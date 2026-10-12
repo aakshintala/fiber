@@ -115,14 +115,10 @@ pub(crate) fn request(spec: &Table) -> mlua::Result<ToolRequest> {
     let args: String = spec.get("args")?;
     let arguments: Value = serde_json::from_str(&args)
         .map_err(|e| mlua::Error::RuntimeError(format!("host.tool: {e}")))?;
-    let arguments = match arguments {
-        Value::Array(items) if items.is_empty() => Value::Object(Map::new()),
-        Value::Array(items) => Value::Array(items),
-        Value::Object(map) => Value::Object(map),
-        Value::Null => Value::Null,
-        Value::Bool(decided) => Value::Bool(decided),
-        Value::Number(number) => Value::Number(number),
-        Value::String(text) => Value::String(text),
+    let arguments = if matches!(&arguments, Value::Array(items) if items.is_empty()) {
+        Value::Object(Map::new())
+    } else {
+        arguments
     };
     Ok(ToolRequest { name, arguments })
 }

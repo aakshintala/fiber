@@ -11,7 +11,7 @@
 
 use std::collections::VecDeque;
 use std::sync::{Arc, Mutex, PoisonError, mpsc};
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use contract::events::{CallStatus, ToolCallCompleted};
 use contract::shapes::{ContentPart, Failure};
@@ -674,27 +674,14 @@ fn outcome_names_only_status_content_and_reason_or_error() {
     assert_eq!(keys, ["content", "reason", "status"]);
 }
 
-/// Waits until the caller parks on the extension's clock: the entered
-/// signal proves the callback is parked, not that the caller waits on the
-/// clock, so the test polls `parked` under one wall-clock deadline and
-/// advances the fake clock only after.
+/// Waits for this caller to park at its clock deadline before the test
+/// advances fake time.
 #[track_caller]
-fn wait_parked(clock: &FakeClock) {
-    let wait = Deadline::after(WAIT);
-    // Polled in rounds on a channel that never sends, so the poll reads no
-    // clock and still ends at the deadline.
-    let (_tx, rx) = mpsc::channel::<()>();
-    loop {
-        if !clock.parked().is_empty() {
-            return;
-        }
-        if wait.left().is_zero() {
-            panic!("the caller never parked on the clock within {WAIT:?}");
-        }
-        match Deadline::after(Duration::from_millis(1)).recv(&rx) {
-            Ok(()) | Err(_) => {}
-        }
-    }
+fn wait_parked(clock: &FakeClock, caller: std::thread::ThreadId, until: Instant) {
+    assert!(
+        clock.await_thread_parked(caller, Some(until), WAIT),
+        "the caller never parked on the extension's clock within {WAIT:?}"
+    );
 }
 
 /// What a `host.tool` outside a running tool call answers: an error in the
@@ -757,28 +744,28 @@ fn tool_from_a_hook_timer_effects_search_provider_or_command_is_an_error() {
         within(move || held.command("via_command", "")).unwrap(),
         OUTSIDE
     );
-    // A timer has no anchor either: arm it, let it fire, read what it stored.
+    // The timer thread must be waiting at the due time before fake time moves.
+    let (timer_done_tx, timer_done_rx) = mpsc::channel();
+    crate::lua::on_timer_done(move || {
+        let _sent = timer_done_tx.send(());
+    });
     let held = Arc::clone(&ext);
     assert_eq!(within(move || held.command("arm", "")).unwrap(), "armed");
+    let due = clock.origin() + Duration::from_millis(100);
+    assert!(
+        clock.await_parked(due, WAIT),
+        "the timer waits for its due time"
+    );
     clock.advance(Duration::from_secs(5));
-    let wait = Deadline::after(WAIT);
-    // Polled through the reader command: each call is quick, and the timer
-    // fires in the gaps between them.
-    let (_tx, parked) = mpsc::channel::<()>();
-    loop {
-        let held = Arc::clone(&ext);
-        let got = within(move || held.command("read_timer", "")).unwrap();
-        if got == OUTSIDE {
-            break;
-        }
-        assert_eq!(got, "unfired", "the timer stored nothing else");
-        if wait.left().is_zero() {
-            panic!("the timer never fired within {WAIT:?}");
-        }
-        match Deadline::after(Duration::from_millis(1)).recv(&parked) {
-            Ok(()) | Err(_) => {}
-        }
-    }
+    Deadline::after(WAIT)
+        .recv(&timer_done_rx)
+        .expect("the timer callback completed");
+    crate::lua::clear_timer_done_hook();
+    let held = Arc::clone(&ext);
+    assert_eq!(
+        within(move || held.command("read_timer", "")).unwrap(),
+        OUTSIDE
+    );
     // An effects function is no tool call.
     let held = Arc::clone(&ext);
     within(move || {
@@ -875,7 +862,7 @@ fn a_timed_out_call_drops_its_runner_and_its_late_answer() {
     let (runner, entered, release_tx) = FakeRunner::holding();
     let caller = Arc::clone(&ext);
     let (done_tx, done_rx) = mpsc::channel();
-    std::thread::spawn(move || {
+    let caller_thread = std::thread::spawn(move || {
         let cancel = fakes::CancelToken::new();
         done_tx
             .send(caller.tool_run_asking(
@@ -891,7 +878,11 @@ fn a_timed_out_call_drops_its_runner_and_its_late_answer() {
         .expect("the runner was entered");
     assert_eq!(ext.runners_held(), 1);
     // The caller must be in its clock wait before the advance wakes it.
-    wait_parked(&clock);
+    wait_parked(
+        &clock,
+        caller_thread.thread().id(),
+        clock.origin() + Duration::from_millis(200) + Duration::from_secs(1),
+    );
     // Past its timeout and the grace: the parked call fails by its deadline.
     clock.advance(Duration::from_secs(5));
     assert!(
@@ -903,6 +894,7 @@ fn a_timed_out_call_drops_its_runner_and_its_late_answer() {
         ),
         "the parked tool fails at its deadline"
     );
+    caller_thread.join().expect("the caller thread exited");
     // The late answer is dropped: the VM still runs the next call, and no
     // runner is left behind.
     release_tx
@@ -936,7 +928,7 @@ fn a_cancelled_call_drops_its_runner_and_its_late_answer() {
     let fire = cancel.clone();
     let caller = Arc::clone(&ext);
     let (done_tx, done_rx) = mpsc::channel();
-    std::thread::spawn(move || {
+    let caller_thread = std::thread::spawn(move || {
         done_tx
             .send(caller.tool_run_asking(
                 "slow",
@@ -951,7 +943,11 @@ fn a_cancelled_call_drops_its_runner_and_its_late_answer() {
         .expect("the runner was entered");
     assert_eq!(ext.runners_held(), 1);
     // The caller must be in its clock wait before the cancel wakes it.
-    wait_parked(&clock);
+    wait_parked(
+        &clock,
+        caller_thread.thread().id(),
+        clock.origin() + Duration::from_secs(6),
+    );
     fire.cancel();
     assert_eq!(
         Deadline::after(WAIT)
@@ -961,6 +957,7 @@ fn a_cancelled_call_drops_its_runner_and_its_late_answer() {
         None,
         "a cancelled call returns no content and no error"
     );
+    caller_thread.join().expect("the caller thread exited");
     release_tx
         .send(Ok(completed("late")))
         .expect("the test releases the held call");

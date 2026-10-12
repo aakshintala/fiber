@@ -398,23 +398,23 @@ pub(super) fn admit<'a>(
     }
 }
 
-/// What a test pauses `settle` with: called with the suspending target and
-/// the stage it reached.
+/// The checkpoint a test observes: called with the target and stage reached.
 #[cfg(test)]
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub(super) enum Pause {
     Admission,
     Start,
+    TimerDone,
 }
 
 /// A test's pause inside `settle`: called with the suspending target.
 #[cfg(test)]
 type SettleHook = Arc<dyn Fn(&Target, Pause) + Send + Sync>;
 
-/// A test's pause inside `settle`, at admission and before an OAuth start:
-/// it runs without the hub lock, so the test may abandon the VM or cancel
-/// the call there, without sleeps. The hook sees only calls for the tool it
-/// names; every other call passes through.
+/// A test's pause inside `settle`, at admission and before an OAuth start,
+/// or a signal after a timer callback completes. The hook runs without the
+/// hub lock; tests can coordinate without sleeps. It sees only calls for the
+/// tool it names; every other call passes through.
 #[cfg(test)]
 static SETTLE_HOOK: std::sync::Mutex<Option<SettleHook>> = std::sync::Mutex::new(None);
 

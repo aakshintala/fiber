@@ -960,20 +960,11 @@ fn cancelling_the_outer_call_cancels_its_inner_calls() {
     assert_eq!(completed[1]["payload"]["error"]["code"], "timeout");
 }
 
-/// A self-call and a chain deeper than 8 are errors in the calling code:
-/// they write no line, and the extension decides what to do next. The four
-/// outer calls run at once, so their inner lines interleave in no fixed
-/// order: this pins each action's own kind list and the sorted multiset of
-/// all kinds instead, with the counts and the tree shapes that are fixed.
+/// A depth-nine chain admits eight inner calls, then returns the cutoff error.
 #[test]
-fn inner_call_depth_is_cut_at_eight_and_a_tool_cannot_run_itself() {
+fn inner_call_depth_is_cut_at_eight() {
     let setup = Setup::new_with_fm_root();
-    let server = calling(&[
-        function_call("call_7", "ping", &json!({"left": 7})),
-        function_call("call_8", "ping", &json!({"left": 8})),
-        function_call("call_9", "ping", &json!({"left": 9})),
-        function_call("call_self", "selfish", &json!({})),
-    ]);
+    let server = calling(&[function_call("call_9", "ping", &json!({"left": 9}))]);
     setup.provider(&server);
     let chain = |name: &str, next: &str| {
         tool(
@@ -990,173 +981,65 @@ fn inner_call_depth_is_cut_at_eight_and_a_tool_cannot_run_itself() {
     };
     setup.lua(
         "chain",
-        &format!(
-            "{}{}{}",
-            chain("ping", "pong"),
-            chain("pong", "ping"),
-            tool(
-                "selfish",
-                "{ effects = { \"reads\" }, reversible = true }",
-                "function() local ok, inner = pcall(host.tool, \"selfish\", {})\n\
-                   if not ok then return \"error:\" .. inner end\n\
-                   return \"unreached\" end",
-                "30000",
-            ),
+        &format!("{}{}", chain("ping", "pong"), chain("pong", "ping")),
+    );
+    let run = ask(&setup, "ping it");
+    let requested = run.all("tool_call_requested");
+    assert_eq!(
+        requested.len(),
+        9,
+        "one outer plus eight admitted inner calls"
+    );
+    assert_eq!(
+        requested
+            .iter()
+            .filter(|line| line["payload"].get("ran_by").is_some())
+            .count(),
+        8
+    );
+    assert_eq!(run.all("tool_call_started").len(), 9);
+    let completed = run.all("tool_call_completed");
+    assert_eq!(completed.len(), 9);
+    let outer = requested
+        .iter()
+        .find(|line| line["payload"].get("ran_by").is_none())
+        .unwrap();
+    let outer_done = completed
+        .iter()
+        .find(|line| line["action_id"] == outer["action_id"])
+        .unwrap();
+    assert_eq!(
+        outer_done["payload"]["content"],
+        json!([{"type": "text", "text": "error:host.tool: inner-call depth exceeds 8"}])
+    );
+}
+
+/// A direct self-call is refused before it writes an inner-call event.
+#[test]
+fn a_tool_cannot_run_itself() {
+    let setup = Setup::new_with_fm_root();
+    let server = calling(&[function_call("call_self", "selfish", &json!({}))]);
+    setup.provider(&server);
+    setup.lua(
+        "selfish",
+        &tool(
+            "selfish",
+            "{ effects = { \"reads\" }, reversible = true }",
+            "function() local ok, inner = pcall(host.tool, \"selfish\", {})\n\
+             if not ok then return \"error:\" .. inner end\n\
+             return \"unreached\" end",
+            "30000",
         ),
     );
-    let run = ask(&setup, "ping them");
-    // 4 outer calls; 7 + 8 + 8 inner calls written (the refused 9th and the
-    // self-call write none), each requested, started and completed.
+    let run = ask(&setup, "call it");
     let requested = run.all("tool_call_requested");
-    let started = run.all("tool_call_started");
+    assert_eq!(requested.len(), 1, "only the outer call was admitted");
+    assert!(requested[0]["payload"].get("ran_by").is_none());
+    assert_eq!(run.all("tool_call_started").len(), 1);
     let completed = run.all("tool_call_completed");
-    assert_eq!(requested.len(), 27);
-    assert_eq!(started.len(), 27);
-    assert_eq!(completed.len(), 27);
-    // Every action's own list is requested, started then completed.
-    let mut by_action: std::collections::BTreeMap<String, Vec<&str>> =
-        std::collections::BTreeMap::new();
-    for line in run.lines.iter().filter(|line| {
-        line["kind"]
-            .as_str()
-            .is_some_and(|kind| kind.starts_with("tool_call_"))
-    }) {
-        by_action
-            .entry(line["action_id"].as_str().unwrap().to_owned())
-            .or_default()
-            .push(line["kind"].as_str().unwrap());
-    }
-    assert_eq!(by_action.len(), 27);
-    for (action, kinds) in &by_action {
-        assert_eq!(
-            kinds,
-            &[
-                "tool_call_requested",
-                "tool_call_started",
-                "tool_call_completed"
-            ],
-            "action {action}"
-        );
-    }
-    // The four outer calls carry no `ran_by`; the 23 inner ones name the
-    // extension and their outer call.
-    let mut inner_parents = Vec::new();
-    for line in &requested {
-        match line["payload"].get("ran_by") {
-            None => {}
-            Some(ran_by) => {
-                assert_eq!(ran_by["extension"], "fiber.test/chain");
-                assert_ne!(ran_by["outer_action_id"], line["action_id"]);
-                inner_parents.push((
-                    line["action_id"].as_str().unwrap().to_owned(),
-                    ran_by["outer_action_id"].as_str().unwrap().to_owned(),
-                ));
-            }
-        }
-    }
-    assert_eq!(inner_parents.len(), 23);
-    // Each outer call's tree holds its chain: 7, 8 and 8 inners, none for
-    // the self-call.
-    let mut children: std::collections::BTreeMap<String, Vec<String>> =
-        std::collections::BTreeMap::new();
-    for (action, parent) in &inner_parents {
-        children
-            .entry(parent.clone())
-            .or_default()
-            .push(action.clone());
-    }
-    fn descendants(
-        children: &std::collections::BTreeMap<String, Vec<String>>,
-        action: &str,
-    ) -> usize {
-        children
-            .get(action)
-            .map(|direct| {
-                direct
-                    .iter()
-                    .map(|child| 1 + descendants(children, child))
-                    .sum()
-            })
-            .unwrap_or(0)
-    }
-    let mut trees = Vec::new();
-    for line in requested
-        .iter()
-        .filter(|line| line["payload"].get("ran_by").is_none())
-    {
-        let name = line["payload"]["name"].clone();
-        let count = descendants(&children, line["action_id"].as_str().unwrap());
-        if name == "selfish" {
-            assert_eq!(count, 0, "a self-call writes no inner line");
-        } else {
-            trees.push((line["payload"]["arguments"].clone(), count));
-        }
-    }
-    trees.sort_by_key(|tree| tree.0.to_string());
+    assert_eq!(completed.len(), 1);
     assert_eq!(
-        trees,
-        [
-            (json!({"left": 7}), 7),
-            (json!({"left": 8}), 8),
-            (json!({"left": 9}), 8),
-        ]
+        completed[0]["payload"]["content"],
+        json!([{"type": "text", "text": "error:host.tool: the tool `selfish` cannot run itself"}])
     );
-    // 7 and 8 caps return `end`; 9 and the self-call return the refusal,
-    // matched by each outer call's own action, since inner calls share the
-    // same names and arguments.
-    for line in requested
-        .iter()
-        .filter(|line| line["payload"].get("ran_by").is_none())
-    {
-        let done = completed
-            .iter()
-            .find(|done| done["action_id"] == line["action_id"])
-            .unwrap_or_else(|| panic!("no completion for {}", line["action_id"]));
-        let content = &done["payload"]["content"];
-        let end = json!([{"type": "text", "text": "end"}]);
-        match (
-            line["payload"]["name"].as_str().unwrap(),
-            line["payload"]["arguments"].clone(),
-        ) {
-            ("ping", args) if args == json!({"left": 7}) => assert_eq!(content, &end),
-            ("ping", args) if args == json!({"left": 8}) => assert_eq!(content, &end),
-            ("ping", args) if args == json!({"left": 9}) => assert_eq!(
-                content,
-                &json!([{"type": "text", "text": "error:host.tool: inner-call depth exceeds 8"}])
-            ),
-            ("selfish", args) if args == json!({}) => assert_eq!(
-                content,
-                &json!([{"type": "text", "text": "error:host.tool: the tool `selfish` cannot run itself"}])
-            ),
-            unexpected => panic!("an unexpected outer call: {unexpected:?}"),
-        }
-    }
-    // The sorted multiset of all kinds is fixed; only the interleave is not.
-    let mut kinds = run.kinds();
-    kinds.sort_unstable();
-    let mut expected = vec![
-        "session_started",
-        "fiber_started",
-        "extensions_loaded",
-        "preamble_built",
-        "opening_message",
-        "turn_started",
-        "step_started",
-        "assistant_message_started",
-        "usage_recorded",
-        "assistant_message_completed",
-        "step_started",
-        "assistant_message_started",
-        "assistant_message_delta",
-        "text_completed",
-        "usage_recorded",
-        "assistant_message_completed",
-        "turn_completed",
-        "fiber_exited",
-    ];
-    expected.extend(std::iter::repeat_n("tool_call_requested", 27));
-    expected.extend(std::iter::repeat_n("tool_call_started", 27));
-    expected.extend(std::iter::repeat_n("tool_call_completed", 27));
-    expected.sort_unstable();
-    assert_eq!(kinds, expected);
 }

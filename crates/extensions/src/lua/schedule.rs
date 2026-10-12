@@ -171,6 +171,10 @@ pub(super) fn serve(hub: Arc<Hub>, start: Start) {
                 continue;
             }
         };
+        #[cfg(test)]
+        if matches!(&target, Target::Timer { .. }) && !matches!(&step, Ok(Step::Suspend { .. })) {
+            settle_hook(&target, Pause::TimerDone);
+        }
         // A callback that ended in an error may have left a held credential
         // in its coroutine.
         let failed = step.is_err();
