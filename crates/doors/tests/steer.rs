@@ -1,6 +1,8 @@
 //! `doors::steer` against a real session socket: the wire order, the
-//! commit point, the probe, and every outcome (`docs/delegates.md`,
-//! "Talking to a delegate").
+//! probe, and every outcome (`docs/delegates.md`, "Talking to a
+//! delegate"). The commit point lives beside the code in
+//! `src/steer_tests.rs`: forcing its interleaving needs the `#[cfg(test)]`
+//! pause point, which this crate cannot see.
 
 #![allow(
     clippy::unwrap_used,
@@ -13,7 +15,7 @@ mod support;
 
 use std::io::{BufRead, BufReader, Write};
 use std::os::unix::net::{UnixListener, UnixStream};
-use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, mpsc};
 use std::thread;
 
@@ -406,88 +408,6 @@ fn a_line_before_the_probe_answer_does_not_queue_the_steer() {
         0,
         "a line before the probe's answer proves nothing"
     );
-}
-
-#[test]
-fn commit_runs_only_after_the_subscribe_is_answered() {
-    let temp = Temp::new();
-    let home = temp.0.join("h");
-    let id = SessionId(mint("s_"));
-    let listener = listen(&home, &id);
-    let (release_tx, release_rx) = mpsc::channel::<()>();
-    let (subscribed_tx, subscribed_rx) = mpsc::channel::<()>();
-    let acked = Arc::new(AtomicBool::new(false));
-    let violated = Arc::new(AtomicBool::new(false));
-    let acked_server = Arc::clone(&acked);
-    let served = thread::spawn(move || {
-        let (stream, _) = listener.accept().unwrap();
-        let mut reader = BufReader::new(stream.try_clone().unwrap());
-        let sub = commanded(&mut reader);
-        // The subscribe line proves the client is waiting for its
-        // acknowledgement: the commit check below runs only after it.
-        subscribed_tx.send(()).unwrap();
-        let sub_id = sub["id"].as_str().unwrap().to_owned();
-        // The acknowledgement is held: nothing may commit before it.
-        Deadline::after(DEADLINE)
-            .recv(&release_rx)
-            .expect("the test releases the acknowledgement");
-        acked_server.store(true, Ordering::SeqCst);
-        let mut writer = stream.try_clone().unwrap();
-        writer.write_all(&accepted(&sub_id)).unwrap();
-        writer.flush().unwrap();
-        // The steer line proves the commit returned true; it is never
-        // answered, so this attempt ends gone.
-        let steered = commanded(&mut reader);
-        assert_eq!(steered["command"], "steer");
-    });
-    let calls = Arc::new(AtomicUsize::new(0));
-    let queued = Arc::new(AtomicUsize::new(0));
-    let (called_tx, called_rx) = mpsc::channel::<()>();
-    let (done_tx, done_rx) = mpsc::channel();
-    let home_client = home.clone();
-    let id_client = id.clone();
-    let counted = Arc::clone(&calls);
-    let acked_client = Arc::clone(&acked);
-    let violated_client = Arc::clone(&violated);
-    let held_back = thread::spawn(move || {
-        let mut commit = || {
-            if !acked_client.load(Ordering::SeqCst) {
-                violated_client.store(true, Ordering::SeqCst);
-            }
-            counted.fetch_add(1, Ordering::SeqCst);
-            let _sent = called_tx.send(());
-            true
-        };
-        let mut on_queued = || {
-            queued.fetch_add(1, Ordering::SeqCst);
-        };
-        let outcome = doors::steer(
-            &home_client,
-            &id_client,
-            &mint("c_"),
-            "held",
-            &mut commit,
-            &mut on_queued,
-        );
-        let _sent = done_tx.send(outcome);
-    });
-    // The client sent its subscribe and waits for the held
-    // acknowledgement: the commit must not arrive while it is held.
-    Deadline::after(DEADLINE)
-        .recv(&subscribed_rx)
-        .expect("the client sent subscribe");
-    release_tx.send(()).unwrap();
-    Deadline::after(DEADLINE)
-        .recv(&called_rx)
-        .expect("commit runs once the subscribe is answered");
-    assert_eq!(steered(&done_rx), Steered::Gone);
-    held_back.join().expect("the steer thread ended");
-    assert!(
-        !violated.load(Ordering::SeqCst),
-        "commit ran before the acknowledgement was sent"
-    );
-    assert_eq!(calls.load(Ordering::SeqCst), 1, "commit ran once");
-    served.join().expect("the server read the steer line");
 }
 
 #[test]

@@ -13,6 +13,43 @@ use contract::shapes::Failure;
 use crate::attach::{check_version, is_answer, next_line, rejection, send};
 use crate::mint;
 
+/// A test-only pause point at the acknowledgement wait: armed by the
+/// commit-order test, which holds the acknowledgement until this fires.
+/// `None` outside that test, so the shipped path sends nothing extra and
+/// waits on nothing extra. A hook, not an outside seam: nothing the test
+/// can observe separates the subscribe write from its answer
+/// (`docs/testing.md`, "Waits and timeouts"; the plan in #540).
+#[cfg(test)]
+pub(crate) struct AckWait {
+    pub(crate) entered: std::sync::mpsc::Sender<()>,
+    pub(crate) release: std::sync::mpsc::Receiver<()>,
+}
+
+#[cfg(test)]
+static ACK_WAIT: std::sync::Mutex<Option<AckWait>> = std::sync::Mutex::new(None);
+
+/// Arms the acknowledgement-wait pause point for the next `steer` call.
+/// One shot: the next call takes it, so later calls run unpaused.
+#[cfg(test)]
+pub(crate) fn hold_ack_wait_for_test(hold: AckWait) {
+    if let Ok(mut armed) = ACK_WAIT.lock() {
+        *armed = Some(hold);
+    }
+}
+
+/// Signals the armed test, if any, and waits for its release: the
+/// acknowledgement read below starts only after. No deadline of its own:
+/// the test's release sender drops when the test ends, which releases
+/// this too (`docs/testing.md`, "Waits and timeouts").
+#[cfg(test)]
+fn pause_at_ack_wait() {
+    let Some(hold) = ACK_WAIT.lock().ok().and_then(|mut armed| armed.take()) else {
+        return;
+    };
+    let _sent = hold.entered.send(());
+    let _released = hold.release.recv();
+}
+
 /// What one `steer` attempt ended in. An outcome, like [`Watched`], not an
 /// error type.
 #[derive(Debug, Clone, PartialEq)]
@@ -72,6 +109,10 @@ pub fn steer(
     {
         return Steered::Gone;
     }
+    // Test-only: the commit-order test holds here until it holds the
+    // acknowledgement, so a commit before the answer fails deterministically.
+    #[cfg(test)]
+    pause_at_ack_wait();
     // The acknowledgement is written before the writer starts, so it is
     // the first line this connection reads, ahead of the fold.
     loop {
@@ -123,3 +164,7 @@ pub fn steer(
         }
     }
 }
+
+#[cfg(test)]
+#[path = "steer_tests.rs"]
+mod tests;
