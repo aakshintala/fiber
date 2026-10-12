@@ -12,6 +12,7 @@ use std::time::Duration;
 
 use contract::Secret;
 use serde::Deserialize;
+use serde::de::{self, Visitor};
 
 use crate::credential_file::{CredentialFile, CredentialLock, credential_path, is_lock_or_tmp};
 use crate::error::ConfigError;
@@ -54,7 +55,12 @@ struct RawSource {
     file: Option<PathBuf>,
     /// A program and its arguments that print the key.
     command: Option<Vec<String>>,
-    /// How long a run of `command` may last; only beside `command`.
+    /// How long a run of `command` may last; only beside `command`, a
+    /// string `parse_duration` accepts. The custom deserializer refuses an
+    /// explicit `"timeout": null`: one `Option` alone reads it as
+    /// omission, silently selecting the default. Omission never reaches
+    /// it: `default` maps a missing key to `None`.
+    #[serde(default, deserialize_with = "de_timeout")]
     timeout: Option<String>,
 }
 
@@ -87,6 +93,43 @@ impl TryFrom<RawSource> for CredentialSource {
             _ => Err("expected exactly one of `env`, `file` or `command`".to_owned()),
         }
     }
+}
+
+/// Reads a `timeout` value: a string stays one, while an explicit `null`
+/// (or any other non-string) is refused with the same error as any other
+/// invalid timeout, in every shape. A missing key never reaches here.
+fn de_timeout<'de, D>(deserializer: D) -> Result<Option<String>, D::Error>
+where
+    D: de::Deserializer<'de>,
+{
+    struct Timeout;
+
+    impl<'de> Visitor<'de> for Timeout {
+        type Value = Option<String>;
+
+        fn expecting(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+            formatter.write_str("a duration string such as `\"2m\"`")
+        }
+
+        fn visit_none<E: de::Error>(self) -> Result<Self::Value, E> {
+            Err(E::custom(
+                "a command's `timeout` must be a duration such as `\"2m\"`",
+            ))
+        }
+
+        fn visit_unit<E: de::Error>(self) -> Result<Self::Value, E> {
+            self.visit_none()
+        }
+
+        fn visit_some<D>(self, deserializer: D) -> Result<Self::Value, D::Error>
+        where
+            D: de::Deserializer<'de>,
+        {
+            String::deserialize(deserializer).map(Some)
+        }
+    }
+
+    deserializer.deserialize_option(Timeout)
 }
 
 impl CredentialSource {

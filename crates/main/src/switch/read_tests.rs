@@ -322,12 +322,24 @@ fn a_credential_command_still_running_at_its_timeout_is_killed_and_times_out() {
         clock.await_parked_since(&mark, Some(deadline), DEADLINE),
         "the wait parked again after the advance"
     );
+    // Armed while the wait is parked: the bump drives one more pass
+    // through its checks, which pauses at the checkpoint still short of
+    // the deadline. The acknowledgement proves the checks ran with
+    // nothing to answer, so the immediate check proves no early answer
+    // arrived without reading the real clock.
+    let (checked, is_checked) = mpsc::channel::<()>();
+    let (release, freed) = mpsc::channel::<()>();
+    reads.pause_at_checks(checked, freed);
+    reads.wake.bump();
+    Deadline::after(DEADLINE).recv_or_fail(&is_checked, "the wait's checks before its timeout");
     assert!(
-        matches!(
-            Deadline::after(Duration::from_millis(100)).recv(&finished),
-            Err(mpsc::RecvTimeoutError::Timeout)
-        ),
+        matches!(finished.try_recv(), Err(mpsc::TryRecvError::Empty)),
         "the wait answered before its timeout"
+    );
+    release.send(()).unwrap();
+    assert!(
+        clock.await_parked(deadline, DEADLINE),
+        "the wait parked at its deadline again"
     );
     assert!(
         fakes::kill_group(pgid, "0").unwrap(),
@@ -369,12 +381,24 @@ fn a_leader_that_exits_while_its_descendant_holds_stdout_times_out_and_the_group
         clock.await_parked_since(&mark, Some(deadline), DEADLINE),
         "the wait parked again after the advance"
     );
+    // Armed while the wait is parked: the bump drives one more pass
+    // through its checks, which pauses at the checkpoint still short of
+    // the deadline. The acknowledgement proves the checks ran with
+    // nothing to answer, so the immediate check proves no early answer
+    // arrived without reading the real clock.
+    let (checked, is_checked) = mpsc::channel::<()>();
+    let (release, freed) = mpsc::channel::<()>();
+    reads.pause_at_checks(checked, freed);
+    reads.wake.bump();
+    Deadline::after(DEADLINE).recv_or_fail(&is_checked, "the wait's checks before its timeout");
     assert!(
-        matches!(
-            Deadline::after(Duration::from_millis(100)).recv(&finished),
-            Err(mpsc::RecvTimeoutError::Timeout)
-        ),
+        matches!(finished.try_recv(), Err(mpsc::TryRecvError::Empty)),
         "the wait answered before its timeout"
+    );
+    release.send(()).unwrap();
+    assert!(
+        clock.await_parked(deadline, DEADLINE),
+        "the wait parked at its deadline again"
     );
     clock.advance(Duration::from_millis(1));
     let error = Deadline::after(fakes::MUST_SUCCEED_WITHIN)

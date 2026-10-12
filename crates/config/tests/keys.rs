@@ -360,6 +360,46 @@ fn a_credential_source_reads_its_timeout_and_refuses_a_bad_one() {
 }
 
 #[test]
+fn an_explicit_null_timeout_beside_command_is_refused() {
+    let message =
+        serde_json::from_value::<CredentialSource>(json!({"command": ["op"], "timeout": null}))
+            .expect_err("an explicit null timeout is refused")
+            .to_string();
+    assert!(message.contains("must be a duration"), "{message}");
+    assert!(!message.contains("op"), "{message}");
+}
+
+#[test]
+fn an_explicit_null_timeout_beside_env_is_refused() {
+    let message = serde_json::from_value::<CredentialSource>(json!({"env": "A", "timeout": null}))
+        .expect_err("an explicit null timeout beside env is refused")
+        .to_string();
+    assert!(message.contains("must be a duration"), "{message}");
+    assert!(!message.contains('A'), "{message}");
+}
+
+#[test]
+fn an_explicit_null_timeout_beside_file_is_refused() {
+    let message =
+        serde_json::from_value::<CredentialSource>(json!({"file": "/k", "timeout": null}))
+            .expect_err("an explicit null timeout beside file is refused")
+            .to_string();
+    assert!(message.contains("must be a duration"), "{message}");
+    assert!(!message.contains("/k"), "{message}");
+}
+
+#[test]
+fn an_omitted_timeout_beside_command_selects_the_thirty_second_default() {
+    assert_eq!(
+        serde_json::from_value::<CredentialSource>(json!({"command": ["op"]})).unwrap(),
+        CredentialSource::Command {
+            argv: vec!["op".into()],
+            timeout: Duration::from_secs(30),
+        }
+    );
+}
+
+#[test]
 fn a_repository_declares_an_mcp_server_but_not_its_hints() {
     let setup = Setup::new();
     setup.write(
