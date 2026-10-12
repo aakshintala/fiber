@@ -16,7 +16,7 @@
 mod support;
 
 use std::path::PathBuf;
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex, mpsc};
 use std::thread;
 use std::time::{Duration, Instant};
@@ -1422,4 +1422,144 @@ fn a_request_whose_call_never_started_is_not_raised_again() {
             payload["action_ids"] = json!(["a_unstarted"]);
         })
     });
+}
+
+/// A dropped call's start, written by a notice claim, carries that call's
+/// action and turn: the suspending form stands in for the resuming
+/// `delegate_message` call, whose output never reaches `finish` because
+/// the shutdown ends the step suspended.
+#[test]
+fn a_start_a_dropped_call_queued_is_written_by_the_notice_claim_under_its_action_and_turn() {
+    use contract::events::{
+        DelegateFinished, DelegateStarted, JobCompleted, JobStarted, Outcome,
+    };
+    use contract::inbox::JobNotice;
+    use contract::jobs::{JobRecord, Taken};
+    use contract::shapes::{Tokens, Usage};
+
+    let former = Arc::new(Former::new());
+    let mut session = session(&["former"], vec![former], Some(IDLE));
+    let tap = Tap::new(&session.log);
+    let at = session.clock.now() + IDLE;
+    session.inbox.send(delivery("go")).unwrap();
+    // `run`, not `turn`: shutdown's settle runs only in `run`.
+    let looped = session.looped.take().unwrap();
+    let (done_tx, done_rx) = mpsc::channel();
+    thread::spawn(move || {
+        let _sent = done_tx.send(looped.run());
+    });
+    let started = tap.wait_for("tool_call_started");
+    let action = started.action_id.clone().unwrap();
+    let turn = started.turn_id.clone().unwrap();
+    let requested = tap.wait_for("interaction_requested");
+    // The call's id is only in the request's payload, not its envelope.
+    assert_eq!(requested.action_id, None);
+    assert_eq!(requested.payload["action_ids"], json!([action.0]));
+    // Run 2's start, queued by the dropped call under its action.
+    let job = "j_6666666666666666";
+    let claims = Arc::new(AtomicUsize::new(0));
+    let claim_counted = Arc::clone(&claims);
+    let start = Taken {
+        record: JobRecord::Started(JobStarted {
+            job_id: JobId(job.into()),
+            tool: Some("delegate_message".into()),
+            extension: None,
+            description: "resumed".into(),
+            output_path: format!("artifacts/{job}.log"),
+        }),
+        action: Some(action.clone()),
+    };
+    let delegate_start = Taken {
+        record: JobRecord::DelegateStarted(DelegateStarted {
+            job_id: JobId(job.into()),
+            delegate_session_id: contract::SessionId("s_d000000000000002".into()),
+            harness: "fiber".into(),
+            model: "fiber:fake/m".into(),
+            workspace: "/w".into(),
+            worktree: None,
+            forked_from: None,
+        }),
+        action: Some(action.clone()),
+    };
+    session
+        .inbox
+        .send(Delivery::Job(JobNotice {
+            completed: JobCompleted {
+                job_id: JobId(job.into()),
+                status: Outcome::Completed,
+                error: None,
+                process: None,
+                output_tail: None,
+            },
+            claim: contract::inbox::Claim(Box::new(move || {
+                claim_counted.fetch_add(1, Ordering::SeqCst);
+                Some(vec![start.clone(), delegate_start.clone()])
+            })),
+            delegate: Some(DelegateFinished {
+                job_id: JobId(job.into()),
+                text: "Done.".into(),
+                artifact: None,
+                questions: None,
+                usage: Usage {
+                    tokens: Tokens {
+                        input: 0,
+                        cache_read: 0,
+                        cache_write: std::collections::BTreeMap::new(),
+                        output: 0,
+                    },
+                    cost: Some(0.0),
+                    subscription_cost: 0.0,
+                },
+                worktree: None,
+            }),
+        }))
+        .unwrap();
+    assert!(
+        session.clock.await_parked(at, DEADLINE),
+        "the step waits on the pending form"
+    );
+    session.cancel.shutdown(143);
+    let result = Deadline::after(DEADLINE)
+        .recv(&done_rx)
+        .expect("run returned");
+    assert!(result.is_ok(), "{result:?}");
+    let lines = exit(&mut session, Some(143));
+    // No `tool_call_completed`: the output was dropped.
+    assert_kinds(
+        &lines,
+        &[
+            OPENING,
+            STEP,
+            FIRST_CALL,
+            &[
+                "tool_call_started",
+                "interaction_requested",
+                "job_started",
+                "delegate_started",
+                "delegate_finished",
+                "job_completed",
+                "fiber_exited",
+            ],
+        ],
+    );
+    assert_eq!(claims.load(Ordering::SeqCst), 1, "the claim ran once");
+    assert!(
+        of_kind(&lines, "tool_call_completed").is_empty(),
+        "the dropped output writes no completion"
+    );
+    let kinds_at = |kind: &str| of_kind(&lines, kind)[0].clone();
+    let job_started = kinds_at("job_started");
+    let delegate_started = kinds_at("delegate_started");
+    // Both starts carry the dropped call's action and turn.
+    assert_eq!(job_started.action_id.as_ref(), Some(&action));
+    assert_eq!(job_started.turn_id.as_ref(), Some(&turn));
+    assert_eq!(delegate_started.action_id.as_ref(), Some(&action));
+    assert_eq!(delegate_started.turn_id.as_ref(), Some(&turn));
+    // Run-end news keeps the writer's ids, as shutdown writes them.
+    let finished = kinds_at("delegate_finished");
+    assert_eq!(finished.action_id, None);
+    assert_eq!(finished.turn_id, None);
+    let completed = kinds_at("job_completed");
+    assert_eq!(completed.action_id, None);
+    assert_eq!(completed.turn_id, None);
 }
