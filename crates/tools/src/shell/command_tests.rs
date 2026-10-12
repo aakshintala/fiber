@@ -1286,15 +1286,16 @@ fn a_resumed_command_with_a_file_does_not_arm_the_spill() {
             moved
         }
     });
-    // The move is observed: releasing the command lets it end.
-    std::fs::write(&release, b"go\n").unwrap();
     // The job's file arrived first: the resume must not arm the spill
-    // over it, so the buffered output stays whole.
+    // over it, so the buffered output stays whole. Injected while the
+    // command is still held, so its end cannot land before this state.
     {
         let mut inner = super::super::output::lock(&moved.progress.shared.inner);
         inner.output = vec![b'y'; super::super::spill::SPILL_AT + 1];
         inner.file = Some(std::fs::File::create(dir.path().join("j_1.log")).unwrap());
     }
+    // The move is observed: releasing the command lets it end.
+    std::fs::write(&release, b"go\n").unwrap();
     let finished = fakes::within("a filed command resumes", JOB_DEADLINE, {
         let clock = Arc::clone(&clock);
         let cancel = cancel.clone();
