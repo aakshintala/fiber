@@ -43,9 +43,6 @@ pub(super) struct Picker {
     selected: usize,
     /// The typed path's state, kept for the opening.
     typed: Typed,
-    /// The typed row is open: a key opened it, and Backspace past its
-    /// first character has not closed it.
-    typing: bool,
 }
 
 impl Default for Picker {
@@ -54,12 +51,18 @@ impl Default for Picker {
             recents: Vec::new(),
             selected: 0,
             typed: Typed::new(),
-            typing: false,
         }
     }
 }
 
 impl Picker {
+    /// Whether the typed row is open: a key opened it, and Backspace
+    /// past its first character has not closed it. The row is open
+    /// while its text holds a character.
+    fn typing(&self) -> bool {
+        !self.typed.text().is_empty()
+    }
+
     /// The recent workspaces, fixed at open.
     #[cfg(test)]
     pub(super) fn recents(&self) -> &[String] {
@@ -121,7 +124,7 @@ impl Home {
     /// row with its completions.
     pub(super) fn picker_screen(&self) -> Option<PickerScreen> {
         let picker = self.chooser.picker.as_ref()?;
-        let typing = picker.typing;
+        let typing = picker.typing();
         let typed = typing.then(|| {
             let typed = &picker.typed;
             let completions: Vec<String> =
@@ -222,7 +225,6 @@ impl App {
             recents: list,
             selected: 0,
             typed: Typed::new(),
-            typing: false,
         });
         Effect::None
     }
@@ -276,7 +278,7 @@ impl App {
         if let Some(home) = self.home.as_mut()
             && let Some(picker) = home.chooser.picker.as_mut()
         {
-            if picker.typing {
+            if picker.typing() {
                 picker.typed.disconnected();
             } else {
                 picker.typed.forget();
@@ -290,7 +292,7 @@ impl App {
         if let Some(home) = self.home.as_mut()
             && let Some(picker) = home.chooser.picker.as_mut()
         {
-            if picker.typing {
+            if picker.typing() {
                 let recents = picker.recents.len();
                 picker.typed.move_focus(down, recents);
             } else {
@@ -312,7 +314,6 @@ impl App {
         if let Some(home) = self.home.as_mut()
             && let Some(picker) = home.chooser.picker.as_mut()
         {
-            picker.typing = true;
             picker.typed.push(c);
         }
     }
@@ -323,10 +324,9 @@ impl App {
     fn backspace_picker(&mut self) {
         if let Some(home) = self.home.as_mut()
             && let Some(picker) = home.chooser.picker.as_mut()
-            && picker.typing
+            && picker.typing()
             && !picker.typed.pop()
         {
-            picker.typing = false;
             picker.selected = 0;
         }
     }
@@ -336,7 +336,7 @@ impl App {
     fn tab_picker(&mut self) {
         if let Some(home) = self.home.as_mut()
             && let Some(picker) = home.chooser.picker.as_mut()
-            && picker.typing
+            && picker.typing()
         {
             picker.typed.tab();
         }
@@ -362,7 +362,7 @@ impl App {
             home.chooser
                 .picker
                 .as_ref()
-                .is_some_and(|picker| picker.typing)
+                .is_some_and(|picker| picker.typing())
         });
         if typed_open && self.link != Link::Up {
             return Some(Effect::None);
