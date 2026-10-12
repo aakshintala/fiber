@@ -1308,6 +1308,7 @@ fn kill_passes_a_blocked_spawn_and_the_late_child_is_killed() {
     Deadline::after(DEADLINE)
         .recv(&killed_rx)
         .expect("the kill pass returns while the spawn is blocked");
+    let reaped = child_a.wait().expect("the killed leader reaps");
     assert!(
         fakes::group_empties(pgid_a, DEADLINE),
         "the pass killed group A"
@@ -1340,14 +1341,8 @@ fn kill_passes_a_blocked_spawn_and_the_late_child_is_killed() {
             .is_some_and(|source| source.kind() == std::io::ErrorKind::Interrupted),
         "the spawn failure carries its `Interrupted` error"
     );
-    let (done, waited) = mpsc::channel();
-    std::thread::spawn(move || done.send(child_a.wait()).unwrap());
-    let status = Deadline::after(DEADLINE)
-        .recv(&waited)
-        .expect("waited {DEADLINE:?} for the killed child")
-        .unwrap();
     use std::os::unix::process::ExitStatusExt as _;
-    assert_eq!(status.signal(), Some(9));
+    assert_eq!(reaped.signal(), Some(9));
     watchdog_a.stand_down(DEADLINE);
     late.stand_down(DEADLINE);
 }
