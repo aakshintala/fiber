@@ -36,6 +36,27 @@ pub(crate) struct Reads {
     /// own run, the cancel flag and its deadline after every wake, so a
     /// wake meant for another wait only parks again.
     wake: Arc<Parker>,
+    /// The next `credential` wait's pause at its checks, armed by a test.
+    /// Absent outside the unit tests.
+    #[cfg(test)]
+    checkpoint: Mutex<Option<Checkpoint>>,
+}
+
+/// One pause of a `credential` wait at its checks, for the interleaving
+/// tests (`docs/testing.md`, "Waits and timeouts"): the wait reports a
+/// pass through its checks and blocks until the test releases it, so the
+/// test lands a finish between the checks and the park on every run. A
+/// `#[cfg(test)]` hook is the only seam that reaches there: the checks
+/// read only channels and the clock, and the state lock covers none of
+/// them, so holding it cannot hold the wait between its checks and its
+/// park.
+#[cfg(test)]
+struct Checkpoint {
+    /// Sent once the wait passed its checks; the send blocks until the
+    /// test receives it, which is the acknowledgement.
+    checked: mpsc::Sender<()>,
+    /// The test releases the wait through this.
+    release: mpsc::Receiver<()>,
 }
 
 /// Everything [`Reads`] guards with its one lock, so a cancel and a spawn
@@ -135,23 +156,38 @@ impl Reads {
         // The leader's exit wakes the wait on its own: a helper that prints
         // its key, closes stdout, then finishes cleanup bumps here when it
         // exits, after the stdout reader's bump was already spent waiting
-        // for it. The blocking wait owns the child, so the timeout and
-        // cancel paths below receive its answer to reap the leader.
+        // for it. The reaper owns the leader's wait, so the timeout and
+        // cancel paths below receive its answer to reap the leader. The
+        // holder keeps the leader ours when the reaper's spawn fails, so
+        // that failure path can still kill and reap it instead of dropping
+        // it unreaped.
+        let reaper: Arc<Mutex<Option<Child>>> = Arc::new(Mutex::new(Some(child)));
         let (status_sent, status_received) = mpsc::channel();
         {
             let exit_wake = Arc::clone(&self.wake);
+            let holder = Arc::clone(&reaper);
             match std::thread::Builder::new()
                 .name("fiber-credential-wait".to_owned())
                 .spawn(move || {
-                    let status = child.wait();
-                    match status_sent.send(status) {
-                        Ok(()) | Err(_) => {}
+                    let taken = holder.lock().unwrap_or_else(PoisonError::into_inner).take();
+                    if let Some(mut child) = taken {
+                        let status = child.wait();
+                        match status_sent.send(status) {
+                            Ok(()) | Err(_) => {}
+                        }
                     }
                     exit_wake.bump();
                 }) {
                 Ok(_) => {}
                 Err(error) => {
                     kill_group(group);
+                    if let Some(mut child) =
+                        reaper.lock().unwrap_or_else(PoisonError::into_inner).take()
+                    {
+                        // The kill above ends the leader at once; the wait
+                        // here reaps it, so no failure path leaves a zombie.
+                        let _reaped = child.wait();
+                    }
                     return Err(io::Error::other(format!(
                         "a thread for the credential read: {error}"
                     )));
@@ -265,6 +301,10 @@ impl Reads {
                 }
                 return Err(timed_out());
             }
+            // The checkpoint holds the wait here, past its checks and
+            // before its park, only when a test armed one.
+            #[cfg(test)]
+            self.checkpoint();
             self.wake.park(clock, Some(deadline), seen);
         }
     }
@@ -304,6 +344,40 @@ impl Reads {
 
     fn lock(&self) -> std::sync::MutexGuard<'_, State> {
         self.state.lock().unwrap_or_else(PoisonError::into_inner)
+    }
+}
+
+#[cfg(test)]
+impl Reads {
+    /// Arms one pause of the next `credential` wait at its checks: the
+    /// wait sends on `checked` after passing its checks and blocks until
+    /// `release` arrives (`docs/testing.md`, "Waits and timeouts"). The
+    /// pause is one-shot; arming again while the wait is held pauses its
+    /// next pass too.
+    pub(crate) fn pause_at_checks(&self, checked: mpsc::Sender<()>, release: mpsc::Receiver<()>) {
+        *self
+            .checkpoint
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner) = Some(Checkpoint { checked, release });
+    }
+
+    /// Reports one pass through the `credential` wait's checks and blocks
+    /// until the test releases it. The first pass consumes the armed
+    /// pause; later passes run free unless a test armed again meanwhile.
+    fn checkpoint(&self) {
+        let point = self
+            .checkpoint
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .take();
+        if let Some(point) = point {
+            match point.checked.send(()) {
+                Ok(()) | Err(_) => {}
+            }
+            match point.release.recv() {
+                Ok(()) | Err(_) => {}
+            }
+        }
     }
 }
 

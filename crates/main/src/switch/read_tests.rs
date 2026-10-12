@@ -408,12 +408,12 @@ fn a_quick_command_answers_without_the_clock_moving() {
     guard.stand_down(DEADLINE);
 }
 
-/// A finish that lands while the wait is checking is not missed: the state
-/// lock holds the wait between its checks while the helper finishes, so
-/// both the stdout reader's and the leader's wakes land between the wait's
-/// checks and its park. The generation captured first ends that park at
-/// once; read after the checks, the park would miss them and hang on the
-/// frozen clock until this test's deadline.
+/// A finish that lands between the wait's checks and its park is not
+/// missed: the checkpoint holds the wait past its checks, so the helper's
+/// finish lands there on every run. The generation captured before the
+/// checks already holds those wakes, so the park ends at once; captured
+/// after the checks, the park would miss them and hang on the frozen
+/// clock until this test's deadline.
 #[test]
 fn a_completion_between_the_checks_and_the_park_is_not_missed() {
     let root = fakes::TempDir::new("fiber-read-credential-interleave");
@@ -421,7 +421,6 @@ fn a_completion_between_the_checks_and_the_park_is_not_missed() {
     let go = root.path().join("go");
     let timeout = Duration::from_secs(30);
     let clock = FakeClock::new();
-    let deadline = clock.origin() + timeout;
     let reads = Arc::new(Reads::default());
     let script = format!(
         "echo $$ > '{}'; while [ ! -e '{}' ]; do sleep 0.01; done; printf key",
@@ -429,30 +428,32 @@ fn a_completion_between_the_checks_and_the_park_is_not_missed() {
         go.display()
     );
     let pre = fakes::Watchdog::matching(&ready.path().display().to_string());
+    // Armed before the wait starts, so its first pass already pauses: the
+    // acknowledgement below proves its checks ran with nothing to read,
+    // since the helper cannot finish before `go` exists.
+    let (checked, is_checked) = mpsc::channel();
+    let (release, freed) = mpsc::channel();
+    reads.pause_at_checks(checked, freed);
     let finished = credential_on_thread(&reads, sh(&script), timeout, &clock);
     let pgid = ready.wait(DEADLINE)[0];
     let watchdog = fakes::Watchdog::group(pgid);
-    assert!(
-        clock.await_parked(deadline, DEADLINE),
-        "the wait parked at its deadline"
-    );
-    // Both wakes land while the wait is held here: the park below already
-    // has them in its generation, so it must return at once. Each thread
-    // bumps after its send, so two bumps mean both answers are in.
+    Deadline::after(DEADLINE).recv_or_fail(&is_checked, "the wait's checks");
+    // Both wakes land while the wait is held past its checks: the park
+    // below already holds them in an earlier generation, so it must
+    // return at once. Each thread bumps after its send, so two bumps mean
+    // both answers are in.
     let wake = Arc::clone(&reads.wake);
     let seen = wake.generation();
-    {
-        let _held = reads.lock();
-        std::fs::write(&go, "").unwrap();
-        fakes::within("the two wakes", DEADLINE, move || {
-            loop {
-                if wake.generation() >= seen + 2 {
-                    return;
-                }
-                std::thread::yield_now();
+    std::fs::write(&go, "").unwrap();
+    fakes::within("the two wakes", DEADLINE, move || {
+        loop {
+            if wake.generation() >= seen + 2 {
+                return;
             }
-        });
-    }
+            std::thread::yield_now();
+        }
+    });
+    release.send(()).unwrap();
     let output = Deadline::after(DEADLINE)
         .recv_or_fail(&finished, "the interleaved read")
         .unwrap();
@@ -524,20 +525,61 @@ fn a_key_finished_after_its_timeout_is_refused() {
 /// A helper that prints its key, closes stdout, then finishes cleanup
 /// answers without the clock moving: the stdout reader's wake lands while
 /// the leader still runs, and only the leader's own wake ends the wait.
+/// `go` releases the print and `out` releases the exit, so stdout closes
+/// strictly before the leader exits on every run; the second checkpoint
+/// proves the wait consumed stdout with the exit still missing, since
+/// `out` does not exist yet.
 #[test]
 fn a_leader_that_closes_stdout_before_it_exits_answers_without_the_clock_moving() {
     let root = fakes::TempDir::new("fiber-read-credential-cleanup");
     let ready = Ready::new(root.path());
+    let go = root.path().join("go");
+    let out = root.path().join("out");
     let clock = FakeClock::new();
     let reads = Arc::new(Reads::default());
     let script = format!(
-        "echo $$ > '{}'; printf key; exec >&-; exec sleep 1",
-        ready.path().display()
+        "echo $$ > '{}'; while [ ! -e '{}' ]; do sleep 0.01; done; printf key; exec >&-; while [ ! -e '{}' ]; do sleep 0.01; done; exit 0",
+        ready.path().display(),
+        go.display(),
+        out.display()
     );
     let pre = fakes::Watchdog::matching(&ready.path().display().to_string());
+    // Armed before the wait starts, so its first pass already pauses: the
+    // acknowledgement proves its checks ran with nothing to read, since
+    // the helper cannot print before `go` exists.
+    let (checked_one, is_checked_one) = mpsc::channel::<()>();
+    let (release_one, freed_one) = mpsc::channel::<()>();
+    reads.pause_at_checks(checked_one, freed_one);
     let finished = credential_on_thread(&reads, sh(&script), Duration::from_secs(30), &clock);
     let pgid = ready.wait(DEADLINE)[0];
     let watchdog = fakes::Watchdog::group(pgid);
+    let wake = Arc::clone(&reads.wake);
+    let sent = wake.generation();
+    Deadline::after(DEADLINE).recv_or_fail(&is_checked_one, "the wait's first checks");
+    // Armed again while the wait is still held, so its next pass pauses
+    // too.
+    let (checked_two, is_checked_two) = mpsc::channel::<()>();
+    let (release_two, freed_two) = mpsc::channel::<()>();
+    reads.pause_at_checks(checked_two, freed_two);
+    release_one.send(()).unwrap();
+    std::fs::write(&go, "").unwrap();
+    Deadline::after(DEADLINE).recv_or_fail(&is_checked_two, "the wait's second checks");
+    // Only the print's bump could have woken the wait, so the second
+    // acknowledgement proves stdout is consumed with the leader still
+    // running. Only now may the leader exit: its own bump lands while
+    // the wait is still held, which is what ends the wait. Each thread
+    // bumps after its send, so two bumps mean both answers are in.
+    std::fs::write(&out, "").unwrap();
+    fakes::within("the leader's wake", DEADLINE, {
+        let wake = Arc::clone(&wake);
+        move || loop {
+            if wake.generation() >= sent + 2 {
+                return;
+            }
+            std::thread::yield_now();
+        }
+    });
+    release_two.send(()).unwrap();
     let output = Deadline::after(DEADLINE)
         .recv_or_fail(&finished, "the cleaning-up leader")
         .unwrap();
