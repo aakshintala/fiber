@@ -21,8 +21,9 @@ use serde::Serialize;
 use serde_json::Value;
 
 use crate::cache::Cached;
+use crate::elicit::Asker;
 use crate::registry::{Stopping, before_lock, before_signal, lock};
-use crate::rpc::{Outcome, encode_notification, encode_request};
+use crate::rpc::{Outcome, encode_notification, encode_request, encode_result};
 use crate::server_json::{ListedPrompt, ListedTool, entries};
 use crate::wait::{CancelBridge, NoCancel, Shared, deadline, park};
 use support::group::Listing;
@@ -77,7 +78,7 @@ fn list_pages<T: serde::de::DeserializeOwned>(
             Some(cursor) => serde_json::json!({"cursor": cursor}),
             None => serde_json::json!({}),
         };
-        let page = match server.request(method, &params, deadline, cancel) {
+        let page = match server.request(method, &params, deadline, cancel, None) {
             Ok(value) => value,
             Err(CallError::Timeout) => return Err(StartError::Deadline),
             Err(_) => return fail(),
@@ -279,6 +280,7 @@ impl Server {
                 }),
                 deadline,
                 &stopping,
+                None,
             ) {
                 Ok(value) if value.is_object() => value,
                 Err(CallError::Timeout) => return Err(StartError::Deadline),
@@ -367,7 +369,9 @@ impl Server {
 
     /// Calls `method` with `params`, waiting until `timeout` passes on the
     /// clock or `cancel` fires. A late response to a timed-out or cancelled
-    /// id is discarded: the slot is removed on every exit path.
+    /// id is discarded: the slot is removed on every exit path. A call
+    /// with no asker never takes an elicitation and is never listed in
+    /// its `action_ids`.
     pub(crate) fn call<P: Serialize + ?Sized>(
         &self,
         method: &str,
@@ -377,7 +381,24 @@ impl Server {
     ) -> Result<Value, CallError> {
         let inner = &self.inner;
         let deadline = deadline(inner.clock.as_ref(), timeout);
-        self.request(method, params, deadline, cancel)
+        self.request(method, params, deadline, cancel, None)
+    }
+
+    /// Calls `method` with `params` as [`Server::call`] does, asking
+    /// elicitations through `asker` when it is `Some`: the call registers
+    /// before its line is sent, and takes queued elicitations while it
+    /// waits. Startup pagination passes `None`.
+    pub(crate) fn call_asking<P: Serialize + ?Sized>(
+        &self,
+        method: &str,
+        params: &P,
+        timeout: Duration,
+        cancel: &dyn Cancel,
+        asker: Option<Asker<'_>>,
+    ) -> Result<Value, CallError> {
+        let inner = &self.inner;
+        let deadline = deadline(inner.clock.as_ref(), timeout);
+        self.request(method, params, deadline, cancel, asker)
     }
 
     /// Whether the server's output ended (it exited).
@@ -419,25 +440,51 @@ impl Server {
         self.reap();
     }
 
-    /// Sends one request and waits for its response.
+    /// Sends one request and waits for its response. With an asker, the
+    /// call registers before its line is sent and takes queued
+    /// elicitations while it waits, answering each with no shared lock
+    /// held.
     fn request<P: Serialize + ?Sized>(
         &self,
         method: &str,
         params: &P,
         deadline: Instant,
         cancel: &dyn Cancel,
+        asker: Option<Asker<'_>>,
     ) -> Result<Value, CallError> {
         let inner = &self.inner;
         let id = inner.shared.next_id();
         inner.shared.insert(id);
+        if let Some(asker) = asker {
+            inner.shared.register(id, asker.ask.action(), deadline);
+        }
         // The slot is removed on every exit path below, so a late response
         // finds no slot and is discarded.
         let line = encode_request(id, method, params);
         inner.send(line);
         let bridge = CancelBridge::arm(&inner.shared);
         cancel.subscribe(Arc::downgrade(&(Arc::clone(&bridge) as Arc<dyn Wake>)));
+        // Whether this call handled an elicitation: once it has, a cancel
+        // or its own deadline wins over a response delivered meanwhile,
+        // or a cancelled or timed-out call would read as a success.
+        let mut handled = false;
         let outcome = loop {
+            // The test-only pause point, before the view: a test holds a
+            // registered call here to force the queue-then-remove order.
+            before_pass();
             let view = inner.shared.view(id, cancel);
+            if handled {
+                if view.cancelled {
+                    inner.send(encode_notification(
+                        "notifications/cancelled",
+                        &serde_json::json!({"requestId": id}),
+                    ));
+                    break Err(CallError::Cancelled);
+                }
+                if inner.clock.now() >= deadline {
+                    break Err(CallError::Timeout);
+                }
+            }
             if let Some(outcome) = view.response {
                 break Ok(outcome);
             }
@@ -459,6 +506,21 @@ impl Server {
             if inner.clock.now() >= deadline {
                 break Err(CallError::Timeout);
             }
+            if let Some(asker) = asker
+                && let Some(taken) = inner.shared.take_elicitation()
+            {
+                let result = crate::elicit::respond(
+                    asker,
+                    &taken.elicitation.form,
+                    taken.action_ids,
+                    taken.until,
+                );
+                // One send attempt: a full or disconnected writer
+                // drops it, and the call then ends as a death.
+                inner.send(encode_result(&taken.elicitation.id, &result));
+                handled = true;
+                continue;
+            }
             park(
                 inner.clock.as_ref(),
                 &inner.shared,
@@ -470,8 +532,15 @@ impl Server {
         drop(bridge);
         // The slot is removed before the abandon: a socket error from the
         // abandoned request then finds no waiter and never marks the
-        // server gone.
-        inner.shared.remove(id);
+        // server gone. When this was the last asking call, the queued
+        // elicitations it left come back here and are declined.
+        let leftovers = inner.shared.remove(id);
+        for elicitation in leftovers {
+            inner.send(encode_result(
+                &elicitation.id,
+                &serde_json::json!({"action": "decline"}),
+            ));
+        }
         inner.peer.abandon(id);
         match outcome {
             Ok(Outcome::Result(value)) => Ok(value),
@@ -558,6 +627,22 @@ impl Inner {
     }
 }
 
+/// Runs the test hook [`tests::before_pass`] installs, if any: the seam
+/// a test pauses on to hold a registered call before its first view, in
+/// the pattern of `registry`'s `before_signal`.
+#[cfg(test)]
+fn before_pass() {
+    crate::server::tests::before_pass();
+}
+
+/// No hook outside tests: the wait never pauses.
+#[cfg(not(test))]
+fn before_pass() {}
+
 #[cfg(test)]
 #[path = "server_tests.rs"]
 pub(crate) mod tests;
+
+#[cfg(test)]
+#[path = "server_elicit_tests.rs"]
+mod elicit_tests;

@@ -1006,3 +1006,104 @@ fn the_first_starts_tool_reaches_an_adopted_server() {
     }
     setup.stop(first.servers);
 }
+
+#[test]
+fn read_asking_answers_an_elicitation_and_reads() {
+    use contract::events::Answer;
+    use contract::tool::Answered;
+    // `run_asking` forwards its asker through the slot seam, as a tool's
+    // does: the stream carries the elicitation and then the contents
+    // together, so whichever the wait sees first wins. Either way the
+    // elicitation gets exactly one answer matching what happened.
+    let setup = Setup::new();
+    let server = fakes::ProviderServer::start_responding(move |req: &fakes::Request| {
+        if req.method == "DELETE" {
+            return fakes::Response::status(200, "");
+        }
+        let body: Value = serde_json::from_slice(&req.body).unwrap_or(Value::Null);
+        let id = body.get("id").cloned().unwrap_or(Value::Null);
+        let result =
+            |result: Value| json!({"jsonrpc": "2.0", "id": id, "result": result}).to_string();
+        match body.get("method").and_then(Value::as_str) {
+            Some("initialize") => fakes::Response::status(
+                200,
+                result(json!({
+                    "protocolVersion": "2025-06-18",
+                    "capabilities": {"tools": {}, "resources": {}},
+                    "serverInfo": {"name": "remote", "version": "1"},
+                })),
+            )
+            .header("mcp-session-id", "1868a90c"),
+            Some("notifications/initialized") | Some("notifications/cancelled") | None => {
+                fakes::Response::status(202, "")
+            }
+            Some("tools/list") => fakes::Response::status(200, result(json!({"tools": []}))),
+            Some("resources/read") => {
+                let elicitation = json!({
+                    "jsonrpc": "2.0",
+                    "id": "el-1",
+                    "method": "elicitation/create",
+                    "params": {
+                        "message": "m",
+                        "requestedSchema": {
+                            "type": "object",
+                            "properties": {"name": {"type": "string"}},
+                            "required": ["name"],
+                        },
+                    },
+                })
+                .to_string();
+                let answer = result(json!({"contents": [{
+                    "uri": "file:///notes.txt",
+                    "mimeType": "text/plain",
+                    "text": "hello",
+                }]}));
+                fakes::Response::stream(format!(
+                    "event: message\ndata: {elicitation}\n\nevent: message\ndata: {answer}\n\n"
+                ))
+            }
+            Some(other) => panic!("unexpected method {other}"),
+        }
+    })
+    .unwrap();
+    let started = live(&setup, &server, "docs");
+    let tool = live_tool(&started, setup.artifacts().as_path());
+    let (ask, seen) = crate::elicit::tests::FakeAsk::scripted(
+        "a_4",
+        vec![Answered::Reply(Answer::Text {
+            text: "prod".to_owned(),
+        })],
+    );
+    let moved = Arc::clone(&tool);
+    let arguments = args(json!({"action": "read", "server": "docs", "uri": "file:///notes.txt"}));
+    let out = fakes::within("the asking read", WITHIN, move || {
+        moved.run_asking(&arguments, &cancel(), &emit(), &ask)
+    });
+    assert!(out.error.is_none(), "the read succeeds: {out:?}");
+    assert_eq!(text_of(&out), ["hello"]);
+    assert!(
+        server.await_requests(5, WITHIN),
+        "the elicitation's answer is POSTed",
+    );
+    let mut answers = server.requests().into_iter().filter_map(|req| {
+        let body: Value = serde_json::from_slice(&req.body).ok()?;
+        (body.get("id") == Some(&json!("el-1"))).then(|| body.clone())
+    });
+    let answer = answers.next().expect("one answer to the elicitation");
+    assert!(answers.next().is_none(), "exactly one answer");
+    // The ask is recorded before its answer is POSTed, and an unasked
+    // elicitation is drained by the remover, so no wait is needed.
+    match seen.try_recv() {
+        Ok(_) => assert_eq!(
+            answer.get("result"),
+            Some(&json!({"action": "accept", "content": {"name": "prod"}})),
+            "asked means accept with the content",
+        ),
+        Err(_) => assert_eq!(
+            answer.get("result"),
+            Some(&json!({"action": "decline"})),
+            "unasked means the remover's decline",
+        ),
+    }
+    setup.stop(started.servers);
+}

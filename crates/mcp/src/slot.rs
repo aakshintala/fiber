@@ -22,6 +22,7 @@ use contract::tool::ServerRecord;
 use serde::Serialize;
 
 use crate::cache::{self, Cached};
+use crate::elicit::Asker;
 use crate::server::{CallError, Server};
 use crate::server_json::ListedTool;
 use crate::start::{ServerSpec, not_started};
@@ -344,7 +345,8 @@ impl Slot {
 
     /// Calls `method` on `server`, mapping the wire outcome to one step.
     /// `server` is the one [`Slot::run`] or [`Slot::serve`] returned. The
-    /// call is never replayed.
+    /// call is never replayed. The wrapper keeps no asker: only the tool
+    /// and `mcp_resources` ask, through [`Slot::call_asking`].
     #[allow(
         clippy::result_large_err,
         reason = "the death record travels with the call that observed it"
@@ -358,6 +360,36 @@ impl Slot {
         cancel: &dyn Cancel,
     ) -> Result<Value, Fault> {
         match server.call(method, params, timeout, cancel) {
+            Ok(value) => Ok(value),
+            Err(CallError::Timeout) => Err(Fault::Timeout),
+            Err(CallError::Cancelled) => Err(Fault::Cancelled),
+            Err(CallError::JsonRpc { message, .. }) => Err(Fault::Refused(message)),
+            Err(CallError::Http(message)) => Err(Fault::Refused(message)),
+            Err(CallError::Expired) => Err(Fault::Expired),
+            Err(CallError::Gone) => match self.died(server) {
+                Some(record) => Err(Fault::Died(record)),
+                None => Err(Fault::Gone),
+            },
+        }
+    }
+
+    /// Calls `method` on `server` as [`Slot::call`] does, asking
+    /// elicitations through `asker`: the call registers before its line
+    /// is sent, without bypassing the fault and death mapping here.
+    #[allow(
+        clippy::result_large_err,
+        reason = "the death record travels with the call that observed it"
+    )]
+    pub(crate) fn call_asking<P: Serialize + ?Sized>(
+        &self,
+        server: &Arc<Server>,
+        method: &str,
+        params: &P,
+        timeout: Duration,
+        cancel: &dyn Cancel,
+        asker: Asker<'_>,
+    ) -> Result<Value, Fault> {
+        match server.call_asking(method, params, timeout, cancel, Some(asker)) {
             Ok(value) => Ok(value),
             Err(CallError::Timeout) => Err(Fault::Timeout),
             Err(CallError::Cancelled) => Err(Fault::Cancelled),

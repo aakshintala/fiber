@@ -20,6 +20,7 @@ use contract::tool::{Cancel, Effects, Output, Tool};
 use serde_json::{Map, Value};
 
 use crate::effects::Hints;
+use crate::elicit::Asker;
 use crate::fail;
 use crate::rpc::{RESOURCES_LIST, RESOURCES_READ};
 use crate::server_json::{CallResult, Content, ListedResource, Resource, entries, from_object};
@@ -101,7 +102,8 @@ impl Resources {
     /// The call through `slot`: `serve`, then one `resources/list` or
     /// `resources/read` request, mapping every outcome with `serve`'s
     /// records carried. `read` maps the result as embedded resources;
-    /// `list` reads one page.
+    /// `list` reads one page. With an asker the call registers before
+    /// its line is sent, as a tool's does.
     fn call(
         &self,
         slot: &Arc<Slot>,
@@ -109,6 +111,7 @@ impl Resources {
         params: &Value,
         read: bool,
         cancel: &dyn Cancel,
+        asker: Option<&dyn contract::tool::Ask>,
     ) -> Output {
         let server = slot.spec().name.clone();
         match slot.serve() {
@@ -124,7 +127,20 @@ impl Resources {
                     images: Arc::clone(&self.images),
                     slot: Arc::downgrade(slot),
                 };
-                let called = slot.call(&running, method, params, slot.spec().call_timeout, cancel);
+                let called = match asker {
+                    None => slot.call(&running, method, params, slot.spec().call_timeout, cancel),
+                    Some(ask) => slot.call_asking(
+                        &running,
+                        method,
+                        params,
+                        slot.spec().call_timeout,
+                        cancel,
+                        Asker {
+                            ask,
+                            server: &server,
+                        },
+                    ),
+                };
                 let call = Call::new(&server, method, target);
                 match called {
                     Ok(result) => {
@@ -202,6 +218,29 @@ impl Tool for Resources {
     }
 
     fn run(&self, arguments: &Map<String, Value>, cancel: &dyn Cancel, _emit: &dyn Emit) -> Output {
+        self.run_with(arguments, cancel, None)
+    }
+
+    fn run_asking(
+        &self,
+        arguments: &Map<String, Value>,
+        cancel: &dyn Cancel,
+        _emit: &dyn Emit,
+        ask: &dyn contract::tool::Ask,
+    ) -> Output {
+        self.run_with(arguments, cancel, Some(ask))
+    }
+}
+
+impl Resources {
+    /// Runs the call, asking elicitations through `asker` when it is
+    /// `Some`, through the same slot seam a tool's calls use.
+    fn run_with(
+        &self,
+        arguments: &Map<String, Value>,
+        cancel: &dyn Cancel,
+        asker: Option<&dyn contract::tool::Ask>,
+    ) -> Output {
         let request = match request(arguments) {
             Ok(request) => request,
             Err(message) => return fail::failed(ErrorCode::InvalidArguments, message),
@@ -222,14 +261,14 @@ impl Tool for Resources {
                     Some(cursor) => serde_json::json!({"cursor": cursor}),
                     None => serde_json::json!({}),
                 };
-                self.call(&slot, RESOURCES_LIST, &params, false, cancel)
+                self.call(&slot, RESOURCES_LIST, &params, false, cancel, asker)
             }
             Request::Read { server, uri } => {
                 let Some(slot) = Self::lookup(&slots, server) else {
                     return fail::failed(ErrorCode::InvalidArguments, no_resources(server));
                 };
                 let params = serde_json::json!({"uri": uri});
-                self.call(&slot, RESOURCES_READ, &params, true, cancel)
+                self.call(&slot, RESOURCES_READ, &params, true, cancel, asker)
             }
         }
     }

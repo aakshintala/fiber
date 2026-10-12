@@ -20,6 +20,7 @@ use contract::tool::{Cancel, Effects, Output, ServerRecord, Tool};
 use serde_json::{Map, Value};
 
 use crate::effects::Hints;
+use crate::elicit::Asker;
 use crate::fail;
 use crate::name::qualified;
 use crate::rpc::{Named, TOOLS_CALL};
@@ -130,6 +131,38 @@ impl Tool for McpTool {
     }
 
     fn run(&self, arguments: &Map<String, Value>, cancel: &dyn Cancel, _emit: &dyn Emit) -> Output {
+        self.run_with(arguments, cancel, None)
+    }
+
+    fn run_asking(
+        &self,
+        arguments: &Map<String, Value>,
+        cancel: &dyn Cancel,
+        _emit: &dyn Emit,
+        ask: &dyn contract::tool::Ask,
+    ) -> Output {
+        // The server name prompts carry is the configured one the call holds.
+        self.run_with(
+            arguments,
+            cancel,
+            Some(Asker {
+                ask,
+                server: &self.call.server,
+            }),
+        )
+    }
+}
+
+impl McpTool {
+    /// Runs the call, asking elicitations through `asker` when it is
+    /// `Some`. `run` passes `None`, so `Server::call` keeps a production
+    /// caller; `run_asking` passes `Some`.
+    fn run_with(
+        &self,
+        arguments: &Map<String, Value>,
+        cancel: &dyn Cancel,
+        asker: Option<Asker<'_>>,
+    ) -> Output {
         let Some(slot) = self.call.slot.upgrade() else {
             return fail::failed(
                 ErrorCode::McpServerUnavailable,
@@ -154,7 +187,17 @@ impl Tool for McpTool {
                     arguments,
                     name: &self.call.tool,
                 };
-                let called = slot.call(&server, TOOLS_CALL, &params, self.call.timeout, cancel);
+                let called = match asker {
+                    None => slot.call(&server, TOOLS_CALL, &params, self.call.timeout, cancel),
+                    Some(asker) => slot.call_asking(
+                        &server,
+                        TOOLS_CALL,
+                        &params,
+                        self.call.timeout,
+                        cancel,
+                        asker,
+                    ),
+                };
                 // The call is never replayed: the next call restarts
                 // the server, if a restart is left.
                 output(&self.call, called, servers, cancel)

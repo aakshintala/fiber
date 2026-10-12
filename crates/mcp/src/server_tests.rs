@@ -597,6 +597,62 @@ fn sampling_and_roots_requests_are_answered_method_not_found() {
 }
 
 #[test]
+fn elicitations_with_no_call_in_flight_are_declined_unlogged() {
+    // An elicitation that arrives with no call in flight on its server
+    // is declined, and nothing is logged for it (`docs/mcp.md`,
+    // "Elicitation, sampling and roots"): the reader answers at once.
+    // A malformed one is answered `-32602` instead.
+    let setup = Setup::with_tools(&json!([{"name": "echo"}]));
+    setup.result("echo", r#"{"content":[]}"#);
+    setup.write(
+        "noise",
+        concat!(
+            "{\"jsonrpc\":\"2.0\",\"id\":\"n1\",\"method\":\"elicitation/create\",",
+            "\"params\":{\"message\":\"m\",\"requestedSchema\":{\"type\":\"object\",",
+            "\"properties\":{\"a\":{\"type\":\"boolean\"}}}}}\n",
+            "{\"jsonrpc\":\"2.0\",\"id\":\"n2\",\"method\":\"elicitation/create\",",
+            "\"params\":{\"message\":\"m\",\"requestedSchema\":{\"type\":\"object\",",
+            "\"properties\":{}}}}\n",
+        ),
+    );
+    let opened = setup.start_expect(Duration::from_secs(5));
+    // The fixture prints `noise` before it reads anything, but the
+    // answers reach `requests.log` through the writer thread: an echo
+    // round trip proves every earlier line is logged.
+    let (echo, opened) = fakes::within("a call after the elicitations", WITHIN, move || {
+        let answer = call_tool(
+            &opened.server,
+            "echo",
+            json!({}),
+            Duration::from_secs(30),
+            &fakes::CancelToken::new(),
+        );
+        (answer, opened)
+    });
+    echo.expect("echo answers");
+    let log = std::fs::read_to_string(setup.dir.path().join("requests.log")).expect("requests");
+    let declined = log
+        .lines()
+        .find(|line| line.contains(r#""id":"n1""#))
+        .unwrap_or_else(|| panic!("missing the n1 answer: {log}"));
+    assert!(
+        declined.contains(r#""action":"decline""#),
+        "the valid elicitation is declined: {declined}"
+    );
+    let malformed = log
+        .lines()
+        .find(|line| line.contains(r#""id":"n2""#))
+        .unwrap_or_else(|| panic!("missing the n2 answer: {log}"));
+    assert!(
+        malformed.contains("-32602") && malformed.contains("Fiber cannot show this elicitation"),
+        "the malformed one is answered -32602: {malformed}"
+    );
+    Deadline::after(WITHIN)
+        .recv(&stopping(opened.server))
+        .unwrap_or_else(|_| panic!("the stop ends within {WITHIN:?}"));
+}
+
+#[test]
 fn stop_leaves_no_running_child() {
     let setup = Setup::with_tools(&json!([{"name": "hang"}]));
     setup.result("hang", "hang");
@@ -872,6 +928,27 @@ fn a_server_is_listed_until_its_reap() {
         .recv(&stopping(opened.server))
         .unwrap_or_else(|_| panic!("the stop returned within {WITHIN:?}"));
     assert!(support::group::live().is_empty());
+}
+
+/// What [`super::before_pass`] runs in this test process, if anything:
+/// the hook a test installs to hold a registered call before its first
+/// view, taken once so later passes run free.
+static BEFORE_PASS: std::sync::Mutex<Option<Box<dyn FnOnce() + Send>>> =
+    std::sync::Mutex::new(None);
+
+/// Runs the hook [`install_before_pass`] installed, if any, then clears
+/// it: `before_pass` runs on every pass of every request, so a held
+/// gate opens once and never stalls a later barrier call.
+pub(crate) fn before_pass() {
+    let hook = super::lock(&BEFORE_PASS).take();
+    if let Some(hook) = hook {
+        hook();
+    }
+}
+
+/// Holds the next pass of any request on `hook`.
+pub(crate) fn install_before_pass(hook: impl FnOnce() + Send + 'static) {
+    *super::lock(&BEFORE_PASS) = Some(Box::new(hook));
 }
 
 /// What [`super::before_signal`] runs in this test process, if anything.

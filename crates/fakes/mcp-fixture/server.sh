@@ -56,7 +56,10 @@
 # `call-<tool>.json` and remove `pending-el-N`. A
 # `result-after-elicit-<tool>` file makes the subshell write the call's
 # result right after the elicitation request, and the main loop then does
-# not answer it again. A `late-elicit-<tool>` FIFO makes the subshell
+# not answer it again. With a `release-<tool>` FIFO the subshell reads it
+# twice: once before the elicitation request and once before the result,
+# so a test observes the ask before the response can land in its slot.
+# A `late-elicit-<tool>` FIFO makes the subshell
 # write the call's result first, then block reading the FIFO, then write
 # the elicitation request; the main loop does not answer it again. A
 # `seen-el` FIFO gets one line after the main loop logs any `"el-N"`
@@ -207,7 +210,7 @@ while IFS= read -r line; do
                         if [ -p "$dir/late-elicit-$tool" ]; then
                             ( answer "{\"jsonrpc\":\"2.0\",\"id\":$id,\"result\":$body}"; read -r _ < "$dir/late-elicit-$tool"; answer "{\"jsonrpc\":\"2.0\",\"id\":\"el-$id\",\"method\":\"elicitation/create\",\"params\":$params}" ) &
                         elif [ -f "$dir/result-after-elicit-$tool" ]; then
-                            ( if [ -p "$dir/release-$tool" ]; then if [ -p "$dir/held-$tool" ]; then printf 'held\n' > "$dir/held-$tool"; fi; read -r _ < "$dir/release-$tool"; fi; answer "{\"jsonrpc\":\"2.0\",\"id\":\"el-$id\",\"method\":\"elicitation/create\",\"params\":$params}"; answer "{\"jsonrpc\":\"2.0\",\"id\":$id,\"result\":$body}" ) &
+                            ( if [ -p "$dir/release-$tool" ]; then if [ -p "$dir/held-$tool" ]; then printf 'held\n' > "$dir/held-$tool"; fi; read -r _ < "$dir/release-$tool"; fi; answer "{\"jsonrpc\":\"2.0\",\"id\":\"el-$id\",\"method\":\"elicitation/create\",\"params\":$params}"; if [ -p "$dir/release-$tool" ]; then read -r _ < "$dir/release-$tool"; fi; answer "{\"jsonrpc\":\"2.0\",\"id\":$id,\"result\":$body}" ) &
                         else
                             # Each call is answered in the background, so a held
                             # call does not hold back a fast one behind it.

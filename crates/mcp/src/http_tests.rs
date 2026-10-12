@@ -1981,3 +1981,125 @@ fn a_server_without_the_resources_capability_offers_none() {
     assert_eq!(listed_names(&listed), ["echo"]);
     assert!(!listed.resources, "no resources capability offers none",);
 }
+
+#[test]
+fn a_streamed_elicitation_gets_exactly_one_answer() {
+    // Over streamable HTTP the elicitation arrives as a stream event,
+    // routed as a stdout line is: the stream carries the elicitation and
+    // then the answer together, so whichever the wait sees first wins.
+    // Either way the elicitation gets exactly one answer, and the answer
+    // matches what happened: asked means `accept` with the content,
+    // unasked means the remover's `decline`.
+    let setup = Setup::new();
+    let server = ProviderServer::start_responding(move |req: &Request| {
+        if req.method == "DELETE" {
+            return Response::status(200, "");
+        }
+        let body: Value = serde_json::from_slice(&req.body).unwrap_or(Value::Null);
+        let id = body.get("id").cloned().unwrap_or(Value::Null);
+        match body.get("method").and_then(Value::as_str) {
+            Some("initialize") => Response::status(
+                200,
+                result(
+                    &id,
+                    json!({
+                        "protocolVersion": "2025-06-18",
+                        "capabilities": {"tools": {}},
+                        "serverInfo": {"name": "remote", "version": "1"},
+                    }),
+                ),
+            )
+            .header("mcp-session-id", SESSION),
+            Some("tools/list") => Response::status(200, result(&id, json!({"tools": []}))),
+            Some("tools/call") => {
+                let elicitation = json!({
+                    "jsonrpc": "2.0",
+                    "id": "el-1",
+                    "method": "elicitation/create",
+                    "params": {
+                        "message": "m",
+                        "requestedSchema": {
+                            "type": "object",
+                            "properties": {"name": {"type": "string"}},
+                            "required": ["name"],
+                        },
+                    },
+                })
+                .to_string();
+                let answer = result(&id, json!({"content": [{"type": "text", "text": "hi"}]}));
+                Response::stream(format!(
+                    "event: message\ndata: {elicitation}\n\nevent: message\ndata: {answer}\n\n"
+                ))
+            }
+            _ => Response::status(202, ""),
+        }
+    })
+    .unwrap();
+    let (remote, _listed) = setup.start(&server, Duration::from_secs(5));
+    let (ask, seen) = crate::elicit::tests::FakeAsk::scripted(
+        "a_5",
+        vec![contract::tool::Answered::Reply(
+            contract::events::Answer::Text {
+                text: "prod".to_owned(),
+            },
+        )],
+    );
+    let (done, result) = std::sync::mpsc::channel();
+    {
+        let remote = Arc::clone(&remote);
+        thread::spawn(move || {
+            let arguments = Map::new();
+            let params = Named {
+                arguments: &arguments,
+                name: "echo",
+            };
+            let answer = remote.call_asking(
+                "tools/call",
+                &params,
+                Duration::from_secs(60),
+                &fakes::CancelToken::new(),
+                Some(crate::elicit::Asker {
+                    ask: &ask,
+                    server: "remote",
+                }),
+            );
+            done.send(answer).expect("collected");
+        });
+    }
+    let answered = Deadline::after(WITHIN)
+        .recv(&result)
+        .unwrap_or_else(|_| panic!("the streamed call answers within {WITHIN:?}"))
+        .expect("the streamed call succeeds");
+    assert_eq!(
+        answered.get("content").and_then(|content| content.get(0)),
+        Some(&json!({"type": "text", "text": "hi"})),
+    );
+    // The pump POSTs the elicitation's answer on its own exchange: five
+    // requests (the handshake's three, the call, and the answer) prove it
+    // is sent.
+    assert!(
+        server.await_requests(5, WITHIN),
+        "the elicitation's answer is POSTed",
+    );
+    let mut answers = server.requests().into_iter().filter_map(|req| {
+        let body: Value = serde_json::from_slice(&req.body).ok()?;
+        (body.get("id") == Some(&json!("el-1"))).then(|| body.clone())
+    });
+    let answer = answers.next().expect("one answer to the elicitation");
+    assert!(answers.next().is_none(), "exactly one answer");
+    // The ask is recorded before its answer is POSTed, and an unasked
+    // elicitation is drained by the remover, so no wait is needed: the
+    // record is there exactly when the answer is an `accept`.
+    match seen.try_recv() {
+        Ok(_) => assert_eq!(
+            answer.get("result"),
+            Some(&json!({"action": "accept", "content": {"name": "prod"}})),
+            "asked means accept with the content",
+        ),
+        Err(_) => assert_eq!(
+            answer.get("result"),
+            Some(&json!({"action": "decline"})),
+            "unasked means the remover's decline",
+        ),
+    }
+}
