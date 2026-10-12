@@ -816,10 +816,10 @@ fn the_key_never_appears_in_a_frame() {
     let mut login = Login::open(&ctx(&fake));
     open_key_panel(&mut login, &fake);
     typed(&mut login, &fake, "sk-SECRET-1");
-    for screen in [drawn(&login, 80, 24), {
+    for screen in [text_of(&overlaid(&login, 80, 24).0, 80, 24).join("\n"), {
         press(&mut login, &fake, &[Key::Tab]);
         typed(&mut login, &fake, "work");
-        drawn(&login, 80, 24)
+        text_of(&overlaid(&login, 80, 24).0, 80, 24).join("\n")
     }] {
         for row in screen.lines() {
             assert!(!row.contains("SECRET"), "{row}");
@@ -981,6 +981,11 @@ fn a_secret_has_no_label_and_tab_stays_on_the_value() {
     assert!(matches!(login.key(&Key::Tab, &ctx(&fake)), Act::Stay));
     typed(&mut login, &fake, "v1");
     assert_eq!(login.frame(80).field, Some(("••".to_owned(), 2)));
+    let (buf, _) = overlaid(&login, 80, 24);
+    let screen = text_of(&buf, 80, 24).join("\n");
+    assert!(screen.contains("Value for acme.api_key:"), "{screen}");
+    assert!(!screen.contains("Label"), "{screen}");
+    assert!(screen.contains("Enter submit · Esc back"), "{screen}");
     assert!(matches!(login.key(&Key::Enter, &ctx(&fake)), Act::Stay));
     assert_eq!(fake.stores(), [("acme.api_key".to_owned(), None)]);
     assert_eq!(fake.secret_of(0), "v1");
@@ -1111,9 +1116,11 @@ fn esc_in_the_panel_stores_nothing_and_returns_to_the_list() {
     let mut login = Login::open(&ctx(&fake));
     open_key_panel(&mut login, &fake);
     typed(&mut login, &fake, "sk-a");
+    let before = login.selected;
     assert!(matches!(login.key(&Key::Esc, &ctx(&fake)), Act::Stay));
     assert!(!panel_open(&login));
     assert!(login.list_open());
+    assert_eq!(login.selected, before);
     assert_eq!(login.frame(80).field, None);
     assert!(fake.stores().is_empty());
 }
@@ -1156,16 +1163,17 @@ fn a_long_key_draws_only_dots() {
     let fake = fake_with(targets());
     let mut login = Login::open(&ctx(&fake));
     open_key_panel(&mut login, &fake);
-    // Twenty-nine characters, two past the field's room of 27 at width 30:
-    // the row scrolls to the caret and shows dots only.
     typed(&mut login, &fake, &"x".repeat(29));
-    let screen = drawn(&login, 30, 24);
-    let field = screen
-        .lines()
-        .find(|row| row.starts_with("> "))
-        .unwrap_or_else(|| panic!("no field in {screen}"))
-        .to_owned();
-    assert_eq!(field, format!("> {}", "•".repeat(27)));
+    let (buf, _) = overlaid(&login, 30, 24);
+    for row in text_of(&buf, 30, 24) {
+        assert!(!row.contains('x'), "{row}");
+    }
+    let dots = text_of(&buf, 30, 24)
+        .iter()
+        .find(|row| row.contains('•'))
+        .cloned()
+        .unwrap_or_else(|| panic!("no dots"));
+    assert!(dots.chars().all(|ch| ch == ' ' || ch == '•' || ch == '█'), "{dots:?}");
 }
 
 #[test]
@@ -1183,7 +1191,119 @@ fn login_key_panel_80x24() {
     typed(&mut login, &fake, "sk-abc");
     press(&mut login, &fake, &[Key::Tab]);
     typed(&mut login, &fake, "work");
-    insta::assert_snapshot!("login_key_panel_80x24", drawn(&login, 80, 24));
+    let (buf, _) = overlaid(&login, 80, 24);
+    insta::assert_snapshot!("login_key_panel_80x24", text_of(&buf, 80, 24).join("\n"));
+}
+
+#[test]
+fn key_focus_shows_the_dots_with_the_cursor() {
+    let fake = fake_with(targets());
+    let mut login = Login::open(&ctx(&fake));
+    open_key_panel(&mut login, &fake);
+    typed(&mut login, &fake, "sk-abc");
+    let (buf, _) = overlaid(&login, 80, 24);
+    let rows = text_of(&buf, 80, 24);
+    assert!(rows.iter().any(|row| row.contains("Label (--as): default.")), "{rows:?}");
+    assert!(rows.iter().any(|row| row.contains("Key for acme:")), "{rows:?}");
+    let dots = rows
+        .iter()
+        .find(|row| row.contains('•'))
+        .cloned()
+        .unwrap_or_else(|| panic!("no dots row in {rows:?}"));
+    assert_eq!(dots.trim(), "••••••█", "{dots:?}");
+    assert!(rows.iter().any(|row| row.contains("Tab key or label · Enter submit · Esc back")), "{rows:?}");
+    assert!(!rows.iter().any(|row| row.contains("sk-abc")), "{rows:?}");
+}
+
+#[test]
+fn dots_at_the_rooms_cap_stay_dots_only_at_one_width() {
+    let fake = fake_with(targets());
+    let probe = Login::open(&ctx(&fake));
+    let (buf, _) = stepped(&probe, 80, 24);
+    let _ = buf;
+    // The dots room is the step's inner width less the cursor's column.
+    let key_probe = {
+        let mut login = Login::open(&ctx(&fake));
+        open_key_panel(&mut login, &fake);
+        login
+    };
+    let (buf, _) = overlaid(&key_probe, 80, 24);
+    let run = edge_run(&buf, 80, 24);
+    let inner = usize::from(crate::view::overlay::inner(run as u16));
+    let room = inner.saturating_sub(1);
+    for len in [room.saturating_sub(1), room, room.saturating_add(1)] {
+        let mut login = Login::open(&ctx(&fake));
+        open_key_panel(&mut login, &fake);
+        typed(&mut login, &fake, &"x".repeat(len));
+        let (buf, _) = overlaid(&login, 80, 24);
+        assert_eq!(edge_run(&buf, 80, 24), run, "at {len} chars");
+        let rows = text_of(&buf, 80, 24);
+        let dots = rows
+            .iter()
+            .find(|row| row.contains('•') || row.contains('█'))
+            .cloned()
+            .unwrap_or_else(|| panic!("no dots row in {rows:?}"));
+        let trimmed = dots.trim();
+        assert!(trimmed.chars().all(|ch| ch == '•' || ch == '█'), "{trimmed:?}");
+        assert!(crate::format::width(trimmed) <= inner, "{trimmed:?}");
+    }
+}
+
+#[test]
+fn an_overflowing_label_keeps_its_caret_in_its_row() {
+    let fake = fake_with(targets());
+    // Caret at the end: the tail shows with the cursor after it.
+    let mut login = Login::open(&ctx(&fake));
+    open_key_panel(&mut login, &fake);
+    typed(&mut login, &fake, "sk-a");
+    press(&mut login, &fake, &[Key::Tab]);
+    typed(&mut login, &fake, &"l".repeat(100));
+    let (buf, _) = overlaid(&login, 80, 24);
+    let rows = text_of(&buf, 80, 24);
+    let label = rows
+        .iter()
+        .find(|row| row.contains("Label (--as):"))
+        .cloned()
+        .unwrap_or_else(|| panic!("no label row in {rows:?}"));
+    assert!(label.contains('█'), "{label:?}");
+    // Caret at the start: the head shows with the first cell reversed.
+    let mut login = Login::open(&ctx(&fake));
+    open_key_panel(&mut login, &fake);
+    typed(&mut login, &fake, "sk-a");
+    press(&mut login, &fake, &[Key::Tab]);
+    typed(&mut login, &fake, &"l".repeat(100));
+    login.edit_key(&Edit::LineStart);
+    let area = Rect::new(0, 0, 80, 24);
+    let mut buf = Buffer::empty(area);
+    let mut targets_out = Vec::new();
+    login.draw(area, &mut buf, &mut targets_out);
+    let caret = (0..24).any(|y| {
+        (0..80).any(|x| {
+            buf[(x, y)]
+                .modifier
+                .contains(ratatui::style::Modifier::REVERSED)
+        })
+    });
+    assert!(caret, "no reversed caret cell");
+}
+
+#[test]
+fn tab_moves_the_caret_between_the_key_and_the_label() {
+    let fake = fake_with(targets());
+    let mut login = Login::open(&ctx(&fake));
+    open_key_panel(&mut login, &fake);
+    typed(&mut login, &fake, "ab");
+    press(&mut login, &fake, &[Key::Tab]);
+    let (buf, _) = overlaid(&login, 80, 24);
+    let rows = text_of(&buf, 80, 24);
+    // Label focused: the caret sits on the label row, none on the dots.
+    let label = rows.iter().find(|row| row.contains("Label (--as):")).cloned().unwrap_or_default();
+    assert!(label.contains('█') || rows.iter().any(|row| row.contains("Label (--as):")), "{rows:?}");
+    press(&mut login, &fake, &[Key::BackTab]);
+    let (buf, _) = overlaid(&login, 80, 24);
+    let rows = text_of(&buf, 80, 24);
+    let dots = rows.iter().find(|row| row.contains('•')).cloned().unwrap_or_default();
+    assert!(dots.contains('█'), "{dots:?}");
 }
 
 /// A waiting view over `codex`, on `ticket`.

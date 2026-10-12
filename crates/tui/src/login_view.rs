@@ -289,10 +289,10 @@ impl Login {
     /// Draws the list in the shared overlay frame, centred: dim
     /// headings, one choice row per target with its tag, the gap, then
     /// anything the last action said, at least three body rows before
-    /// the window clips them, and the legend footer. A browser wait
-    /// draws its step; any other mode draws nothing yet.
+    /// the window clips them, and the legend footer. A browser wait and
+    /// key entry draw their step; any other mode draws nothing yet.
     pub(crate) fn draw(&self, area: Rect, buf: &mut Buffer, targets: &mut Vec<Target>) {
-        if matches!(self.mode, Mode::Waiting(_)) {
+        if matches!(self.mode, Mode::Waiting(_) | Mode::Panel(_)) {
             self.draw_step(area, buf, targets);
             return;
         }
@@ -1193,12 +1193,14 @@ fn wrapped_rows(text: &str, inner: usize, style: Style) -> Vec<overlay::Row> {
         .collect()
 }
 
-/// The dots row: the tail of `dots` that fits, with the block cursor
-/// after it when `cursor` is set.
+/// The dots row: the last dots that fit, with the block cursor
+/// after them when `cursor` is set. Dots only, never an ellipsis.
 fn dots_row(dots: &str, inner: usize, cursor: bool) -> overlay::Row {
     let dim = Style::new().add_modifier(Modifier::DIM);
+    let count = dots.chars().count();
     if cursor {
-        let shown = tail(dots, inner.saturating_sub(1));
+        let room = inner.saturating_sub(1);
+        let shown: String = dots.chars().skip(count.saturating_sub(room)).collect();
         overlay::Row {
             spans: vec![
                 Span::styled(shown, Style::new()),
@@ -1209,8 +1211,9 @@ fn dots_row(dots: &str, inner: usize, cursor: bool) -> overlay::Row {
             barred: false,
         }
     } else {
+        let shown: String = dots.chars().skip(count.saturating_sub(inner)).collect();
         overlay::Row {
-            spans: vec![Span::styled(tail(dots, inner), Style::new())],
+            spans: vec![Span::styled(shown, Style::new())],
             right: Vec::new(),
             targets: Vec::new(),
             barred: false,
