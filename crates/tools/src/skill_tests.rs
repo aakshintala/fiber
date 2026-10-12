@@ -277,7 +277,10 @@ fn a_file_deleted_after_effects_fails_io_failed() {
     let arguments = name("tdd");
     effects_of(&skill, &arguments);
     std::fs::remove_file(&path).unwrap();
-    assert_eq!(code(&run_of(&skill, &arguments)), Some(ErrorCode::ToolError));
+    assert_eq!(
+        code(&run_of(&skill, &arguments)),
+        Some(ErrorCode::ToolError)
+    );
 }
 
 #[test]
