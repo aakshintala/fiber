@@ -63,8 +63,9 @@ pub(crate) fn add_lua(
     extensions: &SessionExtensions,
     providers: &mut Providers,
     config: &Config,
+    run: config::Runner<'_>,
 ) -> Result<AddedLua, Failure> {
-    let mut notices = providers.add_session(extensions, config);
+    let mut notices = providers.add_session(extensions, config, run);
     let naming: Vec<(String, String)> = providers
         .names()
         .flat_map(|name| {
@@ -95,6 +96,7 @@ pub(crate) fn add_lua(
         providers,
         config,
         Some(config::refresh_after(config)),
+        run,
     );
     let _detached = started;
     Ok((naming, notices))

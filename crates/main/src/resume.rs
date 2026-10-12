@@ -196,6 +196,10 @@ fn resumed_session(
     signals: &Arc<doors::Signals>,
     fiber: Result<PathBuf, String>,
 ) -> i32 {
+    // One reads for the process, cancelled when this returns whatever the
+    // result, and armed before the parts are read.
+    let reads = Arc::new(crate::switch::Reads::default());
+    let _cancel = crate::switch::CancelOnDrop(Arc::clone(&reads));
     let folded = match r#loop::resumed(dir) {
         Ok(folded) => folded,
         Err(e) => return ask_failed(failed(e.code(), e)),
@@ -210,6 +214,7 @@ fn resumed_session(
         .thinking
         .as_deref()
         .and_then(|level| level.parse::<contract::ThinkingLevel>().ok());
+    crate::shutdown::arm(signals, &reads);
     let parts = match crate::parts_with(
         overrides,
         folded.model.as_deref(),
@@ -217,6 +222,7 @@ fn resumed_session(
         recorded_thinking,
         Arc::clone(&clock),
         None,
+        Arc::clone(&reads),
     ) {
         Ok(mut parts) => {
             // The session directory's log: the opening message's
@@ -224,7 +230,7 @@ fn resumed_session(
             parts.prompt.session_log = dir.join("events.jsonl").display().to_string();
             parts
         }
-        Err(e) => return ask_failed(e),
+        Err(e) => return crate::session_command::report(signals, e),
     };
     let crate::Parts {
         provider,
@@ -264,13 +270,15 @@ fn resumed_session(
     // A resumed session declares `delegate_spawn` too, parented to itself.
     let fiber_path = match fiber.clone() {
         Ok(fiber_path) => fiber_path,
-        Err(message) => return ask_failed(failed(ErrorCode::IoFailed, message)),
+        Err(message) => {
+            return crate::session_command::report(signals, failed(ErrorCode::IoFailed, message));
+        }
     };
     let Some(sessions) = dir.parent() else {
-        return ask_failed(failed(
-            ErrorCode::IoFailed,
-            "the session directory has no parent",
-        ));
+        return crate::session_command::report(
+            signals,
+            failed(ErrorCode::IoFailed, "the session directory has no parent"),
+        );
     };
     let delegates = crate::delegates::Delegates::new(
         fiber_path,
@@ -282,7 +290,7 @@ fn resumed_session(
         Arc::clone(&clock),
         resolve,
     );
-    crate::shutdown::arm(signals);
+    crate::shutdown::arm(signals, &reads);
     let skill_set = r#loop::SkillSet::new(prompt_inputs.clone(), Path::new(&folded.workspace));
     let skills: Arc<dyn contract::skills::Skills> = Arc::new(skill_set.reader());
     let web_search = match crate::builtin::web_search(
@@ -290,7 +298,7 @@ fn resumed_session(
         extensions.search_backend().as_ref(),
     ) {
         Ok(web_search) => web_search,
-        Err(e) => return ask_failed(e),
+        Err(e) => return crate::session_command::report(signals, e),
     };
     let skipped = folded.skipped();
     let (tools, infos, driver, session_servers) = match crate::mcp_servers::session_tools(
@@ -311,7 +319,7 @@ fn resumed_session(
         extensions.tools(),
     ) {
         Ok(built) => built,
-        Err(e) => return ask_failed(e),
+        Err(e) => return crate::session_command::report(signals, e),
     };
     let forget = Arc::clone(&session_servers.forget);
     let hosted_stands = crate::switch::hosted_stands(&tools);
@@ -340,7 +348,7 @@ fn resumed_session(
         Ok(session) => session,
         Err(e) => {
             session_servers.servers.stop();
-            return ask_failed(e);
+            return crate::session_command::report(signals, e);
         }
     };
     // What the session loads once its offer step has run, before its first

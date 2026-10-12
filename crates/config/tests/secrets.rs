@@ -5,6 +5,7 @@
 mod common;
 
 use std::fs;
+use std::time::Duration;
 
 use common::{Setup, mode};
 use config::{
@@ -27,10 +28,19 @@ fn describe_names_each_source_without_its_secret() {
             "the file /keys/acme",
         ),
         (
-            CredentialSource::Command(vec!["op".into(), "read".into(), "op://acme".into()]),
+            CredentialSource::Command {
+                argv: vec!["op".into(), "read".into(), "op://acme".into()],
+                timeout: Duration::from_secs(30),
+            },
             "the command op",
         ),
-        (CredentialSource::Command(Vec::new()), "an empty command"),
+        (
+            CredentialSource::Command {
+                argv: Vec::new(),
+                timeout: Duration::from_secs(30),
+            },
+            "an empty command",
+        ),
     ] {
         assert_eq!(source.describe(), text);
     }
@@ -108,7 +118,10 @@ fn a_secret_never_prints() {
 
 #[test]
 fn a_command_source_debug_prints_no_argument() {
-    let source = CredentialSource::Command(vec!["echo".into(), VALUE.into()]);
+    let source = CredentialSource::Command {
+        argv: vec!["echo".into(), VALUE.into()],
+        timeout: Duration::from_secs(30),
+    };
     let printed = format!("{source:?}");
     assert!(printed.contains("echo"), "{printed}");
     assert!(!printed.contains(VALUE), "{printed}");
