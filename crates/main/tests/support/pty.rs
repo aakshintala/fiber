@@ -690,6 +690,12 @@ impl Run {
         Arc::clone(&self.writer)
     }
 
+    /// The terminal child's pid: the tests signal the terminal through
+    /// it. A run with no child has none.
+    pub(crate) fn id(&self) -> u32 {
+        self.child.as_ref().expect("the run has a child").id()
+    }
+
     /// The output so far.
     pub(crate) fn output(&self) -> Vec<u8> {
         self.shared.lock().unwrap().output()
