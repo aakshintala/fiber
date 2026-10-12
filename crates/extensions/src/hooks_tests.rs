@@ -433,6 +433,64 @@ fn a_damaged_extension_is_skipped_without_a_notice_and_the_rest_load() {
 }
 
 #[test]
+fn an_unrelated_init_error_keeps_the_extensions_provider_data() {
+    let home = Home::new();
+    home.install("broken-data", Some("error('ordinary init failure')"), &[]);
+    home.edit_manifest("broken-data", |manifest| {
+        manifest["providers"] = json!({"p":[]})
+    });
+    let dir = home
+        .home()
+        .join("extensions/fiber.test-broken-data/providers");
+    fs::create_dir_all(&dir).unwrap();
+    fs::write(
+        dir.join("p.json"),
+        json!({"name":"p", "models":[]}).to_string(),
+    )
+    .unwrap();
+    let session = home.load(&[]);
+    assert_eq!(session.notices().len(), 1);
+    assert!(
+        session.notices()[0]
+            .message
+            .contains("ordinary init failure")
+    );
+    assert!(session.rejected().is_empty());
+    let (mut providers, notices) = crate::Providers::load(&home.home()).unwrap();
+    assert!(notices.is_empty());
+    providers.add_session(&session, &home.config(&[]), &|_, _| {
+        unreachable!("no credential command runs")
+    });
+    assert_eq!(providers.names().collect::<Vec<_>>(), ["p"]);
+}
+
+#[test]
+fn a_provider_start_reports_an_unreadable_provider_directory() {
+    let home = Home::new();
+    home.install("bad-directory", None, &[("p", "fiber.provider('p', {})")]);
+    let session = home.load(&[]);
+    assert!(session.notices().is_empty());
+    assert_eq!(session.lua_providers().len(), 1);
+    let path = home
+        .home()
+        .join("extensions/fiber.test-bad-directory/providers");
+    fs::remove_dir_all(&path).unwrap();
+    fs::write(&path, "not a directory").unwrap();
+    let error = start(&home, &session, "fiber.test/bad-directory", "p")
+        .err()
+        .expect("provider directory must be readable");
+    let crate::Error::Io {
+        path: failed,
+        source,
+    } = error
+    else {
+        panic!("expected the directory read failure, got {error:?}");
+    };
+    assert_eq!(failed, path);
+    assert_eq!(source.kind(), std::io::ErrorKind::NotADirectory);
+}
+
+#[test]
 fn an_entry_script_that_fails_leaves_a_notice_and_is_not_loaded() {
     let home = Home::new();
     home.install("broken", Some("error(\"bad start\")\n"), &[]);

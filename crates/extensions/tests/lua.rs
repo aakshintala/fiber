@@ -190,6 +190,55 @@ fn a_queued_provider_load_expires_at_two_seconds_and_retries() {
 }
 
 #[test]
+fn expiring_one_queued_provider_load_keeps_the_other_load_queued() {
+    let clock = FakeClock::new();
+    let (dir, ext) = lazy_fixture(
+        "fiber.command('hold', {timeout=10000, run=function() require('hold') return 'held' end})",
+        "fiber.provider('p', {})",
+        Arc::clone(&clock),
+    );
+    std::fs::write(
+        dir.path().join("providers/q.lua"),
+        "fiber.provider('q', {sign={timeout=100, run=function() return {} end}})",
+    )
+    .unwrap();
+    let (held, release) = hold_open(dir.path());
+    let command = start(&ext, "hold");
+    Deadline::after(WAIT).recv_or_fail(&held, "held command");
+    let asked = clock.now();
+    let first = start_provider(&ext);
+    assert!(parked_at(&clock, asked + LOAD, 1));
+    let offset = Duration::from_millis(1);
+    let mark = clock.advance_marked(offset);
+    assert!(clock.await_parked_since(&mark, Some(asked + LOAD), WAIT));
+    let (tx, second) = mpsc::channel();
+    let caller = Arc::clone(&ext);
+    std::thread::spawn(move || tx.send(caller.provider_functions("q")));
+    assert!(parked_at(&clock, asked + offset + LOAD, 1));
+    clock.advance(LOAD.checked_sub(offset).unwrap());
+    let error = Deadline::after(WAIT)
+        .recv_or_fail(&first, "first queued load expiry")
+        .unwrap_err();
+    assert!(
+        matches!(error, Error::Timeout { callback, timeout_ms:2000, .. } if callback == "providers/p.lua")
+    );
+    release.send(()).unwrap();
+    assert_eq!(
+        Deadline::after(WAIT)
+            .recv_or_fail(&command, "released command")
+            .unwrap(),
+        "held"
+    );
+    assert_eq!(
+        Deadline::after(WAIT)
+            .recv_or_fail(&second, "the other queued provider load")
+            .unwrap(),
+        ["sign"]
+    );
+    assert!(ext.is_running());
+}
+
+#[test]
 fn a_provider_load_goes_ahead_of_queued_commands() {
     let clock = FakeClock::new();
     let (dir, ext) = lazy_fixture(
