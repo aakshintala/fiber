@@ -291,6 +291,7 @@ fn launched() -> jobs::Launched {
         model: "fake/m:high".to_owned(),
         prompt: "scan the tree".to_owned(),
         workspace: std::path::PathBuf::from("/w"),
+        resume: false,
     }
 }
 
@@ -335,9 +336,14 @@ fn a_delegate_of_a_login_shell_session_carries_the_flag() {
 }
 
 /// Serves one subscription on the socket `home/run/<id>`: acknowledges it,
-/// then either sends one `fiber_exited` line or closes without one. The
-/// thread owns the listener and ends once it served the one connection.
-fn serve(home: &std::path::Path, id: &str, exited: bool) -> std::thread::JoinHandle<()> {
+/// then sends one `fiber_exited` line per `seq`, each carrying it, and
+/// closes. The thread owns the listener and ends once it served the one
+/// connection.
+fn serve(
+    home: &std::path::Path,
+    id: &str,
+    seqs: Vec<Option<u64>>,
+) -> std::thread::JoinHandle<()> {
     let run = home.join("run");
     std::fs::create_dir_all(&run).unwrap();
     // Bound before returning, so the socket file exists when the watch
@@ -357,14 +363,24 @@ fn serve(home: &std::path::Path, id: &str, exited: bool) -> std::thread::JoinHan
             "ts": 0,
         });
         writeln!(writer, "{accepted}").unwrap();
-        if exited {
-            let line = json!({
-                "kind": "fiber_exited",
-                "session_id": "s_test",
-                "ts": 0,
-                "schema_version": contract::SCHEMA_VERSION,
-                "payload": {},
-            });
+        for seq in seqs {
+            let line = match seq {
+                Some(seq) => json!({
+                    "kind": "fiber_exited",
+                    "session_id": "s_test",
+                    "ts": 0,
+                    "schema_version": contract::SCHEMA_VERSION,
+                    "seq": seq,
+                    "payload": {},
+                }),
+                None => json!({
+                    "kind": "fiber_exited",
+                    "session_id": "s_test",
+                    "ts": 0,
+                    "schema_version": contract::SCHEMA_VERSION,
+                    "payload": {},
+                }),
+            };
             writeln!(writer, "{line}").unwrap();
         }
     })
@@ -374,9 +390,9 @@ fn serve(home: &std::path::Path, id: &str, exited: bool) -> std::thread::JoinHan
 fn the_watch_maps_the_socket_exit_to_the_runner_exit() {
     let root = fakes::TempDir::new("dw");
     let home = root.path().join("home");
-    let _served = serve(&home, "s_exited", true);
+    let _served = serve(&home, "s_exited", vec![None]);
     let seen = Arc::new(Mutex::new(Vec::new()));
-    let watched = watch_bounded(&watcher(&home), "s_exited", &seen).unwrap();
+    let watched = watch_bounded(&watcher(&home), "s_exited", None, &seen).unwrap();
     assert!(matches!(watched, jobs::Watched::Exited));
     assert_eq!(*seen.lock().unwrap(), ["fiber_exited"]);
 }
@@ -385,9 +401,9 @@ fn the_watch_maps_the_socket_exit_to_the_runner_exit() {
 fn the_watch_maps_a_close_before_the_exit_to_the_runner_close() {
     let root = fakes::TempDir::new("dw");
     let home = root.path().join("home");
-    let _served = serve(&home, "s_closed", false);
+    let _served = serve(&home, "s_closed", vec![]);
     let seen = Arc::new(Mutex::new(Vec::new()));
-    let watched = watch_bounded(&watcher(&home), "s_closed", &seen).unwrap();
+    let watched = watch_bounded(&watcher(&home), "s_closed", None, &seen).unwrap();
     assert!(matches!(watched, jobs::Watched::Closed));
 }
 
@@ -397,7 +413,7 @@ fn a_refused_watch_is_an_error() {
     let home = root.path().join("home");
     std::fs::create_dir_all(home.join("run")).unwrap();
     let seen = Arc::new(Mutex::new(Vec::new()));
-    assert!(watch_bounded(&watcher(&home), "s_missing", &seen).is_err());
+    assert!(watch_bounded(&watcher(&home), "s_missing", None, &seen).is_err());
 }
 
 /// Runs the watch on a thread and receives its outcome within 5 s: every
@@ -408,6 +424,7 @@ fn a_refused_watch_is_an_error() {
 fn watch_bounded(
     watch: &jobs::Watch,
     id: &str,
+    after: Option<u64>,
     seen: &Arc<Mutex<Vec<String>>>,
 ) -> std::io::Result<jobs::Watched> {
     let watch = Arc::clone(watch);
@@ -418,8 +435,89 @@ fn watch_bounded(
         let mut on_line = |envelope: &contract::Envelope| {
             seen.lock().unwrap().push(envelope.kind.clone());
         };
-        done.send(watch(&id, &mut on_line)).unwrap_or(());
+        done.send(watch(&id, after, &mut on_line)).unwrap_or(());
     });
     Deadline::after(std::time::Duration::from_secs(5))
         .recv_or_fail(&finished, "the watch to return")
+}
+
+fn resumed() -> jobs::Launched {
+    jobs::Launched {
+        session_id: SessionId("s_child".into()),
+        job_id: contract::JobId("j_1".into()),
+        parent: SessionId("s_parent".into()),
+        model: "fake/m:high".to_owned(),
+        prompt: "- also check Y".to_owned(),
+        workspace: std::path::PathBuf::from("/w"),
+        resume: true,
+    }
+}
+
+#[test]
+fn a_resume_builds_the_resume_argv_with_the_message_whole_and_no_model() {
+    let command = launcher(std::path::Path::new("/bin/fiber"))(&resumed());
+    assert_eq!(command.get_program(), "/bin/fiber");
+    let argv: Vec<_> = command
+        .get_args()
+        .map(|arg| arg.to_string_lossy().into_owned())
+        .collect();
+    // One `--prompt=<message>` argument, so a message starting with `-`
+    // reaches the child whole; no `--model`.
+    assert_eq!(
+        argv,
+        [
+            "session",
+            "--id",
+            "s_child",
+            "--workspace",
+            "/w",
+            "--resume",
+            "--prompt=- also check Y",
+            "--parent",
+            "s_parent",
+            "--delegate-id",
+            "j_1",
+        ]
+    );
+    assert!(!argv.iter().any(|arg| arg == "--model"));
+}
+
+#[test]
+fn a_resume_of_a_login_shell_session_carries_the_flag_last() {
+    r#loop::set_variables_source(contract::events::VariablesSource::LoginShell);
+    let resumed = resumed();
+    let argv: Vec<_> = launcher(std::path::Path::new("/bin/fiber"))(&resumed)
+        .get_args()
+        .map(|arg| arg.to_string_lossy().into_owned())
+        .collect();
+    assert_eq!(argv.last().map(String::as_str), Some("--login-shell"));
+    // A new delegate's argv is unchanged.
+    let launched = launched();
+    let argv: Vec<_> = launcher(std::path::Path::new("/bin/fiber"))(&launched)
+        .get_args()
+        .map(|arg| arg.to_string_lossy().into_owned())
+        .collect();
+    assert_eq!(argv.last().map(String::as_str), Some("--login-shell"));
+}
+
+#[test]
+fn the_watch_skips_a_replayed_exit_at_or_before_the_boundary() {
+    let root = fakes::TempDir::new("dw");
+    let home = root.path().join("home");
+    let _served = serve(&home, "s_replay", vec![Some(5)]);
+    let seen = Arc::new(Mutex::new(Vec::new()));
+    let watched = watch_bounded(&watcher(&home), "s_replay", Some(5), &seen).unwrap();
+    assert!(matches!(watched, jobs::Watched::Closed));
+    assert!(seen.lock().unwrap().is_empty(), "no line passes");
+}
+
+#[test]
+fn the_watch_without_a_boundary_takes_the_replayed_exit() {
+    let root = fakes::TempDir::new("dw");
+    let home = root.path().join("home");
+    let _served = serve(&home, "s_replay", vec![Some(5)]);
+    let seen = Arc::new(Mutex::new(Vec::new()));
+    let watched = watch_bounded(&watcher(&home), "s_replay", None, &seen).unwrap();
+    assert!(matches!(watched, jobs::Watched::Exited));
+    assert_eq!(*seen.lock().unwrap(), ["fiber_exited"]);
 }
