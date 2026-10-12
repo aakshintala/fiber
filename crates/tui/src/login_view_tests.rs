@@ -124,15 +124,13 @@ fn typed(login: &mut Login, fake: &Fake, text: &str) {
 }
 
 /// Opens the key panel over `acme`: open focuses the first target, so
-/// Enter opens it with no Down. Edited by hand: the two panel helpers
-/// are different edits, one dropping a key and one shortening a run
-/// that skips the gap (`docs/workflow.md`, "Tools, not handwork").
+/// Enter opens it with no Down.
 fn open_key_panel(login: &mut Login, fake: &Fake) {
     press(login, fake, &[Key::Enter]);
 }
 
 /// Opens the value panel over the secret: two Downs, skipping the gap
-/// and the Secrets heading. Edited by hand, see `open_key_panel`.
+/// and the Secrets heading.
 fn open_secret_panel(login: &mut Login, fake: &Fake) {
     press(login, fake, &[Key::Down, Key::Down, Key::Enter]);
 }
@@ -254,8 +252,7 @@ fn the_list_marks_key_and_browser() {
     let screen = drawn(&Login::open(&ctx(&fake)), 80, 24);
     assert!(screen.contains("Providers"), "{screen}");
     // Each row holds its name and its tag; the key column spans the
-    // providers and the secrets, so `acme` no longer sits two columns
-    // from `key`.
+    // providers and the secrets.
     for (name, tag) in [("acme", "key"), ("codex", "browser"), ("acme.api_key", "")] {
         assert!(
             screen
@@ -486,6 +483,28 @@ fn at_eight_rows_no_choice_draws_and_at_nine_only_the_focus_does() {
     assert_eq!(barred.len(), 1);
     let row: String = (0..80).map(|x| buf[(x, barred[0])].symbol()).collect();
     assert!(row.contains("acme"), "{row}");
+}
+
+#[test]
+fn at_saturation_the_last_provider_stays_visible_with_one_bar() {
+    // At 65,528 providers the overlay height saturates: the window
+    // still shows the last provider, barred, with exactly one bar.
+    const PROVIDERS: usize = 65_528;
+    let mut made = Vec::with_capacity(PROVIDERS);
+    for n in 0..PROVIDERS {
+        made.push(LoginTarget {
+            name: format!("p{n}"),
+            kind: LoginKind::Key,
+        });
+    }
+    let last = format!("p{}", PROVIDERS - 1);
+    let fake = fake_with(made);
+    let login = at(&fake, PROVIDERS);
+    let (buf, _) = overlaid(&login, 80, 24);
+    let barred = barred_rows(&buf, 80, 24);
+    assert_eq!(barred.len(), 1);
+    let row: String = (0..80).map(|x| buf[(x, barred[0])].symbol()).collect();
+    assert!(row.contains(&last), "{row}");
 }
 
 #[test]
