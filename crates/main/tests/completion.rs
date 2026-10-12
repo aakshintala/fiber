@@ -161,7 +161,11 @@ const GRAMMAR: &[(&str, &[&str], &[&str])] = &[
     ("extension reinstall", &[], &["-h", "--help"]),
     ("extension list", &[], &["-h", "--help"]),
     ("extension test", &[], &["-h", "--help"]),
-    ("mcp", &["add", "remove", "list"], &["-h", "--help"]),
+    (
+        "mcp",
+        &["add", "remove", "list", "login", "logout"],
+        &["-h", "--help"],
+    ),
     (
         "mcp add",
         &[],
@@ -169,6 +173,8 @@ const GRAMMAR: &[(&str, &[&str], &[&str])] = &[
     ),
     ("mcp remove", &[], &["--project", "--repo", "-h", "--help"]),
     ("mcp list", &[], &["-h", "--help"]),
+    ("mcp login", &[], &["-h", "--help"]),
+    ("mcp logout", &[], &["-h", "--help"]),
     ("config", &["get", "set"], &["-h", "--help"]),
     ("config get", &[], &["-h", "--help"]),
     ("config set", &[], &["--project", "--repo", "-h", "--help"]),

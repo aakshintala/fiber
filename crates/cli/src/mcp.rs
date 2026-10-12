@@ -78,11 +78,11 @@ pub(crate) struct SecretInput<'a> {
 
 /// Where `run_add` reports: standard output and error.
 pub(crate) struct Streams<'a> {
-    out: &'a mut dyn Write,
-    err: &'a mut dyn Write,
+    pub(crate) out: &'a mut dyn Write,
+    pub(crate) err: &'a mut dyn Write,
 }
 
-fn config_failure(e: ConfigError) -> Failure {
+pub(crate) fn config_failure(e: ConfigError) -> Failure {
     failed(e.code(), e)
 }
 
