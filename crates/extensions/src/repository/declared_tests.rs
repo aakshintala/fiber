@@ -14,7 +14,7 @@ use fakes::Deadline;
 use fakes::clock::FakeClock;
 use serde_json::{Value, json};
 
-use super::{RepoItem, declared_items};
+use super::{RepoItem, declared_items, mcp_server_item};
 use crate::Error;
 use crate::git::GIT_DEADLINE;
 use crate::host::exec::{GRACE, GROUP_POLL};
@@ -754,6 +754,30 @@ fn a_broken_extensions_path_fails_items_but_not_servers() {
         servers.iter().map(|i| i.name.clone()).collect::<Vec<_>>(),
         vec!["db".to_owned()]
     );
+}
+
+#[test]
+fn mcp_server_item_builds_the_snapshot_entry_without_rereading() {
+    use super::declared::declared_servers;
+    let repo = Repo::new();
+    repo.write("srv/run.sh", "echo");
+    repo.config(
+        &json!({"mcp": {"servers": {"db": {"command": "./srv/run.sh", "required": true}}}}),
+    );
+    let declared = config::declared(&repo.root()).unwrap();
+    let entry = declared.mcp_servers.get("db").unwrap().clone();
+    let item = mcp_server_item(&repo.root(), "db", &entry).unwrap();
+    assert_eq!(item.kind, OfferedKind::McpServer);
+    assert_eq!(item.name, "db");
+    assert_eq!(item.path, ".fiber/config.json");
+    assert!(item.required);
+    let servers = declared_servers(&repo.root()).unwrap();
+    let other = servers.iter().find(|i| i.name == "db").unwrap();
+    assert_eq!(item.declaration, other.declaration);
+    assert_eq!(rels(&item), rels(other));
+    let a = super::hash(&mut super::Index::scratch(), &item).unwrap();
+    let b = super::hash(&mut super::Index::scratch(), other).unwrap();
+    assert_eq!(a, b);
 }
 
 #[test]

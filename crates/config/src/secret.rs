@@ -188,6 +188,19 @@ pub fn store_secret(home: &Path, name: &str, secret: &Secret) -> Result<(), Conf
     store_at(&path, secret)
 }
 
+/// Deletes `credentials/<name>` (a `fiber mcp add` undoing a secret it
+/// stored when the declaration write failed before its rename). `true`
+/// when one was removed; `false` when there was none, creating nothing.
+/// A symbolic link there is refused, as [`read_secret`] refuses it.
+pub fn delete_secret(home: &Path, name: &str) -> Result<bool, ConfigError> {
+    let path = secret_path(home, name)?;
+    if !plain(&path, false)? {
+        return Ok(false);
+    }
+    fs::remove_file(&path).map_err(|source| ConfigError::Io { file: path, source })?;
+    Ok(true)
+}
+
 /// Reads `credentials/<name>/<label>`. `None` when there is no such file; a
 /// symbolic link there, or a `credentials/<name>` that is a file, is refused.
 pub fn read_credential(

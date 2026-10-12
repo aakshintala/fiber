@@ -8,8 +8,8 @@ use crate::completion::Shell;
 
 use super::{
     ApproveArgs, AskArgs, Commands, ConfigCommands, ExtensionCommands, HubCommands, Invocation,
-    LoginArgs, LogoutArgs, MENU, SessionArgs, SessionsArgs, SessionsCommands, TokenCommands,
-    command, parse_from, usage_sentence, version_line,
+    LoginArgs, LogoutArgs, MENU, McpAddArgs, McpCommands, McpRemoveArgs, SessionArgs, SessionsArgs,
+    SessionsCommands, TokenCommands, command, parse_from, usage_sentence, version_line,
 };
 
 fn menu() -> String {
@@ -1425,6 +1425,7 @@ fn the_search_subcommands_stay_hidden_but_parse_everything_after() {
             "sessions",
             "models",
             "extension",
+            "mcp",
             "approve",
             "config",
             "login",
@@ -1492,6 +1493,7 @@ fn the_image_subcommand_is_hidden_and_passes_its_arguments_through() {
             "sessions",
             "models",
             "extension",
+            "mcp",
             "approve",
             "config",
             "login",
@@ -2025,5 +2027,209 @@ fn the_menu_fiber_and_ask_rows_show_c() {
             .find(|l| l.starts_with(&format!("  {name} ")))
             .unwrap_or_else(|| panic!("menu has a `{name}` row"));
         assert!(row.contains("[-c <key>=<value>]..."), "menu row: {row}");
+    }
+}
+
+/// `fiber mcp add|remove|list` parses into its invocation: each row is the
+/// argv and the `Invocation` it parses to. A shape the parser cannot say —
+/// both a url and a command, `-e` with a url — parses, and fails at run
+/// time through the binary tests.
+#[test]
+fn mcp_parses_into_its_invocation() {
+    let cases: Vec<(&[&str], Invocation)> = vec![
+        (
+            &["fiber", "mcp", "add", "docs", "https://example.test/mcp"],
+            Invocation::Run(Some(Commands::Mcp(McpCommands::Add(McpAddArgs {
+                project: false,
+                repo: false,
+                name: "docs".to_owned(),
+                url: Some("https://example.test/mcp".to_owned()),
+                env: Vec::new(),
+                secret: Vec::new(),
+                command: Vec::new(),
+            })))),
+        ),
+        (
+            &[
+                "fiber",
+                "mcp",
+                "add",
+                "--repo",
+                "docs",
+                "https://example.test/mcp",
+            ],
+            Invocation::Run(Some(Commands::Mcp(McpCommands::Add(McpAddArgs {
+                project: false,
+                repo: true,
+                name: "docs".to_owned(),
+                url: Some("https://example.test/mcp".to_owned()),
+                env: Vec::new(),
+                secret: Vec::new(),
+                command: Vec::new(),
+            })))),
+        ),
+        (
+            &[
+                "fiber",
+                "mcp",
+                "add",
+                "--project",
+                "x",
+                "-e",
+                "A=1",
+                "--secret",
+                "TOKEN",
+                "--",
+                "npx",
+                "-y",
+                "pkg",
+            ],
+            Invocation::Run(Some(Commands::Mcp(McpCommands::Add(McpAddArgs {
+                project: true,
+                repo: false,
+                name: "x".to_owned(),
+                url: None,
+                env: vec!["A=1".to_owned()],
+                secret: vec!["TOKEN".to_owned()],
+                command: vec!["npx".to_owned(), "-y".to_owned(), "pkg".to_owned()],
+            })))),
+        ),
+        (
+            &["fiber", "mcp", "remove", "docs"],
+            Invocation::Run(Some(Commands::Mcp(McpCommands::Remove(McpRemoveArgs {
+                project: false,
+                repo: false,
+                name: "docs".to_owned(),
+            })))),
+        ),
+        (
+            &["fiber", "mcp", "remove", "--repo", "docs"],
+            Invocation::Run(Some(Commands::Mcp(McpCommands::Remove(McpRemoveArgs {
+                project: false,
+                repo: true,
+                name: "docs".to_owned(),
+            })))),
+        ),
+        (
+            &["fiber", "mcp", "list"],
+            Invocation::Run(Some(Commands::Mcp(McpCommands::List))),
+        ),
+        // Both a url and a command parses; running it is the usage error
+        // the binary tests pin.
+        (
+            &[
+                "fiber",
+                "mcp",
+                "add",
+                "x",
+                "https://example.test/mcp",
+                "--",
+                "npx",
+            ],
+            Invocation::Run(Some(Commands::Mcp(McpCommands::Add(McpAddArgs {
+                project: false,
+                repo: false,
+                name: "x".to_owned(),
+                url: Some("https://example.test/mcp".to_owned()),
+                env: Vec::new(),
+                secret: Vec::new(),
+                command: vec!["npx".to_owned()],
+            })))),
+        ),
+    ];
+    for (argv, expected) in &cases {
+        let parsed = parse_from(argv.iter().copied());
+        // Compared field by field, never through `McpAddArgs`'s redacted
+        // `Debug`: its `Debug` prints names and the layer only, so a
+        // `Debug` comparison would not prove values parsed.
+        match (parsed, expected) {
+            (
+                Invocation::Run(Some(Commands::Mcp(actual))),
+                Invocation::Run(Some(Commands::Mcp(wanted))),
+            ) => match (actual, wanted) {
+                (McpCommands::Add(actual), McpCommands::Add(wanted)) => {
+                    assert_eq!(actual.project, wanted.project, "{argv:?}");
+                    assert_eq!(actual.repo, wanted.repo, "{argv:?}");
+                    assert_eq!(actual.name, wanted.name, "{argv:?}");
+                    assert_eq!(actual.url, wanted.url, "{argv:?}");
+                    assert_eq!(actual.env, wanted.env, "{argv:?}");
+                    assert_eq!(actual.secret, wanted.secret, "{argv:?}");
+                    assert_eq!(actual.command, wanted.command, "{argv:?}");
+                }
+                (McpCommands::Remove(actual), McpCommands::Remove(wanted)) => {
+                    assert_eq!(actual.project, wanted.project, "{argv:?}");
+                    assert_eq!(actual.repo, wanted.repo, "{argv:?}");
+                    assert_eq!(actual.name, wanted.name, "{argv:?}");
+                }
+                (McpCommands::List, McpCommands::List) => {}
+                _ => panic!("mismatched MCP variant for {argv:?}"),
+            },
+            _ => panic!("not an MCP invocation for {argv:?}"),
+        }
+    }
+}
+
+#[test]
+fn mcp_add_args_debug_prints_names_never_values() {
+    let args = McpAddArgs {
+        project: false,
+        repo: true,
+        name: "docs".to_owned(),
+        url: Some("https://user:pass@example.test/mcp?token=zzz".to_owned()),
+        env: vec!["TOKEN=zzz".to_owned()],
+        secret: vec!["KEY".to_owned()],
+        command: vec!["npx".to_owned(), "--token=zzz".to_owned()],
+    };
+    let printed = format!("{args:?}");
+    assert!(printed.contains("docs"), "{printed}");
+    assert!(printed.contains("repository"), "{printed}");
+    assert!(printed.contains("TOKEN"), "{printed}");
+    assert!(printed.contains("KEY"), "{printed}");
+    assert!(!printed.contains("zzz"), "{printed}");
+    assert!(!printed.contains("user"), "{printed}");
+    assert!(!printed.contains("pass"), "{printed}");
+    assert!(!printed.contains("npx"), "{printed}");
+}
+
+#[test]
+fn mcp_rejects_a_missing_name_and_conflicting_scopes() {
+    let missing = sentence(&["fiber", "mcp", "add"]);
+    assert!(
+        missing.contains("<name>"),
+        "the error names the missing name: {missing}"
+    );
+    assert!(
+        missing.ends_with("Run `fiber --help` for usage."),
+        "{missing}"
+    );
+    assert_eq!(missing.lines().count(), 1, "{missing}");
+    for args in [
+        &["fiber", "mcp", "add", "--project", "--repo", "x", "u"][..],
+        &["fiber", "mcp", "remove", "--project", "--repo", "x"],
+    ] {
+        let said = sentence(args);
+        assert!(said.contains("cannot be used with"), "{said}");
+        assert!(said.ends_with("Run `fiber --help` for usage."), "{said}");
+        assert_eq!(said.lines().count(), 1, "{said}");
+    }
+}
+
+#[test]
+fn the_menu_names_the_mcp_commands() {
+    let group = menu()
+        .split("\n\n")
+        .find(|group| group.starts_with("MCP servers:"))
+        .unwrap()
+        .to_owned();
+    for line in [
+        "  mcp add [--project | --repo] <name> <url>",
+        "  mcp add [--project | --repo] <name> [-e KEY=value]... [--secret KEY]... -- <command> [args]...",
+        "  mcp remove [--project | --repo] <name>",
+        "  mcp list",
+    ] {
+        assert!(
+            group.lines().any(|l| l.starts_with(line)),
+            "{line}\n{group}"
+        );
     }
 }
