@@ -851,12 +851,10 @@ mod groups {
         let mut live = live();
         if live.killed {
             signal_group(group, Signal::KILL);
-            // The kill above ends the leader at once; the wait here reaps
-            // it, so no late path leaves a zombie. An already-exited
-            // leader is reaped at once too.
-            match child.wait() {
-                Ok(_) | Err(_) => {}
-            }
+            // Reaped with the lock released: a leader in uninterruptible
+            // sleep (a hung filesystem) must not stall a kill pass behind it.
+            drop(live);
+            let _reaped = child.wait();
             return Err(interrupted());
         }
         live.pgids.push(group);
