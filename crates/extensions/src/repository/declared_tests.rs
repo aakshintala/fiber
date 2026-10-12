@@ -515,6 +515,10 @@ fn stalled_ls_files_child() {
     // The child's own bound fires before the parent's wait, so the two no
     // longer contradict.
     const CHILD_BUDGET: Duration = Duration::from_secs(20);
+    // One deadline for the whole child body, made once at its start: every
+    // wait below takes what remains of it, so the body totals <= CHILD_BUDGET
+    // and the child's bound fires before the parent's 30 s wait.
+    let budget = Deadline::after(CHILD_BUDGET);
     /// One sighting round's wait for the run's answer.
     const SIGHT: Duration = Duration::from_millis(200);
     /// Rounds of waiting for the stalled process to prove it is stuck: 8
@@ -529,12 +533,14 @@ fn stalled_ls_files_child() {
     /// only after the second sighting. A stall that answers instead fails on
     /// its own answer.
     #[track_caller]
-    fn await_stuck<T: Send>(done: &mpsc::Receiver<T>, stall: &str) -> Option<T> {
+    fn await_stuck<T: Send>(done: &mpsc::Receiver<T>, stall: &str, budget: &Deadline) -> Option<T> {
         for _ in 0..STUCK_ROUNDS {
             if !fakes::matching(stall).unwrap().is_empty() {
                 // Up: still up after a bounded wait means stuck, not
-                // starting; an answer meanwhile ends this at once.
-                match Deadline::after(SIGHT).recv(done) {
+                // starting; an answer meanwhile ends this at once. Each
+                // round takes at most what remains of the child's one
+                // deadline.
+                match Deadline::after(SIGHT.min(budget.left())).recv(done) {
                     Ok(done) => return Some(done),
                     Err(std::sync::mpsc::RecvTimeoutError::Timeout) => {}
                     Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => {
@@ -545,7 +551,7 @@ fn stalled_ls_files_child() {
                     return None;
                 }
             }
-            match Deadline::after(SIGHT).recv(done) {
+            match Deadline::after(SIGHT.min(budget.left())).recv(done) {
                 Ok(done) => return Some(done),
                 Err(std::sync::mpsc::RecvTimeoutError::Timeout) => {}
                 Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => {
@@ -587,7 +593,7 @@ fn stalled_ls_files_child() {
     let mut parked = false;
     let mut early = None;
     for _ in 0..STUCK_ROUNDS {
-        if clock.await_parked(running_until, SIGHT) {
+        if clock.await_parked(running_until, SIGHT.min(budget.left())) {
             parked = true;
             break;
         }
@@ -609,7 +615,7 @@ fn stalled_ls_files_child() {
     assert!(parked, "ls-files parks while running");
     // The stall proves it is stuck before the clock first moves: stopping
     // a starter on the way up reports a timeout the stall never caused.
-    let early = await_stuck(&done_rx, &watching);
+    let early = await_stuck(&done_rx, &watching, &budget);
     assert!(early.is_none(), "the stall answers only at its deadline");
     // Past the git deadline the run stops.
     clock.advance(GIT_DEADLINE + Duration::from_secs(1));
@@ -623,7 +629,9 @@ fn stalled_ls_files_child() {
     }
     let answer = match answered {
         Some(answer) => answer,
-        None => Deadline::after(CHILD_BUDGET).recv(&done_rx).unwrap(),
+        // What remains of the child's one deadline, so the sighting rounds
+        // above plus this receive total <= CHILD_BUDGET.
+        None => budget.recv(&done_rx).unwrap(),
     };
     let err = answer.unwrap_err();
     assert!(
@@ -647,7 +655,9 @@ fn stalled_ls_files_child() {
         leftovers.is_empty(),
         "the stalled ls-files is gone: {leftovers:?}"
     );
-    stall_guard.stand_down(CHILD_BUDGET);
+    // What remains of the child's one deadline: the cleanup waits only for
+    // a watchdog that already answered its stand-down.
+    stall_guard.stand_down(budget.left());
 }
 
 #[test]
