@@ -75,8 +75,11 @@ struct SpawnPause {
     release: mpsc::Receiver<()>,
 }
 
-/// Everything [`Reads`] guards with its one lock, so a cancel and a spawn
-/// never interleave.
+/// Everything [`Reads`] guards with its one lock. The lock is never held
+/// across a spawn: a spawn checks under the lock, spawns with it released,
+/// then lists under the lock. A cancel that landed mid-spawn is seen on
+/// the relock, and the late child is killed there, so no command escapes
+/// a cancel.
 #[derive(Default)]
 struct State {
     cancelled: bool,
@@ -325,18 +328,32 @@ impl Reads {
         }
     }
 
-    /// Checks for a cancel, spawns `command` as a group leader and lists
-    /// its group, all under the state lock, so no command escapes a cancel.
+    /// Refuses when cancelled, spawns `command` as a group leader with the
+    /// lock released, then lists its group under the lock. A cancel that
+    /// landed mid-spawn kills the late group here with SIGKILL, reaps the
+    /// leader, and is `Interrupted` without ever listing the group, so no
+    /// command escapes a cancel.
     fn spawn(&self, command: &mut Command) -> io::Result<Child> {
+        if self.lock().cancelled {
+            return Err(interrupted());
+        }
+        #[cfg(test)]
+        self.pause_before_spawn();
+        let mut child = command.process_group(0).spawn()?;
+        let group = child.id();
         let mut state = self.lock();
         if state.cancelled {
+            kill_group(group);
+            // The kill above ends the leader at once; the wait here reaps
+            // it, so no late path leaves a zombie. An already-exited
+            // leader is reaped at once too.
+            match child.wait() {
+                Ok(_) | Err(_) => {}
+            }
             return Err(interrupted());
         }
         state.groups.retain(|group| alive(*group));
-        #[cfg(test)]
-        self.pause_before_spawn();
-        let child = command.process_group(0).spawn()?;
-        state.groups.push(child.id());
+        state.groups.push(group);
         Ok(child)
     }
 
