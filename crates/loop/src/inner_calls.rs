@@ -10,7 +10,7 @@ use contract::tool::{Cancel, InnerCalls};
 use serde_json::Value;
 
 use crate::TurnCancel;
-use crate::progress::SharedWake;
+use crate::progress::{SharedWake, Stream};
 
 pub(crate) const MAX_INNER_DEPTH: u8 = 8;
 
@@ -215,7 +215,7 @@ pub(crate) struct InnerRunning {
     pub(crate) id: ActionId,
     anchor: ActionId,
     request: Raised,
-    pub(crate) stream: Arc<crate::progress::Stream>,
+    pub(crate) stream: Arc<Stream>,
     cancel: Arc<InnerCancel>,
     bound: contract::tool::Bound,
     declared: contract::shapes::DeclaredEffects,
@@ -228,7 +228,7 @@ impl crate::Loop {
     pub(crate) fn take_inner<'scope, 'env>(
         &mut self,
         scope: &'scope std::thread::Scope<'scope, 'env>,
-        streams: &[(&ActionId, &crate::progress::Stream)],
+        streams: &[(&ActionId, &Stream)],
         inner: &mut Vec<InnerRunning>,
         release: &mut crate::asking::Release,
         wake: &Arc<SharedWake>,
@@ -309,16 +309,14 @@ impl crate::Loop {
                     Some(&id),
                 )?;
                 let cancel = Arc::new(InnerCancel::new(Arc::clone(&self.cancel)));
-                let stream = Arc::new(
-                    crate::progress::Stream::new(Arc::clone(wake), id.clone(), false).with_inner(
-                        Arc::new(InnerSlot::new(
-                            Arc::clone(wake),
-                            id.clone(),
-                            call.name.clone(),
-                            slot.depth + 1,
-                        )),
-                    ),
-                );
+                let stream = Arc::new(Stream::new(Arc::clone(wake), id.clone(), false).with_inner(
+                    Arc::new(InnerSlot::new(
+                        Arc::clone(wake),
+                        id.clone(),
+                        call.name.clone(),
+                        slot.depth + 1,
+                    )),
+                ));
                 release.add_cancel(Arc::clone(&cancel));
                 release.add(Arc::clone(&stream));
                 let arguments = Arc::new(prepared.arguments);
