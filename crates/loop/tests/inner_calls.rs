@@ -1122,3 +1122,101 @@ fn an_inner_write_tracks_its_instruction_file_and_appends_the_prune_line_before_
         })
     );
 }
+
+/// A leaf inner call. It reports when it runs, then whether its cancel
+/// arrives within two seconds. It never fails inside its worker, so a missed
+/// cancel reports `false` rather than hanging the turn.
+fn leaf(
+    running: std::sync::mpsc::Sender<()>,
+    cancelled: std::sync::mpsc::Sender<bool>,
+) -> Arc<FakeTool> {
+    Arc::new(FakeTool::new("deep", move |_, cancel, _, _| {
+        let (tx, rx) = std::sync::mpsc::channel();
+        let wake: Arc<dyn contract::clock::Wake> = Arc::new(CancelWake(tx));
+        cancel.subscribe(Arc::downgrade(&wake));
+        let _sent = running.send(());
+        let seen = cancel.is_cancelled()
+            || fakes::Deadline::after(std::time::Duration::from_secs(2))
+                .recv(&rx)
+                .is_ok();
+        let _sent = cancelled.send(seen);
+        text("deep done")
+    }))
+}
+
+/// The anchor of a nested inner call returns while its own inner call is
+/// still running, which only the anchor's return can cancel.
+#[test]
+fn a_nested_inner_call_is_cancelled_when_its_anchor_returns() {
+    let (running_tx, running) = std::sync::mpsc::channel();
+    let (seen_tx, seen) = std::sync::mpsc::channel();
+    let deep = leaf(running_tx, seen_tx);
+    let running = Mutex::new(running);
+    let middle = Arc::new(FakeTool::new("middle", move |_, _, _, ask| {
+        let Some(runner) = ask.inner_calls() else {
+            return text("no runner");
+        };
+        std::thread::spawn(move || runner.run("ext", "deep", json!({})));
+        fakes::Deadline::after(std::time::Duration::from_secs(5)).recv_or_fail(
+            &running.lock().unwrap(),
+            "deep running before middle returns",
+        );
+        text("middle returned")
+    }));
+    let outer = Arc::new(FakeTool::new("outer", |_, _, _, ask| {
+        let Some(runner) = ask.inner_calls() else {
+            return text("no runner");
+        };
+        match runner.run("ext", "middle", json!({})) {
+            Ok(_) => text("outer returned"),
+            Err(error) => text(error),
+        }
+    }));
+    let mut session = session(vec![outer, middle, deep]);
+    assert_eq!(session.turn(), Some(TurnOutcome::Completed));
+    assert!(
+        fakes::Deadline::after(std::time::Duration::from_secs(5))
+            .recv_or_fail(&seen, "deep cancel report"),
+        "the anchor's return cancels the nested call"
+    );
+}
+
+/// The anchor of a nested inner call is cancelled by its own anchor's
+/// return while it is still running, so the nested call is cancelled too.
+#[test]
+fn a_nested_inner_call_is_cancelled_when_its_anchor_is_cancelled() {
+    let deadline = fakes::Deadline::after(std::time::Duration::from_secs(5));
+    let (running_tx, _running) = std::sync::mpsc::channel();
+    let (seen_tx, seen) = std::sync::mpsc::channel();
+    let deep = leaf(running_tx, seen_tx);
+    let (middle_tx, middle_running) = std::sync::mpsc::channel();
+    let middle = Arc::new(FakeTool::new("middle", move |_, _, _, ask| {
+        let Some(runner) = ask.inner_calls() else {
+            return text("no runner");
+        };
+        let _sent = middle_tx.send(());
+        match runner.run("ext", "deep", json!({})) {
+            Ok(_) => text("middle done"),
+            Err(error) => text(error),
+        }
+    }));
+    let middle_running = Mutex::new(middle_running);
+    let outer = Arc::new(FakeTool::new("outer", move |_, _, _, ask| {
+        let Some(runner) = ask.inner_calls() else {
+            return text("no runner");
+        };
+        std::thread::spawn(move || runner.run("ext", "middle", json!({})));
+        deadline.recv_or_fail(
+            &middle_running.lock().unwrap(),
+            "middle running before outer returns",
+        );
+        text("outer returned")
+    }));
+    let mut session = session(vec![outer, middle, deep]);
+    assert_eq!(session.turn(), Some(TurnOutcome::Completed));
+    assert!(
+        fakes::Deadline::after(std::time::Duration::from_secs(5))
+            .recv_or_fail(&seen, "deep cancel report"),
+        "the cancelled anchor cancels the nested call"
+    );
+}

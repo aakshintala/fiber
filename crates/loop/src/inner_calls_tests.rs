@@ -250,3 +250,234 @@ fn a_subscription_after_turn_cancel_is_not_replayed_while_the_relay_is_delayed()
         Err(std::sync::mpsc::TryRecvError::Empty)
     ));
 }
+
+/// Reads the rules once for each call that reaches the deny check. The
+/// window runs inside that read, after `prepared` and before the second
+/// cancel check in `take_inner`.
+#[derive(Clone, Copy)]
+enum Window {
+    Quiet,
+    CancelTurn,
+    FinishAnchor,
+}
+
+struct Reads {
+    window: Window,
+    turn: Arc<crate::TurnCancel>,
+    anchor: Arc<crate::progress::Stream>,
+    count: std::sync::atomic::AtomicUsize,
+}
+
+impl contract::rules::Rules for Reads {
+    fn read(&self) -> Result<contract::rules::StandingRules, contract::rules::RulesError> {
+        self.count.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+        match self.window {
+            Window::Quiet => {}
+            Window::CancelTurn => {
+                let _cancelled = self.turn.cancel();
+            }
+            Window::FinishAnchor => self.anchor.finish(contract::tool::Output::default()),
+        }
+        Ok(contract::rules::StandingRules::default())
+    }
+
+    fn remember(
+        &self,
+        _: &str,
+        _: &str,
+        _: &contract::SessionId,
+    ) -> Result<(), contract::rules::RulesError> {
+        Ok(())
+    }
+}
+
+/// The inner tool. It counts its runs and nothing else.
+struct Inner {
+    runs: std::sync::atomic::AtomicUsize,
+}
+
+impl contract::tool::Tool for Inner {
+    fn definition(&self) -> contract::provider::ToolDefinition {
+        contract::provider::ToolDefinition {
+            name: "inner".into(),
+            description: "An inner tool.".into(),
+            input_schema: serde_json::json!({"type": "object"}),
+            deferred: false,
+            hosted: None,
+        }
+    }
+
+    fn effects(
+        &self,
+        _: &serde_json::Map<String, serde_json::Value>,
+    ) -> Result<contract::tool::Effects, contract::tool::EffectsError> {
+        Ok(contract::tool::Effects {
+            declared: contract::shapes::DeclaredEffects {
+                effects: vec![contract::shapes::Effect::Reads],
+                reversible: true,
+                paths: None,
+            },
+            subject: None,
+            prefix: None,
+            always_reviewed: false,
+        })
+    }
+
+    fn run(
+        &self,
+        _: &serde_json::Map<String, serde_json::Value>,
+        _: &dyn contract::tool::Cancel,
+        _: &dyn contract::emit::Emit,
+    ) -> contract::tool::Output {
+        self.runs.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+        contract::tool::Output::default()
+    }
+}
+
+struct Taken {
+    status: Option<contract::events::CallStatus>,
+    reads: usize,
+    runs: usize,
+}
+
+/// Raises one inner call on an anchor and takes it through
+/// `Loop::take_inner`. The anchor may be cancelled or finished before the
+/// take, and `window` acts inside the deny check.
+fn take(cancel_before: bool, finish_before: bool, window: Window) -> Taken {
+    let deadline = fakes::Deadline::after(std::time::Duration::from_secs(3));
+    let home = fakes::TempDir::new("fiber-inner-take");
+    let workspace = home.path().join("workspace");
+    std::fs::create_dir_all(&workspace).unwrap();
+    let clock: Arc<dyn contract::clock::Clock> = fakes::clock::FakeClock::new();
+    let log = Arc::new(
+        log::Log::create(
+            home.path(),
+            contract::SessionId("s_test".into()),
+            Arc::clone(&clock),
+        )
+        .unwrap(),
+    );
+    let turn = Arc::new(crate::TurnCancel::default());
+    assert!(turn.arm());
+    let (woke_tx, woke) = std::sync::mpsc::channel();
+    let notice: Arc<dyn contract::clock::Wake> = Arc::new(Notice(woke_tx));
+    let wake = Arc::new(SharedWake::default());
+    wake.forward(Some(notice));
+    let anchor_id = ActionId("a_outer".into());
+    let slot = Arc::new(super::InnerSlot::new(
+        Arc::clone(&wake),
+        anchor_id.clone(),
+        "outer".into(),
+        0,
+    ));
+    let anchor = Arc::new(
+        crate::progress::Stream::new(Arc::clone(&wake), anchor_id.clone(), true)
+            .with_inner(Arc::clone(&slot)),
+    );
+    let answered = raise(Arc::clone(&slot), "inner");
+    deadline.recv_or_fail(&woke, "raised inner call");
+    if cancel_before {
+        assert!(turn.cancel());
+    }
+    if finish_before {
+        anchor.finish(contract::tool::Output::default());
+    }
+    let reads = Arc::new(Reads {
+        window,
+        turn: Arc::clone(&turn),
+        anchor: Arc::clone(&anchor),
+        count: std::sync::atomic::AtomicUsize::new(0),
+    });
+    let tool = Arc::new(Inner {
+        runs: std::sync::atomic::AtomicUsize::new(0),
+    });
+    let (_inbox, rx) = std::sync::mpsc::channel();
+    let mut looped = crate::Loop::start(
+        crate::Session {
+            log,
+            provider: Arc::new(fakes::ScriptedProvider::new(Vec::new()))
+                as Arc<dyn contract::provider::Provider>,
+            model: crate::Model {
+                reference: "fake/model".into(),
+                cost: None,
+                subscription: false,
+            },
+            prompt: crate::prompt::PromptInputs::new(
+                home.path().to_path_buf(),
+                "/bin/sh".into(),
+                home.path()
+                    .join("s_test/events.jsonl")
+                    .display()
+                    .to_string(),
+                Arc::clone(&clock),
+                fakes::CONTEXT_WINDOW,
+            ),
+            inbox: rx,
+            tools: vec![(
+                "builtin".to_owned(),
+                Arc::clone(&tool) as Arc<dyn contract::tool::Tool>,
+            )],
+            permissions: crate::Permissions {
+                workspace: workspace.display().to_string(),
+                credentials: home.path().join("credentials"),
+                credential_files: Vec::new(),
+                rules: reads.clone() as Arc<dyn contract::rules::Rules>,
+            },
+        },
+        None,
+    )
+    .unwrap()
+    .cancelled_by(Arc::clone(&turn));
+    let streams = [(&anchor_id, anchor.as_ref())];
+    let mut inner = Vec::new();
+    let mut release = crate::asking::Release::default();
+    let turn_id = contract::TurnId("t_test".into());
+    std::thread::scope(|scope| {
+        looped
+            .take_inner(scope, &streams, &mut inner, &mut release, &wake, &turn_id)
+            .unwrap();
+    });
+    let counted = Taken {
+        status: None,
+        reads: reads.count.load(std::sync::atomic::Ordering::SeqCst),
+        runs: tool.runs.load(std::sync::atomic::Ordering::SeqCst),
+    };
+    // A request the loop kept instead of answering is released here.
+    drop(inner);
+    drop(release);
+    let status = match deadline.recv(&answered) {
+        Ok(Ok(done)) => Some(done.status),
+        _ => None,
+    };
+    Taken { status, ..counted }
+}
+
+#[test]
+fn a_request_taken_under_a_cancelled_turn_is_refused_before_the_rules_are_read() {
+    let taken = take(true, false, Window::Quiet);
+    assert_eq!(taken.status, Some(contract::events::CallStatus::Cancelled));
+    assert_eq!(taken.reads, 0);
+    assert_eq!(taken.runs, 0);
+}
+
+#[test]
+fn a_request_taken_after_its_anchor_finished_is_refused_before_the_rules_are_read() {
+    let taken = take(false, true, Window::Quiet);
+    assert_eq!(taken.status, Some(contract::events::CallStatus::Cancelled));
+    assert_eq!(taken.reads, 0);
+    assert_eq!(taken.runs, 0);
+}
+
+#[test]
+fn a_turn_cancelled_during_the_checks_never_runs_the_request() {
+    let taken = take(false, false, Window::CancelTurn);
+    assert_eq!(taken.status, Some(contract::events::CallStatus::Cancelled));
+    assert_eq!(taken.runs, 0);
+}
+
+#[test]
+fn an_anchor_finished_during_the_checks_never_runs_the_request() {
+    let taken = take(false, false, Window::FinishAnchor);
+    assert_eq!(taken.status, Some(contract::events::CallStatus::Cancelled));
+    assert_eq!(taken.runs, 0);
+}
