@@ -10,11 +10,14 @@ use std::sync::Arc;
 use contract::SessionId;
 use contract::clock::Clock;
 use contract::shapes::Worktree;
+use contract::{ErrorCode, shapes::Failure};
 use log::diag::{Diag, Level, Process, Severity};
 
 use crate::{failure, project};
 
 mod shared;
+
+pub use shared::{Shared, share};
 
 /// A worktree this session process created, until `end`.
 pub struct Isolation {
@@ -23,6 +26,11 @@ pub struct Isolation {
     home: PathBuf,
     clock: Arc<dyn Clock>,
     repository: PathBuf,
+    /// A share of the worktree's lock file, held until `end`: a resumed
+    /// or recreating process runs in a worktree it did not just create,
+    /// so it shares the file for its life. `None` for a worktree this
+    /// process just created, which no other process can share yet.
+    shared: Option<Shared>,
     /// Runs between the first scan's hold and the revalidating scan, so a
     /// test can force the interleaving a session starting in between.
     /// Test-only: always `None` outside tests.
@@ -51,16 +59,150 @@ pub fn isolate(
         .join(&session.0);
     let branch = format!("fiber/{}", session.0);
     match worktree::create(launch, &path, &branch, add) {
-        Ok(created) => Ok(Isolation {
-            created,
-            session: session.clone(),
-            home: home.to_owned(),
-            clock,
-            repository,
-            #[cfg(test)]
-            pause: None,
-        }),
+        Ok(created) => Ok(Isolation::new(
+            created, session, home, clock, repository, None,
+        )),
         Err(error) => Err(failure(error.code(), sentence(&error, &path))),
+    }
+}
+
+/// What a recreation found at the recorded path.
+pub enum Recreated {
+    /// The path was absent: the worktree was made again, at the same
+    /// path and branch from the repository's current HEAD. Ends by the
+    /// same rules as a created worktree.
+    Made(Isolation),
+    /// The path is present: another process already runs in the
+    /// worktree, and the returned share is held for the process's life.
+    Present(Shared),
+}
+
+/// What a failed recreation leaves behind.
+pub struct RecreateError {
+    /// The failure to report.
+    pub failure: Failure,
+    /// The made worktree, when it was made and only its share failed:
+    /// the caller ends it after releasing whatever would keep it.
+    pub isolation: Option<Isolation>,
+}
+
+impl std::fmt::Debug for RecreateError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("RecreateError")
+            .field("failure", &self.failure)
+            .field("isolation", &self.isolation.is_some())
+            .finish()
+    }
+}
+
+/// Makes the recorded worktree again at the same path and branch from the
+/// repository's current HEAD: `repository` is the recorded git common
+/// directory, `path` and `branch` the recorded worktree. A present path
+/// is shared, never remade: the worktree stays exactly as it is. `add`
+/// runs the one hook-running command, `git worktree add`: like
+/// `Command::output`, or a cancellable runner. A failure carries Fiber's
+/// own sentence, never git's output.
+#[allow(
+    clippy::too_many_arguments,
+    reason = "one recreation needs its repository, path, branch, home, session, clock and runners"
+)]
+pub fn recreate(
+    repository: &Path,
+    path: &Path,
+    branch: &str,
+    home: &Path,
+    session: &SessionId,
+    clock: Arc<dyn Clock>,
+    add: &dyn Fn(&mut Command) -> io::Result<Output>,
+) -> Result<Recreated, RecreateError> {
+    recreate_with(
+        repository,
+        path,
+        branch,
+        home,
+        session,
+        clock,
+        add,
+        &|| {},
+        &shared::Creating::downgrade,
+    )
+}
+
+/// [`recreate`] with its two seams: `before_wait` runs before every
+/// blocking lock wait, and `downgrade` converts the creation's exclusive
+/// hold into the share the returned isolation keeps. Production passes a
+/// no-op and the real conversion; tests park on both to force the
+/// interleavings a second process makes.
+#[allow(
+    clippy::too_many_arguments,
+    reason = "one recreation needs its repository, path, branch, home, session, clock, runners and seams"
+)]
+fn recreate_with(
+    repository: &Path,
+    path: &Path,
+    branch: &str,
+    home: &Path,
+    session: &SessionId,
+    clock: Arc<dyn Clock>,
+    add: &dyn Fn(&mut Command) -> io::Result<Output>,
+    before_wait: &dyn Fn(),
+    downgrade: &dyn Fn(shared::Creating) -> Result<Shared, Failure>,
+) -> Result<Recreated, RecreateError> {
+    match shared::claim(path, before_wait) {
+        Ok(shared::Claim::Present(shared)) => Ok(Recreated::Present(shared)),
+        Ok(shared::Claim::Create(creating)) => {
+            let created = match worktree::recreate(repository, path, branch, add) {
+                Ok(created) => created,
+                Err(error) => {
+                    return Err(RecreateError {
+                        failure: recreate_failure(&error, repository, path),
+                        isolation: None,
+                    });
+                }
+            };
+            match downgrade(creating) {
+                Ok(shared) => Ok(Recreated::Made(Isolation::new(
+                    created,
+                    session,
+                    home,
+                    clock,
+                    repository.to_owned(),
+                    Some(shared),
+                ))),
+                Err(failure) => Err(RecreateError {
+                    failure,
+                    isolation: Some(Isolation::new(
+                        created,
+                        session,
+                        home,
+                        clock,
+                        repository.to_owned(),
+                        None,
+                    )),
+                }),
+            }
+        }
+        Err(failure) => Err(RecreateError {
+            failure,
+            isolation: None,
+        }),
+    }
+}
+
+/// One fixed sentence for a recreation's `worktree::Error`: a missing
+/// repository names both directories, and every other error reads as the
+/// matching creation failure does, never with git's output.
+fn recreate_failure(error: &worktree::Error, repository: &Path, path: &Path) -> Failure {
+    match error {
+        worktree::Error::NotARepository { .. } => failure(
+            ErrorCode::IoFailed,
+            format!(
+                "The repository {} is gone, so the worktree {} cannot be made again.",
+                repository.display(),
+                path.display()
+            ),
+        ),
+        _ => failure(error.code(), sentence(error, path)),
     }
 }
 
@@ -77,13 +219,33 @@ fn sentence(error: &worktree::Error, path: &Path) -> String {
         worktree::Error::Git { command, .. } => {
             format!("git {command} failed for the worktree {}.", path.display())
         }
-        worktree::Error::Io { source, .. } => {
-            format!("{}: {}.", path.display(), source.kind())
-        }
+        worktree::Error::Io { path, source } => format!("{}: {}.", path.display(), source.kind()),
     }
 }
 
 impl Isolation {
+    /// One constructor for both entry points: `isolate` shares nothing
+    /// yet, and `recreate` keeps the share it arrived on.
+    fn new(
+        created: worktree::Created,
+        session: &SessionId,
+        home: &Path,
+        clock: Arc<dyn Clock>,
+        repository: PathBuf,
+        shared: Option<Shared>,
+    ) -> Self {
+        Self {
+            created,
+            session: session.clone(),
+            home: home.to_owned(),
+            clock,
+            repository,
+            shared,
+            #[cfg(test)]
+            pause: None,
+        }
+    }
+
     /// The worktree's canonical path.
     pub fn path(&self) -> &Path {
         &self.created.path
@@ -114,7 +276,21 @@ impl Isolation {
     /// still. Runs after `close()`, at most once: it takes `self`.
     /// A kept worktree writes no line; an uncertain one keeps the worktree
     /// and writes one diagnostic `warn` line (see `failed`).
-    pub fn end(self) {
+    pub fn end(mut self) {
+        // Our own share goes first: a removal that waited behind it
+        // would keep the worktree, and no other process shares a
+        // worktree back to life once this returns.
+        drop(self.shared.take());
+        // No process may be working in the worktree while it is
+        // inspected and removed: the exclusive take waits for no one,
+        // and a worktree another process shares is kept with no line.
+        // The hold lasts until `end` returns, around the scan and the
+        // removal below.
+        let _removal = match shared::exclusive(&self.created.path) {
+            Ok(shared::Removal::Exclusive(file)) => Some(file),
+            Ok(shared::Removal::InUse) => return,
+            Err(error) => return self.failed(&error),
+        };
         let mut held = Vec::new();
         let mut known = Vec::new();
         let first = users(&self.home, &self.created.path);
@@ -182,7 +358,18 @@ impl Isolation {
             }
         }
         match worktree::remove(&self.created.path, &inspected, false) {
-            Ok(worktree::Removed::Whole) => {}
+            Ok(worktree::Removed::Whole) => {
+                // The lock file stays while its worktree stays: unlink it
+                // only after a whole removal, still holding the
+                // exclusive take, so a waiter that locked the old inode
+                // reopens the new file. An unlink failure keeps nothing
+                // to lose, only the one warn line.
+                if let Some(lock) = shared::lock_path(&self.created.path) {
+                    if let Err(source) = std::fs::remove_file(&lock) {
+                        self.failed(&worktree::Error::Io { path: lock, source });
+                    }
+                }
+            }
             Ok(worktree::Removed::BranchKept(error)) => self.failed(&error),
             Err(error) => self.failed(&error),
         }

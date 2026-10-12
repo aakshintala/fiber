@@ -30,7 +30,7 @@ pub(crate) const ATTEMPTS: usize = 4;
 /// A worktree's shared hold, kept until dropped. A second share coexists
 /// with it; an exclusive take waits behind it.
 #[derive(Debug)]
-pub(crate) struct Shared {
+pub struct Shared {
     _file: File,
 }
 
@@ -76,7 +76,7 @@ pub(crate) enum Removal {
 /// Shares the worktree's lock file for the process's life, creating the
 /// file. Blocks only while another process recreates or removes the
 /// worktree, both bounded by one git command.
-pub(crate) fn share(worktree: &Path) -> Result<Shared, Failure> {
+pub fn share(worktree: &Path) -> Result<Shared, Failure> {
     share_with(worktree, &|| {})
 }
 
@@ -222,7 +222,7 @@ pub(crate) fn exclusive_with(
 /// The worktree's lock file: the final component with `.lock` appended, so
 /// `worktrees/<id>` locks `worktrees/<id>.lock`. `None` when the path has
 /// no final component.
-fn lock_path(worktree: &Path) -> Option<PathBuf> {
+pub(crate) fn lock_path(worktree: &Path) -> Option<PathBuf> {
     let name = worktree.file_name()?;
     let mut lock = worktree.to_path_buf();
     lock.set_file_name(format!("{}.lock", name.to_string_lossy()));

@@ -1001,3 +1001,454 @@ fn a_rewound_creator_keeps_a_broken_worktree_without_a_diagnostic_line() {
         },
     );
 }
+
+/// An open descriptor on the existing lock file at `path`.
+fn open_lock(path: &Path) -> std::fs::File {
+    std::fs::OpenOptions::new()
+        .read(true)
+        .write(true)
+        .open(path)
+        .unwrap()
+}
+
+/// The lock file beside `path`.
+fn lock_of(path: &Path) -> PathBuf {
+    let name = path.file_name().unwrap().to_string_lossy().into_owned();
+    path.with_file_name(format!("{name}.lock"))
+}
+
+#[test]
+fn recreate_makes_a_removed_worktree_again_at_the_new_head() {
+    fakes::within(
+        "recreate_makes_a_removed_worktree_again_at_the_new_head",
+        BUDGET,
+        || {
+            let home = fakes::TempDir::new("doors-recreate-home");
+            let repo = repo("doors-recreate");
+            let id = "s_0123456789abcdef";
+            let isolation = isolate_now(repo.path(), home.path(), id);
+            let recorded = isolation.worktree();
+            let path = PathBuf::from(&recorded.path);
+            let branch = recorded.branch.clone();
+            let repository = PathBuf::from(recorded.repository.clone().unwrap());
+            isolation.end();
+            assert!(!exists(&path), "the worktree is gone");
+            assert!(!branch_exists(repo.path(), &branch), "the branch is gone");
+            fs::write(repo.path().join("second.txt"), "y").unwrap();
+            git(repo.path(), &["add", "."]);
+            git(repo.path(), &["commit", "--quiet", "-m", "second"]);
+            let head = git(repo.path(), &["rev-parse", "HEAD"]);
+            let clock: Arc<dyn contract::clock::Clock> = fakes::clock::FakeClock::new();
+            let made = match super::recreate(
+                &repository,
+                &path,
+                &branch,
+                home.path(),
+                &SessionId(id.into()),
+                clock,
+                &direct,
+            )
+            .unwrap()
+            {
+                super::Recreated::Made(made) => made,
+                super::Recreated::Present(_) => panic!("the path is absent"),
+            };
+            assert_eq!(made.path(), path);
+            assert_eq!(made.worktree(), recorded);
+            assert_eq!(git(repo.path(), &["rev-parse", &branch]), head);
+            assert!(path.join("second.txt").is_file());
+            // A clean recreated worktree ends against its new base.
+            made.end();
+            assert!(!exists(&path), "the worktree is gone again");
+            assert!(!branch_exists(repo.path(), &branch));
+            assert!(!exists(&lock_of(&path)), "the lock file is unlinked");
+            assert!(!home.path().join("logs").exists(), "no diagnostic line");
+        },
+    );
+}
+
+#[test]
+fn a_recreated_worktree_with_a_commit_beyond_its_base_is_kept() {
+    fakes::within(
+        "a_recreated_worktree_with_a_commit_beyond_its_base_is_kept",
+        BUDGET,
+        || {
+            let home = fakes::TempDir::new("doors-recreate-kept-home");
+            let repo = repo("doors-recreate-kept");
+            let id = "s_0123456789abcdef";
+            let isolation = isolate_now(repo.path(), home.path(), id);
+            let recorded = isolation.worktree();
+            let path = PathBuf::from(&recorded.path);
+            let branch = recorded.branch.clone();
+            let repository = PathBuf::from(recorded.repository.clone().unwrap());
+            isolation.end();
+            let clock: Arc<dyn contract::clock::Clock> = fakes::clock::FakeClock::new();
+            let made = match super::recreate(
+                &repository,
+                &path,
+                &branch,
+                home.path(),
+                &SessionId(id.into()),
+                clock,
+                &direct,
+            )
+            .unwrap()
+            {
+                super::Recreated::Made(made) => made,
+                super::Recreated::Present(_) => panic!("the path is absent"),
+            };
+            fs::write(path.join("more.txt"), "y").unwrap();
+            git(&path, &["add", "."]);
+            git(&path, &["commit", "--quiet", "-m", "more"]);
+            made.end();
+            assert!(exists(&path), "the worktree stays");
+            assert!(branch_exists(repo.path(), &branch));
+            assert!(lock_of(&path).is_file(), "the lock file stays");
+        },
+    );
+}
+
+#[test]
+fn recreate_with_a_missing_repository_makes_nothing() {
+    fakes::within(
+        "recreate_with_a_missing_repository_makes_nothing",
+        BUDGET,
+        || {
+            let home = fakes::TempDir::new("doors-recreate-norepo");
+            let repository = home.path().join("no-such-repo");
+            let path = home.path().join("wt");
+            let clock: Arc<dyn contract::clock::Clock> = fakes::clock::FakeClock::new();
+            let error = match super::recreate(
+                &repository,
+                &path,
+                "fiber/x",
+                home.path(),
+                &SessionId("s_0123456789abcdef".into()),
+                clock,
+                &direct,
+            ) {
+                Err(error) => error,
+                Ok(_) => panic!("a missing repository recreates nothing"),
+            };
+            assert_eq!(error.failure.code, ErrorCode::IoFailed);
+            assert_eq!(
+                error.failure.message,
+                format!(
+                    "The repository {} is gone, so the worktree {} cannot be made again.",
+                    repository.display(),
+                    path.display()
+                )
+            );
+            assert!(error.isolation.is_none());
+            assert!(!exists(&path), "nothing was made");
+            // The claim's hold was released: a share takes hold.
+            let _shared = super::share(&path).unwrap();
+        },
+    );
+}
+
+#[test]
+fn recreate_with_an_existing_branch_keeps_it_where_it_was() {
+    fakes::within(
+        "recreate_with_an_existing_branch_keeps_it_where_it_was",
+        BUDGET,
+        || {
+            let home = fakes::TempDir::new("doors-recreate-branch");
+            let repo = repo("doors-recreate-branch");
+            let branch = "fiber/x";
+            git(repo.path(), &["branch", branch]);
+            let sha = git(repo.path(), &["rev-parse", branch]);
+            let repository = repo.path().join(".git");
+            let path = home.path().join("wt");
+            let clock: Arc<dyn contract::clock::Clock> = fakes::clock::FakeClock::new();
+            let error = match super::recreate(
+                &repository,
+                &path,
+                branch,
+                home.path(),
+                &SessionId("s_0123456789abcdef".into()),
+                clock,
+                &direct,
+            ) {
+                Err(error) => error,
+                Ok(_) => panic!("an existing branch recreates nothing"),
+            };
+            assert_eq!(error.failure.code, ErrorCode::IoFailed);
+            assert_eq!(
+                error.failure.message,
+                format!(
+                    "refs/heads/{branch} already exists, so Fiber did not make a worktree there."
+                )
+            );
+            assert!(error.isolation.is_none());
+            assert_eq!(git(repo.path(), &["rev-parse", branch]), sha);
+            assert!(!exists(&path), "the path was left alone");
+        },
+    );
+}
+
+#[test]
+fn two_concurrent_recreations_share_the_one_worktree() {
+    fakes::within(
+        "two_concurrent_recreations_share_the_one_worktree",
+        BUDGET,
+        || {
+            use std::sync::atomic::{AtomicBool, Ordering};
+
+            let wait = fakes::Deadline::after(BUDGET / 2);
+            let home = fakes::TempDir::new("doors-recreate-race-home");
+            let repo = repo("doors-recreate-race");
+            let common = repo.path().join(".git");
+            let path = home.path().join("wt");
+            let branch = "fiber/x".to_owned();
+            let head = git(repo.path(), &["rev-parse", "HEAD"]);
+            let id = "s_0123456789abcdef";
+            let (in_add_tx, in_add_rx) = mpsc::channel::<()>();
+            let (release_tx, release_rx) = mpsc::channel::<()>();
+            let home_w = home.path().to_path_buf();
+            let home_l = home.path().to_path_buf();
+            let path_w = path.clone();
+            let branch_w = branch.clone();
+            let common_w = common.clone();
+            let winner = std::thread::spawn(move || {
+                let clock: Arc<dyn contract::clock::Clock> = fakes::clock::FakeClock::new();
+                // The winner's add parks inside `git worktree add` while
+                // holding the exclusive claim.
+                let add = |command: &mut Command| -> io::Result<Output> {
+                    in_add_tx.send(()).unwrap();
+                    wait.recv_or_fail(&release_rx, "the test releases the add");
+                    command.output()
+                };
+                super::recreate_with(
+                    &common_w,
+                    &path_w,
+                    &branch_w,
+                    &home_w,
+                    &SessionId(id.into()),
+                    clock,
+                    &add,
+                    &|| {},
+                    &super::shared::Creating::downgrade,
+                )
+            });
+            // The winner is inside its add: start the loser behind it.
+            wait.recv_or_fail(&in_add_rx, "the winner adds");
+            let (waiting_tx, waiting_rx) = mpsc::channel::<()>();
+            let added = Arc::new(AtomicBool::new(false));
+            let added_in = Arc::clone(&added);
+            let path_l = path.clone();
+            let branch_l = branch.clone();
+            let common_l = common.clone();
+            let loser = std::thread::spawn(move || {
+                let clock: Arc<dyn contract::clock::Clock> = fakes::clock::FakeClock::new();
+                let add = |command: &mut Command| -> io::Result<Output> {
+                    added_in.store(true, Ordering::SeqCst);
+                    command.output()
+                };
+                let before_wait = || waiting_tx.send(()).unwrap();
+                super::recreate_with(
+                    &common_l,
+                    &path_l,
+                    &branch_l,
+                    &home_l,
+                    &SessionId(id.into()),
+                    clock,
+                    &add,
+                    &before_wait,
+                    &super::shared::Creating::downgrade,
+                )
+            });
+            wait.recv_or_fail(&waiting_rx, "the loser waits");
+            release_tx.send(()).unwrap();
+            let isolation = match winner.join().unwrap() {
+                Ok(super::Recreated::Made(isolation)) => isolation,
+                Ok(super::Recreated::Present(_)) => panic!("the winner creates"),
+                Err(error) => panic!("the winner creates: {:?}", error.failure),
+            };
+            let loser_shared = match loser.join().unwrap() {
+                Ok(super::Recreated::Present(shared)) => shared,
+                Ok(super::Recreated::Made(_)) => panic!("the loser never adds"),
+                Err(error) => panic!("the loser shares: {:?}", error.failure),
+            };
+            assert!(!added.load(Ordering::SeqCst), "the loser's add never ran");
+            assert!(exists(&path), "the worktree stands");
+            assert_eq!(git(repo.path(), &["rev-parse", &branch]), head);
+            // A clean recreating winner ends while the loser runs: only
+            // the flock keeps the worktree, with no session log at all.
+            isolation.end();
+            assert!(exists(&path), "the worktree is kept");
+            assert!(branch_exists(repo.path(), &branch));
+            drop(loser_shared);
+            // With every share dropped, the lock takes exclusively again.
+            let lock = lock_of(&path);
+            open_lock(&lock).try_lock().unwrap();
+        },
+    );
+}
+
+#[test]
+fn a_share_before_the_end_keeps_the_worktree() {
+    fakes::within("a_share_before_the_end_keeps_the_worktree", BUDGET, || {
+        let home = fakes::TempDir::new("doors-end-shared-home");
+        let repo = repo("doors-end-shared");
+        let id = "s_0123456789abcdef";
+        let isolation = isolate_now(repo.path(), home.path(), id);
+        let path = isolation.path().to_path_buf();
+        let branch = isolation.worktree().branch.clone();
+        // A kept-resume sharer runs in the creator's worktree.
+        let _shared = super::share(&path).unwrap();
+        isolation.end();
+        assert!(exists(&path), "the worktree stays");
+        assert!(branch_exists(repo.path(), &branch));
+        assert!(
+            !home.path().join("logs").exists(),
+            "kept with no diagnostic line"
+        );
+    });
+}
+
+#[test]
+fn an_end_whose_lock_path_is_a_directory_keeps_and_logs() {
+    fakes::within(
+        "an_end_whose_lock_path_is_a_directory_keeps_and_logs",
+        BUDGET,
+        || {
+            let home = fakes::TempDir::new("doors-end-lockdir-home");
+            let repo = repo("doors-end-lockdir");
+            let id = "s_0123456789abcdef";
+            let isolation = isolate_now(repo.path(), home.path(), id);
+            let path = isolation.path().to_path_buf();
+            let branch = isolation.worktree().branch.clone();
+            let lock = lock_of(&path);
+            fs::create_dir(&lock).unwrap();
+            isolation.end();
+            assert!(exists(&path), "the worktree stays");
+            assert!(branch_exists(repo.path(), &branch));
+            let line = warn_line(home.path(), id);
+            assert_eq!(line["level"], "warn");
+            assert_eq!(line["code"], "io_failed");
+            assert_eq!(
+                line["message"],
+                format!("{}: {}.", lock.display(), io::ErrorKind::IsADirectory)
+            );
+        },
+    );
+}
+
+#[test]
+fn a_share_parked_behind_the_end_locks_the_new_file() {
+    fakes::within(
+        "a_share_parked_behind_the_end_locks_the_new_file",
+        BUDGET,
+        || {
+            let wait = fakes::Deadline::after(BUDGET / 2);
+            let home = fakes::TempDir::new("doors-end-handshake-home");
+            let repo = repo("doors-end-handshake");
+            let id = "s_0123456789abcdef";
+            let isolation = isolate_now(repo.path(), home.path(), id);
+            let path = isolation.path().to_path_buf();
+            let (parked_tx, parked_rx) = mpsc::channel::<()>();
+            let (release_tx, release_rx) = mpsc::channel::<()>();
+            let release_rx = Mutex::new(release_rx);
+            let isolation = isolation.with_pause(Arc::new(move || {
+                parked_tx.send(()).unwrap();
+                wait.recv_or_fail(&release_rx.lock().unwrap(), "the test releases the end");
+            }));
+            let ending = std::thread::spawn(move || isolation.end());
+            // The end holds its exclusive take while parked.
+            wait.recv_or_fail(&parked_rx, "the end parks");
+            let (waiting_tx, waiting_rx) = mpsc::channel::<()>();
+            let sharing = path.clone();
+            let sharer = std::thread::spawn(move || {
+                let before_wait = || waiting_tx.send(()).unwrap();
+                super::shared::share_with(&sharing, &before_wait)
+            });
+            wait.recv_or_fail(&waiting_rx, "the share waits");
+            release_tx.send(()).unwrap();
+            ending.join().unwrap();
+            assert!(!exists(&path), "the clean worktree is gone");
+            // The sharer blocked until the end finished: it holds the new
+            // file the removal left behind, never the removed one.
+            let shared = sharer.join().unwrap().unwrap();
+            let lock = lock_of(&path);
+            assert!(lock.is_file(), "the share reopened the lock file");
+            assert!(open_lock(&lock).try_lock().is_err(), "the share holds it");
+            drop(shared);
+        },
+    );
+}
+
+#[test]
+fn a_downgrade_failure_after_a_successful_add_keeps_nothing() {
+    fakes::within(
+        "a_downgrade_failure_after_a_successful_add_keeps_nothing",
+        BUDGET,
+        || {
+            let home = fakes::TempDir::new("doors-recreate-downgrade");
+            let repo = repo("doors-recreate-downgrade");
+            let common = repo.path().join(".git");
+            let path = home.path().join("wt");
+            let branch = "fiber/x".to_owned();
+            let lock = lock_of(&path);
+            let clock: Arc<dyn contract::clock::Clock> = fakes::clock::FakeClock::new();
+            let id = SessionId("s_0123456789abcdef".into());
+            // The downgrade fails after `worktree::recreate` succeeded:
+            // the worktree stands, held by the returned isolation.
+            let fail = |_creating: super::shared::Creating| {
+                Err::<super::shared::Shared, contract::shapes::Failure>(crate::failure(
+                    ErrorCode::IoFailed,
+                    format!("{}: {}.", lock.display(), io::ErrorKind::PermissionDenied),
+                ))
+            };
+            let error = match super::recreate_with(
+                &common,
+                &path,
+                &branch,
+                home.path(),
+                &id,
+                clock,
+                &direct,
+                &|| {},
+                &fail,
+            ) {
+                Err(error) => error,
+                Ok(_) => panic!("the downgrade fails"),
+            };
+            assert_eq!(error.failure.code, ErrorCode::IoFailed);
+            assert_eq!(
+                error.failure.message,
+                format!("{}: {}.", lock.display(), io::ErrorKind::PermissionDenied)
+            );
+            let isolation = error.isolation.expect("the made worktree is kept");
+            assert!(exists(&path), "the worktree stands");
+            isolation.end();
+            assert!(!exists(&path), "the end removes it");
+            assert!(!branch_exists(repo.path(), &branch));
+            assert!(!exists(&lock), "the lock file is unlinked");
+            assert!(
+                !home.path().join("logs").exists(),
+                "no diagnostic line when the end itself succeeds"
+            );
+            // A failure of `worktree::recreate` itself keeps no isolation
+            // and makes nothing.
+            git(repo.path(), &["branch", "fiber/y"]);
+            let clock: Arc<dyn contract::clock::Clock> = fakes::clock::FakeClock::new();
+            let error = match super::recreate_with(
+                &common,
+                &path,
+                "fiber/y",
+                home.path(),
+                &id,
+                clock,
+                &direct,
+                &|| {},
+                &super::shared::Creating::downgrade,
+            ) {
+                Err(error) => error,
+                Ok(_) => panic!("an existing branch recreates nothing"),
+            };
+            assert!(error.isolation.is_none());
+            assert!(!exists(&path), "nothing was made");
+        },
+    );
+}
