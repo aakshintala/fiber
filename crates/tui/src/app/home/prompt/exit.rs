@@ -190,8 +190,9 @@ impl App {
 
     /// One resume line per live session whose stop was not sent: every
     /// live feed row outside `closing`, in list order, and the attached
-    /// session when it has no row and is not closing. Empty without
-    /// home. `run` writes them after restoring the terminal.
+    /// session when it is not closing and no live row already names it.
+    /// Empty without home. `run` writes them after restoring the
+    /// terminal.
     pub(crate) fn exit_lines(&self) -> Vec<String> {
         let Some(home) = self.home.as_ref() else {
             return Vec::new();
@@ -209,15 +210,19 @@ impl App {
             })
             .map(|row| crate::home::exit_line(&row.id))
             .collect();
-        // The attached session without a feed row is still live: without
-        // one it never left, and a row would have listed it.
+        // The attached session is live while attached: it never left,
+        // and a resumed session's row still reads exited until the feed
+        // update marks it live. Without this it gets no resume line when
+        // quitting before that update lands. An exit that arrived after
+        // the attach instead marks it dead, and it gets no line.
         if let Phase::Attached { session, .. } = &self.phase
-            && home.sessions.row(session).is_none()
+            && !home.sessions.live().iter().any(|row| row.id == *session)
             && !home
                 .questions
                 .closing
                 .iter()
                 .any(|(closed, _)| closed == session)
+            && home.left_after_attach.as_ref() != Some(session)
         {
             lines.push(crate::home::exit_line(session));
         }
