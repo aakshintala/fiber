@@ -517,3 +517,7 @@ fn hints(config: &Config, server: &str) -> BTreeMap<String, mcp::Hints> {
 #[cfg(test)]
 #[path = "mcp_servers_tests.rs"]
 mod tests;
+
+#[cfg(test)]
+#[path = "mcp_elicit_tests.rs"]
+mod elicit_tests;

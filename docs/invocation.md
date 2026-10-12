@@ -500,7 +500,9 @@ each `approve`, `skip` or `never`, which `repository_code_resolved` records.
 
 A reply is rejected `stale_request` when its request is no longer pending, and
 `invalid_arguments` when its keys do not fit the request: another kind's
-answer keys, `feedback` with `allow`, `remember` on a request with no `rule`
+answer keys, a typed answer that does not fit its MCP elicitation field
+(`docs/mcp.md`, "Elicitation, sampling and roots"), `feedback` with `allow`,
+`remember` on a request with no `rule`
 or with a prefix the request did not offer, or `decisions` whose length is
 not the number of items offered. A global standing rule is added by
 editing the global rules file, never from an approval.

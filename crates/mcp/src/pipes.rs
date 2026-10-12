@@ -7,7 +7,7 @@ use std::process::{ChildStdin, ChildStdout};
 use std::sync::mpsc::SyncSender;
 use std::sync::{Weak, mpsc};
 
-use crate::rpc::{Incoming, decode_line, encode_error, encode_result};
+use crate::rpc::{Incoming, ServerRequest, decode_line, encode_error, encode_result};
 use crate::wait::Shared;
 
 /// A stdout line past this long ends the reader, and the server counts as
@@ -60,23 +60,54 @@ pub(crate) fn read_stdout(
     }
 }
 
+/// The answer to one server request, or `None` when it was queued for
+/// an asking call. A valid `elicitation/create` with an asking call
+/// registered is queued, waking every waiter; with none it is declined
+/// at once, and a malformed one is answered `-32602`, each unlogged.
+/// `ping` keeps `{}`, and `sampling/createMessage` and every other
+/// unknown server method keep `-32601` (`docs/mcp.md`, "Elicitation,
+/// sampling and roots").
+fn serve(request: &ServerRequest, line: &str, shared: &Shared) -> Option<String> {
+    match request.method.as_str() {
+        "ping" => Some(encode_result(&request.id, &serde_json::json!({}))),
+        "elicitation/create" => match crate::elicit::read(line) {
+            Err(reason) => Some(encode_error(
+                &request.id,
+                -32602,
+                &format!("Fiber cannot show this elicitation: {reason}.",),
+            )),
+            Ok(form) => {
+                let elicitation = crate::wait::Elicitation {
+                    id: request.id.clone(),
+                    form,
+                };
+                match shared.queue_elicitation(elicitation) {
+                    Ok(()) => None,
+                    Err(refused) => Some(encode_result(
+                        &refused.id,
+                        &serde_json::json!({"action": "decline"}),
+                    )),
+                }
+            }
+        },
+        _ => Some(encode_error(&request.id, -32601, "Method not found")),
+    }
+}
+
 /// Routes one received JSON-RPC message: a response to its id's slot, a
-/// server request answered on `writer` (`ping` answered `{}`, any other
-/// server method answered `-32601`). A line that is not a JSON object is
-/// ignored. Both transports feed every received message through here, so
-/// server requests behave the same on either (`docs/mcp.md`, "What Fiber
-/// does with MCP").
+/// server request answered on `writer` through [`serve`]. A line that is
+/// not a JSON object is ignored. Both transports feed every received
+/// message through here, so server requests behave the same on either
+/// (`docs/mcp.md`, "What Fiber does with MCP").
 pub(crate) fn route(line: &str, shared: &Shared, writer: &Weak<SyncSender<Vec<u8>>>) {
     match decode_line(line) {
         Incoming::Response(response) => {
             shared.deliver(response.id, response.outcome);
         }
         Incoming::ServerRequest(request) => {
-            let answer = match request.method.as_str() {
-                "ping" => encode_result(&request.id, &serde_json::json!({})),
-                _ => encode_error(&request.id, -32601, "Method not found"),
-            };
-            if let Some(writer) = writer.upgrade() {
+            if let Some(answer) = serve(&request, line, shared)
+                && let Some(writer) = writer.upgrade()
+            {
                 queue(&writer, answer.into_bytes(), shared);
             }
         }

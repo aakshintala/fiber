@@ -1,5 +1,7 @@
 //! Tests for MCP stdio line limits and child-pipe reads.
 
+use contract::clock::Clock;
+
 #[test]
 fn max_line_is_4_mib() {
     assert_eq!(super::MAX_LINE, 4 * 1024 * 1024);
@@ -247,12 +249,14 @@ fn route_answers_ping_with_an_empty_result() {
 
 #[test]
 fn route_answers_an_unknown_method_with_method_not_found() {
+    // `elicitation/create` is answered through the elicitation path
+    // now (`serve_*` below), so an unknown method names another one.
     let shared = super::super::wait::Shared::default();
     let (writer, incoming) = std::sync::mpsc::sync_channel::<Vec<u8>>(8);
     let writer = std::sync::Arc::new(writer);
     let weak = std::sync::Arc::downgrade(&writer);
     super::route(
-        r#"{"jsonrpc":"2.0","id":"abc","method":"elicitation/create"}"#,
+        r#"{"jsonrpc":"2.0","id":"abc","method":"sampling/createMessage"}"#,
         &shared,
         &weak,
     );
@@ -275,4 +279,128 @@ fn route_ignores_a_non_object_line() {
         !crate::registry::lock(&shared.inner).gone,
         "an ignored line never marks the server gone"
     );
+}
+
+/// One server request over `line`, answered through `serve` alone, so the
+/// reader's arms are pinned without a child.
+fn served(
+    method: &str,
+    id: serde_json::Value,
+    line: &str,
+) -> (super::super::wait::Shared, Option<String>) {
+    let shared = super::super::wait::Shared::default();
+    let request = super::super::rpc::ServerRequest {
+        id,
+        method: method.to_owned(),
+    };
+    let answer = super::serve(&request, line, &shared);
+    (shared, answer)
+}
+
+#[test]
+fn serve_answers_ping_with_an_empty_result() {
+    let (_shared, answer) = served(
+        "ping",
+        serde_json::json!(3),
+        r#"{"jsonrpc":"2.0","id":3,"method":"ping"}"#,
+    );
+    let answer: serde_json::Value =
+        serde_json::from_str(&answer.expect("ping is answered")).expect("valid JSON");
+    assert_eq!(answer["result"], serde_json::json!({}));
+}
+
+/// One elicitation request line with `id`, asking one boolean field.
+fn elicitation_line(id: &serde_json::Value) -> String {
+    serde_json::json!({
+        "jsonrpc": "2.0",
+        "id": id,
+        "method": "elicitation/create",
+        "params": {
+            "message": "m",
+            "requestedSchema": {
+                "type": "object",
+                "properties": {"a": {"type": "boolean"}},
+            },
+        },
+    })
+    .to_string()
+}
+
+#[test]
+fn serve_answers_sampling_and_unknown_methods_with_method_not_found() {
+    for method in ["sampling/createMessage", "roots/list", "no-such-method"] {
+        let line = format!(r#"{{"jsonrpc":"2.0","id":"x","method":"{method}","params":{{}}}}"#);
+        let (_shared, answer) = served(method, serde_json::json!("x"), &line);
+        let answer: serde_json::Value =
+            serde_json::from_str(&answer.expect("the method is answered")).expect("valid JSON");
+        assert_eq!(
+            answer["error"]["code"],
+            serde_json::json!(-32601),
+            "{method}"
+        );
+    }
+}
+
+#[test]
+fn serve_declines_an_elicitation_with_no_asking_call() {
+    for id in [serde_json::json!(7), serde_json::json!("n1")] {
+        let line = elicitation_line(&id);
+        let (_shared, answer) = served("elicitation/create", id.clone(), &line);
+        let answer: serde_json::Value =
+            serde_json::from_str(&answer.expect("no call declines at once")).expect("valid JSON");
+        assert_eq!(answer["id"], id, "the id echoes");
+        assert_eq!(answer["result"], serde_json::json!({"action": "decline"}));
+    }
+}
+
+#[test]
+fn serve_answers_a_malformed_elicitation_with_invalid_params() {
+    let line = serde_json::json!({
+        "jsonrpc": "2.0",
+        "id": "n2",
+        "method": "elicitation/create",
+        "params": {
+            "message": "m",
+            "requestedSchema": {"type": "object", "properties": {}},
+        },
+    })
+    .to_string();
+    let (_shared, answer) = served("elicitation/create", serde_json::json!("n2"), &line);
+    let answer: serde_json::Value =
+        serde_json::from_str(&answer.expect("a malformed elicitation is answered"))
+            .expect("valid JSON");
+    assert_eq!(answer["id"], serde_json::json!("n2"), "the id echoes");
+    assert_eq!(answer["error"]["code"], serde_json::json!(-32602));
+    let message = answer["error"]["message"].as_str().expect("a message");
+    assert!(
+        message.starts_with("Fiber cannot show this elicitation: "),
+        "the message names the cause: {message}",
+    );
+    assert!(
+        message.ends_with('.'),
+        "the message ends in one period: {message}"
+    );
+}
+
+#[test]
+fn serve_queues_an_elicitation_with_an_asking_call() {
+    let shared = super::super::wait::Shared::default();
+    shared.insert(7);
+    shared.register(
+        7,
+        contract::ActionId("a_7".to_owned()),
+        fakes::clock::FakeClock::new().now() + std::time::Duration::from_secs(30),
+    );
+    let line = elicitation_line(&serde_json::json!("el-7"));
+    let request = super::super::rpc::ServerRequest {
+        id: serde_json::json!("el-7"),
+        method: "elicitation/create".to_owned(),
+    };
+    assert!(
+        super::serve(&request, &line, &shared).is_none(),
+        "a queued elicitation has no answer yet",
+    );
+    let taken = shared.take_elicitation().expect("the queue holds it");
+    assert_eq!(taken.elicitation.id, serde_json::json!("el-7"));
+    assert_eq!(taken.elicitation.form.message, "m");
 }

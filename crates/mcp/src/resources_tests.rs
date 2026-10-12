@@ -1006,3 +1006,91 @@ fn the_first_starts_tool_reaches_an_adopted_server() {
     }
     setup.stop(first.servers);
 }
+
+#[test]
+fn read_asking_answers_an_elicitation_and_reads() {
+    use contract::events::Answer;
+    use contract::tool::Answered;
+    // `run_asking` forwards its asker through the slot seam, as a tool's
+    // does: the call is held until its ask is observed, so without
+    // forwarding no ask ever arrives and this wait fails instead of the
+    // remover's decline passing. The fake holds the read's answer until
+    // the elicitation's answer POST arrives, so the ask is always
+    // observed first: the answer below is the asker's, never the
+    // remover's.
+    let setup = Setup::new();
+    let elicitation = json!({
+        "jsonrpc": "2.0",
+        "id": "el-1",
+        "method": "elicitation/create",
+        "params": {
+            "message": "m",
+            "requestedSchema": {
+                "type": "object",
+                "properties": {"name": {"type": "string"}},
+                "required": ["name"],
+            },
+        },
+    })
+    .to_string();
+    let gated = fakes::GatedHttp::start_read(
+        elicitation,
+        json!({"contents": [{
+            "uri": "file:///notes.txt",
+            "mimeType": "text/plain",
+            "text": "hello",
+        }]}),
+    );
+    let spec = setup.remote_spec("docs", &gated.url());
+    let images: Arc<dyn contract::images::Images> = FakeImages::ok();
+    let workspace = setup.workspace();
+    let artifacts = setup.artifacts();
+    let cache = setup.cache();
+    let clock = setup.clock();
+    std::fs::create_dir_all(&artifacts).expect("artifacts dir");
+    let started = fakes::within("the start", WITHIN, move || {
+        crate::start::start(
+            vec![spec],
+            &workspace,
+            &artifacts,
+            images,
+            &cache,
+            &clock,
+            "0.0.0",
+        )
+    });
+    let tool = live_tool(&started, setup.artifacts().as_path());
+    let (ask, seen, send) = crate::elicit::tests::FakeAsk::held("a_4");
+    let moved = Arc::clone(&tool);
+    let arguments = args(json!({"action": "read", "server": "docs", "uri": "file:///notes.txt"}));
+    let (done, out) = std::sync::mpsc::channel();
+    std::thread::spawn(move || {
+        done.send(moved.run_asking(&arguments, &cancel(), &emit(), &ask))
+            .expect("collected");
+    });
+    fakes::Deadline::after(WITHIN).recv_or_fail(&seen, "the elicitation's ask");
+    send.send(Answered::Reply(Answer::Text {
+        text: "prod".to_owned(),
+    }))
+    .expect("the answer sends");
+    let out = fakes::Deadline::after(WITHIN)
+        .recv(&out)
+        .unwrap_or_else(|_| panic!("the asking read answers within {WITHIN:?}"));
+    assert!(out.error.is_none(), "the read succeeds: {out:?}");
+    assert_eq!(text_of(&out), ["hello"]);
+    // The pump POSTs the elicitation's answer before the fake releases
+    // the read's answer, so by the time the read completes the POST is
+    // recorded: no wait is needed.
+    let mut answers = gated.elicitation_answers().into_iter();
+    let answer = answers.next().expect("one answer to the elicitation");
+    assert!(answers.next().is_none(), "exactly one answer");
+    // The ask is recorded before its answer is POSTed, and the call was
+    // held until the ask arrived, so the answer is the asker's `accept`
+    // with the content: no wait is needed and no decline passes.
+    assert_eq!(
+        answer.get("result"),
+        Some(&json!({"action": "accept", "content": {"name": "prod"}})),
+        "asked means accept with the content",
+    );
+    setup.stop(started.servers);
+}
