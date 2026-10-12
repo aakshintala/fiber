@@ -185,9 +185,12 @@ On Linux x86_64 alone:
   parallel and still gate `CI`. Each shard runs `cargo mutants --baseline=skip
   --timeout 120`, since the tests it would rerun as a baseline just passed on
   this head. A systemd user scope caps the run at 12 GiB, leaving 4 GiB of the
-  runner's 16 GiB for the host. Each shard prints its mutant list before the
-  run and uploads `mutants.out` as a shard-named artifact, even if the run
-  fails.
+  runner's 16 GiB for the host. `OOMPolicy=kill` kills the whole scope on an
+  out-of-memory event, so the shard fails instead of counting a killed test as
+  a caught mutant. If the run exits non-zero, the step prints the mutant in the
+  newest scenario log under `mutants.out/log/`. Each shard prints its mutant
+  list before the run and uploads `mutants.out` as a shard-named artifact, even
+  if the run fails.
   Selection lists the diff's mutants (`cargo mutants --in-diff --list`) to its
   job summary on every code pull request event, draft or not, whether or not
   shards will run. A run whose Linux x86_64 tests fail starts none, and a run that selects no tests
