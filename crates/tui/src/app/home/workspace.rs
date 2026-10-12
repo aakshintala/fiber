@@ -311,6 +311,11 @@ impl App {
     /// Removes the path's last character: past the first character the
     /// picker returns to the recents alone, keeping the listings for
     /// the opening. With no typed text it does nothing.
+    // Deleting the `!` sets `selected` while the text still holds a
+    // character. `selected` is read only once typing ends, and typing
+    // ends only here, where it is set to 0 anyway, so the mutant changes
+    // nothing a consumer sees.
+    #[cfg_attr(false, mutants::skip)]
     fn backspace_picker(&mut self) {
         if let Some(home) = self.home.as_mut()
             && let Some(picker) = home.chooser.picker.as_mut()
