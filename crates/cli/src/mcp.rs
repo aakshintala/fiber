@@ -25,8 +25,12 @@ use crate::approve::say;
 use crate::login::{KeyReader, NoEcho, Plain};
 use crate::{fail, failed, project_of, usage};
 
-/// A server's declaration as the layer's file holds it.
-#[derive(Debug, Clone, PartialEq, Eq)]
+/// A server's declaration as the layer's file holds it. Its `Debug`
+/// prints names only, never values: a url prints redacted (never its
+/// query or userinfo), and a stdio server prints its env and secret key
+/// names with its command and arguments redacted
+/// (`docs/code-quality.md`, "Errors").
+#[derive(Clone, PartialEq, Eq)]
 pub enum McpDeclaration {
     /// A remote server: `{ "url": <url> }`.
     Remote {
@@ -45,6 +49,23 @@ pub enum McpDeclaration {
         /// Secret variable names, in flag order.
         secrets: Vec<String>,
     },
+}
+
+impl std::fmt::Debug for McpDeclaration {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Remote { .. } => f.debug_struct("Remote").field("url", &"redacted").finish(),
+            Self::Stdio { env, secrets, .. } => {
+                let names: Vec<&String> = env.iter().map(|(key, _)| key).collect();
+                f.debug_struct("Stdio")
+                    .field("command", &"redacted")
+                    .field("args", &"redacted")
+                    .field("env", &names)
+                    .field("secrets", secrets)
+                    .finish()
+            }
+        }
+    }
 }
 
 /// Where `run_add` reads secrets: the key reader, its input, and whether a
@@ -163,38 +184,59 @@ fn declaration_value(
 }
 
 /// Puts each secret this call stored back: the previous bytes restored, or
-/// the file removed when there was none.
-fn rollback(home: &Path, stored: &[(String, Option<Secret>)]) {
+/// the file removed when there was none. Each cleanup failure is reported
+/// on stderr, naming the affected file; the exit code stays the caller's.
+fn rollback(home: &Path, stored: &[(String, Option<Secret>)], err: &mut dyn Write) {
     for (name, previous) in stored {
-        match previous {
-            Some(secret) => {
-                store_secret(home, name, secret).unwrap_or(());
-            }
-            None => {
-                delete_secret(home, name).unwrap_or(false);
-            }
+        let outcome: Result<(), ConfigError> = match previous {
+            Some(secret) => store_secret(home, name, secret),
+            None => delete_secret(home, name).map(|_| ()),
+        };
+        if let Err(error) = outcome {
+            say(
+                err,
+                &format!(
+                    "fiber: could not restore {}: {error}\n",
+                    home.join("credentials").join(name).display()
+                ),
+            );
         }
     }
+}
+
+/// Whether a `store_secret` result leaves the new bytes in place: success,
+/// or `Unsynced` after its rename. Such a credential joins the rollback
+/// list, so rollback restores or removes it.
+fn track_after_store(result: &Result<(), ConfigError>) -> bool {
+    result.is_ok() || matches!(result, Err(ConfigError::Unsynced { .. }))
 }
 
 /// Undoes the secrets a failed declaration write stored, unless the write
 /// failed after its rename: then the new file is in place and the secrets
 /// are retained, so no visible declaration references a deleted credential.
-fn settle_secrets(home: &Path, stored: &[(String, Option<Secret>)], error: &ConfigError) {
+fn settle_secrets(
+    home: &Path,
+    stored: &[(String, Option<Secret>)],
+    error: &ConfigError,
+    err: &mut dyn Write,
+) {
     if matches!(error, ConfigError::Unsynced { .. }) {
         return;
     }
-    rollback(home, stored);
+    rollback(home, stored, err);
 }
 
 /// Records the approval of the declaration just written to the repository,
-/// hashed exactly as startup hashes it. A failure names the repository's
-/// file and `fiber approve`; the declaration stays.
+/// hashed exactly as startup hashes it. The declaration on disk must equal
+/// the one just written: a concurrent replacement is refused as a config
+/// failure naming the server, approving nothing. Any other failure names
+/// the repository's file and `fiber approve`; the declaration stays.
 fn record_approval(
     home: &Path,
     workspace: &Path,
     project: &ProjectKey,
     name: &str,
+    expected: &Value,
     clock: &Arc<dyn Clock>,
 ) -> Result<(), Failure> {
     let repo_file = workspace.join(".fiber/config.json");
@@ -207,6 +249,18 @@ fn record_approval(
             ),
         )
     };
+    let declared = config::declared(workspace).map_err(config_failure)?;
+    match declared.mcp_servers.get(name) {
+        Some(current) if current == expected => {}
+        _ => {
+            return Err(failed(
+                ErrorCode::ConfigInvalid,
+                format!(
+                    "`{name}` changed after it was written; the approval was not recorded. Run `fiber approve` to approve the current declaration."
+                ),
+            ));
+        }
+    }
     let items =
         extensions::declared_items(workspace, clock.as_ref()).map_err(|e| failed(e.code(), e))?;
     let item = items
@@ -290,11 +344,17 @@ pub(crate) fn run_add(
     for key in secrets {
         check_env_key(key)?;
     }
-    for (key, _) in &pairs {
-        if secrets.contains(key) {
-            return Err(usage(format!(
-                "`{key}` is both `-e` and `--secret`; a variable is one or the other. Run `fiber --help` for usage.",
-            )));
+    // A repeated KEY across `-e` and `--secret` is refused before
+    // anything is read or written, so a declaration failure cannot
+    // restore the first submitted value over the original credential.
+    {
+        let mut seen = std::collections::HashSet::new();
+        for key in pairs.iter().map(|(key, _)| key).chain(secrets.iter()) {
+            if !seen.insert(key) {
+                return Err(usage(format!(
+                    "`{key}` is given more than once; each variable is declared once. Run `fiber --help` for usage.",
+                )));
+            }
         }
     }
     // A url that carries a user name or password is refused before
@@ -339,31 +399,37 @@ pub(crate) fn run_add(
     };
     // Secrets are stored before the declaration is written, remembering
     // what was there; any failure before the rename puts each one back.
+    // A store that returns `Unsynced` already renamed the new bytes into
+    // place, so that credential joins the rollback list too.
     let mut stored: Vec<(String, Option<Secret>)> = Vec::new();
     for (key, value) in secrets.iter().zip(&values) {
         let credential = format!("mcp.{name}.{key}");
         let previous = read_secret(home, &credential).map_err(|e| {
-            rollback(home, &stored);
+            rollback(home, &stored, err);
             config_failure(e)
         })?;
-        store_secret(home, &credential, value).map_err(|e| {
-            rollback(home, &stored);
-            config_failure(e)
-        })?;
-        stored.push((credential, previous));
+        let stored_result = store_secret(home, &credential, value);
+        if track_after_store(&stored_result) {
+            stored.push((credential.clone(), previous));
+        }
+        if let Err(e) = stored_result {
+            rollback(home, &stored, err);
+            return Err(config_failure(e));
+        }
     }
     let value = declaration_value(url, command, &pairs, name, secrets);
+    let expected = value.clone();
     match insert_entry(home, workspace, &project, layer, "mcp.servers", name, value) {
         Ok(true) => {}
         Ok(false) => {
-            rollback(home, &stored);
+            rollback(home, &stored, err);
             return Err(usage(format!(
                 "`{name}` is already declared in the {} layer. Run `fiber mcp remove {name}` to remove it first. Run `fiber --help` for usage.",
                 layer_word(layer)
             )));
         }
         Err(e) => {
-            settle_secrets(home, &stored, &e);
+            settle_secrets(home, &stored, &e, err);
             if matches!(e, ConfigError::Unsynced { .. }) {
                 return Err(failed(
                     e.code(),
@@ -381,7 +447,7 @@ pub(crate) fn run_add(
         }
     }
     if layer == Layer::Repository {
-        record_approval(home, workspace, &project, name, clock)?;
+        record_approval(home, workspace, &project, name, &expected, clock)?;
     }
     Ok(())
 }

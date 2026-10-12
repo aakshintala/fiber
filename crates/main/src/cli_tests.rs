@@ -2139,8 +2139,56 @@ fn mcp_parses_into_its_invocation() {
     ];
     for (argv, expected) in &cases {
         let parsed = parse_from(argv.iter().copied());
-        assert_eq!(format!("{parsed:?}"), format!("{expected:?}"), "{argv:?}");
+        // Compared field by field, never through `McpAddArgs`'s redacted
+        // `Debug`: its `Debug` prints names and the layer only, so a
+        // `Debug` comparison would not prove values parsed.
+        match (parsed, expected) {
+            (
+                Invocation::Run(Some(Commands::Mcp(actual))),
+                Invocation::Run(Some(Commands::Mcp(wanted))),
+            ) => match (actual, wanted) {
+                (McpCommands::Add(actual), McpCommands::Add(wanted)) => {
+                    assert_eq!(actual.project, wanted.project, "{argv:?}");
+                    assert_eq!(actual.repo, wanted.repo, "{argv:?}");
+                    assert_eq!(actual.name, wanted.name, "{argv:?}");
+                    assert_eq!(actual.url, wanted.url, "{argv:?}");
+                    assert_eq!(actual.env, wanted.env, "{argv:?}");
+                    assert_eq!(actual.secret, wanted.secret, "{argv:?}");
+                    assert_eq!(actual.command, wanted.command, "{argv:?}");
+                }
+                (McpCommands::Remove(actual), McpCommands::Remove(wanted)) => {
+                    assert_eq!(actual.project, wanted.project, "{argv:?}");
+                    assert_eq!(actual.repo, wanted.repo, "{argv:?}");
+                    assert_eq!(actual.name, wanted.name, "{argv:?}");
+                }
+                (McpCommands::List, McpCommands::List) => {}
+                _ => panic!("mismatched MCP variant for {argv:?}"),
+            },
+            _ => panic!("not an MCP invocation for {argv:?}"),
+        }
     }
+}
+
+#[test]
+fn mcp_add_args_debug_prints_names_never_values() {
+    let args = McpAddArgs {
+        project: false,
+        repo: true,
+        name: "docs".to_owned(),
+        url: Some("https://user:pass@example.test/mcp?token=zzz".to_owned()),
+        env: vec!["TOKEN=zzz".to_owned()],
+        secret: vec!["KEY".to_owned()],
+        command: vec!["npx".to_owned(), "--token=zzz".to_owned()],
+    };
+    let printed = format!("{args:?}");
+    assert!(printed.contains("docs"), "{printed}");
+    assert!(printed.contains("repository"), "{printed}");
+    assert!(printed.contains("TOKEN"), "{printed}");
+    assert!(printed.contains("KEY"), "{printed}");
+    assert!(!printed.contains("zzz"), "{printed}");
+    assert!(!printed.contains("user"), "{printed}");
+    assert!(!printed.contains("pass"), "{printed}");
+    assert!(!printed.contains("npx"), "{printed}");
 }
 
 #[test]

@@ -402,8 +402,11 @@ pub(crate) enum McpCommands {
     List,
 }
 
-/// `fiber mcp add`: one transport, and the layer to write.
-#[derive(Debug, clap::Args)]
+/// `fiber mcp add`: one transport, and the layer to write. Its `Debug`
+/// prints names and the layer only, never values: the url prints
+/// redacted (never its query or userinfo), `-e` prints its keys, and the
+/// command prints redacted (`docs/code-quality.md`, "Errors").
+#[derive(clap::Args)]
 pub(crate) struct McpAddArgs {
     /// Write the per-project file in Fiber home.
     #[arg(long, conflicts_with = "repo")]
@@ -428,6 +431,32 @@ pub(crate) struct McpAddArgs {
     /// The program and its arguments: a stdio server.
     #[arg(last = true, value_name = "command")]
     pub(crate) command: Vec<String>,
+}
+
+impl std::fmt::Debug for McpAddArgs {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let layer = if self.repo {
+            "repository"
+        } else if self.project {
+            "project"
+        } else {
+            "global"
+        };
+        let env: Vec<&str> = self
+            .env
+            .iter()
+            .map(|raw| raw.split('=').next().unwrap_or(raw))
+            .collect();
+        let command: Vec<&str> = self.command.iter().map(|_| "redacted").collect();
+        f.debug_struct("McpAddArgs")
+            .field("layer", &layer)
+            .field("name", &self.name)
+            .field("url", &self.url.as_ref().map(|_| "redacted"))
+            .field("env", &env)
+            .field("secret", &self.secret)
+            .field("command", &command)
+            .finish()
+    }
 }
 
 /// `fiber mcp remove`: the declaration and the layer to remove it from.

@@ -1023,6 +1023,11 @@ fn read_key_exact_keeps_spaces_and_drops_only_the_final_newline() {
         ("token", "token"),
         ("  \n", "  "),
         ("\n", ""),
+        // Only `\n` or `\r\n` is removed: a trailing `\r` with no
+        // `\n` stays.
+        ("token\r", "token\r"),
+        (" \r", " \r"),
+        ("\r", "\r"),
     ] {
         let mut keys = Plain;
         let mut err = Vec::new();

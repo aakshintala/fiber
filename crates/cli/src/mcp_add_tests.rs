@@ -26,7 +26,10 @@ use contract::shapes::Failure;
 use extensions::{Decision, Index, Store};
 use serde_json::{Value, json};
 
-use super::{McpDeclaration, SecretInput, Streams, lock_label, mcp_add, run_add, settle_secrets};
+use super::{
+    McpDeclaration, SecretInput, Streams, lock_label, mcp_add, record_approval, run_add,
+    settle_secrets, track_after_store,
+};
 use crate::login::KeyReader;
 use crate::project_of;
 
@@ -561,6 +564,66 @@ fn a_key_that_is_both_plain_and_secret_is_a_usage_failure() {
 }
 
 #[test]
+fn a_repeated_key_across_e_and_secret_is_refused_before_anything_is_written() {
+    // A repeated `--secret TOKEN`, a repeated `-e KEY`, and a KEY that is
+    // both are all usage failures naming the key, writing nothing: on a
+    // declaration failure a forward rollback would otherwise restore the
+    // first submitted value rather than the original credential.
+    for (env, secrets, lines) in [
+        (&["K=1", "K=2"] as &[&str], &[] as &[&str], ""),
+        (&[], &["TOKEN", "TOKEN"], "first\nsecond\n"),
+        (&["K=1"], &["K"], "v\n"),
+    ] {
+        let setup = Setup::new();
+        store_secret(&setup.home(), "mcp.x.K", &Secret::new("original".into())).unwrap();
+        store_secret(
+            &setup.home(),
+            "mcp.x.TOKEN",
+            &Secret::new("original".into()),
+        )
+        .unwrap();
+        let ran = ok(
+            &setup,
+            Layer::Global,
+            "x",
+            None,
+            env,
+            secrets,
+            &["npx"],
+            lines,
+        );
+        let failure = ran.result.unwrap_err();
+        assert_eq!(
+            failure.code,
+            ErrorCode::Usage,
+            "env {env:?} secrets {secrets:?}"
+        );
+        let key = if secrets.contains(&"TOKEN") {
+            "TOKEN"
+        } else {
+            "K"
+        };
+        assert!(failure.message.contains(key), "{}", failure.message);
+        assert!(!setup.file(Layer::Global).exists(), "env {env:?}");
+        // The original bytes are untouched: nothing was stored.
+        assert_eq!(
+            read_secret(&setup.home(), "mcp.x.K")
+                .unwrap()
+                .unwrap()
+                .expose(),
+            "original"
+        );
+        assert_eq!(
+            read_secret(&setup.home(), "mcp.x.TOKEN")
+                .unwrap()
+                .unwrap()
+                .expose(),
+            "original"
+        );
+    }
+}
+
+#[test]
 fn the_shape_is_exactly_one_transport_and_no_flags_with_a_url() {
     // Both a url and a command, or neither.
     for (url, command) in [(Some(URL), &["npx"] as &[&str]), (None, &[])] {
@@ -740,7 +803,8 @@ fn settle_keeps_the_secrets_after_the_rename_and_restores_before_it() {
         line: 1,
         column: 1,
     };
-    settle_secrets(&setup.home(), &stored, &before);
+    let mut err = Vec::new();
+    settle_secrets(&setup.home(), &stored, &before, &mut err);
     assert_eq!(
         read_secret(&setup.home(), "mcp.x.A")
             .unwrap()
@@ -755,7 +819,7 @@ fn settle_keeps_the_secrets_after_the_rename_and_restores_before_it() {
         file: setup.file(Layer::Global),
         source: io::Error::other("injected"),
     };
-    settle_secrets(&setup.home(), &stored, &after);
+    settle_secrets(&setup.home(), &stored, &after, &mut err);
     assert_eq!(
         read_secret(&setup.home(), "mcp.x.A")
             .unwrap()
@@ -951,4 +1015,131 @@ fn mcp_add_exits_one_when_the_seam_refuses_the_url() {
     let setup = Setup::new();
     let (code, stderr) = child_exit("mcp_add_exits_one_when_the_seam_refuses_the_url", &setup);
     assert_eq!(code, Some(1), "{stderr}");
+}
+
+#[test]
+fn a_store_after_its_rename_joins_the_rollback_list() {
+    // `store_secret` can return `Unsynced` after its rename: the new bytes
+    // are in place, so rollback must restore or remove that credential.
+    assert!(track_after_store(&Ok(())));
+    assert!(track_after_store(&Err(ConfigError::Unsynced {
+        file: PathBuf::from("credentials/mcp.x.TOKEN"),
+        source: io::Error::other("injected"),
+    })));
+    assert!(!track_after_store(&Err(ConfigError::Io {
+        file: PathBuf::from("credentials/mcp.x.TOKEN"),
+        source: io::Error::other("injected"),
+    })));
+}
+
+#[test]
+fn a_repo_approval_refuses_a_declaration_changed_after_the_write() {
+    let setup = Setup::new();
+    let clock: Arc<dyn contract::clock::Clock> = fakes::clock::FakeClock::new();
+    let ran = ok(
+        &setup,
+        Layer::Repository,
+        "docs",
+        Some(URL),
+        &[],
+        &[],
+        &[],
+        "",
+    );
+    assert!(
+        ran.result.is_ok(),
+        "{:?}",
+        ran.result.err().map(|e| e.message)
+    );
+    // A concurrent replacement lands after the lock is released.
+    let (_, project) = project_of(&setup.home(), &setup.workspace()).unwrap();
+    config::remove_entry(
+        &setup.home(),
+        &setup.workspace(),
+        &project,
+        Layer::Repository,
+        "mcp.servers",
+        "docs",
+    )
+    .unwrap();
+    config::insert_entry(
+        &setup.home(),
+        &setup.workspace(),
+        &project,
+        Layer::Repository,
+        "mcp.servers",
+        "docs",
+        json!({"url": "https://other.test/mcp"}),
+    )
+    .unwrap();
+    let stale = json!({"url": URL});
+    let failure = record_approval(
+        &setup.home(),
+        &setup.workspace(),
+        &project,
+        "docs",
+        &stale,
+        &clock,
+    )
+    .unwrap_err();
+    assert_eq!(failure.code, ErrorCode::ConfigInvalid);
+    assert!(failure.message.contains("docs"), "{}", failure.message);
+    // Nothing was approved: the replacement stays unapproved.
+    assert_eq!(decision_of(&setup, "docs"), None);
+    // Approving the current declaration records it.
+    let current = json!({"url": "https://other.test/mcp"});
+    record_approval(
+        &setup.home(),
+        &setup.workspace(),
+        &project,
+        "docs",
+        &current,
+        &clock,
+    )
+    .unwrap();
+    assert_eq!(decision_of(&setup, "docs"), Some(Decision::Approve));
+}
+
+#[test]
+fn a_declaration_debug_prints_names_never_values() {
+    let remote = McpDeclaration::Remote {
+        url: "https://user:pass@example.test/mcp?token=zzz".to_owned(),
+    };
+    let printed = format!("{remote:?}");
+    assert!(!printed.contains("zzz"), "{printed}");
+    assert!(!printed.contains("user"), "{printed}");
+    assert!(!printed.contains("pass"), "{printed}");
+    let stdio = McpDeclaration::Stdio {
+        command: "npx".to_owned(),
+        args: vec!["--token=zzz".to_owned()],
+        env: vec![("TOKEN".to_owned(), "zzz".to_owned())],
+        secrets: vec!["KEY".to_owned()],
+    };
+    let printed = format!("{stdio:?}");
+    assert!(printed.contains("TOKEN"), "{printed}");
+    assert!(printed.contains("KEY"), "{printed}");
+    assert!(!printed.contains("zzz"), "{printed}");
+    assert!(!printed.contains("npx"), "{printed}");
+}
+
+#[test]
+fn a_rollback_failure_is_reported_naming_the_file_and_keeps_going() {
+    let setup = Setup::new();
+    // A directory where the credential file belongs makes both the
+    // restore and the delete fail.
+    let dir = setup.home().join("credentials/mcp.x.TOKEN");
+    fs::create_dir_all(&dir).unwrap();
+    let stored = vec![
+        ("mcp.x.TOKEN".to_owned(), Some(Secret::new("old".into()))),
+        ("mcp.x.MISSING".to_owned(), None),
+    ];
+    // The missing credential's delete also fails: its parent path is a
+    // directory, so removing it as a file is refused. Make it a
+    // directory too.
+    fs::create_dir_all(setup.home().join("credentials/mcp.x.MISSING")).unwrap();
+    let mut err = Vec::new();
+    super::rollback(&setup.home(), &stored, &mut err);
+    let printed = String::from_utf8(err).unwrap();
+    assert!(printed.contains("mcp.x.TOKEN"), "{printed}");
+    assert!(printed.contains("mcp.x.MISSING"), "{printed}");
 }

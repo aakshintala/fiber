@@ -154,12 +154,15 @@ fn read_line(input: &mut dyn BufRead) -> io::Result<Secret> {
 }
 
 /// One line taken exactly: only its final newline goes, so a secret with
-/// spaces round-trips. A final line with no newline is taken whole.
+/// spaces round-trips. A final line with no newline is taken whole, and a
+/// trailing `\r` without a `\n` stays: only `\n` or `\r\n` is removed.
 pub(crate) fn read_exact_line(input: &mut dyn BufRead) -> io::Result<Secret> {
     let mut line = String::new();
     input.read_line(&mut line)?;
-    let line = line.strip_suffix('\n').unwrap_or(&line);
-    let line = line.strip_suffix('\r').unwrap_or(line);
+    let line = match line.strip_suffix('\n') {
+        Some(stripped) => stripped.strip_suffix('\r').unwrap_or(stripped),
+        None => line.as_str(),
+    };
     Ok(Secret::new(line.to_owned()))
 }
 
