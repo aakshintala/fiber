@@ -9,9 +9,11 @@
 use crate::test_support::{Rig, install_extension};
 use std::cell::Cell;
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
 use std::time::{Duration, SystemTime};
 
 use config::Config;
+use contract::clock::Clock;
 use extensions::SessionExtensions;
 use serde_json::{Value, json};
 
@@ -169,9 +171,15 @@ fn the_readers_cached_read_lists_the_installed_models() {
     let clock: std::sync::Arc<dyn contract::clock::Clock> = fakes::clock::FakeClock::new();
     let locks: std::sync::Arc<dyn contract::files::PathLock> =
         std::sync::Arc::new(tools::PathLocks::new());
-    let catalogue = reader(setup.home(), setup.workspace(), clock, locks)(tui::Refresh::Cached)
-        .map_err(|error| format!("the cached read: {error}"))
-        .unwrap();
+    let catalogue = reader(
+        setup.home(),
+        setup.workspace(),
+        clock,
+        locks,
+        Arc::default(),
+    )(tui::Refresh::Cached)
+    .map_err(|error| format!("the cached read: {error}"))
+    .unwrap();
     assert!(
         catalogue
             .models
@@ -583,5 +591,179 @@ fn future_cache_reads_as_updated_now() {
             updated_ms: Some(contract::clock::wall_ms(now())),
             stale: false,
         }]
+    );
+}
+
+/// The deadline of each wait in the command-source tests.
+const DEADLINE: Duration = Duration::from_secs(10);
+/// The bound of each negative receive: a read that starts no command
+/// answers at once, so silence for this long proves it is stuck.
+const SHORT: Duration = Duration::from_secs(2);
+
+/// A provider `acme` serving `m1` from its data file, with a Lua handle
+/// registering no `credential`, a cached list dated just past the epoch,
+/// and a `command` credential source writing its group id to a FIFO: the
+/// first line of every test proves the command ran.
+struct CommandFixture {
+    setup: Setup,
+    ready: fakes::children::Ready,
+    reads: Arc<crate::switch::Reads>,
+    clock: Arc<dyn Clock>,
+}
+
+impl CommandFixture {
+    fn new(prefix: &str) -> Self {
+        let setup = Setup::new(prefix);
+        let source = setup.home().join("src").join("acme");
+        install_extension(
+            &setup.home(),
+            "src/acme",
+            json!({"name": "acme", "version": "v0.0.0", "fiber": "0.0.0", "api": extensions::API}),
+            &[(
+                "acme",
+                json!({"name": "acme", "models": [{"id": "m1", "protocol": "openai-responses",
+                         "base_url": "http://127.0.0.1:1/v1", "context_window": 1000}]}),
+            )],
+        );
+        // A Lua handle registering no `credential`: the refresh falls
+        // through to the configured command source.
+        std::fs::write(
+            {
+                std::fs::create_dir_all(source.join("providers")).unwrap();
+                source.join("providers/acme.lua")
+            },
+            "fiber.provider(\"acme\", {})\n",
+        )
+        .unwrap();
+        extensions::plan(
+            &setup.home(),
+            &extensions::Request::Path(source),
+            "0.1.0",
+            &extensions::Origin::github(),
+            &*fakes::clock::FakeClock::new(),
+        )
+        .unwrap()
+        .commit()
+        .unwrap();
+        config::write_model_cache(
+            &setup.home(),
+            "acme",
+            &json!([{"id": "m1", "protocol": "openai-responses",
+                     "base_url": "http://127.0.0.1:1/v1",
+                     "context_window": 1000}]),
+        )
+        .unwrap();
+        // Dated just past the epoch: stale under the injected clock, whose
+        // wall is 1_700_000_000 s. A date taken from the test's own `now()`
+        // (1_800_000_000 s) would read as future under it, age zero, and
+        // the command would never run.
+        let cache = setup.home().join("cache/models/acme.json");
+        std::fs::File::options()
+            .write(true)
+            .open(&cache)
+            .unwrap()
+            .set_modified(SystemTime::UNIX_EPOCH + Duration::from_secs(1))
+            .unwrap();
+        // The FIFO lives in the home: nothing scans the home's root, and
+        // its lifetime is the setup's.
+        let ready = fakes::children::Ready::new(&setup.home());
+        let script = format!("echo $$ > '{}'; sleep 600", ready.path().display());
+        setup.write_config(&json!({
+            "model": "acme/m1",
+            "providers": {"acme": {"credentials": {"default": {
+                "command": ["sh", "-c", script],
+            }}}},
+        }));
+        let clock: Arc<dyn Clock> = fakes::clock::FakeClock::new();
+        let reads = Arc::new(crate::switch::Reads::default());
+        Self {
+            setup,
+            ready,
+            reads,
+            clock,
+        }
+    }
+
+    /// The terminal's picker read over the process's shared reads.
+    fn read(&self) -> tui::ReadModels {
+        reader(
+            self.setup.home(),
+            self.setup.workspace(),
+            Arc::clone(&self.clock),
+            Arc::new(tools::PathLocks::new()),
+            Arc::clone(&self.reads),
+        )
+    }
+}
+
+/// A picker read the process cancels returns and kills its group: once the
+/// command's group id arrives the test cancels the shared reads, and the
+/// stale read ends with the cached list kept and no refresh.
+#[test]
+fn a_picker_read_cancelled_by_the_process_reads_returns_and_kills_its_group() {
+    let fixture = CommandFixture::new("fiber-model-list-cancel");
+    // Before the read: the group is known only after the command starts,
+    // so a command-line watchdog covers a spawn no later watchdog can
+    // reach.
+    let pre = fakes::Watchdog::matching(&fixture.ready.path().display().to_string());
+    let (done, finished) = std::sync::mpsc::channel();
+    let read = fixture.read();
+    std::thread::spawn(move || {
+        done.send(read(tui::Refresh::Stale)).unwrap_or(());
+    });
+    // The first line proves the command ran: without it the cancel below
+    // would end nothing and the read would hang.
+    let pgid = fixture.ready.wait(DEADLINE)[0];
+    let watchdog = fakes::Watchdog::group(pgid);
+    fixture.reads.cancel();
+    let catalogue = fakes::Deadline::after(DEADLINE)
+        .recv(&finished)
+        .unwrap()
+        .unwrap();
+    assert!(
+        catalogue
+            .models
+            .iter()
+            .any(|entry| entry.reference == "acme/m1"),
+        "the cached list is kept: {catalogue:?}"
+    );
+    assert!(
+        fakes::group_empties(pgid, DEADLINE),
+        "the cancel killed the group"
+    );
+    watchdog.stand_down(DEADLINE);
+    pre.stand_down(DEADLINE);
+}
+
+/// Two picker reads share one cancel: past the process's cancel a second
+/// read starts no command and answers the cached list at once. Had the
+/// reader built its own reads, the 600 s command would run and the bounded
+/// receive below would fail.
+#[test]
+fn two_picker_reads_share_one_cancel() {
+    let fixture = CommandFixture::new("fiber-model-list-shared");
+    let cache = fixture.setup.home().join("cache/models/acme.json");
+    let dated = std::fs::metadata(&cache).unwrap().modified().unwrap();
+    fixture.reads.cancel();
+    let (done, finished) = std::sync::mpsc::channel();
+    let read = fixture.read();
+    std::thread::spawn(move || {
+        done.send(read(tui::Refresh::Stale)).unwrap_or(());
+    });
+    let catalogue = fakes::Deadline::after(SHORT)
+        .recv(&finished)
+        .unwrap()
+        .unwrap();
+    assert!(
+        catalogue
+            .models
+            .iter()
+            .any(|entry| entry.reference == "acme/m1"),
+        "the cached list is kept: {catalogue:?}"
+    );
+    assert_eq!(
+        std::fs::metadata(&cache).unwrap().modified().unwrap(),
+        dated,
+        "no refresh rewrote the cache"
     );
 }
