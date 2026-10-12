@@ -232,6 +232,10 @@ pub(crate) struct Runner {
 impl Runner {
     /// The runner and its stop. The stop goes to the record; the spawn
     /// sets the group the stop signals.
+    #[allow(
+        clippy::too_many_arguments,
+        reason = "the runner carries the delegate's whole launch context"
+    )]
     pub(crate) fn new(
         job_id: JobId,
         session_id: SessionId,

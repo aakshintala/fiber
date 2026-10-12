@@ -826,7 +826,11 @@ fn closing_while_the_run_lives_fails_closing_at_the_bound() {
         rig.clock.await_parked(at, DEADLINE),
         "the call parks its closing wait"
     );
-    rig.clock.advance(BOUND - Duration::from_millis(1));
+    rig.clock.advance(
+        BOUND
+            .checked_sub(Duration::from_millis(1))
+            .expect("the bound exceeds 1 ms"),
+    );
     assert!(
         fakes::Deadline::after(Duration::from_millis(100))
             .recv(&rx)

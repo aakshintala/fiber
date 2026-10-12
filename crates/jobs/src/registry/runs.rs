@@ -247,7 +247,7 @@ impl Registry {
                 description,
                 output_path: job.path.to_string_lossy().into_owned(),
             };
-            let delegate_started = job.delegate.clone().expect("a delegate resumes as one");
+            let delegate_started = resumable.delegate.clone();
             job.queue.push_back(Pending {
                 at: Mark::start(next),
                 record: JobRecord::Started(started),
@@ -411,45 +411,43 @@ impl Registry {
             .jobs
             .iter_mut()
             .find(|job| job.started.job_id.0 == completed.job_id.0)
+            && job.run == run
+            && matches!(job.phase, super::Phase::Running)
         {
-            if job.run == run && matches!(job.phase, super::Phase::Running) {
-                job.phase = super::Phase::Ended(Box::new(completed.clone()));
-                // The terminal closes with the job.
-                job.input = None;
-                // A delegate's finish is kept past the end, for a later
-                // `wait` and its text.
-                job.finished = delegate.clone();
-                if delegate.is_some() {
-                    job.queue.push_back(Pending {
-                        at: Mark::end(run),
-                        record: JobRecord::DelegateFinished(
-                            delegate.clone().expect("checked above"),
-                        ),
-                        action: None,
-                    });
-                }
+            job.phase = super::Phase::Ended(Box::new(completed.clone()));
+            // The terminal closes with the job.
+            job.input = None;
+            // A delegate's finish is kept past the end, for a later
+            // `wait` and its text.
+            job.finished = delegate.clone();
+            if let Some(finished) = delegate.clone() {
                 job.queue.push_back(Pending {
                     at: Mark::end(run),
-                    record: JobRecord::Completed(completed.clone()),
+                    record: JobRecord::DelegateFinished(finished),
                     action: None,
                 });
-                if let Some(inbox) = &inner.inbox {
-                    let registry = Weak::clone(&self.me);
-                    let id = completed.job_id.0.clone();
-                    let claim = Claim(Box::new(move || {
-                        registry
-                            .upgrade()
-                            .and_then(|registry| registry.claim_through(&id, run))
+            }
+            job.queue.push_back(Pending {
+                at: Mark::end(run),
+                record: JobRecord::Completed(completed.clone()),
+                action: None,
+            });
+            if let Some(inbox) = &inner.inbox {
+                let registry = Weak::clone(&self.me);
+                let id = completed.job_id.0.clone();
+                let claim = Claim(Box::new(move || {
+                    registry
+                        .upgrade()
+                        .and_then(|registry| registry.claim_through(&id, run))
+                }));
+                // A loop that is gone takes no news; the end stays
+                // recorded for `list`.
+                let _sent =
+                    inbox.send(contract::inbox::Delivery::Job(contract::inbox::JobNotice {
+                        completed,
+                        claim,
+                        delegate,
                     }));
-                    // A loop that is gone takes no news; the end stays
-                    // recorded for `list`.
-                    let _sent =
-                        inbox.send(contract::inbox::Delivery::Job(contract::inbox::JobNotice {
-                            completed,
-                            claim,
-                            delegate,
-                        }));
-                }
             }
         }
         self.park.bump();

@@ -1661,7 +1661,7 @@ fn no_boundary_takes_the_first_replayed_exit_as_today() {
         Some("Old.".into())
     );
     assert!(
-        !rig.script.afters().is_empty() && rig.script.afters().iter().all(|after| *after == None),
+        !rig.script.afters().is_empty() && rig.script.afters().iter().all(|after| after.is_none()),
         "every watch call passes no boundary: {:?}",
         rig.script.afters()
     );

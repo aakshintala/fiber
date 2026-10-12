@@ -87,10 +87,10 @@ fn call(settle: &Settle) -> Vec<Taken> {
 }
 
 fn take_notice(rx: &mpsc::Receiver<Delivery>) -> contract::inbox::JobNotice {
-    match rx.try_recv().expect("the end sent a notice") {
-        Delivery::Job(notice) => notice,
-        delivery => panic!("the end sent {delivery:?}"),
-    }
+    let Delivery::Job(notice) = rx.try_recv().expect("the end sent a notice") else {
+        panic!("the end sent nothing job-like");
+    };
+    notice
 }
 
 #[track_caller]
@@ -320,10 +320,10 @@ fn target_names_what_the_id_names() {
     ));
     drop(opened.end);
     let (id, finish) = open_delegate(&registry);
-    match registry.target(&id.0) {
-        Target::Live(session, 1) => assert_eq!(session.0, "s_d000000000000001"),
-        target => panic!("a running delegate is live: {target:?}"),
-    }
+    let Target::Live(session, 1) = registry.target(&id.0) else {
+        panic!("a running delegate is live");
+    };
+    assert_eq!(session.0, "s_d000000000000001");
     end_run(finish, &id, "Done.");
     assert!(matches!(registry.target(&id.0), Target::Ended));
 }

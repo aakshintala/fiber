@@ -100,11 +100,14 @@ struct ResumeRig {
     tool: Arc<DelegateMessage>,
     inbox: mpsc::Receiver<Delivery>,
     launched: Arc<Mutex<Vec<Launched>>>,
-    watch_calls: Arc<Mutex<Vec<(SessionId, Option<u64>)>>>,
+    watch_calls: WatchCalls,
     delivered: mpsc::Receiver<()>,
     last_seq_calls: Arc<Mutex<Vec<SessionId>>>,
     steer_calls: Arc<Mutex<usize>>,
 }
+
+/// Every watch call: the watched session and the boundary it passed.
+type WatchCalls = Arc<Mutex<Vec<(SessionId, Option<u64>)>>>;
 
 fn envelope(seq: u64, kind: &str, payload: serde_json::Value) -> Envelope {
     Envelope {
@@ -189,7 +192,7 @@ fn resume_rig_with_steer(
             LaunchReply::Missing => Command::new("/nonexistent/fiber-delegate-launch"),
         }
     });
-    let watch_calls: Arc<Mutex<Vec<(SessionId, Option<u64>)>>> = Arc::new(Mutex::new(Vec::new()));
+    let watch_calls: WatchCalls = Arc::new(Mutex::new(Vec::new()));
     let seen = Arc::clone(&watch_calls);
     let pending = Arc::new(Mutex::new(VecDeque::from(watch)));
     let (delivered_tx, delivered_rx) = mpsc::channel();
@@ -226,7 +229,7 @@ fn resume_rig_with_steer(
     let counted = Arc::clone(&steer_calls);
     let scripted = Arc::new(Mutex::new(VecDeque::from(steer)));
     let steer: Steer = Arc::new(
-        move |_, _, _, commit: &mut dyn FnMut() -> bool, on_queued: &mut dyn FnMut()| {
+        move |_, _, _, commit: &mut dyn FnMut() -> bool, _: &mut dyn FnMut()| {
             *counted.lock().unwrap() += 1;
             match scripted
                 .lock()
@@ -364,10 +367,10 @@ fn drive(clock: &FakeClock, stop: &AtomicBool) {
 /// Takes one notice the registry sent, without claiming it: the queue
 /// stays as it was, so a later settle or claim still takes it.
 fn take_notice(rig: &ResumeRig) -> contract::inbox::JobNotice {
-    match rig.inbox.try_recv().expect("the end sent a notice") {
-        Delivery::Job(notice) => notice,
-        delivery => panic!("the end sent {delivery:?}"),
-    }
+    let Delivery::Job(notice) = rig.inbox.try_recv().expect("the end sent a notice") else {
+        panic!("the end sent nothing job-like");
+    };
+    notice
 }
 
 /// The runner's report, driving the clock until it arrives, failing at
@@ -900,6 +903,10 @@ fn gone_resumes_once_the_run_ends_during_the_backoff() {
     let output = answered(&rx);
     handle.join().unwrap();
     assert!(output.error.is_none());
+    assert_eq!(content(&output), resumed_text(&id.0, &output_path));
+    assert_eq!(rig.launched.lock().unwrap().len(), 1);
+    assert_eq!(*rig.steer_calls.lock().unwrap(), 1);
+    stop_and_reap(&rig, &id, "fiber-message-gone");
 }
 
 #[test]

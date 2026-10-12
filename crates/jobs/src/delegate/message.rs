@@ -116,6 +116,10 @@ enum AttemptMsg {
 }
 
 /// What an attempt came to on the call's thread.
+#[allow(
+    clippy::large_enum_variant,
+    reason = "one answer per call; boxing it would allocate on every steer attempt"
+)]
 enum Attempt {
     /// The call is answered.
     Done(Output),
@@ -345,18 +349,18 @@ impl DelegateMessage {
             });
         }
         loop {
-            if let Some(steered) = self.pump(&rx, &id, emit, emitted) {
-                return self.answer(steered, &id, &message, run, backoff, &action, &gate, cancel);
+            if let Some(steered) = self.pump(&rx, id, emit, emitted) {
+                return self.answer(steered, id, message, run, backoff, action, gate, cancel);
             }
             if cancel.is_cancelled() {
-                return Attempt::Done(self.cancelled(&id, &gate));
+                return Attempt::Done(self.cancelled(id, gate));
             }
             let seen = park.generation();
-            if let Some(steered) = self.pump(&rx, &id, emit, emitted) {
-                return self.answer(steered, &id, &message, run, backoff, &action, &gate, cancel);
+            if let Some(steered) = self.pump(&rx, id, emit, emitted) {
+                return self.answer(steered, id, message, run, backoff, action, gate, cancel);
             }
             if cancel.is_cancelled() {
-                return Attempt::Done(self.cancelled(&id, &gate));
+                return Attempt::Done(self.cancelled(id, gate));
             }
             park.park(self.clock.as_ref(), None, seen);
         }
@@ -418,11 +422,9 @@ impl DelegateMessage {
                 }],
                 ..Output::default()
             }),
-            Steered::Rejected(failure) => match failure.code {
-                ErrorCode::Closing => self.closing(id, message, run, action, gate, cancel),
-                ErrorCode::DuplicateCommand => Attempt::Done(lost(id)),
-                _ => Attempt::Done(self.refused(id, failure)),
-            },
+            Steered::Rejected(failure) => {
+                self.rejected(id, message, run, action, gate, cancel, failure)
+            }
             // Nothing is known to have reached any run: after the backoff
             // the call asks `target` again, or resumes.
             Steered::Gone => self.gone(id, run, backoff, gate, cancel),
@@ -549,16 +551,32 @@ impl DelegateMessage {
         }
     }
 
-    /// What a rejection carries: its own code when a tool call may carry
-    /// it, else `tool_error` naming the delegate's code. The caller
-    /// answers `closing` and `duplicate_command` itself.
-    fn refused(&self, id: &str, failure: Failure) -> Output {
-        let text = format!("Delegate {id} refused the message: {}", failure.message);
+    /// What a rejection carries: `closing` waits for the run and resumes
+    /// it, `duplicate_command` fails `indeterminate`, a code a tool call
+    /// may carry is kept, and every other code fails `tool_error` naming
+    /// the delegate's code. Every variant is named: a variant added to
+    /// `ErrorCode` later fails to compile until someone places it.
+    #[allow(
+        clippy::too_many_arguments,
+        reason = "a rejection carries the attempt's whole context"
+    )]
+    fn rejected(
+        &self,
+        id: &str,
+        message: &str,
+        run: u64,
+        action: &Option<ActionId>,
+        gate: &Arc<Mutex<SteerGate>>,
+        cancel: &dyn Cancel,
+        failure: Failure,
+    ) -> Attempt {
         match failure.code {
-            ErrorCode::MessageRefused | ErrorCode::HookFailed => fail(failure.code, text),
-            ErrorCode::Closing | ErrorCode::DuplicateCommand => {
-                unreachable!("the caller answers these")
-            }
+            ErrorCode::Closing => self.closing(id, message, run, action, gate, cancel),
+            ErrorCode::DuplicateCommand => Attempt::Done(lost(id)),
+            ErrorCode::MessageRefused | ErrorCode::HookFailed => Attempt::Done(fail(
+                failure.code,
+                format!("Delegate {id} refused the message: {}", failure.message),
+            )),
             ErrorCode::AmbiguousMatch
             | ErrorCode::AuthenticationFailed
             | ErrorCode::Blocked
@@ -650,14 +668,14 @@ impl DelegateMessage {
             | ErrorCode::Usage
             | ErrorCode::VersionConflict
             | ErrorCode::WebSearchUnavailable
-            | ErrorCode::Other(_) => fail(
+            | ErrorCode::Other(_) => Attempt::Done(fail(
                 ErrorCode::ToolError,
                 format!(
                     "Delegate {id} refused the message ({}): {}",
                     code_name(&failure.code),
                     failure.message
                 ),
-            ),
+            )),
         }
     }
 
@@ -807,12 +825,13 @@ fn resumed_receipt(id: &str, resumed: Resumed<Started>) -> Output {
 
 /// The delegate's code, named for the message.
 fn code_name(code: &ErrorCode) -> String {
-    match code {
-        ErrorCode::Other(name) => name.clone(),
-        code => serde_json::to_value(code)
+    if let ErrorCode::Other(name) = code {
+        name.clone()
+    } else {
+        serde_json::to_value(code)
             .ok()
             .and_then(|value| value.as_str().map(str::to_owned))
-            .unwrap_or_else(|| "error".into()),
+            .unwrap_or_else(|| "error".into())
     }
 }
 

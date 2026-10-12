@@ -128,6 +128,10 @@ struct Job {
 
 type Typer = Arc<dyn Fn(&[u8], &dyn Clock, &dyn Cancel) -> std::io::Result<usize> + Send + Sync>;
 
+/// A run's stop with its run's number: the closure to send, when this
+/// call sends it, and the run it stops.
+type RunStop = (Option<Arc<dyn Fn() + Send + Sync>>, u64);
+
 impl Job {
     /// A job that has started and not yet ended; `open` and `open_started`
     /// both record one, and only differ in what they pass in.
@@ -437,7 +441,7 @@ impl Registry {
     /// The stop closure with its run, when the job is running: `None`
     /// for the closure when a stop was already sent for this run. `Err`
     /// when the job is unknown or has ended.
-    fn send_stop(&self, id: &str) -> Result<(Option<Arc<dyn Fn() + Send + Sync>>, u64), StopError> {
+    fn send_stop(&self, id: &str) -> Result<RunStop, StopError> {
         let mut inner = lock(&self.inner);
         let Some(job) = inner.jobs.iter_mut().find(|job| job.started.job_id.0 == id) else {
             return Err(StopError::NotRunning);
