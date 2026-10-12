@@ -32,8 +32,9 @@ pub(crate) enum Kind {
     /// A model reference string, or an object with `model`, the reference:
     /// `roles.*` (`docs/configuration.md`, "Keys").
     Role,
-    /// An object whose values are strings, such as a server's `env`.
-    StrMap,
+    /// An object whose values are strings or `{ "secret": name }`
+    /// references, such as a server's `env`.
+    EnvMap,
     /// An object whose values are booleans, such as MCP hints.
     BoolMap,
     Credential,
@@ -67,9 +68,15 @@ impl Kind {
                         .as_object()
                         .is_some_and(|object| object.get("model").is_some_and(Value::is_string))
             }
-            Self::StrMap => value
-                .as_object()
-                .is_some_and(|map| map.values().all(Value::is_string)),
+            Self::EnvMap => value.as_object().is_some_and(|map| {
+                map.values().all(|item| {
+                    item.is_string()
+                        || item.as_object().is_some_and(|object| {
+                            object.len() == 1
+                                && object.get("secret").is_some_and(Value::is_string)
+                        })
+                })
+            }),
             Self::BoolMap => value
                 .as_object()
                 .is_some_and(|map| map.values().all(Value::is_boolean)),
@@ -103,7 +110,7 @@ impl Kind {
             Self::StrList => "a list of strings".into(),
             Self::StrOrStrList => "a string or a list of strings".into(),
             Self::Role => "a model reference, or an object with `model`, the reference".into(),
-            Self::StrMap => "an object of strings".into(),
+            Self::EnvMap => "an object of strings or `{ \"secret\" }` objects".into(),
             Self::BoolMap => "an object of true or false values".into(),
             Self::Credential => {
                 "one of {\"env\": name}, {\"file\": path} or {\"command\": [program, args]}, and a command may add \"timeout\": a duration such as \"2m\"".into()
@@ -242,7 +249,8 @@ const fn entry_replaced(path: &'static str, kind: Kind) -> Key {
 
 use Kind::{
     Bool, BoolMap, Count, CountBelow, Credential, Duration as DurationKind, Number, OneOf,
-    RepositoryExtensions, Role, Str, StrList, StrMap, StrOrStrList,
+    RepositoryExtensions, Role, Str, StrList, StrOrStrList,
+    EnvMap,
 };
 
 const YES: bool = true;
@@ -294,7 +302,7 @@ pub(crate) const KEYS: &[Key] = &[
     unioned("skills.disabled", StrList, Some("[]")),
     key("mcp.servers.*.command", Str, YES, None),
     key("mcp.servers.*.args", StrList, YES, None),
-    key("mcp.servers.*.env", StrMap, YES, None),
+    key("mcp.servers.*.env", EnvMap, YES, None),
     key("mcp.servers.*.url", Str, YES, None),
     key("mcp.servers.*.required", Bool, YES, Some("false")),
     key("mcp.servers.*.startup_timeout_ms", Count, YES, Some("5000")),
