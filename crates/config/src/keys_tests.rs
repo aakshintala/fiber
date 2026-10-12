@@ -59,3 +59,23 @@ fn each_write_scope_answers_whether_a_repository_sets_it() {
         );
     }
 }
+
+#[test]
+fn mcp_server_env_accepts_a_secret_reference() {
+    let layer: serde_json::Map<String, serde_json::Value> = serde_json::from_str(
+        r#"{"mcp": {"servers": {"x": {"env": {"K": {"secret": "mcp.x.K"}}}}}}"#,
+    )
+    .expect("the test layer parses");
+    let mut notices = Vec::new();
+    let kept = check(
+        layer,
+        &crate::Source::Global("global/config.json".into()),
+        &mut notices,
+    )
+    .expect("a secret env reference loads");
+    assert!(notices.is_empty(), "{notices:?}");
+    assert_eq!(
+        kept.get("mcp"),
+        Some(&serde_json::json!({"servers": {"x": {"env": {"K": {"secret": "mcp.x.K"}}}}}))
+    );
+}
