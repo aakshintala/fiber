@@ -155,12 +155,25 @@ pub(crate) struct Bearer {
     clock: Arc<dyn Clock>,
     refreshing: AtomicBool,
 }
-#[derive(Debug, PartialEq, Eq)]
+#[derive(PartialEq, Eq)]
 pub(crate) enum Authorization {
     None,
     Send(String),
     SendAndRefresh(String),
 }
+impl std::fmt::Debug for Authorization {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::None => f.write_str("None"),
+            Self::Send(_) => f.debug_tuple("Send").field(&"<redacted>").finish(),
+            Self::SendAndRefresh(_) => f
+                .debug_tuple("SendAndRefresh")
+                .field(&"<redacted>")
+                .finish(),
+        }
+    }
+}
+
 pub(crate) trait Refresh {
     fn stopped(&self) -> bool;
     fn pause(&self);

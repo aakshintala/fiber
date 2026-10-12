@@ -267,7 +267,7 @@ the lines that carry it.
 | `budget_exceeded` | turn | the spending budget was reached, or an extension refused a model request (`docs/loop.md`, "Spending budget") |
 | `busy` | driver command | `prompt` or `reload` while a turn is running, or `rewind` mid-turn (`docs/invocation.md`, "What each command does") |
 | `closing` | exit, tool call, extension call, driver command | `session_message` named a session that was sent `close` (`docs/tools.md`, "Messaging other sessions"), or `state.set`, `state.unset` or `host.drive` ran after `fiber_exited` (`docs/extensions.md`, "When a session ends"), or a driver command after `close` (`docs/invocation.md`, "Driver commands"), or the session `fiber ask` attached to ended before its turn completed |
-| `config_invalid` | exit, extension call, notice | a configuration or script file is invalid, or an MCP server declares both `command` and `url` or whose `url` carries a user name or password |
+| `config_invalid` | exit, extension call, notice | a configuration or script file is invalid, or an MCP server that declares both `command` and `url` or whose `url` carries a user name or password |
 | `connection_failed` | exit, extension call, model call, tool call, turn | the connection to the provider or its token endpoint failed, or `web_fetch` could not reach the host |
 | `context_overflow` | model call, turn | the request does not fit the context window |
 | `credential_failed` | exit, extension call, model call, turn | a stored credential cannot be used, or the provider's `credential()` or `sign()` failed; log in again or fix the credential |

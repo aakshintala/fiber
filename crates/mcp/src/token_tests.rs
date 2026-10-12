@@ -165,6 +165,7 @@ fn rejected_or_unusable_replies_leave_the_record_unchanged() {
         OauthReply::raw(401, "secret"),
         OauthReply::raw(200, "not json secret"),
         OauthReply::raw(200, "{}"),
+        OauthReply::raw(200, r#"{"access_token":""}"#),
         OauthReply::raw(200, r#"{"access_token":"secret\r\n"}"#),
     ] {
         let server = OauthServer::start(vec![reply]);
@@ -176,6 +177,29 @@ fn rejected_or_unusable_replies_leave_the_record_unchanged() {
         assert_eq!(record(&files), before);
     }
 }
+#[test]
+fn refresh_accepts_only_the_2xx_status_interval() {
+    for (status, accepted) in [
+        (199, false),
+        (200, true),
+        (201, true),
+        (299, true),
+        (300, false),
+        (301, false),
+    ] {
+        let server = OauthServer::start(vec![OauthReply::raw(status, r#"{"access_token":"a"}"#)]);
+        let (_setup, files, bearer) = fixture(&server.url(), Some(0));
+        let before = record(&files);
+        let result = auth(bearer);
+        if accepted {
+            assert_eq!(result.unwrap(), Authorization::Send("Bearer a".into()));
+        } else {
+            assert!(matches!(result, Err(Outcome::Login(_))));
+            assert_eq!(record(&files), before);
+        }
+    }
+}
+
 #[test]
 fn unusable_records_are_login_failures_without_a_request() {
     for field in [
@@ -381,6 +405,43 @@ fn background_refresh_clears_its_flag_after_each_completion() {
     assert_eq!(record(&files)["generation"], 3);
 }
 #[test]
+fn background_refresh_stops_when_a_new_login_is_outside_the_window() {
+    for expiry in [None, Some(301)] {
+        let server = OauthServer::start(vec![]);
+        let setup = Setup::new();
+        let now = contract::clock::wall_ms(setup.clock().wall()) / 1000;
+        let (_setup, files, bearer) = fixture(&server.url(), Some(now + 60));
+        assert_eq!(
+            auth(bearer.clone()).unwrap(),
+            Authorization::SendAndRefresh("Bearer at-1".into())
+        );
+        store_token(
+            files.as_ref(),
+            "https://h/x",
+            &Token {
+                access_token: contract::Secret::new("at-new".into()),
+                refresh_token: Some(contract::Secret::new("rt-new".into())),
+                expires_at: expiry.map(|seconds| now + seconds),
+                token_endpoint: server.url(),
+                client_id: "fiber-abc".into(),
+            },
+        )
+        .unwrap();
+        let before = record(&files);
+        let (finished, receiver) = mpsc::channel();
+        bearer.refresh_in_background(Box::new(DoneRefresh(finished)));
+        Deadline::after(WITHIN)
+            .recv_or_fail(&receiver, "background refresh uses the new fresh login");
+        assert_eq!(server.request_count(), 0);
+        assert_eq!(record(&files), before);
+        assert_eq!(
+            auth(bearer).unwrap(),
+            Authorization::Send("Bearer at-new".into())
+        );
+    }
+}
+
+#[test]
 fn competing_refreshers_reread_the_generation_including_wrap_and_short_expiry() {
     for (generation, access, lifetime) in [
         (1, "at-2", 3600),
@@ -447,6 +508,19 @@ fn token_error_codes_are_stable() {
         contract::ErrorCode::IoFailed
     );
 }
+#[test]
+fn authorization_debug_redacts_both_sending_variants() {
+    for authorization in [
+        Authorization::Send("Bearer secret-header".into()),
+        Authorization::SendAndRefresh("Bearer secret-header".into()),
+    ] {
+        let debug = format!("{authorization:?}");
+        assert!(!debug.contains("secret-header"));
+        assert!(debug.contains("<redacted>"));
+    }
+    assert_eq!(format!("{:?}", Authorization::None), "None");
+}
+
 #[test]
 fn token_debug_redacts_tokens_and_endpoint_credentials() {
     let token = Token {
