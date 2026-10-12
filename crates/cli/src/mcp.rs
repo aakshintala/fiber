@@ -6,7 +6,7 @@
 //! [`Secret`](config::Secret) from the moment it is read.
 
 use std::io::{self, BufRead, IsTerminal, Write};
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 use config::{
@@ -227,10 +227,13 @@ fn settle_secrets(
 }
 
 /// Records the approval of the declaration just written to the repository,
-/// hashed exactly as startup hashes it. The declaration on disk must equal
-/// the one just written: a concurrent replacement is refused as a config
-/// failure naming the server, approving nothing. Any other failure names
-/// the repository's file and `fiber approve`; the declaration stays.
+/// hashed exactly as startup hashes it. One snapshot of the repository's
+/// declaration, taken under the writers' lock, is both checked against the
+/// one just written and hashed: a concurrent replacement is refused as a
+/// config failure naming the server, approving nothing, and a replacement
+/// past the snapshot can only leave a stale approval behind, never approve
+/// itself. Any other failure names the repository's file and
+/// `fiber approve`; the declaration stays.
 fn record_approval(
     home: &Path,
     workspace: &Path,
@@ -240,39 +243,49 @@ fn record_approval(
     clock: &Arc<dyn Clock>,
 ) -> Result<(), Failure> {
     let repo_file = workspace.join(".fiber/config.json");
-    let missing = || {
+    let approve_hint = |why: &str| {
         failed(
             ErrorCode::IoFailed,
             format!(
-                "could not record the approval of `{name}` in {}: the declaration is missing. Run `fiber approve` to finish it.",
+                "could not record the approval of `{name}` in {}: {why}. Run `fiber approve` to finish it.",
                 repo_file.display()
             ),
         )
     };
-    let declared = config::declared(workspace).map_err(config_failure)?;
-    match declared.mcp_servers.get(name) {
-        Some(current) if current == expected => {}
-        _ => {
-            return Err(failed(
-                ErrorCode::ConfigInvalid,
-                format!(
-                    "`{name}` changed after it was written; the approval was not recorded. Run `fiber approve` to approve the current declaration."
-                ),
-            ));
+    // The same `config.json.lock` writers hold, so the snapshot below sees
+    // one whole file: the declaration is read once, and never re-read for
+    // the hash.
+    let current = {
+        let mut lock_name = repo_file.as_os_str().to_owned();
+        lock_name.push(".lock");
+        let lock_file = std::fs::OpenOptions::new()
+            .create(true)
+            .truncate(false)
+            .write(true)
+            .open(PathBuf::from(lock_name))
+            .map_err(|e| approve_hint(&e.to_string()))?;
+        lock_file.lock().map_err(|e| approve_hint(&e.to_string()))?;
+        let declared = config::declared(workspace).map_err(config_failure)?;
+        match declared.mcp_servers.get(name) {
+            Some(current) if current == expected => current.clone(),
+            _ => {
+                return Err(failed(
+                    ErrorCode::ConfigInvalid,
+                    format!(
+                        "`{name}` changed after it was written; the approval was not recorded. Run `fiber approve` to approve the current declaration."
+                    ),
+                ));
+            }
         }
-    }
-    let items =
-        extensions::declared_items(workspace, clock.as_ref()).map_err(|e| failed(e.code(), e))?;
-    let item = items
-        .iter()
-        .find(|item| item.kind == OfferedKind::McpServer && item.name == name)
-        .ok_or_else(missing)?;
+    };
+    let item = extensions::mcp_server_item(workspace, name, &current)
+        .map_err(|e| approve_hint(&e.to_string()))?;
     let mut index = Index::load(home);
-    let hash = extensions::hash(&mut index, item).map_err(|e| failed(e.code(), e))?;
+    let hash = extensions::hash(&mut index, &item).map_err(|e| failed(e.code(), e))?;
     // The index only saves a re-hash; failing to write it costs nothing else.
     index.save().unwrap_or(());
     Store::new(home, project, Arc::clone(clock))
-        .approve(item, &hash)
+        .approve(&item, &hash)
         .map_err(|e| {
             failed(
                 e.code(),

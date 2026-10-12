@@ -109,6 +109,24 @@ pub(crate) fn declared_servers(workspace: &Path) -> Result<Vec<RepoItem>, Error>
     Ok(items)
 }
 
+/// One MCP server from a declaration snapshot the caller already holds:
+/// the same item `declared_servers` gathers for `name`, without re-reading
+/// the declaration file. `record_approval` checks one snapshot against the
+/// submitted declaration, then hashes the item built here from that same
+/// snapshot, so a replacement between the two never approves the wrong
+/// declaration.
+pub fn mcp_server_item(workspace: &Path, name: &str, entry: &Value) -> Result<RepoItem, Error> {
+    let root = workspace.canonicalize().map_err(io_error(workspace))?;
+    entry_item(
+        &root,
+        OfferedKind::McpServer,
+        name,
+        entry,
+        ".fiber/config.json",
+        required(entry),
+    )
+}
+
 /// Everything the workspace's `.fiber/` declares, in offer order: extensions,
 /// then hooks, then MCP servers, each by name. The file list runs through
 /// `git`, stopped at the git deadline on `clock`.

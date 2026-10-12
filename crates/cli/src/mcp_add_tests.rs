@@ -1101,6 +1101,81 @@ fn a_repo_approval_refuses_a_declaration_changed_after_the_write() {
 }
 
 #[test]
+fn a_repo_approval_hashes_the_checked_snapshot_never_a_replacement() {
+    // The approval hashes the exact declaration it checked, from one
+    // snapshot: the declaration file is read once, so a replacement that
+    // lands where a second read was can never be hashed instead. After a
+    // replacement, the approved hash is still the submitted declaration's,
+    // and the replacement stays unapproved.
+    let setup = Setup::new();
+    let clock: Arc<dyn contract::clock::Clock> = fakes::clock::FakeClock::new();
+    let ran = ok(
+        &setup,
+        Layer::Repository,
+        "docs",
+        Some(URL),
+        &[],
+        &[],
+        &[],
+        "",
+    );
+    assert!(
+        ran.result.is_ok(),
+        "{:?}",
+        ran.result.err().map(|e| e.message)
+    );
+    let (_, project) = project_of(&setup.home(), &setup.workspace()).unwrap();
+    let submitted = json!({"url": URL});
+    let submitted_item =
+        extensions::mcp_server_item(&setup.workspace(), "docs", &submitted).unwrap();
+    let mut index = Index::load(&setup.home());
+    let submitted_hash = extensions::hash(&mut index, &submitted_item).unwrap();
+    assert_eq!(
+        Store::new(&setup.home(), &project, Arc::clone(&clock))
+            .decision(OfferedKind::McpServer, &submitted_hash),
+        Some(Decision::Approve)
+    );
+    // A replacement lands after the approval, where a second read was.
+    config::remove_entry(
+        &setup.home(),
+        &setup.workspace(),
+        &project,
+        Layer::Repository,
+        "mcp.servers",
+        "docs",
+    )
+    .unwrap();
+    config::insert_entry(
+        &setup.home(),
+        &setup.workspace(),
+        &project,
+        Layer::Repository,
+        "mcp.servers",
+        "docs",
+        json!({"url": "https://other.test/mcp"}),
+    )
+    .unwrap();
+    // The replaced declaration is never approved ...
+    let replacement = json!({"url": "https://other.test/mcp"});
+    let replacement_item =
+        extensions::mcp_server_item(&setup.workspace(), "docs", &replacement).unwrap();
+    let mut index = Index::load(&setup.home());
+    let replacement_hash = extensions::hash(&mut index, &replacement_item).unwrap();
+    assert_ne!(submitted_hash, replacement_hash);
+    assert_eq!(
+        Store::new(&setup.home(), &project, Arc::clone(&clock))
+            .decision(OfferedKind::McpServer, &replacement_hash),
+        None
+    );
+    // ... and the approved hash is still the submitted declaration's.
+    assert_eq!(
+        Store::new(&setup.home(), &project, Arc::clone(&clock))
+            .decision(OfferedKind::McpServer, &submitted_hash),
+        Some(Decision::Approve)
+    );
+}
+
+#[test]
 fn a_declaration_debug_prints_names_never_values() {
     let remote = McpDeclaration::Remote {
         url: "https://user:pass@example.test/mcp?token=zzz".to_owned(),
