@@ -382,6 +382,15 @@ impl App {
         }
     }
 
+    /// The open login list, if the login view is open on its rows:
+    /// what the swapped view draws in the shared overlay frame.
+    pub(crate) fn login_list(&self) -> Option<&Login> {
+        match &self.config_views.open {
+            Some(Open::Login(login)) if login.list_open() => Some(login),
+            _ => None,
+        }
+    }
+
     /// The open view's frame.
     pub(crate) fn config_view_screen(&self) -> Option<Frame> {
         let usage = self

@@ -420,9 +420,9 @@ from outside, through a test seam such as a fake writer or the injected clock. A
 seam can reach the behaviour, such as a race's pause point ("Waits and
 timeouts"), and the plan that needs one says why.
 
-cargo-mutants stops each mutant's test run at its own timeout: five times the
-unmutated run of the same tests, and at least 20 s. A mutant stopped there
-fails CI as a timeout, not as caught. A mutant can turn a wait that returns
+cargo-mutants stops each mutant's test run after 120 s, set with `--timeout 120`
+in `.github/workflows/ci.yml` (`mutants`). A mutant stopped there fails CI as a
+timeout, not as caught. A mutant can turn a wait that returns
 early into one that runs out its whole bound, as a flipped comparison in a
 `wait_timeout_while` predicate does, so the deadlines one test can run out in
 turn must add up to well under that timeout.
