@@ -339,6 +339,57 @@ fn the_steer_wire_is_subscribe_then_steer_then_a_probe() {
 }
 
 #[test]
+fn a_line_before_the_probe_answer_does_not_queue_the_steer() {
+    let temp = Temp::new();
+    let home = temp.0.join("h");
+    let id = SessionId(mint("s_"));
+    let listener = listen(&home, &id);
+    let command = mint("c_");
+    let wired = command.clone();
+    let served = thread::spawn(move || {
+        let (stream, _) = listener.accept().unwrap();
+        let mut reader = BufReader::new(stream.try_clone().unwrap());
+        let sub = commanded(&mut reader);
+        let sub_id = sub["id"].as_str().unwrap().to_owned();
+        let mut writer = stream.try_clone().unwrap();
+        writer.write_all(&accepted(&sub_id)).unwrap();
+        writer.flush().unwrap();
+        let steered = commanded(&mut reader);
+        assert_eq!(steered["command"], "steer");
+        assert_eq!(steered["id"], wired);
+        let probe = commanded(&mut reader);
+        assert_eq!(probe["command"], "tools");
+        // An answer to neither the probe nor the steer, then the
+        // connection closes: the probe's own answer is never written.
+        let unrelated = mint("c_");
+        writer.write_all(&accepted(&unrelated)).unwrap();
+        writer.flush().unwrap();
+        drop(writer);
+        drop(reader);
+        drop(stream);
+    });
+    let calls = Arc::new(AtomicUsize::new(0));
+    let queued = Arc::new(AtomicUsize::new(0));
+    let (answered, _queued_rx, steered_in) = spawn_steer(
+        home,
+        id,
+        command,
+        "before the probe".to_owned(),
+        Arc::clone(&calls),
+        Arc::clone(&queued),
+        true,
+    );
+    assert_eq!(steered(&answered), Steered::Gone);
+    steered_in.join().expect("the steer thread ended");
+    served.join().expect("the server closed the connection");
+    assert_eq!(
+        queued.load(Ordering::SeqCst),
+        0,
+        "a line before the probe's answer proves nothing"
+    );
+}
+
+#[test]
 fn commit_runs_only_after_the_subscribe_is_answered() {
     let temp = Temp::new();
     let home = temp.0.join("h");
