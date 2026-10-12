@@ -22,6 +22,7 @@ use contract::events::{
     Clients, Event, McpServerFailed, Notice, OfferDecision, OfferedItem, OfferedKind, ServerFailure,
 };
 use contract::inbox::{Ack, Answer, Delivery};
+use contract::provider::Input;
 use contract::repository::{Decided, RepositoryCode, Unapproved};
 use contract::shapes::Failure;
 use contract::{ErrorCode, RequestId};
@@ -30,7 +31,7 @@ use fakes::{Scripted, ScriptedProvider};
 use log::Watcher;
 use serde_json::json;
 
-use support::{DEADLINE, MODEL, Session, TestTool, delivery, ignore, read_until};
+use support::{DEADLINE, MODEL, Session, TestTool, delivery, ignore, read_until, tool_call_reply};
 
 /// A fake repository: a fixed list of unapproved items.
 #[derive(Default)]
@@ -562,10 +563,10 @@ fn a_failing_load_fails_the_run_before_any_request() {
 }
 
 #[test]
-fn a_loaded_tool_replaces_the_registered_one() {
+fn a_loaded_tool_never_replaces_a_registered_one() {
     let registered = Arc::new(TestTool::reads("same", "Old."));
     let mut session = Session::open(
-        vec![Scripted::text("Hello.")],
+        vec![tool_call_reply("", &["same"]), Scripted::text("Hello.")],
         Vec::new(),
         vec![Arc::clone(&registered) as Arc<dyn contract::tool::Tool>],
         r#loop::Model {
@@ -583,16 +584,127 @@ fn a_loaded_tool_replaces_the_registered_one() {
         loader(
             &calls,
             &Arc::new(Mutex::new(None)),
-            vec![(
-                "db".to_owned(),
-                Arc::new(TestTool::reads("same", "New.")) as Arc<dyn contract::tool::Tool>,
-            )],
+            vec![
+                (
+                    "db".to_owned(),
+                    Arc::new(TestTool::reads("same", "New.")) as Arc<dyn contract::tool::Tool>,
+                ),
+                (
+                    "db".to_owned(),
+                    Arc::new(TestTool::reads("fresh", "Fresh.")) as Arc<dyn contract::tool::Tool>,
+                ),
+            ],
             Vec::new(),
             None,
         ),
     );
     session.inbox.send(delivery("go")).unwrap();
-    session.turn();
+    assert_eq!(
+        session.turn(),
+        Some(contract::events::TurnOutcome::Completed)
+    );
+    let lines = session.lines();
+    // The complete ordered list: the tool step calls the registered
+    // tool, then the text step answers, so a dropped, added or
+    // reordered event fails (`docs/testing.md`, "Event streams").
+    assert_eq!(
+        ordered(lines.iter().map(|line| line.kind.as_str())),
+        [
+            "session_started",
+            "preamble_built",
+            "opening_message",
+            "turn_started",
+            "step_started",
+            "assistant_message_started",
+            "assistant_message_delta",
+            "tool_call_arguments_delta",
+            "tool_call_requested",
+            "usage_recorded",
+            "assistant_message_completed",
+            "tool_call_started",
+            "tool_call_completed",
+            "step_started",
+            "assistant_message_started",
+            "assistant_message_delta",
+            "assistant_message_delta",
+            "text_completed",
+            "usage_recorded",
+            "assistant_message_completed",
+            "turn_completed",
+        ]
+    );
+    assert!(
+        !lines
+            .iter()
+            .any(|line| line.kind.starts_with("permission_")),
+        "a reads call asks nobody"
+    );
+    let built = lines
+        .into_iter()
+        .find(|line| line.kind == "preamble_built")
+        .unwrap();
+    assert!(built.payload.get("replaced").is_none());
+    let declared = built.payload["tools"].as_array().unwrap();
+    let same = declared.iter().find(|t| t["name"] == "same").unwrap();
+    assert_eq!(same["registered_by"], "builtin");
+    let fresh = declared.iter().find(|t| t["name"] == "fresh").unwrap();
+    assert_eq!(fresh["registered_by"], "db");
+    // The registered tool answers the call, and the fresh tool is
+    // declared to the model alongside it.
+    let requests = session.provider.requests();
+    assert_eq!(requests.len(), 2);
+    assert!(requests[0].tools.iter().any(|t| t.name == "same"));
+    assert!(requests[0].tools.iter().any(|t| t.name == "fresh"));
+    match requests[1].conversation.last() {
+        Some(Input::ToolResult {
+            text,
+            is_error: false,
+            ..
+        }) => assert_eq!(text, "Old."),
+        other => panic!("the second request carries the registered tool's result: {other:?}"),
+    }
+}
+
+#[test]
+fn two_loaded_tools_of_one_name_replace_in_order() {
+    let mut session = Session::open(
+        vec![Scripted::text("Hello.")],
+        Vec::new(),
+        Vec::new(),
+        r#loop::Model {
+            reference: MODEL.into(),
+            cost: None,
+            subscription: false,
+        },
+    );
+    let code = Fake::new(Vec::new());
+    let code: Arc<dyn RepositoryCode> = code as Arc<dyn RepositoryCode>;
+    session.looped = Some(session.looped.take().unwrap().repository_code(code));
+    let (calls, _) = counter();
+    with_load(
+        &mut session,
+        loader(
+            &calls,
+            &Arc::new(Mutex::new(None)),
+            vec![
+                (
+                    "db".to_owned(),
+                    Arc::new(TestTool::reads("dup", "First.")) as Arc<dyn contract::tool::Tool>,
+                ),
+                (
+                    "db2".to_owned(),
+                    Arc::new(TestTool::reads("dup", "Second.")) as Arc<dyn contract::tool::Tool>,
+                ),
+            ],
+            Vec::new(),
+            None,
+        ),
+    );
+    session.inbox.send(delivery("go")).unwrap();
+    assert_eq!(
+        session.turn(),
+        Some(contract::events::TurnOutcome::Completed)
+    );
     let lines = session.lines();
     assert_eq!(
         ordered(lines.iter().map(|line| line.kind.as_str())),
@@ -615,15 +727,15 @@ fn a_loaded_tool_replaces_the_registered_one() {
         .into_iter()
         .find(|line| line.kind == "preamble_built")
         .unwrap();
+    // A collision inside the load still replaces and records: only
+    // names held before the load stand.
     assert_eq!(
         built.payload["replaced"],
-        json!([{"name": "same", "from": "builtin", "to": "db"}])
+        json!([{"name": "dup", "from": "db", "to": "db2"}])
     );
-    let requests = session.provider.requests();
-    assert!(requests[0].tools.iter().any(|t| t.name == "same"));
     let declared = built.payload["tools"].as_array().unwrap();
-    let same = declared.iter().find(|t| t["name"] == "same").unwrap();
-    assert_eq!(same["registered_by"], "db");
+    let dup = declared.iter().find(|t| t["name"] == "dup").unwrap();
+    assert_eq!(dup["registered_by"], "db2");
 }
 
 #[test]
