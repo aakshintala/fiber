@@ -162,7 +162,11 @@ impl Signals {
     /// `clock`.
     pub fn install(clock: Arc<dyn Clock>) -> io::Result<Arc<Self>> {
         let mut signals = signal_hook::iterator::Signals::new([SIGTERM, SIGINT, SIGHUP])?;
-        let handling = Arc::new(Self::new(clock, Box::new(|code| std::process::exit(code)), None));
+        let handling = Arc::new(Self::new(
+            clock,
+            Box::new(|code| std::process::exit(code)),
+            None,
+        ));
         let handler = Arc::clone(&handling);
         thread::Builder::new()
             .name("signals".to_owned())
@@ -174,7 +178,11 @@ impl Signals {
         Ok(handling)
     }
 
-    fn new(clock: Arc<dyn Clock>, exit: Box<dyn Fn(i32) + Send + Sync>, diag: Option<Arc<Diag>>) -> Self {
+    fn new(
+        clock: Arc<dyn Clock>,
+        exit: Box<dyn Fn(i32) + Send + Sync>,
+        diag: Option<Arc<Diag>>,
+    ) -> Self {
         Self {
             state: Mutex::new(State {
                 phase: Phase::Booting,
@@ -459,7 +467,12 @@ fn kill_point_message(code: i32) -> String {
 /// first. The loop reads `generation` before either check, so a bump that
 /// lands between the checks still ends the park at once, and the clock is
 /// read before the park, so a move that lands in between cannot be missed.
-fn park_until(clock: &dyn Clock, until: Instant, tick: &support::clock::Parker, done: &dyn Fn() -> bool) {
+fn park_until(
+    clock: &dyn Clock,
+    until: Instant,
+    tick: &support::clock::Parker,
+    done: &dyn Fn() -> bool,
+) {
     loop {
         let seen = tick.generation();
         if done() {
