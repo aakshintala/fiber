@@ -174,12 +174,12 @@ impl Setup {
         manifest["providers"] =
             Value::Object([(name.to_owned(), json!(urls))].into_iter().collect());
         fs::write(src.join("extension.json"), manifest.to_string()).unwrap();
-        let credential = with_credential
-            .then(|| {
-                "credential = { timeout = 1000, \
+        let credential = if with_credential {
+            "credential = { timeout = 1000, \
              run = function() return { token = \"t\", expires_at = 1893456000 } end }, "
-            })
-            .unwrap_or_default();
+        } else {
+            ""
+        };
         fs::write(
             {
                 fs::create_dir_all(src.join("providers")).unwrap();
