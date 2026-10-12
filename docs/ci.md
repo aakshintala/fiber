@@ -214,7 +214,10 @@ On Linux x86_64 alone:
   there, and all of them must pass at the head (`docs/workflow.md`, "The pull
   request"). A pull request whose every changed file is a docs file, as
   "Selection" defines it, passes the check with a message saying so: the
-  doc was wrong and the code was right, so no test can show the bug.
+  doc was wrong and the code was right, so no test can show the bug. The
+  label is read when the run's selection job runs, so a relabel takes effect
+  at the next push or a whole-run rerun; rerunning only the failed job keeps
+  the old reading.
 
 One more Linux x86_64 job builds the release profile for the target that
 ships, `x86_64-unknown-linux-musl` (`docs/releasing.md`), at the pull
