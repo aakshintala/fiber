@@ -980,6 +980,12 @@ Extensions:
   extension list                    List installed extensions: name, version and commit
   extension test [<path>]           Run an extension's test cases against the scripted provider
 
+MCP servers:
+  mcp add [--project | --repo] <name> <url>                                                      Declare a remote server
+  mcp add [--project | --repo] <name> [-e KEY=value]... [--secret KEY]... -- <command> [args]...  Declare a stdio server
+  mcp remove [--project | --repo] <name>                                                         Remove a server's declaration
+  mcp list                                                                                       List declared servers, their layers and approvals
+
 Configuration:
   config get <key>                              Print the effective value and the layer it came from
   config set [--project | --repo] <key> <value>  Write one key in one layer's file

@@ -219,6 +219,9 @@ fn run() -> i32 {
             cli::ExtensionCommands::List => ::cli::extension_list(clock.as_ref()),
             cli::ExtensionCommands::Test { path } => ::cli::extension_test(path.as_deref(), fiber),
         },
+        cli::Invocation::Run(Some(cli::Commands::Mcp(command))) => {
+            mcp_command(command, Arc::clone(&clock))
+        }
         cli::Invocation::Run(Some(cli::Commands::Approve(args))) => {
             ::cli::approve(args.yes, Arc::clone(&clock))
         }
@@ -276,6 +279,89 @@ fn print_help(words: &[String]) -> i32 {
             eprintln!("fiber: {sentence}");
             2
         }
+    }
+}
+
+/// `contract::McpRemote` over `mcp`: the seam `cli`'s MCP commands speak
+/// through (`docs/architecture.md`, "The call rules").
+struct McpClient;
+
+impl contract::McpRemote for McpClient {
+    fn has_userinfo(&self, url: &str) -> bool {
+        mcp::url_has_userinfo(url)
+    }
+}
+
+/// The layer `--project` and `--repo` name, as `config set` reads them:
+/// the repository's file, the per-project file, or the global file.
+fn mcp_layer(project: bool, repo: bool) -> Layer {
+    if repo {
+        Layer::Repository
+    } else if project {
+        Layer::Project
+    } else {
+        Layer::Global
+    }
+}
+
+/// `fiber mcp add|remove|list`: the parser shapes argv and `cli` checks
+/// every value. A shape the parser cannot say — both a url and a command,
+/// neither, `-e` or `--secret` with a url — is a usage error here.
+fn mcp_command(command: cli::McpCommands, clock: Arc<dyn contract::clock::Clock>) -> i32 {
+    match command {
+        cli::McpCommands::Add(args) => match mcp_declaration(&args) {
+            Ok(declaration) => ::cli::mcp_add(
+                mcp_layer(args.project, args.repo),
+                &args.name,
+                declaration,
+                &McpClient,
+                clock,
+            ),
+            Err(sentence) => {
+                eprintln!("fiber: {sentence}");
+                2
+            }
+        },
+        cli::McpCommands::Remove(args) => {
+            ::cli::mcp_remove(mcp_layer(args.project, args.repo), &args.name)
+        }
+        cli::McpCommands::List => ::cli::mcp_list(clock),
+    }
+}
+
+/// The declaration `fiber mcp add`'s arguments shape: exactly one
+/// transport, and no `-e` or `--secret` with a url. Each `-e` splits on
+/// its first `=`; `cli` checks every name and value.
+fn mcp_declaration(args: &cli::McpAddArgs) -> Result<::cli::McpDeclaration, String> {
+    const HELP: &str = "Run `fiber --help` for usage.";
+    let mut env = Vec::new();
+    for raw in &args.env {
+        let Some((key, value)) = raw.split_once('=') else {
+            return Err(format!("`{raw}` is not `KEY=value`. {HELP}"));
+        };
+        env.push((key.to_owned(), value.to_owned()));
+    }
+    match (&args.url, args.command.as_slice()) {
+        (Some(url), []) => {
+            if !args.env.is_empty() || !args.secret.is_empty() {
+                return Err(format!(
+                    "`-e` and `--secret` apply only to `-- <command>`, not to a url. {HELP}"
+                ));
+            }
+            Ok(::cli::McpDeclaration::Remote { url: url.clone() })
+        }
+        (None, [program, rest @ ..]) => Ok(::cli::McpDeclaration::Stdio {
+            command: program.clone(),
+            args: rest.to_vec(),
+            env,
+            secrets: args.secret.clone(),
+        }),
+        (Some(_), _) => Err(format!(
+            "`fiber mcp add` takes either a url or `-- <command>`, not both. {HELP}"
+        )),
+        (None, []) => Err(format!(
+            "`fiber mcp add` takes a url or `-- <command>`. {HELP}"
+        )),
     }
 }
 
