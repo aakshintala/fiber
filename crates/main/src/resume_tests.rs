@@ -19,7 +19,7 @@ use contract::shapes::Worktree;
 use contract::{ErrorCode, clock::Clock};
 use log::Log;
 
-use super::{enter_worktree, finish, recorded_worktree, recreatable};
+use super::{enter, enter_worktree, finish, recorded_worktree, recreatable};
 use crate::failed;
 
 /// A session directory whose first line is `session_started` with
@@ -176,6 +176,7 @@ fn enter_worktree_reports_a_lock_it_cannot_open() {
         &clock,
         &signals,
         &reads,
+        false,
     ) {
         Err(error) => {
             assert_eq!(error.failure.code, ErrorCode::IoFailed);
@@ -183,4 +184,58 @@ fn enter_worktree_reports_a_lock_it_cannot_open() {
         }
         Ok(_) => panic!("a lock that cannot open fails"),
     }
+}
+
+#[test]
+fn a_hub_present_recreation_enters_the_worktree() {
+    let home = fakes::TempDir::new("main-resume-present-hub");
+    let worktree = home.path().join("wt");
+    std::fs::create_dir(&worktree).unwrap();
+    let shared = doors::share(&worktree).unwrap();
+    match enter(&worktree, shared, true) {
+        Ok(super::Held::Shared { .. }) => {}
+        Ok(_) | Err(_) => panic!("a hub Present enters the worktree"),
+    }
+    // Canonical on both sides for macOS `/var` versus `/private/var`.
+    assert_eq!(
+        std::fs::canonicalize(std::env::current_dir().unwrap()).unwrap(),
+        std::fs::canonicalize(&worktree).unwrap()
+    );
+}
+
+#[test]
+fn an_ask_present_recreation_keeps_the_launch_directory() {
+    let before = std::env::current_dir().unwrap();
+    let home = fakes::TempDir::new("main-resume-present-ask");
+    let worktree = home.path().join("wt");
+    std::fs::create_dir(&worktree).unwrap();
+    let shared = doors::share(&worktree).unwrap();
+    match enter(&worktree, shared, false) {
+        Ok(super::Held::Shared { .. }) => {}
+        Ok(_) | Err(_) => panic!("an ask Present keeps the launch directory"),
+    }
+    assert_eq!(std::env::current_dir().unwrap(), before);
+}
+
+#[test]
+fn a_hub_present_recreation_whose_path_vanished_fails_io_failed() {
+    let before = std::env::current_dir().unwrap();
+    let home = fakes::TempDir::new("main-resume-present-gone");
+    let worktree = home.path().join("wt");
+    std::fs::create_dir(&worktree).unwrap();
+    let shared = doors::share(&worktree).unwrap();
+    std::fs::remove_dir_all(&worktree).unwrap();
+    match enter(&worktree, shared, true) {
+        Err(error) => {
+            assert_eq!(error.failure.code, ErrorCode::IoFailed);
+            assert!(
+                error.failure.message.contains(worktree.to_string_lossy().as_ref()),
+                "{}",
+                error.failure.message
+            );
+            assert!(error.isolation.is_none(), "nothing was made");
+        }
+        Ok(_) => panic!("a vanished path fails"),
+    }
+    assert_eq!(std::env::current_dir().unwrap(), before);
 }
