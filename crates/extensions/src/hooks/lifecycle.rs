@@ -90,7 +90,7 @@ pub(super) fn before_model_call(
         let name = extension.name();
         let returned = extension
             .hook(BEFORE_MODEL_CALL, entry.index, arg.clone())
-            .and_then(|value| decode_refuse(name, value));
+            .and_then(|value| decode_additive(name, BEFORE_MODEL_CALL, "refuse", value));
         match returned {
             Ok(None) => {}
             Ok(Some(reason)) => {
@@ -298,11 +298,4 @@ fn decode_additive(
         }
     }
     Ok(text)
-}
-
-/// Reads a `before_model_call` hook's return: `nil`, an empty table, or a
-/// table holding `refuse` (a non-empty string) alone. Anything else is the
-/// hook's failure.
-fn decode_refuse(extension: &str, value: Value) -> Result<Option<String>, Error> {
-    decode_additive(extension, BEFORE_MODEL_CALL, "refuse", value)
 }
