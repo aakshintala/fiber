@@ -28,8 +28,8 @@ use fakes::{Scripted, ScriptedProvider};
 use serde_json::{Value, json};
 
 use support::{
-    REVIEWER_MODEL, Session, TestTool, allow, calls_reply, completed, delivery, deny, ignore,
-    kinds, on_request, paris, reply_delivery, shell, text_first,
+    CountingHooks, REVIEWER_MODEL, Session, TestTool, allow, calls_reply, completed, delivery,
+    deny, ignore, kinds, on_request, paris, reply_delivery, shell, text_first,
 };
 
 /// Sends "go", runs one turn, and returns its lines.
@@ -2413,4 +2413,30 @@ fn a_re_ask_keeps_its_stage() {
             "review {n}"
         );
     }
+}
+
+#[test]
+fn a_reviewed_call_counts_only_the_session_model_requests() {
+    let tool = shell(None, None);
+    let mut session = Session::with_tools(
+        vec![
+            calls_reply("", &[("shell", paris())]),
+            Scripted::text("Done."),
+        ],
+        None,
+        vec![tool as Arc<dyn Tool>],
+    );
+    let counting = CountingHooks::new();
+    session.looped = session
+        .looped
+        .take()
+        .map(|looped| looped.hooks(Arc::clone(&counting) as Arc<dyn contract::hook::Hooks>));
+    let reviewer = session.reviewer(vec![Scripted::text("allow")]);
+    session.inbox.send(delivery("go")).unwrap();
+    assert_eq!(session.turn(), Some(TurnOutcome::Completed));
+    // The step's request and the reply's: the reviewer's own request never
+    // reached the hook.
+    assert_eq!(counting.calls(), 2);
+    assert_eq!(session.requests().len(), 2);
+    assert_eq!(reviewer.requests().len(), 1);
 }

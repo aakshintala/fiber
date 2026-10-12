@@ -257,9 +257,8 @@ impl Drop for KillGroup {
 
 #[test]
 fn fiber_ask_declines_a_hook_ask_and_writes_no_question() {
-    // `turn_start` has no call site yet: only `after_tool` hooks run, so
-    // the hook below answers a tool call instead, naming the answer in
-    // the content the provider sees next.
+    // The hook below answers a tool call, naming the answer in the
+    // content the provider sees next.
     let setup = Setup::new_with_fm_root();
     let server = ProviderServer::start([
         stream(&[function_call(

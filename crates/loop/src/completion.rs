@@ -92,8 +92,8 @@ pub(crate) enum Step {
     /// The reply called tools: take the next step.
     Next,
     /// The reply called no tool: the turn completes unless something is
-    /// waiting.
-    Replied,
+    /// waiting. Carries the reply's text parts, joined, for `turn_end`.
+    Replied(String),
     /// The turn ended.
     Ended(TurnCompleted),
 }
