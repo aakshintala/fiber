@@ -669,7 +669,7 @@ fn enter_worktree(
             None => Ok(Held::Nothing),
         },
         Ok(_) | Err(_) => match doors::share(path) {
-            Ok(shared) => Ok(Held::Shared { _shared: shared }),
+            Ok(shared) => enter(path, shared, enter_present),
             Err(failure) => Err(doors::RecreateError {
                 failure,
                 isolation: None,
@@ -678,9 +678,11 @@ fn enter_worktree(
     }
 }
 
-/// Enters a worktree the recreation found present: on the hub path the
-/// process runs in the worktree, as a made one does; `ask --resume` keeps
-/// the launch directory. A path that vanished after the claim fails with
+/// Enters a present worktree: both arms the hub's launch directory can
+/// meet, the recreation's Present result and a path present at the
+/// metadata check. On the hub path the process runs in the worktree, as a
+/// made one does; `ask --resume` keeps the launch directory. A path that
+/// vanished after the claim fails with
 /// the made arm's sentence and no isolation: the share drops with it.
 #[allow(
     clippy::result_large_err,
