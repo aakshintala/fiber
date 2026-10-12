@@ -15,9 +15,9 @@ use contract::events::{
     PermissionResolved, Progress, RuleOffer, ToolCallCompleted, ToolCallRequested, ToolCallStarted,
     ToolReplaced,
 };
+use contract::jobs::Taken;
 use contract::provider::ToolDefinition;
 use contract::shapes::{ContentPart, DeclaredEffects};
-use contract::jobs::Taken;
 use contract::tool::{Bound, Cancel, Output, Tool};
 use contract::{ActionId, RequestId, SessionId, TurnId};
 use log::Log;

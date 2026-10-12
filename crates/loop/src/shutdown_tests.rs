@@ -76,10 +76,7 @@ impl Listed {
     /// Drops `id` from the running list without sending its end: the
     /// settle stops waiting for it.
     fn forget(&self, id: &str) {
-        self.ids
-            .lock()
-            .unwrap()
-            .retain(|listed| listed.0 != id);
+        self.ids.lock().unwrap().retain(|listed| listed.0 != id);
     }
 
     /// [`Listed::end`], with a delegate's finish riding the notice.

@@ -20,8 +20,8 @@ use fakes::clock::FakeClock;
 use fakes::{CancelToken, Recorder, TempDir, Watchdog};
 use serde_json::{Map, Value, json};
 
-use super::{DelegateMessage, LastSeq, Launch, Steer, Steered, Watch};
 use super::super::Watched;
+use super::{DelegateMessage, LastSeq, Launch, Steer, Steered, Watch};
 use crate::registry::Registry;
 use crate::support::{delegate_finished, delegate_started, ended_ok, exited};
 use contract::Envelope;
@@ -312,12 +312,7 @@ fn content(output: &Output) -> &str {
 }
 
 fn code_of(output: &Output) -> ErrorCode {
-    output
-        .error
-        .as_ref()
-        .expect("the call failed")
-        .code
-        .clone()
+    output.error.as_ref().expect("the call failed").code.clone()
 }
 
 fn call(settle: &contract::tool::Settle) -> Vec<Taken> {
@@ -611,7 +606,10 @@ fn a_resume_after_a_wait_takes_only_the_new_run_start() {
         .registry
         .wait(&id.0, 0, &CancelToken::new())
         .expect("run 1 ended");
-    assert_eq!(call(&waited.settle.expect("an ended wait settles")).len(), 2);
+    assert_eq!(
+        call(&waited.settle.expect("an ended wait settles")).len(),
+        2
+    );
     let output = rig.tool.run(
         &resume_args(&id.0, "go again"),
         &CancelToken::new(),
@@ -662,10 +660,7 @@ fn two_calls_resume_in_turn() {
             LaunchReply::Block("fiber-message-two-1".into()),
             LaunchReply::Block("fiber-message-two-2".into()),
         ],
-        vec![
-            (Vec::new(), Watched::Closed),
-            (Vec::new(), Watched::Closed),
-        ],
+        vec![(Vec::new(), Watched::Closed), (Vec::new(), Watched::Closed)],
         Arc::new(|_| Ok(None)),
     );
     let output_path = format!("{}/sessions/s_2/events.jsonl", rig._dir.path().display());
@@ -746,7 +741,10 @@ fn a_spawn_failure_starts_nothing_and_a_second_call_resumes() {
         .registry
         .wait(&id.0, 0, &CancelToken::new())
         .expect("run 1 ended");
-    assert_eq!(call(&waited.settle.expect("an ended wait settles")).len(), 2);
+    assert_eq!(
+        call(&waited.settle.expect("an ended wait settles")).len(),
+        2
+    );
     // A second call then resumes.
     let output = rig.tool.run(
         &resume_args(&id.0, "go again"),
@@ -825,7 +823,10 @@ fn a_boundary_read_that_failed_starts_nothing_though_the_log_is_back_before_the_
         .registry
         .wait(&id.0, 0, &CancelToken::new())
         .expect("run 1 ended");
-    assert_eq!(call(&waited.settle.expect("an ended wait settles")).len(), 2);
+    assert_eq!(
+        call(&waited.settle.expect("an ended wait settles")).len(),
+        2
+    );
 
     // A second call reads past the restored log and launches on it: the
     // stale replay never stands in for the new run's end.
@@ -889,10 +890,8 @@ fn gone_resumes_once_the_run_ends_during_the_backoff() {
     let (id, finish) = open_resume_delegate(&rig, &output_path);
     let (rx, handle) = call_async(&rig.tool, &id.0, "hi", CancelToken::new());
     assert!(
-        rig.clock.await_parked(
-            rig.clock.now() + Duration::from_millis(50),
-            DEADLINE
-        ),
+        rig.clock
+            .await_parked(rig.clock.now() + Duration::from_millis(50), DEADLINE),
         "the call parks its backoff"
     );
     end_resume_run(finish, &id, "Done.");
@@ -915,10 +914,8 @@ fn closing_after_a_committed_gone_resumes_once_the_run_ends() {
     let (id, finish) = open_resume_delegate(&rig, &output_path);
     let (rx, handle) = call_async(&rig.tool, &id.0, "hi", CancelToken::new());
     assert!(
-        rig.clock.await_parked(
-            rig.clock.now() + Duration::from_millis(50),
-            DEADLINE
-        ),
+        rig.clock
+            .await_parked(rig.clock.now() + Duration::from_millis(50), DEADLINE),
         "the call parks its backoff"
     );
     rig.clock.advance(Duration::from_millis(50));

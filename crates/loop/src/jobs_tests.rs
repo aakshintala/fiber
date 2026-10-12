@@ -3143,16 +3143,12 @@ fn a_notice_kept_for_the_next_turn_writes_what_its_claim_took_ahead() {
     let action = ActionId("a_aaaaaaaaaaaaaaaa".into());
     // Taken while no turn runs: the next turn moves it into its input
     // through `take_queued`, which claims it at the move.
-    world
-        .looped
-        .as_mut()
-        .unwrap()
-        .admit_job(ahead_notice(
-            DELEGATE,
-            "Done.",
-            resumed_ahead(DELEGATE, &action),
-            &asked,
-        ));
+    world.looped.as_mut().unwrap().admit_job(ahead_notice(
+        DELEGATE,
+        "Done.",
+        resumed_ahead(DELEGATE, &action),
+        &asked,
+    ));
     world.send(prompt("go"));
     assert_eq!(world.turn(), Some(TurnOutcome::Completed));
     assert_eq!(asked.count(), 1, "the claim is asked once, at the move");
@@ -3169,10 +3165,7 @@ fn a_notice_kept_for_the_next_turn_writes_what_its_claim_took_ahead() {
     // The turn's input still names the job once, with its message after.
     let input = lines[0].payload["input"].as_array().unwrap();
     assert_eq!(input.len(), 2);
-    assert_eq!(
-        input[0],
-        json!({"type": "jobs", "job_ids": [DELEGATE]})
-    );
+    assert_eq!(input[0], json!({"type": "jobs", "job_ids": [DELEGATE]}));
     assert_eq!(input[1]["type"], "message");
     let at = lines
         .iter()

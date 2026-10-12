@@ -1430,9 +1430,7 @@ fn a_request_whose_call_never_started_is_not_raised_again() {
 /// the shutdown ends the step suspended.
 #[test]
 fn a_start_a_dropped_call_queued_is_written_by_the_notice_claim_under_its_action_and_turn() {
-    use contract::events::{
-        DelegateFinished, DelegateStarted, JobCompleted, JobStarted, Outcome,
-    };
+    use contract::events::{DelegateFinished, DelegateStarted, JobCompleted, JobStarted, Outcome};
     use contract::inbox::JobNotice;
     use contract::jobs::{JobRecord, Taken};
     use contract::shapes::{Tokens, Usage};

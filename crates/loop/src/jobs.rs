@@ -254,7 +254,8 @@ impl Loop {
                 }
                 Queued::Job(ahead, completed, delegate) => {
                     name_job(&mut input, &completed.job_id);
-                    self.queued.push_back(Queued::Job(ahead, completed, delegate));
+                    self.queued
+                        .push_back(Queued::Job(ahead, completed, delegate));
                 }
                 // Notices are claimed at admission while idle and at the
                 // move into a turn's input while running: none reaches a
@@ -368,11 +369,8 @@ impl Loop {
         self.queued
             .drain(..)
             .filter_map(|piece| match piece {
-                Queued::Notice(notice) => {
-                    claimed(notice).map(|(ahead, completed, delegate)| {
-                        Queued::Job(ahead, completed, delegate)
-                    })
-                }
+                Queued::Notice(notice) => claimed(notice)
+                    .map(|(ahead, completed, delegate)| Queued::Job(ahead, completed, delegate)),
                 piece @ (Queued::Steer(..)
                 | Queued::Job(..)
                 | Queued::Line(_)

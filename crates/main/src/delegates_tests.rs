@@ -339,11 +339,7 @@ fn a_delegate_of_a_login_shell_session_carries_the_flag() {
 /// then sends one `fiber_exited` line per `seq`, each carrying it, and
 /// closes. The thread owns the listener and ends once it served the one
 /// connection.
-fn serve(
-    home: &std::path::Path,
-    id: &str,
-    seqs: Vec<Option<u64>>,
-) -> std::thread::JoinHandle<()> {
+fn serve(home: &std::path::Path, id: &str, seqs: Vec<Option<u64>>) -> std::thread::JoinHandle<()> {
     let run = home.join("run");
     std::fs::create_dir_all(&run).unwrap();
     // Bound before returning, so the socket file exists when the watch

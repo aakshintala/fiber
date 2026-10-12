@@ -104,6 +104,8 @@ behaviour is `docs/tools.md`, "Background jobs"; the events are
   its run finishes ("Lifetime"), so most messages to a finished delegate are
   resumes.
 - The receipt says which of these happened.
+- `delegate_message` with an empty message, or one of only whitespace, fails
+  `invalid_arguments` and sends nothing.
 - A person reaches a delegate on its own connection: a client that opens a
   delegate subscribes to it through the hub and sends it `steer` there, as to
   any session. No session forwards a command to another. How the terminal

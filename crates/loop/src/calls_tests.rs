@@ -24,10 +24,10 @@ use contract::events::{
     ToolCallArgumentsDelta, ToolCallRequested, ToolReplaced, TurnOutcome,
 };
 use contract::inbox::{Ack, Delivery, Message};
+use contract::jobs::Taken;
 use contract::provider::{Delta, Input, ModelRequest, Provider, ReplyAction, ToolDefinition};
 use contract::rules::{Rules, RulesError, StandingRules};
 use contract::shapes::{ContentPart, DeclaredEffects, Effect, Failure, Origin, Process, Sender};
-use contract::jobs::Taken;
 use contract::tool::{Cancel, Effects, EffectsError, Output, ServerRecord, Settle, Tool};
 use contract::{ActionId, CommandId, Envelope, ErrorCode, JobId};
 use fakes::Deadline;
