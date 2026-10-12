@@ -547,15 +547,12 @@ fn a_check_hook_at_turn_start_is_not_registered() {
     let session = home.load(&[]);
     let answer = turn_start(&session, Vec::new());
     assert_eq!(added(&answer), Vec::new());
+    let refused = "a `check` hook exists only at `before_message`, `before_tool`";
     assert!(
         session
             .notices()
             .iter()
-            .any(|notice| {
-                notice.message.contains(
-            "a `check` hook exists only at `before_message`, `before_tool` and `before_model_call`"
-        )
-            }),
+            .any(|notice| notice.message.contains(refused)),
         "{:?}",
         session.notices()
     );
