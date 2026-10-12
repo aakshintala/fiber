@@ -352,7 +352,7 @@ impl Login {
                 }
             }
         }
-        while body.len() < 3 {
+        for _ in body.len()..3 {
             body.push(blank_row());
         }
         // The footer carries trailing blanks up to the widest of every
