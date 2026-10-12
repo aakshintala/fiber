@@ -457,7 +457,7 @@ pub(crate) struct SessionArgs {
     /// Resume the session `--id` names instead of starting it; the
     /// workspace is the one its log recorded (`docs/invocation.md`, "The
     /// hub").
-    #[arg(long, conflicts_with = "prompt")]
+    #[arg(long)]
     pub(crate) resume: bool,
 
     /// Run the session in a new worktree (`docs/invocation.md`,
@@ -486,7 +486,6 @@ pub(crate) struct SessionArgs {
         value_parser = parse_session_id,
         requires = "delegate_id",
         requires = "prompt",
-        conflicts_with = "resume",
         conflicts_with = "worktree"
     )]
     pub(crate) parent: Option<String>,
@@ -646,6 +645,19 @@ fn parse_from(args: impl IntoIterator<Item = impl Into<OsString>>) -> Invocation
                         ask,
                         sentence: "The argument '--resume <id>' requires a session id but \
                                  none was given. Run `fiber --help` for usage."
+                            .to_owned(),
+                    }
+                }
+                // `--prompt` with `--resume` is a delegate's resume
+                // only: the hub's resume never carries a prompt.
+                Some(Commands::Session(args))
+                    if args.resume && args.prompt.is_some() && args.parent.is_none() =>
+                {
+                    Invocation::Usage {
+                        ask,
+                        sentence: "The arguments '--resume' and '--prompt' require '--parent': \
+                                 only a delegate resumes with a prompt. \
+                                 Run `fiber --help` for usage."
                             .to_owned(),
                     }
                 }

@@ -34,8 +34,20 @@ impl Loop {
         let queued = std::mem::take(&mut self.queued);
         if !self.rewound {
             for piece in queued {
-                if let Queued::Job(completed, delegate) = piece {
-                    self.write_job_end(completed, delegate)?;
+                match piece {
+                    Queued::Job(completed, delegate) => {
+                        self.write_job_end(completed, delegate)?;
+                    }
+                    // Claimed here, at the settle that writes it.
+                    Queued::Notice(notice) => {
+                        if let Some((completed, delegate)) = claimed(notice) {
+                            self.write_job_end(completed, delegate)?;
+                        }
+                    }
+                    Queued::Steer(..)
+                    | Queued::Line(_)
+                    | Queued::Handoff(..)
+                    | Queued::Pending(..) => {}
                 }
             }
         }

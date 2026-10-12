@@ -117,6 +117,45 @@ impl Segment {
     }
 }
 
+/// The `seq` of the last complete line of the log in `dir`: `Ok(None)`
+/// only for a regular, empty log. Every other outcome without a `seq` is
+/// an error naming the log's path: an open or metadata failure is
+/// [`Error::Io`], a missing log included, and a log whose last line
+/// gives no boundary is [`Error::Pointer`]. Reads only the one handle it
+/// opened, never reopening by path: a log hidden during the read and
+/// restored before the spawn fails closed instead of replaying an
+/// earlier run's end. Bytes after the last `\n` are torn and are dropped.
+pub fn last_seq(dir: &Path) -> Result<Option<Seq>, Error> {
+    let path = dir.join(EVENTS);
+    let file = File::open(&path).map_err(io_at(&path))?;
+    let meta = file.metadata().map_err(io_at(&path))?;
+    if !meta.file_type().is_file() {
+        return Err(Error::Pointer {
+            path,
+            reason: "the log is not a regular file".to_owned(),
+        });
+    }
+    if meta.len() == 0 {
+        return Ok(None);
+    }
+    let Some(line) = crate::scan::last_complete_line(file, meta.len()) else {
+        return Err(Error::Pointer {
+            path,
+            reason: "no complete line could be read from the log".to_owned(),
+        });
+    };
+    let line: Envelope = serde_json::from_slice(&line).map_err(|_| Error::Pointer {
+        path: path.clone(),
+        reason: "the log's last line is not an event".to_owned(),
+    })?;
+    line.seq
+        .ok_or_else(|| Error::Pointer {
+            path,
+            reason: "the log's last line has no seq".to_owned(),
+        })
+        .map(Some)
+}
+
 /// The last complete line of the log in `dir`: `None` when the log is
 /// missing or empty, when it holds no complete line, or when that line
 /// does not parse. Bytes after the last `\n` are torn and are dropped.

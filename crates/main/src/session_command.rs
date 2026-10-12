@@ -52,9 +52,15 @@ pub(crate) fn run(
         r#loop::set_variables_source(VariablesSource::LoginShell);
     }
     if args.resume {
+        // A delegate's resume runs its prompt as one unattended turn,
+        // then exits, as a new delegate does: stdin is its lifeline.
+        if args.parent.is_some() {
+            signals.lifeline(Box::new(std::io::stdin()));
+        }
         return crate::resume::session_resume(
             SessionId(args.id),
             crate::per_run(args.model, args.overrides),
+            args.prompt,
             clock,
             &signals,
             fiber,

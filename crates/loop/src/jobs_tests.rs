@@ -2771,3 +2771,236 @@ fn a_batch_after_close_while_its_job_runs_starts_a_turn() {
     let wait = Deadline::after(DEADLINE);
     ran(&finished, &wait);
 }
+
+/// `id`'s end as a delegate notice whose claim answers `holds` and counts
+/// its asks in `asked`.
+fn counted_delegate(id: &str, text: &str, holds: bool, asked: &Asked) -> Delivery {
+    let asked = Arc::clone(&asked.0);
+    Delivery::Job(JobNotice {
+        completed: failed(id),
+        claim: Claim(Box::new(move || {
+            asked.fetch_add(1, Ordering::SeqCst);
+            holds
+        })),
+        delegate: Some(delegate_finished(id, text.into())),
+    })
+}
+
+#[test]
+fn admit_job_queues_the_notice_without_asking_its_claim() {
+    let mut world = World::new(Vec::new(), Vec::new(), |_| Vec::new());
+    let asked = Asked::default();
+    world
+        .looped
+        .as_mut()
+        .unwrap()
+        .admit_job(counted_job(DELEGATE, true, &asked));
+    assert_eq!(asked.count(), 0, "admission asks nothing");
+}
+
+/// `id`'s end as a notice whose claim answers `holds` and counts its asks
+/// in `asked`.
+fn counted_job(id: &str, holds: bool, asked: &Asked) -> JobNotice {
+    let asked = Arc::clone(&asked.0);
+    JobNotice {
+        completed: failed(id),
+        claim: Claim(Box::new(move || {
+            asked.fetch_add(1, Ordering::SeqCst);
+            holds
+        })),
+        delegate: None,
+    }
+}
+
+#[test]
+fn a_notice_admitted_during_an_approval_wait_is_claimed_once_at_the_next_boundary() {
+    let mut world = World::new(
+        vec![calls("gated"), Scripted::text("Seen.")],
+        Vec::new(),
+        |_| vec![Arc::new(Gated)],
+    );
+    let asked = Asked::default();
+    let (noticed_tx, noticed_rx) = mpsc::channel::<()>();
+    let (release_tx, release_rx) = mpsc::channel::<()>();
+    let answered = on_request(&world.log, {
+        let inbox = world.inbox.clone();
+        let counted = asked.clone();
+        move |id| {
+            inbox
+                .send(counted_delegate(DELEGATE, "Done.", true, &counted))
+                .unwrap();
+            noticed_tx.send(()).unwrap();
+            // The approval still waits: the write, and its claim, are
+            // still ahead.
+            Deadline::after(DEADLINE)
+                .recv(&release_rx)
+                .expect("the test releases the approval");
+            inbox.send(allow(id)).unwrap();
+        }
+    });
+    world.send(prompt("go"));
+    let rx = world.spawn();
+    Deadline::after(DEADLINE)
+        .recv(&noticed_rx)
+        .expect("the notice went out");
+    assert_eq!(asked.count(), 0, "no claim before the next step boundary");
+    release_tx.send(()).unwrap();
+    let wait = Deadline::after(DEADLINE);
+    assert_eq!(world.join(&rx, &wait), Some(TurnOutcome::Completed));
+    answered.join().unwrap();
+    assert_eq!(asked.count(), 1, "the claim is asked once, at the write");
+    let lines = world.turn_lines();
+    let called = [
+        "permission_requested",
+        "permission_resolved",
+        "tool_call_started",
+        "tool_call_completed",
+    ];
+    assert_eq!(
+        kinds(&lines),
+        two_steps_with(&called, &["delegate_finished", "job_completed"])
+    );
+    let finished = lines
+        .iter()
+        .find(|line| line.kind == "delegate_finished")
+        .expect("a delegate_finished line");
+    assert_eq!(finished.payload["job_id"], DELEGATE);
+    assert_eq!(finished.payload["text"], "Done.");
+    assert_eq!(finished.turn_id, lines[0].turn_id);
+    let completed = lines
+        .iter()
+        .find(|line| line.kind == "job_completed")
+        .expect("a job_completed line");
+    assert_notice(completed, DELEGATE);
+}
+
+#[test]
+fn a_notice_refused_at_the_write_writes_nothing() {
+    let mut world = World::new(
+        vec![calls("gated"), Scripted::text("Seen.")],
+        Vec::new(),
+        |_| vec![Arc::new(Gated)],
+    );
+    let asked = Asked::default();
+    let answered = on_request(&world.log, {
+        let inbox = world.inbox.clone();
+        let counted = asked.clone();
+        move |id| {
+            inbox
+                .send(counted_delegate(DELEGATE, "Done.", false, &counted))
+                .unwrap();
+            inbox.send(allow(id)).unwrap();
+        }
+    });
+    world.send(prompt("go"));
+    assert_eq!(world.turn(), Some(TurnOutcome::Completed));
+    answered.join().unwrap();
+    assert_eq!(asked.count(), 1, "the claim is asked once, at the write");
+    let lines = world.turn_lines();
+    let called = [
+        "permission_requested",
+        "permission_resolved",
+        "tool_call_started",
+        "tool_call_completed",
+    ];
+    assert_eq!(kinds(&lines), two_steps_with(&called, &[]));
+}
+
+#[test]
+fn a_refused_notice_kept_by_a_cancelled_turn_starts_no_turn() {
+    let mut world = World::new(
+        vec![calls("gated"), Scripted::text("Seen.")],
+        Vec::new(),
+        |_| vec![Arc::new(Gated)],
+    );
+    let asked = Asked::default();
+    let cancel = Arc::clone(&world.looped.as_ref().unwrap().cancel);
+    let answered = on_request(&world.log, {
+        let inbox = world.inbox.clone();
+        let counted = asked.clone();
+        move |_| {
+            inbox.send(notice(JOB, false, &counted)).unwrap();
+            assert!(cancel.cancel());
+            inbox.send(Delivery::Cancelled).unwrap();
+        }
+    });
+    world.send(prompt("go"));
+    assert_eq!(world.turn(), Some(TurnOutcome::Interrupted));
+    answered.join().unwrap();
+    assert_eq!(asked.count(), 0, "a cancelled turn claims nothing it kept");
+    let cut = world.turn_lines();
+    assert!(!kinds(&cut).contains(&"job_completed"), "{:?}", kinds(&cut));
+    // The next turn takes the leftover notice, refuses it, and starts
+    // nothing on it.
+    world.send(Delivery::Close(ignore()));
+    assert_eq!(world.turn(), None);
+    assert_eq!(asked.count(), 1, "the take claims the kept notice once");
+}
+
+#[test]
+fn a_restarted_job_is_owed_another_orphaned_end() {
+    use contract::events::{Event, JobStarted};
+    let started = || {
+        Event::JobStarted(JobStarted {
+            job_id: JobId(JOB.into()),
+            tool: None,
+            extension: None,
+            description: "a job".into(),
+            output_path: "jobs/j_5e10c0ffee123456.jsonl".into(),
+        })
+    };
+    let mut orphans = super::Orphans::default();
+    orphans.fold(&started());
+    orphans.fold(&Event::JobCompleted(failed(JOB)));
+    // A `job_started` reopens its job: the run it starts is owed its own
+    // orphaned end.
+    orphans.fold(&started());
+    let done = orphans.finish();
+    assert_eq!(done.len(), 1);
+    assert_eq!(done[0].job_id.0, JOB);
+    assert_eq!(done[0].error.as_ref().unwrap().code, ErrorCode::Orphaned);
+}
+
+#[test]
+fn a_job_completed_after_its_restart_owes_nothing() {
+    use contract::events::{Event, JobStarted};
+    let started = || {
+        Event::JobStarted(JobStarted {
+            job_id: JobId(JOB.into()),
+            tool: None,
+            extension: None,
+            description: "a job".into(),
+            output_path: "jobs/j_5e10c0ffee123456.jsonl".into(),
+        })
+    };
+    let mut orphans = super::Orphans::default();
+    orphans.fold(&started());
+    orphans.fold(&Event::JobCompleted(failed(JOB)));
+    orphans.fold(&started());
+    orphans.fold(&Event::JobCompleted(failed(JOB)));
+    assert!(orphans.finish().is_empty());
+}
+
+#[test]
+fn admit_idle_claims_a_notice_at_admission() {
+    let mut world = World::new(Vec::new(), Vec::new(), |_| Vec::new());
+    let looped = world.looped.as_mut().unwrap();
+    // A refused claim starts no turn on the notice.
+    let refused = Asked::default();
+    let mut input = crate::inbox::TurnInput::of(Vec::new());
+    looped
+        .admit_idle(notice(JOB, false, &refused), &mut input)
+        .unwrap();
+    assert!(input.pieces.is_empty(), "a refused claim starts no turn");
+    assert_eq!(refused.count(), 1, "the claim is asked at admission");
+    // A held claim joins the turn's input as the job's end.
+    let held = Asked::default();
+    looped
+        .admit_idle(notice(JOB, true, &held), &mut input)
+        .unwrap();
+    assert!(
+        matches!(input.pieces.as_slice(), [super::Queued::Job(..)]),
+        "a held claim starts one turn with the notice"
+    );
+    assert_eq!(held.count(), 1, "the claim is asked at admission");
+}

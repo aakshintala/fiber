@@ -141,10 +141,13 @@ fn in_launch_project(dir: &Path, project: &Path) -> bool {
 /// The internal session command with `--resume`: resumes the session `id`
 /// in the current directory's project to serve clients
 /// (`docs/invocation.md`, "The hub"). The hub attaches to a live session by
-/// its socket, so a held lock fails instead of attaching.
+/// its socket, so a held lock fails instead of attaching. With a prompt,
+/// which only a delegate's resume carries, the prompt runs as one
+/// unattended turn, then the session exits, as a new delegate does.
 pub(crate) fn session_resume(
     id: SessionId,
     overrides: Vec<String>,
+    prompt: Option<String>,
     clock: Arc<dyn contract::clock::Clock>,
     signals: &Arc<doors::Signals>,
     fiber: Result<PathBuf, String>,
@@ -169,8 +172,9 @@ pub(crate) fn session_resume(
         Err(e) => return ask_failed(failed(e.code(), e)),
     };
     let dir = sessions.join(&id.0);
+    let one_turn = prompt.is_some();
     resumed_session(
-        log, &dir, id, overrides, None, None, false, clock, signals, fiber,
+        log, &dir, id, overrides, None, prompt, one_turn, clock, signals, fiber,
     )
 }
 
