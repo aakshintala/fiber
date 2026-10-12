@@ -1260,3 +1260,72 @@ fn journey_quit_resume_answer_again() {
     let output = run.wait();
     assert_eq!(output.status.code(), Some(0));
 }
+
+#[test]
+fn journey_quit_just_resumed_session_prints_its_resume_line() {
+    let setup = support::Setup::new();
+    // One held response: the first session's answer. The resume half of
+    // this journey sends no prompt, so it needs no second response.
+    let server = ProviderServer::start([reply("First.")]).unwrap();
+    server.hold();
+    provider(&setup, &server);
+    // One turn, then `/close`: the conversation grid holds the answer
+    // before the terminal is restored, as in
+    // `journey_quit_resume_answer_again`.
+    let mut run = terminal(&setup, 120, 32, &[], &[]);
+    run.wait_screen("the first frame", |grid| grid.contents.contains("›"));
+    run.ready();
+    let first_from = run.output().len();
+    run.write(b"first\r");
+    assert!(
+        server.await_requests(1, setup.deadline.left()),
+        "the first request to reach the server"
+    );
+    server.release_one();
+    run.wait_screen("the answer", |grid| {
+        grid.alternate_screen && grid.contents.contains("First.")
+    });
+    // `/close` stops the session on screen: quitting with it live would
+    // leave it running with no terminal, and no list to resume from.
+    // The finished turn proves the session is idle before the close
+    // goes out.
+    run.turn_finished(first_from);
+    let id = only_session(&setup);
+    run.write(b"/close\r");
+    until_socket(
+        setup.deadline,
+        &setup.home().join("run").join(&id),
+        false,
+        "the closed session to exit",
+    );
+    // Nothing live remains, so no resume line follows: the restored
+    // primary screen is the assertion.
+    run.write(b"\x03\x03\r");
+    run.wait_screen("the restored primary screen", |grid| {
+        !grid.alternate_screen && !grid.hide_cursor
+    });
+    let output = run.wait();
+    assert_eq!(output.status.code(), Some(0));
+    // Resume lists the exited session; Enter opens it, and the quit keys
+    // go out in the same write, before the feed's live update can land:
+    // the hub cannot answer the open's subscribe before it reads it,
+    // while the quit keys are already queued in the terminal. The
+    // attached session's row still reads exited, so only the attached
+    // session itself proves it is live (#2129).
+    let mut run = terminal(&setup, 120, 32, &["resume"], &[]);
+    run.wait_screen("the first frame", |grid| grid.contents.contains("›"));
+    run.ready();
+    run.wait_screen("the session list", |grid| grid.contents.contains("first"));
+    run.write(b"\r\x03\x03\r");
+    let screen = run.wait_screen("the restored primary screen", |grid| {
+        !grid.alternate_screen && !grid.hide_cursor
+    });
+    let output = run.wait();
+    assert_eq!(output.status.code(), Some(0));
+    let line = format!("fiber resume {id}");
+    assert!(
+        screen.contents.contains(&line),
+        "quitting a just-resumed session prints its resume line; screen:\n{}",
+        screen.contents
+    );
+}
