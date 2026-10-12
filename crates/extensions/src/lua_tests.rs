@@ -1052,6 +1052,10 @@ fn a_command_queued_behind_a_parked_hook_does_not_start() {
     let hook = {
         let mut shared = hub.lock();
         shared.phase = Phase::Registering { abandon_at: None };
+        shared
+            .loads
+            .insert("p".to_owned(), hub::ProviderLoad::Queued { asked });
+        shared.pending_loads.push_back("p".to_owned());
         shared.push(
             Target::Hook {
                 point: "after_tool".to_owned(),
@@ -1082,6 +1086,10 @@ fn a_command_queued_behind_a_parked_hook_does_not_start() {
             Ok(()) | Err(mpsc::SendError(())) => {}
         }
     });
+    assert!(until(&hub, |shared| matches!(
+        shared.loads.get("p"),
+        Some(hub::ProviderLoad::Loaded)
+    )));
     assert!(
         server.await_requests(1, WAIT_UNTIL),
         "waited for the hook to reach the server"
@@ -1140,6 +1148,10 @@ fn a_held_command_blocks_the_stream_until_released() {
     let held = {
         let mut shared = hub.lock();
         shared.phase = Phase::Registering { abandon_at: None };
+        shared
+            .loads
+            .insert("p".to_owned(), hub::ProviderLoad::Queued { asked });
+        shared.pending_loads.push_back("p".to_owned());
         shared.push_held(command("held"), Value::Null, asked)
     };
     let (thread_hub, dir) = (Arc::clone(&hub), dir.path().to_owned());
@@ -1165,6 +1177,10 @@ fn a_held_command_blocks_the_stream_until_released() {
     });
     // Wait until the entry script has run: the held job is still queued.
     assert!(until(&hub, |s| matches!(s.phase, Phase::Ready(_))));
+    assert!(until(&hub, |shared| matches!(
+        shared.loads.get("p"),
+        Some(hub::ProviderLoad::Loaded)
+    )));
     let asked = clock.now();
     let (hook, sign) = {
         let mut shared = hub.lock();
