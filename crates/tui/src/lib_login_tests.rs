@@ -173,7 +173,10 @@ fn the_waiting_login_opens_its_url_and_its_end_stores() {
         }],
     );
     let rows = screen(&lp);
-    assert!(rows.iter().any(|row| row.contains("✓ Logged in to codex.")), "{rows:?}");
+    assert!(
+        rows.iter().any(|row| row.contains("✓ Logged in to codex.")),
+        "{rows:?}"
+    );
     watchdog.stand_down(WAIT);
 }
 
@@ -199,7 +202,11 @@ fn without_an_opener_the_url_still_shows_and_the_flow_completes() {
         }],
     );
     let rows = screen(&lp);
-    assert!(rows.iter().any(|row| row.contains("Open this URL to log in to codex:")), "{rows:?}");
+    assert!(
+        rows.iter()
+            .any(|row| row.contains("Open this URL to log in to codex:")),
+        "{rows:?}"
+    );
     assert!(rows.iter().any(|row| row.contains(&url)), "{rows:?}");
     seam.answer(
         0,
@@ -224,7 +231,10 @@ fn without_an_opener_the_url_still_shows_and_the_flow_completes() {
         }],
     );
     let rows = screen(&lp);
-    assert!(rows.iter().any(|row| row.contains("✓ Logged in to codex.")), "{rows:?}");
+    assert!(
+        rows.iter().any(|row| row.contains("✓ Logged in to codex.")),
+        "{rows:?}"
+    );
 }
 
 #[test]
@@ -245,5 +255,9 @@ fn without_a_channel_the_worker_never_starts_and_the_start_waits() {
     // still waits.
     assert!(seam.login_names().is_empty());
     let rows = screen(&lp);
-    assert!(rows.iter().any(|row| row.contains("Starting the login to codex…")), "{rows:?}");
+    assert!(
+        rows.iter()
+            .any(|row| row.contains("Starting the login to codex…")),
+        "{rows:?}"
+    );
 }

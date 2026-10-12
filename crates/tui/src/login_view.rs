@@ -20,7 +20,7 @@ use crate::keys::{Edit, Key};
 use crate::login_worker::{LoginStep, LoginTicket, LoginWorker};
 use crate::mouse::{Target, TargetId};
 use crate::settings_view::{Act, Ctx};
-use crate::swapped::{Frame, Ink, List, Spot, rows_height};
+use crate::swapped::Spot;
 use crate::theme::Role;
 use crate::view::overlay;
 
@@ -220,7 +220,6 @@ pub(crate) struct Login {
     /// The focused row, an index into `items`: a target whenever one
     /// exists, else 0. Headings, the gap and the note never take it.
     selected: usize,
-    list: List,
     mode: Mode,
     /// What the last action said, shown below the rows.
     said: Vec<String>,
@@ -240,7 +239,6 @@ impl Login {
             targets,
             items,
             selected: 0,
-            list: List::default(),
             mode: Mode::Rows,
             said,
         };
@@ -250,7 +248,6 @@ impl Login {
             .iter()
             .position(|item| matches!(item, Item::Target(_)))
             .unwrap_or(0);
-        login.sync_list(ctx);
         login
     }
 
@@ -259,44 +256,20 @@ impl Login {
         self.items.get(self.selected).copied()
     }
 
-    /// `selected`'s row in the legacy frame, which never holds the gap:
-    /// past the gap the frame row sits one higher.
-    fn frame_row(&self, selected: usize) -> usize {
-        let gap = self.items.iter().position(|item| matches!(item, Item::Gap));
-        match gap {
-            Some(at) if selected > at => selected.saturating_sub(1),
-            _ => selected,
-        }
-    }
-
-    /// Moves the step viewport to `selected`'s frame row, with today's
-    /// rows shown: the legacy frame never holds the gap, so the list
-    /// keeps exactly the `selected` and `top` today's code gives for
-    /// the same focused target.
-    fn sync_list(&mut self, ctx: &Ctx<'_>) {
-        let frame = self.frame(ctx.width);
-        let shown = rows_height(&frame, ctx.height);
-        self.list
-            .select(self.frame_row(self.selected), frame.rows.len(), shown);
-    }
-
-    /// Whether the list is open: exactly in row mode. The panel and
-    /// the browser wait keep today's drawing through the legacy frame.
-    pub(crate) fn list_open(&self) -> bool {
-        matches!(self.mode, Mode::Rows)
-    }
-
     /// Draws the list in the shared overlay frame, centred: dim
     /// headings, one choice row per target with its tag, the gap, then
     /// anything the last action said, at least three body rows before
     /// the window clips them, and the legend footer. A step draws its
     /// own overlay; any other mode draws nothing yet.
     pub(crate) fn draw(&self, area: Rect, buf: &mut Buffer, targets: &mut Vec<Target>) {
-        if matches!(self.mode, Mode::Waiting(_) | Mode::Panel(_) | Mode::Ended(_)) {
+        if matches!(
+            self.mode,
+            Mode::Waiting(_) | Mode::Panel(_) | Mode::Ended(_)
+        ) {
             self.draw_step(area, buf, targets);
             return;
         }
-        if !self.list_open() {
+        if !matches!(self.mode, Mode::Rows) {
             return;
         }
         let width = overlay::width(u16::MAX, 96, area.width);
@@ -462,9 +435,8 @@ impl Login {
         if !matches!(*key, Key::Up | Key::Down | Key::PageUp | Key::PageDown) {
             return Act::Stay;
         }
-        // The step viewport below shows no row: both selections stay
-        // put.
-        if rows_height(&self.frame(ctx.width), ctx.height) == 0 {
+        // With no body row shown both selections stay put.
+        if shown_body_rows(ctx.height) == 0 {
             return Act::Stay;
         }
         let targets = self.target_rows();
@@ -514,7 +486,6 @@ impl Login {
             }
         }
         if self.selected != before {
-            self.sync_list(ctx);
             self.said.clear();
         }
         Act::Stay
@@ -749,159 +720,23 @@ impl Login {
     /// A click: the ✕ closes, a target row over the rows selects it,
     /// and a row while a step is open keeps its mode. A click on a
     /// heading, the gap, the note or past the last item does nothing.
-    pub(crate) fn click(&mut self, spot: Spot, ctx: &Ctx<'_>) -> Act {
+    pub(crate) fn click(&mut self, spot: Spot, _ctx: &Ctx<'_>) -> Act {
         match spot {
             Spot::Close => Act::Close,
             Spot::Switch { .. } | Spot::Revoke(_) | Spot::Cell(_, _) | Spot::Item(_) => Act::Stay,
             Spot::Row(at) => {
-                if matches!(self.mode, Mode::Panel(_) | Mode::Waiting(_) | Mode::Ended(_)) {
+                if matches!(
+                    self.mode,
+                    Mode::Panel(_) | Mode::Waiting(_) | Mode::Ended(_)
+                ) {
                     return Act::Stay;
                 }
                 if !matches!(self.items.get(at), Some(Item::Target(_))) {
                     return Act::Stay;
                 }
                 self.selected = at;
-                self.sync_list(ctx);
                 self.said.clear();
                 Act::Stay
-            }
-        }
-    }
-
-    /// The frame to draw at `width` columns: the full URL is always
-    /// copyable with `y`, and on screen it is wrapped by display width so
-    /// no row is wider than the view.
-    pub(crate) fn frame(&self, width: usize) -> Frame {
-        if let Mode::Waiting(waiting) = &self.mode {
-            return self.waiting_frame(waiting, width);
-        }
-        let mut below = self.said.clone();
-        let mut field = None;
-        let mut footer = "↑↓ move · Enter log in · Esc close".to_owned();
-        if let Mode::Panel(panel) = &self.mode
-            && let Some(target) = self.targets.get(panel.target)
-        {
-            let name = target.name.as_str();
-            // A refused store keeps its message in `said`: draw it above
-            // the prompts so the failure is visible with the panel open.
-            let mut lines = self.said.clone();
-            if target.kind == LoginKind::Secret {
-                lines.push(format!("Value for {name}:"));
-                below = lines;
-                let dots = panel.key.dots();
-                field = Some((dots.clone(), dots.chars().count()));
-                footer = "Enter store · Esc cancel".to_owned();
-            } else {
-                let label = panel.label.expand();
-                match panel.focus {
-                    Focus::Key => {
-                        let shown = if label.trim().is_empty() {
-                            "default".to_owned()
-                        } else {
-                            label
-                        };
-                        lines.push(format!("Label (--as): {shown}."));
-                        lines.push(format!("Key for {name}:"));
-                        below = lines;
-                        let dots = panel.key.dots();
-                        field = Some((dots.clone(), dots.chars().count()));
-                    }
-                    Focus::Label => {
-                        lines.push(format!("Key for {name}: {}", panel.key.dots()));
-                        lines.push("Label (--as), empty for default:".to_owned());
-                        below = lines;
-                        field = Some((label.clone(), panel.label.position()));
-                    }
-                }
-                footer = "Tab key or label · Enter store · Esc cancel".to_owned();
-            }
-        }
-        Frame {
-            title: "Log in".to_owned(),
-            rows: self
-                .items
-                .iter()
-                .filter_map(|item| {
-                    // The legacy frame never holds the gap, so its row
-                    // indices stay gapless and today's snapshots hold.
-                    let ink = match item {
-                        Item::Heading(_) => Ink::Heading,
-                        Item::Target(_) => Ink::Plain,
-                        Item::Gap => return None,
-                        Item::Note => Ink::Muted,
-                    };
-                    Some(vec![(self.line(*item), None, ink)])
-                })
-                .collect(),
-            list: self.list,
-            below,
-            field,
-            footer,
-        }
-    }
-
-    /// The waiting frame: the rows stay, and below them the login's
-    /// progress: starting, the URL to open, or the code to enter at it.
-    fn waiting_frame(&self, waiting: &Waiting, width: usize) -> Frame {
-        let name = waiting.name.as_str();
-        let (below, footer) = match &waiting.progress {
-            Progress::Starting => (
-                vec![format!("Starting the login to {name}…")],
-                "Esc cancel".to_owned(),
-            ),
-            Progress::Url(url) => {
-                let mut below = vec![format!("Open this URL to log in to {name}:")];
-                below.extend(format::wrap(url, width));
-                (below, "y copy URL · Esc cancel".to_owned())
-            }
-            Progress::DeviceCode { url, code } => {
-                let mut below = vec![format!(
-                    "Enter the code {code} at this URL to log in to {name}:"
-                )];
-                below.extend(format::wrap(url, width));
-                (below, "y copy URL · Esc cancel".to_owned())
-            }
-        };
-        Frame {
-            title: "Log in".to_owned(),
-            rows: self
-                .items
-                .iter()
-                .filter_map(|item| {
-                    // The legacy frame never holds the gap, so its row
-                    // indices stay gapless and today's snapshots hold.
-                    let ink = match item {
-                        Item::Heading(_) => Ink::Heading,
-                        Item::Target(_) => Ink::Plain,
-                        Item::Gap => return None,
-                        Item::Note => Ink::Muted,
-                    };
-                    Some(vec![(self.line(*item), None, ink)])
-                })
-                .collect(),
-            list: self.list,
-            below,
-            field: None,
-            footer,
-        }
-    }
-
-    /// One row's text.
-    fn line(&self, item: Item) -> String {
-        match item {
-            Item::Heading(Group::Providers) => "Providers".to_owned(),
-            Item::Heading(Group::Secrets) => "Secrets".to_owned(),
-            Item::Target(at) => match self.targets.get(at) {
-                Some(target) => match target.kind {
-                    LoginKind::Key => format!("  {}  key", target.name),
-                    LoginKind::Browser => format!("  {}  browser", target.name),
-                    LoginKind::Secret => format!("  {}", target.name),
-                },
-                None => String::new(),
-            },
-            Item::Gap => String::new(),
-            Item::Note => {
-                "No provider is installed, and no installed extension declares a secret.".to_owned()
             }
         }
     }
@@ -947,7 +782,11 @@ impl Login {
             Mode::Rows => return,
             Mode::Waiting(waiting) => match &waiting.progress {
                 Progress::Starting => (
-                    wrapped_rows(&format!("Starting the login to {}…", name), inner, Style::new()),
+                    wrapped_rows(
+                        &format!("Starting the login to {}…", name),
+                        inner,
+                        Style::new(),
+                    ),
                     overlay::legend(&[("Esc", "back")]),
                 ),
                 Progress::Url(url) => {
@@ -961,10 +800,7 @@ impl Login {
                         Style::new().fg(Role::Accent.color()),
                     ));
                     rows.extend(wrapped_rows("Waiting for the browser…", inner, dim));
-                    (
-                        rows,
-                        overlay::legend(&[("y", "copy URL"), ("Esc", "back")]),
-                    )
+                    (rows, overlay::legend(&[("y", "copy URL"), ("Esc", "back")]))
                 }
                 Progress::DeviceCode { url, code } => {
                     let mut rows = wrapped_rows(
@@ -988,12 +824,20 @@ impl Login {
                     return;
                 };
                 if target.kind == LoginKind::Secret {
-                    let mut rows = wrapped_rows(&format!("Value for {}:", name), inner, Style::new());
+                    let mut rows =
+                        wrapped_rows(&format!("Value for {}:", name), inner, Style::new());
                     rows.push(dots_row(&panel.key.dots(), inner, true));
-                    (rows, overlay::legend(&[("Enter", "submit"), ("Esc", "back")]))
+                    (
+                        rows,
+                        overlay::legend(&[("Enter", "submit"), ("Esc", "back")]),
+                    )
                 } else if panel.focus == Focus::Label {
                     let mut rows = vec![label_edit_row(&panel.label, inner)];
-                    rows.extend(wrapped_rows(&format!("Key for {name}:"), inner, Style::new()));
+                    rows.extend(wrapped_rows(
+                        &format!("Key for {name}:"),
+                        inner,
+                        Style::new(),
+                    ));
                     rows.push(dots_row(&panel.key.dots(), inner, false));
                     (
                         rows,
@@ -1011,7 +855,11 @@ impl Login {
                         expanded
                     };
                     let mut rows = wrapped_rows(&format!("Label (--as): {shown}."), inner, dim);
-                    rows.extend(wrapped_rows(&format!("Key for {name}:"), inner, Style::new()));
+                    rows.extend(wrapped_rows(
+                        &format!("Key for {name}:"),
+                        inner,
+                        Style::new(),
+                    ));
                     rows.push(dots_row(&panel.key.dots(), inner, true));
                     (
                         rows,
@@ -1035,7 +883,10 @@ impl Login {
                 Outcome::Failed(reason) => {
                     let head = format!("Login to {name} failed: ");
                     let dot = if reason.ends_with('.') { "" } else { "." };
-                    (failed_rows(&head, reason, dot, inner), overlay::legend(&[("Esc", "back")]))
+                    (
+                        failed_rows(&head, reason, dot, inner),
+                        overlay::legend(&[("Esc", "back")]),
+                    )
                 }
             },
         };
@@ -1120,10 +971,16 @@ fn tail(text: &str, max: usize) -> String {
 /// never depends on what the list clips away.
 fn list_widest(targets: &[LoginTarget]) -> usize {
     let mut wide = 0;
-    if targets.iter().any(|target| target.kind != LoginKind::Secret) {
+    if targets
+        .iter()
+        .any(|target| target.kind != LoginKind::Secret)
+    {
         wide = wide.max(format::width("Providers"));
     }
-    if targets.iter().any(|target| target.kind == LoginKind::Secret) {
+    if targets
+        .iter()
+        .any(|target| target.kind == LoginKind::Secret)
+    {
         wide = wide.max(format::width("Secrets"));
     }
     let listed: Vec<(&str, &str)> = targets
@@ -1247,37 +1104,57 @@ fn label_edit_row(label: &Draft, inner: usize) -> overlay::Row {
         };
     }
     let cell = |ch: char| format::width(&ch.to_string());
+    let width_between = |from: usize, to: usize| -> usize {
+        chars
+            .iter()
+            .skip(from)
+            .take(to.saturating_sub(from))
+            .map(|ch| cell(*ch))
+            .sum()
+    };
     let mut start = caret;
     let mut end = caret.saturating_add(1);
     while end < chars.len() {
-        let width: usize = chars[start..end.saturating_add(1)]
-            .iter()
-            .map(|ch| cell(*ch))
-            .sum();
-        if width > room {
+        if width_between(start, end.saturating_add(1)) > room {
             break;
         }
         end = end.saturating_add(1);
     }
     while start > 0 {
-        let width: usize = chars[start.saturating_sub(1)..end]
-            .iter()
-            .map(|ch| cell(*ch))
-            .sum();
-        if width > room {
+        if width_between(start.saturating_sub(1), end) > room {
             break;
         }
         start = start.saturating_sub(1);
     }
-    let before: String = chars[start..caret].iter().collect();
-    let at = chars[caret].to_string();
-    let after: String = chars[caret.saturating_add(1)..end].iter().collect();
+    let before: String = chars
+        .iter()
+        .skip(start)
+        .take(caret.saturating_sub(start))
+        .collect();
+    let Some(at_ch) = chars.get(caret).copied() else {
+        let shown = tail(&text, room.saturating_sub(1));
+        return overlay::Row {
+            spans: vec![
+                Span::styled(prefix.to_owned(), dim),
+                Span::styled(shown, dim),
+                Span::styled("█".to_owned(), dim),
+            ],
+            right: Vec::new(),
+            targets: Vec::new(),
+            barred: false,
+        };
+    };
+    let after: String = chars
+        .iter()
+        .skip(caret.saturating_add(1))
+        .take(end.saturating_sub(caret.saturating_add(1)))
+        .collect();
     overlay::Row {
         spans: vec![
             Span::styled(prefix.to_owned(), dim),
             Span::styled(before, dim),
             Span::styled(
-                at,
+                at_ch.to_string(),
                 Style::new().add_modifier(Modifier::DIM | Modifier::REVERSED),
             ),
             Span::styled(after, dim),
@@ -1303,29 +1180,33 @@ fn failed_rows(head: &str, reason: &str, dot: &str, inner: usize) -> Vec<overlay
     for row in rows {
         let row_chars: Vec<char> = row.chars().collect();
         let mut start = pos;
-        if combined_chars[start..]
+        let kept: String = combined_chars
             .iter()
+            .skip(start)
             .take(row_chars.len())
-            .collect::<String>()
-            != row
-        {
+            .collect();
+        if kept != row {
             // The wrap dropped the single space or line break the row
             // broke at; skip it so the kept rows stay a prefix.
             if matches!(combined_chars.get(start), Some(' ' | '\n')) {
                 start = start.saturating_add(1);
             }
         }
-        let end = start.saturating_add(row_chars.len()).min(combined_chars.len());
+        let end = start
+            .saturating_add(row_chars.len())
+            .min(combined_chars.len());
         let mut spans = Vec::new();
         let mut at = start;
         while at < end {
             let styled_error = at >= head_len && at < head_len.saturating_add(reason_len);
             let mut run = String::new();
             while at < end
-                && (at >= head_len && at < head_len.saturating_add(reason_len))
-                    == styled_error
+                && (at >= head_len && at < head_len.saturating_add(reason_len)) == styled_error
             {
-                run.push(combined_chars[at]);
+                let Some(ch) = combined_chars.get(at).copied() else {
+                    break;
+                };
+                run.push(ch);
                 at = at.saturating_add(1);
             }
             spans.push(Span::styled(
