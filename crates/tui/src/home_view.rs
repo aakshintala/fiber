@@ -683,7 +683,8 @@ fn draw_typed_picker(
     // The content wraps at the preferred width first: rows are built
     // once at what fits, and the frame shrinks to what they need.
     let room = usize::from(55u16.saturating_sub(4)).min(usize::from(area.width.saturating_sub(4)));
-    let text = room.saturating_sub(2);
+    // The typed row holds `› `, the text and the drawn cursor.
+    let text = room.saturating_sub(3);
     let bold = Style::new().add_modifier(Modifier::BOLD);
     let dim = Style::new().add_modifier(Modifier::DIM);
     let info = Style::new().fg(Role::Info.color());

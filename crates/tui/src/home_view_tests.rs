@@ -2058,6 +2058,29 @@ fn the_typed_picker_row_styles() {
     );
 }
 
+/// The typed row keeps its drawn cursor on a narrow screen: at 40
+/// columns a 34-column path fills the overlay's 36 content columns,
+/// and the cursor cell still draws after the cut text.
+#[test]
+fn the_typed_row_keeps_its_cursor_on_a_narrow_screen() {
+    let path = format!("/{}", "a".repeat(33));
+    assert_eq!(path.chars().count(), 34);
+    let (app, _sent) = typing(40, 24, &path);
+    let buf = buffer(&app, 40, 24);
+    let shown = screen(&app, 40, 24);
+    let y = shown
+        .lines()
+        .position(|line| line.contains("› /a"))
+        .and_then(|row| u16::try_from(row).ok())
+        .unwrap_or_else(|| panic!("the typed row draws: {shown}"));
+    let text: String = (0..40).map(|x| buf[(x, y)].symbol().to_owned()).collect();
+    let at = text
+        .find("█")
+        .unwrap_or_else(|| panic!("the cursor draws: {text:?}"));
+    let x = u16::try_from(text[..at].chars().count()).unwrap_or(u16::MAX);
+    assert_eq!(buf[(x, y)].symbol(), "█", "{shown}");
+}
+
 /// A focused recent while typing sits on the bar, and keeps no dim.
 #[test]
 fn a_focused_recent_while_typing_is_barred() {
