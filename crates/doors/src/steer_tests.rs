@@ -90,7 +90,14 @@ fn commit_runs_only_after_the_subscribe_is_answered() {
             true
         };
         let mut on_queued = || {};
-        let outcome = steer(&home_client, &id, &mint("c_"), "held", &mut commit, &mut on_queued);
+        let outcome = steer(
+            &home_client,
+            &id,
+            &mint("c_"),
+            "held",
+            &mut commit,
+            &mut on_queued,
+        );
         let _sent = done_tx.send(outcome);
     });
     // The client wrote its subscribe and waits for the held
