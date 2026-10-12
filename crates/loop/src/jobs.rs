@@ -28,7 +28,8 @@ use crate::{Error, Loop};
 const ORPHANED: &str = "The process that ran this job died; it may still be running.";
 
 /// Something taken from the inbox and not yet written, in arrival order:
-/// a steering message, or a job's end whose claim held.
+/// a steering message, a job notice not yet claimed, or a job's end
+/// whose claim held.
 #[allow(
     clippy::large_enum_variant,
     reason = "a delegate's finish rides its job's queue entry; boxing would allocate on every job end"
@@ -39,6 +40,11 @@ pub(crate) enum Queued {
     /// a turn. Fiber's own ending notice only ever starts a turn. The
     /// second field is what the `before_message` chain left on the message.
     Steer(Message, Hooked),
+    /// A running turn's job notice, not yet claimed: claimed when the
+    /// step boundary writes it, when a turn takes it, or when shutdown
+    /// settles it, and written as `delegate_finished` (bounded) then
+    /// `job_completed` only when the claim holds.
+    Notice(JobNotice),
     /// Written as `delegate_finished` (bounded) then `job_completed`
     /// with no action; named in a `jobs` item when it starts a turn.
     Job(JobCompleted, Option<DelegateFinished>),
@@ -204,11 +210,10 @@ impl Loop {
     }
 
     /// A notice taken while a turn runs or an approval waits: queued for
-    /// the next step boundary, after anything already queued.
+    /// the next step boundary, after anything already queued. The claim
+    /// is asked when the notice is written, not here.
     pub(crate) fn admit_job(&mut self, notice: JobNotice) {
-        if let Some((completed, delegate)) = claimed(notice) {
-            self.queued.push_back(Queued::Job(completed, delegate));
-        }
+        self.queued.push_back(Queued::Notice(notice));
     }
 
     /// `turn_started`'s input, from what the idle wait collected, in
@@ -246,6 +251,14 @@ impl Loop {
                     name_job(&mut input, &completed.job_id);
                     self.queued.push_back(Queued::Job(completed, delegate));
                 }
+                // Claimed when the turn takes it: held, it joins the
+                // queue as a job's end; refused, it starts no turn.
+                Queued::Notice(notice) => {
+                    if let Some((completed, delegate)) = claimed(notice) {
+                        name_job(&mut input, &completed.job_id);
+                        self.queued.push_back(Queued::Job(completed, delegate));
+                    }
+                }
                 Queued::Line(line) => {
                     name_job(&mut input, &line.job_id);
                     self.queued.push_back(Queued::Line(line));
@@ -274,8 +287,9 @@ impl Loop {
     }
 
     /// Writes everything queued, in arrival order: a steer as
-    /// `steering_applied`, a delegate's finish as `delegate_finished`
-    /// (bounded) then its end as `job_completed` with no action.
+    /// `steering_applied`, a notice whose claim holds as its delegate's
+    /// finish (`delegate_finished`, bounded) then its end as
+    /// `job_completed` with no action, a refused notice as nothing.
     /// Returns whether a steer was written.
     pub(crate) fn write_queued(&mut self, turn: &TurnId) -> Result<bool, Error> {
         let mut steered = false;
@@ -297,13 +311,16 @@ impl Loop {
                     }
                     continue;
                 }
-                Queued::Job(completed, delegate) => {
-                    if let Some(finished) = delegate {
-                        let event =
-                            Event::DelegateFinished(crate::delegated::bounded(&self.log, finished));
-                        self.append(&event, turn, None)?;
+                // The claim is asked here, at the step boundary that
+                // writes the notice.
+                Queued::Notice(notice) => {
+                    if let Some((completed, delegate)) = claimed(notice) {
+                        self.write_end(turn, completed, delegate)?;
                     }
-                    self.append(&Event::JobCompleted(completed), turn, None)?;
+                    continue;
+                }
+                Queued::Job(completed, delegate) => {
+                    self.write_end(turn, completed, delegate)?;
                     continue;
                 }
                 Queued::Line(line) => Event::JobLine(line),
@@ -319,6 +336,42 @@ impl Loop {
             self.append(&event, turn, None)?;
         }
         Ok(steered)
+    }
+
+    /// A claimed job's end: its delegate's final message first, bounded
+    /// as it is written, then `job_completed`.
+    fn write_end(
+        &mut self,
+        turn: &TurnId,
+        completed: JobCompleted,
+        delegate: Option<DelegateFinished>,
+    ) -> Result<(), Error> {
+        if let Some(finished) = delegate {
+            let event = Event::DelegateFinished(crate::delegated::bounded(&self.log, finished));
+            self.append(&event, turn, None)?;
+        }
+        self.append(&Event::JobCompleted(completed), turn, None)?;
+        Ok(())
+    }
+
+    /// Moves everything queued into a turn's input, in arrival order: a
+    /// notice is claimed at the move, held as a job's end, refused as
+    /// nothing, so a notice no settle took never starts a turn on its
+    /// own.
+    pub(crate) fn take_queued(&mut self) -> Vec<Queued> {
+        self.queued
+            .drain(..)
+            .filter_map(|piece| match piece {
+                Queued::Notice(notice) => {
+                    claimed(notice).map(|(completed, delegate)| Queued::Job(completed, delegate))
+                }
+                piece @ (Queued::Steer(..)
+                | Queued::Job(..)
+                | Queued::Line(_)
+                | Queued::Handoff(..)
+                | Queued::Pending(..)) => Some(piece),
+            })
+            .collect()
     }
 
     /// Writes `orphans`, one `job_completed` per job the log started and
@@ -369,10 +422,12 @@ pub(crate) struct Orphans {
 }
 
 impl Orphans {
-    /// Folds one durable line's event.
+    /// Folds one durable line's event. A `job_started` reopens its job:
+    /// a later run a crash cut short is still owed its orphaned end.
     pub(crate) fn fold(&mut self, event: &Event) {
         if let Event::JobStarted(job) = event {
             self.started.push(job.job_id.clone());
+            self.settled.remove(&job.job_id);
         } else if let Event::JobCompleted(job) = event {
             self.settled.insert(job.job_id.clone());
         } else if let Event::Rewound(rewound) = event {

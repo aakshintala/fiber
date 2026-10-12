@@ -225,7 +225,7 @@ impl Loop {
                 .queued
                 .iter()
                 .any(|piece| matches!(piece, Queued::Steer(..)));
-            input.pieces.extend(self.queued.drain(..));
+            input.pieces.extend(self.take_queued());
             if kept_steer {
                 // The queue moved into `turn_started`. Only steers are
                 // listed on `steering_queue`.
@@ -318,7 +318,7 @@ impl Loop {
         self.queued.retain(|piece| {
             !matches!(piece, Queued::Steer(message, _) if !session_message::is_session(message))
         });
-        let mut input = TurnInput::of(self.queued.drain(..).collect());
+        let mut input = TurnInput::of(self.take_queued());
         for delivery in std::mem::take(&mut self.deferred) {
             self.admit_idle(delivery, &mut input)?;
         }
@@ -398,6 +398,7 @@ impl Loop {
                         sender: message.sender.clone(),
                     }),
                     Queued::Job(..)
+                    | Queued::Notice(..)
                     | Queued::Line(_)
                     | Queued::Handoff(..)
                     | Queued::Pending(..) => None,
@@ -548,13 +549,11 @@ impl Loop {
             // meaning while idle.
             Delivery::Cancelled => {}
             // After `close`, news starts a turn only while the loop waits
-            // for the session's jobs; without them the claim is left
-            // untaken.
+            // for the session's jobs; without them the notice stays
+            // unclaimed. The claim is asked when the turn takes it.
             Delivery::Job(notice) => {
-                if !(self.closing && input.pieces.is_empty() && !self.has_jobs())
-                    && let Some((completed, delegate)) = crate::jobs::claimed(notice)
-                {
-                    input.pieces.push(Queued::Job(completed, delegate));
+                if !(self.closing && input.pieces.is_empty() && !self.has_jobs()) {
+                    input.pieces.push(Queued::Notice(notice));
                 }
             }
             Delivery::JobLine(line) => {

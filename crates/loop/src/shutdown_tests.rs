@@ -8,6 +8,7 @@
     reason = "test code"
 )]
 
+use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::mpsc::{self, Receiver, Sender};
 use std::sync::{Arc, Mutex};
 use std::thread;
@@ -902,4 +903,77 @@ fn after_rewound_a_shutdown_writes_nothing_and_refuses_what_waits_closing() {
     }
     ran(&finished);
     assert_eq!(held.kinds(), ["session_started", "rewound"]);
+}
+
+/// A queued notice whose claim answers `holds`, counting its asks in
+/// `asked`, with a delegate's finish riding it.
+fn queued_notice(holds: bool, asked: &Arc<AtomicUsize>) -> crate::jobs::Queued {
+    let notice = JobNotice {
+        completed: JobCompleted {
+            job_id: JobId("j_1".into()),
+            status: Outcome::Cancelled,
+            error: None,
+            process: None,
+            output_tail: None,
+        },
+        claim: Claim(Box::new({
+            let asked = Arc::clone(asked);
+            move || {
+                asked.fetch_add(1, Ordering::SeqCst);
+                holds
+            }
+        })),
+        delegate: Some(DelegateFinished {
+            job_id: JobId("j_1".into()),
+            text: "Done.".into(),
+            artifact: None,
+            questions: None,
+            usage: Usage {
+                tokens: Tokens {
+                    input: 0,
+                    cache_read: 0,
+                    cache_write: std::collections::BTreeMap::new(),
+                    output: 0,
+                },
+                cost: Some(0.0),
+                subscription_cost: 0.0,
+            },
+            worktree: None,
+        }),
+    };
+    crate::jobs::Queued::Notice(notice)
+}
+
+#[test]
+fn settle_claims_a_queued_notice_before_writing_it() {
+    let (jobs, _stops) = Listed::new(&[]);
+    let mut world = World::new(Arc::clone(&jobs) as Arc<dyn Jobs>);
+    let asked = Arc::new(AtomicUsize::new(0));
+    world.looped.queued.push_back(queued_notice(true, &asked));
+    assert_eq!(asked.load(Ordering::SeqCst), 0, "queueing asks nothing");
+    world.cancel.shutdown(143);
+    let (finished, _inbox, held) = world.spawn_run();
+    ran(&finished);
+    assert_eq!(
+        held.kinds(),
+        ["session_started", "delegate_finished", "job_completed"]
+    );
+    assert_eq!(asked.load(Ordering::SeqCst), 1, "the settle claims once");
+    let lines = held.durable();
+    assert_eq!(lines[1].payload["job_id"], "j_1");
+    assert_eq!(lines[1].payload["text"], "Done.");
+    assert_eq!(lines[2].payload["job_id"], "j_1");
+}
+
+#[test]
+fn settle_writes_nothing_for_a_refused_queued_notice() {
+    let (jobs, _stops) = Listed::new(&[]);
+    let mut world = World::new(Arc::clone(&jobs) as Arc<dyn Jobs>);
+    let asked = Arc::new(AtomicUsize::new(0));
+    world.looped.queued.push_back(queued_notice(false, &asked));
+    world.cancel.shutdown(143);
+    let (finished, _inbox, held) = world.spawn_run();
+    ran(&finished);
+    assert_eq!(held.kinds(), ["session_started"]);
+    assert_eq!(asked.load(Ordering::SeqCst), 1, "the settle claims once");
 }
