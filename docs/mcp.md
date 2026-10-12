@@ -59,7 +59,9 @@ MCP tools register through the tool seam like any built-in
 (`docs/architecture.md`, "Tool seam"). The seam's rule applies unchanged:
 registering an existing name replaces it, and the replacement is recorded in the
 session log. An extension can replace any MCP tool, or `mcp_resources`, by
-registering its name.
+registering its name. An extension's replacement of an MCP tool holds when
+the server's tools load later, and that later load adds no entry to
+`preamble_built`'s `replaced` for the name.
 
 The tool set is fixed when the preamble is built (`docs/tools.md`, "Which
 tools the model sees"). A resumed session declares its servers' tools from
