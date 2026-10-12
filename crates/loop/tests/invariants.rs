@@ -381,8 +381,8 @@ fn run_case(plan: Vec<CallKind>) -> Result<(), TestCaseError> {
         .filter(|line| line.kind == "turn_completed")
         .collect();
     prop_assert_eq!(ends.len(), 1);
-    prop_assert_eq!(ends[0].payload.len(), 1);
     prop_assert_eq!(ends[0].payload["outcome"].as_str().unwrap(), "interrupted");
+    prop_assert!(ends[0].payload.get("questions").is_none());
     prop_assert_eq!(
         all.iter()
             .filter(|line| line.kind == "turn_started")
@@ -628,8 +628,8 @@ fn run_order_case(calls: Vec<OrderKind>, perm: Vec<usize>) -> Result<(), TestCas
         .filter(|line| line.kind == "turn_completed")
         .collect();
     prop_assert_eq!(ends.len(), 1);
-    prop_assert_eq!(ends[0].payload.len(), 1);
     prop_assert_eq!(ends[0].payload["outcome"].as_str().unwrap(), "completed");
+    prop_assert!(ends[0].payload.get("questions").is_none());
     prop_assert_eq!(session.requests().len(), 2);
     for (index, gate) in gates.iter().enumerate() {
         gate.check(&format!("gate {index}"));
@@ -839,6 +839,23 @@ fn intake_plan() -> impl Strategy<Value = Vec<TurnPlan>> {
     })
 }
 
+/// One numbered input as its delivery: the ack reports its answer on `tx`,
+/// and the variant follows `sent`.
+fn intake_delivery(
+    sent: Sent,
+    text: &str,
+    id: usize,
+    tx: mpsc::Sender<(usize, Option<ErrorCode>)>,
+) -> Delivery {
+    let ack = Ack(Box::new(move |answer| {
+        let _sent = tx.send((id, answer.err().map(|rejection| rejection.code)));
+    }));
+    match sent {
+        Sent::Prompt => Delivery::Prompt(message(text), ack),
+        Sent::Steer => Delivery::Steer(message(text), ack),
+    }
+}
+
 #[track_caller]
 fn run_intake_case(turns: Vec<TurnPlan>) -> Result<(), TestCaseError> {
     let (ack_tx, ack_rx) = mpsc::channel::<(usize, Option<ErrorCode>)>();
@@ -851,22 +868,7 @@ fn run_intake_case(turns: Vec<TurnPlan>) -> Result<(), TestCaseError> {
         let mut batch = Vec::new();
         for sent in &turn.batch {
             let text = format!("input-{k:02}");
-            let tx = ack_tx.clone();
-            let id = k;
-            batch.push(match sent {
-                Sent::Prompt => Delivery::Prompt(
-                    message(&text),
-                    Ack(Box::new(move |answer| {
-                        let _sent = tx.send((id, answer.err().map(|rejection| rejection.code)));
-                    })),
-                ),
-                Sent::Steer => Delivery::Steer(
-                    message(&text),
-                    Ack(Box::new(move |answer| {
-                        let _sent = tx.send((id, answer.err().map(|rejection| rejection.code)));
-                    })),
-                ),
-            });
+            batch.push(intake_delivery(*sent, &text, k, ack_tx.clone()));
             inputs.push(Intake {
                 k,
                 text,
@@ -880,22 +882,7 @@ fn run_intake_case(turns: Vec<TurnPlan>) -> Result<(), TestCaseError> {
         let mut during = Vec::new();
         for sent in &turn.during {
             let text = format!("input-{k:02}");
-            let tx = ack_tx.clone();
-            let id = k;
-            during.push(match sent {
-                Sent::Prompt => Delivery::Prompt(
-                    message(&text),
-                    Ack(Box::new(move |answer| {
-                        let _sent = tx.send((id, answer.err().map(|rejection| rejection.code)));
-                    })),
-                ),
-                Sent::Steer => Delivery::Steer(
-                    message(&text),
-                    Ack(Box::new(move |answer| {
-                        let _sent = tx.send((id, answer.err().map(|rejection| rejection.code)));
-                    })),
-                ),
-            });
+            during.push(intake_delivery(*sent, &text, k, ack_tx.clone()));
             inputs.push(Intake {
                 k,
                 text,
