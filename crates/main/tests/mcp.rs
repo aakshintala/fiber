@@ -1447,3 +1447,72 @@ fn a_slash_name_neither_a_skill_nor_a_prompt_is_sent_as_written_with_a_server_co
         "/nope x"
     );
 }
+
+#[test]
+fn fiber_ask_declines_an_elicitation_at_once() {
+    // Under `fiber ask` no answer is possible: Fiber declines at once,
+    // writing one `interaction_resolved` by `fiber` with no
+    // `interaction_requested` before it, and the call still returns its
+    // result.
+    let setup = Setup::new();
+    let dir = setup.fixture(
+        &json!([{
+            "name": "ask",
+            "description": "Asks.",
+            "inputSchema": {"type": "object"},
+            "annotations": {"readOnlyHint": true, "openWorldHint": false},
+        }]),
+        &[
+            (
+                "call-ask.json",
+                r#"{"content":[{"type":"text","text":"done"}]}"#,
+            ),
+            (
+                "elicit-ask.json",
+                r#"{"message":"m","requestedSchema":{"type":"object","properties":{"name":{"type":"string"}},"required":["name"]}}"#,
+            ),
+        ],
+    );
+    let server = ProviderServer::start([
+        stream(&[function_call("c1", "mcp__fx__ask", &json!({}))]),
+        hello(),
+    ])
+    .unwrap();
+    setup.provider(&server);
+    configure_fx(&setup, &dir, Value::Null);
+
+    let run = setup.run(&["ask", "go"]);
+
+    assert_eq!(run.code, Some(0), "stderr: {}", run.stderr);
+    let mut kinds = read_kinds();
+    kinds.insert(12, "interaction_resolved");
+    assert_eq!(run.kinds(), kinds);
+    assert!(
+        !run.lines
+            .iter()
+            .any(|line| line["kind"] == "interaction_requested"),
+        "no interaction is raised",
+    );
+    let resolved = run
+        .lines
+        .iter()
+        .find(|line| line["kind"] == "interaction_resolved")
+        .expect("the decline is written");
+    assert_eq!(resolved["payload"]["by"], "fiber");
+    assert_eq!(resolved["payload"]["declined"], true);
+    // The fixture answers the call only on reading the `decline`, so the
+    // completed call proves it is logged: no barrier.
+    let log = fs::read_to_string(dir.join("requests.log")).unwrap();
+    assert!(
+        log.lines()
+            .any(|line| line.contains("\"id\":\"el-") && line.contains("\"action\":\"decline\"")),
+        "the decline reaches the wire: {log}",
+    );
+    let completed = run
+        .lines
+        .iter()
+        .find(|line| line["kind"] == "tool_call_completed")
+        .expect("the call completes");
+    assert_eq!(completed["payload"]["status"], "completed");
+    assert_eq!(completed["payload"]["content"][0]["text"], "done");
+}
