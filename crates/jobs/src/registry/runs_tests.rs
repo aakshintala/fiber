@@ -17,7 +17,7 @@ use fakes::Deadline;
 use fakes::clock::FakeClock;
 use fakes::{CancelToken, TempDir};
 
-use super::{Mark, Resumed, Resume, Target, Waited};
+use super::{Mark, Resume, Resumed, Target, Waited};
 use crate::registry::{Registry, Unreported};
 use crate::support::{
     delegate_finished, delegate_started, ended_ok, opening, registry_with, world,
@@ -191,9 +191,9 @@ fn a_failed_start_leaves_the_job_ended_with_its_news_queued() {
     let (_dir, registry) = world();
     let (id, finish) = open_delegate(&registry);
     end_run(finish, &id, "Done.");
-    let Err(Resume::Start(message)) =
-        registry.resume(&id.0, Some(action()), |_| Err::<(Stop, ()), _>("boom".to_owned()))
-    else {
+    let Err(Resume::Start(message)) = registry.resume(&id.0, Some(action()), |_| {
+        Err::<(Stop, ()), _>("boom".to_owned())
+    }) else {
         panic!("the start failed");
     };
     assert_eq!(message, "boom");
@@ -241,10 +241,10 @@ fn a_resume_settle_takes_news_a_wait_already_took_as_nothing() {
     let waited = registry
         .wait(&id.0, 0, &CancelToken::new())
         .expect("run 1 ended");
-    assert_eq!(call(&waited.settle.expect("settles")), vec![
-        df(&id, "Done."),
-        completed(&id)
-    ]);
+    assert_eq!(
+        call(&waited.settle.expect("settles")),
+        vec![df(&id, "Done."), completed(&id)]
+    );
     let run1 = take_notice(&rx);
     assert_eq!((run1.claim.0)(), None);
 }
@@ -488,9 +488,9 @@ fn a_stop_on_run_1_stops_run_1_and_answers_it_after_a_resume() {
                         let _sent = stop2_tx.send(());
                     }))
                 };
-                match hook_waiter.resume(&hook_id.0, Some(action()), |_| {
-                    Ok::<_, String>((stop, ()))
-                }) {
+                match hook_waiter
+                    .resume(&hook_id.0, Some(action()), |_| Ok::<_, String>((stop, ())))
+                {
                     Ok(resumed) => {
                         *moved_held.lock().unwrap() = Some(resumed.unreported);
                     }
@@ -578,7 +578,12 @@ fn the_run_number_is_never_reused() {
     end_run(finish, &id, "Done.");
     {
         let mut inner = super::super::lock(&registry.inner);
-        inner.jobs.iter_mut().find(|job| job.started.job_id == id).unwrap().run = u64::MAX - 1;
+        inner
+            .jobs
+            .iter_mut()
+            .find(|job| job.started.job_id == id)
+            .unwrap()
+            .run = u64::MAX - 1;
     }
     let a = action();
     let resumed = resume_ok(&registry, &id, Some(a.clone()));
@@ -855,7 +860,12 @@ fn a_notice_claim_after_a_later_settle_takes_nothing() {
     assert_eq!((take_notice(&chain.inbox).claim.0)(), None);
     assert_eq!((take_notice(&chain.inbox).claim.0)(), None);
     // C's settle took everything, run 3's start included.
-    assert!(chain.registry.take_through(&chain.id.0, Mark::end(9)).is_empty());
+    assert!(
+        chain
+            .registry
+            .take_through(&chain.id.0, Mark::end(9))
+            .is_empty()
+    );
 }
 
 #[test]
@@ -865,10 +875,7 @@ fn a_notice_claim_before_the_later_settle_leaves_later_starts() {
     let chain = two_runs();
     assert_eq!(call(&chain.a_settle).len(), 4);
     let _run1 = take_notice(&chain.inbox);
-    assert_eq!(
-        (take_notice(&chain.inbox).claim.0)(),
-        Some(Vec::new())
-    );
+    assert_eq!((take_notice(&chain.inbox).claim.0)(), Some(Vec::new()));
     assert_eq!(
         chain.registry.take_through(&chain.id.0, Mark::end(3)),
         vec![
@@ -923,7 +930,10 @@ fn marks_order_start_before_end_at_each_boundary() {
     // Past the entry's run takes everything; an empty queue gives
     // nothing; a settle takes its records once.
     let chain = two_runs();
-    assert_eq!(chain.registry.take_through(&chain.id.0, Mark::end(5)).len(), 8);
+    assert_eq!(
+        chain.registry.take_through(&chain.id.0, Mark::end(5)).len(),
+        8
+    );
     let (_dir, registry) = world();
     let (id, _running) = open_delegate(&registry);
     assert!(registry.take_through(&id.0, Mark::end(1)).is_empty());

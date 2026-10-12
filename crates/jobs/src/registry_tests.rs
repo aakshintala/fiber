@@ -164,7 +164,13 @@ fn calling_end_records_that_result_and_drop_does_not_record_again() {
     let cancel = CancelToken::new();
     let answer = registry.wait(&id, 0, &cancel).unwrap();
     let records = settled(&answer);
-    let [contract::jobs::Taken { record: JobRecord::Completed(completed), .. }] = &records[..] else {
+    let [
+        contract::jobs::Taken {
+            record: JobRecord::Completed(completed),
+            ..
+        },
+    ] = &records[..]
+    else {
         panic!("{records:?}");
     };
     assert_eq!(completed.job_id, JobId(id.clone()));
@@ -245,7 +251,13 @@ fn the_completion_is_claimed_once() {
     let cancel = CancelToken::new();
     let first = registry.wait(&id, 0, &cancel).unwrap();
     let second = registry.wait(&id, 0, &cancel).unwrap();
-    assert!(matches!(&settled(&first)[..], [contract::jobs::Taken { record: JobRecord::Completed(_), .. }]));
+    assert!(matches!(
+        &settled(&first)[..],
+        [contract::jobs::Taken {
+            record: JobRecord::Completed(_),
+            ..
+        }]
+    ));
     assert!(second.text.contains("cancelled"), "{}", second.text);
     assert!(settled(&second).is_empty());
 }
@@ -279,7 +291,13 @@ fn a_wake_after_the_sequence_snapshot_returns_the_wait() {
         .recv(&rx)
         .expect("the wait returned after a wake that landed before it parked");
     let records = settled(&answer);
-    let [contract::jobs::Taken { record: JobRecord::Completed(completed), .. }] = &records[..] else {
+    let [
+        contract::jobs::Taken {
+            record: JobRecord::Completed(completed),
+            ..
+        },
+    ] = &records[..]
+    else {
         panic!("the wait did not deliver the completion");
     };
     assert_eq!(completed.status, Outcome::Completed);
@@ -289,11 +307,7 @@ fn a_wake_after_the_sequence_snapshot_returns_the_wait() {
 /// What the answer's `Settle` takes: the run's news through its end
 /// mark, once, in queue order.
 fn settled(answer: &super::runs::Answer) -> Vec<contract::jobs::Taken> {
-    (answer
-        .settle
-        .clone()
-        .expect("an ended answer settles")
-        .0)()
+    (answer.settle.clone().expect("an ended answer settles").0)()
 }
 
 fn notice(rx: &mpsc::Receiver<Delivery>) -> contract::inbox::JobNotice {
@@ -315,7 +329,11 @@ fn an_unclaimed_end_sends_one_notice_whose_claim_holds_once() {
     let sent = notice(&rx);
     assert!(rx.try_recv().is_err(), "one end sends one notice");
     assert_eq!(sent.completed, ended_ok(&id));
-    assert_eq!((sent.claim.0)(), Some(Vec::new()), "the notice claims the unclaimed end");
+    assert_eq!(
+        (sent.claim.0)(),
+        Some(Vec::new()),
+        "the notice claims the unclaimed end"
+    );
     let cancel = CancelToken::new();
     let answer = registry.wait(&id, 0, &cancel).unwrap();
     assert!(answer.text.contains("completed"), "{}", answer.text);
@@ -382,7 +400,13 @@ fn a_notice_after_a_wait_claimed_the_end_does_not_hold() {
     let id = opened.started.job_id.0.clone();
     (opened.end.0)(ended_ok(&id));
     let answer = registry.wait(&id, 0, &CancelToken::new()).unwrap();
-    assert!(matches!(&settled(&answer)[..], [contract::jobs::Taken { record: JobRecord::Completed(_), .. }]));
+    assert!(matches!(
+        &settled(&answer)[..],
+        [contract::jobs::Taken {
+            record: JobRecord::Completed(_),
+            ..
+        }]
+    ));
     let sent = notice(&rx);
     assert_eq!((sent.claim.0)(), None, "the wait claimed the end first");
 }
@@ -422,7 +446,13 @@ fn without_an_inbox_an_end_sends_nothing() {
     let id = opened.started.job_id.0.clone();
     (opened.end.0)(ended_ok(&id));
     let answer = registry.wait(&id, 0, &CancelToken::new()).unwrap();
-    assert!(matches!(&settled(&answer)[..], [contract::jobs::Taken { record: JobRecord::Completed(_), .. }]));
+    assert!(matches!(
+        &settled(&answer)[..],
+        [contract::jobs::Taken {
+            record: JobRecord::Completed(_),
+            ..
+        }]
+    ));
 }
 
 #[test]
@@ -435,7 +465,13 @@ fn an_end_after_the_loop_is_gone_is_still_recorded() {
     let id = opened.started.job_id.0.clone();
     (opened.end.0)(ended_ok(&id));
     let answer = registry.wait(&id, 0, &CancelToken::new()).unwrap();
-    assert!(matches!(&settled(&answer)[..], [contract::jobs::Taken { record: JobRecord::Completed(_), .. }]));
+    assert!(matches!(
+        &settled(&answer)[..],
+        [contract::jobs::Taken {
+            record: JobRecord::Completed(_),
+            ..
+        }]
+    ));
 }
 
 fn counted_stop(
@@ -664,7 +700,13 @@ fn write_returns_at_once_with_the_final_state_when_the_job_ends_in_the_wait() {
     assert!(answer.text.starts_with("got:hi\n"), "{}", answer.text);
     assert!(answer.text.contains("completed"), "{}", answer.text);
     assert!(!answer.text.contains("still running"), "{}", answer.text);
-    assert!(matches!(&settled(&answer)[..], [contract::jobs::Taken { record: JobRecord::Completed(_), .. }]));
+    assert!(matches!(
+        &settled(&answer)[..],
+        [contract::jobs::Taken {
+            record: JobRecord::Completed(_),
+            ..
+        }]
+    ));
     // The completion was claimed by the write.
     let again = registry.wait(&id, 0, &CancelToken::new()).unwrap();
     assert!(settled(&again).is_empty());
@@ -1301,14 +1343,15 @@ fn a_delegate_wait_answers_the_final_message_and_records_once() {
         },
     ] = &records[..]
     else {
-        panic!(
-            "a delegate wait records its finish then its end: {records:?}"
-        );
+        panic!("a delegate wait records its finish then its end: {records:?}");
     };
     assert_eq!(finished.text, "Done scanning.");
     let again = registry.wait(&id.0, 0, &CancelToken::new()).unwrap();
     assert_eq!(again.text, text);
-    assert!(settled(&again).is_empty(), "the second wait records nothing");
+    assert!(
+        settled(&again).is_empty(),
+        "the second wait records nothing"
+    );
 }
 
 #[test]
@@ -1376,9 +1419,7 @@ fn a_dropped_delegate_end_is_indeterminate_with_an_empty_finish() {
         },
     ] = &records[..]
     else {
-        panic!(
-            "a dropped delegate end still records both: {records:?}"
-        );
+        panic!("a dropped delegate end still records both: {records:?}");
     };
     assert_eq!(finished.text, "");
     // An empty message still ends its line: without the guard the next

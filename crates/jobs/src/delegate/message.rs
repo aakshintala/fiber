@@ -21,8 +21,8 @@ use support::clock::Parker;
 use support::group::Listing;
 
 use super::run::{Launch, Launched, Runner, Watch, mint_command_id};
-use crate::registry::runs::{Resume, Resumed, Target, Waited, failed};
 use crate::registry::Registry;
+use crate::registry::runs::{Resume, Resumed, Target, Waited, failed};
 
 /// Steers the delegate's session: the jobs-local mirror of `doors::steer`,
 /// as `Watch` mirrors the watch. One connection per message, one command
@@ -31,13 +31,7 @@ use crate::registry::Registry;
 /// returns [`Steered::Withheld`] with nothing written. `on_queued` runs
 /// once the message is queued, proved by the probe's answer.
 pub type Steer = Arc<
-    dyn Fn(
-            &SessionId,
-            &str,
-            &str,
-            &mut dyn FnMut() -> bool,
-            &mut dyn FnMut(),
-        ) -> Steered
+    dyn Fn(&SessionId, &str, &str, &mut dyn FnMut() -> bool, &mut dyn FnMut()) -> Steered
         + Send
         + Sync,
 >;
@@ -216,7 +210,10 @@ impl DelegateMessage {
         };
         // Before any lookup: nothing is steered, resumed or written.
         if message.trim().is_empty() {
-            return fail(ErrorCode::InvalidArguments, "`message` must not be empty.".into());
+            return fail(
+                ErrorCode::InvalidArguments,
+                "`message` must not be empty.".into(),
+            );
         }
         // One command id per call, on every connection the call opens.
         let command = mint_command_id();
@@ -228,7 +225,8 @@ impl DelegateMessage {
         cancel.subscribe(Arc::downgrade(&park) as Weak<dyn Wake>);
         // Timeouts are read off the session clock: a clock move wakes
         // the park, and the wait re-reads its deadline.
-        self.clock.subscribe(Arc::downgrade(&park) as Weak<dyn Wake>);
+        self.clock
+            .subscribe(Arc::downgrade(&park) as Weak<dyn Wake>);
         let mut backoff = super::run::START_BACKOFF;
         let mut emitted = false;
         // The live run to steer: from `target`, or from a resume that
@@ -266,8 +264,18 @@ impl DelegateMessage {
                 return unanswered(&id);
             }
             match self.attempt(
-                &session, &command, &id, &message, run, backoff, &action, &gate,
-                &park, cancel, emit, &mut emitted,
+                &session,
+                &command,
+                &id,
+                &message,
+                run,
+                backoff,
+                &action,
+                &gate,
+                &park,
+                cancel,
+                emit,
+                &mut emitted,
             ) {
                 Attempt::Done(output) => return output,
                 Attempt::Again(wait) => {
@@ -313,24 +321,24 @@ impl DelegateMessage {
             let gate = Arc::clone(gate);
             let park = Arc::clone(park);
             thread::spawn(move || {
-            // The commit for the run this attempt is made for: false
-            // unless the registry still shows that run running and the
-            // call uncancelled. Already `Some(run)` on a resend.
-            let mut commit = {
-                let gate = Arc::clone(&gate);
-                move || {
-                    let mut gate = lock(&gate);
-                    if gate.cancelled || !registry.running(&id, run) {
-                        return false;
+                // The commit for the run this attempt is made for: false
+                // unless the registry still shows that run running and the
+                // call uncancelled. Already `Some(run)` on a resend.
+                let mut commit = {
+                    let gate = Arc::clone(&gate);
+                    move || {
+                        let mut gate = lock(&gate);
+                        if gate.cancelled || !registry.running(&id, run) {
+                            return false;
+                        }
+                        gate.sent_to = Some(run);
+                        true
                     }
-                    gate.sent_to = Some(run);
-                    true
-                }
-            };
-            let mut queued = || {
-                let _sent = tx.send(AttemptMsg::Queued);
-                park.bump();
-            };
+                };
+                let mut queued = || {
+                    let _sent = tx.send(AttemptMsg::Queued);
+                    park.bump();
+                };
                 let steered = steer(&session, &command, &message, &mut commit, &mut queued);
                 let _sent = tx.send(AttemptMsg::Done(steered));
                 park.bump();
@@ -338,18 +346,14 @@ impl DelegateMessage {
         }
         loop {
             if let Some(steered) = self.pump(&rx, &id, emit, emitted) {
-                return self.answer(
-                    steered, &id, &message, run, backoff, &action, &gate, cancel,
-                );
+                return self.answer(steered, &id, &message, run, backoff, &action, &gate, cancel);
             }
             if cancel.is_cancelled() {
                 return Attempt::Done(self.cancelled(&id, &gate));
             }
             let seen = park.generation();
             if let Some(steered) = self.pump(&rx, &id, emit, emitted) {
-                return self.answer(
-                    steered, &id, &message, run, backoff, &action, &gate, cancel,
-                );
+                return self.answer(steered, &id, &message, run, backoff, &action, &gate, cancel);
             }
             if cancel.is_cancelled() {
                 return Attempt::Done(self.cancelled(&id, &gate));
@@ -783,12 +787,13 @@ fn resumed_receipt(id: &str, resumed: Resumed<Started>) -> Output {
     let Resumed {
         settle,
         unreported,
-        value: Started {
-            runner,
-            child,
-            listing,
-            log,
-        },
+        value:
+            Started {
+                runner,
+                child,
+                listing,
+                log,
+            },
     } = resumed;
     thread::spawn(move || runner.drive(child, Some(listing), unreported));
     Output {

@@ -232,11 +232,9 @@ fn rig(replies: Vec<SteerReply>) -> Rig {
     );
     let script = Script::scripted(replies);
     let steered = Arc::clone(&script);
-    let steer: Steer = Arc::new(
-        move |session, command, text, commit, on_queued| {
-            steered.steer(session, command, text, commit, on_queued)
-        },
-    );
+    let steer: Steer = Arc::new(move |session, command, text, commit, on_queued| {
+        steered.steer(session, command, text, commit, on_queued)
+    });
     let launched = Arc::new(AtomicUsize::new(0));
     let counted = Arc::clone(&launched);
     let launch: Launch = Arc::new(move |_| {
@@ -293,12 +291,7 @@ fn content(output: &Output) -> &str {
 }
 
 fn code_of(output: &Output) -> ErrorCode {
-    output
-        .error
-        .as_ref()
-        .expect("the call failed")
-        .code
-        .clone()
+    output.error.as_ref().expect("the call failed").code.clone()
 }
 
 #[test]
@@ -349,12 +342,22 @@ fn effects_declare_executes_and_always_reviewed() {
             .collect(),
     ] {
         assert!(rig.tool.effects(&arguments).is_err());
-        assert!(rig.tool.run(&arguments, &CancelToken::new(), &Recorder::default()).error.is_some());
+        assert!(
+            rig.tool
+                .run(&arguments, &CancelToken::new(), &Recorder::default())
+                .error
+                .is_some()
+        );
     }
     let mut wrong = args("j_x", "hi");
     wrong.insert("message".into(), json!(7));
     assert!(rig.tool.effects(&wrong).is_err());
-    assert!(rig.tool.run(&wrong, &CancelToken::new(), &Recorder::default()).error.is_some());
+    assert!(
+        rig.tool
+            .run(&wrong, &CancelToken::new(), &Recorder::default())
+            .error
+            .is_some()
+    );
 }
 
 #[test]
@@ -374,7 +377,8 @@ fn an_unknown_id_fails_as_jobs_does() {
 #[test]
 fn a_job_that_is_not_a_delegate_fails() {
     let rig = rig(vec![]);
-    let opened = rig.registry
+    let opened = rig
+        .registry
         .open(contract::jobs::Opening {
             tool: "shell".into(),
             description: "npm test".into(),
@@ -384,11 +388,9 @@ fn a_job_that_is_not_a_delegate_fails() {
         })
         .unwrap();
     let id = opened.started.job_id.0.clone();
-    let output = rig.tool.run(
-        &args(&id, "hi"),
-        &CancelToken::new(),
-        &Recorder::default(),
-    );
+    let output = rig
+        .tool
+        .run(&args(&id, "hi"), &CancelToken::new(), &Recorder::default());
     assert_eq!(code_of(&output), ErrorCode::InvalidArguments);
     assert_eq!(content(&output), format!("Job `{id}` is not a delegate.\n"));
     assert!(rig.script.calls().is_empty());
@@ -400,7 +402,9 @@ fn a_steered_message_reports_steered_with_one_delta() {
     let rig = rig(vec![SteerReply::accept()]);
     let (id, _finish) = open_delegate(&rig, "scan");
     let emit = Recorder::default();
-    let output = rig.tool.run(&args(&id.0, "check this"), &CancelToken::new(), &emit);
+    let output = rig
+        .tool
+        .run(&args(&id.0, "check this"), &CancelToken::new(), &emit);
     assert!(output.error.is_none());
     assert_eq!(
         content(&output),
@@ -414,7 +418,10 @@ fn a_steered_message_reports_steered_with_one_delta() {
     let calls = rig.script.calls();
     assert_eq!(calls.len(), 1);
     assert_eq!(calls[0].1, "check this");
-    assert_eq!(rig.script.sessions(), vec![delegate_started(&id.0).delegate_session_id]);
+    assert_eq!(
+        rig.script.sessions(),
+        vec![delegate_started(&id.0).delegate_session_id]
+    );
     assert_eq!(rig.script.commits.lock().unwrap().as_slice(), [true]);
     let deltas: Vec<_> = emit
         .events()
@@ -493,7 +500,11 @@ fn an_empty_message_fails_before_any_lookup() {
                 &CancelToken::new(),
                 &Recorder::default(),
             );
-            assert_eq!(code_of(&output), ErrorCode::InvalidArguments, "for {message:?}");
+            assert_eq!(
+                code_of(&output),
+                ErrorCode::InvalidArguments,
+                "for {message:?}"
+            );
             assert_eq!(content(&output), "`message` must not be empty.\n");
             assert!(rig.script.calls().is_empty(), "steer never ran");
             assert_eq!(rig.launched.load(Ordering::SeqCst), 0);
@@ -544,8 +555,7 @@ fn answered(rx: &mpsc::Receiver<Output>) -> Output {
 
 #[test]
 fn gone_backs_off_doubling_to_a_capped_second() {
-    let mut replies: Vec<SteerReply> =
-        (0..7).map(|_| SteerReply::gone()).collect();
+    let mut replies: Vec<SteerReply> = (0..7).map(|_| SteerReply::gone()).collect();
     replies.push(SteerReply::accept());
     let rig = rig(replies);
     let (id, _finish) = open_delegate(&rig, "scan");
@@ -560,7 +570,10 @@ fn gone_backs_off_doubling_to_a_capped_second() {
     let mut at = rig.clock.now();
     // Five failures wait 50, 100, 200, 400 and 800 ms, then the cap: a
     // sixth and seventh failure wait 1 000 ms each.
-    for (calls, wait) in [50, 100, 200, 400, 800, 1_000, 1_000].into_iter().enumerate() {
+    for (calls, wait) in [50, 100, 200, 400, 800, 1_000, 1_000]
+        .into_iter()
+        .enumerate()
+    {
         let until = at + Duration::from_millis(wait);
         assert!(
             rig.clock.await_parked(until, DEADLINE),
@@ -614,10 +627,8 @@ fn a_committed_gone_resends_with_the_same_id() {
         Arc::new(Recorder::default()),
     );
     assert!(
-        rig.clock.await_parked(
-            rig.clock.now() + Duration::from_millis(50),
-            DEADLINE
-        ),
+        rig.clock
+            .await_parked(rig.clock.now() + Duration::from_millis(50), DEADLINE),
         "the call parks its backoff"
     );
     rig.clock.advance(Duration::from_millis(50));
@@ -628,10 +639,7 @@ fn a_committed_gone_resends_with_the_same_id() {
     let calls = rig.script.calls();
     assert_eq!(calls.len(), 2);
     assert_eq!(calls[0].0, calls[1].0, "the resend keeps the command id");
-    assert_eq!(
-        rig.script.commits.lock().unwrap().as_slice(),
-        [true, true]
-    );
+    assert_eq!(rig.script.commits.lock().unwrap().as_slice(), [true, true]);
 }
 
 #[test]
@@ -673,10 +681,8 @@ fn a_committed_send_to_an_ended_run_fails_indeterminate_without_resuming() {
     );
     assert!(rig.script.await_calls(1, DEADLINE), "the attempt committed");
     assert!(
-        rig.clock.await_parked(
-            rig.clock.now() + Duration::from_millis(50),
-            DEADLINE
-        ),
+        rig.clock
+            .await_parked(rig.clock.now() + Duration::from_millis(50), DEADLINE),
         "the call parks its backoff"
     );
     // The run ends under the committed attempt, as another call's resume
@@ -709,10 +715,8 @@ fn a_run_that_changes_under_a_committed_attempt_is_not_sent_twice() {
     );
     assert!(rig.script.await_calls(1, DEADLINE), "the attempt committed");
     assert!(
-        rig.clock.await_parked(
-            rig.clock.now() + Duration::from_millis(50),
-            DEADLINE
-        ),
+        rig.clock
+            .await_parked(rig.clock.now() + Duration::from_millis(50), DEADLINE),
         "the call parks its backoff"
     );
     // Another call ends run 1 and resumes it to run 2.
@@ -754,10 +758,8 @@ fn a_stale_commit_is_withheld_and_never_resent() {
         Arc::new(Recorder::default()),
     );
     assert!(
-        rig.clock.await_parked(
-            rig.clock.now() + Duration::from_millis(50),
-            DEADLINE
-        ),
+        rig.clock
+            .await_parked(rig.clock.now() + Duration::from_millis(50), DEADLINE),
         "the call parks its backoff"
     );
     rig.clock.advance(Duration::from_millis(50));
@@ -805,10 +807,7 @@ fn a_withheld_commit_asks_again_and_steers() {
     assert!(output.error.is_none());
     assert!(content(&output).starts_with(&format!("Steered delegate {}", id.0)));
     assert_eq!(rig.script.calls().len(), 2);
-    assert_eq!(
-        rig.script.commits.lock().unwrap().as_slice(),
-        [false, true]
-    );
+    assert_eq!(rig.script.commits.lock().unwrap().as_slice(), [false, true]);
 }
 
 #[test]
@@ -938,10 +937,8 @@ fn a_cancel_during_the_backoff_delivers_nothing() {
         Arc::new(Recorder::default()),
     );
     assert!(
-        rig.clock.await_parked(
-            rig.clock.now() + Duration::from_millis(50),
-            DEADLINE
-        ),
+        rig.clock
+            .await_parked(rig.clock.now() + Duration::from_millis(50), DEADLINE),
         "the call parks its backoff"
     );
     cancel.cancel();

@@ -36,9 +36,7 @@ pub type Launch = Arc<dyn Fn(&Launched) -> Command + Send + Sync>;
 /// mirror of `doors::watch_after`. `main` supplies the watch over the
 /// child's socket (`docs/delegates.md`, "Lifetime").
 pub type Watch = Arc<
-    dyn Fn(&SessionId, Option<u64>, &mut dyn FnMut(&Envelope)) -> io::Result<Watched>
-        + Send
-        + Sync,
+    dyn Fn(&SessionId, Option<u64>, &mut dyn FnMut(&Envelope)) -> io::Result<Watched> + Send + Sync,
 >;
 
 /// What a watch returned: the jobs-local mirror of `doors::Watched`.

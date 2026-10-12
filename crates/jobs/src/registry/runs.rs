@@ -7,13 +7,13 @@
 use std::sync::{Arc, Weak};
 use std::time::Instant;
 
+use contract::events::Outcome;
 use contract::events::{DelegateFinished, DelegateStarted, JobCompleted};
 use contract::inbox::Claim;
 use contract::jobs::{JobRecord, Stop, Taken};
+use contract::shapes::{ContentPart, Failure};
 use contract::tool::{Cancel, Output, Settle};
 use contract::{ActionId, ErrorCode, JobId, SessionId};
-use contract::shapes::{ContentPart, Failure};
-use contract::events::Outcome;
 
 use super::park::Parked;
 use super::{Registry, final_text, lock};
@@ -143,9 +143,7 @@ impl Registry {
             return Target::NotDelegate;
         };
         match &job.phase {
-            super::Phase::Running => {
-                Target::Live(delegate.delegate_session_id.clone(), job.run)
-            }
+            super::Phase::Running => Target::Live(delegate.delegate_session_id.clone(), job.run),
             super::Phase::Ended(_) => Target::Ended,
         }
     }
@@ -188,10 +186,7 @@ impl Registry {
             };
             match &job.phase {
                 super::Phase::Running => {
-                    return Err(Resume::Live(
-                        delegate.delegate_session_id.clone(),
-                        job.run,
-                    ));
+                    return Err(Resume::Live(delegate.delegate_session_id.clone(), job.run));
                 }
                 super::Phase::Ended(_) => {}
             }
@@ -252,10 +247,7 @@ impl Registry {
                 description,
                 output_path: job.path.to_string_lossy().into_owned(),
             };
-            let delegate_started = job
-                .delegate
-                .clone()
-                .expect("a delegate resumes as one");
+            let delegate_started = job.delegate.clone().expect("a delegate resumes as one");
             job.queue.push_back(Pending {
                 at: Mark::start(next),
                 record: JobRecord::Started(started),
@@ -451,13 +443,12 @@ impl Registry {
                     }));
                     // A loop that is gone takes no news; the end stays
                     // recorded for `list`.
-                    let _sent = inbox.send(contract::inbox::Delivery::Job(
-                        contract::inbox::JobNotice {
+                    let _sent =
+                        inbox.send(contract::inbox::Delivery::Job(contract::inbox::JobNotice {
                             completed,
                             claim,
                             delegate,
-                        },
-                    ));
+                        }));
                 }
             }
         }

@@ -42,11 +42,7 @@ fn take_output(rx: &mpsc::Receiver<Output>) -> Output {
 /// What the output's `Settle` takes: the run's news through its end
 /// mark, once, in queue order.
 fn settled(output: &Output) -> Vec<Taken> {
-    (output
-        .settle
-        .clone()
-        .expect("an ended answer settles")
-        .0)()
+    (output.settle.clone().expect("an ended answer settles").0)()
 }
 
 fn text_of(output: &Output) -> &str {
@@ -204,7 +200,10 @@ fn list_is_empty_then_shows_jobs_in_start_order() {
     (ended.end.0)(completed(&ended_id, Outcome::Completed));
     let listed = run(&tool, json!({"action": "list"}), &cancel);
     assert!(listed.error.is_none());
-    assert!(listed.settle.is_none(), "list does not deliver a completion");
+    assert!(
+        listed.settle.is_none(),
+        "list does not deliver a completion"
+    );
     assert_eq!(
         text_of(&listed),
         format!(
@@ -220,7 +219,13 @@ fn list_is_empty_then_shows_jobs_in_start_order() {
         &cancel,
     );
     assert!(waited.error.is_none());
-    assert!(matches!(&settled(&waited)[..], [Taken { record: JobRecord::Completed(_), .. }]));
+    assert!(matches!(
+        &settled(&waited)[..],
+        [Taken {
+            record: JobRecord::Completed(_),
+            ..
+        }]
+    ));
     drop(running.end);
 }
 
@@ -792,7 +797,12 @@ fn stop_calls_stop_once_and_returns_the_end_it_reports() {
         text_of(&output)
     );
     match settled(&output).as_slice() {
-        [Taken { record: JobRecord::Completed(done), .. }] => {
+        [
+            Taken {
+                record: JobRecord::Completed(done),
+                ..
+            },
+        ] => {
             assert_eq!(done.status, Outcome::Cancelled);
             assert_eq!(done.job_id.0, output_id(&output));
         }
