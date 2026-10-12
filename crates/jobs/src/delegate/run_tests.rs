@@ -1667,3 +1667,16 @@ fn no_boundary_takes_the_first_replayed_exit_as_today() {
     );
     watchdog.stand_down(DEADLINE);
 }
+
+#[test]
+fn minted_command_ids_carry_their_prefix_and_differ() {
+    let first = super::mint_command_id();
+    let second = super::mint_command_id();
+    for id in [&first, &second] {
+        assert!(
+            id.starts_with("c_"),
+            "a command id carries its prefix: {id}"
+        );
+    }
+    assert_ne!(first, second, "two mints differ");
+}

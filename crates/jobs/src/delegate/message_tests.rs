@@ -18,7 +18,7 @@ use fakes::clock::FakeClock;
 use fakes::{CancelToken, Recorder, TempDir};
 use serde_json::{Map, Value, json};
 
-use super::{DelegateMessage, Launch, Steer, Steered};
+use super::{Attempt, DelegateMessage, Launch, Steer, Steered};
 use crate::registry::Registry;
 use crate::support::{delegate_finished, delegate_started, ended_ok};
 
@@ -808,6 +808,41 @@ fn a_withheld_commit_asks_again_and_steers() {
     assert!(content(&output).starts_with(&format!("Steered delegate {}", id.0)));
     assert_eq!(rig.script.calls().len(), 2);
     assert_eq!(rig.script.commits.lock().unwrap().as_slice(), [false, true]);
+}
+
+#[test]
+fn a_withheld_answer_while_cancelled_stops_without_another_attempt() {
+    let rig = rig(vec![]);
+    let gate = Arc::new(Mutex::new(super::SteerGate {
+        cancelled: false,
+        sent_to: None,
+    }));
+    let cancel = CancelToken::new();
+    cancel.cancel();
+    // No thread and no race: a withheld answer with the call cancelled
+    // stops, instead of asking `target` again.
+    match rig.tool.answer(
+        Steered::Withheld,
+        "j_x",
+        "hi",
+        1,
+        Duration::from_millis(50),
+        &None,
+        &gate,
+        &cancel,
+    ) {
+        Attempt::Done(output) => {
+            assert!(output.error.is_none());
+            assert!(
+                content(&output).contains("nothing was delivered"),
+                "{}",
+                content(&output)
+            );
+        }
+        Attempt::Again(_) | Attempt::Found(..) => {
+            panic!("a withheld answer while cancelled stops")
+        }
+    }
 }
 
 #[test]
