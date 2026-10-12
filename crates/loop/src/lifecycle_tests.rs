@@ -1159,10 +1159,31 @@ fn a_handoff_for_size_runs_the_hook_again_on_the_rebuilt_request() {
     assert_eq!(hooks.before_model_call_calls.load(Ordering::SeqCst), 2);
     assert_eq!(world.provider.requests().len(), 3);
     let all = lines(&world);
-    assert!(
-        all.iter().any(|line| line.kind == "handoff_completed"),
-        "the overflow handed off: {:?}",
-        kinds(&all)
+    assert_eq!(
+        kinds(&all),
+        [
+            "session_started",
+            "preamble_built",
+            "opening_message",
+            "turn_started",
+            "step_started",
+            "assistant_message_started",
+            "usage_recorded",
+            "assistant_message_completed",
+            "handoff_started",
+            "assistant_message_started",
+            "text_completed",
+            "usage_recorded",
+            "assistant_message_completed",
+            "handoff_completed",
+            "opening_message",
+            "assistant_message_started",
+            "text_completed",
+            "usage_recorded",
+            "assistant_message_completed",
+            "turn_completed",
+        ],
+        "complete ordered kinds"
     );
 }
 
@@ -1253,10 +1274,36 @@ fn a_handoff_note_request_never_reaches_the_hook() {
     assert_eq!(hooks.before_model_call_calls.load(Ordering::SeqCst), 2);
     assert_eq!(world.provider.requests().len(), 3);
     let all = lines(&world);
-    assert!(
-        all.iter().any(|line| line.kind == "handoff_completed"),
-        "an automatic handoff ran: {:?}",
-        kinds(&all)
+    assert_eq!(
+        kinds(&all),
+        [
+            "session_started",
+            "preamble_built",
+            "opening_message",
+            "turn_started",
+            "step_started",
+            "assistant_message_started",
+            "text_completed",
+            "tool_call_requested",
+            "usage_recorded",
+            "assistant_message_completed",
+            "tool_call_started",
+            "tool_call_completed",
+            "step_started",
+            "handoff_started",
+            "assistant_message_started",
+            "text_completed",
+            "usage_recorded",
+            "assistant_message_completed",
+            "handoff_completed",
+            "opening_message",
+            "assistant_message_started",
+            "text_completed",
+            "usage_recorded",
+            "assistant_message_completed",
+            "turn_completed",
+        ],
+        "complete ordered kinds"
     );
 }
 
@@ -1629,10 +1676,28 @@ fn a_cancel_inside_turn_end_drops_its_message_and_starts_no_later_turn_with_it()
     drop(world.looped.take());
 
     let all = lines(&world);
-    assert!(
-        !all.iter().any(|line| line.kind == "steering_applied"),
-        "no message was written: {:?}",
-        kinds(&all)
+    assert_eq!(
+        kinds(&all),
+        [
+            "session_started",
+            "preamble_built",
+            "opening_message",
+            "turn_started",
+            "step_started",
+            "assistant_message_started",
+            "text_completed",
+            "usage_recorded",
+            "assistant_message_completed",
+            "turn_completed",
+            "turn_started",
+            "step_started",
+            "assistant_message_started",
+            "text_completed",
+            "usage_recorded",
+            "assistant_message_completed",
+            "turn_completed",
+        ],
+        "complete ordered kinds"
     );
     let started: Vec<&Envelope> = all
         .iter()
@@ -1688,6 +1753,21 @@ fn a_turn_that_fails_or_asks_questions_never_calls_turn_end() {
     );
     drop(world.looped.take());
     assert_eq!(hooks.turn_end_calls.load(Ordering::SeqCst), 0);
+    assert_eq!(
+        kinds(&lines(&world)),
+        [
+            "session_started",
+            "preamble_built",
+            "opening_message",
+            "turn_started",
+            "step_started",
+            "assistant_message_started",
+            "usage_recorded",
+            "assistant_message_completed",
+            "turn_completed",
+        ],
+        "complete ordered kinds"
+    );
 
     // A call asking questions ends the turn at the step boundary instead.
     let hooks = Arc::new(FakeHooks::new());
@@ -1712,6 +1792,25 @@ fn a_turn_that_fails_or_asks_questions_never_calls_turn_end() {
     drop(world.looped.take());
     assert_eq!(hooks.turn_end_calls.load(Ordering::SeqCst), 0);
     let all = lines(&world);
+    assert_eq!(
+        kinds(&all),
+        [
+            "session_started",
+            "preamble_built",
+            "opening_message",
+            "turn_started",
+            "step_started",
+            "assistant_message_started",
+            "text_completed",
+            "tool_call_requested",
+            "usage_recorded",
+            "assistant_message_completed",
+            "tool_call_started",
+            "tool_call_completed",
+            "turn_completed",
+        ],
+        "complete ordered kinds"
+    );
     let end = line(&all, "turn_completed");
     assert!(end.payload.get("questions").is_some());
 }
@@ -1987,6 +2086,85 @@ fn a_shutdown_during_turn_start_from_another_thread_writes_no_context() {
     assert!(
         !all.iter().any(|line| line.kind == "context_added"),
         "no context is written: {all:?}"
+    );
+}
+
+#[test]
+fn a_shutdown_after_the_turn_start_check_writes_no_context() {
+    let hooks = Arc::new(FakeHooks::new());
+    hooks.answer_turn_start(added(vec![("fiber.test/inbox", "late")]));
+    let mut world = started(vec![fakes::Scripted::text("Done.")], Some(hooks));
+    let mut looped = world.looped.take().unwrap();
+    let turn = TurnId("t_test".into());
+    assert!(looped.cancel.arm());
+    // Forced after the post-hook `turn_cancelled` check, before the
+    // guarded answer write: without the guard the contexts below would be
+    // written despite the shutdown.
+    let signal = Arc::clone(&looped.cancel);
+    super::AFTER_TURN_START_CHECK.with(|hook| {
+        *hook.borrow_mut() = Some(Box::new(move || signal.shutdown(143)) as Box<dyn FnOnce()>);
+    });
+    let ended = looped.turn_start(&turn, &[]).unwrap();
+    let Some(completed) = ended else {
+        panic!("a shutdown after the check ends the turn");
+    };
+    assert_eq!(completed.outcome, TurnOutcome::Interrupted);
+    world.looped = Some(looped);
+    drop(world.looped.take());
+
+    let all = lines(&world);
+    assert_eq!(kinds(&all), ["session_started"], "complete ordered kinds");
+    assert!(
+        !all.iter().any(|line| line.kind == "context_added"),
+        "no context is written after the shutdown: {all:?}"
+    );
+}
+
+#[test]
+fn a_shutdown_after_step_started_writes_no_held_message() {
+    let hooks = Arc::new(FakeHooks::new());
+    hooks.answer_turn_end(added(vec![("fiber.test/goal", "keep going")]));
+    let mut world = started(vec![fakes::Scripted::text("Done.")], Some(hooks));
+    let mut looped = world.looped.take().unwrap();
+    let turn = TurnId("t_test".into());
+    // The reply holds one message for the next step, written by
+    // `write_held`, not yet.
+    assert_eq!(looped.replied(&turn, "Done.").unwrap(), None);
+    assert_eq!(looped.lifecycle.continued.len(), 1);
+    assert!(looped.cancel.arm());
+    // The next step's `step_started`, as `step` writes it before the held
+    // messages.
+    let cancel = Arc::clone(&looped.cancel);
+    let wrote = cancel.commit(crate::cancel::Commit::Step, || {
+        looped.append(
+            &contract::events::Event::StepStarted(contract::events::Empty {}),
+            &turn,
+            None,
+        )
+    });
+    assert!(wrote.is_some());
+    wrote.unwrap().unwrap();
+    // Forced after `step_started`, before the held messages' guarded
+    // write: without the guard the message below would be written despite
+    // the shutdown.
+    let signal = Arc::clone(&looped.cancel);
+    super::BEFORE_HELD_WRITE.with(|hook| {
+        *hook.borrow_mut() = Some(Box::new(move || signal.shutdown(143)) as Box<dyn FnOnce()>);
+    });
+    looped.write_held(&turn).unwrap();
+    assert!(looped.lifecycle.continued.is_empty());
+    world.looped = Some(looped);
+    drop(world.looped.take());
+
+    let all = lines(&world);
+    assert_eq!(
+        kinds(&all),
+        ["session_started", "step_started"],
+        "complete ordered kinds"
+    );
+    assert!(
+        !all.iter().any(|line| line.kind == "steering_applied"),
+        "no held message was written after shutdown: {all:?}"
     );
 }
 

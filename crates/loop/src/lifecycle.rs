@@ -15,6 +15,41 @@ use std::sync::Arc;
 
 use crate::{Error, Loop, cancel};
 
+#[cfg(test)]
+thread_local! {
+    /// A shutdown the test runs after the `turn_start` post-hook check,
+    /// before the guarded answer write: the order a shutdown landing
+    /// between the two would force (`docs/testing.md`, "Waits and
+    /// timeouts" allows the hook where no outside seam reaches the race).
+    static AFTER_TURN_START_CHECK: std::cell::RefCell<Option<Box<dyn FnOnce()>>> =
+        std::cell::RefCell::new(None);
+    /// A shutdown the test runs after `step_started`, before the held
+    /// messages' guarded write: the same forced order on the next step's
+    /// path.
+    static BEFORE_HELD_WRITE: std::cell::RefCell<Option<Box<dyn FnOnce()>>> =
+        std::cell::RefCell::new(None);
+}
+
+/// Runs the hook [`AFTER_TURN_START_CHECK`] holds, if any, then clears it.
+#[cfg(test)]
+fn pause_after_turn_start_check() {
+    AFTER_TURN_START_CHECK.with(|hook| {
+        if let Some(paused) = hook.borrow_mut().take() {
+            paused();
+        }
+    });
+}
+
+/// Runs the hook [`BEFORE_HELD_WRITE`] holds, if any, then clears it.
+#[cfg(test)]
+fn pause_before_held_write() {
+    BEFORE_HELD_WRITE.with(|hook| {
+        if let Some(paused) = hook.borrow_mut().take() {
+            paused();
+        }
+    });
+}
+
 /// What `turn_end` hooks returned and the next step writes, and what a
 /// resumed turn's `session_start` contexts wait in (Part 3): held across
 /// calls, never in `queued`, so a cancel never carries them into another
@@ -67,6 +102,8 @@ impl Loop {
                 // Guarded with `Commit::Step` so a shutdown lands before
                 // the writes or after them: no context is applied on a
                 // shutdown (`docs/extensions.md`, "Hooks").
+                #[cfg(test)]
+                pause_after_turn_start_check();
                 let cancel = Arc::clone(&self.cancel);
                 let written = cancel.commit(cancel::Commit::Step, || -> Result<(), Error> {
                     for added in &contexts {
@@ -245,6 +282,8 @@ impl Loop {
         if self.lifecycle.continued.is_empty() {
             return Ok(());
         }
+        #[cfg(test)]
+        pause_before_held_write();
         let held = std::mem::take(&mut self.lifecycle.continued);
         let cancel = Arc::clone(&self.cancel);
         let written = cancel.commit(cancel::Commit::Step, || -> Result<(), Error> {
