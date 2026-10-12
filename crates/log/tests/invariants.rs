@@ -22,9 +22,13 @@ use proptest::prelude::*;
 enum Kind {
     StepStarted,
     Delta,
+    AssistantMessageStarted,
     ToolCallStarted,
     ToolCallCompleted,
     MessageCompleted,
+    ShellCommand,
+    ExtensionExec,
+    UsageRecorded,
 }
 
 fn kind() -> impl Strategy<Value = Kind> {
@@ -32,9 +36,13 @@ fn kind() -> impl Strategy<Value = Kind> {
     prop_oneof![
         Just(StepStarted),
         Just(Delta),
+        Just(AssistantMessageStarted),
         Just(ToolCallStarted),
         Just(ToolCallCompleted),
         Just(MessageCompleted),
+        Just(ShellCommand),
+        Just(ExtensionExec),
+        Just(UsageRecorded),
     ]
 }
 
@@ -43,7 +51,15 @@ fn kind() -> impl Strategy<Value = Kind> {
 fn syncs(kind: &Kind) -> bool {
     use Kind::*;
     match kind {
-        ToolCallStarted | ToolCallCompleted | MessageCompleted => true,
+        // `UsageRecorded` syncs here because the test appends it outside
+        // an action, where no other line records the call.
+        AssistantMessageStarted
+        | ToolCallStarted
+        | ToolCallCompleted
+        | MessageCompleted
+        | ShellCommand
+        | ExtensionExec
+        | UsageRecorded => true,
         StepStarted | Delta => false,
     }
 }
@@ -53,9 +69,39 @@ fn event_of(kind: &Kind) -> contract::events::Event {
     match kind {
         StepStarted => empty("step_started"),
         Delta => delta("x"),
+        AssistantMessageStarted => empty("assistant_message_started"),
         ToolCallStarted => tool_call_started(),
         ToolCallCompleted => tool_call_completed(),
         MessageCompleted => message_completed(),
+        ShellCommand => event(
+            "shell_command",
+            serde_json::json!({
+                "command": "ls",
+                "output": "",
+                "process": {"exit_code": 0, "timed_out": false},
+            }),
+        ),
+        ExtensionExec => event(
+            "extension_exec",
+            serde_json::json!({
+                "extension": "e",
+                "program": "git",
+                "args": [],
+                "cwd": "/w",
+                "process": {"exit_code": 0, "timed_out": false},
+            }),
+        ),
+        // Outside an action, so the append ends with an fsync.
+        UsageRecorded => event(
+            "usage_recorded",
+            serde_json::json!({
+                "generation_id": "g",
+                "model": "p/m",
+                "tokens": {"input": 1, "cache_read": 0, "cache_write": {}, "output": 1},
+                "input_bytes": 1,
+                "cost": null,
+            }),
+        ),
     }
 }
 
