@@ -1776,7 +1776,7 @@ fn pairing_usage_errors_are_one_sentence() {
         ),
         (
             &["fiber", "hub", "token"],
-            "'fiber hub token' requires a subcommand but one was not provided.",
+            "'fiber hub token' requires a subcommand but one was not provided [subcommands: list, revoke].",
         ),
         (
             &["fiber", "hub", "token", "revoke"],
