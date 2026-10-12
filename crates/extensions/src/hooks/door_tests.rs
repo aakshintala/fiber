@@ -634,7 +634,7 @@ fn own_tool_hooks_fail_when_reached_and_run_normally_after_the_answer() {
 #[test]
 fn earlier_hooks_run_and_a_refusal_before_the_own_hook_wins() {
     use contract::hook::BeforeToolOutcome;
-    for refusing in [false, true] {
+    for refusing in [true, false] {
         let home = Home::new();
         let own = home.root.path().join("workspace/x");
         let earlier = home.root.path().join("workspace/y");
