@@ -101,6 +101,10 @@ fn parked_at(clock: &Arc<FakeClock>, until: std::time::Instant, count: usize) ->
     clock.await_parked_count(until, count, WAIT)
 }
 
+#[allow(
+    clippy::unwrap_used,
+    reason = "a test helper; fixture creation must succeed"
+)]
 fn lazy_fixture(
     init: &str,
     provider: &str,
@@ -156,7 +160,7 @@ fn a_queued_provider_load_expires_at_two_seconds_and_retries() {
     let asked = clock.now();
     let provider = start_provider(&ext);
     assert!(parked_at(&clock, asked + LOAD, 1));
-    let mark = clock.advance_marked(LOAD - Duration::from_millis(1));
+    let mark = clock.advance_marked(LOAD.checked_sub(Duration::from_millis(1)).unwrap());
     assert!(clock.await_parked_since(&mark, Some(asked + LOAD), WAIT));
     assert!(matches!(
         provider.try_recv(),
@@ -236,7 +240,11 @@ fn a_stuck_provider_load_abandons_its_mixed_extension_after_grace() {
     let provider = start_provider(&ext);
     Deadline::after(WAIT).recv_or_fail(&held, "provider blocked in C read");
     assert!(parked_at(&clock, asked + LOAD + GRACE, 1));
-    let mark = clock.advance_marked(LOAD + GRACE - Duration::from_millis(1));
+    let mark = clock.advance_marked(
+        (LOAD + GRACE)
+            .checked_sub(Duration::from_millis(1))
+            .unwrap(),
+    );
     assert!(clock.await_parked_since(&mark, Some(asked + LOAD + GRACE), WAIT));
     assert!(matches!(
         provider.try_recv(),

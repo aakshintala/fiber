@@ -155,6 +155,122 @@ fn a_panic_in_a_host_function_passes_the_extensions_pcall() {
     assert!(outcome.is_err(), "the panic became {outcome:?}");
 }
 
+#[test]
+fn load_completion_wins_at_the_abandonment_boundary() {
+    provider_load_race(true);
+}
+
+#[test]
+fn load_abandonment_wins_before_recording() {
+    provider_load_race(false);
+}
+
+#[allow(
+    clippy::unwrap_used,
+    reason = "a race fixture must be created and each bounded wait must finish"
+)]
+fn provider_load_race(completion_first: bool) {
+    use super::hub::Window;
+    use contract::clock::Wake;
+    struct ClockMoved(mpsc::Sender<()>);
+    impl Wake for ClockMoved {
+        fn wake(&self) {
+            match self.0.send(()) {
+                Ok(()) | Err(mpsc::SendError(())) => {}
+            }
+        }
+    }
+    let clock = FakeClock::new();
+    let (moved_tx, moved_rx) = mpsc::channel();
+    let moved: Arc<dyn Wake> = Arc::new(ClockMoved(moved_tx));
+    clock.subscribe(Arc::downgrade(&moved));
+    let dir = extension("load-race", "");
+    std::fs::create_dir_all(dir.path().join("providers")).unwrap();
+    std::fs::write(
+        dir.path().join("providers/p.lua"),
+        "require('hold')\n fiber.provider('p', {})",
+    )
+    .unwrap();
+    let fifo = dir.path().join("hold.lua");
+    assert!(
+        std::process::Command::new("mkfifo")
+            .arg(&fifo)
+            .status()
+            .unwrap()
+            .success()
+    );
+    let (held_tx, held_rx) = mpsc::channel();
+    let (release_tx, release_rx) = mpsc::channel();
+    thread::spawn(move || {
+        let held = std::fs::OpenOptions::new().write(true).open(fifo).unwrap();
+        held_tx.send(()).unwrap();
+        match release_rx.recv() {
+            Ok(()) | Err(mpsc::RecvError) => {}
+        }
+        drop(held);
+    });
+    let ext = Arc::new(LuaExtension::new(
+        "ext",
+        dir.path(),
+        dir.path(),
+        clock.clone(),
+    ));
+    let (recorded_tx, recorded_rx) = mpsc::channel();
+    let (resume_tx, resume_rx) = mpsc::channel();
+    let resume_rx = std::sync::Mutex::new(resume_rx);
+    ext.hub.pause_at_windows(Arc::new(move |_, window| {
+        if window == Window::LoadRecorded {
+            recorded_tx.send(()).unwrap();
+            match resume_rx.lock().unwrap().recv() {
+                Ok(()) | Err(mpsc::RecvError) => {}
+            }
+        }
+    }));
+    let (result_tx, result_rx) = mpsc::channel();
+    let caller = Arc::clone(&ext);
+    let asked = clock.now();
+    thread::spawn(move || result_tx.send(caller.provider_functions("p")));
+    Deadline::after(WAIT).recv_or_fail(&held_rx, "provider held in read");
+    assert!(clock.await_parked(asked + LOAD_TIMEOUT + GRACE, WAIT));
+    if completion_first {
+        release_tx.send(()).unwrap();
+        Deadline::after(WAIT).recv_or_fail(&recorded_rx, "load result recorded before abandonment");
+        let (advanced_tx, advanced_rx) = mpsc::channel();
+        let advance_clock = Arc::clone(&clock);
+        thread::spawn(move || {
+            advance_clock.advance_marked(LOAD_TIMEOUT + GRACE);
+            advanced_tx.send(()).unwrap();
+        });
+        Deadline::after(WAIT).recv_or_fail(&moved_rx, "clock moved before hub wake");
+        resume_tx.send(()).unwrap();
+        Deadline::after(WAIT).recv_or_fail(&advanced_rx, "clock advance completed");
+        assert_eq!(
+            Deadline::after(WAIT)
+                .recv_or_fail(&result_rx, "completed load result")
+                .unwrap(),
+            Vec::<String>::new()
+        );
+        assert!(ext.is_running());
+    } else {
+        clock.advance(LOAD_TIMEOUT + GRACE);
+        let err = Deadline::after(WAIT)
+            .recv_or_fail(&result_rx, "abandonment before recording")
+            .unwrap_err();
+        assert!(matches!(err, Error::Abandoned { callback, .. } if callback == "providers/p.lua"));
+        release_tx.send(()).unwrap();
+        Deadline::after(WAIT).recv_or_fail(&recorded_rx, "late load result dropped");
+        resume_tx.send(()).unwrap();
+        assert!(!ext.is_running());
+        let (retry_tx, retry_rx) = mpsc::channel();
+        let retry = Arc::clone(&ext);
+        thread::spawn(move || retry_tx.send(retry.provider_functions("p")));
+        assert!(matches!(
+            Deadline::after(WAIT).recv_or_fail(&retry_rx, "abandonment stays final"),
+            Err(Error::Abandoned { .. })
+        ));
+    }
+}
+
 fn command(name: &str) -> Target {
     Target::Command(name.to_owned())
 }

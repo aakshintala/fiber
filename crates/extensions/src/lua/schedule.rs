@@ -150,6 +150,8 @@ pub(super) fn serve(hub: Arc<Hub>, start: Start) {
                     };
                     shared.loads.insert(name, state);
                 }
+                #[cfg(test)]
+                hub.at_window(super::hub::Window::LoadRecorded);
                 drop(shared);
                 hub.notify();
                 continue;
@@ -205,20 +207,20 @@ fn next(name: &str, hub: &Hub, parked: &mut Vec<Parked>) -> Option<Work> {
         if !matches!(shared.phase, Phase::Ready(_)) {
             return None;
         }
-        if let Some(provider) = shared.pending_loads.pop_front() {
-            if let Some(ProviderLoad::Queued { asked }) = shared.loads.get(&provider) {
-                let deadline = asked.checked_add(LOAD_TIMEOUT);
-                if expired(deadline, now) {
-                    shared.pending_loads.push_front(provider);
-                } else {
-                    shared.loads.insert(
-                        provider.clone(),
-                        ProviderLoad::Running {
-                            abandon_at: deadline.and_then(|at| at.checked_add(GRACE)),
-                        },
-                    );
-                    return Some(Work::Load(provider, deadline));
-                }
+        if let Some(provider) = shared.pending_loads.pop_front()
+            && let Some(ProviderLoad::Queued { asked }) = shared.loads.get(&provider)
+        {
+            let deadline = asked.checked_add(LOAD_TIMEOUT);
+            if expired(deadline, now) {
+                shared.pending_loads.push_front(provider);
+            } else {
+                shared.loads.insert(
+                    provider.clone(),
+                    ProviderLoad::Running {
+                        abandon_at: deadline.and_then(|at| at.checked_add(GRACE)),
+                    },
+                );
+                return Some(Work::Load(provider, deadline));
             }
         }
         if let Some(pos) = parked.iter().position(|p| shared.cancelled.contains(&p.id)) {

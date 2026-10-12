@@ -53,6 +53,7 @@ pub(super) enum Window {
     Flushing,
     Emitting,
     EmitFlushing,
+    LoadRecorded,
 }
 
 #[cfg(test)]

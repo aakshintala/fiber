@@ -259,6 +259,9 @@ impl SessionExtensions {
                     }
                     Err(e) => {
                         session.failed(&entry.name, &e);
+                        if extension.misplaced_provider() {
+                            session.rejected.push(entry.name.clone());
+                        }
                         continue;
                     }
                 }
