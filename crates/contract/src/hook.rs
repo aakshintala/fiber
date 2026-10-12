@@ -347,3 +347,7 @@ pub struct ContextAnswer {
     /// The notices the chain raised, such as a `non-blocking` hook's failure.
     pub notices: Vec<Notice>,
 }
+
+#[cfg(test)]
+#[path = "hook_tests.rs"]
+mod tests;

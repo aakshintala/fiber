@@ -815,3 +815,105 @@ fn a_blocking_turn_end_failure_drops_the_earlier_message() {
     assert!(failure.message.contains("kaput"), "{}", failure.message);
     assert!(answer.notices.is_empty(), "{:?}", answer.notices);
 }
+
+/// The workspace file a marking hook writes when it runs.
+fn marker(home: &Home, name: &str) -> PathBuf {
+    home.root.path().join("workspace").join(name)
+}
+
+/// A hook body that writes `name` into the workspace, so a test can see
+/// which hooks ran.
+fn mark(home: &Home, name: &str) -> String {
+    format!("host.fs.write(\"{}\", \"x\")", marker(home, name).display())
+}
+
+#[test]
+fn a_cancel_set_before_a_before_model_call_chain_runs_only_its_first_hook() {
+    let home = Home::new();
+    home.install(
+        "a",
+        &hook("before_model_call", "non-blocking", &mark(&home, "a_ran")),
+    );
+    home.install(
+        "b",
+        &hook("before_model_call", "non-blocking", &mark(&home, "b_ran")),
+    );
+    let session = home.load(&[]);
+    let cancel = fakes::CancelToken::new();
+    cancel.cancel();
+    let used = usage(Some(0.01));
+    let answer = bounded(move || {
+        session.before_model_call(&BeforeModelCall {
+            model: "anthropic/claude-x",
+            usage: &used,
+            cancel: &cancel,
+        })
+    });
+    assert_eq!(answer.outcome, CheckOutcome::Passed);
+    assert!(answer.notices.is_empty(), "{:?}", answer.notices);
+    assert!(marker(&home, "a_ran").exists(), "the first hook runs");
+    assert!(
+        !marker(&home, "b_ran").exists(),
+        "the cancel stops the chain before the second hook"
+    );
+}
+
+#[test]
+fn a_cancel_set_before_a_session_start_chain_runs_only_its_first_hook() {
+    let home = Home::new();
+    home.install(
+        "a",
+        &hook("session_start", "non-blocking", &mark(&home, "a_ran")),
+    );
+    home.install(
+        "b",
+        &hook("session_start", "non-blocking", &mark(&home, "b_ran")),
+    );
+    let session = home.load(&[]);
+    let cancel = fakes::CancelToken::new();
+    cancel.cancel();
+    let id = contract::SessionId("s_1".into());
+    let workspace = "/work".to_owned();
+    let answer = bounded(move || {
+        session.session_start(&SessionStart {
+            reason: StartReason::Start,
+            session_id: &id,
+            workspace: &workspace,
+            cancel: &cancel,
+        })
+    });
+    assert_eq!(answer.outcome, ContextOutcome::Added(Vec::new()));
+    assert!(answer.notices.is_empty(), "{:?}", answer.notices);
+    assert!(marker(&home, "a_ran").exists(), "the first hook runs");
+    assert!(
+        !marker(&home, "b_ran").exists(),
+        "the cancel stops the chain before the second hook"
+    );
+}
+
+#[test]
+fn a_later_before_model_call_hook_refuses_after_an_earlier_pass() {
+    let home = Home::new();
+    home.install(
+        "a",
+        &hook("before_model_call", "non-blocking", &mark(&home, "a_ran")),
+    );
+    home.install(
+        "b",
+        &hook(
+            "before_model_call",
+            "non-blocking",
+            "return { refuse = \"team budget spent\" }",
+        ),
+    );
+    let answer = model_call(&home.load(&[]), Some(0.01));
+    assert_eq!(
+        answer.outcome,
+        CheckOutcome::Refused(contract::hook::Refusal {
+            extension: "fiber.test/b".into(),
+            reason: "team budget spent".into(),
+        })
+    );
+    assert!(answer.notices.is_empty(), "{:?}", answer.notices);
+    assert!(marker(&home, "a_ran").exists(), "the first hook ran");
+}
