@@ -169,10 +169,24 @@ pub(super) const MEASURED: &[(&str, Check)] = &[
 ];
 
 /// Each row with no benchmark yet, by its Budget cell, and what owns it.
-pub(super) const NOT_MEASURED: &[(&str, &str)] = &[(
-    "`session_list`, waiting for every running session's status",
-    "#581 (`session_list`)",
-)];
+pub(super) const NOT_MEASURED: &[(&str, &str)] = &[
+    (
+        "`session_list`, waiting for every running session's status",
+        "#581 (`session_list`)",
+    ),
+    (
+        "Session, memory kept after 10 busy turns",
+        "#2188 (the status fold's tool names)",
+    ),
+    (
+        "`paging` jig at scale 16, slowest re-count at a new width",
+        "#2187 (re-count and search growth)",
+    ),
+    (
+        "`paging` jig at scale 16, a search of the whole session with no match",
+        "#2187 (re-count and search growth)",
+    ),
+];
 
 /// The idle rows' RSS-split diagnostics, by Budget cell: the anon and file
 /// metric ids whose head medians the comment shows after the peak RSS.
