@@ -45,16 +45,6 @@ pub(super) struct Picker {
     typed: Typed,
 }
 
-impl Default for Picker {
-    fn default() -> Self {
-        Self {
-            recents: Vec::new(),
-            selected: 0,
-            typed: Typed::new(),
-        }
-    }
-}
-
 impl Picker {
     /// Whether the typed row is open: a key opened it, and Backspace
     /// past its first character has not closed it. The row is open
