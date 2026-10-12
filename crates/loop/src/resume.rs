@@ -645,10 +645,9 @@ impl Loop {
                 // Anything waiting continues the turn (`docs/loop.md`,
                 // "Ending a turn"). A steer taken here waits for the next
                 // step; a prompt is rejected.
-                Step::Replied => {
-                    self.drain(turn)?;
-                    if self.queued.is_empty() {
-                        break crate::ended(TurnOutcome::Completed, None);
+                Step::Replied(reply) => {
+                    if let Some(completed) = self.replied(turn, &reply)? {
+                        break completed;
                     }
                 }
                 Step::Ended(completed) => break completed,
