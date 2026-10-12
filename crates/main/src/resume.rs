@@ -610,16 +610,6 @@ enum Held {
     Made(doors::Isolation),
 }
 
-impl std::fmt::Debug for Held {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self {
-            Self::Nothing => write!(f, "Nothing"),
-            Self::Shared { .. } => write!(f, "Shared(..)"),
-            Self::Made(_) => write!(f, "Made(..)"),
-        }
-    }
-}
-
 /// Enters the recorded worktree: a present one is shared for the
 /// process's life, and a missing one with a recorded repository is made
 /// again at the same path and branch before anything else runs. The

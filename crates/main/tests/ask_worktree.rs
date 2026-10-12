@@ -718,6 +718,24 @@ fn a_clean_recreated_worktree_is_removed_again() {
     let resumed = lines(&out);
     assert_eq!(resumed[0]["kind"], "fiber_started");
     assert_eq!(resumed[0]["payload"]["resumed"], true);
+    assert_eq!(
+        kinds(&resumed),
+        [
+            "fiber_started",
+            "extensions_loaded",
+            "preamble_built",
+            "turn_started",
+            "step_started",
+            "assistant_message_started",
+            "assistant_message_delta",
+            "assistant_message_delta",
+            "text_completed",
+            "usage_recorded",
+            "assistant_message_completed",
+            "turn_completed",
+            "fiber_exited",
+        ]
+    );
     // Removed against the new base: the path, the branch and the lock
     // file are gone again, which a strong log hold would have kept.
     assert!(!first.path.exists());
@@ -754,6 +772,25 @@ fn ask_resume_of_a_kept_worktree_neither_recreates_nor_removes() {
     );
     let resumed = lines(&out);
     assert_eq!(resumed[0]["kind"], "fiber_started");
+    assert_eq!(resumed[0]["payload"]["resumed"], true);
+    assert_eq!(
+        kinds(&resumed),
+        [
+            "fiber_started",
+            "extensions_loaded",
+            "preamble_built",
+            "turn_started",
+            "step_started",
+            "assistant_message_started",
+            "assistant_message_delta",
+            "assistant_message_delta",
+            "text_completed",
+            "usage_recorded",
+            "assistant_message_completed",
+            "turn_completed",
+            "fiber_exited",
+        ]
+    );
     // Never recreated and never removed: the path and branch stand at
     // the original base, not the new HEAD.
     assert!(first.path.exists());
