@@ -8,6 +8,7 @@
     reason = "test code; a failure is the test's"
 )]
 
+use super::callback::{MAX_HEAD, decode};
 use super::*;
 use crate::test_support::{FakeTokens, WITHIN};
 use contract::mcp_tokens::TokenFiles;
@@ -65,6 +66,7 @@ fn each_login_error_maps_to_its_stable_code() {
             ErrorCode::AuthenticationFailed,
         ),
         (LoginError::PkceUnsupported, ErrorCode::ConfigInvalid),
+        (LoginError::Random, ErrorCode::AuthenticationFailed),
         (LoginError::Timeout, ErrorCode::AuthenticationFailed),
         (
             LoginError::Store(TokenError::Url),
@@ -149,7 +151,7 @@ fn server_url(server: &ProviderServer) -> String {
 fn query_param(url: &str, name: &str) -> Option<String> {
     url.split_once('?')?.1.split('&').find_map(|pair| {
         let (key, value) = pair.split_once('=').unwrap_or((pair, ""));
-        (key == name).then(|| super::decode(value))
+        (key == name).then(|| decode(value))
     })
 }
 
@@ -174,6 +176,7 @@ fn send_callback(redirect_uri: &str, query: &str) -> String {
 /// from the authorization URL. `query_for` receives the URL `present` saw.
 /// A login that fails before presenting surfaces its error instead of
 /// hanging on the URL wait.
+#[track_caller]
 fn run_with_callback(
     server_url: &str,
     files: &FakeTokens,
@@ -207,8 +210,19 @@ fn run_with_callback(
         let query = query_for(&url);
         let redirect = query_param(&url, "redirect_uri").unwrap();
         send_callback(&redirect, &query);
+        // The result first, through the deadline: joining a stuck login
+        // would hang past the hang guard. On expiry the clock wait is
+        // released so the scope can still join.
+        let result = match fakes::Deadline::after(WITHIN).recv(&received_done) {
+            Ok(result) => result,
+            Err(_) => {
+                clock.advance(CALLBACK_WAIT);
+                login.join().unwrap();
+                panic!("waited until the deadline for the driven login");
+            }
+        };
         login.join().unwrap();
-        fakes::Deadline::after(WITHIN).recv_or_fail(&received_done, "the driven login")
+        result
     })
 }
 
@@ -694,6 +708,97 @@ fn the_well_known_paths_are_tried_path_inserted_first() {
         .collect();
     assert!(paths.contains(&"/.well-known/oauth-protected-resource/mcp".to_owned()));
     assert!(paths.contains(&"/.well-known/openid-configuration".to_owned()));
+    // The pathless base names its first two candidates alike, and the
+    // duplicate is fetched once before falling through to `openid-configuration`.
+    assert_eq!(
+        paths
+            .iter()
+            .filter(|path| *path == "/.well-known/oauth-authorization-server")
+            .count(),
+        1
+    );
+}
+
+/// Starts a fake whose authorization server is the path-bearing
+/// `{base}/tenant`, serving its authorization-server document at
+/// `document_at` while every other well-known URL 404s. The document
+/// names the tenant issuer, so registration and the exchange run under
+/// `/tenant`.
+fn start_tenant_issuer(document_at: &'static str) -> ProviderServer {
+    ProviderServer::start_responding(move |request: &Request| {
+        let base = base_of(request);
+        let issuer = format!("{base}/tenant");
+        if request.method == "GET" && request.path == document_at {
+            return json_response(&authorization_document(&issuer));
+        }
+        match (request.method.as_str(), request.path.as_str()) {
+            ("GET", "/mcp") => Response::status(401, "{}"),
+            ("GET", "/.well-known/oauth-protected-resource/mcp") => {
+                json_response(&json!({"authorization_servers": [issuer]}))
+            }
+            ("POST", "/tenant/register") => json_response(&json!({"client_id": "c1"})),
+            ("POST", "/tenant/token") => json_response(&token_reply("at-1")),
+            _ => Response::status(404, "{}"),
+        }
+    })
+    .unwrap()
+}
+
+/// The authorization-server metadata paths the fake saw, in order,
+/// skipping the protected-resource fetches that always come first.
+fn metadata_paths(server: &ProviderServer) -> Vec<String> {
+    server
+        .requests()
+        .into_iter()
+        .map(|request| request.path)
+        .filter(|path| {
+            path.contains("oauth-authorization-server") || path.contains("openid-configuration")
+        })
+        .collect()
+}
+
+#[test]
+fn a_path_bearing_issuer_is_discovered_at_its_rfc_8414_url() {
+    // Each row serves the document at one candidate and names the
+    // metadata requests the login must have made, in order: the RFC 8414
+    // path-inserted URL first, then the base-appended one, then
+    // `openid-configuration`.
+    for (document_at, expected) in [
+        (
+            "/.well-known/oauth-authorization-server/tenant",
+            vec!["/.well-known/oauth-authorization-server/tenant"],
+        ),
+        (
+            "/tenant/.well-known/oauth-authorization-server",
+            vec![
+                "/.well-known/oauth-authorization-server/tenant",
+                "/tenant/.well-known/oauth-authorization-server",
+            ],
+        ),
+        (
+            "/tenant/.well-known/openid-configuration",
+            vec![
+                "/.well-known/oauth-authorization-server/tenant",
+                "/tenant/.well-known/oauth-authorization-server",
+                "/tenant/.well-known/openid-configuration",
+            ],
+        ),
+    ] {
+        let server = start_tenant_issuer(document_at);
+        let files = FakeTokens::default();
+        let clock = fakes::clock::FakeClock::new();
+        let url = server_url(&server);
+        run_with_callback(&url, &files, &clock, succeed).unwrap();
+        let expected: Vec<String> = expected.into_iter().map(|path| path.to_owned()).collect();
+        assert_eq!(metadata_paths(&server), expected, "{document_at}");
+        assert!(
+            files
+                .read(&crate::token::token_key(&url).unwrap())
+                .unwrap()
+                .is_some(),
+            "{document_at}"
+        );
+    }
 }
 
 #[test]
@@ -752,6 +857,35 @@ fn without_s256_the_login_is_refused_before_any_registration() {
 }
 
 #[test]
+fn a_failing_random_source_fails_closed_with_no_side_effects() {
+    let server = start_full();
+    let files = FakeTokens::default();
+    let clock = fakes::clock::FakeClock::new();
+    let url = server_url(&server);
+    let error = super::login_with_random(
+        &files,
+        &url,
+        &|_| panic!("no authorization URL is shown"),
+        &*clock,
+        &|_| Err(ring::error::Unspecified),
+    )
+    .unwrap_err();
+    assert!(matches!(error, LoginError::Random), "{error:?}");
+    assert_eq!(error.code(), ErrorCode::AuthenticationFailed);
+    assert_eq!(
+        error.to_string(),
+        "Fiber could not generate the login's PKCE secrets."
+    );
+    assert_eq!(server.requests().len(), 0, "the login reached the server");
+    assert!(
+        files
+            .read(&crate::token::token_key(&url).unwrap())
+            .unwrap()
+            .is_none()
+    );
+}
+
+#[test]
 fn the_authorization_url_and_exchange_carry_the_pkce_shape() {
     let server = start_full();
     let files = FakeTokens::default();
@@ -803,7 +937,7 @@ fn the_authorization_url_and_exchange_carry_the_pkce_shape() {
         .map(|pair| {
             let text = String::from_utf8_lossy(pair).into_owned();
             let (key, value) = text.split_once('=').unwrap();
-            (super::decode(key), super::decode(value))
+            (decode(key), decode(value))
         })
         .collect();
     let field = |name| form.iter().find(|(key, _)| key == name).unwrap().1.clone();
@@ -815,6 +949,88 @@ fn the_authorization_url_and_exchange_carry_the_pkce_shape() {
     let redirect = field("redirect_uri");
     assert!(redirect.starts_with("http://127.0.0.1:"), "{redirect}");
     assert_eq!(form.len(), 6);
+}
+
+#[test]
+fn an_authorization_endpoint_with_a_query_keeps_it() {
+    let server = ProviderServer::start_responding(|request: &Request| {
+        let base = base_of(request);
+        match (request.method.as_str(), request.path.as_str()) {
+            ("GET", "/mcp") => Response::status(401, "{}"),
+            ("GET", "/.well-known/oauth-protected-resource/mcp") => {
+                json_response(&json!({"authorization_servers": [base.clone()]}))
+            }
+            ("GET", "/.well-known/oauth-authorization-server") => json_response(&json!({
+                "authorization_endpoint": format!("{base}/authorize?tenant=x"),
+                "token_endpoint": format!("{base}/token"),
+                "registration_endpoint": format!("{base}/register"),
+                "code_challenge_methods_supported": ["S256"],
+            })),
+            ("POST", "/register") => json_response(&json!({"client_id": "c1"})),
+            ("POST", "/token") => json_response(&token_reply("at-1")),
+            _ => Response::status(404, "{}"),
+        }
+    })
+    .unwrap();
+    let files = FakeTokens::default();
+    let clock = fakes::clock::FakeClock::new();
+    let url = server_url(&server);
+    run_with_callback(&url, &files, &clock, |shown| {
+        // The endpoint's own query survives, and every parameter joins it.
+        assert_eq!(query_param(shown, "tenant").as_deref(), Some("x"));
+        assert_eq!(query_param(shown, "response_type").as_deref(), Some("code"));
+        assert_eq!(query_param(shown, "client_id").as_deref(), Some("c1"));
+        assert_eq!(
+            query_param(shown, "code_challenge_method").as_deref(),
+            Some("S256")
+        );
+        assert!(query_param(shown, "code_challenge").is_some(), "{shown}");
+        assert!(query_param(shown, "state").is_some(), "{shown}");
+        assert!(query_param(shown, "redirect_uri").is_some(), "{shown}");
+        succeed(shown)
+    })
+    .unwrap();
+}
+
+#[test]
+fn the_authorization_url_appends_with_the_separator_the_endpoint_needs() {
+    let plain = super::authorization_url(
+        "https://auth.test/authorize",
+        "c1",
+        "http://127.0.0.1:1/callback",
+        "challenge",
+        "state",
+        "https://rs.test/mcp",
+    );
+    assert!(
+        plain.starts_with("https://auth.test/authorize?response_type=code&"),
+        "{plain}"
+    );
+    // An endpoint that already carries a query keeps it whole: the
+    // parameters join with `&`, or with no separator when the endpoint
+    // already ends mid-query, never with a second `?`.
+    for (endpoint, joined) in [
+        (
+            "https://auth.test/authorize?tenant=x",
+            "?tenant=x&response_type=",
+        ),
+        ("https://auth.test/authorize?", "?response_type="),
+        (
+            "https://auth.test/authorize?tenant=x&",
+            "?tenant=x&response_type=",
+        ),
+    ] {
+        let url = super::authorization_url(
+            endpoint,
+            "c1",
+            "http://127.0.0.1:1/callback",
+            "challenge",
+            "state",
+            "https://rs.test/mcp",
+        );
+        assert!(url.contains(joined), "{url}");
+        assert!(!url.contains("?tenant=x?"), "{url}");
+    }
 }
 
 #[test]
@@ -851,7 +1067,7 @@ fn the_challenge_is_s256_of_the_verifier() {
             .split('&')
             .find_map(|pair| {
                 let (key, value) = pair.split_once('=').unwrap_or((pair, ""));
-                (key == "code_verifier").then(|| super::decode(value))
+                (key == "code_verifier").then(|| decode(value))
             })
             .unwrap();
         let expected = base64::Engine::encode(
@@ -1338,26 +1554,22 @@ fn a_slow_drip_does_not_stop_the_900s_deadline() {
             clock.await_parked(deadline, WITHIN),
             "the login never waited on the clock"
         );
-        // A slow drip: one byte per poll, never completing a head. The
-        // pacing waits through the test deadline, the sanctioned wait;
-        // the bytes themselves prove an incomplete head cannot stop the
-        // injected 900 s deadline.
+        // A slow drip: one byte at a time, never completing a head. Each
+        // byte the callback reader consumes taps the test, so the first
+        // tap proves the connection was accepted before the clock moves,
+        // and each later tap releases the next byte: no pacing sleep.
         let redirect = query_param(&shown, "redirect_uri").unwrap();
         let (_, rest) = redirect.split_once("://").unwrap();
         let (host, _) = rest.split_once('/').unwrap();
+        let reads = super::callback::tap_reads();
+        let drips = fakes::Deadline::after(WITHIN);
         let mut drip = TcpStream::connect(host).unwrap();
         drip.write_all(b"G").unwrap();
-        let (_paced, pacing) = mpsc::channel::<()>();
-        scope.spawn(move || {
-            for _ in 0..60 {
-                match fakes::Deadline::after(Duration::from_millis(30)).recv(&pacing) {
-                    Ok(()) | Err(_) => {}
-                }
-                if drip.write_all(b"G").is_err() {
-                    return;
-                }
-            }
-        });
+        drips.recv_or_fail(&reads, "the callback reader's first byte");
+        for _ in 0..60 {
+            drip.write_all(b"G").unwrap();
+            drips.recv_or_fail(&reads, "the callback reader's next byte");
+        }
         clock.advance(CALLBACK_WAIT);
         let result =
             fakes::Deadline::after(WITHIN).recv_or_fail(&received_done, "the timed-out login");

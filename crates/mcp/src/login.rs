@@ -1,21 +1,28 @@
 //! `fiber mcp login`'s authorization flow (`docs/mcp.md`, "What Fiber does
-//! with MCP"): discovery, dynamic client registration, a PKCE authorization
-//! code on a loopback redirect, and the token exchange, stored by canonical
-//! URL. Method follows MCP's authorization spec: protected-resource metadata
-//! (RFC 9728), authorization-server metadata (RFC 8414), client registration
+//! with MCP"): discovery through `discovery`, dynamic client registration,
+//! a PKCE authorization code on a loopback redirect through `callback`,
+//! and the token exchange, stored by canonical URL. Method follows MCP's
+//! authorization spec: protected-resource metadata (RFC 9728),
+//! authorization-server metadata (RFC 8414), client registration
 //! (RFC 7591, public client), PKCE `S256` (RFC 7636), and the RFC 8707
 //! `resource` parameter.
 
-use std::io::{Read, Write};
-use std::net::{Ipv4Addr, TcpListener, TcpStream};
+mod callback;
+mod discovery;
+
+use callback::wait_callback;
+use discovery::discover;
+
+use std::io::Read;
+use std::net::{Ipv4Addr, TcpListener};
 use std::sync::Arc;
-use std::time::{Duration, Instant};
+use std::time::Duration;
 
 use base64::Engine;
 use contract::clock::Clock;
 use contract::mcp_tokens::TokenFiles;
 use contract::{ErrorCode, Secret};
-use ring::rand::SecureRandom;
+use ring::rand::{SecureRandom, SystemRandom};
 use serde_json::Value;
 use ureq::unversioned::resolver::DefaultResolver;
 
@@ -25,27 +32,10 @@ use crate::token::{Token, key, store_token, url_has_userinfo};
 /// clock: 15 minutes, the precedent `credential`'s callback waits.
 pub const CALLBACK_WAIT: Duration = Duration::from_secs(900);
 
-/// The longest request head the callback listener reads. Past it the
-/// client gets a 431 and the listener serves the next connection.
-const MAX_HEAD: usize = 8 * 1024;
-
 /// The longest metadata or token body the login reads: past it the step
-/// fails, and nothing is stored.
-const MAX_BODY: usize = 1024 * 1024;
-
-/// How many reads in a row a callback connection may send nothing before
-/// the listener drops it and serves the next. Browsers open idle
-/// speculative connections, so silence on one cannot end the wait. The
-/// count restarts whenever bytes arrive.
-const SILENT_POLLS: u32 = 100;
-
-/// One callback socket read's kernel timeout: short, so the injected
-/// 900 s deadline is checked between reads and an idle or slow-drip
-/// connection cannot extend the wait.
-const READ_TIMEOUT: Duration = Duration::from_millis(20);
-
-/// One accept poll's real-time pause between listener checks.
-const POLL_PAUSE: Duration = Duration::from_millis(20);
+/// fails, and nothing is stored. Shared with `discovery`, which caps its
+/// documents the same way.
+pub(crate) const MAX_BODY: usize = 1024 * 1024;
 
 /// A login could not be acquired. The string-bearing variants hold a step
 /// name only, never a token, code, verifier, state, response body or
@@ -58,6 +48,8 @@ pub enum LoginError {
     Userinfo,
     /// The server or its authorization server could not be reached.
     Unreachable(String),
+    /// The platform gave no random bytes for the PKCE verifier and state.
+    Random,
     /// Discovery failed at the named step.
     Discovery(String),
     /// Client registration failed at the named step.
@@ -84,7 +76,8 @@ impl LoginError {
         match self {
             Self::Url | Self::Userinfo | Self::PkceUnsupported => ErrorCode::ConfigInvalid,
             Self::Unreachable(_) => ErrorCode::ConnectionFailed,
-            Self::Discovery(_)
+            Self::Random
+            | Self::Discovery(_)
             | Self::Registration(_)
             | Self::Exchange(_)
             | Self::Callback(_)
@@ -101,6 +94,7 @@ impl std::fmt::Debug for LoginError {
             Self::Url => f.write_str("Url"),
             Self::Userinfo => f.write_str("Userinfo"),
             Self::Unreachable(_) => f.write_str("Unreachable"),
+            Self::Random => f.write_str("Random"),
             Self::Discovery(_) => f.write_str("Discovery"),
             Self::Registration(_) => f.write_str("Registration"),
             Self::Exchange(_) => f.write_str("Exchange"),
@@ -123,6 +117,7 @@ impl std::fmt::Display for LoginError {
             Self::Unreachable(_) => {
                 f.write_str("Fiber could not reach the server or its authorization server.")
             }
+            Self::Random => f.write_str("Fiber could not generate the login's PKCE secrets."),
             Self::Discovery(step) => write!(
                 f,
                 "Fiber could not discover the server's authorization flow at {step}."
@@ -157,8 +152,9 @@ impl std::error::Error for LoginError {}
 
 /// The seven error codes of RFC 6749 section 4.1.2.1, in underscore
 /// spelling: the only callback `error` values `Display` repeats. Any other
-/// value prints the generic sentence, never the value.
-fn is_known_error(code: &str) -> bool {
+/// value prints the generic sentence, never the value. Shared with
+/// `callback`, which reads the error out of the request.
+pub(crate) fn is_known_error(code: &str) -> bool {
     matches!(
         code,
         "invalid_request"
@@ -186,8 +182,8 @@ fn agent() -> ureq::Agent {
 }
 
 /// A `GET`'s status, its `WWW-Authenticate` header when present, and its
-/// body capped at 1 MiB plus one byte.
-fn get(url: &str) -> Result<(u16, Option<String>, Vec<u8>), ureq::Error> {
+/// body capped at 1 MiB plus one byte. Discovery reads through it.
+pub(crate) fn get(url: &str) -> Result<(u16, Option<String>, Vec<u8>), ureq::Error> {
     let mut response = agent().get(url).call()?;
     let status = response.status().as_u16();
     let authenticate = response
@@ -236,180 +232,14 @@ fn post_form(url: &str, form: &[(&str, &str)]) -> Result<(u16, Vec<u8>), ureq::E
     Ok((status, bytes))
 }
 
-/// Whether `url` is an http or https URL without userinfo: every
-/// discovered endpoint must be one, since the token is only ever sent to
-/// the URL it was issued for.
-fn is_usable_endpoint(url: &str) -> bool {
-    let Ok(uri): Result<ureq::http::Uri, _> = url.parse() else {
-        return false;
-    };
-    let scheme = uri.scheme_str().map(str::to_ascii_lowercase);
-    if !matches!(scheme.as_deref(), Some("http") | Some("https")) {
-        return false;
-    }
-    uri.host().is_some() && !url_has_userinfo(url)
-}
-
 /// The origin of a canonical URL: its scheme and authority, the fallback
 /// authorization server when there is no protected-resource metadata.
-fn origin_of(canonical: &str) -> Option<String> {
+/// Shared with `discovery`, which inserts a path-bearing issuer's
+/// well-known document between the origin and the path.
+pub(crate) fn origin_of(canonical: &str) -> Option<String> {
     let (scheme, rest) = canonical.split_once("://")?;
     let end = rest.find(['/', '?', '#']).unwrap_or(rest.len());
     Some(format!("{scheme}://{}", rest.get(..end)?))
-}
-
-/// The `resource_metadata` URL of a `WWW-Authenticate` header, when the
-/// probe carried one.
-fn resource_metadata_url(header: &str) -> Option<String> {
-    let start = header.find("resource_metadata")?;
-    let quote = header.get(start..)?.find('"')?;
-    let rest = header.get(start + quote + 1..)?;
-    let end = rest.find('"')?;
-    rest.get(..end).map(str::to_owned)
-}
-
-/// Fetches one JSON document: a 404 means absent, a 2xx is parsed and a
-/// body past 1 MiB or not JSON fails the named step, and any other status
-/// or a transport error fails it too. Nothing fetched is retried.
-fn fetch_json(url: &str, step: &str) -> Result<Option<Value>, LoginError> {
-    let (status, _, body) = post_get(url).map_err(|_| LoginError::Discovery(step.to_owned()))?;
-    if status == 404 {
-        return Ok(None);
-    }
-    if !(200..300).contains(&status) {
-        return Err(LoginError::Discovery(step.to_owned()));
-    }
-    if body.len() > MAX_BODY {
-        return Err(LoginError::Discovery(step.to_owned()));
-    }
-    serde_json::from_slice(&body)
-        .map(Some)
-        .map_err(|_| LoginError::Discovery(step.to_owned()))
-}
-
-fn post_get(url: &str) -> Result<(u16, Option<String>, Vec<u8>), ureq::Error> {
-    get(url)
-}
-
-/// The protected-resource metadata: the header's document when the probe
-/// named one, else the path-inserted well-known document, else the root
-/// one. Each candidate is fetched in order; a 404 continues to the next.
-fn protected_resource(
-    agent_probe: (u16, Option<String>),
-    canonical: &str,
-    origin: &str,
-) -> Result<Option<Value>, LoginError> {
-    const STEP: &str = "protected-resource metadata";
-    if let Some(url) = agent_probe.1.as_deref().and_then(resource_metadata_url) {
-        if !is_usable_endpoint(&url) {
-            return Err(LoginError::Discovery(STEP.to_owned()));
-        }
-        return match fetch_json(&url, STEP)? {
-            Some(document) => Ok(Some(document)),
-            None => Err(LoginError::Discovery(STEP.to_owned())),
-        };
-    }
-    let path = canonical
-        .split_once("://")
-        .and_then(|(_, rest)| rest.find('/').map(|at| rest.get(at..).unwrap_or_default()))
-        .unwrap_or_default();
-    let path = path.split(['?', '#']).next().unwrap_or_default();
-    let mut candidates = Vec::new();
-    if !path.is_empty() && path != "/" {
-        candidates.push(format!(
-            "{origin}/.well-known/oauth-protected-resource{path}"
-        ));
-    }
-    candidates.push(format!("{origin}/.well-known/oauth-protected-resource"));
-    for url in &candidates {
-        match fetch_json(url, STEP)? {
-            Some(document) => return Ok(Some(document)),
-            None => continue,
-        }
-    }
-    Ok(None)
-}
-
-/// The authorization server's base: the first server the
-/// protected-resource metadata lists, else the resource's own origin.
-fn authorization_base(prm: Option<&Value>, origin: &str) -> Result<String, LoginError> {
-    const STEP: &str = "protected-resource metadata";
-    let first = prm
-        .and_then(|document| document.get("authorization_servers"))
-        .and_then(Value::as_array)
-        .and_then(|servers| servers.first())
-        .and_then(Value::as_str)
-        .map(str::to_owned);
-    match first {
-        Some(server) => {
-            if !is_usable_endpoint(&server) {
-                return Err(LoginError::Discovery(STEP.to_owned()));
-            }
-            Ok(server.trim_end_matches('/').to_owned())
-        }
-        None => Ok(origin.to_owned()),
-    }
-}
-
-/// The authorization server's metadata: the `oauth-authorization-server`
-/// document, then `openid-configuration`. A 404 continues; anything else
-/// failing is terminal at the named step.
-fn authorization_metadata(base: &str) -> Result<Value, LoginError> {
-    const STEP: &str = "authorization-server metadata";
-    let base = base.trim_end_matches('/');
-    for url in [
-        format!("{base}/.well-known/oauth-authorization-server"),
-        format!("{base}/.well-known/openid-configuration"),
-    ] {
-        match fetch_json(&url, STEP)? {
-            Some(document) => return Ok(document),
-            None => continue,
-        }
-    }
-    Err(LoginError::Discovery(STEP.to_owned()))
-}
-
-struct Discovered {
-    authorization_endpoint: String,
-    token_endpoint: String,
-    registration_endpoint: String,
-}
-
-fn discovered(metadata: &Value) -> Result<Discovered, LoginError> {
-    const STEP: &str = "authorization-server metadata";
-    let endpoint = |name| {
-        metadata
-            .get(name)
-            .and_then(Value::as_str)
-            .filter(|url| is_usable_endpoint(url))
-            .map(str::to_owned)
-    };
-    let Some(authorization_endpoint) = endpoint("authorization_endpoint") else {
-        return Err(LoginError::Discovery(STEP.to_owned()));
-    };
-    let Some(token_endpoint) = endpoint("token_endpoint") else {
-        return Err(LoginError::Discovery(STEP.to_owned()));
-    };
-    let Some(registration_endpoint) = endpoint("registration_endpoint") else {
-        return Err(LoginError::Discovery(
-            "client registration endpoint".to_owned(),
-        ));
-    };
-    // MCP's authorization flow requires PKCE: an authorization server
-    // whose metadata does not list `S256` is refused before anything is
-    // registered, with no error code printed.
-    let offers = metadata
-        .get("code_challenge_methods_supported")
-        .and_then(Value::as_array)
-        .is_some_and(|methods| methods.iter().any(|method| method.as_str() == Some("S256")));
-    if !offers {
-        return Err(LoginError::PkceUnsupported);
-    }
-    Ok(Discovered {
-        authorization_endpoint,
-        token_endpoint,
-        registration_endpoint,
-    })
 }
 
 /// Registers the public client: a 2xx with a JSON `client_id` answers it,
@@ -437,23 +267,15 @@ fn register(registration_endpoint: &str, redirect_uri: &str) -> Result<String, L
 }
 
 /// 32 random bytes as base64url without padding, 43 characters (RFC 7636,
-/// section 4.1): a verifier, and a `state` of the same shape.
-fn random_43() -> String {
+/// section 4.1): a verifier, and a `state` of the same shape. Fails
+/// closed: a platform that gives no random bytes fails the login, and
+/// never falls back to a guessable stand-in.
+fn random_43(
+    fill: &dyn Fn(&mut [u8]) -> Result<(), ring::error::Unspecified>,
+) -> Result<String, LoginError> {
     let mut bytes = [0_u8; 32];
-    if ring::rand::SystemRandom::new().fill(&mut bytes).is_err() {
-        // Practically unreachable: the platform has no random bytes to
-        // give, so anything needing them is doomed already. The fallback
-        // still differs per call, from the process and the stack.
-        use std::hash::{BuildHasher, Hasher};
-        let mut hasher = std::collections::hash_map::RandomState::new().build_hasher();
-        hasher.write(&std::process::id().to_le_bytes());
-        hasher.write(&(&raw const bytes as usize).to_le_bytes());
-        let seed = hasher.finish().to_le_bytes();
-        for (byte, seed_byte) in bytes.iter_mut().zip(seed.iter().cycle()) {
-            *byte = *seed_byte;
-        }
-    }
-    base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(bytes)
+    fill(&mut bytes).map_err(|_| LoginError::Random)?;
+    Ok(base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(bytes))
 }
 
 /// The S256 challenge of `verifier` (RFC 7636, section 4.2).
@@ -486,209 +308,25 @@ fn authorization_url(
     state: &str,
     resource: &str,
 ) -> String {
+    // An endpoint that already carries a query keeps it: the parameters
+    // join it with the separator its shape needs.
+    let separator = if endpoint.contains('?') {
+        if endpoint.ends_with('?') || endpoint.ends_with('&') {
+            ""
+        } else {
+            "&"
+        }
+    } else {
+        "?"
+    };
     format!(
-        "{endpoint}?response_type=code&client_id={}&redirect_uri={}&code_challenge={}&code_challenge_method=S256&state={}&resource={}",
+        "{endpoint}{separator}response_type=code&client_id={}&redirect_uri={}&code_challenge={}&code_challenge_method=S256&state={}&resource={}",
         encode(client_id),
         encode(redirect_uri),
         encode(challenge),
         encode(state),
         encode(resource),
     )
-}
-
-/// A query string's parameters in order, percent-decoded with `+` as a
-/// space.
-fn parse_query(query: &str) -> Vec<(String, String)> {
-    query
-        .split('&')
-        .filter(|pair| !pair.is_empty())
-        .map(|pair| {
-            let (name, value) = pair.split_once('=').unwrap_or((pair, ""));
-            (decode(name), decode(value))
-        })
-        .collect()
-}
-
-fn decode(text: &str) -> String {
-    let mut out = Vec::with_capacity(text.len());
-    let mut bytes = text.bytes();
-    while let Some(byte) = bytes.next() {
-        match byte {
-            b'+' => out.push(b' '),
-            b'%' => {
-                // Two hex digits make a byte; anything else leaves the
-                // `%` as written and the next bytes to be read as
-                // themselves.
-                let mut ahead = bytes.clone();
-                let hex = |next: Option<u8>| next.and_then(|b| char::from(b).to_digit(16));
-                match (hex(ahead.next()), hex(ahead.next())) {
-                    (Some(high), Some(low)) => {
-                        if let Ok(value) = u8::try_from(high * 16 + low) {
-                            out.push(value);
-                            bytes = ahead;
-                        } else {
-                            out.push(b'%');
-                        }
-                    }
-                    _ => out.push(b'%'),
-                }
-            }
-            other => out.push(other),
-        }
-    }
-    String::from_utf8_lossy(&out).into_owned()
-}
-
-/// The request line's target, when the head is a request.
-fn request_target(head: &[u8]) -> Option<&str> {
-    let line = head.split(|byte| *byte == b'\n').next()?;
-    let line = std::str::from_utf8(line).ok()?;
-    let mut parts = line.split_whitespace();
-    let (_method, target, version) = (parts.next()?, parts.next()?, parts.next()?);
-    (version.starts_with("HTTP/") && parts.next().is_none()).then_some(target)
-}
-
-fn respond(stream: &mut TcpStream, status: &str) {
-    let body = if status.starts_with("200") {
-        "<!doctype html><title>Fiber</title><p>You can close this tab and return to Fiber.</p>"
-    } else {
-        ""
-    };
-    let reply = format!(
-        "HTTP/1.1 {status}\r\nContent-Type: text/html; charset=utf-8\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
-        body.len()
-    );
-    match stream.write_all(reply.as_bytes()) {
-        Ok(()) | Err(_) => {}
-    }
-}
-
-enum Served {
-    /// The wait is over with the authorization code.
-    Code(String),
-    /// The wait is over with a login failure.
-    Failed(LoginError),
-}
-
-/// Answers one callback connection. `Some` ends the wait; `None` serves
-/// the next connection.
-fn answer(
-    mut stream: TcpStream,
-    clock: &dyn Clock,
-    deadline: Instant,
-    state: &str,
-) -> Option<Served> {
-    stream.set_nonblocking(false).ok()?;
-    stream.set_read_timeout(Some(READ_TIMEOUT)).ok()?;
-    let mut head = Vec::new();
-    let mut byte = [0_u8; 1];
-    let mut silent = 0;
-    loop {
-        // The whole head read is bounded by the injected deadline: an
-        // idle or slow-drip connection cannot extend the wait.
-        if clock.now() >= deadline {
-            return Some(Served::Failed(LoginError::Timeout));
-        }
-        if head.len() >= MAX_HEAD {
-            respond(&mut stream, "431 Request Header Fields Too Large");
-            return None;
-        }
-        match stream.read(&mut byte) {
-            Ok(0) => return None,
-            Ok(_) => {
-                head.push(byte[0]);
-                silent = 0;
-            }
-            Err(_) => {
-                silent += 1;
-                if silent >= SILENT_POLLS {
-                    return None;
-                }
-            }
-        }
-        if head.ends_with(b"\r\n\r\n") || head.ends_with(b"\n\n") {
-            break;
-        }
-    }
-    let Some(target) = request_target(&head) else {
-        respond(&mut stream, "400 Bad Request");
-        return Some(Served::Failed(LoginError::Callback(
-            "callback request".to_owned(),
-        )));
-    };
-    let path = target.split_once('?').map_or(target, |(path, _)| path);
-    if path != "/callback" {
-        respond(&mut stream, "404 Not Found");
-        return None;
-    }
-    let query = target.split_once('?').map_or("", |(_, query)| query);
-    let pairs = parse_query(query);
-    let find = |name| {
-        pairs
-            .iter()
-            .find(|(key, _)| key == name)
-            .map(|(_, v)| v.as_str())
-    };
-    respond(&mut stream, "200 OK");
-    if let Some(error) = find("error") {
-        // Only the seven codes print; any other value, and never the
-        // description or an echo of `state`, prints the generic sentence.
-        if is_known_error(error) {
-            return Some(Served::Failed(LoginError::Denied(error.to_owned())));
-        }
-        return Some(Served::Failed(LoginError::Denied(String::new())));
-    }
-    let (Some(code), Some(returned)) = (find("code"), find("state")) else {
-        return Some(Served::Failed(LoginError::Callback(
-            "callback parameters".to_owned(),
-        )));
-    };
-    if code.is_empty() || returned != state {
-        return Some(Served::Failed(LoginError::Callback(
-            "callback state".to_owned(),
-        )));
-    }
-    Some(Served::Code(code.to_owned()))
-}
-
-/// Waits for the first `/callback` request, on the injected clock. A
-/// request for another path gets 404 and the wait continues; the first
-/// `/callback` request ends it.
-fn wait_callback(
-    listener: &TcpListener,
-    clock: &dyn Clock,
-    deadline: Instant,
-    state: &str,
-) -> Result<String, LoginError> {
-    // The poll pause: one condvar wait, so the idle loop never spins
-    // and the fake clock still sees every park below.
-    let poll = (std::sync::Mutex::new(()), std::sync::Condvar::new());
-    loop {
-        if clock.now() >= deadline {
-            return Err(LoginError::Timeout);
-        }
-        match listener.accept() {
-            Ok((stream, _)) => match answer(stream, clock, deadline, state) {
-                None => {}
-                Some(Served::Code(code)) => return Ok(code),
-                Some(Served::Failed(error)) => return Err(error),
-            },
-            Err(_) => {
-                // Parked on the clock, so a test's `await_parked` sees
-                // the wait; the pause is the shorter of the clock's
-                // bound and the poll, so the deadline still ends it.
-                clock.wait_until(Some(deadline), &mut |bound| {
-                    let pause = bound.map_or(POLL_PAUSE, |bound| bound.min(POLL_PAUSE));
-                    let (lock, changed) = &poll;
-                    if let Ok(guard) = lock.lock() {
-                        let _waited = changed
-                            .wait_timeout(guard, pause)
-                            .unwrap_or_else(std::sync::PoisonError::into_inner);
-                    }
-                });
-            }
-        }
-    }
 }
 
 /// Exchanges the code for tokens and stores them under the configured URL.
@@ -773,11 +411,29 @@ pub fn login(
     present: &dyn Fn(&str),
     clock: &dyn Clock,
 ) -> Result<(), LoginError> {
+    login_with_random(files, url, present, clock, &|bytes| {
+        SystemRandom::new().fill(bytes)
+    })
+}
+
+/// The login with its random source as a parameter, so a test can fail
+/// it: `login` runs it on the platform source.
+fn login_with_random(
+    files: &dyn TokenFiles,
+    url: &str,
+    present: &dyn Fn(&str),
+    clock: &dyn Clock,
+    fill: &dyn Fn(&mut [u8]) -> Result<(), ring::error::Unspecified>,
+) -> Result<(), LoginError> {
     if url_has_userinfo(url) {
         return Err(LoginError::Userinfo);
     }
     let canonical = crate::token::canonical_url(url).map_err(|_| LoginError::Url)?;
     let origin = origin_of(&canonical).ok_or(LoginError::Url)?;
+    // Secrets first, before any network: a platform that gives no random
+    // bytes fails before the listener is bound or the server is reached.
+    let verifier = random_43(fill)?;
+    let state = random_43(fill)?;
     // Bound before discovery, so `present` runs after the bind and the
     // listener is closed on every exit path.
     let listener = TcpListener::bind((Ipv4Addr::LOCALHOST, 0))
@@ -794,13 +450,8 @@ pub fn login(
     // on any status.
     let (_, authenticate, _) =
         get(&canonical).map_err(|_| LoginError::Unreachable(canonical.clone()))?;
-    let prm = protected_resource((0, authenticate), &canonical, &origin)?;
-    let base = authorization_base(prm.as_ref(), &origin)?;
-    let metadata = authorization_metadata(&base)?;
-    let found = discovered(&metadata)?;
+    let found = discover(authenticate.as_deref(), &canonical, &origin)?;
     let client_id = register(&found.registration_endpoint, &redirect_uri)?;
-    let verifier = random_43();
-    let state = random_43();
     let url = authorization_url(
         &found.authorization_endpoint,
         &client_id,
