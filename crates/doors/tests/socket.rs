@@ -301,24 +301,21 @@ fn subscribe_is_first_and_unknown_or_unfit_commands_are_rejected() {
                 ("unknown_command", "`frob` is not built in this Fiber yet.")
             );
 
-            for name in [
-                "reload",
-                "name",
-            ] {
-                send(
-                    &client,
-                    &format!(r#"{{"id":"c_{name}","command":"{name}"}}"#),
-                );
-                let line = response(&client, &format!("c_{name}"));
-                assert_eq!(
-                    rejection(&line),
-                    (
-                        "unknown_command",
-                        format!("`{name}` is not built in this Fiber yet.").as_str()
-                    ),
-                    "{name}"
-                );
-            }
+            send(&client, r#"{"id":"c_reload","command":"reload"}"#);
+            let line = response(&client, "c_reload");
+            assert_eq!(
+                rejection(&line),
+                (
+                    "unknown_command",
+                    "`reload` is not built in this Fiber yet.",
+                ),
+            );
+
+            send(&client, r#"{"id":"c_name","command":"name"}"#);
+            assert_eq!(
+                rejection(&response(&client, "c_name")),
+                ("invalid_arguments", UNFIT)
+            );
 
             send(&client, r#"{"id":"c_shell","command":"shell"}"#);
             assert_eq!(
@@ -1167,6 +1164,38 @@ fn credential_arrives_as_delivery_and_its_rejection_reaches_the_client() {
                 kinds(&own),
                 ["command_accepted", "clients", "command_rejected"]
             );
+            Ok(())
+        })
+        .unwrap();
+    opened.close();
+}
+
+#[test]
+fn name_is_delivered_with_its_text_exactly() {
+    let opened = Opened::open(vec![]);
+    let socket = opened.socket.clone();
+    opened
+        .session
+        .run(Vec::new(), Arc::new(|| false), move |inbox| {
+            let client = Client::connect(&socket).unwrap();
+            subscribe(&client, "c_sub", "full");
+            send(
+                &client,
+                r#"{"id":"c_n1","command":"name","args":{"text":"  Mine  "}}"#,
+            );
+            let wait = Deadline::after(DEADLINE);
+            assert_eq!(take(&inbox, &wait), "name \"  Mine  \"");
+            let accepted = response(&client, "c_n1");
+            assert_eq!(kind(&accepted), "command_accepted");
+            assert_eq!(command_id(&accepted), Some("c_n1"));
+            send(
+                &client,
+                r#"{"id":"c_n2","command":"name","args":{"text":""}}"#,
+            );
+            assert_eq!(take(&inbox, &wait), "name \"\"");
+            let accepted = response(&client, "c_n2");
+            assert_eq!(kind(&accepted), "command_accepted");
+            assert_eq!(command_id(&accepted), Some("c_n2"));
             Ok(())
         })
         .unwrap();
