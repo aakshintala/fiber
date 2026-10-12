@@ -1,5 +1,5 @@
 //! `fiber hub` (`docs/invocation.md`, "Commands and flags"). `install`,
-//! `uninstall`, `status` and `refresh` run in the `cli` crate. The internal
+//! `uninstall`, `status`, `refresh`, `pair` and `token` run in the `cli` crate. The internal
 //! `hub serve` is hidden, free to change, and named nowhere in the docs: it
 //! builds the session starter and runs the hub, which reads configuration
 //! once it holds the `run/` lock; a start failure prints one line on stderr.
@@ -19,19 +19,24 @@ use crate::{cli, settings};
 
 /// Runs a `fiber hub` command.
 pub(crate) fn run(command: cli::HubCommands, exe: Result<PathBuf, String>) -> i32 {
+    let mut connect = || {
+        crate::connect_hub(
+            &config::fiber_home_from_env().map_err(std::io::Error::other)?,
+            &exe,
+            &crate::clock::System,
+        )
+    };
     match command {
         cli::HubCommands::Install { port } => ::cli::hub_install(port, &crate::clock::System),
         cli::HubCommands::Uninstall => ::cli::hub_uninstall(),
         cli::HubCommands::Status { json } => ::cli::hub_status(json, &crate::clock::System),
-        cli::HubCommands::Refresh => {
-            let mut connect = || {
-                crate::connect_hub(
-                    &config::fiber_home_from_env().map_err(std::io::Error::other)?,
-                    &exe,
-                    &crate::clock::System,
-                )
-            };
-            ::cli::hub_refresh(&mut connect)
+        cli::HubCommands::Refresh => ::cli::hub_refresh(&mut connect),
+        cli::HubCommands::Pair { device, address } => {
+            ::cli::hub_pair(&device, address.as_ref(), &mut connect)
+        }
+        cli::HubCommands::Token(cli::TokenCommands::List) => ::cli::hub_token_list(&mut connect),
+        cli::HubCommands::Token(cli::TokenCommands::Revoke { device }) => {
+            ::cli::hub_token_revoke(&device, &mut connect)
         }
         cli::HubCommands::Serve { installed } => serve(exe, mode(installed)),
     }

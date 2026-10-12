@@ -165,13 +165,17 @@ const GRAMMAR: &[(&str, &[&str], &[&str])] = &[
     ("config set", &[], &["--project", "--repo", "-h", "--help"]),
     (
         "hub",
-        &["install", "uninstall", "status", "refresh"],
+        &["install", "uninstall", "status", "refresh", "pair", "token"],
         &["-h", "--help"],
     ),
     ("hub install", &[], &["--port", "-h", "--help"]),
     ("hub uninstall", &[], &["-h", "--help"]),
     ("hub status", &[], &["--json", "-h", "--help"]),
     ("hub refresh", &[], &["-h", "--help"]),
+    ("hub pair", &[], &["--address", "-h", "--help"]),
+    ("hub token", &["list", "revoke"], &["-h", "--help"]),
+    ("hub token list", &[], &["-h", "--help"]),
+    ("hub token revoke", &[], &["-h", "--help"]),
 ];
 
 /// `fiber <path> ` with a trailing space, or `fiber ` for the top level.
