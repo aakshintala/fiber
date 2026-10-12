@@ -1,4 +1,12 @@
 //! The CLI's device commands and a revoked token's binary-level security boundary.
+#![allow(
+    clippy::unwrap_used,
+    clippy::expect_used,
+    clippy::panic,
+    clippy::indexing_slicing,
+    reason = "test helpers; a failure is the test's"
+)]
+
 mod support;
 use serde_json::{Value, json};
 use std::fs;
@@ -203,8 +211,10 @@ impl Ws {
         );
         self.stream
             .set_write_timeout(Some(setup.deadline.left()))
-            .unwrap();
-        self.stream.write_all(&frame).unwrap();
+            .expect("set the websocket write timeout to the test's remaining deadline");
+        self.stream
+            .write_all(&frame)
+            .expect("write the masked client frame");
     }
     fn next(&self, setup: &Setup) -> Frame {
         setup

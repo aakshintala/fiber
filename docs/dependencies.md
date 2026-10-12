@@ -146,8 +146,8 @@ only that crate, in KiB; the empty program is 323 KiB.
 | pulldown-cmark | the terminal's markdown in replies (`docs/tui.md`, "Look") | 428 | 384 | ~0 | 4 | 724 |
 | flate2 | decompressing the release's docs and extensions archives (`docs/releasing.md`, "Installing"), and the test fakes' release archives | 560 | 640 | 592 | 6 | 403 |
 | jiff | the terminal's local time of day under a prompt bubble and on steering (`docs/tui.md`, "Turns"), and a standing rule's `added` time in `/rules`, with daylight saving and `TZ`, which `std` lacks | 536 | 640 | 384 | 2 | 692 |
-| qrcode | the terminal QR code for `hub pair`; default features off | pending probe | pending probe | pending probe | 1 | pending probe |
-| all of the above together | | 8,896 | 8,184 | 5,201 | 155 | 8,165 |
+| qrcode | the terminal QR code for `hub pair`; default features off | 160 | 256 | 336 | 1 | 360 |
+| all of the above together | | 8,760 | 8,076 | 5,249 | 155 | 8,217 |
 | image, fast_image_resize | the image child; png, jpeg, gif and webp only (`docs/model-routing.md`, "Image limits") | 68,076 | 67,604 | 67,825 | 32 | 5,234 |
 | lopdf | the image child: counting a PDF's pages and cutting a page range (`docs/tools.md`, "read") | 908 | 704 | 336 | 66 | 1,320 |
 
@@ -156,7 +156,8 @@ Notes:
 - qrcode 0.14 has its default features off, so it adds no transitive crates.
   Fiber uses its QR encoder and `Dense1x2` terminal renderer rather than
   writing a QR encoder with Reed-Solomon correction, masks and version selection
-  (about 700 lines). Its three-platform measurements are pending the probe.
+  (about 700 lines). The qrcode and together rows were measured in
+  [probe run 38194637421](https://github.com/aakshintala/fiber/actions/runs/38194637421).
 
 - ureq's figure is one live HTTPS request to example.com, through the OS
   trust store and the custom connector that keeps the socket for
