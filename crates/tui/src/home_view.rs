@@ -443,8 +443,14 @@ pub(super) fn render(
     // one row per recent workspace with the selection barred, and what
     // the mouse does (`docs/tui.md`, "Home", "Look", "Overlays"). It
     // keeps the window it had above the box, scrolled around the
-    // selection so the selected entry always draws.
-    if let Some((items, selected)) = &screen.picker {
+    // selection so the selected entry always draws. While a path is
+    // typed its rows draw in the next task; the recents alone draw as
+    // they always did, so their snapshots stay byte-identical.
+    if let Some(picker) = &screen.picker
+        && picker.typed.is_none()
+    {
+        let items = &picker.recents;
+        let selected = picker.focus.unwrap_or(0);
         let visible = usize::from(placed.box_top.saturating_sub(area.y)).min(items.len());
         let start = selected
             .saturating_sub(visible.saturating_sub(1))
@@ -458,7 +464,7 @@ pub(super) fn render(
         let (off, take) = completions::window(selected.saturating_sub(start), len, room);
         let at = start.saturating_add(off);
         if let Some(window) = items.get(at..at.saturating_add(take)) {
-            draw_picker(window, at, *selected, area, buf, &mut targets);
+            draw_picker(window, at, selected, area, buf, &mut targets);
         }
     }
     // The completion panel above the box, in the shared frame centred

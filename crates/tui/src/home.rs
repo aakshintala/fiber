@@ -143,9 +143,9 @@ pub(crate) struct HomeScreen {
     /// The rejected `start`'s message, above the box until the next
     /// `start` goes out.
     pub(crate) blockers: Vec<String>,
-    /// The workspace picker above the box: its list, fixed at open, and
-    /// the selected index.
-    pub(crate) picker: Option<(Vec<String>, usize)>,
+    /// The workspace picker above the box: its recents fixed at open,
+    /// the focused row, and the typed path once a key opens its row.
+    pub(crate) picker: Option<PickerScreen>,
     /// The foot hint, or the quit hint while Ctrl+C is armed.
     pub(crate) foot: String,
     /// The delete question, unwrapped: it wraps over as many rows as
@@ -157,6 +157,31 @@ pub(crate) struct HomeScreen {
     pub(crate) question_scroll: usize,
     /// The input box shows its placeholder.
     pub(crate) placeholder: bool,
+}
+
+/// What the open workspace picker draws (`docs/tui.md`, "Home").
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct PickerScreen {
+    /// The recent workspaces, fixed at open.
+    pub(crate) recents: Vec<String>,
+    /// The focused row's index over the completions then the recents
+    /// while typing, over the recents alone otherwise; `None` with
+    /// nothing focused.
+    pub(crate) focus: Option<usize>,
+    /// The typed path's row, once a key opens it.
+    pub(crate) typed: Option<TypedScreen>,
+}
+
+/// The picker's typed row: its text, the current directory's matching
+/// names, and whether Enter found no directory.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct TypedScreen {
+    /// The typed text.
+    pub(crate) text: String,
+    /// The current directory's names matching the text.
+    pub(crate) completions: Vec<String>,
+    /// Enter found no directory: the list shows "no such directory".
+    pub(crate) missing: bool,
 }
 
 /// A subscription level on this connection: `summary` carries only the

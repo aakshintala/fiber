@@ -93,16 +93,6 @@ impl Typed {
         &self.focus
     }
 
-    /// The directories queued to ask, in send order.
-    pub(super) fn queued(&self) -> &[String] {
-        &self.queued
-    }
-
-    /// The asked directories waiting for their answers, in send order.
-    pub(super) fn inflight(&self) -> &[(String, String)] {
-        &self.inflight
-    }
-
     /// Appends `c`: a keystroke that changes the directory text queues
     /// it, while one inside a name queues nothing. Focus becomes the
     /// first matching completion, else nothing.
@@ -190,10 +180,7 @@ impl Typed {
 
     /// The queued directories as `(id, directory)` in send order,
     /// moving each to the in-flight set under the id `mint` returned.
-    pub(super) fn due(
-        &mut self,
-        mut mint: impl FnMut() -> String,
-    ) -> Vec<(String, String)> {
+    pub(super) fn due(&mut self, mut mint: impl FnMut() -> String) -> Vec<(String, String)> {
         let queued = std::mem::take(&mut self.queued);
         let mut out = Vec::with_capacity(queued.len());
         for dir in queued {
@@ -209,11 +196,7 @@ impl Typed {
     /// listing, held so the directory is never asked again. True when
     /// `id` was in flight.
     pub(super) fn answered(&mut self, id: &str, result: Option<&Value>) -> bool {
-        let Some(at) = self
-            .inflight
-            .iter()
-            .position(|(sent, _)| sent == id)
-        else {
+        let Some(at) = self.inflight.iter().position(|(sent, _)| sent == id) else {
             return false;
         };
         let (_, dir) = self.inflight.remove(at);
@@ -223,9 +206,7 @@ impl Typed {
         });
         let current = split(&self.text).map(|(dir, _)| dir.to_owned());
         self.cache.insert(dir.clone(), listing);
-        if current.as_deref() == Some(dir.as_str())
-            && matches!(self.focus, Focus::Nothing)
-        {
+        if current.as_deref() == Some(dir.as_str()) && matches!(self.focus, Focus::Nothing) {
             self.refocus();
         }
         true
@@ -242,15 +223,18 @@ impl Typed {
     /// flight at a disconnect is asked once more. The cache stays, and
     /// an answer under an old id matches nothing.
     pub(super) fn disconnected(&mut self) {
-        let retry: Vec<String> = self
-            .inflight
-            .iter()
-            .map(|(_, dir)| dir.clone())
-            .collect();
+        let retry: Vec<String> = self.inflight.iter().map(|(_, dir)| dir.clone()).collect();
         self.inflight.clear();
         let mut queued = std::mem::take(&mut self.queued);
         self.queued = retry;
         self.queued.append(&mut queued);
+    }
+
+    /// Drops the in-flight ids without queueing them again: with the
+    /// recents alone open a disconnect asks nothing more. The cache
+    /// stays, and an answer under an old id matches nothing.
+    pub(super) fn forget(&mut self) {
+        self.inflight.clear();
     }
 
     /// Resolves the typed text with nothing focused: a completion's
@@ -280,7 +264,8 @@ impl Typed {
             self.queued.push("~/".to_owned());
             return Resolved::Loading;
         }
-        let Some((dir, name)) = split(&self.text).map(|(dir, name)| (dir.to_owned(), name.to_owned()))
+        let Some((dir, name)) =
+            split(&self.text).map(|(dir, name)| (dir.to_owned(), name.to_owned()))
         else {
             self.missing = true;
             return Resolved::Missing;
@@ -329,15 +314,6 @@ impl Typed {
                 self.missing = true;
                 Resolved::Missing
             }
-        }
-    }
-
-    /// Whether the typed text's directory listing is still missing:
-    /// Enter stays inert while it is.
-    pub(super) fn loading(&self) -> bool {
-        match split(&self.text) {
-            Some((dir, _)) => !self.cache.contains_key(dir),
-            None => false,
         }
     }
 
@@ -428,16 +404,10 @@ pub(super) fn join(path: &str, name: &str) -> String {
 
 /// The `names` starting with `name`, case-sensitive, in hub order: a
 /// hidden directory lists only when the typed name starts with `.`.
-pub(super) fn matching<'a>(
-    names: &'a [String],
-    name: &str,
-) -> impl Iterator<Item = &'a str> {
-    names
-        .iter()
-        .map(String::as_str)
-        .filter(move |held| {
-            held.starts_with(name) && (name.starts_with('.') || !held.starts_with('.'))
-        })
+pub(super) fn matching<'a>(names: &'a [String], name: &str) -> impl Iterator<Item = &'a str> {
+    names.iter().map(String::as_str).filter(move |held| {
+        held.starts_with(name) && (name.starts_with('.') || !held.starts_with('.'))
+    })
 }
 
 /// A failed listing: answered with no names and no path.

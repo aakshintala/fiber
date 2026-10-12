@@ -305,11 +305,11 @@ fn enter_on_the_workspace_chip_opens_the_picker_and_keeps_focus() {
     drawn(&mut app);
     assert_eq!(app.on_key(Key::Down, now()), Effect::None);
     assert_eq!(app.on_key(Key::Enter, now()), Effect::None);
-    let picker = app
-        .home
-        .as_ref()
-        .and_then(|home| home.chooser.picker().cloned());
-    assert_eq!(picker, Some((vec!["/w".to_owned()], 0)));
+    let picker = app.home.as_ref().and_then(|home| home.chooser.picker());
+    assert_eq!(
+        picker.map(|picker| (picker.recents().to_vec(), picker.selected())),
+        Some((vec!["/w".to_owned()], 0))
+    );
     // The picker draws over home, so the chip stays focused.
     drawn(&mut app);
     assert_eq!(app.focused(), Some(TargetId::Home(Spot::Workspace)));

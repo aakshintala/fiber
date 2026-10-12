@@ -527,6 +527,7 @@ impl App {
         self.drop_items();
         self.sessions_dropped();
         self.images_disconnected();
+        self.picker_disconnected();
         self.find_lost();
         self.abandon_copy();
         self.settle();

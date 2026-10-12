@@ -429,7 +429,11 @@ fn the_picker_keeps_its_selection_drawn() {
         let entry = app
             .home_screen()
             .and_then(|screen| screen.picker)
-            .and_then(|(list, at)| (at == selected).then(|| list[selected].clone()))
+            .and_then(|picker| {
+                (picker.focus == Some(selected))
+                    .then(|| picker.recents.get(selected).cloned())
+                    .flatten()
+            })
             .unwrap_or_else(|| panic!("selection {selected}"));
         let drawn = screen(&app, 80, 24);
         assert!(
@@ -1217,8 +1221,8 @@ fn only_the_selected_picker_row_sits_on_the_bar() {
     app.on_click(crate::mouse::TargetId::Home(Spot::Workspace));
     assert_eq!(
         app.home_screen()
-            .and_then(|screen| screen.picker.map(|(_, selected)| selected)),
-        Some(0)
+            .and_then(|screen| screen.picker.map(|picker| picker.focus)),
+        Some(Some(0))
     );
     let row = |app: &App, entry: &str| {
         let area = Rect::new(0, 0, 80, 24);

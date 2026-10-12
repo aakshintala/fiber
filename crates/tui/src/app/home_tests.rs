@@ -1782,7 +1782,11 @@ fn chips(app: &App) -> Vec<String> {
 
 /// The workspace picker home draws: its list and the selected index.
 fn picker(app: &App) -> Option<(Vec<String>, usize)> {
-    app.home_screen().and_then(|screen| screen.picker)
+    app.home_screen().and_then(|screen| {
+        screen
+            .picker
+            .map(|picker| (picker.recents, picker.focus.unwrap_or(0)))
+    })
 }
 
 /// Three live rows: one in the launch directory, two elsewhere, one
@@ -1908,6 +1912,7 @@ fn other_keys_do_nothing_in_the_picker() {
     assert_eq!(app.home_click(Spot::Workspace), Effect::None);
     let now = fakes::clock::FakeClock::new().now();
     assert_eq!(app.on_key(Key::Char('x'), now), Effect::None);
+    assert_eq!(app.on_key(Key::PageDown, now), Effect::None);
     assert!(app.input().expand().is_empty());
     assert_eq!(picker(&app).map(|(_, selected)| selected), Some(0));
     assert_eq!(app.focused(), None);

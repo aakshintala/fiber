@@ -181,7 +181,7 @@ fn resolve_reports_missing_without_a_parent_lookup_for_a_full_name() {
     );
     assert!(answer(&mut typed, &sent[1].0, &[], "/a/"));
     assert!(matches!(typed.resolve(), Resolved::Missing));
-    assert!(typed.queued().is_empty());
+    assert!(typed.queued.is_empty());
 }
 
 #[test]
@@ -193,7 +193,7 @@ fn resolve_reports_missing_for_relative_text_with_no_request() {
         assert!(ids.run(&mut typed).is_empty());
         assert!(matches!(typed.resolve(), Resolved::Missing));
         assert!(typed.missing(), "{text} shows no such directory");
-        assert!(typed.queued().is_empty());
+        assert!(typed.queued.is_empty());
     }
 }
 
@@ -204,10 +204,10 @@ fn resolve_opens_home_once_its_listing_answers() {
     type_text(&mut typed, "~");
     assert!(ids.run(&mut typed).is_empty());
     assert!(matches!(typed.resolve(), Resolved::Loading));
-    assert_eq!(typed.queued(), &["~/".to_owned()]);
+    assert_eq!(typed.queued, &["~/".to_owned()]);
     // A second Enter before the answer queues nothing more.
     assert!(matches!(typed.resolve(), Resolved::Loading));
-    assert_eq!(typed.queued(), &["~/".to_owned()]);
+    assert_eq!(typed.queued, &["~/".to_owned()]);
     let sent = ids.run(&mut typed);
     assert_eq!(
         sent.iter().map(|(_, dir)| dir.as_str()).collect::<Vec<_>>(),
@@ -335,8 +335,8 @@ fn backspace_to_empty_clears_the_queue_and_keeps_the_rest() {
     assert!(typed.pop());
     assert_eq!(typed.text(), "/");
     assert!(!typed.pop());
-    assert!(typed.queued().is_empty());
-    assert_eq!(typed.inflight().len(), 1);
+    assert!(typed.queued.is_empty());
+    assert_eq!(typed.inflight.len(), 1);
 }
 
 #[test]
@@ -350,7 +350,7 @@ fn due_drains_in_order_with_the_minted_ids() {
     assert_eq!(sent[1].0, "c_2");
     assert_eq!(sent[2].0, "c_3");
     assert_eq!(
-        typed.inflight(),
+        typed.inflight,
         &[
             ("c_1".to_owned(), "/".to_owned()),
             ("c_2".to_owned(), "/a/".to_owned()),
@@ -425,15 +425,18 @@ fn disconnect_requeues_in_flight_directories_in_send_order() {
     let sent = ids.run(&mut typed);
     assert_eq!(sent.len(), 2);
     typed.disconnected();
-    assert!(typed.inflight().is_empty());
-    assert_eq!(typed.queued(), &["/".to_owned(), "/a/".to_owned()]);
+    assert!(typed.inflight.is_empty());
+    assert_eq!(typed.queued, &["/".to_owned(), "/a/".to_owned()]);
     // Old ids match nothing after the disconnect.
     assert!(!answer(&mut typed, &sent[0].0, &["a"], "/"));
     let resent = ids.run(&mut typed);
     assert_eq!(resent.len(), 2);
     assert_ne!(resent[0].0, sent[0].0);
     assert_eq!(
-        resent.iter().map(|(_, dir)| dir.as_str()).collect::<Vec<_>>(),
+        resent
+            .iter()
+            .map(|(_, dir)| dir.as_str())
+            .collect::<Vec<_>>(),
         vec!["/", "/a/"]
     );
 }
@@ -446,9 +449,9 @@ fn disconnect_keeps_queued_directories_behind_the_retried_ones() {
     let sent = ids.run(&mut typed);
     assert_eq!(sent.len(), 1);
     type_text(&mut typed, "a/");
-    assert_eq!(typed.queued(), &["/a/".to_owned()]);
+    assert_eq!(typed.queued, &["/a/".to_owned()]);
     typed.disconnected();
-    assert_eq!(typed.queued(), &["/".to_owned(), "/a/".to_owned()]);
+    assert_eq!(typed.queued, &["/".to_owned(), "/a/".to_owned()]);
 }
 
 #[test]
@@ -461,9 +464,30 @@ fn disconnect_keeps_the_cache() {
     typed.disconnected();
     let resent = ids.run(&mut typed);
     assert_eq!(
-        resent.iter().map(|(_, dir)| dir.as_str()).collect::<Vec<_>>(),
+        resent
+            .iter()
+            .map(|(_, dir)| dir.as_str())
+            .collect::<Vec<_>>(),
         vec!["/a/"]
     );
+}
+
+#[test]
+fn forget_drops_in_flight_ids_and_keeps_the_cache() {
+    let mut typed = Typed::new();
+    let mut ids = mint();
+    type_text(&mut typed, "/a/");
+    let sent = ids.run(&mut typed);
+    assert!(answer(&mut typed, &sent[0].0, &["a"], "/"));
+    typed.forget();
+    assert!(typed.inflight.is_empty());
+    assert!(typed.queued.is_empty());
+    assert!(!answer(&mut typed, &sent[1].0, &["x"], "/a/"));
+    // The cache stays: back at `/`, its held listing asks nothing more.
+    assert!(typed.pop());
+    assert!(typed.pop());
+    assert_eq!(typed.text(), "/");
+    assert!(ids.run(&mut typed).is_empty());
 }
 
 #[test]
@@ -578,7 +602,10 @@ fn tab_completes_the_focused_completion_with_a_trailing_slash() {
     assert_eq!(typed.text(), "/a1/");
     let asked = ids.run(&mut typed);
     assert_eq!(
-        asked.iter().map(|(_, dir)| dir.as_str()).collect::<Vec<_>>(),
+        asked
+            .iter()
+            .map(|(_, dir)| dir.as_str())
+            .collect::<Vec<_>>(),
         vec!["/a1/"]
     );
     assert_eq!(typed.focus(), &Focus::Nothing);
