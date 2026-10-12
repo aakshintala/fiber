@@ -132,6 +132,24 @@ pub(crate) fn specs(config: &Config) -> Result<Specs, Failure> {
                 });
                 continue;
             }
+            Entry::Userinfo { name, required } => {
+                if required {
+                    return Err(Failure {
+                        code: ErrorCode::ConfigInvalid,
+                        message: format!(
+                            "The required MCP server `{name}` has a user name or password in its `url`, so Fiber cannot start it. Take them out of the URL."
+                        ),
+                        retry_after_ms: None,
+                        provider: None,
+                    });
+                }
+                notices.push(Notice {
+                    code: ErrorCode::ConfigInvalid,
+                    message: format!("The MCP server `{name}` has a user name or password in its `url`, so Fiber does not start it. Take them out of the URL."),
+                    extension: None,
+                });
+                continue;
+            }
             Entry::Spec(spec) => spec,
         };
         let declared_entry = declared
@@ -172,6 +190,8 @@ enum Entry {
     Spec(mcp::ServerSpec),
     /// Both `command` and `url`, with whether the entry is `required`.
     Both { name: String, required: bool },
+    /// A URL with userinfo must never reach ureq's Basic authentication.
+    Userinfo { name: String, required: bool },
     /// Neither: nothing to start.
     Neither,
 }
@@ -355,6 +375,12 @@ fn spec(config: &Config, name: &str) -> Entry {
     let required = server_field(config, name, "required")
         .and_then(|(value, _)| value.as_bool())
         .unwrap_or(false);
+    if url.as_deref().is_some_and(mcp::url_has_userinfo) {
+        return Entry::Userinfo {
+            name: name.to_owned(),
+            required,
+        };
+    }
     let transport = match (command, url) {
         (Some(_), Some(_)) => {
             return Entry::Both {
