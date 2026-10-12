@@ -32,7 +32,7 @@ pub(crate) fn run(conn: &mut crate::client::Conn, id: CommandId, args: &RunComma
         );
         return;
     };
-    let release = match door.command(&args.name, &text) {
+    let release = match door.command(&id, &args.name, &text) {
         Ok(release) => release,
         Err(rejection) => {
             reject(conn, Some(id), rejection.code, &rejection.message);

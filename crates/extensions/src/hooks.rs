@@ -544,6 +544,13 @@ impl Hooks for SessionExtensions {
             let Some(extension) = self.lua.get(entry.extension) else {
                 continue;
             };
+            if let Some(failure) = before::own_command_failure(extension, AFTER_TOOL) {
+                return AfterToolAnswer {
+                    outcome: AfterToolOutcome::Failed(failure),
+                    notices,
+                    changed_by,
+                };
+            }
             let name = extension.name();
             let arg = shown(
                 call,

@@ -88,11 +88,15 @@ impl Home {
     }
 
     fn load_clock(&self, clock: Arc<FakeClock>) -> Arc<SessionExtensions> {
+        self.load_settings(clock, &[])
+    }
+
+    fn load_settings(&self, clock: Arc<FakeClock>, overrides: &[&str]) -> Arc<SessionExtensions> {
         let config = Config::load(Sources {
             home: self.home(),
             workspace: self.root.path().join("workspace"),
             project: ProjectKey::new("p").unwrap(),
-            overrides: Vec::new(),
+            overrides: overrides.iter().map(|s| (*s).to_owned()).collect(),
         })
         .unwrap();
         let home = self.home();
@@ -276,7 +280,7 @@ fn an_admitted_command_holds_its_runner_through_success_and_lua_error() {
         session.lua[0].deliver_to(send);
         let admitted = session
             .commands
-            .admit_with("go", "", Some(&contract::CommandId("c_admitted".into())))
+            .admit_with(&contract::CommandId("c_admitted".into()), "go", "")
             .unwrap();
         assert_eq!(session.lua[0].runners_held(), 1);
         let queued = admitted.queued().clone();
@@ -310,7 +314,7 @@ fn an_admitted_command_holds_its_runner_through_success_and_lua_error() {
 
 #[test]
 fn a_command_deadline_ends_its_runner_at_and_above_but_not_below_the_boundary() {
-    for milliseconds in [1099, 1100, 1101] {
+    for milliseconds in [99, 100, 101] {
         let home = Home::new();
         home.install("a", "fiber.command('go', { timeout = 100, run = function() return host.tool('read', {}).status end })");
         let clock = FakeClock::new();
@@ -319,7 +323,7 @@ fn a_command_deadline_ends_its_runner_at_and_above_but_not_below_the_boundary() 
         session.lua[0].deliver_to(send);
         let admitted = session
             .commands
-            .admit_with("go", "", Some(&contract::CommandId("c_timeout".into())))
+            .admit_with(&contract::CommandId("c_timeout".into()), "go", "")
             .unwrap();
         let queued = admitted.queued().clone();
         queued.release();
@@ -335,8 +339,11 @@ fn a_command_deadline_ends_its_runner_at_and_above_but_not_below_the_boundary() 
         (request.taken)();
         let until = clock.origin() + Duration::from_millis(1100);
         assert!(clock.await_thread_parked(caller.thread().id(), Some(until), WAIT));
+        // The VM ends a parked callback at its own deadline; the caller's
+        // grace is a backstop, not extra command time.
+        assert!(clock.await_parked(clock.origin() + Duration::from_millis(100), WAIT));
         clock.advance(Duration::from_millis(milliseconds));
-        if milliseconds < 1100 {
+        if milliseconds < 100 {
             assert!(!request.cancel.is_cancelled());
             assert_eq!(session.lua[0].runners_held(), 1);
             assert!(result.try_recv().is_err());
@@ -351,6 +358,420 @@ fn a_command_deadline_ends_its_runner_at_and_above_but_not_below_the_boundary() 
         assert!(request.cancel.is_cancelled());
         (request.answer)(tool_answer());
         assert_eq!(session.lua[0].runners_held(), 0);
+    }
+}
+
+fn before_call(session: &SessionExtensions) -> contract::hook::BeforeToolAnswer {
+    use contract::hook::Hooks;
+    session.before_tool(&contract::hook::BeforeToolCall {
+        tool: "read",
+        arguments: &serde_json::Map::new(),
+        declared: &contract::shapes::DeclaredEffects {
+            effects: vec![contract::shapes::Effect::Reads],
+            reversible: true,
+            paths: None,
+        },
+    })
+}
+
+#[test]
+fn an_untaken_request_keeps_stream_order_under_both_timeout_orders() {
+    use contract::hook::BeforeToolOutcome;
+    for command_first in [false, true] {
+        let home = Home::new();
+        let marker = home.root.path().join("workspace/hook-ran");
+        let (command_ms, hook_ms) = if command_first {
+            (1000, 5000)
+        } else {
+            (5000, 1000)
+        };
+        home.install("x", &format!("fiber.command('go', {{timeout={command_ms}, run=function() return host.tool('read', {{}}).status end}})\nfiber.hook('before_tool', {{timeout={hook_ms}, on_failure='blocking', run=function() host.fs.write({marker:?}, 'x') end}})"));
+        let clock = FakeClock::new();
+        let session = home.load_clock(clock.clone());
+        let (send, rx) = mpsc::channel();
+        session.lua[0].deliver_to(send);
+        let admitted = session
+            .commands
+            .admit_with(&contract::CommandId("c_wait".into()), "go", "")
+            .unwrap();
+        let queued = admitted.queued().clone();
+        queued.release();
+        let (send, command_result) = mpsc::channel();
+        let command_thread = thread::spawn(move || {
+            let _sent = send.send(queued.wait());
+        });
+        let Delivery::InnerCall(request) =
+            Deadline::after(WAIT).recv_or_fail(&rx, "untaken command request")
+        else {
+            panic!("expected inner call");
+        };
+        assert!(!session.lua[0].runs_own_command_call());
+        let caller = session.clone();
+        let (send, hook_result) = mpsc::channel();
+        let hook_thread = thread::spawn(move || {
+            let _sent = send.send(before_call(&caller));
+        });
+        assert!(clock.await_thread_parked(
+            command_thread.thread().id(),
+            Some(clock.origin() + Duration::from_millis(command_ms + 1000)),
+            WAIT
+        ));
+        assert!(clock.await_thread_parked(
+            hook_thread.thread().id(),
+            Some(clock.origin() + Duration::from_millis(hook_ms)),
+            WAIT
+        ));
+        assert!(!marker.exists());
+        clock.advance(Duration::from_millis(if command_first {
+            2000
+        } else {
+            1000
+        }));
+        if command_first {
+            assert!(matches!(
+                Deadline::after(WAIT).recv_or_fail(&command_result, "command timeout before hook"),
+                Err(crate::Error::Timeout { .. })
+            ));
+            assert!(request.cancel.is_cancelled());
+            let answer =
+                Deadline::after(WAIT).recv_or_fail(&hook_result, "hook after command timeout");
+            assert!(matches!(answer.outcome, BeforeToolOutcome::Unchanged));
+            assert!(answer.notices.is_empty());
+            assert_eq!(fs::read_to_string(&marker).unwrap(), "x");
+            (request.taken)();
+            assert!(!session.lua[0].runs_own_command_call());
+        } else {
+            let answer =
+                Deadline::after(WAIT).recv_or_fail(&hook_result, "hook timeout before command");
+            let BeforeToolOutcome::Failed(failure) = answer.outcome else {
+                panic!("expected hook timeout");
+            };
+            assert_eq!(failure.extension, "fiber.test/x");
+            assert!(failure.message.contains("1000"));
+            assert!(!failure.message.contains("wait behind"));
+            assert!(!marker.exists());
+            assert!(!request.cancel.is_cancelled());
+            assert!(command_result.try_recv().is_err());
+            (request.answer)(tool_answer());
+            assert_eq!(
+                Deadline::after(WAIT)
+                    .recv_or_fail(&command_result, "command after hook timeout")
+                    .unwrap(),
+                json!("completed")
+            );
+        }
+        assert_eq!(session.lua[0].runners_held(), 0);
+    }
+}
+
+#[test]
+fn the_commands_own_tool_runs_in_a_gap_without_tool_hooks() {
+    let home = Home::new();
+    home.install("x", "fiber.command('go', {timeout=5000, run=function() return host.tool('local_probe', {}).content[1].text end})\nfiber.tool('local_probe', {description='d', input_schema={type='object'}, effects={effects={'reads'}, reversible=true}, timeout=5000, run=function() return 'gap' end})");
+    let session = home.load();
+    let (send, rx) = mpsc::channel();
+    session.lua[0].deliver_to(send);
+    let admitted = session
+        .commands
+        .admit_with(&contract::CommandId("c_gap".into()), "go", "")
+        .unwrap();
+    let queued = admitted.queued().clone();
+    queued.release();
+    let (send, result) = mpsc::channel();
+    thread::spawn(move || {
+        let _sent = send.send(queued.wait());
+    });
+    let Delivery::InnerCall(request) =
+        Deadline::after(WAIT).recv_or_fail(&rx, "own tool command request")
+    else {
+        panic!("expected inner call");
+    };
+    assert_eq!(request.name, "local_probe");
+    (request.taken)();
+    let lua = session.lua[0].clone();
+    assert_eq!(
+        bounded(move || lua.tool_run("local_probe", json!({}), &fakes::CancelToken::new()))
+            .unwrap(),
+        Some(json!("gap"))
+    );
+    let mut answer = tool_answer();
+    answer.content = vec![contract::shapes::ContentPart::Text { text: "gap".into() }];
+    (request.answer)(answer);
+    assert_eq!(
+        Deadline::after(WAIT)
+            .recv_or_fail(&result, "own tool command completion")
+            .unwrap(),
+        json!("gap")
+    );
+}
+
+#[test]
+fn own_tool_hooks_fail_when_reached_and_run_normally_after_the_answer() {
+    use contract::hook::{AfterToolCall, AfterToolOutcome, BeforeToolOutcome, CheckOutcome, Hooks};
+    for (point, phase, policy) in [
+        ("before_tool", "transform", "blocking"),
+        ("before_tool", "transform", "non-blocking"),
+        ("before_tool", "sanitize", "blocking"),
+        ("before_tool", "check", "blocking"),
+        ("after_tool", "sanitize", "blocking"),
+    ] {
+        let home = Home::new();
+        let marker = home.root.path().join("workspace/own-hook");
+        home.install("x", &format!("fiber.command('go', {{timeout=5000, run=function() return host.tool('read', {{}}).status end}})\nfiber.hook('{point}', {{phase='{phase}', timeout=1000, on_failure='{policy}', run=function() host.fs.write({marker:?}, 'x') end}})"));
+        let session = home.load();
+        let (send, rx) = mpsc::channel();
+        session.lua[0].deliver_to(send);
+        let admitted = session
+            .commands
+            .admit_with(&contract::CommandId("c_own".into()), "go", "")
+            .unwrap();
+        let queued = admitted.queued().clone();
+        queued.release();
+        let (send, result) = mpsc::channel();
+        thread::spawn(move || {
+            let _sent = send.send(queued.wait());
+        });
+        let Delivery::InnerCall(request) =
+            Deadline::after(WAIT).recv_or_fail(&rx, "own-hook request")
+        else {
+            panic!("expected inner call");
+        };
+        assert!(!session.lua[0].runs_own_command_call());
+        (request.taken)();
+        assert!(session.lua[0].runs_own_command_call());
+        let caller = session.clone();
+        let failure = bounded(move || {
+            if point == "after_tool" {
+                let answer = caller.after_tool(&AfterToolCall {
+                    tool: "read",
+                    arguments: &serde_json::Map::new(),
+                    status: contract::events::CallStatus::Completed,
+                    content: "raw",
+                    details: None,
+                    process: None,
+                    spilled: None,
+                });
+                assert!(answer.notices.is_empty());
+                let AfterToolOutcome::Failed(failure) = answer.outcome else {
+                    panic!("own after hook must fail");
+                };
+                failure
+            } else if phase == "check" {
+                let answer = caller.check_tool(&contract::hook::BeforeToolCall {
+                    tool: "read",
+                    arguments: &serde_json::Map::new(),
+                    declared: &contract::shapes::DeclaredEffects {
+                        effects: vec![contract::shapes::Effect::Reads],
+                        reversible: true,
+                        paths: None,
+                    },
+                });
+                assert!(answer.notices.is_empty());
+                let CheckOutcome::Failed(failure) = answer.outcome else {
+                    panic!("own check hook must fail");
+                };
+                failure
+            } else {
+                let answer = before_call(&caller);
+                assert!(answer.notices.is_empty());
+                let BeforeToolOutcome::Failed(failure) = answer.outcome else {
+                    panic!("own before hook must fail even when non-blocking");
+                };
+                failure
+            }
+        });
+        assert_eq!(failure.extension, "fiber.test/x");
+        assert!(failure.message.contains("wait behind"));
+        assert!(!marker.exists());
+        (request.answer)(tool_answer());
+        assert!(!session.lua[0].runs_own_command_call());
+        Deadline::after(WAIT)
+            .recv_or_fail(&result, "command before normal hook")
+            .unwrap();
+        let caller = session.clone();
+        bounded(move || {
+            if point == "after_tool" {
+                assert!(matches!(
+                    caller
+                        .after_tool(&AfterToolCall {
+                            tool: "read",
+                            arguments: &serde_json::Map::new(),
+                            status: contract::events::CallStatus::Completed,
+                            content: "raw",
+                            details: None,
+                            process: None,
+                            spilled: None
+                        })
+                        .outcome,
+                    AfterToolOutcome::Unchanged
+                ));
+            } else if phase == "check" {
+                assert!(matches!(
+                    caller
+                        .check_tool(&contract::hook::BeforeToolCall {
+                            tool: "read",
+                            arguments: &serde_json::Map::new(),
+                            declared: &contract::shapes::DeclaredEffects {
+                                effects: vec![contract::shapes::Effect::Reads],
+                                reversible: true,
+                                paths: None
+                            }
+                        })
+                        .outcome,
+                    CheckOutcome::Passed
+                ));
+            } else {
+                assert!(matches!(
+                    before_call(&caller).outcome,
+                    BeforeToolOutcome::Unchanged
+                ));
+            }
+        });
+        assert_eq!(fs::read_to_string(marker).unwrap(), "x");
+    }
+}
+
+#[test]
+fn earlier_hooks_run_and_a_refusal_before_the_own_hook_wins() {
+    use contract::hook::BeforeToolOutcome;
+    for refusing in [false, true] {
+        let home = Home::new();
+        let own = home.root.path().join("workspace/x");
+        let earlier = home.root.path().join("workspace/y");
+        home.install("x", &format!("fiber.command('go', {{timeout=5000,run=function() return host.tool('read',{{}}).status end}})\nfiber.hook('before_tool', {{timeout=1000,on_failure='blocking',run=function() host.fs.write({own:?},'x') end}})"));
+        home.install("y", &format!("fiber.hook('before_tool', {{timeout=1000,on_failure='blocking',run=function() host.fs.write({earlier:?},'y') {} end}})", if refusing {"return {refuse='earlier deny'}"} else {""}));
+        let session = home.load_settings(
+            FakeClock::new(),
+            &["hooks.order.before_tool=[\"fiber.test/y\",\"fiber.test/x\"]"],
+        );
+        let (send, rx) = mpsc::channel();
+        session.lua[0].deliver_to(send);
+        let admitted = session
+            .commands
+            .admit_with(&contract::CommandId("c_order".into()), "go", "")
+            .unwrap();
+        let queued = admitted.queued().clone();
+        queued.release();
+        let (send, result) = mpsc::channel();
+        thread::spawn(move || {
+            let _sent = send.send(queued.wait());
+        });
+        let Delivery::InnerCall(request) =
+            Deadline::after(WAIT).recv_or_fail(&rx, "ordered-hook request")
+        else {
+            panic!("expected inner call");
+        };
+        (request.taken)();
+        let caller = session.clone();
+        let answer = bounded(move || before_call(&caller));
+        assert!(answer.notices.is_empty());
+        if refusing {
+            let BeforeToolOutcome::Refused(refusal) = answer.outcome else {
+                panic!("earlier refusal must win");
+            };
+            assert_eq!(refusal.extension, "fiber.test/y");
+            assert_eq!(refusal.reason, "earlier deny");
+        } else {
+            let BeforeToolOutcome::Failed(failure) = answer.outcome else {
+                panic!("own hook must fail after earlier hook");
+            };
+            assert_eq!(failure.extension, "fiber.test/x");
+        }
+        assert_eq!(fs::read_to_string(earlier).unwrap(), "y");
+        assert!(!own.exists());
+        (request.answer)(tool_answer());
+        Deadline::after(WAIT)
+            .recv_or_fail(&result, "ordered command end")
+            .unwrap();
+    }
+}
+
+struct Events(mpsc::Sender<contract::events::Event>);
+impl contract::emit::Emit for Events {
+    fn emit(&self, event: &contract::events::Event) {
+        let _sent = self.0.send(event.clone());
+    }
+}
+
+#[test]
+fn the_door_returns_a_tool_failure_normally_and_ends_a_running_call_at_timeout() {
+    struct EndNotice(mpsc::Sender<()>);
+    impl contract::clock::Wake for EndNotice {
+        fn wake(&self) {
+            let _sent = self.0.send(());
+        }
+    }
+    for ending in ["completed", "failed", "timeout"] {
+        let home = Home::new();
+        home.install("x", "fiber.command('go', {timeout=1000,run=function() local o=host.tool('spin', {}) host.status(o.status .. ':' .. (o.error and o.error.code or o.content[1].text)) end})");
+        let clock = FakeClock::new();
+        let session = home.load_clock(clock.clone());
+        let (send, rx) = mpsc::channel();
+        session.lua[0].deliver_to(send);
+        let (send, events) = mpsc::channel();
+        session.emit_to(Arc::new(Events(send)));
+        session
+            .command(&contract::CommandId("c_door".into()), "go", "")
+            .unwrap()();
+        let Delivery::InnerCall(request) =
+            Deadline::after(WAIT).recv_or_fail(&rx, "door command request")
+        else {
+            panic!("expected inner call");
+        };
+        assert_eq!(request.command.0, "c_door");
+        assert_eq!(session.lua[0].runners_held(), 1);
+        let (send, ended) = mpsc::channel();
+        let wake: Arc<dyn contract::clock::Wake> = Arc::new(EndNotice(send));
+        request.cancel.subscribe(Arc::downgrade(&wake));
+        (request.taken)();
+        assert!(session.lua[0].runs_own_command_call());
+        assert!(clock.await_parked(clock.origin() + Duration::from_secs(2), WAIT));
+        if ending == "timeout" {
+            clock.advance(Duration::from_millis(2001));
+            let notice = Deadline::after(WAIT).recv_or_fail(&events, "command timeout notice");
+            let contract::events::Event::Notice(notice) = notice else {
+                panic!("expected timeout notice");
+            };
+            assert_eq!(notice.code, contract::ErrorCode::ExtensionFailed);
+            assert!(notice.message.contains("go"));
+            assert!(notice.message.contains("1000"));
+            assert!(!session.lua[0].runs_own_command_call());
+            assert!(request.cancel.is_cancelled());
+            (request.answer)(tool_answer());
+        } else {
+            let mut answer = tool_answer();
+            if ending == "failed" {
+                answer.status = contract::events::CallStatus::Failed;
+                answer.error = Some(contract::shapes::Failure {
+                    code: contract::ErrorCode::HookFailed,
+                    message: "own hook".into(),
+                    provider: None,
+                    retry_after_ms: None,
+                });
+            }
+            (request.answer)(answer);
+            assert!(!session.lua[0].runs_own_command_call());
+            let status =
+                Deadline::after(WAIT).recv_or_fail(&events, "ordinary tool outcome status");
+            let contract::events::Event::ExtensionUi(ui) = status else {
+                panic!("expected ordinary outcome status");
+            };
+            let contract::events::Ui::Status { status } = ui.ui else {
+                panic!("expected status UI");
+            };
+            assert_eq!(
+                status,
+                if ending == "failed" {
+                    "failed:hook_failed"
+                } else {
+                    "completed:answer"
+                }
+            );
+        }
+        Deadline::after(WAIT).recv_or_fail(&ended, "command cleanup wake");
+        assert_eq!(session.lua[0].runners_held(), 0);
+        assert!(request.cancel.is_cancelled());
+        assert!(events.try_recv().is_err());
     }
 }
 

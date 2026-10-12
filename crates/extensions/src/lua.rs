@@ -438,9 +438,9 @@ impl LuaExtension {
     /// run's end. Starts the extension.
     pub(crate) fn queue_command(
         &self,
+        command: contract::CommandId,
         name: &str,
         text: &str,
-        command: Option<&contract::CommandId>,
     ) -> Result<Queued, Error> {
         let asked = self.hub.clock().now();
         let mut shared = self.hub.lock();
@@ -478,19 +478,17 @@ impl LuaExtension {
         let target = Target::Command(name.to_owned());
         let id = shared.push_held(target.clone(), Value::String(text.into()), asked);
         let ended = Arc::new(command_calls::Ended::default());
-        if let Some(command) = command {
-            shared.runners.insert(
-                id,
-                Arc::new(command_calls::CommandCalls {
-                    hub: Arc::downgrade(&self.hub),
-                    command: command.clone(),
-                    call: id,
-                    ended: ended.clone(),
-                    #[cfg(test)]
-                    pause: std::sync::Mutex::default(),
-                }),
-            );
-        }
+        shared.runners.insert(
+            id,
+            Arc::new(command_calls::CommandCalls {
+                hub: Arc::downgrade(&self.hub),
+                command,
+                call: id,
+                ended: ended.clone(),
+                #[cfg(test)]
+                pause: std::sync::Mutex::default(),
+            }),
+        );
         drop(shared);
         self.hub.notify();
         Ok(Queued {
@@ -501,6 +499,11 @@ impl LuaExtension {
             asked,
             ended,
         })
+    }
+
+    /// Whether the loop is serving this extension's command's inner-call chain.
+    pub(crate) fn runs_own_command_call(&self) -> bool {
+        self.hub.lock().serving.is_some()
     }
 
     /// Hands the ephemeral emitter to `host.status`, `host.widget` and `host.emit`.

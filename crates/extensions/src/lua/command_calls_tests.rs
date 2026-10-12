@@ -126,6 +126,47 @@ fn unanswered_drop_end_and_seal_release_the_runner_as_cancelled() {
 }
 
 #[test]
+fn a_buffered_request_releases_at_command_end_even_when_sealed() {
+    let hub = Hub::new(fakes::clock::FakeClock::new());
+    let (send, selected) = mpsc::channel();
+    hub.pause_at_windows(Arc::new(move |_, window| {
+        if window == super::super::hub::Window::Selected {
+            let _sent = send.send(());
+        }
+    }));
+    let runner = runner(&hub, 1);
+    let result = start(&runner);
+    Deadline::after(WAIT).recv_or_fail(&selected, "buffered command request");
+    assert_eq!(hub.lock().router.buffer().len(), 1);
+    hub.seal();
+    assert!(result.try_recv().is_err());
+    runner.ended.end();
+    assert_eq!(
+        Deadline::after(WAIT)
+            .recv_or_fail(&result, "sealed buffered command end")
+            .status,
+        CallStatus::Cancelled
+    );
+    let (send, rx) = mpsc::channel();
+    hub.set_inbox(send);
+    assert!(hub.lock().router.buffer().is_empty());
+    assert!(rx.try_recv().is_err());
+}
+
+#[test]
+fn a_runner_whose_hub_is_gone_returns_cancelled() {
+    let hub = Hub::new(fakes::clock::FakeClock::new());
+    let runner = runner(&hub, 1);
+    drop(hub);
+    assert_eq!(
+        Deadline::after(WAIT)
+            .recv_or_fail(&start(&runner), "disposed command hub")
+            .status,
+        CallStatus::Cancelled
+    );
+}
+
+#[test]
 fn an_already_ended_runner_sends_nothing() {
     let hub = Hub::new(fakes::clock::FakeClock::new());
     let (send, rx) = mpsc::channel();
@@ -226,6 +267,9 @@ fn queued_return_and_drop_clear_the_runner_and_window_before_waking_it() {
         let (send, rx) = mpsc::channel();
         hub.set_inbox(send);
         let runner = runner(&hub, 1);
+        let (entered, paused) = mpsc::channel();
+        let (release, held) = mpsc::channel();
+        *runner.pause.lock().unwrap() = Some((entered, held));
         let result = start(&runner);
         let request = received_request(&rx);
         (request.taken)();
@@ -252,6 +296,8 @@ fn queued_return_and_drop_clear_the_runner_and_window_before_waking_it() {
         assert_eq!(hub.lock().serving, None);
         assert_eq!(hub.lock().runners.len(), 0);
         assert!(runner.ended.is_cancelled());
+        Deadline::after(WAIT).recv_or_fail(&paused, "queued runner before backstop");
+        release.send(()).unwrap();
         assert_eq!(
             Deadline::after(WAIT)
                 .recv_or_fail(&result, "queued cleanup wake")

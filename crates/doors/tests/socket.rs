@@ -3051,6 +3051,7 @@ impl FakeDoor {
 impl contract::extension::ExtensionDoor for FakeDoor {
     fn command(
         &self,
+        _id: &contract::CommandId,
         name: &str,
         text: &str,
     ) -> Result<Box<dyn FnOnce() + Send>, contract::inbox::Rejection> {
@@ -3079,6 +3080,7 @@ struct HeldDoor {
 impl contract::extension::ExtensionDoor for HeldDoor {
     fn command(
         &self,
+        _id: &contract::CommandId,
         name: &str,
         _text: &str,
     ) -> Result<Box<dyn FnOnce() + Send>, contract::inbox::Rejection> {
@@ -3239,6 +3241,7 @@ fn quiesce_seals_the_door() {
     impl contract::extension::ExtensionDoor for Sealed {
         fn command(
             &self,
+            _id: &contract::CommandId,
             _name: &str,
             _text: &str,
         ) -> Result<Box<dyn FnOnce() + Send>, contract::inbox::Rejection> {

@@ -10,6 +10,7 @@ pub trait ExtensionDoor: Send + Sync {
     /// door does after `command_accepted` is on the connection's queue.
     fn command(
         &self,
+        id: &crate::CommandId,
         name: &str,
         text: &str,
     ) -> Result<Box<dyn FnOnce() + Send>, crate::inbox::Rejection>;

@@ -262,9 +262,9 @@ impl SessionCommands {
     /// Admits `name` with `text`. The queued call's text is `text`.
     pub(crate) fn admit_with(
         &self,
+        id: &contract::CommandId,
         name: &str,
         text: &str,
-        command: Option<&contract::CommandId>,
     ) -> Result<AdmittedCall, Rejection> {
         let cmd = self.admitted.get(name).ok_or_else(|| Rejection {
             code: ErrorCode::UnknownCommand,
@@ -272,7 +272,7 @@ impl SessionCommands {
         })?;
         let queued = cmd
             .lua
-            .queue_command(&cmd.registered, text, command)
+            .queue_command(id.clone(), &cmd.registered, text)
             .map_err(|_| Rejection {
                 code: ErrorCode::UnknownCommand,
                 message: format!("`{name}` names no extension command."),
