@@ -1340,3 +1340,192 @@ fn an_over_mebibyte_shell_call_hands_the_hook_its_path_and_size() {
         }
     }
 }
+
+#[test]
+fn a_turn_start_hook_adds_context_the_first_request_carries() {
+    let setup = Setup::new();
+    setup.lua(
+        "inbox",
+        "fiber.hook(\"turn_start\", { timeout = 30000, on_failure = \"blocking\",\n\
+           run = function(call) return { context = \"inbox: 2\" } end })\n",
+    );
+    let server = ProviderServer::start([hello()]).unwrap();
+    setup.provider_with_extra(&server, &json!({}));
+    let run = setup.run(&["ask", "hello"]);
+    assert_eq!(run.code, Some(0), "stderr: {}", run.stderr);
+    assert_eq!(run.kinds(), ask_text_kinds(&["context_added"]));
+
+    let added = run.first("context_added");
+    assert_eq!(added["payload"]["text"], "inbox: 2");
+    assert_eq!(added["payload"]["extension"], "fiber.test/inbox");
+    assert_eq!(added["payload"]["hook"], "turn_start");
+
+    // The first request carries the context as its own user message after
+    // the prompt.
+    let requests = server.requests();
+    assert_eq!(requests.len(), 1);
+    let body = String::from_utf8_lossy(&requests[0].body);
+    assert!(body.contains("inbox: 2"), "{body}");
+    assert!(body.contains("hello"), "{body}");
+    assert!(
+        body.find("hello").unwrap() < body.find("inbox: 2").unwrap(),
+        "{body}"
+    );
+}
+
+#[test]
+fn a_before_model_call_refusal_fails_the_turn_budget_exceeded_naming_the_extension() {
+    let setup = Setup::new();
+    setup.lua(
+        "guard",
+        "fiber.hook(\"before_model_call\", { timeout = 30000, on_failure = \"blocking\",\n\
+           run = function(call) return { refuse = \"team budget spent\" } end })\n",
+    );
+    // An empty script: a request that wrongly reaches the model fails fast
+    // with an assertion, not a hang.
+    let server = ProviderServer::start([]).unwrap();
+    setup.provider_with_extra(&server, &json!({}));
+    let run = setup.run(&["ask", "hello"]);
+    assert_eq!(run.code, Some(1), "stderr: {}", run.stderr);
+    assert_eq!(
+        run.kinds(),
+        [
+            "session_started",
+            "fiber_started",
+            "extensions_loaded",
+            "preamble_built",
+            "opening_message",
+            "turn_started",
+            "step_started",
+            "turn_completed",
+            "fiber_exited",
+        ]
+    );
+    let end = run.first("turn_completed");
+    assert_eq!(end["payload"]["outcome"], "failed");
+    assert_eq!(end["payload"]["error"]["code"], "budget_exceeded");
+    assert_eq!(
+        end["payload"]["error"]["message"],
+        "Extension fiber.test/guard refused the model request: team budget spent"
+    );
+    assert!(server.requests().is_empty(), "the model got no request");
+}
+
+#[test]
+fn a_turn_end_hook_continues_the_turn_once() {
+    let setup = Setup::new();
+    setup.lua(
+        "goal",
+        "local sent = false\n\
+         fiber.hook(\"turn_end\", { timeout = 30000, on_failure = \"blocking\",\n\
+           run = function(call)\n\
+             if sent then return end\n\
+             sent = true\n\
+             return { message = \"keep going\" }\n\
+           end })\n",
+    );
+    let server = ProviderServer::start([hello(), hello()]).unwrap();
+    setup.provider_with_extra(&server, &json!({}));
+    let run = setup.run(&["ask", "hello"]);
+    assert_eq!(run.code, Some(0), "stderr: {}", run.stderr);
+
+    let requests = server.requests();
+    assert_eq!(requests.len(), 2);
+    let second = String::from_utf8_lossy(&requests[1].body);
+    assert!(second.contains("keep going"), "{second}");
+
+    let steering = run.all("steering_applied");
+    assert_eq!(steering.len(), 1);
+    assert_eq!(
+        steering[0]["payload"]["content"],
+        json!([{"type": "text", "text": "keep going"}])
+    );
+    assert_eq!(steering[0]["payload"]["source"], "extension");
+    assert_eq!(steering[0]["payload"]["extension"], "fiber.test/goal");
+    assert!(steering[0]["payload"].get("command_id").is_none());
+
+    let end = run.first("turn_completed");
+    assert_eq!(end["payload"]["outcome"], "completed");
+}
+
+#[test]
+fn a_blocking_turn_start_failure_fails_the_turn_hook_failed() {
+    let setup = Setup::new();
+    setup.lua(
+        "guard",
+        "fiber.hook(\"turn_start\", { timeout = 30000, on_failure = \"blocking\",\n\
+           run = function(call) error(\"boom\") end })\n",
+    );
+    let server = ProviderServer::start([]).unwrap();
+    setup.provider_with_extra(&server, &json!({}));
+    let run = setup.run(&["ask", "hello"]);
+    assert_eq!(run.code, Some(1), "stderr: {}", run.stderr);
+    assert_eq!(
+        run.kinds(),
+        [
+            "session_started",
+            "fiber_started",
+            "extensions_loaded",
+            "preamble_built",
+            "opening_message",
+            "turn_started",
+            "turn_completed",
+            "fiber_exited",
+        ]
+    );
+    let end = run.first("turn_completed");
+    assert_eq!(end["payload"]["outcome"], "failed");
+    assert_eq!(end["payload"]["error"]["code"], "hook_failed");
+    assert!(server.requests().is_empty(), "the model got no request");
+}
+
+#[test]
+fn a_blocking_before_model_call_failure_fails_the_turn_hook_failed() {
+    let setup = Setup::new();
+    setup.lua(
+        "guard",
+        "fiber.hook(\"before_model_call\", { timeout = 30000, on_failure = \"blocking\",\n\
+           run = function(call) error(\"boom\") end })\n",
+    );
+    let server = ProviderServer::start([]).unwrap();
+    setup.provider_with_extra(&server, &json!({}));
+    let run = setup.run(&["ask", "hello"]);
+    assert_eq!(run.code, Some(1), "stderr: {}", run.stderr);
+    assert_eq!(
+        run.kinds(),
+        [
+            "session_started",
+            "fiber_started",
+            "extensions_loaded",
+            "preamble_built",
+            "opening_message",
+            "turn_started",
+            "step_started",
+            "turn_completed",
+            "fiber_exited",
+        ]
+    );
+    let end = run.first("turn_completed");
+    assert_eq!(end["payload"]["outcome"], "failed");
+    assert_eq!(end["payload"]["error"]["code"], "hook_failed");
+    assert!(server.requests().is_empty(), "the model got no request");
+}
+
+#[test]
+fn a_blocking_turn_end_failure_fails_the_turn_hook_failed() {
+    let setup = Setup::new();
+    setup.lua(
+        "goal",
+        "fiber.hook(\"turn_end\", { timeout = 30000, on_failure = \"blocking\",\n\
+           run = function(call) error(\"boom\") end })\n",
+    );
+    let server = ProviderServer::start([hello()]).unwrap();
+    setup.provider_with_extra(&server, &json!({}));
+    let run = setup.run(&["ask", "hello"]);
+    assert_eq!(run.code, Some(1), "stderr: {}", run.stderr);
+    assert_eq!(run.kinds(), ask_text_kinds(&[]));
+    let end = run.first("turn_completed");
+    assert_eq!(end["payload"]["outcome"], "failed");
+    assert_eq!(end["payload"]["error"]["code"], "hook_failed");
+    assert_eq!(server.requests().len(), 1);
+}
