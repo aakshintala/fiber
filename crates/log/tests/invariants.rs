@@ -149,11 +149,22 @@ proptest! {
     /// durable line written so far, and `seq` carries on from there.
     #[test]
     fn a_session_killed_at_each_fsync_boundary_reopens_intact(
-        kinds in prop::collection::vec(kind(), 1..30)
-            .prop_filter("a syncing kind", |kinds| {
-                kinds.iter().any(syncs)
-            }),
+        prefix in prop::collection::vec(kind(), 0..12),
     ) {
+        use Kind::*;
+        // Every syncing kind in a fixed order, so each case cuts at each
+        // kind of fsync boundary. Reopen and a non-syncing append make no
+        // fsync, so the scratch directory is reused across cuts.
+        let mut kinds = prefix;
+        kinds.extend([
+            AssistantMessageStarted,
+            ToolCallStarted,
+            ToolCallCompleted,
+            MessageCompleted,
+            ShellCommand,
+            ExtensionExec,
+            UsageRecorded,
+        ]);
         let tmp = TestDir::new("prop-fsync-cut");
         let log =
             Log::create(tmp.path(), id("s_1"), fakes::clock::FakeClock::new()).unwrap();
