@@ -8,9 +8,9 @@ use serde_json::json;
 
 use super::atomic::{locked, waiting};
 use super::lines::{append_line, remove_line};
+use super::*;
 use super::{insert_entry, remove_entry};
 use crate::home::ProjectKey;
-use super::*;
 
 /// How long the test waits for a thread before failing.
 const DEADLINE: Duration = Duration::from_secs(10);
@@ -459,8 +459,7 @@ fn two_threads_inserting_different_names_both_land() {
     let dirs = Layers::new();
     let (done, finished) = mpsc::channel();
     for name in ["a", "b"] {
-        let (home, workspace, project) =
-            (dirs.home(), dirs.workspace(), dirs.project.clone());
+        let (home, workspace, project) = (dirs.home(), dirs.workspace(), dirs.project.clone());
         let done = done.clone();
         thread::spawn(move || {
             let wrote = insert_entry(

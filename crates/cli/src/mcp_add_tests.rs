@@ -159,7 +159,16 @@ fn go(
     }
 }
 
-fn ok(setup: &Setup, layer: Layer, name: &str, url: Option<&str>, env: &[&str], secrets: &[&str], command: &[&str], lines: &str) -> Run {
+fn ok(
+    setup: &Setup,
+    layer: Layer,
+    name: &str,
+    url: Option<&str>,
+    env: &[&str],
+    secrets: &[&str],
+    command: &[&str],
+    lines: &str,
+) -> Run {
     go(setup, layer, name, url, env, secrets, command, false, lines)
 }
 
@@ -209,7 +218,11 @@ fn a_remote_add_writes_the_url_in_the_chosen_layer() {
     for layer in [Layer::Global, Layer::Project, Layer::Repository] {
         let setup = Setup::new();
         let ran = ok(&setup, layer, "docs", Some(URL), &[], &[], &[], "");
-        assert!(ran.result.is_ok(), "{:?}", ran.result.err().map(|e| e.message));
+        assert!(
+            ran.result.is_ok(),
+            "{:?}",
+            ran.result.err().map(|e| e.message)
+        );
         assert_eq!(
             setup.read(layer),
             json!({"mcp": {"servers": {"docs": {"url": URL}}}})
@@ -235,7 +248,11 @@ fn a_stdio_add_writes_command_args_and_env_with_secret_references() {
         &["npx", "-y", "pkg"],
         "tok-1\n",
     );
-    assert!(ran.result.is_ok(), "{:?}", ran.result.err().map(|e| e.message));
+    assert!(
+        ran.result.is_ok(),
+        "{:?}",
+        ran.result.err().map(|e| e.message)
+    );
     assert_eq!(
         setup.read(Layer::Global),
         json!({"mcp": {"servers": {"x": {
@@ -273,13 +290,23 @@ fn secrets_are_read_in_flag_order_and_empty_parts_stay_unwritten() {
         &["npx"],
         "b-val\na-val\n",
     );
-    assert!(ran.result.is_ok(), "{:?}", ran.result.err().map(|e| e.message));
+    assert!(
+        ran.result.is_ok(),
+        "{:?}",
+        ran.result.err().map(|e| e.message)
+    );
     assert_eq!(
-        read_secret(&setup.home(), "mcp.x.B").unwrap().unwrap().expose(),
+        read_secret(&setup.home(), "mcp.x.B")
+            .unwrap()
+            .unwrap()
+            .expose(),
         "b-val"
     );
     assert_eq!(
-        read_secret(&setup.home(), "mcp.x.A").unwrap().unwrap().expose(),
+        read_secret(&setup.home(), "mcp.x.A")
+            .unwrap()
+            .unwrap()
+            .expose(),
         "a-val"
     );
     // No args and `-e` values: both stay unwritten.
@@ -295,10 +322,26 @@ fn secrets_are_read_in_flag_order_and_empty_parts_stay_unwritten() {
 #[test]
 fn a_value_with_spaces_round_trips_through_one_stdin_line() {
     let setup = Setup::new();
-    let ran = ok(&setup, Layer::Global, "x", None, &[], &["TOKEN"], &["npx"], " padded \n");
-    assert!(ran.result.is_ok(), "{:?}", ran.result.err().map(|e| e.message));
+    let ran = ok(
+        &setup,
+        Layer::Global,
+        "x",
+        None,
+        &[],
+        &["TOKEN"],
+        &["npx"],
+        " padded \n",
+    );
+    assert!(
+        ran.result.is_ok(),
+        "{:?}",
+        ran.result.err().map(|e| e.message)
+    );
     assert_eq!(
-        read_secret(&setup.home(), "mcp.x.TOKEN").unwrap().unwrap().expose(),
+        read_secret(&setup.home(), "mcp.x.TOKEN")
+            .unwrap()
+            .unwrap()
+            .expose(),
         " padded "
     );
 }
@@ -306,24 +349,56 @@ fn a_value_with_spaces_round_trips_through_one_stdin_line() {
 #[test]
 fn an_empty_secret_value_is_a_usage_failure_and_writes_nothing() {
     let setup = Setup::new();
-    let ran = ok(&setup, Layer::Global, "x", None, &[], &["TOKEN"], &["npx"], "\n");
+    let ran = ok(
+        &setup,
+        Layer::Global,
+        "x",
+        None,
+        &[],
+        &["TOKEN"],
+        &["npx"],
+        "\n",
+    );
     let failure = ran.result.unwrap_err();
     assert_eq!(failure.code, ErrorCode::Usage);
     assert!(!setup.file(Layer::Global).exists());
-    assert!(!setup.home().join("credentials").exists(), "a secret was stored");
+    assert!(
+        !setup.home().join("credentials").exists(),
+        "a secret was stored"
+    );
 }
 
 #[test]
 fn an_existing_secret_is_replaced_and_named() {
     let setup = Setup::new();
     store_secret(&setup.home(), "mcp.x.TOKEN", &Secret::new("old".into())).unwrap();
-    let ran = ok(&setup, Layer::Global, "x", None, &[], &["TOKEN"], &["npx"], "new\n");
-    assert!(ran.result.is_ok(), "{:?}", ran.result.err().map(|e| e.message));
+    let ran = ok(
+        &setup,
+        Layer::Global,
+        "x",
+        None,
+        &[],
+        &["TOKEN"],
+        &["npx"],
+        "new\n",
+    );
+    assert!(
+        ran.result.is_ok(),
+        "{:?}",
+        ran.result.err().map(|e| e.message)
+    );
     assert_eq!(
-        read_secret(&setup.home(), "mcp.x.TOKEN").unwrap().unwrap().expose(),
+        read_secret(&setup.home(), "mcp.x.TOKEN")
+            .unwrap()
+            .unwrap()
+            .expose(),
         "new"
     );
-    assert!(ran.err.contains("fiber: replaced credentials/mcp.x.TOKEN"), "stderr: {}", ran.err);
+    assert!(
+        ran.err.contains("fiber: replaced credentials/mcp.x.TOKEN"),
+        "stderr: {}",
+        ran.err
+    );
     assert!(!ran.err.contains("new"), "stderr: {}", ran.err);
 }
 
@@ -363,7 +438,11 @@ fn userinfo_is_asked_of_the_seam_alone() {
         false,
         "",
     );
-    assert!(ran.result.is_ok(), "{:?}", ran.result.err().map(|e| e.message));
+    assert!(
+        ran.result.is_ok(),
+        "{:?}",
+        ran.result.err().map(|e| e.message)
+    );
     assert_eq!(
         setup.read(Layer::Global),
         json!({"mcp": {"servers": {"docs": {"url": "https://user@example.test/mcp"}}}})
@@ -383,7 +462,11 @@ fn a_bad_name_is_a_usage_failure_and_writes_nothing() {
     for name in ["docs", "a.b", "x.lock", "docs-2_x"] {
         let setup = Setup::new();
         let ran = ok(&setup, Layer::Global, name, Some(URL), &[], &[], &[], "");
-        assert!(ran.result.is_ok(), "name {name:?}: {:?}", ran.result.err().map(|e| e.message));
+        assert!(
+            ran.result.is_ok(),
+            "name {name:?}: {:?}",
+            ran.result.err().map(|e| e.message)
+        );
     }
 }
 
@@ -399,16 +482,33 @@ fn a_bad_variable_is_a_usage_failure_and_writes_nothing() {
         (&[], &[""]),
     ] {
         let setup = Setup::new();
-        let ran = ok(&setup, Layer::Global, "x", None, env, secrets, &["npx"], "v\n");
+        let ran = ok(
+            &setup,
+            Layer::Global,
+            "x",
+            None,
+            env,
+            secrets,
+            &["npx"],
+            "v\n",
+        );
         let failure = ran.result.unwrap_err();
-        assert_eq!(failure.code, ErrorCode::Usage, "env {env:?} secrets {secrets:?}");
+        assert_eq!(
+            failure.code,
+            ErrorCode::Usage,
+            "env {env:?} secrets {secrets:?}"
+        );
         assert!(!setup.file(Layer::Global).exists());
         assert!(!setup.home().join("credentials").exists());
     }
     // An empty `-e` value is allowed.
     let setup = Setup::new();
     let ran = ok(&setup, Layer::Global, "x", None, &["E="], &[], &["npx"], "");
-    assert!(ran.result.is_ok(), "{:?}", ran.result.err().map(|e| e.message));
+    assert!(
+        ran.result.is_ok(),
+        "{:?}",
+        ran.result.err().map(|e| e.message)
+    );
     assert_eq!(
         setup.read(Layer::Global),
         json!({"mcp": {"servers": {"x": {"command": "npx", "env": {"E": ""}}}}})
@@ -418,7 +518,16 @@ fn a_bad_variable_is_a_usage_failure_and_writes_nothing() {
 #[test]
 fn a_key_that_is_both_plain_and_secret_is_a_usage_failure() {
     let setup = Setup::new();
-    let ran = ok(&setup, Layer::Global, "x", None, &["K=1"], &["K"], &["npx"], "v\n");
+    let ran = ok(
+        &setup,
+        Layer::Global,
+        "x",
+        None,
+        &["K=1"],
+        &["K"],
+        &["npx"],
+        "v\n",
+    );
     let failure = ran.result.unwrap_err();
     assert_eq!(failure.code, ErrorCode::Usage);
     assert!(failure.message.contains("K"), "{}", failure.message);
@@ -429,10 +538,7 @@ fn a_key_that_is_both_plain_and_secret_is_a_usage_failure() {
 #[test]
 fn the_shape_is_exactly_one_transport_and_no_flags_with_a_url() {
     // Both a url and a command, or neither.
-    for (url, command) in [
-        (Some(URL), &["npx"] as &[&str]),
-        (None, &[]),
-    ] {
+    for (url, command) in [(Some(URL), &["npx"] as &[&str]), (None, &[])] {
         let setup = Setup::new();
         let ran = ok(&setup, Layer::Global, "x", url, &[], &[], command, "");
         assert_eq!(ran.result.unwrap_err().code, ErrorCode::Usage);
@@ -441,7 +547,16 @@ fn the_shape_is_exactly_one_transport_and_no_flags_with_a_url() {
     // `-e` and `--secret` with a url.
     for (env, secrets) in [(&["A=1"] as &[&str], &[] as &[&str]), (&[], &["A"])] {
         let setup = Setup::new();
-        let ran = ok(&setup, Layer::Global, "x", Some(URL), env, secrets, &[], "v\n");
+        let ran = ok(
+            &setup,
+            Layer::Global,
+            "x",
+            Some(URL),
+            env,
+            secrets,
+            &[],
+            "v\n",
+        );
         assert_eq!(ran.result.unwrap_err().code, ErrorCode::Usage);
         assert!(!setup.file(Layer::Global).exists());
         assert!(!setup.home().join("credentials").exists());
@@ -459,15 +574,32 @@ fn a_duplicate_name_in_the_layer_is_refused_and_keeps_the_bytes() {
     let first = ok(&setup, Layer::Global, "docs", Some(URL), &[], &[], &[], "");
     assert!(first.result.is_ok());
     let before = fs::read(setup.file(Layer::Global)).unwrap();
-    let ran = ok(&setup, Layer::Global, "docs", Some("https://other.test/mcp"), &[], &[], &[], "");
+    let ran = ok(
+        &setup,
+        Layer::Global,
+        "docs",
+        Some("https://other.test/mcp"),
+        &[],
+        &[],
+        &[],
+        "",
+    );
     let failure = ran.result.unwrap_err();
     assert_eq!(failure.code, ErrorCode::Usage);
-    assert!(failure.message.contains("fiber mcp remove"), "{}", failure.message);
+    assert!(
+        failure.message.contains("fiber mcp remove"),
+        "{}",
+        failure.message
+    );
     assert!(failure.message.contains("global"), "{}", failure.message);
     assert_eq!(fs::read(setup.file(Layer::Global)).unwrap(), before);
     // The same name in another layer is accepted.
     let ran = ok(&setup, Layer::Project, "docs", Some(URL), &[], &[], &[], "");
-    assert!(ran.result.is_ok(), "{:?}", ran.result.err().map(|e| e.message));
+    assert!(
+        ran.result.is_ok(),
+        "{:?}",
+        ran.result.err().map(|e| e.message)
+    );
 }
 
 #[test]
@@ -498,7 +630,10 @@ fn a_duplicate_name_restores_the_previous_secret() {
     );
     assert_eq!(ran.result.unwrap_err().code, ErrorCode::Usage);
     assert_eq!(
-        read_secret(&setup.home(), "mcp.x.TOKEN").unwrap().unwrap().expose(),
+        read_secret(&setup.home(), "mcp.x.TOKEN")
+            .unwrap()
+            .unwrap()
+            .expose(),
         "winner"
     );
 }
@@ -521,10 +656,18 @@ fn an_add_while_one_of_the_name_runs_fails_busy_and_writes_nothing() {
     );
     let failure = ran.result.unwrap_err();
     assert_eq!(failure.code, ErrorCode::IoFailed);
-    assert!(failure.message.contains("another `fiber mcp add` of `docs` is running"), "{}", failure.message);
+    assert!(
+        failure
+            .message
+            .contains("another `fiber mcp add` of `docs` is running"),
+        "{}",
+        failure.message
+    );
     assert!(!setup.file(Layer::Global).exists());
     assert!(
-        read_secret(&setup.home(), "mcp.docs.TOKEN").unwrap().is_none(),
+        read_secret(&setup.home(), "mcp.docs.TOKEN")
+            .unwrap()
+            .is_none(),
         "a secret was stored without the declaration"
     );
 }
@@ -546,7 +689,10 @@ fn a_declaration_write_that_fails_puts_each_secret_back() {
     );
     assert_eq!(ran.result.unwrap_err().code, ErrorCode::ConfigInvalid);
     assert_eq!(
-        read_secret(&setup.home(), "mcp.x.OLD").unwrap().unwrap().expose(),
+        read_secret(&setup.home(), "mcp.x.OLD")
+            .unwrap()
+            .unwrap()
+            .expose(),
         "old"
     );
     assert!(
@@ -571,7 +717,10 @@ fn settle_keeps_the_secrets_after_the_rename_and_restores_before_it() {
     };
     settle_secrets(&setup.home(), &stored, &before);
     assert_eq!(
-        read_secret(&setup.home(), "mcp.x.A").unwrap().unwrap().expose(),
+        read_secret(&setup.home(), "mcp.x.A")
+            .unwrap()
+            .unwrap()
+            .expose(),
         "old"
     );
     assert!(read_secret(&setup.home(), "mcp.x.B").unwrap().is_none());
@@ -583,11 +732,17 @@ fn settle_keeps_the_secrets_after_the_rename_and_restores_before_it() {
     };
     settle_secrets(&setup.home(), &stored, &after);
     assert_eq!(
-        read_secret(&setup.home(), "mcp.x.A").unwrap().unwrap().expose(),
+        read_secret(&setup.home(), "mcp.x.A")
+            .unwrap()
+            .unwrap()
+            .expose(),
         "new-a"
     );
     assert_eq!(
-        read_secret(&setup.home(), "mcp.x.B").unwrap().unwrap().expose(),
+        read_secret(&setup.home(), "mcp.x.B")
+            .unwrap()
+            .unwrap()
+            .expose(),
         "new-b"
     );
     // The helper never fails: deleting a missing file is false, not an
@@ -598,18 +753,51 @@ fn settle_keeps_the_secrets_after_the_rename_and_restores_before_it() {
 #[test]
 fn a_repo_add_records_the_approval_and_a_global_one_records_none() {
     let setup = Setup::new();
-    let ran = ok(&setup, Layer::Repository, "docs", Some(URL), &[], &[], &[], "");
-    assert!(ran.result.is_ok(), "{:?}", ran.result.err().map(|e| e.message));
+    let ran = ok(
+        &setup,
+        Layer::Repository,
+        "docs",
+        Some(URL),
+        &[],
+        &[],
+        &[],
+        "",
+    );
+    assert!(
+        ran.result.is_ok(),
+        "{:?}",
+        ran.result.err().map(|e| e.message)
+    );
     assert_eq!(decision_of(&setup, "docs"), Some(Decision::Approve));
-    let ran = ok(&setup, Layer::Repository, "other", Some(URL), &[], &[], &[], "");
-    assert!(ran.result.is_ok(), "{:?}", ran.result.err().map(|e| e.message));
+    let ran = ok(
+        &setup,
+        Layer::Repository,
+        "other",
+        Some(URL),
+        &[],
+        &[],
+        &[],
+        "",
+    );
+    assert!(
+        ran.result.is_ok(),
+        "{:?}",
+        ran.result.err().map(|e| e.message)
+    );
     assert_eq!(decision_of(&setup, "other"), Some(Decision::Approve));
     assert_eq!(decision_of(&setup, "docs"), Some(Decision::Approve));
     // Without `--repo` nothing is recorded.
     let setup = Setup::new();
     let ran = ok(&setup, Layer::Global, "docs", Some(URL), &[], &[], &[], "");
-    assert!(ran.result.is_ok(), "{:?}", ran.result.err().map(|e| e.message));
-    assert!(!setup.home().join("approvals").exists(), "an approval was recorded");
+    assert!(
+        ran.result.is_ok(),
+        "{:?}",
+        ran.result.err().map(|e| e.message)
+    );
+    assert!(
+        !setup.home().join("approvals").exists(),
+        "an approval was recorded"
+    );
 }
 
 #[test]
@@ -625,7 +813,11 @@ fn secret_values_never_reach_the_outputs_or_a_second_layer() {
         &["npx"],
         "s3cr3t-v4lu3\n",
     );
-    assert!(ran.result.is_ok(), "{:?}", ran.result.err().map(|e| e.message));
+    assert!(
+        ran.result.is_ok(),
+        "{:?}",
+        ran.result.err().map(|e| e.message)
+    );
     assert!(!ran.out.contains("s3cr3t-v4lu3"), "stdout: {}", ran.out);
     assert!(!ran.err.contains("s3cr3t-v4lu3"), "stderr: {}", ran.err);
     assert_eq!(
@@ -638,7 +830,9 @@ fn secret_values_never_reach_the_outputs_or_a_second_layer() {
 /// a value holding `=` comes back whole through the first one.
 #[test]
 fn split_declaration_reads_the_shape_back_as_raw_parts() {
-    let remote = super::McpDeclaration::Remote { url: URL.to_owned() };
+    let remote = super::McpDeclaration::Remote {
+        url: URL.to_owned(),
+    };
     assert_eq!(
         super::split_declaration(&remote),
         (Some(URL), Vec::new(), Vec::new(), Vec::new())

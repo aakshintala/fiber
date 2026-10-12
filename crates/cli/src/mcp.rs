@@ -18,7 +18,6 @@ use contract::clock::Clock;
 use contract::events::OfferedKind;
 use contract::mcp_remote::McpRemote;
 use contract::shapes::Failure;
-use doors::failure;
 use extensions::{Decision, Index, Store};
 use serde_json::{Map, Value};
 
@@ -50,14 +49,14 @@ pub enum McpDeclaration {
 
 /// Where `run_add` reads secrets: the key reader, its input, and whether a
 /// person is there to ask.
-struct SecretInput<'a> {
+pub(crate) struct SecretInput<'a> {
     keys: &'a mut dyn KeyReader,
     input: &'a mut dyn BufRead,
     terminal: bool,
 }
 
 /// Where `run_add` reports: standard output and error.
-struct Streams<'a> {
+pub(crate) struct Streams<'a> {
     out: &'a mut dyn Write,
     err: &'a mut dyn Write,
 }
@@ -80,9 +79,9 @@ fn layer_word(layer: Layer) -> &'static str {
 /// control character.
 fn check_name(name: &str) -> Result<(), Failure> {
     let bad = name.is_empty()
-        || name
-            .bytes()
-            .any(|byte| byte == b'"' || byte == b'/' || byte.is_ascii_whitespace() || byte.is_ascii_control());
+        || name.bytes().any(|byte| {
+            byte == b'"' || byte == b'/' || byte.is_ascii_whitespace() || byte.is_ascii_control()
+        });
     if bad {
         return Err(usage(format!(
             "`{name}` is not a server name: it is non-empty and holds no `\"`, `/`, whitespace or control character. Run `fiber --help` for usage."
@@ -205,7 +204,7 @@ fn record_approval(
             format!(
                 "could not record the approval of `{name}` in {}: the declaration is missing. Run `fiber approve` to finish it.",
                 repo_file.display()
-            )
+            ),
         )
     };
     let items =
@@ -331,8 +330,7 @@ pub(crate) fn run_add(
     // The whole transaction runs under a per-name lock taken before the
     // layer file's lock, so a concurrent add of the same name cannot
     // restore or delete the winner's credential.
-    let guard =
-        CredentialFile::new(home, "mcp-add", &lock_label(name)).map_err(config_failure)?;
+    let guard = CredentialFile::new(home, "mcp-add", &lock_label(name)).map_err(config_failure)?;
     let Some(_held) = guard.try_lock().map_err(config_failure)? else {
         return Err(failed(
             ErrorCode::IoFailed,
@@ -395,9 +393,7 @@ pub(crate) fn split_declaration(
     declaration: &McpDeclaration,
 ) -> (Option<&str>, Vec<String>, Vec<String>, Vec<String>) {
     match declaration {
-        McpDeclaration::Remote { url } => {
-            (Some(url.as_str()), Vec::new(), Vec::new(), Vec::new())
-        }
+        McpDeclaration::Remote { url } => (Some(url.as_str()), Vec::new(), Vec::new(), Vec::new()),
         McpDeclaration::Stdio {
             command,
             args,
@@ -454,7 +450,9 @@ pub(crate) fn run_remove(
     _streams: Streams<'_>,
 ) -> Result<(), Failure> {
     let (_, project) = project_of(home, workspace)?;
-    if remove_entry(home, workspace, &project, layer, "mcp.servers", name).map_err(config_failure)? {
+    if remove_entry(home, workspace, &project, layer, "mcp.servers", name)
+        .map_err(config_failure)?
+    {
         return Ok(());
     }
     let layers = declaring_layers(home, workspace, &project, name)?;
@@ -479,9 +477,8 @@ pub fn mcp_remove(layer: Layer, name: &str) -> i32 {
     let ran = config::fiber_home_from_env()
         .map_err(|e| failed(e.code(), e))
         .and_then(|home| {
-            let workspace = std::env::current_dir().map_err(|e| {
-                failed(ErrorCode::IoFailed, format!("the current directory: {e}"))
-            })?;
+            let workspace = std::env::current_dir()
+                .map_err(|e| failed(ErrorCode::IoFailed, format!("the current directory: {e}")))?;
             let mut out = io::stdout();
             let mut err = io::stderr();
             run_remove(
@@ -508,7 +505,9 @@ pub fn mcp_remove(layer: Layer, name: &str) -> i32 {
 fn has_value(entry: &Value) -> bool {
     match entry {
         Value::Object(map) => map.values().any(has_value),
-        _ => true,
+        Value::Null | Value::Bool(_) | Value::Number(_) | Value::String(_) | Value::Array(_) => {
+            true
+        }
     }
 }
 
@@ -544,11 +543,9 @@ fn is_approved(
     let hash = extensions::hash(&mut index, item).map_err(|e| failed(e.code(), e))?;
     // The index only saves a re-hash; failing to write it costs nothing else.
     index.save().unwrap_or(());
-    Ok(
-        Store::new(home, project, Arc::clone(clock))
-            .decision(OfferedKind::McpServer, &hash)
-            .is_some_and(|decision| decision == Decision::Approve),
-    )
+    Ok(Store::new(home, project, Arc::clone(clock))
+        .decision(OfferedKind::McpServer, &hash)
+        .is_some_and(|decision| decision == Decision::Approve))
 }
 
 /// `fiber mcp list`: one row per declaration, sorted by name then layer:
@@ -613,9 +610,8 @@ pub fn mcp_list(clock: Arc<dyn Clock>) -> i32 {
     let ran = config::fiber_home_from_env()
         .map_err(|e| failed(e.code(), e))
         .and_then(|home| {
-            let workspace = std::env::current_dir().map_err(|e| {
-                failed(ErrorCode::IoFailed, format!("the current directory: {e}"))
-            })?;
+            let workspace = std::env::current_dir()
+                .map_err(|e| failed(ErrorCode::IoFailed, format!("the current directory: {e}")))?;
             let mut out = io::stdout();
             let mut err = io::stderr();
             run_list(

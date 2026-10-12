@@ -426,12 +426,7 @@ fn a_stored_secret_is_deleted_and_a_missing_one_is_false() {
     let setup = Setup::new();
     assert!(!delete_secret(&setup.home(), "mcp.docs.TOKEN").unwrap());
     assert!(!setup.home().join("credentials").exists());
-    store_secret(
-        &setup.home(),
-        "mcp.docs.TOKEN",
-        &Secret::new(VALUE.into()),
-    )
-    .unwrap();
+    store_secret(&setup.home(), "mcp.docs.TOKEN", &Secret::new(VALUE.into())).unwrap();
     assert!(delete_secret(&setup.home(), "mcp.docs.TOKEN").unwrap());
     assert!(!setup.home().join("credentials/mcp.docs.TOKEN").exists());
     assert!(!delete_secret(&setup.home(), "mcp.docs.TOKEN").unwrap());

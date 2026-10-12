@@ -105,7 +105,9 @@ fn approve_repo(setup: &Setup, name: &str) {
         .unwrap();
     let mut index = Index::load(&setup.home());
     let hash = extensions::hash(&mut index, item).unwrap();
-    Store::new(&setup.home(), &project, clock).approve(item, &hash).unwrap();
+    Store::new(&setup.home(), &project, clock)
+        .approve(item, &hash)
+        .unwrap();
 }
 
 /// The declaration's hash as startup hashes it, and the decision recorded
@@ -121,7 +123,8 @@ fn hash_and_decision(setup: &Setup, name: &str) -> (String, Option<Decision>) {
         .unwrap();
     let mut index = Index::load(&setup.home());
     let hash = extensions::hash(&mut index, item).unwrap();
-    let decision = Store::new(&setup.home(), &project, clock).decision(OfferedKind::McpServer, &hash);
+    let decision =
+        Store::new(&setup.home(), &project, clock).decision(OfferedKind::McpServer, &hash);
     (hash, decision)
 }
 
@@ -137,7 +140,11 @@ fn remove_deletes_only_the_chosen_layer() {
     setup.declare(Layer::Global, "docs");
     setup.declare(Layer::Project, "docs");
     let ran = go(&setup, Layer::Global, "docs");
-    assert!(ran.result.is_ok(), "{:?}", ran.result.err().map(|e| e.message));
+    assert!(
+        ran.result.is_ok(),
+        "{:?}",
+        ran.result.err().map(|e| e.message)
+    );
     assert_eq!(
         serde_json::from_str::<serde_json::Value>(
             &fs::read_to_string(setup.file(Layer::Global)).unwrap()
@@ -167,7 +174,11 @@ fn remove_of_an_absent_name_names_the_layers_holding_it() {
     assert!(failure.message.contains("`docs`"), "{}", failure.message);
     assert!(failure.message.contains("global"), "{}", failure.message);
     assert!(failure.message.contains("project"), "{}", failure.message);
-    assert!(failure.message.contains("repository"), "{}", failure.message);
+    assert!(
+        failure.message.contains("repository"),
+        "{}",
+        failure.message
+    );
     assert!(!setup.file(Layer::Global).exists(), "a file was created");
 }
 
@@ -179,7 +190,11 @@ fn remove_of_a_name_no_layer_declares_names_none() {
     let failure = ran.result.unwrap_err();
     assert_eq!(failure.code, ErrorCode::Usage);
     assert!(failure.message.contains("`missing`"), "{}", failure.message);
-    assert!(failure.message.contains("no layer declares"), "{}", failure.message);
+    assert!(
+        failure.message.contains("no layer declares"),
+        "{}",
+        failure.message
+    );
 }
 
 #[test]
@@ -196,7 +211,11 @@ fn remove_from_the_repository_leaves_the_approval_and_the_secret() {
     let (hash, before) = hash_and_decision(&setup, "docs");
     assert_eq!(before, Some(Decision::Approve));
     let ran = go(&setup, Layer::Repository, "docs");
-    assert!(ran.result.is_ok(), "{:?}", ran.result.err().map(|e| e.message));
+    assert!(
+        ran.result.is_ok(),
+        "{:?}",
+        ran.result.err().map(|e| e.message)
+    );
     assert_eq!(decision_at(&setup, &hash), Some(Decision::Approve));
     assert_eq!(
         config::read_secret(&setup.home(), "mcp.docs.TOKEN")

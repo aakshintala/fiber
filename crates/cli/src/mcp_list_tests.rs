@@ -114,7 +114,11 @@ fn rows_sort_by_name_then_layer_and_shadowed_names_list_twice() {
     setup.remote(Layer::Repository, "c");
     setup.remote(Layer::Repository, "a");
     let ran = go(&setup);
-    assert!(ran.result.is_ok(), "{:?}", ran.result.err().map(|e| e.message));
+    assert!(
+        ran.result.is_ok(),
+        "{:?}",
+        ran.result.err().map(|e| e.message)
+    );
     assert_eq!(
         ran.out,
         "a  global\n\
@@ -136,8 +140,16 @@ fn an_approved_repository_row_says_so_and_a_changed_one_does_not() {
     );
     approve_repo(&setup, "docs", false);
     let ran = go(&setup);
-    assert!(ran.result.is_ok(), "{:?}", ran.result.err().map(|e| e.message));
-    assert_eq!(ran.out, "docs  repository  approved\n", "stdout: {}", ran.out);
+    assert!(
+        ran.result.is_ok(),
+        "{:?}",
+        ran.result.err().map(|e| e.message)
+    );
+    assert_eq!(
+        ran.out, "docs  repository  approved\n",
+        "stdout: {}",
+        ran.out
+    );
     // An argument added: the declaration changed since the approval.
     let (_, project) = project_of(&setup.home(), &setup.workspace()).unwrap();
     let file = setup.workspace().join(".fiber/config.json");
@@ -157,8 +169,16 @@ fn an_approved_repository_row_says_so_and_a_changed_one_does_not() {
     )
     .unwrap();
     let ran = go(&setup);
-    assert!(ran.result.is_ok(), "{:?}", ran.result.err().map(|e| e.message));
-    assert_eq!(ran.out, "docs  repository  not approved\n", "stdout: {}", ran.out);
+    assert!(
+        ran.result.is_ok(),
+        "{:?}",
+        ran.result.err().map(|e| e.message)
+    );
+    assert_eq!(
+        ran.out, "docs  repository  not approved\n",
+        "stdout: {}",
+        ran.out
+    );
 }
 
 #[test]
@@ -173,8 +193,16 @@ fn a_never_record_prints_not_approved() {
         Some(Decision::Never)
     );
     let ran = go(&setup);
-    assert!(ran.result.is_ok(), "{:?}", ran.result.err().map(|e| e.message));
-    assert_eq!(ran.out, "docs  repository  not approved\n", "stdout: {}", ran.out);
+    assert!(
+        ran.result.is_ok(),
+        "{:?}",
+        ran.result.err().map(|e| e.message)
+    );
+    assert_eq!(
+        ran.out, "docs  repository  not approved\n",
+        "stdout: {}",
+        ran.out
+    );
 }
 
 #[test]
@@ -200,7 +228,11 @@ fn an_entry_holding_no_value_is_not_listed() {
     .unwrap();
     setup.remote(Layer::Global, "docs");
     let ran = go(&setup);
-    assert!(ran.result.is_ok(), "{:?}", ran.result.err().map(|e| e.message));
+    assert!(
+        ran.result.is_ok(),
+        "{:?}",
+        ran.result.err().map(|e| e.message)
+    );
     assert_eq!(ran.out, "docs  global\n", "stdout: {}", ran.out);
 }
 
@@ -218,7 +250,11 @@ fn nothing_about_a_declaration_prints() {
         json!({"command": "npx", "env": {"K": "zzz"}}),
     );
     let ran = go(&setup);
-    assert!(ran.result.is_ok(), "{:?}", ran.result.err().map(|e| e.message));
+    assert!(
+        ran.result.is_ok(),
+        "{:?}",
+        ran.result.err().map(|e| e.message)
+    );
     assert!(!ran.out.contains("zzz"), "stdout: {}", ran.out);
     assert!(!ran.out.contains("example.test"), "stdout: {}", ran.out);
     assert!(!ran.out.contains("npx"), "stdout: {}", ran.out);
@@ -229,7 +265,11 @@ fn nothing_about_a_declaration_prints() {
 fn an_empty_configuration_prints_nothing() {
     let setup = Setup::new();
     let ran = go(&setup);
-    assert!(ran.result.is_ok(), "{:?}", ran.result.err().map(|e| e.message));
+    assert!(
+        ran.result.is_ok(),
+        "{:?}",
+        ran.result.err().map(|e| e.message)
+    );
     assert!(ran.out.is_empty(), "stdout: {}", ran.out);
     assert!(ran.err.is_empty(), "stderr: {}", ran.err);
 }
