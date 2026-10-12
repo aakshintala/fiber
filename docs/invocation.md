@@ -981,8 +981,9 @@ clients.
   does not.
 - **The hub keeps only a hash of each token,** in `hub/devices/<device>`
   (`docs/state.md`), so a copy of Fiber home holds no usable token.
-  `fiber hub token revoke <device>` deletes the record and closes every live
-  connection that presented that token.
+  `fiber hub token revoke <device>` deletes the records holding its token and
+  closes every live connection that presented that token.
+  Revoking a device removes every record holding its token, including hand-made copies.
   Revoking a name not paired is refused `not_found`.
   Revoking a device voids the codes it minted.
   A failed directory sync after the unlink or rename, the commit point, is a

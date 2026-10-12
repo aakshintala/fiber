@@ -1,7 +1,7 @@
 //! Single-use pairing codes and the live identities revoked with device records.
 //! Implements `docs/invocation.md`, "Remote clients", and `docs/state.md`.
 
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::BTreeMap;
 use std::fmt;
 use std::io::Write as _;
 use std::net::Shutdown;
@@ -129,7 +129,6 @@ impl Live {
 struct State {
     pending: BTreeMap<String, Pending>,
     live: BTreeMap<u64, Live>,
-    revoked: BTreeSet<String>,
     fill: Fill,
     #[cfg(test)]
     pause: Option<(Pause, Box<dyn FnOnce() + Send>)>,
@@ -221,7 +220,6 @@ impl Pairing {
             state: Mutex::new(State {
                 pending: BTreeMap::new(),
                 live: BTreeMap::new(),
-                revoked: BTreeSet::new(),
                 fill,
                 #[cfg(test)]
                 pause: None,
@@ -338,9 +336,6 @@ impl Pairing {
     pub(crate) fn authenticate(&self, hub: &Hub, n: u64, token: &str) -> Option<Who> {
         let mut state = lock(&self.state);
         let fingerprint = devices::sha256_hex(token.as_bytes());
-        if state.revoked.contains(&fingerprint) {
-            return None;
-        }
         let record = devices::holder(&hub.home, token)?;
         #[cfg(test)]
         pause(&mut state, Pause::AfterFound);
@@ -442,21 +437,53 @@ impl Pairing {
             return Ok(Outcome::Dropped);
         }
         let device = name(args)?.0;
-        let fingerprint = devices::token_hash(&hub.home, &device);
-        if !devices::remove(&hub.home, &device).map_err(|e| io_failure(hub, &device, e))? {
-            return Err((
+        let not_found = || {
+            (
                 ErrorCode::NotFound,
                 format!("No device named {device} is paired."),
-            ));
+            )
+        };
+        let entries = match std::fs::read_dir(hub.home.join("hub/devices")) {
+            Ok(entries) => entries,
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+                return Err(not_found());
+            }
+            Err(error) => return Err(io_failure(hub, &device, error)),
+        };
+        // Read every regular record before the first unlink: a surviving copy
+        // would make the token usable again after a restart.
+        let mut records = Vec::new();
+        for entry in entries {
+            let entry = entry.map_err(|e| io_failure(hub, &device, e))?;
+            let record = entry.file_name();
+            let display = record.to_string_lossy();
+            if !entry
+                .file_type()
+                .map_err(|e| io_failure(hub, &display, e))?
+                .is_file()
+            {
+                continue;
+            }
+            let hash = devices::token_hash(&hub.home, &record)
+                .map_err(|e| io_failure(hub, &display, e))?;
+            records.push((record, hash));
+        }
+        let fingerprint = records
+            .iter()
+            .find(|(record, _)| record == device.as_str())
+            .map(|(_, hash)| hash.clone())
+            .ok_or_else(not_found)?;
+        for (record, hash) in records {
+            if hash == fingerprint {
+                devices::remove(&hub.home, &record)
+                    .map_err(|e| io_failure(hub, &record.to_string_lossy(), e))?;
+            }
         }
         let warning = devices::sync_dir(&hub.home).is_err();
-        if let Some(hash) = &fingerprint {
-            state.revoked.insert(hash.clone());
-        }
         let mut live = Vec::new();
         for connection in state.live.values() {
             if connection.presented.record == device
-                || fingerprint.as_ref() == Some(&connection.presented.fingerprint)
+                || fingerprint == connection.presented.fingerprint
             {
                 connection.presented.revoked.store(true, Ordering::SeqCst);
                 live.push(connection.clone());

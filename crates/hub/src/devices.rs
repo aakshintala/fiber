@@ -73,12 +73,12 @@ pub(crate) fn holder(home: &Path, token: &str) -> Option<String> {
 }
 
 /// The record's hash, read without following symlinks or opening special files.
-pub(crate) fn token_hash(home: &Path, name: &str) -> Option<String> {
-    read_record(&home.join("hub/devices").join(name))
-        .ok()?
-        .get("token_sha256")?
-        .as_str()
+pub(crate) fn token_hash(home: &Path, name: &std::ffi::OsStr) -> io::Result<String> {
+    read_record(&home.join("hub/devices").join(name))?
+        .get("token_sha256")
+        .and_then(Value::as_str)
         .map(str::to_owned)
+        .ok_or_else(|| io::Error::other("The device record has no token hash."))
 }
 
 /// The complete record created by pairing.
@@ -166,8 +166,8 @@ pub(crate) fn touch(home: &Path, name: &str, at_ms: u64) -> io::Result<()> {
 }
 
 /// Unlinks a regular record only; absence and special files are not found.
-pub(crate) fn remove(home: &Path, name: &str) -> io::Result<bool> {
-    let path = home.join("hub/devices").join(name);
+pub(crate) fn remove(home: &Path, name: impl AsRef<std::ffi::OsStr>) -> io::Result<bool> {
+    let path = home.join("hub/devices").join(name.as_ref());
     let metadata = match fs::symlink_metadata(&path) {
         Ok(metadata) => metadata,
         Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(false),

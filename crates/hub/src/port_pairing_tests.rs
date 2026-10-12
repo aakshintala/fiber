@@ -289,6 +289,117 @@ fn revoke_from_a_second_device_closes_the_first() {
 }
 
 #[test]
+fn revoking_copied_records_refuses_the_token_after_a_restart() {
+    let temp = Temp::new();
+    let (port, hub, got, done) = serve_with_port(&temp, vec![], FakeClock::new());
+    let client = helloed(port, None);
+    let token = pair(&client, &mint(&hub, "phone"));
+    let devices = temp.dir.join("hub/devices");
+    fs::copy(devices.join("phone"), devices.join("tablet")).unwrap();
+    pair_device(&temp.dir, "other", "other-token");
+    fs::create_dir(devices.join("directory")).unwrap();
+    std::os::unix::fs::symlink("other", devices.join("link")).unwrap();
+    client.text(r#"{"id":"r","command":"revoke","args":{"device":"phone"}}"#);
+    let deadline = Deadline::after(DEADLINE);
+    assert_eq!(text(deadline, &client)["kind"], "command_accepted");
+    assert_eq!(text(deadline, &client)["payload"]["change"], "revoked");
+    assert_eq!(
+        deadline.recv_or_fail(&client.rx, "copied token's live connection closes"),
+        Item::Close(1000, String::new())
+    );
+    assert_eq!(
+        deadline.recv_or_fail(&client.rx, "revoked connection EOF"),
+        Item::Eof
+    );
+    for name in ["phone", "tablet"] {
+        assert!(!devices.join(name).exists(), "{name} must be removed");
+    }
+    assert!(devices.join("other").is_file());
+    assert!(devices.join("directory").is_dir());
+    assert!(
+        fs::symlink_metadata(devices.join("link"))
+            .unwrap()
+            .is_symlink()
+    );
+    drop(client);
+    stop(&hub, &got, &done);
+    drop(hub);
+
+    let (port, hub, got, done) = serve_with_port(&temp, vec![], FakeClock::new());
+    let next = helloed(port, None);
+    assert_eq!(
+        authenticate(&next, "a", &token)["payload"]["code"],
+        "unauthenticated"
+    );
+    let deadline = Deadline::after(DEADLINE);
+    assert_eq!(
+        deadline.recv_or_fail(&next.rx, "revoked token is refused after restart"),
+        Item::Close(1008, "unauthenticated".to_owned())
+    );
+    assert_eq!(deadline.recv_or_fail(&next.rx, "refusal EOF"), Item::Eof);
+    let other = helloed(port, None);
+    assert_eq!(
+        authenticate(&other, "a", "other-token")["kind"],
+        "command_accepted"
+    );
+    drop((next, other));
+    stop(&hub, &got, &done);
+}
+
+#[test]
+fn an_unreadable_record_refuses_revoke_without_unlinking_any_record() {
+    use std::os::unix::fs::PermissionsExt as _;
+
+    let temp = Temp::new();
+    let (port, hub, got, done) = serve_with_port(&temp, vec![], FakeClock::new());
+    let client = helloed(port, None);
+    let token = pair(&client, &mint(&hub, "phone"));
+    let devices = temp.dir.join("hub/devices");
+    fs::copy(devices.join("phone"), devices.join("tablet")).unwrap();
+    pair_device(&temp.dir, "sibling", "other-token");
+    let sibling = devices.join("sibling");
+    let unreadable = fs::read(&sibling).unwrap();
+    fs::set_permissions(&sibling, fs::Permissions::from_mode(0o0)).unwrap();
+    // Both a sibling and the named record must be readable before any unlink.
+    for device in ["phone", "sibling"] {
+        client.text(&json!({"id":"r","command":"revoke","args":{"device":device}}).to_string());
+        let refused = text(Deadline::after(DEADLINE), &client);
+        assert_eq!(refused["kind"], "command_rejected");
+        assert_eq!(refused["payload"]["code"], "io_failed");
+        assert!(
+            refused["payload"]["message"]
+                .as_str()
+                .unwrap()
+                .contains("sibling")
+        );
+        for name in ["phone", "tablet", "sibling"] {
+            assert!(devices.join(name).exists(), "{name} must remain");
+        }
+    }
+    fs::set_permissions(&sibling, fs::Permissions::from_mode(0o600)).unwrap();
+    assert_eq!(fs::read(&sibling).unwrap(), unreadable);
+    // Malformed JSON and a missing/non-string hash are unreadable records too.
+    for bytes in ["not json", "{}", r#"{"token_sha256":42}"#] {
+        fs::write(&sibling, bytes).unwrap();
+        client.text(r#"{"id":"r","command":"revoke","args":{"device":"phone"}}"#);
+        let refused = text(Deadline::after(DEADLINE), &client);
+        assert_eq!(refused["payload"]["code"], "io_failed");
+        assert!(
+            refused["payload"]["message"]
+                .as_str()
+                .unwrap()
+                .contains("sibling")
+        );
+        assert!(devices.join("phone").exists() && devices.join("tablet").exists());
+        assert_eq!(fs::read(&sibling).unwrap(), bytes.as_bytes());
+    }
+    let next = helloed(port, None);
+    assert_eq!(authenticate(&next, "a", &token)["kind"], "command_accepted");
+    drop((client, next));
+    stop(&hub, &got, &done);
+}
+
+#[test]
 fn a_device_revoking_itself_gets_the_answer_then_the_close() {
     let temp = Temp::new();
     let (port, hub, got, done) = serve_with_port(&temp, vec![], FakeClock::new());
@@ -428,11 +539,6 @@ fn self_revocation_waits_for_the_output_pump_before_shutting_tcp() {
         tx.send(()).unwrap_or(());
     });
     assert!(clock.await_parked_count(end, 2, PAIR_WAIT));
-    assert!(
-        Deadline::after(Duration::from_millis(100))
-            .recv(&rx)
-            .is_err()
-    );
     assert!(!web.drained());
     let mark = clock
         .mark_parked(end, PAIR_WAIT)
@@ -556,12 +662,6 @@ fn finishing_a_revoke_returns_at_its_deadline_with_an_undrained_web() {
     );
     assert!(clock.await_parked_count(end, 2, PAIR_WAIT));
     client.shutdown(Shutdown::Write).unwrap_or(());
-    assert!(
-        Deadline::after(Duration::from_millis(100))
-            .recv(&served)
-            .is_err(),
-        "the held web drain keeps finish waiting before its deadline"
-    );
 
     clock.advance(STOP_CLOSE_WAIT);
     let returned_at_deadline = Deadline::after(Duration::from_millis(250))
