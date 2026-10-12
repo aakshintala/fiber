@@ -1308,7 +1308,12 @@ fn kill_passes_a_blocked_spawn_and_the_late_child_is_killed() {
     Deadline::after(DEADLINE)
         .recv(&killed_rx)
         .expect("the kill pass returns while the spawn is blocked");
-    let reaped = child_a.wait().expect("the killed leader reaps");
+    let (done, waited) = mpsc::channel();
+    std::thread::spawn(move || done.send(child_a.wait()).unwrap());
+    let reaped = Deadline::after(DEADLINE)
+        .recv(&waited)
+        .expect("waited {DEADLINE:?} for the killed child")
+        .unwrap();
     assert!(
         fakes::group_empties(pgid_a, DEADLINE),
         "the pass killed group A"
