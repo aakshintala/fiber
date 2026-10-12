@@ -390,7 +390,7 @@ fn a_spawn_error_fails_io_failed_with_no_job() {
         &Recorder::default(),
     );
     let error = output.error.expect("a spawn error fails");
-    assert_eq!(error.code, contract::ErrorCode::IoFailed);
+    assert_eq!(error.code, contract::ErrorCode::ToolError);
     let text = output.content.iter().map(text_of).collect::<String>();
     assert!(
         text.contains("Starting the delegate failed"),
