@@ -42,3 +42,7 @@ impl TokenFileError {
         }
     }
 }
+
+#[cfg(test)]
+#[path = "mcp_tokens_tests.rs"]
+mod tests;
