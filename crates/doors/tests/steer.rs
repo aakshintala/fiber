@@ -260,10 +260,30 @@ fn a_steer_sends_its_command_id_and_a_reused_one_is_rejected_duplicate() {
             ack.0(Ok(None));
             // The first steer line reached the session, so its id is
             // reserved: the same id sent again is a duplicate, never a
-            // second message.
-            let mut commit = || true;
-            let mut on_queued = || {};
-            let outcome = doors::steer(&home, &id, &command, "again", &mut commit, &mut on_queued);
+            // second message. The duplicate runs on a thread and answers
+            // under a deadline, so a regression that stops answering
+            // fails the test instead of hanging it.
+            let (second_tx, second_rx) = mpsc::channel();
+            let home_second = home.clone();
+            let id_second = id.clone();
+            let command_second = command.clone();
+            let second = thread::spawn(move || {
+                let mut commit = || true;
+                let mut on_queued = || {};
+                let outcome = doors::steer(
+                    &home_second,
+                    &id_second,
+                    &command_second,
+                    "again",
+                    &mut commit,
+                    &mut on_queued,
+                );
+                let _sent = second_tx.send(outcome);
+            });
+            let outcome = Deadline::after(DEADLINE)
+                .recv(&second_rx)
+                .expect("the duplicate steer answered");
+            second.join().expect("the duplicate steer thread ended");
             assert!(
                 matches!(
                     &outcome,
@@ -396,10 +416,14 @@ fn commit_runs_only_after_the_subscribe_is_answered() {
     let id = SessionId(mint("s_"));
     let listener = listen(&home, &id);
     let (release_tx, release_rx) = mpsc::channel::<()>();
+    let (subscribed_tx, subscribed_rx) = mpsc::channel::<()>();
     let served = thread::spawn(move || {
         let (stream, _) = listener.accept().unwrap();
         let mut reader = BufReader::new(stream.try_clone().unwrap());
         let sub = commanded(&mut reader);
+        // The subscribe line proves the client is waiting for its
+        // acknowledgement: the commit check below runs only after it.
+        subscribed_tx.send(()).unwrap();
         let sub_id = sub["id"].as_str().unwrap().to_owned();
         // The acknowledgement is held: nothing may commit before it.
         Deadline::after(DEADLINE)
@@ -439,7 +463,11 @@ fn commit_runs_only_after_the_subscribe_is_answered() {
         );
         let _sent = done_tx.send(outcome);
     });
-    // Held acknowledgement: the commit must not arrive.
+    // The client sent its subscribe and waits for the held
+    // acknowledgement: the commit must not arrive while it is held.
+    Deadline::after(DEADLINE)
+        .recv(&subscribed_rx)
+        .expect("the client sent subscribe");
     let short = fakes::Deadline::after(Duration::from_millis(500));
     assert!(
         short.recv(&called_rx).is_err(),

@@ -556,14 +556,14 @@ fn seq_of(dir: &std::path::Path) -> u64 {
 
 fn io_error(dir: &std::path::Path) -> String {
     match last_seq(dir) {
-        Err(Error::Io { .. }) => last_seq(dir).unwrap_err().to_string(),
+        Err(error @ Error::Io { .. }) => error.to_string(),
         other => panic!("expected Io, got {other:?}"),
     }
 }
 
 fn pointer_error(dir: &std::path::Path) -> String {
     match last_seq(dir) {
-        Err(Error::Pointer { .. }) => last_seq(dir).unwrap_err().to_string(),
+        Err(error @ Error::Pointer { .. }) => error.to_string(),
         other => panic!("expected Pointer, got {other:?}"),
     }
 }
