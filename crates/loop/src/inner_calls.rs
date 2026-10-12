@@ -204,6 +204,15 @@ impl InnerCancel {
     pub(crate) fn cancel(&self) {
         self.signal.cancel();
     }
+
+    /// Follows a command's end, including one that already happened.
+    pub(crate) fn follow(&self, source: &dyn Cancel) {
+        let relay: Arc<dyn Wake> = self.signal.clone();
+        source.subscribe(Arc::downgrade(&relay));
+        if source.is_cancelled() {
+            self.signal.cancel();
+        }
+    }
 }
 
 impl Cancel for InnerCancel {
@@ -249,6 +258,84 @@ struct Origin<'a> {
 }
 
 impl crate::Loop {
+    /// Runs a command's request alone, including its chain, with no turn.
+    pub(crate) fn run_alone(
+        &mut self,
+        request: contract::inbox::InnerCallRequest,
+    ) -> Result<(), crate::Error> {
+        if request.cancel.is_cancelled() || self.shutting_down() {
+            return Ok(());
+        }
+        let contract::inbox::InnerCallRequest {
+            extension,
+            command,
+            name,
+            arguments,
+            cancel: request_cancel,
+            taken,
+            answer,
+        } = request;
+        taken();
+        let cancel = Arc::new(InnerCancel::new(Arc::clone(&self.cancel)));
+        cancel.follow(request_cancel.as_ref());
+        let request = Raised::new(extension, name, arguments, answer);
+        let clock = Arc::clone(self.log.clock());
+        std::thread::scope(|scope| {
+            let wake = Arc::new(SharedWake::default());
+            let relay: Arc<dyn Wake> = wake.clone();
+            cancel.subscribe(Arc::downgrade(&relay));
+            clock.subscribe(Arc::downgrade(&relay));
+            let mut inner = Vec::new();
+            // Cancel workers and close their slots before the scope joins,
+            // including on a log error or a failure during preparation.
+            let mut release = crate::asking::Release::default();
+            let origin = Origin {
+                ran_by: contract::events::Anchor::Command(command),
+                parent: None,
+                depth: 1,
+                stopped: &|| request_cancel.is_cancelled(),
+                cancel,
+            };
+            self.start_inner(
+                scope,
+                request,
+                origin,
+                (&mut inner, &mut release),
+                &wake,
+                None,
+            )?;
+            loop {
+                let streams: Vec<_> = inner
+                    .iter()
+                    .map(|call| (call.id.clone(), Arc::clone(&call.stream)))
+                    .collect();
+                let streams: Vec<_> = streams
+                    .iter()
+                    .map(|(id, stream)| (id, stream.as_ref()))
+                    .collect();
+                self.take_inner(scope, &streams, &mut inner, &mut release, &wake, None)?;
+                let wrote = self.serve_inner(&mut inner, &|_| false, None)?;
+                let calls: Vec<_> = inner
+                    .iter()
+                    .map(|call| (&call.id, Some(call.stream.as_ref())))
+                    .collect();
+                self.serve_interactions(&calls, None)?;
+                if inner.is_empty() {
+                    return Ok(());
+                }
+                if wrote {
+                    continue;
+                }
+                let earliest = calls
+                    .iter()
+                    .filter_map(|(_, stream)| stream.and_then(Stream::deadline))
+                    .chain(Self::interaction_deadline(&calls))
+                    .min();
+                wake.park(clock.as_ref(), earliest);
+            }
+        })
+    }
+
     /// Takes requests on the loop thread, using preparation and only the deny steps.
     pub(crate) fn take_inner<'scope, 'env>(
         &mut self,

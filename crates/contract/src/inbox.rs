@@ -45,6 +45,36 @@ impl fmt::Debug for Ack {
     }
 }
 
+/// A command's `host.tool` request (`docs/extensions.md`, "Running a tool"):
+/// the loop runs it as an inner call anchored on the command's invocation.
+pub struct InnerCallRequest {
+    /// The extension running the command.
+    pub extension: String,
+    /// The `command` driver command's invocation id.
+    pub command: crate::CommandId,
+    /// The tool to run.
+    pub name: String,
+    /// The arguments supplied by the command.
+    pub arguments: serde_json::Value,
+    /// Set once the command's call ends, for any reason.
+    pub cancel: std::sync::Arc<dyn crate::tool::Cancel>,
+    /// Called once by the loop, before the first line and first hook.
+    pub taken: Box<dyn FnOnce() + Send>,
+    /// Called once with the completion the loop wrote. Dropping this
+    /// uncalled answers it `cancelled` on the requester's side.
+    pub answer: Box<dyn FnOnce(Box<crate::events::ToolCallCompleted>) + Send>,
+}
+
+impl fmt::Debug for InnerCallRequest {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("InnerCallRequest")
+            .field("extension", &self.extension)
+            .field("command", &self.command)
+            .field("name", &self.name)
+            .finish_non_exhaustive()
+    }
+}
+
 /// A session message (`docs/tools.md`, "Messaging other sessions"),
 /// answered by the door once it is in the inbox.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -118,6 +148,8 @@ pub enum Delivery {
     /// An extension ask's answer: written as `interaction_resolved`, then
     /// the ack is called with `Ok(None)`.
     Resolved(crate::events::InteractionResolved, Ack),
+    /// A command's inner call, run alone while idle or at a step boundary.
+    InnerCall(InnerCallRequest),
     /// A line an extension wrote with `host.log`: shown live, recorded in
     /// the diagnostic log, starts nothing.
     ExtensionLog(crate::events::ExtensionLog),

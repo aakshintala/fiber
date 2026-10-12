@@ -742,8 +742,14 @@ impl Loop {
             rewritten,
             spilled,
         };
-        let shaped = self.shape(ran, bound, id, turn)?;
-        if let Some(named) = write {
+        let mut shaped = self.shape(ran, bound, id, turn)?;
+        if let Some(failure) = shaped.error.take() {
+            status = CallStatus::Failed;
+            error = Some(failure);
+        }
+        if let Some(named) = write
+            && status == CallStatus::Completed
+        {
             self.write(&Event::SessionNamed(named), turn, Some(id))?;
         }
         Ok(ToolCallCompleted {

@@ -45,6 +45,7 @@ fn logged(delivery: Delivery) -> ExtensionLog {
     match delivery {
         Delivery::ExtensionLog(log) => log,
         other @ (Delivery::ExtensionExec(_)
+        | Delivery::InnerCall(_)
         | Delivery::Prompt(..)
         | Delivery::Steer(..)
         | Delivery::SteerDrop(..)
@@ -146,6 +147,7 @@ fn a_line_before_deliver_to_keeps_order_with_an_exec_that_ends_after_it() {
     match rx.try_recv().expect("the run arrives second") {
         Delivery::ExtensionExec(exec) => assert_eq!(exec.program, "git"),
         other @ (Delivery::ExtensionLog(_)
+        | Delivery::InnerCall(_)
         | Delivery::Prompt(..)
         | Delivery::Steer(..)
         | Delivery::SteerDrop(..)

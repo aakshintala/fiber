@@ -371,6 +371,16 @@ impl Loop {
         for delivery in waiting {
             self.admit_running(delivery, turn)?;
         }
+        // Commands held by an approval or interaction wait start only at
+        // this step boundary; switches keep their place for the next turn.
+        let held = std::mem::take(&mut self.deferred);
+        for delivery in held {
+            if let Delivery::InnerCall(request) = delivery {
+                self.run_alone(request)?;
+            } else {
+                self.deferred.push_back(delivery);
+            }
+        }
         Ok(())
     }
 
@@ -471,6 +481,7 @@ impl Loop {
             | Delivery::JobLine(_)
             | Delivery::ExtensionExec(_)
             | Delivery::ExtensionLog(_)
+            | Delivery::InnerCall(_)
             | Delivery::Cancelled) => {
                 self.admit_running(other, turn)?;
                 Ok(Waited::Again)
@@ -491,6 +502,7 @@ impl Loop {
             return Ok(());
         }
         match delivery {
+            Delivery::InnerCall(request) => self.run_alone(request)?,
             Delivery::Prompt(message, ack) => {
                 if self.closing {
                     reject(ack, ErrorCode::Closing, CLOSING);
@@ -625,6 +637,7 @@ impl Loop {
     /// `delivery` while a turn is in flight and nothing is pending.
     pub(crate) fn admit_running(&mut self, delivery: Delivery, turn: &TurnId) -> Result<(), Error> {
         match delivery {
+            Delivery::InnerCall(request) => self.deferred.push_back(Delivery::InnerCall(request)),
             Delivery::Prompt(_, ack) => {
                 if self.closing {
                     reject(ack, ErrorCode::Closing, CLOSING);

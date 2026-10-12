@@ -170,6 +170,40 @@ fn a_cancel_created_after_turn_cancellation_is_already_cancelled() {
 }
 
 #[test]
+fn following_an_ended_command_is_cancelled_at_once() {
+    use contract::tool::Cancel;
+    let source = fakes::CancelToken::new();
+    source.cancel();
+    let cancel = super::InnerCancel::new(Arc::new(crate::TurnCancel::default()));
+    cancel.follow(&source);
+    assert!(cancel.is_cancelled());
+}
+
+#[test]
+fn following_a_live_command_keeps_turn_cancellation_and_wakes_subscribers() {
+    use contract::tool::Cancel;
+    for from_command in [false, true] {
+        let turn = Arc::new(crate::TurnCancel::default());
+        assert!(turn.arm());
+        let source = fakes::CancelToken::new();
+        let cancel = super::InnerCancel::new(turn.clone());
+        cancel.follow(&source);
+        assert!(!cancel.is_cancelled());
+        let (tx, rx) = std::sync::mpsc::channel();
+        let notice: Arc<dyn contract::clock::Wake> = Arc::new(Notice(tx));
+        cancel.subscribe(Arc::downgrade(&notice));
+        if from_command {
+            source.cancel();
+        } else {
+            assert!(turn.cancel());
+        }
+        fakes::Deadline::after(std::time::Duration::from_secs(2))
+            .recv_or_fail(&rx, "followed cancellation");
+        assert!(cancel.is_cancelled());
+    }
+}
+
+#[test]
 fn inner_depths_seven_and_eight_run_but_nine_is_refused() {
     use contract::tool::InnerCalls;
     for (requester, allowed) in [(6, true), (7, true), (8, false)] {

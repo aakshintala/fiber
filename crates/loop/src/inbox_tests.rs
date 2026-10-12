@@ -109,6 +109,195 @@ fn started_with(worktree: Option<Worktree>) -> (Loop, Arc<Log>, log::Watcher, fa
     (looped, log, watched, home)
 }
 
+struct CommandTool(&'static str);
+impl contract::tool::Tool for CommandTool {
+    fn definition(&self) -> contract::provider::ToolDefinition {
+        contract::provider::ToolDefinition {
+            name: self.0.into(),
+            description: "command fixture".into(),
+            input_schema: serde_json::json!({"type":"object"}),
+            deferred: false,
+            hosted: None,
+        }
+    }
+    fn effects(
+        &self,
+        _: &serde_json::Map<String, serde_json::Value>,
+    ) -> Result<contract::tool::Effects, contract::tool::EffectsError> {
+        Ok(contract::tool::Effects {
+            declared: contract::shapes::DeclaredEffects {
+                effects: vec![contract::shapes::Effect::Reads],
+                reversible: true,
+                paths: None,
+            },
+            subject: None,
+            prefix: None,
+            always_reviewed: false,
+        })
+    }
+    fn run(
+        &self,
+        _: &serde_json::Map<String, serde_json::Value>,
+        _: &dyn contract::tool::Cancel,
+        _: &dyn contract::emit::Emit,
+    ) -> contract::tool::Output {
+        contract::tool::Output::default()
+    }
+}
+
+fn inner_delivery(name: &str) -> Delivery {
+    Delivery::InnerCall(contract::inbox::InnerCallRequest {
+        extension: "ext".into(),
+        command: contract::CommandId("c_1".into()),
+        name: name.into(),
+        arguments: serde_json::json!({}),
+        cancel: Arc::new(fakes::CancelToken::new()),
+        taken: Box::new(|| {}),
+        answer: Box::new(|_| {}),
+    })
+}
+
+#[test]
+fn running_admission_holds_a_command_request_without_writing_it() {
+    let (mut looped, _log, _watched, home) = started();
+    let watchdog = fakes::Watchdog::matching(&home.path().display().to_string());
+    looped
+        .admit_running(inner_delivery("a"), &TurnId("t_1".into()))
+        .unwrap();
+    assert_eq!(looped.deferred.len(), 1);
+    assert!(matches!(
+        looped.deferred.front(),
+        Some(Delivery::InnerCall(_))
+    ));
+    assert_eq!(saved_kinds(&home), ["session_started"]);
+    watchdog.stand_down(Duration::from_secs(3));
+}
+
+struct Unanswered(Arc<std::sync::atomic::AtomicBool>);
+impl Drop for Unanswered {
+    fn drop(&mut self) {
+        self.0.store(true, std::sync::atomic::Ordering::SeqCst);
+    }
+}
+
+#[test]
+fn an_alone_request_after_command_end_or_shutdown_writes_nothing_and_never_calls_taken() {
+    for shutdown in [false, true] {
+        let (mut looped, _log, _watched, home) = started();
+        let watchdog = fakes::Watchdog::matching(&home.path().display().to_string());
+        let source = Arc::new(fakes::CancelToken::new());
+        if shutdown {
+            looped.cancel.shutdown(143);
+        } else {
+            source.cancel();
+        }
+        let dropped = Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let guard = Unanswered(dropped.clone());
+        let taken = Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let taking = taken.clone();
+        let answered = Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let answering = answered.clone();
+        let request = contract::inbox::InnerCallRequest {
+            extension: "ext".into(),
+            command: contract::CommandId("c_1".into()),
+            name: "a".into(),
+            arguments: serde_json::json!({}),
+            cancel: source,
+            taken: Box::new(move || {
+                taking.store(true, std::sync::atomic::Ordering::SeqCst);
+            }),
+            answer: Box::new(move |_| {
+                answering.store(true, std::sync::atomic::Ordering::SeqCst);
+                drop(guard);
+            }),
+        };
+        fakes::within(
+            "drop stopped command request",
+            Duration::from_secs(3),
+            move || {
+                looped.run_alone(request).unwrap();
+            },
+        );
+        assert!(dropped.load(std::sync::atomic::Ordering::SeqCst));
+        assert!(!taken.load(std::sync::atomic::Ordering::SeqCst));
+        assert!(!answered.load(std::sync::atomic::Ordering::SeqCst));
+        assert_eq!(saved_kinds(&home), ["session_started"]);
+        watchdog.stand_down(Duration::from_secs(3));
+    }
+}
+
+#[test]
+fn the_drain_runs_commands_in_order_and_preserves_interleaved_model_switches() {
+    for order in [
+        vec!["switch", "a"],
+        vec!["a", "switch"],
+        vec!["a", "switch", "b"],
+    ] {
+        let (mut looped, _log, _watched, home) = started();
+        let watchdog = fakes::Watchdog::matching(&home.path().display().to_string());
+        for name in ["a", "b"] {
+            let tool: Arc<dyn contract::tool::Tool> = Arc::new(CommandTool(name));
+            looped.tools.insert(
+                name.into(),
+                ("test".into(), tool.clone(), tool.definition()),
+            );
+        }
+        for item in &order {
+            let delivery = if *item == "switch" {
+                Delivery::Model(
+                    serde_json::from_value(serde_json::json!({"model":"fake/other"})).unwrap(),
+                    ignore(),
+                )
+            } else {
+                inner_delivery(item)
+            };
+            looped.deferred.push_back(delivery);
+        }
+        let looped = fakes::within(
+            "boundary command drain",
+            Duration::from_secs(3),
+            move || {
+                looped.drain(&TurnId("t_1".into())).unwrap();
+                looped
+            },
+        );
+        assert_eq!(looped.deferred.len(), 1);
+        assert!(matches!(
+            looped.deferred.front(),
+            Some(Delivery::Model(_, _))
+        ));
+        let lines = log::read(&home.path().join("s_test")).unwrap();
+        let requested: Vec<_> = lines
+            .iter()
+            .filter(|line| line.kind == "tool_call_requested")
+            .map(|line| line.payload["name"].as_str().unwrap())
+            .collect();
+        let expected: Vec<_> = order
+            .iter()
+            .copied()
+            .filter(|item| *item != "switch")
+            .collect();
+        assert_eq!(requested, expected);
+        assert!(lines.iter().all(|line| line.turn_id.is_none()));
+        let mut kinds = vec!["session_started"];
+        for _ in &requested {
+            kinds.extend([
+                "tool_call_requested",
+                "tool_call_started",
+                "tool_call_completed",
+            ]);
+        }
+        assert_eq!(
+            lines
+                .iter()
+                .map(|line| line.kind.as_str())
+                .collect::<Vec<_>>(),
+            kinds
+        );
+        watchdog.stand_down(Duration::from_secs(3));
+    }
+}
+
 #[test]
 fn start_records_the_worktree_on_session_started() {
     let (_looped, _log, _watched, home) = started_with(Some(Worktree {
@@ -499,6 +688,7 @@ fn held_kinds(looped: &Loop) -> Vec<&str> {
             | Delivery::Job(_)
             | Delivery::JobLine(_)
             | Delivery::ExtensionExec(_)
+            | Delivery::InnerCall(_)
             | Delivery::ExtensionLog(_)
             | Delivery::Interaction(_)
             | Delivery::Resolved(..)

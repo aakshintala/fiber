@@ -356,7 +356,8 @@ impl Loop {
                 | Delivery::Credential(..)
                 | Delivery::Rewind(..)
                 | Delivery::Job(_)
-                | Delivery::JobLine(_)) => self.deferred.push_back(held),
+                | Delivery::JobLine(_)
+                | Delivery::InnerCall(_)) => self.deferred.push_back(held),
                 now @ (Delivery::Reply(..)
                 | Delivery::Name(..)
                 | Delivery::ExtensionExec(_)

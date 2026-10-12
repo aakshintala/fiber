@@ -178,7 +178,9 @@ fn after_tool(session: &Arc<SessionExtensions>, content: &str) -> AfterToolAnswe
 fn changed_content(answer: &AfterToolAnswer) -> Option<&str> {
     match &answer.outcome {
         AfterToolOutcome::Changed { content, .. } => content.as_deref(),
-        AfterToolOutcome::Unchanged | AfterToolOutcome::Withheld { .. } => None,
+        AfterToolOutcome::Unchanged
+        | AfterToolOutcome::Withheld { .. }
+        | AfterToolOutcome::Failed(_) => None,
     }
 }
 

@@ -50,6 +50,7 @@ pub(crate) struct Shaped {
     pub(crate) details: Option<Value>,
     pub(crate) artifact: Option<String>,
     pub(crate) changed_by: Option<Vec<String>>,
+    pub(crate) error: Option<contract::shapes::Failure>,
 }
 
 impl Loop {
@@ -84,6 +85,7 @@ impl Loop {
                 details: None,
                 artifact: None,
                 changed_by: None,
+                error: None,
             });
         }
         if ran.spilled.is_some() {
@@ -116,6 +118,7 @@ impl Loop {
                 self.capped(parts, full, ran.details, None, bound, id)?
                     .with(ran.images)
             }
+            AfterToolOutcome::Failed(failure) => Shaped::failed(failure),
             // Its only content is the line: images go too.
             AfterToolOutcome::Withheld { extension } => Shaped {
                 content: vec![ContentPart::Text {
@@ -126,6 +129,7 @@ impl Loop {
                 details: None,
                 artifact: None,
                 changed_by: None,
+                error: None,
             },
             AfterToolOutcome::Changed {
                 content,
@@ -183,6 +187,7 @@ impl Loop {
             details,
             artifact,
             changed_by: None,
+            error: None,
         })
     }
 
@@ -277,7 +282,14 @@ impl Loop {
                 details,
                 artifact: Some(artifact),
                 changed_by: None,
+                error: None,
             },
+            AfterToolOutcome::Failed(failure) => {
+                let shaped = Shaped::failed(failure);
+                let message = crate::conversation::text(&shaped.content);
+                replace_spilled(&self.log, &path, format!("{message}\n").as_bytes())?;
+                return Ok(shaped);
+            }
             // Its only content is the line: images go too. The file holds
             // the same line, as an `output_file` does.
             AfterToolOutcome::Withheld { extension } => {
@@ -290,6 +302,7 @@ impl Loop {
                     details: None,
                     artifact: None,
                     changed_by: None,
+                    error: None,
                 }
             }
             AfterToolOutcome::Changed {
@@ -328,6 +341,7 @@ impl Loop {
                     details,
                     artifact: Some(artifact),
                     changed_by: None,
+                    error: None,
                 }
             }
         };
@@ -393,7 +407,9 @@ impl Loop {
                 details,
                 artifact: None,
                 changed_by: None,
+                error: None,
             },
+            AfterToolOutcome::Failed(failure) => return Ok(Shaped::failed(failure)),
             // Its only content is the line: images go too.
             AfterToolOutcome::Withheld { extension } => Shaped {
                 content: vec![ContentPart::Text {
@@ -404,6 +420,7 @@ impl Loop {
                 details: None,
                 artifact: None,
                 changed_by: None,
+                error: None,
             },
             AfterToolOutcome::Changed {
                 content,
@@ -441,6 +458,7 @@ impl Loop {
                             details,
                             artifact,
                             changed_by: None,
+                            error: None,
                         }
                     }
                 }
@@ -536,6 +554,27 @@ fn joined(parts: Vec<ContentPart>) -> (Option<Vec<ContentPart>>, String) {
 }
 
 impl Shaped {
+    fn failed(failure: contract::hook::HookFailure) -> Self {
+        let message = format!(
+            "Output withheld: the `after_tool` hook of extension {} could not run: {}.",
+            failure.extension, failure.message
+        );
+        Self {
+            content: vec![ContentPart::Text {
+                text: message.clone(),
+            }],
+            details: None,
+            artifact: None,
+            changed_by: None,
+            error: Some(contract::shapes::Failure {
+                code: contract::ErrorCode::HookFailed,
+                message,
+                provider: None,
+                retry_after_ms: None,
+            }),
+        }
+    }
+
     /// The output's other parts, after its text.
     fn with(mut self, images: Vec<ContentPart>) -> Self {
         self.content.extend(images);
