@@ -19,7 +19,7 @@ use contract::shapes::Worktree;
 use contract::{ErrorCode, clock::Clock};
 use log::Log;
 
-use super::{enter_worktree, finish, recorded_worktree, recreatable};
+use super::{enter, enter_worktree, finish, recorded_worktree, recreatable};
 use crate::failed;
 
 /// A session directory whose first line is `session_started` with
@@ -176,6 +176,7 @@ fn enter_worktree_reports_a_lock_it_cannot_open() {
         &clock,
         &signals,
         &reads,
+        false,
     ) {
         Err(error) => {
             assert_eq!(error.failure.code, ErrorCode::IoFailed);
@@ -183,4 +184,122 @@ fn enter_worktree_reports_a_lock_it_cannot_open() {
         }
         Ok(_) => panic!("a lock that cannot open fails"),
     }
+}
+
+#[test]
+fn a_hub_present_recreation_enters_the_worktree() {
+    let home = fakes::TempDir::new("main-resume-present-hub");
+    let worktree = home.path().join("wt");
+    std::fs::create_dir(&worktree).unwrap();
+    let shared = doors::share(&worktree).unwrap();
+    match enter(&worktree, shared, true) {
+        Ok(super::Held::Shared { .. }) => {}
+        Ok(_) | Err(_) => panic!("a hub Present enters the worktree"),
+    }
+    // Canonical on both sides for macOS `/var` versus `/private/var`.
+    assert_eq!(
+        std::fs::canonicalize(std::env::current_dir().unwrap()).unwrap(),
+        std::fs::canonicalize(&worktree).unwrap()
+    );
+}
+
+#[test]
+fn an_ask_present_recreation_keeps_the_launch_directory() {
+    let before = std::env::current_dir().unwrap();
+    let home = fakes::TempDir::new("main-resume-present-ask");
+    let worktree = home.path().join("wt");
+    std::fs::create_dir(&worktree).unwrap();
+    let shared = doors::share(&worktree).unwrap();
+    match enter(&worktree, shared, false) {
+        Ok(super::Held::Shared { .. }) => {}
+        Ok(_) | Err(_) => panic!("an ask Present keeps the launch directory"),
+    }
+    assert_eq!(std::env::current_dir().unwrap(), before);
+}
+
+#[test]
+fn a_hub_present_recreation_whose_path_vanished_fails_io_failed() {
+    let before = std::env::current_dir().unwrap();
+    let home = fakes::TempDir::new("main-resume-present-gone");
+    let worktree = home.path().join("wt");
+    std::fs::create_dir(&worktree).unwrap();
+    let shared = doors::share(&worktree).unwrap();
+    std::fs::remove_dir_all(&worktree).unwrap();
+    match enter(&worktree, shared, true) {
+        Err(error) => {
+            assert_eq!(error.failure.code, ErrorCode::IoFailed);
+            assert!(
+                error
+                    .failure
+                    .message
+                    .contains(worktree.to_string_lossy().as_ref()),
+                "{}",
+                error.failure.message
+            );
+            assert!(error.isolation.is_none(), "nothing was made");
+        }
+        Ok(_) => panic!("a vanished path fails"),
+    }
+    assert_eq!(std::env::current_dir().unwrap(), before);
+}
+
+#[test]
+fn a_present_workspace_at_the_metadata_check_enters_on_the_hub_path() {
+    let before = std::env::current_dir().unwrap();
+    let home = fakes::TempDir::new("main-resume-hub-present");
+    let worktree = home.path().join("wt");
+    std::fs::create_dir(&worktree).unwrap();
+    let clock: Arc<dyn Clock> = fakes::clock::FakeClock::new();
+    let signals = doors::Signals::install(Arc::clone(&clock), None).unwrap();
+    let reads = Arc::new(crate::switch::Reads::default());
+    match enter_worktree(
+        Some(Worktree {
+            path: worktree.to_string_lossy().into_owned(),
+            branch: "fiber/x".to_owned(),
+            repository: Some(home.path().join("repo").to_string_lossy().into_owned()),
+        }),
+        home.path(),
+        &SessionId("s_0123456789abcdef".into()),
+        &clock,
+        &signals,
+        &reads,
+        true,
+    ) {
+        Ok(super::Held::Shared { .. }) => {}
+        Ok(_) | Err(_) => panic!("a present workspace enters on the hub path"),
+    }
+    // Canonical on both sides for macOS `/var` versus `/private/var`.
+    assert_eq!(
+        std::fs::canonicalize(std::env::current_dir().unwrap()).unwrap(),
+        std::fs::canonicalize(&worktree).unwrap()
+    );
+    std::env::set_current_dir(&before).unwrap();
+}
+
+#[test]
+fn a_present_workspace_at_the_metadata_check_keeps_the_launch_directory_for_ask_resume() {
+    let before = std::env::current_dir().unwrap();
+    let home = fakes::TempDir::new("main-resume-ask-present");
+    let worktree = home.path().join("wt");
+    std::fs::create_dir(&worktree).unwrap();
+    let clock: Arc<dyn Clock> = fakes::clock::FakeClock::new();
+    let signals = doors::Signals::install(Arc::clone(&clock), None).unwrap();
+    let reads = Arc::new(crate::switch::Reads::default());
+    match enter_worktree(
+        Some(Worktree {
+            path: worktree.to_string_lossy().into_owned(),
+            branch: "fiber/x".to_owned(),
+            repository: Some(home.path().join("repo").to_string_lossy().into_owned()),
+        }),
+        home.path(),
+        &SessionId("s_0123456789abcdef".into()),
+        &clock,
+        &signals,
+        &reads,
+        false,
+    ) {
+        Ok(super::Held::Shared { .. }) => {}
+        Ok(_) | Err(_) => panic!("a present workspace keeps the launch directory"),
+    }
+    assert_eq!(std::env::current_dir().unwrap(), before);
 }

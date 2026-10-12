@@ -140,6 +140,27 @@ impl Temp {
     fn hub_log(&self) -> String {
         fs::read_to_string(self.dir.join("logs").join("hub.log")).unwrap_or_default()
     }
+
+    /// `SID`'s log recording the workspace `w-SECRET` and `worktree` as
+    /// given: the repository path is `r-SECRET/.git` under the home,
+    /// never created. Returns the workspace and the repository.
+    fn worktree_log(&self, workspace_present: bool, worktree: Value) -> (PathBuf, PathBuf) {
+        let workspace = self.dir.join(format!("w-{SECRET}"));
+        if workspace_present {
+            fs::create_dir_all(&workspace).unwrap();
+        }
+        let repository = self.dir.join(format!("r-{SECRET}")).join(".git");
+        self.log(
+            &json!({
+                "kind": "session_started",
+                "seq": 0,
+                "session_id": SID,
+                "payload": {"workspace": workspace, "worktree": worktree},
+            })
+            .to_string(),
+        );
+        (workspace, repository)
+    }
 }
 
 /// Takes the relay thread's drain notice with the deadline, failing at
@@ -1741,4 +1762,143 @@ fn a_command_routed_while_its_relay_drains_is_passed_on() {
         received(&starter).last().unwrap(),
         &("c_3".into(), "reply".into())
     );
+}
+
+#[test]
+fn a_removed_workspace_resumes_in_its_recorded_repository() {
+    let temp = Temp::new();
+    let workspace = temp.dir.join(format!("w-{SECRET}"));
+    let repository = temp.dir.join(format!("r-{SECRET}")).join(".git");
+    temp.worktree_log(
+        false,
+        json!({"path": workspace, "branch": "fiber/s", "repository": repository}),
+    );
+    let starter = FakeStarter::bind_and_hold(&temp.dir);
+    let hub = temp.hub(starter.clone());
+    assert!(resumed(&hub).is_ok());
+    assert_eq!(starter.resumed(), [(sid(), repository)]);
+    assert!(!temp.hub_log().contains(SECRET), "no path in the log");
+}
+
+#[test]
+fn a_present_workspace_resumes_in_the_workspace_whatever_repository_is_recorded() {
+    let temp = Temp::new();
+    let workspace = temp.dir.join(format!("w-{SECRET}"));
+    let repository = temp.dir.join(format!("r-{SECRET}")).join(".git");
+    let (workspace, _) = temp.worktree_log(
+        true,
+        json!({"path": workspace, "branch": "fiber/s", "repository": repository}),
+    );
+    let starter = FakeStarter::bind_and_hold(&temp.dir);
+    let hub = temp.hub(starter.clone());
+    assert!(resumed(&hub).is_ok());
+    assert_eq!(starter.resumed(), [(sid(), workspace)]);
+    assert!(!temp.hub_log().contains(SECRET), "no path in the log");
+}
+
+#[test]
+fn a_removed_workspace_without_a_repository_resumes_in_the_workspace() {
+    let temp = Temp::new();
+    let workspace = temp.dir.join(format!("w-{SECRET}"));
+    let (workspace, _) = temp.worktree_log(false, json!({"path": workspace, "branch": "fiber/s"}));
+    // The workspace is gone, but with no recorded repository there is
+    // nowhere else to start: the starter gets the workspace and reports
+    // the missing path itself.
+    let starter = FakeStarter::exit_with(
+        &temp.dir,
+        crate::fake::failure(contract::ErrorCode::IoFailed, "The workspace is gone."),
+    );
+    let hub = temp.hub(starter.clone());
+    let refused = refused(resumed(&hub));
+    assert_eq!(refused.code, contract::ErrorCode::IoFailed);
+    assert_eq!(starter.resumed(), [(sid(), workspace)]);
+    assert!(!temp.hub_log().contains(SECRET), "no path in the log");
+}
+
+#[test]
+fn a_repository_that_is_not_a_string_is_ignored_and_the_log_is_not_corrupt() {
+    for repository in [json!(7), Value::Null, json!(["x"])] {
+        let temp = Temp::new();
+        let workspace = temp.dir.join(format!("w-{SECRET}"));
+        let (workspace, _) = temp.worktree_log(
+            false,
+            json!({"path": workspace, "branch": "fiber/s", "repository": repository}),
+        );
+        let starter = FakeStarter::bind_and_hold(&temp.dir);
+        let hub = temp.hub(starter.clone());
+        assert!(resumed(&hub).is_ok(), "{repository}");
+        assert_eq!(starter.resumed(), [(sid(), workspace)], "{repository}");
+        assert!(!temp.hub_log().contains(SECRET), "no path in the log");
+    }
+    // A `worktree` that is not an object holds no repository either.
+    let temp = Temp::new();
+    let (workspace, _) = temp.worktree_log(false, json!("x"));
+    let starter = FakeStarter::bind_and_hold(&temp.dir);
+    let hub = temp.hub(starter.clone());
+    assert!(resumed(&hub).is_ok());
+    assert_eq!(starter.resumed(), [(sid(), workspace)]);
+    assert!(!temp.hub_log().contains(SECRET), "no path in the log");
+}
+
+#[test]
+fn a_dangling_symlink_workspace_is_present() {
+    let temp = Temp::new();
+    let workspace = temp.dir.join(format!("w-{SECRET}"));
+    let repository = temp.dir.join(format!("r-{SECRET}")).join(".git");
+    let (workspace, _) = temp.worktree_log(
+        false,
+        json!({"path": workspace, "branch": "fiber/s", "repository": repository}),
+    );
+    std::os::unix::fs::symlink(temp.dir.join("no-such-target"), &workspace).unwrap();
+    let starter = FakeStarter::bind_and_hold(&temp.dir);
+    let hub = temp.hub(starter.clone());
+    assert!(resumed(&hub).is_ok());
+    assert_eq!(starter.resumed(), [(sid(), workspace)]);
+    assert!(!temp.hub_log().contains(SECRET), "no path in the log");
+}
+
+#[test]
+fn a_lookup_error_other_than_not_found_keeps_the_workspace() {
+    // The workspace is `<regular file>/inner`: its metadata fails with
+    // `ENOTDIR`, never `NotFound`.
+    let temp = Temp::new();
+    let base = temp.dir.join(format!("w-{SECRET}"));
+    fs::write(&base, "x").unwrap();
+    let workspace = base.join("inner");
+    let repository = temp.dir.join(format!("r-{SECRET}")).join(".git");
+    temp.log(
+        &json!({
+            "kind": "session_started",
+            "seq": 0,
+            "session_id": SID,
+            "payload": {
+                "workspace": workspace,
+                "worktree": {"path": workspace, "branch": "fiber/s", "repository": repository},
+            },
+        })
+        .to_string(),
+    );
+    let starter = FakeStarter::bind_and_hold(&temp.dir);
+    let hub = temp.hub(starter.clone());
+    assert!(resumed(&hub).is_ok());
+    assert_eq!(starter.resumed(), [(sid(), workspace)]);
+    assert!(!temp.hub_log().contains(SECRET), "no path in the log");
+}
+
+#[test]
+fn a_removed_workspace_resumes_in_its_recorded_repository_through_serve() {
+    let temp = Temp::new();
+    let workspace = temp.dir.join(format!("w-{SECRET}"));
+    let repository = temp.dir.join(format!("r-{SECRET}")).join(".git");
+    let (_, repository) = temp.worktree_log(
+        false,
+        json!({"path": workspace, "branch": "fiber/s", "repository": repository}),
+    );
+    let starter = FakeStarter::bind_and_hold(&temp.dir);
+    let hub = temp.hub(starter.clone());
+    let mut client = Client::connect(&hub);
+    client.send("c_1", "subscribe");
+    assert_eq!(client.acknowledged("the subscribe"), "c_1");
+    assert_eq!(starter.resumed(), [(sid(), repository)]);
+    assert!(!temp.hub_log().contains(SECRET), "no path in the log");
 }

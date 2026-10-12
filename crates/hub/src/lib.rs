@@ -120,8 +120,9 @@ pub trait Starter: Send + Sync {
         worktree: bool,
     ) -> io::Result<Box<dyn Started>>;
 
-    /// Starts the session command resuming `id` in `workspace`, the one
-    /// its log recorded (`docs/invocation.md`, "Lifecycle").
+    /// Starts the session command resuming `id` in `workspace`, the launch
+    /// directory the hub selected from the session's log
+    /// (`docs/invocation.md`, "Lifecycle").
     fn resume(&self, id: &SessionId, workspace: &Path) -> io::Result<Box<dyn Started>>;
 
     /// Starts the session command for a rewind's new session `id` in
