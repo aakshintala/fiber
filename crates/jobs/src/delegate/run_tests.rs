@@ -1610,7 +1610,8 @@ fn the_watch_stats_the_log_once_per_poll_interval() {
 fn the_watch_boundary_skips_an_earlier_run_exit() {
     // The child prints the same line the watch delivers for this run:
     // whether the reap or the watch wins the race, the fold sees the
-    // live run's `fiber_exited`, never the replayed earlier one.
+    // live run's `fiber_exited`, never the replayed earlier one. The
+    // reap may win before any watch runs, so the list may be empty.
     let line = json_line(9, "New.");
     let rig = rig(vec![WatchReply::Exited(vec![
         fiber_exited_line(5, "Old."),
@@ -1630,9 +1631,8 @@ fn the_watch_boundary_skips_an_earlier_run_exit() {
         Some("New.".into())
     );
     assert!(
-        !rig.script.afters().is_empty()
-            && rig.script.afters().iter().all(|after| *after == Some(5)),
-        "every watch call passes the boundary: {:?}",
+        rig.script.afters().iter().all(|after| *after == Some(5)),
+        "every watch call passes the boundary (none when the reap wins): {:?}",
         rig.script.afters()
     );
     watchdog.stand_down(DEADLINE);
@@ -1642,7 +1642,8 @@ fn the_watch_boundary_skips_an_earlier_run_exit() {
 fn no_boundary_takes_the_first_replayed_exit_as_today() {
     // The child prints the same line the watch delivers first: whether
     // the reap or the watch wins the race, the fold sees that exit, as
-    // it did before any boundary.
+    // it did before any boundary. The reap may win before any watch
+    // runs, so the list may be empty.
     let line = json_line(5, "Old.");
     let rig = rig(vec![WatchReply::Exited(vec![
         fiber_exited_line(5, "Old."),
@@ -1661,8 +1662,8 @@ fn no_boundary_takes_the_first_replayed_exit_as_today() {
         Some("Old.".into())
     );
     assert!(
-        !rig.script.afters().is_empty() && rig.script.afters().iter().all(|after| after.is_none()),
-        "every watch call passes no boundary: {:?}",
+        rig.script.afters().iter().all(|after| after.is_none()),
+        "every watch call passes no boundary (none when the reap wins): {:?}",
         rig.script.afters()
     );
     watchdog.stand_down(DEADLINE);
