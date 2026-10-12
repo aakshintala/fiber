@@ -1,7 +1,7 @@
 //! The VM's prelude, its `require`, and the deadline hook shared by every
 //! coroutine (`docs/extensions.md`, "How an extension runs").
 
-use std::cell::Cell;
+use std::cell::{Cell, RefCell};
 use std::fs::File;
 use std::io::Read;
 use std::path::{Path, PathBuf};
@@ -33,7 +33,15 @@ pub(crate) fn install(
     deadline: &Deadline,
     dir: PathBuf,
     memory_cap: usize,
-) -> mlua::Result<(Table, Table, Table, Table, crate::host::failure::FailureLib)> {
+    loading: Rc<RefCell<Option<String>>>,
+) -> mlua::Result<(
+    Table,
+    Table,
+    Table,
+    Table,
+    Table,
+    crate::host::failure::FailureLib,
+)> {
     let globals = lua.globals();
     for name in ["print", "warn", "dofile", "loadfile"] {
         globals.raw_remove(name)?;
@@ -52,10 +60,26 @@ pub(crate) fn install(
         })
     })?;
     let failures = crate::host::failure::install(lua)?;
-    let (commands, providers, hooks, problems): (Table, Table, Table, Table) = lua
-        .load(PRELUDE)
-        .set_name("=prelude")
-        .call((create, load_module, failures.rethrow_panic.clone()))?;
+    let loading = lua.create_function(move |_, ()| Ok(loading.borrow().clone()))?;
+    let (commands, providers, hooks, problems, violations): (Table, Table, Table, Table, Table) =
+        lua.load(PRELUDE).set_name("=prelude").call((
+            create,
+            load_module,
+            failures.rethrow_panic.clone(),
+            loading,
+        ))?;
+    Ok((commands, providers, hooks, problems, violations, failures))
+}
+
+#[cfg(test)]
+pub(crate) fn install_prelude(
+    lua: &Lua,
+    deadline: &Deadline,
+    dir: PathBuf,
+    memory_cap: usize,
+) -> mlua::Result<(Table, Table, Table, Table, crate::host::failure::FailureLib)> {
+    let (commands, providers, hooks, problems, _violations, failures) =
+        install(lua, deadline, dir, memory_cap, Rc::default())?;
     Ok((commands, providers, hooks, problems, failures))
 }
 

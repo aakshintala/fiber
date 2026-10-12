@@ -2,7 +2,7 @@
 //! script, one coroutine per callback, and the host calls each yields to.
 //! Only the extension's thread touches the VM.
 
-use std::cell::Cell;
+use std::cell::{Cell, RefCell};
 use std::collections::BTreeMap;
 use std::path::PathBuf;
 use std::rc::Rc;
@@ -111,8 +111,15 @@ impl Vm {
         )
         .map_err(lua_error)?;
         lua.set_memory_limit(*memory_cap).map_err(lua_error)?;
-        let (commands, providers, hooks, problems, failures) =
-            setup::install(&lua, &deadline, dir.clone(), *memory_cap).map_err(lua_error)?;
+        let loading = Rc::new(RefCell::new(Some(ENTRY.to_owned())));
+        let (commands, providers, hooks, problems, violations, failures) = setup::install(
+            &lua,
+            &deadline,
+            dir.clone(),
+            *memory_cap,
+            Rc::clone(&loading),
+        )
+        .map_err(lua_error)?;
         let failure_state = failures.state.clone();
         let workspace = session
             .as_ref()
@@ -166,7 +173,11 @@ impl Vm {
         };
         let ran = vm.resume(entry_fn, ENTRY, LOAD_TIMEOUT, mlua::Value::Nil);
         entry.set(false);
+        *loading.borrow_mut() = None;
         ran?;
+        if let Some(message) = violations.sequence_values::<String>().next() {
+            return Err(fail(message.map_err(lua_error)?));
+        }
         Ok(vm)
     }
 

@@ -20,6 +20,90 @@ const WAIT_UNTIL: Duration = fakes::MUST_SUCCEED_WITHIN;
 /// Bound on a wait for a test server to accept, or a caller to park.
 const WAIT_SERVER: Duration = fakes::MUST_SUCCEED_WITHIN;
 
+fn registration_result(init: &str, command: Option<&str>) -> Result<Vec<(String, String)>, Error> {
+    let dir = extension("registration-guards", init);
+    let ext = LuaExtension::new("ext", dir.path(), dir.path(), FakeClock::new());
+    let command = command.map(str::to_owned);
+    let (tx, rx) = mpsc::channel();
+    thread::spawn(move || {
+        let result = match command {
+            Some(command) => ext
+                .command(&command, "")
+                .map(|reply| vec![(command, reply)]),
+            None => ext.commands(),
+        };
+        tx.send(result).unwrap();
+        drop(dir);
+    });
+    Deadline::after(WAIT_UNTIL).recv_or_fail(&rx, "registration guard result")
+}
+
+#[test]
+fn provider_registration_in_init_is_refused_plain_and_caught() {
+    for init in [
+        "fiber.provider('acme', {})",
+        "pcall(function() fiber.provider('acme', {}) end)",
+    ] {
+        let err = registration_result(init, None).unwrap_err();
+        let Error::Lua { message, .. } = err else {
+            panic!("{err:?}")
+        };
+        assert!(message.contains("init.lua"), "{message}");
+        assert!(message.contains("providers/acme.lua"), "{message}");
+    }
+}
+
+#[test]
+fn registration_from_a_command_is_refused_for_each_registration_kind() {
+    for call in [
+        "fiber.command('late', {timeout=100, run=function() end})",
+        "fiber.hook('turn_start', {timeout=100, on_failure='blocking', run=function() end})",
+        "fiber.provider('acme', {})",
+    ] {
+        let init = format!("fiber.command('test', {{timeout=1000, run=function() {call} end}})");
+        let err = registration_result(&init, Some("test")).unwrap_err();
+        let Error::Lua { message, .. } = err else {
+            panic!("{err:?}")
+        };
+        assert!(message.contains("init.lua:1:"), "{message}");
+        assert!(message.contains("only while"), "{message}");
+    }
+}
+
+#[test]
+fn registration_from_a_deferred_timer_never_makes_a_command_callable() {
+    let dir = extension(
+        "timer-registration",
+        r#"
+        visited = false
+        fiber.command('probe', {timeout=1000, run=function() return tostring(visited) .. ' ' .. tostring(reason) end})
+        host.after(0, function()
+            visited = true
+            local ok
+            ok, reason = pcall(function()
+                fiber.command('late', {timeout=1000, run=function() return 'late' end})
+            end)
+        end, {timeout=1000})
+    "#,
+    );
+    let ext = LuaExtension::new("ext", dir.path(), dir.path(), FakeClock::new());
+    let (tx, rx) = mpsc::channel();
+    thread::spawn(move || {
+        ext.commands().unwrap();
+        assert!(until(&ext.hub, |s| s.timers.listed().is_empty()));
+        let probe = ext.command("probe", "");
+        let late = ext.command("late", "");
+        tx.send((probe, late)).unwrap();
+        drop(dir);
+    });
+    let (probe, late) = Deadline::after(WAIT_UNTIL).recv_or_fail(&rx, "timer registration result");
+    let probe = probe.unwrap();
+    assert!(probe.starts_with("true "), "{probe}");
+    assert!(probe.contains("init.lua:"), "{probe}");
+    assert!(probe.contains("only while"), "{probe}");
+    assert!(matches!(late, Err(Error::UnknownCommand { command, .. }) if command == "late"));
+}
+
 /// A panic in a host function is never a Lua error the extension's `pcall`
 /// can catch (`docs/code-quality.md`, "Panics"). Tests run under unwind,
 /// where it reaches the Rust caller past the `pcall`; Fiber's builds abort at
