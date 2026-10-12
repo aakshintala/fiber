@@ -487,6 +487,15 @@ test's own reap above, not the scan.
 
 The completion tests need bash, zsh and fish on PATH, on Linux and macOS: they never skip at runtime for a missing shell, so a machine without one fails them.
 
+A test that runs a command, directly or through a scripted tool call, uses
+only the shells above and the standard Unix tools every runner has, such as
+`grep`, `sed` and `awk`. `rg`, `jq` and other tools a developer installs are
+absent on the Linux runners, and a scripted call to one fails there.
+
+A test never depends on the length of a temporary path: macOS's are long and
+Linux's short. A test that needs a line cut makes the line long enough to cut
+on any temporary path.
+
 The tests need a user other than root: root bypasses file modes, so the tests
 that deny a file or socket by mode fail with a message saying so.
 
