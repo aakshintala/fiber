@@ -318,6 +318,14 @@ fn serve(
     }
 }
 
+/// Test-only signal for the trickled-header regression test: `read_request`
+/// sends after the request line is read (which is after `accept` made the
+/// request's `RequestDeadline`), so the test advances the fake clock only
+/// once the server is waiting on it (`docs/testing.md`, "Waits and
+/// timeouts").
+#[cfg(test)]
+static REQUEST_LINE_READ: Mutex<Option<std::sync::mpsc::Sender<()>>> = Mutex::new(None);
+
 /// Accepts one connection and reads its request within one [`WAIT`] bound
 /// of the clock: the stream, the method, the body and the bound its
 /// answers share. Fails naming `what` on expiry, so the fake never blocks
@@ -384,6 +392,18 @@ fn read_request(
     what: &str,
 ) -> (String, Vec<u8>) {
     let head = read_line(stream, deadline, what, "to read");
+    #[cfg(test)]
+    {
+        if let Some(tx) = REQUEST_LINE_READ
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .as_ref()
+        {
+            match tx.send(()) {
+                Ok(()) | Err(_) => {}
+            }
+        }
+    }
     let method = head
         .split_whitespace()
         .next()
@@ -591,6 +611,10 @@ mod tests {
         let pause = Arc::new((Mutex::new(()), std::sync::Condvar::new()));
         let waiting = Arc::clone(&pause);
         let (done_tx, done_rx) = mpsc::channel();
+        let (line_tx, line_rx) = mpsc::channel();
+        *REQUEST_LINE_READ
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner) = Some(line_tx);
         std::thread::spawn(move || {
             let caught = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
                 accept(&listener, &waiting, "the initialize request", clock)
@@ -605,6 +629,12 @@ mod tests {
                 .write_all(std::slice::from_ref(byte))
                 .expect("the trickle writes");
         }
+        // After the deadline exists and the request line is read: the
+        // server is waiting on the clock before the clock moves
+        // (`docs/testing.md`, "Waits and timeouts").
+        Deadline::after(WAIT)
+            .recv(&line_rx)
+            .expect("the server read the request line");
         // A header line, one byte at a time, across more than the bound
         // overall: its first bytes arrive inside the bound, the rest past
         // it, while every underlying read still succeeds.
