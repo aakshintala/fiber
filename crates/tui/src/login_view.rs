@@ -482,9 +482,6 @@ impl Login {
                     .unwrap_or(before);
             }
         }
-        if self.selected != before {
-            self.said.clear();
-        }
         Act::Stay
     }
 
@@ -1116,17 +1113,17 @@ fn label_edit_row(label: &Draft, inner: usize) -> overlay::Row {
     };
     let mut start = caret;
     let mut end = caret.saturating_add(1);
-    while end < chars.len() {
-        if width_between(start, end.saturating_add(1)) > room {
+    for to in end.saturating_add(1)..=chars.len() {
+        if width_between(start, to) > room {
             break;
         }
-        end = end.saturating_add(1);
+        end = to;
     }
-    while start > 0 {
-        if width_between(start.saturating_sub(1), end) > room {
+    for from in (0..start).rev() {
+        if width_between(from, end) > room {
             break;
         }
-        start = start.saturating_sub(1);
+        start = from;
     }
     let before: String = chars
         .iter()
@@ -1178,26 +1175,22 @@ fn failed_rows(head: &str, reason: &str, dot: &str, inner: usize) -> Vec<overlay
     source.extend(reason.chars().map(|ch| (ch, true)));
     source.extend(dot.chars().map(|ch| (ch, false)));
     let mut out = Vec::new();
-    let mut first = true;
     for (row, join) in format::wrap_joined(&combined, inner.max(1)) {
-        if !first {
-            // The wrap dropped one space or line break here; an empty
-            // row's only source char is this separator.
-            match join {
-                Join::WrapSpace => {
-                    if matches!(source.front(), Some((' ', _))) {
-                        source.pop_front();
-                    }
+        // The wrap dropped one space or line break here; an empty
+        // row's only source char is this separator.
+        match join {
+            Join::WrapSpace => {
+                if matches!(source.front(), Some((' ', _))) {
+                    source.pop_front();
                 }
-                Join::Break => {
-                    if matches!(source.front(), Some(('\n', _))) {
-                        source.pop_front();
-                    }
-                }
-                Join::Wrap => {}
             }
+            Join::Break => {
+                if matches!(source.front(), Some(('\n', _))) {
+                    source.pop_front();
+                }
+            }
+            Join::Wrap => {}
         }
-        first = false;
         let mut styled: Vec<(char, bool)> = Vec::new();
         for ch in row.chars() {
             // Skip anything else the wrap dropped, such as the spaces

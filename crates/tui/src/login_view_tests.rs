@@ -2358,3 +2358,75 @@ fn a_saturated_body_clips_to_the_lists_budget() {
         );
     }
 }
+
+/// The spans of a label row as text, in order.
+fn span_texts(row: &overlay::Row) -> Vec<String> {
+    row.spans
+        .iter()
+        .map(|span| span.content.to_string())
+        .collect()
+}
+
+/// The label row for `text` with the caret at `caret`, at width `inner`.
+fn label_spans(text: &str, caret: usize, inner: usize) -> Vec<String> {
+    let mut label = crate::input::Draft::default();
+    label.set(text);
+    for _ in caret..text.chars().count() {
+        label.edit(Edit::Left);
+    }
+    span_texts(&super::label_edit_row(&label, inner))
+}
+
+#[test]
+fn a_label_caret_fills_the_room_on_both_sides_to_the_cell() {
+    // The prefix is 14 cells, so an inner width of 24 leaves 10 for the
+    // label. The caret sits at index 8: 9 cells run to its right, and a
+    // cell to its left would make 11, so the left side stays empty.
+    let text = "abcdefghijklmnopqrstuvwxyz";
+    assert_eq!(
+        label_spans(text, 8, 24),
+        ["Label (--as): ", "", "i", "jklmnopqr"]
+    );
+}
+
+#[test]
+fn a_label_caret_fills_the_left_room_to_the_cell() {
+    // The caret at index 20 leaves 5 cells to its right and 4 to its
+    // left: 10 cells in all, and a fifth cell on the left would not fit.
+    let text = "abcdefghijklmnopqrstuvwxyz";
+    assert_eq!(
+        label_spans(text, 20, 24),
+        ["Label (--as): ", "qrst", "u", "vwxyz"]
+    );
+}
+
+#[test]
+fn a_secret_only_list_is_as_wide_as_its_heading_or_row() {
+    // The heading "Secrets" is 7 cells and the row 5, so the list is 7.
+    let targets = vec![LoginTarget {
+        name: "k".to_owned(),
+        kind: LoginKind::Secret,
+    }];
+    assert_eq!(super::list_widest(&targets), 7);
+}
+
+#[test]
+fn a_key_only_list_is_as_wide_as_its_heading_or_row() {
+    // The heading "Providers" is 9 cells and the row "  k  key" is 8, so
+    // the list is 9.
+    let targets = vec![LoginTarget {
+        name: "k".to_owned(),
+        kind: LoginKind::Key,
+    }];
+    assert_eq!(super::list_widest(&targets), 9);
+}
+
+#[test]
+fn a_long_row_sets_the_list_width_uncut() {
+    // Gutter 2, the 20-cell name, 2 cells, then "browser": 31 cells.
+    let targets = vec![LoginTarget {
+        name: "a-long-provider-name".to_owned(),
+        kind: LoginKind::Browser,
+    }];
+    assert_eq!(super::list_widest(&targets), 31);
+}
