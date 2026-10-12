@@ -69,6 +69,47 @@ impl Setup {
     }
 }
 
+/// Runs `finish` where it owes no notice and requires it back promptly.
+///
+/// Under the `finish` mutants that widen its wait (`!=` to `==`, `&&` to
+/// `||`) the empty wait runs out its whole deadline on the frozen fake
+/// clock, so the wall-clock bound below fails the test in seconds instead
+/// of the mutant timeout. Goes over the public API with the injected
+/// clock, so no test hook is needed.
+fn finish_now(hub: &Hub, clock: &FakeClock, revoked: Revoked) {
+    let end = revoked.end;
+    std::thread::scope(|s| {
+        let (finished_tx, finished_rx) = std::sync::mpsc::channel();
+        s.spawn(move || {
+            hub.pairing.finish(hub, revoked);
+            finished_tx.send(()).unwrap_or(());
+        });
+        if fakes::Deadline::after(Duration::from_secs(2))
+            .recv(&finished_rx)
+            .is_ok()
+        {
+            return;
+        }
+        assert!(
+            clock.await_parked(end, Duration::from_secs(1)),
+            "finish waits for its deadline"
+        );
+        clock.advance(crate::port::STOP_CLOSE_WAIT);
+        fakes::Deadline::after(Duration::from_secs(2))
+            .recv_or_fail(&finished_rx, "finish exits at its deadline");
+        panic!("finish waited for fake time with nothing to wait for");
+    });
+}
+
+#[test]
+fn finish_with_nothing_to_wait_for_returns_without_fake_time() {
+    let setup = Setup::new();
+    setup.pair("phone", 1);
+    let revoked = setup.revoke("phone");
+    // The fake clock is never advanced: finish must not wait on it.
+    finish_now(&setup.hub, &setup.clock, revoked);
+}
+
 #[test]
 fn pairing_code_for_a_paired_name_is_rejected() {
     let setup = Setup::new();
@@ -249,7 +290,7 @@ fn revoking_a_device_voids_the_codes_it_minted() {
             .unwrap(),
         Outcome::Dropped
     ));
-    setup.hub.pairing.finish(&setup.hub, revoked);
+    finish_now(&setup.hub, &setup.clock, revoked);
 }
 
 #[test]
@@ -265,7 +306,7 @@ fn a_revoked_connection_attached_late_is_shut_at_once() {
         .pairing
         .attach(&who, &Arc::new(Mutex::new(writer)));
     assert_eq!(peer.read(&mut [0; 1]).unwrap(), 0);
-    setup.hub.pairing.finish(&setup.hub, revoked);
+    finish_now(&setup.hub, &setup.clock, revoked);
 }
 
 #[test]
@@ -332,7 +373,7 @@ fn a_sync_failure_after_unlink_still_revokes() {
     let revoked = setup.revoke("phone");
     assert!(who.revoked());
     assert!(!setup.hub.home.join("hub/devices/phone").exists());
-    setup.hub.pairing.finish(&setup.hub, revoked);
+    finish_now(&setup.hub, &setup.clock, revoked);
     let log = fs::read_to_string(setup.hub.home.join("logs/hub.log")).unwrap();
     assert!(log.contains("device_revoked") && log.contains("io_failed") && log.contains("warn"));
 }
@@ -453,13 +494,14 @@ fn a_token_copied_into_two_records_dies_with_either() {
             .authenticate(&setup.hub, 4, &token.0)
             .is_none()
     );
-    setup.hub.pairing.finish(&setup.hub, revoked);
+    finish_now(&setup.hub, &setup.clock, revoked);
 }
 
 #[test]
 fn authenticate_holds_revoke_until_it_registers() {
     let setup = Setup::new();
     let (token, _) = setup.pair("phone", 1);
+    let clock = Arc::clone(&setup.clock);
     let hub = Arc::new(setup.hub);
     let (held_tx, held_rx) = std::sync::mpsc::channel();
     let (release_tx, release_rx) = std::sync::mpsc::channel();
@@ -504,7 +546,7 @@ fn authenticate_holds_revoke_until_it_registers() {
         Outcome::Dropped => panic!("local revoke dropped"),
     };
     assert!(who.revoked());
-    hub.pairing.finish(&hub, revoked);
+    finish_now(&hub, &clock, revoked);
 }
 
 #[test]
@@ -567,6 +609,7 @@ fn two_redemptions_of_one_code_admit_one() {
 fn a_mint_that_waits_behind_its_issuers_revocation_mints_nothing() {
     let setup = Setup::new();
     let (_, who) = setup.pair("phone", 1);
+    let clock = Arc::clone(&setup.clock);
     let hub = Arc::new(setup.hub);
     let (held_tx, held_rx) = std::sync::mpsc::channel();
     let (release_tx, release_rx) = std::sync::mpsc::channel();
@@ -619,7 +662,7 @@ fn a_mint_that_waits_behind_its_issuers_revocation_mints_nothing() {
         Outcome::Dropped => panic!("local revoke dropped"),
     };
     assert_eq!(hub.pairing.pending(), 0);
-    hub.pairing.finish(&hub, revoked);
+    finish_now(&hub, &clock, revoked);
 }
 
 #[test]
