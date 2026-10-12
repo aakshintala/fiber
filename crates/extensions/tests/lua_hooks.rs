@@ -14,7 +14,9 @@ use contract::clock::Clock;
 use contract::events::{CallStatus, ExtensionExec, ExtensionLog};
 use contract::hook::{
     AfterToolAnswer, AfterToolCall, AfterToolOutcome, BeforeMessage, BeforeMessageAnswer,
-    BeforeMessageOutcome, BeforeToolAnswer, BeforeToolCall, BeforeToolOutcome, Context, Hooks,
+    BeforeMessageOutcome, BeforeModelCall, BeforeToolAnswer, BeforeToolCall, BeforeToolOutcome,
+    CheckAnswer, CheckOutcome, Context, ContextAnswer, ContextOutcome, Hooks, SessionStart,
+    StartReason, TurnEnd,
 };
 use contract::inbox::Delivery;
 use contract::shapes::{ContentPart, DeclaredEffects};
@@ -273,6 +275,65 @@ fn ask_message(session: &Arc<SessionExtensions>) -> mpsc::Receiver<BeforeMessage
     std::thread::spawn(move || {
         let content = vec![ContentPart::Text { text: "x".into() }];
         let answer = session.before_message(&BeforeMessage { content: &content });
+        match tx.send(answer) {
+            Ok(()) | Err(mpsc::SendError(_)) => {}
+        }
+    });
+    rx
+}
+
+/// Asks the `turn_end` hooks about a reply, on its own thread. The cancel
+/// never fires, so the chain runs every hook.
+fn ask_end(session: &Arc<SessionExtensions>) -> mpsc::Receiver<ContextAnswer> {
+    let (tx, rx) = mpsc::channel();
+    let session = Arc::clone(session);
+    std::thread::spawn(move || {
+        let cancel = fakes::CancelToken::new();
+        let answer = session.turn_end(&TurnEnd {
+            reply: "Done.",
+            cancel: &cancel,
+        });
+        match tx.send(answer) {
+            Ok(()) | Err(mpsc::SendError(_)) => {}
+        }
+    });
+    rx
+}
+
+/// Asks the `session_start` hooks about a start, on its own thread. The
+/// cancel never fires, so the chain runs every hook.
+fn ask_start(session: &Arc<SessionExtensions>, workspace: PathBuf) -> mpsc::Receiver<ContextAnswer> {
+    let (tx, rx) = mpsc::channel();
+    let session = Arc::clone(session);
+    std::thread::spawn(move || {
+        let id = contract::SessionId("s_4c1d".into());
+        let cancel = fakes::CancelToken::new();
+        let answer = session.session_start(&SessionStart {
+            reason: StartReason::Start,
+            session_id: &id,
+            workspace: &workspace.display().to_string(),
+            cancel: &cancel,
+        });
+        match tx.send(answer) {
+            Ok(()) | Err(mpsc::SendError(_)) => {}
+        }
+    });
+    rx
+}
+
+/// Asks the `before_model_call` hooks about a request, on its own thread.
+/// The cancel never fires, so the chain runs every hook.
+fn ask_call(session: &Arc<SessionExtensions>) -> mpsc::Receiver<CheckAnswer> {
+    let (tx, rx) = mpsc::channel();
+    let session = Arc::clone(session);
+    std::thread::spawn(move || {
+        let usage = contract::shapes::Usage::default();
+        let cancel = fakes::CancelToken::new();
+        let answer = session.before_model_call(&BeforeModelCall {
+            model: "anthropic/claude-x",
+            usage: &usage,
+            cancel: &cancel,
+        });
         match tx.send(answer) {
             Ok(()) | Err(mpsc::SendError(_)) => {}
         }
@@ -1410,4 +1471,263 @@ fn kill_every_group_stops_a_hook_parked_on_a_long_exec() {
         "the exec group is gone after the kill"
     );
     watchdog.stand_down(WAIT);
+}
+
+// The lifecycle points under their timeouts, on the fake clock
+// (`docs/extensions.md`, "When a hook fails" and "How an extension runs").
+
+#[test]
+#[allow(clippy::expect_used, reason = "a failure is the test's")]
+fn a_blocking_turn_end_hook_past_its_timeout_fails() {
+    let setup = Setup::new();
+    let dir = install_lua(
+        &setup,
+        "a",
+        &json!({}),
+        &spinning_at("turn_end", "blocking", 50, "{ message = \"late\" }"),
+    );
+    let went = go_module(&dir, "spin");
+    let clock = FakeClock::new();
+    let session = load(&setup, &[], clock.clone());
+    let answer = timed_out(
+        || ask_end(&session),
+        &clock,
+        &went,
+        Duration::from_millis(50),
+        &Deadline::after(WAIT),
+    );
+    let ContextOutcome::Failed(failure) = answer.outcome else {
+        panic!("the hook fails: {:?}", answer.outcome);
+    };
+    assert_eq!(failure.extension, "fiber.test/a");
+    assert!(
+        failure.message.contains("50 ms timeout"),
+        "{}",
+        failure.message
+    );
+}
+
+#[test]
+#[allow(clippy::expect_used, reason = "a failure is the test's")]
+fn a_non_blocking_session_start_hook_past_its_timeout_adds_no_context() {
+    let setup = Setup::new();
+    let dir = install_lua(
+        &setup,
+        "a",
+        &json!({}),
+        &spinning_at("session_start", "non-blocking", 50, "{ context = \"late\" }"),
+    );
+    let went = go_module(&dir, "spin");
+    let clock = FakeClock::new();
+    let session = load(&setup, &[], clock.clone());
+    let workspace = setup.workspace();
+    let answer = timed_out(
+        || ask_start(&session, workspace),
+        &clock,
+        &went,
+        Duration::from_millis(50),
+        &Deadline::after(WAIT),
+    );
+    let ContextOutcome::Added(context) = answer.outcome else {
+        panic!("the chain goes on: {:?}", answer.outcome);
+    };
+    assert!(context.is_empty(), "{context:?}");
+    assert_eq!(answer.notices.len(), 1);
+    assert_eq!(answer.notices[0].code, ErrorCode::HookFailed);
+    assert_eq!(answer.notices[0].extension.as_deref(), Some("fiber.test/a"));
+    assert!(
+        answer.notices[0].message.contains("50 ms timeout"),
+        "{}",
+        answer.notices[0].message
+    );
+}
+
+#[test]
+#[allow(clippy::expect_used, reason = "a failure is the test's")]
+fn a_blocking_before_model_call_hook_past_its_timeout_fails() {
+    let setup = Setup::new();
+    let dir = install_lua(
+        &setup,
+        "a",
+        &json!({}),
+        &spinning_at("before_model_call", "blocking", 50, "{ refuse = \"late\" }"),
+    );
+    let went = go_module(&dir, "spin");
+    let clock = FakeClock::new();
+    let session = load(&setup, &[], clock.clone());
+    let answer = timed_out(
+        || ask_call(&session),
+        &clock,
+        &went,
+        Duration::from_millis(50),
+        &Deadline::after(WAIT),
+    );
+    let CheckOutcome::Failed(failure) = answer.outcome else {
+        panic!("the hook fails: {:?}", answer.outcome);
+    };
+    assert_eq!(failure.extension, "fiber.test/a");
+    assert!(
+        failure.message.contains("50 ms timeout"),
+        "{}",
+        failure.message
+    );
+}
+
+/// A `turn_end` chain whose first hook holds in a fifo write: cancelling
+/// while it holds and then releasing it never starts the second hook, and
+/// the first hook's message is dropped.
+#[test]
+#[allow(clippy::expect_used, reason = "a failure is the test's")]
+fn a_cancel_between_turn_end_hooks_drops_the_first_hooks_message() {
+    let setup = Setup::new();
+    let dir = setup.workspace();
+    let init = format!(
+        "local dir = '{}'\n\
+         fiber.hook(\"turn_end\", {{ timeout = 60000, on_failure = \"non-blocking\",\n\
+           run = function(call)\n\
+             require(\"go_hold\")\n\
+             host.fs.write(dir .. \"/started.fifo\", \"x\")\n\
+             host.fs.write(dir .. \"/release.fifo\", \"x\")\n\
+             return {{ message = \"first\" }}\n\
+           end }})\n\
+         fiber.hook(\"turn_end\", {{ timeout = 60000, on_failure = \"non-blocking\",\n\
+           run = function(call)\n\
+             host.fs.write(dir .. \"/b_ran\", \"x\")\n\
+             return {{ message = \"second\" }}\n\
+           end }})\n",
+        dir.display(),
+    );
+    let installed = install_lua(&setup, "hold", &json!({}), &init);
+    let went = go_module(&installed, "hold");
+    timer_fifo(&dir, "started.fifo");
+    timer_fifo(&dir, "release.fifo");
+    let clock = FakeClock::new();
+    let session = load(&setup, &[], clock);
+    let cancel = fakes::CancelToken::new();
+    let (tx, rx) = mpsc::channel();
+    let asking = Arc::clone(&session);
+    let signal = cancel.clone();
+    std::thread::spawn(move || {
+        let answer = asking.turn_end(&TurnEnd {
+            reply: "Done.",
+            cancel: &signal,
+        });
+        match tx.send(answer) {
+            Ok(()) | Err(mpsc::SendError(_)) => {}
+        }
+    });
+    // The require proves the first hook started; the `started` fifo proves
+    // it is held in its writes before the cancel lands.
+    Deadline::after(WAIT)
+        .recv(&went)
+        .expect("waited for the hook to start");
+    assert_eq!(
+        next_line(
+            &read_fifo(dir.join("started.fifo")),
+            "the held hook",
+            &Deadline::after(WAIT)
+        ),
+        b"x"
+    );
+    cancel.cancel();
+    assert_eq!(
+        next_line(
+            &read_fifo(dir.join("release.fifo")),
+            "the released hook",
+            &Deadline::after(WAIT)
+        ),
+        b"x"
+    );
+    let answer = Deadline::after(WAIT)
+        .recv(&rx)
+        .expect("waited for the answer");
+    let ContextOutcome::Added(context) = answer.outcome else {
+        panic!("the cancel drops the messages: {:?}", answer.outcome);
+    };
+    assert!(context.is_empty(), "{context:?}");
+    assert!(answer.notices.is_empty(), "{:?}", answer.notices);
+    assert!(
+        !dir.join("b_ran").exists(),
+        "the second hook never started"
+    );
+}
+
+/// A `session_start` chain whose first hook holds in a fifo write: the same
+/// cancel between its hooks drops the first hook's context.
+#[test]
+#[allow(clippy::expect_used, reason = "a failure is the test's")]
+fn a_cancel_between_session_start_hooks_drops_the_first_hooks_context() {
+    let setup = Setup::new();
+    let dir = setup.workspace();
+    let init = format!(
+        "local dir = '{}'\n\
+         fiber.hook(\"session_start\", {{ timeout = 60000, on_failure = \"non-blocking\",\n\
+           run = function(call)\n\
+             require(\"go_hold\")\n\
+             host.fs.write(dir .. \"/started.fifo\", \"x\")\n\
+             host.fs.write(dir .. \"/release.fifo\", \"x\")\n\
+             return {{ context = \"first\" }}\n\
+           end }})\n\
+         fiber.hook(\"session_start\", {{ timeout = 60000, on_failure = \"non-blocking\",\n\
+           run = function(call)\n\
+             host.fs.write(dir .. \"/b_ran\", \"x\")\n\
+             return {{ context = \"second\" }}\n\
+           end }})\n",
+        dir.display(),
+    );
+    let installed = install_lua(&setup, "hold", &json!({}), &init);
+    let went = go_module(&installed, "hold");
+    timer_fifo(&dir, "started.fifo");
+    timer_fifo(&dir, "release.fifo");
+    let clock = FakeClock::new();
+    let session = load(&setup, &[], clock);
+    let id = contract::SessionId("s_4c1d".into());
+    let workspace = dir.display().to_string();
+    let cancel = fakes::CancelToken::new();
+    let (tx, rx) = mpsc::channel();
+    let asking = Arc::clone(&session);
+    let signal = cancel.clone();
+    std::thread::spawn(move || {
+        let answer = asking.session_start(&SessionStart {
+            reason: StartReason::Start,
+            session_id: &id,
+            workspace: &workspace,
+            cancel: &signal,
+        });
+        match tx.send(answer) {
+            Ok(()) | Err(mpsc::SendError(_)) => {}
+        }
+    });
+    Deadline::after(WAIT)
+        .recv(&went)
+        .expect("waited for the hook to start");
+    assert_eq!(
+        next_line(
+            &read_fifo(dir.join("started.fifo")),
+            "the held hook",
+            &Deadline::after(WAIT)
+        ),
+        b"x"
+    );
+    cancel.cancel();
+    assert_eq!(
+        next_line(
+            &read_fifo(dir.join("release.fifo")),
+            "the released hook",
+            &Deadline::after(WAIT)
+        ),
+        b"x"
+    );
+    let answer = Deadline::after(WAIT)
+        .recv(&rx)
+        .expect("waited for the answer");
+    let ContextOutcome::Added(context) = answer.outcome else {
+        panic!("the cancel drops the contexts: {:?}", answer.outcome);
+    };
+    assert!(context.is_empty(), "{context:?}");
+    assert!(answer.notices.is_empty(), "{:?}", answer.notices);
+    assert!(
+        !dir.join("b_ran").exists(),
+        "the second hook never started"
+    );
 }

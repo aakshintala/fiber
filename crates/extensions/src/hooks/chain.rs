@@ -9,6 +9,18 @@ use crate::lua::{DeclaredHooks, HookPhase};
 
 use super::SessionExtensions;
 
+/// The `session_start` hook point.
+pub(super) const SESSION_START: &str = "session_start";
+
+/// The `turn_start` hook point.
+pub(super) const TURN_START: &str = "turn_start";
+
+/// The `before_model_call` hook point.
+pub(super) const BEFORE_MODEL_CALL: &str = "before_model_call";
+
+/// The `turn_end` hook point.
+pub(super) const TURN_END: &str = "turn_end";
+
 /// The `before_tool` hook point.
 pub(super) const BEFORE_TOOL: &str = "before_tool";
 
@@ -34,12 +46,34 @@ pub(super) struct Builder {
     entries: BTreeMap<&'static str, Vec<(HookPhase, String, Entry)>>,
 }
 
+/// The `session_start`, `turn_start`, `before_model_call` and `turn_end`
+/// chains, in run order.
+#[derive(Default)]
+pub(super) struct Lifecycle {
+    /// The `session_start` chain, in run order.
+    pub(super) session_start: Vec<Entry>,
+    /// The `turn_start` chain, in run order.
+    pub(super) turn_start: Vec<Entry>,
+    /// The `before_model_call` chain, in run order.
+    pub(super) before_model_call: Vec<Entry>,
+    /// The `turn_end` chain, in run order.
+    pub(super) turn_end: Vec<Entry>,
+}
+
 impl Builder {
     /// Pushes `declared`'s hooks at the three points onto the builder, in
     /// registration order. `extension` is its extension's place among the
     /// session's Lua extensions.
     pub(super) fn push(&mut self, name: &str, extension: usize, declared: &DeclaredHooks) {
-        for point in [BEFORE_TOOL, BEFORE_MESSAGE, super::AFTER_TOOL] {
+        for point in [
+            SESSION_START,
+            TURN_START,
+            BEFORE_MODEL_CALL,
+            TURN_END,
+            BEFORE_TOOL,
+            BEFORE_MESSAGE,
+            super::AFTER_TOOL,
+        ] {
             for (index, hook) in declared
                 .by_point
                 .get(point)
@@ -66,6 +100,11 @@ impl Builder {
     /// hooks share a point").
     pub(super) fn fill(self, config: &Config, session: &mut SessionExtensions) {
         let mut entries = self.entries;
+        session.lifecycle.session_start = sorted(config, SESSION_START, entries.remove(SESSION_START));
+        session.lifecycle.turn_start = sorted(config, TURN_START, entries.remove(TURN_START));
+        session.lifecycle.before_model_call =
+            sorted(config, BEFORE_MODEL_CALL, entries.remove(BEFORE_MODEL_CALL));
+        session.lifecycle.turn_end = sorted(config, TURN_END, entries.remove(TURN_END));
         session.before_tool = sorted(config, BEFORE_TOOL, entries.remove(BEFORE_TOOL));
         session.before_message = sorted(config, BEFORE_MESSAGE, entries.remove(BEFORE_MESSAGE));
         session.after_tool = sorted(config, super::AFTER_TOOL, entries.remove(super::AFTER_TOOL));

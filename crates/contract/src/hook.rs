@@ -6,9 +6,10 @@
 
 use serde_json::{Map, Value};
 
-use crate::events::{CallStatus, Notice};
-use crate::shapes::{ContentPart, DeclaredEffects, Process};
-use crate::tool::SpillFile;
+use crate::SessionId;
+use crate::events::{CallStatus, InputItem, Notice};
+use crate::shapes::{ContentPart, DeclaredEffects, Process, Usage};
+use crate::tool::{Cancel, SpillFile};
 
 /// What an `after_tool` hook is given (`docs/extensions.md`, "The hook
 /// points"): a call that ran and has returned, before its output is cut,
@@ -163,7 +164,9 @@ pub struct Replaced {
     pub changed_by: Vec<String>,
 }
 
-/// Context a `before_message` hook added, and who added it.
+/// Context a hook added, and who added it. A `session_start`, `turn_start`
+/// or `turn_end` hook returns it as context to append to the conversation;
+/// at `turn_end` the texts are messages that continue the turn.
 #[derive(Debug, Clone, PartialEq)]
 pub struct Context {
     /// The extension whose hook returned it.
@@ -211,7 +214,136 @@ pub trait Hooks: Send + Sync {
     /// Runs every `before_message` hook on `message`, in order, and returns
     /// what they decided.
     fn before_message(&self, message: &BeforeMessage<'_>) -> BeforeMessageAnswer;
+    /// Runs every `session_start` hook, in order, and returns the contexts
+    /// they added.
+    fn session_start(&self, start: &SessionStart<'_>) -> ContextAnswer;
+    /// Runs every `turn_start` hook on the turn's input, in order, and
+    /// returns the contexts they added.
+    fn turn_start(&self, turn: &TurnStart<'_>) -> ContextAnswer;
+    /// Runs every `before_model_call` hook on the built request, in order,
+    /// and returns whether it may be sent.
+    fn before_model_call(&self, call: &BeforeModelCall<'_>) -> CheckAnswer;
+    /// Runs every `turn_end` hook on the model's final reply, in order, and
+    /// returns the messages they continued the turn with.
+    fn turn_end(&self, end: &TurnEnd<'_>) -> ContextAnswer;
     /// Hands the session loop's inbox to the hooks, so a program an
     /// extension ran can be logged as `extension_exec`.
     fn deliver_to(&self, inbox: std::sync::mpsc::Sender<crate::inbox::Delivery>);
+}
+
+/// Why a session started, as a `session_start` hook is told
+/// (`docs/extensions.md`, "The hook points").
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum StartReason {
+    /// A new session.
+    Start,
+    /// A resumed session.
+    Resume,
+    /// A rewound session.
+    Rewind,
+    /// A handoff, once the note is ready.
+    Handoff,
+}
+
+/// What a `session_start` hook is given (`docs/extensions.md`, "The hook
+/// points"): why the session started, its id and its workspace root.
+#[derive(Clone, Copy)]
+pub struct SessionStart<'a> {
+    /// Why the session started.
+    pub reason: StartReason,
+    /// The session's id.
+    pub session_id: &'a SessionId,
+    /// The session's workspace root.
+    pub workspace: &'a str,
+    /// The loop's cancel signal: set for a cancel or a shutdown.
+    pub cancel: &'a dyn Cancel,
+}
+
+impl std::fmt::Debug for SessionStart<'_> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("SessionStart")
+            .field("reason", &self.reason)
+            .field("session_id", &self.session_id)
+            .field("workspace", &self.workspace)
+            .finish_non_exhaustive()
+    }
+}
+
+/// What a `turn_start` hook is given (`docs/extensions.md`, "The hook
+/// points"): the turn's input and what started it.
+#[derive(Clone, Copy)]
+pub struct TurnStart<'a> {
+    /// Everything that started the turn, in arrival order.
+    pub input: &'a [InputItem],
+    /// The loop's cancel signal: set for a cancel or a shutdown.
+    pub cancel: &'a dyn Cancel,
+}
+
+impl std::fmt::Debug for TurnStart<'_> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("TurnStart")
+            .field("input", &self.input)
+            .finish_non_exhaustive()
+    }
+}
+
+/// What a `before_model_call` hook is given (`docs/extensions.md`, "The
+/// hook points"): the model reference, and the session's `usage` so far,
+/// its delegates included.
+#[derive(Clone, Copy)]
+pub struct BeforeModelCall<'a> {
+    /// The model reference the request is built for.
+    pub model: &'a str,
+    /// The session's usage so far, its delegates included.
+    pub usage: &'a Usage,
+    /// The loop's cancel signal: set for a cancel or a shutdown.
+    pub cancel: &'a dyn Cancel,
+}
+
+impl std::fmt::Debug for BeforeModelCall<'_> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("BeforeModelCall")
+            .field("model", &self.model)
+            .field("usage", &self.usage)
+            .finish_non_exhaustive()
+    }
+}
+
+/// What a `turn_end` hook is given (`docs/extensions.md`, "The hook
+/// points"): the model's final reply.
+#[derive(Clone, Copy)]
+pub struct TurnEnd<'a> {
+    /// The text parts of the reply that ended the step, joined.
+    pub reply: &'a str,
+    /// The loop's cancel signal: set for a cancel or a shutdown.
+    pub cancel: &'a dyn Cancel,
+}
+
+impl std::fmt::Debug for TurnEnd<'_> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("TurnEnd")
+            .field("reply", &self.reply)
+            .finish_non_exhaustive()
+    }
+}
+
+/// What the chain of `session_start`, `turn_start` or `turn_end` hooks
+/// decided. At `turn_end` the added texts are messages that continue the
+/// turn, and an empty `Added` means the turn ends.
+#[derive(Debug, Clone, PartialEq)]
+pub enum ContextOutcome {
+    /// The contexts the hooks added, in run order.
+    Added(Vec<Context>),
+    /// A `blocking` hook failed: none of the chain's contexts is kept.
+    Failed(HookFailure),
+}
+
+/// The answer to a `session_start`, `turn_start` or `turn_end` call.
+#[derive(Debug, Clone, PartialEq)]
+pub struct ContextAnswer {
+    /// What the chain decided.
+    pub outcome: ContextOutcome,
+    /// The notices the chain raised, such as a `non-blocking` hook's failure.
+    pub notices: Vec<Notice>,
 }

@@ -12,15 +12,21 @@
 
 use std::fs;
 use std::path::PathBuf;
-use std::sync::{Arc, mpsc};
+use std::sync::{Arc, Weak, mpsc};
 use std::thread;
 use std::time::Duration;
 
 use config::{Config, ProjectKey, Sources};
 use contract::ErrorCode;
-use contract::events::{CallStatus, Notice};
-use contract::hook::{AfterToolCall, BeforeMessage, BeforeToolCall, Hooks};
-use contract::shapes::{ContentPart, DeclaredEffects, Effect, Process};
+use contract::SessionId;
+use contract::clock::Wake;
+use contract::events::{CallStatus, InputItem, Notice};
+use contract::hook::{
+    AfterToolCall, BeforeMessage, BeforeModelCall, BeforeToolCall, Hooks, SessionStart,
+    StartReason, TurnEnd, TurnStart,
+};
+use contract::shapes::{ContentPart, DeclaredEffects, Effect, Process, Tokens, Usage};
+use contract::tool::Cancel;
 use fakes::Deadline;
 use fakes::clock::FakeClock;
 use serde_json::{Map, Value, json};
@@ -149,18 +155,39 @@ fn backticked(cell: &str) -> Vec<String> {
         .collect()
 }
 
+/// A cancel that never fires: the chain runs every hook.
+struct Never;
+
+impl Cancel for Never {
+    fn is_cancelled(&self) -> bool {
+        false
+    }
+
+    fn subscribe(&self, _waker: Weak<dyn Wake>) {}
+}
+
+const NEVER: Never = Never;
+
 /// Every return key the decoders accept, per point: what the table must
 /// document, and what the test exercises against the code.
 const SUPPORTED: &[(&str, &[&str])] = &[
+    ("session_start", &["context"]),
     ("before_message", &["content", "context", "refuse"]),
+    ("turn_start", &["context"]),
     ("before_tool", &["arguments", "refuse"]),
+    ("before_model_call", &["refuse"]),
     ("after_tool", &["content", "details", "artifact"]),
+    ("turn_end", &["message"]),
 ];
 
 /// A hook returning `key`'s valid value at `point`. Panics on a key
 /// without a value here, so a new decoder key updates this test.
 fn returning(point: &str, key: &str) -> String {
     let body = match (point, key) {
+        ("session_start", "context") => "return { context = \"ctx\" }".to_owned(),
+        ("turn_start", "context") => "return { context = \"ctx\" }".to_owned(),
+        ("before_model_call", "refuse") => "return { refuse = \"no\" }".to_owned(),
+        ("turn_end", "message") => "return { message = \"go\" }".to_owned(),
         ("before_message", "content") => {
             "return { content = {{ type = \"text\", text = \"hi\" }} }".to_owned()
         }
@@ -182,6 +209,67 @@ fn ask_full(session: &Arc<SessionExtensions>, point: &str) -> Vec<Notice> {
     let session = Arc::clone(session);
     let point = point.to_owned();
     bounded(move || match point.as_str() {
+        "session_start" => {
+            let id = SessionId("s_4c1d".into());
+            session
+                .session_start(&SessionStart {
+                    reason: StartReason::Handoff,
+                    session_id: &id,
+                    workspace: "/w",
+                    cancel: &NEVER,
+                })
+                .notices
+        }
+        "turn_start" => {
+            let input = vec![
+                InputItem::Message {
+                    content: vec![ContentPart::Text { text: "x".into() }],
+                    sender: contract::shapes::Sender {
+                        origin: contract::shapes::Origin::Driver,
+                        command_id: Some(contract::CommandId("c_1".into())),
+                    },
+                    changed_by: None,
+                },
+                InputItem::ShellCommand { seq: contract::Seq(1) },
+                InputItem::Jobs {
+                    job_ids: vec![contract::JobId("j_1".into())],
+                },
+                InputItem::Handoff {
+                    command_id: contract::CommandId("c_2".into()),
+                },
+            ];
+            session
+                .turn_start(&TurnStart {
+                    input: &input,
+                    cancel: &NEVER,
+                })
+                .notices
+        }
+        "before_model_call" => {
+            let usage = Usage {
+                tokens: Tokens {
+                    input: 10,
+                    cache_read: 1,
+                    cache_write: [("5m".to_owned(), 2)].into_iter().collect(),
+                    output: 5,
+                },
+                cost: Some(0.01),
+                subscription_cost: 0.5,
+            };
+            session
+                .before_model_call(&BeforeModelCall {
+                    model: "anthropic/claude-x",
+                    usage: &usage,
+                    cancel: &NEVER,
+                })
+                .notices
+        }
+        "turn_end" => session
+            .turn_end(&TurnEnd {
+                reply: "Done.",
+                cancel: &NEVER,
+            })
+            .notices,
         "before_message" => {
             let content = vec![ContentPart::Text { text: "x".into() }];
             session
@@ -231,6 +319,44 @@ fn ask_plain(session: &Arc<SessionExtensions>, point: &str) -> Vec<Notice> {
     let session = Arc::clone(session);
     let point = point.to_owned();
     bounded(move || match point.as_str() {
+        "session_start" => {
+            let id = SessionId("s_4c1d".into());
+            session
+                .session_start(&SessionStart {
+                    reason: StartReason::Start,
+                    session_id: &id,
+                    workspace: "/w",
+                    cancel: &NEVER,
+                })
+                .notices
+        }
+        "turn_start" => {
+            let input = vec![InputItem::Jobs {
+                job_ids: vec![contract::JobId("j_1".into())],
+            }];
+            session
+                .turn_start(&TurnStart {
+                    input: &input,
+                    cancel: &NEVER,
+                })
+                .notices
+        }
+        "before_model_call" => {
+            let usage = Usage::default();
+            session
+                .before_model_call(&BeforeModelCall {
+                    model: "anthropic/claude-x",
+                    usage: &usage,
+                    cancel: &NEVER,
+                })
+                .notices
+        }
+        "turn_end" => session
+            .turn_end(&TurnEnd {
+                reply: "Done.",
+                cancel: &NEVER,
+            })
+            .notices,
         "before_message" => {
             let content = vec![ContentPart::Text { text: "x".into() }];
             session
@@ -270,9 +396,20 @@ fn ask_plain(session: &Arc<SessionExtensions>, point: &str) -> Vec<Notice> {
 }
 
 #[test]
-fn the_table_names_the_three_points() {
+fn the_table_names_the_seven_points() {
     let points: Vec<String> = table_rows().iter().map(|row| row.0.clone()).collect();
-    assert_eq!(points, ["before_message", "before_tool", "after_tool"]);
+    assert_eq!(
+        points,
+        [
+            "session_start",
+            "before_message",
+            "turn_start",
+            "before_tool",
+            "before_model_call",
+            "after_tool",
+            "turn_end"
+        ]
+    );
 }
 
 #[test]

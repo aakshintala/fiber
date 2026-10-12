@@ -365,7 +365,7 @@ pub struct Choice {
 pub enum Origin {
     /// A client's command.
     Driver,
-    /// An extension's `host.drive`.
+    /// An extension's `host.drive`, or a message a `turn_end` hook returned.
     Extension {
         /// The extension's name.
         extension: String,
@@ -385,8 +385,8 @@ pub struct Sender {
     /// Who sent it.
     #[serde(flatten)]
     pub origin: Origin,
-    /// The `prompt`, `steer` or `message` command that sent it; `None`
-    /// only for Fiber's own message.
+    /// The `prompt`, `steer` or `message` command that sent it; `None` for
+    /// Fiber's own message and a `turn_end` hook's.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub command_id: Option<CommandId>,
 }
