@@ -71,6 +71,23 @@ fn initialize_and_list_succeed() {
         log.contains("notifications/initialized"),
         "missing initialized notification: {log}"
     );
+    // The handshake advertises form elicitation and nothing else: the
+    // logged `initialize` line's `params.capabilities` is exactly
+    // `{"elicitation":{}}` (`docs/mcp.md`, "Elicitation, sampling and roots").
+    let initialize = log
+        .lines()
+        .find(|line| line.contains(r#""method":"initialize""#))
+        .expect("the log holds the initialize line");
+    let logged: Value = serde_json::from_str(initialize).expect("the initialize line parses");
+    assert_eq!(
+        logged
+            .get("params")
+            .and_then(|params| params.get("capabilities"))
+            .cloned()
+            .unwrap_or(Value::Null),
+        json!({"elicitation": {}}),
+        "the initialize capabilities advertise form elicitation only: {initialize}"
+    );
     Deadline::after(WITHIN)
         .recv(&stopping(opened.server))
         .unwrap_or_else(|_| panic!("the stop ends within {WITHIN:?}"));
@@ -543,6 +560,37 @@ fn server_requests_are_answered_ping_ok_and_unknown_32601() {
         log.contains("-32601"),
         "missing unknown-method error: {log}"
     );
+    Deadline::after(WITHIN)
+        .recv(&stopping(opened.server))
+        .unwrap_or_else(|_| panic!("the stop ends within {WITHIN:?}"));
+}
+
+#[test]
+fn sampling_and_roots_requests_are_answered_method_not_found() {
+    // Fiber never advertises sampling or roots (`docs/mcp.md`,
+    // "Elicitation, sampling and roots"), so a server asking for either
+    // gets `-32601`, as any unknown method does.
+    let setup = Setup::with_tools(&json!([{"name": "echo"}]));
+    setup.result("echo", r#"{"content":[]}"#);
+    setup.write(
+        "noise",
+        "{\"jsonrpc\":\"2.0\",\"id\":\"s1\",\"method\":\"sampling/createMessage\",\"params\":{}}\n{\"jsonrpc\":\"2.0\",\"id\":\"r1\",\"method\":\"roots/list\",\"params\":{}}\n",
+    );
+    let opened = setup.start_expect(Duration::from_secs(5));
+    // The fixture prints `noise` before it reads anything, and `start`
+    // returns only after the `initialize` reply, so once `start` returns
+    // both answers are already logged.
+    let log = std::fs::read_to_string(setup.dir.path().join("requests.log")).expect("requests");
+    for id in ["s1", "r1"] {
+        let line = log
+            .lines()
+            .find(|line| line.contains(&format!(r#""id":"{id}""#)) && line.contains("-32601"))
+            .unwrap_or_else(|| panic!("missing -32601 under {id}: {log}"));
+        assert!(
+            line.contains(r#""error""#),
+            "the {id} line is an error answer: {line}"
+        );
+    }
     Deadline::after(WITHIN)
         .recv(&stopping(opened.server))
         .unwrap_or_else(|_| panic!("the stop ends within {WITHIN:?}"));

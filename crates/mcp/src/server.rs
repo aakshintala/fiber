@@ -274,7 +274,7 @@ impl Server {
                 "initialize",
                 &serde_json::json!({
                     "protocolVersion": PROTOCOL_VERSION,
-                    "capabilities": {},
+                    "capabilities": {"elicitation": {}},
                     "clientInfo": {"name": "fiber", "version": client_version},
                 }),
                 deadline,

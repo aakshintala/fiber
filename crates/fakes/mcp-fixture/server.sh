@@ -45,6 +45,23 @@
 # `<dir>/grandchild`, so a watchdog matching the directory finds it after
 # the server exits.
 #
+# An `elicit-<tool>.json` file, holding one line with an elicitation's
+# `params`, makes that tool elicit: on its `tools/call` with id `N` the
+# main loop writes `pending-el-N` holding the tool name before it starts
+# the answering subshell, and that subshell writes
+# `{"jsonrpc":"2.0","id":"el-N","method":"elicitation/create",
+# "params":<file>}` after its optional `held-`/`release-` FIFOs, instead
+# of the call's result. A line with no `method` whose id is `"el-N"`
+# (Fiber's answer) makes the main loop answer call `N` with
+# `call-<tool>.json` and remove `pending-el-N`. A
+# `result-after-elicit-<tool>` file makes the subshell write the call's
+# result right after the elicitation request, and the main loop then does
+# not answer it again. A `late-elicit-<tool>` FIFO makes the subshell
+# write the call's result first, then block reading the FIFO, then write
+# the elicitation request; the main loop does not answer it again. A
+# `seen-el` FIFO gets one line after the main loop logs any `"el-N"`
+# response. No sleep, no polling.
+#
 # It answers `initialize`, `tools/list`, `tools/call`, `prompts/list`,
 # `prompts/get` and `ping`, appends
 # every received line to `requests.log`, and writes its working directory
@@ -181,9 +198,26 @@ while IFS= read -r line; do
                 fi
                 if [ "$(cat "$result")" != "hang" ]; then
                     body="$(cat "$result")"
-                    # Each call is answered in the background, so a held
-                    # call does not hold back a fast one behind it.
-                    ( if [ -p "$dir/release-$tool" ]; then if [ -p "$dir/held-$tool" ]; then printf 'held\n' > "$dir/held-$tool"; fi; read -r _ < "$dir/release-$tool"; fi; answer "{\"jsonrpc\":\"2.0\",\"id\":$id,\"result\":$body}" ) &
+                    if [ -f "$dir/elicit-$tool.json" ]; then
+                        params="$(cat "$dir/elicit-$tool.json")"
+                        # The pending file is written before the subshell
+                        # starts, so an answer arriving between the two
+                        # still finds it.
+                        printf '%s\n' "$tool" > "$dir/pending-el-$id"
+                        if [ -p "$dir/late-elicit-$tool" ]; then
+                            ( answer "{\"jsonrpc\":\"2.0\",\"id\":$id,\"result\":$body}"; read -r _ < "$dir/late-elicit-$tool"; answer "{\"jsonrpc\":\"2.0\",\"id\":\"el-$id\",\"method\":\"elicitation/create\",\"params\":$params}" ) &
+                        elif [ -f "$dir/result-after-elicit-$tool" ]; then
+                            ( if [ -p "$dir/release-$tool" ]; then if [ -p "$dir/held-$tool" ]; then printf 'held\n' > "$dir/held-$tool"; fi; read -r _ < "$dir/release-$tool"; fi; answer "{\"jsonrpc\":\"2.0\",\"id\":\"el-$id\",\"method\":\"elicitation/create\",\"params\":$params}"; answer "{\"jsonrpc\":\"2.0\",\"id\":$id,\"result\":$body}" ) &
+                        else
+                            # Each call is answered in the background, so a held
+                            # call does not hold back a fast one behind it.
+                            ( if [ -p "$dir/release-$tool" ]; then if [ -p "$dir/held-$tool" ]; then printf 'held\n' > "$dir/held-$tool"; fi; read -r _ < "$dir/release-$tool"; fi; answer "{\"jsonrpc\":\"2.0\",\"id\":\"el-$id\",\"method\":\"elicitation/create\",\"params\":$params}" ) &
+                        fi
+                    else
+                        # Each call is answered in the background, so a held
+                        # call does not hold back a fast one behind it.
+                        ( if [ -p "$dir/release-$tool" ]; then if [ -p "$dir/held-$tool" ]; then printf 'held\n' > "$dir/held-$tool"; fi; read -r _ < "$dir/release-$tool"; fi; answer "{\"jsonrpc\":\"2.0\",\"id\":$id,\"result\":$body}" ) &
+                    fi
                 fi
             elif [ -n "$id" ]; then
                 answer "{\"jsonrpc\":\"2.0\",\"id\":$id,\"error\":{\"code\":-32602,\"message\":\"Unknown tool: $tool\"}}"
@@ -195,7 +229,22 @@ while IFS= read -r line; do
             fi
             ;;
         "")
-            # A notification, such as `notifications/initialized`: no answer.
+            # A notification, such as `notifications/initialized`: no answer,
+            # unless it is Fiber's answer to an elicitation (`"el-N"` id):
+            # then answer call `N`, unless that call was already answered.
+            elid="$(printf '%s' "$line" | sed -n 's/.*"id":"el-\([0-9][0-9]*\)".*/\1/p')"
+            if [ -n "$elid" ]; then
+                if [ -p "$dir/seen-el" ]; then printf 'seen\n' > "$dir/seen-el"; fi
+                pending="$dir/pending-el-$elid"
+                if [ -f "$pending" ]; then
+                    tool="$(cat "$pending")"
+                    rm -f "$pending"
+                    if [ ! -f "$dir/result-after-elicit-$tool" ] && [ ! -p "$dir/late-elicit-$tool" ]; then
+                        body="$(cat "$dir/call-$tool.json")"
+                        answer "{\"jsonrpc\":\"2.0\",\"id\":$elid,\"result\":$body}"
+                    fi
+                fi
+            fi
             ;;
         *)
             if [ -n "$id" ]; then
