@@ -1516,3 +1516,575 @@ fn a_call_that_returns_an_error_after_its_turn_is_cancelled_ends_failed() {
     assert_eq!(completed.payload["status"], "failed");
     assert_eq!(completed.payload["error"]["code"], "mcp_cancel_requested");
 }
+
+/// A `Settle` returning `taken` and counting its calls in `runs`.
+fn counting(taken: Vec<Taken>, runs: &Arc<Mutex<usize>>) -> Settle {
+    let runs = Arc::clone(runs);
+    Settle(Arc::new(move || {
+        *runs.lock().unwrap() += 1;
+        taken.clone()
+    }))
+}
+
+#[test]
+fn a_call_settle_is_written_before_its_jobs_under_its_action() {
+    let done = "j_cccccccccccccccc";
+    let started = "j_dddddddddddddddd";
+    let runs = Arc::new(Mutex::new(0usize));
+    let ran = run_turn(
+        vec![Arc::new(Lines {
+            name: "jobber",
+            jobs: vec![started_line(started)],
+            settle: Some(counting(
+                vec![Taken {
+                    record: failed_line(done),
+                    action: None,
+                }],
+                &runs,
+            )),
+        })],
+        vec![
+            calls("Checking.", &["jobber"]),
+            fakes::Scripted::text("Done."),
+        ],
+        Arc::new(crate::TurnCancel::default()),
+    );
+    assert_eq!(ran.outcome, Some(TurnOutcome::Completed));
+    assert_eq!(*runs.lock().unwrap(), 1, "the settle ran once");
+    assert_eq!(
+        kinds(&ran.lines),
+        [
+            "session_started",
+            "preamble_built",
+            "opening_message",
+            "turn_started",
+            "step_started",
+            "assistant_message_started",
+            "text_completed",
+            "tool_call_requested",
+            "usage_recorded",
+            "assistant_message_completed",
+            "tool_call_started",
+            "job_completed",
+            "job_started",
+            "tool_call_completed",
+            "step_started",
+            "assistant_message_started",
+            "text_completed",
+            "usage_recorded",
+            "assistant_message_completed",
+            "turn_completed",
+        ]
+    );
+    let lines = durable(&ran.lines);
+    let at = lines
+        .iter()
+        .position(|line| line.kind == "tool_call_started")
+        .expect("a tool_call_started line");
+    let four = &lines[at..at + 4];
+    assert_eq!(
+        [
+            four[0].kind.as_str(),
+            four[1].kind.as_str(),
+            four[2].kind.as_str(),
+            four[3].kind.as_str()
+        ],
+        [
+            "tool_call_started",
+            "job_completed",
+            "job_started",
+            "tool_call_completed"
+        ]
+    );
+    let action = four[0].action_id.clone().unwrap();
+    assert_eq!(four[1].action_id.as_ref(), Some(&action));
+    assert_eq!(four[2].action_id.as_ref(), Some(&action));
+    assert_eq!(four[1].payload["job_id"], done);
+    assert_eq!(four[2].payload["job_id"], started);
+}
+
+#[test]
+fn a_call_settle_writes_a_foreign_action_under_that_action_and_its_own_turn() {
+    let done = "j_eeeeeeeeeeeeeeee";
+    let resumed = "j_ffffffffffffffff";
+    let other = ActionId("a_ffffffffffffffff".into());
+    let runs = Arc::new(Mutex::new(0usize));
+    let ran = run_turn(
+        vec![Arc::new(Lines {
+            name: "jobber",
+            jobs: Vec::new(),
+            settle: Some(counting(
+                vec![
+                    Taken {
+                        record: failed_line(done),
+                        action: None,
+                    },
+                    Taken {
+                        record: started_line(resumed),
+                        action: Some(other.clone()),
+                    },
+                    Taken {
+                        record: delegate_started_line(resumed),
+                        action: Some(other.clone()),
+                    },
+                ],
+                &runs,
+            )),
+        })],
+        vec![
+            calls("Checking.", &["jobber"]),
+            fakes::Scripted::text("Done."),
+        ],
+        Arc::new(crate::TurnCancel::default()),
+    );
+    assert_eq!(ran.outcome, Some(TurnOutcome::Completed));
+    assert_eq!(*runs.lock().unwrap(), 1, "the settle ran once");
+    assert_eq!(
+        kinds(&ran.lines),
+        [
+            "session_started",
+            "preamble_built",
+            "opening_message",
+            "turn_started",
+            "step_started",
+            "assistant_message_started",
+            "text_completed",
+            "tool_call_requested",
+            "usage_recorded",
+            "assistant_message_completed",
+            "tool_call_started",
+            "job_completed",
+            "job_started",
+            "delegate_started",
+            "tool_call_completed",
+            "step_started",
+            "assistant_message_started",
+            "text_completed",
+            "usage_recorded",
+            "assistant_message_completed",
+            "turn_completed",
+        ]
+    );
+    let lines = durable(&ran.lines);
+    let at = lines
+        .iter()
+        .position(|line| line.kind == "tool_call_started")
+        .expect("a tool_call_started line");
+    let five = &lines[at..at + 5];
+    let action = five[0].action_id.clone().unwrap();
+    let turn = five[0].turn_id.clone().unwrap();
+    // The call's own record keeps the call's action; the queued starts
+    // carry the queuing call's, all under the call's turn.
+    assert_eq!(five[1].action_id.as_ref(), Some(&action));
+    assert_eq!(five[2].action_id.as_ref(), Some(&other));
+    assert_eq!(five[3].action_id.as_ref(), Some(&other));
+    assert_ne!(other, action);
+    for line in &five[..4] {
+        assert_eq!(line.turn_id.as_ref(), Some(&turn));
+    }
+    assert_eq!(five[4].action_id.as_ref(), Some(&action));
+}
+
+#[test]
+fn call_turns_is_empty_after_a_turn_whose_calls_all_reached_finish() {
+    let id = "j_5e10c0ffee123457";
+    let started = Arc::new((Mutex::new(false), Condvar::new()));
+    let watch = Arc::clone(&started);
+    let cancel = Arc::new(crate::TurnCancel::default());
+    let cancel_watch = Arc::clone(&cancel);
+    let watcher = thread::spawn(move || {
+        let (lock, cv) = &*watch;
+        let guard = lock.lock().unwrap();
+        let (guard, timeout) = cv
+            .wait_timeout_while(guard, TURN_DEADLINE, |started| !*started)
+            .unwrap();
+        assert!(!timeout.timed_out() && *guard, "the call did not start");
+        drop(guard);
+        assert!(cancel_watch.cancel());
+    });
+    let ran = run_turn(
+        vec![
+            Arc::new(Lines {
+                name: "quick",
+                jobs: Vec::new(),
+                settle: None,
+            }),
+            Arc::new(Hold {
+                jobs: vec![started_line(id), failed_line(id)],
+                error: None,
+                started,
+                settle: None,
+            }),
+        ],
+        vec![
+            calls("Checking.", &["quick", "jobber"]),
+            fakes::Scripted::text("Done."),
+        ],
+        cancel,
+    );
+    watcher.join().unwrap();
+    assert_eq!(ran.outcome, Some(TurnOutcome::Interrupted));
+    assert_eq!(ran.turns_left, 0, "every call reached finish");
+}
+
+/// A call that blocks until the test releases it, then returns `settle`.
+struct Gate {
+    name: &'static str,
+    release: Mutex<mpsc::Receiver<()>>,
+    settle: Option<Settle>,
+}
+
+impl Tool for Gate {
+    fn definition(&self) -> ToolDefinition {
+        ToolDefinition {
+            name: self.name.to_owned(),
+            description: "Blocks until released.".to_owned(),
+            input_schema: json!({"type": "object", "additionalProperties": false}),
+            deferred: false,
+            hosted: None,
+        }
+    }
+
+    fn effects(&self, _: &Map<String, Value>) -> Result<Effects, EffectsError> {
+        Ok(reads())
+    }
+
+    fn run(&self, _: &Map<String, Value>, _: &dyn Cancel, _: &dyn Emit) -> Output {
+        self.release.lock().unwrap().recv().unwrap();
+        Output {
+            content: vec![ContentPart::Text {
+                text: "ok\n".into(),
+            }],
+            settle: self.settle.clone(),
+            ..Output::default()
+        }
+    }
+}
+
+/// A call that tells the test it returned, then returns at once.
+struct Signal {
+    name: &'static str,
+    done: mpsc::Sender<()>,
+}
+
+impl Tool for Signal {
+    fn definition(&self) -> ToolDefinition {
+        ToolDefinition {
+            name: self.name.to_owned(),
+            description: "Signals its return.".to_owned(),
+            input_schema: json!({"type": "object", "additionalProperties": false}),
+            deferred: false,
+            hosted: None,
+        }
+    }
+
+    fn effects(&self, _: &Map<String, Value>) -> Result<Effects, EffectsError> {
+        Ok(reads())
+    }
+
+    fn run(&self, _: &Map<String, Value>, _: &dyn Cancel, _: &dyn Emit) -> Output {
+        let _sent = self.done.send(());
+        Output {
+            content: vec![ContentPart::Text {
+                text: "ok\n".into(),
+            }],
+            ..Output::default()
+        }
+    }
+}
+
+#[test]
+fn two_calls_settles_write_under_their_own_actions() {
+    let settled = "j_1111111111111111";
+    let (release_tx, release_rx) = mpsc::channel();
+    let (done_tx, done_rx) = mpsc::channel();
+    let runs = Arc::new(Mutex::new(0usize));
+    let releaser = thread::spawn(move || {
+        Deadline::after(TURN_DEADLINE)
+            .recv(&done_rx)
+            .expect("the second call returned");
+        release_tx.send(()).unwrap();
+    });
+    let ran = run_turn(
+        vec![
+            Arc::new(Gate {
+                name: "first",
+                release: Mutex::new(release_rx),
+                settle: Some(counting(
+                    vec![Taken {
+                        record: failed_line(settled),
+                        action: None,
+                    }],
+                    &runs,
+                )),
+            }),
+            Arc::new(Signal {
+                name: "second",
+                done: done_tx,
+            }),
+        ],
+        vec![
+            calls("Checking.", &["first", "second"]),
+            fakes::Scripted::text("Done."),
+        ],
+        Arc::new(crate::TurnCancel::default()),
+    );
+    releaser.join().unwrap();
+    assert_eq!(ran.outcome, Some(TurnOutcome::Completed));
+    assert_eq!(*runs.lock().unwrap(), 1, "the settle ran once");
+    let lines = durable(&ran.lines);
+    let starts: Vec<&&Envelope> = lines
+        .iter()
+        .filter(|line| line.kind == "tool_call_started")
+        .collect();
+    assert_eq!(starts.len(), 2);
+    let first_action = starts[0].action_id.clone().unwrap();
+    let second_action = starts[1].action_id.clone().unwrap();
+    assert_ne!(first_action, second_action);
+    let completed = lines
+        .iter()
+        .find(|line| line.kind == "job_completed")
+        .expect("a settled job_completed");
+    assert_eq!(completed.payload["job_id"], settled);
+    assert_eq!(
+        completed.action_id.as_ref(),
+        Some(&first_action),
+        "the settle writes under its own call's action"
+    );
+    assert_ne!(completed.action_id.as_ref(), Some(&second_action));
+}
+
+#[test]
+fn a_call_whose_settle_returns_nothing_writes_only_its_jobs() {
+    let id = "j_2222222222222222";
+    let runs = Arc::new(Mutex::new(0usize));
+    let ran = run_turn(
+        vec![Arc::new(Lines {
+            name: "jobber",
+            jobs: vec![started_line(id), failed_line(id)],
+            settle: Some(counting(Vec::new(), &runs)),
+        })],
+        vec![
+            calls("Checking.", &["jobber"]),
+            fakes::Scripted::text("Done."),
+        ],
+        Arc::new(crate::TurnCancel::default()),
+    );
+    assert_eq!(ran.outcome, Some(TurnOutcome::Completed));
+    assert_eq!(*runs.lock().unwrap(), 1, "the settle ran once");
+    assert_eq!(
+        kinds(&ran.lines),
+        [
+            "session_started",
+            "preamble_built",
+            "opening_message",
+            "turn_started",
+            "step_started",
+            "assistant_message_started",
+            "text_completed",
+            "tool_call_requested",
+            "usage_recorded",
+            "assistant_message_completed",
+            "tool_call_started",
+            "job_started",
+            "job_completed",
+            "tool_call_completed",
+            "step_started",
+            "assistant_message_started",
+            "text_completed",
+            "usage_recorded",
+            "assistant_message_completed",
+            "turn_completed",
+        ]
+    );
+    assert_job_triplet(&ran.lines, id, "completed");
+}
+
+/// A call that records its return and its settle call in order, telling
+/// the test when it returned when given `done`.
+struct Ordered {
+    name: &'static str,
+    release: Option<Mutex<mpsc::Receiver<()>>>,
+    done: Option<mpsc::Sender<()>>,
+    returned: Arc<Mutex<Vec<String>>>,
+    settled: Arc<Mutex<Vec<(String, bool)>>>,
+}
+
+impl Tool for Ordered {
+    fn definition(&self) -> ToolDefinition {
+        ToolDefinition {
+            name: self.name.to_owned(),
+            description: "Records return and settle order.".to_owned(),
+            input_schema: json!({"type": "object", "additionalProperties": false}),
+            deferred: false,
+            hosted: None,
+        }
+    }
+
+    fn effects(&self, _: &Map<String, Value>) -> Result<Effects, EffectsError> {
+        Ok(reads())
+    }
+
+    fn run(&self, _: &Map<String, Value>, _: &dyn Cancel, _: &dyn Emit) -> Output {
+        if let Some(release) = &self.release {
+            release.lock().unwrap().recv().unwrap();
+        }
+        self.returned.lock().unwrap().push(self.name.to_owned());
+        if let Some(done) = &self.done {
+            let _sent = done.send(());
+        }
+        let name = self.name.to_owned();
+        let returned = Arc::clone(&self.returned);
+        let settled = Arc::clone(&self.settled);
+        Output {
+            content: vec![ContentPart::Text {
+                text: "ok\n".into(),
+            }],
+            settle: Some(Settle(Arc::new(move || {
+                let both = returned.lock().unwrap().len() == 2;
+                settled.lock().unwrap().push((name.clone(), both));
+                Vec::new()
+            }))),
+            ..Output::default()
+        }
+    }
+}
+
+#[test]
+fn settles_run_at_write_time_in_request_order_after_both_calls_returned() {
+    let (release_tx, release_rx) = mpsc::channel();
+    let (done_tx, done_rx) = mpsc::channel();
+    let returned = Arc::new(Mutex::new(Vec::new()));
+    let settled = Arc::new(Mutex::new(Vec::new()));
+    // The second call returns first; the test releases the first once it
+    // did. Both settles run after both calls returned, in request order.
+    let releaser = thread::spawn(move || {
+        Deadline::after(TURN_DEADLINE)
+            .recv(&done_rx)
+            .expect("the second call returned");
+        release_tx.send(()).unwrap();
+    });
+    let second_returned = Arc::clone(&returned);
+    let ran = run_turn(
+        vec![
+            Arc::new(Ordered {
+                name: "first",
+                release: Some(Mutex::new(release_rx)),
+                done: None,
+                returned: Arc::clone(&returned),
+                settled: Arc::clone(&settled),
+            }),
+            Arc::new(Ordered {
+                name: "second",
+                release: None,
+                done: Some(done_tx),
+                returned: second_returned,
+                settled: Arc::clone(&settled),
+            }),
+        ],
+        vec![
+            calls("Checking.", &["first", "second"]),
+            fakes::Scripted::text("Done."),
+        ],
+        Arc::new(crate::TurnCancel::default()),
+    );
+    releaser.join().unwrap();
+    assert_eq!(ran.outcome, Some(TurnOutcome::Completed));
+    assert_eq!(
+        returned.lock().unwrap().as_slice(),
+        ["second", "first"],
+        "the second tool returned first"
+    );
+    assert_eq!(
+        settled
+            .lock()
+            .unwrap()
+            .iter()
+            .map(|(name, _)| name.as_str())
+            .collect::<Vec<_>>(),
+        ["first", "second"],
+        "settles ran in request order"
+    );
+    assert!(
+        settled.lock().unwrap().iter().all(|(_, both)| *both),
+        "each settle ran after both calls returned"
+    );
+}
+
+#[test]
+fn a_cancelled_call_still_runs_its_settle_before_its_completion() {
+    let id = "j_3333333333333333";
+    let settled = "j_4444444444444444";
+    let started = Arc::new((Mutex::new(false), Condvar::new()));
+    let watch = Arc::clone(&started);
+    let cancel = Arc::new(crate::TurnCancel::default());
+    let cancel_watch = Arc::clone(&cancel);
+    let watcher = thread::spawn(move || {
+        let (lock, cv) = &*watch;
+        let guard = lock.lock().unwrap();
+        let (guard, timeout) = cv
+            .wait_timeout_while(guard, TURN_DEADLINE, |started| !*started)
+            .unwrap();
+        assert!(!timeout.timed_out() && *guard, "the call did not start");
+        drop(guard);
+        assert!(cancel_watch.cancel());
+    });
+    let runs = Arc::new(Mutex::new(0usize));
+    let ran = run_turn(
+        vec![Arc::new(Hold {
+            jobs: vec![started_line(id), failed_line(id)],
+            error: None,
+            started,
+            settle: Some(counting(
+                vec![Taken {
+                    record: failed_line(settled),
+                    action: None,
+                }],
+                &runs,
+            )),
+        })],
+        vec![
+            calls("Checking.", &["jobber"]),
+            fakes::Scripted::text("Done."),
+        ],
+        cancel,
+    );
+    watcher.join().unwrap();
+    assert_eq!(ran.outcome, Some(TurnOutcome::Interrupted));
+    assert_eq!(*runs.lock().unwrap(), 1, "the settle ran once");
+    assert_eq!(
+        kinds(&ran.lines),
+        [
+            "session_started",
+            "preamble_built",
+            "opening_message",
+            "turn_started",
+            "step_started",
+            "assistant_message_started",
+            "text_completed",
+            "tool_call_requested",
+            "usage_recorded",
+            "assistant_message_completed",
+            "tool_call_started",
+            "job_completed",
+            "job_started",
+            "job_completed",
+            "tool_call_completed",
+            "turn_completed",
+        ]
+    );
+    let lines = durable(&ran.lines);
+    let at = lines
+        .iter()
+        .position(|line| line.kind == "tool_call_started")
+        .expect("a tool_call_started line");
+    let five = &lines[at..at + 5];
+    assert_eq!(five[1].payload["job_id"], settled);
+    assert_eq!(five[2].payload["job_id"], id);
+    assert_eq!(five[3].payload["job_id"], id);
+    assert_eq!(five[4].payload["status"], "cancelled");
+    let action = five[0].action_id.clone().unwrap();
+    for line in &five[1..] {
+        assert_eq!(line.action_id.as_ref(), Some(&action));
+    }
+}
