@@ -420,9 +420,9 @@ from outside, through a test seam such as a fake writer or the injected clock. A
 seam can reach the behaviour, such as a race's pause point ("Waits and
 timeouts"), and the plan that needs one says why.
 
-cargo-mutants stops each mutant's test run at its own timeout: five times the
-unmutated run of the same tests, and at least 20 s. A mutant stopped there
-fails CI as a timeout, not as caught. A mutant can turn a wait that returns
+cargo-mutants stops each mutant's test run after 120 s, set with `--timeout 120`
+in `.github/workflows/ci.yml` (`mutants`). A mutant stopped there fails CI as a
+timeout, not as caught. A mutant can turn a wait that returns
 early into one that runs out its whole bound, as a flipped comparison in a
 `wait_timeout_while` predicate does, so the deadlines one test can run out in
 turn must add up to well under that timeout.
@@ -486,6 +486,15 @@ orphan that is neither is still invisible on macOS: it is caught by the
 test's own reap above, not the scan.
 
 The completion tests need bash, zsh and fish on PATH, on Linux and macOS: they never skip at runtime for a missing shell, so a machine without one fails them.
+
+A test that runs a command, directly or through a scripted tool call, uses
+only the shells above and the standard Unix tools every runner has, such as
+`grep`, `sed` and `awk`. `rg`, `jq` and other tools a developer installs are
+absent on the Linux runners, and a scripted call to one fails there.
+
+A test never depends on the length of a temporary path: macOS's are long and
+Linux's short. A test that needs a line cut makes the line long enough to cut
+on any temporary path.
 
 The tests need a user other than root: root bypasses file modes, so the tests
 that deny a file or socket by mode fail with a message saying so.

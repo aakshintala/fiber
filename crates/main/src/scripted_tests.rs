@@ -135,6 +135,7 @@ fn parts(
         std::fs::write(workspace.join(name), text).unwrap();
     }
     let clock: Arc<dyn Clock> = fakes::clock::FakeClock::new();
+    let reads = Arc::new(crate::switch::Reads::default());
     crate::parts_in(
         home,
         workspace,
@@ -145,6 +146,7 @@ fn parts(
         clock,
         None,
         None,
+        reads,
     )
 }
 

@@ -74,7 +74,7 @@ impl Kind {
                 .as_object()
                 .is_some_and(|map| map.values().all(Value::is_boolean)),
             Self::Credential => match serde_json::from_value(value.clone()) {
-                Ok(CredentialSource::Command(argv)) => !argv.is_empty(),
+                Ok(CredentialSource::Command { argv, .. }) => !argv.is_empty(),
                 Ok(CredentialSource::Env(_) | CredentialSource::File(_)) => true,
                 Err(_) => false,
             },
@@ -106,7 +106,7 @@ impl Kind {
             Self::StrMap => "an object of strings".into(),
             Self::BoolMap => "an object of true or false values".into(),
             Self::Credential => {
-                "one of {\"env\": name}, {\"file\": path} or {\"command\": [program, args]}".into()
+                "one of {\"env\": name}, {\"file\": path} or {\"command\": [program, args]}, and a command may add \"timeout\": a duration such as \"2m\"".into()
             }
             Self::RepositoryExtensions => {
                 "a list of objects, each with a string `path` and an optional true or false `required`".into()

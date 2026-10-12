@@ -1,8 +1,8 @@
 //! The figures a card prints: durations, token counts, money and the
-//! usage behind them, the ▣ line, a tool group's summary line and ledger,
-//! the kinds a summary line counts, a call's arguments in brief and
-//! thinking headings (`docs/tui.md`, "Turns", "Tool groups and
-//! the ledger", "Thinking").
+//! usage behind them, the ▣ line, the kinds a summary line counts,
+//! a call's arguments in brief and thinking headings (`docs/tui.md`,
+//! "Turns", "Tool groups and the ledger", "Thinking"). A tool
+//! group's summary line and ledger are drawn in `crate::turn::group`.
 
 use std::collections::BTreeMap;
 
@@ -16,9 +16,8 @@ use serde_json::Value;
 
 use crate::app::Target;
 use crate::markdown::style;
-use crate::rows::{Join, RowText, Rows};
+use crate::rows::{Join, Rows};
 use crate::theme::Role;
-use crate::turn::{Group, Thought, target_id};
 
 /// A span of milliseconds, truncated to whole seconds: `38s` under a
 /// minute, `4m 05s` under an hour, else `1h 02m`.
@@ -68,71 +67,150 @@ pub(crate) fn count(n: u64, one: &str, many: &str) -> String {
 }
 
 /// What a group's calls did, by kind, and how often the model thought.
+/// Read, edited and written files count distinct `path` arguments per
+/// kind; kinds with no calls are left out of the summary.
 #[derive(Debug, Default, Clone, PartialEq, Eq)]
 pub(crate) struct Kinds {
-    /// `read` calls.
+    /// `read` calls, distinct paths.
     pub(crate) read: u64,
-    /// Shell calls that ran `grep`, `rg` or `find`.
+    /// Shell calls that ran `grep` or `rg`.
     pub(crate) searched: u64,
-    /// Files edited: distinct paths in `changes`, else `edit` and `write`
-    /// calls.
+    /// Shell calls that ran `find`, `ls` or `fd`.
+    pub(crate) listed: u64,
+    /// `edit` calls, distinct paths.
     pub(crate) edited: u64,
-    /// Lines added by the edits.
+    /// `write` calls, distinct paths.
+    pub(crate) wrote: u64,
+    /// Lines added by the `edit` calls.
     pub(crate) added: u64,
-    /// Lines removed by the edits.
+    /// Lines removed by the `edit` calls.
     pub(crate) removed: u64,
     /// Other shell calls.
     pub(crate) ran: u64,
+    /// `delegate_spawn` and `delegate_fork` calls.
+    pub(crate) delegates: u64,
+    /// `jobs` calls.
+    pub(crate) jobs: u64,
     /// Questions `ask_user` asked.
     pub(crate) asked: u64,
     /// Calls to any other tool.
-    pub(crate) other: u64,
+    pub(crate) called: u64,
     /// Thinking blocks.
     pub(crate) thoughts: u64,
 }
 
+/// A dim span.
+fn dim_span(text: String) -> Span<'static> {
+    Span::styled(text, Style::default().add_modifier(Modifier::DIM))
+}
+
 impl Kinds {
-    /// "Read 2 files, edited 1 file +3 −1, ran 1 command, asked 2
-    /// questions, thought once":
-    /// kinds with no calls left out, the first letter capitalised. Empty
-    /// when nothing was done.
-    pub(crate) fn summary(&self) -> String {
-        let mut parts = Vec::new();
+    /// The kinds in the doc's fixed order, each dim, with the edit's
+    /// totals in the added and removed colours: "Read 2 files, searched
+    /// 1 pattern, edited 1 file +2 −1, ran 1 command, thought 4 times".
+    /// Kinds with no calls are left out; the first letter is capitalised.
+    /// Empty when nothing was done.
+    pub(crate) fn summary(&self) -> Vec<Span<'static>> {
+        let mut out = Vec::new();
+        let mut first = true;
+        let push = |out: &mut Vec<Span<'static>>, first: &mut bool, text: String| {
+            let mut text = text;
+            if *first {
+                text = capitalise(&text);
+                *first = false;
+            } else {
+                out.push(dim_span(", ".to_owned()));
+            }
+            out.push(dim_span(text));
+        };
         if self.read > 0 {
-            parts.push(format!("read {}", count(self.read, "file", "files")));
+            push(
+                &mut out,
+                &mut first,
+                format!("read {}", count(self.read, "file", "files")),
+            );
         }
         if self.searched > 0 {
-            parts.push(format!(
-                "searched {}",
-                count(self.searched, "pattern", "patterns")
-            ));
+            push(
+                &mut out,
+                &mut first,
+                format!("searched {}", count(self.searched, "pattern", "patterns")),
+            );
+        }
+        if self.listed > 0 {
+            push(
+                &mut out,
+                &mut first,
+                format!("listed {}", count(self.listed, "directory", "directories")),
+            );
         }
         if self.edited > 0 {
-            let mut part = format!("edited {}", count(self.edited, "file", "files"));
+            push(
+                &mut out,
+                &mut first,
+                format!("edited {}", count(self.edited, "file", "files")),
+            );
             if self.added > 0 || self.removed > 0 {
-                part.push_str(&format!(" +{} −{}", self.added, self.removed));
+                out.push(dim_span(" ".to_owned()));
+                out.push(Span::styled(
+                    format!("+{}", self.added),
+                    style(Role::Added).add_modifier(Modifier::DIM),
+                ));
+                out.push(dim_span(" ".to_owned()));
+                out.push(Span::styled(
+                    format!("−{}", self.removed),
+                    style(Role::Removed).add_modifier(Modifier::DIM),
+                ));
             }
-            parts.push(part);
+        }
+        if self.wrote > 0 {
+            push(
+                &mut out,
+                &mut first,
+                format!("wrote {}", count(self.wrote, "file", "files")),
+            );
         }
         if self.ran > 0 {
-            parts.push(format!("ran {}", count(self.ran, "command", "commands")));
+            push(
+                &mut out,
+                &mut first,
+                format!("ran {}", count(self.ran, "command", "commands")),
+            );
+        }
+        if self.delegates > 0 {
+            push(
+                &mut out,
+                &mut first,
+                format!("started {}", count(self.delegates, "delegate", "delegates")),
+            );
+        }
+        if self.jobs > 0 {
+            push(
+                &mut out,
+                &mut first,
+                format!("checked {}", count(self.jobs, "job", "jobs")),
+            );
         }
         if self.asked > 0 {
-            parts.push(format!(
-                "asked {}",
-                count(self.asked, "question", "questions")
-            ));
+            push(
+                &mut out,
+                &mut first,
+                format!("asked {}", count(self.asked, "question", "questions")),
+            );
         }
-        if self.other > 0 {
-            parts.push(count(self.other, "other call", "other calls"));
+        if self.called > 0 {
+            push(
+                &mut out,
+                &mut first,
+                format!("called {}", count(self.called, "tool", "tools")),
+            );
         }
         match self.thoughts {
             0 => {}
-            1 => parts.push("thought once".to_owned()),
-            2 => parts.push("thought twice".to_owned()),
-            n => parts.push(format!("thought {n} times")),
+            1 => push(&mut out, &mut first, "thought once".to_owned()),
+            n => push(&mut out, &mut first, format!("thought {n} times")),
         }
-        capitalise(&parts.join(", "))
+        out
     }
 }
 
@@ -232,31 +310,65 @@ pub(crate) fn wrap_joined(text: &str, max: usize) -> Vec<(String, Join)> {
     rows
 }
 
-/// What a call is, for the summary line.
+/// What a call is, for the summary line and the ledger's kind word.
+/// `find`, `ls` and `fd` list directories; only `grep` and `rg`
+/// search (`research/tui-prototype`, `kind_of`).
 pub(crate) enum Kind {
     /// `read`.
     Read,
-    /// `edit` or `write`.
-    Edit,
-    /// A shell `grep`, `rg` or `find`.
+    /// A shell `grep` or `rg`.
     Search,
+    /// A shell `find`, `ls` or `fd`.
+    List,
+    /// `edit`.
+    Edit,
+    /// `write`.
+    Write,
     /// Any other shell command.
-    Ran,
+    Shell,
+    /// `delegate_spawn` or `delegate_fork`.
+    Delegate,
+    /// `jobs`.
+    Jobs,
     /// `ask_user`, with how many questions it asked.
     Ask(u64),
     /// Any other tool.
     Other,
 }
 
+impl Kind {
+    /// The ledger's kind word: the call's kind in `info`, padded to nine
+    /// columns by the draw site (`docs/tui.md`, "Tool groups and the
+    /// ledger").
+    pub(crate) fn word(&self) -> &'static str {
+        match self {
+            Kind::Read => "read",
+            Kind::Search => "search",
+            Kind::List => "list",
+            Kind::Edit => "edit",
+            Kind::Write => "write",
+            Kind::Shell => "shell",
+            Kind::Delegate => "delegate",
+            Kind::Jobs => "jobs",
+            Kind::Ask(_) => "ask",
+            Kind::Other => "other",
+        }
+    }
+}
+
 pub(crate) fn kind(name: &str, arguments: &Value) -> Kind {
     match name {
         "read" => Kind::Read,
-        "edit" | "write" => Kind::Edit,
+        "edit" => Kind::Edit,
+        "write" => Kind::Write,
+        "delegate_spawn" | "delegate_fork" => Kind::Delegate,
+        "jobs" => Kind::Jobs,
         "shell" => match argument(arguments, "command")
             .and_then(|command| command.split_whitespace().next())
         {
-            Some("grep" | "rg" | "find") => Kind::Search,
-            Some(_) | None => Kind::Ran,
+            Some("grep" | "rg") => Kind::Search,
+            Some("find" | "ls" | "fd") => Kind::List,
+            Some(_) | None => Kind::Shell,
         },
         // A call whose `questions` is not a list of at least one is no
         // question asked.
@@ -327,11 +439,11 @@ pub(crate) fn label(name: &str, arguments: &str) -> String {
     }
 }
 
-/// What opening a call shows: a failed call's error, a denial's reason,
-/// an edit's diff, else the content's text.
+/// What opening a call shows: a failed call's "<code>: <message>", a
+/// denial's reason, an edit's diff, else the content's text.
 pub(crate) fn detail(done: &ToolCallCompleted) -> String {
     if let (CallStatus::Failed, Some(error)) = (done.status, &done.error) {
-        return error.message.clone();
+        return format!("{}: {}", code(&error.code), error.message);
     }
     if let (CallStatus::Denied, Some(reason)) = (done.status, &done.reason) {
         return reason.clone();
@@ -480,271 +592,6 @@ pub(crate) fn opened(text: &str, indent: &str, out: &mut Rows) {
     for line in text.split('\n') {
         out.push((dim(format!("{indent}{line}")), None));
     }
-}
-
-/// The diff of a call that changed a file, as [`opened`] draws text, each
-/// line added or removed in the added or removed colour.
-fn opened_diff(text: &str, indent: &str, out: &mut Rows) {
-    for line in text.split('\n') {
-        let role = if line.starts_with('+') {
-            Some(Role::Added)
-        } else if line.starts_with('-') {
-            Some(Role::Removed)
-        } else {
-            None
-        };
-        let mut row = dim(format!("{indent}{line}"));
-        if let Some(role) = role {
-            row = row.patch_style(style(role));
-        }
-        out.push((row, None));
-    }
-}
-
-impl Group {
-    /// What its calls did, by kind, and how often the model thought.
-    fn kinds(&self) -> Kinds {
-        let mut kinds = Kinds::default();
-        let mut paths = Vec::new();
-        let mut edits = 0u64;
-        for call in self.calls() {
-            match kind(&call.name, &call.arguments) {
-                Kind::Read => kinds.read = kinds.read.saturating_add(1),
-                Kind::Search => kinds.searched = kinds.searched.saturating_add(1),
-                Kind::Ran => kinds.ran = kinds.ran.saturating_add(1),
-                Kind::Ask(questions) => kinds.asked = kinds.asked.saturating_add(questions),
-                Kind::Other => kinds.other = kinds.other.saturating_add(1),
-                Kind::Edit => {
-                    edits = edits.saturating_add(1);
-                    for change in &call.changes {
-                        kinds.added = kinds.added.saturating_add(change.added);
-                        kinds.removed = kinds.removed.saturating_add(change.removed);
-                        if !paths.contains(&&change.path) {
-                            paths.push(&change.path);
-                        }
-                    }
-                }
-            }
-        }
-        kinds.edited = if paths.is_empty() {
-            edits
-        } else {
-            paths.len() as u64
-        };
-        kinds.thoughts = self.thoughts().count() as u64;
-        kinds
-    }
-
-    /// Its lines. A finished group with no call is its thinking, one line
-    /// a block; otherwise a summary line, and the ledger when open. The
-    /// summary line is one row in `width` cells, whatever runs. A
-    /// call's images draw as their one line each under its ledger row
-    /// (`docs/tui.md`, "Images").
-    pub(crate) fn rows(
-        &self,
-        running: bool,
-        width: u16,
-        layout: &crate::image::Layout,
-        out: &mut Rows,
-    ) {
-        if !running && !self.has_ledger() {
-            for thought in self.thoughts() {
-                thought_rows(thought, "", out);
-            }
-            return;
-        }
-        let mut parts = Vec::new();
-        let kinds = self.kinds().summary();
-        if !kinds.is_empty() {
-            parts.push(kinds);
-        }
-        let failed = self.failed() as u64;
-        if failed > 0 {
-            parts.push(count(failed, "failed model call", "failed model calls"));
-        }
-        let elapsed = if running {
-            let flight: Vec<String> = self
-                .calls()
-                .filter(|call| call.status.is_none())
-                .map(|call| label(&call.name, &summary(&call.name, &call.arguments)))
-                .chain(
-                    self.streaming
-                        .iter()
-                        .map(|call| label(call.name.as_deref().unwrap_or("…"), &call.text)),
-                )
-                .collect();
-            if !flight.is_empty() {
-                parts.push(flight.join(", "));
-            }
-            if let Some(thought) = self.thoughts().filter(|t| t.ended.is_none()).last() {
-                parts.push(match heading(&thought.text, true) {
-                    Some(heading) => format!("Thinking: {heading}"),
-                    None => "Thinking".to_owned(),
-                });
-            }
-            None
-        } else {
-            seconds(self.last.saturating_sub(self.first))
-        };
-        // A finished group's duration stays whole at the end of the line:
-        // what does not fit is cut from the descriptive part with "…", so
-        // the duration is still there (`docs/tui.md`, "Tool groups and the
-        // ledger").
-        let body = parts.join(" · ");
-        let suffix = elapsed.as_deref().map(|span| {
-            if body.is_empty() {
-                format!(" {span}")
-            } else {
-                format!(" · {span}")
-            }
-        });
-        let head = if body.is_empty() {
-            "•".to_owned()
-        } else {
-            format!("• {body}")
-        };
-        if body.is_empty() && suffix.is_none() {
-            return;
-        }
-        // A running summary line carries its spinner's cell: the draw
-        // site spins it on the working line's tick, so keyed and keyless
-        // running groups both move (`docs/tui.md`, "The working line").
-        let text = if running {
-            RowText {
-                spin: Some(0),
-                ..RowText::plain()
-            }
-        } else {
-            RowText::plain()
-        };
-        let mut line = match &suffix {
-            Some(tail) => format!("{head}{tail}"),
-            None => head.clone(),
-        };
-        // What does not fit is cut with "…", so the line never wraps
-        // (`docs/tui.md`, "Tool groups and the ledger").
-        let max = usize::from(width);
-        if self::width(&line) > max {
-            match &suffix {
-                Some(tail) => {
-                    let keep = max.saturating_sub(self::width(tail) + self::width("…"));
-                    line = format!("{}…{tail}", cut(&head, keep));
-                }
-                None => line = format!("{}…", cut(&line, max.saturating_sub(1))),
-            }
-        }
-        out.push_text(
-            (
-                dim(line),
-                self.key.as_deref().map(|key| Target::Group(target_id(key))),
-            ),
-            text,
-        );
-        // An open approval shows its call whatever the group's own state.
-        // A group with no key has no target, and draws as it is on a
-        // search draw too: a match there is one nothing could reveal
-        // (`docs/tui.md`, "Search").
-        let draws = self.open || self.calls().any(|call| call.asking);
-        match self.key.as_deref().map(|key| Target::Group(target_id(key))) {
-            Some(target) => {
-                if out.open_scope(target, draws) {
-                    self.ledger(width, layout, out);
-                }
-                out.end_scope();
-            }
-            None => {
-                if draws {
-                    self.ledger(width, layout, out);
-                }
-            }
-        }
-    }
-
-    /// One row per call, split by step: the step's number in the gutter on
-    /// its first row, the model calls that failed first, then its thinking.
-    /// Each call's images draw under its row, before its opened detail.
-    fn ledger(&self, width: u16, layout: &crate::image::Layout, out: &mut Rows) {
-        for section in &self.sections {
-            let mut gutter = format!("{:>3} ", section.step);
-            for (code, attempt) in &section.failed {
-                let gutter = std::mem::replace(&mut gutter, GAP.to_owned());
-                let row = format!("{gutter}model call failed · {code} · attempt {attempt}");
-                out.push((dim(row), None));
-            }
-            for thought in &section.thoughts {
-                thought_rows(
-                    thought,
-                    &std::mem::replace(&mut gutter, GAP.to_owned()),
-                    out,
-                );
-            }
-            for call in &section.calls {
-                let mut row = format!(
-                    "{}{}",
-                    std::mem::replace(&mut gutter, GAP.to_owned()),
-                    label(&call.name, &summary(&call.name, &call.arguments))
-                );
-                let (added, removed) = call.changes.iter().fold((0u64, 0u64), |(a, r), c| {
-                    (a.saturating_add(c.added), r.saturating_add(c.removed))
-                });
-                // The person's answer to a form replaces the status.
-                let status = match call.status {
-                    None if self.cut && call.started => " · ? may have run; not run again",
-                    None => " · running",
-                    Some(CallStatus::Completed) => "",
-                    Some(CallStatus::Failed) => " · failed",
-                    Some(CallStatus::Denied) => " · denied",
-                    Some(CallStatus::Cancelled) => " · cancelled",
-                };
-                let status = call
-                    .asked
-                    .as_ref()
-                    .and_then(|asked| asked.suffix())
-                    .unwrap_or(status);
-                // A call that changed a file stands out: bold, its counts in
-                // the added and removed colours (`docs/tui.md`, "Tool groups
-                // and the ledger").
-                let line = if call.changes.is_empty() {
-                    row.push_str(status);
-                    dim(row)
-                } else {
-                    Line::from(vec![
-                        Span::raw(row),
-                        Span::styled(format!(" +{added}"), style(Role::Added)),
-                        Span::styled(format!(" −{removed}"), style(Role::Removed)),
-                        Span::raw(status.to_owned()),
-                    ])
-                    .style(Style::default().add_modifier(Modifier::BOLD))
-                };
-                out.push((line, Some(Target::Call(call.id))));
-                crate::turn::images::call_rows(&call.images, width, layout, out);
-                if out.open_scope(Target::Call(call.id), call.open) {
-                    if call.changes.is_empty() {
-                        opened(&call.detail, GAP, out);
-                    } else {
-                        opened_diff(&call.detail, GAP, out);
-                    }
-                }
-                out.end_scope();
-            }
-        }
-    }
-}
-
-/// The gutter left blank.
-const GAP: &str = "    ";
-
-/// A thought's line after `gutter`, and its text when open.
-fn thought_rows(thought: &Thought, gutter: &str, out: &mut Rows) {
-    let span = thought
-        .ended
-        .map(|ended| ended.saturating_sub(thought.started));
-    let line = self::thought(gutter, &thought.text, span);
-    out.push((line, Some(Target::Thought(thought.id))));
-    if out.open_scope(Target::Thought(thought.id), thought.open) {
-        opened(&thought.text, &" ".repeat(gutter.len()), out);
-    }
-    out.end_scope();
 }
 
 /// One question's answer as `ask_user`'s result writes it (`docs/tools.md`,

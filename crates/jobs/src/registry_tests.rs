@@ -480,6 +480,15 @@ fn stop_through_the_trait_on_an_ended_or_unknown_job_is_false() {
     assert!(!Jobs::stop(registry.as_ref(), &id));
     assert!(!Jobs::stop(registry.as_ref(), &JobId("j_missing".into())));
     assert_eq!(calls.load(std::sync::atomic::Ordering::SeqCst), 0);
+    let cancel = CancelToken::new();
+    assert!(matches!(
+        registry.stop("j_missing", &cancel),
+        Err(contract::jobs::StopError::NotRunning)
+    ));
+    assert!(matches!(
+        registry.stop(&id.0, &cancel),
+        Err(contract::jobs::StopError::Ended(Outcome::Completed))
+    ));
 }
 
 #[test]
@@ -600,7 +609,7 @@ fn writing(
     input: &'static str,
     wait_ms: u64,
     cancel: CancelToken,
-) -> mpsc::Receiver<Result<super::Answer, super::WriteError>> {
+) -> mpsc::Receiver<Result<super::Answer, contract::jobs::WriteError>> {
     let registry = Arc::clone(registry);
     let id = id.to_owned();
     let (tx, rx) = mpsc::channel();
@@ -686,17 +695,17 @@ fn write_does_not_reach_a_job_without_a_terminal_an_unknown_job_or_an_ended_one(
     let cancel = CancelToken::new();
     assert!(matches!(
         registry.write(&plain_id, "x", 0, &cancel),
-        Err(super::WriteError::NotTty)
+        Err(contract::jobs::WriteError::NotTty)
     ));
     assert!(matches!(
         registry.write("j_missing", "x", 0, &cancel),
-        Err(super::WriteError::Unknown)
+        Err(contract::jobs::WriteError::NotRunning)
     ));
     let (id, tty, typed) = open_tty(&registry, b"");
     (tty.end.0)(ended_ok(&id));
     assert!(matches!(
         registry.write(&id, "x", 0, &cancel),
-        Err(super::WriteError::Ended(Outcome::Completed))
+        Err(contract::jobs::WriteError::Ended(Outcome::Completed))
     ));
     assert!(
         typed.lock().unwrap().is_empty(),
@@ -722,7 +731,7 @@ fn a_failed_write_to_the_terminal_is_an_io_error() {
     let id = opened.started.job_id.0.clone();
     let result = registry.write(&id, "x", 0, &CancelToken::new());
     assert!(
-        matches!(&result, Err(super::WriteError::Io(err)) if err.to_string().contains("closed"))
+        matches!(&result, Err(contract::jobs::WriteError::Io(err)) if err.to_string().contains("closed"))
     );
     drop(opened.end);
 }
@@ -1101,7 +1110,7 @@ fn seam_write_misses_a_non_tty_an_unknown_or_an_ended_job() {
     (tty.end.0)(ended_ok(&id));
     assert!(matches!(
         seam_write(&registry, &JobId(id), "x"),
-        Err(contract::jobs::WriteError::NotRunning)
+        Err(contract::jobs::WriteError::Ended(Outcome::Completed))
     ));
     assert!(
         typed.lock().unwrap().is_empty(),
@@ -1140,7 +1149,7 @@ fn an_ended_job_drops_its_input() {
     assert_eq!(Arc::strong_count(&typed), 1, "the ended job kept its input");
     assert!(matches!(
         registry.write(&id, "x", 0, &CancelToken::new()),
-        Err(super::WriteError::Ended(Outcome::Completed))
+        Err(contract::jobs::WriteError::Ended(Outcome::Completed))
     ));
 }
 

@@ -11,6 +11,7 @@ use std::sync::Arc;
 
 use contract::ErrorCode;
 use contract::SessionId;
+use contract::events::Event;
 use doors::Session;
 use log::Log;
 use r#loop::Loop;
@@ -70,6 +71,15 @@ pub(crate) fn ask_resume(
         Ok(id) => id,
         Err(e) => return ask_failed(failed(e.code(), e)),
     };
+    // The recorded worktree may be gone: the lookup above reads the
+    // recorded repository, but a resume runs in the recorded workspace, so
+    // the launch project is re-applied to it here. A session outside this
+    // project is refused exactly as an unknown id: the log is untouched,
+    // no lock is taken and nothing attaches.
+    if !in_launch_project(&sessions.join(&id.0), &project) {
+        let e = log::Error::NotFound(sessions.clone());
+        return ask_failed(failed(e.code(), e));
+    }
     // A resume that attaches to a live session names the crash file by the
     // session it attaches to, as the TUI does.
     crate::crash::attach(&id);
@@ -107,6 +117,25 @@ pub(crate) fn ask_resume(
         signals,
         fiber,
     )
+}
+
+/// Whether the session in `dir` runs in the launch project: its recorded
+/// workspace resolves to the same project, the same test the lookup
+/// applied. A missing log, or a first line that fails to read or parse as
+/// `session_started`, is refused the same way; the lookup just accepted it,
+/// so that is unreachable short of a concurrent delete.
+fn in_launch_project(dir: &Path, project: &Path) -> bool {
+    let Ok(lines) = log::lines(dir) else {
+        return false;
+    };
+    let mut lines = lines;
+    let Some(Ok(line)) = lines.next() else {
+        return false;
+    };
+    let Ok(Some(Event::SessionStarted(started))) = Event::from_envelope(&line) else {
+        return false;
+    };
+    doors::project(Path::new(&started.workspace)) == project
 }
 
 /// The internal session command with `--resume`: resumes the session `id`
@@ -167,6 +196,10 @@ fn resumed_session(
     signals: &Arc<doors::Signals>,
     fiber: Result<PathBuf, String>,
 ) -> i32 {
+    // One reads for the process, cancelled when this returns whatever the
+    // result, and armed before the parts are read.
+    let reads = Arc::new(crate::switch::Reads::default());
+    let _cancel = crate::switch::CancelOnDrop(Arc::clone(&reads));
     let folded = match r#loop::resumed(dir) {
         Ok(folded) => folded,
         Err(e) => return ask_failed(failed(e.code(), e)),
@@ -181,6 +214,7 @@ fn resumed_session(
         .thinking
         .as_deref()
         .and_then(|level| level.parse::<contract::ThinkingLevel>().ok());
+    crate::shutdown::arm(signals, &reads);
     let parts = match crate::parts_with(
         overrides,
         folded.model.as_deref(),
@@ -188,6 +222,7 @@ fn resumed_session(
         recorded_thinking,
         Arc::clone(&clock),
         None,
+        Arc::clone(&reads),
     ) {
         Ok(mut parts) => {
             // The session directory's log: the opening message's
@@ -195,7 +230,7 @@ fn resumed_session(
             parts.prompt.session_log = dir.join("events.jsonl").display().to_string();
             parts
         }
-        Err(e) => return ask_failed(e),
+        Err(e) => return crate::session_command::report(signals, e),
     };
     let crate::Parts {
         provider,
@@ -235,13 +270,15 @@ fn resumed_session(
     // A resumed session declares `delegate_spawn` too, parented to itself.
     let fiber_path = match fiber.clone() {
         Ok(fiber_path) => fiber_path,
-        Err(message) => return ask_failed(failed(ErrorCode::IoFailed, message)),
+        Err(message) => {
+            return crate::session_command::report(signals, failed(ErrorCode::IoFailed, message));
+        }
     };
     let Some(sessions) = dir.parent() else {
-        return ask_failed(failed(
-            ErrorCode::IoFailed,
-            "the session directory has no parent",
-        ));
+        return crate::session_command::report(
+            signals,
+            failed(ErrorCode::IoFailed, "the session directory has no parent"),
+        );
     };
     let delegates = crate::delegates::Delegates::new(
         fiber_path,
@@ -253,7 +290,7 @@ fn resumed_session(
         Arc::clone(&clock),
         resolve,
     );
-    crate::shutdown::arm(signals);
+    crate::shutdown::arm(signals, &reads);
     let skill_set = r#loop::SkillSet::new(prompt_inputs.clone(), Path::new(&folded.workspace));
     let skills: Arc<dyn contract::skills::Skills> = Arc::new(skill_set.reader());
     let web_search = match crate::builtin::web_search(
@@ -261,7 +298,7 @@ fn resumed_session(
         extensions.search_backend().as_ref(),
     ) {
         Ok(web_search) => web_search,
-        Err(e) => return ask_failed(e),
+        Err(e) => return crate::session_command::report(signals, e),
     };
     let skipped = folded.skipped();
     let (tools, infos, driver, session_servers) = match crate::mcp_servers::session_tools(
@@ -282,7 +319,7 @@ fn resumed_session(
         extensions.tools(),
     ) {
         Ok(built) => built,
-        Err(e) => return ask_failed(e),
+        Err(e) => return crate::session_command::report(signals, e),
     };
     let forget = Arc::clone(&session_servers.forget);
     let hosted_stands = crate::switch::hosted_stands(&tools);
@@ -311,7 +348,7 @@ fn resumed_session(
         Ok(session) => session,
         Err(e) => {
             session_servers.servers.stop();
-            return ask_failed(e);
+            return crate::session_command::report(signals, e);
         }
     };
     // What the session loads once its offer step has run, before its first

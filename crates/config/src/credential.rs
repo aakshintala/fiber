@@ -9,6 +9,7 @@ use std::io::{self, ErrorKind};
 use std::path::{Path, PathBuf};
 use std::process::{Command, Output, Stdio};
 use std::sync::{Arc, Mutex};
+use std::time::Duration;
 
 use contract::Secret;
 use serde_json::{Map, Value};
@@ -32,7 +33,9 @@ pub struct Read {
 }
 
 /// Runs a credential source's built command and collects its output.
-pub type Runner<'a> = &'a dyn Fn(&mut Command) -> io::Result<Output>;
+/// The duration is the source's `timeout`; a command still running at it
+/// answers `Err` of kind `TimedOut`.
+pub type Runner<'a> = &'a dyn Fn(&mut Command, Duration) -> io::Result<Output>;
 
 /// The key of each `command` source that has run, by stored credential
 /// name, label and command. A clone of the [`Config`] shares it.
@@ -100,24 +103,21 @@ impl Credentials {
             .to_owned()
     }
 
-    /// The provider's key under `label`. The stored credential
+    /// The provider's key under `label`, and the file it was read from.
+    /// The stored credential
     /// `credentials/<stored>/<label>`, where `<stored>` is the credential
     /// the provider's data names or its own name, comes first: when it
     /// exists but cannot be used, that is the error, and no other source is
     /// tried under the label. Otherwise `providers."<name>".credentials."<label>"`
     /// from the global or per-project layer, and for `default` only, the
-    /// provider's own source. A command runs the first time this is called for
+    /// provider's own source. A `command` source runs through `run`, which
+    /// gets the built command and the source's `timeout`: program,
+    /// arguments, stdin and stderr null, stdout piped. A command runs the
+    /// first time this is called for
     /// its credential and label, and its key serves every later call on this
     /// configuration and its clones, so a command that gave a key runs once
     /// per process. A command that failed runs again on the next call.
-    pub fn credential(&self, provider: &ProviderData, label: &str) -> Result<Secret, ConfigError> {
-        self.credential_with(provider, label, &|command: &mut Command| command.output())
-            .map(|read| read.secret)
-    }
-
-    /// As [`Credentials::credential`], running a `command` source through `run`,
-    /// which gets the built command: program, arguments, stdin and stderr
-    /// null, stdout piped. A `file` source is canonicalised and read through
+    /// A `file` source is canonicalised and read through
     /// its canonical path, which [`Read::file`] names, so the bytes read and
     /// the path the credential deny protects are the same file
     /// (`docs/permissions.md`, "Credentials"). When the path cannot be
@@ -190,10 +190,10 @@ impl Credentials {
                     });
                 }
             },
-            CredentialSource::Command(argv) => self
+            CredentialSource::Command { argv, timeout } => self
                 .commands
                 .once((stored.to_owned(), label.to_owned(), argv.clone()), || {
-                    command(argv, run)
+                    command(argv, *timeout, run)
                 }),
         };
         found
@@ -255,7 +255,7 @@ impl Credentials {
 impl Credentials {
     /// The path of every `file` credential source configuration declares,
     /// as written: each `providers."<name>".credentials."<label>"` that
-    /// [`Credentials::credential`] would read, and each of `providers`' own
+    /// [`Credentials::credential_with`] would read, and each of `providers`' own
     /// sources. Each appears once. The credential deny protects them
     /// (`docs/permissions.md`, "Credentials").
     pub fn credential_files<'a>(
@@ -272,7 +272,7 @@ impl Credentials {
             .filter_map(|source| match source {
                 // An empty path names no file and is never read.
                 CredentialSource::File(file) => (!file.as_os_str().is_empty()).then_some(file),
-                CredentialSource::Env(_) | CredentialSource::Command(_) => None,
+                CredentialSource::Env(_) | CredentialSource::Command { .. } => None,
             })
             .collect();
         files.into_iter().collect()
@@ -307,17 +307,28 @@ fn usable(value: &str) -> Option<Secret> {
 
 /// What the command prints on stdout when `run` runs it and it succeeds,
 /// or why it gave no key. The command is named by its program alone: its
-/// arguments may hold a key.
-fn command(argv: &[String], run: Runner<'_>) -> Result<Secret, String> {
+/// arguments may hold a key. A command still running at `timeout` is
+/// `TimedOut`, which reads `` `<program>` was still running after <n>s ``
+/// for the timeout's whole seconds.
+fn command(argv: &[String], timeout: Duration, run: Runner<'_>) -> Result<Secret, String> {
     let Some((program, args)) = argv.split_first() else {
         return Err("the configured command is empty".into());
     };
-    let output = run(Command::new(program)
-        .args(args)
-        .stdin(Stdio::null())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::null()))
-    .map_err(|e| format!("`{program}` could not be started: {e}"))?;
+    let output = run(
+        Command::new(program)
+            .args(args)
+            .stdin(Stdio::null())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::null()),
+        timeout,
+    )
+    .map_err(|e| {
+        if e.kind() == ErrorKind::TimedOut {
+            format!("`{program}` was still running after {}s", timeout.as_secs())
+        } else {
+            format!("`{program}` could not be started: {e}")
+        }
+    })?;
     if !output.status.success() {
         return Err(format!("`{program}` failed ({})", output.status));
     }

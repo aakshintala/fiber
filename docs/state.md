@@ -86,7 +86,8 @@ becomes `-Users-alice-work`.
 
 A slug can collide (`/a-b` and `/a/b` both become `-a-b`). That is harmless:
 the key is only a name for humans. `session_started` records the exact
-workspace, and lookup checks it. The log stays the truth
+workspace, and the worktree's repository when Fiber made one, and lookup
+checks the repository when recorded and the workspace otherwise. The log stays the truth
 ([ADR 0001](adr/0001-session-log-is-the-only-state-of-record.md)).
 
 ## Sessions and resume
@@ -229,7 +230,7 @@ What is recorded:
 
 - **Failures with no session to hold them:** a startup error such as
   `config_invalid`, a signal that arrives before `fiber_started`, a shutdown
-  that passes its bound (`docs/invocation.md`, "Shutdown"), and a background
+  that reaches its kill point (`docs/invocation.md`, "Shutdown"), and a background
   refresh, such as a quota or model list, that fails while no session is
   running.
 - **An extension's `host.log` lines:** each is a line in the session's file

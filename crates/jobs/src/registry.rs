@@ -14,7 +14,9 @@ use contract::clock::{Clock, Wake};
 use contract::emit::Emit;
 use contract::events::{DelegateFinished, JobCompleted, JobLine, JobStarted, Outcome};
 use contract::inbox::{Claim, Delivery, JobNotice};
-use contract::jobs::{End, Foreground, JobRecord, Lines, OpenError, Opened, Opening, Stop};
+use contract::jobs::{
+    End, Foreground, JobRecord, Lines, OpenError, Opened, Opening, Stop, StopError, WriteError,
+};
 use contract::shapes::{ContentPart, Failure};
 use contract::tool::{Cancel, Output};
 use contract::{ErrorCode, JobId};
@@ -163,26 +165,6 @@ pub(crate) struct Answer {
     /// The records, the first time they are delivered: a delegate's
     /// finish, when it has one, then its completion.
     pub(crate) records: Vec<JobRecord>,
-}
-
-/// `write` could not reach the job.
-pub(crate) enum WriteError {
-    /// No job has this id.
-    Unknown,
-    /// The job was not started with `tty`.
-    NotTty,
-    /// The job had already ended, with this status.
-    Ended(Outcome),
-    /// Writing to the terminal failed.
-    Io(std::io::Error),
-}
-
-/// `stop` could not ask the job to stop.
-pub(crate) enum StopError {
-    /// No job has this id.
-    Unknown,
-    /// The job had already ended, with this status.
-    Ended(Outcome),
 }
 
 impl Registry {
@@ -434,7 +416,7 @@ impl Registry {
     fn typer_of(&self, id: &str) -> Result<(Typer, PathBuf), WriteError> {
         let inner = lock(&self.inner);
         let Some(job) = inner.jobs.iter().find(|job| job.started.job_id.0 == id) else {
-            return Err(WriteError::Unknown);
+            return Err(WriteError::NotRunning);
         };
         if let Phase::Ended(completed) = &job.phase {
             return Err(WriteError::Ended(completed.status));
@@ -451,7 +433,7 @@ impl Registry {
     fn send_stop(&self, id: &str) -> Result<Option<Arc<dyn Fn() + Send + Sync>>, StopError> {
         let mut inner = lock(&self.inner);
         let Some(job) = inner.jobs.iter_mut().find(|job| job.started.job_id.0 == id) else {
-            return Err(StopError::Unknown);
+            return Err(StopError::NotRunning);
         };
         if let Phase::Ended(completed) = &job.phase {
             return Err(StopError::Ended(completed.status));
@@ -742,14 +724,7 @@ impl contract::jobs::Jobs for Registry {
     /// a job that never reads stdin cannot hold the connection's reader
     /// thread past that wait (`docs/architecture.md`, "One inbox").
     fn write(&self, job_id: &JobId, text: &str) -> Result<(), contract::jobs::WriteError> {
-        let (typer, _) = match self.typer_of(&job_id.0) {
-            Ok(found) => found,
-            Err(WriteError::Unknown | WriteError::Ended(_)) => {
-                return Err(contract::jobs::WriteError::NotRunning);
-            }
-            Err(WriteError::NotTty) => return Err(contract::jobs::WriteError::NotTty),
-            Err(WriteError::Io(error)) => return Err(contract::jobs::WriteError::Io(error)),
-        };
+        let (typer, _) = self.typer_of(&job_id.0)?;
         // `checked_add` is `None` when the wait does not fit on the clock.
         // That write has no deadline, as a `wait` with no deadline does.
         let until = self.clock.now().checked_add(WRITE_TIMEOUT);
@@ -771,7 +746,7 @@ impl contract::jobs::Jobs for Registry {
                 true
             }
             Ok(None) => true,
-            Err(StopError::Unknown | StopError::Ended(_)) => false,
+            Err(StopError::NotRunning | StopError::Ended(_)) => false,
         }
     }
 

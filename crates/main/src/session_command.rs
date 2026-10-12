@@ -119,12 +119,18 @@ pub(crate) fn new_session(
     case_run: Option<Arc<crate::case::run::CaseRun>>,
     parent: Option<Parent>,
 ) -> i32 {
+    // One reads for the process: the worktree's `git worktree add` and
+    // every startup credential read run through it, so one cancel reaches
+    // them all. The guard drops after the worktree's isolation ends, and
+    // cancels on every return, whatever the result.
+    let reads = Arc::new(crate::switch::Reads::default());
+    let _cancel = crate::switch::CancelOnDrop(Arc::clone(&reads));
     let clock = case_run.as_ref().map_or(clock, |case| case.session_clock());
     let host = case_run.as_ref().map(|case| case.host_script());
     if !worktree {
         return match run_new(
             id, overrides, prompt, one_turn, None, clock, signals, fiber, host, case_run, parent,
-            None,
+            None, reads,
         ) {
             Ok(code) => code,
             Err(failure) => report(signals, failure),
@@ -146,8 +152,7 @@ pub(crate) fn new_session(
     };
     // Its own reads: the worktree's `git worktree add` runs through them,
     // so a signal kills git and its hook together.
-    let reads = Arc::new(crate::switch::Reads::default());
-    shutdown::arm_isolating(signals, &reads);
+    shutdown::arm(signals, &reads);
     let isolation = match doors::isolate(&launch, &home, &id, Arc::clone(&clock), &|command| {
         reads.command(command)
     }) {
@@ -176,6 +181,7 @@ pub(crate) fn new_session(
         case_run,
         parent,
         None,
+        reads,
     );
     isolation.end();
     match result {
@@ -203,7 +209,11 @@ pub(crate) fn run_new(
     case_run: Option<Arc<crate::case::run::CaseRun>>,
     parent: Option<Parent>,
     rewound: Option<r#loop::Rewound>,
+    reads: Arc<crate::switch::Reads>,
 ) -> Result<i32, Failure> {
+    // Armed before the parts are read: from now a signal cancels the one
+    // reads every startup credential command runs through.
+    shutdown::arm(signals, &reads);
     // A rewind's new session runs where the old one did, with the model,
     // credential and thinking level the old log's latest build recorded,
     // as a resume keeps its recorded ones (`docs/events.md`, "Rewind").
@@ -226,9 +236,18 @@ pub(crate) fn run_new(
                 thinking,
                 Arc::clone(&clock),
                 host,
+                Arc::clone(&reads),
             )?
         }
-        None => parts_with(overrides, None, None, None, Arc::clone(&clock), host)?,
+        None => parts_with(
+            overrides,
+            None,
+            None,
+            None,
+            Arc::clone(&clock),
+            host,
+            Arc::clone(&reads),
+        )?,
     };
     crash::attach(&id);
     let dir = parts.sessions.join(&id.0);
@@ -262,7 +281,7 @@ pub(crate) fn run_new(
         web_search,
     } = parts;
     let (job_emit, jobs) = late_emit::registry(&dir, &clock);
-    shutdown::arm(signals);
+    shutdown::arm(signals, &reads);
     // Every session declares `delegate_spawn`: a delegate is its own
     // session, so the child re-executes this binary.
     let fiber_path = fiber

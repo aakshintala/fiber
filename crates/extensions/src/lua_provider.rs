@@ -307,11 +307,16 @@ impl LuaProvider {
     /// (`docs/model-routing.md`, "Model discovery"). `data` is the data
     /// file's, else one naming only the provider: the same lookup a session
     /// uses for its key.
-    pub fn has_credential(&self, config: &Config, data: &ProviderData) -> bool {
+    pub fn has_credential(
+        &self,
+        config: &Config,
+        data: &ProviderData,
+        run: config::Runner<'_>,
+    ) -> bool {
         self.registers("credential").unwrap_or(false)
             || config
                 .credentials()
-                .credential(data, &config.credentials().credential_label(data))
+                .credential_with(data, &config.credentials().credential_label(data), run)
                 .is_ok()
     }
 

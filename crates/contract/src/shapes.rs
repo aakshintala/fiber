@@ -365,7 +365,7 @@ pub struct Choice {
 pub enum Origin {
     /// A client's command.
     Driver,
-    /// An extension's `host.drive`.
+    /// An extension's `host.drive`, or a message a `turn_end` hook returned.
     Extension {
         /// The extension's name.
         extension: String,
@@ -385,8 +385,8 @@ pub struct Sender {
     /// Who sent it.
     #[serde(flatten)]
     pub origin: Origin,
-    /// The `prompt`, `steer` or `message` command that sent it; `None`
-    /// only for Fiber's own message.
+    /// The `prompt`, `steer` or `message` command that sent it; `None` for
+    /// Fiber's own message and a `turn_end` hook's.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub command_id: Option<CommandId>,
 }
@@ -407,6 +407,10 @@ pub struct Worktree {
     pub path: String,
     /// Its branch.
     pub branch: String,
+    /// The repository's git common directory, absolute. Set only for a
+    /// session's own worktree; absent on delegate events.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub repository: Option<String>,
 }
 
 /// A marker key whose only value is `true`, such as `declined` or `skipped`.

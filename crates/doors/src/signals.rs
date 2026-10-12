@@ -16,8 +16,9 @@
 //! - started: the shutdown the door registered runs, and a second SIGTERM
 //!   or SIGINT kills every live process group at once.
 //!
-//! The first signal in the last two also starts the bound: 5 seconds later
-//! whatever is still alive is killed and the process exits with the code.
+//! The first signal in the last two also starts the bound. At 4.9 s
+//! whatever is still alive is killed; with a writer held, one diagnostic
+//! line gets until 5 s, and the process exits with the code.
 //!
 //! A `close` with `now` takes the same path with exit code 0
 //! (`docs/invocation.md`, "Shutdown"): [`Signals::close_now`] records
@@ -26,17 +27,28 @@
 //! so a later SIGTERM or SIGINT is a second signal.
 
 use std::io::{self, Read};
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
 use std::thread;
 use std::time::{Duration, Instant};
 
 use contract::clock::{Clock, Wake};
+use log::diag::{Diag, Severity};
 use signal_hook::consts::{SIGHUP, SIGINT, SIGTERM};
 
 /// From the signal to exit, per process (`docs/invocation.md`, "Shutdown").
 /// A delegate's stop waits this long too: `main` passes it into `jobs`
 /// as the stop bound, so there is one constant.
 pub const SHUTDOWN_BOUND: Duration = Duration::from_secs(5);
+
+/// How long the bound's diagnostic line may take after the kill point:
+/// the process exits this long after [`KILL_AT`], with the line or
+/// without it.
+const LINE_CAP: Duration = Duration::from_millis(100);
+
+/// From the signal to the kill: whatever is still alive is killed here,
+/// [`LINE_CAP`] before [`SHUTDOWN_BOUND`].
+const KILL_AT: Duration = SHUTDOWN_BOUND.saturating_sub(LINE_CAP);
 
 /// The exit code a `close` with `now` ends the process with: success, as an
 /// ordinary `close` would (`docs/invocation.md`, "Lifecycle").
@@ -136,6 +148,9 @@ struct State {
 pub struct Signals {
     state: Mutex<State>,
     clock: Arc<dyn Clock>,
+    /// Writes the bound's diagnostic line, when one is held: `None` until
+    /// the writer is wired in, so production writes no bound line yet.
+    diag: Option<Arc<Diag>>,
     /// Ends the process: `std::process::exit`, or a test's recorder.
     exit: Box<dyn Fn(i32) + Send + Sync>,
     spawn: Spawn,
@@ -147,7 +162,11 @@ impl Signals {
     /// `clock`.
     pub fn install(clock: Arc<dyn Clock>) -> io::Result<Arc<Self>> {
         let mut signals = signal_hook::iterator::Signals::new([SIGTERM, SIGINT, SIGHUP])?;
-        let handling = Arc::new(Self::new(clock, Box::new(|code| std::process::exit(code))));
+        let handling = Arc::new(Self::new(
+            clock,
+            Box::new(|code| std::process::exit(code)),
+            None,
+        ));
         let handler = Arc::clone(&handling);
         thread::Builder::new()
             .name("signals".to_owned())
@@ -159,7 +178,11 @@ impl Signals {
         Ok(handling)
     }
 
-    fn new(clock: Arc<dyn Clock>, exit: Box<dyn Fn(i32) + Send + Sync>) -> Self {
+    fn new(
+        clock: Arc<dyn Clock>,
+        exit: Box<dyn Fn(i32) + Send + Sync>,
+        diag: Option<Arc<Diag>>,
+    ) -> Self {
         Self {
             state: Mutex::new(State {
                 phase: Phase::Booting,
@@ -172,6 +195,7 @@ impl Signals {
             }),
             clock,
             exit,
+            diag,
             spawn: Box::new(spawn_bound),
         }
     }
@@ -367,31 +391,62 @@ impl Signals {
         }
     }
 
-    /// Starts the bound: [`SHUTDOWN_BOUND`] from now on the clock, `on_bound` runs
-    /// and the process exits with `code`. It writes nothing: a line it
-    /// wrote could be followed by a stuck loop's.
+    /// Starts the bound from one reading of the clock: at [`KILL_AT`] the
+    /// bound thread kills whatever is still alive, and at
+    /// [`SHUTDOWN_BOUND`] the process exits with `code`. It writes nothing
+    /// to the session log: a line it wrote could be followed by a stuck
+    /// loop's.
     fn bound(self: &Arc<Self>, code: i32) {
         let now = self.clock.now();
-        let until = now.checked_add(SHUTDOWN_BOUND).unwrap_or(now);
+        let kill_at = now.checked_add(KILL_AT).unwrap_or(now);
+        let exit_by = now.checked_add(SHUTDOWN_BOUND).unwrap_or(now);
         let signals = Arc::clone(self);
         let started = (self.spawn)(Box::new(move || {
-            sleep_until(signals.clock.as_ref(), until);
-            signals.end(code);
+            sleep_until(signals.clock.as_ref(), kill_at);
+            signals.end(code, exit_by);
         }));
         // No thread, no bound: rather than a shutdown with no limit, the
-        // bound is reached now.
+        // kill point is reached now, with only the line's own cap left.
         if started.is_err() {
-            self.end(code);
+            self.end(code, now.checked_add(LINE_CAP).unwrap_or(now));
         }
     }
 
-    /// The bound reached: whatever is alive is killed, and the process
-    /// exits with `code`.
-    fn end(&self, code: i32) {
+    /// The kill point reached: whatever is alive is killed, then, with a
+    /// writer held, one diagnostic line gets until `exit_by`, and the
+    /// process exits with `code`. The calling thread never touches the
+    /// writer: only the `diag` thread does, outside the state lock.
+    fn end(&self, code: i32, exit_by: Instant) {
         let on_bound = lock(&self.state).on_bound.clone();
         if let Some(on_bound) = on_bound {
             on_bound();
         }
+        let Some(diag) = self.diag.clone() else {
+            (self.exit)(code);
+            return;
+        };
+        let tick = Arc::new(support::clock::Parker::new());
+        let wake: Arc<dyn Wake> = tick.clone();
+        self.clock.subscribe(Arc::downgrade(&wake));
+        let done = Arc::new(AtomicBool::new(false));
+        let message = kill_point_message(code);
+        let bumped = Arc::clone(&tick);
+        let written = Arc::clone(&done);
+        // No branch on the spawn: with no thread the wait below still ends
+        // the process at `exit_by`, with no line, and the line is never
+        // written inline, where a stuck loop could hold it up.
+        drop(
+            thread::Builder::new()
+                .name("diag".to_owned())
+                .spawn(move || {
+                    diag.line(Severity::Error, None, "timeout", &message);
+                    written.store(true, Ordering::SeqCst);
+                    bumped.bump();
+                }),
+        );
+        park_until(self.clock.as_ref(), exit_by, &tick, &|| {
+            done.load(Ordering::SeqCst)
+        });
         (self.exit)(code);
     }
 }
@@ -403,21 +458,41 @@ fn spawn_bound(run: Box<dyn FnOnce() + Send>) -> io::Result<()> {
         .map(|_| ())
 }
 
-/// Blocks until `until` on `clock`.
-fn sleep_until(clock: &dyn Clock, until: Instant) {
-    let tick = Arc::new(support::clock::Parker::new());
-    let wake: Arc<dyn Wake> = tick.clone();
-    clock.subscribe(Arc::downgrade(&wake));
+/// The bound's diagnostic line for `code`.
+fn kill_point_message(code: i32) -> String {
+    format!(
+        "The shutdown reached its 4.9-second kill point; every process group still alive was killed and the process exits {code}."
+    )
+}
+
+/// Blocks until `until` on `clock`, or until `done` holds, whichever comes
+/// first. The loop reads `generation` before either check, so a bump that
+/// lands between the checks still ends the park at once, and the clock is
+/// read before the park, so a move that lands in between cannot be missed.
+fn park_until(
+    clock: &dyn Clock,
+    until: Instant,
+    tick: &support::clock::Parker,
+    done: &dyn Fn() -> bool,
+) {
     loop {
-        // `generation` is read before the clock: any bump after that read
-        // makes the park return at once, so a move that lands in between
-        // cannot be missed.
         let seen = tick.generation();
+        if done() {
+            return;
+        }
         if clock.now() >= until {
             return;
         }
         tick.park(clock, Some(until), seen);
     }
+}
+
+/// Blocks until `until` on `clock`.
+fn sleep_until(clock: &dyn Clock, until: Instant) {
+    let tick = Arc::new(support::clock::Parker::new());
+    let wake: Arc<dyn Wake> = tick.clone();
+    clock.subscribe(Arc::downgrade(&wake));
+    park_until(clock, until, &tick, &|| false);
 }
 
 /// Reads `input` to EOF or an error, ignoring every byte: the parent

@@ -11,14 +11,16 @@
 
 use std::ffi::OsStr;
 use std::fs::{File, OpenOptions};
-use std::io::{BufRead, BufReader};
+use std::io::{self, BufRead, BufReader};
+use std::os::unix::process::CommandExt;
 use std::path::{Path, PathBuf};
-use std::process::Command;
+use std::process::{Command, Output};
 use std::sync::mpsc::{self, Sender};
 use std::thread;
 use std::time::Duration;
 
 use crate::deadline::Deadline;
+use crate::{MUST_SUCCEED_WITHIN, Watchdog, group_empties, kill_group};
 
 /// How long [`Ready::new`] waits for its reader to open the FIFO.
 const OPEN_DEADLINE: Duration = Duration::from_secs(5);
@@ -220,6 +222,62 @@ fn block_of(ready: &Path) -> PathBuf {
 
 fn quote(path: &Path) -> String {
     format!("'{}'", path.display().to_string().replace('\'', "'\\''"))
+}
+
+/// Runs `command` in its own process group and collects its output: the
+/// one runner every test hands to a credential read
+/// (`docs/testing.md`, "Running tests"). The caller configures stdio, as
+/// `config` does (stdin and stderr null, stdout piped); this sets only the
+/// process group. A watchdog guards the group while the run lasts. The
+/// wait is bounded by the test's wall deadline, and the product's timeout
+/// is ignored on purpose: bounding by it is `Reads::credential`'s job.
+/// After the exit whatever the group still holds is killed with SIGKILL
+/// and the group is waited out, so no descendant outlives the call.
+///
+/// # Panics
+///
+/// When the run outlasts the wall deadline (naming the program), or when
+/// the group does not empty after the kill.
+///
+/// # Errors
+///
+/// When the command cannot be started.
+#[track_caller]
+#[allow(
+    clippy::panic,
+    reason = "a test runner that hangs or leaks means the test cannot proceed"
+)]
+pub fn grouped_output(command: &mut Command, _timeout: Duration) -> io::Result<Output> {
+    command.process_group(0);
+    let program = command.get_program().to_string_lossy().into_owned();
+    let child = command.spawn()?;
+    let pid = child.id();
+    let watchdog = Watchdog::group(pid);
+    let (done, finished) = mpsc::channel();
+    thread::spawn(move || {
+        let output = child.wait_with_output();
+        match done.send(output) {
+            Ok(()) | Err(_) => {}
+        }
+    });
+    let output = match Deadline::after(MUST_SUCCEED_WITHIN).recv(&finished) {
+        Ok(output) => output?,
+        Err(_) => {
+            match kill_group(pid, "KILL") {
+                Ok(_) | Err(_) => {}
+            }
+            panic!("`{program}` did not exit within {MUST_SUCCEED_WITHIN:?}");
+        }
+    };
+    match kill_group(pid, "KILL") {
+        Ok(_) | Err(_) => {}
+    }
+    assert!(
+        group_empties(pid, MUST_SUCCEED_WITHIN),
+        "`{program}` left its process group {pid} behind"
+    );
+    watchdog.stand_down(MUST_SUCCEED_WITHIN);
+    Ok(output)
 }
 
 #[cfg(test)]

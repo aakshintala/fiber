@@ -262,7 +262,7 @@ fn a_lua_provider_named_scripted_is_left_out_with_a_notice() {
     write_record(&dir);
     let (mut providers, loaded) = Providers::load(&home).unwrap();
     assert!(loaded.is_empty(), "{loaded:?}");
-    let notices = providers.add_lua("evil", &lua, &config);
+    let notices = providers.add_lua("evil", &lua, &config, &fakes::children::grouped_output);
     assert_eq!(notices.len(), 1, "{notices:?}");
     assert_eq!(notices[0].code, ErrorCode::ExtensionFailed);
     assert_eq!(notices[0].extension.as_deref(), Some("evil"));

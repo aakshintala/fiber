@@ -1181,7 +1181,7 @@ fn followed_end_is_complete(grid: &Grid) -> bool {
     ) else {
         return false;
     };
-    if ![(group, '•'), (steer, 's'), (said, 'u'), (done, 'D')]
+    if ![(group, '●'), (steer, 's'), (said, 'u'), (done, 'D')]
         .into_iter()
         .all(|(y, first)| {
             grid.cell(1, y).symbol == " " && grid.cell(2, y).symbol == first.to_string()
@@ -1462,7 +1462,7 @@ fn turns_draw_bubbles_padded_turn_cards_a_thumb_and_the_pill() {
     let steer = row_with("steer");
     let said = row_with("use x");
     let done = row_with("Done.");
-    for (y, first) in [(group, '•'), (steer, 's'), (said, 'u'), (done, 'D')] {
+    for (y, first) in [(group, '●'), (steer, 's'), (said, 'u'), (done, 'D')] {
         assert_eq!(end.cell(1, y).symbol.as_str(), " ");
         assert_eq!(end.cell(2, y).symbol.as_str(), &first.to_string());
     }
