@@ -59,6 +59,39 @@ fn fixture(endpoint: &str, expiry: Option<u64>) -> (Setup, Arc<FakeTokens>, Arc<
 fn record(files: &FakeTokens) -> Value {
     files.read(&key("https://h/x")).unwrap().unwrap()
 }
+#[test]
+fn a_token_debug_names_its_fields_and_hides_both_secrets() {
+    let token = Token {
+        access_token: contract::Secret::new("at-secret-7f3".into()),
+        refresh_token: Some(contract::Secret::new("rt-secret-7f3".into())),
+        expires_at: Some(1_700_000_000),
+        token_endpoint: "https://auth.example/token".into(),
+        client_id: "fiber-abc".into(),
+    };
+    let debug = format!("{token:?}");
+    assert!(debug.contains("Token"), "debug names the type: {debug}");
+    assert!(
+        debug.contains("access_token"),
+        "debug names access_token: {debug}"
+    );
+    assert!(
+        debug.contains("refresh_token"),
+        "debug names refresh_token: {debug}"
+    );
+    assert!(
+        debug.contains("expires_at"),
+        "debug names expires_at: {debug}"
+    );
+    assert!(
+        !debug.contains("at-secret-7f3"),
+        "debug hides the access token: {debug}"
+    );
+    assert!(
+        !debug.contains("rt-secret-7f3"),
+        "debug hides the refresh token: {debug}"
+    );
+}
+
 fn auth(bearer: Arc<Bearer>) -> Result<Authorization, Outcome> {
     fakes::within("token authorization", WITHIN, move || {
         bearer.authorization(&TestRefresh)

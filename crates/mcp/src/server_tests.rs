@@ -10,6 +10,12 @@ use std::time::Duration;
 use contract::clock::Clock;
 use fakes::Deadline;
 use fakes::TempDir;
+
+#[test]
+fn the_initialized_ack_is_the_id_below_the_reserved_max() {
+    assert_eq!(super::INITIALIZED_ACK, u64::MAX - 1);
+    assert_ne!(super::INITIALIZED_ACK, u64::MAX);
+}
 use fakes::clock::FakeClock;
 use serde_json::{Value, json};
 

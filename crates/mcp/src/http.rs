@@ -280,6 +280,10 @@ impl crate::token::Refresh for Exchange {
     fn stopped(&self) -> bool {
         self.link.stopped(self.id)
     }
+    // exempted: a 20 ms wait that paces the refresh loop's retry; removing it
+    // changes CPU use, not an outcome, and no test can observe the difference
+    // without a timing assert (docs/testing.md "Waits and timeouts").
+    #[cfg_attr(false, mutants::skip)]
     fn pause(&self) {
         let _paused = self
             .link

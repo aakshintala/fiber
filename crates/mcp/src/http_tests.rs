@@ -1188,6 +1188,79 @@ fn a_rejected_refresh_fails_the_start_without_changing_the_record() {
     assert!(fake.requests().is_empty());
 }
 
+/// A refresh reply of exactly `len` bytes. `closing_last` pads inside a
+/// string so the JSON's closing brace is the final byte, and truncating
+/// one byte breaks the JSON; otherwise the pad is trailing whitespace,
+/// which still parses when truncated.
+fn refresh_reply(len: usize, closing_last: bool) -> String {
+    const JSON: &str =
+        r#"{"access_token":"at-2","refresh_token":"rt-2","expires_in":3600,"pad":""}"#;
+    if closing_last {
+        let split = JSON.len() - 2;
+        format!(
+            "{}{}{}",
+            &JSON[..split],
+            " ".repeat(len - JSON.len()),
+            &JSON[split..]
+        )
+    } else {
+        format!("{JSON}{}", " ".repeat(len - JSON.len()))
+    }
+}
+
+#[test]
+fn a_refresh_reply_up_to_the_body_cap_renews_the_login() {
+    for (name, len) in [
+        ("cap_minus_one", crate::pipes::MAX_LINE - 1),
+        ("at_cap", crate::pipes::MAX_LINE),
+    ] {
+        let auth =
+            ProviderServer::start(vec![Response::status(200, refresh_reply(len, true))]).unwrap();
+        let fake = ProviderServer::start_responding(standard()).unwrap();
+        let setup = Setup::new();
+        let url = format!("{}/mcp", fake.url());
+        let opened =
+            token_start(&setup, url.clone(), token_files(&url, &auth.url(), Some(0))).unwrap();
+        fakes::within("remote stop", WITHIN, move || opened.server.stop());
+        assert_eq!(auth.requests().len(), 1, "row {name}: one refresh");
+        let requests = fake.requests();
+        assert!(
+            !requests.is_empty(),
+            "row {name}: the renewed login is sent"
+        );
+        for request in requests {
+            assert_eq!(
+                request.header("authorization"),
+                Some(fakes::fingerprint("Bearer at-2").as_str()),
+                "row {name}"
+            );
+        }
+    }
+}
+
+#[test]
+fn a_refresh_reply_one_past_the_body_cap_is_refused() {
+    use contract::mcp_tokens::TokenFiles;
+    let auth = ProviderServer::start(vec![Response::status(
+        200,
+        refresh_reply(crate::pipes::MAX_LINE + 1, false),
+    )])
+    .unwrap();
+    let fake = ProviderServer::start_responding(standard()).unwrap();
+    let setup = Setup::new();
+    let url = format!("{}/mcp", fake.url());
+    let files = token_files(&url, &auth.url(), Some(0));
+    let key = crate::token::key(&url);
+    let before = files.read(&key).unwrap();
+    assert!(matches!(
+        token_start(&setup, url, files.clone()),
+        Err(StartError::Login(_))
+    ));
+    assert_eq!(files.read(&key).unwrap(), before);
+    assert_eq!(auth.requests().len(), 1);
+    assert!(fake.requests().is_empty());
+}
+
 #[test]
 fn a_bad_url_never_sends() {
     for url in ["ws://127.0.0.1:9/mcp", "not a url", "http://"] {
