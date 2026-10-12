@@ -21,6 +21,10 @@ use crate::host::exec::{GRACE, GROUP_POLL};
 
 const HOOKS_FILE: &str = ".fiber/config/hooks.json";
 
+/// A parent's wait for a re-run child: inside half of nextest's per-test
+/// timeout (`.config/nextest.toml`, `docs/testing.md`, "Waits and timeouts").
+const RERUN_WITHIN: Duration = Duration::from_secs(30);
+
 /// A git repository in `<tmp>/repo`, with Fiber home beside it in
 /// `<tmp>/home`.
 pub(super) struct Repo {
@@ -482,13 +486,14 @@ fn a_stalled_ls_files_fails_at_the_git_deadline() {
     // and the run below kills it, the guard still kills the stall the dead
     // child leaves behind, by pid and never this test's own group.
     let stall_guard = fakes::Watchdog::matching(&marker);
-    let output = fakes::rerun(
+    let output = fakes::rerun_within(
         "repository::declared_tests::a_stalled_ls_files_fails_at_the_git_deadline",
         &[
             (LS_FILES_CHILD, "1"),
             ("PATH", path.as_str()),
             (STALL_MARKER, marker.as_str()),
         ],
+        RERUN_WITHIN,
     );
     let stdout = String::from_utf8_lossy(&output.stdout);
     assert!(
@@ -507,7 +512,9 @@ fn a_stalled_ls_files_fails_at_the_git_deadline() {
 /// `ls-files` stalls, and the file list fails at the git deadline.
 #[track_caller]
 fn stalled_ls_files_child() {
-    const WITHIN: Duration = fakes::MUST_SUCCEED_WITHIN;
+    // The child's own bound fires before the parent's wait, so the two no
+    // longer contradict.
+    const CHILD_BUDGET: Duration = Duration::from_secs(20);
     /// One sighting round's wait for the run's answer.
     const SIGHT: Duration = Duration::from_millis(200);
     /// Rounds of waiting for the stalled process to prove it is stuck: 8
@@ -573,7 +580,7 @@ fn stalled_ls_files_child() {
         })
         .unwrap();
     // The run parks while running; an answer meanwhile (a `git` that never
-    // stalled) ends this at once instead of burning `WITHIN` in one blind
+    // stalled) ends this at once instead of burning `CHILD_BUDGET` in one blind
     // wait, which the parent then wins by milliseconds and reports as its
     // own timeout.
     let running_until = clock.now() + GROUP_POLL;
@@ -616,7 +623,7 @@ fn stalled_ls_files_child() {
     }
     let answer = match answered {
         Some(answer) => answer,
-        None => Deadline::after(WITHIN).recv(&done_rx).unwrap(),
+        None => Deadline::after(CHILD_BUDGET).recv(&done_rx).unwrap(),
     };
     let err = answer.unwrap_err();
     assert!(
@@ -640,7 +647,7 @@ fn stalled_ls_files_child() {
         leftovers.is_empty(),
         "the stalled ls-files is gone: {leftovers:?}"
     );
-    stall_guard.stand_down(WITHIN);
+    stall_guard.stand_down(CHILD_BUDGET);
 }
 
 #[test]
