@@ -10,7 +10,8 @@ use std::time::Duration;
 use common::{Setup, mode};
 use config::{
     CredentialFile, CredentialSource, Secret, credential_labels, delete_credential,
-    delete_credential_held, read_credential, read_secret, store_credential, store_secret,
+    delete_credential_held, mcp_secret_name_ok, read_credential, read_secret, store_credential,
+    store_secret, valid_env_key,
 };
 use contract::ErrorCode;
 
@@ -384,4 +385,38 @@ fn storing_a_secret_over_a_provider_directory_fails_and_leaves_it() {
         fs::read_to_string(setup.home().join("credentials/opencode/default")).unwrap(),
         VALUE
     );
+}
+
+#[test]
+fn an_mcp_secret_name_is_mcp_server_and_an_env_key() {
+    assert!(mcp_secret_name_ok("a", "mcp.a.K"));
+    assert!(mcp_secret_name_ok("a.b", "mcp.a.b.K"));
+    assert!(mcp_secret_name_ok("a", "mcp.a._K"));
+    for key in ["A", "Z", "a", "z", "_"] {
+        assert!(mcp_secret_name_ok("a", &format!("mcp.a.{key}")), "{key}");
+        assert!(valid_env_key(key), "{key}");
+    }
+}
+
+#[test]
+fn an_mcp_secret_name_with_a_bad_key_or_prefix_is_refused() {
+    assert!(!mcp_secret_name_ok("a", "mcp.a.1K"));
+    assert!(!valid_env_key("1K"));
+    assert!(!mcp_secret_name_ok("a", "mcp.a.K-1"));
+    assert!(!valid_env_key("K-1"));
+    assert!(!mcp_secret_name_ok("a", "mcp.a.b.K"));
+    assert!(!mcp_secret_name_ok("a", "x.a.K"));
+    assert!(!mcp_secret_name_ok("a", "mcp.b.K"));
+    assert!(!mcp_secret_name_ok("a", "mcp.a."));
+    assert!(!valid_env_key(""));
+}
+
+#[test]
+fn an_mcp_secret_name_needs_both_the_server_and_the_key() {
+    // Prefix matches, the rest does not: the server is a longer name.
+    assert!(!mcp_secret_name_ok("a", "mcp.a.b.K"));
+    // Only the server differs; the key is valid.
+    assert!(!mcp_secret_name_ok("a", "mcp.b.K"));
+    // Server and prefix match; only the key is bad.
+    assert!(!mcp_secret_name_ok("a", "mcp.a.K-1"));
 }
