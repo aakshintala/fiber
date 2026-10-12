@@ -213,6 +213,8 @@ impl Registry {
             Ok(started) => started,
             Err(error) => return Err(Resume::Start(error)),
         };
+        // The new run is recorded with what the resume was started with.
+        let description = resumable.description.clone();
         {
             let mut inner = lock(&self.inner);
             let Some(job) = inner
@@ -247,7 +249,7 @@ impl Registry {
                 job_id: job_id.clone(),
                 tool: Some("delegate_message".into()),
                 extension: None,
-                description: job.started.description.clone(),
+                description,
                 output_path: job.path.to_string_lossy().into_owned(),
             };
             let delegate_started = job

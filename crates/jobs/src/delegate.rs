@@ -20,6 +20,9 @@ pub(crate) mod outcome;
 pub(crate) mod run;
 
 pub use models::{DelegateModels, Resolve};
+pub(crate) mod message;
+
+pub use message::{DelegateMessage, LastSeq, Steer, Steered};
 pub use run::{Launch, Launched, Watch, Watched};
 
 use run::Runner;

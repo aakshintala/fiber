@@ -564,6 +564,13 @@ pub(crate) fn park_due(
     due
 }
 
+/// Mints a driver command id: `c_` and 16 lowercase hex digits, drawn
+/// once. A call mints one id and sends that same id on every connection
+/// it opens.
+pub(crate) fn mint_command_id() -> String {
+    format!("c_{:016x}", RandomState::new().hash_one(()))
+}
+
 /// Mints the delegate's session id: `s_` and 16 lowercase hex digits, drawn
 /// once. The delegate's job id comes from the registry's
 /// [`crate::registry::mint_job_id`]; the two must differ in prefix, so a

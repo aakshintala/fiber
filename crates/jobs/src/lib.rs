@@ -8,6 +8,9 @@ mod registry;
 mod support;
 mod tool;
 
-pub use delegate::{DelegateModels, DelegateSpawn, Launch, Launched, Resolve, Watch, Watched};
+pub use delegate::{
+    DelegateMessage, DelegateModels, DelegateSpawn, LastSeq, Launch, Launched, Resolve, Steer,
+    Steered, Watch, Watched,
+};
 pub use registry::Registry;
 pub use tool::JobsTool;
