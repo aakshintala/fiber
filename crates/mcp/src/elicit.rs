@@ -529,11 +529,10 @@ pub(crate) fn check(field: &Field) -> Option<Check> {
             let (required, min, max) = (field.required, *min, *max);
             Some(Box::new(move |answer: &Answer| match answer {
                 Answer::Text { text } => {
-                    let trimmed = text.trim();
-                    if trimmed.is_empty() && !required {
+                    if text.is_empty() && !required {
                         return true;
                     }
-                    let len = trimmed.chars().count();
+                    let len = text.chars().count();
                     min.is_none_or(|min| len >= min) && max.is_none_or(|max| len <= max)
                 }
                 Answer::Declined { .. }
@@ -615,11 +614,10 @@ fn value(field: &Field, answer: &Answer) -> Valued {
             _ => Valued::Decline,
         },
         (Answer::Text { text }, FieldKind::Text { .. }) => {
-            let trimmed = text.trim();
-            if trimmed.is_empty() && !field.required {
+            if text.is_empty() && !field.required {
                 Valued::Omitted
             } else {
-                Valued::Value(Value::String(trimmed.to_owned()))
+                Valued::Value(Value::String(text.clone()))
             }
         }
         (Answer::Text { text }, FieldKind::Number { .. }) => {

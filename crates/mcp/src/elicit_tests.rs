@@ -1042,10 +1042,43 @@ fn an_empty_answer_is_kept_when_required_and_left_out_when_optional() {
     assert_eq!(described(&number(false), &typed("")), "omitted");
     assert_eq!(described(&integer(true), &typed("")), "decline");
     assert_eq!(described(&integer(false), &typed("")), "omitted");
-    // An optional field that has an answer keeps it.
-    assert_eq!(described(&text(false), &typed(" x ")), "value \"x\"");
+    // An optional field that has an answer keeps it verbatim.
+    assert_eq!(described(&text(false), &typed(" x ")), "value \" x \"");
     assert_eq!(described(&number(false), &typed("3")), "value 3.0");
     assert_eq!(described(&integer(false), &typed("3")), "value 3");
+}
+
+#[test]
+fn string_answers_keep_their_spacing_and_count_original_chars() {
+    // Padded text counts as written: `" ab "` is four chars, so it
+    // passes a 4..=4 check and reaches the server untouched. Trimming
+    // would see `"ab"` and fail the check, then send altered text.
+    let check = check_of(
+        r#""name":{"type":"string","minLength":4,"maxLength":4}"#,
+        r#"["name"]"#,
+        "name",
+    );
+    assert!(check(&Answer::Text {
+        text: " ab ".to_owned()
+    }));
+    let required = field_of(
+        FieldKind::Text {
+            min: None,
+            max: None,
+        },
+        true,
+    );
+    assert_eq!(described(&required, &typed(" x ")), "value \" x \"");
+    // Whitespace-only optional text is an answer like any other, not an
+    // omission: only the empty string is left out.
+    let optional = field_of(
+        FieldKind::Text {
+            min: None,
+            max: None,
+        },
+        false,
+    );
+    assert_eq!(described(&optional, &typed("   ")), "value \"   \"");
 }
 
 #[test]

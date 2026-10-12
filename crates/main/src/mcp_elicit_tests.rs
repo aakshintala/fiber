@@ -209,6 +209,10 @@ fn an_unanswered_elicitation_is_declined_at_the_calls_deadline_then_the_call_tim
     .unwrap();
     let clock = FakeClock::new();
     let shared: Arc<dyn Clock> = clock.clone();
+    // Armed before the start: the fixture runs with this directory as
+    // its argument, so an assertion failure below still kills the
+    // detached group when the watchdog drops.
+    let _watchdog = fakes::Watchdog::matching(&fixture.display().to_string());
     let artifacts = root.path().join("artifacts");
     std::fs::create_dir_all(&artifacts).unwrap();
     let cache = root.path().join("cache");

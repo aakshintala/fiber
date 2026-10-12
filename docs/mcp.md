@@ -303,7 +303,7 @@ Fiber asks each field in turn, in the order the server lists them:
 | enum | select |
 | string, number or integer | text input |
 
-A typed answer that is not a number for a number field, or not a whole number for an integer field, or that is outside the field's limits, is rejected `invalid_arguments`, and the field stays pending. An elicitation Fiber cannot show, such as one with a field of another type or a malformed schema, is answered with a JSON-RPC error, and nothing is logged. A declined optional field is left out of the answers and the rest is still accepted; a declined required field declines the whole elicitation.
+A typed answer that is not a number for a number field, or not a whole number for an integer field, or that is outside the field's limits, is rejected `invalid_arguments`, and the field stays pending. An elicitation Fiber cannot show, such as one with a field of another type or a malformed schema, is answered with a JSON-RPC error, and nothing is logged. A declined optional field is left out of the answers and the rest is still accepted; a declined required field declines the whole elicitation. Each field's prompt names the server that asks.
 
 When no answer is possible, Fiber declines, which is a response MCP defines.
 That is the same case as an escalation's block (`docs/permissions.md`,

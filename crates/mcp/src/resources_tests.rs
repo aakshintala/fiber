@@ -1007,103 +1007,287 @@ fn the_first_starts_tool_reaches_an_adopted_server() {
     setup.stop(first.servers);
 }
 
+/// Reads one HTTP request from `stream`: the method and the body by
+/// `content-length`. One request per connection, as the client sends.
+fn read_request(stream: &mut std::net::TcpStream) -> std::io::Result<(String, Vec<u8>)> {
+    use std::io::{BufRead, Read};
+    let mut reader = std::io::BufReader::new(stream.try_clone()?);
+    let mut head = String::new();
+    reader.read_line(&mut head)?;
+    let method = head
+        .split_whitespace()
+        .next()
+        .unwrap_or_default()
+        .to_owned();
+    let mut length = 0usize;
+    loop {
+        let mut line = String::new();
+        reader.read_line(&mut line)?;
+        if line.trim().is_empty() {
+            break;
+        }
+        if let Some((name, value)) = line.split_once(':')
+            && name.trim().eq_ignore_ascii_case("content-length")
+        {
+            length = value.trim().parse().unwrap_or(0);
+        }
+    }
+    let mut body = vec![0u8; length];
+    reader.read_exact(&mut body)?;
+    Ok((method, body))
+}
+
+/// Writes one HTTP response with `headers` and closes the connection.
+fn write_response(
+    stream: &mut std::net::TcpStream,
+    status: u16,
+    headers: &[(&str, &str)],
+    body: &[u8],
+) {
+    use std::io::Write;
+    let mut head = format!("HTTP/1.1 {status} Fake\r\n");
+    for (name, value) in headers {
+        head.push_str(&format!("{name}: {value}\r\n"));
+    }
+    head.push_str(&format!(
+        "content-length: {}\r\nconnection: close\r\n\r\n",
+        body.len()
+    ));
+    stream.write_all(head.as_bytes()).expect("the fake writes");
+    stream.write_all(body).expect("the fake writes");
+    stream.flush().expect("the fake flushes");
+}
+
+/// The `id` of a JSON-RPC body, `Null` when it has none.
+fn body_id(body: &[u8]) -> Value {
+    serde_json::from_slice::<Value>(body)
+        .ok()
+        .and_then(|value| value.get("id").cloned())
+        .unwrap_or(Value::Null)
+}
+
+/// One JSON-RPC answer string.
+fn answer(id: &Value, result: Value) -> String {
+    json!({"jsonrpc": "2.0", "id": id, "result": result}).to_string()
+}
+
+/// A raw streamable-HTTP fake whose `resources/read` stream is gated:
+/// the handshake and `tools/list` are answered as JSON, and the read's
+/// stream carries the elicitation first and the read's answer only after
+/// the client's POST of the elicitation's answer arrives. The ask is
+/// therefore always observed before the answer lands: no scheduler order
+/// can flip the elicitation to the remover's decline. Every request body
+/// is recorded in arrival order.
+struct GatedRead {
+    /// The fake's `/mcp` URL.
+    url: String,
+    /// Every request body, in arrival order.
+    bodies: Arc<std::sync::Mutex<Vec<Vec<u8>>>>,
+}
+
+impl GatedRead {
+    /// Starts the fake serving one `resources/read` `elicitation`,
+    /// answered with `contents` once the elicitation is answered.
+    fn start(elicitation: String, contents: Value) -> Self {
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").expect("the fake binds");
+        let url = format!("http://{}/mcp", listener.local_addr().expect("an address"));
+        let bodies = Arc::new(std::sync::Mutex::new(Vec::new()));
+        let recorded = Arc::clone(&bodies);
+        std::thread::spawn(move || Self::serve(listener, recorded, elicitation, contents));
+        Self { url, bodies }
+    }
+
+    /// The elicitation answer bodies: every recorded body with
+    /// `id == "el-1"`, in arrival order.
+    fn elicitation_answers(&self) -> Vec<Value> {
+        self.bodies
+            .lock()
+            .expect("recorded")
+            .iter()
+            .filter_map(|body| serde_json::from_slice::<Value>(body).ok())
+            .filter(|body| body.get("id") == Some(&json!("el-1")))
+            .collect()
+    }
+
+    fn serve(
+        listener: std::net::TcpListener,
+        bodies: Arc<std::sync::Mutex<Vec<Vec<u8>>>>,
+        elicitation: String,
+        contents: Value,
+    ) {
+        use std::io::Write;
+        let accept = || {
+            let (mut stream, _) = listener.accept().expect("a request arrives");
+            let (method, body) = read_request(&mut stream).expect("a request reads");
+            (stream, method, body)
+        };
+        let record = |body: Vec<u8>| bodies.lock().expect("recorded").push(body);
+        // The handshake: initialize as JSON with tools and resources
+        // and a session id, notifications `202`, `tools/list` as JSON.
+        let (mut stream, _, body) = accept();
+        let id = body_id(&body);
+        record(body);
+        let initialized = answer(
+            &id,
+            json!({
+                "protocolVersion": "2025-06-18",
+                "capabilities": {"tools": {}, "resources": {}},
+                "serverInfo": {"name": "remote", "version": "1"},
+            }),
+        );
+        write_response(
+            &mut stream,
+            200,
+            &[
+                ("content-type", "application/json"),
+                ("mcp-session-id", "1868a90c"),
+            ],
+            initialized.as_bytes(),
+        );
+        let (mut stream, _, body) = accept();
+        record(body);
+        write_response(&mut stream, 202, &[], b"");
+        let (mut stream, _, body) = accept();
+        let id = body_id(&body);
+        record(body);
+        let listed = answer(&id, json!({"tools": []}));
+        write_response(
+            &mut stream,
+            200,
+            &[("content-type", "application/json")],
+            listed.as_bytes(),
+        );
+        // The read's stream: the elicitation first, held open. The
+        // read's answer goes out only after the client's POST of the
+        // elicitation's answer arrives below.
+        let (mut stream, _) = listener.accept().expect("the read arrives");
+        let (_, read_body) = read_request(&mut stream).expect("the read reads");
+        let read_id = body_id(&read_body);
+        record(read_body);
+        stream
+            .write_all(
+                b"HTTP/1.1 200 Fake\r\ncontent-type: text/event-stream\r\nconnection: close\r\n\r\n",
+            )
+            .expect("the stream head writes");
+        stream
+            .write_all(format!("event: message\ndata: {elicitation}\n\n").as_bytes())
+            .expect("the elicitation writes");
+        stream.flush().expect("the elicitation flushes");
+        // The next POST is the elicitation's answer: `202` it, then send
+        // the read's answer when it accepts, or close unanswered when it
+        // declines (without asker forwarding the remover declines, and
+        // the ask wait below fails the test first).
+        let (mut answered_conn, _, body) = accept();
+        let answered: Value = serde_json::from_slice(&body).unwrap_or(Value::Null);
+        record(body);
+        write_response(&mut answered_conn, 202, &[], b"");
+        if answered.get("result") == Some(&json!({"action": "accept", "content": {"name": "prod"}}))
+        {
+            let done = answer(&read_id, contents);
+            stream
+                .write_all(format!("event: message\ndata: {done}\n\n").as_bytes())
+                .expect("the answer writes");
+            stream.flush().expect("the answer flushes");
+        }
+        drop(stream);
+        // Drain until goodbye: anything else gets `202`, `DELETE` ends
+        // the fake with `200`.
+        loop {
+            let (mut stream, method, body) = accept();
+            record(body);
+            if method == "DELETE" {
+                write_response(&mut stream, 200, &[], b"");
+                return;
+            }
+            write_response(&mut stream, 202, &[], b"");
+        }
+    }
+}
+
 #[test]
 fn read_asking_answers_an_elicitation_and_reads() {
     use contract::events::Answer;
     use contract::tool::Answered;
     // `run_asking` forwards its asker through the slot seam, as a tool's
-    // does: the stream carries the elicitation and then the contents
-    // together, so whichever the wait sees first wins. Either way the
-    // elicitation gets exactly one answer matching what happened.
+    // does: the call is held until its ask is observed, so without
+    // forwarding no ask ever arrives and this wait fails instead of the
+    // remover's decline passing. The fake holds the read's answer until
+    // the elicitation's answer POST arrives, so the ask is always
+    // observed first: the answer below is the asker's, never the
+    // remover's.
     let setup = Setup::new();
-    let server = fakes::ProviderServer::start_responding(move |req: &fakes::Request| {
-        if req.method == "DELETE" {
-            return fakes::Response::status(200, "");
-        }
-        let body: Value = serde_json::from_slice(&req.body).unwrap_or(Value::Null);
-        let id = body.get("id").cloned().unwrap_or(Value::Null);
-        let result =
-            |result: Value| json!({"jsonrpc": "2.0", "id": id, "result": result}).to_string();
-        match body.get("method").and_then(Value::as_str) {
-            Some("initialize") => fakes::Response::status(
-                200,
-                result(json!({
-                    "protocolVersion": "2025-06-18",
-                    "capabilities": {"tools": {}, "resources": {}},
-                    "serverInfo": {"name": "remote", "version": "1"},
-                })),
-            )
-            .header("mcp-session-id", "1868a90c"),
-            Some("notifications/initialized") | Some("notifications/cancelled") | None => {
-                fakes::Response::status(202, "")
-            }
-            Some("tools/list") => fakes::Response::status(200, result(json!({"tools": []}))),
-            Some("resources/read") => {
-                let elicitation = json!({
-                    "jsonrpc": "2.0",
-                    "id": "el-1",
-                    "method": "elicitation/create",
-                    "params": {
-                        "message": "m",
-                        "requestedSchema": {
-                            "type": "object",
-                            "properties": {"name": {"type": "string"}},
-                            "required": ["name"],
-                        },
-                    },
-                })
-                .to_string();
-                let answer = result(json!({"contents": [{
-                    "uri": "file:///notes.txt",
-                    "mimeType": "text/plain",
-                    "text": "hello",
-                }]}));
-                fakes::Response::stream(format!(
-                    "event: message\ndata: {elicitation}\n\nevent: message\ndata: {answer}\n\n"
-                ))
-            }
-            Some(other) => panic!("unexpected method {other}"),
-        }
+    let elicitation = json!({
+        "jsonrpc": "2.0",
+        "id": "el-1",
+        "method": "elicitation/create",
+        "params": {
+            "message": "m",
+            "requestedSchema": {
+                "type": "object",
+                "properties": {"name": {"type": "string"}},
+                "required": ["name"],
+            },
+        },
     })
-    .unwrap();
-    let started = live(&setup, &server, "docs");
-    let tool = live_tool(&started, setup.artifacts().as_path());
-    let (ask, seen) = crate::elicit::tests::FakeAsk::scripted(
-        "a_4",
-        vec![Answered::Reply(Answer::Text {
-            text: "prod".to_owned(),
-        })],
+    .to_string();
+    let gated = GatedRead::start(
+        elicitation,
+        json!({"contents": [{
+            "uri": "file:///notes.txt",
+            "mimeType": "text/plain",
+            "text": "hello",
+        }]}),
     );
+    let spec = setup.remote_spec("docs", &gated.url);
+    let images: Arc<dyn contract::images::Images> = FakeImages::ok();
+    let workspace = setup.workspace();
+    let artifacts = setup.artifacts();
+    let cache = setup.cache();
+    let clock = setup.clock();
+    std::fs::create_dir_all(&artifacts).expect("artifacts dir");
+    let started = fakes::within("the start", WITHIN, move || {
+        crate::start::start(
+            vec![spec],
+            &workspace,
+            &artifacts,
+            images,
+            &cache,
+            &clock,
+            "0.0.0",
+        )
+    });
+    let tool = live_tool(&started, setup.artifacts().as_path());
+    let (ask, seen, send) = crate::elicit::tests::FakeAsk::held("a_4");
     let moved = Arc::clone(&tool);
     let arguments = args(json!({"action": "read", "server": "docs", "uri": "file:///notes.txt"}));
-    let out = fakes::within("the asking read", WITHIN, move || {
-        moved.run_asking(&arguments, &cancel(), &emit(), &ask)
+    let (done, out) = std::sync::mpsc::channel();
+    std::thread::spawn(move || {
+        done.send(moved.run_asking(&arguments, &cancel(), &emit(), &ask))
+            .expect("collected");
     });
+    fakes::Deadline::after(WITHIN).recv_or_fail(&seen, "the elicitation's ask");
+    send.send(Answered::Reply(Answer::Text {
+        text: "prod".to_owned(),
+    }))
+    .expect("the answer sends");
+    let out = fakes::Deadline::after(WITHIN)
+        .recv(&out)
+        .unwrap_or_else(|_| panic!("the asking read answers within {WITHIN:?}"));
     assert!(out.error.is_none(), "the read succeeds: {out:?}");
     assert_eq!(text_of(&out), ["hello"]);
-    assert!(
-        server.await_requests(5, WITHIN),
-        "the elicitation's answer is POSTed",
-    );
-    let mut answers = server.requests().into_iter().filter_map(|req| {
-        let body: Value = serde_json::from_slice(&req.body).ok()?;
-        (body.get("id") == Some(&json!("el-1"))).then(|| body.clone())
-    });
+    // The pump POSTs the elicitation's answer before the fake releases
+    // the read's answer, so by the time the read completes the POST is
+    // recorded: no wait is needed.
+    let mut answers = gated.elicitation_answers().into_iter();
     let answer = answers.next().expect("one answer to the elicitation");
     assert!(answers.next().is_none(), "exactly one answer");
-    // The ask is recorded before its answer is POSTed, and an unasked
-    // elicitation is drained by the remover, so no wait is needed.
-    match seen.try_recv() {
-        Ok(_) => assert_eq!(
-            answer.get("result"),
-            Some(&json!({"action": "accept", "content": {"name": "prod"}})),
-            "asked means accept with the content",
-        ),
-        Err(_) => assert_eq!(
-            answer.get("result"),
-            Some(&json!({"action": "decline"})),
-            "unasked means the remover's decline",
-        ),
-    }
+    // The ask is recorded before its answer is POSTed, and the call was
+    // held until the ask arrived, so the answer is the asker's `accept`
+    // with the content: no wait is needed and no decline passes.
+    assert_eq!(
+        answer.get("result"),
+        Some(&json!({"action": "accept", "content": {"name": "prod"}})),
+        "asked means accept with the content",
+    );
     setup.stop(started.servers);
 }
