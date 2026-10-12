@@ -1317,15 +1317,18 @@ fn journey_quit_just_resumed_session_prints_its_resume_line() {
     run.ready();
     run.wait_screen("the session list", |grid| grid.contents.contains("first"));
     run.write(b"\r\x03\x03\r");
-    let screen = run.wait_screen("the restored primary screen", |grid| {
+    run.wait_screen("the restored primary screen", |grid| {
         !grid.alternate_screen && !grid.hide_cursor
     });
     let output = run.wait();
     assert_eq!(output.status.code(), Some(0));
+    // The lines print after the terminal is restored, so a grid
+    // snapshot at restore can precede them: the assertion reads the
+    // drained output, which holds every byte through end of file.
+    let terminal = String::from_utf8_lossy(&output.terminal);
     let line = format!("fiber resume {id}");
     assert!(
-        screen.contents.contains(&line),
-        "quitting a just-resumed session prints its resume line; screen:\n{}",
-        screen.contents
+        terminal.contains(&line),
+        "quitting a just-resumed session prints its resume line; terminal:\n{terminal}"
     );
 }
