@@ -889,31 +889,16 @@ fn a_real_sigterm_while_booting_exits_143() {
         // The signals thread exits the process; this wait only bounds a
         // child whose exit never came.
         let (_held, never) = mpsc::channel::<()>();
-        let _waited = Deadline::after(CHILD_WITHIN).recv(&never);
+        let _waited = Deadline::after(DEADLINE).recv(&never);
         std::process::exit(0);
     }
     let name = module_path!().split_once("::").unwrap().1;
-    let mut child = Command::new(std::env::current_exe().unwrap())
-        .args([
-            "--exact",
-            &format!("{name}::a_real_sigterm_while_booting_exits_143"),
-            "--nocapture",
-            "--test-threads=1",
-        ])
-        .env(CHILD, "1")
-        .stdin(Stdio::null())
-        .stdout(Stdio::null())
-        .stderr(Stdio::null())
-        .spawn()
-        .unwrap();
-    let pid = child.id();
-    let (tx, rx) = mpsc::channel();
-    thread::spawn(move || tx.send(child.wait().unwrap()));
-    let Ok(status) = Deadline::after(DEADLINE).recv(&rx) else {
-        fakes::kill_pid(pid, "KILL").unwrap();
-        panic!("waited {DEADLINE:?} for the child to exit on SIGTERM");
-    };
-    assert_eq!(status.code(), Some(143), "{status}");
+    let output = fakes::rerun_within(
+        &format!("{name}::a_real_sigterm_while_booting_exits_143"),
+        &[(CHILD, "1")],
+        CHILD_WITHIN,
+    );
+    assert_eq!(output.status.code(), Some(143), "{}", output.status);
 }
 
 #[test]
