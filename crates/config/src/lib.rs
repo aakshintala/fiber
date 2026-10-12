@@ -50,14 +50,15 @@ pub use mcp_tokens::McpTokenFiles;
 pub use names::{SHORT_NAMES, dir_name, full_name, short_name};
 pub use rules::{RuleLine, RulesFiles, RulesListing, RulesScope, list_rules, remove_rule};
 pub use secret::{
-    CredentialSource, credential_labels, delete_credential, delete_credential_held,
+    CredentialSource, credential_labels, delete_credential, delete_credential_held, delete_secret,
     mcp_secret_name_ok, read_credential, read_secret, store_credential, store_secret,
     valid_env_key,
 };
 pub use settings::{SettingInfo, SettingValue};
 pub use write::{
-    Layer, ListChange, ListEdit, Scope, edit_list, get_global, remove_extension_settings,
-    replace_global, set, set_global_if_unset, update_global_entries, write_atomic,
+    Layer, ListChange, ListEdit, Scope, edit_list, get_global, insert_entry, remove_entry,
+    remove_extension_settings, replace_global, set, set_global_if_unset, update_global_entries,
+    write_atomic,
 };
 
 pub use keys::{WriteScope, diagnostics_debug, parse_duration, refresh_after};

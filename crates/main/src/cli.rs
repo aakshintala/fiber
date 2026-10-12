@@ -42,6 +42,12 @@ Extensions:
   extension list                    List installed extensions: name, version and commit
   extension test [<path>]           Run an extension's test cases against the scripted provider
 
+MCP servers:
+  mcp add [--project | --repo] <name> <url>                                                      Declare a remote server
+  mcp add [--project | --repo] <name> [-e KEY=value]... [--secret KEY]... -- <command> [args]...  Declare a stdio server
+  mcp remove [--project | --repo] <name>                                                         Remove a server's declaration
+  mcp list                                                                                       List declared servers, their layers and approvals
+
 Configuration:
   config get <key>                              Print the effective value and the layer it came from
   config set [--project | --repo] <key> <value>  Write one key in one layer's file
@@ -121,6 +127,9 @@ pub(crate) enum Commands {
     /// Manage extensions
     #[command(subcommand, arg_required_else_help = false)]
     Extension(ExtensionCommands),
+    /// Manage MCP servers
+    #[command(subcommand, arg_required_else_help = false)]
+    Mcp(McpCommands),
     /// Show what this repository ships and approve it
     Approve(ApproveArgs),
     /// Print a configuration value, or write one
@@ -380,6 +389,88 @@ pub(crate) enum ExtensionCommands {
         #[arg(value_name = "path")]
         path: Option<PathBuf>,
     },
+}
+
+#[derive(Debug, Subcommand)]
+#[command(disable_help_subcommand = true)]
+pub(crate) enum McpCommands {
+    /// Declare a remote or stdio server
+    Add(McpAddArgs),
+    /// Remove a server's declaration
+    Remove(McpRemoveArgs),
+    /// List declared servers, their layers and approvals
+    List,
+}
+
+/// `fiber mcp add`: one transport, and the layer to write. Its `Debug`
+/// prints names and the layer only, never values: the url prints
+/// redacted (never its query or userinfo), `-e` prints its keys, and the
+/// command prints redacted (`docs/code-quality.md`, "Errors").
+#[derive(clap::Args)]
+pub(crate) struct McpAddArgs {
+    /// Write the per-project file in Fiber home.
+    #[arg(long, conflicts_with = "repo")]
+    pub(crate) project: bool,
+    /// Write the repository's `.fiber/config.json`.
+    #[arg(long, conflicts_with = "project")]
+    pub(crate) repo: bool,
+    /// The server's name.
+    #[arg(value_name = "name", value_parser = clap::builder::NonEmptyStringValueParser::new())]
+    pub(crate) name: String,
+    /// The server's URL: a remote server. With none, `-- <command>` declares
+    /// a stdio server.
+    #[arg(value_name = "url")]
+    pub(crate) url: Option<String>,
+    /// A clear variable, `KEY=value`; only with `-- <command>`. May repeat.
+    #[arg(short = 'e', value_name = "KEY=value")]
+    pub(crate) env: Vec<String>,
+    /// A secret variable's name, stored beside the configuration; only with
+    /// `-- <command>`. May repeat.
+    #[arg(long = "secret", value_name = "KEY")]
+    pub(crate) secret: Vec<String>,
+    /// The program and its arguments: a stdio server.
+    #[arg(last = true, value_name = "command")]
+    pub(crate) command: Vec<String>,
+}
+
+impl std::fmt::Debug for McpAddArgs {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let layer = if self.repo {
+            "repository"
+        } else if self.project {
+            "project"
+        } else {
+            "global"
+        };
+        let env: Vec<&str> = self
+            .env
+            .iter()
+            .map(|raw| raw.split('=').next().unwrap_or(raw))
+            .collect();
+        let command: Vec<&str> = self.command.iter().map(|_| "redacted").collect();
+        f.debug_struct("McpAddArgs")
+            .field("layer", &layer)
+            .field("name", &self.name)
+            .field("url", &self.url.as_ref().map(|_| "redacted"))
+            .field("env", &env)
+            .field("secret", &self.secret)
+            .field("command", &command)
+            .finish()
+    }
+}
+
+/// `fiber mcp remove`: the declaration and the layer to remove it from.
+#[derive(Debug, clap::Args)]
+pub(crate) struct McpRemoveArgs {
+    /// Remove from the per-project file in Fiber home.
+    #[arg(long, conflicts_with = "repo")]
+    pub(crate) project: bool,
+    /// Remove from the repository's `.fiber/config.json`.
+    #[arg(long, conflicts_with = "project")]
+    pub(crate) repo: bool,
+    /// The server's name.
+    #[arg(value_name = "name", value_parser = clap::builder::NonEmptyStringValueParser::new())]
+    pub(crate) name: String,
 }
 
 #[derive(Debug, Subcommand)]

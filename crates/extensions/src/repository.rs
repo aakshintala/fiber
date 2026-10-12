@@ -33,7 +33,7 @@ mod store_tests;
 use contract::events::OfferedKind;
 
 pub use content::{Index, hash};
-pub use declared::{RepoItem, declared_items};
+pub use declared::{RepoItem, declared_items, mcp_server_item};
 pub use offer::{Pending, pending};
 pub use servers::{ApprovedServer, ServerApproval, SpawnGuard, repository_servers};
 pub use session::SessionOffer;

@@ -69,6 +69,16 @@ pub(crate) trait KeyReader {
         input: &mut dyn BufRead,
         err: &mut dyn Write,
     ) -> io::Result<Secret>;
+
+    /// Writes `prompt` to `err`, then reads one line from `input` taken
+    /// exactly: only its final newline is removed, so a secret with
+    /// leading or trailing spaces round-trips (`fiber mcp add --secret`).
+    fn read_key_exact(
+        &mut self,
+        prompt: &str,
+        input: &mut dyn BufRead,
+        err: &mut dyn Write,
+    ) -> io::Result<Secret>;
 }
 
 /// Reads a key from a pipe or a file.
@@ -83,6 +93,16 @@ impl KeyReader for Plain {
     ) -> io::Result<Secret> {
         write_prompt(prompt, err)?;
         read_line(input)
+    }
+
+    fn read_key_exact(
+        &mut self,
+        prompt: &str,
+        input: &mut dyn BufRead,
+        err: &mut dyn Write,
+    ) -> io::Result<Secret> {
+        write_prompt(prompt, err)?;
+        read_exact_line(input)
     }
 }
 
@@ -104,6 +124,19 @@ impl KeyReader for NoEcho {
         writeln!(err)?;
         key
     }
+
+    fn read_key_exact(
+        &mut self,
+        prompt: &str,
+        input: &mut dyn BufRead,
+        err: &mut dyn Write,
+    ) -> io::Result<Secret> {
+        let guard = EchoOff::new()?;
+        let key = write_prompt(prompt, err).and_then(|()| read_exact_line(input));
+        drop(guard);
+        writeln!(err)?;
+        key
+    }
 }
 
 fn write_prompt(prompt: &str, err: &mut dyn Write) -> io::Result<()> {
@@ -118,6 +151,19 @@ fn read_line(input: &mut dyn BufRead) -> io::Result<Secret> {
     let mut line = String::new();
     input.read_line(&mut line)?;
     Ok(Secret::new(line.trim().to_owned()))
+}
+
+/// One line taken exactly: only its final newline goes, so a secret with
+/// spaces round-trips. A final line with no newline is taken whole, and a
+/// trailing `\r` without a `\n` stays: only `\n` or `\r\n` is removed.
+pub(crate) fn read_exact_line(input: &mut dyn BufRead) -> io::Result<Secret> {
+    let mut line = String::new();
+    input.read_line(&mut line)?;
+    let line = match line.strip_suffix('\n') {
+        Some(stripped) => stripped.strip_suffix('\r').unwrap_or(stripped),
+        None => line.as_str(),
+    };
+    Ok(Secret::new(line.to_owned()))
 }
 
 /// Standard input with echo off until it drops. While it lives, SIGINT,
