@@ -259,9 +259,6 @@ impl App {
         if self.link != Link::Up {
             return Vec::new();
         }
-        if self.home.is_none() {
-            return Vec::new();
-        }
         let mut asks = self.picker_asks();
         let Some(home) = self.home.as_mut() else {
             return Vec::new();
