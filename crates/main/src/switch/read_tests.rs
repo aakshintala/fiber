@@ -728,13 +728,23 @@ fn cancel_passes_a_blocked_spawn_and_the_late_child_is_killed() {
     let reads = Arc::new(Reads::default());
     let script_a = format!("echo $$ > '{}'; exec sleep 30", ready_a.display());
     let pre_a = fakes::Watchdog::matching(&ready_a.display().to_string());
+    // Group A pauses after it lists its group, so the assertion below
+    // sees it listed on every run: the ready file alone does not prove
+    // the spawn listed it yet.
+    let (listed_tx, listed_rx) = mpsc::channel::<()>();
+    let (listed_release_tx, listed_release_rx) = mpsc::channel::<()>();
+    reads.pause_at_listed(listed_tx, listed_release_rx);
     let running_a = {
         let reads = Arc::clone(&reads);
         std::thread::spawn(move || reads.command(&mut sh(&script_a)))
     };
     let pid_a: u32 = ready_line(&ready_a).parse().unwrap();
     let watchdog_a = fakes::Watchdog::group(pid_a);
+    Deadline::after(DEADLINE)
+        .recv(&listed_rx)
+        .expect("group A listed its group");
     assert_eq!(listed(&reads), vec![pid_a], "group A listed while it runs");
+    listed_release_tx.send(()).unwrap();
     // The next spawn blocks before it spawns; the marker stays in the
     // late shell's command line, so a leaked late child still matches.
     let (entered_tx, entered_rx) = mpsc::channel::<()>();
@@ -780,7 +790,7 @@ fn cancel_passes_a_blocked_spawn_and_the_late_child_is_killed() {
         "the late group is never listed"
     );
     assert!(
-        no_process_matches(&marker, DEADLINE),
+        fakes::matching_exits(&marker, DEADLINE),
         "the late group is gone"
     );
     let late_a = fakes::within("the killed command", DEADLINE, move || {
@@ -793,26 +803,3 @@ fn cancel_passes_a_blocked_spawn_and_the_late_child_is_killed() {
     late.stand_down(DEADLINE);
 }
 
-/// Whether no process command line still contains `text`: a leaked late
-/// child would. The first character is bracketed so the listing `pgrep`
-/// never matches itself.
-#[track_caller]
-fn no_process_matches(text: &str, deadline: Duration) -> bool {
-    let mut pattern = String::with_capacity(text.len() + 2);
-    let mut chars = text.chars();
-    if let Some(first) = chars.next() {
-        pattern.push('[');
-        pattern.push(first);
-        pattern.push(']');
-        pattern.extend(chars);
-    }
-    fakes::within("pgrep for a leaked late child", deadline, move || {
-        match std::process::Command::new("pgrep")
-            .args(["-f", "--", &pattern])
-            .output()
-        {
-            Ok(output) => output.stdout.is_empty(),
-            Err(_) => false,
-        }
-    })
-}

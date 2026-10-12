@@ -44,6 +44,10 @@ pub(crate) struct Reads {
     /// outside the unit tests.
     #[cfg(test)]
     spawn_pause: Mutex<Option<SpawnPause>>,
+    /// The next spawn's pause after it lists its group, armed by a test.
+    /// Absent outside the unit tests.
+    #[cfg(test)]
+    listed_pause: Mutex<Option<SpawnPause>>,
 }
 
 /// One pause of a `credential` wait at its checks, for the interleaving
@@ -352,6 +356,9 @@ impl Reads {
         }
         state.groups.retain(|group| alive(*group));
         state.groups.push(group);
+        drop(state);
+        #[cfg(test)]
+        self.pause_after_listed();
         Ok(child)
     }
 
@@ -428,6 +435,34 @@ impl Reads {
     fn pause_before_spawn(&self) {
         let point = self
             .spawn_pause
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .take();
+        if let Some(point) = point {
+            match point.entered.send(()) {
+                Ok(()) | Err(_) => {}
+            }
+            match point.release.recv() {
+                Ok(()) | Err(_) => {}
+            }
+        }
+    }
+
+    /// Arms one pause after the next spawn lists its group: the spawn
+    /// sends on `entered` once the group is listed and blocks until
+    /// `release` arrives. The pause is one-shot.
+    pub(crate) fn pause_at_listed(&self, entered: mpsc::Sender<()>, release: mpsc::Receiver<()>) {
+        *self
+            .listed_pause
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner) = Some(SpawnPause { entered, release });
+    }
+
+    /// Reports the spawn listed its group and blocks until the test
+    /// releases it. Runs free unless a test armed a pause meanwhile.
+    fn pause_after_listed(&self) {
+        let point = self
+            .listed_pause
             .lock()
             .unwrap_or_else(PoisonError::into_inner)
             .take();

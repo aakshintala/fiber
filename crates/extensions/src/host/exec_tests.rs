@@ -1329,7 +1329,10 @@ fn kill_passes_a_blocked_spawn_and_the_late_child_is_killed() {
         vec![pgid_a],
         "the late group is never listed"
     );
-    assert!(no_late_process_matches(&marker), "the late group is gone");
+    assert!(
+        fakes::matching_exits(&marker, DEADLINE),
+        "the late group is gone"
+    );
     // A spawn after the pass maps through the existing non-`NotFound`
     // failure path.
     let clock = FakeClock::new();
@@ -1352,27 +1355,3 @@ fn kill_passes_a_blocked_spawn_and_the_late_child_is_killed() {
     late.stand_down(DEADLINE);
 }
 
-/// Whether no process command line still contains `text`: a leaked late
-/// child would. The first character is bracketed so the listing `pgrep`
-/// never matches itself.
-#[track_caller]
-fn no_late_process_matches(text: &str) -> bool {
-    let mut pattern = String::with_capacity(text.len() + 2);
-    let mut chars = text.chars();
-    if let Some(first) = chars.next() {
-        pattern.push('[');
-        pattern.push(first);
-        pattern.push(']');
-        pattern.extend(chars);
-    }
-    within(
-        "pgrep for a leaked late child",
-        move || match std::process::Command::new("pgrep")
-            .args(["-f", "--", &pattern])
-            .output()
-        {
-            Ok(output) => output.stdout.is_empty(),
-            Err(_) => false,
-        },
-    )
-}
