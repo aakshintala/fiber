@@ -178,10 +178,25 @@ fn a_record_swapped_for_a_symlink_before_open_is_refused() {
 fn write_leaves_only_the_record_mode_0600() {
     use std::os::unix::fs::PermissionsExt as _;
     let temp = Temp::new();
-    let record = Record { name: "phone".to_owned(), paired_at: 10, last_connected_at: 10, token_sha256: sha256_hex(b"token") };
+    let record = Record {
+        name: "phone".to_owned(),
+        paired_at: 10,
+        last_connected_at: 10,
+        token_sha256: sha256_hex(b"token"),
+    };
     write(&temp.dir, &record).unwrap();
-    assert_eq!(fs::metadata(temp.devices().join("phone")).unwrap().permissions().mode() & 0o777, 0o600);
-    assert_eq!(fs::metadata(temp.devices()).unwrap().permissions().mode() & 0o777, 0o700);
+    assert_eq!(
+        fs::metadata(temp.devices().join("phone"))
+            .unwrap()
+            .permissions()
+            .mode()
+            & 0o777,
+        0o600
+    );
+    assert_eq!(
+        fs::metadata(temp.devices()).unwrap().permissions().mode() & 0o777,
+        0o700
+    );
     assert!(!temp.dir.join("hub/.phone.tmp").exists());
     assert_eq!(holder(&temp.dir, "token").as_deref(), Some("phone"));
 }
@@ -194,7 +209,10 @@ fn touch_changes_only_last_connected_at() {
     let before: Value = serde_json::from_slice(&fs::read(&path).unwrap()).unwrap();
     touch(&temp.dir, "phone", 123).unwrap();
     let mut after: Value = serde_json::from_slice(&fs::read(&path).unwrap()).unwrap();
-    assert_eq!(after.as_object_mut().unwrap().remove("last_connected_at"), Some(Value::from(123)));
+    assert_eq!(
+        after.as_object_mut().unwrap().remove("last_connected_at"),
+        Some(Value::from(123))
+    );
     assert_eq!(after, before);
 }
 
@@ -220,14 +238,33 @@ fn list_is_sorted_and_skips_non_regular() {
     fs::create_dir(temp.devices().join("dir")).unwrap();
     std::os::unix::fs::symlink("a", temp.devices().join("link")).unwrap();
     let listed = list(&temp.dir).unwrap();
-    assert_eq!(listed.iter().map(|record| record.name.as_str()).collect::<Vec<_>>(), ["a", "z"]);
-    assert!(listed.iter().all(|record| record.paired_at.is_none() && record.last_connected_at.is_none()));
+    assert_eq!(
+        listed
+            .iter()
+            .map(|record| record.name.as_str())
+            .collect::<Vec<_>>(),
+        ["a", "z"]
+    );
+    assert!(
+        listed
+            .iter()
+            .all(|record| record.paired_at.is_none() && record.last_connected_at.is_none())
+    );
 }
 
 #[test]
 fn sync_dir_failure_is_reported_apart_from_the_write() {
     let temp = Temp::new();
-    write(&temp.dir, &Record { name: "phone".to_owned(), paired_at: 10, last_connected_at: 10, token_sha256: sha256_hex(b"token") }).unwrap();
+    write(
+        &temp.dir,
+        &Record {
+            name: "phone".to_owned(),
+            paired_at: 10,
+            last_connected_at: 10,
+            token_sha256: sha256_hex(b"token"),
+        },
+    )
+    .unwrap();
     fault(Fault::Sync);
     assert!(sync_dir(&temp.dir).is_err());
     assert_eq!(holder(&temp.dir, "token").as_deref(), Some("phone"));

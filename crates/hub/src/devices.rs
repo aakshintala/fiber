@@ -98,7 +98,10 @@ pub(crate) struct Listed {
 }
 
 fn read_record(path: &Path) -> io::Result<Value> {
-    let mut file = fs::OpenOptions::new().read(true).custom_flags(open_flags()).open(path)?;
+    let mut file = fs::OpenOptions::new()
+        .read(true)
+        .custom_flags(open_flags())
+        .open(path)?;
     if !file.metadata()?.is_file() {
         return Err(io::Error::other("The device record is not a regular file."));
     }
@@ -109,16 +112,23 @@ fn read_record(path: &Path) -> io::Result<Value> {
 
 fn write_value(home: &Path, name: &str, value: &Value) -> io::Result<()> {
     let dir = home.join("hub/devices");
-    fs::DirBuilder::new().recursive(true).mode(0o700).create(&dir)?;
+    fs::DirBuilder::new()
+        .recursive(true)
+        .mode(0o700)
+        .create(&dir)?;
     // A temporary outside devices cannot authenticate after a crash.
     let temporary = home.join("hub").join(format!(".{name}.tmp"));
     match fs::remove_file(&temporary) {
-        Ok(()) => {},
-        Err(error) if error.kind() == io::ErrorKind::NotFound => {},
+        Ok(()) => {}
+        Err(error) if error.kind() == io::ErrorKind::NotFound => {}
         Err(error) => return Err(error),
     }
     let result = (|| {
-        let mut file = fs::OpenOptions::new().write(true).create_new(true).mode(0o600).open(&temporary)?;
+        let mut file = fs::OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .mode(0o600)
+            .open(&temporary)?;
         file.write_all(&serde_json::to_vec(value).map_err(io::Error::other)?)?;
         file.sync_all()?;
         fs::rename(&temporary, dir.join(name))
@@ -131,7 +141,11 @@ fn write_value(home: &Path, name: &str, value: &Value) -> io::Result<()> {
 
 /// Writes and file-syncs a record; the rename commits it.
 pub(crate) fn write(home: &Path, record: &Record) -> io::Result<()> {
-    write_value(home, &record.name, &serde_json::to_value(record).map_err(io::Error::other)?)
+    write_value(
+        home,
+        &record.name,
+        &serde_json::to_value(record).map_err(io::Error::other)?,
+    )
 }
 
 /// Makes a committed record change durable across a crash.
@@ -144,7 +158,9 @@ pub(crate) fn sync_dir(home: &Path) -> io::Result<()> {
 /// Rewrites the connection time while preserving every other key.
 pub(crate) fn touch(home: &Path, name: &str, at_ms: u64) -> io::Result<()> {
     let mut value = read_record(&home.join("hub/devices").join(name))?;
-    let object = value.as_object_mut().ok_or_else(|| io::Error::other("The device record is not an object."))?;
+    let object = value
+        .as_object_mut()
+        .ok_or_else(|| io::Error::other("The device record is not an object."))?;
     object.insert("last_connected_at".to_owned(), Value::from(at_ms));
     write_value(home, name, &value)
 }
@@ -201,7 +217,10 @@ pub(crate) fn list(home: &Path) -> io::Result<Vec<Listed>> {
 
 #[cfg(test)]
 #[derive(Clone, Copy, PartialEq, Eq)]
-pub(crate) enum Fault { Unlink, Sync }
+pub(crate) enum Fault {
+    Unlink,
+    Sync,
+}
 
 #[cfg(test)]
 thread_local! {
@@ -209,7 +228,9 @@ thread_local! {
 }
 
 #[cfg(test)]
-pub(crate) fn fault(fault: Fault) { FAULT.with(|slot| slot.set(Some(fault))); }
+pub(crate) fn fault(fault: Fault) {
+    FAULT.with(|slot| slot.set(Some(fault)));
+}
 
 #[cfg(test)]
 fn check_fault(fault: Fault) -> io::Result<()> {

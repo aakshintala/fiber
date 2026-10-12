@@ -1,7 +1,8 @@
 //! One client connection: `hub_hello` first, hub-command dispatch for
 //! `start`, `status`, `prompt_history`, `feed`, `dismiss`, `recent`,
-//! `sessions`, `delete`, `directories` and `read_file`, and the relay to session sockets. Every connection also hears
-//! `attention` (`crate::attention`) after its hello.
+//! `sessions`, `delete`, `directories`, `read_file`, `pairing_code`, `devices`
+//! and `revoke`, and the relay to session sockets. Every connection also hears
+//! `attention` and `device_changed` (`crate::attention`) after its hello.
 //!
 //! A command with a `session_id` is for that session: the relay passes it
 //! to the session's socket (`crate::relay`). A command without one is for
@@ -48,6 +49,8 @@ pub(crate) struct Hub {
     pub(crate) diag: log::diag::Diag,
     /// The feed `feed`, `dismiss` and `recent` answer from.
     pub(crate) feed: Arc<Feed>,
+    /// Pending pairing codes and authenticated connections.
+    pub(crate) pairing: crate::pairing::Pairing,
     next_client: AtomicU64,
     /// The open connections and the idle timer, under one lock.
     conns: Mutex<Conns>,
@@ -147,6 +150,7 @@ impl Hub {
             clock,
             diag,
             feed,
+            pairing: crate::pairing::Pairing::new(),
             next_client: AtomicU64::new(0),
             conns: Mutex::new(Conns {
                 open: Vec::new(),
@@ -404,20 +408,25 @@ pub(crate) fn serve_connection(stream: UnixStream, hub: Arc<Hub>) {
 
 /// Serves an accepted connection already counted by [`Hub::poll_accept`].
 pub(crate) fn serve_counted(stream: UnixStream, hub: Arc<Hub>, n: u64) {
-    serve_from(stream, hub, n, true);
+    serve_from(stream, hub, n, true, crate::pairing::Who::Local);
 }
 
 /// Serves an authenticated websocket's pair end, already counted by
 /// [`Hub::poll_accept_web`]: no second `hub_hello`, since the port sent
 /// one before authentication.
-pub(crate) fn serve_authenticated(stream: UnixStream, hub: Arc<Hub>, n: u64) {
-    serve_from(stream, hub, n, false);
+pub(crate) fn serve_authenticated(
+    stream: UnixStream,
+    hub: Arc<Hub>,
+    n: u64,
+    who: crate::pairing::Who,
+) {
+    serve_from(stream, hub, n, false, who);
 }
 
 /// Serves a counted connection: with `hello`, `hub_hello` first, then one
 /// acknowledgement per hub command and a relay thread per session
 /// commanded on it.
-fn serve_from(stream: UnixStream, hub: Arc<Hub>, n: u64, hello: bool) {
+fn serve_from(stream: UnixStream, hub: Arc<Hub>, n: u64, hello: bool, who: crate::pairing::Who) {
     hub.diag.line(
         Severity::Info,
         None,
@@ -427,10 +436,12 @@ fn serve_from(stream: UnixStream, hub: Arc<Hub>, n: u64, hello: bool) {
     let writer = match stream.try_clone() {
         Ok(writer) => Arc::new(Mutex::new(writer)),
         Err(_) => {
+            hub.pairing.forget(&hub, &who);
             disconnect(&hub, n);
             return;
         }
     };
+    hub.pairing.attach(&who, &writer);
     if hello {
         #[cfg(test)]
         if let Some(pause) = lock(&hub.before_hello).take() {
@@ -448,7 +459,14 @@ fn serve_from(stream: UnixStream, hub: Arc<Hub>, n: u64, hello: bool) {
     }
     let relays: Arc<Mutex<Relays>> = Arc::new(Mutex::new(Relays::default()));
     hub.rejoins.register(n, &writer, &relays);
-    let heard = hub.feed.attention.listen(Arc::clone(&writer));
+    let Some(heard) = hub.feed.attention.listen(Arc::clone(&writer)) else {
+        stream.shutdown(Shutdown::Both).unwrap_or(());
+        hub.rejoins.unregister(n);
+        hub.pairing.forget(&hub, &who);
+        disconnect(&hub, n);
+        return;
+    };
+    hub.pairing.announce_owed(&hub, &who);
     let mut read = BufReader::new(stream);
     let mut buf = Vec::new();
     let mut fed = None;
@@ -457,7 +475,7 @@ fn serve_from(stream: UnixStream, hub: Arc<Hub>, n: u64, hello: bool) {
         match read.read_until(b'\n', &mut buf) {
             Ok(0) | Err(_) => break,
             Ok(_) => {
-                on_command(&buf, &hub, &writer, &relays, &mut fed);
+                on_command(&buf, &hub, &writer, &relays, &mut fed, &who);
             }
         }
     }
@@ -468,9 +486,8 @@ fn serve_from(stream: UnixStream, hub: Arc<Hub>, n: u64, hello: bool) {
     if let Some(fed) = fed {
         hub.feed.unsubscribe(fed);
     }
-    if let Some(heard) = heard {
-        hub.feed.attention.unlisten(heard);
-    }
+    hub.feed.attention.unlisten(heard);
+    hub.pairing.forget(&hub, &who);
     // A first prompt still waiting for this connection's subscription goes
     // out now: the connection will never subscribe. Released once the
     // relays lock is dropped.
@@ -504,7 +521,11 @@ fn on_command(
     writer: &Arc<Mutex<UnixStream>>,
     relays: &Arc<Mutex<Relays>>,
     fed: &mut Option<u64>,
+    who: &crate::pairing::Who,
 ) {
+    if who.revoked() {
+        return;
+    }
     let line = match classify(bytes) {
         Ok(line) => line,
         Err(id) => {
@@ -523,6 +544,22 @@ fn on_command(
         return;
     }
     match line.command.as_str() {
+        "pairing_code" => match hub.pairing.mint(hub, who, &line.args) {
+            Ok(crate::pairing::Outcome::Done(result)) => {
+                accept_result(writer, hub, &line.id, result)
+            }
+            Ok(crate::pairing::Outcome::Dropped) => {}
+            Err((code, message)) => reject(writer, hub, Some(&line.id), &code, &message),
+        },
+        "devices" => answer(writer, hub, &line.id, hub.pairing.devices(hub, &line.args)),
+        "revoke" => match hub.pairing.revoke(hub, who, &line.args) {
+            Ok(crate::pairing::Outcome::Done(revoked)) => {
+                answer(writer, hub, &line.id, Ok(None));
+                hub.pairing.finish(hub, revoked);
+            }
+            Ok(crate::pairing::Outcome::Dropped) => {}
+            Err((code, message)) => reject(writer, hub, Some(&line.id), &code, &message),
+        },
         "start" => on_start(&line.id, &line.args, hub, writer, relays),
         "status" => on_status(&line.id, &line.args, hub, writer),
         "refresh" => answer(
