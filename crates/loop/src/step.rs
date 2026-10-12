@@ -35,11 +35,17 @@ impl Loop {
             self.append(&Event::StepStarted(Empty {}), turn, None)
         });
         let Some(written) = step else {
+            // A refused commit drops what `turn_end` returned unwritten, so
+            // its messages never join a later turn.
+            self.lifecycle.continued.clear();
             return Ok(Step::Ended(ended(TurnOutcome::Interrupted, None)));
         };
         written?;
         // A jobs notice comes first, before the drain's `steering_queue`.
         self.write_pending(turn)?;
+        // What `turn_end` hooks returned, written before the drain so a
+        // steer that arrived meanwhile follows it.
+        self.write_held(turn)?;
         // Queued first: a steer held during an approval, or taken by the
         // end-of-turn check, arrived before this drain.
         self.drain(turn)?;
@@ -231,6 +237,9 @@ impl Loop {
         message: &ActionId,
     ) -> Result<Step, Error> {
         let tokens = reply.tokens.clone();
+        // The text `turn_end` hooks are shown: read before the reply is
+        // written, which moves it.
+        let note = crate::handoff::reply_note(&reply);
         let (calls, finish) = self.write_reply(reply, opened, turn, message)?;
         self.measure(&tokens);
         if finish == Finish::OutputLimit {
@@ -256,11 +265,15 @@ impl Loop {
                     }),
                 )));
             }
-            return Ok(if called { Step::Next } else { Step::Replied });
+            return Ok(if called {
+                Step::Next
+            } else {
+                Step::Replied(note)
+            });
         }
         self.cut_off = false;
         if calls.is_empty() {
-            return Ok(Step::Replied);
+            return Ok(Step::Replied(note));
         }
         if self.run_calls(calls, turn)? || self.idle_left {
             // A cancel ended the step: the turn ends `interrupted` instead

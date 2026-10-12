@@ -11,25 +11,11 @@ use doors::{Session, Signals};
 use r#loop::TurnCancel;
 
 /// Arms the signals just before the first child process starts: from now a
-/// signal is recorded, every server still starting is told to stop, and at
-/// the bound every listed process group, MCP servers' included, still alive
-/// is killed.
-pub(crate) fn arm(signals: &Signals) {
-    signals.arm(
-        Box::new(mcp::stop_every_start),
-        Box::new(|| {
-            support::group::kill_every_group();
-            extensions::kill_every_group();
-        }),
-    );
-}
-
-/// Arms the signals just before the session's worktree is created: from
-/// now a signal is recorded, every server still starting is told to stop,
-/// and the worktree's own reads are cancelled, killing its `git` and the
-/// hook together. At the bound the reads go first, then every listed
-/// process group, MCP servers' included, still alive is killed.
-pub(crate) fn arm_isolating(signals: &Signals, reads: &Arc<crate::switch::Reads>) {
+/// signal is recorded, every server still starting is told to stop, the
+/// session's reads are cancelled, killing every credential command they
+/// started, and at the bound every listed process group, MCP servers'
+/// included, still alive is killed.
+pub(crate) fn arm(signals: &Signals, reads: &Arc<crate::switch::Reads>) {
     let record_reads = Arc::clone(reads);
     let bound_reads = Arc::clone(reads);
     signals.arm(

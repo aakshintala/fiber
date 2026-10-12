@@ -1,28 +1,24 @@
 ---
 source: crates/tui/src/login_view_tests.rs
-expression: "drawn(&login, 80, 24)"
+assertion_line: 1195
+expression: "text_of(&buf, 80, 24).join(\"\\n\")"
 ---
-Log in                                                                         ✕
-Providers
-  acme  key
-  codex  browser
-Secrets
-  acme.api_key
 
 
 
 
 
+                 ▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
+
+                   acme                                     ✕
+
+                   Label (--as): work█
+                   Key for acme:
+                   ••••••
 
 
 
 
+                   Tab key or label · Enter submit · Esc back
 
-
-
-
-
-Key for acme: ••••••
-Label (--as), empty for default:
-> work
-Tab key or label · Enter store · Esc cancel
+                 ▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀

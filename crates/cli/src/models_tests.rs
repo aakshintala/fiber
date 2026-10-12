@@ -130,6 +130,7 @@ impl Setup {
             },
             spawn,
             clock.as_ref(),
+            &fakes::children::grouped_output,
         );
         (
             result,
@@ -543,6 +544,7 @@ fn models_exits_zero_and_prints_the_row() {
             fakes::clock::FakeClock::new(),
             std::sync::Arc::new(NoLock),
             Ok(std::env::current_exe().unwrap()),
+            &fakes::children::grouped_output,
         ));
     }
     let setup = Setup::new();
@@ -584,6 +586,7 @@ fn models_with_a_relative_fiber_home_is_a_usage_failure() {
             fakes::clock::FakeClock::new(),
             std::sync::Arc::new(NoLock),
             Ok(std::env::current_exe().unwrap()),
+            &fakes::children::grouped_output,
         ));
     }
     let setup = Setup::new();
@@ -621,6 +624,7 @@ fn models_spawns_its_refresh_child_from_the_recorded_path() {
             fakes::clock::FakeClock::new(),
             std::sync::Arc::new(NoLock),
             Ok(recorded),
+            &fakes::children::grouped_output,
         ));
     }
     let setup = Setup::new();
@@ -698,6 +702,7 @@ fn models_with_an_unusable_recorded_path_still_prints_from_the_cache() {
             fakes::clock::FakeClock::new(),
             std::sync::Arc::new(NoLock),
             Err("the running binary: gone".to_owned()),
+            &fakes::children::grouped_output,
         ));
     }
     let setup = Setup::new();
@@ -947,7 +952,13 @@ fn the_refresh_child_leaves_an_unnamed_uncached_provider_alone() {
     // receive completion under one named deadline.
     let (done, finished) = mpsc::channel();
     thread::spawn(move || {
-        refresh_named(&["stale".to_owned()], &providers, &loaded, &config);
+        refresh_named(
+            &["stale".to_owned()],
+            &providers,
+            &loaded,
+            &config,
+            &fakes::children::grouped_output,
+        );
         done.send(()).unwrap();
     });
     assert!(
@@ -1057,6 +1068,7 @@ fn the_refresh_entry_refreshes_a_stale_list() {
             &names,
             clock,
             std::sync::Arc::new(NoLock),
+            &fakes::children::grouped_output,
         );
         done.send(()).unwrap();
     });
@@ -1083,6 +1095,7 @@ fn the_hidden_refresh_child_refreshes_a_stale_list() {
             &["stale".to_owned()],
             fakes::clock::FakeClock::new(),
             std::sync::Arc::new(NoLock),
+            &fakes::children::grouped_output,
         );
         std::process::exit(0);
     }
@@ -1160,6 +1173,7 @@ fn a_repository_settings_file_cannot_supply_the_host() {
             fakes::clock::FakeClock::new(),
             std::sync::Arc::new(NoLock),
             Ok(std::env::current_exe().unwrap()),
+            &fakes::children::grouped_output,
         ));
     }
     let setup = Setup::new();

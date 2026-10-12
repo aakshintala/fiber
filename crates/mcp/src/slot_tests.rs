@@ -1314,3 +1314,67 @@ fn a_failed_renewal_after_a_restart_leaves_the_slot_dead() {
     assert_eq!(http_count(&server, "tools/call"), 2, "no call is replayed");
     setup.stop(started.servers);
 }
+
+#[test]
+fn call_asking_forwards_the_asker_without_leaving_the_seam() {
+    // `call_asking` carries the asker to the server without bypassing
+    // the fault and death mapping the shared arms below keep: the
+    // elicitation is asked and answered, and the call succeeds.
+    let setup = Setup::with_tools(&json!([{"name": "ask"}]));
+    setup.result("ask", r#"{"content":[{"type":"text","text":"done"}]}"#);
+    setup.write(
+        "elicit-ask.json",
+        r#"{"message":"m","requestedSchema":{"type":"object","properties":{"name":{"type":"string"}},"required":["name"]}}"#,
+    );
+    let started = setup.start(vec![setup.spec("fx")]);
+    let slot = Arc::clone(&started.servers.slots.lock().unwrap()[0]);
+    let serving = Arc::clone(&slot);
+    let server = fakes::within("the serve", WITHIN, move || match serving.run("ask") {
+        Run::Call(server, _) => server,
+        Run::Removed(_) => panic!("the server still lists ask"),
+        Run::Failed(failed) => panic!("the server runs: {}", failed.error.message),
+    });
+    let (ask, seen) = crate::elicit::tests::FakeAsk::scripted(
+        "a_9",
+        vec![contract::tool::Answered::Reply(
+            contract::events::Answer::Text {
+                text: "prod".to_owned(),
+            },
+        )],
+    );
+    let called = fakes::within("the asking call", WITHIN, move || {
+        let empty = serde_json::Map::new();
+        let params = crate::rpc::Named {
+            arguments: &empty,
+            name: "ask",
+        };
+        slot.call_asking(
+            &server,
+            crate::rpc::TOOLS_CALL,
+            &params,
+            DEFAULT_CALL_TIMEOUT,
+            &fakes::CancelToken::new(),
+            crate::elicit::Asker {
+                ask: &ask,
+                server: "fx",
+            },
+        )
+        .is_ok()
+    });
+    assert!(called, "the asked call succeeds");
+    let asked = Deadline::after(WITHIN).recv_or_fail(&seen, "the field's ask");
+    assert_eq!(
+        asked.action_ids,
+        vec![contract::ActionId("a_9".to_owned())],
+        "the asker registers its action",
+    );
+    // The fixture answers the call only on reading the `accept`, so the
+    // result proves it is logged: no barrier.
+    let log = std::fs::read_to_string(setup.dir.path().join("requests.log")).expect("requests");
+    let accept = log
+        .lines()
+        .find(|line| line.contains("\"el-") && line.contains("\"action\":\"accept\""))
+        .unwrap_or_else(|| panic!("the accept reaches the wire: {log}"));
+    assert!(accept.contains(r#""name":"prod""#), "{accept}");
+    setup.stop(started.servers);
+}

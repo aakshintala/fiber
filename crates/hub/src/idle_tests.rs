@@ -978,3 +978,117 @@ fn close_runs_before_hub_stopped_in_the_shutdown_race() {
         "the log ends with hub_stopped: {last}"
     );
 }
+
+#[test]
+fn an_idle_exiting_hub_answers_one_connection_eof_and_leaves_the_next_unanswered_until_its_socket_closes()
+ {
+    let temp = Temp::new();
+    let shell = fake_shell(&temp, "export MARK=1\nexec /bin/sh -c \"$4\"");
+    let clock = fakes::clock::FakeClock::new();
+    let environments = crate::Environments::new(inherited_env(&shell, &temp.dir), &temp.dir);
+    // Hold the cleanup after the idle-exit claim: the hook reports it is
+    // held, then blocks until the test releases it.
+    let (held_tx, held_rx) = mpsc::channel();
+    let (release_tx, release_rx) = mpsc::channel::<()>();
+    *support::lock(&environments.before_publish) = Some(Box::new(move || {
+        held_tx.send(()).unwrap_or(());
+        Deadline::after(DEADLINE).recv(&release_rx).unwrap_or(());
+    }));
+    let done = serve_mode_env(
+        &temp,
+        IDLE,
+        Arc::clone(&clock),
+        Level::Info,
+        crate::Mode::OnDemand,
+        Arc::clone(&environments),
+    );
+    Deadline::after(DEADLINE)
+        .recv(&held_rx)
+        .expect("the capture holds before publishing");
+    await_idle_park(&clock, clock.origin(), "at start");
+    clock.advance(IDLE);
+    crate::testkit::await_true("close begins", {
+        let environments = Arc::clone(&environments);
+        move || environments.is_closed()
+    });
+    // The first connection after the claim is dropped unanswered.
+    let first = UnixStream::connect(temp.socket()).expect("the first connection connects");
+    first.set_read_timeout(Some(DEADLINE)).unwrap();
+    let (first_tx, first_rx) = mpsc::channel();
+    thread::spawn(move || {
+        let mut first = first;
+        let mut got = Vec::new();
+        let read = first.read_to_end(&mut got);
+        first_tx.send((read, got)).unwrap_or(());
+    });
+    let (read, got) = Deadline::after(DEADLINE)
+        .recv(&first_rx)
+        .expect("the first connection ends");
+    assert_eq!(
+        read.expect("EOF, not a hello"),
+        0,
+        "the first connection reads EOF"
+    );
+    assert!(got.is_empty(), "the first connection carries no bytes");
+    // The second connection queues unanswered while the hold lasts. The
+    // reader probes its socket non-blocking while the hold lasts: WouldBlock
+    // proves no bytes arrived and the peer is still open (EOF would read
+    // Ok(0)). The probe's signal orders that proof before these asserts,
+    // and the hold proves the hub cannot answer between the probe and the
+    // release, so no timing assertion is needed.
+    let second = UnixStream::connect(temp.socket()).expect("the second connection connects");
+    let (reading_tx, reading_rx) = mpsc::channel::<Result<(), String>>();
+    let (result_tx, result_rx) = mpsc::channel();
+    thread::spawn(move || {
+        let mut second = second;
+        second.set_nonblocking(true).unwrap();
+        let mut probe = [0u8; 1];
+        let probed = match second.read(&mut probe) {
+            Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => Ok(()),
+            other => Err(format!("{other:?}")),
+        };
+        reading_tx.send(probed).unwrap_or(());
+        second.set_nonblocking(false).unwrap();
+        let mut bytes = Vec::new();
+        let read = second.read_to_end(&mut bytes);
+        let size = read
+            .as_ref()
+            .map(|size| *size)
+            .map_err(|error| error.kind());
+        result_tx.send((size, bytes)).unwrap_or(());
+    });
+    Deadline::after(DEADLINE)
+        .recv(&reading_rx)
+        .expect("the reader probed its read")
+        .expect("the second connection stays unanswered while the hold lasts");
+    assert!(
+        temp.socket().exists(),
+        "the socket stays bound during cleanup"
+    );
+    assert!(
+        !temp.log().contains("hub_stopped"),
+        "no stop line while the hold lasts"
+    );
+    release_tx.send(()).unwrap_or(());
+    let (size, bytes) = Deadline::after(DEADLINE)
+        .recv(&result_rx)
+        .expect("the second connection ends once the socket closes");
+    assert!(bytes.is_empty(), "the second connection carries no bytes");
+    match size {
+        Ok(0) => {}
+        Err(std::io::ErrorKind::ConnectionReset) => {}
+        other => panic!("the second connection ends EOF or reset, got {other:?}"),
+    }
+    assert_eq!(
+        Deadline::after(DEADLINE)
+            .recv(&done)
+            .expect("the hub exits idle"),
+        0
+    );
+    assert!(!temp.socket().exists(), "the exit removes the socket");
+    let last = temp.log().lines().last().unwrap_or_default().to_owned();
+    assert!(
+        last.contains("hub_stopped"),
+        "the log ends with hub_stopped: {last}"
+    );
+}

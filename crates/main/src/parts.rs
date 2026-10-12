@@ -99,6 +99,7 @@ pub(crate) fn parts_with<'a>(
     recorded_thinking: Option<ThinkingLevel>,
     clock: Arc<dyn contract::clock::Clock>,
     host: Option<Arc<extensions::HostScript>>,
+    reads: Arc<switch::Reads>,
 ) -> Result<Parts, Failure> {
     let home = config::fiber_home_from_env().map_err(|e| failed(e.code(), e))?;
     let workspace = std::env::current_dir()
@@ -113,6 +114,7 @@ pub(crate) fn parts_with<'a>(
         clock,
         host,
         prompt_files::agents_home(std::env::var_os("HOME")),
+        reads,
     )
 }
 
@@ -134,6 +136,7 @@ pub(crate) fn parts_in(
     clock: Arc<dyn contract::clock::Clock>,
     host: Option<Arc<extensions::HostScript>>,
     agents_home: Option<PathBuf>,
+    reads: Arc<switch::Reads>,
 ) -> Result<Parts, Failure> {
     let (sessions, project) = ::cli::project_of(&home, &workspace)?;
     let config = Config::load(Sources {
@@ -161,7 +164,13 @@ pub(crate) fn parts_in(
         session_locks,
         host,
     );
-    let (naming, notices) = lua_providers::add_lua(&extensions, &mut providers, &config)?;
+    // One runner for every startup credential read: the session key, the
+    // Lua discovery and refresh gate, and the reviewer lookup all run
+    // through the session's reads, so one cancel reaches them all.
+    let run = |command: &mut std::process::Command, timeout: std::time::Duration| {
+        reads.credential(command, timeout, &*clock)
+    };
+    let (naming, notices) = lua_providers::add_lua(&extensions, &mut providers, &config, &run)?;
     startup_notices.extend(notices);
     scripted::prepare(&mut providers, &config, recorded);
     let owners = (extensions.lua_providers().iter())
@@ -187,7 +196,7 @@ pub(crate) fn parts_in(
     let lua = providers.lua(&model.provider.name);
     let lua_providers::Access { key, signer, .. } = scripted::access(model.provider, || {
         lua_providers::session_credential(lua, model.provider, &label, || {
-            crate::credential::session_credential(&config, model.provider, Some(&label))
+            crate::credential::session_credential(&config, model.provider, Some(&label), &run)
                 .map(|(_, key)| key)
         })
         .map(|read| lua_providers::Access::new(lua, read))
@@ -221,7 +230,7 @@ pub(crate) fn parts_in(
                     }
                     let label = config.credentials().credential_label(provider);
                     let read = lua_providers::session_credential(lua, provider, &label, || {
-                        crate::credential::session_credential(&config, provider, None)
+                        crate::credential::session_credential(&config, provider, None, &run)
                             .map(|(_, key)| key)
                     })?;
                     credentials.insert(provider.name.clone(), (label, read.clone()));
@@ -287,6 +296,7 @@ pub(crate) fn parts_in(
         credentials,
         loaded,
         loader,
+        reads,
     );
     // The extensions loaded above, started before the model was chosen:
     // choosing a Lua provider's model waits on them.

@@ -59,13 +59,15 @@ pub(crate) fn no_label(provider: &str, label: &str, labels: &[String]) -> Failur
     )
 }
 
-/// The session's label and its key. `recorded` is the label the resumed
-/// session's log last recorded; it beats the configured one. A label that
-/// names no credential fails with `credential_missing`.
+/// The session's label and its key, running a `command` source through
+/// `run`. `recorded` is the label the resumed session's log last recorded;
+/// it beats the configured one. A label that names no credential fails
+/// with `credential_missing`.
 pub(crate) fn session_credential(
     config: &Config,
     provider: &ProviderData,
     recorded: Option<&str>,
+    run: config::Runner<'_>,
 ) -> Result<(String, Secret), Failure> {
     let label = recorded.map_or_else(
         || config.credentials().credential_label(provider),
@@ -73,7 +75,8 @@ pub(crate) fn session_credential(
     );
     let key = config
         .credentials()
-        .credential(provider, &label)
+        .credential_with(provider, &label, run)
+        .map(|read| read.secret)
         .map_err(|e| failed(e.code(), e))?;
     Ok((label, key))
 }

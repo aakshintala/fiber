@@ -31,7 +31,7 @@ use contract::{ErrorCode, SessionId};
 
 pub use dependents::dependents;
 pub use export::export;
-pub use history::{Segment, history, history_to, last_line};
+pub use history::{Segment, history, history_to, last_line, last_seq};
 pub use name::session_name;
 pub use rate::{Rate, RateFold};
 pub use read::{Injector, Lines, Watcher, lines, read};
@@ -106,7 +106,9 @@ pub enum Error {
     Exists(PathBuf),
     /// A history pointer names a line no log holds: a fork or rewind
     /// point past its log's end, or a chain that repeats a session
-    /// (`docs/events.md`, "Rewind").
+    /// (`docs/events.md`, "Rewind"). A log whose last line gives no
+    /// boundary, such as a torn-only log or a last line with no `seq`,
+    /// is one too.
     #[error("{path}: {reason}")]
     Pointer {
         /// The log the pointer was read from.

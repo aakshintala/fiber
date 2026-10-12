@@ -1530,6 +1530,32 @@ fn session_resume_conflicts_with_prompt() {
     ]);
     assert!(said.contains("--resume"), "{said}");
     assert!(said.contains("--prompt"), "{said}");
+    assert!(said.contains("--parent"), "{said}");
+}
+
+#[test]
+fn session_resume_with_a_prompt_and_a_parent_parses_as_a_delegate_resume() {
+    let Invocation::Run(Some(Commands::Session(args))) = parse_from([
+        "fiber",
+        "session",
+        "--id",
+        "s_0123456789abcdef",
+        "--workspace",
+        "/w",
+        "--resume",
+        "--prompt",
+        "hi",
+        "--parent",
+        "s_aaaaaaaaaaaaaaaa",
+        "--delegate-id",
+        "j_bbbbbbbbbbbbbbbb",
+    ]) else {
+        panic!("a delegate resume parses");
+    };
+    assert!(args.resume);
+    assert_eq!(args.prompt.as_deref(), Some("hi"));
+    assert_eq!(args.parent.as_deref(), Some("s_aaaaaaaaaaaaaaaa"));
+    assert_eq!(args.delegate_id.as_deref(), Some("j_bbbbbbbbbbbbbbbb"));
 }
 
 #[test]
@@ -1605,7 +1631,9 @@ fn session_parent_without_its_delegate_id_or_prompt_is_a_usage_error() {
 
 #[test]
 fn session_parent_conflicts_with_resume_and_worktree() {
-    let resumed = sentence(&[
+    // `--resume` with a prompt and a parent is a delegate's resume: it
+    // parses, and the resume runs the prompt as one turn.
+    let Invocation::Run(Some(Commands::Session(args))) = parse_from([
         "fiber",
         "session",
         "--id",
@@ -1619,10 +1647,11 @@ fn session_parent_conflicts_with_resume_and_worktree() {
         "--delegate-id",
         "j_bbbbbbbbbbbbbbbb",
         "--resume",
-    ]);
-    // `--prompt`'s own `--resume` conflict fires first; either way the
-    // combination is a usage error naming `--resume`.
-    assert!(resumed.contains("--resume"), "{resumed}");
+    ]) else {
+        panic!("a delegate resume with --resume parses");
+    };
+    assert!(args.resume);
+    assert_eq!(args.parent.as_deref(), Some("s_aaaaaaaaaaaaaaaa"));
     let isolated = sentence(&[
         "fiber",
         "session",

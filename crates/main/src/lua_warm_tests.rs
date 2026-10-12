@@ -157,6 +157,7 @@ fn a_lua_providers_session_refreshes_its_cache_signed_with_only_the_cap_changed(
     let setup_workspace = workspace.clone();
     let setup_clock = Arc::clone(&shared);
     thread::spawn(move || {
+        let reads = Arc::new(crate::switch::Reads::default());
         drop(setup_done.send(super::parts_in(
             setup_home,
             setup_workspace,
@@ -167,6 +168,7 @@ fn a_lua_providers_session_refreshes_its_cache_signed_with_only_the_cap_changed(
             setup_clock,
             None,
             None,
+            reads,
         )));
     });
     let parts = Deadline::after(DEADLINE)

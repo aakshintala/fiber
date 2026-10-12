@@ -87,16 +87,23 @@ fn slash_login_opens_the_view_attached_and_on_home() {
     assert!(app.input().is_empty());
     let rows = screen(&app);
     assert!(
-        rows.first().is_some_and(|row| row.starts_with("Log in")),
+        rows.iter()
+            .any(|row| row.contains("Log in") && row.contains("✕")),
         "{rows:?}"
     );
+    assert!(rows.iter().any(|row| row.contains("▄")), "{rows:?}");
     assert!(rows.iter().any(|row| row.contains("acme  key")), "{rows:?}");
 
     let mut app = attached(Some(seam()));
     slash_login(&mut app);
     assert!(app.config_view_open());
     let rows = screen(&app);
-    assert!(rows.iter().any(|row| row.starts_with("Log in")), "{rows:?}");
+    assert!(
+        rows.iter()
+            .any(|row| row.contains("Log in") && row.contains("✕")),
+        "{rows:?}"
+    );
+    assert!(rows.iter().any(|row| row.contains("▄")), "{rows:?}");
     assert!(rows.iter().any(|row| row.contains("acme  key")), "{rows:?}");
 }
 
@@ -156,7 +163,12 @@ fn the_failed_turns_log_in_line_opens_the_view() {
     assert_eq!(app.on_click(TargetId::Line(Target::Login)), Effect::None);
     assert!(app.config_view_open());
     let rows = screen(&app);
-    assert!(rows.iter().any(|row| row.starts_with("Log in")), "{rows:?}");
+    assert!(
+        rows.iter()
+            .any(|row| row.contains("Log in") && row.contains("✕")),
+        "{rows:?}"
+    );
+    assert!(rows.iter().any(|row| row.contains("▄")), "{rows:?}");
 
     // Enter on the focused line reaches the same arm.
     let mut app = attached(Some(seam()));
@@ -348,4 +360,23 @@ fn a_stale_done_after_close_changes_nothing_and_opens_nothing() {
         ),
         None
     );
+}
+
+#[test]
+fn the_login_view_is_offered_in_every_mode() {
+    let seam = browser_seam();
+    let mut app = browser_login_app(&seam);
+    assert!(app.login_view().is_some());
+    assert!(app.config_view_screen().is_none());
+    // Waiting on a browser login keeps the view offered, drawn as the step.
+    let _ = start_login(&mut app);
+    assert!(app.login_view().is_some());
+    assert!(app.config_view_screen().is_none());
+    // Esc returns to the rows, which the view draws again.
+    assert_eq!(app.on_key(Key::Esc, now()), Effect::None);
+    assert!(app.login_view().is_some());
+    assert!(app.config_view_screen().is_none());
+    // Esc closes the view, which offers nothing.
+    assert_eq!(app.on_key(Key::Esc, now()), Effect::None);
+    assert!(app.login_view().is_none());
 }

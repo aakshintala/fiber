@@ -1,15 +1,40 @@
 //! The request/response rendezvous for MCP servers: shared slots, injected-clock
 //! waits, cancellation and gone notifications (`docs/mcp.md`, "Calls").
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, VecDeque};
 use std::sync::{Arc, Condvar, Mutex, Weak};
 use std::time::{Duration, Instant};
 
+use contract::ActionId;
 use contract::clock::{Clock, Wake};
 use contract::tool::Cancel;
 
+use crate::elicit::Form;
 use crate::registry::lock;
 use crate::rpc::Outcome;
+
+/// One queued elicitation: the server request's id, echoed unchanged,
+/// and the form to ask.
+#[derive(Debug)]
+pub(crate) struct Elicitation {
+    /// The request's id, as the wire carried it.
+    pub(crate) id: serde_json::Value,
+    /// The form to ask.
+    pub(crate) form: Form,
+}
+
+/// One elicitation taken for asking: the elicitation, every asking
+/// call's action in request-id order, and their earliest deadline.
+#[derive(Debug)]
+pub(crate) struct Taken {
+    /// The elicitation to ask.
+    pub(crate) elicitation: Elicitation,
+    /// Every asking call's action, in request-id order.
+    pub(crate) action_ids: Vec<ActionId>,
+    /// The earliest deadline of the asking calls, so the elicitation
+    /// never outlives the first call it belongs to.
+    pub(crate) until: Instant,
+}
 
 /// What a wait loop sees, read under the shared lock after subscribing, so
 /// a response that lands between the subscribe and the read is still
@@ -28,6 +53,12 @@ pub(crate) struct SharedState {
     pub(crate) seq: u64,
     next_id: u64,
     pending: BTreeMap<u64, Option<Outcome>>,
+    /// Every call asking through a person, by request id: its action and
+    /// its deadline. A call registers before its line is sent and
+    /// unregisters on every exit of its wait.
+    asking: BTreeMap<u64, (ActionId, Instant)>,
+    /// The elicitations the reader queued, in arrival order.
+    elicitations: VecDeque<Elicitation>,
     pub(crate) gone: bool,
     /// Whether the remote server ended its session: set with `gone` by
     /// [`Shared::expire_if_awaiting`], never alone.
@@ -38,6 +69,16 @@ pub(crate) struct SharedState {
 pub(crate) struct Shared {
     pub(crate) inner: Mutex<SharedState>,
     pub(crate) cv: Condvar,
+}
+
+impl SharedState {
+    /// Whether any pending slot holds a response; read on a guard the
+    /// caller already holds, inside `cv.wait_timeout_while`, so the wait
+    /// never locks twice.
+    #[cfg(test)]
+    pub(crate) fn holds_a_response(&self) -> bool {
+        self.pending.values().any(|slot| slot.is_some())
+    }
 }
 
 impl Wake for Shared {
@@ -65,8 +106,68 @@ impl Shared {
         lock(&self.inner).pending.insert(id, None);
     }
 
-    pub(crate) fn remove(&self, id: u64) {
-        lock(&self.inner).pending.remove(&id);
+    /// Registers `id` as asking through `action` until `deadline`, right
+    /// after its slot is inserted and before its line is sent, so an
+    /// elicitation the server sends in answer always finds it.
+    pub(crate) fn register(&self, id: u64, action: ActionId, deadline: Instant) {
+        lock(&self.inner).asking.insert(id, (action, deadline));
+    }
+
+    /// Queues `elicitation` and wakes every waiter; gives it back when no
+    /// asking call is registered, so the reader declines it at once.
+    pub(crate) fn queue_elicitation(&self, elicitation: Elicitation) -> Result<(), Elicitation> {
+        let mut state = lock(&self.inner);
+        if state.asking.is_empty() {
+            return Err(elicitation);
+        }
+        state.elicitations.push_back(elicitation);
+        state.seq = state.seq.wrapping_add(1);
+        drop(state);
+        self.cv.notify_all();
+        Ok(())
+    }
+
+    /// The oldest queued elicitation, with every registered call's action
+    /// in request-id order and their earliest deadline.
+    pub(crate) fn take_elicitation(&self) -> Option<Taken> {
+        let mut state = lock(&self.inner);
+        if state.asking.is_empty() {
+            return None;
+        }
+        let elicitation = state.elicitations.pop_front()?;
+        let mut action_ids = Vec::with_capacity(state.asking.len());
+        let mut asking = state.asking.values();
+        // The empty return above holds under the same lock, so a first
+        // call is registered.
+        #[allow(clippy::expect_used, reason = "the same lock keeps `asking` nonempty")]
+        let first = asking.next().expect("an asking call is registered");
+        action_ids.push(first.0.clone());
+        let mut until = first.1;
+        // `BTreeMap` iterates in request-id order.
+        for next in asking {
+            action_ids.push(next.0.clone());
+            until = until.min(next.1);
+        }
+        Some(Taken {
+            elicitation,
+            action_ids,
+            until,
+        })
+    }
+
+    /// Removes and unregisters `id`; when that left no asking call, the
+    /// queued elicitations to decline. Queueing and this last removal
+    /// share one lock, so an elicitation is either refused by the queue
+    /// or returned here, never stranded.
+    pub(crate) fn remove(&self, id: u64) -> Vec<Elicitation> {
+        let mut state = lock(&self.inner);
+        state.pending.remove(&id);
+        state.asking.remove(&id);
+        if state.asking.is_empty() {
+            state.elicitations.drain(..).collect()
+        } else {
+            Vec::new()
+        }
     }
 
     pub(crate) fn view(&self, id: u64, cancel: &dyn Cancel) -> View {

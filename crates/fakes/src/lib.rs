@@ -15,6 +15,7 @@ mod crash_ports;
 pub mod deadline;
 pub mod emit;
 mod finished;
+mod gated_http;
 pub mod jobs;
 mod oauth_server;
 mod process_group;
@@ -38,6 +39,7 @@ pub use connect_proxy::ConnectProxy;
 pub use deadline::Deadline;
 pub use emit::Recorder;
 pub use finished::finished;
+pub use gated_http::GatedHttp;
 pub mod git;
 pub use oauth_server::{OauthReply, OauthRequest, OauthServer, jwt};
 pub use process_group::{

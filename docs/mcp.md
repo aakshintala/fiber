@@ -59,7 +59,9 @@ MCP tools register through the tool seam like any built-in
 (`docs/architecture.md`, "Tool seam"). The seam's rule applies unchanged:
 registering an existing name replaces it, and the replacement is recorded in the
 session log. An extension can replace any MCP tool, or `mcp_resources`, by
-registering its name.
+registering its name. An extension's replacement of an MCP tool holds when
+the server's tools load later, and that later load adds no entry to
+`preamble_built`'s `replaced` for the name.
 
 The tool set is fixed when the preamble is built (`docs/tools.md`, "Which
 tools the model sees"). A resumed session declares its servers' tools from
@@ -295,13 +297,15 @@ other: Fiber raises it on the event stream as one of the interactions
 answers it with `reply`.
 
 Fiber advertises form elicitation. The server sends a form of typed fields.
-Fiber asks each field in turn:
+Fiber asks each field in turn, in the order the server lists them:
 
 | Field type | Interaction |
 |---|---|
 | boolean | confirm |
 | enum | select |
 | string, number or integer | text input |
+
+A typed answer that is not a number for a number field, or not a whole number for an integer field, or that is outside the field's limits, is rejected `invalid_arguments`, and the field stays pending. An elicitation Fiber cannot show, such as one with a field of another type or a malformed schema, is answered with a JSON-RPC error, and nothing is logged. A declined optional field is left out of the answers and the rest is still accepted; a declined required field declines the whole elicitation. Each field's prompt names the server that asks.
 
 When no answer is possible, Fiber declines, which is a response MCP defines.
 That is the same case as an escalation's block (`docs/permissions.md`,
@@ -317,7 +321,7 @@ it: the MCP TypeScript SDK 1.29.0 passes `relatedRequestId` to its transport
 (`server/stdio.js:63`). Each session has its own servers ("Where servers
 run"), so an elicitation always belongs to the session that started the
 server. When that session has more than one call in flight on the server, its
-log records the elicitation with the `action_id` of each.
+log records the elicitation with the `action_id` of each. An elicitation that arrives with no call in flight on its server is declined, and nothing is logged. Fetching an MCP prompt is not a call: an elicitation that arrives during one is declined.
 
 Fiber does not advertise sampling and does not answer a sampling request.
 

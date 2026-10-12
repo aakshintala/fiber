@@ -1,0 +1,24 @@
+---
+source: crates/tui/src/login_view_tests.rs
+assertion_line: 2002
+expression: "text_of(&buf, 80, 24).join(\"\\n\")"
+---
+
+
+
+
+
+                 ▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
+
+                   codex                                    ✕
+
+                   Login to codex failed: token expired.
+
+
+
+
+
+
+                   Esc back
+
+                 ▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀

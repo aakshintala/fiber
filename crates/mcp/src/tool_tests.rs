@@ -916,3 +916,84 @@ fn resource_text_wins_over_an_image_blob() {
     );
     assert_eq!(images.call_count(), 0);
 }
+
+/// One eliciting fixture server and its `ask` tool: `elicit-ask.json`
+/// asks `name` then `approve`.
+fn eliciting_setup() -> (crate::test_support::Setup, crate::start::Started) {
+    use crate::test_support::Setup;
+    let setup = Setup::with_tools(&json!([{"name": "ask"}]));
+    setup.result("ask", r#"{"content":[{"type":"text","text":"done"}]}"#);
+    setup.write(
+        "elicit-ask.json",
+        r#"{"message":"Deploy settings","requestedSchema":{"type":"object","properties":{"name":{"type":"string","title":"Name"},"approve":{"type":"boolean"}},"required":["name"]}}"#,
+    );
+    let spec = setup.spec("fx");
+    let started = setup.start(vec![spec]);
+    (setup, started)
+}
+
+#[test]
+fn run_without_an_asker_registers_nothing_and_the_reader_declines() {
+    // `run` passes no asker, so the call is not registered: the reader
+    // declines the elicitation at once, and the call returns its result.
+    // Without the registration gate the reader would strand it.
+    let (setup, started) = eliciting_setup();
+    let tool = setup.tool(&started, "mcp__fx__ask");
+    let output = setup.run(&tool);
+    assert!(output.error.is_none(), "the call returns its result");
+    // The fixture answers the call only on reading the `decline`, so the
+    // result proves it is logged: no barrier.
+    let log = std::fs::read_to_string(setup.dir.path().join("requests.log")).expect("requests");
+    let decline = log
+        .lines()
+        .find(|line| line.contains("\"el-") && line.contains("\"action\":\"decline\""))
+        .unwrap_or_else(|| panic!("the reader declines: {log}"));
+    assert!(
+        decline.contains(r#""result":{"action":"decline"}"#),
+        "{decline}"
+    );
+    setup.stop(started.servers);
+}
+
+#[test]
+fn run_asking_asks_naming_the_configured_server() {
+    use contract::events::{Answer, Interaction};
+    use contract::tool::Answered;
+    // `run_asking` passes the asker with the configured server name, so
+    // each prompt names it.
+    let (setup, started) = eliciting_setup();
+    let tool = setup.tool(&started, "mcp__fx__ask");
+    let (ask, seen) = crate::elicit::tests::FakeAsk::scripted(
+        "a_1",
+        vec![
+            Answered::Reply(Answer::Text {
+                text: "prod".to_owned(),
+            }),
+            Answered::Reply(Answer::Confirmed { confirmed: true }),
+        ],
+    );
+    let moved = tool.clone();
+    let output = fakes::within("the asking call", WITHIN, move || {
+        moved.run_asking(
+            &Default::default(),
+            &fakes::CancelToken::new(),
+            &fakes::Recorder::default(),
+            &ask,
+        )
+    });
+    assert!(output.error.is_none(), "the call returns its result");
+    let wait = fakes::Deadline::after(WITHIN);
+    let first = wait.recv_or_fail(&seen, "the first field's ask");
+    match first.interaction {
+        Interaction::TextInput { prompt } => assert!(
+            prompt.starts_with("The MCP server `fx` asks: "),
+            "the prompt names the server: {prompt}",
+        ),
+        Interaction::Confirm { .. }
+        | Interaction::Select { .. }
+        | Interaction::MultiSelect { .. }
+        | Interaction::Form { .. } => panic!("the string field asks a text input"),
+    }
+    wait.recv_or_fail(&seen, "the second field's ask");
+    setup.stop(started.servers);
+}

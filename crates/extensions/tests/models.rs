@@ -191,7 +191,8 @@ fn an_installed_provider_is_reached_with_its_credential() {
     assert_eq!(model.model.base_url, "http://127.0.0.1:1/v1");
     let key = config
         .credentials()
-        .credential(model.provider, "default")
+        .credential_with(model.provider, "default", &fakes::children::grouped_output)
+        .map(|read| read.secret)
         .unwrap();
     assert_eq!(key.expose(), "key-from-command");
 }
@@ -204,7 +205,8 @@ fn a_run_whose_provider_has_no_credential_is_credential_missing() {
     let model = providers.choose(None, &config).unwrap();
     let err = config
         .credentials()
-        .credential(model.provider, "default")
+        .credential_with(model.provider, "default", &fakes::children::grouped_output)
+        .map(|read| read.secret)
         .unwrap_err();
     assert_eq!(err.code(), ErrorCode::CredentialMissing);
 }
@@ -601,7 +603,12 @@ fn add_lua_without_a_data_file_creates_the_provider() {
         &["http://127.0.0.1:1/v1"],
     );
     let lua = lua_acme(&setup, "ext", &lua_list(&["m"]));
-    let notices = providers.add_lua("acme-ext", &lua, &config(&setup, &[]));
+    let notices = providers.add_lua(
+        "acme-ext",
+        &lua,
+        &config(&setup, &[]),
+        &fakes::children::grouped_output,
+    );
     assert!(notices.is_empty(), "{notices:?}");
     assert!(providers.resolve("acme/m").is_ok());
     let data = providers.get("acme").unwrap();
@@ -620,7 +627,12 @@ fn add_lua_with_a_data_file_replaces_only_models() {
     data["reviewer_model"] = json!("tiny");
     let mut providers = installed_ext(&setup, "acme", "acme-ext", &[data]);
     let lua = lua_acme(&setup, "ext", &lua_list(&["new"]));
-    let notices = providers.add_lua("acme-ext", &lua, &config(&setup, &[]));
+    let notices = providers.add_lua(
+        "acme-ext",
+        &lua,
+        &config(&setup, &[]),
+        &fakes::children::grouped_output,
+    );
     assert!(notices.is_empty(), "{notices:?}");
     assert!(providers.resolve("acme/new").is_ok());
     assert!(matches!(
@@ -656,7 +668,12 @@ fn add_lua_leaves_out_an_invalid_model_with_a_notice() {
         ]
         .concat(),
     );
-    let notices = providers.add_lua("acme-ext", &lua, &config(&setup, &[]));
+    let notices = providers.add_lua(
+        "acme-ext",
+        &lua,
+        &config(&setup, &[]),
+        &fakes::children::grouped_output,
+    );
     assert!(providers.resolve("acme/ok").is_ok());
     assert!(matches!(
         providers.resolve("acme/bad").unwrap_err(),
@@ -693,7 +710,12 @@ fn add_lua_filters_a_cached_list_without_running_lua() {
     )
     .unwrap();
     let lua = lua_acme(&setup, "ext", "error(\"must not run\")");
-    let notices = providers.add_lua("acme-ext", &lua, &config(&setup, &[]));
+    let notices = providers.add_lua(
+        "acme-ext",
+        &lua,
+        &config(&setup, &[]),
+        &fakes::children::grouped_output,
+    );
     assert!(providers.resolve("acme/ok").is_ok());
     assert!(matches!(
         providers.resolve("acme/bad").unwrap_err(),
@@ -714,7 +736,12 @@ fn a_failing_models_leaves_no_models_with_the_errors_code() {
         &["http://127.0.0.1:1/v1"],
     );
     let lua = lua_acme(&setup, "ext", "error(\"boom\")");
-    let notices = providers.add_lua("acme-ext", &lua, &config(&setup, &[]));
+    let notices = providers.add_lua(
+        "acme-ext",
+        &lua,
+        &config(&setup, &[]),
+        &fakes::children::grouped_output,
+    );
     assert_eq!(providers.names().count(), 0);
     assert_eq!(notices.len(), 1, "{notices:?}");
     assert_eq!(notices[0].code, ErrorCode::ExtensionFailed);
@@ -731,7 +758,12 @@ fn a_failing_models_keeps_the_data_files_models() {
     let setup = Setup::new();
     let mut providers = installed(&setup, &[("acme", provider("acme", &["a"]))]);
     let lua = lua_acme(&setup, "ext", "error(\"boom\")");
-    let notices = providers.add_lua("acme-ext", &lua, &config(&setup, &[]));
+    let notices = providers.add_lua(
+        "acme-ext",
+        &lua,
+        &config(&setup, &[]),
+        &fakes::children::grouped_output,
+    );
     assert!(providers.resolve("acme/a").is_ok());
     assert_eq!(notices.len(), 1, "{notices:?}");
     assert_eq!(notices[0].code, ErrorCode::ExtensionFailed);
@@ -756,7 +788,12 @@ fn add_lua_keeps_the_provider_for_its_signer_even_when_models_fails() {
         &["http://127.0.0.1:1/v1"],
     );
     let lua = lua_acme(&setup, "ext", &lua_list(&["m"]));
-    providers.add_lua("acme-ext", &lua, &config(&setup, &[]));
+    providers.add_lua(
+        "acme-ext",
+        &lua,
+        &config(&setup, &[]),
+        &fakes::children::grouped_output,
+    );
     assert!(providers.lua("acme").is_some());
     assert!(providers.lua("nobody").is_none());
 
@@ -771,7 +808,12 @@ fn add_lua_keeps_the_provider_for_its_signer_even_when_models_fails() {
     let bad = lua_named(&setup2, "bad", "broke", "error(\"boom\")");
     assert_eq!(
         failing
-            .add_lua("broke-ext", &bad, &config(&setup2, &[]))
+            .add_lua(
+                "broke-ext",
+                &bad,
+                &config(&setup2, &[]),
+                &fakes::children::grouped_output
+            )
             .len(),
         1
     );
@@ -883,7 +925,12 @@ fn add_lua_reads_the_addendum_against_the_lua_extensions_directory() {
     );
     write(&setup.home().join("ext/prompts/m.md"), "Lua says hi.\n");
     let lua = lua_acme(&setup, "ext", &lua_addendum_run("m", "prompts/m.md"));
-    let notices = providers.add_lua("acme-ext", &lua, &config(&setup, &[]));
+    let notices = providers.add_lua(
+        "acme-ext",
+        &lua,
+        &config(&setup, &[]),
+        &fakes::children::grouped_output,
+    );
     assert!(notices.is_empty(), "{notices:?}");
     let model = providers.resolve("acme/m").unwrap();
     assert_eq!(providers.addendum(&model), Some("Lua says hi.\n"));
@@ -907,7 +954,12 @@ fn add_lua_replaces_the_data_files_models_and_addenda_together() {
     );
     write(&setup.home().join("ext/prompts/new.md"), "Fresh.\n");
     let lua = lua_acme(&setup, "ext", &lua_addendum_run("new", "prompts/new.md"));
-    let notices = providers.add_lua("acme-ext", &lua, &config(&setup, &[]));
+    let notices = providers.add_lua(
+        "acme-ext",
+        &lua,
+        &config(&setup, &[]),
+        &fakes::children::grouped_output,
+    );
     assert!(notices.is_empty(), "{notices:?}");
     assert!(providers.resolve("acme/old").is_err());
     let model = providers.resolve("acme/new").unwrap();
@@ -925,7 +977,12 @@ fn add_lua_with_a_missing_addendum_leaves_no_models_but_keeps_the_provider() {
         &["http://127.0.0.1:1/v1"],
     );
     let lua = lua_acme(&setup, "ext", &lua_addendum_run("m", "prompts/gone.md"));
-    let notices = providers.add_lua("acme-ext", &lua, &config(&setup, &[]));
+    let notices = providers.add_lua(
+        "acme-ext",
+        &lua,
+        &config(&setup, &[]),
+        &fakes::children::grouped_output,
+    );
     assert_eq!(providers.names().count(), 0);
     assert!(providers.lua("acme").is_some());
     assert_eq!(notices.len(), 1, "{notices:?}");
@@ -943,7 +1000,12 @@ fn add_lua_with_a_missing_addendum_keeps_the_data_files_models() {
     let setup = Setup::new();
     let mut providers = installed_ext(&setup, "acme", "acme-ext", &[provider("acme", &["a"])]);
     let lua = lua_acme(&setup, "ext", &lua_addendum_run("m", "prompts/gone.md"));
-    let notices = providers.add_lua("acme-ext", &lua, &config(&setup, &[]));
+    let notices = providers.add_lua(
+        "acme-ext",
+        &lua,
+        &config(&setup, &[]),
+        &fakes::children::grouped_output,
+    );
     assert!(providers.resolve("acme/a").is_ok());
     assert_eq!(
         providers.addendum(&providers.resolve("acme/a").unwrap()),
@@ -1150,7 +1212,13 @@ fn refresh_lists_starts_only_the_stale_provider_with_a_credential() {
         .iter()
         .map(|(_, provider)| std::sync::Arc::clone(provider))
         .collect();
-    let started = extensions::refresh_lists(&lua, &providers, &config, Some(DAY));
+    let started = extensions::refresh_lists(
+        &lua,
+        &providers,
+        &config,
+        Some(DAY),
+        &fakes::children::grouped_output,
+    );
     assert_eq!(started.len(), 1);
     let names: Vec<&str> = started.iter().map(|(name, _)| name.as_str()).collect();
     assert_eq!(names, ["stale"]);
@@ -1175,7 +1243,13 @@ fn refresh_skips_a_provider_that_did_not_register_models() {
     assert!(lua.refresh(None).is_none());
     assert!(lua.refresh(Some(DAY)).is_none());
     let config = config(&setup, &[]);
-    let started = extensions::refresh_lists(&[lua], &Providers::default(), &config, None);
+    let started = extensions::refresh_lists(
+        &[lua],
+        &Providers::default(),
+        &config,
+        None,
+        &fakes::children::grouped_output,
+    );
     assert!(started.is_empty());
     assert_eq!(cached_ids(&home, "nomodels"), ["old"]);
 }
@@ -1189,7 +1263,7 @@ fn add_lua_without_a_cache_or_a_credential_runs_no_models() {
     // variable: `models()` would fail the test if it ran.
     let lua = lua_bare(&setup, "ext", "acme", "error(\"must not run\")");
     let config = config(&setup, &[]);
-    let notices = providers.add_lua("acme-ext", &lua, &config);
+    let notices = providers.add_lua("acme-ext", &lua, &config, &fakes::children::grouped_output);
     assert!(notices.is_empty(), "{notices:?}");
     assert!(providers.resolve("acme/a").is_ok());
     assert!(
@@ -1277,8 +1351,12 @@ fn add_lua_for_a_provider_with_only_cost_keeps_its_data_models_and_its_handle() 
     let config = config(&setup, &[]);
     // A credential is there and no cache is: only the missing `models`
     // keeps `add_lua` from calling it.
-    assert!(lua.has_credential(&config, providers.get("acme").unwrap()));
-    let notices = providers.add_lua("acme-ext", &lua, &config);
+    assert!(lua.has_credential(
+        &config,
+        providers.get("acme").unwrap(),
+        &fakes::children::grouped_output
+    ));
+    let notices = providers.add_lua("acme-ext", &lua, &config, &fakes::children::grouped_output);
     assert!(notices.is_empty(), "{notices:?}");
     assert!(providers.resolve("acme/a").is_ok());
     assert!(
@@ -1300,7 +1378,12 @@ fn forget_lua_drops_every_handle_and_keeps_the_models() {
     );
     write(&setup.home().join("ext/prompts/m.md"), "Lua says hi.\n");
     let lua = lua_acme(&setup, "ext", &lua_addendum_run("m", "prompts/m.md"));
-    let notices = providers.add_lua("acme-ext", &lua, &config(&setup, &[]));
+    let notices = providers.add_lua(
+        "acme-ext",
+        &lua,
+        &config(&setup, &[]),
+        &fakes::children::grouped_output,
+    );
     assert!(notices.is_empty(), "{notices:?}");
     let weak = std::sync::Arc::downgrade(&lua);
     drop(lua);
@@ -1620,7 +1703,12 @@ fn add_lua_leaves_out_a_models_result_at_an_unlisted_url() {
            { id = \"rogue\", protocol = \"openai-responses\", \
            base_url = \"http://127.0.0.1:2/v1\", context_window = 1000 } }",
     );
-    let notices = providers.add_lua("acme-ext", &lua, &config(&setup, &[]));
+    let notices = providers.add_lua(
+        "acme-ext",
+        &lua,
+        &config(&setup, &[]),
+        &fakes::children::grouped_output,
+    );
     assert!(providers.resolve("acme/listed").is_ok());
     assert!(providers.resolve("acme/rogue").is_err());
     assert_eq!(notices.len(), 1);
@@ -1769,7 +1857,7 @@ fn add_session_drops_the_data_of_an_extension_rejected_for_its_lua() {
     let locks: Arc<dyn contract::files::PathLock> = Arc::new(NoopLock);
     let extensions = SessionExtensions::load(&setup.home(), &config, clock, locks, None);
     assert_eq!(extensions.rejected(), ["c-ext"]);
-    let notices = providers.add_session(&extensions, &config);
+    let notices = providers.add_session(&extensions, &config, &fakes::children::grouped_output);
     assert!(notices.is_empty(), "{notices:?}");
     assert!(providers.get("c").is_none());
     assert!(providers.resolve("d/m").is_ok());
