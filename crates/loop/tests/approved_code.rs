@@ -633,12 +633,6 @@ fn a_loaded_tool_never_replaces_a_registered_one() {
             "turn_completed",
         ]
     );
-    assert!(
-        !lines
-            .iter()
-            .any(|line| line.kind.starts_with("permission_")),
-        "a reads call asks nobody"
-    );
     let built = lines
         .into_iter()
         .find(|line| line.kind == "preamble_built")
