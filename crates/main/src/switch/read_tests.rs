@@ -970,12 +970,17 @@ fn settle_gives_up_at_the_bound() {
     let end = clock.origin() + bound;
     // A spawn held before it spawns: the count stays raised while the test
     // drives the clock.
+    // The marker stays in the late shell's command line, so a leaked late
+    // child still matches: the watchdog reaps the group on every path,
+    // including a failed assertion before the cancel below.
+    let marker = "fiber-settle-gives-up-at-the-bound";
+    let watching = fakes::Watchdog::matching(marker);
     let (entered, is_entered) = mpsc::channel::<()>();
     let (release, freed) = mpsc::channel::<()>();
     reads.pause_at_spawn(entered, freed);
     let held = {
         let reads = Arc::clone(&reads);
-        std::thread::spawn(move || reads.command(&mut sh("sleep 30")))
+        std::thread::spawn(move || reads.command(&mut sh(&format!("sleep 30 # {marker}"))))
     };
     Deadline::after(DEADLINE)
         .recv(&is_entered)
@@ -1010,6 +1015,11 @@ fn settle_gives_up_at_the_bound() {
     let error = fakes::within("the late command", DEADLINE, move || held.join().unwrap())
         .expect_err("a command spawned after the cancel");
     assert_eq!(error.kind(), std::io::ErrorKind::Interrupted);
+    assert!(
+        fakes::matching_exits(marker, DEADLINE),
+        "the late group is gone"
+    );
+    watching.stand_down(DEADLINE);
 }
 
 /// The settle subscribes before it reads the count: on a clock nothing
@@ -1023,12 +1033,17 @@ fn settle_wakes_on_a_clock_advance_with_no_earlier_subscription() {
     let end = clock.origin() + bound;
     // A spawn held before it spawns, on a clock nothing else subscribed:
     // the settle below is the first subscriber.
+    // The marker stays in the late shell's command line, so a leaked late
+    // child still matches: the watchdog reaps the group on every path,
+    // including a failed assertion before the cancel below.
+    let marker = "fiber-settle-wakes-with-no-earlier-subscription";
+    let watching = fakes::Watchdog::matching(marker);
     let (entered, is_entered) = mpsc::channel::<()>();
     let (release, freed) = mpsc::channel::<()>();
     reads.pause_at_spawn(entered, freed);
     let held = {
         let reads = Arc::clone(&reads);
-        std::thread::spawn(move || reads.command(&mut sh("sleep 30")))
+        std::thread::spawn(move || reads.command(&mut sh(&format!("sleep 30 # {marker}"))))
     };
     Deadline::after(DEADLINE)
         .recv(&is_entered)
@@ -1050,6 +1065,11 @@ fn settle_wakes_on_a_clock_advance_with_no_earlier_subscription() {
     let error = fakes::within("the late command", DEADLINE, move || held.join().unwrap())
         .expect_err("a command spawned after the cancel");
     assert_eq!(error.kind(), std::io::ErrorKind::Interrupted);
+    assert!(
+        fakes::matching_exits(marker, DEADLINE),
+        "the late group is gone"
+    );
+    watching.stand_down(DEADLINE);
 }
 
 #[test]

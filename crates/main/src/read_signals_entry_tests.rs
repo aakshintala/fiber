@@ -27,8 +27,8 @@ use super::{models_entry, refresh_entry, terminal_guards};
 /// The registration every test passes: it always refuses, with a message
 /// only `read_signals::guarded` builds into a failure.
 fn refused(
-    _: &Arc<crate::switch::Reads>,
-    _: &Arc<dyn contract::clock::Clock>,
+    _: Arc<crate::switch::Reads>,
+    _: Arc<dyn contract::clock::Clock>,
     _: &[std::ffi::c_int],
 ) -> std::io::Result<super::read_signals::CancelOnSignal> {
     Err(std::io::Error::other("refused-test-guard"))

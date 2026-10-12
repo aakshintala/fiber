@@ -114,20 +114,10 @@ impl Drop for CancelAndSettle {
 }
 
 /// The signal registration an entry point runs: builds its
-/// [`CancelOnSignal`]. A function pointer so the entry points pass
-/// [`register`] and tests pass a refusal.
-pub(crate) type Register = fn(&Arc<Reads>, &Arc<dyn Clock>, &[c_int]) -> io::Result<CancelOnSignal>;
-
-/// The production registration: [`CancelOnSignal::new`] over shared
-/// references. A free function so the entry points pass it as their
-/// registration.
-pub(crate) fn register(
-    reads: &Arc<Reads>,
-    clock: &Arc<dyn Clock>,
-    signals: &[c_int],
-) -> io::Result<CancelOnSignal> {
-    CancelOnSignal::new(Arc::clone(reads), Arc::clone(clock), signals)
-}
+/// [`CancelOnSignal`]. Takes owned [`Arc`]s so the entry points pass
+/// [`CancelOnSignal::new`] directly; tests pass a refusal. A function
+/// pointer so `guarded` stays injectable.
+pub(crate) type Register = fn(Arc<Reads>, Arc<dyn Clock>, &[c_int]) -> io::Result<CancelOnSignal>;
 
 /// Builds an entry point's guards in drop order: the plain cancel, then
 /// the signal watcher, so a taken signal's watcher finishes before the
@@ -140,7 +130,7 @@ pub(crate) fn guarded(
     signals: &[c_int],
     register: Register,
 ) -> Result<(CancelAndSettle, CancelOnSignal), Failure> {
-    match register(reads, clock, signals) {
+    match register(Arc::clone(reads), Arc::clone(clock), signals) {
         Ok(watcher) => Ok((
             CancelAndSettle(Arc::clone(reads), Arc::clone(clock)),
             watcher,

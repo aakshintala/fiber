@@ -267,7 +267,17 @@ fn a_dropped_guard_leaves_a_later_signal_unhandled_by_the_callback() {
     let clock: Arc<dyn Clock> = FakeClock::new();
     let reads = Arc::new(Reads::default());
     let (is_fired, guard) = arm_recording(&reads, &clock, &[SIGUSR1]);
-    drop(guard);
+    // The drop runs on a thread of its own: its return arrives through
+    // `Deadline`, so a join that hung would fail here instead of hanging
+    // the test binary.
+    let (dropped, is_dropped) = mpsc::channel::<()>();
+    std::thread::spawn(move || {
+        drop(guard);
+        dropped.send(()).unwrap_or(());
+    });
+    Deadline::after(DEADLINE)
+        .recv(&is_dropped)
+        .expect("the guard's drop");
     // SIGUSR1 has no other handler in this test, so the test registers its
     // own before raising: the raise reaches that registration, never the
     // dropped guard's callback, and the process survives.

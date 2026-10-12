@@ -172,10 +172,10 @@ fn run() -> i32 {
             ),
         },
         cli::Invocation::Run(Some(cli::Commands::Models(args))) => {
-            models_entry(args, clock, fiber, read_signals::register)
+            models_entry(args, clock, fiber, read_signals::CancelOnSignal::new)
         }
         cli::Invocation::Run(Some(cli::Commands::RefreshModelLists { providers })) => {
-            refresh_entry(&providers, clock, read_signals::register)
+            refresh_entry(&providers, clock, read_signals::CancelOnSignal::new)
         }
         cli::Invocation::Run(Some(cli::Commands::ReleaseInstall { version, base_url })) => {
             ::cli::release_install(
@@ -585,10 +585,11 @@ fn terminal(fiber: Result<PathBuf, String>, open_at: tui::OpenAt) -> i32 {
     // The entry point's guards before the picker reader: a refused
     // registration returns before any credential command starts, and a
     // normal quit cancels once `tui::run` returns.
-    let (reads, _cancel, _watcher) = match terminal_guards(&clock, read_signals::register) {
-        Ok(guards) => guards,
-        Err(error) => return fail(error),
-    };
+    let (reads, _cancel, _watcher) =
+        match terminal_guards(&clock, read_signals::CancelOnSignal::new) {
+            Ok(guards) => guards,
+            Err(error) => return fail(error),
+        };
     // The picker's model lists: the cached copy at once, refreshed in the
     // background (`docs/model-routing.md`, "Model discovery"). The lock
     // is the one `fiber models` uses: a refresh beside another process
