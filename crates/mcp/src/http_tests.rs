@@ -3,7 +3,7 @@
 //! [`ProviderServer::requests`], recorded before the response is sent, so
 //! no row depends on arrival order.
 
-use std::io::{Read, Write};
+use std::io::Read;
 use std::net::{TcpListener, TcpStream};
 use std::sync::Arc;
 use std::thread;
@@ -1997,194 +1997,6 @@ fn a_server_without_the_resources_capability_offers_none() {
     assert!(!listed.resources, "no resources capability offers none",);
 }
 
-/// Reads one HTTP request from `stream`: the method and the body by
-/// `content-length`. One request per connection, as the client sends.
-fn read_request(stream: &mut TcpStream) -> std::io::Result<(String, Vec<u8>)> {
-    use std::io::BufRead;
-    let mut reader = std::io::BufReader::new(stream.try_clone()?);
-    let mut head = String::new();
-    reader.read_line(&mut head)?;
-    let method = head
-        .split_whitespace()
-        .next()
-        .unwrap_or_default()
-        .to_owned();
-    let mut length = 0usize;
-    loop {
-        let mut line = String::new();
-        reader.read_line(&mut line)?;
-        if line.trim().is_empty() {
-            break;
-        }
-        if let Some((name, value)) = line.split_once(':')
-            && name.trim().eq_ignore_ascii_case("content-length")
-        {
-            length = value.trim().parse().unwrap_or(0);
-        }
-    }
-    let mut body = vec![0u8; length];
-    reader.read_exact(&mut body)?;
-    Ok((method, body))
-}
-
-/// Writes one HTTP response with `headers` and closes the connection.
-fn write_response(stream: &mut TcpStream, status: u16, headers: &[(&str, &str)], body: &[u8]) {
-    let mut head = format!("HTTP/1.1 {status} Fake\r\n");
-    for (name, value) in headers {
-        head.push_str(&format!("{name}: {value}\r\n"));
-    }
-    head.push_str(&format!(
-        "content-length: {}\r\nconnection: close\r\n\r\n",
-        body.len()
-    ));
-    stream.write_all(head.as_bytes()).expect("the fake writes");
-    stream.write_all(body).expect("the fake writes");
-    stream.flush().expect("the fake flushes");
-}
-
-/// The `id` of a JSON-RPC body, `Null` when it has none.
-fn body_id(body: &[u8]) -> Value {
-    serde_json::from_slice::<Value>(body)
-        .ok()
-        .and_then(|value| value.get("id").cloned())
-        .unwrap_or(Value::Null)
-}
-
-/// A raw streamable-HTTP fake whose `tools/call` stream is gated: the
-/// handshake and `tools/list` are answered as JSON, and the call's
-/// stream carries the elicitation first and the call's answer only after
-/// the client's POST of the elicitation's answer arrives. The ask is
-/// therefore always observed before the answer lands: no scheduler order
-/// can flip the elicitation to the remover's decline. Every request body
-/// is recorded in arrival order.
-struct Gated {
-    /// The fake's `/mcp` URL.
-    url: String,
-    /// Every request body, in arrival order.
-    bodies: Arc<std::sync::Mutex<Vec<Vec<u8>>>>,
-}
-
-impl Gated {
-    /// Starts the fake serving one `tools/call` `elicitation`, answered
-    /// with `answer` once the elicitation is answered.
-    fn start(elicitation: String, answer: Value) -> Self {
-        let listener = TcpListener::bind("127.0.0.1:0").expect("the fake binds");
-        let url = format!("http://{}/mcp", listener.local_addr().expect("an address"));
-        let bodies = Arc::new(std::sync::Mutex::new(Vec::new()));
-        let recorded = Arc::clone(&bodies);
-        thread::spawn(move || Self::serve(listener, recorded, elicitation, answer));
-        Self { url, bodies }
-    }
-
-    /// The elicitation answer bodies: every recorded body with
-    /// `id == "el-1"`, in arrival order.
-    fn elicitation_answers(&self) -> Vec<Value> {
-        self.bodies
-            .lock()
-            .expect("recorded")
-            .iter()
-            .filter_map(|body| serde_json::from_slice::<Value>(body).ok())
-            .filter(|body| body.get("id") == Some(&json!("el-1")))
-            .collect()
-    }
-
-    fn serve(
-        listener: TcpListener,
-        bodies: Arc<std::sync::Mutex<Vec<Vec<u8>>>>,
-        elicitation: String,
-        answer: Value,
-    ) {
-        let accept = || {
-            let (mut stream, _) = listener.accept().expect("a request arrives");
-            let (method, body) = read_request(&mut stream).expect("a request reads");
-            (stream, method, body)
-        };
-        let record = |body: Vec<u8>| bodies.lock().expect("recorded").push(body);
-        // The handshake: initialize as JSON with a session id,
-        // notifications `202`, `tools/list` as JSON.
-        let (mut stream, _, body) = accept();
-        let id = body_id(&body);
-        record(body);
-        let initialized = result(
-            &id,
-            json!({
-                "protocolVersion": "2025-06-18",
-                "capabilities": {"tools": {}},
-                "serverInfo": {"name": "remote", "version": "1"},
-            }),
-        );
-        write_response(
-            &mut stream,
-            200,
-            &[
-                ("content-type", "application/json"),
-                ("mcp-session-id", SESSION),
-            ],
-            initialized.as_bytes(),
-        );
-        let (mut stream, _, body) = accept();
-        record(body);
-        write_response(&mut stream, 202, &[], b"");
-        let (mut stream, _, body) = accept();
-        let id = body_id(&body);
-        record(body);
-        let listed = result(
-            &id,
-            json!({"tools": [{"name": "echo", "description": "Echoes.", "inputSchema": {"type": "object"}}]}),
-        );
-        write_response(
-            &mut stream,
-            200,
-            &[("content-type", "application/json")],
-            listed.as_bytes(),
-        );
-        // The call's stream: the elicitation first, held open. The
-        // call's answer goes out only after the client's POST of the
-        // elicitation's answer arrives below.
-        let (mut stream, _) = listener.accept().expect("the call arrives");
-        let (_, call_body) = read_request(&mut stream).expect("the call reads");
-        let call_id = body_id(&call_body);
-        record(call_body);
-        stream
-            .write_all(
-                b"HTTP/1.1 200 Fake\r\ncontent-type: text/event-stream\r\nconnection: close\r\n\r\n",
-            )
-            .expect("the stream head writes");
-        stream
-            .write_all(format!("event: message\ndata: {elicitation}\n\n").as_bytes())
-            .expect("the elicitation writes");
-        stream.flush().expect("the elicitation flushes");
-        // The next POST is the elicitation's answer: `202` it, then send
-        // the call's answer when it accepts, or close unanswered when it
-        // declines (without asker forwarding the remover declines, and
-        // the ask wait below fails the test first).
-        let (mut answered_conn, _, body) = accept();
-        let answered: Value = serde_json::from_slice(&body).unwrap_or(Value::Null);
-        record(body);
-        write_response(&mut answered_conn, 202, &[], b"");
-        if answered.get("result") == Some(&json!({"action": "accept", "content": {"name": "prod"}}))
-        {
-            let done = result(&call_id, answer);
-            stream
-                .write_all(format!("event: message\ndata: {done}\n\n").as_bytes())
-                .expect("the answer writes");
-            stream.flush().expect("the answer flushes");
-        }
-        drop(stream);
-        // Drain until goodbye: anything else gets `202`, `DELETE` ends
-        // the fake with `200`.
-        loop {
-            let (mut stream, method, body) = accept();
-            record(body);
-            if method == "DELETE" {
-                write_response(&mut stream, 200, &[], b"");
-                return;
-            }
-            write_response(&mut stream, 202, &[], b"");
-        }
-    }
-}
-
 #[test]
 fn a_streamed_elicitation_gets_exactly_one_answer() {
     // Over streamable HTTP the elicitation arrives as a stream event,
@@ -2209,11 +2021,11 @@ fn a_streamed_elicitation_gets_exactly_one_answer() {
         },
     })
     .to_string();
-    let gated = Gated::start(
+    let gated = fakes::GatedHttp::start_call(
         elicitation,
         json!({"content": [{"type": "text", "text": "hi"}]}),
     );
-    let remote = setup.start_at(&gated.url, Duration::from_secs(5));
+    let remote = setup.start_at(&gated.url(), Duration::from_secs(5));
     let (ask, seen, send) = crate::elicit::tests::FakeAsk::held("a_5");
     let (done, result) = std::sync::mpsc::channel();
     {
