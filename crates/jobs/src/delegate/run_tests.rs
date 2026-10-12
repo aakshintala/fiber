@@ -104,8 +104,14 @@ impl Script {
                 Ok(Watched::Closed)
             }
             Some(WatchReply::Exited(lines)) => {
+                // As the real watch: the first delivered `fiber_exited`
+                // ends the watch, so a replayed earlier run's end never
+                // stands in for this run's.
                 for line in lines.iter().filter(|line| deliver(line)) {
                     on_line(line);
+                    if line.kind == "fiber_exited" {
+                        break;
+                    }
                 }
                 Ok(Watched::Exited)
             }
@@ -1598,4 +1604,67 @@ fn the_watch_stats_the_log_once_per_poll_interval() {
     run_watch(&clock, &shared, &last_check, Arc::clone(&stat), cap, 7..8);
     assert_eq!(*stats.lock().unwrap(), 2, "past the interval it stats");
     assert_eq!(shared.reason(), Some(Termination::OutputCap));
+}
+
+#[test]
+fn the_watch_boundary_skips_an_earlier_run_exit() {
+    // The child prints the same line the watch delivers for this run:
+    // whether the reap or the watch wins the race, the fold sees the
+    // live run's `fiber_exited`, never the replayed earlier one.
+    let line = json_line(9, "New.");
+    let rig = rig(vec![WatchReply::Exited(vec![
+        fiber_exited_line(5, "Old."),
+        fiber_exited_line(9, "New."),
+    ])]);
+    let watchdog = Watchdog::matching("fiber-delegate-boundary");
+    rig.start_after(
+        &format!(": fiber-delegate-boundary; printf '%s\\n' '{line}'; exit 0"),
+        BOUND,
+        1024,
+        Some(5),
+    );
+    let notice = reported(&rig);
+    assert_eq!(notice.completed.status, Outcome::Completed);
+    assert_eq!(
+        notice.delegate.as_ref().map(|finish| finish.text.clone()),
+        Some("New.".into())
+    );
+    assert!(
+        !rig.script.afters().is_empty()
+            && rig.script.afters().iter().all(|after| *after == Some(5)),
+        "every watch call passes the boundary: {:?}",
+        rig.script.afters()
+    );
+    watchdog.stand_down(DEADLINE);
+}
+
+#[test]
+fn no_boundary_takes_the_first_replayed_exit_as_today() {
+    // The child prints the same line the watch delivers first: whether
+    // the reap or the watch wins the race, the fold sees that exit, as
+    // it did before any boundary.
+    let line = json_line(5, "Old.");
+    let rig = rig(vec![WatchReply::Exited(vec![
+        fiber_exited_line(5, "Old."),
+        fiber_exited_line(9, "New."),
+    ])]);
+    let watchdog = Watchdog::matching("fiber-delegate-no-boundary");
+    rig.start(
+        &format!(": fiber-delegate-no-boundary; printf '%s\\n' '{line}'; exit 0"),
+        BOUND,
+        1024,
+    );
+    let notice = reported(&rig);
+    assert_eq!(notice.completed.status, Outcome::Completed);
+    assert_eq!(
+        notice.delegate.as_ref().map(|finish| finish.text.clone()),
+        Some("Old.".into())
+    );
+    assert!(
+        !rig.script.afters().is_empty()
+            && rig.script.afters().iter().all(|after| *after == None),
+        "every watch call passes no boundary: {:?}",
+        rig.script.afters()
+    );
+    watchdog.stand_down(DEADLINE);
 }
