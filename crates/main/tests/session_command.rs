@@ -25,8 +25,8 @@ use std::thread;
 use fakes::{ProviderServer, Response, Watchdog};
 use serde_json::{Value, json};
 use support::{
-    Deadline, PIXEL, PIXEL_BASE64, Setup, function_call, git, group_alive, hello, kinds, stream,
-    text_reply, write_json,
+    Deadline, PIXEL, PIXEL_BASE64, Setup, complete_lines, function_call, git, group_alive, hello,
+    kinds, stream, text_reply, write_json,
 };
 
 impl Setup {
@@ -2727,7 +2727,7 @@ fn a_session_in_a_worktree_it_made_keeps_the_worktree_when_dirty() {
     // client, so nothing else moves.
     running.wait_for("extensions_loaded");
     let events = fs::read_to_string(setup.session_dir(&id).join("events.jsonl")).unwrap();
-    let started: Value = serde_json::from_str(events.lines().next().unwrap()).unwrap();
+    let started: Value = complete_lines(&events).into_iter().next().unwrap();
     assert_eq!(started["kind"], "session_started");
     let workspace = started["payload"]["workspace"].as_str().unwrap();
     let worktree = &started["payload"]["worktree"];

@@ -331,8 +331,8 @@ fn bodies(server: &ProviderServer) -> Vec<Value> {
 /// The durable kinds of the session log: every line with a `seq`.
 fn log_kinds(setup: &Setup, id: &str) -> Vec<String> {
     let log = fs::read_to_string(session_dir(setup, id).join("events.jsonl")).unwrap();
-    log.lines()
-        .map(|line| serde_json::from_str::<Value>(line).unwrap())
+    complete_lines(&log)
+        .into_iter()
         .filter(|line| line.get("seq").is_some())
         .map(|line| line["kind"].as_str().unwrap().to_owned())
         .collect()

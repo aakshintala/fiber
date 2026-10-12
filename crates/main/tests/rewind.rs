@@ -78,10 +78,8 @@ fn until_rejected(client: &Socket, what: &str, id: &str) -> Value {
 /// The log of session `id`, wherever its project is.
 fn session_log(setup: &Setup, id: &str) -> Vec<Value> {
     fs::read_to_string(session_log_path(setup, id))
+        .map(|text| complete_lines(&text))
         .unwrap()
-        .lines()
-        .map(|line| serde_json::from_str(line).unwrap())
-        .collect()
 }
 
 fn session_log_path(setup: &Setup, id: &str) -> PathBuf {
