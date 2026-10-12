@@ -22,6 +22,7 @@ mod open;
 mod open_at;
 mod prompt;
 mod reset;
+mod typed;
 mod workspace;
 
 use open::Subscriptions;
