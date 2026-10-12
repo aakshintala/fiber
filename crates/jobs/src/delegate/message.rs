@@ -125,9 +125,12 @@ enum AttemptMsg {
 enum Attempt {
     /// The call is answered.
     Done(Output),
-    /// Steer again, waiting the backoff first only after `Gone`; at once
-    /// after `Withheld`.
+    /// Ask `target` again: after the backoff past `Gone`, at once past
+    /// `Withheld`.
     Again(Duration),
+    /// Steer the live run another message started: the commit still
+    /// refuses a run that ended since, so a stale pair is safe.
+    Found(SessionId, u64),
 }
 
 fn lock<T>(state: &Mutex<T>) -> MutexGuard<'_, T> {
@@ -223,66 +226,60 @@ impl DelegateMessage {
         }));
         let park = Arc::new(Parker::new());
         cancel.subscribe(Arc::downgrade(&park) as Weak<dyn Wake>);
-        loop {
-            match self.registry.target(&id) {
-                Target::Unknown => {
-                    let message = super::super::tool::unknown_message(&id);
-                    return fail(ErrorCode::InvalidArguments, message);
-                }
-                Target::NotDelegate => {
-                    return fail(
-                        ErrorCode::InvalidArguments,
-                        format!("Job `{id}` is not a delegate."),
-                    );
-                }
-                Target::Live(session, run) => {
-                    return self.steer_loop(&session, run, &command, &id, &message, &action, &gate, &park, cancel, emit);
-                }
-                Target::Ended => {
-                    return self.resume_now(&id, &message, &action, cancel, &gate, &command, &park, emit);
-                }
-            }
-        }
-    }
-
-    /// Steers the live run until the call is answered: one command id,
-    /// one gate, resends to the same run only.
-    #[allow(
-        clippy::too_many_arguments,
-        reason = "steering carries the call's whole context"
-    )]
-    fn steer_loop(
-        &self,
-        session: &SessionId,
-        run: u64,
-        command: &str,
-        id: &str,
-        message: &str,
-        action: &Option<ActionId>,
-        gate: &Arc<Mutex<SteerGate>>,
-        park: &Arc<Parker>,
-        cancel: &dyn Cancel,
-        emit: &dyn Emit,
-    ) -> Output {
+        // Timeouts are read off the session clock: a clock move wakes
+        // the park, and the wait re-reads its deadline.
+        self.clock.subscribe(Arc::downgrade(&park) as Weak<dyn Wake>);
         let mut backoff = super::run::START_BACKOFF;
         let mut emitted = false;
+        // The live run to steer: from `target`, or from a resume that
+        // found one. A stale pair is safe: the commit refuses a run that
+        // ended since.
+        let mut pending: Option<(SessionId, u64)> = None;
         loop {
-            if let Some(sent) = lock(gate).sent_to
+            let (session, run) = match pending.take() {
+                Some(pair) => pair,
+                None => match self.registry.target(&id) {
+                    Target::Unknown => {
+                        let message = super::super::tool::unknown_message(&id);
+                        return fail(ErrorCode::InvalidArguments, message);
+                    }
+                    Target::NotDelegate => {
+                        return fail(
+                            ErrorCode::InvalidArguments,
+                            format!("Job `{id}` is not a delegate."),
+                        );
+                    }
+                    Target::Live(session, run) => (session, run),
+                    Target::Ended => {
+                        match self.resume_now(&id, &message, &action, cancel, &gate) {
+                            Attempt::Done(output) => return output,
+                            Attempt::Found(session, run) => (session, run),
+                            // A resume answers or finds; never waits.
+                            Attempt::Again(_) => continue,
+                        }
+                    }
+                },
+            };
+            if let Some(sent) = lock(&gate).sent_to
                 && sent != run
             {
-                return unanswered(id);
+                return unanswered(&id);
             }
             match self.attempt(
-                session, command, id, message, run, backoff, action, gate, park,
-                cancel, emit, &mut emitted,
+                &session, &command, &id, &message, run, backoff, &action, &gate,
+                &park, cancel, emit, &mut emitted,
             ) {
                 Attempt::Done(output) => return output,
                 Attempt::Again(wait) => {
                     backoff = wait;
                 }
+                Attempt::Found(session, run) => {
+                    pending = Some((session, run));
+                }
             }
         }
     }
+
     /// while this thread parks on its answer, the queued mark and the
     /// cancel. The thread is never joined: it holds nothing this thread
     /// or the registry needs.
@@ -343,7 +340,6 @@ impl DelegateMessage {
             if let Some(steered) = self.pump(&rx, &id, emit, emitted) {
                 return self.answer(
                     steered, &id, &message, run, backoff, &action, &gate, cancel,
-                    &command, &park, emit,
                 );
             }
             if cancel.is_cancelled() {
@@ -353,7 +349,6 @@ impl DelegateMessage {
             if let Some(steered) = self.pump(&rx, &id, emit, emitted) {
                 return self.answer(
                     steered, &id, &message, run, backoff, &action, &gate, cancel,
-                    &command, &park, emit,
                 );
             }
             if cancel.is_cancelled() {
@@ -409,9 +404,6 @@ impl DelegateMessage {
         action: &Option<ActionId>,
         gate: &Arc<Mutex<SteerGate>>,
         cancel: &dyn Cancel,
-        command: &str,
-        park: &Arc<Parker>,
-        emit: &dyn Emit,
     ) -> Attempt {
         match steered {
             Steered::Accepted => Attempt::Done(Output {
@@ -423,9 +415,7 @@ impl DelegateMessage {
                 ..Output::default()
             }),
             Steered::Rejected(failure) => match failure.code {
-                ErrorCode::Closing => self.closing(
-                    id, message, run, action, gate, cancel, command, park, emit,
-                ),
+                ErrorCode::Closing => self.closing(id, message, run, action, gate, cancel),
                 ErrorCode::DuplicateCommand => Attempt::Done(lost(id)),
                 _ => Attempt::Done(self.refused(id, failure)),
             },
@@ -485,9 +475,6 @@ impl DelegateMessage {
         action: &Option<ActionId>,
         gate: &Arc<Mutex<SteerGate>>,
         cancel: &dyn Cancel,
-        command: &str,
-        park: &Arc<Parker>,
-        emit: &dyn Emit,
     ) -> Attempt {
         lock(gate).sent_to = None;
         let until = self
@@ -496,9 +483,7 @@ impl DelegateMessage {
             .checked_add(self.bound)
             .unwrap_or_else(|| self.clock.now());
         match self.registry.await_end(id, run, until, cancel) {
-            Waited::Ended => Attempt::Done(self.resume_now(
-                id, message, action, cancel, gate, command, park, emit,
-            )),
+            Waited::Ended => self.resume_now(id, message, action, cancel, gate),
             Waited::Timeout => Attempt::Done(fail(
                 ErrorCode::Closing,
                 format!(
@@ -523,45 +508,40 @@ impl DelegateMessage {
         action: &Option<ActionId>,
         cancel: &dyn Cancel,
         gate: &Arc<Mutex<SteerGate>>,
-        command: &str,
-        park: &Arc<Parker>,
-        emit: &dyn Emit,
-    ) -> Output {
+    ) -> Attempt {
         if lock(gate).sent_to.is_some() {
-            return unanswered(id);
+            return Attempt::Done(unanswered(id));
         }
         // A cancel after this check can still start the resume: the run
         // exists, and its start must be logged.
         if cancel.is_cancelled() {
-            return nothing_delivered(id);
+            return Attempt::Done(nothing_delivered(id));
         }
         match self.resume(id, message, action.clone()) {
-            Ok(resumed) => resumed_receipt(id, resumed),
+            Ok(resumed) => Attempt::Done(resumed_receipt(id, resumed)),
             Err(Resume::Unknown) => {
                 let message = super::super::tool::unknown_message(id);
-                fail(ErrorCode::InvalidArguments, message)
+                Attempt::Done(fail(ErrorCode::InvalidArguments, message))
             }
-            Err(Resume::NotDelegate) => fail(
+            Err(Resume::NotDelegate) => Attempt::Done(fail(
                 ErrorCode::InvalidArguments,
                 format!("Job `{id}` is not a delegate."),
-            ),
-            Err(Resume::Live(session, run)) => self.steer_loop(
-                &session, run, command, id, message, action, gate, park, cancel, emit,
-            ),
-            Err(Resume::Exhausted) => fail(
+            )),
+            Err(Resume::Live(session, run)) => Attempt::Found(session, run),
+            Err(Resume::Exhausted) => Attempt::Done(fail(
                 ErrorCode::ToolError,
                 format!("Delegate {id} cannot run again: its run count is exhausted."),
-            ),
-            Err(Resume::Start(StartFailed::Boundary(reason))) => fail(
+            )),
+            Err(Resume::Start(StartFailed::Boundary(reason))) => Attempt::Done(fail(
                 ErrorCode::ToolError,
                 format!(
                     "Resuming delegate {id} failed: its log could not be read: {reason}. Nothing was started."
                 ),
-            ),
-            Err(Resume::Start(StartFailed::Spawn(source))) => fail(
+            )),
+            Err(Resume::Start(StartFailed::Spawn(source))) => Attempt::Done(fail(
                 ErrorCode::ToolError,
                 format!("Resuming the delegate failed: {source}."),
-            ),
+            )),
         }
     }
 
