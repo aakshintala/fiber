@@ -299,9 +299,8 @@ impl Bearer {
             .map_err(|()| {
                 "Fiber could not reach its token endpoint to renew the login.".to_owned()
             })?;
-        if wait.stopped() {
-            return Err(UNUSABLE.to_owned());
-        }
+        // A successful reply may rotate the refresh token even after the
+        // request stops; persist it so the next request can still renew.
         if !(200..300).contains(&status) {
             return Err(REJECTED.to_owned());
         }

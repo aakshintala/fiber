@@ -12,12 +12,7 @@ impl Refresh for TestRefresh {
         false
     }
     fn pause(&self) {
-        let (_sender, receiver) = mpsc::channel::<()>();
-        assert!(
-            Deadline::after(std::time::Duration::from_millis(20))
-                .recv(&receiver)
-                .is_err()
-        );
+        std::thread::yield_now();
     }
     fn post(&self, url: &str, form: &[(&str, &str)]) -> Result<(u16, Vec<u8>), ()> {
         use std::io::Read;
@@ -170,6 +165,33 @@ fn refresh_rotates_and_sends_the_exact_resource_form() {
             ("resource".into(), "https://h/x".into())
         ]
     );
+}
+#[test]
+fn refresh_saves_rotated_tokens_when_stopped_after_post() {
+    struct StoppedAfterPost(AtomicBool);
+    impl Refresh for StoppedAfterPost {
+        fn stopped(&self) -> bool {
+            self.0.load(Ordering::Acquire)
+        }
+        fn pause(&self) {
+            TestRefresh.pause();
+        }
+        fn post(&self, url: &str, form: &[(&str, &str)]) -> Result<(u16, Vec<u8>), ()> {
+            let reply = TestRefresh.post(url, form)?;
+            self.0.store(true, Ordering::Release);
+            Ok(reply)
+        }
+    }
+    let server = OauthServer::start(vec![OauthReply::token("at-2", "rt-2", 3600)]);
+    let (_setup, files, bearer) = fixture(&server.url(), Some(0));
+    fakes::within("refresh stopped after reply", WITHIN, move || {
+        let wait = StoppedAfterPost(AtomicBool::new(false));
+        let result = bearer.authorization(&wait);
+        assert!(wait.stopped());
+        assert_eq!(record(&files)["generation"], 2);
+        assert_eq!(record(&files)["refresh_token"], "rt-2");
+        assert_eq!(result.unwrap(), Authorization::Send("Bearer at-2".into()));
+    });
 }
 #[test]
 fn optional_refresh_fields_and_saturating_expiry() {
