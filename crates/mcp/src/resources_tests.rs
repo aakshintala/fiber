@@ -970,6 +970,92 @@ fn a_malformed_list_or_read_is_a_tool_error() {
     setup.stop(started.servers);
 }
 
+/// A fake remote MCP server answering `resources/list` without a resource
+/// list and `resources/read` without its contents, except that the first
+/// request of `dying` drops its connection: that call dies, and the next
+/// call restarts the server, so its record is `Ready`.
+fn malformed_server_dying_once(dying: Option<&'static str>) -> fakes::ProviderServer {
+    let died = std::sync::atomic::AtomicBool::new(false);
+    fakes::ProviderServer::start_responding(move |req: &fakes::Request| {
+        if req.method == "DELETE" {
+            return fakes::Response::status(200, "");
+        }
+        let body: Value = serde_json::from_slice(&req.body).unwrap_or(Value::Null);
+        let id = body.get("id").cloned().unwrap_or(Value::Null);
+        let result =
+            |result: Value| json!({"jsonrpc": "2.0", "id": id, "result": result}).to_string();
+        let method = body.get("method").and_then(Value::as_str);
+        if method.is_some()
+            && method == dying
+            && !died.swap(true, std::sync::atomic::Ordering::SeqCst)
+        {
+            return fakes::Response::drop_connection();
+        }
+        match body.get("method").and_then(Value::as_str) {
+            Some("initialize") => fakes::Response::status(
+                200,
+                result(json!({
+                    "protocolVersion": "2025-06-18",
+                    "capabilities": {"tools": {}, "resources": {}},
+                    "serverInfo": {"name": "remote", "version": "1"},
+                })),
+            )
+            .header("mcp-session-id", "1868a90c"),
+            Some("notifications/initialized") | Some("notifications/cancelled") | None => {
+                fakes::Response::status(202, "")
+            }
+            Some("tools/list") => fakes::Response::status(200, result(json!({"tools": []}))),
+            Some("resources/list") => {
+                fakes::Response::status(200, result(json!({"nextCursor": "p2"})))
+            }
+            Some("resources/read") => {
+                fakes::Response::status(200, result(json!({"contents": {"text": "hi"}})))
+            }
+            Some(other) => panic!("unexpected method {other}"),
+        }
+    })
+    .unwrap()
+}
+
+#[test]
+fn a_malformed_answer_after_a_restart_carries_the_ready_server() {
+    // A malformed answer still names the ready server, so the records are
+    // nonempty: an already-running server would leave them empty. Each arm
+    // runs against its own server, because only the call that restarts a
+    // server carries its `Ready` record, and a second death would leave
+    // the slot dead instead of restarting it again.
+    assert!(!ready_docs().is_empty());
+    for (method, arguments, message) in [
+        (
+            "resources/list",
+            json!({"action": "list", "server": "docs"}),
+            "The MCP server `docs` answered `resources/list` without a resource list.",
+        ),
+        (
+            "resources/read",
+            json!({"action": "read", "server": "docs", "uri": "file:///x"}),
+            "The MCP server `docs` answered `resources/read` without its contents.",
+        ),
+    ] {
+        let setup = Setup::new();
+        let server = malformed_server_dying_once(Some(method));
+        let started = live(&setup, &server, "docs");
+        let tool = live_tool(&started, setup.artifacts().as_path());
+        let died = run(&tool, arguments.clone());
+        assert!(died.error.is_some(), "the first {method} dies");
+        let out = run(&tool, arguments);
+        let failure = out.error.expect("failed");
+        assert_eq!(failure.code, ErrorCode::ToolError);
+        assert_eq!(failure.message, message);
+        assert_eq!(
+            out.servers,
+            ready_docs(),
+            "malformed {method} keeps its records"
+        );
+        setup.stop(started.servers);
+    }
+}
+
 #[test]
 fn the_first_starts_tool_reaches_an_adopted_server() {
     let setup = Setup::new();
