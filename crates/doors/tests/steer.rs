@@ -43,9 +43,11 @@ impl Commit {
     }
 }
 
-/// Runs `steer` on a thread; its outcome arrives on the returned channel
-/// under [`DEADLINE`]. The commit counts its calls and answers `allow`;
-/// `on_queued` counts its own.
+/// Runs `steer` on a thread; its outcome arrives on the first returned
+/// channel under [`DEADLINE`], one item per `on_queued` run on the
+/// second. The commit counts its calls and answers `allow`; `on_queued`
+/// counts its own and signals. A test that needs the probe's proof
+/// before it answers waits for the signal first.
 fn spawn_steer(
     home: std::path::PathBuf,
     id: SessionId,
@@ -54,17 +56,23 @@ fn spawn_steer(
     calls: Arc<AtomicUsize>,
     queued: Arc<AtomicUsize>,
     allow: bool,
-) -> mpsc::Receiver<Steered> {
+) -> (
+    mpsc::Receiver<Steered>,
+    mpsc::Receiver<()>,
+    thread::JoinHandle<()>,
+) {
     let (done_tx, done_rx) = mpsc::channel();
+    let (queued_tx, queued_rx) = mpsc::channel();
     let (called_tx, _) = mpsc::channel();
-    thread::spawn(move || {
+    let handle = thread::spawn(move || {
         let mut commit = Commit {
             calls,
             allow,
             called: called_tx,
         };
-        let mut on_queued = || {
+        let mut on_queued = move || {
             queued.fetch_add(1, Ordering::SeqCst);
+            let _sent = queued_tx.send(());
         };
         let outcome = doors::steer(
             &home,
@@ -76,7 +84,7 @@ fn spawn_steer(
         );
         let _sent = done_tx.send(outcome);
     });
-    done_rx
+    (done_rx, queued_rx, handle)
 }
 
 fn steered(rx: &mpsc::Receiver<Steered>) -> Steered {
@@ -84,8 +92,7 @@ fn steered(rx: &mpsc::Receiver<Steered>) -> Steered {
 }
 
 /// One command line the socket read, parsed.
-fn commanded(stream: &UnixStream) -> serde_json::Value {
-    let mut reader = BufReader::new(stream.try_clone().unwrap());
+fn commanded(reader: &mut BufReader<UnixStream>) -> serde_json::Value {
     let mut raw = String::new();
     reader.read_line(&mut raw).unwrap();
     serde_json::from_str(&raw).unwrap()
@@ -116,7 +123,7 @@ fn an_accepted_steer_delivers_one_text_part_after_the_probe_proved_it_queued() {
     let command = mint("c_");
     let calls = Arc::new(AtomicUsize::new(0));
     let queued = Arc::new(AtomicUsize::new(0));
-    let answered = spawn_steer(
+    let (answered, queued_rx, steered_in) = spawn_steer(
         home,
         id,
         command,
@@ -141,11 +148,18 @@ fn an_accepted_steer_delivers_one_text_part_after_the_probe_proved_it_queued() {
                 }],
                 "the delivered content is one text part with the message"
             );
+            // The probe's answer proves the message is queued: the
+            // accept below is answered only after it arrived, so its
+            // order against the steer's own answer is not a race.
+            Deadline::after(DEADLINE)
+                .recv(&queued_rx)
+                .expect("the probe proved it queued before the accept");
             ack.0(Ok(None));
             Ok(())
         })
         .unwrap();
     assert_eq!(steered(&answered), Steered::Accepted);
+    steered_in.join().expect("the steer thread ended");
     assert_eq!(calls.load(Ordering::SeqCst), 1, "commit ran once");
     assert_eq!(
         queued.load(Ordering::SeqCst),
@@ -162,7 +176,7 @@ fn a_rejected_steer_reports_its_code_and_message() {
     let id = opened.id.clone();
     let calls = Arc::new(AtomicUsize::new(0));
     let queued = Arc::new(AtomicUsize::new(0));
-    let answered = spawn_steer(
+    let (answered, _queued, steered_in) = spawn_steer(
         home,
         id,
         mint("c_"),
@@ -191,6 +205,7 @@ fn a_rejected_steer_reports_its_code_and_message() {
         steered(&answered),
         Steered::Rejected(doors::failure(ErrorCode::MessageRefused, "not now"))
     );
+    steered_in.join().expect("the steer thread ended");
     assert_eq!(calls.load(Ordering::SeqCst), 1, "commit ran once");
     close_within(opened.session, opened.log);
 }
@@ -201,7 +216,7 @@ fn a_steer_without_a_socket_is_gone_with_no_commit() {
     let home = temp.0.join("h");
     let calls = Arc::new(AtomicUsize::new(0));
     let queued = Arc::new(AtomicUsize::new(0));
-    let answered = spawn_steer(
+    let (answered, _queued, steered_in) = spawn_steer(
         home,
         SessionId(mint("s_")),
         mint("c_"),
@@ -211,6 +226,7 @@ fn a_steer_without_a_socket_is_gone_with_no_commit() {
         true,
     );
     assert_eq!(steered(&answered), Steered::Gone);
+    steered_in.join().expect("the steer thread ended");
     assert_eq!(calls.load(Ordering::SeqCst), 0, "commit never ran");
     assert_eq!(queued.load(Ordering::SeqCst), 0, "nothing queued");
 }
@@ -223,7 +239,7 @@ fn a_steer_sends_its_command_id_and_a_reused_one_is_rejected_duplicate() {
     let command = mint("c_");
     let calls = Arc::new(AtomicUsize::new(0));
     let queued = Arc::new(AtomicUsize::new(0));
-    let first = spawn_steer(
+    let (first, _queued, steered_in) = spawn_steer(
         home.clone(),
         id.clone(),
         command.clone(),
@@ -259,6 +275,7 @@ fn a_steer_sends_its_command_id_and_a_reused_one_is_rejected_duplicate() {
         })
         .unwrap();
     assert_eq!(steered(&first), Steered::Accepted);
+    steered_in.join().expect("the steer thread ended");
     close_within(opened.session, opened.log);
 }
 
@@ -272,14 +289,15 @@ fn the_steer_wire_is_subscribe_then_steer_then_a_probe() {
     let wired = command.clone();
     let served = thread::spawn(move || {
         let (stream, _) = listener.accept().unwrap();
-        let sub = commanded(&stream);
+        let mut reader = BufReader::new(stream.try_clone().unwrap());
+        let sub = commanded(&mut reader);
         assert_eq!(sub["command"], "subscribe");
         assert_eq!(sub["args"]["level"], "summary");
         let sub_id = sub["id"].as_str().unwrap().to_owned();
         let mut writer = stream.try_clone().unwrap();
         writer.write_all(&accepted(&sub_id)).unwrap();
         writer.flush().unwrap();
-        let steered = commanded(&stream);
+        let steered = commanded(&mut reader);
         assert_eq!(
             steered["id"], wired,
             "the steer line carries exactly the command id passed in"
@@ -289,7 +307,7 @@ fn the_steer_wire_is_subscribe_then_steer_then_a_probe() {
             steered["args"]["content"],
             serde_json::json!([{"type": "text", "text": "wire order"}])
         );
-        let probe = commanded(&stream);
+        let probe = commanded(&mut reader);
         assert_eq!(probe["command"], "tools");
         // The probe's answer first, so `on_queued` runs, then the steer's.
         let probe_id = probe["id"].as_str().unwrap().to_owned();
@@ -300,7 +318,7 @@ fn the_steer_wire_is_subscribe_then_steer_then_a_probe() {
     });
     let calls = Arc::new(AtomicUsize::new(0));
     let queued = Arc::new(AtomicUsize::new(0));
-    let answered = spawn_steer(
+    let (answered, _queued, steered_in) = spawn_steer(
         home,
         id,
         command,
@@ -310,6 +328,7 @@ fn the_steer_wire_is_subscribe_then_steer_then_a_probe() {
         true,
     );
     assert_eq!(steered(&answered), Steered::Accepted);
+    steered_in.join().expect("the steer thread ended");
     assert_eq!(calls.load(Ordering::SeqCst), 1, "commit ran once");
     assert_eq!(
         queued.load(Ordering::SeqCst),
@@ -328,7 +347,8 @@ fn commit_runs_only_after_the_subscribe_is_answered() {
     let (release_tx, release_rx) = mpsc::channel::<()>();
     let served = thread::spawn(move || {
         let (stream, _) = listener.accept().unwrap();
-        let sub = commanded(&stream);
+        let mut reader = BufReader::new(stream.try_clone().unwrap());
+        let sub = commanded(&mut reader);
         let sub_id = sub["id"].as_str().unwrap().to_owned();
         // The acknowledgement is held: nothing may commit before it.
         Deadline::after(DEADLINE)
@@ -339,7 +359,7 @@ fn commit_runs_only_after_the_subscribe_is_answered() {
         writer.flush().unwrap();
         // The steer line proves the commit returned true; it is never
         // answered, so this attempt ends gone.
-        let steered = commanded(&stream);
+        let steered = commanded(&mut reader);
         assert_eq!(steered["command"], "steer");
     });
     let calls = Arc::new(AtomicUsize::new(0));
@@ -349,7 +369,7 @@ fn commit_runs_only_after_the_subscribe_is_answered() {
     let home_client = home.clone();
     let id_client = id.clone();
     let counted = Arc::clone(&calls);
-    thread::spawn(move || {
+    let held_back = thread::spawn(move || {
         let mut commit = || {
             counted.fetch_add(1, Ordering::SeqCst);
             let _sent = called_tx.send(());
@@ -379,6 +399,7 @@ fn commit_runs_only_after_the_subscribe_is_answered() {
         .recv(&called_rx)
         .expect("commit runs once the subscribe is answered");
     assert_eq!(steered(&done_rx), Steered::Gone);
+    held_back.join().expect("the steer thread ended");
     assert_eq!(calls.load(Ordering::SeqCst), 1, "commit ran once");
     served.join().expect("the server read the steer line");
 }
@@ -414,7 +435,7 @@ fn a_refused_commit_writes_no_steer_line() {
     });
     let calls = Arc::new(AtomicUsize::new(0));
     let queued = Arc::new(AtomicUsize::new(0));
-    let answered = spawn_steer(
+    let (answered, _queued, steered_in) = spawn_steer(
         home,
         id,
         mint("c_"),
@@ -424,6 +445,7 @@ fn a_refused_commit_writes_no_steer_line() {
         false,
     );
     assert_eq!(steered(&answered), Steered::Withheld);
+    steered_in.join().expect("the steer thread ended");
     let lines = served.join().expect("the server read to end of file");
     assert!(
         lines.is_empty(),
@@ -443,7 +465,8 @@ fn a_blocked_send_holds_no_lock_and_ends_gone_on_close() {
     let (release_tx, release_rx) = mpsc::channel::<()>();
     let served = thread::spawn(move || {
         let (stream, _) = listener.accept().unwrap();
-        let sub = commanded(&stream);
+        let mut reader = BufReader::new(stream.try_clone().unwrap());
+        let sub = commanded(&mut reader);
         let sub_id = sub["id"].as_str().unwrap().to_owned();
         let mut writer = stream.try_clone().unwrap();
         writer.write_all(&accepted(&sub_id)).unwrap();
@@ -469,7 +492,7 @@ fn a_blocked_send_holds_no_lock_and_ends_gone_on_close() {
     let gated = Arc::clone(&gate);
     let counted = Arc::clone(&calls);
     let queued_in = Arc::clone(&queued);
-    thread::spawn(move || {
+    let blocked = thread::spawn(move || {
         let mut commit = || {
             // Locked and released before the write: the test locks this
             // same mutex while the write blocks.
@@ -503,6 +526,7 @@ fn a_blocked_send_holds_no_lock_and_ends_gone_on_close() {
     drop(held);
     release_tx.send(()).unwrap();
     assert_eq!(steered(&done_rx), Steered::Gone);
+    blocked.join().expect("the steer thread ended");
     assert_eq!(calls.load(Ordering::SeqCst), 1, "commit ran once");
     served.join().expect("the server closed");
 }
