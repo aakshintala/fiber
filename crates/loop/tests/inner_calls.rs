@@ -556,3 +556,46 @@ fn before_and_check_refusals_and_hook_failures_never_start_the_inner_tool() {
         }
     }
 }
+
+fn chain(name: &'static str, next: &'static str) -> Arc<FakeTool> {
+    Arc::new(FakeTool::new(name, move |_, _, _, ask| {
+        let Some(runner) = ask.inner_calls() else { return text("no runner"); };
+        match runner.run("ext", next, json!({})) {
+            Err(error) => text(error),
+            Ok(done) => text(serde_json::to_string(&done.content).unwrap()),
+        }
+    }))
+}
+
+#[test]
+fn eight_inner_levels_run_and_the_ninth_is_an_error_without_a_line() {
+    let mut session = Session::with_tools(vec![calls_reply("", &[("a", json!({}))]), fakes::Scripted::text("done")], None,
+        vec![chain("a", "b"), chain("b", "a")]);
+    session.inbox.send(support::delivery("go")).unwrap();
+    assert_eq!(session.turn(), Some(TurnOutcome::Completed));
+    let lines = session.lines();
+    let requested: Vec<_> = lines.iter().filter(|l| l.kind == "tool_call_requested").collect();
+    assert_eq!(requested.len(), 9);
+    for pair in requested.windows(2) {
+        assert_eq!(pair[1].payload["ran_by"]["outer_action_id"], serde_json::to_value(&pair[0].action_id).unwrap());
+        assert_eq!(pair[1].payload["ran_by"]["extension"], "ext");
+        assert_eq!(pair[1].turn_id, pair[0].turn_id);
+        assert_eq!(action_kinds(&lines, pair[1].action_id.as_ref().unwrap()), ["tool_call_requested", "tool_call_started", "tool_call_completed"]);
+    }
+    let completed: Vec<_> = lines.iter().filter(|l| l.kind == "tool_call_completed").collect();
+    assert_eq!(completed.len(), 9);
+    assert_eq!(completed.iter().map(|l| l.action_id.as_ref()).collect::<Vec<_>>(), requested.iter().rev().map(|l| l.action_id.as_ref()).collect::<Vec<_>>());
+    assert!(completed[0].payload["content"][0]["text"].as_str().unwrap().contains("depth exceeds 8"));
+}
+
+#[test]
+fn a_direct_self_call_is_an_error_without_an_inner_line() {
+    let mut session = Session::with_tools(vec![calls_reply("", &[("a", json!({}))]), fakes::Scripted::text("done")], None, vec![chain("a", "a")]);
+    session.inbox.send(support::delivery("go")).unwrap();
+    assert_eq!(session.turn(), Some(TurnOutcome::Completed));
+    let lines = session.lines();
+    assert_eq!(lines.iter().filter(|l| l.kind == "tool_call_requested").count(), 1);
+    let done = lines.iter().find(|l| l.kind == "tool_call_completed").unwrap();
+    assert!(done.payload["content"][0]["text"].as_str().unwrap().contains("cannot run itself"));
+}
+
