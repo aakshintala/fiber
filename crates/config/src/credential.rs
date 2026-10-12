@@ -16,7 +16,7 @@ use serde_json::{Map, Value};
 
 use crate::error::ConfigError;
 use crate::extension::ProviderData;
-use crate::secret::{CredentialSource, credential_labels, read_credential};
+use crate::secret::{CredentialSource, credential_labels, read_credential, read_secret};
 
 /// The label of the source a provider's data declares, and of the key
 /// `fiber login` stores without a label.
@@ -94,6 +94,13 @@ impl Credentials {
             providers,
             commands,
         }
+    }
+
+    /// Reads `credentials/<name>` (`docs/configuration.md`, "Secrets").
+    /// `None` when there is no such file; a name that is not one file
+    /// name, or a symbolic link there, is an error, as [`read_secret`] says.
+    pub fn secret(&self, name: &str) -> Result<Option<Secret>, ConfigError> {
+        read_secret(&self.home, name)
     }
 
     /// The label a session of this provider uses when nothing else names

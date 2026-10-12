@@ -283,3 +283,27 @@ pub fn credential_labels(home: &Path, name: &str) -> Result<Vec<String>, ConfigE
     labels.sort();
     Ok(labels)
 }
+
+/// Whether `name` is exactly `mcp.<server>.<KEY>`, with `KEY` an
+/// environment variable name with no `.`: a server reads only its own
+/// secrets, and a dotted server name stays allowed.
+/// (`docs/configuration.md`, "Secrets").
+pub fn mcp_secret_name_ok(server: &str, name: &str) -> bool {
+    let Some(rest) = name.strip_prefix("mcp.") else {
+        return false;
+    };
+    let Some((head, key)) = rest.rsplit_once('.') else {
+        return false;
+    };
+    head == server && valid_env_key(key)
+}
+
+/// Whether `key` is an environment variable name: `[A-Za-z_][A-Za-z0-9_]*`.
+pub fn valid_env_key(key: &str) -> bool {
+    let mut chars = key.bytes();
+    match chars.next() {
+        Some(b'A'..=b'Z' | b'a'..=b'z' | b'_') => {}
+        _ => return false,
+    }
+    chars.all(|byte| matches!(byte, b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9' | b'_'))
+}

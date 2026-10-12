@@ -222,6 +222,8 @@ fn an_unanswered_elicitation_is_declined_at_the_calls_deadline_then_the_call_tim
             command: fakes::mcp_fixture().display().to_string(),
             args: vec![fixture.display().to_string()],
             env: BTreeMap::new(),
+            secrets: BTreeMap::new(),
+            reader: std::sync::Arc::new(|_| Err(mcp::SecretError::Missing)),
             run: None,
         }),
         startup_timeout: mcp::DEFAULT_STARTUP_TIMEOUT,

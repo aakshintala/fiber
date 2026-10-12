@@ -22,7 +22,7 @@ use crate::test_support::{FakeImages, Setup, WITHIN};
 #[test]
 fn a_login_failure_has_login_advice_for_optional_and_required_servers() {
     for required in [false, true] {
-        let (reason, message) = super::fail_parts(
+        let (reason, code, message) = super::fail_parts(
             "docs",
             &crate::server::StartError::Login("detail".into()),
             Duration::from_secs(5),
@@ -30,6 +30,7 @@ fn a_login_failure_has_login_advice_for_optional_and_required_servers() {
             true,
         );
         assert_eq!(reason, ServerFailure::NotLoggedIn);
+        assert_eq!(code, ErrorCode::McpServerUnavailable);
         let subject = if required {
             "The required MCP server"
         } else {
@@ -1011,7 +1012,7 @@ fn a_run_starts_lists_and_caches_under_the_declaration() {
     let declared = spec.key();
     assert!(crate::cache::read(&setup.cache(), "fx", &declared).is_some());
     let (command, args) = spec.stdio().program();
-    let running = crate::cache::key(command, args, &spec.stdio().env);
+    let running = crate::cache::key(command, args, &spec.stdio().env, &spec.stdio().secrets);
     assert_ne!(
         declared, running,
         "the pinned paths never enter the cache key"
@@ -1079,7 +1080,12 @@ fn a_stdio_spec_key_is_its_declaration_never_its_run() {
     let spec = setup.spec("fx");
     assert_eq!(
         spec.key(),
-        crate::cache::key(&spec.stdio().command, &spec.stdio().args, &spec.stdio().env),
+        crate::cache::key(
+            &spec.stdio().command,
+            &spec.stdio().args,
+            &spec.stdio().env,
+            &spec.stdio().secrets
+        ),
         "the key is the declaration's"
     );
     let gate = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(true));
@@ -1091,7 +1097,7 @@ fn a_stdio_spec_key_is_its_declaration_never_its_run() {
     let stdio = run.stdio();
     assert_eq!(
         run.key(),
-        crate::cache::key(&stdio.command, &stdio.args, &stdio.env),
+        crate::cache::key(&stdio.command, &stdio.args, &stdio.env, &stdio.secrets),
         "the key stays the declaration's with a run set"
     );
 }
@@ -1595,4 +1601,211 @@ fn the_resources_info_is_a_full_builtin_row() {
         }
     );
     setup.stop(started.servers);
+}
+
+/// Points `spec` at a wrapper that records `$var` in a marker file, then
+/// runs the fixture with the spec's arguments: the marker holds what the
+/// child's environment held. The wrapper runs as `bash -c`, never as a
+/// file written and executed here (see `a_non_object_initialize_reply_`
+/// `fails_the_start` in `server_tests.rs`).
+fn secret_wrapper(spec: &mut super::ServerSpec, setup: &Setup, var: &str) -> std::path::PathBuf {
+    let marker = setup.dir.path().join("secret-value.txt");
+    let fixture = fakes::mcp_fixture()
+        .display()
+        .to_string()
+        .replace('\'', "'\\''");
+    let marker_text = marker.display().to_string().replace('\'', "'\\''");
+    let script = format!("echo -n \"${var}\" > '{marker_text}'\nexec '{fixture}' \"$@\"");
+    let dir = setup.dir.path().display().to_string();
+    let stdio = spec.stdio_mut();
+    stdio.command = "/bin/bash".to_owned();
+    stdio.args = vec!["-c".to_owned(), script, "wrapper".to_owned(), dir];
+    marker
+}
+
+#[test]
+fn launch_resolves_secret_references_into_the_child() {
+    let setup = Setup::with_tools(&json!([{"name": "echo"}]));
+    let mut spec = setup.spec("fx");
+    let marker = secret_wrapper(&mut spec, &setup, "SECRET_VALUE");
+    let stdio = spec.stdio_mut();
+    stdio
+        .secrets
+        .insert("SECRET_VALUE".to_owned(), "mcp.fx.SECRET_VALUE".to_owned());
+    stdio.reader = Arc::new(|name| {
+        assert_eq!(name, "mcp.fx.SECRET_VALUE", "the reader gets the name");
+        Ok("tok-live-9f3".to_owned())
+    });
+    let started = setup.start(vec![spec]);
+    assert!(started.failed.is_empty(), "{:?}", started.failed);
+    assert_eq!(names(&started), ["mcp__fx__echo"]);
+    assert_eq!(
+        std::fs::read_to_string(&marker).expect("the wrapper records the value"),
+        "tok-live-9f3"
+    );
+    setup.stop(started.servers);
+}
+
+#[test]
+fn launch_reads_a_secret_at_spawn_not_at_spec_build() {
+    // The reader runs at `launch`, so a secret rotated after the spec was
+    // built still reaches the child with its new bytes.
+    let setup = Setup::with_tools(&json!([{"name": "echo"}]));
+    let mut spec = setup.spec("fx");
+    let marker = secret_wrapper(&mut spec, &setup, "SECRET_VALUE");
+    let cell = Arc::new(std::sync::Mutex::new("tok-old-9f3".to_owned()));
+    let stdio = spec.stdio_mut();
+    stdio
+        .secrets
+        .insert("SECRET_VALUE".to_owned(), "mcp.fx.SECRET_VALUE".to_owned());
+    let reading = Arc::clone(&cell);
+    stdio.reader = Arc::new(move |_| Ok(reading.lock().expect("the cell").clone()));
+    *cell.lock().expect("the cell") = "tok-new-9f3".to_owned();
+    let started = setup.start(vec![spec]);
+    assert!(started.failed.is_empty(), "{:?}", started.failed);
+    assert_eq!(
+        std::fs::read_to_string(&marker).expect("the wrapper records the value"),
+        "tok-new-9f3"
+    );
+    setup.stop(started.servers);
+}
+
+#[test]
+fn a_missing_secret_fails_the_start_with_credential_missing_and_spawns_nothing() {
+    let setup = Setup::with_tools(&json!([{"name": "echo"}]));
+    let mut spec = setup.spec("fx");
+    let stdio = spec.stdio_mut();
+    stdio
+        .secrets
+        .insert("SECRET_VALUE".to_owned(), "mcp.fx.SECRET_VALUE".to_owned());
+    stdio.reader = Arc::new(|_| Err(crate::SecretError::Missing));
+    let started = setup.start(vec![spec]);
+    assert!(!setup.spawned(), "no process starts without its secret");
+    assert_eq!(started.failed.len(), 1);
+    let failure = &started.failed[0];
+    assert_eq!(failure.server, "fx");
+    assert_eq!(failure.reason, ServerFailure::StartFailed);
+    assert_eq!(failure.error.code, ErrorCode::CredentialMissing);
+    let message = &failure.error.message;
+    for words in [
+        "credentials/mcp.fx.SECRET_VALUE",
+        "fiber mcp remove fx",
+        "fiber mcp add fx",
+        "--secret SECRET_VALUE",
+    ] {
+        assert!(message.contains(words), "{message}");
+    }
+    setup.stop(started.servers);
+}
+
+#[test]
+fn an_unreadable_secret_fails_the_start_with_credential_failed() {
+    let setup = Setup::with_tools(&json!([{"name": "echo"}]));
+    let mut spec = setup.spec("fx");
+    let stdio = spec.stdio_mut();
+    stdio
+        .secrets
+        .insert("SECRET_VALUE".to_owned(), "mcp.fx.SECRET_VALUE".to_owned());
+    stdio.reader = Arc::new(|_| Err(crate::SecretError::Unreadable("denied".into())));
+    let started = setup.start(vec![spec]);
+    assert!(!setup.spawned(), "no process starts without its secret");
+    assert_eq!(started.failed.len(), 1);
+    let failure = &started.failed[0];
+    assert_eq!(failure.error.code, ErrorCode::CredentialFailed);
+    let message = &failure.error.message;
+    assert!(
+        message.contains("credentials/mcp.fx.SECRET_VALUE"),
+        "{message}"
+    );
+    assert!(message.contains("denied"), "{message}");
+    setup.stop(started.servers);
+}
+
+#[test]
+fn a_spec_debug_holds_no_secret_value() {
+    let setup = Setup::new();
+    let mut spec = setup.spec("fx");
+    let stdio = spec.stdio_mut();
+    stdio.env.insert("PLAIN".to_owned(), "plain-9f3".to_owned());
+    stdio
+        .secrets
+        .insert("SECRET_VALUE".to_owned(), "mcp.fx.SECRET_VALUE".to_owned());
+    stdio.reader = Arc::new(|_| Ok("tok-live-9f3".to_owned()));
+    // Resolve once, as `launch` would, so any held value could leak.
+    let _ = (stdio.reader)("mcp.fx.SECRET_VALUE").expect("the test secret reads");
+    let printed = format!("{:?}", spec);
+    for secret in ["tok-live-9f3", "plain-9f3"] {
+        assert!(!printed.contains(secret), "{printed}");
+    }
+    assert!(printed.contains("SECRET_VALUE"), "{printed}");
+}
+
+#[test]
+fn the_key_follows_references_never_values() {
+    let setup = Setup::new();
+    let mut rotated = setup.spec("fx");
+    rotated
+        .stdio_mut()
+        .secrets
+        .insert("S".to_owned(), "mcp.fx.S".to_owned());
+    rotated.stdio_mut().reader = Arc::new(|_| Ok("tok-old-9f3".to_owned()));
+    let mut fresh = rotated.clone();
+    fresh.stdio_mut().reader = Arc::new(|_| Ok("tok-new-9f3".to_owned()));
+    assert_eq!(rotated.key(), fresh.key(), "a rotation keeps the cache");
+    fresh
+        .stdio_mut()
+        .secrets
+        .insert("S".to_owned(), "mcp.fx.OTHER".to_owned());
+    assert_ne!(rotated.key(), fresh.key(), "a changed reference misses");
+}
+
+#[test]
+fn a_missing_secret_names_the_file_and_the_fix() {
+    for required in [false, true] {
+        let (reason, code, message) = super::fail_parts(
+            "docs",
+            &crate::server::StartError::SecretMissing {
+                name: "mcp.docs.TOKEN".to_owned(),
+            },
+            Duration::from_secs(5),
+            required,
+            false,
+        );
+        assert_eq!(reason, ServerFailure::StartFailed);
+        assert_eq!(code, ErrorCode::CredentialMissing);
+        let subject = if required {
+            "The required MCP server"
+        } else {
+            "The MCP server"
+        };
+        for words in [
+            subject,
+            "`docs`",
+            "credentials/mcp.docs.TOKEN",
+            "fiber mcp remove docs",
+            "fiber mcp add docs",
+            "--secret TOKEN",
+        ] {
+            assert!(message.contains(words), "{message}");
+        }
+    }
+}
+
+#[test]
+fn an_unreadable_secret_names_the_file_without_its_value() {
+    let (reason, code, message) = super::fail_parts(
+        "docs",
+        &crate::server::StartError::SecretUnreadable {
+            name: "mcp.docs.TOKEN".to_owned(),
+            why: "denied".to_owned(),
+        },
+        Duration::from_secs(5),
+        false,
+        false,
+    );
+    assert_eq!(reason, ServerFailure::StartFailed);
+    assert_eq!(code, ErrorCode::CredentialFailed);
+    for words in ["credentials/mcp.docs.TOKEN", "denied"] {
+        assert!(message.contains(words), "{message}");
+    }
 }

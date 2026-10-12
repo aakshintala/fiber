@@ -77,6 +77,7 @@ impl Setup {
                 &fakes::mcp_fixture().display().to_string(),
                 &[self.dir.path().display().to_string()],
                 &BTreeMap::new(),
+                &BTreeMap::new(),
             ),
         )
         .expect("the cache holds lists")
@@ -93,6 +94,7 @@ impl Setup {
             &crate::cache::key(
                 &fakes::mcp_fixture().display().to_string(),
                 &[self.dir.path().display().to_string()],
+                &BTreeMap::new(),
                 &BTreeMap::new(),
             ),
         )
@@ -347,6 +349,7 @@ fn a_call_to_a_removed_tool_fails_without_calling_and_updates_the_cache() {
         &crate::cache::key(
             &fakes::mcp_fixture().display().to_string(),
             &[setup.dir.path().display().to_string()],
+            &BTreeMap::new(),
             &BTreeMap::new(),
         ),
     )
