@@ -50,6 +50,10 @@ fn clocked(clock: &Arc<FakeClock>) -> Arc<dyn contract::clock::Clock> {
 /// One recorded `host.tool` call: the extension, the tool and its arguments.
 type Call = (String, String, Value);
 
+/// What a `host.tool` call answers: its completion, or an error in the
+/// calling code that writes no line.
+type RunnerReply = Result<Box<ToolCallCompleted>, String>;
+
 /// A fake runner: records each call, signals when one arrives, and answers
 /// from a script, or parks the call when told to hold until released.
 #[derive(Clone)]
@@ -60,8 +64,8 @@ pub(super) struct FakeRunner {
 struct FakeInner {
     calls: Mutex<Vec<Call>>,
     entered: mpsc::Sender<()>,
-    replies: Mutex<VecDeque<Result<Box<ToolCallCompleted>, String>>>,
-    hold: Mutex<Option<mpsc::Receiver<Result<Box<ToolCallCompleted>, String>>>>,
+    replies: Mutex<VecDeque<RunnerReply>>,
+    hold: Mutex<Option<mpsc::Receiver<RunnerReply>>>,
 }
 
 impl FakeRunner {
@@ -84,11 +88,7 @@ impl FakeRunner {
     }
 
     /// Parks the next call until `release` sends its answer.
-    fn holding() -> (
-        Self,
-        mpsc::Receiver<()>,
-        mpsc::Sender<Result<Box<ToolCallCompleted>, String>>,
-    ) {
+    fn holding() -> (Self, mpsc::Receiver<()>, mpsc::Sender<RunnerReply>) {
         let (entered_tx, entered_rx) = mpsc::channel();
         let (release_tx, release_rx) = mpsc::channel();
         (
@@ -154,7 +154,7 @@ fn tool_call(
     tool: &str,
     runner: FakeRunner,
 ) -> Result<Option<Value>, Error> {
-    let ext = Arc::clone(&ext);
+    let ext = Arc::clone(ext);
     let tool = tool.to_owned();
     within(move || {
         let cancel = fakes::CancelToken::new();
@@ -633,6 +633,9 @@ fn outcome_names_only_status_content_and_reason_or_error() {
 #[track_caller]
 fn wait_parked(clock: &FakeClock) {
     let wait = Deadline::after(WAIT);
+    // Polled in rounds on a channel that never sends, so the poll reads no
+    // clock and still ends at the deadline.
+    let (_tx, rx) = mpsc::channel::<()>();
     loop {
         if !clock.parked().is_empty() {
             return;
@@ -640,7 +643,9 @@ fn wait_parked(clock: &FakeClock) {
         if wait.left().is_zero() {
             panic!("the caller never parked on the clock within {WAIT:?}");
         }
-        std::thread::sleep(Duration::from_millis(1));
+        match Deadline::after(Duration::from_millis(1)).recv(&rx) {
+            Ok(()) | Err(_) => {}
+        }
     }
 }
 
@@ -673,15 +678,13 @@ fn tool_from_a_hook_timer_effects_search_provider_or_command_is_an_error() {
             tool(
                 "via_tool",
                 "function() local ok, err = pcall(host.tool, \"read\", {}) return tostring(ok) .. \"|\" .. err end",
-            ) + &format!(
-                "fiber.tool(\"via_effects\", {{ description = \"d\", input_schema = {{ type = \"object\" }},\n\
-             effects = function() local ok, err = pcall(host.tool, \"read\", {{}})\n\
+            ) + "fiber.tool(\"via_effects\", { description = \"d\", input_schema = { type = \"object\" },\n\
+             effects = function() local ok, err = pcall(host.tool, \"read\", {})\n\
              EFFECTS_RESULT = tostring(ok) .. \"|\" .. err\n\
-             return {{ effects = {{}}, reversible = true }} end,\n\
-             timeout = 5000, run = function() return \"\" end }})\n\
+             return { effects = {}, reversible = true } end,\n\
+             timeout = 5000, run = function() return \"\" end })\n\
              EFFECTS_RESULT = \"unfired\"\n\
-             fiber.command(\"read_effects\", {{ timeout = 5000, run = function() return EFFECTS_RESULT end }})\n"
-            ),
+             fiber.command(\"read_effects\", { timeout = 5000, run = function() return EFFECTS_RESULT end })\n",
         ),
         &clock,
     );
@@ -711,6 +714,9 @@ fn tool_from_a_hook_timer_effects_search_provider_or_command_is_an_error() {
     assert_eq!(within(move || held.command("arm", "")).unwrap(), "armed");
     clock.advance(Duration::from_secs(5));
     let wait = Deadline::after(WAIT);
+    // Polled through the reader command: each call is quick, and the timer
+    // fires in the gaps between them.
+    let (_tx, parked) = mpsc::channel::<()>();
     loop {
         let held = Arc::clone(&ext);
         let got = within(move || held.command("read_timer", "")).unwrap();
@@ -721,7 +727,9 @@ fn tool_from_a_hook_timer_effects_search_provider_or_command_is_an_error() {
         if wait.left().is_zero() {
             panic!("the timer never fired within {WAIT:?}");
         }
-        std::thread::sleep(Duration::from_millis(1));
+        match Deadline::after(Duration::from_millis(1)).recv(&parked) {
+            Ok(()) | Err(_) => {}
+        }
     }
     // An effects function is no tool call.
     let held = Arc::clone(&ext);

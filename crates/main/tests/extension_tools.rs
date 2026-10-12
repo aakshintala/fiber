@@ -1092,7 +1092,7 @@ fn inner_call_depth_is_cut_at_eight_and_a_tool_cannot_run_itself() {
             trees.push((line["payload"]["arguments"].clone(), count));
         }
     }
-    trees.sort_by(|a, b| a.0.to_string().cmp(&b.0.to_string()));
+    trees.sort_by_key(|tree| tree.0.to_string());
     assert_eq!(
         trees,
         [

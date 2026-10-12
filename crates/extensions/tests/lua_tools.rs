@@ -1466,7 +1466,7 @@ fiber.tool("find", {{
 /// `host.tool` through the public API (`docs/extensions.md`, "Running a
 /// tool"): a fake `Ask` hands its runner to the hub, and the script sees
 /// the inner call's outcome.
-
+///
 /// An `Ask` whose inner calls run through `runner`, when it has one.
 struct FakeAsk {
     runner: Option<Arc<dyn contract::tool::InnerCalls>>,
