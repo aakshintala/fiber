@@ -376,4 +376,4 @@ mod tests;
 
 mod create;
 
-pub use create::{Created, commits_beyond, create};
+pub use create::{Created, commits_beyond, create, recreate};

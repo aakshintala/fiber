@@ -12,6 +12,7 @@ use std::sync::Arc;
 use contract::ErrorCode;
 use contract::SessionId;
 use contract::events::Event;
+use contract::shapes::{Failure, Worktree};
 use doors::Session;
 use log::Log;
 use r#loop::Loop;
@@ -73,10 +74,13 @@ pub(crate) fn ask_resume(
     };
     // The recorded worktree may be gone: the lookup above reads the
     // recorded repository, but a resume runs in the recorded workspace, so
-    // the launch project is re-applied to it here. A session outside this
-    // project is refused exactly as an unknown id: the log is untouched,
-    // no lock is taken and nothing attaches.
-    if !in_launch_project(&sessions.join(&id.0), &project) {
+    // the launch project is re-applied to it here, unless the missing
+    // worktree is recreated from its repository first. A session outside
+    // this project is refused exactly as an unknown id: the log is
+    // untouched, no lock is taken and nothing attaches.
+    let dir = sessions.join(&id.0);
+    let recorded = recorded_worktree(&dir);
+    if !recreatable(recorded.as_ref()) && !in_launch_project(&dir, &project) {
         let e = log::Error::NotFound(sessions.clone());
         return ask_failed(failed(e.code(), e));
     }
@@ -105,7 +109,7 @@ pub(crate) fn ask_resume(
         Err(e) => return ask_failed(failed(e.code(), e)),
     };
     let dir = sessions.join(&id.0);
-    resumed_session(
+    resume_session(
         log,
         &dir,
         id,
@@ -173,8 +177,107 @@ pub(crate) fn session_resume(
     };
     let dir = sessions.join(&id.0);
     let one_turn = prompt.is_some();
-    resumed_session(
+    resume_session(
         log, &dir, id, overrides, None, prompt, one_turn, clock, signals, fiber,
+    )
+}
+
+/// One function runs every resumed session: it enters the recorded
+/// worktree, making it again when it was removed, runs the session, ends
+/// a recreated worktree by the same rules, and only then reports a
+/// startup failure. `log` holds the session lock; it is released before
+/// `end`, whose scan holds the resumed session's own directory, and a
+/// signal recorded during `end` reaches `report`.
+#[allow(
+    clippy::too_many_arguments,
+    reason = "one resumed session needs its log, directory, id, mode, clock, signals and recorded executable"
+)]
+fn resume_session(
+    log: Arc<Log>,
+    dir: &Path,
+    id: SessionId,
+    overrides: Vec<String>,
+    credential: Option<String>,
+    prompt: Option<String>,
+    one_turn: bool,
+    clock: Arc<dyn contract::clock::Clock>,
+    signals: &Arc<doors::Signals>,
+    fiber: Result<PathBuf, String>,
+) -> i32 {
+    // One reads for the process, cancelled when this returns whatever the
+    // result: the guard drops after `end`, so a signal during the end is
+    // still answered.
+    let reads = Arc::new(crate::switch::Reads::default());
+    let _cancel = crate::switch::CancelOnDrop(Arc::clone(&reads));
+    let home = match config::fiber_home_from_env() {
+        Ok(home) => home,
+        Err(e) => return ask_failed(failed(e.code(), e)),
+    };
+    let mut held = match enter_worktree(recorded_worktree(dir), &home, &id, &clock, signals, &reads)
+    {
+        Ok(held) => held,
+        Err(error) => {
+            drop(log);
+            let isolation = error.isolation;
+            return finish(
+                move || {
+                    if let Some(isolation) = isolation {
+                        isolation.end();
+                    }
+                },
+                Err(error.failure),
+                |failure| crate::session_command::report(signals, failure),
+            );
+        }
+    };
+    // A recreated worktree is the session's workspace: configuration
+    // reads from there, as a new session's does. A kept worktree keeps
+    // the launch directory, as today.
+    if let Held::Made(isolation) = held {
+        let path = isolation.path().to_path_buf();
+        if let Err(source) = std::env::set_current_dir(&path) {
+            drop(log);
+            return finish(
+                move || isolation.end(),
+                Err(failed(
+                    ErrorCode::IoFailed,
+                    format!("{}: {}.", path.display(), source.kind()),
+                )),
+                |failure| crate::session_command::report(signals, failure),
+            );
+        }
+        held = Held::Made(isolation);
+    }
+    // Every resume but a recreation keeps the session lock till the
+    // process dies, as a resumed session always did: the hub sequences a
+    // rewind's next start on the exiting process releasing it, so freeing
+    // it at `close` lets the next start overlap this process dying and the
+    // hub drops the next session. A recreated worktree takes no hold:
+    // `end` must see the session free to remove it.
+    if !matches!(held, Held::Made(_)) {
+        std::mem::forget(Arc::clone(&log));
+    }
+    let result = resumed_session(
+        log,
+        dir,
+        id,
+        overrides,
+        credential,
+        prompt,
+        one_turn,
+        clock,
+        signals,
+        fiber,
+        Arc::clone(&reads),
+    );
+    finish(
+        move || {
+            if let Held::Made(isolation) = held {
+                isolation.end();
+            }
+        },
+        result,
+        |failure| crate::session_command::report(signals, failure),
     )
 }
 
@@ -183,7 +286,9 @@ pub(crate) fn session_resume(
 /// no client, and the session command serves clients that may answer
 /// (`docs/permissions.md`, "Headless"). `log` holds the lock; every failure
 /// before `fiber_started` is written leaves the log byte for byte as it
-/// was.
+/// was. The result is returned, never reported: the caller ends the
+/// isolation first, so a signal recorded during the end wins over the
+/// failure.
 #[allow(
     clippy::too_many_arguments,
     reason = "one resumed session needs its log, directory, id, mode, clock, signals and recorded executable"
@@ -199,14 +304,11 @@ fn resumed_session(
     clock: Arc<dyn contract::clock::Clock>,
     signals: &Arc<doors::Signals>,
     fiber: Result<PathBuf, String>,
-) -> i32 {
-    // One reads for the process, cancelled when this returns whatever the
-    // result, and armed before the parts are read.
-    let reads = Arc::new(crate::switch::Reads::default());
-    let _cancel = crate::switch::CancelOnDrop(Arc::clone(&reads));
+    reads: Arc<crate::switch::Reads>,
+) -> Result<i32, Failure> {
     let folded = match r#loop::resumed(dir) {
         Ok(folded) => folded,
-        Err(e) => return ask_failed(failed(e.code(), e)),
+        Err(e) => return Err(failed(e.code(), e)),
     };
     // The recorded model first, `--model` and configuration after it. A
     // model that no longer resolves fails here, before any session line is
@@ -219,7 +321,7 @@ fn resumed_session(
         .as_deref()
         .and_then(|level| level.parse::<contract::ThinkingLevel>().ok());
     crate::shutdown::arm(signals, &reads);
-    let parts = match crate::parts_with(
+    let mut parts = crate::parts_with(
         overrides,
         folded.model.as_deref(),
         crate::credential::Labels::new(credential.as_deref(), folded.credential.as_deref()),
@@ -227,15 +329,11 @@ fn resumed_session(
         Arc::clone(&clock),
         None,
         Arc::clone(&reads),
-    ) {
-        Ok(mut parts) => {
-            // The session directory's log: the opening message's
-            // environment names it.
-            parts.prompt.session_log = dir.join("events.jsonl").display().to_string();
-            parts
-        }
-        Err(e) => return crate::session_command::report(signals, e),
-    };
+    )?;
+    // The session directory's log: the opening message's
+    // environment names it.
+    parts.prompt.session_log = dir.join("events.jsonl").display().to_string();
+    let parts = parts;
     let crate::Parts {
         provider,
         model,
@@ -269,20 +367,20 @@ fn resumed_session(
     let jobs = jobs::Registry::new(
         dir.join("artifacts"),
         Arc::clone(&clock),
-        Arc::clone(&log) as _,
+        Arc::new(log::WeakEmit::new(&log)) as _,
     );
     // A resumed session declares `delegate_spawn` too, parented to itself.
     let fiber_path = match fiber.clone() {
         Ok(fiber_path) => fiber_path,
         Err(message) => {
-            return crate::session_command::report(signals, failed(ErrorCode::IoFailed, message));
+            return Err(failed(ErrorCode::IoFailed, message));
         }
     };
     let Some(sessions) = dir.parent() else {
-        return crate::session_command::report(
-            signals,
-            failed(ErrorCode::IoFailed, "the session directory has no parent"),
-        );
+        return Err(failed(
+            ErrorCode::IoFailed,
+            "the session directory has no parent",
+        ));
     };
     let delegates = crate::delegates::Delegates::new(
         fiber_path,
@@ -297,15 +395,10 @@ fn resumed_session(
     crate::shutdown::arm(signals, &reads);
     let skill_set = r#loop::SkillSet::new(prompt_inputs.clone(), Path::new(&folded.workspace));
     let skills: Arc<dyn contract::skills::Skills> = Arc::new(skill_set.reader());
-    let web_search = match crate::builtin::web_search(
-        web_search.as_deref(),
-        extensions.search_backend().as_ref(),
-    ) {
-        Ok(web_search) => web_search,
-        Err(e) => return crate::session_command::report(signals, e),
-    };
+    let web_search =
+        crate::builtin::web_search(web_search.as_deref(), extensions.search_backend().as_ref())?;
     let skipped = folded.skipped();
-    let (tools, infos, driver, session_servers) = match crate::mcp_servers::session_tools(
+    let (tools, infos, driver, session_servers) = crate::mcp_servers::session_tools(
         fiber,
         &home,
         Path::new(&folded.workspace),
@@ -321,10 +414,7 @@ fn resumed_session(
         &delegates,
         skills,
         extensions.tools(),
-    ) {
-        Ok(built) => built,
-        Err(e) => return crate::session_command::report(signals, e),
-    };
+    )?;
     let forget = Arc::clone(&session_servers.forget);
     let hosted_stands = crate::switch::hosted_stands(&tools);
     let workspace = std::path::PathBuf::from(&folded.workspace);
@@ -352,7 +442,7 @@ fn resumed_session(
         Ok(session) => session,
         Err(e) => {
             session_servers.servers.stop();
-            return crate::session_command::report(signals, e);
+            return Err(e);
         }
     };
     // What the session loads once its offer step has run, before its first
@@ -392,7 +482,7 @@ fn resumed_session(
     if let Some(code) = crate::shutdown::start(signals, &cancel, &session, jobs.clone(), reads) {
         session_servers.servers.stop();
         close(session, log, &home, dir, &workspace, &*clock);
-        return code;
+        return Ok(code);
     }
     match signals.commit(|| {
         r#loop::fiber_started(&log, env!("CARGO_PKG_VERSION"), true)
@@ -402,12 +492,12 @@ fn resumed_session(
         Err(code) => {
             session_servers.servers.stop();
             close(session, log, &home, dir, &workspace, &*clock);
-            return code;
+            return Ok(code);
         }
         Ok(Err(e)) => {
             session_servers.servers.stop();
             close(session, log, &home, dir, &workspace, &*clock);
-            return ask_failed(failed(e.code(), e));
+            return Err(failed(e.code(), e));
         }
         Ok(Ok(())) => {}
     }
@@ -475,5 +565,125 @@ fn resumed_session(
     );
     session_servers.servers.stop();
     close(session, log, &home, dir, &workspace, &*clock);
-    code
+    Ok(code)
 }
+
+/// The first line's `session_started` worktree, when it records one. Any
+/// read or parse failure is none: the lookup already matched this session
+/// into the launch project, so that is unreachable short of a concurrent
+/// delete.
+fn recorded_worktree(dir: &Path) -> Option<Worktree> {
+    let lines = log::lines(dir).ok()?;
+    let mut lines = lines;
+    let line = lines.next()?;
+    let line = line.ok()?;
+    match Event::from_envelope(&line) {
+        Ok(Some(Event::SessionStarted(started))) => started.worktree,
+        Ok(_) | Err(_) => None,
+    }
+}
+
+/// Whether the recorded worktree is recreated: its repository is recorded
+/// and its path is gone. Anything else, a present path, another lookup
+/// error or no recorded repository, resumes where the worktree is, with
+/// no recreation. A dangling symlink at the path exists.
+fn recreatable(recorded: Option<&Worktree>) -> bool {
+    match recorded {
+        Some(worktree) => {
+            worktree.repository.is_some()
+                && std::fs::symlink_metadata(Path::new(&worktree.path))
+                    .is_err_and(|source| source.kind() == std::io::ErrorKind::NotFound)
+        }
+        None => false,
+    }
+}
+
+/// What a resumed process holds its worktree with.
+enum Held {
+    /// No recorded worktree, or one that cannot be recreated: the process
+    /// runs without a hold.
+    Nothing,
+    /// A share of a worktree the process did not make, held for its life:
+    /// the hold is the ownership itself, dropped when the process ends.
+    Shared { _shared: doors::Shared },
+    /// A worktree the process made again, ended by the same rules.
+    Made(doors::Isolation),
+}
+
+/// Enters the recorded worktree: a present one is shared for the
+/// process's life, and a missing one with a recorded repository is made
+/// again at the same path and branch before anything else runs. The
+/// recreation arms the shutdown first, so a signal during the
+/// hook-running `git worktree add` kills it and rolls back. A share or
+/// recreation failure carries no isolation: nothing was made. A
+/// downgrade failure after the worktree was made reaches the caller, so
+/// its isolation is ended after the session lock is released.
+// Only a non-NotFound error reaches the other arm; there both arms fail
+// opening the lock beside the path with the same IoFailed sentence, so no
+// assertion tells them apart.
+#[cfg_attr(false, mutants::skip)]
+#[allow(
+    clippy::result_large_err,
+    reason = "the caller matches the isolation out of the error by value"
+)]
+fn enter_worktree(
+    recorded: Option<Worktree>,
+    home: &Path,
+    id: &SessionId,
+    clock: &Arc<dyn contract::clock::Clock>,
+    signals: &Arc<doors::Signals>,
+    reads: &Arc<crate::switch::Reads>,
+) -> Result<Held, doors::RecreateError> {
+    let Some(worktree) = recorded else {
+        return Ok(Held::Nothing);
+    };
+    let path = Path::new(&worktree.path);
+    match std::fs::symlink_metadata(path) {
+        Err(source) if source.kind() == std::io::ErrorKind::NotFound => match worktree.repository {
+            Some(repository) => {
+                crate::shutdown::arm(signals, reads);
+                match doors::recreate(
+                    Path::new(&repository),
+                    path,
+                    &worktree.branch,
+                    home,
+                    id,
+                    Arc::clone(clock),
+                    &|command| reads.command(command),
+                ) {
+                    Ok(doors::Recreated::Made(isolation)) => Ok(Held::Made(isolation)),
+                    Ok(doors::Recreated::Present(shared)) => Ok(Held::Shared { _shared: shared }),
+                    Err(error) => Err(error),
+                }
+            }
+            None => Ok(Held::Nothing),
+        },
+        Ok(_) | Err(_) => match doors::share(path) {
+            Ok(shared) => Ok(Held::Shared { _shared: shared }),
+            Err(failure) => Err(doors::RecreateError {
+                failure,
+                isolation: None,
+            }),
+        },
+    }
+}
+
+/// Ends the isolation, then answers the resume's result: a signal
+/// recorded during `end` reaches `report`, which the recorded signal
+/// answers before it prints, so a failure after recreation and before
+/// `fiber_started` exits with the signal's code and silence.
+fn finish(
+    end: impl FnOnce(),
+    result: Result<i32, Failure>,
+    report: impl FnOnce(Failure) -> i32,
+) -> i32 {
+    end();
+    match result {
+        Ok(code) => code,
+        Err(failure) => report(failure),
+    }
+}
+
+#[cfg(test)]
+#[path = "resume_tests.rs"]
+mod tests;

@@ -574,3 +574,211 @@ fn a_bad_base_is_a_git_error() {
         }
     });
 }
+
+#[test]
+fn recreate_makes_the_branch_at_the_new_head() {
+    fakes::within("recreate_makes_the_branch_at_the_new_head", BUDGET, || {
+        let home = repo("worktree-recreate");
+        fs::write(home.path().join("second.txt"), "y").unwrap();
+        git(home.path(), &["add", "."]);
+        git(home.path(), &["commit", "--quiet", "-m", "second"]);
+        let head = git(home.path(), &["rev-parse", "HEAD"]);
+        let common = home.path().join(".git");
+        let path = home.path().join("wt");
+        let created = recreate(&common, &path, "fiber/y", &direct).unwrap();
+        assert_eq!(created.base, head);
+        assert_eq!(created.branch, "fiber/y");
+        assert_eq!(created.path, fs::canonicalize(&path).unwrap());
+        assert!(path.join("second.txt").is_file());
+        assert_eq!(git(home.path(), &["rev-parse", "fiber/y"]), head);
+        let inspected = worktree_of(inspect(&path).unwrap());
+        assert_eq!(inspected.branch, "fiber/y");
+    });
+}
+
+#[test]
+fn recreate_refuses_a_plain_a_root_and_a_missing_repository() {
+    fakes::within(
+        "recreate_refuses_a_plain_a_root_and_a_missing_repository",
+        BUDGET,
+        || {
+            let home = repo("worktree-recreate-notrepo");
+            // A plain directory: the common-dir read fails.
+            let plain = home.path().join("plain");
+            fs::create_dir(&plain).unwrap();
+            let err = recreate(&plain, &plain.join("wt"), "fiber/y", &direct).unwrap_err();
+            match &err {
+                Error::NotARepository { path } => assert_eq!(path, &plain),
+                Error::GitMissing | Error::Exists { .. } | Error::Git { .. } | Error::Io { .. } => {
+                    panic!("expected NotARepository, found {err:?}")
+                }
+            }
+            assert!(!exists(&plain.join("wt")));
+            // The work-tree root: its common dir is `<repo>/.git`, not itself.
+            let root = home.path().to_path_buf();
+            let err = recreate(&root, &root.join("wt"), "fiber/y", &direct).unwrap_err();
+            match &err {
+                Error::NotARepository { path } => assert_eq!(path, &root),
+                Error::GitMissing | Error::Exists { .. } | Error::Git { .. } | Error::Io { .. } => {
+                    panic!("expected NotARepository, found {err:?}")
+                }
+            }
+            assert!(!exists(&root.join("wt")));
+            assert!(!branch_exists(home.path(), "fiber/y"));
+            // A missing directory.
+            let missing = home.path().join("no-such-repo");
+            let err = recreate(&missing, &home.path().join("wt"), "fiber/y", &direct).unwrap_err();
+            match &err {
+                Error::NotARepository { path } => assert_eq!(path, &missing),
+                Error::GitMissing | Error::Exists { .. } | Error::Git { .. } | Error::Io { .. } => {
+                    panic!("expected NotARepository, found {err:?}")
+                }
+            }
+            assert!(!exists(&home.path().join("wt")));
+            assert!(!branch_exists(home.path(), "fiber/y"));
+        },
+    );
+}
+
+#[test]
+fn recreate_with_an_existing_branch_keeps_it_where_it_was() {
+    fakes::within(
+        "recreate_with_an_existing_branch_keeps_it_where_it_was",
+        BUDGET,
+        || {
+            let home = repo("worktree-recreate-branch");
+            git(home.path(), &["branch", "fiber/y"]);
+            let sha = git(home.path(), &["rev-parse", "fiber/y"]);
+            let path = home.path().join("wt");
+            let err = recreate(&home.path().join(".git"), &path, "fiber/y", &direct).unwrap_err();
+            match &err {
+                Error::Exists { path } => {
+                    assert_eq!(path, &PathBuf::from("refs/heads/fiber/y"));
+                }
+                Error::GitMissing
+                | Error::NotARepository { .. }
+                | Error::Git { .. }
+                | Error::Io { .. } => panic!("expected Exists, found {err:?}"),
+            }
+            assert_eq!(git(home.path(), &["rev-parse", "fiber/y"]), sha);
+            assert!(!exists(&path), "the path was left alone");
+        },
+    );
+}
+
+#[test]
+fn recreate_with_an_existing_path_leaves_it_alone() {
+    fakes::within(
+        "recreate_with_an_existing_path_leaves_it_alone",
+        BUDGET,
+        || {
+            let home = repo("worktree-recreate-path");
+            let path = home.path().join("wt");
+            fs::create_dir(&path).unwrap();
+            fs::write(path.join("precious.txt"), "precious").unwrap();
+            let err = recreate(&home.path().join(".git"), &path, "fiber/y", &direct).unwrap_err();
+            assert!(matches!(err, Error::Exists { .. }), "{err:?}");
+            assert_eq!(
+                fs::read_to_string(path.join("precious.txt")).unwrap(),
+                "precious"
+            );
+            assert!(!branch_exists(home.path(), "fiber/y"));
+        },
+    );
+}
+
+#[test]
+fn recreate_accepts_a_symlink_to_the_common_dir() {
+    fakes::within(
+        "recreate_accepts_a_symlink_to_the_common_dir",
+        BUDGET,
+        || {
+            let home = repo("worktree-recreate-symlink");
+            let other = fakes::TempDir::new("worktree-recreate-symlink-other");
+            let link = other.path().join("gitdir");
+            std::os::unix::fs::symlink(home.path().join(".git"), &link).unwrap();
+            let path = home.path().join("wt");
+            let created = recreate(&link, &path, "fiber/y", &direct).unwrap();
+            assert_eq!(created.base, git(home.path(), &["rev-parse", "HEAD"]));
+            assert!(path.join("file.txt").is_file());
+        },
+    );
+}
+
+#[test]
+fn recreate_from_a_bare_repository() {
+    fakes::within("recreate_from_a_bare_repository", BUDGET, || {
+        let home = repo("worktree-recreate-bare-src");
+        fs::write(home.path().join("second.txt"), "y").unwrap();
+        git(home.path(), &["add", "."]);
+        git(home.path(), &["commit", "--quiet", "-m", "second"]);
+        let holder = fakes::TempDir::new("worktree-recreate-bare");
+        let bare = holder.path().join("bare.git");
+        git(
+            holder.path(),
+            &[
+                "clone",
+                "--quiet",
+                "--bare",
+                home.path().to_str().unwrap(),
+                bare.to_str().unwrap(),
+            ],
+        );
+        let head = git(&bare, &["rev-parse", "HEAD"]);
+        let path = holder.path().join("wt");
+        let created = recreate(&bare, &path, "fiber/y", &direct).unwrap();
+        assert_eq!(created.base, head);
+        assert!(path.join("second.txt").is_file());
+    });
+}
+
+#[test]
+fn recreate_with_a_failing_hook_leaves_nothing_behind() {
+    fakes::within(
+        "recreate_with_a_failing_hook_leaves_nothing_behind",
+        BUDGET,
+        || {
+            let home = repo("worktree-recreate-hook");
+            let hooks = Path::new(env!("CARGO_MANIFEST_DIR")).join("fixtures/failing-hook");
+            git(
+                home.path(),
+                &["config", "core.hooksPath", hooks.to_str().unwrap()],
+            );
+            let path = home.path().join("wt");
+            let err = recreate(&home.path().join(".git"), &path, "fiber/y", &direct).unwrap_err();
+            match err {
+                Error::Git { command, .. } => assert_eq!(command, "worktree add"),
+                Error::GitMissing
+                | Error::NotARepository { .. }
+                | Error::Exists { .. }
+                | Error::Io { .. } => panic!("expected a worktree add error, found {err:?}"),
+            }
+            assert!(!exists(&path), "the path is gone");
+            assert!(!branch_exists(home.path(), "fiber/y"), "the branch is gone");
+        },
+    );
+}
+
+#[test]
+fn a_canonicalize_failure_after_a_successful_add_rolls_back() {
+    fakes::within(
+        "a_canonicalize_failure_after_a_successful_add_rolls_back",
+        BUDGET,
+        || {
+            let home = repo("worktree-create-self-delete");
+            let hooks = Path::new(env!("CARGO_MANIFEST_DIR")).join("fixtures/self-deleting-hook");
+            git(
+                home.path(),
+                &["config", "core.hooksPath", hooks.to_str().unwrap()],
+            );
+            let path = home.path().join("wt");
+            // The hook deletes the checkout after the add succeeds, so the
+            // canonicalize fails: the shared body rolls back like any
+            // other post-add failure.
+            let err = create(home.path(), &path, "fiber/x", &direct).unwrap_err();
+            assert!(matches!(err, Error::Io { .. }), "{err:?}");
+            assert!(!exists(&path), "no path remains");
+            assert!(!branch_exists(home.path(), "fiber/x"), "no branch remains");
+        },
+    );
+}

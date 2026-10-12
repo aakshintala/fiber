@@ -1,0 +1,4 @@
+#!/bin/sh
+dir=$(pwd)
+rm -rf "$dir"
+exit 0
