@@ -1521,3 +1521,55 @@ fn a_row_click_while_waiting_keeps_the_waiting_mode() {
         ]
     );
 }
+
+#[test]
+fn the_frame_row_drops_the_gap_only_for_rows_past_it() {
+    // Items: heading, two providers, the gap at 3, the Secrets heading,
+    // two secrets. The legacy frame has no gap, so a row past it sits
+    // one higher, and a row at or before it keeps its index.
+    let fake = fake_with(vec![
+        LoginTarget {
+            name: "acme".to_owned(),
+            kind: LoginKind::Key,
+        },
+        LoginTarget {
+            name: "codex".to_owned(),
+            kind: LoginKind::Browser,
+        },
+        LoginTarget {
+            name: "acme.api_key".to_owned(),
+            kind: LoginKind::Secret,
+        },
+        LoginTarget {
+            name: "other.api_key".to_owned(),
+            kind: LoginKind::Secret,
+        },
+    ]);
+    assert_eq!(at(&fake, 1).list.selected(), 1);
+    assert_eq!(at(&fake, 2).list.selected(), 2);
+    assert_eq!(at(&fake, 3).list.selected(), 3);
+    assert_eq!(at(&fake, 4).list.selected(), 3);
+    assert_eq!(at(&fake, 5).list.selected(), 4);
+    assert_eq!(at(&fake, 6).list.selected(), 5);
+}
+
+#[test]
+fn a_blank_row_separates_the_rows_from_what_the_last_action_said() {
+    let fake = fake_with(targets());
+    let mut login = Login::open(&ctx(&fake));
+    open_key_panel(&mut login, &fake);
+    typed(&mut login, &fake, "sk-a");
+    assert!(matches!(login.key(&Key::Enter, &ctx(&fake)), Act::Stay));
+    let (buf, _) = overlaid(&login, 80, 24);
+    let rows = text_of(&buf, 80, 24);
+    let said = rows
+        .iter()
+        .position(|row| row.contains("Stored credentials/acme/default."))
+        .unwrap_or_else(|| panic!("the said line is drawn: {rows:?}"));
+    // The row before the said line is the blank separator, not the
+    // last target row above it.
+    assert!(
+        !rows[said - 1].chars().any(char::is_alphanumeric),
+        "{rows:?}"
+    );
+}

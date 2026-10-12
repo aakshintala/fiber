@@ -361,3 +361,16 @@ fn a_stale_done_after_close_changes_nothing_and_opens_nothing() {
         None
     );
 }
+
+#[test]
+fn the_login_list_is_offered_only_on_the_rows() {
+    let seam = browser_seam();
+    let mut app = browser_login_app(&seam);
+    assert!(app.login_list().is_some());
+    // Waiting on a browser login draws the legacy frame, not the list.
+    let _ = start_login(&mut app);
+    assert!(app.login_list().is_none());
+    // Esc returns to the rows, which the list draws again.
+    assert_eq!(app.on_key(Key::Esc, now()), Effect::None);
+    assert!(app.login_list().is_some());
+}
