@@ -106,6 +106,10 @@ impl Shape {
     }
 
     /// What the gated stream carries, for wait names.
+    // Exempt: the name only words a wait's failure message. No consumer's
+    // behaviour depends on it, and a test reaches that failure only by
+    // waiting out the fake's bound on the wall clock.
+    #[cfg_attr(false, mutants::skip)]
     fn gated(self) -> &'static str {
         match self {
             Self::Call => "the gated call's stream",
@@ -562,97 +566,5 @@ fn answer(id: &Value, result: Value) -> String {
 }
 
 #[cfg(test)]
-mod tests {
-    use std::sync::mpsc;
-
-    use crate::clock::FakeClock;
-    use crate::deadline::Deadline;
-
-    use super::*;
-
-    /// A clock that lives as long as the test process, as a request
-    /// deadline's clock must.
-    fn fake_clock() -> &'static FakeClock {
-        Box::leak(Box::new(FakeClock::new()))
-    }
-
-    /// The message a failed request wait carried: the request it names.
-    /// The test fails when the wait read instead.
-    fn failure_message(
-        caught: std::thread::Result<(TcpStream, String, Vec<u8>, RequestDeadline)>,
-    ) -> String {
-        match caught {
-            Ok(_) => panic!("the trickled request read instead of failing"),
-            Err(payload) => payload
-                .downcast_ref::<String>()
-                .cloned()
-                .or_else(|| {
-                    payload
-                        .downcast_ref::<&str>()
-                        .map(|line| (*line).to_owned())
-                })
-                .expect("the failure names its request"),
-        }
-    }
-
-    /// Trickled bytes stay inside one request's bound (`docs/testing.md`,
-    /// "Waits and timeouts"): a client that sends a header line one byte
-    /// at a time, slower than the bound overall, gets a failure naming the
-    /// request within the bound, instead of stretching each underlying read
-    /// past it. Fake time carries the trickle past the bound, so the test
-    /// is deterministic, takes milliseconds on the wall clock, and never
-    /// sleeps.
-    #[test]
-    fn trickled_header_bytes_fail_within_the_request_bound() {
-        let clock: &'static FakeClock = fake_clock();
-        let listener = TcpListener::bind("127.0.0.1:0").expect("the test binds");
-        let addr = listener.local_addr().expect("an address");
-        listener.set_nonblocking(true).expect("the test polls");
-        let pause = Arc::new((Mutex::new(()), std::sync::Condvar::new()));
-        let waiting = Arc::clone(&pause);
-        let (done_tx, done_rx) = mpsc::channel();
-        let (line_tx, line_rx) = mpsc::channel();
-        *REQUEST_LINE_READ
-            .lock()
-            .unwrap_or_else(PoisonError::into_inner) = Some(line_tx);
-        std::thread::spawn(move || {
-            let caught = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-                accept(&listener, &waiting, "the initialize request", clock)
-            }));
-            done_tx.send(caught).expect("the test waits");
-        });
-        let mut client = TcpStream::connect(addr).expect("the test connects");
-        // The request line, one byte at a time: every underlying read
-        // succeeds, so one timeout per read would never fire on this.
-        for byte in b"POST /mcp HTTP/1.1\r\n" {
-            client
-                .write_all(std::slice::from_ref(byte))
-                .expect("the trickle writes");
-        }
-        // After the deadline exists and the request line is read: the
-        // server is waiting on the clock before the clock moves
-        // (`docs/testing.md`, "Waits and timeouts").
-        Deadline::after(WAIT)
-            .recv(&line_rx)
-            .expect("the server read the request line");
-        // A header line, one byte at a time, across more than the bound
-        // overall: its first bytes arrive inside the bound, the rest past
-        // it, while every underlying read still succeeds.
-        clock.advance(WAIT / 2);
-        for byte in b"content-length: 0\r\n".iter().take(10) {
-            client
-                .write_all(std::slice::from_ref(byte))
-                .expect("the trickle writes");
-        }
-        clock.advance(WAIT / 2 + Duration::from_secs(1));
-        client.write_all(b"0").expect("the trickle writes");
-        let caught = Deadline::after(WAIT)
-            .recv(&done_rx)
-            .expect("the bound names the trickled request");
-        let message = failure_message(caught);
-        assert!(
-            message.contains("the initialize request"),
-            "the failure names its request, got: {message}"
-        );
-    }
-}
+#[path = "gated_http_tests.rs"]
+mod tests;
