@@ -213,7 +213,7 @@ fn arm_slow_kill(
     signals.arm(
         Box::new(move || record_tx.lock().unwrap().send(Did::Signal(-1)).unwrap()),
         Box::new(move || {
-            super::sleep_until(clock.as_ref(), clock.now() + takes);
+            sleep_until(clock.as_ref(), clock.now() + takes);
             bound_tx.lock().unwrap().send(Did::Bound).unwrap();
         }),
     );
@@ -233,9 +233,7 @@ fn mkfifo(path: &Path) {
     let mut child = command.spawn().expect("mkfifo started");
     let group = child.id();
     let (finished_tx, finished) = mpsc::channel();
-    thread::spawn(move || {
-        let _ = finished_tx.send(child.wait());
-    });
+    thread::spawn(move || if let Ok(()) = finished_tx.send(child.wait()) {});
     // The child is already spawned, so a watchdog that cannot start must
     // still leave nothing running: kill the group and wait for the waiter
     // before the panic continues.
@@ -243,8 +241,12 @@ fn mkfifo(path: &Path) {
         match std::panic::catch_unwind(AssertUnwindSafe(|| fakes::Watchdog::group(group))) {
             Ok(watchdog) => watchdog,
             Err(payload) => {
-                let _ = fakes::kill_group(group, "KILL");
-                let _ = Deadline::after(CHILD_WITHIN).recv(&finished);
+                match fakes::kill_group(group, "KILL") {
+                    Ok(_) | Err(_) => {}
+                }
+                match Deadline::after(CHILD_WITHIN).recv(&finished) {
+                    Ok(_) | Err(_) => {}
+                }
                 std::panic::resume_unwind(payload);
             }
         };
@@ -259,7 +261,9 @@ fn mkfifo(path: &Path) {
         }
         Err(_) => {
             let cleanup = Deadline::after(CHILD_WITHIN);
-            let _ = fakes::kill_group(group, "KILL");
+            match fakes::kill_group(group, "KILL") {
+                Ok(_) | Err(_) => {}
+            }
             let reaped = cleanup.recv(&finished).is_ok();
             let emptied = fakes::group_empties(group, cleanup.left());
             panic!("waited {CHILD_WITHIN:?} for mkfifo (reaped: {reaped}, group empty: {emptied})");
@@ -442,7 +446,7 @@ fn a_stalled_bound_line_still_exits_at_5_seconds() {
         let read = std::fs::File::open(&fifo)
             .and_then(|mut file| file.read_to_string(&mut text))
             .map(|_| text);
-        let _ = fifo_tx.send(read);
+        if let Ok(()) = fifo_tx.send(read) {}
     });
     let text = Deadline::after(DEADLINE)
         .recv(&fifo_rx)
@@ -849,7 +853,7 @@ fn a_bound_that_cannot_start_its_thread_writes_its_line_then_ends_at_once() {
     let (worker_tx, worker_rx) = mpsc::channel();
     thread::spawn(move || {
         signals.handle(SIGTERM);
-        let _ = worker_tx.send(());
+        if let Ok(()) = worker_tx.send(()) {}
     });
     let waited = Deadline::after(DEADLINE);
     assert_eq!(

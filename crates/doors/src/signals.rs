@@ -435,13 +435,15 @@ impl Signals {
         // No branch on the spawn: with no thread the wait below still ends
         // the process at `exit_by`, with no line, and the line is never
         // written inline, where a stuck loop could hold it up.
-        let _ = thread::Builder::new()
-            .name("diag".to_owned())
-            .spawn(move || {
-                diag.line(Severity::Error, None, "timeout", &message);
-                written.store(true, Ordering::SeqCst);
-                bumped.bump();
-            });
+        drop(
+            thread::Builder::new()
+                .name("diag".to_owned())
+                .spawn(move || {
+                    diag.line(Severity::Error, None, "timeout", &message);
+                    written.store(true, Ordering::SeqCst);
+                    bumped.bump();
+                }),
+        );
         park_until(self.clock.as_ref(), exit_by, &tick, &|| {
             done.load(Ordering::SeqCst)
         });
