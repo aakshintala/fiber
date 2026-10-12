@@ -113,3 +113,30 @@ fn secret_refuses_a_symbolic_link() {
     let message = error.to_string();
     assert!(!message.contains("planted-key"), "{message}");
 }
+
+#[test]
+fn secret_returns_the_stored_value_exactly() {
+    let root = TempDir::new("cred-secret-exact");
+    let (config, home) = secret_config(&root);
+    crate::secret::store_secret(&home, "mcp.docs.TOKEN", &Secret::new("exact-value".into()))
+        .unwrap();
+    let read = config.credentials().secret("mcp.docs.TOKEN").unwrap();
+    assert_eq!(read.as_ref().map(Secret::expose), Some("exact-value"));
+}
+
+#[test]
+fn secret_is_none_when_absent_and_the_stored_value_otherwise() {
+    let root = TempDir::new("cred-secret-default");
+    let (config, home) = secret_config(&root);
+    assert!(
+        config
+            .credentials()
+            .secret("mcp.docs.TOKEN")
+            .unwrap()
+            .is_none()
+    );
+    crate::secret::store_secret(&home, "mcp.docs.TOKEN", &Secret::new("tok-2".into())).unwrap();
+    let read = config.credentials().secret("mcp.docs.TOKEN").unwrap();
+    assert_eq!(read.as_ref().map(Secret::expose), Some("tok-2"));
+    assert_ne!(read.as_ref().map(Secret::expose), Some(""));
+}
