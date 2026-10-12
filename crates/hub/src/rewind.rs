@@ -6,7 +6,8 @@
 //! one function and a per-session start lock, never the shared resume
 //! gate: a slow start blocks only the threads starting that same session.
 //! A start that fails writes one diagnostic line with a fixed sentence and
-//! no detail, and the relay still forwards its acknowledgement.
+//! no detail, and the relay answers the rewind with the start's code
+//! instead of the acknowledgement.
 
 use std::os::unix::net::UnixStream;
 use std::path::{Path, PathBuf};
@@ -69,7 +70,7 @@ pub(crate) fn notify_left(
 /// waits out an exiting process under the resume gate: no start ever
 /// holds the shared gate, and no resume ever holds a start lock. A
 /// failure writes one diagnostic line and starts nothing; the relay
-/// forwards its acknowledgement either way.
+/// answers the rewind with the start's code.
 pub(crate) fn reach(
     hub: &Arc<Hub>,
     from: &SessionId,
@@ -92,7 +93,12 @@ pub(crate) fn reach(
                     &start::code_name(&refused.code),
                     &format!("Session {} could not resume.", next.0),
                 );
-                Err(refused)
+                // The resume's own message names the session or the io
+                // detail, so the client gets a fixed sentence instead.
+                Err(crate::resume::Refused {
+                    code: refused.code,
+                    message: "The new session could not be resumed.".to_owned(),
+                })
             }
         };
     }
@@ -109,7 +115,7 @@ pub(crate) fn reach(
             );
             return Err(crate::resume::Refused {
                 code: ErrorCode::IoFailed,
-                message: format!("Session {} could not start.", next.0),
+                message: "The new session could not start.".to_owned(),
             });
         }
     };
@@ -124,7 +130,7 @@ pub(crate) fn reach(
             );
             return Err(crate::resume::Refused {
                 code: ErrorCode::IoFailed,
-                message: format!("Session {} could not start.", next.0),
+                message: "The new session could not start.".to_owned(),
             });
         }
     };
@@ -138,7 +144,42 @@ pub(crate) fn reach(
             );
             Ok(stream)
         }
-        Bind::Exited | Bind::TimedOut | Bind::Failed(_) => {
+        Bind::Exited => {
+            let failure = started.exited();
+            // The log keeps the code and a fixed sentence with the id:
+            // the message may hold starter or io text. The client gets
+            // the new process's own sentence, unless it is `io_failed`
+            // or names the new session, when it gets a fixed sentence.
+            let code = failure.as_ref().map(|failure| failure.code.clone());
+            hub.diag.line(
+                Severity::Warn,
+                Some(next),
+                &start::code_name(code.as_ref().unwrap_or(&ErrorCode::IoFailed)),
+                &format!("Session {} could not start.", next.0),
+            );
+            Err(match failure {
+                Some(failure) if failure.code == ErrorCode::IoFailed => crate::resume::Refused {
+                    code: ErrorCode::IoFailed,
+                    message: "The new session could not start.".to_owned(),
+                },
+                // A structured sentence naming the new session is not
+                // forwarded either: the code is kept with the fixed
+                // sentence, so no new id reaches a client.
+                Some(failure) if failure.message.contains(&next.0) => crate::resume::Refused {
+                    code: failure.code,
+                    message: "The new session could not start.".to_owned(),
+                },
+                Some(failure) => crate::resume::Refused {
+                    code: failure.code,
+                    message: failure.message,
+                },
+                None => crate::resume::Refused {
+                    code: ErrorCode::IoFailed,
+                    message: "The new session could not start.".to_owned(),
+                },
+            })
+        }
+        Bind::TimedOut | Bind::Failed(_) => {
             hub.diag.line(
                 Severity::Warn,
                 Some(next),
@@ -147,7 +188,7 @@ pub(crate) fn reach(
             );
             Err(crate::resume::Refused {
                 code: ErrorCode::IoFailed,
-                message: format!("Session {} could not start.", next.0),
+                message: "The new session could not start.".to_owned(),
             })
         }
     }

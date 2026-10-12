@@ -18,8 +18,8 @@ use std::sync::{Arc, Mutex, mpsc};
 use std::thread;
 use std::time::Duration;
 
-use contract::{CommandId, ErrorCode};
 use contract::clock::Clock;
+use contract::{CommandId, ErrorCode};
 use serde_json::{Map, Value, json};
 
 use super::*;
@@ -426,8 +426,7 @@ fn a_start_the_new_process_refuses_is_refused_with_its_own_code() {
         let origin = temp.clock.origin();
         let starter = FakeStarter::exit_with(&temp.dir, failure(code.clone(), "msg"));
         let hub = temp.hub(starter.clone());
-        let refused =
-            reach(&hub, &SessionId(from.clone()), &SessionId(next.clone())).unwrap_err();
+        let refused = reach(&hub, &SessionId(from.clone()), &SessionId(next.clone())).unwrap_err();
         assert_eq!(refused.code, code);
         assert_eq!(refused.message, "msg");
         assert_eq!(starter.rewound().len(), 1, "the start was attempted once");
@@ -455,13 +454,9 @@ fn a_start_message_that_names_the_new_session_is_not_forwarded() {
     write_log(&temp.dir, &from, &workspace, None, &[exited_line(&from)]);
     let _held = hold_old_lock(&temp, &from);
     let message = format!("Session `{from}` was not rewound for session `{next}`.");
-    let starter = FakeStarter::exit_with(
-        &temp.dir,
-        failure(ErrorCode::InvalidArguments, &message),
-    );
+    let starter = FakeStarter::exit_with(&temp.dir, failure(ErrorCode::InvalidArguments, &message));
     let hub = temp.hub(starter.clone());
-    let refused =
-        reach(&hub, &SessionId(from.clone()), &SessionId(next.clone())).unwrap_err();
+    let refused = reach(&hub, &SessionId(from.clone()), &SessionId(next.clone())).unwrap_err();
     assert_eq!(refused.code, ErrorCode::InvalidArguments);
     assert_eq!(refused.message, "The new session could not start.");
     assert!(
@@ -479,8 +474,7 @@ fn a_start_message_that_names_the_new_session_is_not_forwarded() {
         failure(ErrorCode::NoModel, "No model is configured."),
     );
     let hub = temp.hub(starter.clone());
-    let refused =
-        reach(&hub, &SessionId(from.clone()), &SessionId(next.clone())).unwrap_err();
+    let refused = reach(&hub, &SessionId(from.clone()), &SessionId(next.clone())).unwrap_err();
     assert_eq!(refused.code, ErrorCode::NoModel);
     assert_eq!(refused.message, "No model is configured.");
 }
@@ -494,8 +488,7 @@ fn a_start_that_never_binds_is_refused_io_failed() {
     write_log(&temp.dir, &from, &workspace, None, &[exited_line(&from)]);
     let _held = hold_old_lock(&temp, &from);
     let hub = temp.hub(FakeStarter::hang(&temp.dir));
-    let refused =
-        reach(&hub, &SessionId(from.clone()), &SessionId(next.clone())).unwrap_err();
+    let refused = reach(&hub, &SessionId(from.clone()), &SessionId(next.clone())).unwrap_err();
     assert_eq!(refused.code, ErrorCode::IoFailed);
     assert_eq!(refused.message, "The new session could not start.");
     assert!(
@@ -514,8 +507,7 @@ fn an_unreachable_run_directory_is_refused_io_failed() {
     let _held = hold_old_lock(&temp, &from);
     fs::write(temp.dir.join("run"), b"x").unwrap();
     let hub = temp.hub(FakeStarter::hang(&temp.dir));
-    let refused =
-        reach(&hub, &SessionId(from.clone()), &SessionId(next.clone())).unwrap_err();
+    let refused = reach(&hub, &SessionId(from.clone()), &SessionId(next.clone())).unwrap_err();
     assert_eq!(refused.code, ErrorCode::IoFailed);
     assert_eq!(refused.message, "The new session could not start.");
 }
@@ -532,8 +524,7 @@ fn a_refused_resume_of_the_new_session_keeps_its_code() {
     let origin = temp.clock.origin();
     let starter = FakeStarter::held_then_bind(&temp.dir, usize::MAX);
     let hub = temp.hub(starter.clone());
-    let refused =
-        reach(&hub, &SessionId(from.clone()), &SessionId(next.clone())).unwrap_err();
+    let refused = reach(&hub, &SessionId(from.clone()), &SessionId(next.clone())).unwrap_err();
     assert_eq!(refused.code, ErrorCode::SessionHeld);
     assert_eq!(refused.message, "The new session could not be resumed.");
     assert!(
@@ -803,10 +794,7 @@ fn a_command_for_the_new_session_first_still_gets_its_level() {
 
 #[test]
 fn a_relayed_rewind_whose_start_is_refused_answers_that_code() {
-    for code in [
-        ErrorCode::SessionHeld,
-        ErrorCode::ExtensionRequiredFailed,
-    ] {
+    for code in [ErrorCode::SessionHeld, ErrorCode::ExtensionRequiredFailed] {
         let temp = Temp::new();
         let workspace = temp.workspace();
         let code_name: String =
@@ -850,11 +838,7 @@ fn a_relayed_rewind_whose_start_is_refused_answers_that_code() {
             !serde_json::to_string(&rejection).unwrap().contains(&next),
             "the rejection carries no new session id: {rejection}"
         );
-        assert_eq!(
-            starter.rewound().len(),
-            1,
-            "the start was attempted once"
-        );
+        assert_eq!(starter.rewound().len(), 1, "the start was attempted once");
         // Before the old socket is released, a command for the new
         // session names a session with no log: it is rejected
         // `session_not_found`.
@@ -1021,7 +1005,9 @@ fn a_refusal_from_a_retiring_relay_waits_for_the_acknowledgements_it_rerouted() 
     // The rejection waits for the re-routed acknowledgement: nothing
     // reaches the client before the earlier answer is recorded.
     let probe = client_read.try_clone().unwrap();
-    probe.set_read_timeout(Some(Duration::from_millis(100))).unwrap();
+    probe
+        .set_read_timeout(Some(Duration::from_millis(100)))
+        .unwrap();
     let mut first = String::new();
     assert!(
         BufReader::new(probe).read_line(&mut first).is_err(),

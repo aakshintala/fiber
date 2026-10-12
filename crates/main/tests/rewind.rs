@@ -724,6 +724,13 @@ fn a_rewind_keeps_the_person_name_and_its_pin() {
         new_log[1]["payload"],
         json!({"name": "Mine", "by": "person"})
     );
+    // The listing follows the feed's `run/` scan: wait for the new
+    // session's feed entry before listing it, as the feed test does.
+    let (watcher, _) = connect_hub(&setup, &hubbed.hub);
+    watcher.send(&command("n1_watch", None, "feed", json!({})));
+    until(&watcher, "the new session's feed entry", |line| {
+        line["kind"] == "session_status" && line["session_id"] == next
+    });
     assert_eq!(listed_name(&setup, &next), "Mine");
 
     // The pin holds in the new session: its model's `name_session` fails

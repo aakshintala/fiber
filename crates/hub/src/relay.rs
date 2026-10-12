@@ -50,7 +50,7 @@ pub(crate) use ack::ack_parses;
 #[cfg(test)]
 pub(crate) use ack::acknowledges;
 pub(crate) use ack::{Ack, acknowledgement};
-use ack::{Settled, kept_has, muted, settle};
+use ack::{Settled, Verdict, kept_has, muted, settle};
 pub(crate) use relays::Relays;
 
 /// The commands relayed on one session connection that the session has
@@ -607,7 +607,7 @@ fn relay(
                 break;
             }
             Ok(_) => {
-                let ack = acknowledgement(&buf);
+                let mut ack = acknowledgement(&buf);
                 let replayed_ack = muted(ack.as_ref(), &replayed);
                 #[cfg(test)]
                 {
@@ -645,13 +645,35 @@ fn relay(
                     Some(Settled::Rewound(next)) => {
                         // The new session starts before the client reads
                         // the acknowledgement, so its next command finds
-                        // it running; a start that fails still forwards
-                        // the acknowledgement below.
-                        drop(crate::rewind::reach(
-                            hub,
-                            &SessionId(session.to_owned()),
-                            &next,
-                        ));
+                        // it running. A start that fails is answered with
+                        // the start's own code instead, through the same
+                        // ordered forward below, and the connection keeps
+                        // no subscription for the old session, so the
+                        // redirect at the socket's end moves it nowhere.
+                        match crate::rewind::reach(hub, &SessionId(session.to_owned()), &next) {
+                            Ok(stream) => drop(stream),
+                            Err(refused) => {
+                                if let Some(id) = answered.clone() {
+                                    let mut rejection = crate::connection::line(
+                                        hub,
+                                        "command_rejected",
+                                        crate::connection::rejection(
+                                            Some(&CommandId(id.clone())),
+                                            &refused.code,
+                                            &refused.message,
+                                        ),
+                                    );
+                                    rejection.push(b'\n');
+                                    buf = rejection;
+                                    ack = Some(Ack {
+                                        id,
+                                        verdict: Verdict::Rejected,
+                                        rewound: None,
+                                    });
+                                    lock(relays).subscribed.retain(|(kept, _)| kept != session);
+                                }
+                            }
+                        }
                     }
                     Some(Settled::Subscribed(line)) => {
                         #[cfg(test)]
