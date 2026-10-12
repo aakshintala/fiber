@@ -44,7 +44,10 @@ fn pair(client: &Ws, code: &str) -> String {
 fn stop(hub: &Arc<Hub>, got: &AtomicI32, done: &mpsc::Receiver<i32>) {
     await_zero(hub);
     signal(hub, got);
-    assert_eq!(Deadline::after(DEADLINE).recv_or_fail(done, "hub stops"), 0);
+    assert_eq!(
+        Deadline::after(DEADLINE).recv_or_fail(done, "hub stops"),
+        128 + signal_hook::consts::SIGTERM
+    );
 }
 
 #[test]
@@ -356,13 +359,13 @@ fn self_revocation_waits_for_the_output_pump_before_shutting_tcp() {
         Outcome::Done(r) => r,
         Outcome::Dropped => panic!("self revoke dropped"),
     };
-    lock(&writer)
-        .write_all(&connection::line(
-            &hub,
-            "command_accepted",
-            serde_json::Map::from_iter([("command_id".to_owned(), Value::from("r"))]),
-        ))
-        .unwrap();
+    let mut accepted = connection::line(
+        &hub,
+        "command_accepted",
+        serde_json::Map::from_iter([("command_id".to_owned(), Value::from("r"))]),
+    );
+    accepted.push(b'\n');
+    lock(&writer).write_all(&accepted).unwrap();
     let (tx, rx) = mpsc::channel();
     let working = Arc::clone(&hub);
     thread::spawn(move || {
