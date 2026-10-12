@@ -390,15 +390,48 @@ jobs:
       - name: cargo mutants --in-diff
         run: |
           git diff "$BASE...HEAD" >"$RUNNER_TEMP/diff.patch"
+          mutant_list="$RUNNER_TEMP/mutants-$SHARD.txt"
+          cargo mutants --in-diff "$RUNNER_TEMP/diff.patch" --shard "$SHARD/$SHARD_TOTAL" --list >"$mutant_list"
           # A shard with no mutants of its own stops here.
-          if [ -z "$(cargo mutants --in-diff "$RUNNER_TEMP/diff.patch" --shard "$SHARD/$SHARD_TOTAL" --list)" ]; then
+          if [ ! -s "$mutant_list" ]; then
             echo "no mutants in shard $SHARD"
             exit 0
           fi
+          cat "$mutant_list"
           # The Linux x86_64 tests passed on this head before the shard
           # started, so the baseline run adds nothing (docs/ci.md).
-          cargo mutants --in-diff "$RUNNER_TEMP/diff.patch" --test-tool nextest \
-            --baseline=skip --shard "$SHARD/$SHARD_TOTAL"
+          sudo loginctl enable-linger "$USER"
+          XDG_RUNTIME_DIR="/run/user/$(id -u)"
+          export XDG_RUNTIME_DIR
+          state=""
+          for _ in $(seq 1 30); do
+            state=$(systemctl --user is-system-running 2>/dev/null || true)
+            if [ "$state" = running ] || [ "$state" = degraded ]; then
+              break
+            fi
+            sleep 1
+          done
+          if [ "$state" != running ] && [ "$state" != degraded ]; then
+            echo "systemd's user instance is not running after 30 s: '$state'"
+            exit 1
+          fi
+          mutant_args=(
+            --in-diff "$RUNNER_TEMP/diff.patch"
+            --test-tool nextest
+            --baseline=skip
+            # Recent mutants take 13 to 27 s; 120 s leaves room for test deadlines (docs/ci.md).
+            --timeout 120
+            --shard "$SHARD/$SHARD_TOTAL"
+          )
+          # 12 GiB is ample above a normal nextest run and leaves 4 GiB of the 16 GiB runner for the host.
+          systemd-run --user --scope -p MemoryMax=12G -- cargo mutants "${mutant_args[@]}"
+      - name: Upload mutants.out
+        if: always()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: mutants-${{ matrix.shard }}
+          path: mutants.out
+          if-no-files-found: ignore
 
   bug_red:
     name: Bug fix fails at the red commit
