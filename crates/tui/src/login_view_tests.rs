@@ -7,13 +7,19 @@ use contract::ErrorCode;
 use ratatui::buffer::Buffer;
 use ratatui::layout::Rect;
 
+use ratatui::style::Modifier;
+use ratatui::text::Span;
+
 use super::{Act, Ctx, Login};
 use crate::ConfigureError;
 use crate::configure::{LoginKind, LoginTarget, Stored};
 use crate::configure_fake::Fake;
 use crate::keys::{Edit, Key};
 use crate::login_worker::LoginTicket;
+use crate::mouse::{Target, TargetId};
 use crate::swapped::{Spot, render};
+use crate::theme::Role;
+use crate::view::overlay;
 
 /// A key provider, a browser provider and a secret.
 fn targets() -> Vec<LoginTarget> {
@@ -75,21 +81,28 @@ fn answering_fake(stored: Stored) -> Fake {
     fake
 }
 
-/// A call's context over `fake`, 24 rows tall, in `/w`.
-fn ctx(fake: &Fake) -> Ctx<'_> {
+/// A call's context over `fake`, `height` rows tall, in `/w`.
+fn ctx_h(fake: &Fake, height: usize) -> Ctx<'_> {
     Ctx {
         seam: fake,
         workspace: Path::new("/w"),
-        height: 24,
+        height,
         width: 80,
         usage: None,
     }
 }
 
-/// The view over `targets()` with the row at `index` selected.
+/// A call's context over `fake`, 24 rows tall, in `/w`.
+fn ctx(fake: &Fake) -> Ctx<'_> {
+    ctx_h(fake, 24)
+}
+
+/// The view over `targets()` with the item at `index` selected.
 fn at(fake: &Fake, index: usize) -> Login {
-    let mut login = Login::open(&ctx(fake));
-    login.list.select(index, login.items.len(), 20);
+    let context = ctx(fake);
+    let mut login = Login::open(&context);
+    login.selected = index;
+    login.sync_list(&context);
     login
 }
 
@@ -98,36 +111,61 @@ fn press(login: &mut Login, fake: &Fake, keys: &[Key]) -> Vec<Act> {
     keys.iter().map(|key| login.key(key, &ctx(fake))).collect()
 }
 
+/// Presses each key in turn with a `height`-row context.
+fn press_h(login: &mut Login, fake: &Fake, height: usize, keys: &[Key]) -> Vec<Act> {
+    let context = ctx_h(fake, height);
+    keys.iter().map(|key| login.key(key, &context)).collect()
+}
+
 /// Types `text` into the open panel.
 fn typed(login: &mut Login, fake: &Fake, text: &str) {
     let keys: Vec<Key> = text.chars().map(Key::Char).collect();
     press(login, fake, &keys);
 }
 
-/// Opens the key panel over `acme`: the second row.
+/// Opens the key panel over `acme`: open focuses the first target, so
+/// Enter opens it with no Down.
 fn open_key_panel(login: &mut Login, fake: &Fake) {
-    press(login, fake, &[Key::Down, Key::Enter]);
+    press(login, fake, &[Key::Enter]);
 }
 
-/// Opens the value panel over the secret: the last row.
+/// Opens the value panel over the secret: two Downs, skipping the gap
+/// and the Secrets heading.
 fn open_secret_panel(login: &mut Login, fake: &Fake) {
-    press(
-        login,
-        fake,
-        &[Key::Down, Key::Down, Key::Down, Key::Down, Key::Enter],
-    );
+    press(login, fake, &[Key::Down, Key::Down, Key::Enter]);
 }
 
-/// `login` drawn at `width` x `height`, one string per row.
+/// `login` drawn at `width` x `height`, one string per row: the list
+/// overlay while the list is open, else the legacy frame, as
+/// `swapped::draw` routes.
 fn drawn(login: &Login, width: u16, height: u16) -> String {
     let area = Rect::new(0, 0, width, height);
     let mut buf = Buffer::empty(area);
-    render(
-        &login.frame(usize::from(width)),
-        area,
-        &mut buf,
-        &mut Vec::new(),
-    );
+    if login.list_open() {
+        login.draw(area, &mut buf, &mut Vec::new());
+    } else {
+        render(
+            &login.frame(usize::from(width)),
+            area,
+            &mut buf,
+            &mut Vec::new(),
+        );
+    }
+    text_of(&buf, width, height).join("\n")
+}
+
+/// `login`'s list overlay at `width` x `height`: the buffer and the
+/// click targets it pushed.
+fn overlaid(login: &Login, width: u16, height: u16) -> (Buffer, Vec<Target>) {
+    let area = Rect::new(0, 0, width, height);
+    let mut buf = Buffer::empty(area);
+    let mut targets = Vec::new();
+    login.draw(area, &mut buf, &mut targets);
+    (buf, targets)
+}
+
+/// The buffer's rows as text, trailing spaces trimmed.
+fn text_of(buf: &Buffer, width: u16, height: u16) -> Vec<String> {
     (0..height)
         .map(|y| {
             (0..width)
@@ -136,8 +174,71 @@ fn drawn(login: &Login, width: u16, height: u16) -> String {
                 .trim_end()
                 .to_owned()
         })
-        .collect::<Vec<_>>()
-        .join("\n")
+        .collect()
+}
+
+/// The rows whose cells ride the accent bar.
+fn barred_rows(buf: &Buffer, width: u16, height: u16) -> Vec<u16> {
+    let accent = Role::Accent.color();
+    (0..height)
+        .filter(|y| (0..width).any(|x| buf[(x, *y)].bg == accent))
+        .collect()
+}
+
+/// No cell rides the accent bar.
+fn assert_no_bar(buf: &Buffer, width: u16, height: u16) {
+    assert!(barred_rows(buf, width, height).is_empty());
+}
+
+/// A blank overlay body row.
+fn blank() -> overlay::Row {
+    overlay::Row {
+        spans: Vec::new(),
+        right: Vec::new(),
+        targets: Vec::new(),
+        barred: false,
+    }
+}
+
+/// The list overlay's height over a `rows`-row body: the chrome never
+/// depends on the body's text, only on its row count.
+fn probe_height(rows: usize) -> u16 {
+    let framed = overlay::Overlay {
+        title: Some(("Log in".to_owned(), Some(Span::raw("✕")))),
+        close: Some(TargetId::View(Spot::Close)),
+        body: (0..rows).map(|_| blank()).collect(),
+        footer: Some(overlay::legend(&[
+            ("↑↓", "move"),
+            ("Enter", "log in"),
+            ("Esc", "close"),
+        ])),
+        prefer: 96,
+    };
+    overlay::height(&framed)
+}
+
+/// The slab's height in `buf`: the ▄ edge row through the ▀
+/// edge row.
+fn slab_height(buf: &Buffer, width: u16, height: u16) -> u16 {
+    let top = (0..height)
+        .find(|y| (0..width).any(|x| buf[(x, *y)].symbol() == "▄"))
+        .expect("no top edge");
+    let bottom = (0..height)
+        .rev()
+        .find(|y| (0..width).any(|x| buf[(x, *y)].symbol() == "▀"))
+        .expect("no bottom edge");
+    bottom - top + 1
+}
+
+/// The ▄ edge's run of edge cells in `buf`.
+fn edge_run(buf: &Buffer, width: u16, height: u16) -> usize {
+    for y in 0..height {
+        let run = (0..width).filter(|x| buf[(*x, y)].symbol() == "▄").count();
+        if run > 0 {
+            return run;
+        }
+    }
+    panic!("no top edge");
 }
 
 /// Whether the panel is open.
@@ -150,10 +251,18 @@ fn the_list_marks_key_and_browser() {
     let fake = fake_with(targets());
     let screen = drawn(&Login::open(&ctx(&fake)), 80, 24);
     assert!(screen.contains("Providers"), "{screen}");
-    assert!(screen.contains("  acme  key"), "{screen}");
-    assert!(screen.contains("  codex  browser"), "{screen}");
+    // Each row holds its name and its tag; the key column spans the
+    // providers and the secrets.
+    for (name, tag) in [("acme", "key"), ("codex", "browser"), ("acme.api_key", "")] {
+        assert!(
+            screen
+                .lines()
+                .any(|row| row.contains(name) && (tag.is_empty() || row.contains(tag))),
+            "{screen}"
+        );
+    }
+    assert!(!screen.contains("  acme  key"), "{screen}");
     assert!(screen.contains("Secrets"), "{screen}");
-    assert!(screen.contains("  acme.api_key"), "{screen}");
     // A heading only for a group that has rows.
     let screen = drawn(
         &Login::open(&ctx(&fake_with(vec![targets()[0].clone()]))),
@@ -169,6 +278,298 @@ fn the_list_marks_key_and_browser() {
     );
     assert!(!screen.contains("Providers"), "{screen}");
     assert!(screen.contains("Secrets"), "{screen}");
+}
+
+#[test]
+fn exactly_one_row_is_barred_on_the_focused_target() {
+    let fake = fake_with(targets());
+    let (buf, _) = overlaid(&Login::open(&ctx(&fake)), 80, 24);
+    let barred = barred_rows(&buf, 80, 24);
+    assert_eq!(barred.len(), 1);
+    let row: String = (0..80).map(|x| buf[(x, barred[0])].symbol()).collect();
+    assert!(row.contains("acme"), "{row}");
+}
+
+#[test]
+fn the_title_holds_log_in_and_the_close() {
+    let fake = fake_with(targets());
+    let (buf, targets) = overlaid(&Login::open(&ctx(&fake)), 80, 24);
+    let rows = text_of(&buf, 80, 24);
+    let title = rows
+        .iter()
+        .find(|row| row.contains("Log in"))
+        .expect("no title");
+    assert!(title.contains("✕"), "{title}");
+    let close = targets
+        .iter()
+        .find(|target| target.id == TargetId::View(Spot::Close))
+        .expect("no close target");
+    assert_eq!(buf[(close.rect.x, close.rect.y)].symbol(), "✕");
+}
+
+#[test]
+fn the_headings_are_dim_with_a_blank_row_between_the_groups() {
+    let fake = fake_with(targets());
+    let (buf, _) = overlaid(&Login::open(&ctx(&fake)), 80, 24);
+    let rows = text_of(&buf, 80, 24);
+    let providers = rows
+        .iter()
+        .position(|row| row.contains("Providers"))
+        .expect("no heading");
+    let x = rows[providers].find("Providers").expect("no heading");
+    assert!(
+        buf[(
+            u16::try_from(x).unwrap_or(u16::MAX),
+            u16::try_from(providers).unwrap_or(u16::MAX)
+        )]
+            .modifier
+            .contains(Modifier::DIM)
+    );
+    let codex = rows
+        .iter()
+        .position(|row| row.contains("codex"))
+        .expect("no codex");
+    let secrets = rows
+        .iter()
+        .position(|row| row.contains("Secrets"))
+        .expect("no heading");
+    assert_eq!(secrets, codex + 2);
+    assert!(rows[codex + 1].trim().is_empty());
+}
+
+#[test]
+fn with_no_targets_the_note_pads_to_three_rows_with_no_bar() {
+    let fake = fake_with(Vec::new());
+    let (buf, _) = overlaid(&Login::open(&ctx(&fake)), 80, 24);
+    let rows = text_of(&buf, 80, 24);
+    assert!(
+        rows.iter()
+            .any(|row| row.contains("No provider is installed")),
+        "{}",
+        rows.join("\n")
+    );
+    assert_eq!(slab_height(&buf, 80, 24), probe_height(3));
+    assert_no_bar(&buf, 80, 24);
+}
+
+#[test]
+fn a_failed_read_pads_to_three_rows_with_no_bar() {
+    let fake = failed_fake("config.json: not JSON");
+    let (buf, _) = overlaid(&Login::open(&ctx(&fake)), 80, 24);
+    let rows = text_of(&buf, 80, 24);
+    assert!(
+        rows.iter().any(|row| row.contains("config.json: not JSON")),
+        "{}",
+        rows.join("\n")
+    );
+    assert_eq!(slab_height(&buf, 80, 24), probe_height(3));
+    assert_no_bar(&buf, 80, 24);
+}
+
+#[test]
+fn one_browser_provider_pads_the_body_to_three_rows() {
+    let fake = fake_with(vec![LoginTarget {
+        name: "codex".to_owned(),
+        kind: LoginKind::Browser,
+    }]);
+    let (buf, _) = overlaid(&Login::open(&ctx(&fake)), 80, 24);
+    assert_eq!(slab_height(&buf, 80, 24), probe_height(3));
+    assert_eq!(barred_rows(&buf, 80, 24).len(), 1);
+}
+
+#[test]
+fn after_a_store_the_window_clips_the_said_from_below() {
+    let fake = fake_with(targets());
+    let mut login = Login::open(&ctx(&fake));
+    open_key_panel(&mut login, &fake);
+    typed(&mut login, &fake, "sk-a");
+    assert!(matches!(login.key(&Key::Enter, &ctx(&fake)), Act::Stay));
+    // Nine rows tall the window holds only the focused target.
+    let narrow = drawn(&login, 80, 9);
+    assert!(
+        !narrow.contains("Stored credentials/acme/default."),
+        "{narrow}"
+    );
+    assert!(narrow.lines().any(|row| row.contains("acme")), "{narrow}");
+    let wide = drawn(&login, 80, 24);
+    assert!(wide.contains("Stored credentials/acme/default."), "{wide}");
+}
+
+#[test]
+fn a_long_refusal_wraps_and_is_never_cut_sideways() {
+    let message = "w".repeat(100);
+    let fake = fake_with(targets());
+    let mut login = waiting(&fake, LoginTicket(1));
+    login.step(
+        LoginTicket(1),
+        crate::login_worker::LoginStep::Done(Err(ConfigureError {
+            code: contract::ErrorCode::Usage,
+            message: message.clone(),
+        })),
+    );
+    let screen = drawn(&login, 80, 24);
+    let wrapped: Vec<String> = screen
+        .lines()
+        .filter(|row| !row.trim().is_empty() && row.trim().chars().all(|ch| ch == 'w'))
+        .map(|row| row.trim().to_owned())
+        .collect();
+    assert_eq!(wrapped.len(), 2, "{screen}");
+    assert_eq!(wrapped.join(""), message);
+    for row in &wrapped {
+        assert!(crate::format::width(row) <= 76, "{row:?}");
+    }
+}
+
+#[test]
+fn a_very_long_browser_name_draws_one_barred_row() {
+    let fake = fake_with(vec![LoginTarget {
+        name: "b".repeat(65_530),
+        kind: LoginKind::Browser,
+    }]);
+    let (buf, _) = overlaid(&Login::open(&ctx(&fake)), 80, 24);
+    assert_eq!(barred_rows(&buf, 80, 24).len(), 1);
+    assert_eq!(slab_height(&buf, 80, 24), probe_height(3));
+}
+
+#[test]
+fn names_cut_at_the_budget_keep_the_tag_on_screen() {
+    // At 80 columns with a browser target the name budget is 65: the
+    // inner 76 less the gutter, the spacing and `browser`.
+    for (len, whole) in [(65, true), (66, false)] {
+        let name = "n".repeat(len);
+        let fake = fake_with(vec![LoginTarget {
+            name: name.clone(),
+            kind: LoginKind::Browser,
+        }]);
+        let screen = drawn(&Login::open(&ctx(&fake)), 80, 24);
+        let row = screen
+            .lines()
+            .find(|row| row.contains("browser"))
+            .unwrap_or_else(|| panic!("no tag in {screen}"))
+            .to_owned();
+        if whole {
+            assert!(row.contains(&name), "{row}");
+        } else {
+            assert!(!row.contains(&name), "{row}");
+            assert!(row.contains(&"n".repeat(65)), "{row}");
+        }
+    }
+}
+
+#[test]
+fn at_one_row_only_the_title_draws_with_no_bar() {
+    for fake in [
+        fake_with(targets()),
+        fake_with(Vec::new()),
+        failed_fake("config.json: not JSON"),
+    ] {
+        let (buf, _) = overlaid(&Login::open(&ctx(&fake)), 80, 1);
+        let row: String = (0..80).map(|x| buf[(x, 0)].symbol()).collect();
+        assert!(row.contains("Log in"), "{row}");
+        assert_no_bar(&buf, 80, 1);
+    }
+}
+
+#[test]
+fn at_eight_rows_no_choice_draws_and_at_nine_only_the_focus_does() {
+    // The chrome is eight rows: the saturation count draws no body
+    // row, one row taller draws exactly the focused target, barred.
+    let fake = fake_with(targets());
+    let login = Login::open(&ctx(&fake));
+    let short = drawn(&login, 80, 8);
+    assert!(!short.contains("acme"), "{short}");
+    let (buf, _) = overlaid(&login, 80, 9);
+    let barred = barred_rows(&buf, 80, 9);
+    assert_eq!(barred.len(), 1);
+    let row: String = (0..80).map(|x| buf[(x, barred[0])].symbol()).collect();
+    assert!(row.contains("acme"), "{row}");
+}
+
+#[test]
+fn at_saturation_the_last_provider_stays_visible_with_one_bar() {
+    // At 65,528 providers the overlay height saturates: the window
+    // still shows the last provider, barred, with exactly one bar.
+    const PROVIDERS: usize = 65_528;
+    let mut made = Vec::with_capacity(PROVIDERS);
+    for n in 0..PROVIDERS {
+        made.push(LoginTarget {
+            name: format!("p{n}"),
+            kind: LoginKind::Key,
+        });
+    }
+    let last = format!("p{}", PROVIDERS - 1);
+    let fake = fake_with(made);
+    let login = at(&fake, PROVIDERS);
+    let (buf, _) = overlaid(&login, 80, 24);
+    let barred = barred_rows(&buf, 80, 24);
+    assert_eq!(barred.len(), 1);
+    let row: String = (0..80).map(|x| buf[(x, barred[0])].symbol()).collect();
+    assert!(row.contains(&last), "{row}");
+}
+
+#[test]
+fn a_resize_keeps_the_focused_row_drawn() {
+    let fake = fake_with(targets());
+    let login = at(&fake, 5);
+    let (buf, _) = overlaid(&login, 80, 10);
+    let barred = barred_rows(&buf, 80, 10);
+    assert_eq!(barred.len(), 1);
+    let row: String = (0..80).map(|x| buf[(x, barred[0])].symbol()).collect();
+    assert!(row.contains("acme.api_key"), "{row}");
+}
+
+#[test]
+fn page_down_lands_on_a_drawn_target() {
+    let fake = fake_with(targets());
+    let mut login = at(&fake, 1);
+    press_h(&mut login, &fake, 10, &[Key::PageDown]);
+    assert_eq!(login.selected, 2);
+    let (buf, _) = overlaid(&login, 80, 10);
+    let barred = barred_rows(&buf, 80, 10);
+    assert_eq!(barred.len(), 1);
+    let row: String = (0..80).map(|x| buf[(x, barred[0])].symbol()).collect();
+    assert!(row.contains("codex"), "{row}");
+}
+
+#[test]
+fn scrolled_click_targets_name_the_rows_under_them() {
+    let fake = fake_with(targets());
+    let login = at(&fake, 5);
+    // Tall enough every target pushes a target; scrolled to the last
+    // secret only its target is pushed, on the row that draws it.
+    for (height, pushed) in [(24, 3), (10, 1)] {
+        let (buf, targets) = overlaid(&login, 80, height);
+        let mut rows = 0;
+        for target in &targets {
+            let TargetId::View(Spot::Row(at)) = target.id else {
+                continue;
+            };
+            let super::Item::Target(t) = login.items[at] else {
+                continue;
+            };
+            let name = login.targets[t].name.clone();
+            let row: String = (0..80).map(|x| buf[(x, target.rect.y)].symbol()).collect();
+            assert!(row.contains(&name), "row {at} misses {name}: {row}");
+            rows += 1;
+        }
+        assert_eq!(rows, pushed, "height {height}");
+    }
+}
+
+#[test]
+fn the_footer_padding_holds_the_width_while_scrolled() {
+    // A 60-column secret name last: at 80x9 the window holds only
+    // `acme`, but the ▄ run equals the 80x24 one.
+    let mut made = vec![targets()[0].clone(), targets()[1].clone()];
+    made.push(LoginTarget {
+        name: "s".repeat(60),
+        kind: LoginKind::Secret,
+    });
+    let fake = fake_with(made);
+    let login = Login::open(&ctx(&fake));
+    let (narrow, _) = overlaid(&login, 80, 9);
+    let (wide, _) = overlaid(&login, 80, 24);
+    assert_eq!(edge_run(&narrow, 80, 9), edge_run(&wide, 80, 24));
 }
 
 #[test]
@@ -195,11 +596,182 @@ fn a_failed_read_says_why_and_enter_does_nothing() {
 }
 
 #[test]
-fn enter_on_a_heading_or_the_note_does_nothing() {
+fn open_focuses_the_first_target() {
+    let fake = fake_with(targets());
+    let login = Login::open(&ctx(&fake));
+    assert_eq!(login.selected, 1);
+}
+
+#[test]
+fn enter_right_after_open_opens_key_entry() {
     let fake = fake_with(targets());
     let mut login = Login::open(&ctx(&fake));
     assert!(matches!(login.key(&Key::Enter, &ctx(&fake)), Act::Stay));
+    assert!(panel_open(&login));
+}
+
+#[test]
+fn down_and_up_step_over_targets_only() {
+    let fake = fake_with(targets());
+    let mut login = Login::open(&ctx(&fake));
+    press(&mut login, &fake, &[Key::Down]);
+    assert_eq!(login.selected, 2);
+    // Down from codex skips the gap and the Secrets heading.
+    press(&mut login, &fake, &[Key::Down]);
+    assert_eq!(login.selected, 5);
+    // Down on the last target stays.
+    press(&mut login, &fake, &[Key::Down]);
+    assert_eq!(login.selected, 5);
+    // Up from the secret skips back past the gap.
+    press(&mut login, &fake, &[Key::Up]);
+    assert_eq!(login.selected, 2);
+    press(&mut login, &fake, &[Key::Up]);
+    assert_eq!(login.selected, 1);
+    // Up on the first target stays.
+    press(&mut login, &fake, &[Key::Up]);
+    assert_eq!(login.selected, 1);
+}
+
+#[test]
+fn page_up_and_page_down_land_on_targets() {
+    let fake = fake_with(targets());
+    // (height, from, key, to): the page is the shown body rows less
+    // one, at least one, so height 10 pages by 1, 11 by 2, 24 by 15
+    // and 9 by 1 at the floor.
+    for (height, from, key, to) in [
+        (10, 1, Key::PageDown, 2),
+        (10, 2, Key::PageDown, 5),
+        (10, 5, Key::PageDown, 5),
+        (10, 5, Key::PageUp, 2),
+        (10, 2, Key::PageUp, 1),
+        (10, 1, Key::PageUp, 1),
+        (11, 1, Key::PageDown, 5),
+        (11, 5, Key::PageUp, 2),
+        (12, 5, Key::PageUp, 2),
+        (24, 1, Key::PageDown, 5),
+        (24, 5, Key::PageUp, 1),
+        (9, 1, Key::PageDown, 2),
+    ] {
+        let mut login = at(&fake, from);
+        press_h(&mut login, &fake, height, &[key]);
+        assert_eq!(login.selected, to, "height {height} from {from}");
+    }
+}
+
+#[test]
+fn paging_with_one_target_stays() {
+    let fake = fake_with(vec![targets()[0].clone()]);
+    let mut login = Login::open(&ctx(&fake));
+    assert_eq!(login.selected, 1);
+    press(
+        &mut login,
+        &fake,
+        &[Key::PageDown, Key::PageUp, Key::Down, Key::Up],
+    );
+    assert_eq!(login.selected, 1);
+}
+
+#[test]
+fn keys_with_no_targets_do_nothing() {
+    let fake = fake_with(Vec::new());
+    let mut login = Login::open(&ctx(&fake));
+    for key in [Key::Up, Key::Down, Key::PageUp, Key::PageDown, Key::Enter] {
+        assert!(matches!(login.key(&key, &ctx(&fake)), Act::Stay));
+    }
+    assert_eq!(login.selected, 0);
     assert!(!panel_open(&login));
+    assert!(fake.stores().is_empty());
+}
+
+#[test]
+fn keys_on_a_failed_read_do_nothing() {
+    let fake = failed_fake("config.json: not JSON");
+    let mut login = Login::open(&ctx(&fake));
+    for key in [Key::Up, Key::Down, Key::PageUp, Key::PageDown, Key::Enter] {
+        assert!(matches!(login.key(&key, &ctx(&fake)), Act::Stay));
+    }
+    assert_eq!(login.selected, 0);
+    assert!(!panel_open(&login));
+    assert!(fake.stores().is_empty());
+}
+
+#[test]
+fn the_window_maths_saturate() {
+    // The list overlay's chrome is eight rows: shorter than it no body
+    // row shows, at nine rows tall exactly one does.
+    assert_eq!(super::shown_body_rows(7), 0);
+    assert_eq!(super::shown_body_rows(8), 0);
+    assert_eq!(super::shown_body_rows(9), 1);
+    // An empty body or window starts at the top without underflowing.
+    assert_eq!(super::window_start(0, 0, 0), 0);
+    assert_eq!(super::window_start(0, 0, 1), 0);
+    // PageUp and PageDown with no row shown do not panic and stay put.
+    let fake = fake_with(targets());
+    let mut login = Login::open(&ctx(&fake));
+    press_h(&mut login, &fake, 1, &[Key::PageDown, Key::PageUp]);
+    assert_eq!(login.selected, 1);
+}
+
+#[test]
+fn with_no_row_shown_down_and_up_leave_both_selections() {
+    let fake = fake_with(targets());
+    let mut login = Login::open(&ctx(&fake));
+    let legacy = login.list.selected();
+    // Each key on its own: a Down followed by an Up would hide a
+    // broken freeze by cancelling out.
+    press_h(&mut login, &fake, 1, &[Key::Down]);
+    assert_eq!(login.selected, 1);
+    assert_eq!(login.list.selected(), legacy);
+    press_h(&mut login, &fake, 1, &[Key::Up]);
+    assert_eq!(login.selected, 1);
+    assert_eq!(login.list.selected(), legacy);
+}
+
+#[test]
+fn the_step_viewport_follows_the_selection() {
+    // Six key providers and two secrets: ten frame rows, the gap left
+    // out, the last secret at frame row 9. Eight rows tall six rows
+    // show, so the last secret scrolls the viewport to today's top.
+    let mut made = Vec::new();
+    for n in 0..6 {
+        made.push(LoginTarget {
+            name: format!("p{n}"),
+            kind: LoginKind::Key,
+        });
+    }
+    for name in ["s0.api_key", "s1.api_key"] {
+        made.push(LoginTarget {
+            name: name.to_owned(),
+            kind: LoginKind::Secret,
+        });
+    }
+    let fake = fake_with(made);
+    let context = ctx_h(&fake, 8);
+    let mut login = Login::open(&context);
+    assert_eq!(login.selected, 1);
+    for _ in 0..7 {
+        login.key(&Key::Down, &context);
+    }
+    assert_eq!(login.selected, 10);
+    assert_eq!(login.list.selected(), 9);
+    assert_eq!(login.list.top(), 4);
+    // Its secret panel opens over the same frame rows as today.
+    assert!(matches!(login.key(&Key::Enter, &context), Act::Stay));
+    assert!(panel_open(&login));
+    let screen = drawn(&login, 80, 8);
+    assert!(screen.contains("Value for s1.api_key:"), "{screen}");
+}
+
+#[test]
+fn enter_on_a_heading_or_the_note_does_nothing() {
+    let fake = fake_with(targets());
+    let mut login = Login::open(&ctx(&fake));
+    // The headings and the gap never take focus: Enter on each stays.
+    for selected in [0, 3, 4] {
+        login.selected = selected;
+        assert!(matches!(login.key(&Key::Enter, &ctx(&fake)), Act::Stay));
+        assert!(!panel_open(&login));
+    }
     assert!(fake.stores().is_empty());
     let fake = fake_with(Vec::new());
     let mut login = Login::open(&ctx(&fake));
@@ -541,6 +1113,7 @@ fn esc_in_the_panel_stores_nothing_and_returns_to_the_list() {
     typed(&mut login, &fake, "sk-a");
     assert!(matches!(login.key(&Key::Esc, &ctx(&fake)), Act::Stay));
     assert!(!panel_open(&login));
+    assert!(login.list_open());
     assert_eq!(login.frame(80).field, None);
     assert!(fake.stores().is_empty());
 }
@@ -549,6 +1122,7 @@ fn esc_in_the_panel_stores_nothing_and_returns_to_the_list() {
 fn esc_on_the_list_closes() {
     let fake = fake_with(targets());
     let mut login = Login::open(&ctx(&fake));
+    assert!(login.list_open());
     assert!(matches!(login.key(&Key::Esc, &ctx(&fake)), Act::Close));
 }
 
@@ -556,8 +1130,14 @@ fn esc_on_the_list_closes() {
 fn a_click_selects_a_row_and_the_x_closes() {
     let fake = fake_with(targets());
     let mut login = Login::open(&ctx(&fake));
-    assert!(matches!(login.click(Spot::Row(4), &ctx(&fake)), Act::Stay));
-    assert_eq!(login.list.selected(), 4);
+    assert!(matches!(login.click(Spot::Row(5), &ctx(&fake)), Act::Stay));
+    assert_eq!(login.selected, 5);
+    // A click on the Secrets heading, the gap or past the last item
+    // leaves the selection.
+    for spot in [Spot::Row(4), Spot::Row(3), Spot::Row(99)] {
+        assert!(matches!(login.click(spot, &ctx(&fake)), Act::Stay));
+        assert_eq!(login.selected, 5);
+    }
     assert!(matches!(login.click(Spot::Close, &ctx(&fake)), Act::Close));
 }
 
@@ -783,6 +1363,7 @@ fn esc_while_waiting_returns_to_the_rows_and_cancels_once() {
         held.clone() as std::sync::Arc<dyn crate::configure::BrowserLogin>,
     ));
     assert!(matches!(login.key(&Key::Esc, &ctx(&fake)), Act::Stay));
+    assert!(login.list_open());
     assert_eq!(login.frame(80).below, Vec::<String>::new());
     assert_eq!(held.cancels(), 1);
 }
@@ -957,5 +1538,57 @@ fn a_row_click_while_waiting_keeps_the_waiting_mode() {
             "Open this URL to log in to codex:".to_owned(),
             url.to_owned()
         ]
+    );
+}
+
+#[test]
+fn the_frame_row_drops_the_gap_only_for_rows_past_it() {
+    // Items: heading, two providers, the gap at 3, the Secrets heading,
+    // two secrets. The legacy frame has no gap, so a row past it sits
+    // one higher, and a row at or before it keeps its index.
+    let fake = fake_with(vec![
+        LoginTarget {
+            name: "acme".to_owned(),
+            kind: LoginKind::Key,
+        },
+        LoginTarget {
+            name: "codex".to_owned(),
+            kind: LoginKind::Browser,
+        },
+        LoginTarget {
+            name: "acme.api_key".to_owned(),
+            kind: LoginKind::Secret,
+        },
+        LoginTarget {
+            name: "other.api_key".to_owned(),
+            kind: LoginKind::Secret,
+        },
+    ]);
+    assert_eq!(at(&fake, 1).list.selected(), 1);
+    assert_eq!(at(&fake, 2).list.selected(), 2);
+    assert_eq!(at(&fake, 3).list.selected(), 3);
+    assert_eq!(at(&fake, 4).list.selected(), 3);
+    assert_eq!(at(&fake, 5).list.selected(), 4);
+    assert_eq!(at(&fake, 6).list.selected(), 5);
+}
+
+#[test]
+fn a_blank_row_separates_the_rows_from_what_the_last_action_said() {
+    let fake = fake_with(targets());
+    let mut login = Login::open(&ctx(&fake));
+    open_key_panel(&mut login, &fake);
+    typed(&mut login, &fake, "sk-a");
+    assert!(matches!(login.key(&Key::Enter, &ctx(&fake)), Act::Stay));
+    let (buf, _) = overlaid(&login, 80, 24);
+    let rows = text_of(&buf, 80, 24);
+    let said = rows
+        .iter()
+        .position(|row| row.contains("Stored credentials/acme/default."))
+        .unwrap_or_else(|| panic!("the said line is drawn: {rows:?}"));
+    // The row before the said line is the blank separator, not the
+    // last target row above it.
+    assert!(
+        !rows[said - 1].chars().any(char::is_alphanumeric),
+        "{rows:?}"
     );
 }
