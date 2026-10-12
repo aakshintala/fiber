@@ -20,6 +20,24 @@ fn open(home: &Path) -> CredentialFile {
 }
 
 #[test]
+fn an_unlocked_read_sees_whole_files_and_refuses_links() {
+    let dir = fakes::TempDir::new("credential-unlocked");
+    let file = open(dir.path());
+    assert_eq!(file.read_unlocked().unwrap(), None);
+    assert!(!dir.path().join("credentials").exists());
+    let held = file.try_lock().unwrap().unwrap();
+    held.write(&serde_json::json!({"token":"stored"})).unwrap();
+    assert_eq!(file.read_unlocked().unwrap(), held.read().unwrap());
+    let path = dir.path().join("credentials/acme/default");
+    std::fs::remove_file(&path).unwrap();
+    std::os::unix::fs::symlink(dir.path().join("target"), &path).unwrap();
+    assert!(matches!(
+        file.read_unlocked(),
+        Err(ConfigError::NotPlain { .. })
+    ));
+}
+
+#[test]
 fn a_stored_object_reads_back() {
     let home = TempDir::new("cred-file");
     let lock = open(home.path()).try_lock().unwrap().unwrap();

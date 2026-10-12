@@ -14,6 +14,7 @@ mod extension;
 mod extension_settings;
 mod home;
 mod keys;
+mod mcp_tokens;
 mod names;
 mod path;
 mod rules;
@@ -45,6 +46,7 @@ pub use home::{
     ProjectKey, create_fiber_home, fiber_home, fiber_home_from_env, fiber_home_path,
     fiber_home_path_from_env,
 };
+pub use mcp_tokens::McpTokenFiles;
 pub use names::{SHORT_NAMES, dir_name, full_name, short_name};
 pub use rules::{RuleLine, RulesFiles, RulesListing, RulesScope, list_rules, remove_rule};
 pub use secret::{

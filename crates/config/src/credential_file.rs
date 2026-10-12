@@ -1,8 +1,9 @@
 //! A stored OAuth credential (`docs/model-routing.md`, "Credentials"): the
 //! file `credentials/<provider>/<label>` in Fiber home, mode 0600 in a 0700
-//! directory. It is read and written only under a lock, so two sessions never
-//! refresh one token twice (`docs/model-routing.md`, "Keys, tokens and
-//! OAuth"; `docs/state.md`, "Concurrent access").
+//! directory. Writes and refresh re-reads hold the lock, so two sessions never
+//! refresh one token twice. Ordinary reads take no lock: atomic replacement
+//! exposes the old whole file or the new one (`docs/model-routing.md`, "Keys,
+//! tokens and OAuth"; `docs/state.md`, "Concurrent access").
 
 use std::fs::{File, TryLockError};
 use std::path::{Path, PathBuf};
@@ -35,6 +36,16 @@ impl CredentialFile {
         Ok(Self {
             path: credential_path(home, provider, label)?,
         })
+    }
+
+    /// Reads a whole file without locking or creating directories. Symbolic
+    /// links are refused; an absent file returns `None`.
+    pub fn read_unlocked(&self) -> Result<Option<Value>, ConfigError> {
+        check_directories(&self.path)?;
+        if !plain(&self.path, false)? {
+            return Ok(None);
+        }
+        read(&self.path)
     }
 
     /// Takes the lock without waiting. `None` when another holder has it.

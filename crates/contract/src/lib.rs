@@ -21,6 +21,7 @@ mod ids;
 pub mod images;
 pub mod inbox;
 pub mod jobs;
+pub mod mcp_tokens;
 mod pre_session;
 pub mod provider;
 pub mod repository;
