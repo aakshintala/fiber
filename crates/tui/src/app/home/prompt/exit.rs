@@ -213,7 +213,8 @@ impl App {
         // The attached session is live while attached: it never left,
         // and a resumed session's row still reads exited until the feed
         // update marks it live. Without this it gets no resume line when
-        // quitting before that update lands.
+        // quitting before that update lands. An exit that arrived after
+        // the attach instead marks it dead, and it gets no line.
         if let Phase::Attached { session, .. } = &self.phase
             && !home.sessions.live().iter().any(|row| row.id == *session)
             && !home
@@ -221,6 +222,7 @@ impl App {
                 .closing
                 .iter()
                 .any(|(closed, _)| closed == session)
+            && home.left_after_attach.as_ref() != Some(session)
         {
             lines.push(crate::home::exit_line(session));
         }

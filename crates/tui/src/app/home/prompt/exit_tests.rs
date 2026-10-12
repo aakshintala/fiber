@@ -677,6 +677,52 @@ fn the_attached_session_with_an_exited_row_gets_its_line() {
 }
 
 #[test]
+fn an_attached_session_that_exits_gets_no_line() {
+    let mut app = home();
+    linked(&mut app);
+    working(&mut app, "s_aaaaaaaaaaaaaaaa");
+    app.attach(SessionId("s_aaaaaaaaaaaaaaaa".to_owned()));
+    // The session exits after it was attached: dead, so quitting owes
+    // it no resume line.
+    app.on_line(left("s_aaaaaaaaaaaaaaaa", "exited"));
+    assert!(app.exit_lines().is_empty());
+}
+
+#[test]
+fn a_live_status_for_another_session_restores_no_line() {
+    let mut app = home();
+    linked(&mut app);
+    working(&mut app, "s_aaaaaaaaaaaaaaaa");
+    working(&mut app, "s_bbbbbbbbbbbbbbbb");
+    app.attach(SessionId("s_aaaaaaaaaaaaaaaa".to_owned()));
+    app.on_line(left("s_aaaaaaaaaaaaaaaa", "exited"));
+    // A live update for another session changes nothing about the
+    // attached one: still dead, still no line.
+    working(&mut app, "s_bbbbbbbbbbbbbbbb");
+    assert_eq!(
+        app.exit_lines(),
+        ["s_bbbbbbbbbbbbbbbb  fiber resume s_bbbbbbbbbbbbbbbb"]
+    );
+}
+
+#[test]
+fn reattaching_after_the_exit_restores_the_line() {
+    let mut app = home();
+    linked(&mut app);
+    working(&mut app, "s_aaaaaaaaaaaaaaaa");
+    app.attach(SessionId("s_aaaaaaaaaaaaaaaa".to_owned()));
+    app.on_line(left("s_aaaaaaaaaaaaaaaa", "exited"));
+    // Opening the exited session resumes it: the fresh attachment
+    // supersedes the exit, and quitting before the live update lands
+    // owes the line again.
+    app.attach(SessionId("s_aaaaaaaaaaaaaaaa".to_owned()));
+    assert_eq!(
+        app.exit_lines(),
+        ["s_aaaaaaaaaaaaaaaa  fiber resume s_aaaaaaaaaaaaaaaa"]
+    );
+}
+
+#[test]
 fn a_closing_attached_session_with_an_exited_row_gets_no_line() {
     let mut app = home();
     linked(&mut app);
