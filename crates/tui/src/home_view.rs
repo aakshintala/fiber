@@ -507,10 +507,8 @@ pub(super) fn render(
         completions::draw(&panel, rect, placed.box_top, buf, &mut targets);
     }
     token_targets(app, area, &placed, &mut targets);
-    if banner > 0 {
-        let mut bottom = placed.foot;
-        crate::view::banner::draw(app, area, buf, &mut bottom);
-    }
+    let mut bottom = placed.foot;
+    crate::view::banner::draw(app, area, buf, &mut bottom);
     // The foot hint sits on the last row, centred, cut to the width.
     let foot = &screen.foot;
     if placed.foot >= area.y {
@@ -613,7 +611,7 @@ fn typed_body(
             // the header; the missing row takes their place.
             if missing && shown > 0 {
                 rows.push(TypedRow::Missing);
-            } else if shown > 0 && completions > 0 {
+            } else if shown > 0 {
                 let (coff, ctake) =
                     completions::window(completions.saturating_sub(1), completions, shown);
                 rows.extend((coff..coff.saturating_add(ctake)).map(TypedRow::Completion));
@@ -650,7 +648,7 @@ fn typed_body(
             rows.push(TypedRow::Missing);
             budget = budget.saturating_sub(1);
         }
-    } else if completions > 0 && budget > 0 {
+    } else if budget > 0 {
         let (off, take) = completions::window(anchor, completions, budget);
         rows.extend((off..off.saturating_add(take)).map(TypedRow::Completion));
         budget = budget.saturating_sub(take);
