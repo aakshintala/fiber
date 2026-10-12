@@ -25,6 +25,8 @@ fn text(deadline: Deadline, client: &Ws) -> Value {
         }
     }
 }
+const PAIR_WAIT: Duration = Duration::from_secs(1);
+
 fn pair(client: &Ws, code: &str) -> String {
     client.text(&json!({"id":"p1","command":"pair","args":{"code":code}}).to_string());
     let deadline = Deadline::after(DEADLINE);
@@ -40,6 +42,59 @@ fn pair(client: &Ws, code: &str) -> String {
     assert_eq!(notice["kind"], "device_changed");
     assert_eq!(notice["payload"]["change"], "paired");
     token
+}
+
+fn test_hub(temp: &Temp, clock: &Arc<FakeClock>) -> Arc<Hub> {
+    Arc::new(crate::testkit::hub(
+        &temp.dir,
+        Arc::new(FakeStarter::hang(&temp.dir)),
+        Arc::clone(clock) as Arc<dyn Clock>,
+    ))
+}
+
+fn authenticated(
+    hub: Arc<Hub>,
+    n: u64,
+    who: Who,
+) -> (
+    UnixStream,
+    mpsc::Receiver<Option<String>>,
+    mpsc::Receiver<()>,
+) {
+    let (service, client) = UnixStream::pair().unwrap();
+    let (lines_tx, lines_rx) = mpsc::channel();
+    let reader = client.try_clone().unwrap();
+    thread::spawn(move || {
+        let mut read = BufReader::new(reader);
+        loop {
+            let mut line = String::new();
+            match read.read_line(&mut line) {
+                Ok(0) => {
+                    lines_tx.send(None).unwrap_or(());
+                    break;
+                }
+                Ok(_) => {
+                    if lines_tx.send(Some(line)).is_err() {
+                        break;
+                    }
+                }
+                Err(_) => {
+                    lines_tx.send(None).unwrap_or(());
+                    break;
+                }
+            }
+        }
+    });
+    let (served_tx, served_rx) = mpsc::channel();
+    thread::spawn(move || {
+        crate::connection::serve_authenticated(service, hub, n, who);
+        served_tx.send(()).unwrap_or(());
+    });
+    (client, lines_rx, served_rx)
+}
+
+fn wire_value(deadline: Deadline, lines: &mpsc::Receiver<Option<String>>, what: &str) -> Value {
+    serde_json::from_str(&deadline.recv_or_fail(lines, what).unwrap()).unwrap()
 }
 fn stop(hub: &Arc<Hub>, got: &AtomicI32, done: &mpsc::Receiver<i32>) {
     await_zero(hub);
@@ -372,13 +427,16 @@ fn self_revocation_waits_for_the_output_pump_before_shutting_tcp() {
         working.pairing.finish(&working, revoked);
         tx.send(()).unwrap_or(());
     });
-    assert!(clock.await_parked(end, WITHIN));
+    assert!(clock.await_parked_count(end, 2, PAIR_WAIT));
     assert!(
         Deadline::after(Duration::from_millis(100))
             .recv(&rx)
             .is_err()
     );
     assert!(!web.drained());
+    let mark = clock
+        .mark_parked(end, PAIR_WAIT)
+        .expect("finish waits for the pump");
     drop(sink);
     let deadline = Deadline::after(DEADLINE);
     let first = deadline.recv_or_fail(&frames_rx, "acknowledgement after releasing the pump");
@@ -399,6 +457,197 @@ fn self_revocation_waits_for_the_output_pump_before_shutting_tcp() {
         Item::Close(1000, String::new())
     );
     assert_eq!(deadline.recv_or_fail(&frames_rx, "pump EOF"), Item::Eof);
-    deadline.recv_or_fail(&rx, "finish observes pump completion");
+    let finished_before_deadline = Deadline::after(Duration::from_millis(250))
+        .recv(&rx)
+        .is_ok();
+    if !finished_before_deadline {
+        let reparked = clock.await_parked_since(&mark, Some(end), PAIR_WAIT);
+        if reparked {
+            clock.advance(STOP_CLOSE_WAIT);
+        }
+        Deadline::after(DEADLINE).recv_or_fail(&rx, "finish observes pump completion");
+    }
+    assert!(
+        finished_before_deadline,
+        "finish returns when the pump drains"
+    );
     assert!(web.drained());
+}
+
+#[test]
+fn a_local_revoke_announces_without_waiting_for_the_clock() {
+    let temp = Temp::new();
+    let clock = FakeClock::new();
+    let hub = test_hub(&temp, &clock);
+    pair_device(&temp.dir, "phone", "token");
+    let end = clock.now() + STOP_CLOSE_WAIT;
+    let (mut client, lines, served) = authenticated(Arc::clone(&hub), 1, Who::Local);
+    client
+        .write_all(b"{\"id\":\"r\",\"command\":\"revoke\",\"args\":{\"device\":\"phone\"}}\n")
+        .unwrap();
+    let deadline = Deadline::after(DEADLINE);
+    let accepted = wire_value(deadline, &lines, "local revoke acceptance");
+    assert_eq!(accepted["kind"], "command_accepted");
+    assert_eq!(accepted["payload"]["command_id"], "r");
+
+    let early = Deadline::after(Duration::from_millis(250)).recv(&lines);
+    let announced_without_clock = matches!(early, Ok(Some(_)));
+    let event = match early {
+        Ok(Some(line)) => serde_json::from_str::<Value>(&line).unwrap(),
+        Err(std::sync::mpsc::RecvTimeoutError::Timeout) => {
+            let parked = clock.await_parked_count(end, 2, PAIR_WAIT);
+            if parked {
+                clock.advance(STOP_CLOSE_WAIT);
+            }
+            wire_value(
+                Deadline::after(DEADLINE),
+                &lines,
+                "local revoke announcement",
+            )
+        }
+        Ok(None) | Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => {
+            panic!("local revoke connection closed before its announcement")
+        }
+    };
+    assert_eq!(event["kind"], "device_changed");
+    assert_eq!(event["payload"]["change"], "revoked");
+    assert_eq!(event["payload"]["device"], "phone");
+    client.shutdown(Shutdown::Both).unwrap_or(());
+    drop(client);
+    Deadline::after(DEADLINE).recv_or_fail(&served, "local revoke connection exits");
+    assert!(
+        announced_without_clock,
+        "a revoke with no live device does not wait for fake time"
+    );
+}
+
+#[test]
+fn finishing_a_revoke_returns_at_its_deadline_with_an_undrained_web() {
+    let temp = Temp::new();
+    let clock = FakeClock::new();
+    let hub = test_hub(&temp, &clock);
+    pair_device(&temp.dir, "phone", "token");
+    let who = hub.pairing.authenticate(&hub, 1, "token").unwrap();
+    let listener = std::net::TcpListener::bind(("127.0.0.1", 0)).unwrap();
+    let peer = TcpStream::connect(listener.local_addr().unwrap()).unwrap();
+    let (server, _) = listener.accept().unwrap();
+    let web = Arc::new(Web {
+        control: server.try_clone().unwrap(),
+        sink: Mutex::new(Sink {
+            stream: server,
+            closed: false,
+        }),
+        drained: AtomicBool::new(false),
+    });
+    hub.pairing.attach_web(&who, Arc::clone(&web));
+    let end = clock.now() + STOP_CLOSE_WAIT;
+    let (mut client, lines, served) = authenticated(Arc::clone(&hub), 1, who);
+    client
+        .write_all(b"{\"id\":\"r\",\"command\":\"revoke\",\"args\":{\"device\":\"phone\"}}\n")
+        .unwrap();
+    let deadline = Deadline::after(DEADLINE);
+    assert_eq!(
+        wire_value(deadline, &lines, "device revoke acceptance")["kind"],
+        "command_accepted"
+    );
+    assert_eq!(
+        wire_value(deadline, &lines, "device revoke notice")["payload"]["change"],
+        "revoked"
+    );
+    assert!(clock.await_parked_count(end, 2, PAIR_WAIT));
+    client.shutdown(Shutdown::Write).unwrap_or(());
+    assert!(
+        Deadline::after(Duration::from_millis(100))
+            .recv(&served)
+            .is_err(),
+        "the held web drain keeps finish waiting before its deadline"
+    );
+
+    clock.advance(STOP_CLOSE_WAIT);
+    let returned_at_deadline = Deadline::after(Duration::from_millis(250))
+        .recv(&served)
+        .is_ok();
+    if !returned_at_deadline {
+        web.drained.store(true, Ordering::SeqCst);
+        hub.tick.wake();
+        Deadline::after(DEADLINE).recv_or_fail(&served, "finish exits after releasing the drain");
+    }
+    drop((client, peer));
+    assert!(
+        returned_at_deadline,
+        "finish returns when its deadline expires"
+    );
+}
+
+#[test]
+fn revoke_watchdog_closes_a_live_device_at_the_deadline_while_answer_is_blocked() {
+    let temp = Temp::new();
+    let clock = FakeClock::new();
+    let hub = test_hub(&temp, &clock);
+    pair_device(&temp.dir, "phone", "token");
+    let who = hub.pairing.authenticate(&hub, 1, "token").unwrap();
+    let (target, peer) = UnixStream::pair().unwrap();
+    hub.pairing.attach(&who, &Arc::new(Mutex::new(target)));
+    let (closed_tx, closed_rx) = mpsc::channel();
+    let mut target_read = peer.try_clone().unwrap();
+    thread::spawn(move || {
+        let mut bytes = [0; 1024];
+        loop {
+            match target_read.read(&mut bytes) {
+                Ok(0) | Err(_) => {
+                    closed_tx.send(()).unwrap_or(());
+                    break;
+                }
+                Ok(_) => {}
+            }
+        }
+    });
+
+    let end = clock.now() + STOP_CLOSE_WAIT;
+    let (service, mut client) = UnixStream::pair().unwrap();
+    let filler = service.try_clone().unwrap();
+    filler.set_nonblocking(true).unwrap();
+    while (&filler).write(&[0; 4096]).is_ok() {}
+    filler.set_nonblocking(false).unwrap();
+    drop(filler);
+    let (served_tx, served_rx) = mpsc::channel();
+    let working = Arc::clone(&hub);
+    thread::spawn(move || {
+        crate::connection::serve_authenticated(service, working, 2, Who::Local);
+        served_tx.send(()).unwrap_or(());
+    });
+    client
+        .write_all(b"{\"id\":\"r\",\"command\":\"revoke\",\"args\":{\"device\":\"phone\"}}\n")
+        .unwrap();
+
+    let watchdog_waited = clock.await_parked(end, PAIR_WAIT);
+    let closed_before_deadline = closed_rx.try_recv().is_ok();
+    let closed_at_deadline = if watchdog_waited {
+        clock.advance(STOP_CLOSE_WAIT);
+        Deadline::after(Duration::from_millis(250))
+            .recv(&closed_rx)
+            .is_ok()
+    } else {
+        false
+    };
+    client.shutdown(Shutdown::Both).unwrap_or(());
+    drop(client);
+    Deadline::after(DEADLINE).recv_or_fail(&served_rx, "blocked revoke answer is released");
+    if !closed_at_deadline {
+        Deadline::after(DEADLINE).recv_or_fail(&closed_rx, "finish closes the revoked device");
+    }
+    hub.pairing.forget(&hub, &who);
+    drop(peer);
+    assert!(
+        watchdog_waited,
+        "the revoke watchdog waits before its deadline"
+    );
+    assert!(
+        !closed_before_deadline,
+        "the device remains open before the deadline"
+    );
+    assert!(
+        closed_at_deadline,
+        "the watchdog shuts the device at the deadline"
+    );
 }
