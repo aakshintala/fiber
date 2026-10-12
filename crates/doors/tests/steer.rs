@@ -13,10 +13,9 @@ mod support;
 
 use std::io::{BufRead, BufReader, Write};
 use std::os::unix::net::{UnixListener, UnixStream};
-use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::{Arc, mpsc};
 use std::thread;
-use std::time::Duration;
 
 use support::*;
 
@@ -417,6 +416,9 @@ fn commit_runs_only_after_the_subscribe_is_answered() {
     let listener = listen(&home, &id);
     let (release_tx, release_rx) = mpsc::channel::<()>();
     let (subscribed_tx, subscribed_rx) = mpsc::channel::<()>();
+    let acked = Arc::new(AtomicBool::new(false));
+    let violated = Arc::new(AtomicBool::new(false));
+    let acked_server = Arc::clone(&acked);
     let served = thread::spawn(move || {
         let (stream, _) = listener.accept().unwrap();
         let mut reader = BufReader::new(stream.try_clone().unwrap());
@@ -429,6 +431,7 @@ fn commit_runs_only_after_the_subscribe_is_answered() {
         Deadline::after(DEADLINE)
             .recv(&release_rx)
             .expect("the test releases the acknowledgement");
+        acked_server.store(true, Ordering::SeqCst);
         let mut writer = stream.try_clone().unwrap();
         writer.write_all(&accepted(&sub_id)).unwrap();
         writer.flush().unwrap();
@@ -444,8 +447,13 @@ fn commit_runs_only_after_the_subscribe_is_answered() {
     let home_client = home.clone();
     let id_client = id.clone();
     let counted = Arc::clone(&calls);
+    let acked_client = Arc::clone(&acked);
+    let violated_client = Arc::clone(&violated);
     let held_back = thread::spawn(move || {
         let mut commit = || {
+            if !acked_client.load(Ordering::SeqCst) {
+                violated_client.store(true, Ordering::SeqCst);
+            }
             counted.fetch_add(1, Ordering::SeqCst);
             let _sent = called_tx.send(());
             true
@@ -468,17 +476,16 @@ fn commit_runs_only_after_the_subscribe_is_answered() {
     Deadline::after(DEADLINE)
         .recv(&subscribed_rx)
         .expect("the client sent subscribe");
-    let short = fakes::Deadline::after(Duration::from_millis(500));
-    assert!(
-        short.recv(&called_rx).is_err(),
-        "commit is not called before the subscribe is answered"
-    );
     release_tx.send(()).unwrap();
     Deadline::after(DEADLINE)
         .recv(&called_rx)
         .expect("commit runs once the subscribe is answered");
     assert_eq!(steered(&done_rx), Steered::Gone);
     held_back.join().expect("the steer thread ended");
+    assert!(
+        !violated.load(Ordering::SeqCst),
+        "commit ran before the acknowledgement was sent"
+    );
     assert_eq!(calls.load(Ordering::SeqCst), 1, "commit ran once");
     served.join().expect("the server read the steer line");
 }
