@@ -549,11 +549,14 @@ impl Loop {
             // meaning while idle.
             Delivery::Cancelled => {}
             // After `close`, news starts a turn only while the loop waits
-            // for the session's jobs; without them the notice stays
-            // unclaimed. The claim is asked when the turn takes it.
+            // for the session's jobs; without them the claim is left
+            // untaken. The claim is asked here, at admission: a refused
+            // claim starts no turn.
             Delivery::Job(notice) => {
-                if !(self.closing && input.pieces.is_empty() && !self.has_jobs()) {
-                    input.pieces.push(Queued::Notice(notice));
+                if !(self.closing && input.pieces.is_empty() && !self.has_jobs())
+                    && let Some((completed, delegate)) = crate::jobs::claimed(notice)
+                {
+                    input.pieces.push(Queued::Job(completed, delegate));
                 }
             }
             Delivery::JobLine(line) => {

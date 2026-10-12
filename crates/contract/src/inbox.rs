@@ -129,8 +129,8 @@ pub enum Delivery {
 }
 
 /// News that a background job ended, sent by the session's jobs registry.
-/// The loop asks the claim when it writes the notice, at the step
-/// boundary that writes it, never when it admits it.
+/// The loop asks the claim at admission while idle, or at the step
+/// boundary that writes the notice while a turn runs.
 #[derive(Debug)]
 pub struct JobNotice {
     /// How the job ended: the `job_completed` the loop writes with the

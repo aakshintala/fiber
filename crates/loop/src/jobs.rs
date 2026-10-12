@@ -40,10 +40,11 @@ pub(crate) enum Queued {
     /// a turn. Fiber's own ending notice only ever starts a turn. The
     /// second field is what the `before_message` chain left on the message.
     Steer(Message, Hooked),
-    /// A running turn's job notice, not yet claimed: claimed when the
-    /// step boundary writes it, when a turn takes it, or when shutdown
-    /// settles it, and written as `delegate_finished` (bounded) then
-    /// `job_completed` only when the claim holds.
+    /// A running turn's job notice, not yet claimed: claimed at the
+    /// step boundary that writes it, at the move of leftover pieces
+    /// into a turn's input, or at shutdown's settle, and written as
+    /// `delegate_finished` (bounded) then `job_completed` only when
+    /// the claim holds.
     Notice(JobNotice),
     /// Written as `delegate_finished` (bounded) then `job_completed`
     /// with no action; named in a `jobs` item when it starts a turn.
@@ -251,14 +252,10 @@ impl Loop {
                     name_job(&mut input, &completed.job_id);
                     self.queued.push_back(Queued::Job(completed, delegate));
                 }
-                // Claimed when the turn takes it: held, it joins the
-                // queue as a job's end; refused, it starts no turn.
-                Queued::Notice(notice) => {
-                    if let Some((completed, delegate)) = claimed(notice) {
-                        name_job(&mut input, &completed.job_id);
-                        self.queued.push_back(Queued::Job(completed, delegate));
-                    }
-                }
+                // Notices are claimed at admission while idle and at the
+                // move into a turn's input while running: none reaches a
+                // turn unclaimed.
+                Queued::Notice(..) => unreachable!("notices are claimed before a turn takes them"),
                 Queued::Line(line) => {
                     name_job(&mut input, &line.job_id);
                     self.queued.push_back(Queued::Line(line));

@@ -2980,3 +2980,27 @@ fn a_job_completed_after_its_restart_owes_nothing() {
     orphans.fold(&Event::JobCompleted(failed(JOB)));
     assert!(orphans.finish().is_empty());
 }
+
+#[test]
+fn admit_idle_claims_a_notice_at_admission() {
+    let mut world = World::new(Vec::new(), Vec::new(), |_| Vec::new());
+    let looped = world.looped.as_mut().unwrap();
+    // A refused claim starts no turn on the notice.
+    let refused = Asked::default();
+    let mut input = crate::inbox::TurnInput::of(Vec::new());
+    looped
+        .admit_idle(notice(JOB, false, &refused), &mut input)
+        .unwrap();
+    assert!(input.pieces.is_empty(), "a refused claim starts no turn");
+    assert_eq!(refused.count(), 1, "the claim is asked at admission");
+    // A held claim joins the turn's input as the job's end.
+    let held = Asked::default();
+    looped
+        .admit_idle(notice(JOB, true, &held), &mut input)
+        .unwrap();
+    assert!(
+        matches!(input.pieces.as_slice(), [super::Queued::Job(..)]),
+        "a held claim starts one turn with the notice"
+    );
+    assert_eq!(held.count(), 1, "the claim is asked at admission");
+}
