@@ -11,6 +11,7 @@ use std::sync::Arc;
 
 use contract::ErrorCode;
 use contract::SessionId;
+use contract::events::Event;
 use doors::Session;
 use log::Log;
 use r#loop::Loop;
@@ -70,6 +71,15 @@ pub(crate) fn ask_resume(
         Ok(id) => id,
         Err(e) => return ask_failed(failed(e.code(), e)),
     };
+    // The recorded worktree may be gone: the lookup above reads the
+    // recorded repository, but a resume runs in the recorded workspace, so
+    // the launch project is re-applied to it here. A session outside this
+    // project is refused exactly as an unknown id: the log is untouched,
+    // no lock is taken and nothing attaches.
+    if !in_launch_project(&sessions.join(&id.0), &project) {
+        let e = log::Error::NotFound(sessions.clone());
+        return ask_failed(failed(e.code(), e));
+    }
     // A resume that attaches to a live session names the crash file by the
     // session it attaches to, as the TUI does.
     crate::crash::attach(&id);
@@ -107,6 +117,25 @@ pub(crate) fn ask_resume(
         signals,
         fiber,
     )
+}
+
+/// Whether the session in `dir` runs in the launch project: its recorded
+/// workspace resolves to the same project, the same test the lookup
+/// applied. A missing log, or a first line that fails to read or parse as
+/// `session_started`, is refused the same way; the lookup just accepted it,
+/// so that is unreachable short of a concurrent delete.
+fn in_launch_project(dir: &Path, project: &Path) -> bool {
+    let Ok(lines) = log::lines(dir) else {
+        return false;
+    };
+    let mut lines = lines;
+    let Some(Ok(line)) = lines.next() else {
+        return false;
+    };
+    let Ok(Some(Event::SessionStarted(started))) = Event::from_envelope(&line) else {
+        return false;
+    };
+    doors::project(Path::new(&started.workspace)) == project
 }
 
 /// The internal session command with `--resume`: resumes the session `id`

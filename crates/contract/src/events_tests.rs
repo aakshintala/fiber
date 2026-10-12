@@ -279,7 +279,7 @@ fn samples() -> Vec<(&'static str, Value)> {
             "parent": {"session_id": "s", "delegate_id": "j"},
             "forked_from": {"session_id": "s", "seq": 3},
             "rewind": {"summary": "s", "note": "n", "jobs": ["j"]},
-            "worktree": {"path": "/w", "branch": "fiber/s"}}),
+            "worktree": {"path": "/w", "branch": "fiber/s", "repository": "/r/.git"}}),
         ),
         (
             "rewound",

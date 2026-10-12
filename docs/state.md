@@ -86,7 +86,8 @@ becomes `-Users-alice-work`.
 
 A slug can collide (`/a-b` and `/a/b` both become `-a-b`). That is harmless:
 the key is only a name for humans. `session_started` records the exact
-workspace, and lookup checks it. The log stays the truth
+workspace, and the worktree's repository when Fiber made one, and lookup
+checks the repository when recorded and the workspace otherwise. The log stays the truth
 ([ADR 0001](adr/0001-session-log-is-the-only-state-of-record.md)).
 
 ## Sessions and resume

@@ -167,6 +167,12 @@ fn isolate_makes_the_worktree_under_the_projects_worktrees() {
                 Worktree {
                     path: expected.to_string_lossy().into_owned(),
                     branch: format!("fiber/{id}"),
+                    repository: Some(
+                        fs::canonicalize(repo.path().join(".git"))
+                            .unwrap()
+                            .to_string_lossy()
+                            .into_owned(),
+                    ),
                 }
             );
         },

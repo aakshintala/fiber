@@ -114,12 +114,13 @@ fn start_records_the_worktree_on_session_started() {
     let (_looped, _log, _watched, home) = started_with(Some(Worktree {
         path: "/w".to_owned(),
         branch: "fiber/s_test".to_owned(),
+        repository: Some("/r/.git".to_owned()),
     }));
     let lines = log::read(&home.path().join("s_test")).unwrap();
     assert_eq!(lines[0].kind, "session_started");
     assert_eq!(
         lines[0].payload["worktree"],
-        serde_json::json!({"path": "/w", "branch": "fiber/s_test"}),
+        serde_json::json!({"path": "/w", "branch": "fiber/s_test", "repository": "/r/.git"}),
     );
     let (_looped, _log, _watched, home) = started();
     let lines = log::read(&home.path().join("s_test")).unwrap();
