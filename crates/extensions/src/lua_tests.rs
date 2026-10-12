@@ -20,6 +20,101 @@ const WAIT_UNTIL: Duration = fakes::MUST_SUCCEED_WITHIN;
 /// Bound on a wait for a test server to accept, or a caller to park.
 const WAIT_SERVER: Duration = fakes::MUST_SUCCEED_WITHIN;
 
+fn registration_result(init: &str, command: Option<&str>) -> Result<Vec<(String, String)>, Error> {
+    let dir = extension("registration-guards", init);
+    let ext = LuaExtension::new("ext", dir.path(), dir.path(), FakeClock::new());
+    let command = command.map(str::to_owned);
+    let (tx, rx) = mpsc::channel();
+    thread::spawn(move || {
+        let result = match command {
+            Some(command) => ext
+                .command(&command, "")
+                .map(|reply| vec![(command, reply)]),
+            None => ext.commands(),
+        };
+        tx.send(result).unwrap();
+        drop(dir);
+    });
+    Deadline::after(WAIT_UNTIL).recv_or_fail(&rx, "registration guard result")
+}
+
+#[test]
+fn provider_registration_in_init_is_refused_plain_and_caught() {
+    for init in [
+        "fiber.provider('acme', {})",
+        "pcall(function() fiber.provider('acme', {}) end)",
+    ] {
+        let err = registration_result(init, None).unwrap_err();
+        let Error::Lua { message, .. } = err else {
+            panic!("{err:?}")
+        };
+        assert!(message.contains("init.lua"), "{message}");
+        assert!(message.contains("providers/acme.lua"), "{message}");
+    }
+}
+
+#[test]
+fn registration_from_a_command_is_refused_for_each_registration_kind() {
+    for call in [
+        "fiber.command('late', {timeout=100, run=function() end})",
+        "fiber.hook('turn_start', {timeout=100, on_failure='blocking', run=function() end})",
+        "fiber.provider('acme', {})",
+    ] {
+        let init = format!("fiber.command('test', {{timeout=1000, run=function() {call} end}})");
+        let err = registration_result(&init, Some("test")).unwrap_err();
+        let Error::Lua { message, .. } = err else {
+            panic!("{err:?}")
+        };
+        assert!(message.contains("init.lua:1:"), "{message}");
+        assert!(message.contains("only while"), "{message}");
+    }
+}
+
+#[test]
+fn registration_from_a_deferred_timer_never_makes_a_command_callable() {
+    let dir = extension(
+        "timer-registration",
+        r#"
+        visited = false
+        fiber.command('probe', {timeout=1000, run=function() return tostring(visited) .. ' ' .. tostring(reason) end})
+        host.after(0, function()
+            visited = true
+            local ok
+            ok, reason = pcall(function()
+                fiber.command('late', {timeout=1000, run=function() return 'late' end})
+            end)
+            host.status('timer-ready')
+        end, {timeout=1000})
+    "#,
+    );
+    let ext = LuaExtension::new("ext", dir.path(), dir.path(), FakeClock::new());
+    struct TimerSignal(mpsc::Sender<()>);
+    impl contract::emit::Emit for TimerSignal {
+        fn emit(&self, _: &contract::events::Event) {
+            match self.0.send(()) {
+                Ok(()) | Err(mpsc::SendError(())) => {}
+            }
+        }
+    }
+    let (ready_tx, ready_rx) = mpsc::channel();
+    ext.set_emit(Arc::new(TimerSignal(ready_tx)));
+    let (tx, rx) = mpsc::channel();
+    thread::spawn(move || {
+        ext.commands().unwrap();
+        Deadline::after(WAIT).recv_or_fail(&ready_rx, "timer completed its registration attempt");
+        let probe = ext.command("probe", "");
+        let late = ext.command("late", "");
+        tx.send((probe, late)).unwrap();
+        drop(dir);
+    });
+    let (probe, late) = Deadline::after(WAIT_UNTIL).recv_or_fail(&rx, "timer registration result");
+    let probe = probe.unwrap();
+    assert!(probe.starts_with("true "), "{probe}");
+    assert!(probe.contains("init.lua:"), "{probe}");
+    assert!(probe.contains("only while"), "{probe}");
+    assert!(matches!(late, Err(Error::UnknownCommand { command, .. }) if command == "late"));
+}
+
 /// A panic in a host function is never a Lua error the extension's `pcall`
 /// can catch (`docs/code-quality.md`, "Panics"). Tests run under unwind,
 /// where it reaches the Rust caller past the `pcall`; Fiber's builds abort at
@@ -58,6 +153,122 @@ fn a_panic_in_a_host_function_passes_the_extensions_pcall() {
         vm.resume(f, "boom", LOAD_TIMEOUT, mlua::Value::Nil)
     }));
     assert!(outcome.is_err(), "the panic became {outcome:?}");
+}
+
+#[test]
+fn load_completion_wins_at_the_abandonment_boundary() {
+    provider_load_race(true);
+}
+
+#[test]
+fn load_abandonment_wins_before_recording() {
+    provider_load_race(false);
+}
+
+#[allow(
+    clippy::unwrap_used,
+    reason = "a race fixture must be created and each bounded wait must finish"
+)]
+fn provider_load_race(completion_first: bool) {
+    use super::hub::Window;
+    use contract::clock::Wake;
+    struct ClockMoved(mpsc::Sender<()>);
+    impl Wake for ClockMoved {
+        fn wake(&self) {
+            match self.0.send(()) {
+                Ok(()) | Err(mpsc::SendError(())) => {}
+            }
+        }
+    }
+    let clock = FakeClock::new();
+    let (moved_tx, moved_rx) = mpsc::channel();
+    let moved: Arc<dyn Wake> = Arc::new(ClockMoved(moved_tx));
+    clock.subscribe(Arc::downgrade(&moved));
+    let dir = extension("load-race", "");
+    std::fs::create_dir_all(dir.path().join("providers")).unwrap();
+    std::fs::write(
+        dir.path().join("providers/p.lua"),
+        "require('hold')\n fiber.provider('p', {})",
+    )
+    .unwrap();
+    let fifo = dir.path().join("hold.lua");
+    assert!(
+        std::process::Command::new("mkfifo")
+            .arg(&fifo)
+            .status()
+            .unwrap()
+            .success()
+    );
+    let (held_tx, held_rx) = mpsc::channel();
+    let (release_tx, release_rx) = mpsc::channel();
+    thread::spawn(move || {
+        let held = std::fs::OpenOptions::new().write(true).open(fifo).unwrap();
+        held_tx.send(()).unwrap();
+        match release_rx.recv() {
+            Ok(()) | Err(mpsc::RecvError) => {}
+        }
+        drop(held);
+    });
+    let ext = Arc::new(LuaExtension::new(
+        "ext",
+        dir.path(),
+        dir.path(),
+        clock.clone(),
+    ));
+    let (recorded_tx, recorded_rx) = mpsc::channel();
+    let (resume_tx, resume_rx) = mpsc::channel();
+    let resume_rx = std::sync::Mutex::new(resume_rx);
+    ext.hub.pause_at_windows(Arc::new(move |_, window| {
+        if window == Window::LoadRecorded {
+            recorded_tx.send(()).unwrap();
+            match resume_rx.lock().unwrap().recv() {
+                Ok(()) | Err(mpsc::RecvError) => {}
+            }
+        }
+    }));
+    let (result_tx, result_rx) = mpsc::channel();
+    let caller = Arc::clone(&ext);
+    let asked = clock.now();
+    thread::spawn(move || result_tx.send(caller.provider_functions("p")));
+    Deadline::after(WAIT).recv_or_fail(&held_rx, "provider held in read");
+    assert!(clock.await_parked(asked + LOAD_TIMEOUT + GRACE, WAIT));
+    if completion_first {
+        release_tx.send(()).unwrap();
+        Deadline::after(WAIT).recv_or_fail(&recorded_rx, "load result recorded before abandonment");
+        let (advanced_tx, advanced_rx) = mpsc::channel();
+        let advance_clock = Arc::clone(&clock);
+        thread::spawn(move || {
+            advance_clock.advance_marked(LOAD_TIMEOUT + GRACE);
+            advanced_tx.send(()).unwrap();
+        });
+        Deadline::after(WAIT).recv_or_fail(&moved_rx, "clock moved before hub wake");
+        resume_tx.send(()).unwrap();
+        Deadline::after(WAIT).recv_or_fail(&advanced_rx, "clock advance completed");
+        assert_eq!(
+            Deadline::after(WAIT)
+                .recv_or_fail(&result_rx, "completed load result")
+                .unwrap(),
+            Vec::<String>::new()
+        );
+        assert!(ext.is_running());
+    } else {
+        clock.advance(LOAD_TIMEOUT + GRACE);
+        let err = Deadline::after(WAIT)
+            .recv_or_fail(&result_rx, "abandonment before recording")
+            .unwrap_err();
+        assert!(matches!(err, Error::Abandoned { callback, .. } if callback == "providers/p.lua"));
+        release_tx.send(()).unwrap();
+        Deadline::after(WAIT).recv_or_fail(&recorded_rx, "late load result dropped");
+        resume_tx.send(()).unwrap();
+        assert!(!ext.is_running());
+        let (retry_tx, retry_rx) = mpsc::channel();
+        let retry = Arc::clone(&ext);
+        thread::spawn(move || retry_tx.send(retry.provider_functions("p")));
+        assert!(matches!(
+            Deadline::after(WAIT).recv_or_fail(&retry_rx, "abandonment stays final"),
+            Err(Error::Abandoned { .. })
+        ));
+    }
 }
 
 fn command(name: &str) -> Target {
@@ -332,7 +543,7 @@ fn provider_functions_abandoning_registration_wakes_every_waiter() {
     // Its own thread, so a call that never returns fails the test.
     let (done_tx, done_rx) = mpsc::channel();
     let caller = Arc::clone(&ext);
-    thread::spawn(move || done_tx.send(caller.provider_functions("p")));
+    thread::spawn(move || done_tx.send(caller.provider_functions("fixture")));
     let err = Deadline::after(WAIT)
         .recv(&done_rx)
         .expect("provider_functions never returned")
@@ -377,6 +588,19 @@ fn dropping_the_extension_stops_it() {
     ));
 }
 
+/// A mixed fixture's provider registration is the last block of its script.
+fn mixed_extension(tag: &str, script: &str) -> fakes::TempDir {
+    let (init, provider) = script.split_once("fiber.provider").unwrap();
+    let dir = extension(tag, init);
+    std::fs::create_dir_all(dir.path().join("providers")).unwrap();
+    std::fs::write(
+        dir.path().join("providers/p.lua"),
+        format!("fiber.provider{provider}"),
+    )
+    .unwrap();
+    dir
+}
+
 /// An extension directory in a fresh temporary directory, with `init`.
 fn extension(tag: &str, init: &str) -> fakes::TempDir {
     let dir = fakes::TempDir::new(&format!("fiber-lua-{tag}"));
@@ -393,9 +617,16 @@ fn serve_after(
 ) -> (Arc<Hub>, u64, mpsc::Receiver<()>) {
     let hub = Hub::new(clock.clone());
     let asked = clock.now();
+    let provider_file = dir.join("providers/p.lua").is_file();
     let id = {
         let mut shared = hub.lock();
         shared.phase = Phase::Registering { abandon_at: None };
+        if provider_file {
+            shared
+                .loads
+                .insert("p".to_owned(), hub::ProviderLoad::Queued { asked });
+            shared.pending_loads.push_back("p".to_owned());
+        }
         shared.push(command(first), Value::String(String::new()), asked)
     };
     let (thread_hub, dir) = (Arc::clone(&hub), dir.to_owned());
@@ -419,6 +650,12 @@ fn serve_after(
             Ok(()) | Err(mpsc::SendError(())) => {}
         }
     });
+    if provider_file {
+        assert!(until(&hub, |shared| matches!(
+            shared.loads.get("p"),
+            Some(hub::ProviderLoad::Loaded)
+        )));
+    }
     (hub, id, done_rx)
 }
 
@@ -476,7 +713,7 @@ fn a_command_queued_behind_a_parked_command_does_not_start() {
     let server = fakes::ProviderServer::start([fakes::Response::status(200, "ok")]).unwrap();
     server.hold();
     let url = server.url();
-    let dir = extension(
+    let dir = mixed_extension(
         "parked-second",
         &format!(
             "fiber.command(\"hold\", {{ timeout = 5000, run = function() return host.http({{ url = \"{url}\" }}).body end }})\n\
@@ -512,7 +749,7 @@ fn a_command_queued_behind_a_parked_command_does_not_start() {
     hub.notify();
     assert!(until(&hub, |s| matches!(
         s.calls.get(&sign),
-        Some(Progress::Done(_))
+        Some(Progress::Done(Ok(_)))
     )));
     {
         let shared = hub.lock();
@@ -594,7 +831,7 @@ fn an_abandoned_vm_wakes_every_queued_and_parked_waiter() {
     let models = fakes::ProviderServer::start([fakes::Response::status(200, "ok")]).unwrap();
     models.hold();
     let (park_url, models_url) = (park.url(), models.url());
-    let dir = extension(
+    let dir = mixed_extension(
         "abandon",
         &format!(
             "fiber.command(\"park\", {{ timeout = 30000, run = function() return host.http({{ url = \"{park_url}\" }}).body end }})\n\
@@ -734,7 +971,7 @@ fn a_hook_queued_behind_a_parked_command_does_not_start() {
     let server = fakes::ProviderServer::start([fakes::Response::status(200, "ok")]).unwrap();
     server.hold();
     let url = server.url();
-    let dir = extension(
+    let dir = mixed_extension(
         "hook-behind-parked-command",
         &format!(
             "fiber.command(\"hold\", {{ timeout = 5000, run = function() return host.http({{ url = \"{url}\" }}).body end }})\n\
@@ -779,7 +1016,7 @@ fn a_hook_queued_behind_a_parked_command_does_not_start() {
     hub.notify();
     assert!(until(&hub, |s| matches!(
         s.calls.get(&sign),
-        Some(Progress::Done(_))
+        Some(Progress::Done(Ok(_)))
     )));
     {
         let shared = hub.lock();
@@ -801,7 +1038,7 @@ fn a_command_queued_behind_a_parked_hook_does_not_start() {
     let server = fakes::ProviderServer::start([fakes::Response::status(200, "ok")]).unwrap();
     server.hold();
     let url = server.url();
-    let dir = extension(
+    let dir = mixed_extension(
         "command-behind-parked-hook",
         &format!(
             "fiber.command(\"later\", {{ timeout = 5000, run = function() return \"later\" end }})\n\
@@ -815,6 +1052,10 @@ fn a_command_queued_behind_a_parked_hook_does_not_start() {
     let hook = {
         let mut shared = hub.lock();
         shared.phase = Phase::Registering { abandon_at: None };
+        shared
+            .loads
+            .insert("p".to_owned(), hub::ProviderLoad::Queued { asked });
+        shared.pending_loads.push_back("p".to_owned());
         shared.push(
             Target::Hook {
                 point: "after_tool".to_owned(),
@@ -845,6 +1086,10 @@ fn a_command_queued_behind_a_parked_hook_does_not_start() {
             Ok(()) | Err(mpsc::SendError(())) => {}
         }
     });
+    assert!(until(&hub, |shared| matches!(
+        shared.loads.get("p"),
+        Some(hub::ProviderLoad::Loaded)
+    )));
     assert!(
         server.await_requests(1, WAIT_UNTIL),
         "waited for the hook to reach the server"
@@ -871,7 +1116,7 @@ fn a_command_queued_behind_a_parked_hook_does_not_start() {
     hub.notify();
     assert!(until(&hub, |s| matches!(
         s.calls.get(&sign),
-        Some(Progress::Done(_))
+        Some(Progress::Done(Ok(_)))
     )));
     {
         let shared = hub.lock();
@@ -891,7 +1136,7 @@ fn a_command_queued_behind_a_parked_hook_does_not_start() {
 /// until `release`; after `release` it runs.
 #[test]
 fn a_held_command_blocks_the_stream_until_released() {
-    let dir = extension(
+    let dir = mixed_extension(
         "held-blocks-stream",
         "fiber.command(\"held\", { timeout = 5000, run = function() host.log(\"held ran\") end })\n\
          fiber.hook(\"after_tool\", { timeout = 5000, on_failure = \"non-blocking\", run = function(call) return {} end })\n\
@@ -903,6 +1148,10 @@ fn a_held_command_blocks_the_stream_until_released() {
     let held = {
         let mut shared = hub.lock();
         shared.phase = Phase::Registering { abandon_at: None };
+        shared
+            .loads
+            .insert("p".to_owned(), hub::ProviderLoad::Queued { asked });
+        shared.pending_loads.push_back("p".to_owned());
         shared.push_held(command("held"), Value::Null, asked)
     };
     let (thread_hub, dir) = (Arc::clone(&hub), dir.path().to_owned());
@@ -928,6 +1177,10 @@ fn a_held_command_blocks_the_stream_until_released() {
     });
     // Wait until the entry script has run: the held job is still queued.
     assert!(until(&hub, |s| matches!(s.phase, Phase::Ready(_))));
+    assert!(until(&hub, |shared| matches!(
+        shared.loads.get("p"),
+        Some(hub::ProviderLoad::Loaded)
+    )));
     let asked = clock.now();
     let (hook, sign) = {
         let mut shared = hub.lock();
@@ -955,7 +1208,7 @@ fn a_held_command_blocks_the_stream_until_released() {
     // held command and the hook behind it stay queued.
     assert!(until(&hub, |s| matches!(
         s.calls.get(&sign),
-        Some(Progress::Done(_))
+        Some(Progress::Done(Ok(_)))
     )));
     {
         let shared = hub.lock();

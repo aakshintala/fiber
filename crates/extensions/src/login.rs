@@ -44,14 +44,10 @@ pub fn login_provider(
         extension = extension.with_memory_cap(cap);
     }
     let extension = Arc::new(extension);
-    // The login VM's registrations are checked as at load.
-    if let Some(unclaimed) = crate::providers::first_undeclared(
-        &manifest.providers,
-        extension.provider_names()?.iter().map(String::as_str),
-    ) {
+    if !manifest.providers.contains_key(name) {
         return Err(Error::UndeclaredProvider {
             extension: extension_name.to_owned(),
-            provider: unclaimed.to_owned(),
+            provider: name.to_owned(),
         });
     }
     Ok(LuaProvider::new(extension, name))

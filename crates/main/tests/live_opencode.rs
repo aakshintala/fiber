@@ -16,7 +16,7 @@ use std::sync::Arc;
 use std::time::Duration;
 
 /// The package under test, compiled in.
-const INIT: &str = include_str!("../../../providers/opencode/init.lua");
+const INIT: &str = include_str!("../../../providers/opencode/providers/opencode-go.lua");
 
 /// How long the live quota fetch may take.
 const LIVE_DEADLINE: Duration = Duration::from_secs(30);
@@ -30,8 +30,8 @@ fn a_live_opencode_quota_fetch_reports_three_windows() {
     let home = root.path().join("home");
     let dir = root.path().join("ext");
     std::fs::create_dir_all(&home).unwrap();
-    std::fs::create_dir_all(&dir).unwrap();
-    std::fs::write(dir.join("init.lua"), INIT).unwrap();
+    std::fs::create_dir_all(dir.join("providers")).unwrap();
+    std::fs::write(dir.join("providers/opencode-go.lua"), INIT).unwrap();
     let clock = fakes::clock::FakeClock::new();
     let extension = Arc::new(extensions::LuaExtension::new(
         "github.com/aakshintala/fiber/providers/opencode",

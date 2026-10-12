@@ -497,7 +497,9 @@ holds what `docs/extensions.md` ("What a package holds") lists:
 major version it was written for; Fiber loads it only when that is Fiber's own
 (`docs/extensions.md`, "The extension API version"). `process` is present only for
 a process extension, and `exit_timeout_ms` has no default. A Lua extension's
-entry script is `init.lua` at the top of its directory. `memory_mib` raises a
+entry script is `init.lua` at the top of its directory; its provider's Lua is
+`providers/<name>.lua`. Each `providers` key must be one filename, not a path.
+`memory_mib` raises a
 Lua extension's memory cap, in MiB, above the default of 1
 (`docs/extensions.md`, "Loading, and cost when nothing is loaded"). `replaces`
 lists the built-in tools and commands the extension replaces, and `providers`
@@ -519,8 +521,10 @@ and after a call by the session that declares a `writes` effect on one of them
 ## A provider's data
 
 Each provider an extension registers as data is `providers/<name>.json` in the
-extension's directory. The fields are the ones `docs/model-routing.md` ("What a
-provider extension declares") lists:
+extension's directory. Its optional Lua is `providers/<name>.lua` beside that
+data file and registers only that provider (`docs/extensions.md`, "Registering").
+The fields are the ones `docs/model-routing.md` ("What a provider extension
+declares") lists:
 
 ```json
 {

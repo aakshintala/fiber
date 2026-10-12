@@ -13,6 +13,24 @@ use config::{
 };
 use contract::ErrorCode;
 
+#[test]
+fn manifest_provider_keys_are_each_one_file_name() {
+    let setup = Setup::new();
+    let dir = setup.root().join("provider-names");
+    for name in ["", ".", "..", "a/b", "a\u{0}b", "opencode-go", "p"] {
+        let manifest = serde_json::json!({"name":"fiber.test/provider-names", "version":"v1", "fiber":"0.1.0", "api":1, "providers":{name:[]}});
+        setup.write(&dir.join("extension.json"), &manifest.to_string());
+        let result = read_manifest(&dir);
+        match name {
+            "opencode-go" | "p" => assert!(result.is_ok(), "{name}: {result:?}"),
+            _ => assert!(
+                matches!(result, Err(config::ConfigError::WrongType { key, .. }) if key == "providers"),
+                "{name:?} was not refused"
+            ),
+        }
+    }
+}
+
 const DATABRICKS: &str = r#"{
   "name": "databricks",
   "credential": { "env": "DATABRICKS_TOKEN" },

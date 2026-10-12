@@ -22,9 +22,9 @@ fn quota_lua(root: &fakes::TempDir, server: &str) -> Arc<extensions::LuaProvider
     let home = root.path().join("home");
     let dir = root.path().join("ext");
     std::fs::create_dir_all(&home).unwrap();
-    std::fs::create_dir_all(&dir).unwrap();
+    std::fs::create_dir_all(dir.join("providers")).unwrap();
     std::fs::write(
-        dir.join("init.lua"),
+        dir.join("providers/qp.lua"),
         format!(
             "fiber.provider(\"qp\", {{ quota = {{ timeout = 60000, run = function(a)\n\
              local reply = host.http({{ url = \"{server}/\" .. a.label .. \"/\" .. tostring(a.key) }})\n\

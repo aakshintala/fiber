@@ -164,7 +164,10 @@ impl Setup {
             Value::Object([(name.to_owned(), json!(urls))].into_iter().collect());
         fs::write(src.join("extension.json"), manifest.to_string()).unwrap();
         fs::write(
-            src.join("init.lua"),
+            {
+                fs::create_dir_all(src.join("providers")).unwrap();
+                src.join("providers").join(format!("{name}.lua"))
+            },
             format!(
                 "fiber.provider(\"{name}\", {{ credential = {{ timeout = 1000, \
                  run = function() return {{ token = \"t\", expires_at = 1893456000 }} end }}, \

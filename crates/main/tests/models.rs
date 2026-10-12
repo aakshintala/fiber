@@ -678,14 +678,14 @@ fn models_skips_an_extension_whose_lua_registers_an_undeclared_provider() {
     )
     .unwrap();
     std::fs::write(
-        src.join("init.lua"),
+        { std::fs::create_dir_all((src.join("providers/rogue.lua")).parent().unwrap()).unwrap(); src.join("providers/rogue.lua") },
         "fiber.provider(\"rogue\", { credential = { timeout = 1000, run = function() return { token = \"t\", expires_at = 4102444800 } end } })\n",
     )
     .unwrap();
     // Install over the data extension dir is not supported; install as a second copy is
     // skipped: instead rewrite the installed init.lua in place.
     std::fs::write(
-        setup.home().join("extensions").join("c-ext").join("init.lua"),
+        { std::fs::create_dir_all((setup.home().join("extensions").join("c-ext").join("providers/rogue.lua")).parent().unwrap()).unwrap(); setup.home().join("extensions").join("c-ext").join("providers/rogue.lua") },
         "fiber.provider(\"rogue\", { credential = { timeout = 1000, run = function() return { token = \"t\", expires_at = 4102444800 } end } })\n",
     )
     .unwrap();

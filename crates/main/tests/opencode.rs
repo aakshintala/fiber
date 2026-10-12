@@ -14,7 +14,7 @@
 use std::sync::Arc;
 
 /// The package under test, compiled in.
-const INIT: &str = include_str!("../../../providers/opencode/init.lua");
+const INIT: &str = include_str!("../../../providers/opencode/providers/opencode-go.lua");
 
 #[test]
 fn an_opencode_zen_quota_read_reports_no_quota() {
@@ -22,8 +22,8 @@ fn an_opencode_zen_quota_read_reports_no_quota() {
     let home = root.path().join("home");
     let dir = root.path().join("ext");
     std::fs::create_dir_all(&home).unwrap();
-    std::fs::create_dir_all(&dir).unwrap();
-    std::fs::write(dir.join("init.lua"), INIT).unwrap();
+    std::fs::create_dir_all(dir.join("providers")).unwrap();
+    std::fs::write(dir.join("providers/opencode-go.lua"), INIT).unwrap();
     let clock = fakes::clock::FakeClock::new();
     let extension = Arc::new(extensions::LuaExtension::new(
         "github.com/aakshintala/fiber/providers/opencode",

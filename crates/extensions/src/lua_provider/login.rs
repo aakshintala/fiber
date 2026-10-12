@@ -59,6 +59,7 @@ impl LuaProvider {
         label: Option<&str>,
         method: LoginMethod,
     ) -> Result<LoggedIn, Error> {
+        self.extension.ensure_provider(&self.name)?;
         let slot: LoginSlot = Arc::new(Mutex::new(None));
         let inner: Result<LoggedIn, Error> = (|| {
             let returned = self.extension.provider_login(

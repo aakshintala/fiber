@@ -39,7 +39,7 @@ fn install(home: &std::path::Path, name: &str, provider: &str) {
     )
     .unwrap();
     fs::write(
-        dir.join("init.lua"),
+        dir.join("providers/acme.lua"),
         r#"fiber.provider("acme", {
           credential = { timeout = 60000, run = function(arg)
             return { token = "t", expires_at = 4102444800 }
@@ -47,6 +47,39 @@ fn install(home: &std::path::Path, name: &str, provider: &str) {
         })"#,
     )
     .unwrap();
+}
+
+#[test]
+fn constructing_a_login_provider_runs_no_lua() {
+    let root = fakes::TempDir::new("lazy-login");
+    let home = root.path().join("home");
+    install(&home, "acme-ext", "acme");
+    let marker = root.path().join("init-ran");
+    fs::write(
+        home.join("extensions/acme-ext/init.lua"),
+        format!("host.fs.write({:?}, 'x')", marker.display().to_string()),
+    )
+    .unwrap();
+    let (providers, _) = Providers::load(&home).unwrap();
+    let marker_copy = marker.clone();
+    fakes::within(
+        "lazy login construction",
+        Duration::from_secs(5),
+        move || {
+            let provider = login_provider(
+                &home,
+                &providers,
+                "acme",
+                Arc::new(SystemBrowser::default()),
+                FakeClock::new(),
+            )
+            .unwrap();
+            assert_eq!(provider.name(), "acme");
+            assert!(!marker_copy.exists());
+            assert_eq!(provider.functions().unwrap(), ["credential"]);
+        },
+    );
+    assert_eq!(fs::read_to_string(marker).unwrap(), "x");
 }
 
 #[test]
@@ -97,7 +130,7 @@ fn login_provider_applies_the_manifest_memory_cap_in_mib() {
           end }
         })"#,
     );
-    fs::write(dir.join("init.lua"), init).unwrap();
+    fs::write(dir.join("providers/acme.lua"), init).unwrap();
     let (providers, notices) = Providers::load(&home).unwrap();
     assert!(notices.is_empty(), "{notices:?}");
 
@@ -174,7 +207,7 @@ fn login_provider_fails_when_the_vm_registers_an_undeclared_provider() {
     )
     .unwrap();
     fs::write(
-        dir.join("init.lua"),
+        dir.join("providers/acme.lua"),
         r#"fiber.provider("acme", {
           credential = { timeout = 60000, run = function(arg)
             return { token = "t", expires_at = 4102444800 }
@@ -188,16 +221,20 @@ fn login_provider_fails_when_the_vm_registers_an_undeclared_provider() {
     )
     .unwrap();
     let (providers, _) = Providers::load(&home).unwrap();
-    let err = match login_provider(
+    let provider = login_provider(
         &home,
         &providers,
         "acme",
         Arc::new(SystemBrowser::default()),
         FakeClock::new(),
-    ) {
-        Ok(_) => panic!("a VM registering an undeclared provider logs in"),
-        Err(err) => err,
-    };
+    )
+    .unwrap();
+    let err = fakes::within(
+        "refused provider login",
+        Duration::from_secs(5),
+        move || provider.login("acme", None, crate::LoginMethod::Browser),
+    )
+    .unwrap_err();
     assert_eq!(err.code(), contract::ErrorCode::ExtensionFailed);
     assert!(err.to_string().contains("rogue"), "{err}");
 }

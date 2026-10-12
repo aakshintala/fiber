@@ -278,7 +278,34 @@ fn setup_named(name: &str, lua: &str) -> Setup {
         .collect();
     manifest["providers"] = Value::Object(declared.into_iter().collect());
     fs::write(source.join("extension.json"), manifest.to_string()).unwrap();
-    fs::write(source.join("init.lua"), lua).unwrap();
+    if seen.is_empty() {
+        fs::write(source.join("init.lua"), lua).unwrap();
+    } else {
+        fs::create_dir_all(source.join("providers")).unwrap();
+        let mixed = lua.contains("fiber.command(")
+            || lua.contains("fiber.hook(")
+            || lua.contains("fiber.tool(")
+            || lua.contains("fiber.search_backend(");
+        if seen.len() == 1 && !mixed {
+            fs::write(
+                source.join("providers").join(format!("{}.lua", seen[0])),
+                lua,
+            )
+            .unwrap();
+        } else {
+            let mut parts = lua.split("fiber.provider(\"");
+            let init = parts.next().unwrap();
+            fs::write(source.join("init.lua"), init).unwrap();
+            for part in parts {
+                let name = part.split('"').next().unwrap();
+                fs::write(
+                    source.join("providers").join(format!("{name}.lua")),
+                    format!("fiber.provider(\"{part}"),
+                )
+                .unwrap();
+            }
+        }
+    }
     extensions::plan(
         &setup.home(),
         &extensions::Request::Path(source),
@@ -646,7 +673,7 @@ end } })"#,
     )
     .unwrap();
     fs::write(
-        competitor.join("init.lua"),
+        { std::fs::create_dir_all((competitor.join("providers/openrouter.lua")).parent().unwrap()).unwrap(); competitor.join("providers/openrouter.lua") },
         r#"fiber.provider("openrouter", { cost = { timeout = 5000, run = function() return 0.25 end } })"#,
     )
     .unwrap();

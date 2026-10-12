@@ -17,6 +17,71 @@ use extensions::{Error, Providers, leave_out_invalid};
 use fakes::Deadline;
 use serde_json::json;
 
+#[test]
+fn fresh_cache_is_used_before_loading_or_refreshing_provider_lua() {
+    use std::sync::Arc;
+    use std::time::Duration;
+    let setup = Setup::new();
+    let marker = setup.workspace().join("provider-loaded");
+    let manifest = declared_manifest("fiber.test/lazy", json!({"p":["http://127.0.0.1:1/v1"]}));
+    let source = setup.source("lazy", &manifest, &[provider("p", &["cached"])]);
+    write(
+        &source.join("providers/p.lua"),
+        &format!(
+            "host.fs.write({:?}, 'x')\n fiber.provider('p', {{ models={{timeout=100, run=function() return {{}} end}}, credential={{timeout=100, run=function() return {{token='t', expires_at=1893456000}} end}} }})",
+            marker.display().to_string(),
+        ),
+    );
+    install(&setup.home(), &source, "0.1.0").unwrap();
+    let (mut providers, notices) = Providers::load(&setup.home()).unwrap();
+    assert!(notices.is_empty());
+    write_model_cache(&setup.home(), "p", &provider("p", &["cached"])["models"]).unwrap();
+    let configuration = config(&setup, &[]);
+    let session = extensions::SessionExtensions::load(
+        &setup.home(),
+        &configuration,
+        fakes::clock::FakeClock::new(),
+        Arc::new(NoopLock),
+        None,
+    );
+    let lua = Arc::clone(&session.lua_providers()[0].1);
+    let (tx, rx) = std::sync::mpsc::channel();
+    let cache_marker = marker.clone();
+    let home = setup.home();
+    std::thread::spawn(move || {
+        assert!(
+            providers
+                .add_session(&session, &configuration, &|_, _| unreachable!(
+                    "no credential source runs"
+                ))
+                .is_empty()
+        );
+        assert!(
+            !cache_marker.exists(),
+            "cached models must not inspect callbacks"
+        );
+        assert!(
+            extensions::refresh_lists(
+                &[Arc::clone(&lua)],
+                &providers,
+                &configuration,
+                Some(Duration::from_secs(60)),
+                &|_, _| unreachable!("no credential source runs")
+            )
+            .is_empty()
+        );
+        assert!(lua.refresh(Some(Duration::from_secs(60))).is_none());
+        tx.send(providers.resolve("p/cached").unwrap().reference())
+            .unwrap();
+        drop(home);
+    });
+    assert_eq!(
+        Deadline::after(Duration::from_secs(5)).recv_or_fail(&rx, "fresh model cache"),
+        "p/cached"
+    );
+    assert!(!marker.exists());
+}
+
 /// Installs the data files under the manifest name `ext`: the data
 /// provider keeps its own name, while admission checks the extension's.
 fn installed_ext(setup: &Setup, dir: &str, ext: &str, datas: &[serde_json::Value]) -> Providers {
@@ -1336,7 +1401,10 @@ fn add_lua_for_a_provider_with_only_cost_keeps_its_data_models_and_its_handle() 
     let mut providers = installed(&setup, &[("acme", data)]);
     let ext = home.join("ext");
     write(
-        &ext.join("init.lua"),
+        &{
+            std::fs::create_dir_all((ext.join("providers/acme.lua")).parent().unwrap()).unwrap();
+            ext.join("providers/acme.lua")
+        },
         "fiber.provider(\"acme\", { cost = { timeout = 1000, run = function() return 0 end } })\n",
     );
     let lua = extensions::LuaProvider::new(
@@ -1844,7 +1912,10 @@ fn add_session_drops_the_data_of_an_extension_rejected_for_its_lua() {
         .join("extensions")
         .join(config::dir_name("c-ext"));
     std::fs::write(
-        c_dir.join("init.lua"),
+        {
+            std::fs::create_dir_all((c_dir.join("providers/rogue.lua")).parent().unwrap()).unwrap();
+            c_dir.join("providers/rogue.lua")
+        },
         "fiber.provider(\"rogue\", { credential = { timeout = 1000, \
          run = function() return { token = \"t\", expires_at = 1893456000 } end } })\n",
     )

@@ -23,9 +23,6 @@ pub(crate) fn copy_package(name: &str, to: &Path, origin: &str, url: &str) -> Pa
         files.push(format!("providers/{}", file.to_str().unwrap()));
     }
     // A Lua package's entry script, such as `openrouter`'s `models()`.
-    if from.join("init.lua").exists() {
-        files.push("init.lua".to_owned());
-    }
     for file in files {
         let text = fs::read_to_string(from.join(&file)).unwrap();
         fs::create_dir_all(to.join(&file).parent().unwrap()).unwrap();

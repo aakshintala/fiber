@@ -293,18 +293,21 @@ fn fixture_home(name: &str) -> (fakes::TempDir, std::path::PathBuf) {
 fn install_package(home: &std::path::Path, package: &str, provider: Option<&str>) {
     let dir = home.join("extensions").join(config::dir_name(package));
     std::fs::create_dir_all(&dir).unwrap();
-    std::fs::write(
-        dir.join("extension.json"),
-        json!({"name": package, "version": "0.1.0", "fiber": "0.0.0", "api": 1}).to_string(),
-    )
-    .unwrap();
+    let mut manifest = json!({"name": package, "version": "0.1.0", "fiber": "0.0.0", "api": 1});
+    if let Some(name) = provider {
+        manifest["providers"] = json!({name: []});
+    }
+    std::fs::write(dir.join("extension.json"), manifest.to_string()).unwrap();
     let lua = provider.map_or_else(String::new, |name| {
         format!(
             "fiber.provider({name:?}, {{ cost = {{ timeout = 5000, \
              run = function() return 0.5 end }} }})"
         )
     });
-    std::fs::write(dir.join("init.lua"), lua).unwrap();
+    if let Some(name) = provider {
+        std::fs::create_dir_all(dir.join("providers")).unwrap();
+        std::fs::write(dir.join("providers").join(format!("{name}.lua")), lua).unwrap();
+    }
 }
 
 fn installed(package: &str) -> extensions::Installed {
@@ -339,6 +342,28 @@ fn the_package_whose_short_name_is_the_provider_is_chosen() {
         resolved(&installed, "openrouter", &home).as_deref(),
         Some(OPENROUTER)
     );
+}
+
+#[test]
+fn selecting_a_declared_provider_needs_its_file_and_runs_no_lua() {
+    let (_root, home) = fixture_home("fiber-call-lazy-provider");
+    install_package(&home, "different-package", Some("p"));
+    let dir = home
+        .join("extensions")
+        .join(config::dir_name("different-package"));
+    std::fs::write(
+        dir.join("providers/p.lua"),
+        "error('must not run during lookup')",
+    )
+    .unwrap();
+    let installed = [installed("different-package")];
+    let clock: Arc<dyn contract::clock::Clock> = crate::case::clock::CaseClock::new();
+    let host = extensions::HostScript::new(Vec::new(), Vec::new(), Vec::new());
+    let selected = provider_extension(&installed, "p", &home, &clock, &host, true).unwrap();
+    assert_eq!(selected.name(), "different-package");
+    assert!(!selected.is_running());
+    std::fs::remove_file(dir.join("providers/p.lua")).unwrap();
+    assert!(provider_extension(&installed, "p", &home, &clock, &host, true).is_none());
 }
 
 #[test]

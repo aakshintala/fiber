@@ -101,6 +101,270 @@ fn parked_at(clock: &Arc<FakeClock>, until: std::time::Instant, count: usize) ->
     clock.await_parked_count(until, count, WAIT)
 }
 
+#[allow(
+    clippy::unwrap_used,
+    reason = "a test helper; fixture creation must succeed"
+)]
+fn lazy_fixture(
+    init: &str,
+    provider: &str,
+    clock: Arc<FakeClock>,
+) -> (fakes::TempDir, Arc<LuaExtension>) {
+    let dir = fakes::TempDir::new("lazy-provider-load");
+    std::fs::create_dir_all(dir.path().join("providers")).unwrap();
+    std::fs::write(dir.path().join("init.lua"), init).unwrap();
+    std::fs::write(dir.path().join("providers/p.lua"), provider).unwrap();
+    let ext = extension("ext", dir.path(), dir.path(), clock);
+    (dir, ext)
+}
+
+fn start_provider(ext: &Arc<LuaExtension>) -> mpsc::Receiver<Result<Vec<String>, Error>> {
+    let (tx, rx) = mpsc::channel();
+    let ext = Arc::clone(ext);
+    std::thread::spawn(move || tx.send(ext.provider_functions("p")));
+    rx
+}
+
+#[test]
+fn a_failed_provider_load_is_sticky_and_runs_once() {
+    let clock = FakeClock::new();
+    let (dir, ext) = lazy_fixture("", "", clock);
+    let marker = dir.path().join("counter");
+    let path = serde_json::to_string(&marker.to_string_lossy()).unwrap();
+    std::fs::write(dir.path().join("providers/p.lua"), format!(
+        "local ok, old = pcall(host.fs.read, {path})\n host.fs.write({path}, (ok and old or '') .. 'x')\n error('sticky failure')"
+    )).unwrap();
+    let first = Deadline::after(WAIT)
+        .recv_or_fail(&start_provider(&ext), "first failed load")
+        .unwrap_err();
+    let second = Deadline::after(WAIT)
+        .recv_or_fail(&start_provider(&ext), "sticky failed load")
+        .unwrap_err();
+    assert_eq!(first.code(), ErrorCode::ExtensionFailed);
+    assert_eq!(first.to_string(), second.to_string());
+    assert!(first.to_string().contains("providers/p.lua:3:"));
+    assert_eq!(std::fs::read_to_string(marker).unwrap(), "x");
+}
+
+#[test]
+fn a_queued_provider_load_expires_at_two_seconds_and_retries() {
+    let clock = FakeClock::new();
+    let (dir, ext) = lazy_fixture(
+        "fiber.command('hold', {timeout=10000, run=function() require('hold') return 'held' end})",
+        "fiber.provider('p', {models={timeout=100, run=function() return {} end}})",
+        Arc::clone(&clock),
+    );
+    let (held, release) = hold_open(dir.path());
+    let command = start(&ext, "hold");
+    Deadline::after(WAIT).recv_or_fail(&held, "held command");
+    let asked = clock.now();
+    let provider = start_provider(&ext);
+    assert!(parked_at(&clock, asked + LOAD, 1));
+    let mark = clock.advance_marked(LOAD.checked_sub(Duration::from_millis(1)).unwrap());
+    assert!(clock.await_parked_since(&mark, Some(asked + LOAD), WAIT));
+    assert!(matches!(
+        provider.try_recv(),
+        Err(mpsc::TryRecvError::Empty)
+    ));
+    clock.advance(Duration::from_millis(1));
+    let err = Deadline::after(WAIT)
+        .recv_or_fail(&provider, "expired queued load")
+        .unwrap_err();
+    assert!(
+        matches!(err, Error::Timeout { callback, timeout_ms: 2000, .. } if callback == "providers/p.lua")
+    );
+    release.send(()).unwrap();
+    assert_eq!(
+        Deadline::after(WAIT)
+            .recv_or_fail(&command, "released command")
+            .unwrap(),
+        "held"
+    );
+    assert_eq!(
+        Deadline::after(WAIT)
+            .recv_or_fail(&start_provider(&ext), "retried provider load")
+            .unwrap(),
+        ["models"]
+    );
+    assert!(ext.is_running());
+}
+
+#[test]
+fn expiring_one_queued_provider_load_keeps_the_other_load_queued() {
+    let clock = FakeClock::new();
+    let (dir, ext) = lazy_fixture(
+        "fiber.command('hold', {timeout=10000, run=function() require('hold') return 'held' end})",
+        "fiber.provider('p', {})",
+        Arc::clone(&clock),
+    );
+    std::fs::write(
+        dir.path().join("providers/q.lua"),
+        "fiber.provider('q', {sign={timeout=100, run=function() return {} end}})",
+    )
+    .unwrap();
+    let (held, release) = hold_open(dir.path());
+    let command = start(&ext, "hold");
+    Deadline::after(WAIT).recv_or_fail(&held, "held command");
+    let asked = clock.now();
+    let first = start_provider(&ext);
+    assert!(parked_at(&clock, asked + LOAD, 1));
+    let offset = Duration::from_millis(1);
+    let mark = clock.advance_marked(offset);
+    assert!(clock.await_parked_since(&mark, Some(asked + LOAD), WAIT));
+    let (tx, second) = mpsc::channel();
+    let caller = Arc::clone(&ext);
+    std::thread::spawn(move || tx.send(caller.provider_functions("q")));
+    assert!(parked_at(&clock, asked + offset + LOAD, 1));
+    clock.advance(LOAD.checked_sub(offset).unwrap());
+    let error = Deadline::after(WAIT)
+        .recv_or_fail(&first, "first queued load expiry")
+        .unwrap_err();
+    assert!(
+        matches!(error, Error::Timeout { callback, timeout_ms:2000, .. } if callback == "providers/p.lua")
+    );
+    release.send(()).unwrap();
+    assert_eq!(
+        Deadline::after(WAIT)
+            .recv_or_fail(&command, "released command")
+            .unwrap(),
+        "held"
+    );
+    assert_eq!(
+        Deadline::after(WAIT)
+            .recv_or_fail(&second, "the other queued provider load")
+            .unwrap(),
+        ["sign"]
+    );
+    assert!(ext.is_running());
+}
+
+#[test]
+fn a_provider_load_goes_ahead_of_queued_commands() {
+    let clock = FakeClock::new();
+    let (dir, ext) = lazy_fixture(
+        "order = ''\n fiber.command('hold', {timeout=10000, run=function() require('hold') return 'held' end})\n fiber.command('next', {timeout=9000, run=function() order = order .. 'command' return order end})",
+        "order = order .. 'load,'\n fiber.provider('p', {})",
+        Arc::clone(&clock),
+    );
+    let (held, release) = hold_open(dir.path());
+    let command = start(&ext, "hold");
+    Deadline::after(WAIT).recv_or_fail(&held, "held command");
+    let asked = clock.now();
+    let queued = start(&ext, "next");
+    assert!(parked_at(&clock, asked + Duration::from_secs(9), 1));
+    let provider = start_provider(&ext);
+    assert!(parked_at(&clock, asked + LOAD, 1));
+    release.send(()).unwrap();
+    assert_eq!(
+        Deadline::after(WAIT)
+            .recv_or_fail(&command, "held command end")
+            .unwrap(),
+        "held"
+    );
+    assert_eq!(
+        Deadline::after(WAIT)
+            .recv_or_fail(&queued, "queued command")
+            .unwrap(),
+        "load,command"
+    );
+    assert_eq!(
+        Deadline::after(WAIT)
+            .recv_or_fail(&provider, "priority load")
+            .unwrap(),
+        Vec::<String>::new()
+    );
+}
+
+#[test]
+fn a_stuck_provider_load_abandons_its_mixed_extension_after_grace() {
+    let clock = FakeClock::new();
+    let (dir, ext) = lazy_fixture(
+        "fiber.command('echo', {timeout=1000, run=function() return 'alive' end})",
+        "require('hold')\n fiber.provider('p', {})",
+        Arc::clone(&clock),
+    );
+    let (held, release) = hold_open(dir.path());
+    assert_eq!(call(&ext, "echo", "").unwrap(), "alive");
+    let asked = clock.now();
+    let provider = start_provider(&ext);
+    Deadline::after(WAIT).recv_or_fail(&held, "provider blocked in C read");
+    assert!(parked_at(&clock, asked + LOAD + GRACE, 1));
+    let mark = clock.advance_marked(
+        (LOAD + GRACE)
+            .checked_sub(Duration::from_millis(1))
+            .unwrap(),
+    );
+    assert!(clock.await_parked_since(&mark, Some(asked + LOAD + GRACE), WAIT));
+    assert!(matches!(
+        provider.try_recv(),
+        Err(mpsc::TryRecvError::Empty)
+    ));
+    clock.advance(Duration::from_millis(1));
+    let err = Deadline::after(WAIT)
+        .recv_or_fail(&provider, "abandoned provider")
+        .unwrap_err();
+    assert!(matches!(err, Error::Abandoned { callback, .. } if callback == "providers/p.lua"));
+    assert!(!ext.is_running());
+    let err = call(&ext, "echo", "").unwrap_err();
+    assert_eq!(err.code(), ErrorCode::ExtensionFailed);
+    assert!(matches!(
+        err,
+        Error::Abandoned { .. } | Error::Stopped { .. }
+    ));
+    release.send(()).unwrap();
+}
+
+#[test]
+fn a_looping_provider_load_stops_at_entry_deadline_and_keeps_commands() {
+    let clock = FakeClock::new();
+    let (dir, ext) = lazy_fixture(
+        "fiber.command('echo', {timeout=1000, run=function() return 'alive' end})",
+        "require('go_spin')\n while true do end",
+        Arc::clone(&clock),
+    );
+    let entered = go_module(dir.path(), "spin");
+    assert_eq!(call(&ext, "echo", "").unwrap(), "alive");
+    let asked = clock.now();
+    let provider = start_provider(&ext);
+    Deadline::after(WAIT).recv_or_fail(&entered, "provider entered its looping file");
+    assert!(parked_at(&clock, asked + LOAD + GRACE, 1));
+    clock.advance(LOAD);
+    let err = Deadline::after(WAIT)
+        .recv_or_fail(&provider, "looping provider stopped")
+        .unwrap_err();
+    assert!(
+        matches!(err, Error::Timeout { callback, timeout_ms: 2000, .. } if callback == "providers/p.lua")
+    );
+    assert!(ext.is_running());
+    assert_eq!(call(&ext, "echo", "").unwrap(), "alive");
+}
+
+#[test]
+fn a_provider_load_error_leaves_the_mixed_extensions_commands_running() {
+    for lua in ["error('broken provider')", "fiber.provider('q', {})"] {
+        let (_dir, ext) = lazy_fixture(
+            "fiber.command('echo', {timeout=1000, run=function() return 'alive' end})",
+            lua,
+            FakeClock::new(),
+        );
+        assert_eq!(call(&ext, "echo", "").unwrap(), "alive");
+        let err = Deadline::after(WAIT)
+            .recv_or_fail(&start_provider(&ext), "failed provider load")
+            .unwrap_err();
+        assert_eq!(err.code(), ErrorCode::ExtensionFailed);
+        let Error::Lua { message, .. } = err else {
+            panic!("{err:?}")
+        };
+        assert!(message.contains("providers/p.lua:1:"), "{message}");
+        assert!(
+            message.contains("broken provider") || message.contains("not `q`"),
+            "{message}"
+        );
+        assert!(ext.is_running());
+        assert_eq!(call(&ext, "echo", "").unwrap(), "alive");
+    }
+}
+
 #[test]
 fn no_vm_exists_until_the_extension_is_first_called() {
     let ext = fixture();
@@ -476,9 +740,12 @@ fn a_command_queued_behind_a_parked_command_runs_once_it_finishes() {
         &dir.join("init.lua"),
         &format!(
             "fiber.command(\"first\", {{ timeout = 5000, run = function() return host.http({{ url = \"{url}\" }}).body end }})\n\
-             fiber.command(\"second\", {{ timeout = 5000, run = function() return \"second\" end }})\n\
-             fiber.provider(\"p\", {{ sign = {{ timeout = 1000, run = function() return {{}} end }} }})\n"
+             fiber.command(\"second\", {{ timeout = 5000, run = function() return \"second\" end }})\n"
         ),
+    );
+    write(
+        &dir.join("providers/p.lua"),
+        "fiber.provider('p', {sign={timeout=1000, run=function() return {} end}})",
     );
     let ext = extension("ext", dir, setup.home(), FakeClock::new());
     let first = start(&ext, "first");
@@ -675,9 +942,12 @@ fn a_command_named_like_a_provider_function_keeps_its_own_timeout() {
     write(
         &dir.join("init.lua"),
         &format!(
-            "fiber.command(\"p.sign\", {{ timeout = 30000, run = function() return host.http({{ url = \"{url}\" }}).body end }})\n\
-             fiber.provider(\"p\", {{ sign = {{ timeout = 50, run = function() return {{}} end }} }})\n"
+            "fiber.command(\"p.sign\", {{ timeout = 30000, run = function() return host.http({{ url = \"{url}\" }}).body end }})\n"
         ),
+    );
+    write(
+        &dir.join("providers/p.lua"),
+        "fiber.provider('p', {sign={timeout=50, run=function() return {} end}})",
     );
     let clock = FakeClock::new();
     let ext = extension("ext", dir, setup.home(), clock.clone());

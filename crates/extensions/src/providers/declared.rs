@@ -4,6 +4,33 @@
 //! `base_url` the provider's entry does not list is left out.
 
 use std::collections::BTreeMap;
+use std::path::Path;
+
+pub(crate) fn provider_scripts(dir: &Path) -> Result<Vec<String>, crate::Error> {
+    let path = dir.join("providers");
+    let entries = match std::fs::read_dir(&path) {
+        Ok(entries) => entries,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(Vec::new()),
+        Err(source) => return Err(crate::Error::Io { path, source }),
+    };
+    let mut names = Vec::new();
+    for entry in entries {
+        let file = entry
+            .map_err(|source| crate::Error::Io {
+                path: path.clone(),
+                source,
+            })?
+            .path();
+        if file.is_file()
+            && file.extension().is_some_and(|ext| ext == "lua")
+            && let Some(stem) = file.file_stem()
+        {
+            names.push(stem.to_string_lossy().into_owned());
+        }
+    }
+    names.sort();
+    Ok(names)
+}
 
 use config::ModelData;
 use contract::ErrorCode;

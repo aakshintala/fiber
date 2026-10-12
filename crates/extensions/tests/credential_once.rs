@@ -42,7 +42,10 @@ fn discovery_and_the_session_share_one_run_of_the_command() {
 
     let ext = setup.home().join("ext");
     write(
-        &ext.join("init.lua"),
+        &{
+            std::fs::create_dir_all((ext.join("providers/acme.lua")).parent().unwrap()).unwrap();
+            ext.join("providers/acme.lua")
+        },
         "fiber.provider(\"acme\", { models = { timeout = 1000, run = function() \
          return { { id = \"a\", protocol = \"openai-responses\", \
          base_url = \"http://127.0.0.1:1/v1\", context_window = 1000 } } end } })\n",

@@ -24,7 +24,9 @@ use crate::oauth::{Browser, Deliver};
 use super::host_calls::{Admitted, Call, admit};
 #[cfg(test)]
 use super::host_calls::{Pause, settle_hook};
-use super::hub::{Hub, Job, Phase, Progress, Shared, StopReason, not_registered, timed_out};
+use super::hub::{
+    Hub, Job, Phase, Progress, ProviderLoad, Shared, StopReason, not_registered, timed_out,
+};
 use super::{GRACE, LOAD_TIMEOUT, LuaExtension, Step, Target, Vm, expired};
 
 /// A callback suspended on a host call. Its deadline keeps running.
@@ -46,6 +48,7 @@ struct Parked {
 
 /// What the thread does next, outside the lock.
 enum Work {
+    Load(String, Option<Instant>),
     Start(Job, Duration, Option<Instant>),
     Resume(Parked, Reply),
     /// A parked callback was dropped: free what it left in the VM.
@@ -114,6 +117,8 @@ pub(super) fn serve(hub: Arc<Hub>, start: Start) {
                 Some(vm)
             }
             Err(e) => {
+                shared.misplaced = matches!(&e, Error::Lua { message, .. }
+                    if message.contains("fiber.provider:") && message.contains("not `init.lua`"));
                 let unsent = shared.stop(StopReason::of(e));
                 drop(shared);
                 drop(unsent);
@@ -132,6 +137,25 @@ pub(super) fn serve(hub: Arc<Hub>, start: Start) {
         // The call has started or resumed.
         hub.notify();
         let (id, target, step) = match work {
+            Work::Load(name, deadline) => {
+                let result = vm.load_provider(&name, deadline);
+                let mut shared = hub.lock();
+                if let Phase::Ready(timeouts) = &mut shared.phase {
+                    let state = match result {
+                        Ok(functions) => {
+                            timeouts.providers.insert(name.clone(), functions);
+                            ProviderLoad::Loaded
+                        }
+                        Err(e) => ProviderLoad::Failed(StopReason::of(e)),
+                    };
+                    shared.loads.insert(name, state);
+                }
+                #[cfg(test)]
+                hub.at_window(super::hub::Window::LoadRecorded);
+                drop(shared);
+                hub.notify();
+                continue;
+            }
             Work::Start(job, timeout, deadline) => {
                 let step = vm.step(&job.target, &job.arg, timeout, deadline);
                 (job.id, job.target, step)
@@ -182,6 +206,22 @@ fn next(name: &str, hub: &Hub, parked: &mut Vec<Parked>) -> Option<Work> {
         let now = hub.clock().now();
         if !matches!(shared.phase, Phase::Ready(_)) {
             return None;
+        }
+        if let Some(provider) = shared.pending_loads.pop_front()
+            && let Some(ProviderLoad::Queued { asked }) = shared.loads.get(&provider)
+        {
+            let deadline = asked.checked_add(LOAD_TIMEOUT);
+            if expired(deadline, now) {
+                shared.pending_loads.push_front(provider);
+            } else {
+                shared.loads.insert(
+                    provider.clone(),
+                    ProviderLoad::Running {
+                        abandon_at: deadline.and_then(|at| at.checked_add(GRACE)),
+                    },
+                );
+                return Some(Work::Load(provider, deadline));
+            }
         }
         if let Some(pos) = parked.iter().position(|p| shared.cancelled.contains(&p.id)) {
             // A cancelled callback goes, and its host call with it. The call

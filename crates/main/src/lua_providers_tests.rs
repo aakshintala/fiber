@@ -146,7 +146,7 @@ fn the_session_label_and_shared_credential_name_reach_credential() {
         )],
     );
     std::fs::write(
-        src.join("init.lua"),
+        { std::fs::create_dir_all((src.join("providers/acme.lua")).parent().unwrap()).unwrap(); src.join("providers/acme.lua") },
         "fiber.provider(\"acme\", { credential = { timeout = 60000, run = function(who)\
           return { token = who.credential .. \"/\" .. who.label, expires_at = 4102444800 } end } })\n",
     )

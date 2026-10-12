@@ -236,7 +236,7 @@ fn the_reviewer_fetches_quota_for_the_lookup_label() {
         )],
     );
     std::fs::write(
-        home.join("extensions/qp/init.lua"),
+        home.join("extensions/qp/providers/qp.lua"),
         format!(
             "fiber.provider(\"qp\", {{ quota = {{ timeout = 60000, run = function(a)\n\
              local reply = host.http({{ url = \"{}/\" .. a.label }})\n\

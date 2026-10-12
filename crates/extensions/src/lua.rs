@@ -52,8 +52,21 @@ pub(super) const CHECK_EVERY: u32 = 1000;
 // extension runs"). A hook's phase and `on_failure` are docs/extensions.md,
 // "When several hooks share a point" and "When a hook fails".
 pub(super) const PRELUDE: &str = r#"
-local create, load_module, rethrow_panic = ...
-local commands, providers, hooks, problems = {}, {}, {}, {}
+local create, load_module, rethrow_panic, loading = ...
+local commands, providers, hooks, problems, violations = {}, {}, {}, {}, {}
+local registered_files = {}
+
+local function refuse_registration(message, level)
+  local file = loading()
+  if file then violations[#violations + 1] = file .. ': ' .. message end
+  error(message, level or 3)
+end
+
+local function init_registration(kind)
+  if loading() ~= 'init.lua' then
+    refuse_registration('fiber.' .. kind .. ': registers only while init.lua runs', 4)
+  end
+end
 local resume, status, yield, pack, unpack =
   coroutine.resume, coroutine.status, coroutine.yield, table.pack, table.unpack
 
@@ -131,6 +144,7 @@ local failures = { blocking = true, ["non-blocking"] = true }
 -- A hook that does not register leaves a problem for Fiber's notice, and the
 -- entry script goes on.
 local function hook(point, spec)
+  init_registration('hook')
   local name = tostring(point)
   local function refuse(why)
     problems[#problems + 1] = "`" .. name .. "` hook not registered: " .. why
@@ -165,6 +179,7 @@ end
 
 fiber = {
   command = function(name, spec)
+    init_registration('command')
     local shown = tostring(name)
     local function refuse(why)
       problems[#problems + 1] = "`" .. shown .. "` command not registered: " .. why
@@ -191,6 +206,21 @@ fiber = {
     commands[name] = { timeout = spec.timeout, run = spec.run, description = description }
   end,
   provider = function(name, spec)
+    local file = loading()
+    if file == 'init.lua' then
+      refuse_registration('fiber.provider: `' .. tostring(name) .. '` belongs in `providers/' .. tostring(name) .. '.lua`, not `init.lua`')
+    end
+    if not file then
+      refuse_registration('fiber.provider: registers only while its provider file loads')
+    end
+    local own = file:match('^providers/(.*)%.lua$')
+    if name ~= own then
+      refuse_registration('fiber.provider: `' .. file .. '` registers only `' .. tostring(own) .. '`, not `' .. tostring(name) .. '`')
+    end
+    if registered_files[file] then
+      refuse_registration('fiber.provider: `' .. file .. '` registers its provider exactly once')
+    end
+    registered_files[file] = true
     if type(name) ~= "string" or type(spec) ~= "table" then
       error("fiber.provider: takes a name and a table of functions", 2)
     end
@@ -206,7 +236,7 @@ fiber = {
   hook = hook,
 }
 
-return commands, providers, hooks, problems
+return commands, providers, hooks, problems, violations
 "#;
 
 /// A Lua extension in a session. Creating one runs no Lua: the VM and its
@@ -337,6 +367,9 @@ impl LuaExtension {
     /// The functions `fiber.provider` registered for `provider`, by name;
     /// empty when the extension registered no such provider.
     pub fn provider_functions(&self, provider: &str) -> Result<Vec<String>, Error> {
+        if !self.ensure_provider(provider)? {
+            return Ok(Vec::new());
+        }
         self.registered(|timeouts| {
             timeouts
                 .providers
@@ -346,9 +379,46 @@ impl LuaExtension {
         })
     }
 
-    /// Every provider `fiber.provider` registered, sorted.
-    pub fn provider_names(&self) -> Result<Vec<String>, Error> {
-        self.registered(|timeouts| timeouts.providers.keys().cloned().collect())
+    pub(crate) fn ensure_provider(&self, provider: &str) -> Result<bool, Error> {
+        let asked = self.hub.clock().now();
+        let mut shared = self.hub.lock();
+        if !shared.loads.contains_key(provider) {
+            if !self
+                .dir
+                .join("providers")
+                .join(format!("{provider}.lua"))
+                .is_file()
+            {
+                shared
+                    .loads
+                    .insert(provider.to_owned(), hub::ProviderLoad::Absent);
+                return Ok(false);
+            }
+            self.start(&mut shared)?;
+            shared
+                .loads
+                .insert(provider.to_owned(), hub::ProviderLoad::Queued { asked });
+            shared.pending_loads.push_back(provider.to_owned());
+            self.hub.notify();
+        }
+        loop {
+            match shared.judge_load(&self.name, provider, asked, self.hub.clock().now()) {
+                (Next::Return(result), unsent) => {
+                    self.hub.notify();
+                    drop(shared);
+                    drop(unsent);
+                    return result.map(|value| value == Value::Bool(true));
+                }
+                (Next::Sleep(until), unsent) => {
+                    drop(unsent);
+                    shared = self.hub.wait(shared, until);
+                }
+            }
+        }
+    }
+
+    pub(crate) fn misplaced_provider(&self) -> bool {
+        self.hub.lock().misplaced
     }
 
     /// Every command the entry script registered: its name and description.
@@ -514,6 +584,7 @@ impl LuaExtension {
         function: &'static str,
         arg: Value,
     ) -> Result<Value, Error> {
+        self.ensure_provider(provider)?;
         self.call(
             Target::Provider {
                 name: provider.to_owned(),
@@ -534,6 +605,7 @@ impl LuaExtension {
         provider: &str,
         pair: &CredentialPair,
     ) -> Result<Value, Error> {
+        self.ensure_provider(provider)?;
         self.call(
             Target::Provider {
                 name: provider.to_owned(),
@@ -559,6 +631,7 @@ impl LuaExtension {
         method: LoginMethod,
         slot: LoginSlot,
     ) -> Result<Value, Error> {
+        self.ensure_provider(provider)?;
         let login = match method {
             LoginMethod::Browser => "browser",
             LoginMethod::Device => "device",
@@ -765,7 +838,7 @@ use vm::{Step, Vm};
 
 pub(crate) use setup::Deadline;
 #[cfg(test)]
-pub(crate) use setup::install as install_prelude;
+pub(crate) use setup::install_prelude;
 
 #[cfg(test)]
 #[path = "lua_tests.rs"]

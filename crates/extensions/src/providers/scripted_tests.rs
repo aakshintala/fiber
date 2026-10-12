@@ -223,7 +223,11 @@ fn a_lua_provider_named_scripted_is_left_out_with_a_notice() {
     let ext = root.path().join("ext");
     fs::create_dir_all(&ext).unwrap();
     fs::write(
-        ext.join("init.lua"),
+        {
+            std::fs::create_dir_all((ext.join("providers/scripted.lua")).parent().unwrap())
+                .unwrap();
+            ext.join("providers/scripted.lua")
+        },
         "fiber.provider(\"scripted\", { \
          credential = { timeout = 1000, run = function() \
          return { token = \"test-token\", expires_at = 1893456000 } end }, \

@@ -387,11 +387,16 @@ fn provider_extension(
         return Some(extension_for(package));
     }
     installed.iter().find_map(|package| {
-        let extension = extension_for(package);
-        extension
-            .provider_names()
-            .is_ok_and(|names| names.iter().any(|name| name == provider))
-            .then_some(extension)
+        let dir = home
+            .join("extensions")
+            .join(config::dir_name(&package.name));
+        let manifest = config::read_manifest(&dir).ok()?;
+        (manifest.providers.contains_key(provider)
+            && dir
+                .join("providers")
+                .join(format!("{provider}.lua"))
+                .is_file())
+        .then(|| extension_for(package))
     })
 }
 
