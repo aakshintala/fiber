@@ -3205,10 +3205,14 @@ mod from_log {
 
 fn inner_requested(inner: bool) -> Event {
     Event::ToolCallRequested(ToolCallRequested {
-        name: "fake".into(), arguments: json!({}), provider_id: None, repair: None,
+        name: "fake".into(),
+        arguments: json!({}),
+        provider_id: None,
+        repair: None,
         provider_item: None,
         ran_by: inner.then(|| contract::events::RanBy {
-            extension: "ext".into(), anchor: contract::events::Anchor::OuterCall(ActionId("a_outer".into())),
+            extension: "ext".into(),
+            anchor: contract::events::Anchor::OuterCall(ActionId("a_outer".into())),
         }),
     })
 }
@@ -3217,14 +3221,24 @@ fn inner_lines(crash: bool) -> Vec<Envelope> {
     let requested = inner_requested(false);
     let inner = inner_requested(true);
     let started = Event::ToolCallStarted(contract::events::ToolCallStarted {
-        declared: contract::shapes::DeclaredEffects { effects: vec![], reversible: true, paths: None },
-        arguments: None, changed_by: None,
+        declared: contract::shapes::DeclaredEffects {
+            effects: vec![],
+            reversible: true,
+            paths: None,
+        },
+        arguments: None,
+        changed_by: None,
     });
     let done = Event::ToolCallCompleted(crate::completion::completed("outer result".into(), None));
-    let inner_done = Event::ToolCallCompleted(crate::completion::completed("secret inner result".into(), None));
-    let mut lines = vec![line("tool_call_requested", &requested, Some("a_outer")),
+    let inner_done = Event::ToolCallCompleted(crate::completion::completed(
+        "secret inner result".into(),
+        None,
+    ));
+    let mut lines = vec![
+        line("tool_call_requested", &requested, Some("a_outer")),
         line("tool_call_requested", &inner, Some("a_inner")),
-        line("tool_call_started", &started, Some("a_inner"))];
+        line("tool_call_started", &started, Some("a_inner")),
+    ];
     if !crash {
         lines.push(line("tool_call_completed", &inner_done, Some("a_inner")));
         lines.push(line("tool_call_completed", &done, Some("a_outer")));
@@ -3238,12 +3252,21 @@ fn live_and_rebuilt_conversations_exclude_inner_calls_and_their_results() {
     let mut live = Vec::new();
     let mut carry = crate::handoff::Carry::default();
     for line in &lines {
-        render(&mut live, &Event::from_envelope(line).unwrap().unwrap(), line.action_id.as_ref(), "fake", &mut BTreeMap::new(), &mut carry);
+        render(
+            &mut live,
+            &Event::from_envelope(line).unwrap().unwrap(),
+            line.action_id.as_ref(),
+            "fake",
+            &mut BTreeMap::new(),
+            &mut carry,
+        );
     }
     assert_eq!(live, super::rebuild(&lines, "fake").unwrap());
     assert_eq!(live.len(), 2);
     assert!(matches!(&live[0], Input::ToolCall { action_id, .. } if action_id.0 == "a_outer"));
-    assert!(matches!(&live[1], Input::ToolResult { action_id, text, .. } if action_id.0 == "a_outer" && text == "outer result"));
+    assert!(
+        matches!(&live[1], Input::ToolResult { action_id, text, .. } if action_id.0 == "a_outer" && text == "outer result")
+    );
     assert_eq!(carry.step.len(), 1);
     assert!(carry.inner.contains(&ActionId("a_inner".into())));
 }
@@ -3252,13 +3275,16 @@ fn live_and_rebuilt_conversations_exclude_inner_calls_and_their_results() {
 fn a_crash_left_inner_call_gets_no_fixed_result() {
     let rebuilt = super::rebuild(&inner_lines(true), "fake").unwrap();
     assert_eq!(rebuilt.len(), 2);
-    assert!(matches!(&rebuilt[1], Input::ToolResult { action_id, text, .. } if action_id.0 == "a_outer" && text == "It never ran."));
+    assert!(
+        matches!(&rebuilt[1], Input::ToolResult { action_id, text, .. } if action_id.0 == "a_outer" && text == "It never ran.")
+    );
 }
 
 #[test]
 fn a_completion_not_requested_in_this_window_still_renders() {
     let done = Event::ToolCallCompleted(crate::completion::completed("standalone".into(), None));
-    let rebuilt = super::rebuild(&[line("tool_call_completed", &done, Some("a_old"))], "fake").unwrap();
+    let rebuilt =
+        super::rebuild(&[line("tool_call_completed", &done, Some("a_old"))], "fake").unwrap();
     assert_eq!(rebuilt.len(), 1);
     assert!(matches!(&rebuilt[0], Input::ToolResult { text, .. } if text == "standalone"));
 }
@@ -3268,14 +3294,29 @@ fn the_suspended_batch_excludes_inner_requests() {
     let mut lines = inner_lines(true);
     let permission = Event::PermissionRequested(contract::events::PermissionRequested {
         request_id: contract::RequestId("r_1".into()),
-        declared: contract::shapes::DeclaredEffects { effects: vec![], reversible: true, paths: None },
-        step: contract::events::AskStep::StandingAsk { standing_rule: contract::events::StandingRule { scope: contract::events::RuleScope::Project, prefix: "".into() } },
+        declared: contract::shapes::DeclaredEffects {
+            effects: vec![],
+            reversible: true,
+            paths: None,
+        },
+        step: contract::events::AskStep::StandingAsk {
+            standing_rule: contract::events::StandingRule {
+                scope: contract::events::RuleScope::Project,
+                prefix: "".into(),
+            },
+        },
     });
     lines.push(line("permission_requested", &permission, Some("a_outer")));
-    for line in &mut lines { line.turn_id = Some(contract::TurnId("t_1".into())); }
+    for line in &mut lines {
+        line.turn_id = Some(contract::TurnId("t_1".into()));
+    }
     let exited = Event::FiberExited(contract::events::FiberExited {
-        exit_code: 0, usage: Default::default(), final_message: None,
-        error: None, suspended_on: Some(contract::RequestId("r_1".into())), questions: None,
+        exit_code: 0,
+        usage: Default::default(),
+        final_message: None,
+        error: None,
+        suspended_on: Some(contract::RequestId("r_1".into())),
+        questions: None,
     });
     lines.push(line("fiber_exited", &exited, None));
     let suspended = crate::resume::suspended(&lines).unwrap().unwrap();

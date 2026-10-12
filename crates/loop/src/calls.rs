@@ -218,6 +218,7 @@ impl Loop {
             let clock_wake: Arc<dyn Wake> = wake.clone();
             clock.subscribe(Arc::downgrade(&clock_wake));
             let mut running: Vec<Running> = Vec::new();
+            let mut inner = Vec::new();
             // Closes every call's ask on any return, so no worker the scope
             // joins is left blocked in one.
             let mut release = Release::default();
@@ -258,8 +259,15 @@ impl Loop {
                         // wake: nobody can answer (`docs/tools.md`, "Asking
                         // the person").
                         let answerable = self.answerable && self.inbox_wake.is_some();
-                        let stream =
-                            Arc::new(Stream::new(Arc::clone(&wake), id.clone(), answerable));
+                        let slot = Arc::new(crate::inner_calls::InnerSlot::new(
+                            Arc::clone(&wake),
+                            id.clone(),
+                            name.clone(),
+                            0,
+                        ));
+                        let stream = Arc::new(
+                            Stream::new(Arc::clone(&wake), id.clone(), answerable).with_inner(slot),
+                        );
                         if let Some(request) = again
                             && answerable
                         {
@@ -302,7 +310,45 @@ impl Loop {
                 self.declined(request.clone(), turn)?;
             }
             loop {
-                self.serve_interactions(&unwritten(&running), turn)?;
+                // Own the stream handles while taking requests, so the pass can
+                // add new inner streams without borrowing its running list.
+                let streams: Vec<_> = running
+                    .iter()
+                    .filter_map(|call| match &call.state {
+                        State::Running { stream, .. } => {
+                            Some((call.id.clone(), Arc::clone(stream)))
+                        }
+                        State::Ready(_) | State::Done => None,
+                    })
+                    .chain(inner.iter().map(|call: &crate::inner_calls::InnerRunning| {
+                        (call.id.clone(), Arc::clone(&call.stream))
+                    }))
+                    .collect();
+                let streams: Vec<_> = streams
+                    .iter()
+                    .map(|(id, stream)| (id, stream.as_ref()))
+                    .collect();
+                self.take_inner(scope, &streams, &mut inner, &mut release, &wake, turn)?;
+                let wrote_inner = self.serve_inner(
+                    &mut inner,
+                    &|id| {
+                        running
+                            .iter()
+                            .find(|call| &call.id == id)
+                            .is_none_or(|call| match &call.state {
+                                State::Running { stream, .. } => stream.returned(),
+                                State::Ready(_) | State::Done => true,
+                            })
+                    },
+                    turn,
+                )?;
+                let mut calls = unwritten(&running);
+                calls.extend(
+                    inner
+                        .iter()
+                        .map(|call| (&call.id, Some(call.stream.as_ref()))),
+                );
+                self.serve_interactions(&calls, turn)?;
                 let now = clock.now();
                 // Every delta due now, in request order. A held change the
                 // interval still covers stays held for the flush in
@@ -334,7 +380,7 @@ impl Loop {
                 // A returned call's flush already went out in the pass above;
                 // what `take_finished` still holds is only the safety net,
                 // written before its completion all the same.
-                if self.complete_next(&mut running, turn)? {
+                if self.complete_next(&mut running, &inner, turn)? || wrote_inner {
                     continue;
                 }
                 if running.iter().all(is_done) {
@@ -344,7 +390,12 @@ impl Loop {
                 // `until` is due, an emit, a call returning, an ask or a
                 // clock move. Each pass either wrote something above or
                 // waits here, never spins.
-                let calls = unwritten(&running);
+                let mut calls = unwritten(&running);
+                calls.extend(
+                    inner
+                        .iter()
+                        .map(|call| (&call.id, Some(call.stream.as_ref()))),
+                );
                 let earliest = calls
                     .iter()
                     .filter_map(|(_, stream)| stream.and_then(Stream::deadline))
@@ -545,12 +596,17 @@ impl Loop {
     /// result line. Writes the call's job lines and
     /// the hooks' notices under `id` before the caller writes
     /// `tool_call_completed`.
-    fn finish(
+    #[allow(
+        clippy::too_many_arguments,
+        reason = "each input shapes this call's completion; cancellation belongs to the call"
+    )]
+    pub(crate) fn finish(
         &mut self,
         output: Output,
         (tool, arguments): (&str, &Map<String, Value>),
         rewritten: Option<&[String]>,
         bound: Bound,
+        cancelled: bool,
         id: &ActionId,
         turn: &TurnId,
     ) -> Result<ToolCallCompleted, Error> {
@@ -598,7 +654,7 @@ impl Loop {
         // the status the completion carries.
         let mut status = if error.is_some() {
             CallStatus::Failed
-        } else if self.turn_cancelled() {
+        } else if cancelled {
             CallStatus::Cancelled
         } else {
             CallStatus::Completed
@@ -656,7 +712,7 @@ impl Loop {
     /// Writes one due or flushed delta under the call's action, and returns
     /// its encoded bytes for pacing. Errors are ignored: the line is
     /// ephemeral (`docs/architecture.md`, "Streaming").
-    fn write_delta(&mut self, delta: &Progress, turn: &TurnId, id: &ActionId) -> u64 {
+    pub(crate) fn write_delta(&mut self, delta: &Progress, turn: &TurnId, id: &ActionId) -> u64 {
         let event = Event::ToolCallDelta(delta.clone());
         match self.append(&event, turn, Some(id)) {
             Ok(()) | Err(_) => {}
@@ -667,12 +723,20 @@ impl Loop {
     /// Writes the next completion in request order, once every earlier call
     /// is done: true after writing one. A later call's completion waits for
     /// its prefix, while its final flush does not (written above).
-    fn complete_next(&mut self, running: &mut [Running], turn: &TurnId) -> Result<bool, Error> {
+    fn complete_next(
+        &mut self,
+        running: &mut [Running],
+        inner: &[crate::inner_calls::InnerRunning],
+        turn: &TurnId,
+    ) -> Result<bool, Error> {
         // The first call whose completion is not written: everything
         // before it is done, so writing this one keeps request order.
         let Some(call) = running.iter_mut().find(|call| !is_done(call)) else {
             return Ok(false);
         };
+        if Self::inner_anchored(inner, &call.id) {
+            return Ok(false);
+        }
         let mut completed = match &call.state {
             State::Done => return Ok(false),
             // A decided call the cancel reached before its completion was
@@ -695,7 +759,18 @@ impl Loop {
                     }
                     let call_of = (tool.as_str(), arguments.as_ref());
                     let rewritten = rewritten.as_deref();
-                    Box::new(self.finish(output, call_of, rewritten, *bound, &call.id, turn)?)
+                    if let Some(slot) = stream.inner_slot() {
+                        slot.close();
+                    }
+                    Box::new(self.finish(
+                        output,
+                        call_of,
+                        rewritten,
+                        *bound,
+                        self.turn_cancelled(),
+                        &call.id,
+                        turn,
+                    )?)
                 }
                 None => return Ok(false),
             },
@@ -704,28 +779,41 @@ impl Loop {
             State::Running { declared, .. } => Some(declared.clone()),
             State::Ready(_) | State::Done => None,
         };
+        call.state = State::Done;
+        self.after_completed(declared.as_ref(), &mut completed, &call.id, turn)?;
+        Ok(true)
+    }
+
+    /// Writes the completion between its prune line and instruction tracking,
+    /// shared by model and inner calls.
+    pub(crate) fn after_completed(
+        &mut self,
+        declared: Option<&DeclaredEffects>,
+        completed: &mut ToolCallCompleted,
+        id: &ActionId,
+        turn: &TurnId,
+    ) -> Result<(), Error> {
         // An over-budget section a completed call that declared a write
         // touched ends its result with the prune line, before the line is
         // written; the session's own edits below come after it.
-        if let Some(declared) = declared.as_ref()
+        if let Some(declared) = declared
             && completed.status == CallStatus::Completed
         {
             for line in self.changes.prune_lines(&self.workspace, declared) {
                 completed.content.push(ContentPart::Text { text: line });
             }
         }
-        call.state = State::Done;
-        self.append(&Event::ToolCallCompleted(*completed), turn, Some(&call.id))?;
+        self.append(&Event::ToolCallCompleted(completed.clone()), turn, Some(id))?;
         // The session's own edits and subdirectory files: a call that ran
         // re-reads each declared path that is a tracked instruction file,
         // and queues each new subdirectory file for the next step start.
         // A call that never ran touches nothing, so it checks nothing.
         if let Some(declared) = declared {
-            for file in self.changes.call_completed(&self.workspace, &declared) {
-                self.append(&Event::InstructionFile(file), turn, Some(&call.id))?;
+            for file in self.changes.call_completed(&self.workspace, declared) {
+                self.append(&Event::InstructionFile(file), turn, Some(id))?;
             }
         }
-        Ok(true)
+        Ok(())
     }
 }
 
