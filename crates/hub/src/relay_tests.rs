@@ -2072,16 +2072,17 @@ fn the_relay_parses_each_session_line_once() {
         .recv(&lines_rx)
         .expect("the client reads the four forwarded lines before its deadline");
     reader.join().unwrap();
-    assert_eq!(
-        got,
-        vec![
-            session_lines[0].clone(),
-            session_lines[1].clone(),
-            session_lines[3].clone(),
-            session_lines[5].clone(),
-        ],
-        "the relay forwards every line but the muted replay and the unknown acknowledgement"
-    );
+    assert_eq!(got.len(), 4, "the relay forwards four lines: {got:?}");
+    assert_eq!(got[0], session_lines[0].clone());
+    assert_eq!(got[1], session_lines[1].clone());
+    assert_eq!(got[2], session_lines[3].clone());
+    // The rewind's acknowledgement is refused: the hub has no log for
+    // the new session, so its start fails `io_failed`. Only kind,
+    // `command_id` and code compare: the hub stamps its own `ts`.
+    let refused: Value = serde_json::from_str(got[3].trim_end()).unwrap();
+    assert_eq!(refused["kind"], "command_rejected", "{refused}");
+    assert_eq!(refused["payload"]["command_id"], "c_rw", "{refused}");
+    assert_eq!(refused["payload"]["code"], "io_failed", "{refused}");
     join_within_deadline(thread);
     assert_eq!(
         Deadline::after(DEADLINE).recv(&count_rx).ok(),

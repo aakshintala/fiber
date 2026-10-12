@@ -261,52 +261,52 @@ the lines that carry it.
 | Code | Where | Meaning |
 |---|---|---|
 | `ambiguous_match` | tool call | an edit block's text occurs more than once (`docs/tools.md`, "File tools") |
-| `authentication_failed` | exit, extension call, model call, turn | the provider rejected the credential, an OAuth refresh was rejected, or a login was needed with nobody attached |
+| `authentication_failed` | exit, extension call, model call, turn, driver command (`rewind`) | the provider rejected the credential, an OAuth refresh was rejected, or a login was needed with nobody attached |
 | `blocked` | turn | the block budget ran out with no human to answer |
 | `blocked_host` | tool call | `web_fetch` named a link-local address or a cloud metadata host (`docs/tools.md`, "Web fetch and web search") |
 | `budget_exceeded` | turn | the spending budget was reached, or an extension refused a model request (`docs/loop.md`, "Spending budget") |
 | `busy` | driver command | `prompt` or `reload` while a turn is running, or `rewind` mid-turn (`docs/invocation.md`, "What each command does") |
 | `closing` | exit, tool call, extension call, driver command | `session_message` named a session that was sent `close` (`docs/tools.md`, "Messaging other sessions"), or `state.set`, `state.unset` or `host.drive` ran after `fiber_exited` (`docs/extensions.md`, "When a session ends"), or a driver command after `close` (`docs/invocation.md`, "Driver commands"), or the session `fiber ask` attached to ended before its turn completed |
-| `config_invalid` | exit, extension call, notice | a configuration or script file is invalid, or an MCP server declares both `command` and `url` or has a user name or password in its `url` |
-| `connection_failed` | exit, extension call, model call, tool call, turn | the connection to the provider or its token endpoint failed, or `web_fetch` could not reach the host |
+| `config_invalid` | exit, extension call, notice, driver command (`rewind`) | a configuration or script file is invalid, or an MCP server declares both `command` and `url` or has a user name or password in its `url` |
+| `connection_failed` | exit, extension call, model call, tool call, turn, driver command (`rewind`) | the connection to the provider or its token endpoint failed, or `web_fetch` could not reach the host |
 | `context_overflow` | model call, turn | the request does not fit the context window |
-| `credential_failed` | exit, extension call, model call, turn | a stored credential cannot be used, or the provider's `credential()` or `sign()` failed; log in again or fix the credential |
+| `credential_failed` | exit, extension call, model call, turn, driver command (`rewind`) | a stored credential cannot be used, or the provider's `credential()` or `sign()` failed; log in again or fix the credential |
 | `credential_missing` | exit, driver command | no credential was found for the session's model, or its credential label names none; the message lists the provider's labels |
 | `depth_exceeded` | tool call | a delegate tool at depth 2 (`docs/delegates.md`) |
 | `duplicate_command` | driver command | a command repeats the id of one the session already accepted, so it was not applied again (`docs/invocation.md`, "The command line") |
-| `extension_incompatible` | exit, notice | an extension needs a newer `fiber` or a different extension API version; `fiber extension install` refuses it and loading skips it (`docs/extensions.md`, "The extension API version") |
-| `extension_missing` | exit | the provider of a `provider/model` is not installed |
-| `extension_not_found` | exit | an install names a repository or tag that does not exist; fix the name. Not retried automatically (`docs/extensions.md`, "Names") |
-| `extension_not_installed` | exit | `fiber extension remove` names an extension with no directory under `extensions/`; nothing is deleted (`docs/extensions.md`, "Installing") |
-| `extension_required_failed` | exit | a required extension failed to start |
+| `extension_incompatible` | exit, notice, driver command (`rewind`) | an extension needs a newer `fiber` or a different extension API version; `fiber extension install` refuses it and loading skips it (`docs/extensions.md`, "The extension API version") |
+| `extension_missing` | exit, driver command (`rewind`) | the provider of a `provider/model` is not installed |
+| `extension_not_found` | exit, driver command (`rewind`) | an install names a repository or tag that does not exist; fix the name. Not retried automatically (`docs/extensions.md`, "Names") |
+| `extension_not_installed` | exit, driver command (`rewind`) | `fiber extension remove` names an extension with no directory under `extensions/`; nothing is deleted (`docs/extensions.md`, "Installing") |
+| `extension_required_failed` | exit, driver command (`rewind`) | a required extension failed to start |
 | `extension_shadowed` | notice | a repository's approved copy of an extension loads in place of the personal install of the same name; the message names both versions (`docs/extensions.md`, "Code a repository ships") |
-| `extension_unapproved` | exit | a repository's required extension is not approved; run `fiber approve` in the repository |
+| `extension_unapproved` | exit, driver command (`rewind`) | a repository's required extension is not approved; run `fiber approve` in the repository |
 | `extension_unavailable` | tool call | the extension providing the tool died twice |
-| `fetch_failed` | exit | an install or update could not fetch: git or the network failed; try again later. Not retried automatically (`docs/extensions.md`, "Installing") |
+| `fetch_failed` | exit, driver command (`rewind`) | an install or update could not fetch: git or the network failed; try again later. Not retried automatically (`docs/extensions.md`, "Installing") |
 | `flooded` | job | a monitor was suppressed for 30 seconds (`docs/tools.md`) |
 | `hook_failed` | tool call, turn, handoff, notice | an extension hook errored or ran out of time |
-| `hook_unapproved` | exit | a repository's required hook is not approved; run `fiber approve` in the repository |
+| `hook_unapproved` | exit, driver command (`rewind`) | a repository's required hook is not approved; run `fiber approve` in the repository |
 | `http_error` | extension call, tool call | `web_fetch` got a status other than 2xx, was redirected more than 10 times, or was redirected to a URL it cannot parse |
 | `indeterminate` | tool call, job | Fiber cannot tell whether the call completed |
 | `invalid_arguments` | driver command, hub command, extension call, tool call | the arguments failed the tool's schema or checks, or a driver or hub command's `args` (`docs/invocation.md`, "Driver commands" and "The hub") |
 | `invalid_request` | model call, turn | the provider rejected the request for any other reason |
 | `io_failed` | exit, driver command, hub command, extension call | a filesystem failure, or a `git` command on a worktree that failed: a log write or fsync, or a configuration or credential file that exists but cannot be read or written; the message names the path |
-| `log_corrupt` | exit, hub command | a log line that cannot be encoded, or one read back that does not parse |
+| `log_corrupt` | exit, hub command, driver command (`rewind`) | a log line that cannot be encoded, or one read back that does not parse |
 | `malformed` | driver command, hub command | a command line that is not a JSON object, has no string `id` or `command`, has `args` of the wrong type, or has a key no command line takes (`docs/invocation.md`, "Driver commands") |
 | `mcp_cancel_requested` | tool call | a cancelled call the server may still act on |
 | `mcp_prompt_failed` | driver command | Fiber could not get an MCP server's prompt: the server failed, did not answer in time, refused it, or returned content Fiber cannot send |
-| `mcp_required_server_failed` | exit | a required MCP server failed to start |
-| `mcp_server_unapproved` | exit | a repository's required MCP server is not approved; run `fiber approve` in the repository |
+| `mcp_required_server_failed` | exit, driver command (`rewind`) | a required MCP server failed to start |
+| `mcp_server_unapproved` | exit, driver command (`rewind`) | a repository's required MCP server is not approved; run `fiber approve` in the repository |
 | `mcp_server_unavailable` | tool call, MCP server | the server failed to start, died, or ended its session |
 | `mcp_tool_removed` | tool call | the server has removed the tool |
 | `message_refused` | tool call, driver command | a `before_message` hook refused a message: a session message, or a person's or a driver's |
-| `model_ambiguous` | exit | a bare model id matches models of two or more installed providers; prefix the provider |
+| `model_ambiguous` | exit, driver command (`rewind`) | a bare model id matches models of two or more installed providers; prefix the provider |
 | `model_invalid` | notice | a model's `extra_body` names a field Fiber builds, its `web_search` names a type its protocol does not read, it declares no `context_window`, or its `thinking_default` is not among its `thinking_levels`, so the model is left out of the model list (`docs/model-routing.md`, "Extra request body fields", "Hosted web search", "Thinking") |
 | `model_not_found` | model call, turn | the provider's error body says it does not know the model |
-| `model_unconfigured` | exit, notice | a model's base URL names a per-account host whose setting has no value or a value that is not a host, so the model is left out of the model list; the message names the model and the setting (`docs/model-routing.md`, "A per-account host") |
+| `model_unconfigured` | exit, notice, driver command (`rewind`) | a model's base URL names a per-account host whose setting has no value or a value that is not a host, so the model is left out of the model list; the message names the model and the setting (`docs/model-routing.md`, "A per-account host") |
 | `name_pinned` | tool call | `name_session` was called while the person's name pins the session |
 | `no_match` | tool call | an edit block's text was not found in the file |
-| `no_model` | exit, notice | nothing chose a model, an installed provider lacks the named model, or no installed provider has a bare model id |
+| `no_model` | exit, notice, driver command (`rewind`) | nothing chose a model, an installed provider lacks the named model, or no installed provider has a bare model id |
 | `nonzero_exit` | tool call, job | a process exited nonzero |
 | `not_found` | extension call, tool call, hub command | the path `read` or `edit` names does not exist, or `read_file` names no file (`docs/invocation.md`, "A session's files"), or `revoke` names no paired device (`docs/invocation.md`, "Remote clients") |
 | `orphaned` | job | the process that ran the job died |
@@ -314,16 +314,16 @@ the lines that carry it.
 | `output_truncated` | tool call, turn, handoff | a reply was cut off by the output-token limit, so its calls did not run |
 | `pairing_failed` | hub connection | a pairing code was wrong, already used or more than 10 minutes old (`docs/invocation.md`, "Remote clients") |
 | `path_changed` | tool call | a symbolic link changed between the permission decision and the read or write |
-| `protocol_unsupported` | exit | the model's protocol is one this Fiber does not speak yet; pick another model |
+| `protocol_unsupported` | exit, driver command (`rewind`) | the model's protocol is one this Fiber does not speak yet; pick another model |
 | `provider_unavailable` | model call, turn | a provider server error or overload |
 | `quota_exceeded` | model call, turn | a quota, billing or subscription limit |
 | `rate_limited` | extension call, model call, turn | the provider rate-limited the request |
 | `refused` | model call, turn | the provider declined on policy grounds |
 | `repository_code_skipped` | notice | an extension, hook or MCP server the repository declares was skipped, because nobody approved it and nobody could be asked (`docs/extensions.md`, "Code a repository ships") |
 | `reviewer_selection_failed` | notice | the reviewer could not choose which of the person's messages still bind at a handoff, so it kept every one |
-| `session_has_dependents` | exit, hub command | a delete names a session that forks or rewinds point at; the message lists them, and `--cascade` deletes them too (`docs/invocation.md`, "Deleting and pruning") |
-| `session_held` | exit, hub command | another process holds the session, or runs it at a schema version this build cannot read (`docs/invocation.md`, "Processes") |
-| `session_not_found` | exit, hub command | a resume names no session, or a command whose `session_id` names no session, running or exited, or names a delegate that is not running, or a hub command's `session` argument names none (`docs/invocation.md`, "The hub" and "Lifecycle") |
+| `session_has_dependents` | exit, hub command, driver command (`rewind`) | a delete names a session that forks or rewinds point at; the message lists them, and `--cascade` deletes them too (`docs/invocation.md`, "Deleting and pruning") |
+| `session_held` | exit, hub command, driver command (`rewind`) | another process holds the session, or runs it at a schema version this build cannot read (`docs/invocation.md`, "Processes") |
+| `session_not_found` | exit, hub command, driver command (`rewind`) | a resume names no session, or a command whose `session_id` names no session, running or exited, or names a delegate that is not running, or a hub command's `session` argument names none (`docs/invocation.md`, "The hub" and "Lifecycle") |
 | `signal` | tool call, job | a process killed by a signal Fiber did not send |
 | `skill_invalid` | notice | a skill's `SKILL.md` header does not parse or lacks `name` or `description`, so it is left out; the message names its path (`docs/system-prompt.md`, "Skills") |
 | `skill_shadowed` | notice | two skills share a name, an MCP server's prompt is named like a skill, or two servers' prompts share a name; the message names both and which one won (`docs/system-prompt.md`, "Skills") |
@@ -344,8 +344,8 @@ the lines that carry it.
 | `unreachable` | tool call | `session_message` named an id no running session has |
 | `unreadable_reply` | extension call, permission request, handoff | a model replied, but not in the format Fiber asked for, such as a reviewer verdict that could not be read on the second ask (`docs/permissions.md`, "What happens on a block") |
 | `unsupported_file` | extension call, tool call | a file tool was given a directory, device or file it cannot handle |
-| `usage` | exit | the invocation or its environment is wrong; exits 2 |
-| `version_conflict` | exit | an install needs two majors of one dependency, no tag meets a minimum, or the versions cannot be settled; pick compatible versions. Not retried automatically (`docs/extensions.md`, "Versions") |
+| `usage` | exit, driver command (`rewind`) | the invocation or its environment is wrong; exits 2 |
+| `version_conflict` | exit, driver command (`rewind`) | an install needs two majors of one dependency, no tag meets a minimum, or the versions cannot be settled; pick compatible versions. Not retried automatically (`docs/extensions.md`, "Versions") |
 
 Notices, for a failure outside any action:
 
@@ -372,7 +372,7 @@ Notices, for a failure outside any action:
 Driver command rejections (`malformed`, `not_subscribed`, `busy`, `stale_request`, `not_step_boundary`,
 `session_held`, `delegate_session`, `summary_failed`, `invalid_arguments`,
 `unknown_command`, `closing`, `io_failed`, `duplicate_command`, `session_not_found`,
-`message_refused`, `hook_failed`, `mcp_prompt_failed`)
+`message_refused`, `hook_failed`, `mcp_prompt_failed`, `authentication_failed`, `config_invalid`, `connection_failed`, `credential_failed`, `credential_missing`, `extension_incompatible`, `extension_missing`, `extension_not_found`, `extension_not_installed`, `extension_required_failed`, `extension_unapproved`, `fetch_failed`, `hook_unapproved`, `log_corrupt`, `mcp_required_server_failed`, `mcp_server_unapproved`, `model_ambiguous`, `model_unconfigured`, `no_model`, `protocol_unsupported`, `session_has_dependents`, `usage`, `version_conflict`)
 are `docs/invocation.md`, "Driver commands".
 
 ## Not settled here

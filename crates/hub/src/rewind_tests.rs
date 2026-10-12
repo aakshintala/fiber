@@ -10,7 +10,7 @@
     reason = "test helpers; a failure is the test's"
 )]
 
-use std::fs;
+use std::fs::{self, File};
 use std::io::{BufRead, BufReader, Write};
 use std::os::unix::net::{UnixListener, UnixStream};
 use std::path::PathBuf;
@@ -18,14 +18,16 @@ use std::sync::{Arc, Mutex, mpsc};
 use std::thread;
 use std::time::Duration;
 
-use contract::CommandId;
+use contract::clock::Clock;
+use contract::{CommandId, ErrorCode};
 use serde_json::{Map, Value, json};
 
 use super::*;
 use crate::Started;
 use crate::Starter;
 use crate::connection::serve_connection;
-use crate::fake::{FakeStarter, Handshake};
+use crate::fake::{FakeStarter, Handshake, failure};
+use crate::start::START_DEADLINE;
 use crate::testkit::{id, write_log};
 use fakes::Deadline;
 
@@ -41,16 +43,22 @@ struct Temp {
     dir: PathBuf,
     #[expect(dead_code, reason = "Drop removes the directory")]
     held: fakes::TempDir,
+    clock: Arc<fakes::clock::FakeClock>,
 }
 
 impl Temp {
     fn new() -> Self {
         let (held, dir) = crate::testkit::home("hr");
-        Self { dir, held }
+        Self {
+            dir,
+            held,
+            clock: fakes::clock::FakeClock::new(),
+        }
     }
 
     fn hub(&self, starter: impl Starter + 'static) -> Arc<Hub> {
-        let timed: Arc<dyn contract::clock::Clock> = fakes::clock::FakeClock::new();
+        let clock = Arc::clone(&self.clock);
+        let timed: Arc<dyn contract::clock::Clock> = clock;
         Arc::new(crate::testkit::hub(&self.dir, Arc::new(starter), timed))
     }
 
@@ -144,7 +152,7 @@ fn start_connects_when_the_next_session_runs() {
     let hub = temp.hub(starter.clone());
     let next = id(2);
     let bound = crate::fake::FakeSession::bind(&temp.dir, &next);
-    assert!(reach(&hub, &SessionId(id(1)), &SessionId(next.clone())).is_some());
+    assert!(reach(&hub, &SessionId(id(1)), &SessionId(next.clone())).is_ok());
     assert!(
         starter.rewound().is_empty(),
         "a running session is attached to"
@@ -170,7 +178,7 @@ fn start_resumes_a_next_session_with_a_log() {
     let next = id(2);
     write_log(&temp.dir, &from, &workspace, None, &[exited_line(&from)]);
     write_log(&temp.dir, &next, &workspace, None, &[exited_line(&next)]);
-    assert!(reach(&hub, &SessionId(from), &SessionId(next.clone())).is_some());
+    assert!(reach(&hub, &SessionId(from), &SessionId(next.clone())).is_ok());
     assert!(starter.rewound().is_empty(), "a logged session is resumed");
     assert_eq!(
         starter.resumed(),
@@ -188,7 +196,7 @@ fn start_starts_a_next_session_without_a_log() {
     let from = id(1);
     let next = id(2);
     write_log(&temp.dir, &from, &workspace, None, &[exited_line(&from)]);
-    assert!(reach(&hub, &SessionId(from.clone()), &SessionId(next.clone())).is_some());
+    assert!(reach(&hub, &SessionId(from.clone()), &SessionId(next.clone())).is_ok());
     assert_eq!(
         starter.rewound(),
         vec![(
@@ -221,8 +229,8 @@ fn two_starts_of_one_session_start_once() {
             move || reach(&hub, &SessionId(from), &SessionId(next))
         })
         .unwrap();
-    assert!(reach(&hub, &SessionId(from), &SessionId(next)).is_some());
-    assert!(other.join().unwrap().is_some());
+    assert!(reach(&hub, &SessionId(from), &SessionId(next)).is_ok());
+    assert!(other.join().unwrap().is_ok());
     assert_eq!(starter.rewound().len(), 1, "one starter call");
 }
 
@@ -320,7 +328,7 @@ fn a_slow_start_of_one_session_does_not_block_another() {
     let stream = Deadline::after(DEADLINE)
         .recv(&done)
         .expect("the other session starts while the slow one waits");
-    assert!(stream.is_some());
+    assert!(stream.is_ok());
     assert!(
         UnixStream::connect(temp.dir.join("run").join(&other)).is_ok(),
         "the other session's socket accepts"
@@ -374,11 +382,173 @@ fn a_failed_start_writes_a_diagnostic_without_the_detail() {
     });
     let from = id(1);
     write_log(&temp.dir, &from, &workspace, None, &[exited_line(&from)]);
-    assert!(reach(&hub, &SessionId(from), &SessionId(id(2))).is_none());
+    let refused = reach(&hub, &SessionId(from), &SessionId(id(2))).unwrap_err();
+    assert_eq!(refused.code, ErrorCode::IoFailed);
+    assert_eq!(refused.message, "The new session could not start.");
     let log = temp.hub_log();
     assert!(log.contains("\"code\":\"io_failed\""), "{log}");
     assert!(log.contains("could not start."), "{log}");
     assert!(!log.contains(SECRET), "no starter text in the log: {log}");
+}
+
+/// Holds `from`'s session lock, as its running process does: the test
+/// first creates the file, because `write_log` creates only
+/// `events.jsonl`, then locks it and keeps the guard to the end.
+fn hold_old_lock(temp: &Temp, from: &str) -> File {
+    let dir = temp
+        .dir
+        .join("projects")
+        .join("-w")
+        .join("sessions")
+        .join(from);
+    fs::write(dir.join("session.lock"), b"").unwrap();
+    let file = File::open(dir.join("session.lock")).unwrap();
+    file.try_lock().unwrap();
+    file
+}
+
+#[test]
+fn a_start_the_new_process_refuses_is_refused_with_its_own_code() {
+    let codes = [
+        ErrorCode::SessionHeld,
+        ErrorCode::ExtensionRequiredFailed,
+        ErrorCode::McpRequiredServerFailed,
+        ErrorCode::AuthenticationFailed,
+        ErrorCode::ConnectionFailed,
+    ];
+    for code in codes {
+        let temp = Temp::new();
+        let workspace = temp.workspace();
+        let from = id(1);
+        let next = id(2);
+        write_log(&temp.dir, &from, &workspace, None, &[exited_line(&from)]);
+        let _held = hold_old_lock(&temp, &from);
+        let origin = temp.clock.origin();
+        let starter = FakeStarter::exit_with(&temp.dir, failure(code.clone(), "msg"));
+        let hub = temp.hub(starter.clone());
+        let refused = reach(&hub, &SessionId(from.clone()), &SessionId(next.clone())).unwrap_err();
+        assert_eq!(refused.code, code);
+        assert_eq!(refused.message, "msg");
+        assert_eq!(starter.rewound().len(), 1, "the start was attempted once");
+        assert_eq!(temp.clock.now(), origin, "the refusal waits for nothing");
+        let dir = temp
+            .dir
+            .join("projects")
+            .join("-w")
+            .join("sessions")
+            .join(&from);
+        let probe = File::open(dir.join("session.lock")).unwrap();
+        assert!(
+            probe.try_lock().is_err(),
+            "the refusal neither reads nor releases the old lock"
+        );
+    }
+}
+
+#[test]
+fn a_start_message_that_names_the_new_session_is_not_forwarded() {
+    let temp = Temp::new();
+    let workspace = temp.workspace();
+    let from = id(1);
+    let next = id(2);
+    write_log(&temp.dir, &from, &workspace, None, &[exited_line(&from)]);
+    let _held = hold_old_lock(&temp, &from);
+    let message = format!("Session `{from}` was not rewound for session `{next}`.");
+    let starter = FakeStarter::exit_with(&temp.dir, failure(ErrorCode::InvalidArguments, &message));
+    let hub = temp.hub(starter.clone());
+    let refused = reach(&hub, &SessionId(from.clone()), &SessionId(next.clone())).unwrap_err();
+    assert_eq!(refused.code, ErrorCode::InvalidArguments);
+    assert_eq!(refused.message, "The new session could not start.");
+    assert!(
+        !refused.message.contains(&next),
+        "no new session id reaches the client"
+    );
+    let temp = Temp::new();
+    let workspace = temp.workspace();
+    let from = id(1);
+    let next = id(2);
+    write_log(&temp.dir, &from, &workspace, None, &[exited_line(&from)]);
+    let _held = hold_old_lock(&temp, &from);
+    let starter = FakeStarter::exit_with(
+        &temp.dir,
+        failure(ErrorCode::NoModel, "No model is configured."),
+    );
+    let hub = temp.hub(starter.clone());
+    let refused = reach(&hub, &SessionId(from.clone()), &SessionId(next.clone())).unwrap_err();
+    assert_eq!(refused.code, ErrorCode::NoModel);
+    assert_eq!(refused.message, "No model is configured.");
+}
+
+#[test]
+fn a_start_that_exits_io_failed_is_refused_with_the_fixed_sentence() {
+    let temp = Temp::new();
+    let workspace = temp.workspace();
+    let from = id(1);
+    let next = id(2);
+    write_log(&temp.dir, &from, &workspace, None, &[exited_line(&from)]);
+    let _held = hold_old_lock(&temp, &from);
+    let starter = FakeStarter::exit_with(&temp.dir, failure(ErrorCode::IoFailed, "detail text"));
+    let hub = temp.hub(starter.clone());
+    let refused = reach(&hub, &SessionId(from.clone()), &SessionId(next.clone())).unwrap_err();
+    assert_eq!(refused.code, ErrorCode::IoFailed);
+    assert_eq!(refused.message, "The new session could not start.");
+}
+
+#[test]
+fn a_start_that_never_binds_is_refused_io_failed() {
+    let temp = Temp::new();
+    let workspace = temp.workspace();
+    let from = id(1);
+    let next = id(2);
+    write_log(&temp.dir, &from, &workspace, None, &[exited_line(&from)]);
+    let _held = hold_old_lock(&temp, &from);
+    let hub = temp.hub(FakeStarter::hang(&temp.dir));
+    let refused = reach(&hub, &SessionId(from.clone()), &SessionId(next.clone())).unwrap_err();
+    assert_eq!(refused.code, ErrorCode::IoFailed);
+    assert_eq!(refused.message, "The new session could not start.");
+    assert!(
+        temp.clock.now() >= temp.clock.origin() + START_DEADLINE,
+        "the wait lasts the whole deadline"
+    );
+}
+
+#[test]
+fn an_unreachable_run_directory_is_refused_io_failed() {
+    let temp = Temp::new();
+    let workspace = temp.workspace();
+    let from = id(1);
+    let next = id(2);
+    write_log(&temp.dir, &from, &workspace, None, &[exited_line(&from)]);
+    let _held = hold_old_lock(&temp, &from);
+    fs::write(temp.dir.join("run"), b"x").unwrap();
+    let hub = temp.hub(FakeStarter::hang(&temp.dir));
+    let refused = reach(&hub, &SessionId(from.clone()), &SessionId(next.clone())).unwrap_err();
+    assert_eq!(refused.code, ErrorCode::IoFailed);
+    assert_eq!(refused.message, "The new session could not start.");
+}
+
+#[test]
+fn a_refused_resume_of_the_new_session_keeps_its_code() {
+    let temp = Temp::new();
+    let workspace = temp.workspace();
+    let from = id(1);
+    let next = id(2);
+    write_log(&temp.dir, &from, &workspace, None, &[exited_line(&from)]);
+    write_log(&temp.dir, &next, &workspace, None, &[]);
+    let _held = hold_old_lock(&temp, &from);
+    let origin = temp.clock.origin();
+    let starter = FakeStarter::held_then_bind(&temp.dir, usize::MAX);
+    let hub = temp.hub(starter.clone());
+    let refused = reach(&hub, &SessionId(from.clone()), &SessionId(next.clone())).unwrap_err();
+    assert_eq!(refused.code, ErrorCode::SessionHeld);
+    assert_eq!(refused.message, "The new session could not be resumed.");
+    assert!(
+        !refused.message.contains(&next) && !refused.message.contains(&from),
+        "no session id reaches the client"
+    );
+    assert!(starter.rewound().is_empty(), "a logged session is resumed");
+    assert_eq!(starter.resumed().len(), 1, "resumed once");
+    assert_eq!(temp.clock.now(), origin, "the refusal waits for nothing");
 }
 
 /// One side of a client connection: the hub serves the other end.
@@ -420,12 +590,14 @@ impl Client {
     }
 }
 
-/// Serves one old session: answers `subscribe`, then `rewind` naming
-/// `next`, then holds the socket open until `release` before closing, as
-/// a session closing with `rewound` does. The listener binds before the
-/// thread starts, so a client routing first always finds it.
+/// Serves one old session: answers `subscribe`, writes the `rewound`
+/// line naming `next`, then answers `rewind` naming `next`, then holds
+/// the socket open until `release` before closing, as a session closing
+/// with `rewound` does. The listener binds before the thread starts, so
+/// a client routing first always finds it.
 fn serve_old(
     listener: UnixListener,
+    old: String,
     next: String,
     release: mpsc::Receiver<()>,
 ) -> thread::JoinHandle<()> {
@@ -443,6 +615,11 @@ fn serve_old(
             read.read_line(&mut buf).unwrap();
             let rewind: Value = serde_json::from_str(&buf).unwrap();
             let id = rewind.get("id").cloned().unwrap();
+            let event = rewound_line(&old, &next);
+            let mut bytes = serde_json::to_vec(&event).unwrap();
+            bytes.push(b'\n');
+            write.write_all(&bytes).unwrap();
+            write.flush().unwrap();
             let ack = json!({
                 "kind": "command_accepted", "ts": 1, "schema_version": 1,
                 "payload": {"command_id": id, "result": {"new_session_id": next}},
@@ -497,7 +674,7 @@ fn a_relayed_rewind_starts_and_redirects_before_the_next_command() {
     fs::create_dir_all(temp.dir.join("run")).unwrap();
     let listener = UnixListener::bind(temp.dir.join("run").join(&old)).unwrap();
     let (release_tx, release) = mpsc::channel::<()>();
-    let old_session = serve_old(listener, next.clone(), release);
+    let old_session = serve_old(listener, old.clone(), next.clone(), release);
     let mut client = Client::connect(&hub);
     assert_eq!(client.next("hub_hello")["kind"], "hub_hello");
     client.send(&json!({
@@ -508,6 +685,9 @@ fn a_relayed_rewind_starts_and_redirects_before_the_next_command() {
     client.send(&json!({
         "id": "c_rw1", "session_id": old, "command": "rewind", "args": {},
     }));
+    let event = client.next("the old session's rewound event");
+    assert_eq!(event["kind"], "rewound");
+    assert_eq!(event["payload"]["new_session_id"], next);
     let accepted = client.next("the rewind acknowledgement");
     assert_eq!(accepted["kind"], "command_accepted");
     assert_eq!(
@@ -554,7 +734,7 @@ fn a_command_for_the_new_session_first_still_gets_its_level() {
     fs::create_dir_all(temp.dir.join("run")).unwrap();
     let listener = UnixListener::bind(temp.dir.join("run").join(&old)).unwrap();
     let (release_tx, release) = mpsc::channel::<()>();
-    let old_session = serve_old(listener, next.clone(), release);
+    let old_session = serve_old(listener, old.clone(), next.clone(), release);
     let mut client = Client::connect(&hub);
     assert_eq!(client.next("hub_hello")["kind"], "hub_hello");
     client.send(&json!({
@@ -567,6 +747,9 @@ fn a_command_for_the_new_session_first_still_gets_its_level() {
     client.send(&json!({
         "id": "c_rw1", "session_id": old, "command": "rewind", "args": {},
     }));
+    let event = client.next("the old session's rewound event");
+    assert_eq!(event["kind"], "rewound");
+    assert_eq!(event["payload"]["new_session_id"], next);
     let accepted = client.next("the rewind acknowledgement");
     assert_eq!(accepted["payload"]["result"]["new_session_id"], next);
     // The interleaving: the client commands the new session while the old
@@ -622,6 +805,395 @@ fn a_command_for_the_new_session_first_still_gets_its_level() {
         seen.iter().all(|line| line["kind"] != "command_accepted"),
         "no other acknowledgement in between: {seen:?}"
     );
+}
+
+#[test]
+fn a_relayed_rewind_whose_start_is_refused_answers_that_code() {
+    for code in [ErrorCode::SessionHeld, ErrorCode::ExtensionRequiredFailed] {
+        let temp = Temp::new();
+        let workspace = temp.workspace();
+        let code_name: String =
+            serde_json::from_value(serde_json::to_value(&code).unwrap()).unwrap();
+        let starter =
+            FakeStarter::exit_with(&temp.dir, failure(code.clone(), "the new process refused."));
+        let hub = temp.hub(starter.clone());
+        let old = id(1);
+        let next = id(2);
+        write_log(
+            &temp.dir,
+            &old,
+            &workspace,
+            None,
+            &[rewound_line(&old, &next)],
+        );
+        fs::create_dir_all(temp.dir.join("run")).unwrap();
+        let listener = UnixListener::bind(temp.dir.join("run").join(&old)).unwrap();
+        let (release_tx, release) = mpsc::channel::<()>();
+        let old_session = serve_old(listener, old.clone(), next.clone(), release);
+        let mut client = Client::connect(&hub);
+        assert_eq!(client.next("hub_hello")["kind"], "hub_hello");
+        client.send(&json!({
+            "id": "c_sub1", "session_id": old, "command": "subscribe", "args": {"level": "full"},
+        }));
+        assert_eq!(
+            client.next("the subscribe acknowledgement")["kind"],
+            "command_accepted"
+        );
+        client.send(&json!({
+            "id": "c_rw1", "session_id": old, "command": "rewind", "args": {},
+        }));
+        let event = client.next("the old session's rewound event");
+        assert_eq!(event["kind"], "rewound");
+        assert_eq!(event["payload"]["new_session_id"], next);
+        let rejection = client.next("the rewind rejection");
+        assert_eq!(rejection["kind"], "command_rejected", "{rejection}");
+        assert_eq!(rejection["payload"]["command_id"], "c_rw1", "{rejection}");
+        assert_eq!(rejection["payload"]["code"], code_name, "{rejection}");
+        assert!(
+            !serde_json::to_string(&rejection).unwrap().contains(&next),
+            "the rejection carries no new session id: {rejection}"
+        );
+        assert_eq!(starter.rewound().len(), 1, "the start was attempted once");
+        // Before the old socket is released, a command for the new
+        // session names a session with no log: it is rejected
+        // `session_not_found`.
+        client.send(&json!({
+            "id": "c_new1", "session_id": next, "command": "tools", "args": {},
+        }));
+        let refused = client.next("the new session's rejection");
+        assert_eq!(refused["kind"], "command_rejected", "{refused}");
+        assert_eq!(refused["payload"]["command_id"], "c_new1", "{refused}");
+        assert_eq!(refused["payload"]["code"], "session_not_found", "{refused}");
+        // The old socket closes: the redirect follows nothing, so no
+        // second start runs. A later command for the old session is
+        // answered, proving the relay thread ended and its `follow` ran.
+        drop(release_tx);
+        old_session.join().unwrap();
+        client.send(&json!({
+            "id": "c_old2", "session_id": old, "command": "tools", "args": {},
+        }));
+        let answered = client.next("the old session's later answer");
+        assert_eq!(answered["payload"]["command_id"], "c_old2", "{answered}");
+        assert_eq!(
+            starter.rewound().len(),
+            1,
+            "the relay's follow started nothing"
+        );
+    }
+}
+
+#[test]
+fn a_refused_rewind_drops_only_the_old_sessions_kept_level() {
+    let temp = Temp::new();
+    let workspace = temp.workspace();
+    let starter = FakeStarter::exit_with(
+        &temp.dir,
+        failure(ErrorCode::SessionHeld, "the new process refused."),
+    );
+    let hub = temp.hub(starter.clone());
+    let old = id(1);
+    let next = id(2);
+    let other = id(3);
+    write_log(
+        &temp.dir,
+        &old,
+        &workspace,
+        None,
+        &[rewound_line(&old, &next)],
+    );
+    let relays: Arc<Mutex<crate::relay::Relays>> =
+        Arc::new(Mutex::new(crate::relay::Relays::default()));
+    let epoch = lock(&relays).mint();
+    // The connection holds a kept level for the rewound session and for
+    // an untouched one: the refusal must drop only the rewound one.
+    let level = json!({"id": "c_sub1", "command": "subscribe", "args": {"level": "full"}})
+        .as_object()
+        .unwrap()
+        .clone();
+    let other_level = json!({"id": "c_sub9", "command": "subscribe", "args": {"level": "summary"}})
+        .as_object()
+        .unwrap()
+        .clone();
+    lock(&relays).subscribed.push((old.clone(), level));
+    lock(&relays)
+        .subscribed
+        .push((other.clone(), other_level.clone()));
+    let kept: crate::relay::Kept = Arc::new(Mutex::new(vec![(
+        "c_rw".to_owned(),
+        json!({"id": "c_rw", "command": "rewind", "args": {}})
+            .as_object()
+            .unwrap()
+            .clone(),
+        true,
+    )]));
+    let (hub_session, mut session_peer) = UnixStream::pair().unwrap();
+    let reader = hub_session.try_clone().unwrap();
+    lock(&relays).entries.push(crate::relay::Relay {
+        session: old.clone(),
+        epoch,
+        writer: hub_session,
+        kept: Arc::clone(&kept),
+        replayed: Default::default(),
+        thread: None,
+        retiring: None,
+    });
+    let (client_write, client_read) = UnixStream::pair().unwrap();
+    client_read.set_read_timeout(Some(DEADLINE)).unwrap();
+    let client_writer: Arc<Mutex<UnixStream>> = Arc::new(Mutex::new(client_write));
+    let thread = crate::relay::spawn_for_test(
+        old.clone(),
+        epoch,
+        reader,
+        Arc::clone(&hub),
+        Arc::clone(&client_writer),
+        Arc::clone(&relays),
+        kept,
+    );
+    // The session accepts the rewind, naming the new session: its start
+    // is refused, so the relay answers the start's code instead.
+    let ack = json!({
+        "kind": "command_accepted", "ts": 1, "schema_version": 1,
+        "payload": {"command_id": "c_rw", "result": {"new_session_id": next}},
+    });
+    let mut bytes = serde_json::to_vec(&ack).unwrap();
+    bytes.push(b'\n');
+    session_peer.write_all(&bytes).unwrap();
+    session_peer.flush().unwrap();
+    let mut read = BufReader::new(client_read);
+    let mut text = String::new();
+    read.read_line(&mut text)
+        .expect("the client reads the refusal");
+    assert!(!text.is_empty(), "the hub closed before the refusal");
+    let rejection: Value = serde_json::from_str(text.trim_end()).unwrap();
+    assert_eq!(rejection["kind"], "command_rejected", "{rejection}");
+    assert_eq!(rejection["payload"]["command_id"], "c_rw", "{rejection}");
+    assert_eq!(rejection["payload"]["code"], "session_held", "{rejection}");
+    // The session socket closes: the relay ends and its redirect runs.
+    // The blocking join runs on a thread of its own, so the wait carries
+    // the deadline.
+    drop(session_peer);
+    let (done_tx, done) = mpsc::channel();
+    thread::spawn(move || {
+        thread.join().unwrap();
+        done_tx.send(()).unwrap_or(());
+    });
+    assert!(
+        Deadline::after(DEADLINE).recv(&done).is_ok(),
+        "the relay ends after its session socket closes"
+    );
+    // The refusal dropped the rewound session's kept level and kept the
+    // untouched one, so the redirect follows nothing and starts nothing
+    // more: both sides of the kept-level check.
+    assert_eq!(starter.rewound().len(), 1, "the start was attempted once");
+    let held = lock(&relays);
+    assert!(
+        held.subscription(&old).is_none(),
+        "the refused rewind keeps no subscription for the old session"
+    );
+    assert_eq!(
+        held.subscription(&other),
+        Some(other_level),
+        "the refusal keeps every other session's level"
+    );
+}
+
+#[test]
+fn a_refusal_from_a_retiring_relay_waits_for_the_acknowledgements_it_rerouted() {
+    let temp = Temp::new();
+    let workspace = temp.workspace();
+    let starter = FakeStarter::exit_with(
+        &temp.dir,
+        failure(ErrorCode::SessionHeld, "the new process refused."),
+    );
+    let hub = temp.hub(starter.clone());
+    let old = id(1);
+    let next = id(2);
+    write_log(
+        &temp.dir,
+        &old,
+        &workspace,
+        None,
+        &[rewound_line(&old, &next)],
+    );
+    let relays: Arc<Mutex<crate::relay::Relays>> =
+        Arc::new(Mutex::new(crate::relay::Relays::default()));
+    let epoch = lock(&relays).mint();
+    let kept: crate::relay::Kept = Arc::new(Mutex::new(vec![
+        (
+            "c_earlier".to_owned(),
+            json!({"id": "c_earlier", "command": "prompt", "args": {}})
+                .as_object()
+                .unwrap()
+                .clone(),
+            true,
+        ),
+        (
+            "c_rw".to_owned(),
+            json!({"id": "c_rw", "command": "rewind", "args": {}})
+                .as_object()
+                .unwrap()
+                .clone(),
+            true,
+        ),
+    ]));
+    let order = lock(&relays).order.clone();
+    order.enqueue(&old, "c_earlier");
+    order.enqueue(&old, "c_rw");
+    order.mark_rerouted("c_earlier", &old, epoch);
+    let (waited_tx, waited_rx) = mpsc::channel();
+    *lock(&order.before_wait_rerouted) = Some(Box::new(move || {
+        waited_tx.send(()).unwrap_or(());
+    }));
+    let (hub_session, mut session_peer) = UnixStream::pair().unwrap();
+    let reader = hub_session.try_clone().unwrap();
+    lock(&relays).entries.push(crate::relay::Relay {
+        session: old.clone(),
+        epoch,
+        writer: hub_session,
+        kept: Arc::clone(&kept),
+        replayed: Default::default(),
+        thread: None,
+        retiring: Some(crate::retire::Retire::Exited),
+    });
+    // A live relay for the same session answers the re-routed command.
+    // It starts after the retiring relay below has read, so the
+    // retiring relay attempts its forward first.
+    let live = lock(&relays).mint();
+    let kept_live: crate::relay::Kept = Arc::new(Mutex::new(vec![(
+        "c_earlier".to_owned(),
+        json!({"id": "c_earlier", "command": "prompt", "args": {}})
+            .as_object()
+            .unwrap()
+            .clone(),
+        true,
+    )]));
+    let (live_session, mut live_peer) = UnixStream::pair().unwrap();
+    let live_reader = live_session.try_clone().unwrap();
+    lock(&relays).entries.push(crate::relay::Relay {
+        session: old.clone(),
+        epoch: live,
+        writer: live_session,
+        kept: Arc::clone(&kept_live),
+        replayed: Default::default(),
+        thread: None,
+        retiring: None,
+    });
+    let (client_write, client_read) = UnixStream::pair().unwrap();
+    client_read.set_read_timeout(Some(DEADLINE)).unwrap();
+    let client_writer: Arc<Mutex<UnixStream>> = Arc::new(Mutex::new(client_write));
+    let (read_tx, read_rx) = mpsc::channel();
+    *lock(&hub.after_replay_filter) = Some(Box::new(move |_, _| {
+        read_tx.send(()).unwrap_or(());
+    }));
+    // The first acknowledgement through the ordered forward is the
+    // re-routed one: a bypassed wait would forward the rejection first.
+    let (first_tx, first_rx) = mpsc::channel();
+    *lock(&hub.before_forward) = Some(Box::new(move |line, _| {
+        first_tx
+            .send(crate::relay::acknowledges(line, "c_earlier"))
+            .unwrap_or(());
+    }));
+    let retiring_thread = crate::relay::spawn_for_test(
+        old.clone(),
+        epoch,
+        reader,
+        Arc::clone(&hub),
+        Arc::clone(&client_writer),
+        Arc::clone(&relays),
+        kept,
+    );
+    let ack = json!({
+        "kind": "command_accepted", "ts": 1, "schema_version": 1,
+        "payload": {"command_id": "c_rw", "result": {"new_session_id": next}},
+    });
+    let mut bytes = serde_json::to_vec(&ack).unwrap();
+    bytes.push(b'\n');
+    session_peer.write_all(&bytes).unwrap();
+    session_peer.flush().unwrap();
+    assert!(
+        Deadline::after(DEADLINE).recv(&read_rx).is_ok(),
+        "the relay read the rewind acknowledgement"
+    );
+    // The live relay starts now, past the retiring relay's first read,
+    // and parks before its own first read, holding no lock. The park
+    // holds the order hook's lock until released, so it arms only here,
+    // once the retiring relay is past its own first read.
+    let (parked_tx, parked_rx) = mpsc::channel();
+    let (release_tx, release) = mpsc::channel::<()>();
+    *lock(&order.before_read) = Some(Box::new(move || {
+        parked_tx.send(()).unwrap_or(());
+        release.recv().unwrap_or(());
+    }));
+    let live_thread = crate::relay::spawn_for_test(
+        old.clone(),
+        live,
+        live_reader,
+        Arc::clone(&hub),
+        Arc::clone(&client_writer),
+        Arc::clone(&relays),
+        kept_live,
+    );
+    assert!(
+        Deadline::after(DEADLINE).recv(&parked_rx).is_ok(),
+        "the live relay parks before its first read"
+    );
+    // Buffer the re-routed answer where the parked live relay will
+    // read it: it cannot move before the test releases it.
+    let earlier = json!({
+        "kind": "command_accepted", "ts": 1, "schema_version": 1,
+        "payload": {"command_id": "c_earlier"},
+    });
+    let mut bytes = serde_json::to_vec(&earlier).unwrap();
+    bytes.push(b'\n');
+    live_peer.write_all(&bytes).unwrap();
+    live_peer.flush().unwrap();
+    // Hold the live relay until the retiring relay's refusal reaches
+    // the hub log, the last step before its forward attempt, so the
+    // attempt comes while the handover is still unanswered. Both orders
+    // below then prove the wait held: a bypassed wait forwards the
+    // rejection first and fails.
+    let refused = Deadline::after(DEADLINE);
+    let logged = format!("Session {next} could not start");
+    while !temp.hub_log().contains(&logged) {
+        assert!(
+            !refused.left().is_zero(),
+            "the retiring relay to refuse the start"
+        );
+        std::thread::yield_now();
+    }
+    // The retiring relay has reached its ordering wait while the
+    // earlier acknowledgement is still parked: only then release it,
+    // so the losing order (the rejection first) cannot slip through.
+    assert!(
+        Deadline::after(DEADLINE).recv(&waited_rx).is_ok(),
+        "the retiring relay reaches its ordering wait"
+    );
+    release_tx.send(()).unwrap_or(());
+    assert!(
+        Deadline::after(DEADLINE)
+            .recv(&first_rx)
+            .expect("the first acknowledgement forwards"),
+        "the re-routed acknowledgement forwards first"
+    );
+    let mut read = BufReader::new(client_read);
+    let mut text = String::new();
+    read.read_line(&mut text).unwrap();
+    let first: Value = serde_json::from_str(text.trim_end()).unwrap();
+    assert_eq!(first["payload"]["command_id"], "c_earlier", "{first}");
+    text.clear();
+    read.read_line(&mut text).unwrap();
+    let rejection: Value = serde_json::from_str(text.trim_end()).unwrap();
+    assert_eq!(rejection["kind"], "command_rejected", "{rejection}");
+    assert_eq!(rejection["payload"]["command_id"], "c_rw", "{rejection}");
+    assert_eq!(rejection["payload"]["code"], "session_held", "{rejection}");
+    assert!(
+        !serde_json::to_string(&rejection).unwrap().contains(&next),
+        "the rejection carries no new session id: {rejection}"
+    );
+    drop(session_peer);
+    drop(live_peer);
+    retiring_thread.join().unwrap();
+    live_thread.join().unwrap();
 }
 
 #[test]
