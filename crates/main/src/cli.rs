@@ -47,10 +47,13 @@ Configuration:
   config set [--project | --repo] <key> <value>  Write one key in one layer's file
 
 The hub:
-  hub install [--port <port>]  Register the hub as a login service
-  hub uninstall                Remove the hub's login service; running sessions carry on
-  hub status [--json]          Print the hub's state: running, version, port, clients, devices, installed
-  hub refresh                  Rebuild the hub's environment for the sessions it starts from now on
+  hub install [--port <port>]          Register the hub as a login service
+  hub uninstall                        Remove the hub's login service; running sessions carry on
+  hub status [--json]                  Print the hub's state: running, version, port, clients, devices, installed
+  hub refresh                          Rebuild the hub's environment for the sessions it starts from now on
+  hub pair <device> [--address <url>]  Print a pairing code for a device of that name
+  hub token list                       List paired devices: name, when paired, last connection
+  hub token revoke <device>            Revoke a device's token and close its live connections
 
 Flags:
   -h, --help     Print this menu
@@ -230,6 +233,18 @@ pub(crate) enum HubCommands {
     },
     /// Rebuild the hub's environment for the sessions it starts from now on
     Refresh,
+    /// Print a pairing code for a device of that name
+    Pair {
+        /// The device to pair.
+        #[arg(value_name = "device")]
+        device: String,
+        /// The websocket address carried in the QR code.
+        #[arg(long, value_name = "url", value_parser = ::cli::Address::parse)]
+        address: Option<::cli::Address>,
+    },
+    /// Manage paired devices
+    #[command(subcommand)]
+    Token(TokenCommands),
     /// The internal hub command: hidden and free to change.
     #[command(hide = true)]
     Serve {
@@ -237,6 +252,19 @@ pub(crate) enum HubCommands {
         /// exit for being idle.
         #[arg(long, hide = true)]
         installed: bool,
+    },
+}
+
+#[derive(Debug, Subcommand)]
+#[command(disable_help_subcommand = true, arg_required_else_help = false)]
+pub(crate) enum TokenCommands {
+    /// List paired devices: name, when paired, last connection
+    List,
+    /// Revoke a device's token and close its live connections
+    Revoke {
+        /// The device to revoke.
+        #[arg(value_name = "device")]
+        device: String,
     },
 }
 

@@ -8,8 +8,8 @@ use crate::completion::Shell;
 
 use super::{
     ApproveArgs, AskArgs, Commands, ConfigCommands, ExtensionCommands, HubCommands, Invocation,
-    LoginArgs, LogoutArgs, MENU, SessionArgs, SessionsArgs, SessionsCommands, command, parse_from,
-    usage_sentence, version_line,
+    LoginArgs, LogoutArgs, MENU, SessionArgs, SessionsArgs, SessionsCommands, TokenCommands,
+    command, parse_from, usage_sentence, version_line,
 };
 
 fn menu() -> String {
@@ -753,6 +753,39 @@ fn parses_argv_into_its_invocation() {
         (
             &["fiber", "hub", "refresh"],
             Invocation::Run(Some(Commands::Hub(HubCommands::Refresh))),
+        ),
+        (
+            &["fiber", "hub", "pair", "phone"],
+            Invocation::Run(Some(Commands::Hub(HubCommands::Pair {
+                device: "phone".to_owned(),
+                address: None,
+            }))),
+        ),
+        (
+            &[
+                "fiber",
+                "hub",
+                "pair",
+                "phone",
+                "--address",
+                "wss://mybox.tailnet.ts.net",
+            ],
+            Invocation::Run(Some(Commands::Hub(HubCommands::Pair {
+                device: "phone".to_owned(),
+                address: Some(::cli::Address::parse("wss://mybox.tailnet.ts.net").unwrap()),
+            }))),
+        ),
+        (
+            &["fiber", "hub", "token", "list"],
+            Invocation::Run(Some(Commands::Hub(HubCommands::Token(TokenCommands::List)))),
+        ),
+        (
+            &["fiber", "hub", "token", "revoke", "phone"],
+            Invocation::Run(Some(Commands::Hub(HubCommands::Token(
+                TokenCommands::Revoke {
+                    device: "phone".to_owned(),
+                },
+            )))),
         ),
     ];
     for (argv, expected) in &cases {
@@ -1752,6 +1785,35 @@ fn config_set_without_a_value_names_it() {
         "{}",
         sentence(&["fiber", "config", "set", "model"])
     );
+}
+
+#[test]
+fn pairing_usage_errors_are_one_sentence() {
+    let suffix = " Run `fiber --help` for usage.";
+    for (argv, expected) in [
+        (
+            &["fiber", "hub", "pair"][..],
+            "The following required arguments were not provided: <device>.",
+        ),
+        (
+            &["fiber", "hub", "pair", "phone", "--address", "http://x"],
+            "Invalid value 'http://x' for '--address <url>': The address must be a ws:// or wss:// URL.",
+        ),
+        (
+            &["fiber", "hub", "pair", "phone", "--address"],
+            "A value is required for '--address <url>' but none was supplied.",
+        ),
+        (
+            &["fiber", "hub", "token"],
+            "'fiber hub token' requires a subcommand but one was not provided [subcommands: list, revoke].",
+        ),
+        (
+            &["fiber", "hub", "token", "revoke"],
+            "The following required arguments were not provided: <device>.",
+        ),
+    ] {
+        assert_eq!(sentence(argv), format!("{expected}{suffix}"), "{argv:?}");
+    }
 }
 
 #[test]

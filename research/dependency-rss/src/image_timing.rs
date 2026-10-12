@@ -86,7 +86,12 @@ fn encode_primary(img: &DynamicImage, input: ImageFormat) -> Vec<u8> {
                 .unwrap();
         }
         _ => PngEncoder::new(&mut out)
-            .write_image(img.as_bytes(), img.width(), img.height(), img.color().into())
+            .write_image(
+                img.as_bytes(),
+                img.width(),
+                img.height(),
+                img.color().into(),
+            )
             .unwrap(),
     }
     out
@@ -197,7 +202,11 @@ fn bench_fixture(name: &str, backend: Backend, backend_label: &str) {
     let mut jpeg_fb = Vec::with_capacity(20);
 
     for _ in 0..2 {
-        let _ = ImageReader::open(&path).unwrap().with_guessed_format().unwrap().into_dimensions();
+        let _ = ImageReader::open(&path)
+            .unwrap()
+            .with_guessed_format()
+            .unwrap()
+            .into_dimensions();
         let img = image::load_from_memory(&bytes).unwrap();
         let (w, h) = img.dimensions();
         let (nw, nh) = fit_dims(w, h);
@@ -211,7 +220,11 @@ fn bench_fixture(name: &str, backend: Backend, backend_label: &str) {
 
     for _ in 0..20 {
         let t0 = Instant::now();
-        let _ = ImageReader::open(&path).unwrap().with_guessed_format().unwrap().into_dimensions();
+        let _ = ImageReader::open(&path)
+            .unwrap()
+            .with_guessed_format()
+            .unwrap()
+            .into_dimensions();
         header.push(ms(t0.elapsed()));
 
         let t0 = Instant::now();
@@ -275,7 +288,12 @@ fn bench_png_compression(name: &str, backend: Backend, backend_label: &str) {
         for _ in 0..2 {
             let mut out = Vec::new();
             PngEncoder::new_with_quality(&mut out, compression, PngFilterType::Adaptive)
-                .write_image(img.as_bytes(), img.width(), img.height(), img.color().into())
+                .write_image(
+                    img.as_bytes(),
+                    img.width(),
+                    img.height(),
+                    img.color().into(),
+                )
                 .unwrap();
             black_box(out);
         }
@@ -283,7 +301,12 @@ fn bench_png_compression(name: &str, backend: Backend, backend_label: &str) {
             let t0 = Instant::now();
             let mut out = Vec::new();
             PngEncoder::new_with_quality(&mut out, compression, PngFilterType::Adaptive)
-                .write_image(img.as_bytes(), img.width(), img.height(), img.color().into())
+                .write_image(
+                    img.as_bytes(),
+                    img.width(),
+                    img.height(),
+                    img.color().into(),
+                )
                 .unwrap();
             times.push(ms(t0.elapsed()));
             out_len = out.len();
@@ -323,7 +346,12 @@ fn backend_for_build() -> Backend {
 fn encode_png_default(img: &DynamicImage) -> Vec<u8> {
     let mut out = Vec::new();
     PngEncoder::new_with_quality(&mut out, CompressionType::Default, PngFilterType::Adaptive)
-        .write_image(img.as_bytes(), img.width(), img.height(), img.color().into())
+        .write_image(
+            img.as_bytes(),
+            img.width(),
+            img.height(),
+            img.color().into(),
+        )
         .unwrap();
     out
 }
@@ -403,7 +431,9 @@ pub fn run_if_png_photos() -> bool {
         if line.is_empty() || line.starts_with('#') {
             continue;
         }
-        let (label, path) = line.split_once('\t').expect("manifest line: label<TAB>path");
+        let (label, path) = line
+            .split_once('\t')
+            .expect("manifest line: label<TAB>path");
         bench_photo_file(Path::new(path), label);
     }
     true
@@ -449,7 +479,9 @@ pub fn handle_child_args() -> bool {
     match std::env::var("IMAGE_CHILD").ok().as_deref() {
         Some("noop") => true,
         Some("fit") => {
-            let path = std::env::args().nth(1).expect("IMAGE_CHILD=fit needs fixture path");
+            let path = std::env::args()
+                .nth(1)
+                .expect("IMAGE_CHILD=fit needs fixture path");
             child_fit(Path::new(&path));
             true
         }

@@ -57,6 +57,8 @@ pub(crate) struct Listener {
 pub(crate) struct Web {
     sink: Mutex<Sink>,
     control: TcpStream,
+    /// True only once the output pump has drained and sent its close.
+    drained: AtomicBool,
 }
 
 struct Sink {
@@ -85,8 +87,13 @@ impl Web {
 
     /// Shuts the TCP stream down both ways, without the sink lock: it
     /// unblocks a stalled reader, writer or close attempt.
-    fn shut(&self) {
+    pub(crate) fn shut(&self) {
         self.control.shutdown(Shutdown::Both).unwrap_or(());
+    }
+
+    /// Whether the output pump finished its drain and close attempt.
+    pub(crate) fn drained(&self) -> bool {
+        self.drained.load(Ordering::SeqCst)
     }
 
     /// Writes one frame, unless the sink is closed already.
@@ -204,6 +211,7 @@ pub(crate) fn serve(
             closed: false,
         }),
         control,
+        drained: AtomicBool::new(false),
     });
     match hub.poll_accept_web(&web, &stop) {
         Accept::Counted(n) => serve_client(web, hub, n, read),
@@ -259,26 +267,55 @@ fn serve_client(web: Arc<Web>, hub: Arc<Hub>, n: u64, read: BufReader<TcpStream>
         hub.rollback(n);
         return;
     };
-    let id = match connection::classify(message.as_bytes()) {
-        Ok(line)
-            if line.session_id.is_none()
-                && line.command == "authenticate"
-                && token(&line.args)
-                    .is_some_and(|token| crate::devices::holds(&hub.home, token)) =>
-        {
-            line.id
+    let (id, who, result) = match connection::classify(message.as_bytes()) {
+        Ok(line) if line.session_id.is_none() && line.command == "authenticate" => {
+            let who = token(&line.args).and_then(|token| hub.pairing.authenticate(&hub, n, token));
+            let Some(who) = who else {
+                refuse(
+                    &web,
+                    &hub,
+                    n,
+                    Some(&line.id),
+                    &ErrorCode::Unauthenticated,
+                    "unauthenticated",
+                    UNAUTHENTICATED,
+                );
+                return;
+            };
+            (line.id, who, None)
         }
         Ok(line) if line.session_id.is_none() && line.command == "pair" => {
-            refuse(
-                &web,
-                &hub,
-                n,
-                Some(&line.id),
-                &ErrorCode::PairingFailed,
-                "pairing_failed",
-                PAIRING_FAILED,
-            );
-            return;
+            match hub.pairing.redeem(&hub, n, &line.args) {
+                Ok((token, who)) => {
+                    let result = serde_json::json!({"device":who.by(), "token":token.0});
+                    (line.id, who, Some(result))
+                }
+                Err(crate::pairing::Refused::Pairing) => {
+                    refuse(
+                        &web,
+                        &hub,
+                        n,
+                        Some(&line.id),
+                        &ErrorCode::PairingFailed,
+                        "pairing_failed",
+                        PAIRING_FAILED,
+                    );
+                    return;
+                }
+                Err(crate::pairing::Refused::Io(message)) => {
+                    web.text(&connection::line(
+                        &hub,
+                        "command_rejected",
+                        connection::rejection(Some(&line.id), &ErrorCode::IoFailed, &message),
+                    ))
+                    .unwrap_or(());
+                    hub.diag.line(Severity::Error, None, "io_failed", &message);
+                    web.close(1011, "");
+                    web.shut();
+                    hub.rollback(n);
+                    return;
+                }
+            }
         }
         Ok(line) => {
             refuse(
@@ -305,12 +342,17 @@ fn serve_client(web: Arc<Web>, hub: Arc<Hub>, n: u64, read: BufReader<TcpStream>
             return;
         }
     };
-    let accepted = Map::from_iter([("command_id".to_owned(), Value::String(id.0))]);
+    hub.pairing.attach_web(&who, Arc::clone(&web));
+    let mut accepted = Map::from_iter([("command_id".to_owned(), Value::String(id.0))]);
+    if let Some(result) = result {
+        accepted.insert("result".to_owned(), result);
+    }
     if web
         .text(&connection::line(&hub, "command_accepted", accepted))
         .is_err()
     {
         web.shut();
+        hub.pairing.forget(&hub, &who);
         hub.rollback(n);
         return;
     }
@@ -319,19 +361,25 @@ fn serve_client(web: Arc<Web>, hub: Arc<Hub>, n: u64, read: BufReader<TcpStream>
         Err(_) => {
             web.close(1011, "");
             web.shut();
+            hub.pairing.forget(&hub, &who);
             hub.rollback(n);
             return;
         }
     };
+    let served_who = match &who {
+        crate::pairing::Who::Local => crate::pairing::Who::Local,
+        crate::pairing::Who::Device(p) => crate::pairing::Who::Device(Arc::clone(p)),
+    };
     if spawn(&hub, "hub-ws-serve", {
         let hub = Arc::clone(&hub);
-        move || connection::serve_authenticated(hub_end, hub, n)
+        move || connection::serve_authenticated(hub_end, hub, n, served_who)
     })
     .is_err()
     {
         bridge.shutdown(Shutdown::Both).unwrap_or(());
         web.close(1011, "");
         web.shut();
+        hub.pairing.forget(&hub, &who);
         hub.rollback(n);
         return;
     }
@@ -341,18 +389,25 @@ fn serve_client(web: Arc<Web>, hub: Arc<Hub>, n: u64, read: BufReader<TcpStream>
             bridge.shutdown(Shutdown::Both).unwrap_or(());
             web.close(1011, "");
             web.shut();
+            hub.pairing.forget(&hub, &who);
             return;
         }
     };
     if spawn(&hub, "hub-ws-out", {
         let web = Arc::clone(&web);
-        move || pump_lines(&web, pump)
+        let tick = Arc::clone(&hub.tick);
+        move || {
+            pump_lines(&web, pump);
+            web.drained.store(true, Ordering::SeqCst);
+            tick.wake();
+        }
     })
     .is_err()
     {
         bridge.shutdown(Shutdown::Both).unwrap_or(());
         web.close(1011, "");
         web.shut();
+        hub.pairing.forget(&hub, &who);
         return;
     }
     read_lines(&web, read, bridge);

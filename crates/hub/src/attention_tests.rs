@@ -583,6 +583,25 @@ fn ended_unseen_needs_a_since_at_or_after_the_hub_start() {
     assert!(!attention.ended_unseen(&log, &status_of("idle", None, WALL + 1, None)));
 }
 
+#[test]
+fn announce_reaches_every_listener() {
+    let clock = FakeClock::new();
+    let attention = Attention::new(Arc::clone(&clock) as Arc<dyn Clock>);
+    let mut first = listened(&attention);
+    let mut second = listened(&attention);
+    let line = b"{\"kind\":\"device_changed\",\"payload\":{\"device\":\"phone\",\"change\":\"paired\",\"by\":\"local\"}}\n";
+    attention.announce(Arc::from(line.as_slice()));
+    let expected: Value = serde_json::from_slice(line).unwrap();
+    assert_eq!(
+        read_line(&mut first, "the first listener's device change"),
+        expected
+    );
+    assert_eq!(
+        read_line(&mut second, "the second listener's device change"),
+        expected
+    );
+}
+
 fn listened(attention: &Attention) -> BufReader<UnixStream> {
     let (a, b) = UnixStream::pair().unwrap();
     b.set_read_timeout(Some(DEADLINE)).unwrap();

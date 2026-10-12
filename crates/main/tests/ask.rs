@@ -985,10 +985,13 @@ Configuration:
   config set [--project | --repo] <key> <value>  Write one key in one layer's file
 
 The hub:
-  hub install [--port <port>]  Register the hub as a login service
-  hub uninstall                Remove the hub's login service; running sessions carry on
-  hub status [--json]          Print the hub's state: running, version, port, clients, devices, installed
-  hub refresh                  Rebuild the hub's environment for the sessions it starts from now on
+  hub install [--port <port>]          Register the hub as a login service
+  hub uninstall                        Remove the hub's login service; running sessions carry on
+  hub status [--json]                  Print the hub's state: running, version, port, clients, devices, installed
+  hub refresh                          Rebuild the hub's environment for the sessions it starts from now on
+  hub pair <device> [--address <url>]  Print a pairing code for a device of that name
+  hub token list                       List paired devices: name, when paired, last connection
+  hub token revoke <device>            Revoke a device's token and close its live connections
 
 Flags:
   -h, --help     Print this menu

@@ -60,9 +60,9 @@ fn sha256_of_abc_is_the_standard_digest() {
 fn a_matching_record_holds_its_token() {
     let temp = Temp::new();
     write_record(&temp.dir, "phone", "t0k3n");
-    assert!(holds(&temp.dir, "t0k3n"));
+    assert_eq!(holder(&temp.dir, "t0k3n").as_deref(), Some("phone"));
     assert!(
-        !holds(&temp.dir, "t0k3m"),
+        holder(&temp.dir, "t0k3m").is_none(),
         "one character off holds nothing"
     );
 }
@@ -70,7 +70,7 @@ fn a_matching_record_holds_its_token() {
 #[test]
 fn no_devices_directory_holds_nothing() {
     let temp = Temp::new();
-    assert!(!holds(&temp.dir, "t0k3n"));
+    assert!(holder(&temp.dir, "t0k3n").is_none());
 }
 
 #[test]
@@ -90,7 +90,7 @@ fn skipped_shapes_do_not_stop_a_match() {
     )
     .unwrap();
     write_record(&temp.dir, "zzz-phone", "t0k3n");
-    assert!(holds(&temp.dir, "t0k3n"));
+    assert_eq!(holder(&temp.dir, "t0k3n").as_deref(), Some("zzz-phone"));
 }
 
 #[test]
@@ -113,7 +113,7 @@ fn each_skipped_shape_alone_holds_nothing() {
         let temp = Temp::new();
         fs::create_dir_all(temp.devices()).unwrap();
         fs::write(temp.devices().join(name), contents).unwrap();
-        assert!(!holds(&temp.dir, "t0k3n"), "{name} holds nothing");
+        assert!(holder(&temp.dir, "t0k3n").is_none(), "{name} holds nothing");
     }
 }
 
@@ -134,12 +134,12 @@ fn a_fifo_does_not_hold_authentication_open() {
     let home = temp.dir.clone();
     let (done, returned) = mpsc::channel();
     thread::spawn(move || {
-        done.send(holds(&home, "t0k3n")).unwrap_or(());
+        done.send(holder(&home, "t0k3n")).unwrap_or(());
     });
     let held = Deadline::after(FIFO_DEADLINE)
         .recv(&returned)
         .expect("authentication lookup returns while a FIFO is present");
-    assert!(!held, "a FIFO does not hold a device token");
+    assert!(held.is_none(), "a FIFO does not hold a device token");
 }
 
 #[test]
@@ -155,7 +155,7 @@ fn a_directory_and_a_symlink_named_like_devices_hold_nothing() {
     )
     .unwrap();
     std::os::unix::fs::symlink(elsewhere.join("real"), temp.devices().join("tablet")).unwrap();
-    assert!(!holds(&temp.dir, "t0k3n"));
+    assert!(holder(&temp.dir, "t0k3n").is_none());
 }
 
 #[test]
@@ -171,5 +171,143 @@ fn a_record_swapped_for_a_symlink_before_open_is_refused() {
         fs::rename(&record, &moved).unwrap();
         std::os::unix::fs::symlink(&moved, &record).unwrap();
     });
-    assert!(!holds(&temp.dir, "t0k3n"));
+    assert!(holder(&temp.dir, "t0k3n").is_none());
+}
+
+#[test]
+fn write_leaves_only_the_record_mode_0600() {
+    use std::os::unix::fs::PermissionsExt as _;
+    let temp = Temp::new();
+    let record = Record {
+        name: "phone".to_owned(),
+        paired_at: 10,
+        last_connected_at: 10,
+        token_sha256: sha256_hex(b"token"),
+    };
+    write(&temp.dir, &record).unwrap();
+    assert_eq!(
+        fs::metadata(temp.devices().join("phone"))
+            .unwrap()
+            .permissions()
+            .mode()
+            & 0o777,
+        0o600
+    );
+    assert_eq!(
+        fs::metadata(temp.devices()).unwrap().permissions().mode() & 0o777,
+        0o700
+    );
+    assert!(!temp.dir.join("hub/.phone.tmp").exists());
+    assert_eq!(holder(&temp.dir, "token").as_deref(), Some("phone"));
+}
+
+#[test]
+fn touch_changes_only_last_connected_at() {
+    let temp = Temp::new();
+    write_record(&temp.dir, "phone", "token");
+    let path = temp.devices().join("phone");
+    let before: Value = serde_json::from_slice(&fs::read(&path).unwrap()).unwrap();
+    touch(&temp.dir, "phone", 123).unwrap();
+    let mut after: Value = serde_json::from_slice(&fs::read(&path).unwrap()).unwrap();
+    assert_eq!(
+        after.as_object_mut().unwrap().remove("last_connected_at"),
+        Some(Value::from(123))
+    );
+    assert_eq!(after, before);
+}
+
+#[test]
+fn remove_of_absent_or_non_regular_is_false() {
+    let temp = Temp::new();
+    assert!(!remove(&temp.dir, "phone").unwrap());
+    fs::create_dir_all(temp.devices().join("phone")).unwrap();
+    assert!(!remove(&temp.dir, "phone").unwrap());
+    std::os::unix::fs::symlink("phone", temp.devices().join("link")).unwrap();
+    assert!(!remove(&temp.dir, "link").unwrap());
+    write_record(&temp.dir, "tablet", "token");
+    assert!(remove(&temp.dir, "tablet").unwrap());
+    assert!(!exists(&temp.dir, "tablet").unwrap());
+    assert!(exists(&temp.dir, "link").unwrap());
+}
+
+#[test]
+fn list_is_sorted_and_skips_non_regular() {
+    let temp = Temp::new();
+    write_record(&temp.dir, "z", "token");
+    write_record(&temp.dir, "a", "other");
+    fs::create_dir(temp.devices().join("dir")).unwrap();
+    std::os::unix::fs::symlink("a", temp.devices().join("link")).unwrap();
+    let listed = list(&temp.dir).unwrap();
+    assert_eq!(
+        listed
+            .iter()
+            .map(|record| record.name.as_str())
+            .collect::<Vec<_>>(),
+        ["a", "z"]
+    );
+    assert!(
+        listed
+            .iter()
+            .all(|record| record.paired_at.is_none() && record.last_connected_at.is_none())
+    );
+}
+
+#[test]
+fn sync_dir_failure_is_reported_apart_from_the_write() {
+    let temp = Temp::new();
+    write(
+        &temp.dir,
+        &Record {
+            name: "phone".to_owned(),
+            paired_at: 10,
+            last_connected_at: 10,
+            token_sha256: sha256_hex(b"token"),
+        },
+    )
+    .unwrap();
+    fault(Fault::Sync);
+    assert!(sync_dir(&temp.dir).is_err());
+    assert_eq!(holder(&temp.dir, "token").as_deref(), Some("phone"));
+    sync_dir(&temp.dir).unwrap();
+}
+
+#[test]
+fn a_hash_only_record_outside_the_name_rule_is_returned_by_name() {
+    let temp = Temp::new();
+    write_record(&temp.dir, ".phone", "t0k3n");
+    assert_eq!(holder(&temp.dir, "t0k3n").as_deref(), Some(".phone"));
+}
+
+#[test]
+fn a_temporary_that_cannot_be_removed_fails_the_write_with_that_error() {
+    let temp = Temp::new();
+    fs::create_dir_all(temp.dir.join("hub/.phone.tmp")).unwrap();
+    let record = Record {
+        name: "phone".to_owned(),
+        paired_at: 10,
+        last_connected_at: 10,
+        token_sha256: sha256_hex(b"token"),
+    };
+    let error = write(&temp.dir, &record).unwrap_err();
+    assert_ne!(
+        error.kind(),
+        io::ErrorKind::AlreadyExists,
+        "the removal's error is returned, not the later create's"
+    );
+}
+
+#[test]
+fn a_devices_path_that_is_not_a_directory_is_an_error_not_an_absence() {
+    let temp = Temp::new();
+    fs::create_dir_all(temp.dir.join("hub")).unwrap();
+    fs::write(temp.devices(), "not a directory").unwrap();
+    assert!(remove(&temp.dir, "phone").is_err());
+    assert!(exists(&temp.dir, "phone").is_err());
+    assert!(list(&temp.dir).is_err());
+}
+
+#[test]
+fn list_with_no_devices_directory_is_empty() {
+    let temp = Temp::new();
+    assert!(list(&temp.dir).unwrap().is_empty());
 }

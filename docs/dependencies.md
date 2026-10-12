@@ -135,7 +135,7 @@ only that crate, in KiB; the empty program is 323 KiB.
 | clap_complete | the shell completion scripts `fiber completion` prints (`docs/invocation.md`, "Commands and flags") | 796 | 1,020 | 1,136 | 18 | 967 |
 | thiserror | error types in library crates | ~0 | ~0 | ~0 | 6 | 325 |
 | signal-hook | SIGTERM, SIGINT and SIGHUP | ~0 | ~0 | ~0 | 4 | 352 |
-| ring | SHA-256, for PKCE, extension binary checksums, the content hash a repository's approvals pin, and an MCP tool's cut-short name; HMAC-SHA256, for `host.hmac_sha256`; credential fingerprints in the fake provider server; the hub's websocket handshake (SHA-1) and device-token hashes | ~0 | ~0 | ~0 | 8 | 341 |
+| ring | SHA-256, for PKCE, extension binary checksums, the content hash a repository's approvals pin, and an MCP tool's cut-short name; HMAC-SHA256, for `host.hmac_sha256`; credential fingerprints in the fake provider server; the hub's websocket handshake (SHA-1) and device-token hashes; secure random pairing codes and device tokens | ~0 | ~0 | ~0 | 8 | 341 |
 | base64 | PKCE, attachments sent to providers, images a client pastes, the terminal's copy through OSC 52 (`docs/tui.md`, "Selection and copy"), and the files the hub's `read_file` answers with | ~0 | ~0 | ~0 | 1 | 328 |
 | rustix | the shell tool's pseudo-terminal, new session and process group, and reading a key without echo; `host.exec`'s process groups; signalling MCP servers; killing a credential command at its timeout, or on shutdown; signalling a Fiber delegate's process group; the terminal's clipboard read: its process group, its pipe's poll and waiting for its exit; and the test fakes' process and process-group probes; and the process-group guard and the stoppable read's poll in `support` | ~0 | ~0 | ~0 | 4 | 330 |
 | libc | macOS only: the peak physical footprint for a `peak_memory` line (`docs/state.md`, "What each part holds") | n/a | n/a | ~0 | 1 | n/a |
@@ -146,11 +146,18 @@ only that crate, in KiB; the empty program is 323 KiB.
 | pulldown-cmark | the terminal's markdown in replies (`docs/tui.md`, "Look") | 428 | 384 | ~0 | 4 | 724 |
 | flate2 | decompressing the release's docs and extensions archives (`docs/releasing.md`, "Installing"), and the test fakes' release archives | 560 | 640 | 592 | 6 | 403 |
 | jiff | the terminal's local time of day under a prompt bubble and on steering (`docs/tui.md`, "Turns"), and a standing rule's `added` time in `/rules`, with daylight saving and `TZ`, which `std` lacks | 536 | 640 | 384 | 2 | 692 |
-| all of the above together | | 8,896 | 8,184 | 5,201 | 155 | 8,165 |
+| qrcode | the terminal QR code for `hub pair`; default features off | 160 | 256 | 336 | 1 | 360 |
+| all of the above together | | 8,760 | 8,076 | 5,249 | 155 | 8,217 |
 | image, fast_image_resize | the image child; png, jpeg, gif and webp only (`docs/model-routing.md`, "Image limits") | 68,076 | 67,604 | 67,825 | 32 | 5,234 |
 | lopdf | the image child: counting a PDF's pages and cutting a page range (`docs/tools.md`, "read") | 908 | 704 | 336 | 66 | 1,320 |
 
 Notes:
+
+- qrcode 0.14 has its default features off, so it adds no transitive crates.
+  Fiber uses its QR encoder and `Dense1x2` terminal renderer rather than
+  writing a QR encoder with Reed-Solomon correction, masks and version selection
+  (about 700 lines). The qrcode and together rows were measured in
+  [probe run 38194637421](https://github.com/aakshintala/fiber/actions/runs/38194637421).
 
 - ureq's figure is one live HTTPS request to example.com, through the OS
   trust store and the custom connector that keeps the socket for
@@ -166,8 +173,8 @@ Notes:
   adds no crate. libc is a direct dependency on macOS only; Linux reads
   `/proc/self/status` instead.
 - Random ids come from the standard library's `RandomState`, which the
-  operating system seeds, so no crate mints them. The one secret random
-  value, the PKCE verifier, comes from ring.
+  operating system seeds, so no crate mints them. Secret random values, the PKCE verifier, pairing codes and device tokens,
+  come from ring.
 - serde_json's `preserve_order` feature is never enabled
   (`docs/prompt-cache.md`).
 - The search row is ripgrep's walker (`ignore`), its search loop

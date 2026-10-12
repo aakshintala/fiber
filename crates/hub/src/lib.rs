@@ -6,8 +6,9 @@
 //!
 //! [`serve`] listens on `run/hub`, answers `start`, `status`,
 //! `refresh`, `prompt_history`, `feed`, `dismiss`, `recent`, `sessions`, `delete`,
-//! `directories` and `read_file`, and relays session commands to `run/<session_id>` (`docs/invocation.md`,
-//! "What the hub speaks"). It sends `attention` to every connection
+//! `directories`, `read_file`, `pairing_code`, `devices` and `revoke`, and relays
+//! session commands to `run/<session_id>` (`docs/invocation.md`, "What the hub speaks").
+//! It sends `attention` and `device_changed` to every connection
 //! (`docs/invocation.md`, "Attention"). With `port` set, an installed hub
 //! also serves websockets on `127.0.0.1:<port>` (`docs/invocation.md`,
 //! "The hub"). A hub a client started exits once no
@@ -29,6 +30,7 @@ mod feed;
 mod first;
 mod idle;
 mod listen;
+mod pairing;
 mod port;
 mod prompt_history;
 mod read_file;

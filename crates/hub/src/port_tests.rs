@@ -44,6 +44,9 @@ const IDLE: Duration = Duration::from_millis(1_800_000);
 
 const MASK: [u8; 4] = [0x51, 0x1E, 0xA2, 0xC3];
 
+#[path = "port_pairing_tests.rs"]
+mod pairing;
+
 struct Temp {
     dir: PathBuf,
     #[expect(dead_code, reason = "Drop removes the directory")]
@@ -874,6 +877,7 @@ fn a_serve_spawn_failure_closes_1011_without_counting() {
     assert_eq!(client.next("the close"), Item::Close(1011, String::new()));
     assert_eq!(client.next("the end"), Item::Eof);
     await_zero(&hub);
+    assert_eq!(hub.pairing.live(), 0);
     let log = temp.log();
     assert!(!log.contains("client_connected"), "{log}");
     assert!(!log.contains("client_disconnected"), "{log}");
@@ -892,5 +896,6 @@ fn an_out_pump_spawn_failure_disconnects_through_the_pair() {
     assert_eq!(client.next("the close"), Item::Close(1011, String::new()));
     assert_eq!(client.next("the end"), Item::Eof);
     await_zero(&hub);
+    assert_eq!(hub.pairing.live(), 0);
     assert!(temp.log().contains("client_disconnected"));
 }

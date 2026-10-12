@@ -10,7 +10,7 @@ use std::io::{Read, Seek, SeekFrom};
 use std::os::unix::net::UnixStream;
 use std::path::Path;
 #[cfg(test)]
-use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::mpsc::Sender;
 use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
 use std::thread::JoinHandle;
@@ -173,6 +173,8 @@ pub(crate) struct Attention {
     listeners: Mutex<Listeners>,
     #[cfg(test)]
     joining: AtomicUsize,
+    #[cfg(test)]
+    fail_listen: AtomicBool,
 }
 
 impl Attention {
@@ -185,10 +187,16 @@ impl Attention {
             listeners: Mutex::new(Listeners::default()),
             #[cfg(test)]
             joining: AtomicUsize::new(0),
+            #[cfg(test)]
+            fail_listen: AtomicBool::new(false),
         }
     }
 
     pub(crate) fn listen(&self, writer: Arc<Mutex<UnixStream>>) -> Option<u64> {
+        #[cfg(test)]
+        if self.fail_listen.swap(false, Ordering::SeqCst) {
+            return None;
+        }
         let (tx, handle) = crate::feed::spawn_writer(writer, "hub-attention-out")?;
         let mut listeners = lock(&self.listeners);
         listeners.next += 1;
@@ -199,6 +207,18 @@ impl Attention {
             writer: handle,
         });
         Some(id)
+    }
+
+    /// Queues one unsolicited hub line to every served connection.
+    pub(crate) fn announce(&self, line: crate::feed::Line) {
+        lock(&self.listeners)
+            .list
+            .retain(|listener| listener.tx.send(Arc::clone(&line)).is_ok());
+    }
+
+    #[cfg(test)]
+    pub(crate) fn fail_next_listen(&self) {
+        self.fail_listen.store(true, Ordering::SeqCst);
     }
 
     /// Drops listener `id` and joins its writer, after releasing the lock.
