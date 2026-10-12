@@ -770,10 +770,24 @@ fn codex_exchange(email: &str) -> String {
     .to_string()
 }
 
+/// The test's halves of a hold on `login_device`'s stderr reader. The
+/// reader sends `held` before its send of the chunk carrying the final
+/// stored-credentials line, then blocks on `release`; `login_device`
+/// sends `draining` once its post-exit drain is ready to wait for that
+/// chunk, and the test releases the reader only on `draining`, never on
+/// a sleep. This opens #2113's race window on demand: with the old
+/// `try_recv` drain the held chunk arrives after the drain and is dropped.
+struct DeviceHold {
+    held_tx: mpsc::Sender<()>,
+    held_rx: mpsc::Receiver<()>,
+    release_rx: mpsc::Receiver<()>,
+    draining_tx: mpsc::Sender<()>,
+}
+
 /// Runs `fiber login codex --device`, reading stderr until `needle`
 /// shows, then waiting for the exit under the deadline.
 #[track_caller]
-fn login_device(setup: &Setup, args: &[&str], needle: &str) -> Run {
+fn login_device(setup: &Setup, args: &[&str], needle: &str, hold: Option<DeviceHold>) -> Run {
     let mut command = setup.command(args);
     command
         .stdin(Stdio::piped())
@@ -787,13 +801,49 @@ fn login_device(setup: &Setup, args: &[&str], needle: &str) -> Run {
     // code carries the deadline instead of hanging on a pipe.
     let (chunks, received) = mpsc::channel();
     let mut err = child.stderr.take().unwrap();
+    let deadline = setup.deadline;
+    let mut holder = None;
+    let mut waiter = None;
+    if let Some(device) = hold {
+        holder = Some((device.held_tx, device.release_rx));
+        waiter = Some((device.held_rx, device.draining_tx));
+    }
     thread::spawn(move || {
+        // The marker the final stored-credentials line carries.
+        const MARKER: &[u8] = b"stored";
         let mut buf = [0u8; 4096];
+        // Without a hold every chunk goes out at once.
+        let mut released = holder.is_none();
         loop {
             match err.read(&mut buf) {
                 Ok(0) => break,
                 Ok(n) => {
-                    if chunks.send(buf[..n].to_vec()).is_err() {
+                    let mut chunk = &buf[..n];
+                    if !released
+                        && let Some(at) = chunk
+                            .windows(MARKER.len())
+                            .position(|window| window == MARKER)
+                    {
+                        // The prefix holds the device-code line the
+                        // needle waits for, so it goes out at once;
+                        // only the marker onward is held back.
+                        let (prefix, rest) = chunk.split_at(at);
+                        if chunks.send(prefix.to_vec()).is_err() {
+                            break;
+                        }
+                        let (held_tx, release_rx) =
+                            holder.as_ref().expect("a held chunk has its hold");
+                        held_tx.send(()).unwrap_or(());
+                        // The test releases this only once the drain
+                        // waits for it. Ending here drops the sender,
+                        // so the drain fails visibly instead of hanging.
+                        if deadline.recv(release_rx).is_err() {
+                            break;
+                        }
+                        released = true;
+                        chunk = rest;
+                    }
+                    if chunks.send(chunk.to_vec()).is_err() {
                         break;
                     }
                 }
@@ -822,8 +872,31 @@ fn login_device(setup: &Setup, args: &[&str], needle: &str) -> Run {
             "`fiber login codex --device` to exit",
         ),
     };
-    while let Ok(chunk) = received.try_recv() {
-        stderr.extend_from_slice(&chunk);
+    // Drain stderr to the pipe's end: the reader sends every chunk it
+    // reads, so receiving until its sender disconnects keeps the chunk
+    // it had not sent when the child exited (#2113). A timeout fails
+    // naming the drain; a partial read never passes.
+    if let Some((held_rx, draining_tx)) = &waiter {
+        // The window is open only once the reader holds its final
+        // chunk; without this wait a reader that never holds would pass
+        // vacuously.
+        if setup.deadline.recv(held_rx).is_err() {
+            panic!(
+                "`fiber login codex --device` reader never held its final chunk within the deadline"
+            );
+        }
+        // With a hold the test releases the reader only on this send,
+        // so the wait below holds the window open instead of sleeping.
+        draining_tx.send(()).unwrap_or(());
+    }
+    loop {
+        match setup.deadline.recv(&received) {
+            Ok(chunk) => stderr.extend_from_slice(&chunk),
+            Err(mpsc::RecvTimeoutError::Disconnected) => break,
+            Err(mpsc::RecvTimeoutError::Timeout) => {
+                panic!("`fiber login codex --device` stderr stalled within the deadline")
+            }
+        }
     }
     assert!(
         !group_alive(setup.deadline, group),
@@ -863,6 +936,7 @@ fn a_device_login_stores_the_email_label_then_logs_out() {
         &setup,
         &["login", "codex", "--device"],
         "enter the code ABCD-1234",
+        None,
     );
     assert_eq!(login.code, Some(0), "{}", login.stderr);
     assert_eq!(login.stdout, "");
@@ -916,4 +990,61 @@ fn a_device_login_with_as_to_an_already_stored_label_contacts_nothing() {
     assert!(login.stderr.contains("--as"), "{}", login.stderr);
     assert_eq!(oauth.request_count(), 0);
     assert!(file.is_file());
+}
+
+#[test]
+fn a_device_login_keeps_stderr_the_reader_has_not_yet_sent() {
+    let setup = Setup::new_with_fl_root();
+    let oauth = fakes::OauthServer::start(vec![
+        fakes::OauthReply::raw(
+            200,
+            &serde_json::json!({
+                "device_auth_id": "da_1",
+                "user_code": "ABCD-1234",
+                "interval": "1",
+            })
+            .to_string(),
+        ),
+        fakes::OauthReply::raw(
+            200,
+            &serde_json::json!({ "authorization_code": "authcode-2", "code_verifier": "verifier-2" })
+                .to_string(),
+        ),
+        fakes::OauthReply::raw(200, &codex_exchange("alice@example.com")),
+    ]);
+    install_codex(&setup, &oauth.url());
+    // Hold the reader thread before its send of the chunk carrying the
+    // final stored-credentials line, and release it only once the drain
+    // waits for it (#2113). No sleep orders the window: each side moves
+    // on the other's channel send.
+    let (held_tx, held_rx) = mpsc::channel();
+    let (release_tx, release_rx) = mpsc::channel();
+    let (draining_tx, draining_rx) = mpsc::channel();
+    let deadline = setup.deadline;
+    thread::spawn(move || {
+        if deadline.recv(&draining_rx).is_err() {
+            panic!("`login_device` never reached its stderr drain within the deadline");
+        }
+        release_tx.send(()).unwrap_or(());
+    });
+    let login = login_device(
+        &setup,
+        &["login", "codex", "--device"],
+        "enter the code ABCD-1234",
+        Some(DeviceHold {
+            held_tx,
+            held_rx,
+            release_rx,
+            draining_tx,
+        }),
+    );
+    assert_eq!(login.code, Some(0), "{}", login.stderr);
+    assert_eq!(login.stdout, "");
+    assert!(
+        login
+            .stderr
+            .contains("fiber: stored credentials/codex/alice@example.com"),
+        "the drain dropped the chunk the reader had not sent: {}",
+        login.stderr
+    );
 }

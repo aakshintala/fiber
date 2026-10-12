@@ -208,8 +208,18 @@ impl Running {
             }
         };
         let mut lines = std::mem::take(&mut self.first);
-        while let Ok(line) = self.lines.try_recv() {
-            lines.push(line);
+        // Drain stdout to its end: the reader thread sends every line it
+        // reads, so receiving until its sender disconnects keeps the
+        // lines it had not sent when the session exited. A timeout fails
+        // naming the drain; a partial read never passes.
+        loop {
+            match self.deadline.recv(&self.lines) {
+                Ok(line) => lines.push(line),
+                Err(mpsc::RecvTimeoutError::Disconnected) => break,
+                Err(mpsc::RecvTimeoutError::Timeout) => {
+                    panic!("waited until the deadline for the session's remaining stdout")
+                }
+            }
         }
         let stderr = match self.deadline.recv(&self.stderr) {
             Ok(text) => text,
