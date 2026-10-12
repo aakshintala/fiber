@@ -44,6 +44,18 @@ fn failure_of(result: Result<String, Failure>) -> Failure {
 
 const NO_PROMPT: &str = "No prompt. Run `fiber ask \"<prompt>\"` or `fiber ask < <file>`.";
 
+/// A re-run child's own bound: it fires before the parent's wait, so the
+/// two no longer contradict.
+const CHILD_BUDGET: std::time::Duration = std::time::Duration::from_secs(20);
+
+/// A parent's wait for a re-run child: inside half of nextest's per-test
+/// timeout (`.config/nextest.toml`, `docs/testing.md`, "Waits and timeouts").
+const RERUN_WITHIN: std::time::Duration = std::time::Duration::from_secs(30);
+
+/// The outer wait around a test that re-runs a child: at least twice the
+/// parent's wait (`docs/testing.md`, "Waits and timeouts").
+const RERUN_OUTER: std::time::Duration = std::time::Duration::from_secs(60);
+
 /// A reader whose `read` fails with an error that is not invalid UTF-8.
 struct BrokenRead;
 
@@ -157,7 +169,7 @@ fn a_failure_before_any_session_prints_one_line_with_no_session_and_one_sentence
 #[test]
 fn project_ignores_a_hostile_git_environment() {
     if std::env::var("FIBER_DOORS_PROJECT_ENV_CHILD").is_ok() {
-        fakes::within("the child's project checks", DEADLINE, || {
+        fakes::within("the child's project checks", CHILD_BUDGET, || {
             let repo = PathBuf::from(std::env::var("FIBER_DOORS_PROJECT_ENV_REPO").unwrap());
             let common = fs::canonicalize(repo.join(".git")).unwrap();
             assert_eq!(project(&repo), common);
@@ -167,7 +179,7 @@ fn project_ignores_a_hostile_git_environment() {
     }
     fakes::within(
         "project_ignores_a_hostile_git_environment",
-        DEADLINE,
+        RERUN_OUTER,
         || {
             let temp = Temp::new();
             let repo = temp.0.join("repo");
@@ -192,7 +204,7 @@ fn project_ignores_a_hostile_git_environment() {
                     .unwrap()
                     .success()
             );
-            let out = fakes::rerun(
+            let out = fakes::rerun_within(
                 "project_ignores_a_hostile_git_environment",
                 &[
                     ("GIT_COMMON_DIR", "/nonexistent"),
@@ -200,6 +212,7 @@ fn project_ignores_a_hostile_git_environment() {
                     ("FIBER_DOORS_PROJECT_ENV_CHILD", "1"),
                     ("FIBER_DOORS_PROJECT_ENV_REPO", repo.to_str().unwrap()),
                 ],
+                RERUN_WITHIN,
             );
             assert!(
                 out.status.success(),
