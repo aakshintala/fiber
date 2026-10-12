@@ -22,8 +22,8 @@ use fakes::{Deadline, TempDir, Watchdog, kill_group};
 use rustix::process::Signal;
 
 use super::{
-    Error, GROUP_POLL, alive, detach, is_reserved_id, kill_every_group, live, refused, signal,
-    signal_name, signal_process, spawn,
+    Error, GROUP_POLL, alive, detach, kill_every_group, live, refused, signal, signal_name,
+    signal_process, spawn,
 };
 
 /// How long a test waits on a child before it fails.
@@ -59,14 +59,6 @@ fn reap(mut child: std::process::Child) -> std::process::ExitStatus {
         .recv(&waited)
         .expect("the child answered")
         .expect("the wait succeeded")
-}
-
-#[test]
-fn reserved_id_pins_the_boundary() {
-    assert!(is_reserved_id(0));
-    assert!(is_reserved_id(1));
-    assert!(!is_reserved_id(2));
-    assert!(!is_reserved_id(u32::MAX));
 }
 
 #[test]
