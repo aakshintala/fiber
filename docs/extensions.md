@@ -213,8 +213,9 @@ cannot stop the VM, the caller waits 1 second more after the timeout before it
 abandons the VM.
 
 Fiber runs a Lua extension's entry script, `init.lua`, when it creates the VM.
-Reading, compiling and running it is bounded at 2 seconds. The script is not a
-callback, so it declares no timeout.
+Reading, compiling and running it is bounded at 2 seconds. A provider file,
+`providers/<name>.lua`, has the same bound, starting when Fiber asks to load it.
+These scripts are not callbacks, so they declare no timeout.
 
 A process extension keeps the same order: Fiber sends it the stream's items
 one at a time and waits for each reply. How it schedules its own timers and
@@ -263,9 +264,16 @@ backend, its extension and the result's position.
 
 A tool, harness, search backend, hook or watcher registers before the
 session's tool set is fixed (`docs/prompt-cache.md`, "Tools"), which is why
-every enabled Lua extension runs its `init.lua` at session start ("Loading,
+every enabled Lua extension with `init.lua` runs it at session start ("Loading,
 and cost when nothing is loaded"). A provider is the exception: its manifest
-declares it, so its Lua waits for the first use of one of its models.
+declares it, so `providers/<name>.lua` waits for first use. That file registers
+exactly one provider, matching its filename, and nothing else. `init.lua` holds
+the other registrations. A `fiber.provider` call in `init.lua` refuses the whole
+extension with `extension_failed`, including its data; the message names the
+provider file it belongs in. Catching a forbidden or duplicate registration
+with `pcall` still fails the load. After a file finishes loading,
+`fiber.command`, `fiber.hook` and `fiber.provider` raise, including from a timer
+or callback.
 
 ### Host calls
 
@@ -481,7 +489,9 @@ A provider extension is mostly data: its name, how its credential is found, and
 its models, each with a protocol, a base URL, flags and metadata. The wire
 protocols are native Rust, so a provider never parses a stream. What a provider
 declares, and why, is `docs/model-routing.md`. The file is
-`providers/<name>.json` (`docs/configuration.md`, "A provider's data").
+`providers/<name>.json` (`docs/configuration.md`, "A provider's data"). Its Lua
+lives beside it in `providers/<name>.lua`, even when the extension also ships
+tools or hooks.
 
 A provider may have five pieces of Lua:
 
@@ -510,8 +520,8 @@ Each function is `{ timeout, run }`, like `fiber.command`: `timeout` in
 milliseconds, `run` the function Fiber calls. Only `sign()` runs while a
 request is being sent. It sees the body's SHA-256, never the body. A `sign()`
 that errors or returns unusable headers fails the call with `credential_failed`
-(`docs/errors.md`). Here is a provider for a gateway that lists its models at
-`/models`:
+(`docs/errors.md`). Here is `providers/acme.lua` for a gateway that lists its
+models at `/models`:
 
 ```lua
 fiber.provider("acme", {
@@ -1132,10 +1142,10 @@ client.
 ## Loading, and cost when nothing is loaded
 
 Each Lua extension gets its own Lua VM and thread. At session start, every
-installed Lua extension that is enabled for the project runs its `init.lua`,
+installed Lua extension with `init.lua` that is enabled for the project runs it,
 because a tool, hook, watcher, harness or search backend must register before
 the session's tool set is fixed (`docs/prompt-cache.md`, "Tools"), and Fiber
-cannot know what an extension registers without running it. Each started
+cannot know a non-provider extension's registrations without running it. Each started
 extension costs about 120 to 150 KiB and a thread for the whole session. These cost
 nothing at start:
 
@@ -1149,6 +1159,22 @@ nothing at start:
   functions run only when the session uses one of its models;
 - the first-party `hooks` extension in a session whose configuration has no
   `hooks` key ("Hooks declared in configuration").
+
+A provider-only package starts no VM until its provider file is needed. First
+use loads the file into the extension's running VM, or creates one when none
+runs. Providers in one extension share that VM. Model discovery on a missing
+or stale list uses the same path; its VM is dropped after discovery unless
+another provider or the extension's hooks, tools or commands still hold it.
+Fresh cached lists are read without loading provider Lua.
+
+A provider file runs at most once per VM, including when it fails. A load that
+expires while still queued has not run and can be retried. Pending loads run
+before queued jobs. A load error, wrong or missing registration, or the 2 s
+bound fails first use with `extension_failed`, naming the file and reason.
+The rest of the extension keeps running, and its tools are unchanged. The
+exception is a load stuck where the hook cannot stop it: after the timeout
+plus 1 second, Fiber abandons the VM. That extension's tools, hooks and
+commands are unavailable until restart; other providers and the session go on.
 
 A process extension costs its process from session start, because it
 must register before the session's first request. A TUI extension's VM is
@@ -1172,7 +1198,7 @@ manifest"). The install summary shows a raised cap ("What an install shows").
 
 The `reload` driver command (`docs/invocation.md`) reloads extensions. It is how
 a running session picks up an installed or updated extension. Each reloaded
-Lua extension runs `init.lua` again in a new VM before the new tool set is
+Lua extension with `init.lua` runs it again in a new VM before the new tool set is
 declared, and each process extension is restarted. Both are handed their folded state again.
 
 ## When an extension misbehaves
@@ -1385,8 +1411,9 @@ and a git call that runs longer than 300 s, is stopped and fails the install.
 Fiber does not pass
 `--ignore-scripts`, so a dependency's
 own install scripts run too, and the install summary says so. A pure-data
-provider is only ever read. Any other enabled Lua extension's script first
-runs at session start ("Loading, and cost when nothing is loaded").
+provider is only ever read. A provider's `providers/<name>.lua` waits for first
+use or model discovery. Other enabled Lua extensions run `init.lua` at session
+start ("Loading, and cost when nothing is loaded").
 
 ### A fresh install
 
