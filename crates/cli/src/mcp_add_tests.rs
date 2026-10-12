@@ -14,6 +14,7 @@ use std::io::{self, BufRead, Cursor, Write};
 use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
+use std::time::Duration;
 
 use config::{
     ConfigError, CredentialFile, Layer, Secret, delete_secret, read_secret, store_secret,
@@ -25,11 +26,35 @@ use contract::shapes::Failure;
 use extensions::{Decision, Index, Store};
 use serde_json::{Value, json};
 
-use super::{SecretInput, Streams, lock_label, run_add, settle_secrets};
+use super::{McpDeclaration, SecretInput, Streams, lock_label, mcp_add, run_add, settle_secrets};
 use crate::login::KeyReader;
 use crate::project_of;
 
 const URL: &str = "https://example.test/mcp";
+
+/// The child's marker: set, the test runs `mcp_add` and exits with its code.
+const CHILD: &str = "FIBER_CLI_TEST_CHILD";
+
+/// How long the re-run child may run before the test kills its group and
+/// fails: half of nextest's per-test timeout less the cleanup bound.
+const CHILD_DEADLINE: Duration = Duration::from_secs(50);
+
+/// Runs this test in a child process with the setup's home and workspace as
+/// `FIBER_HOME` and the working directory, and returns its exit code and
+/// stderr. The child is this test binary filtered to `test`.
+#[track_caller]
+fn child_exit(test: &str, setup: &Setup) -> (Option<i32>, String) {
+    let full = format!("{}::{test}", module_path!().split_once("::").unwrap().1);
+    let output = fakes::rerun_prepared(&full, &[(CHILD, "1")], CHILD_DEADLINE, |command| {
+        command
+            .env("FIBER_HOME", setup.home())
+            .current_dir(setup.workspace());
+    });
+    (
+        output.status.code(),
+        String::from_utf8(output.stderr).unwrap(),
+    )
+}
 
 /// Whether the seam reports userinfo: the tests own the answer, so a url
 /// that carries userinfo is refused only through the seam, never by a
@@ -852,4 +877,70 @@ fn split_declaration_reads_the_shape_back_as_raw_parts() {
             vec!["npx".to_owned(), "-y".to_owned()],
         )
     );
+}
+
+#[test]
+fn the_per_name_lock_is_labelled_with_the_name_and_add() {
+    assert_eq!(lock_label("docs"), "docs.add");
+    assert_eq!(lock_label("x.lock"), "x.lock.add");
+}
+
+#[test]
+fn mcp_add_exits_zero_when_it_adds_the_server() {
+    if std::env::var_os(CHILD).is_some() {
+        let clock: Arc<dyn contract::clock::Clock> = fakes::clock::FakeClock::new();
+        let declaration = McpDeclaration::Remote {
+            url: URL.to_owned(),
+        };
+        std::process::exit(mcp_add(
+            Layer::Global,
+            "docs",
+            declaration,
+            &FakeRemote(false),
+            clock,
+        ));
+    }
+    let setup = Setup::new();
+    let (code, stderr) = child_exit("mcp_add_exits_zero_when_it_adds_the_server", &setup);
+    assert_eq!(code, Some(0), "{stderr}");
+}
+
+#[test]
+fn mcp_add_exits_two_for_a_bad_name() {
+    if std::env::var_os(CHILD).is_some() {
+        let clock: Arc<dyn contract::clock::Clock> = fakes::clock::FakeClock::new();
+        let declaration = McpDeclaration::Remote {
+            url: URL.to_owned(),
+        };
+        std::process::exit(mcp_add(
+            Layer::Global,
+            "bad name",
+            declaration,
+            &FakeRemote(false),
+            clock,
+        ));
+    }
+    let setup = Setup::new();
+    let (code, stderr) = child_exit("mcp_add_exits_two_for_a_bad_name", &setup);
+    assert_eq!(code, Some(2), "{stderr}");
+}
+
+#[test]
+fn mcp_add_exits_one_when_the_seam_refuses_the_url() {
+    if std::env::var_os(CHILD).is_some() {
+        let clock: Arc<dyn contract::clock::Clock> = fakes::clock::FakeClock::new();
+        let declaration = McpDeclaration::Remote {
+            url: URL.to_owned(),
+        };
+        std::process::exit(mcp_add(
+            Layer::Global,
+            "docs",
+            declaration,
+            &FakeRemote(true),
+            clock,
+        ));
+    }
+    let setup = Setup::new();
+    let (code, stderr) = child_exit("mcp_add_exits_one_when_the_seam_refuses_the_url", &setup);
+    assert_eq!(code, Some(1), "{stderr}");
 }

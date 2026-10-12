@@ -11,6 +11,7 @@
 use std::fs;
 use std::path::PathBuf;
 use std::sync::Arc;
+use std::time::Duration;
 
 use config::{Layer, Secret, insert_entry, store_secret};
 use contract::ErrorCode;
@@ -18,8 +19,32 @@ use contract::events::OfferedKind;
 use extensions::{Decision, Index, Store};
 use serde_json::json;
 
-use super::{Streams, run_remove};
+use super::{Streams, mcp_remove, run_remove};
 use crate::project_of;
+
+/// The child's marker: set, the test runs `mcp_remove` and exits with its code.
+const CHILD: &str = "FIBER_CLI_TEST_CHILD";
+
+/// How long the re-run child may run before the test kills its group and
+/// fails: half of nextest's per-test timeout less the cleanup bound.
+const CHILD_DEADLINE: Duration = Duration::from_secs(50);
+
+/// Runs this test in a child process with the setup's home and workspace as
+/// `FIBER_HOME` and the working directory, and returns its exit code and
+/// stderr. The child is this test binary filtered to `test`.
+#[track_caller]
+fn child_exit(test: &str, setup: &Setup) -> (Option<i32>, String) {
+    let full = format!("{}::{test}", module_path!().split_once("::").unwrap().1);
+    let output = fakes::rerun_prepared(&full, &[(CHILD, "1")], CHILD_DEADLINE, |command| {
+        command
+            .env("FIBER_HOME", setup.home())
+            .current_dir(setup.workspace());
+    });
+    (
+        output.status.code(),
+        String::from_utf8(output.stderr).unwrap(),
+    )
+}
 
 struct Setup {
     tmp: fakes::TempDir,
@@ -224,4 +249,42 @@ fn remove_from_the_repository_leaves_the_approval_and_the_secret() {
             .expose(),
         "tok-1"
     );
+}
+
+#[test]
+fn mcp_remove_exits_zero_when_it_removes_the_declaration() {
+    if std::env::var_os(CHILD).is_some() {
+        std::process::exit(mcp_remove(Layer::Global, "docs"));
+    }
+    let setup = Setup::new();
+    setup.declare(Layer::Global, "docs");
+    let (code, stderr) = child_exit(
+        "mcp_remove_exits_zero_when_it_removes_the_declaration",
+        &setup,
+    );
+    assert_eq!(code, Some(0), "{stderr}");
+}
+
+#[test]
+fn mcp_remove_exits_two_when_no_layer_declares_the_name() {
+    if std::env::var_os(CHILD).is_some() {
+        std::process::exit(mcp_remove(Layer::Global, "docs"));
+    }
+    let setup = Setup::new();
+    let (code, stderr) = child_exit(
+        "mcp_remove_exits_two_when_no_layer_declares_the_name",
+        &setup,
+    );
+    assert_eq!(code, Some(2), "{stderr}");
+}
+
+#[test]
+fn mcp_remove_exits_one_when_a_config_file_is_invalid() {
+    if std::env::var_os(CHILD).is_some() {
+        std::process::exit(mcp_remove(Layer::Global, "docs"));
+    }
+    let setup = Setup::new();
+    fs::write(setup.home().join("config.json"), "{").unwrap();
+    let (code, stderr) = child_exit("mcp_remove_exits_one_when_a_config_file_is_invalid", &setup);
+    assert_eq!(code, Some(1), "{stderr}");
 }

@@ -11,14 +11,39 @@
 use std::fs;
 use std::path::PathBuf;
 use std::sync::Arc;
+use std::time::Duration;
 
 use config::{Layer, insert_entry};
 use contract::events::OfferedKind;
 use extensions::{Decision, Index, Store};
 use serde_json::json;
 
-use super::{Streams, has_value, run_list};
+use super::{Streams, has_value, is_approved, layer_order, mcp_list, run_list};
 use crate::project_of;
+
+/// The child's marker: set, the test runs `mcp_list` and exits with its code.
+const CHILD: &str = "FIBER_CLI_TEST_CHILD";
+
+/// How long the re-run child may run before the test kills its group and
+/// fails: half of nextest's per-test timeout less the cleanup bound.
+const CHILD_DEADLINE: Duration = Duration::from_secs(50);
+
+/// Runs this test in a child process with the setup's home and workspace as
+/// `FIBER_HOME` and the working directory, and returns its exit code and
+/// stderr. The child is this test binary filtered to `test`.
+#[track_caller]
+fn child_exit(test: &str, setup: &Setup) -> (Option<i32>, String) {
+    let full = format!("{}::{test}", module_path!().split_once("::").unwrap().1);
+    let output = fakes::rerun_prepared(&full, &[(CHILD, "1")], CHILD_DEADLINE, |command| {
+        command
+            .env("FIBER_HOME", setup.home())
+            .current_dir(setup.workspace());
+    });
+    (
+        output.status.code(),
+        String::from_utf8(output.stderr).unwrap(),
+    )
+}
 
 struct Setup {
     tmp: fakes::TempDir,
@@ -272,4 +297,80 @@ fn an_empty_configuration_prints_nothing() {
     );
     assert!(ran.out.is_empty(), "stdout: {}", ran.out);
     assert!(ran.err.is_empty(), "stderr: {}", ran.err);
+}
+
+#[test]
+fn mcp_list_exits_zero_when_it_lists() {
+    if std::env::var_os(CHILD).is_some() {
+        let clock: Arc<dyn contract::clock::Clock> = fakes::clock::FakeClock::new();
+        std::process::exit(mcp_list(clock));
+    }
+    let setup = Setup::new();
+    setup.remote(Layer::Global, "docs");
+    let (code, stderr) = child_exit("mcp_list_exits_zero_when_it_lists", &setup);
+    assert_eq!(code, Some(0), "{stderr}");
+}
+
+#[test]
+fn mcp_list_exits_one_when_a_config_file_is_invalid() {
+    if std::env::var_os(CHILD).is_some() {
+        let clock: Arc<dyn contract::clock::Clock> = fakes::clock::FakeClock::new();
+        std::process::exit(mcp_list(clock));
+    }
+    let setup = Setup::new();
+    fs::write(setup.home().join("config.json"), "{").unwrap();
+    let (code, stderr) = child_exit("mcp_list_exits_one_when_a_config_file_is_invalid", &setup);
+    assert_eq!(code, Some(1), "{stderr}");
+}
+
+#[test]
+fn layers_are_ordered_global_then_project_then_repository() {
+    assert_eq!(layer_order(Layer::Global), 0);
+    assert_eq!(layer_order(Layer::Project), 1);
+    assert_eq!(layer_order(Layer::Repository), 2);
+}
+
+#[test]
+fn is_approved_is_true_only_for_the_approved_declaration_of_that_name() {
+    let setup = Setup::new();
+    let clock: Arc<dyn contract::clock::Clock> = fakes::clock::FakeClock::new();
+    let (_, project) = project_of(&setup.home(), &setup.workspace()).unwrap();
+    setup.remote(Layer::Repository, "alpha");
+    approve_repo(&setup, "alpha", false);
+    let check = |name: &str| {
+        is_approved(&setup.home(), &setup.workspace(), &project, name, &clock).unwrap()
+    };
+    assert!(check("alpha"));
+    // Another server is approved; this name is not declared at all.
+    assert!(!check("gamma"));
+    // The approval is of the declaration as it was: a changed url is a new hash.
+    config::remove_entry(
+        &setup.home(),
+        &setup.workspace(),
+        &project,
+        Layer::Repository,
+        "mcp.servers",
+        "alpha",
+    )
+    .unwrap();
+    insert_entry(
+        &setup.home(),
+        &setup.workspace(),
+        &project,
+        Layer::Repository,
+        "mcp.servers",
+        "alpha",
+        json!({"url": "https://example.test/other"}),
+    )
+    .unwrap();
+    assert!(!check("alpha"));
+}
+
+#[test]
+fn a_global_server_is_never_approved() {
+    let setup = Setup::new();
+    let clock: Arc<dyn contract::clock::Clock> = fakes::clock::FakeClock::new();
+    let (_, project) = project_of(&setup.home(), &setup.workspace()).unwrap();
+    setup.remote(Layer::Global, "docs");
+    assert!(!is_approved(&setup.home(), &setup.workspace(), &project, "docs", &clock).unwrap());
 }
