@@ -230,7 +230,9 @@ fn ask_full(session: &Arc<SessionExtensions>, point: &str) -> Vec<Notice> {
                     },
                     changed_by: None,
                 },
-                InputItem::ShellCommand { seq: contract::Seq(1) },
+                InputItem::ShellCommand {
+                    seq: contract::Seq(1),
+                },
                 InputItem::Jobs {
                     job_ids: vec![contract::JobId("j_1".into())],
                 },
@@ -264,12 +266,14 @@ fn ask_full(session: &Arc<SessionExtensions>, point: &str) -> Vec<Notice> {
                 })
                 .notices
         }
-        "turn_end" => session
-            .turn_end(&TurnEnd {
-                reply: "Done.",
-                cancel: &NEVER,
-            })
-            .notices,
+        "turn_end" => {
+            session
+                .turn_end(&TurnEnd {
+                    reply: "Done.",
+                    cancel: &NEVER,
+                })
+                .notices
+        }
         "before_message" => {
             let content = vec![ContentPart::Text { text: "x".into() }];
             session
@@ -351,12 +355,14 @@ fn ask_plain(session: &Arc<SessionExtensions>, point: &str) -> Vec<Notice> {
                 })
                 .notices
         }
-        "turn_end" => session
-            .turn_end(&TurnEnd {
-                reply: "Done.",
-                cancel: &NEVER,
-            })
-            .notices,
+        "turn_end" => {
+            session
+                .turn_end(&TurnEnd {
+                    reply: "Done.",
+                    cancel: &NEVER,
+                })
+                .notices
+        }
         "before_message" => {
             let content = vec![ContentPart::Text { text: "x".into() }];
             session

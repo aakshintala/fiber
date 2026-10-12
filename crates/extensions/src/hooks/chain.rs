@@ -100,7 +100,8 @@ impl Builder {
     /// hooks share a point").
     pub(super) fn fill(self, config: &Config, session: &mut SessionExtensions) {
         let mut entries = self.entries;
-        session.lifecycle.session_start = sorted(config, SESSION_START, entries.remove(SESSION_START));
+        session.lifecycle.session_start =
+            sorted(config, SESSION_START, entries.remove(SESSION_START));
         session.lifecycle.turn_start = sorted(config, TURN_START, entries.remove(TURN_START));
         session.lifecycle.before_model_call =
             sorted(config, BEFORE_MODEL_CALL, entries.remove(BEFORE_MODEL_CALL));

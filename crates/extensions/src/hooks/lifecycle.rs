@@ -6,13 +6,13 @@
 use contract::ErrorCode;
 use contract::events::Notice;
 use contract::hook::{
-    BeforeModelCall, CheckAnswer, CheckOutcome, Context, ContextAnswer, ContextOutcome, HookFailure,
-    Refusal, SessionStart, StartReason, TurnEnd, TurnStart,
+    BeforeModelCall, CheckAnswer, CheckOutcome, Context, ContextAnswer, ContextOutcome,
+    HookFailure, Refusal, SessionStart, StartReason, TurnEnd, TurnStart,
 };
 use contract::tool::Cancel;
 use serde_json::{Map, Value};
 
-use super::chain::{BEFORE_MODEL_CALL, SESSION_START, TURN_END, TURN_START, Entry};
+use super::chain::{BEFORE_MODEL_CALL, Entry, SESSION_START, TURN_END, TURN_START};
 use super::{SessionExtensions, kind, notice};
 use crate::Error;
 
@@ -209,9 +209,7 @@ fn shown_turn(turn: &TurnStart<'_>) -> Value {
         Value::Array(
             turn.input
                 .iter()
-                .filter(|item| {
-                    !matches!(item, contract::events::InputItem::Unknown)
-                })
+                .filter(|item| !matches!(item, contract::events::InputItem::Unknown))
                 .filter_map(|item| serde_json::to_value(item).ok())
                 .collect(),
         ),

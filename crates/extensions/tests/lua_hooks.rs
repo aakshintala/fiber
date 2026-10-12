@@ -302,7 +302,10 @@ fn ask_end(session: &Arc<SessionExtensions>) -> mpsc::Receiver<ContextAnswer> {
 
 /// Asks the `session_start` hooks about a start, on its own thread. The
 /// cancel never fires, so the chain runs every hook.
-fn ask_start(session: &Arc<SessionExtensions>, workspace: PathBuf) -> mpsc::Receiver<ContextAnswer> {
+fn ask_start(
+    session: &Arc<SessionExtensions>,
+    workspace: PathBuf,
+) -> mpsc::Receiver<ContextAnswer> {
     let (tx, rx) = mpsc::channel();
     let session = Arc::clone(session);
     std::thread::spawn(move || {
@@ -1515,7 +1518,12 @@ fn a_non_blocking_session_start_hook_past_its_timeout_adds_no_context() {
         &setup,
         "a",
         &json!({}),
-        &spinning_at("session_start", "non-blocking", 50, "{ context = \"late\" }"),
+        &spinning_at(
+            "session_start",
+            "non-blocking",
+            50,
+            "{ context = \"late\" }",
+        ),
     );
     let went = go_module(&dir, "spin");
     let clock = FakeClock::new();
@@ -1646,10 +1654,7 @@ fn a_cancel_between_turn_end_hooks_drops_the_first_hooks_message() {
     };
     assert!(context.is_empty(), "{context:?}");
     assert!(answer.notices.is_empty(), "{:?}", answer.notices);
-    assert!(
-        !dir.join("b_ran").exists(),
-        "the second hook never started"
-    );
+    assert!(!dir.join("b_ran").exists(), "the second hook never started");
 }
 
 /// A `session_start` chain whose first hook holds in a fifo write: the same
@@ -1726,8 +1731,5 @@ fn a_cancel_between_session_start_hooks_drops_the_first_hooks_context() {
     };
     assert!(context.is_empty(), "{context:?}");
     assert!(answer.notices.is_empty(), "{:?}", answer.notices);
-    assert!(
-        !dir.join("b_ran").exists(),
-        "the second hook never started"
-    );
+    assert!(!dir.join("b_ran").exists(), "the second hook never started");
 }

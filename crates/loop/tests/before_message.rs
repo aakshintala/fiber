@@ -150,10 +150,7 @@ impl Hooks for FakeHooks {
         }
     }
 
-    fn turn_start(
-        &self,
-        _turn: &contract::hook::TurnStart<'_>,
-    ) -> contract::hook::ContextAnswer {
+    fn turn_start(&self, _turn: &contract::hook::TurnStart<'_>) -> contract::hook::ContextAnswer {
         contract::hook::ContextAnswer {
             outcome: contract::hook::ContextOutcome::Added(Vec::new()),
             notices: Vec::new(),
@@ -170,10 +167,7 @@ impl Hooks for FakeHooks {
         }
     }
 
-    fn turn_end(
-        &self,
-        _end: &contract::hook::TurnEnd<'_>,
-    ) -> contract::hook::ContextAnswer {
+    fn turn_end(&self, _end: &contract::hook::TurnEnd<'_>) -> contract::hook::ContextAnswer {
         contract::hook::ContextAnswer {
             outcome: contract::hook::ContextOutcome::Added(Vec::new()),
             notices: Vec::new(),

@@ -146,10 +146,7 @@ fn session_id() -> SessionId {
 }
 
 #[track_caller]
-fn session_start(
-    session: &Arc<SessionExtensions>,
-    reason: StartReason,
-) -> ContextAnswer {
+fn session_start(session: &Arc<SessionExtensions>, reason: StartReason) -> ContextAnswer {
     let session = Arc::clone(session);
     let id = session_id();
     bounded(move || {
@@ -187,10 +184,7 @@ fn usage(cost: Option<f64>) -> Usage {
 }
 
 #[track_caller]
-fn model_call(
-    session: &Arc<SessionExtensions>,
-    cost: Option<f64>,
-) -> contract::hook::CheckAnswer {
+fn model_call(session: &Arc<SessionExtensions>, cost: Option<f64>) -> contract::hook::CheckAnswer {
     let session = Arc::clone(session);
     let used = usage(cost);
     bounded(move || {
@@ -226,11 +220,19 @@ fn two_session_start_hooks_add_context_in_run_order() {
     let home = Home::new();
     home.install(
         "a",
-        &hook("session_start", "non-blocking", "return { context = \"A\" }"),
+        &hook(
+            "session_start",
+            "non-blocking",
+            "return { context = \"A\" }",
+        ),
     );
     home.install(
         "b",
-        &hook("session_start", "non-blocking", "return { context = \"B\" }"),
+        &hook(
+            "session_start",
+            "non-blocking",
+            "return { context = \"B\" }",
+        ),
     );
     let answer = session_start(&home.load(&[]), StartReason::Handoff);
     assert_eq!(
@@ -363,7 +365,11 @@ fn a_non_blocking_failure_keeps_the_chain_and_names_the_extension() {
     );
     home.install(
         "b",
-        &hook("session_start", "non-blocking", "return { context = \"late\" }"),
+        &hook(
+            "session_start",
+            "non-blocking",
+            "return { context = \"late\" }",
+        ),
     );
     let answer = session_start(&home.load(&[]), StartReason::Start);
     assert_eq!(
@@ -396,7 +402,11 @@ fn a_blocking_failure_drops_the_earlier_contexts_and_keeps_the_notices() {
     );
     home.install(
         "b",
-        &hook("turn_start", "non-blocking", "return { context = \"early\" }"),
+        &hook(
+            "turn_start",
+            "non-blocking",
+            "return { context = \"early\" }",
+        ),
     );
     home.install("c", &hook("turn_start", "blocking", "error(\"kaput\")"));
     let answer = turn_start(&home.load(&[]), Vec::new());
@@ -406,10 +416,7 @@ fn a_blocking_failure_drops_the_earlier_contexts_and_keeps_the_notices() {
     assert_eq!(failure.extension, "fiber.test/c");
     assert!(failure.message.contains("kaput"), "{}", failure.message);
     assert_eq!(answer.notices.len(), 1, "{:?}", answer.notices);
-    assert_eq!(
-        answer.notices[0].extension.as_deref(),
-        Some("fiber.test/a")
-    );
+    assert_eq!(answer.notices[0].extension.as_deref(), Some("fiber.test/a"));
 }
 
 #[test]
@@ -477,13 +484,19 @@ fn hooks_order_turn_start_reorders_only_that_point() {
     let session = home.load(&[r#"hooks.order.turn_start=["fiber.test/b"]"#]);
     let answer = turn_start(&session, Vec::new());
     assert_eq!(
-        added(&answer).iter().map(|kept| kept.text.clone()).collect::<Vec<_>>(),
+        added(&answer)
+            .iter()
+            .map(|kept| kept.text.clone())
+            .collect::<Vec<_>>(),
         ["b", "a"]
     );
     // The `session_start` order is untouched by the `turn_start` order.
     let answer = session_start(&session, StartReason::Start);
     assert_eq!(
-        added(&answer).iter().map(|kept| kept.text.clone()).collect::<Vec<_>>(),
+        added(&answer)
+            .iter()
+            .map(|kept| kept.text.clone())
+            .collect::<Vec<_>>(),
         ["a", "b"]
     );
 }
@@ -511,7 +524,10 @@ fn sanitize_hooks_run_before_transform_hooks_at_turn_start() {
     );
     let answer = turn_start(&home.load(&[]), Vec::new());
     assert_eq!(
-        added(&answer).iter().map(|kept| kept.text.clone()).collect::<Vec<_>>(),
+        added(&answer)
+            .iter()
+            .map(|kept| kept.text.clone())
+            .collect::<Vec<_>>(),
         ["S", "T"]
     );
 }
@@ -532,9 +548,14 @@ fn a_check_hook_at_turn_start_is_not_registered() {
     let answer = turn_start(&session, Vec::new());
     assert_eq!(added(&answer), Vec::new());
     assert!(
-        session.notices().iter().any(|notice| notice.message.contains(
+        session
+            .notices()
+            .iter()
+            .any(|notice| {
+                notice.message.contains(
             "a `check` hook exists only at `before_message`, `before_tool` and `before_model_call`"
-        )),
+        )
+            }),
         "{:?}",
         session.notices()
     );
@@ -577,7 +598,9 @@ fn a_before_model_call_hook_is_shown_the_model_and_usage() {
     let answer = model_call(&home.load(&[]), Some(0.01));
     assert_eq!(answer.notices.len(), 1);
     assert!(
-        answer.notices[0].message.contains("anthropic/claude-x|0.01|0.0|10,0,5"),
+        answer.notices[0]
+            .message
+            .contains("anthropic/claude-x|0.01|0.0|10,0,5"),
         "{}",
         answer.notices[0].message
     );
