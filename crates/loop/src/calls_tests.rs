@@ -996,6 +996,7 @@ fn a_calls_job_lines_are_written_before_its_completion_and_render_nothing() {
         vec![Arc::new(Lines {
             name: "jobber",
             jobs: vec![started_line(id), failed_line(id)],
+            settle: None,
         })],
         vec![
             calls("Checking.", &["jobber"]),
@@ -1007,6 +1008,7 @@ fn a_calls_job_lines_are_written_before_its_completion_and_render_nothing() {
         vec![Arc::new(Lines {
             name: "jobber",
             jobs: Vec::new(),
+            settle: None,
         })],
         vec![
             calls("Checking.", &["jobber"]),
@@ -1084,6 +1086,7 @@ fn a_calls_delegate_records_are_written_in_order_under_its_action() {
                 delegate_finished_line(id),
                 failed_line(id),
             ],
+            settle: None,
         })],
         vec![
             calls("Checking.", &["jobber"]),
@@ -1137,10 +1140,12 @@ fn two_calls_write_their_job_lines_in_request_order() {
             Arc::new(Lines {
                 name: "first",
                 jobs: vec![started_line(first), failed_line(first)],
+                settle: None,
             }),
             Arc::new(Lines {
                 name: "second",
                 jobs: vec![started_line(second), failed_line(second)],
+                settle: None,
             }),
         ],
         vec![
@@ -1229,6 +1234,7 @@ fn a_cancelled_call_still_writes_its_job_lines() {
             jobs: vec![started_line(id), failed_line(id)],
             error: None,
             started,
+            settle: None,
         })],
         vec![
             calls("Checking.", &["jobber"]),
@@ -1474,6 +1480,7 @@ fn a_call_that_returns_an_error_after_its_turn_is_cancelled_ends_failed() {
                 provider: None,
             }),
             started,
+            settle: None,
         })],
         vec![
             calls("Checking.", &["jobber"]),
