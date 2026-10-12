@@ -1676,7 +1676,7 @@ fn the_fold_starts_from_the_run_boundary() {
     // when the watch delivers it. The fake script filters at the boundary
     // as the real watch does, so this test drives the runner with a watch
     // that replays without filtering: the fold is the backstop. The child
-    // blocks until the watch ran, so the stale line is always first; the
+    // blocks until the watch folded the stale line, so the stale line is always first; the
     // fresh line on stdout ends the run. Without the boundary the fold
     // takes the stale line and the run reports it instead.
     let rig = rig(vec![]);
@@ -1688,8 +1688,8 @@ fn the_fold_starts_from_the_run_boundary() {
     let watch: Watch = Arc::new(
         move |_: &SessionId, after: Option<u64>, on_line: &mut dyn FnMut(&Envelope)| {
             seen_after.lock().unwrap().push(after);
-            let _sent = called_tx.send(());
             on_line(&stale);
+            let _sent = called_tx.send(());
             Ok(Watched::Exited)
         },
     );
