@@ -304,6 +304,13 @@ fn read_field(name: &str, schema: &Value) -> Result<Field, String> {
             ));
         }
     };
+    // An `enum` belongs only on a string: any other type is a
+    // malformed schema, answered with a JSON-RPC error.
+    if field_type != "string" && object.contains_key("enum") {
+        return Err(format!(
+            "only a string property may have `enum`, not `{name}`."
+        ));
+    }
     let kind = match field_type {
         "boolean" => FieldKind::Boolean,
         "string" => read_string(name, object)?,
@@ -401,13 +408,8 @@ fn read_length(
 }
 
 /// Reads a number property's `minimum` and `maximum`: absent, or a
-/// number, compared as `f64`. An `enum` belongs only on a string.
+/// number, compared as `f64`.
 fn read_number(name: &str, object: &serde_json::Map<String, Value>) -> Result<FieldKind, String> {
-    if object.contains_key("enum") {
-        return Err(format!(
-            "only a string property may have `enum`, not `{name}`."
-        ));
-    }
     let min = read_float(name, object, "minimum")?;
     let max = read_float(name, object, "maximum")?;
     Ok(FieldKind::Number { min, max })
@@ -433,14 +435,8 @@ fn read_float(
 /// inclusive integers. An exact `i64` or `u64` bound is taken as it is;
 /// any `f64` bound (a fraction, an integral float, or past the integer
 /// range) becomes `ceil` for a minimum and `floor` for a maximum, clamped
-/// before its one checked cast, so no conversion can overflow. An `enum`
-/// belongs only on a string.
+/// before its one checked cast, so no conversion can overflow.
 fn read_integer(name: &str, object: &serde_json::Map<String, Value>) -> Result<FieldKind, String> {
-    if object.contains_key("enum") {
-        return Err(format!(
-            "only a string property may have `enum`, not `{name}`."
-        ));
-    }
     let min = read_effective(name, object, "minimum", true)?;
     let max = read_effective(name, object, "maximum", false)?;
     Ok(FieldKind::Integer { min, max })
@@ -482,7 +478,7 @@ fn read_effective(
             const ABOVE: f64 = 9223372036854775808.0;
             if edged < BELOW {
                 Ok(Some(i128::from(i64::MIN) - 1))
-            } else if edged > ABOVE {
+            } else if edged >= ABOVE {
                 Ok(Some(i128::from(i64::MAX) + 1))
             } else {
                 #[allow(
@@ -632,16 +628,30 @@ fn value(field: &Field, answer: &Answer) -> Valued {
                 Valued::Value(Value::String(trimmed.to_owned()))
             }
         }
-        (Answer::Text { text }, FieldKind::Number { .. }) => match text.trim().parse::<f64>() {
-            Ok(number) if number.is_finite() => Valued::Value(
-                serde_json::Number::from_f64(number).map_or(Value::Null, Value::Number),
-            ),
-            Ok(_) | Err(_) => Valued::Decline,
-        },
-        (Answer::Text { text }, FieldKind::Integer { .. }) => match text.trim().parse::<i64>() {
-            Ok(number) => Valued::Value(Value::Number(number.into())),
-            Err(_) => Valued::Decline,
-        },
+        (Answer::Text { text }, FieldKind::Number { .. }) => {
+            let trimmed = text.trim();
+            if trimmed.is_empty() && !field.required {
+                Valued::Omitted
+            } else {
+                match trimmed.parse::<f64>() {
+                    Ok(number) if number.is_finite() => Valued::Value(
+                        serde_json::Number::from_f64(number).map_or(Value::Null, Value::Number),
+                    ),
+                    Ok(_) | Err(_) => Valued::Decline,
+                }
+            }
+        }
+        (Answer::Text { text }, FieldKind::Integer { .. }) => {
+            let trimmed = text.trim();
+            if trimmed.is_empty() && !field.required {
+                Valued::Omitted
+            } else {
+                match trimmed.parse::<i64>() {
+                    Ok(number) => Valued::Value(Value::Number(number.into())),
+                    Err(_) => Valued::Decline,
+                }
+            }
+        }
         (Answer::Confirmed { .. }, _)
         | (Answer::Labels { .. }, _)
         | (Answer::Text { .. }, _)

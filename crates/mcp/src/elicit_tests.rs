@@ -308,6 +308,16 @@ fn every_malformed_schema_names_its_key_or_property() {
             "`count`",
         ),
         (
+            "enum on an integer",
+            line(r#""count":{"type":"integer","enum":[1,2]}"#, r#"[]"#),
+            "`count`",
+        ),
+        (
+            "enum on a boolean",
+            line(r#""ok":{"type":"boolean","enum":[true]}"#, r#"[]"#),
+            "`ok`",
+        ),
+        (
             "empty enum",
             line(r#""env":{"type":"string","enum":[]}"#, r#"[]"#),
             "`env`",
@@ -555,6 +565,13 @@ fn integers_check_whole_numbers_exactly() {
             r#""count":{"type":"integer","maximum":18446744073709551615}"#,
             "9223372036854775807",
             true,
+        ),
+        // `9223372036854775808.0` equals the clamp's upper edge: as a
+        // minimum it leaves no `i64` standing, so the largest one fails.
+        (
+            r#""count":{"type":"integer","minimum":9223372036854775808.0}"#,
+            "9223372036854775807",
+            false,
         ),
     ];
     for (properties, text, passes) in bounded {
@@ -819,6 +836,46 @@ fn a_declined_optional_field_is_left_out_and_accepted() {
     let wait = Deadline::after(WITHIN);
     wait.recv_or_fail(&seen, "the first ask");
     wait.recv_or_fail(&seen, "the second ask");
+}
+
+#[test]
+fn an_empty_optional_number_or_integer_is_left_out_and_the_rest_is_accepted() {
+    // Empty text on an optional numeric field passes its check and is
+    // left out of `content`, while the answered fields are still
+    // accepted.
+    let form = read(&line(
+        r#""name":{"type":"string"},"n":{"type":"number"},"count":{"type":"integer"}"#,
+        r#"["name"]"#,
+    ))
+    .expect("the form reads");
+    let (ask, _seen) = FakeAsk::scripted(
+        "a_1",
+        vec![
+            Answered::Reply(Answer::Text {
+                text: "prod".to_owned(),
+            }),
+            Answered::Reply(Answer::Text {
+                text: "".to_owned(),
+            }),
+            Answered::Reply(Answer::Text {
+                text: "   ".to_owned(),
+            }),
+        ],
+    );
+    let fake = fakes::clock::FakeClock::new();
+    let result = respond(
+        super::Asker {
+            ask: &ask,
+            server: "fx",
+        },
+        &form,
+        vec![ActionId("a_1".to_owned())],
+        fake.now() + Duration::from_secs(60),
+    );
+    assert_eq!(
+        result,
+        json!({"action": "accept", "content": {"name": "prod"}}),
+    );
 }
 
 #[test]

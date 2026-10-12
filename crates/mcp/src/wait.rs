@@ -136,28 +136,23 @@ impl Shared {
         }
         let elicitation = state.elicitations.pop_front()?;
         let mut action_ids = Vec::with_capacity(state.asking.len());
-        let mut until: Option<Instant> = None;
+        let mut asking = state.asking.values();
+        // The empty return above holds under the same lock, so a first
+        // call is registered.
+        #[allow(clippy::expect_used, reason = "the same lock keeps `asking` nonempty")]
+        let first = asking.next().expect("an asking call is registered");
+        action_ids.push(first.0.clone());
+        let mut until = first.1;
         // `BTreeMap` iterates in request-id order.
-        for (action, deadline) in state.asking.values() {
-            action_ids.push(action.clone());
-            until = Some(match until {
-                Some(earliest) => earliest.min(*deadline),
-                None => *deadline,
-            });
+        for next in asking {
+            action_ids.push(next.0.clone());
+            until = until.min(next.1);
         }
-        match until {
-            Some(until) => Some(Taken {
-                elicitation,
-                action_ids,
-                until,
-            }),
-            // Unreachable with a non-empty `asking` above: put it back
-            // rather than strand an elicitation owed one answer.
-            None => {
-                state.elicitations.push_front(elicitation);
-                None
-            }
-        }
+        Some(Taken {
+            elicitation,
+            action_ids,
+            until,
+        })
     }
 
     /// Removes and unregisters `id`; when that left no asking call, the
