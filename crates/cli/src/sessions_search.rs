@@ -229,7 +229,7 @@ fn one_line(text: &str) -> String {
 
 /// `seconds` since the epoch as a UTC time to the second,
 /// `2026-10-07T10:00:03Z`.
-fn utc(seconds: u64) -> String {
+pub(crate) fn utc(seconds: u64) -> String {
     let (year, month, day) = contract::clock::utc_date_of_secs(seconds);
     let second = seconds % 86_400;
     format!(

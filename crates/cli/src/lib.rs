@@ -20,9 +20,11 @@ mod approve;
 mod config;
 mod extension;
 mod extension_test;
+mod hub_pair;
 mod hub_refresh;
 mod hub_service;
 mod hub_status;
+mod hub_token;
 mod hub_unit;
 mod login;
 mod model_lists;
@@ -43,9 +45,11 @@ pub use extension::{
     extension_install, extension_list, extension_reinstall, extension_remove, extension_update,
 };
 pub use extension_test::extension_test;
+pub use hub_pair::{Address, hub_pair};
 pub use hub_refresh::hub_refresh;
 pub use hub_service::{hub_install, hub_restart, hub_uninstall};
 pub use hub_status::hub_status;
+pub use hub_token::{hub_token_list, hub_token_revoke};
 pub use login::{
     LoginCancel, LoginName, LoginStored, LogoutTarget, browser_login, login_store, login_targets,
     providers_in, run_login, run_logout,

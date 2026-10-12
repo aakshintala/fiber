@@ -1,0 +1,132 @@
+//! Pairing codes and terminal QR output (`docs/invocation.md`, "Remote clients").
+use crate::{fail, failed, sessions::request};
+use contract::{ErrorCode, shapes::Failure};
+use qrcode::{QrCode, render::unicode::Dense1x2};
+use serde_json::{Map, Value};
+use std::io::{self, BufReader, IsTerminal as _, Write};
+
+const ADDRESS_RULE: &str = "The address must be a ws:// or wss:// URL.";
+
+/// A websocket URL carried unchanged in the pairing QR code.
+#[derive(Clone, Debug)]
+pub struct Address(String);
+impl Address {
+    /// Accepts a websocket scheme, a host and an optional port in 1..=65535.
+    pub fn parse(value: &str) -> Result<Self, String> {
+        let valid = || {
+            let (scheme, rest) = value.split_once("://")?;
+            if !scheme.eq_ignore_ascii_case("ws") && !scheme.eq_ignore_ascii_case("wss") {
+                return None;
+            }
+            let authority = rest.split(['/', '?', '#']).next()?;
+            if authority
+                .chars()
+                .any(|c| c.is_whitespace() || c.is_control())
+            {
+                return None;
+            }
+            let (host, port) = if let Some(bracketed) = authority.strip_prefix('[') {
+                let (host, tail) = bracketed.split_once(']')?;
+                let port = if tail.is_empty() {
+                    None
+                } else {
+                    Some(tail.strip_prefix(':')?)
+                };
+                (host, port)
+            } else {
+                match authority.rsplit_once(':') {
+                    Some((host, port)) => (host, Some(port)),
+                    None => (authority, None),
+                }
+            };
+            if host.is_empty() {
+                return None;
+            }
+            if let Some(port) = port
+                && (port.is_empty()
+                    || !port.bytes().all(|b| b.is_ascii_digit())
+                    || port.parse::<u16>().ok()? == 0)
+            {
+                return None;
+            }
+            Some(())
+        };
+        valid().ok_or_else(|| ADDRESS_RULE.to_owned())?;
+        Ok(Self(value.to_owned()))
+    }
+    fn as_str(&self) -> &str {
+        &self.0
+    }
+}
+
+/// Prints a single-use pairing code, with a QR code only on a terminal.
+pub fn hub_pair(
+    device: &str,
+    address: Option<&Address>,
+    connect: &mut dyn FnMut() -> io::Result<doors::hub::Hub>,
+) -> i32 {
+    let mut stdout = io::stdout();
+    let terminal = stdout.is_terminal();
+    match run(&mut stdout, device, address, terminal, connect) {
+        Ok(()) => 0,
+        Err(error) => fail(error),
+    }
+}
+fn run(
+    out: &mut dyn Write,
+    device: &str,
+    address: Option<&Address>,
+    terminal: bool,
+    connect: &mut dyn FnMut() -> io::Result<doors::hub::Hub>,
+) -> Result<(), Failure> {
+    let (stream, _) =
+        connect().map_err(|e| failed(ErrorCode::IoFailed, format!("the hub: {e}")))?;
+    let mut read = BufReader::new(stream);
+    let answer = request(
+        &mut read,
+        "c_pairing_code",
+        "pairing_code",
+        Map::from_iter([("device".to_owned(), Value::from(device))]),
+    )?;
+    let code = answer
+        .get("code")
+        .and_then(Value::as_str)
+        .ok_or_else(|| failed(ErrorCode::IoFailed, "the hub's pairing answer has no code"))?;
+    // Draw before printing: an oversized address leaves no partial output.
+    let qr = if terminal {
+        Some(draw(&qr_text(address, code))?)
+    } else {
+        None
+    };
+    let print = || -> io::Result<()> {
+        writeln!(out, "{code}")?;
+        if let Some(qr) = qr {
+            writeln!(out, "\n{qr}")?;
+        }
+        Ok(())
+    };
+    print().map_err(|e| failed(ErrorCode::IoFailed, format!("standard output: {e}")))
+}
+fn qr_text(address: Option<&Address>, code: &str) -> String {
+    address.map_or_else(
+        || code.to_owned(),
+        |address| format!("{}\n{code}", address.as_str()),
+    )
+}
+fn draw(text: &str) -> Result<String, Failure> {
+    let code = QrCode::new(text.as_bytes()).map_err(|_| {
+        failed(
+            ErrorCode::Usage,
+            "The address is too long to draw as a QR code.",
+        )
+    })?;
+    Ok(code
+        .render::<Dense1x2>()
+        .quiet_zone(true)
+        .dark_color(Dense1x2::Light)
+        .light_color(Dense1x2::Dark)
+        .build())
+}
+#[cfg(test)]
+#[path = "hub_pair_tests.rs"]
+mod tests;
