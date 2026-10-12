@@ -31,6 +31,27 @@ use fakes::git::git;
 /// "Waits and timeouts").
 const BUDGET: Duration = Duration::from_secs(40);
 
+/// A re-run child's own bound: it fires before the parent's wait, so the
+/// two no longer contradict.
+const CHILD_BUDGET: Duration = Duration::from_secs(20);
+
+/// A parent's wait for a re-run child: inside half of nextest's per-test
+/// timeout (`.config/nextest.toml`, `docs/testing.md`, "Waits and timeouts").
+const RERUN_WITHIN: Duration = Duration::from_secs(30);
+
+/// The outer wait around a test that re-runs a child: at least twice the
+/// parent's wait (`docs/testing.md`, "Waits and timeouts").
+const RERUN_OUTER: Duration = Duration::from_secs(60);
+
+/// Re-run bounds keep their margins: the child's budget is below the
+/// parent's wait, the wait stays inside half of nextest's per-test timeout,
+/// and the outer wrapper is at least twice the wait.
+const _: () = assert!(
+    CHILD_BUDGET.as_secs() < RERUN_WITHIN.as_secs()
+        && RERUN_WITHIN.as_secs() <= 30
+        && RERUN_OUTER.as_secs() >= 2 * RERUN_WITHIN.as_secs()
+);
+
 /// The plain `add` runner: `Command::output`, as the session passes a
 /// cancellable one.
 fn direct(command: &mut Command) -> io::Result<Output> {
@@ -304,32 +325,36 @@ fn isolate_with_an_interrupted_add_is_io_failed_and_creates_nothing() {
 #[test]
 fn isolate_without_git_on_path_is_usage() {
     if std::env::var("FIBER_DOORS_NO_GIT_CHILD").is_ok() {
-        fakes::within("isolate_without_git_on_path_is_usage child", BUDGET, || {
-            let repo = PathBuf::from(std::env::var("FIBER_DOORS_NO_GIT_REPO").unwrap());
-            let home = PathBuf::from(std::env::var("FIBER_DOORS_NO_GIT_HOME").unwrap());
-            let clock: Arc<dyn contract::clock::Clock> = fakes::clock::FakeClock::new();
-            let failure = expect_failed(isolate(
-                &repo,
-                &home,
-                &SessionId("s_0123456789abcdef".into()),
-                clock,
-                &direct,
-            ));
-            // `project` falls back to the launch path with no git, so the
-            // failure comes from `create`'s missing git.
-            assert_eq!(failure.code, ErrorCode::Usage);
-            assert_eq!(failure.message, "git is not installed.");
-            assert!(!home.join("projects").exists());
-        });
+        fakes::within(
+            "isolate_without_git_on_path_is_usage child",
+            CHILD_BUDGET,
+            || {
+                let repo = PathBuf::from(std::env::var("FIBER_DOORS_NO_GIT_REPO").unwrap());
+                let home = PathBuf::from(std::env::var("FIBER_DOORS_NO_GIT_HOME").unwrap());
+                let clock: Arc<dyn contract::clock::Clock> = fakes::clock::FakeClock::new();
+                let failure = expect_failed(isolate(
+                    &repo,
+                    &home,
+                    &SessionId("s_0123456789abcdef".into()),
+                    clock,
+                    &direct,
+                ));
+                // `project` falls back to the launch path with no git, so the
+                // failure comes from `create`'s missing git.
+                assert_eq!(failure.code, ErrorCode::Usage);
+                assert_eq!(failure.message, "git is not installed.");
+                assert!(!home.join("projects").exists());
+            },
+        );
         return;
     }
-    fakes::within("isolate_without_git_on_path_is_usage", BUDGET, || {
+    fakes::within("isolate_without_git_on_path_is_usage", RERUN_OUTER, || {
         let home = fakes::TempDir::new("doors-isolate-nogit-home");
         let repo = repo("doors-isolate-nogit");
         let empty = home.path().join("empty-path");
         fs::create_dir(&empty).unwrap();
         let name = module_path!().split_once("::").unwrap().1;
-        let out = fakes::rerun(
+        let out = fakes::rerun_within(
             &format!("{name}::isolate_without_git_on_path_is_usage"),
             &[
                 ("PATH", empty.to_str().unwrap()),
@@ -337,6 +362,7 @@ fn isolate_without_git_on_path_is_usage() {
                 ("FIBER_DOORS_NO_GIT_REPO", repo.path().to_str().unwrap()),
                 ("FIBER_DOORS_NO_GIT_HOME", home.path().to_str().unwrap()),
             ],
+            RERUN_WITHIN,
         );
         assert!(
             out.status.success(),
@@ -739,7 +765,7 @@ fn isolate_ignores_a_hostile_git_environment_end_to_end() {
     if std::env::var("FIBER_DOORS_HOSTILE_CHILD").is_ok() {
         fakes::within(
             "isolate_ignores_a_hostile_git_environment_end_to_end child",
-            BUDGET,
+            CHILD_BUDGET,
             || {
                 let repo = PathBuf::from(std::env::var("FIBER_DOORS_HOSTILE_REPO").unwrap());
                 let home = PathBuf::from(std::env::var("FIBER_DOORS_HOSTILE_HOME").unwrap());
@@ -783,7 +809,7 @@ fn isolate_ignores_a_hostile_git_environment_end_to_end() {
     }
     fakes::within(
         "isolate_ignores_a_hostile_git_environment_end_to_end",
-        BUDGET,
+        RERUN_OUTER,
         || {
             let home = fakes::TempDir::new("doors-isolate-hostile-home");
             let repo_dir = repo("doors-isolate-hostile");
@@ -791,7 +817,7 @@ fn isolate_ignores_a_hostile_git_environment_end_to_end() {
             let junk = home.path().join("junk-index");
             fs::write(&junk, "not an index").unwrap();
             let name = module_path!().split_once("::").unwrap().1;
-            let out = fakes::rerun(
+            let out = fakes::rerun_within(
                 &format!("{name}::isolate_ignores_a_hostile_git_environment_end_to_end"),
                 &[
                     ("GIT_COMMON_DIR", "/nonexistent"),
@@ -805,6 +831,7 @@ fn isolate_ignores_a_hostile_git_environment_end_to_end() {
                     ),
                     ("FIBER_DOORS_HOSTILE_HOME", home.path().to_str().unwrap()),
                 ],
+                RERUN_WITHIN,
             );
             assert!(
                 out.status.success(),

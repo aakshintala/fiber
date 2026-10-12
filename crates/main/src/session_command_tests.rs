@@ -17,8 +17,19 @@ use contract::ErrorCode;
 use super::report;
 use fakes::Deadline;
 
-/// How long the child may run before the test kills it and fails.
-const CHILD_DEADLINE: Duration = Duration::from_secs(10);
+/// How long the child may run before the test kills it and fails: it fires
+/// before the parent's wait, so the two no longer contradict.
+const CHILD_DEADLINE: Duration = Duration::from_secs(20);
+
+/// A parent's wait for a re-run child: inside half of nextest's per-test
+/// timeout (`.config/nextest.toml`, `docs/testing.md`, "Waits and timeouts").
+const RERUN_WITHIN: Duration = Duration::from_secs(30);
+
+/// Re-run bounds keep their margins: the child's budget is below the
+/// parent's wait, and the wait stays inside half of nextest's per-test
+/// timeout.
+const _: () =
+    assert!(CHILD_DEADLINE.as_secs() < RERUN_WITHIN.as_secs() && RERUN_WITHIN.as_secs() <= 30);
 
 /// The child's marker: set, the test installs the signals and reports a
 /// failure, with a real SIGTERM sent to its own process or with none.
@@ -38,9 +49,10 @@ fn a_failure_after_a_recorded_signal_reports_only_the_signal() {
         report_child(true);
         return;
     }
-    let out = fakes::rerun(
+    let out = fakes::rerun_within(
         &this("a_failure_after_a_recorded_signal_reports_only_the_signal"),
         &[(CHILD, "signal")],
+        RERUN_WITHIN,
     );
     assert_eq!(out.status.code(), Some(143), "the signal's code wins");
     assert!(
@@ -59,9 +71,10 @@ fn a_failure_with_no_signal_is_reported() {
         report_child(false);
         return;
     }
-    let out = fakes::rerun(
+    let out = fakes::rerun_within(
         &this("a_failure_with_no_signal_is_reported"),
         &[(CHILD, "1")],
+        RERUN_WITHIN,
     );
     assert_eq!(out.status.code(), Some(1));
     let stdout = String::from_utf8_lossy(&out.stdout);

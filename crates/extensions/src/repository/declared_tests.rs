@@ -21,6 +21,14 @@ use crate::host::exec::{GRACE, GROUP_POLL};
 
 const HOOKS_FILE: &str = ".fiber/config/hooks.json";
 
+/// A parent's wait for a re-run child: inside half of nextest's per-test
+/// timeout (`.config/nextest.toml`, `docs/testing.md`, "Waits and timeouts").
+const RERUN_WITHIN: Duration = Duration::from_secs(30);
+
+/// Re-run bounds keep their margins: the parent's wait stays inside half of
+/// nextest's per-test timeout (the child's own budget is checked beside it).
+const _: () = assert!(RERUN_WITHIN.as_secs() <= 30);
+
 /// A git repository in `<tmp>/repo`, with Fiber home beside it in
 /// `<tmp>/home`.
 pub(super) struct Repo {
@@ -482,13 +490,14 @@ fn a_stalled_ls_files_fails_at_the_git_deadline() {
     // and the run below kills it, the guard still kills the stall the dead
     // child leaves behind, by pid and never this test's own group.
     let stall_guard = fakes::Watchdog::matching(&marker);
-    let output = fakes::rerun(
+    let output = fakes::rerun_within(
         "repository::declared_tests::a_stalled_ls_files_fails_at_the_git_deadline",
         &[
             (LS_FILES_CHILD, "1"),
             ("PATH", path.as_str()),
             (STALL_MARKER, marker.as_str()),
         ],
+        RERUN_WITHIN,
     );
     let stdout = String::from_utf8_lossy(&output.stdout);
     assert!(
@@ -507,7 +516,12 @@ fn a_stalled_ls_files_fails_at_the_git_deadline() {
 /// `ls-files` stalls, and the file list fails at the git deadline.
 #[track_caller]
 fn stalled_ls_files_child() {
-    const WITHIN: Duration = fakes::MUST_SUCCEED_WITHIN;
+    // The whole child body runs under one `fakes::within` bound of
+    // CHILD_BUDGET below, so the child's bound fires before the parent's
+    // 30 s wait.
+    const CHILD_BUDGET: Duration = Duration::from_secs(20);
+    const _: () =
+        assert!(CHILD_BUDGET.as_secs() < RERUN_WITHIN.as_secs() && RERUN_WITHIN.as_secs() <= 30);
     /// One sighting round's wait for the run's answer.
     const SIGHT: Duration = Duration::from_millis(200);
     /// Rounds of waiting for the stalled process to prove it is stuck: 8
@@ -549,98 +563,100 @@ fn stalled_ls_files_child() {
         panic!("the stalled process runs");
     }
 
-    // No `git init`: the fixture stalls `ls-files` whatever the directory
-    // holds, and a real `git` here would resolve to the fixture first on
-    // `PATH`.
-    let repo = Repo::bare();
-    repo.package("pkg", "fiber.test/p", &json!({}));
-    repo.config(&json!({"repository_extensions": [{"path": "pkg"}]}));
-    let clock = FakeClock::new();
-    let worker_clock = Arc::clone(&clock);
-    let root = repo.root();
-    // The run passes no directory on the command line anymore, so the
-    // stalled process matches the marker the parent set alone.
-    let marker = std::env::var(STALL_MARKER).expect("the parent sets the stall marker");
-    let watching = marker.clone();
-    // The guard matches this stall alone by its argv: a panic anywhere
-    // below still kills it, by pid and never this child's own group.
-    let stall_guard = fakes::Watchdog::matching(&watching);
-    let (done_tx, done_rx) = mpsc::channel();
-    std::thread::Builder::new()
-        .name("stalled ls-files".into())
-        .spawn(move || {
-            let _sent = done_tx.send(declared_items(&root, &*worker_clock));
-        })
-        .unwrap();
-    // The run parks while running; an answer meanwhile (a `git` that never
-    // stalled) ends this at once instead of burning `WITHIN` in one blind
-    // wait, which the parent then wins by milliseconds and reports as its
-    // own timeout.
-    let running_until = clock.now() + GROUP_POLL;
-    let mut parked = false;
-    let mut early = None;
-    for _ in 0..STUCK_ROUNDS {
-        if clock.await_parked(running_until, SIGHT) {
-            parked = true;
-            break;
-        }
-        match done_rx.try_recv() {
-            Ok(done) => {
-                early = Some(done);
+    fakes::within("stalled_ls_files_child", CHILD_BUDGET, || {
+        // No `git init`: the fixture stalls `ls-files` whatever the directory
+        // holds, and a real `git` here would resolve to the fixture first on
+        // `PATH`.
+        let repo = Repo::bare();
+        repo.package("pkg", "fiber.test/p", &json!({}));
+        repo.config(&json!({"repository_extensions": [{"path": "pkg"}]}));
+        let clock = FakeClock::new();
+        let worker_clock = Arc::clone(&clock);
+        let root = repo.root();
+        // The run passes no directory on the command line anymore, so the
+        // stalled process matches the marker the parent set alone.
+        let marker = std::env::var(STALL_MARKER).expect("the parent sets the stall marker");
+        let watching = marker.clone();
+        // The guard matches this stall alone by its argv: a panic anywhere
+        // below still kills it, by pid and never this child's own group.
+        let stall_guard = fakes::Watchdog::matching(&watching);
+        let (done_tx, done_rx) = mpsc::channel();
+        std::thread::Builder::new()
+            .name("stalled ls-files".into())
+            .spawn(move || {
+                let _sent = done_tx.send(declared_items(&root, &*worker_clock));
+            })
+            .unwrap();
+        // The run parks while running; an answer meanwhile (a `git` that never
+        // stalled) ends this at once instead of burning `CHILD_BUDGET` in one blind
+        // wait, which the parent then wins by milliseconds and reports as its
+        // own timeout.
+        let running_until = clock.now() + GROUP_POLL;
+        let mut parked = false;
+        let mut early = None;
+        for _ in 0..STUCK_ROUNDS {
+            if clock.await_parked(running_until, SIGHT) {
+                parked = true;
                 break;
             }
-            Err(mpsc::TryRecvError::Empty) => {}
-            Err(mpsc::TryRecvError::Disconnected) => {
-                panic!("the stalled run returns")
+            match done_rx.try_recv() {
+                Ok(done) => {
+                    early = Some(done);
+                    break;
+                }
+                Err(mpsc::TryRecvError::Empty) => {}
+                Err(mpsc::TryRecvError::Disconnected) => {
+                    panic!("the stalled run returns")
+                }
             }
         }
-    }
-    assert!(
-        early.is_none(),
-        "ls-files answers before the clock moves: {early:?}"
-    );
-    assert!(parked, "ls-files parks while running");
-    // The stall proves it is stuck before the clock first moves: stopping
-    // a starter on the way up reports a timeout the stall never caused.
-    let early = await_stuck(&done_rx, &watching);
-    assert!(early.is_none(), "the stall answers only at its deadline");
-    // Past the git deadline the run stops.
-    clock.advance(GIT_DEADLINE + Duration::from_secs(1));
-    // The run parks for the grace, or answers at once when the stall dies
-    // on SIGTERM with no grace park; an answer meanwhile ends this at
-    // once, as above.
-    let kill_at = clock.now() + GRACE;
-    let answered = crate::stall::await_grace_or_answer(&clock, &done_rx, kill_at);
-    if answered.is_none() {
-        clock.advance(GRACE);
-    }
-    let answer = match answered {
-        Some(answer) => answer,
-        None => Deadline::after(WITHIN).recv(&done_rx).unwrap(),
-    };
-    let err = answer.unwrap_err();
-    assert!(
-        matches!(&err, Error::Pin { item, .. } if item == "fiber.test/p"),
-        "a stalled ls-files fails pinning its package: {err}"
-    );
-    assert!(
-        err.to_string().contains(&format!(
-            "`git ls-files` did not finish within {} s",
-            GIT_DEADLINE.as_secs()
-        )),
-        "the failure names the call and the deadline's seconds: {err}"
-    );
-    // The run kills what it stopped, so leftovers fail the test without
-    // leaking. By pid, never by group: the stall shares this child's group.
-    let leftovers = fakes::matching(&marker).unwrap();
-    for pid in &leftovers {
-        drop(fakes::kill_pid(*pid, "KILL"));
-    }
-    assert!(
-        leftovers.is_empty(),
-        "the stalled ls-files is gone: {leftovers:?}"
-    );
-    stall_guard.stand_down(WITHIN);
+        assert!(
+            early.is_none(),
+            "ls-files answers before the clock moves: {early:?}"
+        );
+        assert!(parked, "ls-files parks while running");
+        // The stall proves it is stuck before the clock first moves: stopping
+        // a starter on the way up reports a timeout the stall never caused.
+        let early = await_stuck(&done_rx, &watching);
+        assert!(early.is_none(), "the stall answers only at its deadline");
+        // Past the git deadline the run stops.
+        clock.advance(GIT_DEADLINE + Duration::from_secs(1));
+        // The run parks for the grace, or answers at once when the stall dies
+        // on SIGTERM with no grace park; an answer meanwhile ends this at
+        // once, as above.
+        let kill_at = clock.now() + GRACE;
+        let answered = crate::stall::await_grace_or_answer(&clock, &done_rx, kill_at);
+        if answered.is_none() {
+            clock.advance(GRACE);
+        }
+        let answer = match answered {
+            Some(answer) => answer,
+            None => Deadline::after(CHILD_BUDGET).recv(&done_rx).unwrap(),
+        };
+        let err = answer.unwrap_err();
+        assert!(
+            matches!(&err, Error::Pin { item, .. } if item == "fiber.test/p"),
+            "a stalled ls-files fails pinning its package: {err}"
+        );
+        assert!(
+            err.to_string().contains(&format!(
+                "`git ls-files` did not finish within {} s",
+                GIT_DEADLINE.as_secs()
+            )),
+            "the failure names the call and the deadline's seconds: {err}"
+        );
+        // The run kills what it stopped, so leftovers fail the test without
+        // leaking. By pid, never by group: the stall shares this child's group.
+        let leftovers = fakes::matching(&marker).unwrap();
+        for pid in &leftovers {
+            drop(fakes::kill_pid(*pid, "KILL"));
+        }
+        assert!(
+            leftovers.is_empty(),
+            "the stalled ls-files is gone: {leftovers:?}"
+        );
+        stall_guard.stand_down(CHILD_BUDGET);
+    });
 }
 
 #[test]

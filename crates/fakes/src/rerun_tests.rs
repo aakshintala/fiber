@@ -6,6 +6,10 @@ const HANG: &str = "FIBER_FAKES_RERUN_HANG";
 const DIR: &str = "FIBER_FAKES_RERUN_DIR";
 const PID_FILE: &str = "FIBER_FAKES_RERUN_PID_FILE";
 
+/// The default `rerun` bound stays below the standard re-run caller wait
+/// (30 s), so callers on the default need no per-child budget.
+const _: () = assert!(CHILD_WITHIN.as_secs() < 30);
+
 #[test]
 #[allow(
     clippy::print_stdout,
