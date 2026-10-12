@@ -802,4 +802,3 @@ fn cancel_passes_a_blocked_spawn_and_the_late_child_is_killed() {
     pre_a.stand_down(DEADLINE);
     late.stand_down(DEADLINE);
 }
-
