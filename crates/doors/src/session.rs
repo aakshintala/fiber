@@ -412,6 +412,12 @@ impl Session {
         Arc::clone(&self.gate.admission)
     }
 
+    /// The session's own id: its directory's name, which also names its
+    /// socket in `run/`.
+    pub fn id(&self) -> &SessionId {
+        &self.gate.session_id
+    }
+
     /// Makes `fiber_exited` the last line this process writes: no later
     /// `clients` line is emitted, no new driver shell runs, and every
     /// running one is cancelled and waited for. Called just before

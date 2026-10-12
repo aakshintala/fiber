@@ -4,8 +4,10 @@
 //! and every listed process group, MCP servers' included. A `close` with
 //! `now` takes the same path with exit code 0, through the hook wired here.
 
+use std::io;
 use std::sync::Arc;
 
+use contract::clock::Clock;
 use contract::jobs::Jobs;
 use doors::{Session, Signals};
 use r#loop::TurnCancel;
@@ -30,6 +32,15 @@ pub(crate) fn arm(signals: &Signals, reads: &Arc<crate::switch::Reads>) {
         }),
     );
 }
+/// Installs the signals with a writer for the pid-named diagnostic file:
+/// `fiber ask`, `fiber session` and the extension-case process all route
+/// their bound line through [`crate::startup_log::diag`]. A home that
+/// cannot be resolved installs with no writer, so no bound line is
+/// written, and shutdown still runs.
+pub(crate) fn install(clock: Arc<dyn Clock>) -> io::Result<Arc<Signals>> {
+    Signals::install(clock.clone(), crate::startup_log::diag(clock))
+}
+
 /// Starts the session just before its first line: the code of a signal
 /// that came while armed, or `None` with the shutdown wired, still armed
 /// until [`Signals::commit`] decides recorded versus started. A shutdown
@@ -44,6 +55,9 @@ pub(crate) fn start(
     jobs: Arc<dyn Jobs>,
     reads: Arc<crate::switch::Reads>,
 ) -> Option<i32> {
+    // The session exists now, so the bound line goes to its file: before
+    // any `attach` it would land in the pid-named one.
+    signals.attach(session.id().clone());
     let turn = Arc::clone(cancel);
     let stopper = session.stopper();
     let started = signals.start(

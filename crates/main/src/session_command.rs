@@ -40,7 +40,7 @@ pub(crate) fn run(
         ));
     }
     // As `ask`: a signal while starting exits at once.
-    let signals = match doors::Signals::install(Arc::clone(&clock)) {
+    let signals = match crate::shutdown::install(Arc::clone(&clock)) {
         Ok(signals) => signals,
         Err(e) => return ask_failed(failed(ErrorCode::IoFailed, format!("signals: {e}"))),
     };

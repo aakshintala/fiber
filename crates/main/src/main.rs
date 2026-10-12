@@ -296,7 +296,7 @@ fn ask(
 ) -> i32 {
     // First: a signal while the prompt is read exits at once
     // (`docs/invocation.md`, "Shutdown").
-    let signals = match doors::Signals::install(Arc::clone(&clock)) {
+    let signals = match crate::shutdown::install(Arc::clone(&clock)) {
         Ok(signals) => signals,
         Err(e) => return ask_failed(failed(ErrorCode::IoFailed, format!("signals: {e}"))),
     };

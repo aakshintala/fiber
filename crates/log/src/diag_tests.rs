@@ -349,6 +349,102 @@ fn a_line_racing_attach_lands_whole_in_the_file_its_order_implies() {
     assert_eq!(after["session_id"], "s_0123456789abcdef");
 }
 
+/// `for_session` writes to the session's file with its id and leaves the
+/// original writing the pid-named file with none: the complete contents
+/// of both files, byte for byte.
+#[test]
+fn for_session_writes_the_session_file_and_leaves_the_original_unattached() {
+    let home = Home::new("ld-for-session");
+    let diag = home.diag(Process::Session, Level::Info);
+    let bound = diag.for_session(&session());
+    bound.line(
+        Severity::Error,
+        None,
+        "timeout",
+        "The shutdown reached its bound.",
+    );
+    diag.line(Severity::Info, None, "first", "First.");
+    assert_eq!(
+        home.text("session-s_0123456789abcdef.log"),
+        "{\"ts\":1700000000000,\"level\":\"error\",\"process\":\"session\",\
+         \"session_id\":\"s_0123456789abcdef\",\"code\":\"timeout\",\
+         \"message\":\"The shutdown reached its bound.\"}\n"
+    );
+    assert_eq!(
+        home.text(&pid_file("session")),
+        "{\"ts\":1700000000000,\"level\":\"info\",\"process\":\"session\",\
+         \"code\":\"first\",\"message\":\"First.\"}\n"
+    );
+}
+
+/// A second writer waits while a pair holds the files lock: the pair's
+/// seam holds the lock until the test releases it, the competing writer
+/// signals it has reached the lock, and its completion stays unreceived
+/// while the pair is still parked holding the lock. After the pair
+/// returns the line lands after both lines of the pair: the whole
+/// ordered file.
+#[test]
+fn a_second_writer_waits_for_the_pair() {
+    let home = Home::new("ld-pair-waits");
+    let (seam_tx, seam_rx) = mpsc::channel::<()>();
+    let (release_tx, release_rx) = mpsc::channel::<()>();
+    let release_rx = Mutex::new(release_rx);
+    let between: Arc<dyn Fn(bool) + Send + Sync> = Arc::new(move |_held| {
+        seam_tx.send(()).unwrap();
+        let release_rx = release_rx.lock().unwrap();
+        Deadline::after(LIMIT).recv(&release_rx).unwrap();
+    });
+    let pair = home
+        .diag(Process::Hub, Level::Debug)
+        .with_peak(|| Some(7))
+        .with_between(between);
+    let worker = thread::Builder::new()
+        .name("log-test-pair".to_owned())
+        .spawn(move || {
+            pair.peak_memory_then_info("hub_stopped", "The hub stopped.");
+        })
+        .unwrap();
+    Deadline::after(LIMIT).recv(&seam_rx).unwrap();
+    let second = home.diag(Process::Hub, Level::Debug);
+    let (reached_tx, reached_rx) = mpsc::channel::<()>();
+    let (done_tx, done_rx) = mpsc::channel::<()>();
+    let writer = thread::Builder::new()
+        .name("log-test-second".to_owned())
+        .spawn(move || {
+            // The seam above proves the pair holds the files lock, so
+            // this signal says the competing write is next in line for it.
+            reached_tx.send(()).unwrap();
+            second.line(Severity::Info, None, "second", "Second.");
+            done_tx.send(()).unwrap_or(());
+        })
+        .unwrap();
+    Deadline::after(LIMIT).recv(&reached_rx).unwrap();
+    // The pair is still parked in its seam with the files lock held, so
+    // the competing write cannot have landed yet.
+    assert!(
+        FILES.try_lock().is_err(),
+        "the pair still holds the files lock while the second writer waits"
+    );
+    assert!(
+        done_rx.try_recv().is_err(),
+        "a second writer waits while the pair holds the files lock"
+    );
+    release_tx.send(()).unwrap();
+    Deadline::after(LIMIT).recv(&done_rx).unwrap();
+    writer.join().unwrap();
+    worker.join().unwrap();
+    assert_eq!(
+        home.text("hub.log"),
+        "{\"ts\":1700000000000,\"level\":\"debug\",\"process\":\"hub\",\
+         \"code\":\"peak_memory\",\"message\":\"The process's peak memory so far.\",\
+         \"data\":{\"peak_kib\":7}}\n\
+         {\"ts\":1700000000000,\"level\":\"info\",\"process\":\"hub\",\
+         \"code\":\"hub_stopped\",\"message\":\"The hub stopped.\"}\n\
+         {\"ts\":1700000000000,\"level\":\"info\",\"process\":\"hub\",\
+         \"code\":\"second\",\"message\":\"Second.\"}\n"
+    );
+}
+
 /// `peak_memory_then_info` holds one lock across both lines: the seam
 /// runs between the pair's two appends and reports whether the state
 /// lock is still held, which only the single-lock implementation can

@@ -105,9 +105,16 @@ struct Peak {
     peak_kib: u64,
 }
 
+/// One lock across every diagnostic file in the process: a pair write
+/// holds it across both appends, and every other write holds it across
+/// its own, so lines from two writers never interleave a pair. Taken
+/// before the writer's state lock, never after, so the order is one way.
+static FILES: Mutex<()> = Mutex::new(());
+
 /// One process's diagnostic writer. One lock serializes `attach`, rotation
 /// and append, so concurrent callers never lose a line to two rotations or
-/// split one across files.
+/// split one across files; [`FILES`] serializes whole writes across
+/// writers, so a pair from one writer is never split by another's line.
 pub struct Diag {
     logs: PathBuf,
     process: Process,
@@ -198,6 +205,29 @@ impl Diag {
         state.session = Some(session.clone());
     }
 
+    /// A second writer for `session` in the same `logs/` directory: the
+    /// same process, level, clock and peak reader, writing
+    /// `<kind>-<id>.log` with `session_id` from its first line. The
+    /// original keeps its own file and stays unattached. A clone carries
+    /// no rotation and no test hook.
+    pub fn for_session(&self, session: &SessionId) -> Self {
+        Self {
+            logs: self.logs.clone(),
+            process: self.process,
+            level: self.level,
+            clock: Arc::clone(&self.clock),
+            rotate_at: None,
+            peak: self.peak,
+            between: None,
+            state: Mutex::new(State {
+                file: self
+                    .logs
+                    .join(format!("{}-{}.log", self.process.name(), session.0)),
+                session: Some(session.clone()),
+            }),
+        }
+    }
+
     /// Writes one `error`, `warn` or `info` line. `session` falls back to
     /// the attached session.
     pub fn line(&self, severity: Severity, session: Option<&SessionId>, code: &str, message: &str) {
@@ -225,6 +255,7 @@ impl Diag {
             return;
         }
         if let Some(kib) = (self.peak)() {
+            let _files = lock(&FILES);
             let state = lock(&self.state);
             self.peak_line(&state, kib);
         }
@@ -234,6 +265,7 @@ impl Diag {
     /// succeeds, immediately followed by the given `info` line, under one
     /// lock: no other thread's line can come between the pair.
     pub fn peak_memory_then_info(&self, code: &str, message: &str) {
+        let _files = lock(&FILES);
         let state = lock(&self.state);
         if self.debugging()
             && let Some(kib) = (self.peak)()
@@ -259,6 +291,7 @@ impl Diag {
     ) {
         // The file and the attached id are read under the lock that also
         // covers rotation and append.
+        let _files = lock(&FILES);
         let state = lock(&self.state);
         self.append(&state, level, session, code, message, data);
     }
