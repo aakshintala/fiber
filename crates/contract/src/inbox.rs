@@ -193,3 +193,7 @@ impl fmt::Debug for Claim {
         f.write_str("Claim(..)")
     }
 }
+
+#[cfg(test)]
+#[path = "inbox_tests.rs"]
+mod tests;
