@@ -1332,6 +1332,64 @@ fn a_shutdown_signal_while_the_editor_runs_quits_with_128_plus_it() {
     crate::term::restore();
 }
 
+/// A shutdown signal while a file editor runs quits with 128 plus its
+/// number, as for the draft editor: the blocked file editor is
+/// acknowledged first, so the raise cannot land before the wait is
+/// active. Each test runs in its own process, so the raise reaches only
+/// this test.
+#[test]
+fn a_shutdown_signal_while_a_file_editor_runs_quits_with_128_plus_it() {
+    use signal_hook::consts::SIGTERM;
+    super::register_first().unwrap_or_else(|err| panic!("register: {err}"));
+    let pair = open();
+    // The watcher drains what the terminal is sent, so no write blocks.
+    let _frames = watch(&pair.main, Vec::new());
+    crate::term::setup(&pair.slave, true).unwrap_or_else(|err| panic!("setup: {err}"));
+    let tty = pair
+        .slave
+        .try_clone()
+        .unwrap_or_else(|err| panic!("dup: {err}"));
+    let (mut lp, _) = new_loop(TestBackend::new(60, 12), Some(tty));
+    // A blocking editor that acknowledges the block: no `exec`, so the
+    // script stays to name the tree the shutdown ends.
+    let dir = fakes::TempDir::new("editor");
+    let ready = fakes::children::Ready::new(dir.path());
+    let script = dir.path().join("editor.sh");
+    std::fs::write(
+        &script,
+        format!("echo $$ > {}\nsleep 30\n", ready.path().display()),
+    )
+    .unwrap_or_else(|err| panic!("script: {err}"));
+    let command = format!("/bin/sh {}", script.display());
+    let script = script.display().to_string();
+    let watchdog = fakes::Watchdog::matching(&script);
+    lp.var = Box::new(move |name| (name == "EDITOR").then(|| command.clone()));
+    let file = dir.path().join("config.json");
+    // The file editor blocks the loop: it runs on a thread with one
+    // deadline, and the raise below waits for the acknowledgement first.
+    let (done, finished) = mpsc::channel();
+    std::thread::Builder::new()
+        .name("lib-file-editor-signal".to_owned())
+        .spawn(move || match done.send(lp.open_file(&file)) {
+            Ok(()) | Err(_) => {}
+        })
+        .unwrap_or_else(|err| panic!("spawn: {err}"));
+    ready.wait(DEADLINE);
+    signal_hook::low_level::raise(SIGTERM).unwrap_or_else(|err| panic!("raise: {err}"));
+    let code = Deadline::after(DEADLINE)
+        .recv(&finished)
+        .unwrap_or_else(|err| panic!("waited {DEADLINE:?} for the file editor to quit: {err}"));
+    assert_eq!(code, Some(143));
+    // The handover took the terminal back, and the editor tree is gone.
+    assert!(!is_cooked(
+        &rustix::termios::tcgetattr(&pair.slave).unwrap_or_else(|err| panic!("attr: {err}"))
+    ));
+    let left = fakes::matching(&script).unwrap_or_else(|err| panic!("ps: {err}"));
+    assert!(left.is_empty(), "editor processes left: {left:?}");
+    watchdog.stand_down(DEADLINE);
+    crate::term::restore();
+}
+
 #[test]
 fn ctrl_g_that_cannot_take_the_terminal_back_quits_with_one() {
     let (mut lp, _) = new_loop(TestBackend::new(60, 12), None);
