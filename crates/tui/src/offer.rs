@@ -443,13 +443,14 @@ fn dim_row(text: &str) -> Row {
 }
 
 /// The swapped view's top row: `Offer` bold, `repository code` dim and
-/// `Esc returns` dim right-aligned. A click anywhere on it puts the offer
-/// aside (`docs/tui.md`, "Swapped views": a click on the top row
-/// returns). The command gives way first, then Esc, so `Offer` always
-/// draws.
+/// `Esc returns` dim right-aligned, on the `surface` tint across the full
+/// width including padding (`docs/tui.md`, "Swapped views"). A click
+/// anywhere on it puts the offer aside: a click on the top row returns.
+/// The command gives way first, then Esc, so `Offer` always draws.
 fn title_row(width: u16) -> Row {
     const COMMAND: &str = "  repository code";
     const ESC: &str = "Esc returns";
+    let tint = Style::new().bg(Role::Surface.color());
     let fit = usize::from(width);
     let mut name = " Offer".to_owned();
     while crate::format::width(&name) > fit && !name.is_empty() {
@@ -462,21 +463,38 @@ fn title_row(width: u16) -> Row {
     }
     let mut spans = Vec::new();
     if let Some(rest) = name.strip_prefix(' ') {
-        spans.push(Span::raw(" "));
+        spans.push(Span::styled(" ".to_owned(), tint));
         if !rest.is_empty() {
-            spans.push(Span::styled(rest.to_owned(), bold()));
+            spans.push(Span::styled(
+                rest.to_owned(),
+                bold().bg(Role::Surface.color()),
+            ));
         }
     }
     if !command.is_empty() {
-        spans.push(Span::styled(command.clone(), style(Role::Muted)));
+        spans.push(Span::styled(
+            command.clone(),
+            style(Role::Muted).bg(Role::Surface.color()),
+        ));
     }
     let used = crate::format::width(&name) + crate::format::width(&command);
     // Esc needs a space before it, or it stays off.
+    let mut shown = used;
     if used + 1 + ESC.len() <= fit {
-        spans.push(Span::raw(" ".repeat(fit - used - ESC.len())));
-        spans.push(Span::styled(ESC, style(Role::Muted)));
+        spans.push(Span::styled(" ".repeat(fit - used - ESC.len()), tint));
+        spans.push(Span::styled(
+            ESC,
+            style(Role::Muted).bg(Role::Surface.color()),
+        ));
+        shown = fit;
     }
-    clipped(Line::from(spans), vec![(0, width, Spot::Close)], width)
+    // The tint runs the whole row: pad what the spans leave short.
+    if shown < fit {
+        spans.push(Span::styled(" ".repeat(fit - shown), tint));
+    }
+    let mut line = Line::from(spans);
+    line.style = tint;
+    clipped(line, vec![(0, width, Spot::Close)], width)
 }
 
 /// An item's header row: `▸ ` in secondary and the row in secondary on

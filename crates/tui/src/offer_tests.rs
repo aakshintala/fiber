@@ -2,7 +2,10 @@
 
 use contract::events::OfferDecision;
 use contract::{Envelope, SessionId};
+use ratatui::buffer::Buffer;
+use ratatui::layout::Rect;
 use ratatui::style::{Modifier, Style};
+use ratatui::widgets::Widget;
 use serde_json::{Value, json};
 
 use super::{HINT, Offer, OfferKey, Spot, TUI_FILES};
@@ -112,6 +115,62 @@ fn bold() -> Style {
 /// The cursor row's style.
 fn secondary() -> Style {
     style(Role::Secondary)
+}
+
+/// The swapped views' top-row tint.
+fn surface() -> Style {
+    Style::new().bg(Role::Surface.color())
+}
+
+/// Bold on the `surface` tint, as the top row's name draws.
+fn bold_on_surface() -> Style {
+    Style::new()
+        .add_modifier(Modifier::BOLD)
+        .bg(Role::Surface.color())
+}
+
+/// Dim on the `surface` tint, as the top row's command and Esc draw.
+fn dim_on_surface() -> Style {
+    style(Role::Muted).bg(Role::Surface.color())
+}
+
+/// The rows painted into a buffer `width` wide, one row per wrapped row,
+/// as `crate::view::offer` draws them: clipped rows set their line, the
+/// rest render as wrapped paragraphs.
+fn buffer(offer: &Offer, width: u16) -> Buffer {
+    let (rows, _) = offer.rows(width).expect("open");
+    let height: usize = rows.iter().map(|row| row.height(width)).sum();
+    let mut buf = Buffer::empty(Rect::new(
+        0,
+        0,
+        width,
+        u16::try_from(height).unwrap_or(u16::MAX),
+    ));
+    let mut y = 0u16;
+    for row in &rows {
+        if row.clip {
+            buf.set_line(0, y, &row.line, width);
+            y = y.saturating_add(1);
+        } else {
+            let count = u16::try_from(row.height(width)).unwrap_or(u16::MAX);
+            crate::view::paragraph(row.line.clone())
+                .render(Rect::new(0, y, width, count), &mut buf);
+            y = y.saturating_add(count);
+        }
+    }
+    buf
+}
+
+/// A buffer row's text, trailing spaces kept.
+fn row_text(buf: &Buffer, y: u16, width: u16) -> String {
+    (0..width)
+        .map(|x| buf[(x, y)].symbol().to_owned())
+        .collect::<String>()
+}
+
+/// A count as a screen coordinate.
+fn col(value: usize) -> u16 {
+    u16::try_from(value).unwrap_or(u16::MAX)
 }
 
 /// Presses `key` at 80 columns and `height` rows.
@@ -525,11 +584,11 @@ fn the_top_row_names_the_offer_with_its_command_dim() {
     assert_eq!(
         spans(&offer, 80)[0],
         [
-            (" ".to_owned(), Style::new()),
-            ("Offer".to_owned(), bold()),
-            ("  repository code".to_owned(), dim()),
-            (pad, Style::new()),
-            ("Esc returns".to_owned(), dim()),
+            (" ".to_owned(), surface()),
+            ("Offer".to_owned(), bold_on_surface()),
+            ("  repository code".to_owned(), dim_on_surface()),
+            (pad, surface()),
+            ("Esc returns".to_owned(), dim_on_surface()),
         ]
     );
     // A click anywhere on the top row puts the offer aside.
@@ -837,4 +896,147 @@ fn the_send_row_marks_the_cursor_in_secondary() {
             (" Send · 0 approve, 1 skip, 0 never".to_owned(), secondary()),
         ]
     );
+}
+
+#[test]
+fn the_header_row_carries_the_surface_tint_across_its_width() {
+    let offer = holding(1);
+    let buf = buffer(&offer, 80);
+    assert_eq!(
+        row_text(&buf, 0, 80),
+        format!(
+            " Offer  repository code{}Esc returns",
+            " ".repeat(80 - 6 - 17 - 11)
+        )
+    );
+    // The tint runs the whole row, padding included.
+    for x in 0..80u16 {
+        assert_eq!(buf[(x, 0)].bg, Role::Surface.color(), "no tint at {x}");
+    }
+    // The name is bold from column 1; the command follows it, dim.
+    for (i, ch) in "Offer".chars().enumerate() {
+        let cell = &buf[(col(1 + i), 0)];
+        assert_eq!(cell.symbol(), ch.to_string().as_str());
+        assert!(cell.modifier.contains(Modifier::BOLD), "not bold at {i}");
+    }
+    for (i, ch) in "  repository code".chars().enumerate() {
+        let cell = &buf[(col(6 + i), 0)];
+        assert_eq!(cell.symbol(), ch.to_string().as_str());
+        assert_eq!(cell.fg, Role::Muted.color(), "not dim at {i}");
+    }
+    // "Esc returns" ends the row, dim.
+    let end = row_text(&buf, 0, 80);
+    let at = col(end.find("Esc returns").expect("Esc draws"));
+    for (i, ch) in "Esc returns".chars().enumerate() {
+        let cell = &buf[(at.saturating_add(col(i)), 0)];
+        assert_eq!(cell.symbol(), ch.to_string().as_str());
+        assert_eq!(cell.fg, Role::Muted.color(), "Esc not dim at {i}");
+    }
+}
+
+#[test]
+fn the_selected_item_row_draws_in_secondary_on_the_buffer() {
+    let offer = holding(2);
+    let buf = buffer(&offer, 80);
+    assert!(row_text(&buf, 2, 80).starts_with("▸ MCP server a"));
+    for x in 0..14u16 {
+        assert_eq!(
+            buf[(x, 2)].fg,
+            Role::Secondary.color(),
+            "not secondary at {x}"
+        );
+    }
+    assert!(row_text(&buf, 6, 80).starts_with("  MCP server b"));
+    for x in 0..14u16 {
+        assert_ne!(
+            buf[(x, 6)].fg,
+            Role::Secondary.color(),
+            "unselected row in secondary at {x}"
+        );
+    }
+}
+
+#[test]
+fn the_choices_row_marks_the_chosen_answer_on_the_buffer() {
+    let offer = holding(1);
+    let buf = buffer(&offer, 80);
+    let row = row_text(&buf, 4, 80);
+    assert!(row.contains("(•) skip for this session"), "{row}");
+    let mark = col(row.find("(•)").expect("chosen mark draws"));
+    for x in mark..mark.saturating_add(3) {
+        assert_eq!(
+            buf[(x, 4)].fg,
+            Role::Secondary.color(),
+            "mark not secondary at {x}"
+        );
+    }
+    let label = col(row.find("skip for this session").expect("label draws"));
+    assert!(
+        buf[(label, 4)].modifier.contains(Modifier::BOLD),
+        "chosen label not bold"
+    );
+    let unchosen = col(row.find("( ) approve").expect("unchosen mark draws"));
+    for x in unchosen..unchosen.saturating_add(3) {
+        assert_eq!(
+            buf[(x, 4)].fg,
+            Role::Muted.color(),
+            "unchosen mark not dim at {x}"
+        );
+    }
+    assert!(
+        !buf[(unchosen.saturating_add(4), 4)]
+            .modifier
+            .contains(Modifier::BOLD),
+        "unchosen label bold"
+    );
+}
+
+#[test]
+fn the_diff_colours_draw_on_the_buffer() {
+    let offer = with_items(json!([item(
+        "extension",
+        "lint",
+        Some("1.0.0"),
+        "name: lint",
+        Some("@@ -1 +1 @@\n-old()\n+new()")
+    )]));
+    let buf = buffer(&offer, 80);
+    let height = buf.area.height;
+    let marker = col((0..height)
+        .map(|y| row_text(&buf, y, 80))
+        .position(|row| row.contains("the declaration changed"))
+        .expect("marker draws"));
+    let cell = &buf[(2, marker)];
+    assert_eq!(cell.fg, Role::Muted.color(), "marker not dim");
+    let hunk = marker.saturating_add(1);
+    assert!(row_text(&buf, hunk, 80).contains("@@ -1 +1 @@"));
+    assert_eq!(buf[(4, hunk)].fg, Role::Muted.color(), "@@ not dim");
+    let removed = hunk.saturating_add(1);
+    assert!(row_text(&buf, removed, 80).contains("-old()"));
+    assert_eq!(buf[(4, removed)].fg, Role::Removed.color(), "- not removed");
+    let added = hunk.saturating_add(2);
+    assert!(row_text(&buf, added, 80).contains("+new()"));
+    assert_eq!(buf[(4, added)].fg, Role::Added.color(), "+ not added");
+}
+
+#[test]
+fn the_footer_rows_draw_dim_on_the_buffer() {
+    let offer = holding(1);
+    let buf = buffer(&offer, 80);
+    let height = buf.area.height;
+    let rows: Vec<String> = (0..height).map(|y| row_text(&buf, y, 80)).collect();
+    let files = rows
+        .iter()
+        .position(|row| row.trim_end() == TUI_FILES)
+        .expect("files draw");
+    assert_eq!(
+        buf[(0, col(files))].fg,
+        Role::Muted.color(),
+        "files not dim"
+    );
+    let hint = rows
+        .iter()
+        .position(|row| row.trim_end() == HINT)
+        .expect("hint draws");
+    assert_eq!(buf[(0, col(hint))].fg, Role::Muted.color(), "hint not dim");
 }
