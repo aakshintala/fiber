@@ -523,6 +523,7 @@ fn the_selection_request_after_the_cut_sends_no_previous_end() {
     let reviewer = driven.reviewer(vec![
         fakes::Scripted::text("allow"),
         fakes::Scripted::text("1"),
+        fakes::Scripted::text("check"),
         fakes::Scripted::text("allow"),
     ]);
     driven.prompt("never push to main");
@@ -532,7 +533,7 @@ fn the_selection_request_after_the_cut_sends_no_previous_end() {
     driven.prompt("now run it");
     assert_eq!(driven.turn(), Some(TurnOutcome::Completed));
     let requests = reviewer.requests();
-    assert_eq!(requests.len(), 3);
+    assert_eq!(requests.len(), 4);
     // The first review and the first review after the handoff both send
     // the whole input: no stale prefix end survives the cut.
     assert_eq!(requests[0].previous_end, None);
@@ -547,4 +548,11 @@ fn the_selection_request_after_the_cut_sends_no_previous_end() {
         "{selecting:?}"
     );
     assert_eq!(requests[2].previous_end, None);
+    // A second review in the same context reuses its prefix: only a
+    // cut, a resume or a model switch clears the cursor.
+    assert!(
+        requests[3].previous_end.is_some(),
+        "{:?}",
+        requests[3].previous_end
+    );
 }

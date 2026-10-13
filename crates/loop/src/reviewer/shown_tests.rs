@@ -10,12 +10,12 @@
 )]
 
 use contract::events::{
-    Event, HandoffCompleted, InputItem, KeptMessage, Note, Outcome, ReviewerKept, SteeringApplied,
-    ToolCallRequested, TurnStarted,
+    Event, HandoffCompleted, InputItem, KeptMessage, Note, Outcome, ReviewerKept, SessionStarted,
+    SteeringApplied, ToolCallRequested, TurnStarted, Variables, VariablesSource,
 };
 use contract::provider::Input;
 use contract::shapes::{ContentPart, Failure, Origin, Sender};
-use contract::{ActionId, CommandId, ErrorCode, Seq};
+use contract::{ActionId, CommandId, ErrorCode, Seq, SessionId, TurnId};
 use serde_json::json;
 
 use super::{Reviewed, Shown, render_reviewed};
@@ -613,4 +613,199 @@ fn lines_without_a_durable_identity_add_nothing() {
         Some(Seq(40)),
     );
     assert!(reviewed.is_empty());
+}
+
+#[test]
+fn successive_completed_handoffs_drop_each_cut_before_them() {
+    let mut reviewed = Vec::new();
+    busy_turn(&mut reviewed);
+    render_reviewed(&mut reviewed, &handoff_completed(), None, Some(Seq(40)));
+    render_reviewed(
+        &mut reviewed,
+        &Event::TurnStarted(TurnStarted {
+            input: vec![message("keep the tests fast", driver())],
+        }),
+        None,
+        Some(Seq(51)),
+    );
+    render_reviewed(
+        &mut reviewed,
+        &Event::ToolCallRequested(call("shell")),
+        Some(&ActionId("a_3".into())),
+        Some(Seq(52)),
+    );
+    render_reviewed(&mut reviewed, &handoff_completed(), None, Some(Seq(60)));
+    assert!(
+        reviewed
+            .iter()
+            .all(|item| matches!(item.shown, Shown::Person(_))),
+        "no call from either cut stays: {reviewed:?}"
+    );
+    assert_eq!(
+        person_text(&reviewed),
+        [
+            "The person: never push to main",
+            "The person: say hi",
+            "The person: keep the tests fast"
+        ],
+    );
+}
+
+#[test]
+fn a_call_after_the_cut_stays_and_a_call_before_it_goes() {
+    let mut reviewed = Vec::new();
+    render_reviewed(
+        &mut reviewed,
+        &Event::TurnStarted(TurnStarted {
+            input: vec![message("never push to main", driver())],
+        }),
+        None,
+        Some(Seq(12)),
+    );
+    render_reviewed(
+        &mut reviewed,
+        &Event::ToolCallRequested(call("shell")),
+        Some(&ActionId("a_1".into())),
+        Some(Seq(13)),
+    );
+    render_reviewed(&mut reviewed, &handoff_completed(), None, Some(Seq(40)));
+    let after = ActionId("a_2".into());
+    render_reviewed(
+        &mut reviewed,
+        &Event::ToolCallRequested(call("shell")),
+        Some(&after),
+        Some(Seq(41)),
+    );
+    assert_eq!(
+        reviewed,
+        vec![
+            Reviewed {
+                shown: Shown::Person(kept(12, 0)),
+                input: Input::User {
+                    text: "The person: never push to main".into(),
+                    images: Vec::new(),
+                },
+            },
+            Reviewed {
+                shown: Shown::Call(after),
+                input: Input::User {
+                    text: r#"Tool call: {"tool":"shell","arguments":{"city":"Paris"}}"#.into(),
+                    images: Vec::new(),
+                },
+            },
+        ],
+    );
+}
+
+#[test]
+fn the_cut_releases_the_calls_allocation() {
+    let mut reviewed = Vec::with_capacity(1024);
+    render_reviewed(
+        &mut reviewed,
+        &Event::TurnStarted(TurnStarted {
+            input: vec![message("never push to main", driver())],
+        }),
+        None,
+        Some(Seq(12)),
+    );
+    render_reviewed(
+        &mut reviewed,
+        &Event::TurnStarted(TurnStarted {
+            input: vec![message("say hi", driver())],
+        }),
+        None,
+        Some(Seq(13)),
+    );
+    for n in 0..300u64 {
+        render_reviewed(
+            &mut reviewed,
+            &Event::ToolCallRequested(call("shell")),
+            Some(&ActionId(format!("a_{n}"))),
+            Some(Seq(14 + n)),
+        );
+    }
+    let before = reviewed.capacity();
+    assert_eq!(reviewed.len(), 302);
+    render_reviewed(&mut reviewed, &handoff_completed(), None, Some(Seq(400)));
+    // Length alone would still hold the peak's pages: the allocation
+    // itself must fall with the dropped calls.
+    assert_eq!(reviewed.len(), 2);
+    assert!(
+        reviewed.capacity() < before,
+        "capacity {} stays at the {}-call peak {before}",
+        reviewed.capacity(),
+        300,
+    );
+}
+
+#[test]
+fn the_live_fold_and_the_history_fold_agree_at_each_side_of_the_cut() {
+    let root = fakes::TempDir::new("fiber-reviewed-fold");
+    let log = log::Log::create(
+        root.path(),
+        SessionId("s_1".into()),
+        fakes::clock::FakeClock::new(),
+    )
+    .unwrap();
+    let dir = root.path().join("s_1");
+    let turn = TurnId("t_1".into());
+    let after = TurnId("t_2".into());
+    let started = Event::SessionStarted(SessionStarted {
+        workspace: "/w".into(),
+        variables: Variables {
+            path: String::new(),
+            names: Vec::new(),
+            source: VariablesSource::Inherited,
+        },
+        parent: None,
+        forked_from: None,
+        rewind: None,
+        worktree: None,
+    });
+    log.append(&started, None, None).unwrap();
+    log.append(
+        &Event::TurnStarted(TurnStarted {
+            input: vec![message("never push to main", driver())],
+        }),
+        Some(turn.clone()),
+        None,
+    )
+    .unwrap();
+    log.append(
+        &Event::ToolCallRequested(call("shell")),
+        Some(turn.clone()),
+        Some(ActionId("a_1".into())),
+    )
+    .unwrap();
+    log.append(&handoff_completed(), Some(turn), None).unwrap();
+    log.append(
+        &Event::TurnStarted(TurnStarted {
+            input: vec![message("now run it", driver())],
+        }),
+        Some(after.clone()),
+        None,
+    )
+    .unwrap();
+    log.append(
+        &Event::ToolCallRequested(call("shell")),
+        Some(after),
+        Some(ActionId("a_2".into())),
+    )
+    .unwrap();
+    // Before the cut, at it and after it, folding the log to that point
+    // reads the same reviewer input as rendering every line to it: the
+    // live path and resume share one fold, never two implementations.
+    for point in [2, 3, 5] {
+        let folded = crate::history::forked(&dir, Seq(point)).unwrap();
+        let mut live = Vec::new();
+        for line in log::read(&dir).unwrap() {
+            if line.seq.is_some_and(|seq| seq.0 > point) {
+                continue;
+            }
+            if let Some(event) = Event::from_envelope(&line).unwrap() {
+                render_reviewed(&mut live, &event, line.action_id.as_ref(), line.seq);
+            }
+        }
+        assert_eq!(folded.reviewed, live, "at seq {point}");
+    }
 }
