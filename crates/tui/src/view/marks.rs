@@ -30,9 +30,12 @@ const CURRENT: Style = Style::new()
     .add_modifier(Modifier::REVERSED)
     .add_modifier(Modifier::BOLD);
 
-/// A link's underline: markdown links already draw underlined, and bare
-/// URLs gain it here (`docs/tui.md`, "Links").
-const LINK: Style = Style::new().add_modifier(Modifier::UNDERLINED);
+/// A link's look: the accent colour, underlined (`docs/tui.md`,
+/// "Links"). Markdown links already draw it in the reply; bare URLs
+/// gain it here.
+const LINK: Style = Style::new()
+    .fg(Role::Accent.color())
+    .add_modifier(Modifier::UNDERLINED);
 
 /// Paints the search bar on the conversation's top-right row, then the
 /// selection's cells, then pushes one click target per row each visible
