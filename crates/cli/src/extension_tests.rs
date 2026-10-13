@@ -632,9 +632,11 @@ fn run_install(
     (String::from_utf8(err).unwrap(), got)
 }
 
-/// Runs `update_all`: its stderr, and its exit code or failure.
+/// Runs `update_all` against `origin`: its stderr, and its exit code or
+/// failure.
 fn run_update_all(
     home: &Path,
+    origin: &Origin,
     terminal: bool,
     input: &mut dyn BufRead,
 ) -> (String, Result<i32, Failure>) {
@@ -643,7 +645,7 @@ fn run_update_all(
     let got = update_all(
         home,
         FIBER_VERSION,
-        &Origin::github(),
+        origin,
         &*clock,
         Io {
             terminal,
@@ -956,7 +958,7 @@ fn update_all_updates_each_requested_extension_in_order() {
         ),
     );
     let mut unread = Unread;
-    let (err, got) = run_update_all(&setup.home(), false, &mut unread);
+    let (err, got) = run_update_all(&setup.home(), &Origin::github(), false, &mut unread);
     assert_eq!(got.unwrap(), 0);
     assert_eq!(
         err,
@@ -965,37 +967,64 @@ fn update_all_updates_each_requested_extension_in_order() {
 }
 
 #[test]
-fn update_all_skips_extensions_nobody_asked_for() {
+fn update_all_moves_a_dependency_and_leaves_it_unrequested() {
     let setup = Setup::new();
-    install_fixture(
-        &setup.home(),
-        &setup.source(
-            "aaa",
-            &manifest(NAME_A),
-            &[provider("p", &["http://127.0.0.1:1/v1"])],
-        ),
+    // `bbb` lives in a git repository with one tag; `aaa` is a local
+    // extension depending on it.
+    let dep_source = setup.source(
+        "bbb",
+        &manifest(NAME_B),
+        &[provider("p", &["http://127.0.0.1:1/v1"])],
     );
-    install_fixture(
-        &setup.home(),
-        &setup.source(
-            "bbb",
-            &manifest(NAME_B),
-            &[provider("p", &["http://127.0.0.1:1/v1"])],
-        ),
-    );
-    let record = setup
-        .home()
-        .join("extensions")
-        .join(SLUG_B)
-        .join(".fiber.json");
-    let mut json: serde_json::Value =
-        serde_json::from_str(&fs::read_to_string(&record).unwrap()).unwrap();
-    json["requested"] = serde_json::Value::Bool(false);
-    fs::write(&record, json.to_string()).unwrap();
+    for args in [
+        vec!["init", "--quiet"],
+        vec!["add", "."],
+        vec!["commit", "--quiet", "-m", "release"],
+        vec!["tag", "v1.0.0"],
+    ] {
+        fakes::git::git(&dep_source, &args);
+    }
+    let origin = Origin::new("git", {
+        let dep_source = dep_source.clone();
+        move |_| format!("file://{}", dep_source.display())
+    });
+    let mut root = manifest(NAME_A);
+    root["depends"] = serde_json::json!({NAME_B: "1.0"});
+    let root_source = setup.source("aaa", &root, &[provider("p", &["http://127.0.0.1:1/v1"])]);
     let mut unread = Unread;
-    let (err, got) = run_update_all(&setup.home(), false, &mut unread);
+    let (err, got) = run_install(
+        &setup.home(),
+        Request::Path(root_source.clone()),
+        &origin,
+        false,
+        &mut unread,
+    );
+    assert_eq!(got.unwrap(), 0, "{err}");
+    // A newer tag arrives after the install.
+    fs::write(dep_source.join("notes.txt"), "new").unwrap();
+    for args in [
+        vec!["add", "."],
+        vec!["commit", "--quiet", "-m", "release"],
+        vec!["tag", "v1.1.0"],
+    ] {
+        fakes::git::git(&dep_source, &args);
+    }
+    let mut unread = Unread;
+    let (err, got) = run_update_all(&setup.home(), &origin, false, &mut unread);
     assert_eq!(got.unwrap(), 0);
-    assert_eq!(err, format!("fiber: installed {NAME_A}\n"));
+    assert_eq!(
+        err,
+        format!("fiber: installed {NAME_A}\nfiber: installed {NAME_B}\n")
+    );
+    let listed = extensions::list(&setup.home(), &fakes::clock::SystemClock).unwrap();
+    assert!(listed.damaged.is_empty());
+    let dep = listed.installed.iter().find(|i| i.name == NAME_B).unwrap();
+    assert_eq!(dep.version, "v1.1.0");
+    assert!(!dep.requested, "an update-all dependency stays unrequested");
+    assert_eq!(dep.floor.as_deref(), Some("v1.1.0"));
+    let root = listed.installed.iter().find(|i| i.name == NAME_A).unwrap();
+    assert!(root.requested);
+    assert_eq!(root.floor, None);
 }
 
 #[test]
@@ -1018,7 +1047,7 @@ fn update_all_stops_at_the_first_declined_install() {
         ),
     );
     let mut input = io::Cursor::new(b"n\n".to_vec());
-    let (err, got) = run_update_all(&setup.home(), true, &mut input);
+    let (err, got) = run_update_all(&setup.home(), &Origin::github(), true, &mut input);
     assert_eq!(got.unwrap(), 1);
     assert_eq!(err.matches("Go ahead?").count(), 1, "{err}");
     assert!(err.ends_with("fiber: nothing was installed.\n"), "{err}");
@@ -1044,7 +1073,7 @@ fn update_all_stops_at_the_first_failed_plan() {
     );
     fs::remove_dir_all(&source).unwrap();
     let mut unread = Unread;
-    let (err, got) = run_update_all(&setup.home(), false, &mut unread);
+    let (err, got) = run_update_all(&setup.home(), &Origin::github(), false, &mut unread);
     assert!(got.is_err(), "a missing source fails the plan");
     assert!(!err.contains(&format!("installed {NAME_B}")), "{err}");
 }
@@ -1062,7 +1091,7 @@ fn update_all_names_each_damaged_directory_once() {
         ),
     );
     let mut unread = Unread;
-    let (err, got) = run_update_all(&setup.home(), false, &mut unread);
+    let (err, got) = run_update_all(&setup.home(), &Origin::github(), false, &mut unread);
     assert_eq!(got.unwrap(), 0);
     assert_eq!(
         err,
@@ -1074,7 +1103,7 @@ fn update_all_names_each_damaged_directory_once() {
 fn update_all_on_an_empty_home_is_zero_and_silent() {
     let setup = Setup::new();
     let mut unread = Unread;
-    let (err, got) = run_update_all(&setup.home(), false, &mut unread);
+    let (err, got) = run_update_all(&setup.home(), &Origin::github(), false, &mut unread);
     assert_eq!(got.unwrap(), 0);
     assert_eq!(err, "");
 }
