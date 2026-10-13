@@ -8,8 +8,8 @@ use std::os::unix::fs::OpenOptionsExt;
 use std::os::unix::process::ExitStatusExt;
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command};
-use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+use std::sync::{Arc, OnceLock};
 use std::time::Duration;
 
 use contract::clock::Clock;
@@ -105,7 +105,9 @@ fn run_in(
         return failed(err);
     }
     drop(file);
-    let mut forwarding = catch_for_editor();
+    // Registered once per process, before the spawn, so an acknowledged
+    // editor implies installed handlers.
+    forwarded();
     // `sh` splits the command, so a value with arguments such as `code -w`
     // works; the path goes in as `$1`, never through the split. The shell
     // runs in Fiber's group, as on main: the wait signals the shell pid
@@ -119,13 +121,11 @@ fn run_in(
     {
         Ok(child) => child,
         Err(err) => {
-            forwarding.unregister();
             return Outcome::Done(Err(format!("Could not start the editor: {err}")));
         }
     };
     let pid = child.id();
-    let waited = wait(&mut child, clock, pid, &forwarding);
-    forwarding.unregister();
+    let waited = wait(&mut child, clock, pid);
     let status = match waited {
         Ok(Waited::Exited(status)) => status,
         Ok(Waited::Stopped(signal)) => {
@@ -168,7 +168,9 @@ pub(crate) fn open(
     path: &Path,
     clock: &Arc<dyn Clock>,
 ) -> Outcome<Result<(), String>> {
-    let mut forwarding = catch_for_editor();
+    // Registered once per process, before the spawn, so an acknowledged
+    // editor implies installed handlers.
+    forwarded();
     // As in [`run_in`]: the shell runs in Fiber's group, and the wait
     // signals the shell pid alone.
     let mut child = match Command::new("/bin/sh")
@@ -180,13 +182,11 @@ pub(crate) fn open(
     {
         Ok(child) => child,
         Err(err) => {
-            forwarding.unregister();
             return Outcome::Done(Err(format!("Could not start the editor: {err}")));
         }
     };
     let pid = child.id();
-    let waited = wait(&mut child, clock, pid, &forwarding);
-    forwarding.unregister();
+    let waited = wait(&mut child, clock, pid);
     let status = match waited {
         Ok(Waited::Exited(status)) => status,
         Ok(Waited::Stopped(signal)) => {
@@ -226,12 +226,12 @@ enum Waited {
 /// or Ctrl+\ typed while the editor has the terminal in cooked mode still
 /// ends only the editor, and its death by one reads back as its signal,
 /// as before.
-fn wait(
-    child: &mut Child,
-    clock: &Arc<dyn Clock>,
-    pid: u32,
-    forward: &Forwarding,
-) -> io::Result<Waited> {
+fn wait(child: &mut Child, clock: &Arc<dyn Clock>, pid: u32) -> io::Result<Waited> {
+    let forward = forwarded();
+    forward.int.swap(false, Ordering::SeqCst);
+    forward.quit.swap(false, Ordering::SeqCst);
+    forward.term.swap(false, Ordering::SeqCst);
+    forward.hup.swap(false, Ordering::SeqCst);
     loop {
         if let Some(status) = child.try_wait()? {
             return Ok(Waited::Exited(status));
@@ -277,53 +277,46 @@ fn wait(
     }
 }
 
-/// This run's signal forwarding: the flags [`wait`] polls and the
-/// registrations, unregistered by [`Forwarding::unregister`] when the run
-/// ends. Dropping the ids never unregisters them, so without the call
-/// every run would leak a callback and a flag.
-struct Forwarding {
+/// The process's signal forwarding: the flags [`wait`] polls. Registered
+/// once and never unregistered, so there is nothing to clean up and
+/// nothing to leak. Each run clears the flags when its wait starts, so a
+/// signal from before the run never stops it.
+struct Forwarded {
     int: Arc<AtomicBool>,
     quit: Arc<AtomicBool>,
     term: Arc<AtomicBool>,
     hup: Arc<AtomicBool>,
-    held: Vec<signal_hook::SigId>,
 }
 
-impl Forwarding {
-    /// Unregisters every held handler.
-    fn unregister(&mut self) {
-        for id in self.held.drain(..) {
-            signal_hook::low_level::unregister(id);
-        }
-    }
-}
+/// The process's forwarding, registered on first use.
+static FORWARDED: OnceLock<Forwarded> = OnceLock::new();
 
-/// Registers this run's forwarding: SIGINT and SIGQUIT to the editor pid,
-/// and the shutdown signals for [`wait`]'s own end. The caller unregisters
-/// the returned [`Forwarding`] once the run ends. Registered before
-/// the spawn, so an acknowledged editor implies installed handlers: an
-/// interrupt raised after the acknowledgement is always forwarded, and a
-/// shutdown signal always ends the wait, never missed.
-fn catch_for_editor() -> Forwarding {
-    let mut held = Vec::new();
-    let mut flag = |signal| {
-        let caught = Arc::new(AtomicBool::new(false));
-        if let Ok(id) = signal_hook::flag::register(signal, Arc::clone(&caught)) {
-            held.push(id);
+/// Registers the process's forwarding on first use, before the spawn, so
+/// an acknowledged editor implies installed handlers: an interrupt raised
+/// after the acknowledgement is always forwarded, and a shutdown signal
+/// always ends the wait, never missed. SIGINT and SIGQUIT forward to the
+/// editor pid, and the shutdown signals end [`wait`] itself. A failed
+/// registration leaves its flag unset, as before.
+fn forwarded() -> &'static Forwarded {
+    FORWARDED.get_or_init(|| {
+        let flag = |signal| {
+            let caught = Arc::new(AtomicBool::new(false));
+            match signal_hook::flag::register(signal, Arc::clone(&caught)) {
+                Ok(_) | Err(_) => {}
+            }
+            caught
+        };
+        let int = flag(SIGINT);
+        let quit = flag(SIGQUIT);
+        let term = flag(SIGTERM);
+        let hup = flag(SIGHUP);
+        Forwarded {
+            int,
+            quit,
+            term,
+            hup,
         }
-        caught
-    };
-    let int = flag(SIGINT);
-    let quit = flag(SIGQUIT);
-    let term = flag(SIGTERM);
-    let hup = flag(SIGHUP);
-    Forwarding {
-        int,
-        quit,
-        term,
-        hup,
-        held,
-    }
+    })
 }
 
 /// The temporary file the editor opens, removed when dropped.
