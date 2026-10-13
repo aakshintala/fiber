@@ -131,6 +131,7 @@ only that crate, in KiB; the empty program is 323 KiB.
 | ratatui | drawing the terminal UI | 1,084 | 1,344 | 1,376 | 41 | 469 |
 | crossterm | terminal input, raw mode and output | ~0 | 256 | ~0 | 28 | 443 |
 | mlua | the extension runtime, Lua 5.4 vendored | 912 | 704 | ~0 | 23 | 785 |
+| tree-sitter, tree-sitter-bash | the shell tool's command recogniser: it parses a command and allows only listed node kinds, so anything else fails closed to `executes` | 1,324 | 1,412 | ~0 | 10 | 1,746 |
 | clap | the command line | 452 | 448 | ~0 | 17 | 782 |
 | clap_complete | the shell completion scripts `fiber completion` prints (`docs/invocation.md`, "Commands and flags") | 796 | 1,020 | 1,136 | 18 | 967 |
 | thiserror | error types in library crates | ~0 | ~0 | ~0 | 6 | 325 |
@@ -333,7 +334,6 @@ rusqlite carries SQLite's C source.
 | Server-sent events parsing | a line protocol of a few dozen lines |
 | MCP's JSON-RPC and both transports | rmcp needs tokio |
 | Checking tool arguments against their input schema | see below |
-| The shell tool's command recogniser | it must fail closed, not parse all of shell |
 | BM25 for `tool_search` | one scoring formula over a few hundred short documents |
 | Comparing extension version tags | a `v1.4.0` tag is three numbers compared in order |
 | The OAuth callback listener | one request on a `std::net::TcpListener` |
@@ -372,10 +372,13 @@ crates, and cargo-deny fails it out of the box on two unmaintained crates,
 yaml-rust and bincode. arborium 2.18, tree-sitter grammars behind a feature
 per language, passes cargo-deny with 33 crates, but the grammars for the 18
 languages the terminal highlights add 25,500 KiB to the stripped binary on
-macOS arm64, about 9,500 KiB of it SQL's and 5,300 KiB C++'s. That alone is
-over the 24 MiB cap, on a binary already 12.3 MiB. Highlighting one block in
-each of three languages peaks 6,832 KiB over an empty program (macOS arm64
-footprint, October 6, 2026). tree-sitter-highlight with the same grammar
+macOS arm64, about 9,500 KiB of it SQL's and 5,300 KiB C++'s. Each grammar
+costs memory the first time a block in its language is highlighted, and
+highlighting more blocks adds almost nothing: on Linux x86_64, one Rust block
+adds 7,636 KiB and 100 blocks 7,524 KiB, one SQL block 25,780 KiB, one block
+in each of Rust, Python and JavaScript 8,480 KiB, and one in each of the 18
+languages 44,252 KiB, against the terminal's idle budget of 9,944 KiB in
+`docs/performance.md` (October 13, 2026, `research/shell-parser-cost/`). tree-sitter-highlight with the same grammar
 crates compiles the same parse tables.
 
 The lexer's tables are static data, so a reply with no code loads nothing for
@@ -384,10 +387,12 @@ Python and JavaScript draws in 1.9 ms and peaks at 1,632 KiB of footprint,
 against 1.6 ms and 1,344 KiB for the same reply without the blocks: the whole
 process, macOS arm64, October 6, 2026.
 
-The shell tool's recogniser splits a command on `&&`, `||`, `;` and `|` and
-reads each part as plain words. Anything it cannot read plainly makes the
-call declare `executes`, as `docs/tools.md` requires. A recogniser that fails
-closed does not need a full parser.
+tree-sitter-bash parses every command into a syntax tree; the recogniser
+accepts only node kinds on its list, and an `ERROR` or `MISSING` node, like
+any kind not listed, makes the call declare `executes`, as `docs/tools.md`
+requires. Parsing a ten-command set takes about 0.06 ms. brush-parser, the
+other full bash parser, costs 420 KiB on Linux x86_64 but brings 68 crates.
+Both measured October 13, 2026 (`research/shell-parser-cost/`).
 
 Fiber uses the system allocator, musl's in the release binary. Speed that
 allocation costs is won by allocating less, not by another allocator: one
