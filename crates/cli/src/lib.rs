@@ -2,8 +2,9 @@
 //! `fiber logout`, `fiber approve`, `fiber sessions`, `fiber sessions export`,
 //! `fiber sessions delete`, `fiber sessions prune`, `fiber sessions search`, `fiber models`,
 //! `fiber extension install`, `fiber extension update`,
+//! `fiber extension install`, `fiber extension update`,
 //! `fiber extension remove`, `fiber extension list`, `fiber extension test`, `fiber mcp add`,
-//! `fiber mcp remove`, `fiber mcp list`, `fiber hub install`,
+//! `fiber mcp remove`, `fiber mcp list`, `fiber mcp login`, `fiber mcp logout`, `fiber hub install`,
 //! `fiber hub uninstall`, `fiber hub status`, `fiber hub refresh`, and the hub restart
 //! `fiber update` calls, and the release install step `install.sh` runs
 //! (`docs/architecture.md`, "The modules"). `main` parses argv and
@@ -29,6 +30,7 @@ mod hub_token;
 mod hub_unit;
 mod login;
 mod mcp;
+mod mcp_login;
 mod model_lists;
 mod models;
 mod prune;
@@ -57,6 +59,7 @@ pub use login::{
     providers_in, run_login, run_logout,
 };
 pub use mcp::{McpDeclaration, mcp_add, mcp_list, mcp_remove};
+pub use mcp_login::{mcp_login, mcp_logout};
 pub use model_lists::{ModelLists, ModelListsError, model_lists, roles_of};
 pub use models::{models, refresh_model_lists};
 pub use prune::{PruneArgs, prune};

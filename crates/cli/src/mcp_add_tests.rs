@@ -68,6 +68,26 @@ impl McpRemote for FakeRemote {
     fn has_userinfo(&self, _url: &str) -> bool {
         self.0
     }
+
+    fn token_key(&self, _url: &str) -> Result<String, Failure> {
+        Err(crate::failed(
+            contract::ErrorCode::IoFailed,
+            "FakeRemote stores no token",
+        ))
+    }
+
+    fn login(
+        &self,
+        _files: &dyn contract::mcp_tokens::TokenFiles,
+        _url: &str,
+        _present: &dyn Fn(&str),
+        _clock: &dyn contract::clock::Clock,
+    ) -> Result<(), Failure> {
+        Err(crate::failed(
+            contract::ErrorCode::IoFailed,
+            "FakeRemote logs in nowhere",
+        ))
+    }
 }
 
 /// Reads each `--secret` value as one exact line of the input, in flag

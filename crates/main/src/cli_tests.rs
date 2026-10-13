@@ -2226,10 +2226,50 @@ fn the_menu_names_the_mcp_commands() {
         "  mcp add [--project | --repo] <name> [-e KEY=value]... [--secret KEY]... -- <command> [args]...",
         "  mcp remove [--project | --repo] <name>",
         "  mcp list",
+        "  mcp login <server>",
+        "  mcp logout <server>",
     ] {
         assert!(
             group.lines().any(|l| l.starts_with(line)),
             "{line}\n{group}"
+        );
+    }
+}
+
+/// `fiber mcp login|logout` parses into its invocation: each row is the
+/// argv and the server it parses to. An empty or missing server is a usage
+/// error, as for every command taking a name.
+#[test]
+fn mcp_login_parses_into_its_invocation() {
+    let cases: Vec<(&[&str], &str, bool)> = vec![
+        (&["fiber", "mcp", "login", "docs"], "docs", true),
+        (&["fiber", "mcp", "logout", "docs"], "docs", false),
+    ];
+    for (argv, server, login) in &cases {
+        match parse_from(argv.iter().copied()) {
+            Invocation::Run(Some(Commands::Mcp(McpCommands::Login { server: name }))) if *login => {
+                assert_eq!(name, *server, "{argv:?}");
+            }
+            Invocation::Run(Some(Commands::Mcp(McpCommands::Logout { server: name })))
+                if !login =>
+            {
+                assert_eq!(name, *server, "{argv:?}");
+            }
+            Invocation::Run(_) | Invocation::Print(_) | Invocation::Usage { .. } => {
+                panic!("not an MCP login invocation for {argv:?}")
+            }
+        }
+    }
+    for argv in [
+        &["fiber", "mcp", "login"][..],
+        &["fiber", "mcp", "logout"][..],
+    ] {
+        assert!(
+            matches!(
+                parse_from(argv.iter().copied()),
+                Invocation::Usage { ask: false, .. }
+            ),
+            "{argv:?} names no server"
         );
     }
 }

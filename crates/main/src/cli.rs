@@ -47,6 +47,8 @@ MCP servers:
   mcp add [--project | --repo] <name> [-e KEY=value]... [--secret KEY]... -- <command> [args]...  Declare a stdio server
   mcp remove [--project | --repo] <name>                                                         Remove a server's declaration
   mcp list                                                                                       List declared servers, their layers and approvals
+  mcp login <server>                                                                             Log in to a server that needs OAuth
+  mcp logout <server>                                                                            Delete a server's stored token
 
 Configuration:
   config get <key>                              Print the effective value and the layer it came from
@@ -400,6 +402,18 @@ pub(crate) enum McpCommands {
     Remove(McpRemoveArgs),
     /// List declared servers, their layers and approvals
     List,
+    /// Log in to a server that needs OAuth
+    Login {
+        /// The server's name.
+        #[arg(value_name = "server", value_parser = clap::builder::NonEmptyStringValueParser::new())]
+        server: String,
+    },
+    /// Delete a server's stored token
+    Logout {
+        /// The server's name.
+        #[arg(value_name = "server", value_parser = clap::builder::NonEmptyStringValueParser::new())]
+        server: String,
+    },
 }
 
 /// `fiber mcp add`: one transport, and the layer to write. Its `Debug`

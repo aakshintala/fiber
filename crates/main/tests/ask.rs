@@ -985,6 +985,8 @@ MCP servers:
   mcp add [--project | --repo] <name> [-e KEY=value]... [--secret KEY]... -- <command> [args]...  Declare a stdio server
   mcp remove [--project | --repo] <name>                                                         Remove a server's declaration
   mcp list                                                                                       List declared servers, their layers and approvals
+  mcp login <server>                                                                             Log in to a server that needs OAuth
+  mcp logout <server>                                                                            Delete a server's stored token
 
 Configuration:
   config get <key>                              Print the effective value and the layer it came from

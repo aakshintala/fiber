@@ -273,6 +273,20 @@ impl contract::McpRemote for McpClient {
     fn has_userinfo(&self, url: &str) -> bool {
         mcp::url_has_userinfo(url)
     }
+
+    fn token_key(&self, url: &str) -> Result<String, contract::shapes::Failure> {
+        mcp::token_key(url).map_err(|e| failure(e.code(), e.to_string()))
+    }
+
+    fn login(
+        &self,
+        files: &dyn contract::mcp_tokens::TokenFiles,
+        url: &str,
+        present: &dyn Fn(&str),
+        clock: &dyn contract::clock::Clock,
+    ) -> Result<(), contract::shapes::Failure> {
+        mcp::login(files, url, present, clock).map_err(|e| failure(e.code(), e.to_string()))
+    }
 }
 
 /// The layer `--project` and `--repo` name, as `config set` reads them:
@@ -309,6 +323,8 @@ fn mcp_command(command: cli::McpCommands, clock: Arc<dyn contract::clock::Clock>
             ::cli::mcp_remove(mcp_layer(args.project, args.repo), &args.name)
         }
         cli::McpCommands::List => ::cli::mcp_list(clock),
+        cli::McpCommands::Login { server } => ::cli::mcp_login(&server, &McpClient, clock),
+        cli::McpCommands::Logout { server } => ::cli::mcp_logout(&server, &McpClient),
     }
 }
 

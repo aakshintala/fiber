@@ -28,7 +28,7 @@ A remote server that needs OAuth uses MCP's OAuth flow, which the client
 carries ([ADR 0008](adr/0008-the-mcp-client-is-built-in.md)). A person logs in
 to a server with `fiber mcp login <server>`, and `fiber mcp logout <server>`
 deletes the stored token. Both look up the server's URL from its
-configuration. The token is stored by that URL, not by the server's name, at
+configuration. `fiber mcp login` follows MCP's authorization flow: it reads the server's protected-resource and authorization-server metadata, registers itself as a client, and opens the browser on a PKCE authorization with a loopback callback, then stores the token; with no callback within 15 minutes it fails `authentication_failed` and stores nothing. A server a repository declares that is not approved is refused `mcp_server_unapproved` with the advice `fiber approve`, since the URL it would open is the repository's choice. Login uses the first authorization server the server's protected-resource metadata lists; a server with no such metadata is its own authorization server, at its URL's origin. Login refuses an authorization server whose metadata does not list `S256` among its code challenge methods, because MCP's authorization flow requires PKCE. The token is stored by that URL, not by the server's name, at
 `credentials/mcp/<hash>`, where the hash is the lowercase hex SHA-256 of the
 canonical URL's bytes. The file records the URL itself (`docs/state.md`,
 "What each part holds"). Fiber canonicalizes the URL by lowercasing the scheme

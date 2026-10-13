@@ -91,7 +91,7 @@ asked for the session.
 | `model_unconfigured` | the session's model names a per-account host whose setting has no value or a value that is not a host; the message names the model and the setting (`docs/model-routing.md`, "A per-account host") | 1 |
 | `credential_missing` | the session model's credential cannot be found, its credential label names none, or a stdio MCP server's `{ "secret" }` env value names no stored credential | 1 |
 | `credential_failed` | a stored credential is found but cannot be used, the provider's `credential()` call errors, or its `sign()` fails or returns unusable headers (`docs/model-routing.md`, "Credentials") | 1 |
-| `authentication_failed` | the startup OAuth refresh of the session model's token was rejected by the token endpoint, or its `credential()` needed a person to log in and nobody was attached (`docs/model-routing.md`, "Keys, tokens and OAuth") | 1 |
+| `authentication_failed` | the startup OAuth refresh of the session model's token was rejected by the token endpoint, or its `credential()` needed a person to log in and nobody was attached (`docs/model-routing.md`, "Keys, tokens and OAuth"), or `fiber mcp login` got no callback in time | 1 |
 | `connection_failed` | the startup OAuth refresh could not reach the token endpoint | 1 |
 | `session_not_found` | a resume names no session | 1 |
 | `session_held` | another process holds the session's lock, or runs it at a schema version this build cannot read | 1 |
@@ -102,7 +102,7 @@ asked for the session.
 | `mcp_required_server_failed` | an MCP server marked `required` failed to start | 1 |
 | `extension_unapproved` | the repository declares a `required` extension nobody approved, and nobody could be asked (`docs/extensions.md`, "Code a repository ships") | 1 |
 | `hook_unapproved` | the repository declares a `required` hook nobody approved, and nobody could be asked | 1 |
-| `mcp_server_unapproved` | the repository declares a `required` MCP server nobody approved, and nobody could be asked | 1 |
+| `mcp_server_unapproved` | the repository declares a `required` MCP server nobody approved, and nobody could be asked, or `fiber mcp login` named a repository's server nobody approved | 1 |
 
 Only `usage` exits 2, following the Unix convention (and clap's default) that
 separates "called it wrong" from "ran and failed".
@@ -261,14 +261,14 @@ the lines that carry it.
 | Code | Where | Meaning |
 |---|---|---|
 | `ambiguous_match` | tool call | an edit block's text occurs more than once (`docs/tools.md`, "File tools") |
-| `authentication_failed` | exit, extension call, model call, turn, driver command (`rewind`) | the provider rejected the credential, an OAuth refresh was rejected, or a login was needed with nobody attached |
+| `authentication_failed` | exit, extension call, model call, turn, driver command (`rewind`) | the provider rejected the credential, an OAuth refresh was rejected, or a login was needed with nobody attached, or `fiber mcp login` got no callback in time, or the server's discovery, registration or token exchange failed |
 | `blocked` | turn | the block budget ran out with no human to answer |
 | `blocked_host` | tool call | `web_fetch` named a link-local address or a cloud metadata host (`docs/tools.md`, "Web fetch and web search") |
 | `budget_exceeded` | turn | the spending budget was reached, or an extension refused a model request (`docs/loop.md`, "Spending budget") |
 | `busy` | driver command | `prompt` or `reload` while a turn is running, or `rewind` mid-turn (`docs/invocation.md`, "What each command does") |
 | `closing` | exit, tool call, extension call, driver command | `session_message` named a session that was sent `close` (`docs/tools.md`, "Messaging other sessions"), or `state.set`, `state.unset` or `host.drive` ran after `fiber_exited` (`docs/extensions.md`, "When a session ends"), or a driver command after `close` (`docs/invocation.md`, "Driver commands"), or the session `fiber ask` attached to ended before its turn completed |
 | `config_invalid` | exit, extension call, notice, driver command (`rewind`) | a configuration or script file is invalid, or an MCP server declares both `command` and `url` or has a user name or password in its `url` |
-| `connection_failed` | exit, extension call, model call, tool call, turn, driver command (`rewind`) | the connection to the provider or its token endpoint failed, or `web_fetch` could not reach the host |
+| `connection_failed` | exit, extension call, model call, tool call, turn, driver command (`rewind`) | the connection to the provider or its token endpoint failed, or `web_fetch` could not reach the host, or `fiber mcp login` could not reach the server or its authorization server |
 | `context_overflow` | model call, turn | the request does not fit the context window |
 | `credential_failed` | exit, extension call, model call, turn, driver command (`rewind`), `mcp_server_failed`, tool call | a stored credential cannot be used, the provider's `credential()` or `sign()` failed, or a stdio MCP server's `{ "secret" }` env value names a stored credential that cannot be read; log in again or fix the credential |
 | `credential_missing` | exit, driver command, `mcp_server_failed`, tool call | no credential was found for the session's model, its credential label names none, or a stdio MCP server's `{ "secret" }` env value names no stored credential; the provider-credential messages list the provider's labels, while a stdio MCP server's message names the missing secret instead |
@@ -296,7 +296,7 @@ the lines that carry it.
 | `mcp_cancel_requested` | tool call | a cancelled call the server may still act on |
 | `mcp_prompt_failed` | driver command | Fiber could not get an MCP server's prompt: the server failed, did not answer in time, refused it, or returned content Fiber cannot send |
 | `mcp_required_server_failed` | exit, driver command (`rewind`) | a required MCP server failed to start |
-| `mcp_server_unapproved` | exit, driver command (`rewind`) | a repository's required MCP server is not approved; run `fiber approve` in the repository |
+| `mcp_server_unapproved` | exit, driver command (`rewind`) | a repository's required MCP server is not approved; run `fiber approve` in the repository, or `fiber mcp login` named a repository's server nobody approved |
 | `mcp_server_unavailable` | tool call, MCP server | the server failed to start, died, or ended its session |
 | `mcp_tool_removed` | tool call | the server has removed the tool |
 | `message_refused` | tool call, driver command | a `before_message` hook refused a message: a session message, or a person's or a driver's |
