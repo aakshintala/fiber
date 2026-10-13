@@ -667,7 +667,12 @@ impl CommandFixture {
         // The FIFO lives in the home: nothing scans the home's root, and
         // its lifetime is the setup's.
         let ready = fakes::children::Ready::new(&setup.home());
-        let script = format!("echo $$ > '{}'; sleep 600", ready.path().display());
+        // The descendant starts before the ready line: the line then proves the
+        // whole group already runs, so a cancel after it finds every member.
+        // Echoing first would invite the kill to chase a fork still in flight,
+        // and a child born during the kill's walk of the group can miss the
+        // signal and outlive the group.
+        let script = format!("sleep 600 & echo $$ > '{}'; wait", ready.path().display());
         setup.write_config(&json!({
             "model": "acme/m1",
             "providers": {"acme": {"credentials": {"default": {
