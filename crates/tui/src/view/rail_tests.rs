@@ -6,7 +6,7 @@ use crate::app::App;
 use crate::app::rail::Spot;
 use crate::home::{Launch, Left, Row, State};
 use crate::link::Line;
-use crate::markdown::Role;
+use crate::markdown::{Role, style};
 use crate::mouse::{Target, TargetId};
 use crate::view::{render, text};
 use contract::SessionId;
@@ -245,6 +245,103 @@ fn bar_colour_thresholds() {
     assert_eq!(bar_fill(60), Some(Role::Warning.color()));
     assert_eq!(bar_fill(84), Some(Role::Warning.color()));
     assert_eq!(bar_fill(85), Some(Role::Error.color()));
+}
+
+/// The header row's text and click target: the project name bold in
+/// the accent colour, " +" after it starting a session in the
+/// project, and the summed spend right-aligned and dim
+/// (`docs/tui.md`, "The rail").
+#[test]
+fn the_header_names_the_project_then_plus_then_dim_spend() {
+    use ratatui::style::Modifier;
+    let app = two(20.0, json!({}));
+    let drawn = super::rows(&app, 40);
+    let header = &drawn[0];
+    let text = header.line.to_string();
+    assert!(text.starts_with("  fiber +"), "{text:?}");
+    assert!(text.ends_with("$0.00"), "{text:?}");
+    let spans = &header.line.spans;
+    assert_eq!(spans.len(), 5, "{text:?}");
+    assert_eq!(spans[0].content, "  ");
+    assert_eq!(spans[1].content, "fiber");
+    assert_eq!(
+        spans[1].style,
+        style(Role::Accent).add_modifier(Modifier::BOLD)
+    );
+    assert_eq!(spans[2].content, " +");
+    assert_eq!(spans[4].content, "$0.00");
+    assert_eq!(spans[4].style, style(Role::Muted));
+    // The "+" starts a session in the project's first card's
+    // session: two margin columns, the name, then a space.
+    assert_eq!(header.spots, vec![(8, 1, 1, Spot::Start(key(&app, A)))]);
+}
+
+/// A project name too long for the header keeps its "+": the name is
+/// cut, never the chip that starts a session.
+#[test]
+fn a_long_project_name_keeps_its_plus() {
+    let mut app = app(20.0);
+    app.on_line(status(
+        A,
+        json!({"workspace": "/Users/you/work/a-project-name-far-too-long-for-its-header"}),
+    ));
+    app.on_line(status(B, json!({})));
+    let drawn = super::rows(&app, 40);
+    let header = &drawn[0];
+    let text = header.line.to_string();
+    assert!(text.contains('+'), "{text:?}");
+    assert!(text.ends_with("$0.00"), "{text:?}");
+    let plus = u16::try_from(text.find('+').unwrap_or_default()).unwrap_or(u16::MAX);
+    assert_eq!(header.spots, vec![(plus, 1, 1, Spot::Start(key(&app, A)))]);
+}
+
+/// A card's third row, when it is not waiting, is a dim "⎇ " followed
+/// by the branch (`docs/tui.md`, "The rail").
+#[test]
+fn a_branch_row_shows_a_dim_prefix() {
+    let app = two(20.0, json!({"git": {"branch": "main"}}));
+    let buf = rail(&app);
+    assert_eq!(b_row(&buf, 2), "▌ ⎇ main");
+    // B's third text row is the rail's eleventh: the stripe, a space,
+    // then the prefix and the branch.
+    let prefix = buf.cell((2, 10)).and_then(|cell| cell.style().fg);
+    assert_eq!(prefix, Some(Role::Muted.color()));
+    let space = buf.cell((3, 10)).and_then(|cell| cell.style().fg);
+    assert_eq!(space, Some(Role::Muted.color()));
+    for x in 4..8 {
+        let fg = buf.cell((x, 10)).and_then(|cell| cell.style().fg);
+        assert_eq!(fg, Some(ratatui::style::Color::Reset), "branch cell {x}");
+    }
+}
+
+#[test]
+fn a_detached_branch_shows_its_prefix() {
+    let app = two(20.0, json!({"git": {"branch": null}}));
+    assert_eq!(b_row(&rail(&app), 2), "▌ ⎇ detached");
+}
+
+#[test]
+fn outside_git_the_third_row_stays_empty() {
+    let app = two(20.0, json!({}));
+    let row = b_row(&rail(&app), 2);
+    assert!(!row.contains('⎇'), "{row:?}");
+}
+
+/// The context bar's empty cells are ░ in `rule`
+/// (`docs/tui.md`, "The rail").
+#[test]
+fn the_bar_track_is_the_rule_colour() {
+    let app = two(15.0, json!({"context": {"tokens": 50, "window": 100}}));
+    let buf = rail(&app);
+    // B's fourth text row is the rail's twelfth.
+    let track: Vec<_> = (0..buf.area.width)
+        .filter_map(|x| buf.cell((x, 11)))
+        .filter(|cell| cell.symbol() == "░")
+        .collect();
+    assert!(!track.is_empty());
+    for cell in track {
+        assert_eq!(cell.style().fg, Some(Role::Rule.color()));
+    }
 }
 
 #[test]
@@ -653,16 +750,18 @@ fn targets_cover_each_card_its_cross_and_plus() {
     assert_eq!(
         rail_targets(&targets),
         vec![
-            (Spot::Start(a), Rect::new(37, 0, 1, 1)),
+            (Spot::Start(a), Rect::new(8, 0, 1, 1)),
             (Spot::Card(a), Rect::new(0, 2, 39, 4)),
             (Spot::Card(c), Rect::new(0, 8, 39, 4)),
-            (Spot::Start(b), Rect::new(37, 13, 1, 1)),
+            (Spot::Start(b), Rect::new(6, 13, 1, 1)),
             (Spot::Card(b), Rect::new(0, 15, 39, 4)),
             (Spot::Dismiss(b), Rect::new(37, 15, 1, 1)),
         ]
     );
     let lines = lines(&rail(&app));
-    assert!(lines[0].ends_with("$0.00 +"), "{}", lines[0]);
+    assert!(lines[0].starts_with("  fiber +"), "{}", lines[0]);
+    assert!(lines[0].ends_with("$0.00"), "{}", lines[0]);
+    assert!(lines[13].starts_with("  hub +"), "{}", lines[13]);
     assert!(lines[15].ends_with('✕'), "{}", lines[15]);
     assert_eq!(lines[15].chars().count(), 38, "{}", lines[15]);
 }
