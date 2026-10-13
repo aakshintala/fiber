@@ -12,7 +12,7 @@ use contract::ErrorCode;
 const APPROVE_CHILD: &str = "FIBER_CLI_APPROVE_EXIT_CHILD";
 const CHILD_DEADLINE: Duration = Duration::from_secs(5);
 
-use super::{run, says_yes};
+use super::run;
 
 /// A git repository declaring one hook, with Fiber home beside it.
 struct Setup {
@@ -268,15 +268,5 @@ fn approve_returns_zero_on_success_and_two_on_refusal() {
             },
         );
         assert_eq!(output.status.code(), Some(expected), "{case}");
-    }
-}
-
-#[test]
-fn says_yes_matches_exactly_y_and_yes() {
-    for yes in ["y", "Y", "yes", "YES", "yEs", " yes\n"] {
-        assert!(says_yes(yes), "{yes:?}");
-    }
-    for no in ["", "n", "ye", "yess", "yy", "no", "y y"] {
-        assert!(!says_yes(no), "{no:?}");
     }
 }

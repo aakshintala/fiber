@@ -29,7 +29,7 @@ use serde_json::json;
 use super::{
     ChildEnvironment, MAX_SOCKET_PATH, ProcessClock, RunDirectory, RunOptions, RunTimeouts,
     WaitSignal, child_command, discover_cases, extension_test, extension_test_with, group_alive,
-    longest_planned_socket, process_group_id, signal_group, summary,
+    longest_planned_socket, process_group_id, signal_group,
 };
 
 const TEST_WAIT: Duration = Duration::from_secs(15);
@@ -206,11 +206,6 @@ fn a_package_with_no_case_files_prints_the_no_cases_line_and_fails() {
             setup.package.canonicalize().unwrap().display()
         )
     );
-}
-
-#[test]
-fn summary_reports_passes_and_failures() {
-    assert_eq!(summary(2, 1), "2 passed, 1 failed\n");
 }
 
 #[test]

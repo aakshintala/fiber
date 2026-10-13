@@ -8,7 +8,7 @@
 use std::path::Path;
 use std::sync::{Arc, Mutex};
 
-use config::{CredentialFile, delete_credential_held, read_credential, set_global_if_unset};
+use config::read_credential;
 use contract::clock::Clock;
 use contract::shapes::Failure;
 use doors::failure;
@@ -91,7 +91,10 @@ impl LoginCancel {
     }
 }
 
-use super::{LoginIo, chosen_label, config_failure, credential_key, installed, stored_name, usage};
+use super::{
+    LockedStoreFailure, LoginIo, StoreFailure, already_stored, chosen_label, config_failure,
+    installed, store_locked, stored_name, usage_with_hint,
+};
 
 /// The system browser as `fiber login` runs it: a person is attached,
 /// whatever stdin is, since a person ran the command
@@ -117,15 +120,6 @@ impl Browser for Attended {
     fn attended(&self) -> bool {
         true
     }
-}
-
-/// The label the login stores under, or why it stores nothing: a label the
-/// flow already stored is refused, naming `--as`
-/// (`docs/model-routing.md`, "Logging in").
-fn already_stored(name: &str, stored: &str, label: &str) -> String {
-    format!(
-        "credentials/{stored}/{label} is already stored; log in under another label with --as <label>, or run `fiber logout {name} --as {label}` first."
-    )
 }
 
 /// Runs the provider `name`'s `credential()` login and stores what it
@@ -156,7 +150,7 @@ pub fn browser_login(
             .map_err(config_failure)?
             .is_some()
     {
-        return Err(usage(already_stored(name, stored, label)));
+        return Err(usage_with_hint(already_stored(name, stored, label)));
     }
     let provider = login_provider(home, providers, name, browser, clock)
         .map_err(|e| failure(e.code(), e.to_string()))?;
@@ -170,32 +164,18 @@ pub fn browser_login(
         .map_err(|e| failure(e.code(), e.to_string()))?;
     cancel.commit(|| {
         let label = chosen_label(label, logged.email.as_deref());
-        let file = CredentialFile::new(home, stored, label).map_err(|_| {
-            usage(format!(
+        store_locked(home, data, label, |lock| {
+            lock.write(logged.stored.as_value())
+                .map_err(config_failure)?;
+            Ok(())
+        })
+        .map_err(|error| match error {
+            LockedStoreFailure::Config(_) => usage_with_hint(format!(
                 "`{label}` is not a label `fiber login` can store; pass one with `--as <label>`."
-            ))
-        })?;
-        // Held until the store ends, so two logins never both pass the check.
-        let Some(lock) = file.try_lock().map_err(config_failure)? else {
-            return Err(failure(
-                contract::ErrorCode::IoFailed,
-                format!("another login for {name} is running"),
-            ));
-        };
-        if read_credential(home, stored, label)
-            .map_err(config_failure)?
-            .is_some()
-        {
-            return Err(usage(already_stored(name, stored, label)));
-        }
-        lock.write(logged.stored.as_value())
-            .map_err(config_failure)?;
-        if let Err(e) = set_global_if_unset(home, &credential_key(name), label.into()) {
-            // A retry must start clean: no file stored without its label.
-            delete_credential_held(home, stored, label, &lock).unwrap_or(false);
-            return Err(config_failure(e));
-        }
-        Ok(format!("credentials/{stored}/{label}"))
+            )),
+            LockedStoreFailure::Store(StoreFailure::Refused(message)) => usage_with_hint(message),
+            LockedStoreFailure::Store(StoreFailure::Failed(failure)) => failure,
+        })
     })
 }
 
