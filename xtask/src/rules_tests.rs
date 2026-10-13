@@ -745,6 +745,24 @@ fn cfg_test_struct_fields_do_not_hide_following_production_paths() {
 }
 
 #[test]
+fn fiber_home_paths_keep_nested_self_hub_and_inputs_roots() {
+    let files = [source_file(
+        "main",
+        "src/nested_roots.rs",
+        "fn f(&self, hub: &Hub, inputs: &Inputs) {\n    self.home.join(\"projects\").join(\"config.json\");\n    hub.home.join(\"run\");\n    inputs.home.join(\"cache\");\n}\n",
+    )];
+    assert_eq!(
+        fiber_home_paths(&files),
+        [
+            "crates/main/src/nested_roots.rs:2: Fiber-home path outside config",
+            "crates/main/src/nested_roots.rs:2: Fiber-home path outside config",
+            "crates/main/src/nested_roots.rs:3: Fiber-home path outside config",
+            "crates/main/src/nested_roots.rs:4: Fiber-home path outside config",
+        ]
+    );
+}
+
+#[test]
 fn fiber_home_paths_recognize_only_fiber_home_roots() {
     let files = [source_file(
         "main",
@@ -826,6 +844,49 @@ fn loop_tool_names_derives_registered_names_from_owned_definitions() {
     assert!(names.contains("delegate_message"));
     assert!(!names.contains("pwd"));
     assert!(!names.contains("shellish"));
+}
+
+#[test]
+fn loop_tool_names_rejects_label_shapes_in_the_wrong_function() {
+    let tools = registrations(&REGISTERED_TOOLS);
+    let files = [
+        tools,
+        file(
+            "loop",
+            "src/opening.rs",
+            r#"fn other() { let row = ("shell", environment.shell.as_str()); }"#.to_owned(),
+        ),
+        file(
+            "loop",
+            "src/status.rs",
+            r#"fn other() { let key = match state { SessionState::Jobs => ("jobs", None) }; }"#.to_owned(),
+        ),
+        file(
+            "loop",
+            "src/skills.rs",
+            r#"fn other() { let tag = if skill.model_invocable { "skill" } else { "template" }; }"#.to_owned(),
+        ),
+        file(
+            "loop",
+            "src/handoff/carry.rs",
+            r#"fn other() { let args = &[("jobs", listed.join("\n").as_str())]; }"#.to_owned(),
+        ),
+        file(
+            "loop",
+            "src/reviewer.rs",
+            r#"fn other() { let sections = Sections { handoff: crate::prompt::section(md, "handoff") }; }"#.to_owned(),
+        ),
+    ];
+    assert_eq!(
+        loop_tool_names(&files),
+        [
+            "crates/loop/src/opening.rs:1: built-in tool name shell",
+            "crates/loop/src/status.rs:1: built-in tool name jobs",
+            "crates/loop/src/skills.rs:1: built-in tool name skill",
+            "crates/loop/src/handoff/carry.rs:1: built-in tool name jobs",
+            "crates/loop/src/reviewer.rs:1: built-in tool name handoff",
+        ]
+    );
 }
 
 #[test]
@@ -1102,6 +1163,19 @@ fn joined_literal_requires_a_complete_join_call() {
 }
 
 #[test]
+fn loop_sites_fail_closed_at_the_per_file_site_limit() {
+    let source = (0..=MAX_SOURCE_SITES_PER_FILE)
+        .map(|_| "\"shell\";\n")
+        .collect::<String>();
+    let file = source_file("loop", "src/many_sites.rs", &source);
+    let names = BTreeSet::from(["shell".to_owned()]);
+    assert_eq!(
+        loop_sites(&file, &names).unwrap_err(),
+        "crates/loop/src/many_sites.rs:1025: source cursor stopped advancing"
+    );
+}
+
+#[test]
 fn repeated_loop_sites_remain_bounded_and_exact() {
     run_scanner_bound_probe("loop-sites");
 }
@@ -1109,6 +1183,32 @@ fn repeated_loop_sites_remain_bounded_and_exact() {
 #[test]
 fn deep_home_join_chains_are_bounded_and_exact() {
     run_scanner_bound_probe("home-join");
+}
+
+#[test]
+fn joined_literal_false_positives_cannot_walk_unrelated_join_chains() {
+    let mut source = String::from("fn f() { let other = path;\n");
+    for _ in 0..12 {
+        source.push_str("other");
+        for _ in 0..512 {
+            source.push_str(".join(\"segment\")");
+        }
+        source.push_str(".read(\"projects\");\n");
+    }
+    source.push('}');
+    let file = source_file("main", "src/unrelated_chains.rs", &source);
+    assert!(home_sites(&file).unwrap().is_empty());
+}
+
+#[test]
+fn unrelated_join_contexts_fail_closed_before_revisiting_prior_calls() {
+    let calls = (0..256)
+        .map(|_| "other.join(\"projects\");")
+        .collect::<Vec<_>>()
+        .join("\n");
+    let source = format!("fn f() {{\n{calls}\n}}");
+    let file = source_file("main", "src/unrelated_joins.rs", &source);
+    assert!(home_sites(&file).unwrap().is_empty());
 }
 
 #[test]
@@ -1773,6 +1873,23 @@ fn module_target_resolves_explicit_and_default_module_paths() {
             "{source}"
         );
     }
+}
+
+#[test]
+fn production_file_lookup_tests_matching_and_nonmatching_paths() {
+    let files = [
+        source_file("hub", "src/lib.rs", "mod child;"),
+        source_file("hub", "src/child.rs", "fn child() {}"),
+    ];
+    let candidates = files.iter().collect::<Vec<_>>();
+    assert_eq!(
+        production_file(&candidates, "crates/hub/src/child.rs").map(|file| file.rel.as_str()),
+        Some("src/child.rs")
+    );
+    assert_eq!(
+        production_file(&candidates, "crates/hub/src/other.rs"),
+        None
+    );
 }
 
 #[test]

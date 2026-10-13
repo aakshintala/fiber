@@ -578,9 +578,43 @@ const HOME_COMPONENTS: &[&str] = &[
     "skills",
 ];
 
+const MAX_SOURCE_SITES_PER_FILE: usize = 1024;
+const MAX_HOME_JOIN_WORK: usize = 16_384;
+const MAX_HOME_JOIN_CONTEXT_BYTES: usize = 1_048_576;
+
 #[derive(Debug, PartialEq, Eq)]
 struct StalledCursor {
     line: usize,
+}
+
+struct HomeJoinBudget {
+    steps: usize,
+    bytes: usize,
+}
+
+impl HomeJoinBudget {
+    fn new() -> Self {
+        Self {
+            steps: MAX_HOME_JOIN_WORK,
+            bytes: MAX_HOME_JOIN_CONTEXT_BYTES,
+        }
+    }
+
+    fn spend_steps(&mut self, amount: usize, line: usize) -> Result<(), StalledCursor> {
+        self.steps = self
+            .steps
+            .checked_sub(amount)
+            .ok_or(StalledCursor { line })?;
+        Ok(())
+    }
+
+    fn spend_bytes(&mut self, amount: usize, line: usize) -> Result<(), StalledCursor> {
+        self.bytes = self
+            .bytes
+            .checked_sub(amount)
+            .ok_or(StalledCursor { line })?;
+        Ok(())
+    }
 }
 
 struct SourceCursor<'a> {
@@ -1012,6 +1046,10 @@ fn stalled_cursor_diagnostic(file: &RustFile, stalled: StalledCursor) -> String 
 
 /// Production source files under crate `src/`, excluding conventional tests,
 /// cfg(test) items and files referenced only from cfg(test) modules.
+fn production_file<'a>(candidates: &[&'a RustFile], path: &str) -> Option<&'a RustFile> {
+    candidates.iter().copied().find(|file| file.path == path)
+}
+
 fn production_files(files: &[RustFile]) -> Result<Vec<&RustFile>, String> {
     let candidates: Vec<&RustFile> = files
         .iter()
@@ -1066,7 +1104,7 @@ fn production_files(files: &[RustFile]) -> Result<Vec<&RustFile>, String> {
             }
             if production.insert(target.as_str()) {
                 if pending.len() >= candidates.len() {
-                    if let Some(file) = candidates.iter().find(|file| file.path == parent) {
+                    if let Some(file) = production_file(&candidates, parent) {
                         return Err(stalled_cursor_diagnostic(file, StalledCursor { line: 1 }));
                     }
                     return Err(format!("{parent}:1: source cursor stopped advancing"));
@@ -1076,7 +1114,7 @@ fn production_files(files: &[RustFile]) -> Result<Vec<&RustFile>, String> {
         }
     }
     if let Some(parent) = pending.last().copied() {
-        if let Some(file) = candidates.iter().find(|file| file.path == parent) {
+        if let Some(file) = production_file(&candidates, parent) {
             return Err(stalled_cursor_diagnostic(file, StalledCursor { line: 1 }));
         }
         return Err(format!("{parent}:1: source cursor stopped advancing"));
@@ -1166,6 +1204,21 @@ fn home_scope_context(
     }
 }
 
+fn push_source_site(
+    file: &RustFile,
+    sites: &mut Vec<SourceSite>,
+    site: SourceSite,
+) -> Result<(), String> {
+    if sites.len() >= MAX_SOURCE_SITES_PER_FILE {
+        return Err(stalled_cursor_diagnostic(
+            file,
+            StalledCursor { line: site.line },
+        ));
+    }
+    sites.push(site);
+    Ok(())
+}
+
 fn joined_literal(tokens: &[SourceToken], at: usize) -> bool {
     at >= 3
         && punct(tokens.get(at - 3), '.')
@@ -1173,14 +1226,24 @@ fn joined_literal(tokens: &[SourceToken], at: usize) -> bool {
         && punct(tokens.get(at - 1), '(')
 }
 
+#[cfg(test)]
 fn home_join_context(
     tokens: &[SourceToken],
     join_dot: usize,
+) -> Result<Option<String>, StalledCursor> {
+    home_join_context_with_budget(tokens, join_dot, &mut HomeJoinBudget::new())
+}
+
+fn home_join_context_with_budget(
+    tokens: &[SourceToken],
+    join_dot: usize,
+    budget: &mut HomeJoinBudget,
 ) -> Result<Option<String>, StalledCursor> {
     let line = tokens.get(join_dot).map_or(1, |token| token.line);
     let mut join_dot = join_dot;
     let mut segments: Vec<String> = Vec::new();
     for _ in 0..=tokens.len() {
+        budget.spend_steps(1, line)?;
         let Some(end) = join_dot.checked_sub(1) else {
             return Ok(None);
         };
@@ -1199,7 +1262,9 @@ fn home_join_context(
                 "home".to_owned()
             };
             let mut context = owner;
+            budget.spend_bytes(context.len(), line)?;
             for segment in segments.iter().rev() {
+                budget.spend_bytes(segment.len().saturating_add(1), line)?;
                 context.push('/');
                 context.push_str(segment);
             }
@@ -1211,6 +1276,7 @@ fn home_join_context(
         let mut depth = 0usize;
         let mut open = None;
         for i in (0..=end).rev() {
+            budget.spend_steps(1, line)?;
             if punct(tokens.get(i), ')') {
                 depth = depth.saturating_add(1);
             }
@@ -1245,6 +1311,7 @@ fn home_join_context(
                 })
             })
             .unwrap_or("*");
+        budget.spend_bytes(segment.len(), line)?;
         segments.push(segment.to_owned());
         if previous_dot >= join_dot {
             return Err(StalledCursor { line });
@@ -1254,11 +1321,20 @@ fn home_join_context(
     Err(StalledCursor { line })
 }
 
+#[cfg(test)]
 fn fiber_home_join(
     tokens: &[SourceToken],
     join_dot: usize,
 ) -> Result<Option<String>, StalledCursor> {
-    let Some(context) = home_join_context(tokens, join_dot)? else {
+    fiber_home_join_with_budget(tokens, join_dot, &mut HomeJoinBudget::new())
+}
+
+fn fiber_home_join_with_budget(
+    tokens: &[SourceToken],
+    join_dot: usize,
+    budget: &mut HomeJoinBudget,
+) -> Result<Option<String>, StalledCursor> {
+    let Some(context) = home_join_context_with_budget(tokens, join_dot, budget)? else {
         return Ok(None);
     };
     Ok((!context.contains("/.agents") && !context.contains("/.config")).then_some(context))
@@ -1332,12 +1408,16 @@ fn session_sites(file: &RustFile) -> Result<Vec<SourceSite>, String> {
             None
         };
         if let Some(operation) = operation {
-            sites.push(SourceSite {
-                path: file.path.clone(),
-                line: token.line,
-                context: function_context(&tokens, i),
-                operation: operation.to_owned(),
-            });
+            push_source_site(
+                file,
+                &mut sites,
+                SourceSite {
+                    path: file.path.clone(),
+                    line: token.line,
+                    context: function_context(&tokens, i),
+                    operation: operation.to_owned(),
+                },
+            )?;
         }
     }
     Ok(sites)
@@ -1352,6 +1432,7 @@ fn home_sites(file: &RustFile) -> Result<Vec<SourceSite>, String> {
         source_tokens(&file.source).map_err(|stalled| stalled_cursor_diagnostic(file, stalled))?;
     let test_only = test_only_tokens(&tokens);
     let mut sites = Vec::new();
+    let mut join_budget = HomeJoinBudget::new();
     if file.krate == "config" {
         return Ok(sites);
     }
@@ -1363,18 +1444,19 @@ fn home_sites(file: &RustFile) -> Result<Vec<SourceSite>, String> {
             continue;
         };
         let join = joined_literal(&tokens, i);
-        let home_context = if join {
-            fiber_home_join(&tokens, i - 3)
+        let first = value.split('/').next().unwrap_or_default();
+        let home_component = HOME_COMPONENTS.contains(&first);
+        let prompt_candidate = prompt_literal(value);
+        let home_context = if join && (home_component || prompt_candidate) {
+            fiber_home_join_with_budget(&tokens, i - 3, &mut join_budget)
                 .map_err(|stalled| stalled_cursor_diagnostic(file, stalled))?
         } else {
             None
         };
         let home_root = home_context.is_some();
-        let first = value.split('/').next().unwrap_or_default();
-        let home_component = HOME_COMPONENTS.contains(&first);
         let config_path =
             first == ".fiber" && matches!(value.split('/').nth(1), Some("config.json" | "config"));
-        let prompt = prompt_literal(value) && (home_root || file_operation_near(&tokens, i));
+        let prompt = prompt_candidate && (home_root || file_operation_near(&tokens, i));
         let direct_config = config_path && (join || file_operation_near(&tokens, i));
         let operation = if home_root && home_component {
             Some(format!("join:{value}"))
@@ -1391,12 +1473,16 @@ fn home_sites(file: &RustFile) -> Result<Vec<SourceSite>, String> {
                 |root| format!("{}|root:{root}", function_context(&tokens, i)),
             );
             let context = home_scope_context(file, &tokens, i, context, &operation);
-            sites.push(SourceSite {
-                path: file.path.clone(),
-                line: token.line,
-                context,
-                operation,
-            });
+            push_source_site(
+                file,
+                &mut sites,
+                SourceSite {
+                    path: file.path.clone(),
+                    line: token.line,
+                    context,
+                    operation,
+                },
+            )?;
         }
     }
     for (i, (window, test_window)) in tokens.windows(5).zip(test_only.windows(5)).enumerate() {
@@ -1410,7 +1496,7 @@ fn home_sites(file: &RustFile) -> Result<Vec<SourceSite>, String> {
         {
             continue;
         }
-        let Some(root) = fiber_home_join(&tokens, i)
+        let Some(root) = fiber_home_join_with_budget(&tokens, i, &mut join_budget)
             .map_err(|stalled| stalled_cursor_diagnostic(file, stalled))?
         else {
             continue;
@@ -1426,12 +1512,16 @@ fn home_sites(file: &RustFile) -> Result<Vec<SourceSite>, String> {
             format!("fn read_one|root:{root}"),
             operation,
         );
-        sites.push(SourceSite {
-            path: file.path.clone(),
-            line: token.line,
-            context,
-            operation: operation.to_owned(),
-        });
+        push_source_site(
+            file,
+            &mut sites,
+            SourceSite {
+                path: file.path.clone(),
+                line: token.line,
+                context,
+                operation: operation.to_owned(),
+            },
+        )?;
     }
     Ok(sites)
 }
@@ -1650,6 +1740,7 @@ fn loop_sites(
     let test_only = test_only_tokens(&tokens);
     let mut sites = Vec::new();
     let mut failures = Vec::new();
+    let mut identities = 0usize;
     for (i, token) in tokens.iter().enumerate() {
         if test_only.get(i).copied().unwrap_or(false) {
             continue;
@@ -1657,6 +1748,12 @@ fn loop_sites(
         if matches!(file.krate.as_str(), "tools" | "jobs")
             && unrecognized_tool_definition(&tokens, i)
         {
+            if failures.len() >= MAX_SOURCE_SITES_PER_FILE {
+                return Err(stalled_cursor_diagnostic(
+                    file,
+                    StalledCursor { line: token.line },
+                ));
+            }
             failures.push(format!(
                 "{}:{}: unrecognized owned tool-name definition",
                 file.path, token.line
@@ -1668,6 +1765,13 @@ fn loop_sites(
         let Some(name) = string(Some(token)).filter(|name| names.contains(*name)) else {
             continue;
         };
+        identities = identities.saturating_add(1);
+        if identities > MAX_SOURCE_SITES_PER_FILE {
+            return Err(stalled_cursor_diagnostic(
+                file,
+                StalledCursor { line: token.line },
+            ));
+        }
         let mut context = function_context(&tokens, i);
         if let Some((function, reason)) = label_context(file, &tokens, i, name) {
             let label = match (file.path.as_str(), name) {
@@ -1698,12 +1802,16 @@ fn loop_sites(
             }
             context = format!("{context} | {reason}");
         }
-        sites.push(SourceSite {
-            path: file.path.clone(),
-            line: token.line,
-            context,
-            operation: format!("tool:{name}"),
-        });
+        push_source_site(
+            file,
+            &mut sites,
+            SourceSite {
+                path: file.path.clone(),
+                line: token.line,
+                context,
+                operation: format!("tool:{name}"),
+            },
+        )?;
     }
     Ok((sites, failures))
 }
