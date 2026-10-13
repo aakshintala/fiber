@@ -34,10 +34,15 @@ impl Connection {
     pub(crate) fn tunnel(self, target: &str, origin: TcpStream) -> TunnelEnd {
         let (mut stream, ahead, shared) = self.into_tunnel_parts();
         let op = RequestBudget::start_on(&shared.clock, shared.limits.request, shared.limits.guard);
-        // Nonblocking throughout: every byte below bounds itself through
-        // the pump, so a slow peer waits out the handshake's budget
-        // instead of blocking the tunnel thread past it.
         let mut origin = origin;
+        // The dial left the origin blocking: put it nonblocking before
+        // the handshake, so every byte below bounds itself through the
+        // pump and the copies, and a stalled origin peer waits out the
+        // handshake's budget instead of blocking the tunnel thread past
+        // it. A socket that cannot go nonblocking is the origin's end.
+        if origin.set_nonblocking(true).is_err() {
+            return TunnelEnd::OriginClosed;
+        }
         // The 200 and the coalesced bytes within the handshake's budget.
         let mut seq = 0;
         let mut acked = None;
@@ -191,12 +196,14 @@ pub(crate) fn tunnel_handshake(
 
 /// One tunnel direction: bytes from `src` to `dst` within the wait
 /// context's operation, a named bounded operation with a deadline.
-/// Ends when `src` closes or errors, when shutdown stops the wait, or
-/// past the deadline naming the target and phase; the caller marks the
-/// end and breaks both sockets, so the other direction ends too.
-fn tunnel_copy(
-    src: &mut TcpStream,
-    dst: &mut TcpStream,
+/// Both ends are nonblocking, so a stalled peer parks on the injected
+/// clock instead of blocking the copy thread. Ends when `src` closes or
+/// errors, when shutdown stops the wait, or past the deadline naming the
+/// target and phase; the caller marks the end and breaks both sockets,
+/// so the other direction ends too.
+pub(crate) fn tunnel_copy(
+    src: &mut dyn Read,
+    dst: &mut dyn Write,
     phase: &'static str,
     ctx: &mut WaitCtx<'_>,
 ) {

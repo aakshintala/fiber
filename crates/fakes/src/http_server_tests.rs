@@ -2000,6 +2000,271 @@ fn a_stalled_tunnel_direction_fails_within_its_bound() {
     });
 }
 
+/// A reader that never has bytes: every read would block, so a copy
+/// from it parks on the injected clock instead of completing.
+struct SilentReader;
+
+impl std::io::Read for SilentReader {
+    fn read(&mut self, _bytes: &mut [u8]) -> std::io::Result<usize> {
+        Err(std::io::Error::new(
+            std::io::ErrorKind::WouldBlock,
+            "the silent origin holds",
+        ))
+    }
+}
+
+/// A stalled origin read fails within its bound naming the target: the
+/// origin never sends, so only the copy's deadline decides it. A
+/// blocking origin read would hang here with no acknowledgment at all.
+#[test]
+fn a_stalled_origin_read_fails_within_its_bound() {
+    let clock = fake_clock();
+    let server = bind(&clock);
+    let acks = server.test_acknowledgments();
+    let target = "127.0.0.1:1".to_owned();
+    let expected = target.clone();
+    // The request takes the target's name, as the tunnel's own copy
+    // context does: expiry names the target.
+    let (mut conn, _client) = accept_for_tunnel(&server, &target);
+    let op = conn.op_budget();
+    let (_stream, mut ctx) = conn.parts(&op);
+    let (done_tx, done_rx) = mpsc::channel();
+    thread::scope(|scope| {
+        let mut src = SilentReader;
+        let mut dst = Vec::new();
+        scope.spawn(move || {
+            let caught = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                tunnel_copy(
+                    &mut src,
+                    &mut dst,
+                    "to copy the origin to the client",
+                    &mut ctx,
+                );
+            }));
+            match done_tx.send(caught) {
+                Ok(()) | Err(_) => {}
+            }
+        });
+        let ack = loop {
+            let ack = next_acknowledgment(&acks, "the origin copy's clock wait");
+            if ack.phase == "to copy the origin to the client" {
+                break ack;
+            }
+        };
+        assert!(
+            clock.await_thread_parked(ack.thread, ack.until, OP),
+            "the origin copy parks on the clock before it moves"
+        );
+        clock.advance(Duration::from_secs(10));
+        let caught: thread::Result<()> =
+            Deadline::after(OP).recv_or_fail(&done_rx, "the stalled origin read");
+        let message = failure_text(caught, "the stalled origin read");
+        assert!(
+            message.contains(&expected),
+            "the failure names its target, got: {message}"
+        );
+        assert!(
+            message.contains("to copy the origin to the client"),
+            "the failure names its phase, got: {message}"
+        );
+    });
+}
+
+/// A stalled origin write fails within its bound naming the target: the
+/// origin never reads, so the copy's pump parks on the injected clock
+/// instead of completing. A finite writer forces the slow peer, since
+/// sockets alone cannot guarantee send-buffer exhaustion.
+#[test]
+fn a_stalled_origin_write_fails_within_its_bound() {
+    let clock = fake_clock();
+    let server = bind(&clock);
+    let acks = server.test_acknowledgments();
+    let target = "127.0.0.1:1".to_owned();
+    let expected = target.clone();
+    let (mut conn, _client) = accept_for_tunnel(&server, &target);
+    let op = conn.op_budget();
+    let (_stream, mut ctx) = conn.parts(&op);
+    let stop = Arc::new(AtomicBool::new(false));
+    let (done_tx, done_rx) = mpsc::channel();
+    thread::scope(|scope| {
+        // Past capacity with the drain held shut: every write parks, as
+        // behind an origin that never reads.
+        let mut src = std::io::Cursor::new(vec![b'x'; 8]);
+        let mut dst = TestWriter::finished(0, Arc::clone(&stop));
+        scope.spawn(move || {
+            let caught = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                tunnel_copy(
+                    &mut src,
+                    &mut dst,
+                    "to copy the client to the origin",
+                    &mut ctx,
+                );
+            }));
+            match done_tx.send(caught) {
+                Ok(()) | Err(_) => {}
+            }
+        });
+        let ack = loop {
+            let ack = next_acknowledgment(&acks, "the origin write's clock wait");
+            if ack.phase == "to copy the client to the origin" {
+                break ack;
+            }
+        };
+        assert!(
+            clock.await_thread_parked(ack.thread, ack.until, OP),
+            "the origin write parks on the clock before it moves"
+        );
+        clock.advance(Duration::from_secs(10));
+        let caught: thread::Result<()> =
+            Deadline::after(OP).recv_or_fail(&done_rx, "the stalled origin write");
+        let message = failure_text(caught, "the stalled origin write");
+        assert!(
+            message.contains(&expected),
+            "the failure names its target, got: {message}"
+        );
+        assert!(
+            message.contains("to copy the client to the origin"),
+            "the failure names its phase, got: {message}"
+        );
+    });
+}
+
+/// Shutdown during a stalled origin read stops it: the parked copy
+/// returns instead of failing past its bound.
+#[test]
+fn shutdown_during_a_stalled_origin_read_stops_it() {
+    let clock = fake_clock();
+    let server = bind(&clock);
+    let acks = server.test_acknowledgments();
+    let target = "127.0.0.1:1".to_owned();
+    let (mut conn, _client) = accept_for_tunnel(&server, &target);
+    let op = conn.op_budget();
+    let (_stream, mut ctx) = conn.parts(&op);
+    let (done_tx, done_rx) = mpsc::channel();
+    thread::scope(|scope| {
+        let mut src = SilentReader;
+        let mut dst = Vec::new();
+        scope.spawn(move || {
+            let caught = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                tunnel_copy(
+                    &mut src,
+                    &mut dst,
+                    "to copy the origin to the client",
+                    &mut ctx,
+                );
+            }));
+            match done_tx.send(caught.is_ok()) {
+                Ok(()) | Err(_) => {}
+            }
+        });
+        let ack = loop {
+            let ack = next_acknowledgment(&acks, "the origin copy's clock wait");
+            if ack.phase == "to copy the origin to the client" {
+                break ack;
+            }
+        };
+        assert!(
+            clock.await_thread_parked(ack.thread, ack.until, OP),
+            "the origin copy parks on the clock before it moves"
+        );
+        assert!(server.shutdown(), "shutdown ends the stalled origin read");
+        assert!(
+            Deadline::after(OP).recv_or_fail(&done_rx, "the stopped origin read"),
+            "shutdown stops the stalled origin read instead of failing it"
+        );
+    });
+}
+
+/// Shutdown during a stalled origin write stops it: the parked pump
+/// returns instead of failing past its bound.
+#[test]
+fn shutdown_during_a_stalled_origin_write_stops_it() {
+    let clock = fake_clock();
+    let server = bind(&clock);
+    let acks = server.test_acknowledgments();
+    let target = "127.0.0.1:1".to_owned();
+    let (mut conn, _client) = accept_for_tunnel(&server, &target);
+    let op = conn.op_budget();
+    let (_stream, mut ctx) = conn.parts(&op);
+    let stop = Arc::new(AtomicBool::new(false));
+    let (done_tx, done_rx) = mpsc::channel();
+    thread::scope(|scope| {
+        let mut src = std::io::Cursor::new(vec![b'x'; 8]);
+        let mut dst = TestWriter::finished(0, Arc::clone(&stop));
+        scope.spawn(move || {
+            let caught = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                tunnel_copy(
+                    &mut src,
+                    &mut dst,
+                    "to copy the client to the origin",
+                    &mut ctx,
+                );
+            }));
+            match done_tx.send(caught.is_ok()) {
+                Ok(()) | Err(_) => {}
+            }
+        });
+        let ack = loop {
+            let ack = next_acknowledgment(&acks, "the origin write's clock wait");
+            if ack.phase == "to copy the client to the origin" {
+                break ack;
+            }
+        };
+        assert!(
+            clock.await_thread_parked(ack.thread, ack.until, OP),
+            "the origin write parks on the clock before it moves"
+        );
+        assert!(server.shutdown(), "shutdown ends the stalled origin write");
+        assert!(
+            Deadline::after(OP).recv_or_fail(&done_rx, "the stopped origin write"),
+            "shutdown stops the stalled origin write instead of failing it"
+        );
+    });
+}
+
+/// A silent origin parks on the injected clock through a real tunnel:
+/// the origin-to-client copy waits boundedly instead of blocking on
+/// the origin socket, and shutdown ends the tunnel stopped. A blocking
+/// origin read would hang here with no acknowledgment at all.
+#[test]
+fn a_silent_origin_parks_on_the_injected_clock() {
+    let clock = fake_clock();
+    let server = bind(&clock);
+    let acks = server.test_acknowledgments();
+    let (origin_addr, origin_ended) = hold_origin();
+    let target = format!("{origin_addr}");
+    let (done_tx, done_rx) = mpsc::channel();
+    thread::scope(|scope| {
+        let (conn, _client) = accept_for_tunnel(&server, "the tunnel request");
+        let origin = TcpStream::connect(origin_addr).expect("the tunnel reaches the origin");
+        scope.spawn(move || {
+            let end = conn.tunnel(&target, origin);
+            match done_tx.send(end) {
+                Ok(()) | Err(_) => {}
+            }
+        });
+        // Both sides stay open and silent: the origin-to-client copy
+        // parks waiting for bytes that never come.
+        let ack = loop {
+            let ack = next_acknowledgment(&acks, "the origin copy's clock wait");
+            if ack.phase == "to copy the origin to the client" {
+                break ack;
+            }
+        };
+        assert!(
+            clock.await_thread_parked(ack.thread, ack.until, OP),
+            "the origin copy parks on the clock before it moves"
+        );
+        assert!(server.shutdown(), "shutdown ends the silent tunnel");
+        assert_eq!(
+            Deadline::after(OP).recv_or_fail(&done_rx, "the stopped tunnel"),
+            TunnelEnd::Stopped,
+            "shutdown ends the tunnel stopped"
+        );
+        Deadline::after(OP).recv_or_fail(&origin_ended, "the origin's end");
+    });
+}
+
 /// Shutdown during the tunnel handshake stops it: the parked 200 never
 /// sends, and no copy starts.
 #[test]

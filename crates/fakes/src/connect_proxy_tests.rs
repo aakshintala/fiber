@@ -459,30 +459,58 @@ fn a_localhost_target_tunnels_to_loopback() {
     echo.join().unwrap();
 }
 
-/// A silent handshake stays silent on the injected clock: nothing is
-/// recorded and nothing is answered until the client goes away, and the
-/// wait never outruns its bound while the test holds the clock.
+/// A silent handshake stays silent on the injected clock: the reader
+/// parks on the clock waiting for the peer, records nothing, and is
+/// still parked half the bound later. Parked evidence decides it, never
+/// an elapsed-time absence: no client read with a wall timeout takes
+/// part in the verdict.
 #[test]
 fn a_silent_handshake_records_nothing_on_the_injected_clock() {
     use crate::clock::FakeClock;
     let clock = FakeClock::new();
     let proxy = ConnectProxy::start_on(clock.clone()).unwrap();
-    let mut client = TcpStream::connect(("127.0.0.1", proxy.port())).unwrap();
-    client
-        .set_read_timeout(Some(Duration::from_millis(200)))
-        .unwrap();
-    // Half the bound passes with no client bytes: the handshake is
-    // still waiting, answered nothing, recorded nothing. The held
-    // clock and the failed read decide it: with no bytes sent and no
-    // advance past the wait, no record can arrive later.
-    clock.advance(Duration::from_secs(15));
-    let mut one = [0u8; 1];
+    let acks = proxy.test_acknowledgments();
+    let _client = TcpStream::connect(("127.0.0.1", proxy.port())).unwrap();
+    // The handshake reader parks on the clock waiting for the silent
+    // peer: its acknowledgment names the request-line phase past its
+    // clock check, and the parked thread proves it is waiting.
+    let waiting = loop {
+        let ack = Deadline::after(CONNECT_WITHIN).recv_or_fail(&acks, "the handshake's clock wait");
+        if ack.phase == "to read the request line" {
+            break ack;
+        }
+    };
     assert!(
-        client.read_exact(&mut one).is_err(),
-        "a silent handshake answers nothing"
+        clock.await_thread_parked(waiting.thread, waiting.until, CONNECT_WITHIN),
+        "the handshake parks on the clock before it moves"
     );
-    assert!(proxy.connects().is_empty());
-    drop(client);
+    // Half the bound passes with no client bytes: the same reader
+    // announces its next wait in sequence, still parked on the silent
+    // peer, having answered nothing and recorded nothing.
+    clock.advance(Duration::from_secs(15));
+    let still = loop {
+        let ack = Deadline::after(CONNECT_WITHIN).recv_or_fail(&acks, "the handshake's next wait");
+        if ack.phase == "to read the request line" {
+            break ack;
+        }
+    };
+    assert_eq!(
+        still.thread, waiting.thread,
+        "the same reader is still waiting on the silent peer"
+    );
+    assert_eq!(
+        still.seq,
+        waiting.seq + 1,
+        "only the announced sequence advances the clock"
+    );
+    assert!(
+        clock.await_thread_parked(still.thread, still.until, CONNECT_WITHIN),
+        "half the bound later the handshake is still parked on the silent peer"
+    );
+    assert!(
+        proxy.connects().is_empty(),
+        "a silent handshake records nothing"
+    );
 }
 
 /// Dropping the proxy closes every open tunnel: a tunnel that ended

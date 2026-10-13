@@ -36,7 +36,7 @@ pub(crate) use server::woken;
 pub(crate) use server::{HttpServer, Shared};
 pub(crate) use tunnel::TunnelEnd;
 #[cfg(test)]
-pub(crate) use tunnel::tunnel_handshake;
+pub(crate) use tunnel::{tunnel_copy, tunnel_handshake};
 
 const REQUEST_WITHIN: Duration = Duration::from_secs(30);
 const HANG_GUARD: Duration = Duration::from_secs(45);

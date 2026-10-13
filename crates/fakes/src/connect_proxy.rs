@@ -4,12 +4,16 @@
 //! Accepting, head reading and the tunnel run on the shared HTTP core.
 
 use std::io;
+#[cfg(test)]
+use std::sync::mpsc;
 use std::sync::{Arc, Condvar, Mutex, MutexGuard, PoisonError};
 use std::time::Duration;
 
 use contract::clock::Clock;
 
 use crate::clock::SystemClock;
+#[cfg(test)]
+use crate::http_server::WaitAck;
 use crate::http_server::{
     Connection, HttpServer, Limits, TunnelEnd,
     request::{self, RequestOutcome},
@@ -71,6 +75,14 @@ impl ConnectProxy {
     /// order.
     pub fn connects(&self) -> Vec<String> {
         lock(&self.state).connects.clone()
+    }
+
+    /// Receives every clock-wait acknowledgment from here on, test-only:
+    /// the test synchronises on the handshake reader's park instead of
+    /// on elapsed time.
+    #[cfg(test)]
+    pub(crate) fn test_acknowledgments(&self) -> mpsc::Receiver<WaitAck> {
+        self.core.test_acknowledgments()
     }
 
     /// Waits, at most `within` of real time, until at least `count`
