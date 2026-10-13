@@ -464,3 +464,29 @@ fn a_running_refusal_notice_between_acceptances_keeps_the_screen_attached() {
     assert!(!app.gated(&id("s_aaaaaaaaaaaaaaaa")));
     assert_eq!(app.session(), Some(&id("s_aaaaaaaaaaaaaaaa")));
 }
+
+#[test]
+fn a_gated_non_notice_line_is_dropped_without_a_notice() {
+    let mut app = home_at(OpenAt::Home);
+    let lines = commands(app.open_session(
+        id("s_aaaaaaaaaaaaaaaa"),
+        Some(crate::home::Level::Full),
+        Some("work".to_owned()),
+    ));
+    let first = lines[0]["id"]
+        .as_str()
+        .unwrap_or_else(|| panic!("first id"));
+    assert!(
+        app.on_line(session_accepted("s_aaaaaaaaaaaaaaaa", first))
+            .is_empty()
+    );
+    // A gated line that is not a notice is dropped without becoming
+    // one: only an opening notice reports while the replay stays
+    // gated, so `||` here would file a spurious `rejected` notice.
+    assert!(
+        app.on_line(session_accepted("s_aaaaaaaaaaaaaaaa", "unknown"))
+            .is_empty()
+    );
+    assert_eq!(app.notice(), None);
+    assert!(app.gated(&id("s_aaaaaaaaaaaaaaaa")));
+}

@@ -3802,6 +3802,42 @@ fn a_closing_session_cancels_a_pending_label_switch() {
 }
 
 #[test]
+fn a_closing_session_cancels_a_pending_label_switch_despite_a_held_acknowledgement() {
+    reset();
+    let opened = Opened::open(Vec::new());
+    let socket = opened.socket.clone();
+    let (held_tx, held_rx) = mpsc::channel();
+    opened
+        .session
+        .run(Vec::new(), Arc::new(|| false), move |inbox| {
+            let client = Client::connect(&socket).unwrap();
+            client
+                .send(&subscribe_credential_line("c_sub", "full", "work"))
+                .unwrap();
+            let (label, ack) = next_switch(&inbox);
+            assert_eq!(label, "work");
+            // The loop never answers: it holds the acknowledgement past
+            // the close, as a loop mid-turn does.
+            std::mem::forget(ack);
+            // This prompt's acknowledgement clones the outbox, and the
+            // test holds it past the disconnect: the settle list survives
+            // the connection's own handle dropping, so only the reader's
+            // clear ends the waiting writer instead of hanging its join.
+            send_text(&client, "c_prompt", "prompt", "hello");
+            let prompt_ack = next_prompt(&inbox);
+            held_tx.send(prompt_ack).unwrap();
+            drop(client);
+            Ok(())
+        })
+        .unwrap();
+    let held = Deadline::after(DEADLINE)
+        .recv(&held_rx)
+        .expect("the held acknowledgement arrives");
+    close_within(opened.session, opened.log);
+    drop(held);
+}
+
+#[test]
 fn a_dead_client_ends_a_label_bearing_subscribe_without_a_hang() {
     reset();
     let opened = Opened::open(Vec::new());
