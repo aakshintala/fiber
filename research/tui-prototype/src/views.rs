@@ -19,6 +19,7 @@ use super::{bold, dim, fg, paint, rgb, row, slab, sp, view_header};
 use crate::cases::{Case, Surface};
 use ratatui::style::{Color, Style};
 use ratatui::text::Span;
+use serde_json::json;
 use std::io::{self, Write};
 
 /// Every `--view-case` case, named in README.md.
@@ -94,6 +95,46 @@ const CASES: &[Case<Look>] = &[
         build: || Look { kind: Kind::Skills },
     },
     Case {
+        name: "opened-edit",
+        help: "an edit opened inline with its guttered diff and word pairs",
+        check: "the ledger row with its counts, the diff under it with a dim gutter and dim @@ lines, removals red and additions green, one removed and added line with their differing words in reverse video, and the dim overflow line past twenty rows.",
+        build: || Look {
+            kind: Kind::OpenedEdit,
+        },
+    },
+    Case {
+        name: "opened-read",
+        help: "a read opened inline with its text numbered from its offset",
+        check: "the ledger row with its lines, the text under it with a dim gutter numbered from the read's offset.",
+        build: || Look {
+            kind: Kind::OpenedRead,
+        },
+    },
+    Case {
+        name: "opened-search",
+        help: "a search opened inline with its matches grouped under each path",
+        check: "the ledger row with its matches, the matches under it grouped under each file's path with line numbers in the gutter and the matched text on the match tint.",
+        build: || Look {
+            kind: Kind::OpenedSearch,
+        },
+    },
+    Case {
+        name: "opened-shell",
+        help: "shell calls opened inline with their commands and closings",
+        check: "each ledger row, the full command and output under it, one closing line in removed for the failure and one for the killed command.",
+        build: || Look {
+            kind: Kind::OpenedShell,
+        },
+    },
+    Case {
+        name: "opened-mcp",
+        help: "an MCP and an unknown tool opened inline as text and JSON",
+        check: "each ledger row, the MCP content as plain text and the unknown tool's JSON indented under theirs.",
+        build: || Look {
+            kind: Kind::OpenedMcp,
+        },
+    },
+    Case {
         name: "cut-shell",
         help: "a cut shell call's whole output with the marker where the model's 16 KiB view ended",
         check: "the swapped-view title row, the whole output paged from the session, and the dim marker where the model's 16 KiB view ended.",
@@ -123,6 +164,11 @@ enum Kind {
     Rules,
     Settings,
     Skills,
+    OpenedEdit,
+    OpenedRead,
+    OpenedSearch,
+    OpenedShell,
+    OpenedMcp,
     CutShell,
 }
 
@@ -518,6 +564,171 @@ fn skills_rows() -> Vec<super::Row> {
     ]
 }
 
+/// One group with its calls opened, as the conversation draws it: the
+/// summary line, each ledger row, and each opened call under its row.
+/// Static fixtures only; the rows come from the ledger builders.
+fn opened_frame(calls: Vec<super::Call>, open: &[usize], cols: usize) -> Vec<Placed> {
+    let mut v = super::View::default();
+    for ii in open {
+        v.exp.insert((0, 0, *ii));
+    }
+    let g = super::Group {
+        items: calls.into_iter().map(super::Item::C).collect(),
+        steps: 1,
+        step_closed: true,
+        open: true,
+        last_ts: 2500,
+    };
+    placed(
+        super::group_lines(&g, super::Act::Group(0, 0), cols, &v),
+        cols as u16,
+    )
+}
+
+fn edit_fixture() -> super::Call {
+    let mut diff = vec![
+        "@@ -12,5 +12,6 @@ fn paint(".to_string(),
+        "     let spans = fit(&r.spans, w as usize);".to_string(),
+        "-    buf.set_line(x, y, &line, w);".to_string(),
+        "+    buf.set_line(x, y, &Line::from(spans), w);".to_string(),
+        "     if let Some(bg) = r.bg {".to_string(),
+        "+    let line = Line::from(spans);".to_string(),
+    ];
+    diff.extend((7..=24).map(|i| format!("     filler line {i}")));
+    super::Call {
+        name: "edit".into(),
+        args: json!({ "path": "crates/tui/src/view.rs" }),
+        st: super::St::Completed,
+        start: 0,
+        end: Some(2500),
+        err: None,
+        lines: 0,
+        exit: None,
+        changes: vec![("crates/tui/src/view.rs".into(), 6, 2)],
+        content: diff.join("\n"),
+        step: 1,
+        asked: None,
+    }
+}
+
+fn read_fixture() -> super::Call {
+    super::Call {
+        name: "read".into(),
+        args: json!({ "path": "crates/hub/src/lock.rs", "offset": 41 }),
+        st: super::St::Completed,
+        start: 0,
+        end: Some(2500),
+        err: None,
+        lines: 8,
+        exit: None,
+        changes: vec![],
+        content: [
+            "pub fn try_lock(path: &Path) -> Result<Lock> {",
+            "    // one holder at a time",
+            "    let file = File::create(path)?;",
+            "    let _guard = lock(&file)?;",
+            "    map.insert(path, _guard);",
+            "    // the map owns the guard",
+            "    Ok(Lock { file })",
+            "}",
+        ]
+        .join("\n"),
+        step: 1,
+        asked: None,
+    }
+}
+
+fn search_fixture() -> super::Call {
+    super::Call {
+        name: "shell".into(),
+        args: json!({ "command": "grep -rn lock crates" }),
+        st: super::St::Completed,
+        start: 0,
+        end: Some(2500),
+        err: None,
+        lines: 3,
+        exit: Some(0),
+        changes: vec![],
+        content: [
+            "crates/hub/src/lock.rs:41:    let _guard = lock(path);",
+            "crates/hub/src/lock.rs:42:    lock twice lock;",
+            "--",
+            "crates/tui/src/main.rs:1905:    holds the lock for the turn",
+        ]
+        .join("\n"),
+        step: 1,
+        asked: None,
+    }
+}
+
+fn shell_fixtures() -> Vec<super::Call> {
+    vec![
+        super::Call {
+            name: "shell".into(),
+            args: json!({ "command": "cargo test -p log" }),
+            st: super::St::Failed,
+            start: 0,
+            end: Some(2500),
+            err: Some(("nonzero_exit".into(), "exit code 1".into())),
+            lines: 2,
+            exit: Some(1),
+            changes: vec![],
+            content: "running 42 tests\ntest serve::attach ... FAILED".into(),
+            step: 1,
+            asked: None,
+        },
+        super::Call {
+            name: "shell".into(),
+            args: json!({ "command": "cargo test -- --nocapture" }),
+            st: super::St::Failed,
+            start: 0,
+            end: Some(2500),
+            err: Some(("signal".into(), "SIGTERM".into())),
+            lines: 1,
+            exit: None,
+            changes: vec![],
+            content: "running 42 tests".into(),
+            step: 1,
+            asked: None,
+        },
+    ]
+}
+
+fn mcp_fixtures() -> Vec<super::Call> {
+    vec![
+        super::Call {
+            name: "linear_search".into(),
+            args: json!({}),
+            st: super::St::Completed,
+            start: 0,
+            end: Some(2500),
+            err: None,
+            lines: 0,
+            exit: None,
+            changes: vec![],
+            content:
+                "3 results for \"lock\"\ncrates/hub/src/lock.rs:41\ncrates/tui/src/main.rs:1905"
+                    .into(),
+            step: 1,
+            asked: None,
+        },
+        super::Call {
+            name: "notes_save".into(),
+            args: json!({}),
+            st: super::St::Completed,
+            start: 0,
+            end: Some(2500),
+            err: None,
+            lines: 0,
+            exit: None,
+            changes: vec![],
+            content: "{\"saved\": true, \"path\": \"notes/scratch.md\"}".into(),
+            step: 1,
+            asked: None,
+        },
+    ]
+}
+
 /// A cut shell call's whole output, paged from the session's artifact: the
 /// lines the model saw, a dim marker where its 16 KiB view ended, then the
 /// rest with the closing line. A still shows one screen of the paging.
@@ -639,6 +850,11 @@ fn body_rows(c: &Look, cols: usize) -> Vec<Placed> {
             out.extend(placed(skills_rows(), full));
             out
         }
+        Kind::OpenedEdit => opened_frame(vec![edit_fixture()], &[0], cols),
+        Kind::OpenedRead => opened_frame(vec![read_fixture()], &[0], cols),
+        Kind::OpenedSearch => opened_frame(vec![search_fixture()], &[0], cols),
+        Kind::OpenedShell => opened_frame(shell_fixtures(), &[0, 1], cols),
+        Kind::OpenedMcp => opened_frame(mcp_fixtures(), &[0, 1], cols),
         Kind::CutShell => {
             let mut out = placed(vec![view_header("Shell", "cargo test -p log")], full);
             out.push(blank());
@@ -874,7 +1090,7 @@ mod tests {
                 .iter()
                 .all(|c| crate::cases::lookup(CASES, c.name).is_some())
         );
-        assert_eq!(CASES.len(), 11);
+        assert_eq!(CASES.len(), 16);
         assert!(parse("nope").is_none());
     }
 
@@ -1377,6 +1593,108 @@ mod tests {
             assert!(t.contains("[off]"), "no off switch");
             assert!(t.contains("Enter shows the text"), "no text hint");
             assert!(t.contains("Ctrl+G opens its file"), "no file hint");
+        }
+    }
+
+    /// The cell of the first occurrence of `needle` in the buffer's text.
+    fn cell_of(buf: &Buffer, cols: usize, rows: usize, needle: &str) -> (u16, u16) {
+        let t = buf_text(buf, cols, rows);
+        let y = t.lines().position(|l| l.contains(needle)).unwrap();
+        let x = t.lines().nth(y).unwrap().find(needle).unwrap();
+        (x as u16, y as u16)
+    }
+
+    #[test]
+    fn opened_edit_shows_gutter_pairs_and_truncation() {
+        for cols in [160, NARROW] {
+            let c = parse_case("opened-edit");
+            let t = text(&c, cols, 48);
+            assert!(t.contains("Edited 1 file"), "no summary");
+            assert!(t.contains("@@ -12,5 +12,6 @@"), "no hunk header");
+            assert!(t.contains("  13 -    buf.set_line"), "no old-side gutter");
+            assert!(t.contains("  13 +    buf.set_line"), "no new-side gutter");
+            assert!(
+                t.contains("… 4 more lines (Enter to view)"),
+                "no overflow line"
+            );
+        }
+        let c = parse_case("opened-edit");
+        let buf = buffer(&c, 160, 48);
+        for (needle, fg) in [
+            ("&line,", crate::RED),
+            ("&Line::from(spans),", crate::GREEN),
+        ] {
+            let (x, y) = cell_of(&buf, 160, 48, needle);
+            let cell = &buf[(x, y)];
+            assert!(
+                cell.modifier.contains(Modifier::REVERSED),
+                "{needle} is not reversed"
+            );
+            assert_eq!(cell.fg, fg, "{needle} lost its colour");
+        }
+    }
+
+    #[test]
+    fn opened_read_numbers_from_its_offset() {
+        for cols in [160, NARROW] {
+            let c = parse_case("opened-read");
+            let t = text(&c, cols, 48);
+            assert!(t.contains("Read 1 file"), "no summary");
+            assert!(
+                t.contains("  41 pub fn try_lock"),
+                "the text is not numbered from the offset"
+            );
+            assert!(t.contains("  48 }"), "the gutter does not run on");
+        }
+    }
+
+    #[test]
+    fn opened_search_groups_matches_and_highlights() {
+        for cols in [160, NARROW] {
+            let c = parse_case("opened-search");
+            let t = text(&c, cols, 48);
+            let (h0, h1) = (
+                t.find("crates/hub/src/lock.rs").unwrap(),
+                t.find("crates/tui/src/main.rs").unwrap(),
+            );
+            assert!(h0 < h1, "matches are not grouped under each path");
+            assert!(t.contains("  41 "), "no gutter");
+            assert!(t.contains(" 1905 "), "no gutter");
+        }
+        let c = parse_case("opened-search");
+        let buf = buffer(&c, 160, 48);
+        let (x, y) = cell_of(&buf, 160, 48, "lock(path)");
+        assert_eq!(buf[(x, y)].bg, crate::rgb(0x5a4a1a), "no match tint");
+    }
+
+    #[test]
+    fn opened_shell_shows_both_closings() {
+        for cols in [160, NARROW] {
+            let c = parse_case("opened-shell");
+            let t = text(&c, cols, 48);
+            assert!(t.contains("$ cargo test -p log"), "no command");
+            assert!(t.contains("exit 1"), "no failure closing");
+            assert!(t.contains("killed by SIGTERM"), "no signal closing");
+        }
+        let c = parse_case("opened-shell");
+        let buf = buffer(&c, 160, 48);
+        let (x, y) = cell_of(&buf, 160, 48, "exit 1");
+        assert_eq!(buf[(x, y)].fg, crate::RED, "exit 1 is not removed");
+        let (x, y) = cell_of(&buf, 160, 48, "killed by SIGTERM");
+        assert_eq!(buf[(x, y)].fg, crate::RED, "the signal is not removed");
+    }
+
+    #[test]
+    fn opened_mcp_shows_text_and_indented_json() {
+        for cols in [160, NARROW] {
+            let c = parse_case("opened-mcp");
+            let t = text(&c, cols, 48);
+            assert!(t.contains("3 results for"), "no plain content");
+            assert!(
+                t.contains("  \"path\": \"notes/scratch.md\""),
+                "no indented JSON"
+            );
+            assert!(t.contains("  \"saved\": true"), "no indented JSON");
         }
     }
 

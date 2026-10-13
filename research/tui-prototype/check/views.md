@@ -12,4 +12,9 @@ One run per case: `--view-case CASE`.
 - rules: global rules then this project's, each with its prefix, when and from which session it was added, and its red ✕.
 - settings: the keys as aligned columns under a dim header row, key, effective value and the layer it comes from (global, project, repository or default), then the reload cost and the file hint.
 - skills: one row per skill with its source, visibility, shadowed skill and switches, and the text and file hints.
+- opened-edit: the ledger row with its counts, the diff under it with a dim gutter and dim @@ lines, removals red and additions green, one removed and added line with their differing words in reverse video, and the dim overflow line past twenty rows.
+- opened-read: the ledger row with its lines, the text under it with a dim gutter numbered from the read's offset.
+- opened-search: the ledger row with its matches, the matches under it grouped under each file's path with line numbers in the gutter and the matched text on the match tint.
+- opened-shell: each ledger row, the full command and output under it, one closing line in removed for the failure and one for the killed command.
+- opened-mcp: each ledger row, the MCP content as plain text and the unknown tool's JSON indented under theirs.
 - cut-shell: the swapped-view title row, the whole output paged from the session, and the dim marker where the model's 16 KiB view ended.
