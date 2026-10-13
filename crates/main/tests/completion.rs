@@ -155,7 +155,7 @@ const GRAMMAR: &[(&str, &[&str], &[&str])] = &[
         &["install", "update", "remove", "reinstall", "list", "test"],
         &["-h", "--help"],
     ),
-    ("extension install", &[], &["-h", "--help"]),
+    ("extension install", &[], &["--project", "-h", "--help"]),
     ("extension update", &[], &["-h", "--help"]),
     ("extension remove", &[], &["-h", "--help"]),
     ("extension reinstall", &[], &["-h", "--help"]),

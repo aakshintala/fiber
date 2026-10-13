@@ -35,7 +35,7 @@ Fiber itself:
   version                                   Print the version
 
 Extensions:
-  extension install <name or path>  Install an extension and its dependencies
+  extension install [--project] <name or path>  Install an extension and its dependencies
   extension update [<name>]         Update one extension, or every installed extension, to its newest tag
   extension remove <name>           Remove an extension, the dependencies nothing else uses, and their data
   extension reinstall <name>        Remove an extension and install it again from its recorded source and commit
@@ -361,6 +361,9 @@ pub(crate) enum SessionsCommands {
 pub(crate) enum ExtensionCommands {
     /// Install an extension and its dependencies
     Install {
+        /// Enable the extension only for the current project.
+        #[arg(long)]
+        project: bool,
         /// The extension's name, or a path to its package.
         #[arg(value_name = "name or path")]
         name_or_path: String,

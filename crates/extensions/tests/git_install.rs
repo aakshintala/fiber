@@ -142,6 +142,124 @@ fn dirs(setup: &Setup) -> Vec<String> {
 const LIB: &str = "example.com/acme/lib";
 
 #[test]
+fn final_plan_freshness_excludes_existing_and_upgraded_dependencies() {
+    fakes::within("final plan freshness", Duration::from_secs(40), || {
+        let setup = Setup::new();
+        let mut repos = Repos::new(&setup);
+        let root = "example.com/acme/root";
+        let dep = "example.com/acme/dep";
+        let aux = "example.com/acme/aux";
+        let new = "example.com/acme/new";
+        repos.tag(dep, "", "v1.0.0", &manifest(dep), &[]);
+        repos.tag(aux, "", "v1.0.0", &manifest(aux), &[]);
+        repos.tag(
+            root,
+            "",
+            "v1.0.0",
+            &named(root, &[(aux, "1.0"), (dep, "1.0")]),
+            &[],
+        );
+        let clock = fakes::clock::SystemClock;
+        let origin = repos.origin();
+        let p = plan(
+            &setup.home(),
+            &Request::Install(root.into()),
+            FIBER,
+            &origin,
+            &clock,
+        )
+        .unwrap();
+        assert_eq!(p.fresh_names().collect::<Vec<_>>(), [aux, dep, root]);
+        assert_eq!(
+            p.items().map(|i| i.name.as_str()).collect::<Vec<_>>(),
+            [aux, dep, root]
+        );
+        p.commit().unwrap();
+        assert_eq!(
+            versions(&setup),
+            BTreeMap::from([
+                (aux.into(), "v1.0.0".into()),
+                (dep.into(), "v1.0.0".into()),
+                (root.into(), "v1.0.0".into())
+            ])
+        );
+        let p = plan(
+            &setup.home(),
+            &Request::Install(root.into()),
+            FIBER,
+            &origin,
+            &clock,
+        )
+        .unwrap();
+        assert_eq!(p.fresh_names().collect::<Vec<_>>(), Vec::<&str>::new());
+        assert_eq!(
+            p.items().map(|i| i.name.as_str()).collect::<Vec<_>>(),
+            [root]
+        );
+        p.commit().unwrap();
+        repos.tag(dep, "", "v1.1.0", &manifest(dep), &[]);
+        repos.tag(new, "", "v1.0.0", &manifest(new), &[]);
+        repos.tag(
+            root,
+            "",
+            "v1.1.0",
+            &named(root, &[(dep, "1.1"), (new, "1.0")]),
+            &[],
+        );
+        let origin = repos.origin();
+        let p = plan(
+            &setup.home(),
+            &Request::Install(root.into()),
+            FIBER,
+            &origin,
+            &clock,
+        )
+        .unwrap();
+        assert_eq!(p.fresh_names().collect::<Vec<_>>(), [new]);
+        assert_eq!(
+            p.items().map(|i| i.name.as_str()).collect::<Vec<_>>(),
+            [dep, new, root]
+        );
+        p.commit().unwrap();
+        assert_eq!(versions(&setup)[dep], "v1.1.0");
+        assert_eq!(versions(&setup)[new], "v1.0.0");
+    });
+}
+
+#[test]
+fn local_plan_freshness_and_drop_do_not_install_a_package() {
+    fakes::within(
+        "local plan freshness and drop",
+        Duration::from_secs(10),
+        || {
+            let setup = Setup::new();
+            let source = setup.root().join("source");
+            write(
+                &source.join("extension.json"),
+                &manifest("acme").to_string(),
+            );
+            let clock = fakes::clock::SystemClock;
+            let request = Request::Path(source);
+            let p = plan(&setup.home(), &request, FIBER, &Origin::github(), &clock).unwrap();
+            assert_eq!(p.fresh_names().collect::<Vec<_>>(), ["acme"]);
+            assert_eq!(
+                p.items().map(|i| i.name.as_str()).collect::<Vec<_>>(),
+                ["acme"]
+            );
+            drop(p);
+            assert_eq!(versions(&setup), BTreeMap::new());
+            let p = plan(&setup.home(), &request, FIBER, &Origin::github(), &clock).unwrap();
+            assert_eq!(p.fresh_names().collect::<Vec<_>>(), ["acme"]);
+            assert_eq!(p.commit().unwrap(), ["acme"]);
+            let p = plan(&setup.home(), &request, FIBER, &Origin::github(), &clock).unwrap();
+            assert_eq!(p.fresh_names().collect::<Vec<_>>(), Vec::<&str>::new());
+            assert_eq!(p.commit().unwrap(), ["acme"]);
+            assert_eq!(versions(&setup)["acme"], "v1.0.0");
+        },
+    );
+}
+
+#[test]
 fn an_install_fetches_the_newest_tag_and_records_its_commit() {
     let setup = Setup::new();
     let mut repos = Repos::new(&setup);

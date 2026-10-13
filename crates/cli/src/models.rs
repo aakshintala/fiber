@@ -144,7 +144,6 @@ pub(crate) fn providers_and_config(
     home: &Path,
     workspace: &Path,
 ) -> Result<(Providers, Config, Vec<Notice>), Failure> {
-    let (providers, notices) = Providers::load(home).map_err(|e| failed(e.code(), e))?;
     let (_, project) = project_of(home, workspace)?;
     let config = Config::load(Sources {
         home: home.to_path_buf(),
@@ -153,6 +152,8 @@ pub(crate) fn providers_and_config(
         overrides: Vec::new(),
     })
     .map_err(|e| failed(e.code(), e))?;
+    let (providers, notices) =
+        Providers::load_enabled(home, &config).map_err(|e| failed(e.code(), e))?;
     Ok((providers, config, notices))
 }
 
@@ -351,7 +352,7 @@ fn refresh_run(
             project,
             overrides: Vec::new(),
         })
-        && let Ok((providers, _)) = Providers::load(home)
+        && let Ok((providers, _)) = Providers::load_enabled(home, &config)
     {
         let loaded = SessionExtensions::load(home, &config, clock, locks, None);
         refresh_named(names, &providers, &loaded, &config, run);

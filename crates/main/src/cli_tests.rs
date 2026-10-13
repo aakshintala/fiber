@@ -12,6 +12,47 @@ use super::{
     SessionsCommands, TokenCommands, command, parse_from, usage_sentence, version_line,
 };
 
+#[test]
+fn extension_install_accepts_project_scope_and_requires_exactly_one_name() {
+    for (args, expected) in [
+        (vec!["fiber", "extension", "install", "./acme"], false),
+        (
+            vec!["fiber", "extension", "install", "--project", "./acme"],
+            true,
+        ),
+        (
+            vec!["fiber", "extension", "install", "./acme", "--project"],
+            true,
+        ),
+        (
+            vec!["fiber", "extension", "install", "--project", "acme"],
+            true,
+        ),
+    ] {
+        let parsed = parse_from(args);
+        let Invocation::Run(Some(Commands::Extension(ExtensionCommands::Install {
+            project,
+            name_or_path,
+        }))) = parsed
+        else {
+            panic!("expected install, got {parsed:?}")
+        };
+        assert_eq!(project, expected);
+        assert!(name_or_path.ends_with("acme"));
+    }
+    for args in [
+        vec!["fiber", "extension", "install", "--project"],
+        vec!["fiber", "extension", "install", "acme", "extra"],
+    ] {
+        assert!(matches!(parse_from(args), Invocation::Usage { .. }));
+    }
+    let Invocation::Print(help) = parse_from(["fiber", "extension", "install", "--help"]) else {
+        panic!("expected help")
+    };
+    assert!(help.to_string().contains("--project"));
+    assert!(MENU.contains("extension install [--project] <name or path>"));
+}
+
 fn menu() -> String {
     format!("{MENU}\n")
 }
