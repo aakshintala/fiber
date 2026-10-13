@@ -243,6 +243,44 @@ fn a_range_over_a_failed_window_is_an_error_with_no_lines() {
     assert_eq!(seqs(&offsets.range(0, 2).unwrap()), seqs(&written[..2]));
 }
 
+/// A table that never drops a line start grows with every line: after
+/// more pushes than the cap of 1024 resident checkpoints, the resident
+/// set must halve to its even-indexed checkpoints and stay capped.
+#[test]
+fn resident_checkpoints_stay_at_a_constant_cap() {
+    let offsets = Offsets::new(PathBuf::from("red-cap"), Vec::new(), 0);
+    assert!(offsets.lock().starts.is_empty());
+    for _ in 0..1023 {
+        offsets.push(100);
+    }
+    assert_eq!(offsets.lock().starts.len(), 1023);
+    assert_eq!(offsets.lock().starts[0], 0);
+    offsets.push(100);
+    assert_eq!(offsets.lock().starts.len(), 1024);
+    assert_eq!(offsets.lock().starts[0], 0);
+    offsets.push(100);
+    // One past the cap the table halves to its even-indexed checkpoints.
+    assert_eq!(offsets.lock().starts.len(), 513);
+    assert_eq!(offsets.lock().starts[0], 0);
+    // The absolute line count never depends on checkpointing.
+    assert_eq!(offsets.count(), 1025);
+}
+
+/// While the log holds no more lines than the cap, every line start is
+/// resident: small logs read exactly as they do today.
+#[test]
+fn small_tables_checkpoint_every_line() {
+    let offsets = Offsets::new(PathBuf::from("red-small"), Vec::new(), 0);
+    for _ in 0..10 {
+        offsets.push(100);
+    }
+    let table = offsets.lock();
+    assert_eq!(table.starts.len(), 10);
+    for (i, start) in table.starts.iter().enumerate() {
+        assert_eq!(*start, (i as u64).saturating_mul(100), "line {i}");
+    }
+}
+
 #[test]
 fn scan_records_every_complete_line_and_stops_at_a_torn_tail() {
     // A torn tail is not a line: appending torn bytes leaves the table
