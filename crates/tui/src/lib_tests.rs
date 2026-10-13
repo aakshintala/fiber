@@ -1263,6 +1263,75 @@ fn ctrl_g_puts_the_editors_text_in_the_draft_and_the_loop_reads_on() {
     crate::term::restore();
 }
 
+/// A shutdown signal while the editor runs quits with 128 plus its
+/// number: the blocked editor is acknowledged first, so the raise cannot
+/// land before the wait is active. The handover takes the terminal back,
+/// the draft is unchanged, and the live session keeps its resume line.
+/// Each test runs in its own process, so the raise reaches only this test.
+#[test]
+fn a_shutdown_signal_while_the_editor_runs_quits_with_128_plus_it() {
+    use signal_hook::consts::SIGTERM;
+    super::register_first().unwrap_or_else(|err| panic!("register: {err}"));
+    let pair = open();
+    // The watcher drains what the terminal is sent, so no write blocks.
+    let _frames = watch(&pair.main, Vec::new());
+    crate::term::setup(&pair.slave, true).unwrap_or_else(|err| panic!("setup: {err}"));
+    let tty = pair
+        .slave
+        .try_clone()
+        .unwrap_or_else(|err| panic!("dup: {err}"));
+    let (mut lp, _) = new_loop(TestBackend::new(60, 12), Some(tty));
+    lp.app.set_home(launch());
+    // A blocking editor that acknowledges the block: no `exec`, so the
+    // script stays to name the tree the shutdown ends.
+    let dir = fakes::TempDir::new("editor");
+    let ready = fakes::children::Ready::new(dir.path());
+    let script = dir.path().join("editor.sh");
+    std::fs::write(
+        &script,
+        format!("echo $$ > {}\nsleep 30\n", ready.path().display()),
+    )
+    .unwrap_or_else(|err| panic!("script: {err}"));
+    let command = format!("/bin/sh {}", script.display());
+    let script = script.display().to_string();
+    let watchdog = fakes::Watchdog::matching(&script);
+    lp.var = Box::new(move |name| (name == "EDITOR").then(|| command.clone()));
+    let session = contract::SessionId("s_aaaaaaaaaaaaaaaa".to_owned());
+    lp.app.attach(session.clone());
+    let inputs = ["a", "\x07"].map(|bytes| Input::Bytes(bytes.as_bytes().to_vec()));
+    // The loop blocks in the editor: it runs on a thread with one
+    // deadline, and the raise below waits for the acknowledgement first.
+    let (done, finished) = mpsc::channel();
+    std::thread::Builder::new()
+        .name("lib-editor-signal".to_owned())
+        .spawn(move || {
+            let code = feed(&mut lp, inputs.into());
+            match done.send((code, lp.app.draft(), lp.app.exit_lines())) {
+                Ok(()) | Err(_) => {}
+            }
+        })
+        .unwrap_or_else(|err| panic!("spawn: {err}"));
+    ready.wait(DEADLINE);
+    signal_hook::low_level::raise(SIGTERM).unwrap_or_else(|err| panic!("raise: {err}"));
+    let (code, draft, lines) = Deadline::after(DEADLINE)
+        .recv(&finished)
+        .unwrap_or_else(|err| panic!("waited {DEADLINE:?} for the loop to quit: {err}"));
+    assert_eq!(code, 143);
+    assert_eq!(draft, "a");
+    assert_eq!(
+        lines,
+        [format!("{}  fiber resume {}", session.0, session.0)]
+    );
+    // The handover took the terminal back, and the editor tree is gone.
+    assert!(!is_cooked(
+        &rustix::termios::tcgetattr(&pair.slave).unwrap_or_else(|err| panic!("attr: {err}"))
+    ));
+    let left = fakes::matching(&script).unwrap_or_else(|err| panic!("ps: {err}"));
+    assert!(left.is_empty(), "editor processes left: {left:?}");
+    watchdog.stand_down(DEADLINE);
+    crate::term::restore();
+}
+
 #[test]
 fn ctrl_g_that_cannot_take_the_terminal_back_quits_with_one() {
     let (mut lp, _) = new_loop(TestBackend::new(60, 12), None);
@@ -2615,10 +2684,11 @@ fn a_signal_ends_a_history_wait_at_once() {
     assert_eq!(held, 1, "the signal is held for after the frame");
 }
 
-/// Co-pending SIGTERM and SIGHUP keep the first delivered: the second
-/// raise waits until the first is recorded, so the consumer is still
-/// holding both when it sends. Each test runs in its own process, so the
-/// record starts at none and the raises reach only this test.
+/// Co-pending SIGTERM and SIGHUP keep the first delivered: both raises
+/// land before the consumer starts, so it sends from co-pending signals
+/// and either take order still reads the first twice. Each test runs in
+/// its own process, so the record starts at none and the raises reach
+/// only this test.
 #[test]
 fn co_pending_signals_keep_term_delivered_first() {
     use signal_hook::consts::{SIGHUP, SIGTERM};
@@ -2633,21 +2703,25 @@ fn co_pending_signals_keep_hup_delivered_first() {
 }
 
 /// Raises `first`, holds the raise of `second` until the first is
-/// recorded, then reads the two signals the consumer sends: both carry
-/// the first delivered, the later one included.
+/// recorded, then starts the consumer and reads the two signals it sends:
+/// both carry the first delivered, the later one included.
 fn co_pending_first(first: std::ffi::c_int, second: std::ffi::c_int) -> (i32, i32) {
     super::register_first().unwrap_or_else(|err| panic!("register: {err}"));
     let (tx, rx) = mpsc::channel();
     let signals = signal_hook::iterator::Signals::new([first, second])
         .unwrap_or_else(|err| panic!("register: {err}"));
-    super::spawn_signal(signals, tx);
     signal_hook::low_level::raise(first).unwrap_or_else(|err| panic!("raise: {err}"));
-    // The second raise waits for the first's record, not for the
-    // consumer: either order of sending still reads the first twice.
+    // The second raise waits for the first's record, so both signals are
+    // raised before the consumer starts: it finds them co-pending, and
+    // either take order still sends the first delivered twice.
     while super::first_signal() != first {
         std::hint::spin_loop();
     }
     signal_hook::low_level::raise(second).unwrap_or_else(|err| panic!("raise: {err}"));
+    // The consumer starts after both raises, so the test forces
+    // co-pending delivery instead of draining the first before the second
+    // arrives.
+    super::spawn_signal(signals, tx);
     let mut got = Vec::new();
     for _ in 0..2 {
         match Deadline::after(DEADLINE)

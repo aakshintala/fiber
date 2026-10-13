@@ -50,23 +50,38 @@ struct Fake {
     temp: fakes::TempDir,
     /// The script, run through `/bin/sh`.
     script: PathBuf,
+    /// The acknowledgement line the script writes when it blocks, when
+    /// its body names `$READY`.
+    ready: Option<fakes::children::Ready>,
     watchdog: Option<fakes::Watchdog>,
 }
 
 impl Fake {
     /// A fake editor whose script is `body`; `$OUT` in it is the
-    /// directory for what it copies out.
+    /// directory for what it copies out, and `$READY` the line to
+    /// acknowledge with when it blocks (`fakes::children::Ready`).
     fn new(body: &str) -> Self {
         let dir = fakes::TempDir::new("editor");
         let temp = fakes::TempDir::new("drafts");
+        let ready = body
+            .contains("$READY")
+            .then(|| fakes::children::Ready::new(dir.path()));
         let script = dir.path().join("editor.sh");
         let body = body.replace("$OUT", &dir.path().display().to_string());
+        let body = body.replace(
+            "$READY",
+            &ready
+                .as_ref()
+                .map(|ready| ready.path().display().to_string())
+                .unwrap_or_default(),
+        );
         std::fs::write(&script, body).unwrap_or_else(|err| panic!("script: {err}"));
         let watchdog = Some(fakes::Watchdog::matching(&script.display().to_string()));
         Self {
             dir,
             temp,
             script,
+            ready,
             watchdog,
         }
     }
@@ -104,6 +119,17 @@ impl Fake {
     #[track_caller]
     fn run(&self, text: &str) -> Result<String, String> {
         self.run_command(self.command("", ""), text)
+    }
+
+    /// Waits one deadline for the script's acknowledgement line, and
+    /// returns its pids: the block below is active, so a signal raised
+    /// now cannot land before the wait it must end.
+    #[track_caller]
+    fn wait_ready(&self) -> Vec<u32> {
+        match &self.ready {
+            Some(ready) => ready.wait(DEADLINE),
+            None => panic!("the script names no $READY line to wait for"),
+        }
     }
 
     /// The files left where the temporary files are made.
@@ -223,18 +249,24 @@ fn an_editor_ended_by_a_signal_keeps_the_draft_and_names_it() {
     assert!(fake.left().is_empty());
 }
 
-/// A shutdown signal ends a blocked editor wait: the editor is killed
-/// and the wait ends with the signal's number, so the loop quits with 128
-/// plus it instead of waiting out the editor. Each test runs in its own
-/// process, so the raise reaches only this test.
+/// A shutdown signal ends a blocked editor wait: the editor tree is
+/// ended and the wait ends with the signal's number, so the loop quits
+/// with 128 plus it instead of waiting out the editor. The command ends
+/// `; :`, so ending only the shell would leave the script and its sleeper
+/// behind; the script acknowledges the block first, so the raise cannot
+/// land before the wait is active. Each test runs in its own process, so
+/// the raise reaches only this test.
 #[test]
 fn a_shutdown_signal_ends_a_blocked_editor_wait() {
     use signal_hook::consts::SIGTERM;
     crate::event_loop::register_first().unwrap_or_else(|err| panic!("register: {err}"));
-    // A fake editor that blocks until killed: `exec` makes the sleep the
-    // process waited on, as an editor run by its own name is.
-    let fake = Fake::new("exec sleep 30\n");
-    let command = fake.command("", "");
+    // No `exec`: the script stays to name the tree, and the sleeper is a
+    // copy under a path only this test names, so its absence proves the
+    // group signal reached past the shell.
+    let fake = Fake::new("echo $$ > \"$READY\"\ncp /bin/sleep $OUT/leaf\n$OUT/leaf 30\n");
+    let leaf = fake.out("leaf").display().to_string();
+    let script = fake.script.display().to_string();
+    let command = fake.command("", "; :");
     let temp = fake.temp.path().to_path_buf();
     let clock: Arc<dyn Clock> = fakes::clock::FakeClock::new();
     let (done, finished) = mpsc::channel();
@@ -245,6 +277,7 @@ fn a_shutdown_signal_ends_a_blocked_editor_wait() {
                 .unwrap_or(())
         })
         .unwrap_or_else(|err| panic!("spawn: {err}"));
+    let script_pids = fake.wait_ready();
     signal_hook::low_level::raise(SIGTERM).unwrap_or_else(|err| panic!("raise: {err}"));
     match Deadline::after(DEADLINE)
         .recv(&finished)
@@ -252,6 +285,55 @@ fn a_shutdown_signal_ends_a_blocked_editor_wait() {
     {
         Outcome::Stopped(signal) => assert_eq!(signal, SIGTERM),
         Outcome::Done(result) => panic!("the blocked editor returned {result:?}"),
+    }
+    assert!(fake.left().is_empty());
+    assert!(
+        fakes::pids_exit(&script_pids, DEADLINE),
+        "the script outlived the shutdown: {script_pids:?}"
+    );
+    assert!(
+        fakes::matching_exits(&leaf, DEADLINE),
+        "the sleeper outlived the shutdown: {leaf}"
+    );
+    assert!(
+        fakes::matching_exits(&script, DEADLINE),
+        "editor processes left: {script}"
+    );
+}
+
+/// A terminal interrupt while the editor runs ends the editor as its own
+/// signal: the wait forwards this process's SIGINT to the editor's group,
+/// so Ctrl+C with the terminal handed over still ends only the editor.
+/// Each test runs in its own process, so the raise reaches only this test.
+#[test]
+fn an_interrupt_while_the_editor_runs_ends_it_as_its_signal() {
+    use signal_hook::consts::SIGINT;
+    // `exec` makes the sleep the process waited on, as an editor run by
+    // its own name is, so the forwarded interrupt ends that process as
+    // its signal on every platform's shell.
+    let fake = Fake::new("echo $$ > \"$READY\"\nexec sleep 30\n");
+    let command = fake.command("exec ", "");
+    let temp = fake.temp.path().to_path_buf();
+    let clock: Arc<dyn Clock> = fakes::clock::FakeClock::new();
+    let (done, finished) = mpsc::channel();
+    std::thread::Builder::new()
+        .name("editor-interrupt".to_owned())
+        .spawn(move || {
+            done.send(run_in(&temp, &command, "text", &clock))
+                .unwrap_or(())
+        })
+        .unwrap_or_else(|err| panic!("spawn: {err}"));
+    fake.wait_ready();
+    signal_hook::low_level::raise(SIGINT).unwrap_or_else(|err| panic!("raise: {err}"));
+    match Deadline::after(DEADLINE)
+        .recv(&finished)
+        .unwrap_or_else(|err| panic!("waited {DEADLINE:?} for the editor wait to end: {err}"))
+    {
+        Outcome::Done(result) => assert_eq!(
+            result,
+            Err("The editor was ended by signal 2; the draft is unchanged.".to_owned())
+        ),
+        Outcome::Stopped(signal) => panic!("the interrupted editor stopped on signal {signal}"),
     }
     assert!(fake.left().is_empty());
 }
