@@ -594,29 +594,27 @@ fn a_catch_up_across_a_corrupt_evicted_region_returns_the_lines_before_it() {
     // stops at the subscribe-time count and the catch-up re-reads the
     // evicted region from the log: every line before the corrupt one,
     // then the failure once with its absolute number, then nothing.
-    // Blocking receives are a wait too: the drain runs on a scoped thread
-    // and the test takes it with one deadline for the whole wait.
+    // Blocking receives are a wait too: the drain runs on an unscoped thread
+    // so a deadline panic detaches it instead of joining a blocked receive.
     let mut watcher = log.watch_all();
     let (done, drained) = mpsc::channel();
-    thread::scope(|s| {
-        s.spawn(|| {
-            let mut got = Vec::new();
-            let failure = loop {
-                match watcher.recv() {
-                    Ok(Some(line)) => got.push(line),
-                    Ok(None) => panic!("the watcher ended before the failure"),
-                    Err(error) => break error.to_string(),
-                }
-            };
-            let end = watcher.recv().unwrap();
-            done.send((got, failure, end)).unwrap_or(());
-        });
-        let wait = Deadline::after(DEADLINE);
-        let (got, failure, end) = wait
-            .recv(&drained)
-            .expect("the watcher to drain before the deadline");
-        assert!(failure.contains("line 501"), "{failure}");
-        assert_eq!(got, written[..500]);
-        assert!(end.is_none());
+    let _drain = thread::spawn(move || {
+        let mut got = Vec::new();
+        let failure = loop {
+            match watcher.recv() {
+                Ok(Some(line)) => got.push(line),
+                Ok(None) => panic!("the watcher ended before the failure"),
+                Err(error) => break error.to_string(),
+            }
+        };
+        let end = watcher.recv().unwrap();
+        done.send((got, failure, end)).unwrap_or(());
     });
+    let wait = Deadline::after(DEADLINE);
+    let (got, failure, end) = wait
+        .recv(&drained)
+        .expect("the watcher to drain before the deadline");
+    assert!(failure.contains("line 501"), "{failure}");
+    assert_eq!(got, written[..500]);
+    assert!(end.is_none());
 }
