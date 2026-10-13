@@ -1198,8 +1198,33 @@ fn read_stdout_waits_for_data_without_eof() {
     }
     read_stdout(&mut stdout, &mut out, &mut eof, 1024);
     assert_eq!(out, b"hello");
-    assert!(eof, "end-of-file after the child exits");
+    assert!(
+        !eof,
+        "the held write end keeps the pipe open past the child's exit"
+    );
     drop(held);
+    // Closing the last write end delivers the end-of-file: poll the
+    // read end until it is readable, then read until it reports
+    // end-of-file, all under one wall-clock bound.
+    let eof_wait = Deadline::after(DEADLINE);
+    while !eof {
+        let left = eof_wait.left();
+        if left.is_zero() {
+            panic!("waited {DEADLINE:?} for end-of-file after closing the write end");
+        }
+        let timeout = rustix::event::Timespec::try_from(left).unwrap_or_default();
+        let mut fds = [rustix::event::PollFd::new(
+            &stdout,
+            rustix::event::PollFlags::IN,
+        )];
+        match rustix::event::poll(&mut fds, Some(&timeout)) {
+            Ok(_) => {}
+            Err(rustix::io::Errno::INTR) => {}
+            Err(error) => panic!("poll for end-of-file failed: {error:?}"),
+        }
+        read_stdout(&mut stdout, &mut out, &mut eof, 1024);
+    }
+    assert_eq!(out, b"hello");
     watchdog.stand_down(DEADLINE);
 }
 
