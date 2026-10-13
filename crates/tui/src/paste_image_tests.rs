@@ -1158,21 +1158,27 @@ fn read_stdout_waits_for_data_without_eof() {
     use std::io::Write as _;
     use std::os::unix::io::AsFd as _;
     use std::os::unix::process::CommandExt as _;
-    // The child blocks on stdin, so its stdout is a non-blocking pipe
-    // with no data yet: the first read would block, which must return
-    // without setting end-of-file.
+    // The child blocks on stdin, so its stdout is a pipe the test
+    // creates with no data yet: the first read would block, which must
+    // return without setting end-of-file. The duplicate write end stays
+    // open past the child's exit, so the first read after the exit must
+    // still see an open pipe rather than end-of-file.
+    let (read, write) = std::io::pipe().unwrap();
+    let write: std::os::unix::io::OwnedFd = write.into();
+    let held = write.try_clone().unwrap();
     let mut child = std::process::Command::new("sh")
         .args(["-c", "read line; printf hello"])
         .process_group(0)
         .stdin(std::process::Stdio::piped())
-        .stdout(std::process::Stdio::piped())
+        .stdout(std::process::Stdio::from(write))
         .stderr(std::process::Stdio::null())
         .spawn()
         .unwrap();
     let pid = child.id();
     let watchdog = Watchdog::group(pid);
     let mut stdin = child.stdin.take().unwrap();
-    let mut stdout = child.stdout.take().unwrap();
+    let read: std::os::unix::io::OwnedFd = read.into();
+    let mut stdout: std::fs::File = read.into();
     rustix::io::ioctl_fionbio(stdout.as_fd(), true).unwrap();
     let mut out = Vec::new();
     let mut eof = false;
@@ -1193,6 +1199,7 @@ fn read_stdout_waits_for_data_without_eof() {
     read_stdout(&mut stdout, &mut out, &mut eof, 1024);
     assert_eq!(out, b"hello");
     assert!(eof, "end-of-file after the child exits");
+    drop(held);
     watchdog.stand_down(DEADLINE);
 }
 
