@@ -129,6 +129,32 @@ fn other_waiting(session: &str) -> Line {
     })
 }
 
+/// An idle `session_status` for another live session than the
+/// attached one.
+fn other_idle(session: &str) -> Line {
+    Line::Session(contract::Envelope {
+        kind: "session_status".to_owned(),
+        session_id: contract::SessionId(session.to_owned()),
+        ts: 0,
+        schema_version: contract::SCHEMA_VERSION,
+        turn_id: None,
+        action_id: Some(contract::ActionId("a_1".to_owned())),
+        seq: None,
+        payload: serde_json::json!({
+            "name": "other", "workspace": "/Users/you/work/fiber",
+            "project": "-w", "state": "idle", "since": 0,
+            "spend": {"tokens": {"input": 1, "cache_read": 0,
+                "cache_write": {}, "output": 2},
+                "cost": 0.0, "subscription_cost": 0.0},
+            "model": "test/model", "delegates": 0, "jobs": 0,
+            "clients": 0,
+        })
+        .as_object()
+        .cloned()
+        .unwrap_or_default(),
+    })
+}
+
 /// Hides the rail as ⌥R does, so the hidden rail's grip is drawn.
 fn hide_rail(app: &mut App) {
     use contract::clock::Clock;
@@ -210,6 +236,28 @@ fn no_waiting_sessions_no_hidden_rail_line() {
     hide_rail(&mut alone);
     assert!(
         rows(&alone, 40)
+            .iter()
+            .all(|row| !row.line.to_string().contains("hidden · show"))
+    );
+}
+
+/// With the rail hidden and three live sessions but none waiting,
+/// `rail_waiting()` is `Some(0)` and the Session card shows no waiting
+/// line: the `> 0` guard keeps the `>=` mutant's bogus "! 0 waiting ·
+/// hidden · show" row out (`docs/tui.md`, "The panel").
+#[test]
+fn hidden_rail_with_no_waiting_sessions_shows_no_line() {
+    let mut app = attached(160, 40);
+    app.on_line(status_line(
+        spend(1, 0, 0, 2, serde_json::json!(0.0), 0.0),
+        None,
+    ));
+    app.on_line(other_idle("s_bbbbbbbbbbbbbbbb"));
+    app.on_line(other_idle("s_cccccccccccccccc"));
+    hide_rail(&mut app);
+    assert_eq!(app.rail_waiting(), Some(0));
+    assert!(
+        rows(&app, 40)
             .iter()
             .all(|row| !row.line.to_string().contains("hidden · show"))
     );
