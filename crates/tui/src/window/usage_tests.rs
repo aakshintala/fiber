@@ -320,3 +320,92 @@ fn a_late_usage_line_on_a_dropped_page_counts_the_padded_closing_rows() {
     let fresh = folded(&lines, 20);
     assert_eq!(rows(&pages), rows(&fresh));
 }
+
+#[test]
+fn a_late_usage_line_with_new_rows_on_a_held_page_counts_it_again() {
+    // The dropped-page padded closing, but with the first page still
+    // holding its cards: the ▣ line grows past its old rows, so the
+    // closed page counts again. This pins the `open ||` side of the
+    // recount guard: with `&&` the page would take the dropped-page
+    // arithmetic instead of counting, and `recounts` would stay.
+    let mut lines = Vec::new();
+    let mut seq = 0u64;
+    {
+        let mut line = |kind: &str, action: Option<&str>, payload: Value| {
+            lines.push(Envelope {
+                kind: kind.to_owned(),
+                session_id: SessionId(SESSION.to_owned()),
+                ts: 0,
+                schema_version: contract::SCHEMA_VERSION,
+                turn_id: None,
+                action_id: action.map(|id| ActionId(id.to_owned())),
+                seq: Some(Seq(seq)),
+                payload: payload.as_object().cloned().unwrap_or_default(),
+            });
+            seq += 1;
+        };
+        for turn in 0..16 {
+            line(
+                "turn_started",
+                None,
+                json!({"input": [{"type": "message", "source": "driver",
+                    "content": [{"type": "text", "text": format!("turn {turn}")}]}]}),
+            );
+            let call = format!("a_c{turn}");
+            line(
+                "tool_call_requested",
+                Some(&call),
+                json!({"name": "read", "arguments": {"path": "src/a.rs"}}),
+            );
+            line(
+                "tool_call_completed",
+                Some(&call),
+                json!({"status": "completed", "content": [{"type": "text", "text": "ok"}]}),
+            );
+            line(
+                "usage_recorded",
+                Some(&call),
+                json!({"generation_id": format!("g{turn}"), "model": "fake/m",
+                    "tokens": {"input": 0, "cache_read": 0, "cache_write": {}, "output": 0},
+                    "input_bytes": 0, "cost": Value::Null}),
+            );
+            line("turn_completed", None, json!({"outcome": "completed"}));
+        }
+    }
+    let mut pages = folded(&lines, 20);
+    assert!(!pages.closed.is_empty(), "the first page closed");
+    assert!(
+        pages.part(0).is_some(),
+        "the first page still holds its cards"
+    );
+    let head = pages.summaries.first().expect("the first turn's totals");
+    assert_eq!(head.closed_on, 0, "the first turn ends on the first page");
+    lines.push(Envelope {
+        kind: "usage_recorded".to_owned(),
+        session_id: SessionId(SESSION.to_owned()),
+        ts: 0,
+        schema_version: contract::SCHEMA_VERSION,
+        turn_id: None,
+        action_id: Some(ActionId("a_c0".to_owned())),
+        seq: Some(Seq(seq)),
+        payload: json!({"generation_id": "g0", "model": "fake/m",
+            "tokens": {"input": 987_654_321, "cache_read": 0, "cache_write": {}, "output": 40},
+            "input_bytes": 0, "cost": 12.5})
+        .as_object()
+        .cloned()
+        .unwrap_or_default(),
+    });
+    let late = lines
+        .last()
+        .cloned()
+        .unwrap_or_else(|| panic!("a line was logged"));
+    let before = pages.recounts;
+    pages.apply(&late);
+    assert_eq!(
+        pages.recounts,
+        before.saturating_add(1),
+        "the closed page with new rows counts again"
+    );
+    let fresh = folded(&lines, 20);
+    assert_eq!(rows(&pages), rows(&fresh));
+}

@@ -457,3 +457,85 @@ fn searching_with_no_session_is_an_error_not_a_sample() {
         "the error says why: {error}"
     );
 }
+
+#[test]
+fn a_frame_names_the_range_the_log_does_not_hold() {
+    // Turns with text enough to cut a second page and drop the first;
+    // the log then loses the first page, so the frame errors naming its
+    // range instead of loading forever. This pins the snapshot's
+    // empty-range guard: without it the frame would settle an unloadable
+    // page as loaded.
+    let kinds = [
+        (
+            "turn_started",
+            None,
+            serde_json::json!({"input": [{"type": "message", "source": "driver",
+                "content": [{"type": "text", "text": "go"}]}]}),
+        ),
+        (
+            "text_completed",
+            Some("a_m"),
+            serde_json::json!({"text": "filler text that draws rows"}),
+        ),
+        (
+            "turn_completed",
+            None,
+            serde_json::json!({"outcome": "completed"}),
+        ),
+    ];
+    let lines: Vec<(contract::Seq, String)> = (0..25)
+        .flat_map(|_| kinds.iter().cloned())
+        .enumerate()
+        .map(|(at, (kind, action, payload))| {
+            let seq = u64::try_from(at).unwrap_or(0).saturating_add(1);
+            let envelope = Envelope {
+                kind: kind.to_owned(),
+                session_id: contract::SessionId(SESSION.to_owned()),
+                ts: 0,
+                schema_version: contract::SCHEMA_VERSION,
+                turn_id: None,
+                action_id: action.map(|id| contract::ActionId(id.to_owned())),
+                seq: Some(contract::Seq(seq)),
+                payload: payload.as_object().cloned().unwrap_or_default(),
+            };
+            (
+                contract::Seq(seq),
+                serde_json::to_string(&envelope).unwrap_or_default(),
+            )
+        })
+        .collect();
+    let mut app = crate::app::App::new(std::path::PathBuf::new());
+    app.set_size(60, 12);
+    for (_, line) in &lines {
+        let envelope: contract::Envelope =
+            serde_json::from_str(line).unwrap_or_else(|error| panic!("{error}"));
+        if app.session().is_none() {
+            app.attach(envelope.session_id.clone());
+        }
+        app.on_line(crate::link::Line::Session(envelope));
+    }
+    assert!(app.pages().part(0).is_none(), "the first page drops");
+    let clock = fakes::clock::FakeClock::new();
+    let end = app.pages().index().pages()[0].last_seq.0;
+    let kept: Vec<(contract::Seq, &str)> = lines
+        .iter()
+        .filter(|(seq, _)| seq.0 > end)
+        .map(|(seq, line)| (*seq, line.as_str()))
+        .collect();
+    assert!(!kept.is_empty(), "the log keeps the later pages");
+    let mut paging = super::Paging {
+        app,
+        log: kept,
+        area: ratatui::layout::Rect::new(0, 0, 60, 12),
+        clock,
+        most: 0,
+    };
+    // Scroll to the top, so the window needs the dropped first page
+    // the log no longer holds.
+    paging.app.jump(0);
+    let error = paging.frame().unwrap_err();
+    assert!(
+        error.contains("holds no lines"),
+        "the missing range errors: {error}"
+    );
+}

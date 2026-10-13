@@ -2707,3 +2707,112 @@ fn a_fetch_read_before_a_text_change_requeues() {
     assert!(app.find_outgoing().is_empty(), "the search settled");
     assert_eq!(count(&app), "1 of 18");
 }
+
+#[test]
+fn a_fresh_absent_search_counts_each_scan_order_visit_once() {
+    // Two pages with the first dropped: the first settle scans the
+    // resident second page, visits both scan-order positions, and fetches
+    // the first. This pins the cursor loop's and the pump prelude's exact
+    // bookkeeping: a dropped or repeated visit changes the count.
+    let (mut app, _log) = grouped(80, 10, 2);
+    assert_eq!(app.pages().page_count(), 2);
+    assert!(
+        app.pages().part(0).is_none(),
+        "the first page drops before the search"
+    );
+    crate::work::take();
+    let first = fetch_first(&mut app, "qqq-no-match");
+    let work = crate::work::take();
+    assert_eq!(work.search_pages, 1, "the resident page scans once");
+    assert_eq!(
+        work.search_order_pages, 3,
+        "two cursor visits and the pump prelude"
+    );
+    assert_eq!(first.len(), 1, "the dropped page fetches");
+    let (_, from, to) = command(&first[0]);
+    assert_eq!(
+        (from, to),
+        (
+            app.pages().index().pages()[0].first_seq.0,
+            app.pages().index().pages()[0].last_seq.0
+        ),
+        "the fetch reads the dropped page"
+    );
+}
+
+#[test]
+fn answering_the_last_fetch_counts_the_settle_past_it_once() {
+    // The dropped page's answer scans it, and the settle moves the reach
+    // past it: the pump prelude runs for the answer and once more for the
+    // settle, and the skip counts the settled position. The scan
+    // completes with no match and no cap.
+    let (mut app, log) = grouped(80, 10, 2);
+    let first = fetch_first(&mut app, "qqq-no-match");
+    let (id, from, to) = command(&first[0]);
+    crate::work::take();
+    let outgoing = app.on_line(hub_answer(&id, &log, from, to));
+    let work = crate::work::take();
+    assert!(outgoing.is_empty(), "the scan settles with no fetch left");
+    assert_eq!(work.search_pages, 1, "the fetched page scans once");
+    assert_eq!(
+        work.search_order_pages, 3,
+        "two pump preludes and the settle past the page"
+    );
+    assert_eq!(count(&app), "no matches");
+}
+
+#[test]
+fn a_moved_revision_on_a_dropped_page_counts_the_rescan_once() {
+    // Three prose pages with the first dropped and a settled search: a
+    // late usage line moves only the first page's revision. Settling
+    // counts the verification walk, the dirtied visit and both pump
+    // passes, and fetches exactly the moved page. A dropped or repeated
+    // visit changes the count, and using the width here would mix the
+    // recount's own classification visits into it.
+    let (mut app, _log) = grouped(80, 10, 3);
+    assert_eq!(app.pages().page_count(), 3);
+    assert!(
+        app.pages().part(0).is_none(),
+        "the first page drops before the search"
+    );
+    search_all(&mut app, &_log, "durable");
+    let revision = app.pages().index().revision(0);
+    let correction = contract::Envelope {
+        kind: "usage_recorded".to_owned(),
+        session_id: contract::SessionId(SESSION.to_owned()),
+        ts: 0,
+        schema_version: contract::SCHEMA_VERSION,
+        turn_id: None,
+        action_id: None,
+        seq: None,
+        payload: serde_json::json!({"generation_id": "g00w0", "model": "fake/m",
+            "tokens": {"input": 101, "cache_read": 0, "cache_write": {}, "output": 40},
+            "input_bytes": 0, "cost": null})
+        .as_object()
+        .cloned()
+        .unwrap_or_default(),
+    };
+    crate::work::take();
+    app.on_line(crate::link::Line::Session(correction));
+    let work = crate::work::take();
+    assert!(
+        app.pages().index().revision(0) > revision,
+        "the correction moves the first page's revision"
+    );
+    assert_eq!(work.search_pages, 0, "nothing scans before the fetch");
+    assert_eq!(
+        work.search_order_pages, 6,
+        "the verification walk, the dirtied visit and both pump passes"
+    );
+    let outgoing = app.find_outgoing();
+    assert_eq!(outgoing.len(), 1, "the moved page fetches, and only it");
+    let (_, from, to) = command(&outgoing[0]);
+    assert_eq!(
+        (from, to),
+        (
+            app.pages().index().pages()[0].first_seq.0,
+            app.pages().index().pages()[0].last_seq.0
+        ),
+        "the fetch reads the moved page"
+    );
+}

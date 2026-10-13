@@ -3158,3 +3158,75 @@ fn add_shell_without_output_reports_nothing_added() {
     assert!(!pages.add_shell(None));
     assert!(pages.add_shell(Some("shell 00".to_owned())));
 }
+
+#[test]
+fn a_line_that_folds_nothing_moves_no_search_revision() {
+    // A `step_started` with no running turn folds nothing: the open
+    // page's search revision stays, so a search never rescans for it.
+    // This pins the `changed &&` side of the invalidation guard: with
+    // `||` every unchanged line would invalidate the page it lands on.
+    let mut pages = Pages::new(80);
+    let applied = pages.apply(&envelope("step_started", None, json!({})));
+    assert!(!applied.changed, "nothing folds without a running turn");
+    assert_eq!(pages.index().revision(0), 0);
+    assert_eq!(pages.index().clock(), 0);
+}
+
+#[test]
+fn a_never_counted_page_rescans_after_a_width_change() {
+    // A page the width never counted has no table answer yet: the search
+    // treats it as table-sensitive, so a width change moves its revision.
+    // This pins the unknown-conservative default: answering false would
+    // reuse a table layout scanned at another width.
+    let mut pages = Pages::new(80);
+    assert!(pages.page_table(0), "unknown pages read sensitive");
+    pages.set_width(100);
+    assert_eq!(
+        pages.index().revision(0),
+        1,
+        "the unknown page invalidates at the new width"
+    );
+}
+
+#[test]
+fn trim_drops_only_pages_outside_the_window_and_keeps_pins() {
+    // Thirty-two pages with the first half dropped directly (as tests
+    // do) and reloaded through keeps: trimming at the bottom keeps
+    // exactly the window's pages, and a pinned page outside it stays.
+    // This pins the resident tracking trim drops from: a missed keep
+    // would leave a reloaded page undroppable, and a missed drop would
+    // keep the session resident.
+    let (mut pages, lines) = work_pages(32, 80);
+    drop_half(&mut pages);
+    for at in 0..pages.index().pages().len() {
+        if pages.part(at).is_none() {
+            let range = pages
+                .index()
+                .pages()
+                .get(at)
+                .map(|page| page.first_seq..=page.last_seq);
+            if let Some(range) = range {
+                pages.load(&history(&lines, &range));
+            }
+        }
+    }
+    let total = pages.index().total();
+    let height = 24usize;
+    let top = total.saturating_sub(height);
+    pages.want(0);
+    pages.trim(top, height);
+    let window = pages.index().window(top, height);
+    assert!(
+        !window.contains(&0),
+        "the pinned page sits outside the window"
+    );
+    for at in 0..pages.index().pages().len() {
+        let kept = pages.part(at).is_some();
+        if at == 0 {
+            assert!(kept, "a pinned page stays resident");
+        } else {
+            assert_eq!(kept, window.contains(&at), "page {at} trims to the window");
+        }
+    }
+    pages.unwant(0);
+}

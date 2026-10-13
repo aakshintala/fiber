@@ -2454,3 +2454,23 @@ fn without_metric(results: &Value, id: &str) -> Value {
     }
     results
 }
+
+#[test]
+fn the_median_pair_is_the_middle_pair_not_the_second_run() {
+    // Five distinct growths: the middle pair grows 17x and fails while
+    // the second pair grows 2x and passes. Indexing the median with `% 2`
+    // would read the passing pair and let the over-budget head through:
+    // this pins the `/ 2` the median index divides by.
+    let (budget, small, large) = RATIO_ROWS[0];
+    let out = judge_ratio(
+        small,
+        large,
+        json!([1.0, 1.0, 1.0, 1.0, 1.0]),
+        json!([1.0, 2.0, 17.0, 18.0, 19.0]),
+    );
+    assert_eq!(out.failures.len(), 1, "{:?}", out.failures);
+    assert!(has(&out.failures, budget), "{:?}", out.failures);
+    let line = row(&out.comment, budget);
+    assert!(line.contains("17.0x of 16x allowed"), "{line}");
+    assert!(line.ends_with("| fail |"), "{line}");
+}
