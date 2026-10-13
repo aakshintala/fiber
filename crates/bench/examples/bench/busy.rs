@@ -19,8 +19,9 @@ use crate::idle::{Ctx, Samples, Workload};
 use crate::linux;
 use crate::run::{self, Proc, Session};
 
-/// The workloads every run of the harness repeats.
-pub(crate) const WORKLOADS: [Workload; 2] = [
+/// The workloads every run of the harness repeats: the busy turn, its
+/// web page, and the ten-turn pass whose median growth the judge gates.
+pub(crate) const WORKLOADS: [Workload; 3] = [
     Workload {
         name: "busy turn",
         timing: false,
@@ -31,23 +32,20 @@ pub(crate) const WORKLOADS: [Workload; 2] = [
         timing: false,
         run: web_fetch,
     },
-];
-
-/// The workloads that run once: strace slows the process it traces, so its
-/// pass is never a timing or memory sample, and ten busy turns hold one
-/// session while they run.
-pub(crate) const ONCE: [Workload; 2] = [
-    Workload {
-        name: "fsyncs",
-        timing: false,
-        run: fsyncs,
-    },
     Workload {
         name: "10 busy turns",
         timing: false,
         run: ten_turns,
     },
 ];
+
+/// The workload that runs once: strace slows the process it traces, so
+/// its pass is never a timing or memory sample.
+pub(crate) const ONCE: [Workload; 1] = [Workload {
+    name: "fsyncs",
+    timing: false,
+    run: fsyncs,
+}];
 
 /// How long `fiber` may take to start, and to exit once idle.
 pub(crate) const READY: Duration = Duration::from_secs(30);
@@ -502,8 +500,8 @@ fn busy_turn(ctx: &Ctx<'_>, notes: &mut Vec<String>) -> Result<Samples, String> 
 
 /// The 10-turn run's samples: the anon RSS still resident once the
 /// first turn's freed pages settle, and once the tenth's settle. The
-/// judge reads both from the one entry, so the verdict compares the
-/// same session with itself.
+/// judge reads both from each pass's entry, so the verdict compares
+/// each session with itself.
 pub(crate) fn ten_turn_samples(first: u64, last: u64) -> Samples {
     vec![(
         "ten_busy_turns_retained_kib",
@@ -514,7 +512,9 @@ pub(crate) fn ten_turn_samples(first: u64, last: u64) -> Samples {
 /// Ten busy turns in one session: the first on the command line, the
 /// rest over a `full` connection, then the retained anon RSS after the
 /// first and after the tenth. Each turn repeats the busy turn's shape,
-/// so the script serves every turn's replies in order.
+/// so the script serves every turn's replies in order. The harness
+/// repeats the pass every run, so the judge takes the median growth
+/// (`docs/performance.md`, "Measuring").
 fn ten_turns(ctx: &Ctx<'_>, notes: &mut Vec<String>) -> Result<Samples, String> {
     let turn = Turn::new();
     let script = (0..TEN_TURNS)

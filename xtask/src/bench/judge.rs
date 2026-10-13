@@ -1,7 +1,7 @@
 use serde_json::Value;
 
 use super::attach::per_mib;
-use super::results::{Results, field, metric, run_median, runs};
+use super::results::{Results, field, median, metric, run_median, runs};
 
 /// The threads every idle headless session runs with no client.
 const SESSION_THREADS: u64 = 5;
@@ -13,9 +13,6 @@ const FSYNCS_PER_TOOL_CALL: u64 = 2;
 /// The fsyncs are counted in one pass under strace, which slows the
 /// process, so it is never a timing or memory sample.
 const FSYNC_RUNS: usize = 1;
-/// The 10-turn run holds one session for its whole pass, so it runs
-/// once per invocation, like the fsyncs pass.
-const TEN_TURN_RUNS: usize = 1;
 /// The anon RSS the tenth turn may keep past the first, in KiB: 1 MiB.
 const TEN_TURN_GROWTH_KIB: u64 = 1024;
 /// The log bytes a turn may add per tool call beyond its content.
@@ -54,7 +51,8 @@ pub(super) enum Rule {
     /// One pass: `fdatasync` calls against the log's model requests and
     /// tool calls.
     Fsyncs(&'static str),
-    /// One pass: the tenth busy turn's anon RSS against the first's.
+    /// One pass per run: the median tenth-turn anon RSS growth over the
+    /// first's, across the harness's repeats.
     RetainedGrowth(&'static str),
     /// Per run, the turn's log bytes against its content and tool calls.
     LogBytes(&'static str),
@@ -260,7 +258,12 @@ fn exact(rule: Rule, head: Option<&Results>) -> (Vec<String>, String) {
         Rule::IdleSwitches(ids) => per_thread(List::Switches, ids, head),
         Rule::Threads(id) => per_thread(List::Threads, &[id], head),
         Rule::Fsyncs(id) => per_entry(id, FSYNC_RUNS, head, fsyncs),
-        Rule::RetainedGrowth(id) => per_entry(id, TEN_TURN_RUNS, head, retained_growth),
+        Rule::RetainedGrowth(id) => {
+            // `per_entry` fails on the missing metric first, so the count
+            // is only read when results exist.
+            let count = head.map(|results| results.runs_of(id)).unwrap_or(0);
+            retained_growth_median(id, count, head)
+        }
         Rule::LogBytes(id) => {
             // `per_entry` fails on the missing metric first, so the count
             // is only read when results exist.
@@ -399,18 +402,70 @@ fn log_bytes(entry: &Value, id: &str) -> Result<Entry, String> {
     ))
 }
 
-/// The tenth busy turn's anon RSS against the first's: at most 1 MiB
-/// more. Less than the first is no leak, so only growth past the first
-/// breaks the rule.
-fn retained_growth(entry: &Value, id: &str) -> Result<Entry, String> {
+/// One pass's growth: its tenth turn's anon RSS minus its first's,
+/// floored at zero, since a smaller tenth turn is no leak.
+fn growth(entry: &Value, id: &str) -> Result<f64, String> {
     let first = field(entry, id, "first")?;
     let last = field(entry, id, "last")?;
-    let limit = first.saturating_add(TEN_TURN_GROWTH_KIB);
-    let shown = format!("{last} KiB RssAnon after the tenth, {first} KiB after the first");
-    Ok((
-        shown.clone(),
-        (last > limit).then(|| format!("{shown}, over {limit}")),
-    ))
+    Ok(last.saturating_sub(first) as f64)
+}
+
+/// The median growth over the run's ten-turn passes: at most 1 MiB.
+/// One leaking pass moves the median only when most passes leak.
+fn retained_growth_median(id: &str, count: usize, head: Option<&Results>) -> (Vec<String>, String) {
+    let entries = match metric(head, id).and_then(|value| {
+        value
+            .as_array()
+            .ok_or_else(|| format!("{id}: not an array"))
+    }) {
+        Ok(entries) => entries,
+        Err(e) => return (vec![e], String::new()),
+    };
+    if entries.len() != count {
+        return (
+            vec![format!("{id}: {} runs, expected {count}", entries.len())],
+            String::new(),
+        );
+    }
+    let mut growths = Vec::with_capacity(entries.len());
+    let mut failures = Vec::new();
+    for entry in entries {
+        match growth(entry, id) {
+            Ok(grown) => growths.push(grown),
+            Err(e) => failures.push(e),
+        }
+    }
+    if !failures.is_empty() {
+        return (failures, String::new());
+    }
+    let median_growth = match median(&growths, count) {
+        Ok(median_growth) => median_growth,
+        Err(e) => return (vec![format!("{id}: {e}")], String::new()),
+    };
+    let limit = TEN_TURN_GROWTH_KIB as f64;
+    // The first pass stands in for the shape; the verdict is the median.
+    // Unreachable when empty: no entries is a count failure above, and an
+    // empty median fails before this line.
+    let Some(first_entry) = entries.first() else {
+        return (vec![format!("{id}: no runs recorded")], String::new());
+    };
+    let (first, last) = match (
+        field(first_entry, id, "first"),
+        field(first_entry, id, "last"),
+    ) {
+        (Ok(first), Ok(last)) => (first, last),
+        (Err(e), _) | (_, Err(e)) => return (vec![e], String::new()),
+    };
+    let shown = format!(
+        "median growth {median_growth:.0} KiB over {count} runs; run 1: {last} KiB RssAnon after the tenth, {first} KiB after the first"
+    );
+    let broken = (median_growth > limit).then(|| {
+        format!("{OVER}{id}: median growth {median_growth:.0} KiB is over {limit:.0} KiB")
+    });
+    match broken {
+        Some(broken) => (vec![broken], shown),
+        None => (Vec::new(), shown),
+    }
 }
 
 /// The thread as `tid` or `tid (name)`, and its voluntary and involuntary
