@@ -246,6 +246,11 @@ is a real child session process, because it is Fiber. The fakes are:
 
 - a provider server serving recorded and scripted streams, and recording
   requests
+- one shared HTTP/1.1 server core in `fakes`, which the provider server,
+  the OAuth token endpoint, the CONNECT proxy and the gated streamable-HTTP
+  fake all build on: each request is read within one bound on the injected
+  clock, and the test synchronises on pauses at the read request, before
+  the response and between the pieces of a stream
 - MCP servers for both transports, stdio and streamable HTTP
 - child processes that misbehave on purpose: ignore SIGTERM, leave descendants,
   escape their process group
