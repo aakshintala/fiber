@@ -192,44 +192,54 @@ fn drive_releasing_on_panic<T>(
 
 /// Runs `login` to its result, driving one callback with `query_for` built
 /// from the authorization URL. `query_for` receives the URL `present` saw.
-/// A login that fails before presenting surfaces its error instead of
-/// hanging on the URL wait.
+/// The URL wait runs on a scoped driver thread, and the test waits only on
+/// the login's own result: a login that fails before presenting, such as a
+/// refused discovery, ends the flow with no URL, and the driver leaves with
+/// the hung-up channel while the result names why, instead of the test
+/// sitting out a URL wait on the real clock.
 #[track_caller]
 fn run_with_callback(
     server_url: &str,
     files: &FakeTokens,
     clock: &Arc<fakes::clock::FakeClock>,
-    query_for: impl Fn(&str) -> String,
+    query_for: impl Fn(&str) -> String + Send,
 ) -> Result<(), LoginError> {
     let (sent, received) = mpsc::channel();
     let (sent_done, received_done) = mpsc::channel();
     let clock = Arc::clone(clock);
     std::thread::scope(|scope| {
-        let login = scope.spawn(|| {
-            let result = login(
-                files,
-                server_url,
-                &|url| sent.send(url.to_owned()).unwrap(),
-                &*clock,
-            );
-            sent_done.send(result).unwrap();
-        });
-        let url = match fakes::Deadline::after(WITHIN).recv(&received) {
-            Ok(url) => url,
-            Err(_) => {
-                // No authorization URL: the login failed before the
-                // wait, and its result names why.
-                let result = fakes::Deadline::after(WITHIN)
-                    .recv_or_fail(&received_done, "the early login failure");
-                login.join().unwrap();
-                return result;
+        // `sent` moves into the login thread: when the login fails before
+        // presenting, its end drops the URL sender, which releases the
+        // driver's blocking receive below. Owned outside, the sender would
+        // outlive the scope and the driver would never leave.
+        let login = scope.spawn({
+            let clock = Arc::clone(&clock);
+            move || {
+                let result = login(
+                    files,
+                    server_url,
+                    &|url| sent.send(url.to_owned()).unwrap(),
+                    &*clock,
+                );
+                sent_done.send(result).unwrap();
             }
-        };
-        let query = drive_releasing_on_panic(&clock, || query_for(&url));
-        let redirect = drive_releasing_on_panic(&clock, || {
-            query_param(&url, "redirect_uri").unwrap().to_owned()
         });
-        drive_releasing_on_panic(&clock, || send_callback(&redirect, &query));
+        let _driver = scope.spawn({
+            let clock = Arc::clone(&clock);
+            move || {
+                // No URL ever comes when the login fails before the wait:
+                // the hung-up channel ends the driver, and the result below
+                // names the failure.
+                let Ok(url) = received.recv() else {
+                    return;
+                };
+                drive_releasing_on_panic(&clock, || {
+                    let query = query_for(&url);
+                    let redirect = query_param(&url, "redirect_uri").unwrap().to_owned();
+                    send_callback(&redirect, &query);
+                });
+            }
+        });
         // The result first, through the deadline: joining a stuck login
         // would hang past the hang guard. On expiry the clock wait is
         // released so the scope can still join.
@@ -722,7 +732,9 @@ fn a_root_path_fetches_only_the_root_protected_resource_document() {
     // path-inserted guard (`!path.is_empty()` but not `path != "/"`),
     // so only the root document is fetched: an `||` mutant also fetches
     // the slash-suffixed inserted document, which answers 500 here and
-    // fails discovery, and which the exact request list below catches.
+    // fails discovery before anything is presented, so the flow's own
+    // result fails the `unwrap` below with no URL wait, and the exact
+    // request list beneath catches what it fetched.
     let server = ProviderServer::start_responding(|request: &Request| {
         let base = base_of(request);
         match (request.method.as_str(), request.path.as_str()) {
@@ -1172,9 +1184,9 @@ fn the_challenge_is_s256_of_the_verifier() {
     let files = FakeTokens::default();
     let clock = fakes::clock::FakeClock::new();
     let url = server_url(&server);
-    let challenge_seen = std::cell::RefCell::new(String::new());
+    let challenge_seen = std::sync::Mutex::new(String::new());
     run_with_callback(&url, &files, &clock, |shown| {
-        *challenge_seen.borrow_mut() = query_param(shown, "code_challenge").unwrap();
+        *challenge_seen.lock().unwrap() = query_param(shown, "code_challenge").unwrap();
         succeed(shown)
     })
     .unwrap();
@@ -1194,7 +1206,7 @@ fn the_challenge_is_s256_of_the_verifier() {
         &base64::engine::general_purpose::URL_SAFE_NO_PAD,
         ring::digest::digest(&ring::digest::SHA256, verifier.as_bytes()),
     );
-    assert_eq!(challenge_seen.borrow().as_str(), expected);
+    assert_eq!(challenge_seen.lock().unwrap().as_str(), expected);
 }
 
 #[test]
@@ -2060,44 +2072,53 @@ fn answer_once(head: &[u8], state: &str) -> (Option<Served>, String) {
     client.write_all(head).unwrap();
     let (server, _) = listener.accept().unwrap();
     let served = answer(server, &*clock, deadline, state);
-    // The reply may end in a reset instead of a close: refusing an
-    // over-cap head closes with the request half-read, and the peer then
-    // sees RST with none of the reply bytes, as the 431 tests document.
-    // Callers assert on the bytes they need, and on `served` throughout.
     let mut reply = String::new();
     let _read = client.read_to_string(&mut reply);
     (served, reply)
 }
 
 #[test]
-fn answer_reads_a_head_of_exactly_the_cap_but_refuses_one_byte_more() {
+fn answer_reads_a_head_of_exactly_the_cap() {
     // The cap check runs before each read, so a head of exactly the 8 KiB
-    // cap still reads whole while one byte more is refused: a `<` mutant
-    // of the `>=` refuses the exact-cap head too, and an `answer` mutant
-    // that never answers returns `None` for it. The sizes are literals,
-    // not `MAX_HEAD`, so a narrowed-cap mutant cannot underflow
-    // `sized_head` before the assertion; `the_callback_head_cap_is_8kib`
-    // pins the value itself.
+    // cap still reads whole: a `<` mutant of the `>=` refuses it too, and
+    // an `answer` mutant that never answers returns `None` for it. The
+    // size is a literal, not `MAX_HEAD`, so a narrowed-cap mutant cannot
+    // underflow `sized_head` before the assertion;
+    // `the_callback_head_cap_is_8kib` pins the value itself.
     const CAP: usize = 8 * 1024;
-    for (size, reads) in [(CAP, true), (CAP + 1, false)] {
-        let head = sized_head(size);
-        let (served, echo) = answer_once(&head, "s1");
-        if reads {
-            assert!(echo.starts_with("HTTP/1.1 200"), "{size}: {echo}");
-            match served {
-                Some(Served::Code(code)) => assert_eq!(code, "abc", "{size}"),
-                _ => panic!("a head of exactly the cap did not read: {size}"),
-            }
-        } else {
-            // Refused: `None`, with a 431 unless the close raced it as a
-            // reset, which reads as an empty reply.
-            assert!(
-                echo.starts_with("HTTP/1.1 431") || echo.is_empty(),
-                "{size}: {echo}"
-            );
-            assert!(served.is_none(), "{size}: an over-cap head was answered");
-        }
+    let head = sized_head(CAP);
+    let (served, echo) = answer_once(&head, "s1");
+    assert!(echo.starts_with("HTTP/1.1 200"), "{echo}");
+    match served {
+        Some(Served::Code(code)) => assert_eq!(code, "abc"),
+        _ => panic!("a head of exactly the cap did not read"),
     }
+}
+
+#[test]
+fn an_over_cap_head_is_refused_with_431_and_the_next_callback_succeeds() {
+    // One byte past the 8 KiB cap is refused with 431 and serves the next
+    // connection, which still reads: the refused reply is mandatory, and
+    // the second 200 with the code proves the wait continued. The client
+    // reads the first reply whole before it opens the second connection,
+    // and the server drains the refused head before closing, so the 431
+    // cannot race the next accept or the close into a reset.
+    const CAP: usize = 8 * 1024;
+    let clock = fakes::clock::FakeClock::new();
+    let deadline = clock.origin() + Duration::from_secs(60);
+    let over = sized_head(CAP + 1);
+    let (result, echo) = driven_wait(&clock, deadline, "s1", |addr| {
+        let first = send_raw(addr, &over);
+        let second = send_raw(
+            addr,
+            b"GET /callback?code=abc&state=s1 HTTP/1.1\r\nHost: x\r\nConnection: close\r\n\r\n",
+        );
+        format!("{first}||{second}")
+    });
+    let (first, second) = echo.split_once("||").unwrap();
+    assert!(first.starts_with("HTTP/1.1 431"), "{echo}");
+    assert!(second.starts_with("HTTP/1.1 200"), "{echo}");
+    assert_eq!(result.unwrap(), "abc");
 }
 
 #[test]

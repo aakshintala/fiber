@@ -163,6 +163,22 @@ pub(crate) fn answer(
         }
         if head.len() >= MAX_HEAD {
             respond(&mut stream, "431 Request Header Fields Too Large");
+            // The reply is written before the rest of the head is read:
+            // closing with the request half-read resets the connection,
+            // and the peer reads an empty reply instead of the 431. The
+            // drain below reads to the head's end first, so the close
+            // carries the 431 every time. It is bounded past one more cap
+            // of bytes, so a head that never ends still ends here.
+            while head.len() < 2 * MAX_HEAD {
+                match stream.read(&mut byte) {
+                    Ok(0) => break,
+                    Ok(_) => head.push(byte[0]),
+                    Err(_) => break,
+                }
+                if head.ends_with(b"\r\n\r\n") || head.ends_with(b"\n\n") {
+                    break;
+                }
+            }
             return None;
         }
         match stream.read(&mut byte) {
