@@ -554,6 +554,62 @@ fn the_paging_report_counts_the_search_matches_across_the_log() {
     assert!(report.contains(", 3 matches\n"), "{report}");
 }
 
+#[test]
+fn the_paging_report_searches_twice_around_the_recount() {
+    let report = crate::measure_paging(&events(&session()), 60, 12, fakes::clock::FakeClock::new())
+        .unwrap_or_else(|error| panic!("{error}"));
+    // The matching search stays, and the absent search after the resize
+    // completes with no match: a frozen clock prints zeros.
+    assert!(
+        report.contains("search of the whole log: 0.00 ms, 0 matches\n"),
+        "{report}"
+    );
+    assert!(
+        report.contains("search of the whole log with no match: 0.00 ms, 0 matches\n"),
+        "{report}"
+    );
+    // The absent search follows the resize, which follows the matching
+    // search: each line's place pins the measurement order.
+    let at = |label: &str| {
+        report
+            .lines()
+            .position(|line| line.starts_with(label))
+            .unwrap_or_else(|| panic!("no {label:?} in {report}"))
+    };
+    let shell = at("search of the whole log: ");
+    let absent = at("search of the whole log with no match: ");
+    let recount = at("slowest re-count at a new width: ");
+    assert!(shell < recount && recount < absent, "{report}");
+}
+
+#[test]
+fn the_paging_report_times_the_resize_and_absent_search() {
+    let origin = fakes::clock::FakeClock::new().origin();
+    let report = crate::measure_paging(&events(&session()), 60, 12, TickClock::clock(origin))
+        .unwrap_or_else(|error| panic!("{error}"));
+    // A ticking clock times both: the resize from before `set_size`
+    // through its frame, and the absent search after it.
+    let ms = |label: &str| {
+        report
+            .lines()
+            .find(|line| line.starts_with(label))
+            .and_then(|line| {
+                line.trim_start_matches(label)
+                    .split_once(" ms")
+                    .map(|(ms, _)| ms.parse::<f64>().unwrap_or(-1.0))
+            })
+            .unwrap_or_else(|| panic!("no {label:?} in {report}"))
+    };
+    assert!(
+        ms("slowest re-count at a new width: ") > 0.0,
+        "the resize is timed: {report}"
+    );
+    assert!(
+        ms("search of the whole log with no match: ") > 0.0,
+        "the absent search is timed: {report}"
+    );
+}
+
 /// A clock that ticks one millisecond per `now()`, so the paging jig's
 /// report holds nonzero durations. The origin is the fake clock's, since
 /// reading the process clock is banned in tests.
