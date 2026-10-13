@@ -1405,3 +1405,21 @@ fn a_secret_start_error_names_the_secret_never_its_value() {
     assert!(unreadable.contains("mcp.fx.S"), "{unreadable}");
     assert!(unreadable.contains("denied"), "{unreadable}");
 }
+
+#[test]
+fn error_enums_report_each_case_as_a_sentence() {
+    assert_eq!(
+        format!("{}", StartError::Deadline),
+        "The server did not answer before its startup deadline.",
+    );
+    assert_eq!(
+        format!(
+            "{}",
+            CallError::JsonRpc {
+                code: -32601,
+                message: "Method not found.".to_owned(),
+            }
+        ),
+        "The server answered JSON-RPC error -32601: Method not found.",
+    );
+}

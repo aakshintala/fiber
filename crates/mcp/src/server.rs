@@ -41,23 +41,28 @@ pub(crate) const INITIALIZED_ACK: u64 = u64::MAX - 1;
 
 /// Why [`Server::start`] failed: the session records it as
 /// `mcp_server_failed` and leaves the server out.
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, thiserror::Error)]
 pub(crate) enum StartError {
     /// The spawn, `initialize` or `tools/list` failed. The message is
     /// Fiber's own sentence.
+    #[error("{0}")]
     StartFailed(String),
     /// The remote server needs a usable OAuth login.
+    #[error("{0}")]
     Login(String),
     /// Nothing answered before the startup deadline.
+    #[error("The server did not answer before its startup deadline.")]
     Deadline,
     /// A `{ "secret" }` env value names no stored credential: the name
     /// of `credentials/<name>`, never the value.
+    #[error("The server names the secret `credentials/{name}`, which is not stored.")]
     SecretMissing {
         /// The secret's name, as the env value names it.
         name: String,
     },
     /// A `{ "secret" }` env value names a credential that cannot be
     /// read: the name and the reason, never the value.
+    #[error("The server names the secret `credentials/{name}`, which cannot be read: {why}.")]
     SecretUnreadable {
         /// The secret's name, as the env value names it.
         name: String,
@@ -122,15 +127,19 @@ fn list_pages<T: serde::de::DeserializeOwned>(
 }
 
 /// Why [`Server::call`] failed.
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, thiserror::Error)]
 pub(crate) enum CallError {
     /// Nothing answered before the call's deadline.
+    #[error("The server did not answer before the call deadline.")]
     Timeout,
     /// The call was cancelled. `notifications/cancelled` was sent.
+    #[error("The call was cancelled.")]
     Cancelled,
     /// The server is gone: it exited, or its reader ended.
+    #[error("The server is gone.")]
     Gone,
     /// The server answered with a JSON-RPC error.
+    #[error("The server answered JSON-RPC error {code}: {message}")]
     JsonRpc {
         /// The error's code.
         code: i64,
@@ -138,10 +147,13 @@ pub(crate) enum CallError {
         message: String,
     },
     /// The request failed over HTTP without ending the server; Fiber's sentence.
+    #[error("{0}")]
     Http(String),
     /// The request needs a usable OAuth login without ending the server.
+    #[error("{0}")]
     Login(String),
     /// The remote server ended its session.
+    #[error("The remote server ended its session.")]
     Expired,
 }
 
