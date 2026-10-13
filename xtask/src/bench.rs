@@ -1,8 +1,8 @@
 //! `cargo xtask bench-report`: judges the benchmark harness's result files
 //! against the budget table in `docs/performance.md` and writes the pull
-//! request comment. Memory and exact budgets fail the run; timing budgets
-//! are advisory and show the head and base medians ("When a budget is
-//! exceeded"). The comment also names the stripped binary's size each
+//! request comment. Exact, memory and paging growth-ratio budgets fail the
+//! run; absolute timing budgets are advisory and show the head and base
+//! medians ("When a budget is exceeded"). The comment also names the stripped binary's size each
 //! compared file records, and the head-minus-base change when both record
 //! one. Ceilings are read from the table at run time; an exact row's
 //! formula is code here, so its cell text is pinned. On a pull request the
@@ -314,7 +314,7 @@ fn comment(
 ) -> String {
     let with_base = !matches!(base, Base::None);
     let mut out = format!("{MARKER}\n## Benchmarks\n\n");
-    out.push_str("Exact and memory budgets fail the run; timing budgets are advisory. ");
+    out.push_str("Exact, memory and paging growth-ratio budgets fail the run; absolute timing budgets are advisory. ");
     out.push_str(run_sentence);
     out.push('\n');
     if let Some(secs) = idle_secs {

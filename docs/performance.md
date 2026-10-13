@@ -198,6 +198,12 @@ measures a `fiber` binary and writes its results to a file, and
 `cargo xtask bench-report` judges that file against the table above. The
 `paging` rows run the jig at scale 1 and 160 by 48, built in the release
 profile for the target that ships, and read its peak RSS from GNU time.
+The two scale-16 `paging` rows run the same jig at scale 16 and 160 by
+48 in the same run, right after scale 1, so every scale-16 re-count and
+absent search pairs with the same run's scale-1 sample. The gate takes
+the median of the paired ratios, not the ratio of independent medians:
+the ratio, not the machine, decides, and a base that is over its own
+ratio never waives a head that is over.
 The wheel rows burst 30 wheel-up reports, 8 ms apart, against `fiber resume`
 in a pseudo-terminal at 160 by 48, in the `paging` jig's session at scale 1
 and in one turn with a reply of 150 list items preceding an opened `read`
@@ -216,7 +222,11 @@ comment marks the row over at the base and names the base, and the backstop
 on `main` fails on it, which makes the fix a backstop ticket.
 
 A timing budget is advisory: CI posts the head and base medians as a
-comment on the pull request and never fails it. Timing gates turn on per
+comment on the pull request and never fails it. The two scale-16
+`paging` growth-ratio rows are the exception: like an exact or memory
+budget, a paired ratio over 16 times its same run's scale-1 sample
+fails the pull request on Linux x86_64, however the base compares.
+Timing gates turn on per
 runner speed class, once stored results show that the recorded CPU model
 identifies the class. GitHub's Linux x86_64 runners fall into three speed
 classes, the slowest 1.34 to 1.64 times the fastest; within a class a median
