@@ -124,7 +124,7 @@ pub(crate) fn rows_and_delegates(app: &App, width: u16) -> (Vec<Row>, Option<Ran
         let edge = usize::from(width.saturating_sub(1));
         let card_start = out.len();
         out.push(Row {
-            line: surface::card_edge_row(edge, Role::Surface, true),
+            line: surface::edge_row(edge, Role::Surface, true),
             spot: None,
             tint: None,
             edge: true,
@@ -137,7 +137,7 @@ pub(crate) fn rows_and_delegates(app: &App, width: u16) -> (Vec<Row>, Option<Ran
             row
         }));
         out.push(Row {
-            line: surface::card_edge_row(edge, Role::Surface, false),
+            line: surface::edge_row(edge, Role::Surface, false),
             spot: None,
             tint: None,
             edge: true,

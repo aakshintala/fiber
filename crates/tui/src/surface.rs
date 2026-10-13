@@ -106,8 +106,22 @@ impl Edges {
 
 /// An edge row `width` wide in `tint`: half blocks above (`top`) or below
 /// the surface, with no borders (`docs/tui.md`, "Look"). With no colour
-/// the paint pass blanks it, and the row stays.
+/// and room for two sides and text the row is the box's edge instead
+/// (see [`box_edge_row`]): every half-block surface boxes through this
+/// one call, while the prompt keeps [`half_edge_row`]'s half blocks,
+/// which the paint pass blanks. With no colour the paint pass otherwise
+/// blanks it, and the row stays.
 pub(crate) fn edge_row(width: usize, tint: Role, top: bool) -> Line<'static> {
+    if boxed() && width >= 3 {
+        return box_edge_row(width, top);
+    }
+    half_edge_row(width, tint, top)
+}
+
+/// An edge row `width` wide in `tint` that stays half blocks in every
+/// mode: the prompt bubble's edges, which the paint pass blanks with no
+/// colour so its rows stay edge-free (`docs/tui.md`, "Look").
+pub(crate) fn half_edge_row(width: usize, tint: Role, top: bool) -> Line<'static> {
     let edge = if top { "▄" } else { "▀" };
     Line::from(Span::styled(
         edge.repeat(width),
@@ -131,18 +145,6 @@ pub(crate) fn box_edge_row(width: usize, top: bool) -> Line<'static> {
         format!("{left}{}{right}", "─".repeat(width.saturating_sub(2))),
         style,
     ))
-}
-
-/// An edge row for a surface `width` wide in `tint`: the box's edge
-/// where a box fits, else half blocks in the tint (`docs/tui.md`,
-/// "Look"). The prompt keeps [`edge_row`]'s half blocks, which the
-/// paint pass blanks, so its rows stay edge-free.
-pub(crate) fn card_edge_row(width: usize, tint: Role, top: bool) -> Line<'static> {
-    if boxed() && width >= 3 {
-        box_edge_row(width, top)
-    } else {
-        edge_row(width, tint, top)
-    }
 }
 
 /// Draws a box's sides over `rect`'s rows: │ dim on its first and last

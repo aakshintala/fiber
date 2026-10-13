@@ -881,7 +881,7 @@ fn box_edge_rows_are_dim_corners_and_fills() {
 }
 
 #[test]
-fn card_edges_box_where_a_box_fits() {
+fn edge_rows_box_where_a_box_fits() {
     let _ = boxed(&[("NO_COLOR", "1")]);
     assert!(super::box_fit(3));
     assert!(super::box_fit(80));
@@ -889,13 +889,13 @@ fn card_edges_box_where_a_box_fits() {
     assert!(!super::box_fit(0));
     // A box fits: corners, not half blocks, with no role marker for the
     // paint pass to resolve.
-    let row = super::card_edge_row(4, Role::Surface, true);
+    let row = super::edge_row(4, Role::Surface, true);
     let text: String = row.spans.iter().map(|span| span.content.as_ref()).collect();
     assert_eq!(text, "┌──┐");
     assert!(row.spans.iter().all(|span| span.style.fg.is_none()));
     // Too narrow for two sides and text: half blocks, which the paint
     // pass blanks, so the text keeps its columns.
-    let narrow = super::card_edge_row(2, Role::Surface, false);
+    let narrow = super::edge_row(2, Role::Surface, false);
     let text: String = narrow
         .spans
         .iter()
@@ -906,11 +906,25 @@ fn card_edges_box_where_a_box_fits() {
 }
 
 #[test]
-fn card_edges_are_half_blocks_with_colour() {
+fn prompt_edges_stay_half_blocks_without_colour() {
+    // The prompt bubble is the exception: its edges stay half blocks in
+    // every mode, blanked by the paint pass, so its rows stay edge-free
+    // (`docs/tui.md`, "Look").
+    let _ = boxed(&[("NO_COLOR", "1")]);
+    for (top, edge) in [(true, "▄▄▄▄"), (false, "▀▀▀▀")] {
+        let row = super::half_edge_row(4, Role::Prompt, top);
+        let text: String = row.spans.iter().map(|span| span.content.as_ref()).collect();
+        assert_eq!(text, edge);
+        assert_eq!(row.spans[0].style.fg, Some(Role::Prompt.color()));
+    }
+}
+
+#[test]
+fn edge_rows_are_half_blocks_with_colour() {
     let _ = boxed(&[("COLORTERM", "truecolor")]);
     assert!(!super::boxed());
     assert!(!super::box_fit(80));
-    let row = super::card_edge_row(4, Role::Surface, true);
+    let row = super::edge_row(4, Role::Surface, true);
     let text: String = row.spans.iter().map(|span| span.content.as_ref()).collect();
     assert_eq!(text, "▄▄▄▄");
 }

@@ -207,7 +207,7 @@ fn card(app: &App, row: &Row, width: u16, out: &mut Vec<RailRow>) {
         usage(row, text, width >= BAR_FROM),
     ];
     out.push(RailRow {
-        line: crate::surface::card_edge_row(card_w, tint, true),
+        line: crate::surface::edge_row(card_w, tint, true),
         tint: None,
         spots: Vec::new(),
         start: Some(row.key),
@@ -249,7 +249,7 @@ fn card(app: &App, row: &Row, width: u16, out: &mut Vec<RailRow>) {
         });
     }
     out.push(RailRow {
-        line: crate::surface::card_edge_row(card_w, tint, false),
+        line: crate::surface::edge_row(card_w, tint, false),
         tint: None,
         spots: Vec::new(),
         start: None,
