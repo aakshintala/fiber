@@ -1,0 +1,52 @@
+{
+ "calls": [
+  {
+   "choice": "allow",
+   "input_tokens": 348021,
+   "latency_s": 1.774,
+   "name": "A1_first",
+   "output_tokens": 0
+  },
+  {
+   "choice": "allow",
+   "input_tokens": 348021,
+   "latency_s": 2.222,
+   "name": "A2_repeat",
+   "output_tokens": 0
+  },
+  {
+   "choice": "allow",
+   "input_tokens": 345168,
+   "latency_s": 1.804,
+   "name": "B_intervening_other",
+   "output_tokens": 0
+  },
+  {
+   "choice": "allow",
+   "input_tokens": 348021,
+   "latency_s": 1.535,
+   "name": "A3_after_other",
+   "output_tokens": 0
+  },
+  {
+   "choice": "allow",
+   "input_tokens": 348034,
+   "latency_s": 1.865,
+   "name": "C_extended_prefix",
+   "output_tokens": 0
+  }
+ ],
+ "mode": "cache",
+ "response_headers_sample": {
+  "X-Content-Type-Options": "nosniff",
+  "X-DNS-Prefetch-Control": "off",
+  "X-Download-Options": "noopen",
+  "X-Frame-Options": "SAMEORIGIN",
+  "X-Permitted-Cross-Domain-Policies": "none",
+  "X-XSS-Protection": "0"
+ },
+ "usage_fields_seen": [
+  "input_tokens",
+  "output_tokens"
+ ]
+}
