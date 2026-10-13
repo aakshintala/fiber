@@ -118,12 +118,13 @@ pub(crate) fn preserve_order(tree: &str) -> Vec<String> {
         if depth.is_some_and(|d| line_depth <= d) {
             depth = None;
         }
-        if depth.is_some_and(|d| line_depth == d + 1) && !text.contains(" feature \"") {
-            if let Some(name) = text.split_whitespace().next() {
-                enablers.insert(format!(
-                    "{name}: enables serde_json feature \"preserve_order\"; serde_json's preserve_order feature is never enabled (docs/prompt-cache.md)"
-                ));
-            }
+        if depth.is_some_and(|d| line_depth == d + 1)
+            && !text.contains(" feature \"")
+            && let Some(name) = text.split_whitespace().next()
+        {
+            enablers.insert(format!(
+                "{name}: enables serde_json feature \"preserve_order\"; serde_json's preserve_order feature is never enabled (docs/prompt-cache.md)"
+            ));
         }
     }
     if !enablers.is_empty() {

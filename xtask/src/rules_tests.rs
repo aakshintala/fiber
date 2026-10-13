@@ -450,6 +450,7 @@ const PRESERVE_VIOLATION: &str = "0serde_json v1.0.151\n\
 3cli feature \"default\" (command-line)\n\
 1serde_json feature \"preserve_order\"\n\
 2tools v0.0.0 (/repo/crates/tools)\n\
+2\n\
 3tools feature \"default\" (command-line)\n\
 3hub v0.0.0 (/repo/crates/hub)\n\
 2main v0.0.0 (/repo/crates/main) (*)\n\
