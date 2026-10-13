@@ -121,7 +121,14 @@ fn a_page_from_the_end_or_past_it_is_empty_with_nothing_more() {
 #[test]
 fn lines_that_fill_a_page_to_the_byte_share_it() {
     let (_dir, empty, _) = written("overhead", &[0]);
-    let overhead = usize::try_from(empty.window(0, 1, u64::MAX, u64::MAX).unwrap().stop).unwrap();
+    let overhead = usize::try_from(
+        empty
+            .resolve(0, 1, u64::MAX, u64::MAX)
+            .unwrap()
+            .unwrap()
+            .stop,
+    )
+    .unwrap();
     let half = usize::try_from(PAGE_BYTES).unwrap() / 2 - overhead;
     let (_dir, offsets, written) = written("exact", &[half, half, 10]);
     assert_eq!(
@@ -249,19 +256,19 @@ fn a_range_over_a_failed_window_is_an_error_with_no_lines() {
 #[test]
 fn resident_checkpoints_stay_at_a_constant_cap() {
     let offsets = Offsets::new(PathBuf::from("red-cap"), Vec::new(), 0);
-    assert!(offsets.lock().starts.is_empty());
+    assert!(offsets.lock().checkpoints.is_empty());
     for _ in 0..1023 {
         offsets.push(100);
     }
-    assert_eq!(offsets.lock().starts.len(), 1023);
-    assert_eq!(offsets.lock().starts[0], 0);
+    assert_eq!(offsets.lock().checkpoints.len(), 1023);
+    assert_eq!(offsets.lock().checkpoints[0], (0, 0));
     offsets.push(100);
-    assert_eq!(offsets.lock().starts.len(), 1024);
-    assert_eq!(offsets.lock().starts[0], 0);
+    assert_eq!(offsets.lock().checkpoints.len(), 1024);
+    assert_eq!(offsets.lock().checkpoints[0], (0, 0));
     offsets.push(100);
     // One past the cap the table halves to its even-indexed checkpoints.
-    assert_eq!(offsets.lock().starts.len(), 513);
-    assert_eq!(offsets.lock().starts[0], 0);
+    assert_eq!(offsets.lock().checkpoints.len(), 513);
+    assert_eq!(offsets.lock().checkpoints[0], (0, 0));
     // The absolute line count never depends on checkpointing.
     assert_eq!(offsets.count(), 1025);
 }
@@ -275,9 +282,13 @@ fn small_tables_checkpoint_every_line() {
         offsets.push(100);
     }
     let table = offsets.lock();
-    assert_eq!(table.starts.len(), 10);
-    for (i, start) in table.starts.iter().enumerate() {
-        assert_eq!(*start, (i as u64).saturating_mul(100), "line {i}");
+    assert_eq!(table.checkpoints.len(), 10);
+    for (i, checkpoint) in table.checkpoints.iter().enumerate() {
+        assert_eq!(
+            *checkpoint,
+            (i as u64, (i as u64).saturating_mul(100)),
+            "line {i}"
+        );
     }
 }
 
@@ -291,7 +302,7 @@ fn scan_records_every_complete_line_and_stops_at_a_torn_tail() {
     {
         let expected = offsets.lock();
         let found = scanned.lock();
-        assert_eq!(found.starts, expected.starts);
+        assert_eq!(found.checkpoints, expected.checkpoints);
         assert_eq!(found.end, expected.end);
     }
     assert_eq!(scanned.count(), 3);
@@ -307,7 +318,7 @@ fn scan_records_every_complete_line_and_stops_at_a_torn_tail() {
     {
         let expected = offsets.lock();
         let found = scanned.lock();
-        assert_eq!(found.starts, expected.starts);
+        assert_eq!(found.checkpoints, expected.checkpoints);
         assert_eq!(found.end, expected.end);
     }
     assert_eq!(scanned.count(), 3);

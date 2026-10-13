@@ -13,9 +13,21 @@ use contract::Envelope;
 use crate::read::{CAPACITY, PAGE_BYTES, complete_len};
 use crate::{Error, io_at};
 
+/// How many line-start checkpoints the table keeps resident: 1024 pairs of
+/// `(line, byte)`, 16 KiB, whatever the log's size. Past the cap the table
+/// keeps every other checkpoint and doubles its byte spacing, so the
+/// checkpoints stay spread across the whole log and an evicted page is
+/// found by scanning forward from the nearest checkpoint at or before it.
+const CHECKPOINTS: usize = 1024;
+
+/// The forward scan's fixed buffer: recovery scans allocate this once on
+/// the stack, never a retained or growing buffer, so scan-time allocation
+/// is bounded too.
+const SCAN_CHUNK: usize = 8 * 1024;
+
 /// The table, shared by the log that extends it and every watcher that
-/// reads by `seq` from it. A reader takes only its lock, copies the window's
-/// two offsets and lets go before any I/O.
+/// reads by `seq` from it. A reader takes only its lock, copies what it
+/// needs and lets go before any I/O.
 pub(crate) struct Offsets {
     /// The log.
     path: PathBuf,
@@ -23,8 +35,17 @@ pub(crate) struct Offsets {
 }
 
 struct Table {
-    /// The first byte of each complete line.
-    starts: Vec<u64>,
+    /// Resident line-start checkpoints, `(line, byte)` in line order: at
+    /// most [`CHECKPOINTS`] of them, one uniform byte spacing apart. The
+    /// first is `(0, 0)` whenever the table holds any line.
+    checkpoints: Vec<(u64, u64)>,
+    /// The byte spacing the checkpoints keep: a line start is checkpointed
+    /// once it lies at least this far past the previous checkpoint. It
+    /// starts at 1, so every line of a small log is checkpointed, and
+    /// doubles at every halving.
+    spacing: u64,
+    /// How many complete lines the log holds, checkpointed or not.
+    total: u64,
     /// The byte just past the last complete line.
     end: u64,
 }
@@ -53,13 +74,50 @@ struct Partial {
     error: Error,
 }
 
+/// A window's byte span resolved from the checkpoint snapshot.
+struct Resolution {
+    /// The window's first line, an absolute position.
+    first: usize,
+    /// The byte span, `start..stop`.
+    start: u64,
+    stop: u64,
+    /// The table held lines past `stop` when the window was taken.
+    more: bool,
+    /// File bytes traversed finding line starts the checkpoints no longer
+    /// hold: 0 when every start the window needs is resident.
+    scanned: u64,
+    /// The file ended before the window filled: the window holds the
+    /// complete lines found, and reading it still fails as a short read
+    /// does. `None` is a clean window.
+    short: Option<io::Error>,
+}
+
+/// A snapshot of the table, copied under its lock and read without it: the
+/// log is append-only, so absolute offsets at or below the copied end
+/// stay valid while the file is scanned.
+struct Snapshot {
+    checkpoints: Vec<(u64, u64)>,
+    total: u64,
+    end: u64,
+}
+
 impl Offsets {
     /// A table for the log at `path` whose complete lines start at `starts`
     /// and end at `end`.
     pub(crate) fn new(path: PathBuf, starts: Vec<u64>, end: u64) -> Self {
+        let total = u64::try_from(starts.len()).unwrap_or(u64::MAX);
+        let mut table = Table {
+            checkpoints: Vec::new(),
+            spacing: 1,
+            total,
+            end,
+        };
+        for (line, byte) in starts.into_iter().enumerate() {
+            table.record(u64::try_from(line).unwrap_or(u64::MAX), byte);
+        }
         Self {
             path,
-            table: Mutex::new(Table { starts, end }),
+            table: Mutex::new(table),
         }
     }
 
@@ -76,8 +134,13 @@ impl Offsets {
     ) -> Result<Offsets, Error> {
         let mut lines = crate::read::lines(dir)?;
         let path = dir.join(crate::EVENTS);
-        let mut starts = Vec::new();
-        while u64::try_from(starts.len()).unwrap_or(u64::MAX) < limit {
+        let mut table = Table {
+            checkpoints: Vec::new(),
+            spacing: 1,
+            total: 0,
+            end: 0,
+        };
+        while table.total < limit {
             let start = lines.offset();
             let refused = match lines.next_raw() {
                 None => break,
@@ -87,10 +150,16 @@ impl Offsets {
             if let Err(source) = refused {
                 return Err(lines.unreadable(source));
             }
-            starts.push(start);
+            // A refused line is recorded nowhere: the scan ends above.
+            let total = table.total;
+            table.record(total, start);
+            table.total = total.saturating_add(1);
         }
-        let end = lines.offset();
-        Ok(Offsets::new(path, starts, end))
+        table.end = lines.offset();
+        Ok(Self {
+            path,
+            table: Mutex::new(table),
+        })
     }
 
     /// The byte just past the last complete line: where a torn tail
@@ -107,13 +176,15 @@ impl Offsets {
     pub(crate) fn push(&self, len: u64) {
         let mut table = self.lock();
         let start = table.end;
-        table.starts.push(start);
+        let total = table.total;
+        table.record(total, start);
+        table.total = total.saturating_add(1);
         table.end = start.saturating_add(len);
     }
 
     /// How many complete lines the table holds.
     pub(crate) fn count(&self) -> u64 {
-        u64::try_from(self.lock().starts.len()).unwrap_or(u64::MAX)
+        self.lock().total
     }
 
     /// The lines at positions `from..from + max`, in order, fewer when the
@@ -121,8 +192,12 @@ impl Offsets {
     /// parses only those lines. A window that cannot be read whole is an
     /// error with no lines: a partial window would read as complete.
     pub(crate) fn range(&self, from: u64, max: usize) -> Result<Vec<Envelope>, Error> {
-        match self.window(from, max, u64::MAX, u64::MAX) {
-            Some(window) => self.read(&window).map_err(|partial| partial.error),
+        match self.resolve(from, max, u64::MAX, u64::MAX)? {
+            Some(window) => {
+                // The meter is for tests: production ignores the count.
+                let _ = window.scanned;
+                self.read(&window).map_err(|partial| partial.error)
+            }
             None => Ok(Vec::new()),
         }
     }
@@ -137,8 +212,10 @@ impl Offsets {
     /// appended later arrives through the watcher's queue, in queue order;
     /// a catch-up passes `u64::MAX` to read to the table's current end.
     pub(crate) fn page(&self, from: u64, end: u64) -> Page {
-        match self.window(from, CAPACITY, PAGE_BYTES, end) {
-            Some(window) => {
+        match self.resolve(from, CAPACITY, PAGE_BYTES, end) {
+            Ok(Some(window)) => {
+                // The meter is for tests: production ignores the count.
+                let _ = window.scanned;
                 let more = window.more;
                 match self.read(&window) {
                     Ok(lines) => Page {
@@ -151,9 +228,13 @@ impl Offsets {
                     },
                 }
             }
-            None => Page {
+            Ok(None) => Page {
                 lines: Vec::new(),
                 after: After::Done,
+            },
+            Err(error) => Page {
+                lines: Vec::new(),
+                after: After::Failed(error),
             },
         }
     }
@@ -164,8 +245,10 @@ impl Offsets {
     /// ends short keeps only whole lines: the bytes read before the
     /// failure are cut at their last newline, so a partial line is never
     /// parsed or returned. The buffer is allocated once at the window's
-    /// length and never grows past it.
-    fn read(&self, window: &Window) -> Result<Vec<Envelope>, Partial> {
+    /// length and never grows past it. A window the forward scan could
+    /// not fill fails as a short read does, over the complete lines the
+    /// scan found.
+    fn read(&self, window: &Resolution) -> Result<Vec<Envelope>, Partial> {
         let len = window.stop.saturating_sub(window.start);
         let mut bytes = Vec::with_capacity(usize::try_from(len).unwrap_or(usize::MAX));
         let mut open = match File::open(&self.path) {
@@ -188,6 +271,10 @@ impl Offsets {
             },
             Err(error) => Some(error),
         };
+        // A scan that ended short is a short read over the lines found:
+        // the window holds complete lines, and reading them still reports
+        // the short file after them.
+        let failure = failure.or_else(|| window.short.as_ref().map(short_to_io));
         bytes.truncate(complete_len(&bytes));
         let mut lines = Vec::new();
         for (i, line) in bytes.split_inclusive(|b| *b == b'\n').enumerate() {
@@ -217,42 +304,389 @@ impl Offsets {
     /// The window of at most `max` lines from position `from` below `end`,
     /// stopping before a line that would take it past `bytes`; its first
     /// line is in it whatever its length, so a window always moves forward.
-    /// `None` when `from` is past the last line.
-    fn window(&self, from: u64, max: usize, bytes: u64, end: u64) -> Option<Window> {
-        let table = self.lock();
-        let first = usize::try_from(from).ok()?;
-        let start = *table.starts.get(first)?;
-        let limit = start.saturating_add(bytes);
-        let bound = usize::try_from(end).unwrap_or(usize::MAX);
-        let last = first.saturating_add(max).min(table.starts.len()).min(bound);
-        let end_of = |line: usize| {
-            let next = line.saturating_add(1);
-            table.starts.get(next).copied().unwrap_or(table.end)
+    /// `None` when `from` is past the last line. Line starts the resident
+    /// checkpoints no longer hold are found by seeking the nearest
+    /// checkpoint at or before them and counting newlines forward through
+    /// a fixed buffer; the lock is held only to copy the checkpoints, the
+    /// count and the end, never across file I/O. An open or seek failure
+    /// is an error with no lines, as a missing log is; a scan that ends
+    /// short resolves over the complete lines found.
+    fn resolve(
+        &self,
+        from: u64,
+        max: usize,
+        bytes: u64,
+        end: u64,
+    ) -> Result<Option<Resolution>, Error> {
+        let snapshot = {
+            let table = self.lock();
+            Snapshot {
+                checkpoints: table.checkpoints.clone(),
+                total: table.total,
+                end: table.end,
+            }
         };
-        let mut past = first;
-        while past < last && (past == first || end_of(past) <= limit) {
-            past = past.saturating_add(1);
+        let first = match usize::try_from(from) {
+            Ok(first) => first,
+            Err(_) => return Ok(None),
+        };
+        if from >= snapshot.total {
+            return Ok(None);
         }
-        let stop = table.starts.get(past).copied().unwrap_or(table.end);
-        let below = table.starts.len().min(bound);
-        Some(Window {
+        // The last line the window may hold. At least `from` itself: a
+        // bound below `from` still resolves the empty window at it.
+        let want_last = from
+            .saturating_add(u64::try_from(max).unwrap_or(u64::MAX))
+            .min(snapshot.total)
+            .min(end)
+            .max(from);
+        // The nearest checkpoint at or before `from`: the first line is
+        // always checkpointed, so one exists whenever lines do.
+        let below = snapshot
+            .checkpoints
+            .partition_point(|checkpoint| checkpoint.0 <= from);
+        let anchor = below.saturating_sub(1);
+        // Whether every start the window needs is resident: the lines
+        // `from..=want_last` each hold a checkpoint. A fully resident
+        // window takes no file I/O and scans nothing.
+        let mut from_idx = usize::MAX;
+        {
+            let mut line = from;
+            let mut at = anchor;
+            loop {
+                match snapshot.checkpoints.get(at) {
+                    Some(checkpoint) if checkpoint.0 == line => {
+                        if line == from {
+                            from_idx = at;
+                        }
+                        if line == want_last || line == u64::MAX {
+                            break;
+                        }
+                        line = line.saturating_add(1);
+                        at = at.saturating_add(1);
+                    }
+                    _ => {
+                        from_idx = usize::MAX;
+                        break;
+                    }
+                }
+            }
+        }
+        if from_idx != usize::MAX {
+            let spec = Spec {
+                first,
+                from,
+                want_last,
+                start: starts_start(&snapshot, from_idx),
+                bytes,
+                bound: end,
+            };
+            let mut starts = ResidentStarts {
+                snapshot: &snapshot,
+                idx: from_idx.saturating_add(1),
+            };
+            return Ok(Some(size_window(&snapshot, &spec, &mut starts)));
+        }
+        let mut spec = Spec {
             first,
-            start,
-            stop,
-            more: past < below,
-        })
+            from,
+            want_last,
+            start: 0,
+            bytes,
+            bound: end,
+        };
+        self.scanned_window(&snapshot, &mut spec, anchor)
+    }
+
+    /// Sizes a window whose starts need the file: seeks the anchor
+    /// checkpoint and counts newlines forward through a fixed buffer.
+    fn scanned_window(
+        &self,
+        snapshot: &Snapshot,
+        spec: &mut Spec,
+        anchor: usize,
+    ) -> Result<Option<Resolution>, Error> {
+        let (anchor_line, anchor_byte) = match snapshot.checkpoints.get(anchor) {
+            Some(checkpoint) => *checkpoint,
+            None => {
+                return Err(io_at(&self.path)(io::Error::new(
+                    io::ErrorKind::UnexpectedEof,
+                    "the log ends short of its offset table",
+                )));
+            }
+        };
+        let mut file = match File::open(&self.path) {
+            Ok(file) => file,
+            Err(error) => return Err(io_at(&self.path)(error)),
+        };
+        if let Err(error) = file.seek(io::SeekFrom::Start(anchor_byte)) {
+            return Err(io_at(&self.path)(error));
+        }
+        let mut finder = Finder {
+            file: &mut file,
+            buf: [0u8; SCAN_CHUNK],
+            len: 0,
+            at: 0,
+            byte: anchor_byte,
+            scanned: 0,
+            short: None,
+        };
+        // Skip to the window's first line: the anchor's own byte is its
+        // line's start, so seeking the lines between the anchor and the
+        // window lands on the window's first line.
+        let mut skip = spec.from.saturating_sub(anchor_line);
+        let mut start = anchor_byte;
+        if skip > 0 {
+            let mut found = false;
+            while skip > 0 {
+                match finder.next_newline_end() {
+                    Some(end) => {
+                        skip -= 1;
+                        if skip == 0 {
+                            start = end;
+                            found = true;
+                        }
+                    }
+                    None => break,
+                }
+            }
+            if !found {
+                // The file ends before the window's first line: an empty
+                // window over nothing found, still failing as a short
+                // read, never an empty-on-scan-failure window.
+                return Ok(Some(Resolution {
+                    first: spec.first,
+                    start: finder.byte,
+                    stop: finder.byte,
+                    more: spec.from < snapshot.total.min(spec.bound),
+                    scanned: finder.scanned,
+                    short: finder.short.or_else(short_eof),
+                }));
+            }
+        }
+        spec.start = start;
+        let mut starts = ScannedStarts {
+            finder: &mut finder,
+        };
+        let mut window = size_window(snapshot, spec, &mut starts);
+        window.scanned = starts.scanned();
+        Ok(Some(window))
     }
 }
 
-/// A run of whole lines in the log.
-struct Window {
-    /// The first line's position.
+impl Table {
+    /// Checkpoints the line `line` starting at `byte`: the first line, and
+    /// every start at least [`Table::spacing`] past the previous
+    /// checkpoint. Past [`CHECKPOINTS`] checkpoints the even-indexed ones
+    /// are kept and the spacing doubles, so residency stays constant and
+    /// the checkpoints stay spread across the whole log.
+    fn record(&mut self, line: u64, byte: u64) {
+        let checkpoint = match self.checkpoints.last() {
+            None => true,
+            Some(previous) => byte.saturating_sub(previous.1) >= self.spacing,
+        };
+        if !checkpoint {
+            return;
+        }
+        self.checkpoints.push((line, byte));
+        if self.checkpoints.len() > CHECKPOINTS {
+            let mut kept = Vec::with_capacity(self.checkpoints.len().div_ceil(2));
+            for (i, checkpoint) in self.checkpoints.iter().enumerate() {
+                if i % 2 == 0 {
+                    kept.push(*checkpoint);
+                }
+            }
+            self.checkpoints = kept;
+            self.spacing = self.spacing.saturating_mul(2);
+        }
+    }
+}
+
+/// How a window under sizing finds each next line's start, in order from
+/// the line after its first: resident checkpoints, or the forward scan.
+/// `None` past the complete lines found.
+trait Starts {
+    fn next(&mut self) -> Option<u64>;
+    /// Why `next` ended, once it returns `None`.
+    fn short(&mut self) -> Option<io::Error>;
+    /// File bytes the scan traversed, once sizing ends.
+    fn scanned(&self) -> u64;
+}
+
+struct ResidentStarts<'s> {
+    snapshot: &'s Snapshot,
+    idx: usize,
+}
+
+impl Starts for ResidentStarts<'_> {
+    fn next(&mut self) -> Option<u64> {
+        let byte = self.snapshot.checkpoints.get(self.idx)?.1;
+        self.idx = self.idx.saturating_add(1);
+        Some(byte)
+    }
+
+    fn short(&mut self) -> Option<io::Error> {
+        None
+    }
+
+    fn scanned(&self) -> u64 {
+        0
+    }
+}
+
+struct ScannedStarts<'f> {
+    finder: &'f mut Finder<'f>,
+}
+
+impl Starts for ScannedStarts<'_> {
+    fn next(&mut self) -> Option<u64> {
+        self.finder.next_newline_end()
+    }
+
+    fn short(&mut self) -> Option<io::Error> {
+        self.finder.short.take()
+    }
+
+    fn scanned(&self) -> u64 {
+        self.finder.scanned
+    }
+}
+
+/// The start a resident window's first line holds.
+fn starts_start(snapshot: &Snapshot, from_idx: usize) -> u64 {
+    match snapshot.checkpoints.get(from_idx) {
+        Some(checkpoint) => checkpoint.1,
+        None => snapshot.end,
+    }
+}
+
+/// What a window under sizing is and needs: its first line and first
+/// line's start, the last line it may hold, and the bounds sizing it.
+struct Spec {
     first: usize,
-    /// The byte span, `start..stop`.
+    from: u64,
+    want_last: u64,
     start: u64,
-    stop: u64,
-    /// The table held lines past `stop` when the window was taken.
-    more: bool,
+    bytes: u64,
+    bound: u64,
+}
+
+/// Sizes a window from its first line's start: the first line is in
+/// whatever its length, and every later line while it ends at or before
+/// the byte limit. `starts` yields each next line's start in order;
+/// running out ends the window over the complete lines found.
+fn size_window(snapshot: &Snapshot, spec: &Spec, starts: &mut impl Starts) -> Resolution {
+    let limit = spec.start.saturating_add(spec.bytes);
+    // Lines `from..past` are in; `cur` starts line `past`.
+    let mut past = spec.from;
+    let mut cur = spec.start;
+    let mut short: Option<io::Error> = None;
+    loop {
+        if past >= spec.want_last {
+            break;
+        }
+        // The last line's end is authoritative: no scan past the table.
+        let end_of = if past.saturating_add(1) == snapshot.total {
+            snapshot.end
+        } else {
+            match starts.next() {
+                Some(end) => end,
+                None => {
+                    short = starts.short().or_else(short_eof);
+                    break;
+                }
+            }
+        };
+        if past != spec.from && end_of > limit {
+            break;
+        }
+        past = past.saturating_add(1);
+        cur = end_of;
+    }
+    Resolution {
+        first: spec.first,
+        start: spec.start,
+        stop: cur,
+        more: past < snapshot.total.min(spec.bound),
+        scanned: 0,
+        short,
+    }
+}
+
+/// A forward newline scan over a file: `next_newline_end` returns the byte
+/// just past each `\n` in order, counting every byte read as scanned. A
+/// clean end of file, or a failed read, ends the scan with `short` set:
+/// the window resolves over the complete lines found, never an
+/// empty-on-scan-failure window.
+struct Finder<'f> {
+    file: &'f mut File,
+    buf: [u8; SCAN_CHUNK],
+    /// Unconsumed bytes in `buf`: `buf[at..len]`.
+    len: usize,
+    at: usize,
+    /// The file byte of `buf[at]`.
+    byte: u64,
+    scanned: u64,
+    short: Option<io::Error>,
+}
+
+impl Finder<'_> {
+    fn next_newline_end(&mut self) -> Option<u64> {
+        loop {
+            while self.at < self.len {
+                let byte = match self.buf.get(self.at) {
+                    Some(byte) => *byte,
+                    None => break,
+                };
+                self.at = self.at.saturating_add(1);
+                self.byte = self.byte.saturating_add(1);
+                if byte == b'\n' {
+                    return Some(self.byte);
+                }
+            }
+            self.at = 0;
+            match self.file.read(&mut self.buf) {
+                Ok(0) => {
+                    self.len = 0;
+                    self.short = Some(io::Error::new(
+                        io::ErrorKind::UnexpectedEof,
+                        "the log ends short of its offset table",
+                    ));
+                    return None;
+                }
+                Ok(read) => {
+                    self.len = read;
+                    self.scanned = self
+                        .scanned
+                        .saturating_add(u64::try_from(read).unwrap_or(u64::MAX));
+                }
+                Err(error) => {
+                    self.len = 0;
+                    self.short = Some(error);
+                    return None;
+                }
+            }
+        }
+    }
+}
+
+/// A scan that ended short fails as a short read does: the window holds
+/// complete lines, and reading them still reports the short file. A clean
+/// end of file reads as the table running past the log; a failed mid-scan
+/// read reads as itself, kind and cause kept.
+fn short_to_io(error: &io::Error) -> io::Error {
+    match error.raw_os_error() {
+        Some(code) => io::Error::from_raw_os_error(code),
+        None => io::Error::new(error.kind(), error.to_string()),
+    }
+}
+
+/// A clean end of file where a line start was sought.
+fn short_eof() -> Option<io::Error> {
+    Some(io::Error::new(
+        io::ErrorKind::UnexpectedEof,
+        "the log ends short of its offset table",
+    ))
 }
 
 #[cfg(test)]
