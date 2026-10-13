@@ -67,6 +67,8 @@ fn samples() -> Vec<Value> {
     vec![
         json!({"id": "c", "command": "subscribe", "args": {"level": "full"}}),
         json!({"id": "c", "command": "subscribe", "args": {"level": "summary"}}),
+        json!({"id": "c", "command": "subscribe", "args": {"level": "full", "credential": "work"}}),
+        json!({"id": "c", "command": "subscribe", "args": {"level": "summary", "credential": "work"}}),
         json!({"id": "c", "command": "prompt", "args": {"content": content}}),
         json!({"id": "c", "command": "steer", "args": {"content": content}}),
         json!({"id": "c", "command": "steer_drop", "args": {"command_id": "c0"}}),
@@ -330,6 +332,50 @@ fn subscribe_args_that_do_not_fit_are_invalid_arguments() {
     assert!(parse(r#"{"id":"c","command":"subscribe","args":{"level":"partial"}}"#).is_err());
     assert!(
         parse(r#"{"id":"c","command":"subscribe","args":{"level":"full","extra":true}}"#).is_err()
+    );
+    assert!(
+        parse(r#"{"id":"c","command":"subscribe","args":{"level":"full","credential":"work","extra":true}}"#)
+            .is_err()
+    );
+    assert!(
+        parse(r#"{"id":"c","command":"subscribe","args":{"level":"full","credential":1}}"#)
+            .is_err()
+    );
+    assert!(
+        parse(r#"{"id":"c","command":"subscribe","args":{"level":"full","credential":{"label":"work"}}}"#)
+            .is_err()
+    );
+    assert!(
+        parse(r#"{"id":"c","command":"subscribe","args":{"level":1,"credential":"work"}}"#)
+            .is_err()
+    );
+}
+
+#[test]
+fn subscribe_credential_is_an_optional_label() {
+    let line =
+        parse(r#"{"id":"c","command":"subscribe","args":{"level":"full","credential":"work"}}"#)
+            .unwrap();
+    assert_eq!(
+        line.command,
+        Command::Subscribe(SubscribeArgs {
+            level: SubscribeLevel::Full,
+            credential: Some("work".into()),
+        })
+    );
+    let line =
+        parse(r#"{"id":"c","command":"subscribe","args":{"level":"summary"}}"#).unwrap();
+    assert_eq!(
+        line.command,
+        Command::Subscribe(SubscribeArgs {
+            level: SubscribeLevel::Summary,
+            credential: None,
+        })
+    );
+    // An explicit null is never an absent optional key.
+    assert!(
+        parse(r#"{"id":"c","command":"subscribe","args":{"level":"full","credential":null}}"#)
+            .is_err()
     );
 }
 
