@@ -1976,3 +1976,57 @@ fn resume_credential_without_an_id_is_a_usage_error() {
         .unwrap_or_default();
     assert!(live.is_empty(), "no session log was created: {live:?}");
 }
+
+#[test]
+fn sigterm_takes_the_normal_exit_path_with_143() {
+    signal_takes_the_normal_exit_path("TERM", 143);
+}
+
+#[test]
+fn sighup_takes_the_normal_exit_path_with_129() {
+    signal_takes_the_normal_exit_path("HUP", 129);
+}
+
+/// Sends `signal` to a terminal with one live session: the terminal
+/// takes its normal exit path, restoring the screen and printing one
+/// resume line for the live session, then exits with `code`
+/// (`docs/tui.md`, "On exit"; `docs/invocation.md`, "Three signals, one
+/// path"). The terminal's guard exits at once today, skipping the
+/// restore and the lines, so the byte assertions fail until the fix.
+#[track_caller]
+fn signal_takes_the_normal_exit_path(signal: &'static str, code: i32) {
+    let setup = support::Setup::new();
+    let server = ProviderServer::start([reply("Hello.")]).unwrap();
+    provider(&setup, &server);
+    let mut run = terminal(&setup, 120, 32, &[], &[]);
+    run.wait_screen("the first frame", |grid| grid.contents.contains("›"));
+    run.ready();
+    let from = run.output().len();
+    run.write(b"say hi\r");
+    // The reply streams in two deltas; the turn's close says it finished
+    // and the session is live, so the signal below lands with one
+    // session to resume.
+    run.wait_screen("the answer", |grid| grid.contents.contains("Hel"));
+    run.turn_finished(from);
+    let id = only_session(&setup);
+    support::kill_pid(setup.deadline, run.id(), signal).unwrap();
+    let output = run.wait();
+    assert_eq!(
+        output.status.code(),
+        Some(code),
+        "a {signal} signal exits {code}"
+    );
+    // The drained output holds every byte through end of file: leaving
+    // the alternate screen proves the restore ran, and the resume line
+    // proves the exit lines printed after it.
+    let terminal = String::from_utf8_lossy(&output.terminal);
+    assert!(
+        terminal.contains("\x1b[?1049l"),
+        "a {signal} signal restores the terminal; terminal:\n{terminal}"
+    );
+    let line = format!("fiber resume {id}");
+    assert!(
+        terminal.contains(&line),
+        "a {signal} signal prints the live session's resume line; terminal:\n{terminal}"
+    );
+}

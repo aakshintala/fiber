@@ -186,6 +186,7 @@ pub(crate) enum Input {
     /// and the next moving frame arms it again (`docs/tui.md`, "The
     /// working line").
     Tick,
+    Signal(std::ffi::c_int),
 }
 
 /// Restores the terminal [`run`] set up: turns mouse reporting off, leaves
