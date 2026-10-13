@@ -1288,17 +1288,18 @@ fn a_shutdown_signal_while_the_editor_runs_quits_with_128_plus_it() {
         .unwrap_or_else(|err| panic!("dup: {err}"));
     let (mut lp, _) = new_loop(TestBackend::new(60, 12), Some(tty));
     lp.app.set_home(launch());
-    // A blocking editor that acknowledges the block: no `exec`, so the
-    // script stays to name the tree the shutdown ends.
+    // A blocking editor that acknowledges the block: `exec` makes the
+    // sleep the process waited on, so the acknowledgement names the
+    // editor pid itself.
     let dir = fakes::TempDir::new("editor");
     let ready = fakes::children::Ready::new(dir.path());
     let script = dir.path().join("editor.sh");
     std::fs::write(
         &script,
-        format!("echo $$ > {}\nsleep 30\n", ready.path().display()),
+        format!("echo $$ > {}\nexec sleep 30\n", ready.path().display()),
     )
     .unwrap_or_else(|err| panic!("script: {err}"));
-    let command = format!("/bin/sh {}", script.display());
+    let command = format!("exec /bin/sh {}", script.display());
     let script = script.display().to_string();
     let watchdog = fakes::Watchdog::matching(&script);
     lp.var = Box::new(move |name| (name == "EDITOR").then(|| command.clone()));
@@ -1317,7 +1318,12 @@ fn a_shutdown_signal_while_the_editor_runs_quits_with_128_plus_it() {
             }
         })
         .unwrap_or_else(|err| panic!("spawn: {err}"));
-    ready.wait(DEADLINE);
+    let live = ready.wait(DEADLINE);
+    assert_eq!(
+        live.len(),
+        1,
+        "the acknowledgement names the editor: {live:?}"
+    );
     signal_hook::low_level::raise(SIGTERM).unwrap_or_else(|err| panic!("raise: {err}"));
     let (code, draft, lines) = Deadline::after(DEADLINE)
         .recv(&finished)
@@ -1330,12 +1336,14 @@ fn a_shutdown_signal_while_the_editor_runs_quits_with_128_plus_it() {
     );
     // The handover gave the terminal back suspended (cooked, primary
     // screen): the quit path resumes nothing, and the run's restore
-    // keeps what suspend left. The editor tree is gone.
+    // keeps what suspend left. The acknowledged editor pid is gone.
     assert!(is_cooked(
         &rustix::termios::tcgetattr(&pair.slave).unwrap_or_else(|err| panic!("attr: {err}"))
     ));
-    let left = fakes::matching(&script).unwrap_or_else(|err| panic!("ps: {err}"));
-    assert!(left.is_empty(), "editor processes left: {left:?}");
+    assert!(
+        fakes::pids_exit(&live, DEADLINE),
+        "the editor outlived the shutdown: {live:?}"
+    );
     watchdog.stand_down(DEADLINE);
     crate::term::restore();
 }
@@ -1357,17 +1365,18 @@ fn a_shutdown_signal_while_a_file_editor_runs_quits_with_128_plus_it() {
         .try_clone()
         .unwrap_or_else(|err| panic!("dup: {err}"));
     let (mut lp, _) = new_loop(TestBackend::new(60, 12), Some(tty));
-    // A blocking editor that acknowledges the block: no `exec`, so the
-    // script stays to name the tree the shutdown ends.
+    // A blocking editor that acknowledges the block: `exec` makes the
+    // sleep the process waited on, so the acknowledgement names the
+    // editor pid itself.
     let dir = fakes::TempDir::new("editor");
     let ready = fakes::children::Ready::new(dir.path());
     let script = dir.path().join("editor.sh");
     std::fs::write(
         &script,
-        format!("echo $$ > {}\nsleep 30\n", ready.path().display()),
+        format!("echo $$ > {}\nexec sleep 30\n", ready.path().display()),
     )
     .unwrap_or_else(|err| panic!("script: {err}"));
-    let command = format!("/bin/sh {}", script.display());
+    let command = format!("exec /bin/sh {}", script.display());
     let script = script.display().to_string();
     let watchdog = fakes::Watchdog::matching(&script);
     lp.var = Box::new(move |name| (name == "EDITOR").then(|| command.clone()));
@@ -1381,18 +1390,26 @@ fn a_shutdown_signal_while_a_file_editor_runs_quits_with_128_plus_it() {
             Ok(()) | Err(_) => {}
         })
         .unwrap_or_else(|err| panic!("spawn: {err}"));
-    ready.wait(DEADLINE);
+    let live = ready.wait(DEADLINE);
+    assert_eq!(
+        live.len(),
+        1,
+        "the acknowledgement names the editor: {live:?}"
+    );
     signal_hook::low_level::raise(SIGTERM).unwrap_or_else(|err| panic!("raise: {err}"));
     let code = Deadline::after(DEADLINE)
         .recv(&finished)
         .unwrap_or_else(|err| panic!("waited {DEADLINE:?} for the file editor to quit: {err}"));
     assert_eq!(code, Some(143));
-    // As above: suspended, not resumed, and the editor tree is gone.
+    // As above: suspended, not resumed, and the acknowledged editor pid
+    // is gone.
     assert!(is_cooked(
         &rustix::termios::tcgetattr(&pair.slave).unwrap_or_else(|err| panic!("attr: {err}"))
     ));
-    let left = fakes::matching(&script).unwrap_or_else(|err| panic!("ps: {err}"));
-    assert!(left.is_empty(), "editor processes left: {left:?}");
+    assert!(
+        fakes::pids_exit(&live, DEADLINE),
+        "the editor outlived the shutdown: {live:?}"
+    );
     watchdog.stand_down(DEADLINE);
     crate::term::restore();
 }

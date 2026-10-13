@@ -249,27 +249,22 @@ fn an_editor_ended_by_a_signal_keeps_the_draft_and_names_it() {
     assert!(fake.left().is_empty());
 }
 
-/// A shutdown signal ends a blocked editor wait: the editor tree is
-/// ended and the wait ends with the signal's number, so the loop quits
-/// with 128 plus it instead of waiting out the editor. The command ends
-/// `; :`, so ending only the shell would leave the script and its sleeper
-/// behind. The script acknowledges both live processes before blocking, so
-/// the raise cannot land until the script and its sleeper both run: the
-/// line carries the script's pid and the sleeper's, and the absence
-/// assertions below would pass vacuously if either never started. Each
-/// test runs in its own process, so the raise reaches only this test.
+/// A shutdown signal ends a blocked editor wait: the editor is ended
+/// and the wait ends with the signal's number, so the loop quits with 128
+/// plus it instead of waiting out the editor. The script `exec`s the
+/// sleeper, so the shell becomes it: the acknowledged pid is the editor
+/// pid itself, and nothing outlives it. The script acknowledges before
+/// blocking, so the raise cannot land until the sleeper runs: the line
+/// carries the shell's pid, which the exit assertion below would pass
+/// vacuously over if it never started. Each test runs in its own
+/// process, so the raise reaches only this test.
 #[test]
 fn a_shutdown_signal_ends_a_blocked_editor_wait() {
     use signal_hook::consts::SIGTERM;
-    // No `exec`: the script stays to name the tree, and the sleeper is a
-    // copy under a path only this test names, so its absence proves the
-    // group signal reached past the shell. The sleeper starts before the
-    // acknowledgement, and `wait` keeps the script beside it.
-    let fake =
-        Fake::new("cp /bin/sleep $OUT/leaf\n$OUT/leaf 30 & echo \"$$ $!\" > \"$READY\"\nwait\n");
-    let leaf = fake.out("leaf").display().to_string();
-    let script = fake.script.display().to_string();
-    let command = fake.command("", "; :");
+    // `exec` makes the sleep the process Fiber waits on, as an editor run
+    // by its own name is, so the acknowledgement names the editor pid.
+    let fake = Fake::new("echo $$ > \"$READY\"\nexec sleep 30\n");
+    let command = fake.command("exec ", "");
     let temp = fake.temp.path().to_path_buf();
     let clock: Arc<dyn Clock> = fakes::clock::FakeClock::new();
     let (done, finished) = mpsc::channel();
@@ -283,8 +278,8 @@ fn a_shutdown_signal_ends_a_blocked_editor_wait() {
     let live = fake.wait_ready();
     assert_eq!(
         live.len(),
-        2,
-        "the acknowledgement names the script and its sleeper: {live:?}"
+        1,
+        "the acknowledgement names the editor: {live:?}"
     );
     signal_hook::low_level::raise(SIGTERM).unwrap_or_else(|err| panic!("raise: {err}"));
     match Deadline::after(DEADLINE)
@@ -297,35 +292,24 @@ fn a_shutdown_signal_ends_a_blocked_editor_wait() {
     assert!(fake.left().is_empty());
     assert!(
         fakes::pids_exit(&live, DEADLINE),
-        "the script or its sleeper outlived the shutdown: {live:?}"
-    );
-    assert!(
-        fakes::matching_exits(&leaf, DEADLINE),
-        "the sleeper outlived the shutdown: {leaf}"
-    );
-    assert!(
-        fakes::matching_exits(&script, DEADLINE),
-        "editor processes left: {script}"
+        "the editor outlived the shutdown: {live:?}"
     );
 }
 
-/// A tree ignoring SIGTERM is forced down: the TERM grace cannot end it,
-/// so only the group's SIGKILL does, and the wait still ends with the
-/// signal's number. The leaf traps TERM before starting, so it survives
-/// the group's SIGTERM the script also ignores; both pids are
-/// acknowledged before the raise. The 40-poll grace always runs whole (the
-/// tree stays alive through it), so the run advances at least 800 ms of
-/// fake time: a missing grace returns at once. (No upper bound: past the
-/// grace the tree drains through init in real time, which a fake clock
-/// cannot observe.)
+/// An editor ignoring SIGTERM is forced down: the TERM grace cannot end
+/// it, so only the SIGKILL does, and the wait still ends with the
+/// signal's number. The shell traps TERM before replacing itself with the
+/// sleeper, and an ignored signal survives `exec`, so the sleeper also
+/// ignores it; the pid is acknowledged before the raise. The 40-poll
+/// grace always runs whole (the editor stays alive through it), so the
+/// run advances at least 800 ms of fake time: a missing grace returns at
+/// once. (No upper bound: past the grace the reap runs in real time,
+/// which a fake clock cannot observe.)
 #[test]
-fn a_term_ignoring_tree_is_forced_down_with_sigkill() {
+fn a_term_ignoring_editor_is_forced_down_with_sigkill() {
     use signal_hook::consts::SIGTERM;
-    let fake = Fake::new(
-        "cp /bin/sleep $OUT/leaf\ntrap '' TERM\n$OUT/leaf 30 & echo \"$$ $!\" > \"$READY\"\nwait\n",
-    );
-    let leaf = fake.out("leaf").display().to_string();
-    let command = fake.command("", "; :");
+    let fake = Fake::new("trap '' TERM\necho $$ > \"$READY\"\nexec sleep 30\n");
+    let command = fake.command("exec ", "");
     let temp = fake.temp.path().to_path_buf();
     let clock: Arc<dyn Clock> = fakes::clock::FakeClock::new();
     let (done, finished) = mpsc::channel();
@@ -342,8 +326,8 @@ fn a_term_ignoring_tree_is_forced_down_with_sigkill() {
     let live = fake.wait_ready();
     assert_eq!(
         live.len(),
-        2,
-        "the acknowledgement names the script and its sleeper: {live:?}"
+        1,
+        "the acknowledgement names the editor: {live:?}"
     );
     // Measured from the raise: the wait loop busy-spins the fake clock
     // while the test runs, so anything before it is not the run's time.
@@ -364,16 +348,12 @@ fn a_term_ignoring_tree_is_forced_down_with_sigkill() {
     assert!(fake.left().is_empty());
     assert!(
         fakes::pids_exit(&live, DEADLINE),
-        "the script or its sleeper outlived the shutdown: {live:?}"
-    );
-    assert!(
-        fakes::matching_exits(&leaf, DEADLINE),
-        "the TERM-ignoring sleeper outlived the shutdown: {leaf}"
+        "the editor outlived the shutdown: {live:?}"
     );
 }
 
 /// A terminal interrupt while the editor runs ends the editor as its own
-/// signal: the wait forwards this process's SIGINT to the editor's group,
+/// signal: the wait forwards this process's SIGINT to the editor pid,
 /// so Ctrl+C with the terminal handed over still ends only the editor.
 /// Each test runs in its own process, so the raise reaches only this test.
 #[test]
@@ -584,21 +564,6 @@ fn ctrl_g_does_nothing_while_the_search_panel_is_open() {
     press(&mut app, Key::CtrlR);
     assert_eq!(press(&mut app, Key::CtrlG), Effect::None);
     assert!(app.completions().is_some());
-}
-
-/// Foreground transfer needs a terminal: a regular file refuses it, so the
-/// editor still runs without foreground reads. (A controlling terminal's
-/// transfer is covered by the session test in `main`, where the binary
-/// runs under one.)
-#[test]
-fn foreground_transfer_needs_a_terminal() {
-    let dir = fakes::TempDir::new("not-a-tty");
-    let path = dir.path().join("plain");
-    std::fs::write(&path, "x").unwrap_or_else(|err| panic!("write: {err}"));
-    let file = std::fs::File::open(&path).unwrap_or_else(|err| panic!("open: {err}"));
-    let fd: std::os::fd::OwnedFd = file.into();
-    let pid = rustix::process::Pid::from_raw(1).expect("pid 1");
-    assert!(super::give(&fd, pid).is_none());
 }
 
 /// Repeated runs register cleanly: cycling the run exercises registration
