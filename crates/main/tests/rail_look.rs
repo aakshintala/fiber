@@ -288,9 +288,25 @@ fn the_hidden_rail_waiting_line_shows_the_rail() {
     // row.
     run.write(ALT_R);
     let grid = run.wait_screen("the session card's waiting line", |grid| {
-        grid.rows
-            .iter()
-            .any(|row| row.contains("! 2 waiting · hidden · show"))
+        // The styled cells the assertions read: the bang bold in
+        // attention and the rest of the line in attention. A frame
+        // with the text but without its style must not satisfy the
+        // wait.
+        let line = "! 2 waiting · hidden · show";
+        grid.rows.iter().enumerate().any(|(y, row)| {
+            let y = y as u16;
+            row.find(line).is_some_and(|byte| {
+                let at = row[..byte].chars().count() as u16;
+                let bang = grid.cell(at, y);
+                bang.symbol.as_str() == "!"
+                    && bang.fg == ATTENTION
+                    && bang.bold
+                    && line.chars().skip(1).enumerate().all(|(n, expected)| {
+                        let cell = grid.cell(at + 1 + n as u16, y);
+                        cell.symbol == expected.to_string() && cell.fg == ATTENTION
+                    })
+            })
+        })
     });
     assert!(
         !grid.rows.iter().any(|row| row.contains("NEEDS INPUT")),

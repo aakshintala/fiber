@@ -200,47 +200,6 @@ fn the_session_card_ends_with_the_hidden_rail_line() {
     assert!(drawn[1].line.to_string().starts_with("directory"));
 }
 
-#[test]
-fn no_waiting_sessions_no_hidden_rail_line() {
-    let mut app = attached(160, 40);
-    app.on_line(status_line(
-        spend(1, 0, 0, 2, serde_json::json!(0.0), 0.0),
-        None,
-    ));
-    app.on_line(other_waiting("s_bbbbbbbbbbbbbbbb"));
-    hide_rail(&mut app);
-    // One session waits: the line names it. With none waiting there is
-    // no line at all.
-    assert!(
-        rows(&app, 40)
-            .iter()
-            .any(|row| row.line.to_string() == "! 1 waiting · hidden · show"),
-    );
-    let mut alone = attached(160, 40);
-    alone.on_line(status_line(
-        spend(1, 0, 0, 2, serde_json::json!(0.0), 0.0),
-        None,
-    ));
-    alone.on_line(session_line(
-        "session_status",
-        serde_json::json!({
-            "name": "other", "workspace": "/Users/you/work/fiber",
-            "project": "-w", "state": "idle", "since": 0,
-            "spend": {"tokens": {"input": 1, "cache_read": 0,
-                "cache_write": {}, "output": 2},
-                "cost": 0.0, "subscription_cost": 0.0},
-            "model": "test/model", "delegates": 0, "jobs": 0,
-            "clients": 0,
-        }),
-    ));
-    hide_rail(&mut alone);
-    assert!(
-        rows(&alone, 40)
-            .iter()
-            .all(|row| !row.line.to_string().contains("hidden · show"))
-    );
-}
-
 /// With the rail hidden and three live sessions but none waiting,
 /// `rail_waiting()` is `Some(0)` and the Session card shows no waiting
 /// line: the `> 0` guard keeps the `>=` mutant's bogus "! 0 waiting ·
