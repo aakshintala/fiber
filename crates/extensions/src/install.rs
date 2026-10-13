@@ -52,18 +52,17 @@ impl Record {
             Provenance::Path(path) => serde_json::json!({ "path": path }),
             Provenance::Git { commit } => serde_json::json!({ "commit": commit }),
         };
-        let mut record = serde_json::json!({
-            "name": self.name,
-            "version": self.version,
-            "requested": self.requested,
-            "source": source,
-        });
+        let mut record = serde_json::Map::new();
+        record.insert("name".into(), self.name.clone().into());
+        record.insert("version".into(), self.version.clone().into());
+        record.insert("requested".into(), self.requested.into());
+        record.insert("source".into(), source);
         // A missing floor reads as no floor, so writers omit it rather
         // than emitting null.
         if let Some(floor) = &self.floor {
-            record["floor"] = serde_json::Value::String(floor.clone());
+            record.insert("floor".into(), floor.clone().into());
         }
-        record
+        serde_json::Value::Object(record)
     }
 
     /// Reads the record in `dir`; every way it can be wrong names the file.
