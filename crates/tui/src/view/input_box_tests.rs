@@ -487,6 +487,92 @@ fn no_color_drawn(app: &App, area: Rect) -> (Buffer, Vec<crate::mouse::Target>, 
     (buf, targets, top)
 }
 
+/// An app `width` by `height` with two queued steering rows.
+fn queued(width: u16, height: u16) -> App {
+    let mut app = App::new(PathBuf::from("/w"));
+    app.set_size(width, height);
+    app.attach(contract::SessionId("s_aaaaaaaaaaaaaaaa".to_owned()));
+    app.on_line(session_line(
+        "s_aaaaaaaaaaaaaaaa",
+        "turn_started",
+        serde_json::json!({"input": [{
+            "type": "message",
+            "source": "driver",
+            "content": [{"type": "text", "text": "hi"}],
+        }]}),
+    ));
+    app.on_line(session_line(
+        "s_aaaaaaaaaaaaaaaa",
+        "steering_queue",
+        serde_json::json!({"messages": [
+            {"content": [{"type": "text", "text": "use the parser"}], "source": "driver", "command_id": "c_1"},
+            {"content": [{"type": "text", "text": "and test it"}], "source": "driver"},
+        ]}),
+    ));
+    app
+}
+
+#[test]
+fn no_color_draws_the_editing_hint_inside_the_sides() {
+    // While a queued message is edited the hint ends at the box's
+    // right end, dim, never covering the draft, the caret or the
+    // borders (`docs/tui.md`, "Steering").
+    let hint = "editing a queued message · Enter amends · ⌥X drops · Esc stops";
+    let mut app = queued(80, 12);
+    app.select_steering(0);
+    // One step left: the caret leaves the hint's first cell free.
+    app.on_edit(crate::keys::Edit::Left);
+    let area = Rect::new(0, 0, 80, 12);
+    let (buf, _, _) = no_color_drawn(&app, area);
+    let y = (0..12)
+        .find(|y| {
+            (0..80)
+                .map(|x| buf[(x, *y)].symbol().to_owned())
+                .collect::<String>()
+                .contains("Esc stops")
+        })
+        .expect("the hint row");
+    // Right-aligned, ending at the last interior column.
+    let start = 79 - u16::try_from(crate::format::width(hint)).expect("hint width");
+    let mut x = start;
+    for ch in hint.chars() {
+        let wide = u16::try_from(crate::format::width(&ch.to_string())).expect("char width");
+        assert_eq!(buf[(x, y)].symbol(), ch.to_string().as_str(), "cell {x}");
+        x = x.saturating_add(wide.max(1));
+    }
+    assert_eq!(x, 79);
+    // The draft, the caret and both sides keep their cells.
+    assert_eq!(buf[(1, y)].symbol(), "›");
+    assert_eq!(buf[(16, y)].symbol(), "█");
+    assert_eq!(buf[(0, y)].symbol(), "│");
+    assert_eq!(buf[(79, y)].symbol(), "│");
+}
+
+#[test]
+fn no_color_clips_the_editing_hint_before_the_side() {
+    // Eight columns with the draft cleared: the hint starts at the
+    // first free cell and never reaches the box's right side, which
+    // keeps its column (`docs/tui.md`, "Steering").
+    let mut app = queued(8, 12);
+    app.select_steering(0);
+    let now = fakes::clock::FakeClock::new().now();
+    for _ in 0..14 {
+        app.on_key(Key::Backspace, now);
+    }
+    assert_eq!(app.input().expand(), "");
+    let area = Rect::new(0, 0, 8, 12);
+    let (buf, _, _) = no_color_drawn(&app, area);
+    let y = (0..12)
+        .find(|y| buf[(1, *y)].symbol() == "›")
+        .expect("the text row");
+    // Past the prompt: the caret keeps its cell, the hint takes the
+    // free cells after it, and the side keeps its column.
+    let row: String = (0..8).map(|x| buf[(x, y)].symbol().to_owned()).collect();
+    assert_eq!(row, "│› █ing│");
+    assert_eq!(buf[(7, y)].symbol(), "│");
+    assert_eq!(buf[(0, y)].symbol(), "│");
+}
+
 #[test]
 fn no_color_boxes_the_input_box_around_the_draft() {
     use ratatui::style::{Color, Modifier};

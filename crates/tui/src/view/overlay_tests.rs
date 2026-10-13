@@ -594,6 +594,27 @@ fn across_and_under_centre_the_slab_across_the_width() {
 }
 
 #[test]
+fn no_color_draws_no_box_without_text_rows() {
+    // With no title, body or footer, a two-row area keeps its two edge
+    // slots and no text row between them: no box draws, so both rows
+    // stay blank (`docs/tui.md`, "Look").
+    crate::surface::init(&|name: &str| (name == "NO_COLOR").then(|| "1".to_owned()));
+    let bare = super::Overlay {
+        title: None,
+        close: None,
+        body: Vec::new(),
+        footer: None,
+        prefer: 71,
+    };
+    let (buf, _, _) = drawn(&bare, Rect::new(0, 0, 40, 2), Place::Dock);
+    let shown = rows(&buf);
+    assert!(
+        shown.iter().all(|row| row.chars().all(|ch| ch == ' ')),
+        "{shown:?}"
+    );
+}
+
+#[test]
 fn a_lone_bottom_edge_draws_no_tint() {
     // With no title, body or footer, a two-row area keeps its two edge
     // slots and no text row between them: nothing is tinted.

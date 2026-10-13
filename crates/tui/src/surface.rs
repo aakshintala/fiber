@@ -163,10 +163,13 @@ pub(crate) fn draw_sides(buf: &mut Buffer, rect: Rect) {
     }
     let side = Line::from(Span::styled("│", Style::new().add_modifier(Modifier::DIM)));
     for y in rect.top().max(area.top())..rect.bottom().min(area.bottom()) {
-        if left >= area.left() && left < area.right() {
+        // The write clips past the buffer's right itself, so only the
+        // left check draws: a column left of the buffer would panic on
+        // its index (`docs/tui.md`, "Look").
+        if left >= area.left() {
             buf.set_line(left, y, &side, 1);
         }
-        if right >= area.left() && right < area.right() {
+        if right >= area.left() {
             buf.set_line(right, y, &side, 1);
         }
     }
@@ -181,17 +184,22 @@ pub(crate) fn draw_sides(buf: &mut Buffer, rect: Rect) {
 /// sits outside the buffer draws nothing, so clipped text is never
 /// overwritten.
 pub(crate) fn draw_box(buf: &mut Buffer, area: Rect, rect: Rect, edges: Edges) {
-    if edges.top && rect.y > area.y {
+    // The edge rows draw where they land inside the area: the row above
+    // the rect (`edges.top`) or below it (`edges.bottom`)
+    // (`docs/tui.md`, "Look").
+    if edges.top
+        && rect
+            .y
+            .checked_sub(1)
+            .is_some_and(|y| (area.top()..area.bottom()).contains(&y))
+    {
         box_edge(buf, area, rect, true);
     }
     // The rect's columns are the box's: the layout reserved them, so a
     // visible side never covers text.
     draw_sides(buf, rect);
-    if edges.bottom {
-        let y = rect.bottom();
-        if y >= area.y && y < area.bottom() {
-            box_edge(buf, area, rect, false);
-        }
+    if edges.bottom && (area.top()..area.bottom()).contains(&rect.bottom()) {
+        box_edge(buf, area, rect, false);
     }
 }
 

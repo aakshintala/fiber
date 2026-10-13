@@ -536,6 +536,22 @@ fn surfaced(panel: &Panel, height: u16) -> (String, Buffer, Vec<Target>) {
 }
 
 #[test]
+fn edges_draw_only_where_they_fit() {
+    // Two text rows in three rows: no room for the edges, so both edge
+    // rows stay blank (`docs/tui.md`, "Look").
+    let (_, buf, _) = surfaced(&approval(&["line one", "line two"], false), 3);
+    for x in 0..40 {
+        assert_eq!(buf[(x, 0)].symbol(), " ", "top edge at {x}");
+    }
+    // One row more: the edges fit, so both draw.
+    let (_, edged, _) = surfaced(&approval(&["line one", "line two"], false), 4);
+    for x in 0..40 {
+        assert_eq!(edged[(x, 0)].symbol(), "▄", "top edge at {x}");
+        assert_eq!(edged[(x, 3)].symbol(), "▀", "bottom edge at {x}");
+    }
+}
+
+#[test]
 fn approval_with_stripe_and_edges() {
     let (shown, _, _) = surfaced(
         &approval(

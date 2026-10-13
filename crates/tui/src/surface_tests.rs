@@ -982,6 +982,120 @@ fn draw_sides_clips_without_covering_text() {
 }
 
 #[test]
+fn draw_sides_ignores_a_rect_outside_the_buffer() {
+    // Past the buffer on either side both side columns miss it: the
+    // guards keep the writes off it, so no side draws and nothing
+    // panics (`docs/tui.md`, "Look").
+    let mut left = Buffer::empty(Rect::new(4, 5, 4, 1));
+    left.set_string(4, 5, "wxyz", ratatui::style::Style::default());
+    super::draw_sides(&mut left, Rect::new(0, 5, 2, 1));
+    let row: String = (4..8).map(|x| left[(x, 5)].symbol().to_owned()).collect();
+    assert_eq!(row, "wxyz");
+    let mut right = Buffer::empty(Rect::new(0, 5, 4, 1));
+    right.set_string(0, 5, "wxyz", ratatui::style::Style::default());
+    super::draw_sides(&mut right, Rect::new(6, 5, 2, 1));
+    let row: String = (0..4).map(|x| right[(x, 5)].symbol().to_owned()).collect();
+    assert_eq!(row, "wxyz");
+}
+
+#[test]
+fn draw_box_draws_its_edges_only_inside_the_area() {
+    // The top edge draws when the row above the rect sits inside the
+    // area: at the area's own top row it stays off, one row down it
+    // draws (`docs/tui.md`, "Look").
+    let mut flush = Buffer::empty(Rect::new(0, 0, 6, 5));
+    super::draw_box(
+        &mut flush,
+        Rect::new(0, 0, 6, 5),
+        Rect::new(0, 0, 6, 1),
+        Edges::BOTH,
+    );
+    assert_eq!(flush[(0, 0)].symbol(), "│");
+    assert_eq!(flush[(5, 0)].symbol(), "│");
+    assert_eq!(flush[(0, 1)].symbol(), "└");
+    assert_eq!(flush[(5, 1)].symbol(), "┘");
+    for cell in &flush.content {
+        assert_ne!(cell.symbol(), "┌");
+        assert_ne!(cell.symbol(), "┐");
+    }
+    let mut edged = Buffer::empty(Rect::new(0, 0, 6, 5));
+    super::draw_box(
+        &mut edged,
+        Rect::new(0, 0, 6, 5),
+        Rect::new(0, 1, 6, 1),
+        Edges::BOTH,
+    );
+    assert_eq!(edged[(0, 0)].symbol(), "┌");
+    assert_eq!(edged[(5, 0)].symbol(), "┐");
+    assert_eq!(edged[(0, 2)].symbol(), "└");
+    assert_eq!(edged[(5, 2)].symbol(), "┘");
+    // The bottom edge draws while the row below the rect sits inside
+    // the area: ending at the area's bottom row it stays off.
+    let mut bottom = Buffer::empty(Rect::new(0, 0, 6, 5));
+    super::draw_box(
+        &mut bottom,
+        Rect::new(0, 0, 6, 5),
+        Rect::new(0, 3, 6, 2),
+        Edges::BOTH,
+    );
+    assert_eq!(bottom[(0, 2)].symbol(), "┌");
+    assert_eq!(bottom[(5, 2)].symbol(), "┐");
+    assert_eq!(bottom[(0, 3)].symbol(), "│");
+    assert_eq!(bottom[(0, 4)].symbol(), "│");
+    for cell in &bottom.content {
+        assert_ne!(cell.symbol(), "└");
+        assert_ne!(cell.symbol(), "┘");
+    }
+}
+
+#[test]
+fn draw_box_keeps_its_edges_inside_the_buffer() {
+    // The buffer starts below the area's top: the top edge row sits
+    // above the buffer, so only the sides draw, without panicking
+    // (`docs/tui.md`, "Look").
+    let mut above = Buffer::empty(Rect::new(0, 5, 10, 10));
+    super::draw_box(
+        &mut above,
+        Rect::new(0, 0, 10, 10),
+        Rect::new(0, 5, 10, 1),
+        Edges {
+            top: true,
+            bottom: false,
+        },
+    );
+    assert_eq!(above[(0, 5)].symbol(), "│");
+    assert_eq!(above[(9, 5)].symbol(), "│");
+    for cell in &above.content {
+        assert!(
+            !matches!(cell.symbol(), "┌" | "┐" | "└" | "┘"),
+            "{}",
+            cell.symbol()
+        );
+    }
+    // The buffer ends above the area's bottom: the bottom edge row
+    // sits past the buffer, so only the sides draw, without panicking.
+    let mut below = Buffer::empty(Rect::new(0, 0, 10, 5));
+    super::draw_box(
+        &mut below,
+        Rect::new(0, 0, 10, 10),
+        Rect::new(0, 4, 10, 1),
+        Edges {
+            top: false,
+            bottom: true,
+        },
+    );
+    assert_eq!(below[(0, 4)].symbol(), "│");
+    assert_eq!(below[(9, 4)].symbol(), "│");
+    for cell in &below.content {
+        assert!(
+            !matches!(cell.symbol(), "┌" | "┐" | "└" | "┘"),
+            "{}",
+            cell.symbol()
+        );
+    }
+}
+
+#[test]
 fn draw_box_keeps_suppressed_edges_off() {
     let _ = boxed(&[("NO_COLOR", "1")]);
     let mut buf = Buffer::empty(Rect::new(0, 0, 6, 5));
