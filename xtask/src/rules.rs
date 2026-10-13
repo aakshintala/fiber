@@ -119,7 +119,6 @@ pub(crate) fn preserve_order(tree: &str) -> Vec<String> {
             depth = None;
         }
         if depth.is_some_and(|d| line_depth == d + 1)
-            && !text.contains(" feature \"")
             && let Some(name) = text.split_whitespace().next()
         {
             enablers.insert(format!(
