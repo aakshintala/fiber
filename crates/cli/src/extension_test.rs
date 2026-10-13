@@ -81,8 +81,7 @@ struct RunOptions {
 pub fn extension_test(path: Option<&Path>, fiber: Result<PathBuf, String>) -> i32 {
     let fiber = match fiber {
         Ok(fiber) => fiber,
-        // The shared error branch prints the failure and gives code 1,
-        // exactly as the direct write and return did.
+        // The shared error branch prints the failure and gives code 1.
         Err(error) => return finish_code(Err(failed(ErrorCode::IoFailed, error))),
     };
     let options = RunOptions {
