@@ -1426,28 +1426,284 @@ fn thought_rows(text: &str, w: usize, ind: usize) -> Vec<Row> {
         })
         .collect()
 }
-/// A call's result, opened under its ledger row: its error, or its output clipped to 20 lines.
-fn call_rows(c: &Call) -> Vec<Row> {
-    const MAX: usize = 20;
-    let text = match &c.err {
-        Some((code, msg)) => format!("{code}: {msg}"),
-        None if c.content.is_empty() => "no output".into(),
-        None => c.content.replace('\t', "    "),
-    };
-    let lines: Vec<&str> = text.lines().collect();
-    let r = |s: Span<'static>| Row {
-        spans: vec![sp("        ", Style::new()), s],
+/// An opened call shows at most twenty rendered rows under its ledger
+/// row; headers (the shell's `$ command`, a search file's path) are free,
+/// every body line counts once wrapped, and a body line that would
+/// overflow the cap is dropped whole with the rest.
+const OPEN_MAX: usize = 20;
+
+/// One opened row: the eight-column indent under the ledger row, then the spans.
+fn opened_row(s: Vec<Span<'static>>) -> Row {
+    let mut spans = vec![sp("        ", Style::new())];
+    spans.extend(s);
+    Row {
+        spans,
         pre: 8,
         ..Default::default()
-    };
-    let mut out: Vec<Row> = lines
-        .iter()
-        .take(MAX)
-        .map(|l| r(sp(l.to_string(), Style::new())))
-        .collect();
-    if lines.len() > MAX {
-        out.push(r(sp(format!("… {} more lines", lines.len() - MAX), dim())));
     }
+}
+
+/// Cuts a row to the width when it runs past it; shorter rows pass through.
+fn opened_fit(r: Row, w: usize) -> Row {
+    if width(&r.spans) > w {
+        Row {
+            spans: fit(&r.spans, w),
+            ..r
+        }
+    } else {
+        r
+    }
+}
+
+/// Wraps one plain body line under the indent; every rendered row keeps
+/// the indent, so the paged copy sees one layout prefix.
+fn opened_plain(line: &str, style: Style, w: usize) -> Vec<Row> {
+    let pad = || vec![sp("        ", Style::new())];
+    wrap_rows(vec![sp(line.to_string(), style)], w, pad(), pad())
+        .into_iter()
+        .map(|mut r| {
+            r.pre = 8;
+            opened_fit(r, w)
+        })
+        .collect()
+}
+
+/// Indents one gutter row from the shared diff renderer under a ledger row.
+fn opened_indent(r: Row, w: usize) -> Row {
+    let mut out = r;
+    out.spans.insert(0, sp("        ", Style::new()));
+    out.pre = 8;
+    opened_fit(out, w)
+}
+
+/// Takes at most OPEN_MAX rendered rows from the body's lines; a line that
+/// would overflow is dropped whole with the rest. Returns the rows and how
+/// many body lines were left out.
+fn opened_take(body: Vec<Vec<Row>>) -> (Vec<Row>, usize) {
+    let total = body.len();
+    let mut out = vec![];
+    let mut shown = 0;
+    for line in body {
+        if out.len() + line.len() > OPEN_MAX {
+            break;
+        }
+        out.extend(line);
+        shown += 1;
+    }
+    (out, total - shown)
+}
+
+/// The dim overflow line, counting the body lines left out; nothing when
+/// the body fit. Its wording extends the old “… N more lines”, so the
+/// ledger's settled copy still reads.
+fn opened_more(out: &mut Vec<Row>, dropped: usize) {
+    if dropped > 0 {
+        out.push(opened_row(vec![sp(
+            format!("… {dropped} more lines (Enter to view)"),
+            dim(),
+        )]));
+    }
+}
+
+/// A hunk header's old and new start lines: "@@ -12,7 +12,9 @@ fn
+/// paint(" starts old at 12 and new at 12; the counts are ignored.
+fn hunk_start(header: &str) -> Option<(usize, usize)> {
+    let mut it = header.split_whitespace();
+    if it.next()? != "@@" {
+        return None;
+    }
+    let num = |s: &str| s.split(',').next()?.parse::<usize>().ok();
+    Some((
+        num(it.next()?.strip_prefix('-')?)?,
+        num(it.next()?.strip_prefix('+')?)?,
+    ))
+}
+
+/// The byte ranges of a line's whitespace-separated words.
+fn words_of(line: &str) -> Vec<(usize, usize)> {
+    let mut out = vec![];
+    let mut start: Option<usize> = None;
+    for (i, ch) in line.char_indices() {
+        if ch.is_whitespace() {
+            if let Some(s) = start.take() {
+                out.push((s, i));
+            }
+        } else if start.is_none() {
+            start = Some(i);
+        }
+    }
+    if let Some(s) = start.take() {
+        out.push((s, line.len()));
+    }
+    out
+}
+
+/// The words of a line over their ranges, so pairs render over the
+/// original spacing.
+fn words_in<'a>(line: &'a str, ranges: &[(usize, usize)]) -> Vec<&'a str> {
+    ranges.iter().map(|&(a, b)| &line[a..b]).collect()
+}
+
+/// Splits a removed line and its added pair into word spans: the words they
+/// share at the start and end keep the base style, the words they differ by
+/// read in reverse video. Both lines render over their original spacing.
+fn word_pair(old: &str, new: &str) -> (Vec<Span<'static>>, Vec<Span<'static>>) {
+    let (o, n) = (words_of(old), words_of(new));
+    let (ow, nw) = (words_in(old, &o), words_in(new, &n));
+    let mut pre = 0;
+    while pre < ow.len() && pre < nw.len() && ow[pre] == nw[pre] {
+        pre += 1;
+    }
+    let mut suf = 0;
+    while suf < ow.len() - pre
+        && suf < nw.len() - pre
+        && ow[ow.len() - 1 - suf] == nw[nw.len() - 1 - suf]
+    {
+        suf += 1;
+    }
+    let spans = |line: &str, ws: &[(usize, usize)], base: Style| {
+        let mut out = vec![];
+        let mut pos = 0;
+        for (k, &(a, b)) in ws.iter().enumerate() {
+            let rev = k >= pre && k < ws.len() - suf;
+            if a > pos {
+                out.push(sp(line[pos..a].to_string(), base));
+            }
+            out.push(sp(
+                line[a..b].to_string(),
+                if rev {
+                    base.add_modifier(Modifier::REVERSED)
+                } else {
+                    base
+                },
+            ));
+            pos = b;
+        }
+        if pos < line.len() {
+            out.push(sp(line[pos..].to_string(), base));
+        }
+        out
+    };
+    (spans(old, &o, fg(RED)), spans(new, &n, fg(GREEN)))
+}
+
+/// Renders unified-diff lines with a dim four-column right-aligned
+/// line-number gutter: `@@` dim, `-` in `removed`, `+` in `added`, context
+/// plain. In a run of removed lines followed by added lines, removed[i]
+/// pairs with added[i] and the words they differ by read in reverse video;
+/// words split on whitespace. A context line and a `+` line number the new
+/// side, so the gutter runs on; a `-` line numbers the old side. File
+/// headers (`---`/`+++`) read dim. Rows carry no indent; the caller adds
+/// it. Shared by an opened edit and the changed-files view.
+pub(crate) fn diff_rows(diff: &[&str]) -> Vec<Row> {
+    let gutter = |n: Option<usize>| match n {
+        Some(n) => sp(format!("{n:>4} "), dim()),
+        None => sp("     ", Style::new()),
+    };
+    let mut out = vec![];
+    let (mut old, mut new) = (0usize, 0usize);
+    let mut in_hunk = false;
+    let mut i = 0;
+    while i < diff.len() {
+        let l = diff[i];
+        if let Some((o, n)) = hunk_start(l) {
+            (old, new) = (o, n);
+            in_hunk = true;
+            out.push(row(vec![gutter(None), sp(l.to_string(), dim())]));
+            i += 1;
+        } else if l.starts_with('-') && !l.starts_with("---") {
+            let mut rem = vec![];
+            while i < diff.len() && diff[i].starts_with('-') && !diff[i].starts_with("---") {
+                rem.push(&diff[i][1..]);
+                i += 1;
+            }
+            let mut add = vec![];
+            while i < diff.len() && diff[i].starts_with('+') && !diff[i].starts_with("+++") {
+                add.push(&diff[i][1..]);
+                i += 1;
+            }
+            for k in 0..rem.len().max(add.len()) {
+                match (rem.get(k), add.get(k)) {
+                    (Some(r), Some(a)) => {
+                        let (rs, as_) = word_pair(r, a);
+                        let mut s = vec![gutter(in_hunk.then_some(old)), sp("-", fg(RED))];
+                        s.extend(rs);
+                        out.push(row(s));
+                        old += 1;
+                        let mut s = vec![gutter(in_hunk.then_some(new)), sp("+", fg(GREEN))];
+                        s.extend(as_);
+                        out.push(row(s));
+                        new += 1;
+                    }
+                    (Some(r), None) => {
+                        out.push(row(vec![
+                            gutter(in_hunk.then_some(old)),
+                            sp(format!("-{r}"), fg(RED)),
+                        ]));
+                        old += 1;
+                    }
+                    (None, Some(a)) => {
+                        out.push(row(vec![
+                            gutter(in_hunk.then_some(new)),
+                            sp(format!("+{a}"), fg(GREEN)),
+                        ]));
+                        new += 1;
+                    }
+                    (None, None) => unreachable!(),
+                }
+            }
+        } else if l.starts_with('+') && !l.starts_with("+++") {
+            out.push(row(vec![
+                gutter(in_hunk.then_some(new)),
+                sp(l.to_string(), fg(GREEN)),
+            ]));
+            new += 1;
+            i += 1;
+        } else if l.starts_with("---") || l.starts_with("+++") {
+            out.push(row(vec![gutter(None), sp(l.to_string(), dim())]));
+            i += 1;
+        } else {
+            let body = l.strip_prefix(' ').unwrap_or(l);
+            out.push(row(vec![
+                gutter(in_hunk.then_some(new)),
+                sp(body.to_string(), Style::new()),
+            ]));
+            if in_hunk {
+                old += 1;
+                new += 1;
+            }
+            i += 1;
+        }
+    }
+    out
+}
+/// A call's result, opened under its ledger row and indented eight columns:
+/// an edit's diff with a line-number gutter and word-level pairs, or its
+/// error, or its output clipped to twenty rendered rows with a dim
+/// “… N more lines (Enter to view)” opening the swapped view.
+fn call_rows(c: &Call, w: usize) -> Vec<Row> {
+    let content = c.content.replace('\t', "    ");
+    if matches!(kind_of(c), "edit" | "write") && content.lines().any(|l| l.starts_with("@@")) {
+        let lines: Vec<&str> = content.lines().collect();
+        let body: Vec<Vec<Row>> = diff_rows(&lines)
+            .into_iter()
+            .map(|r| vec![opened_indent(r, w)])
+            .collect();
+        let (mut out, dropped) = opened_take(body);
+        opened_more(&mut out, dropped);
+        return out;
+    }
+    let text = match &c.err {
+        Some((code, msg)) => format!("{code}: {msg}"),
+        None if content.is_empty() => "no output".into(),
+        None => content,
+    };
+    let body: Vec<Vec<Row>> = text
+        .lines()
+        .map(|l| opened_plain(l, Style::new(), w))
+        .collect();
+    let (mut out, dropped) = opened_take(body);
+    opened_more(&mut out, dropped);
     out
 }
 
@@ -1731,7 +1987,7 @@ fn group_lines(g: &Group, gid: Act, w: usize, v: &View) -> Vec<Row> {
                     ..row(s)
                 });
                 if open {
-                    ledger.extend(call_rows(c));
+                    ledger.extend(call_rows(c, w));
                 }
             }
         }
@@ -7702,6 +7958,193 @@ mod tests {
             ..Default::default()
         };
         assert!(plain(&group_lines(&lone, Act::Group(2, 3), 80, &v)[1]).contains("why not"));
+    }
+
+    fn edit_call(content: &str) -> Call {
+        Call {
+            name: "edit".into(),
+            args: json!({ "path": "crates/tui/src/view.rs" }),
+            st: St::Completed,
+            start: 0,
+            end: Some(10),
+            err: None,
+            lines: 0,
+            exit: None,
+            changes: vec![],
+            content: content.into(),
+            step: 1,
+            asked: None,
+        }
+    }
+
+    #[test]
+    fn an_opened_edit_shows_its_diff_with_a_gutter_and_word_pairs() {
+        let diff = [
+            "@@ -12,3 +12,4 @@ fn paint(",
+            "     let spans = fit(&r.spans, w as usize);",
+            "-    buf.set_line(x, y, &line, w);",
+            "+    buf.set_line(x, y, &Line::from(spans), w);",
+            "     if let Some(bg) = r.bg {",
+        ]
+        .join("\n");
+        let rows = call_rows(&edit_call(&diff), 160);
+        let text: Vec<String> = rows.iter().map(plain).collect();
+        assert_eq!(rows.len(), 5, "no truncation under twenty lines");
+        // the hunk header reads dim with no number
+        let hunk = rows.iter().find(|r| plain(r).contains("@@")).unwrap();
+        assert!(
+            hunk.spans
+                .iter()
+                .any(|s| s.style.add_modifier.contains(Modifier::DIM)),
+            "the @@ line is not dim"
+        );
+        // the gutter numbers the old side on `-` and the new side on `+`
+        let removed = rows
+            .iter()
+            .find(|r| plain(r).contains("-    buf.set_line"))
+            .unwrap();
+        let added = rows
+            .iter()
+            .find(|r| plain(r).contains("+    buf.set_line"))
+            .unwrap();
+        assert!(
+            plain(removed).contains("  13 -"),
+            "no old-side gutter: {}",
+            plain(removed)
+        );
+        assert!(
+            plain(added).contains("  13 +"),
+            "no new-side gutter: {}",
+            plain(added)
+        );
+        assert!(
+            removed.spans.iter().any(|s| s.style.fg == Some(crate::RED)),
+            "the removal is not red"
+        );
+        assert!(
+            added.spans.iter().any(|s| s.style.fg == Some(crate::GREEN)),
+            "the addition is not green"
+        );
+        // one removed line paired with one added line: only the words
+        // they differ by read in reverse video, still in their colour
+        let rev: Vec<&Span> = removed
+            .spans
+            .iter()
+            .filter(|s| s.style.add_modifier.contains(Modifier::REVERSED))
+            .collect();
+        assert_eq!(
+            rev.iter().map(|s| s.content.as_ref()).collect::<Vec<_>>(),
+            ["&line,"],
+            "the wrong removed words are reversed"
+        );
+        assert!(rev.iter().all(|s| s.style.fg == Some(crate::RED)));
+        let rev: Vec<&Span> = added
+            .spans
+            .iter()
+            .filter(|s| s.style.add_modifier.contains(Modifier::REVERSED))
+            .collect();
+        assert_eq!(
+            rev.iter().map(|s| s.content.as_ref()).collect::<Vec<_>>(),
+            ["&Line::from(spans),"],
+            "the wrong added words are reversed"
+        );
+        assert!(rev.iter().all(|s| s.style.fg == Some(crate::GREEN)));
+        assert!(
+            text.iter().any(|l| l.contains("  12 ")),
+            "no context gutter"
+        );
+    }
+
+    #[test]
+    fn an_opened_edit_clips_past_twenty_rendered_rows() {
+        let diff = |n: usize| {
+            let mut d = vec!["@@ -1,3 +1,99 @@".to_string()];
+            d.extend((1..=n).map(|i| format!(" context line {i}")));
+            edit_call(&d.join("\n"))
+        };
+        // nineteen context lines plus the @@ header fit: no overflow line
+        let rows = call_rows(&diff(19), 160);
+        assert_eq!(rows.len(), 20);
+        assert!(!rows.iter().any(|r| plain(r).contains("more lines")));
+        // the twenty-first body line is dropped whole with the rest
+        let rows = call_rows(&diff(20), 160);
+        assert_eq!(rows.len(), 21);
+        assert_eq!(
+            plain(rows.last().unwrap()),
+            "        … 1 more lines (Enter to view)"
+        );
+        assert!(
+            rows.last()
+                .unwrap()
+                .spans
+                .iter()
+                .any(|s| s.style.add_modifier.contains(Modifier::DIM)),
+            "the overflow line is not dim"
+        );
+        let rows = call_rows(&diff(21), 160);
+        assert!(plain(rows.last().unwrap()).contains("… 2 more lines (Enter to view)"));
+    }
+
+    #[test]
+    fn an_opened_edit_without_hunks_stays_plain() {
+        let rows = call_rows(&edit_call("wrote the file"), 160);
+        assert_eq!(rows.len(), 1);
+        assert_eq!(plain(&rows[0]), "        wrote the file");
+        assert!(
+            rows[0].spans.iter().all(|s| s.style.fg.is_none()),
+            "plain output takes a colour"
+        );
+    }
+
+    #[test]
+    fn unpaired_diff_lines_keep_their_colour_with_no_pairs() {
+        let diff = [
+            "--- a/notes.md",
+            "+++ b/notes.md",
+            "@@ -1,2 +1,2 @@",
+            "-gone",
+            "-and gone",
+            "+new",
+            " context",
+            "+wholly added",
+        ]
+        .join("\n");
+        let rows = call_rows(&edit_call(&diff), 160);
+        // the file headers read dim, never as a removal or addition
+        for h in ["--- a/notes.md", "+++ b/notes.md"] {
+            let r = rows.iter().find(|r| plain(r).contains(h)).unwrap();
+            assert!(
+                r.spans.iter().all(|s| s.style.fg.is_none()),
+                "{h} takes a colour"
+            );
+        }
+        // the paired lines reverse only their differing words; the lone
+        // addition keeps its colour with nothing reversed
+        let lone = rows
+            .iter()
+            .find(|r| plain(r).contains("+wholly added"))
+            .unwrap();
+        assert!(lone.spans.iter().any(|s| s.style.fg == Some(crate::GREEN)));
+        assert!(
+            lone.spans
+                .iter()
+                .all(|s| !s.style.add_modifier.contains(Modifier::REVERSED)),
+            "an unpaired line reverses"
+        );
+        let removed: Vec<&Row> = rows
+            .iter()
+            .filter(|r| plain(r).contains("-gone") || plain(r).contains("-and gone"))
+            .collect();
+        assert_eq!(removed.len(), 2);
+    }
+
+    #[test]
+    fn hunk_headers_parse_or_they_do_not() {
+        assert_eq!(hunk_start("@@ -12,7 +12,9 @@ fn paint("), Some((12, 12)));
+        assert_eq!(hunk_start("@@ -1 +1 @@"), Some((1, 1)));
+        assert_eq!(hunk_start("not a header"), None);
+        assert_eq!(hunk_start("@@ -x +1 @@"), None);
+        assert_eq!(hunk_start("@@ -1 @@"), None);
     }
 
     #[test]
