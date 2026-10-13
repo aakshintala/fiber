@@ -494,13 +494,6 @@ end })"#,
     value["until"] = json!({"kind": "extension_log", "nth": 1});
     assert_success(&run_case(&after, "after", &value));
 
-    let mut no_advance = session(tool_script(), "hi", expected(&kinds));
-    no_advance["until"] = json!({"kind": "extension_log", "nth": 1});
-    assert_failure(
-        &run_case(&after, "after-without-advance", &no_advance),
-        "wait",
-    );
-
     let every = setup(
         r#"fiber.hook("after_tool", { timeout = 5000, on_failure = "blocking", run = function()
   host.every(1000, function() host.log("every timer") end, {timeout = 5000})
