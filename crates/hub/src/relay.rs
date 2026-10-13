@@ -42,7 +42,7 @@ use serde_json::{Map, Value};
 mod ack;
 mod relays;
 
-use crate::connection::{Hub, lock, reject};
+use crate::connection::{Hub, Refused, lock, reject};
 use crate::retire::{AckOrder, Retire};
 
 #[cfg(test)]
@@ -107,9 +107,7 @@ pub(crate) fn valid_session_id(session: &str) -> bool {
 /// or an unknown arg is refused `invalid_arguments` before any process
 /// starts instead of launching one on a partially read hint. Anything
 /// else is left for the session to read, as today.
-fn startup_credential(
-    stripped: &Map<String, Value>,
-) -> Result<Option<String>, (ErrorCode, &'static str)> {
+fn startup_credential(stripped: &Map<String, Value>) -> Result<Option<String>, Refused> {
     const UNFIT: &str = "The arguments do not fit this command.";
     let is_subscribe = stripped.get("command").and_then(Value::as_str) == Some("subscribe");
     let names_credential = stripped
@@ -125,10 +123,16 @@ fn startup_credential(
             if let contract::commands::Command::Subscribe(args) = line.command {
                 Ok(args.credential)
             } else {
-                Err((ErrorCode::InvalidArguments, UNFIT))
+                Err(Refused {
+                    code: ErrorCode::InvalidArguments,
+                    message: UNFIT.to_owned(),
+                })
             }
         }
-        Err(_) => Err((ErrorCode::InvalidArguments, UNFIT)),
+        Err(_) => Err(Refused {
+            code: ErrorCode::InvalidArguments,
+            message: UNFIT.to_owned(),
+        }),
     }
 }
 
@@ -339,8 +343,16 @@ pub(crate) fn route(
     // session to read, as today.
     let credential = match startup_credential(&stripped) {
         Ok(credential) => credential,
-        Err((code, message)) => {
-            crate::retire::refuse(writer, hub, relays, session, id, &code, message);
+        Err(refused) => {
+            crate::retire::refuse(
+                writer,
+                hub,
+                relays,
+                session,
+                id,
+                &refused.code,
+                &refused.message,
+            );
             return;
         }
     };

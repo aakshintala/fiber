@@ -21,10 +21,9 @@ use log::diag::Severity;
 use ring::rand::{SecureRandom as _, SystemRandom};
 use serde_json::{Map, Value, json};
 
-use crate::connection::{Hub, lock};
+use crate::connection::{Hub, Refused as Refusal, lock};
 use crate::devices;
 
-type Refusal = (ErrorCode, String);
 type Fill = Box<dyn FnMut(&mut [u8]) -> Result<(), ()> + Send>;
 pub(crate) const CODE_LIFETIME: Duration = Duration::from_secs(600);
 const CODE_LEN: usize = 10;
@@ -43,7 +42,10 @@ impl DeviceName {
                 .bytes()
                 .all(|b| b.is_ascii_alphanumeric() || b == b'.' || b == b'_' || b == b'-')
         {
-            return Err((ErrorCode::InvalidArguments, NAME_RULE.to_owned()));
+            return Err(Refusal {
+                code: ErrorCode::InvalidArguments,
+                message: NAME_RULE.to_owned(),
+            });
         }
         Ok(Self(name.to_owned()))
     }
@@ -154,26 +156,28 @@ pub(crate) struct Revoked {
 
 fn name(args: &Map<String, Value>) -> Result<DeviceName, Refusal> {
     if args.len() != 1 {
-        return Err((
-            ErrorCode::InvalidArguments,
-            "Expected one string `device`.".to_owned(),
-        ));
+        return Err(Refusal {
+            code: ErrorCode::InvalidArguments,
+            message: "Expected one string `device`.".to_owned(),
+        });
     }
-    DeviceName::parse(args.get("device").and_then(Value::as_str).ok_or_else(|| {
-        (
-            ErrorCode::InvalidArguments,
-            "Expected one string `device`.".to_owned(),
-        )
-    })?)
+    DeviceName::parse(
+        args.get("device")
+            .and_then(Value::as_str)
+            .ok_or_else(|| Refusal {
+                code: ErrorCode::InvalidArguments,
+                message: "Expected one string `device`.".to_owned(),
+            })?,
+    )
 }
 fn io_failure(hub: &Hub, name: &str, error: impl fmt::Display) -> Refusal {
-    (
-        ErrorCode::IoFailed,
-        format!(
+    Refusal {
+        code: ErrorCode::IoFailed,
+        message: format!(
             "{}: {error}",
             hub.home.join("hub/devices").join(name).display()
         ),
-    )
+    }
 }
 fn notice(hub: &Hub, change: &str, device: &str, by: &str) -> Notice {
     let payload = Map::from_iter([
@@ -245,18 +249,16 @@ impl Pairing {
         let now = hub.clock.now();
         prune(&mut state, now);
         if devices::exists(&hub.home, &device.0).map_err(|e| io_failure(hub, &device.0, e))? {
-            return Err((
-                ErrorCode::InvalidArguments,
-                format!("Device {} is already paired; revoke it first.", device.0),
-            ));
+            return Err(Refusal {
+                code: ErrorCode::InvalidArguments,
+                message: format!("Device {} is already paired; revoke it first.", device.0),
+            });
         }
         for _ in 0..8 {
             let mut bytes = [0; CODE_LEN];
-            (state.fill)(&mut bytes).map_err(|_| {
-                (
-                    ErrorCode::IoFailed,
-                    "The system has no random bytes.".to_owned(),
-                )
+            (state.fill)(&mut bytes).map_err(|_| Refusal {
+                code: ErrorCode::IoFailed,
+                message: "The system has no random bytes.".to_owned(),
             })?;
             let code = code_from(bytes);
             let hash = devices::sha256_hex(code.0.as_bytes());
@@ -276,10 +278,10 @@ impl Pairing {
             );
             return Ok(Outcome::Done(json!({"code":code.0})));
         }
-        Err((
-            ErrorCode::IoFailed,
-            "The system has no random bytes.".to_owned(),
-        ))
+        Err(Refusal {
+            code: ErrorCode::IoFailed,
+            message: "The system has no random bytes.".to_owned(),
+        })
     }
 
     pub(crate) fn redeem(
@@ -303,7 +305,7 @@ impl Pairing {
         pause(&mut state, Pause::AfterFound);
         let device = pending.device.0;
         if devices::exists(&hub.home, &device)
-            .map_err(|e| Refused::Io(io_failure(hub, &device, e).1))?
+            .map_err(|e| Refused::Io(io_failure(hub, &device, e).message))?
         {
             return Err(Refused::Pairing);
         }
@@ -322,7 +324,7 @@ impl Pairing {
                 token_sha256: fingerprint.clone(),
             },
         )
-        .map_err(|e| Refused::Io(io_failure(hub, &device, e).1))?;
+        .map_err(|e| Refused::Io(io_failure(hub, &device, e).message))?;
         let warning = devices::sync_dir(&hub.home).is_err();
         let owed = notice(hub, "paired", &device, &pending.issuer);
         let who = register(&mut state, n, device, fingerprint, Some(owed));
@@ -351,7 +353,7 @@ impl Pairing {
                 Severity::Warn,
                 None,
                 "io_failed",
-                &io_failure(hub, &record, error).1,
+                &io_failure(hub, &record, error).message,
             );
         }
         Some(who)
@@ -405,10 +407,10 @@ impl Pairing {
         args: &Map<String, Value>,
     ) -> Result<Option<Value>, Refusal> {
         if !args.is_empty() {
-            return Err((
-                ErrorCode::InvalidArguments,
-                "`devices` takes no arguments.".to_owned(),
-            ));
+            return Err(Refusal {
+                code: ErrorCode::InvalidArguments,
+                message: "`devices` takes no arguments.".to_owned(),
+            });
         }
         let listed = devices::list(&hub.home).map_err(|e| io_failure(hub, "", e))?;
         let devices: Vec<Value> = listed
@@ -437,11 +439,9 @@ impl Pairing {
             return Ok(Outcome::Dropped);
         }
         let device = name(args)?.0;
-        let not_found = || {
-            (
-                ErrorCode::NotFound,
-                format!("No device named {device} is paired."),
-            )
+        let not_found = || Refusal {
+            code: ErrorCode::NotFound,
+            message: format!("No device named {device} is paired."),
         };
         let entries = match std::fs::read_dir(hub.home.join("hub/devices")) {
             Ok(entries) => entries,

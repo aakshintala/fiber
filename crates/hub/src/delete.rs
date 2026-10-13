@@ -21,8 +21,8 @@ use std::sync::PoisonError;
 use contract::{ErrorCode, SessionId};
 use serde_json::{Map, Value};
 
-use crate::connection::Hub;
-use crate::feed::{Refusal, invalid};
+use crate::connection::{Hub, Refused};
+use crate::feed::invalid;
 use crate::relay::valid_session_id;
 use crate::resume::{find_log, not_found};
 
@@ -30,7 +30,7 @@ use crate::resume::{find_log, not_found};
 /// continues it, dependents first. With `cascade`, `expect` holds the set
 /// the person confirmed; without `cascade` it is checked but not compared.
 /// Accepted with no `result`.
-pub(crate) fn delete(hub: &Hub, args: &Map<String, Value>) -> Result<Option<Value>, Refusal> {
+pub(crate) fn delete(hub: &Hub, args: &Map<String, Value>) -> Result<Option<Value>, Refused> {
     let parsed = parse(args).ok_or_else(invalid)?;
     let session = parsed.session;
     let cascade = parsed.cascade;
@@ -41,21 +41,20 @@ pub(crate) fn delete(hub: &Hub, args: &Map<String, Value>) -> Result<Option<Valu
         .lock()
         .unwrap_or_else(PoisonError::into_inner);
     let Some(dir) = session_dir(hub, &session) else {
-        let refused = not_found(&session);
-        return Err((refused.code, refused.message));
+        return Err(not_found(&session));
     };
     let dependents = log::dependents(&hub.home, &session);
     if !cascade && !dependents.is_empty() {
         let mut names: Vec<String> = dependents.iter().map(|id| format!("`{}`", id.0)).collect();
         names.sort();
-        return Err((
-            ErrorCode::SessionHasDependents,
-            format!(
+        return Err(Refused {
+            code: ErrorCode::SessionHasDependents,
+            message: format!(
                 "Session `{}` has sessions that continue it: {}. `--cascade` deletes them too.",
                 session.0,
                 names.join(", ")
             ),
-        ));
+        });
     }
     let mut set = vec![(session, dir)];
     // A dependent whose directory went since the walk is not deleted.
@@ -75,10 +74,10 @@ pub(crate) fn delete(hub: &Hub, args: &Map<String, Value>) -> Result<Option<Valu
         match take_lock(dir) {
             Ok(lock) => locks.push(lock),
             Err(TryLockError::WouldBlock) => {
-                return Err((
-                    ErrorCode::SessionHeld,
-                    format!("Session `{}` is held by another process.", id.0),
-                ));
+                return Err(Refused {
+                    code: ErrorCode::SessionHeld,
+                    message: format!("Session `{}` is held by another process.", id.0),
+                });
             }
             Err(TryLockError::Error(error)) => return Err(io_failed(id, &error)),
         }
@@ -145,18 +144,18 @@ fn parse(args: &Map<String, Value>) -> Option<DeleteArgs> {
 /// The set the hub would remove matches the confirmed set, or the delete
 /// is refused naming the set it would remove now. Takes no lock and
 /// removes nothing.
-fn confirm(set_ids: &BTreeSet<&SessionId>, expect: &BTreeSet<&SessionId>) -> Result<(), Refusal> {
+fn confirm(set_ids: &BTreeSet<&SessionId>, expect: &BTreeSet<&SessionId>) -> Result<(), Refused> {
     if set_ids == expect {
         return Ok(());
     }
     let names: Vec<String> = set_ids.iter().map(|id| format!("`{}`", id.0)).collect();
-    Err((
-        ErrorCode::StaleRequest,
-        format!(
+    Err(Refused {
+        code: ErrorCode::StaleRequest,
+        message: format!(
             "The sessions this delete would remove are now {}. Nothing was deleted.",
             names.join(", ")
         ),
-    ))
+    })
 }
 
 /// `session`'s directory: a real directory, never a link, holding its log.
@@ -187,11 +186,11 @@ fn remove(dir: &std::path::Path) -> io::Result<()> {
     fs::remove_dir_all(dir)
 }
 
-fn io_failed(session: &SessionId, error: &io::Error) -> Refusal {
-    (
-        ErrorCode::IoFailed,
-        format!("Session `{}` could not be deleted: {error}.", session.0),
-    )
+fn io_failed(session: &SessionId, error: &io::Error) -> Refused {
+    Refused {
+        code: ErrorCode::IoFailed,
+        message: format!("Session `{}` could not be deleted: {error}.", session.0),
+    }
 }
 
 #[cfg(test)]

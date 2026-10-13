@@ -2232,10 +2232,10 @@ fn a_label_bearing_subscribe_the_line_rejects_is_refused_before_any_start() {
     .clone();
     assert_eq!(
         startup_credential(&stripped),
-        Err((
-            contract::ErrorCode::InvalidArguments,
-            "The arguments do not fit this command."
-        )),
+        Err(Refused {
+            code: contract::ErrorCode::InvalidArguments,
+            message: "The arguments do not fit this command.".to_owned(),
+        }),
         "a malformed label-bearing subscribe never reaches a session"
     );
 }

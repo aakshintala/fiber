@@ -122,10 +122,10 @@ fn pairing_code_for_a_paired_name_is_rejected() {
         .unwrap();
     assert_eq!(
         error,
-        (
-            ErrorCode::InvalidArguments,
-            "Device phone is already paired; revoke it first.".to_owned()
-        )
+        Refusal {
+            code: ErrorCode::InvalidArguments,
+            message: "Device phone is already paired; revoke it first.".to_owned(),
+        }
     );
 }
 
@@ -167,10 +167,10 @@ fn revoke_of_an_unpaired_device_is_not_found() {
             .revoke(&setup.hub, &Who::Local, &args(json!({"device":"nope"})))
             .err()
             .unwrap(),
-        (
-            ErrorCode::NotFound,
-            "No device named nope is paired.".to_owned()
-        )
+        Refusal {
+            code: ErrorCode::NotFound,
+            message: "No device named nope is paired.".to_owned(),
+        }
     );
 }
 
@@ -179,13 +179,13 @@ fn revoke_is_io_failed_when_the_device_directory_cannot_be_read() {
     let setup = Setup::new();
     fs::create_dir_all(setup.hub.home.join("hub")).unwrap();
     fs::write(setup.hub.home.join("hub/devices"), "obstacle").unwrap();
-    let (code, _) = setup
+    let refused = setup
         .hub
         .pairing
         .revoke(&setup.hub, &Who::Local, &args(json!({"device":"phone"})))
         .err()
         .unwrap();
-    assert_eq!(code, ErrorCode::IoFailed);
+    assert_eq!(refused.code, ErrorCode::IoFailed);
 }
 
 #[test]
@@ -200,7 +200,7 @@ fn revoke_never_reaches_outside_hub_devices() {
             .revoke(&setup.hub, &Who::Local, &args(json!({"device":"../x"})))
             .err()
             .unwrap()
-            .0,
+            .code,
         ErrorCode::InvalidArguments
     );
     assert_eq!(
@@ -353,7 +353,7 @@ fn a_hash_only_record_outside_the_name_rule_authenticates() {
             .revoke(&setup.hub, &Who::Local, &args(json!({"device":".phone"})))
             .err()
             .unwrap()
-            .0,
+            .code,
         ErrorCode::InvalidArguments
     );
 }
@@ -405,7 +405,7 @@ fn a_failed_unlink_changes_nothing() {
             .revoke(&setup.hub, &Who::Local, &args(json!({"device":"phone"})))
             .err()
             .unwrap()
-            .0,
+            .code,
         ErrorCode::IoFailed
     );
     assert!(!who.revoked());
@@ -463,10 +463,10 @@ fn a_repeated_draw_never_overwrites_another_devices_code() {
             .mint(&setup.hub, &Who::Local, &args(json!({"device":"a"})))
             .err()
             .unwrap(),
-        (
-            ErrorCode::IoFailed,
-            "The system has no random bytes.".to_owned()
-        )
+        Refusal {
+            code: ErrorCode::IoFailed,
+            message: "The system has no random bytes.".to_owned(),
+        }
     );
     assert_eq!(count.load(Ordering::SeqCst), 9);
     assert_eq!(setup.hub.pairing.pending(), 1);
@@ -719,9 +719,9 @@ fn device_names_hold_to_the_rule() {
         assert!(DeviceName::parse(name).is_ok(), "{name}");
     }
     for name in ["", ".x", "..", "a/b", "local", "é", &"a".repeat(65)] {
-        let (code, message) = DeviceName::parse(name).err().unwrap();
-        assert_eq!(code, ErrorCode::InvalidArguments);
-        assert_eq!(message, NAME_RULE);
+        let refused = DeviceName::parse(name).err().unwrap();
+        assert_eq!(refused.code, ErrorCode::InvalidArguments);
+        assert_eq!(refused.message, NAME_RULE);
     }
 }
 

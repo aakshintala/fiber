@@ -39,7 +39,7 @@ use contract::{CommandId, Envelope, ErrorCode, HubLine, SCHEMA_VERSION, SessionI
 use serde_json::{Map, Value};
 
 use crate::attention::{Attention, Seen};
-use crate::connection::{Hub, accept_result, reject, send as send_line};
+use crate::connection::{Hub, Refused, accept_result, reject, send as send_line};
 use crate::recent::{self, Left, PageError, RecentRow};
 use crate::relay::valid_session_id;
 use crate::tick::Tick;
@@ -57,9 +57,6 @@ pub(crate) const RUN_SCAN: Duration = Duration::from_millis(500);
 /// The most of a log's end read to find its last line: `fiber_exited` and
 /// `rewound` are far shorter, so a longer last line is neither.
 pub(crate) const TAIL: u64 = 64 * 1024;
-
-/// A rejected feed command: its code and sentence.
-pub(crate) type Refusal = (ErrorCode, String);
 
 /// Called at the end of every scan of `run/` with the names it found.
 pub(crate) type ScanHook = Box<dyn Fn(&BTreeSet<String>) + Send + Sync>;
@@ -272,7 +269,7 @@ impl Feed {
     }
 
     /// `dismiss`: drops a crashed session from the feed.
-    pub(crate) fn dismiss(&self, args: &Map<String, Value>) -> Result<Option<Value>, Refusal> {
+    pub(crate) fn dismiss(&self, args: &Map<String, Value>) -> Result<Option<Value>, Refused> {
         let session = match (args.len(), args.get("session")) {
             (1, Some(Value::String(session))) => session,
             _ => return Err(invalid()),
@@ -285,10 +282,10 @@ impl Feed {
             state.entries.remove(session);
             Ok(None)
         } else {
-            Err((
-                ErrorCode::StaleRequest,
-                format!("`{session}` is not a crashed session in the feed."),
-            ))
+            Err(Refused {
+                code: ErrorCode::StaleRequest,
+                message: format!("`{session}` is not a crashed session in the feed."),
+            })
         }
     }
 
@@ -299,7 +296,7 @@ impl Feed {
     }
 
     /// `recent`: a page of exited sessions, newest first.
-    pub(crate) fn recent(&self, args: &Map<String, Value>) -> Result<Option<Value>, Refusal> {
+    pub(crate) fn recent(&self, args: &Map<String, Value>) -> Result<Option<Value>, Refused> {
         let text = |key: &str| match args.get(key) {
             None => Ok(None),
             Some(Value::String(value)) => Ok(Some(value.as_str())),
@@ -318,10 +315,10 @@ impl Feed {
             .collect();
         match recent::page(&self.home, before, project, &running) {
             Ok(rows) => Ok(Some(serde_json::json!({ "sessions": rows }))),
-            Err(PageError::UnknownBefore) => Err((
-                ErrorCode::InvalidArguments,
-                "`before` names no session in the list.".to_owned(),
-            )),
+            Err(PageError::UnknownBefore) => Err(Refused {
+                code: ErrorCode::InvalidArguments,
+                message: "`before` names no session in the list.".to_owned(),
+            }),
         }
     }
 
@@ -630,7 +627,7 @@ pub(crate) fn answer(
     writer: &Arc<Mutex<UnixStream>>,
     hub: &Hub,
     id: &CommandId,
-    got: Result<Option<Value>, Refusal>,
+    got: Result<Option<Value>, Refused>,
 ) {
     match got {
         Ok(Some(result)) => accept_result(writer, hub, id, result),
@@ -638,7 +635,7 @@ pub(crate) fn answer(
             let payload = Map::from_iter([("command_id".to_owned(), Value::String(id.0.clone()))]);
             send_line(writer, hub, "command_accepted", payload);
         }
-        Err((code, message)) => reject(writer, hub, Some(id), &code, &message),
+        Err(refused) => reject(writer, hub, Some(id), &refused.code, &refused.message),
     }
 }
 
@@ -726,11 +723,11 @@ fn status_line(row: &RecentRow, payload: &SessionStatus) -> Line {
     })
 }
 
-pub(crate) fn invalid() -> Refusal {
-    (
-        ErrorCode::InvalidArguments,
-        "The arguments do not fit this command.".to_owned(),
-    )
+pub(crate) fn invalid() -> Refused {
+    Refused {
+        code: ErrorCode::InvalidArguments,
+        message: "The arguments do not fit this command.".to_owned(),
+    }
 }
 
 fn join(handle: JoinHandle<()>) {

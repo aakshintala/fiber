@@ -410,8 +410,8 @@ fn a_crashed_session_that_comes_back_is_running_again() {
     assert!(back.await_subscribed(1, DEADLINE));
     assert_eq!(sub.raw("the resumed status"), line);
     assert_eq!(entry_of(&feed, &id), Some("running"));
-    let (code, _) = feed.dismiss(&args(json!({"session": id}))).unwrap_err();
-    assert_eq!(code, ErrorCode::StaleRequest);
+    let refused = feed.dismiss(&args(json!({"session": id}))).unwrap_err();
+    assert_eq!(refused.code, ErrorCode::StaleRequest);
     stop_within(&feed);
 }
 
@@ -581,10 +581,10 @@ fn dismiss_drops_only_a_crashed_session() {
     seeded.start();
     assert_eq!(entry_of(&seeded, &waiting), Some("exited"));
     let stale = |feed: &Feed, session: &str| {
-        let (code, _) = feed
+        let refused = feed
             .dismiss(&args(json!({ "session": session })))
             .unwrap_err();
-        assert_eq!(code, ErrorCode::StaleRequest, "{session}");
+        assert_eq!(refused.code, ErrorCode::StaleRequest, "{session}");
     };
     stale(&seeded, &waiting);
     stale(&feed, &id(7));
@@ -604,8 +604,8 @@ fn dismiss_and_recent_refuse_arguments_that_do_not_fit() {
         json!({"session": 1}),
         json!({"session": "s", "extra": "x"}),
     ] {
-        let (code, _) = feed.dismiss(&args(bad.clone())).unwrap_err();
-        assert_eq!(code, ErrorCode::InvalidArguments, "{bad}");
+        let refused = feed.dismiss(&args(bad.clone())).unwrap_err();
+        assert_eq!(refused.code, ErrorCode::InvalidArguments, "{bad}");
     }
     for bad in [
         json!({"before": 1}),
@@ -613,8 +613,8 @@ fn dismiss_and_recent_refuse_arguments_that_do_not_fit() {
         json!({"limit": "x"}),
         json!({"before": id(5)}),
     ] {
-        let (code, _) = feed.recent(&args(bad.clone())).unwrap_err();
-        assert_eq!(code, ErrorCode::InvalidArguments, "{bad}");
+        let refused = feed.recent(&args(bad.clone())).unwrap_err();
+        assert_eq!(refused.code, ErrorCode::InvalidArguments, "{bad}");
     }
     assert_eq!(feed.recent(&Map::new()), Ok(Some(json!({"sessions": []}))));
 }

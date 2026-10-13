@@ -549,7 +549,7 @@ fn on_command(
                 accept_result(writer, hub, &line.id, result)
             }
             Ok(crate::pairing::Outcome::Dropped) => {}
-            Err((code, message)) => reject(writer, hub, Some(&line.id), &code, &message),
+            Err(refused) => reject(writer, hub, Some(&line.id), &refused.code, &refused.message),
         },
         "devices" => answer(writer, hub, &line.id, hub.pairing.devices(hub, &line.args)),
         "revoke" => match hub.pairing.revoke(hub, who, &line.args) {
@@ -558,7 +558,7 @@ fn on_command(
                 hub.pairing.finish(hub, revoked);
             }
             Ok(crate::pairing::Outcome::Dropped) => {}
-            Err((code, message)) => reject(writer, hub, Some(&line.id), &code, &message),
+            Err(refused) => reject(writer, hub, Some(&line.id), &refused.code, &refused.message),
         },
         "start" => on_start(&line.id, &line.args, hub, writer, relays),
         "status" => on_status(&line.id, &line.args, hub, writer),
@@ -568,10 +568,12 @@ fn on_command(
             &line.id,
             crate::environment::refresh(hub, &line.args),
         ),
-        "prompt_history" => match crate::prompt_history::answer(&hub.home, &line.args) {
-            Ok(result) => accept_result(writer, hub, &line.id, result),
-            Err((code, message)) => reject(writer, hub, Some(&line.id), &code, message),
-        },
+        "prompt_history" => answer(
+            writer,
+            hub,
+            &line.id,
+            crate::prompt_history::answer(&hub.home, &line.args).map(Some),
+        ),
         "feed" => on_feed(&line.id, &line.args, hub, writer, fed),
         "dismiss" => answer(writer, hub, &line.id, hub.feed.dismiss(&line.args)),
         "recent" => answer(writer, hub, &line.id, hub.feed.recent(&line.args)),
@@ -695,8 +697,8 @@ fn on_start(
         args.content,
     ) {
         Outcome::Accepted { session_id, first } => (session_id, first),
-        Outcome::Rejected { code, message } => {
-            reject(writer, hub, Some(id), &code, &message);
+        Outcome::Rejected(refused) => {
+            reject(writer, hub, Some(id), &refused.code, &refused.message);
             return;
         }
     };
@@ -710,8 +712,8 @@ fn on_start(
                 crate::first::forget(relays, &first);
                 let failed =
                     start::io_failed(hub, &session_id, "its first prompt could not be sent.");
-                if let Outcome::Rejected { code, message } = failed {
-                    reject(writer, hub, Some(id), &code, &message);
+                if let Outcome::Rejected(refused) = failed {
+                    reject(writer, hub, Some(id), &refused.code, &refused.message);
                 }
                 return;
             }
@@ -835,6 +837,15 @@ pub(crate) fn accept_result(
     payload.insert("command_id".to_owned(), Value::String(id.0.clone()));
     payload.insert("result".to_owned(), result);
     send(writer, hub, "command_accepted", payload);
+}
+
+/// Why a hub command is rejected: its code and Fiber's own sentence.
+#[derive(Debug, PartialEq, Eq)]
+pub(crate) struct Refused {
+    /// The rejection code.
+    pub(crate) code: ErrorCode,
+    /// What the client is told.
+    pub(crate) message: String,
 }
 
 pub(crate) fn reject(

@@ -9,7 +9,8 @@ use std::path::Path;
 use contract::events::SessionStatus;
 use serde_json::{Map, Value, json};
 
-use crate::feed::{Feed, Refusal, invalid};
+use crate::connection::Refused;
+use crate::feed::{Feed, invalid};
 use crate::recent;
 
 /// Answers `sessions`: the live snapshot is copied first, then
@@ -22,14 +23,14 @@ pub(crate) fn answer(
     feed: &Feed,
     home: &Path,
     args: &Map<String, Value>,
-) -> Result<Option<Value>, Refusal> {
+) -> Result<Option<Value>, Refused> {
     let project = project_arg(args)?;
     feed.settled();
     Ok(Some(list(feed.live(), home, project)))
 }
 
 /// `project`, the only key: absent, or a string.
-fn project_arg(args: &Map<String, Value>) -> Result<Option<&str>, Refusal> {
+fn project_arg(args: &Map<String, Value>) -> Result<Option<&str>, Refused> {
     match (args.len(), args.get("project")) {
         (0, _) => Ok(None),
         (1, Some(Value::String(project))) => Ok(Some(project)),

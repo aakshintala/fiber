@@ -124,10 +124,10 @@ fn a_relative_workspace_is_invalid_arguments() {
     let temp = Temp::new();
     let hub = temp.hub(FakeStarter::hang(&temp.dir));
     let outcome = started(hub, "relative/path".to_owned(), None, false, None);
-    let Outcome::Rejected { code, .. } = outcome else {
+    let Outcome::Rejected(refused) = outcome else {
         panic!("a relative workspace is rejected");
     };
-    assert_eq!(code, ErrorCode::InvalidArguments);
+    assert_eq!(refused.code, ErrorCode::InvalidArguments);
 }
 
 #[test]
@@ -145,10 +145,10 @@ fn a_workspace_that_is_no_directory_is_invalid_arguments() {
             false,
             None,
         );
-        let Outcome::Rejected { code, .. } = outcome else {
+        let Outcome::Rejected(refused) = outcome else {
             panic!("{workspace} is rejected");
         };
-        assert_eq!(code, ErrorCode::InvalidArguments);
+        assert_eq!(refused.code, ErrorCode::InvalidArguments);
     }
 }
 
@@ -185,11 +185,11 @@ fn a_session_that_exits_first_rejects_with_its_fiber_exited() {
     let hub = temp.hub(FakeStarter::exit_with(&temp.dir, exited));
     let workspace = temp.workspace();
     let outcome = started(hub, workspace, None, false, None);
-    let Outcome::Rejected { code, message } = outcome else {
+    let Outcome::Rejected(refused) = outcome else {
         panic!("the start is rejected");
     };
-    assert_eq!(code, ErrorCode::NoModel);
-    assert_eq!(message, "No model is configured.");
+    assert_eq!(refused.code, ErrorCode::NoModel);
+    assert_eq!(refused.message, "No model is configured.");
 }
 
 #[test]
@@ -198,10 +198,10 @@ fn a_session_that_neither_binds_nor_exits_is_rejected_io_failed() {
     let hub = temp.hub(FakeStarter::hang(&temp.dir));
     let workspace = temp.workspace();
     let outcome = started(hub, workspace, None, false, None);
-    let Outcome::Rejected { code, .. } = outcome else {
+    let Outcome::Rejected(refused) = outcome else {
         panic!("the start is rejected");
     };
-    assert_eq!(code, ErrorCode::IoFailed);
+    assert_eq!(refused.code, ErrorCode::IoFailed);
     // The waitout lasts the whole deadline: returning at once would fail
     // the start before the session could bind.
     assert!(temp.clock.now() >= temp.clock.origin() + START_DEADLINE);
@@ -216,10 +216,10 @@ fn an_unreachable_socket_error_fails_without_retrying() {
     let hub = temp.hub(FakeStarter::hang(&temp.dir));
     let workspace = temp.workspace();
     let outcome = started(hub, workspace, None, false, None);
-    let Outcome::Rejected { code, .. } = outcome else {
+    let Outcome::Rejected(refused) = outcome else {
         panic!("the start is rejected");
     };
-    assert_eq!(code, ErrorCode::IoFailed);
+    assert_eq!(refused.code, ErrorCode::IoFailed);
     assert!(temp.clock.now() < temp.clock.origin() + START_DEADLINE);
 }
 
@@ -269,12 +269,12 @@ fn a_starter_error_keeps_its_detail_out_of_the_log() {
     let hub = temp.hub_with(starter);
     let workspace = temp.workspace();
     let outcome = started(hub, workspace, Some(SECRET.to_owned()), false, None);
-    let Outcome::Rejected { code, message } = outcome else {
+    let Outcome::Rejected(refused) = outcome else {
         panic!("the start is rejected");
     };
-    assert_eq!(code, ErrorCode::IoFailed);
+    assert_eq!(refused.code, ErrorCode::IoFailed);
     assert!(
-        message.contains(SECRET),
+        refused.message.contains(SECRET),
         "the client keeps the starter detail"
     );
     let log = fs::read_to_string(temp.dir.join("logs").join("hub.log")).unwrap();
@@ -301,12 +301,12 @@ fn an_unexpected_connect_error_keeps_its_detail_out_of_the_log() {
         false,
         None,
     );
-    let Outcome::Rejected { code, message } = outcome else {
+    let Outcome::Rejected(refused) = outcome else {
         panic!("the start is rejected");
     };
-    assert_eq!(code, ErrorCode::IoFailed);
+    assert_eq!(refused.code, ErrorCode::IoFailed);
     assert!(
-        message.contains("could not start:"),
+        refused.message.contains("could not start:"),
         "the client keeps the connect detail"
     );
     let log = fs::read_to_string(temp.dir.join("logs").join("hub.log")).unwrap();
@@ -326,11 +326,11 @@ fn a_failed_start_logs_the_code_and_a_fixed_sentence() {
     let hub = temp.hub(FakeStarter::exit_with(&temp.dir, exited));
     let workspace = temp.workspace();
     let outcome = started(hub, workspace, None, false, None);
-    let Outcome::Rejected { code, message } = outcome else {
+    let Outcome::Rejected(refused) = outcome else {
         panic!("the start is rejected");
     };
-    assert_eq!(code, ErrorCode::NoModel);
-    assert_eq!(message, "No model is configured.");
+    assert_eq!(refused.code, ErrorCode::NoModel);
+    assert_eq!(refused.message, "No model is configured.");
     let log = fs::read_to_string(temp.dir.join("logs").join("hub.log")).unwrap();
     assert!(log.contains("\"code\":\"no_model\""));
     assert!(!log.contains("No model is configured."));
@@ -344,12 +344,12 @@ fn an_exited_failure_keeps_session_text_out_of_the_log() {
     let hub = temp.hub(FakeStarter::exit_with(&temp.dir, exited));
     let workspace = temp.workspace();
     let outcome = started(hub, workspace, Some(SECRET.to_owned()), false, None);
-    let Outcome::Rejected { code, message } = outcome else {
+    let Outcome::Rejected(refused) = outcome else {
         panic!("the start is rejected");
     };
-    assert_eq!(code, ErrorCode::NoModel);
+    assert_eq!(refused.code, ErrorCode::NoModel);
     assert!(
-        message.contains(SECRET),
+        refused.message.contains(SECRET),
         "the client keeps what the session said"
     );
     let log = fs::read_to_string(temp.dir.join("logs").join("hub.log")).unwrap();
@@ -474,11 +474,11 @@ fn a_rejected_first_prompt_returns_the_session_code() {
     );
     let content = json!([{"type": "text", "text": "hi"}]);
     let (hub, held) = held(&temp, starter, &content);
-    let Err(Outcome::Rejected { code, message }) = prompted(hub, *held) else {
+    let Err(Outcome::Rejected(refused)) = prompted(hub, *held) else {
         panic!("the prompt is rejected");
     };
-    assert_eq!(code, ErrorCode::InvalidArguments);
-    assert_eq!(message, "The prompt is empty.");
+    assert_eq!(refused.code, ErrorCode::InvalidArguments);
+    assert_eq!(refused.message, "The prompt is empty.");
 }
 
 #[test]
@@ -496,12 +496,12 @@ fn a_rejected_first_prompt_keeps_session_text_out_of_the_log() {
     let content = json!([{"type": "text", "text": SECRET}]);
     let (hub, held) = held(&temp, starter, &content);
     let session = held.id.0.clone();
-    let Err(Outcome::Rejected { code, message }) = prompted(hub, *held) else {
+    let Err(Outcome::Rejected(refused)) = prompted(hub, *held) else {
         panic!("the prompt is rejected");
     };
-    assert_eq!(code, ErrorCode::InvalidArguments);
+    assert_eq!(refused.code, ErrorCode::InvalidArguments);
     assert!(
-        message.contains(SECRET),
+        refused.message.contains(SECRET),
         "the result keeps what the session said"
     );
     let log = fs::read_to_string(temp.dir.join("logs").join("hub.log")).unwrap();
@@ -523,10 +523,10 @@ fn a_session_gone_before_the_first_prompt_logs_io_failed() {
     let (hub, held) = held(&temp, starter.clone(), &content);
     let session = held.id.clone();
     assert!(starter.stop(&session, HANDSHAKE_DEADLINE));
-    let Err(Outcome::Rejected { code, .. }) = prompted(hub, *held) else {
+    let Err(Outcome::Rejected(refused)) = prompted(hub, *held) else {
         panic!("the prompt is not taken");
     };
-    assert_eq!(code, ErrorCode::IoFailed);
+    assert_eq!(refused.code, ErrorCode::IoFailed);
     let log = fs::read_to_string(temp.dir.join("logs").join("hub.log")).unwrap();
     let line = log
         .lines()
