@@ -4,6 +4,7 @@
 use std::ffi::c_int;
 use std::fs::{self, File, OpenOptions};
 use std::io::{self, Write};
+use std::os::fd::OwnedFd;
 use std::os::unix::fs::OpenOptionsExt;
 use std::os::unix::process::{CommandExt, ExitStatusExt};
 use std::path::{Path, PathBuf};
@@ -13,8 +14,9 @@ use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::time::Duration;
 
 use contract::clock::Clock;
-use rustix::process::Signal;
-use signal_hook::consts::{SIGINT, SIGQUIT};
+use rustix::process::{Pid, Signal};
+use rustix::termios::{tcgetpgrp, tcsetpgrp};
+use signal_hook::consts::{SIGHUP, SIGINT, SIGQUIT, SIGTERM};
 
 /// The notice when neither variable names an editor.
 pub(crate) const NO_EDITOR: &str = "Set $VISUAL or $EDITOR to edit the draft.";
@@ -28,6 +30,16 @@ const ATTEMPTS: usize = 16;
 /// How long one wait poll sleeps: a shutdown signal ends the wait within
 /// this after arriving, and an exited editor is noticed within this.
 const POLL: Duration = Duration::from_millis(20);
+
+/// Grace polls a TERM'd editor tree gets before SIGKILL: 800 ms, the grace
+/// `docs/tools.md` gives a stop ("Stopping a command"). An injected clock
+/// advances through them at once, so tests never wait it out.
+const TERM_GRACE_POLLS: u32 = 40;
+
+/// Polls confirming the editor group emptied after SIGKILL: 2 s, the drain
+/// `docs/tools.md` allows ("Stopping a command"). Worst case the shutdown
+/// waits 2.8 s here, inside its bound.
+const KILL_CONFIRM_POLLS: u32 = 100;
 
 /// How an editor run ended: what the editor returned, or the shutdown
 /// signal that ended the wait while the editor still ran.
@@ -100,7 +112,7 @@ fn run_in(
         return failed(err);
     }
     drop(file);
-    let (int, quit, _forward) = catch_for_editor();
+    let forwarding = catch_for_editor();
     // `sh` splits the command, so a value with arguments such as `code -w`
     // works; the path goes in as `$1`, never through the split.
     let mut child = match Command::new("/bin/sh")
@@ -120,13 +132,20 @@ fn run_in(
         }
     };
     let pgid = child.id();
-    let status = match wait(&mut child, clock, pgid, &int, &quit) {
+    // The editor reads the terminal, which stops a background group with
+    // SIGTTIN: lend it the foreground while it runs, best effort.
+    let foreground = Foreground::take(pgid);
+    let status = match wait(&mut child, clock, pgid, &forwarding) {
         Ok(Waited::Exited(status)) => status,
-        Ok(Waited::Stopped(signal)) => return Outcome::Stopped(signal),
+        Ok(Waited::Stopped(signal)) => {
+            drop(foreground);
+            return Outcome::Stopped(signal);
+        }
         Err(err) => {
             return Outcome::Done(Err(format!("Could not start the editor: {err}")));
         }
     };
+    drop(foreground);
     if let Some(signal) = status.signal() {
         return Outcome::Done(Err(format!(
             "The editor was ended by signal {signal}; the draft is unchanged."
@@ -160,7 +179,7 @@ pub(crate) fn open(
     path: &Path,
     clock: &Arc<dyn Clock>,
 ) -> Outcome<Result<(), String>> {
-    let (int, quit, _forward) = catch_for_editor();
+    let forwarding = catch_for_editor();
     let mut child = match Command::new("/bin/sh")
         .arg("-c")
         .arg(format!("{command} \"$1\""))
@@ -177,13 +196,20 @@ pub(crate) fn open(
         }
     };
     let pgid = child.id();
-    let status = match wait(&mut child, clock, pgid, &int, &quit) {
+    // As in [`run_in`]: the editor reads the terminal, which stops a
+    // background group with SIGTTIN.
+    let foreground = Foreground::take(pgid);
+    let status = match wait(&mut child, clock, pgid, &forwarding) {
         Ok(Waited::Exited(status)) => status,
-        Ok(Waited::Stopped(signal)) => return Outcome::Stopped(signal),
+        Ok(Waited::Stopped(signal)) => {
+            drop(foreground);
+            return Outcome::Stopped(signal);
+        }
         Err(err) => {
             return Outcome::Done(Err(format!("Could not start the editor: {err}")));
         }
     };
+    drop(foreground);
     if let Some(signal) = status.signal() {
         return Outcome::Done(Err(format!("The editor was ended by signal {signal}.")));
     }
@@ -216,14 +242,22 @@ fn wait(
     child: &mut Child,
     clock: &Arc<dyn Clock>,
     pgid: u32,
-    int: &AtomicBool,
-    quit: &AtomicBool,
+    forward: &Forwarding,
 ) -> io::Result<Waited> {
     loop {
         if let Some(status) = child.try_wait()? {
             return Ok(Waited::Exited(status));
         }
-        let stopped = crate::event_loop::first_signal();
+        // Co-pending shutdown signals resolve in no guaranteed order,
+        // as on the loop's signal thread: the wait takes whichever flag
+        // it observes first.
+        let stopped = if forward.term.swap(false, Ordering::SeqCst) {
+            SIGTERM
+        } else if forward.hup.swap(false, Ordering::SeqCst) {
+            SIGHUP
+        } else {
+            0
+        };
         if stopped != 0 {
             // Ends the whole tree: the shell alone may have children of
             // its own (an editor command ending `; :` leaves them behind
@@ -233,13 +267,35 @@ fn wait(
             match support::group::signal(pgid, Signal::TERM) {
                 Ok(()) | Err(_) => {}
             }
+            // A stopped descendant or one ignoring SIGTERM survives it:
+            // force the group down after the grace.
+            for _ in 0..TERM_GRACE_POLLS {
+                if !support::group::alive(pgid) {
+                    break;
+                }
+                clock.sleep(POLL);
+            }
+            if support::group::alive(pgid) {
+                match support::group::signal(pgid, Signal::KILL) {
+                    Ok(()) | Err(_) => {}
+                }
+            }
+            // Reap our shell first: what remains is orphaned to init,
+            // then confirm it drained before the terminal comes back, so
+            // nothing writes to the restored screen.
             match child.kill() {
                 Ok(_) | Err(_) => {}
             }
             drop(child.wait());
+            for _ in 0..KILL_CONFIRM_POLLS {
+                if !support::group::alive(pgid) {
+                    break;
+                }
+                clock.sleep(POLL);
+            }
             return Ok(Waited::Stopped(stopped));
         }
-        for (caught, signal) in [(int, Signal::INT), (quit, Signal::QUIT)] {
+        for (caught, signal) in [(&forward.int, Signal::INT), (&forward.quit, Signal::QUIT)] {
             if caught.swap(false, Ordering::SeqCst) {
                 match support::group::signal(pgid, signal) {
                     Ok(()) | Err(_) => {}
@@ -250,12 +306,33 @@ fn wait(
     }
 }
 
-/// Registers this run's SIGINT and SIGQUIT forwarding: the flags [`wait`]
-/// polls, and the registrations, dropped when the run ends. Registered
-/// before the spawn, so an acknowledged editor implies installed handlers:
-/// a terminal interrupt raised after the acknowledgement is always
-/// forwarded, never missed.
-fn catch_for_editor() -> (Arc<AtomicBool>, Arc<AtomicBool>, Vec<signal_hook::SigId>) {
+/// This run's signal forwarding: the flags [`wait`] polls and the
+/// registrations, unregistered when the run ends. Dropping the ids never
+/// unregisters them, so without the [`Drop`] below every run would leak a
+/// callback and a flag.
+struct Forwarding {
+    int: Arc<AtomicBool>,
+    quit: Arc<AtomicBool>,
+    term: Arc<AtomicBool>,
+    hup: Arc<AtomicBool>,
+    held: Vec<signal_hook::SigId>,
+}
+
+impl Drop for Forwarding {
+    fn drop(&mut self) {
+        for id in self.held.drain(..) {
+            signal_hook::low_level::unregister(id);
+        }
+    }
+}
+
+/// Registers this run's forwarding: SIGINT and SIGQUIT to the editor's
+/// group, and the shutdown signals for [`wait`]'s own end. The flags the
+/// [`Forwarding`] guard unregisters when the run ends. Registered before
+/// the spawn, so an acknowledged editor implies installed handlers: an
+/// interrupt raised after the acknowledgement is always forwarded, and a
+/// shutdown signal always ends the wait, never missed.
+fn catch_for_editor() -> Forwarding {
     let mut held = Vec::new();
     let mut flag = |signal| {
         let caught = Arc::new(AtomicBool::new(false));
@@ -266,7 +343,91 @@ fn catch_for_editor() -> (Arc<AtomicBool>, Arc<AtomicBool>, Vec<signal_hook::Sig
     };
     let int = flag(SIGINT);
     let quit = flag(SIGQUIT);
-    (int, quit, held)
+    let term = flag(SIGTERM);
+    let hup = flag(SIGHUP);
+    Forwarding {
+        int,
+        quit,
+        term,
+        hup,
+        held,
+    }
+}
+
+/// The editor's foreground ownership of the controlling terminal, restored
+/// when dropped: an editor in a background group stops on its first
+/// terminal read (`SIGTTIN`), so the run lends it the foreground and takes
+/// it back afterwards. Best effort throughout: with no controlling
+/// terminal, or one another group owns, there is nothing to lend.
+struct Foreground {
+    tty: OwnedFd,
+    previous: Pid,
+}
+
+impl Foreground {
+    /// Lends the controlling terminal's foreground to `pgid` when this
+    /// process holds it, for the guard's life. `None` without a controlling
+    /// terminal, when another group holds the foreground, when `pgid` is
+    /// no pid, or when the transfer fails: the editor still runs, only
+    /// without foreground reads.
+    fn take(pgid: u32) -> Option<Self> {
+        let tty: OwnedFd = std::fs::File::open("/dev/tty").ok()?.into();
+        if tcgetpgrp(&tty).ok()? != own_foreground_holder(&tty)? {
+            return None;
+        }
+        let target = Pid::from_raw(pgid.try_into().ok()?)?;
+        let previous = give(&tty, target)?;
+        Some(Self { tty, previous })
+    }
+}
+
+impl Drop for Foreground {
+    fn drop(&mut self) {
+        // Best effort: the handover retakes the screen either way, and a
+        // failed restore leaves the foreground on a dead group, which the
+        // next transfer repairs when it reads the holder back.
+        without_ttou_stop(|| tcsetpgrp(&self.tty, self.previous).ok());
+    }
+}
+
+/// Runs `run` with SIGTTOU caught: a foreground change from the
+/// background stops the process, as shells know, so both directions of
+/// the editor's lending catch it and restore the disposition after. A
+/// caught flag counts the same as ignored, needs no unsafe, and
+/// unregisters after. Best effort: without a handler installed the
+/// change runs unguarded.
+fn without_ttou_stop<R>(run: impl FnOnce() -> R) -> R {
+    use signal_hook::consts::SIGTTOU;
+    let guard = signal_hook::flag::register(SIGTTOU, Arc::new(AtomicBool::new(false))).ok();
+    let out = run();
+    if let Some(id) = guard {
+        signal_hook::low_level::unregister(id);
+    }
+    out
+}
+
+/// This process's group when it owns the terminal `tty`'s foreground, so
+/// [`Foreground::take`] lends only what is ours to lend. `None` when
+/// another group owns it.
+fn own_foreground_holder(tty: &OwnedFd) -> Option<Pid> {
+    let holder = tcgetpgrp(tty).ok()?;
+    let ours = rustix::process::getpgid(None).ok()?;
+    (holder == ours).then_some(holder)
+}
+
+/// Sets the foreground group of the terminal `tty` to `pgid`, returning
+/// the previous one once confirmed. `None` when `tty` is no terminal or
+/// the transfer fails.
+fn give(tty: &OwnedFd, pgid: Pid) -> Option<Pid> {
+    let previous = tcgetpgrp(tty).ok()?;
+    without_ttou_stop(|| tcsetpgrp(tty, pgid).ok())?;
+    // Confirm: a racing foreground change must not read back as ours.
+    if tcgetpgrp(tty).ok()? == pgid {
+        Some(previous)
+    } else {
+        without_ttou_stop(|| tcsetpgrp(tty, previous).ok());
+        None
+    }
 }
 
 /// The temporary file the editor opens, removed when dropped.

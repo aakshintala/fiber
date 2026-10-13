@@ -280,7 +280,12 @@ fn a_shutdown_signal_ends_a_blocked_editor_wait() {
                 .unwrap_or(())
         })
         .unwrap_or_else(|err| panic!("spawn: {err}"));
-    let script_pids = fake.wait_ready();
+    let live = fake.wait_ready();
+    assert_eq!(
+        live.len(),
+        2,
+        "the acknowledgement names the script and its sleeper: {live:?}"
+    );
     signal_hook::low_level::raise(SIGTERM).unwrap_or_else(|err| panic!("raise: {err}"));
     match Deadline::after(DEADLINE)
         .recv(&finished)
@@ -291,8 +296,8 @@ fn a_shutdown_signal_ends_a_blocked_editor_wait() {
     }
     assert!(fake.left().is_empty());
     assert!(
-        fakes::pids_exit(&script_pids, DEADLINE),
-        "the script outlived the shutdown: {script_pids:?}"
+        fakes::pids_exit(&live, DEADLINE),
+        "the script or its sleeper outlived the shutdown: {live:?}"
     );
     assert!(
         fakes::matching_exits(&leaf, DEADLINE),
@@ -301,6 +306,69 @@ fn a_shutdown_signal_ends_a_blocked_editor_wait() {
     assert!(
         fakes::matching_exits(&script, DEADLINE),
         "editor processes left: {script}"
+    );
+}
+
+/// A tree ignoring SIGTERM is forced down: the TERM grace cannot end it,
+/// so only the group's SIGKILL does, and the wait still ends with the
+/// signal's number. The leaf traps TERM before starting, so it survives
+/// the group's SIGTERM the script also ignores; both pids are
+/// acknowledged before the raise. The 40-poll grace always runs whole (the
+/// tree stays alive through it), so the run advances at least 800 ms of
+/// fake time: a missing grace returns at once. (No upper bound: past the
+/// grace the tree drains through init in real time, which a fake clock
+/// cannot observe.)
+#[test]
+fn a_term_ignoring_tree_is_forced_down_with_sigkill() {
+    use signal_hook::consts::SIGTERM;
+    let fake = Fake::new(
+        "cp /bin/sleep $OUT/leaf\ntrap '' TERM\n$OUT/leaf 30 & echo \"$$ $!\" > \"$READY\"\nwait\n",
+    );
+    let leaf = fake.out("leaf").display().to_string();
+    let command = fake.command("", "; :");
+    let temp = fake.temp.path().to_path_buf();
+    let clock: Arc<dyn Clock> = fakes::clock::FakeClock::new();
+    let (done, finished) = mpsc::channel();
+    std::thread::Builder::new()
+        .name("editor-forced".to_owned())
+        .spawn({
+            let clock = Arc::clone(&clock);
+            move || {
+                done.send(run_in(&temp, &command, "text", &clock))
+                    .unwrap_or(())
+            }
+        })
+        .unwrap_or_else(|err| panic!("spawn: {err}"));
+    let live = fake.wait_ready();
+    assert_eq!(
+        live.len(),
+        2,
+        "the acknowledgement names the script and its sleeper: {live:?}"
+    );
+    // Measured from the raise: the wait loop busy-spins the fake clock
+    // while the test runs, so anything before it is not the run's time.
+    let before = clock.now();
+    signal_hook::low_level::raise(SIGTERM).unwrap_or_else(|err| panic!("raise: {err}"));
+    match Deadline::after(DEADLINE)
+        .recv(&finished)
+        .unwrap_or_else(|err| panic!("waited {DEADLINE:?} for the editor wait to end: {err}"))
+    {
+        Outcome::Stopped(signal) => assert_eq!(signal, SIGTERM),
+        Outcome::Done(result) => panic!("the blocked editor returned {result:?}"),
+    }
+    let advanced = clock.now().saturating_duration_since(before);
+    assert!(
+        advanced >= Duration::from_millis(800),
+        "the TERM grace ran whole: {advanced:?}"
+    );
+    assert!(fake.left().is_empty());
+    assert!(
+        fakes::pids_exit(&live, DEADLINE),
+        "the script or its sleeper outlived the shutdown: {live:?}"
+    );
+    assert!(
+        fakes::matching_exits(&leaf, DEADLINE),
+        "the TERM-ignoring sleeper outlived the shutdown: {leaf}"
     );
 }
 
@@ -516,6 +584,33 @@ fn ctrl_g_does_nothing_while_the_search_panel_is_open() {
     press(&mut app, Key::CtrlR);
     assert_eq!(press(&mut app, Key::CtrlG), Effect::None);
     assert!(app.completions().is_some());
+}
+
+/// Foreground transfer needs a terminal: a regular file refuses it, so the
+/// editor still runs without foreground reads. (A controlling terminal's
+/// transfer is covered by the session test in `main`, where the binary
+/// runs under one.)
+#[test]
+fn foreground_transfer_needs_a_terminal() {
+    let dir = fakes::TempDir::new("not-a-tty");
+    let path = dir.path().join("plain");
+    std::fs::write(&path, "x").unwrap_or_else(|err| panic!("write: {err}"));
+    let file = std::fs::File::open(&path).unwrap_or_else(|err| panic!("open: {err}"));
+    let fd: std::os::fd::OwnedFd = file.into();
+    let pid = rustix::process::Pid::from_raw(1).expect("pid 1");
+    assert!(super::give(&fd, pid).is_none());
+}
+
+/// Repeated runs register cleanly: cycling the run exercises registration
+/// and unregistration each time, so a leaked handler would accumulate
+/// callbacks process-wide instead of ending with the run.
+#[test]
+fn repeated_editor_runs_register_cleanly() {
+    let fake = Fake::new(":\n");
+    for _ in 0..5 {
+        assert_eq!(fake.run("text"), Ok("text".to_owned()));
+    }
+    assert!(fake.left().is_empty());
 }
 
 /// The name [`TempFile::create`] gives number `n` in `dir`.

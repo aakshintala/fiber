@@ -877,8 +877,8 @@ impl<B: Backend> Loop<B> {
     /// Ctrl+G: opens `text` in the editor `$VISUAL` or `$EDITOR` names,
     /// with the terminal handed over, and gives the app what it returned.
     /// `Some(1)` when the terminal cannot be taken back. A shutdown signal
-    /// while the editor runs quits with 128 plus its number instead, after
-    /// the handover takes the terminal back.
+    /// while the editor runs quits with 128 plus its number instead, with
+    /// no resume: the run's own restore takes the terminal back.
     fn open_editor(&mut self, target: editor::Target, text: &str) -> Option<i32> {
         let Some(command) = editor::command(&self.var) else {
             self.app
@@ -887,7 +887,15 @@ impl<B: Backend> Loop<B> {
         };
         let mut result = editor::Outcome::Done(Err(String::new()));
         let clock = Arc::clone(&self.clock);
-        let code = self.hand_over(|| result = editor::run(&command, text, &clock));
+        let code = self.hand_over(|| {
+            result = editor::run(&command, text, &clock);
+            // A shutdown stop quits outright, before any resume: the
+            // handover takes it as the quit code.
+            match result {
+                editor::Outcome::Stopped(signal) => Some(128 + signal),
+                editor::Outcome::Done(_) => None,
+            }
+        });
         if code.is_none() {
             match result {
                 editor::Outcome::Done(done) => self.app.editor_returned(target, done),
@@ -904,7 +912,7 @@ impl<B: Backend> Loop<B> {
     /// `$VISUAL` or `$EDITOR` names, with the terminal handed over, and
     /// tells the app it returned. `Some(1)` when the terminal cannot be
     /// taken back. A shutdown signal while the editor runs quits with 128
-    /// plus its number instead, after the handover takes the terminal back.
+    /// plus its number instead, with no resume, as above.
     fn open_file(&mut self, file: &std::path::Path) -> Option<i32> {
         let Some(command) = editor::command(&self.var) else {
             self.app
@@ -913,7 +921,14 @@ impl<B: Backend> Loop<B> {
         };
         let mut result = editor::Outcome::Done(Err(String::new()));
         let clock = Arc::clone(&self.clock);
-        let code = self.hand_over(|| result = editor::open(&command, file, &clock));
+        let code = self.hand_over(|| {
+            result = editor::open(&command, file, &clock);
+            // As in [`Loop::open_editor`]: a shutdown stop quits outright.
+            match result {
+                editor::Outcome::Stopped(signal) => Some(128 + signal),
+                editor::Outcome::Done(_) => None,
+            }
+        });
         if code.is_none() {
             match result {
                 editor::Outcome::Done(done) => self.app.config_file_closed(done),
@@ -945,14 +960,23 @@ impl<B: Backend> Loop<B> {
     /// thread: the reader paused, the terminal restored, then both taken
     /// back and the whole screen repainted at the size read again. `Some(1)`
     /// when the terminal cannot be taken back.
-    fn hand_over(&mut self, program: impl FnOnce()) -> Option<i32> {
+    fn hand_over(&mut self, program: impl FnOnce() -> Option<i32>) -> Option<i32> {
         if let Some(reader) = &mut self.reader {
             reader.pause();
         }
         // A failed suspend still runs the program: the terminal may be
         // left part set up, and resume sets it up whole.
         term::suspend().unwrap_or(());
-        program();
+        // A shutdown stop quits outright: there is no terminal use to
+        // resume for, and resuming can only fail the quit when the
+        // terminal is gone. The reader still resumes, so its thread ends
+        // with the test instead of parking past it.
+        if let Some(code) = program() {
+            if let Some(reader) = &self.reader {
+                reader.resume();
+            }
+            return Some(code);
+        }
         if term::resume(self.parser.kitty(), self.hover).is_err() {
             return Some(1);
         }

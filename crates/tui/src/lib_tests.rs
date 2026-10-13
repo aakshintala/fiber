@@ -1137,6 +1137,7 @@ fn hand_over_gives_the_terminal_and_its_input_to_the_program() {
                 BufReader::new(slave).read_line(&mut line).map(|_| line)
             });
             seen = Some((is_cooked(&cooked), line.unwrap_or_default()));
+            None
         });
         // The same title is written again after the program.
         lp.write_title();
@@ -1181,7 +1182,13 @@ fn hand_over_gives_the_terminal_and_its_input_to_the_program() {
 fn hand_over_that_cannot_take_the_terminal_back_quits_with_one() {
     let (mut lp, _) = new_loop(TestBackend::new(60, 12), None);
     let mut ran = false;
-    assert_eq!(lp.hand_over(|| ran = true), Some(1));
+    assert_eq!(
+        lp.hand_over(|| {
+            ran = true;
+            None
+        }),
+        Some(1)
+    );
     assert!(ran);
 }
 
@@ -1321,8 +1328,10 @@ fn a_shutdown_signal_while_the_editor_runs_quits_with_128_plus_it() {
         lines,
         [format!("{}  fiber resume {}", session.0, session.0)]
     );
-    // The handover took the terminal back, and the editor tree is gone.
-    assert!(!is_cooked(
+    // The handover gave the terminal back suspended (cooked, primary
+    // screen): the quit path resumes nothing, and the run's restore
+    // keeps what suspend left. The editor tree is gone.
+    assert!(is_cooked(
         &rustix::termios::tcgetattr(&pair.slave).unwrap_or_else(|err| panic!("attr: {err}"))
     ));
     let left = fakes::matching(&script).unwrap_or_else(|err| panic!("ps: {err}"));
@@ -1378,8 +1387,8 @@ fn a_shutdown_signal_while_a_file_editor_runs_quits_with_128_plus_it() {
         .recv(&finished)
         .unwrap_or_else(|err| panic!("waited {DEADLINE:?} for the file editor to quit: {err}"));
     assert_eq!(code, Some(143));
-    // The handover took the terminal back, and the editor tree is gone.
-    assert!(!is_cooked(
+    // As above: suspended, not resumed, and the editor tree is gone.
+    assert!(is_cooked(
         &rustix::termios::tcgetattr(&pair.slave).unwrap_or_else(|err| panic!("attr: {err}"))
     ));
     let left = fakes::matching(&script).unwrap_or_else(|err| panic!("ps: {err}"));

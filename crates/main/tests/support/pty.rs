@@ -236,6 +236,9 @@ fn end(shared: &Mutex<Shared>) {
 pub(crate) struct Terminal {
     pub(crate) main: OwnedFd,
     pub(crate) terminal: fs::File,
+    /// The terminal side's path, for a session leader to acquire as its
+    /// controlling terminal.
+    pub(crate) user: PathBuf,
 }
 
 /// Opens a `cols` by `rows` pty. The main side stays open while the run
@@ -252,7 +255,7 @@ pub(crate) fn open(cols: u16, rows: u16) -> Terminal {
     let terminal = fs::OpenOptions::new()
         .read(true)
         .write(true)
-        .open(path)
+        .open(&path)
         .unwrap();
     rustix::termios::tcsetwinsize(
         &terminal,
@@ -264,7 +267,11 @@ pub(crate) fn open(cols: u16, rows: u16) -> Terminal {
         },
     )
     .unwrap();
-    Terminal { main, terminal }
+    Terminal {
+        main,
+        terminal,
+        user: path,
+    }
 }
 
 impl Terminal {
@@ -651,9 +658,103 @@ impl Run {
         }
     }
 
+    /// Spawns `fiber` with `args` as a session leader holding the pty as
+    /// its controlling terminal, through a `perl` launcher: a new session,
+    /// the terminal side acquired as the controlling terminal, its
+    /// foreground group claimed, then `fiber` exec'd with `args`. Only
+    /// here does job control apply, so an editor reading the terminal
+    /// proves the foreground handover: in a background group that read
+    /// stops with `SIGTTIN` and the draft never comes back. `perl` ships
+    /// on the Linux and macOS runners; the launcher dies with its message
+    /// on the terminal when it cannot start. Unlike [`Run::spawn`], the
+    /// launcher starts in the test's group: `setsid` refuses a group
+    /// leader, so a preset group would break the session before it
+    /// starts. Its pid is still its group after the call, so the
+    /// watchdog below watches the right group. Unlike [`Run::spawn`],
+    /// the child opens the terminal side itself, so this side stays open
+    /// until the launcher acknowledges its opens: dropping it first
+    /// would show the reader end of file with nobody holding the other
+    /// end yet.
+    #[track_caller]
+    pub(crate) fn spawn_session(
+        setup: &Setup,
+        cols: u16,
+        rows: u16,
+        args: &[&str],
+        env: &[(&str, &str)],
+    ) -> Self {
+        let terminal = open(cols, rows);
+        // The launcher acknowledges its opens on this FIFO before `fiber`
+        // runs: this side is dropped only after, so the reader never
+        // sees end of file with nobody holding the other end yet. The
+        // line carries the launcher's pid, as every ready line does.
+        let ready = fakes::children::Ready::new(setup.root.path());
+        let sessions = Watchdog::matching(setup.workspace().to_str().unwrap());
+        // A fresh pty has no foreground group, so the launcher starts in
+        // the background: claiming the foreground would stop it with
+        // SIGTTOU, as a login shell would, so it ignores SIGTTOU for the
+        // claim and restores the default before `fiber` runs. Every side
+        // opens read-write, as the shared driver's single read-write open
+        // does: the terminal writes its setup to its stdin-derived tty.
+        let launcher = r#"POSIX::setsid(); open(STDIN, "+<", $ENV{PTY}) or die "stdin: $!"; open(STDOUT, "+<", $ENV{PTY}) or die "stdout: $!"; open(STDERR, ">&STDOUT") or die "stderr: $!"; open(my $R, ">>", $ENV{READY}) or die "ready: $!"; print $R "$$\n"; close($R); $SIG{TTOU} = "IGNORE"; POSIX::tcsetpgrp(0, POSIX::getpgrp()) == 0 or die "foreground: $!"; $SIG{TTOU} = "DEFAULT"; exec($ENV{FIBER_BIN}, @ARGV) or die "exec: $!";"#;
+        let mut command = Command::new("perl");
+        command
+            .current_dir(setup.workspace())
+            .env_clear()
+            .envs(fakes::check_run())
+            .env("PATH", std::env::var_os("PATH").unwrap_or_default())
+            .env("HOME", setup.root.path())
+            .env("FIBER_HOME", setup.home())
+            .env("TERM", "xterm-256color")
+            .env("PTY", &terminal.user)
+            .env("READY", ready.path())
+            .env("FIBER_BIN", env!("CARGO_BIN_EXE_fiber"));
+        for (key, value) in env {
+            command.env(key, value);
+        }
+        command
+            .arg("-MPOSIX")
+            .arg("-e")
+            .arg(launcher)
+            .arg("--")
+            .args(args)
+            .stdin(Stdio::null())
+            .stdout(Stdio::null())
+            .stderr(Stdio::null());
+        let child = command.spawn().unwrap();
+        // The launcher holds the terminal side from here on: only now
+        // may this side go.
+        let _opened = ready.wait(setup.deadline.left());
+        let group = child.id();
+        let guard = KillGroup(group);
+        let watchdog = Watchdog::group(group);
+        std::mem::forget(guard);
+        drop(terminal.terminal);
+        let deadline = setup.deadline;
+        let main = fs::File::from(terminal.main);
+        let shared = Arc::new(Mutex::new(Shared::new(cols, rows)));
+        let writer: Writer = Arc::new(Mutex::new(main.try_clone().unwrap()));
+        let (reader, wakes) =
+            Reader::start(main, Arc::clone(&shared), Arc::clone(&writer), deadline);
+        Self {
+            child: Some(child),
+            hub_socket: setup.home().join("run").join("hub"),
+            hub_home: setup.home().to_path_buf(),
+            watchdog: Some(watchdog),
+            sessions: Some((sessions, setup.workspace().to_string_lossy().into_owned())),
+            shared,
+            writer,
+            reader: Some(reader),
+            wakes,
+            cols,
+            rows,
+            deadline,
+        }
+    }
+
     /// A run with no child over an already-open `master`, for harness
     /// tests feeding output by hand: the reader drains from the first
-    /// chunk to end of file, as in [`Run::spawn`].
+    /// chunk to end of file, as in [`Run::spawn`]
     pub(crate) fn attach(master: fs::File, cols: u16, rows: u16, deadline: Deadline) -> Self {
         let shared = Arc::new(Mutex::new(Shared::new(cols, rows)));
         let writer: Writer = Arc::new(Mutex::new(master.try_clone().unwrap()));
