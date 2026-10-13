@@ -271,9 +271,9 @@ fn resident_checkpoints_stay_at_a_constant_cap() {
     // line: spacing 128 keeps every other line (513, still over half),
     // then spacing 256 re-walks those and keeps every fourth (400-byte
     // gaps, 257).
+    assert_eq!(offsets.lock().checkpoints[0], (0, 0));
     assert!(offsets.lock().checkpoints.len() <= CHECKPOINTS / 2);
     assert_eq!(offsets.lock().checkpoints.len(), 257);
-    assert_eq!(offsets.lock().checkpoints[0], (0, 0));
     // Re-thinning allocates the compacted set instead of retaining the
     // grown buffer: right after the thin the capacity sits at the cap,
     // not at the log's scale.
