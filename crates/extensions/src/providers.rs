@@ -265,6 +265,22 @@ impl Providers {
     /// numbers. Each damaged directory leaves one `extension_failed`
     /// notice naming it and the fix, before the healthy entries' notices.
     pub fn load(home: &Path) -> Result<(Self, Vec<Notice>), Error> {
+        Self::load_with(home, |_| true)
+    }
+
+    /// Reads the installed providers enabled by the effective configuration.
+    /// Disabled packages contribute no providers, declarations or secrets.
+    pub fn load_enabled(
+        home: &Path,
+        config: &config::Config,
+    ) -> Result<(Self, Vec<Notice>), Error> {
+        Self::load_with(home, |name| crate::is_enabled(config, name))
+    }
+
+    fn load_with(
+        home: &Path,
+        enabled: impl Fn(&str) -> bool,
+    ) -> Result<(Self, Vec<Notice>), Error> {
         let entries = crate::installed::read_entries(home)?;
         let mut providers = Self::default();
         let mut notices = Vec::new();
@@ -281,6 +297,9 @@ impl Providers {
         for entry in entries.found {
             let dir = entry.dir;
             let manifest = entry.manifest;
+            if !enabled(&manifest.name) {
+                continue;
+            }
             if manifest.api != API {
                 notices.push(Notice {
                     code: ErrorCode::ExtensionIncompatible,

@@ -23,6 +23,92 @@ use serde_json::{Value, json};
 use super::{providers_and_config, refresh_named, refresh_run, run};
 use fakes::Deadline;
 
+#[test]
+fn catalogue_and_cached_model_lists_follow_project_configuration() {
+    fakes::within("project model catalogue", Duration::from_secs(10), || {
+        let setup = Setup::new();
+        let model = json!([{"id":"m", "protocol":"openai-responses", "base_url":"http://127.0.0.1:1/v1", "context_window":1000}]);
+        setup.install("acme", "p", &model);
+        setup.install("other", "other", &model);
+        setup.write_config(&json!({"extensions":{"acme":{"enabled":false}}}));
+        config::write_model_cache(&setup.home(), "p", &model).unwrap();
+        let (providers, _, notices) =
+            providers_and_config(&setup.home(), &setup.workspace()).unwrap();
+        assert!(notices.is_empty());
+        assert_eq!(providers.names().collect::<Vec<_>>(), ["other"]);
+        let (providers, _, notices) = crate::model_lists::model_lists(
+            &setup.home(),
+            &setup.workspace(),
+            crate::model_lists::ModelLists::Cached,
+            &|_| unreachable!("cached lists start no extensions"),
+            &fakes::children::grouped_output,
+        )
+        .unwrap();
+        assert!(notices.is_empty());
+        assert_eq!(providers.names().collect::<Vec<_>>(), ["other"]);
+        let (_, project) = crate::project_of(&setup.home(), &setup.workspace()).unwrap();
+        config::set(
+            &setup.home(),
+            &setup.workspace(),
+            &project,
+            config::Layer::Project,
+            "extensions.acme.enabled",
+            json!(true),
+        )
+        .unwrap();
+        let (providers, _, _) = providers_and_config(&setup.home(), &setup.workspace()).unwrap();
+        assert_eq!(providers.names().collect::<Vec<_>>(), ["other", "p"]);
+        let other_workspace = setup.root.path().join("elsewhere");
+        fs::create_dir(&other_workspace).unwrap();
+        let (providers, _, _) = providers_and_config(&setup.home(), &other_workspace).unwrap();
+        assert_eq!(providers.names().collect::<Vec<_>>(), ["other"]);
+    });
+}
+
+#[test]
+fn refresh_skips_disabled_malformed_provider_data_and_refreshes_enabled_control() {
+    fakes::within(
+        "filtered background model refresh",
+        Duration::from_secs(20),
+        || {
+            let setup = Setup::new();
+            setup.install_lua("enabled", "good", &lua_list("new"));
+            setup.install_lua("disabled", "bad", &lua_list("unwanted"));
+            let old = json!([{"id":"old", "protocol":"openai-responses", "base_url":"http://127.0.0.1:1/v1", "context_window":1000}]);
+            let clock = std::sync::Arc::new(fakes::clock::SystemClock);
+            for provider in ["good", "bad"] {
+                write_stale_cache(&setup.home(), provider, &old, clock.wall());
+            }
+            setup.write_config(&json!({"extensions":{"disabled":{"enabled":false}}}));
+            fs::write(
+                setup.home().join("extensions/disabled/providers/bad.json"),
+                "not JSON",
+            )
+            .unwrap();
+            let before = fs::read(setup.home().join("cache/models/bad.json")).unwrap();
+            refresh_run(
+                &setup.home(),
+                &setup.workspace(),
+                &["good".into(), "bad".into()],
+                clock,
+                std::sync::Arc::new(NoLock),
+                &fakes::children::grouped_output,
+            );
+            let refreshed = config::read_model_cache(&setup.home(), "good")
+                .unwrap()
+                .unwrap();
+            assert_eq!(
+                refreshed.iter().map(|m| m.id.as_str()).collect::<Vec<_>>(),
+                ["new"]
+            );
+            assert_eq!(
+                fs::read(setup.home().join("cache/models/bad.json")).unwrap(),
+                before
+            );
+        },
+    );
+}
+
 /// `fiber models` never writes a file, so its lock runs every call straight
 /// through.
 struct NoLock;

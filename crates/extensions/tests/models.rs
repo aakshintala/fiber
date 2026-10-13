@@ -18,6 +18,104 @@ use fakes::Deadline;
 use serde_json::json;
 
 #[test]
+fn enabled_loading_filters_packages_not_provider_ids_and_inventory_stays_complete() {
+    fakes::within(
+        "configuration-filtered provider loading",
+        std::time::Duration::from_secs(10),
+        || {
+            let setup = Setup::new();
+            let full = "github.com/aakshintala/fiber/providers/opencode";
+            let source = setup.source(
+                "opencode",
+                &manifest(full),
+                &[
+                    provider("opencode-go", &["m"]),
+                    provider("opencode-zen", &["m"]),
+                ],
+            );
+            install(&setup.home(), &source, "0.1.0").unwrap();
+            let other = setup.source("other", &manifest("other"), &[provider("other", &["m"])]);
+            install(&setup.home(), &other, "0.1.0").unwrap();
+            for name in ["opencode", full] {
+                for enabled in [None, Some(true), Some(false)] {
+                    let overrides =
+                        enabled.map(|enabled| format!("extensions.\"{name}\".enabled={enabled}"));
+                    let refs: Vec<&str> = overrides.iter().map(String::as_str).collect();
+                    let configuration = config(&setup, &refs);
+                    let (providers, notices) =
+                        Providers::load_enabled(&setup.home(), &configuration).unwrap();
+                    assert!(notices.is_empty(), "{notices:?}");
+                    let expected = if enabled == Some(false) {
+                        vec!["other"]
+                    } else {
+                        vec!["opencode-go", "opencode-zen", "other"]
+                    };
+                    assert_eq!(providers.names().collect::<Vec<_>>(), expected);
+                    assert_eq!(providers.resolve("other/m").unwrap().reference(), "other/m");
+                    let (inventory, notices) = Providers::load(&setup.home()).unwrap();
+                    assert!(notices.is_empty());
+                    assert_eq!(
+                        inventory.names().collect::<Vec<_>>(),
+                        ["opencode-go", "opencode-zen", "other"]
+                    );
+                }
+            }
+            write(
+                &setup.home().join("config.json"),
+                r#"{"extensions":{"opencode":{"enabled":false}}}"#,
+            );
+            write(
+                &setup.home().join("projects/p/config.json"),
+                r#"{"extensions":{"opencode":{"enabled":true}}}"#,
+            );
+            let configuration = config(&setup, &[]);
+            let (providers, _) = Providers::load_enabled(&setup.home(), &configuration).unwrap();
+            assert!(providers.resolve("opencode-go/m").is_ok());
+            let other_config = config::Config::load(config::Sources {
+                home: setup.home(),
+                workspace: setup.workspace(),
+                project: config::ProjectKey::new("elsewhere").unwrap(),
+                overrides: vec![],
+            })
+            .unwrap();
+            let (providers, _) = Providers::load_enabled(&setup.home(), &other_config).unwrap();
+            assert_eq!(providers.names().collect::<Vec<_>>(), ["other"]);
+        },
+    );
+}
+
+#[test]
+fn disabled_packages_are_skipped_before_provider_files_secrets_and_cached_models() {
+    fakes::within(
+        "disabled provider assets",
+        std::time::Duration::from_secs(10),
+        || {
+            let setup = Setup::new();
+            let mut m = manifest("acme");
+            m["secrets"] = json!(["acme-token"]);
+            let source = setup.source("acme", &m, &[provider("p", &["m"])]);
+            install(&setup.home(), &source, "0.1.0").unwrap();
+            write_model_cache(&setup.home(), "p", &provider("p", &["cached"])["models"]).unwrap();
+            let configuration = config(&setup, &["extensions.acme.enabled=false"]);
+            let (providers, notices) =
+                Providers::load_enabled(&setup.home(), &configuration).unwrap();
+            assert!(notices.is_empty());
+            assert_eq!(providers.names().collect::<Vec<_>>(), Vec::<&str>::new());
+            assert_eq!(providers.secrets().collect::<Vec<_>>(), Vec::<&str>::new());
+            write(
+                &setup.home().join("extensions/acme/providers/p.json"),
+                "not JSON",
+            );
+            let (providers, notices) =
+                Providers::load_enabled(&setup.home(), &configuration).unwrap();
+            assert!(notices.is_empty());
+            assert_eq!(providers.names().collect::<Vec<_>>(), Vec::<&str>::new());
+            assert!(Providers::load(&setup.home()).is_err());
+        },
+    );
+}
+
+#[test]
 fn fresh_cache_is_used_before_loading_or_refreshing_provider_lua() {
     use std::sync::Arc;
     use std::time::Duration;
