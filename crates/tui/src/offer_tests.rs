@@ -2,10 +2,18 @@
 
 use contract::events::OfferDecision;
 use contract::{Envelope, SessionId};
+use ratatui::buffer::Buffer;
+use ratatui::layout::Rect;
+use ratatui::style::{Modifier, Style};
 use serde_json::{Value, json};
+use std::path::PathBuf;
 
-use super::{Offer, OfferKey, Spot, TUI_FILES};
+use super::{HINT, Offer, OfferKey, Spot, TUI_FILES};
+use crate::app::App;
 use crate::keys::{Edit, Key};
+use crate::link::Line;
+use crate::markdown::style;
+use crate::theme::Role;
 
 const SESSION: &str = "s_aaaaaaaaaaaaaaaa";
 
@@ -51,6 +59,124 @@ fn holding(count: u8) -> Offer {
     let mut offer = Offer::default();
     offer.fold(&offered("r_1", count));
     offer
+}
+
+/// An offer of `items` under `r_1`.
+fn with_items(items: Value) -> Offer {
+    let mut offer = Offer::default();
+    offer.fold(&envelope(
+        "repository_code_offered",
+        json!({"request_id": "r_1", "items": items}),
+    ));
+    offer
+}
+
+/// One item of `kind` named `name`, with `version`, `summary` and `diff`.
+fn item(kind: &str, name: &str, version: Option<&str>, summary: &str, diff: Option<&str>) -> Value {
+    let mut item = json!({"kind": kind, "name": name, "hash": "h",
+        "required": false, "summary": summary});
+    if let Some(version) = version {
+        item["version"] = json!(version);
+    }
+    if let Some(diff) = diff {
+        item["diff"] = json!(diff);
+    }
+    item
+}
+
+/// Each row's spans at `width`: every span's text and style.
+fn spans(offer: &Offer, width: u16) -> Vec<Vec<(String, Style)>> {
+    offer
+        .rows(width)
+        .map(|(rows, _)| {
+            rows.iter()
+                .map(|row| {
+                    row.line
+                        .spans
+                        .iter()
+                        .map(|span| (span.content.to_string(), span.style))
+                        .collect()
+                })
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
+/// The dim style the install lines, the footer and the hunk `@@` lines
+/// use.
+fn dim() -> Style {
+    style(Role::Muted)
+}
+
+/// Bold on the default colour, as the top row's name and a chosen
+/// answer's label draw.
+fn bold() -> Style {
+    Style::new().add_modifier(Modifier::BOLD)
+}
+
+/// The cursor row's style.
+fn secondary() -> Style {
+    style(Role::Secondary)
+}
+
+/// The swapped views' top-row tint.
+fn surface() -> Style {
+    Style::new().bg(Role::Surface.color())
+}
+
+/// Bold on the `surface` tint, as the top row's name draws.
+fn bold_on_surface() -> Style {
+    Style::new()
+        .add_modifier(Modifier::BOLD)
+        .bg(Role::Surface.color())
+}
+
+/// Dim on the `surface` tint, as the top row's command and Esc draw.
+fn dim_on_surface() -> Style {
+    style(Role::Muted).bg(Role::Surface.color())
+}
+
+/// The production conversation renderer's buffer for an offer with `items`.
+fn buffer(items: Value, width: u16) -> Buffer {
+    let height = 60;
+    let mut app = App::new(PathBuf::from("/w"));
+    app.on_line(Line::Hub(contract::HubLine {
+        kind: "hub_hello".to_owned(),
+        ts: 0,
+        schema_version: contract::SCHEMA_VERSION,
+        payload: serde_json::Map::new(),
+    }));
+    app.attach(SessionId(SESSION.to_owned()));
+    app.set_size(width, height);
+    app.on_line(Line::Session(envelope(
+        "repository_code_offered",
+        json!({"request_id": "r_1", "items": items}),
+    )));
+    assert!(app.offer_open());
+
+    let area = Rect::new(0, 0, width, height);
+    let mut buf = Buffer::empty(area);
+    crate::view::render(&app, area, &mut buf, None);
+    buf
+}
+
+/// A buffer row's text, trailing spaces kept.
+fn row_text(buf: &Buffer, y: u16, width: u16) -> String {
+    (0..width)
+        .map(|x| buf[(x, y)].symbol().to_owned())
+        .collect::<String>()
+}
+
+/// The first rendered row containing `needle`.
+fn row_with(buf: &Buffer, needle: &str, width: u16) -> u16 {
+    (0..buf.area.height)
+        .find(|y| row_text(buf, *y, width).contains(needle))
+        .unwrap_or_else(|| panic!("row containing {needle:?} draws"))
+}
+
+/// A count as a screen coordinate.
+fn col(value: usize) -> u16 {
+    u16::try_from(value).unwrap_or(u16::MAX)
 }
 
 /// Presses `key` at 80 columns and `height` rows.
@@ -272,18 +398,18 @@ fn esc_f1_alt_a_and_ctrl_c_pass_and_the_rest_is_swallowed() {
 
 #[test]
 fn moving_down_scrolls_send_into_view() {
-    // Three items of four rows each, under three header rows, are taller
-    // than five rows.
+    // Three items of four rows each, under two header rows and over four
+    // footer rows, are taller than five rows.
     let mut offer = holding(3);
     for _ in 0..3 {
         press(&mut offer, &Key::Down, 5);
     }
     let send = texts(&offer, 80)
         .iter()
-        .position(|row| row.contains("Send"))
+        .position(|row| row.contains("Send ·"))
         .unwrap_or(0);
-    assert_eq!(send, 15);
-    assert_eq!(top(&offer), 11);
+    assert_eq!(send, 17);
+    assert_eq!(top(&offer), 13);
 }
 
 #[test]
@@ -293,12 +419,12 @@ fn moving_up_scrolls_back() {
         press(&mut offer, &Key::Down, 5);
     }
     press(&mut offer, &Key::Up, 5);
-    // The third item's header is row 11, still shown.
-    assert_eq!(top(&offer), 11);
+    // The third item's header is row 10, still shown.
+    assert_eq!(top(&offer), 10);
     press(&mut offer, &Key::Up, 5);
-    assert_eq!(top(&offer), 7);
+    assert_eq!(top(&offer), 6);
     press(&mut offer, &Key::Up, 5);
-    assert_eq!(top(&offer), 3);
+    assert_eq!(top(&offer), 2);
 }
 
 #[test]
@@ -310,7 +436,7 @@ fn moving_at_the_top_row_with_zero_height_moves_top_past_it() {
     assert_eq!(top(&offer), 3);
 
     press(&mut offer, &Key::Up, 0);
-    assert_eq!(top(&offer), 4);
+    assert_eq!(top(&offer), 2);
 }
 
 #[test]
@@ -322,7 +448,7 @@ fn moving_above_top_with_zero_height_moves_top_to_the_cursor() {
     assert_eq!(top(&offer), 4);
 
     press(&mut offer, &Key::Up, 0);
-    assert_eq!(top(&offer), 3);
+    assert_eq!(top(&offer), 2);
 }
 
 #[test]
@@ -434,20 +560,23 @@ fn the_rows_show_each_item_and_the_tui_files_line() {
     assert_eq!(
         texts(&offer, 40),
         [
-            "Repository code · 2 items              ✕",
-            TUI_FILES,
+            " Offer  repository code      Esc returns",
             "",
-            "› extension lint · 1.2.0 · required",
-            "    [approve]  skip   never",
-            "    extension lint",
-            "    runs: node",
+            "▸ Extension lint · 1.2.0",
+            "  extension lint",
+            "  runs: node",
+            "  the declaration changed",
             "    -old",
             "    +new",
+            "  (•) approve   ( ) skip for this session   ( ) never",
             "",
+            "  Hook fmt",
             "  hook fmt",
-            "     approve  [skip]  never",
-            "    hook fmt",
+            "  ( ) approve   (•) skip for this session   ( ) never",
             "",
+            TUI_FILES,
+            "",
+            HINT,
             "  Send · 1 approve, 1 skip, 0 never",
         ]
         .map(str::to_owned)
@@ -455,27 +584,49 @@ fn the_rows_show_each_item_and_the_tui_files_line() {
 }
 
 #[test]
-fn the_title_fills_the_header_before_the_close_target() {
+fn the_top_row_names_the_offer_with_its_command_dim() {
     let offer = holding(1);
-    let title = "Repository code · 1 item";
-    let title_width = u16::try_from(crate::format::width(title)).expect("short title fits u16");
-
-    let Some((rows, _)) = offer.rows(title_width + 1) else {
-        panic!("open");
-    };
-    let header = rows.first().expect("header row");
-    assert_eq!(header.line.to_string(), format!("{title}✕"));
-    assert_eq!(header.spots, [(title_width, title_width + 1, Spot::Close)]);
-
-    let Some((rows, _)) = offer.rows(title_width) else {
-        panic!("open");
-    };
-    let header = rows.first().expect("header row");
+    let pad = " ".repeat(80 - 6 - 17 - 11);
     assert_eq!(
-        header.line.to_string(),
-        format!("{}✕", title.strip_suffix('m').expect("title ends in m"))
+        spans(&offer, 80)[0],
+        [
+            (" ".to_owned(), surface()),
+            ("Offer".to_owned(), bold_on_surface()),
+            ("  repository code".to_owned(), dim_on_surface()),
+            (pad, surface()),
+            ("Esc returns".to_owned(), dim_on_surface()),
+        ]
     );
-    assert_eq!(header.spots, [(title_width - 1, title_width, Spot::Close)]);
+    // A click anywhere on the top row puts the offer aside.
+    let spots = offer
+        .rows(80)
+        .map(|(rows, _)| rows[0].spots.clone())
+        .unwrap_or_default();
+    assert_eq!(spots, [(0, 80, Spot::Close)]);
+}
+
+#[test]
+fn a_narrow_top_row_drops_esc_returns_first() {
+    let offer = holding(1);
+    // 6 + 17 + 1 + 11 is 35 columns: Esc with one space before it.
+    assert_eq!(texts(&offer, 35)[0], " Offer  repository code Esc returns");
+    assert_eq!(texts(&offer, 34)[0], " Offer  repository code");
+}
+
+#[test]
+fn a_narrow_top_row_pads_the_tint_to_the_width() {
+    let offer = holding(1);
+    let row = &spans(&offer, 34)[0];
+    let joined: String = row.iter().map(|(text, _)| text.as_str()).collect();
+    assert_eq!(crate::format::width(&joined), 34);
+    assert_eq!(row.last(), Some(&(" ".repeat(11), surface())));
+}
+
+#[test]
+fn a_tiny_top_row_truncates_the_command_then_the_name() {
+    let offer = holding(1);
+    assert_eq!(texts(&offer, 20)[0], " Offer  repository c");
+    assert_eq!(texts(&offer, 4)[0], " Off");
 }
 
 #[test]
@@ -499,12 +650,12 @@ fn a_narrow_view_drops_the_clipped_targets() {
     let Some((rows, _)) = offer.rows(12) else {
         panic!("open");
     };
-    // " approve " starts at 4 and is cut at 12; "[skip]" starts at 14.
+    // "  ( ) approve   (•) skip ...": approve covers 2..13, cut at 12.
     let choice = rows.get(4).map(|row| row.spots.clone()).unwrap_or_default();
     assert_eq!(
         choice,
         [(
-            4,
+            2,
             12,
             Spot::Choice {
                 item: 0,
@@ -516,6 +667,397 @@ fn a_narrow_view_drops_the_clipped_targets() {
         .first()
         .map(|row| row.line.to_string())
         .unwrap_or_default();
-    assert!(header.ends_with('✕'), "{header}");
+    assert_eq!(header, " Offer  repo");
     assert_eq!(crate::format::width(&header), 12);
+}
+
+#[test]
+fn a_changed_item_draws_its_hunk_as_changed_files_does() {
+    let offer = with_items(json!([item(
+        "extension",
+        "lint",
+        Some("1.0.0"),
+        "name: lint",
+        Some("--- a/index.ts\n+++ b/index.ts\n@@ -1 +1 @@\n-old()\n+new()\n context")
+    )]));
+    let rows = spans(&offer, 80);
+    // After the header and its install line: the marker, then the hunk.
+    let hunk = &rows[4..11];
+    let plain = || ("    ".to_owned(), Style::new());
+    assert_eq!(hunk[0], [("  the declaration changed".to_owned(), dim())]);
+    assert_eq!(
+        hunk[1],
+        [plain(), ("--- a/index.ts".to_owned(), style(Role::Keyword))]
+    );
+    assert_eq!(
+        hunk[2],
+        [plain(), ("+++ b/index.ts".to_owned(), style(Role::Keyword))]
+    );
+    assert_eq!(hunk[3], [plain(), ("@@ -1 +1 @@".to_owned(), dim())]);
+    assert_eq!(
+        hunk[4],
+        [plain(), ("-old()".to_owned(), style(Role::Removed))]
+    );
+    assert_eq!(
+        hunk[5],
+        [plain(), ("+new()".to_owned(), style(Role::Added))]
+    );
+    assert_eq!(hunk[6], [plain(), (" context".to_owned(), Style::new())]);
+}
+
+#[test]
+fn the_choices_row_marks_the_chosen_answer() {
+    // Every item starts at skip.
+    let offer = holding(1);
+    assert_eq!(
+        spans(&offer, 80)[4],
+        [
+            ("  ".to_owned(), Style::new()),
+            ("( ) ".to_owned(), dim()),
+            ("approve".to_owned(), Style::new()),
+            ("   ".to_owned(), Style::new()),
+            ("(•) ".to_owned(), secondary()),
+            ("skip for this session".to_owned(), bold()),
+            ("   ".to_owned(), Style::new()),
+            ("( ) ".to_owned(), dim()),
+            ("never".to_owned(), Style::new()),
+        ]
+    );
+}
+
+#[test]
+fn approve_chosen_marks_approve() {
+    let mut offer = holding(1);
+    offer.on_edit(&Edit::Left);
+    assert_eq!(
+        spans(&offer, 80)[4],
+        [
+            ("  ".to_owned(), Style::new()),
+            ("(•) ".to_owned(), secondary()),
+            ("approve".to_owned(), bold()),
+            ("   ".to_owned(), Style::new()),
+            ("( ) ".to_owned(), dim()),
+            ("skip for this session".to_owned(), Style::new()),
+            ("   ".to_owned(), Style::new()),
+            ("( ) ".to_owned(), dim()),
+            ("never".to_owned(), Style::new()),
+        ]
+    );
+}
+
+#[test]
+fn never_chosen_marks_never() {
+    let mut offer = holding(1);
+    offer.on_edit(&Edit::Right);
+    offer.on_edit(&Edit::Right);
+    let row = &spans(&offer, 80)[4];
+    assert_eq!(row[7], ("(•) ".to_owned(), secondary()));
+    assert_eq!(row[8], ("never".to_owned(), bold()));
+    assert_eq!(row[1], ("( ) ".to_owned(), dim()));
+    assert_eq!(row[2], ("approve".to_owned(), Style::new()));
+}
+
+#[test]
+fn each_choice_keeps_its_click_target() {
+    let offer = holding(1);
+    let spots = offer
+        .rows(80)
+        .map(|(rows, _)| rows[4].spots.clone())
+        .unwrap_or_default();
+    let choice = |decision| Spot::Choice { item: 0, decision };
+    assert_eq!(
+        spots,
+        [
+            (2, 13, choice(OfferDecision::Approve)),
+            (16, 41, choice(OfferDecision::Skip)),
+            (44, 53, choice(OfferDecision::Never)),
+        ]
+    );
+}
+
+#[test]
+fn the_chosen_item_marks_its_header_in_secondary() {
+    let offer = holding(2);
+    let rows = spans(&offer, 80);
+    assert_eq!(
+        rows[2],
+        [
+            ("▸ ".to_owned(), secondary()),
+            ("MCP server a".to_owned(), secondary()),
+        ]
+    );
+    assert_eq!(
+        rows[6],
+        [
+            ("  ".to_owned(), Style::new()),
+            ("MCP server b".to_owned(), Style::new()),
+        ]
+    );
+}
+
+#[test]
+fn moving_down_moves_the_mark_and_the_secondary_row() {
+    let mut offer = holding(2);
+    press(&mut offer, &Key::Down, 40);
+    let rows = spans(&offer, 80);
+    assert_eq!(rows[2][0], ("  ".to_owned(), Style::new()));
+    assert_eq!(rows[2][1].1, Style::new());
+    assert_eq!(rows[6][0], ("▸ ".to_owned(), secondary()));
+    assert_eq!(rows[6][1].1, secondary());
+}
+
+#[test]
+fn an_extension_header_carries_its_version_verbatim() {
+    let offer = with_items(json!([item(
+        "extension",
+        "notes",
+        Some("v0.3"),
+        "name: notes",
+        None
+    )]));
+    assert_eq!(texts(&offer, 80)[2], "▸ Extension notes · v0.3");
+}
+
+#[test]
+fn an_extension_without_a_version_names_kind_and_name() {
+    let offer = with_items(json!([item("extension", "lint", None, "name: lint", None)]));
+    assert_eq!(texts(&offer, 80)[2], "▸ Extension lint");
+}
+
+#[test]
+fn a_hook_header_carries_its_declaration_path() {
+    let offer = with_items(json!([item(
+        "hook",
+        "tidy",
+        None,
+        "Hook: tidy\ndeclared in: .fiber/hooks.json\nruns: scripts/tidy.sh",
+        None
+    )]));
+    assert_eq!(
+        texts(&offer, 80)[2],
+        "▸ Hook tidy · declared in .fiber/hooks.json"
+    );
+}
+
+#[test]
+fn an_item_without_a_declaration_path_names_kind_and_name() {
+    let offer = with_items(json!([item(
+        "mcp_server",
+        "db",
+        None,
+        "MCP server: db",
+        None
+    )]));
+    assert_eq!(texts(&offer, 80)[2], "▸ MCP server db");
+}
+
+#[test]
+fn a_bare_declared_in_line_names_kind_and_name() {
+    let offer = with_items(json!([item(
+        "mcp_server",
+        "db",
+        None,
+        "MCP server: db\ndeclared in:",
+        None
+    )]));
+    assert_eq!(texts(&offer, 80)[2], "▸ MCP server db");
+}
+
+#[test]
+fn install_lines_are_dim_and_indented() {
+    let offer = with_items(json!([item(
+        "mcp_server",
+        "db",
+        None,
+        "MCP server: db\ndeclared in: .fiber/mcp.json",
+        None
+    )]));
+    let rows = spans(&offer, 80);
+    assert_eq!(rows[3], [("  MCP server: db".to_owned(), dim())]);
+    assert_eq!(
+        rows[4],
+        [("  declared in: .fiber/mcp.json".to_owned(), dim())]
+    );
+}
+
+#[test]
+fn the_footer_is_the_tui_files_sentence_then_the_hint_both_dim() {
+    let offer = holding(1);
+    let rows = spans(&offer, 80);
+    assert_eq!(rows[6], [(TUI_FILES.to_owned(), dim())]);
+    assert!(rows[7].is_empty());
+    assert_eq!(rows[8], [(HINT.to_owned(), dim())]);
+}
+
+#[test]
+fn the_send_row_marks_the_cursor_in_secondary() {
+    let mut offer = holding(1);
+    let last = spans(&offer, 80).len().saturating_sub(1);
+    assert_eq!(
+        spans(&offer, 80)[last],
+        [
+            (" ".to_owned(), Style::new()),
+            (
+                " Send · 0 approve, 1 skip, 0 never".to_owned(),
+                Style::new()
+            ),
+        ]
+    );
+    press(&mut offer, &Key::Down, 40);
+    assert_eq!(
+        spans(&offer, 80)[last],
+        [
+            ("▸".to_owned(), secondary()),
+            (" Send · 0 approve, 1 skip, 0 never".to_owned(), secondary()),
+        ]
+    );
+}
+
+#[test]
+fn the_header_row_carries_the_surface_tint_across_its_width() {
+    let buf = buffer(
+        json!([{"kind": "mcp_server", "name": "a", "hash": "h", "required": false,
+            "summary": "MCP server: a"}]),
+        80,
+    );
+    let y = row_with(&buf, "Offer  repository code", 80);
+    assert_eq!(
+        row_text(&buf, y, 80),
+        format!(
+            " Offer  repository code{}Esc returns",
+            " ".repeat(80 - 6 - 17 - 11)
+        )
+    );
+    // The tint runs the whole row, padding included.
+    for x in 0..80u16 {
+        assert_eq!(buf[(x, y)].bg, Role::Surface.color(), "no tint at {x}");
+    }
+    // The name is bold from column 1; the command follows it, dim.
+    for (i, ch) in "Offer".chars().enumerate() {
+        let cell = &buf[(col(1 + i), y)];
+        assert_eq!(cell.symbol(), ch.to_string().as_str());
+        assert!(cell.modifier.contains(Modifier::BOLD), "not bold at {i}");
+    }
+    for (i, ch) in "  repository code".chars().enumerate() {
+        let cell = &buf[(col(6 + i), y)];
+        assert_eq!(cell.symbol(), ch.to_string().as_str());
+        assert_eq!(cell.fg, Role::Muted.color(), "not dim at {i}");
+    }
+    // "Esc returns" ends the row, dim.
+    let end = row_text(&buf, y, 80);
+    let at = col(end.find("Esc returns").expect("Esc draws"));
+    for (i, ch) in "Esc returns".chars().enumerate() {
+        let cell = &buf[(at.saturating_add(col(i)), y)];
+        assert_eq!(cell.symbol(), ch.to_string().as_str());
+        assert_eq!(cell.fg, Role::Muted.color(), "Esc not dim at {i}");
+    }
+}
+
+#[test]
+fn the_selected_item_row_draws_in_secondary_on_the_buffer() {
+    let buf = buffer(
+        json!([
+            {"kind": "mcp_server", "name": "a", "hash": "h", "required": false,
+                "summary": "MCP server: a"},
+            {"kind": "mcp_server", "name": "b", "hash": "h", "required": false,
+                "summary": "MCP server: b"}
+        ]),
+        80,
+    );
+    let selected = row_with(&buf, "▸ MCP server a", 80);
+    assert!(row_text(&buf, selected, 80).starts_with("▸ MCP server a"));
+    for x in 0..14u16 {
+        assert_eq!(
+            buf[(x, selected)].fg,
+            Role::Secondary.color(),
+            "not secondary at {x}"
+        );
+    }
+    let unselected = row_with(&buf, "  MCP server b", 80);
+    assert!(row_text(&buf, unselected, 80).starts_with("  MCP server b"));
+    for x in 0..14u16 {
+        assert_ne!(
+            buf[(x, unselected)].fg,
+            Role::Secondary.color(),
+            "unselected row in secondary at {x}"
+        );
+    }
+}
+
+#[test]
+fn the_choices_row_marks_the_chosen_answer_on_the_buffer() {
+    let buf = buffer(
+        json!([{"kind": "mcp_server", "name": "a", "hash": "h", "required": false,
+            "summary": "MCP server: a"}]),
+        80,
+    );
+    let y = row_with(&buf, "(•) skip for this session", 80);
+    let row = row_text(&buf, y, 80);
+    assert!(row.contains("(•) skip for this session"), "{row}");
+    let mark = col(row.find("(•)").expect("chosen mark draws"));
+    for x in mark..mark.saturating_add(3) {
+        assert_eq!(
+            buf[(x, y)].fg,
+            Role::Secondary.color(),
+            "mark not secondary at {x}"
+        );
+    }
+    let label = col(row.find("skip for this session").expect("label draws"));
+    assert!(
+        buf[(label, y)].modifier.contains(Modifier::BOLD),
+        "chosen label not bold"
+    );
+    let unchosen = col(row.find("( ) approve").expect("unchosen mark draws"));
+    for x in unchosen..unchosen.saturating_add(3) {
+        assert_eq!(
+            buf[(x, y)].fg,
+            Role::Muted.color(),
+            "unchosen mark not dim at {x}"
+        );
+    }
+    assert!(
+        !buf[(unchosen.saturating_add(4), y)]
+            .modifier
+            .contains(Modifier::BOLD),
+        "unchosen label bold"
+    );
+}
+
+#[test]
+fn the_diff_colours_draw_on_the_buffer() {
+    let buf = buffer(
+        json!([item(
+            "extension",
+            "lint",
+            Some("1.0.0"),
+            "name: lint",
+            Some("@@ -1 +1 @@\n-old()\n+new()")
+        )]),
+        80,
+    );
+    let marker = row_with(&buf, "the declaration changed", 80);
+    let cell = &buf[(2, marker)];
+    assert_eq!(cell.fg, Role::Muted.color(), "marker not dim");
+    let hunk = row_with(&buf, "@@ -1 +1 @@", 80);
+    assert!(row_text(&buf, hunk, 80).contains("@@ -1 +1 @@"));
+    assert_eq!(buf[(4, hunk)].fg, Role::Muted.color(), "@@ not dim");
+    let removed = row_with(&buf, "-old()", 80);
+    assert!(row_text(&buf, removed, 80).contains("-old()"));
+    assert_eq!(buf[(4, removed)].fg, Role::Removed.color(), "- not removed");
+    let added = row_with(&buf, "+new()", 80);
+    assert!(row_text(&buf, added, 80).contains("+new()"));
+    assert_eq!(buf[(4, added)].fg, Role::Added.color(), "+ not added");
+}
+
+#[test]
+fn the_footer_rows_draw_dim_on_the_buffer() {
+    let buf = buffer(
+        json!([{"kind": "mcp_server", "name": "a", "hash": "h", "required": false,
+            "summary": "MCP server: a"}]),
+        80,
+    );
+    let files = row_with(&buf, TUI_FILES, 80);
+    assert_eq!(buf[(0, files)].fg, Role::Muted.color(), "files not dim");
+    let hint = row_with(&buf, HINT, 80);
+    assert_eq!(buf[(0, hint)].fg, Role::Muted.color(), "hint not dim");
 }
