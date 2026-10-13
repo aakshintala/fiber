@@ -21,7 +21,7 @@ use extensions::{Providers, SessionExtensions};
 use serde::Serialize;
 
 use crate::table::pad;
-use crate::{failed, project_of, with_dirs};
+use crate::{failed, project_of, with_dirs, write_line};
 
 /// Starts the detached refresh of stale model lists: the running binary
 /// re-run as its hidden refresh child: its own process group, nothing on
@@ -245,8 +245,7 @@ fn run(
         for row in &rows {
             let line = serde_json::to_string(row)
                 .map_err(|e| failed(ErrorCode::IoFailed, format!("a model row: {e}")))?;
-            writeln!(out, "{line}")
-                .map_err(|e| failed(ErrorCode::IoFailed, format!("standard output: {e}")))?;
+            write_line(out, &line)?;
         }
         return Ok(());
     }
@@ -255,8 +254,7 @@ fn run(
         return Ok(());
     }
     for line in &text_lines(&rows) {
-        writeln!(out, "{line}")
-            .map_err(|e| failed(ErrorCode::IoFailed, format!("standard output: {e}")))?;
+        write_line(out, line)?;
     }
     Ok(())
 }

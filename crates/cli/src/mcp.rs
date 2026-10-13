@@ -23,7 +23,7 @@ use serde_json::{Map, Value};
 
 use crate::approve::say;
 use crate::login::{KeyReader, NoEcho, Plain};
-use crate::{failed, project_of, usage, with_dirs};
+use crate::{failed, project_of, usage, with_dirs, write_line};
 
 /// A server's declaration as the layer's file holds it. Its `Debug`
 /// prints names only, never values: a url prints redacted (never its
@@ -671,7 +671,7 @@ pub(crate) fn run_list(
         ]);
     }
     for line in crate::table::pad(&table) {
-        say(out, &format!("{line}\n"));
+        write_line(out, &line).unwrap_or(());
     }
     Ok(())
 }

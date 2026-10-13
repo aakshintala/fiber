@@ -19,7 +19,7 @@ use contract::shapes::Failure;
 use serde_json::Value;
 
 use crate::hub_unit::{Manager, Service};
-use crate::{failed, finish};
+use crate::{failed, finish, write_line};
 
 /// How often install asks launchd whether a booted-out service is gone.
 const BOOTOUT_POLL: Duration = Duration::from_millis(100);
@@ -174,7 +174,7 @@ pub(crate) fn install(
         };
         return Err(failed(error.code, message));
     }
-    say(
+    write_line(
         out,
         &format!(
             "Installed the hub's login service: {}",
@@ -182,7 +182,7 @@ pub(crate) fn install(
         ),
     )?;
     if hub_answers && !loaded {
-        say(
+        write_line(
             out,
             "A hub a client started is running; the installed hub takes over once it exits, \
              when no client has been connected for hub.idle_exit_ms.",
@@ -294,7 +294,7 @@ pub(crate) fn uninstall(
             }
         }
     };
-    say(
+    write_line(
         out,
         if removed {
             "Removed the hub's login service."
@@ -446,11 +446,6 @@ fn restore_or_rerun(unit: &Path, previous: Option<&[u8]>, error: Failure) -> Fai
         Ok(()) => format!("{} {RERUN}", error.message),
     };
     failed(error.code, message)
-}
-
-fn say(out: &mut dyn Write, line: &str) -> Result<(), Failure> {
-    writeln!(out, "{line}")
-        .map_err(|e| failed(ErrorCode::IoFailed, format!("standard output: {e}")))
 }
 
 #[cfg(test)]

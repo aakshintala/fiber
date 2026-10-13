@@ -11,7 +11,7 @@ use contract::clock::Clock;
 use contract::shapes::Failure;
 use extensions::{Index, Store};
 
-use crate::{failed, project_of, usage, with_dirs};
+use crate::{failed, project_of, usage, with_dirs, write_line};
 
 /// What the prompt asks.
 const PROMPT: &str = "approve all? [y/N]";
@@ -74,17 +74,18 @@ fn run(
         return Ok(());
     }
     for p in &pending {
-        say(
+        write_line(
             out,
             &format!(
-                "{} {} ({})\n",
+                "{} {} ({})",
                 extensions::kind_name(p.item.kind),
                 p.item.name,
                 p.item.path
             ),
-        );
+        )
+        .unwrap_or(());
         for line in p.offered.summary.lines() {
-            say(out, &format!("  {line}\n"));
+            write_line(out, &format!("  {line}")).unwrap_or(());
         }
         if let Some(diff) = &p.offered.diff {
             say(out, diff);

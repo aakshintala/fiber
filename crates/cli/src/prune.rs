@@ -18,7 +18,7 @@ mod worktrees;
 
 use crate::approve::{confirmed, say};
 use crate::sessions::Ask;
-use crate::{failed, usage, with_dirs};
+use crate::{failed, usage, with_dirs, write_line};
 
 pub(crate) use diagnostics::{OldFile, old_diagnostics};
 
@@ -108,8 +108,7 @@ fn prune_run(
     let has_diagnostics = !logs.is_empty() || !crashes.is_empty();
     if !has_sessions && !has_worktrees && !has_diagnostics {
         print_rows(out, &selected.rows, &planned.rows, &logs, &crashes, now)?;
-        writeln!(out, "freed {}", format_size(0))
-            .map_err(|e| failed(ErrorCode::IoFailed, format!("standard output: {e}")))?;
+        write_line(out, &format!("freed {}", format_size(0)))?;
         return Ok(());
     }
     let would_free = session_listed_bytes(&selected.rows)
@@ -118,8 +117,7 @@ fn prune_run(
         + diag_bytes(&crashes);
     if args.dry_run {
         print_rows(out, &selected.rows, &planned.rows, &logs, &crashes, now)?;
-        writeln!(out, "would free {}", format_size(would_free))
-            .map_err(|e| failed(ErrorCode::IoFailed, format!("standard output: {e}")))?;
+        write_line(out, &format!("would free {}", format_size(would_free)))?;
         return Ok(());
     }
     print_rows(out, &selected.rows, &planned.rows, &logs, &crashes, now)?;
@@ -207,18 +205,17 @@ fn print_rows(
     crashes: &[OldFile],
     now: SystemTime,
 ) -> Result<(), Failure> {
-    let failed = |e: io::Error| failed(ErrorCode::IoFailed, format!("standard output: {e}"));
     for row in sessions {
-        writeln!(out, "{}", session_line(row)).map_err(failed)?;
+        write_line(out, &session_line(row))?;
     }
     for row in worktrees {
-        writeln!(out, "{}", worktrees::worktree_line(row)).map_err(failed)?;
+        write_line(out, &worktrees::worktree_line(row))?;
     }
     for file in logs {
-        writeln!(out, "{}", diag_line("log", &file.path, file.bytes, now)).map_err(failed)?;
+        write_line(out, &diag_line("log", &file.path, file.bytes, now))?;
     }
     for file in crashes {
-        writeln!(out, "{}", diag_line("crash", &file.path, file.bytes, now)).map_err(failed)?;
+        write_line(out, &diag_line("crash", &file.path, file.bytes, now))?;
     }
     Ok(())
 }
@@ -491,8 +488,7 @@ fn finish(
     diag_total: usize,
     worktree_total: usize,
 ) -> Result<(), Failure> {
-    writeln!(out, "freed {}", format_size(freed))
-        .map_err(|e| failed(ErrorCode::IoFailed, format!("standard output: {e}")))?;
+    write_line(out, &format!("freed {}", format_size(freed)))?;
     if failures.is_empty() {
         return Ok(());
     }

@@ -12,7 +12,7 @@ use contract::{ErrorCode, HubLine, SessionId};
 use serde_json::{Value, json};
 
 use crate::approve::{confirmed, say};
-use crate::{failed, project_of, usage, with_dirs};
+use crate::{failed, project_of, usage, with_dirs, write_line};
 
 /// What the delete prompt asks.
 const DELETE_PROMPT: &str = "delete? [y/N]";
@@ -54,8 +54,7 @@ fn run(
         None => workspace.join(&id.0),
     };
     log::export(&sessions.join(&id.0), &target).map_err(|e| failed(e.code(), e))?;
-    writeln!(out, "{}", target.display())
-        .map_err(|e| failed(ErrorCode::IoFailed, format!("standard output: {e}")))?;
+    write_line(out, &target.display().to_string())?;
     Ok(target)
 }
 
@@ -210,8 +209,7 @@ pub(crate) fn request(
 
 fn print_ids(out: &mut dyn Write, ids: &[SessionId]) -> Result<(), Failure> {
     for id in ids {
-        writeln!(out, "{}", id.0)
-            .map_err(|e| failed(ErrorCode::IoFailed, format!("standard output: {e}")))?;
+        write_line(out, &id.0)?;
     }
     Ok(())
 }

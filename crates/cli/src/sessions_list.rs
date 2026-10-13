@@ -14,7 +14,7 @@ use serde_json::Value;
 
 use crate::sessions::request;
 use crate::table::pad;
-use crate::{failed, finish};
+use crate::{failed, finish, write_line};
 
 /// The `id` of the one command `fiber sessions` sends.
 const LIST_ID: &str = "c_sessions";
@@ -101,8 +101,7 @@ fn run(
         text_lines(&rows(answer))
     };
     for line in &lines {
-        writeln!(out, "{line}")
-            .map_err(|e| failed(ErrorCode::IoFailed, format!("standard output: {e}")))?;
+        write_line(out, line)?;
     }
     Ok(())
 }

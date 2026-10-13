@@ -1,5 +1,5 @@
 //! Paired device tables and revocation (`docs/invocation.md`, "Remote clients").
-use crate::{failed, finish, sessions::request, sessions_search::utc, table::pad};
+use crate::{failed, finish, sessions::request, sessions_search::utc, table::pad, write_line};
 use contract::{ErrorCode, shapes::Failure};
 use serde_json::{Map, Value};
 use std::io::{self, BufReader, Write};
@@ -60,8 +60,7 @@ fn list(
         ]);
     }
     for row in pad(&rows) {
-        writeln!(out, "{row}")
-            .map_err(|e| failed(ErrorCode::IoFailed, format!("standard output: {e}")))?;
+        write_line(out, &row)?;
     }
     Ok(())
 }
@@ -78,8 +77,7 @@ fn revoke(
         "revoke",
         Map::from_iter([("device".to_owned(), Value::from(device))]),
     )?;
-    writeln!(out, "{device}")
-        .map_err(|e| failed(ErrorCode::IoFailed, format!("standard output: {e}")))
+    write_line(out, device)
 }
 #[cfg(test)]
 #[path = "hub_token_tests.rs"]

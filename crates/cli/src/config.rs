@@ -14,7 +14,7 @@ use contract::shapes::Failure;
 use extensions::Providers;
 use serde_json::Value;
 
-use crate::{failed, project_of, with_dirs};
+use crate::{failed, project_of, with_dirs, write_line};
 
 /// Prints each notice as one line on standard error: exactly the notice's
 /// message, nothing else (`docs/configuration.md`, "When Fiber reads
@@ -59,16 +59,14 @@ fn run_get(
                 .map_err(|e| failed(ErrorCode::IoFailed, format!("standard error: {e}")))?;
             return Ok(());
         }
-        writeln!(out, "{notes}")
-            .map_err(|e| failed(ErrorCode::IoFailed, format!("standard output: {e}")))?;
+        write_line(out, &notes)?;
         return Ok(());
     }
     match config.get(key, None) {
         Some((value, source)) => {
             let text = serde_json::to_string(&value)
                 .map_err(|e| failed(ErrorCode::IoFailed, format!("a value for `{key}`: {e}")))?;
-            writeln!(out, "{text} from {source}")
-                .map_err(|e| failed(ErrorCode::IoFailed, format!("standard output: {e}")))?;
+            write_line(out, &format!("{text} from {source}"))?;
             Ok(())
         }
         None if !config::known_key(key) => Err(crate::usage(format!(

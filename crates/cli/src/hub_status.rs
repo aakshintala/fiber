@@ -19,7 +19,7 @@ use serde_json::Value;
 
 use crate::hub_service::manager;
 use crate::hub_unit::{Manager, name, unit_path};
-use crate::{failed, finish};
+use crate::{failed, finish, write_line};
 
 /// The `id` of the one command `fiber hub status` sends.
 const STATUS_ID: &str = "c_status";
@@ -58,8 +58,7 @@ pub fn hub_status(json: bool, clock: &dyn Clock) -> i32 {
             } else {
                 render_text(&status)
             };
-            writeln!(io::stdout(), "{text}")
-                .map_err(|e| failed(ErrorCode::IoFailed, format!("standard output: {e}")))
+            write_line(&mut io::stdout(), &text)
         });
     finish(ran)
 }

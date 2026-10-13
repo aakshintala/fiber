@@ -118,6 +118,14 @@ fn finish_code(result: Result<i32, Failure>) -> i32 {
     }
 }
 
+/// Writes one line to `out`: the line plus one line feed. A write failure
+/// is the shared standard-output failure, for the caller to propagate or
+/// ignore as it already did.
+fn write_line(out: &mut dyn Write, line: &str) -> Result<(), Failure> {
+    writeln!(out, "{line}")
+        .map_err(|e| failed(ErrorCode::IoFailed, format!("standard output: {e}")))
+}
+
 /// Runs `run` with Fiber home and the current directory, mapping any
 /// failure to its exit code.
 fn with_dirs(run: impl FnOnce(&Path, &Path) -> Result<(), Failure>) -> i32 {

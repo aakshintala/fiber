@@ -13,7 +13,7 @@ use contract::clock::Clock;
 use contract::shapes::Failure;
 use extensions::{Origin, Provenance, Request};
 
-use crate::{failed, finish, finish_code};
+use crate::{failed, finish, finish_code, write_line};
 
 mod approve;
 
@@ -244,7 +244,7 @@ fn remove(home: &Path, typed: &str, clock: &dyn Clock, io: Io<'_>) -> Result<i32
 fn list(home: &Path, clock: &dyn Clock, out: &mut dyn Write) -> Result<(), Failure> {
     let listing = extensions::list(home, clock).map_err(|e| failed(e.code(), e))?;
     for hit in &listing.damaged {
-        writeln!(out, "{hit}").unwrap_or(());
+        write_line(out, &format!("{hit}")).unwrap_or(());
     }
     for i in &listing.installed {
         let commit = match &i.provenance {
@@ -252,7 +252,7 @@ fn list(home: &Path, clock: &dyn Clock, out: &mut dyn Write) -> Result<(), Failu
             Provenance::Path(_) => "local",
         };
         // A closed stdout leaves nobody to tell.
-        writeln!(out, "{} {} {commit}", i.name, i.version).unwrap_or(());
+        write_line(out, &format!("{} {} {commit}", i.name, i.version)).unwrap_or(());
     }
     Ok(())
 }

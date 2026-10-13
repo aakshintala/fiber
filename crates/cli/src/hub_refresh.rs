@@ -10,7 +10,7 @@ use contract::shapes::Failure;
 use serde_json::{Map, Value};
 
 use crate::sessions::request;
-use crate::{failed, finish};
+use crate::{failed, finish, write_line};
 
 /// The `id` of the `refresh` command `fiber hub refresh` sends.
 const REFRESH_ID: &str = "c_refresh";
@@ -58,8 +58,7 @@ pub(crate) fn run(
             "the hub's answer to `status` has no variables",
         ));
     };
-    writeln!(out, "{line}")
-        .map_err(|e| failed(ErrorCode::IoFailed, format!("standard output: {e}")))?;
+    write_line(out, line)?;
     Ok(())
 }
 
