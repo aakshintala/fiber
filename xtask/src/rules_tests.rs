@@ -1005,6 +1005,21 @@ fn source_tokens_skip_escaped_and_unicode_character_literals() {
             "{literal}"
         );
     }
+
+    let malformed_escape = r###"fn f() { let c = '\uX}'; let _ = dir.join("sessions"); }"###;
+    assert!(
+        source_tokens(malformed_escape)
+            .iter()
+            .any(|token| { matches!(&token.kind, SourceKind::Ident(value) if value == "uX") })
+    );
+    assert_eq!(
+        session_paths(&[source_file(
+            "hub",
+            "src/malformed_char.rs",
+            malformed_escape
+        )]),
+        ["crates/hub/src/malformed_char.rs:1: session path outside log"]
+    );
 }
 
 #[test]
@@ -1028,6 +1043,16 @@ fn cfg_test_detection_distinguishes_other_attributes_and_root_attributes() {
         "#![cfg(test)]\nfn only_test() { let _ = dir.join(\"sessions\"); }\n",
     )];
     assert!(session_paths(&root_test).is_empty());
+
+    let inner_test = [source_file(
+        "hub",
+        "src/inner_test.rs",
+        "#[cfg(test)]\nfn only_test() {}\nfn production() { let _ = dir.join(\"sessions\"); }\n",
+    )];
+    assert_eq!(
+        session_paths(&inner_test),
+        ["crates/hub/src/inner_test.rs:3: session path outside log"]
+    );
 }
 
 #[test]
@@ -1045,7 +1070,7 @@ fn cfg_test_struct_array_fields_do_not_hide_following_production_paths() {
     let files = [source_file(
         "hub",
         "src/array_field.rs",
-        "struct Fake {\n    #[cfg(test)]\n    bytes: [u8; 2],\n}\nfn production() { let _ = dir.join(\"sessions\"); }\n",
+        "struct Fake {\n    #[cfg(test)]\n    bytes: [u8; 2, dir.join(\"sessions\")],\n}\nfn production() { let _ = dir.join(\"sessions\"); }\n",
     )];
     assert_eq!(
         session_paths(&files),
@@ -1056,12 +1081,12 @@ fn cfg_test_struct_array_fields_do_not_hide_following_production_paths() {
 #[test]
 fn test_only_files_shared_with_a_production_module_edge_remain_production() {
     let files = [
+        source_file("hub", "src/lib.rs", "#[cfg(test)] mod fake;\nmod shared;\n"),
         source_file(
             "hub",
-            "src/lib.rs",
-            "#[cfg(test)] mod fake;\nmod shared;\n",
+            "src/fake.rs",
+            "#[path = \"shared.rs\"] mod shared;\n",
         ),
-        source_file("hub", "src/fake.rs", "#[path = \"shared.rs\"] mod shared;\n"),
         source_file(
             "hub",
             "src/shared.rs",
@@ -1087,21 +1112,27 @@ fn home_sites_keep_variable_join_context_and_name_token_line() {
         "fn helper() {}\nfn read_one(home: &Path, name: &str) {\n    let path = home.join(\n        name\n    ).join(\"projects\");\n}\n",
     );
     let sites = home_sites(&file);
-    assert!(sites.iter().any(|site| {
-        site.operation == "join:projects"
-            && site.context == "fn read_one|root:home/name"
-            && site.line == 5
-    }), "{sites:?}");
-    assert!(sites.iter().any(|site| {
-        site.operation == "join:prompt-name"
-            && site.context == "fn read_one|root:home"
-            && site.line == 4
-    }), "{sites:?}");
+    assert!(
+        sites.iter().any(|site| {
+            site.operation == "join:projects"
+                && site.context == "fn read_one|root:home/name"
+                && site.line == 5
+        }),
+        "{sites:?}"
+    );
+    assert!(
+        sites.iter().any(|site| {
+            site.operation == "join:prompt-name"
+                && site.context == "fn read_one|root:home"
+                && site.line == 4
+        }),
+        "{sites:?}"
+    );
 
     let near_function_start = source_file(
         "main",
         "src/prompt_start.rs",
-        "fn preceding() {}\nfn read_one(home: &Path, name: &str) {\n    let path = home.join(name);\n}\n",
+        "fn preceding() {}\nfn read_one(home: &Path, name: &str) {\n    home.join(name);\n}\n",
     );
     assert!(home_sites(&near_function_start).iter().any(|site| {
         site.operation == "join:prompt-name"
@@ -1127,7 +1158,7 @@ fn loop_tool_gate_ignores_owned_name_syntax_outside_tools_and_jobs() {
     let loop_source = source_file(
         "loop",
         "src/new.rs",
-        "fn unrelated() { let name = String::from(\"not-a-tool-definition\"); }\n",
+        "fn unrelated() { let tool = Tool { name: String::from(\"custom\") }; }\n",
     );
     assert!(loop_tool_names(&[tools, loop_source]).is_empty());
 }
@@ -1148,6 +1179,11 @@ fn individual_allowances_are_consumed_once_and_match_path_context_and_operation(
     };
     assert_eq!(allowance.ticket, "#1725");
     assert!(consume_allowance(&[allowance], &site));
+    let unticketed = SourceAllowance {
+        ticket: "",
+        ..allowance
+    };
+    assert!(!consume_allowance(&[unticketed], &site));
     let mut zero_sites = std::iter::empty();
     let mut unused = vec![allowance];
     assert!(!consume_next_allowance(&mut unused, &mut zero_sites));
@@ -1156,31 +1192,25 @@ fn individual_allowances_are_consumed_once_and_match_path_context_and_operation(
     let mut remaining = vec![allowance];
     assert!(consume_next_allowance(&mut remaining, &mut two_sites));
     assert!(!consume_next_allowance(&mut remaining, &mut two_sites));
-    assert!(
-        !consume_allowance(
-            &[allowance],
-            &SourceSite {
-                path: "crates/hub/src/other.rs".to_owned(),
-                ..site.clone()
-            }
-        )
-    );
-    assert!(
-        !consume_allowance(
-            &[allowance],
-            &SourceSite {
-                context: "fn other".to_owned(),
-                ..site.clone()
-            }
-        )
-    );
-    assert!(
-        !consume_allowance(
-            &[allowance],
-            &SourceSite {
-                operation: "join:sessions".to_owned(),
-                ..site
-            }
-        )
-    );
+    assert!(!consume_allowance(
+        &[allowance],
+        &SourceSite {
+            path: "crates/hub/src/other.rs".to_owned(),
+            ..site.clone()
+        }
+    ));
+    assert!(!consume_allowance(
+        &[allowance],
+        &SourceSite {
+            context: "fn other".to_owned(),
+            ..site.clone()
+        }
+    ));
+    assert!(!consume_allowance(
+        &[allowance],
+        &SourceSite {
+            operation: "join:sessions".to_owned(),
+            ..site
+        }
+    ));
 }

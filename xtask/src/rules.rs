@@ -578,167 +578,203 @@ const HOME_COMPONENTS: &[&str] = &[
     "skills",
 ];
 
+struct SourceCursor<'a> {
+    source: &'a str,
+    chars: std::iter::Peekable<std::str::CharIndices<'a>>,
+    line: usize,
+}
+
+impl<'a> SourceCursor<'a> {
+    fn new(source: &'a str) -> Self {
+        Self {
+            source,
+            chars: source.char_indices().peekable(),
+            line: 1,
+        }
+    }
+
+    fn peek(&mut self) -> Option<(usize, char)> {
+        self.chars.peek().copied()
+    }
+
+    fn offset(&mut self) -> usize {
+        self.peek().map_or(self.source.len(), |(offset, _)| offset)
+    }
+
+    fn starts_with(&mut self, text: &str) -> bool {
+        self.source
+            .get(self.offset()..)
+            .is_some_and(|remaining| remaining.starts_with(text))
+    }
+
+    fn next(&mut self) -> Option<(usize, char)> {
+        let next = self.chars.next();
+        if next.is_some_and(|(_, character)| character == '\n') {
+            self.line += 1;
+        }
+        next
+    }
+
+    fn consume_to(&mut self, end: usize) {
+        while self.offset() < end {
+            if self.next().is_none() {
+                break;
+            }
+        }
+    }
+
+    fn consume(&mut self, text: &str) {
+        for expected in text.chars() {
+            let Some((_, actual)) = self.next() else {
+                return;
+            };
+            debug_assert_eq!(actual, expected);
+        }
+    }
+}
+
 /// Rust tokens needed by the source gates. Comments disappear, while string
 /// literals remain available as path and identity values.
 fn source_tokens(source: &str) -> Vec<SourceToken> {
     let bytes = source.as_bytes();
+    let mut cursor = SourceCursor::new(source);
     let mut tokens = Vec::new();
-    let mut at = 0;
-    let mut line = 1;
-    while at < bytes.len() {
-        let Some(byte) = bytes.get(at).copied() else {
-            break;
-        };
-        if byte.is_ascii_whitespace() {
-            if byte == b'\n' {
-                line += 1;
-            }
-            at += 1;
+    while let Some((at, character)) = cursor.peek() {
+        if character.is_ascii_whitespace() {
+            cursor.next();
             continue;
         }
-        if bytes
-            .get(at..)
-            .is_some_and(|remaining| remaining.starts_with(b"//"))
-        {
-            while bytes.get(at).is_some_and(|byte| *byte != b'\n') {
-                at += 1;
+        if cursor.starts_with("//") {
+            cursor.consume("//");
+            while cursor
+                .peek()
+                .is_some_and(|(_, character)| character != '\n')
+            {
+                cursor.next();
             }
             continue;
         }
-        if bytes
-            .get(at..)
-            .is_some_and(|remaining| remaining.starts_with(b"/*"))
-        {
-            at += 2;
-            let mut depth = 1usize;
-            while at < bytes.len() && depth > 0 {
-                if bytes
-                    .get(at..)
-                    .is_some_and(|remaining| remaining.starts_with(b"/*"))
-                {
-                    depth += 1;
-                    at += 2;
-                } else if bytes
-                    .get(at..)
-                    .is_some_and(|remaining| remaining.starts_with(b"*/"))
-                {
-                    depth -= 1;
-                    at += 2;
-                } else {
-                    if bytes.get(at) == Some(&b'\n') {
-                        line += 1;
-                    }
-                    at += 1;
+        if cursor.starts_with("/*") {
+            cursor.consume("/*");
+            let mut nesting = vec![()];
+            while !nesting.is_empty() {
+                if cursor.starts_with("/*") {
+                    cursor.consume("/*");
+                    nesting.push(());
+                } else if cursor.starts_with("*/") {
+                    cursor.consume("*/");
+                    nesting.pop();
+                } else if cursor.next().is_none() {
+                    break;
                 }
             }
             continue;
         }
-        if let Some(end) = char_literal_end(bytes, at) {
-            at = end;
+        if let Some(end) = char_literal_end(source, at) {
+            cursor.consume_to(end);
             continue;
         }
         if let Some((quote, raw, hashes)) = string_start(bytes, at) {
-            let token_line = line;
-            let content_start = quote + 1;
-            let mut end = content_start;
+            let token_line = cursor.line;
+            cursor.consume_to(quote.saturating_add(1));
+            let content_start = cursor.offset();
             if raw {
-                while let Some(byte) = bytes.get(end).copied() {
-                    if byte == b'"'
-                        && bytes
-                            .get(end + 1..end + 1 + hashes)
-                            .is_some_and(|tail| tail.iter().all(|b| *b == b'#'))
-                    {
-                        break;
-                    }
-                    if byte == b'\n' {
-                        line += 1;
-                    }
-                    end += 1;
+                let closing = format!("\"{}", "#".repeat(hashes));
+                while cursor.peek().is_some() && !cursor.starts_with(&closing) {
+                    cursor.next();
                 }
             } else {
                 let mut escaped = false;
-                while let Some(byte) = bytes.get(end).copied() {
-                    if byte == b'\n' {
-                        line += 1;
-                    }
-                    if byte == b'"' && !escaped {
+                while let Some((_, character)) = cursor.peek() {
+                    if character == '"' && !escaped {
                         break;
                     }
-                    escaped = byte == b'\\' && !escaped;
-                    end += 1;
+                    cursor.next();
+                    escaped = character == '\\' && !escaped;
                 }
             }
-            let value = String::from_utf8_lossy(bytes.get(content_start..end).unwrap_or_default())
-                .into_owned();
+            let content_end = cursor.offset();
+            let value = source
+                .get(content_start..content_end)
+                .unwrap_or_default()
+                .to_owned();
             tokens.push(SourceToken {
                 kind: SourceKind::String(value),
                 line: token_line,
             });
-            at = (end + 1 + if raw { hashes } else { 0 }).min(bytes.len());
+            if cursor.peek().is_some_and(|(_, character)| character == '"') {
+                cursor.next();
+                if raw {
+                    for _ in 0..hashes {
+                        cursor.next();
+                    }
+                }
+            }
             continue;
         }
-        let token_line = line;
-        let Some(byte) = bytes.get(at).copied() else {
-            break;
-        };
-        if byte.is_ascii_alphabetic() || byte == b'_' {
+        let token_line = cursor.line;
+        if character.is_ascii_alphabetic() || character == '_' {
             let start = at;
-            at += 1;
-            while bytes
-                .get(at)
-                .is_some_and(|byte| byte.is_ascii_alphanumeric() || *byte == b'_')
+            while cursor
+                .peek()
+                .is_some_and(|(_, next)| next.is_ascii_alphanumeric() || next == '_')
             {
-                at += 1;
+                cursor.next();
             }
+            let value = source
+                .get(start..cursor.offset())
+                .unwrap_or_default()
+                .to_owned();
             tokens.push(SourceToken {
-                kind: SourceKind::Ident(
-                    String::from_utf8_lossy(bytes.get(start..at).unwrap_or_default()).into_owned(),
-                ),
+                kind: SourceKind::Ident(value),
                 line: token_line,
             });
         } else {
+            cursor.next();
             tokens.push(SourceToken {
-                kind: SourceKind::Punct(byte as char),
+                kind: SourceKind::Punct(character),
                 line: token_line,
             });
-            at += 1;
         }
     }
     tokens
 }
 
-fn char_literal_end(bytes: &[u8], at: usize) -> Option<usize> {
-    if bytes.get(at) != Some(&b'\'') {
+fn char_literal_end(source: &str, at: usize) -> Option<usize> {
+    let mut chars = source.get(at..)?.char_indices().peekable();
+    if chars.next()?.1 != '\'' {
         return None;
     }
-    let mut end = at + 1;
-    match bytes.get(end)? {
-        b'\\' => {
-            end += 1;
-            match bytes.get(end)? {
-                b'u' if bytes.get(end + 1) == Some(&b'{') => {
-                    end += 2;
-                    while bytes.get(end).is_some_and(|byte| *byte != b'}') {
-                        end += 1;
+    let first = chars.next()?.1;
+    if first == '\\' {
+        match chars.next()?.1 {
+            'u' if chars.peek().is_some_and(|(_, character)| *character == '{') => {
+                chars.next();
+                let mut closed = false;
+                for (_, character) in chars.by_ref() {
+                    if character == '}' {
+                        closed = true;
+                        break;
                     }
-                    end += 1;
                 }
-                b'x' => end += 3,
-                _ => end += 1,
+                if !closed {
+                    return None;
+                }
             }
-        }
-        b'\'' | b'\n' => return None,
-        byte => {
-            end += match byte {
-                0x00..=0x7f => 1,
-                0xc2..=0xdf => 2,
-                0xe0..=0xef => 3,
-                0xf0..=0xf4 => 4,
-                _ => return None,
+            'x' => {
+                chars.next()?;
+                chars.next()?;
             }
+            _ => {}
         }
+    } else if first == '\'' || first == '\n' {
+        return None;
     }
-    (bytes.get(end) == Some(&b'\'')).then_some(end + 1)
+    let (closing, character) = chars.next()?;
+    if character != '\'' {
+        return None;
+    }
+    at.checked_add(closing)?.checked_add(character.len_utf8())
 }
 
 /// Start of a normal or raw Rust string; `quote` is the opening quote offset.
@@ -857,37 +893,51 @@ fn test_item_end(tokens: &[SourceToken], start: usize, field: bool) -> usize {
     tokens.len().saturating_sub(1)
 }
 
+fn crate_root_cfg_test(tokens: &[SourceToken]) -> bool {
+    if !punct(tokens.first(), '#') {
+        return false;
+    }
+    if !punct(tokens.get(1), '!') {
+        return false;
+    }
+    if !punct(tokens.get(2), '[') {
+        return false;
+    }
+    let Some(end) = matching(tokens, 2, '[', ']') else {
+        return false;
+    };
+    cfg_test_attribute(tokens, 3, end)
+}
+
 /// Marks cfg(test)-guarded items, including inline modules and file modules.
 fn test_only_tokens(tokens: &[SourceToken]) -> Vec<bool> {
     let mut marked = vec![false; tokens.len()];
-    if punct(tokens.first(), '#')
-        && punct(tokens.get(1), '!')
-        && punct(tokens.get(2), '[')
-        && matching(tokens, 2, '[', ']').is_some_and(|end| cfg_test_attribute(tokens, 3, end))
-    {
+    if crate_root_cfg_test(tokens) {
         marked.fill(true);
         return marked;
     }
-    let mut i = 0;
-    while i + 1 < tokens.len() {
-        if !punct(tokens.get(i), '#') || !punct(tokens.get(i + 1), '[') {
-            i += 1;
+    for (i, token) in tokens.iter().enumerate() {
+        if !punct(Some(token), '#') || !punct(tokens.get(i.saturating_add(1)), '[') {
             continue;
         }
-        let Some(attr_end) = matching(tokens, i + 1, '[', ']') else {
-            i += 1;
+        let Some(attr_start) = i.checked_add(1) else {
             continue;
         };
-        if !cfg_test_attribute(tokens, i + 2, attr_end) {
-            i = attr_end + 1;
+        let Some(attr_end) = matching(tokens, attr_start, '[', ']') else {
+            continue;
+        };
+        if !cfg_test_attribute(tokens, attr_start.saturating_add(1), attr_end) {
             continue;
         }
-        let item = attr_end + 1;
+        let item = attr_end.saturating_add(1);
         let end = test_item_end(tokens, item, struct_body(tokens, i));
-        for marked_token in marked.iter_mut().take((end + 1).min(tokens.len())).skip(i) {
+        for marked_token in marked
+            .iter_mut()
+            .take(end.saturating_add(1).min(tokens.len()))
+            .skip(i)
+        {
             *marked_token = true;
         }
-        i = end + 1;
     }
     marked
 }
@@ -958,27 +1008,24 @@ fn production_files(files: &[RustFile]) -> Vec<&RustFile> {
             }
         }
     }
-    let mut test_only = BTreeSet::new();
-    loop {
-        let newly: Vec<String> = edges
-            .iter()
-            .filter(|(parent, _, test_edge)| *test_edge || test_only.contains(*parent))
-            .map(|(_, target, _)| target.clone())
-            .filter(|target| {
-                !test_only.contains(target.as_str())
-                    && !edges.iter().any(|(parent, incoming, is_test)| {
-                        incoming == target && !is_test && !test_only.contains(*parent)
-                    })
-            })
-            .collect();
-        if newly.is_empty() {
-            break;
+    let mut production = BTreeSet::new();
+    let mut pending = Vec::new();
+    for file in &candidates {
+        let has_parent = edges.iter().any(|(_, target, _)| target == &file.path);
+        if !has_parent && production.insert(file.path.as_str()) {
+            pending.push(file.path.as_str());
         }
-        test_only.extend(newly);
+    }
+    while let Some(parent) = pending.pop() {
+        for (source, target, test_edge) in &edges {
+            if *source == parent && !*test_edge && production.insert(target.as_str()) {
+                pending.push(target.as_str());
+            }
+        }
     }
     candidates
         .into_iter()
-        .filter(|file| !test_only.contains(file.path.as_str()))
+        .filter(|file| production.contains(file.path.as_str()))
         .collect()
 }
 
@@ -1289,18 +1336,25 @@ fn home_sites(file: &RustFile) -> Vec<SourceSite> {
 fn consume_next_allowance(
     remaining: &mut Vec<SourceAllowance>,
     sites: &mut impl Iterator<Item = SourceSite>,
-) -> Option<&'static str> {
-    let site = sites.next()?;
-    let position = remaining.iter().position(|allowance| {
+) -> bool {
+    let Some(site) = sites.next() else {
+        return false;
+    };
+    let Some(position) = remaining.iter().position(|allowance| {
         allowance.path == site.path
             && allowance.context == site.context
             && allowance.operation == site.operation
-    })?;
-    Some(remaining.remove(position).ticket)
+    }) else {
+        return false;
+    };
+    let ticket = remaining.remove(position).ticket;
+    ticket.strip_prefix('#').is_some_and(|number| {
+        !number.is_empty() && number.bytes().all(|byte| byte.is_ascii_digit())
+    })
 }
 
 #[cfg(test)]
-fn consume_allowance(allowances: &[SourceAllowance], site: &SourceSite) -> Option<&'static str> {
+fn consume_allowance(allowances: &[SourceAllowance], site: &SourceSite) -> bool {
     let mut remaining = allowances.to_vec();
     consume_next_allowance(&mut remaining, &mut std::iter::once(site.clone()))
 }
@@ -1315,8 +1369,7 @@ fn source_failures(files: &[RustFile], allowances: &[SourceAllowance], home: boo
             session_sites(file)
         };
         for site in sites {
-            if consume_next_allowance(&mut remaining, &mut std::iter::once(site.clone())).is_none()
-            {
+            if !consume_next_allowance(&mut remaining, &mut std::iter::once(site.clone())) {
                 let message = if home {
                     "Fiber-home path outside config"
                 } else {
