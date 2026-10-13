@@ -21,6 +21,8 @@ use contract::clock::{Clock, Wake};
 use crate::clock::SystemClock;
 use crate::deadline::Deadline;
 
+pub(crate) mod request;
+
 const REQUEST_WITHIN: Duration = Duration::from_secs(30);
 const HANG_GUARD: Duration = Duration::from_secs(45);
 const POLL: Duration = Duration::from_millis(1);

@@ -3,7 +3,7 @@
 
 use std::io::Write;
 use std::net::TcpStream;
-use std::sync::{Arc, Mutex, PoisonError, mpsc};
+use std::sync::{Arc, PoisonError, mpsc};
 use std::thread;
 use std::time::Duration;
 
@@ -107,31 +107,33 @@ fn expected_accept_expires_without_a_client() {
         .expect("the core binds");
     let acks = server.test_acknowledgments();
     let (done_tx, done_rx) = mpsc::channel();
-    thread::spawn(move || {
-        let caught = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-            server.accept_expected("the missing request")
-        }));
-        done_tx.send(caught).expect("the test waits");
+    thread::scope(|scope| {
+        scope.spawn(|| {
+            let caught = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                server.accept_expected("the missing request")
+            }));
+            done_tx.send(caught).expect("the test waits");
+        });
+        let ack = next_acknowledgment(&acks, "the accept's clock wait");
+        assert!(
+            clock.await_thread_parked(ack.thread, ack.until, OP),
+            "the accept parks on the clock before it moves"
+        );
+        clock.advance(Duration::from_secs(10) - Duration::from_nanos(1));
+        assert!(
+            Deadline::after(QUIET).recv(&done_rx).is_err(),
+            "one tick before the bound the accept is still waiting"
+        );
+        clock.advance(Duration::from_nanos(1));
+        let caught = Deadline::after(OP)
+            .recv(&done_rx)
+            .expect("the bound ends the accept");
+        let message = failure_text(caught, "the missing request");
+        assert!(
+            message.contains("the missing request"),
+            "the failure names its request, got: {message}"
+        );
     });
-    let ack = next_acknowledgment(&acks, "the accept's clock wait");
-    assert!(
-        clock.await_thread_parked(ack.thread, ack.until, OP),
-        "the accept parks on the clock before it moves"
-    );
-    clock.advance(Duration::from_secs(10) - Duration::from_nanos(1));
-    assert!(
-        Deadline::after(QUIET).recv(&done_rx).is_err(),
-        "one tick before the bound the accept is still waiting"
-    );
-    clock.advance(Duration::from_nanos(1));
-    let caught = Deadline::after(OP)
-        .recv(&done_rx)
-        .expect("the bound ends the accept");
-    let message = failure_text(caught, "the missing request");
-    assert!(
-        message.contains("the missing request"),
-        "the failure names its request, got: {message}"
-    );
 
     // One tick past the bound expires too: a single advance past it.
     let clock = fake_clock();
@@ -139,26 +141,28 @@ fn expected_accept_expires_without_a_client() {
         .expect("the core binds");
     let acks = server.test_acknowledgments();
     let (done_tx, done_rx) = mpsc::channel();
-    thread::spawn(move || {
-        let caught = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-            server.accept_expected("the late request")
-        }));
-        done_tx.send(caught).expect("the test waits");
+    thread::scope(|scope| {
+        scope.spawn(|| {
+            let caught = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                server.accept_expected("the late request")
+            }));
+            done_tx.send(caught).expect("the test waits");
+        });
+        let ack = next_acknowledgment(&acks, "the accept's clock wait");
+        assert!(
+            clock.await_thread_parked(ack.thread, ack.until, OP),
+            "the accept parks on the clock before it moves"
+        );
+        clock.advance(Duration::from_secs(10) + Duration::from_nanos(1));
+        let caught = Deadline::after(OP)
+            .recv(&done_rx)
+            .expect("past the bound the accept fails");
+        let message = failure_text(caught, "the late request");
+        assert!(
+            message.contains("the late request"),
+            "the failure names its request, got: {message}"
+        );
     });
-    let ack = next_acknowledgment(&acks, "the accept's clock wait");
-    assert!(
-        clock.await_thread_parked(ack.thread, ack.until, OP),
-        "the accept parks on the clock before it moves"
-    );
-    clock.advance(Duration::from_secs(10) + Duration::from_nanos(1));
-    let caught = Deadline::after(OP)
-        .recv(&done_rx)
-        .expect("past the bound the accept fails");
-    let message = failure_text(caught, "the late request");
-    assert!(
-        message.contains("the late request"),
-        "the failure names its request, got: {message}"
-    );
 }
 
 /// Idle persistent windows renew without expiring any request, and the
@@ -276,43 +280,44 @@ fn fake_time_wakes_a_silent_connection() {
     let server = bind(&clock);
     let acks = server.test_acknowledgments();
     let (done_tx, done_rx) = mpsc::channel();
-    let accepting = server.clone();
-    thread::spawn(move || {
-        let mut conn = accepting
-            .accept_expected("the silent request")
-            .expect("a client connects");
-        let caught = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-            conn.read_byte("to read the silent request");
-        }));
-        done_tx.send(caught).expect("the test waits");
+    thread::scope(|scope| {
+        scope.spawn(|| {
+            let mut conn = server
+                .accept_expected("the silent request")
+                .expect("a client connects");
+            let caught = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                conn.read_byte("to read the silent request");
+            }));
+            done_tx.send(caught).expect("the test waits");
+        });
+        // The client connects and sends nothing: no byte wakes the read.
+        // The accept itself may complete without waiting when the client
+        // beats it, so only the read's acknowledgment is required.
+        let _client = connect(&server);
+        let read = loop {
+            let ack = next_acknowledgment(&acks, "the read's clock wait");
+            if ack.phase == "to read the silent request" {
+                break ack;
+            }
+        };
+        assert!(
+            clock.await_thread_parked(read.thread, read.until, OP),
+            "the read parks on the clock before it moves"
+        );
+        clock.advance(Duration::from_secs(10));
+        let caught = Deadline::after(OP)
+            .recv(&done_rx)
+            .expect("fake time ends the silent read");
+        let message = failure_text(caught, "the silent read");
+        assert!(
+            message.contains("the silent request"),
+            "the failure names its request, got: {message}"
+        );
+        assert!(
+            message.contains("to read the silent request"),
+            "the failure names its phase, got: {message}"
+        );
     });
-    // The client connects and sends nothing: no byte wakes the read.
-    let _client = connect(&server);
-    // Two acknowledgments: the accept's wait, then the read's wait after
-    // the accept takes the silent client.
-    let accept = next_acknowledgment(&acks, "the accept's clock wait");
-    assert!(
-        clock.await_thread_parked(accept.thread, accept.until, OP),
-        "the accept parks on the clock before it moves"
-    );
-    let read = next_acknowledgment(&acks, "the read's clock wait");
-    assert!(
-        clock.await_thread_parked(read.thread, read.until, OP),
-        "the read parks on the clock before it moves"
-    );
-    clock.advance(Duration::from_secs(10));
-    let caught = Deadline::after(OP)
-        .recv(&done_rx)
-        .expect("fake time ends the silent read");
-    let message = failure_text(caught, "the silent read");
-    assert!(
-        message.contains("the silent request"),
-        "the failure names its request, got: {message}"
-    );
-    assert!(
-        message.contains("to read the silent request"),
-        "the failure names its phase, got: {message}"
-    );
 }
 
 /// Shutdown ends an idle accept window at once: the serving loop stops
@@ -380,43 +385,45 @@ fn advance_between_check_and_park_is_not_lost() {
     let acks = server.test_acknowledgments();
     let gate = server.test_gate();
     let (done_tx, done_rx) = mpsc::channel();
-    thread::spawn(move || {
-        let caught = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-            server.accept_expected("the raced request")
-        }));
-        done_tx.send(caught).expect("the test waits");
+    thread::scope(|scope| {
+        scope.spawn(|| {
+            let caught = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                server.accept_expected("the raced request")
+            }));
+            done_tx.send(caught).expect("the test waits");
+        });
+        let first = next_acknowledgment(&acks, "the accept's clock wait");
+        assert!(
+            clock.await_thread_parked(first.thread, first.until, OP),
+            "the accept parks on the clock before it moves"
+        );
+        // Arm the check-to-park pause, then wake the waiter once: it
+        // re-checks past the advance and pauses before its next park.
+        gate.arm();
+        clock.advance(Duration::from_secs(3));
+        let second = next_acknowledgment(&acks, "the accept's re-check");
+        assert_eq!(
+            second.seq,
+            first.seq + 1,
+            "only the announced sequence advances the clock"
+        );
+        // The deciding advance lands while the waiter is held between its
+        // check and its park.
+        let (advanced_tx, advanced_rx) = mpsc::channel();
+        let advancing = clock.clone();
+        scope.spawn(move || {
+            advancing.advance(Duration::from_secs(7));
+            advanced_tx.send(()).expect("the test waits");
+        });
+        // The advance landed while the waiter was held: the waiter never ran
+        // between the advance and the release.
+        gate.release();
+        Deadline::after(OP).recv_or_fail(&advanced_rx, "the deciding advance");
+        let caught = Deadline::after(OP).recv_or_fail(&done_rx, "the raced accept");
+        let message = failure_text(caught, "the raced accept");
+        assert!(
+            message.contains("the raced request"),
+            "the failure names its request, got: {message}"
+        );
     });
-    let first = next_acknowledgment(&acks, "the accept's clock wait");
-    assert!(
-        clock.await_thread_parked(first.thread, first.until, OP),
-        "the accept parks on the clock before it moves"
-    );
-    // Arm the check-to-park pause, then wake the waiter once: it
-    // re-checks past the advance and pauses before its next park.
-    gate.arm();
-    clock.advance(Duration::from_secs(3));
-    let second = next_acknowledgment(&acks, "the accept's re-check");
-    assert_eq!(
-        second.seq,
-        first.seq + 1,
-        "only the announced sequence advances the clock"
-    );
-    // The deciding advance lands while the waiter is held between its
-    // check and its park.
-    let (advanced_tx, advanced_rx) = mpsc::channel();
-    let advancing = clock.clone();
-    thread::spawn(move || {
-        advancing.advance(Duration::from_secs(7));
-        advanced_tx.send(()).expect("the test waits");
-    });
-    // The advance landed while the waiter was held: the waiter never ran
-    // between the advance and the release.
-    gate.release();
-    Deadline::after(OP).recv_or_fail(&advanced_rx, "the deciding advance");
-    let caught = Deadline::after(OP).recv_or_fail(&done_rx, "the raced accept");
-    let message = failure_text(caught, "the raced accept");
-    assert!(
-        message.contains("the raced request"),
-        "the failure names its request, got: {message}"
-    );
 }
