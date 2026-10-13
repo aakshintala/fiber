@@ -32,6 +32,29 @@ fn is_release_code(path: &str) -> bool {
             || RELEASE_CODE_FILES.contains(&path))
 }
 
+/// `docs/ci.md`, "Selection": prefixes whose diffs also run the
+/// 10-busy-turns workload in `release`. The loop holds the session's
+/// state, so a diff elsewhere rarely moves its row. Slash-bounded, so
+/// `crates/benchmark/…` does not match; `xtask/src/bench` is the doc's
+/// literal `bench*` prefix (`bench.rs`, `bench_tests.rs`, `bench/…`).
+const TEN_TURNS_PREFIXES: [&str; 3] = ["crates/loop/", "crates/bench/", "xtask/src/bench"];
+
+/// Whether `path` is code the 10-busy-turns workload measures
+/// (`docs/ci.md`, "Selection"): under a ten-turns prefix, and never a
+/// docs file, so a Markdown file under those paths does not select it.
+fn is_ten_turns_path(path: &str) -> bool {
+    !super::is_docs_file(path) && TEN_TURNS_PREFIXES.iter().any(|p| path.starts_with(p))
+}
+
+/// Whether the run measures the 10-busy-turns workload: every push to
+/// `main` does, and a pull request does when its diff touches the code
+/// the workload measures (`docs/ci.md`, "Selection"). `release_paths`
+/// is the diff's paths for the release rule, both ends of a rename,
+/// unquoted.
+pub(crate) fn ten_turns_runs(event: &str, release_paths: &[String]) -> bool {
+    event != "pull_request" || release_paths.iter().any(|p| is_ten_turns_path(p))
+}
+
 /// Which CI jobs run, by the job ids in `.github/workflows/ci.yml`, and how
 /// many mutant shards.
 #[derive(Debug, Clone, PartialEq, Eq)]

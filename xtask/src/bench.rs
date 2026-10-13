@@ -15,7 +15,10 @@ mod attach;
 mod judge;
 mod results;
 
-use self::judge::{Base, Line, MEASURED, NOT_MEASURED, judge};
+use self::judge::{
+    Base, Line, MEASURED, NOT_MEASURED, TEN_TURNS_BUDGET, TEN_TURNS_SKIP_NOTE, judge,
+    ten_turns_skipped,
+};
 #[cfg(test)]
 use self::judge::{Quantity, ceiling};
 #[cfg(test)]
@@ -179,7 +182,7 @@ pub(crate) fn report(
         &failures,
         &base,
         idle_secs,
-        &run_sentence(head.as_ref()),
+        head.as_ref(),
         stored_line(
             &stored,
             stored_results.as_ref(),
@@ -308,14 +311,16 @@ fn comment(
     failures: &[String],
     base: &Base,
     idle_secs: Option<u64>,
-    run_sentence: &str,
+    head: Option<&results::Results>,
     stored_line: Option<&str>,
     cpus: &[String],
 ) -> String {
+    let ten_turns_skipped = ten_turns_skipped(head);
+    let run_sentence = run_sentence(head);
     let with_base = !matches!(base, Base::None);
     let mut out = format!("{MARKER}\n## Benchmarks\n\n");
     out.push_str("Exact and memory budgets fail the run; timing budgets are advisory. ");
-    out.push_str(run_sentence);
+    out.push_str(&run_sentence);
     out.push('\n');
     if let Some(secs) = idle_secs {
         out.push_str(&format!("The idle window was {secs} s.\n"));
@@ -353,7 +358,14 @@ fn comment(
     }
     out.push_str("\n### Not measured\n\n");
     for (budget, owner) in NOT_MEASURED {
-        out.push_str(&format!("- {budget}: {owner}\n"));
+        if *budget == TEN_TURNS_BUDGET && ten_turns_skipped {
+            // The row does not gate, but the selection's skip is still
+            // recorded in the head file, so the summary says so
+            // (`docs/ci.md`, "Selection").
+            out.push_str(&format!("- {budget}: {owner} ({TEN_TURNS_SKIP_NOTE})\n"));
+        } else {
+            out.push_str(&format!("- {budget}: {owner}\n"));
+        }
     }
     out
 }
