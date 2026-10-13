@@ -523,28 +523,49 @@ fn detail(item: &OfferedItem) -> Option<String> {
     })
 }
 
-/// An item's choice row: each decision a chip, the chosen one in brackets.
+/// An item's choice row: every decision with its `( )` mark, the chosen
+/// one `(•)` in secondary with its label bold and the other marks dim.
+/// Each decision keeps its click target.
 fn choices(item: usize, chosen: OfferDecision, width: u16) -> Row {
-    let mut text = String::from("   ");
+    const LEAD: &str = "  ";
+    const GAP: &str = "   ";
+    let label = |decision: OfferDecision| match decision {
+        OfferDecision::Approve => "approve",
+        OfferDecision::Skip => "skip for this session",
+        OfferDecision::Never => "never",
+    };
+    let mut spans = vec![Span::raw(LEAD)];
     let mut spots = Vec::new();
-    for decision in DECISIONS {
-        let word = match decision {
-            OfferDecision::Approve => "approve",
-            OfferDecision::Skip => "skip",
-            OfferDecision::Never => "never",
-        };
-        let chip = if decision == chosen {
-            format!("[{word}]")
-        } else {
-            format!(" {word} ")
-        };
-        text.push(' ');
-        let start = to_u16(crate::format::width(&text));
-        text.push_str(&chip);
-        let end = to_u16(crate::format::width(&text));
-        spots.push((start, end, Spot::Choice { item, decision }));
+    let mut col = crate::format::width(LEAD);
+    for (at, decision) in DECISIONS.into_iter().enumerate() {
+        if at > 0 {
+            spans.push(Span::raw(GAP));
+            col += crate::format::width(GAP);
+        }
+        let on = decision == chosen;
+        let mark_text = if on { "(•) " } else { "( ) " };
+        let word = label(decision);
+        let start = to_u16(col);
+        col += crate::format::width(mark_text) + crate::format::width(word);
+        spans.push(Span::styled(
+            mark_text,
+            if on {
+                style(Role::Secondary)
+            } else {
+                style(Role::Muted)
+            },
+        ));
+        spans.push(Span::styled(
+            word,
+            if on {
+                Style::new().add_modifier(Modifier::BOLD)
+            } else {
+                Style::new()
+            },
+        ));
+        spots.push((start, to_u16(col), Spot::Choice { item, decision }));
     }
-    clipped(Line::raw(text), spots, width)
+    clipped(Line::from(spans), spots, width)
 }
 
 /// A row clipped at `width`: a target starting at or past it is dropped,

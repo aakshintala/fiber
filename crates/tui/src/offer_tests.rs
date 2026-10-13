@@ -500,11 +500,11 @@ fn the_rows_show_each_item_and_the_tui_files_line() {
             "  the declaration changed",
             "    -old",
             "    +new",
-            "    [approve]  skip   never",
+            "  (•) approve   ( ) skip for this session   ( ) never",
             "",
             "  Hook fmt",
-            "     approve  [skip]  never",
             "  hook fmt",
+            "  ( ) approve   (•) skip for this session   ( ) never",
             "",
             TUI_FILES,
             "",
@@ -573,13 +573,12 @@ fn a_narrow_view_drops_the_clipped_targets() {
     let Some((rows, _)) = offer.rows(12) else {
         panic!("open");
     };
-    // "    [approve]  skip   never" is the old choices row: task 2
-    // restyles it, and this spot moves with it.
+    // "  ( ) approve   (•) skip ...": approve covers 2..13, cut at 12.
     let choice = rows.get(4).map(|row| row.spots.clone()).unwrap_or_default();
     assert_eq!(
         choice,
         [(
-            4,
+            2,
             12,
             Spot::Choice {
                 item: 0,
@@ -593,6 +592,76 @@ fn a_narrow_view_drops_the_clipped_targets() {
         .unwrap_or_default();
     assert_eq!(header, " Offer  repo");
     assert_eq!(crate::format::width(&header), 12);
+}
+
+#[test]
+fn the_choices_row_marks_the_chosen_answer() {
+    // Every item starts at skip.
+    let offer = holding(1);
+    assert_eq!(
+        spans(&offer, 80)[4],
+        [
+            ("  ".to_owned(), Style::new()),
+            ("( ) ".to_owned(), dim()),
+            ("approve".to_owned(), Style::new()),
+            ("   ".to_owned(), Style::new()),
+            ("(•) ".to_owned(), secondary()),
+            ("skip for this session".to_owned(), bold()),
+            ("   ".to_owned(), Style::new()),
+            ("( ) ".to_owned(), dim()),
+            ("never".to_owned(), Style::new()),
+        ]
+    );
+}
+
+#[test]
+fn approve_chosen_marks_approve() {
+    let mut offer = holding(1);
+    offer.on_edit(&Edit::Left);
+    assert_eq!(
+        spans(&offer, 80)[4],
+        [
+            ("  ".to_owned(), Style::new()),
+            ("(•) ".to_owned(), secondary()),
+            ("approve".to_owned(), bold()),
+            ("   ".to_owned(), Style::new()),
+            ("( ) ".to_owned(), dim()),
+            ("skip for this session".to_owned(), Style::new()),
+            ("   ".to_owned(), Style::new()),
+            ("( ) ".to_owned(), dim()),
+            ("never".to_owned(), Style::new()),
+        ]
+    );
+}
+
+#[test]
+fn never_chosen_marks_never() {
+    let mut offer = holding(1);
+    offer.on_edit(&Edit::Right);
+    offer.on_edit(&Edit::Right);
+    let row = &spans(&offer, 80)[4];
+    assert_eq!(row[7], ("(•) ".to_owned(), secondary()));
+    assert_eq!(row[8], ("never".to_owned(), bold()));
+    assert_eq!(row[1], ("( ) ".to_owned(), dim()));
+    assert_eq!(row[2], ("approve".to_owned(), Style::new()));
+}
+
+#[test]
+fn each_choice_keeps_its_click_target() {
+    let offer = holding(1);
+    let spots = offer
+        .rows(80)
+        .map(|(rows, _)| rows[4].spots.clone())
+        .unwrap_or_default();
+    let choice = |decision| Spot::Choice { item: 0, decision };
+    assert_eq!(
+        spots,
+        [
+            (2, 13, choice(OfferDecision::Approve)),
+            (16, 41, choice(OfferDecision::Skip)),
+            (44, 53, choice(OfferDecision::Never)),
+        ]
+    );
 }
 
 #[test]
@@ -695,7 +764,7 @@ fn the_footer_is_the_tui_files_sentence_then_the_hint_both_dim() {
     let offer = holding(1);
     let rows = spans(&offer, 80);
     assert_eq!(rows[6], [(TUI_FILES.to_owned(), dim())]);
-    assert_eq!(rows[7], [("".to_owned(), Style::new())]);
+    assert!(rows[7].is_empty());
     assert_eq!(rows[8], [(HINT.to_owned(), dim())]);
 }
 
