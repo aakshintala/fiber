@@ -12,6 +12,7 @@
 use std::io::Write;
 use std::sync::{Arc, Condvar, Mutex, MutexGuard, PoisonError};
 use std::thread;
+use std::time::Duration;
 
 use contract::clock::Clock;
 use contract::events::{CommandAccepted, Empty, Event, ExtensionsLoaded, LoadedExtension, Notice};
@@ -30,6 +31,12 @@ use super::*;
 mod support;
 
 use support::DEADLINE;
+
+/// How long a test gives a writer the chance to write a line that must
+/// never come: long past a racing writer's chance, short beside the
+/// suite's hang guards. Every such check pairs with a positive fact,
+/// so a passing check never stands alone (`docs/testing.md`, "Levels").
+const QUIET: Duration = Duration::from_millis(500);
 
 fn lock<T>(mutex: &Mutex<T>) -> MutexGuard<'_, T> {
     mutex.lock().unwrap_or_else(PoisonError::into_inner)
@@ -84,6 +91,7 @@ struct Held {
     entered: Mutex<bool>,
     entered_cv: Condvar,
     buf: Mutex<Vec<u8>>,
+    buf_cv: Condvar,
 }
 
 impl Held {
@@ -94,6 +102,7 @@ impl Held {
             entered: Mutex::new(false),
             entered_cv: Condvar::new(),
             buf: Mutex::new(Vec::new()),
+            buf_cv: Condvar::new(),
         })
     }
 
@@ -109,6 +118,21 @@ impl Held {
     fn release(&self) {
         *lock(&self.mu) = false;
         self.cv.notify_all();
+    }
+
+    /// The buffer once `ready` holds of it, waited with a deadline: the
+    /// writer only appends, so a wait for present lines never passes
+    /// early, and an assertion that a later line is still absent holds
+    /// because nothing after it was sent yet.
+    fn wait_for(&self, ready: impl Fn(&str) -> bool, what: &str) -> String {
+        let guard = lock(&self.buf);
+        let (guard, _) = self
+            .buf_cv
+            .wait_timeout_while(guard, DEADLINE, |buf| !ready(&String::from_utf8_lossy(buf)))
+            .unwrap_or_else(PoisonError::into_inner);
+        let text = String::from_utf8_lossy(&guard).into_owned();
+        assert!(ready(&text), "{what}");
+        text
     }
 }
 
@@ -132,6 +156,7 @@ impl Write for HeldWrite {
         );
         drop(guard);
         lock(&self.held.buf).extend_from_slice(data);
+        self.held.buf_cv.notify_all();
         Ok(data.len())
     }
 
@@ -186,6 +211,7 @@ fn a_lowering_drains_a_lagged_writer_through_the_cutoff() {
             summary: true,
             cutoff,
             prelude: vec![ack, latest],
+            response: None,
         })
         .unwrap();
     outbox.swap(control_line(&id, LEVEL, 0), injector);
@@ -299,6 +325,7 @@ fn a_line_at_the_cutoff_is_skipped_never_written() {
         summary: true,
         cutoff,
         prelude: vec![control_line(&id, "x.ack", 7)],
+        response: None,
     })
     .unwrap();
     let mut buf = Vec::new();
@@ -312,4 +339,319 @@ fn a_line_at_the_cutoff_is_skipped_never_written() {
         "neither the bound line nor the prelude is written"
     );
     assert_eq!(writing.written, None, "nothing below the cutoff was owed");
+}
+
+/// A `command_accepted` envelope for `id`, as the deferred settlement carries it.
+fn settled_acceptance(id: &SessionId, clock: &FakeClock, command: &str) -> contract::Envelope {
+    crate::session::envelope(
+        id,
+        clock,
+        &Event::CommandAccepted(CommandAccepted {
+            command_id: CommandId(command.into()),
+            result: None,
+        }),
+    )
+}
+
+/// A `notice` envelope, as the deferred settlement carries a switch refusal.
+fn settled_notice(id: &SessionId, clock: &FakeClock) -> contract::Envelope {
+    crate::session::envelope(
+        id,
+        clock,
+        &Event::Notice(Notice {
+            code: contract::ErrorCode::CredentialMissing,
+            message: "no credential named `nope`".into(),
+            extension: None,
+        }),
+    )
+}
+
+fn envelopes(text: &str) -> Vec<contract::Envelope> {
+    text.lines()
+        .map(|line| serde_json::from_str(line).unwrap())
+        .collect()
+}
+
+#[test]
+fn a_deferred_response_is_written_after_the_drain_before_the_snapshots() {
+    let (_temp, log, id, clock) = open_log();
+    let old = log.watch_all();
+    log.append(&step(), None, None).unwrap();
+    log.append(&step(), None, None).unwrap();
+    log.append(&extensions(), None, None).unwrap();
+    let cutoff = log.count();
+    let new = log.watch();
+    let snapshot = log.latest("extensions_loaded").unwrap();
+    let (tx, rx) = mpsc::channel();
+    let (resp_tx, resp_rx) = mpsc::channel();
+    tx.send(Switch {
+        watcher: new,
+        summary: true,
+        cutoff,
+        prelude: vec![snapshot],
+        response: Some(resp_rx),
+    })
+    .unwrap();
+    // The settlement is ready before the switch is applied: the order it
+    // is written in still puts the drain first and the snapshots last.
+    resp_tx
+        .send(vec![
+            settled_acceptance(&id, &clock, "c_deferred"),
+            settled_notice(&id, &clock),
+        ])
+        .unwrap();
+    drop(resp_tx);
+    let mut writing = Writing {
+        watcher: old,
+        summary: false,
+        cutoff: 0,
+        written: None,
+    };
+    let mut buf = Vec::new();
+    apply(&mut writing, &rx, &mut buf).unwrap();
+    let lines = envelopes(&String::from_utf8(buf).unwrap());
+    let kinds: Vec<&str> = lines.iter().map(|line| line.kind.as_str()).collect();
+    assert_eq!(
+        kinds,
+        [
+            "step_started",
+            "step_started",
+            "extensions_loaded",
+            "command_accepted",
+            "notice",
+            "extensions_loaded",
+        ],
+        "the drain, then the deferred response, then the snapshots"
+    );
+    assert_eq!(
+        lines[3]
+            .payload
+            .get("command_id")
+            .and_then(|id| id.as_str()),
+        Some("c_deferred")
+    );
+    assert_eq!(
+        lines[4].payload.get("code").and_then(|code| code.as_str()),
+        Some("credential_missing")
+    );
+    assert_eq!(
+        lines[5].seq.map(|seq| seq.0),
+        Some(cutoff - 1),
+        "the snapshot is the latest extensions, not redrained history"
+    );
+    assert!(writing.summary);
+    assert_eq!(writing.cutoff, cutoff);
+}
+
+#[test]
+fn a_lowering_waits_for_the_deferred_response_after_its_drain() {
+    let (_temp, log, id, clock) = open_log();
+    let watcher = log.watch_all();
+    let outbox = Outbox::new(watcher.injector());
+    let held = Held::waiting();
+    held.release();
+    let (switch_tx, switches) = mpsc::channel();
+    let (done_tx, done_rx) = mpsc::channel();
+    thread::spawn({
+        let held = Arc::clone(&held);
+        move || {
+            let ended =
+                crate::client::write_loop(watcher, Box::new(HeldWrite { held }), false, switches);
+            if let Ok(()) = done_tx.send(ended) {}
+        }
+    });
+    log.append(&step(), None, None).unwrap();
+    log.append(&step(), None, None).unwrap();
+    log.append(&extensions(), None, None).unwrap();
+    let summary = log.watch();
+    let cutoff = log.count();
+    let snapshot = log.latest("extensions_loaded").unwrap();
+    let injector = summary.injector();
+    let (resp_tx, resp_rx) = mpsc::channel();
+    switch_tx
+        .send(Switch {
+            watcher: summary,
+            summary: true,
+            cutoff,
+            prelude: vec![snapshot],
+            response: Some(resp_rx),
+        })
+        .unwrap();
+    outbox.swap(control_line(&id, LEVEL, 0), injector);
+    // The drain arrives, but no acceptance: the loop has not answered yet,
+    // and nothing after the answer can precede it.
+    let text = held.wait_for(
+        |text| {
+            envelopes(text)
+                .iter()
+                .filter_map(|line| line.seq.map(|seq| seq.0))
+                .collect::<Vec<_>>()
+                == (0..cutoff).collect::<Vec<_>>()
+        },
+        "the drain arrives before the deferred response",
+    );
+    assert!(
+        envelopes(&text)
+            .iter()
+            .all(|line| line.kind != "command_accepted"),
+        "no acceptance precedes the loop's answer"
+    );
+    resp_tx
+        .send(vec![settled_acceptance(&id, &clock, "c_lower")])
+        .unwrap();
+    drop(resp_tx);
+    let text = held.wait_for(
+        |text| {
+            envelopes(text)
+                .iter()
+                .map(|line| line.kind.as_str())
+                .collect::<Vec<_>>()
+                == [
+                    "step_started",
+                    "step_started",
+                    "extensions_loaded",
+                    "command_accepted",
+                    "extensions_loaded",
+                ]
+        },
+        "the drain, then the deferred acceptance, then the snapshot",
+    );
+    let lines = envelopes(&text);
+    let kinds: Vec<&str> = lines.iter().map(|line| line.kind.as_str()).collect();
+    assert_eq!(
+        kinds,
+        [
+            "step_started",
+            "step_started",
+            "extensions_loaded",
+            "command_accepted",
+            "extensions_loaded",
+        ]
+    );
+    assert_eq!(
+        lines[3]
+            .payload
+            .get("command_id")
+            .and_then(|id| id.as_str()),
+        Some("c_lower"),
+        "the deferred acceptance answers the label-bearing change"
+    );
+    drop(log);
+    assert!(
+        Deadline::after(DEADLINE).recv(&done_rx).is_ok(),
+        "the writer ends once the log is dropped"
+    );
+}
+
+#[test]
+fn a_raising_writes_nothing_before_its_deferred_response() {
+    let (_temp, log, id, clock) = open_log();
+    log.append(&step(), None, None).unwrap();
+    let watcher = log.watch();
+    let outbox = Outbox::new(watcher.injector());
+    let held = Held::waiting();
+    held.release();
+    let (switch_tx, switches) = mpsc::channel();
+    let (done_tx, done_rx) = mpsc::channel();
+    thread::spawn({
+        let held = Arc::clone(&held);
+        move || {
+            let ended =
+                crate::client::write_loop(watcher, Box::new(HeldWrite { held }), true, switches);
+            if let Ok(()) = done_tx.send(ended) {}
+        }
+    });
+    // The folded history is seeded before the switch: it must still wait
+    // behind the loop's answer.
+    let full = log.watch_all_seeded();
+    let injector = full.injector();
+    let (resp_tx, resp_rx) = mpsc::channel();
+    switch_tx
+        .send(Switch {
+            watcher: full,
+            summary: false,
+            cutoff: 0,
+            prelude: Vec::new(),
+            response: Some(resp_rx),
+        })
+        .unwrap();
+    outbox.swap(control_line(&id, LEVEL, 0), injector);
+    // No line can precede the answer, not even the seeded history: the
+    // writer is past the switch and blocked in the response wait. The
+    // bound only gives a racing writer its chance; a correct writer
+    // writes nothing here, ever.
+    let (guard, waited) = held
+        .buf_cv
+        .wait_timeout_while(lock(&held.buf), QUIET, |buf| buf.is_empty())
+        .unwrap_or_else(PoisonError::into_inner);
+    assert!(
+        waited.timed_out() && guard.is_empty(),
+        "no line precedes the loop's answer"
+    );
+    drop(guard);
+    resp_tx
+        .send(vec![settled_acceptance(&id, &clock, "c_raise")])
+        .unwrap();
+    drop(resp_tx);
+    let text = held.wait_for(
+        |text| {
+            envelopes(text)
+                .iter()
+                .map(|line| line.kind.as_str())
+                .collect::<Vec<_>>()
+                == ["command_accepted", "step_started"]
+        },
+        "the deferred acceptance arrives after the loop's answer, before the seeds",
+    );
+    let lines = envelopes(&text);
+    let kinds: Vec<&str> = lines.iter().map(|line| line.kind.as_str()).collect();
+    assert_eq!(kinds, ["command_accepted", "step_started"]);
+    assert_eq!(
+        lines[0]
+            .payload
+            .get("command_id")
+            .and_then(|id| id.as_str()),
+        Some("c_raise"),
+        "the deferred acceptance answers the label-bearing change"
+    );
+    drop(log);
+    assert!(
+        Deadline::after(DEADLINE).recv(&done_rx).is_ok(),
+        "the writer ends once the log is dropped"
+    );
+}
+
+#[test]
+fn a_cancelled_response_ends_the_switch_as_an_error() {
+    let (_temp, log, id, _clock) = open_log();
+    let old = log.watch_all();
+    log.append(&step(), None, None).unwrap();
+    let cutoff = log.count();
+    let new = log.watch();
+    let (tx, rx) = mpsc::channel();
+    let (_resp_tx, resp_rx) = mpsc::channel::<Vec<contract::Envelope>>();
+    tx.send(Switch {
+        watcher: new,
+        summary: true,
+        cutoff,
+        prelude: vec![control_line(&id, "x.ack", 7)],
+        response: Some(resp_rx),
+    })
+    .unwrap();
+    // The reader is gone: its cleanup took the sender, closing the wait.
+    drop(_resp_tx);
+    let mut writing = Writing {
+        watcher: old,
+        summary: false,
+        cutoff: 0,
+        written: None,
+    };
+    let mut buf = Vec::new();
+    assert!(
+        apply(&mut writing, &rx, &mut buf).is_err(),
+        "a cancelled wait ends the writer instead of hanging its join"
+    );
+    let lines = envelopes(&String::from_utf8(buf).unwrap());
+    assert_eq!(lines.len(), 1, "the drain is written; nothing after it");
+    assert_eq!(lines[0].kind, "step_started");
 }
