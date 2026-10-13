@@ -104,6 +104,7 @@ fn a_pull_request_runs_timing_only_workloads_three_times_and_the_rest_five() {
             ("resume 2,000,000 tokens", (5, 5)),
             ("paging", (5, 5)),
             ("fsyncs", (1, 1)),
+            ("10 busy turns", (1, 1)),
             ("sessions list", (1, 3)),
             ("terminal attach", (1, 5)),
             ("terminal wheel", (1, 3)),

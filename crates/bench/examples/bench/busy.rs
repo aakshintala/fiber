@@ -34,12 +34,20 @@ pub(crate) const WORKLOADS: [Workload; 2] = [
 ];
 
 /// The workloads that run once: strace slows the process it traces, so its
-/// pass is never a timing or memory sample.
-pub(crate) const ONCE: [Workload; 1] = [Workload {
-    name: "fsyncs",
-    timing: false,
-    run: fsyncs,
-}];
+/// pass is never a timing or memory sample, and ten busy turns hold one
+/// session while they run.
+pub(crate) const ONCE: [Workload; 2] = [
+    Workload {
+        name: "fsyncs",
+        timing: false,
+        run: fsyncs,
+    },
+    Workload {
+        name: "10 busy turns",
+        timing: false,
+        run: ten_turns,
+    },
+];
 
 /// How long `fiber` may take to start, and to exit once idle.
 pub(crate) const READY: Duration = Duration::from_secs(30);
@@ -50,6 +58,10 @@ pub(crate) const TURN: Duration = Duration::from_secs(600);
 
 /// The p99 of tool calls per user turn (`docs/performance.md`, "Budgets").
 const TOOL_CALLS: usize = 429;
+
+/// The turns one pass of the 10-turn run holds in one session: enough for
+/// a per-turn leak to show past the 1 MiB the row allows.
+pub(crate) const TEN_TURNS: usize = 10;
 
 /// The handoff trigger: `handoff.tokens`' default of 400,000 comes before
 /// 0.7 of the fake model's 1,000,000-token window.
@@ -485,6 +497,85 @@ fn busy_turn(ctx: &Ctx<'_>, notes: &mut Vec<String>) -> Result<Samples, String> 
         let lines = read_log(home, &id)?;
         check_turn(notes, home.server(), &lines, TOOL_CALLS);
         busy_turn_samples(rss, retained, &lines, turn.content)
+    })
+}
+
+/// The 10-turn run's samples: the anon RSS still resident once the
+/// first turn's freed pages settle, and once the tenth's settle. The
+/// judge reads both from the one entry, so the verdict compares the
+/// same session with itself.
+pub(crate) fn ten_turn_samples(first: u64, last: u64) -> Samples {
+    vec![(
+        "ten_busy_turns_retained_kib",
+        json!({"first": first, "last": last}),
+    )]
+}
+
+/// Ten busy turns in one session: the first on the command line, the
+/// rest over a `full` connection, then the retained anon RSS after the
+/// first and after the tenth. Each turn repeats the busy turn's shape,
+/// so the script serves every turn's replies in order.
+fn ten_turns(ctx: &Ctx<'_>, notes: &mut Vec<String>) -> Result<Samples, String> {
+    let turn = Turn::new();
+    let script = (0..TEN_TURNS)
+        .flat_map(|_| turn.script.clone())
+        .collect::<Vec<_>>();
+    in_home(Home::scripted(ctx.home.fiber(), script)?, |home| {
+        for (name, body) in &turn.files {
+            write(&home.workspace().join(name), body)?;
+        }
+        let id = doors::mint("s_");
+        let session = Session::spawn(
+            &mut session(ctx, home, &id, &["--prompt", BUSY_PROMPT]),
+            ctx.clock,
+        )?;
+        let measured = (|| {
+            until_stdout(ctx, &session, "turn_completed", TURN)?;
+            let pid = session.proc.pid();
+            let first = retained_anon_kib_of(pid, |wait| ctx.clock.sleep(wait))?;
+            let mut client = crate::resume::subscribe(ctx, home, &id)?;
+            for n in 2..=TEN_TURNS {
+                let prompt_id = format!("c_ten{n}");
+                let content = json!({"content": [{"type": "text", "text": BUSY_PROMPT}]});
+                crate::resume::run_turn(
+                    ctx,
+                    &mut client,
+                    &prompt_id,
+                    &crate::resume::command(&prompt_id, "prompt", &content),
+                )?;
+            }
+            drop(client);
+            retained_anon_kib_of(pid, |wait| ctx.clock.sleep(wait)).map(|last| (first, last))
+        })();
+        let stopped = session.proc.stop(ctx.clock);
+        let (first, last) = measured?;
+        stopped?;
+        let lines = read_log(home, &id)?;
+        expect(
+            notes,
+            "model requests",
+            home.server().requests().len(),
+            TEN_TURNS * (TOOL_CALLS + 1),
+        );
+        expect(
+            notes,
+            "completed tool calls",
+            count(&lines, "tool_call_completed", "status", "completed"),
+            TEN_TURNS * TOOL_CALLS,
+        );
+        expect(
+            notes,
+            "turn_completed lines",
+            count(&lines, "turn_completed", "", ""),
+            TEN_TURNS,
+        );
+        expect(
+            notes,
+            "handoff_started lines",
+            count(&lines, "handoff_started", "", ""),
+            0,
+        );
+        Ok(ten_turn_samples(first, last))
     })
 }
 

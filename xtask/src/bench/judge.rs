@@ -13,6 +13,11 @@ const FSYNCS_PER_TOOL_CALL: u64 = 2;
 /// The fsyncs are counted in one pass under strace, which slows the
 /// process, so it is never a timing or memory sample.
 const FSYNC_RUNS: usize = 1;
+/// The 10-turn run holds one session for its whole pass, so it runs
+/// once per invocation, like the fsyncs pass.
+const TEN_TURN_RUNS: usize = 1;
+/// The anon RSS the tenth turn may keep past the first, in KiB: 1 MiB.
+const TEN_TURN_GROWTH_KIB: u64 = 1024;
 /// The log bytes a turn may add per tool call beyond its content.
 const LOG_BYTES_PER_TOOL_CALL: u64 = 2048;
 /// The row whose ceiling the `web_fetch` conversion must fit in.
@@ -49,6 +54,8 @@ pub(super) enum Rule {
     /// One pass: `fdatasync` calls against the log's model requests and
     /// tool calls.
     Fsyncs(&'static str),
+    /// One pass: the tenth busy turn's anon RSS against the first's.
+    RetainedGrowth(&'static str),
     /// Per run, the turn's log bytes against its content and tool calls.
     LogBytes(&'static str),
 }
@@ -127,6 +134,13 @@ pub(super) const MEASURED: &[(&str, Check)] = &[
         Check::Memory(&["busy_turn_retained_kib"]),
     ),
     (
+        "Session, memory kept after 10 busy turns",
+        Check::Exact {
+            pin: "the memory kept after the first, plus 1 MiB RssAnon",
+            rule: Rule::RetainedGrowth("ten_busy_turns_retained_kib"),
+        },
+    ),
+    (
         "Terminal, memory kept after attaching a 10 MiB session",
         Check::Memory(&["terminal_attach_retained_kib"]),
     ),
@@ -173,10 +187,6 @@ pub(super) const NOT_MEASURED: &[(&str, &str)] = &[
     (
         "`session_list`, waiting for every running session's status",
         "#581 (`session_list`)",
-    ),
-    (
-        "Session, memory kept after 10 busy turns",
-        "#2188 (the status fold's tool names)",
     ),
     (
         "`paging` jig at scale 16, slowest re-count at a new width",
@@ -250,6 +260,7 @@ fn exact(rule: Rule, head: Option<&Results>) -> (Vec<String>, String) {
         Rule::IdleSwitches(ids) => per_thread(List::Switches, ids, head),
         Rule::Threads(id) => per_thread(List::Threads, &[id], head),
         Rule::Fsyncs(id) => per_entry(id, FSYNC_RUNS, head, fsyncs),
+        Rule::RetainedGrowth(id) => per_entry(id, TEN_TURN_RUNS, head, retained_growth),
         Rule::LogBytes(id) => {
             // `per_entry` fails on the missing metric first, so the count
             // is only read when results exist.
@@ -385,6 +396,20 @@ fn log_bytes(entry: &Value, id: &str) -> Result<Entry, String> {
     Ok((
         shown.clone(),
         (bytes > limit).then(|| format!("{shown}, over {limit}")),
+    ))
+}
+
+/// The tenth busy turn's anon RSS against the first's: at most 1 MiB
+/// more. Less than the first is no leak, so only growth past the first
+/// breaks the rule.
+fn retained_growth(entry: &Value, id: &str) -> Result<Entry, String> {
+    let first = field(entry, id, "first")?;
+    let last = field(entry, id, "last")?;
+    let limit = first.saturating_add(TEN_TURN_GROWTH_KIB);
+    let shown = format!("{last} KiB RssAnon after the tenth, {first} KiB after the first");
+    Ok((
+        shown.clone(),
+        (last > limit).then(|| format!("{shown}, over {limit}")),
     ))
 }
 

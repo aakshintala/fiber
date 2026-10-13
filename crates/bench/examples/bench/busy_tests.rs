@@ -1,6 +1,7 @@
 use super::{
-    PAGE_BYTES, RESULT_BYTES, TOOL_CALLS, TRIGGER_TOKENS, Turn, busy_turn_samples, count,
-    fdatasync_calls, filler, log_lines, page, retained_anon_kib, turn_bytes,
+    PAGE_BYTES, RESULT_BYTES, TEN_TURNS, TOOL_CALLS, TRIGGER_TOKENS, Turn, busy_turn_samples,
+    count, fdatasync_calls, filler, log_lines, page, retained_anon_kib, ten_turn_samples,
+    turn_bytes,
 };
 
 #[test]
@@ -98,6 +99,24 @@ fn the_busy_turn_reports_its_peak_its_retained_and_its_log() {
 #[test]
 fn a_busy_turn_without_a_whole_turn_has_no_samples() {
     assert!(busy_turn_samples(20480, 19000, &[], 1_520_000).is_err());
+}
+
+#[test]
+fn the_ten_turn_run_samples_the_first_and_the_tenth() {
+    assert_eq!(TEN_TURNS, 10);
+    let samples = ten_turn_samples(19000, 19005);
+    assert_eq!(samples.len(), 1);
+    let (id, value) = &samples[0];
+    assert_eq!(*id, "ten_busy_turns_retained_kib");
+    assert_eq!(value.get("first"), Some(&serde_json::json!(19000)));
+    assert_eq!(value.get("last"), Some(&serde_json::json!(19005)));
+    // A different reading on either end is a different sample.
+    assert_ne!(samples, ten_turn_samples(19001, 19005));
+    assert_ne!(samples, ten_turn_samples(19000, 19006));
+    // Ten turns of the busy turn's shape: ten prompts, each with its
+    // calls and one closing reply.
+    assert_eq!(TEN_TURNS * (TOOL_CALLS + 1), 4300);
+    assert_eq!(TEN_TURNS * TOOL_CALLS, 4290);
 }
 
 const STATUS: &str = "Name:\tfiber\nState:\tS (sleeping)\nVmHWM:\t   10840 kB\nVmRSS:\t   10812 kB\nRssAnon:\t    4100 kB\nRssFile:\t    4800 kB\n";

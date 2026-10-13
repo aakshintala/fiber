@@ -69,6 +69,7 @@ fn head() -> Value {
             "terminal_attach_rss_kib": [51200, 51210, 51190, 51205, 51195],
             "terminal_attach_retained_kib": [48000, 48010, 47990, 48005, 47995],
             "busy_turn_retained_kib": [19000, 19010, 18990, 19005, 18995],
+            "ten_busy_turns_retained_kib": [ten_turn_run(19000, 19005)],
             "busy_turn_rss_kib": [20480, 20490, 20470, 20485, 20475],
             "resume_20k_rss_kib": [11000, 11010, 10990, 11005, 10995],
             "resume_2m_rss_kib": [14000, 14010, 13990, 14005, 13995],
@@ -121,6 +122,10 @@ fn fsync_run(model_requests: u64, tool_calls: u64, fdatasync: u64) -> Value {
 
 fn log_run(bytes: u64, content: u64, tool_calls: u64) -> Value {
     json!({"bytes": bytes, "content": content, "tool_calls": tool_calls})
+}
+
+fn ten_turn_run(first: u64, last: u64) -> Value {
+    json!({"first": first, "last": last})
 }
 
 fn base() -> Value {
@@ -876,6 +881,70 @@ fn log_bytes_hold_the_content_plus_two_kib_per_tool_call_on_every_run() {
     let comment = judge(&head(), Some(&base()), Event::PullRequest).comment;
     let row = row(&comment, "Log bytes");
     assert!(row.contains("1700000 bytes"), "{row}");
+}
+
+#[test]
+fn the_tenth_turn_keeps_at_most_one_mib_past_the_first() {
+    // At the MiB past the first passes, one KiB past it fails, naming
+    // the row, the metric and the run.
+    let at = with_metric(
+        head(),
+        "ten_busy_turns_retained_kib",
+        json!([ten_turn_run(19000, 20024)]),
+    );
+    assert_eq!(failures_of(&at), Vec::<String>::new());
+    let over = with_metric(
+        head(),
+        "ten_busy_turns_retained_kib",
+        json!([ten_turn_run(19000, 20025)]),
+    );
+    let failures = failures_of(&over);
+    assert!(
+        has(&failures, "Session, memory kept after 10 busy turns"),
+        "{failures:?}"
+    );
+    assert!(
+        has(&failures, "ten_busy_turns_retained_kib"),
+        "{failures:?}"
+    );
+    assert!(has(&failures, "run 1"), "{failures:?}");
+    // Less than the first is no leak, so it passes.
+    let shrunk = with_metric(
+        head(),
+        "ten_busy_turns_retained_kib",
+        json!([ten_turn_run(19000, 17000)]),
+    );
+    assert_eq!(failures_of(&shrunk), Vec::<String>::new());
+    // A half missing fails naming the metric.
+    for entry in [json!({"first": 19000}), json!({"last": 19005}), json!({})] {
+        let results = with_metric(head(), "ten_busy_turns_retained_kib", json!([entry]));
+        assert!(
+            has(&failures_of(&results), "ten_busy_turns_retained_kib"),
+            "{entry}"
+        );
+    }
+    // One pass per invocation: none, or two entries, fails the count.
+    for entries in [json!([]), json!(vec![ten_turn_run(19000, 19005); 2])] {
+        let results = with_metric(head(), "ten_busy_turns_retained_kib", entries);
+        assert!(has(&failures_of(&results), "ten_busy_turns_retained_kib"));
+    }
+    // Missing entirely fails naming the metric.
+    let mut missing = head();
+    missing["metrics"]
+        .as_object_mut()
+        .unwrap()
+        .remove("ten_busy_turns_retained_kib");
+    assert!(has(&failures_of(&missing), "ten_busy_turns_retained_kib"));
+    // The comment shows the measured row passing, out of Not measured.
+    let comment = judge(&head(), Some(&base()), Event::PullRequest).comment;
+    let line = row(&comment, "Session, memory kept after 10 busy turns");
+    assert!(line.ends_with("| pass |"), "{line}");
+    assert!(
+        line.contains("19005 KiB RssAnon after the tenth, 19000 KiB after the first"),
+        "{line}"
+    );
+    let not_measured = comment.split("### Not measured").nth(1).unwrap();
+    assert!(!not_measured.contains("10 busy turns"), "{comment}");
 }
 
 #[test]
