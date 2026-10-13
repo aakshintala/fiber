@@ -1497,8 +1497,8 @@ fn the_menu_and_ask_help_show_worktree() {
 #[test]
 fn the_menu_and_ask_help_show_resume() {
     assert!(
-        menu().contains("[--resume <id>]"),
-        "the menu shows --resume:\n{}",
+        menu().contains("[--resume <id> [--credential <label>]]"),
+        "the menu nests --credential under --resume:\n{}",
         menu()
     );
     let rendered = super::render_help(&["ask"]).unwrap();
