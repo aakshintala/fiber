@@ -27,6 +27,21 @@ fn text(lines: usize) -> String {
         .collect()
 }
 
+/// The ten shell commands both shell-parser candidates parse and walk.
+#[cfg(feature = "brush-parser")]
+const SHELL_COMMANDS: &[&str] = &[
+    "ls -la",
+    "git status --short",
+    "grep -rn \"foo bar\" src/",
+    "cd crates/tui && git log --oneline -20",
+    "cat README.md | head -50",
+    "FOO=1 cargo test -p tui 2>&1 | tail -20",
+    "find . -name '*.rs' -exec wc -l {} +",
+    "echo \"$(git rev-parse HEAD)\"",
+    "(cd docs; rg -n 'cap' *.md) > /dev/null",
+    "for f in *.md; do wc -l \"$f\"; done",
+];
+
 fn main() {
     #[cfg(any(feature = "image", feature = "image-fir"))]
     {
@@ -39,6 +54,61 @@ fn main() {
         if image_timing::run_if_timing() {
             return;
         }
+    }
+    #[cfg(feature = "brush-parser")]
+    {
+        // Same workload through brush-parser: parse each command into its
+        // AST. The AST has no generic walker, so counting walks every node
+        // through the derived Debug formatter and counts its bytes.
+        let dump = std::env::var("SHELL_DUMP").is_ok();
+        let mut pass = |dump: bool| -> usize {
+            let mut total = 0usize;
+            for cmd in SHELL_COMMANDS {
+                let reader = std::io::BufReader::new(cmd.as_bytes());
+                let mut parser =
+                    brush_parser::Parser::new(reader, &brush_parser::ParserOptions::default());
+                match parser.parse_program() {
+                    Ok(program) => {
+                        let debug = format!("{program:?}");
+                        if dump {
+                            // Variant names surface in Debug output as
+                            // UpperCamel identifiers; count them as the
+                            // node-kind summary.
+                            let mut kinds = std::collections::BTreeMap::new();
+                            for word in debug
+                                .split(|c: char| !c.is_alphanumeric() && c != '_')
+                                .filter(|w| {
+                                    w.len() > 2
+                                        && w.starts_with(|c: char| c.is_ascii_uppercase())
+                                })
+                            {
+                                *kinds.entry(word.to_string()).or_insert(0usize) += 1;
+                            }
+                            let kinds = kinds
+                                .iter()
+                                .map(|(k, n)| format!("{k}x{n}"))
+                                .collect::<Vec<_>>()
+                                .join(" ");
+                            println!("cmd={cmd:?} ok debug_bytes={} {kinds}", debug.len());
+                        }
+                        total += debug.len();
+                    }
+                    Err(error) => {
+                        if dump {
+                            println!("cmd={cmd:?} ERROR {error:?}");
+                        }
+                    }
+                }
+            }
+            total
+        };
+        pass(false); // warm-up
+        let start = std::time::Instant::now();
+        let total = pass(dump);
+        let ms = start.elapsed().as_secs_f64() * 1000.0;
+        println!("nodes={total}");
+        eprintln!("parse_walk_ms={ms:.3}");
+        black_box(total);
     }
     #[cfg(feature = "qrcode")]
     {
@@ -857,26 +927,97 @@ fn main() {
     }
     #[cfg(feature = "arborium")]
     {
-        // The terminal highlights a reply's code blocks: one block in each
-        // of three languages, each grammar loaded on its first block.
-        let blocks = [
+        // The terminal highlights a reply's code blocks, each grammar loaded
+        // on its first block. HL_LANGS selects fixture blocks at run time
+        // (one build, all 18 grammars linked): a comma-separated list of
+        // arborium language names, "all" for every fixture, or empty to
+        // link everything but highlight nothing. HL_REPEAT is blocks per
+        // language (default 1). With HL_LANGS unset, the original
+        // three-language workload below runs, so the `arborium` row of the
+        // main table keeps measuring what it always measured.
+        const HL_FIXTURES: &[(&str, &str)] = &[
+            ("bash", include_str!("../highlight-fixtures/bash.sh")),
+            ("c", include_str!("../highlight-fixtures/c.c")),
+            ("cpp", include_str!("../highlight-fixtures/cpp.cpp")),
+            ("css", include_str!("../highlight-fixtures/css.css")),
+            ("diff", include_str!("../highlight-fixtures/diff.diff")),
+            ("go", include_str!("../highlight-fixtures/go.go")),
+            ("html", include_str!("../highlight-fixtures/html.html")),
+            ("java", include_str!("../highlight-fixtures/java.java")),
             (
-                "rust",
-                "fn main() {\n    let x = 1; // one\n    println!(\"{x}\");\n}\n",
+                "javascript",
+                include_str!("../highlight-fixtures/javascript.js"),
+            ),
+            ("json", include_str!("../highlight-fixtures/json.json")),
+            (
+                "markdown",
+                include_str!("../highlight-fixtures/markdown.md"),
             ),
             (
                 "python",
-                "def main():\n    x = 1  # one\n    print(f\"{x}\")\n",
+                include_str!("../highlight-fixtures/python.py"),
             ),
+            ("rust", include_str!("../highlight-fixtures/rust.rs")),
+            ("sql", include_str!("../highlight-fixtures/sql.sql")),
+            ("toml", include_str!("../highlight-fixtures/toml.toml")),
+            ("tsx", include_str!("../highlight-fixtures/tsx.tsx")),
             (
-                "javascript",
-                "function main() {\n  const x = 1; // one\n  console.log(`${x}`);\n}\n",
+                "typescript",
+                include_str!("../highlight-fixtures/typescript.ts"),
             ),
+            ("yaml", include_str!("../highlight-fixtures/yaml.yaml")),
         ];
-        let mut hl = arborium::Highlighter::new();
-        for (lang, code) in blocks {
-            let code = code.repeat(20);
-            black_box(hl.highlight_spans(lang, &code).unwrap().len());
+        match std::env::var("HL_LANGS") {
+            Err(_) => {
+                // The terminal highlights a reply's code blocks: one block in each
+                // of three languages, each grammar loaded on its first block.
+                let blocks = [
+                    (
+                        "rust",
+                        "fn main() {\n    let x = 1; // one\n    println!(\"{x}\");\n}\n",
+                    ),
+                    (
+                        "python",
+                        "def main():\n    x = 1  # one\n    print(f\"{x}\")\n",
+                    ),
+                    (
+                        "javascript",
+                        "function main() {\n  const x = 1; // one\n  console.log(`${x}`);\n}\n",
+                    ),
+                ];
+                let mut hl = arborium::Highlighter::new();
+                for (lang, code) in blocks {
+                    let code = code.repeat(20);
+                    black_box(hl.highlight_spans(lang, &code).unwrap().len());
+                }
+            }
+            Ok(spec) => {
+                let repeat: usize = std::env::var("HL_REPEAT")
+                    .ok()
+                    .and_then(|s| s.parse().ok())
+                    .unwrap_or(1);
+                let langs: Vec<&str> = if spec == "all" {
+                    HL_FIXTURES.iter().map(|(name, _)| *name).collect()
+                } else {
+                    spec.split(',').map(str::trim).collect()
+                };
+                let mut hl = arborium::Highlighter::new();
+                let mut total = 0usize;
+                for lang in langs {
+                    if lang.is_empty() {
+                        continue;
+                    }
+                    let code = HL_FIXTURES
+                        .iter()
+                        .find(|(name, _)| *name == lang)
+                        .unwrap_or_else(|| panic!("no highlight fixture for {lang:?}"))
+                        .1;
+                    for _ in 0..repeat {
+                        total += hl.highlight_spans(lang, code).unwrap().len();
+                    }
+                }
+                black_box(total);
+            }
         }
     }
     #[cfg(feature = "syntect")]

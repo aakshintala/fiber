@@ -47,6 +47,7 @@ flate2 = { version = "1.1", default-features = false, features = ["rust_backend"
 jiff = { version = "0.2", default-features = false, features = ["std", "tz-system", "tzdb-zoneinfo"], optional = true }
 lopdf = { version = "0.45", default-features = false, optional = true }
 qrcode = { version = "0.14", default-features = false, optional = true }
+brush-parser = { version = "0.4", optional = true }
 
 [features]
 # The shell completion scripts `fiber completion` prints, generated from a
@@ -76,6 +77,12 @@ flate2 = ["dep:flate2"]
 jiff = ["dep:jiff"]
 # The image child: counting a PDF's pages and cutting a page range.
 lopdf = ["dep:lopdf"]
+# Shell recogniser candidate (research/shell-parser-cost): parse ten shell
+# commands and walk every node of each tree. tree-sitter-bash lives in the
+# standalone shell-ts/ crate instead: tree-sitter 0.27 and arborium-tree-sitter
+# both declare links = "tree-sitter", which cargo refuses to resolve in one
+# manifest.
+brush-parser = ["dep:brush-parser"]
 
 [profile.release]
 lto = "thin"

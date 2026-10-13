@@ -8,7 +8,7 @@
 # ~4.5 MiB of RSS before it runs a line of code.
 set -eu
 cd "$(dirname "$0")"
-FEATURES="serde_json ureq ratatui crossterm rusqlite mlua clap clap_complete thiserror signal-hook getrandom base64 ring rustix regex ignore search similar pulldown-cmark jsonschema syntect arborium image image-parts html5ever encoding_rs flate2 jiff lopdf qrcode"
+FEATURES="serde_json ureq ratatui crossterm rusqlite mlua clap clap_complete thiserror signal-hook getrandom base64 ring rustix regex ignore search similar pulldown-cmark jsonschema syntect arborium image image-parts html5ever encoding_rs flate2 jiff lopdf qrcode brush-parser"
 # Every crate in the runtime table of docs/dependencies.md, built together.
 RUNTIME="serde_json ureq ratatui crossterm mlua clap clap_complete thiserror signal-hook getrandom base64 ring rustix search similar html5ever encoding_rs pulldown-cmark flate2 jiff qrcode"
 
@@ -26,6 +26,27 @@ peak_kib() {
 median() {
   bin=$1
   for _ in 1 2 3 4 5; do peak_kib "$bin"; done | sort -n | sed -n 3p
+}
+
+# Median of 5 runs of $1 (a probe binary) with the remaining arguments as
+# VAR=value environment assignments (HL_LANGS, HL_REPEAT). Same peak method.
+hl_median() {
+  bin=$1
+  shift
+  for _ in 1 2 3 4 5; do
+    if [ "$(uname)" = Darwin ]; then
+      script -q /dev/null /usr/bin/time -l env "$@" "$bin" </dev/null 2>&1 | tr -d '\r' | awk '/peak memory footprint/ {print int($1 / 1024)}'
+    else
+      script -qec "env $* /usr/bin/time -v $bin" /dev/null </dev/null 2>&1 | tr -d '\r' | awk -F': ' '/Maximum resident set size/ {print $2}'
+    fi
+  done | sort -n | sed -n 3p
+}
+
+hl_row() {
+  label=$1
+  shift
+  kib=$(hl_median "$hlbin" "$@")
+  echo "| $label | $kib | $((kib - base)) |"
 }
 
 build() {
@@ -54,6 +75,32 @@ all=$(echo $RUNTIME | tr ' ' ',')
 bin=$(build runtime "$all")
 kib=$(median "$bin")
 echo "| all runtime crates together | $kib | $((kib - base)) | $(( $(wc -c < "$bin") / 1024 )) |"
+# tree-sitter-bash is not a feature of this manifest: tree-sitter 0.27 and
+# arborium-tree-sitter both declare links = "tree-sitter", which cargo
+# refuses to resolve in one manifest. shell-ts/ is a standalone crate with
+# the identical workload, measured with the same method.
+tsbin=$(cd shell-ts && cargo build --release -q && echo "$PWD/target/release/shell-ts")
+kib=$(median "$tsbin")
+echo "| tree-sitter-bash (shell-ts/) | $kib | $((kib - base)) | $(( $(wc -c < "$tsbin") / 1024 )) |"
+
+# Arborium highlighting per language: one arborium build (all 18 grammars
+# linked), HL_LANGS/HL_REPEAT selecting fixture blocks at run time. Each
+# block is a realistic ~40-line snippet (highlight-fixtures/). Same peak
+# method, median of 5, over the same baseline.
+echo
+echo "arborium highlighting, $(uname -sm):"
+echo "| Workload | $metric (KiB) | Over baseline (KiB) |"
+echo "|---|---:|---:|"
+hlbin=$(build arborium arborium)
+hl_row "linked, highlight nothing" "HL_LANGS="
+for lang in bash c cpp css diff go html java javascript json markdown python rust sql toml tsx typescript yaml; do
+  hl_row "$lang, one block" "HL_LANGS=$lang" "HL_REPEAT=1"
+done
+hl_row "rust, one block" "HL_LANGS=rust" "HL_REPEAT=1"
+hl_row "rust, 10 blocks" "HL_LANGS=rust" "HL_REPEAT=10"
+hl_row "rust, 100 blocks" "HL_LANGS=rust" "HL_REPEAT=100"
+hl_row "rust+python+javascript, one block each" "HL_LANGS=rust,python,javascript" "HL_REPEAT=1"
+hl_row "all 18 languages, one block each" "HL_LANGS=all" "HL_REPEAT=1"
 
 # The lopdf PDF rows: the same binary as the `lopdf` row above, once per
 # scanned-document-like fixture, cutting pages 1-20 as the image child does.

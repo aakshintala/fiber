@@ -1,0 +1,41 @@
+diff --git a/crates/tools/src/shell/classify.rs b/crates/tools/src/shell/classify.rs
+index 3d2f1a0..9c8e4b2 100644
+--- a/crates/tools/src/shell/classify.rs
++++ b/crates/tools/src/shell/classify.rs
+@@ -14,7 +14,11 @@ pub(super) fn classify(command: &str, workdir: &Path) -> Effects {
+     let (subject, prefix) = subject_and_prefix(&parts);
+     match outcome(&parts, workdir) {
+         Outcome::Reads(paths) => reads(paths, subject, prefix),
+-        Outcome::Executes => executes(subject, prefix),
++        Outcome::Executes => {
++            // A subshell inherits the parent's workdir unless `cd` moves it.
++            let prefix = prefix.or_else(|| Some(workdir.to_string_lossy().into()));
++            executes(subject, prefix)
++        }
+     }
+ }
+
+@@ -40,6 +44,22 @@ fn reads(paths: Vec<String>, subject: Option<String>, prefix: Option<String>) ->
+     declared(
+         Effect::Reads,
+         true,
+-        if paths.is_empty() { None } else { Some(paths) },
++        (!paths.is_empty()).then_some(paths),
+         subject,
+         prefix,
+     )
+ }
++
++#[cfg(test)]
++mod probe_tests {
++    use super::*;
++
++    #[test]
++    fn plain_read_keeps_prefix() {
++        let effects = classify("cat README.md", Path::new("/repo"));
++        assert!(matches!(
++            effects.effect,
++            Effect::Reads,
++        ));
++    }
++}

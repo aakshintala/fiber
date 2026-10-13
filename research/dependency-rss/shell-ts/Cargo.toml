@@ -1,0 +1,19 @@
+[package]
+name = "shell-ts"
+version = "0.0.0"
+edition = "2024"
+publish = false
+
+# Standalone: never part of Fiber's workspace, and not a feature of the
+# parent dependency-rss probe either. tree-sitter 0.27 and the probe's
+# arborium-tree-sitter both declare links = "tree-sitter", which cargo
+# refuses to resolve in one manifest.
+[workspace]
+
+[dependencies]
+tree-sitter = "0.27"
+tree-sitter-bash = "0.25"
+
+[profile.release]
+lto = "thin"
+strip = true
