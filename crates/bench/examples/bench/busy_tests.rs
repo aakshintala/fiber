@@ -1,8 +1,9 @@
 use super::{
-    PAGE_BYTES, RESULT_BYTES, TEN_TURNS, TOOL_CALLS, TRIGGER_TOKENS, Turn, busy_turn_samples,
-    count, fdatasync_calls, filler, log_lines, page, retained_anon_kib, ten_turn_samples,
-    turn_bytes,
+    PAGE_BYTES, RESULT_BYTES, RETAINED_SETTLE, TEN_TURNS, TOOL_CALLS, TRIGGER_TOKENS, Turn,
+    busy_turn_samples, count, fdatasync_calls, filler, log_lines, page, retained_anon_kib,
+    ten_turn_samples, turn_bytes,
 };
+use crate::run::PROBE;
 
 #[test]
 fn fdatasync_calls_are_counted_once_each_and_nothing_else_is() {
@@ -121,61 +122,107 @@ fn the_ten_turn_run_samples_the_first_and_the_tenth() {
 
 const STATUS: &str = "Name:\tfiber\nState:\tS (sleeping)\nVmHWM:\t   10840 kB\nVmRSS:\t   10812 kB\nRssAnon:\t    4100 kB\nRssFile:\t    4800 kB\n";
 
-/// The settle waits `sleeps` records, and the order `events` saw.
-#[derive(Default)]
-struct RetainedRecorder {
-    sleeps: Vec<std::time::Duration>,
-    events: Vec<&'static str>,
+/// A `/proc/<pid>/status` text with `anon` KiB of `RssAnon`.
+fn status_with(anon: u64) -> String {
+    STATUS.replace("4100", &anon.to_string())
+}
+
+/// Runs `retained_anon_kib` over `script`'s readings: the result, the
+/// readings made and the total slept. The sleeps are recorded, never
+/// taken, so no test reads or sleeps on the real clock.
+fn run_retained(
+    script: Vec<Result<String, String>>,
+) -> (Result<u64, String>, usize, std::time::Duration) {
+    let readings = std::cell::Cell::new(0);
+    let script = std::cell::RefCell::new(script.into_iter());
+    let mut slept = std::time::Duration::ZERO;
+    let got = retained_anon_kib(
+        || {
+            readings.set(readings.get() + 1);
+            script
+                .borrow_mut()
+                .next()
+                .unwrap_or(Err("past the script".to_owned()))
+        },
+        |wait| {
+            slept += wait;
+        },
+    );
+    (got, readings.get(), slept)
 }
 
 #[test]
-fn the_retained_reading_waits_the_settle_then_reads_rss_anon() {
-    let recorder = std::cell::RefCell::new(RetainedRecorder::default());
-    let anon = retained_anon_kib(
-        || {
-            recorder.borrow_mut().events.push("read");
-            Ok(STATUS.to_owned())
-        },
-        |wait| {
-            let mut recorder = recorder.borrow_mut();
-            recorder.sleeps.push(wait);
-            recorder.events.push("sleep");
-        },
-    );
-    assert_eq!(anon, Ok(4100));
-    let recorder = recorder.borrow();
-    assert_eq!(recorder.sleeps, [std::time::Duration::from_secs(10)]);
-    // The read follows the wait, so the settled memory is read.
-    assert_eq!(recorder.events, vec!["sleep", "read"]);
+fn the_retained_reading_returns_once_rss_anon_stops_falling() {
+    let script = [5000, 4000, 4000, 1000]
+        .map(status_with)
+        .into_iter()
+        .map(Ok)
+        .collect();
+    let (got, readings, slept) = run_retained(script);
+    assert_eq!(got, Ok(4000));
+    // The third reading is flat against the second, so the fourth never runs.
+    assert_eq!(readings, 3);
+    assert_eq!(slept, 2 * PROBE);
+}
+
+#[test]
+fn a_rising_rss_anon_is_settled_too() {
+    let script = [4000, 4100].map(status_with).into_iter().map(Ok).collect();
+    let (got, readings, slept) = run_retained(script);
+    // Rising is not falling: the wait ends at the second reading.
+    assert_eq!(got, Ok(4100));
+    assert_eq!(readings, 2);
+    assert_eq!(slept, PROBE);
+}
+
+#[test]
+fn a_falling_rss_anon_is_read_through_the_bound() {
+    let polls =
+        usize::try_from(RETAINED_SETTLE.as_millis() / PROBE.as_millis()).unwrap_or(usize::MAX);
+    // Every reading falls, so the wait runs the whole bound and returns the last.
+    let script = (0..=polls)
+        .rev()
+        .map(|n| Ok(status_with(4000 + u64::try_from(n).unwrap_or(u64::MAX))))
+        .collect();
+    let (got, readings, slept) = run_retained(script);
+    assert_eq!(got, Ok(4000));
+    assert_eq!(readings, polls + 1);
+    // The pass never waits longer than the fixed settle did.
+    assert_eq!(slept, RETAINED_SETTLE);
 }
 
 #[test]
 fn a_retained_reading_without_rss_anon_is_an_error_not_zero() {
     let without_anon = STATUS.replace("RssAnon:\t    4100 kB\n", "");
-    let mut sleeps = 0;
-    let anon = retained_anon_kib(
-        || Ok(without_anon.clone()),
-        |_| {
-            sleeps += 1;
-        },
-    );
-    let err = anon.unwrap_err();
+    let (got, readings, slept) = run_retained(vec![Ok(without_anon)]);
+    let err = got.unwrap_err();
     assert!(err.contains("RssAnon"), "{err}");
-    assert_eq!(sleeps, 1);
+    // No wait ran: the first reading already failed.
+    assert_eq!(readings, 1);
+    assert_eq!(slept, std::time::Duration::ZERO);
 }
 
 #[test]
-fn a_process_gone_during_the_settle_wait_fails_the_reading() {
-    let mut sleeps = 0;
-    let anon = retained_anon_kib(
-        || Err("reading /proc/4101/status: no such file".to_owned()),
-        |_| {
-            sleeps += 1;
-        },
-    );
-    assert!(anon.is_err());
-    // The wait still ran: the process lived through the settle.
-    assert_eq!(sleeps, 1);
+fn a_process_gone_before_the_first_reading_fails_the_reading() {
+    let (got, readings, slept) = run_retained(vec![Err(
+        "reading /proc/4101/status: no such file".to_owned()
+    )]);
+    assert!(got.is_err());
+    assert_eq!(readings, 1);
+    // No wait ran: the process was already gone.
+    assert_eq!(slept, std::time::Duration::ZERO);
+}
+
+#[test]
+fn a_process_gone_during_the_quiescence_wait_fails_the_reading() {
+    let script = vec![
+        Ok(status_with(5000)),
+        Err("reading /proc/4101/status: no such file".to_owned()),
+    ];
+    let (got, readings, slept) = run_retained(script);
+    assert!(got.is_err());
+    assert_eq!(readings, 2);
+    assert_eq!(slept, PROBE);
 }
 
 #[test]

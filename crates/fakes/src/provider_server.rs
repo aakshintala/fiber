@@ -460,11 +460,16 @@ fn serve(stream: TcpStream, state: &Mutex<State>, arrived: &Condvar) -> io::Resu
     let mut reader = BufReader::new(stream);
     let (mut request, malformed) = read_request(&mut reader)?;
     let request_path = request.path.clone();
-    // Cloned before the record moves it: the responder reads the request
-    // it answers, and every earlier one stays in the record.
-    let answered = request.clone();
     let response = {
         let mut state = lock(state);
+        // Cloned before the record moves it, and only when a responder
+        // reads the request it answers: the scripted path never does, and
+        // cloning every ever-growing body here copies tens of gigabytes a
+        // pass (see #2188).
+        let answered = state
+            .responder
+            .clone()
+            .map(|responder| (responder, request.clone()));
         if state.drop_bodies {
             request.body = Vec::new();
         }
@@ -477,10 +482,9 @@ fn serve(stream: TcpStream, state: &Mutex<State>, arrived: &Condvar) -> io::Resu
                 400,
                 format!(r#"{{"error":"fakes: malformed chunked body: {why}"}}"#),
             ),
-            None => {
-                if let Some(responder) = state.responder.clone() {
-                    responder(&answered)
-                } else {
+            None => match answered {
+                Some((responder, answered)) => responder(&answered),
+                None => {
                     let target = request_path.split('?').next().unwrap_or_default();
                     let route = state.routes.iter().position(|(path, _)| path == target);
                     route
@@ -489,7 +493,7 @@ fn serve(stream: TcpStream, state: &Mutex<State>, arrived: &Condvar) -> io::Resu
                         .or_else(|| state.fallback.clone())
                         .unwrap_or_else(no_scripted_response)
                 }
-            }
+            },
         };
         if response.drop_connection {
             // Recorded above; the open stream drops here, so the client

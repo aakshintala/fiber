@@ -79,23 +79,41 @@ const BUSY_PROMPT: &str = "read each file";
 const FINAL_TEXT: &str = "every file is read";
 
 /// How long a retained reading waits after the work ends before reading
-/// `RssAnon`: freed pages take a moment to leave the resident set.
+/// `RssAnon`: freed pages take a moment to leave the resident set. A
+/// quiescence wait never sleeps longer than this per reading.
 pub(crate) const RETAINED_SETTLE: Duration = Duration::from_secs(10);
 
-/// `RssAnon` once the memory the finished work freed has settled: waits
-/// the settle on `sleep`, then reads the anon half of `read_status`'s
-/// split. A missing field, or a process gone during the wait, is an
-/// error, never 0: a zero would pass a retained budget.
-pub(crate) fn retained_anon_kib(
-    read_status: impl FnOnce() -> Result<String, String>,
-    sleep: impl FnOnce(Duration),
-) -> Result<u64, String> {
-    sleep(RETAINED_SETTLE);
-    linux::rss_split_kib(&read_status()?).map(|(anon, _)| anon)
+/// The anon half of `read_status`'s split. A missing field is an error,
+/// never 0: a zero would pass a retained budget.
+fn anon_kib(status: &str) -> Result<u64, String> {
+    linux::rss_split_kib(status).map(|(anon, _)| anon)
 }
 
-/// `pid`'s `RssAnon` after the settle wait, sleeping on `sleep`.
-pub(crate) fn retained_anon_kib_of(pid: u32, sleep: impl FnOnce(Duration)) -> Result<u64, String> {
+/// `RssAnon` once the memory the finished work freed has settled: polls
+/// `read_status` every `run::PROBE`, sleeping on `sleep`, until it stops
+/// falling, and sleeps at most `RETAINED_SETTLE` in total. A missing
+/// field, or a process gone during the wait, is an error, never 0: a zero
+/// would pass a retained budget.
+pub(crate) fn retained_anon_kib(
+    mut read_status: impl FnMut() -> Result<String, String>,
+    mut sleep: impl FnMut(Duration),
+) -> Result<u64, String> {
+    let mut prev = anon_kib(&read_status()?)?;
+    let polls =
+        usize::try_from(RETAINED_SETTLE.as_millis() / run::PROBE.as_millis()).unwrap_or(usize::MAX);
+    for _ in 0..polls {
+        sleep(run::PROBE);
+        let next = anon_kib(&read_status()?)?;
+        if next >= prev {
+            return Ok(next);
+        }
+        prev = next;
+    }
+    Ok(prev)
+}
+
+/// `pid`'s `RssAnon` after the quiescence wait, sleeping on `sleep`.
+pub(crate) fn retained_anon_kib_of(pid: u32, sleep: impl FnMut(Duration)) -> Result<u64, String> {
     retained_anon_kib(
         || {
             let path = Path::new("/proc").join(pid.to_string()).join("status");
@@ -530,6 +548,8 @@ fn ten_turns(ctx: &Ctx<'_>, notes: &mut Vec<String>) -> Result<Samples, String> 
             write(&home.workspace().join(name), body)?;
         }
         let id = doors::mint("s_");
+        let pass_start = ctx.clock.now();
+        let mut waited = Duration::ZERO;
         let session = Session::spawn(
             &mut session(ctx, home, &id, &["--prompt", BUSY_PROMPT]),
             ctx.clock,
@@ -537,7 +557,10 @@ fn ten_turns(ctx: &Ctx<'_>, notes: &mut Vec<String>) -> Result<Samples, String> 
         let measured = (|| {
             until_stdout(ctx, &session, "turn_completed", TURN)?;
             let pid = session.proc.pid();
-            let first = retained_anon_kib_of(pid, |wait| ctx.clock.sleep(wait))?;
+            let first = retained_anon_kib_of(pid, |wait| {
+                waited += wait;
+                ctx.clock.sleep(wait);
+            })?;
             let mut client = crate::resume::subscribe(ctx, home, &id)?;
             for n in 2..=TEN_TURNS {
                 let prompt_id = format!("c_ten{n}");
@@ -550,7 +573,22 @@ fn ten_turns(ctx: &Ctx<'_>, notes: &mut Vec<String>) -> Result<Samples, String> 
                 )?;
             }
             drop(client);
-            retained_anon_kib_of(pid, |wait| ctx.clock.sleep(wait)).map(|last| (first, last))
+            let last = retained_anon_kib_of(pid, |wait| {
+                waited += wait;
+                ctx.clock.sleep(wait);
+            })?;
+            // The turns' own time, without the quiescence waits: plain
+            // progress, never a sample (see #2188).
+            eprintln!(
+                "bench: 10 busy turns ran {:.1}s excluding {:.1}s of quiescence wait",
+                ctx.clock
+                    .now()
+                    .saturating_duration_since(pass_start)
+                    .saturating_sub(waited)
+                    .as_secs_f64(),
+                waited.as_secs_f64(),
+            );
+            Ok::<_, String>((first, last))
         })();
         let stopped = session.proc.stop(ctx.clock);
         let (first, last) = measured?;
