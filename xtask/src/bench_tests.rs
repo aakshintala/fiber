@@ -1021,6 +1021,23 @@ fn a_pull_request_the_selection_did_not_choose_skips_the_ten_turns_row() {
     );
     let out = judge(&skipped, Some(&base()), Event::PullRequest);
     assert_eq!(out.failures, Vec::<String>::new(), "{:?}", out.failures);
+    // The row does not gate, but the summary still says the selection
+    // skipped it (`docs/ci.md`, "Selection").
+    let not_measured = out.comment.split("### Not measured").nth(1).unwrap();
+    let ten_turns = not_measured
+        .lines()
+        .find(|l| l.contains("memory kept after 10 busy turns"))
+        .unwrap_or_else(|| panic!("no ten-turns row in:\n{not_measured}"));
+    assert!(ten_turns.contains("skipped"), "{ten_turns}");
+    assert!(ten_turns.contains("#2210"), "{ten_turns}");
+    // A run the selection chose shows the row's owner alone.
+    let out = judge(&head(), Some(&base()), Event::PullRequest);
+    let not_measured = out.comment.split("### Not measured").nth(1).unwrap();
+    let ten_turns = not_measured
+        .lines()
+        .find(|l| l.contains("memory kept after 10 busy turns"))
+        .unwrap_or_else(|| panic!("no ten-turns row in:\n{not_measured}"));
+    assert!(!ten_turns.contains("skipped"), "{ten_turns}");
     // The skip records only the ten-turns workload: another Exact row
     // with the skip recorded is still judged, never skipped.
     let text = skipped.to_string();

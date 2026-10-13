@@ -88,18 +88,44 @@ const FINAL_TEXT: &str = "every file is read";
 /// quiescence wait never sleeps longer than this per reading.
 pub(crate) const RETAINED_SETTLE: Duration = Duration::from_secs(10);
 
+/// `RssAnon` once the memory the finished work freed has settled: waits
+/// the settle on `sleep`, then reads the anon half of `read_status`'s
+/// split. A missing field, or a process gone during the wait, is an
+/// error, never 0: a zero would pass a retained budget.
+pub(crate) fn retained_anon_kib(
+    read_status: impl FnOnce() -> Result<String, String>,
+    sleep: impl FnOnce(Duration),
+) -> Result<u64, String> {
+    sleep(RETAINED_SETTLE);
+    linux::rss_split_kib(&read_status()?).map(|(anon, _)| anon)
+}
+
+/// `pid`'s `RssAnon` after the settle wait, sleeping on `sleep`.
+pub(crate) fn retained_anon_kib_of(pid: u32, sleep: impl FnOnce(Duration)) -> Result<u64, String> {
+    retained_anon_kib(
+        || {
+            let path = Path::new("/proc").join(pid.to_string()).join("status");
+            fs::read_to_string(&path).map_err(|err| format!("reading {}: {err}", path.display()))
+        },
+        sleep,
+    )
+}
+
 /// The anon half of `read_status`'s split. A missing field is an error,
 /// never 0: a zero would pass a retained budget.
 fn anon_kib(status: &str) -> Result<u64, String> {
     linux::rss_split_kib(status).map(|(anon, _)| anon)
 }
 
-/// `RssAnon` once the memory the finished work freed has settled: polls
+/// `RssAnon` once the memory the ten-turn pass freed stops falling: polls
 /// `read_status` every `run::PROBE`, sleeping on `sleep`, until it stops
-/// falling, and sleeps at most `RETAINED_SETTLE` in total. A missing
-/// field, or a process gone during the wait, is an error, never 0: a zero
-/// would pass a retained budget.
-pub(crate) fn retained_anon_kib(
+/// falling, and sleeps at most `RETAINED_SETTLE` in total. Only the
+/// ten-turn pass waits this way, so its two readings fit the Release job;
+/// the busy turn and the attached terminal wait the fixed settle above
+/// (`docs/performance.md`, "Measuring"). A missing field, or a process
+/// gone during the wait, is an error, never 0: a zero would pass a
+/// retained budget.
+pub(crate) fn quiescent_anon_kib(
     mut read_status: impl FnMut() -> Result<String, String>,
     mut sleep: impl FnMut(Duration),
 ) -> Result<u64, String> {
@@ -118,8 +144,8 @@ pub(crate) fn retained_anon_kib(
 }
 
 /// `pid`'s `RssAnon` after the quiescence wait, sleeping on `sleep`.
-pub(crate) fn retained_anon_kib_of(pid: u32, sleep: impl FnMut(Duration)) -> Result<u64, String> {
-    retained_anon_kib(
+pub(crate) fn quiescent_anon_kib_of(pid: u32, sleep: impl FnMut(Duration)) -> Result<u64, String> {
+    quiescent_anon_kib(
         || {
             let path = Path::new("/proc").join(pid.to_string()).join("status");
             fs::read_to_string(&path).map_err(|err| format!("reading {}: {err}", path.display()))
@@ -596,7 +622,7 @@ fn ten_turns(ctx: &Ctx<'_>, notes: &mut Vec<String>) -> Result<Samples, String> 
                 &handoff_id,
                 &crate::resume::command(&handoff_id, "handoff", &json!({})),
             )?;
-            let first = retained_anon_kib_of(pid, |wait| {
+            let first = quiescent_anon_kib_of(pid, |wait| {
                 waited += wait;
                 ctx.clock.sleep(wait);
             })?;
@@ -618,7 +644,7 @@ fn ten_turns(ctx: &Ctx<'_>, notes: &mut Vec<String>) -> Result<Samples, String> 
                 )?;
             }
             drop(client);
-            let last = retained_anon_kib_of(pid, |wait| {
+            let last = quiescent_anon_kib_of(pid, |wait| {
                 waited += wait;
                 ctx.clock.sleep(wait);
             })?;

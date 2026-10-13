@@ -180,6 +180,14 @@ pub(super) const MEASURED: &[(&str, Check)] = &[
     ),
 ];
 
+/// The ten-turn pass's Budget cell, here and in `docs/performance.md`.
+pub(super) const TEN_TURNS_BUDGET: &str =
+    "Session, memory kept after 10 busy turns, each followed by its handoff";
+/// What the summary says when the selection left the ten-turn pass out:
+/// the run is judged on the other rows (`docs/ci.md`, "Selection").
+pub(super) const TEN_TURNS_SKIP_NOTE: &str =
+    "skipped: the selection did not run the 10-busy-turns workload";
+
 /// Each row with no benchmark yet, by its Budget cell, and what owns it.
 pub(super) const NOT_MEASURED: &[(&str, &str)] = &[
     (
@@ -195,7 +203,7 @@ pub(super) const NOT_MEASURED: &[(&str, &str)] = &[
         "#2187 (re-count and search growth)",
     ),
     (
-        "Session, memory kept after 10 busy turns, each followed by its handoff",
+        TEN_TURNS_BUDGET,
         "#2210 (~159 KiB/turn residue, re-registers the row)",
     ),
 ];
@@ -258,8 +266,9 @@ pub(super) enum Base {
 
 /// Whether the head file records the 10-busy-turns workload as skipped:
 /// a pull request the selection did not choose it for is judged on the
-/// other rows.
-fn ten_turns_skipped(head: Option<&Results>) -> bool {
+/// other rows. `pub` for the summary, which names the skip even though
+/// the row does not gate (`docs/ci.md`, "Selection").
+pub(super) fn ten_turns_skipped(head: Option<&Results>) -> bool {
     head.is_some_and(|results| {
         results
             .skipped
@@ -432,10 +441,7 @@ fn retained_growth_median(id: &str, count: usize, head: Option<&Results>) -> (Ve
     // The selection left the workload out: the run is judged on the
     // other rows, and the comment's row says so.
     if ten_turns_skipped(head) {
-        return (
-            Vec::new(),
-            "skipped: the selection did not run the 10-busy-turns workload".to_owned(),
-        );
+        return (Vec::new(), TEN_TURNS_SKIP_NOTE.to_owned());
     }
     let entries = match metric(head, id).and_then(|value| {
         value
