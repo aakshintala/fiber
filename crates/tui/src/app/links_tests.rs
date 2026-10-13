@@ -415,12 +415,14 @@ fn a_focused_link_sits_on_surface_raised_with_its_hint_under_it() {
 }
 
 #[test]
-fn a_focused_link_on_the_last_row_draws_no_hint() {
+fn a_focused_link_on_the_last_row_scrolls_its_hint_into_view() {
     use crate::theme::Role;
+    use ratatui::style::Modifier;
     // Paragraphs enough to fill the conversation, then the link: one
     // wheel step up moves the rows three rows down the screen, putting
-    // the link on the conversation's last row with no row below it
-    // for the hint.
+    // the link on the conversation's last row. The hint stays visible:
+    // the rows scroll up one row to free its row under the link
+    // (`docs/tui.md`, "Links").
     let paragraphs: Vec<String> = (0..30).map(|n| format!("paragraph {n}")).collect();
     let text = format!(
         "{}\n\n[docs](https://example.com/a)",
@@ -440,13 +442,280 @@ fn a_focused_link_on_the_last_row_draws_no_hint() {
         "the link is the last conversation row"
     );
     app.focus = Some(id);
+    let bottom = app.conversation_area().bottom();
+    let (buf, targets) = draw(&app);
+    // The link moves up one row and keeps its focused look; the hint
+    // draws on the freed last row, dim.
+    let moved = bottom.saturating_sub(2);
+    let cell = &buf[(first.x, moved)];
+    assert_eq!(cell.fg, Role::Accent.color(), "the moved link's colour");
+    assert_eq!(
+        cell.bg,
+        Role::SurfaceRaised.color(),
+        "the moved link's tint"
+    );
+    let hint = "Enter opens · y copies";
+    let row: String = (first.x..first.x.saturating_add(22))
+        .map(|x| buf[(x, bottom.saturating_sub(1))].symbol().to_owned())
+        .collect();
+    assert_eq!(row, hint);
+    for dx in 0..22 {
+        assert!(
+            buf[(first.x.saturating_add(dx), bottom.saturating_sub(1))]
+                .modifier
+                .contains(Modifier::DIM),
+            "hint cell {dx}"
+        );
+    }
+    // The hint's cells open the focused link, and Enter and `y` keep
+    // working (`docs/tui.md`, "Links").
+    let under = hit(&targets, first.x, bottom.saturating_sub(1)).expect("a target on the hint row");
+    assert_eq!(under, id);
+    assert_eq!(
+        app.on_click(under),
+        Effect::OpenLink("https://example.com/a".to_owned())
+    );
+    assert_eq!(
+        app.on_key(Key::Enter, now()),
+        Effect::OpenLink("https://example.com/a".to_owned())
+    );
+    app.focus = Some(id);
+    assert_eq!(
+        app.on_key(Key::Char('y'), now()),
+        Effect::Copy("https://example.com/a".to_owned())
+    );
+    // Focus gone, the hint goes with it.
+    app.focus = None;
     let (buf, _) = draw(&app);
-    // The focused look still paints, without the hint and without
-    // touching the rows below the conversation.
-    let cell = &buf[(first.x, first.y)];
-    assert_eq!(cell.bg, Role::SurfaceRaised.color());
     let text = crate::view::text(&buf);
-    assert!(!text.contains("Enter opens"), "{text}");
+    assert!(!text.contains(hint), "{text}");
+}
+
+#[test]
+fn a_focused_table_link_reserves_its_hint_row() {
+    use crate::theme::Role;
+    use ratatui::style::{Color, Modifier};
+    // Two table link rows back to back: the hint for the upper link
+    // reserves its own row under it, so the lower row keeps its text
+    // and its target keeps its URL (`docs/tui.md`, "Links").
+    let mut app = replied(
+        60,
+        16,
+        "| name | link |\n| --- | --- |\n| [spec](https://example.com/spec) | tail |\n| [site](https://example.com/site) | end |\n\nmore text here",
+    );
+    app.set_opener(true);
+    let (id, first) = link_for(&app, "https://example.com/spec");
+    let (_, second) = link_for(&app, "https://example.com/site");
+    assert_eq!(second.y, first.y.saturating_add(1), "adjacent table rows");
+    app.focus = Some(id);
+    let (buf, targets) = draw(&app);
+    // The hint sits on the reserved row under the focused link, dim,
+    // keeping the cells' colours so the card shows through.
+    let hint = "Enter opens · y copies";
+    let gap = first.y.saturating_add(1);
+    let row: String = (first.x..first.x.saturating_add(22))
+        .map(|x| buf[(x, gap)].symbol().to_owned())
+        .collect();
+    assert_eq!(row, hint);
+    for dx in 0..22 {
+        let cell = &buf[(first.x.saturating_add(dx), gap)];
+        assert!(cell.modifier.contains(Modifier::DIM), "hint cell {dx}");
+        assert_eq!(cell.fg, Color::Reset, "hint cell {dx}");
+    }
+    // The reserved row is one blank card row: every cell shares its
+    // background, so no previous frame's cells show past the hint. The
+    // scroll bar paints the last column after the rows.
+    let bg = buf[(0, gap)].bg;
+    let last_col = buf.area.width.saturating_sub(1);
+    for x in 0..last_col {
+        assert_eq!(buf[(x, gap)].bg, bg, "gap cell {x}");
+    }
+    // The focused link stays where it was, on its tint.
+    let (moved, at) = link_for(&app, "https://example.com/spec");
+    assert_eq!((moved, at), (id, first));
+    assert_eq!(
+        buf[(first.x, first.y)].bg,
+        Role::SurfaceRaised.color(),
+        "the focused link's tint"
+    );
+    // The lower row moved down one with its text: no target sits on
+    // the hint row, and its own target still opens its URL.
+    assert!(
+        hit(&targets, first.x, gap).is_none(),
+        "no target under the hint"
+    );
+    let (site_id, site) = link_for(&app, "https://example.com/site");
+    assert_eq!(
+        site.y,
+        second.y.saturating_add(1),
+        "the lower row moved down one"
+    );
+    let screen = crate::view::text(&buf);
+    assert!(
+        screen
+            .lines()
+            .nth(usize::from(site.y))
+            .unwrap_or_default()
+            .contains("site"),
+        "the lower row keeps its text\n{screen}"
+    );
+    assert_eq!(
+        app.on_click(site_id),
+        Effect::OpenLink("https://example.com/site".to_owned())
+    );
+    // Enter opens and `y` copies the focused link.
+    assert_eq!(
+        app.on_key(Key::Enter, now()),
+        Effect::OpenLink("https://example.com/spec".to_owned())
+    );
+    app.focus = Some(id);
+    assert_eq!(
+        app.on_key(Key::Char('y'), now()),
+        Effect::Copy("https://example.com/spec".to_owned())
+    );
+}
+
+#[test]
+fn a_focused_link_moves_down_to_the_next_link() {
+    use crate::theme::Role;
+    // From the table above with the upper link focused, moving focus
+    // to the lower link moves the reserved row under it: the hint
+    // follows focus and every target keeps its URL (`docs/tui.md`,
+    // "Links").
+    let mut app = replied(
+        60,
+        16,
+        "| name | link |\n| --- | --- |\n| [spec](https://example.com/spec) | tail |\n| [site](https://example.com/site) | end |\n\nmore text here",
+    );
+    app.set_opener(true);
+    let (id, _) = link_for(&app, "https://example.com/spec");
+    app.focus = Some(id);
+    assert!(
+        targets_text(&app).contains("Enter opens"),
+        "the first hint shows"
+    );
+    let (site_id, _) = link_for(&app, "https://example.com/site");
+    app.focus = Some(site_id);
+    let (buf, _) = draw(&app);
+    // The hint sits under the newly focused link's line, and it keeps
+    // the focused tint while the old one keeps the card's background.
+    // The refetch reads the newly focused layout's rows.
+    let (_, site) = link_for(&app, "https://example.com/site");
+    let gap = site.y.saturating_add(1);
+    let row: String = (site.x..site.x.saturating_add(22))
+        .map(|x| buf[(x, gap)].symbol().to_owned())
+        .collect();
+    assert_eq!(row, "Enter opens · y copies");
+    assert_eq!(
+        buf[(site.x, site.y)].bg,
+        Role::SurfaceRaised.color(),
+        "the newly focused link's tint"
+    );
+    let (spec_id, spec) = link_for(&app, "https://example.com/spec");
+    assert_eq!(spec_id, id);
+    assert_ne!(
+        buf[(spec.x, spec.y)].bg,
+        Role::SurfaceRaised.color(),
+        "the old link lost its tint"
+    );
+    assert_eq!(
+        app.on_key(Key::Enter, now()),
+        Effect::OpenLink("https://example.com/site".to_owned())
+    );
+}
+
+/// The screen's text for `app` as drawn now.
+fn targets_text(app: &App) -> String {
+    let (buf, _) = draw(app);
+    crate::view::text(&buf)
+}
+
+/// Whether any link drawn now opens `url`.
+fn targets_text_has(app: &App, url: &str) -> bool {
+    let area = app.conversation_area();
+    app.visible_links(area)
+        .into_iter()
+        .any(|link| link.url == url)
+}
+
+#[test]
+fn a_focused_link_pushes_the_last_row_off_the_screen() {
+    // Paragraphs, a mid link, then a last link on the conversation's
+    // last row: focusing the mid link reserves its hint row by moving
+    // the rows below down one, so the last row drops with its target
+    // instead of opening under the hint (`docs/tui.md`, "Links").
+    let paragraphs: Vec<String> = (0..30).map(|n| format!("paragraph {n}")).collect();
+    let text = format!(
+        "{}\n\n[mid](https://example.com/mid)\n\n[last](https://example.com/last)",
+        paragraphs.join("\n\n")
+    );
+    let mut app = replied(60, 16, &text);
+    app.set_opener(true);
+    app.on_wheel(&Mouse {
+        kind: MouseKind::WheelUp,
+        col: 30,
+        row: 6,
+    });
+    let bottom = app.conversation_area().bottom();
+    let (_, last) = link_for(&app, "https://example.com/last");
+    assert_eq!(
+        last.y.saturating_add(1),
+        bottom,
+        "the last link is the last conversation row"
+    );
+    let (id, _) = link_for(&app, "https://example.com/mid");
+    app.focus = Some(id);
+    let (buf, targets) = draw(&app);
+    // The hint shows under the focused link while the dropped row's
+    // text and target are gone together.
+    let text = crate::view::text(&buf);
+    assert!(text.contains("Enter opens · y copies"), "{text}");
+    assert!(!text.contains("https://example.com/last"), "{text}");
+    assert!(
+        targets
+            .iter()
+            .filter(|target| matches!(target.id, TargetId::Link { .. }))
+            .all(|target| target.rect.y < bottom),
+        "no target hangs past the screen"
+    );
+    assert!(
+        !targets_text_has(&app, "https://example.com/last"),
+        "the dropped link has no target"
+    );
+}
+
+#[test]
+fn a_focused_link_filling_its_window_draws_no_hint() {
+    // A one-row conversation window scrolled so the link's row is its
+    // only row: no row below can free the hint's row and no row above
+    // can give way, so only the focused look paints (`docs/tui.md`,
+    // "Links"). PageUp steps one row in a one-row window.
+    let mut app = replied(60, 4, "[docs](https://example.com/a)");
+    app.set_opener(true);
+    let mut found = None;
+    for _ in 0..10 {
+        let area = app.conversation_area();
+        if let Some(entry) = app
+            .visible_links(area)
+            .into_iter()
+            .find(|link| link.url == "https://example.com/a")
+        {
+            found = Some((entry.id, entry.rects.first().copied()))
+        }
+        if found.is_some() {
+            break;
+        }
+        app.on_key(Key::PageUp, now());
+    }
+    let (id, rect) = found.expect("the link scrolls into the one-row window");
+    let area = app.conversation_area();
+    assert_eq!(rect.expect("a link row").y, area.y);
+    app.focus = Some(id);
+    assert!(app.hint_layout(area).gap.is_none(), "no room for the hint");
+    assert_eq!(
+        app.on_key(Key::Enter, now()),
+        Effect::OpenLink("https://example.com/a".to_owned())
+    );
 }
 
 #[test]

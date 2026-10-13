@@ -104,18 +104,303 @@ fn trim(range: &mut Range<usize>, text: &str) {
     }
 }
 
+/// The conversation's layout with the focused link's hint row: where
+/// its rows draw and which row the hint reserves, if any. Content
+/// (`crate::view`) and targets ([`App::visible_links`]) share it, so the
+/// hint never paints over a row whose target opens another URL
+/// (`docs/tui.md`, "Links").
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct HintLayout {
+    /// The first conversation row drawn.
+    pub(crate) top: usize,
+    /// The screen row it draws on.
+    pub(crate) y0: u16,
+    /// How many conversation rows draw.
+    pub(crate) shown: usize,
+    /// The reserved row under the focused link's line, if any.
+    pub(crate) gap: Option<u16>,
+    /// The focused link's entry under its layout cells, when the layout
+    /// moved them.
+    pub(crate) focus: Option<FocusedLink>,
+}
+
+/// The focused link as drawn: its entry keeps the id focus names at its
+/// layout cells, so focus sticks across the reserved row's move and
+/// Enter, `y` and a click keep its URL (`docs/tui.md`, "Links").
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct FocusedLink {
+    /// The id keyboard focus names.
+    pub(crate) id: TargetId,
+    /// The destination it opens.
+    pub(crate) url: String,
+    /// Its cells in the layout, for the entry they rename.
+    pub(crate) rects: Vec<Rect>,
+    /// The hint row's cells, opening the focused link, when the layout
+    /// scrolled them into view.
+    pub(crate) extra: Option<Rect>,
+}
+
+/// The top row shown, the screen row it draws on and how many rows
+/// show, in `area`: like [`App::view_rows`], but clamping the top to
+/// the area's own height, so content and targets share the rows the
+/// area draws. `view_rows` anchors the top to the screen's
+/// conversation height instead, which differs while a frame draws at
+/// another size.
+fn area_rows(app: &App, area: Rect) -> (usize, u16, usize) {
+    let total = app.scroll().1;
+    let height = usize::from(area.height);
+    let bottom = total.saturating_sub(height);
+    let top = app.top().map_or(bottom, |top| top.min(bottom));
+    let shown = total.min(top.saturating_add(height)).saturating_sub(top);
+    let blank = u16::try_from(height.saturating_sub(shown)).unwrap_or(u16::MAX);
+    (top, area.y.saturating_add(blank), shown)
+}
+
+/// `rects` moved below `gap` by the hint's reserved row, less the rows
+/// it pushes past `bottom`: the conversation draws its rows the same
+/// way, so targets sit on their own cells (`docs/tui.md`, "Links").
+fn shifted(rects: &[Rect], gap: u16, bottom: u16) -> Vec<Rect> {
+    let mut out = rects.to_vec();
+    for rect in &mut out {
+        if rect.y >= gap {
+            rect.y = rect.y.saturating_add(1);
+        }
+    }
+    out.retain(|rect| rect.y < bottom);
+    out
+}
+
+/// The raw entry focus names after the scroll freed its hint row:
+/// the same column and destination one row off, which is where the
+/// scroll left it. Same-frame re-resolution only: callers already
+/// matched the id exactly before scrolling.
+fn find_moved(links: &[VisibleLink], fcol: u16, fhash: u64, frow: usize) -> Option<&VisibleLink> {
+    links.iter().find(|link| {
+        let Some(first) = link.rects.first() else {
+            return false;
+        };
+        (
+            first.x,
+            link_hash(&link.url),
+            usize::from(first.y).abs_diff(frow),
+        ) == (fcol, fhash, 1)
+    })
+}
+
 impl App {
     /// The links drawn in `area`, in reading order: each markdown link and
     /// each bare URL on a shown resident row, one entry per link with one
-    /// rect per row it covers (`docs/tui.md`, "Links").
+    /// rect per row it covers (`docs/tui.md`, "Links"). Rows on and below
+    /// the focused link's hint row draw one lower, with the conversation's
+    /// rows, so hint text and click targets agree.
     pub(crate) fn visible_links(&self, area: Rect) -> Vec<VisibleLink> {
         if area.width == 0 {
             return Vec::new();
         }
-        let (top, y0, shown) = self.view_rows(area);
+        let layout = self.hint_layout(area);
+        let Some(last) = self.last_row(area, layout.y0, layout.shown) else {
+            return Vec::new();
+        };
+        let mut out = self.raw_links(area, layout.top, layout.y0, layout.shown, last);
+        if let Some(gap) = layout.gap {
+            for link in &mut out {
+                link.rects = shifted(&link.rects, gap, area.bottom());
+            }
+            out.retain(|link| !link.rects.is_empty());
+        }
+        if let Some(focus) = layout.focus {
+            // The focused link keeps the id focus names even when the
+            // reserved row moved its cells: keyboard focus sticks across
+            // the move, and Enter, `y` and a click keep opening the same
+            // URL (`docs/tui.md`, "Links").
+            for link in &mut out {
+                if link.rects == focus.rects {
+                    link.id = focus.id;
+                }
+            }
+            if let Some((extra, link)) = focus
+                .extra
+                .zip(out.iter_mut().find(|link| link.id == focus.id))
+            {
+                link.rects.push(extra);
+            }
+        }
+        out
+    }
+
+    /// The links drawn in `area` with no hint row reserved: what drew
+    /// before the hint existed, for views whose content does not move
+    /// with it (`docs/tui.md`, "Links").
+    pub(crate) fn plain_links(&self, area: Rect) -> Vec<VisibleLink> {
+        if area.width == 0 {
+            return Vec::new();
+        }
+        let (top, y0, shown) = area_rows(self, area);
         let Some(last) = self.last_row(area, y0, shown) else {
             return Vec::new();
         };
+        self.raw_links(area, top, y0, shown, last)
+    }
+
+    /// The conversation's layout in `area` with the focused link's hint
+    /// row reserved under its line: rows on and below the row draw one
+    /// lower, so the hint never covers conversation cells. With no row
+    /// below, as on the conversation's last row, the rows scroll up one
+    /// row to free it, keeping the link on screen; with no room to
+    /// scroll, only the focused look paints (`docs/tui.md`, "Links").
+    pub(crate) fn hint_layout(&self, area: Rect) -> HintLayout {
+        let (top, y0, shown) = area_rows(self, area);
+        let plain = HintLayout {
+            top,
+            y0,
+            shown,
+            gap: None,
+            focus: None,
+        };
+        let Some(id) = self.focused() else {
+            return plain;
+        };
+        let TargetId::Link { .. } = id else {
+            return plain;
+        };
+        let Some(last) = self.last_row(area, y0, shown) else {
+            return plain;
+        };
+        let raw = self.raw_links(area, top, y0, shown, last);
+        let Some(hit) = raw.iter().find(|link| link.id == id) else {
+            return plain;
+        };
+        let Some(rect) = hit.rects.last() else {
+            return plain;
+        };
+        let row = top.saturating_add(usize::from(rect.y.saturating_sub(y0)));
+        let Some((_, end)) = self.line_span(row) else {
+            return plain;
+        };
+        let gap = y0.saturating_add(u16::try_from(end.saturating_sub(top)).unwrap_or(u16::MAX));
+        if gap != area.bottom() {
+            return HintLayout {
+                gap: Some(gap),
+                focus: Some(FocusedLink {
+                    id,
+                    url: hit.url.clone(),
+                    rects: shifted(&hit.rects, gap, area.bottom()),
+                    extra: None,
+                }),
+                ..plain
+            };
+        }
+        if y0 == area.y {
+            // Every row shows: drop the top row, keeping the link on
+            // screen only while a row above it gives way.
+            if row == top {
+                return plain;
+            }
+            let top = top.saturating_add(1);
+            let total = self.scroll().1;
+            let shown = total
+                .min(top.saturating_add(usize::from(area.height)))
+                .saturating_sub(top);
+            let gap = y0.saturating_add(u16::try_from(end.saturating_sub(top)).unwrap_or(u16::MAX));
+            return self.scrolled_focus(area, id, top, y0, shown, gap, &hit.url);
+        }
+        // Blank rows stand above: the same rows draw one higher.
+        let y0 = y0.saturating_sub(1);
+        let gap = gap.saturating_sub(1);
+        self.scrolled_focus(area, id, top, y0, shown, gap, &hit.url)
+    }
+
+    /// The focused link's entry after a scroll freed its hint row:
+    /// re-resolved in the scrolled layout, with the hint row's cells
+    /// opening it. Plain when the scroll lost it (`docs/tui.md`,
+    /// "Links").
+    #[allow(
+        clippy::too_many_arguments,
+        reason = "a scrolled layout needs its rows and the focused link"
+    )]
+    fn scrolled_focus(
+        &self,
+        area: Rect,
+        id: TargetId,
+        top: usize,
+        y0: u16,
+        shown: usize,
+        gap: u16,
+        url: &str,
+    ) -> HintLayout {
+        let plain = HintLayout {
+            top,
+            y0,
+            shown,
+            gap: None,
+            focus: None,
+        };
+        let Some(last) = self.last_row(area, y0, shown) else {
+            return plain;
+        };
+        let raw = self.raw_links(area, top, y0, shown, last);
+        let TargetId::Link {
+            row: frow,
+            col: fcol,
+            url: fhash,
+        } = id
+        else {
+            return plain;
+        };
+        let Some(hit) = find_moved(&raw, fcol, fhash, frow) else {
+            return plain;
+        };
+        let x = hit.rects.first().map_or(area.x, |rect| rect.x);
+        let room = area.right().saturating_sub(x);
+        let width = u16::try_from(crate::format::width(crate::view::marks::HINT))
+            .unwrap_or(u16::MAX)
+            .min(room);
+        HintLayout {
+            gap: Some(gap),
+            focus: Some(FocusedLink {
+                id,
+                url: url.to_owned(),
+                rects: shifted(&hit.rects, gap, area.bottom()),
+                extra: Some(Rect::new(x, gap, width, 1)),
+            }),
+            ..plain
+        }
+    }
+
+    /// The drawn row holding conversation `row`: its first row and one
+    /// past its last. `None` when no resident page holds `row`.
+    fn line_span(&self, row: usize) -> Option<(usize, usize)> {
+        let index = self.screen.pages().index();
+        let (page, _) = index.locate(row)?;
+        let (rows, _) = self.screen.pages().page_text(page)?;
+        let width = self.screen.pages().wrap_width();
+        let mut at = index.start(page);
+        for (line, _) in &rows {
+            let end = at.saturating_add(crate::view::rows(line.clone(), width));
+            if row < end {
+                return Some((at, end));
+            }
+            at = end;
+        }
+        None
+    }
+
+    /// The links drawn in `area` for the rows `top..top + shown` on
+    /// screen rows from `y0`, down to `last`: each markdown link and each
+    /// bare URL on a shown resident row, one entry per link with one rect
+    /// per row it covers (`docs/tui.md`, "Links").
+    #[allow(
+        clippy::too_many_arguments,
+        reason = "a link's cells need its rows and area"
+    )]
+    fn raw_links(
+        &self,
+        area: Rect,
+        top: usize,
+        y0: u16,
+        shown: usize,
+        last: u16,
+    ) -> Vec<VisibleLink> {
         let end = top.saturating_add(shown);
         // One entry per drawn link occurrence, keyed by its anchor: its
         // first row, its first column there, and its destination's hash.
