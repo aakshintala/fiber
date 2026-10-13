@@ -717,4 +717,28 @@ fn debug_output_redacts_credentials() {
         !shown.contains(credential) && !shown.contains(key),
         "no credential bytes in the outcome's Debug, got: {shown}"
     );
+    // Byte-for-byte: an empty output would pass the absence checks
+    // above, so the exact redacted form pins the `RequestOutcome`
+    // `Debug` body itself.
+    let credential_print = crate::provider_server::fingerprint(credential);
+    let key_print = crate::provider_server::fingerprint(key);
+    let expected_request = format!(
+        "ParsedRequest {{ method: \"GET\", target: \"/v1/models?key={key_print}\", headers: [(\"host\", \"fake\"), (\"authorization\", {credential_print:?}), (\"x-custom\", \"plain\")], body: [], malformed: None }}"
+    );
+    let request = match outcome {
+        RequestOutcome::Complete(request) => request,
+        RequestOutcome::Eof => panic!("the outcome Debug test closed instead of completing"),
+        RequestOutcome::Stopped => panic!("shutdown ended the outcome Debug test"),
+        RequestOutcome::Invalid(why) => panic!("the outcome Debug test was invalid: {why}"),
+    };
+    assert_eq!(
+        format!("{request:?}"),
+        expected_request,
+        "the request's Debug is exactly the redacted form"
+    );
+    assert_eq!(
+        shown,
+        format!("Complete({expected_request})"),
+        "the outcome's Debug is exactly the redacted form"
+    );
 }
