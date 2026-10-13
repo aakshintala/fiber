@@ -119,9 +119,10 @@ fn folding_a_session_does_the_same_work_for_each_line() {
             // Each page is counted once: when it closes, and the open one
             // at the batch's end. A usage line counts no page again.
             assert_eq!(work.page_counts, pages, "{case}");
-            // The batch's end settles once: `view_top` totals every
-            // page, and `trim`'s window totals them and walks them.
-            assert_eq!(work.index_pages, 3 * pages, "{case}");
+            // The batch's end settles once: one prefix rebuild visits
+            // every page, and the settle's totals and window then read
+            // the cache.
+            assert_eq!(work.index_pages, pages, "{case}");
             // A usage line looks its turn up once, never walking the
             // turns before it.
             assert_eq!(work.usage_summaries, turns, "{case}");
@@ -158,8 +159,10 @@ fn a_late_usage_line_on_a_held_page_counts_its_rows_exactly() {
     // A correction for the first turn as large as its ▣ line can grow:
     // at the card's inner width the line already took two padded rows,
     // and still takes two, so no page is counted again yet every row is
-    // where a fresh fold puts it (`docs/tui.md`, "Turns").
+    // where a fresh fold puts it (`docs/tui.md`, "Turns"). Its text
+    // changed, so the page's revision moves with it.
     let before = pages.recounts;
+    let revision = pages.index().revision(0);
     log.usage("g0", 987_654_321, json!(12.5));
     let late = log
         .lines
@@ -168,12 +171,13 @@ fn a_late_usage_line_on_a_held_page_counts_its_rows_exactly() {
         .unwrap_or_else(|| panic!("a line was logged"));
     pages.apply(&late);
     assert_eq!(pages.recounts, before);
+    assert!(pages.index().revision(0) > revision);
     let fresh = folded(&log.lines, 30);
     assert_eq!(rows(&pages), rows(&fresh));
     assert_eq!(pages.rows(), fresh.rows());
-    // The same correction again leaves every row where it is: no page is
-    // counted again, and the page's revision still moves, so search reads
-    // its text again.
+    // The same correction again changes nothing: no page is counted
+    // again, and the page's revision stays, so the search keeps the
+    // scan it holds.
     let before = pages.recounts;
     let revision = pages.index().revision(0);
     log.usage("g0", 987_654_321, json!(12.5));
@@ -183,6 +187,22 @@ fn a_late_usage_line_on_a_held_page_counts_its_rows_exactly() {
         .cloned()
         .unwrap_or_else(|| panic!("a line was logged"));
     pages.apply(&again);
+    assert_eq!(pages.recounts, before);
+    assert_eq!(pages.index().revision(0), revision);
+    let fresh = folded(&log.lines, 30);
+    assert_eq!(rows(&pages), rows(&fresh));
+    assert_eq!(pages.rows(), fresh.rows());
+    // A correction that changes the ▣ line's text but not its rows
+    // counts no page again, yet the revision still moves, so the search
+    // reads its text again.
+    let before = pages.recounts;
+    log.usage("g0", 987_654_321, json!(12.6));
+    let changed = log
+        .lines
+        .last()
+        .cloned()
+        .unwrap_or_else(|| panic!("a line was logged"));
+    pages.apply(&changed);
     assert_eq!(pages.recounts, before);
     assert!(pages.index().revision(0) > revision);
     let fresh = folded(&log.lines, 30);
@@ -206,9 +226,9 @@ fn folding_one_turn_counts_each_step_once() {
     assert_eq!(work.turn_rows, 1, "{case}");
     // The open page counts once, at the batch's end.
     assert_eq!(work.page_counts, 1, "{case}");
-    // The settle totals the one page in `view_top`, and the trim's
-    // window totals it and walks it: three visits to the one page.
-    assert_eq!(work.index_pages, 3, "{case}");
+    // The settle rebuilds the one page's prefix once, and every later
+    // total and window reads the cache.
+    assert_eq!(work.index_pages, 1, "{case}");
     // The usage line looks its turn up once.
     assert_eq!(work.usage_summaries, 1, "{case}");
 }
@@ -297,6 +317,95 @@ fn a_late_usage_line_on_a_dropped_page_counts_the_padded_closing_rows() {
     let grown = pages.summaries.first().expect("the first turn's totals");
     let closing = grown.closing().expect("a closing line");
     assert!(crate::rows::fitted(&closing, crate::surface::inset(20)) > 2);
+    let fresh = folded(&lines, 20);
+    assert_eq!(rows(&pages), rows(&fresh));
+}
+
+#[test]
+fn a_late_usage_line_with_new_rows_on_a_held_page_counts_it_again() {
+    // The dropped-page padded closing, but with the first page still
+    // holding its cards: the ▣ line grows past its old rows, so the
+    // closed page counts again. This pins the `open ||` side of the
+    // recount guard: with `&&` the page would take the dropped-page
+    // arithmetic instead of counting, and `recounts` would stay.
+    let mut lines = Vec::new();
+    let mut seq = 0u64;
+    {
+        let mut line = |kind: &str, action: Option<&str>, payload: Value| {
+            lines.push(Envelope {
+                kind: kind.to_owned(),
+                session_id: SessionId(SESSION.to_owned()),
+                ts: 0,
+                schema_version: contract::SCHEMA_VERSION,
+                turn_id: None,
+                action_id: action.map(|id| ActionId(id.to_owned())),
+                seq: Some(Seq(seq)),
+                payload: payload.as_object().cloned().unwrap_or_default(),
+            });
+            seq += 1;
+        };
+        for turn in 0..16 {
+            line(
+                "turn_started",
+                None,
+                json!({"input": [{"type": "message", "source": "driver",
+                    "content": [{"type": "text", "text": format!("turn {turn}")}]}]}),
+            );
+            let call = format!("a_c{turn}");
+            line(
+                "tool_call_requested",
+                Some(&call),
+                json!({"name": "read", "arguments": {"path": "src/a.rs"}}),
+            );
+            line(
+                "tool_call_completed",
+                Some(&call),
+                json!({"status": "completed", "content": [{"type": "text", "text": "ok"}]}),
+            );
+            line(
+                "usage_recorded",
+                Some(&call),
+                json!({"generation_id": format!("g{turn}"), "model": "fake/m",
+                    "tokens": {"input": 0, "cache_read": 0, "cache_write": {}, "output": 0},
+                    "input_bytes": 0, "cost": Value::Null}),
+            );
+            line("turn_completed", None, json!({"outcome": "completed"}));
+        }
+    }
+    let mut pages = folded(&lines, 20);
+    assert!(!pages.closed.is_empty(), "the first page closed");
+    assert!(
+        pages.part(0).is_some(),
+        "the first page still holds its cards"
+    );
+    let head = pages.summaries.first().expect("the first turn's totals");
+    assert_eq!(head.closed_on, 0, "the first turn ends on the first page");
+    lines.push(Envelope {
+        kind: "usage_recorded".to_owned(),
+        session_id: SessionId(SESSION.to_owned()),
+        ts: 0,
+        schema_version: contract::SCHEMA_VERSION,
+        turn_id: None,
+        action_id: Some(ActionId("a_c0".to_owned())),
+        seq: Some(Seq(seq)),
+        payload: json!({"generation_id": "g0", "model": "fake/m",
+            "tokens": {"input": 987_654_321, "cache_read": 0, "cache_write": {}, "output": 40},
+            "input_bytes": 0, "cost": 12.5})
+        .as_object()
+        .cloned()
+        .unwrap_or_default(),
+    });
+    let late = lines
+        .last()
+        .cloned()
+        .unwrap_or_else(|| panic!("a line was logged"));
+    let before = pages.recounts;
+    pages.apply(&late);
+    assert_eq!(
+        pages.recounts,
+        before.saturating_add(1),
+        "the closed page with new rows counts again"
+    );
     let fresh = folded(&lines, 20);
     assert_eq!(rows(&pages), rows(&fresh));
 }

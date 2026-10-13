@@ -2102,3 +2102,717 @@ fn a_page_of_257_lines_keeps_its_first_chunk_when_its_last_line_is_fetched_alone
     // The match sits in the first chunk: the last line's fetch keeps it.
     assert_eq!(count(&app), "1 of 1");
 }
+
+/// One page-shaped group of identical turns through the app, seqs from
+/// `seq`, recorded in `log` for the fake hub: nine full turns with the
+/// same reply text, then one textless turn. Ids are zero-padded to a
+/// fixed width, so every group draws the same text however large the
+/// session grows. Each group folds 69 lines and cuts exactly one page.
+/// Lines the hub still owes answers for: `page_group` collects every
+/// `on_line` return instead of dropping it on the floor, so a fold with
+/// an open search never loses a fetch.
+fn page_group(
+    log: &mut Vec<contract::Envelope>,
+    seq: &mut u64,
+    app: &mut App,
+    group: usize,
+) -> Vec<String> {
+    page_group_with(
+        log,
+        seq,
+        app,
+        group,
+        "the session log holds every durable line in order ",
+    )
+}
+
+/// One page-shaped group with `reply` as every full turn's text.
+fn page_group_with(
+    log: &mut Vec<contract::Envelope>,
+    seq: &mut u64,
+    app: &mut App,
+    group: usize,
+    reply: &str,
+) -> Vec<String> {
+    let mut out = Vec::new();
+    let mut turn = |log: &mut Vec<contract::Envelope>,
+                    seq: &mut u64,
+                    id: String,
+                    text: Option<&str>,
+                    out: &mut Vec<String>| {
+        out.extend(app.on_line(numbered(
+            log,
+            seq,
+            "turn_started",
+            json!({"input": [{"type": "message", "source": "driver",
+                "content": [{"type": "text", "text": "go"}]}]}),
+            None,
+        )));
+        out.extend(app.on_line(numbered(log, seq, "step_started", json!({}), None)));
+        let message = format!("a_g{group:02}{id}");
+        out.extend(app.on_line(numbered(
+            log,
+            seq,
+            "assistant_message_started",
+            json!({}),
+            Some(&message),
+        )));
+        if let Some(text) = text {
+            out.extend(app.on_line(numbered(
+                log,
+                seq,
+                "text_completed",
+                json!({"text": text}),
+                Some(&message),
+            )));
+        }
+        out.extend(app.on_line(numbered(
+            log,
+            seq,
+            "assistant_message_completed",
+            json!({"outcome": "completed"}),
+            Some(&message),
+        )));
+        out.extend(app.on_line(numbered(
+            log,
+            seq,
+            "usage_recorded",
+            json!({"generation_id": format!("g{group:02}{id}"), "model": "fake/m",
+                "tokens": {"input": 100, "cache_read": 0, "cache_write": {}, "output": 40},
+                "input_bytes": 0, "cost": null}),
+            Some("a_m"),
+        )));
+        out.extend(app.on_line(numbered(
+            log,
+            seq,
+            "turn_completed",
+            json!({"outcome": "completed"}),
+            None,
+        )));
+    };
+    for turn_no in 0..9 {
+        turn(log, seq, format!("w{turn_no}"), Some(reply), &mut out);
+    }
+    turn(log, seq, "q".to_owned(), None, &mut out);
+    out.extend(app.find_outgoing());
+    out
+}
+
+/// An app holding `groups` page-shaped groups, with their durable lines
+/// for the fake hub: exactly one page per group.
+fn grouped(width: u16, height: u16, groups: usize) -> (App, Vec<contract::Envelope>) {
+    let mut app = attached(width, height);
+    let mut log = Vec::new();
+    let mut seq = 0u64;
+    for group in 0..groups {
+        page_group(&mut log, &mut seq, &mut app, group);
+    }
+    assert_eq!(
+        app.pages().page_count(),
+        groups,
+        "{groups} groups cut {groups} pages"
+    );
+    (app, log)
+}
+
+/// A complete absent-query search over `groups` page-shaped groups:
+/// every page scans once, resident at once and dropped by fetch, and the
+/// scan completes with no match and no cap. Returns the search's page
+/// scans and order bookkeeping, and the finished count text.
+fn absent_search(groups: usize) -> (usize, usize, String) {
+    let (mut app, log) = grouped(80, 10, groups);
+    crate::work::take();
+    let ranges = search_all(&mut app, &log, "qqq-no-match");
+    let work = crate::work::take();
+    // Every dropped page fetched exactly once, in scan order.
+    assert_eq!(ranges.len(), groups - 1, "each dropped page fetches once");
+    (work.search_pages, work.search_order_pages, count(&app))
+}
+
+#[test]
+fn search_bookkeeping_grows_with_the_pages_not_the_session() {
+    let (small_pages, small_order, small_count) = absent_search(8);
+    // Eight pages scan once each: the resident one at once, the seven
+    // dropped ones by fetch. The count shows a complete, uncapped,
+    // zero-match scan.
+    assert_eq!(small_pages, 8);
+    assert_eq!(small_count, "no matches");
+    let (large_pages, large_order, large_count) = absent_search(32);
+    assert_eq!(large_pages, 32);
+    assert_eq!(large_count, "no matches");
+    // Four times the pages, at most four times the bookkeeping plus the
+    // allowance: no answer walks or copies the whole page order.
+    assert!(
+        large_pages <= 4 * small_pages + 64,
+        "{large_pages} page scans is more than four times {small_pages} plus the allowance"
+    );
+    assert!(
+        large_order <= 4 * small_order + 64,
+        "{large_order} order visits is more than four times {small_order} plus the allowance"
+    );
+}
+
+/// A completed search's kept state: total, anchors in page order with
+/// their display snippets, the current match and its line text, and the
+/// drawn count. Whole-value compares prove a width change reused every
+/// match.
+#[derive(Debug, PartialEq, Eq)]
+struct Kept {
+    total: usize,
+    matches: Vec<(super::scan::Anchor, usize, super::Snippet)>,
+    current: Option<super::Match>,
+    text: Option<String>,
+    count: String,
+}
+
+fn kept_matches(app: &App) -> Kept {
+    let flat: Vec<(super::scan::Anchor, usize, super::Snippet)> = app
+        .find
+        .flat()
+        .iter()
+        .map(|kept| (kept.anchor.clone(), kept.nth, kept.snippet.clone()))
+        .collect();
+    Kept {
+        total: app.find.total(),
+        matches: flat,
+        current: app.find.current().cloned(),
+        text: current_text(app),
+        count: count(app),
+    }
+}
+
+#[test]
+fn a_width_change_reuses_non_table_search_results() {
+    let (mut app, log) = grouped(80, 10, 2);
+    assert!(
+        app.pages().part(0).is_none(),
+        "the first page drops before the search"
+    );
+    let ranges = search_all(&mut app, &log, "durable");
+    assert_eq!(ranges.len(), 1, "the one dropped page fetches once");
+    assert_eq!(count(&app), "1 of 18");
+    let before = kept_matches(&app);
+    // Wider, then narrower: non-table logical lines never move, so no
+    // page rescans and every kept match stays valid.
+    for width in [100, 60] {
+        crate::work::take();
+        app.set_size(width, 10);
+        let outgoing = app.find_outgoing();
+        if !outgoing.is_empty() {
+            answer_all(&mut app, &log, outgoing);
+        }
+        let work = crate::work::take();
+        assert_eq!(work.search_pages, 0, "no page rescans at {width}");
+        assert_eq!(kept_matches(&app), before, "matches hold at {width}");
+    }
+}
+
+/// Two plain groups and one table group: the table's cells are long
+/// enough to lay out differently at 80 and 100 columns.
+fn mixed_groups(width: u16, height: u16) -> (App, Vec<contract::Envelope>) {
+    let table = "| durable left side with many words in it | durable right side with many words in it |\n|---|---|\n| a durable cell with quite a lot of words inside it | another durable cell with many words inside it |\n";
+    let mut app = attached(width, height);
+    let mut log = Vec::new();
+    let mut seq = 0u64;
+    page_group(&mut log, &mut seq, &mut app, 0);
+    page_group(&mut log, &mut seq, &mut app, 1);
+    page_group_with(&mut log, &mut seq, &mut app, 2, table);
+    assert_eq!(app.pages().page_count(), 3, "three groups cut three pages");
+    (app, log)
+}
+
+#[test]
+fn a_width_change_rescans_only_table_pages() {
+    let (mut app, log) = mixed_groups(80, 10);
+    assert!(
+        app.pages().part(0).is_none() && app.pages().part(1).is_none(),
+        "the first pages drop before the search"
+    );
+    let ranges = search_all(&mut app, &log, "durable");
+    assert_eq!(ranges.len(), 2, "both dropped pages fetch once");
+    let before = kept_matches(&app);
+    let rows_before: Vec<usize> = (0..3)
+        .map(|at| app.pages().index().pages()[at].rows)
+        .collect();
+    // The new width lays the table out again, while prose keeps every
+    // logical line: exactly the resident table page rescans, with no
+    // fetch, and the dropped prose pages keep their matches.
+    crate::work::take();
+    app.set_size(100, 10);
+    assert!(
+        app.find_outgoing().is_empty(),
+        "no fetch: the table page is resident"
+    );
+    let work = crate::work::take();
+    assert_eq!(work.search_pages, 1, "only the table page rescans");
+    let after = kept_matches(&app);
+    let rows_after: Vec<usize> = (0..3)
+        .map(|at| app.pages().index().pages()[at].rows)
+        .collect();
+    assert_ne!(
+        rows_after[2], rows_before[2],
+        "the resize crosses a table wrapping threshold"
+    );
+    // The prose pages' matches are untouched.
+    let prose = |kept: &Kept| {
+        kept.matches
+            .iter()
+            .filter(|(anchor, _, _)| anchor.page < 2)
+            .cloned()
+            .collect::<Vec<_>>()
+    };
+    assert_eq!(prose(&after), prose(&before));
+    // A fresh search at the new width finds exactly what the selective
+    // rescan kept: total, anchors, snippets, current and count.
+    let fresh_ranges = search_all(&mut app, &log, "durable");
+    assert_eq!(
+        fresh_ranges.len(),
+        2,
+        "the fresh search refetches both dropped pages"
+    );
+    assert_eq!(kept_matches(&app), after);
+    // Settling at the same width rescans nothing.
+    crate::work::take();
+    app.set_size(100, 10);
+    assert_eq!(crate::work::take().search_pages, 0);
+}
+
+/// Types `query` and starts the scan, answering nothing: the first
+/// fetch stays on the wire with its layout captured.
+fn fetch_first(app: &mut App, query: &str) -> Vec<String> {
+    if app.find_bar().is_some() {
+        assert_eq!(app.on_key(Key::Esc, now()), Effect::None);
+    }
+    assert_eq!(app.on_key(Key::CtrlF, now()), Effect::None);
+    let mut generation = app.find.generation();
+    for ch in query.chars() {
+        generation += 1;
+        assert_eq!(
+            app.on_key(Key::Char(ch), now()),
+            Effect::FindPause {
+                generation,
+                after: FIND_PAUSE,
+            }
+        );
+    }
+    app.find_due(generation)
+}
+
+#[test]
+fn a_stale_table_answer_requeues_for_the_new_width() {
+    let table = "| durable left side with many words in it | durable right side with many words in it |\n|---|---|\n| a durable cell with quite a lot of words inside it | another durable cell with many words inside it |\n";
+    let mut app = attached(80, 10);
+    let mut log = Vec::new();
+    let mut seq = 0u64;
+    page_group_with(&mut log, &mut seq, &mut app, 0, table);
+    page_group(&mut log, &mut seq, &mut app, 1);
+    page_group(&mut log, &mut seq, &mut app, 2);
+    assert_eq!(app.pages().page_count(), 3);
+    assert!(
+        app.pages().part(0).is_none(),
+        "the table page drops before the search"
+    );
+    // The scan reaches the resident last page, then fetches the dropped
+    // table page first in scan order.
+    let first = fetch_first(&mut app, "durable");
+    assert_eq!(first.len(), 1);
+    let (id, from, to) = command(&first[0]);
+    assert_eq!(
+        (from, to),
+        (
+            app.pages().index().pages()[0].first_seq.0,
+            app.pages().index().pages()[0].last_seq.0
+        ),
+        "the fetch reads the table page"
+    );
+    // The width changes with the fetch on the wire: the pump never
+    // supersedes it, so the old answer still owns the wire after.
+    app.set_size(100, 10);
+    assert!(app.find.fetching(), "one fetch stays on the wire");
+    // The old layout's answer requeues the page for the new width
+    // instead of stamping it: exactly one request goes out, for the
+    // same page, and the page stays unscanned at its new revision.
+    crate::work::take();
+    let outgoing = app.on_line(hub_answer(&id, &log, from, to));
+    assert_eq!(outgoing.len(), 1, "no simultaneous requests");
+    let (again, from_again, to_again) = command(&outgoing[0]);
+    assert_ne!(again, id, "the stale fetch never answers twice");
+    assert_eq!((from_again, to_again), (from, to));
+    assert_ne!(
+        app.find.scanned(0),
+        Some(app.pages().index().revision(0)),
+        "old table results never stamp the new width"
+    );
+    assert_eq!(crate::work::take().search_pages, 0);
+    // Answering the refetch completes the search with what a fresh
+    // search at the new width finds.
+    let mut outgoing = app.on_line(hub_answer(&again, &log, from_again, to_again));
+    let mut ids = vec![again];
+    for _ in 0..app.pages().page_count().saturating_add(2) {
+        let Some(line) = outgoing.into_iter().next() else {
+            break;
+        };
+        let (id, from, to) = command(&line);
+        assert!(!ids.contains(&id), "the same fetch went out twice");
+        ids.push(id.clone());
+        outgoing = app.on_line(hub_answer(&id, &log, from, to));
+    }
+    assert!(app.find_outgoing().is_empty(), "the scan settled");
+    let completed = kept_matches(&app);
+    search_all(&mut app, &log, "durable");
+    assert_eq!(kept_matches(&app), completed);
+}
+
+#[test]
+fn a_non_table_answer_in_flight_survives_a_width_change() {
+    let (mut app, log) = grouped(80, 10, 2);
+    assert!(
+        app.pages().part(0).is_none(),
+        "the first page drops before the search"
+    );
+    let first = fetch_first(&mut app, "durable");
+    assert_eq!(first.len(), 1);
+    let (id, from, to) = command(&first[0]);
+    // The width changes with the fetch on the wire: prose keeps its
+    // logical lines, so its revision holds.
+    let revision = app.pages().index().revision(0);
+    app.set_size(100, 10);
+    assert_eq!(app.pages().index().revision(0), revision);
+    // The answer scans at the current width and settles the page: no
+    // refetch, one scratch scan, and the search completes.
+    crate::work::take();
+    let outgoing = app.on_line(hub_answer(&id, &log, from, to));
+    assert!(outgoing.is_empty(), "no refetch for width-stable text");
+    assert_eq!(crate::work::take().search_pages, 1);
+    assert_eq!(
+        app.find.scanned(0),
+        Some(revision),
+        "the in-flight scan settles the unchanged revision"
+    );
+    assert_eq!(count(&app), "1 of 18");
+}
+
+#[test]
+fn a_late_usage_line_on_a_dropped_page_rescans_only_it() {
+    let (mut app, log) = grouped(80, 10, 2);
+    assert!(
+        app.pages().part(0).is_none(),
+        "the first page drops before the search"
+    );
+    search_all(&mut app, &log, "durable");
+    let before = kept_matches(&app);
+    // A correction for the first page's first turn: one more input
+    // token, so the ▣ line's text changes but not its rows.
+    let mut seq = log
+        .iter()
+        .filter_map(|line| line.seq.map(|seq| seq.0))
+        .max()
+        .unwrap_or(0);
+    let mut ulog = log.clone();
+    let correction = numbered(
+        &mut ulog,
+        &mut seq,
+        "usage_recorded",
+        json!({"generation_id": "g00w0", "model": "fake/m",
+            "tokens": {"input": 101, "cache_read": 0, "cache_write": {}, "output": 40},
+            "input_bytes": 0, "cost": null}),
+        Some("a_m"),
+    );
+    crate::work::take();
+    let Line::Session(envelope) = correction else {
+        panic!("numbered builds a session line");
+    };
+    let first = app.on_line(Line::Session(envelope));
+    // The settle after the line's own outgoing queues the refetch.
+    let mut outgoing = first;
+    outgoing.extend(app.find_outgoing());
+    assert_eq!(outgoing.len(), 1, "only the dropped page refetches");
+    let (id, from, to) = command(&outgoing.remove(0));
+    outgoing = app.on_line(hub_answer(&id, &ulog, from, to));
+    assert!(outgoing.is_empty(), "the rescan settles the search");
+    let work = crate::work::take();
+    assert_eq!(work.search_pages, 1, "only the corrected page rescans");
+    // The corrected page's matches are new; the resident page keeps its.
+    let after = kept_matches(&app);
+    assert_ne!(after, before);
+    let prose = |kept: &Kept| {
+        kept.matches
+            .iter()
+            .filter(|(anchor, _, _)| anchor.page == 1)
+            .cloned()
+            .collect::<Vec<_>>()
+    };
+    assert_eq!(prose(&after), prose(&before));
+}
+
+#[test]
+fn pages_cut_mid_search_scan_without_starving_settled_ones() {
+    let (mut app, mut log) = grouped(80, 10, 2);
+    search_all(&mut app, &log, "durable");
+    let settled = kept_matches(&app);
+    assert_eq!(settled.total, 18);
+    // One more group folds live: every changed line rescans the open
+    // page it lands on, as a live search follows typing, and the cut
+    // pages join behind the order. The settled pages are never starved:
+    // their matches stay, and the new page's add up.
+    let mut seq = log
+        .iter()
+        .filter_map(|line| line.seq.map(|seq| seq.0))
+        .max()
+        .unwrap_or(0);
+    // Fetches go out mid-fold with an open search: answer every one,
+    // during the fold's own lines and after, until nothing waits.
+    let mut outgoing = page_group(&mut log, &mut seq, &mut app, 2);
+    assert_eq!(app.pages().page_count(), 3);
+    // The cut dirtied the settled middle page while it was dropped:
+    // answering every fetch, mid-fold and refetch alike, settles the
+    // search, and nothing else waits.
+    outgoing.extend(app.find_outgoing());
+    for _ in 0..app.pages().page_count().saturating_add(2) {
+        let Some(line) = outgoing.into_iter().next() else {
+            break;
+        };
+        let (id, from, to) = command(&line);
+        outgoing = app.on_line(hub_answer(&id, &log, from, to));
+    }
+    assert!(app.find_outgoing().is_empty(), "the search settled");
+    assert!(app.find.dirty().is_empty(), "every rescan settled");
+    let grown = kept_matches(&app);
+    assert_eq!(grown.total, 27, "nine matches per page over three pages");
+    assert_eq!(count(&app), "1 of 27");
+    let old_pages = |kept: &Kept| {
+        kept.matches
+            .iter()
+            .filter(|(anchor, _, _)| anchor.page < 2)
+            .cloned()
+            .collect::<Vec<_>>()
+    };
+    assert_eq!(old_pages(&grown), old_pages(&settled));
+}
+
+#[test]
+fn dropping_and_reloading_at_the_same_width_rescans_nothing() {
+    let (mut app, log) = grouped(80, 10, 3);
+    search_all(&mut app, &log, "durable");
+    // The middle closed page loads, so it is resident and scanned.
+    let range = app.pages().index().pages()[1].first_seq..=app.pages().index().pages()[1].last_seq;
+    let lines: Vec<contract::Envelope> = log
+        .iter()
+        .filter(|line| line.seq.is_some_and(|seq| range.contains(&seq)))
+        .cloned()
+        .collect();
+    // Step the current match onto the middle page: nine matches on the
+    // first page, so nine steps down. The reveal scrolls the window onto
+    // it, and loading keeps it resident.
+    for _ in 0..9 {
+        assert_eq!(app.on_key(Key::Down, now()), Effect::None);
+    }
+    assert_eq!(app.find.current_index(), Some(9));
+    app.load(lines.clone());
+    assert!(
+        app.pages().part(1).is_some(),
+        "the middle page loads resident"
+    );
+    let before = kept_matches(&app);
+    crate::work::take();
+    // Off the top: the middle closed page drops. The reveal gives up on
+    // a dropped page, so the top stays for the assert.
+    app.jump(0);
+    assert!(
+        app.pages().part(1).is_none(),
+        "scrolling away drops the middle page"
+    );
+    // Back onto it before reloading: the window must cover the page for
+    // the reload to stick, and the reveal still gives up.
+    app.jump(app.pages().index().start(1));
+    app.load(lines);
+    assert!(app.pages().part(1).is_some(), "the page reloads");
+    let work = crate::work::take();
+    assert_eq!(
+        work.search_pages, 0,
+        "an equivalent reload keeps every scan"
+    );
+    assert_eq!(kept_matches(&app), before);
+}
+
+#[test]
+fn attaching_another_session_resets_the_search() {
+    let (mut app, log) = grouped(80, 10, 2);
+    search_all(&mut app, &log, "durable");
+    assert!(app.find_bar().is_some());
+    assert!(app.find.total() > 0);
+    app.attach(contract::SessionId("s_bbbbbbbbbbbbbbbb".to_owned()));
+    assert!(app.on_line(hello()).is_empty());
+    assert!(
+        app.find_bar().is_none(),
+        "the new session starts with no search"
+    );
+    assert_eq!(app.find.total(), 0);
+}
+
+#[test]
+fn a_fetch_read_before_a_text_change_requeues() {
+    let (mut app, log) = grouped(80, 10, 2);
+    assert!(
+        app.pages().part(0).is_none(),
+        "the first page drops before the search"
+    );
+    // A fetch for the dropped first page stays on the wire.
+    let first = fetch_first(&mut app, "durable");
+    assert_eq!(first.len(), 1);
+    let (id, from, to) = command(&first[0]);
+    // A correction for its first turn moves its revision under the
+    // fetch: same width, so only the revision tells.
+    let mut seq = log
+        .iter()
+        .filter_map(|line| line.seq.map(|seq| seq.0))
+        .max()
+        .unwrap_or(0);
+    let mut ulog = log.clone();
+    let correction = numbered(
+        &mut ulog,
+        &mut seq,
+        "usage_recorded",
+        json!({"generation_id": "g00w0", "model": "fake/m",
+            "tokens": {"input": 101, "cache_read": 0, "cache_write": {}, "output": 40},
+            "input_bytes": 0, "cost": null}),
+        Some("a_m"),
+    );
+    let Line::Session(envelope) = correction else {
+        panic!("numbered builds a session line");
+    };
+    app.on_line(Line::Session(envelope));
+    // The old answer requeues instead of stamping the moved revision:
+    // one refetch goes out, and the page stays unscanned meanwhile.
+    let outgoing = app.on_line(hub_answer(&id, &ulog, from, to));
+    assert_eq!(outgoing.len(), 1, "the stale fetch refetches once");
+    let (again, from_again, to_again) = command(&outgoing[0]);
+    assert_ne!(again, id);
+    assert_eq!((from_again, to_again), (from, to));
+    assert_ne!(
+        app.find.scanned(0),
+        Some(app.pages().index().revision(0)),
+        "lines read before the change never stamp the new revision"
+    );
+    // The refetch reads the corrected lines and settles the search.
+    let mut outgoing = app.on_line(hub_answer(&again, &ulog, from_again, to_again));
+    outgoing.extend(app.find_outgoing());
+    for _ in 0..app.pages().page_count().saturating_add(2) {
+        let Some(line) = outgoing.into_iter().next() else {
+            break;
+        };
+        let (id, from, to) = command(&line);
+        outgoing = app.on_line(hub_answer(&id, &ulog, from, to));
+    }
+    assert!(app.find_outgoing().is_empty(), "the search settled");
+    assert_eq!(count(&app), "1 of 18");
+}
+
+#[test]
+fn a_fresh_absent_search_counts_each_scan_order_visit_once() {
+    // Two pages with the first dropped: the first settle scans the
+    // resident second page, visits both scan-order positions, and fetches
+    // the first. This pins the cursor loop's and the pump prelude's exact
+    // bookkeeping: a dropped or repeated visit changes the count.
+    let (mut app, _log) = grouped(80, 10, 2);
+    assert_eq!(app.pages().page_count(), 2);
+    assert!(
+        app.pages().part(0).is_none(),
+        "the first page drops before the search"
+    );
+    crate::work::take();
+    let first = fetch_first(&mut app, "qqq-no-match");
+    let work = crate::work::take();
+    assert_eq!(work.search_pages, 1, "the resident page scans once");
+    assert_eq!(
+        work.search_order_pages, 3,
+        "two cursor visits and the pump prelude"
+    );
+    assert_eq!(first.len(), 1, "the dropped page fetches");
+    let (_, from, to) = command(&first[0]);
+    assert_eq!(
+        (from, to),
+        (
+            app.pages().index().pages()[0].first_seq.0,
+            app.pages().index().pages()[0].last_seq.0
+        ),
+        "the fetch reads the dropped page"
+    );
+}
+
+#[test]
+fn answering_the_last_fetch_counts_the_settle_past_it_once() {
+    // The dropped page's answer scans it, and the settle moves the reach
+    // past it: the pump prelude runs for the answer and once more for the
+    // settle, and the skip counts the settled position. The scan
+    // completes with no match and no cap.
+    let (mut app, log) = grouped(80, 10, 2);
+    let first = fetch_first(&mut app, "qqq-no-match");
+    let (id, from, to) = command(&first[0]);
+    crate::work::take();
+    let outgoing = app.on_line(hub_answer(&id, &log, from, to));
+    let work = crate::work::take();
+    assert!(outgoing.is_empty(), "the scan settles with no fetch left");
+    assert_eq!(work.search_pages, 1, "the fetched page scans once");
+    assert_eq!(
+        work.search_order_pages, 3,
+        "two pump preludes and the settle past the page"
+    );
+    assert_eq!(count(&app), "no matches");
+}
+
+#[test]
+fn a_moved_revision_on_a_dropped_page_counts_the_rescan_once() {
+    // Three prose pages with the first dropped and a settled search: a
+    // late usage line moves only the first page's revision. Settling
+    // counts the verification walk, the dirtied visit and both pump
+    // passes, and fetches exactly the moved page. A dropped or repeated
+    // visit changes the count, and using the width here would mix the
+    // recount's own classification visits into it.
+    let (mut app, _log) = grouped(80, 10, 3);
+    assert_eq!(app.pages().page_count(), 3);
+    assert!(
+        app.pages().part(0).is_none(),
+        "the first page drops before the search"
+    );
+    search_all(&mut app, &_log, "durable");
+    let revision = app.pages().index().revision(0);
+    let correction = contract::Envelope {
+        kind: "usage_recorded".to_owned(),
+        session_id: contract::SessionId(SESSION.to_owned()),
+        ts: 0,
+        schema_version: contract::SCHEMA_VERSION,
+        turn_id: None,
+        action_id: None,
+        seq: None,
+        payload: serde_json::json!({"generation_id": "g00w0", "model": "fake/m",
+            "tokens": {"input": 101, "cache_read": 0, "cache_write": {}, "output": 40},
+            "input_bytes": 0, "cost": null})
+        .as_object()
+        .cloned()
+        .unwrap_or_default(),
+    };
+    crate::work::take();
+    app.on_line(crate::link::Line::Session(correction));
+    let work = crate::work::take();
+    assert!(
+        app.pages().index().revision(0) > revision,
+        "the correction moves the first page's revision"
+    );
+    assert_eq!(work.search_pages, 0, "nothing scans before the fetch");
+    assert_eq!(
+        work.search_order_pages, 6,
+        "the verification walk, the dirtied visit and both pump passes"
+    );
+    let outgoing = app.find_outgoing();
+    assert_eq!(outgoing.len(), 1, "the moved page fetches, and only it");
+    let (_, from, to) = command(&outgoing[0]);
+    assert_eq!(
+        (from, to),
+        (
+            app.pages().index().pages()[0].first_seq.0,
+            app.pages().index().pages()[0].last_seq.0
+        ),
+        "the fetch reads the moved page"
+    );
+}

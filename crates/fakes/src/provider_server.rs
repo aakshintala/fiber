@@ -165,6 +165,9 @@ struct State {
     /// The response of every request past the script.
     fallback: Option<Response>,
     requests: Vec<Request>,
+    /// When set, a recorded request keeps its headers and `body_len` but
+    /// its body is emptied before it is stored.
+    drop_bodies: bool,
     stopping: bool,
     /// When set, a recorded request is not answered until [`ProviderServer::release`].
     hold: bool,
@@ -188,6 +191,7 @@ impl Default for State {
             responder: None,
             fallback: None,
             requests: Vec::new(),
+            drop_bodies: false,
             stopping: false,
             hold: false,
             hold_from: 1,
@@ -293,6 +297,17 @@ impl ProviderServer {
     /// response the request is here.
     pub fn requests(&self) -> Vec<Request> {
         lock(&self.state).requests.clone()
+    }
+
+    /// Empties each request's body as it is recorded: the record keeps
+    /// every request's method, path, headers and `body_len`, so its
+    /// length stays exact, but the stored bodies hold no bytes. A
+    /// responder still answers from the full body of the request it
+    /// sees. For a run whose requests carry an ever-growing conversation
+    /// and which asserts only the count, so the record never holds them
+    /// all.
+    pub fn drop_bodies(&self) {
+        lock(&self.state).drop_bodies = true;
     }
 
     /// Waits, at most `within` of real time, until at least `count` requests
@@ -443,13 +458,21 @@ fn accept_loop(listener: &TcpListener, state: &Arc<Mutex<State>>, arrived: &Arc<
 
 fn serve(stream: TcpStream, state: &Mutex<State>, arrived: &Condvar) -> io::Result<()> {
     let mut reader = BufReader::new(stream);
-    let (request, malformed) = read_request(&mut reader)?;
+    let (mut request, malformed) = read_request(&mut reader)?;
     let request_path = request.path.clone();
-    // Cloned before the record moves it: the responder reads the request
-    // it answers, and every earlier one stays in the record.
-    let answered = request.clone();
     let response = {
         let mut state = lock(state);
+        // Cloned before the record moves it, and only when a responder
+        // reads the request it answers: the scripted path never does, and
+        // cloning every ever-growing body here copies tens of gigabytes a
+        // pass (see #2188).
+        let answered = state
+            .responder
+            .clone()
+            .map(|responder| (responder, request.clone()));
+        if state.drop_bodies {
+            request.body = Vec::new();
+        }
         state.requests.push(request);
         arrived.notify_all();
         // A malformed body is the client's bug: it gets a 400 and the script
@@ -459,10 +482,9 @@ fn serve(stream: TcpStream, state: &Mutex<State>, arrived: &Condvar) -> io::Resu
                 400,
                 format!(r#"{{"error":"fakes: malformed chunked body: {why}"}}"#),
             ),
-            None => {
-                if let Some(responder) = state.responder.clone() {
-                    responder(&answered)
-                } else {
+            None => match answered {
+                Some((responder, answered)) => responder(&answered),
+                None => {
                     let target = request_path.split('?').next().unwrap_or_default();
                     let route = state.routes.iter().position(|(path, _)| path == target);
                     route
@@ -471,7 +493,7 @@ fn serve(stream: TcpStream, state: &Mutex<State>, arrived: &Condvar) -> io::Resu
                         .or_else(|| state.fallback.clone())
                         .unwrap_or_else(no_scripted_response)
                 }
-            }
+            },
         };
         if response.drop_connection {
             // Recorded above; the open stream drops here, so the client

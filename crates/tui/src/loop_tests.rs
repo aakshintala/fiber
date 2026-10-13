@@ -350,6 +350,7 @@ fn inputs_during_the_wait_are_handled_after_the_frame_in_order() {
             | Input::Disconnected
             | Input::FindDue(_)
             | Input::Tick
+            | Input::Signal(_)
             | Input::Files { .. }
             | Input::Models(_)
             | Input::Login { .. }
@@ -552,6 +553,62 @@ fn the_paging_report_counts_the_search_matches_across_the_log() {
     let report = crate::measure_paging(&events(&lines), 60, 12, fakes::clock::FakeClock::new())
         .unwrap_or_else(|error| panic!("{error}"));
     assert!(report.contains(", 3 matches\n"), "{report}");
+}
+
+#[test]
+fn the_paging_report_searches_twice_around_the_recount() {
+    let report = crate::measure_paging(&events(&session()), 60, 12, fakes::clock::FakeClock::new())
+        .unwrap_or_else(|error| panic!("{error}"));
+    // The matching search stays, and the absent search after the resize
+    // completes with no match: a frozen clock prints zeros.
+    assert!(
+        report.contains("search of the whole log: 0.00 ms, 0 matches\n"),
+        "{report}"
+    );
+    assert!(
+        report.contains("search of the whole log with no match: 0.00 ms, 0 matches\n"),
+        "{report}"
+    );
+    // The absent search follows the resize, which follows the matching
+    // search: each line's place pins the measurement order.
+    let at = |label: &str| {
+        report
+            .lines()
+            .position(|line| line.starts_with(label))
+            .unwrap_or_else(|| panic!("no {label:?} in {report}"))
+    };
+    let shell = at("search of the whole log: ");
+    let absent = at("search of the whole log with no match: ");
+    let recount = at("slowest re-count at a new width: ");
+    assert!(shell < recount && recount < absent, "{report}");
+}
+
+#[test]
+fn the_paging_report_times_the_resize_and_absent_search() {
+    let origin = fakes::clock::FakeClock::new().origin();
+    let report = crate::measure_paging(&events(&session()), 60, 12, TickClock::clock(origin))
+        .unwrap_or_else(|error| panic!("{error}"));
+    // A ticking clock times both: the resize from before `set_size`
+    // through its frame, and the absent search after it.
+    let ms = |label: &str| {
+        report
+            .lines()
+            .find(|line| line.starts_with(label))
+            .and_then(|line| {
+                line.trim_start_matches(label)
+                    .split_once(" ms")
+                    .map(|(ms, _)| ms.parse::<f64>().unwrap_or(-1.0))
+            })
+            .unwrap_or_else(|| panic!("no {label:?} in {report}"))
+    };
+    assert!(
+        ms("slowest re-count at a new width: ") > 0.0,
+        "the resize is timed: {report}"
+    );
+    assert!(
+        ms("search of the whole log with no match: ") > 0.0,
+        "the absent search is timed: {report}"
+    );
 }
 
 /// A clock that ticks one millisecond per `now()`, so the paging jig's
@@ -1481,4 +1538,84 @@ fn a_hub_batch_holds_while_folding() {
     assert!(!lp.app.pages().holding());
     let screen = shown(&lp);
     assert!(screen.contains("marker one"), "{screen}");
+}
+
+/// Eighty page-shaped groups of identical turns, serialized for the
+/// jig: enough dropped pages that a search spans many fetches, each
+/// answered from the log.
+fn many_groups() -> String {
+    let mut seq = 0u64;
+    let mut events = String::new();
+    let mut push = |kind: &str, action: Option<&str>, payload: Value| {
+        seq += 1;
+        let envelope = line(kind, Some(seq), action, payload);
+        events.push_str(&serde_json::to_string(&envelope).unwrap_or_default());
+        events.push('\n');
+    };
+    for group in 0..80 {
+        for turn in 0..9 {
+            let message = format!("a_g{group:02}w{turn}");
+            push(
+                "turn_started",
+                None,
+                json!({"input": [{"type": "message", "source": "driver", "content": [{"type": "text", "text": "go"}]}]}),
+            );
+            push("step_started", None, json!({}));
+            push("assistant_message_started", Some(&message), json!({}));
+            push(
+                "text_completed",
+                Some(&message),
+                json!({"text": "the session holds every line in order ".repeat(4)}),
+            );
+            push(
+                "assistant_message_completed",
+                Some(&message),
+                json!({"outcome": "completed"}),
+            );
+            push(
+                "usage_recorded",
+                Some("a_m"),
+                json!({"generation_id": format!("g{group:02}w{turn}"), "model": "fake/m", "tokens": {"input": 100, "cache_read": 0, "cache_write": {}, "output": 40}, "input_bytes": 0, "cost": null}),
+            );
+            push("turn_completed", None, json!({"outcome": "completed"}));
+        }
+        push(
+            "turn_started",
+            None,
+            json!({"input": [{"type": "message", "source": "driver", "content": [{"type": "text", "text": "quiet"}]}]}),
+        );
+        push("step_started", None, json!({}));
+        push(
+            "assistant_message_started",
+            Some(&format!("a_g{group:02}q")),
+            json!({}),
+        );
+        push(
+            "assistant_message_completed",
+            Some(&format!("a_g{group:02}q")),
+            json!({"outcome": "completed"}),
+        );
+        push(
+            "usage_recorded",
+            Some("a_m"),
+            json!({"generation_id": format!("g{group:02}q"), "model": "fake/m", "tokens": {"input": 100, "cache_read": 0, "cache_write": {}, "output": 40}, "input_bytes": 0, "cost": null}),
+        );
+        push("turn_completed", None, json!({"outcome": "completed"}));
+    }
+    events
+}
+
+#[test]
+fn a_long_search_answers_every_fetch_each_settle_queues() {
+    // Eighty pages at 80x10: most drop, so both searches span dozens of
+    // fetches. Every settle queues its own fetch past what its line
+    // returns; the search drains those too, or an orphaned fetch blocks
+    // the wire and the scan never completes.
+    let report = crate::measure_paging(&many_groups(), 80, 10, fakes::clock::FakeClock::new())
+        .unwrap_or_else(|error| panic!("{error}"));
+    assert!(report.contains("pages: 80\n"), "{report}");
+    assert!(
+        report.contains("search of the whole log with no match: 0.00 ms, 0 matches\n"),
+        "{report}"
+    );
 }

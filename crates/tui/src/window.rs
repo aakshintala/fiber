@@ -18,7 +18,7 @@ use crate::mouse::TargetId;
 use crate::pages::{Cut, Index};
 use crate::rows::{RowText, Rows};
 use crate::surface::Edges;
-use crate::turn::{Fold, Row, Turn};
+use crate::turn::{Entry, Fold, Row, Turn};
 
 mod images;
 mod live;
@@ -235,6 +235,13 @@ pub(crate) struct Pages {
     seeds: Vec<Seed>,
     /// Each closed page's cards, `None` while dropped.
     closed: Vec<Option<Part>>,
+    /// The closed pages holding cards: `trim` drops from this set
+    /// instead of scanning every page, so settling costs residents,
+    /// not the session. The set over-approximates: a test may drop a
+    /// page directly, and dropping an already dropped page changes
+    /// nothing, while every site that keeps cards inserts, so no kept
+    /// page is ever missing.
+    resident_set: BTreeSet<usize>,
     /// The open page's cards, always held.
     open: Part,
     pending: Option<Pending>,
@@ -246,6 +253,17 @@ pub(crate) struct Pages {
     fold: Fold,
     /// Shell output, placed after the number of turns in the page where it ran.
     shells: Vec<(usize, usize, String)>,
+    /// Where each page and turn-after keeps its shells, in insertion
+    /// order: drawing a turn slot looks up its own bucket instead of
+    /// walking every shell the session ever ran.
+    shell_index: HashMap<(usize, usize), Vec<usize>>,
+    /// Whether each page's replies hold a Markdown table, `None` until
+    /// the page is first counted: tables lay out at the render width, so
+    /// their logical lines move with it and the search rescans them
+    /// after a width change, while any other page keeps its matches.
+    /// The answer survives the page's drop and reload, since dropping
+    /// keeps it and counting sets it again.
+    table: Vec<Option<bool>>,
     /// Focus stops by page, with row offsets within each page.
     focus: Vec<FocusItems>,
     /// What the person opened or closed since, by target.
@@ -284,12 +302,15 @@ impl Pages {
             index: Index::default(),
             seeds: vec![seed.clone()],
             closed: Vec::new(),
+            resident_set: BTreeSet::new(),
             open: Part::seeded(seed),
             pending: None,
             summaries: Vec::new(),
             generations: HashMap::new(),
             fold: Fold::default(),
             shells: Vec::new(),
+            shell_index: HashMap::new(),
+            table: vec![None],
             focus: vec![Vec::new()],
             overrides: BTreeMap::new(),
             stale: BTreeSet::new(),
@@ -362,6 +383,13 @@ impl Pages {
         // the card as cut short without a `turn_completed`, which the
         // totals below only learn through `CutShort`.
         let busy = Some(self.open.turns.last().is_some_and(Turn::is_open));
+        // A folded line changes the open page's search text, whatever
+        // follows: closing moves its cards, but the line stays on the
+        // new open page. Counting may wait for the batch's end, but the
+        // revision moves now, so a search never trusts a stale scan.
+        if changed && kind != "usage_recorded" {
+            self.index.invalidate(self.closed.len());
+        }
         // A usage line counts the page holding its turn's ▣ line itself.
         if (changed && kind != "usage_recorded") || cut != Cut::None {
             if self.held {
@@ -463,25 +491,32 @@ impl Pages {
         let width = self.width;
         // The ▣ line draws at the card's inner width, split by the same
         // rule, so its count and its rows cannot drift apart
-        // (`docs/tui.md`, "Turns").
-        let rows = |summary: &Summary| {
-            summary
-                .closing()
-                .map(|line| crate::rows::fitted(&line, crate::surface::inset(width)))
-        };
-        let before = rows(summary);
+        // (`docs/tui.md`, "Turns"). The lines themselves compare, not
+        // only their counts: a late line with equal rows still moves the
+        // search revision when its text changed.
+        let before = summary.closing();
         summary.spend.record(&line);
-        let after = rows(summary);
+        let after = summary.closing();
+        let rows = |line: Option<&Line<'static>>| {
+            line.map(|line| crate::rows::fitted(line, crate::surface::inset(width)))
+        };
         let page = summary.closed_on;
         self.generations.insert(line.generation_id, at);
+        if before != after {
+            self.index.invalidate(page);
+        }
         if let (Some(before), Some(after)) = (before, after) {
+            let before_rows = rows(Some(&before));
+            let after_rows = rows(Some(&after));
             let open = page == self.closed.len();
             if open && self.held {
                 self.dirty = true;
-            } else if (open || before != after) && self.part(page).is_some() {
+            } else if (open || before_rows != after_rows) && self.part(page).is_some() {
                 self.count(page);
             } else if let Some(held) = self.index.pages().get(page).map(|page| page.rows) {
-                let rows = held.saturating_sub(before).saturating_add(after);
+                let rows = held
+                    .saturating_sub(before_rows.unwrap_or(0))
+                    .saturating_add(after_rows.unwrap_or(0));
                 self.index.set_rows(page, rows);
             }
         }
@@ -501,8 +536,13 @@ impl Pages {
             closing.carried = part.fold.take_carried();
         }
         self.closed.push(Some(part));
+        self.resident_set.insert(at);
         self.seeds.push(seed);
         self.focus.push(Vec::new());
+        self.table.push(None);
+        // Closing moves the carried descriptions off the page, so its
+        // text may differ from what the search scanned: it scans again.
+        self.index.invalidate(at);
         self.count(at);
     }
 
@@ -582,10 +622,16 @@ impl Pages {
         // the closed page keeps none of their descriptions.
         Fold::default().carry_from(&mut before.fold);
         self.closed.push(Some(before));
+        self.resident_set.insert(at);
         self.seeds.push(seed);
         self.focus.push(Vec::new());
+        self.table.push(None);
         self.open = next;
         self.fold.ledgers = self.open.fold.ledgers;
+        // Ending the cut group, joining the edges and moving the carried
+        // descriptions may all change the closed page's text: it scans
+        // again, while the new open page is fresh and unscanned.
+        self.index.invalidate(at);
         self.count(at);
     }
 
@@ -697,6 +743,7 @@ impl Pages {
         self.finish(at, &mut part);
         if let Some(slot) = self.closed.get_mut(at) {
             *slot = Some(part);
+            self.resident_set.insert(at);
         }
         self.stale.remove(&at);
         self.failed.remove(&at);
@@ -752,9 +799,14 @@ impl Pages {
     /// the pages a pending copy asked for until it runs.
     pub(crate) fn trim(&mut self, top: usize, height: usize) {
         let window = self.index.window(top, height);
-        for (at, part) in self.closed.iter_mut().enumerate() {
+        // Only pages holding cards can drop: the set holds every kept
+        // page, so the scan costs residents, never the session.
+        for at in self.resident_set.clone() {
             if !window.contains(&at) && !self.pins.contains(at) {
-                *part = None;
+                if let Some(slot) = self.closed.get_mut(at) {
+                    *slot = None;
+                }
+                self.resident_set.remove(&at);
             }
         }
     }
@@ -819,7 +871,10 @@ impl Pages {
     }
 
     /// Re-counts every page at `width`: a resident page in place, a dropped
-    /// one once it is loaded again.
+    /// one once it is loaded again. A page whose replies hold a table, or
+    /// whose sensitivity is still unknown, scans again: tables lay out at
+    /// the render width, so their logical lines move with it. Any other
+    /// page keeps the matches the search already holds.
     pub(crate) fn set_width(&mut self, width: u16) {
         if width == self.width {
             return;
@@ -827,6 +882,11 @@ impl Pages {
         self.width = width;
         self.wrapped.clear();
         self.failed.clear();
+        for at in 0..=self.closed.len() {
+            if self.table.get(at).copied().flatten().unwrap_or(true) {
+                self.index.invalidate(at);
+            }
+        }
         self.recount();
     }
 
@@ -1109,9 +1169,16 @@ impl Pages {
         let Some(item) = item else {
             return false;
         };
-        self.shells
-            .push((self.closed.len(), self.summaries.len(), item));
-        self.count(self.closed.len());
+        let page = self.closed.len();
+        let after = self.summaries.len();
+        self.shell_index
+            .entry((page, after))
+            .or_default()
+            .push(self.shells.len());
+        self.shells.push((page, after, item));
+        // Shell output draws on the page, so its search text changed.
+        self.index.invalidate(page);
+        self.count(page);
         true
     }
 
@@ -1126,6 +1193,13 @@ impl Pages {
             return Some(&self.open);
         }
         self.closed.get(at).and_then(Option::as_ref)
+    }
+
+    /// Whether page `at`'s replies hold a Markdown table: unknown
+    /// pages answer sensitively, so the search never trusts an old
+    /// table layout for them.
+    pub(crate) fn page_table(&self, at: usize) -> bool {
+        self.table.get(at).copied().flatten().unwrap_or(true)
     }
 
     /// A page's lines: each card's, and the ▣ line of each card that ends
@@ -1156,12 +1230,18 @@ impl Pages {
             while let Some((_, (_, aside))) = asides.next_if(|(_, (turns, _))| *turns <= after) {
                 aside.rows(&mut out);
             }
-            for (on_page, shell_after, text) in &self.shells {
-                if *on_page == page && *shell_after == after {
-                    out.extend(
-                        text.split('\n')
-                            .map(|line| (Line::raw(line.to_owned()), None)),
-                    );
+            // Shell output lives in the page and turn-after bucket it ran
+            // in: only those candidates are examined, in the order they
+            // ran, never every shell the session ever ran.
+            if let Some(bucket) = self.shell_index.get(&(page, after)) {
+                crate::work::add(|work| work.shell_visits += bucket.len());
+                for slot in bucket {
+                    if let Some((_, _, text)) = self.shells.get(*slot) {
+                        out.extend(
+                            text.split('\n')
+                                .map(|line| (Line::raw(line.to_owned()), None)),
+                        );
+                    }
                 }
             }
             let Some(card) = part.turns.get(at) else {
@@ -1228,6 +1308,13 @@ impl Pages {
         let Some(part) = self.part(at) else {
             return;
         };
+        // Counting sees the page's current replies, so it refreshes the
+        // table answer too: a reply that gained or lost a table flips
+        // the page with it, and a dropped page keeps its answer until
+        // its reload counts it again. Every reply source visited counts,
+        // so no session-size-dependent walk hides here.
+        let (page_table, sources) = classify(part);
+        crate::work::add(|work| work.search_order_pages += sources);
         let (lines, _, focus, _) = self.draw_data(at, part, Draw::Shown);
         let width = self.width;
         let open = at == self.closed.len();
@@ -1256,6 +1343,13 @@ impl Pages {
             self.recounts = self.recounts.saturating_add(1);
         }
         self.index.set_rows(at, rows);
+        // The table answer grows with the pages, never shrinks: the
+        // maximum holds the capacity without a guard left to mutate.
+        self.table
+            .resize(self.table.len().max(at.saturating_add(1)), None);
+        if let Some(slot) = self.table.get_mut(at) {
+            *slot = Some(page_table);
+        }
         if at >= self.focus.len() {
             self.focus.resize_with(at, Vec::new);
             self.focus.push(focus);
@@ -1263,6 +1357,26 @@ impl Pages {
             *items = focus;
         }
     }
+}
+
+/// Whether `part`'s replies hold a Markdown table, and how many reply
+/// sources were visited to tell: only replies render through the
+/// table layout, so only they can make a page table-sensitive. The
+/// reply caches its own answer per text, shared by its clones, so a
+/// recount revisits sources without reparsing them.
+fn classify(part: &Part) -> (bool, usize) {
+    let mut sources = 0usize;
+    for turn in &part.turns {
+        for entry in &turn.entries {
+            if let Entry::Reply { reply, .. } = entry {
+                sources = sources.saturating_add(1);
+                if reply.has_table() {
+                    return (true, sources);
+                }
+            }
+        }
+    }
+    (false, sources)
 }
 
 /// The live durations of `part`'s groups, in order.

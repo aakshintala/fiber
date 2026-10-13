@@ -248,3 +248,294 @@ fn measure_open_reports_no_stages_for_an_empty_log_but_still_draws() {
     assert_eq!(stages.frame_time, Duration::from_millis(1));
     assert_eq!(json!({"frames": stages.frames}), json!({"frames": 1}));
 }
+
+/// A session line with `seq`, serialized as the jig reads it.
+fn numbered(seq: u64, kind: &str) -> String {
+    let envelope = Envelope {
+        kind: kind.to_owned(),
+        session_id: contract::SessionId(SESSION.to_owned()),
+        ts: 0,
+        schema_version: contract::SCHEMA_VERSION,
+        turn_id: None,
+        action_id: None,
+        seq: Some(contract::Seq(seq)),
+        payload: serde_json::Map::new(),
+    };
+    serde_json::to_string(&envelope).unwrap_or_default()
+}
+
+/// A `Paging` over owned `lines`, with no hub connection: fetches never
+/// go out, so any dropped page keeps the search scanning. The lines
+/// outlive the paging within the caller's scope.
+fn over<'a>(
+    lines: &'a [(contract::Seq, String)],
+    clock: std::sync::Arc<dyn contract::clock::Clock>,
+) -> super::Paging<'a> {
+    super::Paging {
+        app: crate::app::App::new(std::path::PathBuf::new()),
+        log: lines
+            .iter()
+            .map(|(seq, line)| (*seq, line.as_str()))
+            .collect(),
+        area: ratatui::layout::Rect::new(0, 0, 60, 12),
+        clock,
+        most: 0,
+    }
+}
+
+#[test]
+fn range_lines_covers_the_inclusive_range() {
+    let lines: Vec<(contract::Seq, String)> = [3u64, 4, 5]
+        .into_iter()
+        .map(|seq| (contract::Seq(seq), numbered(seq, "turn_started")))
+        .collect();
+    let clock = fakes::clock::FakeClock::new();
+    let over = over(&lines, clock);
+    // Both ends included: `<=` on either side undercounts.
+    assert_eq!(over.range_lines(3, 5).unwrap_or_default().len(), 3);
+    assert_eq!(over.range_lines(4, 4).unwrap_or_default().len(), 1);
+    assert_eq!(over.range_lines(0, 2).unwrap_or_default().len(), 0);
+}
+
+#[test]
+fn range_lines_tolerates_sparse_seqs_and_missing_ranges() {
+    let lines: Vec<(contract::Seq, String)> = [1u64, 5, 10]
+        .into_iter()
+        .map(|seq| (contract::Seq(seq), numbered(seq, "turn_started")))
+        .collect();
+    let clock = fakes::clock::FakeClock::new();
+    let sparse = over(&lines, clock);
+    // Sparse seqs: entries below `from` are skipped, past `to` end it.
+    assert_eq!(sparse.range_lines(0, 10).unwrap_or_default().len(), 3);
+    assert_eq!(sparse.range_lines(2, 9).unwrap_or_default().len(), 1);
+    // A range past every line is empty, not an error.
+    assert!(sparse.range_lines(11, 20).unwrap_or_default().is_empty());
+    assert!(sparse.range_lines(6, 6).unwrap_or_default().is_empty());
+    // No lines at all is an empty range too.
+    let empty: Vec<(contract::Seq, String)> = Vec::new();
+    let clock = fakes::clock::FakeClock::new();
+    let over_empty = over(&empty, clock);
+    assert!(over_empty.range_lines(0, 10).unwrap_or_default().is_empty());
+}
+
+#[test]
+fn range_lines_names_an_unreadable_line_in_range() {
+    let lines = vec![
+        (contract::Seq(1), numbered(1, "turn_started")),
+        (contract::Seq(2), "not json".to_owned()),
+    ];
+    let clock = fakes::clock::FakeClock::new();
+    let over = over(&lines, clock);
+    let error = over.range_lines(1, 2).unwrap_err();
+    assert!(!error.is_empty(), "an unreadable line errors");
+    // Outside the range the bad line never reads.
+    assert_eq!(over.range_lines(1, 1).unwrap_or_default().len(), 1);
+}
+
+/// An app folded with `lines` but never connected: `history` never goes
+/// out, so any dropped page keeps the search scanning.
+fn silent_app(lines: &[(contract::Seq, String)]) -> crate::app::App {
+    let mut app = crate::app::App::new(std::path::PathBuf::new());
+    app.set_size(60, 12);
+    for (_, line) in lines {
+        let envelope: contract::Envelope =
+            serde_json::from_str(line).unwrap_or_else(|error| panic!("{error}"));
+        if app.session().is_none() {
+            app.attach(envelope.session_id.clone());
+        }
+        let outgoing = app.on_line(crate::link::Line::Session(envelope));
+        assert!(outgoing.is_empty(), "nothing sends while silent");
+    }
+    app
+}
+
+#[test]
+fn an_absent_search_with_no_connection_never_completes() {
+    // Enough bare turns to drop the first pages at 60x12.
+    let lines: Vec<(contract::Seq, String)> = (1u64..=200)
+        .map(|seq| (contract::Seq(seq), numbered(seq, "turn_started")))
+        .collect();
+    let app = silent_app(&lines);
+    assert!(app.pages().part(0).is_none(), "the first page drops");
+    let clock = fakes::clock::FakeClock::new();
+    let log: Vec<(contract::Seq, &str)> = lines
+        .iter()
+        .map(|(seq, line)| (*seq, line.as_str()))
+        .collect();
+    let mut paging = super::Paging {
+        app,
+        log,
+        area: ratatui::layout::Rect::new(0, 0, 60, 12),
+        clock,
+        most: 0,
+    };
+    // Still scanning with no outgoing: the dropped pages wait on a
+    // fetch that never goes out, so the sample errors instead.
+    let error = paging.search_absent().unwrap_err();
+    assert!(
+        error.contains("never completed"),
+        "a stuck scan errors: {error}"
+    );
+}
+
+/// A session line with `seq` and `payload`, serialized as the jig
+/// reads it.
+fn lined(seq: u64, kind: &str, action: Option<&str>, payload: serde_json::Value) -> String {
+    let mut envelope: contract::Envelope =
+        serde_json::from_str(&numbered(seq, kind)).unwrap_or_else(|error| panic!("{error}"));
+    envelope.action_id = action.map(|id| contract::ActionId(id.to_owned()));
+    envelope.payload = payload.as_object().cloned().unwrap_or_default();
+    serde_json::to_string(&envelope).unwrap_or_default()
+}
+
+#[test]
+fn an_accidental_absent_match_is_an_error_not_a_sample() {
+    let lines = [
+        lined(1, "turn_started", None, serde_json::json!({"input": []})),
+        lined(
+            2,
+            "assistant_message_started",
+            Some("a_m"),
+            serde_json::json!({}),
+        ),
+        lined(
+            3,
+            "text_completed",
+            Some("a_m"),
+            serde_json::json!({"text": "has qqq-no-such-match inside"}),
+        ),
+        lined(
+            4,
+            "assistant_message_completed",
+            Some("a_m"),
+            serde_json::json!({"outcome": "completed"}),
+        ),
+        lined(
+            5,
+            "turn_completed",
+            None,
+            serde_json::json!({"outcome": "completed"}),
+        ),
+    ]
+    .join("\n");
+    let error = crate::measure_paging(&lines, 60, 12, fakes::clock::FakeClock::new())
+        .expect_err("an accidental match must fail the jig");
+    assert!(
+        error.contains("matched 1"),
+        "the sample names its matches: {error}"
+    );
+}
+
+#[test]
+fn measure_paging_on_no_events_reports_zero_searches() {
+    // No lines, no session, no search: the smoke run still reports,
+    // with both searches at zero rather than failing.
+    let report = crate::measure_paging("", 60, 12, fakes::clock::FakeClock::new())
+        .unwrap_or_else(|error| panic!("{error}"));
+    assert!(
+        report.contains("search of the whole log: 0.00 ms, 0 matches\n"),
+        "{report}"
+    );
+    assert!(
+        report.contains("search of the whole log with no match: 0.00 ms, 0 matches\n"),
+        "{report}"
+    );
+}
+
+#[test]
+fn searching_with_no_session_is_an_error_not_a_sample() {
+    // A direct search with no session cannot open its bar: it errors
+    // instead of reporting a vacuous zero-match sample.
+    let lines: Vec<(contract::Seq, String)> = Vec::new();
+    let clock = fakes::clock::FakeClock::new();
+    let mut paging = over(&lines, clock);
+    let error = paging
+        .search_absent()
+        .expect_err("no session means no search");
+    assert!(
+        error.contains("no session to search"),
+        "the error says why: {error}"
+    );
+}
+
+#[test]
+fn a_frame_names_the_range_the_log_does_not_hold() {
+    // Turns with text enough to cut a second page and drop the first;
+    // the log then loses the first page, so the frame errors naming its
+    // range instead of loading forever. This pins the snapshot's
+    // empty-range guard: without it the frame would settle an unloadable
+    // page as loaded.
+    let kinds = [
+        (
+            "turn_started",
+            None,
+            serde_json::json!({"input": [{"type": "message", "source": "driver",
+                "content": [{"type": "text", "text": "go"}]}]}),
+        ),
+        (
+            "text_completed",
+            Some("a_m"),
+            serde_json::json!({"text": "filler text that draws rows"}),
+        ),
+        (
+            "turn_completed",
+            None,
+            serde_json::json!({"outcome": "completed"}),
+        ),
+    ];
+    let lines: Vec<(contract::Seq, String)> = (0..25)
+        .flat_map(|_| kinds.iter().cloned())
+        .enumerate()
+        .map(|(at, (kind, action, payload))| {
+            let seq = u64::try_from(at).unwrap_or(0).saturating_add(1);
+            let envelope = Envelope {
+                kind: kind.to_owned(),
+                session_id: contract::SessionId(SESSION.to_owned()),
+                ts: 0,
+                schema_version: contract::SCHEMA_VERSION,
+                turn_id: None,
+                action_id: action.map(|id| contract::ActionId(id.to_owned())),
+                seq: Some(contract::Seq(seq)),
+                payload: payload.as_object().cloned().unwrap_or_default(),
+            };
+            (
+                contract::Seq(seq),
+                serde_json::to_string(&envelope).unwrap_or_default(),
+            )
+        })
+        .collect();
+    let mut app = crate::app::App::new(std::path::PathBuf::new());
+    app.set_size(60, 12);
+    for (_, line) in &lines {
+        let envelope: contract::Envelope =
+            serde_json::from_str(line).unwrap_or_else(|error| panic!("{error}"));
+        if app.session().is_none() {
+            app.attach(envelope.session_id.clone());
+        }
+        app.on_line(crate::link::Line::Session(envelope));
+    }
+    assert!(app.pages().part(0).is_none(), "the first page drops");
+    let clock = fakes::clock::FakeClock::new();
+    let end = app.pages().index().pages()[0].last_seq.0;
+    let kept: Vec<(contract::Seq, &str)> = lines
+        .iter()
+        .filter(|(seq, _)| seq.0 > end)
+        .map(|(seq, line)| (*seq, line.as_str()))
+        .collect();
+    assert!(!kept.is_empty(), "the log keeps the later pages");
+    let mut paging = super::Paging {
+        app,
+        log: kept,
+        area: ratatui::layout::Rect::new(0, 0, 60, 12),
+        clock,
+        most: 0,
+    };
+    // Scroll to the top, so the window needs the dropped first page
+    // the log no longer holds.
+    paging.app.jump(0);
+    let error = paging.frame().unwrap_err();
+    assert!(
+        error.contains("holds no lines"),
+        "the missing range errors: {error}"
+    );
+}

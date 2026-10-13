@@ -1146,7 +1146,7 @@ on click; schemes are `http`, `https` and `mailto`. A click runs `open` or
 `xdg-open` on the terminal's machine; over SSH or with no opener the click
 copies the URL and shows "Copied". A link is in the accent colour,
 underlined. A focused link sits on the `surface_raised` tint, with "Enter opens
-· y copies" dim under it, and opens with Enter and copies with `y`. A hovered
+· y copies" dim under it when the window has a row under it, and opens with Enter and copies with `y`. A hovered
 link takes the `hover` tint.
 
 A copy, link or image command still running after 10 seconds is stopped;

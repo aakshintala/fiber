@@ -106,12 +106,12 @@ groups, then the flags and examples.
 | `ask [--model <model>] [-c <key>=<value>]... [--resume <id> [--credential <label>]] [--worktree] [<prompt>] [-]` | Runs one session of one turn; its events go to stdout. `--resume` sends the prompt to an existing session ("Lifecycle"). `--worktree` runs it in a new worktree ("Isolation"); with `--resume` it is a usage error, because a resumed session keeps its workspace. |
 | `resume [<id>] [--credential <label>]` | Opens a session in the terminal, resuming it if it has exited. With no id, opens home at the session list (`docs/tui.md`, "The session list"). |
 | `continue` | Opens the most recent session in this project, the launch directory's own outside a git repository, live or exited, in the terminal. With none, it is a usage error naming `fiber`. |
-| `sessions [--all]` | Lists sessions: id, state, the name or first prompt, what it waits on, and spend. It takes `--json`. |
-| `sessions search [--all] <text>` | Searches the logs of past and running sessions for the text, as the `session_search` tool does (`docs/tools.md`, "Searching past sessions"). `--all` searches every project. It takes `--json`. |
+| `sessions [--all] [--json]` | Lists sessions: id, state, the name or first prompt, what it waits on, and spend. |
+| `sessions search [--all] [--json] <text>` | Searches the logs of past and running sessions for the text, as the `session_search` tool does (`docs/tools.md`, "Searching past sessions"). `--all` searches every project. |
 | `sessions delete [--cascade] [--yes] <id>` | Deletes a session ("Deleting and pruning"). |
 | `sessions export <id> [<path>]` | Writes the session's log and its artifacts to `<path>`, default `./<id>/` ("Deleting and pruning"). |
 | `sessions prune [--older-than <duration>] [--cascade] [--force] [--dry-run] [--yes]` | Deletes exited sessions older than the duration and removes kept worktrees that hold nothing to lose, then prints the space freed ("Deleting and pruning"). |
-| `models [<search>]` | Lists the models the installed providers serve: `provider/model`, context window, and price per million tokens in and out, with the configured default marked. `<search>` filters by substring. It takes `--json`. |
+| `models [<search>] [--json]` | Lists the models the installed providers serve: `provider/model`, context window, and price per million tokens in and out, with the configured default marked. `<search>` filters by substring. |
 
 `sessions`, `sessions search` and `sessions prune` use the scope of the terminal's session list. Inside
 a git repository that is the repository's project, every worktree of it;
@@ -215,7 +215,7 @@ pairing code, list devices and revoke one, through the hub commands
 |---|---|
 | `hub install [--port <port>]` | Registers the hub as a login service. Without `--port` it listens on its local socket only. With `--port` it also listens on `127.0.0.1:<port>`, where every connection presents a device token, and writes `hub.port`. |
 | `hub uninstall` | Removes the login service. Running sessions carry on. |
-| `hub status` | Prints whether the hub is running, its version, its port, the connected clients, the paired devices and whether the login service is installed. It takes `--json`. |
+| `hub status [--json]` | Prints whether the hub is running, its version, its port, the connected clients, the paired devices and whether the login service is installed. |
 | `hub pair <device> [--address <url>]` | Prints a pairing code for a device of that name, and in a terminal draws a QR code that carries the pairing code, plus the address given with `--address`. The optional address must be a `ws://` or `wss://` URL; without it, the QR code carries the code alone. Pairing needs no `hub.port` setting. The code works once, within 10 minutes. |
 | `hub token list` | Lists paired devices: name, when paired, last connection. |
 | `hub token revoke <device>` | Revokes a device's token and closes its live connections. |

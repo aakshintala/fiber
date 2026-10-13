@@ -23,6 +23,19 @@ pub struct Work {
     pub index_pages: usize,
     /// Turn summaries looked up to place a `usage_recorded` line.
     pub usage_summaries: usize,
+    /// Drawn pieces measured for their width in the format helpers:
+    /// one per grapheme or control character `cut` or `wrap_joined`
+    /// sized, including a cut's first rejected piece.
+    pub grapheme_widths: usize,
+    /// Pages whose text the search scanned: resident scans and scratch
+    /// folds of dropped pages, one per page scan.
+    pub search_pages: usize,
+    /// Page entries the search's order and progress bookkeeping
+    /// examined: order extensions, scan-progress checks and completion
+    /// walks, one per entry examined.
+    pub search_order_pages: usize,
+    /// Shell candidates examined while placing shell output for a draw.
+    pub shell_visits: usize,
 }
 
 thread_local! {
@@ -42,3 +55,7 @@ pub(crate) fn add(count: impl FnOnce(&mut Work)) {
 pub fn take() -> Work {
     WORK.with(|work| work.replace(Work::default()))
 }
+
+#[cfg(test)]
+#[path = "work_tests.rs"]
+mod tests;

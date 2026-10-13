@@ -1605,3 +1605,19 @@ fn the_preamble_leaves_a_pending_approval_waiting() {
     w.preamble();
     assert_eq!(waiting_of(&w).request_id.0, "r1");
 }
+
+#[test]
+fn finished_turns_forget_their_tool_names() {
+    let mut w = world();
+    w.start();
+    for turn in 0..3 {
+        w.prompt("go");
+        for n in 0..50 {
+            let action = format!("t{turn}a{n}");
+            w.call(&action, "read");
+            w.done(&action);
+        }
+        w.finish();
+        assert_eq!(w.fold.tools.len(), 0, "after turn {}", turn + 1);
+    }
+}

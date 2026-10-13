@@ -1497,8 +1497,8 @@ fn the_menu_and_ask_help_show_worktree() {
 #[test]
 fn the_menu_and_ask_help_show_resume() {
     assert!(
-        menu().contains("[--resume <id>]"),
-        "the menu shows --resume:\n{}",
+        menu().contains("[--resume <id> [--credential <label>]]"),
+        "the menu nests --credential under --resume:\n{}",
         menu()
     );
     let rendered = super::render_help(&["ask"]).unwrap();
@@ -2443,4 +2443,235 @@ fn mcp_login_parses_into_its_invocation() {
             "{argv:?} names no server"
         );
     }
+}
+
+/// The command reference the help menu must match word for word
+/// (`docs/invocation.md`, "Commands and flags").
+const INVOCATION: &str = include_str!("../../../docs/invocation.md");
+
+/// One Markdown table row, split at `|` outside backticks: an escaped
+/// `\|` inside a synopsis stays in its cell.
+fn split_cells(line: &str) -> Vec<String> {
+    let mut cells = Vec::new();
+    let mut current = String::new();
+    let mut quoted = false;
+    for ch in line.chars() {
+        if ch == '`' {
+            quoted = !quoted;
+            current.push(ch);
+        } else if ch == '|' && !quoted {
+            cells.push(current);
+            current = String::new();
+        } else {
+            current.push(ch);
+        }
+    }
+    cells.push(current);
+    cells
+}
+
+/// The `Command`-column synopsis of every table in `section`, backticks
+/// stripped and `\|` unescaped. Only tables headed `Command` count: any
+/// other table is a different contract.
+fn synopses_in(section: &str) -> Vec<String> {
+    let mut synopses = Vec::new();
+    let mut in_table = false;
+    for line in section.lines() {
+        if !line.starts_with('|') {
+            in_table = false;
+            continue;
+        }
+        let cells = split_cells(line);
+        let first = cells.get(1).map(|cell| cell.trim()).unwrap_or("");
+        if first == "Command" {
+            in_table = true;
+            continue;
+        }
+        if !in_table {
+            continue;
+        }
+        if !first.starts_with('`') {
+            continue;
+        }
+        synopses.push(first.trim_matches('`').replace("\\|", "|"));
+    }
+    synopses
+}
+
+/// The doc's "Commands and flags" section: later sections hold driver
+/// and hub commands, which are not `fiber` synopses.
+fn commands_section() -> &'static str {
+    let after = INVOCATION.split("## Commands and flags\n").nth(1).unwrap();
+    after.split("\n## ").next().unwrap()
+}
+
+/// The `Command`-column synopsis of every built command's row in the
+/// doc's "Commands and flags" section.
+fn doc_synopses() -> Vec<String> {
+    synopses_in(commands_section())
+}
+
+/// The words of a synopsis before its first argument: `fiber` names the
+/// terminal itself, so its row leaves none.
+fn command_path(synopsis: &str) -> Vec<&str> {
+    let mut words: Vec<&str> = synopsis
+        .split_whitespace()
+        .take_while(|word| {
+            !word.starts_with('[') && !word.starts_with('<') && !word.starts_with('-')
+        })
+        .collect();
+    if words.first() == Some(&"fiber") {
+        words.remove(0);
+    }
+    words
+}
+
+/// Whether the parser builds the command the path names: every word
+/// names a visible subcommand of the last. An empty path is the
+/// terminal, which is always built.
+fn is_built(path: &[&str]) -> bool {
+    let mut cmd = command();
+    cmd.build();
+    let mut sub = &mut cmd;
+    for word in path {
+        let Some(next) = sub.find_subcommand_mut(word) else {
+            return false;
+        };
+        if next.is_hide_set() {
+            return false;
+        }
+        sub = next;
+    }
+    true
+}
+
+/// The synopsis each indented menu line shows: the text before the gap
+/// of two or more spaces that starts its description.
+fn menu_synopses(menu: &str) -> Vec<&str> {
+    menu.lines()
+        .filter(|line| line.starts_with("  "))
+        .map(|line| line[2..].split("  ").next().unwrap_or(""))
+        .collect()
+}
+
+#[test]
+fn split_cells_keeps_pipes_inside_backticks_in_their_cell() {
+    let cells = split_cells("| `logout <provider> [--as <label> \\| --all]` | Deletes. |");
+    assert_eq!(
+        cells.get(1).map(|cell| cell.trim()),
+        Some("`logout <provider> [--as <label> \\| --all]`")
+    );
+}
+
+#[test]
+fn synopses_come_from_command_tables_only() {
+    let section = [
+        "| Command | What it does |",
+        "|---|---|",
+        "| `ask [<prompt>]` | Runs one turn. |",
+        "",
+        "| Key | Type |",
+        "|---|---|",
+        "| `id` | string |",
+        "",
+        "A `quoted` word in prose is not a row.",
+    ]
+    .join("\n");
+    assert_eq!(synopses_in(&section), ["ask [<prompt>]"]);
+}
+
+#[test]
+fn doc_synopses_are_the_commands_section() {
+    let synopses = doc_synopses();
+    assert_eq!(synopses.len(), 42);
+    assert_eq!(synopses[0], "fiber [--model <model>] [-c <key>=<value>]...");
+    assert_eq!(
+        synopses[1],
+        "ask [--model <model>] [-c <key>=<value>]... [--resume <id> [--credential <label>]] [--worktree] [<prompt>] [-]"
+    );
+    assert!(
+        synopses.contains(&"logout <provider> [--as <label> | --all]".to_owned()),
+        "an escaped pipe reads as one: {synopses:?}"
+    );
+    assert!(
+        synopses
+            .contains(&"mcp add [--project | --repo] <name> [-e KEY=value]... [--secret KEY]... -- <command> [args]...".to_owned()),
+        "{synopses:?}"
+    );
+    // The driver commands live outside the section: they are not synopses.
+    assert!(
+        !synopses.iter().any(|synopsis| synopsis == "subscribe"),
+        "{synopses:?}"
+    );
+}
+
+#[test]
+fn command_path_takes_the_words_before_the_first_argument() {
+    assert_eq!(command_path("continue"), ["continue"]);
+    assert_eq!(
+        command_path("sessions search [--all] <text>"),
+        ["sessions", "search"]
+    );
+    assert_eq!(
+        command_path("fiber [--model <model>] [-c <key>=<value>]..."),
+        Vec::<&str>::new()
+    );
+    assert_eq!(
+        command_path("mcp add [--project | --repo] <name> <url>"),
+        ["mcp", "add"]
+    );
+    assert_eq!(
+        command_path("extension install [--project] <name or path>"),
+        ["extension", "install"]
+    );
+}
+
+#[test]
+fn is_built_follows_the_parser() {
+    assert!(is_built(&["ask"]));
+    assert!(is_built(&["hub", "token", "list"]));
+    assert!(is_built(&[]));
+    assert!(!is_built(&["update"]));
+    assert!(!is_built(&["doctor"]));
+    assert!(!is_built(&["mcp", "serve"]));
+    assert!(!is_built(&["hub", "add"]));
+}
+
+#[test]
+fn menu_synopses_take_the_text_before_the_description_gap() {
+    let fields = menu_synopses(
+        "Fiber, a coding agent.\n\nSessions:\n  continue   Open the most recent session\n  sessions [--all] [--json]   List sessions\n",
+    );
+    assert_eq!(fields, ["continue", "sessions [--all] [--json]"]);
+    // A shorter doc synopsis is not a match: the menu field must equal it.
+    assert!(!fields.contains(&"sessions [--all]"));
+}
+
+/// The Command column of `docs/invocation.md` is the synopsis, so the
+/// help menu holds each built command's row word for word. Rows the
+/// parser does not build name future commands, not drift.
+#[test]
+fn every_built_command_synopsis_in_the_doc_matches_the_menu() {
+    let rendered = menu();
+    let fields = menu_synopses(&rendered);
+    let mut missing = Vec::new();
+    let mut unbuilt = Vec::new();
+    for synopsis in doc_synopses() {
+        if !is_built(&command_path(&synopsis)) {
+            unbuilt.push(command_path(&synopsis).join(" "));
+            continue;
+        }
+        if !fields.iter().any(|field| *field == synopsis) {
+            missing.push(synopsis);
+        }
+    }
+    assert!(
+        missing.is_empty(),
+        "these doc synopses are not in the menu: {missing:?}"
+    );
+    unbuilt.sort();
+    assert_eq!(
+        unbuilt,
+        ["doctor", "hub add", "hub remove", "mcp serve", "update"]
+    );
 }

@@ -351,6 +351,40 @@ fn a_code_pull_request_with_a_bench_readme_skips_the_release_job() {
     assert!(!plan.jobs["release"]);
 }
 
+#[test]
+fn a_pull_request_touching_the_loop_crate_runs_the_ten_turns_workload() {
+    for path in [
+        "crates/loop/src/status.rs",
+        "crates/bench/examples/bench/busy.rs",
+        "xtask/src/bench/judge.rs",
+        "xtask/src/bench_tests.rs",
+    ] {
+        assert!(ten_turns_runs("pull_request", &strings(&[path])), "{path}");
+    }
+}
+
+#[test]
+fn a_pull_request_touching_nothing_the_workload_measures_skips_it() {
+    for paths in [
+        vec![],
+        strings(&["crates/log/src/lib.rs"]),
+        strings(&["crates/benchmark/src/lib.rs"]),
+        strings(&["xtask/src/select.rs"]),
+        // A Markdown file under a measured path is not measured code.
+        strings(&["crates/bench/README.md"]),
+        strings(&["docs/performance.md"]),
+    ] {
+        assert!(!ten_turns_runs("pull_request", &paths), "{paths:?}");
+    }
+}
+
+#[test]
+fn a_push_always_runs_the_ten_turns_workload() {
+    for paths in [vec![], strings(&["crates/log/src/lib.rs"])] {
+        assert!(ten_turns_runs("push", &paths), "{paths:?}");
+    }
+}
+
 fn results(pairs: &[(&str, &str)]) -> BTreeMap<String, String> {
     pairs
         .iter()

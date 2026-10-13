@@ -630,10 +630,11 @@ fn stop_and_fail(servers: mcp_servers::SessionServers, e: Failure) -> i32 {
 }
 
 /// The terminal's shared reads with its guards: a plain cancel for a
-/// normal quit with a signal watcher for SIGTERM and SIGHUP. Built before
-/// the model-list reader, so a signal cancels a picker read in flight.
-/// The guards drop after `tui::run` returns: the watcher first, then the
-/// plain cancel.
+/// normal quit with a watcher that cancels and settles on SIGTERM and
+/// SIGHUP. Built before the model-list reader, so a signal cancels a
+/// picker read in flight. The watcher never exits: the TUI takes its
+/// normal exit path and returns the signal's code. The guards drop after
+/// `tui::run` returns: the watcher first, then the plain cancel.
 fn terminal_guards(
     clock: &Arc<dyn contract::clock::Clock>,
     register: Register,
@@ -696,7 +697,7 @@ fn terminal(fiber: Result<PathBuf, String>, open_at: tui::OpenAt) -> i32 {
     // registration returns before any credential command starts, and a
     // normal quit cancels once `tui::run` returns.
     let (reads, _cancel, _watcher) =
-        match terminal_guards(&clock, read_signals::CancelOnSignal::new) {
+        match terminal_guards(&clock, read_signals::CancelOnSignal::watch) {
             Ok(guards) => guards,
             Err(error) => return fail(error),
         };

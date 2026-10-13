@@ -5,10 +5,13 @@
 use std::collections::BTreeMap;
 
 use contract::shapes::ContentPart;
+use ratatui::style::{Modifier, Style};
+use ratatui::text::{Line, Span};
 
 use crate::app::Target;
 use crate::format;
 use crate::rows::Rows;
+use crate::theme::Role;
 
 /// One image part of the log: its file in the session's `artifacts/`
 /// and its size in pixels, so paging counts its rows without decoding
@@ -105,25 +108,50 @@ pub(crate) enum Align {
 }
 
 /// Draws `part` as its one line, cut to the columns left after its
-/// indent so it is always one row, carrying its click target.
+/// indent so it is always one row, carrying its click target. The line
+/// reads `▣ <name>` in the link look and ` · <dims>` dim
+/// (`docs/tui.md`, "Images", "Links").
 pub(crate) fn rows(part: &Part, layout: &Layout, columns: u16, align: Align, out: &mut Rows) {
     // Text sizing only: the line. Inline rows arrive with kitty's
     // graphics protocol.
     let Sizing::Text = layout.sizing;
     let target = layout.id(&part.path).map(Target::Image);
+    let name = format!("▣ {}", part.name());
     match align {
         Align::Left { indent } => {
             let max = usize::from(columns).saturating_sub(usize::from(indent));
-            let pad = " ".repeat(usize::from(indent));
-            out.push((
-                format::dim(format!("{pad}{}", cut(&part.label(), max))),
-                target,
-            ));
+            let mut spans = Vec::new();
+            if indent > 0 {
+                spans.push(Span::raw(" ".repeat(usize::from(indent))));
+            }
+            spans.extend(spans_of(&cut(&part.label(), max), &name));
+            out.push((Line::from(spans), target));
         }
         Align::Right => {
-            let line = format::dim(cut(&part.label(), usize::from(columns)));
+            let line = Line::from(spans_of(&cut(&part.label(), usize::from(columns)), &name));
             out.push((line.right_aligned(), target));
         }
+    }
+}
+
+/// The label's spans in the link look: `▣ <name>` in the accent colour,
+/// underlined, and ` · <dims>` dim. A label cut inside its dims keeps
+/// the split; one cut inside its name draws wholly as the link, since
+/// no dims show.
+fn spans_of(label: &str, name: &str) -> Vec<Span<'static>> {
+    let link = Style::new()
+        .fg(Role::Accent.color())
+        .add_modifier(Modifier::UNDERLINED);
+    if let Some(rest) = label.strip_prefix(name) {
+        vec![
+            Span::styled(name.to_owned(), link),
+            Span::styled(
+                rest.to_owned(),
+                Style::default().add_modifier(Modifier::DIM),
+            ),
+        ]
+    } else {
+        vec![Span::styled(label.to_owned(), link)]
     }
 }
 
