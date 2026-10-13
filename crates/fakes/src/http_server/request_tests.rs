@@ -165,10 +165,7 @@ fn malformed_chunks_keep_the_decoded_prefix() {
 /// `over` refuses.
 fn check_cap(limits: Limits, under: &[u8], at: &[u8], over: &[u8]) {
     assert!(
-        matches!(
-            read_once(limits, under),
-            RequestOutcome::Complete(_)
-        ),
+        matches!(read_once(limits, under), RequestOutcome::Complete(_)),
         "one under the cap is admitted"
     );
     assert!(
@@ -184,20 +181,32 @@ fn check_cap(limits: Limits, under: &[u8], at: &[u8], over: &[u8]) {
 #[test]
 fn each_request_cap_admits_the_boundary_and_rejects_one_more() {
     // The request line at 15, 16 and 17 bytes with its terminator.
-    let limits = Limits { line: 16, ..bounds() };
+    let limits = Limits {
+        line: 16,
+        ..bounds()
+    };
     let line = |pad: usize| format!("G /{} \r\n\r\n", "x".repeat(pad)).into_bytes();
     check_cap(limits, &line(9), &line(10), &line(11));
 
     // One header line at 15, 16 and 17 bytes with its terminator.
-    let limits = Limits { frame: 16, ..bounds() };
+    let limits = Limits {
+        frame: 16,
+        ..bounds()
+    };
     let header = |pad: usize| format!("G / H\r\na: {}\r\n\r\n", "y".repeat(pad)).into_bytes();
     check_cap(limits, &header(10), &header(11), &header(12));
 
     // A fixed body at 15, 16 and 17 declared bytes.
-    let limits = Limits { body: 16, ..bounds() };
+    let limits = Limits {
+        body: 16,
+        ..bounds()
+    };
     let fixed = |len: usize| {
-        format!("POST /v1 HTTP/1.1\r\nContent-Length: {len}\r\n\r\n{}", "b".repeat(len))
-            .into_bytes()
+        format!(
+            "POST /v1 HTTP/1.1\r\nContent-Length: {len}\r\n\r\n{}",
+            "b".repeat(len)
+        )
+        .into_bytes()
     };
     check_cap(limits, &fixed(15), &fixed(16), &fixed(17));
     // Zero bytes are a valid empty body.
@@ -211,7 +220,10 @@ fn each_request_cap_admits_the_boundary_and_rejects_one_more() {
 
     // A chunk-size line at 31, 32 and 33 bytes: overlong framing is
     // malformed, keeping the decoded prefix, not invalid.
-    let limits = Limits { frame: 32, ..bounds() };
+    let limits = Limits {
+        frame: 32,
+        ..bounds()
+    };
     let size = |pad: usize| {
         format!(
             "POST /v1 HTTP/1.1\r\nTransfer-Encoding: chunked\r\n\r\n1;{}\r\n1\r\n0\r\n\r\n",
@@ -234,7 +246,10 @@ fn each_request_cap_admits_the_boundary_and_rejects_one_more() {
     assert_eq!(crossed.malformed, Some("a chunk line exceeds its cap"));
 
     // Header count: one, two, then three headers with a cap of two.
-    let limits = Limits { header_count: 2, ..bounds() };
+    let limits = Limits {
+        header_count: 2,
+        ..bounds()
+    };
     let heads = |count: usize| {
         let mut request = b"G / H\r\n".to_vec();
         for n in 0..count {
@@ -269,7 +284,10 @@ fn each_request_cap_admits_the_boundary_and_rejects_one_more() {
 fn aggregate_headers_chunks_and_trailers_share_their_caps() {
     // Many small headers whose sum crosses 32 aggregate bytes: five
     // 6-byte lines admit 30, the sixth crosses.
-    let limits = Limits { headers: 32, ..bounds() };
+    let limits = Limits {
+        headers: 32,
+        ..bounds()
+    };
     let heads = |count: usize| {
         let mut request = b"G / H\r\n".to_vec();
         for n in 0..count {
@@ -288,7 +306,10 @@ fn aggregate_headers_chunks_and_trailers_share_their_caps() {
     );
 
     // Many small chunks whose decoded sum crosses 16 body bytes.
-    let limits = Limits { body: 16, ..bounds() };
+    let limits = Limits {
+        body: 16,
+        ..bounds()
+    };
     let chunks = |count: usize| {
         let mut request = b"POST /v1 HTTP/1.1\r\nTransfer-Encoding: chunked\r\n\r\n".to_vec();
         for _ in 0..count {
@@ -309,7 +330,10 @@ fn aggregate_headers_chunks_and_trailers_share_their_caps() {
     assert_eq!(crossed.malformed, Some("the body exceeds its cap"));
 
     // Many small trailers whose sum crosses 32 aggregate bytes.
-    let limits = Limits { trailers: 32, ..bounds() };
+    let limits = Limits {
+        trailers: 32,
+        ..bounds()
+    };
     let trailers = |count: usize| {
         let mut request = b"POST /v1 HTTP/1.1\r\nTransfer-Encoding: chunked\r\n\r\n0\r\n".to_vec();
         for n in 0..count {
@@ -319,10 +343,7 @@ fn aggregate_headers_chunks_and_trailers_share_their_caps() {
         request
     };
     assert!(
-        matches!(
-            read_once(limits, &trailers(5)),
-            RequestOutcome::Complete(_)
-        ),
+        matches!(read_once(limits, &trailers(5)), RequestOutcome::Complete(_)),
         "30 trailer bytes are admitted"
     );
     let crossed = match read_once(limits, &trailers(6)) {
@@ -366,10 +387,7 @@ fn huge_declared_lengths_fail_before_allocation() {
         RequestOutcome::Complete(request) => request,
         other => panic!("an overflowing hex size is malformed, not {other:?}"),
     };
-    assert_eq!(
-        crossed.malformed,
-        Some("a chunk size is not a hex number")
-    );
+    assert_eq!(crossed.malformed, Some("a chunk size is not a hex number"));
     // A valid but enormous hex chunk: refused before a byte is read.
     let crossed = match read_once(
         bounds(),
@@ -459,7 +477,9 @@ fn check_phase(prefix: &[u8], phase: &'static str, progress: &[u8]) {
         client.write_all(progress).expect("one byte writes");
         clock.advance(Duration::from_secs(10) - Duration::from_nanos(1));
         assert!(
-            Deadline::after(Duration::from_millis(200)).recv(&rx).is_err(),
+            Deadline::after(Duration::from_millis(200))
+                .recv(&rx)
+                .is_err(),
             "one tick before the bound the {phase} is still waiting"
         );
         clock.advance(Duration::from_nanos(1));

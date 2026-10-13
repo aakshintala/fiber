@@ -10,7 +10,10 @@ use std::time::Duration;
 use contract::clock::Clock;
 
 use crate::clock::SystemClock;
-use crate::http_server::{Connection, HttpServer, Limits, TunnelEnd, request::{self, RequestOutcome}};
+use crate::http_server::{
+    Connection, HttpServer, Limits, TunnelEnd,
+    request::{self, RequestOutcome},
+};
 
 #[derive(Default)]
 struct State {

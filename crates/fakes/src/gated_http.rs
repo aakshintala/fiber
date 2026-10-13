@@ -163,7 +163,11 @@ impl Drop for GatedHttp {
     clippy::panic,
     reason = "a fake's serving thread; a failure is the test's, named by the request it waited for"
 )]
-fn accept(core: &HttpServer, bodies: &Arc<Mutex<Vec<Vec<u8>>>>, what: &str) -> Option<(Connection, String, Vec<u8>)> {
+fn accept(
+    core: &HttpServer,
+    bodies: &Arc<Mutex<Vec<Vec<u8>>>>,
+    what: &str,
+) -> Option<(Connection, String, Vec<u8>)> {
     let mut conn = core.accept_expected(what)?;
     let request = match crate::http_server::request::read_request(&mut conn) {
         RequestOutcome::Complete(request) => request,
@@ -185,12 +189,7 @@ fn accept(core: &HttpServer, bodies: &Arc<Mutex<Vec<Vec<u8>>>>, what: &str) -> O
 /// Answers one request: the status, headers and whole body, then the
 /// connection closes. False when shutdown ended the write: the serving
 /// thread exits with it.
-fn respond(
-    conn: &mut Connection,
-    status: u16,
-    headers: &[(&str, &str)],
-    body: &[u8],
-) -> bool {
+fn respond(conn: &mut Connection, status: u16, headers: &[(&str, &str)], body: &[u8]) -> bool {
     let mut head = format!("HTTP/1.1 {status} Fake\r\n");
     for (name, value) in headers {
         head.push_str(&format!("{name}: {value}\r\n"));
@@ -280,7 +279,8 @@ fn serve(
     // the gated answer when it accepts, or close unanswered when it
     // declines (without asker forwarding the remover declines, and
     // the ask wait below fails the test first).
-    let Some((mut answered_conn, _, body)) = accept(core, &bodies, "the elicitation's answer") else {
+    let Some((mut answered_conn, _, body)) = accept(core, &bodies, "the elicitation's answer")
+    else {
         return;
     };
     let answered: Value = serde_json::from_slice(&body).unwrap_or(Value::Null);

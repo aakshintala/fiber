@@ -411,7 +411,11 @@ fn post_chunked(server: &OauthServer, path: &str, form: &str) -> (u16, String) {
 fn oauth_requests_flow_through_the_shared_request_reader() {
     let server = OauthServer::start(vec![OauthReply::token("at", "rt", 3600)]);
 
-    let (status, body) = post_chunked(&server, "/token", "grant_type=refresh_token&refresh_token=r+t%2B");
+    let (status, body) = post_chunked(
+        &server,
+        "/token",
+        "grant_type=refresh_token&refresh_token=r+t%2B",
+    );
     assert_eq!(status, 200);
     assert!(body.contains(r#""access_token":"at""#), "{body}");
 

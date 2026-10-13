@@ -104,8 +104,8 @@ fn failure_text<T>(caught: thread::Result<T>, what: &str) -> String {
 fn expected_accept_expires_without_a_client() {
     // One tick before the bound the accept is still waiting.
     let clock = fake_clock();
-    let server = HttpServer::bind(clock.clone() as Arc<dyn Clock>, ten_seconds())
-        .expect("the core binds");
+    let server =
+        HttpServer::bind(clock.clone() as Arc<dyn Clock>, ten_seconds()).expect("the core binds");
     let acks = server.test_acknowledgments();
     let (done_tx, done_rx) = mpsc::channel();
     thread::scope(|scope| {
@@ -138,8 +138,8 @@ fn expected_accept_expires_without_a_client() {
 
     // One tick past the bound expires too: a single advance past it.
     let clock = fake_clock();
-    let server = HttpServer::bind(clock.clone() as Arc<dyn Clock>, ten_seconds())
-        .expect("the core binds");
+    let server =
+        HttpServer::bind(clock.clone() as Arc<dyn Clock>, ten_seconds()).expect("the core binds");
     let acks = server.test_acknowledgments();
     let (done_tx, done_rx) = mpsc::channel();
     thread::scope(|scope| {
@@ -187,24 +187,12 @@ fn persistent_accept_renews_idle_windows_and_serves_the_next_request() {
     });
     // Two idle windows expire with no request to fail: each advance
     // lands past its window's start, so no window misses its budget.
-    assert!(
-        await_windows(&server, 1, OP),
-        "the first window started"
-    );
+    assert!(await_windows(&server, 1, OP), "the first window started");
     clock.advance(Duration::from_secs(5));
-    assert!(
-        await_idle(&server, 1, OP),
-        "the first idle window renewed"
-    );
-    assert!(
-        await_windows(&server, 2, OP),
-        "the second window started"
-    );
+    assert!(await_idle(&server, 1, OP), "the first idle window renewed");
+    assert!(await_windows(&server, 2, OP), "the second window started");
     clock.advance(Duration::from_secs(5));
-    assert!(
-        await_idle(&server, 2, OP),
-        "the second idle window renewed"
-    );
+    assert!(await_idle(&server, 2, OP), "the second idle window renewed");
 
     let mut client = connect(&server);
     client.write_all(b"q").expect("the question writes");
@@ -496,7 +484,12 @@ fn chunked_pieces_have_exact_framing() {
     let head = b"HTTP/1.1 200 Fake\r\ntransfer-encoding: chunked\r\nconnection: close\r\n\r\n";
     let (server, addr) = serve_once(recorded_tx, move |conn| {
         assert_eq!(
-            conn.reply_stream(head, &[b"ok".to_vec(), b"bye".to_vec()], Framing::Chunked, None),
+            conn.reply_stream(
+                head,
+                &[b"ok".to_vec(), b"bye".to_vec()],
+                Framing::Chunked,
+                None
+            ),
             ReplyEnd::Done,
             "the pieces send"
         );
@@ -521,7 +514,10 @@ fn sse_pieces_have_no_inserted_length() {
             "the stream sends"
         );
     });
-    let raw = exchange(addr, b"POST /mcp HTTP/1.1\r\nHost: fake\r\nContent-Length: 0\r\n\r\n");
+    let raw = exchange(
+        addr,
+        b"POST /mcp HTTP/1.1\r\nHost: fake\r\nContent-Length: 0\r\n\r\n",
+    );
     let mut expected = head.to_vec();
     expected.extend_from_slice(events);
     assert_eq!(raw, expected, "stream pieces carry no inserted length");
@@ -638,7 +634,10 @@ fn dropped_reply_records_request_and_sends_nothing() {
     let (server, addr) = serve_once(recorded_tx, |conn| {
         drop(conn);
     });
-    let raw = exchange(addr, b"POST /v1 HTTP/1.1\r\nHost: fake\r\nContent-Length: 0\r\n\r\n");
+    let raw = exchange(
+        addr,
+        b"POST /v1 HTTP/1.1\r\nHost: fake\r\nContent-Length: 0\r\n\r\n",
+    );
     assert!(raw.is_empty(), "a dropped reply sends nothing");
     let request = Deadline::after(OP).recv_or_fail(&recorded_rx, "the recorded request");
     assert_eq!(request.target, "/v1");
@@ -682,8 +681,8 @@ impl std::io::Write for TestWriter {
 #[test]
 fn blocked_write_expires_on_the_injected_clock() {
     let clock = FakeClock::new();
-    let server = HttpServer::bind(clock.clone() as Arc<dyn Clock>, ten_seconds())
-        .expect("the core binds");
+    let server =
+        HttpServer::bind(clock.clone() as Arc<dyn Clock>, ten_seconds()).expect("the core binds");
     let acks = server.test_acknowledgments();
     let addr = server.addr();
     let (tx, rx) = mpsc::channel();
@@ -784,15 +783,14 @@ fn shutdown_releases_pauses_and_reaps_core_waits() {
     let (pause, control) = Pause::new();
     let (paused_tx, paused_rx) = mpsc::channel();
     server.serve_persistent(move |mut conn| {
-            // Held in a core pause, then in a core read: shutdown must
-            // release both without the test sending anything.
-            let request = match request::read_request(&mut conn) {
-                request::RequestOutcome::Complete(request) => request,
-                _ => return,
-            };
-            drop(request);
-        if conn.pause(&pause, &conn.op_budget(), "to pause the test response")
-            == PauseEnd::Stopped
+        // Held in a core pause, then in a core read: shutdown must
+        // release both without the test sending anything.
+        let request = match request::read_request(&mut conn) {
+            request::RequestOutcome::Complete(request) => request,
+            _ => return,
+        };
+        drop(request);
+        if conn.pause(&pause, &conn.op_budget(), "to pause the test response") == PauseEnd::Stopped
         {
             match paused_tx.send("pause") {
                 Ok(()) | Err(_) => {}

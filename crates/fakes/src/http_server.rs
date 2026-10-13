@@ -162,7 +162,10 @@ impl CheckGate {
     fn hold(&self) {
         let mut armed = lock(&self.armed);
         while *armed {
-            armed = self.changed.wait(armed).unwrap_or_else(PoisonError::into_inner);
+            armed = self
+                .changed
+                .wait(armed)
+                .unwrap_or_else(PoisonError::into_inner);
         }
     }
 
@@ -361,7 +364,13 @@ pub(crate) struct Connection {
 impl Connection {
     /// One wait on a would-block socket: expiry names the request.
     fn wait(&mut self, phase: &'static str) -> WaitEnd {
-        self.shared.wait(&self.budget, &self.name, phase, &mut self.seq, &mut self.acked)
+        self.shared.wait(
+            &self.budget,
+            &self.name,
+            phase,
+            &mut self.seq,
+            &mut self.acked,
+        )
     }
 
     /// Expiry fails naming the request and phase.
@@ -442,7 +451,12 @@ impl Connection {
 
     /// Holds `pause` for `phase` under `op`: released when the test
     /// releases or drops its sender, stopped on shutdown or expiry.
-    pub(crate) fn pause(&mut self, pause: &Pause, op: &RequestBudget, phase: &'static str) -> PauseEnd {
+    pub(crate) fn pause(
+        &mut self,
+        pause: &Pause,
+        op: &RequestBudget,
+        phase: &'static str,
+    ) -> PauseEnd {
         match pause.reached.send(()) {
             Ok(()) | Err(_) => {}
         }
@@ -451,7 +465,10 @@ impl Connection {
                 Ok(()) | Err(mpsc::TryRecvError::Disconnected) => return PauseEnd::Released,
                 Err(mpsc::TryRecvError::Empty) => {}
             }
-            match self.shared.wait(op, &self.name, phase, &mut self.seq, &mut self.acked) {
+            match self
+                .shared
+                .wait(op, &self.name, phase, &mut self.seq, &mut self.acked)
+            {
                 WaitEnd::Waited => {}
                 WaitEnd::Expired => expired(op, &self.name, phase),
                 WaitEnd::Stopped => return PauseEnd::Stopped,
@@ -461,7 +478,14 @@ impl Connection {
 
     /// The stream and wait context for one operation's writes.
     fn parts<'a>(&'a mut self, op: &'a RequestBudget) -> (&'a mut TcpStream, WaitCtx<'a>) {
-        let Self { stream, name, shared, seq, acked, .. } = self;
+        let Self {
+            stream,
+            name,
+            shared,
+            seq,
+            acked,
+            ..
+        } = self;
         (
             stream,
             WaitCtx {
@@ -557,12 +581,7 @@ impl Connection {
     /// Sends the head with its declared length and the prefix it
     /// carries: true once flushed, so the adapter records the partial
     /// send before the close wait below.
-    pub(crate) fn stall_send(
-        &mut self,
-        head: &[u8],
-        prefix: &[u8],
-        pause: Option<&Pause>,
-    ) -> bool {
+    pub(crate) fn stall_send(&mut self, head: &[u8], prefix: &[u8], pause: Option<&Pause>) -> bool {
         let op = self.op_budget();
         if let Some(pause) = pause
             && self.pause(pause, &op, "to pause before the stalled response") == PauseEnd::Stopped
@@ -590,7 +609,13 @@ impl Connection {
                 Err(error) if error.kind() == io::ErrorKind::Interrupted => continue,
                 Err(_) => return StallEnd::Closed,
             }
-            match self.shared.wait(&op, &self.name, "to wait for the stalled peer", &mut self.seq, &mut self.acked) {
+            match self.shared.wait(
+                &op,
+                &self.name,
+                "to wait for the stalled peer",
+                &mut self.seq,
+                &mut self.acked,
+            ) {
                 WaitEnd::Waited => {}
                 WaitEnd::Expired => expired(&op, &self.name, "to wait for the stalled peer"),
                 WaitEnd::Stopped => return StallEnd::Stopped,
@@ -601,12 +626,7 @@ impl Connection {
     /// Sends the head with its declared length and the prefix it
     /// carries, then holds until the peer closes: `Closed` on its close,
     /// `Stopped` on shutdown, expiry naming the stall past its bound.
-    pub(crate) fn stall(
-        &mut self,
-        head: &[u8],
-        prefix: &[u8],
-        pause: Option<&Pause>,
-    ) -> StallEnd {
+    pub(crate) fn stall(&mut self, head: &[u8], prefix: &[u8], pause: Option<&Pause>) -> StallEnd {
         if !self.stall_send(head, prefix, pause) {
             return StallEnd::Stopped;
         }
@@ -634,7 +654,12 @@ impl Connection {
             self.shared.limits.request,
             self.shared.limits.guard,
         );
-        let Self { mut stream, ahead, shared, .. } = self;
+        let Self {
+            mut stream,
+            ahead,
+            shared,
+            ..
+        } = self;
         // The copies below block; the handshake bounds itself through
         // the pump either way.
         if stream.set_nonblocking(false).is_err() {
@@ -652,9 +677,17 @@ impl Connection {
             seq: &mut seq,
             acked: &mut acked,
         };
-        if !pump(&mut stream, b"HTTP/1.1 200 Connection Established\r\n\r\n", "to write the tunnel handshake", &mut ctx)
-            || !pump(&mut origin, &ahead, "to forward the bytes past the head", &mut ctx)
-        {
+        if !pump(
+            &mut stream,
+            b"HTTP/1.1 200 Connection Established\r\n\r\n",
+            "to write the tunnel handshake",
+            &mut ctx,
+        ) || !pump(
+            &mut origin,
+            &ahead,
+            "to forward the bytes past the head",
+            &mut ctx,
+        ) {
             return TunnelEnd::OriginClosed;
         }
         // Copies of both ends for shutdown to break: the tunnel owns
@@ -687,7 +720,9 @@ impl Connection {
             .name("fakes-http-tunnel".to_owned())
             .spawn(move || {
                 let _ = io::copy(&mut origin_pump, &mut client_pump);
-                first_pump.compare_exchange(0, 2, Ordering::SeqCst, Ordering::SeqCst).ok();
+                first_pump
+                    .compare_exchange(0, 2, Ordering::SeqCst, Ordering::SeqCst)
+                    .ok();
                 match client_pump.shutdown(std::net::Shutdown::Both) {
                     Ok(()) | Err(_) => {}
                 }
@@ -696,7 +731,9 @@ impl Connection {
                 }
             });
         let _ = io::copy(&mut stream, &mut origin);
-        first.compare_exchange(0, 1, Ordering::SeqCst, Ordering::SeqCst).ok();
+        first
+            .compare_exchange(0, 1, Ordering::SeqCst, Ordering::SeqCst)
+            .ok();
         match stream.shutdown(std::net::Shutdown::Both) {
             Ok(()) | Err(_) => {}
         }
@@ -708,7 +745,9 @@ impl Connection {
                 Ok(()) | Err(_) => {}
             }
         }
-        lock(&shared.tunnels).live.retain(|(live, _, _)| *live != id);
+        lock(&shared.tunnels)
+            .live
+            .retain(|(live, _, _)| *live != id);
         if shared.stopping.load(Ordering::SeqCst) {
             TunnelEnd::Stopped
         } else if first.load(Ordering::SeqCst) == 1 {
@@ -869,7 +908,10 @@ pub(crate) fn pump(
             Err(_) => return false,
         }
         if written != bytes.len() {
-            match ctx.shared.wait(ctx.budget, ctx.name, phase, ctx.seq, ctx.acked) {
+            match ctx
+                .shared
+                .wait(ctx.budget, ctx.name, phase, ctx.seq, ctx.acked)
+            {
                 WaitEnd::Waited => {}
                 WaitEnd::Expired => expired(ctx.budget, ctx.name, phase),
                 WaitEnd::Stopped => return false,
@@ -883,7 +925,10 @@ pub(crate) fn pump(
             Err(error) if error.kind() == io::ErrorKind::Interrupted => continue,
             Err(_) => return false,
         }
-        match ctx.shared.wait(ctx.budget, ctx.name, phase, ctx.seq, ctx.acked) {
+        match ctx
+            .shared
+            .wait(ctx.budget, ctx.name, phase, ctx.seq, ctx.acked)
+        {
             WaitEnd::Waited => {}
             WaitEnd::Expired => expired(ctx.budget, ctx.name, phase),
             WaitEnd::Stopped => return false,
@@ -925,7 +970,10 @@ impl HttpServer {
             windows: Mutex::new(0),
             #[cfg(test)]
             windows_changed: Condvar::new(),
-            tunnels: Mutex::new(TunnelState { next: 0, live: Vec::new() }),
+            tunnels: Mutex::new(TunnelState {
+                next: 0,
+                live: Vec::new(),
+            }),
         });
         // Subscribed before any waiter checks: no advance slips between a
         // check and its park.
@@ -1027,8 +1075,9 @@ impl HttpServer {
                 return AcceptOutcome::Stopped;
             }
             // Taken by shutdown: no more accepts after it.
-            let accepted =
-                lock(&self.shared.listener).as_ref().map(|listener| listener.accept());
+            let accepted = lock(&self.shared.listener)
+                .as_ref()
+                .map(|listener| listener.accept());
             match accepted {
                 Some(Ok((stream, _))) => {
                     if stream.set_nonblocking(true).is_err() {
@@ -1042,7 +1091,10 @@ impl HttpServer {
             if budget.expired() {
                 return AcceptOutcome::Idle;
             }
-            match self.shared.wait(budget, mode.name(), "to accept the connection", seq, acked) {
+            match self
+                .shared
+                .wait(budget, mode.name(), "to accept the connection", seq, acked)
+            {
                 WaitEnd::Waited => {}
                 WaitEnd::Expired => return AcceptOutcome::Idle,
                 WaitEnd::Stopped => return AcceptOutcome::Stopped,
@@ -1053,10 +1105,7 @@ impl HttpServer {
     /// Serves every connection with `handler` on core-owned threads, all
     /// reaped by shutdown. An idle window renews its budget and accepts
     /// again.
-    pub(crate) fn serve_persistent(
-        &self,
-        handler: impl Fn(Connection) + Send + Sync + 'static,
-    ) {
+    pub(crate) fn serve_persistent(&self, handler: impl Fn(Connection) + Send + Sync + 'static) {
         let handler = Arc::new(handler);
         let serving = self.clone();
         let accept = thread::Builder::new()

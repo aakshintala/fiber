@@ -130,8 +130,7 @@ fn the_default_hold_outlasts_every_test_wait() {
 #[test]
 fn a_held_reply_nobody_releases_becomes_a_500_at_its_deadline() {
     let clock = FakeClock::new();
-    let server =
-        ProviderServer::start_on(clock.clone(), vec![Response::stream(b"one")]).unwrap();
+    let server = ProviderServer::start_on(clock.clone(), vec![Response::stream(b"one")]).unwrap();
     server.hold_from(1, Duration::from_secs(5));
     let acks = server.test_acknowledgments();
     let (tx, rx) = mpsc::channel();
@@ -649,8 +648,7 @@ fn dropping_gives_up_on_a_responder_that_never_returns() {
             Ok(()) | Err(_) => {}
         }
     });
-    Deadline::after(READ_WITHIN)
-        .recv_or_fail(&done_rx, "the drop to give up on the responder");
+    Deadline::after(READ_WITHIN).recv_or_fail(&done_rx, "the drop to give up on the responder");
     assert!(
         TcpStream::connect_timeout(&addr, READ_WITHIN).is_err(),
         "the dropped server's port refuses connections"

@@ -44,8 +44,7 @@ fn failure_message<T>(caught: std::thread::Result<T>) -> String {
 #[test]
 fn trickled_header_bytes_fail_within_the_request_bound() {
     let clock = FakeClock::new();
-    let server =
-        HttpServer::bind(clock.clone(), Limits::default()).expect("the core binds");
+    let server = HttpServer::bind(clock.clone(), Limits::default()).expect("the core binds");
     let acks = server.test_acknowledgments();
     let (done_tx, done_rx) = mpsc::channel();
     thread::scope(|scope| {
@@ -70,8 +69,7 @@ fn trickled_header_bytes_fail_within_the_request_bound() {
         // its clock check and waiting on the clock before the clock
         // moves (`docs/testing.md`, "Waits and timeouts").
         let headers = loop {
-            let ack = Deadline::after(WAIT)
-                .recv_or_fail(&acks, "the headers wait");
+            let ack = Deadline::after(WAIT).recv_or_fail(&acks, "the headers wait");
             if ack.phase == "to read the headers" {
                 break ack;
             }
@@ -474,9 +472,7 @@ fn shutdown_ends_an_accept_wait_at_once() {
     });
     // An accept after shutdown ends at once too: it never waits.
     assert!(
-        server
-            .accept_expected("the initialize request")
-            .is_none(),
+        server.accept_expected("the initialize request").is_none(),
         "no accept waits past shutdown"
     );
 }

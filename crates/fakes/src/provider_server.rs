@@ -457,12 +457,7 @@ fn lock(state: &Mutex<State>) -> MutexGuard<'_, State> {
 /// answers from the script, the routes, the responder or the fallback. A
 /// malformed body is the client's bug: it is recorded with its decoded
 /// prefix and answered 400, and the script keeps its next response.
-fn serve(
-    conn: Connection,
-    state: &Mutex<State>,
-    arrived: &Condvar,
-    clock: &Arc<dyn Clock>,
-) {
+fn serve(conn: Connection, state: &Mutex<State>, arrived: &Condvar, clock: &Arc<dyn Clock>) {
     let mut conn = conn;
     let request = match read_request(&mut conn) {
         RequestOutcome::Complete(request) => request,
@@ -535,17 +530,16 @@ fn serve(
 /// drop: `None` once it may go, the 500 naming the hold when nobody
 /// releases it within its bound. The bound runs on the injected clock,
 /// announced once so the test advances past it only when waited for.
-fn hold_wait(
-    state: &Mutex<State>,
-    arrived: &Condvar,
-    clock: &Arc<dyn Clock>,
-) -> Option<Response> {
+fn hold_wait(state: &Mutex<State>, arrived: &Condvar, clock: &Arc<dyn Clock>) -> Option<Response> {
     let (within, until) = {
         let state = lock(state);
         if !(state.hold && state.requests.len() >= state.hold_from) {
             return None;
         }
-        (state.hold_within, clock.now().checked_add(state.hold_within))
+        (
+            state.hold_within,
+            clock.now().checked_add(state.hold_within),
+        )
     };
     // One announcement: the waiter is past its check and parked before
     // the test advances.
