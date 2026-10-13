@@ -24,7 +24,7 @@ use std::thread;
 
 use fakes::{ProviderServer, Response, fingerprint};
 use serde_json::{Value, json};
-use support::pty::{KITTY_PUSH, TITLE, WAITING_TITLE};
+use support::pty::{FINISHED_TITLE, KITTY_PUSH, TITLE, WAITING_TITLE};
 use support::{Deadline, PIXEL, hello, write_json};
 
 /// Installs a provider `fake` with model `m` on `openai-responses` at the
@@ -1404,14 +1404,26 @@ fn assert_config_unchanged(setup: &support::Setup, before: &ConfigSnapshot) {
     assert_eq!(snapshot_config(setup), *before, "a config file changed");
 }
 
-/// Every line of the session's `events.jsonl` as JSON.
-fn session_events(setup: &support::Setup, id: &str) -> Vec<Value> {
-    fs::read_to_string(sessions(setup).join(id).join("events.jsonl"))
-        .unwrap()
-        .lines()
-        .filter(|line| !line.is_empty())
-        .map(|line| serde_json::from_str(line).unwrap())
-        .collect()
+/// Reads the session's `events.jsonl` until its kinds are exactly
+/// `expected`, in order, or the deadline expires: the screen can show
+/// a finished turn on an earlier turn's markers, so `turn_finished`
+/// returning never proves the turn's durable events landed (see
+/// #2211). A trailing partial line is still arriving and never
+/// counts. Returns the last read; the caller asserts its kinds, which
+/// fail on expiry before the log is complete.
+fn wait_session_events(setup: &support::Setup, id: &str, expected: &[&str]) -> Vec<Value> {
+    loop {
+        let bytes = events_bytes(setup, id);
+        let text = String::from_utf8(bytes).unwrap();
+        let events: Vec<Value> = support::complete_lines(&text);
+        if event_kinds(&events).as_slice() == expected {
+            return events;
+        }
+        if setup.deadline.left().is_zero() {
+            return events;
+        }
+        thread::yield_now();
+    }
 }
 
 /// The raw bytes of the session's `events.jsonl`.
@@ -1547,7 +1559,6 @@ fn resume_with_a_credential_switches_an_exited_session_to_the_asked_label() {
     assert_fingerprint(&requests[1], "Bearer work-key");
     // One driver-source change, home before and work after, ahead of
     // the resumed startup's preamble on the new label.
-    let events = session_events(&setup, &id);
     // The complete ordered log: the seeded ask, the resume's startup
     // with the asked label switched ahead of its preamble, then the
     // typed turn. A duplicated, missing or reordered event fails here.
@@ -1559,6 +1570,7 @@ fn resume_with_a_credential_switches_an_exited_session_to_the_asked_label() {
         "preamble_built",
     ]);
     expected.extend(resumed_turn_kinds());
+    let events = wait_session_events(&setup, &id, &expected);
     assert_eq!(event_kinds(&events), expected);
     let changed: Vec<&Value> = events
         .iter()
@@ -1619,6 +1631,15 @@ fn resume_with_a_credential_switches_a_running_session_at_the_next_turn() {
     server.release_one();
     first.turn_finished(first_from);
     assert_eq!(server.requests().len(), 1, "no second request yet");
+    // The first turn's title reaches the second terminal as well:
+    // only past it does an offset prove the next turn finished,
+    // since both turns answer alike and the grid keeps the old paint
+    // (see #2211).
+    second.wait_bytes(
+        attached,
+        FINISHED_TITLE,
+        "the first turn's title on the second terminal",
+    );
     // The next prompt goes out on the new label.
     let second_from = second.output().len();
     second.write(b"second\r");
@@ -1627,6 +1648,9 @@ fn resume_with_a_credential_switches_a_running_session_at_the_next_turn() {
         "the second request to reach the server"
     );
     server.release_one();
+    // Turn 2's own answer in the grid: the bare word `completed`
+    // already shows from turn 1's card on this attached terminal.
+    second.wait_screen("the second answer", |grid| grid.contents.contains("Hello."));
     second.turn_finished(second_from);
     let requests = server.requests();
     assert_eq!(requests.len(), 2, "{requests:?}");
@@ -1634,13 +1658,13 @@ fn resume_with_a_credential_switches_a_running_session_at_the_next_turn() {
     assert_fingerprint(&requests[1], "Bearer work-key");
     // Exactly one driver-source change, home before and work after; the
     // running open started no new session process.
-    let events = session_events(&setup, &id);
     // The complete ordered log: the live session's first turn, the
     // switch with the cache rebuilt ahead of the next turn, then that
     // turn. A duplicated, missing or reordered event fails here.
     let mut expected = opened_kinds(false);
     expected.extend(["model_changed", "preamble_built"]);
     expected.extend(resumed_turn_kinds());
+    let events = wait_session_events(&setup, &id, &expected);
     assert_eq!(event_kinds(&events), expected);
     let kinds = event_kinds(&events);
     let changed: Vec<&Value> = events
@@ -1709,7 +1733,8 @@ fn resume_with_a_credential_second_turn_outlives_a_stale_completed_paint() {
     second.wait_bytes(attached, TITLE, "the attached session's title");
     // Taken while turn 1 is still held, so before any completion
     // marker reaches this terminal: it matches turn 1's paint and
-    // title, not turn 2's.
+    // title, not turn 2's. The log wait below still proves turn 2's
+    // durable events land.
     let second_from = second.output().len();
     server.release_one();
     first.turn_finished(first_from);
@@ -1724,10 +1749,10 @@ fn resume_with_a_credential_second_turn_outlives_a_stale_completed_paint() {
     assert_eq!(requests.len(), 2, "{requests:?}");
     assert_fingerprint(&requests[0], "Bearer home-key");
     assert_fingerprint(&requests[1], "Bearer work-key");
-    let events = session_events(&setup, &id);
     let mut expected = opened_kinds(false);
     expected.extend(["model_changed", "preamble_built"]);
     expected.extend(resumed_turn_kinds());
+    let events = wait_session_events(&setup, &id, &expected);
     assert_eq!(event_kinds(&events), expected);
     assert_config_unchanged(&setup, &before_config);
     quit_keys(&mut second);
@@ -1766,7 +1791,6 @@ fn resume_with_a_credential_after_the_recorded_key_was_deleted() {
     let requests = server.requests();
     assert_eq!(requests.len(), 2, "{requests:?}");
     assert_fingerprint(&requests[1], "Bearer work-key");
-    let events = session_events(&setup, &id);
     // The complete ordered log, as for an exited switch onto the asked
     // label: the asked label wins before the recorded one is read, so
     // the log matches a switch, not a late refusal. A duplicated,
@@ -1779,6 +1803,7 @@ fn resume_with_a_credential_after_the_recorded_key_was_deleted() {
         "preamble_built",
     ]);
     expected.extend(resumed_turn_kinds());
+    let events = wait_session_events(&setup, &id, &expected);
     assert_eq!(event_kinds(&events), expected);
     let changed: Vec<&Value> = events
         .iter()
@@ -1882,12 +1907,12 @@ fn resume_with_an_unknown_credential_on_a_running_session_stays_attached() {
     let requests = server.requests();
     assert_eq!(requests.len(), 2, "{requests:?}");
     assert_fingerprint(&requests[1], "Bearer home-key");
-    let events = session_events(&setup, &id);
     // The complete ordered log: the live session's two turns with no
     // switch between them. A duplicated, missing or reordered event
     // fails here.
     let mut expected = opened_kinds(false);
     expected.extend(resumed_turn_kinds());
+    let events = wait_session_events(&setup, &id, &expected);
     assert_eq!(event_kinds(&events), expected);
     assert!(
         events.iter().all(|line| line["kind"] != "model_changed"),
@@ -1931,13 +1956,13 @@ fn resume_with_the_recorded_credential_records_nothing() {
     let requests = server.requests();
     assert_eq!(requests.len(), 2, "{requests:?}");
     assert_fingerprint(&requests[1], "Bearer home-key");
-    let events = session_events(&setup, &id);
     // The complete ordered log: the seeded ask, a label-free resume
     // startup, then the typed turn. A duplicated, missing or reordered
     // event fails here.
     let mut expected = opened_kinds(true);
     expected.extend(["fiber_started", "extensions_loaded", "preamble_built"]);
     expected.extend(resumed_turn_kinds());
+    let events = wait_session_events(&setup, &id, &expected);
     assert_eq!(event_kinds(&events), expected);
     assert!(
         events.iter().all(|line| line["kind"] != "model_changed"),
@@ -1982,12 +2007,12 @@ fn resume_with_the_current_credential_on_a_running_session_records_nothing() {
     let requests = server.requests();
     assert_eq!(requests.len(), 2, "{requests:?}");
     assert_fingerprint(&requests[1], "Bearer home-key");
-    let events = session_events(&setup, &id);
     // The complete ordered log: the live session's two turns with no
     // switch between them. A duplicated, missing or reordered event
     // fails here.
     let mut expected = opened_kinds(false);
     expected.extend(resumed_turn_kinds());
+    let events = wait_session_events(&setup, &id, &expected);
     assert_eq!(event_kinds(&events), expected);
     assert!(
         events.iter().all(|line| line["kind"] != "model_changed"),
