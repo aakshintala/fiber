@@ -26,10 +26,11 @@ pub(crate) const FOREGROUND: [c_int; 3] = [SIGINT, SIGTERM, SIGHUP];
 /// SIGQUIT belong to the TUI's `catch_interrupts`.
 pub(crate) const TERMINAL: [c_int; 2] = [SIGTERM, SIGHUP];
 
-/// Cancels the entry point's [`Reads`] on a registered signal, settles an
-/// in-flight spawn, then exits with 128 plus the signal's number. `Drop`
-/// closes the registration and joins the watcher, so a taken signal always
-/// exits before the entry point returns. Sends no signal itself.
+/// Cancels the entry point's [`Reads`] on a registered signal, drains its
+/// cancelled groups until each is empty within the shared bound, then
+/// exits with 128 plus the signal's number. `Drop` closes the registration
+/// and joins the watcher, so a taken signal always exits before the entry
+/// point returns. Sends no signal itself.
 pub(crate) struct CancelOnSignal {
     thread: Option<thread::JoinHandle<()>>,
     handle: signal_hook::iterator::Handle,
@@ -51,8 +52,8 @@ impl CancelOnSignal {
         )
     }
 
-    /// Watches `signals` for `reads`: on each, cancel and settle, then
-    /// keep watching. The terminal's watcher: the TUI owns the exit path,
+    /// Watches `signals` for `reads`: on each, cancel and settle within
+    /// the shared bound, then keep watching. The terminal's watcher: the TUI owns the exit path,
     /// so unlike [`CancelOnSignal::new`] this never exits — the loop quits
     /// with the signal's code after restoring the terminal and printing
     /// the resume lines. Only the final action differs: the cancel and
@@ -84,10 +85,10 @@ impl CancelOnSignal {
             .spawn(move || {
                 for signal in registered.forever() {
                     // The cancel wakes a read in flight on the main thread;
-                    // the settle waits out a spawn that raced it; only then
+                    // the shared shutdown drains every cancelled group
+                    // until it is empty, within the one bound; only then
                     // does the process end.
-                    reads.cancel();
-                    reads.settle(&*clock, doors::SHUTDOWN_BOUND);
+                    reads.cancel_and_settle(&*clock, doors::SHUTDOWN_BOUND);
                     finish(signal);
                 }
             });
@@ -117,16 +118,16 @@ impl Drop for CancelOnSignal {
     }
 }
 
-/// Cancels the entry point's [`Reads`] and settles in-flight spawns when
-/// the entry point returns, whatever the result: a normal return kills
-/// what the process's credential commands left in their groups, the same
-/// as a signal does. Cancelling twice is harmless.
+/// Cancels the entry point's [`Reads`] and drains its cancelled groups
+/// within the entry point's one shutdown bound when the entry point
+/// returns, whatever the result: a normal return kills what the process's
+/// credential commands left in their groups, the same as a signal does.
+/// Cancelling twice is harmless.
 pub(crate) struct CancelAndSettle(pub(crate) Arc<Reads>, pub(crate) Arc<dyn Clock>);
 
 impl Drop for CancelAndSettle {
     fn drop(&mut self) {
-        self.0.cancel();
-        self.0.settle(&*self.1, doors::SHUTDOWN_BOUND);
+        self.0.cancel_and_settle(&*self.1, doors::SHUTDOWN_BOUND);
     }
 }
 
