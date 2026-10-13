@@ -273,8 +273,7 @@ impl Index {
     /// counts those visits; queries read the cache and visit no page.
     fn prefixes(&self) -> &Vec<usize> {
         self.prefix.get_or_init(|| {
-            let mut prefix = Vec::new();
-            prefix.reserve(self.pages.len().saturating_add(1));
+            let mut prefix = Vec::with_capacity(self.pages.len().saturating_add(1));
             let mut sum = 0usize;
             prefix.push(0);
             for page in &self.pages {
