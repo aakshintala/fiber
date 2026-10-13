@@ -1704,11 +1704,11 @@ fn resume_with_a_credential_switches_a_running_session_at_the_next_turn() {
 
 /// Repro for #2211: the second terminal attaches while turn 1 still
 /// runs, so an offset taken before turn 1's markers reach it matches
-/// turn 1, not turn 2. Turn 2's reply stays held through the wait and
-/// the read below, so `turn_finished` returns on turn 1's stale paint
-/// and title while turn 2 still streams, and the immediate log read
-/// misses turn 2's tail: the full ordered log cannot be complete, and
-/// the assertion fails every time by construction.
+/// turn 1, not turn 2. Turn 2's reply stays held through the
+/// `turn_finished` wait, which returns on turn 1's stale paint and
+/// title while turn 2 still streams; the reply is released only after
+/// that, and the log is read under the deadline, so the full ordered
+/// log lands before the assertion.
 #[test]
 fn resume_with_a_credential_second_turn_outlives_a_stale_completed_paint() {
     let setup = support::Setup::new();
@@ -1745,21 +1745,21 @@ fn resume_with_a_credential_second_turn_outlives_a_stale_completed_paint() {
     );
     // Turn 2's reply stays held: nothing of turn 2 can arrive, so this
     // wait can only match turn 1's stale paint and title from the
-    // early offset, and returns while turn 2 still streams.
+    // early offset, and returns while turn 2 still streams. The reply
+    // is released only after that demonstration, and the log is read
+    // under the deadline, so turn 2's tail lands before the assertion.
     second.turn_finished(second_from);
+    server.release_one();
     let requests = server.requests();
     assert_eq!(requests.len(), 2, "{requests:?}");
     assert_fingerprint(&requests[0], "Bearer home-key");
     assert_fingerprint(&requests[1], "Bearer work-key");
-    // Deliberately immediate: with the reply held, turn 2's tail
-    // cannot have landed, so the full ordered log cannot be complete
-    // and this fails every time by construction.
-    let bytes = events_bytes(&setup, &id);
-    let text = String::from_utf8(bytes).unwrap();
-    let events: Vec<Value> = support::complete_lines(&text);
+    // The complete ordered log, read under the deadline: `turn_finished`
+    // returning above never proves turn 2's durable events landed.
     let mut expected = opened_kinds(false);
     expected.extend(["model_changed", "preamble_built"]);
     expected.extend(resumed_turn_kinds());
+    let events = wait_session_events(&setup, &id, &expected);
     assert_eq!(event_kinds(&events), expected);
     assert_config_unchanged(&setup, &before_config);
     quit_keys(&mut second);
