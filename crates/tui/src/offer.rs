@@ -8,6 +8,7 @@ use contract::events::{
     OfferDecision, OfferedItem, OfferedKind, RepositoryCodeOffered, RepositoryCodeResolved,
 };
 use contract::{Envelope, RequestId, SessionId};
+use ratatui::style::{Modifier, Style};
 use ratatui::text::{Line, Span};
 
 use crate::app::{read, session_command};
@@ -16,6 +17,10 @@ use crate::markdown::{Role, style};
 
 /// The line every offer shows.
 pub(crate) const TUI_FILES: &str = "A package's TUI files are never installed from a repository.";
+
+/// The hint closing every offer.
+pub(crate) const HINT: &str =
+    "↑↓ choose an item · ←→ its answer · Send answers them all · Esc puts it aside";
 
 /// The decisions in the order ← → step through them.
 const DECISIONS: [OfferDecision; 3] = [
@@ -365,49 +370,29 @@ impl Offer {
 }
 
 /// The rows at `width`, and the row index of each cursor position: each
-/// item's header, then the Send row.
+/// item's header, then the Send row (`docs/tui.md`, "Approving what a
+/// repository ships").
 fn layout(held: &Held, width: u16) -> (Vec<Row>, Vec<usize>) {
-    let count = held.items.len();
-    let noun = if count == 1 { "item" } else { "items" };
-    let cross = width.saturating_sub(1);
-    // The title gives way so the ✕ always draws in the last column.
-    let mut title = String::new();
-    for ch in format!("Repository code · {count} {noun}").chars() {
-        title.push(ch);
-        if crate::format::width(&title) > usize::from(cross) {
-            title.pop();
-            break;
-        }
-    }
-    let pad = usize::from(cross).saturating_sub(crate::format::width(&title));
-    let mut rows = vec![
-        clipped(
-            Line::raw(format!("{title}{}✕", " ".repeat(pad))),
-            vec![(cross, width, Spot::Close)],
-            width,
-        ),
-        Row::text(Line::raw(TUI_FILES)),
-        Row::text(Line::raw("")),
-    ];
-    let mut cursor_rows = Vec::with_capacity(count.saturating_add(1));
+    let mut rows = vec![title_row(width), Row::text(Line::raw(""))];
+    let mut cursor_rows = Vec::with_capacity(held.items.len().saturating_add(1));
     for (at, (item, decision)) in held.items.iter().zip(&held.decisions).enumerate() {
         cursor_rows.push(rows.len());
-        rows.push(Row::text(Line::raw(format!(
-            "{} {}",
-            mark(held.cursor == at),
-            header(item)
-        ))));
-        rows.push(choices(at, *decision, width));
+        rows.push(Row::text(header_line(item, held.cursor == at)));
         rows.extend(
             item.summary
                 .lines()
-                .map(|line| Row::text(Line::raw(format!("    {line}")))),
+                .map(|line| dim_row(&format!("  {line}"))),
         );
         if let Some(diff) = &item.diff {
+            rows.push(dim_row("  the declaration changed"));
             rows.extend(diff_rows(diff));
         }
+        rows.push(choices(at, *decision, width));
         rows.push(Row::text(Line::raw("")));
     }
+    rows.push(dim_row(TUI_FILES));
+    rows.push(Row::text(Line::raw("")));
+    rows.push(dim_row(HINT));
     cursor_rows.push(rows.len());
     let tally = |wanted: OfferDecision| {
         held.decisions
@@ -415,38 +400,127 @@ fn layout(held: &Held, width: u16) -> (Vec<Row>, Vec<usize>) {
             .filter(|decision| **decision == wanted)
             .count()
     };
+    let at_send = held.cursor == held.items.len();
     let send = format!(
-        "{} Send · {} approve, {} skip, {} never",
-        mark(held.cursor == count),
+        " Send · {} approve, {} skip, {} never",
         tally(OfferDecision::Approve),
         tally(OfferDecision::Skip),
         tally(OfferDecision::Never)
     );
-    let end = to_u16(crate::format::width(&send));
-    rows.push(clipped(Line::raw(send), vec![(0, end, Spot::Send)], width));
+    // The mark and the tally share one ink, so the cursor paints the
+    // whole row and the rest draws plain.
+    let ink = if at_send {
+        style(Role::Secondary)
+    } else {
+        Style::new()
+    };
+    let end = to_u16(crate::format::width(&send).saturating_add(1));
+    let line = Line::from(vec![
+        Span::styled(mark(at_send).to_string(), ink),
+        Span::styled(send, ink),
+    ]);
+    rows.push(clipped(line, vec![(0, end, Spot::Send)], width));
     (rows, cursor_rows)
 }
 
-/// The cursor's mark, or a space.
+/// The cursor's mark.
 fn mark(at: bool) -> char {
-    if at { '›' } else { ' ' }
+    if at { '▸' } else { ' ' }
 }
 
-/// An item's header: its kind, name, version and whether it is required.
+/// Bold on the default colour, as the top row's name and a chosen
+/// answer's label draw.
+fn bold() -> Style {
+    Style::new().add_modifier(Modifier::BOLD)
+}
+
+/// One dim row of wrapped text.
+fn dim_row(text: &str) -> Row {
+    Row::text(Line::from(Span::styled(
+        text.to_owned(),
+        style(Role::Muted),
+    )))
+}
+
+/// The swapped view's top row: `Offer` bold, `repository code` dim and
+/// `Esc returns` dim right-aligned. A click anywhere on it puts the offer
+/// aside (`docs/tui.md`, "Swapped views": a click on the top row
+/// returns). The command gives way first, then Esc, so `Offer` always
+/// draws.
+fn title_row(width: u16) -> Row {
+    const COMMAND: &str = "  repository code";
+    const ESC: &str = "Esc returns";
+    let fit = usize::from(width);
+    let mut name = " Offer".to_owned();
+    while crate::format::width(&name) > fit && !name.is_empty() {
+        name.pop();
+    }
+    let mut command = COMMAND.to_owned();
+    while crate::format::width(&name) + crate::format::width(&command) > fit && !command.is_empty()
+    {
+        command.pop();
+    }
+    let mut spans = Vec::new();
+    if let Some(rest) = name.strip_prefix(' ') {
+        spans.push(Span::raw(" "));
+        if !rest.is_empty() {
+            spans.push(Span::styled(rest.to_owned(), bold()));
+        }
+    }
+    if !command.is_empty() {
+        spans.push(Span::styled(command.clone(), style(Role::Muted)));
+    }
+    let used = crate::format::width(&name) + crate::format::width(&command);
+    // Esc needs a space before it, or it stays off.
+    if used + 1 + ESC.len() <= fit {
+        spans.push(Span::raw(" ".repeat(fit - used - ESC.len())));
+        spans.push(Span::styled(ESC, style(Role::Muted)));
+    }
+    clipped(Line::from(spans), vec![(0, width, Spot::Close)], width)
+}
+
+/// An item's header row: `▸ ` in secondary and the row in secondary on
+/// the cursor item, naming its kind, name and what identifies it.
+fn header_line(item: &OfferedItem, cursor: bool) -> Line<'static> {
+    let ink = if cursor {
+        style(Role::Secondary)
+    } else {
+        Style::new()
+    };
+    Line::from(vec![
+        Span::styled(if cursor { "▸ " } else { "  " }, ink),
+        Span::styled(header(item), ink),
+    ])
+}
+
+/// An item's header: its kind, name and what identifies it: an
+/// extension's version, otherwise the path its declaration comes from.
 fn header(item: &OfferedItem) -> String {
     let kind = match item.kind {
-        OfferedKind::Extension => "extension",
-        OfferedKind::Hook => "hook",
+        OfferedKind::Extension => "Extension",
+        OfferedKind::Hook => "Hook",
         OfferedKind::McpServer => "MCP server",
     };
     let mut text = format!("{kind} {}", item.name);
-    if let Some(version) = &item.version {
-        text.push_str(&format!(" · {version}"));
-    }
-    if item.required {
-        text.push_str(" · required");
+    if let Some(detail) = detail(item) {
+        text.push_str(&format!(" · {detail}"));
     }
     text
+}
+
+/// What identifies an item after its kind and name: an extension's
+/// version, otherwise the declaration path the summary carries. `None`
+/// when the item carries neither.
+fn detail(item: &OfferedItem) -> Option<String> {
+    if let Some(version) = &item.version {
+        return Some(version.clone());
+    }
+    item.summary.lines().find_map(|line| {
+        line.strip_prefix("declared in:")
+            .map(str::trim)
+            .filter(|path| !path.is_empty())
+            .map(|path| format!("declared in {path}"))
+    })
 }
 
 /// An item's choice row: each decision a chip, the chosen one in brackets.
