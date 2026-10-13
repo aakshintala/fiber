@@ -211,6 +211,23 @@ fn value_arguments_offer_no_values_and_flags_keep_their_action() {
 }
 
 #[test]
+fn resume_offers_credential_as_a_plain_label_value() {
+    let mut copy = visible(&PARSER);
+    copy.build();
+    let resume = copy.find_subcommand("resume").expect("resume is completed");
+    let credential = resume
+        .get_arguments()
+        .find(|arg| arg.get_long() == Some("credential"))
+        .expect("resume offers --credential");
+    assert!(credential.get_action().takes_values());
+    assert_eq!(credential.get_value_hint(), ValueHint::Other);
+    assert!(
+        credential.get_possible_values().is_empty(),
+        "no label-value completion"
+    );
+}
+
+#[test]
 fn the_bash_script_completes_without_falling_back_to_file_names() {
     let text = script(Shell::Bash);
     assert!(text.starts_with("_fiber() {"), "{text}");

@@ -447,8 +447,13 @@ impl Starter for Recording {
         self.inner.start(id, workspace, model, &[], worktree)
     }
 
-    fn resume(&self, id: &SessionId, workspace: &Path) -> std::io::Result<Box<dyn Started>> {
-        self.inner.resume(id, workspace)
+    fn resume(
+        &self,
+        id: &SessionId,
+        workspace: &Path,
+        credential: Option<&str>,
+    ) -> std::io::Result<Box<dyn Started>> {
+        self.inner.resume(id, workspace, credential)
     }
 
     fn rewind(

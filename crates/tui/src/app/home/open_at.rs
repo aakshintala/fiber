@@ -22,14 +22,19 @@ impl App {
         &mut self,
         session: SessionId,
         expected: Option<Level>,
+        credential: Option<String>,
     ) -> Vec<String> {
         self.go_home();
         self.attach(session.clone());
         let levels = opening(expected);
         let mut ack = String::new();
         let mut lines = Vec::new();
+        // The label applies to the first subscribe only: it may be the
+        // one that starts the process, and no later subscribe, reconnect
+        // or reconciled subscription reasserts it.
+        let mut credential = credential.as_deref();
         for level in levels {
-            let (id, line) = subscribe_line(&session, *level);
+            let (id, line) = subscribe_line(&session, *level, credential.take());
             if let Some(home) = self.home.as_mut() {
                 home.subs.sent(id.clone(), session.clone(), *level);
             }
@@ -50,16 +55,17 @@ impl App {
     /// at most once. A list launch stays armed until the first `recent`
     /// answer spends it.
     pub(super) fn launch_lines(&mut self) -> Vec<String> {
-        let session = match self.home.as_mut().map(|home| &mut home.launch.open_at) {
-            Some(open_at @ OpenAt::Session(_)) => {
-                let OpenAt::Session(session) = std::mem::replace(open_at, OpenAt::Home) else {
+        let (session, credential) = match self.home.as_mut().map(|home| &mut home.launch.open_at) {
+            Some(open_at @ OpenAt::Session(_, _)) => {
+                let OpenAt::Session(session, credential) = std::mem::replace(open_at, OpenAt::Home)
+                else {
                     return Vec::new();
                 };
-                session
+                (session, credential)
             }
             Some(OpenAt::Home | OpenAt::List) | None => return Vec::new(),
         };
-        self.open_session(session, None)
+        self.open_session(session, None, credential)
     }
 
     /// Folds the launch's list request into the first `recent` answer:

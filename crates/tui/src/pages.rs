@@ -2,6 +2,7 @@
 //! page index that cuts the session's durable lines into pages, counts
 //! their rows and finds the window of pages kept on screen.
 
+use std::cell::OnceCell;
 use std::collections::BTreeMap;
 use std::ops::Range;
 
@@ -76,8 +77,22 @@ pub(crate) struct Index {
     pages: Vec<Page>,
     /// One revision per page, pushed with it: a page's revision only
     /// grows, so a search rescans a page whose text moved (`docs/tui.md`,
-    /// "History and paging").
+    /// "History and paging"). Geometry alone never moves it: only an
+    /// explicit [`Index::invalidate`] does, so wrapping at a new width
+    /// keeps the revision of every page whose text the width did not
+    /// change.
     revisions: Vec<u64>,
+    /// How many times any page's text revision moved: the search
+    /// remembers the clock it last verified and re-examines pages only
+    /// when it moved, instead of walking every page per answer.
+    clock: u64,
+    /// The saturated row sums before each page, rebuilt lazily after
+    /// page or row changes: `prefix[at]` is the rows of the pages
+    /// before `at`, so row queries never walk the pages. Empty after a
+    /// change until the next query rebuilds it; the rebuild visits
+    /// every page once and counts those visits, while queries read the
+    /// cache and visit no page.
+    prefix: OnceCell<Vec<usize>>,
     /// Actions in flight, with the turn each began in.
     in_flight: BTreeMap<(Flight, ActionId), u64>,
     /// How many turns have started.
@@ -93,6 +108,8 @@ impl Default for Index {
         Self {
             pages: vec![Page::default()],
             revisions: vec![0],
+            clock: 0,
+            prefix: OnceCell::from(vec![0, 0]),
             in_flight: BTreeMap::new(),
             turns: 0,
             group: false,
@@ -142,6 +159,7 @@ impl Index {
                 if held >= PAGE_LINES && self.in_flight.is_empty() {
                     self.pages.push(Page::default());
                     self.revisions.push(0);
+                    self.prefix = OnceCell::new();
                     cut = Cut::Here;
                 }
             }
@@ -211,6 +229,7 @@ impl Index {
             rows: 0,
         });
         self.revisions.push(0);
+        self.prefix = OnceCell::new();
     }
 
     /// The pages, the open one last.
@@ -218,15 +237,55 @@ impl Index {
         &self.pages
     }
 
-    /// Sets page `at`'s row count, bumping its revision whether or not the
-    /// count changed: a replacement of equal length still rescans.
+    /// Sets page `at`'s row count, for geometry alone: wrapping at a new
+    /// width, reloading, or an edge coming off moves no revision, so the
+    /// search keeps what it scanned. A page's text changing calls
+    /// [`Index::invalidate`] instead. A missing page stays harmless.
     pub(crate) fn set_rows(&mut self, at: usize, rows: usize) {
+        let changed = self.pages.get(at).is_some_and(|page| page.rows != rows);
         if let Some(page) = self.pages.get_mut(at) {
             page.rows = rows;
         }
+        if changed {
+            self.prefix = OnceCell::new();
+        }
+    }
+
+    /// Page `at`'s text changed for the search: its revision grows, so
+    /// the search scans it again. Callers name the change: a folded
+    /// line, a moved ▣ line, a closed page's rearranged cards, or a
+    /// table page's new width. A missing page stays harmless.
+    pub(crate) fn invalidate(&mut self, at: usize) {
         if let Some(revision) = self.revisions.get_mut(at) {
             *revision = revision.saturating_add(1);
+            self.clock = self.clock.saturating_add(1);
         }
+    }
+
+    /// How many times any page's text revision moved.
+    pub(crate) fn clock(&self) -> u64 {
+        self.clock
+    }
+
+    /// The cached saturated row sums before each page, rebuilt once
+    /// after accumulated page or row changes: `prefix[at]` is the rows
+    /// of the pages before `at`. The rebuild visits every page once and
+    /// counts those visits; queries read the cache and visit no page.
+    fn prefixes(&self) -> &Vec<usize> {
+        self.prefix.get_or_init(|| {
+            let mut prefix = Vec::with_capacity(self.pages.len().saturating_add(1));
+            let mut sum = 0usize;
+            prefix.push(0);
+            for page in &self.pages {
+                // Saturation stays in the running sum: subtracting from
+                // an already saturated total would undercount every page
+                // after the overflow.
+                sum = sum.saturating_add(page.rows);
+                prefix.push(sum);
+            }
+            crate::work::add(|work| work.index_pages += self.pages.len());
+            prefix
+        })
     }
 
     /// Page `at`'s revision, 0 for a page never counted.
@@ -243,35 +302,40 @@ impl Index {
             .map(|_| at)
     }
 
-    /// Every row the conversation draws.
+    /// Every row the conversation draws, from the cached prefixes.
     pub(crate) fn total(&self) -> usize {
-        crate::work::add(|work| work.index_pages += self.pages.len());
-        self.pages
-            .iter()
-            .fold(0usize, |sum, page| sum.saturating_add(page.rows))
+        let prefixes = self.prefixes();
+        prefixes.last().copied().unwrap_or(0)
     }
 
-    /// Page `at`'s first row: the rows of the pages before it.
+    /// Page `at`'s first row: the rows of the pages before it, from the
+    /// cached prefixes.
     pub(crate) fn start(&self, at: usize) -> usize {
-        crate::work::add(|work| work.index_pages += at.min(self.pages.len()));
-        self.pages
-            .iter()
-            .take(at)
-            .fold(0usize, |sum, page| sum.saturating_add(page.rows))
+        let prefixes = self.prefixes();
+        prefixes
+            .get(at.min(prefixes.len().saturating_sub(1)))
+            .copied()
+            .unwrap_or(0)
     }
 
     /// The page drawing conversation row `row`, and the row's offset in it;
     /// `None` past the last row. A page drawing no row holds none.
     pub(crate) fn locate(&self, row: usize) -> Option<(usize, usize)> {
-        let mut start = 0usize;
-        for (at, page) in self.pages.iter().enumerate() {
-            let end = start.saturating_add(page.rows);
-            if row < end {
-                return Some((at, row.saturating_sub(start)));
-            }
-            start = end;
+        let prefixes = self.prefixes();
+        let pages = prefixes.len().saturating_sub(1);
+        // The first prefix past `row`, less one: the page whose rows
+        // hold it, skipping pages that draw no row.
+        let at = prefixes
+            .partition_point(|sum| *sum <= row)
+            .saturating_sub(1);
+        if at >= pages {
+            return None;
         }
-        None
+        // `at` holds `row`: `partition_point` put the first prefix
+        // past it one further on, so its end is past `row` and no
+        // guard remains to mutate.
+        let start = prefixes.get(at).copied().unwrap_or(0);
+        Some((at, row.saturating_sub(start)))
     }
 
     /// Each page's first row.
@@ -304,25 +368,20 @@ impl Index {
     /// in `[top - height, top + 2 * height)`, clamped to the conversation.
     /// A page in the range that draws no row is in no window.
     pub(crate) fn window(&self, top: usize, height: usize) -> Range<usize> {
+        let prefixes = self.prefixes();
         let from = top.saturating_sub(height);
         let to = top
             .saturating_add(height.saturating_mul(2))
-            .min(self.total());
-        let mut first = self.pages.len();
-        let mut last = self.pages.len();
-        let mut start = 0usize;
-        for (at, page) in self.pages.iter().enumerate() {
-            crate::work::add(|work| work.index_pages += 1);
-            let end = start.saturating_add(page.rows);
-            if first == self.pages.len() && end > from {
-                first = at;
-            }
-            if start >= to {
-                last = at;
-                break;
-            }
-            start = end;
-        }
+            .min(prefixes.last().copied().unwrap_or(0));
+        // The first page ending past `from`, and the first page starting
+        // at or past `to`: binary searches over the cached saturated
+        // prefixes, so a query reads the cache and visits no page.
+        // `prefixes[0]` is 0, never past `from`, so the first search
+        // always lands past it and the page holds the row after.
+        let first = prefixes
+            .partition_point(|end| *end <= from)
+            .saturating_sub(1);
+        let last = prefixes.partition_point(|start| *start < to);
         first..last.max(first)
     }
 

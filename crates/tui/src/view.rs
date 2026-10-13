@@ -24,7 +24,7 @@ mod home;
 mod input_box;
 pub(crate) mod item;
 mod key_map;
-mod marks;
+pub(crate) mod marks;
 pub(crate) mod model_picker;
 mod offer;
 pub(crate) mod overlay;
@@ -218,7 +218,7 @@ pub(crate) fn render(
             if app.item_view().is_some_and(|view| view.has_transcript) {
                 let inset = crate::layout::past_gutter(body, app.chrome().gutter());
                 conversation_rows(app, inset, buf, &mut targets);
-                marks::draw(app, inset, buf, &mut targets);
+                marks::draw(app, inset, buf, &mut targets, app.hint_layout(inset).gap);
             } else {
                 item::draw_body(app, body, buf);
             }
@@ -234,7 +234,7 @@ pub(crate) fn render(
                 None => match app.find_results() {
                     Some(view) => {
                         results::render(&view, conversation, buf, &mut targets);
-                        marks::draw(app, conversation, buf, &mut targets);
+                        marks::draw(app, conversation, buf, &mut targets, None);
                         // The ✕ draws over the bar's last cell, so the
                         // view keeps a visible closer (`docs/tui.md`,
                         // "Swapped views").
@@ -250,7 +250,7 @@ pub(crate) fn render(
                         let (rows, bar) = scroll_bar::split(inset);
                         conversation_rows(app, rows, buf, &mut targets);
                         scroll_bar::draw(app, bar, buf);
-                        marks::draw(app, inset, buf, &mut targets);
+                        marks::draw(app, inset, buf, &mut targets, app.hint_layout(inset).gap);
                     }
                 },
             }
@@ -277,7 +277,12 @@ pub(crate) fn render(
             buf.set_style(target.rect, HOVER_TINT);
         }
     }
-    if let Some(id) = app.focused() {
+    if let Some(id) = app.focused()
+        && !matches!(id, TargetId::Link { .. })
+    {
+        // Links draw their own focused look in the marks, on the
+        // `surface_raised` tint with the hint under them
+        // (`docs/tui.md`, "Links").
         for target in targets.iter().filter(|target| target.id == id) {
             buf.set_style(target.rect, FOCUS_STYLE);
         }
@@ -431,70 +436,62 @@ pub(crate) fn cursor(app: &App, area: Rect) -> Option<Position> {
     Some(Position::new(x, y))
 }
 
+/// Blanks the hint's reserved row with its card's tint, so no previous
+/// frame's cells show past the hint (`docs/tui.md`, "Links").
+fn blank_row(buf: &mut Buffer, area: Rect, y: u16, style: Style) {
+    let width = usize::from(area.width);
+    buf.set_stringn(area.x, y, " ".repeat(width), width, style);
+}
+
 /// Draws the conversation's visible rows, bottom-aligned while it is
 /// shorter than its area. Only the pages that draw a visible row are read;
 /// a page not loaded draws blank rows. Pushes a target over each shown line
 /// that opens something, and over "↓ New messages below" when drawn.
 fn conversation_rows(app: &App, area: Rect, buf: &mut Buffer, targets: &mut Vec<Target>) {
-    let total = app.scroll().1;
     let height = usize::from(area.height);
-    let bottom_top = total.saturating_sub(height);
-    let top = app.top().map_or(bottom_top, |top| top.min(bottom_top));
+    // The focused link's hint reserves the row under its line, laid out
+    // with the targets: rows on and below it draw one lower, so hint
+    // text and click targets agree (`docs/tui.md`, "Links").
+    let placed = app.hint_layout(area);
+    let top = placed.top;
+    let gap = placed.gap;
+    let mut y = placed.y0;
     let end = top.saturating_add(height);
-    let shown = total.min(end).saturating_sub(top);
-    let mut y = area.y.saturating_add(to_u16(height.saturating_sub(shown)));
     let crate::window::Shown {
         first,
         lines,
         turns,
         spins,
     } = app.shown(top, height);
+    // Where this frame's turn targets splice in: after the targets
+    // drawn before the conversation, before its line targets.
+    let base = targets.len();
     let mut start = first;
     let overlay = app.has_new() && area.height > 0;
     let last = area.bottom().saturating_sub(u16::from(overlay));
-    // Each line's cells on screen: its y and how many of its rows show.
+    // The card tint above the hint's row: the row the hint reserves
+    // ends its card, so the blank row keeps it.
+    let mut under = Style::default();
+    // Each line's cells on screen: its y and how many of its rows show,
+    // laid out with the gap in the loop below. The turns loop after it
+    // reads them.
     let mut layout: Vec<(u16, u16)> = Vec::with_capacity(lines.len());
-    {
-        let (mut row_start, mut line_y) = (start, y);
-        for (_, rows, _) in &lines {
-            let next = row_start.saturating_add(*rows);
-            let count = next.min(end).saturating_sub(row_start.max(top));
-            layout.push((line_y, to_u16(count)));
-            line_y = line_y.saturating_add(to_u16(count));
-            row_start = next;
-        }
-    }
-    // Turns are focus stops over the rows their page cards draw; they are
-    // not click targets, so the line targets drawn after them win clicks.
-    for (at, range) in turns {
-        let mut rect: Option<Rect> = None;
-        for (line, (line_y, count)) in layout.iter().enumerate() {
-            if range.contains(&line) {
-                rect = Some(match rect {
-                    Some(before) => Rect {
-                        height: before.height.saturating_add(*count),
-                        ..before
-                    },
-                    None => Rect::new(area.x, *line_y, area.width, *count),
-                });
-            }
-        }
-        if let Some(rect) = rect {
-            let height = rect.height.min(last.saturating_sub(rect.y));
-            if height > 0 {
-                targets.push(Target {
-                    id: TargetId::Turn(at),
-                    rect: Rect { height, ..rect },
-                });
-            }
-        }
-    }
     // A line wholly above `top` or below `end` shows no rows.
     for (at, (line, rows, open)) in lines.into_iter().enumerate() {
         let next = start.saturating_add(rows);
         let skip = top.saturating_sub(start);
         let count = next.min(end).saturating_sub(start.max(top));
-        let rect = Rect::new(area.x, y, area.width, to_u16(count));
+        if gap.is_some_and(|gap| gap == y) {
+            blank_row(buf, area, y, under);
+            y = y.saturating_add(1);
+        }
+        if y >= area.bottom() {
+            break;
+        }
+        layout.push((y, to_u16(count)));
+        let room = area.bottom().saturating_sub(y);
+        let take = count.min(usize::from(room));
+        let rect = Rect::new(area.x, y, area.width, to_u16(take));
         // A short row and the wrapped rows of a long one fill the column
         // with the row's own background, so a card's surface tint reaches
         // the column's edge (`docs/tui.md`, "Look").
@@ -506,6 +503,7 @@ fn conversation_rows(app: &App, area: Rect, buf: &mut Buffer, targets: &mut Vec<
             .style(fill)
             .scroll((to_u16(skip), 0))
             .render(rect, buf);
+        under = fill;
         // A marked line spins its cell on the working line's tick; the
         // mark is the builders' promise that the line moves.
         if let Some(col) = spins
@@ -542,6 +540,39 @@ fn conversation_rows(app: &App, area: Rect, buf: &mut Buffer, targets: &mut Vec<
         }
         y = y.saturating_add(to_u16(count));
         start = next;
+    }
+    // Turns are focus stops over the rows their page cards draw; they
+    // are not click targets, so the line targets drawn before them win
+    // clicks: their targets splice in front, in draw order.
+    let mut turned: Vec<Target> = Vec::new();
+    for (at, range) in turns {
+        let mut rect: Option<Rect> = None;
+        for (line, (line_y, count)) in layout.iter().enumerate() {
+            if range.contains(&line) {
+                rect = Some(match rect {
+                    Some(before) => Rect {
+                        height: before.height.saturating_add(*count),
+                        ..before
+                    },
+                    None => Rect::new(area.x, *line_y, area.width, *count),
+                });
+            }
+        }
+        if let Some(rect) = rect {
+            let height = rect.height.min(last.saturating_sub(rect.y));
+            if height > 0 {
+                turned.push(Target {
+                    id: TargetId::Turn(at),
+                    rect: Rect { height, ..rect },
+                });
+            }
+        }
+    }
+    targets.splice(base..base, turned);
+    // The hint's row past the last line, when the scroll freed it
+    // there: blank it with the card tint, as in the loop.
+    if gap.is_some_and(|gap| gap == y) {
+        blank_row(buf, area, y, under);
     }
     if overlay {
         // The pill over the conversation's bottom row: its ends and its

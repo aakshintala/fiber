@@ -572,7 +572,7 @@ fn a_command_racing_buffered_lines_waits_for_the_end_and_reaches_the_session_uns
     let fixture = Fixture::new("cs6a");
     let starter = FakeStarter::bind_and_hold(&fixture.home);
     starter
-        .resume(&SessionId(SID.to_owned()), std::path::Path::new("/w"))
+        .resume(&SessionId(SID.to_owned()), std::path::Path::new("/w"), None)
         .unwrap();
     let (rig, client_peer, mut session_peer, reader, park_tx) =
         rig(&fixture.home, starter.clone(), SID, true);
@@ -651,7 +651,7 @@ fn a_command_racing_the_end_is_answered_after_stream_closed() {
     let fixture = Fixture::new("cs6b");
     let starter = FakeStarter::bind_and_hold(&fixture.home);
     starter
-        .resume(&SessionId(SID.to_owned()), std::path::Path::new("/w"))
+        .resume(&SessionId(SID.to_owned()), std::path::Path::new("/w"), None)
         .unwrap();
     let (rig, client_peer, session_peer, reader, park_tx) =
         rig(&fixture.home, starter.clone(), SID, true);

@@ -123,9 +123,30 @@ fn inline_styles() {
             .add_modifier
             .contains(Modifier::UNDERLINED)
     );
+    assert_eq!(style_at(line, 8).fg, fg(Role::Accent));
     assert_eq!(text(line), "b i s c l");
     let plain = style_at(line, 1);
     assert_eq!(plain, style(Role::Text));
+}
+
+#[test]
+fn links_draw_in_accent_while_plain_text_stays_text() {
+    let rendered = render("see [l](http://x) now", 40);
+    let line = &rendered.lines[0];
+    assert_eq!(text(line), "see l now");
+    // The link's cell in the accent colour, underlined.
+    let link = style_at(line, 4);
+    assert_eq!(link.fg, fg(Role::Accent));
+    assert!(link.add_modifier.contains(Modifier::UNDERLINED));
+    // The cells on either side stay in the text colour, not underlined.
+    for col in [0, 3, 5, 8] {
+        let plain = style_at(line, col);
+        assert_eq!(plain.fg, fg(Role::Text), "cell {col}");
+        assert!(
+            !plain.add_modifier.contains(Modifier::UNDERLINED),
+            "cell {col}"
+        );
+    }
 }
 
 #[test]
@@ -629,6 +650,21 @@ fn a_link_in_a_table_cell_is_a_link() {
         .collect();
     assert_eq!(links.len(), 1, "{links:?}");
     assert_eq!(links[0].1, "http://x.example");
+}
+
+#[test]
+fn a_link_in_a_table_cell_draws_in_accent() {
+    let rendered = render("| a | b |\n|---|---|\n| [x](http://x.example) | y |", 40);
+    let row = &rendered.lines[2];
+    assert_eq!(text(row), "x   y");
+    // The link cell in the accent colour, underlined; the plain cell
+    // in the text colour, not underlined.
+    let link = style_at(row, 0);
+    assert_eq!(link.fg, fg(Role::Accent));
+    assert!(link.add_modifier.contains(Modifier::UNDERLINED));
+    let plain = style_at(row, 4);
+    assert_eq!(plain.fg, fg(Role::Text));
+    assert!(!plain.add_modifier.contains(Modifier::UNDERLINED));
 }
 
 #[test]

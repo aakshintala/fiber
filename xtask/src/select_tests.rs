@@ -117,12 +117,7 @@ fn code_outside_every_crate_runs_no_crate() {
 
 #[test]
 fn a_compiled_in_doc_runs_its_crate_alone() {
-    for path in [
-        "docs/events.md",
-        "docs/errors.md",
-        "docs/invocation.md",
-        "docs/tui.md",
-    ] {
+    for path in ["docs/events.md", "docs/errors.md", "docs/tui.md"] {
         let selection = classify(&strings(&[path]), &members());
         assert_eq!(
             selection,
@@ -131,6 +126,13 @@ fn a_compiled_in_doc_runs_its_crate_alone() {
         );
         assert_eq!(selection.mode(), "crates", "{path}");
     }
+}
+
+#[test]
+fn an_invocation_doc_change_runs_contract_and_main() {
+    let selection = classify(&strings(&["docs/invocation.md"]), &members());
+    assert_eq!(selection, Selection::Crates(strings(&["contract", "main"])));
+    assert_eq!(selection.mode(), "crates");
 }
 
 #[test]

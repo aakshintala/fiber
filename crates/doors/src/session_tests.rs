@@ -61,6 +61,9 @@ struct Control {
     accept_waiting: AtomicBool,
     accept_mu: Mutex<()>,
     accept_cv: Condvar,
+    switch_waiting: AtomicBool,
+    switch_mu: Mutex<()>,
+    switch_cv: Condvar,
     skip_shutdown: AtomicBool,
 }
 
@@ -74,6 +77,9 @@ static CONTROL: Control = Control {
     accept_waiting: AtomicBool::new(false),
     accept_mu: Mutex::new(()),
     accept_cv: Condvar::new(),
+    switch_waiting: AtomicBool::new(false),
+    switch_mu: Mutex::new(()),
+    switch_cv: Condvar::new(),
     skip_shutdown: AtomicBool::new(false),
 };
 
@@ -160,11 +166,41 @@ pub(super) fn note_accept_wait() {
     CONTROL.accept_cv.notify_all();
 }
 
+/// Notes that a connection's writer parked at a label-bearing switch's
+/// deferred response wait: the writer thread calls this immediately
+/// before blocking on the loop's answer, so a test that receives it
+/// knows no later line can reach the client until the test answers the
+/// delivered acknowledgement (`docs/testing.md`, "Waits and timeouts").
+pub(crate) fn note_switch_wait() {
+    let _held = lock(&CONTROL.switch_mu);
+    CONTROL.switch_waiting.store(true, Ordering::Relaxed);
+    CONTROL.switch_cv.notify_all();
+}
+
+/// Waits until the connection's writer parked at the switch's response
+/// wait, failing at [`DEADLINE`]: after this returns, silence on the
+/// socket is the writer waiting, not a thread that never ran.
+#[track_caller]
+pub(crate) fn wait_switch_waiting() {
+    let guard = lock(&CONTROL.switch_mu);
+    let (_guard, _) = CONTROL
+        .switch_cv
+        .wait_timeout_while(guard, DEADLINE, |_| {
+            !CONTROL.switch_waiting.load(Ordering::Relaxed)
+        })
+        .unwrap_or_else(PoisonError::into_inner);
+    assert!(
+        CONTROL.switch_waiting.load(Ordering::Relaxed),
+        "the writer parked at the switch's response wait"
+    );
+}
+
 fn reset() {
     CONTROL.hold_reader.store(false, Ordering::Relaxed);
     CONTROL.hold_cv.notify_all();
     CONTROL.parked.store(0, Ordering::Relaxed);
     CONTROL.accept_waiting.store(false, Ordering::Relaxed);
+    CONTROL.switch_waiting.store(false, Ordering::Relaxed);
     CONTROL.skip_shutdown.store(false, Ordering::Relaxed);
 }
 
@@ -537,6 +573,7 @@ fn attach_held(gate: &Arc<super::Gate>, held: &Arc<Held>, watcher: log::Watcher)
             held: Arc::clone(held),
         }),
         false,
+        None,
     );
 }
 
@@ -3468,4 +3505,475 @@ fn message_and_close_race_in_both_lock_orders() {
             .expect("the run closure ran");
         opened.close();
     }
+}
+
+/// A `subscribe` line asking for `label`, as `fiber resume --credential`
+/// sends it through the hub.
+fn subscribe_credential_line(id: &str, level: &str, label: &str) -> String {
+    format!(
+        r#"{{"id":"{id}","command":"subscribe","args":{{"level":"{level}","credential":"{label}"}}}}"#
+    )
+}
+
+/// A switch refusal naming an unknown label, as the credential resolver
+/// words one.
+fn unknown_label(label: &str) -> contract::inbox::Rejection {
+    contract::inbox::Rejection {
+        code: ErrorCode::CredentialMissing,
+        message: format!("no credential named `{label}`"),
+    }
+}
+
+/// The next delivery, which must be a credential switch, with its label
+/// and acknowledgement.
+#[track_caller]
+fn next_switch(inbox: &mpsc::Receiver<Delivery>) -> (String, contract::inbox::Ack) {
+    let delivery = Deadline::after(DEADLINE)
+        .recv(inbox)
+        .expect("a delivery arrives");
+    let Delivery::Credential(args, ack) = delivery else {
+        panic!("expected a credential switch, got {delivery:?}");
+    };
+    (args.label, ack)
+}
+
+#[test]
+fn a_first_subscribe_with_a_label_waits_for_the_switch_before_its_acceptance() {
+    reset();
+    let opened = Opened::open(Vec::new());
+    let socket = opened.socket.clone();
+    opened
+        .session
+        .run(Vec::new(), Arc::new(|| false), move |inbox| {
+            let client = Client::connect(&socket).unwrap();
+            client
+                .send(&subscribe_credential_line("c_sub", "full", "work"))
+                .unwrap();
+            // The switch reaches the loop with the open, before any later
+            // prompt could: nothing else is delivered with it.
+            let (label, ack) = next_switch(&inbox);
+            assert_eq!(label, "work");
+            assert!(
+                inbox.try_recv().is_err(),
+                "no other command is delivered with the switch"
+            );
+            // The writer is parked at the switch's response wait: it
+            // cannot emit the acceptance or folded history until the
+            // test answers. The socket is polled without waiting, so no
+            // line hides behind a delay and no clock is read; anything
+            // already written is a premature line and fails here, and
+            // the ordered read below would fail on it too.
+            wait_switch_waiting();
+            assert!(
+                client.recv(Duration::ZERO).is_none(),
+                "no line precedes the loop's answer"
+            );
+            (ack.0)(Ok(None));
+            // The acceptance is the connection's first line: nothing
+            // preceded it, and it answers this subscribe with no result.
+            let accepted = recv(&client);
+            assert_eq!(accepted["kind"], "command_accepted", "{accepted}");
+            assert_eq!(accepted["payload"]["command_id"], "c_sub", "{accepted}");
+            assert!(
+                accepted["payload"].get("result").is_none(),
+                "one bare acceptance: {accepted}"
+            );
+            // Folded history follows the acceptance, never precedes it:
+            // a fresh session folds only its `clients` count next.
+            let lines = support::until(&client, |line| line["kind"] == "clients");
+            assert_eq!(support::kinds(&lines), ["clients"]);
+            Ok(())
+        })
+        .unwrap();
+    close_within(opened.session, opened.log);
+}
+
+#[test]
+fn a_first_subscribe_with_an_unknown_label_is_accepted_then_noticed() {
+    reset();
+    let opened = Opened::open(Vec::new());
+    let socket = opened.socket.clone();
+    let dir = opened.dir.clone();
+    opened
+        .session
+        .run(Vec::new(), Arc::new(|| false), move |inbox| {
+            let client = Client::connect(&socket).unwrap();
+            client
+                .send(&subscribe_credential_line("c_sub", "full", "nope"))
+                .unwrap();
+            let (label, ack) = next_switch(&inbox);
+            assert_eq!(label, "nope");
+            (ack.0)(Err(unknown_label("nope")));
+            // The subscribe itself still succeeds: one bare acceptance,
+            // then the refusal as an ephemeral notice, never a rejection
+            // of the subscribe id.
+            let accepted = answer_of(&client, "c_sub");
+            assert_eq!(accepted["kind"], "command_accepted", "{accepted}");
+            assert!(
+                accepted["payload"].get("result").is_none(),
+                "one bare acceptance: {accepted}"
+            );
+            let notice = recv(&client);
+            assert_eq!(notice["kind"], "notice", "{notice}");
+            assert_eq!(notice["payload"]["code"], "credential_missing", "{notice}");
+            assert_eq!(
+                notice["payload"]["message"], "no credential named `nope`",
+                "{notice}"
+            );
+            assert!(
+                notice["payload"].get("extension").is_none(),
+                "no new payload key: {notice}"
+            );
+            let history = support::until(&client, |line| line["kind"] == "clients");
+            assert_eq!(support::kinds(&history), ["clients"]);
+            // The successful subscription stands: the next prompt is
+            // delivered and answered as usual, on the old label.
+            send_text(&client, "c_1", "prompt", "hi");
+            let Delivery::Prompt(_, ack) = Deadline::after(DEADLINE).recv(&inbox).unwrap() else {
+                panic!("the prompt after a refused switch is delivered");
+            };
+            (ack.0)(Ok(None));
+            assert_eq!(answer_of(&client, "c_1")["kind"], "command_accepted");
+            assert!(
+                inbox.try_recv().is_err(),
+                "no second command was created for the switch"
+            );
+            Ok(())
+        })
+        .unwrap();
+    // The notice is connection-local and ephemeral: the log holds none.
+    let text = fs::read_to_string(dir.join("events.jsonl")).unwrap();
+    assert!(
+        text.lines().all(|line| {
+            serde_json::from_str::<Value>(line)
+                .ok()
+                .and_then(|line| line.get("kind").cloned())
+                .and_then(|kind| kind.as_str().map(str::to_owned))
+                != Some("notice".to_owned())
+        }),
+        "no durable notice"
+    );
+    close_within(opened.session, opened.log);
+}
+
+#[test]
+fn a_summary_subscribe_with_a_failing_label_notices_before_its_snapshots() {
+    reset();
+    let opened = Opened::open(Vec::new());
+    let socket = opened.socket.clone();
+    let log = Arc::clone(&opened.log);
+    opened
+        .session
+        .run(Vec::new(), Arc::new(|| false), move |inbox| {
+            log.append(&status("s1"), None, None).unwrap();
+            log.append(&extensions(), None, None).unwrap();
+            let client = Client::connect(&socket).unwrap();
+            client
+                .send(&subscribe_credential_line("c_sub", "summary", "nope"))
+                .unwrap();
+            let (_, ack) = next_switch(&inbox);
+            (ack.0)(Err(unknown_label("nope")));
+            let mut lines = Vec::new();
+            for _ in 0..4 {
+                lines.push(recv(&client));
+            }
+            let kinds: Vec<&str> = lines
+                .iter()
+                .map(|line| line["kind"].as_str().unwrap())
+                .collect();
+            assert_eq!(
+                kinds,
+                [
+                    "command_accepted",
+                    "notice",
+                    "session_status",
+                    "extensions_loaded",
+                ],
+                "the notice reaches even a summary connection, before its snapshots"
+            );
+            assert_eq!(lines[0]["payload"]["command_id"], "c_sub");
+            assert_eq!(lines[1]["payload"]["code"], "credential_missing");
+            assert_eq!(lines[2]["payload"]["name"], "s1");
+            // Ordinary summary filtering is unchanged: a later durable
+            // line that is not status or extensions never reaches this
+            // client, while a later status does. Both are appended before
+            // reading, so the status arriving proves the step was already
+            // consumed and skipped: no clock is read.
+            log.append(&step(), None, None).unwrap();
+            log.append(&status("s2"), None, None).unwrap();
+            let lines = support::until(&client, |line| {
+                line["kind"] == "session_status" && line["payload"]["name"] == "s2"
+            });
+            assert_eq!(
+                support::kinds(&lines),
+                ["session_status"],
+                "a summary connection still skips other durable lines"
+            );
+            Ok(())
+        })
+        .unwrap();
+    close_within(opened.session, opened.log);
+}
+
+#[test]
+fn a_duplicate_label_bearing_subscribe_sends_no_second_switch() {
+    reset();
+    let opened = Opened::open(Vec::new());
+    let socket = opened.socket.clone();
+    opened
+        .session
+        .run(Vec::new(), Arc::new(|| false), move |inbox| {
+            let client = Client::connect(&socket).unwrap();
+            client
+                .send(&subscribe_credential_line("c_1", "full", "work"))
+                .unwrap();
+            let (_, ack) = next_switch(&inbox);
+            (ack.0)(Ok(None));
+            assert_eq!(answer_of(&client, "c_1")["kind"], "command_accepted");
+            client
+                .send(&subscribe_credential_line("c_1", "full", "work"))
+                .unwrap();
+            let rejected = answer_of(&client, "c_1");
+            assert_eq!(rejected["kind"], "command_rejected", "{rejected}");
+            assert_eq!(
+                rejected["payload"]["code"], "duplicate_command",
+                "{rejected}"
+            );
+            assert!(
+                inbox.try_recv().is_err(),
+                "a duplicate id is never delivered twice"
+            );
+            Ok(())
+        })
+        .unwrap();
+    close_within(opened.session, opened.log);
+}
+
+#[test]
+fn a_same_level_label_bearing_subscribe_sends_no_switch() {
+    reset();
+    let opened = Opened::open(Vec::new());
+    let socket = opened.socket.clone();
+    opened
+        .session
+        .run(Vec::new(), Arc::new(|| false), move |inbox| {
+            let client = Client::connect(&socket).unwrap();
+            client.send(&subscribe_line("c_1", "full")).unwrap();
+            assert_eq!(answer_of(&client, "c_1")["kind"], "command_accepted");
+            client
+                .send(&subscribe_credential_line("c_2", "full", "work"))
+                .unwrap();
+            let rejected = answer_of(&client, "c_2");
+            assert_eq!(rejected["kind"], "command_rejected", "{rejected}");
+            assert_eq!(
+                rejected["payload"]["code"], "invalid_arguments",
+                "{rejected}"
+            );
+            assert!(
+                inbox.try_recv().is_err(),
+                "a refused level change delivers no switch"
+            );
+            Ok(())
+        })
+        .unwrap();
+    close_within(opened.session, opened.log);
+}
+
+#[test]
+fn a_closing_label_bearing_subscribe_sends_no_switch() {
+    reset();
+    let opened = Opened::open(Vec::new());
+    let Opened {
+        session,
+        log,
+        socket,
+        sessions,
+        id,
+        clock,
+        ..
+    } = opened;
+    session
+        .run(Vec::new(), Arc::new(|| false), move |inbox| {
+            // The session holds only a weak log: dropping the last Arc
+            // closes preparation with `closing`, before any switch.
+            drop(log);
+            let client = Client::connect(&socket).unwrap();
+            client
+                .send(&subscribe_credential_line("c_1", "full", "work"))
+                .unwrap();
+            let rejected = answer_of(&client, "c_1");
+            assert_eq!(rejected["kind"], "command_rejected", "{rejected}");
+            assert_eq!(rejected["payload"]["code"], "closing", "{rejected}");
+            assert!(
+                inbox.try_recv().is_err(),
+                "a refused subscription delivers no switch"
+            );
+            Ok(())
+        })
+        .unwrap();
+    // The log is reopened only to close the session; the refusal above
+    // ran while no Arc remained.
+    let log = Arc::new(Log::open(&sessions, id, clock).unwrap());
+    close_within(session, log);
+}
+
+#[test]
+fn a_closing_session_cancels_a_pending_label_switch() {
+    reset();
+    let opened = Opened::open(Vec::new());
+    let socket = opened.socket.clone();
+    opened
+        .session
+        .run(Vec::new(), Arc::new(|| false), move |inbox| {
+            let client = Client::connect(&socket).unwrap();
+            client
+                .send(&subscribe_credential_line("c_sub", "full", "work"))
+                .unwrap();
+            let (label, ack) = next_switch(&inbox);
+            assert_eq!(label, "work");
+            // The loop never answers: it holds the acknowledgement past
+            // the close, as a loop mid-turn does. The close still ends
+            // the waiting writer instead of hanging its join.
+            std::mem::forget(ack);
+            drop(client);
+            Ok(())
+        })
+        .unwrap();
+    close_within(opened.session, opened.log);
+}
+
+#[test]
+fn a_closing_session_cancels_a_pending_label_switch_despite_a_held_acknowledgement() {
+    reset();
+    let opened = Opened::open(Vec::new());
+    let socket = opened.socket.clone();
+    let (held_tx, held_rx) = mpsc::channel();
+    opened
+        .session
+        .run(Vec::new(), Arc::new(|| false), move |inbox| {
+            let client = Client::connect(&socket).unwrap();
+            client
+                .send(&subscribe_credential_line("c_sub", "full", "work"))
+                .unwrap();
+            let (label, ack) = next_switch(&inbox);
+            assert_eq!(label, "work");
+            // The loop never answers: it holds the acknowledgement past
+            // the close, as a loop mid-turn does.
+            std::mem::forget(ack);
+            // This prompt's acknowledgement clones the outbox, and the
+            // test holds it past the disconnect: the settle list survives
+            // the connection's own handle dropping, so only the reader's
+            // clear ends the waiting writer instead of hanging its join.
+            send_text(&client, "c_prompt", "prompt", "hello");
+            let prompt_ack = next_prompt(&inbox);
+            held_tx.send(prompt_ack).unwrap();
+            drop(client);
+            Ok(())
+        })
+        .unwrap();
+    let held = Deadline::after(DEADLINE)
+        .recv(&held_rx)
+        .expect("the held acknowledgement arrives");
+    close_within(opened.session, opened.log);
+    drop(held);
+}
+
+#[test]
+fn a_dead_client_ends_a_label_bearing_subscribe_without_a_hang() {
+    reset();
+    let opened = Opened::open(Vec::new());
+    let socket = opened.socket.clone();
+    let gate = Arc::clone(&opened.session.gate);
+    opened
+        .session
+        .run(Vec::new(), Arc::new(|| false), move |inbox| {
+            let before = descriptors();
+            let client = Client::connect(&socket).unwrap();
+            client
+                .send(&subscribe_credential_line("c_sub", "full", "work"))
+                .unwrap();
+            let (_, ack) = next_switch(&inbox);
+            // The client is already gone: the prelude write fails and the
+            // writer ends; the reader's cleanup reaps it either way.
+            drop(client);
+            (ack.0)(Ok(None));
+            wait_released(&gate, before);
+            Ok(())
+        })
+        .unwrap();
+    close_within(opened.session, opened.log);
+}
+
+#[test]
+fn a_level_change_with_a_label_waits_for_the_switch() {
+    reset();
+    let opened = Opened::open(Vec::new());
+    let socket = opened.socket.clone();
+    opened
+        .session
+        .run(Vec::new(), Arc::new(|| false), move |inbox| {
+            let client = Client::connect(&socket).unwrap();
+            client.send(&subscribe_line("c_1", "summary")).unwrap();
+            assert_eq!(answer_of(&client, "c_1")["kind"], "command_accepted");
+            client
+                .send(&subscribe_credential_line("c_2", "full", "work"))
+                .unwrap();
+            let (label, ack) = next_switch(&inbox);
+            assert_eq!(label, "work");
+            // Raising writes nothing before the loop answers: the writer
+            // is parked at the switch's response wait, past the empty
+            // drain, so the socket poll below sees the wait, not a
+            // thread that never ran. No clock is read.
+            wait_switch_waiting();
+            assert!(
+                client.recv(Duration::ZERO).is_none(),
+                "no line precedes the loop's answer"
+            );
+            (ack.0)(Ok(None));
+            // The acceptance is the next line on the wire: the drain was
+            // empty and no folded history precedes the loop's answer.
+            let accepted = recv(&client);
+            assert_eq!(accepted["kind"], "command_accepted", "{accepted}");
+            assert_eq!(accepted["payload"]["command_id"], "c_2", "{accepted}");
+            assert!(
+                accepted["payload"].get("result").is_none(),
+                "one bare acceptance: {accepted}"
+            );
+            let first = support::until(&client, |line| line["kind"] == "clients");
+            assert_eq!(support::kinds(&first), ["clients"]);
+            Ok(())
+        })
+        .unwrap();
+    close_within(opened.session, opened.log);
+}
+
+#[test]
+fn a_level_change_with_a_failing_label_notices_before_new_history() {
+    reset();
+    let opened = Opened::open(Vec::new());
+    let socket = opened.socket.clone();
+    opened
+        .session
+        .run(Vec::new(), Arc::new(|| false), move |inbox| {
+            let client = Client::connect(&socket).unwrap();
+            client.send(&subscribe_line("c_1", "summary")).unwrap();
+            assert_eq!(answer_of(&client, "c_1")["kind"], "command_accepted");
+            client
+                .send(&subscribe_credential_line("c_2", "full", "nope"))
+                .unwrap();
+            let (_, ack) = next_switch(&inbox);
+            (ack.0)(Err(unknown_label("nope")));
+            // One acceptance, then the notice, then folded history: the
+            // drain ran before the answer, the snapshots after it.
+            let accepted = answer_of(&client, "c_2");
+            assert_eq!(accepted["kind"], "command_accepted", "{accepted}");
+            let notice = recv(&client);
+            assert_eq!(notice["kind"], "notice", "{notice}");
+            assert_eq!(notice["payload"]["code"], "credential_missing", "{notice}");
+            let history = support::until(&client, |line| line["kind"] == "clients");
+            assert_eq!(support::kinds(&history), ["clients"]);
+            Ok(())
+        })
+        .unwrap();
+    close_within(opened.session, opened.log);
 }

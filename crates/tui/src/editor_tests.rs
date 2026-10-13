@@ -1,12 +1,13 @@
 //! Tests for Ctrl+G: choosing what opens, running the editor on a
 //! temporary file, and applying what it returns.
 
-use super::{NEXT, NO_EDITOR, Target, TempFile, command, open, run_in};
+use super::{NEXT, NO_EDITOR, Outcome, Target, TempFile, command, open, run_in};
 use crate::app::{App, Effect};
 use crate::keys::{Edit, Key};
 use contract::clock::Clock;
 use fakes::Deadline;
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
 use std::sync::mpsc;
 use std::time::Duration;
 
@@ -49,23 +50,38 @@ struct Fake {
     temp: fakes::TempDir,
     /// The script, run through `/bin/sh`.
     script: PathBuf,
+    /// The acknowledgement line the script writes when it blocks, when
+    /// its body names `$READY`.
+    ready: Option<fakes::children::Ready>,
     watchdog: Option<fakes::Watchdog>,
 }
 
 impl Fake {
     /// A fake editor whose script is `body`; `$OUT` in it is the
-    /// directory for what it copies out.
+    /// directory for what it copies out, and `$READY` the line to
+    /// acknowledge with when it blocks (`fakes::children::Ready`).
     fn new(body: &str) -> Self {
         let dir = fakes::TempDir::new("editor");
         let temp = fakes::TempDir::new("drafts");
+        let ready = body
+            .contains("$READY")
+            .then(|| fakes::children::Ready::new(dir.path()));
         let script = dir.path().join("editor.sh");
         let body = body.replace("$OUT", &dir.path().display().to_string());
+        let body = body.replace(
+            "$READY",
+            &ready
+                .as_ref()
+                .map(|ready| ready.path().display().to_string())
+                .unwrap_or_default(),
+        );
         std::fs::write(&script, body).unwrap_or_else(|err| panic!("script: {err}"));
         let watchdog = Some(fakes::Watchdog::matching(&script.display().to_string()));
         Self {
             dir,
             temp,
             script,
+            ready,
             watchdog,
         }
     }
@@ -81,13 +97,20 @@ impl Fake {
     fn run_command(&self, command: String, text: &str) -> Result<String, String> {
         let temp = self.temp.path().to_path_buf();
         let text = text.to_owned();
+        let clock: Arc<dyn Clock> = fakes::clock::FakeClock::new();
         let (done, finished) = mpsc::channel();
         std::thread::Builder::new()
             .name("editor-run".to_owned())
-            .spawn(move || done.send(run_in(&temp, &command, &text)).unwrap_or(()))
+            .spawn(move || {
+                done.send(run_in(&temp, &command, &text, &clock))
+                    .unwrap_or(())
+            })
             .unwrap_or_else(|err| panic!("spawn: {err}"));
         match Deadline::after(DEADLINE).recv(&finished) {
-            Ok(result) => result,
+            Ok(Outcome::Done(result)) => result,
+            Ok(Outcome::Stopped(signal)) => {
+                panic!("the editor wait ended on signal {signal} with no signal raised")
+            }
             Err(err) => panic!("waited {DEADLINE:?} for the editor: {err}"),
         }
     }
@@ -96,6 +119,17 @@ impl Fake {
     #[track_caller]
     fn run(&self, text: &str) -> Result<String, String> {
         self.run_command(self.command("", ""), text)
+    }
+
+    /// Waits one deadline for the script's acknowledgement line, and
+    /// returns its pids: the block below is active, so a signal raised
+    /// now cannot land before the wait it must end.
+    #[track_caller]
+    fn wait_ready(&self) -> Vec<u32> {
+        match &self.ready {
+            Some(ready) => ready.wait(DEADLINE),
+            None => panic!("the script names no $READY line to wait for"),
+        }
     }
 
     /// The files left where the temporary files are made.
@@ -215,6 +249,171 @@ fn an_editor_ended_by_a_signal_keeps_the_draft_and_names_it() {
     assert!(fake.left().is_empty());
 }
 
+/// A shutdown signal ends a blocked editor wait: the editor is ended
+/// and the wait ends with the signal's number, so the loop quits with 128
+/// plus it instead of waiting out the editor. The script `exec`s the
+/// sleeper, so the shell becomes it: the acknowledged pid is the editor
+/// pid itself, and nothing outlives it. The script acknowledges before
+/// blocking, so the raise cannot land until the sleeper runs: the line
+/// carries the shell's pid, which the exit assertion below would pass
+/// vacuously over if it never started. Each test runs in its own
+/// process, so the raise reaches only this test.
+#[test]
+fn a_shutdown_signal_ends_a_blocked_editor_wait() {
+    use signal_hook::consts::SIGTERM;
+    // `exec` makes the sleep the process Fiber waits on, as an editor run
+    // by its own name is, so the acknowledgement names the editor pid.
+    let fake = Fake::new("echo $$ > \"$READY\"\nexec sleep 30\n");
+    let command = fake.command("exec ", "");
+    let temp = fake.temp.path().to_path_buf();
+    let clock: Arc<dyn Clock> = fakes::clock::FakeClock::new();
+    let (done, finished) = mpsc::channel();
+    std::thread::Builder::new()
+        .name("editor-blocked".to_owned())
+        .spawn(move || {
+            done.send(run_in(&temp, &command, "text", &clock))
+                .unwrap_or(())
+        })
+        .unwrap_or_else(|err| panic!("spawn: {err}"));
+    let live = fake.wait_ready();
+    assert_eq!(
+        live.len(),
+        1,
+        "the acknowledgement names the editor: {live:?}"
+    );
+    signal_hook::low_level::raise(SIGTERM).unwrap_or_else(|err| panic!("raise: {err}"));
+    match Deadline::after(DEADLINE)
+        .recv(&finished)
+        .unwrap_or_else(|err| panic!("waited {DEADLINE:?} for the editor wait to end: {err}"))
+    {
+        Outcome::Stopped(signal) => assert_eq!(signal, SIGTERM),
+        Outcome::Done(result) => panic!("the blocked editor returned {result:?}"),
+    }
+    assert!(fake.left().is_empty());
+    assert!(
+        fakes::pids_exit(&live, DEADLINE),
+        "the editor outlived the shutdown: {live:?}"
+    );
+}
+
+/// An editor ignoring SIGTERM is forced down: the TERM grace cannot end
+/// it, so only the SIGKILL does, and the wait still ends with the
+/// signal's number. The shell traps TERM before replacing itself with the
+/// sleeper, and an ignored signal survives `exec`, so the sleeper also
+/// ignores it; the pid is acknowledged before the raise. The 40-poll
+/// grace always runs whole (the editor stays alive through it), so the
+/// run advances at least 800 ms of fake time: a missing grace returns at
+/// once. (No upper bound: past the grace the reap runs in real time,
+/// which a fake clock cannot observe.)
+#[test]
+fn a_term_ignoring_editor_is_forced_down_with_sigkill() {
+    use signal_hook::consts::SIGTERM;
+    let fake = Fake::new("trap '' TERM\necho $$ > \"$READY\"\nexec sleep 30\n");
+    let command = fake.command("exec ", "");
+    let temp = fake.temp.path().to_path_buf();
+    let clock: Arc<dyn Clock> = fakes::clock::FakeClock::new();
+    let (done, finished) = mpsc::channel();
+    std::thread::Builder::new()
+        .name("editor-forced".to_owned())
+        .spawn({
+            let clock = Arc::clone(&clock);
+            move || {
+                done.send(run_in(&temp, &command, "text", &clock))
+                    .unwrap_or(())
+            }
+        })
+        .unwrap_or_else(|err| panic!("spawn: {err}"));
+    let live = fake.wait_ready();
+    assert_eq!(
+        live.len(),
+        1,
+        "the acknowledgement names the editor: {live:?}"
+    );
+    // Measured from the raise: the wait loop busy-spins the fake clock
+    // while the test runs, so anything before it is not the run's time.
+    let before = clock.now();
+    signal_hook::low_level::raise(SIGTERM).unwrap_or_else(|err| panic!("raise: {err}"));
+    match Deadline::after(DEADLINE)
+        .recv(&finished)
+        .unwrap_or_else(|err| panic!("waited {DEADLINE:?} for the editor wait to end: {err}"))
+    {
+        Outcome::Stopped(signal) => assert_eq!(signal, SIGTERM),
+        Outcome::Done(result) => panic!("the blocked editor returned {result:?}"),
+    }
+    let advanced = clock.now().saturating_duration_since(before);
+    assert!(
+        advanced >= Duration::from_millis(800),
+        "the TERM grace ran whole: {advanced:?}"
+    );
+    assert!(fake.left().is_empty());
+    assert!(
+        fakes::pids_exit(&live, DEADLINE),
+        "the editor outlived the shutdown: {live:?}"
+    );
+}
+
+/// A signal from before the run never stops it: a stale shutdown flag is
+/// consumed by the pre-spawn clear, so a quick editor still completes.
+/// Each test runs in its own process, so the raise reaches only this test.
+#[test]
+fn a_signal_from_before_the_run_never_stops_it() {
+    use signal_hook::consts::SIGTERM;
+    use std::sync::atomic::Ordering;
+    // Installed before the raise, so the raise sets the flag instead of
+    // ending the test process.
+    let forward = super::forwarded();
+    signal_hook::low_level::raise(SIGTERM).unwrap_or_else(|err| panic!("raise: {err}"));
+    // The flag read is a poll with a Deadline: delivery is asynchronous,
+    // so the set is awaited, and the run after it is ordinary.
+    let deadline = Deadline::after(DEADLINE);
+    while !forward.term.load(Ordering::SeqCst) {
+        if deadline.left().is_zero() {
+            panic!("waited {DEADLINE:?} for the TERM flag to read set");
+        }
+        std::thread::yield_now();
+    }
+    let fake = Fake::new(":\n");
+    assert_eq!(fake.run("text"), Ok("text".to_owned()));
+    assert!(fake.left().is_empty());
+}
+
+/// A terminal interrupt while the editor runs ends the editor as its own
+/// signal: the wait forwards this process's SIGINT to the editor pid,
+/// so Ctrl+C with the terminal handed over still ends only the editor.
+/// Each test runs in its own process, so the raise reaches only this test.
+#[test]
+fn an_interrupt_while_the_editor_runs_ends_it_as_its_signal() {
+    use signal_hook::consts::SIGINT;
+    // `exec` makes the sleep the process waited on, as an editor run by
+    // its own name is, so the forwarded interrupt ends that process as
+    // its signal on every platform's shell.
+    let fake = Fake::new("echo $$ > \"$READY\"\nexec sleep 30\n");
+    let command = fake.command("exec ", "");
+    let temp = fake.temp.path().to_path_buf();
+    let clock: Arc<dyn Clock> = fakes::clock::FakeClock::new();
+    let (done, finished) = mpsc::channel();
+    std::thread::Builder::new()
+        .name("editor-interrupt".to_owned())
+        .spawn(move || {
+            done.send(run_in(&temp, &command, "text", &clock))
+                .unwrap_or(())
+        })
+        .unwrap_or_else(|err| panic!("spawn: {err}"));
+    fake.wait_ready();
+    signal_hook::low_level::raise(SIGINT).unwrap_or_else(|err| panic!("raise: {err}"));
+    match Deadline::after(DEADLINE)
+        .recv(&finished)
+        .unwrap_or_else(|err| panic!("waited {DEADLINE:?} for the editor wait to end: {err}"))
+    {
+        Outcome::Done(result) => assert_eq!(
+            result,
+            Err("The editor was ended by signal 2; the draft is unchanged.".to_owned())
+        ),
+        Outcome::Stopped(signal) => panic!("the interrupted editor stopped on signal {signal}"),
+    }
+    assert!(fake.left().is_empty());
+}
+
 #[test]
 fn an_unreadable_file_keeps_the_draft_and_says_so() {
     let fake = Fake::new("rm \"$1\"\n");
@@ -234,13 +433,17 @@ impl Fake {
     fn open(&self, path: &Path) -> Result<(), String> {
         let command = self.command("", "");
         let path = path.to_path_buf();
+        let clock: Arc<dyn Clock> = fakes::clock::FakeClock::new();
         let (done, finished) = mpsc::channel();
         std::thread::Builder::new()
             .name("editor-open".to_owned())
-            .spawn(move || done.send(open(&command, &path)).unwrap_or(()))
+            .spawn(move || done.send(open(&command, &path, &clock)).unwrap_or(()))
             .unwrap_or_else(|err| panic!("spawn: {err}"));
         match Deadline::after(DEADLINE).recv(&finished) {
-            Ok(result) => result,
+            Ok(Outcome::Done(result)) => result,
+            Ok(Outcome::Stopped(signal)) => {
+                panic!("the editor wait ended on signal {signal} with no signal raised")
+            }
             Err(err) => panic!("waited {DEADLINE:?} for the editor: {err}"),
         }
     }
@@ -269,22 +472,29 @@ fn open_reports_a_failing_editor() {
     );
     let fake = Fake::new("kill -INT $$\n");
     let command = fake.command("exec ", "");
+    let clock: Arc<dyn Clock> = fakes::clock::FakeClock::new();
     let (done, finished) = mpsc::channel();
     std::thread::Builder::new()
         .name("editor-open-signal".to_owned())
-        .spawn(move || done.send(open(&command, &path)).unwrap_or(()))
+        .spawn(move || done.send(open(&command, &path, &clock)).unwrap_or(()))
         .unwrap_or_else(|err| panic!("spawn: {err}"));
     assert_eq!(
         Deadline::after(DEADLINE).recv(&finished).ok(),
-        Some(Err("The editor was ended by signal 2.".to_owned()))
+        Some(Outcome::Done(Err(
+            "The editor was ended by signal 2.".to_owned()
+        )))
     );
 }
 
 #[test]
 fn no_directory_for_the_file_says_so_and_runs_nothing() {
     let fake = Fake::new("printf 'ran' > $OUT/ran\n");
+    let clock: Arc<dyn Clock> = fakes::clock::FakeClock::new();
     let missing = fake.temp.path().join("missing");
-    let result = run_in(&missing, &fake.command("", ""), "x");
+    let result = run_in(&missing, &fake.command("", ""), "x", &clock);
+    let Outcome::Done(result) = result else {
+        panic!("the editor wait ended on a signal with no signal raised");
+    };
     assert!(
         result
             .as_ref()
@@ -379,6 +589,18 @@ fn ctrl_g_does_nothing_while_the_search_panel_is_open() {
     press(&mut app, Key::CtrlR);
     assert_eq!(press(&mut app, Key::CtrlG), Effect::None);
     assert!(app.completions().is_some());
+}
+
+/// Repeated runs register cleanly: cycling the run exercises registration
+/// and unregistration each time, so a leaked handler would accumulate
+/// callbacks process-wide instead of ending with the run.
+#[test]
+fn repeated_editor_runs_register_cleanly() {
+    let fake = Fake::new(":\n");
+    for _ in 0..5 {
+        assert_eq!(fake.run("text"), Ok("text".to_owned()));
+    }
+    assert!(fake.left().is_empty());
 }
 
 /// The name [`TempFile::create`] gives number `n` in `dir`.

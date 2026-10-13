@@ -101,6 +101,127 @@ fn preamble_line(trigger: Option<u64>) -> Line {
     session_line("preamble_built", payload)
 }
 
+/// A waiting `session_status` for another live session than the
+/// attached one.
+fn other_waiting(session: &str) -> Line {
+    Line::Session(contract::Envelope {
+        kind: "session_status".to_owned(),
+        session_id: contract::SessionId(session.to_owned()),
+        ts: 0,
+        schema_version: contract::SCHEMA_VERSION,
+        turn_id: None,
+        action_id: Some(contract::ActionId("a_1".to_owned())),
+        seq: None,
+        payload: serde_json::json!({
+            "name": "other", "workspace": "/Users/you/work/fiber",
+            "project": "-w", "state": "waiting", "since": 0,
+            "waiting": {"request_id": "r_1", "kind": "approval",
+                "summary": "shell ls"},
+            "spend": {"tokens": {"input": 1, "cache_read": 0,
+                "cache_write": {}, "output": 2},
+                "cost": 0.0, "subscription_cost": 0.0},
+            "model": "test/model", "delegates": 0, "jobs": 0,
+            "clients": 0,
+        })
+        .as_object()
+        .cloned()
+        .unwrap_or_default(),
+    })
+}
+
+/// An idle `session_status` for another live session than the
+/// attached one.
+fn other_idle(session: &str) -> Line {
+    Line::Session(contract::Envelope {
+        kind: "session_status".to_owned(),
+        session_id: contract::SessionId(session.to_owned()),
+        ts: 0,
+        schema_version: contract::SCHEMA_VERSION,
+        turn_id: None,
+        action_id: Some(contract::ActionId("a_1".to_owned())),
+        seq: None,
+        payload: serde_json::json!({
+            "name": "other", "workspace": "/Users/you/work/fiber",
+            "project": "-w", "state": "idle", "since": 0,
+            "spend": {"tokens": {"input": 1, "cache_read": 0,
+                "cache_write": {}, "output": 2},
+                "cost": 0.0, "subscription_cost": 0.0},
+            "model": "test/model", "delegates": 0, "jobs": 0,
+            "clients": 0,
+        })
+        .as_object()
+        .cloned()
+        .unwrap_or_default(),
+    })
+}
+
+/// Hides the rail as ⌥R does, so the hidden rail's grip is drawn.
+fn hide_rail(app: &mut App) {
+    use contract::clock::Clock;
+    app.on_key(crate::keys::Key::AltR, fakes::clock::FakeClock::new().now());
+    assert!(
+        app.chrome()
+            .layout()
+            .is_some_and(|layout| layout.rail.is_none())
+    );
+}
+
+/// With the rail hidden and sessions waiting, the Session card ends with
+/// "! N waiting · hidden · show" in attention with a bold "!", and a
+/// click on it carries Spot::Waiting (`docs/tui.md`, "The panel").
+#[test]
+fn the_session_card_ends_with_the_hidden_rail_line() {
+    use crate::app::panel::Spot;
+    use crate::markdown::{Role, style};
+    use ratatui::style::Modifier;
+    let mut app = attached(160, 40);
+    app.on_line(status_line(
+        spend(1, 0, 0, 2, serde_json::json!(0.0), 0.0),
+        None,
+    ));
+    app.on_line(other_waiting("s_bbbbbbbbbbbbbbbb"));
+    app.on_line(other_waiting("s_cccccccccccccccc"));
+    hide_rail(&mut app);
+    let drawn = rows(&app, 40);
+    // The card's edges frame its rows: the last text row is the line.
+    assert!(drawn.len() > 2);
+    let line = &drawn[drawn.len() - 2];
+    assert_eq!(line.line.to_string(), "! 2 waiting · hidden · show");
+    assert_eq!(line.spot, Some(Spot::Waiting));
+    assert_eq!(line.line.spans.len(), 2);
+    assert_eq!(line.line.spans[0].content, "!");
+    assert_eq!(
+        line.line.spans[0].style,
+        style(Role::Attention).add_modifier(Modifier::BOLD)
+    );
+    assert_eq!(line.line.spans[1].content, " 2 waiting · hidden · show");
+    assert_eq!(line.line.spans[1].style, style(Role::Attention));
+    // The line ends the card: the first text row is the directory.
+    assert!(drawn[1].line.to_string().starts_with("directory"));
+}
+
+/// With the rail hidden and three live sessions but none waiting,
+/// `rail_waiting()` is `Some(0)` and the Session card shows no waiting
+/// line: the `> 0` guard keeps the `>=` mutant's bogus "! 0 waiting ·
+/// hidden · show" row out (`docs/tui.md`, "The panel").
+#[test]
+fn hidden_rail_with_no_waiting_sessions_shows_no_line() {
+    let mut app = attached(160, 40);
+    app.on_line(status_line(
+        spend(1, 0, 0, 2, serde_json::json!(0.0), 0.0),
+        None,
+    ));
+    app.on_line(other_idle("s_bbbbbbbbbbbbbbbb"));
+    app.on_line(other_idle("s_cccccccccccccccc"));
+    hide_rail(&mut app);
+    assert_eq!(app.rail_waiting(), Some(0));
+    assert!(
+        rows(&app, 40)
+            .iter()
+            .all(|row| !row.line.to_string().contains("hidden · show"))
+    );
+}
+
 /// The drawn rows' text at `width`.
 fn texts(app: &App, width: u16) -> Vec<String> {
     rows(app, width)

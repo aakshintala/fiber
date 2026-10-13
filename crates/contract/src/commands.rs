@@ -347,6 +347,9 @@ pub enum SubscribeLevel {
 pub struct SubscribeArgs {
     /// `summary` or `full`.
     pub level: SubscribeLevel,
+    /// A credential label of the session model's provider.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub credential: Option<String>,
 }
 
 /// The `args` of `name`.

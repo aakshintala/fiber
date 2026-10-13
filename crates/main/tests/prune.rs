@@ -14,10 +14,12 @@
 mod support;
 
 use std::fs::{self, File};
+use std::os::unix::fs::PermissionsExt;
 use std::os::unix::process::CommandExt;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 use std::sync::mpsc;
+use std::sync::{Arc, Mutex};
 use std::thread;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
@@ -222,9 +224,66 @@ fn a_young_fork_blocks_then_cascade_removes_both() {
     assert!(out.contains(ROOT), "{out}");
     assert!(out.contains(FORK), "{out}");
     assert!(root.is_dir() && fork.is_dir(), "the fork blocks the root");
+    // The cascade prune needs a ready hub, not a fast cold start: starting
+    // the hub here waits for its hello under the test deadline, and the
+    // held connection keeps it from idling out before the prune connects.
+    let hub = Arc::new(Mutex::new(None));
+    let (client, _) = connect_hub(&setup, &hub);
     let output = prune(&setup, &["--cascade", "--yes", "--older-than", "30d"]);
     assert_eq!(output.status.code(), Some(0), "{}", text(&output.stderr));
     assert!(!root.exists() && !fork.exists());
+    drop(client);
+    until_absent(setup.deadline, &setup.hub_socket(), "the hub to idle out");
+}
+
+/// Restores the run directory's writable mode if the test exits early.
+struct RunDirPermissions(PathBuf);
+
+impl Drop for RunDirPermissions {
+    fn drop(&mut self) {
+        fs::set_permissions(&self.0, fs::Permissions::from_mode(0o700)).unwrap_or(());
+    }
+}
+
+#[test]
+fn a_prune_that_cannot_bind_fails_then_meets_a_ready_one() {
+    // Spawn-sabotage repro for #2121: with the same `run/` mode and prune
+    // inputs, a cold-start cannot bind `run/hub`, while a held hub already
+    // bound there lets the prune pass. `doors::hub::connect` retries the
+    // absent socket only until its existing 5 s bind deadline, so the
+    // cold run fails deterministically; the `did not bind` error is the
+    // signal that the product reached that bounded failure. No stand-in,
+    // sleeps, raised deadlines or budgets.
+    let setup = setup();
+    let dir = session(&setup, ROOT, None, 0);
+    let run = setup.home().join("run");
+    fs::create_dir(&run).unwrap();
+    let _restore_run_permissions = RunDirPermissions(run.clone());
+    fs::set_permissions(&run, fs::Permissions::from_mode(0o500)).unwrap();
+
+    let output = prune(&setup, &["--yes", "--older-than", "30d"]);
+    let stderr = text(&output.stderr);
+    assert_ne!(output.status.code(), Some(0), "{stderr}");
+    assert!(
+        stderr.contains("did not bind"),
+        "the cold-start hub could not bind run/hub: {stderr}"
+    );
+    assert!(dir.join("events.jsonl").is_file(), "nothing is deleted");
+
+    // Let the test start and hold a real hub, then restore the same
+    // unwritable run-directory condition before the identical prune.
+    fs::set_permissions(&run, fs::Permissions::from_mode(0o700)).unwrap();
+    let hub = Arc::new(Mutex::new(None));
+    let (client, _) = connect_hub(&setup, &hub);
+    fs::set_permissions(&run, fs::Permissions::from_mode(0o500)).unwrap();
+    let output = prune(&setup, &["--yes", "--older-than", "30d"]);
+    let stderr = text(&output.stderr);
+    assert_eq!(output.status.code(), Some(0), "{stderr}");
+    assert!(!dir.exists(), "the session is gone: {stderr}");
+
+    // The hub needs write permission to unlink its socket on idle exit.
+    fs::set_permissions(&run, fs::Permissions::from_mode(0o700)).unwrap();
+    drop(client);
     until_absent(setup.deadline, &setup.hub_socket(), "the hub to idle out");
 }
 

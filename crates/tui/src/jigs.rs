@@ -10,7 +10,7 @@ use contract::{Envelope, Seq};
 use ratatui::buffer::Buffer;
 use ratatui::layout::Rect;
 
-use crate::app::App;
+use crate::app::{App, Effect};
 use crate::event_loop::batch::HUB_BATCH;
 use crate::keys::Key;
 use crate::link::Line;
@@ -338,12 +338,40 @@ pub fn measure_paging(
         paging.app.jump(jumped);
         slowest_jump = slowest_jump.max(paging.frame()?.0);
     }
-    let (search_took, search_matches) = paging.search("shell")?;
+    // No session lines, no search: an empty log still reports, with
+    // both searches at zero, rather than failing the smoke run.
+    let connected = paging.app.session().is_some();
+    let (search_took, search_matches) = if connected {
+        // The scan fetches dropped pages with `history`, so the jig
+        // connects once first: the answers come from the log, as the
+        // hub's would. Later searches reuse the connection.
+        paging.app.on_line(Line::Hub(contract::HubLine {
+            kind: "hub_hello".to_owned(),
+            ts: 0,
+            schema_version: contract::SCHEMA_VERSION,
+            payload: serde_json::Map::new(),
+        }));
+        paging.search("shell")?
+    } else {
+        (Duration::ZERO, 0)
+    };
+    // The resize, timed from before `set_size` through the frame it
+    // draws: recounting, settling, loading and drawing all count.
     let mut slowest_width = Duration::ZERO;
     for wide in [width.saturating_sub(1), width] {
+        let resize_started = clock.now();
         paging.app.set_size(wide, height);
-        slowest_width = slowest_width.max(paging.frame()?.0);
+        paging.frame()?;
+        slowest_width = slowest_width.max(clock.now().saturating_duration_since(resize_started));
     }
+    // A fresh absent search after the resize: the prior search closes
+    // first, so its matches never answer for the new query. With no
+    // session there is nothing to search, as above.
+    let absent_took = if connected {
+        paging.search_absent()?
+    } else {
+        Duration::ZERO
+    };
     paging.app.on_key(Key::End, clock.now());
     paging.frame()?;
     let pages_before = paging.app.pages().index().pages().len();
@@ -362,6 +390,7 @@ pub fn measure_paging(
          slowest jump frame: {:.2} ms, of {JUMPS} to row {jumped}\n\
          search of the whole log: {:.2} ms, {search_matches} matches\n\
          slowest re-count at a new width: {:.2} ms\n\
+         search of the whole log with no match: {:.2} ms, 0 matches\n\
          slowest append frame: {:.2} ms, of {appended}; pages while appending: {} to {}, \
          most resident {}\n",
         paging.log.len(),
@@ -370,6 +399,7 @@ pub fn measure_paging(
         ms(slowest_jump),
         ms(search_took),
         ms(slowest_width),
+        ms(absent_took),
         ms(slowest_append),
         pages_before,
         paging.app.pages().index().pages().len(),
@@ -393,26 +423,29 @@ struct Paging<'a> {
 }
 
 impl Paging<'_> {
-    /// Types `query` into the search bar and answers its `history`
-    /// commands from the log until the count stops scanning. Returns how
-    /// long the scan took and how many matches it kept (`docs/tui.md`,
-    /// "History and paging": search of the whole log).
+    /// Types `query` into a fresh search bar and answers its `history`
+    /// commands from the log until the count stops scanning. The prior
+    /// search closes first, and the query's generation comes from the
+    /// keystrokes' own effects, never from its length, so repeated
+    /// searches never share one. Returns how long the scan took and how
+    /// many matches it kept (`docs/tui.md`, "History and paging":
+    /// search of the whole log).
     fn search(&mut self, query: &str) -> Result<(Duration, usize), String> {
-        // The scan fetches dropped pages with `history`, so the jig
-        // connects first: the answers come from the log, as the hub's
-        // would.
-        self.app.on_line(Line::Hub(contract::HubLine {
-            kind: "hub_hello".to_owned(),
-            ts: 0,
-            schema_version: contract::SCHEMA_VERSION,
-            payload: serde_json::Map::new(),
-        }));
+        if self.app.find_bar().is_some() {
+            let now = self.clock.now();
+            self.app.on_key(Key::Esc, now);
+        }
         let now = self.clock.now();
         self.app.on_key(Key::CtrlF, now);
-        for ch in query.chars() {
-            self.app.on_key(Key::Char(ch), now);
+        if self.app.find_bar().is_none() {
+            return Err("the log holds no session to search".to_owned());
         }
-        let generation = u64::try_from(query.chars().count()).unwrap_or(u64::MAX);
+        let mut generation = 0u64;
+        for ch in query.chars() {
+            if let Effect::FindPause { generation: g, .. } = self.app.on_key(Key::Char(ch), now) {
+                generation = g;
+            }
+        }
         let started = self.clock.now();
         let mut outgoing = self.app.find_due(generation);
         let bound = self
@@ -441,15 +474,7 @@ impl Paging<'_> {
                 .and_then(|args| args.get("to_seq"))
                 .and_then(serde_json::Value::as_u64)
                 .unwrap_or(u64::MAX);
-            let mut held: Vec<Envelope> = Vec::new();
-            for (_, line) in self
-                .log
-                .iter()
-                .skip_while(|(seq, _)| seq.0 < from)
-                .take_while(|(seq, _)| seq.0 <= to)
-            {
-                held.push(serde_json::from_str(line).map_err(|error| error.to_string())?);
-            }
+            let held = self.range_lines(from, to)?;
             let answer = contract::Envelope {
                 kind: "command_accepted".to_owned(),
                 session_id: self
@@ -468,6 +493,11 @@ impl Paging<'_> {
                     .unwrap_or_default(),
             };
             outgoing = self.app.on_line(Line::Session(answer));
+            // The settle after the answer queues its own fetch into the
+            // search's unsent lines, past what `on_line` returns: drain
+            // them too, or an orphaned fetch blocks the wire forever.
+            // With the scan due this drains alone and settles nothing.
+            outgoing.extend(self.app.find_due(generation));
         }
         if outgoing.into_iter().next().is_some() {
             return Err("the search never settled".to_owned());
@@ -478,12 +508,54 @@ impl Paging<'_> {
         ))
     }
 
+    /// A fresh absent search after the resize: the query matches nothing
+    /// in any generated session, so a match, a cap, a failed fetch or
+    /// an unsettled scan is an error, never a fast sample. Returns how
+    /// long the complete zero-match scan took.
+    fn search_absent(&mut self) -> Result<Duration, String> {
+        const ABSENT: &str = "qqq-no-such-match";
+        let (took, matches) = self.search(ABSENT)?;
+        if matches != 0 {
+            return Err(format!("the absent query matched {matches} times"));
+        }
+        match self.app.find_bar() {
+            Some(bar) if bar.count == "no matches" => Ok(took),
+            bar => Err(format!(
+                "the absent search never completed: {:?}",
+                bar.map(|bar| bar.count)
+            )),
+        }
+    }
+
+    /// The log's lines from `from_seq` to `to_seq`, both ends included:
+    /// the fetch's inclusive range, found with `partition_point`, never
+    /// by walking each log prefix. Sparse seqs are fine: entries below
+    /// `from` are skipped and entries past `to` end the take.
+    fn range_lines(&self, from: u64, to: u64) -> Result<Vec<Envelope>, String> {
+        let start = self.log.partition_point(|(seq, _)| seq.0 < from);
+        let mut held: Vec<Envelope> = Vec::new();
+        for (_, line) in self
+            .log
+            .iter()
+            .skip(start)
+            .take_while(|(seq, _)| seq.0 <= to)
+        {
+            held.push(serde_json::from_str(line).map_err(|error| error.to_string())?);
+        }
+        Ok(held)
+    }
+
     /// One frame: loads what it needs from the log and draws. Returns how
-    /// long it took and whether it loaded a page.
+    /// long it took and whether it loaded a page. The frame lists what it
+    /// needs once: each load settles and trims, so re-listing after every
+    /// page would walk the whole stale set once per page. Loading from the
+    /// snapshot settles the same pages in the same order; a load never
+    /// needs a page the snapshot lacks.
     fn frame(&mut self) -> Result<(Duration, bool), String> {
         let started = self.clock.now();
+        let wanted = self.app.needs();
         let mut loaded = false;
-        while let Some(range) = self.app.needs().into_iter().next() {
+        for range in &wanted {
             let from = self.log.partition_point(|(seq, _)| seq < range.start());
             let mut lines = Vec::new();
             for (_, line) in self
@@ -494,14 +566,14 @@ impl Paging<'_> {
             {
                 lines.push(serde_json::from_str(line).map_err(|error| error.to_string())?);
             }
-            self.app.load(lines);
-            if self.app.needs().first() == Some(&range) {
+            if lines.is_empty() {
                 return Err(format!(
                     "the log holds no lines {}..={}",
                     range.start().0,
                     range.end().0
                 ));
             }
+            self.app.load(lines);
             loaded = true;
         }
         let mut buf = Buffer::empty(self.area);

@@ -263,7 +263,7 @@ fn after_the_editor_returns_the_pointer_shape_is_written_again() {
         },
     )
     .unwrap_or_else(|err| panic!("winsize: {err}"));
-    assert_eq!(lp.hand_over(|| {}), None);
+    assert_eq!(lp.hand_over(|| None), None);
     lp.write_shape();
     (&pair.slave)
         .write_all(b"ENDMARK")

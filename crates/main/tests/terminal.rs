@@ -22,10 +22,10 @@ use std::process::Stdio;
 use std::sync::mpsc;
 use std::thread;
 
-use fakes::{ProviderServer, Response};
+use fakes::{ProviderServer, Response, fingerprint};
 use serde_json::{Value, json};
-use support::pty::{KITTY_PUSH, TITLE, WAITING_TITLE};
-use support::{Deadline, PIXEL, hello, write_json};
+use support::pty::{FINISHED_TITLE, KITTY_PUSH, TITLE, WAITING_TITLE};
+use support::{Deadline, PIXEL, hello, text_reply, write_json};
 
 /// Installs a provider `fake` with model `m` on `openai-responses` at the
 /// fake server, makes `fake/m` the configured model, and idles the hub
@@ -1335,5 +1335,790 @@ fn journey_quit_just_resumed_session_prints_its_resume_line() {
     assert!(
         terminal.contains(&line),
         "quitting a just-resumed session prints its resume line; terminal:\n{terminal}"
+    );
+}
+
+// Binary-level tests of `fiber resume --credential <label>`
+// (`docs/model-routing.md`, "Which credential a session uses"): the
+// real binary in a pseudo-terminal resumes a session onto another
+// stored credential label, through the hub, with a fake provider.
+// Every request fingerprint is asserted after its signaled
+// request/turn; no test sleeps or reads the real clock.
+
+/// Stores `stored` as `credentials/fake/<label>`, each holding
+/// `<label>-key`, and names `label` as the fake provider's credential,
+/// keeping the hub's test idle exit so no hub lingers. Credential and
+/// config setup always lands before any config snapshot.
+fn labels(setup: &support::Setup, label: &str, stored: &[&str]) {
+    for name in stored {
+        config::store_credential(
+            &setup.home(),
+            "fake",
+            name,
+            &config::Secret::new(format!("{name}-key\n")),
+        )
+        .unwrap();
+    }
+    write_json(
+        &setup.home().join("config.json"),
+        &json!({"model": "fake/m", "providers": {"fake": {"credential": label}}, "hub": {"idle_exit_ms": 1000}}),
+    );
+}
+
+/// The recorded credential header equals the fingerprint of `value`
+/// (`docs/testing.md`, "Model calls"): secrets never cross the log.
+fn assert_fingerprint(request: &fakes::Request, value: &str) {
+    assert_eq!(
+        request.header("authorization"),
+        Some(fingerprint(value).as_str()),
+        "authorization"
+    );
+}
+
+/// One config file's bytes, or its absence when the file is not there.
+#[derive(PartialEq, Eq, Debug)]
+struct ConfigSnapshot {
+    global: Option<Vec<u8>>,
+    project: Option<Vec<u8>>,
+    repository: Option<Vec<u8>>,
+}
+
+fn read_optional(path: &Path) -> Option<Vec<u8>> {
+    fs::read(path).ok()
+}
+
+/// The global, project and repository config bytes: a resume switches
+/// a session's credential, never any configuration file.
+fn snapshot_config(setup: &support::Setup) -> ConfigSnapshot {
+    let workspace = fs::canonicalize(setup.workspace()).unwrap();
+    let key = workspace.to_string_lossy().replace('/', "-");
+    ConfigSnapshot {
+        global: read_optional(&setup.home().join("config.json")),
+        project: read_optional(&setup.home().join("projects").join(key).join("config.json")),
+        repository: read_optional(&setup.workspace().join(".fiber/config.json")),
+    }
+}
+
+#[track_caller]
+fn assert_config_unchanged(setup: &support::Setup, before: &ConfigSnapshot) {
+    assert_eq!(snapshot_config(setup), *before, "a config file changed");
+}
+
+/// Reads the session's `events.jsonl` until its kinds are exactly
+/// `expected`, in order, or the deadline expires: the screen can show
+/// a finished turn on an earlier turn's markers, so `turn_finished`
+/// returning never proves the turn's durable events landed (see
+/// #2211). A trailing partial line is still arriving and never
+/// counts. Returns the last read; the caller asserts its kinds, which
+/// fail on expiry before the log is complete.
+fn wait_session_events(setup: &support::Setup, id: &str, expected: &[&str]) -> Vec<Value> {
+    loop {
+        let bytes = events_bytes(setup, id);
+        let text = String::from_utf8(bytes).unwrap();
+        let events: Vec<Value> = support::complete_lines(&text);
+        if event_kinds(&events).as_slice() == expected {
+            return events;
+        }
+        if setup.deadline.left().is_zero() {
+            return events;
+        }
+        thread::yield_now();
+    }
+}
+
+/// The raw bytes of the session's `events.jsonl`.
+fn events_bytes(setup: &support::Setup, id: &str) -> Vec<u8> {
+    fs::read(sessions(setup).join(id).join("events.jsonl")).unwrap()
+}
+
+/// The kinds of the session's log, in order.
+fn event_kinds(events: &[Value]) -> Vec<&str> {
+    events
+        .iter()
+        .map(|line| line["kind"].as_str().unwrap())
+        .collect()
+}
+
+/// The kinds of the session every credential-resume test starts from:
+/// one open and one finished turn. An exited seed appends the ask
+/// process's `fiber_exited`; a live terminal's session has none yet.
+/// A resumed session never repeats `session_started` or
+/// `opening_message`.
+fn opened_kinds(exited: bool) -> Vec<&'static str> {
+    let mut kinds = vec![
+        "session_started",
+        "fiber_started",
+        "extensions_loaded",
+        "preamble_built",
+        "opening_message",
+        "turn_started",
+        "step_started",
+        "assistant_message_started",
+        "text_completed",
+        "usage_recorded",
+        "assistant_message_completed",
+        "turn_completed",
+    ];
+    if exited {
+        kinds.push("fiber_exited");
+    }
+    kinds
+}
+
+/// The kinds of one typed turn after the resume, through this file's
+/// fake provider: the `hello` reply streams whole, so there are no
+/// deltas.
+fn resumed_turn_kinds() -> Vec<&'static str> {
+    vec![
+        "turn_started",
+        "step_started",
+        "assistant_message_started",
+        "text_completed",
+        "usage_recorded",
+        "assistant_message_completed",
+        "turn_completed",
+    ]
+}
+
+/// Spawns `fiber resume <id> --credential <label>` on a terminal.
+fn resume_with<'a>(setup: &'a support::Setup, id: &'a str, label: &'a str) -> support::pty::Run {
+    terminal(setup, 120, 32, &["resume", id, "--credential", label], &[])
+}
+
+/// Quits from a screen with no live session and waits for a clean
+/// exit: the primary screen is back and the process ends 0.
+#[track_caller]
+fn quit_clean(mut run: support::pty::Run) {
+    run.write(b"\x03\x03\r");
+    run.wait_screen("the restored primary screen", |grid| {
+        !grid.alternate_screen && !grid.hide_cursor
+    });
+    let output = run.wait();
+    assert_eq!(output.status.code(), Some(0));
+}
+
+/// Quits a terminal attached to a live session: the primary screen
+/// carries the session's resume line. The caller reaps the run with
+/// `wait` only once every terminal sharing its hub has quit, since
+/// each wait holds until the hub exits after its last client leaves.
+#[track_caller]
+fn quit_keys(run: &mut support::pty::Run) {
+    run.write(b"\x03\x03\r");
+    run.wait_screen("the primary screen with the resume line", |grid| {
+        !grid.alternate_screen && !grid.hide_cursor && grid.contents.contains("fiber resume")
+    });
+}
+
+#[track_caller]
+fn assert_exited(run: support::pty::Run) {
+    let output = run.wait();
+    assert_eq!(output.status.code(), Some(0));
+}
+
+/// Quits a terminal attached to a live session and waits for a clean
+/// exit: the primary screen carries the session's resume line.
+#[track_caller]
+fn quit_live(mut run: support::pty::Run) {
+    quit_keys(&mut run);
+    assert_exited(run);
+}
+
+#[test]
+fn resume_with_a_credential_switches_an_exited_session_to_the_asked_label() {
+    let setup = support::Setup::new();
+    let server = ProviderServer::start([hello(), hello()]).unwrap();
+    provider(&setup, &server);
+    labels(&setup, "home", &["home", "work"]);
+    let before_seed = snapshot_config(&setup);
+    let asked = ask(&setup, &["ask", "first"]);
+    assert_eq!(asked.status.code(), Some(0));
+    assert_fingerprint(&server.requests()[0], "Bearer home-key");
+    assert_config_unchanged(&setup, &before_seed);
+    let id = only_session(&setup);
+    let before_resume = snapshot_config(&setup);
+    let mut run = resume_with(&setup, &id, "work");
+    run.wait_screen("the first frame", |grid| grid.contents.contains("›"));
+    run.ready();
+    // The exited turn replays, then its close.
+    run.wait_screen("the restored answer", |grid| {
+        grid.contents.contains("Hello.")
+    });
+    run.wait_screen("the closed turn", |grid| {
+        grid.contents.contains("completed")
+    });
+    // A new prompt runs on the asked label.
+    let from = run.output().len();
+    run.write(b"second\r");
+    assert!(
+        server.await_requests(2, setup.deadline.left()),
+        "the second request to reach the server"
+    );
+    run.turn_finished(from);
+    let requests = server.requests();
+    assert_eq!(requests.len(), 2, "{requests:?}");
+    assert_fingerprint(&requests[1], "Bearer work-key");
+    // One driver-source change, home before and work after, ahead of
+    // the resumed startup's preamble on the new label.
+    // The complete ordered log: the seeded ask, the resume's startup
+    // with the asked label switched ahead of its preamble, then the
+    // typed turn. A duplicated, missing or reordered event fails here.
+    let mut expected = opened_kinds(true);
+    expected.extend([
+        "fiber_started",
+        "extensions_loaded",
+        "model_changed",
+        "preamble_built",
+    ]);
+    expected.extend(resumed_turn_kinds());
+    let events = wait_session_events(&setup, &id, &expected);
+    assert_eq!(event_kinds(&events), expected);
+    let changed: Vec<&Value> = events
+        .iter()
+        .filter(|line| line["kind"] == "model_changed")
+        .collect();
+    assert_eq!(changed.len(), 1, "{:?}", event_kinds(&events));
+    assert_eq!(changed[0]["payload"]["source"], "driver");
+    assert_eq!(changed[0]["payload"]["before"]["credential"], "home");
+    assert_eq!(changed[0]["payload"]["after"]["credential"], "work");
+    let kinds = event_kinds(&events);
+    let changed_at = kinds
+        .iter()
+        .position(|kind| *kind == "model_changed")
+        .unwrap();
+    let built_after = events[changed_at..]
+        .iter()
+        .find(|line| line["kind"] == "preamble_built")
+        .unwrap();
+    assert_eq!(built_after["payload"]["credential"], "work");
+    assert!(kinds[changed_at..].contains(&"turn_completed"), "{kinds:?}");
+    assert_config_unchanged(&setup, &before_resume);
+    quit_live(run);
+}
+
+#[test]
+fn resume_with_a_credential_switches_a_running_session_at_the_next_turn() {
+    let setup = support::Setup::new();
+    let server = ProviderServer::start([hello(), text_reply("The second answer.")]).unwrap();
+    provider(&setup, &server);
+    labels(&setup, "home", &["home", "work"]);
+    let before_config = snapshot_config(&setup);
+    // The first terminal owns a live session on `home`.
+    let mut first = terminal(&setup, 120, 32, &[], &[]);
+    first.wait_screen("the first frame", |grid| grid.contents.contains("›"));
+    first.ready();
+    server.hold();
+    let first_from = first.output().len();
+    first.write(b"first\r");
+    assert!(
+        server.await_requests(1, setup.deadline.left()),
+        "the first request to reach the server"
+    );
+    assert_fingerprint(&server.requests()[0], "Bearer home-key");
+    let id = only_session(&setup);
+    // While that turn is still in flight, a second terminal resumes the
+    // running session onto `work`: the open carries the switch, which
+    // waits for the turn boundary.
+    let mut second = resume_with(&setup, &id, "work");
+    second.wait_screen("the first frame", |grid| grid.contents.contains("›"));
+    second.ready();
+    // The open attaches before the held turn finishes: the attached
+    // session's title proves the open, while the turn is still running
+    // and its prompt has not reached history yet.
+    let attached = second.output().len();
+    second.wait_bytes(attached, TITLE, "the attached session's title");
+    // The held turn finishes on the old key; the switch is queued ahead
+    // of any later prompt on the opening connection.
+    server.release_one();
+    first.turn_finished(first_from);
+    assert_eq!(server.requests().len(), 1, "no second request yet");
+    // The first turn's title reaches the second terminal as well:
+    // only past it does an offset prove the next turn finished (see
+    // #2211).
+    second.wait_bytes(
+        attached,
+        FINISHED_TITLE,
+        "the first turn's title on the second terminal",
+    );
+    // The next prompt goes out on the new label.
+    let second_from = second.output().len();
+    second.write(b"second\r");
+    assert!(
+        server.await_requests(2, setup.deadline.left()),
+        "the second request to reach the server"
+    );
+    server.release_one();
+    // Turn 2's own answer in the grid: the bare word `completed`
+    // already shows from turn 1's card on this attached terminal, so
+    // the wait names turn 2's distinct reply text.
+    second.wait_screen("the second answer", |grid| {
+        grid.contents.contains("The second answer.")
+    });
+    second.turn_finished(second_from);
+    let requests = server.requests();
+    assert_eq!(requests.len(), 2, "{requests:?}");
+    assert_fingerprint(&requests[0], "Bearer home-key");
+    assert_fingerprint(&requests[1], "Bearer work-key");
+    // Exactly one driver-source change, home before and work after; the
+    // running open started no new session process.
+    // The complete ordered log: the live session's first turn, the
+    // switch with the cache rebuilt ahead of the next turn, then that
+    // turn. A duplicated, missing or reordered event fails here.
+    let mut expected = opened_kinds(false);
+    expected.extend(["model_changed", "preamble_built"]);
+    expected.extend(resumed_turn_kinds());
+    let events = wait_session_events(&setup, &id, &expected);
+    assert_eq!(event_kinds(&events), expected);
+    let kinds = event_kinds(&events);
+    let changed: Vec<&Value> = events
+        .iter()
+        .filter(|line| line["kind"] == "model_changed")
+        .collect();
+    assert_eq!(changed.len(), 1, "{kinds:?}");
+    assert_eq!(changed[0]["payload"]["source"], "driver");
+    assert_eq!(changed[0]["payload"]["before"]["credential"], "home");
+    assert_eq!(changed[0]["payload"]["after"]["credential"], "work");
+    assert_eq!(
+        kinds
+            .iter()
+            .copied()
+            .filter(|kind| *kind == "session_started")
+            .count(),
+        1,
+        "{kinds:?}"
+    );
+    assert_eq!(
+        kinds
+            .iter()
+            .copied()
+            .filter(|kind| *kind == "fiber_started")
+            .count(),
+        1,
+        "the running open starts no new session process: {kinds:?}"
+    );
+    assert_config_unchanged(&setup, &before_config);
+    // Both terminals leave before either is reaped: each wait holds
+    // for the hub's exit, which waits for the last client to leave.
+    quit_keys(&mut second);
+    quit_keys(&mut first);
+    assert_exited(second);
+    assert_exited(first);
+}
+
+/// Repro for #2211: the second terminal attaches while turn 1 still
+/// runs, so an offset taken before turn 1's markers reach it matches
+/// turn 1, not turn 2. Turn 2's reply stays held through the
+/// `turn_finished` wait, which returns on turn 1's stale paint and
+/// title while turn 2 still streams; the reply is released only after
+/// that, and the log is read under the deadline, so the full ordered
+/// log lands before the assertion.
+#[test]
+fn resume_with_a_credential_second_turn_outlives_a_stale_completed_paint() {
+    let setup = support::Setup::new();
+    let server = ProviderServer::start([hello(), hello()]).unwrap();
+    provider(&setup, &server);
+    labels(&setup, "home", &["home", "work"]);
+    let before_config = snapshot_config(&setup);
+    let mut first = terminal(&setup, 120, 32, &[], &[]);
+    first.wait_screen("the first frame", |grid| grid.contents.contains("›"));
+    first.ready();
+    server.hold();
+    let first_from = first.output().len();
+    first.write(b"first\r");
+    assert!(
+        server.await_requests(1, setup.deadline.left()),
+        "the first request to reach the server"
+    );
+    let id = only_session(&setup);
+    let mut second = resume_with(&setup, &id, "work");
+    second.wait_screen("the first frame", |grid| grid.contents.contains("›"));
+    second.ready();
+    let attached = second.output().len();
+    second.wait_bytes(attached, TITLE, "the attached session's title");
+    // Taken while turn 1 is still held, so before any completion
+    // marker reaches this terminal: it matches turn 1's paint and
+    // title, not turn 2's.
+    let second_from = second.output().len();
+    server.release_one();
+    first.turn_finished(first_from);
+    second.write(b"second\r");
+    assert!(
+        server.await_requests(2, setup.deadline.left()),
+        "the second request to reach the server"
+    );
+    // Turn 2's reply stays held: nothing of turn 2 can arrive, so this
+    // wait can only match turn 1's stale paint and title from the
+    // early offset, and returns while turn 2 still streams. The reply
+    // is released only after that demonstration, and the log is read
+    // under the deadline, so turn 2's tail lands before the assertion.
+    second.turn_finished(second_from);
+    server.release_one();
+    let requests = server.requests();
+    assert_eq!(requests.len(), 2, "{requests:?}");
+    assert_fingerprint(&requests[0], "Bearer home-key");
+    assert_fingerprint(&requests[1], "Bearer work-key");
+    // The complete ordered log, read under the deadline: `turn_finished`
+    // returning above never proves turn 2's durable events landed.
+    let mut expected = opened_kinds(false);
+    expected.extend(["model_changed", "preamble_built"]);
+    expected.extend(resumed_turn_kinds());
+    let events = wait_session_events(&setup, &id, &expected);
+    assert_eq!(event_kinds(&events), expected);
+    assert_config_unchanged(&setup, &before_config);
+    quit_keys(&mut second);
+    quit_keys(&mut first);
+    assert_exited(second);
+    assert_exited(first);
+}
+
+#[test]
+fn resume_with_a_credential_after_the_recorded_key_was_deleted() {
+    let setup = support::Setup::new();
+    let server = ProviderServer::start([hello(), hello()]).unwrap();
+    provider(&setup, &server);
+    labels(&setup, "home", &["home", "work"]);
+    let asked = ask(&setup, &["ask", "first"]);
+    assert_eq!(asked.status.code(), Some(0));
+    let id = only_session(&setup);
+    // The recorded label's key is gone; only the asked label's remains.
+    // Startup must use the asked label before the recorded one, not
+    // switch late: resolving `home` first would refuse the resume.
+    fs::remove_file(setup.home().join("credentials/fake/home")).unwrap();
+    let before_resume = snapshot_config(&setup);
+    let mut run = resume_with(&setup, &id, "work");
+    run.wait_screen("the first frame", |grid| grid.contents.contains("›"));
+    run.ready();
+    run.wait_screen("the restored answer", |grid| {
+        grid.contents.contains("Hello.")
+    });
+    let from = run.output().len();
+    run.write(b"second\r");
+    assert!(
+        server.await_requests(2, setup.deadline.left()),
+        "the second request to reach the server"
+    );
+    run.turn_finished(from);
+    let requests = server.requests();
+    assert_eq!(requests.len(), 2, "{requests:?}");
+    assert_fingerprint(&requests[1], "Bearer work-key");
+    // The complete ordered log, as for an exited switch onto the asked
+    // label: the asked label wins before the recorded one is read, so
+    // the log matches a switch, not a late refusal. A duplicated,
+    // missing or reordered event fails here.
+    let mut expected = opened_kinds(true);
+    expected.extend([
+        "fiber_started",
+        "extensions_loaded",
+        "model_changed",
+        "preamble_built",
+    ]);
+    expected.extend(resumed_turn_kinds());
+    let events = wait_session_events(&setup, &id, &expected);
+    assert_eq!(event_kinds(&events), expected);
+    let changed: Vec<&Value> = events
+        .iter()
+        .filter(|line| line["kind"] == "model_changed")
+        .collect();
+    assert_eq!(changed.len(), 1, "{:?}", event_kinds(&events));
+    assert_eq!(changed[0]["payload"]["before"]["credential"], "home");
+    assert_eq!(changed[0]["payload"]["after"]["credential"], "work");
+    assert_config_unchanged(&setup, &before_resume);
+    quit_live(run);
+}
+
+#[test]
+fn resume_with_an_unknown_credential_on_an_exited_session_stays_home() {
+    let setup = support::Setup::new();
+    let server = ProviderServer::start([hello()]).unwrap();
+    provider(&setup, &server);
+    labels(&setup, "home", &["home", "work"]);
+    let asked = ask(&setup, &["ask", "first"]);
+    assert_eq!(asked.status.code(), Some(0));
+    let id = only_session(&setup);
+    let before = events_bytes(&setup, &id);
+    let before_config = snapshot_config(&setup);
+    let mut run = resume_with(&setup, &id, "nope");
+    run.wait_screen("the first frame", |grid| grid.contents.contains("›"));
+    run.ready();
+    // The refused open returns home with the resolver's notice, naming
+    // the labels the provider has.
+    run.wait_screen("the refusal notice", |grid| {
+        // The box wraps the message across its rows, so each
+        // fragment is asserted on its own row.
+        grid.contents.contains("No credential for")
+            && grid.contents.contains("credentials/fake/nope")
+            && grid.contents.contains("The labels for `fake")
+    });
+    assert_eq!(
+        server.requests().len(),
+        1,
+        "the refused resume sends no new request"
+    );
+    assert_eq!(
+        events_bytes(&setup, &id),
+        before,
+        "the refused resume appends nothing to the log"
+    );
+    assert_config_unchanged(&setup, &before_config);
+    quit_clean(run);
+}
+
+#[test]
+fn resume_with_an_unknown_credential_on_a_running_session_stays_attached() {
+    let setup = support::Setup::new();
+    let server = ProviderServer::start([hello(), hello()]).unwrap();
+    provider(&setup, &server);
+    labels(&setup, "home", &["home", "work"]);
+    let mut first = terminal(&setup, 120, 32, &[], &[]);
+    first.wait_screen("the first frame", |grid| grid.contents.contains("›"));
+    first.ready();
+    let first_from = first.output().len();
+    first.write(b"first\r");
+    assert!(
+        server.await_requests(1, setup.deadline.left()),
+        "the first request to reach the server"
+    );
+    first.turn_finished(first_from);
+    let id = only_session(&setup);
+    let before = events_bytes(&setup, &id);
+    let before_config = snapshot_config(&setup);
+    let mut second = resume_with(&setup, &id, "nope");
+    second.wait_screen("the first frame", |grid| grid.contents.contains("›"));
+    second.ready();
+    // The running open is accepted, and the refused switch arrives as a
+    // notice naming the labels the provider has: no rejection, no trip
+    // home.
+    second.wait_screen("the refusal notice", |grid| {
+        // The box wraps the message across its rows, so each
+        // fragment is asserted on its own row.
+        grid.contents.contains("has no credential label")
+            && grid.contents.contains("`nope`. The labels for `fake` are:")
+            && grid.contents.contains("default, home, work")
+    });
+    // Nothing ran on its own: no new request, no turn, no change event.
+    assert_eq!(
+        server.requests().len(),
+        1,
+        "the refused switch starts no request"
+    );
+    assert_eq!(
+        events_bytes(&setup, &id),
+        before,
+        "the refused switch appends nothing to the log"
+    );
+    // The old label still serves: an explicit prompt goes out on it.
+    let second_from = second.output().len();
+    second.write(b"second\r");
+    assert!(
+        server.await_requests(2, setup.deadline.left()),
+        "the second request to reach the server"
+    );
+    second.turn_finished(second_from);
+    let requests = server.requests();
+    assert_eq!(requests.len(), 2, "{requests:?}");
+    assert_fingerprint(&requests[1], "Bearer home-key");
+    // The complete ordered log: the live session's two turns with no
+    // switch between them. A duplicated, missing or reordered event
+    // fails here.
+    let mut expected = opened_kinds(false);
+    expected.extend(resumed_turn_kinds());
+    let events = wait_session_events(&setup, &id, &expected);
+    assert_eq!(event_kinds(&events), expected);
+    assert!(
+        events.iter().all(|line| line["kind"] != "model_changed"),
+        "no switch was recorded: {:?}",
+        event_kinds(&events)
+    );
+    assert_config_unchanged(&setup, &before_config);
+    // Both terminals leave before either is reaped: each wait holds
+    // for the hub's exit, which waits for the last client to leave.
+    quit_keys(&mut second);
+    quit_keys(&mut first);
+    assert_exited(second);
+    assert_exited(first);
+}
+
+#[test]
+fn resume_with_the_recorded_credential_records_nothing() {
+    let setup = support::Setup::new();
+    let server = ProviderServer::start([hello(), hello()]).unwrap();
+    provider(&setup, &server);
+    labels(&setup, "home", &["home", "work"]);
+    let asked = ask(&setup, &["ask", "first"]);
+    assert_eq!(asked.status.code(), Some(0));
+    let id = only_session(&setup);
+    let before_config = snapshot_config(&setup);
+    // Asking for the label the session already has is a no-op: the
+    // turn still runs, on the same key, with no change recorded.
+    let mut run = resume_with(&setup, &id, "home");
+    run.wait_screen("the first frame", |grid| grid.contents.contains("›"));
+    run.ready();
+    run.wait_screen("the restored answer", |grid| {
+        grid.contents.contains("Hello.")
+    });
+    let from = run.output().len();
+    run.write(b"second\r");
+    assert!(
+        server.await_requests(2, setup.deadline.left()),
+        "the second request to reach the server"
+    );
+    run.turn_finished(from);
+    let requests = server.requests();
+    assert_eq!(requests.len(), 2, "{requests:?}");
+    assert_fingerprint(&requests[1], "Bearer home-key");
+    // The complete ordered log: the seeded ask, a label-free resume
+    // startup, then the typed turn. A duplicated, missing or reordered
+    // event fails here.
+    let mut expected = opened_kinds(true);
+    expected.extend(["fiber_started", "extensions_loaded", "preamble_built"]);
+    expected.extend(resumed_turn_kinds());
+    let events = wait_session_events(&setup, &id, &expected);
+    assert_eq!(event_kinds(&events), expected);
+    assert!(
+        events.iter().all(|line| line["kind"] != "model_changed"),
+        "the same label records no change: {:?}",
+        event_kinds(&events)
+    );
+    assert_config_unchanged(&setup, &before_config);
+    quit_live(run);
+}
+
+#[test]
+fn resume_with_the_current_credential_on_a_running_session_records_nothing() {
+    let setup = support::Setup::new();
+    let server = ProviderServer::start([hello(), hello()]).unwrap();
+    provider(&setup, &server);
+    labels(&setup, "home", &["home", "work"]);
+    let mut first = terminal(&setup, 120, 32, &[], &[]);
+    first.wait_screen("the first frame", |grid| grid.contents.contains("›"));
+    first.ready();
+    let first_from = first.output().len();
+    first.write(b"first\r");
+    assert!(
+        server.await_requests(1, setup.deadline.left()),
+        "the first request to reach the server"
+    );
+    first.turn_finished(first_from);
+    let id = only_session(&setup);
+    let before_config = snapshot_config(&setup);
+    // The second terminal opens the running session on the label it
+    // already has: the conversation is there, and no change is queued.
+    let mut second = resume_with(&setup, &id, "home");
+    second.wait_screen("the first frame", |grid| grid.contents.contains("›"));
+    second.ready();
+    second.wait_screen("the shared answer", |grid| grid.contents.contains("Hello."));
+    let second_from = second.output().len();
+    second.write(b"second\r");
+    assert!(
+        server.await_requests(2, setup.deadline.left()),
+        "the second request to reach the server"
+    );
+    second.turn_finished(second_from);
+    let requests = server.requests();
+    assert_eq!(requests.len(), 2, "{requests:?}");
+    assert_fingerprint(&requests[1], "Bearer home-key");
+    // The complete ordered log: the live session's two turns with no
+    // switch between them. A duplicated, missing or reordered event
+    // fails here.
+    let mut expected = opened_kinds(false);
+    expected.extend(resumed_turn_kinds());
+    let events = wait_session_events(&setup, &id, &expected);
+    assert_eq!(event_kinds(&events), expected);
+    assert!(
+        events.iter().all(|line| line["kind"] != "model_changed"),
+        "the same label records no change: {:?}",
+        event_kinds(&events)
+    );
+    assert_config_unchanged(&setup, &before_config);
+    // Both terminals leave before either is reaped: each wait holds
+    // for the hub's exit, which waits for the last client to leave.
+    quit_keys(&mut second);
+    quit_keys(&mut first);
+    assert_exited(second);
+    assert_exited(first);
+}
+
+#[test]
+fn resume_credential_without_an_id_is_a_usage_error() {
+    let setup = support::Setup::new();
+    let server = ProviderServer::start([hello()]).unwrap();
+    provider(&setup, &server);
+    labels(&setup, "home", &["home", "work"]);
+    let before = snapshot_config(&setup);
+    // No tty: a bare `fiber resume --credential` fails at parse time,
+    // before any terminal, hub or session exists.
+    let mut command = setup.fiber(&["resume", "--credential", "work"]);
+    command.current_dir(setup.workspace());
+    let output = support::run_to_exit(setup.deadline, "`fiber resume --credential work`", command);
+    assert_eq!(output.status.code(), Some(2));
+    assert!(output.stdout.is_empty());
+    let stderr = String::from_utf8(output.stderr).unwrap();
+    assert!(
+        stderr.contains("<id>"),
+        "the error names the missing id: {stderr}"
+    );
+    assert_config_unchanged(&setup, &before);
+    let sessions = sessions(&setup);
+    let live: Vec<String> = fs::read_dir(&sessions)
+        .map(|entries| {
+            entries
+                .flatten()
+                .map(|entry| entry.file_name().to_string_lossy().into_owned())
+                .collect()
+        })
+        .unwrap_or_default();
+    assert!(live.is_empty(), "no session log was created: {live:?}");
+}
+
+#[test]
+fn sigterm_takes_the_normal_exit_path_with_143() {
+    signal_takes_the_normal_exit_path("TERM", 143);
+}
+
+#[test]
+fn sighup_takes_the_normal_exit_path_with_129() {
+    signal_takes_the_normal_exit_path("HUP", 129);
+}
+
+/// Sends `signal` to a terminal with one live session: the terminal
+/// takes its normal exit path, restoring the screen and printing one
+/// resume line for the live session, then exits with `code`
+/// (`docs/tui.md`, "On exit"; `docs/invocation.md`, "Three signals, one
+/// path"). The terminal's guard exits at once today, skipping the
+/// restore and the lines, so the byte assertions fail until the fix.
+#[track_caller]
+fn signal_takes_the_normal_exit_path(signal: &'static str, code: i32) {
+    let setup = support::Setup::new();
+    let server = ProviderServer::start([reply("Hello.")]).unwrap();
+    provider(&setup, &server);
+    let mut run = terminal(&setup, 120, 32, &[], &[]);
+    run.wait_screen("the first frame", |grid| grid.contents.contains("›"));
+    run.ready();
+    let from = run.output().len();
+    run.write(b"say hi\r");
+    // The reply streams in two deltas; the turn's close says it finished
+    // and the session is live, so the signal below lands with one
+    // session to resume.
+    run.wait_screen("the answer", |grid| grid.contents.contains("Hel"));
+    run.turn_finished(from);
+    let id = only_session(&setup);
+    support::kill_pid(setup.deadline, run.id(), signal).unwrap();
+    let output = run.wait();
+    assert_eq!(
+        output.status.code(),
+        Some(code),
+        "a {signal} signal exits {code}"
+    );
+    // The drained output holds every byte through end of file: leaving
+    // the alternate screen proves the restore ran, and the resume line
+    // proves the exit lines printed after it.
+    let terminal = String::from_utf8_lossy(&output.terminal);
+    assert!(
+        terminal.contains("\x1b[?1049l"),
+        "a {signal} signal restores the terminal; terminal:\n{terminal}"
+    );
+    let line = format!("fiber resume {id}");
+    assert!(
+        terminal.contains(&line),
+        "a {signal} signal prints the live session's resume line; terminal:\n{terminal}"
     );
 }

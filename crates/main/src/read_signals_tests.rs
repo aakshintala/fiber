@@ -293,3 +293,53 @@ fn a_dropped_guard_leaves_a_later_signal_unhandled_by_the_callback() {
         "a dropped guard answered a later signal"
     );
 }
+
+#[test]
+fn the_terminal_watcher_cancels_and_settles_without_exiting() {
+    let root = fakes::TempDir::new("fiber-terminal-watch");
+    let ready = Ready::new(root.path());
+    let clock: Arc<dyn Clock> = FakeClock::new();
+    let reads = Arc::new(Reads::default());
+    let script = format!("echo $$ > '{}'; exec sleep 600", ready.path().display());
+    // Before the spawn: the group is known only after it starts, so a
+    // command-line watchdog covers a spawn no later watchdog can reach.
+    let pre = fakes::Watchdog::matching(&ready.path().display().to_string());
+    let finished = credential_on_thread(&reads, sh(&script), Duration::from_secs(30), &clock);
+    let pgid = ready.wait(DEADLINE)[0];
+    let watchdog = fakes::Watchdog::group(pgid);
+    let guard = CancelOnSignal::watch(Arc::clone(&reads), Arc::clone(&clock), &[SIGTERM])
+        .expect("the test's registration");
+    signal_hook::low_level::raise(SIGTERM).expect("the test's raise");
+    // The watcher cancels and settles, then keeps watching instead of
+    // exiting: survival past the cancel proves no exit, and the
+    // cancelled read proves the production calls ran. The spin ends on
+    // the refusal, never on the clock.
+    fakes::within("the watcher's cancel", DEADLINE, {
+        let reads = Arc::clone(&reads);
+        move || loop {
+            if reads.run(|| ()).is_err() {
+                return;
+            }
+            std::thread::yield_now();
+        }
+    });
+    // A second signal still exits nothing: the process is here to drop
+    // the guard.
+    signal_hook::low_level::raise(SIGTERM).expect("the test's second raise");
+    // The guard's drop joins the watcher: bounded on its own thread, so a
+    // hung settle fails here instead of hanging the binary.
+    fakes::within("the guard's drop", Duration::from_secs(3), move || {
+        drop(guard);
+    });
+    let error = Deadline::after(Duration::from_secs(3))
+        .recv(&finished)
+        .expect("the cancelled read")
+        .expect_err("a cancelled read");
+    assert_eq!(error.kind(), std::io::ErrorKind::Interrupted);
+    assert!(
+        fakes::group_empties(pgid, DEADLINE),
+        "the cancel killed the group"
+    );
+    watchdog.stand_down(DEADLINE);
+    pre.stand_down(DEADLINE);
+}

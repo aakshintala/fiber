@@ -3,11 +3,14 @@
 
 use contract::shapes::ContentPart;
 use ratatui::layout::Alignment;
+use ratatui::style::Modifier;
+use ratatui::text::Line;
 
 use super::{Align, Layout, cut, parts};
 use crate::app::Target;
 use crate::format;
 use crate::rows::Rows;
+use crate::theme::Role;
 
 fn image(path: &str, width: u32, height: u32) -> ContentPart {
     ContentPart::Image {
@@ -119,6 +122,81 @@ fn cut_keeps_a_label_that_fits() {
 #[test]
 fn a_zero_width_line_draws_empty() {
     assert_eq!(cut("▣ a.png · 1×1", 0), "");
+}
+
+#[test]
+fn an_image_line_draws_its_name_as_a_link_and_its_dims_dim() {
+    let lines = lines_at(60);
+    assert_eq!(lines.len(), 1);
+    assert_eq!(lines[0].to_string(), "▣ a.png · 1280×800");
+    let spans = &lines[0].spans;
+    assert_eq!(spans.len(), 2);
+    // `▣ <name>` in the accent colour, underlined.
+    assert_eq!(spans[0].content.as_ref(), "▣ a.png");
+    assert_eq!(spans[0].style.fg, Some(Role::Accent.color()));
+    assert!(spans[0].style.add_modifier.contains(Modifier::UNDERLINED));
+    // ` · <dims>` dim.
+    assert_eq!(spans[1].content.as_ref(), " · 1280×800");
+    assert!(spans[1].style.add_modifier.contains(Modifier::DIM));
+    assert_eq!(spans[1].style.fg, None);
+}
+
+#[test]
+fn a_label_cut_inside_its_dims_keeps_the_split() {
+    // One column short: the dims lose their end to `…`, the name is
+    // whole.
+    let lines = lines_at(17);
+    assert_eq!(lines.len(), 1);
+    let spans = &lines[0].spans;
+    assert_eq!(spans.len(), 2);
+    assert_eq!(spans[0].content.as_ref(), "▣ a.png");
+    assert_eq!(spans[0].style.fg, Some(Role::Accent.color()));
+    assert_eq!(lines[0].to_string(), "▣ a.png · 1280×8…");
+    assert!(spans[1].style.add_modifier.contains(Modifier::DIM));
+}
+
+#[test]
+fn a_label_cut_inside_its_name_draws_wholly_as_the_link() {
+    let lines = lines_at(4);
+    assert_eq!(lines.len(), 1);
+    assert_eq!(lines[0].to_string(), "▣ a…");
+    let spans = &lines[0].spans;
+    assert_eq!(spans.len(), 1);
+    assert_eq!(spans[0].style.fg, Some(Role::Accent.color()));
+    assert!(spans[0].style.add_modifier.contains(Modifier::UNDERLINED));
+}
+
+/// The part's line left-aligned at `columns` with `indent` blank
+/// columns before it.
+fn lines_at_indented(columns: u16, indent: u16) -> Vec<Line<'static>> {
+    let mut layout = Layout::default();
+    let part = super::Part {
+        path: "artifacts/a.png".to_owned(),
+        width: 1280,
+        height: 800,
+    };
+    layout.note(&part);
+    let mut out = Rows::default();
+    super::rows(&part, &layout, columns, Align::Left { indent }, &mut out);
+    let (rows, _) = out.into_parts();
+    rows.into_iter().map(|(line, _)| line).collect()
+}
+
+/// The part's line left-aligned at `columns`.
+fn lines_at(columns: u16) -> Vec<Line<'static>> {
+    lines_at_indented(columns, 0)
+}
+
+#[test]
+fn an_indented_line_keeps_plain_padding_before_the_link() {
+    let lines = lines_at_indented(60, 4);
+    assert_eq!(lines.len(), 1);
+    assert_eq!(lines[0].to_string(), "    ▣ a.png · 1280×800");
+    let spans = &lines[0].spans;
+    assert_eq!(spans.len(), 3);
+    assert_eq!(spans[0].content.as_ref(), "    ");
+    assert_eq!(spans[1].content.as_ref(), "▣ a.png");
+    assert_eq!(spans[1].style.fg, Some(Role::Accent.color()));
 }
 
 #[test]
