@@ -614,6 +614,15 @@ fn a_narrow_top_row_drops_esc_returns_first() {
 }
 
 #[test]
+fn a_narrow_top_row_pads_the_tint_to_the_width() {
+    let offer = holding(1);
+    let row = &spans(&offer, 34)[0];
+    let joined: String = row.iter().map(|(text, _)| text.as_str()).collect();
+    assert_eq!(crate::format::width(&joined), 34);
+    assert_eq!(row.last(), Some(&(" ".repeat(11), surface())));
+}
+
+#[test]
 fn a_tiny_top_row_truncates_the_command_then_the_name() {
     let offer = holding(1);
     assert_eq!(texts(&offer, 20)[0], " Offer  repository c");
