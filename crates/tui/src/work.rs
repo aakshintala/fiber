@@ -23,6 +23,19 @@ pub struct Work {
     pub index_pages: usize,
     /// Turn summaries looked up to place a `usage_recorded` line.
     pub usage_summaries: usize,
+    /// Drawn pieces measured for their width in the format helpers:
+    /// one per grapheme or control character `cut` or `wrap_joined`
+    /// sized, including a cut's first rejected piece.
+    pub grapheme_widths: usize,
+    /// Pages whose text the search scanned: resident scans and scratch
+    /// folds of dropped pages, one per page scan.
+    pub search_pages: usize,
+    /// Page entries the search's order and progress bookkeeping
+    /// examined: order extensions, scan-progress checks and completion
+    /// walks, one per entry examined.
+    pub search_order_pages: usize,
+    /// Shell candidates examined while placing shell output for a draw.
+    pub shell_visits: usize,
 }
 
 thread_local! {
@@ -41,4 +54,36 @@ pub(crate) fn add(count: impl FnOnce(&mut Work)) {
 /// This thread's counts since the last call, which start again from zero.
 pub fn take() -> Work {
     WORK.with(|work| work.replace(Work::default()))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{add, take};
+
+    #[test]
+    fn every_field_round_trips_through_take() {
+        take();
+        add(|work| {
+            work.reply_renders += 1;
+            work.turn_rows += 2;
+            work.page_counts += 3;
+            work.index_pages += 4;
+            work.usage_summaries += 5;
+            work.grapheme_widths += 6;
+            work.search_pages += 7;
+            work.search_order_pages += 8;
+            work.shell_visits += 9;
+        });
+        let work = take();
+        assert_eq!(work.reply_renders, 1);
+        assert_eq!(work.turn_rows, 2);
+        assert_eq!(work.page_counts, 3);
+        assert_eq!(work.index_pages, 4);
+        assert_eq!(work.usage_summaries, 5);
+        assert_eq!(work.grapheme_widths, 6);
+        assert_eq!(work.search_pages, 7);
+        assert_eq!(work.search_order_pages, 8);
+        assert_eq!(work.shell_visits, 9);
+        assert_eq!(take(), super::Work::default());
+    }
 }
