@@ -897,12 +897,11 @@ impl<B: Backend> Loop<B> {
             }
         });
         if code.is_none() {
-            match result {
-                editor::Outcome::Done(done) => self.app.editor_returned(target, done),
-                // The editor is killed and the draft unchanged: quit with
-                // the signal's code, closing nothing first, so live
-                // sessions keep their resume lines.
-                editor::Outcome::Stopped(signal) => return Some(128 + signal),
+            // A stop converts to the quit code in the handover above,
+            // so only Done reaches here: the draft is unchanged on a
+            // kill, and live sessions keep their resume lines.
+            if let editor::Outcome::Done(done) = result {
+                self.app.editor_returned(target, done);
             }
         }
         code
@@ -923,19 +922,20 @@ impl<B: Backend> Loop<B> {
         let clock = Arc::clone(&self.clock);
         let code = self.hand_over(|| {
             result = editor::open(&command, file, &clock);
-            // As in [`Loop::open_editor`]: a shutdown stop quits outright.
+            // As in [`Loop::open_editor`]: a shutdown stop converts to
+            // the quit code in this handover.
             match result {
                 editor::Outcome::Stopped(signal) => Some(128 + signal),
                 editor::Outcome::Done(_) => None,
             }
         });
         if code.is_none() {
-            match result {
-                editor::Outcome::Done(done) => self.app.config_file_closed(done),
-                // The editor is killed: quit with the signal's code,
-                // closing nothing first, so live sessions keep their
-                // resume lines.
-                editor::Outcome::Stopped(signal) => return Some(128 + signal),
+            // A stop converts to the quit code in the handover above,
+            // so only Done reaches here: quit with the signal's code,
+            // closing nothing first, so live sessions keep their
+            // resume lines.
+            if let editor::Outcome::Done(done) = result {
+                self.app.config_file_closed(done);
             }
         }
         code

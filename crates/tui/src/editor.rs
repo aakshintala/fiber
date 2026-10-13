@@ -105,7 +105,7 @@ fn run_in(
         return failed(err);
     }
     drop(file);
-    let forwarding = catch_for_editor();
+    let mut forwarding = catch_for_editor();
     // `sh` splits the command, so a value with arguments such as `code -w`
     // works; the path goes in as `$1`, never through the split. The shell
     // runs in Fiber's group, as on main: the wait signals the shell pid
@@ -119,11 +119,14 @@ fn run_in(
     {
         Ok(child) => child,
         Err(err) => {
+            forwarding.unregister();
             return Outcome::Done(Err(format!("Could not start the editor: {err}")));
         }
     };
     let pid = child.id();
-    let status = match wait(&mut child, clock, pid, &forwarding) {
+    let waited = wait(&mut child, clock, pid, &forwarding);
+    forwarding.unregister();
+    let status = match waited {
         Ok(Waited::Exited(status)) => status,
         Ok(Waited::Stopped(signal)) => {
             return Outcome::Stopped(signal);
@@ -165,7 +168,7 @@ pub(crate) fn open(
     path: &Path,
     clock: &Arc<dyn Clock>,
 ) -> Outcome<Result<(), String>> {
-    let forwarding = catch_for_editor();
+    let mut forwarding = catch_for_editor();
     // As in [`run_in`]: the shell runs in Fiber's group, and the wait
     // signals the shell pid alone.
     let mut child = match Command::new("/bin/sh")
@@ -177,11 +180,14 @@ pub(crate) fn open(
     {
         Ok(child) => child,
         Err(err) => {
+            forwarding.unregister();
             return Outcome::Done(Err(format!("Could not start the editor: {err}")));
         }
     };
     let pid = child.id();
-    let status = match wait(&mut child, clock, pid, &forwarding) {
+    let waited = wait(&mut child, clock, pid, &forwarding);
+    forwarding.unregister();
+    let status = match waited {
         Ok(Waited::Exited(status)) => status,
         Ok(Waited::Stopped(signal)) => {
             return Outcome::Stopped(signal);
@@ -272,9 +278,9 @@ fn wait(
 }
 
 /// This run's signal forwarding: the flags [`wait`] polls and the
-/// registrations, unregistered when the run ends. Dropping the ids never
-/// unregisters them, so without the [`Drop`] below every run would leak a
-/// callback and a flag.
+/// registrations, unregistered by [`Forwarding::unregister`] when the run
+/// ends. Dropping the ids never unregisters them, so without the call
+/// every run would leak a callback and a flag.
 struct Forwarding {
     int: Arc<AtomicBool>,
     quit: Arc<AtomicBool>,
@@ -283,8 +289,9 @@ struct Forwarding {
     held: Vec<signal_hook::SigId>,
 }
 
-impl Drop for Forwarding {
-    fn drop(&mut self) {
+impl Forwarding {
+    /// Unregisters every held handler.
+    fn unregister(&mut self) {
         for id in self.held.drain(..) {
             signal_hook::low_level::unregister(id);
         }
@@ -292,8 +299,8 @@ impl Drop for Forwarding {
 }
 
 /// Registers this run's forwarding: SIGINT and SIGQUIT to the editor pid,
-/// and the shutdown signals for [`wait`]'s own end. The flags the
-/// [`Forwarding`] guard unregisters when the run ends. Registered before
+/// and the shutdown signals for [`wait`]'s own end. The caller unregisters
+/// the returned [`Forwarding`] once the run ends. Registered before
 /// the spawn, so an acknowledged editor implies installed handlers: an
 /// interrupt raised after the acknowledgement is always forwarded, and a
 /// shutdown signal always ends the wait, never missed.
