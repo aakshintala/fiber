@@ -18,7 +18,7 @@ pub(crate) use crate::theme::Role;
 
 use crate::highlight;
 use crate::rows::{Join, RowText};
-use crate::surface::edge_row;
+use crate::surface::{self, edge_row};
 
 /// A reply rendered at one width.
 #[derive(Debug, Clone, Default, PartialEq)]
@@ -450,6 +450,12 @@ impl Writer {
 
     /// A code block: the edge rows, the header row with its label and
     /// `copy`, then each line numbered, all on the tint across the width.
+    /// Without colour the slab reserves a column on each side: the edge
+    /// rows already box through `edge_row`, and the card's sides close
+    /// the reserved columns, so the code and the header sit one column
+    /// in, two narrower. The quote bars, the number gutters, the joins,
+    /// the styles and the copied source bytes stay
+    /// (`docs/tui.md`, "Look").
     fn code_block(&mut self, info: &str, code: &str) {
         let code = code.strip_suffix('\n').unwrap_or(code);
         let inner = self.inner_width();
@@ -458,6 +464,14 @@ impl Writer {
             .split(|ch: char| ch.is_whitespace() || ch == ',')
             .next()
             .unwrap_or_default();
+        let boxed = surface::box_fit(inner);
+        let content = if boxed {
+            width.saturating_sub(2)
+        } else {
+            width
+        };
+        // One reserved column past the bars and the gutter is not text.
+        let side = u16::from(boxed);
         if let Some(cols) = copy_cols(inner) {
             let bars = self.quote_width();
             self.out.targets.push(CopyTarget {
@@ -467,7 +481,10 @@ impl Writer {
             });
         }
         self.put(edge_row(width, Role::Code, true), true);
-        self.put(header(label, width), true);
+        self.put(
+            sided(header(label, content), boxed, tinted(Role::Muted)),
+            true,
+        );
         let runs = highlight::spans(info, code).unwrap_or_else(|| {
             code.split('\n')
                 .map(|line| vec![(Role::CodeText, line.to_owned())])
@@ -500,15 +517,16 @@ impl Writer {
             let gutter_cells = cells_width(&number);
             let rest = [Span::styled(" ".repeat(gutter_cells), tinted(Role::Rule))];
             let gutter = u16::try_from(gutter_cells).unwrap_or(u16::MAX);
-            let mut rows = wrap(&cells, width, &first, &rest, false);
+            let mut rows = wrap(&cells, content, &first, &rest, false);
             if rows.is_empty() {
                 rows.push((Line::from(first.to_vec()), Join::Break));
             }
             for (mut row, join) in rows {
-                let pad = width.saturating_sub(row.width());
+                let pad = content.saturating_sub(row.width());
                 row.spans
                     .push(Span::styled(" ".repeat(pad), tinted(Role::CodeText)));
-                self.put_row(row, join, gutter, false, Vec::new());
+                let row = sided(row, boxed, tinted(Role::CodeText));
+                self.put_row(row, join, gutter.saturating_add(side), false, Vec::new());
             }
         }
         self.put(edge_row(width, Role::Code, false), true);
@@ -519,10 +537,18 @@ impl Writer {
 const NUMBER_WIDTH: usize = 4;
 
 /// The `copy` label's cells on a header row `width` wide: its last
-/// thirteen, or none on a narrower row.
+/// thirteen, or none on a narrower row. Without colour the label sits in
+/// the interior the reserved sides leave, never on a side
+/// (`docs/tui.md`, "Look").
 fn copy_cols(width: u16) -> Option<Range<u16>> {
-    let start = width.checked_sub(u16::try_from(COPY.len()).unwrap_or(u16::MAX))?;
-    Some(start..width)
+    if surface::box_fit(width) {
+        let interior = width.saturating_sub(2);
+        let start = interior.checked_sub(u16::try_from(COPY.len()).unwrap_or(u16::MAX))?;
+        Some(start.saturating_add(1)..interior.saturating_add(1))
+    } else {
+        let start = width.checked_sub(u16::try_from(COPY.len()).unwrap_or(u16::MAX))?;
+        Some(start..width)
+    }
 }
 
 /// A code block's header row: one column in, the label left, truncated
@@ -544,6 +570,17 @@ fn header(label: &str, width: usize) -> Line<'static> {
         Span::styled(" ".repeat(pad), tinted(Role::Muted)),
         Span::styled(copy, tinted(Role::Muted)),
     ])
+}
+
+/// `line` with one blank on each side in `pad`'s style when `boxed`:
+/// the columns the card's sides close over without colour, so the text
+/// keeps its cells (`docs/tui.md`, "Look").
+fn sided(mut line: Line<'static>, boxed: bool, pad: Style) -> Line<'static> {
+    if boxed {
+        line.spans.insert(0, Span::styled(" ", pad));
+        line.spans.push(Span::styled(" ", pad));
+    }
+    line
 }
 
 /// `text` cut to `room` cells, ending in `…` when cut.
