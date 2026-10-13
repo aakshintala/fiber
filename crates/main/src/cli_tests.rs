@@ -1244,6 +1244,42 @@ fn bare_fiber_takes_model_and_repeatable_dash_c_as_the_terminal_layer() {
 }
 
 #[test]
+fn top_level_flags_with_a_subcommand_are_a_usage_sentence() {
+    // `ask` keeps its own `--model` and `-c`; the top-level pair with
+    // any subcommand is a usage error, as before the flags existed.
+    for args in [
+        &["fiber", "--model", "fake/m", "sessions"][..],
+        &["fiber", "-c", "retry.attempts=2", "sessions"][..],
+        &["fiber", "--model", "fake/m", "ask", "hi"][..],
+        &["fiber", "-c", "retry.attempts=2", "ask", "hi"][..],
+        &["fiber", "--model", "fake/m", "resume", "s_12"][..],
+        &["fiber", "-c", "a=1", "--model", "fake/m", "continue"][..],
+    ] {
+        let (ask, said) = usage(args);
+        assert!(!ask, "{args:?}");
+        assert!(said.ends_with("Run `fiber --help` for usage."), "{said}");
+        assert_eq!(said.lines().count(), 1, "{said}");
+    }
+}
+
+#[test]
+fn a_dash_c_without_an_equals_is_a_usage_sentence() {
+    for (args, ask) in [
+        (&["fiber", "-c", "retry.attempts"][..], false),
+        (&["fiber", "ask", "-c", "retry.attempts", "hi"][..], true),
+    ] {
+        let used = usage(args);
+        assert_eq!(used.0, ask, "{args:?}");
+        assert!(
+            used.1.ends_with("Run `fiber --help` for usage."),
+            "{}",
+            used.1
+        );
+        assert_eq!(used.1.lines().count(), 1, "{}", used.1);
+    }
+}
+
+#[test]
 fn resume_takes_an_optional_id() {
     let Invocation::Run(Some(Commands::Resume { id, credential }), _) =
         parse_from(["fiber", "resume"])
