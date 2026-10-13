@@ -3306,3 +3306,81 @@ fn a_named_update_replaces_a_floor_across_majors() {
         None
     );
 }
+
+#[test]
+fn updating_a_path_extension_beside_a_floored_install_keeps_its_own_floor() {
+    let setup = Setup::new();
+    let mut local = manifest("local");
+    let source = setup.source("local", &local, &[]);
+    common::install(&setup.home(), &source, FIBER).unwrap();
+    let dep = "example.com/acme/dep";
+    let mut repos = Repos::new(&setup);
+    for tag in ["v1.2.0", "v1.5.0"] {
+        repos.tag(dep, "", tag, &manifest(dep), &[]);
+    }
+    let top = "example.com/acme/top";
+    repos.tag(top, "", "v1.0.0", &named(top, &[(dep, "1.2")]), &[]);
+    install_named(&setup, &repos, top).unwrap();
+    update_all_named(&setup, &repos, dep).unwrap();
+    assert_eq!(
+        record(&setup.home(), "example.com-acme-dep")["floor"],
+        json!("v1.5.0")
+    );
+    // Restaging the path extension must keep exactly its own floor:
+    // none. A floor lookup that matches any other installed extension
+    // would pick up the dependency's floor instead.
+    local["version"] = json!("v1.1.0");
+    write(&source.join("extension.json"), &local.to_string());
+    plan(
+        &setup.home(),
+        &Request::Update("local".into()),
+        FIBER,
+        &repos.origin(),
+        &*fakes::clock::FakeClock::new(),
+    )
+    .unwrap()
+    .commit()
+    .unwrap();
+    assert_eq!(versions(&setup)["local"], "v1.1.0");
+    assert_eq!(
+        record(&setup.home(), "local").get("floor"),
+        None,
+        "a path restage keeps its own floor, not another install's"
+    );
+    assert_eq!(
+        record(&setup.home(), "example.com-acme-dep")["floor"],
+        json!("v1.5.0")
+    );
+}
+
+#[test]
+fn restaging_a_floored_dependency_for_a_new_dependent_keeps_its_floor() {
+    let setup = Setup::new();
+    let mut repos = Repos::new(&setup);
+    let dep = "example.com/acme/dep";
+    for tag in ["v1.2.0", "v1.5.0"] {
+        repos.tag(dep, "", tag, &manifest(dep), &[]);
+    }
+    let top = "example.com/acme/top";
+    repos.tag(top, "", "v1.0.0", &named(top, &[(dep, "1.2")]), &[]);
+    install_named(&setup, &repos, top).unwrap();
+    update_all_named(&setup, &repos, dep).unwrap();
+    assert_eq!(
+        record(&setup.home(), "example.com-acme-dep")["floor"],
+        json!("v1.5.0")
+    );
+    // A new dependent needing more restages the floored dependency
+    // through the unasked path; the restage keeps the installed floor
+    // instead of clearing it.
+    repos.tag(dep, "", "v1.6.0", &manifest(dep), &[]);
+    let user = "example.com/acme/user";
+    repos.tag(user, "", "v1.0.0", &named(user, &[(dep, "1.6")]), &[]);
+    install_named(&setup, &repos, user).unwrap();
+    assert_eq!(versions(&setup)[dep], "v1.6.0");
+    assert!(!installed_named(&setup.home(), dep).requested);
+    assert_eq!(
+        record(&setup.home(), "example.com-acme-dep")["floor"],
+        json!("v1.5.0"),
+        "an unasked restage keeps the installed floor"
+    );
+}
