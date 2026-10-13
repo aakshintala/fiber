@@ -14,9 +14,9 @@ use std::sync::Arc;
 use std::thread::{self, JoinHandle};
 
 use config::{
-    Config, ConfigError, CredentialFile, Login, ProviderData, Secret, Sources, credential_labels,
-    delete_credential, delete_credential_held, read_credential, read_secret, set_global_if_unset,
-    store_credential, store_secret,
+    Config, ConfigError, CredentialFile, CredentialLock, Login, ProviderData, Secret, Sources,
+    credential_labels, delete_credential, delete_credential_held, read_credential, read_secret,
+    set_global_if_unset, store_credential, store_secret,
 };
 use contract::ErrorCode;
 use contract::clock::Clock;
@@ -237,7 +237,7 @@ pub(crate) struct LoginIo<'a> {
     pub(crate) clock: Arc<dyn Clock>,
 }
 
-fn usage(message: impl Into<String>) -> Failure {
+fn usage_with_hint(message: impl Into<String>) -> Failure {
     failure(
         ErrorCode::Usage,
         format!("{} Run `fiber --help` for usage.", message.into()),
@@ -264,7 +264,7 @@ fn stored_name(provider: &ProviderData) -> &str {
 fn installed<'a>(providers: &'a Providers, name: &str) -> Result<&'a ProviderData, Failure> {
     providers.get(name).ok_or_else(|| {
         let names: Vec<&str> = providers.names().collect();
-        usage(if names.is_empty() {
+        usage_with_hint(if names.is_empty() {
             format!("`{name}` is not an installed provider, and none is installed.")
         } else {
             format!(
@@ -307,7 +307,7 @@ fn unknown_message(providers: &Providers, name: &str) -> String {
 /// or by name. Providers are numbered first, then secrets.
 fn choose(io: &mut LoginIo<'_>) -> Result<String, Failure> {
     if !io.terminal {
-        return Err(usage(
+        return Err(usage_with_hint(
             "`fiber login` takes a provider or a secret's name when there is no terminal to ask on.",
         ));
     }
@@ -327,7 +327,7 @@ fn choose(io: &mut LoginIo<'_>) -> Result<String, Failure> {
         })
         .collect();
     if providers.is_empty() && secrets.is_empty() {
-        return Err(usage(
+        return Err(usage_with_hint(
             "No provider is installed, and no installed extension declares a secret.",
         ));
     }
@@ -353,14 +353,14 @@ fn choose(io: &mut LoginIo<'_>) -> Result<String, Failure> {
     io.stdin.read_line(&mut answer).map_err(terminal_failure)?;
     let answer = answer.trim();
     if answer.is_empty() {
-        return Err(usage("Nothing was chosen."));
+        return Err(usage_with_hint("Nothing was chosen."));
     }
     let picked = match answer.parse::<usize>() {
         Ok(number) => number.checked_sub(1).and_then(|index| all.get(index)),
         Err(_) => all.iter().find(|target| target.name() == answer),
     };
     picked.map(|target| target.name().to_owned()).ok_or_else(|| {
-        usage(format!(
+        usage_with_hint(format!(
             "`{answer}` is neither a listed number nor an installed provider or declared secret."
         ))
     })
@@ -418,6 +418,67 @@ impl From<Failure> for StoreFailure {
     }
 }
 
+/// Why a locked store failed: the credential file could not be built, or
+/// the store itself failed. Only the build error travels as a
+/// [`ConfigError`], so each caller keeps its own message for an invalid
+/// label; every later lock, read, write and global error already carries
+/// its config code.
+enum LockedStoreFailure {
+    /// Building the credential file failed.
+    Config(ConfigError),
+    /// The locked store failed.
+    Store(StoreFailure),
+}
+
+/// Stores one provider credential under the label's lock: build the file,
+/// hold the label lock across the re-read, the caller's write, the global
+/// label update and any rollback, then return the relative credential
+/// path. The lock order stays credential then global. A failed global
+/// update deletes only the just-written label under the held lock and
+/// still returns the global error, even when the deletion fails.
+fn store_locked(
+    home: &Path,
+    provider: &ProviderData,
+    label: &str,
+    write: impl FnOnce(&CredentialLock) -> Result<(), StoreFailure>,
+) -> Result<String, LockedStoreFailure> {
+    let name = provider.name.as_str();
+    let stored = stored_name(provider);
+    let file =
+        CredentialFile::new(home, stored, label).map_err(LockedStoreFailure::Config)?;
+    // Held until the login ends, so two logins never both pass the check.
+    let Some(lock) = file
+        .try_lock()
+        .map_err(config_failure)
+        .map_err(StoreFailure::Failed)
+        .map_err(LockedStoreFailure::Store)?
+    else {
+        return Err(LockedStoreFailure::Store(StoreFailure::Failed(failure(
+            ErrorCode::IoFailed,
+            format!("another login for {name} is running"),
+        ))));
+    };
+    if read_credential(home, stored, label)
+        .map_err(config_failure)
+        .map_err(StoreFailure::Failed)
+        .map_err(LockedStoreFailure::Store)?
+        .is_some()
+    {
+        return Err(LockedStoreFailure::Store(StoreFailure::Refused(
+            already_stored(name, stored, label),
+        )));
+    }
+    write(&lock).map_err(LockedStoreFailure::Store)?;
+    if let Err(e) = set_global_if_unset(home, &credential_key(name), label.into()) {
+        // A retry must start clean: no key stored without its label.
+        delete_credential_held(home, stored, label, &lock).unwrap_or(false);
+        return Err(LockedStoreFailure::Store(StoreFailure::Failed(
+            config_failure(e),
+        )));
+    }
+    Ok(format!("credentials/{stored}/{label}"))
+}
+
 /// The installed providers by name, then the secrets installed extensions
 /// declare: the one place the menu's order lives. A name that is both is
 /// the provider's. A provider whose data says `login: browser` is a browser
@@ -460,38 +521,24 @@ fn store(
     read: impl FnOnce(&str) -> Result<Secret, Failure>,
 ) -> Result<LoginStored, StoreFailure> {
     if let Some(data) = providers.get(name) {
-        let stored = stored_name(data);
         // A key login reveals no email; the browser login passes its own.
         let label = chosen_label(label, None);
-        let file = CredentialFile::new(home, stored, label).map_err(config_failure)?;
-        // Held until the login ends, so two logins never both pass the check.
-        let Some(lock) = file.try_lock().map_err(config_failure)? else {
-            return Err(StoreFailure::Failed(failure(
-                ErrorCode::IoFailed,
-                format!("another login for {name} is running"),
-            )));
-        };
-        if read_credential(home, stored, label)
-            .map_err(config_failure)?
-            .is_some()
-        {
-            return Err(StoreFailure::Refused(already_stored(name, stored, label)));
-        }
-        let key = read(&format!("Key for {name}: "))?;
-        if key.expose().is_empty() {
-            return Err(StoreFailure::Refused(
-                "No key was given; nothing was stored.".to_owned(),
-            ));
-        }
-        store_credential(home, stored, label, &key).map_err(config_failure)?;
-        let first = set_global_if_unset(home, &credential_key(name), label.into());
-        if let Err(e) = first {
-            // A retry must start clean: no key stored without its label.
-            delete_credential_held(home, stored, label, &lock).unwrap_or(false);
-            return Err(config_failure(e).into());
-        }
+        let path = store_locked(home, data, label, |_lock| {
+            let key = read(&format!("Key for {name}: "))?;
+            if key.expose().is_empty() {
+                return Err(StoreFailure::Refused(
+                    "No key was given; nothing was stored.".to_owned(),
+                ));
+            }
+            store_credential(home, stored_name(data), label, &key).map_err(config_failure)?;
+            Ok(())
+        })
+        .map_err(|error| match error {
+            LockedStoreFailure::Config(e) => StoreFailure::Failed(config_failure(e)),
+            LockedStoreFailure::Store(failure) => failure,
+        })?;
         Ok(LoginStored {
-            path: format!("credentials/{stored}/{label}"),
+            path,
             replaced: false,
         })
     } else if providers.secrets().any(|secret| secret == name) {
@@ -601,7 +648,7 @@ pub(crate) fn login(
         && (io.providers.get(&name).is_some()
             || io.providers.secrets().any(|secret| secret == name))
     {
-        return Err(usage(
+        return Err(usage_with_hint(
             "--device applies only to a provider that logs in by browser.",
         ));
     }
@@ -623,7 +670,7 @@ pub(crate) fn login(
             };
             writeln!(io.err, "fiber: {done} {}", stored.path).map_err(terminal_failure)
         }
-        Err(StoreFailure::Refused(message)) => Err(usage(message)),
+        Err(StoreFailure::Refused(message)) => Err(usage_with_hint(message)),
         Err(StoreFailure::Failed(failure)) => Err(failure),
     }
 }
@@ -685,7 +732,7 @@ pub(crate) fn logout(
         LogoutTarget::Only => match labels.as_slice() {
             [one] => vec![one.as_str()],
             _ => {
-                return Err(usage(format!(
+                return Err(usage_with_hint(format!(
                     "`{name}` has several stored credentials: {}; name one with --as <label>, or use --all.",
                     labels.join(", ")
                 )));
