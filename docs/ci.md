@@ -212,6 +212,15 @@ On Linux x86_64 alone:
   which stops every running test at the first failure. A mutant that makes
   one test hang until its deadline is then caught by a faster test, not
   reported as a timeout.
+
+  A separate workflow runs daily at 04:00 UTC against the scheduled commit,
+  generating mutants across every workspace package. It runs one full-workspace
+  nextest baseline before starting 16 shards, each of which skips its own
+  baseline; at most 16 shards run at once, and a concurrency group prevents
+  scheduled runs from overlapping. Each shard always uploads `mutants.out`,
+  including survivors and logs. The initial job limit is a generous 360 minutes
+  because scheduled cold-run history is not available; each mutation step has a
+  300-minute limit. This report gates no pull request or merge.
 - for a pull request where any issue its body resolves is labelled
   `bug`, the tests its first commit, the red commit, adds or changes run
   at the red commit, and every test the pull request adds or changes runs at
