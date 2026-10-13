@@ -4567,21 +4567,14 @@ fn reopened_log(sessions: PathBuf, id: SessionId, clock: Arc<dyn Clock>) -> Arc<
     Arc::new(log)
 }
 
-fn drive_shell(
-    deadline: Deadline,
-    driver: &Arc<dyn Drive>,
-    command: &str,
-) -> mpsc::Receiver<Answer> {
+fn drive_shell(driver: &Arc<dyn Drive>, command: &str) -> mpsc::Receiver<Answer> {
     let (tx, rx) = mpsc::channel();
     let driver = Arc::clone(driver);
     let mut args = Map::new();
     args.insert("command".to_owned(), Value::String(command.to_owned()));
-    // Dispatch acquires registry locks before returning, so it runs on a worker
-    // and the caller's deadline-bound receive guards a blocked dispatch
-    // (`docs/testing.md`, "Waits and timeouts"). `deadline` threads that
-    // acknowledgement bound at the call sites; reconciliation keeps it over the
-    // proposed deadline-free helper.
-    let _remaining = deadline.left();
+    // Dispatch acquires registry locks before returning, so it runs on a worker;
+    // callers bound the acknowledgement receive under their existing deadline
+    // (`docs/testing.md`, "Waits and timeouts").
     thread::spawn(move || {
         driver.drive(
             "fiber.test/a",
@@ -4633,7 +4626,7 @@ fn shell_spilled_success_without_log_is_closing() {
     session
         .run(Vec::new(), Arc::new(|| false), move |_inbox| {
             let deadline = Deadline::after(DEADLINE);
-            let rx = drive_shell(deadline, &driver, "cat big");
+            let rx = drive_shell(&driver, "cat big");
             let answer = deadline.recv_or_fail(&rx, "the shell answer without a log");
             match answer {
                 Err(rejection) => {
@@ -4689,7 +4682,7 @@ fn shell_unsaved_left_without_log_still_cleans_up() {
     session
         .run(Vec::new(), Arc::new(|| false), move |_inbox| {
             let deadline = Deadline::after(DEADLINE);
-            let rx = drive_shell(deadline, &driver, "cat left");
+            let rx = drive_shell(&driver, "cat left");
             let answer = deadline.recv_or_fail(&rx, "the unsaved answer without a log");
             match answer {
                 Ok(Some(CommandResult::Shell {
@@ -4748,7 +4741,7 @@ fn shell_unsaved_left_removal_failure_without_log_rejects_io_failed() {
     session
         .run(Vec::new(), Arc::new(|| false), move |_inbox| {
             let deadline = Deadline::after(DEADLINE);
-            let rx = drive_shell(deadline, &driver, "cat stuck");
+            let rx = drive_shell(&driver, "cat stuck");
             let answer = deadline.recv_or_fail(&rx, "the stuck removal without a log");
             match answer {
                 Err(rejection) => {
