@@ -2148,6 +2148,131 @@ fn an_over_cap_head_is_refused_with_431_and_the_next_callback_succeeds() {
 }
 
 #[test]
+fn the_drain_ends_at_twice_the_cap() {
+    // The drain reads at most one more cap past the refused head:
+    // `while head.len() < 2 * MAX_HEAD`. One byte under the second cap
+    // the drain still loops: with nothing more arriving it parks on the
+    // injected clock, and passing the deadline ends it with the timeout.
+    // Exactly at the second cap the loop ends at once: the answer is
+    // `None` without waiting on the clock. A `<=` mutant loops once more
+    // at the cap: it parks, and the timeout below fails the `None`
+    // assertion. Both sizes are literals, not `MAX_HEAD`, so a
+    // narrowed-cap mutant cannot underflow the vectors before the
+    // assertions; `the_callback_head_cap_is_8kib` pins the value itself.
+    const TWICE: usize = 2 * 8 * 1024;
+    // One byte under the second cap, no head end, connection open: the
+    // drain consumes every byte, parks for more, and the advance past
+    // the deadline ends it with the timeout.
+    let clock = fakes::clock::FakeClock::new();
+    let deadline = clock.origin() + Duration::from_secs(60);
+    let listener = std::net::TcpListener::bind((std::net::Ipv4Addr::LOCALHOST, 0)).unwrap();
+    let addr = listener.local_addr().unwrap();
+    let (sent, received) = mpsc::channel();
+    std::thread::scope(|scope| {
+        let mut client = TcpStream::connect(addr).unwrap();
+        client.write_all(&vec![b'G'; TWICE - 1]).unwrap();
+        let (server, _) = listener.accept().unwrap();
+        let answerer = scope.spawn(|| {
+            sent.send(answer(server, &*clock, deadline, "s1")).unwrap();
+        });
+        // The drain consumed every byte and parks for more: only after
+        // this signal may the advance below move past the deadline, so
+        // the timeout it returns is the drain's, not a wait that never
+        // started.
+        assert!(
+            clock.await_parked(deadline, WITHIN),
+            "the drain never waited on the clock"
+        );
+        clock.advance(Duration::from_secs(61));
+        let served =
+            fakes::Deadline::after(WITHIN).recv_or_fail(&received, "the parked drain's answer");
+        match served {
+            Some(Served::Failed(error)) => {
+                assert!(matches!(error, LoginError::Timeout), "{error:?}");
+            }
+            _ => panic!("a drain one byte under the second cap did not time out"),
+        }
+        answerer.join().unwrap();
+    });
+    // Exactly at the second cap, no head end, connection open: the drain
+    // ends at once with `None`, without parking on the clock. A `<=`
+    // mutant reads once more, parks for the byte past the cap, and the
+    // advance below turns its answer into the timeout, which fails the
+    // `None` assertion.
+    let clock = fakes::clock::FakeClock::new();
+    let deadline = clock.origin() + Duration::from_secs(60);
+    let listener = std::net::TcpListener::bind((std::net::Ipv4Addr::LOCALHOST, 0)).unwrap();
+    let addr = listener.local_addr().unwrap();
+    let (sent, received) = mpsc::channel();
+    std::thread::scope(|scope| {
+        let mut client = TcpStream::connect(addr).unwrap();
+        client.write_all(&vec![b'G'; TWICE]).unwrap();
+        let (server, _) = listener.accept().unwrap();
+        let answerer = scope.spawn(|| {
+            sent.send(answer(server, &*clock, deadline, "s1")).unwrap();
+        });
+        let served = match fakes::Deadline::after(WITHIN).recv(&received) {
+            Ok(served) => served,
+            Err(_) => {
+                clock.advance(Duration::from_secs(61));
+                fakes::Deadline::after(WITHIN).recv_or_fail(&received, "the capped drain's answer")
+            }
+        };
+        assert!(served.is_none(), "a drain at the second cap did not end");
+        answerer.join().unwrap();
+    });
+}
+
+#[test]
+fn a_reset_in_the_drain_breaks_the_drain() {
+    // A read error whose kind is not `WouldBlock` ends the drain: the
+    // peer wrote past the cap, peeked only the 431's prefix, and closed
+    // with the rest of the reply unread, which resets the connection, so
+    // the drain's next read fails with `ConnectionReset` and the answer
+    // is `None`. A `true` guard parks on the reset instead of breaking,
+    // and the advance below turns its answer into the timeout, which
+    // fails the `None` assertion.
+    const CAP: usize = 8 * 1024;
+    let clock = fakes::clock::FakeClock::new();
+    let deadline = clock.origin() + Duration::from_secs(60);
+    let listener = std::net::TcpListener::bind((std::net::Ipv4Addr::LOCALHOST, 0)).unwrap();
+    let addr = listener.local_addr().unwrap();
+    let (sent, received) = mpsc::channel();
+    std::thread::scope(|scope| {
+        let mut client = TcpStream::connect(addr).unwrap();
+        // Past the cap with no head end: the server answers 431, then
+        // drains a head that never terminates on its own.
+        client.write_all(&vec![b'G'; CAP + 1024]).unwrap();
+        let (server, _) = listener.accept().unwrap();
+        let answerer = scope.spawn(|| {
+            sent.send(answer(server, &*clock, deadline, "s1")).unwrap();
+        });
+        // The 431 is written before the drain: peeking its prefix proves
+        // the server reached the drain without consuming it, so closing
+        // now resets the connection instead of ending it cleanly. The
+        // read timeout bounds the peek on the wall clock.
+        client.set_read_timeout(Some(WITHIN)).unwrap();
+        let mut prefix = [0_u8; 12];
+        for _ in 0..prefix.len() {
+            if client.peek(&mut prefix).unwrap() == prefix.len() {
+                break;
+            }
+        }
+        assert_eq!(&prefix, b"HTTP/1.1 431");
+        drop(client);
+        let served = match fakes::Deadline::after(WITHIN).recv(&received) {
+            Ok(served) => served,
+            Err(_) => {
+                clock.advance(Duration::from_secs(61));
+                fakes::Deadline::after(WITHIN).recv_or_fail(&received, "the reset head's answer")
+            }
+        };
+        assert!(served.is_none(), "a reset head in the drain ended the wait");
+        answerer.join().unwrap();
+    });
+}
+
+#[test]
 fn a_refused_head_dripped_past_the_deadline_ends_at_the_deadline() {
     // A peer sends an over-cap head with no terminator, reads the 431,
     // then keeps dripping after the fake deadline has passed: the drain
@@ -2170,16 +2295,34 @@ fn a_refused_head_dripped_past_the_deadline_ends_at_the_deadline() {
         let answerer = scope.spawn(|| {
             sent.send(answer(server, &*clock, deadline, "s1")).unwrap();
         });
-        // The 431 arrives before the drain, whole: read to its end, which
-        // needs no timeout and cannot block on the open connection.
-        let mut reply = Vec::new();
-        let mut byte = [0_u8; 1];
-        while !reply.ends_with(b"\r\n\r\n") {
-            match client.read(&mut byte) {
-                Ok(0) | Err(_) => break,
-                Ok(_) => reply.push(byte[0]),
+        // The 431 arrives before the drain, whole: one worker reads to
+        // its end, bounded by one wall-clock deadline, so a refused head
+        // that never ends still ends here. On failure the socket is shut
+        // down before joining, so the worker's blocking read ends and
+        // the scope still joins.
+        let (sent_reply, received_reply) = mpsc::channel();
+        let shutdown = client.try_clone().unwrap();
+        let mut writer = client.try_clone().unwrap();
+        let reader = scope.spawn(move || {
+            let mut reply = Vec::new();
+            let mut byte = [0_u8; 1];
+            while !reply.ends_with(b"\r\n\r\n") {
+                match client.read(&mut byte) {
+                    Ok(0) | Err(_) => break,
+                    Ok(_) => reply.push(byte[0]),
+                }
             }
-        }
+            sent_reply.send(reply).unwrap();
+        });
+        let reply = match fakes::Deadline::after(WITHIN).recv(&received_reply) {
+            Ok(reply) => reply,
+            Err(_) => {
+                let _shutdown = shutdown.shutdown(std::net::Shutdown::Both);
+                fakes::Deadline::after(WITHIN)
+                    .recv_or_fail(&received_reply, "the refused head's 431")
+            }
+        };
+        reader.join().unwrap();
         let reply = String::from_utf8_lossy(&reply).into_owned();
         assert!(reply.starts_with("HTTP/1.1 431"), "{reply}");
         // The drain parks on the injected clock while it waits for more
@@ -2201,7 +2344,7 @@ fn a_refused_head_dripped_past_the_deadline_ends_at_the_deadline() {
             // thread's latest park, so the await needs a park after the
             // write below.
             let mark = clock.advance_marked(Duration::ZERO);
-            client.write_all(b"G").unwrap();
+            writer.write_all(b"G").unwrap();
             assert!(
                 clock.await_parked_since(&mark, Some(deadline), WITHIN),
                 "the drain never waited on the clock"
