@@ -67,10 +67,23 @@ pub(crate) fn to_line(value: &impl serde::Serialize) -> Line {
 
 struct Subscriber {
     id: u64,
-    tx: SyncSender<Line>,
-    writer: JoinHandle<()>,
+    state: State,
     closer: Closer,
     retired: Closer,
+}
+
+/// What a subscriber owns: a pending registration holds only its writer
+/// for a later first line, while an active one holds its channel and
+/// writer thread. A private enum, not flags, so no state contradicts an
+/// optional sender or handle.
+enum State {
+    Pending {
+        writer: Arc<Mutex<UnixStream>>,
+    },
+    Active {
+        tx: SyncSender<Line>,
+        writer: JoinHandle<()>,
+    },
 }
 
 /// What removing one subscriber hands back: the shutdown its join path
@@ -100,6 +113,9 @@ pub(crate) struct Fanout {
     list: Vec<Subscriber>,
     next: u64,
     retired: Vec<(Closer, JoinHandle<()>)>,
+    /// Successful writer starts, including retired ones: never decremented.
+    #[cfg(test)]
+    started: usize,
 }
 
 impl Fanout {
@@ -129,8 +145,27 @@ impl Fanout {
         let id = self.next;
         self.list.push(Subscriber {
             id,
-            tx,
-            writer,
+            state: State::Active { tx, writer },
+            closer,
+            retired,
+        });
+        id
+    }
+
+    /// Reserves a pending registration: no channel and no writer thread
+    /// until the first broadcast line activates it. Returns the
+    /// registration's fresh id, the first being 1.
+    pub(crate) fn listen(
+        &mut self,
+        writer: Arc<Mutex<UnixStream>>,
+        closer: Closer,
+        retired: Closer,
+    ) -> u64 {
+        self.next += 1;
+        let id = self.next;
+        self.list.push(Subscriber {
+            id,
+            state: State::Pending { writer },
             closer,
             retired,
         });
@@ -139,37 +174,114 @@ impl Fanout {
 
     /// Unregisters `id`, drops its sender, and hands its retained
     /// shutdown and writer back for the caller to shut and join outside
-    /// its lock. `None` for an unknown id.
+    /// its lock. A pending registration holds no sender and no writer:
+    /// its shutdown comes back unshut, with no handle. `None` for an
+    /// unknown id.
     pub(crate) fn remove(&mut self, id: u64) -> Option<WriterEnd> {
         let at = self.list.iter().position(|sub| sub.id == id)?;
         let subscriber = self.list.remove(at);
-        drop(subscriber.tx);
-        drop(subscriber.closer);
-        Some(WriterEnd {
-            closer: subscriber.retired,
-            writer: Some(subscriber.writer),
-        })
+        let Subscriber {
+            id: _,
+            state,
+            closer,
+            retired,
+        } = subscriber;
+        drop(closer);
+        match state {
+            State::Active { tx, writer } => {
+                drop(tx);
+                Some(WriterEnd {
+                    closer: retired,
+                    writer: Some(writer),
+                })
+            }
+            State::Pending { writer } => {
+                drop(writer);
+                Some(WriterEnd {
+                    closer: retired,
+                    writer: None,
+                })
+            }
+        }
     }
 
-    /// Queues `line` for every subscriber without blocking. One whose
-    /// queue is full has stalled: it is unregistered, its writer kept for
-    /// joining, and its shutdown handed back for the caller to run
-    /// outside its lock, keeping the rest in order. One whose writer
-    /// already ended is not a cap violation: it is unregistered and kept
-    /// for joining, with no shutdown handed back.
+    /// Queues `line` for every subscriber without blocking. A pending
+    /// registration starts its writer on this first line, under this same
+    /// guard, at most once; a spawn that fails unregisters it and hands
+    /// its shutdown back, closing the connection. One whose queue is full
+    /// has stalled: it is unregistered, its writer kept for joining, and
+    /// its shutdown handed back for the caller to run outside its lock,
+    /// keeping the rest in order. One whose writer already ended is not a
+    /// cap violation: it is unregistered and kept for joining, with no
+    /// shutdown handed back.
     pub(crate) fn broadcast(&mut self, line: &Line) -> Vec<Closer> {
         let mut closers = Vec::new();
+        // Phase 1: activate every pending registration, in order. The
+        // transition holds this guard, so concurrent first lines cannot
+        // spawn twice; a failed spawn unregisters at once.
+        let mut failed = Vec::new();
+        for subscriber in self.list.iter_mut() {
+            let State::Pending { writer } = &subscriber.state else {
+                continue;
+            };
+            let writer = Arc::clone(writer);
+            // The lazy path serves attention only; the feed stays eager.
+            match spawn_writer(writer, "hub-attention-out") {
+                Some((tx, handle)) => {
+                    subscriber.state = State::Active { tx, writer: handle };
+                    #[cfg(test)]
+                    {
+                        self.started += 1;
+                    }
+                }
+                None => failed.push(subscriber.id),
+            }
+        }
+        for id in failed {
+            if let Some(at) = self.list.iter().position(|sub| sub.id == id) {
+                let subscriber = self.list.remove(at);
+                closers.push(subscriber.closer);
+                drop(subscriber.retired);
+            }
+        }
+        // Phase 2: enqueue to every active subscriber.
         let mut live = Vec::with_capacity(self.list.len());
         for subscriber in std::mem::take(&mut self.list) {
-            match subscriber.tx.try_send(Arc::clone(line)) {
-                Ok(()) => live.push(subscriber),
+            let Subscriber {
+                id,
+                state,
+                closer,
+                retired,
+            } = subscriber;
+            let (tx, writer) = match state {
+                State::Active { tx, writer } => (tx, writer),
+                // Phase 1 activates or removes every pending registration
+                // under this same guard, so none reaches here; requeueing
+                // keeps the registration if one ever did.
+                State::Pending { writer } => {
+                    live.push(Subscriber {
+                        id,
+                        state: State::Pending { writer },
+                        closer,
+                        retired,
+                    });
+                    continue;
+                }
+            };
+            match tx.try_send(Arc::clone(line)) {
+                Ok(()) => live.push(Subscriber {
+                    id,
+                    state: State::Active { tx, writer },
+                    closer,
+                    retired,
+                }),
                 Err(TrySendError::Full(_)) => {
-                    closers.push(subscriber.closer);
-                    self.retired.push((subscriber.retired, subscriber.writer));
+                    closers.push(closer);
+                    self.retired.push((retired, writer));
                 }
                 Err(TrySendError::Disconnected(_)) => {
-                    drop(subscriber.closer);
-                    self.retired.push((subscriber.retired, subscriber.writer));
+                    drop(closer);
+                    self.retired.push((retired, writer));
                 }
             }
         }
@@ -187,25 +299,54 @@ impl Fanout {
         let Some(at) = self.list.iter().position(|subscriber| subscriber.id == id) else {
             return Targeted::Gone;
         };
-        let outcome = self
-            .list
-            .get(at)
-            .map(|subscriber| subscriber.tx.try_send(Arc::clone(line)));
-        match outcome {
+        // Probe without holding the borrow. A pending registration holds
+        // no channel: like an unknown id, a no-op that resurrects
+        // nothing. Only the feed sends targeted lines, and the feed stays
+        // eager.
+        let send = match self.list.get(at) {
+            Some(Subscriber {
+                state: State::Active { tx, .. },
+                ..
+            }) => Some(tx.try_send(Arc::clone(line))),
+            _ => None,
+        };
+        match send {
             Some(Ok(())) => Targeted::Sent,
             Some(Err(TrySendError::Full(_))) => {
                 let subscriber = self.list.remove(at);
-                self.retired.push((subscriber.retired, subscriber.writer));
-                Targeted::Full(subscriber.closer)
+                let Subscriber {
+                    id: _,
+                    state,
+                    closer,
+                    retired,
+                } = subscriber;
+                let State::Active { tx: _, writer } = state else {
+                    drop(closer);
+                    drop(retired);
+                    return Targeted::Gone;
+                };
+                self.retired.push((retired, writer));
+                Targeted::Full(closer)
             }
             Some(Err(TrySendError::Disconnected(_))) => {
                 let subscriber = self.list.remove(at);
-                drop(subscriber.closer);
-                drop(subscriber.retired);
-                Targeted::DeadWriter(subscriber.writer)
+                let Subscriber {
+                    id: _,
+                    state,
+                    closer,
+                    retired,
+                } = subscriber;
+                let State::Active { tx: _, writer } = state else {
+                    drop(closer);
+                    drop(retired);
+                    return Targeted::Gone;
+                };
+                drop(closer);
+                drop(retired);
+                Targeted::DeadWriter(writer)
             }
-            // Unreachable: `at` came from this list, which no other code
-            // touches meanwhile.
+            // A pending registration, or, defensively, a vanished index:
+            // a no-op that resurrects nothing.
             None => Targeted::Gone,
         }
     }
@@ -224,18 +365,34 @@ impl Fanout {
     }
 
     /// Drops every subscriber's sender, then hands every writer back with
-    /// its retained shutdown (registered first, then retired). No sender
-    /// is alive when it returns, so joining the result cannot wait on this
-    /// code.
+    /// its retained shutdown (registered first, then retired). Pending
+    /// registrations own no thread and shut nothing: they are dropped,
+    /// not shut. No sender is alive when it returns, so joining the
+    /// result cannot wait on this code.
     pub(crate) fn close(self) -> Vec<WriterEnd> {
         let mut ends: Vec<WriterEnd> = Vec::new();
         for subscriber in self.list {
-            drop(subscriber.tx);
-            drop(subscriber.closer);
-            ends.push(WriterEnd {
-                closer: subscriber.retired,
-                writer: Some(subscriber.writer),
-            });
+            let Subscriber {
+                id: _,
+                state,
+                closer,
+                retired,
+            } = subscriber;
+            match state {
+                State::Active { tx, writer } => {
+                    drop(tx);
+                    drop(closer);
+                    ends.push(WriterEnd {
+                        closer: retired,
+                        writer: Some(writer),
+                    });
+                }
+                State::Pending { writer } => {
+                    drop(writer);
+                    drop(closer);
+                    drop(retired);
+                }
+            }
         }
         ends.extend(self.retired.into_iter().map(|(closer, writer)| WriterEnd {
             closer,
@@ -248,6 +405,14 @@ impl Fanout {
     #[cfg(test)]
     pub(crate) fn ids(&self) -> Vec<u64> {
         self.list.iter().map(|sub| sub.id).collect()
+    }
+
+    /// Successful writer starts, including retired ones: never
+    /// decremented. Test-only: no outside socket outcome distinguishes an
+    /// idle parked thread from no thread.
+    #[cfg(test)]
+    pub(crate) fn started(&self) -> usize {
+        self.started
     }
 }
 

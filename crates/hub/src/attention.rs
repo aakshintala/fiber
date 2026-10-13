@@ -178,6 +178,9 @@ impl Attention {
         }
     }
 
+    /// Reserves a pending listener: no channel and no writer thread until
+    /// the first unsolicited line activates it, under the registry lock,
+    /// at most once. Refused (`None`) once stopped.
     pub(crate) fn listen(
         &self,
         writer: Arc<Mutex<UnixStream>>,
@@ -192,10 +195,7 @@ impl Attention {
         if self.stopped.load(Ordering::SeqCst) {
             return None;
         }
-        // Under the registry lock, so the stopped check and the admission
-        // are atomic: no writer starts past a stop.
-        let spawned = crate::feed::spawn_writer(writer, "hub-attention-out")?;
-        Some(listeners.push(spawned, closer, retired, Arc::from([])))
+        Some(listeners.listen(writer, closer, retired))
     }
 
     /// Queues one unsolicited hub line to every served connection, handing
@@ -214,32 +214,37 @@ impl Attention {
         self.fail_listen.store(true, Ordering::SeqCst);
     }
 
-    /// Drops listener `id`: its connection is shut so a writer blocked on
-    /// a stalled reader ends at once, and its thread is joined after the
-    /// lock is released.
+    /// Drops listener `id`. An active writer's connection is shut so a
+    /// writer blocked on a stalled reader ends at once, and its thread is
+    /// joined after the lock is released. A pending listener owns no
+    /// thread and shuts nothing.
     pub(crate) fn unlisten(&self, id: u64) {
         let gone = lock(&self.listeners).remove(id);
         if let Some(end) = gone {
-            close_connections(vec![end.closer], UnixStream::shutdown);
-            if let Some(writer) = end.writer {
-                match writer.join() {
-                    Ok(()) | Err(_) => {}
+            match end.writer {
+                Some(writer) => {
+                    close_connections(vec![end.closer], UnixStream::shutdown);
+                    match writer.join() {
+                        Ok(()) | Err(_) => {}
+                    }
                 }
+                None => drop(end.closer),
             }
         }
     }
 
     /// Stops the registry for the feed's stop: no later listen registers
-    /// and no later line is queued. Writers are joined without shutting
-    /// their sockets: a relay-only connection never feeds, so its socket
-    /// must keep receiving past the feed's stop, and shutting it would
-    /// close the relay too. Shutting active writers waits for pending
-    /// registrations, which own no thread and are dropped unshut.
+    /// and no later line is queued. Active writers shut before joining,
+    /// so a blocked writer ends at once. Pending registrations own no
+    /// thread and shut nothing: they are dropped, so a relay-only
+    /// connection keeps receiving past the feed's stop.
     pub(crate) fn stop(&self) {
         self.stopped.store(true, Ordering::SeqCst);
         let old = std::mem::take(&mut *lock(&self.listeners));
+        // close() drops pending registrations unshut and hands back only
+        // active writers: every shutdown here frees a real writer.
         for end in old.close() {
-            drop(end.closer);
+            close_connections(vec![end.closer], UnixStream::shutdown);
             if let Some(writer) = end.writer {
                 match writer.join() {
                     Ok(()) | Err(_) => {}
@@ -303,6 +308,15 @@ impl Attention {
     #[cfg(test)]
     pub(crate) fn listeners(&self) -> usize {
         lock(&self.listeners).ids().len()
+    }
+
+    /// How many attention writers started, including retired ones: actual
+    /// successful starts, not currently live writers. Test-only: no
+    /// outside socket outcome distinguishes an idle parked thread from no
+    /// thread.
+    #[cfg(test)]
+    pub(crate) fn writers_started(&self) -> usize {
+        lock(&self.listeners).started()
     }
 }
 

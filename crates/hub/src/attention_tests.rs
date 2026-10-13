@@ -850,7 +850,7 @@ fn announce_reports_a_stalled_listener_without_silently_dropping_it() {
         .unwrap();
     let line = b"{\"kind\":\"device_changed\",\"payload\":{}}\n";
     let mut reported = 0;
-    for _ in 0..crate::feed::QUEUE + 1 {
+    for _ in 0..crate::feed::QUEUE + 2 {
         let closers = attention.announce(Arc::from(&line[..]));
         if !closers.is_empty() {
             reported += closers.len();
@@ -880,17 +880,10 @@ fn announce_reports_a_stalled_listener_without_silently_dropping_it() {
 }
 
 #[test]
-fn stop_shuts_the_registry_but_leaves_sockets_receiving() {
+fn stop_shuts_active_but_leaves_pending_receiving() {
     let clock = FakeClock::new();
     let attention = Arc::new(Attention::new(Arc::clone(&clock) as Arc<dyn Clock>));
-    // Two live listeners; the test keeps each writer to probe its socket.
-    let (first, first_far) = UnixStream::pair().unwrap();
-    first_far.set_read_timeout(Some(DEADLINE)).unwrap();
-    let (first_closer, first_retired) = (closer_for(&first), closer_for(&first));
-    let first_writer = Arc::new(Mutex::new(first));
-    attention
-        .listen(Arc::clone(&first_writer), first_closer, first_retired)
-        .unwrap();
+    // Active: listened, then one waiting line starts its writer.
     let (second, second_far) = UnixStream::pair().unwrap();
     second_far.set_read_timeout(Some(DEADLINE)).unwrap();
     let (second_closer, second_retired) = (closer_for(&second), closer_for(&second));
@@ -898,18 +891,29 @@ fn stop_shuts_the_registry_but_leaves_sockets_receiving() {
     attention
         .listen(Arc::clone(&second_writer), second_closer, second_retired)
         .unwrap();
-    // Delivery works before the stop.
     let waiting = status_of("waiting", Some("r1"), S, None);
     drop(attention.notify("s_0000000000000001", None, &waiting, false));
-    for (far, what) in [
-        (first_far.try_clone().unwrap(), "the first attention"),
-        (second_far.try_clone().unwrap(), "the second attention"),
-    ] {
-        assert_eq!(
-            read_line(&mut BufReader::new(far), what)["payload"]["reason"],
-            "waiting"
-        );
-    }
+    assert_eq!(
+        attention.writers_started(),
+        1,
+        "the notified listener started"
+    );
+    assert_eq!(
+        read_line(
+            &mut BufReader::new(second_far.try_clone().unwrap()),
+            "the attention"
+        )["payload"]["reason"],
+        "waiting"
+    );
+    // Pending: listened after the only line, so no writer ever starts.
+    let (first, first_far) = UnixStream::pair().unwrap();
+    first_far.set_read_timeout(Some(DEADLINE)).unwrap();
+    let (first_closer, first_retired) = (closer_for(&first), closer_for(&first));
+    let first_writer = Arc::new(Mutex::new(first));
+    attention
+        .listen(Arc::clone(&first_writer), first_closer, first_retired)
+        .unwrap();
+    assert_eq!(attention.writers_started(), 1, "listening starts nothing");
     // The registry shuts: no later listen registers and no later line is
     // queued or reported.
     let stopping = Arc::clone(&attention);
@@ -936,30 +940,184 @@ fn stop_shuts_the_registry_but_leaves_sockets_receiving() {
             .notify("s_0000000000000001", None, &waiting, false)
             .is_empty()
     );
-    let line = b"{\"kind\":\"device_changed\",\"payload\":{}}\n";
+    let line = b"{\"kind\":\"device_changed\",\"payload\":{}}";
     assert!(attention.announce(Arc::from(&line[..])).is_empty());
     assert_eq!(attention.listeners(), 0);
-    // Both sockets are unshut: a server-side write still reaches each far
-    // end, so a relay on the same connection keeps receiving. Pending
-    // registrations, which own no thread, are dropped the same way once
-    // listening turns lazy.
-    for (writer, far) in [(&first_writer, first_far), (&second_writer, second_far)] {
-        writer.lock().unwrap().write_all(b"x").unwrap();
-        let mut buf = [0; 1];
-        let mut far = far;
-        far.read_exact(&mut buf).unwrap();
-        assert_eq!(buf, [b'x'], "the socket was never shut");
-    }
+    // The pending socket was never shut: a server-side write still reaches
+    // its far end, so a relay on the same connection keeps receiving past
+    // the feed's stop.
+    first_writer.lock().unwrap().write_all(b"x").unwrap();
+    let mut buf = [0; 1];
+    let mut first_far = first_far;
+    first_far.read_exact(&mut buf).unwrap();
+    assert_eq!(buf, [b'x'], "the pending socket was never shut");
+    // The active socket was shut: its far end sees EOF.
+    let mut buf = [0; 1];
     assert_eq!(
-        Arc::strong_count(&first_writer),
-        1,
-        "the first writer joined"
+        BufReader::new(second_far).read(&mut buf).unwrap(),
+        0,
+        "the active side sees EOF"
     );
+    assert_eq!(Arc::strong_count(&first_writer), 1, "no pending writer");
     assert_eq!(
         Arc::strong_count(&second_writer),
         1,
-        "the second writer joined"
+        "the active writer joined"
     );
+}
+
+#[test]
+fn the_first_attention_starts_one_writer_and_later_lines_reuse_it() {
+    let clock = FakeClock::new();
+    let attention = Arc::new(Attention::new(Arc::clone(&clock) as Arc<dyn Clock>));
+    let (writer, far) = UnixStream::pair().unwrap();
+    far.set_read_timeout(Some(DEADLINE)).unwrap();
+    let (closer, retired) = (closer_for(&writer), closer_for(&writer));
+    let kept = Arc::new(Mutex::new(writer));
+    attention
+        .listen(Arc::clone(&kept), closer, retired)
+        .unwrap();
+    assert_eq!(attention.writers_started(), 0, "listening starts nothing");
+    let mut read = BufReader::new(far);
+    // The first waiting line starts exactly one writer and delivers its
+    // documented payload.
+    let waiting = status_of("waiting", Some("r1"), S, None);
+    drop(attention.notify("s_0000000000000001", None, &waiting, false));
+    assert_eq!(attention.writers_started(), 1, "the first line starts one");
+    let line = read_line(&mut read, "the waiting attention");
+    assert_eq!(line["payload"]["reason"], "waiting");
+    assert_eq!(line["payload"]["session_id"], "s_0000000000000001");
+    assert_eq!(line["payload"]["summary"], "run r1");
+    // The next waiting and finished lines reuse that same writer, in order.
+    let streaming = status_of("streaming", None, S, None);
+    let heard = Seen {
+        status: &streaming,
+        live: true,
+    };
+    let idle = status_of("idle", None, S, None);
+    drop(attention.notify("s_0000000000000001", Some(heard), &idle, false));
+    let waiting = status_of("waiting", Some("r2"), S, None);
+    drop(attention.notify("s_0000000000000001", None, &waiting, false));
+    assert_eq!(attention.writers_started(), 1, "still one writer");
+    assert_eq!(
+        read_line(&mut read, "the finished attention")["payload"]["reason"],
+        "finished"
+    );
+    assert_eq!(
+        read_line(&mut read, "the second waiting attention")["payload"]["reason"],
+        "waiting"
+    );
+    drop(kept);
+}
+
+#[test]
+fn a_pending_unlisten_starts_no_writer() {
+    let clock = FakeClock::new();
+    let attention = Arc::new(Attention::new(Arc::clone(&clock) as Arc<dyn Clock>));
+    let (writer, _far) = UnixStream::pair().unwrap();
+    let (closer, retired) = (closer_for(&writer), closer_for(&writer));
+    let id = attention
+        .listen(Arc::new(Mutex::new(writer)), closer, retired)
+        .unwrap();
+    attention.unlisten(id);
+    assert_eq!(attention.listeners(), 0);
+    let waiting = status_of("waiting", Some("r1"), S, None);
+    drop(attention.notify("s_0000000000000001", None, &waiting, false));
+    assert_eq!(attention.writers_started(), 0, "no writer ever started");
+    assert_eq!(attention.listeners(), 0);
+}
+
+#[test]
+fn concurrent_first_notifies_start_one_writer() {
+    let clock = FakeClock::new();
+    let attention = Arc::new(Attention::new(Arc::clone(&clock) as Arc<dyn Clock>));
+    let (writer, far) = UnixStream::pair().unwrap();
+    far.set_read_timeout(Some(DEADLINE)).unwrap();
+    let (closer, retired) = (closer_for(&writer), closer_for(&writer));
+    attention
+        .listen(Arc::new(Mutex::new(writer)), closer, retired)
+        .unwrap();
+    // Two threads race their first lines through one barrier: whichever
+    // activates, the other only enqueues.
+    let (go_tx, go_rx) = mpsc::channel::<()>();
+    let go_rx = Arc::new(Mutex::new(go_rx));
+    let (done_tx, done_rx) = mpsc::channel::<()>();
+    let mut handles = Vec::new();
+    for session in ["s_00000000000000c1", "s_00000000000000c2"] {
+        let attention = Arc::clone(&attention);
+        let go_rx = Arc::clone(&go_rx);
+        let done_tx = done_tx.clone();
+        handles.push(
+            thread::Builder::new()
+                .name("attention-test-first".to_owned())
+                .spawn(move || {
+                    go_rx.lock().unwrap().recv().unwrap_or(());
+                    let waiting = status_of("waiting", Some("r1"), S, None);
+                    drop(attention.notify(session, None, &waiting, false));
+                    done_tx.send(()).unwrap_or(());
+                })
+                .unwrap(),
+        );
+    }
+    drop(done_tx);
+    go_tx.send(()).unwrap_or(());
+    go_tx.send(()).unwrap_or(());
+    for _ in 0..2 {
+        Deadline::after(DEADLINE)
+            .recv(&done_rx)
+            .expect("both first lines to land");
+    }
+    for handle in handles {
+        handle.join().unwrap();
+    }
+    assert_eq!(attention.writers_started(), 1, "one spawn for both firsts");
+    // Both lines arrived, one per session.
+    let mut read = BufReader::new(far);
+    let mut sessions = Vec::new();
+    for _ in 0..2 {
+        sessions
+            .push(read_line(&mut read, "each first attention")["payload"]["session_id"].clone());
+    }
+    sessions.sort_by(|a, b| a.as_str().cmp(&b.as_str()));
+    assert_eq!(
+        sessions,
+        [
+            Value::String("s_00000000000000c1".to_owned()),
+            Value::String("s_00000000000000c2".to_owned())
+        ]
+    );
+}
+
+#[test]
+fn first_announce_starts_the_writer_and_later_attention_reuses_it() {
+    let clock = FakeClock::new();
+    let attention = Arc::new(Attention::new(Arc::clone(&clock) as Arc<dyn Clock>));
+    let (writer, far) = UnixStream::pair().unwrap();
+    far.set_read_timeout(Some(DEADLINE)).unwrap();
+    let (closer, retired) = (closer_for(&writer), closer_for(&writer));
+    let kept = Arc::new(Mutex::new(writer));
+    attention
+        .listen(Arc::clone(&kept), closer, retired)
+        .unwrap();
+    // A device notice needs no attention first: it starts the writer and
+    // delivers.
+    let line = b"{\"kind\":\"device_changed\",\"payload\":{\"device\":\"phone\"}}\n";
+    drop(attention.announce(Arc::from(&line[..])));
+    assert_eq!(attention.writers_started(), 1, "the notice starts one");
+    let mut read = BufReader::new(far);
+    assert_eq!(
+        read_line(&mut read, "the device change")["kind"],
+        "device_changed"
+    );
+    // Later attention reuses that writer, and retiring it keeps the count.
+    let waiting = status_of("waiting", Some("r1"), S, None);
+    drop(attention.notify("s_0000000000000001", None, &waiting, false));
+    assert_eq!(attention.writers_started(), 1, "still one writer");
+    assert_eq!(
+        read_line(&mut read, "the waiting attention")["payload"]["reason"],
+        "waiting"
+    );
+    drop(kept);
 }
 
 #[test]

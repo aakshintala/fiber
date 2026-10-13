@@ -1366,6 +1366,45 @@ fn overflow_first_still_closes_and_releases() {
     overflow_joined(race, "after the overflow first");
 }
 
+#[test]
+fn a_relay_only_connection_starts_no_attention_writer() {
+    let temp = Temp::new();
+    let hub = temp.hub(FakeStarter::hang(&temp.dir));
+    let sid = "s_0123456789abcdef";
+    let ack = json!({
+        "kind": "command_accepted",
+        "session_id": sid,
+        "ts": 1,
+        "schema_version": 1,
+        "payload": {"command_id": "c_4"},
+    });
+    let _session = bind_session(&temp.dir, sid, ack.clone());
+    let mut client = Client::connect(&hub);
+    client.hello();
+    until_listeners(&hub, 1, "the connection registered");
+    assert_eq!(
+        hub.feed.attention.writers_started(),
+        0,
+        "hello starts no writer"
+    );
+    // Relay only: a session command is acknowledged and verbatim, with no
+    // feed and no unsolicited line.
+    client.send(&json!({
+        "id": "c_4",
+        "session_id": sid,
+        "command": "subscribe",
+        "args": {"level": "full"},
+    }));
+    assert_eq!(client.next("the relayed acknowledgement"), ack);
+    assert_eq!(hub.feed.attention.listeners(), 1, "still registered");
+    assert_eq!(
+        hub.feed.attention.writers_started(),
+        0,
+        "relay-only traffic starts no writer"
+    );
+    stop_within(&hub.feed);
+}
+
 /// A hub on a fake clock whose sessions accept the first prompt, with the
 /// clock and the starter.
 fn content_hub(temp: &Temp) -> (Arc<Hub>, Arc<fakes::clock::FakeClock>, FakeStarter) {
