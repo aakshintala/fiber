@@ -20,9 +20,6 @@ struct Parked {
 struct State {
     offset: Duration,
     parked: Vec<Parked>,
-    /// How many times a waiter entered [`Clock::wait_until`]: a waiter
-    /// that parks enters once per park, one that spins re-enters without
-    /// a wake. Test-only reads distinguish the two.
     /// The latest park id of each thread that ever parked on this clock.
     /// Written in `wait_until` under the lock that pushes the park; a
     /// `FakeClock` lives for one test, so this holds at most one entry
@@ -32,7 +29,6 @@ struct State {
     /// process cannot reach, so a later park's id compares greater with `>`.
     next_id: u64,
     wakers: Vec<Weak<dyn Wake>>,
-    waits: u64,
 }
 
 /// Which thread last parked at the instant of an advance, from
@@ -72,7 +68,6 @@ impl FakeClock {
                 latest: Vec::new(),
                 next_id: 0,
                 wakers: Vec::new(),
-                waits: 0,
             }),
             parked_cv: Condvar::new(),
             #[cfg(test)]
@@ -257,12 +252,6 @@ impl FakeClock {
             .unwrap_or_else(PoisonError::into_inner);
         parked_unbounded(&guard)
     }
-
-    /// How many times waiters entered [`Clock::wait_until`] so far.
-    #[cfg(test)]
-    pub fn wait_entries(&self) -> u64 {
-        lock(&self.state).waits
-    }
 }
 
 impl Clock for FakeClock {
@@ -283,9 +272,6 @@ impl Clock for FakeClock {
     }
 
     fn wait_until(&self, until: Option<Instant>, wait: &mut dyn FnMut(Option<Duration>)) {
-        // One count per entry, test builds included: the single `u64`
-        // costs nothing beside the lock this already holds.
-        lock(&self.state).waits += 1;
         let id = {
             let mut state = lock(&self.state);
             let now = now_in(&state, self.origin);

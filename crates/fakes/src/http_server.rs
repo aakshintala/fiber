@@ -8,6 +8,8 @@
 use std::collections::VecDeque;
 use std::io::{self, Read, Write};
 use std::net::{SocketAddr, TcpListener, TcpStream};
+#[cfg(test)]
+use std::sync::atomic::AtomicU64;
 use std::sync::{
     Arc, Condvar, Mutex, MutexGuard, PoisonError,
     atomic::{AtomicBool, AtomicU8, Ordering},
@@ -274,6 +276,11 @@ struct Shared {
     _waker: Arc<ClockWaker>,
     #[cfg(test)]
     acks: Mutex<Option<mpsc::Sender<WaitAck>>>,
+    /// How many times waiters entered [`Shared::wait`], test-only: a
+    /// waiter that parks enters once per park, one that spins re-enters
+    /// without a wake.
+    #[cfg(test)]
+    waits: AtomicU64,
     #[cfg(test)]
     gate: Mutex<Option<Arc<CheckGate>>>,
     idle: Mutex<usize>,
@@ -305,6 +312,10 @@ impl Shared {
         seq: &mut u64,
         acked: &mut Option<u64>,
     ) -> WaitEnd {
+        // One count per entry: a waiter that parks enters once per
+        // park, one that spins re-enters without a wake.
+        #[cfg(test)]
+        self.waits.fetch_add(1, Ordering::SeqCst);
         // Read under the mutex the wake bumps, before every check, so a
         // wake between here and the park still ends the park at once.
         let seen = *lock(&self.wake);
@@ -1027,6 +1038,8 @@ impl HttpServer {
             #[cfg(test)]
             acks: Mutex::new(None),
             #[cfg(test)]
+            waits: AtomicU64::new(0),
+            #[cfg(test)]
             gate: Mutex::new(None),
             idle: Mutex::new(0),
             idle_changed: Condvar::new(),
@@ -1243,6 +1256,12 @@ impl HttpServer {
         let (tx, rx) = mpsc::channel();
         *lock(&self.shared.acks) = Some(tx);
         rx
+    }
+
+    /// How many times waiters entered [`Shared::wait`] so far, test-only.
+    #[cfg(test)]
+    pub(crate) fn test_wait_entries(&self) -> u64 {
+        self.shared.waits.load(Ordering::SeqCst)
     }
 
     /// Holds check-to-park pauses from here on, test-only.

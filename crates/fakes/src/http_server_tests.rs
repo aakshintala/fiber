@@ -875,8 +875,8 @@ fn default_limits_pin_their_documented_values() {
 }
 
 /// A wait with no wake parks: with a minute poll, a parked waiter enters
-/// the clock once, while one whose park returns at once re-enters without
-/// any wake.
+/// the core's wait once, while one whose park returns at once re-enters
+/// without any wake.
 #[test]
 fn a_wait_without_a_wake_parks_instead_of_spinning() {
     let clock = fake_clock();
@@ -904,16 +904,16 @@ fn a_wait_without_a_wake_parks_instead_of_spinning() {
             clock.await_thread_parked(ack.thread, ack.until, OP),
             "the accept parks on the clock before it moves"
         );
-        let entered = clock.wait_entries();
+        let entered = server.test_wait_entries();
         assert!(
             Deadline::after(QUIET).recv(&done_rx).is_err(),
             "the accept waits instead of ending"
         );
-        let reentered = clock.wait_entries();
+        let reentered = server.test_wait_entries();
         server.shutdown();
         assert!(
             reentered - entered <= 3,
-            "a parked wait re-enters the clock only past a wake, entered {entered}, now {reentered}"
+            "a parked wait re-enters the core's wait only past a wake, entered {entered}, now {reentered}"
         );
     });
 }

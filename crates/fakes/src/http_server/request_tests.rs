@@ -471,15 +471,24 @@ fn check_phase(prefix: &[u8], phase: &'static str, progress: &[u8]) {
         }
     }
 
-    // One byte of progress, then silence to exact expiry. The reader
-    // borrows its server under a scope, so no clone's drop can end the
-    // read early and no thread outlives the phase.
+    // One byte of progress, then silence to exact expiry. The prefix is
+    // queued before the reader starts, so its first park is the phase
+    // under test: that phase's acknowledgment is the one the test waits
+    // for. An early park would spend the wait's one acknowledgment for
+    // this wake generation on an earlier phase, and the phase under test
+    // would park again without announcing itself. The reader borrows its
+    // server under a scope, so no clone's drop can end the read early
+    // and no thread outlives the phase.
     let clock = fake_clock();
     let server = bind(&clock, bounds());
     let acks = server.test_acknowledgments();
     let addr = server.addr();
     let (tx, rx) = mpsc::channel();
     thread::scope(|scope| {
+        // Inside the scope so a failure drops the client before the
+        // join: the drop ends the reader's wait instead of hanging it.
+        let mut client = TcpStream::connect(addr).expect("the test connects");
+        client.write_all(prefix).expect("the prefix writes");
         scope.spawn(|| {
             let outcome = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
                 let mut conn = server
@@ -491,15 +500,25 @@ fn check_phase(prefix: &[u8], phase: &'static str, progress: &[u8]) {
                 Ok(()) | Err(_) => {}
             }
         });
-        let mut client = TcpStream::connect(addr).expect("the test connects");
-        client.write_all(prefix).expect("the prefix writes");
         let ack = wait_phase(&acks, phase);
         assert!(
             clock.await_thread_parked(ack.thread, ack.until, OP),
             "the {phase} parks on the clock before it moves"
         );
+        // The park above, marked before the progress byte lands: the
+        // wait past the next advance is a later park of this waiter,
+        // observed through its acknowledgment and its clock park rather
+        // than through wall timing.
+        let until = ack.until.expect("the phase waits on the request budget");
+        let mark = clock
+            .mark_parked(until, OP)
+            .expect("the phase parks on the clock under its budget");
         client.write_all(progress).expect("one byte writes");
         clock.advance(Duration::from_secs(10) - Duration::from_nanos(1));
+        assert!(
+            clock.await_parked_since(&mark, ack.until, OP),
+            "one tick before the bound the {phase} parks again instead of ending"
+        );
         assert!(
             Deadline::after(Duration::from_millis(200))
                 .recv(&rx)

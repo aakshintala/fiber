@@ -48,6 +48,21 @@ fn trickled_header_bytes_fail_within_the_request_bound() {
     let acks = server.test_acknowledgments();
     let (done_tx, done_rx) = mpsc::channel();
     thread::scope(|scope| {
+        // Inside the scope so a failure drops the client before the
+        // join: the drop ends the reader's wait instead of hanging it.
+        let mut client = TcpStream::connect(server.addr()).expect("the test connects");
+        // The request line, one byte at a time, queued before the reader
+        // starts: every underlying read succeeds, so one timeout per
+        // read would never fire on this. Its first park is the headers
+        // wait below, so that phase's acknowledgment is the one the test
+        // waits for: an early request-line park would spend the wait's
+        // one acknowledgment for this wake generation, and the headers
+        // wait would park again without announcing itself.
+        for byte in b"POST /mcp HTTP/1.1\r\n" {
+            client
+                .write_all(std::slice::from_ref(byte))
+                .expect("the trickle writes");
+        }
         scope.spawn(|| {
             let caught = std::panic::catch_unwind(AssertUnwindSafe(|| {
                 let mut conn = server
@@ -57,14 +72,6 @@ fn trickled_header_bytes_fail_within_the_request_bound() {
             }));
             done_tx.send(caught).expect("the test waits");
         });
-        let mut client = TcpStream::connect(server.addr()).expect("the test connects");
-        // The request line, one byte at a time: every underlying read
-        // succeeds, so one timeout per read would never fire on this.
-        for byte in b"POST /mcp HTTP/1.1\r\n" {
-            client
-                .write_all(std::slice::from_ref(byte))
-                .expect("the trickle writes");
-        }
         // The headers wait announces its own phase: the server is past
         // its clock check and waiting on the clock before the clock
         // moves (`docs/testing.md`, "Waits and timeouts").
