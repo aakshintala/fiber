@@ -56,13 +56,20 @@ pub(crate) fn launch(
     // `model` and `thinking`, unset for the chips' defaults
     // (`docs/configuration.md`). The run's flags name the chip's model:
     // the layer's last `model=`, so a later `-c model=` wins over
-    // `--model`, as the session's own resolution reads them.
+    // `--model`, as the session's own resolution reads them. The key
+    // compares by segments as `crates/config/src/path.rs:parse` splits
+    // them, the same comparison `with_start_model` makes, so a quoted
+    // `"model"` names the chip; the value reads as `-c` documents it:
+    // JSON, or a bare string when it does not parse as JSON.
     let layer = crate::per_run(model, overrides);
     let model = layer
         .iter()
         .rev()
-        .find_map(|override_text| override_text.strip_prefix("model="))
-        .map(str::to_owned)
+        .filter_map(|override_text| {
+            let (key, value) = override_text.split_once('=')?;
+            is_model_key(key_segments(key).as_deref()).then(|| override_value(value))
+        })
+        .next()
         .or_else(|| {
             config
                 .get("model", None)
@@ -125,6 +132,47 @@ pub(crate) fn launch(
         // `main` gives the seam once it holds Fiber home.
         configure: None,
     }
+}
+
+/// Splits a `-c` key into segments the way
+/// `crates/config/src/path.rs:parse` does: a `"quoted"` segment may hold
+/// dots, so `"model"` and `model` are the same key. `None` for an empty
+/// key, an empty segment or an unclosed quote; such keys never name the
+/// chip.
+fn key_segments(key: &str) -> Option<Vec<String>> {
+    let mut segments = Vec::new();
+    let mut rest = key;
+    loop {
+        let (segment, after) = match rest.strip_prefix('"') {
+            Some(quoted) => {
+                let end = quoted.find('"')?;
+                (quoted.get(..end)?, quoted.get(end + 1..)?)
+            }
+            None => rest.split_at(rest.find('.').unwrap_or(rest.len())),
+        };
+        if segment.is_empty() {
+            return None;
+        }
+        segments.push(segment.to_owned());
+        if after.is_empty() {
+            return Some(segments);
+        }
+        rest = after.strip_prefix('.')?;
+    }
+}
+
+/// A `-c` value as `Config::load` reads it (`crates/config/src/lib.rs`):
+/// JSON, or the bare string when it does not parse as JSON, so
+/// `model="fake/m"` names the chip `fake/m` without its quotes.
+fn override_value(value: &str) -> String {
+    serde_json::from_str(value).unwrap_or_else(|_| value.to_owned())
+}
+
+/// Whether `segments` names the top-level `model` key: the same key
+/// comparison `with_start_model` makes, splitting as
+/// `crates/config/src/path.rs:parse` does.
+fn is_model_key(segments: Option<&[String]>) -> bool {
+    matches!(segments, Some([model]) if model == "model")
 }
 
 /// The boolean at `key`, true when absent (`docs/configuration.md`,

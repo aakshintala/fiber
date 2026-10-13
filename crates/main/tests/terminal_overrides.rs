@@ -129,6 +129,34 @@ fn bare_fiber_with_model_and_dash_c_starts_each_session_with_both_overrides() {
     // before the answer proves the `-c` layer rode the `start`.
     // (`retry_scheduled` itself is ephemeral: it never reaches the log.)
     let events = session_events(&setup);
+    // The session's complete ordered event kinds: a missing, duplicated
+    // or reordered event fails (`docs/testing.md`, "Event streams").
+    // The first attempt fails the 503, the retry answers.
+    let kinds: Vec<&str> = events
+        .iter()
+        .filter_map(|line| line["kind"].as_str())
+        .collect();
+    assert_eq!(
+        kinds,
+        [
+            "session_started",
+            "fiber_started",
+            "extensions_loaded",
+            "preamble_built",
+            "opening_message",
+            "turn_started",
+            "step_started",
+            "assistant_message_started",
+            "usage_recorded",
+            "assistant_message_completed",
+            "assistant_message_started",
+            "text_completed",
+            "usage_recorded",
+            "assistant_message_completed",
+            "turn_completed",
+        ],
+        "{events:?}"
+    );
     assert!(
         events
             .iter()

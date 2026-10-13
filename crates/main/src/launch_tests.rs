@@ -11,6 +11,36 @@ fn config(home: &std::path::Path, workspace: &std::path::Path, overrides: Vec<St
 }
 
 #[test]
+fn quoted_model_spellings_name_the_chip() {
+    let dir = fakes::TempDir::new("fiber-launch-quoted");
+    let workspace = dir.path().to_path_buf();
+    let identity = workspace
+        .canonicalize()
+        .unwrap_or_else(|err| panic!("canonical: {err}"));
+    let config = config(dir.path(), &workspace, Vec::new());
+    // `Config::load` reads `"model"` as `model`
+    // (`crates/config/src/path.rs:parse`), and a `-c` value as JSON, or a
+    // bare string when it does not parse as JSON: both quoted spellings
+    // name the chip `cli/m` without quotes.
+    for overrides in [
+        vec!["\"model\"=cli/m".to_owned()],
+        vec!["model=\"cli/m\"".to_owned()],
+    ] {
+        let launch = launch(
+            workspace.clone(),
+            &identity,
+            &config,
+            tui::ThemeSetting::Follow,
+            dir.path(),
+            None,
+            overrides.clone(),
+        );
+        assert_eq!(launch.model.as_deref(), Some("cli/m"), "{overrides:?}");
+        assert_eq!(launch.overrides, overrides, "{overrides:?}");
+    }
+}
+
+#[test]
 fn an_identity_equal_to_the_workspace_is_not_git() {
     let dir = fakes::TempDir::new("fiber-launch");
     let workspace = dir.path().to_path_buf();

@@ -1917,6 +1917,47 @@ fn a_launch_thinking_key_for_the_chosen_model_yields_to_the_choice() {
 }
 
 #[test]
+fn a_quoted_model_key_yields_to_the_session_only_choice() {
+    let mut app = home();
+    // `Config::load` reads `"model"` as `model`
+    // (`crates/config/src/path.rs:parse`), so the quoted spelling yields
+    // to the choice naming the model, exactly as the bare one does.
+    for layer in [
+        vec!["\"model\"=cli/m".to_owned(), "retry.attempts=2".to_owned()],
+        vec!["model=\"cli/m\"".to_owned(), "retry.attempts=2".to_owned()],
+    ] {
+        let args = merged(&mut app, layer.clone(), Some(held("acme/m1", Some("low"))));
+        assert_eq!(args["model"], json!("acme/m1"));
+        assert_eq!(
+            args["overrides"],
+            json!(["retry.attempts=2", "models.\"acme/m1\".thinking=low"]),
+            "{layer:?}"
+        );
+    }
+}
+
+#[test]
+fn an_equivalent_thinking_key_spelling_yields_to_the_choice() {
+    let mut app = home();
+    // Quoting a segment that needs no quotes names the same key
+    // (`crates/config/src/path.rs:parse`), so the choice's level wins
+    // over the equivalent spelling, while a quoted value changes nothing:
+    // the key is what yields.
+    for layer in [
+        vec!["\"models\".\"acme/m1\".\"thinking\"=high".to_owned()],
+        vec!["models.\"acme/m1\".thinking=\"high\"".to_owned()],
+    ] {
+        let args = merged(&mut app, layer.clone(), Some(held("acme/m1", Some("low"))));
+        assert_eq!(args["model"], json!("acme/m1"));
+        assert_eq!(
+            args["overrides"],
+            json!(["models.\"acme/m1\".thinking=low"]),
+            "{layer:?}"
+        );
+    }
+}
+
+#[test]
 fn with_no_choice_the_layer_rides_untouched() {
     let mut app = home();
     let args = merged(&mut app, vec!["model=cli/m".to_owned()], None);

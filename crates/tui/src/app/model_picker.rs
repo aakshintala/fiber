@@ -205,13 +205,15 @@ impl App {
     /// every file. Bare `fiber`'s `--model` and `-c` stay: the choice
     /// supersedes the layer's `model=` and its own thinking key, while
     /// every unrelated key rides on (`docs/configuration.md`, "Layers":
-    /// a later `-c` wins, and every `-c` wins over `--model`).
+    /// a later `-c` wins, and every `-c` wins over `--model`). Keys compare
+    /// by segments as `crates/config/src/path.rs:parse` splits them, so a
+    /// quoted `"model"` counts as `model` and any equivalent spelling of
+    /// the thinking key counts as the thinking key.
     pub(in crate::app) fn with_start_model(&mut self, args: &mut serde_json::Value) {
         let Some(choice) = self.model_picker.start_model.as_ref() else {
             return;
         };
         let (model, override_text) = super::super::model_picker::start_args(choice);
-        let thinking_key = format!("models.\"{}\".thinking", choice.reference);
         let merged: Vec<serde_json::Value> = args
             .get("overrides")
             .and_then(serde_json::Value::as_array)
@@ -227,7 +229,10 @@ impl App {
                         let key = override_text
                             .split_once('=')
                             .map_or(*override_text, |(key, _)| key);
-                        key != "model" && (choice.level.is_none() || key != thinking_key)
+                        let segments = key_segments(key);
+                        !is_model_key(segments.as_deref())
+                            && (choice.level.is_none()
+                                || !is_thinking_key(segments.as_deref(), choice.reference.as_str()))
                     })
                     .map(|override_text| serde_json::Value::String(override_text.to_owned()))
                     .collect()
@@ -723,6 +728,45 @@ impl App {
         }
         Some(super::Effect::None)
     }
+}
+
+/// Splits a `-c` key into segments the way
+/// `crates/config/src/path.rs:parse` does: a `"quoted"` segment may hold
+/// dots, so `"model"` and `model` are the same key. `None` for an empty
+/// key, an empty segment or an unclosed quote; such keys never match and
+/// ride on as unrelated.
+fn key_segments(key: &str) -> Option<Vec<String>> {
+    let mut segments = Vec::new();
+    let mut rest = key;
+    loop {
+        let (segment, after) = match rest.strip_prefix('"') {
+            Some(quoted) => {
+                let end = quoted.find('"')?;
+                (quoted.get(..end)?, quoted.get(end + 1..)?)
+            }
+            None => rest.split_at(rest.find('.').unwrap_or(rest.len())),
+        };
+        if segment.is_empty() {
+            return None;
+        }
+        segments.push(segment.to_owned());
+        if after.is_empty() {
+            return Some(segments);
+        }
+        rest = after.strip_prefix('.')?;
+    }
+}
+
+/// Whether `segments` names the top-level `model` key.
+fn is_model_key(segments: Option<&[String]>) -> bool {
+    matches!(segments, Some([model]) if model == "model")
+}
+
+/// Whether `segments` names the thinking key for `reference`: the
+/// `models."<reference>".thinking` the choice's level overrides.
+fn is_thinking_key(segments: Option<&[String]>, reference: &str) -> bool {
+    matches!(segments, Some([area, model, level])
+        if area == "models" && model == reference && level == "thinking")
 }
 
 #[cfg(test)]
