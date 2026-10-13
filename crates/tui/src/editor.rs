@@ -259,9 +259,8 @@ fn catch_for_editor() -> (Arc<AtomicBool>, Arc<AtomicBool>, Vec<signal_hook::Sig
     let mut held = Vec::new();
     let mut flag = |signal| {
         let caught = Arc::new(AtomicBool::new(false));
-        match signal_hook::flag::register(signal, Arc::clone(&caught)) {
-            Ok(id) => held.push(id),
-            Err(_) => {}
+        if let Ok(id) = signal_hook::flag::register(signal, Arc::clone(&caught)) {
+            held.push(id);
         }
         caught
     };
