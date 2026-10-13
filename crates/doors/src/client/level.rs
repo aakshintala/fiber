@@ -280,6 +280,11 @@ pub(super) fn apply(
     // a notice on failure, before the new-level snapshots. A cancelled
     // wait means the reader is gone; ending here lets the join proceed.
     if let Some(response) = switch.response {
+        // Test-only pause point, as at the first subscribe's prelude wait:
+        // the writer is parked here, before any line past the
+        // old-level drain can reach the client.
+        #[cfg(test)]
+        crate::session::tests::note_switch_wait();
         let settled = response
             .recv()
             .map_err(|_| std::io::Error::other("the switch's response was cancelled"))?;

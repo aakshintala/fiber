@@ -52,6 +52,11 @@ pub(crate) fn spawn_writer(
             // the summary snapshots. A cancelled wait means the reader
             // is gone; ending here lets the join proceed.
             if let Some(prelude) = prelude {
+                // Test-only pause point: the writer is parked here, so a
+                // test that observes it knows the silence that follows is
+                // the wait, not a thread that never ran.
+                #[cfg(test)]
+                crate::session::tests::note_switch_wait();
                 let settled = match prelude.response.recv() {
                     Ok(settled) => settled,
                     Err(_) => return,

@@ -61,6 +61,9 @@ struct Control {
     accept_waiting: AtomicBool,
     accept_mu: Mutex<()>,
     accept_cv: Condvar,
+    switch_waiting: AtomicBool,
+    switch_mu: Mutex<()>,
+    switch_cv: Condvar,
     skip_shutdown: AtomicBool,
 }
 
@@ -74,6 +77,9 @@ static CONTROL: Control = Control {
     accept_waiting: AtomicBool::new(false),
     accept_mu: Mutex::new(()),
     accept_cv: Condvar::new(),
+    switch_waiting: AtomicBool::new(false),
+    switch_mu: Mutex::new(()),
+    switch_cv: Condvar::new(),
     skip_shutdown: AtomicBool::new(false),
 };
 
@@ -160,11 +166,41 @@ pub(super) fn note_accept_wait() {
     CONTROL.accept_cv.notify_all();
 }
 
+/// Notes that a connection's writer parked at a label-bearing switch's
+/// deferred response wait: the writer thread calls this immediately
+/// before blocking on the loop's answer, so a test that receives it
+/// knows no later line can reach the client until the test answers the
+/// delivered acknowledgement (`docs/testing.md`, "Waits and timeouts").
+pub(crate) fn note_switch_wait() {
+    let _held = lock(&CONTROL.switch_mu);
+    CONTROL.switch_waiting.store(true, Ordering::Relaxed);
+    CONTROL.switch_cv.notify_all();
+}
+
+/// Waits until the connection's writer parked at the switch's response
+/// wait, failing at [`DEADLINE`]: after this returns, silence on the
+/// socket is the writer waiting, not a thread that never ran.
+#[track_caller]
+pub(crate) fn wait_switch_waiting() {
+    let guard = lock(&CONTROL.switch_mu);
+    let (_guard, _) = CONTROL
+        .switch_cv
+        .wait_timeout_while(guard, DEADLINE, |_| {
+            !CONTROL.switch_waiting.load(Ordering::Relaxed)
+        })
+        .unwrap_or_else(PoisonError::into_inner);
+    assert!(
+        CONTROL.switch_waiting.load(Ordering::Relaxed),
+        "the writer parked at the switch's response wait"
+    );
+}
+
 fn reset() {
     CONTROL.hold_reader.store(false, Ordering::Relaxed);
     CONTROL.hold_cv.notify_all();
     CONTROL.parked.store(0, Ordering::Relaxed);
     CONTROL.accept_waiting.store(false, Ordering::Relaxed);
+    CONTROL.switch_waiting.store(false, Ordering::Relaxed);
     CONTROL.skip_shutdown.store(false, Ordering::Relaxed);
 }
 
@@ -3471,12 +3507,6 @@ fn message_and_close_race_in_both_lock_orders() {
     }
 }
 
-/// How long a test gives the session the chance to write a line that must
-/// never come: long past a racing writer's chance, short beside the
-/// suite's hang guards. Every such check pairs with a positive fact, so a
-/// passing check never stands alone (`docs/testing.md`, "Levels").
-const QUIET: Duration = Duration::from_millis(500);
-
 /// A `subscribe` line asking for `label`, as `fiber resume --credential`
 /// sends it through the hub.
 fn subscribe_credential_line(id: &str, level: &str, label: &str) -> String {
@@ -3527,15 +3557,23 @@ fn a_first_subscribe_with_a_label_waits_for_the_switch_before_its_acceptance() {
                 inbox.try_recv().is_err(),
                 "no other command is delivered with the switch"
             );
-            // The writer emits nothing before the loop answers: neither
-            // the acceptance nor folded history.
+            // The writer is parked at the switch's response wait: it
+            // cannot emit the acceptance or folded history until the
+            // test answers. The socket is polled without waiting, so no
+            // line hides behind a delay and no clock is read; anything
+            // already written is a premature line and fails here, and
+            // the ordered read below would fail on it too.
+            wait_switch_waiting();
             assert!(
-                client.recv(QUIET).is_none(),
+                client.recv(Duration::ZERO).is_none(),
                 "no line precedes the loop's answer"
             );
             (ack.0)(Ok(None));
-            let accepted = answer_of(&client, "c_sub");
-            assert_eq!(accepted["kind"], "command_accepted");
+            // The acceptance is the connection's first line: nothing
+            // preceded it, and it answers this subscribe with no result.
+            let accepted = recv(&client);
+            assert_eq!(accepted["kind"], "command_accepted", "{accepted}");
+            assert_eq!(accepted["payload"]["command_id"], "c_sub", "{accepted}");
             assert!(
                 accepted["payload"].get("result").is_none(),
                 "one bare acceptance: {accepted}"
@@ -3658,16 +3696,19 @@ fn a_summary_subscribe_with_a_failing_label_notices_before_its_snapshots() {
             assert_eq!(lines[2]["payload"]["name"], "s1");
             // Ordinary summary filtering is unchanged: a later durable
             // line that is not status or extensions never reaches this
-            // client, while a later status does.
+            // client, while a later status does. Both are appended before
+            // reading, so the status arriving proves the step was already
+            // consumed and skipped: no clock is read.
             log.append(&step(), None, None).unwrap();
-            assert!(
-                client.recv(QUIET).is_none(),
+            log.append(&status("s2"), None, None).unwrap();
+            let lines = support::until(&client, |line| {
+                line["kind"] == "session_status" && line["payload"]["name"] == "s2"
+            });
+            assert_eq!(
+                support::kinds(&lines),
+                ["session_status"],
                 "a summary connection still skips other durable lines"
             );
-            log.append(&status("s2"), None, None).unwrap();
-            let status = recv(&client);
-            assert_eq!(status["kind"], "session_status");
-            assert_eq!(status["payload"]["name"], "s2");
             Ok(())
         })
         .unwrap();
@@ -3879,15 +3920,21 @@ fn a_level_change_with_a_label_waits_for_the_switch() {
                 .unwrap();
             let (label, ack) = next_switch(&inbox);
             assert_eq!(label, "work");
-            // Raising writes nothing before the loop answers: no
-            // acceptance, and none of the folded history either.
+            // Raising writes nothing before the loop answers: the writer
+            // is parked at the switch's response wait, past the empty
+            // drain, so the socket poll below sees the wait, not a
+            // thread that never ran. No clock is read.
+            wait_switch_waiting();
             assert!(
-                client.recv(QUIET).is_none(),
+                client.recv(Duration::ZERO).is_none(),
                 "no line precedes the loop's answer"
             );
             (ack.0)(Ok(None));
-            let accepted = answer_of(&client, "c_2");
+            // The acceptance is the next line on the wire: the drain was
+            // empty and no folded history precedes the loop's answer.
+            let accepted = recv(&client);
             assert_eq!(accepted["kind"], "command_accepted", "{accepted}");
+            assert_eq!(accepted["payload"]["command_id"], "c_2", "{accepted}");
             assert!(
                 accepted["payload"].get("result").is_none(),
                 "one bare acceptance: {accepted}"

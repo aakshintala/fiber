@@ -12,7 +12,6 @@
 use std::io::Write;
 use std::sync::{Arc, Condvar, Mutex, MutexGuard, PoisonError};
 use std::thread;
-use std::time::Duration;
 
 use contract::clock::Clock;
 use contract::events::{CommandAccepted, Empty, Event, ExtensionsLoaded, LoadedExtension, Notice};
@@ -31,12 +30,6 @@ use super::*;
 mod support;
 
 use support::DEADLINE;
-
-/// How long a test gives a writer the chance to write a line that must
-/// never come: long past a racing writer's chance, short beside the
-/// suite's hang guards. Every such check pairs with a positive fact,
-/// so a passing check never stands alone (`docs/testing.md`, "Levels").
-const QUIET: Duration = Duration::from_millis(500);
 
 fn lock<T>(mutex: &Mutex<T>) -> MutexGuard<'_, T> {
     mutex.lock().unwrap_or_else(PoisonError::into_inner)
@@ -577,18 +570,15 @@ fn a_raising_writes_nothing_before_its_deferred_response() {
         .unwrap();
     outbox.swap(control_line(&id, LEVEL, 0), injector);
     // No line can precede the answer, not even the seeded history: the
-    // writer is past the switch and blocked in the response wait. The
-    // bound only gives a racing writer its chance; a correct writer
-    // writes nothing here, ever.
-    let (guard, waited) = held
-        .buf_cv
-        .wait_timeout_while(lock(&held.buf), QUIET, |buf| buf.is_empty())
-        .unwrap_or_else(PoisonError::into_inner);
+    // writer is parked at the response wait, past every write it could
+    // make before the loop's answer (the old-level line was skipped,
+    // never written). The buffer is read directly, so no line hides
+    // behind a delay and no clock is read.
+    crate::session::tests::wait_switch_waiting();
     assert!(
-        waited.timed_out() && guard.is_empty(),
+        lock(&held.buf).is_empty(),
         "no line precedes the loop's answer"
     );
-    drop(guard);
     resp_tx
         .send(vec![settled_acceptance(&id, &clock, "c_raise")])
         .unwrap();

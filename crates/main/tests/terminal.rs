@@ -1427,6 +1427,47 @@ fn event_kinds(events: &[Value]) -> Vec<&str> {
         .collect()
 }
 
+/// The kinds of the session every credential-resume test starts from:
+/// one open and one finished turn. An exited seed appends the ask
+/// process's `fiber_exited`; a live terminal's session has none yet.
+/// A resumed session never repeats `session_started` or
+/// `opening_message`.
+fn opened_kinds(exited: bool) -> Vec<&'static str> {
+    let mut kinds = vec![
+        "session_started",
+        "fiber_started",
+        "extensions_loaded",
+        "preamble_built",
+        "opening_message",
+        "turn_started",
+        "step_started",
+        "assistant_message_started",
+        "text_completed",
+        "usage_recorded",
+        "assistant_message_completed",
+        "turn_completed",
+    ];
+    if exited {
+        kinds.push("fiber_exited");
+    }
+    kinds
+}
+
+/// The kinds of one typed turn after the resume, through this file's
+/// fake provider: the `hello` reply streams whole, so there are no
+/// deltas.
+fn resumed_turn_kinds() -> Vec<&'static str> {
+    vec![
+        "turn_started",
+        "step_started",
+        "assistant_message_started",
+        "text_completed",
+        "usage_recorded",
+        "assistant_message_completed",
+        "turn_completed",
+    ]
+}
+
 /// Spawns `fiber resume <id> --credential <label>` on a terminal.
 fn resume_with<'a>(setup: &'a support::Setup, id: &'a str, label: &'a str) -> support::pty::Run {
     terminal(setup, 120, 32, &["resume", id, "--credential", label], &[])
@@ -1507,6 +1548,18 @@ fn resume_with_a_credential_switches_an_exited_session_to_the_asked_label() {
     // One driver-source change, home before and work after, ahead of
     // the resumed startup's preamble on the new label.
     let events = session_events(&setup, &id);
+    // The complete ordered log: the seeded ask, the resume's startup
+    // with the asked label switched ahead of its preamble, then the
+    // typed turn. A duplicated, missing or reordered event fails here.
+    let mut expected = opened_kinds(true);
+    expected.extend([
+        "fiber_started",
+        "extensions_loaded",
+        "model_changed",
+        "preamble_built",
+    ]);
+    expected.extend(resumed_turn_kinds());
+    assert_eq!(event_kinds(&events), expected);
     let changed: Vec<&Value> = events
         .iter()
         .filter(|line| line["kind"] == "model_changed")
@@ -1582,6 +1635,13 @@ fn resume_with_a_credential_switches_a_running_session_at_the_next_turn() {
     // Exactly one driver-source change, home before and work after; the
     // running open started no new session process.
     let events = session_events(&setup, &id);
+    // The complete ordered log: the live session's first turn, the
+    // switch with the cache rebuilt ahead of the next turn, then that
+    // turn. A duplicated, missing or reordered event fails here.
+    let mut expected = opened_kinds(false);
+    expected.extend(["model_changed", "preamble_built"]);
+    expected.extend(resumed_turn_kinds());
+    assert_eq!(event_kinds(&events), expected);
     let kinds = event_kinds(&events);
     let changed: Vec<&Value> = events
         .iter()
@@ -1649,6 +1709,19 @@ fn resume_with_a_credential_after_the_recorded_key_was_deleted() {
     assert_eq!(requests.len(), 2, "{requests:?}");
     assert_fingerprint(&requests[1], "Bearer work-key");
     let events = session_events(&setup, &id);
+    // The complete ordered log, as for an exited switch onto the asked
+    // label: the asked label wins before the recorded one is read, so
+    // the log matches a switch, not a late refusal. A duplicated,
+    // missing or reordered event fails here.
+    let mut expected = opened_kinds(true);
+    expected.extend([
+        "fiber_started",
+        "extensions_loaded",
+        "model_changed",
+        "preamble_built",
+    ]);
+    expected.extend(resumed_turn_kinds());
+    assert_eq!(event_kinds(&events), expected);
     let changed: Vec<&Value> = events
         .iter()
         .filter(|line| line["kind"] == "model_changed")
@@ -1752,6 +1825,12 @@ fn resume_with_an_unknown_credential_on_a_running_session_stays_attached() {
     assert_eq!(requests.len(), 2, "{requests:?}");
     assert_fingerprint(&requests[1], "Bearer home-key");
     let events = session_events(&setup, &id);
+    // The complete ordered log: the live session's two turns with no
+    // switch between them. A duplicated, missing or reordered event
+    // fails here.
+    let mut expected = opened_kinds(false);
+    expected.extend(resumed_turn_kinds());
+    assert_eq!(event_kinds(&events), expected);
     assert!(
         events.iter().all(|line| line["kind"] != "model_changed"),
         "no switch was recorded: {:?}",
@@ -1795,6 +1874,13 @@ fn resume_with_the_recorded_credential_records_nothing() {
     assert_eq!(requests.len(), 2, "{requests:?}");
     assert_fingerprint(&requests[1], "Bearer home-key");
     let events = session_events(&setup, &id);
+    // The complete ordered log: the seeded ask, a label-free resume
+    // startup, then the typed turn. A duplicated, missing or reordered
+    // event fails here.
+    let mut expected = opened_kinds(true);
+    expected.extend(["fiber_started", "extensions_loaded", "preamble_built"]);
+    expected.extend(resumed_turn_kinds());
+    assert_eq!(event_kinds(&events), expected);
     assert!(
         events.iter().all(|line| line["kind"] != "model_changed"),
         "the same label records no change: {:?}",
@@ -1839,6 +1925,12 @@ fn resume_with_the_current_credential_on_a_running_session_records_nothing() {
     assert_eq!(requests.len(), 2, "{requests:?}");
     assert_fingerprint(&requests[1], "Bearer home-key");
     let events = session_events(&setup, &id);
+    // The complete ordered log: the live session's two turns with no
+    // switch between them. A duplicated, missing or reordered event
+    // fails here.
+    let mut expected = opened_kinds(false);
+    expected.extend(resumed_turn_kinds());
+    assert_eq!(event_kinds(&events), expected);
     assert!(
         events.iter().all(|line| line["kind"] != "model_changed"),
         "the same label records no change: {:?}",
