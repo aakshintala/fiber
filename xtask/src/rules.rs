@@ -586,31 +586,46 @@ fn source_tokens(source: &str) -> Vec<SourceToken> {
     let mut at = 0;
     let mut line = 1;
     while at < bytes.len() {
-        if bytes[at].is_ascii_whitespace() {
-            if bytes[at] == b'\n' {
+        let Some(byte) = bytes.get(at).copied() else {
+            break;
+        };
+        if byte.is_ascii_whitespace() {
+            if byte == b'\n' {
                 line += 1;
             }
             at += 1;
             continue;
         }
-        if bytes[at..].starts_with(b"//") {
-            while at < bytes.len() && bytes[at] != b'\n' {
+        if bytes
+            .get(at..)
+            .is_some_and(|remaining| remaining.starts_with(b"//"))
+        {
+            while bytes.get(at).is_some_and(|byte| *byte != b'\n') {
                 at += 1;
             }
             continue;
         }
-        if bytes[at..].starts_with(b"/*") {
+        if bytes
+            .get(at..)
+            .is_some_and(|remaining| remaining.starts_with(b"/*"))
+        {
             at += 2;
             let mut depth = 1usize;
             while at < bytes.len() && depth > 0 {
-                if bytes[at..].starts_with(b"/*") {
+                if bytes
+                    .get(at..)
+                    .is_some_and(|remaining| remaining.starts_with(b"/*"))
+                {
                     depth += 1;
                     at += 2;
-                } else if bytes[at..].starts_with(b"*/") {
+                } else if bytes
+                    .get(at..)
+                    .is_some_and(|remaining| remaining.starts_with(b"*/"))
+                {
                     depth -= 1;
                     at += 2;
                 } else {
-                    if bytes[at] == b'\n' {
+                    if bytes.get(at) == Some(&b'\n') {
                         line += 1;
                     }
                     at += 1;
@@ -627,38 +642,34 @@ fn source_tokens(source: &str) -> Vec<SourceToken> {
             let content_start = quote + 1;
             let mut end = content_start;
             if raw {
-                while end < bytes.len() {
-                    if bytes[end] == b'"'
+                while let Some(byte) = bytes.get(end).copied() {
+                    if byte == b'"'
                         && bytes
                             .get(end + 1..end + 1 + hashes)
                             .is_some_and(|tail| tail.iter().all(|b| *b == b'#'))
                     {
                         break;
                     }
-                    if bytes[end] == b'\n' {
+                    if byte == b'\n' {
                         line += 1;
                     }
                     end += 1;
                 }
             } else {
                 let mut escaped = false;
-                while end < bytes.len() {
-                    let byte = bytes[end];
+                while let Some(byte) = bytes.get(end).copied() {
                     if byte == b'\n' {
                         line += 1;
                     }
                     if byte == b'"' && !escaped {
                         break;
                     }
-                    if byte == b'\\' && !escaped {
-                        escaped = true;
-                    } else {
-                        escaped = false;
-                    }
+                    escaped = byte == b'\\' && !escaped;
                     end += 1;
                 }
             }
-            let value = String::from_utf8_lossy(&bytes[content_start..end]).into_owned();
+            let value = String::from_utf8_lossy(bytes.get(content_start..end).unwrap_or_default())
+                .into_owned();
             tokens.push(SourceToken {
                 kind: SourceKind::String(value),
                 line: token_line,
@@ -667,15 +678,22 @@ fn source_tokens(source: &str) -> Vec<SourceToken> {
             continue;
         }
         let token_line = line;
-        let byte = bytes[at];
+        let Some(byte) = bytes.get(at).copied() else {
+            break;
+        };
         if byte.is_ascii_alphabetic() || byte == b'_' {
             let start = at;
             at += 1;
-            while at < bytes.len() && (bytes[at].is_ascii_alphanumeric() || bytes[at] == b'_') {
+            while bytes
+                .get(at)
+                .is_some_and(|byte| byte.is_ascii_alphanumeric() || *byte == b'_')
+            {
                 at += 1;
             }
             tokens.push(SourceToken {
-                kind: SourceKind::Ident(String::from_utf8_lossy(&bytes[start..at]).into_owned()),
+                kind: SourceKind::Ident(
+                    String::from_utf8_lossy(bytes.get(start..at).unwrap_or_default()).into_owned(),
+                ),
                 line: token_line,
             });
         } else {
@@ -726,7 +744,10 @@ fn char_literal_end(bytes: &[u8], at: usize) -> Option<usize> {
 /// Start of a normal or raw Rust string; `quote` is the opening quote offset.
 fn string_start(bytes: &[u8], at: usize) -> Option<(usize, bool, usize)> {
     for prefix in [b"br".as_slice(), b"cr", b"r", b"b", b"c", b""] {
-        if !bytes[at..].starts_with(prefix) {
+        if !bytes
+            .get(at..)
+            .is_some_and(|remaining| remaining.starts_with(prefix))
+        {
             continue;
         }
         let mut quote = at + prefix.len();
@@ -920,20 +941,20 @@ fn production_files(files: &[RustFile]) -> Vec<&RustFile> {
             if !ident(tokens.get(i), "mod") || !punct(tokens.get(i + 2), ';') {
                 continue;
             }
-            let Some(name) = (match &tokens[i + 1].kind {
+            let Some(name) = tokens.get(i + 1).and_then(|token| match &token.kind {
                 SourceKind::Ident(name) => Some(name.as_str()),
-                _ => None,
+                SourceKind::String(_) | SourceKind::Punct(_) => None,
             }) else {
                 continue;
             };
-            if let Some(target) = module_target(file, name, &tokens, i) {
-                if paths.contains(target.as_str()) {
-                    edges.push((
-                        file.path.as_str(),
-                        target,
-                        tests.get(i).copied().unwrap_or(false),
-                    ));
-                }
+            if let Some(target) = module_target(file, name, &tokens, i)
+                && paths.contains(target.as_str())
+            {
+                edges.push((
+                    file.path.as_str(),
+                    target,
+                    tests.get(i).copied().unwrap_or(false),
+                ));
             }
         }
     }
@@ -1003,7 +1024,9 @@ fn scope_context(tokens: &[SourceToken], at: usize) -> String {
         .find(|i| boundary(*i))
         .unwrap_or(tokens.len());
     let text = |range: std::ops::Range<usize>| {
-        tokens[range]
+        tokens
+            .get(range)
+            .unwrap_or_default()
             .iter()
             .map(|token| match &token.kind {
                 SourceKind::Ident(value) | SourceKind::String(value) => value.clone(),
