@@ -255,6 +255,43 @@ fn hover_tints_a_link() {
     insta::assert_snapshot!("hover_tints_a_link", hover_shown(&app, 60, 10, at));
 }
 
+#[test]
+fn a_bare_url_draws_in_accent_and_hover_keeps_it() {
+    use crate::theme::Role;
+    // A bare URL carries no markdown style of its own: the overlay
+    // gives it the link look (`docs/tui.md`, "Links").
+    let mut app = replied(60, 10, "see https://example.com/a tail");
+    app.set_opener(true);
+    let (buf, targets) = draw(&app, 60, 10);
+    let link = targets
+        .iter()
+        .find(|target| matches!(target.id, crate::mouse::TargetId::Link { .. }))
+        .expect("a link target");
+    let at = (link.rect.x, link.rect.y);
+    let cell = buf[at].clone();
+    assert_eq!(cell.fg, Role::Accent.color(), "the link's colour");
+    assert!(
+        cell.modifier.contains(ratatui::style::Modifier::UNDERLINED),
+        "the link underlines"
+    );
+    // Under the pointer the link takes the hover tint and keeps the
+    // accent foreground and its underline.
+    let area = Rect::new(0, 0, 60, 10);
+    let mut hovered = Buffer::empty(area);
+    super::super::render(&app, area, &mut hovered, Some(at));
+    let cell = hovered[at].clone();
+    assert_eq!(
+        cell.bg,
+        super::super::HOVER_TINT.bg.unwrap_or_default(),
+        "the hovered link's tint"
+    );
+    assert_eq!(cell.fg, Role::Accent.color(), "the hovered link's colour");
+    assert!(
+        cell.modifier.contains(ratatui::style::Modifier::UNDERLINED),
+        "the hovered link underlines"
+    );
+}
+
 /// The screen's text, then a mask: `m` where a match is marked, `c` where
 /// the current match is brighter, `.` elsewhere.
 fn marked(app: &App, width: u16, height: u16) -> String {

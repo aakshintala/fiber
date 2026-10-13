@@ -30,9 +30,23 @@ const CURRENT: Style = Style::new()
     .add_modifier(Modifier::REVERSED)
     .add_modifier(Modifier::BOLD);
 
-/// A link's underline: markdown links already draw underlined, and bare
-/// URLs gain it here (`docs/tui.md`, "Links").
-const LINK: Style = Style::new().add_modifier(Modifier::UNDERLINED);
+/// A link's look: the accent colour, underlined (`docs/tui.md`,
+/// "Links"). Markdown links already draw it in the reply; bare URLs
+/// gain it here.
+const LINK: Style = Style::new()
+    .fg(Role::Accent.color())
+    .add_modifier(Modifier::UNDERLINED);
+
+/// A focused link's look: the link look on the `surface_raised` tint
+/// (`docs/tui.md`, "Links"). The view paints no generic focus style
+/// over links; this is the focused look.
+const FOCUSED: Style = Style::new()
+    .fg(Role::Accent.color())
+    .bg(Role::SurfaceRaised.color())
+    .add_modifier(Modifier::UNDERLINED);
+
+/// The hint under a focused link (`docs/tui.md`, "Links").
+pub(crate) const HINT: &str = "Enter opens · y copies";
 
 /// Paints the search bar on the conversation's top-right row, then the
 /// selection's cells, then pushes one click target per row each visible
@@ -40,7 +54,18 @@ const LINK: Style = Style::new().add_modifier(Modifier::UNDERLINED);
 /// link on screen this costs one check each (`docs/tui.md`,
 /// "Performance"). While the results view is open only the bar draws:
 /// it covers the conversation (`docs/tui.md`, "Search").
-pub(super) fn draw(app: &App, area: Rect, buf: &mut Buffer, targets: &mut Vec<Target>) {
+///
+/// `gap` is the hint row the conversation reserved under the focused
+/// link, if any: the links shift with it, so hint text and click targets
+/// agree. Views whose content does not move pass `None`, and their links
+/// draw as before with no hint (`docs/tui.md`, "Links").
+pub(super) fn draw(
+    app: &App,
+    area: Rect,
+    buf: &mut Buffer,
+    targets: &mut Vec<Target>,
+    gap: Option<u16>,
+) {
     if let Some(bar) = app.find_bar() {
         draw_bar(&bar, area, buf, targets);
     }
@@ -54,16 +79,65 @@ pub(super) fn draw(app: &App, area: Rect, buf: &mut Buffer, targets: &mut Vec<Ta
     for rect in app.selection_cells(area) {
         buf.set_style(rect.intersection(area), SELECTION);
     }
-    for link in app.visible_links(area) {
+    let focused = app.focused();
+    let links = if gap.is_some() {
+        app.visible_links(area)
+    } else {
+        app.plain_links(area)
+    };
+    for link in links {
+        // The focused link sits on the `surface_raised` tint; every
+        // other link keeps the card it draws on (`docs/tui.md`,
+        // "Links").
+        let style = if focused.is_some_and(|id| id == link.id) {
+            FOCUSED
+        } else {
+            LINK
+        };
         for rect in link.rects {
             let rect = rect.intersection(area);
             if rect.is_empty() {
                 continue;
             }
-            buf.set_style(rect, LINK);
+            buf.set_style(rect, style);
             targets.push(Target { id: link.id, rect });
         }
     }
+    hint(app, area, buf, gap);
+}
+
+/// Paints the focused link's hint on its reserved row, dim. The row is
+/// the conversation's own gap under the link's line, so no other target
+/// sits on it; the next frame without focus paints its rows with no gap
+/// again, so the hint goes when focus leaves (`docs/tui.md`, "Links").
+/// With no reserved row only the focused look paints.
+fn hint(app: &App, area: Rect, buf: &mut Buffer, gap: Option<u16>) {
+    let Some(id) = app.focused() else {
+        return;
+    };
+    let Some(gap) = gap else {
+        return;
+    };
+    let Some(link) = app
+        .visible_links(area)
+        .into_iter()
+        .find(|link| link.id == id)
+    else {
+        return;
+    };
+    let x = link.rects.first().map_or(area.x, |rect| rect.x);
+    let room = usize::from(area.right().saturating_sub(x));
+    // One call: `set_stringn` with a dim-only style keeps each cell's
+    // colours and adds dim, exactly what the per-cell loop did, so the
+    // card under the hint shows through. The hint holds no wide
+    // character, so its graphemes match the cut's chars one by one.
+    buf.set_stringn(
+        x,
+        gap,
+        crate::format::cut(HINT, room),
+        room,
+        Style::new().add_modifier(Modifier::DIM),
+    );
 }
 
 /// The bar's cells: at most this wide (`docs/tui.md`, "Search").
