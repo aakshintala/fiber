@@ -1,10 +1,13 @@
 use std::io::{Read, Write};
-use std::net::TcpStream;
-use std::sync::mpsc;
+use std::net::{SocketAddr, TcpStream};
+use std::sync::{Arc, Mutex, mpsc};
 use std::thread;
 use std::time::Duration;
 
+use contract::clock::Clock;
+
 use super::*;
+use crate::clock::FakeClock;
 use crate::deadline::Deadline;
 
 const READ_WITHIN: Duration = crate::MUST_SUCCEED_WITHIN;
@@ -50,6 +53,7 @@ fn hold_records_the_request_and_sends_the_body_only_after_release() {
     let (tx, rx) = mpsc::channel();
     thread::spawn(move || {
         let mut stream = TcpStream::connect(addr).unwrap();
+        stream.set_read_timeout(Some(READ_WITHIN)).unwrap();
         stream
             .write_all(b"POST /v1 HTTP/1.1\r\nHost: localhost\r\nContent-Length: 0\r\n\r\n")
             .unwrap();
@@ -77,9 +81,12 @@ fn hold_records_the_request_and_sends_the_body_only_after_release() {
 }
 
 /// Sends a GET and reads the whole reply on a thread, naming it on `tx`.
+/// The read is bounded, so a failure ends the thread instead of hanging
+/// the test's teardown.
 fn get_on(addr: SocketAddr, name: &'static str, tx: mpsc::Sender<(&'static str, Vec<u8>)>) {
     thread::spawn(move || {
         let mut stream = TcpStream::connect(addr).unwrap();
+        stream.set_read_timeout(Some(READ_WITHIN)).unwrap();
         stream
             .write_all(b"GET /v1 HTTP/1.1\r\nHost: localhost\r\n\r\n")
             .unwrap();
@@ -122,10 +129,26 @@ fn the_default_hold_outlasts_every_test_wait() {
 
 #[test]
 fn a_held_reply_nobody_releases_becomes_a_500_at_its_deadline() {
-    let server = ProviderServer::start([Response::stream(b"one")]).unwrap();
-    server.hold_from(1, Duration::from_millis(200));
+    let clock = FakeClock::new();
+    let server =
+        ProviderServer::start_on(clock.clone(), vec![Response::stream(b"one")]).unwrap();
+    server.hold_from(1, Duration::from_secs(5));
+    let acks = server.test_acknowledgments();
     let (tx, rx) = mpsc::channel();
     get_on(server.addr, "a", tx);
+    assert!(
+        server.await_requests(1, READ_WITHIN),
+        "the held request is recorded"
+    );
+    // The hold waits on the injected clock: the test advances only past
+    // its announced wait.
+    let ack = Deadline::after(READ_WITHIN).recv_or_fail(&acks, "the held response's wait");
+    assert_eq!(ack.phase, "to wait out the held response");
+    assert!(
+        clock.await_thread_parked(ack.thread, ack.until, READ_WITHIN),
+        "the hold parks on the clock before it moves"
+    );
+    clock.advance(Duration::from_secs(5));
     let (_, body) = Deadline::after(READ_WITHIN)
         .recv(&rx)
         .unwrap_or_else(|_| panic!("the deadline ends the hold"));
@@ -145,6 +168,7 @@ fn release_one_sends_one_held_response_and_keeps_holding_the_rest() {
         let tx = tx.clone();
         thread::spawn(move || {
             let mut stream = TcpStream::connect(addr).unwrap();
+            stream.set_read_timeout(Some(READ_WITHIN)).unwrap();
             stream
                 .write_all(b"GET /v1 HTTP/1.1\r\nHost: localhost\r\n\r\n")
                 .unwrap();
@@ -477,52 +501,162 @@ fn waits_count_stalls_already_past_their_event() {
     assert!(answered_within(&server, move |s| s.await_closed(2, event_within)));
 }
 
-/// A thread that finishes only once the returned sender drops.
-fn held_thread() -> (JoinHandle<()>, mpsc::Sender<()>) {
-    let (release, released) = mpsc::channel::<()>();
-    let handle = thread::spawn(move || if let Err(mpsc::RecvError) = released.recv() {});
-    (handle, release)
+/// Idle windows never expire the provider: with no client for longer
+/// than a request bound, the next request is still served in order.
+#[test]
+fn idle_windows_do_not_expire_the_provider() {
+    let clock = FakeClock::new();
+    let server =
+        ProviderServer::start_on(clock.clone(), vec![Response::status(200, "ok")]).unwrap();
+    // Longer than a request bound with no client: idle windows renew,
+    // and no missing request fails.
+    clock.advance(Duration::from_secs(31));
+    assert_eq!(get_status(&server), "200");
+    assert_eq!(server.requests().len(), 1);
+    assert_eq!(get_status(&server), "500");
 }
 
+/// An incomplete request never blocks another connection: a client
+/// holding a partial head open does not stall a complete request.
 #[test]
-fn stop_gives_up_on_an_accept_thread_that_never_finishes() {
-    let listener = TcpListener::bind("127.0.0.1:0").unwrap();
-    let addr = listener.local_addr().unwrap();
-    let (accept, release) = held_thread();
-    let joined = crate::within(
-        "stop to give up on the held thread",
-        STATUS_WITHIN,
-        move || stop(addr, accept, Duration::from_millis(100)),
+fn an_incomplete_request_does_not_block_another_connection() {
+    let server = ProviderServer::start([Response::status(200, "ok")]).unwrap();
+    let mut partial = TcpStream::connect(server.addr).unwrap();
+    partial
+        .write_all(b"POST /v1 HTTP/1.1\r\nHost: localhost\r\n")
+        .unwrap();
+    // The partial head stays open and unanswered while a complete
+    // request goes through.
+    assert_eq!(get_status(&server), "200");
+    let requests = server.requests();
+    assert_eq!(requests.len(), 1);
+    assert_eq!(requests[0].method, "GET");
+    drop(partial);
+}
+
+/// Dropping the server releases held responses and reaps stalled ones:
+/// every client gets what the server promised before the port closes.
+#[test]
+fn dropping_releases_holds_and_reaps_stalls() {
+    let server = Arc::new(
+        ProviderServer::start([
+            Response::stall(200, b"partial".to_vec(), 100),
+            Response::stream(b"two"),
+        ])
+        .unwrap(),
     );
-    assert!(!joined, "a thread that never finishes is not joined");
-    drop(release);
-}
-
-#[test]
-fn stop_gives_up_when_the_wake_cannot_connect() {
-    let addr = crate::refused::ADDR.into();
-    let accept = thread::spawn(|| {});
-    let joined = crate::within(
-        "stop to give up on a refused wake",
-        STATUS_WITHIN,
-        move || stop(addr, accept, Duration::from_millis(100)),
-    );
-    assert!(!joined, "a failed connection leaves the thread unjoined");
-}
-
-#[test]
-fn stop_joins_an_accept_thread_that_sees_stopping() {
-    let mut server = ProviderServer::start([]).unwrap();
-    lock(&server.state).stopping = true;
-    let accept = server.accept.take().unwrap();
+    server.hold();
     let addr = server.addr;
-    let joined = crate::within("stop to join the accept thread", STATUS_WITHIN, move || {
-        stop(addr, accept, STATUS_WITHIN)
-    });
+    let (tx, rx) = mpsc::channel();
+    for name in ["stalled", "streamed"] {
+        let tx = tx.clone();
+        thread::spawn(move || {
+            let mut stream = TcpStream::connect(addr).unwrap();
+            stream.set_read_timeout(Some(READ_WITHIN)).unwrap();
+            stream
+                .write_all(b"GET / HTTP/1.1\r\nHost: localhost\r\n\r\n")
+                .unwrap();
+            let mut body = Vec::new();
+            stream.read_to_end(&mut body).unwrap_or_else(|e| {
+                panic!("the released body arrives within {READ_WITHIN:?}: {e}")
+            });
+            tx.send((name, body)).unwrap();
+        });
+    }
     assert!(
-        joined,
-        "waited {STATUS_WITHIN:?} for the accept thread to stop"
+        server.await_requests(2, READ_WITHIN),
+        "both requests are recorded while held"
     );
+    drop(server);
+    // Either connection may take either scripted response: the script
+    // pops in arrival order, which thread launch order does not fix.
+    let mut bodies = vec![
+        Deadline::after(READ_WITHIN)
+            .recv(&rx)
+            .unwrap_or_else(|_| panic!("the drop releases the first within {READ_WITHIN:?}"))
+            .1,
+        Deadline::after(READ_WITHIN)
+            .recv(&rx)
+            .unwrap_or_else(|_| panic!("the drop releases the second within {READ_WITHIN:?}"))
+            .1,
+    ];
+    bodies.sort();
+    assert!(
+        bodies.iter().any(|body| body.ends_with(b"two")),
+        "the streamed reply arrives whole"
+    );
+    assert!(
+        bodies.iter().any(|body| body.ends_with(b"partial")),
+        "the stalled reply sent its prefix"
+    );
+}
+
+/// Dropping an idle server closes its port: the drop joins the serving
+/// threads instead of hanging on them.
+#[test]
+fn dropping_an_idle_server_closes_its_port() {
+    let server = ProviderServer::start([Response::status(200, "ok")]).unwrap();
+    let addr = server.addr;
+    drop(server);
+    assert!(
+        TcpStream::connect_timeout(&addr, READ_WITHIN).is_err(),
+        "the dropped server's port refuses connections"
+    );
+}
+
+/// Dropping the server gives up on a responder that never returns: the
+/// drop ends within its bound instead of hanging on the callback, and
+/// the port still closes.
+#[test]
+fn dropping_gives_up_on_a_responder_that_never_returns() {
+    let (release_tx, release_rx) = mpsc::channel::<()>();
+    let release_rx = Arc::new(Mutex::new(release_rx));
+    let (started_tx, started_rx) = mpsc::channel::<()>();
+    let server = ProviderServer::start_responding(move |_: &Request| {
+        // The record is pushed under the state lock just before the
+        // responder runs under it, so entering here proves the request
+        // is recorded without taking the lock the responder holds.
+        match started_tx.send(()) {
+            Ok(()) | Err(_) => {}
+        }
+        match release_rx.lock().unwrap().recv() {
+            Ok(()) | Err(_) => {}
+        }
+        Response::status(200, "late")
+    })
+    .unwrap();
+    let addr = server.addr;
+    let (tx, rx) = mpsc::channel();
+    thread::spawn(move || {
+        let mut stream = TcpStream::connect(addr).unwrap();
+        stream.set_read_timeout(Some(READ_WITHIN)).unwrap();
+        stream
+            .write_all(b"GET /v1 HTTP/1.1\r\nHost: localhost\r\n\r\n")
+            .unwrap();
+        let mut body = Vec::new();
+        let _ = stream.read_to_end(&mut body);
+        match tx.send(body) {
+            Ok(()) | Err(_) => {}
+        }
+    });
+    Deadline::after(READ_WITHIN).recv_or_fail(&started_rx, "the blocked responder");
+    // The drop ends while the responder is still blocked: it gives the
+    // callback up instead of hanging on it.
+    let (done_tx, done_rx) = mpsc::channel();
+    thread::spawn(move || {
+        drop(server);
+        match done_tx.send(()) {
+            Ok(()) | Err(_) => {}
+        }
+    });
+    Deadline::after(READ_WITHIN)
+        .recv_or_fail(&done_rx, "the drop to give up on the responder");
+    assert!(
+        TcpStream::connect_timeout(&addr, READ_WITHIN).is_err(),
+        "the dropped server's port refuses connections"
+    );
+    drop(release_tx);
+    let _ = Deadline::after(READ_WITHIN).recv(&rx);
 }
 
 /// Posts `body` and reads the whole response.

@@ -248,7 +248,10 @@ struct TunnelState {
 }
 
 struct Shared {
-    listener: TcpListener,
+    /// The loopback listener, polled nonblocking: shutdown takes and
+    /// closes it, so the port refuses connections even while stuck
+    /// connections keep the server alive.
+    listener: Mutex<Option<TcpListener>>,
     clock: Arc<dyn Clock>,
     limits: Limits,
     /// Set by shutdown: every wait ends stopped.
@@ -552,28 +555,32 @@ impl Connection {
     }
 
     /// Sends the head with its declared length and the prefix it
-    /// carries, then holds until the peer closes: `Closed` on its close,
-    /// `Stopped` on shutdown, expiry naming the stall past its bound.
-    pub(crate) fn stall(
+    /// carries: true once flushed, so the adapter records the partial
+    /// send before the close wait below.
+    pub(crate) fn stall_send(
         &mut self,
         head: &[u8],
         prefix: &[u8],
         pause: Option<&Pause>,
-    ) -> StallEnd {
+    ) -> bool {
         let op = self.op_budget();
         if let Some(pause) = pause
             && self.pause(pause, &op, "to pause before the stalled response") == PauseEnd::Stopped
         {
-            return StallEnd::Stopped;
+            return false;
         }
         let (stream, mut ctx) = self.parts(&op);
         if !pump(stream, head, "to write the stalled head", &mut ctx) {
-            return StallEnd::Stopped;
+            return false;
         }
         let (stream, mut ctx) = self.parts(&op);
-        if !pump(stream, prefix, "to write the stalled prefix", &mut ctx) {
-            return StallEnd::Stopped;
-        }
+        pump(stream, prefix, "to write the stalled prefix", &mut ctx)
+    }
+
+    /// Holds until the peer closes: `Closed` on its close, `Stopped` on
+    /// shutdown, expiry naming the stall past its bound.
+    pub(crate) fn stall_wait(&mut self) -> StallEnd {
+        let op = self.op_budget();
         loop {
             let mut one = [0u8; 1024];
             match self.stream.read(&mut one) {
@@ -589,6 +596,21 @@ impl Connection {
                 WaitEnd::Stopped => return StallEnd::Stopped,
             }
         }
+    }
+
+    /// Sends the head with its declared length and the prefix it
+    /// carries, then holds until the peer closes: `Closed` on its close,
+    /// `Stopped` on shutdown, expiry naming the stall past its bound.
+    pub(crate) fn stall(
+        &mut self,
+        head: &[u8],
+        prefix: &[u8],
+        pause: Option<&Pause>,
+    ) -> StallEnd {
+        if !self.stall_send(head, prefix, pause) {
+            return StallEnd::Stopped;
+        }
+        self.stall_wait()
     }
 
     /// Runs a CONNECT tunnel to `target` over this connection: the 200
@@ -698,7 +720,7 @@ impl Connection {
 
     /// Hands the connection to a tunnel: the stream, blocking again,
     /// with the bytes read past the head.
-    pub(crate) fn into_handoff(mut self) -> io::Result<(TcpStream, Vec<u8>)> {
+    pub(crate) fn into_handoff(self) -> io::Result<(TcpStream, Vec<u8>)> {
         self.stream.set_nonblocking(false)?;
         let Self { stream, ahead, .. } = self;
         Ok((stream, ahead.into()))
@@ -884,7 +906,7 @@ impl HttpServer {
         let listener = TcpListener::bind("127.0.0.1:0")?;
         listener.set_nonblocking(true)?;
         let shared = Arc::new_cyclic(|shared| Shared {
-            listener,
+            listener: Mutex::new(Some(listener)),
             clock: Arc::clone(&clock),
             limits,
             stopping: AtomicBool::new(false),
@@ -913,10 +935,10 @@ impl HttpServer {
 
     /// The loopback address the core listens on.
     pub(crate) fn addr(&self) -> SocketAddr {
-        self.shared
-            .listener
-            .local_addr()
-            .unwrap_or_else(|_| SocketAddr::from(([127, 0, 0, 1], 0)))
+        lock(&self.shared.listener)
+            .as_ref()
+            .and_then(|listener| listener.local_addr().ok())
+            .unwrap_or_else(|| SocketAddr::from(([127, 0, 0, 1], 0)))
     }
 
     /// Waits for one connection under `mode` within a fresh budget, made
@@ -1004,18 +1026,18 @@ impl HttpServer {
             if self.shared.stopping.load(Ordering::SeqCst) {
                 return AcceptOutcome::Stopped;
             }
-            match self.shared.listener.accept() {
-                Ok((stream, _)) => {
+            // Taken by shutdown: no more accepts after it.
+            let accepted =
+                lock(&self.shared.listener).as_ref().map(|listener| listener.accept());
+            match accepted {
+                Some(Ok((stream, _))) => {
                     if stream.set_nonblocking(true).is_err() {
                         continue;
                     }
                     return AcceptOutcome::Accepted(stream);
                 }
-                Err(error) if error.kind() == io::ErrorKind::WouldBlock => {
-                }
-                Err(error) => {
-                    return AcceptOutcome::Stopped;
-                }
+                Some(Err(error)) if error.kind() == io::ErrorKind::WouldBlock => {}
+                Some(Err(_)) | None => return AcceptOutcome::Stopped,
             }
             if budget.expired() {
                 return AcceptOutcome::Idle;
@@ -1083,6 +1105,9 @@ impl HttpServer {
         *lock(&self.shared.wake) += 1;
         self.shared.wake_changed.notify_all();
         self.shared.idle_changed.notify_all();
+        // Take and close the listener: the port refuses connections
+        // even while stuck connections outlive the server.
+        let _listener = lock(&self.shared.listener).take();
         // Break every blocked tunnel copy before joining its thread.
         for (_, client, origin) in std::mem::take(&mut lock(&self.shared.tunnels).live) {
             match client.shutdown(std::net::Shutdown::Both) {

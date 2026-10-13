@@ -384,3 +384,45 @@ fn base64url_decode(text: &str) -> Vec<u8> {
     }
     out
 }
+
+/// POSTs a chunked form and returns the status and the body: the form
+/// travels through the shared request reader's chunked path, not the
+/// fixed-length one every other test uses.
+fn post_chunked(server: &OauthServer, path: &str, form: &str) -> (u16, String) {
+    let addr = server.url().trim_start_matches("http://").to_owned();
+    let mut stream = TcpStream::connect(addr).unwrap();
+    stream
+        .set_read_timeout(Some(Duration::from_secs(5)))
+        .unwrap();
+    write!(
+        stream,
+        "POST {path} HTTP/1.1\r\nHost: localhost\r\ncontent-type: application/x-www-form-urlencoded\r\ntransfer-encoding: chunked\r\n\r\n{:x}\r\n{form}\r\n0\r\n\r\n",
+        form.len()
+    )
+    .unwrap();
+    let mut text = String::new();
+    stream.read_to_string(&mut text).unwrap();
+    let status = text.split(' ').nth(1).unwrap().parse().unwrap();
+    let body = text.split_once("\r\n\r\n").unwrap().1.to_owned();
+    (status, body)
+}
+
+#[test]
+fn oauth_requests_flow_through_the_shared_request_reader() {
+    let server = OauthServer::start(vec![OauthReply::token("at", "rt", 3600)]);
+
+    let (status, body) = post_chunked(&server, "/token", "grant_type=refresh_token&refresh_token=r+t%2B");
+    assert_eq!(status, 200);
+    assert!(body.contains(r#""access_token":"at""#), "{body}");
+
+    let requests = server.requests();
+    assert_eq!(requests.len(), 1);
+    assert_eq!(requests[0].path, "/token");
+    assert_eq!(
+        requests[0].form,
+        [
+            ("grant_type".to_owned(), "refresh_token".to_owned()),
+            ("refresh_token".to_owned(), "r t+".to_owned()),
+        ]
+    );
+}

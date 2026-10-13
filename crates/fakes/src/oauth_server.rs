@@ -1,7 +1,8 @@
 //! The fake OAuth token endpoint (`docs/testing.md`, "Fakes"): a local HTTP
 //! server over [`ProviderServer`] that answers form-encoded POSTs from one
 //! script, in request order, and records each request's path and decoded form
-//! fields. It does not route on the path: a flow uses one endpoint at a time,
+//! fields. It serves through the shared HTTP/1.1 fake core by way of its
+//! [`ProviderServer`] wrapper. It does not route on the path: a flow uses one endpoint at a time,
 //! so a refresh test scripts `/token` replies and a device-code test scripts
 //! `/device/token` replies.
 

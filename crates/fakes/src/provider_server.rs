@@ -1,15 +1,22 @@
 //! The fake provider server (`docs/testing.md`, "Model calls"): a local
 //! HTTP/1.1 server that answers each request with the next response of its
-//! script and records every request it receives.
+//! script and records every request it receives. Accepting, head reading
+//! and every reply run on the shared HTTP core; only the script, the
+//! credential-safe projection and the hold below are this fake's own.
 
 use std::collections::VecDeque;
-use std::io::{self, BufRead, BufReader, Read, Write};
-use std::net::{SocketAddr, TcpListener, TcpStream};
+use std::io;
+use std::net::SocketAddr;
 use std::sync::{Arc, Condvar, Mutex, MutexGuard, PoisonError, mpsc};
-use std::thread::{self, JoinHandle};
 use std::time::Duration;
 
-use crate::deadline::Deadline;
+use contract::clock::Clock;
+
+use crate::clock::SystemClock;
+use crate::http_server::{
+    Connection, HttpServer, Limits, StallEnd, WaitAck,
+    request::{ParsedRequest, RequestOutcome, read_request},
+};
 
 /// Header names whose values are credentials, lowercase. Their values are
 /// replaced by a fingerprint before a request is recorded, as is a `key`
@@ -151,6 +158,9 @@ impl Request {
 /// fails it before the fake answers a 500 the test never asked for.
 const HELD_LIMIT: Duration = crate::deadline::BUDGET;
 
+/// How long one poll inside a hold wait lasts.
+const HOLD_POLL: Duration = Duration::from_millis(1);
+
 /// Answers one request from its content: the recorded request, so an answer
 /// can depend on the request's body or on an earlier request's.
 type Responder = std::sync::Arc<dyn Fn(&Request) -> Response + Send + Sync>;
@@ -168,7 +178,6 @@ struct State {
     /// When set, a recorded request keeps its headers and `body_len` but
     /// its body is emptied before it is stored.
     drop_bodies: bool,
-    stopping: bool,
     /// When set, a recorded request is not answered until [`ProviderServer::release`].
     hold: bool,
     /// The number (1-based) of the first request a hold applies to.
@@ -181,6 +190,10 @@ struct State {
     partial: usize,
     /// Stalled connections whose client side closed.
     closed: usize,
+    /// The clock holds and core budgets run on.
+    clock: Arc<dyn Clock>,
+    /// Where held-response waits announce themselves while a test listens.
+    acks: Option<mpsc::Sender<WaitAck>>,
 }
 
 impl Default for State {
@@ -192,13 +205,14 @@ impl Default for State {
             fallback: None,
             requests: Vec::new(),
             drop_bodies: false,
-            stopping: false,
             hold: false,
             hold_from: 1,
             hold_within: HELD_LIMIT,
             permits: 0,
             partial: 0,
             closed: 0,
+            clock: Arc::new(SystemClock),
+            acks: None,
         }
     }
 }
@@ -208,9 +222,9 @@ impl Default for State {
 /// Dropping the server closes its port.
 pub struct ProviderServer {
     addr: SocketAddr,
+    core: HttpServer,
     state: Arc<Mutex<State>>,
     arrived: Arc<Condvar>,
-    accept: Option<JoinHandle<()>>,
 }
 
 impl ProviderServer {
@@ -226,11 +240,14 @@ impl ProviderServer {
         script: impl IntoIterator<Item = Response>,
         fallback: Response,
     ) -> io::Result<Self> {
-        Self::start_with(State {
-            script: script.into_iter().collect(),
-            fallback: Some(fallback),
-            ..State::default()
-        })
+        Self::start_with(
+            State {
+                script: script.into_iter().collect(),
+                fallback: Some(fallback),
+                ..State::default()
+            },
+            Arc::new(SystemClock),
+        )
     }
 
     /// Like [`ProviderServer::start_with_fallback`], but each of `routes` is
@@ -259,31 +276,59 @@ impl ProviderServer {
     pub fn start_responding(
         responder: impl Fn(&Request) -> Response + Send + Sync + 'static,
     ) -> io::Result<Self> {
-        Self::start_with(State {
-            responder: Some(Arc::new(responder)),
-            ..State::default()
-        })
+        Self::start_with(
+            State {
+                responder: Some(Arc::new(responder)),
+                ..State::default()
+            },
+            Arc::new(SystemClock),
+        )
     }
 
-    /// Listens on a free port on 127.0.0.1 with `state` and serves it: the
-    /// one start path behind every constructor. The port accepts
-    /// connections when this returns.
-    fn start_with(state: State) -> io::Result<Self> {
-        let listener = TcpListener::bind("127.0.0.1:0")?;
-        let addr = listener.local_addr()?;
-        let state = Arc::new(Mutex::new(state));
-        let arrived = Arc::new(Condvar::new());
-        let shared = Arc::clone(&state);
-        let wake = Arc::clone(&arrived);
-        let accept = thread::Builder::new()
-            .name("fake-provider".to_owned())
-            .spawn(move || accept_loop(&listener, &shared, &wake))?;
-        Ok(Self {
+    /// Listens on a free port on 127.0.0.1 with `state` on `clock` and
+    /// serves it: the one start path behind every constructor. The port
+    /// accepts connections when this returns.
+    fn start_with(state: State, clock: Arc<dyn Clock>) -> io::Result<Self> {
+        let core = HttpServer::bind(Arc::clone(&clock), Limits::default())?;
+        let addr = core.addr();
+        let mut state = state;
+        state.clock = Arc::clone(&clock);
+        let server = Self {
             addr,
-            state,
-            arrived,
-            accept: Some(accept),
-        })
+            core,
+            state: Arc::new(Mutex::new(state)),
+            arrived: Arc::new(Condvar::new()),
+        };
+        let shared = Arc::clone(&server.state);
+        let wake = Arc::clone(&server.arrived);
+        let ticking = clock;
+        server
+            .core
+            .serve_persistent(move |conn| serve(conn, &shared, &wake, &ticking));
+        Ok(server)
+    }
+
+    /// [`ProviderServer::start`], on `clock`: the test drives timed holds
+    /// without waiting them out. Test-only: production constructors run on
+    /// the process clock.
+    #[cfg(test)]
+    pub(crate) fn start_on(clock: Arc<dyn Clock>, script: Vec<Response>) -> io::Result<Self> {
+        Self::start_with(
+            State {
+                script: script.into_iter().collect(),
+                fallback: Some(no_scripted_response()),
+                ..State::default()
+            },
+            clock,
+        )
+    }
+
+    /// Receives every held-response wait announcement from here on.
+    #[cfg(test)]
+    pub(crate) fn test_acknowledgments(&self) -> mpsc::Receiver<WaitAck> {
+        let (tx, rx) = mpsc::channel();
+        lock(&self.state).acks = Some(tx);
+        rx
     }
 
     /// The base URL, such as `http://127.0.0.1:49152`, for a provider
@@ -389,39 +434,17 @@ impl ProviderServer {
 
 impl Drop for ProviderServer {
     fn drop(&mut self) {
-        {
-            let mut state = lock(&self.state);
-            state.stopping = true;
+        // Release what the holds are holding before reaping: a held
+        // response is answered, and every serving thread ends its core
+        // wait stopped on its own. A responder stuck under the state
+        // lock is not waited for: the release is tried, never blocking
+        // the drop, and the core's bounded shutdown reaps the rest.
+        if let Ok(mut state) = self.state.try_lock() {
             state.hold = false;
         }
         self.arrived.notify_all();
-        if let Some(accept) = self.accept.take() {
-            stop(self.addr, accept, STOP_DEADLINE);
-        }
+        self.core.shutdown();
     }
-}
-
-/// How long dropping a [`ProviderServer`] waits on the wall clock for its
-/// accept thread to stop. A connection wakes the thread at once; the bound
-/// only stops a drop from hanging on one that never wakes.
-const STOP_DEADLINE: Duration = Duration::from_secs(2);
-
-/// Wakes the accept thread, which has seen `stopping`, by connecting to
-/// `addr`, then joins it. One thread makes the connection and the join, and
-/// one deadline bounds both. Returns whether the thread was joined: a
-/// connection that fails or a join that misses `deadline` leaves the thread
-/// blocked rather than waiting forever. Builds abort on panic
-/// (`docs/code-quality.md`, "Panics"), so a join never carries one.
-fn stop(addr: SocketAddr, accept: JoinHandle<()>, deadline: Duration) -> bool {
-    let (done, joined) = mpsc::channel::<()>();
-    thread::spawn(move || {
-        if TcpStream::connect(addr).is_ok() && accept.join().is_ok() {
-            match done.send(()) {
-                Ok(()) | Err(_) => {}
-            }
-        }
-    });
-    Deadline::after(deadline).recv(&joined).is_ok()
 }
 
 /// A lock that outlives a panicked holder: the state is plain data, and a
@@ -430,36 +453,22 @@ fn lock(state: &Mutex<State>) -> MutexGuard<'_, State> {
     state.lock().unwrap_or_else(PoisonError::into_inner)
 }
 
-fn accept_loop(listener: &TcpListener, state: &Arc<Mutex<State>>, arrived: &Arc<Condvar>) {
-    for stream in listener.incoming() {
-        if lock(state).stopping {
-            return;
-        }
-        let Ok(stream) = stream else { continue };
-        let state = Arc::clone(state);
-        let arrived = Arc::clone(arrived);
-        // One thread per connection, so a client holding a connection open
-        // never stalls another.
-        let spawned = thread::Builder::new()
-            .name("fake-provider-conn".to_owned())
-            .spawn(move || {
-                // A connection that breaks mid-request has already failed its
-                // client, and there is no complete request to record.
-                match serve(stream, &state, &arrived) {
-                    Ok(()) | Err(_) => {}
-                }
-            });
-        // Out of threads: the dropped connection fails its client.
-        if spawned.is_err() {
-            continue;
-        }
-    }
-}
-
-fn serve(stream: TcpStream, state: &Mutex<State>, arrived: &Condvar) -> io::Result<()> {
-    let mut reader = BufReader::new(stream);
-    let (mut request, malformed) = read_request(&mut reader)?;
-    let request_path = request.path.clone();
+/// Serves one connection: records the request under the state lock, then
+/// answers from the script, the routes, the responder or the fallback. A
+/// malformed body is the client's bug: it is recorded with its decoded
+/// prefix and answered 400, and the script keeps its next response.
+fn serve(
+    conn: Connection,
+    state: &Mutex<State>,
+    arrived: &Condvar,
+    clock: &Arc<dyn Clock>,
+) {
+    let mut conn = conn;
+    let request = match read_request(&mut conn) {
+        RequestOutcome::Complete(request) => request,
+        RequestOutcome::Eof | RequestOutcome::Invalid(_) | RequestOutcome::Stopped => return,
+    };
+    let malformed = request.malformed;
     let response = {
         let mut state = lock(state);
         // Cloned before the record moves it, and only when a responder
@@ -469,15 +478,15 @@ fn serve(stream: TcpStream, state: &Mutex<State>, arrived: &Condvar) -> io::Resu
         let answered = state
             .responder
             .clone()
-            .map(|responder| (responder, request.clone()));
+            .map(|responder| (responder, project(&request)));
+        let mut record = project(&request);
         if state.drop_bodies {
-            request.body = Vec::new();
+            record.body = Vec::new();
         }
-        state.requests.push(request);
+        let request_path = record.path.clone();
+        state.requests.push(record);
         arrived.notify_all();
-        // A malformed body is the client's bug: it gets a 400 and the script
-        // keeps its next response.
-        let response = match malformed {
+        match malformed {
             Some(why) => Response::status(
                 400,
                 format!(r#"{{"error":"fakes: malformed chunked body: {why}"}}"#),
@@ -494,45 +503,90 @@ fn serve(stream: TcpStream, state: &Mutex<State>, arrived: &Condvar) -> io::Resu
                         .unwrap_or_else(no_scripted_response)
                 }
             },
-        };
-        if response.drop_connection {
-            // Recorded above; the open stream drops here, so the client
-            // sees a connection closed with no response.
-            return Ok(());
         }
-        if state.hold && state.requests.len() >= state.hold_from {
-            let within = state.hold_within;
-            let (waited, timeout) = arrived
-                .wait_timeout_while(state, within, |state| {
-                    state.hold && state.permits == 0 && !state.stopping
-                })
-                .unwrap_or_else(PoisonError::into_inner);
-            if timeout.timed_out() {
-                drop(waited);
-                return write_response(
-                    reader.get_mut(),
-                    &Response::status(
-                        500,
-                        r#"{"error":"fakes: a held response was never released"}"#,
-                    ),
-                );
-            }
-            state = waited;
-            // A still-held request takes one released permit. The wait
-            // above only ends with no permit left when the hold is already
-            // gone or the server is stopping, which clears the hold first,
-            // so `||` or `>=` here would only re-check a ruled-out state;
-            // the pattern states the rule with mutants a test can reach.
-            if let (true, 1..) = (state.hold, state.permits) {
-                state.permits -= 1;
-            }
-        }
-        response
     };
-    if response.stall {
-        return write_stall(reader.get_mut(), &response, state, arrived);
+    if response.drop_connection {
+        // Recorded above; the open stream drops here, so the client
+        // sees a connection closed with no response.
+        return;
     }
-    write_response(reader.get_mut(), &response)
+    if let Some(expired) = hold_wait(state, arrived, clock) {
+        let _ = conn.reply_full(head(&expired, true).as_bytes(), &expired.body, None);
+        return;
+    }
+    if response.stall {
+        if !conn.stall_send(head(&response, false).as_bytes(), &response.body, None) {
+            return;
+        }
+        {
+            lock(state).partial += 1;
+            arrived.notify_all();
+        }
+        if conn.stall_wait() == StallEnd::Closed {
+            lock(state).closed += 1;
+            arrived.notify_all();
+        }
+        return;
+    }
+    let _ = conn.reply_full(head(&response, true).as_bytes(), &response.body, None);
+}
+
+/// Holds a recorded response until its release, permit or the server's
+/// drop: `None` once it may go, the 500 naming the hold when nobody
+/// releases it within its bound. The bound runs on the injected clock,
+/// announced once so the test advances past it only when waited for.
+fn hold_wait(
+    state: &Mutex<State>,
+    arrived: &Condvar,
+    clock: &Arc<dyn Clock>,
+) -> Option<Response> {
+    let (within, until) = {
+        let state = lock(state);
+        if !(state.hold && state.requests.len() >= state.hold_from) {
+            return None;
+        }
+        (state.hold_within, clock.now().checked_add(state.hold_within))
+    };
+    // One announcement: the waiter is past its check and parked before
+    // the test advances.
+    if let Some(acks) = lock(state).acks.as_ref() {
+        match acks.send(WaitAck {
+            phase: "to wait out the held response",
+            thread: std::thread::current().id(),
+            seq: 1,
+            until,
+        }) {
+            Ok(()) | Err(_) => {}
+        }
+    }
+    let mut guard = lock(state);
+    loop {
+        if !guard.hold {
+            return None;
+        }
+        if guard.permits > 0 {
+            guard.permits -= 1;
+            return None;
+        }
+        // The bound wins over a simultaneous release, as the
+        // real-clock wait it replaces did.
+        if until.is_some_and(|until| clock.now() >= until) {
+            return Some(Response::status(
+                500,
+                r#"{"error":"fakes: a held response was never released"}"#,
+            ));
+        }
+        let predicate = |state: &mut State| !state.hold || state.permits > 0;
+        guard = support::clock::park(
+            clock.as_ref(),
+            until,
+            Some(HOLD_POLL),
+            arrived,
+            guard,
+            predicate,
+        )
+        .unwrap_or_else(|| lock(state));
+    }
 }
 
 fn no_scripted_response() -> Response {
@@ -542,144 +596,25 @@ fn no_scripted_response() -> Response {
     )
 }
 
-fn invalid(what: &str) -> io::Error {
-    io::Error::new(io::ErrorKind::InvalidData, what.to_owned())
-}
-
-/// The request, and why its body's framing is malformed if it is.
-fn read_request(reader: &mut impl BufRead) -> io::Result<(Request, Option<Malformed>)> {
-    let mut line = String::new();
-    reader.read_line(&mut line)?;
-    let mut parts = line.split_whitespace();
-    let (Some(method), Some(target)) = (parts.next(), parts.next()) else {
-        return Err(invalid("no request line"));
-    };
-    let (method, path) = (method.to_owned(), fingerprint_query(target));
-
-    let mut headers = Vec::new();
-    loop {
-        line.clear();
-        if reader.read_line(&mut line)? == 0 {
-            return Err(invalid("headers end before a blank line"));
-        }
-        let header = line.trim_end_matches(['\r', '\n']);
-        if header.is_empty() {
-            break;
-        }
-        let (name, value) = header
-            .split_once(':')
-            .ok_or_else(|| invalid("header without a colon"))?;
-        let name = name.trim().to_ascii_lowercase();
-        let value = value.trim();
-        let value = if CREDENTIAL_HEADERS.contains(&name.as_str()) {
-            fingerprint(value)
-        } else {
-            value.to_owned()
-        };
-        headers.push((name, value));
-    }
-
-    let chunked = headers
-        .iter()
-        // A request with any transfer coding ends in chunked (RFC 9112,
-        // section 6.1).
-        .any(|(n, _)| n == "transfer-encoding");
-    let mut malformed = None;
-    let body = if chunked {
-        let mut body = Vec::new();
-        malformed = read_chunked(reader, &mut body).err();
-        body
-    } else {
-        let length = headers
+/// The recorded request: credentials fingerprinted, exact `body_len`.
+fn project(request: &ParsedRequest) -> Request {
+    Request {
+        method: request.method.clone(),
+        path: fingerprint_query(&request.target),
+        headers: request
+            .headers
             .iter()
-            .find(|(n, _)| n == "content-length")
-            .map_or(Ok(0), |(_, v)| v.parse::<usize>())
-            .map_err(|_| invalid("content-length is not a number"))?;
-        let mut body = vec![0; length];
-        reader.read_exact(&mut body)?;
-        body
-    };
-    Ok((
-        Request {
-            method,
-            path,
-            headers,
-            body_len: body.len(),
-            body,
-        },
-        malformed,
-    ))
-}
-
-/// Why a chunked request body could not be decoded.
-type Malformed = &'static str;
-
-const TRUNCATED: Malformed = "the chunked body ends before its framing does";
-
-/// Decodes a chunked body (RFC 9112, section 7.1) into `body`: each chunk's
-/// bytes in order, with chunk extensions and trailers dropped. On malformed
-/// or truncated framing, `body` holds what decoded before it.
-fn read_chunked(reader: &mut impl BufRead, body: &mut Vec<u8>) -> Result<(), Malformed> {
-    loop {
-        let line = framing_line(reader)?;
-        let size = line.split(';').next().unwrap_or("").trim();
-        let size = u64::from_str_radix(size, 16).map_err(|_| "a chunk size is not a hex number")?;
-        if size == 0 {
-            break;
-        }
-        // `take` rather than a buffer of `size`, so a huge declared size
-        // cannot allocate before a byte arrives.
-        let read = reader
-            .by_ref()
-            .take(size)
-            .read_to_end(body)
-            .map_err(|_| TRUNCATED)?;
-        if u64::try_from(read) != Ok(size) {
-            return Err(TRUNCATED);
-        }
-        if !framing_line(reader)?.is_empty() {
-            return Err("a chunk's data is not followed by CRLF");
-        }
+            .map(|(name, value)| {
+                if CREDENTIAL_HEADERS.contains(&name.as_str()) {
+                    (name.clone(), fingerprint(value))
+                } else {
+                    (name.clone(), value.clone())
+                }
+            })
+            .collect(),
+        body_len: request.body.len(),
+        body: request.body.clone(),
     }
-    // Trailers, up to the blank line that ends the body. They are read so
-    // the client's bytes are all consumed before the connection closes.
-    while !framing_line(reader)?.is_empty() {}
-    Ok(())
-}
-
-/// One line of chunked framing, without its CRLF.
-fn framing_line(reader: &mut impl BufRead) -> Result<String, Malformed> {
-    let mut line = String::new();
-    match reader.read_line(&mut line) {
-        Ok(0) | Err(_) => Err(TRUNCATED),
-        Ok(_) if !line.ends_with('\n') => Err(TRUNCATED),
-        Ok(_) => line
-            .strip_suffix("\r\n")
-            .map(str::to_owned)
-            .ok_or("a chunked framing line does not end in CRLF"),
-    }
-}
-
-/// The request target with any `key` query parameter's value replaced by
-/// its fingerprint.
-fn fingerprint_query(target: &str) -> String {
-    let Some((path, query)) = target.split_once('?') else {
-        return target.to_owned();
-    };
-    let query: Vec<String> = query
-        .split('&')
-        .map(|param| match param.split_once('=') {
-            Some(("key", value)) => format!("key={}", fingerprint(value)),
-            _ => param.to_owned(),
-        })
-        .collect();
-    format!("{path}?{}", query.join("&"))
-}
-
-fn write_response(stream: &mut TcpStream, response: &Response) -> io::Result<()> {
-    stream.write_all(head(response, true).as_bytes())?;
-    stream.write_all(&response.body)?;
-    stream.flush()
 }
 
 /// The response head: the status line, the scripted headers, the body's
@@ -698,31 +633,20 @@ fn head(response: &Response, with_length: bool) -> String {
     head
 }
 
-/// Sends the head with its declared `content-length` and the prefix it
-/// carries, then holds the connection open until the client closes it: the
-/// client stays blocked mid-body. Records the partial send before holding
-/// and the client's close after it, so a test can wait for each.
-fn write_stall(
-    stream: &mut TcpStream,
-    response: &Response,
-    state: &Mutex<State>,
-    arrived: &Condvar,
-) -> io::Result<()> {
-    stream.write_all(head(response, false).as_bytes())?;
-    stream.write_all(&response.body)?;
-    stream.flush()?;
-    {
-        lock(state).partial += 1;
-        arrived.notify_all();
-    }
-    // Held until the client goes away: a zero read is the close.
-    let mut rest = Vec::new();
-    match stream.read_to_end(&mut rest) {
-        Ok(_) | Err(_) => {}
-    }
-    lock(state).closed += 1;
-    arrived.notify_all();
-    Ok(())
+/// The request target with any `key` query parameter's value replaced by
+/// its fingerprint.
+fn fingerprint_query(target: &str) -> String {
+    let Some((path, query)) = target.split_once('?') else {
+        return target.to_owned();
+    };
+    let query: Vec<String> = query
+        .split('&')
+        .map(|param| match param.split_once('=') {
+            Some(("key", value)) => format!("key={}", fingerprint(value)),
+            _ => param.to_owned(),
+        })
+        .collect();
+    format!("{path}?{}", query.join("&"))
 }
 
 #[cfg(test)]
