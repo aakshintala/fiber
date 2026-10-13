@@ -246,7 +246,7 @@ impl Drop for RunDirPermissions {
 }
 
 #[test]
-fn a_prune_that_meets_a_silent_hub_fails_then_meets_a_ready_one() {
+fn a_prune_that_cannot_bind_fails_then_meets_a_ready_one() {
     // Spawn-sabotage repro for #2121: with the same `run/` mode and prune
     // inputs, a cold-start cannot bind `run/hub`, while a held hub already
     // bound there lets the prune pass. `doors::hub::connect` retries the
