@@ -296,14 +296,18 @@ impl Writer {
         }
     }
 
-    /// The style inline text takes here: the full text colour, or the
-    /// heading's, with the open emphasis.
+    /// The style inline text takes here: a link in the accent colour,
+    /// any other text in the full text colour, or the heading's, with
+    /// the open emphasis (`docs/tui.md`, "Links").
     fn style(&self) -> Style {
         let mut style = if self.heading {
             style(Role::Heading).add_modifier(Modifier::BOLD)
         } else {
             style(Role::Text)
         };
+        if self.link > 0 {
+            style = style.fg(Role::Accent.color());
+        }
         for (open, modifier) in [
             (self.strong, Modifier::BOLD),
             (self.emphasis, Modifier::ITALIC),
