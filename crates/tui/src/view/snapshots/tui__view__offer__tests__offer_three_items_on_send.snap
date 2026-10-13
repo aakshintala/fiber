@@ -2,19 +2,19 @@
 source: crates/tui/src/view/offer_tests.rs
 expression: screen
 ---
-  MCP server b
-     approve  [skip]  never
-    MCP server: b
-    declared in: .fiber/config.json
-    runs: /bin/echo
+  runs: /bin/echo
+  ( ) approve   (•) skip for this session   ( ) never
 
-  MCP server c
-     approve  [skip]  never
-    MCP server: c
-    declared in: .fiber/config.json
-    runs: /bin/echo
+  MCP server c · declared in .fiber/config.json
+  MCP server: c
+  declared in: .fiber/config.json
+  runs: /bin/echo
+  ( ) approve   (•) skip for this session   ( ) never
 
-› Send · 0 approve, 3 skip, 0 never
+A package's TUI files are never installed from a repository.
+
+↑↓ choose an item · ←→ its answer · Send answers them all · Esc puts it aside
+▸ Send · 0 approve, 3 skip, 0 never
 ▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
 ▌ ›
 ▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀
