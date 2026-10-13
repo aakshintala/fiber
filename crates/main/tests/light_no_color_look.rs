@@ -306,79 +306,56 @@ fn rail_boxed(grid: &Grid) -> bool {
     if !railed {
         return false;
     }
-    // The turn's card is a thin dim box on the defaults above the
-    // reply: corners and fills wide enough to be the card, not a
-    // fragment.
-    let mut topped: Option<(u16, u16)> = None;
-    for top in (0..ry).rev() {
-        let Some(width) = (25..126).find(|x| grid.cell(*x, top).symbol == "┐") else {
-            continue;
-        };
-        if width.saturating_sub(25) <= 40 {
-            continue;
-        }
-        let gate = (25..width).any(|x| {
-            let cell = grid.cell(x, top);
+    // Select the same nearest edge as the assertion below. Once a row
+    // matches the edge selector, an incomplete edge fails rather than
+    // falling through to an older row.
+    let Some(top) = (0..ry).rev().find(|top| {
+        (25..125).any(|x| {
+            let cell = grid.cell(x, *top);
             cell.symbol == "┌" && cell.dim && cell.fg == Colour::Default
-        });
-        if !gate {
-            continue;
-        }
-        if !(25..=width).all(|x| {
+        })
+    }) else {
+        return false;
+    };
+    let Some(width) = (25..126).find(|x| grid.cell(*x, top).symbol == "┐") else {
+        return false;
+    };
+    if width - 25 <= 40
+        || !(25..=width).all(|x| {
             let cell = grid.cell(x, top);
             cell.bg == Colour::Default && cell.dim
-        }) {
-            continue;
-        }
-        topped = Some((top, width));
-        break;
-    }
-    if topped.is_none() {
+        })
+    {
         return false;
     }
-    // The second prompt bubble keeps blank edges and no box sides: its
-    // row holds the prompt between blanks past the rail, with blank
-    // rows above and below its span, right-aligned.
-    let mut bubbled = false;
-    for py in 0..48 {
+    // Select the first prompt occurrence, as the assertion below does.
+    // Validate it in place: an incomplete bubble cannot be skipped in
+    // favour of a later occurrence.
+    let Some((px, py)) = (0..48).find_map(|py| {
         let row: String = (30..160).map(|x| grid.cell(x, py).symbol).collect();
-        let Some(off) = row.find("again") else {
-            continue;
-        };
-        let Some(px) = u16::try_from(30 + off).ok() else {
-            continue;
-        };
-        if px <= 30 {
-            continue;
-        }
-        let end: u16 = (px..160)
-            .find(|x| grid.cell(*x, py).symbol.as_str() == " ")
-            .unwrap_or(160);
-        if (px.saturating_sub(2)..end.min(160).saturating_add(1))
-            .any(|x| grid.cell(x, py).symbol.as_str() == "│")
-        {
-            continue;
-        }
-        let mut blanked = true;
-        for y in [py.saturating_sub(1), py + 1] {
-            if y >= 48 {
-                continue;
-            }
-            for x in px..end.min(160) {
-                if grid.cell(x, y).symbol.as_str() != " " {
-                    blanked = false;
-                    break;
-                }
-            }
-        }
-        if !blanked {
-            continue;
-        }
-        bubbled = true;
-        break;
-    }
-    if !bubbled {
+        row.find("again")
+            .and_then(|off| u16::try_from(30 + off).ok())
+            .map(|px| (px, py))
+    }) else {
         return false;
+    };
+    if px <= 30 || py + 1 >= 48 {
+        return false;
+    }
+    let end: u16 = (px..160)
+        .find(|x| grid.cell(*x, py).symbol.as_str() == " ")
+        .unwrap_or(160);
+    if (px.saturating_sub(2)..end.min(160).saturating_add(1))
+        .any(|x| grid.cell(x, py).symbol.as_str() == "│")
+    {
+        return false;
+    }
+    for y in [py.saturating_sub(1), py + 1] {
+        for x in px..end.min(160) {
+            if grid.cell(x, y).symbol.as_str() != " " {
+                return false;
+            }
+        }
     }
     // The input box's border: ┌─┐ above, │ on each side and └─┘ below,
     // dim on the defaults, with the prompt one column in.
