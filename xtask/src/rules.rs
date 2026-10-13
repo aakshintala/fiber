@@ -579,6 +579,8 @@ const HOME_COMPONENTS: &[&str] = &[
 ];
 
 const MAX_SOURCE_SITES_PER_FILE: usize = 1024;
+// Bound cross-file diagnostics when a broken scope admits sites from the whole workspace.
+const MAX_SOURCE_FAILURES_PER_CHECK: usize = 1024;
 const MAX_HOME_JOIN_WORK: usize = 16_384;
 const MAX_HOME_JOIN_CONTEXT_BYTES: usize = 1_048_576;
 
@@ -1224,6 +1226,19 @@ fn push_source_site(
     Ok(())
 }
 
+fn push_source_failure(
+    file: &RustFile,
+    failures: &mut Vec<String>,
+    line: usize,
+    failure: String,
+) -> Result<(), String> {
+    if failures.len() >= MAX_SOURCE_FAILURES_PER_CHECK {
+        return Err(stalled_cursor_diagnostic(file, StalledCursor { line }));
+    }
+    failures.push(failure);
+    Ok(())
+}
+
 fn joined_literal(tokens: &[SourceToken], at: usize) -> bool {
     at >= 3
         && punct(tokens.get(at - 3), '.')
@@ -1580,7 +1595,9 @@ fn source_failures(files: &[RustFile], allowances: &[SourceAllowance], home: boo
         } {
             Ok(sites) => sites,
             Err(failure) => {
-                failures.push(failure);
+                if let Err(stalled) = push_source_failure(file, &mut failures, 1, failure) {
+                    return vec![stalled];
+                }
                 continue;
             }
         };
@@ -1591,7 +1608,14 @@ fn source_failures(files: &[RustFile], allowances: &[SourceAllowance], home: boo
                 } else {
                     "session path outside log"
                 };
-                failures.push(format!("{}:{}: {message}", site.path, site.line));
+                if let Err(stalled) = push_source_failure(
+                    file,
+                    &mut failures,
+                    site.line,
+                    format!("{}:{}: {message}", site.path, site.line),
+                ) {
+                    return vec![stalled];
+                }
             }
         }
     }
@@ -1844,18 +1868,31 @@ pub(crate) fn loop_tool_names(files: &[RustFile]) -> Vec<String> {
         let (sites, definitions) = match loop_sites(file, &names) {
             Ok(result) => result,
             Err(failure) => {
-                failures.push(failure);
+                if let Err(stalled) = push_source_failure(file, &mut failures, 1, failure) {
+                    return vec![stalled];
+                }
                 continue;
             }
         };
-        failures.extend(definitions);
+        for definition in definitions {
+            if let Err(stalled) = push_source_failure(file, &mut failures, 1, definition) {
+                return vec![stalled];
+            }
+        }
         for site in sites {
-            failures.push(format!(
-                "{}:{}: built-in tool name {}",
-                site.path,
+            if let Err(stalled) = push_source_failure(
+                file,
+                &mut failures,
                 site.line,
-                site.operation.trim_start_matches("tool:")
-            ));
+                format!(
+                    "{}:{}: built-in tool name {}",
+                    site.path,
+                    site.line,
+                    site.operation.trim_start_matches("tool:")
+                ),
+            ) {
+                return vec![stalled];
+            }
         }
     }
     failures

@@ -1251,6 +1251,16 @@ fn repeated_loop_sites_remain_bounded_and_exact() {
 }
 
 #[test]
+fn loop_tool_scope_mutant_fails_within_a_bounded_workspace_scan() {
+    run_scanner_bound_probe("loop-sites-scope");
+}
+
+#[test]
+fn source_gate_diagnostics_are_bounded_across_files() {
+    run_scanner_bound_probe("source-failures");
+}
+
+#[test]
 fn deep_home_join_chains_are_bounded_and_exact() {
     run_scanner_bound_probe("home-join");
 }
@@ -1414,6 +1424,41 @@ fn scanner_bound_probe() {
                 source_file("hub", "src/looped.rs", "#[path = \"looped.rs\"] mod again;"),
             ];
             assert_eq!(production_files(&cycle).unwrap().len(), 2);
+        }
+        "loop-sites-scope" => {
+            let mut files = vec![registrations(&["shell"])];
+            files.extend((0..=MAX_SOURCE_FAILURES_PER_CHECK).map(|index| {
+                source_file(
+                    "hub",
+                    &format!("src/hit{index:04}.rs"),
+                    "fn f() { let _ = \"shell\"; }",
+                )
+            }));
+            let failures = loop_tool_names(&files);
+            assert!(
+                failures.is_empty(),
+                "expected non-loop tool names to be ignored, got {}: {:?}",
+                failures.len(),
+                failures.first()
+            );
+        }
+        "source-failures" => {
+            let files = (0..=MAX_SOURCE_FAILURES_PER_CHECK)
+                .map(|index| {
+                    source_file(
+                        "hub",
+                        &format!("src/hit{index:04}.rs"),
+                        "fn f() { let _ = dir.join(\"sessions\"); let _ = home.join(\"projects\"); }",
+                    )
+                })
+                .collect::<Vec<_>>();
+            for failures in [session_paths(&files), fiber_home_paths(&files)] {
+                assert_eq!(failures.len(), 1, "diagnostics were not capped");
+                assert!(
+                    failures[0].ends_with("source cursor stopped advancing"),
+                    "missing bounded scanner diagnostic: {failures:?}"
+                );
+            }
         }
         "home-join" => {
             let source = format!("home{}", r#".join("segment")"#.repeat(512));
