@@ -6,6 +6,7 @@
 
 use std::io::{Read, Write};
 use std::net::{TcpListener, TcpStream};
+use std::sync::{Condvar, Mutex};
 use std::time::{Duration, Instant};
 
 use contract::clock::Clock;
@@ -56,6 +57,40 @@ pub(crate) fn tap_reads() -> std::sync::mpsc::Receiver<()> {
 #[cfg(test)]
 fn signal_read() {
     if let Ok(taps) = READ_TAPS.lock() {
+        for tap in taps.iter() {
+            match tap.send(()) {
+                Ok(()) | Err(_) => {}
+            }
+        }
+    }
+}
+
+/// Test-only taps on the callback reader's silent polls: each registered
+/// tap receives one message per read that finds no bytes. The pausing-head
+/// test registers one tap, so its first message proves the wait polled
+/// with no bytes before the rest of the head arrives; nothing else
+/// registers, and the shipped binary holds no tap.
+#[cfg(test)]
+static SILENCE_TAPS: std::sync::Mutex<Vec<std::sync::mpsc::Sender<()>>> =
+    std::sync::Mutex::new(Vec::new());
+
+/// Registers a tap on the callback reader's silent polls, for the
+/// pausing-head test's handshake (`docs/testing.md`, "Waits and timeouts").
+#[cfg(test)]
+pub(crate) fn tap_silence() -> std::sync::mpsc::Receiver<()> {
+    let (sent, received) = std::sync::mpsc::channel();
+    SILENCE_TAPS
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
+        .push(sent);
+    received
+}
+
+/// Sends one message to every silence tap. A tap whose test went away
+/// hangs up here, never in the reader.
+#[cfg(test)]
+fn signal_silence() {
+    if let Ok(taps) = SILENCE_TAPS.lock() {
         for tap in taps.iter() {
             match tap.send(()) {
                 Ok(()) | Err(_) => {}
@@ -152,6 +187,9 @@ pub(crate) fn answer(
 ) -> Option<Served> {
     stream.set_nonblocking(false).ok()?;
     stream.set_read_timeout(Some(READ_TIMEOUT)).ok()?;
+    // The poll pause: one condvar wait, so the drain's park below never
+    // spins and the fake clock still sees every park.
+    let poll = (Mutex::new(()), Condvar::new());
     let mut head = Vec::new();
     let mut byte = [0_u8; 1];
     let mut silent = 0;
@@ -178,6 +216,24 @@ pub(crate) fn answer(
                 match stream.read(&mut byte) {
                     Ok(0) => break,
                     Ok(_) => head.push(byte[0]),
+                    Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => {
+                        // No bytes yet: park on the injected clock
+                        // instead of ending the drain on the socket's
+                        // kernel timeout, so a test's `await_parked`
+                        // sees the drain and advancing the fake clock
+                        // past the deadline ends it with the timeout.
+                        // A closed, reset or refused connection still
+                        // ends the drain at once below.
+                        clock.wait_until(Some(deadline), &mut |bound| {
+                            let pause = bound.map_or(POLL_PAUSE, |bound| bound.min(POLL_PAUSE));
+                            let (lock, changed) = &poll;
+                            if let Ok(guard) = lock.lock() {
+                                let _waited = changed
+                                    .wait_timeout(guard, pause)
+                                    .unwrap_or_else(std::sync::PoisonError::into_inner);
+                            }
+                        });
+                    }
                     Err(_) => break,
                 }
                 if head.ends_with(b"\r\n\r\n") || head.ends_with(b"\n\n") {
@@ -196,6 +252,8 @@ pub(crate) fn answer(
             }
             Err(_) => {
                 silent += 1;
+                #[cfg(test)]
+                signal_silence();
                 if silent >= SILENT_POLLS {
                     return None;
                 }

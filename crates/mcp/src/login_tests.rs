@@ -1616,11 +1616,12 @@ fn at_899s_the_wait_continues_and_at_900s_it_fails() {
             "the login never waited on the clock"
         );
         clock.advance(Duration::from_secs(899));
-        // Still waiting: a short bounded receive must time out.
+        // Still waiting: the login parks on the clock again after the
+        // advance, so the last second still ends it at 900 s. The park
+        // is the code's own signal; no real-clock receive expiry paces
+        // this test.
         assert!(
-            fakes::Deadline::after(Duration::from_millis(200))
-                .recv(&received_done)
-                .is_err(),
+            clock.await_parked(deadline, WITHIN),
             "the login ended before 900 s"
         );
         clock.advance(Duration::from_secs(1));
@@ -2178,10 +2179,26 @@ fn a_refused_head_dripped_past_the_deadline_ends_at_the_deadline() {
         }
         let reply = String::from_utf8_lossy(&reply).into_owned();
         assert!(reply.starts_with("HTTP/1.1 431"), "{reply}");
-        // The deadline passes while the peer keeps dripping: the answer
-        // still ends at the deadline, not after the drip.
+        // The drain parks on the injected clock while it waits for more
+        // of the refused head: each drip below is released only after
+        // `await_parked` shows the drain waiting, so the clock moves past
+        // the deadline while the drain is provably inside its
+        // deadline-bounded wait, and the answer is the deadline's
+        // timeout, not a kernel-timeout race. Without the drain's
+        // deadline check the answer never comes and the bound below
+        // fails the test.
+        for _ in 0..8 {
+            assert!(
+                clock.await_parked(deadline, WITHIN),
+                "the drain never waited on the clock"
+            );
+            client.write_all(b"G").unwrap();
+        }
+        assert!(
+            clock.await_parked(deadline, WITHIN),
+            "the drain never waited on the clock"
+        );
         clock.advance(Duration::from_secs(61));
-        let _dripped = client.write_all(b"GGG");
         let served =
             fakes::Deadline::after(WITHIN).recv_or_fail(&received, "the refused head's answer");
         match served {
@@ -2251,21 +2268,20 @@ fn the_callback_wait_serves_a_connection_that_pauses_before_its_head() {
     let clock = fakes::clock::FakeClock::new();
     let deadline = clock.origin() + Duration::from_secs(60);
     let (result, echo) = driven_wait(&clock, deadline, "s1", |addr| {
+        let reads = super::callback::tap_reads();
         let mut client = match TcpStream::connect(addr) {
             Ok(client) => client,
             Err(_) => return String::new(),
         };
         let _written = client.write_all(b"G");
-        // About five silent polls pass here with no bytes, far below the
-        // hundred the listener tolerates: a bounded receive, not a sleep.
-        let (keep, quiet) = mpsc::channel::<()>();
-        let _keep = keep;
-        assert!(
-            fakes::Deadline::after(Duration::from_millis(100))
-                .recv(&quiet)
-                .is_err(),
-            "a held channel answered"
-        );
+        // The head pauses mid-byte: the reader's own signals pace the
+        // rest, not the real clock. The first byte's tap proves the
+        // connection was accepted; the silence tap is registered only
+        // after that byte landed, so its poll provably finds no bytes
+        // after it, before the rest arrives.
+        fakes::Deadline::after(WITHIN).recv_or_fail(&reads, "the callback reader's first byte");
+        let silent = super::callback::tap_silence();
+        fakes::Deadline::after(WITHIN).recv_or_fail(&silent, "the callback reader's silent poll");
         let _written = client.write_all(
             b"ET /callback?code=abc&state=s1 HTTP/1.1\r\nHost: x\r\nConnection: close\r\n\r\n",
         );
