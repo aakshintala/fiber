@@ -110,7 +110,10 @@ fn hint(app: &App, area: Rect, buf: &mut Buffer) {
         return;
     };
     let y = last.y.saturating_add(last.height);
-    if y < area.y || y >= area.bottom() {
+    // Every visible link draws on a shown row at or below the area's
+    // first row, so the row under its last row is always below the
+    // top: only the bottom needs the guard.
+    if y >= area.bottom() {
         return;
     }
     let x = link.rects.first().map_or(area.x, |rect| rect.x);
