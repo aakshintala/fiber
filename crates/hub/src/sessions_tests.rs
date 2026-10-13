@@ -207,8 +207,8 @@ fn arguments_that_do_not_fit_are_invalid_arguments() {
         let got = Deadline::after(DEADLINE)
             .recv(&rx)
             .expect("refused without a wait");
-        let (code, _) = got.unwrap_err();
-        assert_eq!(code, ErrorCode::InvalidArguments, "{bad}");
+        let refused = got.unwrap_err();
+        assert_eq!(refused.code, ErrorCode::InvalidArguments, "{bad}");
     }
     feed_stop(&feed);
 }

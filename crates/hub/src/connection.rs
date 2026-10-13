@@ -95,6 +95,13 @@ pub(crate) struct Hub {
     /// Tests only: runs handing a queued command over, or clearing it.
     #[cfg(test)]
     pub(crate) on_pass_on: PassOnHook,
+    /// Tests only: a one-shot pause run after the read loop ends and
+    /// before the write shutdown, with its own mutex released: the forced
+    /// overflow races hold it to order connection teardown against the
+    /// bound report. No other race hook is required: queue fullness, EOF
+    /// and joins need none.
+    #[cfg(test)]
+    pub(crate) before_disconnect_cleanup: Mutex<Option<Box<dyn FnOnce() + Send>>>,
     /// Tests only: names `hub-ws-*` threads whose spawns fail, so the
     /// port's spawn-failure paths run without an outside seam.
     #[cfg(test)]
@@ -179,6 +186,8 @@ impl Hub {
             before_open: Mutex::new(None),
             #[cfg(test)]
             on_pass_on: Mutex::new(None),
+            #[cfg(test)]
+            before_disconnect_cleanup: Mutex::new(None),
             #[cfg(test)]
             fail_spawn: Mutex::new(None),
         }
@@ -408,7 +417,7 @@ pub(crate) fn serve_connection(stream: UnixStream, hub: Arc<Hub>) {
 
 /// Serves an accepted connection already counted by [`Hub::poll_accept`].
 pub(crate) fn serve_counted(stream: UnixStream, hub: Arc<Hub>, n: u64) {
-    serve_from(stream, hub, n, true, crate::pairing::Who::Local);
+    serve_from(stream, hub, n, true, crate::pairing::Who::Local, None);
 }
 
 /// Serves an authenticated websocket's pair end, already counted by
@@ -419,14 +428,22 @@ pub(crate) fn serve_authenticated(
     hub: Arc<Hub>,
     n: u64,
     who: crate::pairing::Who,
+    web: Option<Arc<crate::port::Web>>,
 ) {
-    serve_from(stream, hub, n, false, who);
+    serve_from(stream, hub, n, false, who, web);
 }
 
 /// Serves a counted connection: with `hello`, `hub_hello` first, then one
 /// acknowledgement per hub command and a relay thread per session
 /// commanded on it.
-fn serve_from(stream: UnixStream, hub: Arc<Hub>, n: u64, hello: bool, who: crate::pairing::Who) {
+fn serve_from(
+    stream: UnixStream,
+    hub: Arc<Hub>,
+    n: u64,
+    hello: bool,
+    who: crate::pairing::Who,
+    web: Option<Arc<crate::port::Web>>,
+) {
     hub.diag.line(
         Severity::Info,
         None,
@@ -440,6 +457,25 @@ fn serve_from(stream: UnixStream, hub: Arc<Hub>, n: u64, hello: bool, who: crate
             disconnect(&hub, n);
             return;
         }
+    };
+    // Each registration's own shutdown, cloned from the connection
+    // stream before it is read from, without the shared writer mutex:
+    // cleanup never clones at the moment it runs. A bridged connection
+    // also carries its websocket's TCP shutdown.
+    let shutdown_of = |stream: &UnixStream| {
+        stream.try_clone().ok().map(|stream| crate::feed::Closer {
+            stream,
+            web: web.clone(),
+        })
+    };
+    let (Some(feed_closer), Some(heard_closer), Some(heard_retired)) = (
+        shutdown_of(&stream),
+        shutdown_of(&stream),
+        shutdown_of(&stream),
+    ) else {
+        hub.pairing.forget(&hub, &who);
+        disconnect(&hub, n);
+        return;
     };
     hub.pairing.attach(&who, &writer);
     if hello {
@@ -459,7 +495,11 @@ fn serve_from(stream: UnixStream, hub: Arc<Hub>, n: u64, hello: bool, who: crate
     }
     let relays: Arc<Mutex<Relays>> = Arc::new(Mutex::new(Relays::default()));
     hub.rejoins.register(n, &writer, &relays);
-    let Some(heard) = hub.feed.attention.listen(Arc::clone(&writer)) else {
+    let Some(heard) = hub
+        .feed
+        .attention
+        .listen(Arc::clone(&writer), heard_closer, heard_retired)
+    else {
         stream.shutdown(Shutdown::Both).unwrap_or(());
         hub.rejoins.unregister(n);
         hub.pairing.forget(&hub, &who);
@@ -475,9 +515,18 @@ fn serve_from(stream: UnixStream, hub: Arc<Hub>, n: u64, hello: bool, who: crate
         match read.read_until(b'\n', &mut buf) {
             Ok(0) | Err(_) => break,
             Ok(_) => {
-                on_command(&buf, &hub, &writer, &relays, &mut fed, &who);
+                on_command(&buf, &hub, &writer, &feed_closer, &relays, &mut fed, &who);
             }
         }
+    }
+    // The test pause runs after the read loop and before the write
+    // shutdown, with its mutex released: taking it out drops the guard
+    // before the callback runs.
+    #[cfg(test)]
+    let before_disconnect_cleanup = lock(&hub.before_disconnect_cleanup).take();
+    #[cfg(test)]
+    if let Some(cleanup) = before_disconnect_cleanup {
+        cleanup();
     }
     // Fails a blocked writer: the write half only, since a client that
     // half-closed already disconnected the socket, and shutting down a
@@ -519,6 +568,7 @@ fn on_command(
     bytes: &[u8],
     hub: &Arc<Hub>,
     writer: &Arc<Mutex<UnixStream>>,
+    closer: &crate::feed::Closer,
     relays: &Arc<Mutex<Relays>>,
     fed: &mut Option<u64>,
     who: &crate::pairing::Who,
@@ -549,7 +599,7 @@ fn on_command(
                 accept_result(writer, hub, &line.id, result)
             }
             Ok(crate::pairing::Outcome::Dropped) => {}
-            Err((code, message)) => reject(writer, hub, Some(&line.id), &code, &message),
+            Err(refused) => reject(writer, hub, Some(&line.id), &refused.code, &refused.message),
         },
         "devices" => answer(writer, hub, &line.id, hub.pairing.devices(hub, &line.args)),
         "revoke" => match hub.pairing.revoke(hub, who, &line.args) {
@@ -558,7 +608,7 @@ fn on_command(
                 hub.pairing.finish(hub, revoked);
             }
             Ok(crate::pairing::Outcome::Dropped) => {}
-            Err((code, message)) => reject(writer, hub, Some(&line.id), &code, &message),
+            Err(refused) => reject(writer, hub, Some(&line.id), &refused.code, &refused.message),
         },
         "start" => on_start(&line.id, &line.args, hub, writer, relays),
         "status" => on_status(&line.id, &line.args, hub, writer),
@@ -568,11 +618,13 @@ fn on_command(
             &line.id,
             crate::environment::refresh(hub, &line.args),
         ),
-        "prompt_history" => match crate::prompt_history::answer(&hub.home, &line.args) {
-            Ok(result) => accept_result(writer, hub, &line.id, result),
-            Err((code, message)) => reject(writer, hub, Some(&line.id), &code, message),
-        },
-        "feed" => on_feed(&line.id, &line.args, hub, writer, fed),
+        "prompt_history" => answer(
+            writer,
+            hub,
+            &line.id,
+            crate::prompt_history::answer(&hub.home, &line.args).map(Some),
+        ),
+        "feed" => on_feed(&line.id, &line.args, hub, writer, closer, fed),
         "dismiss" => answer(writer, hub, &line.id, hub.feed.dismiss(&line.args)),
         "recent" => answer(writer, hub, &line.id, hub.feed.recent(&line.args)),
         "sessions" => answer(
@@ -695,8 +747,8 @@ fn on_start(
         args.content,
     ) {
         Outcome::Accepted { session_id, first } => (session_id, first),
-        Outcome::Rejected { code, message } => {
-            reject(writer, hub, Some(id), &code, &message);
+        Outcome::Rejected(refused) => {
+            reject(writer, hub, Some(id), &refused.code, &refused.message);
             return;
         }
     };
@@ -710,8 +762,8 @@ fn on_start(
                 crate::first::forget(relays, &first);
                 let failed =
                     start::io_failed(hub, &session_id, "its first prompt could not be sent.");
-                if let Outcome::Rejected { code, message } = failed {
-                    reject(writer, hub, Some(id), &code, &message);
+                if let Outcome::Rejected(refused) = failed {
+                    reject(writer, hub, Some(id), &refused.code, &refused.message);
                 }
                 return;
             }
@@ -835,6 +887,15 @@ pub(crate) fn accept_result(
     payload.insert("command_id".to_owned(), Value::String(id.0.clone()));
     payload.insert("result".to_owned(), result);
     send(writer, hub, "command_accepted", payload);
+}
+
+/// Why a hub command is rejected: its code and Fiber's own sentence.
+#[derive(Debug, PartialEq, Eq)]
+pub(crate) struct Refused {
+    /// The rejection code.
+    pub(crate) code: ErrorCode,
+    /// What the client is told.
+    pub(crate) message: String,
 }
 
 pub(crate) fn reject(

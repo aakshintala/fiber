@@ -13,7 +13,8 @@ use base64::engine::general_purpose::STANDARD;
 use contract::{ErrorCode, SessionId};
 use serde_json::{Map, Value};
 
-use crate::feed::{Refusal, invalid};
+use crate::connection::Refused;
+use crate::feed::invalid;
 use crate::relay::valid_session_id;
 use crate::resume::find_log;
 
@@ -23,7 +24,7 @@ const LIMIT: u64 = 10 * 1024 * 1024;
 /// `read_file`: one file under a session's `artifacts/`, `path` relative
 /// to the session directory. The answer is always `Some`: the file's bytes
 /// in standard base64 under `data`, and its media type under `mime_type`.
-pub(crate) fn read_file(home: &Path, args: &Map<String, Value>) -> Result<Option<Value>, Refusal> {
+pub(crate) fn read_file(home: &Path, args: &Map<String, Value>) -> Result<Option<Value>, Refused> {
     let (session, path) = parse(args).ok_or_else(invalid)?;
     if !fits(path) {
         return Err(outside(path));
@@ -98,11 +99,10 @@ fn fits(path: &str) -> bool {
 /// The session's log, its real `artifacts/`, then the client's original
 /// `path` resolved from the session directory, checked inside and a
 /// regular file, and opened. `path` also appears in messages.
-fn resolve(home: &Path, session: &SessionId, path: &str) -> Result<File, Refusal> {
+fn resolve(home: &Path, session: &SessionId, path: &str) -> Result<File, Refused> {
     let dir = find_log(home, session).and_then(|log| log.parent().map(Path::to_path_buf));
     let Some(dir) = dir else {
-        let refused = crate::resume::not_found(session);
-        return Err((refused.code, refused.message));
+        return Err(crate::resume::not_found(session));
     };
     let home_real = fs::canonicalize(home).map_err(|error| unreadable(path, &error))?;
     let root = dir.join("artifacts");
@@ -162,7 +162,7 @@ fn resolve(home: &Path, session: &SessionId, path: &str) -> Result<File, Refusal
 /// At most `LIMIT` bytes of the opened file, or `too_large`. The file's
 /// length is not trusted: the read is bounded, and a read error is
 /// `io_failed`, never a partial answer.
-fn read_bounded(file: File, shown: &str) -> Result<Vec<u8>, Refusal> {
+fn read_bounded(file: File, shown: &str) -> Result<Vec<u8>, Refused> {
     let mut bytes = Vec::new();
     file.take(LIMIT + 1)
         .read_to_end(&mut bytes)
@@ -172,10 +172,10 @@ fn read_bounded(file: File, shown: &str) -> Result<Vec<u8>, Refusal> {
         Err(_) => usize::MAX,
     };
     if bytes.len() > limit {
-        return Err((
-            ErrorCode::TooLarge,
-            format!("`{shown}` is larger than 10 MiB."),
-        ));
+        return Err(Refused {
+            code: ErrorCode::TooLarge,
+            message: format!("`{shown}` is larger than 10 MiB."),
+        });
     }
     Ok(bytes)
 }
@@ -205,36 +205,36 @@ fn media_type(name: &Path) -> &'static str {
 }
 
 /// `` `<path>` is not a file under the session's `artifacts/`. ``
-fn outside(path: &str) -> Refusal {
-    (
-        ErrorCode::InvalidArguments,
-        format!("`{path}` is not a file under the session's `artifacts/`."),
-    )
+fn outside(path: &str) -> Refused {
+    Refused {
+        code: ErrorCode::InvalidArguments,
+        message: format!("`{path}` is not a file under the session's `artifacts/`."),
+    }
 }
 
 /// `` `<path>` is not a regular file. ``
-fn not_regular(path: &str) -> Refusal {
-    (
-        ErrorCode::InvalidArguments,
-        format!("`{path}` is not a regular file."),
-    )
+fn not_regular(path: &str) -> Refused {
+    Refused {
+        code: ErrorCode::InvalidArguments,
+        message: format!("`{path}` is not a regular file."),
+    }
 }
 
 /// `` No file `<path>` in session `<id>`. ``
-fn missing(session: &SessionId, path: &str) -> Refusal {
-    (
-        ErrorCode::NotFound,
-        format!("No file `{path}` in session `{}`.", session.0),
-    )
+fn missing(session: &SessionId, path: &str) -> Refused {
+    Refused {
+        code: ErrorCode::NotFound,
+        message: format!("No file `{path}` in session `{}`.", session.0),
+    }
 }
 
 /// `` `<path>` could not be read: <error>. `` The error names no path, so
 /// it is safe to carry.
-fn unreadable(path: &str, error: &io::Error) -> Refusal {
-    (
-        ErrorCode::IoFailed,
-        format!("`{path}` could not be read: {error}."),
-    )
+fn unreadable(path: &str, error: &io::Error) -> Refused {
+    Refused {
+        code: ErrorCode::IoFailed,
+        message: format!("`{path}` could not be read: {error}."),
+    }
 }
 
 #[cfg(test)]

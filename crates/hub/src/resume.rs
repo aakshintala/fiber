@@ -32,18 +32,9 @@ use contract::{ErrorCode, SessionId};
 use log::diag::Severity;
 use serde_json::Value;
 
-use crate::connection::Hub;
+use crate::connection::{Hub, Refused};
 use crate::feed::last_kind;
 use crate::start::{self, Bind};
-
-/// Why a relayed command's session could not be reached: the rejection's
-/// code and Fiber's own sentence.
-pub(crate) struct Refused {
-    /// The rejection code.
-    pub(crate) code: ErrorCode,
-    /// What the client is told.
-    pub(crate) message: String,
-}
 
 /// How long a session takes to shut down at most (`docs/invocation.md`,
 /// "Shutdown"): the hub waits this long for an exiting process to release

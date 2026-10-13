@@ -371,7 +371,7 @@ impl Environments {
 pub(crate) fn refresh(
     hub: &Hub,
     args: &Map<String, Value>,
-) -> Result<Option<Value>, crate::feed::Refusal> {
+) -> Result<Option<Value>, crate::connection::Refused> {
     if !args.is_empty() {
         return Err(crate::feed::invalid());
     }

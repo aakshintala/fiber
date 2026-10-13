@@ -24,8 +24,7 @@ const CHUNK: usize = 65_536;
 const UNFIT: &str = "The arguments do not fit this command.";
 const UNREADABLE: &str = "The prompt history could not be read.";
 
-/// Why a `prompt_history` command is rejected: its code and sentence.
-pub(crate) type Refusal = (ErrorCode, &'static str);
+use crate::connection::Refused;
 
 /// A page of prompts, newest first, and the offset of the oldest one's
 /// start when older lines remain.
@@ -33,10 +32,16 @@ type Page = (Vec<Value>, Option<u64>);
 
 /// Answers `prompt_history` with `args` against Fiber home `home`: the
 /// `result` object, or why it is rejected.
-pub(crate) fn answer(home: &Path, args: &Map<String, Value>) -> Result<Value, Refusal> {
-    let (project, before) = parse(args).ok_or((ErrorCode::InvalidArguments, UNFIT))?;
+pub(crate) fn answer(home: &Path, args: &Map<String, Value>) -> Result<Value, Refused> {
+    let (project, before) = parse(args).ok_or(Refused {
+        code: ErrorCode::InvalidArguments,
+        message: UNFIT.to_owned(),
+    })?;
     let file = home.join("projects").join(project).join("history.jsonl");
-    let (prompts, before) = page(&file, before).map_err(|_| (ErrorCode::IoFailed, UNREADABLE))?;
+    let (prompts, before) = page(&file, before).map_err(|_| Refused {
+        code: ErrorCode::IoFailed,
+        message: UNREADABLE.to_owned(),
+    })?;
     let mut result = Map::new();
     result.insert("prompts".to_owned(), Value::Array(prompts));
     if let Some(before) = before {

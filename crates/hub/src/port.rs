@@ -372,7 +372,8 @@ fn serve_client(web: Arc<Web>, hub: Arc<Hub>, n: u64, read: BufReader<TcpStream>
     };
     if spawn(&hub, "hub-ws-serve", {
         let hub = Arc::clone(&hub);
-        move || connection::serve_authenticated(hub_end, hub, n, served_who)
+        let web = Arc::clone(&web);
+        move || connection::serve_authenticated(hub_end, hub, n, served_who, Some(web))
     })
     .is_err()
     {

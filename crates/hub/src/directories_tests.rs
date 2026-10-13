@@ -70,7 +70,7 @@ fn listed(home: Option<&Path>, value: Value) -> Value {
     directories(home, &args(value)).unwrap().unwrap()
 }
 
-fn refused(home: Option<&Path>, value: Value) -> Refusal {
+fn refused(home: Option<&Path>, value: Value) -> Refused {
     directories(home, &args(value)).unwrap_err()
 }
 
@@ -238,8 +238,8 @@ fn tilde_without_a_usable_home_is_invalid() {
 
     let non_utf8 = Path::new(std::ffi::OsStr::from_bytes(b"/\xff"));
     for home in [None, Some(Path::new("rel")), Some(non_utf8)] {
-        let (code, _) = refused(home, json!({"path": "~/sub"}));
-        assert_eq!(code, ErrorCode::InvalidArguments);
+        let refused = refused(home, json!({"path": "~/sub"}));
+        assert_eq!(refused.code, ErrorCode::InvalidArguments);
     }
 }
 
@@ -255,8 +255,8 @@ fn relative_and_misshaped_paths_are_invalid() {
         json!({}),
         json!({"path": "~/", "extra": 1}),
     ] {
-        let (code, _) = refused(Some(temp.home()), value);
-        assert_eq!(code, ErrorCode::InvalidArguments);
+        let refused = refused(Some(temp.home()), value);
+        assert_eq!(refused.code, ErrorCode::InvalidArguments);
     }
 }
 

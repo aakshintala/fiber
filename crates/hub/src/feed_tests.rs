@@ -25,11 +25,20 @@ use fakes::clock::FakeClock;
 use serde_json::{Value, json};
 
 use super::*;
-use crate::fake::{FakeSession, status, status_line};
+use crate::fake::{FakeSession, FakeStarter, status, status_line};
 use crate::testkit::{args, await_scanner, await_true, id, new_feed, start, stop_within};
 
 /// One named deadline per wait: the feed answers before it.
 const DEADLINE: Duration = Duration::from_secs(10);
+
+/// A shutdown handle for a subscriber on `writer`: its own clone, so
+/// cleanup never clones at the moment it runs.
+fn closer_for(writer: &UnixStream) -> Closer {
+    Closer {
+        stream: writer.try_clone().unwrap(),
+        web: None,
+    }
+}
 
 /// `wall()` on a fake clock nobody advanced, in milliseconds.
 const WALL: u64 = 1_700_000_000_000;
@@ -92,7 +101,8 @@ impl Sub {
     fn new(feed: &Feed) -> Self {
         let (a, b) = UnixStream::pair().unwrap();
         b.set_read_timeout(Some(DEADLINE)).unwrap();
-        let id = feed.subscribe(Arc::new(Mutex::new(a))).unwrap();
+        let closer = closer_for(&a);
+        let id = feed.subscribe(Arc::new(Mutex::new(a)), closer).unwrap();
         Self {
             id,
             read: BufReader::new(b),
@@ -410,8 +420,8 @@ fn a_crashed_session_that_comes_back_is_running_again() {
     assert!(back.await_subscribed(1, DEADLINE));
     assert_eq!(sub.raw("the resumed status"), line);
     assert_eq!(entry_of(&feed, &id), Some("running"));
-    let (code, _) = feed.dismiss(&args(json!({"session": id}))).unwrap_err();
-    assert_eq!(code, ErrorCode::StaleRequest);
+    let refused = feed.dismiss(&args(json!({"session": id}))).unwrap_err();
+    assert_eq!(refused.code, ErrorCode::StaleRequest);
     stop_within(&feed);
 }
 
@@ -423,11 +433,15 @@ fn a_dead_or_slow_subscriber_does_not_stop_a_live_one() {
     let session = FakeSession::bind(&temp.dir, &id);
     // Never read: its socket buffer fills and its writer blocks.
     let (slow, slow_far) = UnixStream::pair().unwrap();
-    feed.subscribe(Arc::new(Mutex::new(slow))).unwrap();
+    let slow_closer = closer_for(&slow);
+    feed.subscribe(Arc::new(Mutex::new(slow)), slow_closer)
+        .unwrap();
     // Gone: its writes fail.
     let (dead, dead_far) = UnixStream::pair().unwrap();
     drop(dead_far);
-    feed.subscribe(Arc::new(Mutex::new(dead))).unwrap();
+    let dead_closer = closer_for(&dead);
+    feed.subscribe(Arc::new(Mutex::new(dead)), dead_closer)
+        .unwrap();
     let mut live = Sub::new(&feed);
     start(&feed, &clock);
     assert!(session.await_subscribed(1, DEADLINE));
@@ -464,6 +478,97 @@ fn a_dead_or_slow_subscriber_does_not_stop_a_live_one() {
     );
     assert_eq!(feed.subscribers(), before - 1);
     drop(slow_far);
+    stop_within(&feed);
+}
+
+#[test]
+fn a_stalled_subscriber_is_dropped_at_the_bound_and_a_live_one_keeps_every_line() {
+    let temp = Temp::new();
+    let (feed, _) = new_feed(&temp.dir);
+    // Stalled: the test holds the writer mutex before subscribing, so the
+    // writer thread can never dequeue.
+    let (stalled, mut stalled_far) = UnixStream::pair().unwrap();
+    stalled_far.set_read_timeout(Some(DEADLINE)).unwrap();
+    let stalled_closer = closer_for(&stalled);
+    let kept = Arc::new(Mutex::new(stalled));
+    let guard = kept.lock().unwrap();
+    let stalled_id = feed.subscribe(Arc::clone(&kept), stalled_closer).unwrap();
+    // Live: drains each line before the next broadcast, in order.
+    let mut live = Sub::new(&feed);
+    let count = crate::feed::QUEUE + 2;
+    for n in 0..count {
+        let session = id(n as u64);
+        let line = status_line(&session, &status("n", "/w", "streaming", None));
+        assert!(
+            feed.on_line(&session, line.as_bytes(), None),
+            "the code path takes every change"
+        );
+        let got = live.next("every status");
+        assert_eq!(got["session_id"], json!(session), "line {n} in order");
+    }
+    // The bound fired while the mutex was still held: the stalled
+    // registration is gone and the live one is retained.
+    assert_eq!(feed.subscribers(), 1, "the stalled subscriber is gone");
+    drop(guard);
+    // The overflow shut the stalled connection both ways: EOF, not a line.
+    let mut buf = [0; 1];
+    assert_eq!(
+        stalled_far.read(&mut buf).unwrap(),
+        0,
+        "the stalled side sees EOF"
+    );
+    // Unsubscribing the removed id is a no-op, and stop joins the retired
+    // writer: no Arc survives it.
+    feed.unsubscribe(stalled_id);
+    stop_within(&feed);
+    assert_eq!(Arc::strong_count(&kept), 1, "the writer ended and joined");
+}
+
+#[test]
+fn an_oversized_snapshot_arrives_whole_before_later_changes() {
+    let temp = Temp::new();
+    let (feed, _) = new_feed(&temp.dir);
+    // QUEUE+5 running sessions: far more lines than any queue could hold
+    // one by one, each with a distinct session.
+    let count = crate::feed::QUEUE + 5;
+    let mut sessions = Vec::with_capacity(count);
+    for n in 0..count {
+        let session = id(n as u64);
+        let line = status_line(&session, &status("n", "/w", "streaming", None));
+        assert!(feed.on_line(&session, line.as_bytes(), None));
+        sessions.push(session);
+    }
+    // Subscribe while the writer cannot dequeue: the whole snapshot must
+    // arrive as one queue item.
+    let (writer, far) = UnixStream::pair().unwrap();
+    far.set_read_timeout(Some(DEADLINE)).unwrap();
+    let closer = closer_for(&writer);
+    let writer = Arc::new(Mutex::new(writer));
+    let guard = writer.lock().unwrap();
+    feed.subscribe(Arc::clone(&writer), closer).unwrap();
+    drop(guard);
+    // Every status exactly once, in map order, under one deadline for
+    // the whole snapshot.
+    let mut read = BufReader::new(far);
+    for (n, session) in sessions.iter().enumerate() {
+        let mut text = String::new();
+        read.read_line(&mut text)
+            .unwrap_or_else(|_| panic!("never received snapshot line {n}"));
+        let line: Value = serde_json::from_str(&text).unwrap();
+        assert_eq!(
+            line["session_id"],
+            json!(session),
+            "snapshot line {n} in order"
+        );
+    }
+    // A later change follows the snapshot.
+    let later = id(count as u64);
+    let line = status_line(&later, &status("n", "/w", "streaming", None));
+    feed.on_line(&later, line.as_bytes(), None);
+    let mut text = String::new();
+    read.read_line(&mut text).expect("the later change");
+    let line: Value = serde_json::from_str(&text).unwrap();
+    assert_eq!(line["session_id"], json!(later));
     stop_within(&feed);
 }
 
@@ -581,10 +686,10 @@ fn dismiss_drops_only_a_crashed_session() {
     seeded.start();
     assert_eq!(entry_of(&seeded, &waiting), Some("exited"));
     let stale = |feed: &Feed, session: &str| {
-        let (code, _) = feed
+        let refused = feed
             .dismiss(&args(json!({ "session": session })))
             .unwrap_err();
-        assert_eq!(code, ErrorCode::StaleRequest, "{session}");
+        assert_eq!(refused.code, ErrorCode::StaleRequest, "{session}");
     };
     stale(&seeded, &waiting);
     stale(&feed, &id(7));
@@ -604,8 +709,8 @@ fn dismiss_and_recent_refuse_arguments_that_do_not_fit() {
         json!({"session": 1}),
         json!({"session": "s", "extra": "x"}),
     ] {
-        let (code, _) = feed.dismiss(&args(bad.clone())).unwrap_err();
-        assert_eq!(code, ErrorCode::InvalidArguments, "{bad}");
+        let refused = feed.dismiss(&args(bad.clone())).unwrap_err();
+        assert_eq!(refused.code, ErrorCode::InvalidArguments, "{bad}");
     }
     for bad in [
         json!({"before": 1}),
@@ -613,8 +718,8 @@ fn dismiss_and_recent_refuse_arguments_that_do_not_fit() {
         json!({"limit": "x"}),
         json!({"before": id(5)}),
     ] {
-        let (code, _) = feed.recent(&args(bad.clone())).unwrap_err();
-        assert_eq!(code, ErrorCode::InvalidArguments, "{bad}");
+        let refused = feed.recent(&args(bad.clone())).unwrap_err();
+        assert_eq!(refused.code, ErrorCode::InvalidArguments, "{bad}");
     }
     assert_eq!(feed.recent(&Map::new()), Ok(Some(json!({"sessions": []}))));
 }
@@ -654,48 +759,224 @@ fn recent_answers_a_page_without_running_sessions() {
 }
 
 #[test]
-fn stop_waits_for_a_writer_still_draining_its_backlog() {
+fn stop_closes_a_stalled_subscriber_at_the_bound() {
     let temp = Temp::new();
     let (feed, _) = new_feed(&temp.dir);
     let (writer, mut far) = UnixStream::pair().unwrap();
     far.set_read_timeout(Some(DEADLINE)).unwrap();
+    let closer = closer_for(&writer);
     let kept = Arc::new(Mutex::new(writer));
-    feed.subscribe(Arc::clone(&kept)).unwrap();
-    // Megabytes queued, far more than the socket buffer holds: the writer
-    // thread cannot end until the far end has read nearly all of it.
+    let guard = kept.lock().unwrap();
+    feed.subscribe(Arc::clone(&kept), closer).unwrap();
+    // Past the bound while the writer cannot dequeue: the registration is
+    // gone before stop runs, and the overflow shutdown is still pending.
     let line: Line = Arc::from(vec![b'x'; 2_000]);
-    let count = 4_000;
+    let mut closers = Vec::new();
     {
         let mut state = lock(&feed.state);
-        for _ in 0..count {
+        for _ in 0..crate::feed::QUEUE + 2 {
+            closers.extend(state.fanout.broadcast(&line));
+        }
+    }
+    assert_eq!(feed.subscribers(), 0, "the bound fired while stalled");
+    // The overflow shutdown reaches the far end: EOF, not megabytes.
+    close_connections(closers, UnixStream::shutdown);
+    let mut buf = [0; 1];
+    assert_eq!(far.read(&mut buf).unwrap(), 0, "the stalled side sees EOF");
+    drop(guard);
+    // Stop joins the retired writer: no Arc survives it.
+    stop_within(&feed);
+    assert_eq!(Arc::strong_count(&kept), 1, "the writer ended and joined");
+}
+
+#[test]
+fn stop_frees_a_writer_blocked_below_the_cap() {
+    let temp = Temp::new();
+    let (feed, _) = new_feed(&temp.dir);
+    let (writer, mut far) = UnixStream::pair().unwrap();
+    far.set_read_timeout(Some(DEADLINE)).unwrap();
+    let closer = closer_for(&writer);
+    let kept = Arc::new(Mutex::new(writer));
+    let guard = kept.lock().unwrap();
+    feed.subscribe(Arc::clone(&kept), closer).unwrap();
+    // Below the cap: only a few lines wait, but the writer cannot dequeue.
+    {
+        let line: Line = Arc::from(vec![b'x'; 8]);
+        let mut state = lock(&feed.state);
+        for _ in 0..10 {
             state.fanout.broadcast(&line);
         }
     }
-    let total = line.len() * count;
-    let (go_tx, go_rx) = mpsc::channel::<()>();
-    let drained = thread::spawn(move || {
-        go_rx.recv().unwrap();
-        let mut buf = vec![0; 64 * 1024];
-        let mut read = 0;
-        while read < total {
-            read += far.read(&mut buf).unwrap();
-        }
-        read
-    });
-    let (tx, rx) = mpsc::channel();
     let stopping = Arc::clone(&feed);
-    let watched = Arc::clone(&kept);
+    let (stopped_tx, stopped_rx) = mpsc::channel();
     thread::spawn(move || {
-        // The far end starts reading only as stop is called, so the
-        // writer is still busy unless stop waits for it.
-        go_tx.send(()).unwrap();
         stopping.stop();
-        tx.send(Arc::strong_count(&watched)).unwrap_or(());
+        stopped_tx.send(()).unwrap_or(());
     });
-    let left = Deadline::after(DEADLINE).recv(&rx).expect("stop returns");
-    // The test's handle, `watched`, and none from the writer thread.
-    assert_eq!(left, 2, "stop returned before its writer thread ended");
-    assert_eq!(drained.join().unwrap(), total);
+    // Releasing the mutex lets the writer observe the shutdown: stop
+    // returns under its deadline instead of hanging on the blocked writer.
+    drop(guard);
+    assert!(
+        Deadline::after(DEADLINE).recv(&stopped_rx).is_ok(),
+        "stop returns"
+    );
+    // Whatever the writer flushed before observing the shutdown drains
+    // first; then EOF proves the shutdown shut the connection.
+    let mut buf = [0; 8];
+    loop {
+        match far.read(&mut buf) {
+            Ok(0) => break,
+            Ok(_) => {}
+            Err(error) => panic!("the far end reads to EOF: {error}"),
+        }
+    }
+    assert_eq!(Arc::strong_count(&kept), 1, "the writer ended and joined");
+}
+
+#[test]
+fn overflow_then_stop_still_frees_the_writer() {
+    let temp = Temp::new();
+    let (feed, _) = new_feed(&temp.dir);
+    let (writer, mut far) = UnixStream::pair().unwrap();
+    far.set_read_timeout(Some(DEADLINE)).unwrap();
+    let closer = closer_for(&writer);
+    let kept = Arc::new(Mutex::new(writer));
+    let guard = kept.lock().unwrap();
+    feed.subscribe(Arc::clone(&kept), closer).unwrap();
+    // Past the bound, but the overflow shutdown has not run yet.
+    let line: Line = Arc::from(vec![b'x'; 2_000]);
+    let mut closers = Vec::new();
+    {
+        let mut state = lock(&feed.state);
+        for _ in 0..crate::feed::QUEUE + 2 {
+            closers.extend(state.fanout.broadcast(&line));
+        }
+    }
+    assert_eq!(feed.subscribers(), 0, "the bound fired while stalled");
+    // Stop first: the retained shutdown still frees the writer, without
+    // waiting for the overflow hand-off.
+    let stopping = Arc::clone(&feed);
+    let (stopped_tx, stopped_rx) = mpsc::channel();
+    thread::spawn(move || {
+        stopping.stop();
+        stopped_tx.send(()).unwrap_or(());
+    });
+    drop(guard);
+    assert!(
+        Deadline::after(DEADLINE).recv(&stopped_rx).is_ok(),
+        "stop returns"
+    );
+    // The late overflow shutdown is harmless, and the far end reaches EOF
+    // past whatever the writer flushed before observing the shutdown.
+    close_connections(closers, UnixStream::shutdown);
+    let mut buf = [0; 8];
+    loop {
+        match far.read(&mut buf) {
+            Ok(0) => break,
+            Ok(_) => {}
+            Err(error) => panic!("the far end reads to EOF: {error}"),
+        }
+    }
+    assert_eq!(Arc::strong_count(&kept), 1, "the writer ended and joined");
+}
+
+#[test]
+fn subscribe_after_stop_spawns_no_writer() {
+    let temp = Temp::new();
+    let (feed, _) = new_feed(&temp.dir);
+    stop_within(&feed);
+    let (writer, _far) = UnixStream::pair().unwrap();
+    let closer = closer_for(&writer);
+    assert!(
+        feed.subscribe(Arc::new(Mutex::new(writer)), closer)
+            .is_none(),
+        "a stopped feed subscribes nothing"
+    );
+    assert_eq!(feed.subscribers(), 0);
+    stop_within(&feed);
+}
+
+#[test]
+fn a_repeated_feed_replaces_the_snapshot_without_a_new_writer() {
+    let temp = Temp::new();
+    let clock = FakeClock::new();
+    let hub: Arc<Hub> = Arc::new(crate::testkit::hub(
+        &temp.dir,
+        Arc::new(FakeStarter::hang(&temp.dir)),
+        Arc::clone(&clock) as Arc<dyn Clock>,
+    ));
+    let (writer, far) = UnixStream::pair().unwrap();
+    far.set_read_timeout(Some(DEADLINE)).unwrap();
+    let closer = closer_for(&writer);
+    let writer = Arc::new(Mutex::new(writer));
+    let mut read = BufReader::new(far.try_clone().unwrap());
+    let mut fed = None;
+    let args = Map::new();
+    on_feed(
+        &CommandId("c_feed_1".to_owned()),
+        &args,
+        &hub,
+        &writer,
+        &closer,
+        &mut fed,
+    );
+    let first = fed;
+    assert_eq!(
+        next_line(&mut read, "the first acknowledgement")["kind"],
+        "command_accepted"
+    );
+    // A session arrives between the two feeds: its change reaches the
+    // subscriber at once, and the replacement snapshot carries it again,
+    // after the second acknowledgement.
+    let session = id(1);
+    let line = status_line(&session, &status("n", "/w", "streaming", None));
+    hub.feed.on_line(&session, line.as_bytes(), None);
+    assert_eq!(
+        next_line(&mut read, "the change")["session_id"],
+        json!(session)
+    );
+    on_feed(
+        &CommandId("c_feed_2".to_owned()),
+        &args,
+        &hub,
+        &writer,
+        &closer,
+        &mut fed,
+    );
+    assert_eq!(fed, first, "the live registration is reused");
+    assert_eq!(
+        next_line(&mut read, "the second acknowledgement")["kind"],
+        "command_accepted"
+    );
+    assert_eq!(
+        next_line(&mut read, "the replacement snapshot")["session_id"],
+        json!(session)
+    );
+    assert_eq!(hub.feed.subscribers(), 1, "no second writer started");
+    assert_eq!(Arc::strong_count(&writer), 2, "the test and its writer");
+    // A third feed is still acknowledged: the socket never saw EOF.
+    on_feed(
+        &CommandId("c_feed_3".to_owned()),
+        &args,
+        &hub,
+        &writer,
+        &closer,
+        &mut fed,
+    );
+    assert_eq!(
+        next_line(&mut read, "the third acknowledgement")["kind"],
+        "command_accepted"
+    );
+    stop_within(&hub.feed);
+}
+
+/// The next line on `read`, parsed.
+fn next_line(read: &mut BufReader<UnixStream>, what: &str) -> Value {
+    let mut text = String::new();
+    read.read_line(&mut text)
+        .unwrap_or_else(|_| panic!("never received {what}"));
+    assert!(!text.is_empty(), "the feed closed before {what}");
+    serde_json::from_str(&text).unwrap()
 }
 
 #[test]
@@ -709,8 +990,9 @@ fn stop_ends_every_thread_and_records_no_crash() {
     assert_eq!(sub.raw("the status"), line);
     // A writer the test keeps a handle on: its thread drops the other.
     let (kept, _kept_far) = UnixStream::pair().unwrap();
+    let closer = closer_for(&kept);
     let kept = Arc::new(Mutex::new(kept));
-    feed.subscribe(Arc::clone(&kept)).unwrap();
+    feed.subscribe(Arc::clone(&kept), closer).unwrap();
     let (tx, rx) = mpsc::channel();
     let stopping = Arc::clone(&feed);
     thread::spawn(move || {
@@ -730,7 +1012,11 @@ fn stop_ends_every_thread_and_records_no_crash() {
     let mut rest = String::new();
     assert_eq!(sub.read.read_line(&mut rest).unwrap(), 0, "{rest}");
     let (other, _far) = UnixStream::pair().unwrap();
-    assert!(feed.subscribe(Arc::new(Mutex::new(other))).is_none());
+    let other_closer = closer_for(&other);
+    assert!(
+        feed.subscribe(Arc::new(Mutex::new(other)), other_closer)
+            .is_none()
+    );
 }
 
 #[test]
@@ -876,7 +1162,11 @@ impl Heard {
     fn new(feed: &Feed) -> Self {
         let (a, b) = UnixStream::pair().unwrap();
         b.set_read_timeout(Some(DEADLINE)).unwrap();
-        let id = feed.attention.listen(Arc::new(Mutex::new(a))).unwrap();
+        let (closer, retired) = (closer_for(&a), closer_for(&a));
+        let id = feed
+            .attention
+            .listen(Arc::new(Mutex::new(a)), closer, retired)
+            .unwrap();
         Self {
             id,
             read: BufReader::new(b),
@@ -1539,4 +1829,66 @@ fn a_second_hub_lists_a_session_the_first_hub_already_followed() {
     );
     stop_within(&second);
     stop_within(&first);
+}
+
+#[test]
+fn a_repeated_feed_on_a_stalled_subscriber_shuts_its_connection_and_drops_the_registration() {
+    let temp = Temp::new();
+    let (feed, _) = new_feed(&temp.dir);
+    // Stalled: the test holds the writer mutex before subscribing, so the
+    // writer thread can never dequeue.
+    let (stalled, stalled_far) = UnixStream::pair().unwrap();
+    stalled_far.set_read_timeout(Some(DEADLINE)).unwrap();
+    let stalled_closer = closer_for(&stalled);
+    let kept = Arc::new(Mutex::new(stalled));
+    let guard = kept.lock().unwrap();
+    let stalled_id = feed.subscribe(Arc::clone(&kept), stalled_closer).unwrap();
+    // A few changes through the code path, so the re-queued snapshot is
+    // not empty.
+    for n in 0..5u64 {
+        let session = id(n);
+        let line = status_line(&session, &status("n", "/w", "streaming", None));
+        assert!(
+            feed.on_line(&session, line.as_bytes(), None),
+            "the code path takes every change"
+        );
+    }
+    // The writer never dequeued: the registration is still there.
+    assert_eq!(feed.subscribers(), 1, "nothing drained while stalled");
+    // Repeated feeds re-queue the snapshot behind its acknowledgement.
+    // Each fills one more slot, and the writer is still blocked on the
+    // held mutex, so a Full is certain within QUEUE further replaces:
+    // every Sent stays queued, and only 1,024 slots exist.
+    let mut full = Vec::new();
+    for i in 0..crate::feed::QUEUE + 1 {
+        let closers = feed.replace_snapshot(stalled_id);
+        if !closers.is_empty() {
+            full = closers;
+            break;
+        }
+        // Gone would resurrect nothing and DeadWriter would park the
+        // handle: neither may happen while the registration is live and
+        // its writer only waits on the held mutex.
+        assert_eq!(
+            feed.subscribers(),
+            1,
+            "the stalled subscriber is still there (replace {i})"
+        );
+    }
+    assert_eq!(full.len(), 1, "the full queue hands back its shutdown");
+    close_connections(full, UnixStream::shutdown);
+    assert_eq!(feed.subscribers(), 0, "the stalled subscriber is gone");
+    drop(guard);
+    // The overflow shut the stalled connection both ways: EOF, not a line.
+    let mut buf = [0; 1];
+    assert_eq!(
+        BufReader::new(stalled_far).read(&mut buf).unwrap(),
+        0,
+        "the stalled side sees EOF"
+    );
+    // Unsubscribing the removed id is a no-op, and stop joins the retired
+    // writer: no Arc survives it.
+    feed.unsubscribe(stalled_id);
+    stop_within(&feed);
+    assert_eq!(Arc::strong_count(&kept), 1, "the writer ended and joined");
 }

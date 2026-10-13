@@ -9,7 +9,8 @@ use std::path::Path;
 
 use serde_json::{Map, Value, json};
 
-use crate::feed::{Refusal, invalid};
+use crate::connection::Refused;
+use crate::feed::invalid;
 
 /// `directories`: the names of the subdirectories `path` holds, sorted,
 /// one level only, and `path`, the absolute path listed with `~/`
@@ -19,7 +20,7 @@ use crate::feed::{Refusal, invalid};
 pub(crate) fn directories(
     home: Option<&Path>,
     args: &Map<String, Value>,
-) -> Result<Option<Value>, Refusal> {
+) -> Result<Option<Value>, Refused> {
     let raw = parse(args).ok_or_else(invalid)?;
     let path = expand(home, raw).ok_or_else(invalid)?;
     let mut names = Vec::new();

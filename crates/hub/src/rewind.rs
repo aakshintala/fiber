@@ -75,7 +75,7 @@ pub(crate) fn reach(
     hub: &Arc<Hub>,
     from: &SessionId,
     next: &SessionId,
-) -> Result<UnixStream, crate::resume::Refused> {
+) -> Result<UnixStream, crate::connection::Refused> {
     let guard = guard_for(hub, next);
     let held = lock(&guard);
     let socket = hub.home.join("run").join(&next.0);
@@ -95,7 +95,7 @@ pub(crate) fn reach(
                 );
                 // The resume's own message names the session or the io
                 // detail, so the client gets a fixed sentence instead.
-                Err(crate::resume::Refused {
+                Err(crate::connection::Refused {
                     code: refused.code,
                     message: "The new session could not be resumed.".to_owned(),
                 })
@@ -113,7 +113,7 @@ pub(crate) fn reach(
                 "io_failed",
                 &format!("Session {} could not start.", next.0),
             );
-            return Err(crate::resume::Refused {
+            return Err(crate::connection::Refused {
                 code: ErrorCode::IoFailed,
                 message: "The new session could not start.".to_owned(),
             });
@@ -128,7 +128,7 @@ pub(crate) fn reach(
                 "io_failed",
                 &format!("Session {} could not start.", next.0),
             );
-            return Err(crate::resume::Refused {
+            return Err(crate::connection::Refused {
                 code: ErrorCode::IoFailed,
                 message: "The new session could not start.".to_owned(),
             });
@@ -158,22 +158,24 @@ pub(crate) fn reach(
                 &format!("Session {} could not start.", next.0),
             );
             Err(match failure {
-                Some(failure) if failure.code == ErrorCode::IoFailed => crate::resume::Refused {
-                    code: ErrorCode::IoFailed,
-                    message: "The new session could not start.".to_owned(),
-                },
+                Some(failure) if failure.code == ErrorCode::IoFailed => {
+                    crate::connection::Refused {
+                        code: ErrorCode::IoFailed,
+                        message: "The new session could not start.".to_owned(),
+                    }
+                }
                 // A structured sentence naming the new session is not
                 // forwarded either: the code is kept with the fixed
                 // sentence, so no new id reaches a client.
-                Some(failure) if failure.message.contains(&next.0) => crate::resume::Refused {
+                Some(failure) if failure.message.contains(&next.0) => crate::connection::Refused {
                     code: failure.code,
                     message: "The new session could not start.".to_owned(),
                 },
-                Some(failure) => crate::resume::Refused {
+                Some(failure) => crate::connection::Refused {
                     code: failure.code,
                     message: failure.message,
                 },
-                None => crate::resume::Refused {
+                None => crate::connection::Refused {
                     code: ErrorCode::IoFailed,
                     message: "The new session could not start.".to_owned(),
                 },
@@ -186,7 +188,7 @@ pub(crate) fn reach(
                 "io_failed",
                 &format!("Session {} could not start.", next.0),
             );
-            Err(crate::resume::Refused {
+            Err(crate::connection::Refused {
                 code: ErrorCode::IoFailed,
                 message: "The new session could not start.".to_owned(),
             })

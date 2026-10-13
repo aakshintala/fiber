@@ -16,7 +16,7 @@ use std::path::PathBuf;
 use contract::ErrorCode;
 use serde_json::{Map, Value, json};
 
-use super::{CHUNK, PAGE, answer, read_back};
+use super::{CHUNK, PAGE, Refused, answer, read_back};
 
 const PROJECT: &str = "-Users-alice-work-fiber-.git";
 
@@ -41,7 +41,7 @@ impl Home {
         file
     }
 
-    fn ask(&self, args: Value) -> Result<Value, (ErrorCode, &'static str)> {
+    fn ask(&self, args: Value) -> Result<Value, Refused> {
         let Value::Object(args) = args else {
             panic!("args are an object");
         };
@@ -124,8 +124,8 @@ fn a_history_that_cannot_be_read_is_io_failed() {
         .join(PROJECT)
         .join("history.jsonl");
     fs::create_dir_all(&file).unwrap();
-    let (code, _) = home.ask(json!({"project": PROJECT})).unwrap_err();
-    assert_eq!(code, ErrorCode::IoFailed);
+    let refused = home.ask(json!({"project": PROJECT})).unwrap_err();
+    assert_eq!(refused.code, ErrorCode::IoFailed);
 }
 
 #[test]
@@ -136,8 +136,8 @@ fn a_history_that_cannot_be_opened_is_io_failed() {
     let projects = home.dir.join("projects");
     fs::create_dir_all(&projects).unwrap();
     fs::write(projects.join(PROJECT), b"").unwrap();
-    let (code, _) = home.ask(json!({"project": PROJECT})).unwrap_err();
-    assert_eq!(code, ErrorCode::IoFailed);
+    let refused = home.ask(json!({"project": PROJECT})).unwrap_err();
+    assert_eq!(refused.code, ErrorCode::IoFailed);
 }
 
 #[test]
@@ -319,7 +319,10 @@ fn a_bad_project_key_touches_no_file() {
     for key in ["", ".", "..", "a/b", "/a", "a\0b"] {
         assert_eq!(
             home.ask(json!({"project": key})),
-            Err((ErrorCode::InvalidArguments, super::UNFIT)),
+            Err(Refused {
+                code: ErrorCode::InvalidArguments,
+                message: super::UNFIT.to_owned(),
+            }),
             "{key:?}"
         );
     }
@@ -354,7 +357,10 @@ fn bad_arguments_are_invalid_arguments() {
     ] {
         assert_eq!(
             home.ask(args.clone()),
-            Err((ErrorCode::InvalidArguments, super::UNFIT)),
+            Err(Refused {
+                code: ErrorCode::InvalidArguments,
+                message: super::UNFIT.to_owned(),
+            }),
             "{args}"
         );
     }

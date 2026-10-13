@@ -9,11 +9,10 @@ use std::fs::File;
 use std::io::{Read, Seek, SeekFrom};
 use std::os::unix::net::UnixStream;
 use std::path::Path;
-#[cfg(test)]
-use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
-use std::sync::mpsc::Sender;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
-use std::thread::JoinHandle;
+
+use crate::feed::{Closer, Fanout, WriterEnd, close_connections};
 
 use contract::clock::{Clock, wall_ms};
 use contract::events::{SessionState, SessionStatus};
@@ -152,27 +151,15 @@ pub(crate) fn turn_ended_at(log: &Path, since: u64) -> bool {
     })
 }
 
-struct Listener {
-    id: u64,
-    tx: Sender<crate::feed::Line>,
-    writer: JoinHandle<()>,
-}
-
-#[derive(Default)]
-struct Listeners {
-    next: u64,
-    list: Vec<Listener>,
-}
-
-/// Every connection's listener (a channel and writer thread each), the hub's start,
-/// and what it announced per session.
+/// Every connection's listener (a channel and writer thread each, in the
+/// shared [`Fanout`] registry), the hub's start, and what it announced
+/// per session.
 pub(crate) struct Attention {
     clock: Arc<dyn Clock>,
     started_ms: u64,
     announced: Mutex<BTreeMap<String, Announced>>,
-    listeners: Mutex<Listeners>,
-    #[cfg(test)]
-    joining: AtomicUsize,
+    listeners: Mutex<Fanout>,
+    stopped: AtomicBool,
     #[cfg(test)]
     fail_listen: AtomicBool,
 }
@@ -184,36 +171,42 @@ impl Attention {
             clock,
             started_ms,
             announced: Mutex::new(BTreeMap::new()),
-            listeners: Mutex::new(Listeners::default()),
-            #[cfg(test)]
-            joining: AtomicUsize::new(0),
+            listeners: Mutex::new(Fanout::default()),
+            stopped: AtomicBool::new(false),
             #[cfg(test)]
             fail_listen: AtomicBool::new(false),
         }
     }
 
-    pub(crate) fn listen(&self, writer: Arc<Mutex<UnixStream>>) -> Option<u64> {
+    /// Reserves a pending listener: no channel and no writer thread until
+    /// the first unsolicited line activates it, under the registry lock,
+    /// at most once. Refused (`None`) once stopped.
+    pub(crate) fn listen(
+        &self,
+        writer: Arc<Mutex<UnixStream>>,
+        closer: Closer,
+        retired: Closer,
+    ) -> Option<u64> {
         #[cfg(test)]
         if self.fail_listen.swap(false, Ordering::SeqCst) {
             return None;
         }
-        let (tx, handle) = crate::feed::spawn_writer(writer, "hub-attention-out")?;
         let mut listeners = lock(&self.listeners);
-        listeners.next += 1;
-        let id = listeners.next;
-        listeners.list.push(Listener {
-            id,
-            tx,
-            writer: handle,
-        });
-        Some(id)
+        if self.stopped.load(Ordering::SeqCst) {
+            return None;
+        }
+        Some(listeners.listen(writer, closer, retired))
     }
 
-    /// Queues one unsolicited hub line to every served connection.
-    pub(crate) fn announce(&self, line: crate::feed::Line) {
-        lock(&self.listeners)
-            .list
-            .retain(|listener| listener.tx.send(Arc::clone(&line)).is_ok());
+    /// Queues one unsolicited hub line to every served connection, handing
+    /// back the shutdown of every listener that already disconnected, for
+    /// the caller to run outside every lock. Past a stop the line is
+    /// dropped.
+    pub(crate) fn announce(&self, line: crate::feed::Line) -> Vec<Closer> {
+        if self.stopped.load(Ordering::SeqCst) {
+            return Vec::new();
+        }
+        lock(&self.listeners).broadcast(&line)
     }
 
     #[cfg(test)]
@@ -221,27 +214,49 @@ impl Attention {
         self.fail_listen.store(true, Ordering::SeqCst);
     }
 
-    /// Drops listener `id` and joins its writer, after releasing the lock.
+    /// Drops listener `id`, reaps retired writers that have already
+    /// ended, then shuts and joins every remaining retired writer. This
+    /// closes a blocked writer even when overflow has not run its own
+    /// shutdown hand-off yet. A pending listener owns no thread and shuts
+    /// nothing. Every shutdown and join runs outside the registry lock.
     pub(crate) fn unlisten(&self, id: u64) {
-        let gone = {
+        let (ends, finished) = {
             let mut listeners = lock(&self.listeners);
-            listeners
-                .list
-                .iter()
-                .position(|listener| listener.id == id)
-                .map(|at| listeners.list.remove(at))
+            let gone = listeners.remove(id);
+            let finished = listeners.finished();
+            let mut ends = listeners.take_retired();
+            if let Some(gone) = gone {
+                ends.push(gone);
+            }
+            (ends, finished)
         };
-        if let Some(listener) = gone {
-            drop(listener.tx);
-            self.join(listener.writer);
+        close_and_join(ends);
+        // Already ended, so joining needs no shutdown: `finished` dropped
+        // each reaped closer and released its descriptor.
+        for writer in finished {
+            match writer.join() {
+                Ok(()) | Err(_) => {}
+            }
         }
     }
 
-    fn join(&self, handle: JoinHandle<()>) {
-        #[cfg(test)]
-        self.joining.fetch_add(1, Ordering::SeqCst);
-        match handle.join() {
-            Ok(()) | Err(_) => {}
+    /// Stops the registry for the feed's stop: no later listen registers
+    /// and no later line is queued. Active writers shut before joining,
+    /// so a blocked writer ends at once. Pending registrations own no
+    /// thread and shut nothing: they are dropped, so a relay-only
+    /// connection keeps receiving past the feed's stop.
+    pub(crate) fn stop(&self) {
+        self.stopped.store(true, Ordering::SeqCst);
+        let mut old = std::mem::take(&mut *lock(&self.listeners));
+        // Already-ended retired writers join without shutdown; the fast
+        // path drops their closers. `close` drops pending registrations
+        // unshut and returns every active or unfinished retired writer.
+        let finished = old.finished();
+        close_and_join(old.close());
+        for writer in finished {
+            match writer.join() {
+                Ok(()) | Err(_) => {}
+            }
         }
     }
 
@@ -251,14 +266,19 @@ impl Attention {
         now.since >= self.started_ms && turn_ended_at(log, now.since)
     }
 
-    /// Decides through `reason`, updates `announced`, queues the line.
+    /// Decides through `reason`, updates `announced`, queues the line,
+    /// handing back the shutdown of every listener that already
+    /// disconnected, for the caller to run outside every lock.
     pub(crate) fn notify(
         &self,
         session: &str,
         before: Option<Seen<'_>>,
         now: &SessionStatus,
         unseen: bool,
-    ) {
+    ) -> Vec<Closer> {
+        if self.stopped.load(Ordering::SeqCst) {
+            return Vec::new();
+        }
         let line = {
             let mut announced = lock(&self.announced);
             let known = announced.get(session).cloned().unwrap_or_default();
@@ -269,7 +289,7 @@ impl Attention {
                 announced: &known,
             };
             let Some(reason) = reason(now, &facts) else {
-                return;
+                return Vec::new();
             };
             let line = line_for(session, now, reason, wall_ms(self.clock.wall()));
             let entry = announced.entry(session.to_owned()).or_default();
@@ -285,10 +305,7 @@ impl Attention {
             }
             line
         };
-        let mut listeners = lock(&self.listeners);
-        listeners
-            .list
-            .retain(|listener| listener.tx.send(Arc::clone(&line)).is_ok());
+        lock(&self.listeners).broadcast(&line)
     }
 
     pub(crate) fn forget(&self, session: &str) {
@@ -297,22 +314,23 @@ impl Attention {
 
     #[cfg(test)]
     pub(crate) fn listeners(&self) -> usize {
-        lock(&self.listeners).list.len()
+        lock(&self.listeners).ids().len()
     }
 
+    /// How many retired writers still wait for joining: the fan-out's
+    /// count under the registry guard.
     #[cfg(test)]
-    pub(crate) fn joining(&self) -> usize {
-        self.joining.load(Ordering::SeqCst)
+    pub(crate) fn retired(&self) -> usize {
+        lock(&self.listeners).retired()
     }
 
-    /// How many listeners' writers have returned.
+    /// How many attention writers started, including retired ones: actual
+    /// successful starts, not currently live writers. Test-only: no
+    /// outside socket outcome distinguishes an idle parked thread from no
+    /// thread.
     #[cfg(test)]
-    pub(crate) fn ended(&self) -> usize {
-        lock(&self.listeners)
-            .list
-            .iter()
-            .filter(|listener| listener.writer.is_finished())
-            .count()
+    pub(crate) fn writers_started(&self) -> usize {
+        lock(&self.listeners).started()
     }
 }
 
@@ -337,6 +355,25 @@ fn line_for(session: &str, now: &SessionStatus, reason: Reason, ts: u64) -> crat
         schema_version: SCHEMA_VERSION,
         payload,
     })
+}
+
+/// Closes active connections before joining their writers. Pending
+/// registrations own no thread, so their shutdown handles are dropped.
+fn close_and_join(ends: Vec<WriterEnd>) {
+    let mut closers = Vec::new();
+    let mut writers = Vec::new();
+    for end in ends {
+        if let Some(writer) = end.writer {
+            closers.push(end.closer);
+            writers.push(writer);
+        }
+    }
+    close_connections(closers, UnixStream::shutdown);
+    for writer in writers {
+        match writer.join() {
+            Ok(()) | Err(_) => {}
+        }
+    }
 }
 
 fn lock<'a, T>(mutex: &'a Mutex<T>) -> MutexGuard<'a, T> {

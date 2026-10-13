@@ -39,17 +39,21 @@ use contract::{CommandId, Envelope, ErrorCode, HubLine, SCHEMA_VERSION, SessionI
 use serde_json::{Map, Value};
 
 use crate::attention::{Attention, Seen};
-use crate::connection::{Hub, accept_result, reject, send as send_line};
+use crate::connection::{Hub, Refused, accept_result, reject, send as send_line};
 use crate::recent::{self, Left, PageError, RecentRow};
 use crate::relay::valid_session_id;
 use crate::tick::Tick;
 
 mod fanout;
 mod settle;
-use fanout::Fanout;
 use settle::Settle;
 
-pub(crate) use fanout::{Line, spawn_writer, to_line};
+/// The bound, for tests: production capacity lives in [`spawn_writer`].
+#[cfg(test)]
+pub(crate) use fanout::QUEUE;
+pub(crate) use fanout::{
+    Closer, Fanout, Line, Targeted, WriterEnd, close_connections, spawn_writer, to_line,
+};
 
 /// How often the hub rescans `run/` for new sessions.
 pub(crate) const RUN_SCAN: Duration = Duration::from_millis(500);
@@ -57,9 +61,6 @@ pub(crate) const RUN_SCAN: Duration = Duration::from_millis(500);
 /// The most of a log's end read to find its last line: `fiber_exited` and
 /// `rewound` are far shorter, so a longer last line is neither.
 pub(crate) const TAIL: u64 = 64 * 1024;
-
-/// A rejected feed command: its code and sentence.
-pub(crate) type Refusal = (ErrorCode, String);
 
 /// Called at the end of every scan of `run/` with the names it found.
 pub(crate) type ScanHook = Box<dyn Fn(&BTreeSet<String>) + Send + Sync>;
@@ -107,7 +108,8 @@ struct State {
     /// `run/`: never connected again.
     delegates: BTreeSet<String>,
     fanout: Fanout,
-    /// Summary reader threads, joined at stop or once done.
+    /// Summary reader threads and disconnected writers parked for
+    /// joining, joined at stop or once done.
     threads: Vec<JoinHandle<()>>,
     /// Whether the first scan of `run/` has finished.
     scanned: bool,
@@ -228,40 +230,88 @@ impl Feed {
             }
             tracked.stream.shutdown(Shutdown::Both).unwrap_or(());
         }
-        fanout.close().into_iter().for_each(join);
+        fanout.close().into_iter().for_each(|end| {
+            close_connections(vec![end.closer], UnixStream::shutdown);
+            if let Some(writer) = end.writer {
+                join(writer);
+            }
+        });
+        self.attention.stop();
         threads.into_iter().for_each(join);
     }
 
     /// Subscribes `writer` to the feed: queues every left session's last
     /// status and its `session_left`, then every running one's status,
     /// then every change. The caller has written `command_accepted`.
-    pub(crate) fn subscribe(&self, writer: Arc<Mutex<UnixStream>>) -> Option<u64> {
-        let spawned = spawn_writer(writer, "hub-feed-out")?;
+    /// `closer` shuts the connection down; its retained clone frees a
+    /// retired writer. Both are cloned before admission, never at cleanup.
+    /// A stopped feed subscribes nothing and spawns no writer.
+    pub(crate) fn subscribe(&self, writer: Arc<Mutex<UnixStream>>, closer: Closer) -> Option<u64> {
+        let retired = Closer {
+            stream: closer.stream.try_clone().ok()?,
+            web: closer.web.clone(),
+        };
         let mut state = lock(&self.state);
         if state.stopped {
             return None;
         }
-        let mut snapshot = Vec::new();
+        let spawned = spawn_writer(writer, "hub-feed-out")?;
+        let snapshot = self.snapshot(&state);
+        Some(state.fanout.push(spawned, closer, retired, snapshot))
+    }
+
+    /// The current snapshot as one line: every left session's last
+    /// status and its `session_left`, then every running one's status,
+    /// each group in map order. One queue item however many sessions it
+    /// holds, never truncated: an oversized snapshot still subscribes.
+    fn snapshot(&self, state: &State) -> Line {
+        let mut bytes = Vec::new();
         for (id, entry) in &state.entries {
             if let Entry::Left(status, how) = entry {
-                snapshot.push(Arc::clone(&status.line));
-                snapshot.push(self.left_line(id, *how));
+                bytes.extend_from_slice(&status.line);
+                bytes.extend_from_slice(&self.left_line(id, *how));
             }
         }
         for entry in state.entries.values() {
             if let Entry::Running(status) = entry {
-                snapshot.push(Arc::clone(&status.line));
+                bytes.extend_from_slice(&status.line);
             }
         }
-        Some(state.fanout.push(spawned, &snapshot))
+        Arc::from(bytes)
     }
 
-    /// Ends subscriber `id`: no more lines are queued, and its writer
-    /// thread is joined once it has written what was queued.
+    /// Re-queues the current snapshot for the existing `id` registration,
+    /// behind its command acknowledgement. Hands back the Full shutdown
+    /// when its queue is full, for the caller to run outside the state
+    /// lock; anything else leaves no cleanup behind. A disconnected
+    /// writer's handle parks with the summary threads, joined at the next
+    /// scan or at stop.
+    fn replace_snapshot(&self, id: u64) -> Vec<Closer> {
+        let mut state = lock(&self.state);
+        if state.stopped {
+            return Vec::new();
+        }
+        let snapshot = self.snapshot(&state);
+        match state.fanout.send_to(id, &snapshot) {
+            Targeted::Sent | Targeted::Gone => Vec::new(),
+            Targeted::Full(closer) => vec![closer],
+            Targeted::DeadWriter(writer) => {
+                state.threads.push(writer);
+                Vec::new()
+            }
+        }
+    }
+
+    /// Ends subscriber `id`: no more lines are queued; its connection is
+    /// shut so a writer blocked on a stalled reader ends at once, and its
+    /// thread is joined outside the state lock.
     pub(crate) fn unsubscribe(&self, id: u64) {
         let gone = lock(&self.state).fanout.remove(id);
-        if let Some(writer) = gone {
-            join(writer);
+        if let Some(end) = gone {
+            close_connections(vec![end.closer], UnixStream::shutdown);
+            if let Some(writer) = end.writer {
+                join(writer);
+            }
         }
     }
 
@@ -272,7 +322,7 @@ impl Feed {
     }
 
     /// `dismiss`: drops a crashed session from the feed.
-    pub(crate) fn dismiss(&self, args: &Map<String, Value>) -> Result<Option<Value>, Refusal> {
+    pub(crate) fn dismiss(&self, args: &Map<String, Value>) -> Result<Option<Value>, Refused> {
         let session = match (args.len(), args.get("session")) {
             (1, Some(Value::String(session))) => session,
             _ => return Err(invalid()),
@@ -285,10 +335,10 @@ impl Feed {
             state.entries.remove(session);
             Ok(None)
         } else {
-            Err((
-                ErrorCode::StaleRequest,
-                format!("`{session}` is not a crashed session in the feed."),
-            ))
+            Err(Refused {
+                code: ErrorCode::StaleRequest,
+                message: format!("`{session}` is not a crashed session in the feed."),
+            })
         }
     }
 
@@ -299,7 +349,7 @@ impl Feed {
     }
 
     /// `recent`: a page of exited sessions, newest first.
-    pub(crate) fn recent(&self, args: &Map<String, Value>) -> Result<Option<Value>, Refusal> {
+    pub(crate) fn recent(&self, args: &Map<String, Value>) -> Result<Option<Value>, Refused> {
         let text = |key: &str| match args.get(key) {
             None => Ok(None),
             Some(Value::String(value)) => Ok(Some(value.as_str())),
@@ -318,10 +368,10 @@ impl Feed {
             .collect();
         match recent::page(&self.home, before, project, &running) {
             Ok(rows) => Ok(Some(serde_json::json!({ "sessions": rows }))),
-            Err(PageError::UnknownBefore) => Err((
-                ErrorCode::InvalidArguments,
-                "`before` names no session in the list.".to_owned(),
-            )),
+            Err(PageError::UnknownBefore) => Err(Refused {
+                code: ErrorCode::InvalidArguments,
+                message: "`before` names no session in the list.".to_owned(),
+            }),
         }
     }
 
@@ -500,12 +550,16 @@ impl Feed {
             }),
             None => None,
         };
-        self.attention.notify(id, seen, &payload, unseen);
+        let mut closers = self.attention.notify(id, seen, &payload, unseen);
         let line: Line = Arc::from(bytes);
-        state.fanout.broadcast(&line);
+        closers.extend(state.fanout.broadcast(&line));
         state
             .entries
             .insert(id.to_owned(), Entry::Running(Status { line, payload }));
+        drop(state);
+        // Shut outside the state lock, which the attention listeners lock
+        // nests inside: a shutdown unblocks a writer holding its mutex.
+        close_connections(closers, UnixStream::shutdown);
         true
     }
 
@@ -548,10 +602,11 @@ impl Feed {
             return;
         }
         state.tracked.remove(id);
+        let mut closers = Vec::new();
         if let Some(Entry::Running(status) | Entry::Left(status, _)) = state.entries.remove(id) {
             let left = how.unwrap_or(Left::Exited);
             let line = self.left_line(id, left);
-            state.fanout.broadcast(&line);
+            closers = state.fanout.broadcast(&line);
             let stays = match how {
                 Some(Left::Crashed) => true,
                 Some(Left::Exited) => recent::is_waiting(&status.payload),
@@ -563,6 +618,8 @@ impl Feed {
                     .insert(id.to_owned(), Entry::Left(status, left));
             }
         }
+        drop(state);
+        close_connections(closers, UnixStream::shutdown);
     }
 
     /// Appends crashed session `id`'s row: a process that died cannot.
@@ -605,12 +662,16 @@ impl Feed {
 }
 
 /// `feed`: accepted, then this connection's subscription, replacing any
-/// earlier one, so the snapshot follows the acknowledgement.
+/// earlier one's snapshot on its live registration, so the fresh snapshot
+/// follows the acknowledgement with no new writer. A repeated `feed` whose
+/// registration is gone or full closes nothing itself: a gone id stays
+/// dropped, and a full queue shuts the whole connection outside the lock.
 pub(crate) fn on_feed(
     id: &CommandId,
     args: &Map<String, Value>,
     hub: &Arc<Hub>,
     writer: &Arc<Mutex<UnixStream>>,
+    closer: &Closer,
     fed: &mut Option<u64>,
 ) {
     if !args.is_empty() {
@@ -619,9 +680,19 @@ pub(crate) fn on_feed(
     }
     answer(writer, hub, id, Ok(None));
     if let Some(earlier) = fed.take() {
-        hub.feed.unsubscribe(earlier);
+        let closers = hub.feed.replace_snapshot(earlier);
+        if closers.is_empty() {
+            *fed = Some(earlier);
+        } else {
+            close_connections(closers, UnixStream::shutdown);
+        }
+        return;
     }
-    *fed = hub.feed.subscribe(Arc::clone(writer));
+    let owned = closer.stream.try_clone().ok().map(|stream| Closer {
+        stream,
+        web: closer.web.clone(),
+    });
+    *fed = owned.and_then(|owned| hub.feed.subscribe(Arc::clone(writer), owned));
 }
 
 /// Acknowledges a feed command: `command_accepted`, with `result` only
@@ -630,7 +701,7 @@ pub(crate) fn answer(
     writer: &Arc<Mutex<UnixStream>>,
     hub: &Hub,
     id: &CommandId,
-    got: Result<Option<Value>, Refusal>,
+    got: Result<Option<Value>, Refused>,
 ) {
     match got {
         Ok(Some(result)) => accept_result(writer, hub, id, result),
@@ -638,7 +709,7 @@ pub(crate) fn answer(
             let payload = Map::from_iter([("command_id".to_owned(), Value::String(id.0.clone()))]);
             send_line(writer, hub, "command_accepted", payload);
         }
-        Err((code, message)) => reject(writer, hub, Some(id), &code, &message),
+        Err(refused) => reject(writer, hub, Some(id), &refused.code, &refused.message),
     }
 }
 
@@ -726,11 +797,11 @@ fn status_line(row: &RecentRow, payload: &SessionStatus) -> Line {
     })
 }
 
-pub(crate) fn invalid() -> Refusal {
-    (
-        ErrorCode::InvalidArguments,
-        "The arguments do not fit this command.".to_owned(),
-    )
+pub(crate) fn invalid() -> Refused {
+    Refused {
+        code: ErrorCode::InvalidArguments,
+        message: "The arguments do not fit this command.".to_owned(),
+    }
 }
 
 fn join(handle: JoinHandle<()>) {

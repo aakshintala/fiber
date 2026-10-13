@@ -87,7 +87,7 @@ impl Temp {
     }
 }
 
-fn refused(home: &Path, value: Value) -> Refusal {
+fn refused(home: &Path, value: Value) -> Refused {
     read_file(home, &args(value)).unwrap_err()
 }
 
@@ -184,12 +184,12 @@ fn a_home_reached_through_a_link_answers() {
 fn an_unknown_session_is_session_not_found() {
     let temp = Temp::new();
     temp.session("-p", 1);
-    let (code, message) = refused(
+    let refused = refused(
         &temp.dir,
         json!({"session": id(2), "path": "artifacts/a.png"}),
     );
-    assert_eq!(code, ErrorCode::SessionNotFound);
-    assert_eq!(message, format!("No session `{}`.", id(2)));
+    assert_eq!(refused.code, ErrorCode::SessionNotFound);
+    assert_eq!(refused.message, format!("No session `{}`.", id(2)));
 }
 
 #[test]
@@ -208,8 +208,8 @@ fn arguments_that_do_not_fit_are_invalid_arguments() {
         json!({"session": "../x", "path": "artifacts/a.png"}),
         json!({}),
     ] {
-        let (code, _) = refused(&temp.dir, bad.clone());
-        assert_eq!(code, ErrorCode::InvalidArguments, "{bad}");
+        let refused = refused(&temp.dir, bad.clone());
+        assert_eq!(refused.code, ErrorCode::InvalidArguments, "{bad}");
     }
 }
 
@@ -231,24 +231,28 @@ fn paths_outside_the_lexical_rule_are_invalid_arguments() {
         "artifacts/sub/../../events.jsonl",
         "artifacts/a\0.png",
     ] {
-        let (code, message) = refused(&temp.dir, json!({"session": id(1), "path": bad}));
-        assert_eq!(code, ErrorCode::InvalidArguments, "{bad:?}");
+        let refused = refused(&temp.dir, json!({"session": id(1), "path": bad}));
+        assert_eq!(refused.code, ErrorCode::InvalidArguments, "{bad:?}");
         assert_eq!(
-            message,
+            refused.message,
             format!("`{bad}` is not a file under the session's `artifacts/`."),
             "{bad:?}"
         );
     }
     // The lexical rule runs before the session is looked up.
-    let (code, _) = refused(
+    let lexical = refused(
         &temp.dir,
         json!({"session": id(9), "path": "artifacts/../events.jsonl"}),
     );
-    assert_eq!(code, ErrorCode::InvalidArguments);
+    assert_eq!(lexical.code, ErrorCode::InvalidArguments);
     // The rejection quotes what the client sent, and no hub-produced path.
-    let (_, message) = refused(&temp.dir, json!({"session": id(1), "path": "/etc/passwd"}));
-    assert!(message.contains("/etc/passwd"), "{message}");
-    assert_no_leak(&temp, &message);
+    let refused = refused(&temp.dir, json!({"session": id(1), "path": "/etc/passwd"}));
+    assert!(
+        refused.message.contains("/etc/passwd"),
+        "{}",
+        refused.message
+    );
+    assert_no_leak(&temp, &refused.message);
 }
 
 #[test]
@@ -299,9 +303,9 @@ fn a_link_out_of_artifacts_is_invalid_arguments() {
         "artifacts/sub/x",
         "artifacts/inner/../x",
     ] {
-        let (code, message) = refused(&temp.dir, json!({"session": id(1), "path": path}));
-        assert_eq!(code, ErrorCode::InvalidArguments, "{path}");
-        assert_no_leak(&temp, &message);
+        let refused = refused(&temp.dir, json!({"session": id(1), "path": path}));
+        assert_eq!(refused.code, ErrorCode::InvalidArguments, "{path}");
+        assert_no_leak(&temp, &refused.message);
     }
 }
 
@@ -342,12 +346,16 @@ fn a_link_above_or_at_artifacts_is_invalid_arguments() {
     let moved = temp.held.path().join("sessions-out");
     fs::rename(&sessions, &moved).unwrap();
     std::os::unix::fs::symlink(&moved, &sessions).unwrap();
-    let (code, message) = refused(
+    let linked_sessions = refused(
         &temp.dir,
         json!({"session": id(1), "path": "artifacts/a.png"}),
     );
-    assert_eq!(code, ErrorCode::InvalidArguments, "linked sessions");
-    assert_no_leak(&temp, &message);
+    assert_eq!(
+        linked_sessions.code,
+        ErrorCode::InvalidArguments,
+        "linked sessions"
+    );
+    assert_no_leak(&temp, &linked_sessions.message);
     fs::remove_file(&sessions).unwrap();
     fs::rename(&moved, &sessions).unwrap();
     // A linked session directory.
@@ -355,12 +363,16 @@ fn a_link_above_or_at_artifacts_is_invalid_arguments() {
     let target = temp.held.path().join("session-out");
     fs::rename(&link, &target).unwrap();
     std::os::unix::fs::symlink(&target, &link).unwrap();
-    let (code, message) = refused(
+    let linked_session = refused(
         &temp.dir,
         json!({"session": id(2), "path": "artifacts/a.png"}),
     );
-    assert_eq!(code, ErrorCode::InvalidArguments, "linked session");
-    assert_no_leak(&temp, &message);
+    assert_eq!(
+        linked_session.code,
+        ErrorCode::InvalidArguments,
+        "linked session"
+    );
+    assert_no_leak(&temp, &linked_session.message);
     // `artifacts` itself a link to an outside directory.
     let dir = temp.dir_of("-p", 3);
     let outer = temp.held.path().join("artifacts-out");
@@ -368,22 +380,30 @@ fn a_link_above_or_at_artifacts_is_invalid_arguments() {
     fs::write(outer.join("a.png"), MARKER).unwrap();
     fs::remove_dir_all(dir.join("artifacts")).unwrap();
     std::os::unix::fs::symlink(&outer, dir.join("artifacts")).unwrap();
-    let (code, message) = refused(
+    let linked_artifacts = refused(
         &temp.dir,
         json!({"session": id(3), "path": "artifacts/a.png"}),
     );
-    assert_eq!(code, ErrorCode::InvalidArguments, "linked artifacts");
-    assert_no_leak(&temp, &message);
+    assert_eq!(
+        linked_artifacts.code,
+        ErrorCode::InvalidArguments,
+        "linked artifacts"
+    );
+    assert_no_leak(&temp, &linked_artifacts.message);
     // `artifacts` a regular file.
     let dir = temp.dir_of("-p", 4);
     fs::remove_dir_all(dir.join("artifacts")).unwrap();
     fs::write(dir.join("artifacts"), b"not a directory").unwrap();
-    let (code, message) = refused(
+    let file_artifacts = refused(
         &temp.dir,
         json!({"session": id(4), "path": "artifacts/a.png"}),
     );
-    assert_eq!(code, ErrorCode::InvalidArguments, "file artifacts");
-    assert_no_leak(&temp, &message);
+    assert_eq!(
+        file_artifacts.code,
+        ErrorCode::InvalidArguments,
+        "file artifacts"
+    );
+    assert_no_leak(&temp, &file_artifacts.message);
 }
 
 #[test]
@@ -393,13 +413,17 @@ fn a_self_looped_artifacts_is_io_failed() {
     temp.write(&dir.join("artifacts"), "a.png", b"bytes");
     fs::remove_dir_all(dir.join("artifacts")).unwrap();
     std::os::unix::fs::symlink("artifacts", dir.join("artifacts")).unwrap();
-    let (code, message) = refused(
+    let refused = refused(
         &temp.dir,
         json!({"session": id(1), "path": "artifacts/a.png"}),
     );
-    assert_eq!(code, ErrorCode::IoFailed);
-    assert!(message.contains("artifacts/a.png"), "{message}");
-    assert_no_leak(&temp, &message);
+    assert_eq!(refused.code, ErrorCode::IoFailed);
+    assert!(
+        refused.message.contains("artifacts/a.png"),
+        "{}",
+        refused.message
+    );
+    assert_no_leak(&temp, &refused.message);
 }
 
 #[test]
@@ -417,10 +441,10 @@ fn a_missing_file_is_not_found() {
         (1, "artifacts/dangling.png"),
         (2, "artifacts/a.png"),
     ] {
-        let (code, message) = refused(&temp.dir, json!({"session": id(n), "path": path}));
-        assert_eq!(code, ErrorCode::NotFound, "{path}");
+        let refused = refused(&temp.dir, json!({"session": id(n), "path": path}));
+        assert_eq!(refused.code, ErrorCode::NotFound, "{path}");
         assert_eq!(
-            message,
+            refused.message,
             format!("No file `{path}` in session `{}`.", id(n)),
             "{path}"
         );
@@ -454,10 +478,10 @@ fn a_directory_fifo_or_socket_is_invalid_arguments() {
         "artifacts/up",
         "artifacts/s.sock",
     ] {
-        let (code, message) = refused(&temp.dir, json!({"session": id(1), "path": path}));
-        assert_eq!(code, ErrorCode::InvalidArguments, "{path}");
+        let refused = refused(&temp.dir, json!({"session": id(1), "path": path}));
+        assert_eq!(refused.code, ErrorCode::InvalidArguments, "{path}");
         assert_eq!(
-            message,
+            refused.message,
             format!("`{path}` is not a regular file."),
             "{path}"
         );
@@ -474,8 +498,8 @@ fn a_directory_fifo_or_socket_is_invalid_arguments() {
     });
     match Deadline::after(DEADLINE).recv(&answered) {
         Ok(got) => {
-            let (code, _) = got.unwrap_err();
-            assert_eq!(code, ErrorCode::InvalidArguments);
+            let refused = got.unwrap_err();
+            assert_eq!(refused.code, ErrorCode::InvalidArguments);
         }
         Err(_) => {
             // Release the thread's open, then fail: it must never block.
@@ -512,12 +536,15 @@ fn exactly_10_mib_answers_and_one_byte_more_is_too_large() {
         .unwrap()
         .set_len(10 * 1024 * 1024 + 1)
         .unwrap();
-    let (code, message) = refused(
+    let refused = refused(
         &temp.dir,
         json!({"session": id(1), "path": "artifacts/over.bin"}),
     );
-    assert_eq!(code, ErrorCode::TooLarge);
-    assert_eq!(message, "`artifacts/over.bin` is larger than 10 MiB.");
+    assert_eq!(refused.code, ErrorCode::TooLarge);
+    assert_eq!(
+        refused.message,
+        "`artifacts/over.bin` is larger than 10 MiB."
+    );
 }
 
 #[test]
@@ -531,22 +558,30 @@ fn an_unreadable_file_or_a_link_loop_is_io_failed() {
     if File::open(&denied).is_ok() {
         panic!("running as root: root bypasses file modes, so the mode row cannot fail here");
     }
-    let (code, message) = refused(
+    let unreadable = refused(
         &temp.dir,
         json!({"session": id(1), "path": "artifacts/a.png"}),
     );
-    assert_eq!(code, ErrorCode::IoFailed);
-    assert!(message.contains("artifacts/a.png"), "{message}");
-    assert_no_leak(&temp, &message);
+    assert_eq!(unreadable.code, ErrorCode::IoFailed);
+    assert!(
+        unreadable.message.contains("artifacts/a.png"),
+        "{}",
+        unreadable.message
+    );
+    assert_no_leak(&temp, &unreadable.message);
     fs::set_permissions(&denied, fs::Permissions::from_mode(0o644)).unwrap();
     std::os::unix::fs::symlink("loop", dir.join("artifacts").join("loop")).unwrap();
-    let (code, message) = refused(
+    let refused = refused(
         &temp.dir,
         json!({"session": id(1), "path": "artifacts/loop"}),
     );
-    assert_eq!(code, ErrorCode::IoFailed);
-    assert!(message.contains("artifacts/loop"), "{message}");
-    assert_no_leak(&temp, &message);
+    assert_eq!(refused.code, ErrorCode::IoFailed);
+    assert!(
+        refused.message.contains("artifacts/loop"),
+        "{}",
+        refused.message
+    );
+    assert_no_leak(&temp, &refused.message);
 }
 
 #[test]

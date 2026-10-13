@@ -18,7 +18,7 @@ use contract::{CommandId, ErrorCode, SessionId};
 use log::diag::Severity;
 use serde_json::Value;
 
-use crate::connection::Hub;
+use crate::connection::{Hub, Refused};
 
 /// How long a session started by `start` has to bind `run/<id>` or exit.
 pub(crate) const START_DEADLINE: Duration = Duration::from_secs(30);
@@ -40,13 +40,8 @@ pub(crate) enum Outcome {
         /// was sent.
         first: Option<Box<Held>>,
     },
-    /// The `start` is rejected with this code and message.
-    Rejected {
-        /// The rejection code.
-        code: ErrorCode,
-        /// Fiber's own sentence.
-        message: String,
-    },
+    /// The `start` is rejected: why.
+    Rejected(Refused),
 }
 
 /// The hub's own `summary` connection to a started session, subscribed,
@@ -191,17 +186,17 @@ fn subscribe_summary(
     }
     match acknowledge(stream, &subscribe_id) {
         Ack::Accepted => Ok(()),
-        Ack::Rejected { code, message } => {
+        Ack::Rejected(refused) => {
             // The log keeps the code and a fixed sentence: the session's
             // message may hold model text. The rejection keeps what the
             // session said.
             hub.diag.line(
                 Severity::Warn,
                 Some(id),
-                &code_name(&code),
+                &code_name(&refused.code),
                 &format!("Session {} rejected the hub's subscription.", id.0),
             );
-            Err(Outcome::Rejected { code, message })
+            Err(Outcome::Rejected(refused))
         }
         Ack::Lost => Err(exited_or_io(hub, id, started)),
     }
@@ -232,7 +227,7 @@ pub(crate) fn prompt(held: Held, hub: &Hub) -> Result<(), Outcome> {
     };
     let (code, message, sentence) = match ack {
         Ack::Accepted => return Ok(()),
-        Ack::Rejected { code, message } => (code, message, "rejected"),
+        Ack::Rejected(refused) => (refused.code, refused.message, "rejected"),
         Ack::Lost => match started.exited() {
             Some(failure) => (failure.code, failure.message, "exited before it took"),
             None => (
@@ -251,16 +246,13 @@ pub(crate) fn prompt(held: Held, hub: &Hub) -> Result<(), Outcome> {
             id.0, command.0
         ),
     );
-    Err(Outcome::Rejected { code, message })
+    Err(Outcome::Rejected(Refused { code, message }))
 }
 
 /// How the session answered one of the hub's own commands.
 enum Ack {
     Accepted,
-    Rejected {
-        code: ErrorCode,
-        message: String,
-    },
+    Rejected(Refused),
     /// The connection ended, or could not be read, first.
     Lost,
 }
@@ -306,7 +298,7 @@ fn acknowledge(stream: &UnixStream, command_id: &str) -> Ack {
                     .and_then(Value::as_str)
                     .unwrap_or("The session rejected the command.")
                     .to_owned();
-                return Ack::Rejected { code, message };
+                return Ack::Rejected(Refused { code, message });
             }
             _ => continue,
         }
@@ -326,10 +318,10 @@ fn exited_or_io(hub: &Hub, id: &SessionId, started: &dyn crate::Started) -> Outc
                 &code_name(&failure.code),
                 &format!("Session {} exited before it answered.", id.0),
             );
-            Outcome::Rejected {
+            Outcome::Rejected(Refused {
                 code: failure.code,
                 message: failure.message,
-            }
+            })
         }
         None => io_failed(hub, id, "its acknowledgement could not be read."),
     }
@@ -344,17 +336,17 @@ pub(crate) fn io_failed(hub: &Hub, id: &SessionId, detail: &str) -> Outcome {
         "io_failed",
         &format!("Session {} could not start.", id.0),
     );
-    Outcome::Rejected {
+    Outcome::Rejected(Refused {
         code: ErrorCode::IoFailed,
         message: format!("Session {} could not start: {detail}", id.0),
-    }
+    })
 }
 
 fn invalid(message: &str) -> Outcome {
-    Outcome::Rejected {
+    Outcome::Rejected(Refused {
         code: ErrorCode::InvalidArguments,
         message: message.to_owned(),
-    }
+    })
 }
 
 fn write_line(stream: &UnixStream, line: &Value) -> std::io::Result<()> {
