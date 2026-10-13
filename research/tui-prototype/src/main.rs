@@ -1747,11 +1747,50 @@ fn grep_line(l: &str) -> Option<(String, usize, String, bool)> {
         grep_split(l, '-').map(|(p, n, t)| (p, n, t, false))
     }
 }
+/// An opened shell call: the full command wrapped, its output, then one
+/// closing line: `exit N` (in `removed` past zero), `killed by <signal>`
+/// for a signal, or the error for anything else. Cut output drops the
+/// closing with the rest; the swapped view carries it.
+fn shell_rows(c: &Call, content: &str, w: usize) -> Vec<Row> {
+    let command = c.args["command"].as_str().unwrap_or("");
+    let mut out = opened_plain(&format!("$ {command}"), Style::new(), w);
+    let body: Vec<Vec<Row>> = if content.is_empty() {
+        vec![vec![opened_row(vec![sp("no output", Style::new())])]]
+    } else {
+        content
+            .lines()
+            .map(|l| opened_plain(l, Style::new(), w))
+            .collect()
+    };
+    let (mut rows, dropped) = opened_take(body);
+    out.append(&mut rows);
+    if dropped == 0 {
+        match (c.exit, &c.err) {
+            (Some(0), _) => out.push(opened_row(vec![sp("exit 0", dim())])),
+            (Some(n), _) => out.push(opened_row(vec![sp(format!("exit {n}"), fg(RED))])),
+            (None, Some((code, msg))) if code == "signal" => {
+                let by = if msg.is_empty() {
+                    "signal"
+                } else {
+                    msg.as_str()
+                };
+                out.push(opened_row(vec![sp(format!("killed by {by}"), fg(RED))]));
+            }
+            (None, Some((code, msg))) => {
+                out.push(opened_row(vec![sp(format!("{code}: {msg}"), Style::new())]));
+            }
+            (None, None) => {}
+        }
+    }
+    opened_more(&mut out, dropped);
+    out
+}
 /// A call's result, opened under its ledger row and indented eight columns:
 /// an edit's diff with a line-number gutter and word-level pairs, a read's
-/// text numbered from its offset, or its error, or its output clipped to
-/// twenty rendered rows with a dim “… N more lines (Enter to view)”
-/// opening the swapped view.
+/// text numbered from its offset, a search's matches grouped under each
+/// path, a shell's wrapped command with its output and closing, or its
+/// error, or its output clipped to twenty rendered rows with a dim
+/// “… N more lines (Enter to view)” opening the swapped view.
 fn call_rows(c: &Call, w: usize) -> Vec<Row> {
     let content = c.content.replace('\t', "    ");
     match kind_of(c) {
@@ -1829,6 +1868,7 @@ fn call_rows(c: &Call, w: usize) -> Vec<Row> {
             opened_more(&mut out, dropped);
             out
         }
+        "shell" => shell_rows(c, &content, w),
         _ => {
             let text = match &c.err {
                 Some((code, msg)) => format!("{code}: {msg}"),
@@ -8275,6 +8315,128 @@ mod tests {
             .filter(|r| plain(r).contains("-gone") || plain(r).contains("-and gone"))
             .collect();
         assert_eq!(removed.len(), 2);
+    }
+
+    fn shell_call(
+        command: &str,
+        content: &str,
+        exit: Option<i64>,
+        err: Option<(&str, &str)>,
+    ) -> Call {
+        Call {
+            name: "shell".into(),
+            args: json!({ "command": command }),
+            st: if exit == Some(0) {
+                St::Completed
+            } else {
+                St::Failed
+            },
+            start: 0,
+            end: Some(10),
+            err: err.map(|(c, m)| (c.to_string(), m.to_string())),
+            lines: 0,
+            exit,
+            changes: vec![],
+            content: content.into(),
+            step: 1,
+            asked: None,
+        }
+    }
+
+    #[test]
+    fn an_opened_shell_shows_its_command_output_and_closing() {
+        let ok = shell_call(
+            "cargo test -p log",
+            "running 2 tests\ntest ok ... ok",
+            Some(0),
+            None,
+        );
+        let rows = call_rows(&ok, 160);
+        assert_eq!(rows.len(), 4);
+        assert_eq!(plain(&rows[0]), "        $ cargo test -p log");
+        assert!(plain(&rows[1]).contains("running 2 tests"));
+        assert_eq!(plain(rows.last().unwrap()), "        exit 0");
+        assert!(
+            rows.last()
+                .unwrap()
+                .spans
+                .iter()
+                .any(|s| s.style.add_modifier.contains(Modifier::DIM)),
+            "exit 0 is not dim"
+        );
+        // a failure closes in `removed`
+        let fail = shell_call(
+            "cargo test -p log",
+            "test serve::attach ... FAILED",
+            Some(1),
+            Some(("nonzero_exit", "exit code 1")),
+        );
+        let rows = call_rows(&fail, 160);
+        let close = rows.last().unwrap();
+        assert_eq!(plain(close), "        exit 1");
+        assert!(
+            close.spans.iter().any(|s| s.style.fg == Some(crate::RED)),
+            "exit 1 is not removed"
+        );
+        // a signal names what killed the command, in `removed`
+        let sig = shell_call(
+            "cargo test -- --nocapture",
+            "first lines",
+            None,
+            Some(("signal", "SIGTERM")),
+        );
+        let close = call_rows(&sig, 160).last().unwrap().clone();
+        assert_eq!(plain(&close), "        killed by SIGTERM");
+        assert!(close.spans.iter().any(|s| s.style.fg == Some(crate::RED)));
+        // without a name the signal still reads
+        let anon = shell_call("sleep 60", "", None, Some(("signal", "")));
+        let rows = call_rows(&anon, 160);
+        assert_eq!(plain(&rows[1]), "        no output");
+        assert_eq!(plain(rows.last().unwrap()), "        killed by signal");
+    }
+
+    #[test]
+    fn an_opened_shell_wraps_its_command_and_clips_its_output() {
+        let cmd = "cargo test -p doors --test serve_attach -- --nocapture wait_for_path_sweeps";
+        let rows = call_rows(&shell_call(cmd, "ok", Some(0), None), 60);
+        // the whole command draws, wrapped under the indent
+        let head: String = rows[0..2].iter().map(plain).collect();
+        assert!(head.starts_with("        $ cargo test"), "{head}");
+        assert!(head.contains("wait_for_path_sweeps"), "{head}");
+        assert_eq!(rows.len(), 4, "two header rows, output, closing");
+        // cut output drops the closing with the rest
+        let big = (1..=30)
+            .map(|i| format!("line {i}"))
+            .collect::<Vec<_>>()
+            .join("\n");
+        let rows = call_rows(&shell_call("cargo test", &big, Some(0), None), 160);
+        assert_eq!(rows.len(), 22, "header, twenty lines, overflow");
+        assert_eq!(
+            plain(rows.last().unwrap()),
+            "        … 10 more lines (Enter to view)"
+        );
+        assert!(!rows.iter().any(|r| plain(r).contains("exit")));
+    }
+
+    #[test]
+    fn an_opened_shell_with_an_odd_error_keeps_it_as_its_closing() {
+        let odd = shell_call(
+            "cargo test",
+            "partial",
+            None,
+            Some(("timeout", "timed out")),
+        );
+        let rows = call_rows(&odd, 160);
+        let close = rows.last().unwrap();
+        assert_eq!(plain(close), "        timeout: timed out");
+        assert!(
+            close.spans.iter().all(|s| s.style.fg.is_none()),
+            "an unknown error takes a colour"
+        );
+        // still running: the command and its output so far, no closing
+        let running = shell_call("cargo test", "setup", None, None);
+        let rows = call_rows(&running, 160);
+        assert_eq!(rows.len(), 2);
     }
 
     fn search_call(command: &str, content: &str) -> Call {
