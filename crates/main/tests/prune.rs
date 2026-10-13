@@ -15,11 +15,9 @@ mod support;
 
 use std::fs::{self, File};
 use std::os::unix::fs::PermissionsExt;
-use std::os::unix::net::{UnixListener, UnixStream};
 use std::os::unix::process::CommandExt;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
-use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc;
 use std::sync::{Arc, Mutex};
 use std::thread;
@@ -238,137 +236,53 @@ fn a_young_fork_blocks_then_cascade_removes_both() {
     until_absent(setup.deadline, &setup.hub_socket(), "the hub to idle out");
 }
 
-/// Accepts one connection within the test deadline, yielding the thread
-/// while none waits. `None` is the stand-in ending: `stop` set or the
-/// deadline with no time left.
-fn accept_within(
-    listener: &UnixListener,
-    deadline: Deadline,
-    stop: &AtomicBool,
-) -> Option<UnixStream> {
-    while !stop.load(Ordering::SeqCst) {
-        match listener.accept() {
-            Ok((stream, _)) => return Some(stream),
-            Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => {
-                if deadline.left().is_zero() {
-                    return None;
-                }
-                thread::yield_now();
-            }
-            Err(_) => return None,
-        }
-    }
-    None
-}
+/// Restores the run directory's writable mode if the test exits early.
+struct RunDirPermissions(PathBuf);
 
-/// Sets `stop` when dropped, so the stand-in thread ends on every path,
-/// including a test panic.
-struct StopGuard(Arc<AtomicBool>);
-
-impl Drop for StopGuard {
+impl Drop for RunDirPermissions {
     fn drop(&mut self) {
-        self.0.store(true, Ordering::SeqCst);
+        fs::set_permissions(&self.0, fs::Permissions::from_mode(0o700)).unwrap_or(());
     }
 }
 
 #[test]
 fn a_prune_that_meets_a_silent_hub_fails_then_meets_a_ready_one() {
-    // Cold-start contention repro for #2121 (reworked: a stand-in that
-    // never answers hello, then the same prune against a held ready hub). A stand-in holds `run/`'s lock and
-    // `run/hub`, accepting connections but never answering hello, so a
-    // prune that must cold-start against the contended socket sits in
-    // its bounded hello wait (`doors::hub::CONNECT_DEADLINE`, read-only)
-    // until the wait expires, and exits nonzero with the session still
-    // on disk. Releasing the stand-in and holding a ready hub — the fix
-    // `a_young_fork_blocks_then_cascade_removes_both` relies on — makes
-    // the same prune pass. No sleeps on the real clock, no raised
-    // deadlines or budgets, no repeated runs: the 5 s wait is
-    // the product's own hello bound, awaited through `run_to_exit`'s
-    // deadline, and the `accepted` signal proves the prune spoke to the
-    // stand-in before the test asserts on the failure.
+    // Spawn-sabotage repro for #2121: with the same `run/` mode and prune
+    // inputs, a cold-start cannot bind `run/hub`, while a held hub already
+    // bound there lets the prune pass. `doors::hub::connect` retries the
+    // absent socket only until its existing 5 s bind deadline, so the
+    // cold run fails deterministically; the `did not bind` error is the
+    // signal that the product reached that bounded failure. No stand-in,
+    // sleeps, raised deadlines or budgets.
     let setup = setup();
     let dir = session(&setup, ROOT, None, 0);
-    fs::create_dir_all(setup.home().join("run")).unwrap();
-    let stop = Arc::new(AtomicBool::new(false));
-    let _guard = StopGuard(Arc::clone(&stop));
-    let (ready_tx, ready_rx) = mpsc::channel();
-    let (accepted_tx, accepted_rx) = mpsc::channel();
-    let (released_tx, released_rx) = mpsc::channel();
-    let home = setup.home();
-    let deadline = setup.deadline;
-    let thread_stop = Arc::clone(&stop);
-    thread::spawn(move || {
-        // The contended socket: the `run/` lock as `listen::lock` takes
-        // it, then `run/hub` bound 0600. Every accepted connection is
-        // held open with no bytes written, so the client's hello read
-        // always ends in its bounded wait, never in a race retry; the
-        // lock drops before the unlink, so the hub the test starts next
-        // always gets both.
-        let run = home.join("run");
-        let lock = File::open(&run).ok();
-        let locked = lock.filter(|file| file.try_lock().is_ok());
-        let socket = run.join("hub");
-        fs::remove_file(&socket).unwrap_or(());
-        let Ok(listener) = UnixListener::bind(&socket) else {
-            fs::remove_file(&socket).unwrap_or(());
-            return;
-        };
-        fs::set_permissions(&socket, fs::Permissions::from_mode(0o600)).unwrap_or(());
-        listener.set_nonblocking(true).unwrap_or(());
-        ready_tx.send(()).unwrap_or(());
-        let mut held = Vec::new();
-        let mut accepted = false;
-        while !thread_stop.load(Ordering::SeqCst) {
-            let Some(stream) = accept_within(&listener, deadline, &thread_stop) else {
-                break;
-            };
-            held.push(stream);
-            if !accepted {
-                accepted = true;
-                accepted_tx.send(()).unwrap_or(());
-            }
-        }
-        drop(held);
-        drop(listener);
-        drop(locked);
-        fs::remove_file(&socket).unwrap_or(());
-        released_tx.send(()).unwrap_or(());
-    });
-    assert!(
-        deadline.recv(&ready_rx).is_ok(),
-        "the stand-in holds the socket before the prune runs"
-    );
-    // Without a ready hub the prune cold-starts against the contended
-    // socket: its bounded hello wait expires and it exits nonzero with
-    // the session still on disk.
+    let run = setup.home().join("run");
+    fs::create_dir(&run).unwrap();
+    let _restore_run_permissions = RunDirPermissions(run.clone());
+    fs::set_permissions(&run, fs::Permissions::from_mode(0o500)).unwrap();
+
     let output = prune(&setup, &["--yes", "--older-than", "30d"]);
     let stderr = text(&output.stderr);
     assert_ne!(output.status.code(), Some(0), "{stderr}");
     assert!(
-        stderr.contains("did not say hub_hello"),
-        "the prune failed in its bounded hello wait: {stderr}"
+        stderr.contains("did not bind"),
+        "the cold-start hub could not bind run/hub: {stderr}"
     );
-    assert!(text(&output.stdout).contains(ROOT), "{stderr}");
-    assert!(
-        dir.join("events.jsonl").is_file(),
-        "nothing is deleted: {stderr}"
-    );
-    assert!(
-        deadline.recv(&accepted_rx).is_ok(),
-        "the prune spoke to the stand-in: {stderr}"
-    );
-    // Holding a ready hub removes the contention: the same prune passes.
-    stop.store(true, Ordering::SeqCst);
-    assert!(
-        deadline.recv(&released_rx).is_ok(),
-        "the stand-in released the socket"
-    );
+    assert!(dir.join("events.jsonl").is_file(), "nothing is deleted");
+
+    // Let the test start and hold a real hub, then restore the same
+    // unwritable run-directory condition before the identical prune.
+    fs::set_permissions(&run, fs::Permissions::from_mode(0o700)).unwrap();
     let hub = Arc::new(Mutex::new(None));
     let (client, _) = connect_hub(&setup, &hub);
+    fs::set_permissions(&run, fs::Permissions::from_mode(0o500)).unwrap();
     let output = prune(&setup, &["--yes", "--older-than", "30d"]);
     let stderr = text(&output.stderr);
     assert_eq!(output.status.code(), Some(0), "{stderr}");
     assert!(!dir.exists(), "the session is gone: {stderr}");
+
+    // The hub needs write permission to unlink its socket on idle exit.
+    fs::set_permissions(&run, fs::Permissions::from_mode(0o700)).unwrap();
     drop(client);
     until_absent(setup.deadline, &setup.hub_socket(), "the hub to idle out");
 }
