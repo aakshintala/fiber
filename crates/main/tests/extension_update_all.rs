@@ -16,14 +16,12 @@
 
 mod support;
 
-use std::os::unix::process::CommandExt;
 use std::path::{Path, PathBuf};
-use std::process::{Child, Command, Output, Stdio};
+use std::process::{Command, Output, Stdio};
 use std::sync::mpsc;
 use std::thread;
 
-use fakes::Watchdog;
-use support::{Deadline, Setup, git, group_alive, is_status};
+use support::{Deadline, KillGroup, Setup, git, group_alive, is_status, spawn_watched};
 
 /// One finished run: its exit code, stdout's text lines, and stderr.
 struct Run {
@@ -45,23 +43,6 @@ impl From<Output> for Run {
             stderr: String::from_utf8(output.stderr).unwrap(),
         }
     }
-}
-
-struct KillGroup(u32);
-
-impl Drop for KillGroup {
-    fn drop(&mut self) {
-        support::kill_group_detached(self.0, "KILL");
-    }
-}
-
-fn spawn_watched(command: &mut Command) -> (Child, Watchdog) {
-    let child = command.process_group(0).spawn().unwrap();
-    let group = child.id();
-    let guard = KillGroup(group);
-    let watchdog = Watchdog::group(group);
-    std::mem::forget(guard);
-    (child, watchdog)
 }
 
 impl Setup {

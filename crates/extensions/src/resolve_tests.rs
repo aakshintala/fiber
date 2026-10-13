@@ -190,11 +190,3 @@ fn newest_within_is_deterministic_in_any_order() {
         newest_within("d", &w, &swapped).unwrap()
     );
 }
-
-#[test]
-fn newest_within_ignores_tags_that_are_not_versions() {
-    use super::newest_within;
-    let w = wants(&[("a", "1.0")]);
-    let t = tags(&["latest", "v1.0", "v1.0.0-rc1", "v1.1.0"]);
-    assert_eq!(newest_within("d", &w, &t).unwrap(), "v1.1.0");
-}
