@@ -8,7 +8,6 @@ pub(crate) mod batch;
 use batch::{batch, batchable};
 
 use std::collections::VecDeque;
-use std::ffi::c_int;
 use std::fs::File;
 use std::io::{self, Write};
 use std::ops::RangeInclusive;
@@ -193,13 +192,6 @@ pub fn run(
         }
     }
     code
-}
-
-/// The exit code a signal ends the terminal with: 128 plus its number,
-/// so 143 for SIGTERM and 129 for SIGHUP (`docs/invocation.md`, "Exit
-/// codes").
-fn signal_code(signal: c_int) -> i32 {
-    128 + signal
 }
 
 /// Turns SIGTERM and SIGHUP into [`Input::Signal`] on their own thread,
@@ -533,7 +525,7 @@ impl<B: Backend> Loop<B> {
         match input {
             // A signal quits with 128 plus its number, closing nothing
             // first: live sessions keep their resume lines.
-            Input::Signal(signal) => return Some(signal_code(signal)),
+            Input::Signal(signal) => return Some(128 + signal),
             Input::Bytes(bytes) => {
                 let events = self.parser.feed(&bytes);
                 return self.handle_events(events);
