@@ -66,12 +66,15 @@ fn with_items(items: Value) -> Offer {
     offer
 }
 
-/// One item of `kind` named `name`, with `version` and `summary`.
-fn item(kind: &str, name: &str, version: Option<&str>, summary: &str) -> Value {
+/// One item of `kind` named `name`, with `version`, `summary` and `diff`.
+fn item(kind: &str, name: &str, version: Option<&str>, summary: &str, diff: Option<&str>) -> Value {
     let mut item = json!({"kind": kind, "name": name, "hash": "h",
         "required": false, "summary": summary});
     if let Some(version) = version {
         item["version"] = json!(version);
+    }
+    if let Some(diff) = diff {
+        item["diff"] = json!(diff);
     }
     item
 }
@@ -595,6 +598,40 @@ fn a_narrow_view_drops_the_clipped_targets() {
 }
 
 #[test]
+fn a_changed_item_draws_its_hunk_as_changed_files_does() {
+    let offer = with_items(json!([item(
+        "extension",
+        "lint",
+        Some("1.0.0"),
+        "name: lint",
+        Some("--- a/index.ts\n+++ b/index.ts\n@@ -1 +1 @@\n-old()\n+new()\n context")
+    )]));
+    let rows = spans(&offer, 80);
+    // After the header and its install line: the marker, then the hunk.
+    let hunk = &rows[4..11];
+    let plain = || ("    ".to_owned(), Style::new());
+    assert_eq!(hunk[0], [("  the declaration changed".to_owned(), dim())]);
+    assert_eq!(
+        hunk[1],
+        [plain(), ("--- a/index.ts".to_owned(), style(Role::Keyword))]
+    );
+    assert_eq!(
+        hunk[2],
+        [plain(), ("+++ b/index.ts".to_owned(), style(Role::Keyword))]
+    );
+    assert_eq!(hunk[3], [plain(), ("@@ -1 +1 @@".to_owned(), dim())]);
+    assert_eq!(
+        hunk[4],
+        [plain(), ("-old()".to_owned(), style(Role::Removed))]
+    );
+    assert_eq!(
+        hunk[5],
+        [plain(), ("+new()".to_owned(), style(Role::Added))]
+    );
+    assert_eq!(hunk[6], [plain(), (" context".to_owned(), Style::new())]);
+}
+
+#[test]
 fn the_choices_row_marks_the_chosen_answer() {
     // Every item starts at skip.
     let offer = holding(1);
@@ -701,14 +738,15 @@ fn an_extension_header_carries_its_version_verbatim() {
         "extension",
         "notes",
         Some("v0.3"),
-        "name: notes"
+        "name: notes",
+        None
     )]));
     assert_eq!(texts(&offer, 80)[2], "▸ Extension notes · v0.3");
 }
 
 #[test]
 fn an_extension_without_a_version_names_kind_and_name() {
-    let offer = with_items(json!([item("extension", "lint", None, "name: lint")]));
+    let offer = with_items(json!([item("extension", "lint", None, "name: lint", None)]));
     assert_eq!(texts(&offer, 80)[2], "▸ Extension lint");
 }
 
@@ -718,7 +756,8 @@ fn a_hook_header_carries_its_declaration_path() {
         "hook",
         "tidy",
         None,
-        "Hook: tidy\ndeclared in: .fiber/hooks.json\nruns: scripts/tidy.sh"
+        "Hook: tidy\ndeclared in: .fiber/hooks.json\nruns: scripts/tidy.sh",
+        None
     )]));
     assert_eq!(
         texts(&offer, 80)[2],
@@ -728,7 +767,13 @@ fn a_hook_header_carries_its_declaration_path() {
 
 #[test]
 fn an_item_without_a_declaration_path_names_kind_and_name() {
-    let offer = with_items(json!([item("mcp_server", "db", None, "MCP server: db")]));
+    let offer = with_items(json!([item(
+        "mcp_server",
+        "db",
+        None,
+        "MCP server: db",
+        None
+    )]));
     assert_eq!(texts(&offer, 80)[2], "▸ MCP server db");
 }
 
@@ -738,7 +783,8 @@ fn a_bare_declared_in_line_names_kind_and_name() {
         "mcp_server",
         "db",
         None,
-        "MCP server: db\ndeclared in:"
+        "MCP server: db\ndeclared in:",
+        None
     )]));
     assert_eq!(texts(&offer, 80)[2], "▸ MCP server db");
 }
@@ -749,7 +795,8 @@ fn install_lines_are_dim_and_indented() {
         "mcp_server",
         "db",
         None,
-        "MCP server: db\ndeclared in: .fiber/mcp.json"
+        "MCP server: db\ndeclared in: .fiber/mcp.json",
+        None
     )]));
     let rows = spans(&offer, 80);
     assert_eq!(rows[3], [("  MCP server: db".to_owned(), dim())]);

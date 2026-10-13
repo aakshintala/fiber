@@ -583,19 +583,28 @@ fn clipped(line: Line<'static>, spots: Vec<(u16, u16, Spot)>, width: u16) -> Row
     }
 }
 
-/// A diff's rows, each line in its diff role. `str::lines` drops a
-/// trailing `\r`, so a CRLF diff draws as an LF one.
+/// A changed item's diff: each hunk's `@@` line dim, removed lines in
+/// removed and added lines in added, as "Changed files" draws a hunk
+/// (`docs/tui.md`, "Swapped views"). `str::lines` drops a trailing `\r`,
+/// so a CRLF diff draws as an LF one.
 fn diff_rows(diff: &str) -> Vec<Row> {
-    let text = diff.lines().collect::<Vec<_>>().join("\n");
-    let runs = crate::highlight::spans("diff", &text).unwrap_or_default();
-    runs.into_iter()
+    diff.lines()
         .map(|line| {
-            let mut spans = vec![Span::raw("    ")];
-            spans.extend(
-                line.into_iter()
-                    .map(|(role, run): (Role, String)| Span::styled(run, style(role))),
-            );
-            Row::text(Line::from(spans))
+            let ink = if line.starts_with("@@") {
+                style(Role::Muted)
+            } else if ["+++", "---"].iter().any(|head| line.starts_with(head)) {
+                style(Role::Keyword)
+            } else if line.starts_with('+') {
+                style(Role::Added)
+            } else if line.starts_with('-') {
+                style(Role::Removed)
+            } else {
+                Style::new()
+            };
+            Row::text(Line::from(vec![
+                Span::raw("    "),
+                Span::styled(line.to_owned(), ink),
+            ]))
         })
         .collect()
 }
