@@ -3,7 +3,7 @@ use contract::events::{Event, TextCompleted};
 
 use super::*;
 use crate::Log;
-use crate::fixtures::{corrupt, cut, line_at};
+use crate::fixtures::{corrupt, cut, line, line_at};
 
 /// A log of one `text_completed` line per entry of `texts`, each with a text
 /// of that many bytes, and its offset table read back from the file.
@@ -59,6 +59,21 @@ fn seqs(lines: &[Envelope]) -> Vec<Option<u64>> {
 /// A page's lines' `seq`s and whether lines remain past it.
 fn shape(page: &Page) -> (Vec<Option<u64>>, bool) {
     (seqs(&page.lines), matches!(page.after, After::More))
+}
+
+/// Envelopes equal without dumping megabyte payloads on failure: the
+/// lengths first, then the first differing position with its seqs only.
+#[track_caller]
+fn assert_envelopes(got: &[Envelope], expected: &[Envelope]) {
+    assert_eq!(got.len(), expected.len(), "envelope count");
+    for (i, (g, e)) in got.iter().zip(expected.iter()).enumerate() {
+        assert!(
+            g == e,
+            "envelopes differ at {i}: got seq {:?}, expected seq {:?}",
+            g.seq,
+            e.seq
+        );
+    }
 }
 
 const KIB: usize = 1024;
@@ -121,7 +136,14 @@ fn a_page_from_the_end_or_past_it_is_empty_with_nothing_more() {
 #[test]
 fn lines_that_fill_a_page_to_the_byte_share_it() {
     let (_dir, empty, _) = written("overhead", &[0]);
-    let overhead = usize::try_from(empty.window(0, 1, u64::MAX, u64::MAX).unwrap().stop).unwrap();
+    let overhead = usize::try_from(
+        empty
+            .resolve(0, 1, u64::MAX, u64::MAX)
+            .unwrap()
+            .unwrap()
+            .stop,
+    )
+    .unwrap();
     let half = usize::try_from(PAGE_BYTES).unwrap() / 2 - overhead;
     let (_dir, offsets, written) = written("exact", &[half, half, 10]);
     assert_eq!(
@@ -243,6 +265,57 @@ fn a_range_over_a_failed_window_is_an_error_with_no_lines() {
     assert_eq!(seqs(&offsets.range(0, 2).unwrap()), seqs(&written[..2]));
 }
 
+/// A table that never drops a line start grows with every line: after
+/// more pushes than the cap of 1024 resident checkpoints, the resident
+/// set must re-thin to at most half the cap and stay capped.
+#[test]
+fn resident_checkpoints_stay_at_a_constant_cap() {
+    let offsets = Offsets::new(PathBuf::from("red-cap"), Vec::new(), 0);
+    assert!(offsets.lock().checkpoints.is_empty());
+    for _ in 0..1023 {
+        offsets.push(100);
+    }
+    assert_eq!(offsets.lock().checkpoints.len(), 1023);
+    assert_eq!(offsets.lock().checkpoints[0], (0, 0));
+    offsets.push(100);
+    assert_eq!(offsets.lock().checkpoints.len(), 1024);
+    assert_eq!(offsets.lock().checkpoints[0], (0, 0));
+    offsets.push(100);
+    // One past the cap the table re-thins to at most half the cap. The
+    // doubling passes keep every line while the spacing stays below a
+    // line: spacing 128 keeps every other line (513, still over half),
+    // then spacing 256 re-walks those and keeps every fourth (400-byte
+    // gaps, 257).
+    assert_eq!(offsets.lock().checkpoints[0], (0, 0));
+    assert!(offsets.lock().checkpoints.len() <= CHECKPOINTS / 2);
+    assert_eq!(offsets.lock().checkpoints.len(), 257);
+    // Re-thinning allocates the compacted set instead of retaining the
+    // grown buffer: right after the thin the capacity sits at the cap,
+    // not at the log's scale.
+    assert!(offsets.lock().checkpoints.capacity() <= CHECKPOINTS);
+    // The absolute line count never depends on checkpointing.
+    assert_eq!(offsets.count(), 1025);
+}
+
+/// While the log holds no more lines than the cap, every line start is
+/// resident: small logs read exactly as they do today.
+#[test]
+fn small_tables_checkpoint_every_line() {
+    let offsets = Offsets::new(PathBuf::from("red-small"), Vec::new(), 0);
+    for _ in 0..10 {
+        offsets.push(100);
+    }
+    let table = offsets.lock();
+    assert_eq!(table.checkpoints.len(), 10);
+    for (i, checkpoint) in table.checkpoints.iter().enumerate() {
+        assert_eq!(
+            *checkpoint,
+            (i as u64, (i as u64).saturating_mul(100)),
+            "line {i}"
+        );
+    }
+}
+
 #[test]
 fn scan_records_every_complete_line_and_stops_at_a_torn_tail() {
     // A torn tail is not a line: appending torn bytes leaves the table
@@ -253,7 +326,7 @@ fn scan_records_every_complete_line_and_stops_at_a_torn_tail() {
     {
         let expected = offsets.lock();
         let found = scanned.lock();
-        assert_eq!(found.starts, expected.starts);
+        assert_eq!(found.checkpoints, expected.checkpoints);
         assert_eq!(found.end, expected.end);
     }
     assert_eq!(scanned.count(), 3);
@@ -269,7 +342,7 @@ fn scan_records_every_complete_line_and_stops_at_a_torn_tail() {
     {
         let expected = offsets.lock();
         let found = scanned.lock();
-        assert_eq!(found.starts, expected.starts);
+        assert_eq!(found.checkpoints, expected.checkpoints);
         assert_eq!(found.end, expected.end);
     }
     assert_eq!(scanned.count(), 3);
@@ -336,4 +409,1022 @@ fn scan_stops_at_the_first_line_its_closure_refuses_and_names_it() {
     };
     assert_eq!(*line, 3);
     assert_eq!(seen, 3);
+}
+
+/// A table driven directly through `push`, counting thinning events: a
+/// thinning drops the resident set from above 900 to at most half the cap.
+fn driven(lens: &[u64]) -> (Offsets, u64) {
+    let offsets = Offsets::new(PathBuf::from("log-offsets-driven"), Vec::new(), 0);
+    let mut thins = 0;
+    let mut was_full = false;
+    for len in lens {
+        offsets.push(*len);
+        let resident = offsets.lock().checkpoints.len();
+        if resident > 900 {
+            was_full = true;
+        }
+        if was_full && resident <= CHECKPOINTS / 2 {
+            thins += 1;
+            was_full = false;
+        }
+    }
+    (offsets, thins)
+}
+
+/// Every gap of a thinned table holds within its spacing: at least the
+/// spacing past the last kept checkpoint, and at most twice the spacing
+/// plus the longest line the gap holds.
+fn assert_gaps(checkpoints: &[(u64, u64)], spacing: u64, lens: &[u64]) {
+    assert!(checkpoints.len() > 1);
+    for pair in checkpoints.windows(2) {
+        let (a_line, a_byte) = pair[0];
+        let (b_line, b_byte) = pair[1];
+        let gap = b_byte.saturating_sub(a_byte);
+        assert!(gap >= spacing, "gap {gap} below spacing {spacing}");
+        let mut longest = 0;
+        let mut line = a_line;
+        while line < b_line {
+            if let Ok(i) = usize::try_from(line) {
+                longest = longest.max(*lens.get(i).unwrap_or(&0));
+            }
+            line = line.saturating_add(1);
+            if line == u64::MAX {
+                break;
+            }
+        }
+        assert!(
+            gap <= spacing.saturating_mul(2).saturating_add(longest),
+            "gap {gap} over twice spacing {spacing} plus longest {longest}"
+        );
+    }
+}
+
+/// The spacing stays within the initial spacing and four bytes per
+/// resident byte of log: re-thinning doubles only past what the log fills.
+fn assert_spacing(spacing: u64, end: u64) {
+    assert!(
+        spacing <= 1u64.max(end.saturating_mul(4) / 1024),
+        "spacing {spacing} over bound at end {end}"
+    );
+}
+
+#[test]
+fn re_thinning_bounds_gaps_across_many_thinnings() {
+    // Thirty thousand pushes drive several thinnings eight-plus
+    // doublings deep: triggers grow geometrically costlier as the
+    // spacing grows, so depth is read off the spacing, not the trigger
+    // count. Eight triggers would take a gigabyte-scale log.
+    let lens = vec![200u64; 30_000];
+    let (offsets, thins) = driven(&lens);
+    assert!(thins >= 1, "{thins} thinnings");
+    let table = offsets.lock();
+    assert!(
+        table.spacing.trailing_zeros() >= 8,
+        "spacing {}",
+        table.spacing
+    );
+    assert!(table.checkpoints.len() <= CHECKPOINTS);
+    assert_eq!(table.total, 30_000);
+    assert_eq!(table.checkpoints[0], (0, 0));
+    assert_gaps(&table.checkpoints, table.spacing, &lens);
+    assert_spacing(table.spacing, table.end);
+    // Re-thinning reallocates the compacted set instead of retaining the
+    // grown buffer: capacity stays near the cap, not the log.
+    assert!(table.checkpoints.capacity() <= 2 * CHECKPOINTS);
+}
+
+#[test]
+fn re_thinning_holds_early_dense_logs() {
+    let mut lens = vec![10_000u64; 2000];
+    lens.extend(vec![200u64; 4000]);
+    let (offsets, _thins) = driven(&lens);
+    let table = offsets.lock();
+    // One thinning already doubles the spacing past eight doublings: the
+    // repeat passes keep doubling until at most half the cap remains.
+    assert!(
+        table.spacing.trailing_zeros() >= 8,
+        "spacing {}",
+        table.spacing
+    );
+    assert!(table.checkpoints.len() <= CHECKPOINTS);
+    assert_eq!(table.total, 6000);
+    assert_eq!(table.checkpoints[0], (0, 0));
+    assert_gaps(&table.checkpoints, table.spacing, &lens);
+    assert_spacing(table.spacing, table.end);
+}
+
+#[test]
+fn re_thinning_holds_uniform_long_lines() {
+    let lens = vec![10_000u64; 7500];
+    let (offsets, _thins) = driven(&lens);
+    let table = offsets.lock();
+    assert!(
+        table.spacing.trailing_zeros() >= 8,
+        "spacing {}",
+        table.spacing
+    );
+    assert!(table.checkpoints.len() <= CHECKPOINTS);
+    assert_eq!(table.total, 7500);
+    assert_eq!(table.end, 75_000_000);
+    assert_gaps(&table.checkpoints, table.spacing, &lens);
+    assert_spacing(table.spacing, table.end);
+}
+
+#[test]
+fn re_thinning_holds_alternating_lines() {
+    let mut lens = Vec::new();
+    for _ in 0..6000 {
+        lens.push(50);
+        lens.push(5000);
+    }
+    let (offsets, thins) = driven(&lens);
+    assert!(thins >= 1, "{thins} thinnings");
+    let table = offsets.lock();
+    assert!(table.checkpoints.len() <= CHECKPOINTS);
+    assert_eq!(table.total, 12_000);
+    assert_gaps(&table.checkpoints, table.spacing, &lens);
+    assert_spacing(table.spacing, table.end);
+}
+
+#[test]
+fn re_thinning_holds_growing_lines() {
+    let lens: Vec<u64> = (0..6000).map(|i| 100 + i).collect();
+    let (offsets, thins) = driven(&lens);
+    assert!(thins >= 1, "{thins} thinnings");
+    let table = offsets.lock();
+    assert!(table.checkpoints.len() <= CHECKPOINTS);
+    assert_eq!(table.total, 6000);
+    assert_gaps(&table.checkpoints, table.spacing, &lens);
+    assert_spacing(table.spacing, table.end);
+}
+
+#[test]
+fn lines_longer_than_the_spacing_become_checkpoints() {
+    // After a thinning the spacing is hundreds of bytes. A run of lines
+    // each longer than it ends checkpointed: each starts a whole long
+    // line past any earlier checkpoint, whatever came before.
+    let mut lens = vec![200u64; 1025];
+    lens.extend(vec![5000u64; 5]);
+    let (offsets, thins) = driven(&lens);
+    assert!(thins >= 1, "{thins} thinnings");
+    let table = offsets.lock();
+    // Every long line after the first is checkpointed: each starts a
+    // whole long line past any earlier checkpoint. The first long line
+    // itself can land within the spacing past the previous checkpoint.
+    for line in 1026..1030 {
+        assert!(
+            table.checkpoints.iter().any(|c| c.0 == line),
+            "line {line} not checkpointed"
+        );
+    }
+    assert_gaps(&table.checkpoints, table.spacing, &lens);
+    assert_spacing(table.spacing, table.end);
+}
+
+#[test]
+fn a_giant_line_stays_a_bounded_gap() {
+    // A single giant line need not be checkpointed itself — its start
+    // can lie within the spacing past the previous checkpoint — but the
+    // gap holding it stays within twice the spacing plus its length.
+    let mut lens = vec![200u64; 3000];
+    lens.push(1_500_000);
+    lens.extend(vec![200u64; 3000]);
+    let (offsets, thins) = driven(&lens);
+    assert!(thins >= 1, "{thins} thinnings");
+    let table = offsets.lock();
+    assert_gaps(&table.checkpoints, table.spacing, &lens);
+    assert_spacing(table.spacing, table.end);
+}
+
+#[test]
+fn one_long_line_stays_a_bounded_gap() {
+    // A single long line among small ones: the halves hold whether or
+    // not its start lands on a checkpoint.
+    let mut lens = vec![200u64; 1500];
+    lens.insert(700, 10_000);
+    lens.extend(vec![200u64; 1500]);
+    let (offsets, thins) = driven(&lens);
+    assert!(thins >= 1, "{thins} thinnings");
+    let table = offsets.lock();
+    assert_gaps(&table.checkpoints, table.spacing, &lens);
+    assert_spacing(table.spacing, table.end);
+}
+
+#[test]
+fn consecutive_long_lines_stay_bounded_gaps() {
+    let mut lens = vec![200u64; 2000];
+    lens.extend(vec![10_000u64; 20]);
+    lens.extend(vec![200u64; 4000]);
+    let (offsets, thins) = driven(&lens);
+    assert!(thins >= 1, "{thins} thinnings");
+    let table = offsets.lock();
+    assert_gaps(&table.checkpoints, table.spacing, &lens);
+    assert_spacing(table.spacing, table.end);
+}
+
+/// Envelope lines bulk-written to a log file: `payloads` in order, each
+/// with its absolute `seq`. Returns the directory, the table built by
+/// mirroring per-line pushes (no per-line fsync), the envelopes in order,
+/// and each line's byte length.
+fn bulked(
+    name: &str,
+    payloads: Vec<serde_json::Value>,
+) -> (fakes::TempDir, Offsets, Vec<Envelope>, Vec<u64>) {
+    let sessions = fakes::TempDir::new(&format!("log-offsets-bulk-{name}"));
+    let path = sessions.path().join("events.jsonl");
+    let mut bytes = Vec::new();
+    let mut envelopes: Vec<Envelope> = Vec::new();
+    let mut lens = Vec::new();
+    for (seq, payload) in payloads.into_iter().enumerate() {
+        let text = line(
+            "step_started",
+            "s_1",
+            0,
+            u64::try_from(seq).unwrap_or(u64::MAX),
+            &payload,
+        );
+        lens.push(u64::try_from(text.len()).unwrap_or(u64::MAX));
+        bytes.extend_from_slice(text.as_bytes());
+        envelopes.push(serde_json::from_str(&text).unwrap());
+    }
+    std::fs::write(&path, &bytes).unwrap();
+    let offsets = Offsets::new(path, Vec::new(), 0);
+    for len in &lens {
+        offsets.push(*len);
+    }
+    (sessions, offsets, envelopes, lens)
+}
+
+fn small_payloads(n: usize) -> Vec<serde_json::Value> {
+    vec![serde_json::json!({}); n]
+}
+
+fn long_payload() -> serde_json::Value {
+    serde_json::json!({"pad": "x".repeat(9900)})
+}
+
+/// The first resident gap holding at least two lines: reading inside
+/// it forces the forward scan, since no checkpoint stands between a
+/// gap's bounding lines.
+fn roomy_gap(checkpoints: &[(u64, u64)]) -> (u64, u64) {
+    for pair in checkpoints.windows(2) {
+        if pair[1].0 >= pair[0].0.saturating_add(2) {
+            return (pair[0].0, pair[1].0);
+        }
+    }
+    panic!("no gap holds two lines");
+}
+
+/// The widest resident gap: its bounding lines and bytes, and the longest
+/// line wholly inside it.
+fn widest(checkpoints: &[(u64, u64)], lens: &[u64]) -> (u64, u64, u64, u64) {
+    let mut best = (0, 0, 0, 0);
+    for pair in checkpoints.windows(2) {
+        let (a_line, a_byte) = pair[0];
+        let (b_line, b_byte) = pair[1];
+        let gap = b_byte.saturating_sub(a_byte);
+        if gap > best.2 {
+            let mut longest = 0;
+            let mut line = a_line;
+            while line < b_line {
+                if let Ok(i) = usize::try_from(line) {
+                    longest = longest.max(*lens.get(i).unwrap_or(&0));
+                }
+                line = line.saturating_add(1);
+                if line == u64::MAX {
+                    break;
+                }
+            }
+            best = (a_line, b_line, gap, longest);
+        }
+    }
+    best
+}
+
+/// The metered scan to `target` stays within the ruled bound: the spacing
+/// term from the table's bytes, the gap's longest line, and one page.
+fn assert_scan(offsets: &Offsets, target: u64, end: u64, longest: u64) {
+    let window = offsets
+        .resolve(target, 4, u64::MAX, u64::MAX)
+        .unwrap()
+        .unwrap();
+    let bound = (2u64.max(end.saturating_mul(8) / 1024))
+        .saturating_add(longest)
+        .saturating_add(PAGE_BYTES);
+    assert!(
+        window.scanned <= bound,
+        "target {target}: scanned {} over bound {bound}",
+        window.scanned
+    );
+}
+
+#[test]
+fn evicted_reads_are_exact_across_the_widest_gap() {
+    let mut payloads = vec![long_payload(); 1100];
+    payloads.extend(small_payloads(600));
+    let (_dir, offsets, envelopes, lens) = bulked("evicted", payloads);
+    {
+        let table = offsets.lock();
+        assert!(
+            table.spacing.trailing_zeros() >= 8,
+            "spacing {}",
+            table.spacing
+        );
+        assert_eq!(table.total, envelopes.len() as u64);
+    }
+    let (a_line, b_line, _gap, longest) = widest(&offsets.lock().checkpoints, &lens);
+    let end = offsets.end();
+    // The page starting just before the old sparse checkpoint at the
+    // gap's end: every line before the failure boundary is exact, with
+    // absolute seqs.
+    let from = b_line.saturating_sub(2);
+    let page = offsets.page(from, u64::MAX);
+    let first = usize::try_from(from).unwrap_or(usize::MAX);
+    assert_envelopes(&page.lines, &envelopes[first..first + page.lines.len()]);
+    assert_eq!(
+        page.lines.first().map(|line| line.seq),
+        envelopes.get(first).map(|line| line.seq)
+    );
+    let more = u64::try_from(first + page.lines.len()).unwrap_or(u64::MAX) < offsets.count();
+    assert_eq!(matches!(page.after, After::More), more);
+    // A range wholly inside the gap reads exactly.
+    let at = a_line.saturating_add(1);
+    let at_usize = usize::try_from(at).unwrap_or(usize::MAX);
+    let got = offsets.range(at, 4).unwrap();
+    assert_envelopes(&got, &envelopes[at_usize..at_usize + got.len()]);
+    // The first page reads exactly, through the metered scan.
+    let first_page = offsets.page(0, u64::MAX);
+    assert_envelopes(&first_page.lines, &envelopes[..first_page.lines.len()]);
+    // The worst scan stays within the ruled bound, and so does the first
+    // page's sizing scan.
+    assert_scan(&offsets, b_line.saturating_sub(1), end, longest);
+    assert_scan(&offsets, 0, end, longest);
+}
+
+#[test]
+fn evicted_reads_are_exact_over_uniform_long_lines() {
+    let payloads = vec![long_payload(); 1500];
+    let (_dir, offsets, envelopes, lens) = bulked("uniform-long", payloads);
+    {
+        let table = offsets.lock();
+        assert!(
+            table.spacing.trailing_zeros() >= 8,
+            "spacing {}",
+            table.spacing
+        );
+        assert_gaps(&table.checkpoints, table.spacing, &lens);
+        assert_spacing(table.spacing, table.end);
+    }
+    let (a_line, b_line, _gap, longest) = widest(&offsets.lock().checkpoints, &lens);
+    let end = offsets.end();
+    let at = a_line.saturating_add(1);
+    let at_usize = usize::try_from(at).unwrap_or(usize::MAX);
+    let got = offsets.range(at, 4).unwrap();
+    assert_envelopes(&got, &envelopes[at_usize..at_usize + got.len()]);
+    assert_scan(&offsets, b_line.saturating_sub(1), end, longest);
+    assert_scan(&offsets, 0, end, longest);
+    // Past-end reads stay empty: past the last line, and at `u64::MAX`.
+    assert!(offsets.range(offsets.count(), 4).unwrap().is_empty());
+    assert!(offsets.range(u64::MAX, 4).unwrap().is_empty());
+    let page = offsets.page(u64::MAX, u64::MAX);
+    assert!(page.lines.is_empty());
+    assert!(matches!(page.after, After::Done));
+}
+
+#[test]
+fn evicted_reads_are_exact_around_a_giant_line() {
+    let mut payloads = small_payloads(1500);
+    payloads.push(serde_json::json!({"pad": "x".repeat(1_500_000)}));
+    payloads.extend(small_payloads(1500));
+    let (_dir, offsets, envelopes, lens) = bulked("giant", payloads);
+    {
+        let table = offsets.lock();
+        assert_gaps(&table.checkpoints, table.spacing, &lens);
+        assert_spacing(table.spacing, table.end);
+    }
+    // A line longer than a page is a page of its own, even evicted.
+    let page = offsets.page(1500, u64::MAX);
+    assert_envelopes(&page.lines, &envelopes[1500..1501]);
+    assert!(matches!(page.after, After::More));
+    assert_envelopes(&offsets.range(1501, 3).unwrap(), &envelopes[1501..1504]);
+    // The giant line dominates the ruled bound, so it holds vacuously
+    // at this scale; the halves above carry the guarantee.
+}
+
+#[test]
+fn evicted_reads_are_exact_around_one_long_line() {
+    let mut payloads = small_payloads(1500);
+    payloads.insert(700, long_payload());
+    payloads.extend(small_payloads(1500));
+    let (_dir, offsets, envelopes, lens) = bulked("one-long", payloads);
+    {
+        let table = offsets.lock();
+        assert_gaps(&table.checkpoints, table.spacing, &lens);
+        assert_spacing(table.spacing, table.end);
+    }
+    // A range starting inside a roomy gap (never on a checkpoint)
+    // forces the forward scan, as does the worst-case metered read below.
+    let (_a, b_line, _gap, longest) = widest(&offsets.lock().checkpoints, &lens);
+    let (r_line, _r_end) = roomy_gap(&offsets.lock().checkpoints);
+    let end = offsets.end();
+    let at = r_line.saturating_add(1);
+    let at_usize = usize::try_from(at).unwrap_or(usize::MAX);
+    let got = offsets.range(at, 2).unwrap();
+    assert_envelopes(&got, &envelopes[at_usize..at_usize + got.len()]);
+    assert_eq!(offsets.range(0, 2).unwrap(), envelopes[0..2]);
+    assert_scan(&offsets, b_line.saturating_sub(1), end, longest);
+    // The file is smaller than the page slack, so the ruled bound holds
+    // vacuously here; the halves above carry the guarantee.
+}
+
+#[test]
+fn evicted_reads_are_exact_across_consecutive_long_lines() {
+    let mut payloads = small_payloads(1500);
+    payloads.extend(vec![long_payload(); 20]);
+    payloads.extend(small_payloads(1500));
+    let (_dir, offsets, envelopes, lens) = bulked("consec-long", payloads);
+    {
+        let table = offsets.lock();
+        assert_gaps(&table.checkpoints, table.spacing, &lens);
+        assert_spacing(table.spacing, table.end);
+    }
+    let (_a, b_line, _gap, longest) = widest(&offsets.lock().checkpoints, &lens);
+    let end = offsets.end();
+    // A range spanning the whole long run reads exactly.
+    assert_envelopes(&offsets.range(1500, 20).unwrap(), &envelopes[1500..1520]);
+    // The file is smaller than the page slack, so the ruled bound holds
+    // vacuously here; the halves above carry the guarantee.
+    assert_scan(&offsets, b_line.saturating_sub(1), end, longest);
+}
+
+/// A page starting at an oversized line holds that line alone, and sizing
+/// rejects the next oversized line once its scan passes the remaining page
+/// budget instead of traversing it whole: without the early stop the scan
+/// below traverses both 4 MiB lines against about 5 MiB allowed.
+#[test]
+fn sized_pages_stop_sizing_past_the_page_budget() {
+    let mut payloads = small_payloads(1100);
+    payloads.push(serde_json::json!({"pad": "x".repeat(4 * 1024 * 1024)}));
+    payloads.push(serde_json::json!({"pad": "x".repeat(4 * 1024 * 1024)}));
+    payloads.extend(small_payloads(1100));
+    let (_dir, offsets, envelopes, lens) = bulked("page-budget", payloads);
+    // The oversized first line is a page of its own, exactly.
+    let page = offsets.page(1100, u64::MAX);
+    assert_envelopes(&page.lines, &envelopes[1100..1101]);
+    assert!(matches!(page.after, After::More));
+    // The metered sizing scan stays within the ruled bound.
+    let end = offsets.end();
+    let longest = lens.iter().copied().max().unwrap_or(0);
+    let window = offsets
+        .resolve(1100, CAPACITY, PAGE_BYTES, u64::MAX)
+        .unwrap()
+        .unwrap();
+    assert!(window.scanned > 0, "the page takes the forward scan");
+    assert!(window.more, "lines remain past the page");
+    assert_eq!(
+        window.stop.saturating_sub(window.start),
+        lens[1100],
+        "the page holds the first giant line alone"
+    );
+    let bound = (2u64.max(end.saturating_mul(8) / 1024))
+        .saturating_add(longest)
+        .saturating_add(PAGE_BYTES);
+    assert!(
+        window.scanned <= bound,
+        "scanned {} over bound {bound}",
+        window.scanned
+    );
+}
+
+#[test]
+fn evicted_reads_are_exact_over_alternating_lines() {
+    let mut payloads = Vec::new();
+    for _ in 0..1000 {
+        payloads.push(serde_json::json!({}));
+        payloads.push(long_payload());
+    }
+    let (_dir, offsets, envelopes, lens) = bulked("alternating", payloads);
+    {
+        let table = offsets.lock();
+        assert_gaps(&table.checkpoints, table.spacing, &lens);
+        assert_spacing(table.spacing, table.end);
+    }
+    // Inside a roomy gap, never on a checkpoint: forces the scan.
+    let (_a, b_line, _gap, longest) = widest(&offsets.lock().checkpoints, &lens);
+    let (r_line, _r_end) = roomy_gap(&offsets.lock().checkpoints);
+    let end = offsets.end();
+    let at = r_line.saturating_add(1);
+    let at_usize = usize::try_from(at).unwrap_or(usize::MAX);
+    let got = offsets.range(at, 4).unwrap();
+    assert_envelopes(&got, &envelopes[at_usize..at_usize + got.len()]);
+    assert_scan(&offsets, b_line.saturating_sub(1), end, longest);
+    assert_scan(&offsets, 0, end, longest);
+}
+
+#[test]
+fn evicted_reads_are_exact_over_growing_lines() {
+    let payloads: Vec<serde_json::Value> = (0..3000)
+        .map(|i| serde_json::json!({"pad": "x".repeat(i % 3000)}))
+        .collect();
+    let (_dir, offsets, envelopes, lens) = bulked("growing", payloads);
+    {
+        let table = offsets.lock();
+        assert_gaps(&table.checkpoints, table.spacing, &lens);
+        assert_spacing(table.spacing, table.end);
+    }
+    let (_a, b_line, _gap, longest) = widest(&offsets.lock().checkpoints, &lens);
+    let end = offsets.end();
+    assert_envelopes(&offsets.range(2000, 4).unwrap(), &envelopes[2000..2004]);
+    // A deep line's scan crosses the whole prefix when evicted: still
+    // within the ruled bound.
+    assert_scan(&offsets, 2900, end, longest);
+    assert_scan(&offsets, b_line.saturating_sub(1), end, longest);
+}
+
+#[test]
+fn a_corrupt_line_in_an_evicted_gap_names_its_absolute_line() {
+    let mut payloads = vec![long_payload(); 1100];
+    payloads.extend(small_payloads(600));
+    let (dir, offsets, envelopes, lens) = bulked("evicted-bad", payloads);
+    let (a_line, _b, _gap, _longest) = widest(&offsets.lock().checkpoints, &lens);
+    let bad = usize::try_from(a_line.saturating_add(1)).unwrap_or(usize::MAX);
+    corrupt(dir.path(), bad);
+    // A page reaching the corrupt line keeps every line before it, then
+    // the failure with its absolute one-based number. It starts just
+    // before the line: a page holds at most one megabyte, so a page from
+    // zero would end before a far line with more, not the failure.
+    let from = bad.saturating_sub(2);
+    let page = offsets.page(u64::try_from(from).unwrap_or(u64::MAX), u64::MAX);
+    assert_envelopes(&page.lines, &envelopes[from..bad]);
+    let After::Failed(error) = page.after else {
+        panic!("a page over an unparseable line fails");
+    };
+    assert!(
+        error.to_string().contains(&format!("line {}", bad + 1)),
+        "{error}"
+    );
+    // A range over it is an error with no lines.
+    let err = offsets
+        .range(u64::try_from(from).unwrap_or(u64::MAX), bad + 1)
+        .unwrap_err();
+    assert!(
+        err.to_string().contains(&format!("line {}", bad + 1)),
+        "{err}"
+    );
+}
+
+#[test]
+fn a_cut_in_an_evicted_gap_keeps_the_whole_lines_before_it() {
+    let mut payloads = vec![long_payload(); 1100];
+    payloads.extend(small_payloads(600));
+    let (dir, offsets, envelopes, lens) = bulked("evicted-cut", payloads);
+    let (a_line, _b_line, gap, _longest) = widest(&offsets.lock().checkpoints, &lens);
+    // Cut halfway through the widest gap: only whole lines come before
+    // the failure, and the failure is the short read.
+    let a_byte = offsets
+        .lock()
+        .checkpoints
+        .iter()
+        .find(|c| c.0 == a_line)
+        .map(|c| c.1)
+        .unwrap_or(0);
+    let _cut = cut(
+        dir.path(),
+        usize::try_from(a_byte + gap / 2).unwrap_or(usize::MAX),
+    );
+    // The page starts just before the cut for the same megabyte reason
+    // as above: it keeps the whole lines before the cut, then the short
+    // read failure.
+    let from = usize::try_from(a_line.saturating_sub(2)).unwrap_or(0);
+    let cut_at = a_byte + gap / 2;
+    let page = offsets.page(u64::try_from(from).unwrap_or(u64::MAX), u64::MAX);
+    // Every returned line ends at or before the cut.
+    let mut start = 0;
+    for (i, len) in lens.iter().enumerate() {
+        let stop = start + len;
+        if i >= from {
+            if stop > cut_at {
+                assert_envelopes(&page.lines, &envelopes[from..i]);
+                break;
+            }
+        } else {
+            assert!(stop <= cut_at, "cut lands before the page");
+        }
+        start = stop;
+    }
+    let After::Failed(Error::Io { source, .. }) = page.after else {
+        panic!("a page over a log cut short fails");
+    };
+    assert_eq!(source.kind(), std::io::ErrorKind::UnexpectedEof);
+    let err = offsets.range(0, 10_000).unwrap_err();
+    assert!(matches!(err, Error::Io { .. }), "{err}");
+}
+
+#[test]
+fn scan_with_a_small_limit_reads_only_that_many_lines() {
+    let mut payloads = vec![long_payload(); 1100];
+    payloads.extend(small_payloads(600));
+    let (dir, _offsets, envelopes, _lens) = bulked("evicted-limit", payloads);
+    let session = dir.path();
+    let scanned = Offsets::scan(session, 5, |_| Ok(())).unwrap();
+    assert_eq!(scanned.count(), 5);
+    assert_envelopes(&scanned.range(0, 100).unwrap(), &envelopes[..5]);
+}
+
+/// The forward scan's fixed buffer: recovery scans allocate this once on
+/// the stack. The Finder is correct at any chunk size and `assert_scan`
+/// only upper-bounds the meter, so only a direct assertion on the
+/// constant itself observes it.
+#[test]
+fn the_forward_scan_uses_an_eight_kibibyte_stack_buffer() {
+    assert_eq!(SCAN_CHUNK, 8 * 1024);
+}
+
+/// A fully resident window takes no file I/O and scans nothing: every
+/// start it needs is checkpointed, so the meter stays 0. Any residency
+/// check that falls through to the file scan grows the meter instead, and
+/// the resident counter itself is never called on this path, so only a
+/// direct assertion observes it.
+#[test]
+fn fully_resident_windows_scan_nothing() {
+    let (_dir, offsets, written) = written("resident-meter", &[10; 5]);
+    // Every window stays strictly below the total: a window touching the
+    // total names a line past the last one and takes the file scan.
+    for (from, max) in [(0, 4), (1, 1), (2, 2), (3, 1)] {
+        let window = offsets
+            .resolve(from, max, u64::MAX, u64::MAX)
+            .unwrap()
+            .unwrap();
+        assert_eq!(window.scanned, 0, "from {from} max {max}");
+        // Both sides of the window: the meter is 0 and the lines are
+        // exact, never an empty resident window.
+        let lines = offsets.range(from, max).unwrap();
+        assert!(!lines.is_empty(), "from {from} max {max}");
+        let first = usize::try_from(from).unwrap();
+        assert_eq!(lines, written[first..first + lines.len()]);
+    }
+    // Both sides of the bound: past the last line there is no window.
+    assert!(offsets.resolve(5, 4, u64::MAX, u64::MAX).unwrap().is_none());
+    // The resident scan counter itself: nothing on the resident path
+    // calls it, so only a direct assertion observes it.
+    let table = offsets.lock();
+    let snapshot = Snapshot {
+        checkpoints: table.checkpoints.clone(),
+        total: table.total,
+        end: table.end,
+    };
+    drop(table);
+    let starts = ResidentStarts {
+        snapshot: &snapshot,
+        idx: 1,
+    };
+    assert_eq!(starts.scanned(), 0);
+}
+
+/// An evicted window counts its file scan: the meter reports a positive
+/// count bounded by the ruled scan bound, and the lines it finds stay
+/// exact.
+#[test]
+fn evicted_windows_report_traversed_bytes() {
+    let mut payloads = vec![long_payload(); 1100];
+    payloads.extend(small_payloads(600));
+    let (_dir, offsets, envelopes, lens) = bulked("meter-evicted", payloads);
+    let (_a, b_line, _gap, longest) = widest(&offsets.lock().checkpoints, &lens);
+    let end = offsets.end();
+    // Inside the first roomy gap, never on a checkpoint: forces the scan
+    // near the start, with plenty of file left so the count is bounded.
+    let (r_line, _r_end) = roomy_gap(&offsets.lock().checkpoints);
+    let at = r_line.saturating_add(1);
+    let window = offsets.resolve(at, 4, u64::MAX, u64::MAX).unwrap().unwrap();
+    // A scan happened, and it stayed bounded.
+    assert!(window.scanned > 0, "target {at}");
+    let bound = (2u64.max(end.saturating_mul(8) / 1024))
+        .saturating_add(longest)
+        .saturating_add(PAGE_BYTES);
+    assert!(
+        window.scanned <= bound,
+        "target {at}: scanned {} over bound {bound}",
+        window.scanned
+    );
+    let at_usize = usize::try_from(at).unwrap();
+    let got = offsets.range(at, 4).unwrap();
+    assert!(!got.is_empty());
+    assert_envelopes(&got, &envelopes[at_usize..at_usize + got.len()]);
+    assert_scan(&offsets, b_line.saturating_sub(1), end, longest);
+}
+
+/// The meter counts exact traversed bytes: on a small log with its middle
+/// checkpoints removed, one chunked read takes the whole remainder, so the
+/// meter equals the bytes from the anchor to the end, never a constant.
+#[test]
+fn the_scan_meter_counts_exact_traversed_bytes() {
+    let (_dir, offsets, envelopes) = written("meter-exact", &[10; 10]);
+    let end = offsets.end();
+    let anchor_byte = {
+        let mut table = offsets.lock();
+        let anchor_byte = table.checkpoints[2].1;
+        table
+            .checkpoints
+            .retain(|checkpoint| checkpoint.0 <= 2 || checkpoint.0 == 9);
+        anchor_byte
+    };
+    let at = 5;
+    let window = offsets.resolve(at, 4, u64::MAX, u64::MAX).unwrap().unwrap();
+    // One read takes the whole remainder: the meter is exact.
+    assert_eq!(window.scanned, end.saturating_sub(anchor_byte));
+    assert!(window.scanned > 0);
+    let got = offsets.range(at, 4).unwrap();
+    assert_eq!(got, envelopes[5..9]);
+}
+
+/// A scan that ends before the window's first line resolves an empty
+/// window over nothing found, still failing as a short read: `more` is
+/// true while lines remain below the bound and false when `from` equals
+/// it. Only the direct resolve observes `more` there: pages drop it with
+/// the failure and ranges drop it with the error.
+#[test]
+fn short_scan_empty_windows_carry_more() {
+    let mut payloads = vec![long_payload(); 1100];
+    payloads.extend(small_payloads(600));
+    let (dir, offsets, _envelopes, _lens) = bulked("more-short", payloads);
+    let total = offsets.count();
+    // Inside the first roomy gap, never on a checkpoint: forces the scan.
+    let (r_line, _r_end) = roomy_gap(&offsets.lock().checkpoints);
+    let from = r_line.saturating_add(1);
+    assert!(
+        !offsets
+            .lock()
+            .checkpoints
+            .iter()
+            .any(|checkpoint| checkpoint.0 == from),
+        "from {from} is checkpointed"
+    );
+    // Cut the whole file away: every forward scan ends before any line.
+    let _cut = cut(dir.path(), 0);
+    // Lines remain below the bound: more is true.
+    let empty = offsets
+        .resolve(from, 4, u64::MAX, u64::MAX)
+        .unwrap()
+        .unwrap();
+    assert_eq!(empty.start, empty.stop);
+    assert!(empty.more, "from {from} total {total}");
+    assert_eq!(
+        empty.short.as_ref().map(|error| error.kind()),
+        Some(std::io::ErrorKind::UnexpectedEof)
+    );
+    // An empty scan reads nothing.
+    assert_eq!(empty.scanned, 0);
+    // `from` equals the bound: nothing remains, so more is false.
+    let bound = offsets.resolve(from, 4, u64::MAX, from).unwrap().unwrap();
+    assert_eq!(bound.start, bound.stop);
+    assert!(!bound.more, "from {from}");
+    assert_eq!(
+        bound.short.as_ref().map(|error| error.kind()),
+        Some(std::io::ErrorKind::UnexpectedEof)
+    );
+}
+
+/// A resident scan never ends short: `short` is `None` once `next` runs
+/// out, which the resident walk only reaches past its last checkpoint.
+#[test]
+fn resident_starts_short_is_none() {
+    let (_dir, offsets, _) = written("resident-short", &[10; 3]);
+    let table = offsets.lock();
+    let snapshot = Snapshot {
+        checkpoints: table.checkpoints.clone(),
+        total: table.total,
+        end: table.end,
+    };
+    drop(table);
+    let mut starts = ResidentStarts {
+        snapshot: &snapshot,
+        idx: 1,
+    };
+    // Both sides of the walk: each resident start in order, then none.
+    assert_eq!(starts.next(), Some(snapshot.checkpoints[1].1));
+    assert_eq!(starts.next(), Some(snapshot.checkpoints[2].1));
+    assert_eq!(starts.next(), None);
+    assert!(starts.short().is_none());
+}
+
+/// A mid-scan read error keeps its kind through `Starts::short`: a clean
+/// end of file reads as `UnexpectedEof`, but a failed read reads as
+/// itself. Reading a directory fails deterministically without touching
+/// the log, so the fallback that reports every short scan as end of file
+/// cannot stand in for it.
+#[test]
+fn scanned_starts_short_keeps_a_mid_scan_error_kind() {
+    let home = fakes::TempDir::new("log-offsets-dir-read");
+    let expected = std::io::Read::read(&mut File::open(home.path()).unwrap(), &mut [0u8; 1])
+        .unwrap_err()
+        .kind();
+    // Both sides of the kind: the failure is real, and it is not EOF.
+    assert_ne!(expected, std::io::ErrorKind::UnexpectedEof);
+    let mut file = File::open(home.path()).unwrap();
+    let mut finder = Finder {
+        file: &mut file,
+        buf: [0u8; SCAN_CHUNK],
+        len: 0,
+        at: 0,
+        byte: 0,
+        scanned: 0,
+        short: None,
+    };
+    let mut starts = ScannedStarts {
+        finder: &mut finder,
+    };
+    // Both sides of the scan: no line start, then the kept error.
+    assert_eq!(starts.next(), None);
+    let kept = starts.short().expect("a mid-scan read error is kept");
+    assert_eq!(kept.kind(), expected);
+    // End to end through sizing: the window carries the read error, not
+    // end of file.
+    let mut file = File::open(home.path()).unwrap();
+    let mut finder = Finder {
+        file: &mut file,
+        buf: [0u8; SCAN_CHUNK],
+        len: 0,
+        at: 0,
+        byte: 0,
+        scanned: 0,
+        short: None,
+    };
+    let snapshot = Snapshot {
+        checkpoints: vec![(0, 0)],
+        total: 3,
+        end: 300,
+    };
+    let spec = Spec {
+        first: 0,
+        from: 0,
+        want_last: 2,
+        start: 0,
+        bytes: u64::MAX,
+        bound: u64::MAX,
+    };
+    let mut starts = ScannedStarts {
+        finder: &mut finder,
+    };
+    let window = size_window(&snapshot, &spec, &mut starts);
+    assert_eq!(
+        window.short.as_ref().map(|error| error.kind()),
+        Some(expected)
+    );
+}
+
+/// A clean end of file where a line start was sought is `Some` end of
+/// file: every `or_else(short_eof)` site already holds `Some` in the
+/// exercised shapes, so only a direct assertion observes it.
+#[test]
+fn short_eof_reports_unexpected_eof() {
+    let error = short_eof().expect("a clean end of file is a short read");
+    assert_eq!(error.kind(), std::io::ErrorKind::UnexpectedEof);
+    assert!(!error.to_string().is_empty());
+}
+
+/// A bounded window whose second line ends exactly on the budget stop
+/// holds it: the in-buffer `byte > stop` check lets a newline at
+/// `stop - 1` through, and `size_window` keeps an end equal to the limit.
+/// One byte less budget excludes that line. The checkpoints are evicted so
+/// both windows size through the forward scan; the whole log fits one
+/// chunk, so this covers the in-buffer check site.
+#[test]
+fn bounded_windows_include_a_line_ending_exactly_on_the_budget() {
+    let (_dir, offsets, written) = written("budget-exact", &[10; 4]);
+    let starts: Vec<u64> = offsets
+        .lock()
+        .checkpoints
+        .iter()
+        .map(|checkpoint| checkpoint.1)
+        .collect();
+    assert_eq!(starts.len(), 4);
+    offsets
+        .lock()
+        .checkpoints
+        .retain(|checkpoint| checkpoint.0 == 0 || checkpoint.0 >= 3);
+    let end = offsets.end();
+    assert!(
+        end < u64::try_from(SCAN_CHUNK).unwrap_or(u64::MAX),
+        "the log fits one chunk: {end}"
+    );
+    // Two lines exactly: the second ends on the stop, so it is in, with
+    // the exact span, more past it, and a real scan behind it.
+    let two = starts[2];
+    let window = offsets.resolve(0, 10, two, u64::MAX).unwrap().unwrap();
+    assert_eq!((window.start, window.stop), (0, two));
+    assert!(window.more);
+    assert!(window.scanned > 0);
+    assert_eq!(seqs(&offsets.range(0, 2).unwrap()), seqs(&written[..2]));
+    // One byte less: the second line runs past the stop, so only the
+    // first line is in, still with more and a real scan.
+    let window = offsets.resolve(0, 10, two - 1, u64::MAX).unwrap().unwrap();
+    assert_eq!((window.start, window.stop), (0, starts[1]));
+    assert!(window.more);
+    assert!(window.scanned > 0);
+    assert_eq!(seqs(&offsets.range(0, 1).unwrap()), seqs(&written[..1]));
+}
+
+/// The same exact-fit boundary with the stop at a buffer edge: the window
+/// holds every line ending at or before the first chunk's end, and drops
+/// the line crossing it. Sizing the crossing line evaluates the post-refill
+/// `byte > stop` check, so this covers the refill check site.
+#[test]
+fn bounded_windows_include_a_line_ending_exactly_on_the_budget_at_the_buffer_edge() {
+    let (_dir, offsets, written) = written("budget-edge", &[10; 100]);
+    let starts: Vec<u64> = offsets
+        .lock()
+        .checkpoints
+        .iter()
+        .map(|checkpoint| checkpoint.1)
+        .collect();
+    assert_eq!(starts.len(), 100);
+    let chunk = u64::try_from(SCAN_CHUNK).unwrap_or(u64::MAX);
+    assert!(offsets.end() > chunk, "the log spans past one chunk");
+    offsets
+        .lock()
+        .checkpoints
+        .retain(|checkpoint| checkpoint.0 == 0 || checkpoint.0 >= 90);
+    // The most lines starting at or before the chunk end: the stop sits
+    // within one line of the buffer edge.
+    let mut lines = 1usize;
+    while lines < 100 && starts[lines] <= chunk {
+        lines += 1;
+    }
+    assert!(lines < 100, "lines {lines} reach past the chunk");
+    let edge = starts[lines - 1];
+    assert!(
+        chunk - edge < starts[lines] - edge,
+        "the stop sits within one line of the edge"
+    );
+    let window = offsets.resolve(0, 200, edge, u64::MAX).unwrap().unwrap();
+    assert_eq!((window.start, window.stop), (0, edge));
+    assert!(window.more);
+    assert!(window.scanned > 0);
+    assert_eq!(
+        seqs(&offsets.range(0, lines - 1).unwrap()),
+        seqs(&written[..lines - 1])
+    );
+    // One byte less drops the last line at the edge.
+    let window = offsets
+        .resolve(0, 200, edge - 1, u64::MAX)
+        .unwrap()
+        .unwrap();
+    assert_eq!((window.start, window.stop), (0, starts[lines - 2]));
+    assert!(window.more);
+    assert!(window.scanned > 0);
+}
+
+/// The in-buffer `byte > stop` check lets a newline sitting exactly on the
+/// stop through: the line ends one past it, reported as found, not over
+/// budget. The `==` and `>=` mutants report over budget here instead.
+#[test]
+fn bounded_scan_reports_a_newline_sitting_on_the_budget_stop() {
+    let home = fakes::TempDir::new("log-offsets-bounded-on-stop");
+    let path = home.path().join("events.jsonl");
+    std::fs::write(&path, b"z").unwrap();
+    let mut file = File::open(&path).unwrap();
+    let mut finder = Finder {
+        file: &mut file,
+        buf: [0u8; SCAN_CHUNK],
+        len: 3,
+        at: 0,
+        byte: 100,
+        scanned: 0,
+        short: None,
+    };
+    finder.buf[..3].copy_from_slice(b"ab\n");
+    // The newline byte sits exactly on the stop; the line ends one past
+    // it, found rather than over budget.
+    assert_eq!(finder.next_newline_end_bounded(102), Some(103));
+    assert_eq!(finder.byte, 103);
+    assert!(finder.short.is_none());
+}
+
+/// The post-refill `byte > stop` check lets a scan sitting exactly on the
+/// stop refill: with the file ending there the scan ends short, it does
+/// not report over budget. The `==` and `>=` mutants report over budget
+/// here instead.
+#[test]
+fn bounded_scan_ends_short_when_exhausted_exactly_on_the_budget() {
+    let home = fakes::TempDir::new("log-offsets-bounded-at-eof");
+    let path = home.path().join("events.jsonl");
+    std::fs::write(&path, b"").unwrap();
+    let mut file = File::open(&path).unwrap();
+    let mut finder = Finder {
+        file: &mut file,
+        buf: [0u8; SCAN_CHUNK],
+        len: 3,
+        at: 3,
+        byte: 103,
+        scanned: 0,
+        short: None,
+    };
+    finder.buf[..3].copy_from_slice(b"ab\n");
+    // The buffer is exhausted exactly on the stop with nothing after it:
+    // a short scan, not an over-budget line.
+    assert_eq!(finder.next_newline_end_bounded(103), None);
+    assert_eq!(
+        finder.short.as_ref().map(|error| error.kind()),
+        Some(std::io::ErrorKind::UnexpectedEof)
+    );
 }
