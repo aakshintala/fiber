@@ -7683,7 +7683,7 @@ mod tests {
                 "--completions slash, slash-filtered, slash-hint, at, at-empty, narrow-slash, narrow-at",
                 "--login providers, waiting, key, done, failed",
                 "--rail-case all-states, hovered, context-bars, floor-ceiling, hidden",
-                "--view-case delegate-view, job-pty, running, usage, changed-files, search-results, tools, rules, settings, skills",
+                "--view-case delegate-view, job-pty, running, usage, changed-files, search-results, tools, rules, settings, skills, cut-shell",
                 "--offer-case offer, confirm, select, multi_select, text_input",
                 "--image-case tool_image, fallback, pasted, links, screen_reader, title_approval, title_question, title_waiting, title_finished",
                 "--theme light, dark-256, light-256, dark-no-color",

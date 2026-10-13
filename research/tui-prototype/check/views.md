@@ -12,3 +12,4 @@ One run per case: `--view-case CASE`.
 - rules: global rules then this project's, each with its prefix, when and from which session it was added, and its red ✕.
 - settings: the keys as aligned columns under a dim header row, key, effective value and the layer it comes from (global, project, repository or default), then the reload cost and the file hint.
 - skills: one row per skill with its source, visibility, shadowed skill and switches, and the text and file hints.
+- cut-shell: the swapped-view title row, the whole output paged from the session, and the dim marker where the model's 16 KiB view ended.

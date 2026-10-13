@@ -93,6 +93,14 @@ const CASES: &[Case<Look>] = &[
         check: "one row per skill with its source, visibility, shadowed skill and switches, and the text and file hints.",
         build: || Look { kind: Kind::Skills },
     },
+    Case {
+        name: "cut-shell",
+        help: "a cut shell call's whole output with the marker where the model's 16 KiB view ended",
+        check: "the swapped-view title row, the whole output paged from the session, and the dim marker where the model's 16 KiB view ended.",
+        build: || Look {
+            kind: Kind::CutShell,
+        },
+    },
 ];
 
 /// `--view-case`, for `--help` and `check/views.md`.
@@ -115,6 +123,7 @@ enum Kind {
     Rules,
     Settings,
     Skills,
+    CutShell,
 }
 
 struct Look {
@@ -524,6 +533,42 @@ fn skills_rows() -> Vec<super::Row> {
     ]
 }
 
+/// A cut shell call's whole output, paged from the session's artifact: the
+/// lines the model saw, a dim marker where its 16 KiB view ended, then the
+/// rest with the closing line. A still shows one screen of the paging.
+fn cut_shell_rows() -> Vec<super::Row> {
+    let mut out = vec![row(vec![sp("running 42 tests", Style::new())])];
+    for t in [
+        "test lock::flaky_close ... ok",
+        "test lock::reopen ... ok",
+        "test lock::held ... ok",
+        "test serve::attach ... ok",
+        "test serve::resume ... ok",
+        "test tui::paint ... ok",
+        "test tui::fit ... ok",
+        "test tui::wrap ... ok",
+        "test panel::cards ... ok",
+        "test rail::bars ... ok",
+        "test input::keys ... ok",
+    ] {
+        out.push(row(vec![sp(t, Style::new())]));
+    }
+    out.push(row(vec![sp("── end of the model's 16 KiB view ──", dim())]));
+    for t in [
+        "test input::mouse ... ok",
+        "test lua::rows ... ok",
+        "test paged::pages ... ok",
+        "test home::list ... ok",
+        "test login::steps ... ok",
+        "",
+        "test result: ok. 42 passed; 0 failed",
+    ] {
+        out.push(row(vec![sp(t, Style::new())]));
+    }
+    out.push(row(vec![sp("exit 0", dim())]));
+    out
+}
+
 /// Rows painted at `w`: the terminal width, except a slab that keeps its
 /// own width, such as the job's 80-column screen.
 fn placed(rows: Vec<super::Row>, w: u16) -> Vec<Placed> {
@@ -607,6 +652,25 @@ fn body_rows(c: &Look, cols: usize) -> Vec<Placed> {
             let mut out = placed(vec![view_header("Skills", "/skills")], full);
             out.push(blank());
             out.extend(placed(skills_rows(), full));
+            out
+        }
+        Kind::CutShell => {
+            let mut out = placed(vec![view_header("Shell", "cargo test -p log")], full);
+            out.push(blank());
+            out.extend(placed(
+                vec![row(vec![sp(
+                    "$ cargo test -p log -- --nocapture",
+                    Style::new(),
+                )])],
+                full,
+            ));
+            out.push(blank());
+            out.extend(placed(cut_shell_rows(), full));
+            out.push(blank());
+            out.extend(placed(
+                vec![row(vec![sp("y copies the whole call", dim())])],
+                full,
+            ));
             out
         }
         Kind::JobPty => {
@@ -825,7 +889,7 @@ mod tests {
                 .iter()
                 .all(|c| crate::cases::lookup(CASES, c.name).is_some())
         );
-        assert_eq!(CASES.len(), 10);
+        assert_eq!(CASES.len(), 11);
         assert!(parse("nope").is_none());
     }
 
@@ -1284,6 +1348,43 @@ mod tests {
             assert!(t.contains("[off]"), "no off switch");
             assert!(t.contains("Enter shows the text"), "no text hint");
             assert!(t.contains("Ctrl+G opens its file"), "no file hint");
+        }
+    }
+
+    #[test]
+    fn cut_shell_header_row() {
+        for cols in [160, NARROW] {
+            let c = parse_case("cut-shell");
+            let buf = buffer(&c, cols, 48);
+            assert_header(&buf, "Shell", "cargo test -p log", cols);
+        }
+    }
+
+    #[test]
+    fn cut_shell_shows_the_whole_output_around_its_marker() {
+        for cols in [160, NARROW] {
+            let c = parse_case("cut-shell");
+            let t = text(&c, cols, 48);
+            assert!(t.contains("$ cargo test -p log"), "no command");
+            assert!(t.contains("running 42 tests"), "no output start");
+            assert!(
+                t.contains("end of the model's 16 KiB view"),
+                "no cut marker"
+            );
+            assert!(t.contains("test result: ok"), "no output past the marker");
+            assert!(t.contains("exit 0"), "no closing");
+            // the marker reads dim
+            let marker = cut_shell_rows()
+                .into_iter()
+                .find(|r| r.spans.iter().any(|s| s.content.contains("16 KiB")))
+                .unwrap();
+            assert!(
+                marker
+                    .spans
+                    .iter()
+                    .all(|s| s.style.add_modifier.contains(Modifier::DIM)),
+                "the cut marker is not dim"
+            );
         }
     }
 
