@@ -608,8 +608,8 @@ the run's tested base it files nothing and notes the stale base in the
 summary, and when the pull request itself changed that file it comments on
 the pull request instead of filing. A failure with no panic path, or any
 failure on a push run, files as usual. A flake issue closes when the test
-is rewritten to be deterministic, never by rerunning. A failure on a commit that does not contain
-the fix (`git merge-base --is-ancestor <fix> <commit>` is false) neither
+is rewritten to be deterministic, never by rerunning. A failure on a
+commit that does not contain the fix (`git merge-base --is-ancestor <fix> <commit>` is false) neither
 reopens the closed issue nor counts against the fix.
 
 Crate-level and cross-crate tests never retry: they are deterministic, so a
