@@ -16,7 +16,7 @@ use crate::git::{Origin, full_name, split};
 use crate::install::{Paths, Provenance, Record, commit_all, io, remove, slug, stage};
 use crate::installed::{Damaged, Installed, Lock, lock, read};
 use crate::prepare::prepare;
-use crate::resolve::{meets, newest, pick, root_meets};
+use crate::resolve::{meets, newest, newest_within, pick, root_meets};
 
 /// What is asked for.
 pub enum Request {
@@ -26,6 +26,11 @@ pub enum Request {
     Install(String),
     /// An installed extension, moved to its newest version.
     Update(String),
+    /// One installed extension, as the no-name update's member for it:
+    /// moved to its newest tag within the major version every extension
+    /// that needs it accepts, recording that version as a floor without
+    /// becoming a person request (`docs/extensions.md`, "Versions").
+    UpdateAll(String),
     /// An installed extension, installed again: from its record's source
     /// and commit, or, when its directory is damaged, the name as given
     /// at its newest version (`docs/extensions.md`, "Installing").
@@ -212,13 +217,14 @@ pub fn plan<'c>(
         fiber_version,
         origin,
         installed: &listing.installed,
+        update_all: matches!(request, Request::UpdateAll(_)),
         clock,
     };
     plan.root = match request {
         Request::Path(path) => ctx.add_path(&mut plan, path, None)?,
         Request::Install(typed) => {
             let name = full_name(typed);
-            ctx.add_git(&mut plan, &name, None, true, None)?;
+            ctx.add_git(&mut plan, &name, None, true, None, false)?;
             name
         }
         Request::Update(typed) => {
@@ -232,7 +238,44 @@ pub fn plan<'c>(
             match &have.provenance {
                 Provenance::Path(path) => ctx.add_path(&mut plan, path, Some(&name))?,
                 Provenance::Git { .. } => {
-                    ctx.add_git(&mut plan, &name, None, true, None)?;
+                    ctx.add_git(&mut plan, &name, None, true, None, false)?;
+                    name
+                }
+            }
+        }
+        Request::UpdateAll(typed) => {
+            let name = full_name(typed);
+            if let Some(hit) = plan.damaged.iter().find(|d| is_damaged(d, &name)) {
+                return Err(Error::Damaged(hit.clone()));
+            }
+            let Some(have) = listing.installed.iter().find(|i| i.name == name) else {
+                return Err(Error::NotInstalled { name });
+            };
+            match &have.provenance {
+                Provenance::Path(path) => ctx.add_path(&mut plan, path, Some(&name))?,
+                Provenance::Git { .. } => {
+                    // Every installed dependent's minimum, the person
+                    // minimum and the persistent floor constrain the root
+                    // tag before any fetch; no constraints mean the newest
+                    // tag.
+                    let mut minima = BTreeMap::new();
+                    for other in &listing.installed {
+                        if let Some(min) = other.depends.get(&name) {
+                            minima.insert(other.name.clone(), min.clone());
+                        }
+                    }
+                    let version = have.version.clone();
+                    let requested = have.requested;
+                    let floor = have.floor.clone();
+                    if requested {
+                        minima.insert("your install".into(), version);
+                    }
+                    if let Some(floor) = floor {
+                        minima.insert("your update".into(), floor);
+                    }
+                    let (repo, _) = split(&name)?;
+                    let tag = newest_within(&name, &minima, &ctx.origin.tags(repo, ctx.clock)?)?;
+                    ctx.add_git(&mut plan, &name, Some(tag), false, None, true)?;
                     name
                 }
             }
@@ -249,7 +292,7 @@ pub fn plan<'c>(
                 .map(|i| plan.damaged.remove(i))
                 .is_some()
             {
-                ctx.add_git(&mut plan, &name, None, true, None)?;
+                ctx.add_git(&mut plan, &name, None, true, None, false)?;
                 name
             } else {
                 let Some(have) = listing.installed.iter().find(|i| i.name == name) else {
@@ -261,7 +304,7 @@ pub fn plan<'c>(
                         let version = have.version.clone();
                         let asked = have.requested;
                         let commit = commit.clone();
-                        ctx.add_git(&mut plan, &name, Some(version), asked, Some(&commit))?;
+                        ctx.add_git(&mut plan, &name, Some(version), asked, Some(&commit), false)?;
                         name
                     }
                 }
@@ -285,6 +328,9 @@ struct Ctx<'a, 'c> {
     fiber_version: &'a str,
     origin: &'a Origin,
     installed: &'a [Installed],
+    /// Whether the plan's root is a no-name update's member for one
+    /// installed extension: its floor then still constrains resolution.
+    update_all: bool,
     clock: &'c dyn Clock,
 }
 
@@ -336,12 +382,19 @@ impl Ctx<'_, '_> {
             });
         }
         self.slug_free(plan, &manifest.name)?;
+        // A path keeps its path, and keeps any installed floor with its
+        // record: the manifest names the version, not a resolution.
+        let floor = self
+            .installed
+            .iter()
+            .find(|i| i.name == manifest.name)
+            .and_then(|i| i.floor.clone());
         let record = Record {
             name: manifest.name.clone(),
             provenance: Provenance::Path(path.clone()),
             version: manifest.version.clone(),
             requested: true,
-            floor: None,
+            floor,
         };
         let (manifest, providers, paths) =
             stage(self.home, self.id, &path, self.fiber_version, &record)?;
@@ -363,7 +416,10 @@ impl Ctx<'_, '_> {
 
     /// Fetches `name` at `tag`, or at its newest tag when none, and stages it.
     /// With `pin`, no tag is listed: the recorded version is fetched at
-    /// the recorded commit, with no change list.
+    /// the recorded commit, with no change list. With `update_all`, this
+    /// staging is the no-name update's member for `name`: its tag is
+    /// recorded as the floor and its diff is shown, without making it a
+    /// person request.
     fn add_git(
         &mut self,
         plan: &mut Plan,
@@ -371,6 +427,7 @@ impl Ctx<'_, '_> {
         tag: Option<String>,
         asked: bool,
         pin: Option<&str>,
+        update_all: bool,
     ) -> Result<(), Error> {
         let (repo, dir) = split(name)?;
         self.slug_free(plan, name)?;
@@ -395,7 +452,7 @@ impl Ctx<'_, '_> {
                         Provenance::Git { commit } => Some(commit.as_str()),
                         Provenance::Path(_) => None,
                     });
-                let history = asked && old.is_some();
+                let history = (asked || update_all) && old.is_some();
                 let commit = self.origin.clone(repo, &tag, history, &clone, self.clock)?;
                 let changes = old
                     .filter(|_| history)
@@ -405,12 +462,26 @@ impl Ctx<'_, '_> {
             }
         };
         remove(&clone.join(".git"))?;
+        // The update-all root records its tag as the floor. A person
+        // naming the extension replaces every minimum, floor included;
+        // every other staging keeps the installed floor, never lowering
+        // it.
+        let floor = if update_all {
+            Some(tag.clone())
+        } else if asked && pin.is_none() {
+            None
+        } else {
+            self.installed
+                .iter()
+                .find(|i| i.name == name)
+                .and_then(|i| i.floor.clone())
+        };
         let record = Record {
             name: name.into(),
             provenance: Provenance::Git { commit },
             version: tag,
             requested: self.requested(name, asked),
-            floor: None,
+            floor,
         };
         let (manifest, providers, paths) = stage(
             self.home,
@@ -553,7 +624,7 @@ impl Ctx<'_, '_> {
         }
         let (repo, _) = split(dep)?;
         let tag = pick(dep, wants, &self.origin.tags(repo, self.clock)?)?;
-        self.add_git(plan, dep, Some(tag), false, None)
+        self.add_git(plan, dep, Some(tag), false, None, false)
     }
 
     /// Each reachable extension's dependencies and, for an installed one the
@@ -586,6 +657,21 @@ impl Ctx<'_, '_> {
                     .entry(have.name.clone())
                     .or_default()
                     .insert("your install".into(), have.version.clone());
+            }
+        }
+        // A floor an update-everything run left keeps its version as a
+        // minimum, even for the plan's root: replacing the root's person
+        // minimum never drops its floor. Only a person replacing the root
+        // by name starts its minima over.
+        for have in self.installed {
+            if have.name == plan.root && !self.update_all {
+                continue;
+            }
+            if let Some(floor) = &have.floor {
+                wants
+                    .entry(have.name.clone())
+                    .or_default()
+                    .insert("your update".into(), floor.clone());
             }
         }
         wants
