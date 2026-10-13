@@ -6,7 +6,8 @@ use ratatui::style::Modifier;
 use ratatui::text::Line;
 
 use super::{
-    Kind, Kinds, count, cut, detail, duration, heading, kind, money, seconds, summary, tokens, wrap,
+    Kind, Kinds, count, cut, detail, duration, heading, kind, money, seconds, summary, tokens,
+    wrap, wrap_joined,
 };
 
 fn text(kinds: &Kinds) -> String {
@@ -384,6 +385,39 @@ fn cutting_keeps_what_fits_in_columns() {
     // A wide character that would cross the edge is left out.
     assert_eq!(cut("a界b", 2), "a");
     assert_eq!(cut("a界b", 3), "a界");
+}
+
+#[test]
+fn cutting_keeps_graphemes_whole() {
+    // A ZWJ emoji is one grapheme two columns wide: a width landing
+    // mid-grapheme keeps the whole grapheme when it fits and drops it
+    // when it does not, never splitting it.
+    assert_eq!(cut("a👩\u{200d}💻b", 3), "a👩\u{200d}💻");
+    assert_eq!(cut("a👩\u{200d}💻b", 2), "a");
+    // A flag pair is one grapheme: a lone regional indicator never
+    // stands alone.
+    assert_eq!(cut("🇫🇷x", 1), "");
+    assert_eq!(cut("🇫🇷x", 2), "🇫🇷");
+    // A base letter with a combining accent is one grapheme.
+    assert_eq!(cut("e\u{301}x", 1), "e\u{301}");
+    assert_eq!(cut("e\u{301}x", 2), "e\u{301}x");
+}
+
+#[test]
+fn wrapping_keeps_graphemes_whole() {
+    // A width landing mid-grapheme breaks around the grapheme.
+    assert_eq!(wrap("a👩\u{200d}💻b", 3), vec!["a👩\u{200d}💻", "b"]);
+    assert_eq!(wrap("🇫🇷x", 1), vec!["🇫🇷", "x"]);
+    assert_eq!(wrap("e\u{301}x", 1), vec!["e\u{301}", "x"]);
+}
+
+#[test]
+fn an_over_wide_grapheme_takes_its_own_row_or_is_dropped() {
+    // A grapheme wider than `max` is emitted whole on its own row by
+    // `wrap_joined` and dropped by `cut`.
+    use crate::rows::Join::Break;
+    assert_eq!(wrap_joined("界", 1), vec![("界".to_owned(), Break)]);
+    assert_eq!(cut("a界b", 2), "a");
 }
 
 #[test]
