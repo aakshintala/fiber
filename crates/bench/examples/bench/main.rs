@@ -181,6 +181,15 @@ fn measure_all(
     let mut metrics: Metrics = BTreeMap::new();
     let mut metric_runs: BTreeMap<&'static str, u32> = BTreeMap::new();
     for (workload, repeats, runs) in selected(args) {
+        eprintln!(
+            "bench: running {} (repeats {repeats}, runs {runs})",
+            workload.name
+        );
+        #[allow(
+            clippy::let_underscore_must_use,
+            reason = "a progress line must not fail the run"
+        )]
+        let _ = std::io::Write::flush(&mut std::io::stderr());
         if let Some(samples) = measure(workload, repeats, runs, failures) {
             for id in samples.keys() {
                 metric_runs.insert(id, runs);
