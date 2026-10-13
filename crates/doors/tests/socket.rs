@@ -14,7 +14,7 @@ mod support;
 use std::fs;
 use std::io::{BufRead, BufReader, Write};
 use std::os::unix::net::UnixStream;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::mpsc::{self, Receiver};
 use std::sync::{Arc, Condvar, Mutex};
@@ -30,11 +30,14 @@ use contract::events::{
     SentTool, SessionNamed, SessionState, SessionStatus, SkillInfo, SkillSource, SteeringQueue,
     ToolInfo, ToolSource, ToolState, TurnStarted, UsageRecorded,
 };
-use contract::inbox::{Delivery, Message, Rejection};
+use contract::extension::Drive;
+use contract::inbox::{Ack, Answer, Delivery, Message, Rejection};
 use contract::jobs::{Foreground, Jobs, Opening, Stop};
 use contract::provider::ToolDefinition;
 use contract::shapes::{ContentPart, Failure, Origin, Process, Sender, Tokens, Usage};
-use contract::tool::{Bound, Cancel, Effects, EffectsError, Output, Tool};
+use contract::tool::{
+    Bound, Cancel, Effects, EffectsError, Output, SpillFile, Spilled, Tool, Unsaved,
+};
 use contract::{ActionId, CommandId, ErrorCode, GenerationId, SessionId};
 use fakes::Client;
 use fakes::Deadline;
@@ -4002,4 +4005,692 @@ fn message_before_subscribe_is_not_subscribed_and_without_text_is_invalid_argume
         })
         .unwrap();
     opened.close();
+}
+fn spilled_process(code: Option<i32>) -> Process {
+    Process {
+        exit_code: code,
+        signal: None,
+        timed_out: false,
+    }
+}
+
+fn spilled_ok(
+    head: &str,
+    tail: &str,
+    removed: u64,
+    path: PathBuf,
+    size: u64,
+    competing: &str,
+    code: Option<i32>,
+) -> Output {
+    Output {
+        content: vec![ContentPart::Text {
+            text: competing.to_owned(),
+        }],
+        process: Some(spilled_process(code)),
+        spilled: Some(Spilled {
+            head: head.to_owned(),
+            tail: tail.to_owned(),
+            removed,
+            file: Ok(SpillFile { path, size }),
+        }),
+        ..Output::default()
+    }
+}
+
+#[allow(
+    clippy::too_many_arguments,
+    reason = "one spilled fixture builds one Output"
+)]
+fn spilled_unsaved(
+    head: &str,
+    tail: &str,
+    removed: u64,
+    message: String,
+    left: Option<PathBuf>,
+    process: Option<Process>,
+    error: Option<Failure>,
+    competing: &str,
+) -> Output {
+    let mut content = vec![ContentPart::Text {
+        text: competing.to_owned(),
+    }];
+    if competing.is_empty() {
+        content.clear();
+    }
+    Output {
+        content,
+        error,
+        process,
+        spilled: Some(Spilled {
+            head: head.to_owned(),
+            tail: tail.to_owned(),
+            removed,
+            file: Err(Unsaved { message, left }),
+        }),
+        ..Output::default()
+    }
+}
+
+fn connect_bounded(socket: &Path, deadline: Deadline) -> Client {
+    let owned = socket.to_owned();
+    let (tx, rx) = mpsc::channel();
+    thread::spawn(move || match tx.send(Client::connect(&owned)) {
+        Ok(()) | Err(_) => {}
+    });
+    deadline
+        .recv_or_fail(&rx, "a connection to the session socket")
+        .unwrap()
+}
+
+fn send_bounded(client: &Client, line: &str, deadline: Deadline) {
+    client
+        .send_by(line, &|| deadline.left())
+        .expect("the command line was written");
+}
+
+fn subscribe_bounded(client: &Client, id: &str, deadline: Deadline) -> Value {
+    send_bounded(
+        client,
+        &format!(r#"{{"id":"{id}","command":"subscribe","args":{{"level":"full"}}}}"#),
+        deadline,
+    );
+    let lines = until(client, |line| command_id(line) == Some(id));
+    let ack = lines.last().expect("the subscribe acknowledgement arrived");
+    assert_eq!(kind(ack), "command_accepted", "{ack}");
+    assert_eq!(command_id(ack), Some(id));
+    ack.clone()
+}
+
+fn shell_answer(client: &Client, id: &str) -> Value {
+    let lines = until(client, |line| command_id(line) == Some(id));
+    let matching: Vec<&Value> = lines
+        .iter()
+        .filter(|line| command_id(line) == Some(id))
+        .collect();
+    assert_eq!(matching.len(), 1, "exactly one answer for {id}: {lines:?}");
+    matching[0].clone()
+}
+
+fn artifacts_entries(dir: &Path) -> Vec<String> {
+    let artifacts = dir.join("artifacts");
+    let mut names: Vec<String> = fs::read_dir(&artifacts)
+        .unwrap()
+        .map(|entry| entry.unwrap().file_name().to_string_lossy().into_owned())
+        .collect();
+    names.sort();
+    names
+}
+
+#[test]
+fn shell_spilled_success_returns_original_artifact() {
+    let opened = Opened::open(vec![]);
+    let path = opened.dir.join("artifacts/s_test.txt");
+    let saved = b"original spilled bytes, kept whole";
+    fs::write(&path, saved).unwrap();
+    let size = u64::try_from(saved.len()).unwrap();
+    opened.session.shell(fixed(
+        spilled_ok(
+            "HEAD",
+            "TAIL",
+            5,
+            path.clone(),
+            size,
+            "competing, ignored",
+            Some(0),
+        ),
+        Bound { start: 1, end: 1 },
+    ));
+    let socket = opened.socket.clone();
+    let dir = opened.dir.clone();
+    let absolute = path.display().to_string();
+    opened
+        .session
+        .run(Vec::new(), Arc::new(|| false), move |_inbox| {
+            let deadline = Deadline::after(DEADLINE);
+            let client = connect_bounded(&socket, deadline);
+            let ack = subscribe_bounded(&client, "c_sub", deadline);
+            assert_eq!(command_id(&ack), Some("c_sub"));
+            send_bounded(&client, &shell_line("c_big", "cat big"), deadline);
+            let line = shell_answer(&client, "c_big");
+            assert_eq!(kind(&line), "command_accepted", "{line}");
+            let result = &line["payload"]["result"];
+            let notice =
+                format!("[5 bytes cut. The full output is in {absolute}; read it with `read`.]");
+            assert_eq!(result["output"], format!("HEAD\n{notice}\nTAIL"));
+            assert_eq!(result["artifact"], "artifacts/s_test.txt");
+            assert_eq!(result["process"]["exit_code"], 0);
+            assert_eq!(result["process"]["timed_out"], false);
+            assert_eq!(fs::read(dir.join("artifacts/s_test.txt")).unwrap(), saved);
+            assert_eq!(artifacts_entries(&dir), vec!["s_test.txt".to_owned()]);
+            no_durable(&dir);
+            Ok(())
+        })
+        .unwrap();
+    opened.close();
+}
+
+#[test]
+fn shell_spilled_zero_removed_joins_without_notice() {
+    let opened = Opened::open(vec![]);
+    let path = opened.dir.join("artifacts/s_zero.txt");
+    let saved = "héllo wörld".as_bytes().to_vec();
+    fs::write(&path, &saved).unwrap();
+    let size = u64::try_from(saved.len()).unwrap();
+    opened.session.shell(fixed(
+        spilled_ok("héllo ", "wörld", 0, path.clone(), size, "ignored", Some(0)),
+        Bound { start: 1, end: 1 },
+    ));
+    let socket = opened.socket.clone();
+    let dir = opened.dir.clone();
+    opened
+        .session
+        .run(Vec::new(), Arc::new(|| false), move |_inbox| {
+            let deadline = Deadline::after(DEADLINE);
+            let client = connect_bounded(&socket, deadline);
+            subscribe_bounded(&client, "c_sub", deadline);
+            send_bounded(&client, &shell_line("c_zero", "cat zero"), deadline);
+            let line = shell_answer(&client, "c_zero");
+            assert_eq!(kind(&line), "command_accepted", "{line}");
+            let result = &line["payload"]["result"];
+            assert_eq!(result["output"], "héllo wörld");
+            assert!(
+                !result["output"].as_str().unwrap().contains("bytes cut"),
+                "{}",
+                result["output"]
+            );
+            assert_eq!(result["artifact"], "artifacts/s_zero.txt");
+            assert_eq!(fs::read(dir.join("artifacts/s_zero.txt")).unwrap(), saved);
+            assert_eq!(artifacts_entries(&dir), vec!["s_zero.txt".to_owned()]);
+            no_durable(&dir);
+            Ok(())
+        })
+        .unwrap();
+    opened.close();
+}
+
+#[test]
+fn shell_spilled_outside_session_stays_absolute() {
+    let opened = Opened::open(vec![]);
+    let elsewhere = Temp::new();
+    let path = elsewhere.0.join("s_out.txt");
+    let saved = b"raw output bytes";
+    fs::write(&path, saved).unwrap();
+    let size = u64::try_from(saved.len()).unwrap();
+    let absolute = path.display().to_string();
+    opened.session.shell(fixed(
+        spilled_ok("raw ", "bytes", 6, path.clone(), size, "ignored", Some(0)),
+        Bound { start: 1, end: 1 },
+    ));
+    let socket = opened.socket.clone();
+    let dir = opened.dir.clone();
+    opened
+        .session
+        .run(Vec::new(), Arc::new(|| false), move |_inbox| {
+            let deadline = Deadline::after(DEADLINE);
+            let client = connect_bounded(&socket, deadline);
+            subscribe_bounded(&client, "c_sub", deadline);
+            send_bounded(&client, &shell_line("c_out", "cat out"), deadline);
+            let line = shell_answer(&client, "c_out");
+            assert_eq!(kind(&line), "command_accepted", "{line}");
+            let result = &line["payload"]["result"];
+            assert_eq!(result["artifact"], absolute.as_str());
+            let notice =
+                format!("[6 bytes cut. The full output is in {absolute}; read it with `read`.]");
+            assert_eq!(result["output"], format!("raw \n{notice}\nbytes"));
+            assert_eq!(fs::read(&path).unwrap(), saved);
+            assert!(
+                artifacts_entries(&dir).is_empty(),
+                "no file under the log's artifacts: {:?}",
+                artifacts_entries(&dir)
+            );
+            no_durable(&dir);
+            Ok(())
+        })
+        .unwrap();
+    opened.close();
+}
+
+#[test]
+fn shell_unsaved_without_left_keeps_process_and_notice() {
+    let opened = Opened::open(vec![]);
+    let message = "could not save the output to /nowhere/s_x.txt: boom".to_owned();
+    let notice = format!("[92 bytes cut. The full output could not be saved: {message}.]");
+    opened.session.shell(fixed(
+        spilled_unsaved(
+            "HHHH",
+            "TTTT",
+            92,
+            message,
+            None,
+            Some(spilled_process(Some(2))),
+            Some(Failure {
+                code: ErrorCode::NonzeroExit,
+                message: "Exit code 2.".to_owned(),
+                retry_after_ms: None,
+                provider: None,
+            }),
+            "competing, ignored",
+        ),
+        Bound::DEFAULT,
+    ));
+    let socket = opened.socket.clone();
+    let dir = opened.dir.clone();
+    opened
+        .session
+        .run(Vec::new(), Arc::new(|| false), move |_inbox| {
+            let deadline = Deadline::after(DEADLINE);
+            let client = connect_bounded(&socket, deadline);
+            subscribe_bounded(&client, "c_sub", deadline);
+            send_bounded(&client, &shell_line("c_fail", "false"), deadline);
+            let line = shell_answer(&client, "c_fail");
+            assert_eq!(kind(&line), "command_accepted", "{line}");
+            let result = &line["payload"]["result"];
+            assert_eq!(result["output"], format!("HHHH\n{notice}\nTTTT"));
+            assert!(result.get("artifact").is_none(), "{result}");
+            assert_eq!(result["process"]["exit_code"], 2);
+            assert_eq!(result["process"]["timed_out"], false);
+            assert!(artifacts_entries(&dir).is_empty());
+            no_durable(&dir);
+            Ok(())
+        })
+        .unwrap();
+    opened.close();
+}
+
+#[test]
+fn shell_unsaved_without_left_zero_removed_still_notices() {
+    let opened = Opened::open(vec![]);
+    let message = "could not save the output to /nowhere/s_x.txt: boom".to_owned();
+    let notice = format!("[0 bytes cut. The full output could not be saved: {message}.]");
+    opened.session.shell(fixed(
+        spilled_unsaved(
+            "HHHH",
+            "TTTT",
+            0,
+            message,
+            None,
+            Some(spilled_process(Some(0))),
+            None,
+            "",
+        ),
+        Bound::DEFAULT,
+    ));
+    let socket = opened.socket.clone();
+    let dir = opened.dir.clone();
+    opened
+        .session
+        .run(Vec::new(), Arc::new(|| false), move |_inbox| {
+            let deadline = Deadline::after(DEADLINE);
+            let client = connect_bounded(&socket, deadline);
+            subscribe_bounded(&client, "c_sub", deadline);
+            send_bounded(&client, &shell_line("c_zero_fail", "true"), deadline);
+            let line = shell_answer(&client, "c_zero_fail");
+            assert_eq!(kind(&line), "command_accepted", "{line}");
+            let result = &line["payload"]["result"];
+            assert_eq!(result["output"], format!("HHHH\n{notice}\nTTTT"));
+            assert!(result.get("artifact").is_none(), "{result}");
+            no_durable(&dir);
+            Ok(())
+        })
+        .unwrap();
+    opened.close();
+}
+
+#[test]
+fn shell_unsaved_left_is_removed_before_answer() {
+    let opened = Opened::open(vec![]);
+    let left = opened.dir.join("artifacts/s_left.txt");
+    fs::write(&left, b"partial").unwrap();
+    let message = "could not save the output to /nowhere/s_x.txt: boom".to_owned();
+    let notice = format!("[92 bytes cut. The full output could not be saved: {message}.]");
+    opened.session.shell(fixed(
+        spilled_unsaved(
+            "HHHH",
+            "TTTT",
+            92,
+            message,
+            Some(left.clone()),
+            Some(spilled_process(Some(0))),
+            None,
+            "competing, ignored",
+        ),
+        Bound::DEFAULT,
+    ));
+    let socket = opened.socket.clone();
+    let dir = opened.dir.clone();
+    opened
+        .session
+        .run(Vec::new(), Arc::new(|| false), move |_inbox| {
+            let deadline = Deadline::after(DEADLINE);
+            let client = connect_bounded(&socket, deadline);
+            subscribe_bounded(&client, "c_sub", deadline);
+            send_bounded(&client, &shell_line("c_left", "cat left"), deadline);
+            let line = shell_answer(&client, "c_left");
+            assert_eq!(kind(&line), "command_accepted", "{line}");
+            let result = &line["payload"]["result"];
+            assert_eq!(result["output"], format!("HHHH\n{notice}\nTTTT"));
+            assert!(result.get("artifact").is_none(), "{result}");
+            assert!(
+                !left.exists(),
+                "the partial file is removed before the answer"
+            );
+            assert!(artifacts_entries(&dir).is_empty());
+            no_durable(&dir);
+            Ok(())
+        })
+        .unwrap();
+    opened.close();
+}
+
+#[test]
+fn shell_unsaved_left_removal_failure_rejects_io_failed() {
+    let opened = Opened::open(vec![]);
+    let held = Temp::new();
+    let left = held.0.clone();
+    assert!(left.is_dir());
+    let message = "could not save the output to /nowhere/s_x.txt: boom".to_owned();
+    opened.session.shell(fixed(
+        spilled_unsaved(
+            "HHHH",
+            "TTTT",
+            92,
+            message,
+            Some(left.clone()),
+            Some(spilled_process(Some(0))),
+            None,
+            "",
+        ),
+        Bound::DEFAULT,
+    ));
+    let socket = opened.socket.clone();
+    let dir = opened.dir.clone();
+    let expected = left.display().to_string();
+    opened
+        .session
+        .run(Vec::new(), Arc::new(|| false), move |_inbox| {
+            let deadline = Deadline::after(DEADLINE);
+            let client = connect_bounded(&socket, deadline);
+            subscribe_bounded(&client, "c_sub", deadline);
+            send_bounded(&client, &shell_line("c_stuck", "cat stuck"), deadline);
+            let line = shell_answer(&client, "c_stuck");
+            assert_eq!(kind(&line), "command_rejected", "{line}");
+            assert_eq!(rejection(&line).0, "io_failed");
+            let (_, text) = rejection(&line);
+            assert!(
+                text.contains(&expected),
+                "the message names {expected}: {text}"
+            );
+            assert!(
+                text.contains("could not be removed"),
+                "the message names the removal failure: {text}"
+            );
+            assert!(left.is_dir(), "a directory is not removed as a file");
+            no_durable(&dir);
+            Ok(())
+        })
+        .unwrap();
+    opened.close();
+}
+
+#[test]
+fn shell_unsaved_left_without_process_still_cleans_up() {
+    let opened = Opened::open(vec![]);
+    let left = opened.dir.join("artifacts/s_partial.txt");
+    fs::write(&left, b"partial").unwrap();
+    opened.session.shell(fixed(
+        spilled_unsaved(
+            "HHHH",
+            "TTTT",
+            7,
+            "could not save the output to /nowhere/s_x.txt: boom".to_owned(),
+            Some(left.clone()),
+            None,
+            Some(Failure {
+                code: ErrorCode::InvalidArguments,
+                message: "Give one command.".to_owned(),
+                retry_after_ms: None,
+                provider: None,
+            }),
+            "",
+        ),
+        Bound::DEFAULT,
+    ));
+    let socket = opened.socket.clone();
+    let dir = opened.dir.clone();
+    opened
+        .session
+        .run(Vec::new(), Arc::new(|| false), move |_inbox| {
+            let deadline = Deadline::after(DEADLINE);
+            let client = connect_bounded(&socket, deadline);
+            subscribe_bounded(&client, "c_sub", deadline);
+            send_bounded(&client, &shell_line("c_noproc", ""), deadline);
+            let line = shell_answer(&client, "c_noproc");
+            assert_eq!(rejection(&line), ("invalid_arguments", "Give one command."));
+            assert!(
+                !left.exists(),
+                "the partial file is removed before the rejection"
+            );
+            no_durable(&dir);
+            Ok(())
+        })
+        .unwrap();
+    opened.close();
+}
+
+fn drive_shell(
+    deadline: Deadline,
+    driver: &Arc<dyn Drive>,
+    command: &str,
+) -> mpsc::Receiver<Answer> {
+    let (tx, rx) = mpsc::channel();
+    let mut args = Map::new();
+    args.insert("command".to_owned(), Value::String(command.to_owned()));
+    driver.drive(
+        "fiber.test/a",
+        "shell",
+        args,
+        Ack(Box::new(move |answer| match tx.send(answer) {
+            Ok(()) | Err(_) => {}
+        })),
+    );
+    let _ = deadline;
+    rx
+}
+
+#[test]
+fn shell_spilled_success_without_log_is_closing() {
+    let opened = Opened::open(vec![]);
+    let saved = b"original spilled bytes, kept whole";
+    let relative = "artifacts/s_test.txt".to_owned();
+    fs::write(opened.dir.join(&relative), saved).unwrap();
+    let size = u64::try_from(saved.len()).unwrap();
+    let absolute = opened.dir.join(&relative);
+    opened.session.shell(fixed(
+        spilled_ok(
+            "HEAD",
+            "TAIL",
+            5,
+            absolute.clone(),
+            size,
+            "ignored",
+            Some(0),
+        ),
+        Bound { start: 1, end: 1 },
+    ));
+    let Opened {
+        _temp,
+        clock,
+        home: _,
+        sessions,
+        id,
+        dir,
+        socket: _,
+        out: _,
+        session,
+        log,
+    } = opened;
+    let driver = session.driver();
+    drop(log);
+    let timed: Arc<dyn Clock> = clock.clone();
+    session
+        .run(Vec::new(), Arc::new(|| false), move |_inbox| {
+            let deadline = Deadline::after(DEADLINE);
+            let rx = drive_shell(deadline, &driver, "cat big");
+            let answer = deadline.recv_or_fail(&rx, "the shell answer without a log");
+            match answer {
+                Err(rejection) => {
+                    assert_eq!(rejection.code, ErrorCode::Closing);
+                    assert_eq!(rejection.message, ENDED);
+                }
+                Ok(_) => panic!("a spilled success without a log is rejected closing"),
+            }
+            assert_eq!(fs::read(dir.join(&relative)).unwrap(), saved);
+            assert_eq!(artifacts_entries(&dir), vec!["s_test.txt".to_owned()]);
+            Ok(())
+        })
+        .unwrap();
+    let (tx, rx) = mpsc::channel();
+    let (sessions, id) = (sessions.clone(), id.clone());
+    thread::spawn(move || match tx.send(Log::open(&sessions, id, timed)) {
+        Ok(()) | Err(_) => {}
+    });
+    let log = Deadline::after(DEADLINE)
+        .recv_or_fail(&rx, "the log reopened for close")
+        .unwrap();
+    close_within(session, Arc::new(log));
+}
+
+#[test]
+fn shell_unsaved_left_without_log_still_cleans_up() {
+    let opened = Opened::open(vec![]);
+    let relative = "artifacts/s_left.txt".to_owned();
+    fs::write(opened.dir.join(&relative), b"partial").unwrap();
+    let left = opened.dir.join(&relative);
+    let message = "could not save the output to /nowhere/s_x.txt: boom".to_owned();
+    let notice = format!("[3 bytes cut. The full output could not be saved: {message}.]");
+    opened.session.shell(fixed(
+        spilled_unsaved(
+            "H",
+            "T",
+            3,
+            message,
+            Some(left.clone()),
+            Some(spilled_process(Some(0))),
+            None,
+            "",
+        ),
+        Bound::DEFAULT,
+    ));
+    let Opened {
+        _temp,
+        clock,
+        home: _,
+        sessions,
+        id,
+        dir: _,
+        socket: _,
+        out: _,
+        session,
+        log,
+    } = opened;
+    let driver = session.driver();
+    drop(log);
+    let timed: Arc<dyn Clock> = clock.clone();
+    session
+        .run(Vec::new(), Arc::new(|| false), move |_inbox| {
+            let deadline = Deadline::after(DEADLINE);
+            let rx = drive_shell(deadline, &driver, "cat left");
+            let answer = deadline.recv_or_fail(&rx, "the unsaved answer without a log");
+            match answer {
+                Ok(Some(CommandResult::Shell {
+                    output,
+                    artifact,
+                    process,
+                })) => {
+                    assert_eq!(output, format!("H\n{notice}\nT"));
+                    assert!(artifact.is_none());
+                    assert_eq!(process.exit_code, Some(0));
+                }
+                other => panic!("an unsaved spill without a log is accepted: {other:?}"),
+            }
+            assert!(!left.exists(), "cleanup does not need the log");
+            Ok(())
+        })
+        .unwrap();
+    let (tx, rx) = mpsc::channel();
+    let (sessions, id) = (sessions.clone(), id.clone());
+    thread::spawn(move || match tx.send(Log::open(&sessions, id, timed)) {
+        Ok(()) | Err(_) => {}
+    });
+    let log = Deadline::after(DEADLINE)
+        .recv_or_fail(&rx, "the log reopened for close")
+        .unwrap();
+    close_within(session, Arc::new(log));
+}
+
+#[test]
+fn shell_unsaved_left_removal_failure_without_log_rejects_io_failed() {
+    let held = Temp::new();
+    let left = held.0.clone();
+    assert!(left.is_dir());
+    let opened = Opened::open(vec![]);
+    opened.session.shell(fixed(
+        spilled_unsaved(
+            "H",
+            "T",
+            3,
+            "could not save the output to /nowhere/s_x.txt: boom".to_owned(),
+            Some(left.clone()),
+            Some(spilled_process(Some(0))),
+            None,
+            "",
+        ),
+        Bound::DEFAULT,
+    ));
+    let Opened {
+        _temp,
+        clock,
+        home: _,
+        sessions,
+        id,
+        dir,
+        socket: _,
+        out: _,
+        session,
+        log,
+    } = opened;
+    let driver = session.driver();
+    drop(log);
+    let timed: Arc<dyn Clock> = clock.clone();
+    let expected = left.display().to_string();
+    session
+        .run(Vec::new(), Arc::new(|| false), move |_inbox| {
+            let deadline = Deadline::after(DEADLINE);
+            let rx = drive_shell(deadline, &driver, "cat stuck");
+            let answer = deadline.recv_or_fail(&rx, "the stuck removal without a log");
+            match answer {
+                Err(rejection) => {
+                    assert_eq!(rejection.code, ErrorCode::IoFailed);
+                    assert!(
+                        rejection.message.contains(&expected),
+                        "the message names {expected}: {}",
+                        rejection.message
+                    );
+                }
+                Ok(_) => panic!("a stuck removal without a log is rejected io_failed"),
+            }
+            no_durable(&dir);
+            Ok(())
+        })
+        .unwrap();
+    let (tx, rx) = mpsc::channel();
+    let (sessions, id) = (sessions.clone(), id.clone());
+    thread::spawn(move || match tx.send(Log::open(&sessions, id, timed)) {
+        Ok(()) | Err(_) => {}
+    });
+    let log = Deadline::after(DEADLINE)
+        .recv_or_fail(&rx, "the log reopened for close")
+        .unwrap();
+    close_within(session, Arc::new(log));
 }
