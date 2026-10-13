@@ -29,8 +29,8 @@ const DOC: &str = concat!(
     "| `paging` jig, slowest frame that loaded pages | 3 ms | Linux x86_64 | picked |\n",
     "| `paging` jig, slowest jump frame | 6 ms | Linux x86_64 | picked |\n",
     "| `paging` jig, slowest re-count at a new width | 48 ms | Linux x86_64 | picked |\n",
-    "| `paging` jig at scale 16, slowest re-count at a new width | 16 times the same run's scale-1 re-count | Linux x86_64 | picked |\n",
-    "| `paging` jig at scale 16, a search of the whole session with no match | 16 times the same run's scale-1 search | Linux x86_64 | picked |\n",
+    "| `paging` jig at scale 16, slowest re-count at a new width | 20 times the same run's scale-1 re-count | Linux x86_64 | picked |\n",
+    "| `paging` jig at scale 16, a search of the whole session with no match | 20 times the same run's scale-1 search | Linux x86_64 | picked |\n",
     "| `paging` jig, slowest append frame | 4 ms | Linux x86_64 | picked |\n",
     "| Terminal, wheel to frame, the `paging` jig's session at scale 1, 160 by 48 | 16 ms | Linux x86_64 | picked |\n",
     "| Terminal, wheel to frame, one turn with an opened `read` of 300 lines, 160 by 48 | 16 ms | Linux x86_64 | picked |\n",
@@ -55,7 +55,7 @@ fn quiet_run() -> Value {
 }
 
 fn head() -> Value {
-    json!({
+    let mut head = json!({
         "schema": 1, "runs": 5, "idle_secs": 10,
         "metrics": {
             "session_idle_rss_kib": [10840, 10852, 10836, 10848, 10844],
@@ -70,7 +70,6 @@ fn head() -> Value {
             "terminal_attach_rss_kib": [51200, 51210, 51190, 51205, 51195],
             "terminal_attach_retained_kib": [48000, 48010, 47990, 48005, 47995],
             "busy_turn_retained_kib": [19000, 19010, 18990, 19005, 18995],
-            "ten_busy_turns_retained_kib": json!(vec![ten_turn_run(19000, 19005); 5]),
             "busy_turn_rss_kib": [20480, 20490, 20470, 20485, 20475],
             "resume_20k_rss_kib": [11000, 11010, 10990, 11005, 10995],
             "resume_2m_rss_kib": [14000, 14010, 13990, 14005, 13995],
@@ -87,12 +86,23 @@ fn head() -> Value {
             "paging_scale16_search_ms": [86.0, 84.0, 87.0, 86.5, 83.0],
             "paging_append_ms": [1.8, 1.7, 1.8, 1.9, 1.8],
             "wheel_paging_ms": [3.9, 4.1, 3.8, 4.0, 4.2],
-            "wheel_read_ms": [1.1, 1.0, 1.2, 1.1, 1.0],
-            "paging_counts": vec![json!({"lines": 8074, "turns": 10, "calls": 1051, "pages": 120, "rows": 2915}); 5],
-            "paging_scale16_counts": vec![json!({"lines": 129184, "turns": 160, "calls": 16816, "pages": 1920, "rows": 46640}); 5]
+            "wheel_read_ms": [1.1, 1.0, 1.2, 1.1, 1.0]
         },
         "failures": []
-    })
+    });
+    // Hoisted out of the literal above: nested `json!` calls inside one
+    // literal exceed the default macro recursion limit, so they are
+    // assigned after; the values read exactly as before.
+    head["metrics"]["ten_busy_turns_retained_kib"] = json!(vec![ten_turn_run(19000, 19005); 5]);
+    head["metrics"]["paging_counts"] = json!(vec![
+        json!({"lines": 8074, "turns": 10, "calls": 1051, "pages": 120, "rows": 2915});
+        5
+    ]);
+    head["metrics"]["paging_scale16_counts"] = json!(vec![
+        json!({"lines": 129184, "turns": 160, "calls": 16816, "pages": 1920, "rows": 46640});
+        5
+    ]);
+    head
 }
 
 fn attach_entries(fixture: &str, log_bytes: u64, ms: &[f64]) -> Vec<Value> {
@@ -2179,7 +2189,7 @@ fn judge_ratio(small: &str, large: &str, small_values: Value, large_values: Valu
 }
 
 #[test]
-fn paired_ratios_pass_below_and_at_sixteen_times_and_fail_above() {
+fn paired_ratios_pass_below_and_at_twenty_times_and_fail_above() {
     for (budget, small, large) in RATIO_ROWS {
         // Just below, exactly at, and just above: the median pair
         // decides, so constant arrays pin the edge precisely.
@@ -2187,21 +2197,21 @@ fn paired_ratios_pass_below_and_at_sixteen_times_and_fail_above() {
             small,
             large,
             json!([10.0, 10.0, 10.0, 10.0, 10.0]),
-            json!([159.0, 159.0, 159.0, 159.0, 159.0]),
+            json!([199.0, 199.0, 199.0, 199.0, 199.0]),
         );
         assert_eq!(below.failures, Vec::<String>::new(), "{budget}");
         let at = judge_ratio(
             small,
             large,
             json!([10.0, 10.0, 10.0, 10.0, 10.0]),
-            json!([160.0, 160.0, 160.0, 160.0, 160.0]),
+            json!([200.0, 200.0, 200.0, 200.0, 200.0]),
         );
         assert_eq!(at.failures, Vec::<String>::new(), "{budget} at the ceiling");
         let above = judge_ratio(
             small,
             large,
             json!([10.0, 10.0, 10.0, 10.0, 10.0]),
-            json!([161.0, 161.0, 161.0, 161.0, 161.0]),
+            json!([201.0, 201.0, 201.0, 201.0, 201.0]),
         );
         assert_eq!(above.failures.len(), 1, "{budget}");
         assert!(
@@ -2234,7 +2244,7 @@ fn paired_medians_are_not_ratios_of_medians() {
     // Paired median over where independent medians read about 1.
     let three = with_metric_runs(head(), &[(small, 3), (large, 3)]);
     let three = with_metric(three, small, json!([1.0, 50.0, 51.0]));
-    let three = with_metric(three, large, json!([51.0, 50.0, 850.0]));
+    let three = with_metric(three, large, json!([51.0, 50.0, 1050.0]));
     let out = judge(&three, Some(&base()), Event::PullRequest);
     assert_eq!(out.failures.len(), 1, "{:?}", out.failures);
     assert!(has(&out.failures, "over"), "{:?}", out.failures);
@@ -2250,8 +2260,8 @@ fn a_changed_ceiling_pin_or_multiplier_fails_naming_the_budget() {
             .unwrap_or_else(|| panic!("no {budget} row"));
         let cell = line.split('|').nth(2).unwrap_or_default().trim().to_owned();
         for wrong in [
-            cell.replace("16 times", "15 times"),
-            cell.replace("16 times", "17 times"),
+            cell.replace("20 times", "19 times"),
+            cell.replace("20 times", "21 times"),
             cell.replace("same run's", "the run's"),
         ] {
             let doc = doc_with(&cell, &wrong);
@@ -2304,7 +2314,7 @@ fn malformed_paired_samples_are_configuration_failures() {
     // their count validation (and fail here only on the ratio itself).
     let head = with_metric_runs(head(), &[(small, 3), (large, 3)]);
     let head = with_metric(head, small, json!([10.0, 10.0, 10.0]));
-    let head = with_metric(head, large, json!([170.0, 170.0, 170.0]));
+    let head = with_metric(head, large, json!([210.0, 210.0, 210.0]));
     let out = judge(&head, Some(&base()), Event::PullRequest);
     assert_eq!(out.failures.len(), 1, "{:?}", out.failures);
     assert!(has(&out.failures, "over"), "{:?}", out.failures);
@@ -2355,16 +2365,16 @@ fn ratio_three(small: &str, large: &str, small_values: Value, large_values: Valu
 #[test]
 fn ratio_columns_show_the_median_pair_not_just_its_verdict() {
     let (budget, small, large) = RATIO_ROWS[0];
-    // Sixteen over ten names its growth in the head column.
+    // Twenty over ten names its growth in the head column.
     let at = judge_ratio(
         small,
         large,
         json!([10.0, 10.0, 10.0, 10.0, 10.0]),
-        json!([160.0, 160.0, 160.0, 160.0, 160.0]),
+        json!([200.0, 200.0, 200.0, 200.0, 200.0]),
     );
     assert_eq!(at.failures, Vec::<String>::new(), "{:?}", at.failures);
     let line = row(&at.comment, budget);
-    assert!(line.contains("16.0x of 16x allowed"), "{line}");
+    assert!(line.contains("20.0x of 20x allowed"), "{line}");
     // Zero over zero names zero growth, not infinite growth or NaN.
     let zeros = judge_ratio(
         small,
@@ -2374,7 +2384,7 @@ fn ratio_columns_show_the_median_pair_not_just_its_verdict() {
     );
     assert_eq!(zeros.failures, Vec::<String>::new(), "{:?}", zeros.failures);
     let line = row(&zeros.comment, budget);
-    assert!(line.contains("0.0x of 16x allowed"), "{line}");
+    assert!(line.contains("0.0x of 20x allowed"), "{line}");
     // Positive over zero names infinite growth.
     let infinite = judge_ratio(
         small,
@@ -2384,7 +2394,7 @@ fn ratio_columns_show_the_median_pair_not_just_its_verdict() {
     );
     assert_eq!(infinite.failures.len(), 1, "{:?}", infinite.failures);
     let line = row(&infinite.comment, budget);
-    assert!(line.contains("infinite of 16x allowed"), "{line}");
+    assert!(line.contains("infinite of 20x allowed"), "{line}");
 }
 
 #[test]
@@ -2397,7 +2407,7 @@ fn a_present_base_shows_its_ratio_not_unavailable() {
     let out = judge(&head(), Some(&base), Event::PullRequest);
     assert_eq!(out.failures, Vec::<String>::new(), "{:?}", out.failures);
     let line = row(&out.comment, budget);
-    assert!(line.contains("10.0x of 16x allowed"), "{line}");
+    assert!(line.contains("10.0x of 20x allowed"), "{line}");
     assert!(!line.contains("unavailable"), "{line}");
 }
 
@@ -2435,7 +2445,7 @@ fn paired_ordering_sorts_finite_pairs_by_growth() {
     );
     assert_eq!(out.failures, Vec::<String>::new(), "{:?}", out.failures);
     let line = row(&out.comment, budget);
-    assert!(line.contains("2.0x of 16x allowed"), "{line}");
+    assert!(line.contains("2.0x of 20x allowed"), "{line}");
 }
 
 #[test]
@@ -2446,13 +2456,13 @@ fn paired_ordering_ranks_zero_growth_first_and_infinite_last() {
     let out = ratio_three(small, large, json!([0.0, 1.0, 1.0]), json!([5.0, 2.0, 3.0]));
     assert_eq!(out.failures, Vec::<String>::new(), "{:?}", out.failures);
     let line = row(&out.comment, budget);
-    assert!(line.contains("3.0x of 16x allowed"), "{line}");
+    assert!(line.contains("3.0x of 20x allowed"), "{line}");
     // A zero pair sorts before the finite ones: the middle stays the
     // finite pair at two over one.
     let out = ratio_three(small, large, json!([0.0, 1.0, 1.0]), json!([0.0, 2.0, 3.0]));
     assert_eq!(out.failures, Vec::<String>::new(), "{:?}", out.failures);
     let line = row(&out.comment, budget);
-    assert!(line.contains("2.0x of 16x allowed"), "{line}");
+    assert!(line.contains("2.0x of 20x allowed"), "{line}");
 }
 
 #[test]
@@ -2470,11 +2480,11 @@ fn overflowed_cross_products_fall_back_to_the_quotient() {
     );
     assert_eq!(out.failures, Vec::<String>::new(), "{:?}", out.failures);
     let line = row(&out.comment, budget);
-    assert!(line.contains("2.0x of 16x allowed"), "{line}");
+    assert!(line.contains("2.0x of 20x allowed"), "{line}");
 }
 
 #[test]
-fn a_head_ratio_over_sixteen_times_fails_whatever_the_base_does() {
+fn a_head_ratio_over_twenty_times_fails_whatever_the_base_does() {
     let (_, small, large) = RATIO_ROWS[0];
     let over = |ratio: f64| {
         let head = with_metric(head(), small, json!([10.0, 10.0, 10.0, 10.0, 10.0]));
@@ -2482,20 +2492,20 @@ fn a_head_ratio_over_sixteen_times_fails_whatever_the_base_does() {
     };
     // Base below, at and above the ceiling: the head still fails, never
     // marked over at the base.
-    for base_ratio in [10.0, 16.0, 20.0] {
+    for base_ratio in [10.0, 20.0, 24.0] {
         let base = with_metric(base(), small, json!([10.0, 10.0, 10.0, 10.0, 10.0]));
         let base = with_metric(base, large, json!(vec![base_ratio * 10.0; 5]));
-        let out = judge(&over(17.0), Some(&base), Event::PullRequest);
+        let out = judge(&over(21.0), Some(&base), Event::PullRequest);
         assert_eq!(out.failures.len(), 1, "base at {base_ratio}x");
         assert!(has(&out.failures, "over"), "{:?}", out.failures);
         assert!(!out.comment.contains("over at base"), "{}", out.comment);
     }
     // No base at all, and a stored base over too.
-    let out = judge(&over(17.0), None, Event::Push);
+    let out = judge(&over(21.0), None, Event::Push);
     assert_eq!(out.failures.len(), 1, "{:?}", out.failures);
     let stored = with_metric(full_base(), small, json!([10.0, 10.0, 10.0, 10.0, 10.0]));
-    let stored = with_metric(stored, large, json!(vec![200.0; 5]));
-    let out = judge_stored(&over(17.0), &base(), Some(&stored), Event::PullRequest);
+    let stored = with_metric(stored, large, json!(vec![240.0; 5]));
+    let out = judge_stored(&over(21.0), &base(), Some(&stored), Event::PullRequest);
     assert_eq!(out.failures.len(), 1, "{:?}", out.failures);
     assert!(!out.comment.contains("over at base"), "{}", out.comment);
     // A missing head sample fails even with the stored base over: a
@@ -2586,7 +2596,7 @@ fn the_report_names_the_hard_ratio_exception() {
     // A failing ratio carries the same sentence, and its row fails.
     let (_, small, large) = RATIO_ROWS[0];
     let head = with_metric(head(), small, json!([10.0, 10.0, 10.0, 10.0, 10.0]));
-    let head = with_metric(head, large, json!([170.0, 170.0, 170.0, 170.0, 170.0]));
+    let head = with_metric(head, large, json!([210.0, 210.0, 210.0, 210.0, 210.0]));
     let out = judge(&head, Some(&base()), Event::PullRequest);
     assert_eq!(out.failures.len(), 1, "{:?}", out.failures);
     assert!(
@@ -2613,7 +2623,7 @@ fn both_paging_ratio_rows_are_measured_and_scale_one_stays() {
     // The unrelated tickets stay, and all six scale-1 paging metrics
     // still judge their rows.
     assert!(not_measured.contains("#581"), "{not_measured}");
-    assert!(not_measured.contains("#2188"), "{not_measured}");
+    assert!(not_measured.contains("#2210"), "{not_measured}");
     for budget in [
         "`paging` jig, its session at scale 1 and 160 by 48",
         "`paging` jig, open pass and first frame",
@@ -2637,7 +2647,7 @@ fn without_metric(results: &Value, id: &str) -> Value {
 
 #[test]
 fn the_median_pair_is_the_middle_pair_not_the_second_run() {
-    // Five distinct growths: the middle pair grows 17x and fails while
+    // Five distinct growths: the middle pair grows 21x and fails while
     // the second pair grows 2x and passes. Indexing the median with `% 2`
     // would read the passing pair and let the over-budget head through:
     // this pins the `/ 2` the median index divides by.
@@ -2646,11 +2656,11 @@ fn the_median_pair_is_the_middle_pair_not_the_second_run() {
         small,
         large,
         json!([1.0, 1.0, 1.0, 1.0, 1.0]),
-        json!([1.0, 2.0, 17.0, 18.0, 19.0]),
+        json!([1.0, 2.0, 21.0, 22.0, 23.0]),
     );
     assert_eq!(out.failures.len(), 1, "{:?}", out.failures);
     assert!(has(&out.failures, budget), "{:?}", out.failures);
     let line = row(&out.comment, budget);
-    assert!(line.contains("17.0x of 16x allowed"), "{line}");
+    assert!(line.contains("21.0x of 20x allowed"), "{line}");
     assert!(line.ends_with("| fail |"), "{line}");
 }
