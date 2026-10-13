@@ -75,8 +75,9 @@ fn trickled_header_bytes_fail_within_the_request_bound() {
         // The headers wait announces its own phase: the server is past
         // its clock check and waiting on the clock before the clock
         // moves (`docs/testing.md`, "Waits and timeouts").
+        let headers_deadline = Deadline::after(WAIT);
         let headers = loop {
-            let ack = Deadline::after(WAIT).recv_or_fail(&acks, "the headers wait");
+            let ack = headers_deadline.recv_or_fail(&acks, "the headers wait");
             if ack.phase == "to read the headers" {
                 break ack;
             }

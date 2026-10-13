@@ -841,18 +841,23 @@ fn blocked_write_expires_on_the_injected_clock() {
             }
         });
         let _client = TcpStream::connect(addr).expect("the test connects");
+        let acknowledgment_deadline = Deadline::after(OP);
         let ack = loop {
-            match Deadline::after(OP).recv(&acks) {
-                Ok(ack) if ack.phase == "to write the held response" => break ack,
+            match acknowledgment_deadline.recv(&acks) {
+                Ok(ack) if ack.phase == "to write the held response" => break Some(ack),
                 Ok(_) => continue,
+                Err(_) => break None,
+            }
+        };
+        let ack = match ack {
+            Some(ack) => ack,
+            None => {
                 // No clock wait: a spinner never parks. Release its
                 // writer and take its verdict instead of hanging on it.
-                Err(_) => {
-                    stop.store(true, Ordering::SeqCst);
-                    let verdict = Deadline::after(OP).recv_or_fail(&rx, "the spinning write");
-                    let message = failure_text(verdict, "the held write");
-                    panic!("the held write sent instead of failing: {message}");
-                }
+                stop.store(true, Ordering::SeqCst);
+                let verdict = Deadline::after(OP).recv_or_fail(&rx, "the spinning write");
+                let message = failure_text(verdict, "the held write");
+                panic!("the held write sent instead of failing: {message}");
             }
         };
         assert!(
@@ -1439,8 +1444,9 @@ fn a_would_block_flush_waits_out_its_bound() {
             }
         });
         let _client = TcpStream::connect(addr).expect("the test connects");
+        let acknowledgment_deadline = Deadline::after(OP);
         let ack = loop {
-            let ack = Deadline::after(OP).recv_or_fail(&acks, "the flush's clock wait");
+            let ack = acknowledgment_deadline.recv_or_fail(&acks, "the flush's clock wait");
             if ack.phase == "to flush the held response" {
                 break ack;
             }
