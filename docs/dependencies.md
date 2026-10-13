@@ -39,7 +39,8 @@ one when the only crates for it fail the rules above.
 The `tui` crate prefers an existing crate to writing its own. Its crates meet
 every rule above, and their memory is measured and recorded, but memory is not
 a reason to refuse one: the terminal is its own process
-(`docs/architecture.md`), so nothing it admits reaches a session's memory. No
+(`docs/architecture.md`), so nothing it admits reaches a session's memory.
+The terminal's own budgets in `docs/performance.md` still bind. No
 other Fiber crate depends on a crate admitted only for `tui`, and CI checks
 each crate's dependency tree for it.
 
@@ -58,7 +59,12 @@ whole process, which
 Fiber's own `unsafe` code are `docs/code-quality.md`.
 
 Binary size is recorded, not gated per crate. CI fails a stripped release
-binary of 24 MiB (25,165,824 bytes) or more (`scripts/release-size`); #2042 investigates what makes up the binary. Compile time is not a criterion: CI caches built
+binary of 24 MiB (25,165,824 bytes) or more (`scripts/release-size`). The cap
+is a point to weigh, not a refusal: a crate that would cross it is admitted
+when what it buys is worth its size, and the pull request that adds it raises
+the cap and says why. A crate's binary size is the evidence for that call.
+Runtime memory is the hard limit: a crate that would take a process over a
+budget in `docs/performance.md` is refused. Compile time is not a criterion: CI caches built
 dependencies. On macOS arm64, serde, ureq, ratatui, rusqlite and mlua build from clean in 8
 seconds, and adding ten candidates, syntect among them, takes it to 16.
 
