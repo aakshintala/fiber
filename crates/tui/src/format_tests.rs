@@ -401,6 +401,13 @@ fn cutting_keeps_graphemes_whole() {
     // A base letter with a combining accent is one grapheme.
     assert_eq!(cut("e\u{301}x", 1), "e\u{301}");
     assert_eq!(cut("e\u{301}x", 2), "e\u{301}x");
+    // A piece past a cut that does not fit stays out, even when it is
+    // zero columns wide.
+    assert_eq!(cut("ab\u{301}", 1), "a");
+    // Control characters keep their old one-char measure: a grapheme
+    // walk alone would drop them.
+    assert_eq!(cut("a\tb", 10), "a\tb");
+    assert_eq!(cut("a\nb", 10), "a\nb");
 }
 
 #[test]
@@ -409,6 +416,8 @@ fn wrapping_keeps_graphemes_whole() {
     assert_eq!(wrap("a👩\u{200d}💻b", 3), vec!["a👩\u{200d}💻", "b"]);
     assert_eq!(wrap("🇫🇷x", 1), vec!["🇫🇷", "x"]);
     assert_eq!(wrap("e\u{301}x", 1), vec!["e\u{301}", "x"]);
+    // A tab inside a word is kept, never dropped.
+    assert_eq!(wrap("a\tb", 10), vec!["a\tb"]);
 }
 
 #[test]

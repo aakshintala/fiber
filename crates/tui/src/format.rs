@@ -255,16 +255,56 @@ pub(crate) fn width(text: &str) -> usize {
     Span::raw(text).width()
 }
 
+/// Each drawn piece of `text`, from left to right: every grapheme
+/// whole, with the control characters `Span::styled_graphemes` skips kept
+/// one by one, so they measure exactly as when the text is walked one
+/// char at a time. Stops early when `emit` says so.
+fn each_piece(text: &str, mut emit: impl FnMut(&str) -> bool) {
+    let mut start: Option<usize> = None;
+    for (at, ch) in text.char_indices() {
+        if !ch.is_control() {
+            if start.is_none() {
+                start = Some(at);
+            }
+            continue;
+        }
+        if let Some(from) = start.take()
+            && !emit_graphemes(&text[from..at], &mut emit)
+        {
+            return;
+        }
+        if !emit(&text[at..at + ch.len_utf8()]) {
+            return;
+        }
+    }
+    if let Some(from) = start {
+        emit_graphemes(&text[from..], &mut emit);
+    }
+}
+
+/// Every grapheme of `run` to `emit`; false when `emit` stops the walk.
+/// `run` holds no control character, so no grapheme is skipped.
+fn emit_graphemes(run: &str, emit: &mut impl FnMut(&str) -> bool) -> bool {
+    for grapheme in Span::raw(run).styled_graphemes(Style::default()) {
+        if !emit(grapheme.symbol) {
+            return false;
+        }
+    }
+    true
+}
+
 /// `text` cut to at most `max` columns.
 pub(crate) fn cut(text: &str, max: usize) -> String {
     let mut out = String::new();
-    for ch in text.chars() {
-        let mut buf = [0u8; 4];
-        if width(&out) + width(ch.encode_utf8(&mut buf)) > max {
-            break;
+    // One drawn piece at a time, as `Rows::pad` plans them: a grapheme
+    // that does not fit is dropped whole, never split.
+    each_piece(text, |piece| {
+        if width(&out) + width(piece) > max {
+            return false;
         }
-        out.push(ch);
-    }
+        out.push_str(piece);
+        true
+    });
     out
 }
 
@@ -295,15 +335,15 @@ pub(crate) fn wrap_joined(text: &str, max: usize) -> Vec<(String, Join)> {
             } else if !row.is_empty() {
                 row.push(' ');
             }
-            for ch in word.chars() {
-                let mut buf = [0u8; 4];
-                let cell = width(ch.encode_utf8(&mut buf));
+            each_piece(word, |piece| {
+                let cell = width(piece);
                 if !row.is_empty() && width(&row) + cell > max {
                     rows.push((std::mem::take(&mut row), join));
                     join = Join::Wrap;
                 }
-                row.push(ch);
-            }
+                row.push_str(piece);
+                true
+            });
         }
         rows.push((row, join));
     }
