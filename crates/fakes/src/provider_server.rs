@@ -7,14 +7,18 @@
 use std::collections::VecDeque;
 use std::io;
 use std::net::SocketAddr;
-use std::sync::{Arc, Condvar, Mutex, MutexGuard, PoisonError, mpsc};
+#[cfg(test)]
+use std::sync::mpsc;
+use std::sync::{Arc, Condvar, Mutex, MutexGuard, PoisonError};
 use std::time::Duration;
 
 use contract::clock::Clock;
 
 use crate::clock::SystemClock;
+#[cfg(test)]
+use crate::http_server::WaitAck;
 use crate::http_server::{
-    Connection, HttpServer, Limits, StallEnd, WaitAck,
+    Connection, HttpServer, Limits, StallEnd,
     request::{ParsedRequest, RequestOutcome, read_request},
 };
 
@@ -193,6 +197,7 @@ struct State {
     /// The clock holds and core budgets run on.
     clock: Arc<dyn Clock>,
     /// Where held-response waits announce themselves while a test listens.
+    #[cfg(test)]
     acks: Option<mpsc::Sender<WaitAck>>,
 }
 
@@ -212,6 +217,7 @@ impl Default for State {
             partial: 0,
             closed: 0,
             clock: Arc::new(SystemClock),
+            #[cfg(test)]
             acks: None,
         }
     }
@@ -531,18 +537,16 @@ fn serve(conn: Connection, state: &Mutex<State>, arrived: &Condvar, clock: &Arc<
 /// releases it within its bound. The bound runs on the injected clock,
 /// announced once so the test advances past it only when waited for.
 fn hold_wait(state: &Mutex<State>, arrived: &Condvar, clock: &Arc<dyn Clock>) -> Option<Response> {
-    let (within, until) = {
+    let until = {
         let state = lock(state);
         if !(state.hold && state.requests.len() >= state.hold_from) {
             return None;
         }
-        (
-            state.hold_within,
-            clock.now().checked_add(state.hold_within),
-        )
+        clock.now().checked_add(state.hold_within)
     };
     // One announcement: the waiter is past its check and parked before
     // the test advances.
+    #[cfg(test)]
     if let Some(acks) = lock(state).acks.as_ref() {
         match acks.send(WaitAck {
             phase: "to wait out the held response",

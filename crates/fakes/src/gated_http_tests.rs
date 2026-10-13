@@ -464,9 +464,8 @@ fn shutdown_ends_an_accept_wait_at_once() {
             }
         });
         assert!(server.shutdown(), "shutdown ends the wait");
-        assert_eq!(
-            Deadline::after(CLIENT_WAIT).recv_or_fail(&done_rx, "the stopped accept"),
-            false,
+        assert!(
+            !Deadline::after(CLIENT_WAIT).recv_or_fail(&done_rx, "the stopped accept"),
             "shutdown ends the accept stopped"
         );
     });

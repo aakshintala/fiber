@@ -4,8 +4,6 @@ use std::sync::{Arc, Mutex, mpsc};
 use std::thread;
 use std::time::Duration;
 
-use contract::clock::Clock;
-
 use super::*;
 use crate::clock::FakeClock;
 use crate::deadline::Deadline;
@@ -569,7 +567,7 @@ fn dropping_releases_holds_and_reaps_stalls() {
     drop(server);
     // Either connection may take either scripted response: the script
     // pops in arrival order, which thread launch order does not fix.
-    let mut bodies = vec![
+    let mut bodies = [
         Deadline::after(READ_WITHIN)
             .recv(&rx)
             .unwrap_or_else(|_| panic!("the drop releases the first within {READ_WITHIN:?}"))
@@ -633,7 +631,9 @@ fn dropping_gives_up_on_a_responder_that_never_returns() {
             .write_all(b"GET /v1 HTTP/1.1\r\nHost: localhost\r\n\r\n")
             .unwrap();
         let mut body = Vec::new();
-        let _ = stream.read_to_end(&mut body);
+        match stream.read_to_end(&mut body) {
+            Ok(_) | Err(_) => {}
+        }
         match tx.send(body) {
             Ok(()) | Err(_) => {}
         }
@@ -654,7 +654,9 @@ fn dropping_gives_up_on_a_responder_that_never_returns() {
         "the dropped server's port refuses connections"
     );
     drop(release_tx);
-    let _ = Deadline::after(READ_WITHIN).recv(&rx);
+    match Deadline::after(READ_WITHIN).recv(&rx) {
+        Ok(_) | Err(_) => {}
+    }
 }
 
 /// Posts `body` and reads the whole response.

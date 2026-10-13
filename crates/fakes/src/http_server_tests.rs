@@ -436,7 +436,7 @@ fn exchange(addr: SocketAddr, request: &[u8]) -> Vec<u8> {
 /// both sides of that order.
 fn serve_once(
     recorded: mpsc::Sender<ParsedRequest>,
-    answer: impl FnOnce(&mut Connection) + Send + 'static,
+    answer: impl FnOnce(Connection) + Send + 'static,
 ) -> (HttpServer, SocketAddr) {
     let clock = FakeClock::new();
     let server = HttpServer::bind(clock as Arc<dyn Clock>, ten_seconds()).expect("the core binds");
@@ -448,12 +448,14 @@ fn serve_once(
             .expect("a client connects");
         let request = match request::read_request(&mut conn) {
             request::RequestOutcome::Complete(request) => request,
-            other => panic!("the request completes, not {other:?}"),
+            request::RequestOutcome::Eof => panic!("the peer closed before completing the request"),
+            request::RequestOutcome::Stopped => panic!("shutdown ended the request read"),
+            request::RequestOutcome::Invalid(why) => panic!("the request was invalid: {why}"),
         };
         match recorded.send(request) {
             Ok(()) | Err(_) => {}
         }
-        answer(&mut conn);
+        answer(conn);
     });
     (server, addr)
 }
@@ -462,7 +464,7 @@ fn serve_once(
 fn full_reply_preserves_scripted_headers_and_bytes() {
     let (recorded_tx, recorded_rx) = mpsc::channel();
     let head = b"HTTP/1.1 200 Fake\r\ncontent-type: text/event-stream\r\ncontent-length: 2\r\nconnection: close\r\n\r\n";
-    let (server, addr) = serve_once(recorded_tx, move |conn| {
+    let (server, addr) = serve_once(recorded_tx, move |mut conn| {
         assert_eq!(
             conn.reply_full(head, b"ok", None),
             ReplyEnd::Done,
@@ -482,7 +484,7 @@ fn full_reply_preserves_scripted_headers_and_bytes() {
 fn chunked_pieces_have_exact_framing() {
     let (recorded_tx, recorded_rx) = mpsc::channel();
     let head = b"HTTP/1.1 200 Fake\r\ntransfer-encoding: chunked\r\nconnection: close\r\n\r\n";
-    let (server, addr) = serve_once(recorded_tx, move |conn| {
+    let (server, addr) = serve_once(recorded_tx, move |mut conn| {
         assert_eq!(
             conn.reply_stream(
                 head,
@@ -507,7 +509,7 @@ fn sse_pieces_have_no_inserted_length() {
     let (recorded_tx, recorded_rx) = mpsc::channel();
     let head = b"HTTP/1.1 200 Fake\r\ncontent-type: text/event-stream\r\nconnection: close\r\n\r\n";
     let events = b"event: message\ndata: {\"jsonrpc\":\"2.0\",\"id\":\"el-1\"}\n\n";
-    let (server, addr) = serve_once(recorded_tx, move |conn| {
+    let (server, addr) = serve_once(recorded_tx, move |mut conn| {
         assert_eq!(
             conn.reply_stream(head, &[events.to_vec()], Framing::Raw, None),
             ReplyEnd::Done,
@@ -533,7 +535,7 @@ fn pause_before_reply_and_between_pieces_releases_on_sender_drop() {
     let (recorded_tx, recorded_rx) = mpsc::channel();
     let (pause, control) = Pause::new();
     let head = b"HTTP/1.1 200 Fake\r\ntransfer-encoding: chunked\r\nconnection: close\r\n\r\n";
-    let (server, addr) = serve_once(recorded_tx, move |conn| {
+    let (server, addr) = serve_once(recorded_tx, move |mut conn| {
         assert_eq!(
             conn.reply_stream(
                 head,
@@ -577,7 +579,7 @@ fn stall_records_prefix_then_peer_close() {
     let (recorded_tx, recorded_rx) = mpsc::channel();
     let (sent_tx, sent_rx) = mpsc::channel();
     let head = b"HTTP/1.1 200 Fake\r\ncontent-length: 100\r\nconnection: close\r\n\r\n";
-    let (server, addr) = serve_once(recorded_tx, move |conn| {
+    let (server, addr) = serve_once(recorded_tx, move |mut conn| {
         let end = conn.stall(head, b"partial", None);
         match sent_tx.send(end) {
             Ok(()) | Err(_) => {}
@@ -748,7 +750,11 @@ fn handoff_keeps_bytes_after_the_connect_head() {
             let outcome = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
                 let request = match request::read_request(&mut conn) {
                     request::RequestOutcome::Complete(request) => request,
-                    other => panic!("the CONNECT head completes, not {other:?}"),
+                    request::RequestOutcome::Eof => panic!("the peer closed the CONNECT head"),
+                    request::RequestOutcome::Stopped => panic!("shutdown ended the CONNECT read"),
+                    request::RequestOutcome::Invalid(why) => {
+                        panic!("the CONNECT head was invalid: {why}")
+                    }
                 };
                 assert_eq!(request.method, "CONNECT");
                 conn.into_handoff().expect("the handoff keeps the stream")
@@ -787,7 +793,9 @@ fn shutdown_releases_pauses_and_reaps_core_waits() {
         // release both without the test sending anything.
         let request = match request::read_request(&mut conn) {
             request::RequestOutcome::Complete(request) => request,
-            _ => return,
+            request::RequestOutcome::Eof => return,
+            request::RequestOutcome::Stopped => return,
+            request::RequestOutcome::Invalid(_) => return,
         };
         drop(request);
         if conn.pause(&pause, &conn.op_budget(), "to pause the test response") == PauseEnd::Stopped

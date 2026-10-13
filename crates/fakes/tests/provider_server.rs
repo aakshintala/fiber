@@ -91,15 +91,12 @@ fn exchange(server: &ProviderServer, request: &[u8]) -> Reply {
         }
     });
     let step_wait = Deadline::after(DEADLINE);
-    let outcome = (|| {
-        wait(&rx, "connecting to the fake provider", &step_wait);
-        wait(&rx, "writing the request to the fake provider", &step_wait);
-        wait(&rx, "reading the fake provider's whole reply", &step_wait)
-    })();
+    wait(&rx, "connecting to the fake provider", &step_wait);
+    wait(&rx, "writing the request to the fake provider", &step_wait);
+    let raw = wait(&rx, "reading the fake provider's whole reply", &step_wait);
     match client.join() {
         Ok(()) | Err(_) => {}
     }
-    let raw = outcome;
     let split = raw.windows(4).position(|w| w == b"\r\n\r\n").unwrap();
     let head = String::from_utf8(raw[..split].to_vec()).unwrap();
     let mut lines = head.split("\r\n");

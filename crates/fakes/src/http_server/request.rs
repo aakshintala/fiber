@@ -148,12 +148,10 @@ pub(crate) fn read_request(conn: &mut Connection) -> RequestOutcome {
     })
 }
 
-/// The method, target and headers, in received order with lowercase
-/// names. A version is not required past the two tokens.
-fn read_head(
-    conn: &mut Connection,
-    limits: &Limits,
-) -> Result<(String, String, Vec<(String, String)>), RequestOutcome> {
+/// One head: the method, the target and the headers, in received order
+/// with lowercase names. A version is not required past the two tokens.
+type Head = (String, String, Vec<(String, String)>);
+fn read_head(conn: &mut Connection, limits: &Limits) -> Result<Head, RequestOutcome> {
     let raw = match take_line(conn, "to read the request line", limits.line) {
         LineEnd::Line(raw) => raw,
         LineEnd::Eof => return Err(RequestOutcome::Eof),

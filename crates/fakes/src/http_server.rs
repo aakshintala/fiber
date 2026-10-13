@@ -13,7 +13,9 @@ use std::sync::{
     atomic::{AtomicBool, AtomicU8, Ordering},
     mpsc,
 };
-use std::thread::{self, JoinHandle, ThreadId};
+#[cfg(test)]
+use std::thread::ThreadId;
+use std::thread::{self, JoinHandle};
 use std::time::{Duration, Instant};
 
 use contract::clock::{Clock, Wake};
@@ -134,6 +136,7 @@ impl RequestBudget {
 /// the announced sequence. `until` is the parked bound
 /// [`FakeClock::await_thread_parked`](crate::clock::FakeClock::await_thread_parked)
 /// matches.
+#[cfg(test)]
 #[derive(Clone, Copy, Debug)]
 pub(crate) struct WaitAck {
     pub(crate) phase: &'static str,
@@ -146,12 +149,15 @@ pub(crate) struct WaitAck {
 /// its check, subscription and acknowledgment but before its park. The
 /// test owns it like a release channel: no deadline of its own applies
 /// while held.
+#[cfg(test)]
 pub(crate) struct CheckGate {
     armed: Mutex<bool>,
     changed: Condvar,
 }
 
+#[cfg(test)]
 impl CheckGate {
+    #[cfg(test)]
     fn new() -> Self {
         Self {
             armed: Mutex::new(false),
@@ -204,6 +210,7 @@ pub(crate) enum WaitEnd {
 }
 
 /// What one socket read found.
+#[cfg(test)]
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub(crate) enum ReadOutcome {
     Byte(u8),
@@ -265,7 +272,9 @@ struct Shared {
     wake: Mutex<u64>,
     wake_changed: Condvar,
     _waker: Arc<ClockWaker>,
+    #[cfg(test)]
     acks: Mutex<Option<mpsc::Sender<WaitAck>>>,
+    #[cfg(test)]
     gate: Mutex<Option<Arc<CheckGate>>>,
     idle: Mutex<usize>,
     idle_changed: Condvar,
@@ -314,6 +323,7 @@ impl Shared {
         }
         if *acked != Some(seen) {
             *seq += 1;
+            #[cfg(test)]
             if let Some(acks) = lock(&self.acks).as_ref() {
                 let ack = WaitAck {
                     phase,
@@ -327,6 +337,7 @@ impl Shared {
             }
             *acked = Some(seen);
         }
+        #[cfg(test)]
         if let Some(gate) = lock(&self.gate).as_ref().map(Arc::clone) {
             gate.hold();
         }
@@ -380,6 +391,7 @@ impl Connection {
 
     /// One byte, buffered first: `Eof` when the peer closed, `Stopped`
     /// when shutdown ended the wait.
+    #[cfg(test)]
     pub(crate) fn read_byte(&mut self, phase: &'static str) -> ReadOutcome {
         if let Some(byte) = self.ahead.pop_front() {
             return ReadOutcome::Byte(byte);
@@ -527,6 +539,7 @@ impl Connection {
     /// Streams `pieces` under `head`: chunked framing for a recorded
     /// stream, raw bytes for SSE. Pauses before the reply and between
     /// pieces when held.
+    #[cfg(test)]
     pub(crate) fn reply_stream(
         &mut self,
         head: &[u8],
@@ -626,6 +639,7 @@ impl Connection {
     /// Sends the head with its declared length and the prefix it
     /// carries, then holds until the peer closes: `Closed` on its close,
     /// `Stopped` on shutdown, expiry naming the stall past its bound.
+    #[cfg(test)]
     pub(crate) fn stall(&mut self, head: &[u8], prefix: &[u8], pause: Option<&Pause>) -> StallEnd {
         if !self.stall_send(head, prefix, pause) {
             return StallEnd::Stopped;
@@ -719,10 +733,12 @@ impl Connection {
         let pump_end = thread::Builder::new()
             .name("fakes-http-tunnel".to_owned())
             .spawn(move || {
-                let _ = io::copy(&mut origin_pump, &mut client_pump);
-                first_pump
-                    .compare_exchange(0, 2, Ordering::SeqCst, Ordering::SeqCst)
-                    .ok();
+                match io::copy(&mut origin_pump, &mut client_pump) {
+                    Ok(_) | Err(_) => {}
+                }
+                match first_pump.compare_exchange(0, 2, Ordering::SeqCst, Ordering::SeqCst) {
+                    Ok(_) | Err(_) => {}
+                }
                 match client_pump.shutdown(std::net::Shutdown::Both) {
                     Ok(()) | Err(_) => {}
                 }
@@ -730,10 +746,12 @@ impl Connection {
                     Ok(()) | Err(_) => {}
                 }
             });
-        let _ = io::copy(&mut stream, &mut origin);
-        first
-            .compare_exchange(0, 1, Ordering::SeqCst, Ordering::SeqCst)
-            .ok();
+        match io::copy(&mut stream, &mut origin) {
+            Ok(_) | Err(_) => {}
+        }
+        match first.compare_exchange(0, 1, Ordering::SeqCst, Ordering::SeqCst) {
+            Ok(_) | Err(_) => {}
+        }
         match stream.shutdown(std::net::Shutdown::Both) {
             Ok(()) | Err(_) => {}
         }
@@ -759,6 +777,7 @@ impl Connection {
 
     /// Hands the connection to a tunnel: the stream, blocking again,
     /// with the bytes read past the head.
+    #[cfg(test)]
     pub(crate) fn into_handoff(self) -> io::Result<(TcpStream, Vec<u8>)> {
         self.stream.set_nonblocking(false)?;
         let Self { stream, ahead, .. } = self;
@@ -807,6 +826,7 @@ pub(crate) enum PauseEnd {
 
 /// How one stream frames its pieces.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
+#[cfg(test)]
 pub(crate) enum Framing {
     /// Each piece carries its hex length: a recorded stream.
     Chunked,
@@ -837,6 +857,7 @@ pub(crate) struct Pause {
 
 /// The test's end of a pause: wait for arrivals, release the holder.
 /// Dropping this releases the holder too.
+#[cfg(test)]
 pub(crate) struct PauseControl {
     reached: mpsc::Receiver<()>,
     release: mpsc::Sender<()>,
@@ -844,6 +865,7 @@ pub(crate) struct PauseControl {
 
 impl Pause {
     /// A pause and its control.
+    #[cfg(test)]
     pub(crate) fn new() -> (Pause, PauseControl) {
         let (reached_tx, reached_rx) = mpsc::channel();
         let (release_tx, release_rx) = mpsc::channel();
@@ -860,13 +882,16 @@ impl Pause {
     }
 }
 
+#[cfg(test)]
 impl PauseControl {
     /// Waits for the next arrival, failing the test on expiry.
+    #[cfg(test)]
     pub(crate) fn wait_hit(&self, deadline: &Deadline, what: &str) {
         deadline.recv_or_fail(&self.reached, what);
     }
 
     /// Releases the holder.
+    #[cfg(test)]
     pub(crate) fn release(&self) {
         match self.release.send(()) {
             Ok(()) | Err(_) => {}
@@ -876,7 +901,7 @@ impl PauseControl {
 
 /// One write's wait context: its operation budget and acknowledgment
 /// state.
-struct WaitCtx<'a> {
+pub(crate) struct WaitCtx<'a> {
     budget: &'a RequestBudget,
     name: &'a str,
     shared: &'a Arc<Shared>,
@@ -962,7 +987,9 @@ impl HttpServer {
             _waker: Arc::new(ClockWaker {
                 shared: shared.clone(),
             }),
+            #[cfg(test)]
             acks: Mutex::new(None),
+            #[cfg(test)]
             gate: Mutex::new(None),
             idle: Mutex::new(0),
             idle_changed: Condvar::new(),
@@ -1005,32 +1032,28 @@ impl HttpServer {
         );
         let mut seq = 0;
         let mut acked = None;
-        loop {
-            match self.accept_once(mode, &budget, &mut seq, &mut acked) {
-                AcceptOutcome::Accepted(stream) => {
-                    return Some(Connection {
-                        stream,
-                        budget,
-                        name: mode.name().to_owned(),
-                        shared: Arc::clone(&self.shared),
-                        ahead: VecDeque::new(),
-                        seq,
-                        acked: None,
-                    });
+        match self.accept_once(mode, &budget, &mut seq, &mut acked) {
+            AcceptOutcome::Accepted(stream) => Some(Connection {
+                stream,
+                budget,
+                name: mode.name().to_owned(),
+                shared: Arc::clone(&self.shared),
+                ahead: VecDeque::new(),
+                seq,
+                acked: None,
+            }),
+            // The wait's verdict, not a second check: an advance
+            // between the two would fail an idle window that expired.
+            AcceptOutcome::Idle => match mode {
+                AcceptMode::Expected { name } => {
+                    panic!(
+                        "fakes: the HTTP core waited {:?} to accept {name}",
+                        self.shared.limits.request
+                    );
                 }
-                // The wait's verdict, not a second check: an advance
-                // between the two would fail an idle window that expired.
-                AcceptOutcome::Idle => match mode {
-                    AcceptMode::Expected { name } => {
-                        panic!(
-                            "fakes: the HTTP core waited {:?} to accept {name}",
-                            self.shared.limits.request
-                        );
-                    }
-                    AcceptMode::Persistent => return None,
-                },
-                AcceptOutcome::Stopped => return None,
-            }
+                AcceptMode::Persistent => None,
+            },
+            AcceptOutcome::Stopped => None,
         }
     }
 

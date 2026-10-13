@@ -113,7 +113,9 @@ fn malformed_chunks_keep_the_decoded_prefix() {
         b"POST /v1 HTTP/1.1\r\nTransfer-Encoding: chunked\r\n\r\n3\r\nabc\r\nzz\r\n",
     ) {
         RequestOutcome::Complete(request) => request,
-        other => panic!("a bad hex size is malformed, not {other:?}"),
+        RequestOutcome::Eof => panic!("a bad hex size is malformed ended at EOF"),
+        RequestOutcome::Stopped => panic!("a bad hex size is malformed stopped"),
+        RequestOutcome::Invalid(why) => panic!("a bad hex size is malformed invalid: {why}"),
     };
     assert_eq!(request.body, b"abc");
     assert_eq!(request.malformed, Some("a chunk size is not a hex number"));
@@ -124,7 +126,9 @@ fn malformed_chunks_keep_the_decoded_prefix() {
         b"POST /v1 HTTP/1.1\r\nTransfer-Encoding: chunked\r\n\r\n3\r\nabcX\r\n0\r\n\r\n",
     ) {
         RequestOutcome::Complete(request) => request,
-        other => panic!("a missing CRLF is malformed, not {other:?}"),
+        RequestOutcome::Eof => panic!("a missing CRLF is malformed ended at EOF"),
+        RequestOutcome::Stopped => panic!("a missing CRLF is malformed stopped"),
+        RequestOutcome::Invalid(why) => panic!("a missing CRLF is malformed invalid: {why}"),
     };
     assert_eq!(request.body, b"abc");
     assert_eq!(
@@ -138,7 +142,9 @@ fn malformed_chunks_keep_the_decoded_prefix() {
         b"POST /v1 HTTP/1.1\r\nTransfer-Encoding: chunked\r\n\r\n5\r\nab",
     ) {
         RequestOutcome::Complete(request) => request,
-        other => panic!("a truncated body is malformed, not {other:?}"),
+        RequestOutcome::Eof => panic!("a truncated body is malformed ended at EOF"),
+        RequestOutcome::Stopped => panic!("a truncated body is malformed stopped"),
+        RequestOutcome::Invalid(why) => panic!("a truncated body is malformed invalid: {why}"),
     };
     assert_eq!(request.body, b"ab");
     assert_eq!(
@@ -152,7 +158,9 @@ fn malformed_chunks_keep_the_decoded_prefix() {
         b"POST /v1 HTTP/1.1\r\nTransfer-Encoding: chunked\r\n\r\n3\nabc\r\n0\r\n\r\n",
     ) {
         RequestOutcome::Complete(request) => request,
-        other => panic!("a bare LF is malformed, not {other:?}"),
+        RequestOutcome::Eof => panic!("a bare LF is malformed ended at EOF"),
+        RequestOutcome::Stopped => panic!("a bare LF is malformed stopped"),
+        RequestOutcome::Invalid(why) => panic!("a bare LF is malformed invalid: {why}"),
     };
     assert_eq!(request.body, b"");
     assert_eq!(
@@ -241,7 +249,9 @@ fn each_request_cap_admits_the_boundary_and_rejects_one_more() {
     );
     let crossed = match read_once(limits, &size(29)) {
         RequestOutcome::Complete(request) => request,
-        other => panic!("a 33-byte size line is malformed, not {other:?}"),
+        RequestOutcome::Eof => panic!("a 33-byte size line is malformed ended at EOF"),
+        RequestOutcome::Stopped => panic!("a 33-byte size line is malformed stopped"),
+        RequestOutcome::Invalid(why) => panic!("a 33-byte size line is malformed invalid: {why}"),
     };
     assert_eq!(crossed.malformed, Some("a chunk line exceeds its cap"));
 
@@ -324,7 +334,9 @@ fn aggregate_headers_chunks_and_trailers_share_their_caps() {
     );
     let crossed = match read_once(limits, &chunks(5)) {
         RequestOutcome::Complete(request) => request,
-        other => panic!("a crossed body cap is malformed, not {other:?}"),
+        RequestOutcome::Eof => panic!("a crossed body cap is malformed ended at EOF"),
+        RequestOutcome::Stopped => panic!("a crossed body cap is malformed stopped"),
+        RequestOutcome::Invalid(why) => panic!("a crossed body cap is malformed invalid: {why}"),
     };
     assert_eq!(crossed.body, b"1234123412341234");
     assert_eq!(crossed.malformed, Some("the body exceeds its cap"));
@@ -348,7 +360,11 @@ fn aggregate_headers_chunks_and_trailers_share_their_caps() {
     );
     let crossed = match read_once(limits, &trailers(6)) {
         RequestOutcome::Complete(request) => request,
-        other => panic!("crossed trailer bytes are malformed, not {other:?}"),
+        RequestOutcome::Eof => panic!("crossed trailer bytes are malformed ended at EOF"),
+        RequestOutcome::Stopped => panic!("crossed trailer bytes are malformed stopped"),
+        RequestOutcome::Invalid(why) => {
+            panic!("crossed trailer bytes are malformed invalid: {why}")
+        }
     };
     assert_eq!(crossed.malformed, Some("the trailers exceed their cap"));
 }
@@ -385,7 +401,11 @@ fn huge_declared_lengths_fail_before_allocation() {
         b"POST /v1 HTTP/1.1\r\nTransfer-Encoding: chunked\r\n\r\nFFFFFFFFFFFFFFFFFFF\r\n",
     ) {
         RequestOutcome::Complete(request) => request,
-        other => panic!("an overflowing hex size is malformed, not {other:?}"),
+        RequestOutcome::Eof => panic!("an overflowing hex size is malformed ended at EOF"),
+        RequestOutcome::Stopped => panic!("an overflowing hex size is malformed stopped"),
+        RequestOutcome::Invalid(why) => {
+            panic!("an overflowing hex size is malformed invalid: {why}")
+        }
     };
     assert_eq!(crossed.malformed, Some("a chunk size is not a hex number"));
     // A valid but enormous hex chunk: refused before a byte is read.
@@ -394,7 +414,9 @@ fn huge_declared_lengths_fail_before_allocation() {
         b"POST /v1 HTTP/1.1\r\nTransfer-Encoding: chunked\r\n\r\nFFFFFFFFFFFFFFFF\r\n",
     ) {
         RequestOutcome::Complete(request) => request,
-        other => panic!("an enormous chunk is malformed, not {other:?}"),
+        RequestOutcome::Eof => panic!("an enormous chunk is malformed ended at EOF"),
+        RequestOutcome::Stopped => panic!("an enormous chunk is malformed stopped"),
+        RequestOutcome::Invalid(why) => panic!("an enormous chunk is malformed invalid: {why}"),
     };
     assert!(crossed.body.is_empty(), "no byte is read past the cap");
     assert_eq!(crossed.malformed, Some("the body exceeds its cap"));
@@ -443,7 +465,9 @@ fn check_phase(prefix: &[u8], phase: &'static str, progress: &[u8]) {
                 Some("the chunked body ends before its framing does"),
                 "a close truncates the {phase}"
             ),
-            other => panic!("a close truncates the {phase}, not {other:?}"),
+            RequestOutcome::Eof => panic!("a close truncates the {phase} ended at EOF"),
+            RequestOutcome::Stopped => panic!("a close truncates the {phase} stopped"),
+            RequestOutcome::Invalid(why) => panic!("a close truncates the {phase} invalid: {why}"),
         }
     }
 
