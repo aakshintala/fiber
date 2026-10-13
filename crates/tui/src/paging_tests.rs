@@ -2863,10 +2863,22 @@ fn a_recount_at_a_new_width_costs_pages_not_the_session() {
         );
     }
     // The small fixture's own counts pin the seams: resident pages count
-    // once at the new width and dropped ones once on reload, one prefix
-    // rebuild covers the recount's queries, and no search ran at all.
+    // once at the new width and dropped ones once on reload, and neither
+    // phase walks the index at all: row queries wait for the next total
+    // or window instead of rebuilding prefixes between every page, and
+    // no search ran at all.
     assert_eq!(small_recount.page_counts, 5, "resident pages recount");
     assert_eq!(small_reload.page_counts, 3, "dropped pages reload");
+    assert_eq!(
+        small_recount.index_pages, 0,
+        "no index walk while recounting"
+    );
+    assert_eq!(small_reload.index_pages, 0, "no index walk while reloading");
+    assert_eq!(
+        large_recount.index_pages, 0,
+        "no index walk while recounting"
+    );
+    assert_eq!(large_reload.index_pages, 0, "no index walk while reloading");
     assert_eq!(small_recount.search_pages, 0);
     assert_eq!(small_reload.search_pages, 0);
     assert_eq!(small_recount.shell_visits, 0);

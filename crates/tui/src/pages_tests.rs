@@ -702,8 +702,8 @@ fn a_window_rebuilds_prefixes_once_then_queries_are_free() {
     }
     crate::work::take();
     assert_eq!(index.window(0, 5), 0..1);
-    // One rebuild visits every page once; the window's own total and
-    // edges then read the cache.
+    // One rebuild visits every page once; the window's binary searches
+    // then read the cache.
     assert_eq!(crate::work::take().index_pages, pages);
     // Every later query is free while no row changes: every page holds
     // ten rows, so the fourth starts at row 30.
@@ -711,6 +711,11 @@ fn a_window_rebuilds_prefixes_once_then_queries_are_free() {
     assert_eq!(index.start(3), 30);
     assert_eq!(index.total(), pages * 10);
     assert_eq!(index.locate(35), Some((3, 5)));
+    // Repeated window queries read the same cache: binary searches over
+    // cached prefixes visit no page, whatever the range.
+    assert_eq!(index.window(0, 5), 0..1);
+    assert_eq!(index.window(30, 5), 2..4);
+    assert_eq!(index.window(pages * 10, 0), pages..pages);
     assert_eq!(crate::work::take().index_pages, 0);
 }
 
@@ -771,6 +776,23 @@ fn an_appended_page_rebuilds_prefixes_once() {
 }
 
 #[test]
+fn window_boundaries_are_exact() {
+    // Prefixes [0, 10, 10, 20, 30]: page 1 draws no row, ending where it
+    // starts.
+    let index = with_rows(&[10, 0, 10, 10]);
+    // A zero-height window on the shared edge finds the page past it:
+    // page 1 ends at 10, never past it, and page 2 starts there. The
+    // empty range keeps the lower bound, never inverts it.
+    assert_eq!(index.window(10, 0), 2..2);
+    // A page ending exactly at the window's lower edge stays out, while
+    // one starting exactly at its upper edge does too.
+    assert_eq!(index.window(20, 10), 2..4);
+    assert_eq!(index.window(0, 10), 0..3);
+    // The whole conversation, zero-row page included.
+    assert_eq!(index.window(10, 10), 0..4);
+}
+
+#[test]
 fn prefixes_saturate_rather_than_subtract() {
     // A saturated total stays saturated: no page after the overflow
     // undercounts by subtraction.
@@ -779,11 +801,18 @@ fn prefixes_saturate_rather_than_subtract() {
     assert_eq!(index.start(1), usize::MAX);
     assert_eq!(index.locate(usize::MAX - 1), Some((0, usize::MAX - 1)));
     assert_eq!(index.locate(usize::MAX), None);
+    // Saturation clamps the window's upper edge to the total, and a top
+    // past every row finds no page past the last one.
+    assert_eq!(index.window(0, 5), 0..1);
+    assert_eq!(index.window(usize::MAX, 0), 2..2);
     // Duplicate prefixes from pages drawing no row locate past them.
     let index = with_rows(&[3, 0, 0, 5]);
     assert_eq!(index.total(), 8);
     assert_eq!(index.start(3), 3);
     assert_eq!(index.locate(3), Some((3, 0)));
+    // A zero-height window on the duplicated edge is empty, never
+    // inverted.
+    assert_eq!(index.window(3, 0), 3..3);
     // Out of range in both directions.
     assert_eq!(index.locate(8), None);
     assert_eq!(index.start(99), 8);
