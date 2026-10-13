@@ -112,11 +112,49 @@ fn rail_cards_match_the_doc() {
         "all three turns run"
     );
     let grid = run.wait_screen("the rail with three sessions", |grid| {
-        grid.rows.iter().any(|row| row.contains("⎇ main"))
-            && grid
-                .rows
-                .iter()
-                .any(|row| row.contains('░') && row.contains('%'))
+        // Both project headers with the styled cells the assertions
+        // read: the name bold in accent, the "+" chip, and the dim
+        // spend. Provider requests do not prove the terminal received
+        // both projects' status updates, so a frame with one header
+        // must not satisfy the wait.
+        let header = |name: &str| {
+            grid.rows.iter().enumerate().any(|(y, row)| {
+                let y = y as u16;
+                row.starts_with(name)
+                    && grid.cell(2, y).symbol.as_str() == &name[2..3]
+                    && grid.cell(2, y).fg == ACCENT
+                    && grid.cell(2, y).bold
+                    && grid.cell(4, y).symbol.as_str() == "+"
+                    && row.find("$0.00").is_some_and(|byte| {
+                        let at = row[..byte].chars().count() as u16;
+                        (at..at + 5).all(|x| grid.cell(x, y).dim)
+                    })
+            })
+        };
+        // The branch row with the dim prefix and plain branch the
+        // assertions read.
+        let branch = grid.rows.iter().enumerate().any(|(y, row)| {
+            let y = y as u16;
+            row.find('⎇').is_some_and(|byte| {
+                let at = row[..byte].chars().count() as u16;
+                grid.cell(at, y).dim
+                    && grid.cell(at + 1, y).dim
+                    && ["m", "a", "i", "n"]
+                        .iter()
+                        .enumerate()
+                        .all(|(n, expected)| {
+                            let cell = grid.cell(at + 2 + n as u16, y);
+                            cell.symbol.as_str() == *expected && !cell.dim
+                        })
+            })
+        });
+        // The context bar's track in rule with its percentage.
+        let bar = grid.rows.iter().any(|row| row.contains('%'))
+            && (0..48).any(|y| {
+                (0..160)
+                    .any(|x| grid.cell(x, y).symbol.as_str() == "░" && grid.cell(x, y).fg == RULE)
+            });
+        header("  w +") && header("  v +") && branch && bar
     });
 
     // Both project headers draw: the name, then " +", with the spend

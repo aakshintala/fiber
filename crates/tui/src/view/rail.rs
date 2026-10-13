@@ -143,23 +143,20 @@ pub(crate) fn rows(app: &App, width: u16) -> Vec<RailRow> {
         let spend = format::money(group.spend);
         let room = text.saturating_sub(format::width(&spend) + 1);
         let name = format::cut(&group.name, room.saturating_sub(2));
-        let mut header = vec![Span::raw("  ")];
-        header.extend(sides(
-            vec![
-                Span::styled(
-                    name.clone(),
-                    style(Role::Accent).add_modifier(Modifier::BOLD),
-                ),
-                Span::raw(" +"),
-            ],
-            vec![Span::styled(spend, style(Role::Muted))],
-            text,
-        ));
         // The chip follows the two margin columns, the name and a
         // space.
         let plus = 2u16
             .saturating_add(u16::try_from(format::width(&name)).unwrap_or(u16::MAX))
             .saturating_add(1);
+        let mut header = vec![Span::raw("  ")];
+        header.extend(sides(
+            vec![
+                Span::styled(name, style(Role::Accent).add_modifier(Modifier::BOLD)),
+                Span::raw(" +"),
+            ],
+            vec![Span::styled(spend, style(Role::Muted))],
+            text,
+        ));
         let spots = group
             .cards
             .first()

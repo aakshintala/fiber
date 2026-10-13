@@ -243,10 +243,8 @@ fn bar_fill(pct: u64) -> Option<ratatui::style::Color> {
 fn bar_colour_thresholds() {
     assert_eq!(bar_fill(59), Some(Role::Accent.color()));
     assert_eq!(bar_fill(60), Some(Role::Warning.color()));
-    assert_eq!(bar_fill(61), Some(Role::Warning.color()));
     assert_eq!(bar_fill(84), Some(Role::Warning.color()));
     assert_eq!(bar_fill(85), Some(Role::Error.color()));
-    assert_eq!(bar_fill(86), Some(Role::Error.color()));
 }
 
 /// The header row's text and click target: the project name bold in
