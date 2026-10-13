@@ -40,6 +40,7 @@ fn opened(argv: &[String], dir: &std::path::Path, view: View) -> Result<(), Stri
             | Input::ConnectFailed(_)
             | Input::Disconnected
             | Input::Resize
+            | Input::Signal(_)
             | Input::Files { .. }
             | Input::FindDue(_)
             | Input::Image { .. }

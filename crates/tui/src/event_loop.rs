@@ -8,6 +8,7 @@ pub(crate) mod batch;
 use batch::{batch, batchable};
 
 use std::collections::VecDeque;
+use std::ffi::c_int;
 use std::fs::File;
 use std::io::{self, Write};
 use std::ops::RangeInclusive;
@@ -20,7 +21,7 @@ use std::sync::mpsc::{self, Receiver, Sender};
 use contract::clock::Clock;
 use contract::{Envelope, Seq, SessionId};
 use ratatui::backend::Backend;
-use signal_hook::consts::{SIGINT, SIGQUIT, SIGWINCH};
+use signal_hook::consts::{SIGHUP, SIGINT, SIGQUIT, SIGTERM, SIGWINCH};
 use signal_hook::iterator::Signals;
 
 use crate::app::{App, Effect, mint, session_command};
@@ -50,6 +51,14 @@ pub fn run(
     // SIGWINCH is caught from before the size is read, so no resize is
     // missed; its thread starts after the first frame.
     let signals = Signals::new([SIGWINCH]).ok();
+    // SIGTERM and SIGHUP take the normal exit path below: the loop quits
+    // with 128 plus the signal's number after restoring the terminal and
+    // printing the resume lines. Without the registration a signal would
+    // kill the process without restoring, so a refused one fails before
+    // any frame.
+    let Ok(term_signals) = Signals::new([SIGTERM, SIGHUP]) else {
+        return 1;
+    };
     catch_interrupts();
     let restore = term::Guard;
     // Home is always set, so the first frame draws at once: it runs no
@@ -164,6 +173,7 @@ pub fn run(
     // asks arm it, and the loop re-arms it after every frame.
     terminal.tick.start(Arc::clone(&terminal.clock), tx.clone());
     terminal.tick.arm(terminal.app.take_wake());
+    spawn_signal(term_signals, tx.clone());
     if let Some(signals) = signals {
         spawn_resize(signals, tx);
     }
@@ -183,6 +193,27 @@ pub fn run(
         }
     }
     code
+}
+
+/// The exit code a signal ends the terminal with: 128 plus its number,
+/// so 143 for SIGTERM and 129 for SIGHUP (`docs/invocation.md`, "Exit
+/// codes").
+fn signal_code(signal: c_int) -> i32 {
+    128 + signal
+}
+
+/// Turns SIGTERM and SIGHUP into [`Input::Signal`] on their own thread,
+/// in arrival order, so the first signal's code wins. Left blocked on
+/// quit; it ends with the process.
+fn spawn_signal(mut signals: Signals, tx: Sender<Input>) {
+    let signal = crate::sources::builder("tui-signal").spawn(move || {
+        for signal in signals.forever() {
+            if tx.send(Input::Signal(signal)).is_err() {
+                return;
+            }
+        }
+    });
+    drop(signal);
 }
 
 /// Catches SIGINT and SIGQUIT for the rest of the process's life, so `Ctrl+C`
@@ -500,6 +531,9 @@ impl<B: Backend> Loop<B> {
         );
         let before = self.app.session().cloned();
         match input {
+            // A signal quits with 128 plus its number, closing nothing
+            // first: live sessions keep their resume lines.
+            Input::Signal(signal) => return Some(signal_code(signal)),
             Input::Bytes(bytes) => {
                 let events = self.parser.feed(&bytes);
                 return self.handle_events(events);
@@ -750,7 +784,9 @@ impl<B: Backend> Loop<B> {
     }
 
     /// Waits for the answer to command `id`, holding every other input for
-    /// after the frame. A lost connection ends the wait.
+    /// after the frame. A lost connection ends the wait; a signal is held
+    /// for after the frame and ends the wait as lost, so the loop quits
+    /// with the signal's number next.
     fn answer(&mut self, rx: &Receiver<Input>, id: &str) -> Result<Vec<Envelope>, String> {
         loop {
             let Ok(input) = rx.recv() else {
@@ -767,6 +803,14 @@ impl<B: Backend> Loop<B> {
                 Input::Tick => self.tick.ack(),
                 Input::Disconnected => {
                     self.on_disconnected();
+                    return Err(LOST.to_owned());
+                }
+                // A signal while a frame waits for history is held ahead
+                // of every later input, and the wait ends as lost: the
+                // loop quits with the signal's number before handling
+                // anything behind it.
+                Input::Signal(signal) => {
+                    self.stash.push_back(Input::Signal(signal));
                     return Err(LOST.to_owned());
                 }
                 other @ (Input::Bytes(_)

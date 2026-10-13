@@ -2093,6 +2093,7 @@ fn the_pause_thread_sends_find_due_on_the_fake_clock() {
             | Input::ConnectFailed(_)
             | Input::Disconnected
             | Input::Resize
+            | Input::Signal(_)
             | Input::Files { .. }
             | Input::Models(_)
             | Input::Login { .. }
@@ -2554,4 +2555,94 @@ fn with_a_model_home_opens_as_before() {
     let frames = watch(&pair.main, vec![b"shortcuts" as &[u8]]);
     watched(&frames, "home at start", &Deadline::after(DEADLINE));
     quit(&mut pair, &finished, &Deadline::after(DEADLINE));
+}
+
+/// A signal quits the loop with 128 plus its number, closing nothing
+/// first: 143 for SIGTERM and 129 for SIGHUP (`docs/invocation.md`,
+/// "Exit codes").
+#[test]
+fn a_signal_quits_with_128_plus_its_number() {
+    use signal_hook::consts::{SIGHUP, SIGTERM};
+    let (mut lp, _) = new_loop(TestBackend::new(60, 12), None);
+    assert_eq!(feed(&mut lp, vec![Input::Signal(SIGTERM)]), 143);
+    let (mut lp, _) = new_loop(TestBackend::new(60, 12), None);
+    assert_eq!(feed(&mut lp, vec![Input::Signal(SIGHUP)]), 129);
+}
+
+/// Two signals queued at once: the first one's code wins, whichever order
+/// they arrived in.
+#[test]
+fn the_first_signal_wins() {
+    use signal_hook::consts::{SIGHUP, SIGTERM};
+    let (mut lp, _) = new_loop(TestBackend::new(60, 12), None);
+    assert_eq!(
+        feed(&mut lp, vec![Input::Signal(SIGTERM), Input::Signal(SIGHUP)]),
+        143
+    );
+    let (mut lp, _) = new_loop(TestBackend::new(60, 12), None);
+    assert_eq!(
+        feed(&mut lp, vec![Input::Signal(SIGHUP), Input::Signal(SIGTERM)]),
+        129
+    );
+}
+
+/// A signal while a frame waits for history is held for after the frame:
+/// the wait ends as lost at once instead of waiting past it, and the
+/// held signal quits the loop next.
+#[test]
+fn a_signal_ends_a_history_wait_at_once() {
+    use signal_hook::consts::SIGTERM;
+    let (lp, _) = new_loop(TestBackend::new(60, 12), None);
+    let (tx, rx) = mpsc::channel();
+    tx.send(Input::Signal(SIGTERM))
+        .unwrap_or_else(|err| panic!("send: {err}"));
+    // `answer` blocks in `recv`: it runs on a thread of its own and its
+    // result arrives through one deadline, so a wait that never ends
+    // fails here instead of hanging the suite.
+    let (done, finished) = mpsc::channel();
+    std::thread::Builder::new()
+        .name("lib-signal-wait".to_owned())
+        .spawn(move || {
+            let mut lp = lp;
+            let result = lp.answer(&rx, "a_1");
+            done.send((result, lp.stash.len())).unwrap_or(());
+        })
+        .unwrap_or_else(|err| panic!("spawn: {err}"));
+    let (result, held) = Deadline::after(DEADLINE)
+        .recv(&finished)
+        .unwrap_or_else(|err| panic!("waited {DEADLINE:?} for the history wait to end: {err}"));
+    assert_eq!(result, Err(super::LOST.to_owned()));
+    assert_eq!(held, 1, "the signal is held for after the frame");
+}
+
+/// The signal thread maps each taken signal to [`Input::Signal`] with its
+/// number. SIGUSR1 stands in for the watched pair: nothing else in this
+/// test binary registers it, so the raise reaches only this thread.
+#[test]
+fn the_signal_thread_sends_each_taken_signal() {
+    use signal_hook::consts::SIGUSR1;
+    let (tx, rx) = mpsc::channel();
+    let signals = signal_hook::iterator::Signals::new([SIGUSR1])
+        .unwrap_or_else(|err| panic!("register: {err}"));
+    super::spawn_signal(signals, tx);
+    signal_hook::low_level::raise(SIGUSR1).unwrap_or_else(|err| panic!("raise: {err}"));
+    match Deadline::after(DEADLINE)
+        .recv(&rx)
+        .unwrap_or_else(|err| panic!("waited {DEADLINE:?} for the signal: {err}"))
+    {
+        Input::Signal(got) => assert_eq!(got, SIGUSR1),
+        Input::Bytes(_)
+        | Input::Hub(_)
+        | Input::Connected(..)
+        | Input::ConnectFailed(_)
+        | Input::Disconnected
+        | Input::Resize
+        | Input::Files { .. }
+        | Input::FindDue(_)
+        | Input::Image { .. }
+        | Input::Viewed { .. }
+        | Input::Models(_)
+        | Input::Login { .. }
+        | Input::Tick => panic!("the signal thread sent something else"),
+    }
 }

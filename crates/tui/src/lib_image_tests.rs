@@ -183,6 +183,7 @@ fn completion(rx: &Receiver<Input>, wait: &Deadline) -> Input {
             | Input::ConnectFailed(_)
             | Input::Disconnected
             | Input::Resize
+            | Input::Signal(_)
             | Input::Files { .. }
             | Input::FindDue(_)
             | Input::Image { .. }
@@ -214,6 +215,7 @@ fn a_click_on_an_image_line_reads_the_file_and_opens_it() {
         | Input::ConnectFailed(_)
         | Input::Disconnected
         | Input::Resize
+        | Input::Signal(_)
         | Input::Files { .. }
         | Input::FindDue(_)
         | Input::Image { .. }
