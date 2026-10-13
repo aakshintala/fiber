@@ -444,8 +444,7 @@ fn store_locked(
 ) -> Result<String, LockedStoreFailure> {
     let name = provider.name.as_str();
     let stored = stored_name(provider);
-    let file =
-        CredentialFile::new(home, stored, label).map_err(LockedStoreFailure::Config)?;
+    let file = CredentialFile::new(home, stored, label).map_err(LockedStoreFailure::Config)?;
     // Held until the login ends, so two logins never both pass the check.
     let Some(lock) = file
         .try_lock()

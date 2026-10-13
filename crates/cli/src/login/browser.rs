@@ -173,9 +173,7 @@ pub fn browser_login(
             LockedStoreFailure::Config(_) => usage_with_hint(format!(
                 "`{label}` is not a label `fiber login` can store; pass one with `--as <label>`."
             )),
-            LockedStoreFailure::Store(StoreFailure::Refused(message)) => {
-                usage_with_hint(message)
-            }
+            LockedStoreFailure::Store(StoreFailure::Refused(message)) => usage_with_hint(message),
             LockedStoreFailure::Store(StoreFailure::Failed(failure)) => failure,
         })
     })
