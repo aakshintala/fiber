@@ -361,6 +361,95 @@ fn enter_on_a_focused_link_opens_it() {
 }
 
 #[test]
+fn a_focused_link_sits_on_surface_raised_with_its_hint_under_it() {
+    use crate::theme::Role;
+    use ratatui::style::Modifier;
+    let mut app = replied(
+        60,
+        16,
+        "[docs](https://example.com/a) and [other](https://example.com/b)\n\nmore text here",
+    );
+    app.set_opener(true);
+    let (id, first) = link_for(&app, "https://example.com/a");
+    app.focus = Some(id);
+    let (buf, _) = draw(&app);
+    // Every cell of the focused link: accent, underlined, on
+    // `surface_raised`, and not reversed by the generic focus style.
+    for dx in 0..first.width {
+        let cell = &buf[(first.x.saturating_add(dx), first.y)];
+        assert_eq!(cell.fg, Role::Accent.color(), "link cell {dx}");
+        assert_eq!(cell.bg, Role::SurfaceRaised.color(), "link cell {dx}");
+        assert!(
+            cell.modifier.contains(Modifier::UNDERLINED),
+            "link cell {dx}"
+        );
+        assert!(
+            !cell.modifier.contains(Modifier::REVERSED),
+            "link cell {dx}"
+        );
+    }
+    // The link without focus keeps the card's background.
+    let (_, second) = link_for(&app, "https://example.com/b");
+    let plain = &buf[(second.x, second.y)];
+    assert_eq!(plain.fg, Role::Accent.color());
+    assert_ne!(plain.bg, Role::SurfaceRaised.color());
+    // The hint sits on the row under the link, dim.
+    let hint = "Enter opens · y copies";
+    let row: String = (first.x..first.x.saturating_add(22))
+        .map(|x| buf[(x, first.y.saturating_add(1))].symbol().to_owned())
+        .collect();
+    assert_eq!(row, hint);
+    for dx in 0..22 {
+        assert!(
+            buf[(first.x.saturating_add(dx), first.y.saturating_add(1))]
+                .modifier
+                .contains(Modifier::DIM),
+            "hint cell {dx}"
+        );
+    }
+    // Focus gone, the hint goes with it.
+    app.focus = None;
+    let (buf, _) = draw(&app);
+    let text = crate::view::text(&buf);
+    assert!(!text.contains(hint), "{text}");
+}
+
+#[test]
+fn a_focused_link_on_the_last_row_draws_no_hint() {
+    use crate::theme::Role;
+    // Paragraphs enough to fill the conversation, then the link: one
+    // wheel step up moves the rows three rows down the screen, putting
+    // the link on the conversation's last row with no row below it
+    // for the hint.
+    let paragraphs: Vec<String> = (0..30).map(|n| format!("paragraph {n}")).collect();
+    let text = format!(
+        "{}\n\n[docs](https://example.com/a)",
+        paragraphs.join("\n\n")
+    );
+    let mut app = replied(60, 16, &text);
+    app.set_opener(true);
+    app.on_wheel(&Mouse {
+        kind: MouseKind::WheelUp,
+        col: 30,
+        row: 6,
+    });
+    let (id, first) = link_for(&app, "https://example.com/a");
+    assert_eq!(
+        first.y.saturating_add(1),
+        app.conversation_area().bottom(),
+        "the link is the last conversation row"
+    );
+    app.focus = Some(id);
+    let (buf, _) = draw(&app);
+    // The focused look still paints, without the hint and without
+    // touching the rows below the conversation.
+    let cell = &buf[(first.x, first.y)];
+    assert_eq!(cell.bg, Role::SurfaceRaised.color());
+    let text = crate::view::text(&buf);
+    assert!(!text.contains("Enter opens"), "{text}");
+}
+
+#[test]
 fn a_link_under_the_notice_overlay_is_not_a_target() {
     let mut app = replied(60, 12, "[docs](https://example.com/a)");
     app.on_line(line(

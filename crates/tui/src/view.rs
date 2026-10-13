@@ -277,7 +277,12 @@ pub(crate) fn render(
             buf.set_style(target.rect, HOVER_TINT);
         }
     }
-    if let Some(id) = app.focused() {
+    if let Some(id) = app.focused()
+        && !matches!(id, TargetId::Link { .. })
+    {
+        // Links draw their own focused look in the marks, on the
+        // `surface_raised` tint with the hint under them
+        // (`docs/tui.md`, "Links").
         for target in targets.iter().filter(|target| target.id == id) {
             buf.set_style(target.rect, FOCUS_STYLE);
         }
