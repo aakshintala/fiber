@@ -503,12 +503,14 @@ impl Table {
     /// the cap remains. Every gap then holds at least the spacing and at
     /// most twice it plus the longest line in the gap, and the spacing
     /// stays within the initial spacing and four bytes per resident
-    /// checkpoint. The loop ends: the spacing doubles every pass, and at
-    /// a saturated spacing at most two checkpoints can stand that far
-    /// apart.
+    /// checkpoint. The loop runs at most 64 passes: the spacing doubles
+    /// every pass from at least 1, so it saturates `u64` within 64 passes,
+    /// and every pass keeps at least the first checkpoint, so the loop
+    /// always ends with the same kept sets, spacing progression and break
+    /// point as the unbounded form.
     fn thin(&mut self) {
         self.spacing = self.spacing.saturating_mul(2);
-        loop {
+        for _ in 0..64 {
             let mut kept = Vec::with_capacity(self.checkpoints.len().div_ceil(2));
             let mut last = 0;
             let mut kept_any = false;
@@ -720,14 +722,19 @@ impl Finder<'_> {
     /// does.
     fn next_newline_end_bounded(&mut self, stop: u64) -> Option<u64> {
         loop {
-            while self.at < self.len {
+            // Bounded to the unread bytes: the view ends at `len`, so a
+            // stale tail past it is never read and the loop exits where
+            // the `None => break` arm did, with no comparison left for
+            // the `<` mutant to flip.
+            while let Some(byte) = self
+                .buf
+                .get(..self.len)
+                .and_then(|unread| unread.get(self.at))
+                .copied()
+            {
                 if self.byte > stop {
                     return Some(u64::MAX);
                 }
-                let byte = match self.buf.get(self.at) {
-                    Some(byte) => *byte,
-                    None => break,
-                };
                 self.at = self.at.saturating_add(1);
                 self.byte = self.byte.saturating_add(1);
                 if byte == b'\n' {

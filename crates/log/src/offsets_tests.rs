@@ -1281,3 +1281,150 @@ fn short_eof_reports_unexpected_eof() {
     assert_eq!(error.kind(), std::io::ErrorKind::UnexpectedEof);
     assert!(!error.to_string().is_empty());
 }
+
+/// A bounded window whose second line ends exactly on the budget stop
+/// holds it: the in-buffer `byte > stop` check lets a newline at
+/// `stop - 1` through, and `size_window` keeps an end equal to the limit.
+/// One byte less budget excludes that line. The checkpoints are evicted so
+/// both windows size through the forward scan; the whole log fits one
+/// chunk, so this covers the in-buffer check site.
+#[test]
+fn bounded_windows_include_a_line_ending_exactly_on_the_budget() {
+    let (_dir, offsets, written) = written("budget-exact", &[10; 4]);
+    let starts: Vec<u64> = offsets
+        .lock()
+        .checkpoints
+        .iter()
+        .map(|checkpoint| checkpoint.1)
+        .collect();
+    assert_eq!(starts.len(), 4);
+    offsets
+        .lock()
+        .checkpoints
+        .retain(|checkpoint| checkpoint.0 == 0 || checkpoint.0 >= 3);
+    let end = offsets.end();
+    assert!(
+        end < u64::try_from(SCAN_CHUNK).unwrap_or(u64::MAX),
+        "the log fits one chunk: {end}"
+    );
+    // Two lines exactly: the second ends on the stop, so it is in, with
+    // the exact span, more past it, and a real scan behind it.
+    let two = starts[2];
+    let window = offsets.resolve(0, 10, two, u64::MAX).unwrap().unwrap();
+    assert_eq!((window.start, window.stop), (0, two));
+    assert!(window.more);
+    assert!(window.scanned > 0);
+    assert_eq!(seqs(&offsets.range(0, 2).unwrap()), seqs(&written[..2]));
+    // One byte less: the second line runs past the stop, so only the
+    // first line is in, still with more and a real scan.
+    let window = offsets.resolve(0, 10, two - 1, u64::MAX).unwrap().unwrap();
+    assert_eq!((window.start, window.stop), (0, starts[1]));
+    assert!(window.more);
+    assert!(window.scanned > 0);
+    assert_eq!(seqs(&offsets.range(0, 1).unwrap()), seqs(&written[..1]));
+}
+
+/// The same exact-fit boundary with the stop at a buffer edge: the window
+/// holds every line ending at or before the first chunk's end, and drops
+/// the line crossing it. Sizing the crossing line evaluates the post-refill
+/// `byte > stop` check, so this covers the refill check site.
+#[test]
+fn bounded_windows_include_a_line_ending_exactly_on_the_budget_at_the_buffer_edge() {
+    let (_dir, offsets, written) = written("budget-edge", &[10; 100]);
+    let starts: Vec<u64> = offsets
+        .lock()
+        .checkpoints
+        .iter()
+        .map(|checkpoint| checkpoint.1)
+        .collect();
+    assert_eq!(starts.len(), 100);
+    let chunk = u64::try_from(SCAN_CHUNK).unwrap_or(u64::MAX);
+    assert!(offsets.end() > chunk, "the log spans past one chunk");
+    offsets
+        .lock()
+        .checkpoints
+        .retain(|checkpoint| checkpoint.0 == 0 || checkpoint.0 >= 90);
+    // The most lines starting at or before the chunk end: the stop sits
+    // within one line of the buffer edge.
+    let mut lines = 1usize;
+    while lines < 100 && starts[lines] <= chunk {
+        lines += 1;
+    }
+    assert!(lines < 100, "lines {lines} reach past the chunk");
+    let edge = starts[lines - 1];
+    assert!(
+        chunk - edge < starts[lines] - edge,
+        "the stop sits within one line of the edge"
+    );
+    let window = offsets.resolve(0, 200, edge, u64::MAX).unwrap().unwrap();
+    assert_eq!((window.start, window.stop), (0, edge));
+    assert!(window.more);
+    assert!(window.scanned > 0);
+    assert_eq!(
+        seqs(&offsets.range(0, lines - 1).unwrap()),
+        seqs(&written[..lines - 1])
+    );
+    // One byte less drops the last line at the edge.
+    let window = offsets
+        .resolve(0, 200, edge - 1, u64::MAX)
+        .unwrap()
+        .unwrap();
+    assert_eq!((window.start, window.stop), (0, starts[lines - 2]));
+    assert!(window.more);
+    assert!(window.scanned > 0);
+}
+
+/// The in-buffer `byte > stop` check lets a newline sitting exactly on the
+/// stop through: the line ends one past it, reported as found, not over
+/// budget. The `==` and `>=` mutants report over budget here instead.
+#[test]
+fn bounded_scan_reports_a_newline_sitting_on_the_budget_stop() {
+    let home = fakes::TempDir::new("log-offsets-bounded-on-stop");
+    let path = home.path().join("events.jsonl");
+    std::fs::write(&path, b"z").unwrap();
+    let mut file = File::open(&path).unwrap();
+    let mut finder = Finder {
+        file: &mut file,
+        buf: [0u8; SCAN_CHUNK],
+        len: 3,
+        at: 0,
+        byte: 100,
+        scanned: 0,
+        short: None,
+    };
+    finder.buf[..3].copy_from_slice(b"ab\n");
+    // The newline byte sits exactly on the stop; the line ends one past
+    // it, found rather than over budget.
+    assert_eq!(finder.next_newline_end_bounded(102), Some(103));
+    assert_eq!(finder.byte, 103);
+    assert!(finder.short.is_none());
+}
+
+/// The post-refill `byte > stop` check lets a scan sitting exactly on the
+/// stop refill: with the file ending there the scan ends short, it does
+/// not report over budget. The `==` and `>=` mutants report over budget
+/// here instead.
+#[test]
+fn bounded_scan_ends_short_when_exhausted_exactly_on_the_budget() {
+    let home = fakes::TempDir::new("log-offsets-bounded-at-eof");
+    let path = home.path().join("events.jsonl");
+    std::fs::write(&path, b"").unwrap();
+    let mut file = File::open(&path).unwrap();
+    let mut finder = Finder {
+        file: &mut file,
+        buf: [0u8; SCAN_CHUNK],
+        len: 3,
+        at: 3,
+        byte: 103,
+        scanned: 0,
+        short: None,
+    };
+    finder.buf[..3].copy_from_slice(b"ab\n");
+    // The buffer is exhausted exactly on the stop with nothing after it:
+    // a short scan, not an over-budget line.
+    assert_eq!(finder.next_newline_end_bounded(103), None);
+    assert_eq!(
+        finder.short.as_ref().map(|error| error.kind()),
+        Some(std::io::ErrorKind::UnexpectedEof)
+    );
+}
