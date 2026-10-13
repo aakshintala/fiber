@@ -86,10 +86,14 @@ jobs:
         name: Install the toolchain
         run: rustup toolchain install
 
+      # rust-cache's own key ignores Cargo.toml's [profile] tables, so `key`
+      # names the dev profile's generation: change it with the profile, here
+      # and in the test job's step.
       - &cache-restore
         uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
         with:
           shared-key: ci
+          key: line-tables
           save-if: false
 
       - name: Select
@@ -241,6 +245,7 @@ jobs:
       - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
         with:
           shared-key: ci
+          key: line-tables
           save-if: ${{ github.event_name == 'push' }}
       - uses: taiki-e/install-action@83ac0ad63c0167e6f06796fab0fce28db1bf3db0 # v2.87.22
         with:

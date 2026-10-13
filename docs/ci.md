@@ -340,7 +340,9 @@ The test job saves its cache once the workspace build succeeded,
 even when a later check fails, and saves nothing when the build fails.
 Dev and test builds carry line tables only (`Cargo.toml`, `[profile.dev]`),
 which keeps the cache small and the link fast; a backtrace still names file
-and line.
+and line. rust-cache's key leaves out `[profile]`, so a profile change also
+changes the `key:` the `ci` cache steps carry, or the old builds restore as an
+exact match and every build recompiles the dependencies.
 
 ## Toolchain
 
