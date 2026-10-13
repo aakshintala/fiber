@@ -19,9 +19,9 @@ use std::os::unix::net::{UnixListener, UnixStream};
 use std::os::unix::process::CommandExt;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
-use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc;
+use std::sync::{Arc, Mutex};
 use std::thread;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
@@ -226,9 +226,15 @@ fn a_young_fork_blocks_then_cascade_removes_both() {
     assert!(out.contains(ROOT), "{out}");
     assert!(out.contains(FORK), "{out}");
     assert!(root.is_dir() && fork.is_dir(), "the fork blocks the root");
+    // The cascade prune needs a ready hub, not a fast cold start: starting
+    // the hub here waits for its hello under the test deadline, and the
+    // held connection keeps it from idling out before the prune connects.
+    let hub = Arc::new(Mutex::new(None));
+    let (client, _) = connect_hub(&setup, &hub);
     let output = prune(&setup, &["--cascade", "--yes", "--older-than", "30d"]);
     assert_eq!(output.status.code(), Some(0), "{}", text(&output.stderr));
     assert!(!root.exists() && !fork.exists());
+    drop(client);
     until_absent(setup.deadline, &setup.hub_socket(), "the hub to idle out");
 }
 
