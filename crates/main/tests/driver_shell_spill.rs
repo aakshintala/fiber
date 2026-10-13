@@ -155,8 +155,25 @@ fn driver_shell_past_a_mebibyte_returns_its_complete_artifact() {
         "[{removed} bytes cut. The full output is in {}; read it with `read`.]",
         absolute.display()
     );
-    assert_eq!(output, format!("{head}\n{notice}\n{tail}"));
-    assert!(output.ends_with("Exit code 0.\n"), "{output:?}");
+    let expected = format!("{head}\n{notice}\n{tail}");
+    assert_eq!(
+        output.len(),
+        expected.len(),
+        "the bounded response keeps the head, the notice and the tail"
+    );
+    let first_diff = output
+        .bytes()
+        .zip(expected.bytes())
+        .position(|(got, want)| got != want);
+    assert_eq!(
+        first_diff, None,
+        "the bounded response is the shaped head, notice and tail"
+    );
+    assert!(
+        output.ends_with("Exit code 0.\n"),
+        "the response ends with its closing line ({} bytes)",
+        output.len()
+    );
 
     let artifact = artifact.expect("a spilled driver shell names its artifact");
     assert!(

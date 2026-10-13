@@ -118,19 +118,23 @@ impl Running {
     }
 }
 
+fn no_process(error: Option<contract::shapes::Failure>) -> Rejection {
+    let message = match error {
+        Some(error) => error.message,
+        None => COULD_NOT_START.to_owned(),
+    };
+    Rejection {
+        code: ErrorCode::InvalidArguments,
+        message,
+    }
+}
+
 fn answered(gate: &Gate, output: Output, bound: Bound) -> contract::inbox::Answer {
     if let Some(spilled) = output.spilled {
         return answered_spilled(gate, spilled, output.process, output.error);
     }
     let Some(process) = output.process else {
-        let message = match output.error {
-            Some(error) => error.message,
-            None => COULD_NOT_START.to_owned(),
-        };
-        return Err(Rejection {
-            code: ErrorCode::InvalidArguments,
-            message,
-        });
+        return Err(no_process(output.error));
     };
     let full = joined(&output.content);
     let (kept, artifact) = cut(gate, &full, bound);
@@ -159,14 +163,7 @@ fn answered_spilled(
     match file {
         Ok(kept) => {
             let Some(process) = process else {
-                let message = match error {
-                    Some(error) => error.message,
-                    None => COULD_NOT_START.to_owned(),
-                };
-                return Err(Rejection {
-                    code: ErrorCode::InvalidArguments,
-                    message,
-                });
+                return Err(no_process(error));
             };
             let Some(log) = gate.log.upgrade() else {
                 return Err(Rejection {
@@ -200,14 +197,7 @@ fn answered_spilled(
                 });
             }
             let Some(process) = process else {
-                let message = match error {
-                    Some(error) => error.message,
-                    None => COULD_NOT_START.to_owned(),
-                };
-                return Err(Rejection {
-                    code: ErrorCode::InvalidArguments,
-                    message,
-                });
+                return Err(no_process(error));
             };
             let notice = cut_notice(removed, Err(unsaved.message.as_str()));
             let output = cut_joined(&head, &notice, &tail);

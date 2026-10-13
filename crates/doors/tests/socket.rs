@@ -4089,27 +4089,86 @@ fn send_bounded(client: &Client, line: &str, deadline: Deadline) {
         .expect("the command line was written");
 }
 
-fn subscribe_bounded(client: &Client, id: &str, deadline: Deadline) -> Value {
+fn subscribe_bounded(
+    client: &Client,
+    id: &str,
+    deadline: Deadline,
+    stream: &mut Vec<Value>,
+) -> Value {
     send_bounded(
         client,
         &format!(r#"{{"id":"{id}","command":"subscribe","args":{{"level":"full"}}}}"#),
         deadline,
     );
     let lines = until(client, |line| command_id(line) == Some(id));
-    let ack = lines.last().expect("the subscribe acknowledgement arrived");
-    assert_eq!(kind(ack), "command_accepted", "{ack}");
-    assert_eq!(command_id(ack), Some(id));
-    ack.clone()
+    let ack = lines
+        .last()
+        .expect("the subscribe acknowledgement arrived")
+        .clone();
+    assert_eq!(kind(&ack), "command_accepted", "{ack}");
+    assert_eq!(command_id(&ack), Some(id));
+    stream.extend(lines);
+    ack
 }
 
-fn shell_answer(client: &Client, id: &str) -> Value {
+fn shell_answer(client: &Client, id: &str, deadline: Deadline, stream: &mut Vec<Value>) -> Value {
     let lines = until(client, |line| command_id(line) == Some(id));
-    let matching: Vec<&Value> = lines
+    stream.extend(lines);
+    // A controlled completion boundary: the trailing command proves no second
+    // shell answer follows, so a duplicate shell acknowledgement fails below
+    // (`docs/testing.md`, "Event streams").
+    let sentinel = format!("c_after_{id}");
+    send_bounded(
+        client,
+        &format!(r#"{{"id":"{sentinel}","command":"tools"}}"#),
+        deadline,
+    );
+    let trail = until(client, |line| command_id(line) == Some(sentinel.as_str()));
+    stream.extend(trail);
+    let matching: Vec<&Value> = stream
         .iter()
         .filter(|line| command_id(line) == Some(id))
         .collect();
-    assert_eq!(matching.len(), 1, "exactly one answer for {id}: {lines:?}");
+    assert_eq!(matching.len(), 1, "exactly one answer for {id}: {stream:?}");
     matching[0].clone()
+}
+
+/// The complete ordered event kinds on one subscribed connection: the
+/// subscribe acknowledgement, then the shell answer, then the trailing
+/// boundary command, with the independent attach line set aside and its
+/// count checked, so a duplicated, missing or reordered event fails
+/// (`docs/testing.md`, "Event streams").
+fn assert_shell_stream(stream: &[Value], sub_id: &str, shell_id: &str, shell_kind: &str) {
+    let sentinel = format!("c_after_{shell_id}");
+    let main: Vec<&Value> = stream
+        .iter()
+        .filter(|line| kind(line) != "clients")
+        .collect();
+    assert_eq!(
+        main.iter().map(|line| kind(line)).collect::<Vec<_>>(),
+        ["command_accepted", shell_kind, "command_accepted"],
+        "the complete ordered event kinds: {stream:?}"
+    );
+    for id in [sub_id, shell_id, sentinel.as_str()] {
+        assert_eq!(
+            stream
+                .iter()
+                .filter(|line| command_id(line) == Some(id))
+                .count(),
+            1,
+            "exactly one acknowledgement for {id}: {stream:?}"
+        );
+    }
+    let attach: Vec<&Value> = stream
+        .iter()
+        .filter(|line| kind(line) == "clients")
+        .collect();
+    assert_eq!(attach.len(), 1, "one independent attach line: {stream:?}");
+    assert_eq!(
+        attach[0]["payload"]["count"].as_u64(),
+        Some(1),
+        "the attach counts its own connection: {stream:?}"
+    );
 }
 
 fn artifacts_entries(dir: &Path) -> Vec<String> {
@@ -4149,10 +4208,12 @@ fn shell_spilled_success_returns_original_artifact() {
         .run(Vec::new(), Arc::new(|| false), move |_inbox| {
             let deadline = Deadline::after(DEADLINE);
             let client = connect_bounded(&socket, deadline);
-            let ack = subscribe_bounded(&client, "c_sub", deadline);
+            let mut stream = Vec::new();
+            let ack = subscribe_bounded(&client, "c_sub", deadline, &mut stream);
             assert_eq!(command_id(&ack), Some("c_sub"));
             send_bounded(&client, &shell_line("c_big", "cat big"), deadline);
-            let line = shell_answer(&client, "c_big");
+            let line = shell_answer(&client, "c_big", deadline, &mut stream);
+            assert_shell_stream(&stream, "c_sub", "c_big", "command_accepted");
             assert_eq!(kind(&line), "command_accepted", "{line}");
             let result = &line["payload"]["result"];
             let notice =
@@ -4188,9 +4249,11 @@ fn shell_spilled_zero_removed_joins_without_notice() {
         .run(Vec::new(), Arc::new(|| false), move |_inbox| {
             let deadline = Deadline::after(DEADLINE);
             let client = connect_bounded(&socket, deadline);
-            subscribe_bounded(&client, "c_sub", deadline);
+            let mut stream = Vec::new();
+            subscribe_bounded(&client, "c_sub", deadline, &mut stream);
             send_bounded(&client, &shell_line("c_zero", "cat zero"), deadline);
-            let line = shell_answer(&client, "c_zero");
+            let line = shell_answer(&client, "c_zero", deadline, &mut stream);
+            assert_shell_stream(&stream, "c_sub", "c_zero", "command_accepted");
             assert_eq!(kind(&line), "command_accepted", "{line}");
             let result = &line["payload"]["result"];
             assert_eq!(result["output"], "héllo wörld");
@@ -4229,9 +4292,11 @@ fn shell_spilled_outside_session_stays_absolute() {
         .run(Vec::new(), Arc::new(|| false), move |_inbox| {
             let deadline = Deadline::after(DEADLINE);
             let client = connect_bounded(&socket, deadline);
-            subscribe_bounded(&client, "c_sub", deadline);
+            let mut stream = Vec::new();
+            subscribe_bounded(&client, "c_sub", deadline, &mut stream);
             send_bounded(&client, &shell_line("c_out", "cat out"), deadline);
-            let line = shell_answer(&client, "c_out");
+            let line = shell_answer(&client, "c_out", deadline, &mut stream);
+            assert_shell_stream(&stream, "c_sub", "c_out", "command_accepted");
             assert_eq!(kind(&line), "command_accepted", "{line}");
             let result = &line["payload"]["result"];
             assert_eq!(result["artifact"], absolute.as_str());
@@ -4281,9 +4346,11 @@ fn shell_unsaved_without_left_keeps_process_and_notice() {
         .run(Vec::new(), Arc::new(|| false), move |_inbox| {
             let deadline = Deadline::after(DEADLINE);
             let client = connect_bounded(&socket, deadline);
-            subscribe_bounded(&client, "c_sub", deadline);
+            let mut stream = Vec::new();
+            subscribe_bounded(&client, "c_sub", deadline, &mut stream);
             send_bounded(&client, &shell_line("c_fail", "false"), deadline);
-            let line = shell_answer(&client, "c_fail");
+            let line = shell_answer(&client, "c_fail", deadline, &mut stream);
+            assert_shell_stream(&stream, "c_sub", "c_fail", "command_accepted");
             assert_eq!(kind(&line), "command_accepted", "{line}");
             let result = &line["payload"]["result"];
             assert_eq!(result["output"], format!("HHHH\n{notice}\nTTTT"));
@@ -4323,9 +4390,11 @@ fn shell_unsaved_without_left_zero_removed_still_notices() {
         .run(Vec::new(), Arc::new(|| false), move |_inbox| {
             let deadline = Deadline::after(DEADLINE);
             let client = connect_bounded(&socket, deadline);
-            subscribe_bounded(&client, "c_sub", deadline);
+            let mut stream = Vec::new();
+            subscribe_bounded(&client, "c_sub", deadline, &mut stream);
             send_bounded(&client, &shell_line("c_zero_fail", "true"), deadline);
-            let line = shell_answer(&client, "c_zero_fail");
+            let line = shell_answer(&client, "c_zero_fail", deadline, &mut stream);
+            assert_shell_stream(&stream, "c_sub", "c_zero_fail", "command_accepted");
             assert_eq!(kind(&line), "command_accepted", "{line}");
             let result = &line["payload"]["result"];
             assert_eq!(result["output"], format!("HHHH\n{notice}\nTTTT"));
@@ -4364,9 +4433,11 @@ fn shell_unsaved_left_is_removed_before_answer() {
         .run(Vec::new(), Arc::new(|| false), move |_inbox| {
             let deadline = Deadline::after(DEADLINE);
             let client = connect_bounded(&socket, deadline);
-            subscribe_bounded(&client, "c_sub", deadline);
+            let mut stream = Vec::new();
+            subscribe_bounded(&client, "c_sub", deadline, &mut stream);
             send_bounded(&client, &shell_line("c_left", "cat left"), deadline);
-            let line = shell_answer(&client, "c_left");
+            let line = shell_answer(&client, "c_left", deadline, &mut stream);
+            assert_shell_stream(&stream, "c_sub", "c_left", "command_accepted");
             assert_eq!(kind(&line), "command_accepted", "{line}");
             let result = &line["payload"]["result"];
             assert_eq!(result["output"], format!("HHHH\n{notice}\nTTTT"));
@@ -4411,9 +4482,11 @@ fn shell_unsaved_left_removal_failure_rejects_io_failed() {
         .run(Vec::new(), Arc::new(|| false), move |_inbox| {
             let deadline = Deadline::after(DEADLINE);
             let client = connect_bounded(&socket, deadline);
-            subscribe_bounded(&client, "c_sub", deadline);
+            let mut stream = Vec::new();
+            subscribe_bounded(&client, "c_sub", deadline, &mut stream);
             send_bounded(&client, &shell_line("c_stuck", "cat stuck"), deadline);
-            let line = shell_answer(&client, "c_stuck");
+            let line = shell_answer(&client, "c_stuck", deadline, &mut stream);
+            assert_shell_stream(&stream, "c_sub", "c_stuck", "command_rejected");
             assert_eq!(kind(&line), "command_rejected", "{line}");
             assert_eq!(rejection(&line).0, "io_failed");
             let (_, text) = rejection(&line);
@@ -4463,9 +4536,11 @@ fn shell_unsaved_left_without_process_still_cleans_up() {
         .run(Vec::new(), Arc::new(|| false), move |_inbox| {
             let deadline = Deadline::after(DEADLINE);
             let client = connect_bounded(&socket, deadline);
-            subscribe_bounded(&client, "c_sub", deadline);
+            let mut stream = Vec::new();
+            subscribe_bounded(&client, "c_sub", deadline, &mut stream);
             send_bounded(&client, &shell_line("c_noproc", ""), deadline);
-            let line = shell_answer(&client, "c_noproc");
+            let line = shell_answer(&client, "c_noproc", deadline, &mut stream);
+            assert_shell_stream(&stream, "c_sub", "c_noproc", "command_rejected");
             assert_eq!(rejection(&line), ("invalid_arguments", "Give one command."));
             assert!(
                 !left.exists(),
@@ -4478,23 +4553,45 @@ fn shell_unsaved_left_without_process_still_cleans_up() {
     opened.close();
 }
 
+/// Reopens the session log on a worker bounded by [`DEADLINE`], so the
+/// missing-log tests close through the ordinary path after dropping their
+/// strong handle.
+fn reopened_log(sessions: PathBuf, id: SessionId, clock: Arc<dyn Clock>) -> Arc<Log> {
+    let (tx, rx) = mpsc::channel();
+    thread::spawn(move || match tx.send(Log::open(&sessions, id, clock)) {
+        Ok(()) | Err(_) => {}
+    });
+    let log = Deadline::after(DEADLINE)
+        .recv_or_fail(&rx, "the log reopened for close")
+        .unwrap();
+    Arc::new(log)
+}
+
 fn drive_shell(
     deadline: Deadline,
     driver: &Arc<dyn Drive>,
     command: &str,
 ) -> mpsc::Receiver<Answer> {
     let (tx, rx) = mpsc::channel();
+    let driver = Arc::clone(driver);
     let mut args = Map::new();
     args.insert("command".to_owned(), Value::String(command.to_owned()));
-    driver.drive(
-        "fiber.test/a",
-        "shell",
-        args,
-        Ack(Box::new(move |answer| match tx.send(answer) {
-            Ok(()) | Err(_) => {}
-        })),
-    );
-    let _ = deadline;
+    // Dispatch acquires registry locks before returning, so it runs on a worker
+    // and the caller's deadline-bound receive guards a blocked dispatch
+    // (`docs/testing.md`, "Waits and timeouts"). `deadline` threads that
+    // acknowledgement bound at the call sites; reconciliation keeps it over the
+    // proposed deadline-free helper.
+    let _remaining = deadline.left();
+    thread::spawn(move || {
+        driver.drive(
+            "fiber.test/a",
+            "shell",
+            args,
+            Ack(Box::new(move |answer| match tx.send(answer) {
+                Ok(()) | Err(_) => {}
+            })),
+        );
+    });
     rx
 }
 
@@ -4550,15 +4647,7 @@ fn shell_spilled_success_without_log_is_closing() {
             Ok(())
         })
         .unwrap();
-    let (tx, rx) = mpsc::channel();
-    let (sessions, id) = (sessions.clone(), id.clone());
-    thread::spawn(move || match tx.send(Log::open(&sessions, id, timed)) {
-        Ok(()) | Err(_) => {}
-    });
-    let log = Deadline::after(DEADLINE)
-        .recv_or_fail(&rx, "the log reopened for close")
-        .unwrap();
-    close_within(session, Arc::new(log));
+    close_within(session, reopened_log(sessions, id, timed));
 }
 
 #[test]
@@ -4618,15 +4707,7 @@ fn shell_unsaved_left_without_log_still_cleans_up() {
             Ok(())
         })
         .unwrap();
-    let (tx, rx) = mpsc::channel();
-    let (sessions, id) = (sessions.clone(), id.clone());
-    thread::spawn(move || match tx.send(Log::open(&sessions, id, timed)) {
-        Ok(()) | Err(_) => {}
-    });
-    let log = Deadline::after(DEADLINE)
-        .recv_or_fail(&rx, "the log reopened for close")
-        .unwrap();
-    close_within(session, Arc::new(log));
+    close_within(session, reopened_log(sessions, id, timed));
 }
 
 #[test]
@@ -4684,13 +4765,5 @@ fn shell_unsaved_left_removal_failure_without_log_rejects_io_failed() {
             Ok(())
         })
         .unwrap();
-    let (tx, rx) = mpsc::channel();
-    let (sessions, id) = (sessions.clone(), id.clone());
-    thread::spawn(move || match tx.send(Log::open(&sessions, id, timed)) {
-        Ok(()) | Err(_) => {}
-    });
-    let log = Deadline::after(DEADLINE)
-        .recv_or_fail(&rx, "the log reopened for close")
-        .unwrap();
-    close_within(session, Arc::new(log));
+    close_within(session, reopened_log(sessions, id, timed));
 }
