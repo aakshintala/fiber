@@ -202,9 +202,9 @@ On Linux x86_64 alone:
   (`cargo mutants --list`) and plans one shard per 15 of them, rounded up, at
   most 16; a diff with no mutants starts none. Recent runs (#1461, #1395)
   tested a mutant in 13 to 27 seconds on a runner and the unmutated baseline
-  took 1 to 3.5 minutes; a `crates/main` mutant takes 50 to 74 seconds, so 15
-  mutants keep a shard near 10 minutes. Shards
-  split the list round-robin, so every shard holds the same mix of crates and
+  took 1 to 3.5 minutes, so 15 mutants keep a shard near 10 minutes; a
+  `crates/main` mutant takes 50 to 74 seconds. Shards split the list
+  round-robin, so every shard holds the same mix of crates and
   the count alone sets its size. Past 240 mutants the cap makes shards larger,
   and their time limit grows with them ("Job time limits"). Two pull requests at the cap
   leave 8 of the 40 jobs for everything else.
