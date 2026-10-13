@@ -272,7 +272,9 @@ impl App {
         let (top, _) = self.scroll();
         let start = pages.index().locate(top).map_or(0, |(at, _)| at);
         let count = pages.page_count();
-        self.find.start(start, count);
+        let clock = pages.index().clock();
+        let session = self.session().cloned();
+        self.find.start(start, count, clock, session);
         // Scans resident pages, fetches the first dropped one, and
         // reveals the current match in the same step: its sections open
         // and the view scrolls to it, and a dropped page it sits on
@@ -281,20 +283,57 @@ impl App {
         self.find_outgoing()
     }
 
-    /// Scans every resident page whose revision moved, in scan order.
-    /// Whether any page scanned.
+    /// Scans every reached-but-unscanned resident page and every
+    /// dirtied one, in scan order, advancing the reach past settled
+    /// positions. New pages join behind the order; changed pages rescan
+    /// without starving the pages the reach still owes. Whether any page
+    /// scanned.
     fn scan_resident_all(&mut self) -> bool {
         let count = self.screen.pages().page_count();
-        let order = self.find.scan_order(count);
+        self.find.extend_order(count);
+        // Text that moved since the last verification soils its pages
+        // for a rescan; with no moves this costs nothing.
+        self.find.verify(self.screen.pages());
         let mut rescanned = false;
-        for at in order {
+        // Dirtied positions first: they stand earlier in scan order than
+        // the reach, and their rescan never starves it. A position
+        // settled another way (its answer landed first) just cleans.
+        for pos in self.find.dirty().clone() {
+            crate::work::add(|work| work.search_order_pages += 1);
+            let Some(at) = self.find.page_at(pos) else {
+                self.find.clean(pos);
+                continue;
+            };
             let revision = self.screen.pages().index().revision(at);
             if self.find.scanned(at) == Some(revision) {
+                self.find.clean(pos);
                 continue;
             }
             if self.screen.pages().part(at).is_some() {
                 self.scan_resident(at);
+                self.find.clean(pos);
                 rescanned = true;
+            }
+        }
+        // New positions in scan order: resident ones scan, and the
+        // reach stops at the first dropped one, which the pump fetches.
+        while self.find.cursor() < count {
+            let pos = self.find.cursor();
+            let Some(at) = self.find.page_at(pos) else {
+                break;
+            };
+            crate::work::add(|work| work.search_order_pages += 1);
+            let revision = self.screen.pages().index().revision(at);
+            if self.find.scanned(at) == Some(revision) {
+                self.find.reach(pos.saturating_add(1));
+                continue;
+            }
+            if self.screen.pages().part(at).is_some() {
+                self.scan_resident(at);
+                self.find.reach(pos.saturating_add(1));
+                rescanned = true;
+            } else {
+                break;
             }
         }
         rescanned
@@ -311,6 +350,7 @@ impl App {
         let Some(found) = scan::resident(self.screen.pages(), at, &query) else {
             return;
         };
+        crate::work::add(|work| work.search_pages += 1);
         let kept = self.find.record(at, revision, found);
         let (top, _) = self.scroll();
         self.find.consider(at, &kept, top);
@@ -325,6 +365,7 @@ impl App {
         rows: &[crate::turn::Row],
         texts: &[crate::rows::RowText],
     ) {
+        crate::work::add(|work| work.search_pages += 1);
         let query = self.find.query().to_owned();
         let found = scan::scratch(self.screen.pages(), at, rows, texts, &query);
         let kept = self.find.record(at, revision, found);
@@ -334,22 +375,51 @@ impl App {
 
     /// Fetches the next dropped page the scan has not read, if any, then
     /// falls back to the first match in page order when the scan found
-    /// none at or after the top row anywhere after it. At most one request
-    /// is ever on the wire, whatever the generation.
+    /// none at or after the top row anywhere after it. The next page in
+    /// scan order wins: a dirtied page beats the reach's, and the
+    /// reach's beats every page behind it. At most one request is ever
+    /// on the wire, whatever the generation.
     fn pump_find(&mut self) {
         if !self.find.due() {
             return;
         }
         let count = self.screen.pages().page_count();
-        let order = self.find.scan_order(count);
+        self.find.extend_order(count);
         if !self.find.capped() && !self.find.fetching() {
+            crate::work::add(|work| work.search_order_pages += 1);
+            // Past positions already settled: the reach never looks back.
+            self.find.skip_settled(self.screen.pages());
             let mut next = None;
-            for at in order {
+            let mut next_pos = usize::MAX;
+            // Dirtied positions, earliest in scan order first: each
+            // entry examined once, never the whole order. The first
+            // dropped page still waiting wins; the reach decides
+            // against it below.
+            for pos in self.find.dirty().clone() {
+                crate::work::add(|work| work.search_order_pages += 1);
+                let Some(at) = self.find.page_at(pos) else {
+                    continue;
+                };
                 let revision = self.screen.pages().index().revision(at);
-                if self.find.scanned(at) != Some(revision) && self.screen.pages().part(at).is_none()
+                if self.find.scanned(at) == Some(revision) || self.screen.pages().part(at).is_some()
+                {
+                    continue;
+                }
+                next_pos = pos;
+                next = Some(at);
+                break;
+            }
+            // The reach's page, unless a dirtied one stands earlier.
+            if self.find.cursor() < count {
+                let Some(at) = self.find.page_at(self.find.cursor()) else {
+                    return;
+                };
+                let revision = self.screen.pages().index().revision(at);
+                if self.find.scanned(at) != Some(revision)
+                    && self.screen.pages().part(at).is_none()
+                    && self.find.cursor() < next_pos
                 {
                     next = Some(at);
-                    break;
                 }
             }
             if let Some(at) = next {
@@ -358,7 +428,7 @@ impl App {
         }
         if !self.find.fetching()
             && self.find.current().is_none()
-            && !self.find.wants(self.screen.pages())
+            && self.find.settled(self.screen.pages())
             && let Some(first) = self.find.match_at(0)
         {
             self.find.set_current(first);
@@ -366,12 +436,14 @@ impl App {
     }
 
     /// Asks for `page`'s lines from `from`, or from its first line: one
-    /// `history` command of at most [`HISTORY_LINES`] lines.
+    /// `history` command of at most [`HISTORY_LINES`] lines. Captures the
+    /// layout the fetch reads under, so its answer cannot stamp another.
     fn fetch_page(&mut self, page: usize, from: Option<u64>, held: Vec<contract::Envelope>) {
         let (Some(session), true) = (self.session().cloned(), self.link == Link::Up) else {
             return;
         };
         let revision = self.screen.pages().index().revision(page);
+        let width = self.screen.pages().wrap_width();
         let Some(entry) = self.screen.pages().index().pages().get(page) else {
             return;
         };
@@ -389,7 +461,7 @@ impl App {
         let id = mint();
         let args = serde_json::json!({"from_seq": from, "to_seq": to});
         let line = session_command(&id, "history", &session, Some(args)).to_string();
-        self.find.send(id, page, held, line);
+        self.find.send(id, page, width, revision, held, line);
     }
 
     /// The search's unsent command lines.
@@ -442,14 +514,27 @@ impl App {
                     let done = fetch.held.is_empty()
                         || last.is_some_and(|last| end.is_some_and(|end| last >= end));
                     if done {
-                        // The page folds whole, so a chunk never scans
-                        // without the lines that open its turns.
-                        match self.screen.pages().fold_text(fetch.page, &fetch.held) {
-                            Some((rows, texts)) => {
-                                self.scan_scratch(fetch.page, revision, &rows, &texts);
-                            }
-                            None => {
-                                self.find.record(fetch.page, revision, Vec::new());
+                        // The fetch read under its captured layout: lines
+                        // read before a text change, or a table read at
+                        // another width, requeue for the current layout
+                        // instead of stamping the new revision with old
+                        // results. Anything else folds whole and scans at
+                        // the current width, as before.
+                        let width = self.screen.pages().wrap_width();
+                        let obsolete = fetch.revision != revision
+                            || (fetch.width != width && self.screen.pages().page_table(fetch.page));
+                        if obsolete {
+                            self.find.requeue(fetch.page);
+                        } else {
+                            // The page folds whole, so a chunk never scans
+                            // without the lines that open its turns.
+                            match self.screen.pages().fold_text(fetch.page, &fetch.held) {
+                                Some((rows, texts)) => {
+                                    self.scan_scratch(fetch.page, revision, &rows, &texts);
+                                }
+                                None => {
+                                    self.find.record(fetch.page, revision, Vec::new());
+                                }
                             }
                         }
                     } else {
@@ -480,6 +565,12 @@ impl App {
     /// dropped, and reveals the current match.
     pub(in crate::app) fn settle_find(&mut self) {
         if !self.find.due() {
+            return;
+        }
+        // Another session since the scan started resets the search:
+        // its pages and revisions answer for no one else.
+        if self.find.session_id().as_ref() != self.session() {
+            self.close_find();
             return;
         }
         let old = self.find.current().cloned();

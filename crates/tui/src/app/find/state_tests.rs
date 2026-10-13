@@ -102,6 +102,8 @@ fn answers_takes_only_the_fetchs_reply_from_the_attached_session() {
         id: "c_1".to_owned(),
         page: 0,
         generation: 0,
+        width: 40,
+        revision: 0,
         held: Vec::new(),
     });
     assert!(
@@ -167,6 +169,31 @@ fn record_caps_only_past_the_limit() {
         .collect();
     assert!(app.find.record(1, 1, more).is_empty());
     assert!(app.find.capped);
+}
+
+#[test]
+fn the_cap_pins_down_at_one_below_at_and_one_past() {
+    let mut app = attached(40, 10);
+    // One below the cap: one more fills it exactly, uncapped.
+    app.find.total = super::MAX_MATCHES - 1;
+    let one: Vec<_> =
+        std::iter::once((anchor_at(9, 1), 0usize, false, super::Snippet::default())).collect();
+    assert_eq!(app.find.record(9, 1, one).len(), 1);
+    assert!(!app.find.capped(), "one below the cap is not capped");
+    assert_eq!(app.find.total(), super::MAX_MATCHES);
+    // Exactly at the cap: an empty page still records uncapped, so a
+    // completed scan reads distinctly from a capped one.
+    assert!(app.find.record(10, 1, Vec::new()).is_empty());
+    assert!(
+        !app.find.capped(),
+        "exactly the cap with no match is not capped"
+    );
+    // One past: a match with no room left caps the scan.
+    let more: Vec<_> = (0..2)
+        .map(|_| (anchor_at(11, 1), 0usize, false, super::Snippet::default()))
+        .collect();
+    assert!(app.find.record(11, 1, more).is_empty());
+    assert!(app.find.capped(), "one past the cap caps the scan");
 }
 
 #[test]

@@ -1179,6 +1179,13 @@ impl Pages {
         self.closed.get(at).and_then(Option::as_ref)
     }
 
+    /// Whether page `at`'s replies hold a Markdown table: unknown
+    /// pages answer sensitively, so the search never trusts an old
+    /// table layout for them.
+    pub(crate) fn page_table(&self, at: usize) -> bool {
+        self.table.get(at).copied().flatten().unwrap_or(true)
+    }
+
     /// A page's lines: each card's, and the ▣ line of each card that ends
     /// on it, drawn from its turn's totals.
     fn draw(&self, page: usize, part: &Part, out: &mut Rows) {

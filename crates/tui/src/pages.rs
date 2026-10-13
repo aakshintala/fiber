@@ -82,6 +82,10 @@ pub(crate) struct Index {
     /// keeps the revision of every page whose text the width did not
     /// change.
     revisions: Vec<u64>,
+    /// How many times any page's text revision moved: the search
+    /// remembers the clock it last verified and re-examines pages only
+    /// when it moved, instead of walking every page per answer.
+    clock: u64,
     /// The saturated row sums before each page, rebuilt lazily after row
     /// changes: `prefix[at]` is the rows of the pages before `at`, so
     /// row queries never walk the pages. Rebuilding visits every page
@@ -104,6 +108,7 @@ impl Default for Index {
         Self {
             pages: vec![Page::default()],
             revisions: vec![0],
+            clock: 0,
             prefix: RefCell::new(vec![0, 0]),
             prefix_clean: Cell::new(true),
             in_flight: BTreeMap::new(),
@@ -254,7 +259,13 @@ impl Index {
     pub(crate) fn invalidate(&mut self, at: usize) {
         if let Some(revision) = self.revisions.get_mut(at) {
             *revision = revision.saturating_add(1);
+            self.clock = self.clock.saturating_add(1);
         }
+    }
+
+    /// How many times any page's text revision moved.
+    pub(crate) fn clock(&self) -> u64 {
+        self.clock
     }
 
     /// The cached saturated row sums before each page, rebuilt once
