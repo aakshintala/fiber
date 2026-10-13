@@ -1788,8 +1788,8 @@ fn shell_rows(c: &Call, content: &str, w: usize) -> Vec<Row> {
 /// A call's result, opened under its ledger row and indented eight columns:
 /// an edit's diff with a line-number gutter and word-level pairs, a read's
 /// text numbered from its offset, a search's matches grouped under each
-/// path, a shell's wrapped command with its output and closing, or its
-/// error, or its output clipped to twenty rendered rows with a dim
+/// path, a shell's wrapped command with its output and closing, an
+/// unrecognised tool's content plain or JSON indented, or its error, or its output clipped to twenty rendered rows with a dim
 /// “… N more lines (Enter to view)” opening the swapped view.
 fn call_rows(c: &Call, w: usize) -> Vec<Row> {
     let content = c.content.replace('\t', "    ");
@@ -1869,6 +1869,27 @@ fn call_rows(c: &Call, w: usize) -> Vec<Row> {
             out
         }
         "shell" => shell_rows(c, &content, w),
+        "other" if c.err.is_none() => {
+            if content.is_empty() {
+                return vec![opened_row(vec![sp("no output", Style::new())])];
+            }
+            // JSON content renders indented; anything else, including
+            // invalid JSON, renders verbatim
+            let t = content.trim();
+            let text = match serde_json::from_str::<Value>(t) {
+                Ok(v) if t.starts_with('{') || t.starts_with('[') => {
+                    serde_json::to_string_pretty(&v).unwrap_or_else(|_| content.clone())
+                }
+                _ => content.clone(),
+            };
+            let body: Vec<Vec<Row>> = text
+                .lines()
+                .map(|l| opened_plain(l, Style::new(), w))
+                .collect();
+            let (mut out, dropped) = opened_take(body);
+            opened_more(&mut out, dropped);
+            out
+        }
         _ => {
             let text = match &c.err {
                 Some((code, msg)) => format!("{code}: {msg}"),
@@ -8315,6 +8336,53 @@ mod tests {
             .filter(|r| plain(r).contains("-gone") || plain(r).contains("-and gone"))
             .collect();
         assert_eq!(removed.len(), 2);
+    }
+
+    fn tool_call(name: &str, content: &str) -> Call {
+        Call {
+            name: name.into(),
+            args: json!({}),
+            st: St::Completed,
+            start: 0,
+            end: Some(10),
+            err: None,
+            lines: 0,
+            exit: None,
+            changes: vec![],
+            content: content.into(),
+            step: 1,
+            asked: None,
+        }
+    }
+
+    #[test]
+    fn an_opened_unknown_tool_shows_json_indented_and_text_verbatim() {
+        // JSON content renders indented
+        let rows = call_rows(
+            &tool_call("notes_save", "{\"ok\":true,\"path\":\"n.md\"}"),
+            160,
+        );
+        let text: Vec<String> = rows.iter().map(plain).collect();
+        assert_eq!(text.len(), 4);
+        assert_eq!(text[0], "        {");
+        assert_eq!(text[1], "          \"ok\": true,");
+        assert_eq!(text[2], "          \"path\": \"n.md\"");
+        assert_eq!(text[3], "        }");
+        // a list renders indented too
+        let rows = call_rows(&tool_call("notes_save", "[1, 2]"), 160);
+        assert_eq!(rows.iter().map(plain).collect::<Vec<_>>().len(), 4);
+        // invalid JSON renders verbatim, however it starts
+        let rows = call_rows(&tool_call("notes_save", "{\"ok\": tru"), 160);
+        assert_eq!(rows.len(), 1);
+        assert_eq!(plain(&rows[0]), "        {\"ok\": tru");
+        // plain text passes through, wrapped
+        let rows = call_rows(&tool_call("linear_search", "two lines\nhere"), 160);
+        assert_eq!(rows.len(), 2);
+        assert_eq!(plain(&rows[1]), "        here");
+        // empty output reuses "no output"
+        let rows = call_rows(&tool_call("linear_search", ""), 160);
+        assert_eq!(rows.len(), 1);
+        assert_eq!(plain(&rows[0]), "        no output");
     }
 
     fn shell_call(
