@@ -111,6 +111,28 @@ fn config_with(home: &std::path::Path, text: &str) -> config::Config {
 }
 
 #[test]
+fn enabled_lookup_addresses_quote_names_without_dotted_key_parsing() {
+    fakes::within(
+        "enabled quote-name lookup",
+        std::time::Duration::from_secs(10),
+        || {
+            let home = fakes::TempDir::new("fiber-enabled-quote");
+            for enabled in [false, true] {
+                let text = serde_json::json!({"extensions": {"ac\"me": {"enabled":enabled}, "opencode": {"enabled":enabled}}}).to_string();
+                let config = config_with(home.path(), &text);
+                assert_eq!(is_enabled(&config, "ac\"me"), enabled);
+                assert_eq!(is_enabled(&config, "opencode"), enabled);
+                assert_eq!(
+                    is_enabled(&config, "github.com/aakshintala/fiber/providers/opencode"),
+                    enabled
+                );
+                assert!(is_enabled(&config, "unset\"name"));
+            }
+        },
+    );
+}
+
+#[test]
 fn an_extension_is_enabled_unless_switched_off() {
     let home = fakes::TempDir::new("fiber-enabled-default");
     let config = config_with(home.path(), "{}");

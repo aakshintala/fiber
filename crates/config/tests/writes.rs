@@ -18,6 +18,54 @@ use serde_json::json;
 const ACME: &str = "github.com/acme/fiber-acme";
 
 #[test]
+fn segments_read_addresses_unparseable_names_and_preserves_layers_and_aliases() {
+    fakes::within(
+        "segments configuration read",
+        std::time::Duration::from_secs(10),
+        || {
+            let setup = Setup::new();
+            setup.write(
+                &setup.global(),
+                &json!({"extensions":{"ac\"me":{"enabled":false}, "opencode":{"enabled":false}}})
+                    .to_string(),
+            );
+            setup.write(
+                &setup.project(),
+                &json!({"extensions":{"opencode":{"enabled":true}}}).to_string(),
+            );
+            let config = setup.load(&[]).unwrap();
+            for (name, enabled, source) in [
+                ("ac\"me", false, config::Source::Global(setup.global())),
+                ("opencode", true, config::Source::Project(setup.project())),
+                (
+                    "github.com/aakshintala/fiber/providers/opencode",
+                    true,
+                    config::Source::Project(setup.project()),
+                ),
+            ] {
+                let segments = vec!["extensions".into(), name.into(), "enabled".into()];
+                assert_eq!(
+                    config.get_segments(&segments, None),
+                    Some((json!(enabled), source))
+                );
+            }
+            assert_eq!(
+                config.get_segments(
+                    &[
+                        "extensions".into(),
+                        "missing\"name".into(),
+                        "enabled".into()
+                    ],
+                    None
+                ),
+                Some((json!(true), config::Source::Default))
+            );
+            assert_eq!(config.get_segments(&["unknown".into()], None), None);
+        },
+    );
+}
+
+#[test]
 fn set_preserves_equivalent_extension_leaf_spellings_in_person_layers() {
     fakes::within(
         "alias writes and effective reads",

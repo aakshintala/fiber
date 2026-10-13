@@ -229,9 +229,13 @@ pub(crate) fn locked_entries(home: &Path, clock: &dyn Clock) -> Result<Entries, 
 /// Whether the extension `name` loads: `extensions."<name>".enabled`,
 /// default true (`docs/configuration.md`, "Keys").
 pub fn is_enabled(config: &config::Config, name: &str) -> bool {
-    let quoted = format!("extensions.\"{name}\".enabled");
+    let segments = vec![
+        "extensions".to_owned(),
+        name.to_owned(),
+        "enabled".to_owned(),
+    ];
     config
-        .get(&quoted, None)
+        .get_segments(&segments, None)
         .and_then(|(value, _)| value.as_bool())
         .unwrap_or(true)
 }
