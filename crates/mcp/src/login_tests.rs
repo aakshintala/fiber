@@ -1615,13 +1615,16 @@ fn at_899s_the_wait_continues_and_at_900s_it_fails() {
             clock.await_parked(deadline, WITHIN),
             "the login never waited on the clock"
         );
-        clock.advance(Duration::from_secs(899));
         // Still waiting: the login parks on the clock again after the
-        // advance, so the last second still ends it at 900 s. The park
+        // advance, so the last second still ends it at 900 s. The mark
+        // is each thread's latest park when the clock moves; the await
+        // needs a later park with the same deadline, so a mutant that
+        // ends the wait early never re-parks and fails here. The park
         // is the code's own signal; no real-clock receive expiry paces
         // this test.
+        let mark = clock.advance_marked(Duration::from_secs(899));
         assert!(
-            clock.await_parked(deadline, WITHIN),
+            clock.await_parked_since(&mark, Some(deadline), WITHIN),
             "the login ended before 900 s"
         );
         clock.advance(Duration::from_secs(1));
@@ -2180,22 +2183,33 @@ fn a_refused_head_dripped_past_the_deadline_ends_at_the_deadline() {
         let reply = String::from_utf8_lossy(&reply).into_owned();
         assert!(reply.starts_with("HTTP/1.1 431"), "{reply}");
         // The drain parks on the injected clock while it waits for more
-        // of the refused head: each drip below is released only after
-        // `await_parked` shows the drain waiting, so the clock moves past
-        // the deadline while the drain is provably inside its
-        // deadline-bounded wait, and the answer is the deadline's
-        // timeout, not a kernel-timeout race. Without the drain's
-        // deadline check the answer never comes and the bound below
-        // fails the test.
-        for _ in 0..8 {
-            assert!(
-                clock.await_parked(deadline, WITHIN),
-                "the drain never waited on the clock"
-            );
-            client.write_all(b"G").unwrap();
-        }
+        // of the refused head: each drip below is released only after a
+        // later park proves the drain consumed the previous one, so the
+        // clock moves past the deadline while the drain is provably
+        // inside its deadline-bounded wait, and the answer is the
+        // deadline's timeout, not a kernel-timeout race. A plain
+        // `await_parked` could match one park for every drip; the mark
+        // needs a later park after each write, so a drip the drain never
+        // consumed fails here. Without the drain's deadline check the
+        // answer never comes and the bound below fails the test.
         assert!(
             clock.await_parked(deadline, WITHIN),
+            "the drain never waited on the clock"
+        );
+        for _ in 0..8 {
+            // Advancing by zero moves no deadline: it only snapshots each
+            // thread's latest park, so the await needs a park after the
+            // write below.
+            let mark = clock.advance_marked(Duration::ZERO);
+            client.write_all(b"G").unwrap();
+            assert!(
+                clock.await_parked_since(&mark, Some(deadline), WITHIN),
+                "the drain never waited on the clock"
+            );
+        }
+        let mark = clock.advance_marked(Duration::ZERO);
+        assert!(
+            clock.await_parked_since(&mark, Some(deadline), WITHIN),
             "the drain never waited on the clock"
         );
         clock.advance(Duration::from_secs(61));
