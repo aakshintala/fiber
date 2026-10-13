@@ -221,21 +221,52 @@ impl Look {
 
     /// Each role's paint in `theme` at `depth`. A role the terminal
     /// draws itself stays the default at every depth, and a `Dim` shade
-    /// draws dim at every depth, `NO_COLOR` included (`docs/tui.md`,
-    /// "Themes").
+    /// resolves through the theme's text shade and draws dim at every
+    /// depth, `NO_COLOR` included (`docs/tui.md`, "Themes"). On an
+    /// exactly white page the page takes the colour cube's white, 231,
+    /// which the grey ramp lacks, and any other tint that would resolve
+    /// to 231 takes the ramp's lightest, 255, so every tint stays
+    /// visible on the page (`docs/tui.md`, "Themes").
     fn colours(theme: &Theme, depth: Depth) -> [Paint; ROLES] {
+        let white_page = theme.shade(Role::Background) == Shade::Rgb((0xff, 0xff, 0xff));
         Role::ALL.map(|role| {
             let shade = theme.shade(role);
             match shade {
-                Shade::Terminal | Shade::Dim => Paint {
+                Shade::Terminal => Paint {
                     colour: Color::Reset,
-                    dim: matches!(shade, Shade::Dim),
+                    dim: false,
+                },
+                // `muted` is the text colour drawn dim: it follows the
+                // theme's text shade, so on a white page it never
+                // resolves to a white terminal foreground it would
+                // vanish on (`docs/tui.md`, "Themes").
+                Shade::Dim => Paint {
+                    colour: match theme.shade(Role::Text) {
+                        Shade::Terminal | Shade::Dim => Color::Reset,
+                        Shade::Rgb(rgb) => match depth {
+                            Depth::NoColour => Color::Reset,
+                            Depth::True => Color::Rgb(rgb.0, rgb.1, rgb.2),
+                            Depth::Ansi256 => Color::Indexed(ansi256(rgb, 16..=255)),
+                        },
+                    },
+                    dim: true,
                 },
                 Shade::Rgb(rgb) => Paint {
                     colour: match depth {
                         Depth::NoColour => Color::Reset,
                         Depth::True => Color::Rgb(rgb.0, rgb.1, rgb.2),
-                        Depth::Ansi256 => Color::Indexed(ansi256(rgb, among(role))),
+                        Depth::Ansi256 => {
+                            if white_page && role == Role::Background {
+                                Color::Indexed(231)
+                            } else {
+                                let index = ansi256(rgb, among(role));
+                                if white_page && role.tint() && index == 231 {
+                                    Color::Indexed(255)
+                                } else {
+                                    Color::Indexed(index)
+                                }
+                            }
+                        }
                     },
                     dim: false,
                 },

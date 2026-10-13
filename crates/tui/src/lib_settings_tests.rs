@@ -112,7 +112,7 @@ fn a_theme_choice_repaints_the_next_frame() {
     for cell in &written.content {
         assert!(matches!(
             cell.bg,
-            Color::Rgb(0xfa, 0xfa, 0xfa) | Color::Rgb(0xf0, 0xf0, 0xf1)
+            Color::Rgb(0xff, 0xff, 0xff) | Color::Rgb(0xea, 0xee, 0xf2)
         ));
     }
     assert_eq!(

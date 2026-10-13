@@ -69,10 +69,10 @@ fn a_fixed_light_theme_paints_every_cell_light() {
     let screen = drawn(look(ThemeSetting::Light, &[("COLORTERM", "truecolor")]));
     let written = screen.backend().buffer();
     for cell in &written.content {
-        assert_eq!(cell.bg, Color::Rgb(0xfa, 0xfa, 0xfa));
+        assert_eq!(cell.bg, Color::Rgb(0xff, 0xff, 0xff));
     }
-    assert_eq!(written[(1, 0)].fg, Color::Rgb(0x38, 0x3a, 0x42));
-    assert_eq!(written[(2, 1)].fg, Color::Rgb(0x38, 0x3a, 0x42));
+    assert_eq!(written[(1, 0)].fg, Color::Rgb(0x1f, 0x23, 0x28));
+    assert_eq!(written[(2, 1)].fg, Color::Rgb(0x1f, 0x23, 0x28));
 }
 
 #[test]
@@ -91,7 +91,7 @@ fn a_new_look_repaints_the_unchanged_frame() {
     screen.draw_with(&mut app, None, hi).expect("a draw");
     assert_eq!(
         screen.backend().buffer()[(3, 1)].bg,
-        Color::Rgb(0xfa, 0xfa, 0xfa)
+        Color::Rgb(0xff, 0xff, 0xff)
     );
 }
 
@@ -155,7 +155,7 @@ fn a_new_look_keeps_the_reported_appearance() {
     screen.draw_with(&mut app, None, hi).expect("a draw");
     assert_eq!(
         screen.backend().buffer()[(3, 1)].bg,
-        Color::Rgb(0xfa, 0xfa, 0xfa)
+        Color::Rgb(0xff, 0xff, 0xff)
     );
 }
 
@@ -170,7 +170,7 @@ fn a_light_report_repaints_the_unchanged_frame_light() {
     screen.draw_with(&mut app, None, hi).expect("a draw");
     assert_eq!(
         screen.backend().buffer()[(3, 1)].bg,
-        Color::Rgb(0xfa, 0xfa, 0xfa)
+        Color::Rgb(0xff, 0xff, 0xff)
     );
 }
 
@@ -199,7 +199,7 @@ fn a_light_report_through_the_loop_repaints_light() {
     );
     assert_eq!(
         lp.screen.backend().buffer()[(0, 0)].bg,
-        Color::Rgb(0xfa, 0xfa, 0xfa)
+        Color::Rgb(0xff, 0xff, 0xff)
     );
 }
 
