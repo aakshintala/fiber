@@ -976,3 +976,262 @@ fn scan_with_a_small_limit_reads_only_that_many_lines() {
     assert_eq!(scanned.count(), 5);
     assert_eq!(scanned.range(0, 100).unwrap(), envelopes[..5]);
 }
+
+/// The forward scan's fixed buffer: recovery scans allocate this once on
+/// the stack. The Finder is correct at any chunk size and `assert_scan`
+/// only upper-bounds the meter, so only a direct assertion on the
+/// constant itself observes it.
+#[test]
+fn the_forward_scan_uses_an_eight_kibibyte_stack_buffer() {
+    assert_eq!(SCAN_CHUNK, 8 * 1024);
+    assert_eq!(SCAN_CHUNK, 8192);
+    // Both sides of the change this pins: `8 + 1024` is the 1032-byte
+    // buffer no existing test observes.
+    assert_ne!(SCAN_CHUNK, 8 + 1024);
+}
+
+/// A fully resident window takes no file I/O and scans nothing: every
+/// start it needs is checkpointed, so the meter stays 0. Any residency
+/// check that falls through to the file scan grows the meter instead, and
+/// the resident counter itself is never called on this path, so only a
+/// direct assertion observes it.
+#[test]
+fn fully_resident_windows_scan_nothing() {
+    let (_dir, offsets, written) = written("resident-meter", &[10; 5]);
+    // Every window stays strictly below the total: a window touching the
+    // total names a line past the last one and takes the file scan.
+    for (from, max) in [(0, 4), (1, 1), (2, 2), (3, 1)] {
+        let window = offsets
+            .resolve(from, max, u64::MAX, u64::MAX)
+            .unwrap()
+            .unwrap();
+        assert_eq!(window.scanned, 0, "from {from} max {max}");
+        // Both sides of the window: the meter is 0 and the lines are
+        // exact, never an empty resident window.
+        let lines = offsets.range(from, max).unwrap();
+        assert!(!lines.is_empty(), "from {from} max {max}");
+        let first = usize::try_from(from).unwrap();
+        assert_eq!(lines, written[first..first + lines.len()]);
+    }
+    // Both sides of the bound: past the last line there is no window.
+    assert!(offsets.resolve(5, 4, u64::MAX, u64::MAX).unwrap().is_none());
+    // The resident scan counter itself: nothing on the resident path
+    // calls it, so only a direct assertion observes it.
+    let table = offsets.lock();
+    let snapshot = Snapshot {
+        checkpoints: table.checkpoints.clone(),
+        total: table.total,
+        end: table.end,
+    };
+    drop(table);
+    let starts = ResidentStarts {
+        snapshot: &snapshot,
+        idx: 1,
+    };
+    assert_eq!(starts.scanned(), 0);
+    assert_ne!(starts.scanned(), 1);
+}
+
+/// An evicted window counts its file scan: the meter reports a positive
+/// count bounded by the ruled scan bound, and the lines it finds stay
+/// exact.
+#[test]
+fn evicted_windows_report_traversed_bytes() {
+    let mut payloads = vec![long_payload(); 1100];
+    payloads.extend(small_payloads(600));
+    let (_dir, offsets, envelopes, lens) = bulked("meter-evicted", payloads);
+    let (_a, b_line, _gap, longest) = widest(&offsets.lock().checkpoints, &lens);
+    let end = offsets.end();
+    // Inside the first roomy gap, never on a checkpoint: forces the scan
+    // near the start, with plenty of file left so the count is bounded.
+    let (r_line, _r_end) = roomy_gap(&offsets.lock().checkpoints);
+    let at = r_line.saturating_add(1);
+    let window = offsets.resolve(at, 4, u64::MAX, u64::MAX).unwrap().unwrap();
+    // Both sides of the meter: a scan happened, and it stayed bounded.
+    assert!(window.scanned > 0, "target {at}");
+    assert_ne!(window.scanned, 0);
+    let bound = (2u64.max(end.saturating_mul(8) / 1024))
+        .saturating_add(longest)
+        .saturating_add(PAGE_BYTES);
+    assert!(
+        window.scanned <= bound,
+        "target {at}: scanned {} over bound {bound}",
+        window.scanned
+    );
+    let at_usize = usize::try_from(at).unwrap();
+    let got = offsets.range(at, 4).unwrap();
+    assert!(!got.is_empty());
+    assert_eq!(got, envelopes[at_usize..at_usize + got.len()]);
+    assert_scan(&offsets, b_line.saturating_sub(1), end, longest);
+}
+
+/// The meter counts exact traversed bytes: on a small log with its middle
+/// checkpoints removed, one chunked read takes the whole remainder, so the
+/// meter equals the bytes from the anchor to the end, never a constant.
+#[test]
+fn the_scan_meter_counts_exact_traversed_bytes() {
+    let (_dir, offsets, envelopes) = written("meter-exact", &[10; 10]);
+    let end = offsets.end();
+    let anchor_byte = {
+        let mut table = offsets.lock();
+        let anchor_byte = table.checkpoints[2].1;
+        table
+            .checkpoints
+            .retain(|checkpoint| checkpoint.0 <= 2 || checkpoint.0 == 9);
+        anchor_byte
+    };
+    let at = 5;
+    let window = offsets.resolve(at, 4, u64::MAX, u64::MAX).unwrap().unwrap();
+    // One read takes the whole remainder: the meter is exact.
+    assert_eq!(window.scanned, end.saturating_sub(anchor_byte));
+    // Both sides of the constant: positive and not pinned to 1.
+    assert!(window.scanned > 0);
+    assert_ne!(window.scanned, 1);
+    let got = offsets.range(at, 4).unwrap();
+    assert_eq!(got, envelopes[5..9]);
+}
+
+/// A scan that ends before the window's first line resolves an empty
+/// window over nothing found, still failing as a short read: `more` is
+/// true while lines remain below the bound and false when `from` equals
+/// it. Only the direct resolve observes `more` there: pages drop it with
+/// the failure and ranges drop it with the error.
+#[test]
+fn short_scan_empty_windows_carry_more() {
+    let mut payloads = vec![long_payload(); 1100];
+    payloads.extend(small_payloads(600));
+    let (dir, offsets, _envelopes, _lens) = bulked("more-short", payloads);
+    let total = offsets.count();
+    // Inside the first roomy gap, never on a checkpoint: forces the scan.
+    let (r_line, _r_end) = roomy_gap(&offsets.lock().checkpoints);
+    let from = r_line.saturating_add(1);
+    assert!(
+        !offsets
+            .lock()
+            .checkpoints
+            .iter()
+            .any(|checkpoint| checkpoint.0 == from),
+        "from {from} is checkpointed"
+    );
+    // Cut the whole file away: every forward scan ends before any line.
+    let _cut = cut(dir.path(), 0);
+    // Lines remain below the bound: more is true.
+    let empty = offsets
+        .resolve(from, 4, u64::MAX, u64::MAX)
+        .unwrap()
+        .unwrap();
+    assert_eq!(empty.start, empty.stop);
+    assert!(empty.more, "from {from} total {total}");
+    assert_eq!(
+        empty.short.as_ref().map(|error| error.kind()),
+        Some(std::io::ErrorKind::UnexpectedEof)
+    );
+    // An empty scan reads nothing.
+    assert_eq!(empty.scanned, 0);
+    // `from` equals the bound: nothing remains, so more is false.
+    let bound = offsets.resolve(from, 4, u64::MAX, from).unwrap().unwrap();
+    assert_eq!(bound.start, bound.stop);
+    assert!(!bound.more, "from {from}");
+    assert_eq!(
+        bound.short.as_ref().map(|error| error.kind()),
+        Some(std::io::ErrorKind::UnexpectedEof)
+    );
+}
+
+/// A resident scan never ends short: `short` is `None` once `next` runs
+/// out, which the resident walk only reaches past its last checkpoint.
+#[test]
+fn resident_starts_short_is_none() {
+    let (_dir, offsets, _) = written("resident-short", &[10; 3]);
+    let table = offsets.lock();
+    let snapshot = Snapshot {
+        checkpoints: table.checkpoints.clone(),
+        total: table.total,
+        end: table.end,
+    };
+    drop(table);
+    let mut starts = ResidentStarts {
+        snapshot: &snapshot,
+        idx: 1,
+    };
+    // Both sides of the walk: each resident start in order, then none.
+    assert_eq!(starts.next(), Some(snapshot.checkpoints[1].1));
+    assert_eq!(starts.next(), Some(snapshot.checkpoints[2].1));
+    assert_eq!(starts.next(), None);
+    assert!(starts.short().is_none());
+}
+
+/// A mid-scan read error keeps its kind through `Starts::short`: a clean
+/// end of file reads as `UnexpectedEof`, but a failed read reads as
+/// itself. Reading a directory fails deterministically without touching
+/// the log, so the fallback that reports every short scan as end of file
+/// cannot stand in for it.
+#[test]
+fn scanned_starts_short_keeps_a_mid_scan_error_kind() {
+    let home = fakes::TempDir::new("log-offsets-dir-read");
+    let expected = std::io::Read::read(&mut File::open(home.path()).unwrap(), &mut [0u8; 1])
+        .unwrap_err()
+        .kind();
+    // Both sides of the kind: the failure is real, and it is not EOF.
+    assert_ne!(expected, std::io::ErrorKind::UnexpectedEof);
+    let mut file = File::open(home.path()).unwrap();
+    let mut finder = Finder {
+        file: &mut file,
+        buf: [0u8; SCAN_CHUNK],
+        len: 0,
+        at: 0,
+        byte: 0,
+        scanned: 0,
+        short: None,
+    };
+    let mut starts = ScannedStarts {
+        finder: &mut finder,
+    };
+    // Both sides of the scan: no line start, then the kept error.
+    assert_eq!(starts.next(), None);
+    let kept = starts.short().expect("a mid-scan read error is kept");
+    assert_eq!(kept.kind(), expected);
+    // End to end through sizing: the window carries the read error, not
+    // end of file.
+    let mut file = File::open(home.path()).unwrap();
+    let mut finder = Finder {
+        file: &mut file,
+        buf: [0u8; SCAN_CHUNK],
+        len: 0,
+        at: 0,
+        byte: 0,
+        scanned: 0,
+        short: None,
+    };
+    let snapshot = Snapshot {
+        checkpoints: vec![(0, 0)],
+        total: 3,
+        end: 300,
+    };
+    let spec = Spec {
+        first: 0,
+        from: 0,
+        want_last: 2,
+        start: 0,
+        bytes: u64::MAX,
+        bound: u64::MAX,
+    };
+    let mut starts = ScannedStarts {
+        finder: &mut finder,
+    };
+    let window = size_window(&snapshot, &spec, &mut starts);
+    assert_eq!(
+        window.short.as_ref().map(|error| error.kind()),
+        Some(expected)
+    );
+}
+
+/// A clean end of file where a line start was sought is `Some` end of
+/// file: every `or_else(short_eof)` site already holds `Some` in the
+/// exercised shapes, so only a direct assertion observes it.
+#[test]
+fn short_eof_reports_unexpected_eof() {
+    let error = short_eof().expect("a clean end of file is a short read");
+    assert_eq!(error.kind(), std::io::ErrorKind::UnexpectedEof);
+    assert!(!error.to_string().is_empty());
+}
