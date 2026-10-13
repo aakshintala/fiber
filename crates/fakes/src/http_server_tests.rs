@@ -55,6 +55,23 @@ fn is_stopped(server: &HttpServer) -> bool {
     server.shared.stopping.load(Ordering::SeqCst)
 }
 
+/// Releases an armed check-to-park pause and stops the server when the
+/// test unwinds past it: a waiter held between its check and its park
+/// would otherwise outlive the failed test and hang the scope's join,
+/// turning a red assertion into a hung suite. After a green run the
+/// release and shutdown repeat what the test already did.
+struct Rescue {
+    gate: Arc<CheckGate>,
+    server: HttpServer,
+}
+
+impl Drop for Rescue {
+    fn drop(&mut self) {
+        self.gate.release();
+        self.server.shutdown();
+    }
+}
+
 /// A request bound of ten fake seconds, so advances stay small numbers.
 fn ten_seconds() -> Limits {
     Limits {
@@ -355,6 +372,24 @@ fn shutdown_reaps_core_blocked_connections() {
     assert!(server.shutdown(), "shutdown reaps the blocked read");
 }
 
+/// Each move of the injected clock bumps the wake generation by one:
+/// no waiter is parked, so a broken bump fails at once instead of
+/// hanging a waiter past the mutant timeout.
+#[test]
+fn each_clock_move_bumps_the_wake_generation() {
+    let clock = fake_clock();
+    let server = bind(&clock);
+    assert_eq!(server.test_generation(), 0, "the generation starts at zero");
+    clock.advance(Duration::from_secs(1));
+    assert_eq!(
+        server.test_generation(),
+        1,
+        "one clock move bumps the generation once"
+    );
+    clock.advance(Duration::from_secs(1));
+    assert_eq!(server.test_generation(), 2, "the next move bumps it again");
+}
+
 /// An advance between the wait's clock check and its park is not lost:
 /// the waiter fails naming its request instead of sleeping past the
 /// advance. The check-to-park pause holds the waiter after its check, the
@@ -393,6 +428,13 @@ fn advance_between_check_and_park_is_not_lost() {
         // Arm the check-to-park pause, then wake the waiter once: it
         // re-checks past the advance and pauses before its next park.
         gate.arm();
+        // Dropped when an assertion below fails: the held waiter would
+        // otherwise hang the scope's join, so a red assertion fails the
+        // test instead of hanging it.
+        let _rescue = Rescue {
+            gate: Arc::clone(&gate),
+            server: server.clone(),
+        };
         clock.advance(Duration::from_secs(3));
         let second = next_acknowledgment(&acks, "the accept's re-check");
         assert_eq!(
@@ -482,6 +524,78 @@ fn full_reply_preserves_scripted_headers_and_bytes() {
     let request = Deadline::after(OP).recv_or_fail(&recorded_rx, "the recorded request");
     assert_eq!(request.target, "/v1");
     assert!(server.shutdown(), "shutdown reaps the serving threads");
+}
+
+/// A released pause before a full reply still sends every scripted
+/// byte: the reply is `Done`, and the wire carries the head and body
+/// exactly. A flipped pause check would stop the reply instead, so the
+/// client would see an empty close.
+#[test]
+fn a_released_pause_before_a_full_reply_sends_every_byte() {
+    let (recorded_tx, recorded_rx) = mpsc::channel();
+    let (pause, control) = Pause::new();
+    let (result_tx, result_rx) = mpsc::channel();
+    let (raw_tx, raw_rx) = mpsc::channel();
+    let head = b"HTTP/1.1 200 Fake\r\ncontent-length: 2\r\nconnection: close\r\n\r\n";
+    let (server, addr) = serve_once(recorded_tx, move |mut conn| {
+        let end = conn.reply_full(head, b"ok", Some(&pause));
+        match result_tx.send(end) {
+            Ok(()) | Err(_) => {}
+        }
+    });
+    thread::scope(|scope| {
+        scope.spawn(|| {
+            let raw = exchange(addr, b"GET /v1 HTTP/1.1\r\nHost: fake\r\n\r\n");
+            match raw_tx.send(raw) {
+                Ok(()) | Err(_) => {}
+            }
+        });
+        control.wait_hit(&Deadline::after(OP), "the pause before the response");
+        control.release();
+        let raw = Deadline::after(OP).recv_or_fail(&raw_rx, "the client's reply");
+        let mut expected = head.to_vec();
+        expected.extend_from_slice(b"ok");
+        assert_eq!(raw, expected, "the wire carries the scripted bytes");
+        assert_eq!(
+            Deadline::after(OP).recv_or_fail(&result_rx, "the full reply"),
+            ReplyEnd::Done,
+            "the released reply sends"
+        );
+        Deadline::after(OP).recv_or_fail(&recorded_rx, "the recorded request");
+    });
+    assert!(server.shutdown(), "shutdown reaps the serving threads");
+}
+
+/// Shutdown during the pause before a full reply stops it: the reply
+/// is `Stopped`, never a full reply from a stopped server. A flipped
+/// pause check would send the reply anyway, answering `Done`.
+#[test]
+fn shutdown_during_the_pause_before_a_full_reply_stops_it() {
+    let (recorded_tx, recorded_rx) = mpsc::channel();
+    let (pause, control) = Pause::new();
+    let (result_tx, result_rx) = mpsc::channel();
+    let head = b"HTTP/1.1 200 Fake\r\ncontent-length: 2\r\nconnection: close\r\n\r\n";
+    let (server, addr) = serve_once(recorded_tx, move |mut conn| {
+        let end = conn.reply_full(head, b"ok", Some(&pause));
+        match result_tx.send(end) {
+            Ok(()) | Err(_) => {}
+        }
+    });
+    let mut client = TcpStream::connect(addr).expect("the test connects");
+    client
+        .set_read_timeout(Some(OP))
+        .expect("the test bounds its reads");
+    client
+        .write_all(b"GET /v1 HTTP/1.1\r\nHost: fake\r\n\r\n")
+        .expect("the request writes");
+    control.wait_hit(&Deadline::after(OP), "the pause before the response");
+    assert!(server.shutdown(), "shutdown ends the paused reply");
+    assert_eq!(
+        Deadline::after(OP).recv_or_fail(&result_rx, "the stopped reply"),
+        ReplyEnd::Stopped,
+        "shutdown stops the paused reply"
+    );
+    Deadline::after(OP).recv_or_fail(&recorded_rx, "the recorded request");
 }
 
 #[test]

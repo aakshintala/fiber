@@ -277,6 +277,32 @@ fn a_dropped_proxy_refuses_connections() {
     );
 }
 
+/// Dropping the proxy refuses connections promptly: the port is already
+/// closed when the drop returns, so the first connect after it is
+/// refused, without waiting out any bound.
+#[test]
+fn a_dropped_proxy_refuses_connections_at_once() {
+    let proxy = ConnectProxy::start().unwrap();
+    let port = proxy.port();
+    drop(proxy);
+    let deadline = Deadline::after(REPLY_WITHIN);
+    let refused = loop {
+        match TcpStream::connect(("127.0.0.1", port)) {
+            Ok(open) => {
+                drop(open);
+                if deadline.left().is_zero() {
+                    break false;
+                }
+            }
+            Err(_) => break true,
+        }
+    };
+    assert!(
+        refused,
+        "the dropped proxy's port refuses connections promptly"
+    );
+}
+
 /// Bytes sent with the CONNECT head are the tunnel's first payload, not
 /// dropped lookahead: one write carries the head and the ping together.
 #[test]

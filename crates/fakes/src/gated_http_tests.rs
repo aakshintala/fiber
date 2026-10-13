@@ -455,6 +455,33 @@ fn dropping_before_goodbye_stops_the_server() {
     );
 }
 
+/// Dropping the fake refuses connections promptly: the port is already
+/// closed when the drop returns, so the first connect after it is
+/// refused, without waiting out any bound.
+#[test]
+fn a_dropped_fake_refuses_connections_at_once() {
+    let fake = GatedHttp::start_call(elicitation(), gated_result());
+    let url = fake.url();
+    handshake(&url);
+    drop(fake);
+    let deadline = Deadline::after(CLIENT_WAIT);
+    let refused = loop {
+        match std::net::TcpStream::connect(address(&url)) {
+            Ok(open) => {
+                drop(open);
+                if deadline.left().is_zero() {
+                    break false;
+                }
+            }
+            Err(_) => break true,
+        }
+    };
+    assert!(
+        refused,
+        "the dropped fake's port refuses connections promptly"
+    );
+}
+
 /// Shutdown ends an accept wait at once: the wait returns instead of
 /// polling out its bound, so a stopped server never waits out a bound
 /// it was told to drop.

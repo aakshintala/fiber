@@ -25,7 +25,9 @@ struct State {
 }
 
 /// A fake CONNECT proxy listening on a local port. Dropping it closes the
-/// port and every open tunnel.
+/// port and every open tunnel: the core field drops first, and its own
+/// drop shuts the server down, breaking tunnels and reaping the serving
+/// threads, so no explicit `Drop` duplicates it.
 pub struct ConnectProxy {
     core: HttpServer,
     state: Arc<Mutex<State>>,
@@ -93,14 +95,6 @@ impl ConnectProxy {
             .wait_timeout_while(guard, within, |state| state.closed < count)
             .unwrap_or_else(PoisonError::into_inner);
         guard.closed >= count
-    }
-}
-
-impl Drop for ConnectProxy {
-    fn drop(&mut self) {
-        // Shutdown breaks every open tunnel and reaps every serving
-        // thread within its bound.
-        self.core.shutdown();
     }
 }
 

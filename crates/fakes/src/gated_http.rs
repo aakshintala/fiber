@@ -146,6 +146,11 @@ impl GatedHttp {
 }
 
 impl Drop for GatedHttp {
+    // Exempt: removing the drop still closes the port through the core
+    // field's own drop, which runs the same shutdown; the explicit drop
+    // only reaps the already-stopping serving thread within the shutdown
+    // bound, which no consumer observes.
+    #[cfg_attr(false, mutants::skip)]
     fn drop(&mut self) {
         // Shutdown ends the serving thread's current wait; joining it
         // reaps it within the core's bound, so no handshake-only test

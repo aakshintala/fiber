@@ -1264,6 +1264,14 @@ impl HttpServer {
         self.shared.waits.load(Ordering::SeqCst)
     }
 
+    /// The clock-wake generation waiters park on, test-only: each move
+    /// of the injected clock bumps it by one, so a test pins the bump
+    /// without waiting on any waiter.
+    #[cfg(test)]
+    pub(crate) fn test_generation(&self) -> u64 {
+        *lock(&self.shared.wake)
+    }
+
     /// Holds check-to-park pauses from here on, test-only.
     #[cfg(test)]
     pub(crate) fn test_gate(&self) -> Arc<CheckGate> {
