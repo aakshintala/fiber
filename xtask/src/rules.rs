@@ -84,6 +84,60 @@ pub(crate) fn leaks(trees: &[(String, String)], rule: &Isolation) -> Vec<String>
     failures.into_iter().collect()
 }
 
+/// The feature node `cargo tree --prefix depth -e features` prints for
+/// serde_json's `preserve_order`, without a deduplication marker.
+const PRESERVE_ORDER: &str = "serde_json feature \"preserve_order\"";
+
+/// Each failure where the workspace build enables serde_json's
+/// `preserve_order` feature, which `docs/prompt-cache.md` never allows.
+/// `tree` is the output of `cargo tree --prefix depth -e features -i
+/// serde_json`: every line starts with its depth, so the package lines
+/// directly under a `preserve_order` node, one level deeper, are the
+/// crates that enabled it. Deeper crates only depend on an enabler.
+/// A bare node with no crate under it still fails: the feature is on,
+/// so the build is already poisoned.
+pub(crate) fn preserve_order(tree: &str) -> Vec<String> {
+    let mut enablers = BTreeSet::new();
+    let mut nodes = 0;
+    let mut depth: Option<usize> = None;
+    for line in tree.lines() {
+        let digits = line.chars().take_while(|c| c.is_numeric()).count();
+        let (line_depth, text) = match line[..digits].parse::<usize>() {
+            Ok(line_depth) => (line_depth, line[digits..].trim_end().to_owned()),
+            Err(_) => {
+                depth = None;
+                continue;
+            }
+        };
+        let text = text.strip_suffix("(*)").unwrap_or(&text).trim_end();
+        if text == PRESERVE_ORDER {
+            nodes += 1;
+            depth = Some(line_depth);
+            continue;
+        }
+        if depth.is_some_and(|d| line_depth <= d) {
+            depth = None;
+        }
+        if depth.is_some_and(|d| line_depth == d + 1) && !text.contains(" feature \"") {
+            if let Some(name) = text.split_whitespace().next() {
+                enablers.insert(format!(
+                    "{name}: enables serde_json feature \"preserve_order\"; serde_json's preserve_order feature is never enabled (docs/prompt-cache.md)"
+                ));
+            }
+        }
+    }
+    if !enablers.is_empty() {
+        return enablers.into_iter().collect();
+    }
+    if nodes > 0 {
+        return vec![
+            "serde_json feature \"preserve_order\" is enabled but no crate in the tree names it; serde_json's preserve_order feature is never enabled (docs/prompt-cache.md)"
+                .to_owned(),
+        ];
+    }
+    Vec::new()
+}
+
 /// Whether Rust `source` uses the `unsafe` keyword. proc-macro2 tokenises
 /// it, so comments, literals and doc comments are never read as code.
 pub(crate) fn uses_unsafe(source: &str) -> Result<bool, proc_macro2::LexError> {

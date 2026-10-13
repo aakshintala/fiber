@@ -440,3 +440,81 @@ fn a_member_whose_tree_names_a_tui_crate_is_reported_and_tui_and_main_are_exempt
         ]
     );
 }
+
+/// A `--prefix depth` tree where `tools` and `main` enable
+/// `preserve_order`: the crates in the `default` and `std` subtrees, and
+/// the deeper crate under `tools`, enabled nothing.
+const PRESERVE_VIOLATION: &str = "0serde_json v1.0.151\n\
+1serde_json feature \"default\"\n\
+2cli v0.0.0 (/repo/crates/cli)\n\
+3cli feature \"default\" (command-line)\n\
+1serde_json feature \"preserve_order\"\n\
+2tools v0.0.0 (/repo/crates/tools)\n\
+3tools feature \"default\" (command-line)\n\
+3hub v0.0.0 (/repo/crates/hub)\n\
+2main v0.0.0 (/repo/crates/main) (*)\n\
+2tools v0.0.0 (/repo/crates/tools) (*)\n\
+1serde_json feature \"std\"\n\
+2serde_json feature \"default\" (*)\n\
+2config v0.0.0 (/repo/crates/config)\n\
+1serde_json feature \"preserve_order\" (*)\n";
+
+#[test]
+fn preserve_order_reports_each_enabling_crate_once() {
+    assert_eq!(
+        preserve_order(PRESERVE_VIOLATION),
+        [
+            "main: enables serde_json feature \"preserve_order\"; serde_json's preserve_order feature is never enabled (docs/prompt-cache.md)",
+            "tools: enables serde_json feature \"preserve_order\"; serde_json's preserve_order feature is never enabled (docs/prompt-cache.md)",
+        ]
+    );
+}
+
+/// The workspace tree on main today: only `default` and `std`, so no
+/// violation. `preserve_order_helper` is a crate name, not the feature.
+const PRESERVE_CLEAN: &str = "0serde_json v1.0.151\n\
+1serde_json feature \"default\"\n\
+2cli v0.0.0 (/repo/crates/cli)\n\
+3cli feature \"default\" (command-line)\n\
+2preserve_order_helper v1.2.3 (/repo/other)\n\
+1serde_json feature \"std\"\n\
+2config v0.0.0 (/repo/crates/config)\n";
+
+#[test]
+fn preserve_order_passes_without_the_feature() {
+    assert!(preserve_order(PRESERVE_CLEAN).is_empty());
+    assert!(preserve_order("").is_empty());
+}
+
+#[test]
+fn preserve_order_ignores_a_longer_feature_name() {
+    let tree = "0serde_json v1.0.151\n1serde_json feature \"preserve_order_extra\"\n2tools v0.0.0 (/repo/crates/tools)\n";
+    assert!(preserve_order(tree).is_empty());
+}
+
+#[test]
+fn preserve_order_names_a_nested_enabler_and_ends_at_the_sibling() {
+    let tree = "0serde_json v1.0.151\n\
+1serde_json feature \"default\"\n\
+2cli v0.0.0 (/repo/crates/cli)\n\
+3serde_json feature \"preserve_order\"\n\
+4tools v0.0.0 (/repo/crates/tools)\n\
+2config v0.0.0 (/repo/crates/config)\n";
+    assert_eq!(
+        preserve_order(tree),
+        [
+            "tools: enables serde_json feature \"preserve_order\"; serde_json's preserve_order feature is never enabled (docs/prompt-cache.md)"
+        ]
+    );
+}
+
+#[test]
+fn preserve_order_without_a_named_enabler_still_fails() {
+    let tree = "0serde_json v1.0.151\n1serde_json feature \"preserve_order\"\n1serde_json feature \"std\"\n";
+    assert_eq!(
+        preserve_order(tree),
+        [
+            "serde_json feature \"preserve_order\" is enabled but no crate in the tree names it; serde_json's preserve_order feature is never enabled (docs/prompt-cache.md)"
+        ]
+    );
+}
