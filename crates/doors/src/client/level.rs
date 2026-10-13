@@ -10,6 +10,7 @@ use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
 
 use contract::commands::SubscribeLevel;
 use contract::events::{CommandAccepted, Event};
+use contract::inbox::Delivery;
 use contract::{CommandId, Envelope, ErrorCode, SessionId};
 use log::Injector;
 
@@ -30,29 +31,57 @@ pub(crate) struct Switch {
     /// Written directly after the switch: the acknowledgement first, then
     /// (summary only) the latest session_status and extensions_loaded.
     pub(crate) prelude: Vec<Envelope>,
+    /// A label-bearing change's deferred response: bare acceptance, then
+    /// a notice on failure, written after the old-level drain and before
+    /// the prelude snapshots. `None` for a label-free change, whose
+    /// prelude already holds the acceptance.
+    pub(crate) response: Option<mpsc::Receiver<Vec<Envelope>>>,
 }
 
 /// The connection's route to its writer's current queue: every reader and
 /// acknowledgement line goes through it, so a line pushed before a switch
 /// is written at the old level, and one pushed after at the new level.
+/// It also carries the reader's deferred subscribe responses: the
+/// reader's cleanup cancels them, before the writer is joined, so a
+/// writer waiting on the loop's answer ends instead of hanging the join.
 #[derive(Clone)]
-pub(crate) struct Outbox(Arc<Mutex<Injector>>);
+pub(crate) struct Outbox {
+    inner: Arc<Mutex<Injector>>,
+    settles: Arc<Mutex<Vec<super::SettleCancel>>>,
+}
 
 impl Outbox {
     pub(crate) fn new(injector: Injector) -> Self {
-        Self(Arc::new(Mutex::new(injector)))
+        Self {
+            inner: Arc::new(Mutex::new(injector)),
+            settles: Arc::default(),
+        }
     }
 
     pub(crate) fn push_kept(&self, line: Envelope) {
-        lock(&self.0).push_kept(line);
+        lock(&self.inner).push_kept(line);
     }
 
     /// Under one lock: pushes `control` (kept) into the current queue,
     /// then makes `next` current.
     pub(crate) fn swap(&self, control: Envelope, next: Injector) {
-        let mut current = lock(&self.0);
+        let mut current = lock(&self.inner);
         current.push_kept(control);
         *current = next;
+    }
+
+    /// Holds a label-bearing subscribe's deferred response until the
+    /// reader leaves: the reader's cleanup cancels every one it held.
+    pub(crate) fn settle(&self, cancel: super::SettleCancel) {
+        lock(&self.settles).push(cancel);
+    }
+
+    /// Cancels every deferred response held for this connection, so a
+    /// writer waiting on the loop's answer ends instead of hanging the
+    /// join that follows. A response already answered is unaffected: its
+    /// sender is taken, so the cancel finds nothing.
+    pub(crate) fn cancel_settles(&self) {
+        lock(&self.settles).clear();
     }
 
     /// Pushes the writer's STOP line into the current queue
@@ -82,7 +111,16 @@ fn drain_more(written: Option<u64>, cutoff: u64) -> bool {
 /// request is rejected and nothing else happens. Otherwise preparation
 /// runs first: on failure the outbox, `conn.full` and the `clients` count
 /// are untouched, and the rejection reaches the client at the old level.
-pub(super) fn change(conn: &mut Conn, id: CommandId, level: SubscribeLevel) {
+/// With `credential`, the label is delivered as the `credential` command
+/// after preparation succeeds, and the single wire acceptance waits for
+/// the loop's answer, which the writer emits after the old-level drain
+/// and before the new-level snapshots.
+pub(super) fn change(
+    conn: &mut Conn,
+    id: CommandId,
+    level: SubscribeLevel,
+    credential: Option<String>,
+) {
     let summary = matches!(level, SubscribeLevel::Summary);
     if summary == !conn.full {
         reject(conn, Some(id), ErrorCode::InvalidArguments, super::ALREADY);
@@ -108,13 +146,13 @@ pub(super) fn change(conn: &mut Conn, id: CommandId, level: SubscribeLevel) {
                 &conn.gate.session_id,
                 conn.gate.clock.as_ref(),
                 &Event::CommandAccepted(CommandAccepted {
-                    command_id: id,
+                    command_id: id.clone(),
                     result: None,
                 }),
             );
-            let mut prelude = vec![ack];
-            prelude.extend([status, extensions].into_iter().flatten());
-            (watcher, injector, cutoff, prelude)
+            let mut snapshots = Vec::new();
+            snapshots.extend([status, extensions].into_iter().flatten());
+            (watcher, injector, cutoff, ack, snapshots)
         } else {
             // Raising folds the stream from the log as a first `full`
             // subscribe does: over an unreadable page the new watcher
@@ -127,14 +165,14 @@ pub(super) fn change(conn: &mut Conn, id: CommandId, level: SubscribeLevel) {
                 &conn.gate.session_id,
                 conn.gate.clock.as_ref(),
                 &Event::CommandAccepted(CommandAccepted {
-                    command_id: id,
+                    command_id: id.clone(),
                     result: None,
                 }),
             );
-            (watcher, injector, 0, vec![ack])
+            (watcher, injector, 0, ack, Vec::new())
         }
     };
-    let (watcher, injector, cutoff, prelude) = prepared;
+    let (watcher, injector, cutoff, ack, snapshots) = prepared;
     // The count changes before the writer can see the switch: the new
     // full watcher is registered, so an upgraded connection receives its
     // own `clients` line after the fold, and a downgrade's `clients` line
@@ -145,6 +183,32 @@ pub(super) fn change(conn: &mut Conn, id: CommandId, level: SubscribeLevel) {
     } else {
         conn.gate.attach();
     }
+    // The prelude snapshots follow the acceptance. A label-bearing
+    // change's acceptance arrives with the loop's answer, so the eagerly
+    // built one is dropped and the subscribe is answered exactly once.
+    let prelude = match &credential {
+        None => std::iter::once(ack).chain(snapshots).collect(),
+        Some(_) => snapshots,
+    };
+    // The switch is submitted only after preparation succeeded. A refused
+    // switch keeps this successful subscription: the writer still emits
+    // the single acceptance, then the refusal as a notice.
+    let response = match credential {
+        None => None,
+        Some(label) => {
+            let Some(outbox) = conn.outbox.clone() else {
+                conn.gone = true;
+                return;
+            };
+            let (ack, response, cancel) = super::settle_response(&conn.gate, id);
+            outbox.settle(cancel);
+            conn.gate.deliver(Delivery::Credential(
+                contract::commands::CredentialArgs { label },
+                ack,
+            ));
+            Some(response)
+        }
+    };
     // The seed lines are in the new queue before the control line is
     // published (they were, by registration), so a pending
     // acknowledgement cannot precede them.
@@ -153,6 +217,7 @@ pub(super) fn change(conn: &mut Conn, id: CommandId, level: SubscribeLevel) {
         summary,
         cutoff,
         prelude,
+        response,
     };
     if conn
         .switches
@@ -175,10 +240,11 @@ pub(super) fn change(conn: &mut Conn, id: CommandId, level: SubscribeLevel) {
 
 /// Writer side, on a [`LEVEL`] line: takes the next [`Switch`] with
 /// `try_recv` (never `recv`); on a lowering drains `writing.watcher`
-/// through `switch.cutoff`; writes the prelude; installs the new watcher,
-/// level and cutoff. With no switch pending it changes nothing. A failed
-/// write, or the old watcher ending during the drain, is returned as an
-/// error.
+/// through `switch.cutoff`; waits for a label-bearing switch's deferred
+/// response, then writes it before the prelude snapshots; installs the
+/// new watcher, level and cutoff. With no switch pending it changes
+/// nothing. A failed write, a cancelled response, or the old watcher
+/// ending during the drain, is returned as an error.
 pub(super) fn apply(
     writing: &mut Writing,
     switches: &mpsc::Receiver<Switch>,
@@ -210,6 +276,22 @@ pub(super) fn apply(
             }
         }
     }
+    // The loop's answer to the delivered switch: bare acceptance, then
+    // a notice on failure, before the new-level snapshots. A cancelled
+    // wait means the reader is gone; ending here lets the join proceed.
+    if let Some(response) = switch.response {
+        // Test-only pause point, as at the first subscribe's prelude wait:
+        // the writer is parked here, before any line past the
+        // old-level drain can reach the client.
+        #[cfg(test)]
+        crate::session::tests::note_switch_wait();
+        let settled = response
+            .recv()
+            .map_err(|_| std::io::Error::other("the switch's response was cancelled"))?;
+        for line in &settled {
+            super::write_line(stream, line)?;
+        }
+    }
     for line in &switch.prelude {
         super::write_line(stream, line)?;
     }
@@ -219,7 +301,7 @@ pub(super) fn apply(
     Ok(())
 }
 
-fn lock(mutex: &Mutex<Injector>) -> MutexGuard<'_, Injector> {
+fn lock<T>(mutex: &Mutex<T>) -> MutexGuard<'_, T> {
     mutex.lock().unwrap_or_else(PoisonError::into_inner)
 }
 

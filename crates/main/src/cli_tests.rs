@@ -555,6 +555,7 @@ fn parses_argv_into_its_invocation() {
                 parent: None,
                 delegate_id: None,
                 login_shell: false,
+                credential: None,
             }))),
         ),
         (
@@ -582,6 +583,7 @@ fn parses_argv_into_its_invocation() {
                 parent: None,
                 delegate_id: None,
                 login_shell: false,
+                credential: None,
             }))),
         ),
         (
@@ -605,6 +607,7 @@ fn parses_argv_into_its_invocation() {
                 parent: None,
                 delegate_id: None,
                 login_shell: false,
+                credential: None,
             }))),
         ),
         (
@@ -629,6 +632,7 @@ fn parses_argv_into_its_invocation() {
                 parent: None,
                 delegate_id: None,
                 login_shell: false,
+                credential: None,
             }))),
         ),
         (
@@ -658,6 +662,7 @@ fn parses_argv_into_its_invocation() {
                 parent: Some("s_aaaaaaaaaaaaaaaa".to_owned()),
                 delegate_id: Some("j_0123456789abcdef".to_owned()),
                 login_shell: false,
+                credential: None,
             }))),
         ),
         (
@@ -689,6 +694,7 @@ fn parses_argv_into_its_invocation() {
                 parent: Some("s_aaaaaaaaaaaaaaaa".to_owned()),
                 delegate_id: Some("j_bbbbbbbbbbbbbbbb".to_owned()),
                 login_shell: false,
+                credential: None,
             }))),
         ),
         (
@@ -714,6 +720,7 @@ fn parses_argv_into_its_invocation() {
                 parent: None,
                 delegate_id: None,
                 login_shell: false,
+                credential: None,
             }))),
         ),
         (
@@ -738,6 +745,7 @@ fn parses_argv_into_its_invocation() {
                 parent: None,
                 delegate_id: None,
                 login_shell: true,
+                credential: None,
             }))),
         ),
         (
@@ -1014,20 +1022,56 @@ fn a_list_flag_with_a_subcommand_is_a_usage_sentence() {
 
 #[test]
 fn resume_takes_an_optional_id() {
-    let Invocation::Run(Some(Commands::Resume { id })) = parse_from(["fiber", "resume"]) else {
+    let Invocation::Run(Some(Commands::Resume { id, credential })) =
+        parse_from(["fiber", "resume"])
+    else {
         panic!("bare resume");
     };
     assert_eq!(id, None);
-    let Invocation::Run(Some(Commands::Resume { id })) = parse_from(["fiber", "resume", "s_12"])
+    assert_eq!(credential, None);
+    let Invocation::Run(Some(Commands::Resume { id, credential })) =
+        parse_from(["fiber", "resume", "s_12"])
     else {
         panic!("resume with an id");
     };
     assert_eq!(id.as_deref(), Some("s_12"));
+    assert_eq!(credential, None);
     let help = super::render_help(&["resume"]).unwrap();
     assert!(
         help.contains("Open a session in the terminal, or home at the session list"),
         "{help}"
     );
+    assert!(help.contains("--credential <label>"), "{help}");
+}
+
+#[test]
+fn resume_credential_rides_with_an_id_in_either_order() {
+    for argv in [
+        vec!["fiber", "resume", "s_12", "--credential", "work"],
+        vec!["fiber", "resume", "--credential", "work", "s_12"],
+        vec!["fiber", "resume", "s_12", "--credential=work"],
+    ] {
+        let Invocation::Run(Some(Commands::Resume { id, credential })) = parse_from(argv) else {
+            panic!("resume with a credential");
+        };
+        assert_eq!(id.as_deref(), Some("s_12"));
+        assert_eq!(credential.as_deref(), Some("work"));
+    }
+}
+
+#[test]
+fn resume_credential_without_an_id_is_a_usage_error() {
+    let message = sentence(&["fiber", "resume", "--credential", "work"]);
+    assert!(
+        message.contains("<id>"),
+        "the error names the missing id: {message}"
+    );
+}
+
+#[test]
+fn resume_help_names_the_credential_flag() {
+    let help = super::render_help(&["resume"]).unwrap();
+    assert!(help.contains("--credential <label>"), "{help}");
 }
 
 #[test]
@@ -1039,6 +1083,15 @@ fn continue_takes_no_arguments() {
     assert!(
         help.contains("Open the most recent session in this project"),
         "{help}"
+    );
+}
+
+#[test]
+fn continue_rejects_the_credential_flag() {
+    let message = sentence(&["fiber", "continue", "--credential", "work"]);
+    assert!(
+        message.contains("--credential"),
+        "the error names `--credential`: {message}"
     );
 }
 
@@ -1628,6 +1681,83 @@ fn session_resume_with_a_prompt_and_a_parent_parses_as_a_delegate_resume() {
     assert_eq!(args.prompt.as_deref(), Some("hi"));
     assert_eq!(args.parent.as_deref(), Some("s_aaaaaaaaaaaaaaaa"));
     assert_eq!(args.delegate_id.as_deref(), Some("j_bbbbbbbbbbbbbbbb"));
+}
+
+#[test]
+fn session_resume_with_a_credential_parses_the_label() {
+    let Invocation::Run(Some(Commands::Session(args))) = parse_from([
+        "fiber",
+        "session",
+        "--id",
+        "s_0123456789abcdef",
+        "--workspace",
+        "/w",
+        "--resume",
+        "--credential",
+        "work",
+    ]) else {
+        panic!("a resume with a credential parses");
+    };
+    assert!(args.resume);
+    assert_eq!(args.credential.as_deref(), Some("work"));
+}
+
+#[test]
+fn session_resume_with_an_equals_credential_parses_the_label() {
+    // The hub spawns the resumed session with `--credential=<label>` as
+    // one argument, so an empty or leading-hyphen label is one value.
+    let Invocation::Run(Some(Commands::Session(args))) = parse_from([
+        "fiber",
+        "session",
+        "--id",
+        "s_0123456789abcdef",
+        "--workspace",
+        "/w",
+        "--resume",
+        "--credential=--resume",
+    ]) else {
+        panic!("a resume with an equals credential parses");
+    };
+    assert!(args.resume);
+    assert_eq!(args.credential.as_deref(), Some("--resume"));
+}
+
+#[test]
+fn session_credential_without_resume_is_a_usage_error() {
+    let message = sentence(&[
+        "fiber",
+        "session",
+        "--id",
+        "s_0123456789abcdef",
+        "--workspace",
+        "/w",
+        "--credential",
+        "work",
+    ]);
+    assert!(
+        message.contains("--resume"),
+        "the error names `--resume`: {message}"
+    );
+}
+
+#[test]
+fn session_credential_with_a_rewind_is_a_usage_error() {
+    let message = sentence(&[
+        "fiber",
+        "session",
+        "--id",
+        "s_0123456789abcdef",
+        "--workspace",
+        "/w",
+        "--rewound-from",
+        "s_aaaaaaaaaaaaaaaa",
+        "--credential",
+        "work",
+    ]);
+    assert!(
+        message.contains("--resume"),
+        "the error names `--resume`: {message}"
+    );
 }
 
 #[test]

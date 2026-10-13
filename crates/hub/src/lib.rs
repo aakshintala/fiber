@@ -122,8 +122,15 @@ pub trait Starter: Send + Sync {
 
     /// Starts the session command resuming `id` in `workspace`, the launch
     /// directory the hub selected from the session's log
-    /// (`docs/invocation.md`, "Lifecycle").
-    fn resume(&self, id: &SessionId, workspace: &Path) -> io::Result<Box<dyn Started>>;
+    /// (`docs/invocation.md`, "Lifecycle"). With `credential`, the
+    /// resumed session starts on that credential label
+    /// (`docs/model-routing.md`, "Which credential a session uses").
+    fn resume(
+        &self,
+        id: &SessionId,
+        workspace: &Path,
+        credential: Option<&str>,
+    ) -> io::Result<Box<dyn Started>>;
 
     /// Starts the session command for a rewind's new session `id` in
     /// `workspace`, the old session's, for the rewind of `from`

@@ -59,6 +59,9 @@ pub(crate) struct FakeStarter {
     accepted: Arc<Accepted>,
     /// Each `resume` call's session and workspace, in order.
     resumed: Arc<Mutex<Vec<(SessionId, PathBuf)>>>,
+    /// Each `resume` call's asked credential label, in order: `Some` when
+    /// the opening subscribe named one, beside [`FakeStarter::resumed`].
+    asked: Arc<Mutex<Vec<Option<String>>>>,
     /// Each `rewind` call's new session, workspace and old session, in order.
     rewound: Arc<Mutex<Vec<(SessionId, PathBuf, SessionId)>>>,
     /// Each `start` call's worktree flag, in order.
@@ -179,6 +182,7 @@ impl FakeStarter {
             received: Arc::new(Received::default()),
             accepted: Arc::new(Accepted::default()),
             resumed: Arc::new(Mutex::new(Vec::new())),
+            asked: Arc::new(Mutex::new(Vec::new())),
             rewound: Arc::new(Mutex::new(Vec::new())),
             started_worktrees: Arc::new(Mutex::new(Vec::new())),
             serving: Arc::new(Serving::default()),
@@ -224,6 +228,11 @@ impl FakeStarter {
     /// Each `resume` call's session and workspace, in order.
     pub(crate) fn resumed(&self) -> Vec<(SessionId, PathBuf)> {
         lock(&self.resumed).clone()
+    }
+
+    /// Each `resume` call's asked credential label, in order.
+    pub(crate) fn asked(&self) -> Vec<Option<String>> {
+        lock(&self.asked).clone()
     }
 
     /// Each `start` call's worktree flag, in order.
@@ -311,8 +320,14 @@ impl Starter for FakeStarter {
         self.launch(id)
     }
 
-    fn resume(&self, id: &SessionId, workspace: &Path) -> std::io::Result<Box<dyn Started>> {
+    fn resume(
+        &self,
+        id: &SessionId,
+        workspace: &Path,
+        credential: Option<&str>,
+    ) -> std::io::Result<Box<dyn Started>> {
         lock(&self.resumed).push((id.clone(), workspace.to_path_buf()));
+        lock(&self.asked).push(credential.map(str::to_owned));
         {
             let mut held = lock(&self.held);
             if *held > 0 {

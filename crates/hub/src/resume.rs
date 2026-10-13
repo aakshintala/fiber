@@ -57,15 +57,23 @@ const HELD_POLL: Duration = Duration::from_millis(100);
 /// none accepts, a resumed one's. `session` has the minted shape. Under the
 /// hub's resume gate the socket is tried first, so the starter is never
 /// asked to resume a session whose socket accepts.
-pub(crate) fn resume(hub: &Hub, session: &SessionId) -> Result<UnixStream, Refused> {
-    reach(hub, session, true)
+pub(crate) fn resume(
+    hub: &Hub,
+    session: &SessionId,
+    credential: Option<&str>,
+) -> Result<UnixStream, Refused> {
+    reach(hub, session, credential, true)
 }
 
 /// A connection to a resumed `session` whose log ends in `fiber_exited`
 /// while its process still answers: a socket that accepts while the log
 /// still ends so is the exiting process's, and is waited out.
-pub(crate) fn resume_exited(hub: &Hub, session: &SessionId) -> Result<UnixStream, Refused> {
-    reach(hub, session, false)
+pub(crate) fn resume_exited(
+    hub: &Hub,
+    session: &SessionId,
+    credential: Option<&str>,
+) -> Result<UnixStream, Refused> {
+    reach(hub, session, credential, false)
 }
 
 /// Whether `session`'s log ends in `fiber_exited`: it has exited, even
@@ -98,7 +106,12 @@ enum Step {
 /// until [`SHUTDOWN_BOUND`] after the first clock read; past it the client
 /// gets `session_held`. With `trusted`, a socket that accepts on the first
 /// pass is used as it is.
-fn reach(hub: &Hub, session: &SessionId, trusted: bool) -> Result<UnixStream, Refused> {
+fn reach(
+    hub: &Hub,
+    session: &SessionId,
+    credential: Option<&str>,
+    trusted: bool,
+) -> Result<UnixStream, Refused> {
     let socket = hub.home.join("run").join(&session.0);
     let _gate = hub
         .resume_gate
@@ -108,7 +121,7 @@ fn reach(hub: &Hub, session: &SessionId, trusted: bool) -> Result<UnixStream, Re
     let mut trusted = trusted;
     let mut held = None;
     loop {
-        match attempt(hub, session, &socket, trusted) {
+        match attempt(hub, session, &socket, credential, trusted) {
             Step::Done(result) => return result,
             Step::Wait(message) => held = message.or(held),
         }
@@ -129,7 +142,13 @@ fn reach(hub: &Hub, session: &SessionId, trusted: bool) -> Result<UnixStream, Re
     }
 }
 
-fn attempt(hub: &Hub, session: &SessionId, socket: &Path, trusted: bool) -> Step {
+fn attempt(
+    hub: &Hub,
+    session: &SessionId,
+    socket: &Path,
+    credential: Option<&str>,
+    trusted: bool,
+) -> Step {
     if let Ok(stream) = UnixStream::connect(socket) {
         if trusted || !exited(&hub.home, session) {
             return Step::Done(Ok(stream));
@@ -169,7 +188,7 @@ fn attempt(hub: &Hub, session: &SessionId, socket: &Path, trusted: bool) -> Step
     if recorded.delegate {
         return Step::Done(Err(delegate_refused()));
     }
-    let started = match hub.starter.resume(session, recorded.launch()) {
+    let started = match hub.starter.resume(session, recorded.launch(), credential) {
         Ok(started) => started,
         Err(error) => return Step::Done(Err(io_failed(hub, session, &format!("{error}.")))),
     };

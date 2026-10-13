@@ -13,6 +13,15 @@ use serde_json::{Map, Value};
 use super::level::{LEVEL, Switch, Writing, apply};
 use crate::session::Gate;
 
+/// A first subscribe's deferred response: the loop's answer to the
+/// delivered switch, emitted before anything the seeded watcher holds.
+/// `response` is bare acceptance, then a notice on failure; `after` is
+/// written next (summary snapshots; empty for full).
+pub(crate) struct Prelude {
+    pub(crate) response: mpsc::Receiver<Vec<Envelope>>,
+    pub(crate) after: Vec<Envelope>,
+}
+
 /// Wakes a connection's writer so it leaves `recv`.
 pub(crate) const STOP: &str = "doors.stop";
 
@@ -22,6 +31,7 @@ pub(crate) fn spawn_writer(
     watcher: log::Watcher,
     stream: Box<dyn Write + Send>,
     summary: bool,
+    prelude: Option<Prelude>,
 ) -> mpsc::Sender<Switch> {
     gate.conns.begin_writer();
     let ended = Arc::clone(&gate);
@@ -35,6 +45,27 @@ pub(crate) fn spawn_writer(
             // The handle is stored before this write can block, so close joins it.
             if rx.recv().is_err() {
                 return;
+            }
+            let mut stream = stream;
+            // The loop's answer to the delivered switch, before folded
+            // history: bare acceptance, then a notice on failure, then
+            // the summary snapshots. A cancelled wait means the reader
+            // is gone; ending here lets the join proceed.
+            if let Some(prelude) = prelude {
+                // Test-only pause point: the writer is parked here, so a
+                // test that observes it knows the silence that follows is
+                // the wait, not a thread that never ran.
+                #[cfg(test)]
+                crate::session::tests::note_switch_wait();
+                let settled = match prelude.response.recv() {
+                    Ok(settled) => settled,
+                    Err(_) => return,
+                };
+                for line in settled.into_iter().chain(prelude.after) {
+                    if write_line(stream.as_mut(), &line).is_err() {
+                        return;
+                    }
+                }
             }
             if write_loop(watcher, stream, summary, switches) == Ended::Failed {
                 // The watcher failed: the reader and socket stay open, so

@@ -12,6 +12,8 @@ pub enum OpenAt {
     Home,
     /// `fiber resume` with no id: home at the session list.
     List,
-    /// `fiber resume <id>` and `fiber continue`: this session.
-    Session(SessionId),
+    /// `fiber resume <id>` and `fiber continue`: this session, and the
+    /// credential label the opening subscribe asks for, if any. The
+    /// launch carries it once; `continue` and reconnects carry none.
+    Session(SessionId, Option<String>),
 }
