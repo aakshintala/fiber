@@ -990,7 +990,9 @@ pub(super) fn judge(
                         let base_ten = match base {
                             Base::None => None,
                             Base::Failed(_) => None,
-                            Base::Ok(results) if !results.metrics.contains_key(id) => None,
+                            // No missing-metric arm: `attach_medians` errors
+                            // on a missing metric, so `.ok()` is `None`
+                            // exactly then and this arm covers it.
                             Base::Ok(results) => attach_medians(Some(results), id)
                                 .ok()
                                 .and_then(|m| m.get(GATED_ATTACH_FIXTURE).copied()),
@@ -1006,23 +1008,12 @@ pub(super) fn judge(
                             Base::None | Base::Failed(_) | Base::Ok(_) => None,
                         };
                         match (base, base_usable) {
-                            (Base::None, _) | (Base::Ok(_), None)
-                                if !matches!(base, Base::Failed(_)) =>
-                            {
+                            // A failed base never reaches this arm: its own
+                            // arm below matches first, so no guard is needed.
+                            // Every unavailable base shares one reason.
+                            (Base::None, _) | (Base::Ok(_), None) => {
                                 line.result = "advisory";
-                                let why = if matches!(base, Base::None) {
-                                    NO_BASE_REASON.to_owned()
-                                } else if let Base::Ok(results) = base {
-                                    if !results.metrics.contains_key(id)
-                                        || attach_medians(Some(results), id).is_err()
-                                    {
-                                        "advisory: no comparable same-job base timing".to_owned()
-                                    } else {
-                                        NO_BASE_REASON.to_owned()
-                                    }
-                                } else {
-                                    NO_BASE_REASON.to_owned()
-                                };
+                                let why = NO_BASE_REASON.to_owned();
                                 line.head.push_str(&format!(
                                     "; {GATED_ATTACH_FIXTURE}: {ten:.1} ms ({} ceiling {ceiling:.1} ms, +{tolerance}% over base; {why}){one_note}",
                                     class_name(class)
@@ -1131,9 +1122,9 @@ pub(super) fn judge(
                             Base::None | Base::Failed(_) | Base::Ok(_) => None,
                         };
                         match (base, base_value) {
-                            (Base::None, _) | (Base::Ok(_), None)
-                                if !matches!(base, Base::Failed(_)) =>
-                            {
+                            // A failed base never reaches this arm: its own
+                            // arm below matches first, so no guard is needed.
+                            (Base::None, _) | (Base::Ok(_), None) => {
                                 line.result = "advisory";
                                 line.head.push_str(&format!("; {NO_BASE_REASON}"));
                             }
