@@ -54,7 +54,7 @@ const CASES: &[Case<Look>] = &[
     Case {
         name: "changed-files",
         help: "the files Fiber changed with one file's hunks",
-        check: "the changed files with the chosen file's hunks as a diff against HEAD, the untracked file wholly added, removals red and additions green.",
+        check: "the changed files with the chosen file's hunks as a guttered diff against HEAD, differing words in reverse video on paired lines, the untracked file wholly added, removals red and additions green.",
         build: || Look {
             kind: Kind::ChangedFiles,
         },
@@ -309,8 +309,9 @@ fn usage_rows() -> Vec<super::Row> {
 }
 
 /// Changed files: the files Fiber changed, with the chosen file's hunks as
-/// the workspace's current diff against HEAD. Removals read red; additions
-/// keep the default colour, since the palette names no green.
+/// the workspace's current diff against HEAD, through the shared diff
+/// renderer: a dim gutter, removals red, additions green, differing words
+/// in reverse video on paired lines.
 fn changed_files_rows(w: usize) -> Vec<super::Row> {
     let mut out = vec![
         row(vec![
@@ -330,29 +331,13 @@ fn changed_files_rows(w: usize) -> Vec<super::Row> {
         "@@ -12,7 +12,9 @@ fn paint(",
         "     let spans = fit(&r.spans, w as usize);",
         "-    buf.set_line(x, y, &Line::from(spans), w);",
-        "+    let line = Line::from(spans);",
         "+    buf.set_line(x, y, &line, w);",
         "     if let Some(bg) = r.bg {",
+        "+    let line = Line::from(spans);",
+        "-    let old = Line::from(spans);",
+        "+    let new = Line::from(spans);",
     ];
-    out.extend(slab(
-        hunks
-            .iter()
-            .map(|l| {
-                if l.starts_with('-') {
-                    row(vec![sp(l.to_string(), fg(RED))])
-                } else if l.starts_with('+') {
-                    row(vec![sp(l.to_string(), fg(GREEN))])
-                } else if l.starts_with("@@") {
-                    row(vec![sp(l.to_string(), dim())])
-                } else {
-                    row(vec![sp(l.to_string(), Style::new())])
-                }
-            })
-            .collect(),
-        BK,
-        None,
-        w,
-    ));
+    out.extend(slab(super::diff_rows(&hunks), BK, None, w));
     out
 }
 
@@ -1101,26 +1086,70 @@ mod tests {
     #[test]
     fn changed_files_marks_removals_red_and_hunks_dim() {
         let rows = changed_files_rows(160);
+        let plain = |r: &crate::Row| {
+            r.spans
+                .iter()
+                .map(|s| s.content.as_ref())
+                .collect::<String>()
+        };
+        let rev = |r: &crate::Row| {
+            r.spans
+                .iter()
+                .filter(|s| s.style.add_modifier.contains(Modifier::REVERSED))
+                .map(|s| s.content.to_string())
+                .collect::<Vec<_>>()
+        };
+        // the paired removal numbers the old side and reads red, with only
+        // its differing words in reverse video
         let removal = rows
             .iter()
-            .find(|r| {
-                r.spans
-                    .iter()
-                    .any(|s| s.content.contains("-    buf.set_line"))
-            })
+            .find(|r| plain(r).contains("-    buf.set_line"))
             .unwrap();
-        assert_eq!(removal.spans[0].style.fg, Some(crate::RED));
-        // Additions take the added role.
+        assert!(
+            removal.spans.iter().any(|s| s.style.fg == Some(crate::RED)),
+            "the removal is not red"
+        );
+        assert!(
+            plain(removal).contains("  13 -"),
+            "no old-side gutter: {}",
+            plain(removal)
+        );
+        assert_eq!(rev(removal), ["&Line::from(spans),"]);
+        // its pair numbers the new side in the added role
         let addition = rows
             .iter()
-            .find(|r| r.spans.iter().any(|s| s.content.contains("+    let line")))
+            .find(|r| plain(r).contains("+    buf.set_line"))
             .unwrap();
-        assert_eq!(addition.spans[0].style.fg, Some(crate::GREEN));
+        assert!(
+            addition
+                .spans
+                .iter()
+                .any(|s| s.style.fg == Some(crate::GREEN)),
+            "the addition is not green"
+        );
+        assert!(
+            plain(addition).contains("  13 +"),
+            "no new-side gutter: {}",
+            plain(addition)
+        );
+        assert_eq!(rev(addition), ["&line,"]);
+        // an unpaired addition keeps its colour with nothing reversed
+        let lone = rows
+            .iter()
+            .find(|r| plain(r).contains("+    let line"))
+            .unwrap();
+        assert!(lone.spans.iter().any(|s| s.style.fg == Some(crate::GREEN)));
+        assert!(rev(lone).is_empty(), "an unpaired line reverses");
         let hunk = rows
             .iter()
             .find(|r| r.spans.iter().any(|s| s.content.starts_with("@@")))
             .unwrap();
-        assert!(hunk.spans[0].style.add_modifier.contains(Modifier::DIM));
+        assert!(
+            hunk.spans
+                .iter()
+                .any(|s| s.style.add_modifier.contains(Modifier::DIM)),
+            "the @@ line is not dim"
+        );
     }
 
     #[test]
