@@ -78,8 +78,10 @@ pub fn extension_install(
 }
 
 /// `fiber extension update [<name>]`: with a name, reinstalls that
-/// extension at its newest version; without one, updates every
-/// installed extension a person asked for, in listing order.
+/// extension at its newest version; without one, updates every installed
+/// extension, dependencies included, in listing order: each member moves to
+/// its newest tag within the accepted major and records a floor, without
+/// becoming a person request.
 pub fn extension_update(name: Option<&str>, fiber_version: &str, clock: &dyn Clock) -> i32 {
     let stdin = io::stdin();
     let terminal = stdin.is_terminal();
@@ -218,10 +220,10 @@ fn update_all(
     for hit in &listing.damaged {
         writeln!(err, "fiber: {}", hit.skipped()).unwrap_or(());
     }
-    for ext in listing.installed.iter().filter(|i| i.requested) {
+    for ext in &listing.installed {
         let plan = plan_request(
             home,
-            Request::Update(ext.name.clone()),
+            Request::UpdateAll(ext.name.clone()),
             fiber_version,
             origin,
             clock,

@@ -316,6 +316,7 @@ fn installed(package: &str) -> extensions::Installed {
         version: "0.1.0".to_owned(),
         provenance: extensions::Provenance::Path(std::path::PathBuf::from("test")),
         requested: true,
+        floor: None,
         depends: std::collections::BTreeMap::new(),
     }
 }

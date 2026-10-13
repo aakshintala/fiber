@@ -107,6 +107,35 @@ pub(crate) fn root_meets(
     })
 }
 
+/// The newest tag within the major version every minimum in `wants`
+/// accepts: the update-everything choice for one installed extension.
+/// No constraints means the newest tag, as for an install that names no
+/// minimum. A minimum no tag meets, or two major versions, fails as for
+/// an ordinary dependency.
+pub(crate) fn newest_within(
+    name: &str,
+    wants: &BTreeMap<String, String>,
+    tags: &[String],
+) -> Result<String, Error> {
+    if wants.is_empty() {
+        return newest(tags).ok_or_else(|| Error::NoTag { name: name.into() });
+    }
+    let floor = floor(name, wants)?;
+    versions(tags)
+        .into_iter()
+        .rev()
+        .find(|(v, _)| *v >= floor && v[0] == floor[0])
+        .map(|(_, t)| t.clone())
+        .ok_or_else(|| Error::NoVersion {
+            name: name.into(),
+            needs: wants
+                .values()
+                .max_by_key(|m| minimum(m).ok())
+                .cloned()
+                .unwrap_or_default(),
+        })
+}
+
 /// The lowest tag at or above every minimum in `wants`; the newest tag is
 /// not taken unless a minimum asks for it.
 pub(crate) fn pick(

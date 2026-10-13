@@ -24,6 +24,11 @@ pub struct Installed {
     pub provenance: Provenance,
     /// Asked for, rather than pulled in as a dependency.
     pub requested: bool,
+    /// The lowest version an update-everything run moved this extension
+    /// to, kept as a minimum by later installs and removals. It never
+    /// keeps the extension installed: removal still depends only on
+    /// requested roots and manifest dependencies.
+    pub floor: Option<String>,
     /// The extensions it depends on, each with a minimum version.
     pub depends: BTreeMap<String, String>,
 }
@@ -202,6 +207,7 @@ pub(crate) fn read_entries(home: &Path) -> Result<Entries, Error> {
             version: record.version,
             provenance: record.provenance,
             requested: record.requested,
+            floor: record.floor,
             depends: manifest.depends.clone(),
         };
         found.push(Entry {

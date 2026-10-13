@@ -113,3 +113,80 @@ fn newest_is_the_highest_version_tag() {
     assert_eq!(newest(&tags(&["v1.10.0", "v1.9.0"])).unwrap(), "v1.10.0");
     assert_eq!(newest(&tags(&["latest"])), None);
 }
+
+#[test]
+fn newest_within_accepted_major_skips_a_newer_major() {
+    use super::newest_within;
+    let all = tags(&["v1.2.0", "v1.5.0", "v2.0.0"]);
+    // At, just below and just above the edge of major 1's newest tag.
+    for (min, got) in [
+        ("1.2", "v1.5.0"),
+        ("1.5", "v1.5.0"),
+        ("1.4", "v1.5.0"),
+        ("2.0", "v2.0.0"),
+    ] {
+        let w = wants(&[("a", min)]);
+        assert_eq!(newest_within("d", &w, &all).unwrap(), got, "{min}");
+    }
+    // Above the newest tag of the accepted major: no version qualifies.
+    for min in ["1.6", "1.5.1"] {
+        let w = wants(&[("a", min)]);
+        assert!(
+            matches!(newest_within("d", &w, &all), Err(Error::NoVersion { .. })),
+            "{min}"
+        );
+    }
+}
+
+#[test]
+fn newest_within_with_two_dependents_takes_the_newest_of_their_major() {
+    use super::newest_within;
+    let all = tags(&["v1.2.0", "v1.5.0", "v2.0.0"]);
+    let w = wants(&[("a", "1.2"), ("b", "1.4")]);
+    assert_eq!(newest_within("d", &w, &all).unwrap(), "v1.5.0");
+}
+
+#[test]
+fn newest_within_with_two_majors_stops_naming_both() {
+    use super::newest_within;
+    let all = tags(&["v1.2.0", "v1.5.0", "v2.0.0"]);
+    let w = wants(&[("a", "1.2"), ("b", "2.0")]);
+    let err = newest_within("d", &w, &all).unwrap_err();
+    let text = err.to_string();
+    for part in ["d", "a", "b", "1.2", "2.0"] {
+        assert!(text.contains(part), "{text}");
+    }
+    assert!(matches!(err, Error::MajorConflict { .. }));
+}
+
+#[test]
+fn newest_within_without_constraints_is_the_newest_tag() {
+    use super::newest_within;
+    let all = tags(&["v1.2.0", "v1.5.0", "v2.0.0"]);
+    assert_eq!(newest_within("d", &wants(&[]), &all).unwrap(), "v2.0.0");
+    assert!(matches!(
+        newest_within("d", &wants(&[]), &tags(&["latest"])),
+        Err(Error::NoTag { .. })
+    ));
+}
+
+#[test]
+fn newest_within_is_deterministic_in_any_order() {
+    use super::newest_within;
+    let w = wants(&[("a", "1.2")]);
+    let mut shuffled = tags(&["v1.2.0", "v1.5.0", "v2.0.0"]);
+    shuffled.reverse();
+    assert_eq!(
+        newest_within("d", &w, &shuffled).unwrap(),
+        newest_within("d", &w, &tags(&["v1.2.0", "v1.5.0", "v2.0.0"])).unwrap()
+    );
+    // `1.4.0` and `v1.4.0` are one version: either order picks the same tag.
+    let both = tags(&["v1.4.0", "1.4.0"]);
+    let mut swapped = both.clone();
+    swapped.reverse();
+    let w = wants(&[("a", "1.4")]);
+    assert_eq!(
+        newest_within("d", &w, &both).unwrap(),
+        newest_within("d", &w, &swapped).unwrap()
+    );
+}

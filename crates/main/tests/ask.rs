@@ -1447,14 +1447,14 @@ fn extension_update_all_on_an_empty_home_exits_zero() {
 }
 
 #[test]
-fn extension_update_all_skips_unrequested_dependencies() {
+fn extension_update_all_moves_unrequested_dependencies_and_floors_them() {
     let setup = Setup::new_with_started_deadline();
     let gh = Github::new(&setup);
     gh.release_with_needs_muse("v0.1.0", "v1.0.0", "v0.1.0");
-    let muse_v1 = git(setup.deadline, &gh.repo, &["rev-parse", "v0.1.0^{commit}"]);
     let run = setup.fiber_with_env(&["extension", "install", NEEDS_MUSE], &gh.env());
     assert_eq!(run.code, Some(0), "{}", run.stderr);
     gh.release_with_needs_muse("v0.2.0", "v1.0.1", "v0.1.0");
+    let v2 = git(setup.deadline, &gh.repo, &["rev-parse", "v0.2.0^{commit}"]);
     let run = setup.fiber_with_env(&["extension", "update"], &gh.env());
     assert_eq!(run.code, Some(0), "{}", run.stderr);
     let listed = setup.fiber_with_env(&["extension", "list"], &[]);
@@ -1462,8 +1462,8 @@ fn extension_update_all_skips_unrequested_dependencies() {
         listed
             .raw
             .iter()
-            .any(|line| line.contains(&format!("{MUSE} v0.1.0 {muse_v1}"))),
-        "muse must stay on v0.1.0 when update-all skips unrequested extensions: {:?}",
+            .any(|line| line.contains(&format!("{MUSE} v0.2.0 {v2}"))),
+        "muse moves to v0.2.0 when update-all moves unrequested extensions: {:?}",
         listed.raw
     );
     assert!(
@@ -1474,6 +1474,13 @@ fn extension_update_all_skips_unrequested_dependencies() {
         "{:?}",
         listed.raw
     );
+    // The move recorded a floor without making muse a person request.
+    let record: Value = serde_json::from_str(
+        &fs::read_to_string(setup.home().join("extensions/muse/.fiber.json")).unwrap(),
+    )
+    .unwrap();
+    assert_eq!(record["floor"], json!("v0.2.0"), "{record}");
+    assert_eq!(record["requested"], json!(false), "{record}");
     // muse is still a dependency only: removing what needed it removes it.
     let removed = setup.run_with_stdin(&["extension", "remove", NEEDS_MUSE], None);
     assert_eq!(removed.code, Some(0), "{}", removed.stderr);
