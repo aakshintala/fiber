@@ -449,6 +449,14 @@ impl App {
                         return Some(self.answer_ask(ask, accepted, &envelope.payload));
                     }
                 }
+                if envelope.kind == "notice" && self.gated(&envelope.session_id) {
+                    // An opening session's notice reaches the notices
+                    // while its replay stays gated: a refused credential
+                    // switch reports without opening the gate or
+                    // returning home.
+                    self.notices.push(refusal(&envelope.payload));
+                    return Some(Vec::new());
+                }
                 if self.gated(&envelope.session_id) {
                     return Some(Vec::new());
                 }

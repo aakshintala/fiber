@@ -51,6 +51,20 @@ impl CancelOnSignal {
         )
     }
 
+    /// Watches `signals` for `reads`: on each, cancel and settle, then
+    /// keep watching. The terminal's watcher: the TUI owns the exit path,
+    /// so unlike [`CancelOnSignal::new`] this never exits — the loop quits
+    /// with the signal's code after restoring the terminal and printing
+    /// the resume lines. Only the final action differs: the cancel and
+    /// the settle are production code on every path.
+    pub(crate) fn watch(
+        reads: Arc<Reads>,
+        clock: Arc<dyn Clock>,
+        signals: &[c_int],
+    ) -> io::Result<Self> {
+        Self::arm(reads, clock, signals, Box::new(|_| {}))
+    }
+
     /// Watches `signals` for `reads`: on each, cancel, settle, then
     /// `finish`. Only the final action is injected: the cancel and the
     /// settle are production code on every tested path.

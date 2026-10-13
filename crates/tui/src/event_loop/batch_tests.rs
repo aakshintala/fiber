@@ -40,6 +40,7 @@ fn described(inputs: &[Input]) -> Vec<String> {
             | Input::ConnectFailed(_)
             | Input::Disconnected
             | Input::Resize
+            | Input::Signal(_)
             | Input::Files { .. }
             | Input::FindDue(_)
             | Input::Image { .. }

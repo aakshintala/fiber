@@ -40,8 +40,15 @@ pub(crate) fn needs_tty() -> Option<i32> {
 /// `fiber resume`: with an id, the session it names in this project;
 /// with none, home at the session list. The tty is checked before the
 /// selector is resolved; a selector nothing in this project answers is
-/// the resolve error, before the terminal starts.
-pub(crate) fn resume(selector: Option<String>, fiber: Result<PathBuf, String>) -> i32 {
+/// the resolve error, before the terminal starts. `credential` is
+/// `--credential`'s label, carried on the opening subscribe so the
+/// session starts or switches to it
+/// (`docs/model-routing.md`, "Which credential a session uses").
+pub(crate) fn resume(
+    selector: Option<String>,
+    credential: Option<String>,
+    fiber: Result<PathBuf, String>,
+) -> i32 {
     if let Some(code) = needs_tty() {
         return code;
     }
@@ -69,7 +76,7 @@ pub(crate) fn resume(selector: Option<String>, fiber: Result<PathBuf, String>) -
         Err(e) => return crate::fail(crate::failed(e.code(), e)),
     };
     crate::crash::attach(&id);
-    crate::terminal(fiber, tui::OpenAt::Session(id))
+    crate::terminal(fiber, tui::OpenAt::Session(id, credential))
 }
 
 /// `fiber continue`: the session used most recently in this project. The
@@ -100,7 +107,7 @@ pub(crate) fn continue_latest(fiber: Result<PathBuf, String>) -> i32 {
         Err(e) => return crate::fail(e),
     };
     crate::crash::attach(&id);
-    crate::terminal(fiber, tui::OpenAt::Session(id))
+    crate::terminal(fiber, tui::OpenAt::Session(id, None))
 }
 
 /// The session `continue` opens in `sessions`: the most recent one, or a

@@ -1137,6 +1137,7 @@ fn hand_over_gives_the_terminal_and_its_input_to_the_program() {
                 BufReader::new(slave).read_line(&mut line).map(|_| line)
             });
             seen = Some((is_cooked(&cooked), line.unwrap_or_default()));
+            None
         });
         // The same title is written again after the program.
         lp.write_title();
@@ -1181,7 +1182,13 @@ fn hand_over_gives_the_terminal_and_its_input_to_the_program() {
 fn hand_over_that_cannot_take_the_terminal_back_quits_with_one() {
     let (mut lp, _) = new_loop(TestBackend::new(60, 12), None);
     let mut ran = false;
-    assert_eq!(lp.hand_over(|| ran = true), Some(1));
+    assert_eq!(
+        lp.hand_over(|| {
+            ran = true;
+            None
+        }),
+        Some(1)
+    );
     assert!(ran);
 }
 
@@ -1260,6 +1267,150 @@ fn ctrl_g_puts_the_editors_text_in_the_draft_and_the_loop_reads_on() {
     let inputs = ["a", "\x07", "!"].map(|bytes| Input::Bytes(bytes.as_bytes().to_vec()));
     assert_eq!(feed_within(lp, inputs.into()), (0, "edited!".to_owned()));
     editor.assert_gone();
+    crate::term::restore();
+}
+
+/// A shutdown signal while the editor runs quits with 128 plus its
+/// number: the blocked editor is acknowledged first, so the raise cannot
+/// land before the wait is active. The handover takes the terminal back,
+/// the draft is unchanged, and the live session keeps its resume line.
+/// Each test runs in its own process, so the raise reaches only this test.
+#[test]
+fn a_shutdown_signal_while_the_editor_runs_quits_with_128_plus_it() {
+    use signal_hook::consts::SIGTERM;
+    let pair = open();
+    // The watcher drains what the terminal is sent, so no write blocks.
+    let _frames = watch(&pair.main, Vec::new());
+    crate::term::setup(&pair.slave, true).unwrap_or_else(|err| panic!("setup: {err}"));
+    let tty = pair
+        .slave
+        .try_clone()
+        .unwrap_or_else(|err| panic!("dup: {err}"));
+    let (mut lp, _) = new_loop(TestBackend::new(60, 12), Some(tty));
+    lp.app.set_home(launch());
+    // A blocking editor that acknowledges the block: `exec` makes the
+    // sleep the process waited on, so the acknowledgement names the
+    // editor pid itself.
+    let dir = fakes::TempDir::new("editor");
+    let ready = fakes::children::Ready::new(dir.path());
+    let script = dir.path().join("editor.sh");
+    std::fs::write(
+        &script,
+        format!("echo $$ > {}\nexec sleep 30\n", ready.path().display()),
+    )
+    .unwrap_or_else(|err| panic!("script: {err}"));
+    let command = format!("exec /bin/sh {}", script.display());
+    let script = script.display().to_string();
+    let watchdog = fakes::Watchdog::matching(&script);
+    lp.var = Box::new(move |name| (name == "EDITOR").then(|| command.clone()));
+    let session = contract::SessionId("s_aaaaaaaaaaaaaaaa".to_owned());
+    lp.app.attach(session.clone());
+    let inputs = ["a", "\x07"].map(|bytes| Input::Bytes(bytes.as_bytes().to_vec()));
+    // The loop blocks in the editor: it runs on a thread with one
+    // deadline, and the raise below waits for the acknowledgement first.
+    let (done, finished) = mpsc::channel();
+    std::thread::Builder::new()
+        .name("lib-editor-signal".to_owned())
+        .spawn(move || {
+            let code = feed(&mut lp, inputs.into());
+            match done.send((code, lp.app.draft(), lp.app.exit_lines())) {
+                Ok(()) | Err(_) => {}
+            }
+        })
+        .unwrap_or_else(|err| panic!("spawn: {err}"));
+    let live = ready.wait(DEADLINE);
+    assert_eq!(
+        live.len(),
+        1,
+        "the acknowledgement names the editor: {live:?}"
+    );
+    signal_hook::low_level::raise(SIGTERM).unwrap_or_else(|err| panic!("raise: {err}"));
+    let (code, draft, lines) = Deadline::after(DEADLINE)
+        .recv(&finished)
+        .unwrap_or_else(|err| panic!("waited {DEADLINE:?} for the loop to quit: {err}"));
+    assert_eq!(code, 143);
+    assert_eq!(draft, "a");
+    assert_eq!(
+        lines,
+        [format!("{}  fiber resume {}", session.0, session.0)]
+    );
+    // The handover gave the terminal back suspended (cooked, primary
+    // screen): the quit path resumes nothing, and the run's restore
+    // keeps what suspend left. The acknowledged editor pid is gone.
+    assert!(is_cooked(
+        &rustix::termios::tcgetattr(&pair.slave).unwrap_or_else(|err| panic!("attr: {err}"))
+    ));
+    assert!(
+        fakes::pids_exit(&live, DEADLINE),
+        "the editor outlived the shutdown: {live:?}"
+    );
+    watchdog.stand_down(DEADLINE);
+    crate::term::restore();
+}
+
+/// A shutdown signal while a file editor runs quits with 128 plus its
+/// number, as for the draft editor: the blocked file editor is
+/// acknowledged first, so the raise cannot land before the wait is
+/// active. Each test runs in its own process, so the raise reaches only
+/// this test.
+#[test]
+fn a_shutdown_signal_while_a_file_editor_runs_quits_with_128_plus_it() {
+    use signal_hook::consts::SIGTERM;
+    let pair = open();
+    // The watcher drains what the terminal is sent, so no write blocks.
+    let _frames = watch(&pair.main, Vec::new());
+    crate::term::setup(&pair.slave, true).unwrap_or_else(|err| panic!("setup: {err}"));
+    let tty = pair
+        .slave
+        .try_clone()
+        .unwrap_or_else(|err| panic!("dup: {err}"));
+    let (mut lp, _) = new_loop(TestBackend::new(60, 12), Some(tty));
+    // A blocking editor that acknowledges the block: `exec` makes the
+    // sleep the process waited on, so the acknowledgement names the
+    // editor pid itself.
+    let dir = fakes::TempDir::new("editor");
+    let ready = fakes::children::Ready::new(dir.path());
+    let script = dir.path().join("editor.sh");
+    std::fs::write(
+        &script,
+        format!("echo $$ > {}\nexec sleep 30\n", ready.path().display()),
+    )
+    .unwrap_or_else(|err| panic!("script: {err}"));
+    let command = format!("exec /bin/sh {}", script.display());
+    let script = script.display().to_string();
+    let watchdog = fakes::Watchdog::matching(&script);
+    lp.var = Box::new(move |name| (name == "EDITOR").then(|| command.clone()));
+    let file = dir.path().join("config.json");
+    // The file editor blocks the loop: it runs on a thread with one
+    // deadline, and the raise below waits for the acknowledgement first.
+    let (done, finished) = mpsc::channel();
+    std::thread::Builder::new()
+        .name("lib-file-editor-signal".to_owned())
+        .spawn(move || match done.send(lp.open_file(&file)) {
+            Ok(()) | Err(_) => {}
+        })
+        .unwrap_or_else(|err| panic!("spawn: {err}"));
+    let live = ready.wait(DEADLINE);
+    assert_eq!(
+        live.len(),
+        1,
+        "the acknowledgement names the editor: {live:?}"
+    );
+    signal_hook::low_level::raise(SIGTERM).unwrap_or_else(|err| panic!("raise: {err}"));
+    let code = Deadline::after(DEADLINE)
+        .recv(&finished)
+        .unwrap_or_else(|err| panic!("waited {DEADLINE:?} for the file editor to quit: {err}"));
+    assert_eq!(code, Some(143));
+    // As above: suspended, not resumed, and the acknowledged editor pid
+    // is gone.
+    assert!(is_cooked(
+        &rustix::termios::tcgetattr(&pair.slave).unwrap_or_else(|err| panic!("attr: {err}"))
+    ));
+    assert!(
+        fakes::pids_exit(&live, DEADLINE),
+        "the editor outlived the shutdown: {live:?}"
+    );
+    watchdog.stand_down(DEADLINE);
     crate::term::restore();
 }
 
@@ -2093,6 +2244,7 @@ fn the_pause_thread_sends_find_due_on_the_fake_clock() {
             | Input::ConnectFailed(_)
             | Input::Disconnected
             | Input::Resize
+            | Input::Signal(_)
             | Input::Files { .. }
             | Input::Models(_)
             | Input::Login { .. }
@@ -2554,4 +2706,94 @@ fn with_a_model_home_opens_as_before() {
     let frames = watch(&pair.main, vec![b"shortcuts" as &[u8]]);
     watched(&frames, "home at start", &Deadline::after(DEADLINE));
     quit(&mut pair, &finished, &Deadline::after(DEADLINE));
+}
+
+/// A signal quits the loop with 128 plus its number, closing nothing
+/// first: 143 for SIGTERM and 129 for SIGHUP (`docs/invocation.md`,
+/// "Exit codes").
+#[test]
+fn a_signal_quits_with_128_plus_its_number() {
+    use signal_hook::consts::{SIGHUP, SIGTERM};
+    let (mut lp, _) = new_loop(TestBackend::new(60, 12), None);
+    assert_eq!(feed(&mut lp, vec![Input::Signal(SIGTERM)]), 143);
+    let (mut lp, _) = new_loop(TestBackend::new(60, 12), None);
+    assert_eq!(feed(&mut lp, vec![Input::Signal(SIGHUP)]), 129);
+}
+
+/// Two signals queued at once: the loop quits with the first queued one's
+/// code, in channel order.
+#[test]
+fn the_first_queued_signal_wins() {
+    use signal_hook::consts::{SIGHUP, SIGTERM};
+    let (mut lp, _) = new_loop(TestBackend::new(60, 12), None);
+    assert_eq!(
+        feed(&mut lp, vec![Input::Signal(SIGTERM), Input::Signal(SIGHUP)]),
+        143
+    );
+    let (mut lp, _) = new_loop(TestBackend::new(60, 12), None);
+    assert_eq!(
+        feed(&mut lp, vec![Input::Signal(SIGHUP), Input::Signal(SIGTERM)]),
+        129
+    );
+}
+
+/// A signal while a frame waits for history is held for after the frame:
+/// the wait ends as lost at once instead of waiting past it, and the
+/// held signal quits the loop next.
+#[test]
+fn a_signal_ends_a_history_wait_at_once() {
+    use signal_hook::consts::SIGTERM;
+    let (lp, _) = new_loop(TestBackend::new(60, 12), None);
+    let (tx, rx) = mpsc::channel();
+    tx.send(Input::Signal(SIGTERM))
+        .unwrap_or_else(|err| panic!("send: {err}"));
+    // `answer` blocks in `recv`: it runs on a thread of its own and its
+    // result arrives through one deadline, so a wait that never ends
+    // fails here instead of hanging the suite.
+    let (done, finished) = mpsc::channel();
+    std::thread::Builder::new()
+        .name("lib-signal-wait".to_owned())
+        .spawn(move || {
+            let mut lp = lp;
+            let result = lp.answer(&rx, "a_1");
+            done.send((result, lp.stash.len())).unwrap_or(());
+        })
+        .unwrap_or_else(|err| panic!("spawn: {err}"));
+    let (result, held) = Deadline::after(DEADLINE)
+        .recv(&finished)
+        .unwrap_or_else(|err| panic!("waited {DEADLINE:?} for the history wait to end: {err}"));
+    assert_eq!(result, Err(super::LOST.to_owned()));
+    assert_eq!(held, 1, "the signal is held for after the frame");
+}
+
+/// The signal thread maps each taken signal to [`Input::Signal`] with its
+/// number. SIGUSR1 stands in for the watched pair: nothing else in this
+/// test binary registers it, so the raise reaches only this thread.
+#[test]
+fn the_signal_thread_sends_each_taken_signal() {
+    use signal_hook::consts::SIGUSR1;
+    let (tx, rx) = mpsc::channel();
+    let signals = signal_hook::iterator::Signals::new([SIGUSR1])
+        .unwrap_or_else(|err| panic!("register: {err}"));
+    super::spawn_signal(signals, tx);
+    signal_hook::low_level::raise(SIGUSR1).unwrap_or_else(|err| panic!("raise: {err}"));
+    match Deadline::after(DEADLINE)
+        .recv(&rx)
+        .unwrap_or_else(|err| panic!("waited {DEADLINE:?} for the signal: {err}"))
+    {
+        Input::Signal(got) => assert_eq!(got, SIGUSR1),
+        Input::Bytes(_)
+        | Input::Hub(_)
+        | Input::Connected(..)
+        | Input::ConnectFailed(_)
+        | Input::Disconnected
+        | Input::Resize
+        | Input::Files { .. }
+        | Input::FindDue(_)
+        | Input::Image { .. }
+        | Input::Viewed { .. }
+        | Input::Models(_)
+        | Input::Login { .. }
+        | Input::Tick => panic!("the signal thread sent something else"),
+    }
 }

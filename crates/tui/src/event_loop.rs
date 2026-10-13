@@ -20,7 +20,7 @@ use std::sync::mpsc::{self, Receiver, Sender};
 use contract::clock::Clock;
 use contract::{Envelope, Seq, SessionId};
 use ratatui::backend::Backend;
-use signal_hook::consts::{SIGINT, SIGQUIT, SIGWINCH};
+use signal_hook::consts::{SIGHUP, SIGINT, SIGQUIT, SIGTERM, SIGWINCH};
 use signal_hook::iterator::Signals;
 
 use crate::app::{App, Effect, mint, session_command};
@@ -50,6 +50,14 @@ pub fn run(
     // SIGWINCH is caught from before the size is read, so no resize is
     // missed; its thread starts after the first frame.
     let signals = Signals::new([SIGWINCH]).ok();
+    // SIGTERM and SIGHUP take the normal exit path below: the loop quits
+    // with 128 plus the signal's number after restoring the terminal and
+    // printing the resume lines. Without the registration a signal would
+    // kill the process without restoring, so a refused one fails before
+    // any frame.
+    let Ok(term_signals) = Signals::new([SIGTERM, SIGHUP]) else {
+        return 1;
+    };
     catch_interrupts();
     let restore = term::Guard;
     // Home is always set, so the first frame draws at once: it runs no
@@ -164,6 +172,7 @@ pub fn run(
     // asks arm it, and the loop re-arms it after every frame.
     terminal.tick.start(Arc::clone(&terminal.clock), tx.clone());
     terminal.tick.arm(terminal.app.take_wake());
+    spawn_signal(term_signals, tx.clone());
     if let Some(signals) = signals {
         spawn_resize(signals, tx);
     }
@@ -183,6 +192,22 @@ pub fn run(
         }
     }
     code
+}
+
+/// Turns SIGTERM and SIGHUP into [`Input::Signal`] on their own thread,
+/// in the iterator's order, as the session's signal handling takes it
+/// (`docs/invocation.md`, "Three signals, one path"): co-pending
+/// signals have no bound order, and no test pins one. Left blocked on
+/// quit; it ends with the process.
+fn spawn_signal(mut signals: Signals, tx: Sender<Input>) {
+    let signal = crate::sources::builder("tui-signal").spawn(move || {
+        for signal in signals.forever() {
+            if tx.send(Input::Signal(signal)).is_err() {
+                return;
+            }
+        }
+    });
+    drop(signal);
 }
 
 /// Catches SIGINT and SIGQUIT for the rest of the process's life, so `Ctrl+C`
@@ -500,6 +525,9 @@ impl<B: Backend> Loop<B> {
         );
         let before = self.app.session().cloned();
         match input {
+            // A signal quits with 128 plus its number, closing nothing
+            // first: live sessions keep their resume lines.
+            Input::Signal(signal) => return Some(128 + signal),
             Input::Bytes(bytes) => {
                 let events = self.parser.feed(&bytes);
                 return self.handle_events(events);
@@ -750,7 +778,9 @@ impl<B: Backend> Loop<B> {
     }
 
     /// Waits for the answer to command `id`, holding every other input for
-    /// after the frame. A lost connection ends the wait.
+    /// after the frame. A lost connection ends the wait; a signal is held
+    /// for after the frame and ends the wait as lost, so the loop quits
+    /// with the signal's number next.
     fn answer(&mut self, rx: &Receiver<Input>, id: &str) -> Result<Vec<Envelope>, String> {
         loop {
             let Ok(input) = rx.recv() else {
@@ -767,6 +797,14 @@ impl<B: Backend> Loop<B> {
                 Input::Tick => self.tick.ack(),
                 Input::Disconnected => {
                     self.on_disconnected();
+                    return Err(LOST.to_owned());
+                }
+                // A signal while a frame waits for history is held ahead
+                // of every later input, and the wait ends as lost: the
+                // loop quits with the signal's number before handling
+                // anything behind it.
+                Input::Signal(signal) => {
+                    self.stash.push_back(Input::Signal(signal));
                     return Err(LOST.to_owned());
                 }
                 other @ (Input::Bytes(_)
@@ -838,17 +876,33 @@ impl<B: Backend> Loop<B> {
 
     /// Ctrl+G: opens `text` in the editor `$VISUAL` or `$EDITOR` names,
     /// with the terminal handed over, and gives the app what it returned.
-    /// `Some(1)` when the terminal cannot be taken back.
+    /// `Some(1)` when the terminal cannot be taken back. A shutdown signal
+    /// while the editor runs quits with 128 plus its number instead, with
+    /// no resume: the run's own restore takes the terminal back.
     fn open_editor(&mut self, target: editor::Target, text: &str) -> Option<i32> {
         let Some(command) = editor::command(&self.var) else {
             self.app
                 .editor_returned(target, Err(editor::NO_EDITOR.to_owned()));
             return None;
         };
-        let mut result = Err(String::new());
-        let code = self.hand_over(|| result = editor::run(&command, text));
+        let mut result = editor::Outcome::Done(Err(String::new()));
+        let clock = Arc::clone(&self.clock);
+        let code = self.hand_over(|| {
+            result = editor::run(&command, text, &clock);
+            // A shutdown stop quits outright, before any resume: the
+            // handover takes it as the quit code.
+            match result {
+                editor::Outcome::Stopped(signal) => Some(128 + signal),
+                editor::Outcome::Done(_) => None,
+            }
+        });
         if code.is_none() {
-            self.app.editor_returned(target, result);
+            // A stop converts to the quit code in the handover above,
+            // so only Done reaches here: the draft is unchanged on a
+            // kill, and live sessions keep their resume lines.
+            if let editor::Outcome::Done(done) = result {
+                self.app.editor_returned(target, done);
+            }
         }
         code
     }
@@ -856,17 +910,33 @@ impl<B: Backend> Loop<B> {
     /// Ctrl+G on a configuration view: opens `file` in the editor
     /// `$VISUAL` or `$EDITOR` names, with the terminal handed over, and
     /// tells the app it returned. `Some(1)` when the terminal cannot be
-    /// taken back.
+    /// taken back. A shutdown signal while the editor runs quits with 128
+    /// plus its number instead, with no resume, as above.
     fn open_file(&mut self, file: &std::path::Path) -> Option<i32> {
         let Some(command) = editor::command(&self.var) else {
             self.app
                 .config_file_closed(Err(editor::NO_EDITOR_FILE.to_owned()));
             return None;
         };
-        let mut result = Err(String::new());
-        let code = self.hand_over(|| result = editor::open(&command, file));
+        let mut result = editor::Outcome::Done(Err(String::new()));
+        let clock = Arc::clone(&self.clock);
+        let code = self.hand_over(|| {
+            result = editor::open(&command, file, &clock);
+            // As in [`Loop::open_editor`]: a shutdown stop converts to
+            // the quit code in this handover.
+            match result {
+                editor::Outcome::Stopped(signal) => Some(128 + signal),
+                editor::Outcome::Done(_) => None,
+            }
+        });
         if code.is_none() {
-            self.app.config_file_closed(result);
+            // A stop converts to the quit code in the handover above,
+            // so only Done reaches here: quit with the signal's code,
+            // closing nothing first, so live sessions keep their
+            // resume lines.
+            if let editor::Outcome::Done(done) = result {
+                self.app.config_file_closed(done);
+            }
         }
         code
     }
@@ -890,14 +960,23 @@ impl<B: Backend> Loop<B> {
     /// thread: the reader paused, the terminal restored, then both taken
     /// back and the whole screen repainted at the size read again. `Some(1)`
     /// when the terminal cannot be taken back.
-    fn hand_over(&mut self, program: impl FnOnce()) -> Option<i32> {
+    fn hand_over(&mut self, program: impl FnOnce() -> Option<i32>) -> Option<i32> {
         if let Some(reader) = &mut self.reader {
             reader.pause();
         }
         // A failed suspend still runs the program: the terminal may be
         // left part set up, and resume sets it up whole.
         term::suspend().unwrap_or(());
-        program();
+        // A shutdown stop quits outright: there is no terminal use to
+        // resume for, and resuming can only fail the quit when the
+        // terminal is gone. The reader still resumes, so its thread ends
+        // with the test instead of parking past it.
+        if let Some(code) = program() {
+            if let Some(reader) = &self.reader {
+                reader.resume();
+            }
+            return Some(code);
+        }
         if term::resume(self.parser.kitty(), self.hover).is_err() {
             return Some(1);
         }

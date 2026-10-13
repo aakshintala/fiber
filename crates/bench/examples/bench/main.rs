@@ -4,7 +4,7 @@
 //! self-check that failed, as one result file for
 //! `cargo xtask bench-report` to judge. It measures; it judges nothing.
 //!
-//! `bench --fiber <path> --out <file> [--runs 5] [--timing-runs <runs>] [--idle-secs 10] [--only all|timing|wheel] [--paging <jig>]`
+//! `bench --fiber <path> --out <file> [--runs 5] [--timing-runs <runs>] [--idle-secs 10] [--only all|timing|wheel] [--paging <jig>] [--skip-ten-turns]`
 //! (`--paging` names the `tui` crate's `paging` jig; without it that workload
 //! does not run; `--timing-runs` defaults to the `--runs` value)
 //! exits 0 once the file is written (a failed workload is recorded in it),
@@ -37,7 +37,7 @@ use std::time::Duration;
 use serde_json::{Value, json};
 
 const USAGE: &str = "usage: bench --fiber <path> --out <file> [--runs 5] [--timing-runs <runs>] \
-     [--idle-secs 10] [--only all|timing|wheel] [--paging <jig>]";
+     [--idle-secs 10] [--only all|timing|wheel] [--paging <jig>] [--skip-ten-turns]";
 
 /// The result file's format, which `cargo xtask bench-report` checks.
 const SCHEMA: u32 = 1;
@@ -60,12 +60,24 @@ struct Args {
     idle_secs: u64,
     only: Only,
     paging: Option<PathBuf>,
+    /// The selection did not choose the 10-busy-turns workload: CI passes
+    /// this on a pull request whose diff touches nothing it measures
+    /// (`docs/ci.md`, "Selection"). The results file records the skip
+    /// under `skipped`, so the judge reports it instead of failing the
+    /// missing metric.
+    skip_ten_turns: bool,
 }
 
 fn parse(mut args: impl Iterator<Item = String>) -> Result<Args, String> {
     let (mut fiber, mut out, mut paging) = (None, None, None);
     let (mut runs, mut timing_runs, mut idle_secs, mut only) = (5, None, 10, Only::All);
+    let mut skip_ten_turns = false;
     while let Some(flag) = args.next() {
+        // A switch, never a value: the selection left the workload out.
+        if flag == "--skip-ten-turns" {
+            skip_ten_turns = true;
+            continue;
+        }
         let value = args.next().ok_or_else(|| format!("{flag} needs a value"))?;
         let number = |what: &str| -> Result<u64, String> {
             match value.parse() {
@@ -112,6 +124,7 @@ fn parse(mut args: impl Iterator<Item = String>) -> Result<Args, String> {
         idle_secs,
         only,
         paging,
+        skip_ten_turns,
     })
 }
 
@@ -164,6 +177,10 @@ fn selected(args: &Args) -> Vec<(&'static idle::Workload, u32, u32)> {
                 .first()
                 .is_some_and(|wheel| wheel.name == workload.name),
         })
+        // The selection runs the 10-busy-turns workload only on a pull
+        // request whose diff touches what it measures, and always on a
+        // push (`docs/ci.md`, "Selection").
+        .filter(|(workload, _, _)| !(args.skip_ten_turns && workload.name == busy::TEN_TURNS_NAME))
         .collect()
 }
 
@@ -180,7 +197,22 @@ fn measure_all(
 ) -> (Metrics, BTreeMap<&'static str, u32>) {
     let mut metrics: Metrics = BTreeMap::new();
     let mut metric_runs: BTreeMap<&'static str, u32> = BTreeMap::new();
+    if args.skip_ten_turns {
+        eprintln!(
+            "bench: skipping {} (the selection did not choose it)",
+            busy::TEN_TURNS_NAME
+        );
+    }
     for (workload, repeats, runs) in selected(args) {
+        eprintln!(
+            "bench: running {} (repeats {repeats}, runs {runs})",
+            workload.name
+        );
+        #[allow(
+            clippy::let_underscore_must_use,
+            reason = "a progress line must not fail the run"
+        )]
+        let _ = std::io::Write::flush(&mut std::io::stderr());
         if let Some(samples) = measure(workload, repeats, runs, failures) {
             for id in samples.keys() {
                 metric_runs.insert(id, runs);
@@ -211,6 +243,9 @@ fn document(
         "metric_runs": metric_runs,
         "metrics": metrics,
         "failures": failures,
+        // The workloads the selection left out, by name: the judge
+        // reports them instead of failing their missing metrics.
+        "skipped": if args.skip_ten_turns { vec![busy::TEN_TURNS_NAME] } else { Vec::new() },
     });
     if let Some(size) = binary_size
         && let Value::Object(map) = &mut result

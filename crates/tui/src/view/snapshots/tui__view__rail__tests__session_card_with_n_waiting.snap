@@ -4,11 +4,11 @@ expression: text(&buf)
 ---
 
                                                                                                                                ▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
-                                                                                                                                2 waiting
                                                                                                                                 directory  …sers/you/work/fiber
                                                                                                                                 model  test/model
                                                                                                                                 tokens in / out  1 / 2
                                                                                                                                 cache hits  0%
+                                                                                                                                ! 2 waiting · hidden · show
                                                                                                                                ▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀
 
 
