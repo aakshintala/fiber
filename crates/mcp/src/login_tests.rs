@@ -172,6 +172,24 @@ fn send_callback(redirect_uri: &str, query: &str) -> String {
     reply
 }
 
+/// Runs `drive` while a login waits on `clock`, advancing the clock past
+/// the callback deadline when `drive` panics so the parked login still
+/// ends and the scope still joins; the panic is then resumed. Without the
+/// release a value mutant that breaks the flow before the callback would
+/// hang the suite past its timeout instead of failing the test.
+fn drive_releasing_on_panic<T>(
+    clock: &Arc<fakes::clock::FakeClock>,
+    drive: impl FnOnce() -> T,
+) -> T {
+    match std::panic::catch_unwind(std::panic::AssertUnwindSafe(drive)) {
+        Ok(value) => value,
+        Err(payload) => {
+            clock.advance(CALLBACK_WAIT + Duration::from_secs(1));
+            std::panic::resume_unwind(payload);
+        }
+    }
+}
+
 /// Runs `login` to its result, driving one callback with `query_for` built
 /// from the authorization URL. `query_for` receives the URL `present` saw.
 /// A login that fails before presenting surfaces its error instead of
@@ -207,9 +225,11 @@ fn run_with_callback(
                 return result;
             }
         };
-        let query = query_for(&url);
-        let redirect = query_param(&url, "redirect_uri").unwrap();
-        send_callback(&redirect, &query);
+        let query = drive_releasing_on_panic(&clock, || query_for(&url));
+        let redirect = drive_releasing_on_panic(&clock, || {
+            query_param(&url, "redirect_uri").unwrap().to_owned()
+        });
+        drive_releasing_on_panic(&clock, || send_callback(&redirect, &query));
         // The result first, through the deadline: joining a stuck login
         // would hang past the hang guard. On expiry the clock wait is
         // released so the scope can still join.
@@ -697,6 +717,63 @@ fn without_protected_resource_metadata_the_origin_is_its_own_server() {
 }
 
 #[test]
+fn a_root_path_fetches_only_the_root_protected_resource_document() {
+    // A canonical path of `/` holds exactly one side of the
+    // path-inserted guard (`!path.is_empty()` but not `path != "/"`),
+    // so only the root document is fetched: an `||` mutant also fetches
+    // the slash-suffixed inserted document, which answers 500 here and
+    // fails discovery, and which the exact request list below catches.
+    let server = ProviderServer::start_responding(|request: &Request| {
+        let base = base_of(request);
+        match (request.method.as_str(), request.path.as_str()) {
+            ("GET", "/") => Response::status(200, "{}"),
+            ("GET", "/.well-known/oauth-protected-resource/") => {
+                Response::status(500, "secret-body")
+            }
+            ("GET", "/.well-known/oauth-protected-resource") => {
+                json_response(&json!({"authorization_servers": [base.clone()]}))
+            }
+            ("GET", "/.well-known/oauth-authorization-server") => {
+                json_response(&authorization_document(&base))
+            }
+            ("POST", "/register") => json_response(&json!({"client_id": "c1"})),
+            ("POST", "/token") => json_response(&token_reply("at-1")),
+            _ => Response::status(404, "{}"),
+        }
+    })
+    .unwrap();
+    let files = FakeTokens::default();
+    let clock = fakes::clock::FakeClock::new();
+    let url = format!("{}/", server.url());
+    run_with_callback(&url, &files, &clock, succeed).unwrap();
+    let paths: Vec<String> = server
+        .requests()
+        .into_iter()
+        .map(|request| request.path)
+        .collect();
+    assert_eq!(
+        paths
+            .iter()
+            .filter(|path| *path == "/.well-known/oauth-protected-resource")
+            .count(),
+        1,
+        "the root document fetches: {paths:?}"
+    );
+    assert!(
+        paths
+            .iter()
+            .all(|path| path != "/.well-known/oauth-protected-resource/"),
+        "the slash-suffixed inserted document was fetched: {paths:?}"
+    );
+    assert!(
+        files
+            .read(&crate::token::token_key(&url).unwrap())
+            .unwrap()
+            .is_some()
+    );
+}
+
+#[test]
 fn the_well_known_paths_are_tried_path_inserted_first() {
     let server = ProviderServer::start_responding(|request: &Request| {
         let base = base_of(request);
@@ -958,40 +1035,27 @@ fn the_authorization_url_and_exchange_carry_the_pkce_shape() {
     let clock = fakes::clock::FakeClock::new();
     let url = server_url(&server);
     let canonical = crate::token::canonical_url(&url).unwrap();
-    let (sent, received) = mpsc::channel();
-    std::thread::scope(|scope| {
-        let login = scope.spawn(|| {
-            login(
-                &files,
-                &url,
-                &|url| sent.send(url.to_owned()).unwrap(),
-                &*clock,
-            )
-        });
-        let shown = fakes::Deadline::after(WITHIN).recv_or_fail(&received, "the authorization URL");
-        let redirect = query_param(&shown, "redirect_uri").unwrap();
+    run_with_callback(&url, &files, &clock, |shown| {
+        let redirect = query_param(shown, "redirect_uri").unwrap();
         assert!(redirect.starts_with("http://127.0.0.1:"), "{redirect}");
         assert!(redirect.ends_with("/callback"), "{redirect}");
+        assert_eq!(query_param(shown, "response_type").as_deref(), Some("code"));
+        assert_eq!(query_param(shown, "client_id").as_deref(), Some("c1"));
         assert_eq!(
-            query_param(&shown, "response_type").as_deref(),
-            Some("code")
-        );
-        assert_eq!(query_param(&shown, "client_id").as_deref(), Some("c1"));
-        assert_eq!(
-            query_param(&shown, "code_challenge_method").as_deref(),
+            query_param(shown, "code_challenge_method").as_deref(),
             Some("S256")
         );
         assert_eq!(
-            query_param(&shown, "resource").as_deref(),
+            query_param(shown, "resource").as_deref(),
             Some(canonical.as_str())
         );
-        let challenge = query_param(&shown, "code_challenge").unwrap();
-        let state = query_param(&shown, "state").unwrap();
+        let challenge = query_param(shown, "code_challenge").unwrap();
+        let state = query_param(shown, "state").unwrap();
         assert_eq!(challenge.len(), 43, "{challenge}");
         assert_eq!(state.len(), 43, "{state}");
-        send_callback(&redirect, &format!("code=abc&state={state}"));
-        login.join().unwrap().unwrap();
-    });
+        succeed(shown)
+    })
+    .unwrap();
     let exchange = server
         .requests()
         .into_iter()
@@ -1108,40 +1172,29 @@ fn the_challenge_is_s256_of_the_verifier() {
     let files = FakeTokens::default();
     let clock = fakes::clock::FakeClock::new();
     let url = server_url(&server);
-    let (sent, received) = mpsc::channel();
-    std::thread::scope(|scope| {
-        let login = scope.spawn(|| {
-            login(
-                &files,
-                &url,
-                &|url| sent.send(url.to_owned()).unwrap(),
-                &*clock,
-            )
-        });
-        let shown = fakes::Deadline::after(WITHIN).recv_or_fail(&received, "the authorization URL");
-        let redirect = query_param(&shown, "redirect_uri").unwrap();
-        let state = query_param(&shown, "state").unwrap();
-        let challenge = query_param(&shown, "code_challenge").unwrap();
-        send_callback(&redirect, &format!("code=abc&state={state}"));
-        login.join().unwrap().unwrap();
-        let exchange = server
-            .requests()
-            .into_iter()
-            .find(|request| request.path == "/token")
-            .unwrap();
-        let verifier = String::from_utf8_lossy(&exchange.body)
-            .split('&')
-            .find_map(|pair| {
-                let (key, value) = pair.split_once('=').unwrap_or((pair, ""));
-                (key == "code_verifier").then(|| decode(value))
-            })
-            .unwrap();
-        let expected = base64::Engine::encode(
-            &base64::engine::general_purpose::URL_SAFE_NO_PAD,
-            ring::digest::digest(&ring::digest::SHA256, verifier.as_bytes()),
-        );
-        assert_eq!(challenge, expected);
-    });
+    let challenge_seen = std::cell::RefCell::new(String::new());
+    run_with_callback(&url, &files, &clock, |shown| {
+        *challenge_seen.borrow_mut() = query_param(shown, "code_challenge").unwrap();
+        succeed(shown)
+    })
+    .unwrap();
+    let exchange = server
+        .requests()
+        .into_iter()
+        .find(|request| request.path == "/token")
+        .unwrap();
+    let verifier = String::from_utf8_lossy(&exchange.body)
+        .split('&')
+        .find_map(|pair| {
+            let (key, value) = pair.split_once('=').unwrap_or((pair, ""));
+            (key == "code_verifier").then(|| decode(value))
+        })
+        .unwrap();
+    let expected = base64::Engine::encode(
+        &base64::engine::general_purpose::URL_SAFE_NO_PAD,
+        ring::digest::digest(&ring::digest::SHA256, verifier.as_bytes()),
+    );
+    assert_eq!(challenge_seen.borrow().as_str(), expected);
 }
 
 #[test]
@@ -1374,18 +1427,8 @@ fn a_request_for_another_path_gets_404_and_the_wait_continues() {
     let files = FakeTokens::default();
     let clock = fakes::clock::FakeClock::new();
     let url = server_url(&server);
-    let (sent, received) = mpsc::channel();
-    std::thread::scope(|scope| {
-        let login = scope.spawn(|| {
-            login(
-                &files,
-                &url,
-                &|url| sent.send(url.to_owned()).unwrap(),
-                &*clock,
-            )
-        });
-        let shown = fakes::Deadline::after(WITHIN).recv_or_fail(&received, "the authorization URL");
-        let redirect = query_param(&shown, "redirect_uri").unwrap();
+    run_with_callback(&url, &files, &clock, |shown| {
+        let redirect = query_param(shown, "redirect_uri").unwrap();
         let (_, rest) = redirect.split_once("://").unwrap();
         let (host, _) = rest.split_once('/').unwrap();
         let mut other = TcpStream::connect(host).unwrap();
@@ -1398,10 +1441,9 @@ fn a_request_for_another_path_gets_404_and_the_wait_continues() {
         let mut reply = String::new();
         other.read_to_string(&mut reply).unwrap();
         assert!(reply.contains("404"), "{reply}");
-        let state = query_param(&shown, "state").unwrap();
-        send_callback(&redirect, &format!("code=abc&state={state}"));
-        login.join().unwrap().unwrap();
-    });
+        succeed(shown)
+    })
+    .unwrap();
     assert!(
         files
             .read(&crate::token::token_key(&url).unwrap())
@@ -1416,18 +1458,8 @@ fn a_head_past_8kib_gets_431_and_the_wait_continues() {
     let files = FakeTokens::default();
     let clock = fakes::clock::FakeClock::new();
     let url = server_url(&server);
-    let (sent, received) = mpsc::channel();
-    std::thread::scope(|scope| {
-        let login = scope.spawn(|| {
-            login(
-                &files,
-                &url,
-                &|url| sent.send(url.to_owned()).unwrap(),
-                &*clock,
-            )
-        });
-        let shown = fakes::Deadline::after(WITHIN).recv_or_fail(&received, "the authorization URL");
-        let redirect = query_param(&shown, "redirect_uri").unwrap();
+    run_with_callback(&url, &files, &clock, |shown| {
+        let redirect = query_param(shown, "redirect_uri").unwrap();
         let (_, rest) = redirect.split_once("://").unwrap();
         let (host, _) = rest.split_once('/').unwrap();
         // A head of exactly 8 KiB is past the cap; one byte less reads.
@@ -1444,10 +1476,9 @@ fn a_head_past_8kib_gets_431_and_the_wait_continues() {
         if big.read_to_string(&mut reply).is_ok() {
             assert!(reply.contains("431"), "{reply}");
         }
-        let state = query_param(&shown, "state").unwrap();
-        send_callback(&redirect, &format!("code=abc&state={state}"));
-        login.join().unwrap().unwrap();
-    });
+        succeed(shown)
+    })
+    .unwrap();
     assert!(
         files
             .read(&crate::token::token_key(&url).unwrap())
@@ -1474,18 +1505,8 @@ fn an_idle_connection_is_dropped_and_a_later_callback_succeeds() {
     let files = FakeTokens::default();
     let clock = fakes::clock::FakeClock::new();
     let url = server_url(&server);
-    let (sent, received) = mpsc::channel();
-    std::thread::scope(|scope| {
-        let login = scope.spawn(|| {
-            login(
-                &files,
-                &url,
-                &|url| sent.send(url.to_owned()).unwrap(),
-                &*clock,
-            )
-        });
-        let shown = fakes::Deadline::after(WITHIN).recv_or_fail(&received, "the authorization URL");
-        let redirect = query_param(&shown, "redirect_uri").unwrap();
+    run_with_callback(&url, &files, &clock, |shown| {
+        let redirect = query_param(shown, "redirect_uri").unwrap();
         let (_, rest) = redirect.split_once("://").unwrap();
         let (host, _) = rest.split_once('/').unwrap();
         // An idle connection, opened with no bytes: the listener drops it
@@ -1498,10 +1519,9 @@ fn an_idle_connection_is_dropped_and_a_later_callback_succeeds() {
             0,
             "the idle connection stayed open"
         );
-        let state = query_param(&shown, "state").unwrap();
-        send_callback(&redirect, &format!("code=abc&state={state}"));
-        login.join().unwrap().unwrap();
-    });
+        succeed(shown)
+    })
+    .unwrap();
     assert!(
         files
             .read(&crate::token::token_key(&url).unwrap())
@@ -1624,18 +1644,20 @@ fn a_slow_drip_does_not_stop_the_900s_deadline() {
         // byte the callback reader consumes taps the test, so the first
         // tap proves the connection was accepted before the clock moves,
         // and each later tap releases the next byte: no pacing sleep.
-        let redirect = query_param(&shown, "redirect_uri").unwrap();
-        let (_, rest) = redirect.split_once("://").unwrap();
-        let (host, _) = rest.split_once('/').unwrap();
+        let redirect = query_param(&shown, "redirect_uri").unwrap().to_owned();
         let reads = super::callback::tap_reads();
         let drips = fakes::Deadline::after(WITHIN);
-        let mut drip = TcpStream::connect(host).unwrap();
-        drip.write_all(b"G").unwrap();
-        drips.recv_or_fail(&reads, "the callback reader's first byte");
-        for _ in 0..60 {
+        drive_releasing_on_panic(&clock, || {
+            let (_, rest) = redirect.split_once("://").unwrap();
+            let (host, _) = rest.split_once('/').unwrap();
+            let mut drip = TcpStream::connect(host).unwrap();
             drip.write_all(b"G").unwrap();
-            drips.recv_or_fail(&reads, "the callback reader's next byte");
-        }
+            drips.recv_or_fail(&reads, "the callback reader's first byte");
+            for _ in 0..60 {
+                drip.write_all(b"G").unwrap();
+                drips.recv_or_fail(&reads, "the callback reader's next byte");
+            }
+        });
         clock.advance(CALLBACK_WAIT);
         let result =
             fakes::Deadline::after(WITHIN).recv_or_fail(&received_done, "the timed-out login");
@@ -2002,6 +2024,72 @@ fn the_callback_wait_answers_one_valid_request() {
 #[test]
 fn the_callback_head_cap_is_8kib() {
     assert_eq!(super::callback::MAX_HEAD, 8 * 1024);
+}
+
+/// A callback head of exactly `size` bytes: the request line carries the
+/// valid callback, and `X-Pad` stretches the head to the byte.
+fn sized_head(size: usize) -> Vec<u8> {
+    let prefix = b"GET /callback?code=abc&state=s1 HTTP/1.1\r\nHost: x\r\nX-Pad: ";
+    let suffix = b"\r\n\r\n";
+    let mut head = Vec::with_capacity(size);
+    head.extend_from_slice(prefix);
+    head.extend(std::iter::repeat_n(
+        b'p',
+        size - prefix.len() - suffix.len(),
+    ));
+    head.extend_from_slice(suffix);
+    assert_eq!(head.len(), size);
+    head
+}
+
+#[test]
+fn callback_heads_on_both_sides_of_the_cap() {
+    // The cap check runs before each read, so a head of exactly `MAX_HEAD`
+    // bytes still reads whole while one byte more is refused: a `<` mutant
+    // of the `>=` refuses both, and a zeroed cap refuses both too.
+    for (size, reads) in [(MAX_HEAD, true), (MAX_HEAD + 1, false)] {
+        let clock = fakes::clock::FakeClock::new();
+        let deadline = clock.origin() + Duration::from_secs(60);
+        let head = sized_head(size);
+        let (result, echo) = driven_wait(&clock, deadline, "s1", |addr| {
+            let first = send_raw(addr, &head);
+            if reads {
+                first
+            } else {
+                let second = send_raw(
+                    addr,
+                    b"GET /callback?code=abc&state=s1 HTTP/1.1\r\nHost: x\r\nConnection: close\r\n\r\n",
+                );
+                format!("{first}||{second}")
+            }
+        });
+        if reads {
+            assert!(echo.starts_with("HTTP/1.1 200"), "{size}: {echo}");
+        } else {
+            assert!(echo.starts_with("HTTP/1.1 431"), "{size}: {echo}");
+            assert!(echo.contains("||HTTP/1.1 200"), "{size}: {echo}");
+        }
+        assert_eq!(result.unwrap(), "abc", "{size}");
+    }
+}
+
+#[test]
+fn the_callback_wait_fails_a_garbage_head_with_the_request_error() {
+    // A head that is no request ends the wait with the `callback request`
+    // failure, never the generic wait: an `answer` mutant that never
+    // answers ends it with a timeout instead.
+    let clock = fakes::clock::FakeClock::new();
+    let deadline = clock.origin() + Duration::from_secs(60);
+    let (result, echo) = driven_wait(&clock, deadline, "s1", |addr| {
+        send_raw(addr, b"not a request\r\n\r\n")
+    });
+    assert!(echo.starts_with("HTTP/1.1 400"), "{echo}");
+    let error = result.unwrap_err();
+    assert!(matches!(error, LoginError::Callback(_)), "{error:?}");
+    assert_eq!(
+        error.to_string(),
+        "Fiber could not read the browser callback at callback request."
+    );
 }
 
 #[test]
