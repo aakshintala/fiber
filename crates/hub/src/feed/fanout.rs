@@ -435,6 +435,14 @@ impl Fanout {
     pub(crate) fn started(&self) -> usize {
         self.started
     }
+
+    /// How many retired writers still wait for joining. Test-only: a
+    /// retained shut-socket descriptor is invisible except through
+    /// descriptor exhaustion, so no outside seam observes its release.
+    #[cfg(test)]
+    pub(crate) fn retired(&self) -> usize {
+        self.retired.len()
+    }
 }
 
 #[cfg(test)]

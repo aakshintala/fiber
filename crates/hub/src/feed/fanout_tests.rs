@@ -123,18 +123,21 @@ fn the_queue_reports_full_at_the_bound_and_keeps_a_healthy_subscriber() {
     let (stalled_writer, stalled_release) = inert();
     let stalled = fanout.push((stalled_tx, stalled_writer), closer(), closer(), line());
     let (healthy_tx, healthy_rx) = held();
-    let drained = thread::Builder::new()
-        .name("fanout-test-drain".to_owned())
-        .spawn(move || while healthy_rx.recv().is_ok() {})
-        .unwrap();
-    let healthy = fanout.push((healthy_tx, drained), closer(), closer(), line());
-    // The snapshot holds one slot: QUEUE-1 more sends fit, and the QUEUEth
+    let (healthy_writer, healthy_release) = inert();
+    let healthy = fanout.push((healthy_tx, healthy_writer), closer(), closer(), line());
+    // The snapshot holds one slot: drain it first, then acknowledge each
+    // healthy line before the next broadcast, so the healthy queue never
+    // fills and the final broadcast cannot fill it too.
+    let healthy_line = Deadline::after(DEADLINE);
+    healthy_line.recv_or_fail(&healthy_rx, "the healthy snapshot to land");
+    // QUEUE-1 more sends fit, and the QUEUEth
     // queued line still fits.
     for _ in 0..QUEUE - 1 {
         assert!(
             fanout.broadcast(&line()).is_empty(),
             "no overflow below the bound"
         );
+        healthy_line.recv_or_fail(&healthy_rx, "each healthy line to land");
         assert_eq!(fanout.ids(), [stalled, healthy]);
     }
     let closers = fanout.broadcast(&line());
@@ -142,6 +145,7 @@ fn the_queue_reports_full_at_the_bound_and_keeps_a_healthy_subscriber() {
     assert_eq!(fanout.ids(), [healthy], "the stalled id is gone");
     shut(closers);
     stalled_release.send(()).unwrap_or(());
+    healthy_release.send(()).unwrap_or(());
     for end in fanout.close() {
         shut(vec![end.closer]);
         if let Some(writer) = end.writer {

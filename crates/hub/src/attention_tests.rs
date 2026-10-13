@@ -1062,10 +1062,9 @@ fn concurrent_first_notifies_start_one_writer() {
     drop(done_tx);
     go_tx.send(()).unwrap_or(());
     go_tx.send(()).unwrap_or(());
+    let landed = Deadline::after(DEADLINE);
     for _ in 0..2 {
-        Deadline::after(DEADLINE)
-            .recv(&done_rx)
-            .expect("both first lines to land");
+        landed.recv(&done_rx).expect("both first lines to land");
     }
     for handle in handles {
         handle.join().unwrap();
@@ -1273,5 +1272,66 @@ fn two_listeners_take_distinct_ids_and_unlistening_the_second_ends_only_that_one
             "the first listener's attention"
         )["payload"]["reason"],
         "waiting"
+    );
+}
+
+#[test]
+fn unlisten_reaps_a_retired_writer_without_stopping_the_hub() {
+    let clock = FakeClock::new();
+    let attention = Arc::new(Attention::new(Arc::clone(&clock) as Arc<dyn Clock>));
+    let (writer, far) = UnixStream::pair().unwrap();
+    far.set_read_timeout(Some(DEADLINE)).unwrap();
+    let (writer_closer, writer_retired) = (closer_for(&writer), closer_for(&writer));
+    let kept = Arc::new(Mutex::new(writer));
+    // Held by the test: the writer cannot dequeue, so the bound fires
+    // instead of lines queueing behind it.
+    let guard = kept.lock().unwrap();
+    let id = attention
+        .listen(Arc::clone(&kept), writer_closer, writer_retired)
+        .unwrap();
+    // QUEUE+2 distinct waiting requests: dedup cannot hide a send, and
+    // one dequeued in-flight item still leaves the bound firing.
+    for n in 0..crate::feed::QUEUE + 2 {
+        let request = format!("r{n}");
+        let waiting = status_of("waiting", Some(&request), S, None);
+        let closers = attention.notify("s_0000000000000001", None, &waiting, false);
+        if !closers.is_empty() {
+            crate::feed::close_connections(closers, UnixStream::shutdown);
+        }
+    }
+    assert_eq!(attention.listeners(), 0, "the bound fired while stalled");
+    assert_eq!(
+        attention.retired(),
+        1,
+        "the overflowed writer waits for joining"
+    );
+    drop(guard);
+    // The overflow shut the connection: the far end sees EOF instead of
+    // queued lines.
+    let mut buf = [0; 1];
+    assert_eq!(
+        BufReader::new(far).read(&mut buf).unwrap(),
+        0,
+        "the stalled side sees EOF"
+    );
+    // Tearing the connection down reaps the retired writer without
+    // stopping the hub: the id is already gone, so only the sweep acts.
+    // The sweep runs until it takes effect, under a deadline: only an
+    // ended writer reaps, and the writer's last release races its thread
+    // end by microseconds, so one pass may find it unfinished.
+    let tearing = Arc::clone(&attention);
+    await_true("unlisten to reap the retired writer", move || {
+        tearing.unlisten(id);
+        tearing.retired() == 0
+    });
+    assert_eq!(attention.retired(), 0, "unlisten joined the retired writer");
+    assert_eq!(Arc::strong_count(&kept), 1, "no writer Arc survives");
+    let (later, _) = UnixStream::pair().unwrap();
+    let (later_closer, later_retired) = (closer_for(&later), closer_for(&later));
+    assert!(
+        attention
+            .listen(Arc::new(Mutex::new(later)), later_closer, later_retired)
+            .is_some(),
+        "the hub still serves past the teardown"
     );
 }

@@ -214,12 +214,18 @@ impl Attention {
         self.fail_listen.store(true, Ordering::SeqCst);
     }
 
-    /// Drops listener `id`. An active writer's connection is shut so a
-    /// writer blocked on a stalled reader ends at once, and its thread is
-    /// joined after the lock is released. A pending listener owns no
-    /// thread and shuts nothing.
+    /// Drops listener `id`, then reaps the retired writers that have
+    /// ended since. An active writer's connection is shut so a writer
+    /// blocked on a stalled reader ends at once, and its thread is joined
+    /// after the lock is released. A pending listener owns no thread and
+    /// shuts nothing. Only ended writers reap: an unfinished retained
+    /// writer keeps its independent close capability for a later remove
+    /// or stop. Every shutdown and join runs outside the registry lock.
     pub(crate) fn unlisten(&self, id: u64) {
-        let gone = lock(&self.listeners).remove(id);
+        let (gone, finished) = {
+            let mut listeners = lock(&self.listeners);
+            (listeners.remove(id), listeners.finished())
+        };
         if let Some(end) = gone {
             match end.writer {
                 Some(writer) => {
@@ -231,6 +237,13 @@ impl Attention {
                 None => drop(end.closer),
             }
         }
+        // Already ended, so joining needs no shutdown: dropping each
+        // reaped closer with its handle already released its descriptor.
+        for writer in finished {
+            match writer.join() {
+                Ok(()) | Err(_) => {}
+            }
+        }
     }
 
     /// Stops the registry for the feed's stop: no later listen registers
@@ -240,10 +253,19 @@ impl Attention {
     /// connection keeps receiving past the feed's stop.
     pub(crate) fn stop(&self) {
         self.stopped.store(true, Ordering::SeqCst);
-        let old = std::mem::take(&mut *lock(&self.listeners));
+        let mut old = std::mem::take(&mut *lock(&self.listeners));
+        // Writers that already ended join with no shutdown: their reaped
+        // closers already released their descriptors.
+        let finished = old.finished();
+        let rest = old.close();
+        for writer in finished {
+            match writer.join() {
+                Ok(()) | Err(_) => {}
+            }
+        }
         // close() drops pending registrations unshut and hands back only
         // active writers: every shutdown here frees a real writer.
-        for end in old.close() {
+        for end in rest {
             close_connections(vec![end.closer], UnixStream::shutdown);
             if let Some(writer) = end.writer {
                 match writer.join() {
@@ -308,6 +330,13 @@ impl Attention {
     #[cfg(test)]
     pub(crate) fn listeners(&self) -> usize {
         lock(&self.listeners).ids().len()
+    }
+
+    /// How many retired writers still wait for joining: the fan-out's
+    /// count under the registry guard.
+    #[cfg(test)]
+    pub(crate) fn retired(&self) -> usize {
+        lock(&self.listeners).retired()
     }
 
     /// How many attention writers started, including retired ones: actual
