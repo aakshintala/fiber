@@ -685,6 +685,183 @@ fn a_focused_link_pushes_the_last_row_off_the_screen() {
 }
 
 #[test]
+fn a_focused_link_on_a_partially_visible_wrapped_line_keeps_its_hint_in_bounds() {
+    use crate::format;
+
+    let url = "http://example.com/aaaa-bbbb-cccc-dddd-eeee-ffff-gggg-hhhh-iiii-jjjj-kkkk";
+    let paragraphs: Vec<String> = (0..20).map(|n| format!("paragraph {n}")).collect();
+    let mut app = replied(24, 16, &paragraphs.join("\n\n"));
+    // Shell output is a plain, unpadded row. The long bare URL wraps only
+    // when drawn, so its final wrapped rows can fall beyond the viewport.
+    app.screen.pages_mut().add_shell(Some(url.to_owned()));
+    app.settle();
+    app.set_opener(true);
+    let area = app.conversation_area();
+    app.on_wheel(&Mouse {
+        kind: MouseKind::WheelUp,
+        col: area.x.saturating_add(area.width / 2),
+        row: area.y.saturating_add(area.height / 2),
+    });
+    let area = app.conversation_area();
+    let (top, y0, shown) = app.view_rows(area);
+    let link = app
+        .visible_links(area)
+        .into_iter()
+        .find(|link| link.url == url)
+        .expect("the partly shown shell URL");
+    let last = link.rects.last().expect("a visible URL row");
+    let row = top.saturating_add(usize::from(last.y.saturating_sub(y0)));
+    let (_, end) = app.line_span(row).expect("the URL's wrapped line");
+    assert!(
+        end > top.saturating_add(shown),
+        "the line is cut by the viewport"
+    );
+    app.focus = Some(link.id);
+
+    // Before the fix, the line's full wrapped height put the hint past the
+    // conversation. Rendering then indexed beyond the buffer.
+    let (buf, targets) = draw(&app);
+    let layout = app.hint_layout(area);
+    let gap = layout.gap.expect("the focused link reserves its hint");
+    assert!(
+        area.y <= gap && gap < area.bottom(),
+        "gap {gap} in {area:?}"
+    );
+    let screen = crate::view::text(&buf);
+    assert!(
+        screen.contains(format::cut(crate::view::marks::HINT, usize::from(area.width)).as_str()),
+        "{screen}"
+    );
+    assert!(
+        targets
+            .iter()
+            .filter(|target| matches!(target.id, TargetId::Link { .. }))
+            .all(|target| { target.rect.y >= area.y && target.rect.bottom() <= area.bottom() }),
+        "link target outside the conversation: {targets:?}"
+    );
+    let hint_target = targets
+        .iter()
+        .find(|target| target.id == link.id && target.rect.y == gap)
+        .expect("the hint row targets its focused link");
+    assert_eq!(
+        app.on_click(hint_target.id),
+        Effect::OpenLink(url.to_owned())
+    );
+}
+
+#[test]
+fn a_focused_link_reserves_its_hint_above_the_new_below_pill() {
+    use crate::theme::Role;
+    use ratatui::style::Modifier;
+
+    let text = "paragraph one\n\nparagraph two paragraph two paragraph two paragraph two\n\n[docs](https://example.com/a)\n\nafter";
+    let mut app = App::new(PathBuf::from("/w"));
+    assert!(app.on_line(hello()).is_empty());
+    app.attach(contract::SessionId(SESSION.to_owned()));
+    app.set_size(40, 11);
+    app.on_line(line(
+        "turn_started",
+        json!({"input": [{"type": "message", "source": "driver",
+            "content": [{"type": "text", "text": " "}]}]}),
+        None,
+    ));
+    app.on_line(line("text_completed", json!({ "text": text }), Some("a_m")));
+    app.on_key(Key::PageUp, now());
+    app.on_line(line("text_completed", json!({"text": "more"}), Some("a_n")));
+    assert!(app.has_new());
+    app.set_opener(true);
+    let area = app.conversation_area();
+    let link = app
+        .visible_links(area)
+        .into_iter()
+        .find(|link| link.url == "https://example.com/a")
+        .expect("the link is visible above the pill");
+    let first = link.rects.first().expect("a link row");
+    assert_eq!(first.y, area.bottom().saturating_sub(2), "penultimate row");
+    app.focus = Some(link.id);
+
+    let (buf, targets) = draw(&app);
+    // Focus moves the link up one row, reserves its old row for the hint,
+    // and leaves the new-below pill and its target on the last row.
+    let gap = first.y;
+    let hint: String = (first.x..first.x.saturating_add(22))
+        .map(|x| buf[(x, gap)].symbol().to_owned())
+        .collect();
+    assert_eq!(hint, crate::view::marks::HINT);
+    for x in first.x..first.x.saturating_add(22) {
+        assert!(
+            buf[(x, gap)].modifier.contains(Modifier::DIM),
+            "hint at {x}"
+        );
+    }
+    assert_eq!(
+        buf[(first.x, first.y.saturating_sub(1))].bg,
+        Role::SurfaceRaised.color(),
+        "the focused link moves up"
+    );
+    let pill = targets
+        .iter()
+        .find(|target| target.id == crate::mouse::TargetId::NewBelow)
+        .expect("the new-below pill keeps its target");
+    assert_eq!(pill.rect.y, area.bottom().saturating_sub(1));
+    let pill_row: String = (0..area.width)
+        .map(|x| buf[(x, pill.rect.y)].symbol().to_owned())
+        .collect();
+    assert!(pill_row.contains("New messages below · End"), "{pill_row}");
+    let hint_target = targets
+        .iter()
+        .find(|target| target.id == link.id && target.rect.y == gap)
+        .expect("the hint row still targets the focused link");
+    assert_eq!(hint_target.rect.height, 1);
+    assert_ne!(pill.rect.y, hint_target.rect.y);
+    assert_eq!(
+        app.on_click(hint_target.id),
+        Effect::OpenLink("https://example.com/a".to_owned())
+    );
+}
+
+#[test]
+fn a_focused_link_can_scroll_to_the_conversations_first_row_and_keep_its_hint() {
+    use crate::theme::Role;
+
+    let url = "http://example.com/a";
+    let mut app = replied(60, 5, "a reply");
+    app.set_opener(true);
+    app.screen.pages_mut().add_shell(Some(url.to_owned()));
+    app.settle();
+    let area = app.conversation_area();
+    assert_eq!(area.height, 2, "the conversation has two rows");
+    let link = app
+        .visible_links(area)
+        .into_iter()
+        .find(|link| link.url == url)
+        .expect("the final shell row is a link");
+    assert_eq!(link.rects[0].y, area.bottom().saturating_sub(1));
+    app.focus = Some(link.id);
+
+    let (buf, targets) = draw(&app);
+    let gap = area.bottom().saturating_sub(1);
+    assert_eq!(app.hint_layout(area).gap, Some(gap));
+    assert_eq!(
+        buf[(link.rects[0].x, area.y)].bg,
+        Role::SurfaceRaised.color()
+    );
+    let hint: String = (link.rects[0].x..link.rects[0].x.saturating_add(22))
+        .map(|x| buf[(x, gap)].symbol().to_owned())
+        .collect();
+    assert_eq!(hint, crate::view::marks::HINT);
+    assert!(
+        targets
+            .iter()
+            .any(|target| target.id == link.id && target.rect.y == gap)
+    );
+    assert_eq!(
+        app.on_key(Key::Enter, now()),
+        Effect::OpenLink(url.to_owned())
+    );
+}
+
+#[test]
 fn a_focused_link_filling_its_window_draws_no_hint() {
     // A one-row conversation window scrolled so the link's row is its
     // only row: no row below can free the hint's row and no row above
@@ -709,6 +886,7 @@ fn a_focused_link_filling_its_window_draws_no_hint() {
     }
     let (id, rect) = found.expect("the link scrolls into the one-row window");
     let area = app.conversation_area();
+    assert_eq!(area.height, 1);
     assert_eq!(rect.expect("a link row").y, area.y);
     app.focus = Some(id);
     assert!(app.hint_layout(area).gap.is_none(), "no room for the hint");

@@ -170,21 +170,19 @@ fn shifted(rects: &[Rect], gap: u16, bottom: u16) -> Vec<Rect> {
     out
 }
 
-/// The raw entry focus names after the scroll freed its hint row:
-/// the same column and destination one row off, which is where the
-/// scroll left it. Same-frame re-resolution only: callers already
-/// matched the id exactly before scrolling.
+/// The raw entry matching focus after a scroll freed its hint row:
+/// the nearest row with the same destination. The first visible piece
+/// may have a different column after a wrapped line scrolls. Same-frame
+/// re-resolution only: callers matched the id exactly before scrolling.
 fn find_moved(links: &[VisibleLink], fcol: u16, fhash: u64, frow: usize) -> Option<&VisibleLink> {
-    links.iter().find(|link| {
-        let Some(first) = link.rects.first() else {
-            return false;
-        };
-        (
-            first.x,
-            link_hash(&link.url),
-            usize::from(first.y).abs_diff(frow),
-        ) == (fcol, fhash, 1)
-    })
+    links
+        .iter()
+        .filter(|link| link_hash(&link.url) == fhash)
+        .min_by_key(|link| {
+            link.rects.first().map_or((usize::MAX, u16::MAX), |first| {
+                (usize::from(first.y).abs_diff(frow), first.x.abs_diff(fcol))
+            })
+        })
 }
 
 impl App {
@@ -245,9 +243,9 @@ impl App {
     /// The conversation's layout in `area` with the focused link's hint
     /// row reserved under its line: rows on and below the row draw one
     /// lower, so the hint never covers conversation cells. With no row
-    /// below, as on the conversation's last row, the rows scroll up one
-    /// row to free it, keeping the link on screen; with no room to
-    /// scroll, only the focused look paints (`docs/tui.md`, "Links").
+    /// below, the layout uses blank rows above or scrolls enough to free
+    /// it, keeping the link on screen; with no room to scroll, only the
+    /// focused look paints (`docs/tui.md`, "Links").
     pub(crate) fn hint_layout(&self, area: Rect) -> HintLayout {
         let (top, y0, shown) = area_rows(self, area);
         let plain = HintLayout {
@@ -278,7 +276,10 @@ impl App {
             return plain;
         };
         let gap = y0.saturating_add(u16::try_from(end.saturating_sub(top)).unwrap_or(u16::MAX));
-        if gap != area.bottom() {
+        // The new-below pill owns the last row; the hint must end before
+        // it, just as its click target does (`docs/tui.md`, "Turns").
+        let limit = area.bottom().saturating_sub(u16::from(self.has_new()));
+        if gap < limit {
             return HintLayout {
                 gap: Some(gap),
                 focus: Some(FocusedLink {
@@ -290,23 +291,23 @@ impl App {
                 ..plain
             };
         }
-        if y0 == area.y {
-            // Every row shows: drop the top row, keeping the link on
-            // screen only while a row above it gives way.
-            if row == top {
-                return plain;
-            }
-            let top = top.saturating_add(1);
-            let total = self.scroll().1;
-            let shown = total
-                .min(top.saturating_add(usize::from(area.height)))
-                .saturating_sub(top);
-            let gap = y0.saturating_add(u16::try_from(end.saturating_sub(top)).unwrap_or(u16::MAX));
-            return self.scrolled_focus(area, id, top, y0, shown, gap, &hit.url);
+        // Reserve the final available row. Use blank rows above first,
+        // then scroll the conversation enough to bring a wrapped line's
+        // end and the hint into the area. If that loses the focused link,
+        // `scrolled_focus` leaves the ordinary focused look in place.
+        let shift = gap.saturating_sub(limit.saturating_sub(1));
+        let blank = y0.saturating_sub(area.y).min(shift);
+        let y0 = y0.saturating_sub(blank);
+        let scroll = shift.saturating_sub(blank);
+        if row < top.saturating_add(usize::from(scroll)) {
+            return plain;
         }
-        // Blank rows stand above: the same rows draw one higher.
-        let y0 = y0.saturating_sub(1);
-        let gap = gap.saturating_sub(1);
+        let top = top.saturating_add(usize::from(scroll));
+        let total = self.scroll().1;
+        let shown = total
+            .min(top.saturating_add(usize::from(area.height)))
+            .saturating_sub(top);
+        let gap = gap.saturating_sub(shift);
         self.scrolled_focus(area, id, top, y0, shown, gap, &hit.url)
     }
 
