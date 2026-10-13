@@ -2045,8 +2045,9 @@ fn a_stalled_origin_read_fails_within_its_bound() {
                 Ok(()) | Err(_) => {}
             }
         });
+        let deadline = Deadline::after(OP);
         let ack = loop {
-            let ack = next_acknowledgment(&acks, "the origin copy's clock wait");
+            let ack = deadline.recv_or_fail(&acks, "the origin copy's clock wait");
             if ack.phase == "to copy the origin to the client" {
                 break ack;
             }
@@ -2104,8 +2105,9 @@ fn a_stalled_origin_write_fails_within_its_bound() {
                 Ok(()) | Err(_) => {}
             }
         });
+        let deadline = Deadline::after(OP);
         let ack = loop {
-            let ack = next_acknowledgment(&acks, "the origin write's clock wait");
+            let ack = deadline.recv_or_fail(&acks, "the origin write's clock wait");
             if ack.phase == "to copy the client to the origin" {
                 break ack;
             }
@@ -2157,8 +2159,9 @@ fn shutdown_during_a_stalled_origin_read_stops_it() {
                 Ok(()) | Err(_) => {}
             }
         });
+        let deadline = Deadline::after(OP);
         let ack = loop {
-            let ack = next_acknowledgment(&acks, "the origin copy's clock wait");
+            let ack = deadline.recv_or_fail(&acks, "the origin copy's clock wait");
             if ack.phase == "to copy the origin to the client" {
                 break ack;
             }
@@ -2204,8 +2207,9 @@ fn shutdown_during_a_stalled_origin_write_stops_it() {
                 Ok(()) | Err(_) => {}
             }
         });
+        let deadline = Deadline::after(OP);
         let ack = loop {
-            let ack = next_acknowledgment(&acks, "the origin write's clock wait");
+            let ack = deadline.recv_or_fail(&acks, "the origin write's clock wait");
             if ack.phase == "to copy the client to the origin" {
                 break ack;
             }
@@ -2245,8 +2249,9 @@ fn a_silent_origin_parks_on_the_injected_clock() {
         });
         // Both sides stay open and silent: the origin-to-client copy
         // parks waiting for bytes that never come.
+        let deadline = Deadline::after(OP);
         let ack = loop {
-            let ack = next_acknowledgment(&acks, "the origin copy's clock wait");
+            let ack = deadline.recv_or_fail(&acks, "the origin copy's clock wait");
             if ack.phase == "to copy the origin to the client" {
                 break ack;
             }

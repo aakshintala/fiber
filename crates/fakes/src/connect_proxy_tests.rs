@@ -474,8 +474,9 @@ fn a_silent_handshake_records_nothing_on_the_injected_clock() {
     // The handshake reader parks on the clock waiting for the silent
     // peer: its acknowledgment names the request-line phase past its
     // clock check, and the parked thread proves it is waiting.
+    let waiting_deadline = Deadline::after(CONNECT_WITHIN);
     let waiting = loop {
-        let ack = Deadline::after(CONNECT_WITHIN).recv_or_fail(&acks, "the handshake's clock wait");
+        let ack = waiting_deadline.recv_or_fail(&acks, "the handshake's clock wait");
         if ack.phase == "to read the request line" {
             break ack;
         }
@@ -488,8 +489,9 @@ fn a_silent_handshake_records_nothing_on_the_injected_clock() {
     // announces its next wait in sequence, still parked on the silent
     // peer, having answered nothing and recorded nothing.
     clock.advance(Duration::from_secs(15));
+    let still_deadline = Deadline::after(CONNECT_WITHIN);
     let still = loop {
-        let ack = Deadline::after(CONNECT_WITHIN).recv_or_fail(&acks, "the handshake's next wait");
+        let ack = still_deadline.recv_or_fail(&acks, "the handshake's next wait");
         if ack.phase == "to read the request line" {
             break ack;
         }
