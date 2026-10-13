@@ -514,6 +514,7 @@ fn parses_argv_into_its_invocation() {
                 parent: None,
                 delegate_id: None,
                 login_shell: false,
+                credential: None,
             }))),
         ),
         (
@@ -541,6 +542,7 @@ fn parses_argv_into_its_invocation() {
                 parent: None,
                 delegate_id: None,
                 login_shell: false,
+                credential: None,
             }))),
         ),
         (
@@ -564,6 +566,7 @@ fn parses_argv_into_its_invocation() {
                 parent: None,
                 delegate_id: None,
                 login_shell: false,
+                credential: None,
             }))),
         ),
         (
@@ -588,6 +591,7 @@ fn parses_argv_into_its_invocation() {
                 parent: None,
                 delegate_id: None,
                 login_shell: false,
+                credential: None,
             }))),
         ),
         (
@@ -617,6 +621,7 @@ fn parses_argv_into_its_invocation() {
                 parent: Some("s_aaaaaaaaaaaaaaaa".to_owned()),
                 delegate_id: Some("j_0123456789abcdef".to_owned()),
                 login_shell: false,
+                credential: None,
             }))),
         ),
         (
@@ -648,6 +653,7 @@ fn parses_argv_into_its_invocation() {
                 parent: Some("s_aaaaaaaaaaaaaaaa".to_owned()),
                 delegate_id: Some("j_bbbbbbbbbbbbbbbb".to_owned()),
                 login_shell: false,
+                credential: None,
             }))),
         ),
         (
@@ -673,6 +679,7 @@ fn parses_argv_into_its_invocation() {
                 parent: None,
                 delegate_id: None,
                 login_shell: false,
+                credential: None,
             }))),
         ),
         (
@@ -697,6 +704,7 @@ fn parses_argv_into_its_invocation() {
                 parent: None,
                 delegate_id: None,
                 login_shell: true,
+                credential: None,
             }))),
         ),
         (
@@ -1587,6 +1595,83 @@ fn session_resume_with_a_prompt_and_a_parent_parses_as_a_delegate_resume() {
     assert_eq!(args.prompt.as_deref(), Some("hi"));
     assert_eq!(args.parent.as_deref(), Some("s_aaaaaaaaaaaaaaaa"));
     assert_eq!(args.delegate_id.as_deref(), Some("j_bbbbbbbbbbbbbbbb"));
+}
+
+#[test]
+fn session_resume_with_a_credential_parses_the_label() {
+    let Invocation::Run(Some(Commands::Session(args))) = parse_from([
+        "fiber",
+        "session",
+        "--id",
+        "s_0123456789abcdef",
+        "--workspace",
+        "/w",
+        "--resume",
+        "--credential",
+        "work",
+    ]) else {
+        panic!("a resume with a credential parses");
+    };
+    assert!(args.resume);
+    assert_eq!(args.credential.as_deref(), Some("work"));
+}
+
+#[test]
+fn session_resume_with_an_equals_credential_parses_the_label() {
+    // The hub spawns the resumed session with `--credential=<label>` as
+    // one argument, so an empty or leading-hyphen label is one value.
+    let Invocation::Run(Some(Commands::Session(args))) = parse_from([
+        "fiber",
+        "session",
+        "--id",
+        "s_0123456789abcdef",
+        "--workspace",
+        "/w",
+        "--resume",
+        "--credential=--resume",
+    ]) else {
+        panic!("a resume with an equals credential parses");
+    };
+    assert!(args.resume);
+    assert_eq!(args.credential.as_deref(), Some("--resume"));
+}
+
+#[test]
+fn session_credential_without_resume_is_a_usage_error() {
+    let message = sentence(&[
+        "fiber",
+        "session",
+        "--id",
+        "s_0123456789abcdef",
+        "--workspace",
+        "/w",
+        "--credential",
+        "work",
+    ]);
+    assert!(
+        message.contains("--resume"),
+        "the error names `--resume`: {message}"
+    );
+}
+
+#[test]
+fn session_credential_with_a_rewind_is_a_usage_error() {
+    let message = sentence(&[
+        "fiber",
+        "session",
+        "--id",
+        "s_0123456789abcdef",
+        "--workspace",
+        "/w",
+        "--rewound-from",
+        "s_aaaaaaaaaaaaaaaa",
+        "--credential",
+        "work",
+    ]);
+    assert!(
+        message.contains("--resume"),
+        "the error names `--resume`: {message}"
+    );
 }
 
 #[test]

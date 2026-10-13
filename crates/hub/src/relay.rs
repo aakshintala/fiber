@@ -36,7 +36,7 @@ use std::sync::atomic::AtomicBool;
 use std::sync::{Arc, Mutex};
 use std::thread;
 
-use contract::{CommandId, SessionId};
+use contract::{CommandId, ErrorCode, SessionId};
 use serde_json::{Map, Value};
 
 mod ack;
@@ -98,6 +98,36 @@ pub(crate) fn valid_session_id(session: &str) -> bool {
         && hex
             .bytes()
             .all(|byte| matches!(byte, b'0'..=b'9' | b'a'..=b'f'))
+}
+
+/// The credential label an opening `subscribe` asks the resumed session
+/// to start on: `None` when the command names no label. Only a subscribe
+/// whose args name `credential` is read here, as the closed command line
+/// (where an optional key is absent, never null), so a malformed value
+/// or an unknown arg is refused `invalid_arguments` before any process
+/// starts instead of launching one on a partially read hint. Anything
+/// else is left for the session to read, as today.
+fn startup_credential(
+    stripped: &Map<String, Value>,
+) -> Result<Option<String>, (ErrorCode, &'static str)> {
+    const UNFIT: &str = "The arguments do not fit this command.";
+    let is_subscribe = stripped.get("command").and_then(Value::as_str) == Some("subscribe");
+    let names_credential = stripped
+        .get("args")
+        .and_then(Value::as_object)
+        .is_some_and(|args| args.contains_key("credential"));
+    if !is_subscribe || !names_credential {
+        return Ok(None);
+    }
+    match serde_json::from_value::<contract::commands::CommandLine>(Value::Object(
+        stripped.clone(),
+    )) {
+        Ok(line) => match line.command {
+            contract::commands::Command::Subscribe(args) => Ok(args.credential),
+            _ => Err((ErrorCode::InvalidArguments, UNFIT)),
+        },
+        Err(_) => Err((ErrorCode::InvalidArguments, UNFIT)),
+    }
 }
 
 /// Passes the line to the session's socket without the `session_id` key,
@@ -300,12 +330,24 @@ pub(crate) fn route(
     if from.is_none() {
         crate::retire::enqueue_new(&order, session, id, &stripped);
     }
+    // The startup label comes from the current command, never from a
+    // kept subscription. A label-bearing subscribe is read as the closed
+    // command line before any process starts, so a value the session
+    // would refuse never launches one; anything else is left for the
+    // session to read, as today.
+    let credential = match startup_credential(&stripped) {
+        Ok(credential) => credential,
+        Err((code, message)) => {
+            crate::retire::refuse(writer, hub, relays, session, id, &code, message);
+            return;
+        }
+    };
     let sid = SessionId(session.to_owned());
     let opened = if exited {
-        crate::resume::resume_exited(hub, &sid)
+        crate::resume::resume_exited(hub, &sid, credential.as_deref())
     } else {
         UnixStream::connect(hub.home.join("run").join(session))
-            .or_else(|_| crate::resume::resume(hub, &sid))
+            .or_else(|_| crate::resume::resume(hub, &sid, credential.as_deref()))
     };
     let stream = match opened {
         Ok(stream) => stream,

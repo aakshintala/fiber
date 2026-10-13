@@ -84,7 +84,7 @@ pub(crate) fn reach(
     }
     if crate::resume::find_log(&hub.home, next).is_some() {
         drop(held);
-        return match crate::resume::resume(hub, next) {
+        return match crate::resume::resume(hub, next, None) {
             Ok(stream) => Ok(stream),
             Err(refused) => {
                 hub.diag.line(

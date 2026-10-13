@@ -593,6 +593,15 @@ pub(crate) struct SessionArgs {
     #[arg(long)]
     pub(crate) resume: bool,
 
+    /// The credential label the resumed session starts on: hidden and
+    /// free to change, passed by the hub that resumes an exited session
+    /// (`docs/model-routing.md`, "Which credential a session uses").
+    /// Only a resume carries it; `parse_from` refuses it without
+    /// `--resume`, since clap's `requires` does not cover every
+    /// conflicting combination.
+    #[arg(long, value_name = "label", hide = true)]
+    pub(crate) credential: Option<String>,
+
     /// Run the session in a new worktree (`docs/invocation.md`,
     /// "Isolation").
     #[arg(long, conflicts_with = "resume")]
@@ -778,6 +787,20 @@ fn parse_from(args: impl IntoIterator<Item = impl Into<OsString>>) -> Invocation
                         ask,
                         sentence: "The argument '--resume <id>' requires a session id but \
                                  none was given. Run `fiber --help` for usage."
+                            .to_owned(),
+                    }
+                }
+                // `--credential` without `--resume` names no startup
+                // label: the hub passes it only when it resumes an
+                // exited session, never for a fresh session or a rewind.
+                Some(Commands::Session(args))
+                    if args.credential.is_some() && !args.resume =>
+                {
+                    Invocation::Usage {
+                        ask,
+                        sentence: "The argument '--credential <label>' requires '--resume': \
+                                 only a resumed session starts on a label. \
+                                 Run `fiber --help` for usage."
                             .to_owned(),
                     }
                 }

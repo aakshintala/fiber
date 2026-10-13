@@ -993,6 +993,47 @@ fn a_rejoin_for_an_opening_session_writes_nothing_to_the_session() {
 }
 
 #[test]
+fn a_rejoin_replays_a_label_bearing_subscription_without_its_credential() {
+    let temp = Temp::new();
+    let (hub, _clock) = temp.hub(FakeStarter::hang(&temp.dir));
+    let sid = "s_aaaaaaaaaaaaaaaa";
+    // Saved through the real storing path, as an accepted label-bearing
+    // subscribe stores it: the kept copy carries no label.
+    let asked = json!({"id": "c_1", "command": "subscribe",
+        "args": {"level": "full", "credential": "work"}})
+    .as_object()
+    .unwrap()
+    .clone();
+    let mut held = crate::relay::Relays::default();
+    assert!(!held.transfer(sid, &asked), "no relay: kept only");
+    let epoch = held.mint();
+    assert!(admit(&mut held, sid, false, mark_for(None, 0, false, 0), epoch));
+    let relays = Arc::new(Mutex::new(held));
+    let (client, _client_peer) = UnixStream::pair().unwrap();
+    let writer = Arc::new(Mutex::new(client));
+    let (stream, session) = UnixStream::pair().unwrap();
+    session.set_read_timeout(Some(DEADLINE)).unwrap();
+    let mut read = BufReader::new(session.try_clone().unwrap());
+    crate::relay::attach_rejoin(sid, stream, &hub, &writer, &relays, epoch);
+    let mut first = String::new();
+    read.read_line(&mut first)
+        .expect("the rejoin replays the kept subscription");
+    let line: Value = serde_json::from_str(first.trim_end()).unwrap();
+    assert_eq!(line["command"], "subscribe");
+    assert_eq!(line["args"]["level"], "full");
+    assert!(
+        line["args"].get("credential").is_none(),
+        "the replay carries no earlier asked label: {line}"
+    );
+    assert_ne!(
+        line["id"], "c_1",
+        "the replay carries an id of the hub's own"
+    );
+    // Ends the relay thread: it reads to EOF, then the entries drop.
+    session.shutdown(std::net::Shutdown::Both).unwrap_or(());
+}
+
+#[test]
 fn candidates_lists_only_a_kept_unopened_marked_listed_unopening_open_session() {
     let sid = "s_aaaaaaaaaaaaaaaa";
     let names: BTreeSet<String> = BTreeSet::from([sid.to_owned()]);
@@ -1804,8 +1845,9 @@ impl crate::Starter for GateStarter {
         &self,
         id: &contract::SessionId,
         workspace: &Path,
+        credential: Option<&str>,
     ) -> std::io::Result<Box<dyn crate::Started>> {
-        self.inner.resume(id, workspace)
+        self.inner.resume(id, workspace, credential)
     }
 
     fn rewind(

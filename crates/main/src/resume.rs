@@ -152,6 +152,7 @@ fn in_launch_project(dir: &Path, project: &Path) -> bool {
 pub(crate) fn session_resume(
     id: SessionId,
     overrides: Vec<String>,
+    credential: Option<String>,
     prompt: Option<String>,
     clock: Arc<dyn contract::clock::Clock>,
     signals: &Arc<doors::Signals>,
@@ -179,7 +180,7 @@ pub(crate) fn session_resume(
     let dir = sessions.join(&id.0);
     let one_turn = prompt.is_some();
     resume_session(
-        log, &dir, id, overrides, None, prompt, one_turn, true, clock, signals, fiber,
+        log, &dir, id, overrides, credential, prompt, one_turn, true, clock, signals, fiber,
     )
 }
 

@@ -170,6 +170,113 @@ fn an_accepted_subscribe_replaces_the_kept_one() {
     );
 }
 
+fn entry_with_epoch(session: &str, epoch: u64) -> Relay {
+    let (writer, _) = UnixStream::pair().unwrap();
+    Relay {
+        session: session.to_owned(),
+        epoch,
+        writer,
+        kept: Kept::default(),
+        replayed: Replayed::default(),
+        thread: None,
+        retiring: None,
+    }
+}
+
+#[test]
+fn an_accepted_subscribe_keeps_no_credential() {
+    let line = |id: &str| {
+        json!({"id": id, "command": "subscribe",
+            "args": {"level": "full", "credential": "work"}})
+        .as_object()
+        .unwrap()
+        .clone()
+    };
+    let mut relays = Relays::default();
+    let epoch = relays.mint();
+    relays.entries.push(entry_with_epoch("s_aaaaaaaaaaaaaaaa", epoch));
+    relays.accepted("s_aaaaaaaaaaaaaaaa", epoch, line("c_1"));
+    // Level and id are kept; only the label is stripped.
+    assert_eq!(
+        relays.subscription("s_aaaaaaaaaaaaaaaa"),
+        Some(
+            json!({"id": "c_1", "command": "subscribe", "args": {"level": "full"}})
+                .as_object()
+                .unwrap()
+                .clone()
+        )
+    );
+    // A later explicit subscribe replaces the kept one, label and all.
+    relays.accepted("s_aaaaaaaaaaaaaaaa", epoch, line("c_2"));
+    assert_eq!(
+        relays
+            .subscription("s_aaaaaaaaaaaaaaaa")
+            .as_ref()
+            .and_then(|kept| kept.get("id"))
+            .and_then(Value::as_str),
+        Some("c_2")
+    );
+    assert!(
+        relays
+            .subscription("s_aaaaaaaaaaaaaaaa")
+            .as_ref()
+            .and_then(|kept| kept.get("args"))
+            .and_then(|args| args.get("credential"))
+            .is_none(),
+        "the replacement keeps no label either"
+    );
+}
+
+#[test]
+fn an_accepted_prompt_leaves_the_kept_subscribe_alone() {
+    let subscribe = json!({"id": "c_1", "command": "subscribe",
+        "args": {"level": "full", "credential": "work"}})
+    .as_object()
+    .unwrap()
+    .clone();
+    let prompt = json!({"id": "c_2", "command": "prompt",
+        "args": {"content": []}})
+    .as_object()
+    .unwrap()
+    .clone();
+    let mut relays = Relays::default();
+    let epoch = relays.mint();
+    relays.entries.push(entry_with_epoch("s_aaaaaaaaaaaaaaaa", epoch));
+    relays.accepted("s_aaaaaaaaaaaaaaaa", epoch, subscribe);
+    relays.accepted("s_aaaaaaaaaaaaaaaa", epoch, prompt);
+    assert_eq!(
+        relays.subscription("s_aaaaaaaaaaaaaaaa"),
+        Some(
+            json!({"id": "c_1", "command": "subscribe", "args": {"level": "full"}})
+                .as_object()
+                .unwrap()
+                .clone()
+        )
+    );
+}
+
+#[test]
+fn a_transferred_subscribe_keeps_no_credential() {
+    let line = json!({"id": "c_1", "command": "subscribe",
+        "args": {"level": "full", "credential": "work"}})
+    .as_object()
+    .unwrap()
+    .clone();
+    let mut relays = Relays::default();
+    assert!(!relays.transfer("s_aaaaaaaaaaaaaaaa", &line));
+    assert_eq!(
+        relays.subscription("s_aaaaaaaaaaaaaaaa"),
+        Some(
+            json!({"id": "c_1", "command": "subscribe", "args": {"level": "full"}})
+                .as_object()
+                .unwrap()
+                .clone()
+        )
+    );
+    // The caller's line keeps its label: only the stored copy is stripped.
+    assert_eq!(line["args"]["credential"], "work");
+}
+
 #[test]
 fn an_accepted_command_that_is_not_subscribe_changes_nothing() {
     let line = |id: &str, command: &str| {

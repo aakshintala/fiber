@@ -531,7 +531,7 @@ fn resume_runs_the_recorded_path() {
             source: contract::events::VariablesSource::Inherited,
         }),
     };
-    let started = hub::Starter::resume(&starter, &SessionId("s1".to_owned()), &workspace).unwrap();
+    let started = hub::Starter::resume(&starter, &SessionId("s1".to_owned()), &workspace, None).unwrap();
     assert_eq!(exit_of(started).message, "recorded resume");
 }
 
@@ -607,12 +607,66 @@ fn resume_runs_with_the_published_environment_and_the_flag() {
         recording_binary(&root),
         contract::events::VariablesSource::LoginShell,
     );
-    let started = hub::Starter::resume(&starter, &SessionId("s1".to_owned()), &workspace).unwrap();
+    let started =
+        hub::Starter::resume(&starter, &SessionId("s1".to_owned()), &workspace, None).unwrap();
     assert_eq!(exit_of(started).message, "recorded");
     let (args, env) = reported(&root);
     assert_eq!(args.last().map(String::as_str), Some("--login-shell"));
     assert!(args.contains(&"--resume".to_owned()));
+    assert!(
+        !args.iter().any(|arg| arg.starts_with("--credential")),
+        "no credential argument without a label: {args:?}"
+    );
     assert_eq!(env, "start /h unset");
+}
+
+#[test]
+fn resume_with_a_label_passes_it_as_one_credential_argument() {
+    let root = fakes::TempDir::new("hresumecred");
+    let (_, workspace) = home_and_workspace(&root);
+    let starter = starter_with(
+        recording_binary(&root),
+        contract::events::VariablesSource::Inherited,
+    );
+    let started = hub::Starter::resume(
+        &starter,
+        &SessionId("s1".to_owned()),
+        &workspace,
+        Some("work"),
+    )
+    .unwrap();
+    assert_eq!(exit_of(started).message, "recorded");
+    let (args, _) = reported(&root);
+    assert!(args.contains(&"--resume".to_owned()), "{args:?}");
+    let credential: Vec<&String> = args
+        .iter()
+        .filter(|arg| arg.starts_with("--credential"))
+        .collect();
+    assert_eq!(credential, ["--credential=work"], "{args:?}");
+}
+
+#[test]
+fn resume_with_a_flag_looking_label_passes_it_as_one_value() {
+    let root = fakes::TempDir::new("hresumecredflag");
+    let (_, workspace) = home_and_workspace(&root);
+    let starter = starter_with(
+        recording_binary(&root),
+        contract::events::VariablesSource::Inherited,
+    );
+    let started = hub::Starter::resume(
+        &starter,
+        &SessionId("s1".to_owned()),
+        &workspace,
+        Some("--resume"),
+    )
+    .unwrap();
+    assert_eq!(exit_of(started).message, "recorded");
+    let (args, _) = reported(&root);
+    let credential: Vec<&String> = args
+        .iter()
+        .filter(|arg| arg.starts_with("--credential"))
+        .collect();
+    assert_eq!(credential, ["--credential=--resume"], "{args:?}");
 }
 
 #[test]
