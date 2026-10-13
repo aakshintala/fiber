@@ -2473,7 +2473,7 @@ fn menu_synopses_take_the_text_before_the_description_gap() {
     );
     assert_eq!(fields, ["continue", "sessions [--all] [--json]"]);
     // A shorter doc synopsis is not a match: the menu field must equal it.
-    assert!(!fields.iter().any(|field| *field == "sessions [--all]"));
+    assert!(!fields.contains(&"sessions [--all]"));
 }
 
 /// The Command column of `docs/invocation.md` is the synopsis, so the
