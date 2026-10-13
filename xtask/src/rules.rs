@@ -869,9 +869,12 @@ fn struct_body(tokens: &[SourceToken], at: usize) -> bool {
     let start = (0..open)
         .rev()
         .find(|i| {
-            punct(tokens.get(*i), ';') || punct(tokens.get(*i), '{') || punct(tokens.get(*i), '}')
+            matches!(
+                tokens.get(*i).map(|token| &token.kind),
+                Some(SourceKind::Punct(';' | '{' | '}'))
+            )
         })
-        .map_or(0, |i| i + 1);
+        .map_or(0, |i| i.saturating_add(1));
     (start..open).any(|i| {
         ["struct", "enum", "union"]
             .iter()
@@ -933,7 +936,10 @@ fn test_only_tokens(tokens: &[SourceToken]) -> Vec<bool> {
         return marked;
     }
     for (i, token) in tokens.iter().enumerate() {
-        if !punct(Some(token), '#') || !punct(tokens.get(i.saturating_add(1)), '[') {
+        if !punct(Some(token), '#') {
+            continue;
+        }
+        if !punct(tokens.get(i.saturating_add(1)), '[') {
             continue;
         }
         let Some(attr_start) = i.checked_add(1) else {
@@ -972,7 +978,7 @@ fn module_target(
     };
     let from = (0..module_index)
         .rfind(|i| punct(tokens.get(*i), ';'))
-        .map_or(0, |i| i + 1);
+        .map_or(0, |i| i.saturating_add(1));
     let path_attr = (from..module_index).find_map(|i| {
         (punct(tokens.get(i), '#')
             && punct(tokens.get(i + 1), '[')
@@ -1220,13 +1226,21 @@ fn file_operation_near(tokens: &[SourceToken], at: usize) -> bool {
         "new",
         "from",
     ];
-    (at.saturating_sub(32)..at).any(|i| {
-        operations.iter().any(|operation| {
-            ident(tokens.get(i), operation)
-                && punct(tokens.get(i + 1), '(')
-                && matching(tokens, i + 1, '(', ')').is_some_and(|end| end >= at)
-        })
-    })
+    for i in at.saturating_sub(32)..at {
+        if !operations
+            .iter()
+            .any(|operation| ident(tokens.get(i), operation))
+        {
+            continue;
+        }
+        if !punct(tokens.get(i + 1), '(') {
+            continue;
+        }
+        if matching(tokens, i + 1, '(', ')').is_some_and(|end| end >= at) {
+            return true;
+        }
+    }
+    false
 }
 
 fn session_sites(file: &RustFile) -> Result<Vec<SourceSite>, String> {
@@ -1296,9 +1310,8 @@ fn home_sites(file: &RustFile) -> Result<Vec<SourceSite>, String> {
         let home_root = home_context.is_some();
         let first = value.split('/').next().unwrap_or_default();
         let home_component = HOME_COMPONENTS.contains(&first);
-        let config_path = (first == ".fiber")
-            && (value.split('/').nth(1) == Some("config.json")
-                || value.split('/').nth(1) == Some("config"));
+        let config_path =
+            first == ".fiber" && matches!(value.split('/').nth(1), Some("config.json" | "config"));
         let prompt = prompt_literal(value) && (home_root || file_operation_near(&tokens, i));
         let direct_config = config_path && (join || file_operation_near(&tokens, i));
         let operation = if home_root && home_component {
@@ -1324,21 +1337,21 @@ fn home_sites(file: &RustFile) -> Result<Vec<SourceSite>, String> {
             });
         }
     }
-    for i in 0..tokens.len().saturating_sub(4) {
-        if !punct(tokens.get(i), '.')
-            || !ident(tokens.get(i + 1), "join")
-            || !punct(tokens.get(i + 2), '(')
-            || !ident(tokens.get(i + 3), "name")
-            || !punct(tokens.get(i + 4), ')')
-            || test_only.get(i + 3).copied().unwrap_or(false)
-            || function_context(&tokens, i + 3) != "fn read_one"
+    for (i, (window, test_window)) in tokens.windows(5).zip(test_only.windows(5)).enumerate() {
+        if !punct(window.first(), '.')
+            || !ident(window.get(1), "join")
+            || !punct(window.get(2), '(')
+            || !ident(window.get(3), "name")
+            || !punct(window.get(4), ')')
+            || test_window.get(3).copied().unwrap_or(false)
+            || function_context(&tokens, i) != "fn read_one"
         {
             continue;
         }
         let Some(root) = fiber_home_join(&tokens, i) else {
             continue;
         };
-        let Some(token) = tokens.get(i + 3) else {
+        let Some(token) = window.get(3) else {
             continue;
         };
         let operation = "join:prompt-name";
@@ -1593,22 +1606,26 @@ fn loop_sites(
         };
         let mut context = function_context(&tokens, i);
         if let Some((function, reason)) = label_context(file, &tokens, i, name) {
-            let exception = LABEL_ALLOWANCES.iter().find(|allowance| {
-                allowance.path == file.path
-                    && allowance.function == function
-                    && allowance.context
-                        == match (file.path.as_str(), name) {
-                            ("crates/loop/src/opening.rs", "shell") => "environment-template",
-                            ("crates/loop/src/status.rs", "jobs") => "state-key",
-                            ("crates/loop/src/skills.rs", "skill") => "command-tag",
-                            ("crates/loop/src/handoff/carry.rs", "jobs") => "template-key",
-                            ("crates/loop/src/reviewer.rs", "handoff") => "prompt-section",
-                            _ => "",
-                        }
-                    && allowance.name == name
-                    && allowance.reason == reason
+            let label = match (file.path.as_str(), name) {
+                ("crates/loop/src/opening.rs", "shell") => Some("environment-template"),
+                ("crates/loop/src/status.rs", "jobs") => Some("state-key"),
+                ("crates/loop/src/skills.rs", "skill") => Some("command-tag"),
+                ("crates/loop/src/handoff/carry.rs", "jobs") => Some("template-key"),
+                ("crates/loop/src/reviewer.rs", "handoff") => Some("prompt-section"),
+                _ => None,
+            };
+            let exception = label.is_some_and(|label| {
+                LABEL_ALLOWANCES.iter().any(|allowance| {
+                    (
+                        allowance.path,
+                        allowance.function,
+                        allowance.context,
+                        allowance.name,
+                        allowance.reason,
+                    ) == (file.path.as_str(), function, label, name, reason)
+                })
             });
-            if exception.is_some() {
+            if exception {
                 continue;
             }
             context = format!("{context} | {reason}");

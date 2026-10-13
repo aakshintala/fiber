@@ -1315,3 +1315,533 @@ fn individual_allowances_are_consumed_once_and_match_path_context_and_operation(
         }
     ));
 }
+
+fn token_with_string(tokens: &[SourceToken], value: &str) -> usize {
+    tokens
+        .iter()
+        .position(|token| string(Some(token)) == Some(value))
+        .unwrap()
+}
+
+fn token_with_ident(tokens: &[SourceToken], value: &str) -> usize {
+    tokens
+        .iter()
+        .position(|token| ident(Some(token), value))
+        .unwrap()
+}
+
+fn reject_label_after_change(
+    file: &RustFile,
+    source: &str,
+    name: &str,
+    offset: isize,
+    replacement: SourceKind,
+) {
+    let mut tokens = source_tokens(source).unwrap();
+    let at = token_with_string(&tokens, name);
+    let changed = if offset < 0 {
+        at.checked_sub(offset.unsigned_abs()).unwrap()
+    } else {
+        at.saturating_add(offset.cast_unsigned())
+    };
+    tokens[changed].kind = replacement;
+    assert_eq!(label_context(file, &tokens, at, name), None, "{source}");
+}
+
+#[test]
+fn source_predicates_return_true_and_false_at_each_boundary() {
+    let tokens = source_tokens("before , after").unwrap();
+    let before = token_with_ident(&tokens, "before");
+    let after = token_with_ident(&tokens, "after");
+    assert!(next_punct(&tokens, before, 1, ','));
+    assert!(!next_punct(&tokens, before, 1, ';'));
+    assert!(!next_punct(&tokens, after, 1, ','));
+    assert!(next_ident(&tokens, before, 2, "after"));
+    assert!(!next_ident(&tokens, before, 2, "before"));
+    assert!(!next_ident(&tokens, after, 1, "after"));
+    assert!(previous_punct(&tokens, after, 1, ','));
+    assert!(!previous_punct(&tokens, after, 1, ';'));
+    assert!(!previous_punct(&tokens, before, 1, ','));
+    assert!(previous_ident(&tokens, after, 2, "before"));
+    assert!(!previous_ident(&tokens, after, 2, "after"));
+    assert!(!previous_ident(&tokens, before, 1, "before"));
+}
+
+#[test]
+fn function_and_scope_contexts_stay_inside_their_matching_braces() {
+    let tokens =
+        source_tokens("fn first() { let a = 1; } fn second() { let b = 2; } let top = 3;").unwrap();
+    let a = token_with_ident(&tokens, "a");
+    let b = token_with_ident(&tokens, "b");
+    let top = token_with_ident(&tokens, "top");
+    assert_eq!(function_context(&tokens, a), "fn first");
+    assert_eq!(function_context(&tokens, b), "fn second");
+    assert_eq!(function_context(&tokens, top), "module");
+    assert_eq!(scope_context(&tokens, b), "fn second ( )::let b = 2");
+    assert_eq!(scope_context(&tokens, top), "module");
+}
+
+#[test]
+fn scope_context_starts_after_the_previous_item_boundary() {
+    let tokens = source_tokens("fn prior() {} fn next() { let value = 1; }").unwrap();
+    let value = token_with_ident(&tokens, "value");
+    assert_eq!(scope_context(&tokens, value), "fn next ( )::let value = 1");
+}
+
+#[test]
+fn struct_body_requires_a_matched_opening_brace_and_excludes_its_close() {
+    let source = "struct S { #[cfg(test)] field: u8 } fn f() { #[cfg(test)] let x = 1; }";
+    let tokens = source_tokens(source).unwrap();
+    let first_cfg = tokens
+        .iter()
+        .position(|token| ident(Some(token), "cfg"))
+        .unwrap();
+    let close = tokens
+        .iter()
+        .position(|token| matches!(token.kind, SourceKind::Punct('}')))
+        .unwrap();
+    let function_cfg = tokens
+        .iter()
+        .rposition(|token| ident(Some(token), "cfg"))
+        .unwrap();
+    assert!(struct_body(&tokens, first_cfg));
+    assert!(!struct_body(&tokens, close));
+    assert!(!struct_body(&tokens, function_cfg));
+
+    let unmatched = source_tokens("struct S { #[cfg(test)] field: u8").unwrap();
+    let cfg = unmatched
+        .iter()
+        .position(|token| ident(Some(token), "cfg"))
+        .unwrap();
+    assert!(!struct_body(&unmatched, cfg));
+}
+
+#[test]
+fn test_item_end_tracks_nested_delimiters_and_field_generics() {
+    let function_type = source_tokens("callback: fn(A, B), next: Path").unwrap();
+    let callback = token_with_ident(&function_type, "callback");
+    let commas = function_type
+        .iter()
+        .enumerate()
+        .filter_map(|(i, token)| punct(Some(token), ',').then_some(i))
+        .collect::<Vec<_>>();
+    assert_eq!(commas.len(), 2);
+    assert_eq!(test_item_end(&function_type, callback, true), commas[1]);
+
+    let generic = source_tokens("value: Map<A, B>, next: Path").unwrap();
+    let value = token_with_ident(&generic, "value");
+    let commas = generic
+        .iter()
+        .enumerate()
+        .filter_map(|(i, token)| punct(Some(token), ',').then_some(i))
+        .collect::<Vec<_>>();
+    assert_eq!(test_item_end(&generic, value, true), commas[1]);
+}
+
+#[test]
+fn test_item_end_does_not_pop_a_mismatched_delimiter() {
+    let source = source_tokens("callback: fn(A], B), next: Path").unwrap();
+    let callback = token_with_ident(&source, "callback");
+    let commas = source
+        .iter()
+        .enumerate()
+        .filter_map(|(i, token)| punct(Some(token), ',').then_some(i))
+        .collect::<Vec<_>>();
+    assert_eq!(test_item_end(&source, callback, true), commas[1]);
+
+    let comparison = source_tokens("callback: fn(A > B, C), next: Path").unwrap();
+    let callback = token_with_ident(&comparison, "callback");
+    let commas = comparison
+        .iter()
+        .enumerate()
+        .filter_map(|(i, token)| punct(Some(token), ',').then_some(i))
+        .collect::<Vec<_>>();
+    assert_eq!(test_item_end(&comparison, callback, true), commas[1]);
+}
+
+#[test]
+fn test_item_end_returns_the_last_token_for_an_unclosed_body() {
+    let tokens = source_tokens("item { body").unwrap();
+    assert_eq!(test_item_end(&tokens, 0, false), tokens.len() - 1);
+}
+
+#[test]
+fn test_item_end_ignores_angle_comparisons_in_non_field_items() {
+    let tokens = source_tokens("fn test() { let value = left < right; } fn next() {}").unwrap();
+    let start = token_with_ident(&tokens, "fn");
+    let body = tokens
+        .iter()
+        .position(|token| punct(Some(token), '{'))
+        .unwrap();
+    assert_eq!(
+        test_item_end(&tokens, start, false),
+        matching(&tokens, body, '{', '}').unwrap()
+    );
+}
+
+#[test]
+fn test_only_tokens_marks_only_cfg_test_items() {
+    let tokens = source_tokens(
+        "let production = 1; #[cfg(feature = \"x\")] fn feature() {} #[cfg(test)] fn fixture() {}",
+    )
+    .unwrap();
+    let marked = test_only_tokens(&tokens);
+    let production = token_with_ident(&tokens, "production");
+    let feature = token_with_ident(&tokens, "feature");
+    let fixture = token_with_ident(&tokens, "fixture");
+    assert!(!marked[production]);
+    assert!(!marked[feature]);
+    assert!(marked[fixture]);
+}
+
+#[test]
+fn module_target_resolves_explicit_and_default_module_paths() {
+    let explicit = source_file("hub", "src/lib.rs", "#[path = \"fake/deep.rs\"] mod fake;");
+    let tokens = source_tokens(&explicit.source).unwrap();
+    let module = token_with_ident(&tokens, "mod");
+    assert_eq!(
+        module_target(&explicit, "fake", &tokens, module).as_deref(),
+        Some("crates/hub/src/fake/deep.rs")
+    );
+
+    let default = source_file("hub", "src/parent.rs", "mod child;");
+    let tokens = source_tokens(&default.source).unwrap();
+    let module = token_with_ident(&tokens, "mod");
+    assert_eq!(
+        module_target(&default, "child", &tokens, module).as_deref(),
+        Some("crates/hub/src/parent/child.rs")
+    );
+
+    for source in [
+        "item [path = \"wrong.rs\"] mod child;",
+        "#[other = \"wrong.rs\"] mod child;",
+        "#[path != \"wrong.rs\"] mod child;",
+    ] {
+        let file = source_file("hub", "src/lib.rs", source);
+        let tokens = source_tokens(source).unwrap();
+        let module = token_with_ident(&tokens, "mod");
+        assert_eq!(
+            module_target(&file, "child", &tokens, module).as_deref(),
+            Some("crates/hub/src/child.rs"),
+            "{source}"
+        );
+    }
+}
+
+#[test]
+fn production_files_does_not_treat_a_local_binding_as_a_module_edge() {
+    let files = [
+        source_file(
+            "hub",
+            "src/lib.rs",
+            "#[cfg(test)] fn test_only() { let child; }",
+        ),
+        source_file("hub", "src/child.rs", "fn production() {}"),
+    ];
+    let paths = production_files(&files)
+        .unwrap()
+        .into_iter()
+        .map(|file| file.rel.as_str())
+        .collect::<Vec<_>>();
+    assert_eq!(paths, ["src/lib.rs", "src/child.rs"]);
+}
+
+#[test]
+fn joined_literal_and_file_operation_context_require_the_complete_call() {
+    let joined = source_tokens("home.join(\"projects\")").unwrap();
+    let path = token_with_string(&joined, "projects");
+    assert!(joined_literal(&joined, path));
+    assert!(!joined_literal(&joined, path - 1));
+    let other_method = source_tokens("home.read(\"projects\")").unwrap();
+    let path = token_with_string(&other_method, "projects");
+    assert!(!joined_literal(&other_method, path));
+
+    let calls = source_tokens(
+        "read(\"SYSTEM.md\"); ordinary(\"SYSTEM.md\"); read(\"other\"); \"SYSTEM.md\"; home.read(\"projects\")",
+    )
+    .unwrap();
+    let prompt = calls
+        .iter()
+        .enumerate()
+        .filter_map(|(i, token)| (string(Some(token)) == Some("SYSTEM.md")).then_some(i))
+        .collect::<Vec<_>>();
+    assert!(file_operation_near(&calls, prompt[0]));
+    assert!(!file_operation_near(&calls, prompt[1]));
+    assert!(!file_operation_near(&calls, prompt[2]));
+}
+
+#[test]
+fn home_join_context_and_fiber_root_exclusion_cover_both_outcomes() {
+    let tokens = source_tokens(
+        "home.join(\"projects\").join(\"config.json\"); home.join(\".agents\").join(\"skills\"); home.join(\".config\").join(\"config.json\"); other.home.join(\"projects\"); home.not_join(\"projects\").join(\"cache\");",
+    )
+    .unwrap();
+    let dots = tokens
+        .iter()
+        .enumerate()
+        .filter_map(|(i, token)| {
+            (punct(Some(token), '.') && ident(tokens.get(i + 1), "join")).then_some(i)
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(home_join_context(&tokens, dots[0]).as_deref(), Some("home"));
+    assert_eq!(
+        home_join_context(&tokens, dots[1]).as_deref(),
+        Some("home/projects")
+    );
+    assert_eq!(fiber_home_join(&tokens, dots[0]).as_deref(), Some("home"));
+    assert_eq!(fiber_home_join(&tokens, dots[3]), None);
+    assert_eq!(fiber_home_join(&tokens, dots[5]), None);
+    assert_eq!(home_join_context(&tokens, dots[6]), None);
+    assert_eq!(home_join_context(&tokens, dots[7]), None);
+}
+
+#[test]
+fn home_scope_context_needs_the_matching_path_operation_and_scope_prefix() {
+    let file = source_file(
+        "extensions",
+        "src/installed.rs",
+        "fn removal() { let path = home.join(\"extensions\"); }",
+    );
+    let tokens = source_tokens(&file.source).unwrap();
+    let at = token_with_string(&tokens, "extensions");
+    let context = "fn removal|root:home".to_owned();
+    let scoped = home_scope_context(&file, &tokens, at, context.clone(), "join:extensions");
+    assert!(
+        scoped.starts_with("fn removal|root:home|scope:"),
+        "{scoped}"
+    );
+    assert_eq!(
+        home_scope_context(&file, &tokens, at, context.clone(), "join:projects"),
+        context
+    );
+    assert_eq!(
+        home_scope_context(
+            &file,
+            &tokens,
+            at,
+            "fn other|root:home".to_owned(),
+            "join:extensions"
+        ),
+        "fn other|root:home"
+    );
+    let other_file = source_file("main", "src/installed.rs", &file.source);
+    assert_eq!(
+        home_scope_context(&other_file, &tokens, at, context.clone(), "join:extensions"),
+        context
+    );
+}
+
+#[test]
+fn home_sites_accepts_both_configuration_layout_paths_and_rejects_lookalikes() {
+    let config_json = source_file(
+        "main",
+        "src/config_json.rs",
+        "fn f() { read(\".fiber/config.json\"); }",
+    );
+    let config_dir = source_file(
+        "main",
+        "src/config_dir.rs",
+        "fn f() { read(\".fiber/config\"); }",
+    );
+    assert_eq!(
+        home_sites(&config_json).unwrap()[0].operation,
+        "config-path:.fiber/config.json"
+    );
+    assert_eq!(
+        home_sites(&config_dir).unwrap()[0].operation,
+        "config-path:.fiber/config"
+    );
+    for source in [
+        "fn f() { read(\"other/config.json\"); }",
+        "fn f() { read(\".fiber/configurable\"); }",
+        "fn f() { read(\".fiber/config.json.old\"); }",
+    ] {
+        assert!(
+            home_sites(&source_file("main", "src/clean.rs", source))
+                .unwrap()
+                .is_empty(),
+            "{source}"
+        );
+    }
+}
+
+#[test]
+fn prompt_name_detection_requires_a_join_call_in_read_one() {
+    let valid = source_file(
+        "main",
+        "src/prompt.rs",
+        "fn read_one(home: &Path, name: &str) { home.join(name); }",
+    );
+    assert_eq!(home_sites(&valid).unwrap()[0].operation, "join:prompt-name");
+    let wrong_method = source_file(
+        "main",
+        "src/prompt.rs",
+        "fn read_one(home: &Path, name: &str) { home.other(name); }",
+    );
+    assert!(home_sites(&wrong_method).unwrap().is_empty());
+}
+
+#[test]
+fn stalled_cursor_consume_returns_a_bounded_error() {
+    let mut cursor = SourceCursor::new("");
+    assert!(matches!(
+        cursor.consume("/*"),
+        Err(StalledCursor { line: 1 })
+    ));
+}
+
+#[test]
+fn string_start_advances_once_per_raw_delimiter_hash() {
+    assert_eq!(string_start(br###"r##"value"##"###, 0), Some((3, true, 2)));
+    assert_eq!(string_start(br##"r#"value"#"##, 0), Some((2, true, 1)));
+    assert_eq!(string_start(b"r\"value\"", 0), Some((1, true, 0)));
+}
+
+#[test]
+fn each_label_context_requires_every_neighbour_token() {
+    let cases = [
+        (
+            file("loop", "src/opening.rs", String::new()),
+            "fn render() { let row = (\"shell\", environment.shell.as_str()); }",
+            "shell",
+            "render",
+            "fills the opening environment template",
+            &[
+                (-1, SourceKind::Punct('!')),
+                (1, SourceKind::Punct('!')),
+                (2, SourceKind::Ident("other".to_owned())),
+                (3, SourceKind::Punct('!')),
+                (4, SourceKind::Ident("other".to_owned())),
+            ][..],
+        ),
+        (
+            file("loop", "src/status.rs", String::new()),
+            "fn key() { let key = match state { SessionState::Jobs => (\"jobs\", None) }; }",
+            "jobs",
+            "key",
+            "names a session state key",
+            &[
+                (-1, SourceKind::Punct('!')),
+                (-2, SourceKind::Punct('!')),
+                (-3, SourceKind::Punct('!')),
+                (1, SourceKind::Punct('!')),
+                (2, SourceKind::Ident("other".to_owned())),
+            ][..],
+        ),
+        (
+            file("loop", "src/skills.rs", String::new()),
+            "fn commands() { let tag = if skill.model_invocable { \"skill\" } else { \"template\" }; }",
+            "skill",
+            "commands",
+            "labels a listed command",
+            &[
+                (-1, SourceKind::Punct('!')),
+                (-2, SourceKind::Ident("other".to_owned())),
+                (1, SourceKind::Punct('!')),
+                (2, SourceKind::Ident("other".to_owned())),
+            ][..],
+        ),
+        (
+            file("loop", "src/handoff/carry.rs", String::new()),
+            "fn restart() { let args = &[(\"jobs\", listed.join(\"\\n\").as_str())]; }",
+            "jobs",
+            "restart",
+            "fills the handoff template",
+            &[
+                (-1, SourceKind::Punct('!')),
+                (1, SourceKind::Punct('!')),
+                (2, SourceKind::Ident("other".to_owned())),
+                (3, SourceKind::Punct('!')),
+                (4, SourceKind::Ident("other".to_owned())),
+            ][..],
+        ),
+        (
+            file("loop", "src/reviewer.rs", String::new()),
+            "fn sections() { let sections = Sections { handoff: crate::prompt::section(md, \"handoff\") }; }",
+            "handoff",
+            "sections",
+            "selects the handoff section",
+            &[
+                (-1, SourceKind::Punct('!')),
+                (-2, SourceKind::Ident("other".to_owned())),
+                (-4, SourceKind::Ident("other".to_owned())),
+                (-7, SourceKind::Ident("other".to_owned())),
+                (-10, SourceKind::Ident("other".to_owned())),
+                (-12, SourceKind::Ident("other".to_owned())),
+            ][..],
+        ),
+    ];
+
+    for (file, source, name, function, reason, near_misses) in cases {
+        let tokens = source_tokens(source).unwrap();
+        let at = token_with_string(&tokens, name);
+        assert_eq!(
+            label_context(&file, &tokens, at, name),
+            Some((function, reason)),
+            "{source}"
+        );
+        for (offset, replacement) in near_misses {
+            reject_label_after_change(&file, source, name, *offset, replacement.clone());
+        }
+    }
+}
+
+#[test]
+fn derived_tool_names_are_exactly_the_owned_definitions() {
+    let tools = registrations(&REGISTERED_TOOLS);
+    let jobs = source_file(
+        "jobs",
+        "src/extra.rs",
+        "Tool { name: \"delegate_message\".to_owned() }\nTool { name: \"pwd\" }\n",
+    );
+    let names = derived_tool_names(&[tools, jobs]).unwrap();
+    assert_eq!(
+        names,
+        REGISTERED_TOOLS
+            .into_iter()
+            .chain(["delegate_message"])
+            .map(str::to_owned)
+            .collect()
+    );
+}
+
+#[test]
+fn owned_tool_definition_and_unrecognized_forms_need_name_and_colon() {
+    let tokens = source_tokens(
+        "name: \"known\".to_owned(); other: \"not-name\".to_owned(); name \"missing-colon\".to_owned(); name: String::from(\"custom\");",
+    )
+    .unwrap();
+    let name_positions = tokens
+        .iter()
+        .enumerate()
+        .filter_map(|(i, token)| ident(Some(token), "name").then_some(i))
+        .collect::<Vec<_>>();
+    assert_eq!(
+        owned_tool_definition(&tokens, name_positions[0]).as_deref(),
+        Some("known")
+    );
+    let other = token_with_ident(&tokens, "other");
+    assert_eq!(owned_tool_definition(&tokens, other), None);
+    assert_eq!(owned_tool_definition(&tokens, name_positions[1]), None);
+    assert_eq!(owned_tool_definition(&tokens, name_positions[2]), None);
+    assert!(unrecognized_tool_definition(&tokens, name_positions[2]));
+    assert!(!unrecognized_tool_definition(&tokens, other));
+    assert!(!unrecognized_tool_definition(&tokens, name_positions[1]));
+}
+
+#[test]
+fn unrecognized_tool_names_reject_nearby_owned_string_spellings() {
+    let source = "name: Other::from(\"x\"); name: String X: from(\"x\"); name: String::to_owned(\"x\"); name: Other . to_string(); name: \"x\": to_string(); name String::from(\"wrong\"); other: String::from(\"wrong\");";
+    let tokens = source_tokens(source).unwrap();
+    let name_positions = tokens
+        .iter()
+        .enumerate()
+        .filter_map(|(i, token)| ident(Some(token), "name").then_some(i))
+        .collect::<Vec<_>>();
+    assert_eq!(name_positions.len(), 6);
+    for at in name_positions {
+        assert!(!unrecognized_tool_definition(&tokens, at), "{source}");
+    }
+    let other = token_with_ident(&tokens, "other");
+    assert!(!unrecognized_tool_definition(&tokens, other), "{source}");
+}
