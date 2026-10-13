@@ -3724,7 +3724,10 @@ fn start_carries_the_terminal_layer_in_overrides() {
     assert_eq!(bare["workspace"], "/w");
     assert!(bare.get("overrides").is_none());
     // The layer rides in order, beside the workspace.
-    app.launch_overrides = vec!["model=acme/m".to_owned(), "retry.attempts=2".to_owned()];
+    app.set_launch_overrides(vec![
+        "model=acme/m".to_owned(),
+        "retry.attempts=2".to_owned(),
+    ]);
     let args = app.start_args();
     assert_eq!(args["workspace"], "/w");
     assert_eq!(
