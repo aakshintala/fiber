@@ -1,3 +1,9 @@
+use std::os::unix::process::CommandExt as _;
+use std::process::{Command, Stdio};
+use std::time::Duration;
+
+use fakes::finished;
+
 use super::*;
 
 const CODE_QUALITY: &str = "# Code quality
@@ -665,7 +671,7 @@ fn session_paths_skip_test_files_cfg_test_items_and_test_only_modules() {
             "fn fake() { let _ = dir.join(\"sessions\"); }",
         ),
     ];
-    assert_eq!(production_files(&files).len(), 1);
+    assert_eq!(production_files(&files).unwrap().len(), 1);
     assert!(session_paths(&files).is_empty());
 }
 
@@ -709,10 +715,10 @@ fn fiber_home_paths_match_prompt_reads_but_not_os_home_or_relative_joins() {
         ),
     ];
     assert_eq!(
-        home_sites(&files[0]).len(),
+        home_sites(&files[0]).unwrap().len(),
         4,
         "{:?}",
-        home_sites(&files[0])
+        home_sites(&files[0]).unwrap()
     );
     assert_eq!(
         fiber_home_paths(&files),
@@ -775,7 +781,7 @@ fn home_allowances_distinguish_repeated_sites_in_one_function() {
         "src/installed.rs",
         "fn removal() {\n    let path = home.join(\"extensions\");\n    dirs.push(home.join(\"extensions\"));\n}\n",
     );
-    let sites = home_sites(&file);
+    let sites = home_sites(&file).unwrap();
     assert_eq!(sites.len(), 2);
     assert!(sites[0].context.contains("::let path"));
     assert!(sites[1].context.contains("::dirs . push"));
@@ -785,7 +791,7 @@ fn home_allowances_distinguish_repeated_sites_in_one_function() {
         "src/installed.rs",
         "fn removal() {\n    let path = home.join(\"extensions\");\n}\n",
     );
-    assert_eq!(home_sites(&one_site)[0].context, sites[0].context);
+    assert_eq!(home_sites(&one_site).unwrap()[0].context, sites[0].context);
 }
 
 #[test]
@@ -813,7 +819,7 @@ fn loop_tool_names_derives_registered_names_from_owned_definitions() {
         "src/extra.rs",
         "Tool { name: \"delegate_message\".to_owned() }\nTool { name: \"pwd\" }\n",
     );
-    let names = derived_tool_names(&[tools, jobs]);
+    let names = derived_tool_names(&[tools, jobs]).unwrap();
     for name in REGISTERED_TOOLS {
         assert!(names.contains(name), "derived names: {names:?}");
     }
@@ -994,10 +1000,13 @@ fn source_tokens_do_not_end_an_escaped_quote_string_early() {
 
 #[test]
 fn source_tokens_skip_escaped_and_unicode_character_literals() {
+    assert_eq!(char_literal_end("'''", 0), None);
+    assert_eq!(char_literal_end("'\n'", 0), None);
     for literal in [r"'x'", r"'\''", r"'\x41'", r"'\u{1F980}'", "'🦀'"] {
         let source = format!("fn f() {{ let c = {literal}; let _ = dir.join(\"sessions\"); }}");
-        let expected = source_tokens("fn f() { let c = ; let _ = dir.join(\"sessions\"); }");
-        assert_eq!(source_tokens(&source), expected, "{literal}");
+        let expected =
+            source_tokens("fn f() { let c = ; let _ = dir.join(\"sessions\"); }").unwrap();
+        assert_eq!(source_tokens(&source).unwrap(), expected, "{literal}");
         let files = [source_file("hub", "src/chars.rs", &source)];
         assert_eq!(
             session_paths(&files),
@@ -1009,6 +1018,7 @@ fn source_tokens_skip_escaped_and_unicode_character_literals() {
     let malformed_escape = r###"fn f() { let c = '\uX}'; let _ = dir.join("sessions"); }"###;
     assert!(
         source_tokens(malformed_escape)
+            .unwrap()
             .iter()
             .any(|token| { matches!(&token.kind, SourceKind::Ident(value) if value == "uX") })
     );
@@ -1019,6 +1029,91 @@ fn source_tokens_skip_escaped_and_unicode_character_literals() {
             malformed_escape
         )]),
         ["crates/hub/src/malformed_char.rs:1: session path outside log"]
+    );
+}
+
+const CURSOR_PROBE_ENV: &str = "XTASK_SOURCE_CURSOR_STALL_PROBE";
+/// A child that spins without the cursor guard must fail well before the mutant timeout.
+const CURSOR_PROBE_WITHIN: Duration = Duration::from_secs(5);
+
+#[test]
+fn stalled_cursor_diagnostic_names_the_file_and_line() {
+    let source = source_file("hub", "src/stalled.rs", "\n\nfn f() {}\n");
+    assert_eq!(
+        stalled_cursor_diagnostic(&source, StalledCursor { line: 3 }),
+        "crates/hub/src/stalled.rs:3: source cursor stopped advancing"
+    );
+}
+
+fn run_cursor_stall_probe(case: &str) {
+    let child = Command::new(std::env::current_exe().unwrap())
+        .args([
+            "--exact",
+            "rules::tests::source_cursor_stall_probe",
+            "--nocapture",
+        ])
+        .env(CURSOR_PROBE_ENV, case)
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .process_group(0)
+        .spawn()
+        .unwrap();
+    let output = finished(
+        &format!("source cursor probe {case}"),
+        child,
+        &[],
+        CURSOR_PROBE_WITHIN,
+    );
+    assert!(
+        output.status.success(),
+        "source cursor probe {case} failed:\n{}{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+}
+
+#[test]
+fn stalled_peek_at_offset_zero_is_bounded() {
+    run_cursor_stall_probe("peek-zero");
+}
+
+#[test]
+fn stalled_peek_at_offset_one_is_bounded() {
+    run_cursor_stall_probe("peek-one");
+}
+
+#[test]
+fn stalled_next_returning_none_is_bounded() {
+    run_cursor_stall_probe("next-none");
+}
+
+#[test]
+fn stalled_next_returning_zero_is_bounded() {
+    run_cursor_stall_probe("next-zero");
+}
+
+#[test]
+fn stalled_next_returning_one_is_bounded() {
+    run_cursor_stall_probe("next-one");
+}
+
+#[test]
+fn source_cursor_stall_probe() {
+    let Some(case) = std::env::var_os(CURSOR_PROBE_ENV) else {
+        return;
+    };
+    let source = match case.to_str().unwrap() {
+        "peek-zero" | "peek-one" => "",
+        "next-none" => " ",
+        "next-zero" | "next-one" => "f",
+        other => panic!("unknown cursor probe {other}"),
+    };
+    let files = [source_file("hub", "src/cursor_probe.rs", source)];
+    let failures = session_paths(&files);
+    assert!(
+        failures.is_empty(),
+        "cursor probe scanner failures: {failures:?}"
     );
 }
 
@@ -1094,6 +1189,7 @@ fn test_only_files_shared_with_a_production_module_edge_remain_production() {
         ),
     ];
     let paths = production_files(&files)
+        .unwrap()
         .into_iter()
         .map(|file| file.rel.as_str())
         .collect::<Vec<_>>();
@@ -1111,7 +1207,7 @@ fn home_sites_keep_variable_join_context_and_name_token_line() {
         "src/prompt_fixture.rs",
         "fn helper() {}\nfn read_one(home: &Path, name: &str) {\n    let path = home.join(\n        name\n    ).join(\"projects\");\n}\n",
     );
-    let sites = home_sites(&file);
+    let sites = home_sites(&file).unwrap();
     assert!(
         sites.iter().any(|site| {
             site.operation == "join:projects"
@@ -1134,11 +1230,16 @@ fn home_sites_keep_variable_join_context_and_name_token_line() {
         "src/prompt_start.rs",
         "fn preceding() {}\nfn read_one(home: &Path, name: &str) {\n    home.join(name);\n}\n",
     );
-    assert!(home_sites(&near_function_start).iter().any(|site| {
-        site.operation == "join:prompt-name"
-            && site.context == "fn read_one|root:home"
-            && site.line == 3
-    }));
+    assert!(
+        home_sites(&near_function_start)
+            .unwrap()
+            .iter()
+            .any(|site| {
+                site.operation == "join:prompt-name"
+                    && site.context == "fn read_one|root:home"
+                    && site.line == 3
+            })
+    );
 }
 
 #[test]
@@ -1148,7 +1249,7 @@ fn test_only_read_one_join_name_is_not_a_home_path() {
         "src/prompt_fixture.rs",
         "#[cfg(test)]\nmod fake {\n    fn read_one(home: &Path, name: &str) {\n        let path = home.join(\"projects\").join(name);\n    }\n}\n",
     )];
-    assert!(home_sites(&files[0]).is_empty());
+    assert!(home_sites(&files[0]).unwrap().is_empty());
     assert!(fiber_home_paths(&files).is_empty());
 }
 

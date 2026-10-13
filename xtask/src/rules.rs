@@ -578,6 +578,11 @@ const HOME_COMPONENTS: &[&str] = &[
     "skills",
 ];
 
+#[derive(Debug)]
+struct StalledCursor {
+    line: usize,
+}
+
 struct SourceCursor<'a> {
     source: &'a str,
     chars: std::iter::Peekable<std::str::CharIndices<'a>>,
@@ -615,73 +620,84 @@ impl<'a> SourceCursor<'a> {
         next
     }
 
-    fn consume_to(&mut self, end: usize) {
-        while self.offset() < end {
-            if self.next().is_none() {
-                break;
-            }
+    fn advance(&mut self) -> Result<(usize, char), StalledCursor> {
+        // Inspect the iterator directly: a stalled `peek` must not hide EOF.
+        let before = self.chars.peek().map(|(offset, _)| *offset);
+        let next = self.next();
+        let after = self.chars.peek().map(|(offset, _)| *offset);
+        if before == after {
+            return Err(StalledCursor { line: self.line });
         }
+        next.ok_or(StalledCursor { line: self.line })
     }
 
-    fn consume(&mut self, text: &str) {
+    fn consume_to(&mut self, end: usize) -> Result<(), StalledCursor> {
+        while self.offset() < end {
+            self.advance()?;
+        }
+        Ok(())
+    }
+
+    fn consume(&mut self, text: &str) -> Result<(), StalledCursor> {
         for expected in text.chars() {
-            let Some((_, actual)) = self.next() else {
-                return;
-            };
+            let (_, actual) = self.advance()?;
             debug_assert_eq!(actual, expected);
         }
+        Ok(())
     }
 }
 
 /// Rust tokens needed by the source gates. Comments disappear, while string
 /// literals remain available as path and identity values.
-fn source_tokens(source: &str) -> Vec<SourceToken> {
+fn source_tokens(source: &str) -> Result<Vec<SourceToken>, StalledCursor> {
     let bytes = source.as_bytes();
     let mut cursor = SourceCursor::new(source);
     let mut tokens = Vec::new();
     while let Some((at, character)) = cursor.peek() {
         if character.is_ascii_whitespace() {
-            cursor.next();
+            cursor.advance()?;
             continue;
         }
         if cursor.starts_with("//") {
-            cursor.consume("//");
+            cursor.consume("//")?;
             while cursor
                 .peek()
                 .is_some_and(|(_, character)| character != '\n')
             {
-                cursor.next();
+                cursor.advance()?;
             }
             continue;
         }
         if cursor.starts_with("/*") {
-            cursor.consume("/*");
+            cursor.consume("/*")?;
             let mut nesting = vec![()];
             while !nesting.is_empty() {
                 if cursor.starts_with("/*") {
-                    cursor.consume("/*");
+                    cursor.consume("/*")?;
                     nesting.push(());
                 } else if cursor.starts_with("*/") {
-                    cursor.consume("*/");
+                    cursor.consume("*/")?;
                     nesting.pop();
-                } else if cursor.next().is_none() {
+                } else if cursor.chars.peek().is_none() {
                     break;
+                } else {
+                    cursor.advance()?;
                 }
             }
             continue;
         }
         if let Some(end) = char_literal_end(source, at) {
-            cursor.consume_to(end);
+            cursor.consume_to(end)?;
             continue;
         }
         if let Some((quote, raw, hashes)) = string_start(bytes, at) {
             let token_line = cursor.line;
-            cursor.consume_to(quote.saturating_add(1));
+            cursor.consume_to(quote.saturating_add(1))?;
             let content_start = cursor.offset();
             if raw {
                 let closing = format!("\"{}", "#".repeat(hashes));
                 while cursor.peek().is_some() && !cursor.starts_with(&closing) {
-                    cursor.next();
+                    cursor.advance()?;
                 }
             } else {
                 let mut escaped = false;
@@ -689,7 +705,7 @@ fn source_tokens(source: &str) -> Vec<SourceToken> {
                     if character == '"' && !escaped {
                         break;
                     }
-                    cursor.next();
+                    cursor.advance()?;
                     escaped = character == '\\' && !escaped;
                 }
             }
@@ -703,10 +719,10 @@ fn source_tokens(source: &str) -> Vec<SourceToken> {
                 line: token_line,
             });
             if cursor.peek().is_some_and(|(_, character)| character == '"') {
-                cursor.next();
+                cursor.advance()?;
                 if raw {
                     for _ in 0..hashes {
-                        cursor.next();
+                        cursor.advance()?;
                     }
                 }
             }
@@ -719,7 +735,7 @@ fn source_tokens(source: &str) -> Vec<SourceToken> {
                 .peek()
                 .is_some_and(|(_, next)| next.is_ascii_alphanumeric() || next == '_')
             {
-                cursor.next();
+                cursor.advance()?;
             }
             let value = source
                 .get(start..cursor.offset())
@@ -730,14 +746,14 @@ fn source_tokens(source: &str) -> Vec<SourceToken> {
                 line: token_line,
             });
         } else {
-            cursor.next();
+            cursor.advance()?;
             tokens.push(SourceToken {
                 kind: SourceKind::Punct(character),
                 line: token_line,
             });
         }
     }
-    tokens
+    Ok(tokens)
 }
 
 fn char_literal_end(source: &str, at: usize) -> Option<usize> {
@@ -767,7 +783,7 @@ fn char_literal_end(source: &str, at: usize) -> Option<usize> {
             }
             _ => {}
         }
-    } else if first == '\'' || first == '\n' {
+    } else if matches!(first, '\'' | '\n') {
         return None;
     }
     let (closing, character) = chars.next()?;
@@ -975,9 +991,16 @@ fn module_target(
     Some(format!("{}/{normalized}", root.trim_end_matches('/')))
 }
 
+fn stalled_cursor_diagnostic(file: &RustFile, stalled: StalledCursor) -> String {
+    format!(
+        "{}:{}: source cursor stopped advancing",
+        file.path, stalled.line
+    )
+}
+
 /// Production source files under crate `src/`, excluding conventional tests,
 /// cfg(test) items and files referenced only from cfg(test) modules.
-fn production_files(files: &[RustFile]) -> Vec<&RustFile> {
+fn production_files(files: &[RustFile]) -> Result<Vec<&RustFile>, String> {
     let candidates: Vec<&RustFile> = files
         .iter()
         .filter(|f| f.krate != "fakes" && f.rel.starts_with("src/") && !is_test_file(&f.rel))
@@ -985,7 +1008,8 @@ fn production_files(files: &[RustFile]) -> Vec<&RustFile> {
     let paths: BTreeSet<&str> = candidates.iter().map(|f| f.path.as_str()).collect();
     let mut edges = Vec::new();
     for file in &candidates {
-        let tokens = source_tokens(&file.source);
+        let tokens = source_tokens(&file.source)
+            .map_err(|stalled| stalled_cursor_diagnostic(file, stalled))?;
         let tests = test_only_tokens(&tokens);
         for i in 0..tokens.len().saturating_sub(2) {
             if !ident(tokens.get(i), "mod") || !punct(tokens.get(i + 2), ';') {
@@ -1023,10 +1047,10 @@ fn production_files(files: &[RustFile]) -> Vec<&RustFile> {
             }
         }
     }
-    candidates
+    Ok(candidates
         .into_iter()
         .filter(|file| production.contains(file.path.as_str()))
-        .collect()
+        .collect())
 }
 
 fn function_context(tokens: &[SourceToken], at: usize) -> String {
@@ -1205,12 +1229,13 @@ fn file_operation_near(tokens: &[SourceToken], at: usize) -> bool {
     })
 }
 
-fn session_sites(file: &RustFile) -> Vec<SourceSite> {
-    let tokens = source_tokens(&file.source);
+fn session_sites(file: &RustFile) -> Result<Vec<SourceSite>, String> {
+    let tokens =
+        source_tokens(&file.source).map_err(|stalled| stalled_cursor_diagnostic(file, stalled))?;
     let test_only = test_only_tokens(&tokens);
     let mut sites = Vec::new();
     if file.krate == "log" {
-        return sites;
+        return Ok(sites);
     }
     for (i, token) in tokens.iter().enumerate() {
         if test_only.get(i).copied().unwrap_or(false) {
@@ -1240,19 +1265,20 @@ fn session_sites(file: &RustFile) -> Vec<SourceSite> {
             });
         }
     }
-    sites
+    Ok(sites)
 }
 
 fn prompt_literal(value: &str) -> bool {
     matches!(value, "SYSTEM.md" | "APPEND_SYSTEM.md")
 }
 
-fn home_sites(file: &RustFile) -> Vec<SourceSite> {
-    let tokens = source_tokens(&file.source);
+fn home_sites(file: &RustFile) -> Result<Vec<SourceSite>, String> {
+    let tokens =
+        source_tokens(&file.source).map_err(|stalled| stalled_cursor_diagnostic(file, stalled))?;
     let test_only = test_only_tokens(&tokens);
     let mut sites = Vec::new();
     if file.krate == "config" {
-        return sites;
+        return Ok(sites);
     }
     for (i, token) in tokens.iter().enumerate() {
         if test_only.get(i).copied().unwrap_or(false) {
@@ -1330,7 +1356,7 @@ fn home_sites(file: &RustFile) -> Vec<SourceSite> {
             operation: operation.to_owned(),
         });
     }
-    sites
+    Ok(sites)
 }
 
 fn consume_next_allowance(
@@ -1362,11 +1388,21 @@ fn consume_allowance(allowances: &[SourceAllowance], site: &SourceSite) -> bool 
 fn source_failures(files: &[RustFile], allowances: &[SourceAllowance], home: bool) -> Vec<String> {
     let mut remaining = allowances.to_vec();
     let mut failures = Vec::new();
-    for file in production_files(files) {
-        let sites = if home {
+    let production = match production_files(files) {
+        Ok(production) => production,
+        Err(failure) => return vec![failure],
+    };
+    for file in production {
+        let sites = match if home {
             home_sites(file)
         } else {
             session_sites(file)
+        } {
+            Ok(sites) => sites,
+            Err(failure) => {
+                failures.push(failure);
+                continue;
+            }
         };
         for site in sites {
             if !consume_next_allowance(&mut remaining, &mut std::iter::once(site.clone())) {
@@ -1423,13 +1459,14 @@ fn unrecognized_tool_definition(tokens: &[SourceToken], i: usize) -> bool {
                 .any(|method| ident(tokens.get(value + 2), method)))
 }
 
-fn derived_tool_names(files: &[RustFile]) -> BTreeSet<String> {
+fn derived_tool_names(files: &[RustFile]) -> Result<BTreeSet<String>, String> {
     let mut names = BTreeSet::new();
-    for file in production_files(files)
+    for file in production_files(files)?
         .into_iter()
         .filter(|file| matches!(file.krate.as_str(), "tools" | "jobs"))
     {
-        let tokens = source_tokens(&file.source);
+        let tokens = source_tokens(&file.source)
+            .map_err(|stalled| stalled_cursor_diagnostic(file, stalled))?;
         let test_only = test_only_tokens(&tokens);
         for i in 0..tokens.len() {
             if test_only.get(i).copied().unwrap_or(false) {
@@ -1440,7 +1477,7 @@ fn derived_tool_names(files: &[RustFile]) -> BTreeSet<String> {
             }
         }
     }
-    names
+    Ok(names)
 }
 
 fn previous_punct(tokens: &[SourceToken], at: usize, offset: usize, wanted: char) -> bool {
@@ -1527,8 +1564,12 @@ fn previous_ident(tokens: &[SourceToken], at: usize, offset: usize, wanted: &str
         .is_some_and(|index| ident(tokens.get(index), wanted))
 }
 
-fn loop_sites(file: &RustFile, names: &BTreeSet<String>) -> (Vec<SourceSite>, Vec<String>) {
-    let tokens = source_tokens(&file.source);
+fn loop_sites(
+    file: &RustFile,
+    names: &BTreeSet<String>,
+) -> Result<(Vec<SourceSite>, Vec<String>), String> {
+    let tokens =
+        source_tokens(&file.source).map_err(|stalled| stalled_cursor_diagnostic(file, stalled))?;
     let test_only = test_only_tokens(&tokens);
     let mut sites = Vec::new();
     let mut failures = Vec::new();
@@ -1579,16 +1620,28 @@ fn loop_sites(file: &RustFile, names: &BTreeSet<String>) -> (Vec<SourceSite>, Ve
             operation: format!("tool:{name}"),
         });
     }
-    (sites, failures)
+    Ok((sites, failures))
 }
 
 /// Built-in tool identities named by loop production source.
 pub(crate) fn loop_tool_names(files: &[RustFile]) -> Vec<String> {
-    let production = production_files(files);
-    let names = derived_tool_names(files);
+    let production = match production_files(files) {
+        Ok(production) => production,
+        Err(failure) => return vec![failure],
+    };
+    let names = match derived_tool_names(files) {
+        Ok(names) => names,
+        Err(failure) => return vec![failure],
+    };
     let mut failures = Vec::new();
     for file in production {
-        let (sites, definitions) = loop_sites(file, &names);
+        let (sites, definitions) = match loop_sites(file, &names) {
+            Ok(result) => result,
+            Err(failure) => {
+                failures.push(failure);
+                continue;
+            }
+        };
         failures.extend(definitions);
         for site in sites {
             failures.push(format!(
