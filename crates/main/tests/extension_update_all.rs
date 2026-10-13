@@ -83,7 +83,7 @@ impl Setup {
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
             .stderr(Stdio::piped());
-        let (mut child, watchdog) = spawn_watched(&mut command);
+        let (child, watchdog) = spawn_watched(&mut command);
         let group = child.id();
         let guard = KillGroup(group);
         let (done, finished) = mpsc::channel();
@@ -122,7 +122,6 @@ fn package(name: &str) -> PathBuf {
 
 const MUSE: &str = "github.com/aakshintala/fiber/providers/muse";
 const NEEDS_MUSE: &str = "github.com/aakshintala/fiber/providers/needs-muse";
-const OPENCODE: &str = "github.com/aakshintala/fiber/providers/opencode";
 
 /// Fiber's own repository as a local one, with `providers/muse` (the
 /// dependency), `providers/needs-muse` (depending on it) and
