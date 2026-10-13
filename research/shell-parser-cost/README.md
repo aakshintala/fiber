@@ -193,3 +193,36 @@ cmd="echo \"$(git rev-parse HEAD)\"" ok debug_bytes=598 AndOrListx1 CommandSuffi
 cmd="(cd docs; rg -n 'cap' *.md) > /dev/null" ok debug_bytes=1971 AndOrListx3 CommandSuffixx2 Compoundx1 CompoundListx2 CompoundListItemx3 Filex1 Filenamex1 Nonex6 Pipelinex3 Programx1 RedirectListx1 Sequencex3 Simplex2 SimpleCommandx2 Somex12 SourcePositionx16 SourceSpanx8 Subshellx1 SubshellCommandx1 Wordx11 Writex1
 cmd="for f in *.md; do wc -l \"$f\"; done" ok debug_bytes=1422 AndOrListx2 CommandSuffixx1 Compoundx1 CompoundListx2 CompoundListItemx2 DoGroupCommandx1 ForClausex1 ForClauseCommandx1 Nonex4 Pipelinex2 Programx1 Sequencex2 Simplex1 SimpleCommandx1 Somex7 SourcePositionx12 SourceSpanx6 Wordx6
 ```
+
+## Linux (dependency-probe run 38446335487, October 13, 2026)
+
+Peak RSS over baseline, KiB.
+
+| Workload | Linux x86_64 | Linux aarch64 |
+|---|---:|---:|
+| linked, highlight nothing | 1080 | 836 |
+| bash, one block | 6196 | 6212 |
+| c, one block | 3092 | 3152 |
+| cpp, one block | 13352 | 13332 |
+| css, one block | 2304 | 2432 |
+| diff, one block | 1444 | 1536 |
+| go, one block | 2424 | 2272 |
+| html, one block | 3972 | 3868 |
+| java, one block | 2896 | 2892 |
+| javascript, one block | 3700 | 3708 |
+| json, one block | 1432 | 1524 |
+| markdown, one block | 7256 | 7256 |
+| python, one block | 2968 | 3140 |
+| rust, one block | 7636 | 7412 |
+| sql, one block | 25780 | 25796 |
+| toml, one block | 1432 | 1536 |
+| tsx, one block | 6028 | 5956 |
+| typescript, one block | 5828 | 5956 |
+| yaml, one block | 2200 | 2244 |
+| rust, one block | 7460 | 7416 |
+| rust, 10 blocks | 7684 | 7412 |
+| rust, 100 blocks | 7524 | 7416 |
+| rust+python+javascript, one block each | 8480 | 8312 |
+| all 18 languages, one block each | 44252 | 44112 |
+
+Shell parsers, peak RSS over baseline / stripped binary (KiB): tree-sitter-bash 1,324 / 1,746 (x86_64), 1,412 / 1,732 (aarch64); brush-parser 420 / 773, 516 / 773.
