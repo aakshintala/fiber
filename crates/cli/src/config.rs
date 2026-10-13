@@ -14,7 +14,7 @@ use contract::shapes::Failure;
 use extensions::Providers;
 use serde_json::Value;
 
-use crate::{fail, failed, project_of};
+use crate::{failed, project_of, with_dirs};
 
 /// Prints each notice as one line on standard error: exactly the notice's
 /// message, nothing else (`docs/configuration.md`, "When Fiber reads
@@ -136,22 +136,6 @@ pub fn config_set_text(
         .lines()
         .map(str::to_owned)
         .collect())
-}
-
-/// Runs `run` with Fiber home and the current directory, mapping any failure
-/// to its exit code.
-fn with_dirs(run: impl FnOnce(&Path, &Path) -> Result<(), Failure>) -> i32 {
-    let ran = config::fiber_home_from_env()
-        .map_err(|e| failed(e.code(), e))
-        .and_then(|home| {
-            let workspace = std::env::current_dir()
-                .map_err(|e| failed(ErrorCode::IoFailed, format!("the current directory: {e}")))?;
-            run(&home, &workspace)
-        });
-    match ran {
-        Ok(()) => 0,
-        Err(e) => fail(e),
-    }
 }
 
 /// Checks a `model` value against the installed providers' cached model

@@ -21,7 +21,7 @@ use extensions::{Providers, SessionExtensions};
 use serde::Serialize;
 
 use crate::table::pad;
-use crate::{fail, failed, project_of};
+use crate::{failed, project_of, with_dirs};
 
 /// Starts the detached refresh of stale model lists: the running binary
 /// re-run as its hidden refresh child: its own process group, nothing on
@@ -271,39 +271,25 @@ pub fn models(
     exe: Result<PathBuf, String>,
     run: config::Runner<'_>,
 ) -> i32 {
-    let ran = config::fiber_home_from_env()
-        .map_err(|e| failed(e.code(), e))
-        .and_then(|home| {
-            let workspace = std::env::current_dir()
-                .map_err(|e| failed(ErrorCode::IoFailed, format!("the current directory: {e}")))?;
-            self::run(
-                &home,
-                &workspace,
-                search,
-                json,
-                &mut io::stdout(),
-                &mut io::stderr(),
-                &|config: &Config| {
-                    SessionExtensions::load(
-                        &home,
-                        config,
-                        Arc::clone(&clock),
-                        Arc::clone(&locks),
-                        None,
-                    )
-                },
-                &|providers| match &exe {
-                    Ok(path) => spawn_refresh(path, providers).map(drop),
-                    Err(message) => Err(io::Error::other(message.clone())),
-                },
-                clock.as_ref(),
-                run,
-            )
-        });
-    match ran {
-        Ok(()) => 0,
-        Err(e) => fail(e),
-    }
+    with_dirs(|home, workspace| {
+        self::run(
+            home,
+            workspace,
+            search,
+            json,
+            &mut io::stdout(),
+            &mut io::stderr(),
+            &|config: &Config| {
+                SessionExtensions::load(home, config, Arc::clone(&clock), Arc::clone(&locks), None)
+            },
+            &|providers| match &exe {
+                Ok(path) => spawn_refresh(path, providers).map(drop),
+                Err(message) => Err(io::Error::other(message.clone())),
+            },
+            clock.as_ref(),
+            run,
+        )
+    })
 }
 
 /// Refreshes the named providers' cached model lists with the age check.

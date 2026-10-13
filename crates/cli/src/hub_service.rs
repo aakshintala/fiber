@@ -19,7 +19,7 @@ use contract::shapes::Failure;
 use serde_json::Value;
 
 use crate::hub_unit::{Manager, Service};
-use crate::{fail, failed};
+use crate::{failed, finish};
 
 /// How often install asks launchd whether a booted-out service is gone.
 const BOOTOUT_POLL: Duration = Duration::from_millis(100);
@@ -79,14 +79,14 @@ pub fn hub_install(port: Option<u16>, clock: &dyn Clock) -> i32 {
             &write_unit,
         )
     });
-    ran.map_or_else(fail, |()| 0)
+    finish(ran)
 }
 
 /// `fiber hub uninstall` for this Fiber home.
 pub fn hub_uninstall() -> i32 {
     let ran = system_service()
         .and_then(|(_, service)| uninstall(&service, &SystemRunner, &mut io::stdout()));
-    ran.map_or_else(fail, |()| 0)
+    finish(ran)
 }
 
 /// Restarts `home`'s installed hub through its service manager: `Ok(true)`

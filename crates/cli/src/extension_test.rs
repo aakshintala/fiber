@@ -13,6 +13,8 @@ use std::sync::{Arc, Condvar, Mutex, MutexGuard, PoisonError, mpsc};
 use std::thread;
 use std::time::{Duration, Instant, SystemTime};
 
+use crate::{failed, finish_code};
+use contract::ErrorCode;
 use contract::clock::{Clock, Wake};
 use extensions::{Origin, Request};
 use rustix::process::{Pid, Signal};
@@ -79,10 +81,9 @@ struct RunOptions {
 pub fn extension_test(path: Option<&Path>, fiber: Result<PathBuf, String>) -> i32 {
     let fiber = match fiber {
         Ok(fiber) => fiber,
-        Err(error) => {
-            writeln!(io::stderr().lock(), "fiber: {error}").unwrap_or(());
-            return 1;
-        }
+        // The shared error branch prints the failure and gives code 1,
+        // exactly as the direct write and return did.
+        Err(error) => return finish_code(Err(failed(ErrorCode::IoFailed, error))),
     };
     let options = RunOptions {
         clock: Arc::new(ProcessClock),

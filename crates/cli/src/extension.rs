@@ -13,7 +13,7 @@ use contract::clock::Clock;
 use contract::shapes::Failure;
 use extensions::{Origin, Provenance, Request};
 
-use crate::{fail, failed};
+use crate::{failed, finish, finish_code};
 
 mod approve;
 
@@ -71,10 +71,7 @@ pub fn extension_install(
                 },
             )
         });
-    match ran {
-        Ok(code) => code,
-        Err(e) => fail(e),
-    }
+    finish_code(ran)
 }
 
 /// `fiber extension update [<name>]`: with a name, reinstalls that
@@ -106,10 +103,7 @@ pub fn extension_update(name: Option<&str>, fiber_version: &str, clock: &dyn Clo
                 None => update_all(&home, fiber_version, &Origin::github(), clock, io),
             }
         });
-    match ran {
-        Ok(code) => code,
-        Err(e) => fail(e),
-    }
+    finish_code(ran)
 }
 
 /// `fiber extension remove <name>`: removes an extension, the
@@ -132,10 +126,7 @@ pub fn extension_remove(name: &str, clock: &dyn Clock) -> i32 {
                 },
             )
         });
-    match ran {
-        Ok(code) => code,
-        Err(e) => fail(e),
-    }
+    finish_code(ran)
 }
 
 /// `fiber extension reinstall <name>`: removes the extension and installs
@@ -161,10 +152,7 @@ pub fn extension_reinstall(name: &str, fiber_version: &str, clock: &dyn Clock) -
                 },
             )
         });
-    match ran {
-        Ok(code) => code,
-        Err(e) => fail(e),
-    }
+    finish_code(ran)
 }
 
 /// `fiber extension list`: one line per installed extension: name,
@@ -173,10 +161,7 @@ pub fn extension_list(clock: &dyn Clock) -> i32 {
     let ran = config::fiber_home_from_env()
         .map_err(|e| failed(e.code(), e))
         .and_then(|home| list(&home, clock, &mut io::stdout().lock()));
-    match ran {
-        Ok(()) => 0,
-        Err(e) => fail(e),
-    }
+    finish(ran)
 }
 
 fn install(

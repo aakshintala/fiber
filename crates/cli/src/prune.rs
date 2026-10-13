@@ -18,7 +18,7 @@ mod worktrees;
 
 use crate::approve::{confirmed, say};
 use crate::sessions::Ask;
-use crate::{fail, failed, usage};
+use crate::{failed, usage, with_dirs};
 
 pub(crate) use diagnostics::{OldFile, old_diagnostics};
 
@@ -56,31 +56,23 @@ pub fn prune(
 ) -> i32 {
     let stdin = io::stdin();
     let terminal = stdin.is_terminal();
-    let ran = config::fiber_home_from_env()
-        .map_err(|e| failed(e.code(), e))
-        .and_then(|home| {
-            let workspace = std::env::current_dir()
-                .map_err(|e| failed(ErrorCode::IoFailed, format!("the current directory: {e}")))?;
-            let ask = Ask {
-                yes: args.yes,
-                terminal,
-                input: &mut stdin.lock(),
-                err: &mut io::stderr(),
-            };
-            prune_run(
-                &home,
-                &workspace,
-                args,
-                clock.wall(),
-                ask,
-                &mut io::stdout(),
-                connect,
-            )
-        });
-    match ran {
-        Ok(()) => 0,
-        Err(e) => fail(e),
-    }
+    with_dirs(|home, workspace| {
+        let ask = Ask {
+            yes: args.yes,
+            terminal,
+            input: &mut stdin.lock(),
+            err: &mut io::stderr(),
+        };
+        prune_run(
+            home,
+            workspace,
+            args,
+            clock.wall(),
+            ask,
+            &mut io::stdout(),
+            connect,
+        )
+    })
 }
 
 /// Runs prune for `home` and `workspace` at `now`: lists, asks unless

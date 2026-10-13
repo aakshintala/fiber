@@ -14,7 +14,7 @@ use serde_json::Value;
 
 use crate::sessions::request;
 use crate::table::pad;
-use crate::{fail, failed};
+use crate::{failed, finish};
 
 /// The `id` of the one command `fiber sessions` sends.
 const LIST_ID: &str = "c_sessions";
@@ -67,10 +67,7 @@ pub fn list(
             let project = doors::resolve_project(&workspace);
             run(&project, all, json, &mut io::stdout(), connect)
         });
-    match ran {
-        Ok(()) => 0,
-        Err(e) => fail(e),
-    }
+    finish(ran)
 }
 
 /// Lists the sessions in `project`'s scope, as

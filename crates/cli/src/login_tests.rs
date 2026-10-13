@@ -26,9 +26,10 @@ use serde_json::{Value, json};
 use doors::failure;
 
 use super::{
-    KeyReader, LoginIo, LoginName, LoginStored, LogoutTarget, Plain, credential_key, finish, login,
+    KeyReader, LoginIo, LoginName, LoginStored, LogoutTarget, Plain, credential_key, login,
     login_store, login_targets, login_with_notices, logout, run_login, run_logout, write_prompt,
 };
+use crate::finish;
 
 const KEY: &str = "sk-live-7f3a9c0d1e2b";
 

@@ -16,33 +16,25 @@ use contract::shapes::Failure;
 use contract::tool::Cancel;
 use serde::Serialize;
 
-use crate::{fail, failed};
+use crate::{failed, with_dirs};
 
 /// `fiber sessions search [--all] [--json] <text>` in the current
 /// directory: the shared scan's hits on stdout, its problems on stderr.
 pub fn search(text: &str, all: bool, json: bool) -> i32 {
-    let ran = config::fiber_home_from_env()
-        .map_err(|e| failed(e.code(), e))
-        .and_then(|home| {
-            let workspace = std::env::current_dir()
-                .map_err(|e| failed(ErrorCode::IoFailed, format!("the current directory: {e}")))?;
-            let in_repository = doors::resolve_project(&workspace).in_repository;
-            run(
-                &home,
-                &workspace,
-                Arc::new(doors::project),
-                in_repository,
-                text,
-                all,
-                json,
-                &mut io::stdout(),
-                &mut io::stderr(),
-            )
-        });
-    match ran {
-        Ok(()) => 0,
-        Err(e) => fail(e),
-    }
+    with_dirs(|home, workspace| {
+        let in_repository = doors::resolve_project(workspace).in_repository;
+        run(
+            home,
+            workspace,
+            Arc::new(doors::project),
+            in_repository,
+            text,
+            all,
+            json,
+            &mut io::stdout(),
+            &mut io::stderr(),
+        )
+    })
 }
 
 /// The signal the command scans with: never cancelled. SIGINT, SIGTERM and

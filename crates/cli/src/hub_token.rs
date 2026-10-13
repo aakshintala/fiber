@@ -1,25 +1,19 @@
 //! Paired device tables and revocation (`docs/invocation.md`, "Remote clients").
-use crate::{fail, failed, sessions::request, sessions_search::utc, table::pad};
+use crate::{failed, finish, sessions::request, sessions_search::utc, table::pad};
 use contract::{ErrorCode, shapes::Failure};
 use serde_json::{Map, Value};
 use std::io::{self, BufReader, Write};
 
 /// Lists the paired devices through the hub's local socket.
 pub fn hub_token_list(connect: &mut dyn FnMut() -> io::Result<doors::hub::Hub>) -> i32 {
-    match list(&mut io::stdout(), connect) {
-        Ok(()) => 0,
-        Err(error) => fail(error),
-    }
+    finish(list(&mut io::stdout(), connect))
 }
 /// Revokes a device and prints its name once the hub accepts the change.
 pub fn hub_token_revoke(
     device: &str,
     connect: &mut dyn FnMut() -> io::Result<doors::hub::Hub>,
 ) -> i32 {
-    match revoke(&mut io::stdout(), device, connect) {
-        Ok(()) => 0,
-        Err(error) => fail(error),
-    }
+    finish(revoke(&mut io::stdout(), device, connect))
 }
 fn list(
     out: &mut dyn Write,
