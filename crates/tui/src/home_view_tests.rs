@@ -2417,16 +2417,22 @@ fn no_color_boxes_the_home_box_and_narrows_its_text() {
         .collect();
     // The box is 80 wide: ┌─┐ above the draft, └─┘ below the chips,
     // dim, on the default colours.
-    let top = shown
-        .iter()
-        .position(|row| row.starts_with('┌'))
-        .expect("the box's top edge");
-    let bottom = shown
-        .iter()
-        .position(|row| row.starts_with('└'))
-        .expect("the box's bottom edge");
+    let top = u16::try_from(
+        shown
+            .iter()
+            .position(|row| row.starts_with('┌'))
+            .expect("the box's top edge"),
+    )
+    .expect("a row");
+    let bottom = u16::try_from(
+        shown
+            .iter()
+            .position(|row| row.starts_with('└'))
+            .expect("the box's bottom edge"),
+    )
+    .expect("a row");
     assert!(bottom > top);
-    for y in [top as u16, bottom as u16] {
+    for y in [top, bottom] {
         for x in 0..80u16 {
             let cell = &buf[(x, y)];
             assert_eq!(
@@ -2437,19 +2443,18 @@ fn no_color_boxes_the_home_box_and_narrows_its_text() {
             assert_eq!(cell.modifier, Modifier::DIM, "({x}, {y})");
         }
     }
-    assert_eq!(shown[top].chars().last().unwrap(), '┐');
-    assert_eq!(shown[bottom].chars().last().unwrap(), '┘');
+    assert_eq!(shown[usize::from(top)].chars().last().unwrap(), '┐');
+    assert_eq!(shown[usize::from(bottom)].chars().last().unwrap(), '┘');
     // The draft and the chips sit one column in, between │ sides, with
     // the drawn cursor on the interior.
     for y in (top + 1)..bottom {
-        let y = y as u16;
         assert_eq!(buf[(0, y)].symbol(), "│", "row {y}");
         assert_eq!(buf[(79, y)].symbol(), "│", "row {y}");
     }
-    let draft = &shown[top + 1];
+    let draft = &shown[usize::from(top) + 1];
     assert!(draft.contains("hello"), "{draft:?}");
     assert!(draft.starts_with("│›"), "{draft:?}");
-    let caret: String = (0..80).map(|x| buf[(x, top as u16 + 1)].symbol()).collect();
+    let caret: String = (0..80u16).map(|x| buf[(x, top + 1)].symbol()).collect();
     assert!(caret.contains('█'), "{caret:?}");
     assert!(!caret.ends_with('█'), "the cursor never sits on a border");
     // Chip targets keep inside the interior, clear of the sides.
@@ -2485,10 +2490,13 @@ fn no_color_home_navigation_follows_the_rendered_rows() {
     // the renderer wraps.
     assert_eq!(app.draft_width(), 38);
     let (buf, _) = no_color_home(&app, 40, 24);
-    let box_top = (0..24)
-        .map(|y| (0..40).map(|x| buf[(x, y)].symbol()).collect::<String>())
-        .position(|row| row.starts_with('┌'))
-        .expect("the box");
-    assert_eq!(buf[(0, box_top as u16)].symbol(), "┌");
-    assert_eq!(buf[(39, box_top as u16)].symbol(), "┐");
+    let box_top = u16::try_from(
+        (0..24u16)
+            .map(|y| (0..40u16).map(|x| buf[(x, y)].symbol()).collect::<String>())
+            .position(|row| row.starts_with('┌'))
+            .expect("the box"),
+    )
+    .expect("a row");
+    assert_eq!(buf[(0, box_top)].symbol(), "┌");
+    assert_eq!(buf[(39, box_top)].symbol(), "┐");
 }

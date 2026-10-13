@@ -584,7 +584,7 @@ fn no_color_token_targets_keep_clear_of_the_borders() {
     // Past the prompt, one column in from the colour columns: the text
     // rect starts at the box's left side plus one.
     assert_eq!(token.rect.x, 5 + 1 + 6);
-    assert!(token.rect.right() <= 5 + 40 - 1, "{token:?}");
+    assert!(token.rect.right() < 5 + 40, "{token:?}");
     // The final text character survives beside the right side.
     let y = token.rect.y;
     assert_eq!(buf[(5 + 40 - 1, y)].symbol(), "│");

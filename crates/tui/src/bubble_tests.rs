@@ -269,7 +269,7 @@ fn no_color_keeps_the_prompt_bare_and_its_rows() {
     for (y, (line, _)) in lines.iter().enumerate() {
         buf.set_line(
             80 - u16::try_from(line.width()).expect("a width"),
-            y as u16,
+            u16::try_from(y).expect("a row"),
             line,
             80,
         );

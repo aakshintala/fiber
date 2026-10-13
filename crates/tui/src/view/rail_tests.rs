@@ -116,7 +116,7 @@ fn rail(app: &App) -> Buffer {
         .unwrap_or_else(|| panic!("a rail"));
     let area = Rect::new(0, 0, rect.width, rect.height);
     let mut buf = Buffer::empty(area);
-    draw(&app, area, &mut buf, None, &mut Vec::new());
+    draw(app, area, &mut buf, None, &mut Vec::new());
     buf
 }
 

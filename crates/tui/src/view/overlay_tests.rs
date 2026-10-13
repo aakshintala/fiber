@@ -702,7 +702,7 @@ fn no_color_boxes_the_overlay_and_keeps_its_cells() {
         .iter()
         .position(|row| row.contains("choice"))
         .expect("the barred row");
-    let cell = &buf[(22, barred as u16)];
+    let cell = &buf[(22, u16::try_from(barred).expect("a row"))];
     assert!(cell.modifier.contains(Modifier::BOLD), "{cell:?}");
     assert_eq!((cell.fg, cell.bg), (Color::Reset, Color::Reset));
     // The padding blanks keep no tint: blanks between the sides, on

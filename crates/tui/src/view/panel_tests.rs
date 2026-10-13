@@ -1303,7 +1303,7 @@ fn no_color_boxes_a_sidebar_card_and_keeps_targets_inside() {
     assert!(body.contains("hello"), "{body:?}");
     // No target reaches a border column.
     for target in &targets {
-        assert!(target.rect.x >= left + 1, "{target:?}");
+        assert!(target.rect.x > left, "{target:?}");
         assert!(target.rect.right() <= right, "{target:?}");
     }
     // Only the widget card draws, with no delegates span: the box keeps
