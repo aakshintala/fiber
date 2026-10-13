@@ -1054,8 +1054,191 @@ fn source_tokens_skip_escaped_and_unicode_character_literals() {
 }
 
 const CURSOR_PROBE_ENV: &str = "XTASK_SOURCE_CURSOR_STALL_PROBE";
-/// A child that spins without the cursor guard must fail well before the mutant timeout.
+const SCANNER_PROBE_ENV: &str = "XTASK_SOURCE_SCANNER_BOUND_PROBE";
+/// A child that spins without a scanner guard must fail well before the mutant timeout.
 const CURSOR_PROBE_WITHIN: Duration = Duration::from_secs(5);
+
+fn run_scanner_bound_probe(case: &str) {
+    let child = Command::new(std::env::current_exe().unwrap())
+        .args([
+            "--exact",
+            "rules::tests::scanner_bound_probe",
+            "--nocapture",
+        ])
+        .env(SCANNER_PROBE_ENV, case)
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .process_group(0)
+        .spawn()
+        .unwrap();
+    let output = finished(
+        &format!("scanner bound probe {case}"),
+        child,
+        &[],
+        CURSOR_PROBE_WITHIN,
+    );
+    assert!(
+        output.status.success(),
+        "scanner bound probe {case} failed:\n{}{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+}
+
+#[test]
+fn production_module_cycles_are_bounded() {
+    run_scanner_bound_probe("module-cycle");
+}
+
+#[test]
+fn nested_comment_scanning_is_bounded_by_the_source() {
+    run_scanner_bound_probe("nested-comment");
+}
+
+#[test]
+fn joined_literal_requires_a_complete_join_call() {
+    run_scanner_bound_probe("joined-literal");
+}
+
+#[test]
+fn repeated_loop_sites_remain_bounded_and_exact() {
+    run_scanner_bound_probe("loop-sites");
+}
+
+#[test]
+fn deep_home_join_chains_are_bounded_and_exact() {
+    run_scanner_bound_probe("home-join");
+}
+
+#[test]
+fn label_context_exemptions_stay_narrow_and_bounded() {
+    run_scanner_bound_probe("label-context");
+}
+
+#[test]
+fn scanner_bound_probe() {
+    let Some(case) = std::env::var_os(SCANNER_PROBE_ENV) else {
+        return;
+    };
+    match case.to_str().unwrap() {
+        "module-cycle" => {
+            let files = [
+                source_file("hub", "src/lib.rs", "mod looped;"),
+                source_file("hub", "src/looped.rs", "#[path = \"looped.rs\"] mod again;"),
+            ];
+            let paths = production_files(&files)
+                .unwrap()
+                .into_iter()
+                .map(|file| file.rel.as_str())
+                .collect::<Vec<_>>();
+            assert_eq!(paths, ["src/lib.rs", "src/looped.rs"]);
+        }
+        "nested-comment" => {
+            let opens = "/*".repeat(2048);
+            let closes = "*/".repeat(2048);
+            let source = format!("{opens}{closes}\nfn f() {{ let _ = dir.join(\"sessions\"); }}");
+            let files = [source_file("hub", "src/nested.rs", &source)];
+            assert_eq!(
+                session_paths(&files),
+                ["crates/hub/src/nested.rs:2: session path outside log"]
+            );
+        }
+        "joined-literal" => {
+            let tokens = source_tokens(
+                "let joined = home.join(\"sessions\"); let other = home.read(\"sessions\");",
+            )
+            .unwrap();
+            let joined = token_with_string(&tokens, "sessions");
+            assert!(joined_literal(&tokens, joined));
+            let other = tokens
+                .iter()
+                .enumerate()
+                .skip(joined + 1)
+                .find_map(|(i, token)| (string(Some(token)) == Some("sessions")).then_some(i))
+                .unwrap();
+            assert!(!joined_literal(&tokens, other));
+        }
+        "loop-sites" => {
+            let names = BTreeSet::from(["shell".to_owned()]);
+            let source = (0..512)
+                .map(|_| {
+                    r#"let _ = "shell";
+"#
+                })
+                .collect::<String>();
+            let file = source_file("loop", "src/repeated.rs", &source);
+            let (sites, definitions) = loop_sites(&file, &names).unwrap();
+            assert!(definitions.is_empty());
+            assert_eq!(sites.len(), 512);
+            assert!(sites.iter().all(|site| site.operation == "tool:shell"));
+            let filtered = source_file(
+                "loop",
+                "src/filtered.rs",
+                "// let _ = \"shell\";\n#[cfg(test)] fn fake() { let _ = \"shell\"; }\nfn real() { let _ = \"shell\"; }",
+            );
+            let (sites, definitions) = loop_sites(&filtered, &names).unwrap();
+            assert!(definitions.is_empty());
+            assert_eq!(sites.len(), 1);
+            assert_eq!(sites[0].line, 3);
+
+            let cycle = [
+                source_file("hub", "src/lib.rs", "mod looped;"),
+                source_file("hub", "src/looped.rs", "#[path = \"looped.rs\"] mod again;"),
+            ];
+            assert_eq!(production_files(&cycle).unwrap().len(), 2);
+        }
+        "home-join" => {
+            let source = format!("home{}", r#".join("segment")"#.repeat(512));
+            let tokens = source_tokens(&source).unwrap();
+            let join_dot = tokens
+                .iter()
+                .enumerate()
+                .rev()
+                .find_map(|(i, token)| {
+                    (punct(Some(token), '.') && ident(tokens.get(i + 1), "join")).then_some(i)
+                })
+                .unwrap();
+            let expected = format!("home{}", "/segment".repeat(511));
+            let actual = home_join_context(&tokens, join_dot).unwrap().unwrap();
+            let first_difference = actual
+                .bytes()
+                .zip(expected.bytes())
+                .position(|(actual, expected)| actual != expected)
+                .unwrap_or_else(|| actual.len().min(expected.len()));
+            if actual != expected {
+                panic!(
+                    "home join context differs at byte {first_difference}: actual {} bytes, expected {} bytes",
+                    actual.len(),
+                    expected.len()
+                );
+            }
+        }
+        "label-context" => {
+            let tools = registrations(&REGISTERED_TOOLS);
+            let labels = [
+                file("loop", "src/opening.rs", r#"fn render() { let row = ("shell", environment.shell.as_str()); }"#.to_owned()),
+                file("loop", "src/status.rs", r#"fn key() { let key = match state { SessionState::Jobs => ("jobs", None) }; }"#.to_owned()),
+                file("loop", "src/skills.rs", r#"fn commands() { let tag = if skill.model_invocable { "skill" } else { "template" }; }"#.to_owned()),
+                file("loop", "src/handoff/carry.rs", r#"fn restart() { let args = &[("jobs", listed.join("\n").as_str())]; }"#.to_owned()),
+                file("loop", "src/reviewer.rs", r#"fn sections() { let sections = Sections { handoff: crate::prompt::section(md, "handoff") }; }"#.to_owned()),
+            ];
+            let mut files = vec![tools];
+            files.extend(labels);
+            assert!(loop_tool_names(&files).is_empty());
+            files.push(file(
+                "loop",
+                "src/opening.rs",
+                r#"fn render() { let row = ("shell", environment.shell.as_str()); let identity = "shell"; }"#.to_owned(),
+            ));
+            assert_eq!(
+                loop_tool_names(&files),
+                ["crates/loop/src/opening.rs:1: built-in tool name shell"]
+            );
+        }
+        other => panic!("unknown scanner probe {other}"),
+    }
+}
 
 #[test]
 fn stalled_cursor_diagnostic_names_the_file_and_line() {
@@ -1647,16 +1830,22 @@ fn home_join_context_and_fiber_root_exclusion_cover_both_outcomes() {
             (punct(Some(token), '.') && ident(tokens.get(i + 1), "join")).then_some(i)
         })
         .collect::<Vec<_>>();
-    assert_eq!(home_join_context(&tokens, dots[0]).as_deref(), Some("home"));
     assert_eq!(
-        home_join_context(&tokens, dots[1]).as_deref(),
-        Some("home/projects")
+        home_join_context(&tokens, dots[0]),
+        Ok(Some("home".to_owned()))
     );
-    assert_eq!(fiber_home_join(&tokens, dots[0]).as_deref(), Some("home"));
-    assert_eq!(fiber_home_join(&tokens, dots[3]), None);
-    assert_eq!(fiber_home_join(&tokens, dots[5]), None);
-    assert_eq!(home_join_context(&tokens, dots[6]), None);
-    assert_eq!(home_join_context(&tokens, dots[7]), None);
+    assert_eq!(
+        home_join_context(&tokens, dots[1]),
+        Ok(Some("home/projects".to_owned()))
+    );
+    assert_eq!(
+        fiber_home_join(&tokens, dots[0]),
+        Ok(Some("home".to_owned()))
+    );
+    assert_eq!(fiber_home_join(&tokens, dots[3]), Ok(None));
+    assert_eq!(fiber_home_join(&tokens, dots[5]), Ok(None));
+    assert_eq!(home_join_context(&tokens, dots[6]), Ok(None));
+    assert_eq!(home_join_context(&tokens, dots[7]), Ok(None));
 }
 
 #[test]

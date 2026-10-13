@@ -578,7 +578,7 @@ const HOME_COMPONENTS: &[&str] = &[
     "skills",
 ];
 
-#[derive(Debug)]
+#[derive(Debug, PartialEq, Eq)]
 struct StalledCursor {
     line: usize,
 }
@@ -1052,12 +1052,34 @@ fn production_files(files: &[RustFile]) -> Result<Vec<&RustFile>, String> {
             pending.push(file.path.as_str());
         }
     }
-    while let Some(parent) = pending.pop() {
+    // Each candidate is enqueued once; cap both visits and queued paths if that invariant breaks.
+    for _ in 0..=candidates.len() {
+        let Some(parent) = pending.pop() else {
+            break;
+        };
         for (source, target, test_edge) in &edges {
-            if *source == parent && !*test_edge && production.insert(target.as_str()) {
+            if *source != parent {
+                continue;
+            }
+            if *test_edge {
+                continue;
+            }
+            if production.insert(target.as_str()) {
+                if pending.len() >= candidates.len() {
+                    if let Some(file) = candidates.iter().find(|file| file.path == parent) {
+                        return Err(stalled_cursor_diagnostic(file, StalledCursor { line: 1 }));
+                    }
+                    return Err(format!("{parent}:1: source cursor stopped advancing"));
+                }
                 pending.push(target.as_str());
             }
         }
+    }
+    if let Some(parent) = pending.last().copied() {
+        if let Some(file) = candidates.iter().find(|file| file.path == parent) {
+            return Err(stalled_cursor_diagnostic(file, StalledCursor { line: 1 }));
+        }
+        return Err(format!("{parent}:1: source cursor stopped advancing"));
     }
     Ok(candidates
         .into_iter()
@@ -1151,62 +1173,95 @@ fn joined_literal(tokens: &[SourceToken], at: usize) -> bool {
         && punct(tokens.get(at - 1), '(')
 }
 
-fn home_join_context(tokens: &[SourceToken], join_dot: usize) -> Option<String> {
-    let end = join_dot.checked_sub(1)?;
-    if ident(tokens.get(end), "home") {
-        let owner = if previous_punct(tokens, end, 1, '.') {
-            match tokens.get(end.checked_sub(2)?) {
-                Some(SourceToken {
-                    kind: SourceKind::Ident(owner),
-                    ..
-                }) if matches!(owner.as_str(), "self" | "hub" | "inputs") => {
-                    format!("{owner}.home")
-                }
-                _ => return None,
-            }
-        } else {
-            "home".to_owned()
+fn home_join_context(
+    tokens: &[SourceToken],
+    join_dot: usize,
+) -> Result<Option<String>, StalledCursor> {
+    let line = tokens.get(join_dot).map_or(1, |token| token.line);
+    let mut join_dot = join_dot;
+    let mut segments: Vec<String> = Vec::new();
+    for _ in 0..=tokens.len() {
+        let Some(end) = join_dot.checked_sub(1) else {
+            return Ok(None);
         };
-        return Some(owner);
-    }
-    if !punct(tokens.get(end), ')') {
-        return None;
-    }
-    let mut depth = 0usize;
-    let mut open = None;
-    for i in (0..=end).rev() {
-        if punct(tokens.get(i), ')') {
-            depth = depth.saturating_add(1);
+        if ident(tokens.get(end), "home") {
+            let owner = if previous_punct(tokens, end, 1, '.') {
+                match end.checked_sub(2).and_then(|index| tokens.get(index)) {
+                    Some(SourceToken {
+                        kind: SourceKind::Ident(owner),
+                        ..
+                    }) if matches!(owner.as_str(), "self" | "hub" | "inputs") => {
+                        format!("{owner}.home")
+                    }
+                    _ => return Ok(None),
+                }
+            } else {
+                "home".to_owned()
+            };
+            let mut context = owner;
+            for segment in segments.iter().rev() {
+                context.push('/');
+                context.push_str(segment);
+            }
+            return Ok(Some(context));
         }
-        if punct(tokens.get(i), '(') {
-            depth = depth.saturating_sub(1);
-            if depth == 0 {
-                open = Some(i);
-                break;
+        if !punct(tokens.get(end), ')') {
+            return Ok(None);
+        }
+        let mut depth = 0usize;
+        let mut open = None;
+        for i in (0..=end).rev() {
+            if punct(tokens.get(i), ')') {
+                depth = depth.saturating_add(1);
+            }
+            if punct(tokens.get(i), '(') {
+                depth = depth.saturating_sub(1);
+                if depth == 0 {
+                    open = Some(i);
+                    break;
+                }
             }
         }
+        let Some(open) = open else {
+            return Ok(None);
+        };
+        let Some(previous_dot) = open.checked_sub(2) else {
+            return Ok(None);
+        };
+        if !open
+            .checked_sub(1)
+            .is_some_and(|index| ident(tokens.get(index), "join"))
+            || !punct(tokens.get(previous_dot), '.')
+        {
+            return Ok(None);
+        }
+        let segment = open
+            .checked_add(1)
+            .and_then(|index| tokens.get(index))
+            .and_then(|token| {
+                string(Some(token)).or(match &token.kind {
+                    SourceKind::Ident(value) => Some(value.as_str()),
+                    SourceKind::String(_) | SourceKind::Punct(_) => None,
+                })
+            })
+            .unwrap_or("*");
+        segments.push(segment.to_owned());
+        if previous_dot >= join_dot {
+            return Err(StalledCursor { line });
+        }
+        join_dot = previous_dot;
     }
-    let open = open?;
-    let previous_dot = open.checked_sub(2)?;
-    if !ident(tokens.get(open.checked_sub(1)?), "join") || !punct(tokens.get(previous_dot), '.') {
-        return None;
-    }
-    let base = home_join_context(tokens, previous_dot)?;
-    let segment = string(tokens.get(open + 1))
-        .or_else(|| match tokens.get(open + 1) {
-            Some(SourceToken {
-                kind: SourceKind::Ident(value),
-                ..
-            }) => Some(value.as_str()),
-            _ => None,
-        })
-        .unwrap_or("*");
-    Some(format!("{base}/{segment}"))
+    Err(StalledCursor { line })
 }
 
-fn fiber_home_join(tokens: &[SourceToken], join_dot: usize) -> Option<String> {
-    let context = home_join_context(tokens, join_dot)?;
-    (!context.contains("/.agents") && !context.contains("/.config")).then_some(context)
+fn fiber_home_join(
+    tokens: &[SourceToken],
+    join_dot: usize,
+) -> Result<Option<String>, StalledCursor> {
+    let Some(context) = home_join_context(tokens, join_dot)? else {
+        return Ok(None);
+    };
+    Ok((!context.contains("/.agents") && !context.contains("/.config")).then_some(context))
 }
 
 fn path_segment(value: &str, wanted: &str) -> bool {
@@ -1310,6 +1365,7 @@ fn home_sites(file: &RustFile) -> Result<Vec<SourceSite>, String> {
         let join = joined_literal(&tokens, i);
         let home_context = if join {
             fiber_home_join(&tokens, i - 3)
+                .map_err(|stalled| stalled_cursor_diagnostic(file, stalled))?
         } else {
             None
         };
@@ -1354,7 +1410,9 @@ fn home_sites(file: &RustFile) -> Result<Vec<SourceSite>, String> {
         {
             continue;
         }
-        let Some(root) = fiber_home_join(&tokens, i) else {
+        let Some(root) = fiber_home_join(&tokens, i)
+            .map_err(|stalled| stalled_cursor_diagnostic(file, stalled))?
+        else {
             continue;
         };
         let Some(token) = window.get(3) else {
