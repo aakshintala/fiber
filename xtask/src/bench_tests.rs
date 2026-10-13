@@ -1021,6 +1021,23 @@ fn a_pull_request_the_selection_did_not_choose_skips_the_ten_turns_row() {
     );
     let out = judge(&skipped, Some(&base()), Event::PullRequest);
     assert_eq!(out.failures, Vec::<String>::new(), "{:?}", out.failures);
+    // The skip records only the ten-turns workload: another Exact row
+    // with the skip recorded is still judged, never skipped.
+    let text = skipped.to_string();
+    let parsed = super::results::parse_results(&text).expect("test head parses");
+    let (failures, line) = super::judge::judge(
+        "fsyncs",
+        "2 per model request, 2 per tool call",
+        Check::Exact {
+            pin: "2 per model request, 2 per tool call",
+            rule: Rule::Fsyncs("fsyncs"),
+        },
+        (Some(&parsed), None, ""),
+        &Base::None,
+        &[],
+    );
+    assert_eq!(failures, Vec::<String>::new(), "{failures:?}");
+    assert_eq!(line.result, "pass", "{}", line.head);
 }
 
 #[test]
