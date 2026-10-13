@@ -588,6 +588,20 @@ Ten still frames from the fixtures in `src/views.rs`, one per swapped view docs/
 | `settings` | `cargo run --release -- fixtures/session.jsonl --static --view-case settings`: the keys with their effective values and layers, and the reload cost |
 | `skills` | `cargo run --release -- fixtures/session.jsonl --static --view-case skills`: one row per skill with its source, visibility, shadowed skill and switches |
 
+## Opened tool calls (#2240)
+
+Seven still frames for the opened-call cases #2240 draws as ruled on #2235: five calls opened inline under their ledger rows, the swapped view of a cut shell call, and the changed-files view from the section above redrawn on the shared diff format. Each inline frame draws one group through the ledger builders with the call opened, the same rows the conversation draws: a dim line-number gutter, `@@` lines dim, `-` lines in `removed`, `+` lines in `added`, differing words in reverse video on paired lines, and past twenty rows a dim "… N more lines (Enter to view)". Each waits for a key; Esc, q or Ctrl+C quits. Combine with `--static`; the fixture still loads but the cases ignore it. Every case also renders at 100x40 for the narrow layout; capture at 160 by 48. `./capture-opened-calls.sh` captures every new case at both sizes, plain text and SGR: `OUT=<dir> ./capture-opened-calls.sh` writes `<case>-160x48.txt` and `<case>-100x40.txt` with `sgr/` beside them.
+
+| Case | How to reach it |
+|---|---|
+| `opened-edit` | `cargo run --release -- fixtures/session.jsonl --static --view-case opened-edit`: an edit opened inline, its diff with a gutter and word pairs, clipped past twenty rows |
+| `opened-read` | `cargo run --release -- fixtures/session.jsonl --static --view-case opened-read`: a read opened inline, its text numbered from the read's offset |
+| `opened-search` | `cargo run --release -- fixtures/session.jsonl --static --view-case opened-search`: a search opened inline, matches grouped under each path with the pattern on the match tint |
+| `opened-shell` | `cargo run --release -- fixtures/session.jsonl --static --view-case opened-shell`: two shells opened inline, a failure closing in `removed` and a command killed by a signal |
+| `opened-mcp` | `cargo run --release -- fixtures/session.jsonl --static --view-case opened-mcp`: MCP content as plain text and an unknown tool's JSON indented |
+| `cut-shell` | `cargo run --release -- fixtures/session.jsonl --static --view-case cut-shell`: the swapped view of a cut shell call, the whole output around the dim marker where the model's 16 KiB view ended |
+| `changed-files` | `cargo run --release -- fixtures/session.jsonl --static --view-case changed-files`: the changed-files view from the section above, redrawn with the shared gutter and word pairs |
+
 ## Repository offer and one-question forms (#1636)
 
 Five still frames from the fixtures in `src/offers.rs`: the repository's offer of what it ships, and the one-question forms an extension's `host.ask` and MCP elicitation raise. The offer takes the conversation area under its header row (the view's name bold, `repository code` dim, `Esc returns` dim right-aligned); each form draws at the bottom of an otherwise quiet frame, an `approval` slab with the `▌` stripe on every row, the title `Question from <session>` with `Esc: chat about this` right-aligned and no tab row, ending in `Chat about this`. Each waits for a key; Esc, q or Ctrl+C quits. Combine with `--static`; the fixture still loads but the offers ignore it. Every case also renders at 100x40 for the narrow layout; capture at 160 by 48.

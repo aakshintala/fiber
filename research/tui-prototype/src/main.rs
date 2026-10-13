@@ -1426,29 +1426,512 @@ fn thought_rows(text: &str, w: usize, ind: usize) -> Vec<Row> {
         })
         .collect()
 }
-/// A call's result, opened under its ledger row: its error, or its output clipped to 20 lines.
-fn call_rows(c: &Call) -> Vec<Row> {
-    const MAX: usize = 20;
-    let text = match &c.err {
-        Some((code, msg)) => format!("{code}: {msg}"),
-        None if c.content.is_empty() => "no output".into(),
-        None => c.content.replace('\t', "    "),
-    };
-    let lines: Vec<&str> = text.lines().collect();
-    let r = |s: Span<'static>| Row {
-        spans: vec![sp("        ", Style::new()), s],
+/// An opened call shows at most twenty rendered rows under its ledger
+/// row; the shell's `$ command` header is free, a search file's path
+/// counts with its matches, every other body line counts once wrapped,
+/// and a body line that would overflow the cap is dropped whole with
+/// the rest.
+const OPEN_MAX: usize = 20;
+
+/// One opened row: the eight-column indent under the ledger row, then the spans.
+fn opened_row(s: Vec<Span<'static>>) -> Row {
+    let mut spans = vec![sp("        ", Style::new())];
+    spans.extend(s);
+    Row {
+        spans,
         pre: 8,
         ..Default::default()
-    };
-    let mut out: Vec<Row> = lines
-        .iter()
-        .take(MAX)
-        .map(|l| r(sp(l.to_string(), Style::new())))
-        .collect();
-    if lines.len() > MAX {
-        out.push(r(sp(format!("… {} more lines", lines.len() - MAX), dim())));
+    }
+}
+
+/// Cuts a row to the width when it runs past it; shorter rows pass through.
+fn opened_fit(r: Row, w: usize) -> Row {
+    if width(&r.spans) > w {
+        Row {
+            spans: fit(&r.spans, w),
+            ..r
+        }
+    } else {
+        r
+    }
+}
+
+/// Wraps one plain body line under the indent; every rendered row keeps
+/// the indent, so the paged copy sees one layout prefix.
+fn opened_plain(line: &str, style: Style, w: usize) -> Vec<Row> {
+    let pad = || vec![sp("        ", Style::new())];
+    wrap_rows(vec![sp(line.to_string(), style)], w, pad(), pad())
+        .into_iter()
+        .map(|mut r| {
+            r.pre = 8;
+            opened_fit(r, w)
+        })
+        .collect()
+}
+
+/// Indents one gutter row from the shared diff renderer under a ledger row.
+fn opened_indent(r: Row, w: usize) -> Row {
+    let mut out = r;
+    out.spans.insert(0, sp("        ", Style::new()));
+    out.pre = 8;
+    opened_fit(out, w)
+}
+
+/// Takes at most OPEN_MAX rendered rows from the body's lines; a line that
+/// would overflow is dropped whole with the rest. Returns the rows and how
+/// many body lines were left out.
+fn opened_take(body: Vec<Vec<Row>>) -> (Vec<Row>, usize) {
+    let total = body.len();
+    let mut out = vec![];
+    let mut shown = 0;
+    for line in body {
+        if out.len() + line.len() > OPEN_MAX {
+            break;
+        }
+        out.extend(line);
+        shown += 1;
+    }
+    (out, total - shown)
+}
+
+/// The dim overflow line, counting the body lines left out; nothing when
+/// the body fit. Its wording extends the old “… N more lines”, so the
+/// ledger's settled copy still reads.
+fn opened_more(out: &mut Vec<Row>, dropped: usize) {
+    if dropped > 0 {
+        out.push(opened_row(vec![sp(
+            format!("… {dropped} more lines (Enter to view)"),
+            dim(),
+        )]));
+    }
+}
+
+/// A hunk header's old and new start lines: "@@ -12,7 +12,9 @@ fn
+/// paint(" starts old at 12 and new at 12; the counts are ignored.
+fn hunk_start(header: &str) -> Option<(usize, usize)> {
+    let mut it = header.split_whitespace();
+    if it.next()? != "@@" {
+        return None;
+    }
+    let num = |s: &str| s.split(',').next()?.parse::<usize>().ok();
+    Some((
+        num(it.next()?.strip_prefix('-')?)?,
+        num(it.next()?.strip_prefix('+')?)?,
+    ))
+}
+
+/// The byte ranges of a line's whitespace-separated words.
+fn words_of(line: &str) -> Vec<(usize, usize)> {
+    let mut out = vec![];
+    let mut start: Option<usize> = None;
+    for (i, ch) in line.char_indices() {
+        if ch.is_whitespace() {
+            if let Some(s) = start.take() {
+                out.push((s, i));
+            }
+        } else if start.is_none() {
+            start = Some(i);
+        }
+    }
+    if let Some(s) = start.take() {
+        out.push((s, line.len()));
     }
     out
+}
+
+/// The words of a line over their ranges, so pairs render over the
+/// original spacing.
+fn words_in<'a>(line: &'a str, ranges: &[(usize, usize)]) -> Vec<&'a str> {
+    ranges.iter().map(|&(a, b)| &line[a..b]).collect()
+}
+
+/// Splits a removed line and its added pair into word spans: the words they
+/// share at the start and end keep the base style, the words they differ by
+/// read in reverse video. Both lines render over their original spacing.
+fn word_pair(old: &str, new: &str) -> (Vec<Span<'static>>, Vec<Span<'static>>) {
+    let (o, n) = (words_of(old), words_of(new));
+    let (ow, nw) = (words_in(old, &o), words_in(new, &n));
+    let mut pre = 0;
+    while pre < ow.len() && pre < nw.len() && ow[pre] == nw[pre] {
+        pre += 1;
+    }
+    let mut suf = 0;
+    while suf < ow.len() - pre
+        && suf < nw.len() - pre
+        && ow[ow.len() - 1 - suf] == nw[nw.len() - 1 - suf]
+    {
+        suf += 1;
+    }
+    let spans = |line: &str, ws: &[(usize, usize)], base: Style| {
+        let mut out = vec![];
+        let mut pos = 0;
+        for (k, &(a, b)) in ws.iter().enumerate() {
+            let rev = k >= pre && k < ws.len() - suf;
+            if a > pos {
+                out.push(sp(line[pos..a].to_string(), base));
+            }
+            out.push(sp(
+                line[a..b].to_string(),
+                if rev {
+                    base.add_modifier(Modifier::REVERSED)
+                } else {
+                    base
+                },
+            ));
+            pos = b;
+        }
+        if pos < line.len() {
+            out.push(sp(line[pos..].to_string(), base));
+        }
+        out
+    };
+    (spans(old, &o, fg(RED)), spans(new, &n, fg(GREEN)))
+}
+
+/// Renders unified-diff lines with a dim four-column right-aligned
+/// line-number gutter: `@@` dim, `-` in `removed`, `+` in `added`, context
+/// plain. In a run of removed lines followed by added lines, removed[i]
+/// pairs with added[i] and the words they differ by read in reverse video;
+/// words split on whitespace. A context line and a `+` line number the new
+/// side, so the gutter runs on; a `-` line numbers the old side. File
+/// headers (`---`/`+++`) read dim. Rows carry no indent; the caller adds
+/// it. Shared by an opened edit and the changed-files view.
+pub(crate) fn diff_rows(diff: &[&str]) -> Vec<Row> {
+    let gutter = |n: Option<usize>| match n {
+        Some(n) => sp(format!("{n:>4} "), dim()),
+        None => sp("     ", Style::new()),
+    };
+    let mut out = vec![];
+    let (mut old, mut new) = (0usize, 0usize);
+    let mut in_hunk = false;
+    let mut i = 0;
+    while i < diff.len() {
+        let l = diff[i];
+        if let Some((o, n)) = hunk_start(l) {
+            (old, new) = (o, n);
+            in_hunk = true;
+            out.push(row(vec![gutter(None), sp(l.to_string(), dim())]));
+            i += 1;
+        } else if l.starts_with('-') && !l.starts_with("---") {
+            let mut rem = vec![];
+            while i < diff.len() && diff[i].starts_with('-') && !diff[i].starts_with("---") {
+                rem.push(&diff[i][1..]);
+                i += 1;
+            }
+            let mut add = vec![];
+            while i < diff.len() && diff[i].starts_with('+') && !diff[i].starts_with("+++") {
+                add.push(&diff[i][1..]);
+                i += 1;
+            }
+            for k in 0..rem.len().max(add.len()) {
+                match (rem.get(k), add.get(k)) {
+                    (Some(r), Some(a)) => {
+                        let (rs, as_) = word_pair(r, a);
+                        let mut s = vec![gutter(in_hunk.then_some(old)), sp("-", fg(RED))];
+                        s.extend(rs);
+                        out.push(row(s));
+                        old += 1;
+                        let mut s = vec![gutter(in_hunk.then_some(new)), sp("+", fg(GREEN))];
+                        s.extend(as_);
+                        out.push(row(s));
+                        new += 1;
+                    }
+                    (Some(r), None) => {
+                        out.push(row(vec![
+                            gutter(in_hunk.then_some(old)),
+                            sp(format!("-{r}"), fg(RED)),
+                        ]));
+                        old += 1;
+                    }
+                    (None, Some(a)) => {
+                        out.push(row(vec![
+                            gutter(in_hunk.then_some(new)),
+                            sp(format!("+{a}"), fg(GREEN)),
+                        ]));
+                        new += 1;
+                    }
+                    (None, None) => unreachable!(),
+                }
+            }
+        } else if l.starts_with('+') && !l.starts_with("+++") {
+            out.push(row(vec![
+                gutter(in_hunk.then_some(new)),
+                sp(l.to_string(), fg(GREEN)),
+            ]));
+            new += 1;
+            i += 1;
+        } else if l.starts_with("---") || l.starts_with("+++") {
+            out.push(row(vec![gutter(None), sp(l.to_string(), dim())]));
+            i += 1;
+        } else {
+            let body = l.strip_prefix(' ').unwrap_or(l);
+            out.push(row(vec![
+                gutter(in_hunk.then_some(new)),
+                sp(body.to_string(), Style::new()),
+            ]));
+            if in_hunk {
+                old += 1;
+                new += 1;
+            }
+            i += 1;
+        }
+    }
+    out
+}
+/// One numbered body line under a ledger row: the dim four-column gutter,
+/// then the spans, cut to the width when it runs past it.
+fn opened_numbered(n: usize, s: Vec<Span<'static>>, w: usize) -> Row {
+    let mut spans = vec![sp(format!("{n:>4} "), dim())];
+    spans.extend(s);
+    opened_indent(row(spans), w)
+}
+/// The search pattern: the first non-flag token after the command itself,
+/// so `grep -rn lock crates` highlights `lock`.
+fn search_pattern(command: &str) -> &str {
+    let mut toks = command.split_whitespace();
+    toks.next();
+    toks.find(|t| !t.starts_with('-')).unwrap_or("")
+}
+/// Picks the pattern's occurrences out on the match tint; without a pattern
+/// the text passes through.
+fn match_spans(text: &str, pat: &str) -> Vec<Span<'static>> {
+    if pat.is_empty() {
+        return vec![sp(text.to_string(), Style::new())];
+    }
+    let mut out = vec![];
+    let mut rest = text;
+    while let Some(i) = rest.find(pat) {
+        if i > 0 {
+            out.push(sp(rest[..i].to_string(), Style::new()));
+        }
+        out.push(sp(
+            pat.to_string(),
+            Style::new().bg(rgb(0x5a4a1a)).fg(Color::White),
+        ));
+        rest = &rest[i + pat.len()..];
+    }
+    if !rest.is_empty() {
+        out.push(sp(rest.to_string(), Style::new()));
+    }
+    out
+}
+/// Splits `path<sep>41<sep>text` at its line number, scanning past
+/// separators inside the path (a dashed path reads `my-crate/x.rs-8-t`)
+/// or the text; the number must be all digits with a path before it.
+fn grep_split(l: &str, sep: char) -> Option<(String, usize, String)> {
+    let mut prefix_len = 0;
+    let mut search = l;
+    while let Some(i) = search.find(sep) {
+        let after = &search[i + sep.len_utf8()..];
+        if let Some(e) = after.find(sep) {
+            let (num, text) = (&after[..e], &after[e + sep.len_utf8()..]);
+            if !num.is_empty()
+                && num.bytes().all(|b| b.is_ascii_digit())
+                && prefix_len + i > 0
+                && let Ok(n) = num.parse::<usize>()
+            {
+                return Some((l[..prefix_len + i].to_string(), n, text.to_string()));
+            }
+        }
+        let step = i + sep.len_utf8();
+        prefix_len += step;
+        search = &search[step..];
+    }
+    None
+}
+/// One grep output line: its path, line number, text and whether it is a
+/// match (`path:41:text`) or context (`path-41-text`).
+fn grep_line(l: &str) -> Option<(String, usize, String, bool)> {
+    if let Some((p, n, t)) = grep_split(l, ':') {
+        Some((p, n, t, true))
+    } else {
+        grep_split(l, '-').map(|(p, n, t)| (p, n, t, false))
+    }
+}
+/// An opened shell call: the full command wrapped, its output, then one
+/// closing line: `exit N` (in `removed` past zero), `killed by <signal>`
+/// for a signal, or the error for anything else. Cut output drops the
+/// closing with the rest; the swapped view carries it.
+fn shell_rows(c: &Call, content: &str, w: usize) -> Vec<Row> {
+    let command = c.args["command"].as_str().unwrap_or("");
+    let mut out = opened_plain(&format!("$ {command}"), Style::new(), w);
+    let body: Vec<Vec<Row>> = if content.is_empty() {
+        vec![vec![opened_row(vec![sp("no output", Style::new())])]]
+    } else {
+        content
+            .lines()
+            .map(|l| opened_plain(l, Style::new(), w))
+            .collect()
+    };
+    let (mut rows, dropped) = opened_take(body);
+    out.append(&mut rows);
+    if dropped == 0 {
+        match (c.exit, &c.err) {
+            (Some(0), _) => out.push(opened_row(vec![sp("exit 0", dim())])),
+            (Some(n), _) => out.push(opened_row(vec![sp(format!("exit {n}"), fg(RED))])),
+            (None, Some((code, msg))) if code == "signal" => {
+                let by = if msg.is_empty() {
+                    "signal"
+                } else {
+                    msg.as_str()
+                };
+                out.push(opened_row(vec![sp(format!("killed by {by}"), fg(RED))]));
+            }
+            (None, Some((code, msg))) => {
+                out.push(opened_row(vec![sp(format!("{code}: {msg}"), Style::new())]));
+            }
+            (None, None) => {}
+        }
+    }
+    opened_more(&mut out, dropped);
+    out
+}
+/// A call's result, opened under its ledger row and indented eight columns:
+/// an edit's diff with a line-number gutter and word-level pairs, a read's
+/// text numbered from its offset, a search's matches grouped under each
+/// path, a shell's wrapped command with its output and closing, an
+/// unrecognised tool's content plain or JSON indented, or its error, or its output clipped to twenty rendered rows with a dim
+/// “… N more lines (Enter to view)” opening the swapped view.
+fn call_rows(c: &Call, w: usize) -> Vec<Row> {
+    let content = c.content.replace('\t', "    ");
+    match kind_of(c) {
+        "edit" | "write" if c.err.is_none() && content.lines().any(|l| l.starts_with("@@")) => {
+            let lines: Vec<&str> = content.lines().collect();
+            let body: Vec<Vec<Row>> = diff_rows(&lines)
+                .into_iter()
+                .map(|r| vec![opened_indent(r, w)])
+                .collect();
+            let (mut out, dropped) = opened_take(body);
+            opened_more(&mut out, dropped);
+            out
+        }
+        "read" if c.err.is_none() => {
+            if content.is_empty() {
+                return vec![opened_row(vec![sp("no output", Style::new())])];
+            }
+            // the read's offset counts its first line from 1
+            let offset = c.args["offset"].as_u64().unwrap_or(1) as usize;
+            let body: Vec<Vec<Row>> = content
+                .lines()
+                .enumerate()
+                .map(|(i, l)| {
+                    vec![opened_numbered(
+                        offset + i,
+                        vec![sp(l.to_string(), Style::new())],
+                        w,
+                    )]
+                })
+                .collect();
+            let (mut out, dropped) = opened_take(body);
+            opened_more(&mut out, dropped);
+            out
+        }
+        "search" if c.err.is_none() => {
+            if content.is_empty() {
+                return vec![opened_row(vec![sp("no output", Style::new())])];
+            }
+            let pat = search_pattern(c.args["command"].as_str().unwrap_or(""));
+            // path headers in first-seen order, then each file's matches:
+            // headers count in the cap with the matches, so a header
+            // whose matches are omitted is omitted too; match and
+            // context lines count once cut to the width, strays pass
+            // through
+            let mut groups: Vec<(Option<Row>, Vec<Vec<Row>>)> = vec![];
+            let mut current: Option<String> = None;
+            for l in content.lines() {
+                if l == "--" {
+                    continue;
+                }
+                match grep_line(l) {
+                    Some((path, n, text, _)) => {
+                        if current.as_deref() != Some(path.as_str()) {
+                            groups.push((Some(opened_row(vec![sp(path.clone(), bold())])), vec![]));
+                            current = Some(path.clone());
+                        }
+                        groups
+                            .last_mut()
+                            .expect("a match always opens its group")
+                            .1
+                            .push(vec![opened_numbered(n, match_spans(&text, pat), w)]);
+                    }
+                    None => groups.push((None, vec![opened_plain(l, Style::new(), w)])),
+                }
+            }
+            // groups emit in order under the cap; a group that fits no
+            // match is dropped whole, header with it, and everything
+            // past the first dropped line is dropped too
+            let mut out = vec![];
+            let mut used = 0;
+            let mut dropped = 0;
+            let mut done = false;
+            for (header, lines) in &groups {
+                if done {
+                    dropped += lines.len();
+                    continue;
+                }
+                let head = usize::from(header.is_some());
+                let mut fit = 0;
+                let mut fit_rows = 0;
+                while fit < lines.len() && used + head + fit_rows + lines[fit].len() <= OPEN_MAX {
+                    fit_rows += lines[fit].len();
+                    fit += 1;
+                }
+                if used + head > OPEN_MAX || (!lines.is_empty() && fit == 0) {
+                    dropped += lines.len();
+                    done = true;
+                    continue;
+                }
+                if let Some(h) = header {
+                    out.push(h.clone());
+                    used += 1;
+                }
+                for line in lines.iter().take(fit) {
+                    used += line.len();
+                    out.extend(line.iter().cloned());
+                }
+                dropped += lines.len() - fit;
+                done = fit < lines.len();
+            }
+            opened_more(&mut out, dropped);
+            out
+        }
+        "shell" => shell_rows(c, &content, w),
+        "other" if c.err.is_none() => {
+            if content.is_empty() {
+                return vec![opened_row(vec![sp("no output", Style::new())])];
+            }
+            // JSON content renders indented; anything else, including
+            // invalid JSON, renders verbatim
+            let t = content.trim();
+            let text = match serde_json::from_str::<Value>(t) {
+                Ok(v) if t.starts_with('{') || t.starts_with('[') => {
+                    serde_json::to_string_pretty(&v).unwrap_or_else(|_| content.clone())
+                }
+                _ => content.clone(),
+            };
+            let body: Vec<Vec<Row>> = text
+                .lines()
+                .map(|l| opened_plain(l, Style::new(), w))
+                .collect();
+            let (mut out, dropped) = opened_take(body);
+            opened_more(&mut out, dropped);
+            out
+        }
+        _ => {
+            let text = match &c.err {
+                Some((code, msg)) => format!("{code}: {msg}"),
+                None if content.is_empty() => "no output".into(),
+                None => content,
+            };
+            let body: Vec<Vec<Row>> = text
+                .lines()
+                .map(|l| opened_plain(l, Style::new(), w))
+                .collect();
+            let (mut out, dropped) = opened_take(body);
+            opened_more(&mut out, dropped);
+            out
+        }
+    }
 }
 
 fn result_spans(c: &Call) -> Vec<Span<'static>> {
@@ -1731,7 +2214,7 @@ fn group_lines(g: &Group, gid: Act, w: usize, v: &View) -> Vec<Row> {
                     ..row(s)
                 });
                 if open {
-                    ledger.extend(call_rows(c));
+                    ledger.extend(call_rows(c, w));
                 }
             }
         }
@@ -7227,7 +7710,7 @@ mod tests {
                 "--completions slash, slash-filtered, slash-hint, at, at-empty, narrow-slash, narrow-at",
                 "--login providers, waiting, key, done, failed",
                 "--rail-case all-states, hovered, context-bars, floor-ceiling, hidden",
-                "--view-case delegate-view, job-pty, running, usage, changed-files, search-results, tools, rules, settings, skills",
+                "--view-case delegate-view, job-pty, running, usage, changed-files, search-results, tools, rules, settings, skills, opened-edit, opened-read, opened-search, opened-shell, opened-mcp, cut-shell",
                 "--offer-case offer, confirm, select, multi_select, text_input",
                 "--image-case tool_image, fallback, pasted, links, screen_reader, title_approval, title_question, title_waiting, title_finished",
                 "--theme light, dark-256, light-256, dark-no-color",
@@ -7702,6 +8185,604 @@ mod tests {
             ..Default::default()
         };
         assert!(plain(&group_lines(&lone, Act::Group(2, 3), 80, &v)[1]).contains("why not"));
+    }
+
+    fn edit_call(content: &str) -> Call {
+        Call {
+            name: "edit".into(),
+            args: json!({ "path": "crates/tui/src/view.rs" }),
+            st: St::Completed,
+            start: 0,
+            end: Some(10),
+            err: None,
+            lines: 0,
+            exit: None,
+            changes: vec![],
+            content: content.into(),
+            step: 1,
+            asked: None,
+        }
+    }
+
+    #[test]
+    fn an_opened_edit_shows_its_diff_with_a_gutter_and_word_pairs() {
+        let diff = [
+            "@@ -12,3 +12,4 @@ fn paint(",
+            "     let spans = fit(&r.spans, w as usize);",
+            "-    buf.set_line(x, y, &line, w);",
+            "+    buf.set_line(x, y, &Line::from(spans), w);",
+            "     if let Some(bg) = r.bg {",
+        ]
+        .join("\n");
+        let rows = call_rows(&edit_call(&diff), 160);
+        let text: Vec<String> = rows.iter().map(plain).collect();
+        assert_eq!(rows.len(), 5, "no truncation under twenty lines");
+        // the hunk header reads dim with no number
+        let hunk = rows.iter().find(|r| plain(r).contains("@@")).unwrap();
+        assert!(
+            hunk.spans
+                .iter()
+                .any(|s| s.style.add_modifier.contains(Modifier::DIM)),
+            "the @@ line is not dim"
+        );
+        // the gutter numbers the old side on `-` and the new side on `+`
+        let removed = rows
+            .iter()
+            .find(|r| plain(r).contains("-    buf.set_line"))
+            .unwrap();
+        let added = rows
+            .iter()
+            .find(|r| plain(r).contains("+    buf.set_line"))
+            .unwrap();
+        assert!(
+            plain(removed).contains("  13 -"),
+            "no old-side gutter: {}",
+            plain(removed)
+        );
+        assert!(
+            plain(added).contains("  13 +"),
+            "no new-side gutter: {}",
+            plain(added)
+        );
+        assert!(
+            removed.spans.iter().any(|s| s.style.fg == Some(crate::RED)),
+            "the removal is not red"
+        );
+        assert!(
+            added.spans.iter().any(|s| s.style.fg == Some(crate::GREEN)),
+            "the addition is not green"
+        );
+        // one removed line paired with one added line: only the words
+        // they differ by read in reverse video, still in their colour
+        let rev: Vec<&Span> = removed
+            .spans
+            .iter()
+            .filter(|s| s.style.add_modifier.contains(Modifier::REVERSED))
+            .collect();
+        assert_eq!(
+            rev.iter().map(|s| s.content.as_ref()).collect::<Vec<_>>(),
+            ["&line,"],
+            "the wrong removed words are reversed"
+        );
+        assert!(rev.iter().all(|s| s.style.fg == Some(crate::RED)));
+        let rev: Vec<&Span> = added
+            .spans
+            .iter()
+            .filter(|s| s.style.add_modifier.contains(Modifier::REVERSED))
+            .collect();
+        assert_eq!(
+            rev.iter().map(|s| s.content.as_ref()).collect::<Vec<_>>(),
+            ["&Line::from(spans),"],
+            "the wrong added words are reversed"
+        );
+        assert!(rev.iter().all(|s| s.style.fg == Some(crate::GREEN)));
+        assert!(
+            text.iter().any(|l| l.contains("  12 ")),
+            "no context gutter"
+        );
+    }
+
+    #[test]
+    fn an_opened_edit_clips_past_twenty_rendered_rows() {
+        let diff = |n: usize| {
+            let mut d = vec!["@@ -1,3 +1,99 @@".to_string()];
+            d.extend((1..=n).map(|i| format!(" context line {i}")));
+            edit_call(&d.join("\n"))
+        };
+        // nineteen context lines plus the @@ header fit: no overflow line
+        let rows = call_rows(&diff(19), 160);
+        assert_eq!(rows.len(), 20);
+        assert!(!rows.iter().any(|r| plain(r).contains("more lines")));
+        // the twenty-first body line is dropped whole with the rest
+        let rows = call_rows(&diff(20), 160);
+        assert_eq!(rows.len(), 21);
+        assert_eq!(
+            plain(rows.last().unwrap()),
+            "        … 1 more lines (Enter to view)"
+        );
+        assert!(
+            rows.last()
+                .unwrap()
+                .spans
+                .iter()
+                .any(|s| s.style.add_modifier.contains(Modifier::DIM)),
+            "the overflow line is not dim"
+        );
+        let rows = call_rows(&diff(21), 160);
+        assert!(plain(rows.last().unwrap()).contains("… 2 more lines (Enter to view)"));
+    }
+
+    #[test]
+    fn an_opened_edit_without_hunks_stays_plain() {
+        let rows = call_rows(&edit_call("wrote the file"), 160);
+        assert_eq!(rows.len(), 1);
+        assert_eq!(plain(&rows[0]), "        wrote the file");
+        assert!(
+            rows[0].spans.iter().all(|s| s.style.fg.is_none()),
+            "plain output takes a colour"
+        );
+    }
+
+    #[test]
+    fn unpaired_diff_lines_keep_their_colour_with_no_pairs() {
+        let diff = [
+            "--- a/notes.md",
+            "+++ b/notes.md",
+            "@@ -1,2 +1,2 @@",
+            "-gone",
+            "-and gone",
+            "+new",
+            " context",
+            "+wholly added",
+        ]
+        .join("\n");
+        let rows = call_rows(&edit_call(&diff), 160);
+        // the file headers read dim, never as a removal or addition
+        for h in ["--- a/notes.md", "+++ b/notes.md"] {
+            let r = rows.iter().find(|r| plain(r).contains(h)).unwrap();
+            assert!(
+                r.spans.iter().all(|s| s.style.fg.is_none()),
+                "{h} takes a colour"
+            );
+        }
+        // the paired lines reverse only their differing words; the lone
+        // addition keeps its colour with nothing reversed
+        let lone = rows
+            .iter()
+            .find(|r| plain(r).contains("+wholly added"))
+            .unwrap();
+        assert!(lone.spans.iter().any(|s| s.style.fg == Some(crate::GREEN)));
+        assert!(
+            lone.spans
+                .iter()
+                .all(|s| !s.style.add_modifier.contains(Modifier::REVERSED)),
+            "an unpaired line reverses"
+        );
+        let removed: Vec<&Row> = rows
+            .iter()
+            .filter(|r| plain(r).contains("-gone") || plain(r).contains("-and gone"))
+            .collect();
+        assert_eq!(removed.len(), 2);
+    }
+
+    fn tool_call(name: &str, content: &str) -> Call {
+        Call {
+            name: name.into(),
+            args: json!({}),
+            st: St::Completed,
+            start: 0,
+            end: Some(10),
+            err: None,
+            lines: 0,
+            exit: None,
+            changes: vec![],
+            content: content.into(),
+            step: 1,
+            asked: None,
+        }
+    }
+
+    #[test]
+    fn an_opened_unknown_tool_shows_json_indented_and_text_verbatim() {
+        // JSON content renders indented
+        let rows = call_rows(
+            &tool_call("notes_save", "{\"ok\":true,\"path\":\"n.md\"}"),
+            160,
+        );
+        let text: Vec<String> = rows.iter().map(plain).collect();
+        assert_eq!(text.len(), 4);
+        assert_eq!(text[0], "        {");
+        assert_eq!(text[1], "          \"ok\": true,");
+        assert_eq!(text[2], "          \"path\": \"n.md\"");
+        assert_eq!(text[3], "        }");
+        // a list renders indented too
+        let rows = call_rows(&tool_call("notes_save", "[1, 2]"), 160);
+        assert_eq!(rows.iter().map(plain).collect::<Vec<_>>().len(), 4);
+        // invalid JSON renders verbatim, however it starts
+        let rows = call_rows(&tool_call("notes_save", "{\"ok\": tru"), 160);
+        assert_eq!(rows.len(), 1);
+        assert_eq!(plain(&rows[0]), "        {\"ok\": tru");
+        // plain text passes through, wrapped
+        let rows = call_rows(&tool_call("linear_search", "two lines\nhere"), 160);
+        assert_eq!(rows.len(), 2);
+        assert_eq!(plain(&rows[1]), "        here");
+        // empty output reuses "no output"
+        let rows = call_rows(&tool_call("linear_search", ""), 160);
+        assert_eq!(rows.len(), 1);
+        assert_eq!(plain(&rows[0]), "        no output");
+    }
+
+    fn shell_call(
+        command: &str,
+        content: &str,
+        exit: Option<i64>,
+        err: Option<(&str, &str)>,
+    ) -> Call {
+        Call {
+            name: "shell".into(),
+            args: json!({ "command": command }),
+            st: if exit == Some(0) {
+                St::Completed
+            } else {
+                St::Failed
+            },
+            start: 0,
+            end: Some(10),
+            err: err.map(|(c, m)| (c.to_string(), m.to_string())),
+            lines: 0,
+            exit,
+            changes: vec![],
+            content: content.into(),
+            step: 1,
+            asked: None,
+        }
+    }
+
+    #[test]
+    fn an_opened_shell_shows_its_command_output_and_closing() {
+        let ok = shell_call(
+            "cargo test -p log",
+            "running 2 tests\ntest ok ... ok",
+            Some(0),
+            None,
+        );
+        let rows = call_rows(&ok, 160);
+        assert_eq!(rows.len(), 4);
+        assert_eq!(plain(&rows[0]), "        $ cargo test -p log");
+        assert!(plain(&rows[1]).contains("running 2 tests"));
+        assert_eq!(plain(rows.last().unwrap()), "        exit 0");
+        assert!(
+            rows.last()
+                .unwrap()
+                .spans
+                .iter()
+                .any(|s| s.style.add_modifier.contains(Modifier::DIM)),
+            "exit 0 is not dim"
+        );
+        // a failure closes in `removed`
+        let fail = shell_call(
+            "cargo test -p log",
+            "test serve::attach ... FAILED",
+            Some(1),
+            Some(("nonzero_exit", "exit code 1")),
+        );
+        let rows = call_rows(&fail, 160);
+        let close = rows.last().unwrap();
+        assert_eq!(plain(close), "        exit 1");
+        assert!(
+            close.spans.iter().any(|s| s.style.fg == Some(crate::RED)),
+            "exit 1 is not removed"
+        );
+        // a signal names what killed the command, in `removed`
+        let sig = shell_call(
+            "cargo test -- --nocapture",
+            "first lines",
+            None,
+            Some(("signal", "SIGTERM")),
+        );
+        let close = call_rows(&sig, 160).last().unwrap().clone();
+        assert_eq!(plain(&close), "        killed by SIGTERM");
+        assert!(close.spans.iter().any(|s| s.style.fg == Some(crate::RED)));
+        // without a name the signal still reads
+        let anon = shell_call("sleep 60", "", None, Some(("signal", "")));
+        let rows = call_rows(&anon, 160);
+        assert_eq!(plain(&rows[1]), "        no output");
+        assert_eq!(plain(rows.last().unwrap()), "        killed by signal");
+    }
+
+    #[test]
+    fn an_opened_shell_wraps_its_command_and_clips_its_output() {
+        let cmd = "cargo test -p doors --test serve_attach -- --nocapture wait_for_path_sweeps";
+        let rows = call_rows(&shell_call(cmd, "ok", Some(0), None), 60);
+        // the whole command draws, wrapped under the indent
+        let head: String = rows[0..2].iter().map(plain).collect();
+        assert!(head.starts_with("        $ cargo test"), "{head}");
+        assert!(head.contains("wait_for_path_sweeps"), "{head}");
+        assert_eq!(rows.len(), 4, "two header rows, output, closing");
+        // cut output drops the closing with the rest
+        let big = (1..=30)
+            .map(|i| format!("line {i}"))
+            .collect::<Vec<_>>()
+            .join("\n");
+        let rows = call_rows(&shell_call("cargo test", &big, Some(0), None), 160);
+        assert_eq!(rows.len(), 22, "header, twenty lines, overflow");
+        assert_eq!(
+            plain(rows.last().unwrap()),
+            "        … 10 more lines (Enter to view)"
+        );
+        assert!(!rows.iter().any(|r| plain(r).contains("exit")));
+    }
+
+    #[test]
+    fn an_opened_shell_with_an_odd_error_keeps_it_as_its_closing() {
+        let odd = shell_call(
+            "cargo test",
+            "partial",
+            None,
+            Some(("timeout", "timed out")),
+        );
+        let rows = call_rows(&odd, 160);
+        let close = rows.last().unwrap();
+        assert_eq!(plain(close), "        timeout: timed out");
+        assert!(
+            close.spans.iter().all(|s| s.style.fg.is_none()),
+            "an unknown error takes a colour"
+        );
+        // still running: the command and its output so far, no closing
+        let running = shell_call("cargo test", "setup", None, None);
+        let rows = call_rows(&running, 160);
+        assert_eq!(rows.len(), 2);
+    }
+
+    fn search_call(command: &str, content: &str) -> Call {
+        Call {
+            name: "shell".into(),
+            args: json!({ "command": command }),
+            st: St::Completed,
+            start: 0,
+            end: Some(10),
+            err: None,
+            lines: 0,
+            exit: Some(0),
+            changes: vec![],
+            content: content.into(),
+            step: 1,
+            asked: None,
+        }
+    }
+
+    fn tinted(row: &Row) -> Vec<String> {
+        row.spans
+            .iter()
+            .filter(|s| s.style.bg == Some(crate::rgb(0x5a4a1a)))
+            .map(|s| s.content.to_string())
+            .collect()
+    }
+
+    #[test]
+    fn an_opened_search_groups_matches_under_each_path() {
+        let content = [
+            "crates/hub/src/lock.rs:41:    let _guard = lock(path);",
+            "crates/hub/src/lock.rs:42:    lock twice lock;",
+            "--",
+            "crates/tui/src/main.rs:1905:    holds the lock for the turn",
+            "crates/tui/src/main.rs-1904-    // the handoff point",
+            "crates/my-crate/x.rs-8-    no lock here",
+        ]
+        .join("\n");
+        let rows = call_rows(&search_call("grep -rn lock crates", &content), 160);
+        let text: Vec<String> = rows.iter().map(plain).collect();
+        // one bold header per file, in first-seen order, each above its matches
+        let head = |p: &str| text.iter().position(|l| l.trim() == p).unwrap();
+        let (h0, h1, h2) = (
+            head("crates/hub/src/lock.rs"),
+            head("crates/tui/src/main.rs"),
+            head("crates/my-crate/x.rs"),
+        );
+        assert!(h0 < h1 && h1 < h2, "headers out of order");
+        for h in [h0, h1, h2] {
+            assert!(
+                rows[h]
+                    .spans
+                    .iter()
+                    .any(|s| s.style.add_modifier.contains(Modifier::BOLD)),
+                "the path header is not bold"
+            );
+        }
+        assert!(
+            text[h0 + 1].contains("  41 "),
+            "no gutter: {}",
+            text[h0 + 1]
+        );
+        assert!(
+            text[h0 + 2].contains("  42 "),
+            "no gutter: {}",
+            text[h0 + 2]
+        );
+        assert!(
+            text[h1 + 1].contains(" 1905 "),
+            "no gutter: {}",
+            text[h1 + 1]
+        );
+        // the separator never draws
+        assert!(!text.iter().any(|l| l.trim() == "--"));
+        // every occurrence of the pattern reads on the match tint, in
+        // match and context lines alike; context without it stays plain
+        let hits: usize = rows.iter().map(|r| tinted(r).len()).sum();
+        assert_eq!(hits, 1 + 2 + 1 + 1, "wrong highlight count");
+        let ctx = &rows[h1 + 2];
+        assert!(
+            plain(ctx).contains(" 1904 "),
+            "no context gutter: {}",
+            plain(ctx)
+        );
+        assert!(
+            tinted(ctx).is_empty(),
+            "context without the pattern takes the tint"
+        );
+    }
+
+    #[test]
+    fn an_opened_search_without_a_pattern_highlights_nothing() {
+        let rows = call_rows(&search_call("grep -rn", "crates/a.rs:1:lock"), 160);
+        assert!(rows.iter().all(|r| tinted(r).is_empty()));
+    }
+
+    #[test]
+    fn an_opened_search_counts_its_header_in_the_cap() {
+        let content = (1..=25)
+            .map(|i| format!("crates/a.rs:{i}:match lock {i}"))
+            .collect::<Vec<_>>()
+            .join("\n");
+        let rows = call_rows(&search_call("grep -rn lock crates", &content), 160);
+        // one counted header, nineteen matches, then the overflow line
+        assert_eq!(rows.len(), OPEN_MAX + 1);
+        assert_eq!(plain(&rows[0]), "        crates/a.rs");
+        assert_eq!(
+            plain(rows.last().unwrap()),
+            "        … 6 more lines (Enter to view)"
+        );
+    }
+
+    #[test]
+    fn an_opened_search_leaves_no_orphan_header_past_the_cap() {
+        let content = (0..25)
+            .map(|i| format!("crates/f{i:02}.rs:1:match lock {i}"))
+            .collect::<Vec<_>>()
+            .join("\n");
+        let rows = call_rows(&search_call("grep -rn lock crates", &content), 160);
+        // ten headers with their ten matches, then the overflow tail
+        assert_eq!(rows.len(), OPEN_MAX + 1);
+        assert_eq!(
+            plain(rows.last().unwrap()),
+            "        … 15 more lines (Enter to view)"
+        );
+        for (i, r) in rows.iter().take(OPEN_MAX).enumerate() {
+            let t = plain(r);
+            // a header carries no gutter number; the row under it is
+            // its match, so no header is left without its matches
+            if !t.contains(':') && t.trim().ends_with(".rs") {
+                assert!(
+                    i + 1 < OPEN_MAX && plain(&rows[i + 1]).contains("   1 "),
+                    "orphan header: {t}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn the_search_pattern_is_the_first_non_flag_token() {
+        assert_eq!(search_pattern("grep -rn lock crates"), "lock");
+        assert_eq!(search_pattern("rg -i foo"), "foo");
+        assert_eq!(search_pattern("grep --include=*.rs bar ."), "bar");
+        assert_eq!(search_pattern("grep -rn"), "");
+        assert_eq!(search_pattern(""), "");
+    }
+
+    #[test]
+    fn grep_lines_parse_matches_context_and_dashed_paths() {
+        assert_eq!(
+            grep_line("crates/a.rs:41:    lock(path);"),
+            Some(("crates/a.rs".into(), 41, "    lock(path);".into(), true))
+        );
+        // the text keeps its own separators
+        assert_eq!(
+            grep_line("crates/a.rs:41:a:b"),
+            Some(("crates/a.rs".into(), 41, "a:b".into(), true))
+        );
+        assert_eq!(
+            grep_line("crates/a.rs-41-    // hi"),
+            Some(("crates/a.rs".into(), 41, "    // hi".into(), false))
+        );
+        // a dashed path still splits at its number
+        assert_eq!(
+            grep_line("crates/my-crate/x.rs-8-    no lock"),
+            Some((
+                "crates/my-crate/x.rs".into(),
+                8,
+                "    no lock".into(),
+                false
+            ))
+        );
+        assert_eq!(grep_line("no numbers here"), None);
+        assert_eq!(grep_line(":41:x"), None);
+        assert_eq!(grep_line("crates/a.rs:xx:text"), None);
+    }
+
+    fn read_call(offset: Option<u64>, content: &str) -> Call {
+        let mut args = json!({ "path": "crates/hub/src/lock.rs" });
+        if let Some(o) = offset {
+            args["offset"] = json!(o);
+        }
+        Call {
+            name: "read".into(),
+            args,
+            st: St::Completed,
+            start: 0,
+            end: Some(10),
+            err: None,
+            lines: 0,
+            exit: None,
+            changes: vec![],
+            content: content.into(),
+            step: 1,
+            asked: None,
+        }
+    }
+
+    #[test]
+    fn an_opened_read_numbers_from_its_offset() {
+        let content = (1..=5)
+            .map(|i| format!("line {i}"))
+            .collect::<Vec<_>>()
+            .join("\n");
+        let rows = call_rows(&read_call(Some(41), &content), 160);
+        assert_eq!(rows.len(), 5);
+        assert_eq!(plain(&rows[0]), "          41 line 1");
+        assert_eq!(plain(&rows[4]), "          45 line 5");
+        // the gutter reads dim
+        assert!(
+            rows[0].spans[1].style.add_modifier.contains(Modifier::DIM),
+            "the read gutter is not dim"
+        );
+        // without an offset the text numbers from the first line
+        let rows = call_rows(&read_call(None, &content), 160);
+        assert_eq!(plain(&rows[0]), "           1 line 1");
+        // past twenty lines the overflow line counts what is left out
+        let big = (1..=30)
+            .map(|i| format!("line {i}"))
+            .collect::<Vec<_>>()
+            .join("\n");
+        let rows = call_rows(&read_call(Some(7), &big), 160);
+        assert_eq!(rows.len(), 21);
+        assert!(plain(&rows[19]).contains("  26 "), "{}", plain(&rows[19]));
+        assert_eq!(
+            plain(rows.last().unwrap()),
+            "        … 10 more lines (Enter to view)"
+        );
+    }
+
+    #[test]
+    fn errors_and_empty_reads_keep_the_old_rows() {
+        // an edit that failed shows its error, not its diff
+        let mut failed = edit_call("@@ -1 +1 @@\n-old\n+new");
+        failed.err = Some(("stale_file".into(), "the file changed".into()));
+        let rows = call_rows(&failed, 160);
+        assert_eq!(rows.len(), 1);
+        assert_eq!(plain(&rows[0]), "        stale_file: the file changed");
+        // an empty read reads "no output"
+        let rows = call_rows(&read_call(Some(3), ""), 160);
+        assert_eq!(rows.len(), 1);
+        assert_eq!(plain(&rows[0]), "        no output");
+    }
+
+    #[test]
+    fn hunk_headers_parse_or_they_do_not() {
+        assert_eq!(hunk_start("@@ -12,7 +12,9 @@ fn paint("), Some((12, 12)));
+        assert_eq!(hunk_start("@@ -1 +1 @@"), Some((1, 1)));
+        assert_eq!(hunk_start("not a header"), None);
+        assert_eq!(hunk_start("@@ -x +1 @@"), None);
+        assert_eq!(hunk_start("@@ -1 @@"), None);
     }
 
     #[test]
