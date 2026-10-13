@@ -196,11 +196,8 @@ fn no_color_keeps_selection_and_matches_distinct() {
         at(MATCH).expect("a matched cell"),
         at(CURRENT).expect("a current cell"),
     );
-    let vars: Vec<(String, String)> = vec![("NO_COLOR".to_owned(), "1".to_owned())];
     let (look, notice) = Look::new(ThemeSetting::Dark, &|name: &str| {
-        vars.iter()
-            .find(|(set, _)| set == name)
-            .map(|(_, value)| value.clone())
+        (name == "NO_COLOR").then(|| "1".to_owned())
     });
     assert_eq!(notice, None);
     look.paint(&mut buf);

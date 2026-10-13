@@ -1239,11 +1239,8 @@ fn no_color_drawn(app: &App) -> (Buffer, Vec<crate::mouse::Target>) {
     let mut buf = Buffer::empty(area);
     let mut targets = Vec::new();
     super::draw(app, area, &mut buf, &mut targets);
-    let vars: Vec<(String, String)> = vec![("NO_COLOR".to_owned(), "1".to_owned())];
     let (look, notice) = crate::look::Look::new(crate::look::ThemeSetting::Dark, &|name: &str| {
-        vars.iter()
-            .find(|(set, _)| set == name)
-            .map(|(_, value)| value.clone())
+        (name == "NO_COLOR").then(|| "1".to_owned())
     });
     assert_eq!(notice, None);
     look.paint(&mut buf);

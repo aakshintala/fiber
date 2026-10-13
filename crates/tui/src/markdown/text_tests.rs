@@ -3,7 +3,7 @@ use ratatui::style::Style;
 use crate::rows::Join::{self, Break, Wrap, WrapSpace};
 
 /// Each rendered row's text and what it adds to its logical line.
-fn rows(markdown: &str, width: u16) -> Vec<(String, Join, u16, bool)> {
+fn rows(markdown: &str, width: u16) -> Vec<(String, Join, u16, u16, bool)> {
     let rendered = super::super::render(markdown, width);
     assert_eq!(
         rendered.text.len(),
@@ -14,46 +14,57 @@ fn rows(markdown: &str, width: u16) -> Vec<(String, Join, u16, bool)> {
         .lines
         .iter()
         .zip(&rendered.text)
-        .map(|(line, text)| (line.to_string(), text.join, text.skip, text.decoration))
+        .map(|(line, text)| {
+            (
+                line.to_string(),
+                text.join,
+                text.skip,
+                text.tail,
+                text.decoration,
+            )
+        })
         .collect()
 }
 
 #[test]
 fn each_row_reports_its_join_and_skip() {
-    type Case<'a> = (&'a str, &'a str, u16, Vec<(&'a str, Join, u16, bool)>);
+    type Case<'a> = (&'a str, &'a str, u16, Vec<(&'a str, Join, u16, u16, bool)>);
     let cases: Vec<Case<'_>> = vec![
         (
             "a paragraph wrapped at a space",
             "aaa bbb",
             5,
-            vec![("aaa", Break, 0, false), ("bbb", WrapSpace, 0, false)],
+            vec![("aaa", Break, 0, 0, false), ("bbb", WrapSpace, 0, 0, false)],
         ),
         (
             "a word longer than the width",
             "abcdefgh",
             5,
-            vec![("abcde", Break, 0, false), ("fgh", Wrap, 0, false)],
+            vec![("abcde", Break, 0, 0, false), ("fgh", Wrap, 0, 0, false)],
         ),
         (
             "a hard break",
             "aa  \nbb",
             20,
-            vec![("aa", Break, 0, false), ("bb", Break, 0, false)],
+            vec![("aa", Break, 0, 0, false), ("bb", Break, 0, 0, false)],
         ),
         (
             "a list item's continuation skips the hang",
             "- aaa bbb",
             7,
-            vec![("• aaa", Break, 0, false), ("  bbb", WrapSpace, 2, false)],
+            vec![
+                ("• aaa", Break, 0, 0, false),
+                ("  bbb", WrapSpace, 2, 0, false),
+            ],
         ),
         (
             "a nested list",
             "- a\n  - bbb ccc",
             9,
             vec![
-                ("• a", Break, 0, false),
-                ("  • bbb", Break, 0, false),
-                ("    ccc", WrapSpace, 4, false),
+                ("• a", Break, 0, 0, false),
+                ("  • bbb", Break, 0, 0, false),
+                ("    ccc", WrapSpace, 4, 0, false),
             ],
         ),
         (
@@ -61,8 +72,8 @@ fn each_row_reports_its_join_and_skip() {
             "> - aaa bbb",
             9,
             vec![
-                ("│ • aaa", Break, 2, false),
-                ("│   bbb", WrapSpace, 4, false),
+                ("│ • aaa", Break, 2, 0, false),
+                ("│   bbb", WrapSpace, 4, 0, false),
             ],
         ),
         (
@@ -70,12 +81,12 @@ fn each_row_reports_its_join_and_skip() {
             "```\nabcdefghij\n```",
             10,
             vec![
-                ("▄▄▄▄▄▄▄▄▄▄", Break, 0, true),
-                ("          ", Break, 0, true),
-                ("   1  abcd", Break, 6, false),
-                ("      efgh", Wrap, 6, false),
-                ("      ij  ", Wrap, 6, false),
-                ("▀▀▀▀▀▀▀▀▀▀", Break, 0, true),
+                ("▄▄▄▄▄▄▄▄▄▄", Break, 0, 0, true),
+                ("          ", Break, 0, 0, true),
+                ("   1  abcd", Break, 6, 0, false),
+                ("      efgh", Wrap, 6, 0, false),
+                ("      ij  ", Wrap, 6, 0, false),
+                ("▀▀▀▀▀▀▀▀▀▀", Break, 0, 0, true),
             ],
         ),
         (
@@ -83,19 +94,68 @@ fn each_row_reports_its_join_and_skip() {
             "aa\n\nbb",
             10,
             vec![
-                ("aa", Break, 0, false),
-                ("", Break, 0, false),
-                ("bb", Break, 0, false),
+                ("aa", Break, 0, 0, false),
+                ("", Break, 0, 0, false),
+                ("bb", Break, 0, 0, false),
             ],
         ),
     ];
     for (name, markdown, width, expected) in cases {
-        let expected: Vec<(String, Join, u16, bool)> = expected
+        let expected: Vec<(String, Join, u16, u16, bool)> = expected
             .into_iter()
-            .map(|(text, join, skip, decoration)| (text.to_owned(), join, skip, decoration))
+            .map(|(text, join, skip, tail, decoration)| {
+                (text.to_owned(), join, skip, tail, decoration)
+            })
             .collect();
         assert_eq!(rows(markdown, width), expected, "{name}");
     }
+}
+
+#[test]
+fn a_boxed_code_body_row_tails_its_side() {
+    // Without colour the slab's own sides are decoration on both ends:
+    // the leading side joins the gutter in `skip`, the trailing side in
+    // `tail`, so the logical copy keeps the source bytes without the
+    // border (`docs/tui.md`, "Look").
+    crate::surface::init(&|name: &str| (name == "NO_COLOR").then(|| "1".to_owned()));
+    assert!(crate::surface::boxed());
+    let rendered = super::super::render("```\nabcdefghij\n```", 10);
+    let texts: Vec<(String, u16, u16, bool)> = rendered
+        .lines
+        .iter()
+        .zip(&rendered.text)
+        .map(|(line, text)| (line.to_string(), text.skip, text.tail, text.decoration))
+        .collect();
+    assert_eq!(
+        texts,
+        vec![
+            ("┌────────┐".to_owned(), 0, 0, true),
+            ("│        │".to_owned(), 0, 0, true),
+            ("│   1  ab│".to_owned(), 7, 1, false),
+            ("│      cd│".to_owned(), 7, 1, false),
+            ("│      ef│".to_owned(), 7, 1, false),
+            ("│      gh│".to_owned(), 7, 1, false),
+            ("│      ij│".to_owned(), 7, 1, false),
+            ("└────────┘".to_owned(), 0, 0, true),
+        ]
+    );
+    // The logical text between the decoration is the source unwrapped.
+    let mut out = String::new();
+    for (at, (_, _, _, decoration)) in texts.iter().enumerate() {
+        if *decoration {
+            continue;
+        }
+        let (_, body) = crate::logical::line_text(&rendered.lines[at], &rendered.text[at]);
+        if !out.is_empty() {
+            out.push_str(match rendered.text[at].join {
+                Join::WrapSpace => " ",
+                Join::Wrap => "",
+                Join::Break => "\n",
+            });
+        }
+        out.push_str(&body);
+    }
+    assert_eq!(out, "abcdefghij");
 }
 
 #[test]
@@ -137,8 +197,12 @@ fn a_line_number_wider_than_four_columns_widens_its_gutter() {
 fn a_table_row_is_a_break_with_no_skip() {
     let rows = rows("| a | b |\n|---|---|\n| c | d |", 20);
     assert!(rows.len() >= 3, "{rows:?}");
-    for (text, join, skip, decoration) in rows {
-        assert_eq!((join, skip, decoration), (Break, 0, false), "{text:?}");
+    for (text, join, skip, tail, decoration) in rows {
+        assert_eq!(
+            (join, skip, tail, decoration),
+            (Break, 0, 0, false),
+            "{text:?}"
+        );
     }
 }
 

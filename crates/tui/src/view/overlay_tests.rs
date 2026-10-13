@@ -645,11 +645,8 @@ fn no_color_drawn(area: Rect) -> (Buffer, Rect) {
     });
     let mut buf = Buffer::empty(area);
     let slab = draw(&mut buf, area, &overlay, Place::Centre, &mut Vec::new());
-    let vars: Vec<(String, String)> = vec![("NO_COLOR".to_owned(), "1".to_owned())];
     let (look, notice) = crate::look::Look::new(crate::look::ThemeSetting::Dark, &|name: &str| {
-        vars.iter()
-            .find(|(set, _)| set == name)
-            .map(|(_, value)| value.clone())
+        (name == "NO_COLOR").then(|| "1".to_owned())
     });
     assert_eq!(notice, None);
     look.paint(&mut buf);

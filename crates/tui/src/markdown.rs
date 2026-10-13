@@ -270,7 +270,7 @@ impl Writer {
             TagEnd::Table => {
                 if let Some(table) = self.table.take() {
                     for (line, links) in table.layout(usize::from(self.inner_width())) {
-                        self.put_row(line, Join::Break, 0, false, links);
+                        self.put_row(line, Join::Break, 0, 0, false, links);
                     }
                 }
             }
@@ -335,7 +335,7 @@ impl Writer {
         let len = self.out.lines.len();
         if len > 0 && self.lists.is_empty() && self.separator != Some(len) {
             self.track
-                .row(Join::Break, self.quote_width(), false, Vec::new());
+                .row(Join::Break, self.quote_width(), 0, false, Vec::new());
             self.out.lines.push(Line::from(self.quote_prefix()));
             self.separator = Some(self.out.lines.len());
         }
@@ -362,17 +362,19 @@ impl Writer {
     /// Adds a block's row after the quote bars, which are not text; with
     /// `decoration` none of it is.
     fn put(&mut self, line: Line<'static>, decoration: bool) {
-        self.put_row(line, Join::Break, 0, decoration, Vec::new());
+        self.put_row(line, Join::Break, 0, 0, decoration, Vec::new());
     }
 
-    /// Adds a row after the quote bars that joins the row before by `join`
-    /// and whose first `gutter` cells after the bars are not text. `links`
-    /// are the link cells in `line`, offset past the bars.
+    /// Adds a row after the quote bars that joins the row before by `join`,
+    /// whose first `gutter` cells after the bars and whose last `tail`
+    /// cells are not text. `links` are the link cells in `line`, offset
+    /// past the bars.
     fn put_row(
         &mut self,
         line: Line<'static>,
         join: Join,
         gutter: u16,
+        tail: u16,
         decoration: bool,
         links: Vec<(Range<u16>, String)>,
     ) {
@@ -387,7 +389,7 @@ impl Writer {
                 )
             })
             .collect();
-        self.track.row(join, skip, decoration, links);
+        self.track.row(join, skip, tail, decoration, links);
         let mut spans = self.quote_prefix();
         spans.extend(line.spans);
         self.out.lines.push(Line::from(spans));
@@ -433,7 +435,7 @@ impl Writer {
         let rest_room = usize::from(self.width).saturating_sub(rest_width).max(1);
         let rows = wrap_joined_indices(&cells, first_room, rest_room, true);
         if rows.is_empty() {
-            self.track.row(Join::Break, bars, false, Vec::new());
+            self.track.row(Join::Break, bars, 0, false, Vec::new());
             self.out.lines.push(Line::from(first));
             return;
         }
@@ -442,7 +444,7 @@ impl Writer {
             let mut spans = if at == 0 { first.clone() } else { rest.clone() };
             let prefix: usize = spans.iter().map(Span::width).sum();
             let row_links = link_cols(&row, &indices, prefix, &links);
-            self.track.row(join, skip, false, row_links);
+            self.track.row(join, skip, 0, false, row_links);
             spans.extend(spans_of(&row));
             self.out.lines.push(Line::from(spans));
         }
@@ -451,10 +453,10 @@ impl Writer {
     /// A code block: the edge rows, the header row with its label and
     /// `copy`, then each line numbered, all on the tint across the width.
     /// Without colour the slab reserves a column on each side: the edge
-    /// rows already box through `edge_row`, and the card's sides close
-    /// the reserved columns, so the code and the header sit one column
-    /// in, two narrower. The quote bars, the number gutters, the joins,
-    /// the styles and the copied source bytes stay
+    /// rows already box through `edge_row`, and the slab's own sides
+    /// close the reserved columns, so the code and the header sit one
+    /// column in, two narrower. The quote bars, the number gutters, the
+    /// joins, the styles and the copied source bytes stay
     /// (`docs/tui.md`, "Look").
     fn code_block(&mut self, info: &str, code: &str) {
         let code = code.strip_suffix('\n').unwrap_or(code);
@@ -481,10 +483,7 @@ impl Writer {
             });
         }
         self.put(edge_row(width, Role::Code, true), true);
-        self.put(
-            sided(header(label, content), boxed, tinted(Role::Muted)),
-            true,
-        );
+        self.put(sided(header(label, content), boxed), true);
         let runs = highlight::spans(info, code).unwrap_or_else(|| {
             code.split('\n')
                 .map(|line| vec![(Role::CodeText, line.to_owned())])
@@ -525,8 +524,17 @@ impl Writer {
                 let pad = content.saturating_sub(row.width());
                 row.spans
                     .push(Span::styled(" ".repeat(pad), tinted(Role::CodeText)));
-                let row = sided(row, boxed, tinted(Role::CodeText));
-                self.put_row(row, join, gutter.saturating_add(side), false, Vec::new());
+                let row = sided(row, boxed);
+                // The trailing side is decoration, not text: the logical
+                // copy keeps the source bytes without the border.
+                self.put_row(
+                    row,
+                    join,
+                    gutter.saturating_add(side),
+                    side,
+                    false,
+                    Vec::new(),
+                );
             }
         }
         self.put(edge_row(width, Role::Code, false), true);
@@ -572,13 +580,15 @@ fn header(label: &str, width: usize) -> Line<'static> {
     ])
 }
 
-/// `line` with one blank on each side in `pad`'s style when `boxed`:
-/// the columns the card's sides close over without colour, so the text
-/// keeps its cells (`docs/tui.md`, "Look").
-fn sided(mut line: Line<'static>, boxed: bool, pad: Style) -> Line<'static> {
+/// `line` with the slab's own dim sides when `boxed`: `│` in the
+/// columns the slab reserves on each side, so the text keeps its cells
+/// and a nested slab boxes itself inside the card's sides
+/// (`docs/tui.md`, "Look").
+fn sided(mut line: Line<'static>, boxed: bool) -> Line<'static> {
     if boxed {
-        line.spans.insert(0, Span::styled(" ", pad));
-        line.spans.push(Span::styled(" ", pad));
+        let side = Style::new().add_modifier(Modifier::DIM);
+        line.spans.insert(0, Span::styled("│", side));
+        line.spans.push(Span::styled("│", side));
     }
     line
 }

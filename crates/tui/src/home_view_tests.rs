@@ -2395,11 +2395,8 @@ fn no_color_home(app: &App, width: u16, height: u16) -> (Buffer, Vec<crate::mous
     let area = Rect::new(0, 0, width, height);
     let mut buf = Buffer::empty(area);
     let targets = home_only(app, area, &mut buf);
-    let vars: Vec<(String, String)> = vec![("NO_COLOR".to_owned(), "1".to_owned())];
     let (look, notice) = crate::look::Look::new(crate::look::ThemeSetting::Dark, &|name: &str| {
-        vars.iter()
-            .find(|(set, _)| set == name)
-            .map(|(_, value)| value.clone())
+        (name == "NO_COLOR").then(|| "1".to_owned())
     });
     assert_eq!(notice, None);
     look.paint(&mut buf);

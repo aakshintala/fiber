@@ -203,9 +203,41 @@ pub(crate) fn draw_box(buf: &mut Buffer, area: Rect, rect: Rect, edges: Edges) {
     }
 }
 
+/// The visible run of `full`, an edge row drawn for a wider rect: its
+/// cells from `skip`, `take` of them, with their styles. A clipped box
+/// edge keeps the original corners and fills, never gaining a corner at
+/// the clip; a clipped half-block edge is unchanged, every cell the same
+/// (`docs/tui.md`, "Look"). Every edge glyph is one cell wide, so cells
+/// and characters coincide.
+fn clip_edge_row(full: &Line<'static>, skip: usize, take: usize) -> Line<'static> {
+    let mut out = Vec::new();
+    let mut rest = take;
+    let mut taken = 0usize;
+    for span in &full.spans {
+        if rest == 0 {
+            break;
+        }
+        let run: String = span
+            .content
+            .chars()
+            .skip(skip.saturating_sub(taken))
+            .take(rest)
+            .collect();
+        taken = taken.saturating_add(span.content.chars().count());
+        rest = rest.saturating_sub(run.chars().count());
+        if !run.is_empty() {
+            out.push(Span::styled(run, span.style));
+        }
+    }
+    Line::from(out)
+}
+
 /// Draws one box edge for `rect` in `area` of `buf`: above it (`top`)
 /// or below it, where that row sits inside both, across the columns
-/// where the rect and the buffer overlap (`docs/tui.md`, "Look").
+/// where the rect and the buffer overlap (`docs/tui.md`, "Look"). The
+/// original edge across the rect's own columns is clipped to the
+/// visible run, so a clipped side keeps its fill, never gaining a
+/// corner at the clip.
 fn box_edge(buf: &mut Buffer, area: Rect, rect: Rect, top: bool) {
     let space = buf.area.intersection(area);
     let y = if top {
@@ -221,8 +253,10 @@ fn box_edge(buf: &mut Buffer, area: Rect, rect: Rect, top: bool) {
     if left >= right {
         return;
     }
-    let width = right - left;
-    buf.set_line(left, y, &box_edge_row(usize::from(width), top), width);
+    let full = box_edge_row(usize::from(rect.width), top);
+    let skip = usize::from(left.saturating_sub(rect.x));
+    let clipped = clip_edge_row(&full, skip, usize::from(right - left));
+    buf.set_line(left, y, &clipped, right - left);
 }
 
 /// The stripe's cell in `colour` on `tint`, on the `right` of its surface:
@@ -279,7 +313,10 @@ pub(crate) fn draw_slab(
 
 /// Draws one edge row for `rect` in `tint`: above it (`top`) or below
 /// it, where that row sits inside `buf`, across the columns where the
-/// rect and the buffer overlap (`docs/tui.md`, "Look").
+/// rect and the buffer overlap (`docs/tui.md`, "Look"). The original
+/// edge across the rect's own columns is clipped to the visible run,
+/// so a clipped box keeps its fills, never gaining a corner at the
+/// clip.
 fn draw_edge(buf: &mut Buffer, rect: Rect, tint: Role, top: bool) {
     let area = buf.area;
     let y = if top {
@@ -298,8 +335,10 @@ fn draw_edge(buf: &mut Buffer, rect: Rect, tint: Role, top: bool) {
     if left >= right {
         return;
     }
-    let width = right - left;
-    buf.set_line(left, y, &edge_row(usize::from(width), tint, top), width);
+    let full = edge_row(usize::from(rect.width), tint, top);
+    let skip = usize::from(left.saturating_sub(rect.x));
+    let clipped = clip_edge_row(&full, skip, usize::from(right - left));
+    buf.set_line(left, y, &clipped, right - left);
 }
 
 /// Draws the edge rows above and below `rect` in `tint`, where they sit

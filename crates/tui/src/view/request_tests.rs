@@ -769,11 +769,8 @@ fn clicking_chat_about_this_declines_every_one_question_kind() {
 
 /// The NO_COLOR look: every role paints to the terminal's default.
 fn no_color_look() -> crate::look::Look {
-    let vars: Vec<(String, String)> = vec![("NO_COLOR".to_owned(), "1".to_owned())];
     let (look, notice) = crate::look::Look::new(crate::look::ThemeSetting::Dark, &|name: &str| {
-        vars.iter()
-            .find(|(set, _)| set == name)
-            .map(|(_, value)| value.clone())
+        (name == "NO_COLOR").then(|| "1".to_owned())
     });
     assert_eq!(notice, None);
     look

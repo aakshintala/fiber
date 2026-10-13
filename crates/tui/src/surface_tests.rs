@@ -1125,3 +1125,87 @@ fn draw_box_keeps_suppressed_edges_off() {
     assert_eq!(edged[(1, 1)].symbol(), "─");
     assert_eq!(edged[(2, 2)].symbol(), " ");
 }
+
+#[test]
+fn draw_box_clips_its_edges_without_inventing_corners() {
+    use ratatui::style::Modifier;
+    let _ = boxed(&[("NO_COLOR", "1")]);
+    // The rect overhangs the buffer on the left: its columns 0 and 1
+    // sit outside, and its right corner sits past the buffer too, so
+    // the visible edge keeps the original fills, never a corner at the
+    // clip (`docs/tui.md`, "Look").
+    let mut overhang = Buffer::empty(Rect::new(2, 0, 6, 5));
+    super::draw_box(
+        &mut overhang,
+        Rect::new(0, 0, 10, 5),
+        Rect::new(0, 1, 10, 1),
+        Edges::BOTH,
+    );
+    // The original top edge is ┌ at 0, ─ at 1..9, ┐ at 9: columns 2..8
+    // show fills only.
+    for x in 2..8 {
+        for y in [0, 2] {
+            assert_eq!(overhang[(x, y)].symbol(), "─", "({x}, {y})");
+            assert_eq!(overhang[(x, y)].modifier, Modifier::DIM, "({x}, {y})");
+        }
+    }
+    for cell in &overhang.content {
+        assert!(
+            !matches!(cell.symbol(), "┌" | "┐" | "└" | "┘"),
+            "{}",
+            cell.symbol()
+        );
+    }
+    // The rect overhangs on the right instead: the visible edge keeps
+    // its original corner where it shows, and fills past it.
+    let mut right = Buffer::empty(Rect::new(0, 0, 6, 5));
+    super::draw_box(
+        &mut right,
+        Rect::new(0, 0, 6, 5),
+        Rect::new(0, 1, 8, 1),
+        Edges::BOTH,
+    );
+    assert_eq!(right[(0, 0)].symbol(), "┌");
+    assert_eq!(right[(0, 2)].symbol(), "└");
+    for x in 1..6 {
+        assert_eq!(right[(x, 0)].symbol(), "─", "({x}, 0)");
+        assert_eq!(right[(x, 2)].symbol(), "─", "({x}, 2)");
+    }
+    for cell in &right.content {
+        assert!(!matches!(cell.symbol(), "┐" | "┘"), "{}", cell.symbol());
+    }
+}
+
+#[test]
+fn draw_edges_clip_a_box_without_inventing_corners() {
+    let _ = boxed(&[("NO_COLOR", "1")]);
+    // The slab overhangs the buffer on the right through the edge-row
+    // path: the visible rows keep the original corner where it shows
+    // and fills past it, never a corner at the clip
+    // (`docs/tui.md`, "Look").
+    let mut buf = Buffer::empty(Rect::new(0, 0, 6, 4));
+    draw_edges(&mut buf, Rect::new(0, 1, 8, 1), Role::Surface);
+    assert_eq!(buf[(0, 0)].symbol(), "┌");
+    assert_eq!(buf[(0, 2)].symbol(), "└");
+    for x in 1..6 {
+        assert_eq!(buf[(x, 0)].symbol(), "─", "({x}, 0)");
+        assert_eq!(buf[(x, 2)].symbol(), "─", "({x}, 2)");
+    }
+    for cell in &buf.content {
+        assert!(!matches!(cell.symbol(), "┐" | "┘"), "{}", cell.symbol());
+    }
+    // Overhanging on the left instead: both rows show fills only.
+    let mut clipped = Buffer::empty(Rect::new(2, 1, 6, 3));
+    draw_edges(&mut clipped, Rect::new(0, 2, 10, 1), Role::Surface);
+    for x in 2..8 {
+        assert_eq!(clipped[(x, 1)].symbol(), "─", "({x}, 1)");
+        assert_eq!(clipped[(x, 3)].symbol(), "─", "({x}, 3)");
+    }
+    for cell in &clipped.content {
+        assert!(
+            !matches!(cell.symbol(), "┌" | "┐" | "└" | "┘"),
+            "{}",
+            cell.symbol()
+        );
+    }
+}

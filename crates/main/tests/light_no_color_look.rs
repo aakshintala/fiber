@@ -67,9 +67,10 @@ fn light_run() -> (Setup, Run, Grid) {
 }
 
 /// Whether the grid shows a finished light turn with everything the
-/// light assertions read: the `completed` status, the reply surfaced on
-/// its card, the white page, and the striped input box. A partial
-/// redraw can't satisfy it: every asserted property is checked.
+/// light assertions read: the `completed` status, the prompt and reply
+/// surfaced on their tints off the white page, the full white page, the
+/// turn's edge run and the striped input box. A partial redraw can't
+/// satisfy it: every asserted property is checked.
 fn light_drawn(grid: &Grid) -> bool {
     if !grid.contents.contains("completed") {
         return false;
@@ -95,20 +96,65 @@ fn light_drawn(grid: &Grid) -> bool {
     }) {
         return false;
     }
-    // The white page: a blank cell above the turn on 231.
-    if !(1..y).any(|above| {
-        (0..126).any(|at| {
-            let cell = grid.cell(at, above);
-            cell.symbol == " " && cell.bg == Colour::Indexed(231)
-        })
-    }) {
+    // The white page: every blank cell above the first content row is
+    // the page, with a blank page row above the turn.
+    let Some(first) = (1..45).find(|y| (0..126).any(|x| grid.cell(x, *y).symbol.as_str() != " "))
+    else {
+        return false;
+    };
+    if first <= 1 {
         return false;
     }
-    // The input box's stripe in its surface.
-    (0..160).any(|at| {
-        let cell = grid.cell(at, 46);
-        cell.symbol == "▌" && matches!(cell.fg, Colour::Indexed(_))
-    })
+    for y in 1..first {
+        for x in 0..126 {
+            let cell = grid.cell(x, y);
+            if cell.symbol.as_str() != " " || cell.bg != Colour::Indexed(231) {
+                return false;
+            }
+        }
+    }
+    // The person's prompt bubble sits on its own indexed tint, off the
+    // page too.
+    let mut prompt_at: Option<(u16, u16)> = None;
+    for py in 0..48 {
+        let row: String = (0..160).map(|x| grid.cell(x, py).symbol).collect();
+        if let Some(px) = row.find("show light") {
+            prompt_at = u16::try_from(px).ok().map(|px| (px, py));
+            break;
+        }
+    }
+    let Some((px, py)) = prompt_at else {
+        return false;
+    };
+    let prompt = grid.cell(px, py);
+    if !(matches!(prompt.bg, Colour::Indexed(_)) && prompt.bg != Colour::Indexed(231)) {
+        return false;
+    }
+    // The turn card's ▄ edge between the page and the reply: a full
+    // surfaced run, not a single lucky cell.
+    if (first..y)
+        .find(|row| {
+            let run = (0..126)
+                .filter(|col| {
+                    let cell = grid.cell(*col, *row);
+                    cell.symbol == "▄" && matches!(cell.fg, Colour::Indexed(_))
+                })
+                .count();
+            run >= 100
+        })
+        .is_none()
+    {
+        return false;
+    }
+    // The input box's striped surface: every asserted cell indexed,
+    // with the stripe in its surface.
+    for x in 0..126 {
+        if !matches!(grid.cell(x, 46).bg, Colour::Indexed(_)) {
+            return false;
+        }
+    }
+    let stripe = grid.cell(0, 46);
+    stripe.symbol.as_str() == "▌" && matches!(stripe.fg, Colour::Indexed(_))
 }
 
 #[test]
@@ -197,27 +243,38 @@ fn no_color_run() -> (Setup, Run) {
 }
 
 /// Whether the grid shows a rail card's box with everything the rail
-/// assertions read: dim corners and fills on the default colours, its
-/// sides, and the finished reply still drawn.
+/// assertions read: the rail card's dim box on the default colours
+/// with its sides, the finished reply readable in the turn's box, the
+/// turn's edge run, the prompt bubble's blank edges with no box sides,
+/// and the input box's border. A partial redraw can't satisfy it: every
+/// asserted property is checked.
 fn rail_boxed(grid: &Grid) -> bool {
-    if !shows(grid, "Hel") {
+    // The finished reply still drawn, readable on the defaults.
+    let Some((rx, ry)) = find_cell(grid, "Hel") else {
         return false;
-    }
-    (0..48).any(|y| {
-        if grid.cell(0, y).symbol != "┌" {
+    };
+    for dx in 0..3 {
+        let cell = grid.cell(rx + dx, ry);
+        if !(cell.fg == Colour::Default && cell.bg == Colour::Default && !cell.dim) {
             return false;
         }
-        let end = (1..30).find(|&x| grid.cell(x, y).symbol == "┐");
-        let Some(end) = end else {
-            return false;
+    }
+    // The rail card's box: dim corners and fills on the defaults.
+    let mut railed = false;
+    for y in 0..48 {
+        if grid.cell(0, y).symbol != "┌" {
+            continue;
+        }
+        let Some(end) = (1..30).find(|&x| grid.cell(x, y).symbol == "┐") else {
+            continue;
         };
         if !(1..end).all(|x| grid.cell(x, y).symbol == "─") {
-            return false;
+            continue;
         }
         if y + 1 >= 48 {
-            return false;
+            continue;
         }
-        (0..=end).all(|x| {
+        if !(0..=end).all(|x| {
             let (top, side) = (grid.cell(x, y), grid.cell(x, y + 1));
             top.fg == Colour::Default
                 && top.bg == Colour::Default
@@ -226,11 +283,163 @@ fn rail_boxed(grid: &Grid) -> bool {
                     || x == end
                     || side.symbol != "│"
                     || (side.fg == Colour::Default && side.bg == Colour::Default && side.dim))
-        })
-    })
+        }) {
+            continue;
+        }
+        // The rail's sides close the card's first body row.
+        let left = grid.cell(0, y + 1);
+        let right = grid.cell(end, y + 1);
+        if !(left.symbol == "│"
+            && right.symbol == "│"
+            && left.fg == Colour::Default
+            && left.bg == Colour::Default
+            && left.dim
+            && right.fg == Colour::Default
+            && right.bg == Colour::Default
+            && right.dim)
+        {
+            continue;
+        }
+        railed = true;
+        break;
+    }
+    if !railed {
+        return false;
+    }
+    // The turn's card is a thin dim box on the defaults above the
+    // reply: corners and fills wide enough to be the card, not a
+    // fragment.
+    let mut topped: Option<(u16, u16)> = None;
+    for top in (0..ry).rev() {
+        let Some(width) = (25..126).find(|x| grid.cell(*x, top).symbol == "┐") else {
+            continue;
+        };
+        if width.saturating_sub(25) <= 40 {
+            continue;
+        }
+        let gate = (25..width).any(|x| {
+            let cell = grid.cell(x, top);
+            cell.symbol == "┌" && cell.dim && cell.fg == Colour::Default
+        });
+        if !gate {
+            continue;
+        }
+        if !(25..=width).all(|x| {
+            let cell = grid.cell(x, top);
+            cell.bg == Colour::Default && cell.dim
+        }) {
+            continue;
+        }
+        topped = Some((top, width));
+        break;
+    }
+    if topped.is_none() {
+        return false;
+    }
+    // The second prompt bubble keeps blank edges and no box sides: its
+    // row holds the prompt between blanks past the rail, with blank
+    // rows above and below its span, right-aligned.
+    let mut bubbled = false;
+    for py in 0..48 {
+        let row: String = (30..160).map(|x| grid.cell(x, py).symbol).collect();
+        let Some(off) = row.find("again") else {
+            continue;
+        };
+        let Some(px) = u16::try_from(30 + off).ok() else {
+            continue;
+        };
+        if px <= 30 {
+            continue;
+        }
+        let end: u16 = (px..160)
+            .find(|x| grid.cell(*x, py).symbol.as_str() == " ")
+            .unwrap_or(160);
+        if (px.saturating_sub(2)..end.min(160).saturating_add(1))
+            .any(|x| grid.cell(x, py).symbol.as_str() == "│")
+        {
+            continue;
+        }
+        let mut blanked = true;
+        for y in [py.saturating_sub(1), py + 1] {
+            if y >= 48 {
+                continue;
+            }
+            for x in px..end.min(160) {
+                if grid.cell(x, y).symbol.as_str() != " " {
+                    blanked = false;
+                    break;
+                }
+            }
+        }
+        if !blanked {
+            continue;
+        }
+        bubbled = true;
+        break;
+    }
+    if !bubbled {
+        return false;
+    }
+    // The input box's border: ┌─┐ above, │ on each side and └─┘ below,
+    // dim on the defaults, with the prompt one column in.
+    let Some((left, row)) = input_side_on(grid) else {
+        return false;
+    };
+    if row == 0 || row + 1 >= 48 {
+        return false;
+    }
+    let Some(right) = (left + 1..160).find(|&x| grid.cell(x, row - 1).symbol == "┐") else {
+        return false;
+    };
+    for x in left..=right {
+        for (y, corner, fill) in [(row - 1, "┌", "─"), (row + 1, "└", "─")] {
+            let want = if x == left {
+                corner
+            } else if x == right {
+                if y == row - 1 { "┐" } else { "┘" }
+            } else {
+                fill
+            };
+            let cell = grid.cell(x, y);
+            if cell.symbol.as_str() != want
+                || (cell.fg, cell.bg) != (Colour::Default, Colour::Default)
+                || !cell.dim
+            {
+                return false;
+            }
+        }
+    }
+    grid.cell(left, row).symbol.as_str() == "│"
+        && grid.cell(left + 1, row).symbol.as_str() == "›"
+        && grid.cell(right, row).symbol.as_str() == "│"
 }
 
-/// The input box's side cell: the bottom-most `›` past a `│`.
+/// The first position of `needle` on `grid`, when drawn.
+fn find_cell(grid: &Grid, needle: &str) -> Option<(u16, u16)> {
+    for y in 0..48 {
+        let row: String = (0..160).map(|x| grid.cell(x, y).symbol).collect();
+        if let Some(x) = row.find(needle) {
+            return u16::try_from(x).ok().map(|x| (x, y));
+        }
+    }
+    None
+}
+
+/// The input box's side cell, when drawn: the bottom-most `›` past a `│`.
+fn input_side_on(screen: &Grid) -> Option<(u16, u16)> {
+    for y in (0..48).rev() {
+        for x in 1..160 {
+            if screen.cell(x, y).symbol.as_str() != "›" {
+                continue;
+            }
+            if screen.cell(x - 1, y).symbol.as_str() == "│" {
+                return Some((x - 1, y));
+            }
+        }
+    }
+    None
+}
+
 fn input_side(screen: &Grid) -> (u16, u16) {
     for y in (0..48).rev() {
         for x in 1..160 {
