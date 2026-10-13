@@ -500,7 +500,9 @@ fn a_parked_after_timer_waits_out_the_short_until_bound_without_advances() {
         let until = waiter_clock.now() + Duration::from_millis(5000);
         waiter_clock.wait_until(Some(until), &mut |_| {
             let _ignored = parked_tx.send(());
-            let _ignored = Deadline::after(Duration::from_secs(5)).recv(&release_rx);
+            // The test owns release_tx, so this blocks until the test sends
+            // or drops it: the waiter stays parked with no deadline of its own.
+            let _ignored = release_rx.recv();
         });
     });
     Deadline::after(Duration::from_secs(5))
