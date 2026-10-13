@@ -776,17 +776,24 @@ impl Run {
         self.wait_bytes(0, TITLE, "the end of the first frame")
     }
 
-    /// The turn that started after offset `from` finished, whichever
-    /// order its two markers arrive in: the `completed` paint on the
-    /// grid, and the finished title on the raw output at or after
-    /// `from`. Each wait searches from its own start, never from the
-    /// other's match, so the pair is order-free (see #1775).
+    /// The turn that started after offset `from` finished: the finished
+    /// title on the raw output at or after `from` first, then the
+    /// `completed` paint on the grid. Either marker may arrive first:
+    /// the grid and the output both accumulate, so the pair stays
+    /// order-free (see #1775). The title wait is the per-turn
+    /// gate: it searches from `from`, so `from` must be taken after the
+    /// previous turn's title reached this terminal, or an earlier
+    /// turn's title matches first (see #2211). The paint wait only
+    /// confirms the close drew; the grid keeps an earlier turn's
+    /// paint, so it never proves which turn finished. A caller
+    /// proving one turn's durable events reads the session log under
+    /// its deadline after this returns.
     #[track_caller]
     pub(crate) fn turn_finished(&mut self, from: usize) {
+        self.wait_bytes(from, FINISHED_TITLE, "the finished title");
         self.wait_screen("the completed turn", |grid| {
             grid.contents.contains("completed")
         });
-        self.wait_bytes(from, FINISHED_TITLE, "the finished title");
     }
 
     /// Resizes the terminal to `cols` by `rows`: the size is recorded
