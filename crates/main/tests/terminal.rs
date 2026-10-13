@@ -1678,6 +1678,64 @@ fn resume_with_a_credential_switches_a_running_session_at_the_next_turn() {
     assert_exited(first);
 }
 
+/// Repro for #2211: the second terminal attaches while turn 1 still
+/// runs, so an offset taken before turn 1's markers reach it matches
+/// turn 1, not turn 2. `turn_finished` returns on turn 1's paint and
+/// title while turn 2 still streams, and the immediate log read misses
+/// turn 2's tail: turn 2's pipeline starts only at its release, after
+/// the read, so the full ordered log cannot be complete in time.
+#[test]
+fn resume_with_a_credential_second_turn_outlives_a_stale_completed_paint() {
+    let setup = support::Setup::new();
+    let server = ProviderServer::start([hello(), hello()]).unwrap();
+    provider(&setup, &server);
+    labels(&setup, "home", &["home", "work"]);
+    let before_config = snapshot_config(&setup);
+    let mut first = terminal(&setup, 120, 32, &[], &[]);
+    first.wait_screen("the first frame", |grid| grid.contents.contains("›"));
+    first.ready();
+    server.hold();
+    let first_from = first.output().len();
+    first.write(b"first\r");
+    assert!(
+        server.await_requests(1, setup.deadline.left()),
+        "the first request to reach the server"
+    );
+    let id = only_session(&setup);
+    let mut second = resume_with(&setup, &id, "work");
+    second.wait_screen("the first frame", |grid| grid.contents.contains("›"));
+    second.ready();
+    let attached = second.output().len();
+    second.wait_bytes(attached, TITLE, "the attached session's title");
+    // Taken while turn 1 is still held, so before any completion
+    // marker reaches this terminal: it matches turn 1's paint and
+    // title, not turn 2's.
+    let second_from = second.output().len();
+    server.release_one();
+    first.turn_finished(first_from);
+    second.write(b"second\r");
+    assert!(
+        server.await_requests(2, setup.deadline.left()),
+        "the second request to reach the server"
+    );
+    server.release_one();
+    second.turn_finished(second_from);
+    let requests = server.requests();
+    assert_eq!(requests.len(), 2, "{requests:?}");
+    assert_fingerprint(&requests[0], "Bearer home-key");
+    assert_fingerprint(&requests[1], "Bearer work-key");
+    let events = session_events(&setup, &id);
+    let mut expected = opened_kinds(false);
+    expected.extend(["model_changed", "preamble_built"]);
+    expected.extend(resumed_turn_kinds());
+    assert_eq!(event_kinds(&events), expected);
+    assert_config_unchanged(&setup, &before_config);
+    quit_keys(&mut second);
+    quit_keys(&mut first);
+    assert_exited(second);
+    assert_exited(first);
+}
+
 #[test]
 fn resume_with_a_credential_after_the_recorded_key_was_deleted() {
     let setup = support::Setup::new();
