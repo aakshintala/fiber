@@ -207,11 +207,7 @@ fn tint_and_grey_per_role() {
 
 #[test]
 fn dark_and_light_differ_in_every_background_role() {
-    // `panel`, `turn` and `handoff` are new in the doc table and take the
-    // dark value in the light theme until ruled (see #1634's case).
-    for role in Role::ALL.into_iter().filter(|role| {
-        role.tint() && *role != Role::Panel && *role != Role::Turn && *role != Role::Handoff
-    }) {
+    for role in Role::ALL.into_iter().filter(|role| role.tint()) {
         assert_ne!(
             Theme::DARK.shade(role),
             Theme::LIGHT.shade(role),
@@ -379,34 +375,38 @@ fn the_dark_theme_is_the_doc_table() {
     }
 }
 
+/// The fourth column of the first table under `### Themes` in `doc`, one
+/// cell per role, in order, backticks kept.
+fn doc_light(doc: &str) -> Vec<String> {
+    doc_column(doc, 4)
+}
+
+/// The light theme's shade the doc's light cell `cell` names for `role`.
+fn light_cell(cell: &str, role: Role) -> Shade {
+    match cell {
+        "`text`, dim" => Shade::Dim,
+        hex => {
+            let text = hex.strip_prefix('`').and_then(|hex| hex.strip_suffix('`'));
+            text.and_then(super::hex)
+                .map(|(r, g, b)| Shade::Rgb((r, g, b)))
+                .unwrap_or_else(|| panic!("{}: unknown light cell {cell:?}", role.name()))
+        }
+    }
+}
+
 #[test]
-fn the_light_theme_takes_the_dark_value_for_unruled_roles() {
-    for role in [
-        Role::Info,
-        Role::Secondary,
-        Role::Rule,
-        Role::Scroll,
-        Role::Panel,
-        Role::Turn,
-        Role::Handoff,
-    ] {
+fn the_light_theme_is_the_doc_table() {
+    let doc = include_str!("../../../docs/tui.md");
+    let names: Vec<&str> = Role::ALL.into_iter().map(Role::name).collect();
+    assert_eq!(doc_roles(doc), names);
+    let light = doc_light(doc);
+    assert_eq!(light.len(), ROLES, "{light:?}");
+    for (role, cell) in Role::ALL.into_iter().zip(light.iter()) {
         assert_eq!(
             Theme::LIGHT.shade(role),
-            Theme::DARK.shade(role),
+            light_cell(cell, role),
             "{}",
             role.name()
         );
     }
-    assert_eq!(
-        Theme::LIGHT.shade(Role::Text),
-        Shade::Rgb((0x38, 0x3a, 0x42))
-    );
-    assert_eq!(
-        Theme::LIGHT.shade(Role::Background),
-        Shade::Rgb((0xfa, 0xfa, 0xfa))
-    );
-    assert_eq!(
-        Theme::LIGHT.shade(Role::Muted),
-        Shade::Rgb((0xa0, 0xa1, 0xa7))
-    );
 }

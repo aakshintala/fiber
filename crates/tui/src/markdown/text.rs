@@ -1,8 +1,8 @@
 //! What each rendered row adds to its logical line (`docs/tui.md`,
 //! "Selection and copy": a selection copies text unwrapped). The renderer
 //! wraps text itself and drops the whitespace at a break, so it reports
-//! here, row by row, how each row joins the one before and how many of its
-//! leading cells are decoration.
+//! here, row by row, how each row joins the one before, how many of its
+//! leading cells are decoration, and how many of its trailing cells are.
 
 use std::ops::Range;
 
@@ -17,20 +17,22 @@ pub(super) struct Track {
 
 impl Track {
     /// The next row joins the one before by `join`, its first `skip` cells
-    /// are not text, with `decoration` none of it is, and `links` are the
-    /// link destinations drawn on it with their cells in the line
-    /// (`docs/tui.md`, "Links": links are handled on click).
+    /// and its last `tail` cells are not text, with `decoration` none of
+    /// it is, and `links` are the link destinations drawn on it with their
+    /// cells in the line (`docs/tui.md`, "Links": links are handled on
+    /// click).
     pub(super) fn row(
         &mut self,
         join: Join,
         skip: u16,
+        tail: u16,
         decoration: bool,
         links: Vec<(Range<u16>, String)>,
     ) {
         self.texts.push(RowText {
             join,
             skip,
-            tail: 0,
+            tail,
             decoration,
             links,
             scopes: Vec::new(),

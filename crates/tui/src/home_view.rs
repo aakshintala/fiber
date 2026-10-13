@@ -37,6 +37,9 @@ struct Placed {
     /// The box's first column and width.
     x: u16,
     width: u16,
+    /// The text's width inside the box: two narrower where a box takes
+    /// the sides.
+    inner: u16,
     /// The logo's first row and its rows: four pixel rows, or one.
     logo: u16,
     logo_rows: usize,
@@ -61,9 +64,17 @@ struct Placed {
 /// rows when they fit with three list rows kept, else the one-row form.
 fn layout(app: &App, screen: &HomeScreen, area: Rect) -> Placed {
     let width = area.width.min(BOX_WIDTH);
+    // Without colour the box is thin: its sides take one column each,
+    // so the draft, the blockers and the chips wrap two narrower
+    // (`docs/tui.md`, "Look").
+    let inner = if crate::surface::box_fit(width) {
+        width.saturating_sub(2)
+    } else {
+        width
+    };
     let x = area.x.saturating_add(area.width.saturating_sub(width) / 2);
     let pad = area.height / 8;
-    let draft = app.input().rows(width);
+    let draft = app.input().rows(inner);
     let height = draft.len().clamp(MIN_BOX, MAX_BOX);
     // The box is its ▄ edge, the draft rows, the chip row and its ▀ edge.
     let boxed = super::to_u16(height).saturating_add(3);
@@ -72,7 +83,7 @@ fn layout(app: &App, screen: &HomeScreen, area: Rect) -> Placed {
     let blockers: Vec<String> = screen
         .blockers
         .iter()
-        .flat_map(|line| wrap(line, usize::from(width)))
+        .flat_map(|line| wrap(line, usize::from(inner)))
         .collect();
     // Four rows need the pad, the four-row logo, one blank row, the
     // blocker lines, the box, three list rows and the foot, and the
@@ -87,7 +98,7 @@ fn layout(app: &App, screen: &HomeScreen, area: Rect) -> Placed {
         .saturating_add(super::to_u16(logo_rows))
         .saturating_add(1)
         .saturating_add(super::to_u16(blockers.len()));
-    let (row, _) = app.input().cursor(width);
+    let (row, _) = app.input().cursor(inner);
     let top = row.saturating_add(1).saturating_sub(height);
     let shown = draft.into_iter().skip(top).take(height).collect();
     let draft_top = box_top.saturating_add(1);
@@ -97,6 +108,7 @@ fn layout(app: &App, screen: &HomeScreen, area: Rect) -> Placed {
     Placed {
         x,
         width,
+        inner,
         logo,
         logo_rows,
         blockers,
@@ -247,30 +259,36 @@ pub(super) fn render(
     }
     // The box's edges above and below its draft and chip rows, with the
     // rows' surface tint edge to edge, past the placeholder or the
-    // written text (`docs/tui.md`, "Look", "The input box").
-    crate::surface::draw_slab(
-        buf,
-        ratatui::layout::Rect::new(
-            placed.x,
-            placed.draft_top,
-            placed.width,
-            placed
-                .chip
-                .saturating_sub(placed.draft_top)
-                .saturating_add(1),
-        ),
-        Role::Surface,
-        None,
-        crate::surface::Edges::BOTH,
+    // written text (`docs/tui.md`, "Look", "The input box"). Without
+    // colour the box is thin: ┌─┐ and └─┘ on the edge rows and │ on the
+    // box's columns, dim, with no tint, and the text sits one column in.
+    let slab = ratatui::layout::Rect::new(
+        placed.x,
+        placed.draft_top,
+        placed.width,
+        placed
+            .chip
+            .saturating_sub(placed.draft_top)
+            .saturating_add(1),
     );
+    // The text's first column: one past the box's left side where the
+    // box takes the sides.
+    let text_x = placed
+        .x
+        .saturating_add(u16::from(crate::surface::box_fit(placed.width)));
+    if crate::surface::box_fit(placed.width) {
+        crate::surface::draw_box(buf, area, slab, crate::surface::Edges::BOTH);
+    } else {
+        crate::surface::draw_slab(buf, slab, Role::Surface, None, crate::surface::Edges::BOTH);
+    }
     for (at, row) in placed.shown.iter().enumerate() {
         let y = placed.draft_top.saturating_add(super::to_u16(at));
         if screen.placeholder && placed.top == 0 && at == 0 {
             // The placeholder's prompt is `info` like a draft's; the rest
             // stays dim (`docs/tui.md`, "The input box").
-            put_prompt(buf, area, placed.x, y, PLACEHOLDER, placed.width, true);
+            put_prompt(buf, area, text_x, y, PLACEHOLDER, placed.inner, true);
         } else {
-            put_prompt(buf, area, placed.x, y, row, placed.width, false);
+            put_prompt(buf, area, text_x, y, row, placed.inner, false);
         }
     }
     // The cursor is a drawn dim `█` at the draft's cursor while nothing
@@ -279,13 +297,11 @@ pub(super) fn render(
     // terminal's own cursor stays where `cursor` puts it.
     let chip_focused = matches!(app.focused(), Some(TargetId::Home(spot)) if spot.is_chip());
     if app.focused().is_none() || chip_focused {
-        let (row, col) = app.input().cursor(placed.width);
+        let (row, col) = app.input().cursor(placed.inner);
         let y = placed
             .draft_top
             .saturating_add(super::to_u16(row.saturating_sub(placed.top)));
-        let x = placed
-            .x
-            .saturating_add(col.min(placed.width.saturating_sub(1)));
+        let x = text_x.saturating_add(col.min(placed.inner.saturating_sub(1)));
         // The draft sits below the area's top row by construction, so
         // only the bottom needs the guard.
         if y < area.bottom() {
@@ -298,18 +314,18 @@ pub(super) fn render(
     put(
         buf,
         area,
-        placed.x,
+        text_x,
         placed.chip,
         &texts.join("  "),
-        placed.width,
+        placed.inner,
         BOX_TINT,
     );
-    let mut chip_x = placed.x;
+    let mut chip_x = text_x;
     // A chip past the box's right edge draws nothing and takes no
-    // target; a chip cut part-way keeps its visible cells.
-    let box_end = placed
-        .x
-        .saturating_add(placed.width)
+    // target; a chip cut part-way keeps its visible cells. Without
+    // colour the right side takes the box's last column.
+    let box_end = text_x
+        .saturating_add(placed.inner)
         .min(area.x.saturating_add(area.width));
     for (at, (spot, text)) in screen.chips.iter().enumerate() {
         if at != 0 {
@@ -873,7 +889,7 @@ pub(super) fn cursor(app: &App, screen: &HomeScreen, area: Rect) -> Option<Posit
         return None;
     }
     let placed = layout(app, screen, area);
-    let (row, col) = app.input().cursor(placed.width);
+    let (row, col) = app.input().cursor(placed.inner);
     let y = placed
         .draft_top
         .saturating_add(super::to_u16(row.saturating_sub(placed.top)));
@@ -882,7 +898,8 @@ pub(super) fn cursor(app: &App, screen: &HomeScreen, area: Rect) -> Option<Posit
     }
     let x = placed
         .x
-        .saturating_add(col.min(placed.width.saturating_sub(1)));
+        .saturating_add(u16::from(crate::surface::box_fit(placed.width)))
+        .saturating_add(col.min(placed.inner.saturating_sub(1)));
     Some(Position::new(x, y))
 }
 

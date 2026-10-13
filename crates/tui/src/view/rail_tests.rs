@@ -833,3 +833,168 @@ fn the_rail_region_is_on_the_background() {
         "a card's row keeps its tint"
     );
 }
+
+/// The NO_COLOR look: every role paints to the terminal's default.
+fn no_color_look() -> crate::look::Look {
+    let (look, notice) = crate::look::Look::new(crate::look::ThemeSetting::Dark, &|name: &str| {
+        (name == "NO_COLOR").then(|| "1".to_owned())
+    });
+    assert_eq!(notice, None);
+    look
+}
+
+/// The rail drawn and painted without colour: the buffer and its targets.
+fn no_color_drawn(app: &App) -> (Buffer, Vec<crate::mouse::Target>) {
+    crate::surface::init(&|name: &str| (name == "NO_COLOR").then(|| "1".to_owned()));
+    let rect = app
+        .chrome()
+        .layout()
+        .and_then(|layout| layout.rail)
+        .unwrap_or_else(|| panic!("a rail"));
+    let area = Rect::new(0, 0, rect.width, rect.height);
+    let mut buf = Buffer::empty(area);
+    let mut targets = Vec::new();
+    draw(app, area, &mut buf, None, &mut targets);
+    no_color_look().paint(&mut buf);
+    (buf, targets)
+}
+
+#[test]
+fn no_color_boxes_a_rail_card_and_narrows_its_text() {
+    use ratatui::style::{Color, Modifier};
+    // C's card crashed, so its ✕ target proves the spots moved with the
+    // narrowed body. Two sessions stay live, so the rail draws.
+    let mut app = app(15.0);
+    app.on_line(status(A, json!({})));
+    app.on_line(status(B, json!({})));
+    app.on_line(status(C, json!({})));
+    app.on_line(left(C, "crashed"));
+    let (buf, targets) = no_color_drawn(&app);
+    let rect = app
+        .chrome()
+        .layout()
+        .and_then(|layout| layout.rail)
+        .expect("a rail");
+    let card_w = rect.width.saturating_sub(1);
+    // C's card: its top edge on row 13, four text rows, its bottom edge.
+    let (top, bottom) = (13, 18);
+    for x in 0..card_w {
+        let corner = buf[(x, top)].symbol();
+        assert_eq!(
+            corner,
+            if x == 0 {
+                "┌"
+            } else if x == card_w - 1 {
+                "┐"
+            } else {
+                "─"
+            }
+        );
+        let corner = buf[(x, bottom)].symbol();
+        assert_eq!(
+            corner,
+            if x == 0 {
+                "└"
+            } else if x == card_w - 1 {
+                "┘"
+            } else {
+                "─"
+            }
+        );
+        for y in [top, bottom] {
+            let cell = &buf[(x, y)];
+            assert_eq!(
+                (cell.fg, cell.bg),
+                (Color::Reset, Color::Reset),
+                "({x}, {y})"
+            );
+            assert_eq!(cell.modifier, Modifier::DIM, "({x}, {y})");
+        }
+    }
+    // Each body row sits between │ sides, dim, on the default colours,
+    // with the card's text readable inside.
+    for y in top + 1..bottom {
+        for x in [0, card_w - 1] {
+            let cell = &buf[(x, y)];
+            assert_eq!(cell.symbol(), "│", "({x}, {y})");
+            assert_eq!(
+                (cell.fg, cell.bg),
+                (Color::Reset, Color::Reset),
+                "({x}, {y})"
+            );
+            assert_eq!(cell.modifier, Modifier::DIM, "({x}, {y})");
+        }
+    }
+    let body: String = (1..card_w - 1)
+        .map(|x| buf[(x, top + 2)].symbol())
+        .collect();
+    assert!(body.contains("fix the parser"), "{body:?}");
+    // The text room is two columns narrower than with colour: the ✕ sits
+    // one column past it, and the header's bold survives the paint.
+    let text = usize::from(card_w).saturating_sub(3).saturating_sub(2);
+    let dismiss = targets
+        .iter()
+        .find(|target| matches!(target.id, TargetId::Rail(Spot::Dismiss(_))))
+        .expect("the dismiss target");
+    assert_eq!(
+        dismiss.rect.x,
+        u16::try_from(text.saturating_add(1)).expect("a column")
+    );
+    assert_eq!(dismiss.rect.width, 1);
+    let card = targets
+        .iter()
+        .find(|target| matches!(target.id, TargetId::Rail(Spot::Card(_))))
+        .expect("the card target");
+    assert_eq!(card.rect.height, 4);
+    // Six rows per card, header and start ranges kept.
+    let rows = super::rows(&app, rect.width);
+    assert_eq!(rows.len() % 6, 1, "one header row and six rows per card");
+    let header = &buf[(2, 0)];
+    assert!(header.modifier.contains(Modifier::BOLD));
+    assert_eq!((header.fg, header.bg), (Color::Reset, Color::Reset));
+}
+
+#[test]
+fn no_color_keeps_coloured_half_blocks_off_the_rail() {
+    // With colour the same card draws half-block edges and a stripe: the
+    // box is only the colourless form.
+    let app = two(15.0, json!({}));
+    let rect = app
+        .chrome()
+        .layout()
+        .and_then(|layout| layout.rail)
+        .expect("a rail");
+    let area = Rect::new(0, 0, rect.width, rect.height);
+    let mut buf = Buffer::empty(area);
+    draw(&app, area, &mut buf, None, &mut Vec::new());
+    assert_eq!(buf[(0, 7)].symbol(), "▄");
+    assert_eq!(buf[(0, 8)].symbol(), "▌");
+}
+
+#[test]
+fn rail_draws_at_tiny_widths_without_colour() {
+    let app = two(15.0, json!({}));
+    crate::surface::init(&|name: &str| (name == "NO_COLOR").then(|| "1".to_owned()));
+    // Widths too small for two sides plus text keep the text-first
+    // fallback: no box, no panic.
+    for width in [0, 1, 2, 3, 4] {
+        let rows = super::rows(&app, width);
+        let area = Rect::new(0, 0, width, 40);
+        let mut buf = Buffer::empty(area);
+        draw(&app, area, &mut buf, None, &mut Vec::new());
+        if width < 3 {
+            for row in &rows {
+                let text: String = row
+                    .line
+                    .spans
+                    .iter()
+                    .map(|span| span.content.as_ref())
+                    .collect();
+                assert!(
+                    !text.contains('┌') && !text.contains('│'),
+                    "width {width}: {text:?}"
+                );
+            }
+        }
+    }
+}

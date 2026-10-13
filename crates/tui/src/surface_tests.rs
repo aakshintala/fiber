@@ -814,3 +814,533 @@ fn draw_edges_clips_its_columns_at_a_nonzero_origin() {
         assert_eq!(buf[(x, 2)].symbol(), " ", "x {x}");
     }
 }
+
+/// The layout mode `init` reads over `vars`.
+fn boxed(vars: &[(&str, &str)]) -> bool {
+    let vars: Vec<(String, String)> = vars
+        .iter()
+        .map(|(name, value)| ((*name).to_owned(), (*value).to_owned()))
+        .collect();
+    super::init(&|name| {
+        vars.iter()
+            .find(|(set, _)| set == name)
+            .map(|(_, value)| value.clone())
+    });
+    super::boxed()
+}
+
+#[test]
+fn box_mode_agrees_with_depth_on_no_color() {
+    // Unset and empty mean colour; any other value means colourless,
+    // exactly as `look::depth` reads it (`docs/tui.md`, "Look").
+    assert!(!boxed(&[]));
+    assert!(!boxed(&[("NO_COLOR", "")]));
+    assert!(boxed(&[("NO_COLOR", "1")]));
+    assert!(boxed(&[("NO_COLOR", "yes")]));
+    for vars in [
+        vec![("NO_COLOR", "1")],
+        vec![("NO_COLOR", "1"), ("COLORTERM", "truecolor")],
+        vec![("NO_COLOR", "1"), ("TERM", "xterm-ghostty")],
+    ] {
+        let owned: Vec<(String, String)> = vars
+            .iter()
+            .map(|(name, value)| ((*name).to_owned(), (*value).to_owned()))
+            .collect();
+        let depth = crate::look::depth(&|name| {
+            owned
+                .iter()
+                .find(|(set, _)| set == name)
+                .map(|(_, value)| value.clone())
+        });
+        assert_eq!(depth, crate::look::Depth::NoColour, "{vars:?}");
+        assert!(boxed(&vars), "{vars:?}");
+    }
+}
+
+#[test]
+fn box_edge_rows_are_dim_corners_and_fills() {
+    use ratatui::style::Modifier;
+    for (top, left, right) in [(true, "┌", "┐"), (false, "└", "┘")] {
+        let row = super::box_edge_row(5, top);
+        assert_eq!(row.width(), 5);
+        let text: String = row.spans.iter().map(|span| span.content.as_ref()).collect();
+        assert_eq!(text, format!("{left}───{right}"));
+        for span in &row.spans {
+            assert_eq!(span.style.fg, None);
+            assert_eq!(span.style.bg, None);
+            assert_eq!(span.style.add_modifier, Modifier::DIM);
+        }
+    }
+    assert_eq!(super::box_edge_row(0, true).width(), 0);
+    let one = super::box_edge_row(1, true);
+    assert_eq!(one.width(), 1);
+    let two = super::box_edge_row(2, false);
+    assert_eq!(two.width(), 2);
+    let text: String = two.spans.iter().map(|span| span.content.as_ref()).collect();
+    assert_eq!(text, "└┘");
+}
+
+#[test]
+fn edge_rows_box_where_a_box_fits() {
+    let _ = boxed(&[("NO_COLOR", "1")]);
+    assert!(super::box_fit(3));
+    assert!(super::box_fit(80));
+    assert!(!super::box_fit(2));
+    assert!(!super::box_fit(0));
+    // A box fits: corners, not half blocks, with no role marker for the
+    // paint pass to resolve.
+    let row = super::edge_row(4, Role::Surface, true);
+    let text: String = row.spans.iter().map(|span| span.content.as_ref()).collect();
+    assert_eq!(text, "┌──┐");
+    assert!(row.spans.iter().all(|span| span.style.fg.is_none()));
+    // Too narrow for two sides and text: half blocks, which the paint
+    // pass blanks, so the text keeps its columns.
+    let narrow = super::edge_row(2, Role::Surface, false);
+    let text: String = narrow
+        .spans
+        .iter()
+        .map(|span| span.content.as_ref())
+        .collect();
+    assert_eq!(text, "▀▀");
+    assert_eq!(narrow.spans[0].style.fg, Some(Role::Surface.color()));
+}
+
+#[test]
+fn prompt_edges_stay_half_blocks_without_colour() {
+    // The prompt bubble is the exception: its edges stay half blocks in
+    // every mode, blanked by the paint pass, so its rows stay edge-free
+    // (`docs/tui.md`, "Look").
+    let _ = boxed(&[("NO_COLOR", "1")]);
+    for (top, edge) in [(true, "▄▄▄▄"), (false, "▀▀▀▀")] {
+        let row = super::half_edge_row(4, Role::Prompt, top);
+        let text: String = row.spans.iter().map(|span| span.content.as_ref()).collect();
+        assert_eq!(text, edge);
+        assert_eq!(row.spans[0].style.fg, Some(Role::Prompt.color()));
+    }
+}
+
+#[test]
+fn edge_rows_are_half_blocks_with_colour() {
+    let _ = boxed(&[("COLORTERM", "truecolor")]);
+    assert!(!super::boxed());
+    assert!(!super::box_fit(80));
+    let row = super::edge_row(4, Role::Surface, true);
+    let text: String = row.spans.iter().map(|span| span.content.as_ref()).collect();
+    assert_eq!(text, "▄▄▄▄");
+}
+
+#[test]
+fn draw_sides_keeps_text_and_adds_no_corners() {
+    use ratatui::style::Modifier;
+    let _ = boxed(&[("NO_COLOR", "1")]);
+    let mut buf = Buffer::empty(Rect::new(0, 0, 6, 4));
+    buf.set_string(0, 1, "abcdef", ratatui::style::Style::default());
+    buf.set_string(0, 2, "ghijkl", ratatui::style::Style::default());
+    super::draw_sides(&mut buf, Rect::new(0, 1, 6, 2));
+    for y in 1..=2 {
+        assert_eq!(buf[(0, y)].symbol(), "│");
+        assert_eq!(buf[(5, y)].symbol(), "│");
+        assert_eq!(buf[(0, y)].modifier, Modifier::DIM);
+        assert_eq!(
+            (buf[(0, y)].fg, buf[(0, y)].bg),
+            (Color::Reset, Color::Reset)
+        );
+    }
+    // The text between the sides keeps its cells.
+    assert_eq!(buf[(1, 1)].symbol(), "b");
+    assert_eq!(buf[(4, 2)].symbol(), "k");
+    // Rows outside the rect keep their cells: no corners, no sides.
+    assert_eq!(buf[(0, 0)].symbol(), " ");
+    assert_eq!(buf[(5, 0)].symbol(), " ");
+    assert_eq!(buf[(0, 3)].symbol(), " ");
+}
+
+#[test]
+fn draw_sides_clips_without_covering_text() {
+    let _ = boxed(&[("NO_COLOR", "1")]);
+    // A nonzero origin: the sides draw at the rect's columns in buffer
+    // cells.
+    let mut buf = Buffer::empty(Rect::new(4, 4, 5, 3));
+    buf.set_string(4, 5, "abcde", ratatui::style::Style::default());
+    super::draw_sides(&mut buf, Rect::new(4, 5, 5, 1));
+    assert_eq!(buf[(4, 5)].symbol(), "│");
+    assert_eq!(buf[(8, 5)].symbol(), "│");
+    assert_eq!(buf[(6, 5)].symbol(), "c");
+    // Clipped on the left: the left side draws nothing, the text it
+    // would cover keeps its cell, and the right side still draws.
+    let mut clipped = Buffer::empty(Rect::new(1, 5, 4, 1));
+    clipped.set_string(1, 5, "wxyz", ratatui::style::Style::default());
+    super::draw_sides(&mut clipped, Rect::new(0, 5, 6, 1));
+    assert_eq!(clipped[(1, 5)].symbol(), "w");
+    assert_eq!(clipped[(4, 5)].symbol(), "z");
+    // Clipped on the right: the right side draws nothing.
+    let mut right = Buffer::empty(Rect::new(0, 5, 4, 1));
+    right.set_string(0, 5, "wxyz", ratatui::style::Style::default());
+    super::draw_sides(&mut right, Rect::new(0, 5, 6, 1));
+    assert_eq!(right[(0, 5)].symbol(), "│");
+    assert_eq!(right[(3, 5)].symbol(), "z");
+}
+
+#[test]
+fn draw_sides_ignores_a_rect_outside_the_buffer() {
+    // Past the buffer on either side both side columns miss it: the
+    // guards keep the writes off it, so no side draws and nothing
+    // panics (`docs/tui.md`, "Look").
+    let mut left = Buffer::empty(Rect::new(4, 5, 4, 1));
+    left.set_string(4, 5, "wxyz", ratatui::style::Style::default());
+    super::draw_sides(&mut left, Rect::new(0, 5, 2, 1));
+    let row: String = (4..8).map(|x| left[(x, 5)].symbol().to_owned()).collect();
+    assert_eq!(row, "wxyz");
+    let mut right = Buffer::empty(Rect::new(0, 5, 4, 1));
+    right.set_string(0, 5, "wxyz", ratatui::style::Style::default());
+    super::draw_sides(&mut right, Rect::new(6, 5, 2, 1));
+    let row: String = (0..4).map(|x| right[(x, 5)].symbol().to_owned()).collect();
+    assert_eq!(row, "wxyz");
+}
+
+#[test]
+fn draw_box_draws_its_edges_only_inside_the_area() {
+    // The top edge draws when the row above the rect sits inside the
+    // area: at the area's own top row it stays off, one row down it
+    // draws (`docs/tui.md`, "Look").
+    let mut flush = Buffer::empty(Rect::new(0, 0, 6, 5));
+    super::draw_box(
+        &mut flush,
+        Rect::new(0, 0, 6, 5),
+        Rect::new(0, 0, 6, 1),
+        Edges::BOTH,
+    );
+    assert_eq!(flush[(0, 0)].symbol(), "│");
+    assert_eq!(flush[(5, 0)].symbol(), "│");
+    assert_eq!(flush[(0, 1)].symbol(), "└");
+    assert_eq!(flush[(5, 1)].symbol(), "┘");
+    for cell in &flush.content {
+        assert_ne!(cell.symbol(), "┌");
+        assert_ne!(cell.symbol(), "┐");
+    }
+    let mut edged = Buffer::empty(Rect::new(0, 0, 6, 5));
+    super::draw_box(
+        &mut edged,
+        Rect::new(0, 0, 6, 5),
+        Rect::new(0, 1, 6, 1),
+        Edges::BOTH,
+    );
+    assert_eq!(edged[(0, 0)].symbol(), "┌");
+    assert_eq!(edged[(5, 0)].symbol(), "┐");
+    assert_eq!(edged[(0, 2)].symbol(), "└");
+    assert_eq!(edged[(5, 2)].symbol(), "┘");
+    // The bottom edge draws while the row below the rect sits inside
+    // the area: ending at the area's bottom row it stays off.
+    let mut bottom = Buffer::empty(Rect::new(0, 0, 6, 5));
+    super::draw_box(
+        &mut bottom,
+        Rect::new(0, 0, 6, 5),
+        Rect::new(0, 3, 6, 2),
+        Edges::BOTH,
+    );
+    assert_eq!(bottom[(0, 2)].symbol(), "┌");
+    assert_eq!(bottom[(5, 2)].symbol(), "┐");
+    assert_eq!(bottom[(0, 3)].symbol(), "│");
+    assert_eq!(bottom[(0, 4)].symbol(), "│");
+    for cell in &bottom.content {
+        assert_ne!(cell.symbol(), "└");
+        assert_ne!(cell.symbol(), "┘");
+    }
+}
+
+#[test]
+fn draw_box_keeps_its_edges_inside_the_buffer() {
+    // The buffer starts below the area's top: the top edge row sits
+    // above the buffer, so only the sides draw, without panicking
+    // (`docs/tui.md`, "Look").
+    let mut above = Buffer::empty(Rect::new(0, 5, 10, 10));
+    super::draw_box(
+        &mut above,
+        Rect::new(0, 0, 10, 10),
+        Rect::new(0, 5, 10, 1),
+        Edges {
+            top: true,
+            bottom: false,
+        },
+    );
+    assert_eq!(above[(0, 5)].symbol(), "│");
+    assert_eq!(above[(9, 5)].symbol(), "│");
+    for cell in &above.content {
+        assert!(
+            !matches!(cell.symbol(), "┌" | "┐" | "└" | "┘"),
+            "{}",
+            cell.symbol()
+        );
+    }
+    // The buffer ends above the area's bottom: the bottom edge row
+    // sits past the buffer, so only the sides draw, without panicking.
+    let mut below = Buffer::empty(Rect::new(0, 0, 10, 5));
+    super::draw_box(
+        &mut below,
+        Rect::new(0, 0, 10, 10),
+        Rect::new(0, 4, 10, 1),
+        Edges {
+            top: false,
+            bottom: true,
+        },
+    );
+    assert_eq!(below[(0, 4)].symbol(), "│");
+    assert_eq!(below[(9, 4)].symbol(), "│");
+    for cell in &below.content {
+        assert!(
+            !matches!(cell.symbol(), "┌" | "┐" | "└" | "┘"),
+            "{}",
+            cell.symbol()
+        );
+    }
+}
+
+#[test]
+fn draw_box_keeps_suppressed_edges_off() {
+    let _ = boxed(&[("NO_COLOR", "1")]);
+    let mut buf = Buffer::empty(Rect::new(0, 0, 6, 5));
+    let area = Rect::new(0, 1, 6, 3);
+    let rect = Rect::new(0, 2, 6, 1);
+    super::draw_box(
+        &mut buf,
+        area,
+        rect,
+        Edges {
+            top: false,
+            bottom: false,
+        },
+    );
+    // No edge rows: only the sides draw, on the rect's own row.
+    assert_eq!(buf[(0, 1)].symbol(), " ");
+    assert_eq!(buf[(0, 3)].symbol(), " ");
+    assert_eq!(buf[(0, 2)].symbol(), "│");
+    assert_eq!(buf[(5, 2)].symbol(), "│");
+    // Both edges: corners above and below, never on the text row.
+    let mut edged = Buffer::empty(Rect::new(0, 0, 6, 5));
+    super::draw_box(&mut edged, area, rect, Edges::BOTH);
+    assert_eq!(edged[(0, 1)].symbol(), "┌");
+    assert_eq!(edged[(5, 1)].symbol(), "┐");
+    assert_eq!(edged[(0, 3)].symbol(), "└");
+    assert_eq!(edged[(5, 3)].symbol(), "┘");
+    assert_eq!(edged[(1, 1)].symbol(), "─");
+    assert_eq!(edged[(2, 2)].symbol(), " ");
+}
+
+#[test]
+fn draw_box_clips_its_edges_without_inventing_corners() {
+    use ratatui::style::Modifier;
+    let _ = boxed(&[("NO_COLOR", "1")]);
+    // The rect overhangs the buffer on the left: its columns 0 and 1
+    // sit outside, and its right corner sits past the buffer too, so
+    // the visible edge keeps the original fills, never a corner at the
+    // clip (`docs/tui.md`, "Look").
+    let mut overhang = Buffer::empty(Rect::new(2, 0, 6, 5));
+    super::draw_box(
+        &mut overhang,
+        Rect::new(0, 0, 10, 5),
+        Rect::new(0, 1, 10, 1),
+        Edges::BOTH,
+    );
+    // The original top edge is ┌ at 0, ─ at 1..9, ┐ at 9: columns 2..8
+    // show fills only.
+    for x in 2..8 {
+        for y in [0, 2] {
+            assert_eq!(overhang[(x, y)].symbol(), "─", "({x}, {y})");
+            assert_eq!(overhang[(x, y)].modifier, Modifier::DIM, "({x}, {y})");
+        }
+    }
+    for cell in &overhang.content {
+        assert!(
+            !matches!(cell.symbol(), "┌" | "┐" | "└" | "┘"),
+            "{}",
+            cell.symbol()
+        );
+    }
+    // The rect overhangs on the right instead: the visible edge keeps
+    // its original corner where it shows, and fills past it.
+    let mut right = Buffer::empty(Rect::new(0, 0, 6, 5));
+    super::draw_box(
+        &mut right,
+        Rect::new(0, 0, 6, 5),
+        Rect::new(0, 1, 8, 1),
+        Edges::BOTH,
+    );
+    assert_eq!(right[(0, 0)].symbol(), "┌");
+    assert_eq!(right[(0, 2)].symbol(), "└");
+    for x in 1..6 {
+        assert_eq!(right[(x, 0)].symbol(), "─", "({x}, 0)");
+        assert_eq!(right[(x, 2)].symbol(), "─", "({x}, 2)");
+    }
+    for cell in &right.content {
+        assert!(!matches!(cell.symbol(), "┐" | "┘"), "{}", cell.symbol());
+    }
+}
+
+#[test]
+fn draw_edges_clip_a_box_without_inventing_corners() {
+    let _ = boxed(&[("NO_COLOR", "1")]);
+    // The slab overhangs the buffer on the right through the edge-row
+    // path: the visible rows keep the original corner where it shows
+    // and fills past it, never a corner at the clip
+    // (`docs/tui.md`, "Look").
+    let mut buf = Buffer::empty(Rect::new(0, 0, 6, 4));
+    draw_edges(&mut buf, Rect::new(0, 1, 8, 1), Role::Surface);
+    assert_eq!(buf[(0, 0)].symbol(), "┌");
+    assert_eq!(buf[(0, 2)].symbol(), "└");
+    for x in 1..6 {
+        assert_eq!(buf[(x, 0)].symbol(), "─", "({x}, 0)");
+        assert_eq!(buf[(x, 2)].symbol(), "─", "({x}, 2)");
+    }
+    for cell in &buf.content {
+        assert!(!matches!(cell.symbol(), "┐" | "┘"), "{}", cell.symbol());
+    }
+    // Overhanging on the left instead: both rows show fills only.
+    let mut clipped = Buffer::empty(Rect::new(2, 1, 6, 3));
+    draw_edges(&mut clipped, Rect::new(0, 2, 10, 1), Role::Surface);
+    for x in 2..8 {
+        assert_eq!(clipped[(x, 1)].symbol(), "─", "({x}, 1)");
+        assert_eq!(clipped[(x, 3)].symbol(), "─", "({x}, 3)");
+    }
+    for cell in &clipped.content {
+        assert!(
+            !matches!(cell.symbol(), "┌" | "┐" | "└" | "┘"),
+            "{}",
+            cell.symbol()
+        );
+    }
+}
+
+/// The symbols across `y` of `buf` as one row of text.
+fn row_text(buf: &Buffer, y: u16) -> String {
+    let area = buf.area;
+    (0..area.width)
+        .map(|i| buf[(area.x + i, y)].symbol().to_owned())
+        .collect()
+}
+
+#[test]
+fn draw_box_pins_the_kept_span_at_every_horizontal_boundary() {
+    let _ = boxed(&[("NO_COLOR", "1")]);
+    // The rect's columns 2..10 hold "┌──────┐" above and "└──────┘"
+    // below. Sliding the buffer's left edge across every boundary pins
+    // the kept span: fully visible, clipped on the left, corner-only,
+    // and nothing (`docs/tui.md`, "Look").
+    let area = Rect::new(0, 0, 14, 5);
+    let rect = Rect::new(2, 1, 8, 1);
+    for (buf_x, top, bottom) in [
+        (0, "  ┌──────┐    ", "  └──────┘    "),
+        (1, " ┌──────┐    ", " └──────┘    "),
+        (2, "┌──────┐    ", "└──────┘    "),
+        (3, "──────┐    ", "──────┘    "),
+        (4, "─────┐    ", "─────┘    "),
+        (5, "────┐    ", "────┘    "),
+        (6, "───┐    ", "───┘    "),
+        (7, "──┐    ", "──┘    "),
+        (8, "─┐    ", "─┘    "),
+        (9, "┐    ", "┘    "),
+        (10, "    ", "    "),
+        (11, "   ", "   "),
+    ] {
+        let mut buf = Buffer::empty(Rect::new(buf_x, 0, 14 - buf_x, 5));
+        super::draw_box(&mut buf, area, rect, Edges::BOTH);
+        assert_eq!(row_text(&buf, 0), top, "left {buf_x}");
+        assert_eq!(row_text(&buf, 2), bottom, "left {buf_x}");
+    }
+    // Shrinking the buffer's width across the right boundary pins the
+    // kept span the other way: the corner drops the column it leaves.
+    for (buf_w, top, bottom) in [
+        (12, "  ┌──────┐  ", "  └──────┘  "),
+        (11, "  ┌──────┐ ", "  └──────┘ "),
+        (10, "  ┌──────┐", "  └──────┘"),
+        (9, "  ┌──────", "  └──────"),
+        (3, "  ┌", "  └"),
+        (2, "  ", "  "),
+        (1, " ", " "),
+    ] {
+        let mut buf = Buffer::empty(Rect::new(0, 0, buf_w, 5));
+        super::draw_box(&mut buf, area, rect, Edges::BOTH);
+        assert_eq!(row_text(&buf, 0), top, "width {buf_w}");
+        assert_eq!(row_text(&buf, 2), bottom, "width {buf_w}");
+    }
+    // Widths with no interior keep their corners, whole and clipped.
+    for (width, top, bottom) in [(1, "┌", "└"), (2, "┌┐", "└┘"), (3, "┌─┐", "└─┘")]
+    {
+        let mut buf = Buffer::empty(Rect::new(0, 0, 14, 5));
+        super::draw_box(&mut buf, area, Rect::new(2, 1, width, 1), Edges::BOTH);
+        let pad = " ".repeat(12 - usize::from(width));
+        assert_eq!(row_text(&buf, 0), format!("  {top}{pad}"), "width {width}");
+        assert_eq!(
+            row_text(&buf, 2),
+            format!("  {bottom}{pad}"),
+            "width {width}"
+        );
+    }
+    let mut left = Buffer::empty(Rect::new(3, 0, 11, 5));
+    super::draw_box(&mut left, area, Rect::new(2, 1, 2, 1), Edges::BOTH);
+    assert_eq!(row_text(&left, 0), "┐          ");
+    assert_eq!(row_text(&left, 2), "┘          ");
+    let mut right = Buffer::empty(Rect::new(0, 0, 3, 5));
+    super::draw_box(&mut right, area, Rect::new(2, 1, 2, 1), Edges::BOTH);
+    assert_eq!(row_text(&right, 0), "  ┌");
+    assert_eq!(row_text(&right, 2), "  └");
+}
+
+#[test]
+fn draw_edges_pins_the_kept_span_at_every_horizontal_boundary() {
+    let _ = boxed(&[("NO_COLOR", "1")]);
+    // The same sweep through the slab edge-row path: the rect's columns
+    // 2..10 hold "┌──────┐" above and "└──────┘" below, and the slab's
+    // own row stays blank (`docs/tui.md`, "Look").
+    let rect = Rect::new(2, 1, 8, 1);
+    for (buf_x, top, bottom) in [
+        (0, "  ┌──────┐    ", "  └──────┘    "),
+        (1, " ┌──────┐    ", " └──────┘    "),
+        (2, "┌──────┐    ", "└──────┘    "),
+        (3, "──────┐    ", "──────┘    "),
+        (4, "─────┐    ", "─────┘    "),
+        (5, "────┐    ", "────┘    "),
+        (6, "───┐    ", "───┘    "),
+        (7, "──┐    ", "──┘    "),
+        (8, "─┐    ", "─┘    "),
+        (9, "┐    ", "┘    "),
+        (10, "    ", "    "),
+        (11, "   ", "   "),
+    ] {
+        let mut buf = Buffer::empty(Rect::new(buf_x, 0, 14 - buf_x, 3));
+        draw_edges(&mut buf, rect, Role::Surface);
+        assert_eq!(row_text(&buf, 0), top, "left {buf_x}");
+        assert_eq!(row_text(&buf, 2), bottom, "left {buf_x}");
+        assert_eq!(
+            row_text(&buf, 1),
+            " ".repeat(usize::from(14 - buf_x)),
+            "middle {buf_x}"
+        );
+    }
+    for (buf_w, top, bottom) in [
+        (12, "  ┌──────┐  ", "  └──────┘  "),
+        (11, "  ┌──────┐ ", "  └──────┘ "),
+        (10, "  ┌──────┐", "  └──────┘"),
+        (9, "  ┌──────", "  └──────"),
+        (3, "  ┌", "  └"),
+        (2, "  ", "  "),
+        (1, " ", " "),
+    ] {
+        let mut buf = Buffer::empty(Rect::new(0, 0, buf_w, 3));
+        draw_edges(&mut buf, rect, Role::Surface);
+        assert_eq!(row_text(&buf, 0), top, "width {buf_w}");
+        assert_eq!(row_text(&buf, 2), bottom, "width {buf_w}");
+    }
+    // A three-wide edge keeps its fills, whole and clipped.
+    let mut whole = Buffer::empty(Rect::new(0, 0, 14, 3));
+    draw_edges(&mut whole, Rect::new(2, 1, 3, 1), Role::Surface);
+    assert_eq!(row_text(&whole, 0), "  ┌─┐         ");
+    assert_eq!(row_text(&whole, 2), "  └─┘         ");
+    let mut left = Buffer::empty(Rect::new(3, 0, 11, 3));
+    draw_edges(&mut left, Rect::new(2, 1, 3, 1), Role::Surface);
+    assert_eq!(row_text(&left, 0), "─┐         ");
+    assert_eq!(row_text(&left, 2), "─┘         ");
+    let mut right = Buffer::empty(Rect::new(0, 0, 4, 3));
+    draw_edges(&mut right, Rect::new(2, 1, 3, 1), Role::Surface);
+    assert_eq!(row_text(&right, 0), "  ┌─");
+    assert_eq!(row_text(&right, 2), "  └─");
+}

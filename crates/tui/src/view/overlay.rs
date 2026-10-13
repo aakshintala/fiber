@@ -395,20 +395,34 @@ pub(crate) fn draw(
         |slot: Option<&Slot>| u16::from(matches!(slot, Some(Slot::EdgeTop | Slot::EdgeBottom)));
     let text_top = slab_y.saturating_add(edged(stack.first()));
     let text_bottom = slab.bottom().saturating_sub(edged(stack.last()));
+    let edges = crate::surface::Edges {
+        top: matches!(stack.first(), Some(Slot::EdgeTop)),
+        bottom: matches!(stack.last(), Some(Slot::EdgeBottom)),
+    };
+    // Without colour the frame is a thin box: the interior paints with
+    // no tint, and ┌─┐, │ and └─┘ draw dim after it, so the title, the
+    // body, the padding and the barred rows keep their cells
+    // (`docs/tui.md`, "Look").
+    let boxed = crate::surface::box_fit(slab_w);
     if text_bottom > text_top {
         let text = Rect::new(slab_x, text_top, slab_w, text_bottom - text_top);
-        let edges = crate::surface::Edges {
-            top: matches!(stack.first(), Some(Slot::EdgeTop)),
-            bottom: matches!(stack.last(), Some(Slot::EdgeBottom)),
-        };
-        crate::surface::draw_slab(buf, text, Role::Surface, None, edges);
-        // The tint keeps the symbols underneath: blank the interior so
-        // the screen behind cannot bleed through the pad and gap rows.
-        // The content rows repaint over it below.
-        let blank = text.intersection(area).intersection(buf.area);
-        for y in blank.top()..blank.bottom() {
-            for x in blank.left()..blank.right() {
-                buf[(x, y)].set_symbol(" ");
+        if boxed {
+            let blank = text.intersection(area).intersection(buf.area);
+            for y in blank.top()..blank.bottom() {
+                for x in blank.left()..blank.right() {
+                    buf[(x, y)].set_symbol(" ");
+                }
+            }
+        } else {
+            crate::surface::draw_slab(buf, text, Role::Surface, None, edges);
+            // The tint keeps the symbols underneath: blank the interior so
+            // the screen behind cannot bleed through the pad and gap rows.
+            // The content rows repaint over it below.
+            let blank = text.intersection(area).intersection(buf.area);
+            for y in blank.top()..blank.bottom() {
+                for x in blank.left()..blank.right() {
+                    buf[(x, y)].set_symbol(" ");
+                }
             }
         }
     }
@@ -471,6 +485,17 @@ pub(crate) fn draw(
                 targets.push(Target { id: *id, rect });
             }
         }
+    }
+    // Without colour the box draws after the interior: ┌─┐ and └─┘ on
+    // the kept edge rows and │ on the slab's columns, dim. The content
+    // keeps its cells; only the outermost pad column takes the sides.
+    if boxed && text_bottom > text_top {
+        crate::surface::draw_box(
+            buf,
+            area,
+            Rect::new(slab_x, text_top, slab_w, text_bottom - text_top),
+            edges,
+        );
     }
     slab.intersection(area)
 }

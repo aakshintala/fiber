@@ -349,47 +349,46 @@ impl Theme {
         ],
     };
 
-    /// The built-in light theme. Roles with no ruled light value take
-    /// the dark value until ruled (see #1634's case).
+    /// The built-in light theme (`docs/tui.md`, "Themes").
     pub(crate) const LIGHT: Theme = Theme {
         colours: [
-            Shade::Rgb((0x38, 0x3a, 0x42)), // text
-            Shade::Rgb((0xa0, 0xa1, 0xa7)), // muted
-            Shade::Rgb((0x01, 0x84, 0xbc)), // accent
-            Shade::Rgb((0x40, 0x78, 0xf2)), // heading
-            Shade::Rgb((0x50, 0xa1, 0x4f)), // success
-            Shade::Rgb((0xc1, 0x84, 0x01)), // warning
-            Shade::Rgb((0xe4, 0x56, 0x49)), // error
-            Shade::Rgb((0xcc, 0x66, 0x00)), // attention
-            Shade::Rgb((0x50, 0xa1, 0x4f)), // added
-            Shade::Rgb((0xe4, 0x56, 0x49)), // removed
-            Shade::Rgb((0x38, 0x3a, 0x42)), // code_text
-            Shade::Rgb((0xa6, 0x26, 0xa4)), // keyword
-            Shade::Rgb((0x50, 0xa1, 0x4f)), // string
-            Shade::Rgb((0xa0, 0xa1, 0xa7)), // comment
-            Shade::Rgb((0x98, 0x68, 0x01)), // number
-            Shade::Rgb((0x40, 0x78, 0xf2)), // function
-            Shade::Rgb((0xc1, 0x84, 0x01)), // type
-            Shade::Rgb((0xe4, 0x56, 0x49)), // constant
-            Shade::Rgb((0x01, 0x84, 0xbc)), // operator
-            Shade::Rgb((0x7d, 0xd3, 0xfc)), // info
-            Shade::Rgb((0xb3, 0x9d, 0xdb)), // secondary
-            Shade::Rgb((0x3a, 0x3a, 0x4a)), // rule
-            Shade::Rgb((0x80, 0x80, 0x80)), // scroll
-            Shade::Rgb((0xfa, 0xfa, 0xfa)), // background
-            Shade::Rgb((0x0c, 0x0c, 0x11)), // panel
-            Shade::Rgb((0xf0, 0xf0, 0xf1)), // surface
-            Shade::Rgb((0xe5, 0xe5, 0xe6)), // surface_raised
-            Shade::Rgb((0x10, 0x10, 0x17)), // turn
-            Shade::Rgb((0xe2, 0xea, 0xf6)), // prompt
-            Shade::Rgb((0xea, 0xea, 0xeb)), // code
-            Shade::Rgb((0x1f, 0x1a, 0x2e)), // handoff
-            Shade::Rgb((0xe0, 0xe8, 0xf8)), // approval
-            Shade::Rgb((0xfc, 0xde, 0xde)), // alert
-            Shade::Rgb((0xdb, 0xdb, 0xde)), // hover
-            Shade::Rgb((0xd2, 0xde, 0xf5)), // selection
-            Shade::Rgb((0xfa, 0xec, 0xb4)), // match
-            Shade::Rgb((0xf5, 0xd7, 0x78)), // match_current
+            Shade::Rgb((0x1f, 0x23, 0x28)), // text
+            Shade::Dim,                     // muted
+            Shade::Rgb((0x09, 0x69, 0xda)), // accent
+            Shade::Rgb((0xbc, 0x4c, 0x00)), // heading
+            Shade::Rgb((0x09, 0x69, 0xda)), // success
+            Shade::Rgb((0xbc, 0x4c, 0x00)), // warning
+            Shade::Rgb((0xcf, 0x22, 0x2e)), // error
+            Shade::Rgb((0xbc, 0x4c, 0x00)), // attention
+            Shade::Rgb((0x1a, 0x7f, 0x37)), // added
+            Shade::Rgb((0xcf, 0x22, 0x2e)), // removed
+            Shade::Rgb((0x1f, 0x23, 0x28)), // code_text
+            Shade::Rgb((0x09, 0x69, 0xda)), // keyword
+            Shade::Rgb((0xa3, 0x15, 0x15)), // string
+            Shade::Rgb((0x6e, 0x77, 0x81)), // comment
+            Shade::Rgb((0x11, 0x63, 0x29)), // number
+            Shade::Rgb((0x0b, 0x72, 0x85)), // function
+            Shade::Rgb((0x0b, 0x72, 0x85)), // type
+            Shade::Rgb((0x0b, 0x72, 0x85)), // constant
+            Shade::Rgb((0x1f, 0x23, 0x28)), // operator
+            Shade::Rgb((0x0b, 0x72, 0x85)), // info
+            Shade::Rgb((0x6f, 0x42, 0xc1)), // secondary
+            Shade::Rgb((0xd0, 0xd7, 0xde)), // rule
+            Shade::Rgb((0xb0, 0xb7, 0xbf)), // scroll
+            Shade::Rgb((0xff, 0xff, 0xff)), // background
+            Shade::Rgb((0xf6, 0xf8, 0xfa)), // panel
+            Shade::Rgb((0xea, 0xee, 0xf2)), // surface
+            Shade::Rgb((0xd0, 0xd7, 0xde)), // surface_raised
+            Shade::Rgb((0xf3, 0xf5, 0xf8)), // turn
+            Shade::Rgb((0xdd, 0xe3, 0xea)), // prompt
+            Shade::Rgb((0xef, 0xf1, 0xf4)), // code
+            Shade::Rgb((0xef, 0xe9, 0xf9)), // handoff
+            Shade::Rgb((0xea, 0xee, 0xf2)), // approval
+            Shade::Rgb((0xff, 0xd7, 0xd9)), // alert
+            Shade::Rgb((0xe3, 0xe7, 0xec)), // hover
+            Shade::Rgb((0xb6, 0xd7, 0xff)), // selection
+            Shade::Rgb((0xff, 0xf1, 0xa8)), // match
+            Shade::Rgb((0xff, 0xd6, 0x7e)), // match_current
         ],
     };
 

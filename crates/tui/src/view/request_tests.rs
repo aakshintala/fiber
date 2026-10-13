@@ -536,6 +536,22 @@ fn surfaced(panel: &Panel, height: u16) -> (String, Buffer, Vec<Target>) {
 }
 
 #[test]
+fn edges_draw_only_where_they_fit() {
+    // Two text rows in three rows: no room for the edges, so both edge
+    // rows stay blank (`docs/tui.md`, "Look").
+    let (_, buf, _) = surfaced(&approval(&["line one", "line two"], false), 3);
+    for x in 0..40 {
+        assert_eq!(buf[(x, 0)].symbol(), " ", "top edge at {x}");
+    }
+    // One row more: the edges fit, so both draw.
+    let (_, edged, _) = surfaced(&approval(&["line one", "line two"], false), 4);
+    for x in 0..40 {
+        assert_eq!(edged[(x, 0)].symbol(), "▄", "top edge at {x}");
+        assert_eq!(edged[(x, 3)].symbol(), "▀", "bottom edge at {x}");
+    }
+}
+
+#[test]
 fn approval_with_stripe_and_edges() {
     let (shown, _, _) = surfaced(
         &approval(
@@ -749,4 +765,119 @@ fn clicking_chat_about_this_declines_every_one_question_kind() {
             "{kind}"
         );
     }
+}
+
+/// The NO_COLOR look: every role paints to the terminal's default.
+fn no_color_look() -> crate::look::Look {
+    let (look, notice) = crate::look::Look::new(crate::look::ThemeSetting::Dark, &|name: &str| {
+        (name == "NO_COLOR").then(|| "1".to_owned())
+    });
+    assert_eq!(notice, None);
+    look
+}
+
+/// `panel` drawn and painted without colour in a 40-wide area, with its
+/// targets.
+fn no_color_surfaced(panel: &Panel, height: u16) -> (Buffer, Vec<Target>) {
+    crate::surface::init(&|name: &str| (name == "NO_COLOR").then(|| "1".to_owned()));
+    let area = Rect::new(0, 0, 40, height);
+    let mut buf = Buffer::empty(area);
+    let mut targets = Vec::new();
+    draw(panel, area, area.bottom(), &mut buf, &mut targets);
+    no_color_look().paint(&mut buf);
+    (buf, targets)
+}
+
+#[test]
+fn no_color_boxes_an_approval_and_an_escalation() {
+    use ratatui::style::{Color, Modifier};
+    for alert in [false, true] {
+        let (buf, _) = no_color_surfaced(
+            &approval(
+                &["approve shell echo hi?", "allow once · for this session"],
+                alert,
+            ),
+            12,
+        );
+        // Two text rows with a box above and below, and no stripe cell.
+        for y in [9, 10] {
+            for x in 0..40 {
+                assert_eq!(
+                    (buf[(x, y)].fg, buf[(x, y)].bg),
+                    (Color::Reset, Color::Reset),
+                    "({x}, {y})"
+                );
+            }
+            assert_eq!(buf[(0, y)].symbol(), "│", "({y})");
+            assert_eq!(buf[(39, y)].symbol(), "│", "({y})");
+            assert_eq!(buf[(0, y)].modifier, Modifier::DIM);
+        }
+        let first: String = (1..39).map(|x| buf[(x, 9)].symbol()).collect();
+        assert!(first.contains("approve shell echo hi?"), "{first:?}");
+        for (y, left, right) in [(8, "┌", "┐"), (11, "└", "┘")] {
+            for x in 0..40 {
+                let cell = &buf[(x, y)];
+                assert_eq!(
+                    cell.symbol(),
+                    if x == 0 {
+                        left
+                    } else if x == 39 {
+                        right
+                    } else {
+                        "─"
+                    }
+                );
+                assert_eq!(cell.modifier, Modifier::DIM, "({x}, {y})");
+            }
+        }
+        for cell in &buf.content {
+            assert_ne!(cell.symbol(), "▌");
+        }
+    }
+}
+
+#[test]
+fn no_color_spots_and_the_caret_keep_clear_of_the_borders() {
+    let mut panel = numbered(2, true);
+    panel.spots = vec![PanelSpot {
+        line: 0,
+        cols: Some((1, 4)),
+        spot: Spot::Chat,
+    }];
+    panel.caret = Some((0, 5));
+    crate::surface::init(&|name: &str| (name == "NO_COLOR").then(|| "1".to_owned()));
+    let area = Rect::new(0, 0, 40, 12);
+    let mut buf = Buffer::empty(area);
+    let mut targets = Vec::new();
+    draw(&panel, area, area.bottom(), &mut buf, &mut targets);
+    // One column in, past the box's left side; the right column stays
+    // reserved.
+    assert_eq!(rect_of(&targets, Spot::Chat), Some(Rect::new(2, 9, 3, 1)));
+    assert_eq!(
+        super::caret(&panel, area, area.bottom()),
+        Some(ratatui::layout::Position::new(6, 9))
+    );
+    no_color_look().paint(&mut buf);
+    assert_eq!(buf[(0, 9)].symbol(), "│");
+    assert_eq!(buf[(39, 9)].symbol(), "│");
+}
+
+#[test]
+fn no_color_suppresses_box_edges_without_room() {
+    // Two text rows in two rows: no room for the edges, so no corners
+    // draw, but the sides still box the text.
+    let (buf, _) = no_color_surfaced(&approval(&["line one", "line two"], false), 2);
+    for y in 0..=1 {
+        assert_eq!(buf[(0, y)].symbol(), "│");
+        assert_eq!(buf[(39, y)].symbol(), "│");
+    }
+    for cell in &buf.content {
+        assert!(
+            !matches!(cell.symbol(), "┌" | "┐" | "└" | "┘"),
+            "{}",
+            cell.symbol()
+        );
+    }
+    let first: String = (1..39).map(|x| buf[(x, 0)].symbol()).collect();
+    assert!(first.contains("line one"), "{first:?}");
 }

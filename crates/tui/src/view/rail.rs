@@ -177,10 +177,18 @@ pub(crate) fn rows(app: &App, width: u16) -> Vec<RailRow> {
 }
 
 /// A card's six rows: its top edge, its four text rows on its tint with
-/// the stripe in its state's colour, and its bottom edge.
+/// the stripe in its state's colour, and its bottom edge. Without
+/// colour the card is a thin box: its text room is two columns narrower,
+/// each body row sits between │ sides, and the edges are ┌─┐ and └─┘
+/// (`docs/tui.md`, "Look").
 fn card(app: &App, row: &Row, width: u16, out: &mut Vec<RailRow>) {
     let card_w = usize::from(width.saturating_sub(1));
-    let text = card_w.saturating_sub(3);
+    let room = card_w.saturating_sub(3);
+    let text = if crate::surface::box_fit(width) {
+        room.saturating_sub(2)
+    } else {
+        room
+    };
     let tint = if app.session() == Some(&row.id) {
         Role::SurfaceRaised
     } else {
@@ -205,14 +213,34 @@ fn card(app: &App, row: &Row, width: u16, out: &mut Vec<RailRow>) {
         start: Some(row.key),
     });
     let mut spots = Vec::new();
-    // The ✕ target follows the card's, so a click on it dismisses.
+    // The ✕ target follows the card's, so a click on it dismisses. It
+    // moves with the narrowed body: one column past the text room.
     if row.left == Some(Left::Crashed) {
         let last = u16::try_from(text.saturating_add(1)).unwrap_or(u16::MAX);
         spots.push((last, 1, 1, Spot::Dismiss(row.key)));
     }
+    // Without colour the stripe's column is the box's left side: each
+    // body row opens with │, keeps its gap column, and pads to the
+    // interior the right side closes (`docs/tui.md`, "Look").
+    let box_body = crate::surface::box_fit(width);
     for spans in texts {
-        let mut line = vec![stripe.clone(), Span::raw(" ")];
+        let mut line = if box_body {
+            vec![
+                Span::styled("│", Style::new().add_modifier(Modifier::DIM)),
+                Span::raw(" "),
+            ]
+        } else {
+            vec![stripe.clone(), Span::raw(" ")]
+        };
         line.extend(spans);
+        if box_body {
+            // Pad the content, sides excluded, to the interior the
+            // right side closes.
+            let room = card_w.saturating_sub(1);
+            let used: usize = line.iter().map(Span::width).sum();
+            line.push(Span::raw(" ".repeat(room.saturating_sub(used))));
+            line.push(Span::styled("│", Style::new().add_modifier(Modifier::DIM)));
+        }
         out.push(RailRow {
             line: Line::from(line),
             tint: Some(tint),
@@ -390,6 +418,8 @@ pub(crate) fn draw(
 ) {
     let card_w = area.width.saturating_sub(1);
     let rows = rows(app, area.width);
+    // Without colour the rows already carry the box: no tint is laid,
+    // so every cell keeps the terminal's default colours.
     // A screen that grew never shows a gap: a scroll past the end clamps
     // when drawn.
     let height = usize::from(area.height);
@@ -434,7 +464,9 @@ pub(crate) fn draw(
         .skip(skip)
         .zip(area.y..area.bottom())
     {
-        if let Some(tint) = row.tint {
+        if let Some(tint) = row.tint
+            && !crate::surface::box_fit(area.width)
+        {
             buf.set_style(
                 Rect::new(area.x, y, card_w, 1),
                 Style::new().bg(tint.color()),

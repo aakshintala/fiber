@@ -462,3 +462,225 @@ fn the_cursor_column_counts_the_stripe_and_gap() {
     let narrow = typed(2, 12, "hi");
     assert_eq!(super::cursor_row(&narrow, 2, 11), (2, 2));
 }
+
+/// The NO_COLOR look: every role paints to the terminal's default.
+fn no_color_look() -> crate::look::Look {
+    let (look, notice) = crate::look::Look::new(crate::look::ThemeSetting::Dark, &|name: &str| {
+        (name == "NO_COLOR").then(|| "1".to_owned())
+    });
+    assert_eq!(notice, None);
+    look
+}
+
+/// The input box drawn and painted without colour, with its targets and
+/// the box's top-edge row.
+fn no_color_drawn(app: &App, area: Rect) -> (Buffer, Vec<crate::mouse::Target>, u16) {
+    crate::surface::init(&|name: &str| (name == "NO_COLOR").then(|| "1".to_owned()));
+    let mut buf = Buffer::empty(area);
+    let mut bottom = area.bottom();
+    let mut targets = Vec::new();
+    let top = draw(app, area, &mut bottom, &mut buf, &mut targets);
+    no_color_look().paint(&mut buf);
+    (buf, targets, top)
+}
+
+/// An app `width` by `height` with two queued steering rows.
+fn queued(width: u16, height: u16) -> App {
+    let mut app = App::new(PathBuf::from("/w"));
+    app.set_size(width, height);
+    app.attach(contract::SessionId("s_aaaaaaaaaaaaaaaa".to_owned()));
+    app.on_line(session_line(
+        "s_aaaaaaaaaaaaaaaa",
+        "turn_started",
+        serde_json::json!({"input": [{
+            "type": "message",
+            "source": "driver",
+            "content": [{"type": "text", "text": "hi"}],
+        }]}),
+    ));
+    app.on_line(session_line(
+        "s_aaaaaaaaaaaaaaaa",
+        "steering_queue",
+        serde_json::json!({"messages": [
+            {"content": [{"type": "text", "text": "use the parser"}], "source": "driver", "command_id": "c_1"},
+            {"content": [{"type": "text", "text": "and test it"}], "source": "driver"},
+        ]}),
+    ));
+    app
+}
+
+#[test]
+fn no_color_draws_the_editing_hint_inside_the_sides() {
+    // While a queued message is edited the hint ends at the box's
+    // right end, dim, never covering the draft, the caret or the
+    // borders (`docs/tui.md`, "Steering").
+    let hint = "editing a queued message · Enter amends · ⌥X drops · Esc stops";
+    let mut app = queued(80, 12);
+    app.select_steering(0);
+    // One step left: the caret leaves the hint's first cell free.
+    app.on_edit(crate::keys::Edit::Left);
+    let area = Rect::new(0, 0, 80, 12);
+    let (buf, _, _) = no_color_drawn(&app, area);
+    let y = (0..12)
+        .find(|y| {
+            (0..80)
+                .map(|x| buf[(x, *y)].symbol().to_owned())
+                .collect::<String>()
+                .contains("Esc stops")
+        })
+        .expect("the hint row");
+    // Right-aligned, ending at the last interior column.
+    let start = 79 - u16::try_from(crate::format::width(hint)).expect("hint width");
+    let mut x = start;
+    for ch in hint.chars() {
+        let wide = u16::try_from(crate::format::width(&ch.to_string())).expect("char width");
+        assert_eq!(buf[(x, y)].symbol(), ch.to_string().as_str(), "cell {x}");
+        x = x.saturating_add(wide.max(1));
+    }
+    assert_eq!(x, 79);
+    // The draft, the caret and both sides keep their cells.
+    assert_eq!(buf[(1, y)].symbol(), "›");
+    assert_eq!(buf[(16, y)].symbol(), "█");
+    assert_eq!(buf[(0, y)].symbol(), "│");
+    assert_eq!(buf[(79, y)].symbol(), "│");
+}
+
+#[test]
+fn no_color_clips_the_editing_hint_before_the_side() {
+    // Eight columns with the draft cleared: the hint starts at the
+    // first free cell and never reaches the box's right side, which
+    // keeps its column (`docs/tui.md`, "Steering").
+    let mut app = queued(8, 12);
+    app.select_steering(0);
+    let now = fakes::clock::FakeClock::new().now();
+    for _ in 0..14 {
+        app.on_key(Key::Backspace, now);
+    }
+    assert_eq!(app.input().expand(), "");
+    let area = Rect::new(0, 0, 8, 12);
+    let (buf, _, _) = no_color_drawn(&app, area);
+    let y = (0..12)
+        .find(|y| buf[(1, *y)].symbol() == "›")
+        .expect("the text row");
+    // Past the prompt: the caret keeps its cell, the hint takes the
+    // free cells after it, and the side keeps its column.
+    let row: String = (0..8).map(|x| buf[(x, y)].symbol().to_owned()).collect();
+    assert_eq!(row, "│› █ing│");
+    assert_eq!(buf[(7, y)].symbol(), "│");
+    assert_eq!(buf[(0, y)].symbol(), "│");
+}
+
+#[test]
+fn no_color_boxes_the_input_box_around_the_draft() {
+    use ratatui::style::{Color, Modifier};
+    let app = typed(40, 6, "hi");
+    let area = Rect::new(0, 0, 40, 6);
+    let (buf, _, _) = no_color_drawn(&app, area);
+    // One draft row: the box is three rows at the bottom, as with
+    // colour, but thin.
+    for x in 0..40 {
+        let top = &buf[(x, 3)];
+        assert_eq!(
+            top.symbol(),
+            if x == 0 {
+                "┌"
+            } else if x == 39 {
+                "┐"
+            } else {
+                "─"
+            }
+        );
+        assert_eq!((top.fg, top.bg), (Color::Reset, Color::Reset));
+        assert_eq!(top.modifier, Modifier::DIM);
+        let bottom = &buf[(x, 5)];
+        assert_eq!(
+            bottom.symbol(),
+            if x == 0 {
+                "└"
+            } else if x == 39 {
+                "┘"
+            } else {
+                "─"
+            }
+        );
+        assert_eq!(bottom.modifier, Modifier::DIM);
+    }
+    // The text row sits between │ sides: the prompt and draft one
+    // column in, the final text character surviving before the side.
+    assert_eq!(buf[(0, 4)].symbol(), "│");
+    assert_eq!(buf[(39, 4)].symbol(), "│");
+    assert_eq!(buf[(1, 4)].symbol(), "›");
+    assert_eq!(buf[(2, 4)].symbol(), " ");
+    assert_eq!(buf[(3, 4)].symbol(), "h");
+    assert_eq!(buf[(4, 4)].symbol(), "i");
+    // The drawn cursor sits on the interior's last draft cell, never on
+    // a border.
+    assert_eq!(buf[(5, 4)].symbol(), "█");
+    for y in 3..=5 {
+        for x in 0..40 {
+            assert_eq!(
+                (buf[(x, y)].fg, buf[(x, y)].bg),
+                (Color::Reset, Color::Reset),
+                "({x}, {y})"
+            );
+        }
+    }
+}
+
+#[test]
+fn no_color_wraps_a_full_width_draft_inside_the_sides() {
+    // A draft filling the interior but one: the caret takes the last
+    // interior cell, and the side keeps its column. The prompt is the
+    // renderer's own first two cells.
+    let app = typed(10, 6, "12345");
+    let area = Rect::new(0, 0, 10, 6);
+    let (buf, _, _) = no_color_drawn(&app, area);
+    assert_eq!(buf[(0, 4)].symbol(), "│");
+    assert_eq!(buf[(9, 4)].symbol(), "│");
+    assert_eq!(buf[(1, 4)].symbol(), "›");
+    assert_eq!(buf[(7, 4)].symbol(), "5");
+    assert_eq!(buf[(8, 4)].symbol(), "█");
+    // A draft past the interior wraps at the boxed width: the overflow
+    // row draws above, between the same sides.
+    let long = typed(10, 6, "123456");
+    let (wide, _, _) = no_color_drawn(&long, area);
+    let first: String = (0..10).map(|x| wide[(x, 3)].symbol()).collect();
+    let second: String = (0..10).map(|x| wide[(x, 4)].symbol()).collect();
+    assert_eq!(first, "│› 123456│");
+    assert_eq!(second, "│  █     │");
+}
+
+#[test]
+fn no_color_token_targets_keep_clear_of_the_borders() {
+    use crate::keys::Edit;
+    use crate::mouse::TargetId;
+
+    let mut app = typed(40, 6, "see ");
+    let pasted: Vec<String> = (1..=12).map(|n| format!("line {n}")).collect();
+    app.on_edit(Edit::Paste(pasted.join("\n")));
+    let area = Rect::new(5, 0, 40, 6);
+    let (buf, targets, _) = no_color_drawn(&app, area);
+    let token = targets
+        .iter()
+        .find(|target| matches!(target.id, TargetId::Token(1)))
+        .expect("a token target");
+    // Past the prompt, one column in from the colour columns: the text
+    // rect starts at the box's left side plus one.
+    assert_eq!(token.rect.x, 5 + 1 + 6);
+    assert!(token.rect.right() < 5 + 40, "{token:?}");
+    // The final text character survives beside the right side.
+    let y = token.rect.y;
+    assert_eq!(buf[(5 + 40 - 1, y)].symbol(), "│");
+}
+
+#[test]
+fn no_color_cursor_column_counts_one_side() {
+    crate::surface::init(&|name: &str| (name == "NO_COLOR").then(|| "1".to_owned()));
+    let app = typed(60, 12, "hi");
+    // The text sits one column in, past the box's left side.
+    assert_eq!(super::cursor_row(&app, 60, 11), (2, 5));
+    // Too narrow for two sides plus text: the text-first fallback keeps
+    // the colour columns.
+    let narrow = typed(2, 12, "hi");
+    assert_eq!(super::cursor_row(&narrow, 2, 11), (2, 2));
+}

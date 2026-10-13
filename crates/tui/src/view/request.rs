@@ -75,6 +75,9 @@ impl Layout {
     /// Line `line`'s rows on screen and how many of its own rows sit above
     /// them, scrolled off; `None` when none of its rows shows. The rect
     /// sits on the inset: past the stripe and the gap where they fit.
+    /// Without colour the stripe's column is the box's left side and the
+    /// right column is reserved, so the text sits one column in
+    /// (`docs/tui.md`, "Look").
     fn place(&self, line: usize, area: Rect) -> Option<(Rect, usize)> {
         let start: usize = self.rows.iter().take(line).sum();
         let next = start.saturating_add(*self.rows.get(line)?);
@@ -88,7 +91,11 @@ impl Layout {
             .top
             .saturating_add(to_u16(first.saturating_sub(self.skip)));
         let width = surface::inset(area.width);
-        let x = area.x.saturating_add(area.width.saturating_sub(width));
+        let x = if surface::box_fit(area.width) {
+            area.x.saturating_add(1)
+        } else {
+            area.x.saturating_add(area.width.saturating_sub(width))
+        };
         let rect = Rect::new(x, y, width, to_u16(count));
         Some((rect, first.saturating_sub(start)))
     }
@@ -142,28 +149,44 @@ pub(super) fn draw(
         Role::Approval
     };
     let rect = Rect::new(area.x, layout.top, area.width, to_u16(layout.shown));
-    buf.set_style(
-        rect,
-        if panel.alert {
-            ALERT_TINT
-        } else {
-            APPROVAL_TINT
-        },
-    );
-    // The stripe marks an approval; a form's stripe cell keeps the tint
-    // (`docs/tui.md`, "Look"). Too narrow for a stripe, there is none.
-    if panel.cursor.is_none() && area.width >= 3 {
-        surface::draw_stripe(
+    // Without colour the panel is a thin box: ┌─┐ and └─┘ on the edge
+    // rows and │ on the rect's columns, dim, with no tint and no stripe
+    // (`docs/tui.md`, "Look"). The text keeps the narrowed rect the
+    // layout places, so spots and the caret stay off the borders.
+    if surface::box_fit(area.width) {
+        surface::draw_box(
             buf,
+            area,
+            rect,
+            surface::Edges {
+                top: fits,
+                bottom: fits,
+            },
+        );
+    } else {
+        buf.set_style(
             rect,
             if panel.alert {
-                Role::Error
+                ALERT_TINT
             } else {
-                Role::Attention
+                APPROVAL_TINT
             },
-            tint,
-            false,
         );
+        // The stripe marks an approval; a form's stripe cell keeps the tint
+        // (`docs/tui.md`, "Look"). Too narrow for a stripe, there is none.
+        if panel.cursor.is_none() && area.width >= 3 {
+            surface::draw_stripe(
+                buf,
+                rect,
+                if panel.alert {
+                    Role::Error
+                } else {
+                    Role::Attention
+                },
+                tint,
+                false,
+            );
+        }
     }
     for (line, text) in panel.lines.iter().enumerate() {
         if let Some((rect, skip)) = layout.place(line, area) {
@@ -172,7 +195,7 @@ pub(super) fn draw(
                 .render(rect, buf);
         }
     }
-    if fits {
+    if fits && !surface::box_fit(area.width) {
         surface::draw_edges(buf, rect, tint);
     }
     for spot in &panel.spots {

@@ -30,7 +30,7 @@ pub(crate) fn rows(text: &str, columns: u16, out: &mut Rows) {
     let block = (widest.saturating_add(3)).min(bubble);
     out.push_text(
         (
-            surface::edge_row(block, Role::Prompt, true).right_aligned(),
+            surface::half_edge_row(block, Role::Prompt, true).right_aligned(),
             None,
         ),
         RowText {
@@ -78,7 +78,7 @@ pub(crate) fn rows(text: &str, columns: u16, out: &mut Rows) {
     }
     out.push_text(
         (
-            surface::edge_row(block, Role::Prompt, false).right_aligned(),
+            surface::half_edge_row(block, Role::Prompt, false).right_aligned(),
             None,
         ),
         RowText {
@@ -96,7 +96,7 @@ fn narrow(text: &str, columns: u16, out: &mut Rows) {
     let max = usize::from(columns);
     out.push_text(
         (
-            surface::edge_row(max, Role::Prompt, true).right_aligned(),
+            surface::half_edge_row(max, Role::Prompt, true).right_aligned(),
             None,
         ),
         RowText {
@@ -121,7 +121,7 @@ fn narrow(text: &str, columns: u16, out: &mut Rows) {
     }
     out.push_text(
         (
-            surface::edge_row(max, Role::Prompt, false).right_aligned(),
+            surface::half_edge_row(max, Role::Prompt, false).right_aligned(),
             None,
         ),
         RowText {

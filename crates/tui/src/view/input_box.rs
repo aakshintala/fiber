@@ -52,26 +52,41 @@ pub(super) fn draw(
     }
     // Above the box's top edge: the box's own top row, whatever drew it.
     let box_top = *bottom;
-    // While a queued message is edited the stripe is in `attention`
-    // (`docs/tui.md`, "Steering").
-    let stripe = if app.steering_selected().is_some() {
-        Role::Attention
+    // Without colour the box is thin: ┌─┐ and └─┘ on the edge rows and
+    // │ on the slab's columns, dim, with no tint and no stripe: the
+    // stripe's column is the box's left side (`docs/tui.md`, "Look").
+    if surface::box_fit(area.width) {
+        surface::draw_box(
+            buf,
+            area,
+            slab,
+            surface::Edges {
+                top: top_edge,
+                bottom: bottom_edge,
+            },
+        );
     } else {
-        Role::Accent
-    };
-    surface::draw_slab(
-        buf,
-        slab,
-        Role::Surface,
-        Some(surface::Stripe {
-            colour: stripe,
-            right: false,
-        }),
-        surface::Edges {
-            top: top_edge,
-            bottom: bottom_edge,
-        },
-    );
+        // While a queued message is edited the stripe is in `attention`
+        // (`docs/tui.md`, "Steering").
+        let stripe = if app.steering_selected().is_some() {
+            Role::Attention
+        } else {
+            Role::Accent
+        };
+        surface::draw_slab(
+            buf,
+            slab,
+            Role::Surface,
+            Some(surface::Stripe {
+                colour: stripe,
+                right: false,
+            }),
+            surface::Edges {
+                top: top_edge,
+                bottom: bottom_edge,
+            },
+        );
+    }
     if app.steering_selected().is_some() {
         draw_editing_hint(area, below, &rows, (cursor_row, cursor_col), buf);
     }
@@ -102,15 +117,27 @@ pub(super) fn draw(
 }
 
 /// The columns the draft's rows take: past the stripe and gap where the
-/// box has them (`docs/tui.md`, "Look", "The input box").
+/// box has them (`docs/tui.md`, "Look", "The input box"). Without
+/// colour the stripe's column is the box's left side and the right column
+/// is reserved, so the text sits one column in, two narrower
+/// (`docs/tui.md`, "Look").
 fn text_area(area: Rect) -> Rect {
-    let width = surface::inset(area.width);
-    Rect::new(
-        area.x.saturating_add(area.width.saturating_sub(width)),
-        area.y,
-        width,
-        area.height,
-    )
+    if surface::box_fit(area.width) {
+        Rect::new(
+            area.x.saturating_add(1),
+            area.y,
+            area.width.saturating_sub(2),
+            area.height,
+        )
+    } else {
+        let width = surface::inset(area.width);
+        Rect::new(
+            area.x.saturating_add(area.width.saturating_sub(width)),
+            area.y,
+            width,
+            area.height,
+        )
+    }
 }
 
 /// Puts one draft row on the row above `bottom` at the text columns,
@@ -151,7 +178,8 @@ fn cursor_shown(app: &App) -> bool {
 
 /// The caret's cell in `area`: the cursor's column past the stripe and
 /// gap, on the cursor's shown row above `below` (`docs/tui.md",
-/// "The input box").
+/// "The input box"). Without colour the text sits one column in, past
+/// the box's left side.
 fn caret_cell(area: Rect, below: u16, rows: &[String], row: usize, col: u16) -> (u16, u16) {
     let text = text_area(area);
     (
@@ -201,16 +229,24 @@ fn draw_editing_hint(
     let text = text_area(area);
     let end = text.x.saturating_add(to_u16(format::width(last)));
     let caret = caret_cell(area, below, rows, cursor_row, cursor_col);
+    // Without colour the right column is the box's side: the hint keeps
+    // inside the interior, never covering the border.
+    let right = if surface::box_fit(area.width) {
+        area.right().saturating_sub(1)
+    } else {
+        area.right()
+    };
     // The hint is a fixed literal of one-cell characters, drawn
     // right-aligned only over free cells: past the draft's text, never
     // over the caret (`docs/tui.md`, "Steering"). Cells past the box
     // clip in the buffer write.
-    let mut x = area
-        .right()
-        .saturating_sub(to_u16(format::width(EDITING_HINT)));
+    let mut x = right.saturating_sub(to_u16(format::width(EDITING_HINT)));
+    // Without colour the hint keeps clear of the box's right side; with
+    // colour overlong hints still clip in the buffer write.
+    let boxed = surface::box_fit(area.width);
     for ch in EDITING_HINT.chars() {
         let wide = to_u16(format::width(&ch.to_string()));
-        if x >= end && (x, y) != caret {
+        if x >= end && (x, y) != caret && (!boxed || x < right) {
             buf.set_stringn(x, y, ch.to_string(), usize::from(wide), style(Role::Muted));
         }
         x = x.saturating_add(wide.max(1));
@@ -219,13 +255,19 @@ fn draw_editing_hint(
 /// The cursor's rows above the column's bottom and its column: the shown
 /// rows below the cursor's with the bottom edge below them, so the cursor
 /// sits in the same column as without edges, past the stripe and gap
-/// (`docs/tui.md`, "Look").
+/// (`docs/tui.md`, "Look"). Without colour the text sits one column in,
+/// past the box's left side.
 pub(super) fn cursor_row(app: &App, width: u16, room: usize) -> (u16, u16) {
     let (rows, _, row, col) = rows(app, width);
     let edges = usize::from(surface::edged(rows.len(), room) > rows.len());
+    let indent = if surface::box_fit(width) {
+        1
+    } else {
+        width.saturating_sub(surface::inset(width))
+    };
     (
         to_u16(rows.len().saturating_sub(row).saturating_add(edges)),
-        col.saturating_add(width.saturating_sub(surface::inset(width))),
+        col.saturating_add(indent),
     )
 }
 
