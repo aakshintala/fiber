@@ -1,7 +1,7 @@
 use serde_json::Value;
 
 use super::attach::per_mib;
-use super::results::{Results, field, metric, run_median, runs};
+use super::results::{Results, field, median, metric, run_median, runs};
 
 /// The threads every idle headless session runs with no client.
 const SESSION_THREADS: u64 = 5;
@@ -13,6 +13,11 @@ const FSYNCS_PER_TOOL_CALL: u64 = 2;
 /// The fsyncs are counted in one pass under strace, which slows the
 /// process, so it is never a timing or memory sample.
 const FSYNC_RUNS: usize = 1;
+/// The anon RSS the tenth turn may keep past the first, in KiB: 1 MiB.
+const TEN_TURN_GROWTH_KIB: u64 = 1024;
+/// The ten-turn pass's workload name, as the harness records it under
+/// `skipped` when the selection leaves it out.
+const TEN_TURNS_WORKLOAD: &str = "10 busy turns";
 /// The log bytes a turn may add per tool call beyond its content.
 const LOG_BYTES_PER_TOOL_CALL: u64 = 2048;
 /// The row whose ceiling the `web_fetch` conversion must fit in.
@@ -49,6 +54,13 @@ pub(super) enum Rule {
     /// One pass: `fdatasync` calls against the log's model requests and
     /// tool calls.
     Fsyncs(&'static str),
+    /// One pass per run: the median tenth-turn anon RSS growth over the
+    /// first's, across the harness's repeats. The row is not measured
+    /// until #2210, so nothing constructs this; the workload, its samples
+    /// and its judge stay so that ticket re-registers the row without
+    /// rebuilding them.
+    #[allow(dead_code, reason = "the row is not measured until #2210")]
+    RetainedGrowth(&'static str),
     /// Per run, the turn's log bytes against its content and tool calls.
     LogBytes(&'static str),
 }
@@ -168,15 +180,19 @@ pub(super) const MEASURED: &[(&str, Check)] = &[
     ),
 ];
 
+/// The ten-turn pass's Budget cell, here and in `docs/performance.md`.
+pub(super) const TEN_TURNS_BUDGET: &str =
+    "Session, memory kept after 10 busy turns, each followed by its handoff";
+/// What the summary says when the selection left the ten-turn pass out:
+/// the run is judged on the other rows (`docs/ci.md`, "Selection").
+pub(super) const TEN_TURNS_SKIP_NOTE: &str =
+    "skipped: the selection did not run the 10-busy-turns workload";
+
 /// Each row with no benchmark yet, by its Budget cell, and what owns it.
 pub(super) const NOT_MEASURED: &[(&str, &str)] = &[
     (
         "`session_list`, waiting for every running session's status",
         "#581 (`session_list`)",
-    ),
-    (
-        "Session, memory kept after 10 busy turns",
-        "#2188 (the status fold's tool names)",
     ),
     (
         "`paging` jig at scale 16, slowest re-count at a new width",
@@ -185,6 +201,10 @@ pub(super) const NOT_MEASURED: &[(&str, &str)] = &[
     (
         "`paging` jig at scale 16, a search of the whole session with no match",
         "#2187 (re-count and search growth)",
+    ),
+    (
+        TEN_TURNS_BUDGET,
+        "#2210 (~159 KiB/turn residue, re-registers the row)",
     ),
 ];
 
@@ -244,12 +264,31 @@ pub(super) enum Base {
     Ok(Results),
 }
 
+/// Whether the head file records the 10-busy-turns workload as skipped:
+/// a pull request the selection did not choose it for is judged on the
+/// other rows. `pub` for the summary, which names the skip even though
+/// the row does not gate (`docs/ci.md`, "Selection").
+pub(super) fn ten_turns_skipped(head: Option<&Results>) -> bool {
+    head.is_some_and(|results| {
+        results
+            .skipped
+            .iter()
+            .any(|name| name == TEN_TURNS_WORKLOAD)
+    })
+}
+
 /// The rule's failures, and what the head column shows.
 fn exact(rule: Rule, head: Option<&Results>) -> (Vec<String>, String) {
     match rule {
         Rule::IdleSwitches(ids) => per_thread(List::Switches, ids, head),
         Rule::Threads(id) => per_thread(List::Threads, &[id], head),
         Rule::Fsyncs(id) => per_entry(id, FSYNC_RUNS, head, fsyncs),
+        Rule::RetainedGrowth(id) => {
+            // `per_entry` fails on the missing metric first, so the count
+            // is only read when results exist.
+            let count = head.map(|results| results.runs_of(id)).unwrap_or(0);
+            retained_growth_median(id, count, head)
+        }
         Rule::LogBytes(id) => {
             // `per_entry` fails on the missing metric first, so the count
             // is only read when results exist.
@@ -386,6 +425,77 @@ fn log_bytes(entry: &Value, id: &str) -> Result<Entry, String> {
         shown.clone(),
         (bytes > limit).then(|| format!("{shown}, over {limit}")),
     ))
+}
+
+/// One pass's growth: its tenth turn's anon RSS minus its first's,
+/// floored at zero, since a smaller tenth turn is no leak.
+fn growth(entry: &Value, id: &str) -> Result<f64, String> {
+    let first = field(entry, id, "first")?;
+    let last = field(entry, id, "last")?;
+    Ok(last.saturating_sub(first) as f64)
+}
+
+/// The median growth over the run's ten-turn passes: at most 1 MiB.
+/// One leaking pass moves the median only when most passes leak.
+fn retained_growth_median(id: &str, count: usize, head: Option<&Results>) -> (Vec<String>, String) {
+    // The selection left the workload out: the run is judged on the
+    // other rows, and the comment's row says so.
+    if ten_turns_skipped(head) {
+        return (Vec::new(), TEN_TURNS_SKIP_NOTE.to_owned());
+    }
+    let entries = match metric(head, id).and_then(|value| {
+        value
+            .as_array()
+            .ok_or_else(|| format!("{id}: not an array"))
+    }) {
+        Ok(entries) => entries,
+        Err(e) => return (vec![e], String::new()),
+    };
+    if entries.len() != count {
+        return (
+            vec![format!("{id}: {} runs, expected {count}", entries.len())],
+            String::new(),
+        );
+    }
+    let mut growths = Vec::with_capacity(entries.len());
+    let mut failures = Vec::new();
+    for entry in entries {
+        match growth(entry, id) {
+            Ok(grown) => growths.push(grown),
+            Err(e) => failures.push(e),
+        }
+    }
+    if !failures.is_empty() {
+        return (failures, String::new());
+    }
+    let median_growth = match median(&growths, count) {
+        Ok(median_growth) => median_growth,
+        Err(e) => return (vec![format!("{id}: {e}")], String::new()),
+    };
+    let limit = TEN_TURN_GROWTH_KIB as f64;
+    // The first pass stands in for the shape; the verdict is the median.
+    // Unreachable when empty: no entries is a count failure above, and an
+    // empty median fails before this line.
+    let Some(first_entry) = entries.first() else {
+        return (vec![format!("{id}: no runs recorded")], String::new());
+    };
+    let (first, last) = match (
+        field(first_entry, id, "first"),
+        field(first_entry, id, "last"),
+    ) {
+        (Ok(first), Ok(last)) => (first, last),
+        (Err(e), _) | (_, Err(e)) => return (vec![e], String::new()),
+    };
+    let shown = format!(
+        "median growth {median_growth:.0} KiB over {count} runs; run 1: {last} KiB RssAnon after the tenth, {first} KiB after the first"
+    );
+    let broken = (median_growth > limit).then(|| {
+        format!("{OVER}{id}: median growth {median_growth:.0} KiB is over {limit:.0} KiB")
+    });
+    match broken {
+        Some(broken) => (vec![broken], shown),
+        None => (Vec::new(), shown),
+    }
 }
 
 /// The thread as `tid` or `tid (name)`, and its voluntary and involuntary
@@ -538,6 +648,10 @@ pub(super) fn judge(
             let (broken, observed) = exact(rule, head);
             measured.extend(broken);
             line.head = observed;
+            // A skipped ten-turns run leaves the row out of the verdict.
+            if matches!(rule, Rule::RetainedGrowth(_)) && ten_turns_skipped(head) {
+                line.result = "skipped";
+            }
         }
     }
     if !measured.is_empty() {

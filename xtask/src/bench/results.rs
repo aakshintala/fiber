@@ -26,6 +26,10 @@ pub(super) struct Results {
     pub(super) timing_runs: usize,
     /// Each recorded metric id's run count, when the file declares one.
     pub(super) metric_runs: BTreeMap<String, usize>,
+    /// The workloads the selection left out, by name: the judge reports
+    /// their rows as skipped instead of failing their missing metrics.
+    /// Files the harness wrote before the flag carry none.
+    pub(super) skipped: Vec<String>,
     /// The runner's CPU model; files the backstop wrote before it carry none.
     pub(super) cpu: Option<String>,
     /// The stripped binary's size in bytes; files written before it carry none.
@@ -73,6 +77,19 @@ pub(super) fn parse_results(text: &str) -> Result<Results, String> {
             metric_runs.insert(id.clone(), count(value, &format!("metric_runs.{id}"))?);
         }
     }
+    let skipped = match value.get("skipped") {
+        None => Vec::new(),
+        Some(skipped) => skipped
+            .as_array()
+            .ok_or("skipped is not an array")?
+            .iter()
+            .map(|name| {
+                name.as_str()
+                    .map(str::to_owned)
+                    .ok_or("a skipped workload is not a string")
+            })
+            .collect::<Result<_, _>>()?,
+    };
     let cpu = match value.get("cpu") {
         None => None,
         Some(Value::String(model)) => Some(model.clone()),
@@ -110,6 +127,7 @@ pub(super) fn parse_results(text: &str) -> Result<Results, String> {
         runs,
         timing_runs,
         metric_runs,
+        skipped,
         cpu,
         binary_size_bytes,
         metrics,

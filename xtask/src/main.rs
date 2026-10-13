@@ -145,6 +145,14 @@ fn run(args: &[String]) -> Result<bool, String> {
                 "shard_timeout={}",
                 select::shard_timeout_minutes(mutant_count)
             );
+            println!(
+                "ten_turns={}",
+                if select::ten_turns_runs(&flag(rest, "--event")?, &release_paths) {
+                    "true"
+                } else {
+                    "false"
+                }
+            );
             Ok(true)
         }
         "verdict" => {

@@ -19,8 +19,10 @@ use crate::idle::{Ctx, Samples, Workload};
 use crate::linux;
 use crate::run::{self, Proc, Session};
 
-/// The workloads every run of the harness repeats.
-pub(crate) const WORKLOADS: [Workload; 2] = [
+/// The workloads every run of the harness repeats: the busy turn, its
+/// web page, and the ten-turn pass whose median growth the judge gates.
+/// [`TEN_TURNS_NAME`] is the pass the selection can leave out.
+pub(crate) const WORKLOADS: [Workload; 3] = [
     Workload {
         name: "busy turn",
         timing: false,
@@ -31,10 +33,19 @@ pub(crate) const WORKLOADS: [Workload; 2] = [
         timing: false,
         run: web_fetch,
     },
+    Workload {
+        name: TEN_TURNS_NAME,
+        timing: false,
+        run: ten_turns,
+    },
 ];
 
-/// The workloads that run once: strace slows the process it traces, so its
-/// pass is never a timing or memory sample.
+/// The ten-turn pass's workload name: what `--skip-ten-turns` leaves out
+/// and what the results file records under `skipped` when it does.
+pub(crate) const TEN_TURNS_NAME: &str = "10 busy turns";
+
+/// The workload that runs once: strace slows the process it traces, so
+/// its pass is never a timing or memory sample.
 pub(crate) const ONCE: [Workload; 1] = [Workload {
     name: "fsyncs",
     timing: false,
@@ -50,6 +61,10 @@ pub(crate) const TURN: Duration = Duration::from_secs(600);
 
 /// The p99 of tool calls per user turn (`docs/performance.md`, "Budgets").
 const TOOL_CALLS: usize = 429;
+
+/// The turns one pass of the 10-turn run holds in one session: enough for
+/// a per-turn leak to show past the 1 MiB the row allows.
+pub(crate) const TEN_TURNS: usize = 10;
 
 /// The handoff trigger: `handoff.tokens`' default of 400,000 comes before
 /// 0.7 of the fake model's 1,000,000-token window.
@@ -69,7 +84,8 @@ const BUSY_PROMPT: &str = "read each file";
 const FINAL_TEXT: &str = "every file is read";
 
 /// How long a retained reading waits after the work ends before reading
-/// `RssAnon`: freed pages take a moment to leave the resident set.
+/// `RssAnon`: freed pages take a moment to leave the resident set. A
+/// quiescence wait never sleeps longer than this per reading.
 pub(crate) const RETAINED_SETTLE: Duration = Duration::from_secs(10);
 
 /// `RssAnon` once the memory the finished work freed has settled: waits
@@ -87,6 +103,49 @@ pub(crate) fn retained_anon_kib(
 /// `pid`'s `RssAnon` after the settle wait, sleeping on `sleep`.
 pub(crate) fn retained_anon_kib_of(pid: u32, sleep: impl FnOnce(Duration)) -> Result<u64, String> {
     retained_anon_kib(
+        || {
+            let path = Path::new("/proc").join(pid.to_string()).join("status");
+            fs::read_to_string(&path).map_err(|err| format!("reading {}: {err}", path.display()))
+        },
+        sleep,
+    )
+}
+
+/// The anon half of `read_status`'s split. A missing field is an error,
+/// never 0: a zero would pass a retained budget.
+fn anon_kib(status: &str) -> Result<u64, String> {
+    linux::rss_split_kib(status).map(|(anon, _)| anon)
+}
+
+/// `RssAnon` once the memory the ten-turn pass freed stops falling: polls
+/// `read_status` every `run::PROBE`, sleeping on `sleep`, until it stops
+/// falling, and sleeps at most `RETAINED_SETTLE` in total. Only the
+/// ten-turn pass waits this way, so its two readings fit the Release job;
+/// the busy turn and the attached terminal wait the fixed settle above
+/// (`docs/performance.md`, "Measuring"). A missing field, or a process
+/// gone during the wait, is an error, never 0: a zero would pass a
+/// retained budget.
+pub(crate) fn quiescent_anon_kib(
+    mut read_status: impl FnMut() -> Result<String, String>,
+    mut sleep: impl FnMut(Duration),
+) -> Result<u64, String> {
+    let mut prev = anon_kib(&read_status()?)?;
+    let polls =
+        usize::try_from(RETAINED_SETTLE.as_millis() / run::PROBE.as_millis()).unwrap_or(usize::MAX);
+    for _ in 0..polls {
+        sleep(run::PROBE);
+        let next = anon_kib(&read_status()?)?;
+        if next >= prev {
+            return Ok(next);
+        }
+        prev = next;
+    }
+    Ok(prev)
+}
+
+/// `pid`'s `RssAnon` after the quiescence wait, sleeping on `sleep`.
+pub(crate) fn quiescent_anon_kib_of(pid: u32, sleep: impl FnMut(Duration)) -> Result<u64, String> {
+    quiescent_anon_kib(
         || {
             let path = Path::new("/proc").join(pid.to_string()).join("status");
             fs::read_to_string(&path).map_err(|err| format!("reading {}: {err}", path.display()))
@@ -485,6 +544,165 @@ fn busy_turn(ctx: &Ctx<'_>, notes: &mut Vec<String>) -> Result<Samples, String> 
         let lines = read_log(home, &id)?;
         check_turn(notes, home.server(), &lines, TOOL_CALLS);
         busy_turn_samples(rss, retained, &lines, turn.content)
+    })
+}
+
+/// The 10-turn run's samples: the anon RSS still resident once the
+/// first turn's handoff settles, and once the tenth's settles. The
+/// judge reads both from each pass's entry, so the verdict compares
+/// each session with itself.
+pub(crate) fn ten_turn_samples(first: u64, last: u64) -> Samples {
+    vec![(
+        "ten_busy_turns_retained_kib",
+        json!({"first": first, "last": last}),
+    )]
+}
+
+/// The note the model writes at each handoff of the 10-turn run: short,
+/// so the restarted context is the note alone.
+pub(crate) const HANDOFF_NOTE: &str = "the busy turns so far are in the session log";
+
+/// One handoff's note reply, reporting the turn's end context as the
+/// turn's own replies do: after it the session holds the note and what
+/// comes after (`docs/performance.md`, "What a budget covers").
+fn handoff_note(turn: &Turn) -> Response {
+    text_reply(HANDOFF_NOTE, turn.content)
+}
+
+/// The 10-turn run's script: each turn's replies, then its handoff's
+/// note, in the order the session asks for them. One pass is ten turns
+/// of `TOOL_CALLS` calls and one closing reply each, plus ten notes.
+pub(crate) fn ten_turn_script(turn: &Turn) -> Vec<Response> {
+    (0..TEN_TURNS)
+        .flat_map(|_| turn.script.iter().cloned().chain([handoff_note(turn)]))
+        .collect()
+}
+
+/// Ten busy turns in one session, each followed by its handoff, as a
+/// session past the trigger does them: the first turn on the command
+/// line, the rest over a `full` connection, with a `handoff` driver
+/// command after every turn. The readings are the retained anon RSS
+/// after the first turn's handoff and after the tenth's, so growth is
+/// what the session keeps across handoffs, not its context. Each turn
+/// repeats the busy turn's shape, so the script serves every turn's
+/// replies and every note in order. The harness repeats the pass every
+/// run, so the judge takes the median growth (`docs/performance.md`,
+/// "Measuring").
+fn ten_turns(ctx: &Ctx<'_>, notes: &mut Vec<String>) -> Result<Samples, String> {
+    let turn = Turn::new();
+    let script = ten_turn_script(&turn);
+    let home = Home::scripted(ctx.home.fiber(), script)?;
+    // The pass asserts only the request count, while each request carries
+    // the session's whole conversation so far: retaining every body would
+    // hold tens of gigabytes in the harness (see #2188).
+    home.server().drop_bodies();
+    in_home(home, |home| {
+        for (name, body) in &turn.files {
+            write(&home.workspace().join(name), body)?;
+        }
+        let id = doors::mint("s_");
+        let pass_start = ctx.clock.now();
+        let mut waited = Duration::ZERO;
+        let session = Session::spawn(
+            &mut session(ctx, home, &id, &["--prompt", BUSY_PROMPT]),
+            ctx.clock,
+        )?;
+        let measured = (|| {
+            until_stdout(ctx, &session, "turn_completed", TURN)?;
+            let pid = session.proc.pid();
+            let mut client = crate::resume::subscribe(ctx, home, &id)?;
+            // Each turn ends with its handoff, driven as the resume
+            // workload drives them; a handoff command carries no message,
+            // so its turn ends at once after the note
+            // (`crates/loop/src/handoff.rs`, `run_person_handoff`).
+            let handoff_id = "c_h1".to_owned();
+            crate::resume::run_turn(
+                ctx,
+                &mut client,
+                &handoff_id,
+                &crate::resume::command(&handoff_id, "handoff", &json!({})),
+            )?;
+            let first = quiescent_anon_kib_of(pid, |wait| {
+                waited += wait;
+                ctx.clock.sleep(wait);
+            })?;
+            for n in 2..=TEN_TURNS {
+                let prompt_id = format!("c_ten{n}");
+                let content = json!({"content": [{"type": "text", "text": BUSY_PROMPT}]});
+                crate::resume::run_turn(
+                    ctx,
+                    &mut client,
+                    &prompt_id,
+                    &crate::resume::command(&prompt_id, "prompt", &content),
+                )?;
+                let handoff_id = format!("c_h{n}");
+                crate::resume::run_turn(
+                    ctx,
+                    &mut client,
+                    &handoff_id,
+                    &crate::resume::command(&handoff_id, "handoff", &json!({})),
+                )?;
+            }
+            drop(client);
+            let last = quiescent_anon_kib_of(pid, |wait| {
+                waited += wait;
+                ctx.clock.sleep(wait);
+            })?;
+            // The turns' own time, without the quiescence waits: plain
+            // progress, never a sample (see #2188).
+            eprintln!(
+                "bench: 10 busy turns ran {:.1}s excluding {:.1}s of quiescence wait",
+                ctx.clock
+                    .now()
+                    .saturating_duration_since(pass_start)
+                    .saturating_sub(waited)
+                    .as_secs_f64(),
+                waited.as_secs_f64(),
+            );
+            Ok::<_, String>((first, last))
+        })();
+        let stopped = session.proc.stop(ctx.clock);
+        let (first, last) = measured?;
+        stopped?;
+        let lines = read_log(home, &id)?;
+        expect(
+            notes,
+            "model requests",
+            home.server().requests().len(),
+            TEN_TURNS * (TOOL_CALLS + 2),
+        );
+        expect(
+            notes,
+            "completed tool calls",
+            count(&lines, "tool_call_completed", "status", "completed"),
+            TEN_TURNS * TOOL_CALLS,
+        );
+        // Each prompt turn and each handoff turn ends its own turn.
+        expect(
+            notes,
+            "turn_completed lines",
+            count(&lines, "turn_completed", "", ""),
+            2 * TEN_TURNS,
+        );
+        expect(
+            notes,
+            "handoff_started lines",
+            count(&lines, "handoff_started", "", ""),
+            TEN_TURNS,
+        );
+        expect(
+            notes,
+            "completed handoffs",
+            count(&lines, "handoff_completed", "outcome", "completed"),
+            TEN_TURNS,
+        );
+        expect(
+            notes,
+            "automatic handoffs",
+            count(&lines, "handoff_started", "trigger", "auto"),
+            0,
+        );
+        Ok(ten_turn_samples(first, last))
     })
 }
 
