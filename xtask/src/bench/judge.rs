@@ -184,8 +184,8 @@ pub(super) const MEASURED: &[(&str, Check)] = &[
     (
         "`paging` jig at scale 16, slowest re-count at a new width",
         Check::Ratio {
-            pin: "16 times the same run's scale-1 re-count",
-            times: 16.0,
+            pin: "20 times the same run's scale-1 re-count",
+            times: 20.0,
             small: "paging_width_ms",
             large: "paging_scale16_width_ms",
         },
@@ -193,8 +193,8 @@ pub(super) const MEASURED: &[(&str, Check)] = &[
     (
         "`paging` jig at scale 16, a search of the whole session with no match",
         Check::Ratio {
-            pin: "16 times the same run's scale-1 search",
-            times: 16.0,
+            pin: "20 times the same run's scale-1 search",
+            times: 20.0,
             small: "paging_search_ms",
             large: "paging_scale16_search_ms",
         },
@@ -681,7 +681,7 @@ pub(super) fn judge(
             large,
         } => {
             // The ceiling text is code: a changed multiplier or wording
-            // fails here with the budget, never silently keeping 16x
+            // fails here with the budget, never silently keeping 20x
             // enforcement. A ratio overage fails the run outright below:
             // it never reaches the stored-base exemption.
             if cell != pin {

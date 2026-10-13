@@ -2900,6 +2900,90 @@ fn a_recount_at_a_new_width_costs_pages_not_the_session() {
     }
 }
 
+/// The per-page proof for the scale-16 ceiling (#2187): identical pages
+/// do identical work, so the re-count and reload counters per page agree
+/// within 10% between the 8-page and 32-page sessions. The comparison is
+/// synchronous counter work: it reads no clock and waits on nothing, so
+/// no injected clock or deadline applies.
+#[test]
+fn recount_work_per_page_agrees_within_ten_percent_across_scales() {
+    let (mut small, small_lines) = work_pages(8, 80);
+    let (mut large, large_lines) = work_pages(32, 80);
+    drop_half(&mut small);
+    drop_half(&mut large);
+    let small_pages = small.index().pages().len();
+    let large_pages = large.index().pages().len();
+    assert_eq!(small_pages, 8);
+    assert_eq!(large_pages, 32);
+    let [small_recount, small_reload] = recount_work(&mut small, &small_lines, 100);
+    let [large_recount, large_reload] = recount_work(&mut large, &large_lines, 100);
+    let fields = [
+        (
+            "reply_renders",
+            small_recount.reply_renders + small_reload.reply_renders,
+            large_recount.reply_renders + large_reload.reply_renders,
+        ),
+        (
+            "turn_rows",
+            small_recount.turn_rows + small_reload.turn_rows,
+            large_recount.turn_rows + large_reload.turn_rows,
+        ),
+        (
+            "page_counts",
+            small_recount.page_counts + small_reload.page_counts,
+            large_recount.page_counts + large_reload.page_counts,
+        ),
+        (
+            "index_pages",
+            small_recount.index_pages + small_reload.index_pages,
+            large_recount.index_pages + large_reload.index_pages,
+        ),
+        (
+            "usage_summaries",
+            small_recount.usage_summaries + small_reload.usage_summaries,
+            large_recount.usage_summaries + large_reload.usage_summaries,
+        ),
+        (
+            "grapheme_widths",
+            small_recount.grapheme_widths + small_reload.grapheme_widths,
+            large_recount.grapheme_widths + large_reload.grapheme_widths,
+        ),
+        (
+            "search_pages",
+            small_recount.search_pages + small_reload.search_pages,
+            large_recount.search_pages + large_reload.search_pages,
+        ),
+        (
+            "search_order_pages",
+            small_recount.search_order_pages + small_reload.search_order_pages,
+            large_recount.search_order_pages + large_reload.search_order_pages,
+        ),
+        (
+            "shell_visits",
+            small_recount.shell_visits + small_reload.shell_visits,
+            large_recount.shell_visits + large_reload.shell_visits,
+        ),
+    ];
+    for (field, small, large) in fields {
+        // Cross-multiplied per-page comparison: `large / large_pages`
+        // against `small / small_pages`, within 10%, without dividing.
+        let small_scaled = small * large_pages;
+        let large_scaled = large * small_pages;
+        if small == 0 {
+            assert_eq!(
+                large, 0,
+                "{field}: no work at 8 pages must stay no work at 32"
+            );
+        } else {
+            let diff = large_scaled.abs_diff(small_scaled);
+            assert!(
+                diff * 10 <= small_scaled,
+                "{field}: per-page {large_scaled} over {large_pages} pages differs from {small_scaled} over {small_pages} by more than 10%"
+            );
+        }
+    }
+}
+
 /// Two pages: plain prose, then a reply holding a Markdown table with
 /// cells long enough to lay out differently at 80 and 100 columns.
 fn table_pages(width: u16) -> (Pages, Vec<Envelope>) {

@@ -41,8 +41,7 @@ Two rows hold work to the size of what it covers. Memory kept after 10 busy
 turns, each followed by its handoff, stays within 1 MiB of the memory kept after one, so state that grows
 with every tool call the session has ever made fails it. The `paging` jig's
 scale-16 session is about 75 MiB, the size of the owner's longest sessions;
-its re-count and search may take at most 16 times their scale-1 time in the
-same run, so the ratio, not the machine, decides.
+its re-count and search may take at most 20 times their scale-1 time in the same run, so the ratio, not the machine, decides. The page count is 16 times; the rest allows for cache capacity, which grows the time per page at 75 MiB while the work per page stays flat (#2187).
 
 The `paging` rows measure the `tui` crate's `paging` jig (`docs/testing.md`,
 "Jigs"), a process that runs the terminal's paging over a generated session
@@ -83,8 +82,8 @@ a 20-thousand-token one fit the same ceiling.
 | `paging` jig, slowest jump frame | 11 ms | Linux x86_64 | measured |
 | `paging` jig, slowest re-count at a new width | 123 ms | Linux x86_64 | measured |
 | `paging` jig, slowest append frame | 3 ms | Linux x86_64 | measured |
-| `paging` jig at scale 16, slowest re-count at a new width | 16 times the same run's scale-1 re-count | Linux x86_64 | picked |
-| `paging` jig at scale 16, a search of the whole session with no match | 16 times the same run's scale-1 search | Linux x86_64 | picked |
+| `paging` jig at scale 16, slowest re-count at a new width | 20 times the same run's scale-1 re-count | Linux x86_64 | picked |
+| `paging` jig at scale 16, a search of the whole session with no match | 20 times the same run's scale-1 search | Linux x86_64 | picked |
 | Terminal, wheel to frame, the `paging` jig's session at scale 1, 160 by 48 | 16 ms | Linux x86_64 | picked |
 | Terminal, wheel to frame, one turn with an opened `read` of 300 lines, 160 by 48 | 16 ms | Linux x86_64 | picked |
 
@@ -224,7 +223,7 @@ on `main` fails on it, which makes the fix a backstop ticket.
 A timing budget is advisory: CI posts the head and base medians as a
 comment on the pull request and never fails it. The two scale-16
 `paging` growth-ratio rows are the exception: like an exact or memory
-budget, a paired ratio over 16 times its same run's scale-1 sample
+budget, a paired ratio over 20 times its same run's scale-1 sample
 fails the pull request on Linux x86_64, however the base compares.
 Timing gates turn on per
 runner speed class, once stored results show that the recorded CPU model
