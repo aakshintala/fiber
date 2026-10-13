@@ -8,7 +8,7 @@
 # ~4.5 MiB of RSS before it runs a line of code.
 set -eu
 cd "$(dirname "$0")"
-FEATURES="serde_json ureq ratatui crossterm rusqlite mlua clap clap_complete thiserror signal-hook getrandom base64 ring rustix regex ignore search similar pulldown-cmark jsonschema syntect arborium image image-parts html5ever encoding_rs flate2 jiff lopdf qrcode"
+FEATURES="serde_json ureq ratatui crossterm rusqlite mlua clap clap_complete thiserror signal-hook getrandom base64 ring rustix regex ignore search similar pulldown-cmark jsonschema syntect arborium image image-parts html5ever encoding_rs flate2 jiff lopdf qrcode brush-parser"
 # Every crate in the runtime table of docs/dependencies.md, built together.
 RUNTIME="serde_json ureq ratatui crossterm mlua clap clap_complete thiserror signal-hook getrandom base64 ring rustix search similar html5ever encoding_rs pulldown-cmark flate2 jiff qrcode"
 
@@ -54,6 +54,13 @@ all=$(echo $RUNTIME | tr ' ' ',')
 bin=$(build runtime "$all")
 kib=$(median "$bin")
 echo "| all runtime crates together | $kib | $((kib - base)) | $(( $(wc -c < "$bin") / 1024 )) |"
+# tree-sitter-bash is not a feature of this manifest: tree-sitter 0.27 and
+# arborium-tree-sitter both declare links = "tree-sitter", which cargo
+# refuses to resolve in one manifest. shell-ts/ is a standalone crate with
+# the identical workload, measured with the same method.
+tsbin=$(cd shell-ts && cargo build --release -q && echo "$PWD/target/release/shell-ts")
+kib=$(median "$tsbin")
+echo "| tree-sitter-bash (shell-ts/) | $kib | $((kib - base)) | $(( $(wc -c < "$tsbin") / 1024 )) |"
 
 # The lopdf PDF rows: the same binary as the `lopdf` row above, once per
 # scanned-document-like fixture, cutting pages 1-20 as the image child does.
