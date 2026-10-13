@@ -327,7 +327,19 @@ pub(crate) fn wrap_joined(text: &str, max: usize) -> Vec<(String, Join)> {
     for line in text.split('\n') {
         let mut row = String::new();
         let mut join = Join::Break;
-        for word in line.split(' ') {
+        // Words split only at a standalone `" "` grapheme, so a
+        // grapheme containing a space (such as `" \u{301}"`) stays
+        // inside its word instead of being torn apart.
+        let mut words: Vec<String> = vec![String::new()];
+        each_piece(line, |piece| {
+            if piece == " " {
+                words.push(String::new());
+            } else if let Some(word) = words.last_mut() {
+                word.push_str(piece);
+            }
+            true
+        });
+        for word in &words {
             // The space before the word counts only after another word.
             if !row.is_empty() && width(&row) + 1 + width(word) > max {
                 rows.push((std::mem::take(&mut row), join));

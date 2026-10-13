@@ -421,6 +421,14 @@ fn wrapping_keeps_graphemes_whole() {
 }
 
 #[test]
+fn wrapping_keeps_a_space_with_a_combining_mark_whole() {
+    // `" \u{301}"` is one grapheme, not a word separator: the space
+    // stays with its combining mark instead of being discarded.
+    assert_eq!(wrap("a \u{301}b", 1), vec!["a", " \u{301}", "b"]);
+    assert_eq!(wrap("a \u{301}b", 3), vec!["a \u{301}b"]);
+}
+
+#[test]
 fn an_over_wide_grapheme_takes_its_own_row_or_is_dropped() {
     // A grapheme wider than `max` is emitted whole on its own row by
     // `wrap_joined` and dropped by `cut`.
