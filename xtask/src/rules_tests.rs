@@ -829,6 +829,27 @@ fn loop_tool_names_derives_registered_names_from_owned_definitions() {
 }
 
 #[test]
+fn loop_tool_names_accepts_only_the_exact_label_allowance() {
+    let tools = registrations(&REGISTERED_TOOLS);
+    let exact = file(
+        "loop",
+        "src/opening.rs",
+        "fn render() { let row = (\"shell\", environment.shell.as_str()); }".to_owned(),
+    );
+    assert!(loop_tool_names(&[tools.clone(), exact]).is_empty());
+
+    let nearby = file(
+        "loop",
+        "src/opening.rs",
+        "fn other() { let row = (\"shell\", environment.shell.as_str()); }".to_owned(),
+    );
+    assert_eq!(
+        loop_tool_names(&[tools, nearby]),
+        ["crates/loop/src/opening.rs:1: built-in tool name shell"]
+    );
+}
+
+#[test]
 fn loop_tool_names_rejects_every_derived_identity_outside_its_label_context() {
     let tools = registrations(&REGISTERED_TOOLS);
     for name in REGISTERED_TOOLS {
@@ -1265,6 +1286,26 @@ fn loop_tool_gate_ignores_owned_name_syntax_outside_tools_and_jobs() {
 }
 
 #[test]
+fn individual_allowances_require_a_valid_ticket_after_matching_the_site() {
+    let site = SourceSite {
+        path: "crates/hub/src/feed.rs".to_owned(),
+        line: 1,
+        context: "fn feed".to_owned(),
+        operation: "join:events.jsonl".to_owned(),
+    };
+    let allowance = |ticket| SourceAllowance {
+        path: "crates/hub/src/feed.rs",
+        context: "fn feed",
+        operation: "join:events.jsonl",
+        ticket,
+    };
+
+    assert!(consume_allowance(&[allowance("#1725")], &site));
+    assert!(!consume_allowance(&[allowance("#")], &site));
+    assert!(!consume_allowance(&[allowance("#not-a-number")], &site));
+}
+
+#[test]
 fn individual_allowances_are_consumed_once_and_match_path_context_and_operation() {
     let allowance = SourceAllowance {
         path: "crates/hub/src/feed.rs",
@@ -1467,16 +1508,39 @@ fn test_item_end_returns_the_last_token_for_an_unclosed_body() {
 
 #[test]
 fn test_item_end_ignores_angle_comparisons_in_non_field_items() {
-    let tokens = source_tokens("fn test() { let value = left < right; } fn next() {}").unwrap();
-    let start = token_with_ident(&tokens, "fn");
-    let body = tokens
+    let tokens = source_tokens("const TEST: bool = LEFT < RIGHT; fn next() {}").unwrap();
+    let start = token_with_ident(&tokens, "const");
+    let semicolon = tokens
         .iter()
-        .position(|token| punct(Some(token), '{'))
+        .position(|token| punct(Some(token), ';'))
         .unwrap();
-    assert_eq!(
-        test_item_end(&tokens, start, false),
-        matching(&tokens, body, '{', '}').unwrap()
-    );
+    assert_eq!(test_item_end(&tokens, start, false), semicolon);
+
+    let tokens =
+        source_tokens("#[cfg(test)] const ONLY: bool = LEFT < RIGHT; fn production() {}").unwrap();
+    let marked = test_only_tokens(&tokens);
+    let production = token_with_ident(&tokens, "production");
+    assert!(!marked[production]);
+}
+
+#[test]
+fn test_item_end_tracks_angle_groups_only_for_fields() {
+    let field = source_tokens("value: Map<A, B>, next: Path").unwrap();
+    let value = token_with_ident(&field, "value");
+    let commas = field
+        .iter()
+        .enumerate()
+        .filter_map(|(i, token)| punct(Some(token), ',').then_some(i))
+        .collect::<Vec<_>>();
+    assert_eq!(test_item_end(&field, value, true), commas[1]);
+
+    let item = source_tokens("const VALUE: bool = LEFT < RIGHT;").unwrap();
+    let value = token_with_ident(&item, "const");
+    let semicolon = item
+        .iter()
+        .position(|token| punct(Some(token), ';'))
+        .unwrap();
+    assert_eq!(test_item_end(&item, value, false), semicolon);
 }
 
 #[test]
@@ -1691,10 +1755,12 @@ fn stalled_cursor_consume_returns_a_bounded_error() {
 }
 
 #[test]
-fn string_start_advances_once_per_raw_delimiter_hash() {
+fn string_start_counts_raw_delimiter_hashes() {
     assert_eq!(string_start(br###"r##"value"##"###, 0), Some((3, true, 2)));
     assert_eq!(string_start(br##"r#"value"#"##, 0), Some((2, true, 1)));
     assert_eq!(string_start(b"r\"value\"", 0), Some((1, true, 0)));
+    assert_eq!(string_start(b"cr###\"value\"###", 0), Some((5, true, 3)));
+    assert_eq!(string_start(b"r##missing-quote", 0), None);
 }
 
 #[test]

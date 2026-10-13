@@ -802,16 +802,22 @@ fn string_start(bytes: &[u8], at: usize) -> Option<(usize, bool, usize)> {
         {
             continue;
         }
-        let mut quote = at + prefix.len();
+        let Some(prefix_end) = at.checked_add(prefix.len()) else {
+            continue;
+        };
+        let Some(suffix) = bytes.get(prefix_end..) else {
+            continue;
+        };
         if prefix.ends_with(b"r") {
-            while bytes.get(quote) == Some(&b'#') {
-                quote += 1;
-            }
+            let hashes = suffix.iter().take_while(|&&byte| byte == b'#').count();
+            let Some(quote) = prefix_end.checked_add(hashes) else {
+                continue;
+            };
             if bytes.get(quote) == Some(&b'"') {
-                return Some((quote, true, quote - at - prefix.len()));
+                return Some((quote, true, hashes));
             }
-        } else if bytes.get(quote) == Some(&b'"') {
-            return Some((quote, false, 0));
+        } else if suffix.first() == Some(&b'"') {
+            return Some((prefix_end, false, 0));
         }
     }
     None
@@ -1615,15 +1621,19 @@ fn loop_sites(
                 _ => None,
             };
             let exception = label.is_some_and(|label| {
-                LABEL_ALLOWANCES.iter().any(|allowance| {
-                    (
-                        allowance.path,
-                        allowance.function,
-                        allowance.context,
-                        allowance.name,
-                        allowance.reason,
-                    ) == (file.path.as_str(), function, label, name, reason)
-                })
+                LABEL_ALLOWANCES
+                    .iter()
+                    .find(|allowance| {
+                        allowance.path == file.path.as_str() && allowance.name == name
+                    })
+                    .is_some_and(|allowance| {
+                        (
+                            allowance.function,
+                            allowance.context,
+                            allowance.name,
+                            allowance.reason,
+                        ) == (function, label, name, reason)
+                    })
             });
             if exception {
                 continue;
