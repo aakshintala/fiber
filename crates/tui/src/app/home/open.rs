@@ -82,20 +82,24 @@ struct Opening {
     ack: String,
 }
 
-/// A `subscribe` line for `session` at `level`, with its id.
-pub(super) fn subscribe_line(session: &SessionId, level: Level) -> (String, String) {
+/// A `subscribe` line for `session` at `level`, with its id. With
+/// `credential`, the label rides on this subscribe only, never as
+/// `null`: an absent label leaves the key out.
+pub(super) fn subscribe_line(
+    session: &SessionId,
+    level: Level,
+    credential: Option<&str>,
+) -> (String, String) {
     let id = mint();
     let name = match level {
         Level::Summary => "summary",
         Level::Full => "full",
     };
-    let line = session_command(
-        &id,
-        "subscribe",
-        session,
-        Some(serde_json::json!({"level": name})),
-    )
-    .to_string();
+    let mut args = serde_json::json!({"level": name});
+    if let Some(credential) = credential {
+        args["credential"] = Value::String(credential.to_owned());
+    }
+    let line = session_command(&id, "subscribe", session, Some(args)).to_string();
     (id, line)
 }
 
@@ -104,7 +108,7 @@ impl App {
     /// the expected level is the last in-flight one, so no path sends a
     /// subscribe at the level already held or asked for.
     pub(in crate::app) fn subscribe(&mut self, session: &SessionId, level: Level) -> String {
-        let (id, line) = subscribe_line(session, level);
+        let (id, line) = subscribe_line(session, level, None);
         if let Some(home) = self.home.as_mut() {
             home.subs.sent(id, session.clone(), level);
         }
@@ -187,7 +191,7 @@ impl App {
             .home
             .as_ref()
             .and_then(|home| home.subs.expected(&session));
-        Effect::Send(self.open_session(session, expected))
+        Effect::Send(self.open_session(session, expected, None))
     }
 
     /// Records the acknowledgement of the in-flight subscribe `id`:

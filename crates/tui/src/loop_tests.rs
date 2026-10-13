@@ -1189,7 +1189,7 @@ fn resume_open_replays_the_log_to_the_tail() {
         rail_share: 15.0,
         panel_share: 21.0,
         panel_cards: Vec::new(),
-        open_at: crate::OpenAt::Session(contract::SessionId(SESSION.to_owned())),
+        open_at: crate::OpenAt::Session(contract::SessionId(SESSION.to_owned()), None),
         ..Default::default()
     });
     app.set_size(60, 12);

@@ -17,7 +17,7 @@ Usage: fiber <command> [arguments]
 Sessions:
   fiber [--model <model>] [-c <key>=<value>]...                                            Open the terminal
   ask [--model <model>] [-c <key>=<value>]... [--resume <id>] [--worktree] [<prompt>] [-]  Run one session of one turn; its events go to stdout
-  resume [<id>]                                                                            Open a session in the terminal, or home at the session list
+  resume [<id>] [--credential <label>]                                                     Open a session in the terminal, or home at the session list
   continue                                                                                 Open the most recent session in this project
   sessions [--all] [--json]                                                                List sessions: id, state, name, what it waits on, spend
   sessions search [--all] [--json] <text>                                                  Search the logs of past and running sessions for the text
@@ -119,6 +119,10 @@ pub(crate) enum Commands {
         /// home opens at the session list.
         #[arg(value_name = "id", value_parser = clap::builder::NonEmptyStringValueParser::new())]
         id: Option<String>,
+        /// The credential label to switch the session to
+        /// (`docs/model-routing.md`, "Which credential a session uses").
+        #[arg(long, value_name = "label", requires = "id")]
+        credential: Option<String>,
     },
     /// Open the most recent session in this project
     Continue,
@@ -793,9 +797,7 @@ fn parse_from(args: impl IntoIterator<Item = impl Into<OsString>>) -> Invocation
                 // `--credential` without `--resume` names no startup
                 // label: the hub passes it only when it resumes an
                 // exited session, never for a fresh session or a rewind.
-                Some(Commands::Session(args))
-                    if args.credential.is_some() && !args.resume =>
-                {
+                Some(Commands::Session(args)) if args.credential.is_some() && !args.resume => {
                     Invocation::Usage {
                         ask,
                         sentence: "The argument '--credential <label>' requires '--resume': \

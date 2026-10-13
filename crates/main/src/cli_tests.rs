@@ -981,20 +981,56 @@ fn a_list_flag_with_a_subcommand_is_a_usage_sentence() {
 
 #[test]
 fn resume_takes_an_optional_id() {
-    let Invocation::Run(Some(Commands::Resume { id })) = parse_from(["fiber", "resume"]) else {
+    let Invocation::Run(Some(Commands::Resume { id, credential })) =
+        parse_from(["fiber", "resume"])
+    else {
         panic!("bare resume");
     };
     assert_eq!(id, None);
-    let Invocation::Run(Some(Commands::Resume { id })) = parse_from(["fiber", "resume", "s_12"])
+    assert_eq!(credential, None);
+    let Invocation::Run(Some(Commands::Resume { id, credential })) =
+        parse_from(["fiber", "resume", "s_12"])
     else {
         panic!("resume with an id");
     };
     assert_eq!(id.as_deref(), Some("s_12"));
+    assert_eq!(credential, None);
     let help = super::render_help(&["resume"]).unwrap();
     assert!(
         help.contains("Open a session in the terminal, or home at the session list"),
         "{help}"
     );
+    assert!(help.contains("--credential <label>"), "{help}");
+}
+
+#[test]
+fn resume_credential_rides_with_an_id_in_either_order() {
+    for argv in [
+        vec!["fiber", "resume", "s_12", "--credential", "work"],
+        vec!["fiber", "resume", "--credential", "work", "s_12"],
+        vec!["fiber", "resume", "s_12", "--credential=work"],
+    ] {
+        let Invocation::Run(Some(Commands::Resume { id, credential })) = parse_from(argv) else {
+            panic!("resume with a credential");
+        };
+        assert_eq!(id.as_deref(), Some("s_12"));
+        assert_eq!(credential.as_deref(), Some("work"));
+    }
+}
+
+#[test]
+fn resume_credential_without_an_id_is_a_usage_error() {
+    let message = sentence(&["fiber", "resume", "--credential", "work"]);
+    assert!(
+        message.contains("<id>"),
+        "the error names the missing id: {message}"
+    );
+}
+
+#[test]
+fn resume_help_names_the_credential_flag() {
+    let help = super::render_help(&["resume"]).unwrap();
+    assert!(help.contains("--credential <label>"), "{help}");
 }
 
 #[test]
@@ -1006,6 +1042,15 @@ fn continue_takes_no_arguments() {
     assert!(
         help.contains("Open the most recent session in this project"),
         "{help}"
+    );
+}
+
+#[test]
+fn continue_rejects_the_credential_flag() {
+    let message = sentence(&["fiber", "continue", "--credential", "work"]);
+    assert!(
+        message.contains("--credential"),
+        "the error names `--credential`: {message}"
     );
 }
 

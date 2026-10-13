@@ -153,7 +153,7 @@ fn drawn(app: &mut App) {
 
 #[test]
 fn a_session_launch_sends_nothing_before_the_link_is_up() {
-    let mut app = home_at(OpenAt::Session(id("s_aaaaaaaaaaaaaaaa")));
+    let mut app = home_at(OpenAt::Session(id("s_aaaaaaaaaaaaaaaa"), None));
     assert!(app.on_line(status("s_aaaaaaaaaaaaaaaa")).is_empty());
     assert!(app.session().is_none());
     assert!(!spent(&app));
@@ -161,7 +161,7 @@ fn a_session_launch_sends_nothing_before_the_link_is_up() {
 
 #[test]
 fn a_session_launch_opens_with_the_first_feed_and_recent() {
-    let mut app = home_at(OpenAt::Session(id("s_aaaaaaaaaaaaaaaa")));
+    let mut app = home_at(OpenAt::Session(id("s_aaaaaaaaaaaaaaaa"), None));
     let lines = commands(app.on_line(hello()));
     assert_eq!(lines.len(), 4);
     assert_eq!(lines[0]["command"], "feed");
@@ -178,7 +178,7 @@ fn a_session_launch_opens_with_the_first_feed_and_recent() {
 
 #[test]
 fn a_second_hello_sends_no_second_open() {
-    let mut app = home_at(OpenAt::Session(id("s_aaaaaaaaaaaaaaaa")));
+    let mut app = home_at(OpenAt::Session(id("s_aaaaaaaaaaaaaaaa"), None));
     assert_eq!(commands(app.on_line(hello())).len(), 4);
     assert!(app.on_line(hello()).is_empty());
     assert_eq!(app.session(), Some(&id("s_aaaaaaaaaaaaaaaa")));
@@ -186,7 +186,7 @@ fn a_second_hello_sends_no_second_open() {
 
 #[test]
 fn a_refused_launch_open_shows_the_refusal_on_home() {
-    let mut app = home_at(OpenAt::Session(id("s_aaaaaaaaaaaaaaaa")));
+    let mut app = home_at(OpenAt::Session(id("s_aaaaaaaaaaaaaaaa"), None));
     let lines = commands(app.on_line(hello()));
     let ack = lines[2]["id"].as_str().unwrap_or_else(|| panic!("ack id"));
     assert!(
@@ -305,4 +305,162 @@ fn a_later_recent_page_never_focuses_the_list() {
     assert!(!spent(&app));
     drawn(&mut app);
     assert_eq!(app.focused(), None);
+}
+
+/// A session `notice` line, as the hub forwards a refused switch.
+fn notice(session: &str, message: &str) -> Line {
+    Line::Session(contract::Envelope {
+        kind: "notice".to_owned(),
+        session_id: id(session),
+        ts: 0,
+        schema_version: contract::SCHEMA_VERSION,
+        turn_id: None,
+        action_id: None,
+        seq: None,
+        payload: [
+            (
+                "code".to_owned(),
+                Value::String("credential_missing".to_owned()),
+            ),
+            ("message".to_owned(), Value::String(message.to_owned())),
+        ]
+        .into_iter()
+        .collect(),
+    })
+}
+
+/// A session `command_accepted` line for `id`.
+fn session_accepted(session: &str, command: &str) -> Line {
+    Line::Session(contract::Envelope {
+        kind: "command_accepted".to_owned(),
+        session_id: id(session),
+        ts: 0,
+        schema_version: contract::SCHEMA_VERSION,
+        turn_id: None,
+        action_id: None,
+        seq: None,
+        payload: [("command_id".to_owned(), Value::String(command.to_owned()))]
+            .into_iter()
+            .collect(),
+    })
+}
+
+#[test]
+fn a_session_launch_with_a_label_puts_it_on_the_first_subscribe() {
+    let mut app = home_at(OpenAt::Session(
+        id("s_aaaaaaaaaaaaaaaa"),
+        Some("work".to_owned()),
+    ));
+    let lines = commands(app.on_line(hello()));
+    assert_eq!(lines.len(), 4);
+    assert_eq!(lines[2]["command"], "subscribe");
+    assert_eq!(
+        lines[2]["args"],
+        json!({"level": "full", "credential": "work"}),
+        "the complete args ride on the first subscribe"
+    );
+    assert_eq!(lines[3]["command"], "commands");
+    assert!(spent(&app), "the launch carries the label once");
+    // Spent: a second hello sends no second open, label or not.
+    assert!(app.on_line(hello()).is_empty());
+}
+
+#[test]
+fn a_session_launch_without_a_label_sends_no_credential_key() {
+    let mut app = home_at(OpenAt::Session(id("s_aaaaaaaaaaaaaaaa"), None));
+    let lines = commands(app.on_line(hello()));
+    assert_eq!(lines[2]["command"], "subscribe");
+    assert_eq!(lines[2]["args"], json!({"level": "full"}));
+    assert!(
+        lines[2]["args"].get("credential").is_none(),
+        "an absent label leaves the key out, never null"
+    );
+}
+
+#[test]
+fn an_expected_full_open_puts_the_label_on_the_first_subscribe_only() {
+    let mut app = home_at(OpenAt::Home);
+    let lines = commands(app.open_session(
+        id("s_aaaaaaaaaaaaaaaa"),
+        Some(crate::home::Level::Full),
+        Some("work".to_owned()),
+    ));
+    let subscribes: Vec<&Value> = lines
+        .iter()
+        .filter(|line| line["command"] == "subscribe")
+        .collect();
+    assert_eq!(subscribes.len(), 2);
+    assert_eq!(
+        subscribes[0]["args"],
+        json!({"level": "summary", "credential": "work"})
+    );
+    assert_eq!(subscribes[1]["args"], json!({"level": "full"}));
+}
+
+#[test]
+fn a_row_open_and_a_reconnect_carry_no_label() {
+    let mut app = home_at(OpenAt::Home);
+    let lines = commands(app.open_session(id("s_aaaaaaaaaaaaaaaa"), None, None));
+    let subscribes: Vec<&Value> = lines
+        .iter()
+        .filter(|line| line["command"] == "subscribe")
+        .collect();
+    assert_eq!(subscribes.len(), 1);
+    assert_eq!(subscribes[0]["args"], json!({"level": "full"}));
+    // An ordinary subscription carries none either.
+    let line: Value = serde_json::from_str(
+        &app.subscribe(&id("s_aaaaaaaaaaaaaaaa"), crate::home::Level::Summary),
+    )
+    .unwrap();
+    assert_eq!(line["args"], json!({"level": "summary"}));
+}
+
+#[test]
+fn a_refused_launch_open_with_a_label_fails_home_as_before() {
+    let mut app = home_at(OpenAt::Session(
+        id("s_aaaaaaaaaaaaaaaa"),
+        Some("work".to_owned()),
+    ));
+    let lines = commands(app.on_line(hello()));
+    assert_eq!(lines[2]["args"]["credential"], "work");
+    let ack = lines[2]["id"].as_str().unwrap_or_else(|| panic!("ack id"));
+    assert!(
+        app.on_line(refused(ack, "held by another process"))
+            .is_empty()
+    );
+    assert!(app.session().is_none());
+    assert!(app.on_home());
+    assert_eq!(app.notice(), Some("held by another process"));
+}
+
+#[test]
+fn a_running_refusal_notice_between_acceptances_keeps_the_screen_attached() {
+    let mut app = home_at(OpenAt::Home);
+    let lines = commands(app.open_session(
+        id("s_aaaaaaaaaaaaaaaa"),
+        Some(crate::home::Level::Full),
+        Some("work".to_owned()),
+    ));
+    let first = lines[0]["id"]
+        .as_str()
+        .unwrap_or_else(|| panic!("first id"));
+    let last = lines[1]["id"].as_str().unwrap_or_else(|| panic!("last id"));
+    // The first acceptance lands, then the switch refusal as a notice.
+    assert!(
+        app.on_line(session_accepted("s_aaaaaaaaaaaaaaaa", first))
+            .is_empty()
+    );
+    assert!(
+        app.on_line(notice("s_aaaaaaaaaaaaaaaa", "no credential named `nope`"))
+            .is_empty()
+    );
+    assert_eq!(app.notice(), Some("no credential named `nope`"));
+    assert_eq!(app.session(), Some(&id("s_aaaaaaaaaaaaaaaa")));
+    // Historical lines are still gated behind the final acceptance.
+    assert!(app.on_line(status("s_aaaaaaaaaaaaaaaa")).is_empty());
+    assert!(app.gated(&id("s_aaaaaaaaaaaaaaaa")));
+    // The final acceptance ends the gate.
+    app.on_line(session_accepted("s_aaaaaaaaaaaaaaaa", last));
+    assert!(!app.gated(&id("s_aaaaaaaaaaaaaaaa")));
+    assert_eq!(app.session(), Some(&id("s_aaaaaaaaaaaaaaaa")));
 }

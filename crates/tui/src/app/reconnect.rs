@@ -178,7 +178,7 @@ impl App {
         let attached = self.session().cloned();
         if let Some(session) = &attached {
             let draft = std::mem::take(&mut self.draft);
-            lines.extend(self.open_session(session.clone(), None));
+            lines.extend(self.open_session(session.clone(), None, None));
             self.draft = draft;
         }
         let mut subscribed: Vec<SessionId> = Vec::new();
