@@ -927,26 +927,97 @@ fn main() {
     }
     #[cfg(feature = "arborium")]
     {
-        // The terminal highlights a reply's code blocks: one block in each
-        // of three languages, each grammar loaded on its first block.
-        let blocks = [
+        // The terminal highlights a reply's code blocks, each grammar loaded
+        // on its first block. HL_LANGS selects fixture blocks at run time
+        // (one build, all 18 grammars linked): a comma-separated list of
+        // arborium language names, "all" for every fixture, or empty to
+        // link everything but highlight nothing. HL_REPEAT is blocks per
+        // language (default 1). With HL_LANGS unset, the original
+        // three-language workload below runs, so the `arborium` row of the
+        // main table keeps measuring what it always measured.
+        const HL_FIXTURES: &[(&str, &str)] = &[
+            ("bash", include_str!("../highlight-fixtures/bash.sh")),
+            ("c", include_str!("../highlight-fixtures/c.c")),
+            ("cpp", include_str!("../highlight-fixtures/cpp.cpp")),
+            ("css", include_str!("../highlight-fixtures/css.css")),
+            ("diff", include_str!("../highlight-fixtures/diff.diff")),
+            ("go", include_str!("../highlight-fixtures/go.go")),
+            ("html", include_str!("../highlight-fixtures/html.html")),
+            ("java", include_str!("../highlight-fixtures/java.java")),
             (
-                "rust",
-                "fn main() {\n    let x = 1; // one\n    println!(\"{x}\");\n}\n",
+                "javascript",
+                include_str!("../highlight-fixtures/javascript.js"),
+            ),
+            ("json", include_str!("../highlight-fixtures/json.json")),
+            (
+                "markdown",
+                include_str!("../highlight-fixtures/markdown.md"),
             ),
             (
                 "python",
-                "def main():\n    x = 1  # one\n    print(f\"{x}\")\n",
+                include_str!("../highlight-fixtures/python.py"),
             ),
+            ("rust", include_str!("../highlight-fixtures/rust.rs")),
+            ("sql", include_str!("../highlight-fixtures/sql.sql")),
+            ("toml", include_str!("../highlight-fixtures/toml.toml")),
+            ("tsx", include_str!("../highlight-fixtures/tsx.tsx")),
             (
-                "javascript",
-                "function main() {\n  const x = 1; // one\n  console.log(`${x}`);\n}\n",
+                "typescript",
+                include_str!("../highlight-fixtures/typescript.ts"),
             ),
+            ("yaml", include_str!("../highlight-fixtures/yaml.yaml")),
         ];
-        let mut hl = arborium::Highlighter::new();
-        for (lang, code) in blocks {
-            let code = code.repeat(20);
-            black_box(hl.highlight_spans(lang, &code).unwrap().len());
+        match std::env::var("HL_LANGS") {
+            Err(_) => {
+                // The terminal highlights a reply's code blocks: one block in each
+                // of three languages, each grammar loaded on its first block.
+                let blocks = [
+                    (
+                        "rust",
+                        "fn main() {\n    let x = 1; // one\n    println!(\"{x}\");\n}\n",
+                    ),
+                    (
+                        "python",
+                        "def main():\n    x = 1  # one\n    print(f\"{x}\")\n",
+                    ),
+                    (
+                        "javascript",
+                        "function main() {\n  const x = 1; // one\n  console.log(`${x}`);\n}\n",
+                    ),
+                ];
+                let mut hl = arborium::Highlighter::new();
+                for (lang, code) in blocks {
+                    let code = code.repeat(20);
+                    black_box(hl.highlight_spans(lang, &code).unwrap().len());
+                }
+            }
+            Ok(spec) => {
+                let repeat: usize = std::env::var("HL_REPEAT")
+                    .ok()
+                    .and_then(|s| s.parse().ok())
+                    .unwrap_or(1);
+                let langs: Vec<&str> = if spec == "all" {
+                    HL_FIXTURES.iter().map(|(name, _)| *name).collect()
+                } else {
+                    spec.split(',').map(str::trim).collect()
+                };
+                let mut hl = arborium::Highlighter::new();
+                let mut total = 0usize;
+                for lang in langs {
+                    if lang.is_empty() {
+                        continue;
+                    }
+                    let code = HL_FIXTURES
+                        .iter()
+                        .find(|(name, _)| *name == lang)
+                        .unwrap_or_else(|| panic!("no highlight fixture for {lang:?}"))
+                        .1;
+                    for _ in 0..repeat {
+                        total += hl.highlight_spans(lang, code).unwrap().len();
+                    }
+                }
+                black_box(total);
+            }
         }
     }
     #[cfg(feature = "syntect")]

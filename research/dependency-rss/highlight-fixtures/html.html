@@ -1,0 +1,34 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Pair a device</title>
+    <style>
+      body { font-family: system-ui, sans-serif; margin: 2rem; }
+      .code { font-size: 2rem; letter-spacing: 0.3rem; }
+    </style>
+  </head>
+  <body>
+    <h1>Pair a device</h1>
+    <p>Enter the six-digit code shown in the terminal:</p>
+    <form action="/pair" method="post">
+      <input
+        class="code"
+        name="code"
+        inputmode="numeric"
+        pattern="[0-9]{6}"
+        autocomplete="one-time-code"
+        required
+      />
+      <button type="submit">Pair</button>
+    </form>
+    <script>
+      const input = document.querySelector("input[name=code]");
+      input.addEventListener("input", () => {
+        input.value = input.value.replace(/[^0-9]/g, "").slice(0, 6);
+      });
+    </script>
+  </body>
+</html>
+    <p class="hint">Codes expire after ten minutes.</p>

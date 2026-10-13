@@ -1,0 +1,37 @@
+# fiber release profile: what ships on each platform.
+[release]
+musl-target = "x86_64-unknown-linux-musl"
+size-cap-mib = 24
+
+[release.hub]
+listen = "127.0.0.1:8765"
+max-clients = 10
+idle-timeout-secs = 300
+
+[release.models.default]
+route = "fast"
+max-price-per-mtok = 2.5
+require-tools = ["read", "grep"]
+
+[[release.models.routes]]
+id = "fast"
+price-per-mtok = 0.4
+tools = ["read", "grep"]
+
+[[release.models.routes]]
+id = "deep"
+price-per-mtok = 2.1
+tools = ["read", "grep", "edit"]
+
+[session]
+dir = "~/.fiber/sessions"
+retention-days = 90
+
+[session.index]
+enabled = true
+min-chars = 3
+stop-words = ["the", "a", "an", "of", "to"]
+
+[logging]
+level = "info"
+spans = false

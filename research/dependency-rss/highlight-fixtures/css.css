@@ -1,0 +1,43 @@
+/* Terminal reply bubbles: prompt on the right, replies full width. */
+.turns {
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+  max-width: 72rem;
+  margin: 0 auto;
+  padding: 1rem;
+}
+
+.turns > .user {
+  align-self: flex-end;
+  background: #1d4ed8;
+  color: #fff;
+  border-radius: 0.75rem 0.75rem 0 0.75rem;
+  padding: 0.5rem 0.9rem;
+  max-width: 80%;
+}
+
+.turns > .assistant {
+  align-self: flex-start;
+  background: #f3f4f6;
+  border: 1px solid #e5e7eb;
+  border-radius: 0.75rem 0.75rem 0.75rem 0;
+  padding: 0.5rem 0.9rem;
+}
+
+.turns pre {
+  overflow-x: auto;
+  font-family: "JetBrains Mono", ui-monospace, monospace;
+  font-size: 0.85rem;
+  line-height: 1.45;
+}
+
+@media (max-width: 640px) {
+  .turns {
+    padding: 0.5rem;
+  }
+  .turns > .user,
+  .turns > .assistant {
+    max-width: 95%;
+  }
+}

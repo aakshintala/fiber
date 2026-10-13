@@ -1,0 +1,35 @@
+# Dependency probe: runs research/dependency-rss on three runners.
+name: Dependency probe
+on:
+  workflow_dispatch:
+    inputs:
+      probe:
+        description: Which probe to run
+        type: choice
+        options: [dependency-rss, session-search]
+        default: dependency-rss
+permissions:
+  contents: read
+jobs:
+  probe:
+    strategy:
+      fail-fast: false
+      matrix:
+        runner: [ubuntu-24.04, ubuntu-24.04-arm, macos-26]
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 45
+    steps:
+      - name: Check out
+        uses: actions/checkout@v7
+      - name: Install toolchain
+        uses: dtolnay/rust-toolchain@stable
+      - name: Run the probe
+        shell: bash
+        run: bash research/dependency-rss/run.sh | tee probe.md
+      - name: Upload the table
+        uses: actions/upload-artifact@v7
+        with:
+          name: ${{ inputs.probe }}-${{ matrix.runner }}
+          path: probe.md
+      - name: Check disk
+        run: df -h .

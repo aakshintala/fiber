@@ -60,6 +60,64 @@ figures were not measured: that needs the CI runners
 (`gh workflow run dependency-probe.yml`); the 24 MiB cap gates the Linux
 musl binary, not this macOS one.
 
+## Highlighting memory per language (macOS arm64)
+
+What tree-sitter highlighting (arborium 2.18, all 18 grammars linked)
+costs in runtime memory, per language and per block. One build; `HL_LANGS`
+and `HL_REPEAT` select fixture blocks at run time
+(`research/dependency-rss/highlight-fixtures/`, one realistic ~40-line
+snippet per language). Same peak-footprint method, median of 5, over the
+same 1,008 KiB empty program. Differences under 200 KiB are noise.
+
+| Workload | Peak footprint (KiB) | Over baseline (KiB) |
+|---|---:|---:|
+| linked, highlight nothing | 1,264 | +256 |
+| bash, one block | 5,568 | +4,560 |
+| c, one block | 2,784 | +1,776 |
+| cpp, one block | 8,368 | +7,360 |
+| css, one block | 1,712 | +704 |
+| diff, one block | 1,376 | +368 |
+| go, one block | 2,464 | +1,456 |
+| html, one block | 3,168 | +2,160 |
+| java, one block | 2,640 | +1,632 |
+| javascript, one block | 3,104 | +2,096 |
+| json, one block | 1,360 | +352 |
+| markdown, one block | 6,288 | +5,280 |
+| python, one block | 3,616 | +2,608 |
+| rust, one block | 6,144 | +5,136 |
+| sql, one block | 17,744 | +16,736 |
+| toml, one block | 1,456 | +448 |
+| tsx, one block | 6,032 | +5,024 |
+| typescript, one block | 5,760 | +4,752 |
+| yaml, one block | 2,432 | +1,424 |
+| rust, 10 blocks | 6,256 | +5,248 |
+| rust, 100 blocks | 6,240 | +5,232 |
+| rust+python+javascript, one block each | 7,632 | +6,624 |
+| all 18 languages, one block each | 31,200 | +30,192 |
+
+These are the figures from a full local `./run.sh` (see wall time under
+Method). A repeat of the table alone agreed within noise except the two
+multi-grammar rows, which moved ~300-400 KiB between runs (combo +6,928
+vs +6,624; all-18 +29,760 vs +30,192): treat multi-grammar rows as
+accurate to about half a megabyte.
+
+- The grammar load dominates: linking everything costs +256 KiB, and the
+  first block in a language pages in its tables (rust: +5,136 for the
+  first block, +112 more for the next 9, nothing further for the next 90
+  beyond noise). Highlighting further blocks is cheap.
+- SQL is the outlier at +16,736 KiB over baseline, stable across runs
+  (17,744 / 17,744 / 17,728 KiB peak). This fits the binary split in
+  docs/dependencies.md, where SQL owns about 9,500 KiB of the grammar
+  tables: the biggest tables cost the most to page in.
+- The rust+python+javascript row (+6,624) is the same language combo as
+  the documented 6,832 KiB figure but not the same workload (here ~40-line
+  fixtures, one block each; there tiny snippets repeated 20 times), so the
+  two are not directly comparable. The main table's `arborium` row still
+  runs the original workload and measured +6,880 in the same run.
+- Linux x86_64 and Linux arm64: pending the dependency-probe run
+  (`gh workflow run dependency-probe.yml --ref research/shell-parser-cost`),
+  which prints the same second table from `run.sh` on all three runners.
+
 ## Per-candidate notes
 
 - tree-sitter-bash 0.25.1: last release 2025-12-02. Licence MIT. Its
@@ -87,7 +145,11 @@ musl binary, not this macOS one.
 - Toolchain: rustc 1.99.0 (b940084d7 2026-09-28). Date: 2026-10-13.
 - Memory: `research/dependency-rss/run.sh` method (median of 5 runs over
   the featureless program); tree-sitter-bash via `shell-ts/` with the same
-  functions. Timing: each probe binary run 5 times; median of the printed
+  functions. Highlighting: same method, one arborium build with all 18
+  grammars linked, `HL_LANGS`/`HL_REPEAT` selecting
+  `highlight-fixtures/` blocks at run time (5 runs per row). Full local
+  `./run.sh` wall time: 9m36s (real 575.50s), well inside the workflow's
+  45-minute timeout. Timing: each probe binary run 5 times; median of the printed
   `parse_walk_ms` (one warm-up pass inside the process, timed pass over all
   ten commands). Per-command summaries: `SHELL_DUMP=1` on the same
   binaries, one run.

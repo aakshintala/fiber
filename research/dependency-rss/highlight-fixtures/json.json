@@ -1,0 +1,36 @@
+{
+  "hub": {
+    "listen": "127.0.0.1:8765",
+    "tls": false,
+    "limits": {
+      "maxClients": 10,
+      "maxMessageBytes": 1048576,
+      "idleTimeoutSecs": 300
+    }
+  },
+  "models": {
+    "default": "fast",
+    "routes": [
+      { "id": "fast", "mtok": 0.4, "tools": ["read", "grep"] },
+      { "id": "deep", "mtok": 2.1, "tools": ["read", "grep", "edit"] },
+      { "id": "giant", "mtok": 8.0, "tools": ["read", "grep", "edit", "exec"] }
+    ]
+  },
+  "sessions": {
+    "dir": "~/.fiber/sessions",
+    "retentionDays": 90,
+    "index": {
+      "enabled": true,
+      "minChars": 3,
+      "stopWords": ["the", "a", "an", "of", "to"]
+    }
+  },
+  "mcp": {
+    "servers": [
+      { "name": "docs", "command": ["docs-mcp", "--stdio"] },
+      { "name": "git", "command": ["git-mcp", "--repo", "."], "env": { "LANG": "C" } }
+    ]
+  },
+  "logging": { "level": "info", "spans": false },
+  "approvals": { "mode": "auto", "readOnlyBypass": true }
+}
