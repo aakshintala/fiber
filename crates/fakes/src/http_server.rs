@@ -145,8 +145,9 @@ impl RequestBudget {
 }
 
 /// One clock-wait acknowledgment, announced after the waiter's clock
-/// check: its phase, thread and own sequence, so the test advances only
-/// the announced sequence. `until` is the parked bound
+/// check: its phase, thread and own sequence. Each phase is announced once
+/// per wake generation, so a phase change cannot hide behind an earlier
+/// wait's acknowledgment. `until` is the parked bound
 /// [`FakeClock::await_thread_parked`](crate::clock::FakeClock::await_thread_parked)
 /// matches.
 #[cfg(test)]

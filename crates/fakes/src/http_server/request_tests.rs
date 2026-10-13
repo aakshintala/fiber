@@ -425,8 +425,9 @@ fn huge_declared_lengths_fail_before_allocation() {
 /// The next clock-wait acknowledgment naming `phase`, skipping the waits
 /// around it: an accept the client beat gets no acknowledgment at all.
 fn wait_phase(acks: &mpsc::Receiver<WaitAck>, phase: &'static str) -> WaitAck {
+    let deadline = Deadline::after(OP);
     loop {
-        let ack = Deadline::after(OP).recv_or_fail(acks, "the next clock wait");
+        let ack = deadline.recv_or_fail(acks, "the next clock wait");
         if ack.phase == phase {
             return ack;
         }
@@ -543,6 +544,64 @@ fn check_phase(prefix: &[u8], phase: &'static str, progress: &[u8]) {
             message.contains(phase),
             "the failure names its phase, got: {message}"
         );
+    });
+}
+
+#[test]
+fn a_phase_change_during_the_same_clock_wait_is_announced() {
+    let clock = fake_clock();
+    let server = bind(&clock, bounds());
+    let acks = server.test_acknowledgments();
+    let addr = server.addr();
+    let (tx, rx) = mpsc::channel();
+    thread::scope(|scope| {
+        let mut client = TcpStream::connect(addr).expect("the test connects");
+        scope.spawn(|| {
+            let outcome = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                let mut conn = server
+                    .accept_expected("the phase change")
+                    .expect("a client connects");
+                read_request(&mut conn)
+            }));
+            match tx.send(outcome) {
+                Ok(()) | Err(_) => {}
+            }
+        });
+
+        // Hold the request line incomplete until the core has acknowledged
+        // and parked on it. The client then completes that line, so the
+        // same waiter reaches the header phase without a clock advance.
+        let line = wait_phase(&acks, "to read the request line");
+        assert!(
+            clock.await_thread_parked(line.thread, line.until, OP),
+            "the request-line read parks before the bytes arrive"
+        );
+        let mark = clock
+            .mark_parked(line.until.expect("the read has a bound"), OP)
+            .expect("the request-line read is parked");
+        client
+            .write_all(b"G / H\r\n")
+            .expect("the request line writes");
+
+        // A phase transition is a distinct clock wait even when no clock
+        // wake occurred. Without that announcement, the test cannot
+        // distinguish the header wait from the earlier request-line wait.
+        let headers = wait_phase(&acks, "to read the headers");
+        assert_eq!(headers.thread, line.thread, "the same reader advances");
+        assert_eq!(headers.seq, line.seq + 1, "the phase change is sequenced");
+        assert!(
+            clock.await_parked_since(&mark, headers.until, OP),
+            "the same reader parks again for the headers"
+        );
+
+        client
+            .write_all(b"\r\n")
+            .expect("the empty header block writes");
+        let outcome = Deadline::after(OP).recv_or_fail(&rx, "the completed request");
+        let request = complete(outcome.expect("the reader returns instead of panicking"));
+        assert_eq!(request.method, "G");
+        assert_eq!(request.target, "/");
+        assert!(request.headers.is_empty());
     });
 }
 

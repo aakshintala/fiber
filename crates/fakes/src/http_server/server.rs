@@ -139,7 +139,7 @@ impl Shared {
         name: &str,
         phase: &'static str,
         seq: &mut u64,
-        acked: &mut Option<u64>,
+        acked: &mut Option<(u64, &'static str)>,
     ) -> WaitEnd {
         // One count per entry: a waiter that parks enters once per
         // park, one that spins re-enters without a wake.
@@ -158,7 +158,7 @@ impl Shared {
         if guard_left.is_zero() {
             guard_expired(budget, name, phase);
         }
-        if *acked != Some(seen) {
+        if *acked != Some((seen, phase)) {
             *seq += 1;
             #[cfg(test)]
             if let Some(acks) = lock(&self.acks).as_ref() {
@@ -172,7 +172,7 @@ impl Shared {
                     Ok(()) | Err(_) => {}
                 }
             }
-            *acked = Some(seen);
+            *acked = Some((seen, phase));
         }
         #[cfg(test)]
         if let Some(gate) = lock(&self.gate).as_ref().map(Arc::clone) {
@@ -324,7 +324,7 @@ impl HttpServer {
         mode: &AcceptMode,
         budget: &RequestBudget,
         seq: &mut u64,
-        acked: &mut Option<u64>,
+        acked: &mut Option<(u64, &'static str)>,
     ) -> AcceptOutcome {
         loop {
             if self.shared.stopping.load(Ordering::SeqCst) {

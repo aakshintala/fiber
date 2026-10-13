@@ -67,8 +67,8 @@ pub(crate) struct Connection {
     /// Bytes read past what the caller consumed.
     ahead: VecDeque<u8>,
     seq: u64,
-    /// The last acknowledged wake generation: polls stay silent.
-    acked: Option<u64>,
+    /// The last acknowledged wake generation and phase: polls stay silent.
+    acked: Option<(u64, &'static str)>,
 }
 
 impl Connection {
@@ -536,7 +536,7 @@ pub(crate) struct WaitCtx<'a> {
     pub(crate) name: &'a str,
     pub(crate) shared: &'a Arc<Shared>,
     pub(crate) seq: &'a mut u64,
-    pub(crate) acked: &'a mut Option<u64>,
+    pub(crate) acked: &'a mut Option<(u64, &'static str)>,
 }
 
 /// Writes every byte through `writer` and flushes within the wait
