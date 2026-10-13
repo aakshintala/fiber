@@ -377,7 +377,10 @@ impl Offsets {
                 first,
                 from,
                 want_last,
-                start: starts_start(&snapshot, from_idx),
+                start: snapshot
+                    .checkpoints
+                    .get(from_idx)
+                    .map_or(snapshot.end, |checkpoint| checkpoint.1),
                 bytes,
                 bound: end,
             };
@@ -527,9 +530,12 @@ impl Table {
 
 /// How a window under sizing finds each next line's start, in order from
 /// the line after its first: resident checkpoints, or the forward scan.
-/// `None` past the complete lines found.
+/// `None` past the complete lines found. `next_bounded` stops the scan
+/// once the line passes `limit` and reports it as over budget without
+/// traversing it whole.
 trait Starts {
     fn next(&mut self) -> Option<u64>;
+    fn next_bounded(&mut self, limit: u64) -> Option<u64>;
     /// Why `next` ended, once it returns `None`.
     fn short(&mut self) -> Option<io::Error>;
     /// File bytes the scan traversed, once sizing ends.
@@ -546,6 +552,11 @@ impl Starts for ResidentStarts<'_> {
         let byte = self.snapshot.checkpoints.get(self.idx)?.1;
         self.idx = self.idx.saturating_add(1);
         Some(byte)
+    }
+
+    fn next_bounded(&mut self, limit: u64) -> Option<u64> {
+        let _ = limit;
+        self.next()
     }
 
     fn short(&mut self) -> Option<io::Error> {
@@ -566,20 +577,16 @@ impl Starts for ScannedStarts<'_> {
         self.finder.next_newline_end()
     }
 
+    fn next_bounded(&mut self, limit: u64) -> Option<u64> {
+        self.finder.next_newline_end_bounded(limit)
+    }
+
     fn short(&mut self) -> Option<io::Error> {
         self.finder.short.take()
     }
 
     fn scanned(&self) -> u64 {
         self.finder.scanned
-    }
-}
-
-/// The start a resident window's first line holds.
-fn starts_start(snapshot: &Snapshot, from_idx: usize) -> u64 {
-    match snapshot.checkpoints.get(from_idx) {
-        Some(checkpoint) => checkpoint.1,
-        None => snapshot.end,
     }
 }
 
@@ -596,8 +603,10 @@ struct Spec {
 
 /// Sizes a window from its first line's start: the first line is in
 /// whatever its length, and every later line while it ends at or before
-/// the byte limit. `starts` yields each next line's start in order;
-/// running out ends the window over the complete lines found.
+/// the byte limit. A later line is rejected once its scan passes the
+/// limit, without traversing it whole. `starts` yields each next line's
+/// start in order; running out ends the window over the complete lines
+/// found.
 fn size_window(snapshot: &Snapshot, spec: &Spec, starts: &mut impl Starts) -> Resolution {
     let limit = spec.start.saturating_add(spec.bytes);
     // Lines `from..past` are in; `cur` starts line `past`.
@@ -609,10 +618,20 @@ fn size_window(snapshot: &Snapshot, spec: &Spec, starts: &mut impl Starts) -> Re
             break;
         }
         // The last line's end is authoritative: no scan past the table.
+        // The first line is in whatever its length, so only later lines
+        // take the bounded scan that stops past the limit.
         let end_of = if past.saturating_add(1) == snapshot.total {
             snapshot.end
-        } else {
+        } else if past == spec.from {
             match starts.next() {
+                Some(end) => end,
+                None => {
+                    short = starts.short().or_else(short_eof);
+                    break;
+                }
+            }
+        } else {
+            match starts.next_bounded(limit) {
                 Some(end) => end,
                 None => {
                     short = starts.short().or_else(short_eof);
@@ -666,6 +685,57 @@ impl Finder<'_> {
                 if byte == b'\n' {
                     return Some(self.byte);
                 }
+            }
+            self.at = 0;
+            match self.file.read(&mut self.buf) {
+                Ok(0) => {
+                    self.len = 0;
+                    self.short = Some(io::Error::new(
+                        io::ErrorKind::UnexpectedEof,
+                        "the log ends short of its offset table",
+                    ));
+                    return None;
+                }
+                Ok(read) => {
+                    self.len = read;
+                    self.scanned = self
+                        .scanned
+                        .saturating_add(u64::try_from(read).unwrap_or(u64::MAX));
+                }
+                Err(error) => {
+                    self.len = 0;
+                    self.short = Some(error);
+                    return None;
+                }
+            }
+        }
+    }
+
+    /// The byte just past the next `\n`, stopping once the scan passes
+    /// `stop`: a line running past the page budget is reported as
+    /// `u64::MAX`, over the budget whatever its length, without
+    /// traversing it whole. `short` stays unset on that path: the line
+    /// exists, it just does not fit. A clean end of file or a failed
+    /// read still ends the scan with `short` set, as `next_newline_end`
+    /// does.
+    fn next_newline_end_bounded(&mut self, stop: u64) -> Option<u64> {
+        loop {
+            while self.at < self.len {
+                if self.byte > stop {
+                    return Some(u64::MAX);
+                }
+                let byte = match self.buf.get(self.at) {
+                    Some(byte) => *byte,
+                    None => break,
+                };
+                self.at = self.at.saturating_add(1);
+                self.byte = self.byte.saturating_add(1);
+                if byte == b'\n' {
+                    return Some(self.byte);
+                }
+            }
+            if self.byte > stop {
+                return Some(u64::MAX);
             }
             self.at = 0;
             match self.file.read(&mut self.buf) {

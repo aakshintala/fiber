@@ -61,6 +61,21 @@ fn shape(page: &Page) -> (Vec<Option<u64>>, bool) {
     (seqs(&page.lines), matches!(page.after, After::More))
 }
 
+/// Envelopes equal without dumping megabyte payloads on failure: the
+/// lengths first, then the first differing position with its seqs only.
+#[track_caller]
+fn assert_envelopes(got: &[Envelope], expected: &[Envelope]) {
+    assert_eq!(got.len(), expected.len(), "envelope count");
+    for (i, (g, e)) in got.iter().zip(expected.iter()).enumerate() {
+        assert!(
+            g == e,
+            "envelopes differ at {i}: got seq {:?}, expected seq {:?}",
+            g.seq,
+            e.seq
+        );
+    }
+}
+
 const KIB: usize = 1024;
 
 #[test]
@@ -725,7 +740,7 @@ fn evicted_reads_are_exact_across_the_widest_gap() {
     let from = b_line.saturating_sub(2);
     let page = offsets.page(from, u64::MAX);
     let first = usize::try_from(from).unwrap_or(usize::MAX);
-    assert_eq!(page.lines, envelopes[first..first + page.lines.len()]);
+    assert_envelopes(&page.lines, &envelopes[first..first + page.lines.len()]);
     assert_eq!(
         page.lines.first().map(|line| line.seq),
         envelopes.get(first).map(|line| line.seq)
@@ -736,10 +751,10 @@ fn evicted_reads_are_exact_across_the_widest_gap() {
     let at = a_line.saturating_add(1);
     let at_usize = usize::try_from(at).unwrap_or(usize::MAX);
     let got = offsets.range(at, 4).unwrap();
-    assert_eq!(got, envelopes[at_usize..at_usize + got.len()]);
+    assert_envelopes(&got, &envelopes[at_usize..at_usize + got.len()]);
     // The first page reads exactly, through the metered scan.
     let first_page = offsets.page(0, u64::MAX);
-    assert_eq!(first_page.lines, envelopes[..first_page.lines.len()]);
+    assert_envelopes(&first_page.lines, &envelopes[..first_page.lines.len()]);
     // The worst scan stays within the ruled bound, and so does the first
     // page's sizing scan.
     assert_scan(&offsets, b_line.saturating_sub(1), end, longest);
@@ -765,7 +780,7 @@ fn evicted_reads_are_exact_over_uniform_long_lines() {
     let at = a_line.saturating_add(1);
     let at_usize = usize::try_from(at).unwrap_or(usize::MAX);
     let got = offsets.range(at, 4).unwrap();
-    assert_eq!(got, envelopes[at_usize..at_usize + got.len()]);
+    assert_envelopes(&got, &envelopes[at_usize..at_usize + got.len()]);
     assert_scan(&offsets, b_line.saturating_sub(1), end, longest);
     assert_scan(&offsets, 0, end, longest);
     // Past-end reads stay empty: past the last line, and at `u64::MAX`.
@@ -789,9 +804,9 @@ fn evicted_reads_are_exact_around_a_giant_line() {
     }
     // A line longer than a page is a page of its own, even evicted.
     let page = offsets.page(1500, u64::MAX);
-    assert_eq!(page.lines, envelopes[1500..1501]);
+    assert_envelopes(&page.lines, &envelopes[1500..1501]);
     assert!(matches!(page.after, After::More));
-    assert_eq!(offsets.range(1501, 3).unwrap(), envelopes[1501..1504]);
+    assert_envelopes(&offsets.range(1501, 3).unwrap(), &envelopes[1501..1504]);
     // The giant line dominates the ruled bound, so it holds vacuously
     // at this scale; the halves above carry the guarantee.
 }
@@ -815,7 +830,7 @@ fn evicted_reads_are_exact_around_one_long_line() {
     let at = r_line.saturating_add(1);
     let at_usize = usize::try_from(at).unwrap_or(usize::MAX);
     let got = offsets.range(at, 2).unwrap();
-    assert_eq!(got, envelopes[at_usize..at_usize + got.len()]);
+    assert_envelopes(&got, &envelopes[at_usize..at_usize + got.len()]);
     assert_eq!(offsets.range(0, 2).unwrap(), envelopes[0..2]);
     assert_scan(&offsets, b_line.saturating_sub(1), end, longest);
     // The file is smaller than the page slack, so the ruled bound holds
@@ -836,10 +851,49 @@ fn evicted_reads_are_exact_across_consecutive_long_lines() {
     let (_a, b_line, _gap, longest) = widest(&offsets.lock().checkpoints, &lens);
     let end = offsets.end();
     // A range spanning the whole long run reads exactly.
-    assert_eq!(offsets.range(1500, 20).unwrap(), envelopes[1500..1520]);
+    assert_envelopes(&offsets.range(1500, 20).unwrap(), &envelopes[1500..1520]);
     // The file is smaller than the page slack, so the ruled bound holds
     // vacuously here; the halves above carry the guarantee.
     assert_scan(&offsets, b_line.saturating_sub(1), end, longest);
+}
+
+/// A page starting at an oversized line holds that line alone, and sizing
+/// rejects the next oversized line once its scan passes the remaining page
+/// budget instead of traversing it whole: without the early stop the scan
+/// below traverses both 4 MiB lines against about 5 MiB allowed.
+#[test]
+fn sized_pages_stop_sizing_past_the_page_budget() {
+    let mut payloads = small_payloads(1100);
+    payloads.push(serde_json::json!({"pad": "x".repeat(4 * 1024 * 1024)}));
+    payloads.push(serde_json::json!({"pad": "x".repeat(4 * 1024 * 1024)}));
+    payloads.extend(small_payloads(1100));
+    let (_dir, offsets, envelopes, lens) = bulked("page-budget", payloads);
+    // The oversized first line is a page of its own, exactly.
+    let page = offsets.page(1100, u64::MAX);
+    assert_envelopes(&page.lines, &envelopes[1100..1101]);
+    assert!(matches!(page.after, After::More));
+    // The metered sizing scan stays within the ruled bound.
+    let end = offsets.end();
+    let longest = lens.iter().copied().max().unwrap_or(0);
+    let window = offsets
+        .resolve(1100, CAPACITY, PAGE_BYTES, u64::MAX)
+        .unwrap()
+        .unwrap();
+    assert!(window.scanned > 0, "the page takes the forward scan");
+    assert!(window.more, "lines remain past the page");
+    assert_eq!(
+        window.stop.saturating_sub(window.start),
+        lens[1100],
+        "the page holds the first giant line alone"
+    );
+    let bound = (2u64.max(end.saturating_mul(8) / 1024))
+        .saturating_add(longest)
+        .saturating_add(PAGE_BYTES);
+    assert!(
+        window.scanned <= bound,
+        "scanned {} over bound {bound}",
+        window.scanned
+    );
 }
 
 #[test]
@@ -862,7 +916,7 @@ fn evicted_reads_are_exact_over_alternating_lines() {
     let at = r_line.saturating_add(1);
     let at_usize = usize::try_from(at).unwrap_or(usize::MAX);
     let got = offsets.range(at, 4).unwrap();
-    assert_eq!(got, envelopes[at_usize..at_usize + got.len()]);
+    assert_envelopes(&got, &envelopes[at_usize..at_usize + got.len()]);
     assert_scan(&offsets, b_line.saturating_sub(1), end, longest);
     assert_scan(&offsets, 0, end, longest);
 }
@@ -880,7 +934,7 @@ fn evicted_reads_are_exact_over_growing_lines() {
     }
     let (_a, b_line, _gap, longest) = widest(&offsets.lock().checkpoints, &lens);
     let end = offsets.end();
-    assert_eq!(offsets.range(2000, 4).unwrap(), envelopes[2000..2004]);
+    assert_envelopes(&offsets.range(2000, 4).unwrap(), &envelopes[2000..2004]);
     // A deep line's scan crosses the whole prefix when evicted: still
     // within the ruled bound.
     assert_scan(&offsets, 2900, end, longest);
@@ -901,7 +955,7 @@ fn a_corrupt_line_in_an_evicted_gap_names_its_absolute_line() {
     // zero would end before a far line with more, not the failure.
     let from = bad.saturating_sub(2);
     let page = offsets.page(u64::try_from(from).unwrap_or(u64::MAX), u64::MAX);
-    assert_eq!(page.lines, envelopes[from..bad]);
+    assert_envelopes(&page.lines, &envelopes[from..bad]);
     let After::Failed(error) = page.after else {
         panic!("a page over an unparseable line fails");
     };
@@ -950,7 +1004,7 @@ fn a_cut_in_an_evicted_gap_keeps_the_whole_lines_before_it() {
         let stop = start + len;
         if i >= from {
             if stop > cut_at {
-                assert_eq!(page.lines, envelopes[from..i]);
+                assert_envelopes(&page.lines, &envelopes[from..i]);
                 break;
             }
         } else {
@@ -974,7 +1028,7 @@ fn scan_with_a_small_limit_reads_only_that_many_lines() {
     let session = dir.path();
     let scanned = Offsets::scan(session, 5, |_| Ok(())).unwrap();
     assert_eq!(scanned.count(), 5);
-    assert_eq!(scanned.range(0, 100).unwrap(), envelopes[..5]);
+    assert_envelopes(&scanned.range(0, 100).unwrap(), &envelopes[..5]);
 }
 
 /// The forward scan's fixed buffer: recovery scans allocate this once on
@@ -984,10 +1038,6 @@ fn scan_with_a_small_limit_reads_only_that_many_lines() {
 #[test]
 fn the_forward_scan_uses_an_eight_kibibyte_stack_buffer() {
     assert_eq!(SCAN_CHUNK, 8 * 1024);
-    assert_eq!(SCAN_CHUNK, 8192);
-    // Both sides of the change this pins: `8 + 1024` is the 1032-byte
-    // buffer no existing test observes.
-    assert_ne!(SCAN_CHUNK, 8 + 1024);
 }
 
 /// A fully resident window takes no file I/O and scans nothing: every
@@ -1029,7 +1079,6 @@ fn fully_resident_windows_scan_nothing() {
         idx: 1,
     };
     assert_eq!(starts.scanned(), 0);
-    assert_ne!(starts.scanned(), 1);
 }
 
 /// An evicted window counts its file scan: the meter reports a positive
@@ -1047,9 +1096,8 @@ fn evicted_windows_report_traversed_bytes() {
     let (r_line, _r_end) = roomy_gap(&offsets.lock().checkpoints);
     let at = r_line.saturating_add(1);
     let window = offsets.resolve(at, 4, u64::MAX, u64::MAX).unwrap().unwrap();
-    // Both sides of the meter: a scan happened, and it stayed bounded.
+    // A scan happened, and it stayed bounded.
     assert!(window.scanned > 0, "target {at}");
-    assert_ne!(window.scanned, 0);
     let bound = (2u64.max(end.saturating_mul(8) / 1024))
         .saturating_add(longest)
         .saturating_add(PAGE_BYTES);
@@ -1061,7 +1109,7 @@ fn evicted_windows_report_traversed_bytes() {
     let at_usize = usize::try_from(at).unwrap();
     let got = offsets.range(at, 4).unwrap();
     assert!(!got.is_empty());
-    assert_eq!(got, envelopes[at_usize..at_usize + got.len()]);
+    assert_envelopes(&got, &envelopes[at_usize..at_usize + got.len()]);
     assert_scan(&offsets, b_line.saturating_sub(1), end, longest);
 }
 
@@ -1084,9 +1132,7 @@ fn the_scan_meter_counts_exact_traversed_bytes() {
     let window = offsets.resolve(at, 4, u64::MAX, u64::MAX).unwrap().unwrap();
     // One read takes the whole remainder: the meter is exact.
     assert_eq!(window.scanned, end.saturating_sub(anchor_byte));
-    // Both sides of the constant: positive and not pinned to 1.
     assert!(window.scanned > 0);
-    assert_ne!(window.scanned, 1);
     let got = offsets.range(at, 4).unwrap();
     assert_eq!(got, envelopes[5..9]);
 }
