@@ -2615,6 +2615,64 @@ fn a_signal_ends_a_history_wait_at_once() {
     assert_eq!(held, 1, "the signal is held for after the frame");
 }
 
+/// Co-pending SIGTERM and SIGHUP keep the first delivered: the second
+/// raise waits until the first is recorded, so the consumer is still
+/// holding both when it sends. Each test runs in its own process, so the
+/// record starts at none and the raises reach only this test.
+#[test]
+fn co_pending_signals_keep_term_delivered_first() {
+    use signal_hook::consts::{SIGHUP, SIGTERM};
+    assert_eq!(co_pending_first(SIGTERM, SIGHUP), (SIGTERM, SIGTERM));
+}
+
+/// Co-pending SIGTERM and SIGHUP keep the first delivered, HUP first.
+#[test]
+fn co_pending_signals_keep_hup_delivered_first() {
+    use signal_hook::consts::{SIGHUP, SIGTERM};
+    assert_eq!(co_pending_first(SIGHUP, SIGTERM), (SIGHUP, SIGHUP));
+}
+
+/// Raises `first`, holds the raise of `second` until the first is
+/// recorded, then reads the two signals the consumer sends: both carry
+/// the first delivered, the later one included.
+fn co_pending_first(first: std::ffi::c_int, second: std::ffi::c_int) -> (i32, i32) {
+    super::register_first().unwrap_or_else(|err| panic!("register: {err}"));
+    let (tx, rx) = mpsc::channel();
+    let signals = signal_hook::iterator::Signals::new([first, second])
+        .unwrap_or_else(|err| panic!("register: {err}"));
+    super::spawn_signal(signals, tx);
+    signal_hook::low_level::raise(first).unwrap_or_else(|err| panic!("raise: {err}"));
+    // The second raise waits for the first's record, not for the
+    // consumer: either order of sending still reads the first twice.
+    while super::first_signal() != first {
+        std::hint::spin_loop();
+    }
+    signal_hook::low_level::raise(second).unwrap_or_else(|err| panic!("raise: {err}"));
+    let mut got = Vec::new();
+    for _ in 0..2 {
+        match Deadline::after(DEADLINE)
+            .recv(&rx)
+            .unwrap_or_else(|err| panic!("waited {DEADLINE:?} for the signal: {err}"))
+        {
+            Input::Signal(signal) => got.push(signal),
+            Input::Bytes(_)
+            | Input::Hub(_)
+            | Input::Connected(..)
+            | Input::ConnectFailed(_)
+            | Input::Disconnected
+            | Input::Resize
+            | Input::Files { .. }
+            | Input::FindDue(_)
+            | Input::Image { .. }
+            | Input::Viewed { .. }
+            | Input::Models(_)
+            | Input::Login { .. }
+            | Input::Tick => panic!("the signal thread sent something else"),
+        }
+    }
+    (got[0], got[1])
+}
+
 /// The signal thread maps each taken signal to [`Input::Signal`] with its
 /// number. SIGUSR1 stands in for the watched pair: nothing else in this
 /// test binary registers it, so the raise reaches only this thread.

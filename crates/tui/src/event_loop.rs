@@ -8,13 +8,14 @@ pub(crate) mod batch;
 use batch::{batch, batchable};
 
 use std::collections::VecDeque;
+use std::ffi::c_int;
 use std::fs::File;
 use std::io::{self, Write};
 use std::ops::RangeInclusive;
 use std::os::unix::net::UnixStream;
 use std::path::PathBuf;
 use std::sync::Arc;
-use std::sync::atomic::AtomicBool;
+use std::sync::atomic::{AtomicBool, AtomicI32, Ordering};
 use std::sync::mpsc::{self, Receiver, Sender};
 
 use contract::clock::Clock;
@@ -55,6 +56,13 @@ pub fn run(
     // printing the resume lines. Without the registration a signal would
     // kill the process without restoring, so a refused one fails before
     // any frame.
+    // The first-delivered recorder goes in first: signal-hook runs a
+    // signal's handlers in registration order, so the record precedes
+    // the iterator's wakeup and the consumer always finds it. A refused
+    // recorder fails before any frame, as a refused iterator does.
+    if register_first().is_err() {
+        return 1;
+    }
     let Ok(term_signals) = Signals::new([SIGTERM, SIGHUP]) else {
         return 1;
     };
@@ -194,13 +202,52 @@ pub fn run(
     code
 }
 
+/// The first of SIGTERM and SIGHUP delivered to this process, or 0
+/// while none has arrived. The iterator takes co-pending signals in an
+/// arbitrary order, so the handlers below record the delivered order and
+/// the consumer sends the record: the first signal's code wins, for every
+/// later signal too.
+static FIRST: AtomicI32 = AtomicI32::new(0);
+
+/// The first delivered shutdown signal, or 0 while none has arrived.
+pub(crate) fn first_signal() -> c_int {
+    FIRST.load(Ordering::SeqCst)
+}
+
+/// Records the handlers' signal as the first delivered, leaving a
+/// recorded one alone: the first compare-exchange wins.
+fn record_first(signal: c_int) {
+    let _recorded = FIRST.compare_exchange(0, signal, Ordering::SeqCst, Ordering::SeqCst);
+}
+
+/// Records the first of SIGTERM and SIGHUP delivered, before the
+/// iterator below wakes its consumer. No safe signal-hook helper keeps
+/// the first: `flag` overwrites with the last. Register before the
+/// iterator, so the record precedes its wakeup.
+#[allow(
+    unsafe_code,
+    reason = "first-delivered SIGTERM/SIGHUP capture: the handler only CASes an AtomicI32"
+)]
+pub(crate) fn register_first() -> io::Result<()> {
+    for signal in [SIGTERM, SIGHUP] {
+        // SAFETY: async-signal-safe: the handler only compare-exchanges
+        // `FIRST`, which never allocates, blocks or touches a lock.
+        unsafe { signal_hook::low_level::register(signal, move || record_first(signal)) }?;
+    }
+    Ok(())
+}
+
 /// Turns SIGTERM and SIGHUP into [`Input::Signal`] on their own thread,
-/// in arrival order, so the first signal's code wins. Left blocked on
-/// quit; it ends with the process.
+/// sending the first delivered for every one, so the first signal's code
+/// wins. Left blocked on quit; it ends with the process.
 fn spawn_signal(mut signals: Signals, tx: Sender<Input>) {
     let signal = crate::sources::builder("tui-signal").spawn(move || {
         for signal in signals.forever() {
-            if tx.send(Input::Signal(signal)).is_err() {
+            // 0 only when the iterator woke without a recorded signal,
+            // which registration order rules out: keep the taken one then.
+            let first = first_signal();
+            let first = if first == 0 { signal } else { first };
+            if tx.send(Input::Signal(first)).is_err() {
                 return;
             }
         }
@@ -874,17 +921,26 @@ impl<B: Backend> Loop<B> {
 
     /// Ctrl+G: opens `text` in the editor `$VISUAL` or `$EDITOR` names,
     /// with the terminal handed over, and gives the app what it returned.
-    /// `Some(1)` when the terminal cannot be taken back.
+    /// `Some(1)` when the terminal cannot be taken back. A shutdown signal
+    /// while the editor runs quits with 128 plus its number instead, after
+    /// the handover takes the terminal back.
     fn open_editor(&mut self, target: editor::Target, text: &str) -> Option<i32> {
         let Some(command) = editor::command(&self.var) else {
             self.app
                 .editor_returned(target, Err(editor::NO_EDITOR.to_owned()));
             return None;
         };
-        let mut result = Err(String::new());
-        let code = self.hand_over(|| result = editor::run(&command, text));
+        let mut result = editor::Outcome::Done(Err(String::new()));
+        let clock = Arc::clone(&self.clock);
+        let code = self.hand_over(|| result = editor::run(&command, text, &clock));
         if code.is_none() {
-            self.app.editor_returned(target, result);
+            match result {
+                editor::Outcome::Done(done) => self.app.editor_returned(target, done),
+                // The editor is killed and the draft unchanged: quit with
+                // the signal's code, closing nothing first, so live
+                // sessions keep their resume lines.
+                editor::Outcome::Stopped(signal) => return Some(128 + signal),
+            }
         }
         code
     }
@@ -892,17 +948,25 @@ impl<B: Backend> Loop<B> {
     /// Ctrl+G on a configuration view: opens `file` in the editor
     /// `$VISUAL` or `$EDITOR` names, with the terminal handed over, and
     /// tells the app it returned. `Some(1)` when the terminal cannot be
-    /// taken back.
+    /// taken back. A shutdown signal while the editor runs quits with 128
+    /// plus its number instead, after the handover takes the terminal back.
     fn open_file(&mut self, file: &std::path::Path) -> Option<i32> {
         let Some(command) = editor::command(&self.var) else {
             self.app
                 .config_file_closed(Err(editor::NO_EDITOR_FILE.to_owned()));
             return None;
         };
-        let mut result = Err(String::new());
-        let code = self.hand_over(|| result = editor::open(&command, file));
+        let mut result = editor::Outcome::Done(Err(String::new()));
+        let clock = Arc::clone(&self.clock);
+        let code = self.hand_over(|| result = editor::open(&command, file, &clock));
         if code.is_none() {
-            self.app.config_file_closed(result);
+            match result {
+                editor::Outcome::Done(done) => self.app.config_file_closed(done),
+                // The editor is killed: quit with the signal's code,
+                // closing nothing first, so live sessions keep their
+                // resume lines.
+                editor::Outcome::Stopped(signal) => return Some(128 + signal),
+            }
         }
         code
     }

@@ -1,12 +1,13 @@
 //! Tests for Ctrl+G: choosing what opens, running the editor on a
 //! temporary file, and applying what it returns.
 
-use super::{NEXT, NO_EDITOR, Target, TempFile, command, open, run_in};
+use super::{NEXT, NO_EDITOR, Outcome, Target, TempFile, command, open, run_in};
 use crate::app::{App, Effect};
 use crate::keys::{Edit, Key};
 use contract::clock::Clock;
 use fakes::Deadline;
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
 use std::sync::mpsc;
 use std::time::Duration;
 
@@ -81,13 +82,20 @@ impl Fake {
     fn run_command(&self, command: String, text: &str) -> Result<String, String> {
         let temp = self.temp.path().to_path_buf();
         let text = text.to_owned();
+        let clock: Arc<dyn Clock> = fakes::clock::FakeClock::new();
         let (done, finished) = mpsc::channel();
         std::thread::Builder::new()
             .name("editor-run".to_owned())
-            .spawn(move || done.send(run_in(&temp, &command, &text)).unwrap_or(()))
+            .spawn(move || {
+                done.send(run_in(&temp, &command, &text, &clock))
+                    .unwrap_or(())
+            })
             .unwrap_or_else(|err| panic!("spawn: {err}"));
         match Deadline::after(DEADLINE).recv(&finished) {
-            Ok(result) => result,
+            Ok(Outcome::Done(result)) => result,
+            Ok(Outcome::Stopped(signal)) => {
+                panic!("the editor wait ended on signal {signal} with no signal raised")
+            }
             Err(err) => panic!("waited {DEADLINE:?} for the editor: {err}"),
         }
     }
@@ -215,6 +223,39 @@ fn an_editor_ended_by_a_signal_keeps_the_draft_and_names_it() {
     assert!(fake.left().is_empty());
 }
 
+/// A shutdown signal ends a blocked editor wait: the editor is killed
+/// and the wait ends with the signal's number, so the loop quits with 128
+/// plus it instead of waiting out the editor. Each test runs in its own
+/// process, so the raise reaches only this test.
+#[test]
+fn a_shutdown_signal_ends_a_blocked_editor_wait() {
+    use signal_hook::consts::SIGTERM;
+    crate::event_loop::register_first().unwrap_or_else(|err| panic!("register: {err}"));
+    // A fake editor that blocks until killed: `exec` makes the sleep the
+    // process waited on, as an editor run by its own name is.
+    let fake = Fake::new("exec sleep 30\n");
+    let command = fake.command("", "");
+    let temp = fake.temp.path().to_path_buf();
+    let clock: Arc<dyn Clock> = fakes::clock::FakeClock::new();
+    let (done, finished) = mpsc::channel();
+    std::thread::Builder::new()
+        .name("editor-blocked".to_owned())
+        .spawn(move || {
+            done.send(run_in(&temp, &command, "text", &clock))
+                .unwrap_or(())
+        })
+        .unwrap_or_else(|err| panic!("spawn: {err}"));
+    signal_hook::low_level::raise(SIGTERM).unwrap_or_else(|err| panic!("raise: {err}"));
+    match Deadline::after(DEADLINE)
+        .recv(&finished)
+        .unwrap_or_else(|err| panic!("waited {DEADLINE:?} for the editor wait to end: {err}"))
+    {
+        Outcome::Stopped(signal) => assert_eq!(signal, SIGTERM),
+        Outcome::Done(result) => panic!("the blocked editor returned {result:?}"),
+    }
+    assert!(fake.left().is_empty());
+}
+
 #[test]
 fn an_unreadable_file_keeps_the_draft_and_says_so() {
     let fake = Fake::new("rm \"$1\"\n");
@@ -234,13 +275,17 @@ impl Fake {
     fn open(&self, path: &Path) -> Result<(), String> {
         let command = self.command("", "");
         let path = path.to_path_buf();
+        let clock: Arc<dyn Clock> = fakes::clock::FakeClock::new();
         let (done, finished) = mpsc::channel();
         std::thread::Builder::new()
             .name("editor-open".to_owned())
-            .spawn(move || done.send(open(&command, &path)).unwrap_or(()))
+            .spawn(move || done.send(open(&command, &path, &clock)).unwrap_or(()))
             .unwrap_or_else(|err| panic!("spawn: {err}"));
         match Deadline::after(DEADLINE).recv(&finished) {
-            Ok(result) => result,
+            Ok(Outcome::Done(result)) => result,
+            Ok(Outcome::Stopped(signal)) => {
+                panic!("the editor wait ended on signal {signal} with no signal raised")
+            }
             Err(err) => panic!("waited {DEADLINE:?} for the editor: {err}"),
         }
     }
@@ -269,22 +314,29 @@ fn open_reports_a_failing_editor() {
     );
     let fake = Fake::new("kill -INT $$\n");
     let command = fake.command("exec ", "");
+    let clock: Arc<dyn Clock> = fakes::clock::FakeClock::new();
     let (done, finished) = mpsc::channel();
     std::thread::Builder::new()
         .name("editor-open-signal".to_owned())
-        .spawn(move || done.send(open(&command, &path)).unwrap_or(()))
+        .spawn(move || done.send(open(&command, &path, &clock)).unwrap_or(()))
         .unwrap_or_else(|err| panic!("spawn: {err}"));
     assert_eq!(
         Deadline::after(DEADLINE).recv(&finished).ok(),
-        Some(Err("The editor was ended by signal 2.".to_owned()))
+        Some(Outcome::Done(Err(
+            "The editor was ended by signal 2.".to_owned()
+        )))
     );
 }
 
 #[test]
 fn no_directory_for_the_file_says_so_and_runs_nothing() {
     let fake = Fake::new("printf 'ran' > $OUT/ran\n");
+    let clock: Arc<dyn Clock> = fakes::clock::FakeClock::new();
     let missing = fake.temp.path().join("missing");
-    let result = run_in(&missing, &fake.command("", ""), "x");
+    let result = run_in(&missing, &fake.command("", ""), "x", &clock);
+    let Outcome::Done(result) = result else {
+        panic!("the editor wait ended on a signal with no signal raised");
+    };
     assert!(
         result
             .as_ref()

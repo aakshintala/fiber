@@ -191,6 +191,7 @@ the code and the list disagree.
 | `fakes` | `crates/fakes/src/crash_ports.rs` | on macOS, `pre_exec` calls `task_set_exception_ports` so a re-run child's deliberate `abort()` writes no ReportCrash report; its test reads the port back with `task_get_exception_ports` |
 | `log` | `crates/log/src/diag/memory.rs` | on macOS, `proc_pid_rusage` reads the peak physical footprint for a `peak_memory` line |
 | `fakes` | `crates/fakes/src/alloc.rs` | the counting allocator implements `GlobalAlloc`, an unsafe trait, and forwards every call to `System` |
+| `tui` | `crates/tui/src/event_loop.rs` | first-delivered SIGTERM/SIGHUP capture: `low_level` handlers that only compare-exchange an `AtomicI32` |
 
 `unsafe` inside dependencies is `docs/dependencies.md`'s.
 
