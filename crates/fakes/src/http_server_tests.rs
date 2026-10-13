@@ -2411,3 +2411,73 @@ fn registration_past_shutdown_claims_nothing() {
         "the refused claim registers nothing"
     );
 }
+
+/// A finished tunnel removes only its own registry entry: live neighbours
+/// below and above its id stay for shutdown's drain. Flipping the retain
+/// to `==` keeps only the finished id and drops both neighbours.
+#[test]
+fn a_finished_tunnel_removes_only_its_own_registry_entry() {
+    let clock = fake_clock();
+    let server = bind(&clock);
+    let acks = server.test_acknowledgments();
+    // A live neighbour below the tunnel's id: the drain must still
+    // break it after the tunnel ends.
+    let (probe_before, held_before) = socket_pair();
+    let before = server
+        .shared
+        .register_tunnel(&probe_before, &held_before)
+        .expect("a live neighbour registers");
+    let (origin_addr, origin_ended) = hold_origin();
+    let target = format!("{origin_addr}");
+    let (done_tx, done_rx) = mpsc::channel();
+    thread::scope(|scope| {
+        let (conn, client) = accept_for_tunnel(&server, "the tunnel request");
+        let origin = TcpStream::connect(origin_addr).expect("the tunnel reaches the origin");
+        scope.spawn(move || {
+            let end = conn.tunnel(&target, origin);
+            match done_tx.send(end) {
+                Ok(()) | Err(_) => {}
+            }
+        });
+        // The client-to-origin copy parks only past registration, so
+        // its wait proves the tunnel claimed its id.
+        let deadline = Deadline::after(OP);
+        let ack = loop {
+            let ack = next_acknowledgment(&deadline, &acks, "the copy's clock wait");
+            if ack.phase == "to copy the client to the origin" {
+                break ack;
+            }
+        };
+        assert!(
+            clock.await_thread_parked(ack.thread, ack.until, OP),
+            "the copy parks on the clock before it moves"
+        );
+        // A live neighbour above the tunnel's id, claimed while the
+        // tunnel runs.
+        let (probe_after, held_after) = socket_pair();
+        let after = server
+            .shared
+            .register_tunnel(&probe_after, &held_after)
+            .expect("a later neighbour registers");
+        // The client's close ends the client-to-origin copy first: the
+        // origin never sends nor closes, so the origin copy cannot win.
+        drop(client);
+        assert_eq!(
+            Deadline::after(OP).recv_or_fail(&done_rx, "the finished tunnel"),
+            TunnelEnd::ClientClosed,
+            "the client's close ends the tunnel first"
+        );
+        let live: Vec<u64> = lock(&server.shared.tunnels)
+            .live
+            .iter()
+            .map(|(id, _, _)| *id)
+            .collect();
+        assert_eq!(
+            live,
+            vec![before, after],
+            "only the finished tunnel leaves the registry"
+        );
+        assert!(server.shutdown(), "shutdown reaps the neighbours");
+        Deadline::after(OP).recv_or_fail(&origin_ended, "the origin's end");
+    });
+}
