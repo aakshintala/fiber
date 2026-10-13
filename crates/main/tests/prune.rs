@@ -272,10 +272,9 @@ impl Drop for StopGuard {
 }
 
 #[test]
-fn a_prune_that_meets_an_exiting_hub_waits_and_starts_a_new_one() {
-    // Cold-start contention repro for #2121 (reworked: the exiting-hub
-    // handshake it forced before tested #2110's already-landed retry,
-    // not this PR's readiness fix). A stand-in holds `run/`'s lock and
+fn a_prune_that_meets_a_silent_hub_fails_then_meets_a_ready_one() {
+    // Cold-start contention repro for #2121 (reworked: a stand-in that
+    // never answers hello, then the same prune against a held ready hub). A stand-in holds `run/`'s lock and
     // `run/hub`, accepting connections but never answering hello, so a
     // prune that must cold-start against the contended socket sits in
     // its bounded hello wait (`doors::hub::CONNECT_DEADLINE`, read-only)
