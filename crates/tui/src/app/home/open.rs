@@ -96,8 +96,11 @@ pub(super) fn subscribe_line(
         Level::Full => "full",
     };
     let mut args = serde_json::json!({"level": name});
-    if let Some(credential) = credential {
-        args["credential"] = Value::String(credential.to_owned());
+    if let (Some(credential), Some(object)) = (credential, args.as_object_mut()) {
+        object.insert(
+            "credential".to_owned(),
+            Value::String(credential.to_owned()),
+        );
     }
     let line = session_command(&id, "subscribe", session, Some(args)).to_string();
     (id, line)

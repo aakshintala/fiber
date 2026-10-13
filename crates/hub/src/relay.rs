@@ -121,10 +121,13 @@ fn startup_credential(
     }
     match serde_json::from_value::<contract::commands::CommandLine>(Value::Object(stripped.clone()))
     {
-        Ok(line) => match line.command {
-            contract::commands::Command::Subscribe(args) => Ok(args.credential),
-            _ => Err((ErrorCode::InvalidArguments, UNFIT)),
-        },
+        Ok(line) => {
+            if let contract::commands::Command::Subscribe(args) = line.command {
+                Ok(args.credential)
+            } else {
+                Err((ErrorCode::InvalidArguments, UNFIT))
+            }
+        }
         Err(_) => Err((ErrorCode::InvalidArguments, UNFIT)),
     }
 }

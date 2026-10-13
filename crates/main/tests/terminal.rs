@@ -1338,12 +1338,12 @@ fn journey_quit_just_resumed_session_prints_its_resume_line() {
     );
 }
 
-/// Binary-level tests of `fiber resume --credential <label>`
-/// (`docs/model-routing.md`, "Which credential a session uses"): the
-/// real binary in a pseudo-terminal resumes a session onto another
-/// stored credential label, through the hub, with a fake provider.
-/// Every request fingerprint is asserted after its signaled
-/// request/turn; no test sleeps or reads the real clock.
+// Binary-level tests of `fiber resume --credential <label>`
+// (`docs/model-routing.md`, "Which credential a session uses"): the
+// real binary in a pseudo-terminal resumes a session onto another
+// stored credential label, through the hub, with a fake provider.
+// Every request fingerprint is asserted after its signaled
+// request/turn; no test sleeps or reads the real clock.
 
 /// Stores `stored` as `credentials/fake/<label>`, each holding
 /// `<label>-key`, and names `label` as the fake provider's credential,
