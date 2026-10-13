@@ -2,7 +2,7 @@
 //! (`http_server/request.rs`).
 
 use std::io::Write;
-use std::net::{Shutdown, SocketAddr, TcpStream};
+use std::net::{Shutdown, TcpStream};
 use std::sync::{Arc, mpsc};
 use std::thread;
 use std::time::Duration;
