@@ -255,8 +255,9 @@ fn box_edge(buf: &mut Buffer, area: Rect, rect: Rect, top: bool) {
     }
     let full = box_edge_row(usize::from(rect.width), top);
     let skip = usize::from(left.saturating_sub(rect.x));
-    let clipped = clip_edge_row(&full, skip, usize::from(right - left));
-    buf.set_line(left, y, &clipped, right - left);
+    let kept = right.saturating_sub(left);
+    let clipped = clip_edge_row(&full, skip, usize::from(kept));
+    buf.set_line(left, y, &clipped, kept);
 }
 
 /// The stripe's cell in `colour` on `tint`, on the `right` of its surface:
@@ -337,8 +338,9 @@ fn draw_edge(buf: &mut Buffer, rect: Rect, tint: Role, top: bool) {
     }
     let full = edge_row(usize::from(rect.width), tint, top);
     let skip = usize::from(left.saturating_sub(rect.x));
-    let clipped = clip_edge_row(&full, skip, usize::from(right - left));
-    buf.set_line(left, y, &clipped, right - left);
+    let kept = right.saturating_sub(left);
+    let clipped = clip_edge_row(&full, skip, usize::from(kept));
+    buf.set_line(left, y, &clipped, kept);
 }
 
 /// Draws the edge rows above and below `rect` in `tint`, where they sit
