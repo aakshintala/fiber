@@ -788,10 +788,11 @@ jobs:
           done
 
   # Files the flake issues for the tests that passed after a retry
-  # (docs/testing.md, "Flaky tests"). It holds only `contents: read` and
-  # `issues: write`, checks nothing out and runs no repository code: the
-  # test names come from this run's artifacts and go to the API by file.
-  # Not in `ci`'s needs: a flake never fails the merge.
+  # (docs/testing.md, "Flaky tests"). It holds `contents: read`,
+  # `pull-requests: read` and `issues: write`, checks nothing out and runs
+  # no repository code: the test names come from this run's artifacts and
+  # go to the API by file. It skips repeat titles, stale bases and PR-only
+  # failures. Not in `ci`'s needs: a flake never fails the merge.
   flake_report:
     name: Report flaky tests
     needs: [test_linux, test]
@@ -801,6 +802,7 @@ jobs:
     timeout-minutes: 5
     permissions:
       contents: read
+      pull-requests: read
       issues: write
     env:
       GH_TOKEN: ${{ github.token }}
@@ -830,6 +832,20 @@ jobs:
         run: |
           dir=$RUNNER_TEMP/flaky
           [ -d "$dir" ] || exit 0
+          seen=$RUNNER_TEMP/flaky-seen.txt
+          : > "$seen"
+          base=""
+          compare_files=""
+          pr_files=""
+          if [ "${GITHUB_EVENT_NAME:-}" = pull_request ]; then
+            base=$(gh api "repos/$GH_REPO/commits/$GITHUB_SHA" -q '.parents[0].sha // empty' || true)
+            if [ -n "$base" ]; then
+              compare_files=$(gh api --paginate "repos/$GH_REPO/compare/$base...main" -q '.files[].filename' || true)
+            fi
+            if [ -n "$PR" ]; then
+              pr_files=$(gh api --paginate "repos/$GH_REPO/pulls/$PR/files" -q '.[].filename' || true)
+            fi
+          fi
           for file in "$dir"/flaky-tests-*.txt; do
             [ -f "$file" ] || continue
             runner=${file#"$dir"/flaky-tests-}
@@ -844,6 +860,35 @@ jobs:
                 *) detail="" ;;
               esac
               title="Flaky test: $name"
+              if grep -Fxq "$title" "$seen"; then
+                continue
+              fi
+              failing=""
+              case "$detail" in
+                *panicked\ at*)
+                  hit=$(printf '%s' "$detail" | grep -o -E '[A-Za-z0-9_./-]+\.rs:[0-9]+' | head -n 1 || true)
+                  if [ -n "$hit" ]; then
+                    failing=${hit%:*}
+                  fi
+                  ;;
+              esac
+              if [ -n "$failing" ] && [ "${GITHUB_EVENT_NAME:-}" = pull_request ]; then
+                if [ -n "$base" ] && [ -n "$compare_files" ] \
+                  && printf '%s\n' "$compare_files" | grep -Fxq "$failing"; then
+                  echo "stale base: main changed $failing since $base" >> "$GITHUB_STEP_SUMMARY"
+                  printf '%s\n' "$title" >> "$seen"
+                  continue
+                fi
+                if [ -n "$pr_files" ] && printf '%s\n' "$pr_files" | grep -Fxq "$failing"; then
+                  pr_body="The test \`$name\` passed after a retry on $runner, but its failing file \`$failing\` belongs to #$PR rather than main: $RUN_URL."
+                  if [ -n "$detail" ]; then
+                    pr_body="$pr_body"$'\n```\n'"$detail"$'\n```'
+                  fi
+                  gh issue comment "$PR" --body "$pr_body"
+                  printf '%s\n' "$title" >> "$seen"
+                  continue
+                fi
+              fi
               body="The test \`$name\` passed after a retry on $runner: $RUN_URL."
               if [ -n "$PR" ]; then
                 body="$body (see #$PR)"
@@ -858,6 +903,7 @@ jobs:
               else
                 gh issue create --title "$title" --body "$body"
               fi
+              printf '%s\n' "$title" >> "$seen"
             done < "$file"
           done
 

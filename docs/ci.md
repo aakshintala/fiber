@@ -143,8 +143,8 @@ A failed binary-level test retries once. A pass on retry does not fail the
 run: CI opens a flake issue naming the test, or comments on the open one
 (`docs/testing.md`, "Flaky tests"). The retry is nextest's `ci` profile over
 the `crates/main/tests` binaries, and a separate job holding only
-`contents: read` and `issues: write`, which runs no Fiber code, files the
-issue. No other test retries.
+`contents: read`, `pull-requests: read` and `issues: write`, which runs no
+Fiber code, files the issue. No other test retries.
 
 On Linux x86_64 alone:
 
