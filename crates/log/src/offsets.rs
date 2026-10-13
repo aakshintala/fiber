@@ -15,9 +15,9 @@ use crate::{Error, io_at};
 
 /// How many line-start checkpoints the table keeps resident: 1024 pairs of
 /// `(line, byte)`, 16 KiB, whatever the log's size. Past the cap the table
-/// keeps every other checkpoint and doubles its byte spacing, so the
-/// checkpoints stay spread across the whole log and an evicted page is
-/// found by scanning forward from the nearest checkpoint at or before it.
+/// doubles its byte spacing and greedily re-thins to at most half the cap,
+/// so the checkpoints stay spread across the whole log and an evicted page
+/// is found by scanning forward from the nearest checkpoint at or before it.
 const CHECKPOINTS: usize = 1024;
 
 /// The forward scan's fixed buffer: recovery scans allocate this once on
