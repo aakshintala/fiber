@@ -520,7 +520,12 @@ fn ten_turns(ctx: &Ctx<'_>, notes: &mut Vec<String>) -> Result<Samples, String> 
     let script = (0..TEN_TURNS)
         .flat_map(|_| turn.script.clone())
         .collect::<Vec<_>>();
-    in_home(Home::scripted(ctx.home.fiber(), script)?, |home| {
+    let home = Home::scripted(ctx.home.fiber(), script)?;
+    // The pass asserts only the request count, while each request carries
+    // the session's whole conversation so far: retaining every body would
+    // hold tens of gigabytes in the harness (see #2188).
+    home.server().drop_bodies();
+    in_home(home, |home| {
         for (name, body) in &turn.files {
             write(&home.workspace().join(name), body)?;
         }

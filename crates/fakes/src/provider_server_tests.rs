@@ -563,6 +563,31 @@ fn a_responder_answers_each_request_from_its_body() {
 }
 
 #[test]
+fn dropped_bodies_keep_the_count_and_the_lengths_but_not_the_bytes() {
+    let server =
+        ProviderServer::start([Response::status(200, "ok"), Response::status(200, "ok")]).unwrap();
+    server.drop_bodies();
+    let addr = server.addr;
+
+    let first = vec![b'a'; 1_000_000];
+    let second = vec![b'b'; 2_000_000];
+    post(addr, &first);
+    post(addr, &second);
+    assert!(
+        server.await_requests(2, READ_WITHIN),
+        "both requests are recorded"
+    );
+    let requests = server.requests();
+    assert_eq!(requests.len(), 2);
+    assert_eq!(requests[0].body_len, first.len());
+    assert_eq!(requests[1].body_len, second.len());
+    assert!(
+        requests.iter().all(|request| request.body.is_empty()),
+        "no stored body holds its bytes"
+    );
+}
+
+#[test]
 fn a_responder_builds_a_later_answer_from_an_earlier_request() {
     let server = ProviderServer::start_responding(|request: &Request| {
         let text = String::from_utf8_lossy(&request.body);
