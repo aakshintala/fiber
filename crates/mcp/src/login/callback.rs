@@ -168,8 +168,13 @@ pub(crate) fn answer(
             // and the peer reads an empty reply instead of the 431. The
             // drain below reads to the head's end first, so the close
             // carries the 431 every time. It is bounded past one more cap
-            // of bytes, so a head that never ends still ends here.
+            // of bytes, and by the same injected deadline as the head
+            // read, so a head that never ends still ends here, and a peer
+            // that drips the refused head cannot extend the wait.
             while head.len() < 2 * MAX_HEAD {
+                if clock.now() >= deadline {
+                    return Some(Served::Failed(LoginError::Timeout));
+                }
                 match stream.read(&mut byte) {
                     Ok(0) => break,
                     Ok(_) => head.push(byte[0]),

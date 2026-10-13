@@ -1479,7 +1479,10 @@ fn a_head_past_8kib_gets_431_and_the_wait_continues() {
         // server closed with the request half-read, and either way the
         // wait continues for the real callback below.
         let mut big = TcpStream::connect(host).unwrap();
-        big.set_read_timeout(Some(Duration::from_secs(10))).unwrap();
+        // No socket timeout: the read ends at the close the listener
+        // performs after writing the 431, and a hang is bounded by the
+        // login result's own deadline with its fake-clock advance in
+        // `run_with_callback`.
         let padding = "x".repeat(MAX_HEAD);
         let _written = big.write_all(
             format!("GET /callback?{padding} HTTP/1.1\r\nHost: {host}\r\n\r\n").as_bytes(),
@@ -1524,7 +1527,10 @@ fn an_idle_connection_is_dropped_and_a_later_callback_succeeds() {
         // An idle connection, opened with no bytes: the listener drops it
         // after its silent polls, which this read sees as the close.
         let mut idle = TcpStream::connect(host).unwrap();
-        idle.set_read_timeout(Some(WITHIN)).unwrap();
+        // No socket timeout: the read ends at the close the listener
+        // performs after its silent polls, and a hang is bounded by the
+        // login result's own deadline with its fake-clock advance in
+        // `run_with_callback`.
         let mut byte = [0_u8; 1];
         assert_eq!(
             idle.read(&mut byte).unwrap(),
@@ -1662,7 +1668,10 @@ fn a_slow_drip_does_not_stop_the_900s_deadline() {
         // instead of hanging the suite.
         let reads = super::callback::tap_reads();
         let drips = fakes::Deadline::after(WITHIN);
-        drive_releasing_on_panic(&clock, || {
+        // `drip` returns to the test and stays open across the advance
+        // below: the deadline interrupts the reader's blocked read, not
+        // an EOF from a dropped connection.
+        let drip = drive_releasing_on_panic(&clock, || {
             let redirect = query_param(&shown, "redirect_uri").unwrap().to_owned();
             let (_, rest) = redirect.split_once("://").unwrap();
             let (host, _) = rest.split_once('/').unwrap();
@@ -1673,12 +1682,14 @@ fn a_slow_drip_does_not_stop_the_900s_deadline() {
                 drip.write_all(b"G").unwrap();
                 drips.recv_or_fail(&reads, "the callback reader's next byte");
             }
+            drip
         });
         clock.advance(CALLBACK_WAIT);
         let result =
             fakes::Deadline::after(WITHIN).recv_or_fail(&received_done, "the timed-out login");
         assert!(matches!(result, Err(LoginError::Timeout)), "{result:?}");
         login.join().unwrap();
+        drop(drip);
     });
     assert!(
         files
@@ -1972,14 +1983,17 @@ fn the_header_document_is_used_when_the_well_known_ones_are_absent() {
 
 /// Sends raw `head` bytes to `addr` and reads the reply to the close,
 /// never failing: a refused connection or a reset read is an empty reply,
-/// so no assertion inside the driving scope can hang the wait.
+/// so no assertion inside the driving scope can hang the wait. No socket
+/// timeout: the read ends at the close the server performs when it
+/// answers, and the half-close below guarantees that close even when the
+/// server reads past the head, with the fake deadline ending the wait.
 fn send_raw(addr: std::net::SocketAddr, head: &[u8]) -> String {
     let mut stream = match TcpStream::connect(addr) {
         Ok(stream) => stream,
         Err(_) => return String::new(),
     };
-    let _timeout = stream.set_read_timeout(Some(WITHIN));
     let _written = stream.write_all(head);
+    let _half_closed = stream.shutdown(std::net::Shutdown::Write);
     let mut reply = String::new();
     let _read = stream.read_to_string(&mut reply);
     reply
@@ -1987,10 +2001,11 @@ fn send_raw(addr: std::net::SocketAddr, head: &[u8]) -> String {
 
 /// Drives one [`wait_callback`] wait to its end: the wait runs on a scoped
 /// thread while `interact` works the listener's address, then the result
-/// is received with a bound, advancing the clock past the deadline first
+/// is received with a bound, advancing the fake clock past the deadline
 /// when the bound expires, so a mutant that never answers still ends the
-/// wait and the scope still joins. `interact` reports through its echo,
-/// asserted after the join.
+/// wait and the scope still joins. The clock advances only after the wait
+/// parks on it below, so the advance never ends a wait that has not
+/// started. `interact` reports through its echo, asserted after the join.
 fn driven_wait(
     clock: &Arc<fakes::clock::FakeClock>,
     deadline: std::time::Instant,
@@ -2008,6 +2023,13 @@ fn driven_wait(
             sent.send(wait_callback(&listener, &**clock, deadline, state))
                 .unwrap();
         });
+        // The wait parks on the fake clock between accepts: only after
+        // this signal does the test interact, and only after it may the
+        // fallback below advance the clock.
+        assert!(
+            clock.await_parked(deadline, WITHIN),
+            "the callback wait never waited on the clock"
+        );
         let echo = interact(addr);
         let result = match fakes::Deadline::after(WITHIN).recv(&received) {
             Ok(result) => result,
@@ -2097,28 +2119,79 @@ fn answer_reads_a_head_of_exactly_the_cap() {
 
 #[test]
 fn an_over_cap_head_is_refused_with_431_and_the_next_callback_succeeds() {
-    // One byte past the 8 KiB cap is refused with 431 and serves the next
-    // connection, which still reads: the refused reply is mandatory, and
-    // the second 200 with the code proves the wait continued. The client
-    // reads the first reply whole before it opens the second connection,
-    // and the server drains the refused head before closing, so the 431
-    // cannot race the next accept or the close into a reset.
+    // One byte past the 8 KiB cap is refused with 431 and the next head
+    // still reads: the refused reply is mandatory, and the second 200
+    // with the code proves the wait continued. Both calls are direct, one
+    // head fully written before each call with the clock never moving, so
+    // an `answer` mutant that never answers fails the assertions below
+    // instead of waiting out a result deadline; the server drains the
+    // refused head before closing, so the 431 cannot race the close into
+    // a reset.
+    const CAP: usize = 8 * 1024;
+    let over = sized_head(CAP + 1);
+    let (refused, first) = answer_once(&over, "s1");
+    assert!(first.starts_with("HTTP/1.1 431"), "{first}");
+    assert!(refused.is_none(), "a refused head ended the wait");
+    let (served, second) = answer_once(
+        b"GET /callback?code=abc&state=s1 HTTP/1.1\r\nHost: x\r\nConnection: close\r\n\r\n",
+        "s1",
+    );
+    assert!(second.starts_with("HTTP/1.1 200"), "{second}");
+    match served {
+        Some(Served::Code(code)) => assert_eq!(code, "abc"),
+        _ => panic!("the callback after a refused head did not read"),
+    }
+}
+
+#[test]
+fn a_refused_head_dripped_past_the_deadline_ends_at_the_deadline() {
+    // A peer sends an over-cap head with no terminator, reads the 431,
+    // then keeps dripping after the fake deadline has passed: the drain
+    // stops at the deadline with the timeout instead of consuming the
+    // drip. Reading the 431 first proves the server reached the drain, so
+    // the advance below lands mid-drain; without the drain's deadline
+    // check the answer is `None`, after the drip.
     const CAP: usize = 8 * 1024;
     let clock = fakes::clock::FakeClock::new();
     let deadline = clock.origin() + Duration::from_secs(60);
-    let over = sized_head(CAP + 1);
-    let (result, echo) = driven_wait(&clock, deadline, "s1", |addr| {
-        let first = send_raw(addr, &over);
-        let second = send_raw(
-            addr,
-            b"GET /callback?code=abc&state=s1 HTTP/1.1\r\nHost: x\r\nConnection: close\r\n\r\n",
-        );
-        format!("{first}||{second}")
+    let listener = std::net::TcpListener::bind((std::net::Ipv4Addr::LOCALHOST, 0)).unwrap();
+    let addr = listener.local_addr().unwrap();
+    let (sent, received) = mpsc::channel();
+    std::thread::scope(|scope| {
+        let mut client = TcpStream::connect(addr).unwrap();
+        // Over the cap with no head end: the server answers 431, then
+        // drains a head that never terminates on its own.
+        client.write_all(&vec![b'G'; CAP + 1]).unwrap();
+        let (server, _) = listener.accept().unwrap();
+        let answerer = scope.spawn(|| {
+            sent.send(answer(server, &*clock, deadline, "s1")).unwrap();
+        });
+        // The 431 arrives before the drain, whole: read to its end, which
+        // needs no timeout and cannot block on the open connection.
+        let mut reply = Vec::new();
+        let mut byte = [0_u8; 1];
+        while !reply.ends_with(b"\r\n\r\n") {
+            match client.read(&mut byte) {
+                Ok(0) | Err(_) => break,
+                Ok(_) => reply.push(byte[0]),
+            }
+        }
+        let reply = String::from_utf8_lossy(&reply).into_owned();
+        assert!(reply.starts_with("HTTP/1.1 431"), "{reply}");
+        // The deadline passes while the peer keeps dripping: the answer
+        // still ends at the deadline, not after the drip.
+        clock.advance(Duration::from_secs(61));
+        let _dripped = client.write_all(b"GGG");
+        let served =
+            fakes::Deadline::after(WITHIN).recv_or_fail(&received, "the refused head's answer");
+        match served {
+            Some(Served::Failed(error)) => {
+                assert!(matches!(error, LoginError::Timeout), "{error:?}");
+            }
+            _ => panic!("a refused head dripped past the deadline did not time out"),
+        }
+        answerer.join().unwrap();
     });
-    let (first, second) = echo.split_once("||").unwrap();
-    assert!(first.starts_with("HTTP/1.1 431"), "{echo}");
-    assert!(second.starts_with("HTTP/1.1 200"), "{echo}");
-    assert_eq!(result.unwrap(), "abc");
 }
 
 #[test]
@@ -2182,7 +2255,6 @@ fn the_callback_wait_serves_a_connection_that_pauses_before_its_head() {
             Ok(client) => client,
             Err(_) => return String::new(),
         };
-        let _timeout = client.set_read_timeout(Some(WITHIN));
         let _written = client.write_all(b"G");
         // About five silent polls pass here with no bytes, far below the
         // hundred the listener tolerates: a bounded receive, not a sleep.
