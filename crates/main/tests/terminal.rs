@@ -25,7 +25,7 @@ use std::thread;
 use fakes::{ProviderServer, Response, fingerprint};
 use serde_json::{Value, json};
 use support::pty::{FINISHED_TITLE, KITTY_PUSH, TITLE, WAITING_TITLE};
-use support::{Deadline, PIXEL, hello, write_json};
+use support::{Deadline, PIXEL, hello, text_reply, write_json};
 
 /// Installs a provider `fake` with model `m` on `openai-responses` at the
 /// fake server, makes `fake/m` the configured model, and idles the hub
@@ -1598,7 +1598,7 @@ fn resume_with_a_credential_switches_an_exited_session_to_the_asked_label() {
 #[test]
 fn resume_with_a_credential_switches_a_running_session_at_the_next_turn() {
     let setup = support::Setup::new();
-    let server = ProviderServer::start([hello(), hello()]).unwrap();
+    let server = ProviderServer::start([hello(), text_reply("The second answer.")]).unwrap();
     provider(&setup, &server);
     labels(&setup, "home", &["home", "work"]);
     let before_config = snapshot_config(&setup);
@@ -1632,9 +1632,8 @@ fn resume_with_a_credential_switches_a_running_session_at_the_next_turn() {
     first.turn_finished(first_from);
     assert_eq!(server.requests().len(), 1, "no second request yet");
     // The first turn's title reaches the second terminal as well:
-    // only past it does an offset prove the next turn finished,
-    // since both turns answer alike and the grid keeps the old paint
-    // (see #2211).
+    // only past it does an offset prove the next turn finished (see
+    // #2211).
     second.wait_bytes(
         attached,
         FINISHED_TITLE,
@@ -1649,8 +1648,11 @@ fn resume_with_a_credential_switches_a_running_session_at_the_next_turn() {
     );
     server.release_one();
     // Turn 2's own answer in the grid: the bare word `completed`
-    // already shows from turn 1's card on this attached terminal.
-    second.wait_screen("the second answer", |grid| grid.contents.contains("Hello."));
+    // already shows from turn 1's card on this attached terminal, so
+    // the wait names turn 2's distinct reply text.
+    second.wait_screen("the second answer", |grid| {
+        grid.contents.contains("The second answer.")
+    });
     second.turn_finished(second_from);
     let requests = server.requests();
     assert_eq!(requests.len(), 2, "{requests:?}");
