@@ -274,6 +274,10 @@ fn resident_checkpoints_stay_at_a_constant_cap() {
     assert!(offsets.lock().checkpoints.len() <= CHECKPOINTS / 2);
     assert_eq!(offsets.lock().checkpoints.len(), 257);
     assert_eq!(offsets.lock().checkpoints[0], (0, 0));
+    // Re-thinning allocates the compacted set instead of retaining the
+    // grown buffer: right after the thin the capacity sits at the cap,
+    // not at the log's scale.
+    assert!(offsets.lock().checkpoints.capacity() <= CHECKPOINTS);
     // The absolute line count never depends on checkpointing.
     assert_eq!(offsets.count(), 1025);
 }
@@ -459,7 +463,11 @@ fn re_thinning_bounds_gaps_across_many_thinnings() {
     let (offsets, thins) = driven(&lens);
     assert!(thins >= 1, "{thins} thinnings");
     let table = offsets.lock();
-    assert!(table.spacing.trailing_zeros() >= 8, "spacing {}", table.spacing);
+    assert!(
+        table.spacing.trailing_zeros() >= 8,
+        "spacing {}",
+        table.spacing
+    );
     assert!(table.checkpoints.len() <= CHECKPOINTS);
     assert_eq!(table.total, 30_000);
     assert_eq!(table.checkpoints[0], (0, 0));
@@ -640,6 +648,18 @@ fn long_payload() -> serde_json::Value {
     serde_json::json!({"pad": "x".repeat(9900)})
 }
 
+/// The first resident gap holding at least two lines: reading inside
+/// it forces the forward scan, since no checkpoint stands between a
+/// gap's bounding lines.
+fn roomy_gap(checkpoints: &[(u64, u64)]) -> (u64, u64) {
+    for pair in checkpoints.windows(2) {
+        if pair[1].0 >= pair[0].0.saturating_add(2) {
+            return (pair[0].0, pair[1].0);
+        }
+    }
+    panic!("no gap holds two lines");
+}
+
 /// The widest resident gap: its bounding lines and bytes, and the longest
 /// line wholly inside it.
 fn widest(checkpoints: &[(u64, u64)], lens: &[u64]) -> (u64, u64, u64, u64) {
@@ -789,9 +809,15 @@ fn evicted_reads_are_exact_around_one_long_line() {
         assert_gaps(&table.checkpoints, table.spacing, &lens);
         assert_spacing(table.spacing, table.end);
     }
+    // A range starting inside a roomy gap (never on a checkpoint)
+    // forces the forward scan, as does the worst-case metered read below.
     let (_a, b_line, _gap, longest) = widest(&offsets.lock().checkpoints, &lens);
+    let (r_line, _r_end) = roomy_gap(&offsets.lock().checkpoints);
     let end = offsets.end();
-    assert_eq!(offsets.range(700, 2).unwrap(), envelopes[700..702]);
+    let at = r_line.saturating_add(1);
+    let at_usize = usize::try_from(at).unwrap_or(usize::MAX);
+    let got = offsets.range(at, 2).unwrap();
+    assert_eq!(got, envelopes[at_usize..at_usize + got.len()]);
     assert_eq!(offsets.range(0, 2).unwrap(), envelopes[0..2]);
     assert_scan(&offsets, b_line.saturating_sub(1), end, longest);
     assert_scan(&offsets, 700, end, lens[700]);
@@ -829,9 +855,14 @@ fn evicted_reads_are_exact_over_alternating_lines() {
         assert_gaps(&table.checkpoints, table.spacing, &lens);
         assert_spacing(table.spacing, table.end);
     }
+    // Inside a roomy gap, never on a checkpoint: forces the scan.
     let (_a, b_line, _gap, longest) = widest(&offsets.lock().checkpoints, &lens);
+    let (r_line, _r_end) = roomy_gap(&offsets.lock().checkpoints);
     let end = offsets.end();
-    assert_eq!(offsets.range(100, 6).unwrap(), envelopes[100..106]);
+    let at = r_line.saturating_add(1);
+    let at_usize = usize::try_from(at).unwrap_or(usize::MAX);
+    let got = offsets.range(at, 4).unwrap();
+    assert_eq!(got, envelopes[at_usize..at_usize + got.len()]);
     assert_scan(&offsets, b_line.saturating_sub(1), end, longest);
     assert_scan(&offsets, 0, end, longest);
 }
