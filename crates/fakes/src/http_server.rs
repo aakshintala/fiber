@@ -1097,19 +1097,19 @@ impl HttpServer {
             if self.shared.stopping.load(Ordering::SeqCst) {
                 return AcceptOutcome::Stopped;
             }
-            // Taken by shutdown: no more accepts after it.
-            let accepted = lock(&self.shared.listener)
+            // Taken by shutdown: no more accepts after it. An empty
+            // queue or an aborted handshake is not the listener's end:
+            // poll again within the budget, which still bounds the wait
+            // and names its expiry. Shutdown is checked first above, so
+            // stopping still ends at once.
+            if let Some(Ok((stream, _))) = lock(&self.shared.listener)
                 .as_ref()
-                .map(|listener| listener.accept());
-            match accepted {
-                Some(Ok((stream, _))) => {
-                    if stream.set_nonblocking(true).is_err() {
-                        continue;
-                    }
-                    return AcceptOutcome::Accepted(stream);
+                .map(|listener| listener.accept())
+            {
+                if stream.set_nonblocking(true).is_err() {
+                    continue;
                 }
-                Some(Err(error)) if error.kind() == io::ErrorKind::WouldBlock => {}
-                Some(Err(_)) | None => return AcceptOutcome::Stopped,
+                return AcceptOutcome::Accepted(stream);
             }
             if budget.expired() {
                 return AcceptOutcome::Idle;
