@@ -798,3 +798,22 @@ fn hold_gates_a_responded_answer_as_it_does_a_scripted_one() {
         .unwrap_or_else(|_| panic!("release sends the held answer within {READ_WITHIN:?}"));
     assert!(response.ends_with(b"saw 4"), "{response:?}");
 }
+
+/// A hold release pins every side: no hold goes with no permit, a hold
+/// waits with no permit, and a permit lets a held response go.
+#[test]
+fn a_hold_release_pins_every_side() {
+    assert!(
+        hold_released(false, 0),
+        "a released hold goes with no permit"
+    );
+    assert!(
+        !hold_released(true, 0),
+        "a held response waits with no permit"
+    );
+    assert!(hold_released(true, 1), "a permit lets one held response go");
+    assert!(
+        hold_released(false, 1),
+        "a released hold with a permit goes"
+    );
+}

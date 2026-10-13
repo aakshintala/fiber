@@ -563,3 +563,36 @@ fn every_read_phase_uses_the_original_budget() {
         check_phase(prefix, phase, progress);
     }
 }
+
+/// Trailer count admits the count and refuses one more: the count is a
+/// cap of its own beside the aggregate trailer bytes.
+#[test]
+fn trailer_count_admits_the_count_and_refuses_one_more() {
+    let limits = Limits {
+        trailer_count: 2,
+        ..bounds()
+    };
+    let trailers = |count: usize| {
+        let mut request = b"POST /v1 HTTP/1.1\r\nTransfer-Encoding: chunked\r\n\r\n0\r\n".to_vec();
+        for n in 0..count {
+            request.extend_from_slice(format!("t{n}: v\r\n").as_bytes());
+        }
+        request.extend_from_slice(b"\r\n");
+        request
+    };
+    assert!(
+        matches!(read_once(limits, &trailers(1)), RequestOutcome::Complete(_)),
+        "one trailer is admitted"
+    );
+    assert!(
+        matches!(read_once(limits, &trailers(2)), RequestOutcome::Complete(_)),
+        "exactly the count is admitted"
+    );
+    let crossed = match read_once(limits, &trailers(3)) {
+        RequestOutcome::Complete(request) => request,
+        RequestOutcome::Eof => panic!("a third trailer is malformed ended at EOF"),
+        RequestOutcome::Stopped => panic!("a third trailer is malformed stopped"),
+        RequestOutcome::Invalid(why) => panic!("a third trailer is malformed invalid: {why}"),
+    };
+    assert_eq!(crossed.malformed, Some("there are too many trailers"));
+}

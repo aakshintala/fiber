@@ -546,6 +546,14 @@ fn serve(conn: Connection, state: &Mutex<State>, arrived: &Condvar, clock: &Arc<
     let _ = conn.reply_full(head(&response, true).as_bytes(), &response.body, None);
 }
 
+/// Whether a held response may go: released, permitted or dropped. A
+/// pure function, so a unit test pins each side directly: the hold's
+/// millisecond re-poll observes every release without it, so no socket
+/// test distinguishes either comparison.
+fn hold_released(hold: bool, permits: usize) -> bool {
+    !hold || permits > 0
+}
+
 /// Holds a recorded response until its release, permit or the server's
 /// drop: `None` once it may go, the 500 naming the hold when nobody
 /// releases it within its bound. The bound runs on the injected clock,
@@ -588,7 +596,7 @@ fn hold_wait(state: &Mutex<State>, arrived: &Condvar, clock: &Arc<dyn Clock>) ->
                 r#"{"error":"fakes: a held response was never released"}"#,
             ));
         }
-        let predicate = |state: &mut State| !state.hold || state.permits > 0;
+        let predicate = |state: &mut State| hold_released(state.hold, state.permits);
         guard = support::clock::park(
             clock.as_ref(),
             until,

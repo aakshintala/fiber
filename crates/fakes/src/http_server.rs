@@ -351,11 +351,39 @@ impl Shared {
             Some(self.limits.poll.min(guard_left)),
             &self.wake_changed,
             guard,
-            |wake| *wake != seen,
+            |wake| woken(seen, *wake),
         );
         drop(parked);
         WaitEnd::Waited
     }
+}
+
+/// What a socket-read error means for a core read: waiting for more
+/// ends in a clock park, an interruption reads again at once, and
+/// anything else is the peer's end. A pure function, so a unit test pins
+/// each kind directly: socket tests cannot, since an interruption lands
+/// nondeterministically beside the error under test.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+enum ReadErr {
+    Wait,
+    Retry,
+    End,
+}
+
+fn classify(error: &io::Error) -> ReadErr {
+    if error.kind() == io::ErrorKind::WouldBlock {
+        ReadErr::Wait
+    } else if error.kind() == io::ErrorKind::Interrupted {
+        ReadErr::Retry
+    } else {
+        ReadErr::End
+    }
+}
+
+/// Whether a wake generation moved past the one a waiter saw: the park
+/// ends at once past it, and only past it.
+fn woken(seen: u64, current: u64) -> bool {
+    current != seen
 }
 
 /// One accepted connection, still charging its accept window's budget.
@@ -401,9 +429,11 @@ impl Connection {
             match self.stream.read(&mut byte) {
                 Ok(0) => return ReadOutcome::Eof,
                 Ok(_) => return ReadOutcome::Byte(byte[0]),
-                Err(error) if error.kind() == io::ErrorKind::WouldBlock => {}
-                Err(error) if error.kind() == io::ErrorKind::Interrupted => continue,
-                Err(_) => return ReadOutcome::Eof,
+                Err(error) => match classify(&error) {
+                    ReadErr::Wait => {}
+                    ReadErr::Retry => continue,
+                    ReadErr::End => return ReadOutcome::Eof,
+                },
             }
             match self.wait(phase) {
                 WaitEnd::Waited => {}
@@ -424,9 +454,11 @@ impl Connection {
                     self.ahead.extend(chunk.into_iter().take(read));
                     return FillOutcome::Held(self.ahead.len());
                 }
-                Err(error) if error.kind() == io::ErrorKind::WouldBlock => {}
-                Err(error) if error.kind() == io::ErrorKind::Interrupted => continue,
-                Err(_) => return FillOutcome::Eof,
+                Err(error) => match classify(&error) {
+                    ReadErr::Wait => {}
+                    ReadErr::Retry => continue,
+                    ReadErr::End => return FillOutcome::Eof,
+                },
             }
             match self.wait(phase) {
                 WaitEnd::Waited => {}
@@ -618,9 +650,11 @@ impl Connection {
             match self.stream.read(&mut one) {
                 Ok(0) => return StallEnd::Closed,
                 Ok(_) => continue,
-                Err(error) if error.kind() == io::ErrorKind::WouldBlock => {}
-                Err(error) if error.kind() == io::ErrorKind::Interrupted => continue,
-                Err(_) => return StallEnd::Closed,
+                Err(error) => match classify(&error) {
+                    ReadErr::Wait => {}
+                    ReadErr::Retry => continue,
+                    ReadErr::End => return StallEnd::Closed,
+                },
             }
             match self.shared.wait(
                 &op,
@@ -696,7 +730,10 @@ impl Connection {
             b"HTTP/1.1 200 Connection Established\r\n\r\n",
             "to write the tunnel handshake",
             &mut ctx,
-        ) || !pump(
+        ) {
+            return TunnelEnd::OriginClosed;
+        }
+        if !pump(
             &mut origin,
             &ahead,
             "to forward the bytes past the head",
@@ -1174,7 +1211,9 @@ impl HttpServer {
     /// shutdown bound.
     pub(crate) fn shutdown(&self) -> bool {
         self.shared.stopping.store(true, Ordering::SeqCst);
-        *lock(&self.shared.wake) += 1;
+        // No wake-generation bump beside the notify: every parked wait
+        // ends on the notify, and every other waiter re-checks stopping
+        // past its millisecond poll, so no waiter sleeps past shutdown.
         self.shared.wake_changed.notify_all();
         self.shared.idle_changed.notify_all();
         // Take and close the listener: the port refuses connections

@@ -3,7 +3,11 @@
 
 use std::io::Write;
 use std::net::{SocketAddr, TcpStream};
-use std::sync::{Arc, PoisonError, mpsc};
+use std::sync::{
+    Arc, PoisonError,
+    atomic::{AtomicBool, Ordering},
+    mpsc,
+};
 use std::thread;
 use std::time::Duration;
 
@@ -647,22 +651,29 @@ fn dropped_reply_records_request_and_sends_nothing() {
 }
 
 /// A writer with a finite capacity: past it, every write would block.
+/// The test stops it, so a mutant that spins past every wait still ends.
 struct TestWriter {
     capacity: usize,
     written: Vec<u8>,
+    stop: Arc<AtomicBool>,
 }
 
 impl TestWriter {
-    fn finished(capacity: usize) -> Self {
+    fn finished(capacity: usize, stop: Arc<AtomicBool>) -> Self {
         Self {
             capacity,
             written: Vec::new(),
+            stop,
         }
     }
 }
 
 impl std::io::Write for TestWriter {
     fn write(&mut self, bytes: &[u8]) -> std::io::Result<usize> {
+        if self.stop.load(Ordering::SeqCst) {
+            self.written.extend_from_slice(bytes);
+            return Ok(bytes.len());
+        }
         let room = self.capacity.saturating_sub(self.written.len());
         if room == 0 {
             return Err(std::io::Error::new(
@@ -687,6 +698,7 @@ fn blocked_write_expires_on_the_injected_clock() {
         HttpServer::bind(clock.clone() as Arc<dyn Clock>, ten_seconds()).expect("the core binds");
     let acks = server.test_acknowledgments();
     let addr = server.addr();
+    let stop = Arc::new(AtomicBool::new(false));
     let (tx, rx) = mpsc::channel();
     thread::scope(|scope| {
         scope.spawn(|| {
@@ -694,7 +706,7 @@ fn blocked_write_expires_on_the_injected_clock() {
                 .accept_expected("the held request")
                 .expect("a client connects");
             let caught = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-                let mut writer = TestWriter::finished(10);
+                let mut writer = TestWriter::finished(10, Arc::clone(&stop));
                 let op = conn.op_budget();
                 let (_stream, mut ctx) = conn.parts(&op);
                 pump(
@@ -710,9 +722,17 @@ fn blocked_write_expires_on_the_injected_clock() {
         });
         let _client = TcpStream::connect(addr).expect("the test connects");
         let ack = loop {
-            let ack = Deadline::after(OP).recv_or_fail(&acks, "the write's clock wait");
-            if ack.phase == "to write the held response" {
-                break ack;
+            match Deadline::after(OP).recv(&acks) {
+                Ok(ack) if ack.phase == "to write the held response" => break ack,
+                Ok(_) => continue,
+                // No clock wait: a spinner never parks. Release its
+                // writer and take its verdict instead of hanging on it.
+                Err(_) => {
+                    stop.store(true, Ordering::SeqCst);
+                    let verdict = Deadline::after(OP).recv_or_fail(&rx, "the spinning write");
+                    let message = failure_text(verdict, "the held write");
+                    panic!("the held write sent instead of failing: {message}");
+                }
             }
         };
         assert!(
@@ -822,4 +842,774 @@ fn shutdown_releases_pauses_and_reaps_core_waits() {
         "shutdown ends the pause stopped"
     );
     drop(control);
+}
+
+/// The defaults the module doc states: pinning each value kills a mutant
+/// that lowers a cap past what any boundary test reaches through small
+/// injected limits.
+#[test]
+fn default_limits_pin_their_documented_values() {
+    let limits = Limits::default();
+    assert_eq!(
+        limits.request,
+        Duration::from_secs(30),
+        "one request bound covers the whole read"
+    );
+    assert_eq!(
+        limits.guard,
+        Duration::from_secs(45),
+        "one real hang guard backs the bound"
+    );
+    assert_eq!(
+        limits.poll,
+        Duration::from_millis(1),
+        "one poll interval bounds every park"
+    );
+    assert_eq!(limits.line, 64 * 1024, "request-line bytes");
+    assert_eq!(limits.frame, 64 * 1024, "header and chunk-line bytes");
+    assert_eq!(limits.headers, 1024 * 1024, "aggregate header bytes");
+    assert_eq!(limits.header_count, 4096, "header count");
+    assert_eq!(limits.body, 64 * 1024 * 1024, "decoded body bytes");
+    assert_eq!(limits.trailers, 1024 * 1024, "aggregate trailer bytes");
+    assert_eq!(limits.trailer_count, 4096, "trailer count");
+}
+
+/// A wait with no wake parks: with a minute poll, a parked waiter enters
+/// the clock once, while one whose park returns at once re-enters without
+/// any wake.
+#[test]
+fn a_wait_without_a_wake_parks_instead_of_spinning() {
+    let clock = fake_clock();
+    let server = HttpServer::bind(
+        clock.clone() as Arc<dyn Clock>,
+        Limits {
+            request: Duration::from_secs(10),
+            poll: Duration::from_secs(60),
+            ..Limits::default()
+        },
+    )
+    .expect("the core binds");
+    let acks = server.test_acknowledgments();
+    let (done_tx, done_rx) = mpsc::channel();
+    thread::scope(|scope| {
+        scope.spawn(|| {
+            let accepted = server.accept_expected("the parked request").is_some();
+            match done_tx.send(accepted) {
+                Ok(()) | Err(_) => {}
+            }
+        });
+        let ack = next_acknowledgment(&acks, "the accept's clock wait");
+        assert_eq!(ack.phase, "to accept the connection");
+        assert!(
+            clock.await_thread_parked(ack.thread, ack.until, OP),
+            "the accept parks on the clock before it moves"
+        );
+        let entered = clock.wait_entries();
+        assert!(
+            Deadline::after(QUIET).recv(&done_rx).is_err(),
+            "the accept waits instead of ending"
+        );
+        let reentered = clock.wait_entries();
+        server.shutdown();
+        assert!(
+            reentered - entered <= 3,
+            "a parked wait re-enters the clock only past a wake, entered {entered}, now {reentered}"
+        );
+    });
+}
+
+/// A silent connection is not closed: the stall waits for the peer, and
+/// only its close ends the wait.
+#[test]
+fn a_silent_connection_is_not_closed() {
+    let clock = fake_clock();
+    let server = bind(&clock);
+    let acks = server.test_acknowledgments();
+    let addr = server.addr();
+    let (tx, rx) = mpsc::channel();
+    thread::scope(|scope| {
+        scope.spawn(|| {
+            let mut conn = server
+                .accept_expected("the stalled request")
+                .expect("a client connects");
+            let end = conn.stall_wait();
+            match tx.send(end) {
+                Ok(()) | Err(_) => {}
+            }
+        });
+        let client = TcpStream::connect(addr).expect("the test connects");
+        let ack = loop {
+            let ack = next_acknowledgment(&acks, "the stall's clock wait");
+            if ack.phase == "to wait for the stalled peer" {
+                break ack;
+            }
+        };
+        assert!(
+            clock.await_thread_parked(ack.thread, ack.until, OP),
+            "the stall parks on the clock before it moves"
+        );
+        assert!(
+            Deadline::after(QUIET).recv(&rx).is_err(),
+            "a silent stall waits instead of closing"
+        );
+        drop(client);
+        let end = Deadline::after(OP).recv(&rx);
+        server.shutdown();
+        assert_eq!(
+            end.ok(),
+            Some(StallEnd::Closed),
+            "the peer's close ends the stall"
+        );
+    });
+}
+
+/// A reset connection ends a fill at once: anything but a would-block
+/// wait or an interrupted retry is the peer's end, not another wait.
+/// The client peeks the server's bytes, proving they arrived without
+/// consuming them, so its close resets with bytes unread: the unread
+/// count is proven, not timed. The error-kind mapping itself is pinned
+/// by read_errors_classify_distinctly, which needs no socket.
+#[test]
+fn a_reset_connection_ends_a_fill_at_once() {
+    let clock = fake_clock();
+    let server = bind(&clock);
+    let acks = server.test_acknowledgments();
+    let addr = server.addr();
+    let (tx, rx) = mpsc::channel();
+    thread::scope(|scope| {
+        scope.spawn(|| {
+            let mut conn = server
+                .accept_expected("the reset request")
+                .expect("a client connects");
+            let op = conn.op_budget();
+            let (stream, mut ctx) = conn.parts(&op);
+            assert!(
+                pump(stream, &[b'x'; 8], "to write before the reset", &mut ctx),
+                "the bytes the reset leaves unread write"
+            );
+            let outcome = conn.fill("to read the reset request");
+            match tx.send(outcome) {
+                Ok(()) | Err(_) => {}
+            }
+        });
+        let client = TcpStream::connect(addr).expect("the test connects");
+        client
+            .set_read_timeout(Some(OP))
+            .expect("the test bounds its reads");
+        // Peeking proves all eight arrived while leaving them unread, so
+        // the close below resets instead of closing cleanly.
+        let mut peeked = [0u8; 8];
+        loop {
+            match client.peek(&mut peeked) {
+                Ok(8) => break,
+                Ok(_) => continue,
+                Err(error) => panic!("the peek reads within {OP:?}: {error}"),
+            }
+        }
+        let ack = loop {
+            let ack = next_acknowledgment(&acks, "the fill's clock wait");
+            if ack.phase == "to read the reset request" {
+                break ack;
+            }
+        };
+        assert!(
+            clock.await_thread_parked(ack.thread, ack.until, OP),
+            "the fill parks on the clock before it moves"
+        );
+        drop(client);
+        let outcome = Deadline::after(QUIET).recv(&rx);
+        server.shutdown();
+        assert_eq!(
+            outcome.ok(),
+            Some(FillOutcome::Eof),
+            "a reset ends the fill"
+        );
+    });
+}
+
+/// A silent fill waits for its bytes: a would-block wait parks, and the
+/// first byte ends it held.
+#[test]
+fn a_silent_fill_waits_for_its_bytes() {
+    let clock = fake_clock();
+    let server = bind(&clock);
+    let acks = server.test_acknowledgments();
+    let addr = server.addr();
+    let (tx, rx) = mpsc::channel();
+    thread::scope(|scope| {
+        scope.spawn(|| {
+            let mut conn = server
+                .accept_expected("the silent request")
+                .expect("a client connects");
+            let outcome = conn.fill("to read the silent request");
+            match tx.send(outcome) {
+                Ok(()) | Err(_) => {}
+            }
+        });
+        let mut client = TcpStream::connect(addr).expect("the test connects");
+        let ack = loop {
+            let ack = next_acknowledgment(&acks, "the fill's clock wait");
+            if ack.phase == "to read the silent request" {
+                break ack;
+            }
+        };
+        assert!(
+            clock.await_thread_parked(ack.thread, ack.until, OP),
+            "the fill parks on the clock before it moves"
+        );
+        assert!(
+            Deadline::after(QUIET).recv(&rx).is_err(),
+            "a silent fill waits instead of ending"
+        );
+        client.write_all(b"x").expect("the byte writes");
+        assert_eq!(
+            Deadline::after(OP).recv_or_fail(&rx, "the fed fill"),
+            FillOutcome::Held(1),
+            "the first byte ends the fill held"
+        );
+        drop(client);
+    });
+}
+
+/// A reset stall reports the close: the peer is gone, whatever error its
+/// reset reads as. The client peeks the stalled bytes, proving they
+/// arrived without consuming them, so its close resets with bytes unread.
+#[test]
+fn a_reset_stall_reports_the_close() {
+    let clock = fake_clock();
+    let server = bind(&clock);
+    let acks = server.test_acknowledgments();
+    let addr = server.addr();
+    let head = b"HTTP/1.1 200 Fake\r\ncontent-length: 100\r\nconnection: close\r\n\r\n";
+    let prefix = b"partial";
+    let total = head.len() + prefix.len();
+    let (tx, rx) = mpsc::channel();
+    thread::scope(|scope| {
+        scope.spawn(|| {
+            let mut conn = server
+                .accept_expected("the reset stall")
+                .expect("a client connects");
+            assert!(
+                conn.stall_send(head, prefix, None),
+                "the stalled head sends"
+            );
+            let end = conn.stall_wait();
+            match tx.send(end) {
+                Ok(()) | Err(_) => {}
+            }
+        });
+        let client = TcpStream::connect(addr).expect("the test connects");
+        client
+            .set_read_timeout(Some(OP))
+            .expect("the test bounds its reads");
+        // Peeking proves the whole stall arrived while leaving it unread,
+        // so the close below resets instead of closing cleanly.
+        let mut peeked = vec![0u8; total];
+        loop {
+            match client.peek(&mut peeked) {
+                Ok(n) if n == total => break,
+                Ok(_) => continue,
+                Err(error) => panic!("the peek reads within {OP:?}: {error}"),
+            }
+        }
+        let ack = loop {
+            let ack = next_acknowledgment(&acks, "the stall's clock wait");
+            if ack.phase == "to wait for the stalled peer" {
+                break ack;
+            }
+        };
+        assert!(
+            clock.await_thread_parked(ack.thread, ack.until, OP),
+            "the stall parks on the clock before it moves"
+        );
+        drop(client);
+        let end = Deadline::after(QUIET).recv(&rx);
+        server.shutdown();
+        assert_eq!(
+            end.ok(),
+            Some(StallEnd::Closed),
+            "a reset ends the stall closed"
+        );
+    });
+}
+
+/// A writer whose flush fails a programmed number of times, then succeeds.
+/// The test stops it, so a mutant that spins past every wait still ends.
+struct FlushFaults {
+    written: Vec<u8>,
+    kind: std::io::ErrorKind,
+    failures: usize,
+    stop: Arc<AtomicBool>,
+}
+
+impl FlushFaults {
+    fn fails(kind: std::io::ErrorKind, failures: usize, stop: Arc<AtomicBool>) -> Self {
+        Self {
+            written: Vec::new(),
+            kind,
+            failures,
+            stop,
+        }
+    }
+}
+
+impl std::io::Write for FlushFaults {
+    fn write(&mut self, bytes: &[u8]) -> std::io::Result<usize> {
+        self.written.extend_from_slice(bytes);
+        Ok(bytes.len())
+    }
+
+    fn flush(&mut self) -> std::io::Result<()> {
+        if self.stop.load(Ordering::SeqCst) {
+            return Ok(());
+        }
+        if self.failures > 0 {
+            self.failures -= 1;
+            return Err(std::io::Error::new(self.kind, "the test flush fails"));
+        }
+        Ok(())
+    }
+}
+
+/// An interrupted flush retries: one interruption is not the peer's end.
+#[test]
+fn an_interrupted_flush_retries() {
+    let clock = FakeClock::new();
+    let server =
+        HttpServer::bind(clock.clone() as Arc<dyn Clock>, ten_seconds()).expect("the core binds");
+    let addr = server.addr();
+    let stop = Arc::new(AtomicBool::new(false));
+    let (tx, rx) = mpsc::channel();
+    thread::scope(|scope| {
+        scope.spawn(|| {
+            let mut conn = server
+                .accept_expected("the flushed request")
+                .expect("a client connects");
+            let caught = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                let mut writer =
+                    FlushFaults::fails(std::io::ErrorKind::Interrupted, 1, Arc::clone(&stop));
+                let op = conn.op_budget();
+                let (_stream, mut ctx) = conn.parts(&op);
+                pump(&mut writer, b"ok", "to flush the response", &mut ctx)
+            }));
+            match tx.send(caught) {
+                Ok(()) | Err(_) => {}
+            }
+        });
+        let _client = TcpStream::connect(addr).expect("the test connects");
+        match Deadline::after(QUIET).recv(&rx) {
+            Ok(caught) => assert_eq!(caught.ok(), Some(true), "an interrupted flush retries"),
+            Err(_) => {
+                server.shutdown();
+                if Deadline::after(OP).recv(&rx).is_err() {
+                    // Shutdown released no one: a spinner never parks.
+                    // Stop its writer and reap it instead of hanging.
+                    stop.store(true, Ordering::SeqCst);
+                    match Deadline::after(OP).recv(&rx) {
+                        Ok(_) | Err(_) => {}
+                    }
+                }
+                panic!("an interrupted flush retries instead of waiting out the flush");
+            }
+        }
+    });
+}
+
+/// A failed flush ends the write: a permanent error is the peer's end,
+/// not another wait.
+#[test]
+fn a_failed_flush_ends_the_write() {
+    let clock = FakeClock::new();
+    let server =
+        HttpServer::bind(clock.clone() as Arc<dyn Clock>, ten_seconds()).expect("the core binds");
+    let addr = server.addr();
+    let stop = Arc::new(AtomicBool::new(false));
+    let (tx, rx) = mpsc::channel();
+    thread::scope(|scope| {
+        scope.spawn(|| {
+            let mut conn = server
+                .accept_expected("the failed request")
+                .expect("a client connects");
+            let caught = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                let mut writer = FlushFaults::fails(
+                    std::io::ErrorKind::BrokenPipe,
+                    usize::MAX,
+                    Arc::clone(&stop),
+                );
+                let op = conn.op_budget();
+                let (_stream, mut ctx) = conn.parts(&op);
+                pump(&mut writer, b"ok", "to flush the failed response", &mut ctx)
+            }));
+            match tx.send(caught) {
+                Ok(()) | Err(_) => {}
+            }
+        });
+        let _client = TcpStream::connect(addr).expect("the test connects");
+        match Deadline::after(QUIET).recv(&rx) {
+            Ok(caught) => assert_eq!(caught.ok(), Some(false), "a failed flush ends the write"),
+            Err(_) => {
+                server.shutdown();
+                if Deadline::after(OP).recv(&rx).is_err() {
+                    stop.store(true, Ordering::SeqCst);
+                    match Deadline::after(OP).recv(&rx) {
+                        Ok(_) | Err(_) => {}
+                    }
+                }
+                panic!("a failed flush ends the write instead of waiting out the flush");
+            }
+        }
+    });
+}
+
+/// A writer whose flush would block until the test stops it.
+struct GatedFlush {
+    written: Vec<u8>,
+    stop: Arc<AtomicBool>,
+}
+
+impl std::io::Write for GatedFlush {
+    fn write(&mut self, bytes: &[u8]) -> std::io::Result<usize> {
+        self.written.extend_from_slice(bytes);
+        Ok(bytes.len())
+    }
+
+    fn flush(&mut self) -> std::io::Result<()> {
+        if self.stop.load(Ordering::SeqCst) {
+            return Ok(());
+        }
+        Err(std::io::Error::new(
+            std::io::ErrorKind::WouldBlock,
+            "the test flush would block",
+        ))
+    }
+}
+
+/// A flush that would block waits out its bound: expiry names the request
+/// past it, instead of spinning past the wait or ending the write.
+#[test]
+fn a_would_block_flush_waits_out_its_bound() {
+    let clock = FakeClock::new();
+    let server =
+        HttpServer::bind(clock.clone() as Arc<dyn Clock>, ten_seconds()).expect("the core binds");
+    let acks = server.test_acknowledgments();
+    let addr = server.addr();
+    let stop = Arc::new(AtomicBool::new(false));
+    let (tx, rx) = mpsc::channel();
+    thread::scope(|scope| {
+        scope.spawn(|| {
+            let mut conn = server
+                .accept_expected("the held request")
+                .expect("a client connects");
+            let caught = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                let mut writer = GatedFlush {
+                    written: Vec::new(),
+                    stop: Arc::clone(&stop),
+                };
+                let op = conn.op_budget();
+                let (_stream, mut ctx) = conn.parts(&op);
+                pump(&mut writer, b"ok", "to flush the held response", &mut ctx)
+            }));
+            match tx.send(caught) {
+                Ok(()) | Err(_) => {}
+            }
+        });
+        let _client = TcpStream::connect(addr).expect("the test connects");
+        let ack = loop {
+            let ack = Deadline::after(OP).recv_or_fail(&acks, "the flush's clock wait");
+            if ack.phase == "to flush the held response" {
+                break ack;
+            }
+        };
+        assert!(
+            clock.await_thread_parked(ack.thread, ack.until, OP),
+            "the flush parks on the clock before it moves"
+        );
+        clock.advance(Duration::from_secs(10) - Duration::from_nanos(1));
+        clock.advance(Duration::from_nanos(1));
+        // A spinner never waited out its bound, so no verdict arrives:
+        // release its writer and take its verdict instead.
+        let verdict = match Deadline::after(OP).recv(&rx) {
+            Ok(caught) => caught,
+            Err(_) => {
+                stop.store(true, Ordering::SeqCst);
+                Deadline::after(OP).recv_or_fail(&rx, "the spinning flush")
+            }
+        };
+        let message = failure_text(verdict, "the held flush");
+        assert!(
+            message.contains("the held request"),
+            "the failure names its request, got: {message}"
+        );
+    });
+}
+
+/// A writer whose writes fail a programmed number of times, then succeed.
+/// The test stops it, so a mutant that spins past every wait still ends.
+struct WriteFaults {
+    written: Vec<u8>,
+    kind: std::io::ErrorKind,
+    failures: usize,
+    stop: Arc<AtomicBool>,
+}
+
+impl WriteFaults {
+    fn fails(kind: std::io::ErrorKind, failures: usize, stop: Arc<AtomicBool>) -> Self {
+        Self {
+            written: Vec::new(),
+            kind,
+            failures,
+            stop,
+        }
+    }
+}
+
+impl std::io::Write for WriteFaults {
+    fn write(&mut self, bytes: &[u8]) -> std::io::Result<usize> {
+        if self.stop.load(Ordering::SeqCst) {
+            self.written.extend_from_slice(bytes);
+            return Ok(bytes.len());
+        }
+        if self.failures > 0 {
+            self.failures -= 1;
+            return Err(std::io::Error::new(self.kind, "the test write fails"));
+        }
+        self.written.extend_from_slice(bytes);
+        Ok(bytes.len())
+    }
+
+    fn flush(&mut self) -> std::io::Result<()> {
+        Ok(())
+    }
+}
+
+/// An interrupted write retries: one interruption is not the peer's end.
+#[test]
+fn an_interrupted_write_retries() {
+    let clock = FakeClock::new();
+    let server =
+        HttpServer::bind(clock.clone() as Arc<dyn Clock>, ten_seconds()).expect("the core binds");
+    let addr = server.addr();
+    let stop = Arc::new(AtomicBool::new(false));
+    let (tx, rx) = mpsc::channel();
+    thread::scope(|scope| {
+        scope.spawn(|| {
+            let mut conn = server
+                .accept_expected("the written request")
+                .expect("a client connects");
+            let caught = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                let mut writer =
+                    WriteFaults::fails(std::io::ErrorKind::Interrupted, 1, Arc::clone(&stop));
+                let op = conn.op_budget();
+                let (_stream, mut ctx) = conn.parts(&op);
+                pump(&mut writer, b"ok", "to write the response", &mut ctx)
+            }));
+            match tx.send(caught) {
+                Ok(()) | Err(_) => {}
+            }
+        });
+        let _client = TcpStream::connect(addr).expect("the test connects");
+        match Deadline::after(QUIET).recv(&rx) {
+            Ok(caught) => assert_eq!(caught.ok(), Some(true), "an interrupted write retries"),
+            Err(_) => {
+                server.shutdown();
+                if Deadline::after(OP).recv(&rx).is_err() {
+                    stop.store(true, Ordering::SeqCst);
+                    match Deadline::after(OP).recv(&rx) {
+                        Ok(_) | Err(_) => {}
+                    }
+                }
+                panic!("an interrupted write retries instead of waiting out the write");
+            }
+        }
+    });
+}
+
+/// A failed write ends at once: a permanent error is the peer's end, not
+/// another wait.
+#[test]
+fn a_failed_write_ends_at_once() {
+    let clock = FakeClock::new();
+    let server =
+        HttpServer::bind(clock.clone() as Arc<dyn Clock>, ten_seconds()).expect("the core binds");
+    let addr = server.addr();
+    let stop = Arc::new(AtomicBool::new(false));
+    let (tx, rx) = mpsc::channel();
+    thread::scope(|scope| {
+        scope.spawn(|| {
+            let mut conn = server
+                .accept_expected("the broken request")
+                .expect("a client connects");
+            let caught = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                let mut writer = WriteFaults::fails(
+                    std::io::ErrorKind::BrokenPipe,
+                    usize::MAX,
+                    Arc::clone(&stop),
+                );
+                let op = conn.op_budget();
+                let (_stream, mut ctx) = conn.parts(&op);
+                pump(&mut writer, b"ok", "to write the broken response", &mut ctx)
+            }));
+            match tx.send(caught) {
+                Ok(()) | Err(_) => {}
+            }
+        });
+        let _client = TcpStream::connect(addr).expect("the test connects");
+        match Deadline::after(QUIET).recv(&rx) {
+            Ok(caught) => assert_eq!(caught.ok(), Some(false), "a failed write ends at once"),
+            Err(_) => {
+                server.shutdown();
+                if Deadline::after(OP).recv(&rx).is_err() {
+                    stop.store(true, Ordering::SeqCst);
+                    match Deadline::after(OP).recv(&rx) {
+                        Ok(_) | Err(_) => {}
+                    }
+                }
+                panic!("a failed write ends at once instead of waiting out the write");
+            }
+        }
+    });
+}
+
+/// A stalled send holds on its pause: release sends the head and prefix,
+/// while shutdown ends the send unsent.
+#[test]
+fn a_stalled_pause_releases_and_stops() {
+    let head = b"HTTP/1.1 200 Fake\r\ncontent-length: 100\r\nconnection: close\r\n\r\n";
+    // Release sends the stalled head and prefix.
+    let clock = FakeClock::new();
+    let server = bind(&clock);
+    let addr = server.addr();
+    let (pause, control) = Pause::new();
+    let (tx, rx) = mpsc::channel();
+    thread::scope(|scope| {
+        scope.spawn(|| {
+            let mut conn = server
+                .accept_expected("the paused stall")
+                .expect("a client connects");
+            let sent = conn.stall_send(head, b"partial", Some(&pause));
+            match tx.send(sent) {
+                Ok(()) | Err(_) => {}
+            }
+        });
+        let client = TcpStream::connect(addr).expect("the test connects");
+        let deadline = Deadline::after(OP);
+        control.wait_hit(&deadline, "the pause before the stalled response");
+        assert!(
+            Deadline::after(QUIET).recv(&rx).is_err(),
+            "the stalled send waits on its pause"
+        );
+        control.release();
+        assert!(
+            Deadline::after(OP).recv_or_fail(&rx, "the released stall"),
+            "release sends the stalled head"
+        );
+        drop(client);
+    });
+    // Shutdown while paused ends the send unsent.
+    let clock = FakeClock::new();
+    let server = bind(&clock);
+    let addr = server.addr();
+    let (pause, control) = Pause::new();
+    let (tx, rx) = mpsc::channel();
+    thread::scope(|scope| {
+        scope.spawn(|| {
+            let mut conn = server
+                .accept_expected("the stopped stall")
+                .expect("a client connects");
+            let sent = conn.stall_send(head, b"partial", Some(&pause));
+            match tx.send(sent) {
+                Ok(()) | Err(_) => {}
+            }
+        });
+        let _client = TcpStream::connect(addr).expect("the test connects");
+        control.wait_hit(&Deadline::after(OP), "the pause before the stopped stall");
+        assert!(server.shutdown(), "shutdown ends the paused send");
+        assert!(
+            !Deadline::after(OP).recv_or_fail(&rx, "the stopped stall"),
+            "shutdown ends the stalled send unsent"
+        );
+    });
+}
+
+/// Dropping the server refuses connections: the drop stops the listener,
+/// not just the last handle.
+#[test]
+fn dropping_the_server_refuses_connections() {
+    let clock = fake_clock();
+    let server = bind(&clock);
+    let addr = server.addr();
+    server.serve_persistent(|_| {});
+    drop(server);
+    assert!(
+        TcpStream::connect(addr).is_err(),
+        "a dropped server refuses connections"
+    );
+}
+
+/// Shutdown reports a stuck handler: a serving thread that never ends
+/// fails shutdown instead of hanging the drop.
+#[test]
+fn shutdown_reports_a_stuck_handler() {
+    let clock = fake_clock();
+    let server = bind(&clock);
+    let (started_tx, started_rx) = mpsc::channel();
+    server.serve_persistent(move |_conn| {
+        match started_tx.send(()) {
+            Ok(()) | Err(_) => {}
+        }
+        // Stuck past shutdown's bound: shutdown must report it instead
+        // of hanging. The wait's own deadline never fires inside the
+        // test; the test process ends first.
+        let (_stuck_tx, stuck_rx) = mpsc::channel::<()>();
+        match Deadline::after(Duration::from_secs(60)).recv(&stuck_rx) {
+            Ok(_) | Err(_) => {}
+        }
+    });
+    let mut client = connect(&server);
+    client
+        .write_all(b"GET /stuck HTTP/1.1\r\nHost: fake\r\n\r\n")
+        .expect("the request writes");
+    Deadline::after(OP).recv_or_fail(&started_rx, "the stuck handler");
+    assert!(
+        !server.shutdown(),
+        "shutdown reports the stuck handler instead of hanging"
+    );
+}
+
+/// A socket-read error classifies distinctly: a would-block waits, an
+/// interruption reads again at once, and anything else ends the read.
+/// Each kind is constructed, so no socket flake decides the verdict.
+#[test]
+fn read_errors_classify_distinctly() {
+    use std::io::ErrorKind;
+    let error = |kind| std::io::Error::new(kind, "the test error");
+    assert_eq!(
+        classify(&error(ErrorKind::WouldBlock)),
+        ReadErr::Wait,
+        "a would-block waits"
+    );
+    assert_eq!(
+        classify(&error(ErrorKind::Interrupted)),
+        ReadErr::Retry,
+        "an interruption reads again"
+    );
+    assert_eq!(
+        classify(&error(ErrorKind::ConnectionReset)),
+        ReadErr::End,
+        "a reset ends the read"
+    );
+    assert_eq!(
+        classify(&error(ErrorKind::BrokenPipe)),
+        ReadErr::End,
+        "a broken pipe ends the read"
+    );
+}
+
+/// A wake generation pins both sides: the same generation is no wake,
+/// any other generation wakes, wrapping included.
+#[test]
+fn a_wake_generation_pins_both_sides() {
+    assert!(!woken(7, 7), "the same generation is no wake");
+    assert!(woken(7, 8), "a newer generation wakes");
+    assert!(woken(8, 7), "an older generation past a wrap wakes");
 }

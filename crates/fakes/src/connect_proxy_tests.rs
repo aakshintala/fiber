@@ -488,3 +488,44 @@ fn a_silent_handshake_records_nothing_on_the_injected_clock() {
     );
     drop(client);
 }
+
+/// Dropping the proxy closes every open tunnel: a tunnel that ended
+/// earlier does not evict a still-open one from the shutdown.
+#[test]
+fn dropping_the_proxy_closes_every_open_tunnel() {
+    let proxy = ConnectProxy::start().unwrap();
+    let (echo_a_addr, echo_a) = echo_once();
+    let (echo_b_addr, echo_b) = echo_once();
+    let target_a = format!("{echo_a_addr}");
+    let target_b = format!("{echo_b_addr}");
+    let client_a = open_tunnel_on(proxy.port(), &target_a);
+    let mut client_b = open_tunnel_on(proxy.port(), &target_b);
+    // Both tunnels echo, so both echoes are past their first read.
+    for client in [&client_a, &client_b] {
+        let mut client = client.try_clone().expect("the test clones");
+        client.write_all(b"ping").unwrap();
+        let mut heard = [0; 4];
+        client
+            .read_exact(&mut heard)
+            .unwrap_or_else(|e| panic!("the echo through the tunnel within {REPLY_WITHIN:?}: {e}"));
+        assert_eq!(&heard, b"ping");
+    }
+    // The first tunnel ends while the second stays open.
+    drop(client_a);
+    assert!(
+        proxy.await_closed(1, CLOSE_WITHIN),
+        "the proxy saw the first tunnel close"
+    );
+    drop(proxy);
+    // The still-open tunnel's sockets are shut: its read ends at once.
+    client_b
+        .set_read_timeout(Some(QUICK))
+        .expect("the test bounds its reads");
+    let mut rest = Vec::new();
+    client_b
+        .read_to_end(&mut rest)
+        .unwrap_or_else(|e| panic!("the open tunnel ends on drop within {QUICK:?}: {e}"));
+    drop(client_b);
+    echo_a.join().unwrap();
+    echo_b.join().unwrap();
+}
