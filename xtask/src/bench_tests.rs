@@ -996,28 +996,37 @@ fn the_tenth_turn_keeps_a_median_of_at_most_one_mib_past_the_first() {
         "{}",
         line.head
     );
-    // The report does not gate the row: an over-budget metric passes,
-    // and the comment lists the row under Not measured with its owner.
+    // The report gates the row: an over-budget metric fails naming the
+    // row, and the comment judges it in the table instead of listing it
+    // under Not measured.
     let over = with_metric(
         head(),
         "ten_busy_turns_retained_kib",
         json!(vec![ten_turn_run(19000, 20025); 5]),
     );
-    assert_eq!(failures_of(&over), Vec::<String>::new());
+    let failures = failures_of(&over);
+    assert!(
+        has(&failures, "memory kept after 10 busy turns"),
+        "{failures:?}"
+    );
     let comment = judge(&head(), Some(&base()), Event::PullRequest).comment;
     let not_measured = comment.split("### Not measured").nth(1).unwrap();
     assert!(
-        not_measured.contains("Session, memory kept after 10 busy turns")
-            && not_measured.contains("#2210"),
+        !not_measured.contains("memory kept after 10 busy turns"),
         "{comment}"
     );
+    let line = row(
+        &comment,
+        "Session, memory kept after 10 busy turns, each followed by its handoff",
+    );
+    assert!(line.ends_with("| pass |"), "{line}");
 }
 
 #[test]
 fn a_pull_request_the_selection_did_not_choose_skips_the_ten_turns_row() {
     // No metric, but the record names the skipped workload: the direct
     // check reports it skipped instead of failing the missing metric.
-    // The report itself never judges the row until #2210 re-registers it.
+    // The report judges the row in the table with that note.
     let mut skipped = head();
     skipped["metrics"]
         .as_object_mut()
@@ -1035,23 +1044,37 @@ fn a_pull_request_the_selection_did_not_choose_skips_the_ten_turns_row() {
     );
     let out = judge(&skipped, Some(&base()), Event::PullRequest);
     assert_eq!(out.failures, Vec::<String>::new(), "{:?}", out.failures);
-    // The row does not gate, but the summary still says the selection
-    // skipped it (`docs/ci.md`, "Selection").
+    // The skipped row does not gate, and the table says so
+    // (`docs/ci.md`, "Selection"): it leaves Not measured, which now
+    // holds only the unrelated rows.
     let not_measured = out.comment.split("### Not measured").nth(1).unwrap();
-    let ten_turns = not_measured
-        .lines()
-        .find(|l| l.contains("memory kept after 10 busy turns"))
-        .unwrap_or_else(|| panic!("no ten-turns row in:\n{not_measured}"));
-    assert!(ten_turns.contains("skipped"), "{ten_turns}");
-    assert!(ten_turns.contains("#2210"), "{ten_turns}");
-    // A run the selection chose shows the row's owner alone.
+    assert!(
+        !not_measured.contains("memory kept after 10 busy turns"),
+        "{not_measured}"
+    );
+    let line = row(
+        &out.comment,
+        "Session, memory kept after 10 busy turns, each followed by its handoff",
+    );
+    assert!(line.ends_with("| skipped |"), "{line}");
+    assert!(
+        line.contains("the selection did not run the 10-busy-turns workload"),
+        "{line}"
+    );
+    // A run the selection chose judges the row in the table: it passes
+    // on the head's metric and never appears under Not measured.
     let out = judge(&head(), Some(&base()), Event::PullRequest);
+    assert_eq!(out.failures, Vec::<String>::new(), "{:?}", out.failures);
     let not_measured = out.comment.split("### Not measured").nth(1).unwrap();
-    let ten_turns = not_measured
-        .lines()
-        .find(|l| l.contains("memory kept after 10 busy turns"))
-        .unwrap_or_else(|| panic!("no ten-turns row in:\n{not_measured}"));
-    assert!(!ten_turns.contains("skipped"), "{ten_turns}");
+    assert!(
+        !not_measured.contains("memory kept after 10 busy turns"),
+        "{not_measured}"
+    );
+    let line = row(
+        &out.comment,
+        "Session, memory kept after 10 busy turns, each followed by its handoff",
+    );
+    assert!(line.ends_with("| pass |"), "{line}");
     // The skip records only the ten-turns workload: another Exact row
     // with the skip recorded is still judged, never skipped.
     let text = skipped.to_string();
@@ -2623,7 +2646,7 @@ fn both_paging_ratio_rows_are_measured_and_scale_one_stays() {
     // The unrelated tickets stay, and all six scale-1 paging metrics
     // still judge their rows.
     assert!(not_measured.contains("#581"), "{not_measured}");
-    assert!(not_measured.contains("#2210"), "{not_measured}");
+    assert!(!not_measured.contains("#2210"), "{not_measured}");
     for budget in [
         "`paging` jig, its session at scale 1 and 160 by 48",
         "`paging` jig, open pass and first frame",
