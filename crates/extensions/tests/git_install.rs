@@ -148,9 +148,17 @@ fn final_plan_freshness_excludes_existing_and_upgraded_dependencies() {
         let mut repos = Repos::new(&setup);
         let root = "example.com/acme/root";
         let dep = "example.com/acme/dep";
+        let aux = "example.com/acme/aux";
         let new = "example.com/acme/new";
         repos.tag(dep, "", "v1.0.0", &manifest(dep), &[]);
-        repos.tag(root, "", "v1.0.0", &named(root, &[(dep, "1.0")]), &[]);
+        repos.tag(aux, "", "v1.0.0", &manifest(aux), &[]);
+        repos.tag(
+            root,
+            "",
+            "v1.0.0",
+            &named(root, &[(aux, "1.0"), (dep, "1.0")]),
+            &[],
+        );
         let clock = fakes::clock::SystemClock;
         let origin = repos.origin();
         let p = plan(
@@ -161,15 +169,16 @@ fn final_plan_freshness_excludes_existing_and_upgraded_dependencies() {
             &clock,
         )
         .unwrap();
-        assert_eq!(p.fresh_names().collect::<Vec<_>>(), [dep, root]);
+        assert_eq!(p.fresh_names().collect::<Vec<_>>(), [aux, dep, root]);
         assert_eq!(
             p.items().map(|i| i.name.as_str()).collect::<Vec<_>>(),
-            [dep, root]
+            [aux, dep, root]
         );
         p.commit().unwrap();
         assert_eq!(
             versions(&setup),
             BTreeMap::from([
+                (aux.into(), "v1.0.0".into()),
                 (dep.into(), "v1.0.0".into()),
                 (root.into(), "v1.0.0".into())
             ])

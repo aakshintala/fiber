@@ -52,6 +52,11 @@ fn ask(setup: &Setup, workspace: &Path, model: &str) -> Run {
         .filter(|line: &Value| line["kind"] != "session_status")
         .collect();
     if output.status.success() {
+        let completed = lines
+            .iter()
+            .find(|line| line["kind"] == "text_completed")
+            .unwrap();
+        assert_eq!(completed["payload"]["text"], "Hello.");
         let id = lines[0]["session_id"].as_str().unwrap();
         let durable: String = raw
             .lines()

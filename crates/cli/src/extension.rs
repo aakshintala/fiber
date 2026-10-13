@@ -17,13 +17,13 @@ use crate::{fail, failed};
 
 mod approve;
 
-/// What a command asks on and reports to: whether stdin is a terminal,
-/// stdin, and stderr.
 struct ScopedInstall {
     workspace: PathBuf,
     project: config::ProjectKey,
 }
 
+/// What a command asks on and reports to: whether stdin is a terminal,
+/// stdin, and stderr.
 struct Io<'a> {
     terminal: bool,
     input: &'a mut dyn BufRead,

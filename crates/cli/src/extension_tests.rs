@@ -151,6 +151,65 @@ fn scoped_git_dependencies_keep_existing_global_state_and_write_all_projects_fir
     });
 }
 
+#[test]
+fn a_later_scope_key_failure_keeps_completed_keys_and_never_runs_install_steps() {
+    fakes::within("partial scope writes", Duration::from_secs(20), || {
+        let setup = Setup::new();
+        let dep = "example.com/acme/dep";
+        let dep_source = setup.source("dep", &manifest(dep), &[]);
+        for args in [
+            vec!["init", "--quiet"],
+            vec!["add", "."],
+            vec!["commit", "--quiet", "-m", "release"],
+            vec!["tag", "v1.0.0"],
+        ] {
+            fakes::git::git(&dep_source, &args);
+        }
+        let origin = Origin::new("git", move |_| format!("file://{}", dep_source.display()));
+        let marker = setup.root.path().join("install-step");
+        let mut m = manifest("z\"acme");
+        m["depends"] = serde_json::json!({dep:"1.0"});
+        m["install"] = serde_json::json!([
+            "sh",
+            "-c",
+            format!("printf marker > '{}'", marker.display())
+        ]);
+        let source = setup.source("root", &m, &[]);
+        let workspace = setup.root.path().join("workspace");
+        fs::create_dir(&workspace).unwrap();
+        let (_, project) = crate::project_of(&setup.home(), &workspace).unwrap();
+        let scope = super::ScopedInstall { workspace, project };
+        let failure = install(
+            &setup.home(),
+            Request::Path(source),
+            Some(&scope),
+            FIBER_VERSION,
+            &origin,
+            &fakes::clock::SystemClock,
+            Io {
+                terminal: false,
+                input: &mut Unread,
+                err: &mut Vec::new(),
+            },
+        )
+        .unwrap_err();
+        assert_eq!(failure.code, ErrorCode::Usage);
+        let (global, project) = scope_files(&setup);
+        assert_eq!(
+            json_file(&project),
+            serde_json::json!({"extensions":{dep:{"enabled":true}}})
+        );
+        assert!(!global.exists());
+        assert!(!marker.exists());
+        assert!(
+            extensions::list(&setup.home(), &fakes::clock::SystemClock)
+                .unwrap()
+                .installed
+                .is_empty()
+        );
+    });
+}
+
 fn scoped_install(
     setup: &Setup,
     source: &Path,
