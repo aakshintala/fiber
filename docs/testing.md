@@ -601,8 +601,14 @@ binaries in `crates/main/tests/`; no other test retries, including the unit
 tests in `crates/main/src/`. A pass on retry does not block the
 merge. CI opens a flake issue naming the test and its first failure, or
 comments on the open one. The issue's title is `Flaky test: ` followed by
-the test as nextest prints it. A flake issue closes when the test is rewritten to be
-deterministic, never by rerunning. A failure on a commit that does not contain
+the test as nextest prints it. Within one report job a test title files or
+comments once; a repeat is skipped. On a pull request run the report reads
+the failing file from the panic path: when main changed that file since
+the run's tested base it files nothing and notes the stale base in the
+summary, and when the pull request itself changed that file it comments on
+the pull request instead of filing. A failure with no panic path, or any
+failure on a push run, files as usual. A flake issue closes when the test
+is rewritten to be deterministic, never by rerunning. A failure on a commit that does not contain
 the fix (`git merge-base --is-ancestor <fix> <commit>` is false) neither
 reopens the closed issue nor counts against the fix.
 
