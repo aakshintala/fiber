@@ -223,6 +223,13 @@ impl Default for State {
     }
 }
 
+/// How often [`ProviderServer::drop`] retries its hold release: one
+/// `try_lock` can land while a serving thread holds the state lock
+/// briefly on a hold poll or while entering its hold wait, so a single
+/// attempt can miss and leave held responses unanswered. Spinning this
+/// often still ends at once past a responder stuck under the lock.
+const RELEASE_RETRIES: usize = 1_000;
+
 /// A fake provider listening on a local port. Each request gets the next
 /// response of the script, and a request past its end gets a 500 saying so.
 /// Dropping the server closes its port.
@@ -445,8 +452,15 @@ impl Drop for ProviderServer {
         // wait stopped on its own. A responder stuck under the state
         // lock is not waited for: the release is tried, never blocking
         // the drop, and the core's bounded shutdown reaps the rest.
-        if let Ok(mut state) = self.state.try_lock() {
-            state.hold = false;
+        // One attempt can miss while a serving thread holds the lock
+        // on a hold poll or entering its wait, so retry briefly: a
+        // responder past that still ends the retries, never the drop.
+        for _ in 0..RELEASE_RETRIES {
+            if let Ok(mut state) = self.state.try_lock() {
+                state.hold = false;
+                break;
+            }
+            std::thread::yield_now();
         }
         self.arrived.notify_all();
         self.core.shutdown();
