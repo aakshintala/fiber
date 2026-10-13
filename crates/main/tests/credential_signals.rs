@@ -406,11 +406,11 @@ fn sigint_to_fiber_models_while_a_credential_command_runs_exits_130_and_kills_it
     let matching = Watchdog::matching(&fifo.display().to_string());
     install(
         &setup.home(),
-        &format!("echo $$ > '{}'; sleep 600", fifo.display()),
+        &format!("sleep 600 & echo $$ > '{}'; wait", fifo.display()),
     );
     let (fiber_pid, child, watchdog) = setup.start(&["models"]);
-    // The first line proves the command ran: the signal below lands while
-    // the command sleeps on every run.
+    // The ready line proves the descendant started before the signal: the
+    // sleep forks before the echo, and the shell waits for it.
     let pgid = ready.wait(setup.deadline.left())[0];
     let group = Watchdog::group(pgid);
     support::kill_pid(setup.deadline, fiber_pid, "INT").unwrap();
@@ -435,7 +435,7 @@ fn sighup_to_fiber_models_while_a_credential_command_runs_exits_129_and_kills_it
     let matching = Watchdog::matching(&fifo.display().to_string());
     install(
         &setup.home(),
-        &format!("echo $$ > '{}'; sleep 600", fifo.display()),
+        &format!("sleep 600 & echo $$ > '{}'; wait", fifo.display()),
     );
     let (fiber_pid, child, watchdog) = setup.start(&["models"]);
     let pgid = ready.wait(setup.deadline.left())[0];
@@ -462,7 +462,7 @@ fn sigterm_to_refresh_model_lists_while_a_credential_command_runs_exits_143_and_
     let matching = Watchdog::matching(&fifo.display().to_string());
     install(
         &setup.home(),
-        &format!("echo $$ > '{}'; sleep 600", fifo.display()),
+        &format!("sleep 600 & echo $$ > '{}'; wait", fifo.display()),
     );
     let (fiber_pid, child, watchdog) = setup.start(&["refresh-model-lists", "acme"]);
     let pgid = ready.wait(setup.deadline.left())[0];
@@ -585,7 +585,7 @@ fn sigterm_to_the_terminal_while_a_picker_read_runs_exits_143_and_kills_its_grou
     let matching = Watchdog::matching(&fifo.display().to_string());
     install(
         &setup.home(),
-        &format!("echo $$ > '{}'; sleep 600", fifo.display()),
+        &format!("sleep 600 & echo $$ > '{}'; wait", fifo.display()),
     );
     let mut run = Run::spawn(&setup, 120, 32, &[], &[("TERM", "xterm-256color")]);
     run.ready();
@@ -610,7 +610,7 @@ fn sighup_to_the_terminal_while_a_picker_read_runs_exits_129_and_kills_its_group
     let matching = Watchdog::matching(&fifo.display().to_string());
     install(
         &setup.home(),
-        &format!("echo $$ > '{}'; sleep 600", fifo.display()),
+        &format!("sleep 600 & echo $$ > '{}'; wait", fifo.display()),
     );
     let mut run = Run::spawn(&setup, 120, 32, &[], &[("TERM", "xterm-256color")]);
     run.ready();
