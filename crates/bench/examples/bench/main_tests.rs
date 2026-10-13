@@ -25,6 +25,7 @@ fn the_defaults_are_five_runs_a_ten_second_window_and_every_workload() {
             idle_secs: 10,
             only: Only::All,
             paging: None,
+            skip_ten_turns: false,
         })
     );
 }
@@ -41,6 +42,7 @@ fn every_flag_sets_its_value() {
             idle_secs: 60,
             only: Only::Timing,
             paging: None,
+            skip_ten_turns: false,
         })
     );
 }
@@ -104,6 +106,7 @@ fn a_pull_request_runs_timing_only_workloads_three_times_and_the_rest_five() {
             ("resume 2,000,000 tokens", (5, 5)),
             ("paging", (5, 5)),
             ("fsyncs", (1, 1)),
+            ("10 busy turns", (5, 5)),
             ("sessions list", (1, 3)),
             ("terminal attach", (1, 5)),
             ("terminal wheel", (1, 3)),
@@ -218,6 +221,42 @@ fn measure_all_hands_each_workload_its_counts_and_records_them() {
     assert_eq!(metrics["session start_m"].len(), 3);
     assert!(!metrics.contains_key("busy turn_m"));
     assert!(!metric_runs.contains_key("busy turn_m"));
+}
+
+#[test]
+fn skip_ten_turns_leaves_the_workload_out_and_records_it() {
+    assert!(!args("--fiber f --out o").unwrap().skip_ten_turns);
+    let parsed = args("--fiber f --out o --skip-ten-turns").unwrap();
+    assert!(parsed.skip_ten_turns);
+    // The flag is a switch: it takes no value.
+    assert!(args("--fiber f --out o --skip-ten-turns --runs 3").is_ok());
+    let all = names("--fiber f --out o");
+    assert!(all.contains(&"10 busy turns"), "{all:?}");
+    let skipped = names("--fiber f --out o --skip-ten-turns");
+    assert!(!skipped.contains(&"10 busy turns"), "{skipped:?}");
+    assert_eq!(skipped.len() + 1, all.len());
+    // The record names the skipped workload, so the judge reports it
+    // instead of failing its missing metric; without the flag nothing
+    // was skipped.
+    let metrics: BTreeMap<&'static str, Vec<Value>> = BTreeMap::new();
+    let recorded = document(
+        &parsed,
+        "CPU-X",
+        None,
+        metrics.clone(),
+        BTreeMap::new(),
+        vec![],
+    );
+    assert_eq!(recorded["skipped"], json!(["10 busy turns"]));
+    let plain = document(
+        &args("--fiber f --out o").unwrap(),
+        "CPU-X",
+        None,
+        metrics,
+        BTreeMap::new(),
+        vec![],
+    );
+    assert_eq!(plain["skipped"], json!([]));
 }
 
 #[test]

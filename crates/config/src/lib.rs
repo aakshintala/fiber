@@ -272,7 +272,17 @@ impl Config {
     /// `fiber config get` prints them. An object merged from several layers
     /// names the highest.
     pub fn get(&self, key: &str, model: Option<&str>) -> Option<(Value, Source)> {
-        let mut key = path::parse(key)?;
+        self.get_segments(&path::parse(key)?, model)
+    }
+
+    /// The effective value and source of a key supplied as literal segments,
+    /// with the same layering and extension aliases as [`Self::get`].
+    pub fn get_segments(
+        &self,
+        segments: &[String],
+        model: Option<&str>,
+    ) -> Option<(Value, Source)> {
+        let mut key = segments.to_vec();
         if let [area, name, ..] = key.as_mut_slice()
             && area == "extensions"
         {

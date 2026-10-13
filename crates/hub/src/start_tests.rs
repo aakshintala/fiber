@@ -240,7 +240,12 @@ impl crate::Starter for FailStarter {
         Err(io::Error::other(self.message.clone()))
     }
 
-    fn resume(&self, _id: &SessionId, _workspace: &Path) -> io::Result<Box<dyn crate::Started>> {
+    fn resume(
+        &self,
+        _id: &SessionId,
+        _workspace: &Path,
+        _credential: Option<&str>,
+    ) -> io::Result<Box<dyn crate::Started>> {
         Err(io::Error::other(self.message.clone()))
     }
 

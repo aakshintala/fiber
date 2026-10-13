@@ -2,18 +2,18 @@
 source: crates/tui/src/view/offer_tests.rs
 expression: "draw(&app, 80, 24).0"
 ---
-Repository code · 1 item                                                       ✕
+ Offer  repository code                                              Esc returns
+
+▸ MCP server db · declared in .fiber/config.json
+  MCP server: db
+  declared in: .fiber/config.json
+  runs: /bin/echo
+  ( ) approve   ( ) skip for this session   (•) never
+
 A package's TUI files are never installed from a repository.
 
-› MCP server db
-     approve   skip  [never]
-    MCP server: db
-    declared in: .fiber/config.json
-    runs: /bin/echo
-
+↑↓ choose an item · ←→ its answer · Send answers them all · Esc puts it aside
   Send · 0 approve, 0 skip, 1 never
-
-
 
 
 

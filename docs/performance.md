@@ -38,7 +38,7 @@ build takes about 8 ms and 2.5 ms. Both include resolving each path and
 reading the index. No Linux figure is measured.
 
 Two rows hold work to the size of what it covers. Memory kept after 10 busy
-turns stays within 1 MiB of the memory kept after one, so state that grows
+turns, each followed by its handoff, stays within 1 MiB of the memory kept after one, so state that grows
 with every tool call the session has ever made fails it. The `paging` jig's
 scale-16 session is about 75 MiB, the size of the owner's longest sessions;
 its re-count and search may take at most 16 times their scale-1 time in the
@@ -73,7 +73,7 @@ a 20-thousand-token one fit the same ceiling.
 | Terminal to its first frame, attaching | 50 ms plus 10 ms per MiB of session log | Linux x86_64 | picked |
 | Terminal, attaching a 10 MiB session | 81,392 KiB peak RSS | Linux x86_64 | measured |
 | Session, memory kept after the busy turn | 16,176 KiB RssAnon | Linux x86_64 | measured |
-| Session, memory kept after 10 busy turns | the memory kept after the first, plus 1 MiB RssAnon | Linux x86_64 | picked |
+| Session, memory kept after 10 busy turns, each followed by its handoff | the memory kept after the first, plus 1 MiB RssAnon | Linux x86_64 | picked |
 | Terminal, memory kept after attaching a 10 MiB session | 12,048 KiB RssAnon | Linux x86_64 | measured |
 | Listing 1,000 sessions in one project, warm cache | 50 ms | Linux x86_64 | picked |
 | `session_list`, waiting for every running session's status | 2 s for the whole call | Linux x86_64 | picked |

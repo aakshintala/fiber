@@ -135,19 +135,32 @@ pub(crate) fn rows(app: &App, width: u16) -> Vec<RailRow> {
     let card_w = width.saturating_sub(1);
     let text = usize::from(card_w).saturating_sub(3);
     let mut out = Vec::new();
-    // The text's last column: a header's "+" and a crashed card's ✕.
-    let last = u16::try_from(text.saturating_add(1)).unwrap_or(u16::MAX);
     for group in groups(&cards, launch_project) {
+        // The header's left keeps the "+" that starts a session in
+        // the project: the name is cut to the room left of the
+        // right-aligned spend less the chip (`docs/tui.md`, "The
+        // rail").
+        let spend = format::money(group.spend);
+        let room = text.saturating_sub(format::width(&spend) + 1);
+        let name = format::cut(&group.name, room.saturating_sub(2));
+        // The chip follows the two margin columns, the name and a
+        // space.
+        let plus = 2u16
+            .saturating_add(u16::try_from(format::width(&name)).unwrap_or(u16::MAX))
+            .saturating_add(1);
         let mut header = vec![Span::raw("  ")];
         header.extend(sides(
-            vec![Span::raw(group.name.clone())],
-            vec![Span::raw(format!("{} +", format::money(group.spend)))],
+            vec![
+                Span::styled(name, style(Role::Accent).add_modifier(Modifier::BOLD)),
+                Span::raw(" +"),
+            ],
+            vec![Span::styled(spend, style(Role::Muted))],
             text,
         ));
         let spots = group
             .cards
             .first()
-            .map(|card| (last, 1, 1, Spot::Start(card.key)))
+            .map(|card| (plus, 1, 1, Spot::Start(card.key)))
             .into_iter()
             .collect();
         out.push(RailRow {
@@ -269,8 +282,8 @@ fn first_row(app: &App, row: &Row, text: usize) -> Vec<Span<'static>> {
 }
 
 /// A card's third row: what it waits on, in the attention colour, while
-/// it waits; otherwise its git branch, `detached` without one, and
-/// nothing outside git.
+/// it waits; otherwise a dim ⎇ and its git branch, `detached` without
+/// one, and nothing outside git.
 fn third_row(row: &Row, text: usize) -> Vec<Span<'static>> {
     if let Some(waiting) = &row.waiting {
         return vec![Span::styled(
@@ -284,7 +297,16 @@ fn third_row(row: &Row, text: usize) -> Vec<Span<'static>> {
         .and_then(|status| status.git.as_ref())
         .map(|git| git.branch.as_deref().unwrap_or("detached"))
         .unwrap_or_default();
-    vec![Span::raw(format::cut(branch, text))]
+    if branch.is_empty() {
+        return vec![Span::raw(String::new())];
+    }
+    vec![
+        Span::styled("⎇ ", style(Role::Muted)),
+        Span::raw(format::cut(
+            branch,
+            text.saturating_sub(format::width("⎇ ")),
+        )),
+    ]
 }
 
 /// A card's fourth row: its spend, and with a context window its
@@ -324,7 +346,7 @@ fn usage(row: &Row, text: usize, bar: bool) -> Vec<Span<'static>> {
     vec![
         Span::raw(format!("{spend} ")),
         Span::styled("▆".repeat(filled), style(fill)),
-        Span::styled("░".repeat(cells.saturating_sub(filled)), style(Role::Muted)),
+        Span::styled("░".repeat(cells.saturating_sub(filled)), style(Role::Rule)),
         Span::raw(format!(" {shown}")),
     ]
 }

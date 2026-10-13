@@ -2,19 +2,19 @@
 source: crates/tui/src/view/offer_tests.rs
 expression: screen
 ---
-Repository code · 1 item               ✕
+ Offer  repository code      Esc returns
+
+▸ Hook fmt
+  runs: cargo fmt --all -- --check
+--config-path rustfmt.toml
+  ( ) approve   (•) skip for this sessio
+
 A package's TUI files are never
 installed from a repository.
 
-› hook fmt
-     approve  [skip]  never
-    runs: cargo fmt --all -- --check
---config-path rustfmt.toml
-
+↑↓ choose an item · ←→ its answer · Send
+answers them all · Esc puts it aside
   Send · 0 approve, 1 skip, 0 never
-
-
-
 ▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
 ▌ ›
 ▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀

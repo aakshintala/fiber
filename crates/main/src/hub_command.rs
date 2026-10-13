@@ -191,8 +191,18 @@ impl hub::Starter for SpawnStarter {
         spawn(id, command)
     }
 
-    fn resume(&self, id: &SessionId, workspace: &Path) -> std::io::Result<Box<dyn hub::Started>> {
+    fn resume(
+        &self,
+        id: &SessionId,
+        workspace: &Path,
+        credential: Option<&str>,
+    ) -> std::io::Result<Box<dyn hub::Started>> {
         let mut command = session_command(&self.exe, id, workspace, None, false, true, None);
+        // One argument, so an empty or leading-hyphen label from the
+        // wire cannot be consumed as another flag.
+        if let Some(label) = credential {
+            command.arg(format!("--credential={label}"));
+        }
         apply(&mut command, &self.environments.get());
         spawn(id, command)
     }

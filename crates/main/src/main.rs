@@ -111,7 +111,9 @@ fn run() -> i32 {
         // `fiber` with no arguments opens the terminal: this tty as a
         // client of the hub, starting one when none runs.
         cli::Invocation::Run(None) => terminal(fiber, tui::OpenAt::Home),
-        cli::Invocation::Run(Some(cli::Commands::Resume { id })) => open::resume(id, fiber),
+        cli::Invocation::Run(Some(cli::Commands::Resume { id, credential })) => {
+            open::resume(id, credential, fiber)
+        }
         cli::Invocation::Run(Some(cli::Commands::Continue)) => open::continue_latest(fiber),
         cli::Invocation::Usage {
             ask: true,
@@ -187,9 +189,15 @@ fn run() -> i32 {
             )
         }
         cli::Invocation::Run(Some(cli::Commands::Extension(cmd))) => match cmd {
-            cli::ExtensionCommands::Install { name_or_path } => {
-                ::cli::extension_install(&name_or_path, env!("CARGO_PKG_VERSION"), clock.as_ref())
-            }
+            cli::ExtensionCommands::Install {
+                name_or_path,
+                project,
+            } => ::cli::extension_install(
+                &name_or_path,
+                project,
+                env!("CARGO_PKG_VERSION"),
+                clock.as_ref(),
+            ),
             cli::ExtensionCommands::Update { name } => {
                 ::cli::extension_update(name.as_deref(), env!("CARGO_PKG_VERSION"), clock.as_ref())
             }

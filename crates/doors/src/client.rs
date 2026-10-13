@@ -7,17 +7,19 @@ mod writer;
 
 #[cfg(test)]
 pub(crate) use writer::write_loop;
-pub(crate) use writer::{STOP, control_line, spawn_writer, write_line};
+pub(crate) use writer::{Prelude, STOP, control_line, spawn_writer, write_line};
 
 use std::io::{BufRead, BufReader, Write};
 use std::net::Shutdown;
 use std::os::unix::net::UnixStream;
 use std::sync::Arc;
+use std::sync::Mutex;
+use std::sync::PoisonError;
 use std::sync::mpsc;
 use std::thread;
 
 use contract::commands::{Command, CommandLine};
-use contract::events::{CommandAccepted, CommandRejected, CommandResult, Event};
+use contract::events::{CommandAccepted, CommandRejected, CommandResult, Event, Notice};
 use contract::inbox::{Ack, Answer, Delivery, Message, Rejection};
 use contract::shapes::{ContentPart, Origin, Sender};
 use contract::{CommandId, Envelope, ErrorCode};
@@ -131,6 +133,7 @@ pub(crate) fn serve_connection(
         conn.gate.detach();
     }
     if let Some(outbox) = conn.outbox.take() {
+        outbox.cancel_settles();
         outbox.stop(&conn.gate.session_id);
     }
 }
@@ -244,9 +247,9 @@ pub(crate) fn dispatch(conn: &mut Conn, line: CommandLine, name: &str) {
     match line.command {
         Command::Subscribe(args) => {
             if conn.subscribed {
-                level::change(conn, id, args.level);
+                level::change(conn, id, args.level, args.credential);
             } else {
-                subscribe(conn, id, args.level);
+                subscribe(conn, id, args.level, args.credential);
             }
         }
         Command::Tools => {
@@ -450,7 +453,12 @@ fn shell(conn: &mut Conn, id: CommandId, args: &contract::commands::Shell, name:
     }
 }
 
-fn subscribe(conn: &mut Conn, id: CommandId, level: contract::commands::SubscribeLevel) {
+fn subscribe(
+    conn: &mut Conn,
+    id: CommandId,
+    level: contract::commands::SubscribeLevel,
+    credential: Option<String>,
+) {
     let summary = matches!(level, contract::commands::SubscribeLevel::Summary);
     // The watcher is registered and its seed queued under the one log lock
     // that `append` takes, so no later line can be queued before an older
@@ -489,6 +497,42 @@ fn subscribe(conn: &mut Conn, id: CommandId, level: contract::commands::Subscrib
         // The watcher is registered, so this connection receives the line.
         conn.gate.attach();
     }
+    // With a label the switch is submitted only after this preparation
+    // succeeded, and the single wire acceptance waits for the loop's
+    // answer, which the writer emits before folded history. A refused
+    // switch keeps this successful subscription.
+    if let Some(label) = credential {
+        let Some(stream) = conn.writer.take() else {
+            return;
+        };
+        let (ack, response, cancel) = settle_response(&conn.gate, id);
+        let snapshots = if summary {
+            [status, extensions].into_iter().flatten().collect()
+        } else {
+            Vec::new()
+        };
+        outbox.settle(cancel);
+        conn.gate.deliver(Delivery::Credential(
+            contract::commands::CredentialArgs { label },
+            ack,
+        ));
+        conn.subscribed = true;
+        conn.outbox = Some(outbox);
+        conn.switches = Some(spawn_writer(
+            Arc::clone(&conn.gate),
+            conn.id,
+            watcher,
+            stream,
+            summary,
+            Some(Prelude {
+                response,
+                after: snapshots,
+            }),
+        ));
+        // The writer is the only writer from here.
+        drop(conn.direct.take());
+        return;
+    }
     // The acknowledgement is written here, before the writer starts, so it
     // is the first line the client reads.
     accept(conn, id, None);
@@ -521,6 +565,7 @@ fn subscribe(conn: &mut Conn, id: CommandId, level: contract::commands::Subscrib
         watcher,
         stream,
         summary,
+        None,
     ));
     // The writer is the only writer from here.
     drop(conn.direct.take());
@@ -651,6 +696,76 @@ fn unknown(conn: &mut Conn, id: CommandId, command: &str) {
         ErrorCode::UnknownCommand,
         &not_built(command),
     );
+}
+
+/// A label-bearing subscribe's deferred response envelopes: bare
+/// acceptance, then a notice on failure.
+type Settled = Vec<Envelope>;
+
+/// Cancels a label-bearing subscribe's deferred response when its reader
+/// leaves before the loop answers: taking the sender closes the channel,
+/// so the writer's wait ends instead of hanging the join that follows.
+/// The connection's outbox holds one per label-bearing subscribe; the
+/// reader's cleanup cancels them all before the writer is joined.
+pub(super) struct SettleCancel {
+    sender: Arc<Mutex<Option<mpsc::Sender<Settled>>>>,
+}
+
+impl Drop for SettleCancel {
+    fn drop(&mut self) {
+        drop(lock(&self.sender).take());
+    }
+}
+
+/// Builds the deferred response for a label-bearing subscribe: the Ack
+/// the loop answers once the delivered switch admits or refuses, the
+/// receiver the writer emits before history, and the cancel the reader
+/// holds until it leaves. The loop's answer becomes bare subscribe
+/// acceptance, then the rejection as a connection-local notice on
+/// failure; the subscribe id is never released and no rejection is sent
+/// for it. The sender is taken exactly once, by the answer or by the
+/// cancel, so a late answer after teardown is dropped and a teardown
+/// after the answer changes nothing. The callback only publishes
+/// envelopes; it never blocks the loop on socket output.
+fn settle_response(
+    gate: &Arc<Gate>,
+    id: CommandId,
+) -> (Ack, mpsc::Receiver<Settled>, SettleCancel) {
+    let (tx, rx) = mpsc::channel();
+    let shared = Arc::new(Mutex::new(Some(tx)));
+    let cancel = SettleCancel {
+        sender: Arc::clone(&shared),
+    };
+    let gate = Arc::clone(gate);
+    let ack = guard(move |result: Answer| {
+        let mut settled = vec![session::envelope(
+            &gate.session_id,
+            gate.clock.as_ref(),
+            &Event::CommandAccepted(CommandAccepted {
+                command_id: id,
+                result: None,
+            }),
+        )];
+        if let Err(rejection) = result {
+            settled.push(session::envelope(
+                &gate.session_id,
+                gate.clock.as_ref(),
+                &Event::Notice(Notice {
+                    code: rejection.code,
+                    message: rejection.message,
+                    extension: None,
+                }),
+            ));
+        }
+        if let Some(tx) = lock(&shared).take() {
+            tx.send(settled).unwrap_or(());
+        }
+    });
+    (ack, rx, cancel)
+}
+
+fn lock<T>(mutex: &Mutex<T>) -> std::sync::MutexGuard<'_, T> {
+    mutex.lock().unwrap_or_else(PoisonError::into_inner)
 }
 
 pub(crate) fn inbox_ack(conn: &mut Conn, id: CommandId) -> Ack {

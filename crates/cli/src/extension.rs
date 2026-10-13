@@ -17,6 +17,11 @@ use crate::{fail, failed};
 
 mod approve;
 
+struct ScopedInstall {
+    workspace: PathBuf,
+    project: config::ProjectKey,
+}
+
 /// What a command asks on and reports to: whether stdin is a terminal,
 /// stdin, and stderr.
 struct Io<'a> {
@@ -28,12 +33,25 @@ struct Io<'a> {
 /// `fiber extension install <name or path>`: fetches and checks the
 /// extension and its dependencies, shows what they register and asks
 /// when stdin is a terminal, and prints each name installed.
-pub fn extension_install(name_or_path: &str, fiber_version: &str, clock: &dyn Clock) -> i32 {
+pub fn extension_install(
+    name_or_path: &str,
+    project: bool,
+    fiber_version: &str,
+    clock: &dyn Clock,
+) -> i32 {
     let stdin = io::stdin();
     let terminal = stdin.is_terminal();
     let ran = config::fiber_home_from_env()
         .map_err(|e| failed(e.code(), e))
         .and_then(|home| {
+            let scope = if project {
+                let workspace = std::env::current_dir()
+                    .map_err(|e| failed(contract::ErrorCode::IoFailed, e))?;
+                let (_, project) = crate::project_of(&home, &workspace)?;
+                Some(ScopedInstall { workspace, project })
+            } else {
+                None
+            };
             let request = if extensions::is_path(name_or_path) {
                 Request::Path(PathBuf::from(name_or_path))
             } else {
@@ -42,6 +60,7 @@ pub fn extension_install(name_or_path: &str, fiber_version: &str, clock: &dyn Cl
             install(
                 &home,
                 request,
+                scope.as_ref(),
                 fiber_version,
                 &Origin::github(),
                 clock,
@@ -76,6 +95,7 @@ pub fn extension_update(name: Option<&str>, fiber_version: &str, clock: &dyn Clo
                 Some(name) => install(
                     &home,
                     Request::Update(name.to_owned()),
+                    None,
                     fiber_version,
                     &Origin::github(),
                     clock,
@@ -128,6 +148,7 @@ pub fn extension_reinstall(name: &str, fiber_version: &str, clock: &dyn Clock) -
             install(
                 &home,
                 Request::Reinstall(name.to_owned()),
+                None,
                 fiber_version,
                 &Origin::github(),
                 clock,
@@ -159,6 +180,7 @@ pub fn extension_list(clock: &dyn Clock) -> i32 {
 fn install(
     home: &Path,
     request: Request,
+    scope: Option<&ScopedInstall>,
     fiber_version: &str,
     origin: &Origin,
     clock: &dyn Clock,
@@ -175,7 +197,7 @@ fn install(
     for hit in plan.damaged() {
         writeln!(err, "fiber: {}", hit.skipped()).unwrap_or(());
     }
-    report_install(commit_plan(plan, terminal, input, err), err)
+    report_install(commit_plan(home, scope, plan, terminal, input, err), err)
 }
 
 fn update_all(
@@ -204,7 +226,7 @@ fn update_all(
             origin,
             clock,
         )?;
-        let code = report_install(commit_plan(plan, terminal, input, err), err)?;
+        let code = report_install(commit_plan(home, None, plan, terminal, input, err), err)?;
         if code != 0 {
             return Ok(code);
         }
@@ -278,6 +300,8 @@ fn plan_request<'c>(
 }
 
 fn commit_plan(
+    home: &Path,
+    scope: Option<&ScopedInstall>,
     plan: extensions::Plan<'_>,
     terminal: bool,
     input: &mut dyn BufRead,
@@ -315,6 +339,30 @@ fn commit_plan(
         .collect();
     if !approve::install_approved(&summaries, terminal, input, err)? {
         return Ok(None);
+    }
+    if let Some(scope) = scope {
+        for name in plan.items().map(|item| item.name.as_str()) {
+            config::set(
+                home,
+                &scope.workspace,
+                &scope.project,
+                config::Layer::Project,
+                &format!("extensions.\"{}\".enabled", config::short_name(name)),
+                serde_json::Value::Bool(true),
+            )
+            .map_err(|e| failed(e.code(), e))?;
+        }
+        for name in plan.fresh_names() {
+            config::set(
+                home,
+                &scope.workspace,
+                &scope.project,
+                config::Layer::Global,
+                &format!("extensions.\"{}\".enabled", config::short_name(name)),
+                serde_json::Value::Bool(false),
+            )
+            .map_err(|e| failed(e.code(), e))?;
+        }
     }
     plan.commit().map(Some).map_err(|e| failed(e.code(), e))
 }

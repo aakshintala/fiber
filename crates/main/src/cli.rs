@@ -15,16 +15,16 @@ const MENU: &str = r#"Fiber, a coding agent.
 Usage: fiber <command> [arguments]
 
 Sessions:
-  fiber [--model <model>] [-c <key>=<value>]...                                            Open the terminal
-  ask [--model <model>] [-c <key>=<value>]... [--resume <id>] [--worktree] [<prompt>] [-]  Run one session of one turn; its events go to stdout
-  resume [<id>]                                                                            Open a session in the terminal, or home at the session list
-  continue                                                                                 Open the most recent session in this project
-  sessions [--all] [--json]                                                                List sessions: id, state, name, what it waits on, spend
-  sessions search [--all] [--json] <text>                                                  Search the logs of past and running sessions for the text
-  sessions delete [--cascade] [--yes] <id>                                                 Delete a session, and with --cascade the sessions that continue it
-  sessions export <id> [<path>]                                                            Write the session's log and its artifacts to <path>
-  sessions prune [--older-than <duration>] [--dry-run]                                     Delete old sessions, worktrees and diagnostic logs
-  models [<search>] [--json]                                                               List the models the installed providers serve
+  fiber [--model <model>] [-c <key>=<value>]...                                                                   Open the terminal
+  ask [--model <model>] [-c <key>=<value>]... [--resume <id> [--credential <label>]] [--worktree] [<prompt>] [-]  Run one session of one turn; its events go to stdout
+  resume [<id>] [--credential <label>]                                                                            Open a session in the terminal, or home at the session list
+  continue                                                                                                        Open the most recent session in this project
+  sessions [--all] [--json]                                                                                       List sessions: id, state, name, what it waits on, spend
+  sessions search [--all] [--json] <text>                                                                         Search the logs of past and running sessions for the text
+  sessions delete [--cascade] [--yes] <id>                                                                        Delete a session, and with --cascade the sessions that continue it
+  sessions export <id> [<path>]                                                                                   Write the session's log and its artifacts to <path>
+  sessions prune [--older-than <duration>] [--cascade] [--force] [--dry-run] [--yes]                              Delete old sessions, worktrees and diagnostic logs
+  models [<search>] [--json]                                                                                      List the models the installed providers serve
 
 Fiber itself:
   approve [--yes]                           Show what this repository ships and approve it
@@ -35,7 +35,7 @@ Fiber itself:
   version                                   Print the version
 
 Extensions:
-  extension install <name or path>  Install an extension and its dependencies
+  extension install [--project] <name or path>  Install an extension and its dependencies
   extension update [<name>]         Update one extension, or every installed extension, to its newest tag
   extension remove <name>           Remove an extension, the dependencies nothing else uses, and their data
   extension reinstall <name>        Remove an extension and install it again from its recorded source and commit
@@ -119,6 +119,10 @@ pub(crate) enum Commands {
         /// home opens at the session list.
         #[arg(value_name = "id", value_parser = clap::builder::NonEmptyStringValueParser::new())]
         id: Option<String>,
+        /// The credential label to switch the session to
+        /// (`docs/model-routing.md`, "Which credential a session uses").
+        #[arg(long, value_name = "label", requires = "id")]
+        credential: Option<String>,
     },
     /// Open the most recent session in this project
     Continue,
@@ -361,6 +365,9 @@ pub(crate) enum SessionsCommands {
 pub(crate) enum ExtensionCommands {
     /// Install an extension and its dependencies
     Install {
+        /// Enable the extension only for the current project.
+        #[arg(long)]
+        project: bool,
         /// The extension's name, or a path to its package.
         #[arg(value_name = "name or path")]
         name_or_path: String,
@@ -593,6 +600,15 @@ pub(crate) struct SessionArgs {
     #[arg(long)]
     pub(crate) resume: bool,
 
+    /// The credential label the resumed session starts on: hidden and
+    /// free to change, passed by the hub that resumes an exited session
+    /// (`docs/model-routing.md`, "Which credential a session uses").
+    /// Only a resume carries it; `parse_from` refuses it without
+    /// `--resume`, since clap's `requires` does not cover every
+    /// conflicting combination.
+    #[arg(long, value_name = "label", hide = true)]
+    pub(crate) credential: Option<String>,
+
     /// Run the session in a new worktree (`docs/invocation.md`,
     /// "Isolation").
     #[arg(long, conflicts_with = "resume")]
@@ -778,6 +794,18 @@ fn parse_from(args: impl IntoIterator<Item = impl Into<OsString>>) -> Invocation
                         ask,
                         sentence: "The argument '--resume <id>' requires a session id but \
                                  none was given. Run `fiber --help` for usage."
+                            .to_owned(),
+                    }
+                }
+                // `--credential` without `--resume` names no startup
+                // label: the hub passes it only when it resumes an
+                // exited session, never for a fresh session or a rewind.
+                Some(Commands::Session(args)) if args.credential.is_some() && !args.resume => {
+                    Invocation::Usage {
+                        ask,
+                        sentence: "The argument '--credential <label>' requires '--resume': \
+                                 only a resumed session starts on a label. \
+                                 Run `fiber --help` for usage."
                             .to_owned(),
                     }
                 }

@@ -229,6 +229,10 @@ impl Fold {
             Event::TurnCompleted(_) => {
                 self.turn_running = false;
                 self.retrying = false;
+                // A completed turn's calls are named nowhere further:
+                // pending summaries were stored at request time, and no
+                // running call or turn is left to name.
+                self.tools.clear();
                 self.running_calls.clear();
                 self.pending.clear();
                 self.refresh_running();
@@ -248,6 +252,10 @@ impl Fold {
             Event::ToolCallCompleted(_) => {
                 if let Some(id) = &line.action_id {
                     self.running_calls.retain(|call| call != id);
+                    // A completed call is named nowhere further: it is
+                    // no longer running, and its approval was requested
+                    // before it started.
+                    self.tools.remove(id);
                 }
             }
             Event::PermissionRequested(asked) => {

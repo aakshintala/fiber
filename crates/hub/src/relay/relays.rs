@@ -200,8 +200,17 @@ impl Relays {
     }
 }
 
-/// Keeps `line` as `session`'s subscription, replacing the kept one.
+/// Keeps `line` as `session`'s subscription, replacing the kept one. A
+/// credential label applies to that subscribe only, so only
+/// `args.credential` is stripped from the stored copy: a reconnect or a
+/// later attach must not reapply an earlier asked label after another
+/// client changed it. The command in flight keeps its args until
+/// answered; an absent label is a no-op.
 pub(super) fn keep_subscription(relays: &mut Relays, session: &str, line: Map<String, Value>) {
+    let mut line = line;
+    if let Some(args) = line.get_mut("args").and_then(Value::as_object_mut) {
+        args.remove("credential");
+    }
     if let Some((_, kept)) = relays
         .subscribed
         .iter_mut()

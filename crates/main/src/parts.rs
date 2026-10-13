@@ -153,7 +153,8 @@ pub(crate) fn parts_in(
     let budget = config
         .get("budget.usd", None)
         .and_then(|(value, _)| value.as_f64());
-    let (mut providers, notices) = Providers::load(&home).map_err(|e| failed(e.code(), e))?;
+    let (mut providers, notices) =
+        Providers::load_enabled(&home, &config).map_err(|e| failed(e.code(), e))?;
     startup_notices.extend(notices);
     let locks = Arc::new(tools::PathLocks::new());
     let session_locks: Arc<dyn contract::files::PathLock> = locks.clone();

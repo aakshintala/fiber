@@ -1,5 +1,6 @@
 use serde_json::{Value, json};
 
+use super::judge::{Check, Rule};
 use super::*;
 
 const DOC: &str = concat!(
@@ -20,7 +21,7 @@ const DOC: &str = concat!(
     "| Terminal, attaching a 10 MiB session | 200 MiB peak RSS | Linux x86_64 | picked |\n",
     "| Session, memory kept after the busy turn | 200 MiB RssAnon | Linux x86_64 | picked |\n",
     "| Terminal, memory kept after attaching a 10 MiB session | 200 MiB RssAnon | Linux x86_64 | picked |\n",
-    "| Session, memory kept after 10 busy turns | the memory kept after the first, plus 1 MiB RssAnon | Linux x86_64 | picked |\n",
+    "| Session, memory kept after 10 busy turns, each followed by its handoff | the memory kept after the first, plus 1 MiB RssAnon | Linux x86_64 | picked |\n",
     "| Listing 1,000 sessions in one project, warm cache | 50 ms | Linux x86_64 | picked |\n",
     "| `session_list`, waiting for every running session's status | 2 s for the whole call | Linux x86_64 | picked |\n",
     "| `paging` jig, its session at scale 1 and 160 by 48 | 21,224 KiB peak RSS | Linux x86_64 | picked |\n",
@@ -69,6 +70,7 @@ fn head() -> Value {
             "terminal_attach_rss_kib": [51200, 51210, 51190, 51205, 51195],
             "terminal_attach_retained_kib": [48000, 48010, 47990, 48005, 47995],
             "busy_turn_retained_kib": [19000, 19010, 18990, 19005, 18995],
+            "ten_busy_turns_retained_kib": json!(vec![ten_turn_run(19000, 19005); 5]),
             "busy_turn_rss_kib": [20480, 20490, 20470, 20485, 20475],
             "resume_20k_rss_kib": [11000, 11010, 10990, 11005, 10995],
             "resume_2m_rss_kib": [14000, 14010, 13990, 14005, 13995],
@@ -125,6 +127,10 @@ fn fsync_run(model_requests: u64, tool_calls: u64, fdatasync: u64) -> Value {
 
 fn log_run(bytes: u64, content: u64, tool_calls: u64) -> Value {
     json!({"bytes": bytes, "content": content, "tool_calls": tool_calls})
+}
+
+fn ten_turn_run(first: u64, last: u64) -> Value {
+    json!({"first": first, "last": last})
 }
 
 fn base() -> Value {
@@ -882,6 +888,179 @@ fn log_bytes_hold_the_content_plus_two_kib_per_tool_call_on_every_run() {
     assert!(row.contains("1700000 bytes"), "{row}");
 }
 
+/// Judges `results` against the ten-turns check directly and returns its
+/// failures and comment line: the row is not measured until #2210, so the
+/// report never judges it, and this keeps covering `Rule::RetainedGrowth`.
+fn ten_turns_judged(results: &Value) -> (Vec<String>, Line) {
+    let text = results.to_string();
+    let parsed = super::results::parse_results(&text).expect("test head parses");
+    let check = Check::Exact {
+        pin: "the memory kept after the first, plus 1 MiB RssAnon",
+        rule: Rule::RetainedGrowth("ten_busy_turns_retained_kib"),
+    };
+    super::judge::judge(
+        "Session, memory kept after 10 busy turns, each followed by its handoff",
+        "the memory kept after the first, plus 1 MiB RssAnon",
+        check,
+        (Some(&parsed), None, ""),
+        &Base::None,
+        &[],
+    )
+}
+
+#[test]
+fn the_tenth_turn_keeps_a_median_of_at_most_one_mib_past_the_first() {
+    // A median at the MiB past the first passes, one KiB past it fails
+    // naming the metric.
+    let at = with_metric(
+        head(),
+        "ten_busy_turns_retained_kib",
+        json!(vec![ten_turn_run(19000, 20024); 5]),
+    );
+    assert_eq!(ten_turns_judged(&at).0, Vec::<String>::new());
+    let over = with_metric(
+        head(),
+        "ten_busy_turns_retained_kib",
+        json!(vec![ten_turn_run(19000, 20025); 5]),
+    );
+    let (failures, _) = ten_turns_judged(&over);
+    assert!(
+        has(&failures, "ten_busy_turns_retained_kib"),
+        "{failures:?}"
+    );
+    // One leaking pass does not move the median of five; three do.
+    let mut runs = vec![ten_turn_run(19000, 19005); 4];
+    runs.push(ten_turn_run(19000, 20025));
+    let one = with_metric(head(), "ten_busy_turns_retained_kib", json!(runs));
+    assert_eq!(ten_turns_judged(&one).0, Vec::<String>::new());
+    let mut runs = vec![ten_turn_run(19000, 19005); 2];
+    runs.extend(vec![ten_turn_run(19000, 20025); 3]);
+    let three = with_metric(head(), "ten_busy_turns_retained_kib", json!(runs));
+    let (failures, _) = ten_turns_judged(&three);
+    assert!(
+        has(&failures, "ten_busy_turns_retained_kib"),
+        "{failures:?}"
+    );
+    // Less than the first is no leak, so it passes.
+    let shrunk = with_metric(
+        head(),
+        "ten_busy_turns_retained_kib",
+        json!(vec![ten_turn_run(19000, 17000); 5]),
+    );
+    assert_eq!(ten_turns_judged(&shrunk).0, Vec::<String>::new());
+    // A half missing fails naming the metric.
+    for entry in [json!({"first": 19000}), json!({"last": 19005}), json!({})] {
+        let results = with_metric(head(), "ten_busy_turns_retained_kib", json!(vec![entry; 5]));
+        assert!(
+            has(&ten_turns_judged(&results).0, "ten_busy_turns_retained_kib"),
+            "{results}"
+        );
+    }
+    // Five passes per run: none, one, two, or six entries fail the count.
+    for entries in [
+        json!([]),
+        json!(vec![ten_turn_run(19000, 19005); 1]),
+        json!(vec![ten_turn_run(19000, 19005); 2]),
+        json!(vec![ten_turn_run(19000, 19005); 6]),
+    ] {
+        let results = with_metric(head(), "ten_busy_turns_retained_kib", entries);
+        assert!(has(
+            &ten_turns_judged(&results).0,
+            "ten_busy_turns_retained_kib"
+        ));
+    }
+    // Missing entirely fails naming the metric.
+    let mut missing = head();
+    missing["metrics"]
+        .as_object_mut()
+        .unwrap()
+        .remove("ten_busy_turns_retained_kib");
+    assert!(has(
+        &ten_turns_judged(&missing).0,
+        "ten_busy_turns_retained_kib"
+    ));
+    // The head cell shows the median growth and run 1's readings.
+    let (_, line) = ten_turns_judged(&head());
+    assert!(
+        line.head.contains("median growth 5 KiB over 5 runs; run 1: 19005 KiB RssAnon after the tenth, 19000 KiB after the first"),
+        "{}",
+        line.head
+    );
+    // The report does not gate the row: an over-budget metric passes,
+    // and the comment lists the row under Not measured with its owner.
+    let over = with_metric(
+        head(),
+        "ten_busy_turns_retained_kib",
+        json!(vec![ten_turn_run(19000, 20025); 5]),
+    );
+    assert_eq!(failures_of(&over), Vec::<String>::new());
+    let comment = judge(&head(), Some(&base()), Event::PullRequest).comment;
+    let not_measured = comment.split("### Not measured").nth(1).unwrap();
+    assert!(
+        not_measured.contains("Session, memory kept after 10 busy turns")
+            && not_measured.contains("#2210"),
+        "{comment}"
+    );
+}
+
+#[test]
+fn a_pull_request_the_selection_did_not_choose_skips_the_ten_turns_row() {
+    // No metric, but the record names the skipped workload: the direct
+    // check reports it skipped instead of failing the missing metric.
+    // The report itself never judges the row until #2210 re-registers it.
+    let mut skipped = head();
+    skipped["metrics"]
+        .as_object_mut()
+        .unwrap()
+        .remove("ten_busy_turns_retained_kib");
+    skipped["skipped"] = json!(["10 busy turns"]);
+    let (failures, line) = ten_turns_judged(&skipped);
+    assert_eq!(failures, Vec::<String>::new(), "{failures:?}");
+    assert_eq!(line.result, "skipped");
+    assert!(
+        line.head
+            .contains("the selection did not run the 10-busy-turns workload"),
+        "{}",
+        line.head
+    );
+    let out = judge(&skipped, Some(&base()), Event::PullRequest);
+    assert_eq!(out.failures, Vec::<String>::new(), "{:?}", out.failures);
+    // The row does not gate, but the summary still says the selection
+    // skipped it (`docs/ci.md`, "Selection").
+    let not_measured = out.comment.split("### Not measured").nth(1).unwrap();
+    let ten_turns = not_measured
+        .lines()
+        .find(|l| l.contains("memory kept after 10 busy turns"))
+        .unwrap_or_else(|| panic!("no ten-turns row in:\n{not_measured}"));
+    assert!(ten_turns.contains("skipped"), "{ten_turns}");
+    assert!(ten_turns.contains("#2210"), "{ten_turns}");
+    // A run the selection chose shows the row's owner alone.
+    let out = judge(&head(), Some(&base()), Event::PullRequest);
+    let not_measured = out.comment.split("### Not measured").nth(1).unwrap();
+    let ten_turns = not_measured
+        .lines()
+        .find(|l| l.contains("memory kept after 10 busy turns"))
+        .unwrap_or_else(|| panic!("no ten-turns row in:\n{not_measured}"));
+    assert!(!ten_turns.contains("skipped"), "{ten_turns}");
+    // The skip records only the ten-turns workload: another Exact row
+    // with the skip recorded is still judged, never skipped.
+    let text = skipped.to_string();
+    let parsed = super::results::parse_results(&text).expect("test head parses");
+    let (failures, line) = super::judge::judge(
+        "fsyncs",
+        "2 per model request, 2 per tool call",
+        Check::Exact {
+            pin: "2 per model request, 2 per tool call",
+            rule: Rule::Fsyncs("fsyncs"),
+        },
+        (Some(&parsed), None, ""),
+        &Base::None,
+        &[],
+    );
+    assert_eq!(failures, Vec::<String>::new(), "{failures:?}");
+    assert_eq!(line.result, "pass", "{}", line.head);
+}
+
 #[test]
 fn an_exact_part_2_row_whose_text_changes_fails() {
     for (from, to) in [
@@ -1497,6 +1676,7 @@ fn a_file_without_metric_runs_expects_runs_for_every_metric() {
         "terminal_attach_rss_kib",
         "terminal_attach_retained_kib",
         "busy_turn_retained_kib",
+        "ten_busy_turns_retained_kib",
         "busy_turn_rss_kib",
         "resume_20k_rss_kib",
         "resume_2m_rss_kib",

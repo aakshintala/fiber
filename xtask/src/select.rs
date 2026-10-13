@@ -17,7 +17,7 @@ mod test_filter;
 use compiled_in::{COMPILED_IN, PACKAGE_READERS};
 pub(crate) use compiled_in::{compiled_in_mismatches, package_reader_mismatches};
 use plan::BINARY_TESTS;
-pub(crate) use plan::{plan, shard_timeout_minutes, verdict};
+pub(crate) use plan::{plan, shard_timeout_minutes, ten_turns_runs, verdict};
 pub(crate) use test_filter::{is_test_file, test_filter};
 
 /// A workspace member: its directory relative to the workspace root, its

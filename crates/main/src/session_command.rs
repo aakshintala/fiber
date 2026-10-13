@@ -60,6 +60,7 @@ pub(crate) fn run(
         return crate::resume::session_resume(
             SessionId(args.id),
             crate::per_run(args.model, args.overrides),
+            args.credential,
             args.prompt,
             clock,
             &signals,
