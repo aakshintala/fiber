@@ -397,8 +397,7 @@ impl App {
                     return;
                 };
                 let revision = self.screen.pages().index().revision(at);
-                if self.find.scanned(at) != Some(revision)
-                    && self.screen.pages().part(at).is_none()
+                if self.find.scanned(at) != Some(revision) && self.screen.pages().part(at).is_none()
                 {
                     next = Some(at);
                 }
