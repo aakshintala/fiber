@@ -56,76 +56,67 @@ enum SpeedClass {
     Slow,
 }
 
-/// What the head CPU model means for the timing gates.
-struct ModelInfo {
-    class: Option<SpeedClass>,
-    stored: Option<usize>,
-    gates: bool,
+/// What the head CPU model means for the timing gates. Eligibility
+/// derives from the stored evidence, so an eligible model always has a
+/// class and enough stored runs: no flag can contradict them.
+enum ModelInfo {
+    /// A classified model with at least `MIN_STORED_RUNS` stored files.
+    Eligible { class: SpeedClass },
+    /// A classified model with fewer stored files than gate.
+    FewRuns { class: SpeedClass, stored: usize },
+    /// An unclassified, unknown or missing model; `stored` is the known
+    /// file count when the model is recorded but unclassified.
+    Advisory { stored: Option<usize> },
 }
 
 /// The head CPU model's class, stored-file count and whether it gates.
-/// Matching is ASCII case-insensitive; anything else is unknown.
+/// Matching is ASCII case-insensitive; anything else is unknown. The
+/// single `stored >= MIN_STORED_RUNS` check below is the only place
+/// eligibility is decided, from the class and count it just looked up.
 fn model_info(cpu: Option<&str>) -> ModelInfo {
     let Some(model) = cpu.map(str::trim).filter(|m| !m.is_empty()) else {
-        return ModelInfo {
-            class: None,
-            stored: None,
-            gates: false,
-        };
+        return ModelInfo::Advisory { stored: None };
     };
-    if model.eq_ignore_ascii_case(FAST_CPU) {
-        ModelInfo {
-            class: Some(SpeedClass::Fast),
-            stored: Some(FAST_STORED),
-            gates: FAST_STORED >= MIN_STORED_RUNS,
-        }
+    let evidence = if model.eq_ignore_ascii_case(FAST_CPU) {
+        (Some(SpeedClass::Fast), Some(FAST_STORED))
     } else if model.eq_ignore_ascii_case(MIDDLE_CPU) {
-        ModelInfo {
-            class: Some(SpeedClass::Middle),
-            stored: Some(MIDDLE_STORED),
-            gates: false,
-        }
+        (Some(SpeedClass::Middle), Some(MIDDLE_STORED))
     } else if model.eq_ignore_ascii_case(SLOW_7763_CPU) {
-        ModelInfo {
-            class: Some(SpeedClass::Slow),
-            stored: Some(SLOW_7763_STORED),
-            gates: SLOW_7763_STORED >= MIN_STORED_RUNS,
-        }
+        (Some(SpeedClass::Slow), Some(SLOW_7763_STORED))
     } else if model.eq_ignore_ascii_case(SLOW_9V74_CPU) {
-        ModelInfo {
-            class: Some(SpeedClass::Slow),
-            stored: Some(SLOW_9V74_STORED),
-            gates: false,
-        }
+        (Some(SpeedClass::Slow), Some(SLOW_9V74_STORED))
     } else if model.eq_ignore_ascii_case(UNCLASSIFIED_8573C_CPU) {
-        ModelInfo {
-            class: None,
-            stored: Some(UNCLASSIFIED_8573C_STORED),
-            gates: false,
-        }
+        (None, Some(UNCLASSIFIED_8573C_STORED))
     } else {
-        ModelInfo {
-            class: None,
-            stored: None,
-            gates: false,
-        }
+        (None, None)
+    };
+    match evidence {
+        (Some(class), Some(stored)) if stored >= MIN_STORED_RUNS => ModelInfo::Eligible { class },
+        (Some(class), Some(stored)) => ModelInfo::FewRuns { class, stored },
+        (_, stored) => ModelInfo::Advisory { stored },
     }
 }
 
 /// Why the head CPU model stays advisory, naming its stored evidence.
 fn model_advisory(cpu: Option<&str>, info: &ModelInfo) -> String {
     let model = cpu.map(str::trim).filter(|m| !m.is_empty());
-    match (model, info.stored, info.class) {
-        (Some(model), Some(stored), Some(_)) if !info.gates => {
-            let run = if stored == 1 { "run" } else { "runs" };
+    let runs = |stored: usize| if stored == 1 { "run" } else { "runs" };
+    match (model, info) {
+        (Some(model), ModelInfo::FewRuns { stored, .. }) => {
             format!(
-                "advisory: {model} has {stored} stored {run}; at least {MIN_STORED_RUNS} are required"
+                "advisory: {model} has {stored} stored {}; at least {MIN_STORED_RUNS} are required",
+                runs(*stored)
             )
         }
-        (Some(model), Some(stored), None) => {
-            let run = if stored == 1 { "run" } else { "runs" };
+        (
+            Some(model),
+            ModelInfo::Advisory {
+                stored: Some(stored),
+            },
+        ) => {
             format!(
-                "advisory: {model} is not a classified timing model ({stored} stored {run}; at least {MIN_STORED_RUNS} are required)"
+                "advisory: {model} is not a classified timing model ({stored} stored {}; at least {MIN_STORED_RUNS} are required)",
+                runs(*stored)
             )
         }
         _ => "advisory: CPU model is unknown or not recorded".to_owned(),
@@ -275,24 +266,32 @@ fn class_name(class: SpeedClass) -> &'static str {
 /// itself does not reject negatives, so this runs before any advisory
 /// handling: a negative or non-finite `ms` is a named configuration
 /// failure even on an advisory fixture or model.
-fn attach_medians(
-    results: Option<&Results>,
-    id: &str,
-) -> Result<std::collections::BTreeMap<String, f64>, String> {
+struct AttachMedians {
+    /// Median ms of the advisory 1 MiB fixture.
+    one_mib: f64,
+    /// Median ms of the gated 10 MiB fixture.
+    ten_mib: f64,
+}
+
+fn attach_medians(results: Option<&Results>, id: &str) -> Result<AttachMedians, String> {
     let entries = metric(results, id)?
         .as_array()
         .ok_or_else(|| format!("{id}: not an array"))?;
     let runs = results.map(|results| results.runs_of(id)).unwrap_or(0);
-    let mut by_fixture: std::collections::BTreeMap<String, Vec<f64>> =
-        std::collections::BTreeMap::new();
+    let mut one_mib = Vec::new();
+    let mut ten_mib = Vec::new();
     for entry in entries {
         let fixture = entry
             .get("fixture")
             .and_then(Value::as_str)
             .ok_or_else(|| format!("{id}: {entry} has no fixture"))?;
-        if fixture != "1 MiB" && fixture != GATED_ATTACH_FIXTURE {
+        let samples = if fixture == "1 MiB" {
+            &mut one_mib
+        } else if fixture == GATED_ATTACH_FIXTURE {
+            &mut ten_mib
+        } else {
             return Err(format!("{id}: unknown fixture {fixture:?}"));
-        }
+        };
         entry
             .get("log_bytes")
             .and_then(Value::as_u64)
@@ -306,25 +305,24 @@ fn attach_medians(
                 "{id}: {entry} is not a finite number at or above zero"
             ));
         }
-        by_fixture.entry(fixture.to_owned()).or_default().push(ms);
+        samples.push(ms);
     }
-    let mut medians = std::collections::BTreeMap::new();
-    for fixture in ["1 MiB", GATED_ATTACH_FIXTURE] {
-        let Some(samples) = by_fixture.get(fixture) else {
+    let median_of = |fixture: &str, samples: &[f64]| -> Result<f64, String> {
+        if samples.is_empty() {
             return Err(format!("{id}: no {fixture} fixture"));
-        };
+        }
         if samples.len() != runs {
             return Err(format!(
                 "{id}: {fixture}: {} runs, expected {runs}",
                 samples.len()
             ));
         }
-        medians.insert(
-            fixture.to_owned(),
-            median(samples, runs).map_err(|e| format!("{id}: {fixture}: {e}"))?,
-        );
-    }
-    Ok(medians)
+        median(samples, runs).map_err(|e| format!("{id}: {fixture}: {e}"))
+    };
+    Ok(AttachMedians {
+        one_mib: median_of("1 MiB", &one_mib)?,
+        ten_mib: median_of(GATED_ATTACH_FIXTURE, &ten_mib)?,
+    })
 }
 
 /// What the head column shows for a gated scalar timing: the median with
@@ -963,96 +961,88 @@ pub(super) fn judge(
                     }
                 }
                 (Ok(medians), Ok(gates)) => {
-                    // `attach_medians` inserts both fixtures on success, so
-                    // these `get` calls always hit; the fallback never runs.
-                    let ten = medians
-                        .get(GATED_ATTACH_FIXTURE)
-                        .copied()
-                        .unwrap_or_default();
-                    let one = medians
-                        .get(ADVISORY_ATTACH_FIXTURE)
-                        .copied()
-                        .unwrap_or_default();
-                    if !info.gates {
-                        line.result = "advisory";
-                        let why = model_advisory(head_cpu, &info);
-                        line.head.push_str(&format!(
-                            "; {GATED_ATTACH_FIXTURE}: {ten:.1} ms ({why}); {ADVISORY_ATTACH_FIXTURE}: {one:.1} ms (advisory until #1546 lands a fix or a re-ruled ceiling)"
-                        ));
-                    } else if let Some(class) = info.class {
-                        let (ceiling, tolerance) = class_limit(&gates, class);
-                        let tolerance = tolerance.unwrap_or(0.0);
-                        // The 1 MiB fixture never gates, even on an eligible
-                        // model: its reason names the ticket that owns it.
-                        let one_note = format!(
-                            "; {ADVISORY_ATTACH_FIXTURE}: {one:.1} ms (advisory until #1546 lands a fix or a re-ruled ceiling)"
-                        );
-                        let base_ten = match base {
-                            Base::None => None,
-                            Base::Failed(_) => None,
-                            // No missing-metric arm: `attach_medians` errors
-                            // on a missing metric, so `.ok()` is `None`
-                            // exactly then and this arm covers it.
-                            Base::Ok(results) => attach_medians(Some(results), id)
-                                .ok()
-                                .and_then(|m| m.get(GATED_ATTACH_FIXTURE).copied()),
-                        };
-                        let base_usable = match base {
-                            Base::Ok(results)
-                                if results.metrics.contains_key(id)
-                                    && attach_medians(Some(results), id).is_ok()
-                                    && base_cpu_comparable(head_cpu, base) =>
-                            {
-                                base_ten
-                            }
-                            Base::None | Base::Failed(_) | Base::Ok(_) => None,
-                        };
-                        match (base, base_usable) {
-                            // A failed base never reaches this arm: its own
-                            // arm below matches first, so no guard is needed.
-                            // Every unavailable base shares one reason.
-                            (Base::None, _) | (Base::Ok(_), None) => {
-                                line.result = "advisory";
-                                let why = NO_BASE_REASON.to_owned();
-                                line.head.push_str(&format!(
+                    let ten = medians.ten_mib;
+                    let one = medians.one_mib;
+                    match info {
+                        ModelInfo::Eligible { class } => {
+                            let (ceiling, tolerance) = class_limit(&gates, class);
+                            let tolerance = tolerance.unwrap_or(0.0);
+                            // The 1 MiB fixture never gates, even on an eligible
+                            // model: its reason names the ticket that owns it.
+                            let one_note = format!(
+                                "; {ADVISORY_ATTACH_FIXTURE}: {one:.1} ms (advisory until #1546 lands a fix or a re-ruled ceiling)"
+                            );
+                            let base_ten = match base {
+                                Base::None => None,
+                                Base::Failed(_) => None,
+                                // No missing-metric arm: `attach_medians` errors
+                                // on a missing metric, so `.ok()` is `None`
+                                // exactly then and this arm covers it.
+                                Base::Ok(results) => {
+                                    attach_medians(Some(results), id).ok().map(|m| m.ten_mib)
+                                }
+                            };
+                            let base_usable = match base {
+                                Base::Ok(results)
+                                    if results.metrics.contains_key(id)
+                                        && attach_medians(Some(results), id).is_ok()
+                                        && base_cpu_comparable(head_cpu, base) =>
+                                {
+                                    base_ten
+                                }
+                                Base::None | Base::Failed(_) | Base::Ok(_) => None,
+                            };
+                            match (base, base_usable) {
+                                // A failed base never reaches this arm: its own
+                                // arm below matches first, so no guard is needed.
+                                // Every unavailable base shares one reason.
+                                (Base::None, _) | (Base::Ok(_), None) => {
+                                    line.result = "advisory";
+                                    let why = NO_BASE_REASON.to_owned();
+                                    line.head.push_str(&format!(
                                     "; {GATED_ATTACH_FIXTURE}: {ten:.1} ms ({} ceiling {ceiling:.1} ms, +{tolerance}% over base; {why}){one_note}",
                                     class_name(class)
                                 ));
-                            }
-                            (Base::Failed(_), _) => {
-                                line.result = "advisory";
-                                line.head.push_str(&format!(
+                                }
+                                (Base::Failed(_), _) => {
+                                    line.result = "advisory";
+                                    line.head.push_str(&format!(
                                     "; {GATED_ATTACH_FIXTURE}: {ten:.1} ms ({} ceiling {ceiling:.1} ms; {}){one_note}",
                                     class_name(class),
                                     line.base
                                 ));
-                            }
-                            _ => {
-                                let base_median = base_usable.unwrap_or(0.0);
-                                match timing_fails(ten, base_median, ceiling, tolerance) {
-                                    Err(e) => failures.push(format!("{id}: {e}")),
-                                    Ok(true) => {
-                                        failures.push(format!(
+                                }
+                                _ => {
+                                    let base_median = base_usable.unwrap_or(0.0);
+                                    match timing_fails(ten, base_median, ceiling, tolerance) {
+                                        Err(e) => failures.push(format!("{id}: {e}")),
+                                        Ok(true) => {
+                                            failures.push(format!(
                                             "{OVER}median {ten:.1} ms of {id} {GATED_ATTACH_FIXTURE} is over {ceiling:.1} ms {} ceiling and over base {base_median:.1} ms by more than {tolerance}%",
                                             class_name(class)
                                         ));
-                                        line.head.push_str(&format!(
+                                            line.head.push_str(&format!(
                                             "; {GATED_ATTACH_FIXTURE}: {ten:.1} ms ({} ceiling {ceiling:.1} ms, +{tolerance}% over base){one_note}",
                                             class_name(class)
                                         ));
-                                    }
-                                    Ok(false) => {
-                                        line.head.push_str(&format!(
+                                        }
+                                        Ok(false) => {
+                                            line.head.push_str(&format!(
                                             "; {GATED_ATTACH_FIXTURE}: {ten:.1} ms ({} ceiling {ceiling:.1} ms, +{tolerance}% over base){one_note}",
                                             class_name(class)
                                         ));
+                                        }
                                     }
                                 }
                             }
                         }
-                    } else {
-                        line.result = "advisory";
-                        line.head.push_str(&format!("; {NO_BASE_REASON}"));
+                        ModelInfo::FewRuns { .. } | ModelInfo::Advisory { .. } => {
+                            line.result = "advisory";
+                            let why = model_advisory(head_cpu, &info);
+                            line.head.push_str(&format!(
+                                "; {GATED_ATTACH_FIXTURE}: {ten:.1} ms ({why}); {ADVISORY_ATTACH_FIXTURE}: {one:.1} ms (advisory until #1546 lands a fix or a re-ruled ceiling)"
+                            ));
+                        }
                     }
                 }
             }
@@ -1092,48 +1082,48 @@ pub(super) fn judge(
                         Base::Ok(results) => timing_median(Some(results), id)
                             .map_or_else(|e| format!("base failed: {e}"), |v| format!("{v:.1} ms")),
                     };
-                    if !info.gates {
-                        line.result = "advisory";
-                        let why = model_advisory(head_cpu, &info);
-                        match info.class {
-                            Some(class) => {
-                                let (ceil, _) = class_limit(&gates, class);
-                                line.head = format!(
-                                    "{head_value:.1} ms ({} ceiling {ceil:.1} ms; {why})",
-                                    class_name(class)
-                                );
-                            }
-                            None => {
-                                line.head = format!("{head_value:.1} ms ({why})");
-                            }
+                    match info {
+                        ModelInfo::FewRuns { class, .. } => {
+                            line.result = "advisory";
+                            let why = model_advisory(head_cpu, &info);
+                            let (ceil, _) = class_limit(&gates, class);
+                            line.head = format!(
+                                "{head_value:.1} ms ({} ceiling {ceil:.1} ms; {why})",
+                                class_name(class)
+                            );
                         }
-                    } else if let Some(class) = info.class {
-                        let (ceiling, tolerance) = class_limit(&gates, class);
-                        let tolerance = tolerance.unwrap_or(0.0);
-                        line.head = gated_shown(head_value, class, ceiling, tolerance);
-                        let base_value = match base {
-                            Base::Ok(results)
-                                if results.metrics.contains_key(id)
-                                    && timing_median(Some(results), id).is_ok()
-                                    && base_cpu_comparable(head_cpu, base) =>
-                            {
-                                timing_median(Some(results), id).ok()
-                            }
-                            Base::None | Base::Failed(_) | Base::Ok(_) => None,
-                        };
-                        match (base, base_value) {
-                            // A failed base never reaches this arm: its own
-                            // arm below matches first, so no guard is needed.
-                            (Base::None, _) | (Base::Ok(_), None) => {
-                                line.result = "advisory";
-                                line.head.push_str(&format!("; {NO_BASE_REASON}"));
-                            }
-                            (Base::Failed(_), _) => {
-                                line.result = "advisory";
-                            }
-                            _ => {
-                                let base_median = base_value.unwrap_or(0.0);
-                                match timing_fails(head_value, base_median, ceiling, tolerance) {
+                        ModelInfo::Advisory { .. } => {
+                            line.result = "advisory";
+                            let why = model_advisory(head_cpu, &info);
+                            line.head = format!("{head_value:.1} ms ({why})");
+                        }
+                        ModelInfo::Eligible { class } => {
+                            let (ceiling, tolerance) = class_limit(&gates, class);
+                            let tolerance = tolerance.unwrap_or(0.0);
+                            line.head = gated_shown(head_value, class, ceiling, tolerance);
+                            let base_value = match base {
+                                Base::Ok(results)
+                                    if results.metrics.contains_key(id)
+                                        && timing_median(Some(results), id).is_ok()
+                                        && base_cpu_comparable(head_cpu, base) =>
+                                {
+                                    timing_median(Some(results), id).ok()
+                                }
+                                Base::None | Base::Failed(_) | Base::Ok(_) => None,
+                            };
+                            match (base, base_value) {
+                                // A failed base never reaches this arm: its own
+                                // arm below matches first, so no guard is needed.
+                                (Base::None, _) | (Base::Ok(_), None) => {
+                                    line.result = "advisory";
+                                    line.head.push_str(&format!("; {NO_BASE_REASON}"));
+                                }
+                                (Base::Failed(_), _) => {
+                                    line.result = "advisory";
+                                }
+                                _ => {
+                                    let base_median = base_value.unwrap_or(0.0);
+                                    match timing_fails(head_value, base_median, ceiling, tolerance) {
                                     Err(e) => failures.push(format!("{id}: {e}")),
                                     Ok(true) => failures.push(format!(
                                         "{OVER}median {head_value:.1} ms of {id} is over {ceiling:.1} ms {} ceiling and over base {base_median:.1} ms by more than {tolerance}%",
@@ -1141,11 +1131,9 @@ pub(super) fn judge(
                                     )),
                                     Ok(false) => {}
                                 }
+                                }
                             }
                         }
-                    } else {
-                        line.result = "advisory";
-                        line.head = format!("{head_value:.1} ms ({NO_BASE_REASON})");
                     }
                 }
             }

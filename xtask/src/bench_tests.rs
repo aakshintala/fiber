@@ -3285,11 +3285,7 @@ fn malformed_head_timings_fail_even_on_advisory_models() {
     for cpu in [SLOW_MODEL, SLOW_ADVISORY_MODEL, "unknown cpu"] {
         let mut missing = with_cpu(head(), cpu);
         missing["metrics"].as_object_mut().unwrap().remove(id);
-        let (b_cpu, b) = (
-            cpu,
-            with_cpu(with_metric(base(), id, json!(vec![1.0; 5])), cpu),
-        );
-        let _ = b_cpu;
+        let b = with_cpu(with_metric(base(), id, json!(vec![1.0; 5])), cpu);
         let out = judge(&missing, Some(&b), Event::PullRequest);
         assert!(has(&out.failures, id), "{cpu}: {:?}", out.failures);
         for bad in [
@@ -3666,9 +3662,11 @@ fn unclassified_model_uses_the_singular_stored_run() {
 
 #[test]
 fn attach_ms_of_zero_passes_validation() {
-    // Kills judge.rs:304 `<` with `==` in `attach_medians`: the mutant
-    // rejects exactly 0.0, which no older test exercises (only positive,
-    // negative and NaN ms).
+    // Kills two `attach_medians` mutants of the lower-bound check:
+    // `<` with `==` rejects exactly 0.0, which no older test exercises
+    // (only positive, negative and NaN ms); `<` with `<=` rejects exactly
+    // 0.0 while keeping the negative rejection, so only a 0.0 fixture
+    // bites it.
     let (h, b) = attach_pair(&[0.0; 5], &[0.0; 5], &[0.0; 5], &[0.0; 5], SLOW_MODEL);
     let out = judge(&h, Some(&b), Event::PullRequest);
     assert_eq!(out.failures, Vec::<String>::new(), "{:?}", out.failures);
@@ -3685,18 +3683,6 @@ fn attach_ms_of_zero_passes_validation() {
         "{:?}",
         out.failures
     );
-}
-
-#[test]
-fn attach_ms_of_zero_passes_at_the_lower_bound() {
-    // Kills judge.rs:304 `<` with `<=` in `attach_medians`: the mutant
-    // rejects exactly 0.0 while keeping the negative rejection, so only
-    // a 0.0 fixture bites it.
-    let (h, b) = attach_pair(&[0.0; 5], &[0.0; 5], &[0.0; 5], &[0.0; 5], SLOW_MODEL);
-    let out = judge(&h, Some(&b), Event::PullRequest);
-    assert_eq!(out.failures, Vec::<String>::new(), "{:?}", out.failures);
-    let line = row(&out.comment, "Terminal to its first frame, attaching");
-    assert!(line.ends_with("| pass |"), "{line}");
 }
 
 /// An over-ceiling 10 MiB head on `SLOW_MODEL` with a valid but
@@ -3722,40 +3708,11 @@ fn mismatched_attach_pair() -> (Value, Value) {
 
 #[test]
 fn a_mismatched_attach_base_never_forces_the_gate() {
-    // Kills judge.rs:1000's guard with `true`: the mutant gates on the
-    // mismatched base and fails naming 10 MiB.
-    let (h, b) = mismatched_attach_pair();
-    let out = judge(&h, Some(&b), Event::PullRequest);
-    assert_eq!(out.failures, Vec::<String>::new(), "{:?}", out.failures);
-    let line = row(&out.comment, "Terminal to its first frame, attaching");
-    assert!(line.ends_with("| advisory |"), "{line}");
-    assert!(
-        line.contains("no comparable same-job base timing"),
-        "{line}"
-    );
-}
-
-#[test]
-fn a_mismatched_attach_base_needs_every_validity_leg() {
-    // Kills judge.rs:1002's second `&&` with `||`: the mutant's
-    // (contains && is_ok) side is true for the mismatched valid base, so
-    // it gates and fails naming 10 MiB.
-    let (h, b) = mismatched_attach_pair();
-    let out = judge(&h, Some(&b), Event::PullRequest);
-    assert_eq!(out.failures, Vec::<String>::new(), "{:?}", out.failures);
-    let line = row(&out.comment, "Terminal to its first frame, attaching");
-    assert!(line.ends_with("| advisory |"), "{line}");
-    assert!(
-        line.contains("no comparable same-job base timing"),
-        "{line}"
-    );
-}
-
-#[test]
-fn a_mismatched_attach_base_needs_the_metric_leg() {
-    // Kills judge.rs:1001's first `&&` with `||`: the mutant's contains
-    // side is true for the mismatched valid base, so it gates and fails
-    // naming 10 MiB.
+    // Kills three same-job-base guard mutants, each of which gates on the
+    // mismatched base and fails naming 10 MiB: the guard with `true`; the
+    // second `&&` with `||`, whose (contains && is_ok) side is true for
+    // the mismatched valid base; and the first `&&` with `||`, whose
+    // contains side is true for the mismatched valid base.
     let (h, b) = mismatched_attach_pair();
     let out = judge(&h, Some(&b), Event::PullRequest);
     assert_eq!(out.failures, Vec::<String>::new(), "{:?}", out.failures);
@@ -3816,37 +3773,10 @@ fn failed_attach_base_shows_its_failure() {
 
 #[test]
 fn missing_attach_base_metric_stays_advisory() {
-    // Kills judge.rs:1010's guard with `false`: the mutant skips the
-    // advisory arm and gates the 1400 ms head against 0.0, failing naming
-    // 10 MiB.
-    let (h, _) = attach_pair(
-        &[1400.0; 5],
-        &[31.0; 5],
-        &[800.0; 5],
-        &[30.5; 5],
-        SLOW_MODEL,
-    );
-    let mut missing = base();
-    missing["metrics"]
-        .as_object_mut()
-        .unwrap()
-        .remove("terminal_attach_ms");
-    let missing = with_cpu(missing, SLOW_MODEL);
-    let out = judge(&h, Some(&missing), Event::PullRequest);
-    assert_eq!(out.failures, Vec::<String>::new(), "{:?}", out.failures);
-    let line = row(&out.comment, "Terminal to its first frame, attaching");
-    assert!(line.ends_with("| advisory |"), "{line}");
-    assert!(
-        line.contains("no comparable same-job base timing"),
-        "{line}"
-    );
-}
-
-#[test]
-fn missing_attach_base_metric_stays_advisory_without_a_failure() {
-    // Kills judge.rs:1010's deleted `!`: the mutant admits only failed
-    // bases to the advisory arm and gates the rest against 0.0, failing
-    // naming 10 MiB.
+    // Kills two advisory-arm mutants, each of which gates the 1400 ms
+    // head against 0.0 and fails naming 10 MiB: the guard with `false`,
+    // which skips the advisory arm; and the deleted `!`, which admits
+    // only failed bases to the advisory arm.
     let (h, _) = attach_pair(
         &[1400.0; 5],
         &[31.0; 5],
