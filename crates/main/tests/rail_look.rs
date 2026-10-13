@@ -11,6 +11,7 @@
     clippy::expect_used,
     clippy::panic,
     clippy::indexing_slicing,
+    clippy::cast_possible_truncation,
     reason = "test helpers; a failure is the test's"
 )]
 
