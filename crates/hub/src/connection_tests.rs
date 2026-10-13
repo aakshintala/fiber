@@ -1123,9 +1123,11 @@ fn attention_reaches_every_connection_after_hub_hello_with_or_without_a_feed() {
     Deadline::after(DEADLINE)
         .recv(&reached_rx)
         .expect("C reaches its hello");
-    hub.feed
-        .attention
-        .notify("s_00000000000000ff", None, &waiting_status("rh"), false);
+    drop(
+        hub.feed
+            .attention
+            .notify("s_00000000000000ff", None, &waiting_status("rh"), false),
+    );
     let held = b.next("the held attention");
     assert_eq!(held["payload"]["reason"], "waiting");
     assert_eq!(held["payload"]["summary"], "run rh");
@@ -1177,9 +1179,11 @@ fn a_client_that_half_closes_without_reading_still_leaves() {
     for n in 0..2_000 {
         let mut status = waiting_status(&format!("r{n}"));
         status.name = format!("{n}:{}", "x".repeat(2_000));
-        hub.feed
-            .attention
-            .notify("s_00000000000000ff", None, &status, false);
+        drop(
+            hub.feed
+                .attention
+                .notify("s_00000000000000ff", None, &status, false),
+        );
     }
     d.write.shutdown(Shutdown::Write).unwrap();
     until_listeners(&hub, 0, "after D half-closed");

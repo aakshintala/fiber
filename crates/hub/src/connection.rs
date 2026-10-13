@@ -441,6 +441,25 @@ fn serve_from(stream: UnixStream, hub: Arc<Hub>, n: u64, hello: bool, who: crate
             return;
         }
     };
+    // Each registration's own shutdown, cloned from the connection
+    // stream before it is read from, without the shared writer mutex:
+    // cleanup never clones at the moment it runs. Local connections
+    // carry no websocket.
+    let shutdown_of = |stream: &UnixStream| {
+        stream
+            .try_clone()
+            .ok()
+            .map(|stream| crate::feed::Closer { stream, web: None })
+    };
+    let (Some(feed_closer), Some(heard_closer), Some(heard_retired)) = (
+        shutdown_of(&stream),
+        shutdown_of(&stream),
+        shutdown_of(&stream),
+    ) else {
+        hub.pairing.forget(&hub, &who);
+        disconnect(&hub, n);
+        return;
+    };
     hub.pairing.attach(&who, &writer);
     if hello {
         #[cfg(test)]
@@ -459,7 +478,11 @@ fn serve_from(stream: UnixStream, hub: Arc<Hub>, n: u64, hello: bool, who: crate
     }
     let relays: Arc<Mutex<Relays>> = Arc::new(Mutex::new(Relays::default()));
     hub.rejoins.register(n, &writer, &relays);
-    let Some(heard) = hub.feed.attention.listen(Arc::clone(&writer)) else {
+    let Some(heard) = hub
+        .feed
+        .attention
+        .listen(Arc::clone(&writer), heard_closer, heard_retired)
+    else {
         stream.shutdown(Shutdown::Both).unwrap_or(());
         hub.rejoins.unregister(n);
         hub.pairing.forget(&hub, &who);
@@ -475,7 +498,7 @@ fn serve_from(stream: UnixStream, hub: Arc<Hub>, n: u64, hello: bool, who: crate
         match read.read_until(b'\n', &mut buf) {
             Ok(0) | Err(_) => break,
             Ok(_) => {
-                on_command(&buf, &hub, &writer, &relays, &mut fed, &who);
+                on_command(&buf, &hub, &writer, &feed_closer, &relays, &mut fed, &who);
             }
         }
     }
@@ -519,6 +542,7 @@ fn on_command(
     bytes: &[u8],
     hub: &Arc<Hub>,
     writer: &Arc<Mutex<UnixStream>>,
+    closer: &crate::feed::Closer,
     relays: &Arc<Mutex<Relays>>,
     fed: &mut Option<u64>,
     who: &crate::pairing::Who,
@@ -574,7 +598,7 @@ fn on_command(
             &line.id,
             crate::prompt_history::answer(&hub.home, &line.args).map(Some),
         ),
-        "feed" => on_feed(&line.id, &line.args, hub, writer, fed),
+        "feed" => on_feed(&line.id, &line.args, hub, writer, closer, fed),
         "dismiss" => answer(writer, hub, &line.id, hub.feed.dismiss(&line.args)),
         "recent" => answer(writer, hub, &line.id, hub.feed.recent(&line.args)),
         "sessions" => answer(

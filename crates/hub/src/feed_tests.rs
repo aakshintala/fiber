@@ -31,6 +31,15 @@ use crate::testkit::{args, await_scanner, await_true, id, new_feed, start, stop_
 /// One named deadline per wait: the feed answers before it.
 const DEADLINE: Duration = Duration::from_secs(10);
 
+/// A shutdown handle for a subscriber on `writer`: its own clone, so
+/// cleanup never clones at the moment it runs.
+fn closer_for(writer: &UnixStream) -> Closer {
+    Closer {
+        stream: writer.try_clone().unwrap(),
+        web: None,
+    }
+}
+
 /// `wall()` on a fake clock nobody advanced, in milliseconds.
 const WALL: u64 = 1_700_000_000_000;
 
@@ -92,7 +101,8 @@ impl Sub {
     fn new(feed: &Feed) -> Self {
         let (a, b) = UnixStream::pair().unwrap();
         b.set_read_timeout(Some(DEADLINE)).unwrap();
-        let id = feed.subscribe(Arc::new(Mutex::new(a))).unwrap();
+        let closer = closer_for(&a);
+        let id = feed.subscribe(Arc::new(Mutex::new(a)), closer).unwrap();
         Self {
             id,
             read: BufReader::new(b),
@@ -423,11 +433,15 @@ fn a_dead_or_slow_subscriber_does_not_stop_a_live_one() {
     let session = FakeSession::bind(&temp.dir, &id);
     // Never read: its socket buffer fills and its writer blocks.
     let (slow, slow_far) = UnixStream::pair().unwrap();
-    feed.subscribe(Arc::new(Mutex::new(slow))).unwrap();
+    let slow_closer = closer_for(&slow);
+    feed.subscribe(Arc::new(Mutex::new(slow)), slow_closer)
+        .unwrap();
     // Gone: its writes fail.
     let (dead, dead_far) = UnixStream::pair().unwrap();
     drop(dead_far);
-    feed.subscribe(Arc::new(Mutex::new(dead))).unwrap();
+    let dead_closer = closer_for(&dead);
+    feed.subscribe(Arc::new(Mutex::new(dead)), dead_closer)
+        .unwrap();
     let mut live = Sub::new(&feed);
     start(&feed, &clock);
     assert!(session.await_subscribed(1, DEADLINE));
@@ -659,8 +673,9 @@ fn stop_waits_for_a_writer_still_draining_its_backlog() {
     let (feed, _) = new_feed(&temp.dir);
     let (writer, mut far) = UnixStream::pair().unwrap();
     far.set_read_timeout(Some(DEADLINE)).unwrap();
+    let closer = closer_for(&writer);
     let kept = Arc::new(Mutex::new(writer));
-    feed.subscribe(Arc::clone(&kept)).unwrap();
+    feed.subscribe(Arc::clone(&kept), closer).unwrap();
     // Megabytes queued, far more than the socket buffer holds: the writer
     // thread cannot end until the far end has read nearly all of it.
     let line: Line = Arc::from(vec![b'x'; 2_000]);
@@ -709,8 +724,9 @@ fn stop_ends_every_thread_and_records_no_crash() {
     assert_eq!(sub.raw("the status"), line);
     // A writer the test keeps a handle on: its thread drops the other.
     let (kept, _kept_far) = UnixStream::pair().unwrap();
+    let closer = closer_for(&kept);
     let kept = Arc::new(Mutex::new(kept));
-    feed.subscribe(Arc::clone(&kept)).unwrap();
+    feed.subscribe(Arc::clone(&kept), closer).unwrap();
     let (tx, rx) = mpsc::channel();
     let stopping = Arc::clone(&feed);
     thread::spawn(move || {
@@ -730,7 +746,11 @@ fn stop_ends_every_thread_and_records_no_crash() {
     let mut rest = String::new();
     assert_eq!(sub.read.read_line(&mut rest).unwrap(), 0, "{rest}");
     let (other, _far) = UnixStream::pair().unwrap();
-    assert!(feed.subscribe(Arc::new(Mutex::new(other))).is_none());
+    let other_closer = closer_for(&other);
+    assert!(
+        feed.subscribe(Arc::new(Mutex::new(other)), other_closer)
+            .is_none()
+    );
 }
 
 #[test]
@@ -876,7 +896,11 @@ impl Heard {
     fn new(feed: &Feed) -> Self {
         let (a, b) = UnixStream::pair().unwrap();
         b.set_read_timeout(Some(DEADLINE)).unwrap();
-        let id = feed.attention.listen(Arc::new(Mutex::new(a))).unwrap();
+        let (closer, retired) = (closer_for(&a), closer_for(&a));
+        let id = feed
+            .attention
+            .listen(Arc::new(Mutex::new(a)), closer, retired)
+            .unwrap();
         Self {
             id,
             read: BufReader::new(b),

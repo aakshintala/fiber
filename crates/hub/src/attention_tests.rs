@@ -590,7 +590,7 @@ fn announce_reaches_every_listener() {
     let mut first = listened(&attention);
     let mut second = listened(&attention);
     let line = b"{\"kind\":\"device_changed\",\"payload\":{\"device\":\"phone\",\"change\":\"paired\",\"by\":\"local\"}}\n";
-    attention.announce(Arc::from(line.as_slice()));
+    drop(attention.announce(Arc::from(line.as_slice())));
     let expected: Value = serde_json::from_slice(line).unwrap();
     assert_eq!(
         read_line(&mut first, "the first listener's device change"),
@@ -602,10 +602,22 @@ fn announce_reaches_every_listener() {
     );
 }
 
+/// A shutdown handle for a listener on `writer`: its own clone, so
+/// cleanup never clones at the moment it runs.
+fn closer_for(writer: &UnixStream) -> Closer {
+    Closer {
+        stream: writer.try_clone().unwrap(),
+        web: None,
+    }
+}
+
 fn listened(attention: &Attention) -> BufReader<UnixStream> {
     let (a, b) = UnixStream::pair().unwrap();
     b.set_read_timeout(Some(DEADLINE)).unwrap();
-    attention.listen(Arc::new(Mutex::new(a))).unwrap();
+    let (closer, retired) = (closer_for(&a), closer_for(&a));
+    attention
+        .listen(Arc::new(Mutex::new(a)), closer, retired)
+        .unwrap();
     BufReader::new(b)
 }
 
@@ -637,7 +649,7 @@ fn a_waiting_line_carries_the_summary_and_a_finished_line_does_not() {
     let mut read = listened(&attention);
     let waiting: SessionStatus =
         serde_json::from_value(fake::status("n", "/w", "waiting", None)).unwrap();
-    attention.notify("s_0000000000000001", None, &waiting, false);
+    drop(attention.notify("s_0000000000000001", None, &waiting, false));
     assert_eq!(
         read_line(&mut read, "the waiting attention"),
         json!({
@@ -653,12 +665,12 @@ fn a_waiting_line_carries_the_summary_and_a_finished_line_does_not() {
         status: &waiting,
         live: true,
     };
-    attention.notify(
+    drop(attention.notify(
         "s_0000000000000001",
         Some(before),
         &status_of("idle", None, WALL, None),
         false,
-    );
+    ));
     assert_eq!(
         read_line(&mut read, "the finished attention"),
         json!({
@@ -676,12 +688,21 @@ fn a_dead_or_slow_listener_does_not_stop_a_live_one() {
     let clock = FakeClock::new();
     let attention = Arc::new(Attention::new(Arc::clone(&clock) as Arc<dyn Clock>));
     let (slow, slow_far) = UnixStream::pair().unwrap();
-    let slow = attention.listen(Arc::new(Mutex::new(slow))).unwrap();
+    let (slow_closer, slow_retired) = (closer_for(&slow), closer_for(&slow));
+    let slow = attention
+        .listen(Arc::new(Mutex::new(slow)), slow_closer, slow_retired)
+        .unwrap();
     let (dead, dead_far) = UnixStream::pair().unwrap();
-    attention.listen(Arc::new(Mutex::new(dead))).unwrap();
+    let (dead_closer, dead_retired) = (closer_for(&dead), closer_for(&dead));
+    attention
+        .listen(Arc::new(Mutex::new(dead)), dead_closer, dead_retired)
+        .unwrap();
     drop(dead_far);
     let (live, live_far) = UnixStream::pair().unwrap();
-    let live = attention.listen(Arc::new(Mutex::new(live))).unwrap();
+    let (live_closer, live_retired) = (closer_for(&live), closer_for(&live));
+    let live = attention
+        .listen(Arc::new(Mutex::new(live)), live_closer, live_retired)
+        .unwrap();
     let mut read = BufReader::new(live_far);
     read.get_mut().set_read_timeout(Some(DEADLINE)).unwrap();
     let idle = status_of("idle", None, S, None);
@@ -690,7 +711,7 @@ fn a_dead_or_slow_listener_does_not_stop_a_live_one() {
         status: &streaming,
         live: true,
     };
-    attention.notify("a", Some(heard), &idle, false);
+    drop(attention.notify("a", Some(heard), &idle, false));
     assert_eq!(
         read_line(&mut read, "the first attention")["payload"]["reason"],
         "finished"
@@ -712,12 +733,12 @@ fn a_dead_or_slow_listener_does_not_stop_a_live_one() {
         3,
         "the dead sender stays until the next send"
     );
-    attention.notify(
+    drop(attention.notify(
         "a",
         Some(heard),
         &status_of("idle", None, S + 1, None),
         false,
-    );
+    ));
     assert_eq!(
         attention.listeners(),
         2,
@@ -731,7 +752,7 @@ fn a_dead_or_slow_listener_does_not_stop_a_live_one() {
     for n in 0..count {
         let mut waiting = status_of("waiting", Some(&format!("r{n}")), S, None);
         waiting.name = format!("{n}:{}", "x".repeat(2_000));
-        attention.notify("a", None, &waiting, false);
+        drop(attention.notify("a", None, &waiting, false));
     }
     for n in 0..count {
         let line = read_line(&mut read, "every attention");
@@ -754,12 +775,15 @@ fn unlisten_ends_only_that_listener() {
     let attention = Arc::new(Attention::new(Arc::clone(&clock) as Arc<dyn Clock>));
     let (first, first_far) = UnixStream::pair().unwrap();
     first_far.set_read_timeout(Some(DEADLINE)).unwrap();
+    let (first_closer, first_retired) = (closer_for(&first), closer_for(&first));
     let held = Arc::new(Mutex::new(first));
-    let first = attention.listen(Arc::clone(&held)).unwrap();
+    let first = attention
+        .listen(Arc::clone(&held), first_closer, first_retired)
+        .unwrap();
     let mut second = listened(&attention);
     unlisten_within(&attention, first, "unlisten returns");
     drop(held);
-    attention.notify("a", None, &status_of("waiting", Some("r1"), S, None), false);
+    drop(attention.notify("a", None, &status_of("waiting", Some("r1"), S, None), false));
     assert_eq!(
         read_line(&mut second, "the attention")["payload"]["reason"],
         "waiting"
@@ -783,26 +807,26 @@ fn notify_remembers_what_it_announced_per_session_until_forgotten() {
     let idle = status_of("idle", None, S, None);
     let waiting = status_of("waiting", Some("r1"), S, None);
     let reasons = |line: Value| line["payload"]["reason"].clone();
-    attention.notify("a", Some(heard), &idle, false);
+    drop(attention.notify("a", Some(heard), &idle, false));
     assert_eq!(reasons(read_line(&mut read, "finished for a")), "finished");
     // The same idle period sends nothing: the next line is a's waiting.
-    attention.notify("a", Some(heard), &idle, false);
-    attention.notify("a", None, &waiting, false);
+    drop(attention.notify("a", Some(heard), &idle, false));
+    drop(attention.notify("a", None, &waiting, false));
     assert_eq!(reasons(read_line(&mut read, "waiting for a")), "waiting");
     // The same request sends nothing: the next lines are b's pair.
-    attention.notify("a", None, &waiting, false);
-    attention.notify("b", Some(heard), &idle, false);
+    drop(attention.notify("a", None, &waiting, false));
+    drop(attention.notify("b", Some(heard), &idle, false));
     assert_eq!(reasons(read_line(&mut read, "finished for b")), "finished");
-    attention.notify("b", None, &waiting, false);
+    drop(attention.notify("b", None, &waiting, false));
     assert_eq!(reasons(read_line(&mut read, "waiting for b")), "waiting");
     attention.forget("a");
-    attention.notify("a", Some(heard), &idle, false);
+    drop(attention.notify("a", Some(heard), &idle, false));
     assert_eq!(
         reasons(read_line(&mut read, "finished for a again")),
         "finished"
     );
-    attention.notify("a", Some(heard), &idle, false);
-    attention.notify("a", None, &waiting, false);
+    drop(attention.notify("a", Some(heard), &idle, false));
+    drop(attention.notify("a", None, &waiting, false));
     assert_eq!(
         reasons(read_line(&mut read, "waiting for a again")),
         "waiting"
@@ -815,8 +839,11 @@ fn unlisten_waits_for_its_writer_still_draining_its_backlog() {
     let attention = Arc::new(Attention::new(Arc::clone(&clock) as Arc<dyn Clock>));
     let (writer, far) = UnixStream::pair().unwrap();
     far.set_read_timeout(Some(DEADLINE)).unwrap();
+    let (writer_closer, writer_retired) = (closer_for(&writer), closer_for(&writer));
     let kept = Arc::new(Mutex::new(writer));
-    let id = attention.listen(Arc::clone(&kept)).unwrap();
+    let id = attention
+        .listen(Arc::clone(&kept), writer_closer, writer_retired)
+        .unwrap();
     // Megabytes queued, far more than the socket buffer holds: the writer
     // thread cannot end until the far end has read nearly all of it.
     let count = 4_000;
@@ -824,7 +851,7 @@ fn unlisten_waits_for_its_writer_still_draining_its_backlog() {
         let request = format!("r{n}");
         let mut waiting = status_of("waiting", Some(&request), S, None);
         waiting.name = format!("{n}:{}", "x".repeat(2_000));
-        attention.notify("s_0000000000000001", None, &waiting, false);
+        drop(attention.notify("s_0000000000000001", None, &waiting, false));
     }
     let (tx, rx) = mpsc::channel();
     let ending = Arc::clone(&attention);

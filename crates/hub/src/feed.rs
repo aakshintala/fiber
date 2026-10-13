@@ -46,10 +46,9 @@ use crate::tick::Tick;
 
 mod fanout;
 mod settle;
-use fanout::Fanout;
 use settle::Settle;
 
-pub(crate) use fanout::{Line, spawn_writer, to_line};
+pub(crate) use fanout::{Closer, Fanout, Line, close_connections, spawn_writer, to_line};
 
 /// How often the hub rescans `run/` for new sessions.
 pub(crate) const RUN_SCAN: Duration = Duration::from_millis(500);
@@ -225,14 +224,25 @@ impl Feed {
             }
             tracked.stream.shutdown(Shutdown::Both).unwrap_or(());
         }
-        fanout.close().into_iter().for_each(join);
+        fanout.close().into_iter().for_each(|end| {
+            drop(end.closer);
+            if let Some(writer) = end.writer {
+                join(writer);
+            }
+        });
         threads.into_iter().for_each(join);
     }
 
     /// Subscribes `writer` to the feed: queues every left session's last
     /// status and its `session_left`, then every running one's status,
     /// then every change. The caller has written `command_accepted`.
-    pub(crate) fn subscribe(&self, writer: Arc<Mutex<UnixStream>>) -> Option<u64> {
+    /// `closer` shuts the connection down; its retained clone frees a
+    /// retired writer. Both are cloned before admission, never at cleanup.
+    pub(crate) fn subscribe(&self, writer: Arc<Mutex<UnixStream>>, closer: Closer) -> Option<u64> {
+        let retired = Closer {
+            stream: closer.stream.try_clone().ok()?,
+            web: closer.web.clone(),
+        };
         let spawned = spawn_writer(writer, "hub-feed-out")?;
         let mut state = lock(&self.state);
         if state.stopped {
@@ -250,15 +260,18 @@ impl Feed {
                 snapshot.push(Arc::clone(&status.line));
             }
         }
-        Some(state.fanout.push(spawned, &snapshot))
+        Some(state.fanout.push(spawned, closer, retired, &snapshot))
     }
 
     /// Ends subscriber `id`: no more lines are queued, and its writer
     /// thread is joined once it has written what was queued.
     pub(crate) fn unsubscribe(&self, id: u64) {
         let gone = lock(&self.state).fanout.remove(id);
-        if let Some(writer) = gone {
-            join(writer);
+        if let Some(end) = gone {
+            drop(end.closer);
+            if let Some(writer) = end.writer {
+                join(writer);
+            }
         }
     }
 
@@ -497,12 +510,16 @@ impl Feed {
             }),
             None => None,
         };
-        self.attention.notify(id, seen, &payload, unseen);
+        let mut closers = self.attention.notify(id, seen, &payload, unseen);
         let line: Line = Arc::from(bytes);
-        state.fanout.broadcast(&line);
+        closers.extend(state.fanout.broadcast(&line));
         state
             .entries
             .insert(id.to_owned(), Entry::Running(Status { line, payload }));
+        drop(state);
+        // Shut outside the state lock, which the attention listeners lock
+        // nests inside: a shutdown unblocks a writer holding its mutex.
+        close_connections(closers, UnixStream::shutdown);
         true
     }
 
@@ -545,10 +562,11 @@ impl Feed {
             return;
         }
         state.tracked.remove(id);
+        let mut closers = Vec::new();
         if let Some(Entry::Running(status) | Entry::Left(status, _)) = state.entries.remove(id) {
             let left = how.unwrap_or(Left::Exited);
             let line = self.left_line(id, left);
-            state.fanout.broadcast(&line);
+            closers = state.fanout.broadcast(&line);
             let stays = match how {
                 Some(Left::Crashed) => true,
                 Some(Left::Exited) => recent::is_waiting(&status.payload),
@@ -560,6 +578,8 @@ impl Feed {
                     .insert(id.to_owned(), Entry::Left(status, left));
             }
         }
+        drop(state);
+        close_connections(closers, UnixStream::shutdown);
     }
 
     /// Appends crashed session `id`'s row: a process that died cannot.
@@ -608,6 +628,7 @@ pub(crate) fn on_feed(
     args: &Map<String, Value>,
     hub: &Arc<Hub>,
     writer: &Arc<Mutex<UnixStream>>,
+    closer: &Closer,
     fed: &mut Option<u64>,
 ) {
     if !args.is_empty() {
@@ -618,7 +639,11 @@ pub(crate) fn on_feed(
     if let Some(earlier) = fed.take() {
         hub.feed.unsubscribe(earlier);
     }
-    *fed = hub.feed.subscribe(Arc::clone(writer));
+    let owned = closer.stream.try_clone().ok().map(|stream| Closer {
+        stream,
+        web: closer.web.clone(),
+    });
+    *fed = owned.and_then(|owned| hub.feed.subscribe(Arc::clone(writer), owned));
 }
 
 /// Acknowledges a feed command: `command_accepted`, with `result` only

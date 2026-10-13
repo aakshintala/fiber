@@ -23,6 +23,7 @@ use serde_json::{Map, Value, json};
 
 use crate::connection::{Hub, Refused as Refusal, lock};
 use crate::devices;
+use crate::feed::close_connections;
 
 type Fill = Box<dyn FnMut(&mut [u8]) -> Result<(), ()> + Send>;
 pub(crate) const CODE_LIFETIME: Duration = Duration::from_secs(600);
@@ -626,7 +627,10 @@ fn register(
     Who::Device(presented)
 }
 fn announce(hub: &Hub, notice: Notice, change: &str) {
-    hub.feed.attention.announce(notice.line);
+    let closers = hub.feed.attention.announce(notice.line);
+    // No pairing state lock is held here: shutting a half unblocks a
+    // writer holding its mutex.
+    close_connections(closers, UnixStream::shutdown);
     hub.diag.line(
         Severity::Info,
         None,

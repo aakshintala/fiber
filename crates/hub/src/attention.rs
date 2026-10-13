@@ -11,9 +11,10 @@ use std::os::unix::net::UnixStream;
 use std::path::Path;
 #[cfg(test)]
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
-use std::sync::mpsc::Sender;
 use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
 use std::thread::JoinHandle;
+
+use crate::feed::{Closer, Fanout};
 
 use contract::clock::{Clock, wall_ms};
 use contract::events::{SessionState, SessionStatus};
@@ -152,25 +153,14 @@ pub(crate) fn turn_ended_at(log: &Path, since: u64) -> bool {
     })
 }
 
-struct Listener {
-    id: u64,
-    tx: Sender<crate::feed::Line>,
-    writer: JoinHandle<()>,
-}
-
-#[derive(Default)]
-struct Listeners {
-    next: u64,
-    list: Vec<Listener>,
-}
-
-/// Every connection's listener (a channel and writer thread each), the hub's start,
-/// and what it announced per session.
+/// Every connection's listener (a channel and writer thread each, in the
+/// shared [`Fanout`] registry), the hub's start, and what it announced
+/// per session.
 pub(crate) struct Attention {
     clock: Arc<dyn Clock>,
     started_ms: u64,
     announced: Mutex<BTreeMap<String, Announced>>,
-    listeners: Mutex<Listeners>,
+    listeners: Mutex<Fanout>,
     #[cfg(test)]
     joining: AtomicUsize,
     #[cfg(test)]
@@ -184,7 +174,7 @@ impl Attention {
             clock,
             started_ms,
             announced: Mutex::new(BTreeMap::new()),
-            listeners: Mutex::new(Listeners::default()),
+            listeners: Mutex::new(Fanout::default()),
             #[cfg(test)]
             joining: AtomicUsize::new(0),
             #[cfg(test)]
@@ -192,28 +182,25 @@ impl Attention {
         }
     }
 
-    pub(crate) fn listen(&self, writer: Arc<Mutex<UnixStream>>) -> Option<u64> {
+    pub(crate) fn listen(
+        &self,
+        writer: Arc<Mutex<UnixStream>>,
+        closer: Closer,
+        retired: Closer,
+    ) -> Option<u64> {
         #[cfg(test)]
         if self.fail_listen.swap(false, Ordering::SeqCst) {
             return None;
         }
-        let (tx, handle) = crate::feed::spawn_writer(writer, "hub-attention-out")?;
-        let mut listeners = lock(&self.listeners);
-        listeners.next += 1;
-        let id = listeners.next;
-        listeners.list.push(Listener {
-            id,
-            tx,
-            writer: handle,
-        });
-        Some(id)
+        let spawned = crate::feed::spawn_writer(writer, "hub-attention-out")?;
+        Some(lock(&self.listeners).push(spawned, closer, retired, &[]))
     }
 
-    /// Queues one unsolicited hub line to every served connection.
-    pub(crate) fn announce(&self, line: crate::feed::Line) {
-        lock(&self.listeners)
-            .list
-            .retain(|listener| listener.tx.send(Arc::clone(&line)).is_ok());
+    /// Queues one unsolicited hub line to every served connection, handing
+    /// back the shutdown of every listener that already disconnected, for
+    /// the caller to run outside every lock.
+    pub(crate) fn announce(&self, line: crate::feed::Line) -> Vec<Closer> {
+        lock(&self.listeners).broadcast(&line)
     }
 
     #[cfg(test)]
@@ -223,17 +210,12 @@ impl Attention {
 
     /// Drops listener `id` and joins its writer, after releasing the lock.
     pub(crate) fn unlisten(&self, id: u64) {
-        let gone = {
-            let mut listeners = lock(&self.listeners);
-            listeners
-                .list
-                .iter()
-                .position(|listener| listener.id == id)
-                .map(|at| listeners.list.remove(at))
-        };
-        if let Some(listener) = gone {
-            drop(listener.tx);
-            self.join(listener.writer);
+        let gone = lock(&self.listeners).remove(id);
+        if let Some(end) = gone {
+            drop(end.closer);
+            if let Some(writer) = end.writer {
+                self.join(writer);
+            }
         }
     }
 
@@ -251,14 +233,16 @@ impl Attention {
         now.since >= self.started_ms && turn_ended_at(log, now.since)
     }
 
-    /// Decides through `reason`, updates `announced`, queues the line.
+    /// Decides through `reason`, updates `announced`, queues the line,
+    /// handing back the shutdown of every listener that already
+    /// disconnected, for the caller to run outside every lock.
     pub(crate) fn notify(
         &self,
         session: &str,
         before: Option<Seen<'_>>,
         now: &SessionStatus,
         unseen: bool,
-    ) {
+    ) -> Vec<Closer> {
         let line = {
             let mut announced = lock(&self.announced);
             let known = announced.get(session).cloned().unwrap_or_default();
@@ -269,7 +253,7 @@ impl Attention {
                 announced: &known,
             };
             let Some(reason) = reason(now, &facts) else {
-                return;
+                return Vec::new();
             };
             let line = line_for(session, now, reason, wall_ms(self.clock.wall()));
             let entry = announced.entry(session.to_owned()).or_default();
@@ -285,10 +269,7 @@ impl Attention {
             }
             line
         };
-        let mut listeners = lock(&self.listeners);
-        listeners
-            .list
-            .retain(|listener| listener.tx.send(Arc::clone(&line)).is_ok());
+        lock(&self.listeners).broadcast(&line)
     }
 
     pub(crate) fn forget(&self, session: &str) {
@@ -297,7 +278,7 @@ impl Attention {
 
     #[cfg(test)]
     pub(crate) fn listeners(&self) -> usize {
-        lock(&self.listeners).list.len()
+        lock(&self.listeners).ids().len()
     }
 
     #[cfg(test)]
@@ -308,11 +289,7 @@ impl Attention {
     /// How many listeners' writers have returned.
     #[cfg(test)]
     pub(crate) fn ended(&self) -> usize {
-        lock(&self.listeners)
-            .list
-            .iter()
-            .filter(|listener| listener.writer.is_finished())
-            .count()
+        lock(&self.listeners).active_finished()
     }
 }
 

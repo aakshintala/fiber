@@ -672,10 +672,15 @@ fn a_failed_listener_registration_refuses_the_connection_and_keeps_the_notice() 
     other_peer
         .set_read_timeout(Some(Duration::from_secs(2)))
         .unwrap();
+    let closer_for = |writer: &UnixStream| crate::feed::Closer {
+        stream: writer.try_clone().unwrap(),
+        web: None,
+    };
+    let (closer, retired) = (closer_for(&other_writer), closer_for(&other_writer));
     let listener = hub
         .feed
         .attention
-        .listen(Arc::new(Mutex::new(other_writer)))
+        .listen(Arc::new(Mutex::new(other_writer)), closer, retired)
         .unwrap();
     let (stream, mut peer) = UnixStream::pair().unwrap();
     peer.set_read_timeout(Some(Duration::from_secs(2))).unwrap();
