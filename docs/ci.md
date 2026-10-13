@@ -337,6 +337,9 @@ base, the commits the 9-ancestor lookup can reach. A failed delete warns and
 never fails the backstop; the job is not in `ci`'s needs.
 The test job saves its cache once the workspace build succeeded,
 even when a later check fails, and saves nothing when the build fails.
+Dev and test builds carry line tables only (`Cargo.toml`, `[profile.dev]`),
+which keeps the cache small and the link fast; a backtrace still names file
+and line.
 
 ## Toolchain
 

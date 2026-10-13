@@ -73,6 +73,7 @@ allow_attributes_without_reason = "deny"
 # docs/code-quality.md, "Panics".
 [profile.dev]
 panic = "abort"
+debug = "line-tables-only"
 
 [profile.release]
 panic = "abort"
