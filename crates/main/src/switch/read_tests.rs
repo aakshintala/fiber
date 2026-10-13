@@ -1206,6 +1206,61 @@ fn unusable_ids_are_neither_alive_nor_signalled() {
     kill_group(u32::MAX);
 }
 
+/// A refusal id stays not alive without consulting its script: 0 and 1
+/// are unsignallable while `u32::MAX` is unrepresentable, so the guarded
+/// validation returns before any probe. Each script answers `Ok` (alive),
+/// so the `&&` mutant, which proceeds on either half alone, answers true
+/// and fails here.
+#[test]
+fn refusal_ids_stay_not_alive_without_probing() {
+    let reads = Reads::default();
+    reads.script_group(0, vec![Ok(())], vec![]);
+    assert!(
+        !reads.lock().group_alive(0),
+        "group 0 is refused before any probe"
+    );
+    reads.script_group(1, vec![Ok(())], vec![]);
+    assert!(
+        !reads.lock().group_alive(1),
+        "group 1 is refused before any probe"
+    );
+    reads.script_group(u32::MAX, vec![Ok(())], vec![]);
+    assert!(
+        !reads.lock().group_alive(u32::MAX),
+        "an unrepresentable id is refused before any probe"
+    );
+}
+
+/// A refusal id is never sent to: 0 and 1 are unsignallable while
+/// `u32::MAX` is unrepresentable, so the guarded validation returns
+/// before any send. The `&&` mutant, which proceeds on either half
+/// alone, records a scripted send and fails the count below.
+#[test]
+fn refusal_ids_are_never_sent() {
+    let reads = Reads::default();
+    reads.script_group(0, vec![], vec![Ok(())]);
+    reads.lock().kill_listed(0);
+    assert_eq!(
+        reads.scripted_sends(),
+        0,
+        "group 0 is refused before any send"
+    );
+    reads.script_group(1, vec![], vec![Ok(())]);
+    reads.lock().kill_listed(1);
+    assert_eq!(
+        reads.scripted_sends(),
+        0,
+        "group 1 is refused before any send"
+    );
+    reads.script_group(u32::MAX, vec![], vec![Ok(())]);
+    reads.lock().kill_listed(u32::MAX);
+    assert_eq!(
+        reads.scripted_sends(),
+        0,
+        "an unrepresentable id is refused before any send"
+    );
+}
+
 /// A cancelled settle with nothing listed answers `true` at once: no
 /// group means no poll park, on any clock.
 #[test]
