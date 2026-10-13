@@ -1331,17 +1331,11 @@ fn one_unlisten_closes_and_joins_a_retired_writer_before_overflow_shutdown() {
     // teardown's shutdown; release the writer only after both paths ran.
     crate::feed::close_connections(overflow, UnixStream::shutdown);
     drop(guard);
-    let unlisten_returned = Deadline::after(DEADLINE).recv(&done_rx).is_ok();
-    let eof_after_release = if observed_eof.is_ok() {
-        matches!(observed_eof, Ok(Ok(0)))
-    } else {
-        matches!(Deadline::after(DEADLINE).recv(&eof_rx), Ok(Ok(0)))
-    };
-
     assert!(
-        eof_after_release,
+        matches!(observed_eof, Ok(Ok(0))),
         "one unlisten closes the retired writer before overflow shutdown"
     );
+    let unlisten_returned = Deadline::after(DEADLINE).recv(&done_rx).is_ok();
     assert!(waited_for_join, "unlisten waits for the held writer to end");
     assert!(
         unlisten_returned,
