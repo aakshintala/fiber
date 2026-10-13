@@ -279,13 +279,7 @@ pub(super) fn render(
     if crate::surface::box_fit(placed.width) {
         crate::surface::draw_box(buf, area, slab, crate::surface::Edges::BOTH);
     } else {
-        crate::surface::draw_slab(
-            buf,
-            slab,
-            Role::Surface,
-            None,
-            crate::surface::Edges::BOTH,
-        );
+        crate::surface::draw_slab(buf, slab, Role::Surface, None, crate::surface::Edges::BOTH);
     }
     for (at, row) in placed.shown.iter().enumerate() {
         let y = placed.draft_top.saturating_add(super::to_u16(at));
@@ -902,7 +896,9 @@ pub(super) fn cursor(app: &App, screen: &HomeScreen, area: Rect) -> Option<Posit
     if y >= area.bottom() {
         return None;
     }
-    let x = placed.x.saturating_add(u16::from(crate::surface::box_fit(placed.width)))
+    let x = placed
+        .x
+        .saturating_add(u16::from(crate::surface::box_fit(placed.width)))
         .saturating_add(col.min(placed.inner.saturating_sub(1)));
     Some(Position::new(x, y))
 }

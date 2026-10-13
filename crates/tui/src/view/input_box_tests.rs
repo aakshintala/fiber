@@ -478,9 +478,7 @@ fn no_color_look() -> crate::look::Look {
 /// The input box drawn and painted without colour, with its targets and
 /// the box's top-edge row.
 fn no_color_drawn(app: &App, area: Rect) -> (Buffer, Vec<crate::mouse::Target>, u16) {
-    crate::surface::init(&|name: &str| {
-        (name == "NO_COLOR").then(|| "1".to_owned())
-    });
+    crate::surface::init(&|name: &str| (name == "NO_COLOR").then(|| "1".to_owned()));
     let mut buf = Buffer::empty(area);
     let mut bottom = area.bottom();
     let mut targets = Vec::new();
@@ -499,11 +497,29 @@ fn no_color_boxes_the_input_box_around_the_draft() {
     // colour, but thin.
     for x in 0..40 {
         let top = &buf[(x, 3)];
-        assert_eq!(top.symbol(), if x == 0 { "┌" } else if x == 39 { "┐" } else { "─" });
+        assert_eq!(
+            top.symbol(),
+            if x == 0 {
+                "┌"
+            } else if x == 39 {
+                "┐"
+            } else {
+                "─"
+            }
+        );
         assert_eq!((top.fg, top.bg), (Color::Reset, Color::Reset));
         assert_eq!(top.modifier, Modifier::DIM);
         let bottom = &buf[(x, 5)];
-        assert_eq!(bottom.symbol(), if x == 0 { "└" } else if x == 39 { "┘" } else { "─" });
+        assert_eq!(
+            bottom.symbol(),
+            if x == 0 {
+                "└"
+            } else if x == 39 {
+                "┘"
+            } else {
+                "─"
+            }
+        );
         assert_eq!(bottom.modifier, Modifier::DIM);
     }
     // The text row sits between │ sides: the prompt and draft one
@@ -519,7 +535,11 @@ fn no_color_boxes_the_input_box_around_the_draft() {
     assert_eq!(buf[(5, 4)].symbol(), "█");
     for y in 3..=5 {
         for x in 0..40 {
-            assert_eq!((buf[(x, y)].fg, buf[(x, y)].bg), (Color::Reset, Color::Reset), "({x}, {y})");
+            assert_eq!(
+                (buf[(x, y)].fg, buf[(x, y)].bg),
+                (Color::Reset, Color::Reset),
+                "({x}, {y})"
+            );
         }
     }
 }
@@ -572,9 +592,7 @@ fn no_color_token_targets_keep_clear_of_the_borders() {
 
 #[test]
 fn no_color_cursor_column_counts_one_side() {
-    crate::surface::init(&|name: &str| {
-        (name == "NO_COLOR").then(|| "1".to_owned())
-    });
+    crate::surface::init(&|name: &str| (name == "NO_COLOR").then(|| "1".to_owned()));
     let app = typed(60, 12, "hi");
     // The text sits one column in, past the box's left side.
     assert_eq!(super::cursor_row(&app, 60, 11), (2, 5));

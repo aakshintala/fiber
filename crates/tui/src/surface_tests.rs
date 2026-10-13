@@ -927,7 +927,10 @@ fn draw_sides_keeps_text_and_adds_no_corners() {
         assert_eq!(buf[(0, y)].symbol(), "│");
         assert_eq!(buf[(5, y)].symbol(), "│");
         assert_eq!(buf[(0, y)].modifier, Modifier::DIM);
-        assert_eq!((buf[(0, y)].fg, buf[(0, y)].bg), (Color::Reset, Color::Reset));
+        assert_eq!(
+            (buf[(0, y)].fg, buf[(0, y)].bg),
+            (Color::Reset, Color::Reset)
+        );
     }
     // The text between the sides keeps its cells.
     assert_eq!(buf[(1, 1)].symbol(), "b");
@@ -970,7 +973,15 @@ fn draw_box_keeps_suppressed_edges_off() {
     let mut buf = Buffer::empty(Rect::new(0, 0, 6, 5));
     let area = Rect::new(0, 1, 6, 3);
     let rect = Rect::new(0, 2, 6, 1);
-    super::draw_box(&mut buf, area, rect, Edges { top: false, bottom: false });
+    super::draw_box(
+        &mut buf,
+        area,
+        rect,
+        Edges {
+            top: false,
+            bottom: false,
+        },
+    );
     // No edge rows: only the sides draw, on the rect's own row.
     assert_eq!(buf[(0, 1)].symbol(), " ");
     assert_eq!(buf[(0, 3)].symbol(), " ");

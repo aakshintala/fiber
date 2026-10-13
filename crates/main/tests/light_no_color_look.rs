@@ -15,9 +15,7 @@
 
 mod support;
 
-use support::pty::{
-    Colour, Grid, HOME_TITLE, Run,
-};
+use support::pty::{Colour, Grid, HOME_TITLE, Run};
 use support::{Setup, TRUECOLOUR};
 
 /// Whether `grid` shows `needle` anywhere.
@@ -186,10 +184,7 @@ fn no_color_run() -> (Setup, Run) {
         &setup.home().join("config.json"),
         &serde_json::json!({"model": "scripted/s.json", "hub": {"idle_exit_ms": 1000}}),
     );
-    let env: Vec<(&str, &str)> = [("NO_COLOR", "1")]
-        .into_iter()
-        .chain(TRUECOLOUR)
-        .collect();
+    let env: Vec<(&str, &str)> = [("NO_COLOR", "1")].into_iter().chain(TRUECOLOUR).collect();
     let mut run = Run::spawn(&setup, 160, 48, &[], &env);
     // The end of the first frame proves the input reader runs before
     // the prompt goes out.
@@ -227,7 +222,8 @@ fn rail_boxed(grid: &Grid) -> bool {
             top.fg == Colour::Default
                 && top.bg == Colour::Default
                 && top.dim
-                && (x == 0 || x == end
+                && (x == 0
+                    || x == end
                     || side.symbol != "│"
                     || (side.fg == Colour::Default && side.bg == Colour::Default && side.dim))
         })
@@ -299,7 +295,8 @@ fn no_color_boxes_every_surface_on_the_final_frame() {
     let (px, py) = (0..48)
         .find_map(|y| {
             let row: String = (30..160).map(|x| screen.cell(x, y).symbol).collect();
-            row.find("again").map(|x| (30 + u16::try_from(x).unwrap(), y))
+            row.find("again")
+                .map(|x| (30 + u16::try_from(x).unwrap(), y))
         })
         .expect("the prompt bubble");
     let end: u16 = (px..160)
@@ -307,11 +304,19 @@ fn no_color_boxes_every_surface_on_the_final_frame() {
         .unwrap_or(160);
     assert!(px > 30, "the prompt sits right-aligned, {px}");
     for x in px.saturating_sub(2)..end.min(160).saturating_add(1) {
-        assert_ne!(screen.cell(x, py).symbol.as_str(), "│", "prompt side ({x}, {py})");
+        assert_ne!(
+            screen.cell(x, py).symbol.as_str(),
+            "│",
+            "prompt side ({x}, {py})"
+        );
     }
     for y in [py.saturating_sub(1), py + 1] {
         for x in px..end.min(160) {
-            assert_eq!(screen.cell(x, y).symbol.as_str(), " ", "prompt edge ({x}, {y})");
+            assert_eq!(
+                screen.cell(x, y).symbol.as_str(),
+                " ",
+                "prompt edge ({x}, {y})"
+            );
         }
     }
     // The input box's border on the final frame: ┌─┐ above, │ on each
@@ -331,7 +336,11 @@ fn no_color_boxes_every_surface_on_the_final_frame() {
             };
             let cell = screen.cell(x, y);
             assert_eq!(cell.symbol.as_str(), want, "input edge ({x}, {y})");
-            assert_eq!((cell.fg, cell.bg), (Colour::Default, Colour::Default), "({x}, {y})");
+            assert_eq!(
+                (cell.fg, cell.bg),
+                (Colour::Default, Colour::Default),
+                "({x}, {y})"
+            );
             assert!(cell.dim, "input edge ({x}, {y})");
         }
     }

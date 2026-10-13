@@ -226,10 +226,7 @@ fn card(app: &App, row: &Row, width: u16, out: &mut Vec<RailRow>) {
     for spans in texts {
         let mut line = if box_body {
             vec![
-                Span::styled(
-                    "│",
-                    Style::new().add_modifier(Modifier::DIM),
-                ),
+                Span::styled("│", Style::new().add_modifier(Modifier::DIM)),
                 Span::raw(" "),
             ]
         } else {
@@ -242,10 +239,7 @@ fn card(app: &App, row: &Row, width: u16, out: &mut Vec<RailRow>) {
             let room = card_w.saturating_sub(1);
             let used: usize = line.iter().map(Span::width).sum();
             line.push(Span::raw(" ".repeat(room.saturating_sub(used))));
-            line.push(Span::styled(
-                "│",
-                Style::new().add_modifier(Modifier::DIM),
-            ));
+            line.push(Span::styled("│", Style::new().add_modifier(Modifier::DIM)));
         }
         out.push(RailRow {
             line: Line::from(line),

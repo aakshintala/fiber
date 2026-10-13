@@ -614,9 +614,7 @@ fn a_lone_bottom_edge_draws_no_tint() {
 
 /// An overlay with a barred choice row, drawn and painted without colour.
 fn no_color_drawn(area: Rect) -> (Buffer, Rect) {
-    crate::surface::init(&|name: &str| {
-        (name == "NO_COLOR").then(|| "1".to_owned())
-    });
+    crate::surface::init(&|name: &str| (name == "NO_COLOR").then(|| "1".to_owned()));
     let mut overlay = overlay();
     overlay.body.push(Row {
         spans: vec![Span::raw("choice")],
@@ -648,11 +646,31 @@ fn no_color_boxes_the_overlay_and_keeps_its_cells() {
     // ┌─┐ above and └─┘ below, dim, on the default colours.
     for x in 20u16..60 {
         let top = &buf[(x, 6)];
-        assert_eq!(top.symbol(), if x == 20 { "┌" } else if x == 59 { "┐" } else { "─" }, "col {x}");
+        assert_eq!(
+            top.symbol(),
+            if x == 20 {
+                "┌"
+            } else if x == 59 {
+                "┐"
+            } else {
+                "─"
+            },
+            "col {x}"
+        );
         assert_eq!((top.fg, top.bg), (Color::Reset, Color::Reset), "col {x}");
         assert_eq!(top.modifier, Modifier::DIM, "col {x}");
         let bottom = &buf[(x, 16)];
-        assert_eq!(bottom.symbol(), if x == 20 { "└" } else if x == 59 { "┘" } else { "─" }, "col {x}");
+        assert_eq!(
+            bottom.symbol(),
+            if x == 20 {
+                "└"
+            } else if x == 59 {
+                "┘"
+            } else {
+                "─"
+            },
+            "col {x}"
+        );
         assert_eq!(bottom.modifier, Modifier::DIM, "col {x}");
     }
     // │ on the slab's columns over the text rows, dim. A barred row's
@@ -662,8 +680,16 @@ fn no_color_boxes_the_overlay_and_keeps_its_cells() {
         for x in [20u16, 59u16] {
             let cell = &buf[(x, y)];
             assert_eq!(cell.symbol(), "│", "({x}, {y}): {:?}", shown[y as usize]);
-            assert_eq!((cell.fg, cell.bg), (Color::Reset, Color::Reset), "({x}, {y})");
-            assert!(cell.modifier.contains(Modifier::DIM), "({x}, {y}): {:?}", cell.modifier);
+            assert_eq!(
+                (cell.fg, cell.bg),
+                (Color::Reset, Color::Reset),
+                "({x}, {y})"
+            );
+            assert!(
+                cell.modifier.contains(Modifier::DIM),
+                "({x}, {y}): {:?}",
+                cell.modifier
+            );
         }
     }
     // The title, the body, the padding and the barred row keep their
@@ -672,7 +698,10 @@ fn no_color_boxes_the_overlay_and_keeps_its_cells() {
     for word in ["Title", "first", "second", "choice", "foot"] {
         assert!(flat.contains(word), "{word}: {flat:?}");
     }
-    let barred = shown.iter().position(|row| row.contains("choice")).expect("the barred row");
+    let barred = shown
+        .iter()
+        .position(|row| row.contains("choice"))
+        .expect("the barred row");
     let cell = &buf[(22, barred as u16)];
     assert!(cell.modifier.contains(Modifier::BOLD), "{cell:?}");
     assert_eq!((cell.fg, cell.bg), (Color::Reset, Color::Reset));
@@ -683,7 +712,10 @@ fn no_color_boxes_the_overlay_and_keeps_its_cells() {
         assert_eq!(shown[y as usize].chars().nth(59).unwrap(), '│');
         for x in 21u16..59 {
             assert_eq!(buf[(x, y)].symbol(), " ", "({x}, {y})");
-            assert_eq!((buf[(x, y)].fg, buf[(x, y)].bg), (Color::Reset, Color::Reset));
+            assert_eq!(
+                (buf[(x, y)].fg, buf[(x, y)].bg),
+                (Color::Reset, Color::Reset)
+            );
         }
     }
 }

@@ -159,10 +159,7 @@ pub(crate) fn draw_sides(buf: &mut Buffer, rect: Rect) {
     if left >= right {
         return;
     }
-    let side = Line::from(Span::styled(
-        "│",
-        Style::new().add_modifier(Modifier::DIM),
-    ));
+    let side = Line::from(Span::styled("│", Style::new().add_modifier(Modifier::DIM)));
     for y in rect.top().max(area.top())..rect.bottom().min(area.bottom()) {
         if left >= area.left() && left < area.right() {
             buf.set_line(left, y, &side, 1);

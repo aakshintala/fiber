@@ -495,10 +495,7 @@ fn a_report_re_resolves_dim() {
     assert_eq!(followed.colour(Role::Muted), Color::Reset);
     assert!(followed.appearance(Appearance::Light));
     assert!(followed.dim(Role::Muted));
-    assert_eq!(
-        followed.colour(Role::Muted),
-        Color::Rgb(0x1f, 0x23, 0x28)
-    );
+    assert_eq!(followed.colour(Role::Muted), Color::Rgb(0x1f, 0x23, 0x28));
     assert!(followed.appearance(Appearance::Dark));
     assert!(followed.dim(Role::Muted));
     assert_eq!(followed.colour(Role::Muted), Color::Reset);
@@ -762,14 +759,20 @@ fn no_color_paint_keeps_box_cells_and_their_modifiers() {
     let mut buf = row(&[
         ("┌", Style::new().add_modifier(Modifier::DIM)),
         ("─", Style::new().add_modifier(Modifier::DIM)),
-        ("│", Style::new().add_modifier(Modifier::DIM | Modifier::BOLD)),
+        (
+            "│",
+            Style::new().add_modifier(Modifier::DIM | Modifier::BOLD),
+        ),
         ("x", Style::new().fg(Role::Text.color())),
     ]);
     look.paint(&mut buf);
     let symbols: Vec<&str> = buf.content.iter().map(|cell| cell.symbol()).collect();
     assert_eq!(symbols, ["┌", "─", "│", "x"]);
     for x in 0..4 {
-        assert_eq!((buf.content[x].fg, buf.content[x].bg), (Color::Reset, Color::Reset));
+        assert_eq!(
+            (buf.content[x].fg, buf.content[x].bg),
+            (Color::Reset, Color::Reset)
+        );
     }
     assert_eq!(buf.content[2].modifier, Modifier::DIM | Modifier::BOLD);
 }

@@ -766,9 +766,7 @@ fn no_color_look() -> crate::look::Look {
 /// `panel` drawn and painted without colour in a 40-wide area, with its
 /// targets.
 fn no_color_surfaced(panel: &Panel, height: u16) -> (Buffer, Vec<Target>) {
-    crate::surface::init(&|name: &str| {
-        (name == "NO_COLOR").then(|| "1".to_owned())
-    });
+    crate::surface::init(&|name: &str| (name == "NO_COLOR").then(|| "1".to_owned()));
     let area = Rect::new(0, 0, 40, height);
     let mut buf = Buffer::empty(area);
     let mut targets = Vec::new();
@@ -782,13 +780,20 @@ fn no_color_boxes_an_approval_and_an_escalation() {
     use ratatui::style::{Color, Modifier};
     for alert in [false, true] {
         let (buf, _) = no_color_surfaced(
-            &approval(&["approve shell echo hi?", "allow once · for this session"], alert),
+            &approval(
+                &["approve shell echo hi?", "allow once · for this session"],
+                alert,
+            ),
             12,
         );
         // Two text rows with a box above and below, and no stripe cell.
         for y in [9, 10] {
             for x in 0..40 {
-                assert_eq!((buf[(x, y)].fg, buf[(x, y)].bg), (Color::Reset, Color::Reset), "({x}, {y})");
+                assert_eq!(
+                    (buf[(x, y)].fg, buf[(x, y)].bg),
+                    (Color::Reset, Color::Reset),
+                    "({x}, {y})"
+                );
             }
             assert_eq!(buf[(0, y)].symbol(), "│", "({y})");
             assert_eq!(buf[(39, y)].symbol(), "│", "({y})");
@@ -799,7 +804,16 @@ fn no_color_boxes_an_approval_and_an_escalation() {
         for (y, left, right) in [(8, "┌", "┐"), (11, "└", "┘")] {
             for x in 0..40 {
                 let cell = &buf[(x, y)];
-                assert_eq!(cell.symbol(), if x == 0 { left } else if x == 39 { right } else { "─" });
+                assert_eq!(
+                    cell.symbol(),
+                    if x == 0 {
+                        left
+                    } else if x == 39 {
+                        right
+                    } else {
+                        "─"
+                    }
+                );
                 assert_eq!(cell.modifier, Modifier::DIM, "({x}, {y})");
             }
         }
@@ -818,9 +832,7 @@ fn no_color_spots_and_the_caret_keep_clear_of_the_borders() {
         spot: Spot::Chat,
     }];
     panel.caret = Some((0, 5));
-    crate::surface::init(&|name: &str| {
-        (name == "NO_COLOR").then(|| "1".to_owned())
-    });
+    crate::surface::init(&|name: &str| (name == "NO_COLOR").then(|| "1".to_owned()));
     let area = Rect::new(0, 0, 40, 12);
     let mut buf = Buffer::empty(area);
     let mut targets = Vec::new();
@@ -847,7 +859,11 @@ fn no_color_suppresses_box_edges_without_room() {
         assert_eq!(buf[(39, y)].symbol(), "│");
     }
     for cell in &buf.content {
-        assert!(!matches!(cell.symbol(), "┌" | "┐" | "└" | "┘"), "{}", cell.symbol());
+        assert!(
+            !matches!(cell.symbol(), "┌" | "┐" | "└" | "┘"),
+            "{}",
+            cell.symbol()
+        );
     }
     let first: String = (1..39).map(|x| buf[(x, 0)].symbol()).collect();
     assert!(first.contains("line one"), "{first:?}");

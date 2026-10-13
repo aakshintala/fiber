@@ -1229,9 +1229,7 @@ fn the_context_bar_is_drawn_in_its_roles() {
 
 /// The panel rect drawn and painted without colour, with its targets.
 fn no_color_drawn(app: &App) -> (Buffer, Vec<crate::mouse::Target>) {
-    crate::surface::init(&|name: &str| {
-        (name == "NO_COLOR").then(|| "1".to_owned())
-    });
+    crate::surface::init(&|name: &str| (name == "NO_COLOR").then(|| "1".to_owned()));
     let rect = app
         .chrome()
         .layout()
@@ -1268,11 +1266,29 @@ fn no_color_boxes_a_sidebar_card_and_keeps_targets_inside() {
     let (left, right) = (1, rect.width.saturating_sub(1));
     for x in left..=right {
         let top = &buf[(x, 1)];
-        assert_eq!(top.symbol(), if x == left { "┌" } else if x == right { "┐" } else { "─" });
+        assert_eq!(
+            top.symbol(),
+            if x == left {
+                "┌"
+            } else if x == right {
+                "┐"
+            } else {
+                "─"
+            }
+        );
         assert_eq!((top.fg, top.bg), (Color::Reset, Color::Reset));
         assert_eq!(top.modifier, Modifier::DIM);
         let bottom = &buf[(x, 4)];
-        assert_eq!(bottom.symbol(), if x == left { "└" } else if x == right { "┘" } else { "─" });
+        assert_eq!(
+            bottom.symbol(),
+            if x == left {
+                "└"
+            } else if x == right {
+                "┘"
+            } else {
+                "─"
+            }
+        );
         assert_eq!(bottom.modifier, Modifier::DIM);
     }
     // Each text row sits between │ sides with its text readable inside.

@@ -1135,9 +1135,7 @@ fn no_color_screen(text: &str) -> ratatui::buffer::Buffer {
 
     use crate::link::Line as LinkLine;
 
-    crate::surface::init(&|name: &str| {
-        (name == "NO_COLOR").then(|| "1".to_owned())
-    });
+    crate::surface::init(&|name: &str| (name == "NO_COLOR").then(|| "1".to_owned()));
     let mut app = crate::app::App::new(PathBuf::from("/w"));
     app.set_size(80, 24);
     app.attach(contract::SessionId(SESSION.to_owned()));
@@ -1151,8 +1149,18 @@ fn no_color_screen(text: &str) -> ratatui::buffer::Buffer {
         json!({"input": [{"type": "message", "source": "driver",
             "content": [{"type": "text", "text": "go"}]}]}),
     );
-    feed(&mut app, "text_completed", Some("a_1"), json!({"text": text}));
-    feed(&mut app, "turn_completed", None, json!({"outcome": "completed"}));
+    feed(
+        &mut app,
+        "text_completed",
+        Some("a_1"),
+        json!({"text": text}),
+    );
+    feed(
+        &mut app,
+        "turn_completed",
+        None,
+        json!({"outcome": "completed"}),
+    );
     let area = Rect::new(0, 0, 80, 24);
     let mut buf = Buffer::empty(area);
     crate::view::render(&app, area, &mut buf, None);
@@ -1169,10 +1177,11 @@ fn no_color_boxes_a_turn_card_and_leaves_the_prompt_bare() {
         .collect();
     // The prompt bubble's edges draw as blanks and its rows stay: no
     // box sides on the prompt, whose text sits right-aligned.
-    let prompt = u16::try_from(text
-        .iter()
-        .position(|row| row.contains("go"))
-        .expect("the prompt's row"))
+    let prompt = u16::try_from(
+        text.iter()
+            .position(|row| row.contains("go"))
+            .expect("the prompt's row"),
+    )
     .expect("a row");
     assert_eq!(buf[(0, prompt)].symbol(), " ");
     assert_eq!(buf[(79, prompt)].symbol(), " ");
@@ -1181,30 +1190,37 @@ fn no_color_boxes_a_turn_card_and_leaves_the_prompt_bare() {
     // default colours, with the reply readable between │ sides. The
     // card is one column narrower than the screen, leaving the scroll
     // bar's column blank.
-    let top = u16::try_from(text
-        .iter()
-        .position(|row| row.starts_with('┌'))
-        .expect("the card's top edge"))
+    let top = u16::try_from(
+        text.iter()
+            .position(|row| row.starts_with('┌'))
+            .expect("the card's top edge"),
+    )
     .expect("a row");
     assert_eq!(text[usize::from(top)], format!("┌{}┐ ", "─".repeat(77)));
-    let bottom = u16::try_from(text
-        .iter()
-        .position(|row| row.starts_with('└'))
-        .expect("the card's bottom edge"))
+    let bottom = u16::try_from(
+        text.iter()
+            .position(|row| row.starts_with('└'))
+            .expect("the card's bottom edge"),
+    )
     .expect("a row");
     assert!(bottom > top);
     assert_eq!(text[usize::from(bottom)], format!("└{}┘ ", "─".repeat(77)));
     for x in 0..79u16 {
         for y in [top, bottom] {
             let cell = &buf[(x, y)];
-            assert_eq!((cell.fg, cell.bg), (Color::Reset, Color::Reset), "({x}, {y})");
+            assert_eq!(
+                (cell.fg, cell.bg),
+                (Color::Reset, Color::Reset),
+                "({x}, {y})"
+            );
             assert_eq!(cell.modifier, Modifier::DIM, "({x}, {y})");
         }
     }
-    let reply = u16::try_from(text
-        .iter()
-        .position(|row| row.contains("Hello."))
-        .expect("the reply's row"))
+    let reply = u16::try_from(
+        text.iter()
+            .position(|row| row.contains("Hello."))
+            .expect("the reply's row"),
+    )
     .expect("a row");
     assert!(reply > top && reply < bottom);
     for y in top + 1..bottom {
@@ -1217,15 +1233,20 @@ fn no_color_boxes_a_turn_card_and_leaves_the_prompt_bare() {
             }
             let cell = &buf[(x, y)];
             assert_eq!(cell.symbol(), "│", "({x}, {y}): {row:?}");
-            assert_eq!((cell.fg, cell.bg), (Color::Reset, Color::Reset), "({x}, {y})");
+            assert_eq!(
+                (cell.fg, cell.bg),
+                (Color::Reset, Color::Reset),
+                "({x}, {y})"
+            );
             assert_eq!(cell.modifier, Modifier::DIM, "({x}, {y})");
         }
     }
     // Bold survives the paint: state words still show with no colour.
-    let closing = u16::try_from(text
-        .iter()
-        .position(|row| row.contains("completed"))
-        .expect("the closing row"))
+    let closing = u16::try_from(
+        text.iter()
+            .position(|row| row.contains("completed"))
+            .expect("the closing row"),
+    )
     .expect("a row");
     assert!(closing > top && closing < bottom);
 }
@@ -1236,9 +1257,7 @@ fn no_color_keeps_box_rows_out_of_the_logical_copy() {
     // edge positions, the body text and the decoration flags match the
     // coloured card across every edge combination, bands included.
     let colour = |edges| {
-        crate::surface::init(&|name: &str| {
-            (name == "COLORTERM").then(|| "truecolor".to_owned())
-        });
+        crate::surface::init(&|name: &str| (name == "COLORTERM").then(|| "truecolor".to_owned()));
         let mut cards = fresh();
         start(&mut cards, "go");
         band(&mut cards);
@@ -1248,9 +1267,7 @@ fn no_color_keeps_box_rows_out_of_the_logical_copy() {
         draw(&cards.turns[0], WIDTH, edges)
     };
     let boxed = |edges| {
-        crate::surface::init(&|name: &str| {
-            (name == "NO_COLOR").then(|| "1".to_owned())
-        });
+        crate::surface::init(&|name: &str| (name == "NO_COLOR").then(|| "1".to_owned()));
         let mut cards = fresh();
         start(&mut cards, "go");
         band(&mut cards);
@@ -1259,19 +1276,25 @@ fn no_color_keeps_box_rows_out_of_the_logical_copy() {
         done(&mut cards);
         draw(&cards.turns[0], WIDTH, edges)
     };
-    let is_box = |row: &str| {
-        !row.is_empty() && (row.starts_with('┌') || row.starts_with('└'))
-    };
+    let is_box = |row: &str| !row.is_empty() && (row.starts_with('┌') || row.starts_with('└'));
     for edges in [
         Edges::BOTH,
-        Edges { top: false, bottom: true },
-        Edges { top: true, bottom: false },
+        Edges {
+            top: false,
+            bottom: true,
+        },
+        Edges {
+            top: true,
+            bottom: false,
+        },
     ] {
         let (colour_rows, colour_texts, _) = colour(edges);
         let (box_rows, box_texts, _) = boxed(edges);
         assert_eq!(box_rows.len(), colour_rows.len(), "{edges:?}");
-        for ((box_row, box_text), (colour_row, colour_text)) in
-            box_rows.iter().zip(&box_texts).zip(colour_rows.iter().zip(&colour_texts))
+        for ((box_row, box_text), (colour_row, colour_text)) in box_rows
+            .iter()
+            .zip(&box_texts)
+            .zip(colour_rows.iter().zip(&colour_texts))
         {
             let (box_line, colour_line) = (box_row.0.to_string(), colour_row.0.to_string());
             assert_eq!(box_text.decoration, colour_text.decoration, "{box_line:?}");
@@ -1291,9 +1314,14 @@ fn no_color_keeps_box_rows_out_of_the_logical_copy() {
             .filter(|(text, _)| !text.decoration)
             .map(|(_, row)| row.0.to_string())
             .collect();
-        assert!(logical.iter().any(|row| row.contains("after")), "{logical:?}");
         assert!(
-            logical.iter().all(|row| !row.contains('┌') && !row.contains('│')),
+            logical.iter().any(|row| row.contains("after")),
+            "{logical:?}"
+        );
+        assert!(
+            logical
+                .iter()
+                .all(|row| !row.contains('┌') && !row.contains('│')),
             "{logical:?}"
         );
     }

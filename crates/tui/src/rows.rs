@@ -243,7 +243,8 @@ impl Rows {
             });
         }
         if edges.top {
-            self.rows.insert(from, (card_edge_row(width, tint, true), None));
+            self.rows
+                .insert(from, (card_edge_row(width, tint, true), None));
             self.texts.insert(
                 from,
                 RowText {
