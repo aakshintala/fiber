@@ -512,8 +512,8 @@ fn conversation_rows(app: &App, area: Rect, buf: &mut Buffer, targets: &mut Vec<
         // name the surface until the paint pass, so the pads the card
         // keeps are decorated without moving text; the prompt bubble
         // stays edge-free, and a cut card draws no corner it withheld.
-        let turn_tint = fill.bg == Some(Role::Turn.color())
-            || fill.bg == Some(Role::Surface.color());
+        let turn_tint =
+            fill.bg == Some(Role::Turn.color()) || fill.bg == Some(Role::Surface.color());
         if crate::surface::box_fit(area.width) && turn_tint {
             crate::surface::draw_sides(buf, rect);
         }
