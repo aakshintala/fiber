@@ -212,6 +212,17 @@ fn scoped_provider_package_serves_a_but_neither_provider_is_available_in_b() {
                 &provider.url(),
             );
             install(&setup, &a, &source, true);
+            assert_eq!(
+                keys(&setup, &a),
+                json!({"extensions":{"opencode":{"enabled":true}}})
+            );
+            let global: Value =
+                serde_json::from_slice(&fs::read(setup.home().join("config.json")).unwrap())
+                    .unwrap();
+            assert_eq!(
+                global,
+                json!({"model":"fake/m", "extensions":{"opencode":{"enabled":false}}})
+            );
             let global_key = command(
                 &setup,
                 &a,
@@ -245,6 +256,19 @@ fn scoped_provider_package_serves_a_but_neither_provider_is_available_in_b() {
                 );
             }
             assert_eq!(provider.requests().len(), request_count);
+            let catalogue = command(&setup, &b, &["models", "--json"]);
+            assert!(catalogue.status.success());
+            let rows: Vec<Value> = String::from_utf8(catalogue.stdout)
+                .unwrap()
+                .lines()
+                .map(|line| serde_json::from_str(line).unwrap())
+                .collect();
+            assert_eq!(
+                rows.iter()
+                    .map(|row| row["model"].as_str().unwrap())
+                    .collect::<Vec<_>>(),
+                ["fake/m"]
+            );
             let run_b = ask(&setup, &b, "fake/m");
             assert_eq!(run_b.code, Some(0), "{}", run_b.stderr);
             assert_eq!(run_b.kinds(), HELLO_KINDS);
