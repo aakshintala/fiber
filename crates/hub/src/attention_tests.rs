@@ -1276,7 +1276,7 @@ fn two_listeners_take_distinct_ids_and_unlistening_the_second_ends_only_that_one
 }
 
 #[test]
-fn unlisten_reaps_a_retired_writer_without_stopping_the_hub() {
+fn one_unlisten_closes_and_joins_a_retired_writer_before_overflow_shutdown() {
     let clock = FakeClock::new();
     let attention = Arc::new(Attention::new(Arc::clone(&clock) as Arc<dyn Clock>));
     let (writer, far) = UnixStream::pair().unwrap();
@@ -1289,6 +1289,9 @@ fn unlisten_reaps_a_retired_writer_without_stopping_the_hub() {
     let id = attention
         .listen(Arc::clone(&kept), writer_closer, writer_retired)
         .unwrap();
+    // Keep the overflow shutdown hand-off instead of running it. The
+    // retained closer must let unlisten end the still-blocked writer.
+    let mut overflow = Vec::new();
     // QUEUE+2 distinct waiting requests: dedup cannot hide a send, and
     // one dequeued in-flight item still leaves the bound firing.
     for n in 0..crate::feed::QUEUE + 2 {
@@ -1296,36 +1299,64 @@ fn unlisten_reaps_a_retired_writer_without_stopping_the_hub() {
         let waiting = status_of("waiting", Some(&request), S, None);
         let closers = attention.notify("s_0000000000000001", None, &waiting, false);
         if !closers.is_empty() {
-            crate::feed::close_connections(closers, UnixStream::shutdown);
+            overflow = closers;
         }
     }
     assert_eq!(attention.listeners(), 0, "the bound fired while stalled");
     assert_eq!(
         attention.retired(),
         1,
-        "the overflowed writer waits for joining"
+        "the overflowed writer and its retained closer await teardown"
     );
-    drop(guard);
-    // The overflow shut the connection: the far end sees EOF instead of
-    // queued lines.
-    let mut buf = [0; 1];
-    assert_eq!(
-        BufReader::new(far).read(&mut buf).unwrap(),
-        0,
-        "the stalled side sees EOF"
-    );
-    // Tearing the connection down reaps the retired writer without
-    // stopping the hub: the id is already gone, so only the sweep acts.
-    // The sweep runs until it takes effect, under a deadline: only an
-    // ended writer reaps, and the writer's last release races its thread
-    // end by microseconds, so one pass may find it unfinished.
+
+    let (done_tx, done_rx) = mpsc::channel();
     let tearing = Arc::clone(&attention);
-    await_true("unlisten to reap the retired writer", move || {
+    thread::spawn(move || {
         tearing.unlisten(id);
-        tearing.retired() == 0
+        done_tx.send(()).unwrap_or(());
     });
-    assert_eq!(attention.retired(), 0, "unlisten joined the retired writer");
-    assert_eq!(Arc::strong_count(&kept), 1, "no writer Arc survives");
+    let (eof_tx, eof_rx) = mpsc::channel();
+    thread::spawn(move || {
+        let mut buf = [0; 1];
+        eof_tx
+            .send(BufReader::new(far).read(&mut buf))
+            .unwrap_or(());
+    });
+    // EOF proves unlisten used the retired closer. The writer still cannot
+    // end while the test owns its mutex, so unlisten must be joining it.
+    let observed_eof = Deadline::after(DEADLINE).recv(&eof_rx);
+    let waited_for_join = matches!(done_rx.try_recv(), Err(mpsc::TryRecvError::Empty));
+
+    // The overflow caller may now race its idempotent shutdown with the
+    // teardown's shutdown; release the writer only after both paths ran.
+    crate::feed::close_connections(overflow, UnixStream::shutdown);
+    drop(guard);
+    let unlisten_returned = Deadline::after(DEADLINE).recv(&done_rx).is_ok();
+    let eof_after_release = if observed_eof.is_ok() {
+        matches!(observed_eof, Ok(Ok(0)))
+    } else {
+        matches!(Deadline::after(DEADLINE).recv(&eof_rx), Ok(Ok(0)))
+    };
+
+    assert!(
+        eof_after_release,
+        "one unlisten closes the retired writer before overflow shutdown"
+    );
+    assert!(waited_for_join, "unlisten waits for the held writer to end");
+    assert!(
+        unlisten_returned,
+        "unlisten returns after joining the writer"
+    );
+    assert_eq!(
+        attention.retired(),
+        0,
+        "the retired handle and closer are released"
+    );
+    assert_eq!(
+        Arc::strong_count(&kept),
+        1,
+        "no writer Arc survives the join"
+    );
     let (later, _) = UnixStream::pair().unwrap();
     let (later_closer, later_retired) = (closer_for(&later), closer_for(&later));
     assert!(

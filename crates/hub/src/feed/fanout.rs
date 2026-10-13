@@ -379,6 +379,18 @@ impl Fanout {
         done.into_iter().map(|(_, writer)| writer).collect()
     }
 
+    /// Removes every retired writer, including ones still running, and
+    /// returns its retained shutdown with its handle for close-before-join.
+    pub(crate) fn take_retired(&mut self) -> Vec<WriterEnd> {
+        std::mem::take(&mut self.retired)
+            .into_iter()
+            .map(|(closer, writer)| WriterEnd {
+                closer,
+                writer: Some(writer),
+            })
+            .collect()
+    }
+
     /// Drops every subscriber's sender, then hands every writer back with
     /// its retained shutdown (registered first, then retired). Pending
     /// registrations own no thread and shut nothing: they are dropped,

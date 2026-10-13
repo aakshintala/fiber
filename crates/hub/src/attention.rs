@@ -12,7 +12,7 @@ use std::path::Path;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
 
-use crate::feed::{Closer, Fanout, close_connections};
+use crate::feed::{Closer, Fanout, WriterEnd, close_connections};
 
 use contract::clock::{Clock, wall_ms};
 use contract::events::{SessionState, SessionStatus};
@@ -214,31 +214,25 @@ impl Attention {
         self.fail_listen.store(true, Ordering::SeqCst);
     }
 
-    /// Drops listener `id`, then reaps the retired writers that have
-    /// ended since. An active writer's connection is shut so a writer
-    /// blocked on a stalled reader ends at once, and its thread is joined
-    /// after the lock is released. A pending listener owns no thread and
-    /// shuts nothing. Only ended writers reap: an unfinished retained
-    /// writer keeps its independent close capability for a later remove
-    /// or stop. Every shutdown and join runs outside the registry lock.
+    /// Drops listener `id`, reaps retired writers that have already
+    /// ended, then shuts and joins every remaining retired writer. This
+    /// closes a blocked writer even when overflow has not run its own
+    /// shutdown hand-off yet. A pending listener owns no thread and shuts
+    /// nothing. Every shutdown and join runs outside the registry lock.
     pub(crate) fn unlisten(&self, id: u64) {
-        let (gone, finished) = {
+        let (ends, finished) = {
             let mut listeners = lock(&self.listeners);
-            (listeners.remove(id), listeners.finished())
-        };
-        if let Some(end) = gone {
-            match end.writer {
-                Some(writer) => {
-                    close_connections(vec![end.closer], UnixStream::shutdown);
-                    match writer.join() {
-                        Ok(()) | Err(_) => {}
-                    }
-                }
-                None => drop(end.closer),
+            let gone = listeners.remove(id);
+            let finished = listeners.finished();
+            let mut ends = listeners.take_retired();
+            if let Some(gone) = gone {
+                ends.push(gone);
             }
-        }
-        // Already ended, so joining needs no shutdown: dropping each
-        // reaped closer with its handle already released its descriptor.
+            (ends, finished)
+        };
+        close_and_join(ends);
+        // Already ended, so joining needs no shutdown: `finished` dropped
+        // each reaped closer and released its descriptor.
         for writer in finished {
             match writer.join() {
                 Ok(()) | Err(_) => {}
@@ -254,23 +248,14 @@ impl Attention {
     pub(crate) fn stop(&self) {
         self.stopped.store(true, Ordering::SeqCst);
         let mut old = std::mem::take(&mut *lock(&self.listeners));
-        // Writers that already ended join with no shutdown: their reaped
-        // closers already released their descriptors.
+        // Already-ended retired writers join without shutdown; the fast
+        // path drops their closers. `close` drops pending registrations
+        // unshut and returns every active or unfinished retired writer.
         let finished = old.finished();
-        let rest = old.close();
+        close_and_join(old.close());
         for writer in finished {
             match writer.join() {
                 Ok(()) | Err(_) => {}
-            }
-        }
-        // close() drops pending registrations unshut and hands back only
-        // active writers: every shutdown here frees a real writer.
-        for end in rest {
-            close_connections(vec![end.closer], UnixStream::shutdown);
-            if let Some(writer) = end.writer {
-                match writer.join() {
-                    Ok(()) | Err(_) => {}
-                }
             }
         }
     }
@@ -370,6 +355,25 @@ fn line_for(session: &str, now: &SessionStatus, reason: Reason, ts: u64) -> crat
         schema_version: SCHEMA_VERSION,
         payload,
     })
+}
+
+/// Closes active connections before joining their writers. Pending
+/// registrations own no thread, so their shutdown handles are dropped.
+fn close_and_join(ends: Vec<WriterEnd>) {
+    let mut closers = Vec::new();
+    let mut writers = Vec::new();
+    for end in ends {
+        if let Some(writer) = end.writer {
+            closers.push(end.closer);
+            writers.push(writer);
+        }
+    }
+    close_connections(closers, UnixStream::shutdown);
+    for writer in writers {
+        match writer.join() {
+            Ok(()) | Err(_) => {}
+        }
+    }
 }
 
 fn lock<'a, T>(mutex: &'a Mutex<T>) -> MutexGuard<'a, T> {

@@ -51,7 +51,9 @@ use settle::Settle;
 /// The bound, for tests: production capacity lives in [`spawn_writer`].
 #[cfg(test)]
 pub(crate) use fanout::QUEUE;
-pub(crate) use fanout::{Closer, Fanout, Line, Targeted, close_connections, spawn_writer, to_line};
+pub(crate) use fanout::{
+    Closer, Fanout, Line, Targeted, WriterEnd, close_connections, spawn_writer, to_line,
+};
 
 /// How often the hub rescans `run/` for new sessions.
 pub(crate) const RUN_SCAN: Duration = Duration::from_millis(500);
