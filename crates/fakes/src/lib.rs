@@ -16,7 +16,7 @@ pub mod deadline;
 pub mod emit;
 mod finished;
 mod gated_http;
-mod http_server;
+pub(crate) mod http_server;
 pub mod jobs;
 mod oauth_server;
 mod process_group;

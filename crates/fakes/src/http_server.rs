@@ -26,7 +26,8 @@ pub(crate) mod request;
 const REQUEST_WITHIN: Duration = Duration::from_secs(30);
 const HANG_GUARD: Duration = Duration::from_secs(45);
 const POLL: Duration = Duration::from_millis(1);
-const SHUTDOWN_WITHIN: Duration = Duration::from_secs(2);
+/// How long shutdown waits for the serving threads to stop.
+pub(crate) const SHUTDOWN_WITHIN: Duration = Duration::from_secs(2);
 const READ_CHUNK: usize = 8192;
 
 /// The process clock behind every real hang guard.
@@ -100,11 +101,14 @@ pub(crate) struct RequestBudget {
 
 impl RequestBudget {
     fn start_on(clock: &Arc<dyn Clock>, duration: Duration, guard: Duration) -> Self {
+        let cloned = Arc::clone(clock);
+        let start = clock.now();
+        let guard_start = PROCESS.now();
         Self {
-            clock: Arc::clone(clock),
-            start: clock.now(),
+            clock: cloned,
+            start,
             duration,
-            guard_start: PROCESS.now(),
+            guard_start,
             guard_for: guard,
         }
     }
@@ -587,6 +591,111 @@ impl Connection {
         }
     }
 
+    /// Runs a CONNECT tunnel to `target` over this connection: the 200
+    /// handshake, the bytes read past the head, then bytes both ways
+    /// until either side closes. The handshake is bounded; the copy ends
+    /// on close or shutdown, reporting which side closed first. Targets
+    /// outside the trust boundary never connect.
+    /// Dials a CONNECT target within the trust boundary: a loopback
+    /// address or localhost, connected with the remaining handshake
+    /// guard. Anything else, or a refusal, is a silent error before any
+    /// record, as a failed dial always was.
+    pub(crate) fn dial(&self, target: &str) -> io::Result<TcpStream> {
+        let op = self.op_budget();
+        let addr = HttpServer::check_target(target)?;
+        TcpStream::connect_timeout(&addr, op.guard_left().min(self.shared.limits.request))
+    }
+
+    pub(crate) fn tunnel(self, target: &str, origin: TcpStream) -> TunnelEnd {
+        let op = RequestBudget::start_on(
+            &self.shared.clock,
+            self.shared.limits.request,
+            self.shared.limits.guard,
+        );
+        let Self { mut stream, ahead, shared, .. } = self;
+        // The copies below block; the handshake bounds itself through
+        // the pump either way.
+        if stream.set_nonblocking(false).is_err() {
+            return TunnelEnd::OriginClosed;
+        }
+        let ahead: Vec<u8> = ahead.into();
+        let mut origin = origin;
+        // The 200 and the coalesced bytes within the handshake's budget.
+        let mut seq = 0;
+        let mut acked = None;
+        let mut ctx = WaitCtx {
+            budget: &op,
+            name: target,
+            shared: &shared,
+            seq: &mut seq,
+            acked: &mut acked,
+        };
+        if !pump(&mut stream, b"HTTP/1.1 200 Connection Established\r\n\r\n", "to write the tunnel handshake", &mut ctx)
+            || !pump(&mut origin, &ahead, "to forward the bytes past the head", &mut ctx)
+        {
+            return TunnelEnd::OriginClosed;
+        }
+        // Copies of both ends for shutdown to break: the tunnel owns
+        // the originals below.
+        let id = {
+            let mut tunnels = lock(&shared.tunnels);
+            let id = tunnels.next;
+            tunnels.next = tunnels.next.wrapping_add(1);
+            match (stream.try_clone(), origin.try_clone()) {
+                (Ok(break_client), Ok(break_origin)) => {
+                    tunnels.live.push((id, break_client, break_origin));
+                }
+                _ => return TunnelEnd::OriginClosed,
+            }
+            id
+        };
+        // Whoever's copy ends first names the end; both directions
+        // break on the first end. 1 names the client, 2 the origin.
+        let first = Arc::new(AtomicU8::new(0));
+        let first_pump = Arc::clone(&first);
+        let mut origin_pump = match origin.try_clone() {
+            Ok(origin) => origin,
+            Err(_) => return TunnelEnd::OriginClosed,
+        };
+        let mut client_pump = match stream.try_clone() {
+            Ok(client) => client,
+            Err(_) => return TunnelEnd::OriginClosed,
+        };
+        let pump_end = thread::Builder::new()
+            .name("fakes-http-tunnel".to_owned())
+            .spawn(move || {
+                let _ = io::copy(&mut origin_pump, &mut client_pump);
+                first_pump.compare_exchange(0, 2, Ordering::SeqCst, Ordering::SeqCst).ok();
+                match client_pump.shutdown(std::net::Shutdown::Both) {
+                    Ok(()) | Err(_) => {}
+                }
+                match origin_pump.shutdown(std::net::Shutdown::Both) {
+                    Ok(()) | Err(_) => {}
+                }
+            });
+        let _ = io::copy(&mut stream, &mut origin);
+        first.compare_exchange(0, 1, Ordering::SeqCst, Ordering::SeqCst).ok();
+        match stream.shutdown(std::net::Shutdown::Both) {
+            Ok(()) | Err(_) => {}
+        }
+        match origin.shutdown(std::net::Shutdown::Both) {
+            Ok(()) | Err(_) => {}
+        }
+        if let Ok(pump_end) = pump_end {
+            match pump_end.join() {
+                Ok(()) | Err(_) => {}
+            }
+        }
+        lock(&shared.tunnels).live.retain(|(live, _, _)| *live != id);
+        if shared.stopping.load(Ordering::SeqCst) {
+            TunnelEnd::Stopped
+        } else if first.load(Ordering::SeqCst) == 1 {
+            TunnelEnd::ClientClosed
+        } else {
+            TunnelEnd::OriginClosed
+        }
+    }
+
     /// Hands the connection to a tunnel: the stream, blocking again,
     /// with the bytes read past the head.
     pub(crate) fn into_handoff(mut self) -> io::Result<(TcpStream, Vec<u8>)> {
@@ -902,8 +1011,11 @@ impl HttpServer {
                     }
                     return AcceptOutcome::Accepted(stream);
                 }
-                Err(error) if error.kind() == io::ErrorKind::WouldBlock => {}
-                Err(_) => return AcceptOutcome::Stopped,
+                Err(error) if error.kind() == io::ErrorKind::WouldBlock => {
+                }
+                Err(error) => {
+                    return AcceptOutcome::Stopped;
+                }
             }
             if budget.expired() {
                 return AcceptOutcome::Idle;
@@ -921,7 +1033,7 @@ impl HttpServer {
     /// again.
     pub(crate) fn serve_persistent(
         &self,
-        handler: impl Fn(&mut Connection) + Send + Sync + 'static,
+        handler: impl Fn(Connection) + Send + Sync + 'static,
     ) {
         let handler = Arc::new(handler);
         let serving = self.clone();
@@ -935,8 +1047,7 @@ impl HttpServer {
                             match thread::Builder::new()
                                 .name("fakes-http-conn".to_owned())
                                 .spawn(move || {
-                                    let mut conn = conn;
-                                    handler(&mut conn);
+                                    handler(conn);
                                 }) {
                                 Ok(conn) => lock(&serving.shared.conns).push(conn),
                                 Err(_) => continue,
@@ -1059,108 +1170,6 @@ impl HttpServer {
             )),
         }
     }
-
-    /// Runs a CONNECT tunnel to `target`: the 200 handshake, the bytes
-    /// read past the head, then bytes both ways until either side
-    /// closes. The handshake is bounded; the copy ends on close or
-    /// shutdown, reporting which side closed first. Targets outside the
-    /// trust boundary never connect.
-    pub(crate) fn tunnel(&self, client: TcpStream, target: &str, ahead: &[u8]) -> TunnelEnd {
-        let op = RequestBudget::start_on(
-            &self.shared.clock,
-            self.shared.limits.request,
-            self.shared.limits.guard,
-        );
-        let addr = match Self::check_target(target) {
-            Ok(addr) => addr,
-            Err(_) => return TunnelEnd::OriginClosed,
-        };
-        let mut origin = match TcpStream::connect_timeout(
-            &addr,
-            op.guard_left().min(self.shared.limits.request),
-        ) {
-            Ok(origin) => origin,
-            Err(_) => return TunnelEnd::OriginClosed,
-        };
-        let mut client = client;
-        if client.set_nonblocking(false).is_err() {
-            return TunnelEnd::OriginClosed;
-        }
-        // The 200 and the coalesced bytes within the handshake's budget.
-        let mut seq = 0;
-        let mut acked = None;
-        let mut ctx = WaitCtx {
-            budget: &op,
-            name: target,
-            shared: &self.shared,
-            seq: &mut seq,
-            acked: &mut acked,
-        };
-        if !pump(&mut client, b"HTTP/1.1 200 Connection Established\r\n\r\n", "to write the tunnel handshake", &mut ctx)
-            || !pump(&mut origin, ahead, "to forward the bytes past the head", &mut ctx)
-        {
-            return TunnelEnd::OriginClosed;
-        }
-        // Copies of both ends for shutdown to break: the tunnel owns
-        // the originals below.
-        let id = {
-            let mut tunnels = lock(&self.shared.tunnels);
-            let id = tunnels.next;
-            tunnels.next = tunnels.next.wrapping_add(1);
-            match (client.try_clone(), origin.try_clone()) {
-                (Ok(break_client), Ok(break_origin)) => {
-                    tunnels.live.push((id, break_client, break_origin));
-                }
-                _ => return TunnelEnd::OriginClosed,
-            }
-            id
-        };
-        // Whoever's copy ends first names the end; both directions
-        // break on the first end. 1 names the client, 2 the origin.
-        let first = Arc::new(AtomicU8::new(0));
-        let first_pump = Arc::clone(&first);
-        let mut origin_pump = match origin.try_clone() {
-            Ok(origin) => origin,
-            Err(_) => return TunnelEnd::OriginClosed,
-        };
-        let mut client_pump = match client.try_clone() {
-            Ok(client) => client,
-            Err(_) => return TunnelEnd::OriginClosed,
-        };
-        let pump_end = thread::Builder::new()
-            .name("fakes-http-tunnel".to_owned())
-            .spawn(move || {
-                let _ = io::copy(&mut origin_pump, &mut client_pump);
-                first_pump.compare_exchange(0, 2, Ordering::SeqCst, Ordering::SeqCst).ok();
-                match client_pump.shutdown(std::net::Shutdown::Both) {
-                    Ok(()) | Err(_) => {}
-                }
-                match origin_pump.shutdown(std::net::Shutdown::Both) {
-                    Ok(()) | Err(_) => {}
-                }
-            });
-        let _ = io::copy(&mut client, &mut origin);
-        first.compare_exchange(0, 1, Ordering::SeqCst, Ordering::SeqCst).ok();
-        match client.shutdown(std::net::Shutdown::Both) {
-            Ok(()) | Err(_) => {}
-        }
-        match origin.shutdown(std::net::Shutdown::Both) {
-            Ok(()) | Err(_) => {}
-        }
-        if let Ok(pump_end) = pump_end {
-            match pump_end.join() {
-                Ok(()) | Err(_) => {}
-            }
-        }
-        lock(&self.shared.tunnels).live.retain(|(live, _, _)| *live != id);
-        if self.shared.stopping.load(Ordering::SeqCst) {
-            TunnelEnd::Stopped
-        } else if first.load(Ordering::SeqCst) == 1 {
-            TunnelEnd::ClientClosed
-        } else {
-            TunnelEnd::OriginClosed
-        }
-    }
 }
 
 impl Drop for HttpServer {
@@ -1172,7 +1181,7 @@ impl Drop for HttpServer {
 /// Joins `accept` within `within`, leaving a stuck thread blocked rather
 /// than hanging the drop. Builds abort on panic, so a join never carries
 /// one.
-fn join_within(accept: JoinHandle<()>, within: Duration) -> bool {
+pub(crate) fn join_within(accept: JoinHandle<()>, within: Duration) -> bool {
     let (done, joined) = mpsc::channel::<()>();
     thread::spawn(move || {
         match accept.join() {

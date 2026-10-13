@@ -1,12 +1,16 @@
 //! A fake HTTP CONNECT proxy (`docs/dependencies.md`, "Proxies"): it answers
 //! `CONNECT host:port` by dialling the target and copying bytes both ways, so
 //! a test can prove a client tunnelled through it. Anything else gets a 405.
+//! Accepting, head reading and the tunnel run on the shared HTTP core.
 
-use std::io::{self, BufRead, BufReader, Write};
-use std::net::{Shutdown, SocketAddr, TcpListener, TcpStream};
+use std::io;
 use std::sync::{Arc, Condvar, Mutex, MutexGuard, PoisonError};
-use std::thread::{self, JoinHandle};
 use std::time::Duration;
+
+use contract::clock::Clock;
+
+use crate::clock::SystemClock;
+use crate::http_server::{Connection, HttpServer, Limits, TunnelEnd, request::{self, RequestOutcome}};
 
 #[derive(Default)]
 struct State {
@@ -15,48 +19,47 @@ struct State {
     connects: Vec<String>,
     /// Connections whose client side closed first, in arrival order.
     closed: usize,
-    stopping: bool,
 }
 
 /// A fake CONNECT proxy listening on a local port. Dropping it closes the
-/// port.
+/// port and every open tunnel.
 pub struct ConnectProxy {
-    addr: SocketAddr,
+    core: HttpServer,
     state: Arc<Mutex<State>>,
     arrived: Arc<Condvar>,
-    accept: Option<JoinHandle<()>>,
 }
 
 impl ConnectProxy {
     /// Listens on a free port on 127.0.0.1. The port accepts connections
     /// when this returns.
     pub fn start() -> io::Result<Self> {
-        let listener = TcpListener::bind("127.0.0.1:0")?;
-        let addr = listener.local_addr()?;
-        let state = Arc::new(Mutex::new(State::default()));
-        let arrived = Arc::new(Condvar::new());
-        let shared = Arc::clone(&state);
-        let wake = Arc::clone(&arrived);
-        let accept = thread::Builder::new()
-            .name("fake-connect-proxy".to_owned())
-            .spawn(move || accept_loop(&listener, &shared, &wake))
-            .map_err(io::Error::other)?;
-        Ok(Self {
-            addr,
-            state,
-            arrived,
-            accept: Some(accept),
-        })
+        Self::start_on(Arc::new(SystemClock))
+    }
+
+    /// [`ConnectProxy::start`], on `clock`: the test drives silent
+    /// handshakes without waiting out the real bound.
+    pub(crate) fn start_on(clock: Arc<dyn Clock>) -> io::Result<Self> {
+        let proxy = Self {
+            core: HttpServer::bind(clock, Limits::default())?,
+            state: Arc::new(Mutex::new(State::default())),
+            arrived: Arc::new(Condvar::new()),
+        };
+        let state = Arc::clone(&proxy.state);
+        let arrived = Arc::clone(&proxy.arrived);
+        proxy
+            .core
+            .serve_persistent(move |conn| serve(conn, &state, &arrived));
+        Ok(proxy)
     }
 
     /// The proxy URL to hand a client, such as `http://127.0.0.1:49152`.
     pub fn url(&self) -> String {
-        format!("http://{}", self.addr)
+        format!("http://{}", self.core.addr())
     }
 
     /// The local port the proxy listens on.
     pub fn port(&self) -> u16 {
-        self.addr.port()
+        self.core.addr().port()
     }
 
     /// Every `CONNECT` target received so far, as `host:port`, in arrival
@@ -92,22 +95,9 @@ impl ConnectProxy {
 
 impl Drop for ConnectProxy {
     fn drop(&mut self) {
-        {
-            let mut state = lock(&self.state);
-            state.stopping = true;
-        }
-        self.arrived.notify_all();
-        // A connection wakes the accept thread to see `stopping`. If none can
-        // be made the thread is left blocked rather than joined forever.
-        if TcpStream::connect(self.addr).is_ok()
-            && let Some(accept) = self.accept.take()
-        {
-            // Builds abort on panic (docs/code-quality.md, "Panics"), so a
-            // join never carries one.
-            match accept.join() {
-                Ok(()) | Err(_) => {}
-            }
-        }
+        // Shutdown breaks every open tunnel and reaps every serving
+        // thread within its bound.
+        self.core.shutdown();
     }
 }
 
@@ -117,115 +107,35 @@ fn lock(state: &Mutex<State>) -> MutexGuard<'_, State> {
     state.lock().unwrap_or_else(PoisonError::into_inner)
 }
 
-fn accept_loop(listener: &TcpListener, state: &Arc<Mutex<State>>, arrived: &Arc<Condvar>) {
-    for stream in listener.incoming() {
-        if lock(state).stopping {
-            return;
-        }
-        let Ok(stream) = stream else { continue };
-        let state = Arc::clone(state);
-        let arrived = Arc::clone(arrived);
-        // One thread per connection, so a tunnel held open never stalls
-        // another.
-        let spawned = thread::Builder::new()
-            .name("fake-connect-proxy-conn".to_owned())
-            .spawn(move || {
-                // A connection that breaks mid-handshake has already failed
-                // its client, and there is no tunnel to run.
-                match serve(stream, &state, &arrived) {
-                    Ok(()) | Err(_) => {}
-                }
-            });
-        // Out of threads: the dropped connection fails its client.
-        if spawned.is_err() {
-            continue;
-        }
-    }
-}
-
-fn serve(client: TcpStream, state: &Mutex<State>, arrived: &Condvar) -> io::Result<()> {
-    let mut reader = BufReader::new(client);
-    let mut line = String::new();
-    // Zero bytes is the `Drop` wake-up, or a client that went away: there
-    // is no request to answer.
-    if reader.read_line(&mut line)? == 0 {
-        return Ok(());
-    }
-    let (method, target) = {
-        let mut words = line.split_whitespace();
-        (
-            words.next().unwrap_or("").to_owned(),
-            words.next().unwrap_or("").to_owned(),
-        )
+/// Serves one connection: anything but `CONNECT` gets a 405, and a
+/// `CONNECT` hands its stream to the core's tunnel past the recorded
+/// target. A close or shutdown ends the read silently, as the drop
+/// wake-up does.
+fn serve(mut conn: Connection, state: &Mutex<State>, arrived: &Condvar) {
+    let request = match request::read_request(&mut conn) {
+        RequestOutcome::Complete(request) => request,
+        RequestOutcome::Eof | RequestOutcome::Invalid(_) | RequestOutcome::Stopped => return,
     };
-    // The rest of the head is skipped: the proxy needs only the target.
-    loop {
-        line.clear();
-        if reader.read_line(&mut line)? == 0 {
-            return Err(invalid("headers end before a blank line"));
-        }
-        if line.trim_end_matches(['\r', '\n']).is_empty() {
-            break;
-        }
+    if request.method != "CONNECT" {
+        let _ = conn.reply_full(
+            b"HTTP/1.1 405 Method Not Allowed\r\nconnection: close\r\ncontent-length: 0\r\n\r\n",
+            b"",
+            None,
+        );
+        return;
     }
-    let mut client = reader.into_inner();
-    if method != "CONNECT" {
-        let reply =
-            "HTTP/1.1 405 Method Not Allowed\r\nconnection: close\r\ncontent-length: 0\r\n\r\n";
-        client.write_all(reply.as_bytes())?;
-        client.flush()?;
-        return Ok(());
-    }
-    let origin = TcpStream::connect(target.as_str())?;
+    let target = request.target.clone();
+    let origin = match conn.dial(&target) {
+        Ok(origin) => origin,
+        Err(_) => return,
+    };
     {
-        lock(state).connects.push(target.to_owned());
+        lock(state).connects.push(target.clone());
         arrived.notify_all();
     }
-    client.write_all(b"HTTP/1.1 200 Connection Established\r\n\r\n")?;
-    client.flush()?;
-    tunnel(client, origin, state, arrived);
-    Ok(())
-}
-
-fn invalid(what: &str) -> io::Error {
-    io::Error::new(io::ErrorKind::InvalidData, what.to_owned())
-}
-
-/// Copies bytes both ways until either side closes, then shuts the other
-/// half down so its blocked read ends too.
-fn tunnel(client: TcpStream, origin: TcpStream, state: &Mutex<State>, arrived: &Condvar) {
-    let Ok(client_read) = client.try_clone() else {
-        return;
-    };
-    let Ok(origin_read) = origin.try_clone() else {
-        return;
-    };
-    // The serving thread pumps one direction; one more thread pumps the
-    // other. Both are joined, so no thread outlives the tunnel.
-    let other = thread::Builder::new()
-        .name("fake-connect-proxy-pump".to_owned())
-        .spawn(move || {
-            let mut read = origin_read;
-            let mut write = client;
-            let _copied = io::copy(&mut read, &mut write);
-            let _closed = read.shutdown(Shutdown::Both);
-            let _closed = write.shutdown(Shutdown::Both);
-        });
-    let mut read = client_read;
-    let mut write = origin;
-    let copied = io::copy(&mut read, &mut write);
-    // A clean end of the client side is the client going away, such as a
-    // cancelled call closing its socket.
-    if copied.is_ok() {
+    if conn.tunnel(&target, origin) == TunnelEnd::ClientClosed {
         lock(state).closed += 1;
         arrived.notify_all();
-    }
-    let _closed = read.shutdown(Shutdown::Both);
-    let _closed = write.shutdown(Shutdown::Both);
-    if let Ok(other) = other {
-        match other.join() {
-            Ok(()) | Err(_) => {}
-        }
     }
 }
 
