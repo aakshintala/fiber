@@ -197,6 +197,205 @@ fn await_refresh_exit(deadline: Deadline, pattern: &str) {
     });
 }
 
+/// One live member of a process group seen by `ps`: its pid and state.
+#[derive(Debug, PartialEq, Eq)]
+struct GroupMember {
+    pid: u32,
+    stat: String,
+}
+
+/// Parses `ps -o pid= -o pgid= -o stat=` output for the live members of
+/// `pgid`. Errors on a malformed line and on output that lists no process
+/// at all, so an empty or failed observation is never proof the group is
+/// empty; only rows carrying this `pgid` are members.
+fn parse_ps_members(output: &str, pgid: u32) -> Result<Vec<GroupMember>, String> {
+    let mut members = Vec::new();
+    let mut rows = 0;
+    for (index, line) in output.lines().enumerate() {
+        if line.trim().is_empty() {
+            continue;
+        }
+        rows += 1;
+        let mut fields = line.split_whitespace();
+        let (pid, gid, stat) = match (fields.next(), fields.next(), fields.next()) {
+            (Some(pid), Some(gid), Some(stat)) => (pid, gid, stat),
+            _ => {
+                return Err(format!(
+                    "ps line {} is not `pid pgid stat`: {line:?}",
+                    index + 1
+                ));
+            }
+        };
+        let pid: u32 = pid
+            .parse()
+            .map_err(|_| format!("ps pid is not a number: {pid:?}"))?;
+        let gid: u32 = gid
+            .parse()
+            .map_err(|_| format!("ps pgid is not a number: {gid:?}"))?;
+        if gid == pgid {
+            members.push(GroupMember {
+                pid,
+                stat: stat.to_owned(),
+            });
+        }
+    }
+    if rows == 0 {
+        return Err("ps listed no processes".to_owned());
+    }
+    Ok(members)
+}
+
+/// Lists the live members of `pgid` through `ps`, run in its own watched
+/// group with its output received under `deadline`. Sends no signal and
+/// makes no machine-wide assertion. A `ps` that never exits is killed and
+/// reported, never read as empty.
+#[track_caller]
+fn observe_group_members(deadline: Deadline, pgid: u32) -> Result<Vec<GroupMember>, String> {
+    let mut command = Command::new("ps");
+    command
+        .args(["-ax", "-o", "pid=", "-o", "pgid=", "-o", "stat="])
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .env_clear()
+        .envs(fakes::check_run())
+        .env("PATH", std::env::var_os("PATH").unwrap_or_default());
+    let (child, watchdog) = support::spawn_watched(&mut command);
+    let ps_group = child.id();
+    let (done, finished) = mpsc::channel();
+    thread::spawn(move || done.send(child.wait_with_output()).unwrap());
+    let wait = deadline.left().min(Duration::from_secs(3));
+    let output = match Deadline::after(wait).recv(&finished) {
+        Ok(output) => output.map_err(|error| format!("ps could not be reaped: {error}"))?,
+        Err(_) => {
+            match support::kill_group(deadline, ps_group, "KILL") {
+                Ok(_) | Err(_) => {}
+            }
+            watchdog.stand_down(deadline.cleanup());
+            return Err(format!("ps did not exit within {wait:?}"));
+        }
+    };
+    watchdog.stand_down(deadline.cleanup());
+    if !output.status.success() {
+        return Err(format!(
+            "ps exited {}: {}",
+            output.status,
+            String::from_utf8_lossy(&output.stderr)
+        ));
+    }
+    let text = String::from_utf8(output.stdout)
+        .map_err(|error| format!("ps output is not text: {error}"))?;
+    parse_ps_members(&text, pgid)
+}
+
+#[test]
+fn ps_parser_lists_only_the_asked_group() {
+    let output = "  101   100 Ss\n  202   200 SN\n  203   200 R\n";
+    assert_eq!(
+        parse_ps_members(output, 200).unwrap(),
+        vec![
+            GroupMember {
+                pid: 202,
+                stat: "SN".to_owned()
+            },
+            GroupMember {
+                pid: 203,
+                stat: "R".to_owned()
+            },
+        ]
+    );
+    assert_eq!(parse_ps_members(output, 300).unwrap(), vec![]);
+}
+
+#[test]
+fn ps_parser_rejects_empty_and_malformed_output() {
+    assert!(
+        parse_ps_members("", 200).is_err(),
+        "empty is no observation"
+    );
+    assert!(
+        parse_ps_members("   \n", 200).is_err(),
+        "blank is no observation"
+    );
+    assert!(
+        parse_ps_members("  202\n", 200).is_err(),
+        "a short line is malformed"
+    );
+    assert!(
+        parse_ps_members("  pid   pgid stat\n", 200).is_err(),
+        "a header is malformed"
+    );
+    assert!(
+        parse_ps_members("  abc   200 SN\n", 200).is_err(),
+        "a non-numeric pid is malformed"
+    );
+}
+
+#[test]
+fn ps_observer_runs_and_finds_no_member_in_an_absent_group() {
+    // A group id past the pid range holds nothing: `ps` runs and reports
+    // no member, proving the observer itself works.
+    let deadline = Deadline::start();
+    assert_eq!(observe_group_members(deadline, 4_000_000).unwrap(), vec![]);
+}
+
+/// The fork-during-kill orphan: a credential command forking as the kill
+/// lands outlives one SIGKILL, so the group still holds a member when
+/// Fiber exits. macOS only: it forces the kernel interleaving by
+/// repeating the run, 20 attempts sharing one deadline.
+#[cfg(target_os = "macos")]
+#[test]
+fn sigint_to_fiber_models_during_a_credential_fork_loop_leaves_no_group_member_fork_loop() {
+    let shared = Deadline::start();
+    for attempt in 0..20 {
+        let mut setup = Setup::new();
+        setup.deadline = shared;
+        let ready = Ready::new(setup.root.path());
+        let fifo = ready.path().to_path_buf();
+        // Before the spawn: a command-line watchdog covers a spawn no
+        // later watchdog can reach.
+        let matching = Watchdog::matching(&fifo.display().to_string());
+        // The ready line first, then the fork loop: the signal lands while
+        // the command forks on every run.
+        install(
+            &setup.home(),
+            &format!(
+                "echo $$ > '{}'; while :; do sleep 600 & done",
+                fifo.display()
+            ),
+        );
+        let (fiber_pid, child, watchdog) = setup.start(&["models"]);
+        // The first line proves the command ran: the signal below lands
+        // while the command forks on every run.
+        let pgid = ready.wait(setup.deadline.left())[0];
+        let group = Watchdog::group(pgid);
+        support::kill_pid(setup.deadline, fiber_pid, "INT").unwrap();
+        let output = setup.finish("`fiber models` to exit", fiber_pid, child);
+        assert_eq!(
+            output.status.code(),
+            Some(130),
+            "attempt {attempt}: stderr: {}",
+            stderr(&output)
+        );
+        // Observed at Fiber exit, before the guarded cleanup below kills
+        // a survivor: any member, in any state, is the orphan.
+        let members = observe_group_members(setup.deadline, pgid)
+            .unwrap_or_else(|error| panic!("attempt {attempt}: observing group {pgid}: {error}"));
+        // Guarded cleanup before the assertion: a survivor must not
+        // outlive the attempt either way.
+        match support::kill_group(setup.deadline, pgid, "KILL") {
+            Ok(_) | Err(_) => {}
+        }
+        group.stand_down(setup.deadline.cleanup());
+        watchdog.stand_down(setup.deadline.cleanup());
+        matching.stand_down(setup.deadline.cleanup());
+        assert!(
+            members.is_empty(),
+            "attempt {attempt}: group {pgid} still holds {members:?} at Fiber exit"
+        );
+    }
+}
+
 #[test]
 fn sigint_to_fiber_models_while_a_credential_command_runs_exits_130_and_kills_its_group() {
     let setup = Setup::new();

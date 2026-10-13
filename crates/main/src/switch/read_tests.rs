@@ -808,6 +808,100 @@ fn cancel_passes_a_blocked_spawn_and_the_late_child_is_killed() {
     late.stand_down(DEADLINE);
 }
 
+/// A cancelled group with a live member is settled by killing it, not by
+/// counting spawns: the command below blocks in `sleep` with nothing in
+/// flight, so a count-only settle answers `true` while the group lives.
+/// The `true`-means-empty assertion fails at Base on every platform; the
+/// fix kills the pending group and answers `true` only once it is empty.
+#[test]
+fn settle_rekills_a_cancelled_survivor_before_answering_true() {
+    let root = fakes::TempDir::new("fiber-read-settle-survivor");
+    let ready = root.path().join("ready");
+    let clock = FakeClock::new();
+    let reads = Arc::new(Reads::default());
+    let script = format!("echo $$ > '{}'; exec sleep 600", ready.display());
+    // Before the spawn: the group is known only after it starts, so a
+    // command-line watchdog covers a spawn no later watchdog can reach.
+    let pre = fakes::Watchdog::matching(&ready.display().to_string());
+    // Paused after listing: the acknowledgement proves the group is listed
+    // with nothing in flight before the survivor state is seeded below.
+    let (listed_tx, listed_rx) = mpsc::channel::<()>();
+    let (release_tx, release_rx) = mpsc::channel::<()>();
+    reads.pause_at_listed(listed_tx, release_rx);
+    let running = {
+        let reads = Arc::clone(&reads);
+        std::thread::spawn(move || reads.command(&mut sh(&script)))
+    };
+    let pgid: u32 = ready_line(&ready).parse().unwrap();
+    let watchdog = fakes::Watchdog::group(pgid);
+    Deadline::after(DEADLINE)
+        .recv(&listed_rx)
+        .expect("the group listed");
+    assert_eq!(listed(&reads), vec![pgid], "listed while it runs");
+    assert_eq!(reads.lock().spawning, 0, "nothing in flight");
+    release_tx.send(()).unwrap();
+    assert!(
+        fakes::kill_group(pgid, "0").unwrap(),
+        "the member lives before the settle"
+    );
+    // The probe's post-cancel survivor: cancelled with a live listed group
+    // and no kill sent, as a fork during the kernel kill walk leaves one.
+    // Set directly: `cancel` would kill the group and hide the survivor.
+    reads.lock().cancelled = true;
+    let settled = settle_on_thread(&reads, &clock, doors::SHUTDOWN_BOUND);
+    match Deadline::after(SHORT).recv(&settled) {
+        Ok(answer) => {
+            let lives = fakes::kill_group(pgid, "0").unwrap_or(false);
+            // Guarded cleanup before the assertion: the survivor must not
+            // outlive the test either way.
+            match fakes::kill_group(pgid, "KILL") {
+                Ok(_) | Err(_) => {}
+            }
+            let _finished = fakes::within("the killed command", DEADLINE, move || {
+                running.join().unwrap()
+            });
+            watchdog.stand_down(DEADLINE);
+            pre.stand_down(DEADLINE);
+            assert!(
+                !answer || !lives,
+                "settle answered `true` while group {pgid} still lives"
+            );
+            assert!(answer, "settle answers `true` once the group is empty");
+        }
+        Err(_) => {
+            // Parked on the clock: the fix kills and rechecks. Drive it to
+            // the bound, then the answer must arrive with the group empty.
+            let end = clock.origin() + doors::SHUTDOWN_BOUND;
+            loop {
+                if settled.try_recv().is_ok() {
+                    break;
+                }
+                if !clock.await_parked(end, DEADLINE) {
+                    break;
+                }
+                clock.advance(Duration::from_millis(50));
+            }
+            let answer = Deadline::after(DEADLINE)
+                .recv(&settled)
+                .expect("the settle");
+            let lives = fakes::kill_group(pgid, "0").unwrap_or(false);
+            match fakes::kill_group(pgid, "KILL") {
+                Ok(_) | Err(_) => {}
+            }
+            let _finished = fakes::within("the killed command", DEADLINE, move || {
+                running.join().unwrap()
+            });
+            watchdog.stand_down(DEADLINE);
+            pre.stand_down(DEADLINE);
+            assert!(answer, "settle answers `true` once the group is empty");
+            assert!(
+                !lives,
+                "settle answered `true` while group {pgid} still lives"
+            );
+        }
+    }
+}
+
 /// Runs `reads.settle` for `bound` on `clock` on a thread of its own,
 /// returning the channel its answer arrives on. The test receives through
 /// [`Deadline`], never a raw `recv_timeout`.
