@@ -593,26 +593,31 @@ struct HomeJoinBudget {
 }
 
 impl HomeJoinBudget {
-    fn new() -> Self {
-        Self {
-            steps: MAX_HOME_JOIN_WORK,
-            bytes: MAX_HOME_JOIN_CONTEXT_BYTES,
-        }
+    fn new(steps: usize, bytes: usize) -> Self {
+        Self { steps, bytes }
     }
 
     fn spend_steps(&mut self, amount: usize, line: usize) -> Result<(), StalledCursor> {
-        self.steps = self
+        let remaining = self
             .steps
             .checked_sub(amount)
             .ok_or(StalledCursor { line })?;
+        if remaining == 0 {
+            return Err(StalledCursor { line });
+        }
+        self.steps = remaining;
         Ok(())
     }
 
     fn spend_bytes(&mut self, amount: usize, line: usize) -> Result<(), StalledCursor> {
-        self.bytes = self
+        let remaining = self
             .bytes
             .checked_sub(amount)
             .ok_or(StalledCursor { line })?;
+        if remaining == 0 {
+            return Err(StalledCursor { line });
+        }
+        self.bytes = remaining;
         Ok(())
     }
 }
@@ -1231,7 +1236,11 @@ fn home_join_context(
     tokens: &[SourceToken],
     join_dot: usize,
 ) -> Result<Option<String>, StalledCursor> {
-    home_join_context_with_budget(tokens, join_dot, &mut HomeJoinBudget::new())
+    home_join_context_with_budget(
+        tokens,
+        join_dot,
+        &mut HomeJoinBudget::new(MAX_HOME_JOIN_WORK, MAX_HOME_JOIN_CONTEXT_BYTES),
+    )
 }
 
 fn home_join_context_with_budget(
@@ -1326,7 +1335,11 @@ fn fiber_home_join(
     tokens: &[SourceToken],
     join_dot: usize,
 ) -> Result<Option<String>, StalledCursor> {
-    fiber_home_join_with_budget(tokens, join_dot, &mut HomeJoinBudget::new())
+    fiber_home_join_with_budget(
+        tokens,
+        join_dot,
+        &mut HomeJoinBudget::new(MAX_HOME_JOIN_WORK, MAX_HOME_JOIN_CONTEXT_BYTES),
+    )
 }
 
 fn fiber_home_join_with_budget(
@@ -1432,7 +1445,7 @@ fn home_sites(file: &RustFile) -> Result<Vec<SourceSite>, String> {
         source_tokens(&file.source).map_err(|stalled| stalled_cursor_diagnostic(file, stalled))?;
     let test_only = test_only_tokens(&tokens);
     let mut sites = Vec::new();
-    let mut join_budget = HomeJoinBudget::new();
+    let mut join_budget = HomeJoinBudget::new(MAX_HOME_JOIN_WORK, MAX_HOME_JOIN_CONTEXT_BYTES);
     if file.krate == "config" {
         return Ok(sites);
     }

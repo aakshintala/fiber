@@ -942,6 +942,13 @@ fn loop_tool_names_ignore_longer_names_other_crates_and_comments() {
 }
 
 #[test]
+fn loop_sites_skip_tool_identities_in_non_loop_crates() {
+    let file = source_file("tools", "src/path.rs", "let x = \"shell\";");
+    let names = BTreeSet::from(["shell".to_owned()]);
+    assert_eq!(loop_sites(&file, &names).unwrap(), (Vec::new(), Vec::new()));
+}
+
+#[test]
 fn loop_tool_names_allows_only_the_five_known_label_contexts() {
     let tools = registrations(&REGISTERED_TOOLS);
     let labels = [
@@ -1163,16 +1170,79 @@ fn joined_literal_requires_a_complete_join_call() {
 }
 
 #[test]
-fn loop_sites_fail_closed_at_the_per_file_site_limit() {
-    let source = (0..=MAX_SOURCE_SITES_PER_FILE)
-        .map(|_| "\"shell\";\n")
-        .collect::<String>();
-    let file = source_file("loop", "src/many_sites.rs", &source);
+fn loop_sites_enforces_the_identity_limit_at_each_cap_edge() {
     let names = BTreeSet::from(["shell".to_owned()]);
-    assert_eq!(
-        loop_sites(&file, &names).unwrap_err(),
-        "crates/loop/src/many_sites.rs:1025: source cursor stopped advancing"
-    );
+    for (count, succeeds) in [
+        (MAX_SOURCE_SITES_PER_FILE - 1, true),
+        (MAX_SOURCE_SITES_PER_FILE, true),
+        (MAX_SOURCE_SITES_PER_FILE + 1, false),
+    ] {
+        let source = (0..count).map(|_| "\"shell\";\n").collect::<String>();
+        let file = source_file("loop", "src/many_sites.rs", &source);
+        let result = loop_sites(&file, &names);
+        assert_eq!(result.is_ok(), succeeds, "count: {count}");
+        if succeeds {
+            assert_eq!(result.unwrap().0.len(), count, "count: {count}");
+        } else {
+            assert_eq!(
+                result.unwrap_err(),
+                "crates/loop/src/many_sites.rs:1025: source cursor stopped advancing",
+                "count: {count}"
+            );
+        }
+    }
+}
+
+#[test]
+fn loop_sites_enforces_the_unrecognized_definition_limit_at_each_cap_edge() {
+    for (count, succeeds) in [
+        (MAX_SOURCE_SITES_PER_FILE - 1, true),
+        (MAX_SOURCE_SITES_PER_FILE, true),
+        (MAX_SOURCE_SITES_PER_FILE + 1, false),
+    ] {
+        let source = (0..count)
+            .map(|_| "name: String::from(\"custom\");\n")
+            .collect::<String>();
+        let file = source_file("tools", "src/many_definitions.rs", &source);
+        let result = loop_sites(&file, &BTreeSet::new());
+        assert_eq!(result.is_ok(), succeeds, "count: {count}");
+        if succeeds {
+            assert_eq!(result.unwrap().1.len(), count, "count: {count}");
+        } else {
+            assert_eq!(
+                result.unwrap_err(),
+                "crates/tools/src/many_definitions.rs:1025: source cursor stopped advancing",
+                "count: {count}"
+            );
+        }
+    }
+}
+
+#[test]
+fn push_source_site_enforces_the_per_file_limit_at_each_cap_edge() {
+    let file = source_file("loop", "src/many_sites.rs", "");
+    for (count, succeeds) in [
+        (MAX_SOURCE_SITES_PER_FILE - 1, true),
+        (MAX_SOURCE_SITES_PER_FILE, true),
+        (MAX_SOURCE_SITES_PER_FILE + 1, false),
+    ] {
+        let mut sites = Vec::new();
+        let mut result = Ok(());
+        for _ in 0..count {
+            let site = SourceSite {
+                path: file.path.clone(),
+                line: 1,
+                context: "fn f".to_owned(),
+                operation: "tool:shell".to_owned(),
+            };
+            result = push_source_site(&file, &mut sites, site);
+            if result.is_err() {
+                break;
+            }
+        }
+        assert_eq!(result.is_ok(), succeeds, "count: {count}");
+        assert_eq!(sites.len(), count.min(MAX_SOURCE_SITES_PER_FILE));
+    }
 }
 
 #[test]
@@ -1183,6 +1253,63 @@ fn repeated_loop_sites_remain_bounded_and_exact() {
 #[test]
 fn deep_home_join_chains_are_bounded_and_exact() {
     run_scanner_bound_probe("home-join");
+}
+
+#[test]
+fn home_join_budget_rejects_at_and_above_each_injected_cap() {
+    let limit = 4;
+    for (amount, succeeds) in [(limit - 1, true), (limit, false), (limit + 1, false)] {
+        let mut steps = HomeJoinBudget::new(limit, 8);
+        let result = steps.spend_steps(amount, 7);
+        assert_eq!(result.is_ok(), succeeds, "step amount: {amount}");
+        if !succeeds {
+            assert_eq!(result.unwrap_err(), StalledCursor { line: 7 });
+        }
+
+        let mut bytes = HomeJoinBudget::new(8, limit);
+        let result = bytes.spend_bytes(amount, 9);
+        assert_eq!(result.is_ok(), succeeds, "byte amount: {amount}");
+        if !succeeds {
+            assert_eq!(result.unwrap_err(), StalledCursor { line: 9 });
+        }
+    }
+}
+
+#[test]
+fn home_join_scanner_fails_closed_when_a_budget_is_exhausted() {
+    let tokens = source_tokens("home.join(\"a\").join(\"x\")").unwrap();
+    let join_dot = tokens
+        .iter()
+        .enumerate()
+        .filter_map(|(index, token)| {
+            (punct(Some(token), '.') && ident(tokens.get(index + 1), "join")).then_some(index)
+        })
+        .next_back()
+        .unwrap();
+
+    let mut steps_at_limit = HomeJoinBudget::new(5, 8);
+    assert_eq!(
+        home_join_context_with_budget(&tokens, join_dot, &mut steps_at_limit),
+        Err(StalledCursor { line: 1 })
+    );
+
+    let mut bytes_at_limit = HomeJoinBudget::new(6, 7);
+    assert_eq!(
+        home_join_context_with_budget(&tokens, join_dot, &mut bytes_at_limit),
+        Err(StalledCursor { line: 1 })
+    );
+
+    let mut just_under_both_limits = HomeJoinBudget::new(6, 8);
+    assert_eq!(
+        home_join_context_with_budget(&tokens, join_dot, &mut just_under_both_limits),
+        Ok(Some("home/a".to_owned()))
+    );
+}
+
+#[test]
+fn home_join_production_limits_are_pinned() {
+    assert_eq!(MAX_HOME_JOIN_WORK, 16_384);
+    assert_eq!(MAX_HOME_JOIN_CONTEXT_BYTES, 1_048_576);
 }
 
 #[test]
