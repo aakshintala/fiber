@@ -471,6 +471,93 @@ fn wrap_joined_marks_word_and_character_breaks() {
 }
 
 #[test]
+fn cutting_measures_each_kept_piece_and_at_most_the_first_rejected_one() {
+    // One-piece examples: a kept piece and a rejected one each count one.
+    crate::work::take();
+    assert_eq!(cut("a", 1), "a");
+    assert_eq!(crate::work::take().grapheme_widths, 1);
+    crate::work::take();
+    assert_eq!(cut("界", 1), "");
+    assert_eq!(crate::work::take().grapheme_widths, 1);
+    // Kept pieces plus the first rejected one, never the rest.
+    crate::work::take();
+    assert_eq!(cut("abcdef", 4), "abcd");
+    assert_eq!(crate::work::take().grapheme_widths, 5);
+    // Everything fits: no rejected piece to measure.
+    crate::work::take();
+    assert_eq!(cut("abc", 3), "abc");
+    assert_eq!(crate::work::take().grapheme_widths, 3);
+    // Nothing fits: only the first piece is ever measured.
+    crate::work::take();
+    assert_eq!(cut("abcdef", 0), "");
+    assert_eq!(crate::work::take().grapheme_widths, 1);
+    // A wide kept piece counts once, like any other.
+    crate::work::take();
+    assert_eq!(cut("a界b", 3), "a界");
+    assert_eq!(crate::work::take().grapheme_widths, 3);
+    // A zero-width piece still measures once and never forces a cut.
+    crate::work::take();
+    assert_eq!(cut("a\u{200b}b", 1), "a\u{200b}");
+    assert_eq!(crate::work::take().grapheme_widths, 3);
+}
+
+#[test]
+fn wrapping_measures_each_piece_once_at_any_length() {
+    // One width measurement per drawn grapheme, whatever the row's
+    // length: doubling the input doubles the count, nothing more.
+    for len in [80usize, 160, 320] {
+        let text = "a".repeat(len);
+        crate::work::take();
+        let rows = wrap(&text, 80);
+        assert_eq!(crate::work::take().grapheme_widths, len);
+        assert_eq!(rows.len(), len.div_ceil(80));
+        assert!(rows.iter().all(|row| row.len() <= 80));
+    }
+    // The separator space is never sized: only the words' pieces are.
+    crate::work::take();
+    assert_eq!(wrap("ab cd", 5), vec!["ab cd"]);
+    assert_eq!(crate::work::take().grapheme_widths, 4);
+}
+
+#[test]
+fn cut_and_wrap_hold_their_edges() {
+    // `cut`: a piece fits while what is taken plus its width stays at
+    // or under the cap. `>=` would drop the last fitting piece.
+    assert_eq!(cut("ab", 0), "");
+    assert_eq!(cut("ab", 1), "a");
+    assert_eq!(cut("ab", 2), "ab");
+    // A wide grapheme at the edge: `>` keeps it when it lands on the cap.
+    assert_eq!(cut("a界", 2), "a");
+    assert_eq!(cut("a界", 3), "a界");
+    // `wrap_joined`: the space before a word counts only after another
+    // word. At cap − 1 the word wraps, at cap it joins with its space.
+    assert_eq!(wrap("ab cd", 4), vec!["ab", "cd"]);
+    assert_eq!(wrap("ab cd", 5), vec!["ab cd"]);
+    assert_eq!(wrap("ab cd", 6), vec!["ab cd"]);
+    // Inside a word the same edge breaks only past the cap.
+    assert_eq!(wrap("abcde", 4), vec!["abcd", "e"]);
+    assert_eq!(wrap("abcdef", 4), vec!["abcd", "ef"]);
+    assert_eq!(wrap("abcdefg", 4), vec!["abcd", "efg"]);
+    // A too-wide first piece still takes its own row, never nothing.
+    assert_eq!(wrap("界x", 1), vec!["界", "x"]);
+}
+
+#[test]
+fn wrapping_keeps_empty_lines_and_spacing_whole() {
+    assert_eq!(wrap("", 10), vec![""]);
+    assert_eq!(wrap("a\n\nb", 10), vec!["a", "", "b"]);
+    // Repeated and trailing spaces survive as drawn rows.
+    assert_eq!(wrap("a  b", 10), vec!["a  b"]);
+    assert_eq!(wrap("a ", 10), vec!["a "]);
+    assert_eq!(wrap("  ", 10), vec![""]);
+    // Controls stay one piece each, measured as drawn.
+    assert_eq!(wrap("a\tb", 10), vec!["a\tb"]);
+    crate::work::take();
+    assert_eq!(wrap("a\tb", 10), vec!["a\tb"]);
+    assert_eq!(crate::work::take().grapheme_widths, 3);
+}
+
+#[test]
 fn answer_rows_match_the_result_lines_ask_user_writes() {
     use super::{answer_row, note_row};
     let labels = ["main (Recommended)".to_owned(), "dev".to_owned()];

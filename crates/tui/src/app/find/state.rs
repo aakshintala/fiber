@@ -4,7 +4,7 @@
 //! The driver in the parent module calls the interface below; nothing
 //! here reads `App`.
 
-use std::collections::{BTreeMap, HashMap};
+use std::collections::{BTreeMap, BTreeSet, HashMap};
 
 use super::FIND_PAUSE;
 use super::scan::{Anchor, Snippet};
@@ -47,6 +47,12 @@ pub(super) struct Fetch {
     /// The generation it scans for: older than the current one is stale,
     /// and its answer folds nothing.
     pub(super) generation: u64,
+    /// The width the page was fetched at: an answer for an old table
+    /// layout is not recorded as scanned at the new width.
+    pub(super) width: u16,
+    /// The page's revision when it was fetched: lines read before a
+    /// text change may miss it, so the answer requeues instead.
+    pub(super) revision: u64,
     /// The page's lines read so far: a page over one answer folds whole
     /// once its last chunk arrives, so a chunk never scans without the
     /// lines that open its turns.
@@ -89,11 +95,28 @@ pub(in crate::app) struct Find {
     results: Option<Results>,
     /// A page could not be read: the count gains ` · incomplete`.
     incomplete: bool,
+    /// The session the scan runs on, if it started: attaching another
+    /// session resets the search, so old matches never answer for it.
+    session: Option<contract::SessionId>,
     /// The page on screen when the scan started: the scan runs from it to
     /// the end, then from page 0 back to it.
     start_page: usize,
-    /// The pages in scan order.
+    /// The pages in scan order, append-only within a query: newly cut
+    /// pages join behind the pages already in it.
     order: Vec<usize>,
+    /// How far the scan reached in `order`: every earlier position
+    /// scanned when resident, or fetched when dropped. Only ever moves
+    /// forward within a query, so each position is reached once.
+    cursor: usize,
+    /// Reached pages whose revision has since moved: they rescan in
+    /// page order without starving the pages the cursor still owes.
+    dirty: BTreeSet<usize>,
+    /// Pages still needing scan action: unreached ones, and dirtied
+    /// ones. Tells completion without walking every page per answer.
+    outstanding: usize,
+    /// The page-revision clock the scan last verified: while it holds,
+    /// no text moved, so no page needs re-examination.
+    seen_clock: u64,
 }
 
 impl Find {
@@ -207,7 +230,14 @@ impl Find {
     /// Starts the scan for the current query from the page on screen:
     /// the matches, the current match and the count clear, and the scan
     /// runs from `start_page` to the end, then from page 0 back to it.
-    pub(super) fn start(&mut self, start_page: usize, page_count: usize) {
+    /// Every page is outstanding until it scans at its revision.
+    pub(super) fn start(
+        &mut self,
+        start_page: usize,
+        page_count: usize,
+        clock: u64,
+        session: Option<contract::SessionId>,
+    ) {
         self.due = true;
         self.matches.clear();
         self.scanned.clear();
@@ -216,21 +246,144 @@ impl Find {
         self.current = None;
         self.reveal = false;
         self.incomplete = false;
+        self.session = session;
         self.start_page = start_page;
         self.order = (start_page..page_count).chain(0..start_page).collect();
+        self.cursor = 0;
+        self.dirty.clear();
+        self.outstanding = page_count;
+        self.seen_clock = clock;
+    }
+
+    /// The session the scan runs on, if it started.
+    pub(super) fn session_id(&self) -> Option<contract::SessionId> {
+        self.session.clone()
     }
 
     /// Pulls pages cut since the query started into the scan order
-    /// behind the pages already in it, and returns the order: a page
-    /// never scanned scans too (`docs/tui.md`, "Search": search covers
-    /// the whole session log).
-    pub(super) fn scan_order(&mut self, page_count: usize) -> Vec<usize> {
-        for at in 0..page_count {
-            if !self.order.contains(&at) {
-                self.order.push(at);
+    /// behind the pages already in it: each new page is outstanding
+    /// until it scans (`docs/tui.md`, "Search": search covers the
+    /// whole session log). Appending a contiguous range needs no
+    /// membership walk and no copy of the order.
+    pub(super) fn extend_order(&mut self, page_count: usize) {
+        let fresh = page_count.saturating_sub(self.order.len());
+        if fresh == 0 {
+            return;
+        }
+        crate::work::add(|work| work.search_order_pages += fresh);
+        self.order.extend(self.order.len()..page_count);
+        self.outstanding = self.outstanding.saturating_add(fresh);
+    }
+
+    /// The page at scan-order `pos`, if it has one.
+    pub(super) fn page_at(&self, pos: usize) -> Option<usize> {
+        self.order.get(pos).copied()
+    }
+
+    /// How far the scan reached in scan order.
+    pub(super) fn cursor(&self) -> usize {
+        self.cursor
+    }
+
+    /// Moves the reach past `through`: the scan settled every earlier
+    /// position, scanning resident pages and fetching dropped ones.
+    pub(super) fn reach(&mut self, through: usize) {
+        self.cursor = self.cursor.max(through);
+    }
+
+    /// Moves the reach past positions already settled at their
+    /// revision: scanning or fetching them again would repeat work.
+    /// Counts each position skipped; each position is skipped once,
+    /// since the reach never moves back within a query.
+    pub(super) fn skip_settled(&mut self, pages: &Pages) {
+        while let Some(at) = self.order.get(self.cursor).copied() {
+            if self.scanned.get(&at) != Some(&pages.index().revision(at)) {
+                break;
+            }
+            crate::work::add(|work| work.search_order_pages += 1);
+            self.cursor = self.cursor.saturating_add(1);
+        }
+    }
+
+    /// The reached positions waiting on a rescan, earliest in scan
+    /// order first.
+    pub(super) fn dirty(&self) -> &BTreeSet<usize> {
+        &self.dirty
+    }
+
+    /// Drops `pos` from the rescan set: it scanned at its revision, and
+    /// a later verification soils it again if its text moved since.
+    pub(super) fn clean(&mut self, pos: usize) {
+        self.dirty.remove(&pos);
+    }
+
+    /// Marks the reached position `pos` for a rescan: its page scanned
+    /// before at another revision. Newly soiled pages join outstanding,
+    /// so completion waits for them; pages never scanned stay
+    /// outstanding from their order extension.
+    fn soil(&mut self, pos: usize) {
+        let settled = self
+            .order
+            .get(pos)
+            .is_some_and(|at| self.scanned.contains_key(at));
+        if self.dirty.insert(pos) && settled {
+            self.outstanding = self.outstanding.saturating_add(1);
+        }
+    }
+
+    /// Requeues `page` after a stale answer: its fetch read lines the
+    /// page no longer holds, so it scans again at the current layout
+    /// without issuing a second request. The page was outstanding under
+    /// its fetch and stays so. Counts each order entry the lookup
+    /// passes, so no walk hides here.
+    pub(super) fn requeue(&mut self, page: usize) {
+        if let Some(pos) = self.position_of(page) {
+            self.dirty.insert(pos);
+        }
+    }
+
+    /// `page`'s position in scan order, if it has one. Counts each
+    /// entry examined: requeues are rare, but their walk is still work.
+    pub(super) fn position_of(&self, page: usize) -> Option<usize> {
+        for (pos, at) in self.order.iter().enumerate() {
+            crate::work::add(|work| work.search_order_pages += 1);
+            if *at == page {
+                return Some(pos);
             }
         }
-        self.order.clone()
+        None
+    }
+
+    /// Whether the scan verified the current page-revision clock: while
+    /// it holds, no text moved anywhere.
+    pub(super) fn verified(&self, clock: u64) -> bool {
+        self.seen_clock == clock
+    }
+
+    /// Re-examines every scanned page's revision after the clock moved:
+    /// a reached position scanned before whose revision moved since
+    /// soils for a rescan. Counts one bookkeeping visit per order entry
+    /// examined, and remembers the clock, so a later settle with no
+    /// moves costs nothing. Whether any position soiled.
+    pub(super) fn verify(&mut self, pages: &Pages) -> bool {
+        let clock = pages.index().clock();
+        if self.seen_clock == clock {
+            return false;
+        }
+        crate::work::add(|work| work.search_order_pages += self.order.len());
+        self.seen_clock = clock;
+        let mut soiled = false;
+        for pos in 0..self.order.len() {
+            let Some(at) = self.order.get(pos).copied() else {
+                continue;
+            };
+            let revision = pages.index().revision(at);
+            if self.scanned.get(&at).is_some_and(|seen| *seen != revision) {
+                self.soil(pos);
+                soiled = true;
+            }
+        }
+        soiled
     }
 
     /// The revision page `at` scanned at, if it scanned.
@@ -244,11 +397,12 @@ impl Find {
         self.scanned.insert(at, revision);
     }
 
-    /// Whether any page still wants scanning: never scanned, or scanned
-    /// at an older revision. A scanned page keeps its matches when it
-    /// drops; its revision moves only when its text does.
+    /// Whether any page still wants scanning: outstanding pages, or
+    /// text that moved since the last verification. Tests only: the
+    /// count reads completion without walking every page per frame.
+    #[cfg(test)]
     pub(super) fn wants(&self, pages: &Pages) -> bool {
-        (0..pages.page_count()).any(|at| self.scanned.get(&at) != Some(&pages.index().revision(at)))
+        self.outstanding > 0 || !self.verified(pages.index().clock())
     }
 
     /// Whether the cap stopped the scan.
@@ -262,13 +416,23 @@ impl Find {
     }
 
     /// Whether the count shows it is still scanning: a fetch is on the
-    /// wire, or a page still wants scanning and the cap did not stop it.
+    /// wire, or pages are outstanding and the cap did not stop the scan.
+    /// Reads the outstanding count and the clock, never the pages.
     fn scanning(&self, pages: &Pages) -> bool {
-        self.fetch.is_some() || (!self.capped && self.wants(pages))
+        self.fetch.is_some()
+            || (!self.capped && (self.outstanding > 0 || !self.verified(pages.index().clock())))
+    }
+
+    /// Whether the scan settled every page at the verified clock: no
+    /// page outstanding and no text moved since.
+    pub(super) fn settled(&self, pages: &Pages) -> bool {
+        self.outstanding == 0 && self.verified(pages.index().clock())
     }
 
     /// Records page `at`'s matches, whole, in render order, stopping at
     /// the cap: the flattened order stays page order, then render order.
+    /// A page newly settled at its revision leaves outstanding;
+    /// re-recording the same revision changes nothing.
     /// Returns the kept matches with their rows.
     pub(super) fn record(
         &mut self,
@@ -302,6 +466,9 @@ impl Find {
         }
         self.total = self.total.saturating_add(matches.len());
         self.matches.insert(at, matches);
+        if self.scanned.get(&at) != Some(&revision) {
+            self.outstanding = self.outstanding.saturating_sub(1);
+        }
         self.scanned.insert(at, revision);
         kept
     }
@@ -337,11 +504,14 @@ impl Find {
 
     /// Sends `line` for `page`'s lines, holding `held` for its next
     /// chunk: at most one request is ever on the wire, whatever the
-    /// generation.
+    /// generation. Captures the layout the fetch reads under, so an
+    /// answer for an old table layout never stamps the new width.
     pub(super) fn send(
         &mut self,
         id: String,
         page: usize,
+        width: u16,
+        revision: u64,
         held: Vec<contract::Envelope>,
         line: String,
     ) {
@@ -349,6 +519,8 @@ impl Find {
             id,
             page,
             generation: self.generation,
+            width,
+            revision,
             held,
         });
         self.pending_out.push(line);

@@ -41,6 +41,17 @@ pub(super) enum Check {
     /// against a formula: head and base medians per fixture, never
     /// failing on a slow sample, failing on a malformed metric.
     PerMib { pin: &'static str, id: &'static str },
+    /// A paired growth ratio per run: each run's `large` over its `small`
+    /// must not exceed `times`. The row's ceiling cell must read `pin`
+    /// exactly, and the pin and the multiplier change together in code.
+    /// Unlike memory and exact budgets, a ratio overage never earns the
+    /// stored-base exemption: it fails the run outright.
+    Ratio {
+        pin: &'static str,
+        times: f64,
+        small: &'static str,
+        large: &'static str,
+    },
     /// A formula held here; the row's ceiling cell must read `pin` exactly.
     Exact { pin: &'static str, rule: Rule },
 }
@@ -171,6 +182,24 @@ pub(super) const MEASURED: &[(&str, Check)] = &[
         Check::Timing("paging_append_ms"),
     ),
     (
+        "`paging` jig at scale 16, slowest re-count at a new width",
+        Check::Ratio {
+            pin: "20 times the same run's scale-1 re-count",
+            times: 20.0,
+            small: "paging_width_ms",
+            large: "paging_scale16_width_ms",
+        },
+    ),
+    (
+        "`paging` jig at scale 16, a search of the whole session with no match",
+        Check::Ratio {
+            pin: "20 times the same run's scale-1 search",
+            times: 20.0,
+            small: "paging_search_ms",
+            large: "paging_scale16_search_ms",
+        },
+    ),
+    (
         "Terminal, wheel to frame, the `paging` jig's session at scale 1, 160 by 48",
         Check::Timing("wheel_paging_ms"),
     ),
@@ -193,14 +222,6 @@ pub(super) const NOT_MEASURED: &[(&str, &str)] = &[
     (
         "`session_list`, waiting for every running session's status",
         "#581 (`session_list`)",
-    ),
-    (
-        "`paging` jig at scale 16, slowest re-count at a new width",
-        "#2187 (re-count and search growth)",
-    ),
-    (
-        "`paging` jig at scale 16, a search of the whole session with no match",
-        "#2187 (re-count and search growth)",
     ),
     (
         TEN_TURNS_BUDGET,
@@ -653,6 +674,47 @@ pub(super) fn judge(
                 line.result = "skipped";
             }
         }
+        Check::Ratio {
+            pin,
+            times,
+            small,
+            large,
+        } => {
+            // The ceiling text is code: a changed multiplier or wording
+            // fails here with the budget, never silently keeping 20x
+            // enforcement. A ratio overage fails the run outright below:
+            // it never reaches the stored-base exemption.
+            if cell != pin {
+                failures.push(format!(
+                    "the ceiling reads {cell:?}; it must read {pin:?} for budget {budget:?}: change xtask/src/bench/judge.rs with it"
+                ));
+            }
+            match paired_ratio(head, small, large, times) {
+                Ok((shown, None)) => line.head = shown,
+                Ok((shown, Some(over))) => {
+                    line.head = shown;
+                    failures.push(over);
+                }
+                Err(malformed) => failures.push(malformed),
+            }
+            // The base ratio is a diagnostic, never authority to waive a
+            // head failure; a base predating the workload shows
+            // unavailable.
+            line.base = match base {
+                Base::None => String::new(),
+                Base::Failed(why) => format!("base failed: {why}"),
+                Base::Ok(results)
+                    if !results.metrics.contains_key(small)
+                        || !results.metrics.contains_key(large) =>
+                {
+                    "unavailable".to_owned()
+                }
+                Base::Ok(results) => match paired_ratio(Some(results), small, large, times) {
+                    Ok((shown, _)) => shown,
+                    Err(first) => format!("base failed: {first}"),
+                },
+            };
+        }
     }
     if !measured.is_empty() {
         let base_failures = base_results.map(|b| match check {
@@ -669,7 +731,7 @@ pub(super) fn judge(
                 f
             }
             Check::Exact { rule, .. } => exact(rule, Some(b)).0,
-            Check::Timing(_) | Check::PerMib { .. } => Vec::new(),
+            Check::Timing(_) | Check::PerMib { .. } | Check::Ratio { .. } => Vec::new(),
         });
         if all_over(&measured) && base_failures.is_some_and(|f| all_over(&f)) {
             line.base = format!("over at base {base_commit}");
@@ -701,6 +763,122 @@ fn rss_split(head: Option<&Results>, anon: &str, file: &str) -> String {
         String::new()
     } else {
         format!(" ({})", parts.join(", "))
+    }
+}
+
+/// One metric's per-run numbers: exactly its declared run count, each a
+/// finite number at or above zero. A missing, misshapen or out-of-count
+/// metric is a configuration failure, never a slow sample.
+fn samples_of(results: Option<&Results>, id: &str) -> Result<Vec<f64>, String> {
+    let values = metric(results, id)?
+        .as_array()
+        .ok_or_else(|| format!("{id}: not an array"))?;
+    let runs = results.map(|results| results.runs_of(id)).unwrap_or(0);
+    if values.len() != runs {
+        return Err(format!("{id}: {} runs, expected {runs}", values.len()));
+    }
+    values
+        .iter()
+        .map(|value| match value.as_f64() {
+            Some(value) if value.is_finite() && value >= 0.0 => Ok(value),
+            Some(_) | None => Err(format!(
+                "{id}: {value} is not a finite number at or above zero"
+            )),
+        })
+        .collect()
+}
+
+/// The median paired growth of `large` over `small`: each run's large
+/// against the same run's small, sorted without dividing, judged as
+/// `large <= times * small` on the median pair. Returns what the column
+/// shows, and the overage when the median pair breaks the ceiling. Zero
+/// over zero is zero growth; positive over zero is infinite growth and
+/// fails. A non-finite `times * small` bound is a configuration failure,
+/// never silently accepted overflow.
+fn paired_ratio(
+    results: Option<&Results>,
+    small: &str,
+    large: &str,
+    times: f64,
+) -> Result<(String, Option<String>), String> {
+    let small = samples_of(results, small)?;
+    let large = samples_of(results, large)?;
+    if small.len() != large.len() {
+        return Err(format!(
+            "paired samples differ: {} runs of one metric, {} of the other",
+            small.len(),
+            large.len()
+        ));
+    }
+    if small.is_empty() {
+        return Err("no runs to pair".to_owned());
+    }
+    let mut pairs: Vec<(f64, f64)> = small.into_iter().zip(large).collect();
+    // Least growth first, without dividing: zero growth (0/0), then
+    // finite ratios by cross-multiplication, then infinite growth
+    // (+/0), so zeros and infinities sort without a single NaN.
+    pairs.sort_by(|(s1, l1), (s2, l2)| {
+        let class = |small: f64, large: f64| {
+            if small == 0.0 {
+                if large == 0.0 { 0 } else { 2 }
+            } else {
+                1
+            }
+        };
+        match (class(*s1, *l1), class(*s2, *l2)) {
+            (a, b) if a != b => a.cmp(&b),
+            (1, 1) => {
+                let (left, right) = (l1 * s2, l2 * s1);
+                // Overflowed cross products fall back to the quotient,
+                // which stays ordered (never NaN: small is nonzero and
+                // both sides finite here). A nested `if` would collapse
+                // and a match would lose an arm to mutants no test can
+                // catch, so the fallback decision chains `then` instead.
+                let quotient = (l1 / s1).total_cmp(&(l2 / s2));
+                let crossed = if left.is_finite() {
+                    right.is_finite()
+                } else {
+                    false
+                };
+                if crossed {
+                    left.total_cmp(&right)
+                } else {
+                    quotient
+                }
+            }
+            _ => std::cmp::Ordering::Equal,
+        }
+    });
+    let Some(&(median_small, median_large)) = pairs.get(pairs.len() / 2) else {
+        return Err("no runs to pair".to_owned());
+    };
+    let shown = if median_small == 0.0 {
+        if median_large == 0.0 {
+            format!("0.0x of {times:.0}x allowed")
+        } else {
+            format!("infinite of {times:.0}x allowed")
+        }
+    } else {
+        format!("{:.1}x of {times:.0}x allowed", median_large / median_small)
+    };
+    // Zero over zero passes through the bound below (`0 <= times * 0`),
+    // so no early return remains to mutate; positive over zero still
+    // fails there as infinite growth.
+    let bound = times * median_small;
+    if !bound.is_finite() {
+        return Err(format!(
+            "{times}x of {median_small} overflows: cannot judge the paired growth"
+        ));
+    }
+    if median_large <= bound {
+        Ok((shown, None))
+    } else {
+        Ok((
+            shown,
+            Some(format!(
+                "{OVER}median paired growth is over {times:.0}x: {median_large:.1} ms over {median_small:.1} ms"
+            )),
+        ))
     }
 }
 

@@ -102,6 +102,8 @@ fn answers_takes_only_the_fetchs_reply_from_the_attached_session() {
         id: "c_1".to_owned(),
         page: 0,
         generation: 0,
+        width: 40,
+        revision: 0,
         held: Vec::new(),
     });
     assert!(
@@ -167,6 +169,31 @@ fn record_caps_only_past_the_limit() {
         .collect();
     assert!(app.find.record(1, 1, more).is_empty());
     assert!(app.find.capped);
+}
+
+#[test]
+fn the_cap_pins_down_at_one_below_at_and_one_past() {
+    let mut app = attached(40, 10);
+    // One below the cap: one more fills it exactly, uncapped.
+    app.find.total = super::MAX_MATCHES - 1;
+    let one: Vec<_> =
+        std::iter::once((anchor_at(9, 1), 0usize, false, super::Snippet::default())).collect();
+    assert_eq!(app.find.record(9, 1, one).len(), 1);
+    assert!(!app.find.capped(), "one below the cap is not capped");
+    assert_eq!(app.find.total(), super::MAX_MATCHES);
+    // Exactly at the cap: an empty page still records uncapped, so a
+    // completed scan reads distinctly from a capped one.
+    assert!(app.find.record(10, 1, Vec::new()).is_empty());
+    assert!(
+        !app.find.capped(),
+        "exactly the cap with no match is not capped"
+    );
+    // One past: a match with no room left caps the scan.
+    let more: Vec<_> = (0..2)
+        .map(|_| (anchor_at(11, 1), 0usize, false, super::Snippet::default()))
+        .collect();
+    assert!(app.find.record(11, 1, more).is_empty());
+    assert!(app.find.capped(), "one past the cap caps the scan");
 }
 
 #[test]
@@ -301,4 +328,114 @@ fn remap_selected_keeps_the_equal_match_then_moves_after_and_wraps() {
     app.find.total = 0;
     app.find.remap_selected(match_at(0, 1, 0), 10);
     assert_eq!(selected(&app), 0);
+}
+
+#[test]
+fn extend_order_counts_each_page_it_pulls_in() {
+    // Two pages in order, two more cut: the extension counts exactly the
+    // two new entries. A `*=` or `-=` mutant cannot satisfy the count.
+    let mut find = super::Find::default();
+    find.start(0, 2, 0, None);
+    crate::work::take();
+    find.extend_order(4);
+    assert_eq!(crate::work::take().search_order_pages, 2);
+    assert_eq!(find.page_at(3), Some(3));
+    assert_eq!(find.outstanding, 4);
+}
+
+#[test]
+fn skip_settled_counts_each_position_it_passes() {
+    // Both pages scanned at their revisions with the reach behind them:
+    // skipping counts both positions and moves the reach past them.
+    let app = attached(40, 10);
+    let mut find = super::Find::default();
+    find.start(0, 2, app.pages().index().clock(), None);
+    for at in 0..2 {
+        find.record(at, app.pages().index().revision(at), Vec::new());
+    }
+    crate::work::take();
+    find.skip_settled(app.pages());
+    assert_eq!(crate::work::take().search_order_pages, 2);
+    assert_eq!(find.cursor(), 2);
+}
+
+#[test]
+fn verify_counts_each_entry_it_re_examines() {
+    // The scan verified another clock: the verification walks both order
+    // entries, remembers the clock, and costs nothing the second time.
+    let app = attached(40, 10);
+    let mut find = super::Find::default();
+    find.start(0, 2, app.pages().index().clock().wrapping_add(1), None);
+    crate::work::take();
+    assert!(!find.verify(app.pages()));
+    assert_eq!(crate::work::take().search_order_pages, 2);
+    crate::work::take();
+    assert!(!find.verify(app.pages()));
+    assert_eq!(
+        crate::work::take().search_order_pages,
+        0,
+        "a verified clock costs nothing"
+    );
+}
+
+#[test]
+fn reach_moves_the_scan_past_settled_positions_only_forward() {
+    // The reach jumps past settled positions and never moves back: with
+    // the body removed the cursor would stay, and every later settle
+    // would re-examine the whole order from zero.
+    let mut find = super::Find::default();
+    find.start(0, 3, 0, None);
+    find.reach(2);
+    assert_eq!(find.cursor(), 2);
+    find.reach(1);
+    assert_eq!(find.cursor(), 2, "the reach never moves back");
+}
+
+#[test]
+fn requeue_marks_the_page_itself_for_a_rescan_and_counts_the_walk() {
+    // Page 0 sits third in scan order: requeueing it soils exactly its
+    // own position and counts every entry the walk passes. A dropped,
+    // invented or miscompared position soils the wrong page, and an
+    // uncounted walk reads zero.
+    let mut find = super::Find::default();
+    find.start(1, 4, 0, None);
+    assert_eq!(find.page_at(3), Some(0));
+    crate::work::take();
+    find.requeue(0);
+    assert_eq!(
+        crate::work::take().search_order_pages,
+        4,
+        "the walk visits every entry to page 0"
+    );
+    assert_eq!(find.dirty().len(), 1);
+    assert!(
+        find.dirty().contains(&3),
+        "page 0 requeues at its own position"
+    );
+}
+
+#[test]
+fn settled_needs_every_page_and_the_verified_clock() {
+    // Nothing outstanding at the verified clock: settled.
+    let app = attached(40, 10);
+    let clock = app.pages().index().clock();
+    let mut find = super::Find::default();
+    find.start(0, 0, clock, None);
+    assert!(find.settled(app.pages()));
+    // A page still outstanding never reads settled, even at the verified
+    // clock: forcing true would let an unfinished scan pick a current
+    // match and stop fetching.
+    find.start(0, 2, clock, None);
+    assert!(
+        !find.settled(app.pages()),
+        "an outstanding page never reads settled"
+    );
+    // Nothing outstanding, but the clock moved since verification: not
+    // settled either, so a loosened `||` cannot pass off moved text as
+    // scanned.
+    find.start(0, 0, clock.wrapping_add(1), None);
+    assert!(
+        !find.settled(app.pages()),
+        "a moved clock never reads settled"
+    );
 }
