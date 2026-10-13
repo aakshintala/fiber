@@ -1821,6 +1821,142 @@ fn a_model_without_levels_rides_start_with_no_override() {
     assert!(args.get("overrides").is_none());
 }
 
+/// A session-only choice for `reference` at `level`: what Ctrl+S holds
+/// for the next `start`.
+fn held(reference: &str, level: Option<&str>) -> crate::model_picker::Choice {
+    crate::model_picker::Choice {
+        reference: reference.to_owned(),
+        level: level.map(str::to_owned),
+        level_chosen: false,
+        save_model: false,
+        session_only: true,
+    }
+}
+
+/// The `start` args with `layer` stored and `choice` held, merged.
+fn merged(
+    app: &mut App,
+    layer: Vec<String>,
+    choice: Option<crate::model_picker::Choice>,
+) -> serde_json::Value {
+    app.launch_overrides = layer;
+    app.model_picker.start_model = choice;
+    let mut args = app.start_args();
+    app.with_start_model(&mut args);
+    args
+}
+
+#[test]
+fn a_session_only_choice_rides_beside_unrelated_layer_keys() {
+    let mut app = home();
+    // The layer's `model=` yields to the choice naming the model; the
+    // unrelated key and the choice's level ride on.
+    let args = merged(
+        &mut app,
+        vec!["model=cli/m".to_owned(), "retry.attempts=2".to_owned()],
+        Some(held("acme/m1", Some("low"))),
+    );
+    assert_eq!(args["model"], json!("acme/m1"));
+    assert_eq!(
+        args["overrides"],
+        json!(["retry.attempts=2", "models.\"acme/m1\".thinking=low"])
+    );
+}
+
+#[test]
+fn a_session_only_choice_without_a_level_keeps_unrelated_layer_keys() {
+    let mut app = home();
+    // No level, no thinking override: the choice supersedes only the
+    // layer's `model=`.
+    let args = merged(
+        &mut app,
+        vec!["model=cli/m".to_owned(), "budget.usd=10".to_owned()],
+        Some(held("acme/m1", None)),
+    );
+    assert_eq!(args["model"], json!("acme/m1"));
+    assert_eq!(args["overrides"], json!(["budget.usd=10"]));
+    // Nothing left to merge, the key is absent, as without a layer.
+    let args = merged(
+        &mut app,
+        vec!["model=cli/m".to_owned()],
+        Some(held("acme/m1", None)),
+    );
+    assert_eq!(args["model"], json!("acme/m1"));
+    assert!(args.get("overrides").is_none());
+}
+
+#[test]
+fn a_launch_thinking_key_for_the_chosen_model_yields_to_the_choice() {
+    let mut app = home();
+    // The choice's level wins over the layer's thinking key for the
+    // same model; another key rides on. The layer holds canonical keys,
+    // as `main` hands them: `acme/m1` needs no quotes.
+    let args = merged(
+        &mut app,
+        vec![
+            "models.acme/m1.thinking=high".to_owned(),
+            "retry.attempts=2".to_owned(),
+        ],
+        Some(held("acme/m1", Some("low"))),
+    );
+    assert_eq!(args["model"], json!("acme/m1"));
+    assert_eq!(
+        args["overrides"],
+        json!(["retry.attempts=2", "models.\"acme/m1\".thinking=low"])
+    );
+    // Without a chosen level the layer's thinking key stands.
+    let args = merged(
+        &mut app,
+        vec!["models.acme/m1.thinking=high".to_owned()],
+        Some(held("acme/m1", None)),
+    );
+    assert_eq!(args["model"], json!("acme/m1"));
+    assert_eq!(args["overrides"], json!(["models.acme/m1.thinking=high"]));
+}
+
+#[test]
+fn a_canonical_thinking_key_for_a_dotted_reference_yields_to_the_choice() {
+    let mut app = home();
+    // A reference holding a dot keeps its quotes in canonical spelling,
+    // so the layer's thinking key for the chosen model yields to the
+    // choice's level, while an unrelated key rides on.
+    let layer = vec![
+        "models.\"acme/m.1\".thinking=high".to_owned(),
+        "retry.attempts=2".to_owned(),
+    ];
+    let args = merged(&mut app, layer.clone(), Some(held("acme/m.1", Some("low"))));
+    assert_eq!(args["model"], json!("acme/m.1"));
+    assert_eq!(
+        args["overrides"],
+        json!(["retry.attempts=2", "models.\"acme/m.1\".thinking=low"]),
+        "{layer:?}"
+    );
+}
+
+#[test]
+fn a_canonical_thinking_key_with_a_quoted_value_yields_to_the_choice() {
+    let mut app = home();
+    // The key is what yields: the layer's canonical thinking key for
+    // the chosen model, even with a quoted value, gives way to the
+    // choice's level.
+    let layer = vec!["models.acme/m1.thinking=\"high\"".to_owned()];
+    let args = merged(&mut app, layer.clone(), Some(held("acme/m1", Some("low"))));
+    assert_eq!(args["model"], json!("acme/m1"));
+    assert_eq!(
+        args["overrides"],
+        json!(["models.\"acme/m1\".thinking=low"]),
+        "{layer:?}"
+    );
+}
+
+#[test]
+fn with_no_choice_the_layer_rides_untouched() {
+    let mut app = home();
+    let args = merged(&mut app, vec!["model=cli/m".to_owned()], None);
+    assert!(args.get("model").is_none());
+    assert_eq!(args["overrides"], json!(["model=cli/m"]));
+}
+
 #[test]
 fn the_start_model_clears_once_start_is_accepted() {
     let mut app = home();

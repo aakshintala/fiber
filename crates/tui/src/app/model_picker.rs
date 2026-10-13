@@ -202,19 +202,50 @@ impl App {
 
     /// Writes the session-only choice on home into the `start` args: the
     /// model exactly, and the level as a per-run override, outranking
-    /// every file.
+    /// every file. Bare `fiber`'s `--model` and `-c` stay: the choice
+    /// supersedes the layer's `model=` and its own thinking key, while
+    /// every unrelated key rides on (`docs/configuration.md`, "Layers":
+    /// a later `-c` wins, and every `-c` wins over `--model`). The layer
+    /// holds canonical keys, as `main` hands them, so each comparison is
+    /// one plain string: `model`, and the choice's canonical thinking
+    /// key.
     pub(in crate::app) fn with_start_model(&mut self, args: &mut serde_json::Value) {
         let Some(choice) = self.model_picker.start_model.as_ref() else {
             return;
         };
         let (model, override_text) = super::super::model_picker::start_args(choice);
+        let thinking_key = canonical_thinking_key(&choice.reference);
+        let merged: Vec<serde_json::Value> = args
+            .get("overrides")
+            .and_then(serde_json::Value::as_array)
+            .map(|overrides| {
+                overrides
+                    .iter()
+                    .filter_map(serde_json::Value::as_str)
+                    .filter(|override_text| {
+                        // The choice names the model, so the layer's
+                        // `model=` never stands beside it; its
+                        // thinking key stands only without a chosen
+                        // level.
+                        let key = override_text
+                            .split_once('=')
+                            .map_or(*override_text, |(key, _)| key);
+                        key != "model" && (choice.level.is_none() || key != thinking_key)
+                    })
+                    .map(|override_text| serde_json::Value::String(override_text.to_owned()))
+                    .collect()
+            })
+            .unwrap_or_default();
+        let mut merged = merged;
+        if let Some(override_text) = override_text {
+            merged.push(serde_json::Value::String(override_text));
+        }
         if let Some(object) = args.as_object_mut() {
             object.insert("model".to_owned(), serde_json::Value::String(model));
-            if let Some(override_text) = override_text {
-                object.insert(
-                    "overrides".to_owned(),
-                    serde_json::Value::Array(vec![serde_json::Value::String(override_text)]),
-                );
+            if merged.is_empty() {
+                object.remove("overrides");
+            } else {
+                object.insert("overrides".to_owned(), serde_json::Value::Array(merged));
             }
         }
     }
@@ -694,6 +725,19 @@ impl App {
             | Edit::Paste(_) => {}
         }
         Some(super::Effect::None)
+    }
+}
+
+/// The choice's thinking key in canonical spelling: `models` holding the
+/// reference holding `thinking`, quoting only a segment that holds a dot,
+/// as `config`'s dotted-path display spells it. `main` hands the terminal
+/// canonical keys, so this plain string supersedes the choice's own key
+/// with no parsing here.
+fn canonical_thinking_key(reference: &str) -> String {
+    if reference.contains('.') {
+        format!("models.\"{reference}\".thinking")
+    } else {
+        format!("models.{reference}.thinking")
     }
 }
 

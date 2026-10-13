@@ -9,7 +9,7 @@ use crate::completion::Shell;
 use super::{
     ApproveArgs, AskArgs, Commands, ConfigCommands, ExtensionCommands, HubCommands, Invocation,
     LoginArgs, LogoutArgs, MENU, McpAddArgs, McpCommands, McpRemoveArgs, SessionArgs, SessionsArgs,
-    SessionsCommands, TokenCommands, command, parse_from, usage_sentence, version_line,
+    SessionsCommands, TokenCommands, TopLevel, command, parse_from, usage_sentence, version_line,
 };
 
 #[test]
@@ -30,10 +30,13 @@ fn extension_install_accepts_project_scope_and_requires_exactly_one_name() {
         ),
     ] {
         let parsed = parse_from(args);
-        let Invocation::Run(Some(Commands::Extension(ExtensionCommands::Install {
-            project,
-            name_or_path,
-        }))) = parsed
+        let Invocation::Run(
+            Some(Commands::Extension(ExtensionCommands::Install {
+                project,
+                name_or_path,
+            })),
+            _,
+        ) = parsed
         else {
             panic!("expected install, got {parsed:?}")
         };
@@ -130,7 +133,7 @@ fn the_menu_is_hand_grouped_and_names_every_visible_subcommand() {
     assert!(
         matches!(
             parsed,
-            Invocation::Run(Some(Commands::Help { ref command })) if command.as_slice().is_empty()
+            Invocation::Run(Some(Commands::Help { ref command }), _) if command.as_slice().is_empty()
         ),
         "{parsed:?}"
     );
@@ -170,165 +173,223 @@ fn parses_argv_into_its_invocation() {
     let cases: Vec<(&[&str], Invocation)> = vec![
         (
             &["fiber", "extension", "update"],
-            Invocation::Run(Some(Commands::Extension(ExtensionCommands::Update {
-                name: None,
-            }))),
+            Invocation::Run(
+                Some(Commands::Extension(ExtensionCommands::Update {
+                    name: None,
+                })),
+                TopLevel::default(),
+            ),
         ),
         (
             &["fiber", "extension", "update", "x"],
-            Invocation::Run(Some(Commands::Extension(ExtensionCommands::Update {
-                name: Some("x".to_owned()),
-            }))),
+            Invocation::Run(
+                Some(Commands::Extension(ExtensionCommands::Update {
+                    name: Some("x".to_owned()),
+                })),
+                TopLevel::default(),
+            ),
         ),
         (
             &["fiber", "extension", "reinstall", "acme"],
-            Invocation::Run(Some(Commands::Extension(ExtensionCommands::Reinstall {
-                name: "acme".to_owned(),
-            }))),
+            Invocation::Run(
+                Some(Commands::Extension(ExtensionCommands::Reinstall {
+                    name: "acme".to_owned(),
+                })),
+                TopLevel::default(),
+            ),
         ),
         (
             &["fiber", "extension", "test"],
-            Invocation::Run(Some(Commands::Extension(ExtensionCommands::Test {
-                path: None,
-            }))),
+            Invocation::Run(
+                Some(Commands::Extension(ExtensionCommands::Test { path: None })),
+                TopLevel::default(),
+            ),
         ),
         (
             &["fiber", "extension", "test", "./package"],
-            Invocation::Run(Some(Commands::Extension(ExtensionCommands::Test {
-                path: Some(PathBuf::from("./package")),
-            }))),
+            Invocation::Run(
+                Some(Commands::Extension(ExtensionCommands::Test {
+                    path: Some(PathBuf::from("./package")),
+                })),
+                TopLevel::default(),
+            ),
         ),
         (
             &["fiber", "approve"],
-            Invocation::Run(Some(Commands::Approve(ApproveArgs { yes: false }))),
+            Invocation::Run(
+                Some(Commands::Approve(ApproveArgs { yes: false })),
+                TopLevel::default(),
+            ),
         ),
         (
             &["fiber", "approve", "--yes"],
-            Invocation::Run(Some(Commands::Approve(ApproveArgs { yes: true }))),
+            Invocation::Run(
+                Some(Commands::Approve(ApproveArgs { yes: true })),
+                TopLevel::default(),
+            ),
         ),
         (
             &["fiber", "login"],
-            Invocation::Run(Some(Commands::Login(LoginArgs {
-                name: None,
-                label: None,
-                device: false,
-            }))),
+            Invocation::Run(
+                Some(Commands::Login(LoginArgs {
+                    name: None,
+                    label: None,
+                    device: false,
+                })),
+                TopLevel::default(),
+            ),
         ),
         (
             &["fiber", "login", "openrouter"],
-            Invocation::Run(Some(Commands::Login(LoginArgs {
-                name: Some("openrouter".to_owned()),
-                label: None,
-                device: false,
-            }))),
+            Invocation::Run(
+                Some(Commands::Login(LoginArgs {
+                    name: Some("openrouter".to_owned()),
+                    label: None,
+                    device: false,
+                })),
+                TopLevel::default(),
+            ),
         ),
         (
             &["fiber", "login", "acme", "--as", "work"],
-            Invocation::Run(Some(Commands::Login(LoginArgs {
-                name: Some("acme".to_owned()),
-                label: Some("work".to_owned()),
-                device: false,
-            }))),
+            Invocation::Run(
+                Some(Commands::Login(LoginArgs {
+                    name: Some("acme".to_owned()),
+                    label: Some("work".to_owned()),
+                    device: false,
+                })),
+                TopLevel::default(),
+            ),
         ),
         (
             &["fiber", "login", "codex", "--device"],
-            Invocation::Run(Some(Commands::Login(LoginArgs {
-                name: Some("codex".to_owned()),
-                label: None,
-                device: true,
-            }))),
+            Invocation::Run(
+                Some(Commands::Login(LoginArgs {
+                    name: Some("codex".to_owned()),
+                    label: None,
+                    device: true,
+                })),
+                TopLevel::default(),
+            ),
         ),
         (
             &["fiber", "logout"],
-            Invocation::Run(Some(Commands::Logout(LogoutArgs {
-                provider: None,
-                label: None,
-                all: false,
-            }))),
+            Invocation::Run(
+                Some(Commands::Logout(LogoutArgs {
+                    provider: None,
+                    label: None,
+                    all: false,
+                })),
+                TopLevel::default(),
+            ),
         ),
         (
             &["fiber", "logout", "opencode-zen"],
-            Invocation::Run(Some(Commands::Logout(LogoutArgs {
-                provider: Some("opencode-zen".to_owned()),
-                label: None,
-                all: false,
-            }))),
+            Invocation::Run(
+                Some(Commands::Logout(LogoutArgs {
+                    provider: Some("opencode-zen".to_owned()),
+                    label: None,
+                    all: false,
+                })),
+                TopLevel::default(),
+            ),
         ),
         (
             &["fiber", "logout", "acme", "--as", "work"],
-            Invocation::Run(Some(Commands::Logout(LogoutArgs {
-                provider: Some("acme".to_owned()),
-                label: Some("work".to_owned()),
-                all: false,
-            }))),
+            Invocation::Run(
+                Some(Commands::Logout(LogoutArgs {
+                    provider: Some("acme".to_owned()),
+                    label: Some("work".to_owned()),
+                    all: false,
+                })),
+                TopLevel::default(),
+            ),
         ),
         (
             &["fiber", "logout", "acme", "--all"],
-            Invocation::Run(Some(Commands::Logout(LogoutArgs {
-                provider: Some("acme".to_owned()),
-                label: None,
-                all: true,
-            }))),
+            Invocation::Run(
+                Some(Commands::Logout(LogoutArgs {
+                    provider: Some("acme".to_owned()),
+                    label: None,
+                    all: true,
+                })),
+                TopLevel::default(),
+            ),
         ),
         (
             &["fiber", "sessions", "export", "s_abc"],
-            Invocation::Run(Some(Commands::Sessions(SessionsArgs {
-                command: Some(SessionsCommands::Export {
-                    id: "s_abc".to_owned(),
-                    path: None,
-                }),
-                all: false,
-                json: false,
-            }))),
+            Invocation::Run(
+                Some(Commands::Sessions(SessionsArgs {
+                    command: Some(SessionsCommands::Export {
+                        id: "s_abc".to_owned(),
+                        path: None,
+                    }),
+                    all: false,
+                    json: false,
+                })),
+                TopLevel::default(),
+            ),
         ),
         (
             &["fiber", "sessions", "export", "s_abc", "out"],
-            Invocation::Run(Some(Commands::Sessions(SessionsArgs {
-                command: Some(SessionsCommands::Export {
-                    id: "s_abc".to_owned(),
-                    path: Some(PathBuf::from("out")),
-                }),
-                all: false,
-                json: false,
-            }))),
+            Invocation::Run(
+                Some(Commands::Sessions(SessionsArgs {
+                    command: Some(SessionsCommands::Export {
+                        id: "s_abc".to_owned(),
+                        path: Some(PathBuf::from("out")),
+                    }),
+                    all: false,
+                    json: false,
+                })),
+                TopLevel::default(),
+            ),
         ),
         (
             &["fiber", "sessions", "delete", "s_abc"],
-            Invocation::Run(Some(Commands::Sessions(SessionsArgs {
-                command: Some(SessionsCommands::Delete {
-                    cascade: false,
-                    yes: false,
-                    id: "s_abc".to_owned(),
-                }),
-                all: false,
-                json: false,
-            }))),
+            Invocation::Run(
+                Some(Commands::Sessions(SessionsArgs {
+                    command: Some(SessionsCommands::Delete {
+                        cascade: false,
+                        yes: false,
+                        id: "s_abc".to_owned(),
+                    }),
+                    all: false,
+                    json: false,
+                })),
+                TopLevel::default(),
+            ),
         ),
         (
             &["fiber", "sessions", "delete", "--cascade", "--yes", "s_abc"],
-            Invocation::Run(Some(Commands::Sessions(SessionsArgs {
-                command: Some(SessionsCommands::Delete {
-                    cascade: true,
-                    yes: true,
-                    id: "s_abc".to_owned(),
-                }),
-                all: false,
-                json: false,
-            }))),
+            Invocation::Run(
+                Some(Commands::Sessions(SessionsArgs {
+                    command: Some(SessionsCommands::Delete {
+                        cascade: true,
+                        yes: true,
+                        id: "s_abc".to_owned(),
+                    }),
+                    all: false,
+                    json: false,
+                })),
+                TopLevel::default(),
+            ),
         ),
         (
             &["fiber", "sessions", "prune"],
-            Invocation::Run(Some(Commands::Sessions(SessionsArgs {
-                command: Some(SessionsCommands::Prune {
-                    older_than: None,
-                    cascade: false,
-                    dry_run: false,
-                    yes: false,
-                    force: false,
-                }),
-                all: false,
-                json: false,
-            }))),
+            Invocation::Run(
+                Some(Commands::Sessions(SessionsArgs {
+                    command: Some(SessionsCommands::Prune {
+                        older_than: None,
+                        cascade: false,
+                        dry_run: false,
+                        yes: false,
+                        force: false,
+                    }),
+                    all: false,
+                    json: false,
+                })),
+                TopLevel::default(),
+            ),
         ),
         (
             &[
@@ -342,177 +403,231 @@ fn parses_argv_into_its_invocation() {
                 "--yes",
                 "--force",
             ],
-            Invocation::Run(Some(Commands::Sessions(SessionsArgs {
-                command: Some(SessionsCommands::Prune {
-                    older_than: Some("30d".to_owned()),
-                    cascade: true,
-                    dry_run: true,
-                    yes: true,
-                    force: true,
-                }),
-                all: false,
-                json: false,
-            }))),
+            Invocation::Run(
+                Some(Commands::Sessions(SessionsArgs {
+                    command: Some(SessionsCommands::Prune {
+                        older_than: Some("30d".to_owned()),
+                        cascade: true,
+                        dry_run: true,
+                        yes: true,
+                        force: true,
+                    }),
+                    all: false,
+                    json: false,
+                })),
+                TopLevel::default(),
+            ),
         ),
         (
             &["fiber", "sessions"],
-            Invocation::Run(Some(Commands::Sessions(SessionsArgs {
-                command: None,
-                all: false,
-                json: false,
-            }))),
+            Invocation::Run(
+                Some(Commands::Sessions(SessionsArgs {
+                    command: None,
+                    all: false,
+                    json: false,
+                })),
+                TopLevel::default(),
+            ),
         ),
         (
             &["fiber", "sessions", "--all"],
-            Invocation::Run(Some(Commands::Sessions(SessionsArgs {
-                command: None,
-                all: true,
-                json: false,
-            }))),
+            Invocation::Run(
+                Some(Commands::Sessions(SessionsArgs {
+                    command: None,
+                    all: true,
+                    json: false,
+                })),
+                TopLevel::default(),
+            ),
         ),
         (
             &["fiber", "sessions", "--json"],
-            Invocation::Run(Some(Commands::Sessions(SessionsArgs {
-                command: None,
-                all: false,
-                json: true,
-            }))),
+            Invocation::Run(
+                Some(Commands::Sessions(SessionsArgs {
+                    command: None,
+                    all: false,
+                    json: true,
+                })),
+                TopLevel::default(),
+            ),
         ),
         (
             &["fiber", "sessions", "--json", "--all"],
-            Invocation::Run(Some(Commands::Sessions(SessionsArgs {
-                command: None,
-                all: true,
-                json: true,
-            }))),
+            Invocation::Run(
+                Some(Commands::Sessions(SessionsArgs {
+                    command: None,
+                    all: true,
+                    json: true,
+                })),
+                TopLevel::default(),
+            ),
         ),
         (
             &["fiber", "sessions", "search", "x"],
-            Invocation::Run(Some(Commands::Sessions(SessionsArgs {
-                command: Some(SessionsCommands::Search {
+            Invocation::Run(
+                Some(Commands::Sessions(SessionsArgs {
+                    command: Some(SessionsCommands::Search {
+                        all: false,
+                        json: false,
+                        text: "x".to_owned(),
+                    }),
                     all: false,
                     json: false,
-                    text: "x".to_owned(),
-                }),
-                all: false,
-                json: false,
-            }))),
+                })),
+                TopLevel::default(),
+            ),
         ),
         (
             &["fiber", "sessions", "search", "--all", "x"],
-            Invocation::Run(Some(Commands::Sessions(SessionsArgs {
-                command: Some(SessionsCommands::Search {
-                    all: true,
+            Invocation::Run(
+                Some(Commands::Sessions(SessionsArgs {
+                    command: Some(SessionsCommands::Search {
+                        all: true,
+                        json: false,
+                        text: "x".to_owned(),
+                    }),
+                    all: false,
                     json: false,
-                    text: "x".to_owned(),
-                }),
-                all: false,
-                json: false,
-            }))),
+                })),
+                TopLevel::default(),
+            ),
         ),
         (
             &["fiber", "sessions", "search", "--json", "x"],
-            Invocation::Run(Some(Commands::Sessions(SessionsArgs {
-                command: Some(SessionsCommands::Search {
+            Invocation::Run(
+                Some(Commands::Sessions(SessionsArgs {
+                    command: Some(SessionsCommands::Search {
+                        all: false,
+                        json: true,
+                        text: "x".to_owned(),
+                    }),
                     all: false,
-                    json: true,
-                    text: "x".to_owned(),
-                }),
-                all: false,
-                json: false,
-            }))),
+                    json: false,
+                })),
+                TopLevel::default(),
+            ),
         ),
         (
             &["fiber", "sessions", "search", "--all", "--json", "x"],
-            Invocation::Run(Some(Commands::Sessions(SessionsArgs {
-                command: Some(SessionsCommands::Search {
-                    all: true,
-                    json: true,
-                    text: "x".to_owned(),
-                }),
-                all: false,
-                json: false,
-            }))),
+            Invocation::Run(
+                Some(Commands::Sessions(SessionsArgs {
+                    command: Some(SessionsCommands::Search {
+                        all: true,
+                        json: true,
+                        text: "x".to_owned(),
+                    }),
+                    all: false,
+                    json: false,
+                })),
+                TopLevel::default(),
+            ),
         ),
         (
             &["fiber", "sessions", "search", "--json", "--all", "x"],
-            Invocation::Run(Some(Commands::Sessions(SessionsArgs {
-                command: Some(SessionsCommands::Search {
-                    all: true,
-                    json: true,
-                    text: "x".to_owned(),
-                }),
-                all: false,
-                json: false,
-            }))),
+            Invocation::Run(
+                Some(Commands::Sessions(SessionsArgs {
+                    command: Some(SessionsCommands::Search {
+                        all: true,
+                        json: true,
+                        text: "x".to_owned(),
+                    }),
+                    all: false,
+                    json: false,
+                })),
+                TopLevel::default(),
+            ),
         ),
         (
             &["fiber", "sessions", "search", "--", "-n"],
-            Invocation::Run(Some(Commands::Sessions(SessionsArgs {
-                command: Some(SessionsCommands::Search {
+            Invocation::Run(
+                Some(Commands::Sessions(SessionsArgs {
+                    command: Some(SessionsCommands::Search {
+                        all: false,
+                        json: false,
+                        text: "-n".to_owned(),
+                    }),
                     all: false,
                     json: false,
-                    text: "-n".to_owned(),
-                }),
-                all: false,
-                json: false,
-            }))),
+                })),
+                TopLevel::default(),
+            ),
         ),
         (
             &["fiber", "completion", "bash"],
-            Invocation::Run(Some(Commands::Completion { shell: Shell::Bash })),
+            Invocation::Run(
+                Some(Commands::Completion { shell: Shell::Bash }),
+                TopLevel::default(),
+            ),
         ),
         (
             &["fiber", "completion", "zsh"],
-            Invocation::Run(Some(Commands::Completion { shell: Shell::Zsh })),
+            Invocation::Run(
+                Some(Commands::Completion { shell: Shell::Zsh }),
+                TopLevel::default(),
+            ),
         ),
         (
             &["fiber", "completion", "fish"],
-            Invocation::Run(Some(Commands::Completion { shell: Shell::Fish })),
+            Invocation::Run(
+                Some(Commands::Completion { shell: Shell::Fish }),
+                TopLevel::default(),
+            ),
         ),
         (
             &["fiber", "ask", "--resume", "s_abc", "hi"],
-            Invocation::Run(Some(Commands::Ask(AskArgs {
-                model: None,
-                overrides: Vec::new(),
-                resume: Some("s_abc".to_owned()),
-                credential: None,
-                worktree: false,
-                prompt: vec!["hi".to_owned()],
-            }))),
+            Invocation::Run(
+                Some(Commands::Ask(AskArgs {
+                    model: None,
+                    overrides: Vec::new(),
+                    resume: Some("s_abc".to_owned()),
+                    credential: None,
+                    worktree: false,
+                    prompt: vec!["hi".to_owned()],
+                })),
+                TopLevel::default(),
+            ),
         ),
         (
             &["fiber", "ask", "--resume", "s_abc"],
-            Invocation::Run(Some(Commands::Ask(AskArgs {
-                model: None,
-                overrides: Vec::new(),
-                resume: Some("s_abc".to_owned()),
-                credential: None,
-                worktree: false,
-                prompt: Vec::new(),
-            }))),
+            Invocation::Run(
+                Some(Commands::Ask(AskArgs {
+                    model: None,
+                    overrides: Vec::new(),
+                    resume: Some("s_abc".to_owned()),
+                    credential: None,
+                    worktree: false,
+                    prompt: Vec::new(),
+                })),
+                TopLevel::default(),
+            ),
         ),
         (
             &["fiber", "ask", "hi"],
-            Invocation::Run(Some(Commands::Ask(AskArgs {
-                model: None,
-                overrides: Vec::new(),
-                resume: None,
-                credential: None,
-                worktree: false,
-                prompt: vec!["hi".to_owned()],
-            }))),
+            Invocation::Run(
+                Some(Commands::Ask(AskArgs {
+                    model: None,
+                    overrides: Vec::new(),
+                    resume: None,
+                    credential: None,
+                    worktree: false,
+                    prompt: vec!["hi".to_owned()],
+                })),
+                TopLevel::default(),
+            ),
         ),
         (
             &["fiber", "ask", "--worktree", "hi"],
-            Invocation::Run(Some(Commands::Ask(AskArgs {
-                model: None,
-                overrides: Vec::new(),
-                resume: None,
-                credential: None,
-                worktree: true,
-                prompt: vec!["hi".to_owned()],
-            }))),
+            Invocation::Run(
+                Some(Commands::Ask(AskArgs {
+                    model: None,
+                    overrides: Vec::new(),
+                    resume: None,
+                    credential: None,
+                    worktree: true,
+                    prompt: vec!["hi".to_owned()],
+                })),
+                TopLevel::default(),
+            ),
         ),
         (
             &[
@@ -524,14 +639,17 @@ fn parses_argv_into_its_invocation() {
                 "home",
                 "hi",
             ],
-            Invocation::Run(Some(Commands::Ask(AskArgs {
-                model: None,
-                overrides: Vec::new(),
-                resume: Some("s_abc".to_owned()),
-                credential: Some("home".to_owned()),
-                worktree: false,
-                prompt: vec!["hi".to_owned()],
-            }))),
+            Invocation::Run(
+                Some(Commands::Ask(AskArgs {
+                    model: None,
+                    overrides: Vec::new(),
+                    resume: Some("s_abc".to_owned()),
+                    credential: Some("home".to_owned()),
+                    worktree: false,
+                    prompt: vec!["hi".to_owned()],
+                })),
+                TopLevel::default(),
+            ),
         ),
         (
             &[
@@ -543,20 +661,23 @@ fn parses_argv_into_its_invocation() {
                 "/home/u/proj",
                 "--worktree",
             ],
-            Invocation::Run(Some(Commands::Session(SessionArgs {
-                id: "s_0123456789abcdef".to_owned(),
-                workspace: PathBuf::from("/home/u/proj"),
-                model: None,
-                overrides: Vec::new(),
-                prompt: None,
-                resume: false,
-                worktree: true,
-                rewound_from: None,
-                parent: None,
-                delegate_id: None,
-                login_shell: false,
-                credential: None,
-            }))),
+            Invocation::Run(
+                Some(Commands::Session(SessionArgs {
+                    id: "s_0123456789abcdef".to_owned(),
+                    workspace: PathBuf::from("/home/u/proj"),
+                    model: None,
+                    overrides: Vec::new(),
+                    prompt: None,
+                    resume: false,
+                    worktree: true,
+                    rewound_from: None,
+                    parent: None,
+                    delegate_id: None,
+                    login_shell: false,
+                    credential: None,
+                })),
+                TopLevel::default(),
+            ),
         ),
         (
             &[
@@ -571,20 +692,23 @@ fn parses_argv_into_its_invocation() {
                 "--prompt",
                 "hi",
             ],
-            Invocation::Run(Some(Commands::Session(SessionArgs {
-                id: "s_0123456789abcdef".to_owned(),
-                workspace: PathBuf::from("/home/u/proj"),
-                model: Some("fake/m".to_owned()),
-                overrides: Vec::new(),
-                prompt: Some("hi".to_owned()),
-                resume: false,
-                worktree: false,
-                rewound_from: None,
-                parent: None,
-                delegate_id: None,
-                login_shell: false,
-                credential: None,
-            }))),
+            Invocation::Run(
+                Some(Commands::Session(SessionArgs {
+                    id: "s_0123456789abcdef".to_owned(),
+                    workspace: PathBuf::from("/home/u/proj"),
+                    model: Some("fake/m".to_owned()),
+                    overrides: Vec::new(),
+                    prompt: Some("hi".to_owned()),
+                    resume: false,
+                    worktree: false,
+                    rewound_from: None,
+                    parent: None,
+                    delegate_id: None,
+                    login_shell: false,
+                    credential: None,
+                })),
+                TopLevel::default(),
+            ),
         ),
         (
             &[
@@ -595,20 +719,23 @@ fn parses_argv_into_its_invocation() {
                 "--workspace",
                 "/home/u/proj",
             ],
-            Invocation::Run(Some(Commands::Session(SessionArgs {
-                id: "s_0123456789abcdef".to_owned(),
-                workspace: PathBuf::from("/home/u/proj"),
-                model: None,
-                overrides: Vec::new(),
-                prompt: None,
-                resume: false,
-                worktree: false,
-                rewound_from: None,
-                parent: None,
-                delegate_id: None,
-                login_shell: false,
-                credential: None,
-            }))),
+            Invocation::Run(
+                Some(Commands::Session(SessionArgs {
+                    id: "s_0123456789abcdef".to_owned(),
+                    workspace: PathBuf::from("/home/u/proj"),
+                    model: None,
+                    overrides: Vec::new(),
+                    prompt: None,
+                    resume: false,
+                    worktree: false,
+                    rewound_from: None,
+                    parent: None,
+                    delegate_id: None,
+                    login_shell: false,
+                    credential: None,
+                })),
+                TopLevel::default(),
+            ),
         ),
         (
             &[
@@ -620,20 +747,23 @@ fn parses_argv_into_its_invocation() {
                 "/home/u/proj",
                 "--resume",
             ],
-            Invocation::Run(Some(Commands::Session(SessionArgs {
-                id: "s_0123456789abcdef".to_owned(),
-                workspace: PathBuf::from("/home/u/proj"),
-                model: None,
-                overrides: Vec::new(),
-                prompt: None,
-                resume: true,
-                worktree: false,
-                rewound_from: None,
-                parent: None,
-                delegate_id: None,
-                login_shell: false,
-                credential: None,
-            }))),
+            Invocation::Run(
+                Some(Commands::Session(SessionArgs {
+                    id: "s_0123456789abcdef".to_owned(),
+                    workspace: PathBuf::from("/home/u/proj"),
+                    model: None,
+                    overrides: Vec::new(),
+                    prompt: None,
+                    resume: true,
+                    worktree: false,
+                    rewound_from: None,
+                    parent: None,
+                    delegate_id: None,
+                    login_shell: false,
+                    credential: None,
+                })),
+                TopLevel::default(),
+            ),
         ),
         (
             &[
@@ -650,20 +780,23 @@ fn parses_argv_into_its_invocation() {
                 "--delegate-id",
                 "j_0123456789abcdef",
             ],
-            Invocation::Run(Some(Commands::Session(SessionArgs {
-                id: "s_0123456789abcdef".to_owned(),
-                workspace: PathBuf::from("/home/u/proj"),
-                model: None,
-                overrides: Vec::new(),
-                prompt: Some("- also check Y".to_owned()),
-                resume: true,
-                worktree: false,
-                rewound_from: None,
-                parent: Some("s_aaaaaaaaaaaaaaaa".to_owned()),
-                delegate_id: Some("j_0123456789abcdef".to_owned()),
-                login_shell: false,
-                credential: None,
-            }))),
+            Invocation::Run(
+                Some(Commands::Session(SessionArgs {
+                    id: "s_0123456789abcdef".to_owned(),
+                    workspace: PathBuf::from("/home/u/proj"),
+                    model: None,
+                    overrides: Vec::new(),
+                    prompt: Some("- also check Y".to_owned()),
+                    resume: true,
+                    worktree: false,
+                    rewound_from: None,
+                    parent: Some("s_aaaaaaaaaaaaaaaa".to_owned()),
+                    delegate_id: Some("j_0123456789abcdef".to_owned()),
+                    login_shell: false,
+                    credential: None,
+                })),
+                TopLevel::default(),
+            ),
         ),
         (
             &[
@@ -682,20 +815,23 @@ fn parses_argv_into_its_invocation() {
                 "--delegate-id",
                 "j_bbbbbbbbbbbbbbbb",
             ],
-            Invocation::Run(Some(Commands::Session(SessionArgs {
-                id: "s_0123456789abcdef".to_owned(),
-                workspace: PathBuf::from("/home/u/proj"),
-                model: Some("fake/m".to_owned()),
-                overrides: Vec::new(),
-                prompt: Some("hi".to_owned()),
-                resume: false,
-                worktree: false,
-                rewound_from: None,
-                parent: Some("s_aaaaaaaaaaaaaaaa".to_owned()),
-                delegate_id: Some("j_bbbbbbbbbbbbbbbb".to_owned()),
-                login_shell: false,
-                credential: None,
-            }))),
+            Invocation::Run(
+                Some(Commands::Session(SessionArgs {
+                    id: "s_0123456789abcdef".to_owned(),
+                    workspace: PathBuf::from("/home/u/proj"),
+                    model: Some("fake/m".to_owned()),
+                    overrides: Vec::new(),
+                    prompt: Some("hi".to_owned()),
+                    resume: false,
+                    worktree: false,
+                    rewound_from: None,
+                    parent: Some("s_aaaaaaaaaaaaaaaa".to_owned()),
+                    delegate_id: Some("j_bbbbbbbbbbbbbbbb".to_owned()),
+                    login_shell: false,
+                    credential: None,
+                })),
+                TopLevel::default(),
+            ),
         ),
         (
             &[
@@ -708,20 +844,23 @@ fn parses_argv_into_its_invocation() {
                 "--rewound-from",
                 "s_aaaaaaaaaaaaaaaa",
             ],
-            Invocation::Run(Some(Commands::Session(SessionArgs {
-                id: "s_0123456789abcdef".to_owned(),
-                workspace: PathBuf::from("/home/u/proj"),
-                model: None,
-                overrides: Vec::new(),
-                prompt: None,
-                resume: false,
-                worktree: false,
-                rewound_from: Some("s_aaaaaaaaaaaaaaaa".to_owned()),
-                parent: None,
-                delegate_id: None,
-                login_shell: false,
-                credential: None,
-            }))),
+            Invocation::Run(
+                Some(Commands::Session(SessionArgs {
+                    id: "s_0123456789abcdef".to_owned(),
+                    workspace: PathBuf::from("/home/u/proj"),
+                    model: None,
+                    overrides: Vec::new(),
+                    prompt: None,
+                    resume: false,
+                    worktree: false,
+                    rewound_from: Some("s_aaaaaaaaaaaaaaaa".to_owned()),
+                    parent: None,
+                    delegate_id: None,
+                    login_shell: false,
+                    credential: None,
+                })),
+                TopLevel::default(),
+            ),
         ),
         (
             &[
@@ -733,35 +872,44 @@ fn parses_argv_into_its_invocation() {
                 "/home/u/proj",
                 "--login-shell",
             ],
-            Invocation::Run(Some(Commands::Session(SessionArgs {
-                id: "s_0123456789abcdef".to_owned(),
-                workspace: PathBuf::from("/home/u/proj"),
-                model: None,
-                overrides: Vec::new(),
-                prompt: None,
-                resume: false,
-                worktree: false,
-                rewound_from: None,
-                parent: None,
-                delegate_id: None,
-                login_shell: true,
-                credential: None,
-            }))),
+            Invocation::Run(
+                Some(Commands::Session(SessionArgs {
+                    id: "s_0123456789abcdef".to_owned(),
+                    workspace: PathBuf::from("/home/u/proj"),
+                    model: None,
+                    overrides: Vec::new(),
+                    prompt: None,
+                    resume: false,
+                    worktree: false,
+                    rewound_from: None,
+                    parent: None,
+                    delegate_id: None,
+                    login_shell: true,
+                    credential: None,
+                })),
+                TopLevel::default(),
+            ),
         ),
         (
             &["fiber", "config", "get", "model"],
-            Invocation::Run(Some(Commands::Config(ConfigCommands::Get {
-                key: "model".to_owned(),
-            }))),
+            Invocation::Run(
+                Some(Commands::Config(ConfigCommands::Get {
+                    key: "model".to_owned(),
+                })),
+                TopLevel::default(),
+            ),
         ),
         (
             &["fiber", "config", "set", "model", "a/b"],
-            Invocation::Run(Some(Commands::Config(ConfigCommands::Set {
-                project: false,
-                repo: false,
-                key: "model".to_owned(),
-                value: "a/b".to_owned(),
-            }))),
+            Invocation::Run(
+                Some(Commands::Config(ConfigCommands::Set {
+                    project: false,
+                    repo: false,
+                    key: "model".to_owned(),
+                    value: "a/b".to_owned(),
+                })),
+                TopLevel::default(),
+            ),
         ),
         (
             &[
@@ -772,72 +920,107 @@ fn parses_argv_into_its_invocation() {
                 "handoff.tokens",
                 "200000",
             ],
-            Invocation::Run(Some(Commands::Config(ConfigCommands::Set {
-                project: true,
-                repo: false,
-                key: "handoff.tokens".to_owned(),
-                value: "200000".to_owned(),
-            }))),
+            Invocation::Run(
+                Some(Commands::Config(ConfigCommands::Set {
+                    project: true,
+                    repo: false,
+                    key: "handoff.tokens".to_owned(),
+                    value: "200000".to_owned(),
+                })),
+                TopLevel::default(),
+            ),
         ),
         (
             &["fiber", "config", "set", "--repo", "model", "a/b"],
-            Invocation::Run(Some(Commands::Config(ConfigCommands::Set {
-                project: false,
-                repo: true,
-                key: "model".to_owned(),
-                value: "a/b".to_owned(),
-            }))),
+            Invocation::Run(
+                Some(Commands::Config(ConfigCommands::Set {
+                    project: false,
+                    repo: true,
+                    key: "model".to_owned(),
+                    value: "a/b".to_owned(),
+                })),
+                TopLevel::default(),
+            ),
         ),
         (
             &["fiber", "hub", "serve"],
-            Invocation::Run(Some(Commands::Hub(HubCommands::Serve { installed: false }))),
+            Invocation::Run(
+                Some(Commands::Hub(HubCommands::Serve { installed: false })),
+                TopLevel::default(),
+            ),
         ),
         (
             &["fiber", "hub", "serve", "--installed"],
-            Invocation::Run(Some(Commands::Hub(HubCommands::Serve { installed: true }))),
+            Invocation::Run(
+                Some(Commands::Hub(HubCommands::Serve { installed: true })),
+                TopLevel::default(),
+            ),
         ),
         (
             &["fiber", "hub", "install"],
-            Invocation::Run(Some(Commands::Hub(HubCommands::Install { port: None }))),
+            Invocation::Run(
+                Some(Commands::Hub(HubCommands::Install { port: None })),
+                TopLevel::default(),
+            ),
         ),
         (
             &["fiber", "hub", "install", "--port", "4040"],
-            Invocation::Run(Some(Commands::Hub(HubCommands::Install {
-                port: Some(4040),
-            }))),
+            Invocation::Run(
+                Some(Commands::Hub(HubCommands::Install { port: Some(4040) })),
+                TopLevel::default(),
+            ),
         ),
         (
             &["fiber", "hub", "install", "--port", "1"],
-            Invocation::Run(Some(Commands::Hub(HubCommands::Install { port: Some(1) }))),
+            Invocation::Run(
+                Some(Commands::Hub(HubCommands::Install { port: Some(1) })),
+                TopLevel::default(),
+            ),
         ),
         (
             &["fiber", "hub", "install", "--port", "65535"],
-            Invocation::Run(Some(Commands::Hub(HubCommands::Install {
-                port: Some(65535),
-            }))),
+            Invocation::Run(
+                Some(Commands::Hub(HubCommands::Install { port: Some(65535) })),
+                TopLevel::default(),
+            ),
         ),
         (
             &["fiber", "hub", "uninstall"],
-            Invocation::Run(Some(Commands::Hub(HubCommands::Uninstall))),
+            Invocation::Run(
+                Some(Commands::Hub(HubCommands::Uninstall)),
+                TopLevel::default(),
+            ),
         ),
         (
             &["fiber", "hub", "status"],
-            Invocation::Run(Some(Commands::Hub(HubCommands::Status { json: false }))),
+            Invocation::Run(
+                Some(Commands::Hub(HubCommands::Status { json: false })),
+                TopLevel::default(),
+            ),
         ),
         (
             &["fiber", "hub", "status", "--json"],
-            Invocation::Run(Some(Commands::Hub(HubCommands::Status { json: true }))),
+            Invocation::Run(
+                Some(Commands::Hub(HubCommands::Status { json: true })),
+                TopLevel::default(),
+            ),
         ),
         (
             &["fiber", "hub", "refresh"],
-            Invocation::Run(Some(Commands::Hub(HubCommands::Refresh))),
+            Invocation::Run(
+                Some(Commands::Hub(HubCommands::Refresh)),
+                TopLevel::default(),
+            ),
         ),
         (
             &["fiber", "hub", "pair", "phone"],
-            Invocation::Run(Some(Commands::Hub(HubCommands::Pair {
-                device: "phone".to_owned(),
-                address: None,
-            }))),
+            Invocation::Run(
+                Some(Commands::Hub(HubCommands::Pair {
+                    device: "phone".to_owned(),
+                    address: None,
+                })),
+                TopLevel::default(),
+            ),
         ),
         (
             &[
@@ -848,22 +1031,29 @@ fn parses_argv_into_its_invocation() {
                 "--address",
                 "wss://mybox.tailnet.ts.net",
             ],
-            Invocation::Run(Some(Commands::Hub(HubCommands::Pair {
-                device: "phone".to_owned(),
-                address: Some(::cli::Address::parse("wss://mybox.tailnet.ts.net").unwrap()),
-            }))),
+            Invocation::Run(
+                Some(Commands::Hub(HubCommands::Pair {
+                    device: "phone".to_owned(),
+                    address: Some(::cli::Address::parse("wss://mybox.tailnet.ts.net").unwrap()),
+                })),
+                TopLevel::default(),
+            ),
         ),
         (
             &["fiber", "hub", "token", "list"],
-            Invocation::Run(Some(Commands::Hub(HubCommands::Token(TokenCommands::List)))),
+            Invocation::Run(
+                Some(Commands::Hub(HubCommands::Token(TokenCommands::List))),
+                TopLevel::default(),
+            ),
         ),
         (
             &["fiber", "hub", "token", "revoke", "phone"],
-            Invocation::Run(Some(Commands::Hub(HubCommands::Token(
-                TokenCommands::Revoke {
+            Invocation::Run(
+                Some(Commands::Hub(HubCommands::Token(TokenCommands::Revoke {
                     device: "phone".to_owned(),
-                },
-            )))),
+                }))),
+                TopLevel::default(),
+            ),
         ),
     ];
     for (argv, expected) in &cases {
@@ -876,7 +1066,7 @@ fn parses_argv_into_its_invocation() {
 fn extension_case_is_a_hidden_internal_command() {
     let parsed = parse_from(["fiber", "extension-case", "tests/first.json"]);
     assert!(
-        matches!(parsed, Invocation::Run(Some(Commands::ExtensionCase { ref case })) if case.as_os_str() == OsStr::new("tests/first.json")),
+        matches!(parsed, Invocation::Run(Some(Commands::ExtensionCase { ref case }), _) if case.as_os_str() == OsStr::new("tests/first.json")),
         "{parsed:?}"
     );
     assert!(!visible().iter().any(|name| name == "extension-case"));
@@ -914,7 +1104,7 @@ fn version_is_the_package_version_and_there_is_no_capital_v() {
     }
     let parsed = parse_from(["fiber", "version"]);
     assert!(
-        matches!(parsed, Invocation::Run(Some(Commands::Version))),
+        matches!(parsed, Invocation::Run(Some(Commands::Version), _)),
         "{parsed:?}"
     );
     assert_eq!(
@@ -1021,15 +1211,84 @@ fn a_list_flag_with_a_subcommand_is_a_usage_sentence() {
 }
 
 #[test]
+fn bare_fiber_takes_model_and_repeatable_dash_c_as_the_terminal_layer() {
+    for (argv, model, overrides) in [
+        (vec!["fiber"], None, Vec::new()),
+        (
+            vec!["fiber", "--model", "fake/m"],
+            Some("fake/m"),
+            Vec::new(),
+        ),
+        (
+            vec!["fiber", "-c", "retry.attempts=2"],
+            None,
+            vec!["retry.attempts=2".to_owned()],
+        ),
+        (
+            vec!["fiber", "--model", "fake/m", "-c", "a=1", "-c", "b=2"],
+            Some("fake/m"),
+            vec!["a=1".to_owned(), "b=2".to_owned()],
+        ),
+        (
+            vec!["fiber", "-c", "a=1", "--model", "fake/m"],
+            Some("fake/m"),
+            vec!["a=1".to_owned()],
+        ),
+    ] {
+        let Invocation::Run(None, top) = parse_from(argv.clone()) else {
+            panic!("bare fiber with its flags: {argv:?}");
+        };
+        assert_eq!(top.model.as_deref(), model, "{argv:?}");
+        assert_eq!(top.overrides, overrides, "{argv:?}");
+    }
+}
+
+#[test]
+fn top_level_flags_with_a_subcommand_are_a_usage_sentence() {
+    // `ask` keeps its own `--model` and `-c`; the top-level pair with
+    // any subcommand is a usage error, as before the flags existed.
+    for args in [
+        &["fiber", "--model", "fake/m", "sessions"][..],
+        &["fiber", "-c", "retry.attempts=2", "sessions"][..],
+        &["fiber", "--model", "fake/m", "ask", "hi"][..],
+        &["fiber", "-c", "retry.attempts=2", "ask", "hi"][..],
+        &["fiber", "--model", "fake/m", "resume", "s_12"][..],
+        &["fiber", "-c", "a=1", "--model", "fake/m", "continue"][..],
+    ] {
+        let (ask, said) = usage(args);
+        assert!(!ask, "{args:?}");
+        assert!(said.ends_with("Run `fiber --help` for usage."), "{said}");
+        assert_eq!(said.lines().count(), 1, "{said}");
+    }
+}
+
+#[test]
+fn a_dash_c_without_an_equals_is_a_usage_sentence() {
+    for (args, ask) in [
+        (&["fiber", "-c", "retry.attempts"][..], false),
+        (&["fiber", "ask", "-c", "retry.attempts", "hi"][..], true),
+    ] {
+        let used = usage(args);
+        assert_eq!(used.0, ask, "{args:?}");
+        assert!(
+            used.1.ends_with("Run `fiber --help` for usage."),
+            "{}",
+            used.1
+        );
+        assert_eq!(used.1.lines().count(), 1, "{}", used.1);
+    }
+}
+
+#[test]
 fn resume_takes_an_optional_id() {
-    let Invocation::Run(Some(Commands::Resume { id, credential })) =
+    let Invocation::Run(Some(Commands::Resume { id, credential }), _) =
         parse_from(["fiber", "resume"])
     else {
         panic!("bare resume");
     };
     assert_eq!(id, None);
     assert_eq!(credential, None);
-    let Invocation::Run(Some(Commands::Resume { id, credential })) =
+    let Invocation::Run(Some(Commands::Resume { id, credential }), _) =
         parse_from(["fiber", "resume", "s_12"])
     else {
         panic!("resume with an id");
@@ -1051,7 +1310,7 @@ fn resume_credential_rides_with_an_id_in_either_order() {
         vec!["fiber", "resume", "--credential", "work", "s_12"],
         vec!["fiber", "resume", "s_12", "--credential=work"],
     ] {
-        let Invocation::Run(Some(Commands::Resume { id, credential })) = parse_from(argv) else {
+        let Invocation::Run(Some(Commands::Resume { id, credential }), _) = parse_from(argv) else {
             panic!("resume with a credential");
         };
         assert_eq!(id.as_deref(), Some("s_12"));
@@ -1076,7 +1335,7 @@ fn resume_help_names_the_credential_flag() {
 
 #[test]
 fn continue_takes_no_arguments() {
-    let Invocation::Run(Some(Commands::Continue)) = parse_from(["fiber", "continue"]) else {
+    let Invocation::Run(Some(Commands::Continue), _) = parse_from(["fiber", "continue"]) else {
         panic!("bare continue");
     };
     let help = super::render_help(&["continue"]).unwrap();
@@ -1136,12 +1395,12 @@ fn a_search_flag_with_a_list_flag_is_a_usage_sentence() {
 
 #[test]
 fn models_takes_an_optional_search_and_json() {
-    let Invocation::Run(Some(Commands::Models(models))) = parse_from(["fiber", "models"]) else {
+    let Invocation::Run(Some(Commands::Models(models)), _) = parse_from(["fiber", "models"]) else {
         panic!("bare models");
     };
     assert_eq!(models.search, None);
     assert!(!models.json);
-    let Invocation::Run(Some(Commands::Models(models))) =
+    let Invocation::Run(Some(Commands::Models(models)), _) =
         parse_from(["fiber", "models", "acme", "--json"])
     else {
         panic!("models with a search and --json");
@@ -1259,7 +1518,7 @@ fn help_noun_verb_matches_the_verbs_help_flag() {
     assert!(pairs.len() >= 3, "{pairs:?}");
     for (noun, verb) in &pairs {
         let parsed = parse_from(["fiber", "help", noun, verb]);
-        let Invocation::Run(Some(Commands::Help { command })) = parsed else {
+        let Invocation::Run(Some(Commands::Help { command }), _) = parsed else {
             panic!("help {noun} {verb} did not parse: {parsed:?}");
         };
         let rendered = super::render_help(command.as_slice()).unwrap();
@@ -1350,7 +1609,7 @@ fn other_parse_errors_are_one_sentence() {
 #[test]
 fn ask_takes_one_prompt_then_an_optional_dash() {
     let parsed = parse_from(["fiber", "ask", "hi", "-"]);
-    let Invocation::Run(Some(Commands::Ask(args))) = parsed else {
+    let Invocation::Run(Some(Commands::Ask(args)), _) = parsed else {
         panic!("{parsed:?}");
     };
     assert_eq!(args.model, None);
@@ -1359,12 +1618,12 @@ fn ask_takes_one_prompt_then_an_optional_dash() {
         (Some("hi".to_owned()), true)
     );
 
-    let Invocation::Run(Some(Commands::Ask(args))) = parse_from(["fiber", "ask", "-"]) else {
+    let Invocation::Run(Some(Commands::Ask(args)), _) = parse_from(["fiber", "ask", "-"]) else {
         panic!("dash");
     };
     assert_eq!(super::ask_parts(&args.prompt).unwrap(), (None, true));
 
-    let Invocation::Run(Some(Commands::Ask(args))) = parse_from(["fiber", "ask", "hi"]) else {
+    let Invocation::Run(Some(Commands::Ask(args)), _) = parse_from(["fiber", "ask", "hi"]) else {
         panic!("prompt");
     };
     assert_eq!(
@@ -1372,7 +1631,7 @@ fn ask_takes_one_prompt_then_an_optional_dash() {
         (Some("hi".to_owned()), false)
     );
 
-    assert!(matches!(parse_from(["fiber"]), Invocation::Run(None)));
+    assert!(matches!(parse_from(["fiber"]), Invocation::Run(None, _)));
 
     let shape = "`fiber ask` takes one prompt, then an optional `-`; quote the prompt. Run `fiber --help` for usage.";
     for args in [
@@ -1380,7 +1639,7 @@ fn ask_takes_one_prompt_then_an_optional_dash() {
         &["fiber", "ask", "-", "a"],
         &["fiber", "ask", "-", "-"],
     ] {
-        let Invocation::Run(Some(Commands::Ask(ask))) = parse_from(args.iter().copied()) else {
+        let Invocation::Run(Some(Commands::Ask(ask)), _) = parse_from(args.iter().copied()) else {
             panic!("{args:?}");
         };
         assert_eq!(
@@ -1530,24 +1789,24 @@ fn the_search_subcommands_stay_hidden_but_parse_everything_after() {
             "hub"
         ]
     );
-    let Invocation::Run(Some(Commands::Grep { args })) =
+    let Invocation::Run(Some(Commands::Grep { args }), _) =
         parse_from(["fiber", "grep", "needle", "a.txt"])
     else {
         panic!("grep with a pattern and a path");
     };
     assert_eq!(args, [OsString::from("needle"), OsString::from("a.txt")]);
     // Clap handles no help or version flag for them: all is operands.
-    let Invocation::Run(Some(Commands::Grep { args })) =
+    let Invocation::Run(Some(Commands::Grep { args }), _) =
         parse_from(["fiber", "grep", "--help", "-n"])
     else {
         panic!("grep with flags");
     };
     assert_eq!(args, [OsString::from("--help"), OsString::from("-n")]);
-    let Invocation::Run(Some(Commands::Grep { args })) = parse_from(["fiber", "grep"]) else {
+    let Invocation::Run(Some(Commands::Grep { args }), _) = parse_from(["fiber", "grep"]) else {
         panic!("bare grep");
     };
     assert!(args.is_empty());
-    let Invocation::Run(Some(Commands::Grep { args })) =
+    let Invocation::Run(Some(Commands::Grep { args }), _) =
         parse_from(["fiber", "grep", "--", "-needle", "a.txt"])
     else {
         panic!("grep keeps the argv delimiter");
@@ -1560,7 +1819,7 @@ fn the_search_subcommands_stay_hidden_but_parse_everything_after() {
             OsString::from("a.txt")
         ]
     );
-    let Invocation::Run(Some(Commands::Find { args })) =
+    let Invocation::Run(Some(Commands::Find { args }), _) =
         parse_from(["fiber", "find", ".", "-name", "*.rs", "-o"])
     else {
         panic!("find with an expression");
@@ -1598,7 +1857,7 @@ fn the_image_subcommand_is_hidden_and_passes_its_arguments_through() {
             "hub"
         ]
     );
-    let Invocation::Run(Some(Commands::Image { args })) =
+    let Invocation::Run(Some(Commands::Image { args }), _) =
         parse_from(["fiber", "image", "a", "b", "c"])
     else {
         panic!("image with three operands");
@@ -1611,7 +1870,7 @@ fn the_image_subcommand_is_hidden_and_passes_its_arguments_through() {
             OsString::from("c")
         ]
     );
-    let Invocation::Run(Some(Commands::Image { args })) =
+    let Invocation::Run(Some(Commands::Image { args }), _) =
         parse_from(["fiber", "image", "--", "-a", "b", "c"])
     else {
         panic!("image keeps the argv delimiter");
@@ -1625,7 +1884,7 @@ fn find_keeps_the_argv_delimiter_like_grep() {
     // Clap consumes the argv delimiter `--`, so only the raw slice after
     // the subcommand restores it: without the find arm above, the parsed
     // args would miss it.
-    let Invocation::Run(Some(Commands::Find { args })) =
+    let Invocation::Run(Some(Commands::Find { args }), _) =
         parse_from(["fiber", "find", "--", "-name", "*.rs"])
     else {
         panic!("find keeps the argv delimiter");
@@ -1660,7 +1919,7 @@ fn session_resume_conflicts_with_prompt() {
 
 #[test]
 fn session_resume_with_a_prompt_and_a_parent_parses_as_a_delegate_resume() {
-    let Invocation::Run(Some(Commands::Session(args))) = parse_from([
+    let Invocation::Run(Some(Commands::Session(args)), _) = parse_from([
         "fiber",
         "session",
         "--id",
@@ -1685,7 +1944,7 @@ fn session_resume_with_a_prompt_and_a_parent_parses_as_a_delegate_resume() {
 
 #[test]
 fn session_resume_with_a_credential_parses_the_label() {
-    let Invocation::Run(Some(Commands::Session(args))) = parse_from([
+    let Invocation::Run(Some(Commands::Session(args)), _) = parse_from([
         "fiber",
         "session",
         "--id",
@@ -1706,7 +1965,7 @@ fn session_resume_with_a_credential_parses_the_label() {
 fn session_resume_with_an_equals_credential_parses_the_label() {
     // The hub spawns the resumed session with `--credential=<label>` as
     // one argument, so an empty or leading-hyphen label is one value.
-    let Invocation::Run(Some(Commands::Session(args))) = parse_from([
+    let Invocation::Run(Some(Commands::Session(args)), _) = parse_from([
         "fiber",
         "session",
         "--id",
@@ -1835,7 +2094,7 @@ fn session_parent_without_its_delegate_id_or_prompt_is_a_usage_error() {
 fn session_parent_conflicts_with_resume_and_worktree() {
     // `--resume` with a prompt and a parent is a delegate's resume: it
     // parses, and the resume runs the prompt as one turn.
-    let Invocation::Run(Some(Commands::Session(args))) = parse_from([
+    let Invocation::Run(Some(Commands::Session(args)), _) = parse_from([
         "fiber",
         "session",
         "--id",
@@ -2079,7 +2338,7 @@ fn help_hub_install_prints_that_commands_help() {
     assert!(
         matches!(
             parsed,
-            Invocation::Run(Some(Commands::Help { ref command })) if command == &["hub", "install"]
+            Invocation::Run(Some(Commands::Help { ref command }), _) if command == &["hub", "install"]
         ),
         "{parsed:?}"
     );
@@ -2087,14 +2346,14 @@ fn help_hub_install_prints_that_commands_help() {
 
 #[test]
 fn the_hidden_release_install_takes_a_version_and_a_base_url() {
-    let Invocation::Run(Some(Commands::ReleaseInstall { version, base_url })) =
+    let Invocation::Run(Some(Commands::ReleaseInstall { version, base_url }), _) =
         parse_from(["fiber", "release-install", "0.3.0"])
     else {
         panic!("release-install with a version");
     };
     assert_eq!(version, "0.3.0");
     assert_eq!(base_url, None);
-    let Invocation::Run(Some(Commands::ReleaseInstall { version, base_url })) = parse_from([
+    let Invocation::Run(Some(Commands::ReleaseInstall { version, base_url }), _) = parse_from([
         "fiber",
         "release-install",
         "0.3.0",
@@ -2121,13 +2380,13 @@ fn the_hidden_release_install_takes_a_version_and_a_base_url() {
 
 #[test]
 fn the_hidden_refresh_child_takes_provider_names_only() {
-    let Invocation::Run(Some(Commands::RefreshModelLists { providers })) =
+    let Invocation::Run(Some(Commands::RefreshModelLists { providers }), _) =
         parse_from(["fiber", "refresh-model-lists", "openai", "anthropic"])
     else {
         panic!("refresh-model-lists with two providers");
     };
     assert_eq!(providers, ["openai", "anthropic"]);
-    let Invocation::Run(Some(Commands::RefreshModelLists { providers })) =
+    let Invocation::Run(Some(Commands::RefreshModelLists { providers }), _) =
         parse_from(["fiber", "refresh-model-lists"])
     else {
         panic!("bare refresh-model-lists");
@@ -2210,15 +2469,18 @@ fn mcp_parses_into_its_invocation() {
     let cases: Vec<(&[&str], Invocation)> = vec![
         (
             &["fiber", "mcp", "add", "docs", "https://example.test/mcp"],
-            Invocation::Run(Some(Commands::Mcp(McpCommands::Add(McpAddArgs {
-                project: false,
-                repo: false,
-                name: "docs".to_owned(),
-                url: Some("https://example.test/mcp".to_owned()),
-                env: Vec::new(),
-                secret: Vec::new(),
-                command: Vec::new(),
-            })))),
+            Invocation::Run(
+                Some(Commands::Mcp(McpCommands::Add(McpAddArgs {
+                    project: false,
+                    repo: false,
+                    name: "docs".to_owned(),
+                    url: Some("https://example.test/mcp".to_owned()),
+                    env: Vec::new(),
+                    secret: Vec::new(),
+                    command: Vec::new(),
+                }))),
+                TopLevel::default(),
+            ),
         ),
         (
             &[
@@ -2229,15 +2491,18 @@ fn mcp_parses_into_its_invocation() {
                 "docs",
                 "https://example.test/mcp",
             ],
-            Invocation::Run(Some(Commands::Mcp(McpCommands::Add(McpAddArgs {
-                project: false,
-                repo: true,
-                name: "docs".to_owned(),
-                url: Some("https://example.test/mcp".to_owned()),
-                env: Vec::new(),
-                secret: Vec::new(),
-                command: Vec::new(),
-            })))),
+            Invocation::Run(
+                Some(Commands::Mcp(McpCommands::Add(McpAddArgs {
+                    project: false,
+                    repo: true,
+                    name: "docs".to_owned(),
+                    url: Some("https://example.test/mcp".to_owned()),
+                    env: Vec::new(),
+                    secret: Vec::new(),
+                    command: Vec::new(),
+                }))),
+                TopLevel::default(),
+            ),
         ),
         (
             &[
@@ -2255,35 +2520,44 @@ fn mcp_parses_into_its_invocation() {
                 "-y",
                 "pkg",
             ],
-            Invocation::Run(Some(Commands::Mcp(McpCommands::Add(McpAddArgs {
-                project: true,
-                repo: false,
-                name: "x".to_owned(),
-                url: None,
-                env: vec!["A=1".to_owned()],
-                secret: vec!["TOKEN".to_owned()],
-                command: vec!["npx".to_owned(), "-y".to_owned(), "pkg".to_owned()],
-            })))),
+            Invocation::Run(
+                Some(Commands::Mcp(McpCommands::Add(McpAddArgs {
+                    project: true,
+                    repo: false,
+                    name: "x".to_owned(),
+                    url: None,
+                    env: vec!["A=1".to_owned()],
+                    secret: vec!["TOKEN".to_owned()],
+                    command: vec!["npx".to_owned(), "-y".to_owned(), "pkg".to_owned()],
+                }))),
+                TopLevel::default(),
+            ),
         ),
         (
             &["fiber", "mcp", "remove", "docs"],
-            Invocation::Run(Some(Commands::Mcp(McpCommands::Remove(McpRemoveArgs {
-                project: false,
-                repo: false,
-                name: "docs".to_owned(),
-            })))),
+            Invocation::Run(
+                Some(Commands::Mcp(McpCommands::Remove(McpRemoveArgs {
+                    project: false,
+                    repo: false,
+                    name: "docs".to_owned(),
+                }))),
+                TopLevel::default(),
+            ),
         ),
         (
             &["fiber", "mcp", "remove", "--repo", "docs"],
-            Invocation::Run(Some(Commands::Mcp(McpCommands::Remove(McpRemoveArgs {
-                project: false,
-                repo: true,
-                name: "docs".to_owned(),
-            })))),
+            Invocation::Run(
+                Some(Commands::Mcp(McpCommands::Remove(McpRemoveArgs {
+                    project: false,
+                    repo: true,
+                    name: "docs".to_owned(),
+                }))),
+                TopLevel::default(),
+            ),
         ),
         (
             &["fiber", "mcp", "list"],
-            Invocation::Run(Some(Commands::Mcp(McpCommands::List))),
+            Invocation::Run(Some(Commands::Mcp(McpCommands::List)), TopLevel::default()),
         ),
         // Both a url and a command parses; running it is the usage error
         // the binary tests pin.
@@ -2297,15 +2571,18 @@ fn mcp_parses_into_its_invocation() {
                 "--",
                 "npx",
             ],
-            Invocation::Run(Some(Commands::Mcp(McpCommands::Add(McpAddArgs {
-                project: false,
-                repo: false,
-                name: "x".to_owned(),
-                url: Some("https://example.test/mcp".to_owned()),
-                env: Vec::new(),
-                secret: Vec::new(),
-                command: vec!["npx".to_owned()],
-            })))),
+            Invocation::Run(
+                Some(Commands::Mcp(McpCommands::Add(McpAddArgs {
+                    project: false,
+                    repo: false,
+                    name: "x".to_owned(),
+                    url: Some("https://example.test/mcp".to_owned()),
+                    env: Vec::new(),
+                    secret: Vec::new(),
+                    command: vec!["npx".to_owned()],
+                }))),
+                TopLevel::default(),
+            ),
         ),
     ];
     for (argv, expected) in &cases {
@@ -2315,8 +2592,8 @@ fn mcp_parses_into_its_invocation() {
         // `Debug` comparison would not prove values parsed.
         match (parsed, expected) {
             (
-                Invocation::Run(Some(Commands::Mcp(actual))),
-                Invocation::Run(Some(Commands::Mcp(wanted))),
+                Invocation::Run(Some(Commands::Mcp(actual)), _),
+                Invocation::Run(Some(Commands::Mcp(wanted)), _),
             ) => match (actual, wanted) {
                 (McpCommands::Add(actual), McpCommands::Add(wanted)) => {
                     assert_eq!(actual.project, wanted.project, "{argv:?}");
@@ -2418,15 +2695,17 @@ fn mcp_login_parses_into_its_invocation() {
     ];
     for (argv, server, login) in &cases {
         match parse_from(argv.iter().copied()) {
-            Invocation::Run(Some(Commands::Mcp(McpCommands::Login { server: name }))) if *login => {
+            Invocation::Run(Some(Commands::Mcp(McpCommands::Login { server: name })), _)
+                if *login =>
+            {
                 assert_eq!(name, *server, "{argv:?}");
             }
-            Invocation::Run(Some(Commands::Mcp(McpCommands::Logout { server: name })))
+            Invocation::Run(Some(Commands::Mcp(McpCommands::Logout { server: name })), _)
                 if !login =>
             {
                 assert_eq!(name, *server, "{argv:?}");
             }
-            Invocation::Run(_) | Invocation::Print(_) | Invocation::Usage { .. } => {
+            Invocation::Run(_, _) | Invocation::Print(_) | Invocation::Usage { .. } => {
                 panic!("not an MCP login invocation for {argv:?}")
             }
         }

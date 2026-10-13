@@ -94,7 +94,12 @@ pub fn run(
     // The viewer's copies live under Fiber home, taken before home
     // keeps the launch description.
     let images_dir = launch.images.clone();
+    // Bare `fiber`'s `--model` and `-c`, normalized into the per-run
+    // layer: taken out before home keeps the launch description, so
+    // each `start` carries them in `overrides`.
+    let launch_overrides = std::mem::take(&mut launch.overrides);
     app.set_home(launch);
+    app.set_launch_overrides(launch_overrides);
     if pick_at_start {
         app.open_model_picker(crate::model_picker::Mode::Choose);
     }

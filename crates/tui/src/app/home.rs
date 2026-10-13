@@ -99,6 +99,14 @@ impl App {
         });
     }
 
+    /// Stores bare `fiber`'s `--model` and `-c`, normalized into the
+    /// per-run layer: each `start` carries them in `overrides`
+    /// (`docs/invocation.md`, "Sessions"). The loop calls it once with
+    /// the launch description's layer, before the first frame.
+    pub(crate) fn set_launch_overrides(&mut self, overrides: Vec<String>) {
+        self.launch_overrides = overrides;
+    }
+
     /// Whether home draws: home is set, no session is attached, and neither
     /// the key map nor the approval panel covers the screen.
     pub(crate) fn on_home(&self) -> bool {
@@ -749,10 +757,12 @@ impl App {
     }
 
     /// The `start` args: the picked workspace on home, else the launch
-    /// workspace, and the launch directory as today. The new worktree
-    /// switch adds `"worktree": true` only while it shows and is on.
-    /// Sending one hides the placeholder and clears the blocker lines
-    /// until the run ends.
+    /// workspace, and the launch directory as today. Bare `fiber`'s
+    /// `--model` and `-c` ride in `overrides`, normalized into the
+    /// per-run layer (`docs/invocation.md`, "Sessions"). The new
+    /// worktree switch adds `"worktree": true` only while it shows and
+    /// is on. Sending one hides the placeholder and clears the blocker
+    /// lines until the run ends.
     pub(super) fn start_args(&mut self) -> Value {
         match &mut self.home {
             Some(home) => {
@@ -764,11 +774,21 @@ impl App {
                     .map(str::to_owned)
                     .unwrap_or_else(|| home.launch.workspace.display().to_string());
                 let mut args = json!({"workspace": workspace});
-                if home.chooser.worktree()
-                    && home.in_git()
-                    && let Some(object) = args.as_object_mut()
-                {
-                    object.insert("worktree".to_owned(), json!(true));
+                if let Some(object) = args.as_object_mut() {
+                    if !self.launch_overrides.is_empty() {
+                        object.insert(
+                            "overrides".to_owned(),
+                            Value::Array(
+                                self.launch_overrides
+                                    .iter()
+                                    .map(|override_text| Value::String(override_text.clone()))
+                                    .collect(),
+                            ),
+                        );
+                    }
+                    if home.chooser.worktree() && home.in_git() {
+                        object.insert("worktree".to_owned(), json!(true));
+                    }
                 }
                 args
             }

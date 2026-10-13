@@ -3715,3 +3715,31 @@ fn start_sends_worktree_only_when_the_switch_is_on_and_shown() {
     assert_eq!(args["workspace"], "/w");
     assert!(args.get("worktree").is_none());
 }
+
+#[test]
+fn start_carries_the_terminal_layer_in_overrides() {
+    // No layer, no key: the shape every existing start keeps.
+    let mut app = home();
+    let bare = app.start_args();
+    assert_eq!(bare["workspace"], "/w");
+    assert!(bare.get("overrides").is_none());
+    // The layer rides in order, beside the workspace.
+    app.set_launch_overrides(vec![
+        "model=acme/m".to_owned(),
+        "retry.attempts=2".to_owned(),
+    ]);
+    let args = app.start_args();
+    assert_eq!(args["workspace"], "/w");
+    assert_eq!(
+        args["overrides"],
+        json!(["model=acme/m", "retry.attempts=2"])
+    );
+    assert!(args.get("worktree").is_none());
+    // Beside the worktree switch: both keys ride.
+    let mut app = git_home();
+    app.launch_overrides = vec!["model=acme/m".to_owned()];
+    assert_eq!(app.home_click(Spot::Worktree), Effect::None);
+    let args = app.start_args();
+    assert_eq!(args["overrides"], json!(["model=acme/m"]));
+    assert_eq!(args["worktree"], true);
+}

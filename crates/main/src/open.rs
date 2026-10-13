@@ -53,7 +53,7 @@ pub(crate) fn resume(
         return code;
     }
     let Some(selector) = selector else {
-        return crate::terminal(fiber, tui::OpenAt::List);
+        return crate::terminal(fiber, tui::OpenAt::List, None, Vec::new());
     };
     let home = match config::fiber_home_from_env() {
         Ok(home) => home,
@@ -76,7 +76,12 @@ pub(crate) fn resume(
         Err(e) => return crate::fail(crate::failed(e.code(), e)),
     };
     crate::crash::attach(&id);
-    crate::terminal(fiber, tui::OpenAt::Session(id, credential))
+    crate::terminal(
+        fiber,
+        tui::OpenAt::Session(id, credential),
+        None,
+        Vec::new(),
+    )
 }
 
 /// `fiber continue`: the session used most recently in this project. The
@@ -107,7 +112,7 @@ pub(crate) fn continue_latest(fiber: Result<PathBuf, String>) -> i32 {
         Err(e) => return crate::fail(e),
     };
     crate::crash::attach(&id);
-    crate::terminal(fiber, tui::OpenAt::Session(id, None))
+    crate::terminal(fiber, tui::OpenAt::Session(id, None), None, Vec::new())
 }
 
 /// The session `continue` opens in `sessions`: the most recent one, or a

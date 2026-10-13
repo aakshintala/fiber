@@ -101,7 +101,7 @@ const GRAMMAR: &[(&str, &[&str], &[&str])] = &[
             "help",
             "hub",
         ],
-        &["-h", "--help", "-v", "--version"],
+        &["--model", "-c", "-h", "--help", "-v", "--version"],
     ),
     (
         "ask",

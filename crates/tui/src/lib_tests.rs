@@ -733,6 +733,33 @@ fn run_redraws_on_sigwinch_at_the_new_size() {
     assert_eq!(code, 0);
 }
 
+#[test]
+fn run_returns_one_when_the_tty_cannot_be_set_up() {
+    // `/dev/null` is no terminal: `term::setup` fails before any frame,
+    // so `run` returns 1 without reading the hub or drawing. The thread
+    // plus [`DEADLINE`] keeps a regression hanging the suite into a
+    // failure instead.
+    let tty = File::open("/dev/null").unwrap_or_else(|err| panic!("open /dev/null: {err}"));
+    let (done, finished) = mpsc::channel();
+    std::thread::Builder::new()
+        .name("lib-run".to_owned())
+        .spawn(move || {
+            let code = super::run(
+                tty,
+                launch(),
+                Box::new(|| Err(io::Error::other("unused"))),
+                Box::new(|_| {}),
+                fakes::clock::FakeClock::new(),
+            );
+            done.send(code).unwrap_or(());
+        })
+        .unwrap_or_else(|err| panic!("spawn: {err}"));
+    let code = Deadline::after(DEADLINE)
+        .recv(&finished)
+        .unwrap_or_else(|err| panic!("waited {DEADLINE:?} for run to return: {err}"));
+    assert_eq!(code, 1);
+}
+
 /// A review request offering the rule `npm test`, as the hub relays it.
 pub(super) fn offering(request: &str) -> Input {
     let payload = serde_json::json!({

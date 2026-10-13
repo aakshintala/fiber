@@ -80,12 +80,19 @@ const HELP_SUFFIX: &str = " Run `fiber --help` for usage.";
 const ASK_SHAPE: &str = "`fiber ask` takes one prompt, then an optional `-`; quote the prompt. Run `fiber --help` for usage.";
 
 /// What `fiber` was asked to do, or the parse error.
+#[allow(
+    clippy::large_enum_variant,
+    reason = "one invocation is parsed and matched once per process; boxing would allocate for no path that copies it"
+)]
 #[derive(Debug)]
 pub(crate) enum Invocation {
     /// Help or version, printed with clap's printer.
     Print(clap::Error),
-    /// A command, or no arguments.
-    Run(Option<Commands>),
+    /// A command, or no arguments. The top-level flags are bare
+    /// `fiber`'s per-run layer; with any subcommand they are a usage
+    /// error, through clap's `args_conflicts_with_subcommands`, so a
+    /// command never carries them.
+    Run(Option<Commands>, TopLevel),
     /// A usage error. `ask` is whether the invocation runs a session:
     /// `ask`, or the internal `session` command. Both fail before any
     /// session through the same pre-session exit.
@@ -97,14 +104,38 @@ pub(crate) enum Invocation {
     },
 }
 
+/// Bare `fiber`'s `--model` and `-c`: the terminal's per-run layer,
+/// as `-c` reads it (`docs/configuration.md`, "Layers").
+#[derive(Debug, Default)]
+pub(crate) struct TopLevel {
+    /// `--model <model>`, as `-c model=<model>` reads it.
+    pub(crate) model: Option<String>,
+    /// Each `-c <key>=<value>`, in order.
+    pub(crate) overrides: Vec<String>,
+}
+
 #[derive(Parser)]
 #[command(
     name = "fiber",
     about = "Fiber, a coding agent.",
     disable_version_flag = true,
-    disable_help_subcommand = true
+    disable_help_subcommand = true,
+    args_conflicts_with_subcommands = true
 )]
 struct Cli {
+    /// The model for this terminal run, as a person types it: bare
+    /// `fiber` only, carried on each `start` in `overrides`
+    /// (`docs/invocation.md`, "Sessions").
+    #[arg(long, value_name = "model")]
+    model: Option<String>,
+
+    /// One configuration key for this terminal run, `<key>=<value>`:
+    /// bare `fiber` only, carried on each `start` in `overrides`. May
+    /// repeat; a later one wins, and every one wins over `--model`
+    /// (`docs/configuration.md`, "Layers").
+    #[arg(short = 'c', value_name = "key>=<value", value_parser = parse_override)]
+    overrides: Vec<String>,
+
     #[command(subcommand)]
     command: Option<Commands>,
 }
@@ -772,20 +803,28 @@ fn parse_from(args: impl IntoIterator<Item = impl Into<OsString>>) -> Invocation
             // keeps `--` before the pattern, for the built-in and the
             // fallback alike.
             Ok(cli) if matches!(cli.command, Some(Commands::Grep { .. })) => {
-                Invocation::Run(Some(Commands::Grep {
-                    args: passthrough(&args, "grep"),
-                }))
+                // No top-level flag reaches a subcommand: clap's
+                // `args_conflicts_with_subcommands` refused them, so
+                // the layer is empty here and below.
+                Invocation::Run(
+                    Some(Commands::Grep {
+                        args: passthrough(&args, "grep"),
+                    }),
+                    TopLevel::default(),
+                )
             }
-            Ok(cli) if matches!(cli.command, Some(Commands::Find { .. })) => {
-                Invocation::Run(Some(Commands::Find {
+            Ok(cli) if matches!(cli.command, Some(Commands::Find { .. })) => Invocation::Run(
+                Some(Commands::Find {
                     args: passthrough(&args, "find"),
-                }))
-            }
-            Ok(cli) if matches!(cli.command, Some(Commands::Image { .. })) => {
-                Invocation::Run(Some(Commands::Image {
+                }),
+                TopLevel::default(),
+            ),
+            Ok(cli) if matches!(cli.command, Some(Commands::Image { .. })) => Invocation::Run(
+                Some(Commands::Image {
                     args: passthrough(&args, "image"),
-                }))
-            }
+                }),
+                TopLevel::default(),
+            ),
             // `--resume` with an empty value names no session: a usage
             // error before `resolve` runs, which itself matches none.
             Ok(cli) => match cli.command {
@@ -822,7 +861,13 @@ fn parse_from(args: impl IntoIterator<Item = impl Into<OsString>>) -> Invocation
                             .to_owned(),
                     }
                 }
-                command => Invocation::Run(command),
+                command => Invocation::Run(
+                    command,
+                    TopLevel {
+                        model: cli.model,
+                        overrides: cli.overrides,
+                    },
+                ),
             },
             Err(error) => usage(error, ask),
         },

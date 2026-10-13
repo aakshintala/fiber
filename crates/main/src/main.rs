@@ -100,21 +100,25 @@ fn run() -> i32 {
             error.print().unwrap_or(());
             0
         }
-        cli::Invocation::Run(Some(cli::Commands::Version)) => {
+        cli::Invocation::Run(Some(cli::Commands::Version), _) => {
             write!(io::stdout().lock(), "{}", cli::version_line()).unwrap_or(());
             0
         }
-        cli::Invocation::Run(Some(cli::Commands::Completion { shell })) => completion::print(shell),
-        cli::Invocation::Run(Some(cli::Commands::Help { command })) => {
+        cli::Invocation::Run(Some(cli::Commands::Completion { shell }), _) => {
+            completion::print(shell)
+        }
+        cli::Invocation::Run(Some(cli::Commands::Help { command }), _) => {
             print_help(command.as_slice())
         }
         // `fiber` with no arguments opens the terminal: this tty as a
         // client of the hub, starting one when none runs.
-        cli::Invocation::Run(None) => terminal(fiber, tui::OpenAt::Home),
-        cli::Invocation::Run(Some(cli::Commands::Resume { id, credential })) => {
+        cli::Invocation::Run(None, top) => {
+            terminal(fiber, tui::OpenAt::Home, top.model, top.overrides)
+        }
+        cli::Invocation::Run(Some(cli::Commands::Resume { id, credential }), _) => {
             open::resume(id, credential, fiber)
         }
-        cli::Invocation::Run(Some(cli::Commands::Continue)) => open::continue_latest(fiber),
+        cli::Invocation::Run(Some(cli::Commands::Continue), _) => open::continue_latest(fiber),
         cli::Invocation::Usage {
             ask: true,
             sentence,
@@ -126,7 +130,7 @@ fn run() -> i32 {
             eprintln!("fiber: {sentence}");
             2
         }
-        cli::Invocation::Run(Some(cli::Commands::Ask(args))) => {
+        cli::Invocation::Run(Some(cli::Commands::Ask(args)), _) => {
             match cli::ask_parts(&args.prompt) {
                 Ok((prompt, dash)) => ask(
                     per_run(args.model, args.overrides),
@@ -141,14 +145,16 @@ fn run() -> i32 {
                 Err(sentence) => ask_failed(usage(sentence)),
             }
         }
-        cli::Invocation::Run(Some(cli::Commands::ExtensionCase { case })) => {
+        cli::Invocation::Run(Some(cli::Commands::ExtensionCase { case }), _) => {
             case::run::extension_case(case, clock, fiber)
         }
-        cli::Invocation::Run(Some(cli::Commands::Session(args))) => {
+        cli::Invocation::Run(Some(cli::Commands::Session(args)), _) => {
             session_command::run(args, clock, fiber)
         }
-        cli::Invocation::Run(Some(cli::Commands::Hub(command))) => hub_command::run(command, fiber),
-        cli::Invocation::Run(Some(cli::Commands::Sessions(args))) => match args.command {
+        cli::Invocation::Run(Some(cli::Commands::Hub(command)), _) => {
+            hub_command::run(command, fiber)
+        }
+        cli::Invocation::Run(Some(cli::Commands::Sessions(args)), _) => match args.command {
             None => sessions_list(args.all, args.json, clock.as_ref(), fiber),
             Some(cli::SessionsCommands::Delete { cascade, yes, id }) => {
                 sessions_delete(&id, cascade, yes, clock.as_ref(), fiber)
@@ -173,13 +179,13 @@ fn run() -> i32 {
                 fiber,
             ),
         },
-        cli::Invocation::Run(Some(cli::Commands::Models(args))) => {
+        cli::Invocation::Run(Some(cli::Commands::Models(args)), _) => {
             models_entry(args, clock, fiber, read_signals::CancelOnSignal::new)
         }
-        cli::Invocation::Run(Some(cli::Commands::RefreshModelLists { providers })) => {
+        cli::Invocation::Run(Some(cli::Commands::RefreshModelLists { providers }), _) => {
             refresh_entry(&providers, clock, read_signals::CancelOnSignal::new)
         }
-        cli::Invocation::Run(Some(cli::Commands::ReleaseInstall { version, base_url })) => {
+        cli::Invocation::Run(Some(cli::Commands::ReleaseInstall { version, base_url }), _) => {
             ::cli::release_install(
                 &version,
                 base_url.as_deref(),
@@ -188,7 +194,7 @@ fn run() -> i32 {
                 clock.as_ref(),
             )
         }
-        cli::Invocation::Run(Some(cli::Commands::Extension(cmd))) => match cmd {
+        cli::Invocation::Run(Some(cli::Commands::Extension(cmd)), _) => match cmd {
             cli::ExtensionCommands::Install {
                 name_or_path,
                 project,
@@ -210,13 +216,13 @@ fn run() -> i32 {
             cli::ExtensionCommands::List => ::cli::extension_list(clock.as_ref()),
             cli::ExtensionCommands::Test { path } => ::cli::extension_test(path.as_deref(), fiber),
         },
-        cli::Invocation::Run(Some(cli::Commands::Mcp(command))) => {
+        cli::Invocation::Run(Some(cli::Commands::Mcp(command)), _) => {
             mcp_command(command, Arc::clone(&clock))
         }
-        cli::Invocation::Run(Some(cli::Commands::Approve(args))) => {
+        cli::Invocation::Run(Some(cli::Commands::Approve(args)), _) => {
             ::cli::approve(args.yes, Arc::clone(&clock))
         }
-        cli::Invocation::Run(Some(cli::Commands::Config(cmd))) => match cmd {
+        cli::Invocation::Run(Some(cli::Commands::Config(cmd)), _) => match cmd {
             cli::ConfigCommands::Get { key } => ::cli::config_get(&key),
             cli::ConfigCommands::Set {
                 project,
@@ -234,13 +240,13 @@ fn run() -> i32 {
                 ::cli::config_set(layer, &key, &value)
             }
         },
-        cli::Invocation::Run(Some(cli::Commands::Login(args))) => ::cli::run_login(
+        cli::Invocation::Run(Some(cli::Commands::Login(args)), _) => ::cli::run_login(
             args.name.as_deref(),
             args.label.as_deref(),
             args.device,
             Arc::clone(&clock),
         ),
-        cli::Invocation::Run(Some(cli::Commands::Logout(args))) => {
+        cli::Invocation::Run(Some(cli::Commands::Logout(args)), _) => {
             let target = match (args.label.as_deref(), args.all) {
                 (_, true) => ::cli::LogoutTarget::All,
                 (Some(label), false) => ::cli::LogoutTarget::Label(label),
@@ -250,11 +256,11 @@ fn run() -> i32 {
         }
         // The hidden search subcommands hold no feature logic: they only
         // call into `tools` (`docs/architecture.md`, "The call rules").
-        cli::Invocation::Run(Some(cli::Commands::Grep { args })) => tools::grep_main(args),
-        cli::Invocation::Run(Some(cli::Commands::Find { args })) => tools::find_main(args),
+        cli::Invocation::Run(Some(cli::Commands::Grep { args }), _) => tools::grep_main(args),
+        cli::Invocation::Run(Some(cli::Commands::Find { args }), _) => tools::find_main(args),
         // The image child holds no feature logic either: `picture` is the
         // only crate that links image code.
-        cli::Invocation::Run(Some(cli::Commands::Image { args })) => picture::main(args),
+        cli::Invocation::Run(Some(cli::Commands::Image { args }), _) => picture::main(args),
     }
 }
 
@@ -654,8 +660,15 @@ fn terminal_guards(
 /// `fiber` with no arguments: the terminal on this tty, a client of the hub
 /// (`docs/invocation.md`, "Two doors"). Without a tty it is a usage error
 /// naming `fiber ask`. The hub it starts listens on its local socket only
-/// and is never waited on.
-fn terminal(fiber: Result<PathBuf, String>, open_at: tui::OpenAt) -> i32 {
+/// and is never waited on. `model` and `overrides` are the run's top-level
+/// flags, forwarded into the launch description; a resume or a continue
+/// carries none.
+fn terminal(
+    fiber: Result<PathBuf, String>,
+    open_at: tui::OpenAt,
+    model: Option<String>,
+    overrides: Vec<String>,
+) -> i32 {
     if let Some(code) = open::needs_tty() {
         return code;
     }
@@ -717,7 +730,15 @@ fn terminal(fiber: Result<PathBuf, String>, open_at: tui::OpenAt) -> i32 {
     let launch_home = home.clone();
     let connect: tui::Connect = Box::new(move || connect_hub(&home, &fiber, hub_clock.as_ref()));
     let identity = doors::project(&workspace);
-    let mut launch = launch::launch(workspace, &identity, &config, theme, &launch_home);
+    let mut launch = launch::launch(
+        workspace,
+        &identity,
+        &config,
+        theme,
+        &launch_home,
+        model,
+        overrides,
+    );
     launch.models = Some(models);
     launch.configure = Some(seam);
     launch.open_at = open_at;
