@@ -10,7 +10,7 @@ use std::io::{self, Read, Write};
 use std::net::{SocketAddr, TcpListener, TcpStream};
 use std::sync::{
     Arc, Condvar, Mutex, MutexGuard, PoisonError,
-    atomic::{AtomicBool, Ordering},
+    atomic::{AtomicBool, AtomicU8, Ordering},
     mpsc,
 };
 use std::thread::{self, JoinHandle, ThreadId};
@@ -235,6 +235,14 @@ pub(crate) enum WindowOutcome {
     Stopped,
 }
 
+/// The core's open CONNECT tunnels: shutdown breaks every one.
+struct TunnelState {
+    /// The next tunnel's id.
+    next: u64,
+    /// Each open tunnel's sockets, broken on shutdown.
+    live: Vec<(u64, TcpStream, TcpStream)>,
+}
+
 struct Shared {
     listener: TcpListener,
     clock: Arc<dyn Clock>,
@@ -257,6 +265,9 @@ struct Shared {
     windows: Mutex<usize>,
     #[cfg(test)]
     windows_changed: Condvar,
+    /// Open tunnels, broken by shutdown: each entry's sockets end every
+    /// blocked copy when the server stops.
+    tunnels: Mutex<TunnelState>,
 }
 
 impl Shared {
@@ -403,41 +414,185 @@ impl Connection {
     }
 
     /// Writes every byte and flushes: false when shutdown or the peer
-    /// ended the connection first.
+    /// ended the connection first. Response I/O runs its own operation
+    /// budget, not the request's read budget.
     pub(crate) fn write_all(&mut self, bytes: &[u8], phase: &'static str) -> bool {
-        let mut written = 0;
-        while written != bytes.len() {
-            let Some(next) = bytes.get(written..) else {
-                return false;
-            };
-            match self.stream.write(next) {
-                Ok(0) => return false,
-                Ok(n) => written += n,
-                Err(error) if error.kind() == io::ErrorKind::WouldBlock => {}
-                Err(error) if error.kind() == io::ErrorKind::Interrupted => continue,
-                Err(_) => return false,
+        let op = self.op_budget();
+        let (stream, mut ctx) = self.parts(&op);
+        pump(stream, bytes, phase, &mut ctx)
+    }
+
+    /// A fresh operation budget for response I/O: a reply, a stall, a
+    /// pause or a tunnel handshake each bounds itself, never reusing
+    /// the read budget.
+    pub(crate) fn op_budget(&self) -> RequestBudget {
+        RequestBudget::start_on(
+            &self.shared.clock,
+            self.shared.limits.request,
+            self.shared.limits.guard,
+        )
+    }
+
+    /// Holds `pause` for `phase` under `op`: released when the test
+    /// releases or drops its sender, stopped on shutdown or expiry.
+    pub(crate) fn pause(&mut self, pause: &Pause, op: &RequestBudget, phase: &'static str) -> PauseEnd {
+        match pause.reached.send(()) {
+            Ok(()) | Err(_) => {}
+        }
+        loop {
+            match lock(&pause.release).try_recv() {
+                Ok(()) | Err(mpsc::TryRecvError::Disconnected) => return PauseEnd::Released,
+                Err(mpsc::TryRecvError::Empty) => {}
             }
-            if written != bytes.len() {
-                match self.wait(phase) {
-                    WaitEnd::Waited => {}
-                    WaitEnd::Expired => self.expired(phase),
-                    WaitEnd::Stopped => return false,
+            match self.shared.wait(op, &self.name, phase, &mut self.seq, &mut self.acked) {
+                WaitEnd::Waited => {}
+                WaitEnd::Expired => expired(op, &self.name, phase),
+                WaitEnd::Stopped => return PauseEnd::Stopped,
+            }
+        }
+    }
+
+    /// The stream and wait context for one operation's writes.
+    fn parts<'a>(&'a mut self, op: &'a RequestBudget) -> (&'a mut TcpStream, WaitCtx<'a>) {
+        let Self { stream, name, shared, seq, acked, .. } = self;
+        (
+            stream,
+            WaitCtx {
+                budget: op,
+                name,
+                shared,
+                seq,
+                acked,
+            },
+        )
+    }
+
+    /// Writes the whole head and body, then the connection closes behind
+    /// the caller: the scripted bytes go as supplied.
+    pub(crate) fn reply_full(
+        &mut self,
+        head: &[u8],
+        body: &[u8],
+        pause: Option<&Pause>,
+    ) -> ReplyEnd {
+        let op = self.op_budget();
+        if let Some(pause) = pause
+            && self.pause(pause, &op, "to pause before the response") == PauseEnd::Stopped
+        {
+            return ReplyEnd::Stopped;
+        }
+        for (bytes, phase) in [
+            (head, "to write the response head"),
+            (body, "to write the response body"),
+        ] {
+            let (stream, mut ctx) = self.parts(&op);
+            if !pump(stream, bytes, phase, &mut ctx) {
+                return ReplyEnd::Stopped;
+            }
+        }
+        ReplyEnd::Done
+    }
+
+    /// Streams `pieces` under `head`: chunked framing for a recorded
+    /// stream, raw bytes for SSE. Pauses before the reply and between
+    /// pieces when held.
+    pub(crate) fn reply_stream(
+        &mut self,
+        head: &[u8],
+        pieces: &[Vec<u8>],
+        framing: Framing,
+        pause: Option<&Pause>,
+    ) -> ReplyEnd {
+        let op = self.op_budget();
+        if let Some(pause) = pause
+            && self.pause(pause, &op, "to pause before the response") == PauseEnd::Stopped
+        {
+            return ReplyEnd::Stopped;
+        }
+        let (stream, mut ctx) = self.parts(&op);
+        if !pump(stream, head, "to write the stream head", &mut ctx) {
+            return ReplyEnd::Stopped;
+        }
+        for (index, piece) in pieces.iter().enumerate() {
+            if index != 0
+                && let Some(pause) = pause
+                && self.pause(pause, &op, "to pause between stream pieces") == PauseEnd::Stopped
+            {
+                return ReplyEnd::Stopped;
+            }
+            if framing == Framing::Chunked {
+                let size = format!("{:x}\r\n", piece.len());
+                let (stream, mut ctx) = self.parts(&op);
+                if !pump(stream, size.as_bytes(), "to write a piece size", &mut ctx) {
+                    return ReplyEnd::Stopped;
+                }
+            }
+            let (stream, mut ctx) = self.parts(&op);
+            if !pump(stream, piece, "to write a stream piece", &mut ctx) {
+                return ReplyEnd::Stopped;
+            }
+            if framing == Framing::Chunked {
+                let (stream, mut ctx) = self.parts(&op);
+                if !pump(stream, b"\r\n", "to end a stream piece", &mut ctx) {
+                    return ReplyEnd::Stopped;
                 }
             }
         }
-        loop {
-            match self.stream.flush() {
-                Ok(()) => return true,
-                Err(error) if error.kind() == io::ErrorKind::WouldBlock => {}
-                Err(error) if error.kind() == io::ErrorKind::Interrupted => continue,
-                Err(_) => return false,
-            }
-            match self.wait(phase) {
-                WaitEnd::Waited => {}
-                WaitEnd::Expired => self.expired(phase),
-                WaitEnd::Stopped => return false,
+        if framing == Framing::Chunked {
+            let (stream, mut ctx) = self.parts(&op);
+            if !pump(stream, b"0\r\n\r\n", "to end the chunked stream", &mut ctx) {
+                return ReplyEnd::Stopped;
             }
         }
+        ReplyEnd::Done
+    }
+
+    /// Sends the head with its declared length and the prefix it
+    /// carries, then holds until the peer closes: `Closed` on its close,
+    /// `Stopped` on shutdown, expiry naming the stall past its bound.
+    pub(crate) fn stall(
+        &mut self,
+        head: &[u8],
+        prefix: &[u8],
+        pause: Option<&Pause>,
+    ) -> StallEnd {
+        let op = self.op_budget();
+        if let Some(pause) = pause
+            && self.pause(pause, &op, "to pause before the stalled response") == PauseEnd::Stopped
+        {
+            return StallEnd::Stopped;
+        }
+        let (stream, mut ctx) = self.parts(&op);
+        if !pump(stream, head, "to write the stalled head", &mut ctx) {
+            return StallEnd::Stopped;
+        }
+        let (stream, mut ctx) = self.parts(&op);
+        if !pump(stream, prefix, "to write the stalled prefix", &mut ctx) {
+            return StallEnd::Stopped;
+        }
+        loop {
+            let mut one = [0u8; 1024];
+            match self.stream.read(&mut one) {
+                Ok(0) => return StallEnd::Closed,
+                Ok(_) => continue,
+                Err(error) if error.kind() == io::ErrorKind::WouldBlock => {}
+                Err(error) if error.kind() == io::ErrorKind::Interrupted => continue,
+                Err(_) => return StallEnd::Closed,
+            }
+            match self.shared.wait(&op, &self.name, "to wait for the stalled peer", &mut self.seq, &mut self.acked) {
+                WaitEnd::Waited => {}
+                WaitEnd::Expired => expired(&op, &self.name, "to wait for the stalled peer"),
+                WaitEnd::Stopped => return StallEnd::Stopped,
+            }
+        }
+    }
+
+    /// Hands the connection to a tunnel: the stream, blocking again,
+    /// with the bytes read past the head.
+    pub(crate) fn into_handoff(mut self) -> io::Result<(TcpStream, Vec<u8>)> {
+        self.stream.set_nonblocking(false)?;
+        let Self { stream, ahead, .. } = self;
+        Ok((stream, ahead.into()))
     }
 }
 
@@ -451,6 +606,158 @@ fn expired(budget: &RequestBudget, name: &str, phase: &str) -> ! {
         "fakes: the HTTP core waited {:?} {phase} {name}",
         budget.duration
     );
+}
+
+/// How one reply ended.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub(crate) enum ReplyEnd {
+    /// Every byte flushed.
+    Done,
+    /// Shutdown or the peer ended the connection first.
+    Stopped,
+}
+
+/// How one stalled response ended.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub(crate) enum StallEnd {
+    /// The peer closed after the prefix.
+    Closed,
+    /// Shutdown ended the wait.
+    Stopped,
+}
+
+/// How one pause ended.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub(crate) enum PauseEnd {
+    /// The test released it, or dropped its sender.
+    Released,
+    /// Shutdown ended the wait.
+    Stopped,
+}
+
+/// How one stream frames its pieces.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub(crate) enum Framing {
+    /// Each piece carries its hex length: a recorded stream.
+    Chunked,
+    /// Pieces go raw: server-sent events.
+    Raw,
+}
+
+/// How one tunnel ended.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub(crate) enum TunnelEnd {
+    /// The client side closed first.
+    ClientClosed,
+    /// The origin side closed first.
+    OriginClosed,
+    /// Shutdown ended the tunnel.
+    Stopped,
+}
+
+/// A response pause: the core signals each arrival, then holds until
+/// the test releases or drops its sender. Dropping the control
+/// releases every holder, including failure paths. The release side
+/// sits behind a mutex, so a pause is safe to share with serving
+/// threads.
+pub(crate) struct Pause {
+    reached: mpsc::Sender<()>,
+    release: Mutex<mpsc::Receiver<()>>,
+}
+
+/// The test's end of a pause: wait for arrivals, release the holder.
+/// Dropping this releases the holder too.
+pub(crate) struct PauseControl {
+    reached: mpsc::Receiver<()>,
+    release: mpsc::Sender<()>,
+}
+
+impl Pause {
+    /// A pause and its control.
+    pub(crate) fn new() -> (Pause, PauseControl) {
+        let (reached_tx, reached_rx) = mpsc::channel();
+        let (release_tx, release_rx) = mpsc::channel();
+        (
+            Pause {
+                reached: reached_tx,
+                release: Mutex::new(release_rx),
+            },
+            PauseControl {
+                reached: reached_rx,
+                release: release_tx,
+            },
+        )
+    }
+}
+
+impl PauseControl {
+    /// Waits for the next arrival, failing the test on expiry.
+    pub(crate) fn wait_hit(&self, deadline: &Deadline, what: &str) {
+        deadline.recv_or_fail(&self.reached, what);
+    }
+
+    /// Releases the holder.
+    pub(crate) fn release(&self) {
+        match self.release.send(()) {
+            Ok(()) | Err(_) => {}
+        }
+    }
+}
+
+/// One write's wait context: its operation budget and acknowledgment
+/// state.
+struct WaitCtx<'a> {
+    budget: &'a RequestBudget,
+    name: &'a str,
+    shared: &'a Arc<Shared>,
+    seq: &'a mut u64,
+    acked: &'a mut Option<u64>,
+}
+
+/// Writes every byte through `writer` and flushes within the wait
+/// context's budget: false when shutdown or the peer ended it first.
+/// Expiry panics naming the request and phase. The test drives this
+/// with a finite writer past its capacity; production passes the
+/// connection's stream.
+pub(crate) fn pump(
+    writer: &mut dyn Write,
+    bytes: &[u8],
+    phase: &'static str,
+    ctx: &mut WaitCtx<'_>,
+) -> bool {
+    let mut written = 0;
+    while written != bytes.len() {
+        let Some(next) = bytes.get(written..) else {
+            return false;
+        };
+        match writer.write(next) {
+            Ok(0) => return false,
+            Ok(n) => written += n,
+            Err(error) if error.kind() == io::ErrorKind::WouldBlock => {}
+            Err(error) if error.kind() == io::ErrorKind::Interrupted => continue,
+            Err(_) => return false,
+        }
+        if written != bytes.len() {
+            match ctx.shared.wait(ctx.budget, ctx.name, phase, ctx.seq, ctx.acked) {
+                WaitEnd::Waited => {}
+                WaitEnd::Expired => expired(ctx.budget, ctx.name, phase),
+                WaitEnd::Stopped => return false,
+            }
+        }
+    }
+    loop {
+        match writer.flush() {
+            Ok(()) => return true,
+            Err(error) if error.kind() == io::ErrorKind::WouldBlock => {}
+            Err(error) if error.kind() == io::ErrorKind::Interrupted => continue,
+            Err(_) => return false,
+        }
+        match ctx.shared.wait(ctx.budget, ctx.name, phase, ctx.seq, ctx.acked) {
+            WaitEnd::Waited => {}
+            WaitEnd::Expired => expired(ctx.budget, ctx.name, phase),
+            WaitEnd::Stopped => return false,
+        }
+    }
 }
 
 /// One bounded HTTP/1.1 core on a loopback port. Clone shares the server;
@@ -487,6 +794,7 @@ impl HttpServer {
             windows: Mutex::new(0),
             #[cfg(test)]
             windows_changed: Condvar::new(),
+            tunnels: Mutex::new(TunnelState { next: 0, live: Vec::new() }),
         });
         // Subscribed before any waiter checks: no advance slips between a
         // check and its park.
@@ -656,13 +964,23 @@ impl HttpServer {
         }
     }
 
-    /// Stops the server: waits end stopped and every serving thread is
-    /// joined. True when all stopped within the shutdown bound.
+    /// Stops the server: waits end stopped, open tunnels break, and
+    /// every serving thread is joined. True when all stopped within the
+    /// shutdown bound.
     pub(crate) fn shutdown(&self) -> bool {
         self.shared.stopping.store(true, Ordering::SeqCst);
         *lock(&self.shared.wake) += 1;
         self.shared.wake_changed.notify_all();
         self.shared.idle_changed.notify_all();
+        // Break every blocked tunnel copy before joining its thread.
+        for (_, client, origin) in std::mem::take(&mut lock(&self.shared.tunnels).live) {
+            match client.shutdown(std::net::Shutdown::Both) {
+                Ok(()) | Err(_) => {}
+            }
+            match origin.shutdown(std::net::Shutdown::Both) {
+                Ok(()) | Err(_) => {}
+            }
+        }
         // Bound before matching: a match scrutinee temporary would hold
         // the mutex through the whole join below, blocking every drop.
         let accept = lock(&self.shared.accept).take();
@@ -693,6 +1011,155 @@ impl HttpServer {
     fn note_window(&self) {
         *lock(&self.shared.windows) += 1;
         self.shared.windows_changed.notify_all();
+    }
+
+    /// Checks a CONNECT target against the fake's trust boundary: a
+    /// loopback numeric address or `localhost:<port>`, mapped without a
+    /// blocking DNS lookup. Anything else is a named `InvalidInput`
+    /// before any connect, so no fake ever initiates public-network I/O.
+    pub(crate) fn check_target(target: &str) -> io::Result<SocketAddr> {
+        let (host, port) = match target.rsplit_once(':') {
+            Some((host, port)) => (host, port),
+            None => {
+                return Err(io::Error::new(
+                    io::ErrorKind::InvalidInput,
+                    format!("fakes: the CONNECT target has no port: {target}"),
+                ));
+            }
+        };
+        // Bracketed IPv6 loopback first; localhost maps to loopback;
+        // other names never resolve here.
+        let host = host
+            .strip_prefix('[')
+            .and_then(|host| host.strip_suffix(']'))
+            .unwrap_or(host);
+        if host.is_empty() {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidInput,
+                format!("fakes: the CONNECT target has no host: {target}"),
+            ));
+        }
+        let port: u16 = match port.parse() {
+            Ok(port) => port,
+            Err(_) => {
+                return Err(io::Error::new(
+                    io::ErrorKind::InvalidInput,
+                    format!("fakes: the CONNECT target has no port: {target}"),
+                ));
+            }
+        };
+        if host.eq_ignore_ascii_case("localhost") {
+            return Ok(SocketAddr::from(([127, 0, 0, 1], port)));
+        }
+        match host.parse::<std::net::IpAddr>() {
+            Ok(addr) if addr.is_loopback() => Ok(SocketAddr::new(addr, port)),
+            _ => Err(io::Error::new(
+                io::ErrorKind::InvalidInput,
+                format!("fakes: the CONNECT target is not a loopback fake: {target}"),
+            )),
+        }
+    }
+
+    /// Runs a CONNECT tunnel to `target`: the 200 handshake, the bytes
+    /// read past the head, then bytes both ways until either side
+    /// closes. The handshake is bounded; the copy ends on close or
+    /// shutdown, reporting which side closed first. Targets outside the
+    /// trust boundary never connect.
+    pub(crate) fn tunnel(&self, client: TcpStream, target: &str, ahead: &[u8]) -> TunnelEnd {
+        let op = RequestBudget::start_on(
+            &self.shared.clock,
+            self.shared.limits.request,
+            self.shared.limits.guard,
+        );
+        let addr = match Self::check_target(target) {
+            Ok(addr) => addr,
+            Err(_) => return TunnelEnd::OriginClosed,
+        };
+        let mut origin = match TcpStream::connect_timeout(
+            &addr,
+            op.guard_left().min(self.shared.limits.request),
+        ) {
+            Ok(origin) => origin,
+            Err(_) => return TunnelEnd::OriginClosed,
+        };
+        let mut client = client;
+        if client.set_nonblocking(false).is_err() {
+            return TunnelEnd::OriginClosed;
+        }
+        // The 200 and the coalesced bytes within the handshake's budget.
+        let mut seq = 0;
+        let mut acked = None;
+        let mut ctx = WaitCtx {
+            budget: &op,
+            name: target,
+            shared: &self.shared,
+            seq: &mut seq,
+            acked: &mut acked,
+        };
+        if !pump(&mut client, b"HTTP/1.1 200 Connection Established\r\n\r\n", "to write the tunnel handshake", &mut ctx)
+            || !pump(&mut origin, ahead, "to forward the bytes past the head", &mut ctx)
+        {
+            return TunnelEnd::OriginClosed;
+        }
+        // Copies of both ends for shutdown to break: the tunnel owns
+        // the originals below.
+        let id = {
+            let mut tunnels = lock(&self.shared.tunnels);
+            let id = tunnels.next;
+            tunnels.next = tunnels.next.wrapping_add(1);
+            match (client.try_clone(), origin.try_clone()) {
+                (Ok(break_client), Ok(break_origin)) => {
+                    tunnels.live.push((id, break_client, break_origin));
+                }
+                _ => return TunnelEnd::OriginClosed,
+            }
+            id
+        };
+        // Whoever's copy ends first names the end; both directions
+        // break on the first end. 1 names the client, 2 the origin.
+        let first = Arc::new(AtomicU8::new(0));
+        let first_pump = Arc::clone(&first);
+        let mut origin_pump = match origin.try_clone() {
+            Ok(origin) => origin,
+            Err(_) => return TunnelEnd::OriginClosed,
+        };
+        let mut client_pump = match client.try_clone() {
+            Ok(client) => client,
+            Err(_) => return TunnelEnd::OriginClosed,
+        };
+        let pump_end = thread::Builder::new()
+            .name("fakes-http-tunnel".to_owned())
+            .spawn(move || {
+                let _ = io::copy(&mut origin_pump, &mut client_pump);
+                first_pump.compare_exchange(0, 2, Ordering::SeqCst, Ordering::SeqCst).ok();
+                match client_pump.shutdown(std::net::Shutdown::Both) {
+                    Ok(()) | Err(_) => {}
+                }
+                match origin_pump.shutdown(std::net::Shutdown::Both) {
+                    Ok(()) | Err(_) => {}
+                }
+            });
+        let _ = io::copy(&mut client, &mut origin);
+        first.compare_exchange(0, 1, Ordering::SeqCst, Ordering::SeqCst).ok();
+        match client.shutdown(std::net::Shutdown::Both) {
+            Ok(()) | Err(_) => {}
+        }
+        match origin.shutdown(std::net::Shutdown::Both) {
+            Ok(()) | Err(_) => {}
+        }
+        if let Ok(pump_end) = pump_end {
+            match pump_end.join() {
+                Ok(()) | Err(_) => {}
+            }
+        }
+        lock(&self.shared.tunnels).live.retain(|(live, _, _)| *live != id);
+        if self.shared.stopping.load(Ordering::SeqCst) {
+            TunnelEnd::Stopped
+        } else if first.load(Ordering::SeqCst) == 1 {
+            TunnelEnd::ClientClosed
+        } else {
+            TunnelEnd::OriginClosed
+        }
     }
 }
 

@@ -2,13 +2,14 @@
 //! through its own seam (`http_server.rs`).
 
 use std::io::Write;
-use std::net::TcpStream;
+use std::net::{SocketAddr, TcpStream};
 use std::sync::{Arc, PoisonError, mpsc};
 use std::thread;
 use std::time::Duration;
 
 use contract::clock::Clock;
 
+use super::request::ParsedRequest;
 use super::*;
 use crate::clock::FakeClock;
 use crate::deadline::Deadline;
@@ -426,4 +427,393 @@ fn advance_between_check_and_park_is_not_lost() {
             "the failure names its request, got: {message}"
         );
     });
+}
+
+/// A client over blocking I/O: connects, sends one request, reads the
+/// whole reply to the connection's end.
+fn exchange(addr: SocketAddr, request: &[u8]) -> Vec<u8> {
+    use std::io::Read;
+    let mut stream = TcpStream::connect(addr).expect("the test connects");
+    stream
+        .set_read_timeout(Some(OP))
+        .expect("the test bounds its reads");
+    stream.write_all(request).expect("the request writes");
+    let mut raw = Vec::new();
+    stream.read_to_end(&mut raw).expect("the reply reads");
+    raw
+}
+
+/// Serves one connection: reads its request, records it, and answers
+/// with `answer`. The recording precedes any admission: the test owns
+/// both sides of that order.
+fn serve_once(
+    recorded: mpsc::Sender<ParsedRequest>,
+    answer: impl FnOnce(&mut Connection) + Send + 'static,
+) -> (HttpServer, SocketAddr) {
+    let clock = FakeClock::new();
+    let server = HttpServer::bind(clock as Arc<dyn Clock>, ten_seconds()).expect("the core binds");
+    let addr = server.addr();
+    let serving = server.clone();
+    thread::spawn(move || {
+        let mut conn = serving
+            .accept_expected("the test request")
+            .expect("a client connects");
+        let request = match request::read_request(&mut conn) {
+            request::RequestOutcome::Complete(request) => request,
+            other => panic!("the request completes, not {other:?}"),
+        };
+        match recorded.send(request) {
+            Ok(()) | Err(_) => {}
+        }
+        answer(&mut conn);
+    });
+    (server, addr)
+}
+
+#[test]
+fn full_reply_preserves_scripted_headers_and_bytes() {
+    let (recorded_tx, recorded_rx) = mpsc::channel();
+    let head = b"HTTP/1.1 200 Fake\r\ncontent-type: text/event-stream\r\ncontent-length: 2\r\nconnection: close\r\n\r\n";
+    let (server, addr) = serve_once(recorded_tx, move |conn| {
+        assert_eq!(
+            conn.reply_full(head, b"ok", None),
+            ReplyEnd::Done,
+            "the full reply sends"
+        );
+    });
+    let raw = exchange(addr, b"GET /v1 HTTP/1.1\r\nHost: fake\r\n\r\n");
+    let mut expected = head.to_vec();
+    expected.extend_from_slice(b"ok");
+    assert_eq!(raw, expected, "the wire carries the scripted bytes");
+    let request = Deadline::after(OP).recv_or_fail(&recorded_rx, "the recorded request");
+    assert_eq!(request.target, "/v1");
+    assert!(server.shutdown(), "shutdown reaps the serving threads");
+}
+
+#[test]
+fn chunked_pieces_have_exact_framing() {
+    let (recorded_tx, recorded_rx) = mpsc::channel();
+    let head = b"HTTP/1.1 200 Fake\r\ntransfer-encoding: chunked\r\nconnection: close\r\n\r\n";
+    let (server, addr) = serve_once(recorded_tx, move |conn| {
+        assert_eq!(
+            conn.reply_stream(head, &[b"ok".to_vec(), b"bye".to_vec()], Framing::Chunked, None),
+            ReplyEnd::Done,
+            "the pieces send"
+        );
+    });
+    let raw = exchange(addr, b"GET /v1 HTTP/1.1\r\nHost: fake\r\n\r\n");
+    let mut expected = head.to_vec();
+    expected.extend_from_slice(b"2\r\nok\r\n3\r\nbye\r\n0\r\n\r\n");
+    assert_eq!(raw, expected, "each piece carries its exact framing");
+    Deadline::after(OP).recv_or_fail(&recorded_rx, "the recorded request");
+    assert!(server.shutdown(), "shutdown reaps the serving threads");
+}
+
+#[test]
+fn sse_pieces_have_no_inserted_length() {
+    let (recorded_tx, recorded_rx) = mpsc::channel();
+    let head = b"HTTP/1.1 200 Fake\r\ncontent-type: text/event-stream\r\nconnection: close\r\n\r\n";
+    let events = b"event: message\ndata: {\"jsonrpc\":\"2.0\",\"id\":\"el-1\"}\n\n";
+    let (server, addr) = serve_once(recorded_tx, move |conn| {
+        assert_eq!(
+            conn.reply_stream(head, &[events.to_vec()], Framing::Raw, None),
+            ReplyEnd::Done,
+            "the stream sends"
+        );
+    });
+    let raw = exchange(addr, b"POST /mcp HTTP/1.1\r\nHost: fake\r\nContent-Length: 0\r\n\r\n");
+    let mut expected = head.to_vec();
+    expected.extend_from_slice(events);
+    assert_eq!(raw, expected, "stream pieces carry no inserted length");
+    Deadline::after(OP).recv_or_fail(&recorded_rx, "the recorded request");
+    assert!(server.shutdown(), "shutdown reaps the serving threads");
+}
+
+#[test]
+fn pause_before_reply_and_between_pieces_releases_on_sender_drop() {
+    // Two pieces: one pause before the reply, one between the pieces.
+    // The second pause releases when its sender drops, not by an
+    // explicit send.
+    let (recorded_tx, recorded_rx) = mpsc::channel();
+    let (pause, control) = Pause::new();
+    let head = b"HTTP/1.1 200 Fake\r\ntransfer-encoding: chunked\r\nconnection: close\r\n\r\n";
+    let (server, addr) = serve_once(recorded_tx, move |conn| {
+        assert_eq!(
+            conn.reply_stream(
+                head,
+                &[b"one".to_vec(), b"two".to_vec()],
+                Framing::Chunked,
+                Some(&pause),
+            ),
+            ReplyEnd::Done,
+            "the paused stream sends"
+        );
+    });
+    let mut reader = {
+        let stream = TcpStream::connect(addr).expect("the test connects");
+        stream
+            .set_read_timeout(Some(OP))
+            .expect("the test bounds its reads");
+        let mut reader = std::io::BufReader::new(stream);
+        reader
+            .get_mut()
+            .write_all(b"GET /v1 HTTP/1.1\r\nHost: fake\r\n\r\n")
+            .expect("the request writes");
+        reader
+    };
+    let deadline = Deadline::after(OP);
+    control.wait_hit(&deadline, "the pause before the reply");
+    control.release();
+    control.wait_hit(&deadline, "the pause between the pieces");
+    drop(control);
+    use std::io::Read;
+    let mut raw = Vec::new();
+    reader.read_to_end(&mut raw).expect("the stream reads");
+    let mut expected = head.to_vec();
+    expected.extend_from_slice(b"3\r\none\r\n3\r\ntwo\r\n0\r\n\r\n");
+    assert_eq!(raw, expected, "both pieces arrive after their pauses");
+    Deadline::after(OP).recv_or_fail(&recorded_rx, "the recorded request");
+    assert!(server.shutdown(), "shutdown reaps the serving threads");
+}
+
+#[test]
+fn stall_records_prefix_then_peer_close() {
+    let (recorded_tx, recorded_rx) = mpsc::channel();
+    let (sent_tx, sent_rx) = mpsc::channel();
+    let head = b"HTTP/1.1 200 Fake\r\ncontent-length: 100\r\nconnection: close\r\n\r\n";
+    let (server, addr) = serve_once(recorded_tx, move |conn| {
+        let end = conn.stall(head, b"partial", None);
+        match sent_tx.send(end) {
+            Ok(()) | Err(_) => {}
+        }
+    });
+    let mut stream = TcpStream::connect(addr).expect("the test connects");
+    stream
+        .set_read_timeout(Some(OP))
+        .expect("the test bounds its reads");
+    stream
+        .write_all(b"GET / HTTP/1.1\r\nHost: fake\r\n\r\n")
+        .expect("the request writes");
+    let mut reader = std::io::BufReader::new(stream.try_clone().expect("the test clones"));
+    let mut status = String::new();
+    use std::io::BufRead;
+    reader
+        .read_line(&mut status)
+        .expect("the stall's status reads");
+    assert!(status.starts_with("HTTP/1.1 200"), "{status}");
+    loop {
+        let mut line = String::new();
+        reader.read_line(&mut line).expect("the stall's head reads");
+        if line.trim_end_matches(['\r', '\n']).is_empty() {
+            break;
+        }
+    }
+    let mut prefix = vec![0u8; 7];
+    use std::io::Read;
+    reader.read_exact(&mut prefix).expect("the prefix reads");
+    assert_eq!(prefix, b"partial");
+    Deadline::after(OP).recv_or_fail(&recorded_rx, "the recorded request");
+    // Nothing more arrives while the client holds the connection.
+    stream
+        .set_read_timeout(Some(Duration::from_millis(200)))
+        .expect("the test bounds its reads");
+    let mut one = [0u8; 1];
+    assert!(
+        reader.read_exact(&mut one).is_err(),
+        "the connection holds past its prefix"
+    );
+    drop(reader);
+    drop(stream);
+    assert_eq!(
+        Deadline::after(OP).recv_or_fail(&sent_rx, "the stalled peer's close"),
+        StallEnd::Closed,
+        "the client's close ends the stall"
+    );
+    assert!(server.shutdown(), "shutdown reaps the serving threads");
+}
+
+#[test]
+fn dropped_reply_records_request_and_sends_nothing() {
+    let (recorded_tx, recorded_rx) = mpsc::channel();
+    let (server, addr) = serve_once(recorded_tx, |conn| {
+        drop(conn);
+    });
+    let raw = exchange(addr, b"POST /v1 HTTP/1.1\r\nHost: fake\r\nContent-Length: 0\r\n\r\n");
+    assert!(raw.is_empty(), "a dropped reply sends nothing");
+    let request = Deadline::after(OP).recv_or_fail(&recorded_rx, "the recorded request");
+    assert_eq!(request.target, "/v1");
+    assert!(server.shutdown(), "shutdown reaps the serving threads");
+}
+
+/// A writer with a finite capacity: past it, every write would block.
+struct TestWriter {
+    capacity: usize,
+    written: Vec<u8>,
+}
+
+impl TestWriter {
+    fn finished(capacity: usize) -> Self {
+        Self {
+            capacity,
+            written: Vec::new(),
+        }
+    }
+}
+
+impl std::io::Write for TestWriter {
+    fn write(&mut self, bytes: &[u8]) -> std::io::Result<usize> {
+        let room = self.capacity.saturating_sub(self.written.len());
+        if room == 0 {
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::WouldBlock,
+                "the test writer is full",
+            ));
+        }
+        let take = room.min(bytes.len());
+        self.written.extend_from_slice(&bytes[..take]);
+        Ok(take)
+    }
+
+    fn flush(&mut self) -> std::io::Result<()> {
+        Ok(())
+    }
+}
+
+#[test]
+fn blocked_write_expires_on_the_injected_clock() {
+    let clock = FakeClock::new();
+    let server = HttpServer::bind(clock.clone() as Arc<dyn Clock>, ten_seconds())
+        .expect("the core binds");
+    let acks = server.test_acknowledgments();
+    let addr = server.addr();
+    let (tx, rx) = mpsc::channel();
+    thread::scope(|scope| {
+        scope.spawn(|| {
+            let mut conn = server
+                .accept_expected("the held request")
+                .expect("a client connects");
+            let caught = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                let mut writer = TestWriter::finished(10);
+                let op = conn.op_budget();
+                let (_stream, mut ctx) = conn.parts(&op);
+                pump(
+                    &mut writer,
+                    &[b'x'; 100],
+                    "to write the held response",
+                    &mut ctx,
+                )
+            }));
+            match tx.send(caught) {
+                Ok(()) | Err(_) => {}
+            }
+        });
+        let _client = TcpStream::connect(addr).expect("the test connects");
+        let ack = loop {
+            let ack = Deadline::after(OP).recv_or_fail(&acks, "the write's clock wait");
+            if ack.phase == "to write the held response" {
+                break ack;
+            }
+        };
+        assert!(
+            clock.await_thread_parked(ack.thread, ack.until, OP),
+            "the write parks on the clock before it moves"
+        );
+        clock.advance(Duration::from_secs(10) - Duration::from_nanos(1));
+        clock.advance(Duration::from_nanos(1));
+        let caught: thread::Result<bool> = Deadline::after(OP).recv_or_fail(&rx, "the held write");
+        let message = match caught {
+            Ok(_) => panic!("the held write sent instead of failing"),
+            Err(payload) => payload
+                .downcast_ref::<String>()
+                .cloned()
+                .expect("the failure names its request"),
+        };
+        assert!(
+            message.contains("the held request"),
+            "the failure names its request, got: {message}"
+        );
+    });
+}
+
+#[test]
+fn handoff_keeps_bytes_after_the_connect_head() {
+    let clock = FakeClock::new();
+    let server = HttpServer::bind(clock as Arc<dyn Clock>, ten_seconds()).expect("the core binds");
+    let addr = server.addr();
+    let (tx, rx) = mpsc::channel();
+    thread::scope(|scope| {
+        scope.spawn(|| {
+            let mut conn = server
+                .accept_expected("the CONNECT request")
+                .expect("a client connects");
+            let outcome = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                let request = match request::read_request(&mut conn) {
+                    request::RequestOutcome::Complete(request) => request,
+                    other => panic!("the CONNECT head completes, not {other:?}"),
+                };
+                assert_eq!(request.method, "CONNECT");
+                conn.into_handoff().expect("the handoff keeps the stream")
+            }));
+            match tx.send(outcome) {
+                Ok(()) | Err(_) => {}
+            }
+        });
+        let mut client = TcpStream::connect(addr).expect("the test connects");
+        client
+            .write_all(b"CONNECT 127.0.0.1:80 HTTP/1.1\r\nHost: 127.0.0.1:80\r\n\r\nPING")
+            .expect("the CONNECT writes");
+        let (stream, ahead) = match Deadline::after(OP).recv_or_fail(&rx, "the handoff") {
+            Ok(handoff) => handoff,
+            Err(payload) => panic!(
+                "the handoff failed: {}",
+                payload
+                    .downcast_ref::<String>()
+                    .cloned()
+                    .unwrap_or_else(|| "a non-string panic".to_owned())
+            ),
+        };
+        assert_eq!(ahead, b"PING", "bytes past the head survive the handoff");
+        drop(stream);
+    });
+}
+
+#[test]
+fn shutdown_releases_pauses_and_reaps_core_waits() {
+    let clock = FakeClock::new();
+    let server = HttpServer::bind(clock as Arc<dyn Clock>, ten_seconds()).expect("the core binds");
+    let (pause, control) = Pause::new();
+    let (paused_tx, paused_rx) = mpsc::channel();
+    server.serve_persistent(move |mut conn| {
+            // Held in a core pause, then in a core read: shutdown must
+            // release both without the test sending anything.
+            let request = match request::read_request(&mut conn) {
+                request::RequestOutcome::Complete(request) => request,
+                _ => return,
+            };
+            drop(request);
+        if conn.pause(&pause, &conn.op_budget(), "to pause the test response")
+            == PauseEnd::Stopped
+        {
+            match paused_tx.send("pause") {
+                Ok(()) | Err(_) => {}
+            }
+            return;
+        }
+        match paused_tx.send("released") {
+            Ok(()) | Err(_) => {}
+        }
+    });
+    let mut client = TcpStream::connect(server.addr()).expect("the test connects");
+    client
+        .write_all(b"GET /held HTTP/1.1\r\nHost: fake\r\n\r\n")
+        .expect("the request writes");
+    control.wait_hit(&Deadline::after(OP), "the held pause");
+    // The control is never released: shutdown ends the pause instead.
+    assert!(server.shutdown(), "shutdown releases the pause");
+    assert_eq!(
+        Deadline::after(OP).recv_or_fail(&paused_rx, "the released pause"),
+        "pause",
+        "shutdown ends the pause stopped"
+    );
+    drop(control);
 }
