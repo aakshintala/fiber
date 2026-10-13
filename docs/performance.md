@@ -57,35 +57,35 @@ a 20-thousand-token one fit the same ceiling.
 
 ## Budgets
 
-| Budget | Ceiling | Gated on | Basis |
-|---|---|---|---|
-| Session, idle, headless | 12 MiB peak RSS | Linux x86_64 | picked |
-| Terminal, idle | 9,944 KiB peak RSS | Linux x86_64 | from components |
-| Session, busy or resumed | 46,720 KiB peak RSS | Linux x86_64 | measured |
-| `web_fetch` converting a 10 MiB HTML page, the download cap | within the busy session's 46,720 KiB peak RSS | Linux x86_64 | measured |
-| Idle CPU, session and terminal | zero context switches in the idle window, on every thread | Linux x86_64 | exact |
-| Threads, idle headless session | 5, plus 2 per client, plus 1 per Lua extension in use | Linux x86_64 | exact |
-| fsyncs | 2 per model request, 2 per tool call | Linux x86_64 | exact |
-| Log bytes, 429-call turn | the turn's content plus 2 KiB per tool call | Linux x86_64 | exact |
-| Session start, the internal session command to its first line, no hub | 20 ms | Linux x86_64 | picked |
-| Terminal to its first frame, new session | 50 ms | Linux x86_64 | picked |
-| Terminal to its first frame, attaching | 50 ms plus 10 ms per MiB of session log | Linux x86_64 | picked |
-| Terminal, attaching a 10 MiB session | 81,392 KiB peak RSS | Linux x86_64 | measured |
-| Session, memory kept after the busy turn | 16,176 KiB RssAnon | Linux x86_64 | measured |
-| Session, memory kept after 10 busy turns, each followed by its handoff | the memory kept after the first, plus 1 MiB RssAnon | Linux x86_64 | picked |
-| Terminal, memory kept after attaching a 10 MiB session | 12,048 KiB RssAnon | Linux x86_64 | measured |
-| Listing 1,000 sessions in one project, warm cache | 50 ms | Linux x86_64 | picked |
-| `session_list`, waiting for every running session's status | 2 s for the whole call | Linux x86_64 | picked |
-| `paging` jig, its session at scale 1 and 160 by 48 | 17,592 KiB peak RSS | Linux x86_64 | measured |
-| `paging` jig, open pass and first frame | 1,347 ms | Linux x86_64 | measured |
-| `paging` jig, slowest frame that loaded pages | 7 ms | Linux x86_64 | measured |
-| `paging` jig, slowest jump frame | 11 ms | Linux x86_64 | measured |
-| `paging` jig, slowest re-count at a new width | 123 ms | Linux x86_64 | measured |
-| `paging` jig, slowest append frame | 3 ms | Linux x86_64 | measured |
-| `paging` jig at scale 16, slowest re-count at a new width | 20 times the same run's scale-1 re-count | Linux x86_64 | picked |
-| `paging` jig at scale 16, a search of the whole session with no match | 20 times the same run's scale-1 search | Linux x86_64 | picked |
-| Terminal, wheel to frame, the `paging` jig's session at scale 1, 160 by 48 | 16 ms | Linux x86_64 | picked |
-| Terminal, wheel to frame, one turn with an opened `read` of 300 lines, 160 by 48 | 16 ms | Linux x86_64 | picked |
+| Budget | Ceiling | Gated on | Basis | Fast ceiling | Middle ceiling | Slow ceiling | Fast tolerance | Slow tolerance |
+|---|---|---|---|---|---|---|---|---|
+| Session, idle, headless | 12 MiB peak RSS | Linux x86_64 | picked | — | — | — | — | — |
+| Terminal, idle | 9,944 KiB peak RSS | Linux x86_64 | from components | — | — | — | — | — |
+| Session, busy or resumed | 46,720 KiB peak RSS | Linux x86_64 | measured | — | — | — | — | — |
+| `web_fetch` converting a 10 MiB HTML page, the download cap | within the busy session's 46,720 KiB peak RSS | Linux x86_64 | measured | — | — | — | — | — |
+| Idle CPU, session and terminal | zero context switches in the idle window, on every thread | Linux x86_64 | exact | — | — | — | — | — |
+| Threads, idle headless session | 5, plus 2 per client, plus 1 per Lua extension in use | Linux x86_64 | exact | — | — | — | — | — |
+| fsyncs | 2 per model request, 2 per tool call | Linux x86_64 | exact | — | — | — | — | — |
+| Log bytes, 429-call turn | the turn's content plus 2 KiB per tool call | Linux x86_64 | exact | — | — | — | — | — |
+| Session start, the internal session command to its first line, no hub | 20 ms | Linux x86_64 | picked | 16 ms | 12 ms | 13 ms | 55 % | 9 % |
+| Terminal to its first frame, new session | 50 ms | Linux x86_64 | picked | 7 ms | 8 ms | 11 ms | 18 % | 8 % |
+| Terminal to its first frame, attaching | 50 ms plus 10 ms per MiB of session log | Linux x86_64 | picked | 898 ms | 1101 ms | 1364 ms | 9 % | 4 % |
+| Terminal, attaching a 10 MiB session | 81,392 KiB peak RSS | Linux x86_64 | measured | — | — | — | — | — |
+| Session, memory kept after the busy turn | 16,176 KiB RssAnon | Linux x86_64 | measured | — | — | — | — | — |
+| Session, memory kept after 10 busy turns, each followed by its handoff | the memory kept after the first, plus 1 MiB RssAnon | Linux x86_64 | picked | — | — | — | — | — |
+| Terminal, memory kept after attaching a 10 MiB session | 12,048 KiB RssAnon | Linux x86_64 | measured | — | — | — | — | — |
+| Listing 1,000 sessions in one project, warm cache | 50 ms | Linux x86_64 | picked | 32 ms | 34 ms | 41 ms | 21 % | 13 % |
+| `session_list`, waiting for every running session's status | 2 s for the whole call | Linux x86_64 | picked | — | — | — | — | — |
+| `paging` jig, its session at scale 1 and 160 by 48 | 17,592 KiB peak RSS | Linux x86_64 | measured | — | — | — | — | — |
+| `paging` jig, open pass and first frame | 1,347 ms | Linux x86_64 | measured | 725 ms | 828 ms | 1049 ms | 11 % | 4 % |
+| `paging` jig, slowest frame that loaded pages | 7 ms | Linux x86_64 | measured | 8 ms | 5 ms | 10 ms | 16 % | 4 % |
+| `paging` jig, slowest jump frame | 11 ms | Linux x86_64 | measured | 9 ms | 9 ms | 13 ms | 11 % | 5 % |
+| `paging` jig, slowest re-count at a new width | 123 ms | Linux x86_64 | measured | 67 ms | 77 ms | 99 ms | 16 % | 8 % |
+| `paging` jig, slowest append frame | 3 ms | Linux x86_64 | measured | 7 ms | 4 ms | 6 ms | 56 % | 32 % |
+| `paging` jig at scale 16, slowest re-count at a new width | 20 times the same run's scale-1 re-count | Linux x86_64 | picked | — | — | — | — | — |
+| `paging` jig at scale 16, a search of the whole session with no match | 20 times the same run's scale-1 search | Linux x86_64 | picked | — | — | — | — | — |
+| Terminal, wheel to frame, the `paging` jig's session at scale 1, 160 by 48 | 16 ms | Linux x86_64 | picked | 7 ms | 6 ms | 9 ms | 21 % | 12 % |
+| Terminal, wheel to frame, one turn with an opened `read` of 300 lines, 160 by 48 | 16 ms | Linux x86_64 | picked | 5 ms | 4 ms | 7 ms | 40 % | 23 % |
 
 Basis says where a number came from:
 
@@ -118,8 +118,31 @@ Basis says where a number came from:
   one only where the measurement exceeds that number. Every other ceiling stays
   as it is, and a ceiling the measurement does not exceed keeps its basis. A
   ceiling given as a formula, such as attaching's, stays picked: its benchmark
-  reports each measurement against the formula until the row's timing gate
-  turns on.
+  reports each measurement against the formula, and the timing gate for the
+  10 MiB fixture judges against the class ceiling instead.
+
+The class columns hold the timing gates per runner speed class, keyed by CPU
+model strings matched case-insensitively. A model's class is the slowest
+cluster its stored runs reach. The fast class is `AMD EPYC 9V45 96-Core
+Processor` (6 stored files, gates); the middle class is `Intel(R) Xeon(R)
+Platinum 8370C CPU @ 2.80GHz` (2 stored files, advisory); the slow class is
+`AMD EPYC 7763 64-Core Processor` (13 stored files, gates) and `AMD EPYC 9V74
+80-Core Processor` (4 stored files, advisory). `INTEL(R) XEON(R) PLATINUM 8573C`
+(1 stored file) has no class, and any other model, an empty string or a missing
+CPU is unknown: all stay advisory, and the comment says why. A model gates
+only with at least 5 stored files; turning another model on later is a pull
+request that adds its rows. The attaching row's class columns judge only the
+10 MiB fixture; the 1 MiB fixture stays advisory until #1546 lands a fix or a
+re-ruled ceiling. Rows that are not absolute timings carry `—` in these
+columns, and the ordinary Ceiling cell stays as advisory reference data.
+
+Each class ceiling is the maximum individual stored sample for that metric
+across every model in the class, rounded upward to the next whole
+millisecond, so it covers every stored sample as well as every per-file
+median. Each tolerance is `100 * (maximum per-file median / minimum per-file
+median - 1)` for the gated model and row, rounded upward to a whole percent:
+fast uses 9V45, slow uses 7763 only, so the advisory 9V74 never widens 7763's
+tolerance. Middle has no tolerance because no middle model gates.
 
 The busy-or-resumed ceiling holds on three workloads:
 
@@ -220,24 +243,33 @@ pull request: the
 comment marks the row over at the base and names the base, and the backstop
 on `main` fails on it, which makes the fix a backstop ticket.
 
-A timing budget is advisory: CI posts the head and base medians as a
-comment on the pull request and never fails it. The two scale-16
+A timing row gates per runner speed class when its runner's CPU model is
+eligible, and stays advisory otherwise. The two scale-16
 `paging` growth-ratio rows are the exception: like an exact or memory
 budget, a paired ratio over 20 times its same run's scale-1 sample
 fails the pull request on Linux x86_64, however the base compares.
-Timing gates turn on per
-runner speed class, once stored results show that the recorded CPU model
-identifies the class. GitHub's Linux x86_64 runners fall into three speed
-classes, the slowest 1.34 to 1.64 times the fastest; within a class a median
-varies by about 2% on the drawing benchmarks and up to 10% on session start
-and listing, and memory varies by 3% across all runners (353 backstop
-results, 2026-10-07 to 2026-10-11). The pull request that turns the gates on
-sets each gate's ceiling per class and its tolerance from that spread. From
-then on a timing gate fails only when the median is over its class's ceiling
-and over the base commit's median by more than that tolerance, measured in
-the same job on the same runner, and its author may raise the ceiling as
-above. The attach 1 MiB row's gate turns on only once `main` meets its
-ceiling or the ceiling is ruled again (#1546). A benchmark's
+GitHub's Linux x86_64 runners fall into three speed classes, whose
+frames_64 medians across 26 stored results (October 11 to 13, 2026; 19 from
+gated models) run about 1.49 to 1.65 times from the fast extremes to the slow
+cluster: fast 302.150569 to 324.314527 ms, middle 446.141956 to 448.120506 ms
+and the slow cluster 481.640278 to 497.654993 ms. The 9V74 fast VM at
+384.165851 ms belongs to the slow class but stands outside the slow cluster's
+range: a model's class is the slowest cluster its stored runs reach. Within
+a model the frames_64 medians span 1.77% on 7763 and 7.34% on 9V45; the 9V74
+fast VM is 22.80% faster than its own slowest VM (29.54% slower by the
+opposite denominator). Across the 11 absolute timing rows the gated models'
+max/min median spreads range from 3.22% to 55.83%: session start spans 8.47%
+on 7763 and 54.37% on 9V45, listing spans 12.43% and 20.71% respectively, so
+each row carries its own tolerance in the table. Budgeted numeric memory-row
+medians across these files vary by about 1.0% to 7.0% depending on workload:
+busy peak RSS spans 1.31% and web_fetch peak RSS 6.98%. A timing gate fails
+only when the median is over its class's ceiling and over the base commit's
+median from the same job by more than that tolerance, measured in the same
+job on the same runner, and its author may raise the ceiling as
+above. A model with fewer than 5 stored runs, an unknown CPU model, the
+attach 1 MiB row and any row without a comparable same-job base timing stay
+advisory, and the comment says why. Attach 1 MiB stays advisory until #1546
+lands a fix or a re-ruled ceiling. A benchmark's
 own self-check failing is a failed run, not a slow sample.
 
 At each release, every ceiling more than twice its measured value drops to
