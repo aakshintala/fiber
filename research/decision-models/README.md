@@ -90,10 +90,16 @@ against the labels.
 | `check` (40) | 22 | **14** |
 
 19 sampled cases (15 `allow`, 4 `check`) errored: all HTTP 400, input over
-the 393,216-token window — Fiber's longest reviewer contexts do not fit
-SubQ's 384K context either. Agreement over verdicts: 139/171 = **81.3%**.
-Recall on `check` (the calls that need the reasoning pass): 14/36 =
-**38.9%** — SubQ lets most of them through. Precision on `allow`: 125/135 =
+the 393,216-token window. The cases are whole transcripts; Fiber's reviewer
+input follows handoffs (docs/permissions.md, "At a handoff"), so it is bounded
+by the session model's window, which can still exceed 384K. Agreement over verdicts: 139/171 = **81.3%**.
+The labels are Claude Code's final verdicts, not "needed the reasoning
+pass": a `check` label is a call Claude Code's classifier rejected, and an
+`allow` label may have passed through its own reasoning. So the two kinds of
+disagreement differ. A `check` label answered `allow` is a missed block: the
+call would skip the reasoning pass. An `allow` label answered `check` costs
+one reasoning pass and is not an error. Recall on `check`: 14/36 =
+**38.9%**; SubQ answered `allow` on 22 of the 36 calls Claude Code blocked. Precision on `allow`: 125/135 =
 92.6%. Median reported `p(check)`: 0.294 on `check` labels vs 0.036 on
 `allow` labels; median confidence 0.929 on correct verdicts vs 0.736 on
 wrong ones — probability tracks the label weakly, but the argmax still
@@ -153,8 +159,8 @@ retention, Models). Every reviewer-shaped call pays full input price.
 
 The numbers that decide it, all for SubQ Snap on the 190-case sample:
 
-- `check` recall **38.9%** (14/36): most calls the classifier rejected —
-  the closest thing to "needs the reasoning pass" — would skip it. A first
+- `check` recall **38.9%** (14/36): 22 of 36 calls Claude Code's
+  classifier blocked would skip the reasoning pass. A first
   stage that misses 6 in 10 dangers is a worse triage, not a faster one.
 - Overall agreement 81.3% (139/171) with no baseline to beat: today's
   first stage is unmeasured (blocked), so no superiority claim is possible
