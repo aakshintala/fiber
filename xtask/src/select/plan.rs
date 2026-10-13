@@ -11,7 +11,7 @@ const MUTANTS_PER_SHARD: u64 = 15;
 const MAX_MUTANT_SHARDS: u64 = 16;
 /// `docs/ci.md`: a shard's time limit with up to one shard's worth of
 /// mutants, in minutes.
-const SHARD_TIMEOUT_BASE_MINUTES: u64 = 20;
+const SHARD_TIMEOUT_BASE_MINUTES: u64 = 40;
 /// `docs/ci.md`: the most time one shard gets, in minutes: GitHub stops a
 /// job after 6 hours, so a larger bound buys nothing.
 const SHARD_TIMEOUT_MAX_MINUTES: u64 = 360;
@@ -69,8 +69,8 @@ pub(crate) fn mutant_shards(count: u64) -> u64 {
     count.div_ceil(MUTANTS_PER_SHARD).min(MAX_MUTANT_SHARDS)
 }
 
-/// One shard's time limit for `count` mutants, in minutes: 20 minutes per
-/// 15 of the largest round-robin share, rounded up, never under 20 and
+/// One shard's time limit for `count` mutants, in minutes: 40 minutes per
+/// 15 of the largest round-robin share, rounded up, never under 40 and
 /// never over 360. The multiplication saturates, so no `u64` count overflows.
 pub(crate) fn shard_timeout_minutes(count: u64) -> u64 {
     let share = count.div_ceil(mutant_shards(count).max(1));

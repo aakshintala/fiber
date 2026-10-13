@@ -499,17 +499,17 @@ fn shards_grow_with_the_mutant_count_between_one_and_the_cap() {
 
 #[test]
 fn shard_timeouts_grow_with_the_largest_shard_past_the_cap() {
-    // (mutants, minutes): 20 minutes per 15 of the largest shard's
+    // (mutants, minutes): 40 minutes per 15 of the largest shard's
     // mutants, rounded up, at most 360.
     let table = [
-        (0, 20),
-        (1, 20),
-        (15, 20),
-        (240, 20),
-        (241, 22),
-        (256, 22),
-        (257, 23),
-        (480, 40),
+        (0, 40),
+        (1, 40),
+        (15, 40),
+        (240, 40),
+        (241, 43),
+        (256, 43),
+        (257, 46),
+        (480, 80),
         (4320, 360),
         (4321, 360),
         (100_000, 360),

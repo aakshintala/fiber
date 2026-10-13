@@ -202,7 +202,8 @@ On Linux x86_64 alone:
   (`cargo mutants --list`) and plans one shard per 15 of them, rounded up, at
   most 16; a diff with no mutants starts none. Recent runs (#1461, #1395)
   tested a mutant in 13 to 27 seconds on a runner and the unmutated baseline
-  took 1 to 3.5 minutes, so 15 mutants keep a shard near 10 minutes. Shards
+  took 1 to 3.5 minutes; a `crates/main` mutant takes 50 to 74 seconds, so 15
+  mutants keep a shard near 10 minutes. Shards
   split the list round-robin, so every shard holds the same mix of crates and
   the count alone sets its size. Past 240 mutants the cap makes shards larger,
   and their time limit grows with them ("Job time limits"). Two pull requests at the cap
@@ -403,11 +404,11 @@ the pull request waiting out GitHub's 6-hour default.
 A bound is about twice the job's median duration over its last 20 runs, rounded
 up to a round number, and never under 5 minutes, because runner start-up
 varies. A job with too little history gets a generous bound. The one exception
-is a mutants shard: 8 % of shards take 9 to 12 minutes when a pull request
-changes a widely used function, so its bound is twice that slow group, not
-twice the median. A shard of up to 15 mutants gets 20 minutes. A larger
-shard, which only the cap makes, gets 20 minutes per 15 of its mutants,
-rounded up, at most 360 minutes, GitHub's limit for a job. The selection
+is a mutants shard: a shard of `crates/main` mutants, whose tests drive the
+binary, takes about 20 minutes (run 38420177975), so its bound is twice that
+slow group, not twice the median. A shard of up to 15 mutants gets 40 minutes.
+A larger shard, which only the cap makes, gets 40 minutes per 15 of its
+mutants, rounded up, at most 360 minutes, GitHub's limit for a job. The selection
 computes it (`cargo xtask plan`). A job that builds the workspace is bounded at
 twice its cold-cache duration, since a pull request's first run after a cache
 eviction or a `Cargo.lock` change builds cold. The median behind each bound is a comment beside its
