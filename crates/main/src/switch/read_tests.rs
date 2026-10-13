@@ -14,11 +14,14 @@ use std::sync::{Arc, mpsc};
 use std::time::Duration;
 
 use contract::ErrorCode;
+use contract::clock::Clock;
 
-use super::{CancelOnDrop, Reads, deadline_due, signallable};
+use super::{CancelOnDrop, Reads, alive, deadline_due, kill_group, signallable};
 use fakes::Deadline;
 use fakes::children::Ready;
 use fakes::clock::FakeClock;
+use rustix::io::Errno;
+use support::group::GROUP_POLL;
 
 /// The deadline of each wait in these tests.
 const DEADLINE: Duration = Duration::from_secs(10);
@@ -721,8 +724,8 @@ fn dropping_cancel_on_drop_kills_what_a_finished_command_left() {
 }
 
 /// A cancel lands while a spawn is blocked before it spawns: the cancel
-/// returns at once and kills every listed group, and the late spawn kills
-/// its own group and is `Interrupted` without ever listing it. Before the
+/// returns at once and kills every listed group, and the late spawn lists
+/// its own group for settlement, kills it and is `Interrupted`. Before the
 /// fix the spawn holds the state lock across the spawn, so the cancel
 /// blocks behind it and the deadline below fails the test.
 #[test]
@@ -789,14 +792,36 @@ fn cancel_passes_a_blocked_spawn_and_the_late_child_is_killed() {
     })
     .expect_err("a command spawned after the cancel");
     assert_eq!(error.kind(), std::io::ErrorKind::Interrupted);
+    // The late group is listed for settlement: A was already empty (the
+    // wait above), so the late spawn's prune retires it and lists only
+    // the late group. The leader's reap never retires surviving
+    // descendants; settlement does, once the probe says SRCH.
     assert_eq!(
-        listed(&reads),
-        vec![pid_a],
-        "the late group is never listed"
+        listed(&reads).len(),
+        1,
+        "only the late group is listed: {:?}",
+        listed(&reads)
+    );
+    assert!(
+        !listed(&reads).contains(&pid_a),
+        "A retired once empty: {:?}",
+        listed(&reads)
     );
     assert!(
         fakes::matching_exits(&marker, DEADLINE),
         "the late group is gone"
+    );
+    // Settlement retires the reaped late group: nothing stays listed.
+    let clock = FakeClock::new();
+    let settled = settle_on_thread(&reads, &clock, doors::SHUTDOWN_BOUND);
+    assert!(
+        Deadline::after(Duration::from_secs(3)).recv_or_fail(&settled, "the settle"),
+        "the settle retires the late group"
+    );
+    assert!(
+        listed(&reads).is_empty(),
+        "settlement retires the late group: {:?}",
+        listed(&reads)
     );
     let late_a = fakes::within("the killed command", DEADLINE, move || {
         running_a.join().unwrap()
@@ -869,21 +894,30 @@ fn settle_rekills_a_cancelled_survivor_before_answering_true() {
             assert!(answer, "settle answers `true` once the group is empty");
         }
         Err(_) => {
-            // Parked on the clock: the fix kills and rechecks. Drive it to
-            // the bound, then the answer must arrive with the group empty.
-            let end = clock.origin() + doors::SHUTDOWN_BOUND;
-            loop {
-                if settled.try_recv().is_ok() {
+            // Parked on the clock: the fix kills and rechecks. Drive
+            // rechecks until it answers: each advance wakes one more
+            // pass, and an ack's expiry only rechecks the answer, so an
+            // answer racing the ack never hangs here. The first park is
+            // exact on the unmoved clock; later ones follow each advance.
+            let poll = clock.origin() + GROUP_POLL;
+            assert!(
+                clock.await_parked(poll, DEADLINE),
+                "the settle parked at its poll"
+            );
+            let mut answer = None;
+            for _ in 0..130 {
+                let mark = clock.advance_marked(Duration::from_millis(50));
+                let _ = clock.await_any_parked_since(&mark, Duration::from_millis(200));
+                if let Ok(got) = settled.try_recv() {
+                    answer = Some(got);
                     break;
                 }
-                if !clock.await_parked(end, DEADLINE) {
-                    break;
-                }
-                clock.advance(Duration::from_millis(50));
             }
-            let answer = Deadline::after(DEADLINE)
-                .recv(&settled)
-                .expect("the settle");
+            let answer = answer.unwrap_or_else(|| {
+                Deadline::after(DEADLINE)
+                    .recv(&settled)
+                    .expect("the settle")
+            });
             let lives = fakes::kill_group(pgid, "0").unwrap_or(false);
             match fakes::kill_group(pgid, "KILL") {
                 Ok(_) | Err(_) => {}
@@ -900,6 +934,452 @@ fn settle_rekills_a_cancelled_survivor_before_answering_true() {
             );
         }
     }
+}
+
+/// A cancelled group that survives the first kill gets SIGKILL again, and
+/// none once SRCH retires it: the script answers the cancel's probe and
+/// send, the settle's first probe and send, then SRCH. The send count pins
+/// both deliveries and the absence of any after retirement.
+#[test]
+fn settle_sends_again_until_srch_then_never_again() {
+    let root = fakes::TempDir::new("fiber-read-settle-retry");
+    let ready = root.path().join("ready");
+    let clock = FakeClock::new();
+    let reads = Arc::new(Reads::default());
+    let script = format!("echo $$ > '{}'; exec sleep 600", ready.display());
+    // Before the spawn: the group is known only after it starts, so a
+    // command-line watchdog covers a spawn no later watchdog can reach.
+    let pre = fakes::Watchdog::matching(&ready.display().to_string());
+    let (listed_tx, listed_rx) = mpsc::channel::<()>();
+    let (release_tx, release_rx) = mpsc::channel::<()>();
+    reads.pause_at_listed(listed_tx, release_rx);
+    let running = {
+        let reads = Arc::clone(&reads);
+        std::thread::spawn(move || reads.command(&mut sh(&script)))
+    };
+    let pgid: u32 = ready_line(&ready).parse().unwrap();
+    let watchdog = fakes::Watchdog::group(pgid);
+    Deadline::after(DEADLINE)
+        .recv(&listed_rx)
+        .expect("the group listed");
+    release_tx.send(()).unwrap();
+    // Alive through the cancel and the settle's first pass, gone on the
+    // second: an accepted send never retires the group, only SRCH does.
+    reads.script_group(
+        pgid,
+        vec![Ok(()), Ok(()), Err(Errno::SRCH)],
+        vec![Ok(()), Ok(())],
+    );
+    let finished = cancel_and_settle_on_thread(&reads, &clock, doors::SHUTDOWN_BOUND);
+    // The cancel's kill and the settle's first pass each deliver once;
+    // the settle then parks at its first poll, an exact deadline on the
+    // unmoved clock.
+    let poll = clock.origin() + GROUP_POLL;
+    assert!(
+        clock.await_parked(poll, DEADLINE),
+        "the settle parked at its poll"
+    );
+    clock.advance(GROUP_POLL);
+    assert!(
+        Deadline::after(DEADLINE)
+            .recv(&finished)
+            .expect("the settle"),
+        "the settle retires the group on SRCH"
+    );
+    assert_eq!(reads.scripted_sends(), 2, "one send per pass before SRCH");
+    // A retired group earns no more sends: another settle finds nothing.
+    let again = settle_on_thread(&reads, &clock, doors::SHUTDOWN_BOUND);
+    assert!(
+        Deadline::after(Duration::from_secs(3)).recv_or_fail(&again, "the second settle"),
+        "a retired group settles at once"
+    );
+    assert_eq!(
+        reads.scripted_sends(),
+        2,
+        "no send after SRCH retired the group"
+    );
+    // The scripted sends never touched the real group: kill it for real
+    // and reap the command thread on every path.
+    match fakes::kill_group(pgid, "KILL") {
+        Ok(_) | Err(_) => {}
+    }
+    let _finished = fakes::within("the killed command", DEADLINE, move || {
+        running.join().unwrap()
+    });
+    assert!(
+        fakes::group_empties(pgid, DEADLINE),
+        "the real group is gone"
+    );
+    watchdog.stand_down(DEADLINE);
+    pre.stand_down(DEADLINE);
+}
+
+/// Two cancelled groups drain together within the one bound, though their
+/// empty observations arrive on different passes: the scripted group is
+/// observed SRCH on the settle's second pass, while the real group is
+/// pruned whenever its death lands. The scripted group is also killed for
+/// real up front, so the script never disagrees with the kernel past its
+/// schedule and no exhaustion fallback can keep it pending.
+#[test]
+fn settle_drains_two_groups_together_within_one_bound() {
+    let root = fakes::TempDir::new("fiber-read-settle-two-groups");
+    let ready_one = root.path().join("ready-one");
+    let ready_two = root.path().join("ready-two");
+    let clock = FakeClock::new();
+    let reads = Arc::new(Reads::default());
+    let pre_one = fakes::Watchdog::matching(&ready_one.display().to_string());
+    let pre_two = fakes::Watchdog::matching(&ready_two.display().to_string());
+    let start = |reads: &Arc<Reads>, ready: &std::path::Path| {
+        let reads = Arc::clone(reads);
+        let script = format!("echo $$ > '{}'; exec sleep 600", ready.display());
+        std::thread::spawn(move || reads.command(&mut sh(&script)))
+    };
+    let running_one = start(&reads, &ready_one);
+    let running_two = start(&reads, &ready_two);
+    // Each ready line arrives after its own spawn listed its group.
+    let pgid_one: u32 = ready_line(&ready_one).parse().unwrap();
+    let pgid_two: u32 = ready_line(&ready_two).parse().unwrap();
+    let watchdog_one = fakes::Watchdog::group(pgid_one);
+    let watchdog_two = fakes::Watchdog::group(pgid_two);
+    assert_eq!(listed(&reads).len(), 2, "both groups listed");
+    // The first group follows the script; the second stays real, so every
+    // send really kills it. The first is also killed for real up front:
+    // its command thread reaps the leader while the script schedules its
+    // SRCH observation on the second pass, whatever wall time that takes.
+    reads.script_group(
+        pgid_one,
+        vec![Ok(()), Ok(()), Err(Errno::SRCH)],
+        vec![Ok(()), Ok(())],
+    );
+    match fakes::kill_group(pgid_one, "KILL") {
+        Ok(_) | Err(_) => {}
+    }
+    let finished = cancel_and_settle_on_thread(&reads, &clock, doors::SHUTDOWN_BOUND);
+    // The cancel's kill and the settle's first pass each deliver to the
+    // scripted group; it parks at its first poll, exact on the unmoved
+    // clock. Later passes find it already retired and cost no probe, so
+    // the drive below stays exact however slowly the real group dies.
+    let poll = clock.origin() + GROUP_POLL;
+    assert!(
+        clock.await_parked(poll, DEADLINE),
+        "the settle parked at its poll"
+    );
+    let mut answer = None;
+    for _ in 0..130 {
+        let mark = clock.advance_marked(Duration::from_millis(50));
+        let _ = clock.await_any_parked_since(&mark, Duration::from_millis(200));
+        if let Ok(got) = finished.try_recv() {
+            answer = Some(got);
+            break;
+        }
+    }
+    assert!(
+        answer.unwrap_or_else(|| {
+            Deadline::after(DEADLINE)
+                .recv(&finished)
+                .expect("the settle")
+        }),
+        "both groups drain within the one bound"
+    );
+    assert_eq!(reads.scripted_sends(), 2, "one send per pass before SRCH");
+    assert!(
+        fakes::group_empties(pgid_two, DEADLINE),
+        "the real group died through the shared settlement"
+    );
+    // Reap both command threads on every path: the first was killed up
+    // front, the second through the shared settlement.
+    let _one = fakes::within("the first killed command", DEADLINE, move || {
+        running_one.join().unwrap()
+    });
+    let _two = fakes::within("the second killed command", DEADLINE, move || {
+        running_two.join().unwrap()
+    });
+    assert!(
+        fakes::group_empties(pgid_one, DEADLINE),
+        "the scripted group is gone"
+    );
+    watchdog_one.stand_down(DEADLINE);
+    watchdog_two.stand_down(DEADLINE);
+    pre_one.stand_down(DEADLINE);
+    pre_two.stand_down(DEADLINE);
+}
+
+/// PERM and other probe errors keep a cancelled group pending: they never
+/// retire it, so the settle retries within the bound and answers `false`
+/// at it. The script outlasts the 5 s bound at a 10 ms cadence.
+#[test]
+fn settle_retries_a_perm_group_until_the_bound_then_fails() {
+    let root = fakes::TempDir::new("fiber-read-settle-perm");
+    let ready = root.path().join("ready");
+    let clock = FakeClock::new();
+    let end = clock.origin() + doors::SHUTDOWN_BOUND;
+    let reads = Arc::new(Reads::default());
+    let script = format!("echo $$ > '{}'; exec sleep 600", ready.display());
+    let pre = fakes::Watchdog::matching(&ready.display().to_string());
+    let (listed_tx, listed_rx) = mpsc::channel::<()>();
+    let (release_tx, release_rx) = mpsc::channel::<()>();
+    reads.pause_at_listed(listed_tx, release_rx);
+    let running = {
+        let reads = Arc::clone(&reads);
+        std::thread::spawn(move || reads.command(&mut sh(&script)))
+    };
+    let pgid: u32 = ready_line(&ready).parse().unwrap();
+    let watchdog = fakes::Watchdog::group(pgid);
+    Deadline::after(DEADLINE)
+        .recv(&listed_rx)
+        .expect("the group listed");
+    release_tx.send(()).unwrap();
+    let probes: Vec<rustix::io::Result<()>> = (0..300)
+        .flat_map(|_| [Err(Errno::PERM), Err(Errno::INTR)])
+        .collect();
+    let sends: Vec<rustix::io::Result<()>> = vec![Ok(()); 600];
+    reads.script_group(pgid, probes, sends);
+    let finished = cancel_and_settle_on_thread(&reads, &clock, doors::SHUTDOWN_BOUND);
+    // Drive to the bound, one acknowledged park per advance. The settle
+    // cannot answer before the bound: every probe keeps it pending.
+    let poll = clock.origin() + GROUP_POLL;
+    assert!(
+        clock.await_parked(poll, DEADLINE),
+        "the settle parked at its poll"
+    );
+    let mut mark = clock.advance_marked(Duration::from_millis(50));
+    loop {
+        if let Ok(answer) = finished.try_recv() {
+            assert!(
+                !answer,
+                "a group pending past every probe never settles true"
+            );
+            break;
+        }
+        if clock.now() >= end {
+            let answer = Deadline::after(DEADLINE)
+                .recv(&finished)
+                .expect("the settle");
+            assert!(!answer, "a group still pending at the bound settles false");
+            break;
+        }
+        assert!(
+            clock.await_any_parked_since(&mark, DEADLINE),
+            "the settle parked again"
+        );
+        if let Ok(answer) = finished.try_recv() {
+            assert!(
+                !answer,
+                "a group pending past every probe never settles true"
+            );
+            break;
+        }
+        mark = clock.advance_marked(Duration::from_millis(50));
+    }
+    let sends = reads.scripted_sends();
+    assert!(
+        sends >= 2,
+        "the settle retried within the bound, not once: {sends}"
+    );
+    // The scripted sends never touched the real group: kill it for real
+    // and reap the command thread on every path.
+    match fakes::kill_group(pgid, "KILL") {
+        Ok(_) | Err(_) => {}
+    }
+    let _finished = fakes::within("the killed command", DEADLINE, move || {
+        running.join().unwrap()
+    });
+    assert!(
+        fakes::group_empties(pgid, DEADLINE),
+        "the real group is gone"
+    );
+    watchdog.stand_down(DEADLINE);
+    pre.stand_down(DEADLINE);
+}
+
+/// Ids no credential group can hold are refused before any syscall: 0, 1
+/// and ids past the pid range are never alive, and killing them sends
+/// nothing. The signallable edge sits between 1 and 2.
+#[test]
+fn unusable_ids_are_neither_alive_nor_signalled() {
+    assert!(!alive(0));
+    assert!(!alive(1));
+    assert!(!alive(u32::MAX));
+    // Refused, not evidence of anything: these send no KILL anywhere.
+    kill_group(0);
+    kill_group(1);
+    kill_group(u32::MAX);
+}
+
+/// A cancelled settle with nothing listed answers `true` at once: no
+/// group means no poll park, on any clock.
+#[test]
+fn settle_after_cancel_answers_true_at_once_with_nothing_listed() {
+    let clock = FakeClock::new();
+    let reads = Arc::new(Reads::default());
+    reads.cancel();
+    let settled = settle_on_thread(&reads, &clock, doors::SHUTDOWN_BOUND);
+    assert!(
+        Deadline::after(Duration::from_secs(3)).recv_or_fail(&settled, "the settle"),
+        "nothing listed settles at once"
+    );
+}
+
+/// Repeat shutdowns share the first end: a second `cancel_and_settle` and
+/// a later `settle` earn no fresh bound. The held spawn keeps both waits
+/// parked; past the first end both answer `false`.
+#[test]
+fn repeat_shutdowns_reuse_the_first_end() {
+    let clock = FakeClock::new();
+    let bound = doors::SHUTDOWN_BOUND;
+    let end = clock.origin() + bound;
+    let reads = Arc::new(Reads::default());
+    // The marker stays in the held shell's command line, so a leaked late
+    // child still matches: the watchdog reaps the group on every path,
+    // including a failed assertion before the release below.
+    let marker = "fiber-shutdown-end-reuse";
+    let watching = fakes::Watchdog::matching(marker);
+    let (entered, is_entered) = mpsc::channel::<()>();
+    let (release, freed) = mpsc::channel::<()>();
+    reads.pause_at_spawn(entered, freed);
+    let held = {
+        let reads = Arc::clone(&reads);
+        std::thread::spawn(move || reads.command(&mut sh(&format!("sleep 30 # {marker}"))))
+    };
+    Deadline::after(DEADLINE)
+        .recv(&is_entered)
+        .expect("the spawn reached its pause");
+    let first = cancel_and_settle_on_thread(&reads, &clock, bound);
+    assert!(
+        clock.await_parked(end, DEADLINE),
+        "the first shutdown parked at its end"
+    );
+    assert_eq!(
+        reads.lock().shutdown_end,
+        Some(end),
+        "the first call stored the end"
+    );
+    // A repeat one nanosecond before the end must not move it.
+    let mark = clock.advance_marked(
+        bound
+            .checked_sub(Duration::from_nanos(1))
+            .expect("the bound holds a nanosecond"),
+    );
+    assert!(
+        clock.await_parked_since(&mark, Some(end), DEADLINE),
+        "the first shutdown parked again at its end"
+    );
+    let second = cancel_and_settle_on_thread(&reads, &clock, bound);
+    assert_eq!(
+        reads.lock().shutdown_end,
+        Some(end),
+        "the repeat stored no fresh end"
+    );
+    // Past the first end both answer `false`: the repeat earned nothing.
+    clock.advance(Duration::from_nanos(2));
+    assert!(
+        !Deadline::after(DEADLINE)
+            .recv(&first)
+            .expect("the first shutdown"),
+        "the held spawn outlasts the shared end"
+    );
+    assert!(
+        !Deadline::after(DEADLINE)
+            .recv(&second)
+            .expect("the second shutdown"),
+        "the repeat shares the spent end"
+    );
+    // A later settle reads the same spent end and answers `false` at
+    // once, without parking.
+    let settled = settle_on_thread(&reads, &clock, bound);
+    assert!(
+        !Deadline::after(Duration::from_secs(3)).recv_or_fail(&settled, "the spent settle"),
+        "a settle past the shared end answers false at once"
+    );
+    release.send(()).expect("the spawn's release");
+    let error = fakes::within("the late command", DEADLINE, move || held.join().unwrap())
+        .expect_err("a command spawned after the cancel");
+    assert_eq!(error.kind(), std::io::ErrorKind::Interrupted);
+    assert!(
+        fakes::matching_exits(marker, DEADLINE),
+        "the late group is gone"
+    );
+    watching.stand_down(DEADLINE);
+}
+
+/// An end past what the clock can count expires at once: a held spawn
+/// still answers `false` without parking, and the stored end is now.
+#[test]
+fn an_overflowing_shutdown_end_expires_at_once() {
+    let clock = FakeClock::new();
+    let reads = Arc::new(Reads::default());
+    let marker = "fiber-shutdown-end-overflow";
+    let watching = fakes::Watchdog::matching(marker);
+    let (entered, is_entered) = mpsc::channel::<()>();
+    let (release, freed) = mpsc::channel::<()>();
+    reads.pause_at_spawn(entered, freed);
+    let held = {
+        let reads = Arc::clone(&reads);
+        std::thread::spawn(move || reads.command(&mut sh(&format!("sleep 30 # {marker}"))))
+    };
+    Deadline::after(DEADLINE)
+        .recv(&is_entered)
+        .expect("the spawn reached its pause");
+    let now = clock.now();
+    let finished = cancel_and_settle_on_thread(&reads, &clock, Duration::MAX);
+    assert!(
+        !Deadline::after(Duration::from_secs(3))
+            .recv(&finished)
+            .expect("the shutdown"),
+        "an overflowing bound expires at once"
+    );
+    assert_eq!(
+        reads.lock().shutdown_end,
+        Some(now),
+        "overflow stores now, not None"
+    );
+    release.send(()).expect("the spawn's release");
+    let error = fakes::within("the late command", DEADLINE, move || held.join().unwrap())
+        .expect_err("a command spawned after the cancel");
+    assert_eq!(error.kind(), std::io::ErrorKind::Interrupted);
+    assert!(
+        fakes::matching_exits(marker, DEADLINE),
+        "the late group is gone"
+    );
+    watching.stand_down(DEADLINE);
+}
+
+/// An empty shutdown answers `true` even past its stored end: expiry only
+/// fails a shutdown with anything still pending.
+#[test]
+fn an_empty_shutdown_answers_true_past_its_end() {
+    let clock = FakeClock::new();
+    let reads = Arc::new(Reads::default());
+    let first = cancel_and_settle_on_thread(&reads, &clock, doors::SHUTDOWN_BOUND);
+    assert!(
+        Deadline::after(Duration::from_secs(3))
+            .recv(&first)
+            .expect("the first shutdown"),
+        "an empty shutdown settles at once"
+    );
+    clock.advance(doors::SHUTDOWN_BOUND + Duration::from_secs(1));
+    let settled = settle_on_thread(&reads, &clock, doors::SHUTDOWN_BOUND);
+    assert!(
+        Deadline::after(Duration::from_secs(3)).recv_or_fail(&settled, "the spent settle"),
+        "an empty shutdown stays true past its end"
+    );
+}
+
+/// Runs `reads.cancel_and_settle` for `bound` on `clock` on a thread of
+/// its own, returning the channel its answer arrives on. The test receives
+/// through [`Deadline`], never a raw `recv_timeout`.
+fn cancel_and_settle_on_thread(
+    reads: &Arc<Reads>,
+    clock: &Arc<FakeClock>,
+    bound: Duration,
+) -> mpsc::Receiver<bool> {
+    let (done, finished) = mpsc::channel();
+    let (reads, clock) = (Arc::clone(reads), Arc::clone(clock));
+    std::thread::spawn(move || {
+        done.send(reads.cancel_and_settle(&*clock, bound))
+            .unwrap_or(());
+    });
+    finished
 }
 
 /// Runs `reads.settle` for `bound` on `clock` on a thread of its own,
@@ -968,7 +1448,7 @@ fn a_cancel_mid_spawn_is_settled_before_exit() {
     assert_eq!(reads.lock().spawning, 0, "the late kill dropped the count");
     assert!(
         listed(&reads).is_empty(),
-        "the late group is never listed: {:?}",
+        "the settle retired the late group: {:?}",
         listed(&reads)
     );
     assert!(
