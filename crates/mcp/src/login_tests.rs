@@ -2225,13 +2225,14 @@ fn the_drain_ends_at_twice_the_cap() {
 
 #[test]
 fn a_reset_in_the_drain_breaks_the_drain() {
-    // A read error whose kind is not `WouldBlock` ends the drain: the
-    // peer wrote past the cap, peeked only the 431's prefix, and closed
-    // with the rest of the reply unread, which resets the connection, so
-    // the drain's next read fails with `ConnectionReset` and the answer
-    // is `None`. A `true` guard parks on the reset instead of breaking,
-    // and the advance below turns its answer into the timeout, which
-    // fails the `None` assertion.
+    // A read error whose kind is not `WouldBlock` ends the drain at
+    // once: the peer writes past the cap, never reads the 431, and
+    // closes with the whole reply unread, so the close carries a
+    // reset on every platform and the drain's next read fails instead of
+    // reading a clean close, and the answer is `None` with no further
+    // park on the clock. A `true` guard parks on the reset instead of
+    // breaking, and the advance below turns its answer into the
+    // timeout, which fails the `None` assertion.
     const CAP: usize = 8 * 1024;
     let clock = fakes::clock::FakeClock::new();
     let deadline = clock.origin() + Duration::from_secs(60);
@@ -2247,18 +2248,24 @@ fn a_reset_in_the_drain_breaks_the_drain() {
         let answerer = scope.spawn(|| {
             sent.send(answer(server, &*clock, deadline, "s1")).unwrap();
         });
-        // The 431 is written before the drain: peeking its prefix proves
-        // the server reached the drain without consuming it, so closing
-        // now resets the connection instead of ending it cleanly. The
-        // read timeout bounds the peek on the wall clock.
-        client.set_read_timeout(Some(WITHIN)).unwrap();
-        let mut prefix = [0_u8; 12];
-        for _ in 0..prefix.len() {
-            if client.peek(&mut prefix).unwrap() == prefix.len() {
-                break;
-            }
-        }
-        assert_eq!(&prefix, b"HTTP/1.1 431");
+        // The drain holds `answer`'s only park: this signal proves the
+        // server wrote the 431 and consumed every sent byte, so the
+        // reset below meets an empty receive buffer and the drain's
+        // next read fails at once instead of consuming a byte. No
+        // socket read proves the 431: the client never reads it, so the
+        // whole reply stays unread in its own buffer.
+        assert!(
+            clock.await_parked(deadline, WITHIN),
+            "the drain never waited on the clock"
+        );
+        // The mark is the drain's latest park: the break below parks no
+        // more, so the clock's latest parks still match it after the
+        // join, while a `true` guard's park moves them.
+        let mark = clock.advance_marked(Duration::ZERO);
+        // The whole 431 stays unread in the client's buffer, so the
+        // close carries a reset on Linux and macOS alike, never a
+        // clean close: the drain's next read fails, it does not read
+        // `Ok(0)`.
         drop(client);
         let served = match fakes::Deadline::after(WITHIN).recv(&received) {
             Ok(served) => served,
@@ -2269,6 +2276,11 @@ fn a_reset_in_the_drain_breaks_the_drain() {
         };
         assert!(served.is_none(), "a reset head in the drain ended the wait");
         answerer.join().unwrap();
+        assert_eq!(
+            clock.advance_marked(Duration::ZERO),
+            mark,
+            "the drain parked after the reset instead of breaking"
+        );
     });
 }
 
