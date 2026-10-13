@@ -1677,34 +1677,67 @@ pub(crate) fn diff_rows(diff: &[&str]) -> Vec<Row> {
     }
     out
 }
+/// One numbered body line under a ledger row: the dim four-column gutter,
+/// then the spans, cut to the width when it runs past it.
+fn opened_numbered(n: usize, s: Vec<Span<'static>>, w: usize) -> Row {
+    let mut spans = vec![sp(format!("{n:>4} "), dim())];
+    spans.extend(s);
+    opened_indent(row(spans), w)
+}
 /// A call's result, opened under its ledger row and indented eight columns:
-/// an edit's diff with a line-number gutter and word-level pairs, or its
-/// error, or its output clipped to twenty rendered rows with a dim
-/// “… N more lines (Enter to view)” opening the swapped view.
+/// an edit's diff with a line-number gutter and word-level pairs, a read's
+/// text numbered from its offset, or its error, or its output clipped to
+/// twenty rendered rows with a dim “… N more lines (Enter to view)”
+/// opening the swapped view.
 fn call_rows(c: &Call, w: usize) -> Vec<Row> {
     let content = c.content.replace('\t', "    ");
-    if matches!(kind_of(c), "edit" | "write") && content.lines().any(|l| l.starts_with("@@")) {
-        let lines: Vec<&str> = content.lines().collect();
-        let body: Vec<Vec<Row>> = diff_rows(&lines)
-            .into_iter()
-            .map(|r| vec![opened_indent(r, w)])
-            .collect();
-        let (mut out, dropped) = opened_take(body);
-        opened_more(&mut out, dropped);
-        return out;
+    match kind_of(c) {
+        "edit" | "write" if c.err.is_none() && content.lines().any(|l| l.starts_with("@@")) => {
+            let lines: Vec<&str> = content.lines().collect();
+            let body: Vec<Vec<Row>> = diff_rows(&lines)
+                .into_iter()
+                .map(|r| vec![opened_indent(r, w)])
+                .collect();
+            let (mut out, dropped) = opened_take(body);
+            opened_more(&mut out, dropped);
+            out
+        }
+        "read" if c.err.is_none() => {
+            if content.is_empty() {
+                return vec![opened_row(vec![sp("no output", Style::new())])];
+            }
+            // the read's offset counts its first line from 1
+            let offset = c.args["offset"].as_u64().unwrap_or(1) as usize;
+            let body: Vec<Vec<Row>> = content
+                .lines()
+                .enumerate()
+                .map(|(i, l)| {
+                    vec![opened_numbered(
+                        offset + i,
+                        vec![sp(l.to_string(), Style::new())],
+                        w,
+                    )]
+                })
+                .collect();
+            let (mut out, dropped) = opened_take(body);
+            opened_more(&mut out, dropped);
+            out
+        }
+        _ => {
+            let text = match &c.err {
+                Some((code, msg)) => format!("{code}: {msg}"),
+                None if content.is_empty() => "no output".into(),
+                None => content,
+            };
+            let body: Vec<Vec<Row>> = text
+                .lines()
+                .map(|l| opened_plain(l, Style::new(), w))
+                .collect();
+            let (mut out, dropped) = opened_take(body);
+            opened_more(&mut out, dropped);
+            out
+        }
     }
-    let text = match &c.err {
-        Some((code, msg)) => format!("{code}: {msg}"),
-        None if content.is_empty() => "no output".into(),
-        None => content,
-    };
-    let body: Vec<Vec<Row>> = text
-        .lines()
-        .map(|l| opened_plain(l, Style::new(), w))
-        .collect();
-    let (mut out, dropped) = opened_take(body);
-    opened_more(&mut out, dropped);
-    out
 }
 
 fn result_spans(c: &Call) -> Vec<Span<'static>> {
@@ -8136,6 +8169,73 @@ mod tests {
             .filter(|r| plain(r).contains("-gone") || plain(r).contains("-and gone"))
             .collect();
         assert_eq!(removed.len(), 2);
+    }
+
+    fn read_call(offset: Option<u64>, content: &str) -> Call {
+        let mut args = json!({ "path": "crates/hub/src/lock.rs" });
+        if let Some(o) = offset {
+            args["offset"] = json!(o);
+        }
+        Call {
+            name: "read".into(),
+            args,
+            st: St::Completed,
+            start: 0,
+            end: Some(10),
+            err: None,
+            lines: 0,
+            exit: None,
+            changes: vec![],
+            content: content.into(),
+            step: 1,
+            asked: None,
+        }
+    }
+
+    #[test]
+    fn an_opened_read_numbers_from_its_offset() {
+        let content = (1..=5)
+            .map(|i| format!("line {i}"))
+            .collect::<Vec<_>>()
+            .join("\n");
+        let rows = call_rows(&read_call(Some(41), &content), 160);
+        assert_eq!(rows.len(), 5);
+        assert_eq!(plain(&rows[0]), "          41 line 1");
+        assert_eq!(plain(&rows[4]), "          45 line 5");
+        // the gutter reads dim
+        assert!(
+            rows[0].spans[1].style.add_modifier.contains(Modifier::DIM),
+            "the read gutter is not dim"
+        );
+        // without an offset the text numbers from the first line
+        let rows = call_rows(&read_call(None, &content), 160);
+        assert_eq!(plain(&rows[0]), "           1 line 1");
+        // past twenty lines the overflow line counts what is left out
+        let big = (1..=30)
+            .map(|i| format!("line {i}"))
+            .collect::<Vec<_>>()
+            .join("\n");
+        let rows = call_rows(&read_call(Some(7), &big), 160);
+        assert_eq!(rows.len(), 21);
+        assert!(plain(&rows[19]).contains("  26 "), "{}", plain(&rows[19]));
+        assert_eq!(
+            plain(rows.last().unwrap()),
+            "        … 10 more lines (Enter to view)"
+        );
+    }
+
+    #[test]
+    fn errors_and_empty_reads_keep_the_old_rows() {
+        // an edit that failed shows its error, not its diff
+        let mut failed = edit_call("@@ -1 +1 @@\n-old\n+new");
+        failed.err = Some(("stale_file".into(), "the file changed".into()));
+        let rows = call_rows(&failed, 160);
+        assert_eq!(rows.len(), 1);
+        assert_eq!(plain(&rows[0]), "        stale_file: the file changed");
+        // an empty read reads "no output"
+        let rows = call_rows(&read_call(Some(3), ""), 160);
+        assert_eq!(rows.len(), 1);
+        assert_eq!(plain(&rows[0]), "        no output");
     }
 
     #[test]
