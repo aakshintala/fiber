@@ -479,6 +479,71 @@ fn an_expired_until_wait_dumps_parked_deadlines_events_and_next_advance() {
     assert!(dump.contains("next_advance=1"), "{failures:?}");
 }
 
+#[test]
+fn a_parked_after_timer_waits_out_the_short_until_bound_without_advances() {
+    let (_root, log) = session_log(&[]);
+    let case = case_run(
+        vec![json!({"kind": "extension_log"})],
+        Vec::new(),
+        Some(Selector {
+            kind: "extension_log".to_owned(),
+            nth: 1,
+        }),
+    );
+    // A waiter parked at now + 5000ms mirrors host.after(5000) while the
+    // driver waits for an until event that never arrives and no advance
+    // ever runs.
+    let (parked_tx, parked_rx) = mpsc::channel();
+    let (release_tx, release_rx) = mpsc::channel::<()>();
+    let waiter_clock = case.session_clock();
+    let waiter = std::thread::spawn(move || {
+        let until = waiter_clock.now() + Duration::from_millis(5000);
+        waiter_clock.wait_until(Some(until), &mut |_| {
+            let _ignored = parked_tx.send(());
+            // The test owns release_tx, so this blocks until the test sends
+            // or drops it: the waiter stays parked with no deadline of its own.
+            let _ignored = release_rx.recv();
+        });
+    });
+    Deadline::after(Duration::from_secs(5))
+        .recv(&parked_rx)
+        .expect("the waiter parks before the driver runs");
+    let driver = Arc::new(FakeDrive {
+        log: Arc::clone(&log),
+        close_calls: AtomicUsize::new(0),
+        exit_on_close: false,
+    });
+
+    let failures = case.drive(
+        driver as Arc<dyn contract::extension::Drive>,
+        log.watch_all(),
+        Arc::new(r#loop::TurnCancel::default()),
+    );
+    let _ignored = release_tx.send(());
+    waiter.join().expect("join the parked waiter");
+
+    assert_eq!(failures.len(), 3, "{failures:?}");
+    assert!(
+        failures[0].contains("wait for until event extension_log occurrence 1"),
+        "{failures:?}"
+    );
+    assert!(
+        failures[0].contains("20ms"),
+        "the until wait stays at the test bound: {failures:?}"
+    );
+    assert_eq!(failures[1], "expect[0]: missing durable event");
+    let dump = &failures[2];
+    assert!(dump.starts_with("diagnostics:"), "{failures:?}");
+    assert!(dump.contains("now_offset_ms=0"), "{failures:?}");
+    assert!(dump.contains("parked_ms=[5000ms]"), "{failures:?}");
+    assert!(dump.contains("events=[]"), "{failures:?}");
+    assert!(
+        !dump.contains("extension_log"),
+        "no until event arrived before the bound: {failures:?}"
+    );
+    assert!(dump.contains("next_advance=none"), "{failures:?}");
+}
+
 /// A clock whose first `now()` waits until the test releases it, holding
 /// the driver in the window where it has started but not yet registered
 /// its watcher.

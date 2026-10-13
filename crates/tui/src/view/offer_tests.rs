@@ -136,29 +136,39 @@ fn a_long_summary_wraps_at_40_columns() {
     for target in offer_targets(&targets) {
         assert!(target.rect.right() <= 40, "{target:?}");
     }
+    // The 53-column choices row is cut at the width: approve and skip
+    // draw, never starts past it.
+    for decision in [OfferDecision::Approve, OfferDecision::Skip] {
+        assert!(
+            rect_of(&targets, Spot::Choice { item: 0, decision }).is_some(),
+            "{decision:?} draws"
+        );
+    }
     let never = Spot::Choice {
         item: 0,
         decision: OfferDecision::Never,
     };
-    assert!(rect_of(&targets, never).is_some());
+    assert!(rect_of(&targets, never).is_none());
 }
 
 #[test]
 fn a_narrow_view_drops_a_chip_past_its_width() {
     let app = offered(json!([server("db", false)]), 16, 16);
     let (_, targets) = draw(&app, 16, 16);
-    let never = Spot::Choice {
+    // Approve covers 2..13 and draws whole; skip starts at 16, past
+    // the width, and never starts later still.
+    let approve = Spot::Choice {
         item: 0,
-        decision: OfferDecision::Never,
+        decision: OfferDecision::Approve,
     };
-    assert!(rect_of(&targets, never).is_none());
-    // "[skip]" starts at 14 and is cut at the edge, below the wrapped
-    // header rows.
-    let skip = Spot::Choice {
-        item: 0,
-        decision: OfferDecision::Skip,
-    };
-    assert_eq!(rect_of(&targets, skip), Some(Rect::new(14, 7, 2, 1)));
+    let approve_rect = rect_of(&targets, approve);
+    assert!(approve_rect.is_some_and(|rect| rect.width == 11));
+    for decision in [OfferDecision::Skip, OfferDecision::Never] {
+        assert!(
+            rect_of(&targets, Spot::Choice { item: 0, decision }).is_none(),
+            "{decision:?} is past the width"
+        );
+    }
 }
 
 #[test]
@@ -250,18 +260,21 @@ fn clicking_a_chip_sets_its_decision_and_moves_the_cursor() {
     let Some(rect) = rect_of(&targets, spot) else {
         panic!("the chip is drawn");
     };
-    assert_eq!(rect.width, 9);
+    assert_eq!(rect.width, 11);
     assert_eq!(app.on_click(TargetId::Offer(spot)), Effect::None);
     let (screen, _) = draw(&app, 80, 30);
-    assert!(screen.contains("› MCP server b"), "{screen}");
-    assert!(screen.contains("    [approve]  skip   never"), "{screen}");
+    assert!(screen.contains("▸ MCP server b"), "{screen}");
+    assert!(
+        screen.contains("  (•) approve   ( ) skip for this session   ( ) never"),
+        "{screen}"
+    );
 }
 
 #[test]
 fn the_send_target_sends_and_the_cross_puts_it_aside() {
     let mut app = offered(json!([server("db", false)]), 80, 24);
     let (_, targets) = draw(&app, 80, 24);
-    assert_eq!(rect_of(&targets, Spot::Close), Some(Rect::new(79, 0, 1, 1)));
+    assert_eq!(rect_of(&targets, Spot::Close), Some(Rect::new(0, 0, 80, 1)));
     assert!(rect_of(&targets, Spot::Send).is_some());
     let Effect::Send(lines) = app.on_click(TargetId::Offer(Spot::Send)) else {
         panic!("Send sends");
@@ -285,10 +298,10 @@ fn a_taller_screen_shows_the_whole_offer_after_scrolling() {
     for _ in 0..5 {
         press(&mut app, Key::PageDown);
     }
-    assert!(!draw(&app, 80, 8).0.starts_with("Repository code"));
+    assert!(!draw(&app, 80, 8).0.starts_with(" Offer"));
     // The scroll is past the end of a 40-row view, which shows it all.
     app.set_size(80, 40);
     let (screen, _) = draw(&app, 80, 40);
-    assert!(screen.starts_with("Repository code"), "{screen}");
+    assert!(screen.starts_with(" Offer"), "{screen}");
     assert!(screen.contains("Send"), "{screen}");
 }

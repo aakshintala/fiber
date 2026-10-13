@@ -119,6 +119,7 @@ pub(crate) fn carries(dir: &Path, manifest: &Manifest) -> Vec<String> {
 pub struct Plan<'c> {
     root: String,
     items: BTreeMap<String, Item>,
+    fresh: BTreeSet<String>,
     damaged: Vec<Damaged>,
     scratch: PathBuf,
     _lock: Lock,
@@ -129,6 +130,11 @@ impl Plan<'_> {
     /// The extensions to install, the one asked for and its dependencies.
     pub fn items(&self) -> impl Iterator<Item = &Item> {
         self.items.values()
+    }
+
+    /// Names of final-plan extensions not already installed, in name order.
+    pub fn fresh_names(&self) -> impl Iterator<Item = &str> {
+        self.fresh.iter().map(String::as_str)
     }
 
     /// The damaged directories the plan skipped: their dependency
@@ -194,6 +200,7 @@ pub fn plan<'c>(
     let mut plan = Plan {
         root: String::new(),
         items: BTreeMap::new(),
+        fresh: BTreeSet::new(),
         damaged: listing.damaged,
         scratch,
         _lock: lock,
@@ -262,6 +269,13 @@ pub fn plan<'c>(
         }
     };
     ctx.resolve(&mut plan)?;
+    let installed: BTreeSet<&str> = listing.installed.iter().map(|i| i.name.as_str()).collect();
+    plan.fresh = plan
+        .items
+        .keys()
+        .filter(|name| !installed.contains(name.as_str()))
+        .cloned()
+        .collect();
     Ok(plan)
 }
 

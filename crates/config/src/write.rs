@@ -58,7 +58,15 @@ pub fn set(
             why: refused_why(&segments, &source),
         });
     }
-    update(&file, &segments, value, false).map(|_| ())
+    let _lock = locked(&file)?;
+    let mut root = read(&file)?.unwrap_or_else(|| Value::Object(Map::new()));
+    // Equivalent names may hold disjoint leaves, never the same leaf twice.
+    if let Some(Value::Object(extensions)) = root.get("extensions") {
+        crate::full_names(extensions.clone(), &source, &[])?;
+    }
+    let resolved = resolve_spelling(&root, &segments);
+    path::set(&mut root, &resolved, value);
+    write_root(&file, &root)
 }
 
 /// One change to a list of names in one layer's file (`/tools`, `/skills`).

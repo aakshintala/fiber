@@ -955,7 +955,7 @@ Usage: fiber <command> [arguments]
 Sessions:
   fiber [--model <model>] [-c <key>=<value>]...                                            Open the terminal
   ask [--model <model>] [-c <key>=<value>]... [--resume <id>] [--worktree] [<prompt>] [-]  Run one session of one turn; its events go to stdout
-  resume [<id>]                                                                            Open a session in the terminal, or home at the session list
+  resume [<id>] [--credential <label>]                                                     Open a session in the terminal, or home at the session list
   continue                                                                                 Open the most recent session in this project
   sessions [--all] [--json]                                                                List sessions: id, state, name, what it waits on, spend
   sessions search [--all] [--json] <text>                                                  Search the logs of past and running sessions for the text
@@ -973,7 +973,7 @@ Fiber itself:
   version                                   Print the version
 
 Extensions:
-  extension install <name or path>  Install an extension and its dependencies
+  extension install [--project] <name or path>  Install an extension and its dependencies
   extension update [<name>]         Update one extension, or every installed extension, to its newest tag
   extension remove <name>           Remove an extension, the dependencies nothing else uses, and their data
   extension reinstall <name>        Remove an extension and install it again from its recorded source and commit

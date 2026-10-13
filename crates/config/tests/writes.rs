@@ -18,6 +18,219 @@ use serde_json::json;
 const ACME: &str = "github.com/acme/fiber-acme";
 
 #[test]
+fn segments_read_addresses_unparseable_names_and_preserves_layers_and_aliases() {
+    fakes::within(
+        "segments configuration read",
+        std::time::Duration::from_secs(10),
+        || {
+            let setup = Setup::new();
+            setup.write(
+                &setup.global(),
+                &json!({"extensions":{"ac\"me":{"enabled":false}, "opencode":{"enabled":false}}})
+                    .to_string(),
+            );
+            setup.write(
+                &setup.project(),
+                &json!({"extensions":{"opencode":{"enabled":true}}}).to_string(),
+            );
+            let config = setup.load(&[]).unwrap();
+            for (name, enabled, source) in [
+                ("ac\"me", false, config::Source::Global(setup.global())),
+                ("opencode", true, config::Source::Project(setup.project())),
+                (
+                    "github.com/aakshintala/fiber/providers/opencode",
+                    true,
+                    config::Source::Project(setup.project()),
+                ),
+            ] {
+                let segments = vec!["extensions".into(), name.into(), "enabled".into()];
+                assert_eq!(
+                    config.get_segments(&segments, None),
+                    Some((json!(enabled), source))
+                );
+            }
+            assert_eq!(
+                config.get_segments(
+                    &[
+                        "extensions".into(),
+                        "missing\"name".into(),
+                        "enabled".into()
+                    ],
+                    None
+                ),
+                Some((json!(true), config::Source::Default))
+            );
+            assert_eq!(config.get_segments(&["unknown".into()], None), None);
+        },
+    );
+}
+
+#[test]
+fn set_preserves_equivalent_extension_leaf_spellings_in_person_layers() {
+    fakes::within(
+        "alias writes and effective reads",
+        std::time::Duration::from_secs(10),
+        || {
+            let full = "github.com/aakshintala/fiber/providers/opencode";
+            for layer in [Layer::Global, Layer::Project] {
+                for (stored, requested) in [(full, "opencode"), ("opencode", full)] {
+                    let setup = Setup::new();
+                    let file = match layer {
+                        Layer::Global => setup.global(),
+                        Layer::Project => setup.project(),
+                        Layer::Repository => unreachable!(),
+                    };
+                    setup.write(
+                        &file,
+                        &json!({"extensions": {stored: {"enabled": false}}, "model": "a/b"})
+                            .to_string(),
+                    );
+                    set(
+                        &setup.home(),
+                        &setup.workspace(),
+                        &key(),
+                        layer,
+                        &format!("extensions.\"{requested}\".enabled"),
+                        json!(true),
+                    )
+                    .unwrap();
+                    let written: serde_json::Value =
+                        serde_json::from_str(&fs::read_to_string(&file).unwrap()).unwrap();
+                    assert_eq!(
+                        written,
+                        json!({"extensions": {stored: {"enabled": true}}, "model": "a/b"})
+                    );
+                    let config = setup.load(&[]).unwrap();
+                    for name in [full, "opencode"] {
+                        assert_eq!(
+                            config
+                                .get(&format!("extensions.\"{name}\".enabled"), None)
+                                .unwrap()
+                                .0,
+                            json!(true)
+                        );
+                    }
+                    assert!(!setup.repository().exists());
+                }
+            }
+        },
+    );
+}
+
+#[test]
+fn set_joins_an_existing_extension_spelling_without_checking_unrelated_values() {
+    fakes::within(
+        "new alias leaf writes",
+        std::time::Duration::from_secs(10),
+        || {
+            let setup = Setup::new();
+            let full = "github.com/aakshintala/fiber/providers/opencode";
+            setup.write(
+                &setup.global(),
+                &json!({"extensions": {full: {"startup_timeout_ms": 500}}, "model": 3}).to_string(),
+            );
+            set(
+                &setup.home(),
+                &setup.workspace(),
+                &key(),
+                Layer::Global,
+                "extensions.\"opencode\".enabled",
+                json!(false),
+            )
+            .unwrap();
+            let written: serde_json::Value =
+                serde_json::from_str(&fs::read_to_string(setup.global()).unwrap()).unwrap();
+            assert_eq!(
+                written,
+                json!({"extensions": {full: {"startup_timeout_ms": 500, "enabled": false}}, "model": 3})
+            );
+        },
+    );
+}
+
+#[test]
+fn set_refuses_duplicate_extension_leaves_without_changing_the_file() {
+    fakes::within(
+        "duplicate alias refusal",
+        std::time::Duration::from_secs(10),
+        || {
+            let setup = Setup::new();
+            let text = r#"{"extensions":{"opencode":{"enabled":true},"github.com/aakshintala/fiber/providers/opencode":{"enabled":false}}}"#;
+            setup.write(&setup.global(), text);
+            let error = set(
+                &setup.home(),
+                &setup.workspace(),
+                &key(),
+                Layer::Global,
+                "extensions.\"opencode\".enabled",
+                json!(true),
+            )
+            .unwrap_err();
+            assert_eq!(error.code(), ErrorCode::ConfigInvalid);
+            assert!(matches!(
+                error,
+                config::ConfigError::DuplicateExtension { .. }
+            ));
+            assert_eq!(fs::read_to_string(setup.global()).unwrap(), text);
+        },
+    );
+}
+
+#[test]
+fn set_keeps_disjoint_alias_leaves_and_uses_requested_spelling_for_new_extensions() {
+    fakes::within(
+        "disjoint alias and fresh writes",
+        std::time::Duration::from_secs(10),
+        || {
+            let setup = Setup::new();
+            let full = "github.com/aakshintala/fiber/providers/opencode";
+            setup.write(&setup.global(), &json!({"extensions": {full: {"startup_timeout_ms": 500}, "opencode": {"enabled": false}}}).to_string());
+            set(
+                &setup.home(),
+                &setup.workspace(),
+                &key(),
+                Layer::Global,
+                "extensions.\"opencode\".enabled",
+                json!(true),
+            )
+            .unwrap();
+            let written: serde_json::Value =
+                serde_json::from_str(&fs::read_to_string(setup.global()).unwrap()).unwrap();
+            assert_eq!(
+                written,
+                json!({"extensions": {full: {"startup_timeout_ms": 500}, "opencode": {"enabled": true}}})
+            );
+            assert_eq!(
+                setup
+                    .load(&[])
+                    .unwrap()
+                    .get("extensions.\"opencode\".enabled", None)
+                    .unwrap()
+                    .0,
+                json!(true)
+            );
+            for name in ["memory", "github.com/acme/lint"] {
+                set(
+                    &setup.home(),
+                    &setup.workspace(),
+                    &key(),
+                    Layer::Project,
+                    &format!("extensions.\"{name}\".enabled"),
+                    json!(false),
+                )
+                .unwrap();
+            }
+            let written: serde_json::Value =
+                serde_json::from_str(&fs::read_to_string(setup.project()).unwrap()).unwrap();
+            assert_eq!(
+                written,
+                json!({"extensions": {"memory": {"enabled": false}, "github.com/acme/lint": {"enabled": false}}})
+            );
+        },
+    );
+}
+
+#[test]
 fn a_write_creates_the_global_file_sorted_with_a_two_space_indent() {
     let setup = Setup::new();
     set(

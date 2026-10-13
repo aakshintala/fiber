@@ -2,20 +2,20 @@
 source: crates/tui/src/view/offer_tests.rs
 expression: screen
 ---
-Repository code · 1 item                                                       ✕
-A package's TUI files are never installed from a repository.
+ Offer  repository code                                              Esc returns
 
-› extension lint · 1.0.0
-     approve  [skip]  never
-    extension lint
-    files: a.ts
+▸ Extension lint · 1.0.0
+  extension lint
+  files: a.ts
+  the declaration changed
     -old
     +new
+  ( ) approve   (•) skip for this session   ( ) never
 
+A package's TUI files are never installed from a repository.
+
+↑↓ choose an item · ←→ its answer · Send answers them all · Esc puts it aside
   Send · 0 approve, 1 skip, 0 never
-
-
-
 
 
 

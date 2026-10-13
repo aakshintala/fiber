@@ -259,8 +259,9 @@ impl Starter for GateStarter {
         &self,
         id: &SessionId,
         workspace: &std::path::Path,
+        credential: Option<&str>,
     ) -> std::io::Result<Box<dyn Started>> {
-        self.inner.resume(id, workspace)
+        self.inner.resume(id, workspace, credential)
     }
 
     fn rewind(
@@ -358,6 +359,7 @@ impl Starter for FailRewind {
         &self,
         _id: &SessionId,
         _workspace: &std::path::Path,
+        _credential: Option<&str>,
     ) -> std::io::Result<Box<dyn Started>> {
         Err(std::io::Error::other("unused"))
     }

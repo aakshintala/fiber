@@ -181,9 +181,20 @@ fn sid() -> SessionId {
 /// received with a wall-clock deadline.
 #[track_caller]
 fn resumed(hub: &Arc<Hub>) -> Result<UnixStream, Refused> {
+    resumed_with(hub, None)
+}
+
+/// Runs `resume` with an asked credential label on a thread, received
+/// with a wall-clock deadline.
+#[track_caller]
+fn resumed_with(hub: &Arc<Hub>, credential: Option<&str>) -> Result<UnixStream, Refused> {
     let (done, finished) = mpsc::channel();
     let hub = Arc::clone(hub);
-    thread::spawn(move || done.send(resume(&hub, &sid())).unwrap_or(()));
+    let credential = credential.map(str::to_owned);
+    thread::spawn(move || {
+        done.send(resume(&hub, &sid(), credential.as_deref()))
+            .unwrap_or(())
+    });
     Deadline::after(DEADLINE)
         .recv(&finished)
         .expect("the resume answers before its deadline")
@@ -192,9 +203,20 @@ fn resumed(hub: &Arc<Hub>) -> Result<UnixStream, Refused> {
 /// Runs `resume_exited` on a thread, received with a wall-clock deadline.
 #[track_caller]
 fn resumed_exited(hub: &Arc<Hub>) -> Result<UnixStream, Refused> {
+    resumed_exited_with(hub, None)
+}
+
+/// Runs `resume_exited` with an asked credential label on a thread,
+/// received with a wall-clock deadline.
+#[track_caller]
+fn resumed_exited_with(hub: &Arc<Hub>, credential: Option<&str>) -> Result<UnixStream, Refused> {
     let (done, finished) = mpsc::channel();
     let hub = Arc::clone(hub);
-    thread::spawn(move || done.send(resume_exited(&hub, &sid())).unwrap_or(()));
+    let credential = credential.map(str::to_owned);
+    thread::spawn(move || {
+        done.send(resume_exited(&hub, &sid(), credential.as_deref()))
+            .unwrap_or(())
+    });
     Deadline::after(DEADLINE)
         .recv(&finished)
         .expect("the resume answers before its deadline")
@@ -205,7 +227,7 @@ fn resumed_exited(hub: &Arc<Hub>) -> Result<UnixStream, Refused> {
 fn resuming(hub: &Arc<Hub>) -> mpsc::Receiver<Result<UnixStream, Refused>> {
     let (done, finished) = mpsc::channel();
     let hub = Arc::clone(hub);
-    thread::spawn(move || done.send(resume(&hub, &sid())).unwrap_or(()));
+    thread::spawn(move || done.send(resume(&hub, &sid(), None)).unwrap_or(()));
     finished
 }
 
@@ -248,6 +270,182 @@ fn a_running_session_is_attached_to_without_a_resume() {
     assert!(resumed(&hub).is_ok());
     assert!(starter.resumed().is_empty());
     assert!(!temp.hub_log().contains("session_resumed"));
+}
+
+#[test]
+fn an_exited_session_resume_carries_the_asked_label_to_the_starter() {
+    let temp = Temp::new();
+    let workspace = temp.recorded();
+    let starter = FakeStarter::bind_and_hold(&temp.dir);
+    let hub = temp.hub(starter.clone());
+    assert!(resumed_with(&hub, Some("work")).is_ok());
+    assert_eq!(starter.resumed(), [(sid(), workspace)]);
+    assert_eq!(starter.asked(), [Some("work".to_owned())]);
+}
+
+#[test]
+fn a_resume_without_a_label_asks_for_none() {
+    let temp = Temp::new();
+    temp.recorded();
+    let starter = FakeStarter::bind_and_hold(&temp.dir);
+    let hub = temp.hub(starter.clone());
+    assert!(resumed(&hub).is_ok());
+    assert_eq!(starter.resumed().len(), 1);
+    assert_eq!(starter.asked(), [None]);
+}
+
+#[test]
+fn a_running_session_resume_starts_nothing_and_asks_for_nothing() {
+    let temp = Temp::new();
+    temp.recorded();
+    let run = temp.dir.join("run");
+    fs::create_dir_all(&run).unwrap();
+    let _running = UnixListener::bind(run.join(SID)).unwrap();
+    let starter = FakeStarter::bind_and_hold(&temp.dir);
+    let hub = temp.hub(starter.clone());
+    assert!(resumed_with(&hub, Some("work")).is_ok());
+    assert!(starter.resumed().is_empty());
+    assert!(starter.asked().is_empty());
+}
+
+#[test]
+fn an_exited_session_resume_exited_carries_the_asked_label_to_the_starter() {
+    let temp = Temp::new();
+    let workspace = temp.recorded();
+    let starter = FakeStarter::bind_and_hold(&temp.dir);
+    let hub = temp.hub(starter.clone());
+    assert!(resumed_exited_with(&hub, Some("work")).is_ok());
+    assert_eq!(starter.resumed(), [(sid(), workspace)]);
+    assert_eq!(starter.asked(), [Some("work".to_owned())]);
+}
+
+#[test]
+fn an_opening_subscribe_with_a_label_starts_the_session_on_it() {
+    let temp = Temp::new();
+    temp.recorded();
+    let starter = FakeStarter::bind_and_hold(&temp.dir);
+    let hub = temp.hub(starter.clone());
+    let mut client = Client::connect(&hub);
+    client.subscribe_with("c_1", "full", Some("work"));
+    assert_eq!(client.acknowledged("the subscribe"), "c_1");
+    assert_eq!(starter.asked(), [Some("work".to_owned())]);
+    // The original command is forwarded as sent, label included.
+    let received = starter.received();
+    assert_eq!(received.len(), 1, "{received:?}");
+    let line: Value = serde_json::from_str(&received[0]).unwrap();
+    assert_eq!(line["command"], "subscribe");
+    assert_eq!(line["args"]["level"], "full");
+    assert_eq!(line["args"]["credential"], "work");
+    assert!(starter.stop(&sid(), DEADLINE), "the fake session ended");
+}
+
+#[test]
+fn an_opening_subscribe_without_a_label_starts_the_session_without_one() {
+    let temp = Temp::new();
+    temp.recorded();
+    let starter = FakeStarter::bind_and_hold(&temp.dir);
+    let hub = temp.hub(starter.clone());
+    let mut client = Client::connect(&hub);
+    client.subscribe("c_1", "full");
+    assert_eq!(client.acknowledged("the subscribe"), "c_1");
+    assert_eq!(starter.resumed().len(), 1);
+    assert_eq!(starter.asked(), [None]);
+    assert!(starter.stop(&sid(), DEADLINE), "the fake session ended");
+}
+
+#[test]
+fn an_opening_subscribe_with_a_wrong_typed_level_and_a_label_starts_nothing() {
+    let temp = Temp::new();
+    temp.recorded();
+    let starter = FakeStarter::bind_and_hold(&temp.dir);
+    let hub = temp.hub(starter.clone());
+    let mut client = Client::connect(&hub);
+    client.subscribe_raw("c_1", json!({"level": 1, "credential": "work"}));
+    let rejected = client.next("the rejection");
+    assert_eq!(rejected["kind"], "command_rejected", "{rejected}");
+    assert_eq!(rejected["payload"]["command_id"], "c_1");
+    assert_eq!(rejected["payload"]["code"], "invalid_arguments");
+    assert!(starter.resumed().is_empty(), "no process starts");
+    assert!(starter.asked().is_empty(), "no label is used");
+}
+
+#[test]
+fn an_opening_subscribe_with_an_unknown_arg_and_a_label_starts_nothing() {
+    let temp = Temp::new();
+    temp.recorded();
+    let starter = FakeStarter::bind_and_hold(&temp.dir);
+    let hub = temp.hub(starter.clone());
+    let mut client = Client::connect(&hub);
+    client.subscribe_raw(
+        "c_1",
+        json!({"level": "full", "credential": "work", "future": 1}),
+    );
+    let rejected = client.next("the rejection");
+    assert_eq!(rejected["kind"], "command_rejected", "{rejected}");
+    assert_eq!(rejected["payload"]["command_id"], "c_1");
+    assert_eq!(rejected["payload"]["code"], "invalid_arguments");
+    assert!(starter.resumed().is_empty(), "no process starts");
+    assert!(starter.asked().is_empty(), "no label is used");
+}
+
+#[test]
+fn an_opening_subscribe_with_a_null_credential_starts_nothing() {
+    // An optional key is absent, never null: an explicit null is
+    // refused before any process starts, not read as absent.
+    let temp = Temp::new();
+    temp.recorded();
+    let starter = FakeStarter::bind_and_hold(&temp.dir);
+    let hub = temp.hub(starter.clone());
+    let mut client = Client::connect(&hub);
+    client.subscribe_raw("c_1", json!({"level": "full", "credential": Value::Null}));
+    let rejected = client.next("the rejection");
+    assert_eq!(rejected["kind"], "command_rejected", "{rejected}");
+    assert_eq!(rejected["payload"]["command_id"], "c_1");
+    assert_eq!(rejected["payload"]["code"], "invalid_arguments");
+    assert!(starter.resumed().is_empty(), "no process starts");
+    assert!(starter.asked().is_empty(), "no label is used");
+}
+
+#[test]
+fn an_opening_subscribe_with_a_wrong_typed_credential_starts_nothing() {
+    let temp = Temp::new();
+    temp.recorded();
+    let starter = FakeStarter::bind_and_hold(&temp.dir);
+    let hub = temp.hub(starter.clone());
+    let mut client = Client::connect(&hub);
+    client.subscribe_raw("c_1", json!({"level": "full", "credential": 1}));
+    let rejected = client.next("the rejection");
+    assert_eq!(rejected["kind"], "command_rejected", "{rejected}");
+    assert_eq!(rejected["payload"]["command_id"], "c_1");
+    assert_eq!(rejected["payload"]["code"], "invalid_arguments");
+    assert!(starter.resumed().is_empty(), "no process starts");
+    assert!(starter.asked().is_empty(), "no label is used");
+}
+
+#[test]
+fn a_label_bearing_subscribe_past_an_exited_process_starts_the_session_on_it() {
+    let temp = Temp::new();
+    temp.recorded();
+    temp.append("fiber_exited");
+    // A session whose log is gone answers `subscribe` `closing` too.
+    let dying = FakeStarter::closing_every_command(&temp.dir);
+    let started = crate::Starter::start(&dying, &sid(), &temp.workspace(), None, &[], false);
+    assert!(started.is_ok(), "the closing session binds");
+    let starter = FakeStarter::bind_and_hold(&temp.dir);
+    let hub = temp.hub(starter.clone());
+    let mut client = Client::connect(&hub);
+    client.subscribe_with("c_1", "full", Some("work"));
+    let until = temp.clock.origin() + HELD_POLL;
+    assert!(
+        temp.clock.await_parked(until, DEADLINE),
+        "the hub waits out the exiting process"
+    );
+    assert!(dying.stop(&sid(), DEADLINE), "the exiting process ended");
+    temp.clock.advance(HELD_POLL);
+    // One acknowledgement, the resumed session's.
+    assert_eq!(client.acknowledged("the subscribe"), "c_1");
+    assert_eq!(starter.asked(), [Some("work".to_owned())]);
+    assert!(starter.stop(&sid(), DEADLINE), "the fake session ended");
 }
 
 #[test]
@@ -499,7 +697,7 @@ fn two_commands_for_one_exited_session_start_one_process() {
     for _ in 0..2 {
         let hub = Arc::clone(&hub);
         let done = done.clone();
-        thread::spawn(move || done.send(resume(&hub, &sid()).is_ok()).unwrap_or(()));
+        thread::spawn(move || done.send(resume(&hub, &sid(), None).is_ok()).unwrap_or(()));
     }
     let wait = Deadline::after(DEADLINE);
     for _ in 0..2 {
@@ -547,11 +745,36 @@ impl Client {
 
     /// Sends a `subscribe` for the session at `level`.
     fn subscribe(&mut self, id: &str, level: &str) {
+        self.subscribe_with(id, level, None);
+    }
+
+    /// Sends a `subscribe` for the session at `level`, asking for
+    /// `credential` when one is named.
+    fn subscribe_with(&mut self, id: &str, level: &str, credential: Option<&str>) {
+        let mut args = serde_json::Map::new();
+        args.insert("level".into(), Value::String(level.to_owned()));
+        if let Some(credential) = credential {
+            args.insert("credential".into(), Value::String(credential.to_owned()));
+        }
         let line = json!({
             "id": id,
             "session_id": SID,
             "command": "subscribe",
-            "args": {"level": level},
+            "args": Value::Object(args),
+        });
+        let mut bytes = serde_json::to_vec(&line).unwrap();
+        bytes.push(b'\n');
+        self.write.write_all(&bytes).unwrap();
+        self.write.flush().unwrap();
+    }
+
+    /// Sends `args` as the subscribe's args verbatim.
+    fn subscribe_raw(&mut self, id: &str, args: Value) {
+        let line = json!({
+            "id": id,
+            "session_id": SID,
+            "command": "subscribe",
+            "args": args,
         });
         let mut bytes = serde_json::to_vec(&line).unwrap();
         bytes.push(b'\n');

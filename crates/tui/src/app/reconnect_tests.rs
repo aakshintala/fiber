@@ -951,3 +951,48 @@ fn an_open_left_before_its_answer_gates_nothing_after_a_reconnect() {
     );
     assert!(app.badge().is_some() || app.panel().is_some());
 }
+
+#[test]
+fn a_reconnect_after_an_accepted_open_carries_no_credential() {
+    let mut app = home();
+    linked(&mut app);
+    let open = started(&mut app, S_A);
+    fold(&mut app, accepted(S_A, &id_of(&open[0])));
+    let lines = parsed(&reconnect(&mut app));
+    let subscribe = lines
+        .iter()
+        .find(|line| line["command"] == "subscribe")
+        .unwrap_or_else(|| panic!("a fresh subscribe: {lines:?}"));
+    assert_eq!(subscribe["session_id"], S_A);
+    assert_eq!(
+        subscribe["args"],
+        json!({"level": "full"}),
+        "a reconnect carries no earlier asked label"
+    );
+}
+
+#[test]
+fn a_reconnect_before_the_open_is_answered_carries_no_credential() {
+    let mut app = home();
+    linked(&mut app);
+    let open = started(&mut app, S_A);
+    let prompt = open[2].clone();
+    // The opening subscribe is still in flight: it was never kept, so the
+    // new connection subscribes afresh, and the kept prompt goes out
+    // unchanged behind it.
+    let lines = parsed(&reconnect(&mut app));
+    let subscribe = lines
+        .iter()
+        .find(|line| line["command"] == "subscribe")
+        .unwrap_or_else(|| panic!("a fresh subscribe: {lines:?}"));
+    assert_eq!(subscribe["session_id"], S_A);
+    assert_eq!(
+        subscribe["args"],
+        json!({"level": "full"}),
+        "an unanswered opening subscribe is not replayed with a label"
+    );
+    assert!(
+        lines.contains(&prompt),
+        "the ordinary kept prompt goes out unchanged"
+    );
+}
