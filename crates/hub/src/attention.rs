@@ -9,12 +9,10 @@ use std::fs::File;
 use std::io::{Read, Seek, SeekFrom};
 use std::os::unix::net::UnixStream;
 use std::path::Path;
-#[cfg(test)]
-use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
-use std::thread::JoinHandle;
 
-use crate::feed::{Closer, Fanout};
+use crate::feed::{Closer, Fanout, close_connections};
 
 use contract::clock::{Clock, wall_ms};
 use contract::events::{SessionState, SessionStatus};
@@ -161,8 +159,7 @@ pub(crate) struct Attention {
     started_ms: u64,
     announced: Mutex<BTreeMap<String, Announced>>,
     listeners: Mutex<Fanout>,
-    #[cfg(test)]
-    joining: AtomicUsize,
+    stopped: AtomicBool,
     #[cfg(test)]
     fail_listen: AtomicBool,
 }
@@ -175,8 +172,7 @@ impl Attention {
             started_ms,
             announced: Mutex::new(BTreeMap::new()),
             listeners: Mutex::new(Fanout::default()),
-            #[cfg(test)]
-            joining: AtomicUsize::new(0),
+            stopped: AtomicBool::new(false),
             #[cfg(test)]
             fail_listen: AtomicBool::new(false),
         }
@@ -192,14 +188,24 @@ impl Attention {
         if self.fail_listen.swap(false, Ordering::SeqCst) {
             return None;
         }
+        let mut listeners = lock(&self.listeners);
+        if self.stopped.load(Ordering::SeqCst) {
+            return None;
+        }
+        // Under the registry lock, so the stopped check and the admission
+        // are atomic: no writer starts past a stop.
         let spawned = crate::feed::spawn_writer(writer, "hub-attention-out")?;
-        Some(lock(&self.listeners).push(spawned, closer, retired, &[]))
+        Some(listeners.push(spawned, closer, retired, Arc::from([])))
     }
 
     /// Queues one unsolicited hub line to every served connection, handing
     /// back the shutdown of every listener that already disconnected, for
-    /// the caller to run outside every lock.
+    /// the caller to run outside every lock. Past a stop the line is
+    /// dropped.
     pub(crate) fn announce(&self, line: crate::feed::Line) -> Vec<Closer> {
+        if self.stopped.load(Ordering::SeqCst) {
+            return Vec::new();
+        }
         lock(&self.listeners).broadcast(&line)
     }
 
@@ -208,22 +214,37 @@ impl Attention {
         self.fail_listen.store(true, Ordering::SeqCst);
     }
 
-    /// Drops listener `id` and joins its writer, after releasing the lock.
+    /// Drops listener `id`: its connection is shut so a writer blocked on
+    /// a stalled reader ends at once, and its thread is joined after the
+    /// lock is released.
     pub(crate) fn unlisten(&self, id: u64) {
         let gone = lock(&self.listeners).remove(id);
         if let Some(end) = gone {
-            drop(end.closer);
+            close_connections(vec![end.closer], UnixStream::shutdown);
             if let Some(writer) = end.writer {
-                self.join(writer);
+                match writer.join() {
+                    Ok(()) | Err(_) => {}
+                }
             }
         }
     }
 
-    fn join(&self, handle: JoinHandle<()>) {
-        #[cfg(test)]
-        self.joining.fetch_add(1, Ordering::SeqCst);
-        match handle.join() {
-            Ok(()) | Err(_) => {}
+    /// Stops the registry for the feed's stop: no later listen registers
+    /// and no later line is queued. Writers are joined without shutting
+    /// their sockets: a relay-only connection never feeds, so its socket
+    /// must keep receiving past the feed's stop, and shutting it would
+    /// close the relay too. Shutting active writers waits for pending
+    /// registrations, which own no thread and are dropped unshut.
+    pub(crate) fn stop(&self) {
+        self.stopped.store(true, Ordering::SeqCst);
+        let old = std::mem::take(&mut *lock(&self.listeners));
+        for end in old.close() {
+            drop(end.closer);
+            if let Some(writer) = end.writer {
+                match writer.join() {
+                    Ok(()) | Err(_) => {}
+                }
+            }
         }
     }
 
@@ -243,6 +264,9 @@ impl Attention {
         now: &SessionStatus,
         unseen: bool,
     ) -> Vec<Closer> {
+        if self.stopped.load(Ordering::SeqCst) {
+            return Vec::new();
+        }
         let line = {
             let mut announced = lock(&self.announced);
             let known = announced.get(session).cloned().unwrap_or_default();
@@ -279,17 +303,6 @@ impl Attention {
     #[cfg(test)]
     pub(crate) fn listeners(&self) -> usize {
         lock(&self.listeners).ids().len()
-    }
-
-    #[cfg(test)]
-    pub(crate) fn joining(&self) -> usize {
-        self.joining.load(Ordering::SeqCst)
-    }
-
-    /// How many listeners' writers have returned.
-    #[cfg(test)]
-    pub(crate) fn ended(&self) -> usize {
-        lock(&self.listeners).active_finished()
     }
 }
 

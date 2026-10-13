@@ -95,6 +95,13 @@ pub(crate) struct Hub {
     /// Tests only: runs handing a queued command over, or clearing it.
     #[cfg(test)]
     pub(crate) on_pass_on: PassOnHook,
+    /// Tests only: a one-shot pause run after the read loop ends and
+    /// before the write shutdown, with its own mutex released: the forced
+    /// overflow races hold it to order connection teardown against the
+    /// bound report. No other race hook is required: queue fullness, EOF
+    /// and joins need none.
+    #[cfg(test)]
+    pub(crate) before_disconnect_cleanup: Mutex<Option<Box<dyn FnOnce() + Send>>>,
     /// Tests only: names `hub-ws-*` threads whose spawns fail, so the
     /// port's spawn-failure paths run without an outside seam.
     #[cfg(test)]
@@ -179,6 +186,8 @@ impl Hub {
             before_open: Mutex::new(None),
             #[cfg(test)]
             on_pass_on: Mutex::new(None),
+            #[cfg(test)]
+            before_disconnect_cleanup: Mutex::new(None),
             #[cfg(test)]
             fail_spawn: Mutex::new(None),
         }
@@ -408,7 +417,7 @@ pub(crate) fn serve_connection(stream: UnixStream, hub: Arc<Hub>) {
 
 /// Serves an accepted connection already counted by [`Hub::poll_accept`].
 pub(crate) fn serve_counted(stream: UnixStream, hub: Arc<Hub>, n: u64) {
-    serve_from(stream, hub, n, true, crate::pairing::Who::Local);
+    serve_from(stream, hub, n, true, crate::pairing::Who::Local, None);
 }
 
 /// Serves an authenticated websocket's pair end, already counted by
@@ -419,14 +428,22 @@ pub(crate) fn serve_authenticated(
     hub: Arc<Hub>,
     n: u64,
     who: crate::pairing::Who,
+    web: Option<Arc<crate::port::Web>>,
 ) {
-    serve_from(stream, hub, n, false, who);
+    serve_from(stream, hub, n, false, who, web);
 }
 
 /// Serves a counted connection: with `hello`, `hub_hello` first, then one
 /// acknowledgement per hub command and a relay thread per session
 /// commanded on it.
-fn serve_from(stream: UnixStream, hub: Arc<Hub>, n: u64, hello: bool, who: crate::pairing::Who) {
+fn serve_from(
+    stream: UnixStream,
+    hub: Arc<Hub>,
+    n: u64,
+    hello: bool,
+    who: crate::pairing::Who,
+    web: Option<Arc<crate::port::Web>>,
+) {
     hub.diag.line(
         Severity::Info,
         None,
@@ -443,13 +460,13 @@ fn serve_from(stream: UnixStream, hub: Arc<Hub>, n: u64, hello: bool, who: crate
     };
     // Each registration's own shutdown, cloned from the connection
     // stream before it is read from, without the shared writer mutex:
-    // cleanup never clones at the moment it runs. Local connections
-    // carry no websocket.
+    // cleanup never clones at the moment it runs. A bridged connection
+    // also carries its websocket's TCP shutdown.
     let shutdown_of = |stream: &UnixStream| {
-        stream
-            .try_clone()
-            .ok()
-            .map(|stream| crate::feed::Closer { stream, web: None })
+        stream.try_clone().ok().map(|stream| crate::feed::Closer {
+            stream,
+            web: web.clone(),
+        })
     };
     let (Some(feed_closer), Some(heard_closer), Some(heard_retired)) = (
         shutdown_of(&stream),
@@ -501,6 +518,15 @@ fn serve_from(stream: UnixStream, hub: Arc<Hub>, n: u64, hello: bool, who: crate
                 on_command(&buf, &hub, &writer, &feed_closer, &relays, &mut fed, &who);
             }
         }
+    }
+    // The test pause runs after the read loop and before the write
+    // shutdown, with its mutex released: taking it out drops the guard
+    // before the callback runs.
+    #[cfg(test)]
+    let before_disconnect_cleanup = lock(&hub.before_disconnect_cleanup).take();
+    #[cfg(test)]
+    if let Some(cleanup) = before_disconnect_cleanup {
+        cleanup();
     }
     // Fails a blocked writer: the write half only, since a client that
     // half-closed already disconnected the socket, and shutting down a

@@ -685,7 +685,7 @@ fn a_failed_listener_registration_refuses_the_connection_and_keeps_the_notice() 
     let (stream, mut peer) = UnixStream::pair().unwrap();
     peer.set_read_timeout(Some(Duration::from_secs(2))).unwrap();
     hub.feed.attention.fail_next_listen();
-    crate::connection::serve_authenticated(stream, Arc::clone(&hub), 1, who);
+    crate::connection::serve_authenticated(stream, Arc::clone(&hub), 1, who, None);
     let mut line = String::new();
     assert_eq!(BufReader::new(&mut peer).read_line(&mut line).unwrap(), 0);
     let mut reader = BufReader::new(other_peer);

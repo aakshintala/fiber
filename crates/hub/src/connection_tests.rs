@@ -10,7 +10,7 @@
 )]
 
 use std::fs;
-use std::io::{BufRead, BufReader, Write};
+use std::io::{BufRead, BufReader, Read, Write};
 use std::net::Shutdown;
 use std::os::unix::net::{UnixListener, UnixStream};
 use std::path::{Path, PathBuf};
@@ -22,7 +22,7 @@ use serde_json::{Value, json};
 
 use super::*;
 use crate::fake::FakeStarter;
-use crate::testkit::stop_within;
+use crate::testkit::{await_true, stop_within};
 use crate::{Started, Starter};
 use contract::events::SessionStatus;
 use fakes::Deadline;
@@ -1189,6 +1189,181 @@ fn a_client_that_half_closes_without_reading_still_leaves() {
     until_listeners(&hub, 0, "after D half-closed");
     until_clients(&hub, 0, "after D half-closed");
     stop_within(&hub.feed);
+}
+
+/// A served connection plus a test-owned attention subscriber on a clone
+/// of its socket: the subscriber is what overflows, while the
+/// connection's teardown races the bound report.
+struct OverflowRace {
+    _temp: Temp,
+    hub: Arc<Hub>,
+    client: UnixStream,
+    read: BufReader<UnixStream>,
+    owned: Arc<Mutex<UnixStream>>,
+    serve_rx: mpsc::Receiver<()>,
+    paused_rx: mpsc::Receiver<()>,
+    release_tx: mpsc::Sender<()>,
+}
+
+/// Serves one counted connection, drains its `hub_hello`, and overflows a
+/// test-owned subscriber on a clone of its socket up to the bound report:
+/// a 4 MiB line the writer blocks on, never read by the peer. Returns the
+/// race with the writer proven blocked and the teardown pause armed.
+fn overflow_race() -> OverflowRace {
+    let temp = Temp::new();
+    let hub = temp.hub(FakeStarter::hang(&temp.dir));
+    let (server, client) = UnixStream::pair().unwrap();
+    client.set_read_timeout(Some(DEADLINE)).unwrap();
+    let sub_sock = server.try_clone().unwrap();
+    let closer_sock = server.try_clone().unwrap();
+    let retired_sock = server.try_clone().unwrap();
+    let n = hub
+        .register(&server)
+        .expect("the hub counts the connection");
+    let serve_hub = Arc::clone(&hub);
+    let (serve_tx, serve_rx) = mpsc::channel();
+    thread::spawn(move || {
+        serve_counted(server, serve_hub, n);
+        serve_tx.send(()).unwrap_or(());
+    });
+    let mut read = BufReader::new(client.try_clone().unwrap());
+    let mut hello = String::new();
+    read.read_line(&mut hello).unwrap();
+    assert_eq!(
+        serde_json::from_str::<Value>(&hello).unwrap()["kind"],
+        "hub_hello"
+    );
+    until_listeners(&hub, 1, "the connection registered");
+    let owned = Arc::new(Mutex::new(sub_sock));
+    let closer = crate::feed::Closer {
+        stream: closer_sock,
+        web: None,
+    };
+    let retired = crate::feed::Closer {
+        stream: retired_sock,
+        web: None,
+    };
+    hub.feed
+        .attention
+        .listen(Arc::clone(&owned), closer, retired)
+        .unwrap();
+    until_listeners(&hub, 2, "the test subscriber registered");
+    // One line larger than any socket buffer, never read: the writer
+    // blocks in its write path, which the held mutex proves.
+    let big = waiting_status(&format!("r-big-{}", "x".repeat(4 * 1024 * 1024)));
+    drop(
+        hub.feed
+            .attention
+            .notify("s_0000000000000bb0", None, &big, false),
+    );
+    let blocked = Arc::clone(&owned);
+    await_true("the writer to block in its write", move || {
+        blocked.try_lock().is_err()
+    });
+    let (paused_tx, paused_rx) = mpsc::channel();
+    let (release_tx, release_rx) = mpsc::channel::<()>();
+    *lock(&hub.before_disconnect_cleanup) = Some(Box::new(move || {
+        paused_tx.send(()).unwrap_or(());
+        release_rx.recv().unwrap_or(());
+    }));
+    OverflowRace {
+        _temp: temp,
+        hub,
+        client,
+        read,
+        owned,
+        serve_rx,
+        paused_rx,
+        release_tx,
+    }
+}
+
+/// QUEUE+1 small lines after the big one: the bound fires for every
+/// stalled listener, and the shutdown runs outside every lock. The loop
+/// allows for the dequeued empty snapshot and stops at the report.
+fn overflow_full(race: &OverflowRace) {
+    let mut closers = Vec::new();
+    for n in 0..crate::feed::QUEUE + 10 {
+        if !closers.is_empty() {
+            break;
+        }
+        let session = format!("s_{n:016x}");
+        let status = waiting_status(&format!("r{n}"));
+        closers.extend(
+            race.hub
+                .feed
+                .attention
+                .notify(&session, None, &status, false),
+        );
+    }
+    assert!(!closers.is_empty(), "the bound fired");
+    crate::feed::close_connections(closers, UnixStream::shutdown);
+    until_listeners(&race.hub, 0, "the overflow unregistered every listener");
+}
+
+/// The race converged: the read loop returned, the count released, EOF
+/// drained, and the writer ended and joined.
+fn overflow_joined(race: OverflowRace, what: &str) {
+    let OverflowRace {
+        _temp: _,
+        hub,
+        client,
+        mut read,
+        owned,
+        serve_rx,
+        paused_rx: _,
+        release_tx: _,
+    } = race;
+    Deadline::after(DEADLINE)
+        .recv(&serve_rx)
+        .unwrap_or_else(|_| panic!("the read loop returns {what}"));
+    until_clients(&hub, 0, "the count released");
+    // Whatever partial writes landed drains first; then EOF.
+    let mut buf = [0; 8];
+    loop {
+        match read.read(&mut buf) {
+            Ok(0) => break,
+            Ok(_) => {}
+            Err(error) => panic!("the client drains to EOF {what}: {error}"),
+        }
+    }
+    let _ = client;
+    stop_within(&hub.feed);
+    assert_eq!(
+        Arc::strong_count(&owned),
+        1,
+        "the writer ended and joined {what}"
+    );
+}
+
+#[test]
+fn overflow_while_teardown_is_held_still_closes_and_releases() {
+    let race = overflow_race();
+    // The client's half-close ends the read loop; teardown pauses after
+    // EOF but before its own write shutdown.
+    race.client.shutdown(Shutdown::Write).unwrap();
+    Deadline::after(DEADLINE)
+        .recv(&race.paused_rx)
+        .expect("teardown to pause after EOF");
+    // The overflow runs while teardown is held, then teardown resumes.
+    overflow_full(&race);
+    race.release_tx.send(()).unwrap_or(());
+    overflow_joined(race, "after held teardown");
+}
+
+#[test]
+fn overflow_first_still_closes_and_releases() {
+    let race = overflow_race();
+    // The overflow's own read shutdown ends the connection reader, so
+    // teardown pauses; only then does the client half-close, whose errors
+    // after the disconnect are allowed.
+    overflow_full(&race);
+    Deadline::after(DEADLINE)
+        .recv(&race.paused_rx)
+        .expect("teardown to pause after the overflow");
+    race.client.shutdown(Shutdown::Write).unwrap_or(());
+    race.release_tx.send(()).unwrap_or(());
+    overflow_joined(race, "after the overflow first");
 }
 
 /// A hub on a fake clock whose sessions accept the first prompt, with the

@@ -8,8 +8,9 @@
     reason = "test helpers; a failure is the test's"
 )]
 
-use std::io::{BufRead, BufReader};
+use std::io::{BufRead, BufReader, Read, Write};
 use std::os::unix::net::UnixStream;
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, mpsc};
 use std::thread;
 use std::time::Duration;
@@ -716,38 +717,39 @@ fn a_dead_or_slow_listener_does_not_stop_a_live_one() {
         read_line(&mut read, "the first attention")["payload"]["reason"],
         "finished"
     );
-    let ended = Arc::clone(&attention);
-    let (tx, rx) = mpsc::channel();
-    thread::spawn(move || {
-        while ended.ended() != 1 {
-            thread::yield_now();
-        }
-        tx.send(()).unwrap_or(());
-    });
-    assert!(
-        Deadline::after(DEADLINE).recv(&rx).is_ok(),
-        "the dead writer ends"
-    );
     assert_eq!(
         attention.listeners(),
         3,
         "the dead sender stays until the next send"
     );
-    drop(attention.notify(
-        "a",
-        Some(heard),
-        &status_of("idle", None, S + 1, None),
-        false,
-    ));
-    assert_eq!(
-        attention.listeners(),
-        2,
-        "the failed send drops the dead listener"
-    );
+    // The dead writer ends on its first failed write; further sends retire
+    // it. Each send carries a distinct idle `since`, so none is
+    // deduplicated, and every send reaches the live listener.
+    let polls = Arc::new(AtomicU64::new(0));
+    let counted = Arc::clone(&polls);
+    let retiring = Arc::clone(&attention);
+    await_true("the dead listener to drop", move || {
+        if retiring.listeners() == 2 {
+            return true;
+        }
+        let n = polls.fetch_add(1, Ordering::SeqCst);
+        let streaming = status_of("streaming", None, S, None);
+        let idle = status_of("idle", None, S + 2 + n, None);
+        let heard = Seen {
+            status: &streaming,
+            live: true,
+        };
+        drop(retiring.notify("a", Some(heard), &idle, false));
+        false
+    });
+    let extra = counted.load(Ordering::SeqCst);
     assert_eq!(
         read_line(&mut read, "the second attention")["payload"]["reason"],
         "finished"
     );
+    for _ in 1..extra {
+        read_line(&mut read, "a further attention");
+    }
     let count = 1_000;
     for n in 0..count {
         let mut waiting = status_of("waiting", Some(&format!("r{n}")), S, None);
@@ -767,6 +769,197 @@ fn a_dead_or_slow_listener_does_not_stop_a_live_one() {
     unlisten_within(&attention, live, "the live unlisten returns");
     drop(slow_far);
     unlisten_within(&attention, slow, "the slow unlisten returns");
+}
+
+#[test]
+fn a_stalled_listener_is_dropped_at_the_bound_and_a_live_one_keeps_every_line() {
+    let clock = FakeClock::new();
+    let attention = Arc::new(Attention::new(Arc::clone(&clock) as Arc<dyn Clock>));
+    // Stalled: the test holds the writer mutex before listening, so the
+    // writer thread can never dequeue.
+    let (stalled, stalled_far) = UnixStream::pair().unwrap();
+    stalled_far.set_read_timeout(Some(DEADLINE)).unwrap();
+    let (stalled_closer, stalled_retired) = (closer_for(&stalled), closer_for(&stalled));
+    let held = Arc::new(Mutex::new(stalled));
+    let guard = held.lock().unwrap();
+    let stalled_id = attention
+        .listen(Arc::clone(&held), stalled_closer, stalled_retired)
+        .unwrap();
+    // Live: drains each line before the next notify, in order.
+    let (live, live_far) = UnixStream::pair().unwrap();
+    live_far.set_read_timeout(Some(DEADLINE)).unwrap();
+    let (live_closer, live_retired) = (closer_for(&live), closer_for(&live));
+    attention
+        .listen(Arc::new(Mutex::new(live)), live_closer, live_retired)
+        .unwrap();
+    let mut read = BufReader::new(live_far);
+    // QUEUE+2 distinct waiting requests: dedup cannot hide a send, and
+    // one dequeued in-flight item still leaves the bound firing.
+    let count = crate::feed::QUEUE + 2;
+    for n in 0..count {
+        let request = format!("r{n}");
+        let waiting = status_of("waiting", Some(&request), S, None);
+        let closers = attention.notify("s_0000000000000001", None, &waiting, false);
+        // Only the stalled connection can ever report: shut it outside
+        // every lock, as production callers do.
+        if !closers.is_empty() {
+            crate::feed::close_connections(closers, UnixStream::shutdown);
+        }
+        let line = read_line(&mut read, "every attention");
+        assert_eq!(line["payload"]["reason"], "waiting");
+        assert_eq!(line["payload"]["summary"], format!("run r{n}"));
+    }
+    // The bound fired while the mutex was still held: the stalled
+    // registration is gone and the live one is retained.
+    assert_eq!(attention.listeners(), 1, "the stalled listener is gone");
+    drop(guard);
+    // The overflow shut the stalled connection both ways: EOF, not a line.
+    let mut buf = [0; 1];
+    assert_eq!(
+        BufReader::new(stalled_far).read(&mut buf).unwrap(),
+        0,
+        "the stalled side sees EOF"
+    );
+    // Unlistening the removed id is a no-op, and stop joins the retired
+    // writer: no Arc survives it.
+    attention.unlisten(stalled_id);
+    let stopping = Arc::clone(&attention);
+    let (stopped_tx, stopped_rx) = mpsc::channel();
+    thread::spawn(move || {
+        stopping.stop();
+        stopped_tx.send(()).unwrap_or(());
+    });
+    assert!(
+        Deadline::after(DEADLINE).recv(&stopped_rx).is_ok(),
+        "stop returns"
+    );
+    assert_eq!(Arc::strong_count(&held), 1, "the writer ended and joined");
+}
+
+#[test]
+fn announce_reports_a_stalled_listener_without_silently_dropping_it() {
+    let clock = FakeClock::new();
+    let attention = Arc::new(Attention::new(Arc::clone(&clock) as Arc<dyn Clock>));
+    let (stalled, stalled_far) = UnixStream::pair().unwrap();
+    stalled_far.set_read_timeout(Some(DEADLINE)).unwrap();
+    let (stalled_closer, stalled_retired) = (closer_for(&stalled), closer_for(&stalled));
+    let held = Arc::new(Mutex::new(stalled));
+    let guard = held.lock().unwrap();
+    attention
+        .listen(Arc::clone(&held), stalled_closer, stalled_retired)
+        .unwrap();
+    let line = b"{\"kind\":\"device_changed\",\"payload\":{}}\n";
+    let mut reported = 0;
+    for _ in 0..crate::feed::QUEUE + 1 {
+        let closers = attention.announce(Arc::from(&line[..]));
+        if !closers.is_empty() {
+            reported += closers.len();
+            crate::feed::close_connections(closers, UnixStream::shutdown);
+        }
+    }
+    assert_eq!(reported, 1, "the overflow hands back exactly one shutdown");
+    assert_eq!(attention.listeners(), 0, "the stalled listener is gone");
+    drop(guard);
+    let mut buf = [0; 1];
+    assert_eq!(
+        BufReader::new(stalled_far).read(&mut buf).unwrap(),
+        0,
+        "the stalled side sees EOF"
+    );
+    let stopping = Arc::clone(&attention);
+    let (stopped_tx, stopped_rx) = mpsc::channel();
+    thread::spawn(move || {
+        stopping.stop();
+        stopped_tx.send(()).unwrap_or(());
+    });
+    assert!(
+        Deadline::after(DEADLINE).recv(&stopped_rx).is_ok(),
+        "stop returns"
+    );
+    assert_eq!(Arc::strong_count(&held), 1, "the writer ended and joined");
+}
+
+#[test]
+fn stop_shuts_the_registry_but_leaves_sockets_receiving() {
+    let clock = FakeClock::new();
+    let attention = Arc::new(Attention::new(Arc::clone(&clock) as Arc<dyn Clock>));
+    // Two live listeners; the test keeps each writer to probe its socket.
+    let (first, first_far) = UnixStream::pair().unwrap();
+    first_far.set_read_timeout(Some(DEADLINE)).unwrap();
+    let (first_closer, first_retired) = (closer_for(&first), closer_for(&first));
+    let first_writer = Arc::new(Mutex::new(first));
+    attention
+        .listen(Arc::clone(&first_writer), first_closer, first_retired)
+        .unwrap();
+    let (second, second_far) = UnixStream::pair().unwrap();
+    second_far.set_read_timeout(Some(DEADLINE)).unwrap();
+    let (second_closer, second_retired) = (closer_for(&second), closer_for(&second));
+    let second_writer = Arc::new(Mutex::new(second));
+    attention
+        .listen(Arc::clone(&second_writer), second_closer, second_retired)
+        .unwrap();
+    // Delivery works before the stop.
+    let waiting = status_of("waiting", Some("r1"), S, None);
+    drop(attention.notify("s_0000000000000001", None, &waiting, false));
+    for (far, what) in [
+        (first_far.try_clone().unwrap(), "the first attention"),
+        (second_far.try_clone().unwrap(), "the second attention"),
+    ] {
+        assert_eq!(
+            read_line(&mut BufReader::new(far), what)["payload"]["reason"],
+            "waiting"
+        );
+    }
+    // The registry shuts: no later listen registers and no later line is
+    // queued or reported.
+    let stopping = Arc::clone(&attention);
+    let (stopped_tx, stopped_rx) = mpsc::channel();
+    thread::spawn(move || {
+        stopping.stop();
+        stopped_tx.send(()).unwrap_or(());
+    });
+    assert!(
+        Deadline::after(DEADLINE).recv(&stopped_rx).is_ok(),
+        "stop returns"
+    );
+    let (later, _) = UnixStream::pair().unwrap();
+    let (later_closer, later_retired) = (closer_for(&later), closer_for(&later));
+    assert!(
+        attention
+            .listen(Arc::new(Mutex::new(later)), later_closer, later_retired)
+            .is_none(),
+        "no listen past a stop"
+    );
+    let waiting = status_of("waiting", Some("r2"), S, None);
+    assert!(
+        attention
+            .notify("s_0000000000000001", None, &waiting, false)
+            .is_empty()
+    );
+    let line = b"{\"kind\":\"device_changed\",\"payload\":{}}\n";
+    assert!(attention.announce(Arc::from(&line[..])).is_empty());
+    assert_eq!(attention.listeners(), 0);
+    // Both sockets are unshut: a server-side write still reaches each far
+    // end, so a relay on the same connection keeps receiving. Pending
+    // registrations, which own no thread, are dropped the same way once
+    // listening turns lazy.
+    for (writer, far) in [(&first_writer, first_far), (&second_writer, second_far)] {
+        writer.lock().unwrap().write_all(b"x").unwrap();
+        let mut buf = [0; 1];
+        let mut far = far;
+        far.read_exact(&mut buf).unwrap();
+        assert_eq!(buf, [b'x'], "the socket was never shut");
+    }
+    assert_eq!(
+        Arc::strong_count(&first_writer),
+        1,
+        "the first writer joined"
+    );
+    assert_eq!(
+        Arc::strong_count(&second_writer),
+        1,
+        "the second writer joined"
+    );
 }
 
 #[test]
@@ -834,63 +1027,52 @@ fn notify_remembers_what_it_announced_per_session_until_forgotten() {
 }
 
 #[test]
-fn unlisten_waits_for_its_writer_still_draining_its_backlog() {
+fn unlisten_after_overflow_joins_without_draining() {
     let clock = FakeClock::new();
     let attention = Arc::new(Attention::new(Arc::clone(&clock) as Arc<dyn Clock>));
     let (writer, far) = UnixStream::pair().unwrap();
     far.set_read_timeout(Some(DEADLINE)).unwrap();
     let (writer_closer, writer_retired) = (closer_for(&writer), closer_for(&writer));
     let kept = Arc::new(Mutex::new(writer));
+    // Held by the test: the writer cannot dequeue, so the bound fires
+    // instead of megabytes queueing behind it.
+    let guard = kept.lock().unwrap();
     let id = attention
         .listen(Arc::clone(&kept), writer_closer, writer_retired)
         .unwrap();
-    // Megabytes queued, far more than the socket buffer holds: the writer
-    // thread cannot end until the far end has read nearly all of it.
-    let count = 4_000;
-    for n in 0..count {
+    let mut reported = 0;
+    for n in 0..crate::feed::QUEUE + 2 {
         let request = format!("r{n}");
-        let mut waiting = status_of("waiting", Some(&request), S, None);
-        waiting.name = format!("{n}:{}", "x".repeat(2_000));
-        drop(attention.notify("s_0000000000000001", None, &waiting, false));
+        let waiting = status_of("waiting", Some(&request), S, None);
+        let closers = attention.notify("s_0000000000000001", None, &waiting, false);
+        if !closers.is_empty() {
+            reported += closers.len();
+            crate::feed::close_connections(closers, UnixStream::shutdown);
+        }
     }
-    let (tx, rx) = mpsc::channel();
-    let ending = Arc::clone(&attention);
-    let watched = Arc::clone(&kept);
+    assert_eq!(reported, 1, "the overflow hands back exactly one shutdown");
+    assert_eq!(attention.listeners(), 0, "the bound fired while stalled");
+    drop(guard);
+    // The far end sees EOF, not the queued megabytes: the overflow shut
+    // the connection instead of draining it.
+    let mut buf = [0; 1];
+    assert_eq!(
+        BufReader::new(far).read(&mut buf).unwrap(),
+        0,
+        "the stalled side sees EOF"
+    );
+    // Unlistening the removed id is a no-op, and stop joins the retired
+    // writer: no Arc survives it.
+    attention.unlisten(id);
+    let stopping = Arc::clone(&attention);
+    let (stopped_tx, stopped_rx) = mpsc::channel();
     thread::spawn(move || {
-        ending.unlisten(id);
-        tx.send(Arc::strong_count(&watched)).unwrap_or(());
-    });
-    // The far end holds its reader until the test-only join point confirms
-    // unlisten reached the writer join. Under the no-op-`join` mutant the
-    // counter never advances, so this wait fails on every run.
-    let joining = Arc::clone(&attention);
-    await_true("unlisten to reach its writer join", move || {
-        joining.joining() == 1
+        stopping.stop();
+        stopped_tx.send(()).unwrap_or(());
     });
     assert!(
-        matches!(rx.try_recv(), Err(mpsc::TryRecvError::Empty)),
-        "unlisten returned while its writer still held a full backlog"
+        Deadline::after(DEADLINE).recv(&stopped_rx).is_ok(),
+        "stop returns"
     );
-    let drained = thread::spawn(move || {
-        let mut read = BufReader::new(far);
-        let mut text = String::new();
-        for _ in 0..count {
-            text.clear();
-            read.read_line(&mut text).unwrap();
-            assert!(!text.is_empty());
-        }
-    });
-    let left = Deadline::after(DEADLINE)
-        .recv(&rx)
-        .expect("unlisten returns");
-    // The test's handle, `watched`, and none from the writer thread.
-    assert_eq!(left, 2, "unlisten returned before its writer ended");
-    let (joined_tx, joined_rx) = mpsc::channel();
-    thread::spawn(move || {
-        joined_tx.send(drained.join()).unwrap_or(());
-    });
-    let joined = Deadline::after(DEADLINE)
-        .recv(&joined_rx)
-        .expect("the far end drains");
-    joined.unwrap();
+    assert_eq!(Arc::strong_count(&kept), 1, "the writer ended and joined");
 }

@@ -48,7 +48,10 @@ mod fanout;
 mod settle;
 use settle::Settle;
 
-pub(crate) use fanout::{Closer, Fanout, Line, close_connections, spawn_writer, to_line};
+/// The bound, for tests: production capacity lives in [`spawn_writer`].
+#[cfg(test)]
+pub(crate) use fanout::QUEUE;
+pub(crate) use fanout::{Closer, Fanout, Line, Targeted, close_connections, spawn_writer, to_line};
 
 /// How often the hub rescans `run/` for new sessions.
 pub(crate) const RUN_SCAN: Duration = Duration::from_millis(500);
@@ -103,7 +106,8 @@ struct State {
     /// `run/`: never connected again.
     delegates: BTreeSet<String>,
     fanout: Fanout,
-    /// Summary reader threads, joined at stop or once done.
+    /// Summary reader threads and disconnected writers parked for
+    /// joining, joined at stop or once done.
     threads: Vec<JoinHandle<()>>,
     /// Whether the first scan of `run/` has finished.
     scanned: bool,
@@ -225,11 +229,12 @@ impl Feed {
             tracked.stream.shutdown(Shutdown::Both).unwrap_or(());
         }
         fanout.close().into_iter().for_each(|end| {
-            drop(end.closer);
+            close_connections(vec![end.closer], UnixStream::shutdown);
             if let Some(writer) = end.writer {
                 join(writer);
             }
         });
+        self.attention.stop();
         threads.into_iter().for_each(join);
     }
 
@@ -238,37 +243,70 @@ impl Feed {
     /// then every change. The caller has written `command_accepted`.
     /// `closer` shuts the connection down; its retained clone frees a
     /// retired writer. Both are cloned before admission, never at cleanup.
+    /// A stopped feed subscribes nothing and spawns no writer.
     pub(crate) fn subscribe(&self, writer: Arc<Mutex<UnixStream>>, closer: Closer) -> Option<u64> {
         let retired = Closer {
             stream: closer.stream.try_clone().ok()?,
             web: closer.web.clone(),
         };
-        let spawned = spawn_writer(writer, "hub-feed-out")?;
         let mut state = lock(&self.state);
         if state.stopped {
             return None;
         }
-        let mut snapshot = Vec::new();
+        let spawned = spawn_writer(writer, "hub-feed-out")?;
+        let snapshot = self.snapshot(&state);
+        Some(state.fanout.push(spawned, closer, retired, snapshot))
+    }
+
+    /// The current snapshot as one line: every left session's last
+    /// status and its `session_left`, then every running one's status,
+    /// each group in map order. One queue item however many sessions it
+    /// holds, never truncated: an oversized snapshot still subscribes.
+    fn snapshot(&self, state: &State) -> Line {
+        let mut bytes = Vec::new();
         for (id, entry) in &state.entries {
             if let Entry::Left(status, how) = entry {
-                snapshot.push(Arc::clone(&status.line));
-                snapshot.push(self.left_line(id, *how));
+                bytes.extend_from_slice(&status.line);
+                bytes.extend_from_slice(&self.left_line(id, *how));
             }
         }
         for entry in state.entries.values() {
             if let Entry::Running(status) = entry {
-                snapshot.push(Arc::clone(&status.line));
+                bytes.extend_from_slice(&status.line);
             }
         }
-        Some(state.fanout.push(spawned, closer, retired, &snapshot))
+        Arc::from(bytes)
     }
 
-    /// Ends subscriber `id`: no more lines are queued, and its writer
-    /// thread is joined once it has written what was queued.
+    /// Re-queues the current snapshot for the existing `id` registration,
+    /// behind its command acknowledgement. Hands back the Full shutdown
+    /// when its queue is full, for the caller to run outside the state
+    /// lock; anything else leaves no cleanup behind. A disconnected
+    /// writer's handle parks with the summary threads, joined at the next
+    /// scan or at stop.
+    fn replace_snapshot(&self, id: u64) -> Vec<Closer> {
+        let mut state = lock(&self.state);
+        if state.stopped {
+            return Vec::new();
+        }
+        let snapshot = self.snapshot(&state);
+        match state.fanout.send_to(id, &snapshot) {
+            Targeted::Sent | Targeted::Gone => Vec::new(),
+            Targeted::Full(closer) => vec![closer],
+            Targeted::DeadWriter(writer) => {
+                state.threads.push(writer);
+                Vec::new()
+            }
+        }
+    }
+
+    /// Ends subscriber `id`: no more lines are queued; its connection is
+    /// shut so a writer blocked on a stalled reader ends at once, and its
+    /// thread is joined outside the state lock.
     pub(crate) fn unsubscribe(&self, id: u64) {
         let gone = lock(&self.state).fanout.remove(id);
         if let Some(end) = gone {
-            drop(end.closer);
+            close_connections(vec![end.closer], UnixStream::shutdown);
             if let Some(writer) = end.writer {
                 join(writer);
             }
@@ -622,7 +660,10 @@ impl Feed {
 }
 
 /// `feed`: accepted, then this connection's subscription, replacing any
-/// earlier one, so the snapshot follows the acknowledgement.
+/// earlier one's snapshot on its live registration, so the fresh snapshot
+/// follows the acknowledgement with no new writer. A repeated `feed` whose
+/// registration is gone or full closes nothing itself: a gone id stays
+/// dropped, and a full queue shuts the whole connection outside the lock.
 pub(crate) fn on_feed(
     id: &CommandId,
     args: &Map<String, Value>,
@@ -637,7 +678,13 @@ pub(crate) fn on_feed(
     }
     answer(writer, hub, id, Ok(None));
     if let Some(earlier) = fed.take() {
-        hub.feed.unsubscribe(earlier);
+        let closers = hub.feed.replace_snapshot(earlier);
+        if closers.is_empty() {
+            *fed = Some(earlier);
+        } else {
+            close_connections(closers, UnixStream::shutdown);
+        }
+        return;
     }
     let owned = closer.stream.try_clone().ok().map(|stream| Closer {
         stream,

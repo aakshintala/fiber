@@ -87,7 +87,7 @@ fn authenticated(
     });
     let (served_tx, served_rx) = mpsc::channel();
     thread::spawn(move || {
-        crate::connection::serve_authenticated(service, hub, n, who);
+        crate::connection::serve_authenticated(service, hub, n, who, None);
         served_tx.send(()).unwrap_or(());
     });
     (client, lines_rx, served_rx)
@@ -713,7 +713,7 @@ fn revoke_watchdog_closes_a_live_device_at_the_deadline_while_answer_is_blocked(
     let (served_tx, served_rx) = mpsc::channel();
     let working = Arc::clone(&hub);
     thread::spawn(move || {
-        crate::connection::serve_authenticated(service, working, 2, Who::Local);
+        crate::connection::serve_authenticated(service, working, 2, Who::Local, None);
         served_tx.send(()).unwrap_or(());
     });
     client

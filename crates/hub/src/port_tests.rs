@@ -12,26 +12,34 @@
 
 use std::fs;
 use std::io::{BufReader, Read, Write};
-use std::net::{Shutdown, TcpStream};
+use std::net::{Shutdown, TcpListener, TcpStream};
+use std::os::unix::net::UnixStream;
 use std::path::{Path, PathBuf};
-use std::sync::atomic::{AtomicBool, AtomicI32, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicI32, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, mpsc};
 use std::thread;
 use std::time::Duration;
 
 use contract::clock::Clock;
+use contract::events::SessionStatus;
 use log::diag::Severity;
-use serde_json::Value;
+use serde_json::{Value, json};
 
 use super::*;
 use crate::connection::{Hub, lock};
-use crate::fake::FakeStarter;
+use crate::fake::{FakeStarter, status};
 use crate::listen::Held;
+use crate::testkit::await_true;
 use fakes::Deadline;
 use fakes::clock::FakeClock;
 
 /// One named deadline per expected item: the hub answers before it.
 const DEADLINE: Duration = Duration::from_secs(5);
+
+/// How fast a shutdown lands: `Web::shut` fails a blocked write at once,
+/// while a TCP stream left to the operating system takes seconds here and
+/// never closes on Linux, so a missing shutdown fails this bound.
+const SHUT: Duration = Duration::from_secs(1);
 
 /// How long a hub-state wait lasts, in wall time.
 const WITHIN: Duration = Duration::from_secs(5);
@@ -898,4 +906,180 @@ fn an_out_pump_spawn_failure_disconnects_through_the_pair() {
     await_zero(&hub);
     assert_eq!(hub.pairing.live(), 0);
     assert!(temp.log().contains("client_disconnected"));
+}
+
+/// A `waiting` session status whose summary is `summary`.
+fn waiting_with(summary: &str) -> SessionStatus {
+    let mut payload = status("n", "/w", "idle", None);
+    let map = payload.as_object_mut().unwrap();
+    map.insert("state".to_owned(), json!("waiting"));
+    map.insert(
+        "waiting".to_owned(),
+        json!({
+            "request_id": "r1",
+            "kind": "approval",
+            "summary": summary,
+        }),
+    );
+    serde_json::from_value(payload).unwrap()
+}
+
+#[test]
+fn overflow_on_a_websocket_bridge_shuts_the_unix_pair_and_the_tcp_stream() {
+    let temp = Temp::new();
+    let clock = FakeClock::new();
+    let timed: Arc<dyn Clock> = clock;
+    let hub = Arc::new(Hub::new(
+        &temp.dir,
+        "0.0.0",
+        Arc::new(FakeStarter::hang(&temp.dir)),
+        Arc::clone(&timed),
+        crate::diag::open(&temp.dir, timed),
+    ));
+    // The TCP side of the bridge: the peer never reads.
+    let tcp_listener = TcpListener::bind("127.0.0.1:0").unwrap();
+    let tcp_addr = tcp_listener.local_addr().unwrap();
+    let tcp_client = TcpStream::connect(tcp_addr).unwrap();
+    tcp_client.set_read_timeout(Some(DEADLINE)).unwrap();
+    let mut tcp_client = tcp_client;
+    let (tcp_server, _) = tcp_listener.accept().unwrap();
+    let web = Arc::new(Web {
+        sink: Mutex::new(Sink {
+            stream: tcp_server.try_clone().unwrap(),
+            closed: false,
+        }),
+        control: tcp_server,
+        drained: AtomicBool::new(false),
+    });
+    // The Unix side of the bridge, served as an authenticated connection.
+    let (hub_end, bridge_end) = UnixStream::pair().unwrap();
+    let sub_sock = hub_end.try_clone().unwrap();
+    let closer_sock = hub_end.try_clone().unwrap();
+    let retired_sock = hub_end.try_clone().unwrap();
+    let n = hub
+        .register(&hub_end)
+        .expect("the hub counts the connection");
+    let serve_hub = Arc::clone(&hub);
+    let serve_web = Arc::clone(&web);
+    let (serve_tx, serve_rx) = mpsc::channel();
+    thread::spawn(move || {
+        crate::connection::serve_authenticated(
+            hub_end,
+            serve_hub,
+            n,
+            crate::pairing::Who::Local,
+            Some(serve_web),
+        );
+        serve_tx.send(()).unwrap_or(());
+    });
+    let pump_web = Arc::clone(&web);
+    let (pump_tx, pump_rx) = mpsc::channel();
+    thread::spawn(move || {
+        pump_lines(&pump_web, bridge_end);
+        pump_tx.send(()).unwrap_or(());
+    });
+    await_true("the connection to listen", {
+        let hub = Arc::clone(&hub);
+        move || hub.feed.attention.listeners() == 1
+    });
+    // Saturate the TCP stream first: 16 KiB lines to the connection's own
+    // listener until the bound removes it. The peer never reads, so TCP
+    // must fill; the pump then stops draining the bridge, the bridge
+    // fills, and the connection's writer blocks with a full queue. Small
+    // lines alone could otherwise drain through the pump into TCP buffers
+    // despite an unread client, and TCP buffers grow past any single line
+    // here. Each fill line is dropped unshut: only the unregister matters.
+    let fill = Arc::new(AtomicU64::new(0));
+    let filling = Arc::clone(&hub);
+    await_true("the bridge backpressure to fill", move || {
+        if filling.feed.attention.listeners() == 0 {
+            return true;
+        }
+        let n = fill.fetch_add(1, Ordering::SeqCst);
+        if n > 20_000 {
+            return true;
+        }
+        let session = format!("fill_{n:08}");
+        let status = waiting_with(&"f".repeat(16 * 1024));
+        drop(
+            filling
+                .feed
+                .attention
+                .notify(&session, None, &status, false),
+        );
+        false
+    });
+    assert_eq!(
+        hub.feed.attention.listeners(),
+        0,
+        "the fill phase removed the connection listener at the bound"
+    );
+    // A test-owned subscriber on a clone of the bridged socket, carrying
+    // the websocket's shutdown like the connection's own registrations.
+    // Its writer blocks on the first byte: the bridge is already full.
+    let owned = Arc::new(Mutex::new(sub_sock));
+    let closer = crate::feed::Closer {
+        stream: closer_sock,
+        web: Some(Arc::clone(&web)),
+    };
+    let retired = crate::feed::Closer {
+        stream: retired_sock,
+        web: Some(Arc::clone(&web)),
+    };
+    hub.feed
+        .attention
+        .listen(Arc::clone(&owned), closer, retired)
+        .unwrap();
+    // The first small line blocks the writer: the bridge is still full
+    // from the fill phase, which the held mutex proves.
+    let first = waiting_with("run r0");
+    drop(
+        hub.feed
+            .attention
+            .notify("s_0000000000000000", None, &first, false),
+    );
+    let blocked = Arc::clone(&owned);
+    await_true("the Unix writer to block in its write", move || {
+        blocked.try_lock().is_err()
+    });
+    // Further small lines: the bound fires once QUEUE are queued behind
+    // the blocked writer. The loop allows for the dequeued empty snapshot
+    // and stops at the report; the assert below pins that it fired.
+    let mut closers = Vec::new();
+    for n in 1..crate::feed::QUEUE + 10 {
+        if !closers.is_empty() {
+            break;
+        }
+        let session = format!("s_{n:016x}");
+        let status = waiting_with(&format!("run r{n}"));
+        closers.extend(hub.feed.attention.notify(&session, None, &status, false));
+    }
+    assert!(!closers.is_empty(), "the bound fired");
+    crate::feed::close_connections(closers, UnixStream::shutdown);
+    assert_eq!(
+        hub.feed.attention.listeners(),
+        0,
+        "the overflow unregistered the listener"
+    );
+    // The pump ends, the TCP side closes, and the served read loop
+    // returns: a closer that shut only the Unix halves would leave the
+    // pump and the TCP stream hanging.
+    Deadline::after(SHUT)
+        .recv(&pump_rx)
+        .expect("the pump to end");
+    tcp_client.set_read_timeout(Some(SHUT)).unwrap();
+    let mut buf = [0; 8];
+    loop {
+        match tcp_client.read(&mut buf) {
+            Ok(0) => break,
+            Ok(_) => {}
+            Err(error) => panic!("the TCP side closes: {error}"),
+        }
+    }
+    Deadline::after(DEADLINE)
+        .recv(&serve_rx)
+        .expect("the read loop to return");
+    assert_eq!(hub.clients(), 0, "the count released");
+    crate::testkit::stop_within(&hub.feed);
+    assert_eq!(Arc::strong_count(&owned), 1, "the writer ended and joined");
 }
