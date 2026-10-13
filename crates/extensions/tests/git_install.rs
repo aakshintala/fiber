@@ -2922,3 +2922,465 @@ fn a_damaged_directory_whose_manifest_names_another_extension_reinstalls_by_its_
             .is_empty()
     );
 }
+
+/// Runs the no-name update's member for `name`: moves it to its newest
+/// tag within the accepted major and records a floor, without making it
+/// a person request.
+fn update_all_named(setup: &Setup, repos: &Repos, name: &str) -> Result<Vec<String>, Error> {
+    plan(
+        &setup.home(),
+        &Request::UpdateAll(name.into()),
+        FIBER,
+        &repos.origin(),
+        &*fakes::clock::FakeClock::new(),
+    )?
+    .commit()
+}
+
+/// The install record of `dir` under `extensions/`, as JSON.
+fn record(home: &Path, dir: &str) -> Value {
+    serde_json::from_str(&record_text(home, dir)).unwrap()
+}
+
+#[test]
+fn update_all_advances_a_dependency_and_records_a_floor() {
+    let setup = Setup::new();
+    let mut repos = Repos::new(&setup);
+    let dep = "example.com/acme/dep";
+    repos.tag(dep, "", "v1.2.0", &manifest(dep), &[("v12.txt", "v12")]);
+    repos.tag(dep, "", "v1.5.0", &manifest(dep), &[("v15.txt", "v15")]);
+    let top = "example.com/acme/top";
+    repos.tag(top, "", "v1.0.0", &named(top, &[(dep, "1.2")]), &[]);
+    install_named(&setup, &repos, top).unwrap();
+    assert_eq!(versions(&setup)[dep], "v1.2.0");
+    let clock = fakes::clock::FakeClock::new();
+    let staged = plan(
+        &setup.home(),
+        &Request::UpdateAll(dep.into()),
+        FIBER,
+        &repos.origin(),
+        &*clock,
+    )
+    .unwrap();
+    // The dependency shows its diff without becoming a root.
+    let item = staged.items().next().unwrap();
+    assert_eq!(item.version, "v1.5.0");
+    assert!(item.changes.clone().unwrap().contains("v15.txt"));
+    assert_eq!(staged.commit().unwrap(), [dep]);
+    assert_eq!(versions(&setup)[dep], "v1.5.0");
+    let listed = installed_named(&setup.home(), dep);
+    assert!(
+        !listed.requested,
+        "an update-all dependency stays unrequested"
+    );
+    let text = record_text(&setup.home(), "example.com-acme-dep");
+    assert!(text.contains("\"floor\":\"v1.5.0\""), "{text}");
+    assert_eq!(
+        record(&setup.home(), "example.com-acme-dep")["floor"],
+        json!("v1.5.0")
+    );
+}
+
+#[test]
+fn a_floor_survives_reinstall_and_pins_the_next_update_all() {
+    let setup = Setup::new();
+    let mut repos = Repos::new(&setup);
+    let dep = "example.com/acme/dep";
+    for tag in ["v1.2.0", "v1.5.0"] {
+        repos.tag(dep, "", tag, &manifest(dep), &[]);
+    }
+    let top = "example.com/acme/top";
+    repos.tag(top, "", "v1.0.0", &named(top, &[(dep, "1.2")]), &[]);
+    install_named(&setup, &repos, top).unwrap();
+    update_all_named(&setup, &repos, dep).unwrap();
+    assert_eq!(versions(&setup)[dep], "v1.5.0");
+    // A reinstall from the record keeps the version and the floor.
+    reinstall(&setup, &repos.origin(), dep).unwrap();
+    assert_eq!(versions(&setup)[dep], "v1.5.0");
+    assert_eq!(
+        record(&setup.home(), "example.com-acme-dep")["floor"],
+        json!("v1.5.0")
+    );
+    assert!(!installed_named(&setup.home(), dep).requested);
+    // An unrelated install leaves the floored dependency alone.
+    let extra = "example.com/acme/extra";
+    repos.tag(extra, "", "v1.0.0", &manifest(extra), &[]);
+    install_named(&setup, &repos, extra).unwrap();
+    assert_eq!(versions(&setup)[dep], "v1.5.0");
+    assert_eq!(
+        record(&setup.home(), "example.com-acme-dep")["floor"],
+        json!("v1.5.0")
+    );
+    // A newer major does not move a floored dependency: the floor pins
+    // the major, so update-all stays on the newest 1.x tag.
+    repos.tag(dep, "", "v2.0.0", &manifest(dep), &[]);
+    assert_eq!(update_all_named(&setup, &repos, dep).unwrap(), [dep]);
+    assert_eq!(versions(&setup)[dep], "v1.5.0");
+    assert_eq!(
+        record(&setup.home(), "example.com-acme-dep")["floor"],
+        json!("v1.5.0")
+    );
+    assert!(!installed_named(&setup.home(), dep).requested);
+}
+
+#[test]
+fn two_dependents_and_a_transitive_chain_constrain_update_all() {
+    let setup = Setup::new();
+    let mut repos = Repos::new(&setup);
+    let dep = "example.com/acme/dep";
+    for tag in ["v1.2.0", "v1.4.0", "v1.5.0"] {
+        repos.tag(dep, "", tag, &manifest(dep), &[]);
+    }
+    let (a, b) = ("example.com/acme/a", "example.com/acme/b");
+    repos.tag(a, "", "v1.0.0", &named(a, &[(dep, "1.2")]), &[]);
+    repos.tag(b, "", "v1.0.0", &named(b, &[(dep, "1.4")]), &[]);
+    install_named(&setup, &repos, a).unwrap();
+    install_named(&setup, &repos, b).unwrap();
+    assert_eq!(versions(&setup)[dep], "v1.4.0");
+    update_all_named(&setup, &repos, dep).unwrap();
+    assert_eq!(versions(&setup)[dep], "v1.5.0");
+    assert_eq!(
+        record(&setup.home(), "example.com-acme-dep")["floor"],
+        json!("v1.5.0")
+    );
+    // A transitive dependent counts too: `root` needs `mid`, which needs
+    // `dep` 1.2 or later.
+    let mid = "example.com/acme/mid";
+    let root = "example.com/acme/root";
+    repos.tag(mid, "", "v1.0.0", &named(mid, &[(dep, "1.2")]), &[]);
+    repos.tag(root, "", "v1.0.0", &named(root, &[(mid, "1.0")]), &[]);
+    install_named(&setup, &repos, root).unwrap();
+    repos.tag(dep, "", "v1.6.0", &manifest(dep), &[]);
+    update_all_named(&setup, &repos, dep).unwrap();
+    assert_eq!(versions(&setup)[dep], "v1.6.0");
+    assert_eq!(
+        record(&setup.home(), "example.com-acme-dep")["floor"],
+        json!("v1.6.0")
+    );
+}
+
+#[test]
+fn removing_the_last_dependent_deletes_the_floor_with_it() {
+    let setup = Setup::new();
+    let mut repos = Repos::new(&setup);
+    let dep = "example.com/acme/dep";
+    for tag in ["v1.2.0", "v1.5.0"] {
+        repos.tag(dep, "", tag, &manifest(dep), &[]);
+    }
+    let top = "example.com/acme/top";
+    repos.tag(top, "", "v1.0.0", &named(top, &[(dep, "1.2")]), &[]);
+    install_named(&setup, &repos, top).unwrap();
+    update_all_named(&setup, &repos, dep).unwrap();
+    assert_eq!(
+        record(&setup.home(), "example.com-acme-dep")["floor"],
+        json!("v1.5.0")
+    );
+    assert_eq!(uninstall(&setup.home(), top).unwrap(), [top, dep]);
+    assert!(
+        !setup
+            .home()
+            .join("extensions/example.com-acme-dep")
+            .exists()
+    );
+    // With the floor gone, a fresh install takes the lowest tag again.
+    install_named(&setup, &repos, top).unwrap();
+    assert_eq!(versions(&setup)[dep], "v1.2.0");
+    assert_eq!(
+        record(&setup.home(), "example.com-acme-dep").get("floor"),
+        None
+    );
+}
+
+#[test]
+fn a_named_update_of_a_floored_dependency_is_a_person_request() {
+    let setup = Setup::new();
+    let mut repos = Repos::new(&setup);
+    let dep = "example.com/acme/dep";
+    for tag in ["v1.2.0", "v1.5.0"] {
+        repos.tag(dep, "", tag, &manifest(dep), &[]);
+    }
+    let top = "example.com/acme/top";
+    repos.tag(top, "", "v1.0.0", &named(top, &[(dep, "1.2")]), &[]);
+    install_named(&setup, &repos, top).unwrap();
+    update_all_named(&setup, &repos, dep).unwrap();
+    let clock = fakes::clock::FakeClock::new();
+    plan(
+        &setup.home(),
+        &Request::Update(dep.into()),
+        FIBER,
+        &repos.origin(),
+        &*clock,
+    )
+    .unwrap()
+    .commit()
+    .unwrap();
+    let listed = installed_named(&setup.home(), dep);
+    assert_eq!(listed.version, "v1.5.0");
+    assert!(listed.requested, "a named update stays a person request");
+    assert_eq!(
+        record(&setup.home(), "example.com-acme-dep").get("floor"),
+        None,
+        "the person minimum replaces the floor"
+    );
+}
+
+#[test]
+fn a_failed_update_all_commits_no_floor() {
+    let setup = Setup::new();
+    let mut repos = Repos::new(&setup);
+    let dep = "example.com/acme/dep";
+    repos.tag(dep, "", "v1.2.0", &manifest(dep), &[]);
+    repos.tag(dep, "", "v1.5.0", &manifest(dep), &[]);
+    let top = "example.com/acme/top";
+    repos.tag(top, "", "v1.0.0", &named(top, &[(dep, "1.2")]), &[]);
+    install_named(&setup, &repos, top).unwrap();
+    // A dropped plan changes neither files nor floor.
+    let clock = fakes::clock::FakeClock::new();
+    drop(
+        plan(
+            &setup.home(),
+            &Request::UpdateAll(dep.into()),
+            FIBER,
+            &repos.origin(),
+            &*clock,
+        )
+        .unwrap(),
+    );
+    assert_eq!(versions(&setup)[dep], "v1.2.0");
+    assert_eq!(
+        record(&setup.home(), "example.com-acme-dep").get("floor"),
+        None
+    );
+    // A fetch failure plans nothing.
+    let origin = Origin::new("git", |_| "file:///nonexistent-repository".into());
+    let Err(err) = plan(
+        &setup.home(),
+        &Request::UpdateAll(dep.into()),
+        FIBER,
+        &origin,
+        &*fakes::clock::FakeClock::new(),
+    ) else {
+        panic!("a fetch failure planned");
+    };
+    assert_eq!(err.code(), ErrorCode::ExtensionNotFound, "{err}");
+    assert_eq!(versions(&setup)[dep], "v1.2.0");
+    assert_eq!(
+        record(&setup.home(), "example.com-acme-dep").get("floor"),
+        None
+    );
+    // A version whose manifest needs a newer Fiber fails before commit.
+    let mut newer = manifest(dep);
+    newer["fiber"] = json!("9.0.0");
+    repos.tag(dep, "", "v1.6.0", &newer, &[]);
+    let Err(err) = plan(
+        &setup.home(),
+        &Request::UpdateAll(dep.into()),
+        FIBER,
+        &repos.origin(),
+        &*fakes::clock::FakeClock::new(),
+    ) else {
+        panic!("a version needing a newer Fiber planned");
+    };
+    assert!(matches!(err, Error::NeedsNewerFiber { .. }), "{err}");
+    assert_eq!(versions(&setup)[dep], "v1.2.0");
+    assert_eq!(
+        record(&setup.home(), "example.com-acme-dep").get("floor"),
+        None
+    );
+    // A failing install step rolls the commit back, keeping the record.
+    let mut bad = with_step(dep, &["sh", "-c", "exit 3"]);
+    bad["version"] = json!("v1.7.0");
+    repos.tag(dep, "", "v1.7.0", &bad, &[]);
+    let err = plan(
+        &setup.home(),
+        &Request::UpdateAll(dep.into()),
+        FIBER,
+        &repos.origin(),
+        &*fakes::clock::FakeClock::new(),
+    )
+    .unwrap()
+    .commit()
+    .unwrap_err();
+    assert!(matches!(err, Error::InstallExited { .. }), "{err}");
+    assert_eq!(versions(&setup)[dep], "v1.2.0");
+    assert_eq!(
+        record(&setup.home(), "example.com-acme-dep").get("floor"),
+        None
+    );
+}
+
+#[test]
+fn update_all_of_a_name_not_installed_or_damaged_is_refused() {
+    let setup = Setup::new();
+    let mut repos = Repos::new(&setup);
+    let dep = "example.com/acme/dep";
+    repos.tag(dep, "", "v1.2.0", &manifest(dep), &[]);
+    let err = update_all_named(&setup, &repos, dep).unwrap_err();
+    assert!(matches!(err, Error::NotInstalled { .. }), "{err}");
+    let top = "example.com/acme/top";
+    repos.tag(top, "", "v1.0.0", &named(top, &[(dep, "1.2")]), &[]);
+    install_named(&setup, &repos, top).unwrap();
+    fs::remove_file(
+        setup
+            .home()
+            .join("extensions/example.com-acme-dep/.fiber.json"),
+    )
+    .unwrap();
+    let err = update_all_named(&setup, &repos, dep).unwrap_err();
+    assert!(matches!(err, Error::Damaged(_)), "{err}");
+    let listing = list(&setup.home(), &*fakes::clock::FakeClock::new()).unwrap();
+    assert!(listing.installed.iter().all(|i| i.name != dep));
+    assert_eq!(listing.damaged.len(), 1);
+}
+
+#[test]
+fn a_floor_stops_an_install_that_needs_another_major() {
+    let setup = Setup::new();
+    let mut repos = Repos::new(&setup);
+    let dep = "example.com/acme/dep";
+    for tag in ["v1.2.0", "v1.5.0", "v2.0.0"] {
+        repos.tag(dep, "", tag, &manifest(dep), &[]);
+    }
+    let top = "example.com/acme/top";
+    repos.tag(top, "", "v1.0.0", &named(top, &[(dep, "1.2")]), &[]);
+    install_named(&setup, &repos, top).unwrap();
+    update_all_named(&setup, &repos, dep).unwrap();
+    assert_eq!(
+        record(&setup.home(), "example.com-acme-dep")["floor"],
+        json!("v1.5.0")
+    );
+    // `top` moves to needing 2.x: the floor's 1.x need conflicts with it.
+    repos.tag(top, "", "v1.1.0", &named(top, &[(dep, "2.0")]), &[]);
+    let err = install_named(&setup, &repos, top).unwrap_err();
+    assert!(matches!(err, Error::MajorConflict { .. }), "{err}");
+    assert_eq!(err.code(), ErrorCode::VersionConflict);
+    let text = err.to_string();
+    assert!(text.contains("your update") && text.contains(top), "{text}");
+    assert_eq!(versions(&setup)[dep], "v1.5.0");
+    assert_eq!(versions(&setup)[top], "v1.0.0");
+    // The way out is the one the floor allows: removing the last
+    // dependent takes the floor with it, and a fresh install moves
+    // freely to the new major.
+    assert_eq!(uninstall(&setup.home(), top).unwrap(), [top, dep]);
+    install_named(&setup, &repos, top).unwrap();
+    assert_eq!(versions(&setup)[dep], "v2.0.0");
+    assert!(!installed_named(&setup.home(), dep).requested);
+    assert_eq!(
+        record(&setup.home(), "example.com-acme-dep").get("floor"),
+        None
+    );
+}
+
+#[test]
+fn a_named_update_replaces_a_floor_across_majors() {
+    let setup = Setup::new();
+    let mut repos = Repos::new(&setup);
+    let dep = "example.com/acme/dep";
+    for tag in ["v1.2.0", "v1.5.0"] {
+        repos.tag(dep, "", tag, &manifest(dep), &[]);
+    }
+    install_named(&setup, &repos, dep).unwrap();
+    update_all_named(&setup, &repos, dep).unwrap();
+    assert_eq!(
+        record(&setup.home(), "example.com-acme-dep")["floor"],
+        json!("v1.5.0")
+    );
+    // Nobody else needs the dependency, so naming it moves to the newest
+    // tag in any major, replacing the floor with the person minimum.
+    repos.tag(dep, "", "v2.0.0", &manifest(dep), &[]);
+    plan(
+        &setup.home(),
+        &Request::Update(dep.into()),
+        FIBER,
+        &repos.origin(),
+        &*fakes::clock::FakeClock::new(),
+    )
+    .unwrap()
+    .commit()
+    .unwrap();
+    let listed = installed_named(&setup.home(), dep);
+    assert_eq!(listed.version, "v2.0.0");
+    assert!(listed.requested);
+    assert_eq!(
+        record(&setup.home(), "example.com-acme-dep").get("floor"),
+        None
+    );
+}
+
+#[test]
+fn updating_a_path_extension_beside_a_floored_install_keeps_its_own_floor() {
+    let setup = Setup::new();
+    let mut local = manifest("local");
+    let source = setup.source("local", &local, &[]);
+    common::install(&setup.home(), &source, FIBER).unwrap();
+    let dep = "example.com/acme/dep";
+    let mut repos = Repos::new(&setup);
+    for tag in ["v1.2.0", "v1.5.0"] {
+        repos.tag(dep, "", tag, &manifest(dep), &[]);
+    }
+    let top = "example.com/acme/top";
+    repos.tag(top, "", "v1.0.0", &named(top, &[(dep, "1.2")]), &[]);
+    install_named(&setup, &repos, top).unwrap();
+    update_all_named(&setup, &repos, dep).unwrap();
+    assert_eq!(
+        record(&setup.home(), "example.com-acme-dep")["floor"],
+        json!("v1.5.0")
+    );
+    // Restaging the path extension must keep exactly its own floor:
+    // none. A floor lookup that matches any other installed extension
+    // would pick up the dependency's floor instead.
+    local["version"] = json!("v1.1.0");
+    write(&source.join("extension.json"), &local.to_string());
+    plan(
+        &setup.home(),
+        &Request::Update("local".into()),
+        FIBER,
+        &repos.origin(),
+        &*fakes::clock::FakeClock::new(),
+    )
+    .unwrap()
+    .commit()
+    .unwrap();
+    assert_eq!(versions(&setup)["local"], "v1.1.0");
+    assert_eq!(
+        record(&setup.home(), "local").get("floor"),
+        None,
+        "a path restage keeps its own floor, not another install's"
+    );
+    assert_eq!(
+        record(&setup.home(), "example.com-acme-dep")["floor"],
+        json!("v1.5.0")
+    );
+}
+
+#[test]
+fn restaging_a_floored_dependency_for_a_new_dependent_keeps_its_floor() {
+    let setup = Setup::new();
+    let mut repos = Repos::new(&setup);
+    let dep = "example.com/acme/dep";
+    for tag in ["v1.2.0", "v1.5.0"] {
+        repos.tag(dep, "", tag, &manifest(dep), &[]);
+    }
+    let top = "example.com/acme/top";
+    repos.tag(top, "", "v1.0.0", &named(top, &[(dep, "1.2")]), &[]);
+    install_named(&setup, &repos, top).unwrap();
+    update_all_named(&setup, &repos, dep).unwrap();
+    assert_eq!(
+        record(&setup.home(), "example.com-acme-dep")["floor"],
+        json!("v1.5.0")
+    );
+    // A new dependent needing more restages the floored dependency
+    // through the unasked path; the restage keeps the installed floor
+    // instead of clearing it.
+    repos.tag(dep, "", "v1.6.0", &manifest(dep), &[]);
+    let user = "example.com/acme/user";
+    repos.tag(user, "", "v1.0.0", &named(user, &[(dep, "1.6")]), &[]);
+    install_named(&setup, &repos, user).unwrap();
+    assert_eq!(versions(&setup)[dep], "v1.6.0");
+    assert!(!installed_named(&setup.home(), dep).requested);
+    assert_eq!(
+        record(&setup.home(), "example.com-acme-dep")["floor"],
+        json!("v1.5.0"),
+        "an unasked restage keeps the installed floor"
+    );
+}

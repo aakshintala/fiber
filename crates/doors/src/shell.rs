@@ -3,9 +3,6 @@
 //! on a thread of its own and reads on, so a `cancel` on the same connection
 //! reaches it. The loop never sees it.
 
-use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::{Arc, Mutex, MutexGuard, PoisonError, Weak};
-
 use contract::ErrorCode;
 use contract::clock::Wake;
 use contract::commands::Shell;
@@ -14,7 +11,10 @@ use contract::events::{CommandResult, Event};
 use contract::inbox::{Ack, Rejection};
 use contract::shapes::ContentPart;
 use contract::tool::{Bound, Cancel, Output, Tool};
+use log::{cut_joined, cut_notice};
 use serde_json::{Map, Value};
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::{Arc, Mutex, MutexGuard, PoisonError, Weak};
 
 use crate::mint;
 use crate::session::Gate;
@@ -118,16 +118,23 @@ impl Running {
     }
 }
 
+fn no_process(error: Option<contract::shapes::Failure>) -> Rejection {
+    let message = match error {
+        Some(error) => error.message,
+        None => COULD_NOT_START.to_owned(),
+    };
+    Rejection {
+        code: ErrorCode::InvalidArguments,
+        message,
+    }
+}
+
 fn answered(gate: &Gate, output: Output, bound: Bound) -> contract::inbox::Answer {
+    if let Some(spilled) = output.spilled {
+        return answered_spilled(gate, spilled, output.process, output.error);
+    }
     let Some(process) = output.process else {
-        let message = match output.error {
-            Some(error) => error.message,
-            None => COULD_NOT_START.to_owned(),
-        };
-        return Err(Rejection {
-            code: ErrorCode::InvalidArguments,
-            message,
-        });
+        return Err(no_process(output.error));
     };
     let full = joined(&output.content);
     let (kept, artifact) = cut(gate, &full, bound);
@@ -136,6 +143,80 @@ fn answered(gate: &Gate, output: Output, bound: Bound) -> contract::inbox::Answe
         artifact,
         process,
     }))
+}
+
+/// A shell that already spilled its output past 1 MiB: the spilled file is
+/// the artifact, shaped without a second write or cut. Text parts beside
+/// the spill are ignored; the command's process is kept as it ended.
+fn answered_spilled(
+    gate: &Gate,
+    spilled: contract::tool::Spilled,
+    process: Option<contract::shapes::Process>,
+    error: Option<contract::shapes::Failure>,
+) -> contract::inbox::Answer {
+    let contract::tool::Spilled {
+        head,
+        tail,
+        removed,
+        file,
+    } = spilled;
+    match file {
+        Ok(kept) => {
+            let Some(process) = process else {
+                return Err(no_process(error));
+            };
+            let Some(log) = gate.log.upgrade() else {
+                return Err(Rejection {
+                    code: ErrorCode::Closing,
+                    message: crate::client::ENDED.to_owned(),
+                });
+            };
+            let artifact = spill_artifact(&log, &kept.path);
+            let output = if removed == 0 {
+                format!("{head}{tail}")
+            } else {
+                let notice = cut_notice(removed, Ok(&kept.path));
+                cut_joined(&head, &notice, &tail)
+            };
+            Ok(Some(CommandResult::Shell {
+                output,
+                artifact: Some(artifact),
+                process,
+            }))
+        }
+        Err(unsaved) => {
+            if let Some(left) = unsaved.left.as_ref()
+                && let Err(remove) = std::fs::remove_file(left)
+            {
+                return Err(Rejection {
+                    code: ErrorCode::IoFailed,
+                    message: format!(
+                        "The partial output at {} could not be removed: {remove}.",
+                        left.display()
+                    ),
+                });
+            }
+            let Some(process) = process else {
+                return Err(no_process(error));
+            };
+            let notice = cut_notice(removed, Err(unsaved.message.as_str()));
+            let output = cut_joined(&head, &notice, &tail);
+            Ok(Some(CommandResult::Shell {
+                output,
+                artifact: None,
+                process,
+            }))
+        }
+    }
+}
+
+/// A spilled file as the driver's artifact: its path relative to the
+/// session directory, or absolute when it is not under it.
+fn spill_artifact(log: &log::Log, path: &std::path::Path) -> String {
+    match path.strip_prefix(log.dir()) {
+        Ok(relative) => relative.display().to_string(),
+        Err(_) => path.display().to_string(),
+    }
 }
 
 fn joined(content: &[ContentPart]) -> String {
