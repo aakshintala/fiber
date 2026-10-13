@@ -644,14 +644,36 @@ fn start_is_the_sum_of_the_rows_before() {
 }
 
 #[test]
-fn set_rows_bumps_the_page_revision() {
+fn set_rows_leaves_the_text_revision_alone() {
     let mut index = Index::default();
     assert_eq!(index.revision(0), 0);
+    // Geometry alone never moves the revision: a recount, a reload, or
+    // an edge coming off keeps what the search scanned.
     index.set_rows(0, 10);
+    assert_eq!(index.revision(0), 0);
+    index.set_rows(0, 10);
+    assert_eq!(index.revision(0), 0);
+    index.set_rows(0, 4);
+    assert_eq!(index.revision(0), 0);
+    // A missing page stays harmless.
+    index.set_rows(9, 10);
+    assert_eq!(index.revision(9), 0);
+}
+
+#[test]
+fn invalidate_moves_the_text_revision() {
+    let mut index = Index::default();
+    index.set_rows(0, 10);
+    index.invalidate(0);
     assert_eq!(index.revision(0), 1);
-    // A recount bumps it whether or not the count changed.
-    index.set_rows(0, 10);
+    // Geometry after the invalidation keeps the bumped revision.
+    index.set_rows(0, 4);
+    assert_eq!(index.revision(0), 1);
+    index.invalidate(0);
     assert_eq!(index.revision(0), 2);
+    // A missing page stays harmless.
+    index.invalidate(9);
+    assert_eq!(index.revision(9), 0);
 }
 
 #[test]
@@ -666,7 +688,7 @@ fn a_new_page_starts_at_revision_zero() {
 }
 
 #[test]
-fn a_window_near_the_top_counts_only_the_pages_it_walks() {
+fn a_window_rebuilds_prefixes_once_then_queries_are_free() {
     let mut index = Index::default();
     let mut seq = 0;
     for _ in 0..6 {
@@ -680,11 +702,89 @@ fn a_window_near_the_top_counts_only_the_pages_it_walks() {
     }
     crate::work::take();
     assert_eq!(index.window(0, 5), 0..1);
-    // `total` scans every page once; the walk itself stops at the second.
-    assert_eq!(crate::work::take().index_pages, pages + 2);
-    // `start` walks the pages before `at`, once each: every page holds
+    // One rebuild visits every page once; the window's own total and
+    // edges then read the cache.
+    assert_eq!(crate::work::take().index_pages, pages);
+    // Every later query is free while no row changes: every page holds
     // ten rows, so the fourth starts at row 30.
     crate::work::take();
     assert_eq!(index.start(3), 30);
-    assert_eq!(crate::work::take().index_pages, 3);
+    assert_eq!(index.total(), pages * 10);
+    assert_eq!(index.locate(35), Some((3, 5)));
+    assert_eq!(crate::work::take().index_pages, 0);
+}
+
+#[test]
+fn a_noop_set_rows_rebuilds_nothing() {
+    let index = with_rows(&[3, 0, 5, 2]);
+    crate::work::take();
+    assert_eq!(index.total(), 10);
+    let built = crate::work::take().index_pages;
+    // Setting the rows a page already has marks nothing dirty.
+    let mut index = index;
+    index.set_rows(2, 5);
+    crate::work::take();
+    assert_eq!(index.total(), 10);
+    assert_eq!(index.start(3), 8);
+    assert_eq!(crate::work::take().index_pages, 0);
+    assert!(built > 0);
+}
+
+#[test]
+fn fresh_empty_and_zero_row_pages_query_safely() {
+    // A fresh index draws nothing: every query is free and empty.
+    let index = Index::default();
+    crate::work::take();
+    assert_eq!(index.total(), 0);
+    assert_eq!(index.start(0), 0);
+    assert_eq!(index.locate(0), None);
+    assert_eq!(index.window(0, 5), 1..1);
+    assert_eq!(crate::work::take().index_pages, 0);
+    // Pages drawing no row at all, and zeros trailing real rows.
+    let index = with_rows(&[0, 0, 0]);
+    assert_eq!(index.total(), 0);
+    assert_eq!(index.locate(0), None);
+    assert_eq!(index.window(0, 5), 3..3);
+    let index = with_rows(&[5, 0, 0]);
+    assert_eq!(index.total(), 5);
+    assert_eq!(index.locate(4), Some((0, 4)));
+    assert_eq!(index.locate(5), None);
+    assert_eq!(index.window(0, 2), 0..1);
+}
+
+#[test]
+fn an_appended_page_rebuilds_prefixes_once() {
+    let mut index = with_rows(&[3, 0, 5, 2]);
+    crate::work::take();
+    assert_eq!(index.total(), 10);
+    assert_eq!(crate::work::take().index_pages, 4);
+    // One more page: the next query rebuilds once for all five.
+    let mut seq = 100u64;
+    filler(&mut index, &mut seq, PAGE_LINES);
+    push(&mut index, seq, "turn_started", None, true);
+    index.set_rows(4, 7);
+    crate::work::take();
+    assert_eq!(index.total(), 17);
+    assert_eq!(index.start(4), 10);
+    assert_eq!(index.locate(16), Some((4, 6)));
+    assert_eq!(crate::work::take().index_pages, 5);
+}
+
+#[test]
+fn prefixes_saturate_rather_than_subtract() {
+    // A saturated total stays saturated: no page after the overflow
+    // undercounts by subtraction.
+    let index = with_rows(&[usize::MAX, 1]);
+    assert_eq!(index.total(), usize::MAX);
+    assert_eq!(index.start(1), usize::MAX);
+    assert_eq!(index.locate(usize::MAX - 1), Some((0, usize::MAX - 1)));
+    assert_eq!(index.locate(usize::MAX), None);
+    // Duplicate prefixes from pages drawing no row locate past them.
+    let index = with_rows(&[3, 0, 0, 5]);
+    assert_eq!(index.total(), 8);
+    assert_eq!(index.start(3), 3);
+    assert_eq!(index.locate(3), Some((3, 0)));
+    // Out of range in both directions.
+    assert_eq!(index.locate(8), None);
+    assert_eq!(index.start(99), 8);
 }

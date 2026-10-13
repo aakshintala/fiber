@@ -1706,15 +1706,24 @@ fn the_open_page_caches_only_its_lines_too_wide_for_one_row() {
 #[test]
 fn shell_output_draws_only_on_its_own_page_after_its_own_turn() {
     let mut pages = Pages::new(80);
-    pages.shells.push((0, 0, "here".to_owned()));
-    pages.shells.push((1, 0, "other page".to_owned()));
-    pages.shells.push((0, 1, "later turn".to_owned()));
+    for (page, after, text) in [(0, 0, "here"), (1, 0, "other page"), (0, 1, "later turn")] {
+        pages
+            .shell_index
+            .entry((page, after))
+            .or_default()
+            .push(pages.shells.len());
+        pages.shells.push((page, after, text.to_owned()));
+    }
     let part = pages.part(0).expect("open page");
     let mut out = Rows::default();
+    crate::work::take();
     pages.draw(0, part, &mut out);
     let out = out.into_parts().0;
     let texts: Vec<String> = out.iter().map(|(line, _)| line.to_string()).collect();
     assert_eq!(texts, vec!["here".to_owned()]);
+    // Only the drawn slot's bucket is examined: one candidate, not
+    // every shell the session ever ran.
+    assert_eq!(crate::work::take().shell_visits, 1);
 }
 
 #[test]
@@ -2651,4 +2660,480 @@ fn drawing_a_page_keeps_each_replys_render() {
         });
     let reply = replies.next().expect("the turn has a reply");
     assert_eq!(reply.cached_at(), Some(58));
+}
+
+/// One page-shaped group for the exact-work fixtures: nine full turns
+/// with identical reply text, then one textless turn. The nine turns
+/// hold 63 lines, so no step sees a full page; the textless turn's step
+/// sets a candidate no text ever confirms, so the next group's first
+/// turn cuts exactly one page. Ids are zero-padded to a fixed width:
+/// unique across groups, so usage lines find their own turn, yet every
+/// group draws the same text at the same widths however large the
+/// session grows.
+fn work_group(stream: &mut Stream, group: usize) {
+    work_group_with(
+        stream,
+        group,
+        "the session log holds every durable line in order ",
+    );
+}
+
+/// One page-shaped group with `reply` as every full turn's text.
+fn work_group_with(stream: &mut Stream, group: usize, reply: &str) {
+    for turn in 0..9 {
+        let message = format!("a_g{group:02}w{turn}");
+        stream.durable(
+            "turn_started",
+            None,
+            json!({"input": [{"type": "message", "source": "driver",
+                "content": [{"type": "text", "text": format!("prompt {turn}")}]}]}),
+        );
+        stream.durable("step_started", None, json!({}));
+        stream.durable("assistant_message_started", Some(&message), json!({}));
+        stream.durable("text_completed", Some(&message), json!({"text": reply}));
+        stream.durable(
+            "assistant_message_completed",
+            Some(&message),
+            json!({"outcome": "completed"}),
+        );
+        stream.usage(&format!("g{group:02}w{turn}"), 100, json!({}));
+        stream.durable("turn_completed", None, json!({"outcome": "completed"}));
+    }
+    // The textless turn: its step's candidate dies at its end, and its
+    // lines bring the group to 69, so the next group cuts exactly once.
+    let message = format!("a_g{group:02}q");
+    stream.durable(
+        "turn_started",
+        None,
+        json!({"input": [{"type": "message", "source": "driver",
+            "content": [{"type": "text", "text": "quiet"}]}]}),
+    );
+    stream.durable("step_started", None, json!({}));
+    stream.durable("assistant_message_started", Some(&message), json!({}));
+    stream.durable(
+        "assistant_message_completed",
+        Some(&message),
+        json!({"outcome": "completed"}),
+    );
+    stream.usage(&format!("g{group:02}q"), 100, json!({}));
+    stream.durable("turn_completed", None, json!({"outcome": "completed"}));
+}
+
+/// `groups` page-shaped groups folded at `width`, holding exactly one
+/// page each: the next group's first turn cuts the last.
+fn work_pages(groups: usize, width: u16) -> (Pages, Vec<Envelope>) {
+    let mut stream = Stream::new(false);
+    for group in 0..groups {
+        work_group(&mut stream, group);
+    }
+    let mut pages = Pages::new(width);
+    for line in &stream.lines {
+        pages.apply(line);
+    }
+    assert_eq!(
+        pages.index().pages().len(),
+        groups,
+        "{groups} groups cut {groups} pages"
+    );
+    (pages, stream.lines)
+}
+
+/// Drops the first half of the closed pages, so both fixtures keep the
+/// same resident share: the open page and the later half stay.
+fn drop_half(pages: &mut Pages) {
+    let half = pages.closed.len() / 2;
+    for part in pages.closed.iter_mut().take(half) {
+        *part = None;
+    }
+}
+
+/// Reloads every dropped page from `lines`, as the frame's loads do.
+fn reload(pages: &mut Pages, lines: &[Envelope]) {
+    for at in 0..pages.index().pages().len() {
+        if pages.part(at).is_none() {
+            let range = pages
+                .index()
+                .pages()
+                .get(at)
+                .map(|page| page.first_seq..=page.last_seq);
+            if let Some(range) = range {
+                pages.load(&history(lines, &range));
+            }
+            assert!(pages.part(at).is_some(), "page {at} did not load");
+        }
+    }
+}
+
+#[test]
+fn page_shaped_groups_cut_exactly_one_page_each() {
+    for groups in [8, 32] {
+        let (pages, _) = work_pages(groups, 80);
+        assert_eq!(pages.page_count(), groups);
+        // Identical groups draw identical rows on every page.
+        let mut rows = Vec::new();
+        for at in 0..groups {
+            let part = pages.part(at).expect("every page is resident");
+            let mut out = Rows::default();
+            pages.draw(at, part, &mut out);
+            rows.push(out.into_parts().0.len());
+        }
+        assert!(
+            rows.iter().all(|count| *count == rows[0]),
+            "every page draws {rows:?}"
+        );
+    }
+}
+
+/// The recount and reload work, by phase: re-counting the resident pages
+/// at the new width, then reloading the dropped ones.
+fn recount_work(pages: &mut Pages, lines: &[Envelope], width: u16) -> [crate::work::Work; 2] {
+    crate::work::take();
+    pages.set_width(width);
+    let recount = crate::work::take();
+    reload(pages, lines);
+    let reloaded = crate::work::take();
+    [recount, reloaded]
+}
+
+#[test]
+fn a_recount_at_a_new_width_costs_pages_not_the_session() {
+    let (mut small, small_lines) = work_pages(8, 80);
+    let (mut large, large_lines) = work_pages(32, 80);
+    // The same resident share: the open page and the later half stay.
+    drop_half(&mut small);
+    drop_half(&mut large);
+    assert_eq!(small.resident(), 5);
+    assert_eq!(large.resident(), 17);
+    let [small_recount, small_reload] = recount_work(&mut small, &small_lines, 100);
+    let [large_recount, large_reload] = recount_work(&mut large, &large_lines, 100);
+    // Every counter grows with the pages, never the session: four times
+    // the pages, at most four times the work plus the open page and the
+    // frame's bookkeeping.
+    let fields = [
+        (
+            "reply_renders",
+            small_recount.reply_renders + small_reload.reply_renders,
+            large_recount.reply_renders + large_reload.reply_renders,
+        ),
+        (
+            "turn_rows",
+            small_recount.turn_rows + small_reload.turn_rows,
+            large_recount.turn_rows + large_reload.turn_rows,
+        ),
+        (
+            "page_counts",
+            small_recount.page_counts + small_reload.page_counts,
+            large_recount.page_counts + large_reload.page_counts,
+        ),
+        (
+            "index_pages",
+            small_recount.index_pages + small_reload.index_pages,
+            large_recount.index_pages + large_reload.index_pages,
+        ),
+        (
+            "usage_summaries",
+            small_recount.usage_summaries + small_reload.usage_summaries,
+            large_recount.usage_summaries + large_reload.usage_summaries,
+        ),
+        (
+            "grapheme_widths",
+            small_recount.grapheme_widths + small_reload.grapheme_widths,
+            large_recount.grapheme_widths + large_reload.grapheme_widths,
+        ),
+        (
+            "search_pages",
+            small_recount.search_pages + small_reload.search_pages,
+            large_recount.search_pages + large_reload.search_pages,
+        ),
+        (
+            "search_order_pages",
+            small_recount.search_order_pages + small_reload.search_order_pages,
+            large_recount.search_order_pages + large_reload.search_order_pages,
+        ),
+        (
+            "shell_visits",
+            small_recount.shell_visits + small_reload.shell_visits,
+            large_recount.shell_visits + large_reload.shell_visits,
+        ),
+    ];
+    for (field, small, large) in fields {
+        assert!(
+            large <= 4 * small + 64,
+            "{field}: {large} is more than four times {small} plus the allowance"
+        );
+    }
+    // The small fixture's own counts pin the seams: resident pages count
+    // once at the new width and dropped ones once on reload, one prefix
+    // rebuild covers the recount's queries, and no search ran at all.
+    assert_eq!(small_recount.page_counts, 5, "resident pages recount");
+    assert_eq!(small_reload.page_counts, 3, "dropped pages reload");
+    assert_eq!(small_recount.search_pages, 0);
+    assert_eq!(small_reload.search_pages, 0);
+    assert_eq!(small_recount.shell_visits, 0);
+    assert_eq!(small_reload.shell_visits, 0);
+    assert_eq!(small_recount.usage_summaries, 0);
+    assert_eq!(small_reload.usage_summaries, 0);
+    // All rows still draw where they did: the recount moved no row.
+    for (pages, lines) in [(&small, &small_lines), (&large, &large_lines)] {
+        let mut total = 0usize;
+        for at in 0..pages.index().pages().len() {
+            let part = pages.part(at).expect("every page reloaded");
+            let mut out = Rows::default();
+            pages.draw(at, part, &mut out);
+            total += out.into_parts().0.len();
+        }
+        assert_eq!(total, pages.index().total(), "rows add to the total");
+        // Each group folds 69 durable lines and cuts exactly one page.
+        assert_eq!(lines.len(), pages.index().pages().len() * 69);
+    }
+}
+
+/// Two pages: plain prose, then a reply holding a Markdown table with
+/// cells long enough to lay out differently at 80 and 100 columns.
+fn table_pages(width: u16) -> (Pages, Vec<Envelope>) {
+    let table = "| left hand side | right hand side |\n|---|---|\n| a cell with quite a lot of words inside it | another cell with quite a lot of words inside it |\n";
+    let mut stream = Stream::new(false);
+    work_group(&mut stream, 0);
+    work_group_with(&mut stream, 1, table);
+    let mut pages = Pages::new(width);
+    for line in &stream.lines {
+        pages.apply(line);
+    }
+    assert_eq!(pages.index().pages().len(), 2, "two groups cut two pages");
+    (pages, stream.lines)
+}
+
+#[test]
+fn a_width_change_moves_only_table_page_revisions() {
+    let (mut pages, _) = table_pages(80);
+    // Both pages counted, so both classified: prose is width-stable.
+    let plain = pages.index().revision(0);
+    let tabled = pages.index().revision(1);
+    pages.set_width(100);
+    assert_eq!(
+        pages.index().revision(0),
+        plain,
+        "a non-table page keeps its revision across a width change"
+    );
+    assert!(
+        pages.index().revision(1) > tabled,
+        "a table page scans again at the new width"
+    );
+    // The same width again settles nothing: no page rescans twice for
+    // one width change.
+    let plain = pages.index().revision(0);
+    let tabled = pages.index().revision(1);
+    pages.set_width(100);
+    assert_eq!(pages.index().revision(0), plain);
+    assert_eq!(pages.index().revision(1), tabled);
+    // Back at the first width the table page moves once more, and the
+    // prose page still holds.
+    pages.set_width(80);
+    assert_eq!(pages.index().revision(0), plain);
+    assert!(
+        pages.index().revision(1) > tabled,
+        "returning to a width rescans the table page once"
+    );
+    // A tiny width recounts every row yet moves the same revisions:
+    // geometry never stands in for text.
+    let plain = pages.index().revision(0);
+    let tabled = pages.index().revision(1);
+    pages.set_width(10);
+    assert!(pages.index().pages()[0].rows > 0);
+    assert_eq!(pages.index().revision(0), plain);
+    assert!(pages.index().revision(1) > tabled);
+    let total = pages.index().total();
+    let mut drawn = 0usize;
+    for at in 0..pages.index().pages().len() {
+        let part = pages.part(at).expect("every page is resident");
+        let mut out = Rows::default();
+        pages.draw(at, part, &mut out);
+        drawn += out.into_parts().0.len();
+    }
+    assert_eq!(drawn, total);
+}
+
+#[test]
+fn an_unclassified_page_rescans_once_then_holds() {
+    // A fresh page was never counted, so its sensitivity is unknown:
+    // the first width change rescans it rather than trusting it.
+    let mut pages = Pages::new(80);
+    assert_eq!(pages.index().revision(0), 0);
+    pages.set_width(100);
+    assert_eq!(pages.index().revision(0), 1);
+    // Counting classifies its empty cards as width-stable, so the next
+    // width change leaves it alone.
+    pages.set_width(80);
+    assert_eq!(pages.index().revision(0), 1);
+}
+
+#[test]
+fn a_batch_held_line_moves_the_revision_before_the_count() {
+    // One short turn on one page, so no step sees a full page and no
+    // line cuts while the batch folds.
+    let mut stream = Stream::new(false);
+    stream.durable(
+        "turn_started",
+        None,
+        json!({"input": [{"type": "message", "source": "driver",
+            "content": [{"type": "text", "text": "prompt"}]}]}),
+    );
+    stream.durable("step_started", None, json!({}));
+    stream.durable("assistant_message_started", Some("a_h"), json!({}));
+    stream.durable("text_completed", Some("a_h"), json!({"text": "first"}));
+    let mut pages = Pages::new(80);
+    for line in &stream.lines {
+        pages.apply(line);
+    }
+    let open = pages.closed.len();
+    let revision = pages.index().revision(open);
+    let recounts = pages.recounts;
+    // The batch's lines change the running turn's cards.
+    let mut held = Stream::new(false);
+    held.durable("step_started", None, json!({}));
+    held.durable("assistant_message_started", Some("a_h2"), json!({}));
+    held.durable("text_completed", Some("a_h2"), json!({"text": "held line"}));
+    pages.hold();
+    let mut changed = false;
+    for line in &held.lines {
+        changed |= pages.apply(line).changed;
+    }
+    assert!(changed, "the held batch changes a card");
+    // The text changed under the hold: the revision moved at once, while
+    // the recount waits for the batch's end.
+    assert!(pages.index().revision(open) > revision);
+    assert_eq!(pages.recounts, recounts);
+    pages.flush();
+    assert!(pages.recounts > recounts);
+}
+
+#[test]
+fn rejoining_an_edge_moves_no_search_revision() {
+    // The blank-reply cut: the next page draws nothing of the card, so
+    // the page before keeps its edge until the turn's completion draws
+    // the closing line there and joins the pages.
+    let mut stream = Stream::new(false);
+    begun(&mut stream, "go");
+    stream.text("a_m", "visible");
+    fill(&mut stream, 62);
+    stream.durable("step_started", None, json!({}));
+    stream.text("a_m", "   ");
+    let cut = stream.lines.len();
+    completed(&mut stream);
+    let lines = stream.lines;
+    let mut pages = pages_at(&lines[..cut], 40);
+    assert_eq!(pages.index().pages().len(), 2);
+    let rows = pages.index().pages()[0].rows;
+    let revision = pages.index().revision(0);
+    let open_revision = pages.index().revision(1);
+    for line in &lines[cut..] {
+        pages.apply(line);
+    }
+    // The edge came off, so the row count moved ...
+    assert_eq!(pages.index().pages()[0].rows, rows - 1);
+    // ... but only an edge did: the page before keeps its revision,
+    // while the open page's new closing line moves its own.
+    assert_eq!(pages.index().revision(0), revision);
+    assert!(pages.index().revision(1) > open_revision);
+}
+
+#[test]
+fn a_reply_gaining_a_table_reclassifies_its_page() {
+    // One page with a plain reply: counted, so classified width-stable.
+    let mut stream = Stream::new(true);
+    begun(&mut stream, "go");
+    stream.durable("assistant_message_started", Some("a_m"), json!({}));
+    stream.text("a_m", "plain words here");
+    let mut pages = Pages::new(80);
+    for line in &stream.lines {
+        pages.apply(line);
+    }
+    let revision = pages.index().revision(0);
+    pages.set_width(100);
+    assert_eq!(
+        pages.index().revision(0),
+        revision,
+        "a table-free page keeps its revision"
+    );
+    // A delta streams a table onto the reply: the next count flips the
+    // page to table-sensitive, so the width back rescans it.
+    let mut table = Stream::new(true);
+    table.durable(
+        "assistant_message_delta",
+        Some("a_m"),
+        json!({"text": "| a | b |\n|---|---|\n| c | d |\n"}),
+    );
+    table.text("a_m", "plain words here\n| a | b |\n|---|---|\n| c | d |\n");
+    for line in &table.lines {
+        pages.apply(line);
+    }
+    pages.set_width(80);
+    assert!(
+        pages.index().revision(0) > revision,
+        "a page that gained a table rescans at the new width"
+    );
+}
+
+/// `groups` page-shaped groups with shell output after every `every`th
+/// group, placed on the group it ran in.
+fn work_pages_shells(groups: usize, width: u16, every: usize) -> (Pages, Vec<Envelope>) {
+    let mut stream = Stream::new(false);
+    for group in 0..groups {
+        work_group(&mut stream, group);
+    }
+    let mut pages = Pages::new(width);
+    let mut at = 0usize;
+    for line in &stream.lines {
+        pages.apply(line);
+        at += 1;
+        // After a group's last line the open page is the group's own:
+        // the shell lands on it. A group folds 69 lines.
+        if at.is_multiple_of(69) {
+            let group = at / 69 - 1;
+            if group.is_multiple_of(every) {
+                assert!(pages.add_shell(Some(format!("shell {group:02}"))));
+            }
+        }
+    }
+    assert_eq!(
+        pages.index().pages().len(),
+        groups,
+        "{groups} groups cut {groups} pages"
+    );
+    (pages, stream.lines)
+}
+
+#[test]
+fn shells_on_many_pages_place_locally() {
+    let (mut small, small_lines) = work_pages_shells(8, 80, 2);
+    let (mut large, large_lines) = work_pages_shells(32, 80, 2);
+    // Every shell draws on its own page, after its own turns.
+    for (pages, groups) in [(&small, 8), (&large, 32)] {
+        for group in (0..groups).step_by(2) {
+            let texts = cut_texts(pages, group);
+            assert!(
+                texts.iter().any(|row| row == &format!("shell {group:02}")),
+                "page {group} draws its shell: {texts:?}"
+            );
+        }
+    }
+    drop_half(&mut small);
+    drop_half(&mut large);
+    let [small_recount, small_reload] = recount_work(&mut small, &small_lines, 100);
+    let [large_recount, large_reload] = recount_work(&mut large, &large_lines, 100);
+    let small_shells = small_recount.shell_visits + small_reload.shell_visits;
+    let large_shells = large_recount.shell_visits + large_reload.shell_visits;
+    // Four shells on eight pages, sixteen on thirty-two: each shell's
+    // page counts once, resident at the new width or dropped on reload,
+    // so each shell is visited exactly once, never the session's shells.
+    assert_eq!(small_shells, 4, "one visit per shell");
+    assert!(
+        large_shells <= 4 * small_shells + 64,
+        "{large_shells} is more than four times {small_shells} plus the allowance"
+    );
+    // And the whole recount still grows with the pages.
+    assert!(
+        large_recount.page_counts + large_reload.page_counts
+            <= 4 * (small_recount.page_counts + small_reload.page_counts) + 64
+    );
 }
