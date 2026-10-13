@@ -20,12 +20,17 @@ fn user_keys(config: &Config) -> serde_json::Map<String, serde_json::Value> {
 /// Builds the terminal's launch description from the launch directory,
 /// its identity path, the loaded configuration, the theme `tui.theme`
 /// names, and Fiber home, under which the viewer writes its copies.
+/// `model` and `overrides` are bare `fiber`'s top-level flags: normalized
+/// into the per-run layer, so `--model` reads as a `-c model=` before
+/// every `-c` (`docs/configuration.md`, "Layers").
 pub(crate) fn launch(
     workspace: PathBuf,
     identity: &Path,
     config: &Config,
     theme: tui::ThemeSetting,
     home: &Path,
+    model: Option<String>,
+    overrides: Vec<String>,
 ) -> tui::Launch {
     // The project key names the identity path: git's shared directory
     // inside a repository, else the launch directory itself.
@@ -49,10 +54,20 @@ pub(crate) fn launch(
         .and_then(|(value, _)| value.as_bool())
         .unwrap_or(false);
     // `model` and `thinking`, unset for the chips' defaults
-    // (`docs/configuration.md`).
-    let model = config
-        .get("model", None)
-        .and_then(|(value, _)| value.as_str().map(str::to_owned));
+    // (`docs/configuration.md`). The run's flags name the chip's model:
+    // the layer's last `model=`, so a later `-c model=` wins over
+    // `--model`, as the session's own resolution reads them.
+    let layer = crate::per_run(model, overrides);
+    let model = layer
+        .iter()
+        .rev()
+        .find_map(|override_text| override_text.strip_prefix("model="))
+        .map(str::to_owned)
+        .or_else(|| {
+            config
+                .get("model", None)
+                .and_then(|(value, _)| value.as_str().map(str::to_owned))
+        });
     let thinking = config
         .get("thinking", None)
         .and_then(|(value, _)| value.as_str().map(str::to_owned));
@@ -74,6 +89,7 @@ pub(crate) fn launch(
         reduced_motion,
         version: env!("CARGO_PKG_VERSION").to_owned(),
         model,
+        overrides: layer,
         thinking,
         models: None,
         scoped_models,

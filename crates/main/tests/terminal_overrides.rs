@@ -56,12 +56,7 @@ fn provider_without_model(setup: &support::Setup, server: &ProviderServer) {
 
 /// Spawns `fiber` with `args` on a `cols` by `rows` terminal through the
 /// shared driver, with the fake key in the child's environment.
-fn terminal(
-    setup: &support::Setup,
-    cols: u16,
-    rows: u16,
-    args: &[&str],
-) -> support::pty::Run {
+fn terminal(setup: &support::Setup, cols: u16, rows: u16, args: &[&str]) -> support::pty::Run {
     support::pty::Run::spawn(
         setup,
         cols,
@@ -91,8 +86,7 @@ fn session_events(setup: &support::Setup) -> Vec<Value> {
         .join(ids.pop().unwrap())
         .join("events.jsonl");
     let text = fs::read_to_string(&log).unwrap();
-    text
-        .lines()
+    text.lines()
         .map(|line| serde_json::from_str(line).unwrap())
         .collect()
 }
@@ -130,19 +124,30 @@ fn bare_fiber_with_model_and_dash_c_starts_each_session_with_both_overrides() {
     let output = run.wait();
     assert_eq!(output.status.code(), Some(0));
     // The `start` carried both overrides: the session ran on the run's
-    // model, and retried the 503 under the run's retry layer.
+    // model, and retried the 503 under the run's retry layer. Attempts
+    // 0 in the file would fail the turn at once, so one failed call
+    // before the answer proves the `-c` layer rode the `start`.
+    // (`retry_scheduled` itself is ephemeral: it never reaches the log.)
     let events = session_events(&setup);
     assert!(
-        events.iter().any(|line| line["kind"] == "usage_recorded"
-            && line["payload"]["model"] == "fake/m"),
+        events
+            .iter()
+            .any(|line| line["kind"] == "usage_recorded" && line["payload"]["model"] == "fake/m"),
         "the session ran on the run's model: {events:?}"
     );
-    let scheduled: Vec<&Value> = events
+    let failed = events
         .iter()
-        .filter(|line| line["kind"] == "retry_scheduled")
-        .collect();
-    assert_eq!(scheduled.len(), 1, "{events:?}");
-    assert_eq!(scheduled[0]["payload"]["last_attempt"], 3);
+        .filter(|line| {
+            line["kind"] == "assistant_message_completed" && line["payload"]["outcome"] == "failed"
+        })
+        .count();
+    assert_eq!(failed, 1, "{events:?}");
+    assert!(
+        events
+            .iter()
+            .any(|line| line["kind"] == "text_completed" && line["payload"]["text"] == "Hello."),
+        "the retried call answered: {events:?}"
+    );
 }
 
 #[test]

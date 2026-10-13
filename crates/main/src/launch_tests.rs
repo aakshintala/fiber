@@ -25,6 +25,8 @@ fn an_identity_equal_to_the_workspace_is_not_git() {
         &config,
         tui::ThemeSetting::Follow,
         dir.path(),
+        None,
+        Vec::new(),
     );
     assert_eq!(launch.workspace, workspace);
     assert_eq!(launch.project, log::project_key(&identity));
@@ -46,6 +48,8 @@ fn an_identity_elsewhere_is_git_and_names_the_project() {
         &config,
         tui::ThemeSetting::Follow,
         dir.path(),
+        None,
+        Vec::new(),
     );
     assert_eq!(launch.workspace, workspace);
     assert_eq!(launch.project, log::project_key(&identity));
@@ -74,6 +78,8 @@ fn model_thinking_and_logo_glyph_come_from_config() {
         &set_config,
         tui::ThemeSetting::Follow,
         dir.path(),
+        None,
+        Vec::new(),
     );
     assert_eq!(set.model.as_deref(), Some("openai/gpt-5"));
     assert_eq!(set.thinking.as_deref(), Some("low"));
@@ -86,6 +92,8 @@ fn model_thinking_and_logo_glyph_come_from_config() {
         &plain_config,
         tui::ThemeSetting::Follow,
         dir.path(),
+        None,
+        Vec::new(),
     );
     assert_eq!(unset.model, None);
     assert_eq!(unset.thinking, None);
@@ -104,6 +112,8 @@ fn tui_hover_defaults_to_on_and_reads_off() {
             &on,
             tui::ThemeSetting::Follow,
             dir.path(),
+            None,
+            Vec::new(),
         )
         .hover
     );
@@ -115,6 +125,8 @@ fn tui_hover_defaults_to_on_and_reads_off() {
             &off,
             tui::ThemeSetting::Follow,
             dir.path(),
+            None,
+            Vec::new(),
         )
         .hover
     );
@@ -132,6 +144,8 @@ fn reduced_motion_comes_from_config_default_off() {
             &off,
             tui::ThemeSetting::Follow,
             dir.path(),
+            None,
+            Vec::new(),
         )
         .reduced_motion
     );
@@ -147,6 +161,8 @@ fn reduced_motion_comes_from_config_default_off() {
             &on,
             tui::ThemeSetting::Follow,
             dir.path(),
+            None,
+            Vec::new(),
         )
         .reduced_motion
     );
@@ -163,6 +179,8 @@ fn shares_and_cards_come_from_config_with_defaults() {
         &plain,
         tui::ThemeSetting::Follow,
         dir.path(),
+        None,
+        Vec::new(),
     );
     assert_eq!((unset.rail_share, unset.panel_share), (15.0, 21.0));
     assert_eq!(
@@ -184,6 +202,8 @@ fn shares_and_cards_come_from_config_with_defaults() {
         &set_config,
         tui::ThemeSetting::Follow,
         dir.path(),
+        None,
+        Vec::new(),
     );
     assert_eq!((set.rail_share, set.panel_share), (18.5, 30.0));
     assert_eq!(set.panel_cards, ["jobs", "session"]);
@@ -212,6 +232,8 @@ fn an_out_of_range_share_reads_as_the_default() {
             &set_config,
             tui::ThemeSetting::Follow,
             dir.path(),
+            None,
+            Vec::new(),
         );
         assert_eq!(
             (set.rail_share, set.panel_share),
@@ -233,6 +255,8 @@ fn without_keys_anywhere_launch_keys_user_is_empty() {
             &plain,
             tui::ThemeSetting::Follow,
             dir.path(),
+            None,
+            Vec::new(),
         )
         .keys
         .user
@@ -263,6 +287,8 @@ fn global_and_project_keys_merge_as_written() {
         &config,
         tui::ThemeSetting::Follow,
         dir.path(),
+        None,
+        Vec::new(),
     )
     .keys
     .user;
@@ -284,8 +310,16 @@ fn the_theme_setting_is_passed_through() {
         name: "solar".to_owned(),
         text: Ok("{}".to_owned()),
     };
-    let tui::ThemeSetting::File { name, text } =
-        launch(workspace.clone(), &workspace, &plain, setting, dir.path()).theme
+    let tui::ThemeSetting::File { name, text } = launch(
+        workspace.clone(),
+        &workspace,
+        &plain,
+        setting,
+        dir.path(),
+        None,
+        Vec::new(),
+    )
+    .theme
     else {
         panic!("not a theme file");
     };
@@ -297,6 +331,8 @@ fn the_theme_setting_is_passed_through() {
         &plain,
         tui::ThemeSetting::Light,
         dir.path(),
+        None,
+        Vec::new(),
     );
     assert!(matches!(light.theme, tui::ThemeSetting::Light));
 }
@@ -312,6 +348,8 @@ fn attention_switches_come_from_config_with_defaults() {
         &plain,
         tui::ThemeSetting::default(),
         dir.path(),
+        None,
+        Vec::new(),
     );
     assert!(unset.attention.notification);
     assert!(unset.attention.bell);
@@ -328,6 +366,8 @@ fn attention_switches_come_from_config_with_defaults() {
             &set_config,
             tui::ThemeSetting::default(),
             dir.path(),
+            None,
+            Vec::new(),
         );
         assert_eq!(
             (
@@ -359,6 +399,8 @@ fn scoped_models_come_from_config() {
         &set_config,
         tui::ThemeSetting::Follow,
         dir.path(),
+        None,
+        Vec::new(),
     );
     assert_eq!(set.scoped_models, ["openai/gpt-5"]);
     assert!(set.models.is_none());
@@ -370,6 +412,8 @@ fn scoped_models_come_from_config() {
         &plain_config,
         tui::ThemeSetting::Follow,
         dir.path(),
+        None,
+        Vec::new(),
     );
     assert!(unset.scoped_models.is_empty());
 }
@@ -388,6 +432,78 @@ fn images_dir_is_under_home_cache() {
         &config,
         tui::ThemeSetting::Follow,
         dir.path(),
+        None,
+        Vec::new(),
     );
     assert_eq!(launch.images, dir.path().join("cache").join("images"));
+}
+
+#[test]
+fn the_terminal_layer_normalizes_model_before_each_dash_c() {
+    let dir = fakes::TempDir::new("fiber-launch-layer");
+    let workspace = dir.path().to_path_buf();
+    let identity = workspace
+        .canonicalize()
+        .unwrap_or_else(|err| panic!("canonical: {err}"));
+    let config = config(dir.path(), &workspace, Vec::new());
+    // `--model` alone reads as one `model=` override, and names the chip.
+    let only_model = launch(
+        workspace.clone(),
+        &identity,
+        &config,
+        tui::ThemeSetting::Follow,
+        dir.path(),
+        Some("acme/m".to_owned()),
+        Vec::new(),
+    );
+    assert_eq!(only_model.model.as_deref(), Some("acme/m"));
+    assert_eq!(only_model.overrides, ["model=acme/m"]);
+    // A later `-c model=` wins over `--model`, for the chip and the
+    // layer, as the session's own resolution reads them.
+    let beaten = launch(
+        workspace.clone(),
+        &identity,
+        &config,
+        tui::ThemeSetting::Follow,
+        dir.path(),
+        Some("acme/m".to_owned()),
+        vec!["model=other/m".to_owned(), "retry.attempts=2".to_owned()],
+    );
+    assert_eq!(beaten.model.as_deref(), Some("other/m"));
+    assert_eq!(
+        beaten.overrides,
+        ["model=acme/m", "model=other/m", "retry.attempts=2"]
+    );
+    // A `-c model=` names the chip with no `--model`.
+    let dash_c = launch(
+        workspace.clone(),
+        &identity,
+        &config,
+        tui::ThemeSetting::Follow,
+        dir.path(),
+        None,
+        vec!["model=cli/m".to_owned()],
+    );
+    assert_eq!(dash_c.model.as_deref(), Some("cli/m"));
+    assert_eq!(dash_c.overrides, ["model=cli/m"]);
+    // Anything else leaves the chip to the configured default: a
+    // `models.` key, a longer name, and an unrelated key name nothing.
+    for overrides in [
+        vec!["models.\"acme/m\".thinking=high".to_owned()],
+        vec!["modelx=1".to_owned()],
+        vec!["retry.attempts=2".to_owned()],
+        Vec::new(),
+    ] {
+        let bare = launch(
+            workspace.clone(),
+            &identity,
+            &config,
+            tui::ThemeSetting::Follow,
+            dir.path(),
+            None,
+            overrides.clone(),
+        );
+        assert_eq!(bare.model, None, "{overrides:?}");
+        assert_eq!(bare.overrides, overrides, "{overrides:?}");
+    }
 }

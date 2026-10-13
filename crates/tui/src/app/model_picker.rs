@@ -202,19 +202,47 @@ impl App {
 
     /// Writes the session-only choice on home into the `start` args: the
     /// model exactly, and the level as a per-run override, outranking
-    /// every file.
+    /// every file. Bare `fiber`'s `--model` and `-c` stay: the choice
+    /// supersedes the layer's `model=` and its own thinking key, while
+    /// every unrelated key rides on (`docs/configuration.md`, "Layers":
+    /// a later `-c` wins, and every `-c` wins over `--model`).
     pub(in crate::app) fn with_start_model(&mut self, args: &mut serde_json::Value) {
         let Some(choice) = self.model_picker.start_model.as_ref() else {
             return;
         };
         let (model, override_text) = super::super::model_picker::start_args(choice);
+        let thinking_key = format!("models.\"{}\".thinking", choice.reference);
+        let merged: Vec<serde_json::Value> = args
+            .get("overrides")
+            .and_then(serde_json::Value::as_array)
+            .map(|overrides| {
+                overrides
+                    .iter()
+                    .filter_map(serde_json::Value::as_str)
+                    .filter(|override_text| {
+                        // The choice names the model, so the layer's
+                        // `model=` never stands beside it; its
+                        // thinking key stands only without a chosen
+                        // level.
+                        let key = override_text
+                            .split_once('=')
+                            .map_or(*override_text, |(key, _)| key);
+                        key != "model" && (choice.level.is_none() || key != thinking_key)
+                    })
+                    .map(|override_text| serde_json::Value::String(override_text.to_owned()))
+                    .collect()
+            })
+            .unwrap_or_default();
+        let mut merged = merged;
+        if let Some(override_text) = override_text {
+            merged.push(serde_json::Value::String(override_text));
+        }
         if let Some(object) = args.as_object_mut() {
             object.insert("model".to_owned(), serde_json::Value::String(model));
-            if let Some(override_text) = override_text {
-                object.insert(
-                    "overrides".to_owned(),
-                    serde_json::Value::Array(vec![serde_json::Value::String(override_text)]),
-                );
+            if merged.is_empty() {
+                object.remove("overrides");
+            } else {
+                object.insert("overrides".to_owned(), serde_json::Value::Array(merged));
             }
         }
     }

@@ -296,6 +296,10 @@ pub(crate) struct App {
     /// Failures since the hub was last reached (`docs/tui.md`, "A dropped
     /// connection").
     reconnect: reconnect::Reconnect,
+    /// Bare `fiber`'s `--model` and `-c`, normalized into the per-run
+    /// layer: each `start` carries them in `overrides`
+    /// (`docs/invocation.md`, "Sessions").
+    launch_overrides: Vec<String>,
     /// What moves on screen, and when it next moves (`docs/tui.md`,
     /// "The working line").
     motion: crate::motion::Motion,
@@ -345,6 +349,7 @@ impl App {
             session_views: session_views::SessionViews::default(),
             items: items::Items::default(),
             reconnect: reconnect::Reconnect::default(),
+            launch_overrides: Vec::new(),
             motion: crate::motion::Motion::default(),
         }
     }

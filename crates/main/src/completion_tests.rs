@@ -131,9 +131,15 @@ fn the_copy_has_the_parsers_visible_grammar_in_both_directions() {
         .iter()
         .map(|arg| (arg.short, arg.long.as_deref()))
         .collect();
+    // Bare `fiber`'s own flags complete beside the printers'.
     assert_eq!(
         flags,
-        [(Some('v'), Some("version")), (Some('h'), Some("help"))]
+        [
+            (None, Some("model")),
+            (Some('c'), None),
+            (Some('v'), Some("version")),
+            (Some('h'), Some("help"))
+        ]
     );
 }
 
