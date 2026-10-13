@@ -563,3 +563,49 @@ fn a_range_over_a_log_cut_short_is_an_error_with_no_lines() {
     assert_eq!(err.code(), contract::ErrorCode::IoFailed);
     assert_eq!(log.range(0, 2).unwrap(), written[..2]);
 }
+
+#[test]
+fn a_range_and_a_catch_up_cross_an_evicted_region() {
+    // Past the first thinning at 1025 appends: the resident set no longer
+    // holds every line, so these reads scan forward from checkpoints.
+    let (_tmp, log, written) = steps("evicted", 1100);
+    assert_eq!(log.count(), 1100);
+    assert_eq!(log.range(0, 1100).unwrap(), written);
+    assert_eq!(log.range(3, 50).unwrap(), written[3..53]);
+    // The seqs are absolute from 0: equality with the appended lines pins
+    // them, since each append minted the next one.
+    let watcher = log.watch_all();
+    let flood: Vec<Envelope> = (0..CAPACITY + 500)
+        .map(|_| log.append(&empty("step_started"), None, None).unwrap())
+        .collect();
+    let rx = relay(watcher);
+    let expected: Vec<Envelope> = written.into_iter().chain(flood).collect();
+    assert_eq!(
+        durable(&rx, expected.len(), &Deadline::after(DEADLINE)),
+        expected
+    );
+}
+
+#[test]
+fn a_catch_up_across_a_corrupt_evicted_region_returns_the_lines_before_it() {
+    let (tmp, log, written) = steps("evicted-bad", 1100);
+    corrupt(&tmp.session(&id("s_1")), 500);
+    // The watcher was registered before the corruption, so its backlog
+    // stops at the subscribe-time count and the catch-up re-reads the
+    // evicted region from the log: every line before the corrupt one,
+    // then the failure once with its absolute number, then nothing.
+    let mut watcher = log.watch_all();
+    let mut got = Vec::new();
+    loop {
+        match watcher.recv() {
+            Ok(Some(line)) => got.push(line),
+            Ok(None) => panic!("the watcher ended before the failure"),
+            Err(error) => {
+                assert!(error.to_string().contains("line 501"), "{error}");
+                break;
+            }
+        }
+    }
+    assert_eq!(got, written[..500]);
+    assert!(watcher.recv().unwrap().is_none());
+}
