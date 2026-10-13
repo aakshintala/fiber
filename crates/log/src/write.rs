@@ -46,7 +46,7 @@ struct Inner {
     _lock: Lock,
     /// The `seq` the next durable line gets.
     next: u64,
-    /// Resident line-start checkpoints: at most CHECKPOINTS of them, strided; the absolute count is `next`.
+    /// Resident line-start checkpoints: at most CHECKPOINTS of them, byte-spaced; the absolute count is `next`.
     offsets: Arc<Offsets>,
     fsyncs: u64,
     watchers: Vec<Weak<Queue>>,

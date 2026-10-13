@@ -477,9 +477,9 @@ impl Offsets {
 impl Table {
     /// Checkpoints the line `line` starting at `byte`: the first line, and
     /// every start at least [`Table::spacing`] past the previous
-    /// checkpoint. Past [`CHECKPOINTS`] checkpoints the even-indexed ones
-    /// are kept and the spacing doubles, so residency stays constant and
-    /// the checkpoints stay spread across the whole log.
+    /// checkpoint. Past [`CHECKPOINTS`] checkpoints the table re-thins to
+    /// at most half the cap at double the spacing, so residency stays
+    /// constant and the checkpoints stay spread across the whole log.
     fn record(&mut self, line: u64, byte: u64) {
         let checkpoint = match self.checkpoints.last() {
             None => true,
@@ -490,13 +490,36 @@ impl Table {
         }
         self.checkpoints.push((line, byte));
         if self.checkpoints.len() > CHECKPOINTS {
+            self.thin();
+        }
+    }
+
+    /// Greedy byte re-thinning: double the spacing, keep the first
+    /// checkpoint, and walk the rest in order keeping one only if at
+    /// least the spacing past the last kept; repeat until at most half
+    /// the cap remains. Every gap then holds at least the spacing and at
+    /// most twice it plus the longest line in the gap, and the spacing
+    /// stays within the initial spacing and four bytes per resident
+    /// checkpoint. The loop ends: the spacing doubles every pass, and at
+    /// a saturated spacing at most two checkpoints can stand that far
+    /// apart.
+    fn thin(&mut self) {
+        self.spacing = self.spacing.saturating_mul(2);
+        loop {
             let mut kept = Vec::with_capacity(self.checkpoints.len().div_ceil(2));
-            for (i, checkpoint) in self.checkpoints.iter().enumerate() {
-                if i % 2 == 0 {
+            let mut last = 0;
+            let mut kept_any = false;
+            for checkpoint in self.checkpoints.iter() {
+                if !kept_any || checkpoint.1.saturating_sub(last) >= self.spacing {
                     kept.push(*checkpoint);
+                    last = checkpoint.1;
+                    kept_any = true;
                 }
             }
             self.checkpoints = kept;
+            if self.checkpoints.len() <= CHECKPOINTS / 2 {
+                break;
+            }
             self.spacing = self.spacing.saturating_mul(2);
         }
     }

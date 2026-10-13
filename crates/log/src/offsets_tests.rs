@@ -252,7 +252,7 @@ fn a_range_over_a_failed_window_is_an_error_with_no_lines() {
 
 /// A table that never drops a line start grows with every line: after
 /// more pushes than the cap of 1024 resident checkpoints, the resident
-/// set must halve to its even-indexed checkpoints and stay capped.
+/// set must re-thin to at most half the cap and stay capped.
 #[test]
 fn resident_checkpoints_stay_at_a_constant_cap() {
     let offsets = Offsets::new(PathBuf::from("red-cap"), Vec::new(), 0);
@@ -266,8 +266,13 @@ fn resident_checkpoints_stay_at_a_constant_cap() {
     assert_eq!(offsets.lock().checkpoints.len(), 1024);
     assert_eq!(offsets.lock().checkpoints[0], (0, 0));
     offsets.push(100);
-    // One past the cap the table halves to its even-indexed checkpoints.
-    assert_eq!(offsets.lock().checkpoints.len(), 513);
+    // One past the cap the table re-thins to at most half the cap. The
+    // doubling passes keep every line while the spacing stays below a
+    // line: spacing 128 keeps every other line (513, still over half),
+    // then spacing 256 re-walks those and keeps every fourth (400-byte
+    // gaps, 257).
+    assert!(offsets.lock().checkpoints.len() <= CHECKPOINTS / 2);
+    assert_eq!(offsets.lock().checkpoints.len(), 257);
     assert_eq!(offsets.lock().checkpoints[0], (0, 0));
     // The absolute line count never depends on checkpointing.
     assert_eq!(offsets.count(), 1025);
