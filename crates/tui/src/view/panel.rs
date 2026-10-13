@@ -6,7 +6,7 @@ use std::ops::Range;
 
 use ratatui::buffer::Buffer;
 use ratatui::layout::Rect;
-use ratatui::style::Style;
+use ratatui::style::{Modifier, Style};
 use ratatui::text::{Line, Span};
 
 use crate::app::App;
@@ -249,14 +249,6 @@ fn card_rows(app: &App, card: &Card, text: usize) -> Vec<Row> {
 fn session_rows(app: &App, text: usize) -> Vec<Row> {
     let panel = app.panel_state();
     let mut out = Vec::new();
-    if let Some(waiting) = app.rail_waiting() {
-        out.push(Row {
-            line: Line::raw(format!("{waiting} waiting")),
-            spot: Some(Spot::Waiting),
-            tint: None,
-            edge: false,
-        });
-    }
     if let Some(status) = panel.status() {
         out.push(plain(format!(
             "directory  {}",
@@ -409,6 +401,25 @@ fn session_rows(app: &App, text: usize) -> Vec<Row> {
         out.push(Row {
             line: Line::raw(format!("tools  {}", servers.join(", "))),
             spot: Some(Spot::Tools),
+            tint: None,
+            edge: false,
+        });
+    }
+    // With the rail hidden and sessions waiting, the card ends with the
+    // line that shows it (`docs/tui.md`, "The panel").
+    if let Some(waiting) = app.rail_waiting().filter(|waiting| *waiting > 0) {
+        out.push(Row {
+            line: Line::from(vec![
+                Span::styled(
+                    "!",
+                    style(Role::Attention).add_modifier(Modifier::BOLD),
+                ),
+                Span::styled(
+                    format!(" {waiting} waiting · hidden · show"),
+                    style(Role::Attention),
+                ),
+            ]),
+            spot: Some(Spot::Waiting),
             tint: None,
             edge: false,
         });
