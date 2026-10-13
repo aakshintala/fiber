@@ -305,7 +305,10 @@ fn third_row(row: &Row, text: usize) -> Vec<Span<'static>> {
     }
     vec![
         Span::styled("⎇ ", style(Role::Muted)),
-        Span::raw(format::cut(&branch, text.saturating_sub(format::width("⎇ ")))),
+        Span::raw(format::cut(
+            &branch,
+            text.saturating_sub(format::width("⎇ ")),
+        )),
     ]
 }
 

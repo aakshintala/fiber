@@ -112,7 +112,10 @@ fn rail_cards_match_the_doc() {
     );
     let grid = run.wait_screen("the rail with three sessions", |grid| {
         grid.rows.iter().any(|row| row.contains("⎇ main"))
-            && grid.rows.iter().any(|row| row.contains('░') && row.contains('%'))
+            && grid
+                .rows
+                .iter()
+                .any(|row| row.contains('░') && row.contains('%'))
     });
 
     // Both project headers draw: the name, then " +", with the spend
@@ -146,7 +149,11 @@ fn rail_cards_match_the_doc() {
     for (n, expected) in ["m", "a", "i", "n"].iter().enumerate() {
         let cell = grid.cell(at + 2 + n as u16, y);
         assert_eq!(cell.symbol.as_str(), *expected);
-        assert!(!cell.dim, "branch cell ({}, {y}) is plain", at + 2 + n as u16);
+        assert!(
+            !cell.dim,
+            "branch cell ({}, {y}) is plain",
+            at + 2 + n as u16
+        );
     }
 
     // Every empty bar cell is ░ in rule.
@@ -200,7 +207,10 @@ fn the_hidden_rail_waiting_line_shows_the_rail() {
     // (`docs/permissions.md`, "Headless").
     fs::write(
         setup.home().join("rules"),
-        format!("{}\n", json!({"decision": "ask", "tool": "shell", "prefix": "echo hi"})),
+        format!(
+            "{}\n",
+            json!({"decision": "ask", "tool": "shell", "prefix": "echo hi"})
+        ),
     )
     .unwrap();
     let second = setup.root.path().join("b");
@@ -262,16 +272,7 @@ fn the_hidden_rail_waiting_line_shows_the_rail() {
     }
 
     // A click on the line shows the rail again.
-    run.write(
-        format!(
-            "\x1b[<0;{};{}M\x1b[<0;{};{}m",
-            at + 1,
-            y + 1,
-            at + 1,
-            y + 1
-        )
-        .as_bytes(),
-    );
+    run.write(format!("\x1b[<0;{};{}M\x1b[<0;{};{}m", at + 1, y + 1, at + 1, y + 1).as_bytes());
     run.wait_screen("the rail shown again", |grid| {
         grid.rows.iter().any(|row| row.contains("NEEDS INPUT"))
     });

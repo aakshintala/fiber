@@ -132,10 +132,7 @@ fn other_waiting(session: &str) -> Line {
 /// Hides the rail as ⌥R does, so the hidden rail's grip is drawn.
 fn hide_rail(app: &mut App) {
     use contract::clock::Clock;
-    app.on_key(
-        crate::keys::Key::AltR,
-        fakes::clock::FakeClock::new().now(),
-    );
+    app.on_key(crate::keys::Key::AltR, fakes::clock::FakeClock::new().now());
     assert!(
         app.chrome()
             .layout()
