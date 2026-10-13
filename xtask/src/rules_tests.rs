@@ -926,6 +926,213 @@ fn loop_tool_names_fail_loudly_on_unrecognized_owned_definitions() {
 }
 
 #[test]
+fn source_tokens_scan_after_block_comment_closes_and_preserve_comment_boundaries() {
+    let files = [source_file(
+        "hub",
+        "src/comments.rs",
+        "fn f() {\n    /* one line */\n    let _ = dir.join(\"sessions\");\n    /* outer\n       /* inner */ let _ = dir.join(\"sessions\");\n    */\n    let _ = dir./* between tokens */join(\"sessions\");\n}\n",
+    )];
+    assert_eq!(
+        session_paths(&files),
+        [
+            "crates/hub/src/comments.rs:3: session path outside log",
+            "crates/hub/src/comments.rs:7: session path outside log",
+        ]
+    );
+}
+
+#[test]
+fn source_tokens_count_nested_comment_closes_before_reporting_following_paths() {
+    let files = [source_file(
+        "hub",
+        "src/nested_comments.rs",
+        "fn f() {\n    /* outer /* middle /* inner */ let _ = dir.join(\"sessions\"); */ still outer */\n    let _ = dir.join(\"sessions\");\n}\n",
+    )];
+    assert_eq!(
+        session_paths(&files),
+        ["crates/hub/src/nested_comments.rs:3: session path outside log"]
+    );
+}
+
+#[test]
+fn source_tokens_track_raw_and_multiline_string_delimiters_and_lines() {
+    let files = [source_file(
+        "hub",
+        "src/strings.rs",
+        r###"fn f() {
+    let _ = r##"#not-the-close " # and dir.join("sessions")"##;
+    let _ = "ordinary
+        multiline";
+    let _ = r#"raw
+        multiline"#;
+    let _ = dir.join("sessions");
+}
+"###,
+    )];
+    assert_eq!(
+        session_paths(&files),
+        ["crates/hub/src/strings.rs:7: session path outside log"]
+    );
+}
+
+#[test]
+fn source_tokens_do_not_end_an_escaped_quote_string_early() {
+    let files = [source_file(
+        "hub",
+        "src/escaped_quote.rs",
+        r###"fn f() {
+    let _ = "escaped \" let _ = dir.join(\"sessions\")";
+    let _ = dir.join("sessions");
+}
+"###,
+    )];
+    assert_eq!(
+        session_paths(&files),
+        ["crates/hub/src/escaped_quote.rs:3: session path outside log"]
+    );
+}
+
+#[test]
+fn source_tokens_skip_escaped_and_unicode_character_literals() {
+    for literal in [r"'x'", r"'\''", r"'\x41'", r"'\u{1F980}'", "'🦀'"] {
+        let source = format!("fn f() {{ let c = {literal}; let _ = dir.join(\"sessions\"); }}");
+        let expected = source_tokens("fn f() { let c = ; let _ = dir.join(\"sessions\"); }");
+        assert_eq!(source_tokens(&source), expected, "{literal}");
+        let files = [source_file("hub", "src/chars.rs", &source)];
+        assert_eq!(
+            session_paths(&files),
+            ["crates/hub/src/chars.rs:1: session path outside log"],
+            "{literal}"
+        );
+    }
+}
+
+#[test]
+fn cfg_test_detection_distinguishes_other_attributes_and_root_attributes() {
+    let files = [source_file(
+        "hub",
+        "src/attributes.rs",
+        "#[cfg(not(test))]\nfn not_test() { let _ = dir.join(\"sessions\"); }\n#[cfg(feature = \"x\")]\nfn feature() { let _ = dir.join(\"sessions\"); }\n#[cfg(test, feature = \"x\")]\nfn combined() { let _ = dir.join(\"sessions\"); }\n#[cfg(test)]\nfn test_only() { let _ = dir.join(\"sessions\"); }\n",
+    )];
+    assert_eq!(
+        session_paths(&files),
+        [
+            "crates/hub/src/attributes.rs:2: session path outside log",
+            "crates/hub/src/attributes.rs:4: session path outside log",
+            "crates/hub/src/attributes.rs:6: session path outside log",
+        ]
+    );
+    let root_test = [source_file(
+        "hub",
+        "src/root_test.rs",
+        "#![cfg(test)]\nfn only_test() { let _ = dir.join(\"sessions\"); }\n",
+    )];
+    assert!(session_paths(&root_test).is_empty());
+}
+
+#[test]
+fn cfg_test_non_struct_items_do_not_treat_commas_as_field_terminators() {
+    let files = [source_file(
+        "hub",
+        "src/items.rs",
+        "#[cfg(test)]\ntype TestOnly = First, let _ = dir.join(\"sessions\");\nfn production() {}\n",
+    )];
+    assert!(session_paths(&files).is_empty());
+}
+
+#[test]
+fn cfg_test_struct_array_fields_do_not_hide_following_production_paths() {
+    let files = [source_file(
+        "hub",
+        "src/array_field.rs",
+        "struct Fake {\n    #[cfg(test)]\n    bytes: [u8; 2],\n}\nfn production() { let _ = dir.join(\"sessions\"); }\n",
+    )];
+    assert_eq!(
+        session_paths(&files),
+        ["crates/hub/src/array_field.rs:5: session path outside log"]
+    );
+}
+
+#[test]
+fn test_only_files_shared_with_a_production_module_edge_remain_production() {
+    let files = [
+        source_file(
+            "hub",
+            "src/lib.rs",
+            "#[cfg(test)] mod fake;\nmod shared;\n",
+        ),
+        source_file("hub", "src/fake.rs", "#[path = \"shared.rs\"] mod shared;\n"),
+        source_file(
+            "hub",
+            "src/shared.rs",
+            "fn production() { let _ = dir.join(\"sessions\"); }\n",
+        ),
+    ];
+    let paths = production_files(&files)
+        .into_iter()
+        .map(|file| file.rel.as_str())
+        .collect::<Vec<_>>();
+    assert_eq!(paths, ["src/lib.rs", "src/shared.rs"]);
+    assert_eq!(
+        session_paths(&files),
+        ["crates/hub/src/shared.rs:1: session path outside log"]
+    );
+}
+
+#[test]
+fn home_sites_keep_variable_join_context_and_name_token_line() {
+    let file = source_file(
+        "main",
+        "src/prompt_fixture.rs",
+        "fn helper() {}\nfn read_one(home: &Path, name: &str) {\n    let path = home.join(\n        name\n    ).join(\"projects\");\n}\n",
+    );
+    let sites = home_sites(&file);
+    assert!(sites.iter().any(|site| {
+        site.operation == "join:projects"
+            && site.context == "fn read_one|root:home/name"
+            && site.line == 5
+    }), "{sites:?}");
+    assert!(sites.iter().any(|site| {
+        site.operation == "join:prompt-name"
+            && site.context == "fn read_one|root:home"
+            && site.line == 4
+    }), "{sites:?}");
+
+    let near_function_start = source_file(
+        "main",
+        "src/prompt_start.rs",
+        "fn preceding() {}\nfn read_one(home: &Path, name: &str) {\n    let path = home.join(name);\n}\n",
+    );
+    assert!(home_sites(&near_function_start).iter().any(|site| {
+        site.operation == "join:prompt-name"
+            && site.context == "fn read_one|root:home"
+            && site.line == 3
+    }));
+}
+
+#[test]
+fn test_only_read_one_join_name_is_not_a_home_path() {
+    let files = [source_file(
+        "main",
+        "src/prompt_fixture.rs",
+        "#[cfg(test)]\nmod fake {\n    fn read_one(home: &Path, name: &str) {\n        let path = home.join(\"projects\").join(name);\n    }\n}\n",
+    )];
+    assert!(home_sites(&files[0]).is_empty());
+    assert!(fiber_home_paths(&files).is_empty());
+}
+
+#[test]
+fn loop_tool_gate_ignores_owned_name_syntax_outside_tools_and_jobs() {
+    let tools = registrations(&REGISTERED_TOOLS);
+    let loop_source = source_file(
+        "loop",
+        "src/new.rs",
+        "fn unrelated() { let name = String::from(\"not-a-tool-definition\"); }\n",
+    );
+    assert!(loop_tool_names(&[tools, loop_source]).is_empty());
+}
+
+#[test]
 fn individual_allowances_are_consumed_once_and_match_path_context_and_operation() {
     let allowance = SourceAllowance {
         path: "crates/hub/src/feed.rs",
@@ -940,43 +1147,40 @@ fn individual_allowances_are_consumed_once_and_match_path_context_and_operation(
         operation: "join:events.jsonl".to_owned(),
     };
     assert_eq!(allowance.ticket, "#1725");
-    assert!(consume_allowance(&[allowance], &site).is_some());
+    assert!(consume_allowance(&[allowance], &site));
     let mut zero_sites = std::iter::empty();
     let mut unused = vec![allowance];
-    assert!(consume_next_allowance(&mut unused, &mut zero_sites).is_none());
+    assert!(!consume_next_allowance(&mut unused, &mut zero_sites));
     assert_eq!(unused.len(), 1);
     let mut two_sites = [site.clone(), site.clone()].into_iter();
     let mut remaining = vec![allowance];
-    assert!(consume_next_allowance(&mut remaining, &mut two_sites).is_some());
-    assert!(consume_next_allowance(&mut remaining, &mut two_sites).is_none());
+    assert!(consume_next_allowance(&mut remaining, &mut two_sites));
+    assert!(!consume_next_allowance(&mut remaining, &mut two_sites));
     assert!(
-        consume_allowance(
+        !consume_allowance(
             &[allowance],
             &SourceSite {
                 path: "crates/hub/src/other.rs".to_owned(),
                 ..site.clone()
             }
         )
-        .is_none()
     );
     assert!(
-        consume_allowance(
+        !consume_allowance(
             &[allowance],
             &SourceSite {
                 context: "fn other".to_owned(),
                 ..site.clone()
             }
         )
-        .is_none()
     );
     assert!(
-        consume_allowance(
+        !consume_allowance(
             &[allowance],
             &SourceSite {
                 operation: "join:sessions".to_owned(),
                 ..site
             }
         )
-        .is_none()
     );
 }
