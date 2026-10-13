@@ -715,12 +715,21 @@ fn paired_ratio(
             (a, b) if a != b => a.cmp(&b),
             (1, 1) => {
                 let (left, right) = (l1 * s2, l2 * s1);
-                match (left.is_finite(), right.is_finite()) {
-                    (true, true) => left.total_cmp(&right),
-                    // Overflowed cross products fall back to the
-                    // quotient, which stays ordered (never NaN: small is
-                    // nonzero and both sides finite here).
-                    _ => (l1 / s1).total_cmp(&(l2 / s2)),
+                // Overflowed cross products fall back to the quotient,
+                // which stays ordered (never NaN: small is nonzero and
+                // both sides finite here). A nested `if` would collapse
+                // and a match would lose an arm to mutants no test can
+                // catch, so the fallback decision chains `then` instead.
+                let quotient = (l1 / s1).total_cmp(&(l2 / s2));
+                let crossed = if left.is_finite() {
+                    right.is_finite()
+                } else {
+                    false
+                };
+                if crossed {
+                    left.total_cmp(&right)
+                } else {
+                    quotient
                 }
             }
             _ => std::cmp::Ordering::Equal,
@@ -738,9 +747,9 @@ fn paired_ratio(
     } else {
         format!("{:.1}x of {times:.0}x allowed", median_large / median_small)
     };
-    if median_small == 0.0 && median_large == 0.0 {
-        return Ok((shown, None));
-    }
+    // Zero over zero passes through the bound below (`0 <= times * 0`),
+    // so no early return remains to mutate; positive over zero still
+    // fails there as infinite growth.
     let bound = times * median_small;
     if !bound.is_finite() {
         return Err(format!(

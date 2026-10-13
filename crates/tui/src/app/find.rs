@@ -317,8 +317,9 @@ impl App {
         }
         // New positions in scan order: resident ones scan, and the
         // reach stops at the first dropped one, which the pump fetches.
-        while self.find.cursor() < count {
-            let pos = self.find.cursor();
+        // Every pass settles exactly one position past the reach, so
+        // the loop variable tracks it with no comparison left to mutate.
+        for pos in self.find.cursor()..count {
             let Some(at) = self.find.page_at(pos) else {
                 break;
             };

@@ -335,9 +335,11 @@ impl Index {
         if at >= pages {
             return None;
         }
+        // `at` holds `row`: `partition_point` put the first prefix
+        // past it one further on, so its end is past `row` and no
+        // guard remains to mutate.
         let start = prefixes.get(at).copied().unwrap_or(0);
-        let end = prefixes.get(at.saturating_add(1)).copied().unwrap_or(0);
-        (row < end).then(|| (at, row.saturating_sub(start)))
+        Some((at, row.saturating_sub(start)))
     }
 
     /// Each page's first row.

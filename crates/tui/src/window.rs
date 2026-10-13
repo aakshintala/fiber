@@ -1327,9 +1327,10 @@ impl Pages {
             self.recounts = self.recounts.saturating_add(1);
         }
         self.index.set_rows(at, rows);
-        if self.table.len() <= at {
-            self.table.resize(at.saturating_add(1), None);
-        }
+        // The table answer grows with the pages, never shrinks: the
+        // maximum holds the capacity without a guard left to mutate.
+        self.table
+            .resize(self.table.len().max(at.saturating_add(1)), None);
         if let Some(slot) = self.table.get_mut(at) {
             *slot = Some(page_table);
         }

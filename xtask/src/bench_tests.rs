@@ -2163,6 +2163,136 @@ fn zero_growth_passes_and_infinite_growth_fails() {
     );
 }
 
+/// The head judged with three runs of `small`/`large`, so run order
+/// can disagree with growth order and the median proves the sort.
+fn ratio_three(small: &str, large: &str, small_values: Value, large_values: Value) -> Report {
+    let head = with_metric_runs(head(), &[(small, 3), (large, 3)]);
+    let head = with_metric(head, small, small_values);
+    let head = with_metric(head, large, large_values);
+    judge(&head, Some(&base()), Event::PullRequest)
+}
+
+#[test]
+fn ratio_columns_show_the_median_pair_not_just_its_verdict() {
+    let (budget, small, large) = RATIO_ROWS[0];
+    // Sixteen over ten names its growth in the head column.
+    let at = judge_ratio(
+        small,
+        large,
+        json!([10.0, 10.0, 10.0, 10.0, 10.0]),
+        json!([160.0, 160.0, 160.0, 160.0, 160.0]),
+    );
+    assert_eq!(at.failures, Vec::<String>::new(), "{:?}", at.failures);
+    let line = row(&at.comment, budget);
+    assert!(line.contains("16.0x of 16x allowed"), "{line}");
+    // Zero over zero names zero growth, not infinite growth or NaN.
+    let zeros = judge_ratio(
+        small,
+        large,
+        json!([0.0, 0.0, 0.0, 0.0, 0.0]),
+        json!([0.0, 0.0, 0.0, 0.0, 0.0]),
+    );
+    assert_eq!(zeros.failures, Vec::<String>::new(), "{:?}", zeros.failures);
+    let line = row(&zeros.comment, budget);
+    assert!(line.contains("0.0x of 16x allowed"), "{line}");
+    // Positive over zero names infinite growth.
+    let infinite = judge_ratio(
+        small,
+        large,
+        json!([0.0, 0.0, 0.0, 0.0, 0.0]),
+        json!([1.0, 1.0, 1.0, 1.0, 1.0]),
+    );
+    assert_eq!(infinite.failures.len(), 1, "{:?}", infinite.failures);
+    let line = row(&infinite.comment, budget);
+    assert!(line.contains("infinite of 16x allowed"), "{line}");
+}
+
+#[test]
+fn a_present_base_shows_its_ratio_not_unavailable() {
+    let (budget, small, large) = RATIO_ROWS[0];
+    // A base that ran the workload shows its own median pair, ten over
+    // one, in the base column: forcing "unavailable" hides it.
+    let base = with_metric(base(), small, json!([1.0, 1.0, 1.0, 1.0, 1.0]));
+    let base = with_metric(base, large, json!([10.0, 10.0, 10.0, 10.0, 10.0]));
+    let out = judge(&head(), Some(&base), Event::PullRequest);
+    assert_eq!(out.failures, Vec::<String>::new(), "{:?}", out.failures);
+    let line = row(&out.comment, budget);
+    assert!(line.contains("10.0x of 16x allowed"), "{line}");
+    assert!(!line.contains("unavailable"), "{line}");
+}
+
+#[test]
+fn a_base_missing_one_scale_shows_unavailable() {
+    let (budget, small, large) = RATIO_ROWS[0];
+    let rich = with_metric(base(), small, json!([1.0, 1.0, 1.0, 1.0, 1.0]));
+    let rich = with_metric(rich, large, json!([10.0, 10.0, 10.0, 10.0, 10.0]));
+    // Missing either side alone still reads unavailable: judging half a
+    // pair would fail the base instead.
+    for missing in [small, large] {
+        let base = without_metric(&rich, missing);
+        let out = judge(&head(), Some(&base), Event::PullRequest);
+        assert_eq!(
+            out.failures,
+            Vec::<String>::new(),
+            "{missing}: {:?}",
+            out.failures
+        );
+        let line = row(&out.comment, budget);
+        assert!(line.contains("unavailable"), "{missing}: {line}");
+    }
+}
+
+#[test]
+fn paired_ordering_sorts_finite_pairs_by_growth() {
+    let (budget, small, large) = RATIO_ROWS[0];
+    // Run order disagrees with growth order: the column names the
+    // sorted middle (two over one), never the run middle (one over one).
+    let out = ratio_three(
+        small,
+        large,
+        json!([1.0, 1.0, 1.0]),
+        json!([20.0, 1.0, 2.0]),
+    );
+    assert_eq!(out.failures, Vec::<String>::new(), "{:?}", out.failures);
+    let line = row(&out.comment, budget);
+    assert!(line.contains("2.0x of 16x allowed"), "{line}");
+}
+
+#[test]
+fn paired_ordering_ranks_zero_growth_first_and_infinite_last() {
+    let (budget, small, large) = RATIO_ROWS[0];
+    // An infinite pair sorts after the finite ones whatever the run
+    // order: the middle stays the finite pair at three over one.
+    let out = ratio_three(small, large, json!([0.0, 1.0, 1.0]), json!([5.0, 2.0, 3.0]));
+    assert_eq!(out.failures, Vec::<String>::new(), "{:?}", out.failures);
+    let line = row(&out.comment, budget);
+    assert!(line.contains("3.0x of 16x allowed"), "{line}");
+    // A zero pair sorts before the finite ones: the middle stays the
+    // finite pair at two over one.
+    let out = ratio_three(small, large, json!([0.0, 1.0, 1.0]), json!([0.0, 2.0, 3.0]));
+    assert_eq!(out.failures, Vec::<String>::new(), "{:?}", out.failures);
+    let line = row(&out.comment, budget);
+    assert!(line.contains("2.0x of 16x allowed"), "{line}");
+}
+
+#[test]
+fn overflowed_cross_products_fall_back_to_the_quotient() {
+    let (budget, small, large) = RATIO_ROWS[0];
+    // Exact powers of two: every cross product overflows, so the median
+    // comes from the quotients (two over one). Exact zero remainders or
+    // infinite products would instead tie at the run middle (one over one).
+    let unit = 2f64.powi(600);
+    let out = ratio_three(
+        small,
+        large,
+        json!([unit, unit, unit]),
+        json!([4.0 * unit, unit, 2.0 * unit]),
+    );
+    assert_eq!(out.failures, Vec::<String>::new(), "{:?}", out.failures);
+    let line = row(&out.comment, budget);
+    assert!(line.contains("2.0x of 16x allowed"), "{line}");
+}
+
 #[test]
 fn a_head_ratio_over_sixteen_times_fails_whatever_the_base_does() {
     let (_, small, large) = RATIO_ROWS[0];

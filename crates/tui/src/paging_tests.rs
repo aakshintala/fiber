@@ -3137,3 +3137,12 @@ fn shells_on_many_pages_place_locally() {
             <= 4 * (small_recount.page_counts + small_reload.page_counts) + 64
     );
 }
+
+#[test]
+fn add_shell_without_output_reports_nothing_added() {
+    let mut pages = Pages::new(80);
+    // No shell ran, so no page changed: the `None` path reports false
+    // while a real shell still reports true.
+    assert!(!pages.add_shell(None));
+    assert!(pages.add_shell(Some("shell 00".to_owned())));
+}
