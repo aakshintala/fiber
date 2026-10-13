@@ -106,8 +106,15 @@ fn run_in(
     }
     drop(file);
     // Registered once per process, before the spawn, so an acknowledged
-    // editor implies installed handlers.
-    forwarded();
+    // editor implies installed handlers. The clear sits before the spawn:
+    // any signal after the clear is observed by the wait; anything before
+    // it is stale by definition. Clearing on wait entry instead would
+    // discard a signal arriving after the spawn but before the wait.
+    let forward = forwarded();
+    forward.int.swap(false, Ordering::SeqCst);
+    forward.quit.swap(false, Ordering::SeqCst);
+    forward.term.swap(false, Ordering::SeqCst);
+    forward.hup.swap(false, Ordering::SeqCst);
     // `sh` splits the command, so a value with arguments such as `code -w`
     // works; the path goes in as `$1`, never through the split. The shell
     // runs in Fiber's group, as on main: the wait signals the shell pid
@@ -169,8 +176,15 @@ pub(crate) fn open(
     clock: &Arc<dyn Clock>,
 ) -> Outcome<Result<(), String>> {
     // Registered once per process, before the spawn, so an acknowledged
-    // editor implies installed handlers.
-    forwarded();
+    // editor implies installed handlers. The clear sits before the spawn:
+    // any signal after the clear is observed by the wait; anything before
+    // it is stale by definition. Clearing on wait entry instead would
+    // discard a signal arriving after the spawn but before the wait.
+    let forward = forwarded();
+    forward.int.swap(false, Ordering::SeqCst);
+    forward.quit.swap(false, Ordering::SeqCst);
+    forward.term.swap(false, Ordering::SeqCst);
+    forward.hup.swap(false, Ordering::SeqCst);
     // As in [`run_in`]: the shell runs in Fiber's group, and the wait
     // signals the shell pid alone.
     let mut child = match Command::new("/bin/sh")
@@ -228,10 +242,6 @@ enum Waited {
 /// as before.
 fn wait(child: &mut Child, clock: &Arc<dyn Clock>, pid: u32) -> io::Result<Waited> {
     let forward = forwarded();
-    forward.int.swap(false, Ordering::SeqCst);
-    forward.quit.swap(false, Ordering::SeqCst);
-    forward.term.swap(false, Ordering::SeqCst);
-    forward.hup.swap(false, Ordering::SeqCst);
     loop {
         if let Some(status) = child.try_wait()? {
             return Ok(Waited::Exited(status));
@@ -279,7 +289,7 @@ fn wait(child: &mut Child, clock: &Arc<dyn Clock>, pid: u32) -> io::Result<Waite
 
 /// The process's signal forwarding: the flags [`wait`] polls. Registered
 /// once and never unregistered, so there is nothing to clean up and
-/// nothing to leak. Each run clears the flags when its wait starts, so a
+/// nothing to leak. Each run clears the flags before its spawn, so a
 /// signal from before the run never stops it.
 struct Forwarded {
     int: Arc<AtomicBool>,

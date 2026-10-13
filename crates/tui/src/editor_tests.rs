@@ -352,6 +352,31 @@ fn a_term_ignoring_editor_is_forced_down_with_sigkill() {
     );
 }
 
+/// A signal from before the run never stops it: a stale shutdown flag is
+/// consumed by the pre-spawn clear, so a quick editor still completes.
+/// Each test runs in its own process, so the raise reaches only this test.
+#[test]
+fn a_signal_from_before_the_run_never_stops_it() {
+    use signal_hook::consts::SIGTERM;
+    use std::sync::atomic::Ordering;
+    // Installed before the raise, so the raise sets the flag instead of
+    // ending the test process.
+    let forward = super::forwarded();
+    signal_hook::low_level::raise(SIGTERM).unwrap_or_else(|err| panic!("raise: {err}"));
+    // The flag read is a poll with a Deadline: delivery is asynchronous,
+    // so the set is awaited, and the run after it is ordinary.
+    let deadline = Deadline::after(DEADLINE);
+    while !forward.term.load(Ordering::SeqCst) {
+        if deadline.left().is_zero() {
+            panic!("waited {DEADLINE:?} for the TERM flag to read set");
+        }
+        std::thread::yield_now();
+    }
+    let fake = Fake::new(":\n");
+    assert_eq!(fake.run("text"), Ok("text".to_owned()));
+    assert!(fake.left().is_empty());
+}
+
 /// A terminal interrupt while the editor runs ends the editor as its own
 /// signal: the wait forwards this process's SIGINT to the editor pid,
 /// so Ctrl+C with the terminal handed over still ends only the editor.
