@@ -1889,11 +1889,12 @@ fn a_session_only_choice_without_a_level_keeps_unrelated_layer_keys() {
 fn a_launch_thinking_key_for_the_chosen_model_yields_to_the_choice() {
     let mut app = home();
     // The choice's level wins over the layer's thinking key for the
-    // same model; another key rides on.
+    // same model; another key rides on. The layer holds canonical keys,
+    // as `main` hands them: `acme/m1` needs no quotes.
     let args = merged(
         &mut app,
         vec![
-            "models.\"acme/m1\".thinking=high".to_owned(),
+            "models.acme/m1.thinking=high".to_owned(),
             "retry.attempts=2".to_owned(),
         ],
         Some(held("acme/m1", Some("low"))),
@@ -1906,55 +1907,46 @@ fn a_launch_thinking_key_for_the_chosen_model_yields_to_the_choice() {
     // Without a chosen level the layer's thinking key stands.
     let args = merged(
         &mut app,
-        vec!["models.\"acme/m1\".thinking=high".to_owned()],
+        vec!["models.acme/m1.thinking=high".to_owned()],
         Some(held("acme/m1", None)),
     );
     assert_eq!(args["model"], json!("acme/m1"));
+    assert_eq!(args["overrides"], json!(["models.acme/m1.thinking=high"]));
+}
+
+#[test]
+fn a_canonical_thinking_key_for_a_dotted_reference_yields_to_the_choice() {
+    let mut app = home();
+    // A reference holding a dot keeps its quotes in canonical spelling,
+    // so the layer's thinking key for the chosen model yields to the
+    // choice's level, while an unrelated key rides on.
+    let layer = vec![
+        "models.\"acme/m.1\".thinking=high".to_owned(),
+        "retry.attempts=2".to_owned(),
+    ];
+    let args = merged(&mut app, layer.clone(), Some(held("acme/m.1", Some("low"))));
+    assert_eq!(args["model"], json!("acme/m.1"));
     assert_eq!(
         args["overrides"],
-        json!(["models.\"acme/m1\".thinking=high"])
+        json!(["retry.attempts=2", "models.\"acme/m.1\".thinking=low"]),
+        "{layer:?}"
     );
 }
 
 #[test]
-fn a_quoted_model_key_yields_to_the_session_only_choice() {
+fn a_canonical_thinking_key_with_a_quoted_value_yields_to_the_choice() {
     let mut app = home();
-    // `Config::load` reads `"model"` as `model`
-    // (`crates/config/src/path.rs:parse`), so the quoted spelling yields
-    // to the choice naming the model, exactly as the bare one does.
-    for layer in [
-        vec!["\"model\"=cli/m".to_owned(), "retry.attempts=2".to_owned()],
-        vec!["model=\"cli/m\"".to_owned(), "retry.attempts=2".to_owned()],
-    ] {
-        let args = merged(&mut app, layer.clone(), Some(held("acme/m1", Some("low"))));
-        assert_eq!(args["model"], json!("acme/m1"));
-        assert_eq!(
-            args["overrides"],
-            json!(["retry.attempts=2", "models.\"acme/m1\".thinking=low"]),
-            "{layer:?}"
-        );
-    }
-}
-
-#[test]
-fn an_equivalent_thinking_key_spelling_yields_to_the_choice() {
-    let mut app = home();
-    // Quoting a segment that needs no quotes names the same key
-    // (`crates/config/src/path.rs:parse`), so the choice's level wins
-    // over the equivalent spelling, while a quoted value changes nothing:
-    // the key is what yields.
-    for layer in [
-        vec!["\"models\".\"acme/m1\".\"thinking\"=high".to_owned()],
-        vec!["models.\"acme/m1\".thinking=\"high\"".to_owned()],
-    ] {
-        let args = merged(&mut app, layer.clone(), Some(held("acme/m1", Some("low"))));
-        assert_eq!(args["model"], json!("acme/m1"));
-        assert_eq!(
-            args["overrides"],
-            json!(["models.\"acme/m1\".thinking=low"]),
-            "{layer:?}"
-        );
-    }
+    // The key is what yields: the layer's canonical thinking key for
+    // the chosen model, even with a quoted value, gives way to the
+    // choice's level.
+    let layer = vec!["models.acme/m1.thinking=\"high\"".to_owned()];
+    let args = merged(&mut app, layer.clone(), Some(held("acme/m1", Some("low"))));
+    assert_eq!(args["model"], json!("acme/m1"));
+    assert_eq!(
+        args["overrides"],
+        json!(["models.\"acme/m1\".thinking=low"]),
+        "{layer:?}"
+    );
 }
 
 #[test]

@@ -7,6 +7,7 @@
 use std::path::{Path, PathBuf};
 
 use config::Config;
+use config::path::{display, parse};
 
 /// The person's `keys` (`docs/configuration.md`, "Keys"): the merged
 /// `keys` object as written, empty when no file sets it.
@@ -56,18 +57,17 @@ pub(crate) fn launch(
     // `model` and `thinking`, unset for the chips' defaults
     // (`docs/configuration.md`). The run's flags name the chip's model:
     // the layer's last `model=`, so a later `-c model=` wins over
-    // `--model`, as the session's own resolution reads them. The key
-    // compares by segments as `crates/config/src/path.rs:parse` splits
-    // them, the same comparison `with_start_model` makes, so a quoted
-    // `"model"` names the chip; the value reads as `-c` documents it:
-    // JSON, or a bare string when it does not parse as JSON.
-    let layer = crate::per_run(model, overrides);
+    // `--model`, as the session's own resolution reads them. The layer
+    // holds canonical keys (`canonical_layer`), so the chip compares one
+    // plain string; the value reads as `-c` documents it: JSON, or a bare
+    // string when it does not parse as JSON.
+    let layer = canonical_layer(crate::per_run(model, overrides));
     let model = layer
         .iter()
         .rev()
         .filter_map(|override_text| {
             let (key, value) = override_text.split_once('=')?;
-            is_model_key(key_segments(key).as_deref()).then(|| override_value(value))
+            (key == "model").then(|| override_value(value))
         })
         .next()
         .or_else(|| {
@@ -134,31 +134,23 @@ pub(crate) fn launch(
     }
 }
 
-/// Splits a `-c` key into segments the way
-/// `crates/config/src/path.rs:parse` does: a `"quoted"` segment may hold
-/// dots, so `"model"` and `model` are the same key. `None` for an empty
-/// key, an empty segment or an unclosed quote; such keys never name the
-/// chip.
-fn key_segments(key: &str) -> Option<Vec<String>> {
-    let mut segments = Vec::new();
-    let mut rest = key;
-    loop {
-        let (segment, after) = match rest.strip_prefix('"') {
-            Some(quoted) => {
-                let end = quoted.find('"')?;
-                (quoted.get(..end)?, quoted.get(end + 1..)?)
-            }
-            None => rest.split_at(rest.find('.').unwrap_or(rest.len())),
-        };
-        if segment.is_empty() {
-            return None;
-        }
-        segments.push(segment.to_owned());
-        if after.is_empty() {
-            return Some(segments);
-        }
-        rest = after.strip_prefix('.')?;
-    }
+/// The per-run layer in canonical spelling: each `-c` key through
+/// `config`'s dotted-path parser, so `"model"` rides as `model` and the
+/// terminal compares plain strings. A key the parser refuses rides
+/// untouched, as does each value: `-c` documents JSON, or the bare
+/// string when it does not parse as JSON, and the hub reads it the same
+/// way. The chip resolution reads this same layer, so one parse names a
+/// key everywhere.
+fn canonical_layer(layer: Vec<String>) -> Vec<String> {
+    layer
+        .into_iter()
+        .map(|override_text| match override_text.split_once('=') {
+            Some((key, value)) => parse(key)
+                .map(|segments| format!("{}={value}", display(&segments)))
+                .unwrap_or(override_text),
+            None => override_text,
+        })
+        .collect()
 }
 
 /// A `-c` value as `Config::load` reads it (`crates/config/src/lib.rs`):
@@ -166,13 +158,6 @@ fn key_segments(key: &str) -> Option<Vec<String>> {
 /// `model="fake/m"` names the chip `fake/m` without its quotes.
 fn override_value(value: &str) -> String {
     serde_json::from_str(value).unwrap_or_else(|_| value.to_owned())
-}
-
-/// Whether `segments` names the top-level `model` key: the same key
-/// comparison `with_start_model` makes, splitting as
-/// `crates/config/src/path.rs:parse` does.
-fn is_model_key(segments: Option<&[String]>) -> bool {
-    matches!(segments, Some([model]) if model == "model")
 }
 
 /// The boolean at `key`, true when absent (`docs/configuration.md`,

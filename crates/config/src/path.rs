@@ -5,7 +5,7 @@ use serde_json::{Map, Value};
 
 /// Splits a dotted path. A segment in double quotes may hold dots. `None` for
 /// an empty path, an empty segment or an unclosed quote.
-pub(crate) fn parse(text: &str) -> Option<Vec<String>> {
+pub fn parse(text: &str) -> Option<Vec<String>> {
     let mut segments = Vec::new();
     let mut rest = text;
     loop {
@@ -28,7 +28,7 @@ pub(crate) fn parse(text: &str) -> Option<Vec<String>> {
 }
 
 /// The dotted form of a path, quoting a segment that holds a dot.
-pub(crate) fn display(path: &[String]) -> String {
+pub fn display(path: &[String]) -> String {
     path.iter()
         .map(|s| {
             if s.contains('.') {

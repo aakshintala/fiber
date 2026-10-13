@@ -11,20 +11,34 @@ fn config(home: &std::path::Path, workspace: &std::path::Path, overrides: Vec<St
 }
 
 #[test]
-fn quoted_model_spellings_name_the_chip() {
+fn quoted_key_spellings_canonicalize_in_the_layer_and_name_the_chip() {
     let dir = fakes::TempDir::new("fiber-launch-quoted");
     let workspace = dir.path().to_path_buf();
     let identity = workspace
         .canonicalize()
         .unwrap_or_else(|err| panic!("canonical: {err}"));
     let config = config(dir.path(), &workspace, Vec::new());
-    // `Config::load` reads `"model"` as `model`
-    // (`crates/config/src/path.rs:parse`), and a `-c` value as JSON, or a
-    // bare string when it does not parse as JSON: both quoted spellings
-    // name the chip `cli/m` without quotes.
-    for overrides in [
-        vec!["\"model\"=cli/m".to_owned()],
-        vec!["model=\"cli/m\"".to_owned()],
+    // Each key through `config`'s dotted-path parser: a quoted spelling
+    // rides canonical, while the value rides untouched, as `-c`
+    // documents it (JSON, or the bare string when it does not parse).
+    // The chip reads the same layer, so `"model"` names it, and a
+    // JSON-quoted value names it without its quotes.
+    for (overrides, expected, chip) in [
+        (
+            vec!["\"model\"=cli/m".to_owned()],
+            vec!["model=cli/m".to_owned()],
+            Some("cli/m"),
+        ),
+        (
+            vec!["model=\"cli/m\"".to_owned()],
+            vec!["model=\"cli/m\"".to_owned()],
+            Some("cli/m"),
+        ),
+        (
+            vec!["\"models\".\"acme/m1\".\"thinking\"=high".to_owned()],
+            vec!["models.acme/m1.thinking=high".to_owned()],
+            None,
+        ),
     ] {
         let launch = launch(
             workspace.clone(),
@@ -35,8 +49,8 @@ fn quoted_model_spellings_name_the_chip() {
             None,
             overrides.clone(),
         );
-        assert_eq!(launch.model.as_deref(), Some("cli/m"), "{overrides:?}");
-        assert_eq!(launch.overrides, overrides, "{overrides:?}");
+        assert_eq!(launch.model.as_deref(), chip, "{overrides:?}");
+        assert_eq!(launch.overrides, expected, "{overrides:?}");
     }
 }
 
@@ -518,11 +532,19 @@ fn the_terminal_layer_normalizes_model_before_each_dash_c() {
     assert_eq!(dash_c.overrides, ["model=cli/m"]);
     // Anything else leaves the chip to the configured default: a
     // `models.` key, a longer name, and an unrelated key name nothing.
-    for overrides in [
-        vec!["models.\"acme/m\".thinking=high".to_owned()],
-        vec!["modelx=1".to_owned()],
-        vec!["retry.attempts=2".to_owned()],
-        Vec::new(),
+    // The layer rides in canonical spelling: quoting a segment that
+    // needs no quotes changes nothing about the key.
+    for (overrides, expected) in [
+        (
+            vec!["models.\"acme/m\".thinking=high".to_owned()],
+            vec!["models.acme/m.thinking=high".to_owned()],
+        ),
+        (vec!["modelx=1".to_owned()], vec!["modelx=1".to_owned()]),
+        (
+            vec!["retry.attempts=2".to_owned()],
+            vec!["retry.attempts=2".to_owned()],
+        ),
+        (Vec::new(), Vec::new()),
     ] {
         let bare = launch(
             workspace.clone(),
@@ -534,6 +556,6 @@ fn the_terminal_layer_normalizes_model_before_each_dash_c() {
             overrides.clone(),
         );
         assert_eq!(bare.model, None, "{overrides:?}");
-        assert_eq!(bare.overrides, overrides, "{overrides:?}");
+        assert_eq!(bare.overrides, expected, "{overrides:?}");
     }
 }

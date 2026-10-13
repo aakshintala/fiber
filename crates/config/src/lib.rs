@@ -16,7 +16,7 @@ mod home;
 mod keys;
 mod mcp_tokens;
 mod names;
-mod path;
+pub mod path;
 mod rules;
 mod secret;
 mod settings;
