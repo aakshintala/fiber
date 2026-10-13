@@ -21,6 +21,7 @@ use crate::run::{self, Proc, Session};
 
 /// The workloads every run of the harness repeats: the busy turn, its
 /// web page, and the ten-turn pass whose median growth the judge gates.
+/// [`TEN_TURNS_NAME`] is the pass the selection can leave out.
 pub(crate) const WORKLOADS: [Workload; 3] = [
     Workload {
         name: "busy turn",
@@ -33,11 +34,15 @@ pub(crate) const WORKLOADS: [Workload; 3] = [
         run: web_fetch,
     },
     Workload {
-        name: "10 busy turns",
+        name: TEN_TURNS_NAME,
         timing: false,
         run: ten_turns,
     },
 ];
+
+/// The ten-turn pass's workload name: what `--skip-ten-turns` leaves out
+/// and what the results file records under `skipped` when it does.
+pub(crate) const TEN_TURNS_NAME: &str = "10 busy turns";
 
 /// The workload that runs once: strace slows the process it traces, so
 /// its pass is never a timing or memory sample.
@@ -517,7 +522,7 @@ fn busy_turn(ctx: &Ctx<'_>, notes: &mut Vec<String>) -> Result<Samples, String> 
 }
 
 /// The 10-turn run's samples: the anon RSS still resident once the
-/// first turn's freed pages settle, and once the tenth's settle. The
+/// first turn's handoff settles, and once the tenth's settles. The
 /// judge reads both from each pass's entry, so the verdict compares
 /// each session with itself.
 pub(crate) fn ten_turn_samples(first: u64, last: u64) -> Samples {
@@ -527,17 +532,39 @@ pub(crate) fn ten_turn_samples(first: u64, last: u64) -> Samples {
     )]
 }
 
-/// Ten busy turns in one session: the first on the command line, the
-/// rest over a `full` connection, then the retained anon RSS after the
-/// first and after the tenth. Each turn repeats the busy turn's shape,
-/// so the script serves every turn's replies in order. The harness
-/// repeats the pass every run, so the judge takes the median growth
-/// (`docs/performance.md`, "Measuring").
+/// The note the model writes at each handoff of the 10-turn run: short,
+/// so the restarted context is the note alone.
+pub(crate) const HANDOFF_NOTE: &str = "the busy turns so far are in the session log";
+
+/// One handoff's note reply, reporting the turn's end context as the
+/// turn's own replies do: after it the session holds the note and what
+/// comes after (`docs/performance.md`, "What a budget covers").
+fn handoff_note(turn: &Turn) -> Response {
+    text_reply(HANDOFF_NOTE, turn.content)
+}
+
+/// The 10-turn run's script: each turn's replies, then its handoff's
+/// note, in the order the session asks for them. One pass is ten turns
+/// of `TOOL_CALLS` calls and one closing reply each, plus ten notes.
+pub(crate) fn ten_turn_script(turn: &Turn) -> Vec<Response> {
+    (0..TEN_TURNS)
+        .flat_map(|_| turn.script.iter().cloned().chain([handoff_note(turn)]))
+        .collect()
+}
+
+/// Ten busy turns in one session, each followed by its handoff, as a
+/// session past the trigger does them: the first turn on the command
+/// line, the rest over a `full` connection, with a `handoff` driver
+/// command after every turn. The readings are the retained anon RSS
+/// after the first turn's handoff and after the tenth's, so growth is
+/// what the session keeps across handoffs, not its context. Each turn
+/// repeats the busy turn's shape, so the script serves every turn's
+/// replies and every note in order. The harness repeats the pass every
+/// run, so the judge takes the median growth (`docs/performance.md`,
+/// "Measuring").
 fn ten_turns(ctx: &Ctx<'_>, notes: &mut Vec<String>) -> Result<Samples, String> {
     let turn = Turn::new();
-    let script = (0..TEN_TURNS)
-        .flat_map(|_| turn.script.clone())
-        .collect::<Vec<_>>();
+    let script = ten_turn_script(&turn);
     let home = Home::scripted(ctx.home.fiber(), script)?;
     // The pass asserts only the request count, while each request carries
     // the session's whole conversation so far: retaining every body would
@@ -557,11 +584,22 @@ fn ten_turns(ctx: &Ctx<'_>, notes: &mut Vec<String>) -> Result<Samples, String> 
         let measured = (|| {
             until_stdout(ctx, &session, "turn_completed", TURN)?;
             let pid = session.proc.pid();
+            let mut client = crate::resume::subscribe(ctx, home, &id)?;
+            // Each turn ends with its handoff, driven as the resume
+            // workload drives them; a handoff command carries no message,
+            // so its turn ends at once after the note
+            // (`crates/loop/src/handoff.rs`, `run_person_handoff`).
+            let handoff_id = "c_h1".to_owned();
+            crate::resume::run_turn(
+                ctx,
+                &mut client,
+                &handoff_id,
+                &crate::resume::command(&handoff_id, "handoff", &json!({})),
+            )?;
             let first = retained_anon_kib_of(pid, |wait| {
                 waited += wait;
                 ctx.clock.sleep(wait);
             })?;
-            let mut client = crate::resume::subscribe(ctx, home, &id)?;
             for n in 2..=TEN_TURNS {
                 let prompt_id = format!("c_ten{n}");
                 let content = json!({"content": [{"type": "text", "text": BUSY_PROMPT}]});
@@ -570,6 +608,13 @@ fn ten_turns(ctx: &Ctx<'_>, notes: &mut Vec<String>) -> Result<Samples, String> 
                     &mut client,
                     &prompt_id,
                     &crate::resume::command(&prompt_id, "prompt", &content),
+                )?;
+                let handoff_id = format!("c_h{n}");
+                crate::resume::run_turn(
+                    ctx,
+                    &mut client,
+                    &handoff_id,
+                    &crate::resume::command(&handoff_id, "handoff", &json!({})),
                 )?;
             }
             drop(client);
@@ -598,7 +643,7 @@ fn ten_turns(ctx: &Ctx<'_>, notes: &mut Vec<String>) -> Result<Samples, String> 
             notes,
             "model requests",
             home.server().requests().len(),
-            TEN_TURNS * (TOOL_CALLS + 1),
+            TEN_TURNS * (TOOL_CALLS + 2),
         );
         expect(
             notes,
@@ -606,16 +651,29 @@ fn ten_turns(ctx: &Ctx<'_>, notes: &mut Vec<String>) -> Result<Samples, String> 
             count(&lines, "tool_call_completed", "status", "completed"),
             TEN_TURNS * TOOL_CALLS,
         );
+        // Each prompt turn and each handoff turn ends its own turn.
         expect(
             notes,
             "turn_completed lines",
             count(&lines, "turn_completed", "", ""),
-            TEN_TURNS,
+            2 * TEN_TURNS,
         );
         expect(
             notes,
             "handoff_started lines",
             count(&lines, "handoff_started", "", ""),
+            TEN_TURNS,
+        );
+        expect(
+            notes,
+            "completed handoffs",
+            count(&lines, "handoff_completed", "outcome", "completed"),
+            TEN_TURNS,
+        );
+        expect(
+            notes,
+            "automatic handoffs",
+            count(&lines, "handoff_started", "trigger", "auto"),
             0,
         );
         Ok(ten_turn_samples(first, last))

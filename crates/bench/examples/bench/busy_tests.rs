@@ -1,7 +1,7 @@
 use super::{
-    PAGE_BYTES, RESULT_BYTES, RETAINED_SETTLE, TEN_TURNS, TOOL_CALLS, TRIGGER_TOKENS, Turn,
-    busy_turn_samples, count, fdatasync_calls, filler, log_lines, page, retained_anon_kib,
-    ten_turn_samples, turn_bytes,
+    HANDOFF_NOTE, PAGE_BYTES, RESULT_BYTES, RETAINED_SETTLE, TEN_TURNS, TOOL_CALLS, TRIGGER_TOKENS,
+    Turn, busy_turn_samples, count, fdatasync_calls, filler, log_lines, page, retained_anon_kib,
+    ten_turn_samples, ten_turn_script, turn_bytes,
 };
 use crate::run::PROBE;
 
@@ -115,9 +115,26 @@ fn the_ten_turn_run_samples_the_first_and_the_tenth() {
     assert_ne!(samples, ten_turn_samples(19001, 19005));
     assert_ne!(samples, ten_turn_samples(19000, 19006));
     // Ten turns of the busy turn's shape: ten prompts, each with its
-    // calls and one closing reply.
-    assert_eq!(TEN_TURNS * (TOOL_CALLS + 1), 4300);
+    // calls, one closing reply and one handoff note.
+    assert_eq!(TEN_TURNS * (TOOL_CALLS + 2), 4310);
     assert_eq!(TEN_TURNS * TOOL_CALLS, 4290);
+    // Each prompt turn and each handoff turn ends its own turn.
+    assert_eq!(2 * TEN_TURNS, 20);
+}
+
+#[test]
+fn the_ten_turn_script_serves_each_turn_then_its_handoff_note() {
+    // Each handoff note sits after its turn's closing reply: exactly one
+    // script entry per turn holds the note, and the script serves every
+    // turn's replies in order.
+    let turn = Turn::new();
+    let script = ten_turn_script(&turn);
+    assert_eq!(script.len(), TEN_TURNS * (TOOL_CALLS + 2));
+    let noted = script
+        .iter()
+        .filter(|reply| String::from_utf8_lossy(&reply.body).contains(HANDOFF_NOTE))
+        .count();
+    assert_eq!(noted, TEN_TURNS);
 }
 
 const STATUS: &str = "Name:\tfiber\nState:\tS (sleeping)\nVmHWM:\t   10840 kB\nVmRSS:\t   10812 kB\nRssAnon:\t    4100 kB\nRssFile:\t    4800 kB\n";

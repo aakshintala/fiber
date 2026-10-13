@@ -20,7 +20,7 @@ const DOC: &str = concat!(
     "| Terminal, attaching a 10 MiB session | 200 MiB peak RSS | Linux x86_64 | picked |\n",
     "| Session, memory kept after the busy turn | 200 MiB RssAnon | Linux x86_64 | picked |\n",
     "| Terminal, memory kept after attaching a 10 MiB session | 200 MiB RssAnon | Linux x86_64 | picked |\n",
-    "| Session, memory kept after 10 busy turns | the memory kept after the first, plus 1 MiB RssAnon | Linux x86_64 | picked |\n",
+    "| Session, memory kept after 10 busy turns, each followed by its handoff | the memory kept after the first, plus 1 MiB RssAnon | Linux x86_64 | picked |\n",
     "| Listing 1,000 sessions in one project, warm cache | 50 ms | Linux x86_64 | picked |\n",
     "| `session_list`, waiting for every running session's status | 2 s for the whole call | Linux x86_64 | picked |\n",
     "| `paging` jig, its session at scale 1 and 160 by 48 | 21,224 KiB peak RSS | Linux x86_64 | picked |\n",
@@ -962,6 +962,26 @@ fn the_tenth_turn_keeps_a_median_of_at_most_one_mib_past_the_first() {
     );
     let not_measured = comment.split("### Not measured").nth(1).unwrap();
     assert!(!not_measured.contains("10 busy turns"), "{comment}");
+}
+
+#[test]
+fn a_pull_request_the_selection_did_not_choose_skips_the_ten_turns_row() {
+    // No metric, but the record names the skipped workload: the run is
+    // judged on the other rows, and the row says it was skipped.
+    let mut skipped = head();
+    skipped["metrics"]
+        .as_object_mut()
+        .unwrap()
+        .remove("ten_busy_turns_retained_kib");
+    skipped["skipped"] = json!(["10 busy turns"]);
+    let out = judge(&skipped, Some(&base()), Event::PullRequest);
+    assert_eq!(out.failures, Vec::<String>::new(), "{:?}", out.failures);
+    let line = row(&out.comment, "Session, memory kept after 10 busy turns");
+    assert!(line.ends_with("| skipped |"), "{line}");
+    assert!(
+        line.contains("the selection did not run the 10-busy-turns workload"),
+        "{line}"
+    );
 }
 
 #[test]

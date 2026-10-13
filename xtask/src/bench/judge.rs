@@ -15,6 +15,9 @@ const FSYNCS_PER_TOOL_CALL: u64 = 2;
 const FSYNC_RUNS: usize = 1;
 /// The anon RSS the tenth turn may keep past the first, in KiB: 1 MiB.
 const TEN_TURN_GROWTH_KIB: u64 = 1024;
+/// The ten-turn pass's workload name, as the harness records it under
+/// `skipped` when the selection leaves it out.
+const TEN_TURNS_WORKLOAD: &str = "10 busy turns";
 /// The log bytes a turn may add per tool call beyond its content.
 const LOG_BYTES_PER_TOOL_CALL: u64 = 2048;
 /// The row whose ceiling the `web_fetch` conversion must fit in.
@@ -132,7 +135,7 @@ pub(super) const MEASURED: &[(&str, Check)] = &[
         Check::Memory(&["busy_turn_retained_kib"]),
     ),
     (
-        "Session, memory kept after 10 busy turns",
+        "Session, memory kept after 10 busy turns, each followed by its handoff",
         Check::Exact {
             pin: "the memory kept after the first, plus 1 MiB RssAnon",
             rule: Rule::RetainedGrowth("ten_busy_turns_retained_kib"),
@@ -250,6 +253,18 @@ pub(super) enum Base {
     /// The base binary failed; timings show why instead of a median.
     Failed(String),
     Ok(Results),
+}
+
+/// Whether the head file records the 10-busy-turns workload as skipped:
+/// a pull request the selection did not choose it for is judged on the
+/// other rows.
+fn ten_turns_skipped(head: Option<&Results>) -> bool {
+    head.is_some_and(|results| {
+        results
+            .skipped
+            .iter()
+            .any(|name| name == TEN_TURNS_WORKLOAD)
+    })
 }
 
 /// The rule's failures, and what the head column shows.
@@ -413,6 +428,14 @@ fn growth(entry: &Value, id: &str) -> Result<f64, String> {
 /// The median growth over the run's ten-turn passes: at most 1 MiB.
 /// One leaking pass moves the median only when most passes leak.
 fn retained_growth_median(id: &str, count: usize, head: Option<&Results>) -> (Vec<String>, String) {
+    // The selection left the workload out: the run is judged on the
+    // other rows, and the comment's row says so.
+    if ten_turns_skipped(head) {
+        return (
+            Vec::new(),
+            "skipped: the selection did not run the 10-busy-turns workload".to_owned(),
+        );
+    }
     let entries = match metric(head, id).and_then(|value| {
         value
             .as_array()
@@ -618,6 +641,10 @@ pub(super) fn judge(
             let (broken, observed) = exact(rule, head);
             measured.extend(broken);
             line.head = observed;
+            // A skipped ten-turns run leaves the row out of the verdict.
+            if matches!(rule, Rule::RetainedGrowth(_)) && ten_turns_skipped(head) {
+                line.result = "skipped";
+            }
         }
     }
     if !measured.is_empty() {
