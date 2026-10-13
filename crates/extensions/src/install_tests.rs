@@ -246,6 +246,7 @@ fn staging_directories_differ_by_plan_id() {
         provenance: Provenance::Path(source.clone()),
         version: "v1".into(),
         requested: true,
+        floor: None,
     };
     let home = dirs.path("home");
     let one = stage(&home, 1, &source, "0.1.0", &record).unwrap().2;
@@ -495,6 +496,7 @@ fn staging_reads_providers_from_the_copy_not_the_source() {
         provenance: Provenance::Path(source.clone()),
         version: "v1".into(),
         requested: true,
+        floor: None,
     };
     let home = dirs.path("home");
     let (_, at_source) = check(&source, "0.1.0").unwrap();
@@ -516,4 +518,135 @@ fn staging_reads_providers_from_the_copy_not_the_source() {
     let (_, providers, paths) = stage(&home, 8, &source, "0.1.0", &record).unwrap();
     assert_eq!(providers[0].models[0].id, "from-copy");
     assert!(paths.fresh.is_dir());
+}
+
+/// A directory holding `text` as its install record.
+fn record_dir(root: &std::path::Path, text: &str) -> PathBuf {
+    let dir = root.join("recorded");
+    fs::create_dir_all(&dir).unwrap();
+    fs::write(dir.join(".fiber.json"), text).unwrap();
+    dir
+}
+
+#[test]
+fn a_record_without_a_floor_reads_with_no_floor_and_writes_none() {
+    use super::{Provenance, Record, stage};
+    let dirs = Dirs::new("floor-absent");
+    // A record written before floors existed has no `floor` key.
+    let dir = record_dir(
+        &dirs.root,
+        r#"{"name":"acme","version":"v1.0.0","requested":true,"source":{"path":"/p"}}"#,
+    );
+    let record = Record::read(&dir).unwrap();
+    assert_eq!(record.floor, None);
+    assert_eq!(record.name, "acme");
+    // A fresh record with no floor writes no `floor` key either.
+    let source = dirs.path("src");
+    fs::create_dir_all(&source).unwrap();
+    fs::write(
+        source.join("extension.json"),
+        r#"{"name":"acme","version":"v1","fiber":"0.1.0","api":1}"#,
+    )
+    .unwrap();
+    let staged = Record {
+        name: "acme".into(),
+        provenance: Provenance::Path(source.clone()),
+        version: "v1".into(),
+        requested: true,
+        floor: None,
+    };
+    let (_, _, paths) = stage(&dirs.path("home"), 11, &source, "0.1.0", &staged).unwrap();
+    let text = fs::read_to_string(paths.fresh.join(".fiber.json")).unwrap();
+    assert!(!text.contains("\"floor\":"), "{text}");
+    assert_eq!(Record::read(&paths.fresh).unwrap().floor, None);
+}
+
+#[test]
+fn a_record_with_a_floor_round_trips_through_staging() {
+    use super::{Provenance, Record, stage};
+    let dirs = Dirs::new("floor-round-trip");
+    let source = dirs.path("src");
+    fs::create_dir_all(&source).unwrap();
+    fs::write(
+        source.join("extension.json"),
+        r#"{"name":"acme","version":"v1","fiber":"0.1.0","api":1}"#,
+    )
+    .unwrap();
+    let staged = Record {
+        name: "acme".into(),
+        provenance: Provenance::Path(source.clone()),
+        version: "v1".into(),
+        requested: false,
+        floor: Some("v1.5.0".into()),
+    };
+    let (_, _, paths) = stage(&dirs.path("home"), 12, &source, "0.1.0", &staged).unwrap();
+    let text = fs::read_to_string(paths.fresh.join(".fiber.json")).unwrap();
+    assert!(text.contains("\"floor\":\"v1.5.0\""), "{text}");
+    let back = Record::read(&paths.fresh).unwrap();
+    assert_eq!(back.floor.as_deref(), Some("v1.5.0"));
+    assert!(!back.requested);
+}
+
+#[test]
+fn a_record_with_a_bad_floor_is_a_bad_record() {
+    use super::Record;
+    let dirs = Dirs::new("floor-bad");
+    // Null, a non-string and a string that is not a full version are all
+    // damage, naming the record file.
+    for floor in [
+        "null".to_owned(),
+        "1".to_owned(),
+        "true".to_owned(),
+        r#"{"x":1}"#.to_owned(),
+        "\"1.2\"".to_owned(),
+        "\"x\"".to_owned(),
+        "\"v1\"".to_owned(),
+    ] {
+        let dir = record_dir(
+            &dirs.root,
+            &format!(
+                r#"{{"name":"acme","version":"v1.0.0","requested":false,"floor":{floor},"source":{{"commit":"abc"}}}}"#
+            ),
+        );
+        let err = Record::read(&dir).unwrap_err();
+        assert!(
+            matches!(err, crate::Error::BadRecord { .. }),
+            "{floor}: {err}"
+        );
+        assert!(err.to_string().contains(".fiber.json"), "{floor}: {err}");
+        fs::remove_dir_all(&dir).unwrap();
+    }
+}
+
+#[test]
+fn a_record_that_cannot_be_written_fails_naming_it_and_leaves_nothing() {
+    use super::{Provenance, Record, stage};
+    let dirs = Dirs::new("floor-write-fails");
+    let source = dirs.path("src");
+    fs::create_dir_all(&source).unwrap();
+    fs::write(
+        source.join("extension.json"),
+        r#"{"name":"acme","version":"v1","fiber":"0.1.0","api":1}"#,
+    )
+    .unwrap();
+    // The source carries `.fiber.json` as a directory, so writing the
+    // record through it fails.
+    fs::create_dir_all(source.join(".fiber.json/nested")).unwrap();
+    let record = Record {
+        name: "acme".into(),
+        provenance: Provenance::Path(source.clone()),
+        version: "v1".into(),
+        requested: true,
+        floor: Some("v1.5.0".into()),
+    };
+    let home = dirs.path("home");
+    let Err(err) = stage(&home, 13, &source, "0.1.0", &record) else {
+        panic!("a record that cannot be written was staged");
+    };
+    assert!(err.to_string().contains(".fiber.json"), "{err}");
+    let left: Vec<String> = fs::read_dir(home.join("extensions"))
+        .unwrap()
+        .map(|e| e.unwrap().file_name().to_string_lossy().into_owned())
+        .collect();
+    assert!(left.is_empty(), "{left:?}");
 }

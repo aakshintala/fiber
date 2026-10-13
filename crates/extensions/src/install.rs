@@ -36,6 +36,10 @@ pub(crate) struct Record {
     pub(crate) version: String,
     /// Asked for, rather than pulled in as a dependency.
     pub(crate) requested: bool,
+    /// The lowest version an update-everything run moved this extension
+    /// to, kept as a minimum by later installs and removals. Absence
+    /// means no floor; it never keeps the extension installed.
+    pub(crate) floor: Option<String>,
 }
 
 /// The file beside the manifest that holds the [`Record`], so removing the
@@ -48,12 +52,18 @@ impl Record {
             Provenance::Path(path) => serde_json::json!({ "path": path }),
             Provenance::Git { commit } => serde_json::json!({ "commit": commit }),
         };
-        serde_json::json!({
+        let mut record = serde_json::json!({
             "name": self.name,
             "version": self.version,
             "requested": self.requested,
             "source": source,
-        })
+        });
+        // A missing floor reads as no floor, so writers omit it rather
+        // than emitting null.
+        if let Some(floor) = &self.floor {
+            record["floor"] = serde_json::Value::String(floor.clone());
+        }
+        record
     }
 
     /// Reads the record in `dir`; every way it can be wrong names the file.
@@ -84,6 +94,15 @@ impl Record {
                 .get("requested")
                 .and_then(serde_json::Value::as_bool)
                 .ok_or_else(|| bad("no `requested`"))?,
+            floor: match json.get("floor") {
+                None => None,
+                Some(serde_json::Value::String(floor)) => {
+                    // Only a full version counts; anything else is damage.
+                    version(floor).map_err(|_| bad("bad `floor`"))?;
+                    Some(floor.clone())
+                }
+                Some(_) => return Err(bad("bad `floor`")),
+            },
             provenance,
         })
     }

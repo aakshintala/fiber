@@ -341,6 +341,7 @@ impl Ctx<'_, '_> {
             provenance: Provenance::Path(path.clone()),
             version: manifest.version.clone(),
             requested: true,
+            floor: None,
         };
         let (manifest, providers, paths) =
             stage(self.home, self.id, &path, self.fiber_version, &record)?;
@@ -409,6 +410,7 @@ impl Ctx<'_, '_> {
             provenance: Provenance::Git { commit },
             version: tag,
             requested: self.requested(name, asked),
+            floor: None,
         };
         let (manifest, providers, paths) = stage(
             self.home,

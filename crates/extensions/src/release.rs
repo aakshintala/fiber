@@ -98,6 +98,7 @@ pub(crate) fn install_release_with(
             },
             version: release.version.clone(),
             requested: true,
+            floor: None,
         };
         let source = extensions_dir.join(short);
         let (_, _, paths) = stage(home, scratch.n, &source, &release.version, &record)?;

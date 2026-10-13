@@ -176,3 +176,91 @@ fn an_extensions_path_that_is_not_a_directory_is_an_error() {
     let err = read(home.path()).unwrap_err();
     assert!(err.to_string().contains("extensions"), "{err}");
 }
+
+/// A healthy extension directory: `extension.json` naming `name` with
+/// `depends`, beside the record `text`.
+fn installed_dir(home: &std::path::Path, dir: &str, name: &str, depends: &str, text: &str) {
+    let path = home.join("extensions").join(dir);
+    fs::create_dir_all(&path).unwrap_or_else(|e| panic!("mkdir: {e}"));
+    fs::write(
+        path.join("extension.json"),
+        format!(
+            r#"{{"name":"{name}","version":"v1.0.0","fiber":"0.1.0","api":1,"depends":{depends}}}"#
+        ),
+    )
+    .unwrap_or_else(|e| panic!("write: {e}"));
+    fs::write(path.join(".fiber.json"), text).unwrap_or_else(|e| panic!("write: {e}"));
+}
+
+#[test]
+#[allow(clippy::unwrap_used, reason = "a failure is the test's")]
+fn a_floor_in_the_record_lists_with_the_extension() {
+    let home = fakes::TempDir::new("fiber-read-floor");
+    installed_dir(
+        home.path(),
+        "example.com-acme-dep",
+        "example.com/acme/dep",
+        "{}",
+        r#"{"name":"example.com/acme/dep","version":"v1.5.0","requested":false,"floor":"v1.5.0","source":{"commit":"abc"}}"#,
+    );
+    let listing = read(home.path()).unwrap();
+    assert_eq!(listing.installed.len(), 1);
+    assert_eq!(listing.installed[0].floor.as_deref(), Some("v1.5.0"));
+    assert!(!listing.installed[0].requested);
+    assert!(listing.damaged.is_empty());
+}
+
+#[test]
+#[allow(clippy::unwrap_used, reason = "a failure is the test's")]
+fn a_bad_floor_lists_the_extension_as_damaged() {
+    for floor in ["null", "1", "\"1.2\"", "\"x\""] {
+        let home = fakes::TempDir::new("fiber-read-bad-floor");
+        installed_dir(
+            home.path(),
+            "example.com-acme-dep",
+            "example.com/acme/dep",
+            "{}",
+            &format!(
+                r#"{{"name":"example.com/acme/dep","version":"v1.5.0","requested":false,"floor":{floor},"source":{{"commit":"abc"}}}}"#
+            ),
+        );
+        let listing = read(home.path()).unwrap();
+        assert!(listing.installed.is_empty(), "{floor}");
+        assert_eq!(listing.damaged.len(), 1, "{floor}");
+        assert_eq!(listing.damaged[0].name, "example.com/acme/dep", "{floor}");
+    }
+}
+
+#[test]
+#[allow(clippy::unwrap_used, reason = "a failure is the test's")]
+fn a_floor_does_not_keep_an_orphaned_dependency_installed() {
+    let home = fakes::TempDir::new("fiber-remove-floor-orphan");
+    let root = "example.com/acme/root";
+    let dep = "example.com/acme/dep";
+    installed_dir(
+        home.path(),
+        "example.com-acme-root",
+        root,
+        &format!(r#"{{"{dep}":"1.0"}}"#),
+        &format!(
+            r#"{{"name":"{root}","version":"v1.0.0","requested":true,"source":{{"commit":"abc"}}}}"#
+        ),
+    );
+    installed_dir(
+        home.path(),
+        "example.com-acme-dep",
+        dep,
+        "{}",
+        &format!(
+            r#"{{"name":"{dep}","version":"v1.5.0","requested":false,"floor":"v1.5.0","source":{{"commit":"def"}}}}"#
+        ),
+    );
+    let clock = fakes::clock::FakeClock::new();
+    let removal = super::removal(home.path(), root, &*clock).unwrap();
+    assert_eq!(removal.names, [root, dep]);
+    removal.commit().unwrap();
+    assert!(
+        read(home.path()).unwrap().installed.is_empty(),
+        "the floor goes with its directory"
+    );
+}
