@@ -80,6 +80,10 @@ const HELP_SUFFIX: &str = " Run `fiber --help` for usage.";
 const ASK_SHAPE: &str = "`fiber ask` takes one prompt, then an optional `-`; quote the prompt. Run `fiber --help` for usage.";
 
 /// What `fiber` was asked to do, or the parse error.
+#[allow(
+    clippy::large_enum_variant,
+    reason = "one invocation is parsed and matched once per process; boxing would allocate for no path that copies it"
+)]
 #[derive(Debug)]
 pub(crate) enum Invocation {
     /// Help or version, printed with clap's printer.
