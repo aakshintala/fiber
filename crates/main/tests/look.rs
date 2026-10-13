@@ -587,14 +587,22 @@ fn turn_drawn(grid: &Grid) -> bool {
         return false;
     }
     let stripe = grid.cell(BOX_LEFT, INPUT_ROW).symbol;
-    if stripe != "▌" && stripe != " " {
+    // Without colour the box's side stands where the stripe was.
+    let boxed = stripe == "│";
+    if stripe != "▌" && stripe != " " && !boxed {
         return false;
     }
-    if grid.cell(BOX_LEFT + 1, INPUT_ROW).symbol != " " {
-        return false;
-    }
-    if grid.cell(BOX_LEFT + 2, INPUT_ROW).symbol != "›" {
-        return false;
+    if boxed {
+        if grid.cell(BOX_LEFT + 1, INPUT_ROW).symbol != "›" {
+            return false;
+        }
+    } else {
+        if grid.cell(BOX_LEFT + 1, INPUT_ROW).symbol != " " {
+            return false;
+        }
+        if grid.cell(BOX_LEFT + 2, INPUT_ROW).symbol != "›" {
+            return false;
+        }
     }
     for y in [EDGE_TOP, INPUT_ROW, EDGE_BOTTOM] {
         let first = grid.cell(BOX_LEFT, y);
@@ -603,8 +611,28 @@ fn turn_drawn(grid: &Grid) -> bool {
             if cell.bg != first.bg {
                 return false;
             }
-            if y != INPUT_ROW && (cell.symbol != first.symbol || cell.fg != first.fg) {
-                return false;
+            if y != INPUT_ROW {
+                if boxed {
+                    // ┌─┐ above and └─┘ below, dim: corners at the
+                    // ends, fills between (`docs/tui.md`, "Look").
+                    let (left, right) = if y == EDGE_TOP {
+                        ("┌", "┐")
+                    } else {
+                        ("└", "┘")
+                    };
+                    let want = if x == BOX_LEFT {
+                        left
+                    } else if x == BOX_RIGHT - 1 {
+                        right
+                    } else {
+                        "─"
+                    };
+                    if cell.symbol != want || cell.fg != first.fg || !cell.dim {
+                        return false;
+                    }
+                } else if cell.symbol != first.symbol || cell.fg != first.fg {
+                    return false;
+                }
             }
         }
     }
@@ -649,16 +677,19 @@ fn one_turn(env: &[(&str, &str)]) -> (Grid, Vec<u8>) {
     (screen, output)
 }
 
-/// The bottom-most row holding `>` at `x` with `x >= 2`, a space before
-/// it and a stripe or a space before that: the input box's prompt row.
-/// Returns the stripe's cell.
+/// The bottom-most row holding `>` at `x` with `x >= 1`: with colour a
+/// space before it and a stripe or a space before that; without colour
+/// the box's side before it. Returns the stripe's or side's cell.
 fn input_row(screen: &Grid) -> (u16, u16) {
     for y in (0..48).rev() {
-        for x in 2..160 {
+        for x in 1..160 {
             if screen.cell(x, y).symbol.as_str() != "›" {
                 continue;
             }
-            if screen.cell(x - 1, y).symbol.as_str() != " " {
+            if screen.cell(x - 1, y).symbol.as_str() == "│" {
+                return (x - 1, y);
+            }
+            if x < 2 || screen.cell(x - 1, y).symbol.as_str() != " " {
                 continue;
             }
             let stripe = screen.cell(x - 2, y).symbol;
@@ -782,7 +813,7 @@ fn at_256_colours_every_colour_is_a_palette_entry() {
 }
 
 #[test]
-fn no_color_sends_no_colour_and_blank_edges_keep_their_rows() {
+fn no_color_sends_no_colour_and_boxes_keep_their_rows() {
     let (screen, output) = one_turn(&[
         ("NO_COLOR", "1"),
         ("TERM", "xterm-256color"),
@@ -801,13 +832,30 @@ fn no_color_sends_no_colour_and_blank_edges_keep_their_rows() {
         }
     }
     assert_eq!(input_row(&screen), (BOX_LEFT, INPUT_ROW));
-    for y in [EDGE_TOP, EDGE_BOTTOM] {
+    // The input box is a thin dim box: ┌─┐ above, │ on each side and
+    // └─┘ below, on the terminal's default colours (`docs/tui.md`,
+    // "Look"). The edge rows keep their rows.
+    for (y, left, right) in [(EDGE_TOP, "┌", "┐"), (EDGE_BOTTOM, "└", "┘")] {
         for x in BOX_LEFT..BOX_RIGHT {
             let cell = screen.cell(x, y);
-            assert_eq!(cell.symbol.as_str(), " ", "edge cell ({x}, {y})");
+            let want = if x == BOX_LEFT {
+                left
+            } else if x == BOX_RIGHT - 1 {
+                right
+            } else {
+                "─"
+            };
+            assert_eq!(cell.symbol.as_str(), want, "edge cell ({x}, {y})");
+            assert_eq!(cell.fg, Colour::Default, "edge cell ({x}, {y})");
             assert_eq!(cell.bg, Colour::Default, "edge cell ({x}, {y})");
+            assert!(cell.dim, "edge cell ({x}, {y})");
         }
     }
+    // The prompt sits one column in, past the box's left side, between
+    // │ sides.
+    assert_eq!(screen.cell(BOX_LEFT, INPUT_ROW).symbol.as_str(), "│");
+    assert_eq!(screen.cell(BOX_LEFT + 1, INPUT_ROW).symbol.as_str(), "›");
+    assert_eq!(screen.cell(BOX_RIGHT - 1, INPUT_ROW).symbol.as_str(), "│");
 }
 
 const PANEL_RGB: Colour = Colour::Rgb(12, 12, 17);

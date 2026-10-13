@@ -100,7 +100,9 @@ pub(crate) fn rows_and_delegates(app: &App, width: u16) -> (Vec<Row>, Option<Ran
         .iter()
         .map(|widget| (widget.extension.as_str(), widget.widget.as_str()))
         .collect();
-    let text = text_width(width);
+    // Without colour each card is a thin box: the sides take one column
+    // each, so the text fits two narrower (`docs/tui.md`, "Look").
+    let text = card_text_width(width);
     let mut out = Vec::new();
     let mut span = None;
     for card in cards(app.panel_cards(), &names) {
@@ -122,7 +124,7 @@ pub(crate) fn rows_and_delegates(app: &App, width: u16) -> (Vec<Row>, Option<Ran
         let edge = usize::from(width.saturating_sub(1));
         let card_start = out.len();
         out.push(Row {
-            line: surface::edge_row(edge, Role::Surface, true),
+            line: surface::card_edge_row(edge, Role::Surface, true),
             spot: None,
             tint: None,
             edge: true,
@@ -135,7 +137,7 @@ pub(crate) fn rows_and_delegates(app: &App, width: u16) -> (Vec<Row>, Option<Ran
             row
         }));
         out.push(Row {
-            line: surface::edge_row(edge, Role::Surface, false),
+            line: surface::card_edge_row(edge, Role::Surface, false),
             spot: None,
             tint: None,
             edge: true,
@@ -147,9 +149,14 @@ pub(crate) fn rows_and_delegates(app: &App, width: u16) -> (Vec<Row>, Option<Ran
 /// Draws every card's rows into the panel rect: each card on its surface
 /// tint from the column's second column, its text at `area.x + 2`,
 /// `area.width - 3` columns wide, the first card on `area.y + 1`. The
-/// blank row between cards shows the region's `panel` tint.
+/// blank row between cards shows the region's `panel` tint. Without
+/// colour each card is a thin box instead: no tint is laid, the edge
+/// rows already draw ┌─┐ and └─┘, and each text row takes │ sides on the
+/// card's columns, so targets keep the narrowed visible text.
 pub(crate) fn draw(app: &App, area: Rect, buf: &mut Buffer, targets: &mut Vec<Target>) {
-    let text = text_width(area.width);
+    // The text width rows_and_delegates fits to: two narrower where a
+    // box takes the sides.
+    let text = card_text_width(area.width);
     let width = u16::try_from(text).unwrap_or(u16::MAX);
     let (rows, span) = rows_and_delegates(app, area.width);
     // A screen that grew never shows a gap: a scroll past the end clamps
@@ -161,6 +168,9 @@ pub(crate) fn draw(app: &App, area: Rect, buf: &mut Buffer, targets: &mut Vec<Ta
         .min(rows.len().saturating_sub(height));
     let card_x = area.x.saturating_add(1);
     let card_w = area.width.saturating_sub(1);
+    // Without colour the rows already carry the box: no tint is laid,
+    // so every cell keeps the terminal's default colours.
+    let boxed = surface::box_fit(area.width);
     let x = area.x.saturating_add(2);
     let mut y = area.y.saturating_add(1);
     let mut drawn: usize = 0;
@@ -171,13 +181,18 @@ pub(crate) fn draw(app: &App, area: Rect, buf: &mut Buffer, targets: &mut Vec<Ta
         if row.edge {
             buf.set_line(card_x, y, &row.line, card_w);
         } else {
-            if let Some(tint) = row.tint {
+            if let Some(tint) = row.tint
+                && !boxed
+            {
                 buf.set_style(
                     Rect::new(card_x, y, card_w, 1),
                     Style::new().bg(tint.color()),
                 );
             }
             buf.set_line(x, y, &row.line, width);
+            if boxed {
+                surface::draw_sides(buf, Rect::new(card_x, y, card_w, 1));
+            }
             if let Some(spot) = row.spot {
                 let wide = u16::try_from(row.line.width().min(text)).unwrap_or(u16::MAX);
                 targets.push(Target {
@@ -652,6 +667,17 @@ fn jobs_rows(app: &App) -> Vec<Row> {
         }));
     }
     out
+}
+
+/// The card text's width: the rect less the edge and one margin column
+/// each side, two narrower where a box takes the sides
+/// (`docs/tui.md`, "Look").
+fn card_text_width(width: u16) -> usize {
+    if surface::box_fit(width) {
+        text_width(width).saturating_sub(2)
+    } else {
+        text_width(width)
+    }
 }
 
 /// The card text's width: the rect less the edge and one margin column

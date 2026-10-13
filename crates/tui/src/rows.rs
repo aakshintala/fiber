@@ -9,7 +9,7 @@ use ratatui::style::Style;
 use ratatui::text::{Line, Span};
 
 use crate::app::Target;
-use crate::surface::{Edges, edge_row};
+use crate::surface::{Edges, card_edge_row};
 use crate::theme::Role;
 use crate::turn::Row;
 
@@ -219,9 +219,10 @@ impl Rows {
     }
 
     /// The rows from `from` on sit on `tint`: each takes it as its line's
-    /// background; with `edges`, an `edge_row` (`width` cells,
-    /// decoration) is inserted at `from` and pushed after the last. No
-    /// rows from `from`: nothing (`docs/tui.md`, "Look").
+    /// background; with `edges`, an edge row (`width` cells, decoration)
+    /// is inserted at `from` and pushed after the last: the box's edge
+    /// where a box fits, else half blocks in the tint. No rows from
+    /// `from`: nothing (`docs/tui.md`, "Look").
     pub(crate) fn on_surface(&mut self, from: usize, width: u16, tint: Role, edges: Edges) {
         let Some(body) = self.rows.get_mut(from..) else {
             return;
@@ -234,7 +235,7 @@ impl Rows {
         }
         let width = usize::from(width);
         if edges.bottom {
-            self.rows.push((edge_row(width, tint, false), None));
+            self.rows.push((card_edge_row(width, tint, false), None));
             self.texts.push(RowText {
                 decoration: true,
                 scopes: self.scopes.clone(),
@@ -242,7 +243,7 @@ impl Rows {
             });
         }
         if edges.top {
-            self.rows.insert(from, (edge_row(width, tint, true), None));
+            self.rows.insert(from, (card_edge_row(width, tint, true), None));
             self.texts.insert(
                 from,
                 RowText {

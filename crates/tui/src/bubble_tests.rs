@@ -222,3 +222,52 @@ fn copies_hold_only_the_text() {
     assert_eq!(copied("hi", 3), ["hi"]);
     assert_eq!(copied("hi", 1), ["hi"]);
 }
+
+#[test]
+fn no_color_keeps_the_prompt_bare_and_its_rows() {
+    // The person's prompt bubble is the exception: its edges stay half
+    // blocks, which the paint pass blanks, and its rows stay exactly as
+    // with colour (`docs/tui.md`, "Look").
+    // A stripe terminal, so the stripe draws in both modes.
+    let ghost = |name: &str| match name {
+        "NO_COLOR" => Some("1".to_owned()),
+        "TERM_PROGRAM" => Some("ghostty".to_owned()),
+        _ => None,
+    };
+    crate::surface::init(&ghost);
+    for columns in [1, 2, 3, 4, 5, 80] {
+        let (boxed, _) = bubbled("hi there", columns);
+        crate::surface::init(&|name: &str| match name {
+            "COLORTERM" => Some("truecolor".to_owned()),
+            "TERM_PROGRAM" => Some("ghostty".to_owned()),
+            _ => None,
+        });
+        let (coloured, _) = bubbled("hi there", columns);
+        crate::surface::init(&ghost);
+        assert_eq!(boxed, coloured, "columns {columns}");
+        assert!(!boxed.iter().any(|row| row.contains('┌') || row.contains('│')), "{boxed:?}");
+    }
+    // Painted: the edges blank, the text stays, right-aligned.
+    let (shown, _) = bubbled("hi", 80);
+    assert_eq!(shown, ["▄▄▄▄▄", " hi ▐", "▀▀▀▀▀"]);
+    let vars: Vec<(String, String)> = vec![("NO_COLOR".to_owned(), "1".to_owned())];
+    let (look, notice) = crate::look::Look::new(crate::look::ThemeSetting::Dark, &|name: &str| {
+        vars.iter()
+            .find(|(set, _)| set == name)
+            .map(|(_, value)| value.clone())
+    });
+    assert_eq!(notice, None);
+    let mut buf = ratatui::buffer::Buffer::empty(ratatui::layout::Rect::new(0, 0, 80, 3));
+    let mut out = Rows::default();
+    rows("hi", 80, &mut out);
+    let (lines, _) = out.into_parts();
+    for (y, (line, _)) in lines.iter().enumerate() {
+        buf.set_line(80 - u16::try_from(line.width()).expect("a width"), y as u16, line, 80);
+    }
+    look.paint(&mut buf);
+    let painted: Vec<String> = (0..3).map(|y| (0..80).map(|x| buf[(x, y)].symbol()).collect()).collect();
+    assert_eq!(painted[0].trim(), "");
+    assert_eq!(painted[2].trim(), "");
+    assert!(painted[1].contains("hi"), "{painted:?}");
+    assert!(!painted[1].contains('│'), "{painted:?}");
+}

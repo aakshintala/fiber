@@ -1226,3 +1226,73 @@ fn the_context_bar_is_drawn_in_its_roles() {
     assert_eq!(spans[17].content, "│");
     assert_eq!(spans[17].style, style(Role::Attention));
 }
+
+/// The panel rect drawn and painted without colour, with its targets.
+fn no_color_drawn(app: &App) -> (Buffer, Vec<crate::mouse::Target>) {
+    crate::surface::init(&|name: &str| {
+        (name == "NO_COLOR").then(|| "1".to_owned())
+    });
+    let rect = app
+        .chrome()
+        .layout()
+        .and_then(|layout| layout.panel)
+        .unwrap_or_else(|| panic!("a panel rect"));
+    let area = Rect::new(0, 0, rect.width, rect.height);
+    let mut buf = Buffer::empty(area);
+    let mut targets = Vec::new();
+    super::draw(app, area, &mut buf, &mut targets);
+    let vars: Vec<(String, String)> = vec![("NO_COLOR".to_owned(), "1".to_owned())];
+    let (look, notice) = crate::look::Look::new(crate::look::ThemeSetting::Dark, &|name: &str| {
+        vars.iter()
+            .find(|(set, _)| set == name)
+            .map(|(_, value)| value.clone())
+    });
+    assert_eq!(notice, None);
+    look.paint(&mut buf);
+    (buf, targets)
+}
+
+#[test]
+fn no_color_boxes_a_sidebar_card_and_keeps_targets_inside() {
+    use ratatui::style::{Color, Modifier};
+    let mut app = attached(160, 40);
+    fold_widget(&mut app, "ext", "one", &["hello"]);
+    let (buf, targets) = no_color_drawn(&app);
+    let rect = app
+        .chrome()
+        .layout()
+        .and_then(|layout| layout.panel)
+        .expect("a panel rect");
+    // The widget card: its top edge on row 1, two text rows, its bottom
+    // edge, from the panel's second column.
+    let (left, right) = (1, rect.width.saturating_sub(1));
+    for x in left..=right {
+        let top = &buf[(x, 1)];
+        assert_eq!(top.symbol(), if x == left { "┌" } else if x == right { "┐" } else { "─" });
+        assert_eq!((top.fg, top.bg), (Color::Reset, Color::Reset));
+        assert_eq!(top.modifier, Modifier::DIM);
+        let bottom = &buf[(x, 4)];
+        assert_eq!(bottom.symbol(), if x == left { "└" } else if x == right { "┘" } else { "─" });
+        assert_eq!(bottom.modifier, Modifier::DIM);
+    }
+    // Each text row sits between │ sides with its text readable inside.
+    for y in 2..=3 {
+        assert_eq!(buf[(left, y)].symbol(), "│");
+        assert_eq!(buf[(right, y)].symbol(), "│");
+        assert_eq!(buf[(left, y)].modifier, Modifier::DIM);
+    }
+    let title: String = ((left + 1)..right).map(|x| buf[(x, 2)].symbol()).collect();
+    assert!(title.contains("ext · one"), "{title:?}");
+    let body: String = ((left + 1)..right).map(|x| buf[(x, 3)].symbol()).collect();
+    assert!(body.contains("hello"), "{body:?}");
+    // No target reaches a border column.
+    for target in &targets {
+        assert!(target.rect.x >= left + 1, "{target:?}");
+        assert!(target.rect.right() <= right, "{target:?}");
+    }
+    // Only the widget card draws, with no delegates span: the box keeps
+    // the row indices the delegates span counts on.
+    let (rows, span) = super::rows_and_delegates(&app, rect.width);
+    assert_eq!(rows.len(), 4);
+    assert_eq!(span, None);
+}

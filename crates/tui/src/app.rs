@@ -626,10 +626,17 @@ impl App {
 
     /// The width the draft wraps at: past the input box's stripe and
     /// gap, except on home, where the home box draws at its own width
-    /// (`docs/tui.md`, "Look", "The input box").
+    /// (`docs/tui.md`, "Look", "The input box"). Without colour the
+    /// home box is thin too, so its branch wraps at the same boxed
+    /// interior width the home renderer uses.
     pub(crate) fn draft_width(&self) -> u16 {
         if self.on_home() {
-            self.column_width()
+            let width = self.column_width();
+            if crate::surface::box_fit(width) {
+                width.saturating_sub(2)
+            } else {
+                width
+            }
         } else {
             crate::surface::inset(self.column_width())
         }

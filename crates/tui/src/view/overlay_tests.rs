@@ -611,3 +611,79 @@ fn a_lone_bottom_edge_draws_no_tint() {
         "{shown:?}"
     );
 }
+
+/// An overlay with a barred choice row, drawn and painted without colour.
+fn no_color_drawn(area: Rect) -> (Buffer, Rect) {
+    crate::surface::init(&|name: &str| {
+        (name == "NO_COLOR").then(|| "1".to_owned())
+    });
+    let mut overlay = overlay();
+    overlay.body.push(Row {
+        spans: vec![Span::raw("choice")],
+        right: Vec::new(),
+        targets: Vec::new(),
+        barred: true,
+    });
+    let mut buf = Buffer::empty(area);
+    let slab = draw(&mut buf, area, &overlay, Place::Centre, &mut Vec::new());
+    let vars: Vec<(String, String)> = vec![("NO_COLOR".to_owned(), "1".to_owned())];
+    let (look, notice) = crate::look::Look::new(crate::look::ThemeSetting::Dark, &|name: &str| {
+        vars.iter()
+            .find(|(set, _)| set == name)
+            .map(|(_, value)| value.clone())
+    });
+    assert_eq!(notice, None);
+    look.paint(&mut buf);
+    (buf, slab)
+}
+
+#[test]
+fn no_color_boxes_the_overlay_and_keeps_its_cells() {
+    let area = Rect::new(0, 0, 80, 24);
+    let (buf, slab) = no_color_drawn(area);
+    let shown = rows(&buf);
+    // The slab keeps its centred rect: the box takes the kept edge rows
+    // and side columns, never extra rows.
+    assert_eq!(slab, Rect::new(20, 6, 40, 11));
+    // ┌─┐ above and └─┘ below, dim, on the default colours.
+    for x in 20u16..60 {
+        let top = &buf[(x, 6)];
+        assert_eq!(top.symbol(), if x == 20 { "┌" } else if x == 59 { "┐" } else { "─" }, "col {x}");
+        assert_eq!((top.fg, top.bg), (Color::Reset, Color::Reset), "col {x}");
+        assert_eq!(top.modifier, Modifier::DIM, "col {x}");
+        let bottom = &buf[(x, 16)];
+        assert_eq!(bottom.symbol(), if x == 20 { "└" } else if x == 59 { "┘" } else { "─" }, "col {x}");
+        assert_eq!(bottom.modifier, Modifier::DIM, "col {x}");
+    }
+    // │ on the slab's columns over the text rows, dim. A barred row's
+    // bar reaches the sides: its border cells take the side after the
+    // interior paints, keeping bold on the text inside.
+    for y in 7u16..16 {
+        for x in [20u16, 59u16] {
+            let cell = &buf[(x, y)];
+            assert_eq!(cell.symbol(), "│", "({x}, {y}): {:?}", shown[y as usize]);
+            assert_eq!((cell.fg, cell.bg), (Color::Reset, Color::Reset), "({x}, {y})");
+            assert!(cell.modifier.contains(Modifier::DIM), "({x}, {y}): {:?}", cell.modifier);
+        }
+    }
+    // The title, the body, the padding and the barred row keep their
+    // cells: text readable, the barred row bold.
+    let flat: String = shown.join("\n");
+    for word in ["Title", "first", "second", "choice", "foot"] {
+        assert!(flat.contains(word), "{word}: {flat:?}");
+    }
+    let barred = shown.iter().position(|row| row.contains("choice")).expect("the barred row");
+    let cell = &buf[(22, barred as u16)];
+    assert!(cell.modifier.contains(Modifier::BOLD), "{cell:?}");
+    assert_eq!((cell.fg, cell.bg), (Color::Reset, Color::Reset));
+    // The padding blanks keep no tint: blanks between the sides, on
+    // the default colours.
+    for y in [7u16, 15u16] {
+        assert_eq!(shown[y as usize].chars().nth(20).unwrap(), '│');
+        assert_eq!(shown[y as usize].chars().nth(59).unwrap(), '│');
+        for x in 21u16..59 {
+            assert_eq!(buf[(x, y)].symbol(), " ", "({x}, {y})");
+            assert_eq!((buf[(x, y)].fg, buf[(x, y)].bg), (Color::Reset, Color::Reset));
+        }
+    }
+}

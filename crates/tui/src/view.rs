@@ -502,10 +502,21 @@ fn conversation_rows(app: &App, area: Rect, buf: &mut Buffer, targets: &mut Vec<
             bg: line.style.bg,
             ..Style::default()
         };
-        paragraph(line)
+        paragraph(line.clone())
             .style(fill)
             .scroll((to_u16(skip), 0))
             .render(rect, buf);
+        // Without colour a turn's card is a thin box: its edge rows
+        // already draw ┌─┐ and └─┘, and its body rows take │ on the
+        // card's columns (`docs/tui.md`, "Look"). The markers still
+        // name the surface until the paint pass, so the pads the card
+        // keeps are decorated without moving text; the prompt bubble
+        // stays edge-free, and a cut card draws no corner it withheld.
+        let turn_tint = line.style.bg == Some(Role::Turn.color())
+            || line.style.bg == Some(Role::Surface.color());
+        if crate::surface::box_fit(area.width) && turn_tint {
+            crate::surface::draw_sides(buf, rect);
+        }
         // A marked line spins its cell on the working line's tick; the
         // mark is the builders' promise that the line moves.
         if let Some(col) = spins

@@ -753,3 +753,23 @@ fn a_rendered_light_frame_keeps_the_page_distinct() {
         assert_ne!(buf[(x, 0)].fg, Color::Indexed(231), "{}", role.name());
     }
 }
+
+#[test]
+fn no_color_paint_keeps_box_cells_and_their_modifiers() {
+    // Box glyphs carry no role marker: the paint pass keeps their
+    // symbols, default colours and modifiers (`docs/tui.md`, "Look").
+    let look = look(ThemeSetting::Dark, &[("NO_COLOR", "1")]);
+    let mut buf = row(&[
+        ("┌", Style::new().add_modifier(Modifier::DIM)),
+        ("─", Style::new().add_modifier(Modifier::DIM)),
+        ("│", Style::new().add_modifier(Modifier::DIM | Modifier::BOLD)),
+        ("x", Style::new().fg(Role::Text.color())),
+    ]);
+    look.paint(&mut buf);
+    let symbols: Vec<&str> = buf.content.iter().map(|cell| cell.symbol()).collect();
+    assert_eq!(symbols, ["┌", "─", "│", "x"]);
+    for x in 0..4 {
+        assert_eq!((buf.content[x].fg, buf.content[x].bg), (Color::Reset, Color::Reset));
+    }
+    assert_eq!(buf.content[2].modifier, Modifier::DIM | Modifier::BOLD);
+}

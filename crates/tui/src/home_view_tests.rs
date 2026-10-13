@@ -2388,3 +2388,95 @@ fn clicking_a_recent_while_typing_chooses_it() {
     );
     assert_eq!(app.workspace(), PathBuf::from("/repo0"));
 }
+
+/// Home drawn and painted without colour, with its targets.
+fn no_color_home(app: &App, width: u16, height: u16) -> (Buffer, Vec<crate::mouse::Target>) {
+    crate::surface::init(&|name: &str| {
+        (name == "NO_COLOR").then(|| "1".to_owned())
+    });
+    let area = Rect::new(0, 0, width, height);
+    let mut buf = Buffer::empty(area);
+    let targets = home_only(app, area, &mut buf);
+    let vars: Vec<(String, String)> = vec![("NO_COLOR".to_owned(), "1".to_owned())];
+    let (look, notice) = crate::look::Look::new(crate::look::ThemeSetting::Dark, &|name: &str| {
+        vars.iter()
+            .find(|(set, _)| set == name)
+            .map(|(_, value)| value.clone())
+    });
+    assert_eq!(notice, None);
+    look.paint(&mut buf);
+    (buf, targets)
+}
+
+#[test]
+fn no_color_boxes_the_home_box_and_narrows_its_text() {
+    use ratatui::style::{Color, Modifier};
+    let mut app = home(80, 24);
+    type_draft(&mut app, "hello");
+    let (buf, targets) = no_color_home(&app, 80, 24);
+    let shown: Vec<String> = (0..24).map(|y| (0..80).map(|x| buf[(x, y)].symbol()).collect()).collect();
+    // The box is 80 wide: ┌─┐ above the draft, └─┘ below the chips,
+    // dim, on the default colours.
+    let top = shown.iter().position(|row| row.starts_with('┌')).expect("the box's top edge");
+    let bottom = shown.iter().position(|row| row.starts_with('└')).expect("the box's bottom edge");
+    assert!(bottom > top);
+    for y in [top as u16, bottom as u16] {
+        for x in 0..80u16 {
+            let cell = &buf[(x, y)];
+            assert_eq!((cell.fg, cell.bg), (Color::Reset, Color::Reset), "({x}, {y})");
+            assert_eq!(cell.modifier, Modifier::DIM, "({x}, {y})");
+        }
+    }
+    assert_eq!(shown[top].chars().last().unwrap(), '┐');
+    assert_eq!(shown[bottom].chars().last().unwrap(), '┘');
+    // The draft and the chips sit one column in, between │ sides, with
+    // the drawn cursor on the interior.
+    for y in (top + 1)..bottom {
+        let y = y as u16;
+        assert_eq!(buf[(0, y)].symbol(), "│", "row {y}");
+        assert_eq!(buf[(79, y)].symbol(), "│", "row {y}");
+    }
+    let draft = &shown[top + 1];
+    assert!(draft.contains("hello"), "{draft:?}");
+    assert!(draft.starts_with("│›"), "{draft:?}");
+    let caret: String = (0..80).map(|x| buf[(x, top as u16 + 1)].symbol()).collect();
+    assert!(caret.contains('█'), "{caret:?}");
+    assert!(!caret.ends_with('█'), "the cursor never sits on a border");
+    // Chip targets keep inside the interior, clear of the sides.
+    for target in &targets {
+        assert!(target.rect.x >= 1, "{target:?}");
+        assert!(target.rect.right() <= 79, "{target:?}");
+    }
+    // The view's cursor agrees with the drawn one, one column in.
+    let cursor = cursor(&app, Rect::new(0, 0, 80, 24)).expect("the cursor");
+    assert_eq!(buf[(cursor.x, cursor.y)].symbol(), "█");
+    assert!((1..79).contains(&cursor.x));
+}
+
+#[test]
+fn no_color_home_navigation_follows_the_rendered_rows() {
+    // A draft wrapping to three rows at the boxed interior: Up moves to
+    // the end of the row above, Down returns, per the rendered rows.
+    crate::surface::init(&|name: &str| {
+        (name == "NO_COLOR").then(|| "1".to_owned())
+    });
+    let mut app = home(40, 24);
+    type_draft(&mut app, &"w".repeat(100));
+    let area = Rect::new(0, 0, 40, 24);
+    let before = cursor(&app, area).expect("the cursor");
+    let now = fakes::clock::FakeClock::new().now();
+    app.on_key(Key::Up, now);
+    let up = cursor(&app, area).expect("the cursor");
+    assert!(up.y < before.y || (up.y == before.y && up.x < before.x), "{before:?} -> {up:?}");
+    app.on_key(Key::Down, now);
+    assert_eq!(cursor(&app, area).expect("the cursor"), before);
+    // The draft width is the boxed interior: navigation counts the rows
+    // the renderer wraps.
+    assert_eq!(app.draft_width(), 38);
+    let (buf, _) = no_color_home(&app, 40, 24);
+    let box_top = (0..24).map(|y| (0..40).map(|x| buf[(x, y)].symbol()).collect::<String>())
+        .position(|row| row.starts_with('┌'))
+        .expect("the box");
+    assert_eq!(buf[(0, box_top as u16)].symbol(), "┌");
+    assert_eq!(buf[(39, box_top as u16)].symbol(), "┐");
+}

@@ -814,3 +814,175 @@ fn draw_edges_clips_its_columns_at_a_nonzero_origin() {
         assert_eq!(buf[(x, 2)].symbol(), " ", "x {x}");
     }
 }
+
+/// The layout mode `init` reads over `vars`.
+fn boxed(vars: &[(&str, &str)]) -> bool {
+    let vars: Vec<(String, String)> = vars
+        .iter()
+        .map(|(name, value)| ((*name).to_owned(), (*value).to_owned()))
+        .collect();
+    super::init(&|name| {
+        vars.iter()
+            .find(|(set, _)| set == name)
+            .map(|(_, value)| value.clone())
+    });
+    super::boxed()
+}
+
+#[test]
+fn box_mode_agrees_with_depth_on_no_color() {
+    // Unset and empty mean colour; any other value means colourless,
+    // exactly as `look::depth` reads it (`docs/tui.md`, "Look").
+    assert!(!boxed(&[]));
+    assert!(!boxed(&[("NO_COLOR", "")]));
+    assert!(boxed(&[("NO_COLOR", "1")]));
+    assert!(boxed(&[("NO_COLOR", "yes")]));
+    for vars in [
+        vec![("NO_COLOR", "1")],
+        vec![("NO_COLOR", "1"), ("COLORTERM", "truecolor")],
+        vec![("NO_COLOR", "1"), ("TERM", "xterm-ghostty")],
+    ] {
+        let owned: Vec<(String, String)> = vars
+            .iter()
+            .map(|(name, value)| ((*name).to_owned(), (*value).to_owned()))
+            .collect();
+        let depth = crate::look::depth(&|name| {
+            owned
+                .iter()
+                .find(|(set, _)| set == name)
+                .map(|(_, value)| value.clone())
+        });
+        assert_eq!(depth, crate::look::Depth::NoColour, "{vars:?}");
+        assert!(boxed(&vars), "{vars:?}");
+    }
+}
+
+#[test]
+fn box_edge_rows_are_dim_corners_and_fills() {
+    use ratatui::style::Modifier;
+    for (top, left, right) in [(true, "┌", "┐"), (false, "└", "┘")] {
+        let row = super::box_edge_row(5, top);
+        assert_eq!(row.width(), 5);
+        let text: String = row.spans.iter().map(|span| span.content.as_ref()).collect();
+        assert_eq!(text, format!("{left}───{right}"));
+        for span in &row.spans {
+            assert_eq!(span.style.fg, None);
+            assert_eq!(span.style.bg, None);
+            assert_eq!(span.style.add_modifier, Modifier::DIM);
+        }
+    }
+    assert_eq!(super::box_edge_row(0, true).width(), 0);
+    let one = super::box_edge_row(1, true);
+    assert_eq!(one.width(), 1);
+    let two = super::box_edge_row(2, false);
+    assert_eq!(two.width(), 2);
+    let text: String = two.spans.iter().map(|span| span.content.as_ref()).collect();
+    assert_eq!(text, "└┘");
+}
+
+#[test]
+fn card_edges_box_where_a_box_fits() {
+    let _ = boxed(&[("NO_COLOR", "1")]);
+    assert!(super::box_fit(3));
+    assert!(super::box_fit(80));
+    assert!(!super::box_fit(2));
+    assert!(!super::box_fit(0));
+    // A box fits: corners, not half blocks, with no role marker for the
+    // paint pass to resolve.
+    let row = super::card_edge_row(4, Role::Surface, true);
+    let text: String = row.spans.iter().map(|span| span.content.as_ref()).collect();
+    assert_eq!(text, "┌──┐");
+    assert!(row.spans.iter().all(|span| span.style.fg.is_none()));
+    // Too narrow for two sides and text: half blocks, which the paint
+    // pass blanks, so the text keeps its columns.
+    let narrow = super::card_edge_row(2, Role::Surface, false);
+    let text: String = narrow
+        .spans
+        .iter()
+        .map(|span| span.content.as_ref())
+        .collect();
+    assert_eq!(text, "▀▀");
+    assert_eq!(narrow.spans[0].style.fg, Some(Role::Surface.color()));
+}
+
+#[test]
+fn card_edges_are_half_blocks_with_colour() {
+    let _ = boxed(&[("COLORTERM", "truecolor")]);
+    assert!(!super::boxed());
+    assert!(!super::box_fit(80));
+    let row = super::card_edge_row(4, Role::Surface, true);
+    let text: String = row.spans.iter().map(|span| span.content.as_ref()).collect();
+    assert_eq!(text, "▄▄▄▄");
+}
+
+#[test]
+fn draw_sides_keeps_text_and_adds_no_corners() {
+    use ratatui::style::Modifier;
+    let _ = boxed(&[("NO_COLOR", "1")]);
+    let mut buf = Buffer::empty(Rect::new(0, 0, 6, 4));
+    buf.set_string(0, 1, "abcdef", ratatui::style::Style::default());
+    buf.set_string(0, 2, "ghijkl", ratatui::style::Style::default());
+    super::draw_sides(&mut buf, Rect::new(0, 1, 6, 2));
+    for y in 1..=2 {
+        assert_eq!(buf[(0, y)].symbol(), "│");
+        assert_eq!(buf[(5, y)].symbol(), "│");
+        assert_eq!(buf[(0, y)].modifier, Modifier::DIM);
+        assert_eq!((buf[(0, y)].fg, buf[(0, y)].bg), (Color::Reset, Color::Reset));
+    }
+    // The text between the sides keeps its cells.
+    assert_eq!(buf[(1, 1)].symbol(), "b");
+    assert_eq!(buf[(4, 2)].symbol(), "k");
+    // Rows outside the rect keep their cells: no corners, no sides.
+    assert_eq!(buf[(0, 0)].symbol(), " ");
+    assert_eq!(buf[(5, 0)].symbol(), " ");
+    assert_eq!(buf[(0, 3)].symbol(), " ");
+}
+
+#[test]
+fn draw_sides_clips_without_covering_text() {
+    let _ = boxed(&[("NO_COLOR", "1")]);
+    // A nonzero origin: the sides draw at the rect's columns in buffer
+    // cells.
+    let mut buf = Buffer::empty(Rect::new(4, 4, 5, 3));
+    buf.set_string(4, 5, "abcde", ratatui::style::Style::default());
+    super::draw_sides(&mut buf, Rect::new(4, 5, 5, 1));
+    assert_eq!(buf[(4, 5)].symbol(), "│");
+    assert_eq!(buf[(8, 5)].symbol(), "│");
+    assert_eq!(buf[(6, 5)].symbol(), "c");
+    // Clipped on the left: the left side draws nothing, the text it
+    // would cover keeps its cell, and the right side still draws.
+    let mut clipped = Buffer::empty(Rect::new(1, 5, 4, 1));
+    clipped.set_string(1, 5, "wxyz", ratatui::style::Style::default());
+    super::draw_sides(&mut clipped, Rect::new(0, 5, 6, 1));
+    assert_eq!(clipped[(1, 5)].symbol(), "w");
+    assert_eq!(clipped[(4, 5)].symbol(), "z");
+    // Clipped on the right: the right side draws nothing.
+    let mut right = Buffer::empty(Rect::new(0, 5, 4, 1));
+    right.set_string(0, 5, "wxyz", ratatui::style::Style::default());
+    super::draw_sides(&mut right, Rect::new(0, 5, 6, 1));
+    assert_eq!(right[(0, 5)].symbol(), "│");
+    assert_eq!(right[(3, 5)].symbol(), "z");
+}
+
+#[test]
+fn draw_box_keeps_suppressed_edges_off() {
+    let _ = boxed(&[("NO_COLOR", "1")]);
+    let mut buf = Buffer::empty(Rect::new(0, 0, 6, 5));
+    let area = Rect::new(0, 1, 6, 3);
+    let rect = Rect::new(0, 2, 6, 1);
+    super::draw_box(&mut buf, area, rect, Edges { top: false, bottom: false });
+    // No edge rows: only the sides draw, on the rect's own row.
+    assert_eq!(buf[(0, 1)].symbol(), " ");
+    assert_eq!(buf[(0, 3)].symbol(), " ");
+    assert_eq!(buf[(0, 2)].symbol(), "│");
+    assert_eq!(buf[(5, 2)].symbol(), "│");
+    // Both edges: corners above and below, never on the text row.
+    let mut edged = Buffer::empty(Rect::new(0, 0, 6, 5));
+    super::draw_box(&mut edged, area, rect, Edges::BOTH);
+    assert_eq!(edged[(0, 1)].symbol(), "┌");
+    assert_eq!(edged[(5, 1)].symbol(), "┐");
+    assert_eq!(edged[(0, 3)].symbol(), "└");
+    assert_eq!(edged[(5, 3)].symbol(), "┘");
+    assert_eq!(edged[(1, 1)].symbol(), "─");
+    assert_eq!(edged[(2, 2)].symbol(), " ");
+}

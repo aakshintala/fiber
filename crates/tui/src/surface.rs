@@ -10,19 +10,37 @@ use std::sync::atomic::{AtomicBool, Ordering};
 
 use ratatui::buffer::Buffer;
 use ratatui::layout::Rect;
-use ratatui::style::Style;
+use ratatui::style::{Modifier, Style};
 use ratatui::text::{Line, Span};
 
-use crate::look::Var;
+use crate::look::{Depth, Var, depth};
 use crate::theme::Role;
 
 /// Whether stripes draw, read once at start.
 static STRIPES: AtomicBool = AtomicBool::new(true);
 
-/// Reads whether stripes draw into [`STRIPES`]; `run` calls it once before
-/// the first frame.
+/// Whether surfaces draw as colourless boxes, read once at start.
+static BOXED: AtomicBool = AtomicBool::new(false);
+
+/// Reads whether stripes draw and whether surfaces box into their
+/// statics; `run` calls it once before the first frame.
 pub(crate) fn init(var: Var<'_>) {
     STRIPES.store(stripes(var), Ordering::Relaxed);
+    BOXED.store(depth(var) == Depth::NoColour, Ordering::Relaxed);
+}
+
+/// Whether surfaces draw as thin colourless boxes instead of tinted
+/// slabs with half-block edges: `NO_COLOR` set and not empty, agreeing
+/// with [`crate::look::depth`] (`docs/tui.md`, "Look").
+pub(crate) fn boxed() -> bool {
+    BOXED.load(Ordering::Relaxed)
+}
+
+/// Whether a surface `width` wide draws its box: colourless with room
+/// for two sides and text. Narrower keeps the text, with no box
+/// (`docs/tui.md`, "Look").
+pub(crate) fn box_fit(width: u16) -> bool {
+    boxed() && width >= 3
 }
 
 /// Whether stripes draw on the terminal `var` describes (`docs/tui.md`,
@@ -95,6 +113,109 @@ pub(crate) fn edge_row(width: usize, tint: Role, top: bool) -> Line<'static> {
         edge.repeat(width),
         Style::new().fg(tint.color()),
     ))
+}
+
+/// A box's edge row `width` wide: ┌─┐ above (`top`) or └─┘ below,
+/// dim, on the terminal's default colours (`docs/tui.md`, "Look").
+/// The row keeps its place, so row counts never change.
+pub(crate) fn box_edge_row(width: usize, top: bool) -> Line<'static> {
+    let style = Style::new().add_modifier(Modifier::DIM);
+    if width == 0 {
+        return Line::default();
+    }
+    let (left, right) = if top { ('┌', '┐') } else { ('└', '┘') };
+    if width == 1 {
+        return Line::from(Span::styled(left.to_string(), style));
+    }
+    Line::from(Span::styled(
+        format!("{left}{}{right}", "─".repeat(width.saturating_sub(2))),
+        style,
+    ))
+}
+
+/// An edge row for a surface `width` wide in `tint`: the box's edge
+/// where a box fits, else half blocks in the tint (`docs/tui.md`,
+/// "Look"). The prompt keeps [`edge_row`]'s half blocks, which the
+/// paint pass blanks, so its rows stay edge-free.
+pub(crate) fn card_edge_row(width: usize, tint: Role, top: bool) -> Line<'static> {
+    if boxed() && width >= 3 {
+        box_edge_row(width, top)
+    } else {
+        edge_row(width, tint, top)
+    }
+}
+
+/// Draws a box's sides over `rect`'s rows: │ dim on its first and last
+/// columns, where each sits inside `buf` (`docs/tui.md`, "Look").
+/// Adds no corners and writes no text: the edge rows hold the corners,
+/// and the text keeps its cells.
+pub(crate) fn draw_sides(buf: &mut Buffer, rect: Rect) {
+    if rect.height == 0 {
+        return;
+    }
+    let area = buf.area;
+    let left = rect.x;
+    let right = rect.right().saturating_sub(1);
+    if left >= right {
+        return;
+    }
+    let side = Line::from(Span::styled(
+        "│",
+        Style::new().add_modifier(Modifier::DIM),
+    ));
+    for y in rect.top().max(area.top())..rect.bottom().min(area.bottom()) {
+        if left >= area.left() && left < area.right() {
+            buf.set_line(left, y, &side, 1);
+        }
+        if right >= area.left() && right < area.right() {
+            buf.set_line(right, y, &side, 1);
+        }
+    }
+}
+
+/// Draws a thin box for `rect` in `area` of `buf`: ┌─┐ on the row above
+/// it (`edges.top`) and └─┘ on the row below it (`edges.bottom`), where
+/// each sits inside both `area` and `buf` across the columns where the
+/// rect and the buffer overlap, and │ on the rect's own columns
+/// (`docs/tui.md`, "Look"). The rect keeps its rows: the edges take
+/// the rows the slab's edge rows already reserved. A side whose column
+/// sits outside the buffer draws nothing, so clipped text is never
+/// overwritten.
+pub(crate) fn draw_box(buf: &mut Buffer, area: Rect, rect: Rect, edges: Edges) {
+    if edges.top && rect.y > area.y {
+        box_edge(buf, area, rect, true);
+    }
+    // The rect's columns are the box's: the layout reserved them, so a
+    // visible side never covers text.
+    draw_sides(buf, rect);
+    if edges.bottom {
+        let y = rect.bottom();
+        if y >= area.y && y < area.bottom() {
+            box_edge(buf, area, rect, false);
+        }
+    }
+}
+
+/// Draws one box edge for `rect` in `area` of `buf`: above it (`top`)
+/// or below it, where that row sits inside both, across the columns
+/// where the rect and the buffer overlap (`docs/tui.md`, "Look").
+fn box_edge(buf: &mut Buffer, area: Rect, rect: Rect, top: bool) {
+    let space = buf.area.intersection(area);
+    let y = if top {
+        rect.y.saturating_sub(1)
+    } else {
+        rect.bottom()
+    };
+    if y < space.top() || y >= space.bottom() {
+        return;
+    }
+    let left = rect.x.max(space.left());
+    let right = rect.right().min(space.right());
+    if left >= right {
+        return;
+    }
+    let width = right - left;
+    buf.set_line(left, y, &box_edge_row(usize::from(width), top), width);
 }
 
 /// The stripe's cell in `colour` on `tint`, on the `right` of its surface:
