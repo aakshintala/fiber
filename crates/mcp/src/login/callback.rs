@@ -133,7 +133,7 @@ fn respond(stream: &mut TcpStream, status: &str) {
     }
 }
 
-enum Served {
+pub(crate) enum Served {
     /// The wait is over with the authorization code.
     Code(String),
     /// The wait is over with a login failure.
@@ -141,8 +141,10 @@ enum Served {
 }
 
 /// Answers one callback connection. `Some` ends the wait; `None` serves
-/// the next connection.
-fn answer(
+/// the next connection. The callback tests call it directly with the
+/// injected clock, so a mutant of its answer or cap fails without waiting
+/// out a deadline.
+pub(crate) fn answer(
     mut stream: TcpStream,
     clock: &dyn Clock,
     deadline: Instant,

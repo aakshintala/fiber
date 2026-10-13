@@ -8,7 +8,7 @@
     reason = "test code; a failure is the test's"
 )]
 
-use super::callback::{MAX_HEAD, decode, wait_callback};
+use super::callback::{MAX_HEAD, Served, answer, decode, wait_callback};
 use super::*;
 use crate::test_support::{FakeTokens, WITHIN};
 use contract::mcp_tokens::TokenFiles;
@@ -1644,10 +1644,14 @@ fn a_slow_drip_does_not_stop_the_900s_deadline() {
         // byte the callback reader consumes taps the test, so the first
         // tap proves the connection was accepted before the clock moves,
         // and each later tap releases the next byte: no pacing sleep.
-        let redirect = query_param(&shown, "redirect_uri").unwrap().to_owned();
+        // The redirect is read inside the releasing scope: a value mutant
+        // that breaks the authorization URL panics there, releasing the
+        // parked login before the scope joins, so the mutant fails fast
+        // instead of hanging the suite.
         let reads = super::callback::tap_reads();
         let drips = fakes::Deadline::after(WITHIN);
         drive_releasing_on_panic(&clock, || {
+            let redirect = query_param(&shown, "redirect_uri").unwrap().to_owned();
             let (_, rest) = redirect.split_once("://").unwrap();
             let (host, _) = rest.split_once('/').unwrap();
             let mut drip = TcpStream::connect(host).unwrap();
@@ -2042,54 +2046,76 @@ fn sized_head(size: usize) -> Vec<u8> {
     head
 }
 
+/// Calls [`answer`] once with `head` already written: the client writes
+/// before the call, so no thread and no clock wait is involved, and the
+/// reply is read after it returns. The fake clock never moves and no
+/// deadline is waited out: a mutant of the answer or the cap fails on the
+/// assertions below, never on a real-clock timeout.
+fn answer_once(head: &[u8], state: &str) -> (Option<Served>, String) {
+    let clock = fakes::clock::FakeClock::new();
+    let deadline = clock.origin() + Duration::from_secs(60);
+    let listener = std::net::TcpListener::bind((std::net::Ipv4Addr::LOCALHOST, 0)).unwrap();
+    let addr = listener.local_addr().unwrap();
+    let mut client = TcpStream::connect(addr).unwrap();
+    client.write_all(head).unwrap();
+    let (server, _) = listener.accept().unwrap();
+    let served = answer(server, &*clock, deadline, state);
+    // The reply may end in a reset instead of a close: refusing an
+    // over-cap head closes with the request half-read, and the peer then
+    // sees RST with none of the reply bytes, as the 431 tests document.
+    // Callers assert on the bytes they need, and on `served` throughout.
+    let mut reply = String::new();
+    let _read = client.read_to_string(&mut reply);
+    (served, reply)
+}
+
 #[test]
-fn callback_heads_on_both_sides_of_the_cap() {
-    // The cap check runs before each read, so a head of exactly `MAX_HEAD`
-    // bytes still reads whole while one byte more is refused: a `<` mutant
-    // of the `>=` refuses both, and a zeroed cap refuses both too.
-    for (size, reads) in [(MAX_HEAD, true), (MAX_HEAD + 1, false)] {
-        let clock = fakes::clock::FakeClock::new();
-        let deadline = clock.origin() + Duration::from_secs(60);
+fn answer_reads_a_head_of_exactly_the_cap_but_refuses_one_byte_more() {
+    // The cap check runs before each read, so a head of exactly the 8 KiB
+    // cap still reads whole while one byte more is refused: a `<` mutant
+    // of the `>=` refuses the exact-cap head too, and an `answer` mutant
+    // that never answers returns `None` for it. The sizes are literals,
+    // not `MAX_HEAD`, so a narrowed-cap mutant cannot underflow
+    // `sized_head` before the assertion; `the_callback_head_cap_is_8kib`
+    // pins the value itself.
+    const CAP: usize = 8 * 1024;
+    for (size, reads) in [(CAP, true), (CAP + 1, false)] {
         let head = sized_head(size);
-        let (result, echo) = driven_wait(&clock, deadline, "s1", |addr| {
-            let first = send_raw(addr, &head);
-            if reads {
-                first
-            } else {
-                let second = send_raw(
-                    addr,
-                    b"GET /callback?code=abc&state=s1 HTTP/1.1\r\nHost: x\r\nConnection: close\r\n\r\n",
-                );
-                format!("{first}||{second}")
-            }
-        });
+        let (served, echo) = answer_once(&head, "s1");
         if reads {
             assert!(echo.starts_with("HTTP/1.1 200"), "{size}: {echo}");
+            match served {
+                Some(Served::Code(code)) => assert_eq!(code, "abc", "{size}"),
+                _ => panic!("a head of exactly the cap did not read: {size}"),
+            }
         } else {
-            assert!(echo.starts_with("HTTP/1.1 431"), "{size}: {echo}");
-            assert!(echo.contains("||HTTP/1.1 200"), "{size}: {echo}");
+            // Refused: `None`, with a 431 unless the close raced it as a
+            // reset, which reads as an empty reply.
+            assert!(
+                echo.starts_with("HTTP/1.1 431") || echo.is_empty(),
+                "{size}: {echo}"
+            );
+            assert!(served.is_none(), "{size}: an over-cap head was answered");
         }
-        assert_eq!(result.unwrap(), "abc", "{size}");
     }
 }
 
 #[test]
-fn the_callback_wait_fails_a_garbage_head_with_the_request_error() {
-    // A head that is no request ends the wait with the `callback request`
-    // failure, never the generic wait: an `answer` mutant that never
-    // answers ends it with a timeout instead.
-    let clock = fakes::clock::FakeClock::new();
-    let deadline = clock.origin() + Duration::from_secs(60);
-    let (result, echo) = driven_wait(&clock, deadline, "s1", |addr| {
-        send_raw(addr, b"not a request\r\n\r\n")
-    });
+fn answer_fails_a_garbage_head_with_the_request_error() {
+    // A head that is no request ends with the `callback request` failure:
+    // an `answer` mutant that never answers returns `None` instead.
+    let (served, echo) = answer_once(b"not a request\r\n\r\n", "s1");
     assert!(echo.starts_with("HTTP/1.1 400"), "{echo}");
-    let error = result.unwrap_err();
-    assert!(matches!(error, LoginError::Callback(_)), "{error:?}");
-    assert_eq!(
-        error.to_string(),
-        "Fiber could not read the browser callback at callback request."
-    );
+    match served {
+        Some(Served::Failed(error)) => {
+            assert!(matches!(error, LoginError::Callback(_)), "{error:?}");
+            assert_eq!(
+                error.to_string(),
+                "Fiber could not read the browser callback at callback request."
+            );
+        }
+        _ => panic!("a garbage head did not end with the request error"),
+    }
 }
 
 #[test]
