@@ -97,8 +97,8 @@ fn connect(server: &HttpServer) -> TcpStream {
 
 /// The waiter's clock-wait acknowledgment, failing the test when none
 /// arrives within the operation bound.
-fn next_acknowledgment(rx: &mpsc::Receiver<WaitAck>, what: &str) -> WaitAck {
-    Deadline::after(OP).recv_or_fail(rx, what)
+fn next_acknowledgment(deadline: &Deadline, rx: &mpsc::Receiver<WaitAck>, what: &str) -> WaitAck {
+    deadline.recv_or_fail(rx, what)
 }
 
 /// The text of a waiter that failed naming its request: the test fails
@@ -136,7 +136,8 @@ fn expected_accept_expires_without_a_client() {
             }));
             done_tx.send(caught).expect("the test waits");
         });
-        let ack = next_acknowledgment(&acks, "the accept's clock wait");
+        let deadline = Deadline::after(OP);
+        let ack = next_acknowledgment(&deadline, &acks, "the accept's clock wait");
         assert!(
             clock.await_thread_parked(ack.thread, ack.until, OP),
             "the accept parks on the clock before it moves"
@@ -170,7 +171,8 @@ fn expected_accept_expires_without_a_client() {
             }));
             done_tx.send(caught).expect("the test waits");
         });
-        let ack = next_acknowledgment(&acks, "the accept's clock wait");
+        let deadline = Deadline::after(OP);
+        let ack = next_acknowledgment(&deadline, &acks, "the accept's clock wait");
         assert!(
             clock.await_thread_parked(ack.thread, ack.until, OP),
             "the accept parks on the clock before it moves"
@@ -244,7 +246,8 @@ fn accept_time_is_charged_to_the_request_budget() {
                 .expect("a client connects");
             conn_tx.send(conn).expect("the test waits");
         });
-        let ack = next_acknowledgment(&acks, "the accept's clock wait");
+        let deadline = Deadline::after(OP);
+        let ack = next_acknowledgment(&deadline, &acks, "the accept's clock wait");
         assert!(
             clock.await_thread_parked(ack.thread, ack.until, OP),
             "the accept parks on the clock before it moves"
@@ -304,8 +307,9 @@ fn fake_time_wakes_a_silent_connection() {
         // The accept itself may complete without waiting when the client
         // beats it, so only the read's acknowledgment is required.
         let _client = connect(&server);
+        let deadline = Deadline::after(OP);
         let read = loop {
-            let ack = next_acknowledgment(&acks, "the read's clock wait");
+            let ack = next_acknowledgment(&deadline, &acks, "the read's clock wait");
             if ack.phase == "to read the silent request" {
                 break ack;
             }
@@ -420,7 +424,8 @@ fn advance_between_check_and_park_is_not_lost() {
             }));
             done_tx.send(caught).expect("the test waits");
         });
-        let first = next_acknowledgment(&acks, "the accept's clock wait");
+        let deadline = Deadline::after(OP);
+        let first = next_acknowledgment(&deadline, &acks, "the accept's clock wait");
         assert!(
             clock.await_thread_parked(first.thread, first.until, OP),
             "the accept parks on the clock before it moves"
@@ -436,7 +441,8 @@ fn advance_between_check_and_park_is_not_lost() {
             server: server.clone(),
         };
         clock.advance(Duration::from_secs(3));
-        let second = next_acknowledgment(&acks, "the accept's re-check");
+        let deadline = Deadline::after(OP);
+        let second = next_acknowledgment(&deadline, &acks, "the accept's re-check");
         assert_eq!(
             second.seq,
             first.seq + 1,
@@ -1012,7 +1018,8 @@ fn a_wait_without_a_wake_parks_instead_of_spinning() {
                 Ok(()) | Err(_) => {}
             }
         });
-        let ack = next_acknowledgment(&acks, "the accept's clock wait");
+        let deadline = Deadline::after(OP);
+        let ack = next_acknowledgment(&deadline, &acks, "the accept's clock wait");
         assert_eq!(ack.phase, "to accept the connection");
         assert!(
             clock.await_thread_parked(ack.thread, ack.until, OP),
@@ -1052,8 +1059,9 @@ fn a_silent_connection_is_not_closed() {
             }
         });
         let client = TcpStream::connect(addr).expect("the test connects");
+        let deadline = Deadline::after(OP);
         let ack = loop {
-            let ack = next_acknowledgment(&acks, "the stall's clock wait");
+            let ack = next_acknowledgment(&deadline, &acks, "the stall's clock wait");
             if ack.phase == "to wait for the stalled peer" {
                 break ack;
             }
@@ -1120,8 +1128,9 @@ fn a_reset_connection_ends_a_fill_at_once() {
                 Err(error) => panic!("the peek reads within {OP:?}: {error}"),
             }
         }
+        let deadline = Deadline::after(OP);
         let ack = loop {
-            let ack = next_acknowledgment(&acks, "the fill's clock wait");
+            let ack = next_acknowledgment(&deadline, &acks, "the fill's clock wait");
             if ack.phase == "to read the reset request" {
                 break ack;
             }
@@ -1161,8 +1170,9 @@ fn a_silent_fill_waits_for_its_bytes() {
             }
         });
         let mut client = TcpStream::connect(addr).expect("the test connects");
+        let deadline = Deadline::after(OP);
         let ack = loop {
-            let ack = next_acknowledgment(&acks, "the fill's clock wait");
+            let ack = next_acknowledgment(&deadline, &acks, "the fill's clock wait");
             if ack.phase == "to read the silent request" {
                 break ack;
             }
@@ -1226,8 +1236,9 @@ fn a_reset_stall_reports_the_close() {
                 Err(error) => panic!("the peek reads within {OP:?}: {error}"),
             }
         }
+        let deadline = Deadline::after(OP);
         let ack = loop {
-            let ack = next_acknowledgment(&acks, "the stall's clock wait");
+            let ack = next_acknowledgment(&deadline, &acks, "the stall's clock wait");
             if ack.phase == "to wait for the stalled peer" {
                 break ack;
             }
@@ -1921,8 +1932,9 @@ fn a_handshake_the_peer_never_reads_fails_within_its_bound() {
                 Ok(()) | Err(_) => {}
             }
         });
+        let deadline = Deadline::after(OP);
         let ack = loop {
-            let ack = next_acknowledgment(&acks, "the handshake's clock wait");
+            let ack = next_acknowledgment(&deadline, &acks, "the handshake's clock wait");
             if ack.phase == "to write the tunnel handshake" {
                 break ack;
             }
@@ -1971,8 +1983,9 @@ fn a_stalled_tunnel_direction_fails_within_its_bound() {
         });
         // Both sides stay open and silent: the client-to-origin copy
         // parks waiting for bytes that never come.
+        let deadline = Deadline::after(OP);
         let ack = loop {
-            let ack = next_acknowledgment(&acks, "the copy's clock wait");
+            let ack = next_acknowledgment(&deadline, &acks, "the copy's clock wait");
             if ack.phase == "to copy the client to the origin" {
                 break ack;
             }
@@ -2047,7 +2060,7 @@ fn a_stalled_origin_read_fails_within_its_bound() {
         });
         let deadline = Deadline::after(OP);
         let ack = loop {
-            let ack = deadline.recv_or_fail(&acks, "the origin copy's clock wait");
+            let ack = next_acknowledgment(&deadline, &acks, "the origin copy's clock wait");
             if ack.phase == "to copy the origin to the client" {
                 break ack;
             }
@@ -2107,7 +2120,7 @@ fn a_stalled_origin_write_fails_within_its_bound() {
         });
         let deadline = Deadline::after(OP);
         let ack = loop {
-            let ack = deadline.recv_or_fail(&acks, "the origin write's clock wait");
+            let ack = next_acknowledgment(&deadline, &acks, "the origin write's clock wait");
             if ack.phase == "to copy the client to the origin" {
                 break ack;
             }
@@ -2161,7 +2174,7 @@ fn shutdown_during_a_stalled_origin_read_stops_it() {
         });
         let deadline = Deadline::after(OP);
         let ack = loop {
-            let ack = deadline.recv_or_fail(&acks, "the origin copy's clock wait");
+            let ack = next_acknowledgment(&deadline, &acks, "the origin copy's clock wait");
             if ack.phase == "to copy the origin to the client" {
                 break ack;
             }
@@ -2209,7 +2222,7 @@ fn shutdown_during_a_stalled_origin_write_stops_it() {
         });
         let deadline = Deadline::after(OP);
         let ack = loop {
-            let ack = deadline.recv_or_fail(&acks, "the origin write's clock wait");
+            let ack = next_acknowledgment(&deadline, &acks, "the origin write's clock wait");
             if ack.phase == "to copy the client to the origin" {
                 break ack;
             }
@@ -2251,7 +2264,7 @@ fn a_silent_origin_parks_on_the_injected_clock() {
         // parks waiting for bytes that never come.
         let deadline = Deadline::after(OP);
         let ack = loop {
-            let ack = deadline.recv_or_fail(&acks, "the origin copy's clock wait");
+            let ack = next_acknowledgment(&deadline, &acks, "the origin copy's clock wait");
             if ack.phase == "to copy the origin to the client" {
                 break ack;
             }
@@ -2292,8 +2305,9 @@ fn shutdown_during_the_tunnel_handshake_stops_it() {
                 Ok(()) | Err(_) => {}
             }
         });
+        let deadline = Deadline::after(OP);
         let ack = loop {
-            let ack = next_acknowledgment(&acks, "the handshake's clock wait");
+            let ack = next_acknowledgment(&deadline, &acks, "the handshake's clock wait");
             if ack.phase == "to write the tunnel handshake" {
                 break ack;
             }
