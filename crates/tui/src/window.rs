@@ -235,6 +235,13 @@ pub(crate) struct Pages {
     seeds: Vec<Seed>,
     /// Each closed page's cards, `None` while dropped.
     closed: Vec<Option<Part>>,
+    /// The closed pages holding cards: `trim` drops from this set
+    /// instead of scanning every page, so settling costs residents,
+    /// not the session. The set over-approximates: a test may drop a
+    /// page directly, and dropping an already dropped page changes
+    /// nothing, while every site that keeps cards inserts, so no kept
+    /// page is ever missing.
+    resident_set: BTreeSet<usize>,
     /// The open page's cards, always held.
     open: Part,
     pending: Option<Pending>,
@@ -295,6 +302,7 @@ impl Pages {
             index: Index::default(),
             seeds: vec![seed.clone()],
             closed: Vec::new(),
+            resident_set: BTreeSet::new(),
             open: Part::seeded(seed),
             pending: None,
             summaries: Vec::new(),
@@ -528,6 +536,7 @@ impl Pages {
             closing.carried = part.fold.take_carried();
         }
         self.closed.push(Some(part));
+        self.resident_set.insert(at);
         self.seeds.push(seed);
         self.focus.push(Vec::new());
         self.table.push(None);
@@ -613,6 +622,7 @@ impl Pages {
         // the closed page keeps none of their descriptions.
         Fold::default().carry_from(&mut before.fold);
         self.closed.push(Some(before));
+        self.resident_set.insert(at);
         self.seeds.push(seed);
         self.focus.push(Vec::new());
         self.table.push(None);
@@ -733,6 +743,7 @@ impl Pages {
         self.finish(at, &mut part);
         if let Some(slot) = self.closed.get_mut(at) {
             *slot = Some(part);
+            self.resident_set.insert(at);
         }
         self.stale.remove(&at);
         self.failed.remove(&at);
@@ -788,9 +799,14 @@ impl Pages {
     /// the pages a pending copy asked for until it runs.
     pub(crate) fn trim(&mut self, top: usize, height: usize) {
         let window = self.index.window(top, height);
-        for (at, part) in self.closed.iter_mut().enumerate() {
+        // Only pages holding cards can drop: the set holds every kept
+        // page, so the scan costs residents, never the session.
+        for at in self.resident_set.clone() {
             if !window.contains(&at) && !self.pins.contains(at) {
-                *part = None;
+                if let Some(slot) = self.closed.get_mut(at) {
+                    *slot = None;
+                }
+                self.resident_set.remove(&at);
             }
         }
     }

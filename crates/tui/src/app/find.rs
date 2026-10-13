@@ -391,12 +391,28 @@ impl App {
             // Past positions already settled: the reach never looks back.
             self.find.skip_settled(self.screen.pages());
             let mut next = None;
-            let mut next_pos = usize::MAX;
-            // Dirtied positions, earliest in scan order first: each
-            // entry examined once, never the whole order. The first
-            // dropped page still waiting wins; the reach decides
-            // against it below.
-            for pos in self.find.dirty().clone() {
+            // The reach's page, unless a dirtied one stands earlier.
+            if self.find.cursor() < count {
+                let Some(at) = self.find.page_at(self.find.cursor()) else {
+                    return;
+                };
+                let revision = self.screen.pages().index().revision(at);
+                if self.find.scanned(at) != Some(revision)
+                    && self.screen.pages().part(at).is_none()
+                {
+                    next = Some(at);
+                }
+            }
+            // Dirtied positions before the reach stand earlier in scan
+            // order, so the first dropped one still waiting wins over
+            // the reach: each entry examined once, never the whole order.
+            for pos in self
+                .find
+                .dirty()
+                .range(..self.find.cursor())
+                .cloned()
+                .collect::<Vec<_>>()
+            {
                 crate::work::add(|work| work.search_order_pages += 1);
                 let Some(at) = self.find.page_at(pos) else {
                     continue;
@@ -406,22 +422,8 @@ impl App {
                 {
                     continue;
                 }
-                next_pos = pos;
                 next = Some(at);
                 break;
-            }
-            // The reach's page, unless a dirtied one stands earlier.
-            if self.find.cursor() < count {
-                let Some(at) = self.find.page_at(self.find.cursor()) else {
-                    return;
-                };
-                let revision = self.screen.pages().index().revision(at);
-                if self.find.scanned(at) != Some(revision)
-                    && self.screen.pages().part(at).is_none()
-                    && self.find.cursor() < next_pos
-                {
-                    next = Some(at);
-                }
             }
             if let Some(at) = next {
                 self.fetch_page(at, None, Vec::new());

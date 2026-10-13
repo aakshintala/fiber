@@ -546,11 +546,16 @@ impl Paging<'_> {
     }
 
     /// One frame: loads what it needs from the log and draws. Returns how
-    /// long it took and whether it loaded a page.
+    /// long it took and whether it loaded a page. The frame lists what it
+    /// needs once: each load settles and trims, so re-listing after every
+    /// page would walk the whole stale set once per page. Loading from the
+    /// snapshot settles the same pages in the same order; a load never
+    /// needs a page the snapshot lacks.
     fn frame(&mut self) -> Result<(Duration, bool), String> {
         let started = self.clock.now();
+        let wanted = self.app.needs();
         let mut loaded = false;
-        while let Some(range) = self.app.needs().into_iter().next() {
+        for range in &wanted {
             let from = self.log.partition_point(|(seq, _)| seq < range.start());
             let mut lines = Vec::new();
             for (_, line) in self
@@ -561,14 +566,14 @@ impl Paging<'_> {
             {
                 lines.push(serde_json::from_str(line).map_err(|error| error.to_string())?);
             }
-            self.app.load(lines);
-            if self.app.needs().first() == Some(&range) {
+            if lines.is_empty() {
                 return Err(format!(
                     "the log holds no lines {}..={}",
                     range.start().0,
                     range.end().0
                 ));
             }
+            self.app.load(lines);
             loaded = true;
         }
         let mut buf = Buffer::empty(self.area);
