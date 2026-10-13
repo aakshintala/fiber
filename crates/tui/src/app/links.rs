@@ -280,14 +280,12 @@ impl App {
         // it, just as its click target does (`docs/tui.md`, "Turns").
         let limit = area.bottom().saturating_sub(u16::from(self.has_new()));
         if gap < limit {
+            // No `focus` entry: the rows below only shift down one, so
+            // the focused link keeps its id at its shifted cells without
+            // a rename, and there is no hint-row target to add. Keeping
+            // the layout plain here leaves no field no test can catch.
             return HintLayout {
                 gap: Some(gap),
-                focus: Some(FocusedLink {
-                    id,
-                    url: hit.url.clone(),
-                    rects: shifted(&hit.rects, gap, area.bottom()),
-                    extra: None,
-                }),
                 ..plain
             };
         }

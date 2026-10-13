@@ -492,6 +492,55 @@ fn a_focused_link_on_the_last_row_scrolls_its_hint_into_view() {
 }
 
 #[test]
+fn a_hint_past_the_last_row_blanks_stale_cells() {
+    // A shell row with a bare URL, focused: shell output is a plain,
+    // unpadded row, so with the link on the last content row the hint row
+    // sits past the last line, and only the trailing blank in
+    // `conversation_rows` clears it (`docs/tui.md`, "Links"). The buffer
+    // starts full of stale cells, as a previous frame's rows: past the
+    // hint text the row must be blank, not stale.
+    let url = "http://example.com/a";
+    let mut app = replied(60, 16, "a reply");
+    app.set_opener(true);
+    app.screen.pages_mut().add_shell(Some(url.to_owned()));
+    app.settle();
+    let area = app.conversation_area();
+    let (id, first) = link_for(&app, url);
+    app.focus = Some(id);
+    let gap = app.hint_layout(area).gap.expect("the hint reserves a row");
+    let (width, height) = (app.screen.width(), app.screen.height());
+    let full = Rect::new(0, 0, width, height);
+    let mut buf = Buffer::empty(full);
+    for y in full.top()..full.bottom() {
+        for x in full.left()..full.right() {
+            buf[(x, y)].set_symbol("X");
+        }
+    }
+    let _targets = crate::view::render(&app, full, &mut buf, None);
+    // The hint draws on the reserved row, dim.
+    let hint = crate::view::marks::HINT;
+    let row: String = (first.x..first.x.saturating_add(22))
+        .map(|x| buf[(x, gap)].symbol().to_owned())
+        .collect();
+    assert_eq!(row, hint);
+    // Every cell past the hint is blank: no stale cell shows. The
+    // scroll bar paints the last column after the rows.
+    let last_col = full.right().saturating_sub(1);
+    for x in first.x.saturating_add(22)..last_col {
+        assert_eq!(buf[(x, gap)].symbol(), " ", "stale cell at {x}");
+    }
+    // The focused link keeps its row above the hint, and Enter still
+    // opens it.
+    let moved = gap.saturating_sub(1);
+    let cell = &buf[(first.x, moved)];
+    assert_eq!(cell.fg, crate::theme::Role::Accent.color());
+    assert_eq!(
+        app.on_key(Key::Enter, now()),
+        Effect::OpenLink(url.to_owned())
+    );
+}
+
+#[test]
 fn a_focused_table_link_reserves_its_hint_row() {
     use crate::theme::Role;
     use ratatui::style::{Color, Modifier};
