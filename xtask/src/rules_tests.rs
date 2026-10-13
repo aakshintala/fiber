@@ -534,3 +534,449 @@ fn preserve_order_without_a_named_enabler_still_fails() {
         ]
     );
 }
+
+const REGISTERED_TOOLS: [&str; 14] = [
+    "ask_user",
+    "delegate_models",
+    "delegate_spawn",
+    "edit",
+    "handoff",
+    "jobs",
+    "name_session",
+    "read",
+    "session_search",
+    "shell",
+    "skill",
+    "web_fetch",
+    "web_search",
+    "write",
+];
+
+fn registrations(names: &[&str]) -> RustFile {
+    let source = names
+        .iter()
+        .map(|name| format!("Tool {{ name: {name:?}.to_owned() }}"))
+        .collect::<Vec<_>>()
+        .join("\n");
+    file("tools", "src/definitions.rs", source)
+}
+
+fn source_file(krate: &str, rel: &str, source: &str) -> RustFile {
+    file(krate, rel, source.to_owned())
+}
+
+#[test]
+fn session_paths_only_rejects_construction_outside_log() {
+    assert!(session_paths(&[]).is_empty());
+    let files = [
+        file(
+            "log",
+            "src/lib.rs",
+            "let dir = home.join(\"sessions\");".to_owned(),
+        ),
+        file(
+            "config",
+            "src/lib.rs",
+            "let dir = home.join(\"sessions_extra\");".to_owned(),
+        ),
+        file(
+            "hub",
+            "src/lib.rs",
+            "fn clean() { let s = \"sessions in prose\"; }".to_owned(),
+        ),
+    ];
+    assert_eq!(session_paths(&files), Vec::<String>::new());
+}
+
+#[test]
+fn session_paths_match_segments_joined_paths_and_raw_literals() {
+    let files = [
+        source_file(
+            "hub",
+            "src/new.rs",
+            "fn first() {\n    let dir = project\n        .join(\n            r#\"sessions\"#\n        );\n}\nfn second() {\n    let path = std::fs::read(\"projects/key/sessions/id/events.jsonl\");\n}\n",
+        ),
+        source_file(
+            "main",
+            "src/other.rs",
+            "fn third() {\n    let path = dir.join(\"events.jsonl\");\n}\n",
+        ),
+    ];
+    assert_eq!(
+        session_paths(&files),
+        [
+            "crates/hub/src/new.rs:4: session path outside log",
+            "crates/hub/src/new.rs:8: session path outside log",
+            "crates/main/src/other.rs:2: session path outside log",
+        ]
+    );
+}
+
+#[test]
+fn session_paths_ignore_comments_descriptive_strings_and_segment_lookalikes() {
+    let files = [source_file(
+        "hub",
+        "src/clean.rs",
+        "// fs::read(\"sessions/old/events.jsonl\")\n/* .join(\"sessions\") */\nfn clean() {\n    let text = r#\"sessions/ is documentation\"#;\n    let description = \"sessions/story\"; let _ = read(\"notes.txt\");\n    let a = dir.join(\"sessions_extra\");\n    let b = dir.join(\"my_sessions\");\n    let c = dir.join(\"events.jsonl.old\");\n}\n",
+    )];
+    assert!(session_paths(&files).is_empty());
+}
+
+#[test]
+fn session_paths_keep_scanning_after_a_quote_character_literal() {
+    let files = [source_file(
+        "hub",
+        "src/quotes.rs",
+        "fn f() { let quote = '\"'; let path = dir.join(\"sessions\"); }\n",
+    )];
+    assert_eq!(
+        session_paths(&files),
+        ["crates/hub/src/quotes.rs:1: session path outside log"]
+    );
+}
+
+#[test]
+fn session_paths_skip_test_files_cfg_test_items_and_test_only_modules() {
+    let files = [
+        source_file(
+            "hub",
+            "src/lib.rs",
+            "#[cfg(test)]\n#[path = \"fake.rs\"]\nmod fake;\n#[cfg(test)]\nfn test_only() { let _ = dir.join(\"sessions\"); }\nfn production() {}\n",
+        ),
+        source_file("hub", "src/fake.rs", "mod deeper;\n"),
+        source_file(
+            "hub",
+            "src/fake/deeper.rs",
+            "fn test_fake() { let _ = dir.join(\"sessions\"); }",
+        ),
+        file(
+            "hub",
+            "src/paths_tests.rs",
+            "fn test() { let _ = dir.join(\"sessions\"); }".to_owned(),
+        ),
+        file(
+            "hub",
+            "tests/paths.rs",
+            "fn test() { let _ = dir.join(\"sessions\"); }".to_owned(),
+        ),
+        source_file(
+            "fakes",
+            "src/lib.rs",
+            "fn fake() { let _ = dir.join(\"sessions\"); }",
+        ),
+    ];
+    assert_eq!(production_files(&files).len(), 1);
+    assert!(session_paths(&files).is_empty());
+}
+
+#[test]
+fn fiber_home_paths_check_construction_and_file_reads_outside_config() {
+    assert!(fiber_home_paths(&[]).is_empty());
+    let files = [
+        source_file(
+            "cli",
+            "src/new.rs",
+            "fn f(inputs: Inputs) {\n    let path = inputs.home\n        .join(\"projects\")\n        .join(\"config.json\");\n    let _ = read(&path);\n}\n",
+        ),
+        source_file(
+            "main",
+            "src/other.rs",
+            "fn f(home: &Path) {\n    let _ = std::fs::read(home.join(\"SYSTEM.md\"));\n}\n",
+        ),
+    ];
+    assert_eq!(
+        fiber_home_paths(&files),
+        [
+            "crates/cli/src/new.rs:3: Fiber-home path outside config",
+            "crates/cli/src/new.rs:4: Fiber-home path outside config",
+            "crates/main/src/other.rs:2: Fiber-home path outside config",
+        ]
+    );
+}
+
+#[test]
+fn fiber_home_paths_match_prompt_reads_but_not_os_home_or_relative_joins() {
+    let files = [
+        source_file(
+            "main",
+            "src/prompt_fixture.rs",
+            "fn prompts(home: &Path, project: &ProjectKey) {\n    read_one(home, project, \"SYSTEM.md\");\n    read_one(home, project, r#\"APPEND_SYSTEM.md\"#);\n}\nfn read_one(home: &Path, project: &ProjectKey, name: &str) {\n    let _ = home.join(\"projects\").join(project).join(name);\n}\n",
+        ),
+        source_file(
+            "loop",
+            "src/skills.rs",
+            "fn places(home: &Path, dir: &Path, other: &Other) {\n    let os = home.join(\".agents/skills\");\n    let os_nested = home.join(\".agents\").join(\"skills\");\n    let config = home.join(\".config\");\n    let config_nested = home.join(\".config\").join(\"config.json\");\n    let relative = dir.join(\"projects\");\n    let lookalike = home.join(\"configurable/projects\");\n    let caller_home = other.home.join(\"projects\");\n    let prompt_prose = \"SYSTEM.md\"; let _ = read(\"notes.txt\");\n}\n",
+        ),
+    ];
+    assert_eq!(
+        home_sites(&files[0]).len(),
+        4,
+        "{:?}",
+        home_sites(&files[0])
+    );
+    assert_eq!(
+        fiber_home_paths(&files),
+        [
+            "crates/main/src/prompt_fixture.rs:2: Fiber-home path outside config",
+            "crates/main/src/prompt_fixture.rs:3: Fiber-home path outside config",
+            "crates/main/src/prompt_fixture.rs:6: Fiber-home path outside config",
+            "crates/main/src/prompt_fixture.rs:6: Fiber-home path outside config",
+        ]
+    );
+}
+
+#[test]
+fn cfg_test_struct_fields_do_not_hide_following_production_paths() {
+    let files = [source_file(
+        "doors",
+        "src/isolation.rs",
+        "struct Isolation {\n    #[cfg(test)]\n    pause: Option<fn()>,\n}\nfn production(home: &Path) {\n    let path = home\n        .join(\"projects\");\n}\n",
+    )];
+    assert_eq!(
+        fiber_home_paths(&files),
+        ["crates/doors/src/isolation.rs:7: Fiber-home path outside config"]
+    );
+}
+
+#[test]
+fn fiber_home_paths_recognize_only_fiber_home_roots() {
+    let files = [source_file(
+        "main",
+        "src/roots.rs",
+        "fn f(&self, hub: &Hub, inputs: &Inputs, other: &Other) {\n    self.home.join(\"projects\");\n    hub.home.join(\"run\");\n    inputs.home.join(\"cache\");\n    other.home.join(\"projects\");\n}\n",
+    )];
+    assert_eq!(
+        fiber_home_paths(&files),
+        [
+            "crates/main/src/roots.rs:2: Fiber-home path outside config",
+            "crates/main/src/roots.rs:3: Fiber-home path outside config",
+            "crates/main/src/roots.rs:4: Fiber-home path outside config",
+        ]
+    );
+}
+
+#[test]
+fn fiber_home_paths_check_configuration_literals_used_by_file_operations() {
+    let files = [source_file(
+        "main",
+        "src/config.rs",
+        "fn read_config(workspace: &Path) {\n    let _ = std::fs::read(workspace.join(\".fiber/config.json\"));\n}\n",
+    )];
+    assert_eq!(
+        fiber_home_paths(&files),
+        ["crates/main/src/config.rs:2: Fiber-home path outside config"]
+    );
+}
+
+#[test]
+fn home_allowances_distinguish_repeated_sites_in_one_function() {
+    let file = source_file(
+        "extensions",
+        "src/installed.rs",
+        "fn removal() {\n    let path = home.join(\"extensions\");\n    dirs.push(home.join(\"extensions\"));\n}\n",
+    );
+    let sites = home_sites(&file);
+    assert_eq!(sites.len(), 2);
+    assert!(sites[0].context.contains("::let path"));
+    assert!(sites[1].context.contains("::dirs . push"));
+    assert_ne!(sites[0].context, sites[1].context);
+    let one_site = source_file(
+        "extensions",
+        "src/installed.rs",
+        "fn removal() {\n    let path = home.join(\"extensions\");\n}\n",
+    );
+    assert_eq!(home_sites(&one_site)[0].context, sites[0].context);
+}
+
+#[test]
+fn fiber_home_paths_accept_config_ownership_and_require_a_layout_segment() {
+    let files = [
+        source_file(
+            "config",
+            "src/read.rs",
+            "fn read_config(home: &Path) {\n    let _ = home.join(\"config.json\");\n}\n",
+        ),
+        source_file(
+            "cli",
+            "src/relative.rs",
+            "fn f(dir: &Path, home: &Path) {\n    let _ = dir.join(\"configurable\");\n    let _ = home.join(\"configurable\");\n}\n",
+        ),
+    ];
+    assert!(fiber_home_paths(&files).is_empty());
+}
+
+#[test]
+fn loop_tool_names_derives_registered_names_from_owned_definitions() {
+    let tools = registrations(&REGISTERED_TOOLS);
+    let jobs = source_file(
+        "jobs",
+        "src/extra.rs",
+        "Tool { name: \"delegate_message\".to_owned() }\nTool { name: \"pwd\" }\n",
+    );
+    let names = derived_tool_names(&[tools, jobs]);
+    for name in REGISTERED_TOOLS {
+        assert!(names.contains(name), "derived names: {names:?}");
+    }
+    assert!(names.contains("delegate_message"));
+    assert!(!names.contains("pwd"));
+    assert!(!names.contains("shellish"));
+}
+
+#[test]
+fn loop_tool_names_rejects_every_derived_identity_outside_its_label_context() {
+    let tools = registrations(&REGISTERED_TOOLS);
+    for name in REGISTERED_TOOLS {
+        let source = format!("fn f() {{\n    let tool = {name:?};\n}}\n");
+        let files = [tools.clone(), file("loop", "src/new.rs", source)];
+        assert_eq!(
+            loop_tool_names(&files),
+            [format!(
+                "crates/loop/src/new.rs:2: built-in tool name {name}"
+            )],
+            "{name}"
+        );
+    }
+}
+
+#[test]
+fn loop_tool_names_ignore_longer_names_other_crates_and_comments() {
+    let tools = registrations(&REGISTERED_TOOLS);
+    let files = [
+        tools,
+        source_file(
+            "loop",
+            "src/clean.rs",
+            "// \"shell\" is only a comment\nfn f() { let a = \"shellish\"; let b = r#\"my_shell\"#; }\n",
+        ),
+        file("tools", "src/path.rs", "let x = \"shell\";".to_owned()),
+    ];
+    assert!(loop_tool_names(&files).is_empty());
+}
+
+#[test]
+fn loop_tool_names_allows_only_the_five_known_label_contexts() {
+    let tools = registrations(&REGISTERED_TOOLS);
+    let labels = [
+        file("loop", "src/opening.rs", "fn render() { let row = (\"shell\", environment.shell.as_str()); }".to_owned()),
+        file("loop", "src/status.rs", "fn key() { let key = match state { SessionState::Jobs => (\"jobs\", None) }; }".to_owned()),
+        file("loop", "src/skills.rs", "fn commands() { let tag = if skill.model_invocable { \"skill\" } else { \"template\" }; }".to_owned()),
+        file("loop", "src/handoff/carry.rs", "fn restart() { let args = &[(\"jobs\", listed.join(\"\\n\").as_str())]; }".to_owned()),
+        file("loop", "src/reviewer.rs", "fn sections() { let sections = Sections { handoff: crate::prompt::section(md, \"handoff\") }; }".to_owned()),
+    ];
+    let mut files = vec![tools];
+    files.extend(labels);
+    assert!(
+        loop_tool_names(&files).is_empty(),
+        "{:?}",
+        loop_tool_names(&files)
+    );
+}
+
+#[test]
+fn loop_tool_label_exceptions_do_not_exempt_other_uses_in_the_same_files() {
+    let tools = registrations(&REGISTERED_TOOLS);
+    let files = [
+        tools,
+        file("loop", "src/opening.rs", "fn render() { let row = (\"shell\", environment.shell.as_str()); let name = \"shell\"; }".to_owned()),
+        file("loop", "src/status.rs", "fn key() { let key = SessionState::Jobs => (\"jobs\", None); let name = \"jobs\"; }".to_owned()),
+        file("loop", "src/skills.rs", "fn commands() { let tag = if skill.model_invocable { \"skill\" } else { \"template\" }; let name = \"skill\"; }".to_owned()),
+        file("loop", "src/handoff/carry.rs", "fn restart() { let args = &[(\"jobs\", listed.join(\"\\n\").as_str())]; let name = \"jobs\"; }".to_owned()),
+        file("loop", "src/reviewer.rs", "fn sections() { let sections = Sections { handoff: crate::prompt::section(md, \"handoff\") }; let name = \"handoff\"; }".to_owned()),
+    ];
+    let failures = loop_tool_names(&files);
+    assert_eq!(failures.len(), 5, "{failures:?}");
+    assert!(
+        failures
+            .iter()
+            .any(|line| line.contains("built-in tool name shell"))
+    );
+    assert!(
+        failures
+            .iter()
+            .any(|line| line.contains("built-in tool name jobs"))
+    );
+    assert!(
+        failures
+            .iter()
+            .any(|line| line.contains("built-in tool name skill"))
+    );
+    assert!(
+        failures
+            .iter()
+            .any(|line| line.contains("built-in tool name handoff"))
+    );
+}
+
+#[test]
+fn loop_tool_names_fail_loudly_on_unrecognized_owned_definitions() {
+    let tools = source_file(
+        "tools",
+        "src/definitions.rs",
+        "name: String::from(\"first\")\nname: \"second\".to_string()\nname: \"third\".into()\nname: \"pwd\",\n",
+    );
+    let failures = loop_tool_names(&[tools]);
+    assert_eq!(
+        failures,
+        [
+            "crates/tools/src/definitions.rs:1: unrecognized owned tool-name definition",
+            "crates/tools/src/definitions.rs:2: unrecognized owned tool-name definition",
+            "crates/tools/src/definitions.rs:3: unrecognized owned tool-name definition",
+        ]
+    );
+}
+
+#[test]
+fn individual_allowances_are_consumed_once_and_match_path_context_and_operation() {
+    let allowance = SourceAllowance {
+        path: "crates/hub/src/feed.rs",
+        context: "fn feed",
+        operation: "join:events.jsonl",
+        ticket: "#1725",
+    };
+    let site = SourceSite {
+        path: "crates/hub/src/feed.rs".to_owned(),
+        line: 1,
+        context: "fn feed".to_owned(),
+        operation: "join:events.jsonl".to_owned(),
+    };
+    assert_eq!(allowance.ticket, "#1725");
+    assert!(consume_allowance(&[allowance], &site).is_some());
+    let mut zero_sites = std::iter::empty();
+    let mut unused = vec![allowance];
+    assert!(consume_next_allowance(&mut unused, &mut zero_sites).is_none());
+    assert_eq!(unused.len(), 1);
+    let mut two_sites = [site.clone(), site.clone()].into_iter();
+    let mut remaining = vec![allowance];
+    assert!(consume_next_allowance(&mut remaining, &mut two_sites).is_some());
+    assert!(consume_next_allowance(&mut remaining, &mut two_sites).is_none());
+    assert!(
+        consume_allowance(
+            &[allowance],
+            &SourceSite {
+                path: "crates/hub/src/other.rs".to_owned(),
+                ..site.clone()
+            }
+        )
+        .is_none()
+    );
+    assert!(
+        consume_allowance(
+            &[allowance],
+            &SourceSite {
+                context: "fn other".to_owned(),
+                ..site.clone()
+            }
+        )
+        .is_none()
+    );
+    assert!(
+        consume_allowance(
+            &[allowance],
+            &SourceSite {
+                operation: "join:sessions".to_owned(),
+                ..site
+            }
+        )
+        .is_none()
+    );
+}
