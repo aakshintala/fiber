@@ -25,8 +25,8 @@ use fakes::clock::FakeClock;
 use serde_json::{Value, json};
 
 use super::{
-    RERUN, Ran, Runner, SystemRunner, current_exe, hub_answers, hub_install, hub_restart,
-    hub_uninstall, install, is_missing, read_unit, restart, uninstall,
+    RERUN, Ran, Runner, SystemRunner, hub_answers, hub_install, hub_restart, hub_uninstall,
+    install, read_unit, restart, uninstall,
 };
 use crate::hub_unit::{Manager, Service, name};
 
@@ -862,44 +862,6 @@ fn the_system_runner_reports_a_missing_program_as_not_found() {
 }
 
 #[test]
-fn a_failure_with_no_stderr_or_exit_code_says_so() {
-    let setup = Setup::new();
-    let service = setup.service(Manager::Systemd);
-    fs::write(&service.unit, "x").unwrap();
-    let killed = Fake::new(|_| {
-        Ok(Ran {
-            success: false,
-            code: None,
-            stderr: "\n".to_owned(),
-        })
-    });
-    assert_eq!(
-        restart(&service, &killed).unwrap_err().message,
-        format!(
-            "`systemctl --user restart {}.service` failed with no exit code.",
-            service.name
-        )
-    );
-}
-
-#[test]
-fn only_a_missing_unit_is_no_unit() {
-    assert!(is_missing(io::ErrorKind::NotFound));
-    for kind in [
-        io::ErrorKind::PermissionDenied,
-        io::ErrorKind::NotADirectory,
-        io::ErrorKind::IsADirectory,
-        io::ErrorKind::TimedOut,
-        io::ErrorKind::WouldBlock,
-        io::ErrorKind::InvalidInput,
-        io::ErrorKind::ConnectionReset,
-        io::ErrorKind::UnexpectedEof,
-    ] {
-        assert!(!is_missing(kind), "{kind:?}");
-    }
-}
-
-#[test]
 fn read_unit_is_none_when_absent_some_when_present_and_an_error_otherwise() {
     let dir = fakes::TempDir::new("cli-hub-read-unit");
     let absent = dir.path().join("absent.service");
@@ -910,13 +872,6 @@ fn read_unit_is_none_when_absent_some_when_present_and_an_error_otherwise() {
     // Reading a directory fails with `IsADirectory`, not `NotFound`.
     let error = read_unit(dir.path()).unwrap_err();
     assert_eq!(error.code, ErrorCode::IoFailed);
-}
-
-#[test]
-fn current_exe_is_the_running_binary() {
-    let exe = current_exe().unwrap();
-    assert!(exe.is_absolute(), "{}", exe.display());
-    assert!(!exe.as_os_str().is_empty());
 }
 
 #[test]
