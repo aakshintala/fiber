@@ -1,7 +1,7 @@
 //! What the reviewer is shown (`docs/permissions.md`, "What it is shown"):
 //! each person's message and each tool call, nothing else.
 
-use contract::events::{Event, InputItem, KeptMessage};
+use contract::events::{Event, InputItem, KeptMessage, Outcome};
 use contract::provider::Input;
 use contract::shapes::{ContentPart, Origin};
 use contract::{ActionId, Seq};
@@ -31,7 +31,9 @@ pub(crate) struct Reviewed {
 /// own `seq`: a person message with none is skipped, so every person item
 /// carries the identity a later `reviewer_kept` names. A `reviewer_kept`
 /// keeps only the person items it names, in their current order, and drops
-/// every tool call.
+/// every tool call. A completed handoff drops every tool call and keeps
+/// every person item, releasing the calls' allocation: the reviewer's
+/// input follows the context window, not the transcript.
 pub(crate) fn render_reviewed(
     reviewed: &mut Vec<Reviewed>,
     event: &Event,
@@ -87,6 +89,21 @@ pub(crate) fn render_reviewed(
                 });
             }
         }
+        Event::HandoffCompleted(done) => {
+            // At a completed handoff the reviewer's input restarts from
+            // the person's messages that still bind
+            // (`docs/permissions.md`, "At a handoff"): earlier tool calls
+            // can never be reviewed again, so they leave the resident
+            // input while every person message stays for the selection
+            // that follows. Shrinking the allocation keeps a busy turn's
+            // peak from becoming permanent kept state. A failed or
+            // cancelled handoff leaves the context as it was
+            // (`docs/handoff.md`, "Recording").
+            if done.outcome == Outcome::Completed {
+                reviewed.retain(|item| matches!(item.shown, Shown::Person(_)));
+                reviewed.shrink_to_fit();
+            }
+        }
         Event::ReviewerKept(kept) => {
             reviewed.retain(|item| match &item.shown {
                 Shown::Person(message) => kept.kept.contains(message),
@@ -114,7 +131,7 @@ pub(crate) fn render_reviewed(
         Event::Notice(_) | Event::PreambleBuilt(_) | Event::ModelChanged(_) => {}
         Event::OpeningMessage(_) | Event::InstructionFile(_) | Event::DateChanged(_) => {}
         Event::SkillsChanged(_) | Event::SkillsResent(_) => {}
-        Event::HandoffStarted(_) | Event::HandoffCompleted(_) | Event::ContextNudged(_) => {}
+        Event::HandoffStarted(_) | Event::ContextNudged(_) => {}
         Event::McpServerFailed(_) | Event::McpServerReady(_) | Event::Reloaded(_) => {}
         Event::ExtensionsLoaded(_)
         | Event::ExtensionStateSet(_)

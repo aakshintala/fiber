@@ -197,12 +197,18 @@ pub struct Loop {
     /// When a reviewer block hands the call to a person.
     limits: BlockLimits,
     /// What the reviewer is shown, rendered from the same events as
-    /// `conversation` (`docs/permissions.md`, "What it is shown").
+    /// `conversation` (`docs/permissions.md`, "What it is shown"). A
+    /// completed handoff drops every tool call from it and keeps the
+    /// person's messages, releasing the calls' allocation, so the resident
+    /// state follows the context window, not the transcript
+    /// (`docs/performance.md`, "What a budget covers").
     reviewed: Vec<reviewer::Reviewed>,
     /// The reviewer's cache key: the session's id plus `reviewer`
     /// (`docs/prompt-cache.md`, "Rules for other areas").
     reviewer_key: String,
-    /// How much of `reviewed` the previous reviewer request sent.
+    /// How much of `reviewed` the previous reviewer request sent. A
+    /// completed handoff resets it, as a resume and a model switch do:
+    /// `None` means no earlier prefix may be reused.
     reviewer_sent: Option<usize>,
     /// Consecutive reviewer blocks; a reviewer allow or a person's answer
     /// to a review escalation resets it.

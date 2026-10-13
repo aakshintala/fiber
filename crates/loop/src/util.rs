@@ -6,7 +6,9 @@ use std::collections::{BTreeMap, hash_map::RandomState};
 use std::hash::BuildHasher;
 use std::sync::OnceLock;
 
-use contract::events::{Class, Event, TurnCompleted, TurnOutcome, Variables, VariablesSource};
+use contract::events::{
+    Class, Event, Outcome, TurnCompleted, TurnOutcome, Variables, VariablesSource,
+};
 use contract::provider::Input;
 use contract::shapes::Failure;
 use contract::{ActionId, TurnId};
@@ -107,7 +109,19 @@ impl crate::Loop {
             had: &mut self.changes.had,
             carry: &mut self.handoff.carry,
         }
-        .write(&self.log, &self.model.reference, event, turn, action)
+        .write(&self.log, &self.model.reference, event, turn, action)?;
+        // A completed handoff restarts the reviewer's input from the kept
+        // person's messages (`docs/permissions.md`, "At a handoff"), so
+        // the selection that follows re-sends from the start instead of
+        // reusing a prefix end that names the old input. A failed or
+        // cancelled handoff, or a refused append, changes nothing.
+        if matches!(
+            event,
+            Event::HandoffCompleted(done) if done.outcome == Outcome::Completed
+        ) {
+            self.reviewer_sent = None;
+        }
+        Ok(())
     }
 
     /// Writes `event` and renders it into the conversation.
