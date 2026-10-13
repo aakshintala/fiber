@@ -493,6 +493,11 @@ impl Paging<'_> {
                     .unwrap_or_default(),
             };
             outgoing = self.app.on_line(Line::Session(answer));
+            // The settle after the answer queues its own fetch into the
+            // search's unsent lines, past what `on_line` returns: drain
+            // them too, or an orphaned fetch blocks the wire forever.
+            // With the scan due this drains alone and settles nothing.
+            outgoing.extend(self.app.find_due(generation));
         }
         if outgoing.into_iter().next().is_some() {
             return Err("the search never settled".to_owned());
