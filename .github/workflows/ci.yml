@@ -835,7 +835,7 @@ jobs:
           if [ "${GITHUB_EVENT_NAME:-}" = pull_request ]; then
             base=$(gh api "repos/$GH_REPO/commits/$GITHUB_SHA" -q '.parents[0].sha // empty' || true)
             if [ -n "$base" ]; then
-              compare_files=$(gh api "repos/$GH_REPO/compare/$base...main" -q '.files[].filename' || true)
+              compare_files=$(gh api --paginate "repos/$GH_REPO/compare/$base...main" -q '.files[].filename' || true)
             fi
             if [ -n "$PR" ]; then
               pr_files=$(gh api --paginate "repos/$GH_REPO/pulls/$PR/files" -q '.[].filename' || true)
