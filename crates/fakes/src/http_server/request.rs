@@ -7,7 +7,10 @@
 //! checked with remaining-room arithmetic and overflow probes, never by
 //! allocating an advertised length.
 
+use std::fmt;
+
 use super::{Connection, FillOutcome, Limits};
+use crate::provider_server::{CREDENTIAL_HEADERS, fingerprint, fingerprint_query};
 
 /// Why a chunked body could not be decoded. The wire texts match the
 /// provider fake's, so its assertions survive the move.
@@ -20,7 +23,7 @@ const TRUNCATED: Malformed = "the chunked body ends before its framing does";
 /// body, and why its chunked framing is malformed, if it is. Malformed
 /// bodies keep what decoded before the failure; credential projection is
 /// the adapter's, never this reader's.
-#[derive(Clone, PartialEq, Eq, Debug)]
+#[derive(Clone, PartialEq, Eq)]
 pub(crate) struct ParsedRequest {
     pub(crate) method: String,
     pub(crate) target: String,
@@ -33,7 +36,7 @@ pub(crate) struct ParsedRequest {
 }
 
 /// What one request read found.
-#[derive(Clone, PartialEq, Eq, Debug)]
+#[derive(Clone, PartialEq, Eq)]
 pub(crate) enum RequestOutcome {
     /// The whole head, and the body or its decoded prefix.
     Complete(ParsedRequest),
@@ -43,6 +46,59 @@ pub(crate) enum RequestOutcome {
     Stopped,
     /// The head or declared length is unusable: the reason names it.
     Invalid(&'static str),
+}
+
+/// A request header for `Debug`: credential values appear only as
+/// fingerprints, as in the recorded request.
+struct ShownHeader<'a>(&'a (String, String));
+
+impl fmt::Debug for ShownHeader<'_> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        let (name, value) = self.0;
+        if CREDENTIAL_HEADERS.contains(&name.as_str()) {
+            write!(f, "({name:?}, {:?})", fingerprint(value))
+        } else {
+            write!(f, "({name:?}, {value:?})")
+        }
+    }
+}
+
+/// Headers for `Debug`: each in received order, credentials fingerprinted.
+struct ShownHeaders<'a>(&'a [(String, String)]);
+
+impl fmt::Debug for ShownHeaders<'_> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_list()
+            .entries(self.0.iter().map(ShownHeader))
+            .finish()
+    }
+}
+
+impl fmt::Debug for ParsedRequest {
+    /// The request with credentials redacted: credential header values
+    /// and any `key` query parameter appear only as fingerprints, so a
+    /// failure or log line never holds the credential.
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("ParsedRequest")
+            .field("method", &self.method)
+            .field("target", &fingerprint_query(&self.target))
+            .field("headers", &ShownHeaders(&self.headers))
+            .field("body", &self.body)
+            .field("malformed", &self.malformed)
+            .finish()
+    }
+}
+
+impl fmt::Debug for RequestOutcome {
+    /// The outcome with credentials redacted through the request.
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            RequestOutcome::Complete(request) => f.debug_tuple("Complete").field(request).finish(),
+            RequestOutcome::Eof => write!(f, "Eof"),
+            RequestOutcome::Stopped => write!(f, "Stopped"),
+            RequestOutcome::Invalid(why) => f.debug_tuple("Invalid").field(why).finish(),
+        }
+    }
 }
 
 /// Whether `len` fits `cap`: equality admitted, one more refused, probed
@@ -60,14 +116,22 @@ enum ByteEnd {
 }
 
 fn next_byte(conn: &mut Connection, phase: &'static str) -> ByteEnd {
+    if !conn.consume_check(phase) {
+        return ByteEnd::Stopped;
+    }
     if let Some(byte) = conn.buffered() {
         return ByteEnd::Byte(byte);
     }
     match conn.fill(phase) {
-        FillOutcome::Held(_) => match conn.buffered() {
-            Some(byte) => ByteEnd::Byte(byte),
-            None => ByteEnd::Eof,
-        },
+        FillOutcome::Held(_) => {
+            if !conn.consume_check(phase) {
+                return ByteEnd::Stopped;
+            }
+            match conn.buffered() {
+                Some(byte) => ByteEnd::Byte(byte),
+                None => ByteEnd::Eof,
+            }
+        }
         FillOutcome::Eof => ByteEnd::Eof,
         FillOutcome::Stopped => ByteEnd::Stopped,
     }

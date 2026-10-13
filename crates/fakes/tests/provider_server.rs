@@ -415,17 +415,12 @@ fn a_request_line_at_the_cap_boundary_is_accepted() {
     let server = ProviderServer::start([Response::status(200, "ok")]).unwrap();
     // A 65536-byte request line with its terminator is admitted: the
     // target carries the padding, the method and version stay short.
-    let pad = "p".repeat(65536 - len("POST / HTTP/1.1\r\n"));
+    let pad = "p".repeat(65536 - "POST / HTTP/1.1\r\n".len());
     let request = format!("POST /{pad} HTTP/1.1\r\nHost: fake\r\n\r\n");
     assert_eq!(request.lines().next().unwrap().len() + 2, 65536);
     let reply = exchange(&server, request.as_bytes());
     assert_eq!(reply.status, 200);
     assert_eq!(server.requests().len(), 1);
-}
-
-/// The length of `text` in bytes.
-fn len(text: &str) -> usize {
-    text.len()
 }
 
 #[test]

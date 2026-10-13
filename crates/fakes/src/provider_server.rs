@@ -24,8 +24,8 @@ use crate::http_server::{
 
 /// Header names whose values are credentials, lowercase. Their values are
 /// replaced by a fingerprint before a request is recorded, as is a `key`
-/// query parameter, which Google's API also accepts (`docs/model-routing.md`).
-const CREDENTIAL_HEADERS: [&str; 6] = [
+/// query parameter, which Google's API also accepts (`docs/model-routing.md`). Shared with the request reader's redacted `Debug`.
+pub(crate) const CREDENTIAL_HEADERS: [&str; 6] = [
     "authorization",
     "proxy-authorization",
     "x-api-key",
@@ -654,8 +654,8 @@ fn head(response: &Response, with_length: bool) -> String {
 }
 
 /// The request target with any `key` query parameter's value replaced by
-/// its fingerprint.
-fn fingerprint_query(target: &str) -> String {
+/// its fingerprint. Shared with the request reader's redacted `Debug`.
+pub(crate) fn fingerprint_query(target: &str) -> String {
     let Some((path, query)) = target.split_once('?') else {
         return target.to_owned();
     };

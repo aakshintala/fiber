@@ -615,3 +615,47 @@ fn trailer_count_admits_the_count_and_refuses_one_more() {
     };
     assert_eq!(crossed.malformed, Some("there are too many trailers"));
 }
+
+/// `Debug` redacts credentials: an `Authorization` header and a `key`
+/// query parameter appear only as fingerprints, never as bytes, through
+/// both the request and its outcome. A derived `Debug` would print them
+/// raw, so this fails against the derive.
+#[test]
+fn debug_output_redacts_credentials() {
+    let credential = "Bearer secret-token-123";
+    let key = "secret-query-key-456";
+    let request = complete(read_once(
+        bounds(),
+        format!(
+            "GET /v1/models?key={key} HTTP/1.1\r\nHost: fake\r\nAuthorization: {credential}\r\nX-Custom: plain\r\n\r\n"
+        )
+        .as_bytes(),
+    ));
+    let shown = format!("{request:?}");
+    assert!(
+        !shown.contains(credential),
+        "no credential bytes in the request's Debug, got: {shown}"
+    );
+    assert!(
+        !shown.contains(key),
+        "no query-key bytes in the request's Debug, got: {shown}"
+    );
+    assert!(
+        shown.contains(&crate::provider_server::fingerprint(credential)),
+        "the credential's fingerprint names it, got: {shown}"
+    );
+    assert!(
+        shown.contains(&crate::provider_server::fingerprint(key)),
+        "the query key's fingerprint names it, got: {shown}"
+    );
+    assert!(
+        shown.contains("plain"),
+        "a non-credential header still shows, got: {shown}"
+    );
+    let outcome = RequestOutcome::Complete(request);
+    let shown = format!("{outcome:?}");
+    assert!(
+        !shown.contains(credential) && !shown.contains(key),
+        "no credential bytes in the outcome's Debug, got: {shown}"
+    );
+}

@@ -2,7 +2,7 @@
 //! through its own seam (`http_server.rs`).
 
 use std::io::Write;
-use std::net::{SocketAddr, TcpStream};
+use std::net::{SocketAddr, TcpListener, TcpStream};
 use std::sync::{
     Arc, PoisonError,
     atomic::{AtomicBool, Ordering},
@@ -1726,4 +1726,398 @@ fn a_wake_generation_pins_both_sides() {
     assert!(!woken(7, 7), "the same generation is no wake");
     assert!(woken(7, 8), "a newer generation wakes");
     assert!(woken(8, 7), "an older generation past a wrap wakes");
+}
+
+/// The consume gate pins each budget directly: an expired injected
+/// budget panics naming the request and phase, a spent real guard
+/// panics naming the guard, shutdown ends stopped, and a live budget
+/// reads. No socket timing decides any case: the budgets are built,
+/// never waited out.
+#[test]
+fn consume_checks_gate_buffered_bytes() {
+    let clock = fake_clock();
+    let server = bind(&clock);
+    let client = connect(&server);
+    let budget = |request: Duration, guard: Duration| {
+        RequestBudget::start_on(&(clock.clone() as Arc<dyn Clock>), request, guard)
+    };
+    let conn = |request: Duration, guard: Duration| {
+        Connection::new(
+            client.try_clone().expect("the test clones its stream"),
+            budget(request, guard),
+            "the test request".to_owned(),
+            Arc::clone(&server.shared),
+        )
+    };
+    assert!(
+        conn(Duration::from_secs(10), Duration::from_secs(45))
+            .consume_check("to read the test request"),
+        "a live budget consumes"
+    );
+    let caught = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        conn(Duration::from_secs(0), Duration::from_secs(45))
+            .consume_check("to read the test request");
+    }));
+    let message = failure_text(caught, "the expired consume check");
+    assert!(
+        message.contains("the test request"),
+        "expiry names its request, got: {message}"
+    );
+    assert!(
+        message.contains("to read the test request"),
+        "expiry names its phase, got: {message}"
+    );
+    let caught = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        conn(Duration::from_secs(10), Duration::from_secs(0))
+            .consume_check("to read the test request");
+    }));
+    let message = failure_text(caught, "the spent guard's consume check");
+    assert!(
+        message.contains("real guard"),
+        "a spent guard names itself, got: {message}"
+    );
+    assert!(
+        message.contains("the test request"),
+        "a spent guard names its request, got: {message}"
+    );
+    assert!(server.shutdown(), "shutdown stops the server");
+    assert!(
+        !conn(Duration::from_secs(10), Duration::from_secs(45))
+            .consume_check("to read the test request"),
+        "shutdown ends the consume stopped"
+    );
+}
+
+/// Buffers one connection's whole request on a spawned thread, so the
+/// test's deadline bounds the buffering and the request below is proven
+/// fully held before the bound moves.
+fn buffer_whole_request(server: &HttpServer, name: &str, request: &[u8]) -> Connection {
+    let (conn_tx, conn_rx) = mpsc::channel();
+    thread::scope(|scope| {
+        scope.spawn(|| {
+            let mut conn = server.accept_expected(name).expect("a client connects");
+            loop {
+                match conn.fill("to buffer the request") {
+                    FillOutcome::Held(held) if held == request.len() => break,
+                    FillOutcome::Held(_) => continue,
+                    FillOutcome::Eof => panic!("the peer closed before buffering the request"),
+                    FillOutcome::Stopped => panic!("shutdown ended the buffering"),
+                }
+            }
+            conn_tx
+                .send(conn)
+                .expect("the test waits for the buffered read");
+        });
+        let mut client = TcpStream::connect(server.addr()).expect("the test connects");
+        client.write_all(request).expect("the request writes");
+        Deadline::after(OP)
+            .recv(&conn_rx)
+            .expect("the whole request buffers")
+    })
+}
+
+/// An expired budget with a fully-buffered request still fails naming
+/// the request and phase: already-held bytes never complete it.
+#[test]
+fn an_expired_budget_with_a_fully_buffered_request_still_fails_naming_it() {
+    let clock = fake_clock();
+    let server = bind(&clock);
+    let request = b"GET /late HTTP/1.1\r\nHost: fake\r\n\r\n";
+    let mut conn = buffer_whole_request(&server, "the buffered request", request);
+    // The whole request is held; the bound expires with no further
+    // client bytes, so only the consume gate decides the read.
+    clock.advance(Duration::from_secs(10));
+    let caught = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        request::read_request(&mut conn)
+    }));
+    let message = failure_text(caught, "the expired buffered read");
+    assert!(
+        message.contains("the buffered request"),
+        "the failure names its request, got: {message}"
+    );
+    assert!(
+        message.contains("to read the request line"),
+        "the failure names its phase, got: {message}"
+    );
+}
+
+/// A shutdown racing buffered bytes ends stopped, never a completed
+/// response: the held request is not answered from the buffer.
+#[test]
+fn shutdown_racing_buffered_bytes_ends_stopped_never_complete() {
+    let clock = fake_clock();
+    let server = bind(&clock);
+    let request = b"GET /held HTTP/1.1\r\nHost: fake\r\n\r\n";
+    let mut conn = buffer_whole_request(&server, "the held request", request);
+    assert!(server.shutdown(), "shutdown stops the server");
+    assert!(
+        matches!(
+            request::read_request(&mut conn),
+            request::RequestOutcome::Stopped
+        ),
+        "shutdown ends the buffered read stopped, never complete"
+    );
+}
+
+/// An origin that accepts one connection and holds it until the peer
+/// goes away: the tunnel's far end. Its thread ends on the peer's
+/// close in every path below, so no join outlives its test.
+fn hold_origin() -> (SocketAddr, mpsc::Receiver<()>) {
+    let listener = TcpListener::bind("127.0.0.1:0").expect("the origin binds");
+    let addr = listener.local_addr().expect("the origin has an address");
+    let (ended_tx, ended_rx) = mpsc::channel();
+    thread::Builder::new()
+        .name("fakes-http-test-origin".to_owned())
+        .spawn(move || {
+            let (mut stream, _) = listener.accept().expect("the tunnel reaches the origin");
+            let mut rest = Vec::new();
+            match std::io::Read::read_to_end(&mut stream, &mut rest) {
+                Ok(_) | Err(_) => {}
+            }
+            match ended_tx.send(()) {
+                Ok(()) | Err(_) => {}
+            }
+        })
+        .expect("the origin serves");
+    (addr, ended_rx)
+}
+
+/// Accepts one connection for a tunnel test: the client connects
+/// first, so the accept finds it pending.
+fn accept_for_tunnel(server: &HttpServer, name: &str) -> (Connection, TcpStream) {
+    let client = TcpStream::connect(server.addr()).expect("the test connects");
+    let conn = server.accept_expected(name).expect("a client connects");
+    (conn, client)
+}
+
+/// A handshake the peer never reads fails within its bound naming the
+/// target: the writer is past capacity, so the 200 parks on the injected
+/// clock instead of completing. Sockets alone cannot guarantee
+/// send-buffer exhaustion, so a finite writer forces the slow peer.
+#[test]
+fn a_handshake_the_peer_never_reads_fails_within_its_bound() {
+    let clock = fake_clock();
+    let server = bind(&clock);
+    let acks = server.test_acknowledgments();
+    let target = "127.0.0.1:1".to_owned();
+    let expected = target.clone();
+    let stop = Arc::new(AtomicBool::new(false));
+    let (done_tx, done_rx) = mpsc::channel();
+    // The request takes the target's name, as the tunnel's own
+    // handshake context does: expiry names the target.
+    let (mut conn, _client) = accept_for_tunnel(&server, &target);
+    let op = conn.op_budget();
+    let (_stream, mut ctx) = conn.parts(&op);
+    thread::scope(|scope| {
+        // Past capacity with the drain held shut: every write parks, as
+        // behind a peer that never reads.
+        let mut client = TestWriter::finished(0, Arc::clone(&stop));
+        let mut origin = TestWriter::finished(0, Arc::clone(&stop));
+        scope.spawn(move || {
+            let caught = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                tunnel_handshake(&mut client, &mut origin, &[], &mut ctx)
+            }));
+            match done_tx.send(caught) {
+                Ok(()) | Err(_) => {}
+            }
+        });
+        let ack = loop {
+            let ack = next_acknowledgment(&acks, "the handshake's clock wait");
+            if ack.phase == "to write the tunnel handshake" {
+                break ack;
+            }
+        };
+        assert!(
+            clock.await_thread_parked(ack.thread, ack.until, OP),
+            "the handshake parks on the clock before it moves"
+        );
+        clock.advance(Duration::from_secs(10));
+        let caught: thread::Result<bool> =
+            Deadline::after(OP).recv_or_fail(&done_rx, "the stalled handshake");
+        let message = failure_text(caught, "the stalled handshake");
+        assert!(
+            message.contains(&expected),
+            "the failure names its target, got: {message}"
+        );
+        assert!(
+            message.contains("to write the tunnel handshake"),
+            "the failure names its phase, got: {message}"
+        );
+    });
+}
+
+/// A tunnel direction the peer never feeds fails within its bound
+/// naming the target: both sides stay open and silent, so only the
+/// copy's deadline decides it.
+#[test]
+fn a_stalled_tunnel_direction_fails_within_its_bound() {
+    let clock = fake_clock();
+    let server = bind(&clock);
+    let acks = server.test_acknowledgments();
+    let (origin_addr, origin_ended) = hold_origin();
+    let target = format!("{origin_addr}");
+    let expected = target.clone();
+    let (done_tx, done_rx) = mpsc::channel();
+    thread::scope(|scope| {
+        let (conn, _client) = accept_for_tunnel(&server, "the tunnel request");
+        let origin = TcpStream::connect(origin_addr).expect("the tunnel reaches the origin");
+        scope.spawn(move || {
+            let caught = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                conn.tunnel(&target, origin)
+            }));
+            match done_tx.send(caught) {
+                Ok(()) | Err(_) => {}
+            }
+        });
+        // Both sides stay open and silent: the client-to-origin copy
+        // parks waiting for bytes that never come.
+        let ack = loop {
+            let ack = next_acknowledgment(&acks, "the copy's clock wait");
+            if ack.phase == "to copy the client to the origin" {
+                break ack;
+            }
+        };
+        assert!(
+            clock.await_thread_parked(ack.thread, ack.until, OP),
+            "the copy parks on the clock before it moves"
+        );
+        clock.advance(Duration::from_secs(10));
+        let caught: thread::Result<TunnelEnd> =
+            Deadline::after(OP).recv_or_fail(&done_rx, "the stalled copy");
+        let message = failure_text(caught, "the stalled copy");
+        assert!(
+            message.contains(&expected),
+            "the failure names its target, got: {message}"
+        );
+        assert!(
+            message.contains("to copy the client to the origin"),
+            "the failure names its phase, got: {message}"
+        );
+        // The panic drops the tunnel's sockets and shutdown reaps the
+        // other direction: the origin sees the end either way.
+        assert!(server.shutdown(), "shutdown reaps the tunnel");
+        Deadline::after(OP).recv_or_fail(&origin_ended, "the origin's end");
+    });
+}
+
+/// Shutdown during the tunnel handshake stops it: the parked 200 never
+/// sends, and no copy starts.
+#[test]
+fn shutdown_during_the_tunnel_handshake_stops_it() {
+    let clock = fake_clock();
+    let server = bind(&clock);
+    let acks = server.test_acknowledgments();
+    let target = "127.0.0.1:1".to_owned();
+    let stop = Arc::new(AtomicBool::new(false));
+    let (done_tx, done_rx) = mpsc::channel();
+    let (mut conn, _client) = accept_for_tunnel(&server, &target);
+    let op = conn.op_budget();
+    let (_stream, mut ctx) = conn.parts(&op);
+    thread::scope(|scope| {
+        let mut client = TestWriter::finished(0, Arc::clone(&stop));
+        let mut origin = TestWriter::finished(0, Arc::clone(&stop));
+        scope.spawn(move || {
+            let held = tunnel_handshake(&mut client, &mut origin, &[], &mut ctx);
+            match done_tx.send(held) {
+                Ok(()) | Err(_) => {}
+            }
+        });
+        let ack = loop {
+            let ack = next_acknowledgment(&acks, "the handshake's clock wait");
+            if ack.phase == "to write the tunnel handshake" {
+                break ack;
+            }
+        };
+        assert!(
+            clock.await_thread_parked(ack.thread, ack.until, OP),
+            "the handshake parks on the clock before it moves"
+        );
+        assert!(server.shutdown(), "shutdown stops the handshake");
+        assert!(
+            !Deadline::after(OP).recv_or_fail(&done_rx, "the stopped handshake"),
+            "shutdown ends the handshake stopped"
+        );
+    });
+}
+
+/// Shutdown before tunnel registration stops it without copying: the
+/// handshake already succeeded, but the atomic check sees stopping and
+/// no copy starts, so nothing is left for the drain to miss.
+#[test]
+fn shutdown_before_tunnel_registration_stops_it_without_copying() {
+    let clock = fake_clock();
+    let server = bind(&clock);
+    let (origin_addr, origin_ended) = hold_origin();
+    let target = format!("{origin_addr}");
+    let (done_tx, done_rx) = mpsc::channel();
+    thread::scope(|scope| {
+        let (conn, _client) = accept_for_tunnel(&server, "the tunnel request");
+        let origin = TcpStream::connect(origin_addr).expect("the tunnel reaches the origin");
+        assert!(server.shutdown(), "shutdown stops the server first");
+        scope.spawn(move || {
+            let end = conn.tunnel(&target, origin);
+            match done_tx.send(end) {
+                Ok(()) | Err(_) => {}
+            }
+        });
+        assert_eq!(
+            Deadline::after(OP).recv_or_fail(&done_rx, "the stopped tunnel"),
+            TunnelEnd::Stopped,
+            "shutdown ends the tunnel stopped before any copy"
+        );
+        assert!(
+            lock(&server.shared.tunnels).live.is_empty(),
+            "no tunnel registered past shutdown"
+        );
+        Deadline::after(OP).recv_or_fail(&origin_ended, "the origin's end");
+    });
+}
+
+/// One connected socket pair, held open: break-socket dupes for the
+/// registration tests below.
+fn socket_pair() -> (TcpStream, TcpStream) {
+    let listener = TcpListener::bind("127.0.0.1:0").expect("the pair binds");
+    let addr = listener.local_addr().expect("the pair has an address");
+    let probe = TcpStream::connect(addr).expect("the pair connects");
+    let (held, _) = listener.accept().expect("the pair accepts");
+    (probe, held)
+}
+
+/// Registration while live claims an id with its break sockets: the
+/// drain below would break a copy parked on them.
+#[test]
+fn registration_while_live_claims_an_id() {
+    let clock = fake_clock();
+    let server = bind(&clock);
+    let (probe, held) = socket_pair();
+    assert_eq!(
+        server.shared.register_tunnel(&probe, &held),
+        Some(0),
+        "the first live registration claims id zero"
+    );
+    assert_eq!(
+        lock(&server.shared.tunnels).live.len(),
+        1,
+        "the claim registers its break sockets"
+    );
+}
+
+/// Registration past shutdown claims nothing: the atomic check sees
+/// stopping under the same lock as the push, so no copy starts and the
+/// drain has nothing to miss. Removing the check registers instead.
+#[test]
+fn registration_past_shutdown_claims_nothing() {
+    let clock = fake_clock();
+    let server = bind(&clock);
+    let (probe, held) = socket_pair();
+    assert!(server.shutdown(), "shutdown stops the server");
+    assert_eq!(
+        server.shared.register_tunnel(&probe, &held),
+        None,
+        "no tunnel registers past shutdown"
+    );
+    assert!(
+        lock(&server.shared.tunnels).live.is_empty(),
+        "the refused claim registers nothing"
+    );
 }
