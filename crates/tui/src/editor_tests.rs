@@ -253,17 +253,20 @@ fn an_editor_ended_by_a_signal_keeps_the_draft_and_names_it() {
 /// ended and the wait ends with the signal's number, so the loop quits
 /// with 128 plus it instead of waiting out the editor. The command ends
 /// `; :`, so ending only the shell would leave the script and its sleeper
-/// behind; the script acknowledges the block first, so the raise cannot
-/// land before the wait is active. Each test runs in its own process, so
-/// the raise reaches only this test.
+/// behind. The script acknowledges both live processes before blocking, so
+/// the raise cannot land until the script and its sleeper both run: the
+/// line carries the script's pid and the sleeper's, and the absence
+/// assertions below would pass vacuously if either never started. Each
+/// test runs in its own process, so the raise reaches only this test.
 #[test]
 fn a_shutdown_signal_ends_a_blocked_editor_wait() {
     use signal_hook::consts::SIGTERM;
-    crate::event_loop::register_first().unwrap_or_else(|err| panic!("register: {err}"));
     // No `exec`: the script stays to name the tree, and the sleeper is a
     // copy under a path only this test names, so its absence proves the
-    // group signal reached past the shell.
-    let fake = Fake::new("echo $$ > \"$READY\"\ncp /bin/sleep $OUT/leaf\n$OUT/leaf 30\n");
+    // group signal reached past the shell. The sleeper starts before the
+    // acknowledgement, and `wait` keeps the script beside it.
+    let fake =
+        Fake::new("cp /bin/sleep $OUT/leaf\n$OUT/leaf 30 & echo \"$$ $!\" > \"$READY\"\nwait\n");
     let leaf = fake.out("leaf").display().to_string();
     let script = fake.script.display().to_string();
     let command = fake.command("", "; :");

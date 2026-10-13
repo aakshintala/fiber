@@ -8,14 +8,13 @@ pub(crate) mod batch;
 use batch::{batch, batchable};
 
 use std::collections::VecDeque;
-use std::ffi::c_int;
 use std::fs::File;
 use std::io::{self, Write};
 use std::ops::RangeInclusive;
 use std::os::unix::net::UnixStream;
 use std::path::PathBuf;
 use std::sync::Arc;
-use std::sync::atomic::{AtomicBool, AtomicI32, Ordering};
+use std::sync::atomic::AtomicBool;
 use std::sync::mpsc::{self, Receiver, Sender};
 
 use contract::clock::Clock;
@@ -56,13 +55,6 @@ pub fn run(
     // printing the resume lines. Without the registration a signal would
     // kill the process without restoring, so a refused one fails before
     // any frame.
-    // The first-delivered recorder goes in first: signal-hook runs a
-    // signal's handlers in registration order, so the record precedes
-    // the iterator's wakeup and the consumer always finds it. A refused
-    // recorder fails before any frame, as a refused iterator does.
-    if register_first().is_err() {
-        return 1;
-    }
     let Ok(term_signals) = Signals::new([SIGTERM, SIGHUP]) else {
         return 1;
     };
@@ -202,52 +194,15 @@ pub fn run(
     code
 }
 
-/// The first of SIGTERM and SIGHUP delivered to this process, or 0
-/// while none has arrived. The iterator takes co-pending signals in an
-/// arbitrary order, so the handlers below record the delivered order and
-/// the consumer sends the record: the first signal's code wins, for every
-/// later signal too.
-static FIRST: AtomicI32 = AtomicI32::new(0);
-
-/// The first delivered shutdown signal, or 0 while none has arrived.
-pub(crate) fn first_signal() -> c_int {
-    FIRST.load(Ordering::SeqCst)
-}
-
-/// Records the handlers' signal as the first delivered, leaving a
-/// recorded one alone: the first compare-exchange wins.
-fn record_first(signal: c_int) {
-    let _recorded = FIRST.compare_exchange(0, signal, Ordering::SeqCst, Ordering::SeqCst);
-}
-
-/// Records the first of SIGTERM and SIGHUP delivered, before the
-/// iterator below wakes its consumer. No safe signal-hook helper keeps
-/// the first: `flag` overwrites with the last. Register before the
-/// iterator, so the record precedes its wakeup.
-#[allow(
-    unsafe_code,
-    reason = "first-delivered SIGTERM/SIGHUP capture: the handler only CASes an AtomicI32"
-)]
-pub(crate) fn register_first() -> io::Result<()> {
-    for signal in [SIGTERM, SIGHUP] {
-        // SAFETY: async-signal-safe: the handler only compare-exchanges
-        // `FIRST`, which never allocates, blocks or touches a lock.
-        unsafe { signal_hook::low_level::register(signal, move || record_first(signal)) }?;
-    }
-    Ok(())
-}
-
 /// Turns SIGTERM and SIGHUP into [`Input::Signal`] on their own thread,
-/// sending the first delivered for every one, so the first signal's code
-/// wins. Left blocked on quit; it ends with the process.
+/// in the iterator's order, as the session's signal handling takes it
+/// (`docs/invocation.md`, "Three signals, one path"): co-pending
+/// signals have no bound order, and no test pins one. Left blocked on
+/// quit; it ends with the process.
 fn spawn_signal(mut signals: Signals, tx: Sender<Input>) {
     let signal = crate::sources::builder("tui-signal").spawn(move || {
         for signal in signals.forever() {
-            // 0 only when the iterator woke without a recorded signal,
-            // which registration order rules out: keep the taken one then.
-            let first = first_signal();
-            let first = if first == 0 { signal } else { first };
-            if tx.send(Input::Signal(first)).is_err() {
+            if tx.send(Input::Signal(signal)).is_err() {
                 return;
             }
         }

@@ -1271,7 +1271,6 @@ fn ctrl_g_puts_the_editors_text_in_the_draft_and_the_loop_reads_on() {
 #[test]
 fn a_shutdown_signal_while_the_editor_runs_quits_with_128_plus_it() {
     use signal_hook::consts::SIGTERM;
-    super::register_first().unwrap_or_else(|err| panic!("register: {err}"));
     let pair = open();
     // The watcher drains what the terminal is sent, so no write blocks.
     let _frames = watch(&pair.main, Vec::new());
@@ -1340,7 +1339,6 @@ fn a_shutdown_signal_while_the_editor_runs_quits_with_128_plus_it() {
 #[test]
 fn a_shutdown_signal_while_a_file_editor_runs_quits_with_128_plus_it() {
     use signal_hook::consts::SIGTERM;
-    super::register_first().unwrap_or_else(|err| panic!("register: {err}"));
     let pair = open();
     // The watcher drains what the terminal is sent, so no write blocks.
     let _frames = watch(&pair.main, Vec::new());
@@ -2696,10 +2694,10 @@ fn a_signal_quits_with_128_plus_its_number() {
     assert_eq!(feed(&mut lp, vec![Input::Signal(SIGHUP)]), 129);
 }
 
-/// Two signals queued at once: the first one's code wins, whichever order
-/// they arrived in.
+/// Two signals queued at once: the loop quits with the first queued one's
+/// code, in channel order.
 #[test]
-fn the_first_signal_wins() {
+fn the_first_queued_signal_wins() {
     use signal_hook::consts::{SIGHUP, SIGTERM};
     let (mut lp, _) = new_loop(TestBackend::new(60, 12), None);
     assert_eq!(
@@ -2740,69 +2738,6 @@ fn a_signal_ends_a_history_wait_at_once() {
         .unwrap_or_else(|err| panic!("waited {DEADLINE:?} for the history wait to end: {err}"));
     assert_eq!(result, Err(super::LOST.to_owned()));
     assert_eq!(held, 1, "the signal is held for after the frame");
-}
-
-/// Co-pending SIGTERM and SIGHUP keep the first delivered: both raises
-/// land before the consumer starts, so it sends from co-pending signals
-/// and either take order still reads the first twice. Each test runs in
-/// its own process, so the record starts at none and the raises reach
-/// only this test.
-#[test]
-fn co_pending_signals_keep_term_delivered_first() {
-    use signal_hook::consts::{SIGHUP, SIGTERM};
-    assert_eq!(co_pending_first(SIGTERM, SIGHUP), (SIGTERM, SIGTERM));
-}
-
-/// Co-pending SIGTERM and SIGHUP keep the first delivered, HUP first.
-#[test]
-fn co_pending_signals_keep_hup_delivered_first() {
-    use signal_hook::consts::{SIGHUP, SIGTERM};
-    assert_eq!(co_pending_first(SIGHUP, SIGTERM), (SIGHUP, SIGHUP));
-}
-
-/// Raises `first`, holds the raise of `second` until the first is
-/// recorded, then starts the consumer and reads the two signals it sends:
-/// both carry the first delivered, the later one included.
-fn co_pending_first(first: std::ffi::c_int, second: std::ffi::c_int) -> (i32, i32) {
-    super::register_first().unwrap_or_else(|err| panic!("register: {err}"));
-    let (tx, rx) = mpsc::channel();
-    let signals = signal_hook::iterator::Signals::new([first, second])
-        .unwrap_or_else(|err| panic!("register: {err}"));
-    signal_hook::low_level::raise(first).unwrap_or_else(|err| panic!("raise: {err}"));
-    // The second raise waits for the first's record, so both signals are
-    // raised before the consumer starts: it finds them co-pending, and
-    // either take order still sends the first delivered twice.
-    while super::first_signal() != first {
-        std::hint::spin_loop();
-    }
-    signal_hook::low_level::raise(second).unwrap_or_else(|err| panic!("raise: {err}"));
-    // The consumer starts after both raises, so the test forces
-    // co-pending delivery instead of draining the first before the second
-    // arrives.
-    super::spawn_signal(signals, tx);
-    let mut got = Vec::new();
-    for _ in 0..2 {
-        match Deadline::after(DEADLINE)
-            .recv(&rx)
-            .unwrap_or_else(|err| panic!("waited {DEADLINE:?} for the signal: {err}"))
-        {
-            Input::Signal(signal) => got.push(signal),
-            Input::Bytes(_)
-            | Input::Hub(_)
-            | Input::Connected(..)
-            | Input::ConnectFailed(_)
-            | Input::Disconnected
-            | Input::Resize
-            | Input::Files { .. }
-            | Input::FindDue(_)
-            | Input::Image { .. }
-            | Input::Viewed { .. }
-            | Input::Models(_)
-            | Input::Login { .. }
-            | Input::Tick => panic!("the signal thread sent something else"),
-        }
-    }
-    (got[0], got[1])
 }
 
 /// The signal thread maps each taken signal to [`Input::Signal`] with its
