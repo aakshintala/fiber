@@ -1427,9 +1427,10 @@ fn thought_rows(text: &str, w: usize, ind: usize) -> Vec<Row> {
         .collect()
 }
 /// An opened call shows at most twenty rendered rows under its ledger
-/// row; headers (the shell's `$ command`, a search file's path) are free,
-/// every body line counts once wrapped, and a body line that would
-/// overflow the cap is dropped whole with the rest.
+/// row; the shell's `$ command` header is free, a search file's path
+/// counts with its matches, every other body line counts once wrapped,
+/// and a body line that would overflow the cap is dropped whole with
+/// the rest.
 const OPEN_MAX: usize = 20;
 
 /// One opened row: the eight-column indent under the ledger row, then the spans.
@@ -1831,9 +1832,11 @@ fn call_rows(c: &Call, w: usize) -> Vec<Row> {
             }
             let pat = search_pattern(c.args["command"].as_str().unwrap_or(""));
             // path headers in first-seen order, then each file's matches:
-            // headers are chrome and free of the cap, match and context
-            // lines count once cut to the width, strays pass through
-            let mut items: Vec<(bool, Vec<Row>)> = vec![];
+            // headers count in the cap with the matches, so a header
+            // whose matches are omitted is omitted too; match and
+            // context lines count once cut to the width, strays pass
+            // through
+            let mut groups: Vec<(Option<Row>, Vec<Vec<Row>>)> = vec![];
             let mut current: Option<String> = None;
             for l in content.lines() {
                 if l == "--" {
@@ -1842,28 +1845,52 @@ fn call_rows(c: &Call, w: usize) -> Vec<Row> {
                 match grep_line(l) {
                     Some((path, n, text, _)) => {
                         if current.as_deref() != Some(path.as_str()) {
-                            items.push((true, vec![opened_row(vec![sp(path.clone(), bold())])]));
+                            groups.push((Some(opened_row(vec![sp(path.clone(), bold())])), vec![]));
                             current = Some(path.clone());
                         }
-                        items.push((false, vec![opened_numbered(n, match_spans(&text, pat), w)]));
+                        groups
+                            .last_mut()
+                            .expect("a match always opens its group")
+                            .1
+                            .push(vec![opened_numbered(n, match_spans(&text, pat), w)]);
                     }
-                    None => items.push((false, opened_plain(l, Style::new(), w))),
+                    None => groups.push((None, vec![opened_plain(l, Style::new(), w)])),
                 }
             }
+            // groups emit in order under the cap; a group that fits no
+            // match is dropped whole, header with it, and everything
+            // past the first dropped line is dropped too
             let mut out = vec![];
             let mut used = 0;
             let mut dropped = 0;
-            for (header, rows) in items {
-                if header {
-                    out.extend(rows);
+            let mut done = false;
+            for (header, lines) in &groups {
+                if done {
+                    dropped += lines.len();
                     continue;
                 }
-                if used + rows.len() > OPEN_MAX {
-                    dropped += 1;
+                let head = usize::from(header.is_some());
+                let mut fit = 0;
+                let mut fit_rows = 0;
+                while fit < lines.len() && used + head + fit_rows + lines[fit].len() <= OPEN_MAX {
+                    fit_rows += lines[fit].len();
+                    fit += 1;
+                }
+                if used + head > OPEN_MAX || (!lines.is_empty() && fit == 0) {
+                    dropped += lines.len();
+                    done = true;
                     continue;
                 }
-                used += rows.len();
-                out.extend(rows);
+                if let Some(h) = header {
+                    out.push(h.clone());
+                    used += 1;
+                }
+                for line in lines.iter().take(fit) {
+                    used += line.len();
+                    out.extend(line.iter().cloned());
+                }
+                dropped += lines.len() - fit;
+                done = fit < lines.len();
             }
             opened_more(&mut out, dropped);
             out
@@ -8602,19 +8629,45 @@ mod tests {
     }
 
     #[test]
-    fn an_opened_search_clips_matches_with_headers_free() {
+    fn an_opened_search_counts_its_header_in_the_cap() {
         let content = (1..=25)
             .map(|i| format!("crates/a.rs:{i}:match lock {i}"))
             .collect::<Vec<_>>()
             .join("\n");
         let rows = call_rows(&search_call("grep -rn lock crates", &content), 160);
-        // one free header, twenty matches, then the overflow line
-        assert_eq!(rows.len(), 22);
+        // one counted header, nineteen matches, then the overflow line
+        assert_eq!(rows.len(), OPEN_MAX + 1);
         assert_eq!(plain(&rows[0]), "        crates/a.rs");
         assert_eq!(
             plain(rows.last().unwrap()),
-            "        … 5 more lines (Enter to view)"
+            "        … 6 more lines (Enter to view)"
         );
+    }
+
+    #[test]
+    fn an_opened_search_leaves_no_orphan_header_past_the_cap() {
+        let content = (0..25)
+            .map(|i| format!("crates/f{i:02}.rs:1:match lock {i}"))
+            .collect::<Vec<_>>()
+            .join("\n");
+        let rows = call_rows(&search_call("grep -rn lock crates", &content), 160);
+        // ten headers with their ten matches, then the overflow tail
+        assert_eq!(rows.len(), OPEN_MAX + 1);
+        assert_eq!(
+            plain(rows.last().unwrap()),
+            "        … 15 more lines (Enter to view)"
+        );
+        for (i, r) in rows.iter().take(OPEN_MAX).enumerate() {
+            let t = plain(r);
+            // a header carries no gutter number; the row under it is
+            // its match, so no header is left without its matches
+            if !t.contains(':') && t.trim().ends_with(".rs") {
+                assert!(
+                    i + 1 < OPEN_MAX && plain(&rows[i + 1]).contains("   1 "),
+                    "orphan header: {t}"
+                );
+            }
+        }
     }
 
     #[test]
