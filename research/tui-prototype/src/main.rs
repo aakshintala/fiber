@@ -1684,6 +1684,69 @@ fn opened_numbered(n: usize, s: Vec<Span<'static>>, w: usize) -> Row {
     spans.extend(s);
     opened_indent(row(spans), w)
 }
+/// The search pattern: the first non-flag token after the command itself,
+/// so `grep -rn lock crates` highlights `lock`.
+fn search_pattern(command: &str) -> &str {
+    let mut toks = command.split_whitespace();
+    toks.next();
+    toks.find(|t| !t.starts_with('-')).unwrap_or("")
+}
+/// Picks the pattern's occurrences out on the match tint; without a pattern
+/// the text passes through.
+fn match_spans(text: &str, pat: &str) -> Vec<Span<'static>> {
+    if pat.is_empty() {
+        return vec![sp(text.to_string(), Style::new())];
+    }
+    let mut out = vec![];
+    let mut rest = text;
+    while let Some(i) = rest.find(pat) {
+        if i > 0 {
+            out.push(sp(rest[..i].to_string(), Style::new()));
+        }
+        out.push(sp(
+            pat.to_string(),
+            Style::new().bg(rgb(0x5a4a1a)).fg(Color::White),
+        ));
+        rest = &rest[i + pat.len()..];
+    }
+    if !rest.is_empty() {
+        out.push(sp(rest.to_string(), Style::new()));
+    }
+    out
+}
+/// Splits `path<sep>41<sep>text` at its line number, scanning past
+/// separators inside the path (a dashed path reads `my-crate/x.rs-8-t`)
+/// or the text; the number must be all digits with a path before it.
+fn grep_split(l: &str, sep: char) -> Option<(String, usize, String)> {
+    let mut prefix_len = 0;
+    let mut search = l;
+    while let Some(i) = search.find(sep) {
+        let after = &search[i + sep.len_utf8()..];
+        if let Some(e) = after.find(sep) {
+            let (num, text) = (&after[..e], &after[e + sep.len_utf8()..]);
+            if !num.is_empty()
+                && num.bytes().all(|b| b.is_ascii_digit())
+                && prefix_len + i > 0
+                && let Ok(n) = num.parse::<usize>()
+            {
+                return Some((l[..prefix_len + i].to_string(), n, text.to_string()));
+            }
+        }
+        let step = i + sep.len_utf8();
+        prefix_len += step;
+        search = &search[step..];
+    }
+    None
+}
+/// One grep output line: its path, line number, text and whether it is a
+/// match (`path:41:text`) or context (`path-41-text`).
+fn grep_line(l: &str) -> Option<(String, usize, String, bool)> {
+    if let Some((p, n, t)) = grep_split(l, ':') {
+        Some((p, n, t, true))
+    } else {
+        grep_split(l, '-').map(|(p, n, t)| (p, n, t, false))
+    }
+}
 /// A call's result, opened under its ledger row and indented eight columns:
 /// an edit's diff with a line-number gutter and word-level pairs, a read's
 /// text numbered from its offset, or its error, or its output clipped to
@@ -1720,6 +1783,49 @@ fn call_rows(c: &Call, w: usize) -> Vec<Row> {
                 })
                 .collect();
             let (mut out, dropped) = opened_take(body);
+            opened_more(&mut out, dropped);
+            out
+        }
+        "search" if c.err.is_none() => {
+            if content.is_empty() {
+                return vec![opened_row(vec![sp("no output", Style::new())])];
+            }
+            let pat = search_pattern(c.args["command"].as_str().unwrap_or(""));
+            // path headers in first-seen order, then each file's matches:
+            // headers are chrome and free of the cap, match and context
+            // lines count once cut to the width, strays pass through
+            let mut items: Vec<(bool, Vec<Row>)> = vec![];
+            let mut current: Option<String> = None;
+            for l in content.lines() {
+                if l == "--" {
+                    continue;
+                }
+                match grep_line(l) {
+                    Some((path, n, text, _)) => {
+                        if current.as_deref() != Some(path.as_str()) {
+                            items.push((true, vec![opened_row(vec![sp(path.clone(), bold())])]));
+                            current = Some(path.clone());
+                        }
+                        items.push((false, vec![opened_numbered(n, match_spans(&text, pat), w)]));
+                    }
+                    None => items.push((false, opened_plain(l, Style::new(), w))),
+                }
+            }
+            let mut out = vec![];
+            let mut used = 0;
+            let mut dropped = 0;
+            for (header, rows) in items {
+                if header {
+                    out.extend(rows);
+                    continue;
+                }
+                if used + rows.len() > OPEN_MAX {
+                    dropped += 1;
+                    continue;
+                }
+                used += rows.len();
+                out.extend(rows);
+            }
             opened_more(&mut out, dropped);
             out
         }
@@ -8169,6 +8275,155 @@ mod tests {
             .filter(|r| plain(r).contains("-gone") || plain(r).contains("-and gone"))
             .collect();
         assert_eq!(removed.len(), 2);
+    }
+
+    fn search_call(command: &str, content: &str) -> Call {
+        Call {
+            name: "shell".into(),
+            args: json!({ "command": command }),
+            st: St::Completed,
+            start: 0,
+            end: Some(10),
+            err: None,
+            lines: 0,
+            exit: Some(0),
+            changes: vec![],
+            content: content.into(),
+            step: 1,
+            asked: None,
+        }
+    }
+
+    fn tinted(row: &Row) -> Vec<String> {
+        row.spans
+            .iter()
+            .filter(|s| s.style.bg == Some(crate::rgb(0x5a4a1a)))
+            .map(|s| s.content.to_string())
+            .collect()
+    }
+
+    #[test]
+    fn an_opened_search_groups_matches_under_each_path() {
+        let content = [
+            "crates/hub/src/lock.rs:41:    let _guard = lock(path);",
+            "crates/hub/src/lock.rs:42:    lock twice lock;",
+            "--",
+            "crates/tui/src/main.rs:1905:    holds the lock for the turn",
+            "crates/tui/src/main.rs-1904-    // the handoff point",
+            "crates/my-crate/x.rs-8-    no lock here",
+        ]
+        .join("\n");
+        let rows = call_rows(&search_call("grep -rn lock crates", &content), 160);
+        let text: Vec<String> = rows.iter().map(plain).collect();
+        // one bold header per file, in first-seen order, each above its matches
+        let head = |p: &str| text.iter().position(|l| l.trim() == p).unwrap();
+        let (h0, h1, h2) = (
+            head("crates/hub/src/lock.rs"),
+            head("crates/tui/src/main.rs"),
+            head("crates/my-crate/x.rs"),
+        );
+        assert!(h0 < h1 && h1 < h2, "headers out of order");
+        for h in [h0, h1, h2] {
+            assert!(
+                rows[h]
+                    .spans
+                    .iter()
+                    .any(|s| s.style.add_modifier.contains(Modifier::BOLD)),
+                "the path header is not bold"
+            );
+        }
+        assert!(
+            text[h0 + 1].contains("  41 "),
+            "no gutter: {}",
+            text[h0 + 1]
+        );
+        assert!(
+            text[h0 + 2].contains("  42 "),
+            "no gutter: {}",
+            text[h0 + 2]
+        );
+        assert!(
+            text[h1 + 1].contains(" 1905 "),
+            "no gutter: {}",
+            text[h1 + 1]
+        );
+        // the separator never draws
+        assert!(!text.iter().any(|l| l.trim() == "--"));
+        // every occurrence of the pattern reads on the match tint, in
+        // match and context lines alike; context without it stays plain
+        let hits: usize = rows.iter().map(|r| tinted(r).len()).sum();
+        assert_eq!(hits, 1 + 2 + 1 + 1, "wrong highlight count");
+        let ctx = &rows[h1 + 2];
+        assert!(
+            plain(ctx).contains(" 1904 "),
+            "no context gutter: {}",
+            plain(ctx)
+        );
+        assert!(
+            tinted(ctx).is_empty(),
+            "context without the pattern takes the tint"
+        );
+    }
+
+    #[test]
+    fn an_opened_search_without_a_pattern_highlights_nothing() {
+        let rows = call_rows(&search_call("grep -rn", "crates/a.rs:1:lock"), 160);
+        assert!(rows.iter().all(|r| tinted(r).is_empty()));
+    }
+
+    #[test]
+    fn an_opened_search_clips_matches_with_headers_free() {
+        let content = (1..=25)
+            .map(|i| format!("crates/a.rs:{i}:match lock {i}"))
+            .collect::<Vec<_>>()
+            .join("\n");
+        let rows = call_rows(&search_call("grep -rn lock crates", &content), 160);
+        // one free header, twenty matches, then the overflow line
+        assert_eq!(rows.len(), 22);
+        assert_eq!(plain(&rows[0]), "        crates/a.rs");
+        assert_eq!(
+            plain(rows.last().unwrap()),
+            "        … 5 more lines (Enter to view)"
+        );
+    }
+
+    #[test]
+    fn the_search_pattern_is_the_first_non_flag_token() {
+        assert_eq!(search_pattern("grep -rn lock crates"), "lock");
+        assert_eq!(search_pattern("rg -i foo"), "foo");
+        assert_eq!(search_pattern("grep --include=*.rs bar ."), "bar");
+        assert_eq!(search_pattern("grep -rn"), "");
+        assert_eq!(search_pattern(""), "");
+    }
+
+    #[test]
+    fn grep_lines_parse_matches_context_and_dashed_paths() {
+        assert_eq!(
+            grep_line("crates/a.rs:41:    lock(path);"),
+            Some(("crates/a.rs".into(), 41, "    lock(path);".into(), true))
+        );
+        // the text keeps its own separators
+        assert_eq!(
+            grep_line("crates/a.rs:41:a:b"),
+            Some(("crates/a.rs".into(), 41, "a:b".into(), true))
+        );
+        assert_eq!(
+            grep_line("crates/a.rs-41-    // hi"),
+            Some(("crates/a.rs".into(), 41, "    // hi".into(), false))
+        );
+        // a dashed path still splits at its number
+        assert_eq!(
+            grep_line("crates/my-crate/x.rs-8-    no lock"),
+            Some((
+                "crates/my-crate/x.rs".into(),
+                8,
+                "    no lock".into(),
+                false
+            ))
+        );
+        assert_eq!(grep_line("no numbers here"), None);
+        assert_eq!(grep_line(":41:x"), None);
+        assert_eq!(grep_line("crates/a.rs:xx:text"), None);
     }
 
     fn read_call(offset: Option<u64>, content: &str) -> Call {
