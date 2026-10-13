@@ -531,7 +531,8 @@ fn resume_runs_the_recorded_path() {
             source: contract::events::VariablesSource::Inherited,
         }),
     };
-    let started = hub::Starter::resume(&starter, &SessionId("s1".to_owned()), &workspace, None).unwrap();
+    let started =
+        hub::Starter::resume(&starter, &SessionId("s1".to_owned()), &workspace, None).unwrap();
     assert_eq!(exit_of(started).message, "recorded resume");
 }
 

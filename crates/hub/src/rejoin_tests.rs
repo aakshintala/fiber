@@ -1007,7 +1007,13 @@ fn a_rejoin_replays_a_label_bearing_subscription_without_its_credential() {
     let mut held = crate::relay::Relays::default();
     assert!(!held.transfer(sid, &asked), "no relay: kept only");
     let epoch = held.mint();
-    assert!(admit(&mut held, sid, false, mark_for(None, 0, false, 0), epoch));
+    assert!(admit(
+        &mut held,
+        sid,
+        false,
+        mark_for(None, 0, false, 0),
+        epoch
+    ));
     let relays = Arc::new(Mutex::new(held));
     let (client, _client_peer) = UnixStream::pair().unwrap();
     let writer = Arc::new(Mutex::new(client));

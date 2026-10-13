@@ -194,7 +194,9 @@ fn an_accepted_subscribe_keeps_no_credential() {
     };
     let mut relays = Relays::default();
     let epoch = relays.mint();
-    relays.entries.push(entry_with_epoch("s_aaaaaaaaaaaaaaaa", epoch));
+    relays
+        .entries
+        .push(entry_with_epoch("s_aaaaaaaaaaaaaaaa", epoch));
     relays.accepted("s_aaaaaaaaaaaaaaaa", epoch, line("c_1"));
     // Level and id are kept; only the label is stripped.
     assert_eq!(
@@ -241,7 +243,9 @@ fn an_accepted_prompt_leaves_the_kept_subscribe_alone() {
     .clone();
     let mut relays = Relays::default();
     let epoch = relays.mint();
-    relays.entries.push(entry_with_epoch("s_aaaaaaaaaaaaaaaa", epoch));
+    relays
+        .entries
+        .push(entry_with_epoch("s_aaaaaaaaaaaaaaaa", epoch));
     relays.accepted("s_aaaaaaaaaaaaaaaa", epoch, subscribe);
     relays.accepted("s_aaaaaaaaaaaaaaaa", epoch, prompt);
     assert_eq!(

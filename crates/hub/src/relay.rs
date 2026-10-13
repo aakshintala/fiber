@@ -119,9 +119,8 @@ fn startup_credential(
     if !is_subscribe || !names_credential {
         return Ok(None);
     }
-    match serde_json::from_value::<contract::commands::CommandLine>(Value::Object(
-        stripped.clone(),
-    )) {
+    match serde_json::from_value::<contract::commands::CommandLine>(Value::Object(stripped.clone()))
+    {
         Ok(line) => match line.command {
             contract::commands::Command::Subscribe(args) => Ok(args.credential),
             _ => Err((ErrorCode::InvalidArguments, UNFIT)),

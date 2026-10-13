@@ -363,8 +363,7 @@ fn subscribe_credential_is_an_optional_label() {
             credential: Some("work".into()),
         })
     );
-    let line =
-        parse(r#"{"id":"c","command":"subscribe","args":{"level":"summary"}}"#).unwrap();
+    let line = parse(r#"{"id":"c","command":"subscribe","args":{"level":"summary"}}"#).unwrap();
     assert_eq!(
         line.command,
         Command::Subscribe(SubscribeArgs {

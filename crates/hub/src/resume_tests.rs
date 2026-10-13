@@ -209,10 +209,7 @@ fn resumed_exited(hub: &Arc<Hub>) -> Result<UnixStream, Refused> {
 /// Runs `resume_exited` with an asked credential label on a thread,
 /// received with a wall-clock deadline.
 #[track_caller]
-fn resumed_exited_with(
-    hub: &Arc<Hub>,
-    credential: Option<&str>,
-) -> Result<UnixStream, Refused> {
+fn resumed_exited_with(hub: &Arc<Hub>, credential: Option<&str>) -> Result<UnixStream, Refused> {
     let (done, finished) = mpsc::channel();
     let hub = Arc::clone(hub);
     let credential = credential.map(str::to_owned);
