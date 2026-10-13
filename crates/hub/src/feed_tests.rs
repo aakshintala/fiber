@@ -1830,3 +1830,65 @@ fn a_second_hub_lists_a_session_the_first_hub_already_followed() {
     stop_within(&second);
     stop_within(&first);
 }
+
+#[test]
+fn a_repeated_feed_on_a_stalled_subscriber_shuts_its_connection_and_drops_the_registration() {
+    let temp = Temp::new();
+    let (feed, _) = new_feed(&temp.dir);
+    // Stalled: the test holds the writer mutex before subscribing, so the
+    // writer thread can never dequeue.
+    let (stalled, stalled_far) = UnixStream::pair().unwrap();
+    stalled_far.set_read_timeout(Some(DEADLINE)).unwrap();
+    let stalled_closer = closer_for(&stalled);
+    let kept = Arc::new(Mutex::new(stalled));
+    let guard = kept.lock().unwrap();
+    let stalled_id = feed.subscribe(Arc::clone(&kept), stalled_closer).unwrap();
+    // A few changes through the code path, so the re-queued snapshot is
+    // not empty.
+    for n in 0..5u64 {
+        let session = id(n);
+        let line = status_line(&session, &status("n", "/w", "streaming", None));
+        assert!(
+            feed.on_line(&session, line.as_bytes(), None),
+            "the code path takes every change"
+        );
+    }
+    // The writer never dequeued: the registration is still there.
+    assert_eq!(feed.subscribers(), 1, "nothing drained while stalled");
+    // Repeated feeds re-queue the snapshot behind its acknowledgement.
+    // Each fills one more slot, and the writer is still blocked on the
+    // held mutex, so a Full is certain within QUEUE further replaces:
+    // every Sent stays queued, and only 1,024 slots exist.
+    let mut full = Vec::new();
+    for i in 0..crate::feed::QUEUE + 1 {
+        let closers = feed.replace_snapshot(stalled_id);
+        if !closers.is_empty() {
+            full = closers;
+            break;
+        }
+        // Gone would resurrect nothing and DeadWriter would park the
+        // handle: neither may happen while the registration is live and
+        // its writer only waits on the held mutex.
+        assert_eq!(
+            feed.subscribers(),
+            1,
+            "the stalled subscriber is still there (replace {i})"
+        );
+    }
+    assert_eq!(full.len(), 1, "the full queue hands back its shutdown");
+    close_connections(full, UnixStream::shutdown);
+    assert_eq!(feed.subscribers(), 0, "the stalled subscriber is gone");
+    drop(guard);
+    // The overflow shut the stalled connection both ways: EOF, not a line.
+    let mut buf = [0; 1];
+    assert_eq!(
+        BufReader::new(stalled_far).read(&mut buf).unwrap(),
+        0,
+        "the stalled side sees EOF"
+    );
+    // Unsubscribing the removed id is a no-op, and stop joins the retired
+    // writer: no Arc survives it.
+    feed.unsubscribe(stalled_id);
+    stop_within(&feed);
+    assert_eq!(Arc::strong_count(&kept), 1, "the writer ended and joined");
+}

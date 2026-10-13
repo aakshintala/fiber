@@ -1234,3 +1234,44 @@ fn unlisten_after_overflow_joins_without_draining() {
     );
     assert_eq!(Arc::strong_count(&kept), 1, "the writer ended and joined");
 }
+
+#[test]
+fn two_listeners_take_distinct_ids_and_unlistening_the_second_ends_only_that_one() {
+    let clock = FakeClock::new();
+    let attention = Arc::new(Attention::new(Arc::clone(&clock) as Arc<dyn Clock>));
+    // Two pending registrations: listening starts no writer.
+    let (first, first_far) = UnixStream::pair().unwrap();
+    first_far.set_read_timeout(Some(DEADLINE)).unwrap();
+    let (first_closer, first_retired) = (closer_for(&first), closer_for(&first));
+    let first_id = attention
+        .listen(Arc::new(Mutex::new(first)), first_closer, first_retired)
+        .unwrap();
+    let (second, second_far) = UnixStream::pair().unwrap();
+    second_far.set_read_timeout(Some(DEADLINE)).unwrap();
+    let (second_closer, second_retired) = (closer_for(&second), closer_for(&second));
+    let second_id = attention
+        .listen(Arc::new(Mutex::new(second)), second_closer, second_retired)
+        .unwrap();
+    // A constant id would alias the two registrations: unlistening one
+    // would end the other.
+    assert_ne!(first_id, second_id, "each listener takes its own id");
+    assert_eq!(attention.writers_started(), 0, "listening starts nothing");
+    // Unlistening the second ends only that one: its far end sees EOF.
+    unlisten_within(&attention, second_id, "unlisten returns");
+    let mut buf = [0; 1];
+    assert_eq!(
+        BufReader::new(second_far).read(&mut buf).unwrap(),
+        0,
+        "the second listener ends"
+    );
+    // The first still receives: its writer starts on this first line.
+    let waiting = status_of("waiting", Some("r1"), S, None);
+    drop(attention.notify("s_0000000000000001", None, &waiting, false));
+    assert_eq!(
+        read_line(
+            &mut BufReader::new(first_far),
+            "the first listener's attention"
+        )["payload"]["reason"],
+        "waiting"
+    );
+}

@@ -307,3 +307,92 @@ fn send_to_reaches_exactly_one_subscriber() {
         }
     }
 }
+
+#[test]
+fn pending_registrations_take_distinct_ids_and_remove_keeps_the_first() {
+    let mut fanout = Fanout::default();
+    // Pending registrations spawn no thread: these channels never leave
+    // this test.
+    let (first, _first_far) = UnixStream::pair().unwrap();
+    let first_id = fanout.listen(Arc::new(Mutex::new(first)), closer(), closer());
+    let (second, _second_far) = UnixStream::pair().unwrap();
+    let second_id = fanout.listen(Arc::new(Mutex::new(second)), closer(), closer());
+    // Exact ids: a constant return aliases the two registrations, and a
+    // broken counter never counts past the first.
+    assert_eq!(first_id, 1, "the first registration takes id 1");
+    assert_eq!(second_id, 2, "the second registration takes id 2");
+    assert_eq!(fanout.ids(), [first_id, second_id]);
+    let end = fanout
+        .remove(second_id)
+        .expect("the second registration removes");
+    assert!(
+        end.writer.is_none(),
+        "a pending registration owns no writer"
+    );
+    shut(vec![end.closer]);
+    assert_eq!(fanout.ids(), [first_id], "the first registration stays");
+    // Pending registrations own no thread and shut nothing: closing drops
+    // them with nothing to join.
+    assert!(fanout.close().is_empty(), "no writer to hand back");
+}
+
+#[test]
+fn a_broadcast_whose_pending_writer_fails_to_spawn_unregisters_it_and_hands_back_its_shutdown() {
+    let mut fanout = Fanout::default();
+    // Two pending registrations, each closer tied to its own socket so
+    // shutting the handed-back closer is observed on its far end.
+    let (failed, failed_far) = UnixStream::pair().unwrap();
+    failed_far.set_read_timeout(Some(DEADLINE)).unwrap();
+    let failed_stream = failed.try_clone().unwrap();
+    let failed_id = fanout.listen(
+        Arc::new(Mutex::new(failed)),
+        Closer {
+            stream: failed_stream.try_clone().unwrap(),
+            web: None,
+        },
+        Closer {
+            stream: failed_stream,
+            web: None,
+        },
+    );
+    let (healthy, healthy_far) = UnixStream::pair().unwrap();
+    healthy_far.set_read_timeout(Some(DEADLINE)).unwrap();
+    let healthy_stream = healthy.try_clone().unwrap();
+    let healthy_id = fanout.listen(
+        Arc::new(Mutex::new(healthy)),
+        Closer {
+            stream: healthy_stream.try_clone().unwrap(),
+            web: None,
+        },
+        Closer {
+            stream: healthy_stream,
+            web: None,
+        },
+    );
+    // Only the first spawn fails: the failure is ordered, not racy.
+    fanout.fail_next_spawn();
+    let closers = fanout.broadcast(&line());
+    assert_eq!(closers.len(), 1, "exactly the failed registration reports");
+    assert_eq!(fanout.ids(), [healthy_id], "the failed id is gone");
+    assert_ne!(failed_id, healthy_id, "the two registrations differ");
+    shut(closers);
+    // Exactly the failed connection's shutdown came back: its far end sees
+    // EOF, while the healthy registration's writer delivers the line.
+    let mut buf = [0; 1];
+    assert_eq!(
+        BufReader::new(failed_far).read(&mut buf).unwrap(),
+        0,
+        "the failed side sees EOF"
+    );
+    let mut text = String::new();
+    BufReader::new(healthy_far)
+        .read_line(&mut text)
+        .expect("the healthy registration delivers");
+    assert_eq!(text, "l\n");
+    for end in fanout.close() {
+        shut(vec![end.closer]);
+        if let Some(writer) = end.writer {
+            join_within(writer, "the healthy writer to end");
+        }
+    }
+}

@@ -13,6 +13,8 @@
 use std::io::Write;
 use std::net::Shutdown;
 use std::os::unix::net::UnixStream;
+#[cfg(test)]
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc::{self, SyncSender, TrySendError};
 use std::sync::{Arc, Mutex};
 use std::thread::{self, JoinHandle};
@@ -113,6 +115,11 @@ pub(crate) struct Fanout {
     list: Vec<Subscriber>,
     next: u64,
     retired: Vec<(Closer, JoinHandle<()>)>,
+    /// Tests only: refuses the next lazy writer spawn, so the
+    /// failed-spawn path runs without an outside seam: no socket outcome
+    /// fails a thread spawn on demand.
+    #[cfg(test)]
+    fail_spawn: AtomicBool,
     /// Successful writer starts, including retired ones: never decremented.
     #[cfg(test)]
     started: usize,
@@ -225,6 +232,14 @@ impl Fanout {
                 continue;
             };
             let writer = Arc::clone(writer);
+            // Tests refuse the next lazy spawn through
+            // `fail_next_spawn`: no outside seam fails a thread spawn
+            // on demand.
+            #[cfg(test)]
+            if self.fail_spawn.swap(false, Ordering::SeqCst) {
+                failed.push(subscriber.id);
+                continue;
+            }
             // The lazy path serves attention only; the feed stays eager.
             match spawn_writer(writer, "hub-attention-out") {
                 Some((tx, handle)) => {
@@ -399,6 +414,12 @@ impl Fanout {
             writer: Some(writer),
         }));
         ends
+    }
+
+    /// Tests only: refuses the next lazy writer spawn in `broadcast`.
+    #[cfg(test)]
+    pub(crate) fn fail_next_spawn(&self) {
+        self.fail_spawn.store(true, Ordering::SeqCst);
     }
 
     /// Registered ids in registration order.

@@ -535,3 +535,24 @@ fn a_session_gone_before_the_first_prompt_logs_io_failed() {
     assert!(line.contains("\"code\":\"io_failed\""));
     assert!(line.contains(&session.0));
 }
+
+#[test]
+fn a_start_whose_session_rejects_the_summary_subscribe_is_rejected_with_its_code() {
+    let temp = Temp::new();
+    // Every command, `subscribe` too, is answered `closing`: the hub's own
+    // summary subscription is rejected at once.
+    let hub = temp.hub(FakeStarter::closing_every_command(&temp.dir));
+    let workspace = temp.workspace();
+    let content = json!([{"type": "text", "text": "hi"}]);
+    let outcome = started(hub, workspace, None, false, Some(content));
+    let Outcome::Rejected(refused) = outcome else {
+        panic!("the start is rejected with the session's answer");
+    };
+    assert_eq!(refused.code, ErrorCode::Closing);
+    assert_eq!(refused.message, "The session is closing.");
+    // Fast-fail: the rejection answers at once, with no clock wait.
+    assert!(
+        temp.clock.now() < temp.clock.origin() + START_DEADLINE,
+        "no clock wait on a rejected subscription"
+    );
+}
