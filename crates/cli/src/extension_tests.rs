@@ -19,6 +19,404 @@ use extensions::{Origin, Request};
 
 use super::{Io, install, list, remove, update_all};
 
+#[test]
+fn public_install_wrapper_propagates_project_scope() {
+    const SCOPED_CHILD: &str = "FIBER_TEST_SCOPED_INSTALL_CHILD";
+    if std::env::var_os(SCOPED_CHILD).is_some() {
+        let source = std::env::var("FIBER_TEST_SCOPED_SOURCE").unwrap();
+        std::process::exit(super::extension_install(
+            &source,
+            true,
+            FIBER_VERSION,
+            &fakes::clock::SystemClock,
+        ));
+    }
+    let setup = Setup::new();
+    let source = setup.source("acme", &manifest("acme"), &[]);
+    let workspace = setup.root.path().join("workspace");
+    fs::create_dir_all(&workspace).unwrap();
+    let name = format!(
+        "{}::public_install_wrapper_propagates_project_scope",
+        module_path!().split_once("::").unwrap().1
+    );
+    let output = fakes::rerun_prepared(
+        &name,
+        &[(SCOPED_CHILD, "1")],
+        Duration::from_secs(20),
+        |command| {
+            command
+                .env("FIBER_HOME", setup.home())
+                .env("FIBER_TEST_SCOPED_SOURCE", &source)
+                .current_dir(&workspace);
+        },
+    );
+    assert_eq!(
+        output.status.code(),
+        Some(0),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let (global, project) = scope_files(&setup);
+    assert_eq!(
+        json_file(&global),
+        serde_json::json!({"extensions":{"acme":{"enabled":false}}})
+    );
+    assert_eq!(
+        json_file(&project),
+        serde_json::json!({"extensions":{"acme":{"enabled":true}}})
+    );
+    assert!(setup.home().join("extensions/acme/.fiber.json").is_file());
+}
+
+#[test]
+fn scoped_git_dependencies_keep_existing_global_state_and_write_all_projects_first() {
+    fakes::within("scoped dependency writes", Duration::from_secs(40), || {
+        let setup = Setup::new();
+        let root = "example.com/acme/root";
+        let dep = "example.com/acme/dep";
+        let new = "example.com/acme/new";
+        let mut paths = std::collections::BTreeMap::new();
+        for name in [dep, new, root] {
+            let m = if name == root {
+                let mut m = manifest(root);
+                m["depends"] = serde_json::json!({dep:"1.1", new:"1.0"});
+                m
+            } else {
+                manifest(name)
+            };
+            let source = setup.source(name, &m, &[]);
+            fakes::git::git(&source, &["init", "--quiet"]);
+            fakes::git::git(&source, &["add", "."]);
+            fakes::git::git(&source, &["commit", "--quiet", "-m", "release"]);
+            fakes::git::git(&source, &["tag", "v1.0.0"]);
+            if name == dep {
+                fakes::git::git(&source, &["tag", "v1.1.0"]);
+                assert_eq!(
+                    run_install(
+                        &setup.home(),
+                        Request::Path(source.clone()),
+                        &Origin::github(),
+                        false,
+                        &mut Unread
+                    )
+                    .1
+                    .unwrap(),
+                    0
+                );
+            }
+            paths.insert(name.to_owned(), source);
+        }
+        let origin = Origin::new("git", move |name| {
+            format!("file://{}", paths[name].display())
+        });
+        let workspace = setup.root.path().join("workspace");
+        fs::create_dir(&workspace).unwrap();
+        let (_, project) = crate::project_of(&setup.home(), &workspace).unwrap();
+        let scope = super::ScopedInstall { workspace, project };
+        let code = install(
+            &setup.home(),
+            Request::Install(root.into()),
+            Some(&scope),
+            FIBER_VERSION,
+            &origin,
+            &fakes::clock::SystemClock,
+            Io {
+                terminal: false,
+                input: &mut Unread,
+                err: &mut Vec::new(),
+            },
+        )
+        .unwrap();
+        assert_eq!(code, 0);
+        let (global, project) = scope_files(&setup);
+        assert_eq!(
+            json_file(&global),
+            serde_json::json!({"extensions":{root:{"enabled":false},new:{"enabled":false}}})
+        );
+        assert_eq!(
+            json_file(&project),
+            serde_json::json!({"extensions":{root:{"enabled":true},new:{"enabled":true},dep:{"enabled":true}}})
+        );
+        let listed = extensions::list(&setup.home(), &fakes::clock::SystemClock).unwrap();
+        assert_eq!(listed.installed.len(), 3);
+        assert_eq!(
+            listed
+                .installed
+                .iter()
+                .find(|i| i.name == dep)
+                .unwrap()
+                .version,
+            "v1.1.0"
+        );
+    });
+}
+
+fn scoped_install(
+    setup: &Setup,
+    source: &Path,
+    terminal: bool,
+    input: &mut dyn BufRead,
+) -> Result<i32, Failure> {
+    let workspace = setup.root.path().join("workspace");
+    fs::create_dir_all(&workspace).unwrap();
+    let (_, project) = crate::project_of(&setup.home(), &workspace).unwrap();
+    let scope = super::ScopedInstall { workspace, project };
+    install(
+        &setup.home(),
+        Request::Path(source.into()),
+        Some(&scope),
+        FIBER_VERSION,
+        &Origin::github(),
+        &fakes::clock::SystemClock,
+        Io {
+            terminal,
+            input,
+            err: &mut Vec::new(),
+        },
+    )
+}
+
+fn scope_files(setup: &Setup) -> (PathBuf, PathBuf) {
+    let workspace = setup.root.path().join("workspace");
+    let (_, project) = crate::project_of(&setup.home(), &workspace).unwrap();
+    (
+        setup.home().join("config.json"),
+        setup
+            .home()
+            .join("projects")
+            .join(project.as_str())
+            .join("config.json"),
+    )
+}
+
+fn json_file(file: &Path) -> serde_json::Value {
+    serde_json::from_slice(&fs::read(file).unwrap()).unwrap()
+}
+
+#[test]
+fn scoped_install_writes_keys_before_commit_and_other_commands_keep_them() {
+    fakes::within(
+        "scoped keys before install",
+        Duration::from_secs(20),
+        || {
+            let setup = Setup::new();
+            let workspace = setup.root.path().join("workspace");
+            fs::create_dir_all(&workspace).unwrap();
+            let (global, project) = scope_files(&setup);
+            let artifact = setup.root.path().join("keys");
+            let mut m = manifest("acme");
+            m["install"] = serde_json::json!([
+                "sh",
+                "-c",
+                format!(
+                    "cat '{}' '{}' > '{}'",
+                    project.display(),
+                    global.display(),
+                    artifact.display()
+                )
+            ]);
+            let source = setup.source("acme", &m, &[]);
+            assert_eq!(
+                scoped_install(&setup, &source, false, &mut Unread).unwrap(),
+                0
+            );
+            let on = serde_json::json!({"extensions":{"acme":{"enabled":true}}});
+            let off = serde_json::json!({"extensions":{"acme":{"enabled":false}}});
+            assert_eq!(json_file(&project), on);
+            assert_eq!(json_file(&global), off);
+            assert_eq!(
+                fs::read_to_string(&artifact).unwrap(),
+                format!(
+                    "{}{}",
+                    fs::read_to_string(&project).unwrap(),
+                    fs::read_to_string(&global).unwrap()
+                )
+            );
+            assert!(!workspace.join(".fiber").exists());
+            for request in [
+                Request::Path(source.clone()),
+                Request::Update("acme".into()),
+                Request::Reinstall("acme".into()),
+            ] {
+                assert_eq!(
+                    run_install(
+                        &setup.home(),
+                        request,
+                        &Origin::github(),
+                        false,
+                        &mut Unread
+                    )
+                    .1
+                    .unwrap(),
+                    0
+                );
+                assert_eq!(json_file(&project), on);
+                assert_eq!(json_file(&global), off);
+            }
+            assert_eq!(
+                run_remove(&setup.home(), "acme", false, &mut Unread)
+                    .1
+                    .unwrap(),
+                0
+            );
+            assert_eq!(json_file(&project), on);
+            assert_eq!(json_file(&global), off);
+        },
+    );
+}
+
+#[test]
+fn existing_installs_keep_global_state_and_fresh_installs_replace_stale_keys() {
+    fakes::within(
+        "scoped freshness configuration",
+        Duration::from_secs(20),
+        || {
+            for global in [None, Some(false), Some(true)] {
+                let setup = Setup::new();
+                let source = setup.source("acme", &manifest("acme"), &[]);
+                assert_eq!(
+                    run_install(
+                        &setup.home(),
+                        Request::Path(source.clone()),
+                        &Origin::github(),
+                        false,
+                        &mut Unread
+                    )
+                    .1
+                    .unwrap(),
+                    0
+                );
+                let expected = global
+                    .map(|value| serde_json::json!({"extensions":{"acme":{"enabled":value}}}));
+                if let Some(ref expected) = expected {
+                    write_file(&setup.home().join("config.json"), &expected.to_string());
+                }
+                assert_eq!(
+                    scoped_install(&setup, &source, false, &mut Unread).unwrap(),
+                    0
+                );
+                let (global_file, project) = scope_files(&setup);
+                assert_eq!(
+                    json_file(&project),
+                    serde_json::json!({"extensions":{"acme":{"enabled":true}}})
+                );
+                assert_eq!(global_file.exists(), expected.is_some());
+                if let Some(expected) = expected {
+                    assert_eq!(json_file(&global_file), expected);
+                }
+            }
+            let setup = Setup::new();
+            let source = setup.source("acme", &manifest("acme"), &[]);
+            write_file(
+                &setup.home().join("config.json"),
+                r#"{"extensions":{"acme":{"enabled":true}},"model":3}"#,
+            );
+            assert_eq!(
+                scoped_install(&setup, &source, false, &mut Unread).unwrap(),
+                0
+            );
+            let (global, project) = scope_files(&setup);
+            assert_eq!(
+                json_file(&global),
+                serde_json::json!({"extensions":{"acme":{"enabled":false}},"model":3})
+            );
+            assert_eq!(
+                json_file(&project),
+                serde_json::json!({"extensions":{"acme":{"enabled":true}}})
+            );
+        },
+    );
+}
+
+#[test]
+fn scope_write_failures_stop_install_and_keep_completed_project_keys() {
+    fakes::within(
+        "scope write failure ordering",
+        Duration::from_secs(20),
+        || {
+            for broken_project in [true, false] {
+                let setup = Setup::new();
+                fs::create_dir_all(setup.root.path().join("workspace")).unwrap();
+                let (global, project) = scope_files(&setup);
+                let broken = if broken_project { &project } else { &global };
+                write_file(broken, "not JSON");
+                let marker = setup.root.path().join("installed");
+                let mut m = manifest("acme");
+                m["install"] = serde_json::json!([
+                    "sh",
+                    "-c",
+                    format!("printf marker > '{}'", marker.display())
+                ]);
+                let source = setup.source("acme", &m, &[]);
+                assert_eq!(
+                    scoped_install(&setup, &source, false, &mut Unread)
+                        .unwrap_err()
+                        .code,
+                    ErrorCode::ConfigInvalid
+                );
+                assert_eq!(fs::read_to_string(broken).unwrap(), "not JSON");
+                assert!(!marker.exists());
+                assert!(!setup.home().join("extensions/acme").exists());
+                if broken_project {
+                    assert!(!global.exists());
+                } else {
+                    assert_eq!(
+                        json_file(&project),
+                        serde_json::json!({"extensions":{"acme":{"enabled":true}}})
+                    );
+                }
+            }
+        },
+    );
+}
+
+#[test]
+fn declined_scope_and_failed_fresh_or_replacement_installs_preserve_safety() {
+    fakes::within(
+        "scope approval and install failure",
+        Duration::from_secs(20),
+        || {
+            let setup = Setup::new();
+            let source = setup.source("acme", &manifest("acme"), &[]);
+            assert_eq!(
+                scoped_install(&setup, &source, true, &mut io::Cursor::new(b"n\n")).unwrap(),
+                1
+            );
+            let (global, project) = scope_files(&setup);
+            assert!(!global.exists());
+            assert!(!project.exists());
+            let mut failed = manifest("acme");
+            failed["install"] = serde_json::json!(["sh", "-c", "exit 1"]);
+            write_file(&source.join("extension.json"), &failed.to_string());
+            assert!(scoped_install(&setup, &source, false, &mut Unread).is_err());
+            assert_eq!(
+                json_file(&global),
+                serde_json::json!({"extensions":{"acme":{"enabled":false}}})
+            );
+            assert_eq!(
+                json_file(&project),
+                serde_json::json!({"extensions":{"acme":{"enabled":true}}})
+            );
+            assert!(!setup.home().join("extensions/acme").exists());
+            write_file(
+                &source.join("extension.json"),
+                &manifest("acme").to_string(),
+            );
+            assert_eq!(
+                scoped_install(&setup, &source, false, &mut Unread).unwrap(),
+                0
+            );
+            let old = fs::read(setup.home().join("extensions/acme/extension.json")).unwrap();
+            write_file(&source.join("extension.json"), &failed.to_string());
+            assert!(scoped_install(&setup, &source, false, &mut Unread).is_err());
+            assert_eq!(
+                fs::read(setup.home().join("extensions/acme/extension.json")).unwrap(),
+                old
+            );
+        },
+    );
+}
+
 /// The Fiber version an install checks against, as the manifest states.
 const FIBER_VERSION: &str = "0.1.0";
 
@@ -162,6 +560,7 @@ fn run_install(
     let got = install(
         home,
         request,
+        None,
         FIBER_VERSION,
         origin,
         &*clock,
@@ -765,6 +1164,7 @@ fn run_case(case: &str) {
             "list" => super::extension_list(&*clock),
             "install" => super::extension_install(
                 &std::env::var(CHILD_SOURCE).unwrap(),
+                false,
                 FIBER_VERSION,
                 &*clock,
             ),
@@ -772,9 +1172,12 @@ fn run_case(case: &str) {
             "update-all" => super::extension_update(None, FIBER_VERSION, &*clock),
             "remove" => super::extension_remove(NAME_A, &*clock),
             "reinstall" => super::extension_reinstall(NAME_A, FIBER_VERSION, &*clock),
-            "install-by-name" => {
-                super::extension_install("github.com/acme/fiber-acme", FIBER_VERSION, &*clock)
-            }
+            "install-by-name" => super::extension_install(
+                "github.com/acme/fiber-acme",
+                false,
+                FIBER_VERSION,
+                &*clock,
+            ),
             unknown => panic!("unknown extension child case: {unknown}"),
         };
         std::process::exit(code);

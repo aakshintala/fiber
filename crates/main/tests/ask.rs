@@ -973,7 +973,7 @@ Fiber itself:
   version                                   Print the version
 
 Extensions:
-  extension install <name or path>  Install an extension and its dependencies
+  extension install [--project] <name or path>  Install an extension and its dependencies
   extension update [<name>]         Update one extension, or every installed extension, to its newest tag
   extension remove <name>           Remove an extension, the dependencies nothing else uses, and their data
   extension reinstall <name>        Remove an extension and install it again from its recorded source and commit

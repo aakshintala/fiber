@@ -187,9 +187,15 @@ fn run() -> i32 {
             )
         }
         cli::Invocation::Run(Some(cli::Commands::Extension(cmd))) => match cmd {
-            cli::ExtensionCommands::Install { name_or_path } => {
-                ::cli::extension_install(&name_or_path, env!("CARGO_PKG_VERSION"), clock.as_ref())
-            }
+            cli::ExtensionCommands::Install {
+                name_or_path,
+                project,
+            } => ::cli::extension_install(
+                &name_or_path,
+                project,
+                env!("CARGO_PKG_VERSION"),
+                clock.as_ref(),
+            ),
             cli::ExtensionCommands::Update { name } => {
                 ::cli::extension_update(name.as_deref(), env!("CARGO_PKG_VERSION"), clock.as_ref())
             }
