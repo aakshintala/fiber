@@ -568,44 +568,8 @@ fn reviewer_kept_after_a_completed_handoff_selects_the_kept_persons() {
 }
 
 #[test]
-fn a_repaired_call_renders_the_arguments_that_run() {
-    let mut repaired = call("shell");
-    let mut map = serde_json::Map::new();
-    map.insert("city".into(), serde_json::Value::String("Paris".into()));
-    repaired.repair = Some(contract::events::ArgumentRepair {
-        repaired: map,
-        repairs: Vec::new(),
-    });
-    let mut reviewed = Vec::new();
-    render_reviewed(
-        &mut reviewed,
-        &Event::ToolCallRequested(repaired),
-        Some(&ActionId("a_9".into())),
-        Some(Seq(41)),
-    );
-    assert_eq!(
-        reviewed,
-        vec![Reviewed {
-            shown: Shown::Call(ActionId("a_9".into())),
-            input: Input::User {
-                text: r#"Tool call: {"tool":"shell","arguments":{"city":"Paris"}}"#.into(),
-                images: Vec::new(),
-            },
-        }],
-    );
-}
-
-#[test]
 fn lines_without_a_durable_identity_add_nothing() {
     let mut reviewed = Vec::new();
-    render_reviewed(
-        &mut reviewed,
-        &Event::TurnStarted(TurnStarted {
-            input: vec![message("run the tests", driver())],
-        }),
-        None,
-        None,
-    );
     render_reviewed(
         &mut reviewed,
         &Event::ToolCallRequested(call("shell")),

@@ -6,14 +6,6 @@
 //! The write path every event takes, and what a completed handoff leaves
 //! the reviewer's input holding (`docs/permissions.md`, "At a handoff").
 
-#![allow(
-    clippy::unwrap_used,
-    clippy::expect_used,
-    clippy::panic,
-    clippy::indexing_slicing,
-    reason = "test code; a failure is the test's"
-)]
-
 use std::sync::{Arc, mpsc};
 use std::thread;
 use std::time::Duration;
