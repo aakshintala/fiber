@@ -22,6 +22,7 @@ mod oauth_server;
 mod process_group;
 mod provider_server;
 pub mod pty;
+mod raw_http_server;
 mod record;
 pub mod refused;
 mod rerun;
@@ -48,6 +49,7 @@ pub use process_group::{
     pids_exit, try_matching_exits,
 };
 pub use provider_server::{ProviderServer, Request, Response, fingerprint};
+pub use raw_http_server::RawHttpServer;
 pub use record::write_record;
 pub use rerun::{rerun, rerun_prepared, rerun_within};
 pub use scripted_provider::{

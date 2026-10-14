@@ -638,7 +638,7 @@ fn no_scripted_response() -> Response {
 }
 
 /// The recorded request: credentials fingerprinted, exact `body_len`.
-fn project(request: &ParsedRequest) -> Request {
+pub(crate) fn project(request: &ParsedRequest) -> Request {
     Request {
         method: request.method.clone(),
         path: fingerprint_query(&request.target),
