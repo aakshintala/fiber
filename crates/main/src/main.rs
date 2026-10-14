@@ -725,8 +725,9 @@ fn terminal(
         Arc::clone(&reads),
     );
     // The viewer's copies live under Fiber home: cloned before the
-    // connect closure moves it.
+    // connect closure moves it, as is the diagnostic writer's.
     let launch_home = home.clone();
+    let diag_home = home.clone();
     let connect: tui::Connect = Box::new(move || connect_hub(&home, &fiber, hub_clock.as_ref()));
     let identity = doors::project(&workspace);
     let mut launch = launch::launch(
@@ -741,9 +742,37 @@ fn terminal(
     launch.models = Some(models);
     launch.configure = Some(seam);
     launch.open_at = open_at;
-    match tui::run(tty, launch, connect, Box::new(crash::attach), clock) {
+    match tui::run(
+        tty,
+        launch,
+        connect,
+        Box::new(crash::attach),
+        Arc::clone(&clock),
+    ) {
         Ok(code) => code,
-        Err(failure) => fail(failure),
+        Err(failure) => {
+            // The terminal never started: one `error` line in
+            // `logs/tui-<pid>.log` keeps the failure diagnosable, as a
+            // startup failure does (`docs/state.md`, "Diagnostic logs").
+            let level = if config::diagnostics_debug(&config) {
+                log::diag::Level::Debug
+            } else {
+                log::diag::Level::Info
+            };
+            log::diag::Diag::new(
+                &diag_home,
+                log::diag::Process::Tui,
+                level,
+                Arc::clone(&clock),
+            )
+            .line(
+                log::diag::Severity::Error,
+                None,
+                "io_failed",
+                &failure.message,
+            );
+            fail(failure)
+        }
     }
 }
 

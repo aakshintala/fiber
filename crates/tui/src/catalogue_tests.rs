@@ -189,4 +189,19 @@ fn spawn_failure_fails_the_waiting_and_queued_reads() {
         next(&rx, &Deadline::after(DEADLINE)),
         Input::Models(Ok(_))
     ));
+    // With nothing queued, only the waiting read fails.
+    let read: ReadModels = Arc::new(|_| Ok(Catalogue::default()));
+    let mut reader = Reader::new(Some(read));
+    let (tx, rx) = mpsc::channel();
+    reader.ask_with(Refresh::Cached, &tx, failing_spawn);
+    assert!(!reader.running);
+    match Deadline::after(DEADLINE).recv(&rx) {
+        Ok(Input::Models(Err(message))) => assert_eq!(
+            message,
+            "terminal: could not start the model-list reader: no thread"
+        ),
+        Ok(_) => panic!("the waiting read: the failure, not an answer"),
+        Err(error) => panic!("waited {DEADLINE:?} for the waiting read: {error}"),
+    }
+    assert!(matches!(rx.try_recv(), Err(mpsc::TryRecvError::Empty)));
 }

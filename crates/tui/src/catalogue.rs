@@ -114,8 +114,9 @@ impl Reader {
     }
 
     /// Asks as [`Reader::ask`] does, with the thread spawn as a closure
-    /// so tests fail it. A failed spawn is dropped here: the asked read
-    /// never answers.
+    /// so tests fail it. A failed spawn fails every owed read with the
+    /// same `terminal:` message and frees the reader, so a later ask
+    /// spawns again; nothing stays queued.
     pub(crate) fn ask_with(
         &mut self,
         refresh: Refresh,
@@ -140,14 +141,29 @@ impl Reader {
         self.running = true;
         let read = Arc::clone(read);
         let out = out.clone();
+        let thread_out = out.clone();
         // A read whose send fails finds the loop closed, and ends: the
         // answer is dropped with the send's error.
-        drop(spawn(
+        match spawn(
             crate::sources::builder("tui-models"),
             Box::new(move || {
-                drop(out.send(crate::Input::Models(read(refresh))));
+                drop(thread_out.send(crate::Input::Models(read(refresh))));
             }),
-        ));
+        ) {
+            Ok(_) => {}
+            Err(source) => {
+                // No read runs, so every owed read fails alike: the asked
+                // one, and the queued one when one waits. The reader is
+                // free again, and nothing stays queued.
+                self.running = false;
+                let queued = self.queued.take();
+                let message = format!("terminal: could not start the model-list reader: {source}");
+                drop(out.send(crate::Input::Models(Err(message.clone()))));
+                if queued.is_some() {
+                    drop(out.send(crate::Input::Models(Err(message))));
+                }
+            }
+        }
     }
 
     /// A read answered: the widest waiting starts, if one waits.

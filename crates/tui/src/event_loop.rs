@@ -19,7 +19,7 @@ use std::sync::mpsc::{self, Receiver, Sender};
 
 use contract::clock::Clock;
 use contract::shapes::Failure;
-use contract::{Envelope, Seq, SessionId};
+use contract::{Envelope, ErrorCode, Seq, SessionId};
 use ratatui::backend::Backend;
 use signal_hook::consts::{SIGHUP, SIGINT, SIGQUIT, SIGTERM, SIGWINCH};
 use signal_hook::iterator::Signals;
@@ -52,8 +52,9 @@ pub fn run(
 }
 
 /// Runs as [`run`] does, with the input reader's spawn as a function so
-/// tests fail it. A failed spawn reads no keys: the terminal runs without
-/// them here, and reports the failure once the seam's callers do.
+/// tests fail it. A failed spawn returns the failure without entering the
+/// loop: the terminal is restored by the [`term::Guard`] drop on that
+/// return.
 pub(crate) fn run_with(
     tty: File,
     launch: Launch,
@@ -183,10 +184,24 @@ pub(crate) fn run_with(
     // frame draws at once and the picker lists them as soon as the read
     // answers.
     terminal.model_reader.ask(catalogue::Refresh::Cached, &tx);
-    terminal.reader = terminal
+    match terminal
         .tty
         .as_ref()
-        .and_then(|tty| spawn_reader(tty, tx.clone()).ok());
+        .map(|tty| spawn_reader(tty, tx.clone()))
+    {
+        Some(Ok(reader)) => terminal.reader = Some(reader),
+        // Without the reader no key reaches the loop: fail instead of
+        // running deaf. The guard's drop restores the terminal.
+        Some(Err(error)) => {
+            return Err(Failure {
+                code: ErrorCode::IoFailed,
+                message: error.to_string(),
+                retry_after_ms: None,
+                provider: None,
+            });
+        }
+        None => {}
+    }
     spawn_hub(connect, tx.clone(), retry, Arc::clone(&terminal.clock));
     // The tick runs only while something drawn moves: the first frame's
     // asks arm it, and the loop re-arms it after every frame.
