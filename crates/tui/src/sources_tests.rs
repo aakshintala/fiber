@@ -2,6 +2,7 @@
 
 use crate::Input;
 use fakes::Deadline;
+use std::error::Error as _;
 use std::fs::File;
 use std::io::{self, Write};
 use std::sync::{Arc, mpsc};
@@ -202,6 +203,13 @@ fn spawn_clone_failure_is_terminal_io_failed() {
         error.to_string(),
         "terminal: could not start the input reader: duplicating the tty: no dup"
     );
+    assert_eq!(
+        error
+            .source()
+            .expect("the clone error has a source")
+            .to_string(),
+        "no dup"
+    );
 }
 
 #[test]
@@ -220,6 +228,13 @@ fn spawn_pipe_failure_is_terminal_io_failed() {
         error.to_string(),
         "terminal: could not start the input reader: creating the wake pipe: no pipe"
     );
+    assert_eq!(
+        error
+            .source()
+            .expect("the pipe error has a source")
+            .to_string(),
+        "no pipe"
+    );
 }
 
 #[test]
@@ -233,5 +248,12 @@ fn spawn_thread_failure_is_terminal_io_failed() {
     assert_eq!(
         error.to_string(),
         "terminal: could not start the input reader: spawning the reader thread: no thread"
+    );
+    assert_eq!(
+        error
+            .source()
+            .expect("the thread error has a source")
+            .to_string(),
+        "no thread"
     );
 }
