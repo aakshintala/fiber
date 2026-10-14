@@ -1,6 +1,6 @@
 //! Tests for the loop, and for `run` through a pseudo-terminal.
 
-use super::{Input, Loop, Screen};
+use super::{Input, Loop, Screen, hub::Connection};
 use crate::app::App;
 use crate::keys::Event;
 use crate::link::Line;
@@ -134,7 +134,7 @@ pub(super) fn new_loop<B: Backend + crate::screen::SyncEmit>(
         app,
         parser: crate::keys::Parser::default(),
         screen,
-        hub: None,
+        hub: Connection::new(None),
         tty,
         on_attach: Box::new(move |session| {
             if let Ok(mut held) = seen.lock() {
@@ -145,7 +145,6 @@ pub(super) fn new_loop<B: Backend + crate::screen::SyncEmit>(
         wakeups: 0,
         files_out: None,
         search: None,
-        stash: std::collections::VecDeque::new(),
         reader: None,
         model_reader: crate::catalogue::Reader::new(None),
         paste_reader: None,
@@ -158,7 +157,6 @@ pub(super) fn new_loop<B: Backend + crate::screen::SyncEmit>(
         images_dir: PathBuf::new(),
         title: crate::osc::Title::default(),
         shape: crate::osc::Shape::default(),
-        retry: None,
         tick: crate::tick::TickThread::idle(),
     };
     (lp, attached)
@@ -398,7 +396,7 @@ fn connect_failure_and_disconnect_are_notices() {
         vec![Input::Connected(ours, hello()), Input::Disconnected],
     );
     assert_eq!(lp.app.notice(), Some("Connection lost."));
-    assert!(lp.hub.is_none());
+    assert!(!lp.hub.has_stream());
 }
 
 /// A clone of `ours`, as the hub reader thread holds one, that waits
@@ -434,9 +432,9 @@ fn a_failed_write_hangs_up_and_returns_the_draft() {
     ours.shutdown(std::net::Shutdown::Write)
         .unwrap_or_else(|err| panic!("shutdown: {err}"));
     feed(&mut lp, vec![Input::Connected(ours, hello())]);
-    assert!(lp.hub.is_some());
+    assert!(lp.hub.has_stream());
     feed(&mut lp, vec![Input::Bytes(b"hi\r".to_vec())]);
-    assert!(lp.hub.is_none());
+    assert!(!lp.hub.has_stream());
     sees_the_end(reader, "the reader to see the hang-up");
     assert_eq!(lp.app.notice(), Some("Connection lost."));
     assert_eq!(lp.app.draft(), "hi");
@@ -456,7 +454,7 @@ fn a_schema_mismatch_says_so_and_hangs_up() {
     let mut newer = hello();
     newer.schema_version = contract::SCHEMA_VERSION + 1;
     feed(&mut lp, vec![Input::Connected(ours, newer)]);
-    assert!(lp.hub.is_none());
+    assert!(!lp.hub.has_stream());
     sees_the_end(reader, "the reader to see the hang-up");
     // The reader's end arrives next; the version notice stays.
     feed(&mut lp, vec![Input::Disconnected]);
@@ -2191,14 +2189,13 @@ fn the_loop_lists_searches_and_drops_the_worker_on_close() {
         parser: crate::keys::Parser::default(),
         screen: Screen::new(TestBackend::new(60, 12), 60, 12)
             .unwrap_or_else(|err| panic!("screen: {err}")),
-        hub: None,
+        hub: Connection::new(None),
         tty: None,
         on_attach: Box::new(|_| {}),
         clock: fakes::clock::FakeClock::new(),
         wakeups: 0,
         files_out: Some(out),
         search: None,
-        stash: std::collections::VecDeque::new(),
         reader: None,
         model_reader: crate::catalogue::Reader::new(None),
         paste_reader: None,
@@ -2211,7 +2208,6 @@ fn the_loop_lists_searches_and_drops_the_worker_on_close() {
         images_dir: PathBuf::new(),
         title: crate::osc::Title::default(),
         shape: crate::osc::Shape::default(),
-        retry: None,
         tick: crate::tick::TickThread::idle(),
     };
     // No hub: a frame fetches no history, so nothing arrives here.
@@ -2301,7 +2297,7 @@ fn the_pause_thread_sends_find_due_on_the_fake_clock() {
     assert!(lp.app.pages().page_count() > 2);
     assert!(lp.app.pages().part(0).is_none(), "the first page dropped");
     let (hub, theirs) = UnixStream::pair().unwrap_or_else(|err| panic!("pair: {err}"));
-    lp.hub = Some(hub);
+    lp.hub.store(hub);
     let (found, due) = mpsc::channel();
     lp.files_out = Some(found);
     let (_, main) = mpsc::channel::<Input>();
@@ -2451,7 +2447,7 @@ fn keys_typed_while_a_reveal_loads_its_page_are_handled_after_in_order() {
     assert_eq!(lp.app.top(), Some(start));
     // The loop runs on its own thread with the fake hub on a socket pair.
     let (ours, theirs) = UnixStream::pair().unwrap_or_else(|err| panic!("pair: {err}"));
-    lp.hub = Some(ours);
+    lp.hub.store(ours);
     let (tx, rx) = mpsc::channel();
     let (done, finished) = mpsc::channel();
     std::thread::Builder::new()
@@ -2841,14 +2837,14 @@ fn a_signal_ends_a_history_wait_at_once() {
         .name("lib-signal-wait".to_owned())
         .spawn(move || {
             let mut lp = lp;
-            let result = lp.answer(&rx, "a_1");
-            done.send((result, lp.stash.len())).unwrap_or(());
+            let result = lp.hub.answer(&rx, "a_1", &mut lp.app, &lp.tick);
+            done.send((result, lp.hub.stashed().len())).unwrap_or(());
         })
         .unwrap_or_else(|err| panic!("spawn: {err}"));
     let (result, held) = Deadline::after(DEADLINE)
         .recv(&finished)
         .unwrap_or_else(|err| panic!("waited {DEADLINE:?} for the history wait to end: {err}"));
-    assert_eq!(result, Err(super::LOST.to_owned()));
+    assert_eq!(result, Err(super::hub::LOST.to_owned()));
     assert_eq!(held, 1, "the signal is held for after the frame");
 }
 

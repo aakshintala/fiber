@@ -10,7 +10,7 @@ use std::time::Duration;
 use ratatui::backend::TestBackend;
 use serde_json::{Value, json};
 
-use super::Loop;
+use super::{Loop, hub::Connection};
 use crate::Input;
 use crate::app::{App, Effect, Target};
 use crate::link::Line;
@@ -81,16 +81,15 @@ fn loop_with_viewer(
         program.to_str().unwrap_or_default().to_owned(),
         marker.to_str().unwrap_or_default().to_owned(),
     ];
-    let lp = Loop {
+    let mut lp = Loop {
         app,
         parser: crate::keys::Parser::default(),
         screen,
-        hub: Some(ours),
+        hub: Connection::new(None),
         tty: None,
         on_attach: Box::new(|_| {}),
         clock: fakes::clock::FakeClock::new(),
         wakeups: 0,
-        stash: std::collections::VecDeque::new(),
         files_out: Some(out),
         search: None,
         reader: None,
@@ -105,9 +104,9 @@ fn loop_with_viewer(
         images_dir: images.clone(),
         title: crate::osc::Title::default(),
         shape: crate::osc::Shape::default(),
-        retry: None,
         tick: crate::tick::TickThread::idle(),
     };
+    lp.hub.store(ours);
     (lp, theirs, rx, images, marker, dir)
 }
 
@@ -201,7 +200,7 @@ fn a_click_on_an_image_line_reads_the_file_and_opens_it() {
     let (mut lp, theirs, rx, images, marker, _dir) = loop_with_viewer("echo \"$2\" > \"$1\"\n");
     let (_idle_tx, idle) = mpsc::channel();
     let lines = click(&mut lp);
-    lp.send(&lines);
+    lp.hub.send(&lines, &mut lp.app);
     let id = answer(&theirs);
     assert_eq!(lp.step(accepted(&id, "Ynl0ZXM="), &idle), None);
     match completion(&rx, &Deadline::after(DEADLINE)) {
@@ -243,7 +242,7 @@ fn a_failed_viewer_draws_the_notice() {
     let (mut lp, theirs, rx, _images, _marker, _dir) = loop_with_viewer("exit 3\n");
     let (_idle_tx, idle) = mpsc::channel();
     let lines = click(&mut lp);
-    lp.send(&lines);
+    lp.hub.send(&lines, &mut lp.app);
     let id = answer(&theirs);
     assert_eq!(lp.step(accepted(&id, "Ynl0ZXM="), &idle), None);
     // The worker's completion arrives as its own input: stepping it

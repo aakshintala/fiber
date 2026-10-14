@@ -4,30 +4,29 @@
 //! before drawing it, and hands the terminal to the editor.
 
 pub(crate) mod batch;
+mod hub;
 
-use batch::{batch, batchable};
+use batch::batchable;
+use hub::Connection;
 
-use std::collections::VecDeque;
 use std::fs::File;
 use std::io::{self, Write};
-use std::ops::RangeInclusive;
-use std::os::unix::net::UnixStream;
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::sync::atomic::AtomicBool;
 use std::sync::mpsc::{self, Receiver, Sender};
 
 use contract::clock::Clock;
-use contract::{Envelope, ErrorCode, Seq, SessionId};
+use contract::{ErrorCode, SessionId};
 use ratatui::backend::Backend;
 use signal_hook::consts::{SIGHUP, SIGINT, SIGQUIT, SIGTERM, SIGWINCH};
 use signal_hook::iterator::Signals;
 
-use crate::app::{App, Effect, mint, session_command};
+use crate::app::{App, Effect};
 use crate::catalogue;
 use crate::home::Launch;
 use crate::keys::{Button, Event, MouseKind, Parser, Reply};
-use crate::link::{self, Line};
+use crate::link::Line;
 use crate::look::Look;
 use crate::mouse::Pointer;
 use crate::retry::Retry;
@@ -149,14 +148,13 @@ pub(crate) fn run_with(
         app,
         parser: Parser::default(),
         screen,
-        hub: None,
+        hub: Connection::new(Some(Arc::clone(&retry))),
         tty: Some(tty),
         on_attach,
         clock,
         wakeups: 0,
         files_out: None,
         search: None,
-        stash: VecDeque::new(),
         reader: None,
         model_reader: catalogue::Reader::new(models),
         pointer: Pointer::default(),
@@ -174,7 +172,6 @@ pub(crate) fn run_with(
         ),
         title: osc::Title::default(),
         shape: osc::Shape::default(),
-        retry: Some(Arc::clone(&retry)),
         tick: crate::tick::TickThread::idle(),
     };
     terminal.app.set_opener(terminal.open_command.is_some());
@@ -230,7 +227,7 @@ pub(crate) fn run_with(
     let lines = terminal.app.exit_lines();
     // Ends the hub reader thread; the input and resize threads stay
     // blocked and end with the process.
-    terminal.hang_up();
+    terminal.hub.hang_up();
     drop(restore);
     if let Some(mut tty) = terminal.tty.take() {
         for line in &lines {
@@ -278,8 +275,9 @@ struct Loop<B: Backend> {
     app: App,
     parser: Parser,
     screen: Screen<B>,
-    /// The hub stream commands are written on, once connected.
-    hub: Option<UnixStream>,
+    /// The hub connection: the stream, the held inputs and the hub
+    /// thread's permit, reached only through its interface.
+    hub: Connection,
     /// The tty, for its size on resize.
     tty: Option<File>,
     on_attach: OnAttach,
@@ -293,9 +291,6 @@ struct Loop<B: Backend> {
     /// The clipboard image command for this machine, chosen once at
     /// startup, or none where no clipboard reads.
     paste_reader: Option<crate::paste_image::Reader>,
-    /// Inputs that arrived while a frame waited for history, handled next
-    /// in arrival order.
-    stash: VecDeque<Input>,
     /// The tty's reader, paused while the editor has the terminal.
     reader: Option<Reader>,
     /// The one model-list read at a time.
@@ -321,20 +316,10 @@ struct Loop<B: Backend> {
     title: osc::Title,
     /// The pointer shape last written.
     shape: osc::Shape,
-    /// The hub thread's permit to connect again (`docs/tui.md`, "A
-    /// dropped connection"); none in tests with no hub thread.
-    retry: Option<Arc<Retry>>,
     /// The working line's timer: armed after every frame with the next
     /// moving frame's deadline (`docs/tui.md`, "The working line").
     tick: crate::tick::TickThread,
 }
-
-/// The most lines one `history` answer holds (`docs/invocation.md`,
-/// "Driver commands").
-const HISTORY_LINES: u64 = 256;
-
-/// What a lost connection fails a fetch with.
-const LOST: &str = "connection lost";
 
 impl<B: Backend> Loop<B> {
     /// Handles inputs until one quits, or every sender is gone: those a
@@ -343,12 +328,9 @@ impl<B: Backend> Loop<B> {
     /// for its own. The only wait is `recv` with no timeout.
     fn run(&mut self, rx: &Receiver<Input>) -> i32 {
         loop {
-            let first = match self.stash.pop_front() {
-                Some(input) => input,
-                None => match rx.recv() {
-                    Ok(input) => input,
-                    Err(_) => return 0,
-                },
+            // Nothing stashed and every sender gone ends the loop.
+            let Some(inputs) = self.hub.take_batch(rx) else {
+                return 0;
             };
             // Only a batch starting with a hub line or tick holds: a
             // key, click or resize folds nothing into a held page, and
@@ -357,8 +339,8 @@ impl<B: Backend> Loop<B> {
             // the open page is counted once for the batch, not once per
             // changed line, and the batch settles once at its end, when
             // the counts are exact.
-            let held = batchable(&first);
-            let inputs = batch(first, &mut self.stash, rx);
+            let held = inputs.first().is_some_and(batchable);
+            // The batch's inputs already folded, in arrival order.
             if held {
                 self.app.begin_batch();
             }
@@ -474,13 +456,13 @@ impl<B: Backend> Loop<B> {
                     clipboard::copy(self.tty.as_ref(), self.copy_command.as_deref(), text);
                 }
                 Effect::OpenLink(url) => self.open_link(url),
-                Effect::Send(lines) => self.send(&lines),
+                Effect::Send(lines) => self.hub.send(&lines, &mut self.app),
                 Effect::Quit => return Some(0),
                 Effect::Exit(lines) => {
                     // The quit question's closes go out, then the
                     // terminal quits: a close never written keeps
                     // its resume line.
-                    self.send(&lines);
+                    self.hub.send(&lines, &mut self.app);
                     return Some(0);
                 }
                 Effect::ListFiles => self.list_files(),
@@ -580,24 +562,24 @@ impl<B: Backend> Loop<B> {
             }
             Input::Hub(line) => {
                 let lines = self.app.on_line(line);
-                self.send(&lines);
+                self.hub.send(&lines, &mut self.app);
             }
             Input::Connected(stream, hello) => {
-                self.hub = Some(stream);
+                self.hub.store(stream);
                 let lines = self.app.on_line(Line::Hub(hello));
-                self.send(&lines);
+                self.hub.send(&lines, &mut self.app);
                 // A `hub_hello` this terminal cannot read leaves it
                 // unconnected: it says so and disconnects.
                 if !self.app.connected() {
-                    self.hang_up();
+                    self.hub.hang_up();
                 }
             }
             Input::ConnectFailed(error) => {
                 self.app
                     .connect_failed(format!("Could not reach the hub: {error}"));
-                self.retry_later();
+                self.hub.retry_later(&mut self.app);
             }
-            Input::Disconnected => self.on_disconnected(),
+            Input::Disconnected => self.hub.on_disconnected(&mut self.app),
             Input::Files { generation, result } => self.app.on_files(generation, result),
             Input::Models(result) => {
                 self.app.on_models(result);
@@ -616,7 +598,7 @@ impl<B: Backend> Loop<B> {
             } => self.app.image_viewed(id, &name, generation, result),
             Input::FindDue(generation) => {
                 let lines = self.app.find_due(generation);
-                self.send(&lines);
+                self.hub.send(&lines, &mut self.app);
             }
             // Its frame already drew: the next moving frame arms the
             // tick again below.
@@ -648,7 +630,7 @@ impl<B: Backend> Loop<B> {
         // acknowledgement arriving late is reconciled on the step that
         // brings it.
         let due = self.app.items_due(self.clock.now());
-        self.send(&due);
+        self.hub.send(&due, &mut self.app);
         self.page_in(rx);
         self.apply_theme();
         // A selection's copy waiting on dropped pages runs once they load.
@@ -772,10 +754,13 @@ impl<B: Backend> Loop<B> {
             let Some(session) = self.app.paging_session().cloned() else {
                 return;
             };
-            if self.hub.is_none() {
+            if !self.hub.has_stream() {
                 return;
             }
-            match self.fetch(rx, &session, &range) {
+            match self
+                .hub
+                .fetch(rx, &session, &range, &mut self.app, &mut self.tick)
+            {
                 Ok(lines) => {
                     self.app.load(lines);
                     // An answer that folded nothing into the page would
@@ -787,124 +772,6 @@ impl<B: Backend> Loop<B> {
                 }
                 Err(message) => self.app.load_failed(&range, &message),
             }
-        }
-    }
-
-    /// Reads `range` with `history`, in commands of at most
-    /// [`HISTORY_LINES`] lines, each answered before the next is sent.
-    fn fetch(
-        &mut self,
-        rx: &Receiver<Input>,
-        session: &SessionId,
-        range: &RangeInclusive<Seq>,
-    ) -> Result<Vec<Envelope>, String> {
-        let mut lines = Vec::new();
-        let mut from = range.start().0;
-        while from <= range.end().0 {
-            let to = from.saturating_add(HISTORY_LINES - 1).min(range.end().0);
-            let id = mint();
-            let args = serde_json::json!({"from_seq": from, "to_seq": to});
-            let command = session_command(&id, "history", session, Some(args)).to_string();
-            let written = self
-                .hub
-                .as_ref()
-                .is_some_and(|hub| link::write_line(hub, &command).is_ok());
-            if !written {
-                self.lost();
-                return Err(LOST.to_owned());
-            }
-            let answer = self.answer(rx, &id)?;
-            let Some(last) = answer.last().and_then(|line| line.seq) else {
-                break;
-            };
-            from = last.0.saturating_add(1);
-            lines.extend(answer);
-        }
-        Ok(lines)
-    }
-
-    /// Waits for the answer to command `id`, holding every other input for
-    /// after the frame. A lost connection ends the wait; a signal is held
-    /// for after the frame and ends the wait as lost, so the loop quits
-    /// with the signal's number next.
-    fn answer(&mut self, rx: &Receiver<Input>, id: &str) -> Result<Vec<Envelope>, String> {
-        loop {
-            let Ok(input) = rx.recv() else {
-                self.lost();
-                return Err(LOST.to_owned());
-            };
-            match input {
-                Input::Hub(Line::Session(line)) if link::answers(&line, id) => {
-                    return link::history_answer(&line);
-                }
-                // A tick while a frame waits for history is acked and
-                // dropped, not stashed: the frame asks again after it
-                // draws.
-                Input::Tick => self.tick.ack(),
-                Input::Disconnected => {
-                    self.on_disconnected();
-                    return Err(LOST.to_owned());
-                }
-                // A signal while a frame waits for history is held ahead
-                // of every later input, and the wait ends as lost: the
-                // loop quits with the signal's number before handling
-                // anything behind it.
-                Input::Signal(signal) => {
-                    self.stash.push_back(Input::Signal(signal));
-                    return Err(LOST.to_owned());
-                }
-                other @ (Input::Bytes(_)
-                | Input::Hub(_)
-                | Input::Connected(..)
-                | Input::ConnectFailed(_)
-                | Input::Resize
-                | Input::FindDue(_)
-                | Input::Image { .. }
-                | Input::Viewed { .. }
-                | Input::Models(_)
-                | Input::Login { .. }
-                | Input::Files { .. }) => self.stash.push_back(other),
-            }
-        }
-    }
-
-    /// The hub connection ended: the reader sends this once per stream,
-    /// so each ended connection gives the hub thread one permit.
-    fn on_disconnected(&mut self) {
-        self.hub = None;
-        self.app.disconnected();
-        self.retry_later();
-    }
-
-    /// Gives the hub thread its permit for one failure, after the delay
-    /// the app names; none once the hub refused this terminal's schema.
-    fn retry_later(&mut self) {
-        if let (Some(delay), Some(retry)) = (self.app.next_retry(), &self.retry) {
-            retry.give(delay);
-        }
-    }
-
-    /// The connection ended during a fetch: nothing more is asked. The
-    /// reader's end of the stream gives the permit.
-    fn lost(&mut self) {
-        self.hang_up();
-        self.app.disconnected();
-    }
-
-    /// Writes command lines to the hub, each one written kept for resending
-    /// until it is answered. A failed write hangs up: the connection is
-    /// lost, and the text of the lines not sent returns to the draft.
-    fn send(&mut self, lines: &[String]) {
-        for (at, line) in lines.iter().enumerate() {
-            let Some(hub) = &mut self.hub else {
-                return;
-            };
-            if link::write_line(hub, line).is_err() {
-                self.hang_up();
-                self.app.write_failed(lines.get(at..).unwrap_or_default());
-                return;
-            }
-            self.app.wrote(line);
         }
     }
 
@@ -1040,29 +907,6 @@ impl<B: Backend> Loop<B> {
         };
         self.app.set_size(width, height);
         self.screen.resize(width, height).err().map(|_| 1)
-    }
-
-    /// Stops the hub reader, shuts the hub stream down both ways and drops
-    /// it. The reader thread then sees the end, even when the kernel misses
-    /// the shutdown's wakeup (#1877).
-    fn hang_up(&mut self) {
-        if let Some(retry) = &self.retry {
-            retry.end_read();
-        }
-        if let Some(hub) = self.hub.take() {
-            hub.shutdown(std::net::Shutdown::Both).unwrap_or(());
-        }
-    }
-}
-
-/// The loop is gone: the hub thread stops waiting for a permit, and a
-/// reader blocked on the stream sees its end.
-impl<B: Backend> Drop for Loop<B> {
-    fn drop(&mut self) {
-        if let Some(retry) = &self.retry {
-            retry.quit();
-        }
-        self.hang_up();
     }
 }
 

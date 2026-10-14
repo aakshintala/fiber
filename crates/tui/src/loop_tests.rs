@@ -2,7 +2,7 @@
 //! needs with `history` before it draws (`docs/tui.md`, "History and
 //! paging").
 
-use super::{Input, Loop, Screen};
+use super::{Input, Loop, Screen, hub::Connection};
 use crate::app::App;
 use crate::link::Line;
 use contract::Envelope;
@@ -133,16 +133,15 @@ fn opened() -> (
     let (ours, theirs) = UnixStream::pair().unwrap_or_else(|err| panic!("pair: {err}"));
     let screen =
         Screen::new(TestBackend::new(60, 12), 60, 12).unwrap_or_else(|err| panic!("screen: {err}"));
-    let lp = Loop {
+    let mut lp = Loop {
         app,
         parser: crate::keys::Parser::default(),
         screen,
-        hub: Some(ours),
+        hub: Connection::new(None),
         tty: None,
         on_attach: Box::new(|_| {}),
         clock: fakes::clock::FakeClock::new(),
         wakeups: 0,
-        stash: std::collections::VecDeque::new(),
         files_out: None,
         search: None,
         reader: None,
@@ -157,9 +156,9 @@ fn opened() -> (
         images_dir: PathBuf::new(),
         title: crate::osc::Title::default(),
         shape: crate::osc::Shape::default(),
-        retry: None,
         tick: crate::tick::TickThread::idle(),
     };
+    lp.hub.store(ours);
     let (tx, rx) = mpsc::channel();
     (lp, theirs, tx, rx)
 }
@@ -339,7 +338,8 @@ fn inputs_during_the_wait_are_handled_after_the_frame_in_order() {
     // Held in arrival order, not yet handled.
     assert_eq!(lp.app.draft(), "");
     let held: Vec<String> = lp
-        .stash
+        .hub
+        .stashed()
         .iter()
         .map(|input| match input {
             Input::Bytes(bytes) => String::from_utf8_lossy(bytes).into_owned(),
@@ -360,7 +360,7 @@ fn inputs_during_the_wait_are_handled_after_the_frame_in_order() {
         })
         .collect();
     assert_eq!(held, ["a", "command_accepted", "resize", "b"]);
-    while let Some(input) = lp.stash.pop_front() {
+    while let Some(input) = lp.hub.pop_stashed() {
         assert_eq!(lp.step(input, &rx), None);
     }
     assert_eq!(lp.app.draft(), "ab");
@@ -374,7 +374,7 @@ fn a_lost_connection_ends_the_wait_with_the_notice() {
     let seen = serve(theirs, tx.clone(), script);
     let lp = run(lp, rx, &tx, to_the_top());
     assert_eq!(ranges(&seen).len(), 1);
-    assert!(lp.hub.is_none());
+    assert!(!lp.hub.has_stream());
     assert_eq!(
         lp.app.notice(),
         Some("Could not load history: connection lost")
@@ -389,7 +389,7 @@ fn a_lost_connection_ends_the_wait_with_the_notice() {
 fn a_drop_during_a_history_fetch_gives_one_retry() {
     let (mut lp, theirs, tx, rx) = opened();
     let retry = crate::retry::Retry::new(&lp.clock);
-    lp.retry = Some(Arc::clone(&retry));
+    lp.hub.set_retry(Arc::clone(&retry));
     let script: Script = Box::new(|_| vec![Input::Disconnected]);
     serve(theirs, tx.clone(), script);
     let lp = run(lp, rx, &tx, to_the_top());
@@ -426,14 +426,14 @@ fn a_rejected_fetch_sets_the_notice_and_the_frame_goes_on() {
     assert_eq!(ranges.iter().filter(|(from, _)| *from == 0).count(), 1);
     assert!(ranges.iter().any(|(from, _)| *from > 512), "{ranges:?}");
     assert!(!lp.app.pages().part(0).is_some());
-    assert!(lp.hub.is_some());
+    assert!(lp.hub.has_stream());
 }
 
 #[test]
 fn a_frame_with_no_hub_fetches_nothing() {
     let (mut lp, theirs, tx, rx) = opened();
     drop(theirs);
-    lp.hang_up();
+    lp.hub.hang_up();
     let lp = run(lp, rx, &tx, to_the_top());
     assert!(!lp.app.pages().part(0).is_some());
     assert_eq!(lp.app.scroll().0, 0);
@@ -465,12 +465,12 @@ fn an_answer_with_no_lines_fails_the_page_once() {
 #[test]
 fn a_history_command_that_cannot_be_written_loses_the_connection() {
     let (lp, _theirs, tx, rx) = opened();
-    if let Some(hub) = &lp.hub {
+    if let Some(hub) = lp.hub.stream() {
         hub.shutdown(std::net::Shutdown::Write)
             .unwrap_or_else(|err| panic!("shutdown: {err}"));
     }
     let lp = run(lp, rx, &tx, to_the_top());
-    assert!(lp.hub.is_none());
+    assert!(!lp.hub.has_stream());
     assert_eq!(
         lp.app.notice(),
         Some("Could not load history: connection lost")
@@ -858,12 +858,11 @@ fn counting() -> (
         app,
         parser: crate::keys::Parser::default(),
         screen,
-        hub: None,
+        hub: Connection::new(None),
         tty: None,
         on_attach: Box::new(|_| {}),
         clock: fakes::clock::FakeClock::new(),
         wakeups: 0,
-        stash: std::collections::VecDeque::new(),
         files_out: None,
         search: None,
         reader: None,
@@ -878,7 +877,6 @@ fn counting() -> (
         images_dir: PathBuf::new(),
         title: crate::osc::Title::default(),
         shape: crate::osc::Shape::default(),
-        retry: None,
         tick: crate::tick::TickThread::idle(),
     };
     let (tx, rx) = mpsc::channel();
@@ -1256,12 +1254,11 @@ fn resume_open_replays_the_log_to_the_tail() {
         app,
         parser: crate::keys::Parser::default(),
         screen,
-        hub: None,
+        hub: Connection::new(None),
         tty: None,
         on_attach: Box::new(|_| {}),
         clock: fakes::clock::FakeClock::new(),
         wakeups: 0,
-        stash: std::collections::VecDeque::new(),
         files_out: None,
         search: None,
         reader: None,
@@ -1276,7 +1273,6 @@ fn resume_open_replays_the_log_to_the_tail() {
         images_dir: PathBuf::new(),
         title: crate::osc::Title::default(),
         shape: crate::osc::Shape::default(),
-        retry: None,
         tick: crate::tick::TickThread::idle(),
     };
     let (tx, rx) = mpsc::channel();

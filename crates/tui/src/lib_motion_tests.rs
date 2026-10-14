@@ -207,7 +207,7 @@ fn a_tick_while_a_frame_waits_for_history_is_acked() {
         None,
     )))
     .unwrap_or_else(|err| panic!("send: {err}"));
-    let lines = lp.answer(&rx, "c_1");
+    let lines = lp.hub.answer(&rx, "c_1", &mut lp.app, &lp.tick);
     assert_eq!(lines, Ok(Vec::new()));
     // Without the ack the next armed tick would never come: a deadline
     // already past sends at once.
