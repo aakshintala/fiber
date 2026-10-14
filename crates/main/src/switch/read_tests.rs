@@ -462,6 +462,10 @@ fn timeout_rekills_a_group_that_survives_its_first_kill() {
     let clock = FakeClock::new();
     let deadline = clock.origin() + timeout;
     let reads = Arc::new(Reads::default());
+    // Both wakes before the timeout must land before the poll cadence
+    // below: the spawn's listing and the reaper's answer. Captured before
+    // the spawn, so both are still to come.
+    let sent = reads.wake.generation();
     // The `sleep` inherits stdout, so the leader's exit is not the run's
     // end: the wait parks at its deadline with the leader already gone,
     // and the timeout below needs no reap wait, only the group's kills.
@@ -474,6 +478,23 @@ fn timeout_rekills_a_group_that_survives_its_first_kill() {
         clock.await_parked(deadline, DEADLINE),
         "the wait parked at its deadline"
     );
+    // The reaper's answer bump can otherwise still be in flight here:
+    // landing after the first poll park below, it would drive its own
+    // extra settlement pass on top of the forced one, retiring the group
+    // before any named park. Both wakes before the timeout — the spawn's
+    // listing and the reaper's answer — land first, so the forced bump
+    // below is the only wake inside the cadence. The stdout reader never
+    // answers while `sleep` holds the pipe, nothing is cancelled, and the
+    // clock has not moved, so these are the only two.
+    fakes::within("the leader's wake", DEADLINE, {
+        let wake = Arc::clone(&reads.wake);
+        move || loop {
+            if wake.generation() >= sent + 2 {
+                return;
+            }
+            std::thread::yield_now();
+        }
+    });
     // Alive past the first kill, gone after the second.
     reads.script_group(
         pgid,
@@ -488,6 +509,27 @@ fn timeout_rekills_a_group_that_survives_its_first_kill() {
     assert!(
         clock.await_parked(poll, DEADLINE),
         "the timeout parked at its first poll"
+    );
+    // Forced late wake: the reaper's exit bump can land after the first
+    // poll park is observed. One bump of the wait's own wake is exactly
+    // what that exit bump does, so it drives the same extra settlement
+    // pass with `now` still at the deadline, spending the second probe
+    // before the advance below. The send count proves the extra pass ran;
+    // the park after it proves the wait is held again before the drive
+    // moves on.
+    reads.wake.bump();
+    fakes::within("the early settlement pass", DEADLINE, {
+        let reads = Arc::clone(&reads);
+        move || loop {
+            if reads.scripted_sends() == 2 {
+                return;
+            }
+            std::thread::yield_now();
+        }
+    });
+    assert!(
+        clock.await_parked(poll, DEADLINE),
+        "the timeout parked at its first poll again"
     );
     clock.advance(GROUP_POLL);
     let repoll = poll + GROUP_POLL;
