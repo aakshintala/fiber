@@ -832,7 +832,7 @@ fn a_pipelined_discard_pins_every_side() {
     let transfer_encoding = ("transfer-encoding".to_string(), "chunked".to_string());
     let host = ("host".to_string(), "localhost".to_string());
     assert!(
-        discards_pipelined(&[content_length.clone()]),
+        discards_pipelined(std::slice::from_ref(&content_length)),
         "a declared fixed body discards pipelined bytes"
     );
     assert!(
@@ -840,7 +840,7 @@ fn a_pipelined_discard_pins_every_side() {
         "a chunked declared body never drains"
     );
     assert!(
-        !discards_pipelined(&[transfer_encoding.clone()]),
+        !discards_pipelined(std::slice::from_ref(&transfer_encoding)),
         "a chunked body with no declared length never drains"
     );
     assert!(
