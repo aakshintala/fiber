@@ -155,9 +155,10 @@ fn add_architecture_noise(dir: &TempDir, source: &str) {
 fn select_runs_a_changed_crate_and_its_dependents() {
     let dir = workspace();
     dir.write("crates/a/src/lib.rs", "//! a, changed\n");
+    // The exact output pins the keys `scripts/check` reads (`mode`,
+    // `packages`, `package_specs`, `library_specs`) and the absence of
+    // any `libraries=` line.
     let (code, out) = xtask(&dir, &["select", "--base", "main"], &[], "");
-    assert_eq!(code, 0, "{out}");
-    assert!(!out.lines().any(|l| l.starts_with("libraries=")), "{out}");
     assert_eq!(
         (code, out.as_str()),
         (
@@ -169,29 +170,10 @@ fn select_runs_a_changed_crate_and_its_dependents() {
 }
 
 #[test]
-fn select_output_has_the_keys_scripts_check_reads_and_no_libraries_key() {
-    // `scripts/check` reads `mode`, `packages`, `package_specs`,
-    // `library_specs` and `extension_packages`, never `libraries`.
-    let dir = workspace();
-    dir.write("crates/a/src/lib.rs", "//! a, changed\n");
-    let (code, out) = xtask(&dir, &["select", "--base", "main"], &[], "");
-    assert_eq!(code, 0, "{out}");
-    let keys: Vec<&str> = out
-        .lines()
-        .map(|l| l.split('=').next().unwrap_or(""))
-        .collect();
-    for key in ["mode", "packages", "package_specs", "library_specs"] {
-        assert!(keys.contains(&key), "{out}");
-    }
-    assert!(!keys.contains(&"libraries"), "{out}");
-}
-
-#[test]
 fn select_counts_untracked_and_committed_changes() {
     let dir = workspace();
     dir.write("crates/b/src/new.rs", "");
     let (_, out) = xtask(&dir, &["select", "--base", "main"], &[], "");
-    assert!(!out.lines().any(|l| l.starts_with("libraries=")), "{out}");
     assert_eq!(
         out,
         "mode=crates\npackages=b\npackage_specs=b@0.0.0\nlibrary_specs=b@0.0.0\n"
@@ -202,14 +184,12 @@ fn select_counts_untracked_and_committed_changes() {
     git(&dir, &["add", "."]);
     git(&dir, &["commit", "-qm", "docs"]);
     let (_, out) = xtask(&dir, &["select", "--base", "main"], &[], "");
-    assert!(!out.lines().any(|l| l.starts_with("libraries=")), "{out}");
     assert_eq!(
         out,
         "mode=crates\npackages=b\npackage_specs=b@0.0.0\nlibrary_specs=b@0.0.0\n"
     );
     std::fs::remove_file(dir.path().join("crates/b/src/new.rs")).unwrap();
     let (_, out) = xtask(&dir, &["select", "--base", "main"], &[], "");
-    assert!(!out.lines().any(|l| l.starts_with("libraries=")), "{out}");
     assert_eq!(
         out,
         "mode=docs\npackages=\npackage_specs=\nlibrary_specs=\n"
@@ -243,8 +223,6 @@ fn select_prints_an_unambiguous_spec_for_a_crate_named_like_a_dependency() {
     git(&dir, &["commit", "-qm", "base"]);
     dir.write("crates/log/src/lib.rs", "//! log, changed\n");
     let (code, out) = xtask(&dir, &["select", "--base", "main"], &[], "");
-    assert_eq!(code, 0, "{out}");
-    assert!(!out.lines().any(|l| l.starts_with("libraries=")), "{out}");
     assert_eq!(
         (code, out.as_str()),
         (
@@ -686,6 +664,14 @@ fn the_signal_check_fails_a_signal_outside_the_allowlist() {
     // Built from parts so this file holds no signal pattern itself; the
     // file is an untracked test file, which the check still scans.
     let pattern = ["kill", "pg"].concat();
+    dir.write(
+        "crates/b/tests/evil.rs",
+        &format!("// call {pattern}(1);\n"),
+    );
+    assert_eq!(
+        xtask(&dir, &["signal-sites"], &[], ""),
+        (0, "signal-sites: ok\n".to_owned())
+    );
     dir.write("crates/b/tests/evil.rs", &format!("call {pattern}(1);\n"));
     let (code, out) = xtask(&dir, &["signal-sites"], &[], "");
     assert_eq!(code, 1);
