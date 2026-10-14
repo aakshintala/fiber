@@ -338,6 +338,60 @@ fn signal_after_group(
     signal_pid(id);
 }
 
+/// The next timeout cleanup's pause at its group kill, armed by a test and
+/// keyed by group id: the worker reports it sent the group's kill and
+/// blocks until the test releases it, so the test lands a fork between the
+/// kill and the reap on every run. One-shot; a group no test armed runs
+/// free, so the pause never holds another test's read.
+#[cfg(test)]
+static CLEANUP_PAUSE: std::sync::OnceLock<CleanupPauses> = std::sync::OnceLock::new();
+
+/// What [`CLEANUP_PAUSE`] holds: one pause per armed group, the worker's
+/// report sender and the test's release receiver.
+#[cfg(test)]
+type CleanupPauses =
+    std::sync::Mutex<std::collections::HashMap<u32, (mpsc::Sender<()>, mpsc::Receiver<()>)>>;
+
+/// The armed pauses, created on first use.
+#[cfg(test)]
+fn cleanup_pauses() -> &'static CleanupPauses {
+    CLEANUP_PAUSE.get_or_init(|| std::sync::Mutex::new(std::collections::HashMap::new()))
+}
+
+/// Arms one pause of the next timeout cleanup of group `pgid` (see
+/// [`CLEANUP_PAUSE`]): the worker sends on `entered` once it sent the
+/// group's kill and blocks until `release` arrives. The pause is one-shot.
+#[cfg(test)]
+fn arm_cleanup_pause(pgid: u32, entered: mpsc::Sender<()>, release: mpsc::Receiver<()>) {
+    cleanup_pauses()
+        .lock()
+        .unwrap_or_else(PoisonError::into_inner)
+        .insert(pgid, (entered, release));
+}
+
+/// Reports the worker sent the group's kill and blocks until the test
+/// releases it, when a test armed this group; runs free otherwise. A test
+/// that goes away drops the release sender, which releases the worker too.
+#[cfg(test)]
+fn cleanup_pause(id: u32) {
+    let point = cleanup_pauses()
+        .lock()
+        .unwrap_or_else(PoisonError::into_inner)
+        .remove(&id);
+    if let Some((entered, release)) = point {
+        match entered.send(()) {
+            Ok(()) | Err(_) => {}
+        }
+        match release.recv() {
+            Ok(()) | Err(_) => {}
+        }
+    }
+}
+
+/// No pause outside the unit tests: the cleanup never blocks.
+#[cfg(not(test))]
+fn cleanup_pause(_id: u32) {}
+
 /// Runs the read of `child` to `end`, then ends it the same way every
 /// time: the signals, the read end dropped, the watcher's word, then the
 /// reap, by this worker alone.
@@ -454,6 +508,7 @@ fn run(
         });
     };
     signal_after_group(id, exited, &exited_rx, signal_group, signal_pid);
+    cleanup_pause(id);
     let _ = stdout;
     match exited_rx.recv() {
         Ok(_) | Err(_) => {}

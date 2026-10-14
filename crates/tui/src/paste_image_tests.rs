@@ -15,8 +15,8 @@ use fakes::clock::FakeClock;
 use fakes::{TempDir, Watchdog, group_empties, kill_pid, pids_exit};
 
 use super::{
-    Decode, Failed, IMAGE_CAP, NO_CLIPBOARD, Reader, apple_script_png, command, drain, png_size,
-    read, read_stdout, refused, signal_after_group, signal_pid, start,
+    Decode, Failed, IMAGE_CAP, NO_CLIPBOARD, Reader, apple_script_png, arm_cleanup_pause, command,
+    drain, png_size, read, read_stdout, refused, signal_after_group, signal_pid, start,
 };
 
 /// One named wall-clock deadline for every blocking wait.
@@ -1262,4 +1262,69 @@ fn stdout_of_exactly_the_cap_with_a_live_child_is_not_too_large() {
         Err(Failed::TimedOut)
     );
     reaped(watchdog, pgid, "the exact-cap live child");
+}
+
+#[test]
+fn the_timeout_kill_misses_a_member_joined_after_it() {
+    let test = ChildTest::new();
+    let clock = FakeClock::new();
+    let start = clock.now();
+    let end = start + LIMIT;
+    // Exactly 16 bytes at the cap with a live child holding stdout open:
+    // the read parks at its deadline and times out, as in
+    // stdout_of_exactly_the_cap_with_a_live_child_is_not_too_large. The
+    // armed pause lands a join between the timeout kill and the reap on
+    // every run, so the single kill demonstrably misses a member.
+    let reader = test.reader("sleep 3600 & printf '1234567890123456'; wait", Decode::Raw);
+    let rx = spawn_read(reader, Arc::clone(&clock), LIMIT, 16);
+    let (watchdog, pgid) = watch(&test);
+    let (entered_tx, entered_rx) = mpsc::channel();
+    let (release_tx, release_rx) = mpsc::channel();
+    arm_cleanup_pause(pgid, entered_tx, release_rx);
+    waiting(
+        &rx,
+        &clock,
+        end,
+        "the exact-cap live child with its late join",
+    );
+    clock.advance(Duration::from_millis(1));
+    // The worker sent the group's kill and waits: join a sleep to the
+    // group after the kill, so the kill misses it. The leader is still
+    // unreaped while the worker is held, so the group still takes members.
+    match Deadline::after(DEADLINE).recv(&entered_rx) {
+        Ok(()) => {}
+        Err(_) => panic!("waited {DEADLINE:?} for the timeout kill"),
+    }
+    use std::os::unix::process::CommandExt as _;
+    let mut late = std::process::Command::new("sleep")
+        .arg("3600")
+        // The child joins the group itself before it execs: joining from
+        // the parent after the exec is refused.
+        .process_group(pgid.try_into().unwrap())
+        .stdin(std::process::Stdio::null())
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .spawn()
+        .unwrap();
+    match release_tx.send(()) {
+        Ok(()) | Err(_) => {}
+    }
+    assert_eq!(
+        answered(
+            &rx,
+            "the exact-cap live child with its late join",
+            &Deadline::after(DEADLINE)
+        ),
+        Err(Failed::TimedOut)
+    );
+    // A dead late join is already reaped here, so no zombie holds the
+    // group past the read; a live one proves the single kill missed it.
+    match late.try_wait() {
+        Ok(_) | Err(_) => {}
+    }
+    reaped(
+        watchdog,
+        pgid,
+        "the exact-cap live child with its late join",
+    );
 }
