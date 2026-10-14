@@ -1920,3 +1920,11 @@ fn a_failed_write_grants_no_retry_until_the_reader_disconnects() {
     assert_eq!(lp.step(Input::Disconnected, &idle), None);
     assert_eq!(retry.held(), Some(Duration::from_millis(500)));
 }
+
+#[test]
+fn an_empty_batch_with_no_senders_ends_the_loop() {
+    let mut conn = Connection::new(None);
+    let (tx, rx) = mpsc::channel::<Input>();
+    drop(tx);
+    assert!(conn.take_batch(&rx).is_none());
+}
