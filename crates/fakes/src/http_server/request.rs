@@ -196,7 +196,9 @@ pub(crate) fn read_request(conn: &mut Connection) -> RequestOutcome {
         // Bulk reads, one bound check per fill: the check before the
         // drain stops an expired budget or a racing shutdown from
         // completing a request from bytes already held, and the fill
-        // checks after each socket read, as the per-byte loop did.
+        // checks after each socket read, as the per-byte loop did. Past
+        // the head's leftover, socket bytes land straight in the body
+        // instead of transiting the lookahead one byte at a time.
         let mut body = Vec::with_capacity(length);
         while body.len() != length {
             if !conn.consume_check("to read the fixed body") {
@@ -209,12 +211,16 @@ pub(crate) fn read_request(conn: &mut Connection) -> RequestOutcome {
             if body.len() == length {
                 break;
             }
-            match conn.fill("to read the fixed body") {
+            match conn.fill_into(&mut body, remaining, "to read the fixed body") {
                 FillOutcome::Held(_) => {}
                 FillOutcome::Eof => return RequestOutcome::Eof,
                 FillOutcome::Stopped => return RequestOutcome::Stopped,
             }
         }
+        // Pipelined bytes the capped reads left on the socket would
+        // reset the close instead of delivering the reply: discard one
+        // read of what already arrived, never waiting for more.
+        conn.drain_socket();
         (body, None)
     };
     RequestOutcome::Complete(ParsedRequest {
