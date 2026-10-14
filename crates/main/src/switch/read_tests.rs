@@ -2109,6 +2109,17 @@ fn a_cancel_mid_spawn_is_settled_before_exit() {
     Deadline::after(DEADLINE)
         .recv(&is_reaping)
         .expect("the spawn reached its reap");
+    // The spawn listed its group before the kill, so the listing holds
+    // the late PGID: the shell itself cannot report it, as the kill lands
+    // before it could run.
+    let groups = listed(&reads);
+    assert_eq!(
+        groups.len(),
+        1,
+        "only the late group is listed: {:?}",
+        groups
+    );
+    let pgid = groups[0];
     // The settle holds on the raised count while the reap is held: one
     // bounded negative receive covers the whole hold, so a settle that
     // answered on the kill alone fails here. One deadline for the whole
@@ -2119,11 +2130,17 @@ fn a_cancel_mid_spawn_is_settled_before_exit() {
     );
     free_reap.send(()).expect("the reap's release");
     // The late kill landed while the reap was held, so the shell is
-    // already dead: the wall-clock wait confirms it before the fake clock
-    // moves, never ahead of the real death.
+    // already dead: the wall-clock waits confirm it before the fake clock
+    // moves, never ahead of the real death. The command line only proves
+    // the shell is gone; the group wait proves the whole group is empty
+    // before the drive advances.
     assert!(
         fakes::matching_exits(&marker, DEADLINE),
         "the late group is gone"
+    );
+    assert!(
+        fakes::group_empties(pgid, DEADLINE),
+        "the late group is empty"
     );
     // A fork that landed inside the kill still lists the group after the
     // reap: the settle re-kills on its poll cadence and parks between
@@ -2154,9 +2171,7 @@ fn a_cancel_mid_spawn_is_settled_before_exit() {
     }
     let answer = match answer {
         Some(answer) => answer,
-        None => Deadline::after(DEADLINE)
-            .recv(&settled)
-            .expect("the settle"),
+        None => drive.recv(&settled).expect("the settle"),
     };
     assert!(answer, "settle waits out the late kill");
     let error = Deadline::after(DEADLINE)
