@@ -114,12 +114,26 @@ fn the_watcher_drains_a_listed_group_before_it_finishes() {
         "the shutdown parked while the spawn is held"
     );
     release.send(()).expect("the spawn's release");
-    assert_eq!(
-        Deadline::after(DEADLINE)
-            .recv(&is_fired)
-            .expect("the watcher's finish"),
-        SIGTERM
-    );
+    // The shutdown re-parks at its poll until every group is empty: each
+    // advance follows a confirmed park, and a park that never comes means
+    // the finish already arrived. The whole drive shares one deadline.
+    let drive = Deadline::after(DEADLINE);
+    let signal = loop {
+        match is_fired.try_recv() {
+            Ok(signal) => break signal,
+            Err(mpsc::TryRecvError::Disconnected) => {
+                panic!("the watcher ended without a finish")
+            }
+            Err(mpsc::TryRecvError::Empty) => {}
+        }
+        if fake.await_parked(poll, Duration::from_millis(200)) {
+            fake.advance(GROUP_POLL);
+            poll += GROUP_POLL;
+        } else if drive.left().is_zero() {
+            break drive.recv_or_fail(&is_fired, "the watcher's finish");
+        }
+    };
+    assert_eq!(signal, SIGTERM);
     assert!(
         fakes::group_empties(pgid, DEADLINE),
         "the finish came after the group drained"
