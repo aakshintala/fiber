@@ -91,7 +91,9 @@ pub(in crate::app) struct ConfigViews {
     /// The latest call's prompt size in tokens, and its session.
     usage: Option<(SessionId, u64)>,
     /// The browser login tickets handed out, in order: incremented before
-    /// use, so the first ticket is 1 and every ticket is used once.
+    /// use, so the first ticket is 1. Tickets stay distinct until the
+    /// counter saturates at `u64::MAX`, which is then handed out again
+    /// for every later start.
     tickets: LoginTicket,
     /// The browser login start the loop has not picked up yet.
     pending_login: Option<LoginStart>,

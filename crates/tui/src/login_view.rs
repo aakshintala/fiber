@@ -199,8 +199,6 @@ struct Preparing {
 /// The reviewer picker.
 #[derive(Debug)]
 struct Choices {
-    /// The read's ticket: only its result landed.
-    ticket: LoginTicket,
     /// The provider logging in.
     name: String,
     /// The provider's model IDs, in its order.
@@ -218,13 +216,12 @@ struct Choices {
 impl Choices {
     /// The picker over `choices`: the preselected row opens highlighted;
     /// a stale or absent preselection opens with no row highlighted.
-    fn open(ticket: LoginTicket, name: String, choices: crate::configure::ReviewerModels) -> Self {
+    fn open(name: String, choices: crate::configure::ReviewerModels) -> Self {
         let cursor = choices
             .selected
             .as_deref()
             .and_then(|id| choices.models.iter().position(|model| model == id));
         Self {
-            ticket,
             name,
             models: choices.models,
             cursor,
@@ -720,7 +717,7 @@ impl Login {
                         outcome: Outcome::StoredWithNote(note),
                     });
                 } else {
-                    self.mode = Mode::Choices(Choices::open(ticket, name, choices));
+                    self.mode = Mode::Choices(Choices::open(name, choices));
                 }
             }
             Err(error) => {
@@ -1128,7 +1125,7 @@ impl Login {
                 overlay::legend(&[("Esc", "back")]),
             ),
             Mode::Choices(choices) => {
-                choice_rows(choices, inner, usize::from(area.height))
+                choice_rows(choices, inner, self.body_count(), usize::from(area.height))
             }
         };
         let kept = self.body_count();
@@ -1161,21 +1158,29 @@ impl Login {
 /// The picker rows for `choices` at `inner` columns: the stale line when
 /// the preselection names no listed row, the models windowed so the
 /// highlighted row stays visible, then the discovery notices while room
-/// remains. Model IDs are cut to one row; the whole ID is still saved.
+/// remains. The window shares the step's fixed body count, clipped to
+/// what the area shows, so the overlay never jumps between steps.
+/// Model IDs are cut to one row; the whole ID is still saved.
 fn choice_rows(
     choices: &Choices,
     inner: usize,
+    kept: usize,
     height: usize,
 ) -> (Vec<overlay::Row>, overlay::Row) {
     let dim = Style::new().add_modifier(Modifier::DIM);
-    let budget = shown_body_rows(height);
+    let budget = kept.min(shown_body_rows(height));
     let mut rows: Vec<overlay::Row> = Vec::new();
     if let Some(saved) = choices.selected.as_deref().filter(|_| choices.is_stale()) {
-        rows.extend(wrapped_rows(
+        for row in wrapped_rows(
             &format!("Saved reviewer `{saved}` is not listed; Enter keeps it."),
             inner,
             dim,
-        ));
+        ) {
+            if rows.len() >= budget {
+                break;
+            }
+            rows.push(row);
+        }
     }
     let room = budget.saturating_sub(rows.len());
     let total = choices.models.len();

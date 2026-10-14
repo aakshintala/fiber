@@ -380,3 +380,251 @@ fn the_login_view_is_offered_in_every_mode() {
     assert_eq!(app.on_key(Key::Esc, now()), Effect::None);
     assert!(app.login_view().is_none());
 }
+
+/// A seam with two key providers.
+fn two_key_seam() -> Arc<Fake> {
+    let fake = Fake::new(Vec::new());
+    if let Ok(mut targets) = fake.targets.lock() {
+        *targets = Ok(vec![
+            LoginTarget {
+                name: "acme".to_owned(),
+                kind: LoginKind::Key,
+            },
+            LoginTarget {
+                name: "beta".to_owned(),
+                kind: LoginKind::Key,
+            },
+        ]);
+    }
+    Arc::new(fake)
+}
+
+/// Reviewer choices with `models` and `selected` preselected.
+fn choices(models: &[&str], selected: Option<&str>) -> crate::configure::ReviewerModels {
+    crate::configure::ReviewerModels {
+        models: models.iter().map(|model| (*model).to_owned()).collect(),
+        selected: selected.map(str::to_owned),
+        notices: Vec::new(),
+    }
+}
+
+/// Opens `/login`, submits the key on the first row, and takes the
+/// queued reviewer start.
+fn start_key_reviewer(
+    app: &mut App,
+    seam: &Arc<Fake>,
+) -> crate::login_worker::LoginStart {
+    slash_login(app);
+    assert!(app.config_view_open());
+    assert_eq!(app.on_key(Key::Enter, now()), Effect::None);
+    for ch in "sk-a".chars() {
+        app.on_key(Key::Char(ch), now());
+    }
+    assert_eq!(app.on_key(Key::Enter, now()), Effect::None);
+    assert_eq!(seam.stores(), [("acme".to_owned(), None)]);
+    app.take_login_start()
+        .expect("a stored key queues a reviewer read")
+}
+
+#[test]
+fn a_stored_key_queues_a_reviewer_read_on_a_fresh_ticket() {
+    let seam = two_key_seam();
+    let mut app = attached(Some(Arc::clone(&seam)));
+    let start = start_key_reviewer(&mut app, &seam);
+    assert_eq!(start.ticket, crate::login_worker::LoginTicket(1));
+    assert_eq!(start.name, "acme");
+    assert!(matches!(
+        start.job,
+        crate::login_worker::LoginJob::Reviewer
+    ));
+    assert!(app.take_login_start().is_none());
+    // The preparing step shows while the read runs.
+    let rows = screen(&app);
+    assert!(
+        rows.iter().any(|row| row.contains("Reading acme's reviewer models")),
+        "{rows:?}"
+    );
+}
+
+#[test]
+fn a_declared_secret_ends_without_a_reviewer_read() {
+    let fake = Fake::new(Vec::new());
+    if let Ok(mut targets) = fake.targets.lock() {
+        *targets = Ok(vec![LoginTarget {
+            name: "acme.api_key".to_owned(),
+            kind: crate::configure::LoginKind::Secret,
+        }]);
+    }
+    let seam = Arc::new(fake);
+    let mut app = attached(Some(Arc::clone(&seam)));
+    slash_login(&mut app);
+    app.on_key(Key::Down, now());
+    app.on_key(Key::Enter, now());
+    for ch in "v1".chars() {
+        app.on_key(Key::Char(ch), now());
+    }
+    assert_eq!(app.on_key(Key::Enter, now()), Effect::None);
+    assert!(app.take_login_start().is_none());
+    assert!(seam.reviewer_reads().is_empty());
+    let rows = screen(&app);
+    assert!(
+        rows.iter().any(|row| row.contains("✓ Logged in to acme.api_key.")),
+        "{rows:?}"
+    );
+}
+
+#[test]
+fn a_browser_done_keeps_its_ticket_into_preparation() {
+    let seam = browser_seam();
+    let mut app = browser_login_app(&seam);
+    let start = start_login(&mut app);
+    assert_eq!(
+        app.on_login(
+            start.ticket,
+            crate::login_worker::LoginStep::Done(Ok(crate::configure::Stored {
+                path: "credentials/codex/alice@example.com".to_owned(),
+                replaced: false,
+            }))
+        ),
+        None
+    );
+    // Done success is not the end: the ticket prepares, and a repeated
+    // Done cannot re-enter discovery after completion.
+    assert_eq!(
+        app.on_login(
+            start.ticket,
+            crate::login_worker::LoginStep::Done(Ok(crate::configure::Stored {
+                path: "credentials/codex/alice@example.com".to_owned(),
+                replaced: false,
+            }))
+        ),
+        None
+    );
+    let rows = screen(&app);
+    assert!(
+        rows.iter().any(|row| row.contains("Reading codex's reviewer models")),
+        "{rows:?}"
+    );
+}
+
+#[test]
+fn a_late_reviewer_after_dismissal_changes_nothing_and_saves_nothing() {
+    let seam = two_key_seam();
+    let mut app = attached(Some(Arc::clone(&seam)));
+    let start = start_key_reviewer(&mut app, &seam);
+    assert_eq!(app.on_key(Key::Esc, now()), Effect::None);
+    assert_eq!(
+        app.on_login(
+            start.ticket,
+            crate::login_worker::LoginStep::Reviewer(Ok(choices(&["m1"], Some("m1"))))
+        ),
+        None
+    );
+    assert!(app.config_view_open());
+    assert!(seam.reviewer_saves().is_empty());
+}
+
+#[test]
+fn a_second_login_leaves_the_first_ticket_s_result_behind() {
+    let seam = two_key_seam();
+    let mut app = attached(Some(Arc::clone(&seam)));
+    let first = start_key_reviewer(&mut app, &seam);
+    // Back to the rows, over to beta, and through its panel: the
+    // second read runs on ticket 2.
+    let _ = app.on_key(Key::Esc, now());
+    app.on_key(Key::Down, now());
+    assert_eq!(app.on_key(Key::Enter, now()), Effect::None);
+    for ch in "sk-b".chars() {
+        app.on_key(Key::Char(ch), now());
+    }
+    assert_eq!(app.on_key(Key::Enter, now()), Effect::None);
+    assert_eq!(seam.stores(), [("acme".to_owned(), None), ("beta".to_owned(), None)]);
+    let second = app.take_login_start().expect("a second reviewer read");
+    assert_eq!(second.ticket, crate::login_worker::LoginTicket(2));
+    assert_eq!(second.name, "beta");
+    // The first ticket's late choices land on no preparing view.
+    assert_eq!(
+        app.on_login(
+            first.ticket,
+            crate::login_worker::LoginStep::Reviewer(Ok(choices(&["m1"], Some("m1"))))
+        ),
+        None
+    );
+    assert!(seam.reviewer_saves().is_empty());
+    let rows = screen(&app);
+    assert!(
+        rows.iter().any(|row| row.contains("Reading beta's reviewer models")),
+        "{rows:?}"
+    );
+}
+
+#[test]
+fn ticket_exhaustion_hands_max_out_again_and_admits_its_old_result() {
+    let seam = two_key_seam();
+    let mut app = attached(Some(Arc::clone(&seam)));
+    app.config_views.tickets = crate::login_worker::LoginTicket(u64::MAX - 1);
+    let first = start_key_reviewer(&mut app, &seam);
+    assert_eq!(first.ticket, crate::login_worker::LoginTicket(u64::MAX));
+    let _ = app.on_key(Key::Esc, now());
+    app.on_key(Key::Down, now());
+    assert_eq!(app.on_key(Key::Enter, now()), Effect::None);
+    for ch in "sk-b".chars() {
+        app.on_key(Key::Char(ch), now());
+    }
+    assert_eq!(app.on_key(Key::Enter, now()), Effect::None);
+    let second = app.take_login_start().expect("a second reviewer read");
+    assert_eq!(second.ticket, crate::login_worker::LoginTicket(u64::MAX));
+    // The old read's late result passes the ticket/stage guard onto the
+    // later login waiting on the same saturated ticket: this documents
+    // the reuse, without saving a choice.
+    assert_eq!(
+        app.on_login(
+            first.ticket,
+            crate::login_worker::LoginStep::Reviewer(Ok(choices(&["old-m"], Some("old-m"))))
+        ),
+        None
+    );
+    assert!(seam.reviewer_saves().is_empty());
+    let rows = screen(&app);
+    assert!(rows.iter().any(|row| row.contains("old-m")), "{rows:?}");
+}
+
+#[test]
+fn closing_after_the_credential_commit_keeps_it() {
+    let seam = browser_seam();
+    let mut app = browser_login_app(&seam);
+    let start = start_login(&mut app);
+    assert_eq!(
+        app.on_login(
+            start.ticket,
+            crate::login_worker::LoginStep::Done(Ok(crate::configure::Stored {
+                path: "credentials/codex/alice@example.com".to_owned(),
+                replaced: false,
+            }))
+        ),
+        None
+    );
+    app.config_view_click(crate::swapped::Spot::Close);
+    assert!(!app.config_view_open());
+}
+
+#[test]
+fn the_key_never_reaches_the_apps_debug_through_the_reviewer_flow() {
+    let seam = two_key_seam();
+    let mut app = attached(Some(Arc::clone(&seam)));
+    let start = start_key_reviewer(&mut app, &seam);
+    assert_eq!(
+        app.on_login(
+            start.ticket,
+            crate::login_worker::LoginStep::Reviewer(Ok(choices(&["m1"], Some("m1"))))
+        ),
+        None
+    );
+    assert_eq!(app.on_key(Key::Enter, now()), Effect::None);
+    assert_eq!(
+        seam.reviewer_saves(),
+        [("acme".to_owned(), "m1".to_owned())]
+    );
+    let debug = format!("{:?}", app.login_view());
+    assert!(!debug.contains("sk-a"), "{debug}");
+}

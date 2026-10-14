@@ -2494,3 +2494,634 @@ fn a_long_row_sets_the_list_width_uncut() {
     }];
     assert_eq!(super::list_widest(&targets), 31);
 }
+
+/// Drives a key login for `name` through its reviewer `answer`: the panel,
+/// the store, the queued read and the choices. The view holds the picker.
+fn key_choices(
+    name: &str,
+    ticket: LoginTicket,
+    answer: crate::configure::ReviewerModels,
+) -> (Fake, Login) {
+    let fake = fake_with(vec![LoginTarget {
+        name: name.to_owned(),
+        kind: LoginKind::Key,
+    }]);
+    let mut login = Login::open(&ctx(&fake));
+    press(&mut login, &fake, &[Key::Enter]);
+    typed(&mut login, &fake, "sk-a");
+    assert!(matches!(
+        login.key(&Key::Enter, &ctx(&fake)),
+        Act::Reviewer(stored) if stored == name
+    ));
+    login.wait_reviewer(ticket, name.to_owned());
+    login.step(
+        ticket,
+        crate::login_worker::LoginStep::Reviewer(Ok(answer)),
+    );
+    (fake, login)
+}
+
+/// Whether the view shows the provider rows.
+fn rows_shown(login: &Login) -> bool {
+    drawn(login, 80, 24).contains("Providers")
+}
+
+#[test]
+fn a_stored_key_queues_a_reviewer_read_not_an_end() {
+    let fake = fake_with(targets());
+    let mut login = Login::open(&ctx(&fake));
+    open_key_panel(&mut login, &fake);
+    typed(&mut login, &fake, "sk-a");
+    assert!(matches!(
+        login.key(&Key::Enter, &ctx(&fake)),
+        Act::Reviewer(name) if name == "acme"
+    ));
+    assert_eq!(fake.stores(), [("acme".to_owned(), None)]);
+    // The panel stays until the app queues the read on its ticket.
+    login.wait_reviewer(LoginTicket(1), "acme".to_owned());
+    let screen = drawn(&login, 80, 24);
+    assert!(
+        screen.contains("Reading acme's reviewer models"),
+        "{screen}"
+    );
+    assert!(!rows_shown(&login));
+}
+
+#[test]
+fn a_secret_still_ends_the_login_at_once() {
+    let fake = fake_with(targets());
+    let mut login = Login::open(&ctx(&fake));
+    open_secret_panel(&mut login, &fake);
+    typed(&mut login, &fake, "v1");
+    assert!(matches!(login.key(&Key::Enter, &ctx(&fake)), Act::Stay));
+    let screen = drawn(&login, 80, 24);
+    assert!(screen.contains("✓ Logged in to acme.api_key."), "{screen}");
+}
+
+#[test]
+fn a_browser_done_prepares_on_its_ticket_until_the_reviewer_lands() {
+    let fake = fake_with(targets());
+    let mut login = waiting(&fake, LoginTicket(1));
+    login.step(
+        LoginTicket(1),
+        crate::login_worker::LoginStep::Done(Ok(Stored {
+            path: "credentials/codex/alice@example.com".to_owned(),
+            replaced: false,
+        })),
+    );
+    assert!(!rows_open(&login));
+    let screen = drawn(&login, 80, 24);
+    assert!(
+        screen.contains("Reading codex's reviewer models"),
+        "{screen}"
+    );
+    assert!(!screen.contains("✓ Logged in"), "{screen}");
+}
+
+#[test]
+fn reviewer_results_land_only_in_preparing_on_their_ticket() {
+    let answer = || {
+        crate::login_worker::LoginStep::Reviewer(Ok(choices(&["m1"], Some("m1"))))
+    };
+    // Rows, panel and ended ignore the result; choices is already chosen.
+    let fake = fake_with(targets());
+    let mut login = Login::open(&ctx(&fake));
+    assert_eq!(login.step(LoginTicket(1), answer()), None);
+    assert!(rows_open(&login));
+    open_key_panel(&mut login, &fake);
+    assert_eq!(login.step(LoginTicket(1), answer()), None);
+    assert!(panel_open(&login));
+    let (_, mut login) = key_choices("acme", LoginTicket(1), choices(&["m1"], Some("m1")));
+    assert_eq!(login.step(LoginTicket(1), answer()), None);
+    // A stale ticket on a preparing view changes nothing.
+    let fake = fake_with(targets());
+    let mut login = waiting(&fake, LoginTicket(1));
+    login.step(
+        LoginTicket(1),
+        crate::login_worker::LoginStep::Done(Ok(Stored {
+            path: "credentials/codex/default".to_owned(),
+            replaced: false,
+        })),
+    );
+    assert_eq!(login.step(LoginTicket(2), answer()), None);
+    assert!(!rows_open(&login));
+    let screen = drawn(&login, 80, 24);
+    assert!(
+        screen.contains("Reading codex's reviewer models"),
+        "{screen}"
+    );
+}
+
+#[test]
+fn an_empty_list_keeps_the_login_with_its_note() {
+    let (fake, login) = key_choices(
+        "acme",
+        LoginTicket(1),
+        crate::configure::ReviewerModels {
+            models: Vec::new(),
+            selected: Some("gone-m".to_owned()),
+            notices: vec!["`acme` lists no models; the credential stays.".to_owned()],
+        },
+    );
+    assert!(fake.reviewer_saves().is_empty());
+    let (buf, _) = overlaid(&login, 80, 24);
+    let screen = text_of(&buf, 80, 24).join("\n");
+    assert!(screen.contains("✓ Logged in to acme."), "{screen}");
+    assert!(screen.contains("`acme` lists no models;"), "{screen}");
+    assert!(screen.contains("the credential"), "{screen}");
+    assert!(screen.contains("stays."), "{screen}");
+    assert!(!screen.contains("failed"), "{screen}");
+}
+
+#[test]
+fn a_failed_read_keeps_the_login_with_its_message() {
+    let fake = fake_with(vec![LoginTarget {
+        name: "acme".to_owned(),
+        kind: LoginKind::Key,
+    }]);
+    let mut login = Login::open(&ctx(&fake));
+    press(&mut login, &fake, &[Key::Enter]);
+    typed(&mut login, &fake, "sk-a");
+    assert!(matches!(
+        login.key(&Key::Enter, &ctx(&fake)),
+        Act::Reviewer(_)
+    ));
+    login.wait_reviewer(LoginTicket(1), "acme".to_owned());
+    login.step(
+        LoginTicket(1),
+        crate::login_worker::LoginStep::Reviewer(Err(ConfigureError {
+            code: ErrorCode::ConfigInvalid,
+            message: "home config is not valid JSON".to_owned(),
+        })),
+    );
+    let screen = drawn(&login, 80, 24);
+    assert!(screen.contains("✓ Logged in to acme."), "{screen}");
+    assert!(screen.contains("home config is not valid JSON"), "{screen}");
+}
+
+#[test]
+fn esc_in_preparing_and_choices_returns_to_the_rows_saving_nothing() {
+    let (fake, mut login) = key_choices("acme", LoginTicket(1), choices(&["m1"], Some("m1")));
+    assert!(matches!(login.key(&Key::Esc, &ctx(&fake)), Act::Stay));
+    assert!(rows_open(&login));
+    assert!(fake.reviewer_saves().is_empty());
+    let fake = fake_with(vec![LoginTarget {
+        name: "acme".to_owned(),
+        kind: LoginKind::Key,
+    }]);
+    let mut login = Login::open(&ctx(&fake));
+    press(&mut login, &fake, &[Key::Enter]);
+    typed(&mut login, &fake, "sk-a");
+    assert!(matches!(
+        login.key(&Key::Enter, &ctx(&fake)),
+        Act::Reviewer(_)
+    ));
+    login.wait_reviewer(LoginTicket(1), "acme".to_owned());
+    assert!(matches!(login.key(&Key::Esc, &ctx(&fake)), Act::Stay));
+    assert!(rows_open(&login));
+    // The late result cannot reopen the picker.
+    assert_eq!(
+        login.step(
+            LoginTicket(1),
+            crate::login_worker::LoginStep::Reviewer(Ok(choices(&["m1"], Some("m1"))))
+        ),
+        None
+    );
+    assert!(rows_open(&login));
+}
+
+#[test]
+fn without_a_preselection_no_row_opens_highlighted() {
+    let (fake, mut login) = key_choices("acme", LoginTicket(1), choices(&["m1", "m2"], None));
+    let (buf, _) = overlaid(&login, 80, 24);
+    assert_no_bar(&buf, 80, 24);
+    // Enter with no highlighted row and nothing preselected stays open.
+    assert!(matches!(login.key(&Key::Enter, &ctx(&fake)), Act::Stay));
+    assert!(fake.reviewer_saves().is_empty());
+    // Down highlights the first row, Up the last one; both clamp.
+    press(&mut login, &fake, &[Key::Down]);
+    let (buf, _) = overlaid(&login, 80, 24);
+    assert_eq!(barred_rows(&buf, 80, 24).len(), 1);
+    let row: String = (0..80)
+        .map(|x| buf[(x, barred_rows(&buf, 80, 24)[0])].symbol())
+        .collect();
+    assert!(row.contains("m1"), "{row}");
+    press(&mut login, &fake, &[Key::Down, Key::Down, Key::Up]);
+    let (buf, _) = overlaid(&login, 80, 24);
+    let row: String = (0..80)
+        .map(|x| buf[(x, barred_rows(&buf, 80, 24)[0])].symbol())
+        .collect();
+    assert!(row.contains("m1"), "down clamps, up steps back: {row}");
+    // Up from no highlight reaches the last row.
+    let (fake, mut login) = key_choices("acme", LoginTicket(1), choices(&["m1", "m2"], None));
+    press(&mut login, &fake, &[Key::Up]);
+    let (buf, _) = overlaid(&login, 80, 24);
+    let row: String = (0..80)
+        .map(|x| buf[(x, barred_rows(&buf, 80, 24)[0])].symbol())
+        .collect();
+    assert!(row.contains("m2"), "{row}");
+    // A click highlights its row without saving; Enter saves it.
+    login.click(Spot::Row(0), &ctx(&fake));
+    press(&mut login, &fake, &[Key::Enter]);
+    assert_eq!(
+        fake.reviewer_saves(),
+        [("acme".to_owned(), "m1".to_owned())]
+    );
+    let screen = drawn(&login, 80, 24);
+    assert!(screen.contains("✓ Logged in to acme."), "{screen}");
+}
+
+#[test]
+fn a_stale_preselection_opens_unhighlighted_and_enter_keeps_it() {
+    let (fake, mut login) = key_choices(
+        "acme",
+        LoginTicket(1),
+        choices(&["m1", "m2"], Some("gone-m")),
+    );
+    let (buf, _) = overlaid(&login, 80, 24);
+    assert_no_bar(&buf, 80, 24);
+    let screen = drawn(&login, 80, 24);
+    assert!(screen.contains("Saved reviewer `gone-m` is not listed;"), "{screen}");
+    assert!(screen.contains("Enter keeps it."), "{screen}");
+    assert!(matches!(login.key(&Key::Enter, &ctx(&fake)), Act::Stay));
+    assert_eq!(
+        fake.reviewer_saves(),
+        [("acme".to_owned(), "gone-m".to_owned())]
+    );
+}
+
+#[test]
+fn a_listed_preselection_opens_highlighted_and_enter_saves_it() {
+    let (fake, mut login) = key_choices(
+        "acme",
+        LoginTicket(1),
+        choices(&["m1", "m2"], Some("m2")),
+    );
+    let (buf, _) = overlaid(&login, 80, 24);
+    assert_eq!(barred_rows(&buf, 80, 24).len(), 1);
+    let screen = drawn(&login, 80, 24);
+    assert!(screen.contains("m2 (saved)"), "{screen}");
+    assert!(matches!(login.key(&Key::Enter, &ctx(&fake)), Act::Stay));
+    assert_eq!(
+        fake.reviewer_saves(),
+        [("acme".to_owned(), "m2".to_owned())]
+    );
+}
+
+#[test]
+fn arrows_move_and_clamp_over_the_models() {
+    for (keys, shown) in [
+        (vec![Key::Down], "m1"),
+        (vec![Key::Down, Key::Down], "m2"),
+        (vec![Key::Down, Key::Down, Key::Down], "m2"),
+        (vec![Key::Up], "m2"),
+        (vec![Key::Down, Key::Up, Key::Up], "m1"),
+        (vec![Key::Up, Key::Up, Key::Up], "m1"),
+    ] {
+        let (fake, mut login) = key_choices("acme", LoginTicket(1), choices(&["m1", "m2"], None));
+        press(&mut login, &fake, &keys);
+        let (buf, _) = overlaid(&login, 80, 24);
+        let barred = barred_rows(&buf, 80, 24);
+        assert_eq!(barred.len(), 1);
+        let row: String = (0..80).map(|x| buf[(x, barred[0])].symbol()).collect();
+        assert!(row.contains(shown), "{keys:?}: {row}");
+    }
+}
+
+#[test]
+fn text_and_pastes_never_reach_the_draft_from_the_choices() {
+    let (fake, mut login) = key_choices("acme", LoginTicket(1), choices(&["m1"], None));
+    press(&mut login, &fake, &[Key::Char('m'), Key::Char('1')]);
+    login.edit_key(&Edit::Paste("m1".to_owned()));
+    assert!(fake.reviewer_saves().is_empty());
+    let screen = drawn(&login, 80, 24);
+    assert!(!screen.contains("m1m1"), "{screen}");
+}
+
+#[test]
+fn clicks_outside_the_models_write_nothing() {
+    let (fake, mut login) = key_choices("acme", LoginTicket(1), choices(&["m1"], None));
+    login.click(Spot::Row(99), &ctx(&fake));
+    assert!(fake.reviewer_saves().is_empty());
+    login.click(Spot::Close, &ctx(&fake));
+    login.click(Spot::Row(0), &ctx(&fake));
+    press(&mut login, &fake, &[Key::Enter]);
+    assert_eq!(
+        fake.reviewer_saves(),
+        [("acme".to_owned(), "m1".to_owned())]
+    );
+}
+
+#[test]
+fn a_failed_save_names_the_key_and_keeps_the_login() {
+    let (fake, mut login) = key_choices("acme", LoginTicket(1), choices(&["m1"], Some("m1")));
+    if let Ok(mut saved) = fake.reviewer_saved.lock() {
+        *saved = Err(ConfigureError {
+            code: ErrorCode::ConfigInvalid,
+            message: "could not save `providers.acme.reviewer_model`: home config is `[]`."
+                .to_owned(),
+        });
+    }
+    press(&mut login, &fake, &[Key::Enter]);
+    let screen = drawn(&login, 80, 24);
+    assert!(screen.contains("✓ Logged in to acme."), "{screen}");
+    assert!(screen.contains("could not save"), "{screen}");
+    assert!(
+        screen.contains("providers.acme.reviewer_model"),
+        "the failure names the key: {screen}"
+    );
+    assert!(!screen.contains("nothing was stored"), "{screen}");
+}
+
+#[test]
+fn the_key_never_reaches_a_frame_debug_or_notice() {
+    let (fake, mut login) = key_choices("acme", LoginTicket(1), choices(&["m1"], None));
+    let debug = format!("{:?}", login);
+    assert!(!debug.contains("sk-a"), "{debug}");
+    let screen = drawn(&login, 80, 24);
+    assert!(!screen.contains("sk-a"), "{screen}");
+    press(&mut login, &fake, &[Key::Down, Key::Enter]);
+    let debug = format!("{:?}", login);
+    assert!(!debug.contains("sk-a"), "{debug}");
+    let screen = drawn(&login, 80, 24);
+    assert!(!screen.contains("sk-a"), "{screen}");
+}
+
+#[test]
+fn login_reviewer_default_80x24() {
+    let (_, login) = key_choices(
+        "acme",
+        LoginTicket(1),
+        choices(&["fast-1", "fast-2", "fast-3"], Some("fast-2")),
+    );
+    let (buf, _) = overlaid(&login, 80, 24);
+    insta::assert_snapshot!(
+        "login_reviewer_default_80x24",
+        text_of(&buf, 80, 24).join("\n")
+    );
+}
+
+#[test]
+fn login_reviewer_none_80x24() {
+    let (_, login) = key_choices("acme", LoginTicket(1), choices(&["fast-1", "fast-2"], None));
+    let (buf, _) = overlaid(&login, 80, 24);
+    insta::assert_snapshot!("login_reviewer_none_80x24", text_of(&buf, 80, 24).join("\n"));
+}
+
+#[test]
+fn login_reviewer_stale_48x24() {
+    let (_, login) = key_choices("acme", LoginTicket(1), choices(&["fast-1"], Some("gone-m")));
+    let (buf, _) = overlaid(&login, 48, 24);
+    insta::assert_snapshot!("login_reviewer_stale_48x24", text_of(&buf, 48, 24).join("\n"));
+}
+
+#[test]
+fn login_reviewer_empty_80x24() {
+    let (_, login) = key_choices(
+        "acme",
+        LoginTicket(1),
+        crate::configure::ReviewerModels {
+            models: Vec::new(),
+            selected: Some("gone-m".to_owned()),
+            notices: vec!["`acme` lists no models; the credential stays.".to_owned()],
+        },
+    );
+    let (buf, _) = overlaid(&login, 80, 24);
+    insta::assert_snapshot!("login_reviewer_empty_80x24", text_of(&buf, 80, 24).join("\n"));
+}
+
+#[test]
+fn login_reviewer_write_failed_80x24() {
+    let (fake, mut login) = key_choices("acme", LoginTicket(1), choices(&["m1"], Some("m1")));
+    if let Ok(mut saved) = fake.reviewer_saved.lock() {
+        *saved = Err(ConfigureError {
+            code: ErrorCode::ConfigInvalid,
+            message: "could not save `providers.acme.reviewer_model`: home config is `[]`."
+                .to_owned(),
+        });
+    }
+    press(&mut login, &fake, &[Key::Enter]);
+    let (buf, _) = overlaid(&login, 80, 24);
+    insta::assert_snapshot!(
+        "login_reviewer_write_failed_80x24",
+        text_of(&buf, 80, 24).join("\n")
+    );
+}
+
+/// Every drawn row fits `width` columns.
+fn assert_fits(buf: &Buffer, width: u16, height: u16) {
+    for y in 0..height {
+        let row: String = (0..width).map(|x| buf[(x, y)].symbol()).collect();
+        assert!(
+            crate::format::width(row.trim_end()) <= usize::from(width),
+            "{row:?}"
+        );
+    }
+}
+
+/// A preparing view over `acme`.
+fn preparing_view() -> (Fake, Login) {
+    let fake = fake_with(vec![LoginTarget {
+        name: "acme".to_owned(),
+        kind: LoginKind::Key,
+    }]);
+    let mut login = Login::open(&ctx(&fake));
+    login.wait_reviewer(LoginTicket(1), "acme".to_owned());
+    (fake, login)
+}
+
+#[test]
+fn preparing_and_choices_draw_in_tiny_areas() {
+    for width in 0..6u16 {
+        for height in 1..4u16 {
+            let (_, preparing) = preparing_view();
+            let (buf, _) = overlaid(&preparing, width, height);
+            assert_fits(&buf, width, height);
+            let (_, choices) = key_choices("acme", LoginTicket(1), choices(&["m1"], None));
+            let (buf, _) = overlaid(&choices, width, height);
+            assert_fits(&buf, width, height);
+            let (_, ended) = key_choices(
+                "acme",
+                LoginTicket(1),
+                crate::configure::ReviewerModels {
+                    models: Vec::new(),
+                    selected: None,
+                    notices: vec!["note".to_owned()],
+                },
+            );
+            let (buf, _) = overlaid(&ended, width, height);
+            assert_fits(&buf, width, height);
+        }
+    }
+}
+
+#[test]
+fn choices_around_the_visible_capacity_keep_the_focus_drawn() {
+    // One target keeps three body rows: two, three and four models
+    // exercise below, at and above capacity.
+    for count in [2usize, 3, 4] {
+        let models: Vec<String> = (0..count).map(|n| format!("m{n}")).collect();
+        let answer = crate::configure::ReviewerModels {
+            models,
+            selected: None,
+            notices: Vec::new(),
+        };
+        let (fake, mut login) = key_choices("acme", LoginTicket(1), answer);
+        // Down to the last row: the final row is reachable, not merely drawn.
+        for _ in 0..count {
+            press(&mut login, &fake, &[Key::Down]);
+        }
+        let (buf, _) = overlaid(&login, 80, 24);
+        let last = format!("m{}", count.saturating_sub(1));
+        let screen = text_of(&buf, 80, 24).join("\n");
+        assert!(screen.contains(&last), "{count}: {screen}");
+        assert_eq!(barred_rows(&buf, 80, 24).len(), 1);
+        // A shorter overlay keeps the focused row visible.
+        let (short, _) = overlaid(&login, 80, 10);
+        let screen = text_of(&short, 80, 10).join("\n");
+        assert!(screen.contains(&last), "{count}: {screen}");
+    }
+}
+
+#[test]
+fn a_very_large_model_count_stays_inside_its_rows() {
+    let (_, mut login) = key_choices("acme", LoginTicket(1), choices(&["m1"], None));
+    if let super::Mode::Choices(choices) = &mut login.mode {
+        choices.models = (0..70_000).map(|n| format!("m{n}")).collect();
+        choices.cursor = Some(69_999);
+    }
+    let (buf, targets) = overlaid(&login, 80, 24);
+    assert_fits(&buf, 80, 24);
+    let screen = text_of(&buf, 80, 24).join("\n");
+    assert!(screen.contains("m69999"), "{screen}");
+    assert_eq!(barred_rows(&buf, 80, 24).len(), 1);
+    assert!(!targets.is_empty());
+}
+
+#[test]
+fn long_and_wide_ids_stay_inside_while_the_save_keeps_them_whole() {
+    let wide = "あ".repeat(60);
+    let long = "m".repeat(200);
+    let (fake, mut login) = key_choices(
+        "acme",
+        LoginTicket(1),
+        choices(&[&wide, &long, "org/fast", "v:2"], None),
+    );
+    let (buf, _) = overlaid(&login, 80, 24);
+    assert_fits(&buf, 80, 24);
+    for _ in 0..4 {
+        press(&mut login, &fake, &[Key::Down]);
+    }
+    press(&mut login, &fake, &[Key::Enter]);
+    assert_eq!(
+        fake.reviewer_saves(),
+        [("acme".to_owned(), "v:2".to_owned())]
+    );
+    let (fake, mut login) = key_choices(
+        "acme",
+        LoginTicket(1),
+        choices(&[&wide, &long], None),
+    );
+    press(&mut login, &fake, &[Key::Down, Key::Down, Key::Enter]);
+    assert_eq!(fake.reviewer_saves(), [("acme".to_owned(), long)]);
+}
+
+#[test]
+fn every_step_shares_one_height_at_each_width() {
+    for width in [48u16, 80, 200] {
+        let fake = fake_with(targets());
+        let mut panel = Login::open(&ctx(&fake));
+        open_key_panel(&mut panel, &fake);
+        let browser_wait = waiting(&fake, LoginTicket(1));
+        let mut preparing = waiting(&fake, LoginTicket(1));
+        preparing.wait_reviewer(LoginTicket(1), "codex".to_owned());
+        let mut picker = waiting(&fake, LoginTicket(1));
+        picker.wait_reviewer(LoginTicket(1), "codex".to_owned());
+        picker.step(
+            LoginTicket(1),
+            crate::login_worker::LoginStep::Reviewer(Ok(choices(&["m1", "m2"], Some("m1")))),
+        );
+        let mut done = waiting(&fake, LoginTicket(1));
+        done.wait_reviewer(LoginTicket(1), "codex".to_owned());
+        done.step(
+            LoginTicket(1),
+            crate::login_worker::LoginStep::Reviewer(Ok(choices(&["m1"], Some("m1")))),
+        );
+        press(&mut done, &fake, &[Key::Enter]);
+        let refusing = refusing_fake("token expired");
+        let mut failed = Login::open(&ctx(&refusing));
+        open_key_panel(&mut failed, &refusing);
+        typed(&mut failed, &refusing, "sk-x");
+        failed.key(&Key::Enter, &ctx(&refusing));
+        let heights: Vec<u16> = [&panel, &browser_wait]
+            .into_iter()
+            .map(|login| {
+                let (buf, _) = overlaid(login, width, 24);
+                slab_height(&buf, width, 24)
+            })
+            .collect();
+        let (preparing_buf, _) = overlaid(&preparing, width, 24);
+        let (picker_buf, _) = overlaid(&picker, width, 24);
+        let (done_buf, _) = overlaid(&done, width, 24);
+        let (failed_buf, _) = overlaid(&failed, width, 24);
+        let mut all = heights;
+        all.extend([
+            slab_height(&preparing_buf, width, 24),
+            slab_height(&picker_buf, width, 24),
+            slab_height(&done_buf, width, 24),
+            slab_height(&failed_buf, width, 24),
+        ]);
+        assert!(
+            all.windows(2).all(|pair| pair[0] == pair[1]),
+            "{width}: {all:?}"
+        );
+        let runs: Vec<usize> = [&preparing_buf, &picker_buf, &done_buf, &failed_buf]
+            .into_iter()
+            .map(|buf| edge_run(buf, width, 24))
+            .collect();
+        assert!(
+            runs.windows(2).all(|pair| pair[0] == pair[1]),
+            "{width}: {runs:?}"
+        );
+    }
+}
+
+#[test]
+fn no_step_shows_the_provider_list_rows() {
+    let (_, preparing) = preparing_view();
+    let (_, picker) = key_choices("acme", LoginTicket(1), choices(&["m1"], Some("m1")));
+    for login in [&preparing, &picker] {
+        let screen = drawn(login, 80, 24);
+        assert!(!screen.contains("Providers"), "{screen}");
+        assert!(!screen.contains("Secrets"), "{screen}");
+    }
+}
+
+#[test]
+fn the_failed_reason_reads_error() {
+    let refusing = refusing_fake("token expired");
+    let mut login = Login::open(&ctx(&refusing));
+    open_key_panel(&mut login, &refusing);
+    typed(&mut login, &refusing, "sk-x");
+    login.key(&Key::Enter, &ctx(&refusing));
+    let (buf, _) = overlaid(&login, 80, 24);
+    let error = Role::Error.color();
+    let rows = text_of(&buf, 80, 24);
+    assert!(
+        rows.iter().any(|row| row.contains("Login to acme failed:")),
+        "{rows:?}"
+    );
+    for y in 0..24 {
+        let line: String = (0..80).map(|x| buf[(x, y)].symbol()).collect();
+        if let Some(start) = line.find("token expired") {
+            let start = start as u16;
+            let end = start.saturating_add("token expired".len() as u16);
+            for x in start..end {
+                let cell = &buf[(x, y)];
+                if cell.symbol() != " " {
+                    assert_eq!(cell.fg, error, "cell {x},{y} is not error");
+                }
+            }
+        }
+    }
+}

@@ -1,0 +1,21 @@
+---
+source: crates/tui/src/login_view_tests.rs
+expression: "text_of(&buf, 80, 24).join(\"\\n\")"
+---
+
+
+
+
+
+
+                 ▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
+
+                   acme                                     ✕
+
+                   ✓ Logged in to acme.
+                   could not save
+                   `providers.acme.reviewer_model`: home
+
+                   Esc back
+
+                 ▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀

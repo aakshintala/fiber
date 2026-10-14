@@ -121,6 +121,150 @@ fn store_key_refusal_is_usage_with_the_cli_message() {
     );
 }
 
+/// Installs a provider `name` with `reviewer_model` as its package default.
+fn install_reviewer(setup: &Setup, name: &str, reviewer: &str) {
+    install_extension(
+        &setup.home(),
+        &format!("extensions/{name}"),
+        json!({"name": name, "version": "v0.0.0", "fiber": "0.0.0", "api": 1}),
+        &[(
+            name,
+            json!({
+                "name": name,
+                "reviewer_model": reviewer,
+                "models": [
+                    {"id": "m1", "protocol": "openai-responses",
+                     "base_url": "http://x/v1", "context_window": 1000},
+                    {"id": "m2", "protocol": "openai-responses",
+                     "base_url": "http://x/v1", "context_window": 1000},
+                ],
+            }),
+        )],
+    );
+}
+
+fn clock() -> std::sync::Arc<dyn contract::clock::Clock> {
+    fakes::clock::FakeClock::new()
+}
+
+fn global(setup: &Setup) -> serde_json::Value {
+    serde_json::from_str(&fs::read_to_string(setup.home().join("config.json")).unwrap()).unwrap()
+}
+
+#[test]
+fn reviewer_models_preselects_the_saved_global_pick() {
+    let setup = Setup::new();
+    install_reviewer(&setup, "acme", "pkg-m");
+    fs::write(
+        setup.home().join("config.json"),
+        r#"{"providers": {"acme": {"reviewer_model": "saved-m"}}}"#,
+    )
+    .unwrap();
+    let choices = Seam::new(setup.home()).reviewer_models("acme", clock()).unwrap();
+    assert_eq!(choices.models, ["m1", "m2"]);
+    assert_eq!(choices.selected.as_deref(), Some("saved-m"));
+}
+
+#[test]
+fn reviewer_models_falls_back_to_the_package_default_then_to_none() {
+    let setup = Setup::new();
+    install_reviewer(&setup, "acme", "pkg-m");
+    let choices = Seam::new(setup.home()).reviewer_models("acme", clock()).unwrap();
+    assert_eq!(choices.models, ["m1", "m2"]);
+    assert_eq!(choices.selected.as_deref(), Some("pkg-m"));
+    let setup = Setup::new();
+    setup.install("beta");
+    let choices = Seam::new(setup.home()).reviewer_models("beta", clock()).unwrap();
+    assert_eq!(choices.models, ["m"]);
+    assert_eq!(choices.selected, None);
+}
+
+#[test]
+fn reviewer_models_ignores_the_override_and_project_layers() {
+    let setup = Setup::new();
+    install_reviewer(&setup, "acme", "pkg-m");
+    fs::create_dir_all(setup.home().join("projects/test")).unwrap();
+    fs::write(
+        setup.home().join("projects/test/config.json"),
+        r#"{"reviewer": {"model": "all/x"}, "providers": {"acme": {"reviewer_model": "project-m"}}}"#,
+    )
+    .unwrap();
+    let choices = Seam::new(setup.home()).reviewer_models("acme", clock()).unwrap();
+    assert_eq!(choices.selected.as_deref(), Some("pkg-m"));
+}
+
+#[test]
+fn set_reviewer_saves_the_exact_local_id_per_provider() {
+    let setup = Setup::new();
+    install_reviewer(&setup, "acme", "pkg-m");
+    setup.install("other");
+    let seam = Seam::new(setup.home());
+    seam.set_reviewer("acme", "org/fast").unwrap();
+    seam.set_reviewer("other", "m").unwrap();
+    assert_eq!(
+        global(&setup),
+        json!({"providers": {
+            "acme": {"reviewer_model": "org/fast"},
+            "other": {"reviewer_model": "m"},
+        }}),
+        "each provider keeps its own verbatim pick"
+    );
+}
+
+#[test]
+fn set_reviewer_keeps_a_dotted_name_one_segment() {
+    let setup = Setup::new();
+    setup.install("acme");
+    Seam::new(setup.home()).set_reviewer("acme.corp", "m").unwrap();
+    assert_eq!(
+        global(&setup),
+        json!({"providers": {"acme.corp": {"reviewer_model": "m"}}}),
+    );
+}
+
+#[test]
+fn set_reviewer_failure_names_the_key_and_keeps_the_credential() {
+    let setup = Setup::new();
+    setup.install("acme");
+    let seam = Seam::new(setup.home());
+    seam.store_key("acme", None, contract::Secret::new("sk-a".to_owned())).unwrap();
+    let credential_before =
+        fs::read(setup.home().join("credentials/acme/default")).unwrap();
+    fs::write(setup.home().join("config.json"), "[]").unwrap();
+    let error = seam.set_reviewer("acme", "m").unwrap_err();
+    assert_eq!(error.code, contract::ErrorCode::ConfigInvalid);
+    assert!(
+        error.message.contains("providers.acme.reviewer_model"),
+        "{}",
+        error.message
+    );
+    assert_eq!(
+        fs::read(setup.home().join("credentials/acme/default")).unwrap(),
+        credential_before,
+        "the stored credential stays"
+    );
+    assert_eq!(fs::read_to_string(setup.home().join("config.json")).unwrap(), "[]");
+}
+
+#[test]
+fn reviewer_choices_keep_the_stored_credential() {
+    let setup = Setup::new();
+    install_reviewer(&setup, "acme", "pkg-m");
+    let seam = Seam::new(setup.home());
+    seam.store_key("acme", None, contract::Secret::new("sk-a".to_owned())).unwrap();
+    let choices = seam.reviewer_models("acme", clock()).unwrap();
+    assert_eq!(choices.models, ["m1", "m2"]);
+    seam.set_reviewer("acme", "m2").unwrap();
+    assert_eq!(
+        fs::read_to_string(setup.home().join("credentials/acme/default")).unwrap(),
+        "sk-a"
+    );
+    assert_eq!(
+        global(&setup)["providers"]["acme"]["reviewer_model"],
+        json!("m2")
+    );
+}
+
 #[test]
 fn store_key_with_an_empty_key_stores_nothing() {
     let setup = Setup::new();

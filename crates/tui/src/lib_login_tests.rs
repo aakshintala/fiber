@@ -322,3 +322,74 @@ fn without_a_channel_the_worker_never_starts_and_the_start_waits() {
         "{rows:?}"
     );
 }
+
+/// A seam with one key provider.
+fn key_seam() -> Arc<Fake> {
+    let fake = Fake::new(Vec::new());
+    if let Ok(mut targets) = fake.targets.lock() {
+        *targets = Ok(vec![LoginTarget {
+            name: "acme".to_owned(),
+            kind: LoginKind::Key,
+        }]);
+    }
+    Arc::new(fake)
+}
+
+#[test]
+fn a_key_login_asks_its_reviewer_after_the_worker_and_saves_it() {
+    let seam = key_seam();
+    if let Ok(mut answer) = seam.reviewer_answer.lock() {
+        *answer = Ok(crate::configure::ReviewerModels {
+            models: ["m1".to_owned(), "m2".to_owned()].to_vec(),
+            selected: Some("m2".to_owned()),
+            notices: Vec::new(),
+        });
+    }
+    let (mut lp, rx, _dir, _out) = loop_with(&seam, None);
+    feed(&mut lp, vec![Input::Bytes(b"/login".to_vec())]);
+    feed(&mut lp, vec![Input::Bytes(b"\r".to_vec())]);
+    assert!(lp.app.config_view_open());
+    // The first row is the key provider: Enter opens its panel.
+    feed(&mut lp, vec![Input::Bytes(b"\r".to_vec())]);
+    feed(&mut lp, vec![Input::Bytes(b"sk-a".to_vec())]);
+    feed(&mut lp, vec![Input::Bytes(b"\r".to_vec())]);
+    assert_eq!(seam.stores(), [("acme".to_owned(), None)]);
+    // The worker reads the choices off the loop thread: Enter on the
+    // highlighted preselection saves it through the seam.
+    let (_, step) = next(&rx, &Deadline::after(WAIT));
+    let step = match step {
+        crate::login_worker::LoginStep::Reviewer(Ok(choices)) => {
+            assert_eq!(choices.models, ["m1", "m2"]);
+            crate::login_worker::LoginStep::Reviewer(Ok(choices))
+        }
+        other => panic!("{other:?}"),
+    };
+    feed(
+        &mut lp,
+        vec![Input::Login {
+            ticket: crate::login_worker::LoginTicket(1),
+            step,
+        }],
+    );
+    let rows = screen(&lp);
+    assert!(
+        rows.iter().any(|row| row.contains("m2 (saved)")),
+        "{rows:?}"
+    );
+    feed(&mut lp, vec![Input::Bytes(b"\r".to_vec())]);
+    let rows = screen(&lp);
+    assert!(
+        rows.iter().any(|row| row.contains("✓ Logged in to acme.")),
+        "{rows:?}"
+    );
+    assert_eq!(
+        seam.reviewer_saves(),
+        [("acme".to_owned(), "m2".to_owned())]
+    );
+    assert_eq!(seam.reviewer_threads().len(), 1);
+    assert_ne!(
+        seam.reviewer_threads()[0],
+        std::thread::current().id(),
+        "discovery never runs on the loop thread"
+    );
+}
