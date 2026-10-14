@@ -11,6 +11,7 @@
 use std::fs::{self, File, OpenOptions};
 use std::os::unix::fs::PermissionsExt;
 use std::path::Path;
+use std::time::Duration;
 
 use contract::SessionId;
 use serde_json::json;
@@ -437,4 +438,23 @@ fn last_line_where_finds_a_match_more_than_one_step_before_the_end() {
     });
     assert_eq!(found, Some(()));
     assert_eq!(calls, 6001);
+}
+
+/// `last_ts` over a small log completes: the backward scan's step moves
+/// its offset every step. A `STEP` that cannot advance (the `/` mutant
+/// makes it zero) hangs the scan until the mutant deadline, so the helper
+/// thread carries a wall-clock bound and the hang fails here instead.
+#[test]
+fn last_ts_completes_within_a_wall_clock_bound() {
+    let home = fakes::TempDir::new("log-scan-step-progress");
+    let dir = home.path().join("s");
+    write_log(&dir, format!("{}\n{}\n", event(7), event(9)).as_bytes());
+    let (done, waited) = std::sync::mpsc::channel();
+    std::thread::spawn(move || {
+        let ts = last_ts(&dir);
+        done.send(ts).unwrap();
+    });
+    let ts = fakes::Deadline::after(Duration::from_secs(10))
+        .recv_or_fail(&waited, "last_ts of the small log");
+    assert_eq!(ts, Some(9));
 }
