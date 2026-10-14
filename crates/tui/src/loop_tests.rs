@@ -2,14 +2,17 @@
 //! needs with `history` before it draws (`docs/tui.md`, "History and
 //! paging").
 
-use super::{Input, Loop, Screen, hub::Connection};
+use super::{
+    Input, Loop, Screen,
+    hub::{Connection, LOST},
+};
 use crate::app::App;
 use crate::link::Line;
-use contract::Envelope;
+use contract::{Envelope, Seq};
 use fakes::Deadline;
 use ratatui::backend::TestBackend;
 use serde_json::{Value, json};
-use std::io::{BufRead, BufReader};
+use std::io::{BufRead, BufReader, ErrorKind, Read};
 use std::os::unix::net::UnixStream;
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -1656,4 +1659,264 @@ fn a_long_search_answers_every_fetch_each_settle_queues() {
         report.contains("search of the whole log with no match: 0.00 ms, 0 matches\n"),
         "{report}"
     );
+}
+
+#[test]
+fn a_closed_answer_channel_ends_the_wait_hung_up() {
+    let (mut lp, _theirs, tx, rx) = opened();
+    drop(tx);
+    // The channel is closed, so the wait ends at once instead of hanging
+    // the suite: no thread and no deadline needed.
+    let result = lp.hub.answer(&rx, "a_1", &mut lp.app, &lp.tick);
+    assert_eq!(result, Err(LOST.to_owned()));
+    assert!(!lp.hub.has_stream(), "the closed channel hangs the wait up");
+}
+
+#[test]
+fn an_answer_missing_its_final_seq_is_dropped() {
+    let (ours, theirs) = UnixStream::pair().unwrap_or_else(|err| panic!("pair: {err}"));
+    let mut hub = Connection::new(None);
+    hub.store(ours);
+    let mut app = App::new(PathBuf::from("/w"));
+    let tick = crate::tick::TickThread::idle();
+    let session_id = contract::SessionId(SESSION.to_owned());
+    let (tx, rx) = mpsc::channel();
+    // The hub answers every history command with one line carrying no
+    // seq, and counts the commands, until the fetch hangs up.
+    let (seen_tx, seen) = mpsc::channel();
+    std::thread::Builder::new()
+        .name("loop-seq-less-hub".to_owned())
+        .spawn(move || {
+            let mut reader = BufReader::new(theirs);
+            let mut text = String::new();
+            let mut count = 0u64;
+            while reader.read_line(&mut text).is_ok_and(|read| read > 0) {
+                count += 1;
+                let command: Value = serde_json::from_str(&text).unwrap_or_default();
+                text.clear();
+                let id = command["id"].as_str().unwrap_or_default().to_owned();
+                let mut first = serde_json::to_value(&session()[0])
+                    .unwrap_or_else(|err| panic!("encode: {err}"));
+                if let Some(line) = first.as_object_mut() {
+                    line.remove("seq");
+                }
+                tx.send(answer(
+                    "command_accepted",
+                    json!({"command_id": id, "result": {"lines": [first]}}),
+                ))
+                .unwrap_or(());
+            }
+            seen_tx.send(count).unwrap_or(());
+        })
+        .unwrap_or_else(|err| panic!("spawn: {err}"));
+    // One line asked: the fetch returns at once, so it runs on a thread
+    // of its own so a fetch that asks again fails here instead of
+    // hanging the suite.
+    let (done, finished) = mpsc::channel();
+    std::thread::Builder::new()
+        .name("loop-seq-less-fetch".to_owned())
+        .spawn(move || {
+            let lines = hub.fetch(&rx, &session_id, &(Seq(0)..=Seq(0)), &mut app, &tick);
+            done.send((lines, hub)).unwrap_or(());
+        })
+        .unwrap_or_else(|err| panic!("spawn: {err}"));
+    let (lines, hub) = Deadline::after(DEADLINE)
+        .recv(&finished)
+        .unwrap_or_else(|err| panic!("waited {DEADLINE:?} for the fetch: {err}"));
+    // The unsequenced answer is dropped, not kept.
+    assert_eq!(lines, Ok(Vec::new()));
+    drop(hub);
+    let count = Deadline::after(DEADLINE)
+        .recv(&seen)
+        .unwrap_or_else(|err| panic!("waited {DEADLINE:?} for the hub to see the hang-up: {err}"));
+    assert_eq!(
+        count, 1,
+        "the missing seq ends the fetch instead of asking again"
+    );
+}
+
+#[test]
+fn an_empty_fetch_range_asks_nothing() {
+    let (ours, mut theirs) = UnixStream::pair().unwrap_or_else(|err| panic!("pair: {err}"));
+    theirs
+        .set_nonblocking(true)
+        .unwrap_or_else(|err| panic!("nonblocking: {err}"));
+    let mut hub = Connection::new(None);
+    hub.store(ours);
+    let mut app = App::new(PathBuf::from("/w"));
+    let tick = crate::tick::TickThread::idle();
+    let session = contract::SessionId(SESSION.to_owned());
+    let (_idle_tx, idle) = mpsc::channel();
+    // An inverted range asks nothing, so the fetch returns at once; it
+    // runs on a thread of its own so an ask that never ends fails here
+    // instead of hanging the suite.
+    let (done, finished) = mpsc::channel();
+    std::thread::Builder::new()
+        .name("loop-empty-fetch".to_owned())
+        .spawn(move || {
+            let lines = hub.fetch(&idle, &session, &(Seq(5)..=Seq(3)), &mut app, &tick);
+            done.send((lines, hub)).unwrap_or(());
+        })
+        .unwrap_or_else(|err| panic!("spawn: {err}"));
+    let (lines, hub) = Deadline::after(DEADLINE)
+        .recv(&finished)
+        .unwrap_or_else(|err| panic!("waited {DEADLINE:?} for the empty fetch: {err}"));
+    assert_eq!(lines, Ok(Vec::new()));
+    // Nothing reached the hub: the peer reads nothing, without waiting.
+    // The hub returns first, so its stream is still open for the read.
+    let mut byte = [0u8; 1];
+    match theirs.read(&mut byte) {
+        Err(err) if err.kind() == ErrorKind::WouldBlock => {}
+        Ok(_) => panic!("the empty fetch wrote a command"),
+        Err(err) => panic!("the empty fetch's read failed: {err}"),
+    }
+    drop(hub);
+}
+
+#[test]
+fn a_fetch_with_no_stream_is_lost_at_once() {
+    let mut hub = Connection::new(None);
+    let mut app = App::new(PathBuf::from("/w"));
+    app.on_line(Line::Hub(contract::HubLine {
+        kind: "hub_hello".to_owned(),
+        ts: 0,
+        schema_version: contract::SCHEMA_VERSION,
+        payload: serde_json::Map::new(),
+    }));
+    app.attach(contract::SessionId(SESSION.to_owned()));
+    let tick = crate::tick::TickThread::idle();
+    let session = contract::SessionId(SESSION.to_owned());
+    let (_idle_tx, idle) = mpsc::channel();
+    // Nothing is connected, so the fetch fails without waiting; it runs
+    // on a thread of its own so a wait that never ends fails here
+    // instead of hanging the suite.
+    let (done, finished) = mpsc::channel();
+    std::thread::Builder::new()
+        .name("loop-lost-fetch".to_owned())
+        .spawn(move || {
+            let lines = hub.fetch(&idle, &session, &(Seq(0)..=Seq(1)), &mut app, &tick);
+            done.send((lines, app)).unwrap_or(());
+        })
+        .unwrap_or_else(|err| panic!("spawn: {err}"));
+    let (lines, app) = Deadline::after(DEADLINE)
+        .recv(&finished)
+        .unwrap_or_else(|err| panic!("waited {DEADLINE:?} for the lost fetch: {err}"));
+    assert_eq!(lines, Err(LOST.to_owned()));
+    assert_eq!(app.notice(), Some("Connection lost."));
+}
+
+#[test]
+fn an_empty_send_keeps_the_connection_and_writes_nothing() {
+    let (ours, mut theirs) = UnixStream::pair().unwrap_or_else(|err| panic!("pair: {err}"));
+    theirs
+        .set_nonblocking(true)
+        .unwrap_or_else(|err| panic!("nonblocking: {err}"));
+    let mut hub = Connection::new(None);
+    hub.store(ours);
+    let mut app = App::new(PathBuf::from("/w"));
+    hub.send(&[], &mut app);
+    assert!(hub.has_stream(), "an empty send keeps the stream");
+    // Nothing reached the hub: the peer reads nothing, without waiting.
+    let mut byte = [0u8; 1];
+    match theirs.read(&mut byte) {
+        Err(err) if err.kind() == ErrorKind::WouldBlock => {}
+        Ok(_) => panic!("the empty send wrote a line"),
+        Err(err) => panic!("the empty send's read failed: {err}"),
+    }
+}
+
+#[test]
+fn dropping_the_loop_with_no_retry_ends_the_read() {
+    let (lp, mut theirs, _tx, _rx) = opened();
+    theirs
+        .set_read_timeout(Some(DEADLINE))
+        .unwrap_or_else(|err| panic!("timeout: {err}"));
+    drop(lp);
+    // The drop shuts the stream down both ways, so the peer sees the end
+    // at once instead of waiting out the deadline.
+    let mut byte = [0u8; 1];
+    match theirs.read(&mut byte) {
+        Ok(0) => {}
+        Ok(_) => panic!("a byte instead of the end"),
+        Err(err) => {
+            panic!("waited {DEADLINE:?} for the dropped loop to end the read: {err}")
+        }
+    }
+}
+
+#[test]
+fn hanging_up_twice_clears_the_stream() {
+    let (ours, theirs) = UnixStream::pair().unwrap_or_else(|err| panic!("pair: {err}"));
+    drop(theirs);
+    let mut hub = Connection::new(None);
+    hub.store(ours);
+    // The peer is gone: the shutdown still holds nothing back and clears
+    // the stream, and hanging up with nothing held stays quiet.
+    hub.hang_up();
+    assert!(!hub.has_stream());
+    hub.hang_up();
+    assert!(!hub.has_stream());
+}
+
+#[test]
+fn a_signal_during_a_history_wait_keeps_the_connection() {
+    use signal_hook::consts::SIGTERM;
+    let (lp, _theirs, tx, rx) = opened();
+    tx.send(Input::Signal(SIGTERM))
+        .unwrap_or_else(|err| panic!("send: {err}"));
+    // `answer` blocks in `recv`: it runs on a thread of its own and its
+    // result arrives through one deadline, so a wait that never ends
+    // fails here instead of hanging the suite.
+    let (done, finished) = mpsc::channel();
+    std::thread::Builder::new()
+        .name("loop-signal-kept".to_owned())
+        .spawn(move || {
+            let mut lp = lp;
+            let result = lp.hub.answer(&rx, "a_1", &mut lp.app, &lp.tick);
+            done.send((result, lp)).unwrap_or(());
+        })
+        .unwrap_or_else(|err| panic!("spawn: {err}"));
+    let (result, lp) = Deadline::after(DEADLINE)
+        .recv(&finished)
+        .unwrap_or_else(|err| panic!("waited {DEADLINE:?} for the history wait to end: {err}"));
+    assert_eq!(result, Err(LOST.to_owned()));
+    assert!(
+        lp.hub.has_stream(),
+        "the held signal ends the wait, not the connection"
+    );
+    assert_eq!(
+        lp.hub.stashed().len(),
+        1,
+        "the signal is held for after the frame"
+    );
+}
+
+#[test]
+fn a_failed_write_grants_no_retry_until_the_reader_disconnects() {
+    let (mut lp, _theirs, tx, rx) = opened();
+    let retry = crate::retry::Retry::new(&lp.clock);
+    lp.hub.set_retry(Arc::clone(&retry));
+    // Only the write side fails: the reader stays open, so no permit
+    // arrives on its own.
+    if let Some(hub) = lp.hub.stream() {
+        hub.shutdown(std::net::Shutdown::Write)
+            .unwrap_or_else(|err| panic!("shutdown: {err}"));
+    } else {
+        panic!("the loop holds no stream");
+    }
+    let mut lp = run(lp, rx, &tx, to_the_top());
+    assert!(!lp.hub.has_stream());
+    assert_eq!(
+        lp.app.notice(),
+        Some("Could not load history: connection lost")
+    );
+    assert_eq!(
+        retry.held(),
+        None,
+        "the write loss grants no retry on its own"
+    );
+    // The reader's end of the stream gives the permit.
+    let (_idle_tx, idle) = mpsc::channel();
+    assert_eq!(lp.step(Input::Disconnected, &idle), None);
+    assert_eq!(retry.held(), Some(Duration::from_millis(500)));
 }
