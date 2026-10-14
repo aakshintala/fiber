@@ -218,6 +218,14 @@ fn a_run_flag_of_the_wrong_type_names_the_flag() {
 }
 
 #[test]
+fn known_key_accepts_a_documented_key_and_refuses_an_unknown_one() {
+    // `fiber config get` refuses an unknown key and reads a known one, so
+    // neither a body of `true` nor one of `false` stands in for the table.
+    assert!(config::known_key("handoff.tokens"));
+    assert!(!config::known_key("frobnicate"));
+}
+
+#[test]
 fn an_unknown_key_is_a_notice_and_is_otherwise_ignored() {
     let setup = Setup::new();
     setup.write(
