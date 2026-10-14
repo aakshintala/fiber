@@ -31,6 +31,7 @@
 //!   from models.dev, or from FILE instead of fetching
 //!   (`docs/model-routing.md`)
 //! - `line-cap`, `unsafe-table`, `signal-sites`, `compiled-in`, `dependency-list`, `image-isolation`, `tui-isolation`, `preserve-order`, `check-docs`, `ci-needs`: the checks
+//! - `session-paths`, `fiber-home-paths`, `loop-tool-names`: architecture rules 3, 4 and 5
 //! - `logo-mask --font <path> [--out <path>]`: regenerates the logo's alpha
 //!   mask from JetBrains Mono ExtraBold; the font is downloaded by whoever
 //!   regenerates and never committed
@@ -243,6 +244,21 @@ fn run(args: &[String]) -> Result<bool, String> {
         "signal-sites" => report(
             "signal-sites",
             &rules::signal_sites(&rust_files(&workspace_members()?)?),
+            "ok",
+        ),
+        "session-paths" => report(
+            "session-paths",
+            &rules::session_paths(&rust_files(&workspace_members()?)?),
+            "ok",
+        ),
+        "fiber-home-paths" => report(
+            "fiber-home-paths",
+            &rules::fiber_home_paths(&rust_files(&workspace_members()?)?),
+            "ok",
+        ),
+        "loop-tool-names" => report(
+            "loop-tool-names",
+            &rules::loop_tool_names(&rust_files(&workspace_members()?)?),
             "ok",
         ),
         "compiled-in" => {
