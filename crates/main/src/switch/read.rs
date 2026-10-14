@@ -268,9 +268,10 @@ impl Reads {
     /// end is not a key: a run done past its deadline, or after shutdown
     /// cancelled the reads, is killed and reported as the wait ended. A run
     /// not finished at the timeout has its group killed again until no
-    /// process is left in it, within one bound, and its leader reaped
-    /// before this returns `TimedOut`; at the bound the group stays listed
-    /// for later settlement. The stdout reader is never
+    /// process is left in it, within one bound anchored at the deadline,
+    /// and its leader reaped within the same bound before this returns
+    /// `TimedOut`; at the bound the group stays listed for later
+    /// settlement even if the leader never exits. The stdout reader is never
     /// waited on after the kill, so a process that left the group and holds
     /// stdout keeps only that reader thread alive, never the caller. Once
     /// [`Reads::cancel`] ran, this returns `Interrupted`, whether it was
@@ -288,6 +289,13 @@ impl Reads {
                 "its timeout is longer than this system's clock can count",
             )
         })?;
+        // Settlement and the reap below share this one absolute end,
+        // anchored at the deadline: neither earns a fresh budget, so a
+        // leader that never exits still ends the wait at the end. An end
+        // past what the clock can count expires at once, below.
+        let end = deadline
+            .checked_add(doors::SHUTDOWN_BOUND)
+            .unwrap_or(deadline);
         let mut child = self.spawn(command)?;
         let group = child.id();
         // Taken before the reaper below owns the child.
@@ -405,7 +413,11 @@ impl Reads {
                         return Err(interrupted());
                     }
                     if deadline_due(clock.now(), deadline) {
-                        self.settle_group(group, clock);
+                        self.settle_group(group, clock, end);
+                        if self.lock().cancelled {
+                            kill_group(group);
+                            return Err(interrupted());
+                        }
                         return Err(timed_out());
                     }
                     {
@@ -434,13 +446,41 @@ impl Reads {
                 return Err(interrupted());
             }
             if deadline_due(clock.now(), deadline) {
-                self.settle_group(group, clock);
+                self.settle_group(group, clock, end);
+                if self.lock().cancelled {
+                    kill_group(group);
+                    return Err(interrupted());
+                }
                 if exit.is_none() {
                     // The reaper owns the leader's wait: its answer reaps
                     // the leader. An emptied group already delivered it, so
                     // this returns at once; the receive is ignored either
-                    // way, since the answer here is `TimedOut`.
-                    let _reaped = status_received.recv();
+                    // way, since the answer here is `TimedOut`. The reap
+                    // shares settlement's absolute end: at the end the
+                    // group stays listed for later settlement even if the
+                    // leader never exits, so this never blocks past it.
+                    loop {
+                        match status_received.try_recv() {
+                            Ok(_) | Err(mpsc::TryRecvError::Disconnected) => break,
+                            Err(mpsc::TryRecvError::Empty) => {}
+                        }
+                        if self.lock().cancelled {
+                            kill_group(group);
+                            return Err(interrupted());
+                        }
+                        if clock.now() >= end {
+                            break;
+                        }
+                        // Captured after the check: a send past this point
+                        // ends the park below at once, so no reap lands
+                        // between the check and the park unheard.
+                        let seen = self.wake.generation();
+                        let wait_until = clock
+                            .now()
+                            .checked_add(GROUP_POLL)
+                            .map_or(end, |poll| poll.min(end));
+                        self.wake.park(clock, Some(wait_until), seen);
+                    }
                 }
                 return Err(timed_out());
             }
@@ -580,10 +620,11 @@ impl Reads {
     /// timed-out group through the shared helper: nothing here cancels
     /// another read or kills another group. At the end the group stays
     /// listed for later settlement, as [`Reads::settle`] leaves anything
-    /// still pending at its bound.
-    fn settle_group(&self, group: u32, clock: &dyn Clock) {
-        let now = clock.now();
-        let end = now.checked_add(doors::SHUTDOWN_BOUND).unwrap_or(now);
+    /// still pending at its bound. A cancel ends the settlement at once:
+    /// every pass observes `cancelled` — a cancel bumps the wake, so the
+    /// parked pass ends at once — and the caller answers `Interrupted`, so
+    /// a cancel that lands while timing out is never `TimedOut`.
+    fn settle_group(&self, group: u32, clock: &dyn Clock, end: Instant) {
         loop {
             // The generation is captured before the checks, as in
             // `credential`: a clock move past this point ends the park
@@ -600,6 +641,9 @@ impl Reads {
                 }
             };
             if empty {
+                return;
+            }
+            if self.lock().cancelled {
                 return;
             }
             if clock.now() >= end {
