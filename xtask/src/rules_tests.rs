@@ -2078,17 +2078,19 @@ fn test_item_end_tracks_angle_groups_only_for_fields() {
 }
 
 #[test]
-fn test_only_tokens_marks_only_cfg_test_items() {
+fn test_only_tokens_marks_only_direct_cfg_test_items() {
     let tokens = source_tokens(
-        "let production = 1; #[cfg(feature = \"x\")] fn feature() {} #[cfg(test)] fn fixture() {}",
+        "let production = 1; #[cfg(feature = \"x\")] fn feature() {} #[cfg_attr(test, cfg(test))] fn conditional() {} #[cfg(test)] fn fixture() {}",
     )
     .unwrap();
     let marked = test_only_tokens(&tokens).unwrap();
     let production = token_with_ident(&tokens, "production");
     let feature = token_with_ident(&tokens, "feature");
+    let conditional = token_with_ident(&tokens, "conditional");
     let fixture = token_with_ident(&tokens, "fixture");
     assert!(!marked[production]);
     assert!(!marked[feature]);
+    assert!(!marked[conditional]);
     assert!(marked[fixture]);
 }
 

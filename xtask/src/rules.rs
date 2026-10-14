@@ -928,12 +928,11 @@ fn matching(tokens: &[SourceToken], start: usize, left: char, right: char) -> Op
 }
 
 fn cfg_test_attribute(tokens: &[SourceToken], start: usize, end: usize) -> bool {
-    (start..end).any(|i| {
-        ident(tokens.get(i), "cfg")
-            && punct(tokens.get(i + 1), '(')
-            && ident(tokens.get(i + 2), "test")
-            && punct(tokens.get(i + 3), ')')
-    })
+    end.checked_sub(start) == Some(4)
+        && ident(tokens.get(start), "cfg")
+        && punct(tokens.get(start + 1), '(')
+        && ident(tokens.get(start + 2), "test")
+        && punct(tokens.get(start + 3), ')')
 }
 
 fn struct_body(tokens: &[SourceToken], at: usize) -> bool {
