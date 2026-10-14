@@ -1116,3 +1116,36 @@ fn a_close_now_during_commit_shuts_down_with_code_0_after_the_write() {
     assert_eq!(ended.recv(&calls).unwrap(), Did::Bound);
     assert_eq!(ended.recv(&did).unwrap(), Did::Exit(0));
 }
+
+#[test]
+fn close_now_after_a_signal_while_armed_does_nothing() {
+    let clock = FakeClock::new();
+    let (signals, did) = recorded(&clock);
+    let (tx, calls) = mpsc::channel();
+    arm(&signals, &tx);
+    assert_eq!(start_only(&signals, &tx), None);
+    let until = clock.now() + KILL_AT;
+    signals.handle(SIGTERM);
+    assert_eq!(calls.try_recv().unwrap(), Did::Signal(-1));
+    signals.close_now();
+    assert!(
+        calls.try_recv().is_err(),
+        "a close with now after a signal while armed does nothing"
+    );
+    assert_eq!(signals.recorded(), Some(143));
+    assert_eq!(signals.commit(|| ()), Err(143));
+    assert!(
+        calls.try_recv().is_err(),
+        "the recorded close runs no second on_record"
+    );
+    assert!(
+        clock.await_parked(until, DEADLINE),
+        "the bound waits on the clock"
+    );
+    clock.advance(KILL_AT);
+    let ended = Deadline::after(DEADLINE);
+    assert_eq!(ended.recv(&calls).unwrap(), Did::Bound);
+    assert_eq!(ended.recv(&did).unwrap(), Did::Exit(143));
+    assert!(calls.try_recv().is_err(), "no second bound ran");
+    assert!(did.try_recv().is_err(), "no second exit ran");
+}
