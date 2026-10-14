@@ -175,7 +175,12 @@ pub(crate) fn read_request(conn: &mut Connection) -> RequestOutcome {
     };
     // A request with any transfer coding ends in chunked, as before.
     let chunked = headers.iter().any(|(name, _)| name == "transfer-encoding");
-    let (body, malformed) = if chunked {
+    // A CONNECT request has no message body: every byte past the head
+    // is tunnel data, and eating declared bytes as a body would keep
+    // them from `into_tunnel_parts`.
+    let (body, malformed) = if method == "CONNECT" {
+        (Vec::new(), None)
+    } else if chunked {
         match read_chunked(conn, &limits) {
             Ok(decoded) => decoded,
             Err(outcome) => return outcome,
@@ -220,15 +225,6 @@ pub(crate) fn read_request(conn: &mut Connection) -> RequestOutcome {
                 FillOutcome::Eof => return RequestOutcome::Eof,
                 FillOutcome::Stopped => return RequestOutcome::Stopped,
             }
-        }
-        // Pipelined bytes the capped reads left on the socket would
-        // reset the close instead of delivering the reply: discard one
-        // read of what already arrived, never waiting for more. Only
-        // past a declared body, on the path that closes after replying:
-        // a zero-length read (a CONNECT, or a reused connection's empty
-        // body) leaves socket bytes the tunnel or the session still owns.
-        if length != 0 {
-            conn.drain_socket();
         }
         (body, None)
     };

@@ -493,6 +493,21 @@ fn serve(conn: Connection, state: &Mutex<State>, arrived: &Condvar, clock: &Arc<
         RequestOutcome::Complete(request) => request,
         RequestOutcome::Eof | RequestOutcome::Invalid(_) | RequestOutcome::Stopped => return,
     };
+    // The closing adapter discards already-arrived pipelined bytes so
+    // the close delivers the reply instead of resetting; anything not
+    // yet arrived is never waited for. Only past a declared fixed body:
+    // chunked, zero-body-on-reused-conn and tunnelled reads never drain.
+    if request
+        .headers
+        .iter()
+        .any(|(name, _)| name == "content-length")
+        && !request
+            .headers
+            .iter()
+            .any(|(name, _)| name == "transfer-encoding")
+    {
+        conn.drain_socket();
+    }
     let malformed = request.malformed;
     let response = {
         let mut state = lock(state);

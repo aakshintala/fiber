@@ -881,6 +881,24 @@ fn first_diff(recorded: &[u8], sent: &[u8]) -> Option<usize> {
         .position(|(recorded, sent)| recorded != sent)
 }
 
+/// Reads `stream` to its close on a thread and receives the whole reply
+/// through one named wall-clock deadline: continued partial progress
+/// fails the test at the deadline instead of reaching the harness kill.
+fn read_reply_within(stream: TcpStream, what: &'static str) -> Vec<u8> {
+    let (tx, rx) = mpsc::channel();
+    thread::spawn(move || {
+        let mut stream = stream;
+        let mut reply = Vec::new();
+        stream
+            .read_to_end(&mut reply)
+            .unwrap_or_else(|e| panic!("{what} within {READ_WITHIN:?}: {e}"));
+        tx.send(reply).unwrap();
+    });
+    Deadline::after(READ_WITHIN)
+        .recv(&rx)
+        .unwrap_or_else(|_| panic!("{what} within {READ_WITHIN:?}"))
+}
+
 // One bench-shaped POST: a large fixed-length body on a fresh connection,
 // answered at once, like each of a busy turn's model calls over its own
 // `connection: close` connection. The reply completes with the body
@@ -1213,8 +1231,10 @@ fn growing_fixed_bodies_bypass_the_lookahead() {
     let server = ProviderServer::start_on(clock, script).unwrap();
     let addr = server.addr;
     for body in bodies.iter() {
-        let mut stream = TcpStream::connect(addr).unwrap();
+        let mut stream = TcpStream::connect_timeout(&addr, READ_WITHIN)
+            .unwrap_or_else(|e| panic!("the connection arrives within {READ_WITHIN:?}: {e}"));
         stream.set_read_timeout(Some(READ_WITHIN)).unwrap();
+        stream.set_write_timeout(Some(READ_WITHIN)).unwrap();
         stream
             .write_all(
                 format!(
@@ -1223,15 +1243,16 @@ fn growing_fixed_bodies_bypass_the_lookahead() {
                 )
                 .as_bytes(),
             )
-            .unwrap();
-        stream.write_all(body).unwrap();
+            .unwrap_or_else(|e| panic!("the head arrives within {READ_WITHIN:?}: {e}"));
+        stream
+            .write_all(body)
+            .unwrap_or_else(|e| panic!("the body arrives within {READ_WITHIN:?}: {e}"));
         // The write side stays open until the reply completes, like the
         // bench's client on its fresh connection per call: the server
         // closes, so the read ends at the reply instead of its bound.
-        let mut response = Vec::new();
-        stream
-            .read_to_end(&mut response)
-            .unwrap_or_else(|e| panic!("the scripted reply arrives within {READ_WITHIN:?}: {e}"));
+        // One wall-clock deadline spans the whole reply, so continued
+        // partial progress fails here instead of at the harness kill.
+        let response = read_reply_within(stream, "the scripted reply arrives");
         let text = String::from_utf8_lossy(&response);
         assert!(text.starts_with("HTTP/1.1 200"), "{text}");
         assert!(response.ends_with(b"{}\n\n"), "{text}");
@@ -1312,12 +1333,11 @@ fn a_fixed_body_buffered_with_its_head_keeps_only_its_length() {
     // fake clock only past the wait the announcement pinned.
     clock.advance(Duration::from_secs(1));
     // Anything past the body sees the close: an over-read loses the
-    // reply instead of hanging on it.
+    // reply instead of hanging on it. One wall-clock deadline spans the
+    // whole reply, so continued partial progress fails here instead of
+    // at the harness kill.
     stream.shutdown(Shutdown::Write).unwrap();
-    let mut response = Vec::new();
-    stream
-        .read_to_end(&mut response)
-        .unwrap_or_else(|e| panic!("the scripted reply arrives within {READ_WITHIN:?}: {e}"));
+    let response = read_reply_within(stream, "the scripted reply arrives");
     let text = String::from_utf8_lossy(&response);
     assert!(text.starts_with("HTTP/1.1 200"), "{text}");
     assert!(response.ends_with(b"ok"), "{text}");
@@ -1341,14 +1361,14 @@ fn a_fixed_body_buffered_with_its_head_keeps_only_its_length() {
     );
 }
 
-// A CONNECT whose payload is larger than the head's initial read tunnels
-// every byte to the origin: the fixed-body discard runs only past a
-// declared body, so payload bytes already on the socket survive the
-// handshake and reach the origin byte-exact. The head goes without its
-// blank line, so the handshake parks (pinned by its wait announcement)
-// before the blank line and the whole payload arrive as one burst: the
-// burst is queued before the parked read wakes, so the discard, if it
-// ran, would certainly find socket bytes to eat.
+// A CONNECT with a declared Content-Length whose payload is larger than
+// the head's initial read tunnels every byte to the origin: a CONNECT has
+// no message body, so declared bytes are tunnel data, never a body, and
+// no discard runs on the tunnel path. The head carries the content-length
+// line without its blank line, so the handshake parks (pinned by its wait
+// announcement) before the blank line and the whole payload arrive as one
+// burst: the burst is queued before the parked read wakes, so a body read
+// or a discard, if either ran, would certainly eat socket bytes.
 #[test]
 fn a_connect_payload_larger_than_the_head_read_reaches_its_origin() {
     use std::io::BufRead as _;
@@ -1358,12 +1378,11 @@ fn a_connect_payload_larger_than_the_head_read_reaches_its_origin() {
     let origin = listener.local_addr().unwrap();
     let (tx, rx) = mpsc::channel();
     thread::spawn(move || {
-        let (mut stream, _) = listener.accept().unwrap();
+        let (stream, _) = listener.accept().unwrap();
         stream.set_read_timeout(Some(READ_WITHIN)).unwrap();
-        let mut payload = Vec::new();
-        stream
-            .read_to_end(&mut payload)
-            .unwrap_or_else(|e| panic!("the origin reads the payload within {READ_WITHIN:?}: {e}"));
+        // One wall-clock deadline spans the whole payload, so continued
+        // partial progress fails here instead of at the harness kill.
+        let payload = read_reply_within(stream, "the origin reads the payload");
         tx.send(payload).unwrap();
     });
     let proxy = crate::ConnectProxy::start().unwrap();
@@ -1375,7 +1394,12 @@ fn a_connect_payload_larger_than_the_head_read_reaches_its_origin() {
     client.set_read_timeout(Some(READ_WITHIN)).unwrap();
     client.set_write_timeout(Some(READ_WITHIN)).unwrap();
     client
-        .write_all(format!("CONNECT {target} HTTP/1.1\r\nHost: {target}\r\n").as_bytes())
+        .write_all(
+            format!(
+                "CONNECT {target} HTTP/1.1\r\nHost: {target}\r\nContent-Length: {PAYLOAD_LEN}\r\n"
+            )
+            .as_bytes(),
+        )
         .unwrap_or_else(|e| panic!("the partial head arrives within {READ_WITHIN:?}: {e}"));
     let deadline = Deadline::after(READ_WITHIN);
     loop {
