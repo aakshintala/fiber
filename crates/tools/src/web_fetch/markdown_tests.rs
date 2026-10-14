@@ -361,6 +361,22 @@ fn a_tag_that_cannot_be_in_svg_ends_it() {
 }
 
 #[test]
+fn a_tag_that_cannot_be_in_svg_ends_it_before_its_deadline() {
+    // `close_svg` pops down to an `svg_base` of zero here, so with `>=`
+    // the loop never ends: popping an empty stack is a no-op. The
+    // deadline fails that mutant naming what it waited for, instead of
+    // hanging to the mutant timeout.
+    let html = "a<svg><svg>s<p>b</p>".to_owned();
+    assert_eq!(
+        with_deadline(
+            "closing every open svg at a tag that cannot be in one",
+            move || to_markdown(&html)
+        ),
+        "a\n\nb\n"
+    );
+}
+
+#[test]
 fn leaving_svg_closes_what_is_open_inside_it() {
     // Inside an `svg` a `noscript` or `template` is an element of the
     // `svg`, so the tag that ends the `svg` ends it too.
