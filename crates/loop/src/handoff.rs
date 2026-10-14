@@ -7,8 +7,7 @@
 use std::sync::Arc;
 
 use contract::events::{
-    ContextNudged, Event, HandoffCompleted, HandoffTrigger, Note, Outcome, ToolCallRequested,
-    TurnCompleted, TurnOutcome,
+    ContextNudged, Event, HandoffTrigger, Outcome, ToolCallRequested, TurnCompleted, TurnOutcome,
 };
 use contract::provider::{Input, ModelRequest};
 use contract::shapes::{Failure, Tokens};
@@ -237,8 +236,10 @@ impl Loop {
         if size >= trigger_at && !self.handoff.blocked {
             return Ok(cancelled(self.run_handoff(
                 turn,
-                HandoffTrigger::Auto,
-                None,
+                note::Source::Requested {
+                    trigger: HandoffTrigger::Auto,
+                    instructions: None,
+                },
                 size,
             )?));
         }
@@ -271,8 +272,14 @@ impl Loop {
             .collect();
         let instructions = (!parts.is_empty()).then(|| parts.join("\n\n"));
         let size = self.context_estimate();
-        let ended =
-            cancelled(self.run_handoff(turn, HandoffTrigger::Person, instructions, size)?);
+        let ended = cancelled(self.run_handoff(
+            turn,
+            note::Source::Requested {
+                trigger: HandoffTrigger::Person,
+                instructions,
+            },
+            size,
+        )?);
         if ended.is_none() && self.handoff.person_turn && self.handoff.carry.input.is_empty() {
             return Ok(Some(crate::ended(TurnOutcome::Completed, None)));
         }
@@ -295,18 +302,8 @@ impl Loop {
             return Ok(false);
         }
         let tokens_before = self.context_estimate();
-        self.append(
-            &Event::HandoffCompleted(HandoffCompleted {
-                outcome: Outcome::Completed,
-                error: None,
-                note: Some(Note::Actions { note }),
-                tokens_before,
-                instructions: None,
-            }),
-            turn,
-            None,
-        )?;
-        self.restarted(turn)?;
+        let outcome = self.run_handoff(turn, note::Source::Tools { note }, tokens_before)?;
+        debug_assert_eq!(outcome, Outcome::Completed);
         Ok(true)
     }
 
@@ -338,7 +335,14 @@ impl Loop {
             return Ok(Step::Ended(crate::ended(TurnOutcome::Failed, Some(over))));
         }
         let size = self.context_estimate();
-        match self.run_handoff(turn, HandoffTrigger::Overflow, None, size)? {
+        match self.run_handoff(
+            turn,
+            note::Source::Requested {
+                trigger: HandoffTrigger::Overflow,
+                instructions: None,
+            },
+            size,
+        )? {
             Outcome::Completed => self.send(turn),
             Outcome::Failed => Ok(Step::Ended(crate::ended(TurnOutcome::Failed, Some(over)))),
             Outcome::Cancelled => Ok(Step::Ended(crate::ended(TurnOutcome::Interrupted, None))),
@@ -348,6 +352,16 @@ impl Loop {
     /// Sends the step's request from the conversation as it stands, once the
     /// budget and the window allow it (`docs/loop.md`, "One step").
     pub(crate) fn send(&mut self, turn: &TurnId) -> Result<Step, Error> {
+        // The scope covers assembling the history plus the request, never
+        // the budget, window or hook checks after it. A missing preamble
+        // only means no timer starts: assembly and the fail-closed path
+        // run exactly as before.
+        let has_preamble = self.preamble.is_some();
+        let _timer = has_preamble
+            .then(|| self.diag.timed(contract::diag::Op::TurnRequest))
+            .flatten();
+        #[cfg(test)]
+        crate::timing_tests::request_send_entry();
         let Some(request) = self.request_for(self.conversation.clone()) else {
             // `turn` builds the preamble before its `turn_started`; reaching
             // a step without one is a bug, so the turn fails closed.
@@ -359,6 +373,9 @@ impl Loop {
                 )),
             )));
         };
+        #[cfg(test)]
+        crate::timing_tests::request_send_exit(self.log.clock().as_ref());
+        drop(_timer);
         if let Some(completed) = self.over_budget() {
             return Ok(Step::Ended(self.budget_end(completed)));
         }

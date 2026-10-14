@@ -277,7 +277,20 @@ What is recorded:
   attempt group for a native observed request, from the first socket attempt
   through socket admission. It excludes DNS before entry, TLS, CONNECT
   negotiation and the response body, as well as pre-stopped and empty groups
-  and already-built tunnels. Other plain agent clients stay unobserved, and
+  and already-built tunnels. Installed for the loop are `startup.preamble`,
+  `turn.request`, `turn.model_call` and `turn.handoff`. `startup.preamble`
+  covers building and installing the preamble after the approved-code load,
+  before the opening message, once per session start: a same-session rebuild
+  writes no line. `turn.request` covers assembling the history plus the
+  request, ending before the budget, window and hook checks. `turn.model_call`
+  covers one admitted attempt, from entering the model call until its stream
+  ends; a cancel observed before admission writes none, and a retry's backoff
+  stays outside. `turn.handoff` covers one handoff end to end, from its first
+  record through the restart. The scopes nest instead of adding up: a
+  requested handoff holds its note's request and model scopes, and
+  `provider_request`'s network share sits inside `turn.model_call`. Warming
+  refreshes and reviewer judgements run through the same factories but write
+  no turn scope. Other plain agent clients stay unobserved, and
   MCP timing follows in a later part.
 
 An event inside a running session is recorded in that session's log and
