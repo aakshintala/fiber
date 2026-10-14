@@ -203,23 +203,18 @@ impl FakeClock {
         (checked_rx, release_tx)
     }
 
-    /// The `mark_parked` pause point: when armed and nobody is parked at
-    /// `until`, signals the test and blocks on its release without holding
-    /// the clock's lock, so the parker can park meanwhile. Fires once per
-    /// arming; when a park is already present the arming is dropped without
-    /// signalling.
+    /// The `mark_parked` pause point, called only while its wait predicate is
+    /// true. Fires once per arming; the pause mutex is released before the
+    /// test signal and release wait.
     #[cfg(test)]
     #[track_caller]
-    fn mark_parked_predicate_checked(&self, until: Instant) {
+    fn mark_parked_predicate_checked(&self) {
         let pause = self
             .mark_parked_pause
             .lock()
             .unwrap_or_else(PoisonError::into_inner)
             .take();
-        let Some((checked, release)) = pause else {
-            return;
-        };
-        if parked_count(&lock(&self.state), until) == 0 {
+        if let Some((checked, release)) = pause {
             let _sent = checked.send(());
             crate::deadline::Deadline::after(Duration::from_secs(5))
                 .recv(&release)
@@ -233,12 +228,17 @@ impl FakeClock {
     /// `None` at the deadline. A later park by one of them matches
     /// [`FakeClock::await_parked_since`], whatever woke it.
     pub fn mark_parked(&self, until: Instant, within: Duration) -> Option<Mark> {
-        #[cfg(test)]
-        self.mark_parked_predicate_checked(until);
         let state = lock(&self.state);
         let (guard, _) = self
             .parked_cv
-            .wait_timeout_while(state, within, |state| parked_count(state, until) == 0)
+            .wait_timeout_while(state, within, |state| {
+                let waiting = parked_count(state, until) == 0;
+                #[cfg(test)]
+                if waiting {
+                    self.mark_parked_predicate_checked();
+                }
+                waiting
+            })
             .unwrap_or_else(PoisonError::into_inner);
         (parked_count(&guard, until) > 0).then(|| {
             Mark(

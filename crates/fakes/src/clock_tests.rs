@@ -1158,12 +1158,12 @@ fn a_thread_waited_on_by_id_is_in_the_mark_for_its_next_park() {
         .expect("thread A exits");
 }
 
-/// `mark_parked` returns the park that arrives after it starts waiting: the
-/// waiter signals it is blocked with nobody parked, the parker parks and
-/// holds on the test's release, and the released waiter returns exactly
-/// that park. With the wait predicate inverted the waiter waits out its
-/// `within` past the held park and returns `None`, so the final `expect`
-/// fails: this kills the `parked_count(state, until) == 0` mutant.
+/// `mark_parked` returns the park that arrives after it starts waiting. The
+/// wait predicate signals while nobody is parked; the test releases the
+/// waiter before starting the parker, so it enters the real condvar wait and
+/// the arriving park wakes it. With the predicate inverted, the hook does not
+/// signal and the bounded receive fails: this kills the
+/// `parked_count(state, until) == 0` mutant.
 #[test]
 fn mark_parked_returns_the_park_that_arrives_after_it_starts() {
     let clock = FakeClock::new();
@@ -1180,6 +1180,7 @@ fn mark_parked_returns_the_park_that_arrives_after_it_starts() {
     Deadline::after(Duration::from_secs(5))
         .recv(&waiting)
         .expect("waited for mark_parked to block with nobody parked");
+    release_waiter.send(()).unwrap();
     let (parker_release_tx, parker_release_rx) = mpsc::channel::<()>();
     let (parker_exit_tx, parker_exit_rx) = mpsc::channel();
     let clock_park = Arc::clone(&clock);
@@ -1198,7 +1199,6 @@ fn mark_parked_returns_the_park_that_arrives_after_it_starts() {
         "the parker parked at its deadline: {:?}, thread {parker_id:?}",
         clock.parked(),
     );
-    release_waiter.send(()).unwrap();
     let mark = Deadline::after(Duration::from_secs(5))
         .recv(&result_rx)
         .expect("waited for mark_parked to return the park")
