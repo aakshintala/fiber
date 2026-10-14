@@ -1345,16 +1345,15 @@ fn resume_open_replays_the_log_to_the_tail() {
                         // A command naming a session is relayed, never
                         // answered by the hub itself: only the session's
                         // accept arrives, carrying its id, then the log.
-                        // The hub parks here until the test releases it,
-                        // forcing the drain to wait past any fixed window.
+                        // The hub parks here until the test releases it: held
+                        // past DRAIN, the drain wait fails every run.
                         subscribed_tx.send(()).unwrap_or(());
                         release.recv().unwrap_or(());
                         write(session_ack(&id, json!({})));
                         for envelope in &stream {
                             write(serde_json::to_value(envelope).unwrap_or(Value::Null));
                         }
-                        hub_done_tx.send(()).unwrap_or(());
-                        return;
+                        break;
                     }
                     Some("commands") => {
                         write(session_ack(&id, json!({"commands": []})));
