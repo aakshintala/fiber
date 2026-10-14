@@ -8,6 +8,7 @@
 
 use crate::test_support::write_record;
 use std::cell::Cell;
+use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::Duration;
@@ -579,6 +580,29 @@ fn the_scripted_provider_is_never_listed() {
         )
         .unwrap(),
     );
+    assert!(catalogue.models.is_empty(), "{:?}", catalogue.models);
+}
+
+#[test]
+fn a_skipped_cache_file_is_never_read() {
+    let setup = Setup::new("fiber-model-list-skipped-unreadable");
+    // `scripted` is reserved: the cached read skips its file without
+    // opening it, so an unreadable one still reads Ok.
+    std::fs::create_dir_all(setup.home().join("cache/models")).unwrap();
+    let skipped = setup.home().join("cache/models/scripted.json");
+    std::fs::write(&skipped, "not a list").unwrap();
+    std::fs::set_permissions(&skipped, std::fs::Permissions::from_mode(0o000)).unwrap();
+    let called = Cell::new(false);
+    let result = model_lists(
+        &setup.home(),
+        &setup.workspace(),
+        ModelLists::Cached,
+        &unloaded(&called),
+        &fakes::children::grouped_output,
+    );
+    std::fs::set_permissions(&skipped, std::fs::Permissions::from_mode(0o644)).unwrap();
+    assert!(result.is_ok(), "a skipped cache file is never read");
+    let catalogue = listed(result.unwrap());
     assert!(catalogue.models.is_empty(), "{:?}", catalogue.models);
 }
 
