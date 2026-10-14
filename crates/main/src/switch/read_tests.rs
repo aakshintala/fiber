@@ -1187,18 +1187,29 @@ fn drive_settle_to_completion(
         clock.await_parked(poll, drive.left()),
         "the settle parked at its poll"
     );
-    // Blind-probe phase, holds maintained: ten advances, each confirmed
-    // by a re-park, exactly like the old drive.
+    // Blind-probe phase, holds maintained: ten advances. Each confirmed
+    // re-park is the held path; once the settle answers early instead
+    // (its group died unheld) later cycles keep the cadence, so the
+    // still-listed assert below names the failure, not these lines.
+    let mut answered = false;
     let mut mark = clock.advance_marked(Duration::from_millis(50));
     for _ in 1..10 {
+        let reparked = clock.await_any_parked_since(&mark, drive.left().min(PARK_PAUSE));
+        if !reparked && !answered {
+            answered = finished.try_recv().is_ok();
+        }
         assert!(
-            clock.await_any_parked_since(&mark, drive.left().min(PARK_PAUSE)),
+            reparked || answered,
             "the settle parked again after the probe advance"
         );
         mark = clock.advance_marked(Duration::from_millis(50));
     }
+    let reparked = clock.await_any_parked_since(&mark, drive.left().min(PARK_PAUSE));
+    if !reparked && !answered {
+        answered = finished.try_recv().is_ok();
+    }
     assert!(
-        clock.await_any_parked_since(&mark, drive.left().min(PARK_PAUSE)),
+        reparked || answered,
         "the settle parked again after the last probe advance"
     );
     assert_eq!(
