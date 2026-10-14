@@ -689,3 +689,74 @@ fn the_callable_times_without_a_second_check_and_emits_once() {
     assert_eq!(line["data"]["op"], "startup.config");
     assert_eq!(line["data"]["ms"], 103);
 }
+
+#[test]
+fn whole_milliseconds_truncate_and_saturate() {
+    for (elapsed, want) in [
+        (Duration::ZERO, 0),
+        (Duration::from_nanos(999_999), 0),
+        (Duration::from_nanos(1_000_000), 1),
+        (Duration::from_nanos(1_999_999), 1),
+        (Duration::from_millis(u64::MAX - 1), u64::MAX - 1),
+        (Duration::from_millis(u64::MAX), u64::MAX),
+    ] {
+        assert_eq!(duration_ms(elapsed), want, "{elapsed:?}");
+    }
+    let past_max = Duration::from_millis(u64::MAX)
+        .checked_add(Duration::from_millis(1))
+        .expect("one millisecond past the maximum");
+    assert_eq!(duration_ms(past_max), u64::MAX);
+}
+
+/// Runs one guard for `elapsed` on the fake clock and returns the file's
+/// text: empty when nothing was written.
+fn timed_text(op: Op, elapsed: Duration) -> String {
+    let home = Home::new("ld-timed-ms");
+    let inner = fakes::clock::FakeClock::new();
+    let clock: Arc<dyn Clock> = inner.clone();
+    let diag = Diag::new(home.path(), Process::Hub, Level::Debug, clock);
+    let start = inner.now();
+    inner.advance(elapsed);
+    drop(timed(&diag, op, None, Some(start)).expect("debug guard"));
+    fs::read_to_string(home.file("hub.log")).unwrap_or_default()
+}
+
+#[test]
+fn a_backwards_clock_contributes_zero() {
+    let home = Home::new("ld-timed-backwards");
+    let inner = fakes::clock::FakeClock::new();
+    let clock: Arc<dyn Clock> = inner.clone();
+    let diag = Diag::new(home.path(), Process::Hub, Level::Debug, clock);
+    let start = inner
+        .now()
+        .checked_add(Duration::from_secs(1))
+        .expect("one second ahead");
+    drop(timed(&diag, Op::TurnHandoff, None, Some(start)).expect("debug guard"));
+    let line = op_line(&home, "hub.log");
+    assert_eq!(line["data"]["op"], "turn.handoff");
+    assert_eq!(line["data"]["ms"], 0);
+}
+
+#[test]
+fn a_frame_within_budget_writes_nothing_and_one_past_writes_sixteen() {
+    let frame = Duration::from_millis(16);
+    let within = timed_text(
+        Op::TuiFrame,
+        frame
+            .checked_sub(Duration::from_nanos(1))
+            .expect("one less"),
+    );
+    assert!(
+        within.is_empty(),
+        "16 ms minus 1 ns writes nothing: {within}"
+    );
+    let at = timed_text(Op::TuiFrame, frame);
+    assert!(at.is_empty(), "16 ms writes nothing: {at}");
+    let past = timed_text(Op::TuiFrame, frame + Duration::from_nanos(1));
+    let line: serde_json::Value = serde_json::from_str(past.trim_end()).unwrap();
+    assert_eq!(line["data"]["op"], "tui.frame");
+    assert_eq!(line["data"]["ms"], 16);
+    let other = timed_text(Op::TurnRequest, frame);
+    let line: serde_json::Value = serde_json::from_str(other.trim_end()).unwrap();
+    assert_eq!(line["data"]["ms"], 16, "the budget binds frames only");
+}

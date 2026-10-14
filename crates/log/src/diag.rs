@@ -471,6 +471,15 @@ impl Stopwatch for Timer {
     }
 }
 
+/// Whole milliseconds in `elapsed`: truncated, saturating to `u64::MAX`.
+fn duration_ms(elapsed: Duration) -> u64 {
+    elapsed.as_millis().try_into().unwrap_or(u64::MAX)
+}
+
+/// A frame past this budget writes `tui.frame`; one within it writes no
+/// line, so scrolling leaves the log small.
+const FRAME_BUDGET: Duration = Duration::from_millis(16);
+
 impl Drop for Timer {
     fn drop(&mut self) {
         let end = self.end.unwrap_or_else(|| self.clock.now());
@@ -479,7 +488,12 @@ impl Drop for Timer {
         let elapsed = end
             .checked_duration_since(self.start)
             .unwrap_or(Duration::ZERO);
-        let ms = elapsed.as_millis().try_into().unwrap_or(u64::MAX);
+        // A frame within its budget writes no line; the comparison is on
+        // the untruncated duration, strictly over budget.
+        if self.op == Op::TuiFrame && elapsed <= FRAME_BUDGET {
+            return;
+        }
+        let ms = duration_ms(elapsed);
         let _files = lock(&FILES);
         let state = lock(&self.state);
         let line = Line {
