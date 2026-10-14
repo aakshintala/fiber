@@ -670,7 +670,8 @@ fn a_key_typed_on_a_terminal_is_not_echoed_and_echo_comes_back() {
         .wait_for("fiber: stored credentials/acme/default");
     // The stored credential precedes the reviewer question: the one
     // installed model is chosen by number.
-    run.screen.wait_for("Reviewer for acme:");
+    // One wait for the input-readiness line: the header, rows and prompt
+    // arrive as one burst, so a second wait could mark past them.
     run.screen.wait_for("Reviewer, by number or name: ");
     run.screen.type_text("1\n");
     run.screen.wait_for("fiber: reviewer acme m");
@@ -709,7 +710,6 @@ fn the_provider_menu_on_a_terminal_picks_by_number() {
     run.screen.type_text(&format!("{KEY}\n"));
     run.screen
         .wait_for("fiber: stored credentials/beta/default");
-    run.screen.wait_for("Reviewer for beta:");
     run.screen.wait_for("Reviewer, by number or name: ");
     run.screen.type_text("1\n");
     run.screen.wait_for("fiber: reviewer beta m");
@@ -1234,17 +1234,23 @@ fn opencode_go_login_asks_with_nothing_preselected_and_saves_the_pick() {
     run.screen.type_text(&format!("{KEY}\n"));
     run.screen
         .wait_for("fiber: stored credentials/opencode/default");
-    run.screen.wait_for("Reviewer for opencode-go:");
-    run.screen.wait_for("Reviewer, by number or name: ");
+    let shown = run.screen.wait_for("Reviewer, by number or name: ");
     assert!(
-        !run.screen.seen.contains("(saved)") && !run.screen.seen.contains("Saved reviewer"),
-        "nothing is preselected on opencode-go: {:?}",
-        run.screen.seen
+        shown.contains("Reviewer for opencode-go:"),
+        "the stored credential precedes the question: {shown:?}"
     );
-    // An invalid answer prints one line naming the problem and asks again.
+    assert!(
+        !shown.contains("(saved)") && !shown.contains("Saved reviewer"),
+        "nothing is preselected on opencode-go: {shown:?}"
+    );
+    // An invalid answer prints one line naming the problem and asks again:
+    // the re-prompt proves the problem line arrived before it.
     run.screen.type_text("nope\n");
-    run.screen.wait_for("`nope` is not a listed reviewer");
-    run.screen.wait_for("Reviewer, by number or name: ");
+    let shown = run.screen.wait_for("Reviewer, by number or name: ");
+    assert!(
+        shown.contains("`nope` is not a listed reviewer"),
+        "{shown:?}"
+    );
     run.screen.type_text("muse-spark-1.3-contributor\n");
     run.screen
         .wait_for("fiber: reviewer opencode-go muse-spark-1.3-contributor");
@@ -1277,12 +1283,10 @@ fn anthropic_login_preselects_its_vendor_default_for_enter() {
     run.screen.type_text(&format!("{KEY}\n"));
     run.screen
         .wait_for("fiber: stored credentials/anthropic/default");
-    run.screen.wait_for("Reviewer for anthropic:");
-    run.screen.wait_for("Reviewer, by number or name: ");
+    let shown = run.screen.wait_for("Reviewer, by number or name: ");
     assert!(
-        run.screen.seen.contains("claude-sonnet-5-5 (saved)"),
-        "the vendor default is preselected: {:?}",
-        run.screen.seen
+        shown.contains("claude-sonnet-5-5 (saved)"),
+        "the vendor default is preselected: {shown:?}"
     );
     run.screen.type_text("\n");
     run.screen
@@ -1349,7 +1353,6 @@ fn a_relogin_keeps_a_stale_saved_pick_on_enter() {
     first
         .screen
         .wait_for("fiber: stored credentials/acme/default");
-    first.screen.wait_for("Reviewer for acme:");
     first.screen.wait_for("Reviewer, by number or name: ");
     first.screen.type_text("1\n");
     first.screen.wait_for("fiber: reviewer acme m");
@@ -1396,7 +1399,6 @@ fn two_providers_sharing_a_credential_keep_their_own_picks() {
     go.screen.type_text(&format!("{KEY}\n"));
     go.screen
         .wait_for("fiber: stored credentials/opencode/default");
-    go.screen.wait_for("Reviewer for opencode-go:");
     go.screen.wait_for("Reviewer, by number or name: ");
     go.screen.type_text("1\n");
     go.screen.wait_for("fiber: reviewer opencode-go");
@@ -1408,9 +1410,8 @@ fn two_providers_sharing_a_credential_keep_their_own_picks() {
     zen.screen.type_text(&format!("{KEY}\n"));
     zen.screen
         .wait_for("fiber: stored credentials/opencode/work");
-    zen.screen.wait_for("Reviewer for opencode-zen:");
-    zen.screen.wait_for("Reviewer, by number or name: ");
-    assert!(zen.screen.seen.contains("(saved)"), "{:?}", zen.screen.seen);
+    let shown = zen.screen.wait_for("Reviewer, by number or name: ");
+    assert!(shown.contains("(saved)"), "{shown:?}");
     zen.screen.type_text("\n");
     zen.screen.wait_for("fiber: reviewer opencode-zen");
     assert_eq!(zen.finish().code(), Some(0));
@@ -1470,7 +1471,6 @@ fn a_reviewer_write_failure_names_the_key_and_keeps_the_credential() {
     run.screen.type_text(&format!("{KEY}\n"));
     run.screen
         .wait_for("fiber: stored credentials/acme/default");
-    run.screen.wait_for("Reviewer for acme:");
     run.screen.wait_for("Reviewer, by number or name: ");
     // Another writer replaces the whole document with `[]` after the
     // prompt: the save fails instead of destroying it.
