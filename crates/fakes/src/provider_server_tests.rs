@@ -11,7 +11,7 @@ use std::time::{Duration, Instant, SystemTime};
 use super::*;
 use crate::clock::FakeClock;
 use crate::deadline::Deadline;
-use crate::http_server::CheckGate;
+use crate::http_server::{CheckGate, Pause};
 use contract::clock::Wake;
 
 const READ_WITHIN: Duration = crate::MUST_SUCCEED_WITHIN;
@@ -1022,20 +1022,17 @@ fn a_large_fixed_body_costs_one_bound_check_per_fill_not_per_byte() {
 }
 
 // A fixed body followed by pipelined bytes keeps only its declared
-// length: the drain is capped by the remaining room, so a second
-// request's bytes already buffered are never consumed as this body.
-// The server is parked waiting for the rest of the body (pinned by its
-// wait announcement) before the tail and the pipelined bytes arrive
-// together, so every fill past the seam straddles it: an uncapped drain
-// overshoots into the pipelined bytes and loses the reply.
+// length. The post-reply seam lets the test send bytes after the reply is
+// complete, then waits for a peek that proves they reached the socket while
+// leaving them unread for the close path. No scheduling or elapsed-time
+// assumption decides the result.
 #[test]
 fn a_fixed_body_followed_by_pipelined_bytes_keeps_only_its_length() {
     const BODY_LEN: usize = 20_000;
-    const FIRST: usize = 1_000;
     let clock = FakeClock::new();
-    let server =
-        ProviderServer::start_on(clock.clone(), vec![Response::status(200, "ok")]).unwrap();
-    let acks = server.core.test_acknowledgments();
+    let server = ProviderServer::start_on(clock, vec![Response::status(200, "ok")]).unwrap();
+    let (pause, control) = Pause::new();
+    Connection::set_test_post_reply_pause(pause);
     let addr = server.addr;
 
     let body: Vec<u8> = (0u8..=250).cycle().take(BODY_LEN).collect();
@@ -1048,27 +1045,19 @@ fn a_fixed_body_followed_by_pipelined_bytes_keeps_only_its_length() {
                 .as_bytes(),
         )
         .unwrap();
-    let (first, rest) = body.split_at(FIRST);
-    stream.write_all(first).unwrap();
-    // The server is out of bytes and parked in the body read: only then
-    // do the tail and the pipelined bytes arrive, together. Earlier
-    // phases (the accept, the head) announce first and are passed over;
-    // every receive is bounded, so a missing body wait fails, never hangs.
+    stream.write_all(&body).unwrap();
+    assert!(
+        server.await_requests(1, READ_WITHIN),
+        "the request is recorded"
+    );
+
     let deadline = Deadline::after(READ_WITHIN);
-    loop {
-        let ack = deadline.recv_or_fail(&acks, "the body read's wait");
-        if ack.phase == "to read the fixed body" {
-            break;
-        }
-    }
-    stream.write_all(rest).unwrap();
+    control.wait_hit(&deadline, "the post-reply seam");
     stream.write_all(pipelined).unwrap();
-    // Wakes the parked read deterministically: the test advances the
-    // fake clock only past the wait the announcement pinned.
-    clock.advance(Duration::from_secs(1));
-    // Anything past the body sees the close: an over-read loses the
-    // reply instead of hanging on it.
     stream.shutdown(Shutdown::Write).unwrap();
+    control.wait_hit(&deadline, "the server's peek of pipelined bytes");
+    control.release();
+
     let mut response = Vec::new();
     stream
         .read_to_end(&mut response)
@@ -1077,10 +1066,6 @@ fn a_fixed_body_followed_by_pipelined_bytes_keeps_only_its_length() {
     assert!(text.starts_with("HTTP/1.1 200"), "{text}");
     assert!(response.ends_with(b"ok"), "{text}");
 
-    assert!(
-        server.await_requests(1, READ_WITHIN),
-        "the request is recorded"
-    );
     let requests = server.requests();
     assert_eq!(requests.len(), 1);
     assert_eq!(requests[0].body_len, BODY_LEN);
@@ -1202,12 +1187,12 @@ fn busy_shaped_posts_sleep_only_when_idle() {
             "the whole head arrives first"
         );
         stream.write_all(body).unwrap();
+        stream.shutdown(Shutdown::Write).unwrap();
         gate.pass(BODY);
         let mut passed = 2u64;
         let response = thread::scope(|scope| {
-            // The write side stays open until the reply completes: the
-            // server closes, so the read ends at the reply instead of its
-            // bound.
+            // The request's write half is closed after the body, so the
+            // reply drain sees EOF and the read ends at the reply.
             let reader = scope.spawn(|| {
                 let mut response = Vec::new();
                 stream.read_to_end(&mut response).unwrap_or_else(|e| {

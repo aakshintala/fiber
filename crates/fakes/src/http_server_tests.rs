@@ -490,7 +490,15 @@ fn serve_once(
     recorded: mpsc::Sender<ParsedRequest>,
     answer: impl FnOnce(Connection) + Send + 'static,
 ) -> (HttpServer, SocketAddr) {
-    let clock = FakeClock::new();
+    serve_once_on(FakeClock::new(), recorded, answer)
+}
+
+/// `serve_once`, on the test's clock so it can drive a drain deadline.
+fn serve_once_on(
+    clock: Arc<FakeClock>,
+    recorded: mpsc::Sender<ParsedRequest>,
+    answer: impl FnOnce(Connection) + Send + 'static,
+) -> (HttpServer, SocketAddr) {
     let server = HttpServer::bind(clock as Arc<dyn Clock>, ten_seconds()).expect("the core binds");
     let addr = server.addr();
     let serving = server.clone();
@@ -530,6 +538,258 @@ fn full_reply_preserves_scripted_headers_and_bytes() {
     let request = Deadline::after(OP).recv_or_fail(&recorded_rx, "the recorded request");
     assert_eq!(request.target, "/v1");
     assert!(server.shutdown(), "shutdown reaps the serving threads");
+}
+
+/// Starts a reply drain while the peer keeps its write side open. The
+/// acknowledgment proves the drain is waiting on its injected deadline.
+fn start_reply_drain(
+    within: Duration,
+) -> (
+    Arc<FakeClock>,
+    HttpServer,
+    TcpStream,
+    mpsc::Receiver<ParsedRequest>,
+    mpsc::Receiver<()>,
+    WaitAck,
+) {
+    use std::io::{Read, Write};
+
+    let clock = fake_clock();
+    let (recorded_tx, recorded_rx) = mpsc::channel();
+    let (drained_tx, drained_rx) = mpsc::channel();
+    let (server, addr) = serve_once_on(clock.clone(), recorded_tx, move |mut conn| {
+        assert!(conn.write_all(b"reply", "to write the test reply"));
+        conn.shutdown_write_and_drain(within);
+        drained_tx.send(()).expect("the test waits for the drain");
+    });
+    let acks = server.test_acknowledgments();
+    let mut client = TcpStream::connect(addr).expect("the test connects");
+    client
+        .set_read_timeout(Some(OP))
+        .expect("the test bounds reads");
+    client
+        .write_all(b"GET /v1 HTTP/1.1\r\nHost: fake\r\n\r\n")
+        .expect("the request writes");
+    let mut reply = [0; 5];
+    client.read_exact(&mut reply).expect("the reply reads");
+    assert_eq!(reply, *b"reply", "the reply arrives before the drain");
+    let mut end = [0; 1];
+    assert_eq!(client.read(&mut end).expect("the write half closes"), 0);
+
+    let deadline = Deadline::after(OP);
+    let ack = loop {
+        let ack = deadline.recv_or_fail(&acks, "the reply drain's clock wait");
+        if ack.phase == "to drain the full reply" {
+            break ack;
+        }
+    };
+    assert!(
+        clock.await_thread_parked(ack.thread, ack.until, OP),
+        "the drain waits on its injected-clock bound"
+    );
+    (clock, server, client, recorded_rx, drained_rx, ack)
+}
+
+/// The injected drain bound expires below, at and above its exact edge.
+/// The production value is pinned, and each edge is driven only after the
+/// drain announces its clock wait.
+#[test]
+fn reply_drain_bound_expires_at_the_exact_edge() {
+    let bound = Duration::from_millis(100);
+    assert_eq!(
+        crate::http_server::connection::REPLY_DRAIN_WITHIN,
+        bound,
+        "the production drain bound is pinned"
+    );
+
+    let (clock, server, _client, requests, drained, ack) = start_reply_drain(bound);
+    let before = bound
+        .checked_sub(Duration::from_nanos(1))
+        .expect("the bound is at least one nanosecond");
+    let mark = clock.advance_marked(before);
+    assert!(
+        clock.await_parked_since(&mark, ack.until, OP),
+        "one tick below the bound the drain is still waiting"
+    );
+    assert!(
+        drained.try_recv().is_err(),
+        "one tick below the bound the reply drain has not ended"
+    );
+    clock.advance(Duration::from_nanos(1));
+    Deadline::after(OP).recv_or_fail(&drained, "the drain at its bound");
+    let request = Deadline::after(OP).recv_or_fail(&requests, "the recorded request");
+    assert_eq!(request.target, "/v1");
+    assert!(server.shutdown(), "shutdown reaps the serving threads");
+
+    let (clock, server, _client, requests, drained, _ack) = start_reply_drain(bound);
+    clock.advance(bound);
+    Deadline::after(OP).recv_or_fail(&drained, "the drain at its bound");
+    let request = Deadline::after(OP).recv_or_fail(&requests, "the recorded request");
+    assert_eq!(request.target, "/v1");
+    assert!(server.shutdown(), "shutdown reaps the serving threads");
+
+    let (clock, server, _client, requests, drained, _ack) = start_reply_drain(bound);
+    clock.advance(bound + Duration::from_nanos(1));
+    Deadline::after(OP).recv_or_fail(&drained, "the drain past its bound");
+    let request = Deadline::after(OP).recv_or_fail(&requests, "the recorded request");
+    assert_eq!(request.target, "/v1");
+    assert!(server.shutdown(), "shutdown reaps the serving threads");
+}
+
+/// Bytes arriving during the drain do not renew its one operation budget.
+#[test]
+fn reply_drain_progress_does_not_restart_its_bound() {
+    const SHORT: Duration = Duration::from_millis(50);
+    let (clock, server, mut client, requests, drained, ack) = start_reply_drain(SHORT);
+    client.write_all(b"x").expect("the pipelined byte writes");
+    let mark = clock.advance_marked(Duration::from_millis(1));
+    assert!(
+        clock.await_parked_since(&mark, ack.until, OP),
+        "after consuming the byte, the drain waits again on the same bound"
+    );
+    let rest = SHORT
+        .checked_sub(Duration::from_millis(1))
+        .expect("the short bound exceeds one millisecond");
+    clock.advance(rest);
+    Deadline::after(OP).recv_or_fail(&drained, "the unchanged drain bound");
+    let request = Deadline::after(OP).recv_or_fail(&requests, "the recorded request");
+    assert_eq!(request.target, "/v1");
+    assert!(server.shutdown(), "shutdown reaps the serving threads");
+}
+
+/// Server shutdown wakes a drain parked on a much longer injected bound.
+#[test]
+fn shutdown_ends_a_reply_drain_with_an_open_peer() {
+    let (clock, server, _client, requests, drained, ack) =
+        start_reply_drain(Duration::from_secs(30));
+    assert!(
+        clock.await_thread_parked(ack.thread, ack.until, OP),
+        "the reply drain is waiting before shutdown"
+    );
+    assert!(
+        server.shutdown(),
+        "shutdown ends and reaps the active drain"
+    );
+    Deadline::after(OP).recv_or_fail(&drained, "the shutdown-stopped drain");
+    let request = Deadline::after(OP).recv_or_fail(&requests, "the recorded request");
+    assert_eq!(request.target, "/v1");
+}
+
+/// One raw loopback pair for the close-path unit tests: the server side
+/// (nonblocking, owned by the test's connection) and the client side,
+/// plus a probe clone of the server side that peeks without consuming,
+/// so arrival is proven by the kernel instead of assumed.
+fn raw_pair(server: &HttpServer, name: &str) -> (Connection, TcpStream, TcpStream) {
+    let listener = TcpListener::bind("127.0.0.1:0").expect("the raw pair binds");
+    let addr = listener.local_addr().expect("the raw pair has an address");
+    let client = TcpStream::connect(addr).expect("the test connects");
+    let (server_stream, _) = listener.accept().expect("the test accepts");
+    server_stream
+        .set_nonblocking(true)
+        .expect("the drain reads nonblocking");
+    let probe = server_stream
+        .try_clone()
+        .expect("the test clones its probe");
+    probe
+        .set_nonblocking(true)
+        .expect("the probe peeks nonblocking");
+    let budget = RequestBudget::start_on(
+        &server.shared.clock,
+        Duration::from_secs(10),
+        server.shared.limits.guard,
+    );
+    let conn = Connection::new(
+        server_stream,
+        budget,
+        name.to_owned(),
+        Arc::clone(&server.shared),
+    );
+    (conn, client, probe)
+}
+
+/// Spins until `probe` peeks all `want` bytes, at most `OP`: the kernel
+/// proves they arrived while leaving them unread for the drain under
+/// test. The bound fails naming the awaited bytes instead of spinning
+/// past a partial arrival or EOF.
+fn await_peeked(probe: &TcpStream, want: usize, what: &str) {
+    let deadline = Deadline::after(OP);
+    let mut peeked = vec![0u8; want];
+    loop {
+        match probe.peek(&mut peeked) {
+            Ok(n) if n == want => return,
+            Ok(_) => {}
+            Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => {}
+            Err(error) => panic!("{what} peeks within {OP:?}: {error}"),
+        }
+        if deadline.left().is_zero() {
+            panic!("waited {OP:?} for {what} ({want} bytes): fewer arrived");
+        }
+    }
+}
+
+/// The pre-reply discard consumes what already arrived: a no-op drain
+/// would leave the bytes for the close to reset on, so the peek below
+/// would still see them.
+#[test]
+fn drain_socket_discards_only_already_arrived_bytes() {
+    let clock = fake_clock();
+    let server = bind(&clock);
+    let (mut conn, mut client, probe) = raw_pair(&server, "the drained request");
+    client.write_all(b"held").expect("the held bytes write");
+    await_peeked(&probe, 4, "the held bytes");
+    conn.drain_socket();
+    match probe.peek(&mut [0u8; 1]) {
+        Ok(_) => panic!("the drain leaves no byte unread"),
+        Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => {}
+        Err(error) => panic!("the drained socket peeks within {OP:?}: {error}"),
+    }
+    // A drain on an empty socket ends at once, consuming nothing.
+    conn.drain_socket();
+    match probe.peek(&mut [0u8; 1]) {
+        Ok(_) => panic!("the second drain leaves no byte unread"),
+        Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => {}
+        Err(error) => panic!("the twice-drained socket peeks within {OP:?}: {error}"),
+    }
+    assert!(server.shutdown(), "shutdown reaps the server");
+}
+
+/// Shutdown ends the reply drain before any read: with `&&` the drain
+/// would consume the held bytes first, so the peek below would miss them.
+#[test]
+fn reply_drain_with_shutdown_returns_without_consuming() {
+    let clock = fake_clock();
+    let server = bind(&clock);
+    let (mut conn, mut client, probe) = raw_pair(&server, "the stopping drain");
+    client.write_all(b"held").expect("the held bytes write");
+    await_peeked(&probe, 4, "the held bytes");
+    assert!(server.shutdown(), "shutdown stops the server");
+    conn.shutdown_write_and_drain(Duration::from_secs(30));
+    let mut peeked = [0u8; 4];
+    match probe.peek(&mut peeked) {
+        Ok(4) => assert_eq!(peeked, *b"held", "the stopped drain consumes nothing"),
+        Ok(n) => panic!("the stopped drain leaves 4 bytes unread, peeked {n}"),
+        Err(error) => panic!("the stopped drain leaves the bytes unread: {error}"),
+    }
+}
+
+/// An expired bound ends the reply drain before any read: with `&&` the
+/// drain would consume the held bytes first, so the peek below would
+/// miss them.
+#[test]
+fn reply_drain_when_expired_returns_without_consuming() {
+    let clock = fake_clock();
+    let server = bind(&clock);
+    let (mut conn, mut client, probe) = raw_pair(&server, "the expired drain");
+    client.write_all(b"held").expect("the held bytes write");
+    await_peeked(&probe, 4, "the held bytes");
+    conn.shutdown_write_and_drain(Duration::ZERO);
+    let mut peeked = [0u8; 4];
+    match probe.peek(&mut peeked) {
+        Ok(4) => assert_eq!(peeked, *b"held", "the expired drain consumes nothing"),
+        Ok(n) => panic!("the expired drain leaves 4 bytes unread, peeked {n}"),
+        Err(error) => panic!("the expired drain leaves the bytes unread: {error}"),
+    }
+    assert!(server.shutdown(), "shutdown reaps the server");
 }
 
 /// A released pause before a full reply still sends every scripted
@@ -602,6 +862,122 @@ fn shutdown_during_the_pause_before_a_full_reply_stops_it() {
         "shutdown stops the paused reply"
     );
     Deadline::after(OP).recv_or_fail(&recorded_rx, "the recorded request");
+}
+
+/// Sends one fixed-length body with `pipelined` bytes behind it, all at
+/// once, then half-closes and reads the reply to the connection's end.
+/// The body is larger than one socket read, so the head's over-read
+/// cannot swallow the suffix into the lookahead: it sits on the socket,
+/// unread, when the reply's close runs, and the suffix is queued before
+/// the server answers, so no wait decides the outcome.
+fn exchange_pipelined(addr: SocketAddr, body: &[u8], pipelined: &[u8]) -> Vec<u8> {
+    use std::io::Read;
+    let mut stream = TcpStream::connect(addr).expect("the test connects");
+    stream
+        .set_read_timeout(Some(OP))
+        .expect("the test bounds its reads");
+    stream
+        .write_all(
+            format!(
+                "POST /v1 HTTP/1.1\r\nHost: fake\r\nContent-Length: {}\r\n\r\n",
+                body.len()
+            )
+            .as_bytes(),
+        )
+        .expect("the head writes");
+    stream.write_all(body).expect("the body writes");
+    stream
+        .write_all(pipelined)
+        .expect("the pipelined bytes write");
+    // Half-closes: the reply's drain meets the suffix, then the end.
+    stream
+        .shutdown(std::net::Shutdown::Write)
+        .expect("the write side closes");
+    let mut raw = Vec::new();
+    stream.read_to_end(&mut raw).expect("the reply reads");
+    raw
+}
+
+/// A fixed body larger than one socket read, for the pipelined-suffix
+/// tests below: small enough to burst at once, large enough that the
+/// head's over-read cannot reach past it into the suffix.
+fn large_body() -> Vec<u8> {
+    vec![b'x'; 20_000]
+}
+
+/// A full reply after a half-close with nothing behind the body still
+/// delivers: the reply's drain meets the peer's end at once, so the
+/// close behind it is clean. The zero-byte edge of the drain's end
+/// check: without it the drain would spin on the end below instead of
+/// closing.
+#[test]
+fn full_reply_after_a_half_close_with_no_unread_bytes_delivers() {
+    let (recorded_tx, recorded_rx) = mpsc::channel();
+    let head = b"HTTP/1.1 200 Fake\r\ncontent-length: 2\r\nconnection: close\r\n\r\n";
+    let (server, addr) = serve_once(recorded_tx, move |mut conn| {
+        assert_eq!(
+            conn.reply_full(head, b"ok", None),
+            ReplyEnd::Done,
+            "the full reply sends"
+        );
+    });
+    let raw = exchange_pipelined(addr, &large_body(), b"");
+    let mut expected = head.to_vec();
+    expected.extend_from_slice(b"ok");
+    assert_eq!(raw, expected, "the wire carries the scripted bytes");
+    let request = Deadline::after(OP).recv_or_fail(&recorded_rx, "the recorded request");
+    assert_eq!(request.target, "/v1");
+    assert!(server.shutdown(), "shutdown reaps the serving threads");
+}
+
+/// A full reply past one unread byte still delivers: the reply's drain
+/// consumes what arrived behind the body before the close behind it, so
+/// the close carries no reset to the client. The one-byte edge past the
+/// drain's end check: without the drain the byte sits unread at close
+/// and the read below resets instead.
+#[test]
+fn full_reply_delivers_past_one_unread_byte() {
+    let (recorded_tx, recorded_rx) = mpsc::channel();
+    let head = b"HTTP/1.1 200 Fake\r\ncontent-length: 2\r\nconnection: close\r\n\r\n";
+    let (server, addr) = serve_once(recorded_tx, move |mut conn| {
+        assert_eq!(
+            conn.reply_full(head, b"ok", None),
+            ReplyEnd::Done,
+            "the full reply sends"
+        );
+    });
+    let raw = exchange_pipelined(addr, &large_body(), b"y");
+    let mut expected = head.to_vec();
+    expected.extend_from_slice(b"ok");
+    assert_eq!(raw, expected, "the wire carries the scripted bytes");
+    let request = Deadline::after(OP).recv_or_fail(&recorded_rx, "the recorded request");
+    assert_eq!(request.target, "/v1");
+    assert!(server.shutdown(), "shutdown reaps the serving threads");
+}
+
+/// A full reply past more than one read of unread bytes still delivers:
+/// the reply's drain keeps consuming until the socket runs dry, so no
+/// tail past its first read sits unread at close. Well past the drain's
+/// end check and past one socket read: stopping after one read would
+/// leave most of the suffix unread and reset the read below instead.
+#[test]
+fn full_reply_delivers_past_more_than_one_read_of_unread_bytes() {
+    let (recorded_tx, recorded_rx) = mpsc::channel();
+    let head = b"HTTP/1.1 200 Fake\r\ncontent-length: 2\r\nconnection: close\r\n\r\n";
+    let (server, addr) = serve_once(recorded_tx, move |mut conn| {
+        assert_eq!(
+            conn.reply_full(head, b"ok", None),
+            ReplyEnd::Done,
+            "the full reply sends"
+        );
+    });
+    let raw = exchange_pipelined(addr, &large_body(), &vec![b'y'; 20_000]);
+    let mut expected = head.to_vec();
+    expected.extend_from_slice(b"ok");
+    assert_eq!(raw, expected, "the wire carries the scripted bytes");
+    let request = Deadline::after(OP).recv_or_fail(&recorded_rx, "the recorded request");
+    assert_eq!(request.target, "/v1");
+    assert!(server.shutdown(), "shutdown reaps the serving threads");
 }
 
 #[test]

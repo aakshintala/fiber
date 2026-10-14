@@ -5,14 +5,26 @@
 
 use std::collections::VecDeque;
 use std::io::{self, Read, Write};
-use std::net::TcpStream;
+use std::net::{Shutdown, TcpStream};
 use std::os::fd::AsFd;
+#[cfg(test)]
+use std::sync::OnceLock;
 use std::sync::{Arc, Mutex, atomic::Ordering, mpsc};
+use std::time::Duration;
 
 #[cfg(test)]
 use crate::deadline::Deadline;
 
 use super::{READ_CHUNK, RequestBudget, Shared, WaitEnd, expired, guard_expired, lock};
+
+/// Maximum injected-clock time a full reply waits for the client to finish
+/// its write side.
+pub(crate) const REPLY_DRAIN_WITHIN: Duration = Duration::from_millis(100);
+const REPLY_DRAIN_PHASE: &str = "to drain the full reply";
+
+/// The one-shot test seam after a full reply and before the bounded EOF drain.
+#[cfg(test)]
+static POST_REPLY_PAUSE: OnceLock<Mutex<Option<Pause>>> = OnceLock::new();
 
 /// What one socket read found.
 #[cfg(test)]
@@ -227,21 +239,29 @@ impl Connection {
         self.ahead.pop_front()
     }
 
-    /// Discards one read of bytes already on the socket, without waiting
-    /// for more: after a fixed body, the pipelined bytes the capped reads
-    /// left behind. A close with unread bytes resets the connection
-    /// instead of delivering the reply, so what already arrived is
-    /// consumed, as the old over-read did; what has not arrived yet is
-    /// never waited for.
+    /// Discards bytes already on the socket, without waiting for more:
+    /// after a fixed body, the pipelined bytes the capped reads left
+    /// behind. A close with unread bytes resets the connection, so what
+    /// already arrived is consumed, as the old over-read did; what has
+    /// not arrived yet is never waited for. Each pass re-checks the
+    /// request budget and shutdown, so a feeding peer cannot hold the
+    /// discard past either and the bounded full-reply drain is reached.
     #[allow(
         clippy::unused_io_amount,
         reason = "a discard read: pipelined bytes past the body are counted nowhere"
     )]
     pub(crate) fn drain_socket(&mut self) {
+        const PHASE: &str = "to discard pipelined bytes";
         loop {
+            if !self.consume_check(PHASE) {
+                return;
+            }
             let mut chunk = [0u8; READ_CHUNK];
             match self.stream.read(&mut chunk) {
-                Ok(_) => return,
+                // The peer closed: nothing more can arrive.
+                Ok(0) => return,
+                // Discarded: more may have arrived behind them.
+                Ok(_) => continue,
                 Err(error) => match classify(&error) {
                     ReadErr::Wait => return,
                     ReadErr::Retry => continue,
@@ -393,8 +413,10 @@ impl Connection {
         )
     }
 
-    /// Writes the whole head and body, then the connection closes behind
-    /// the caller: the scripted bytes go as supplied.
+    /// Writes the whole head and body, then shuts down the write half and
+    /// drains the client's side until EOF or the injected-clock bound:
+    /// the scripted bytes go as supplied, and bytes pipelined before the
+    /// client's FIN are consumed before the connection closes.
     pub(crate) fn reply_full(
         &mut self,
         head: &[u8],
@@ -416,7 +438,108 @@ impl Connection {
                 return ReplyEnd::Stopped;
             }
         }
+        #[cfg(test)]
+        self.test_post_reply_park();
+        self.shutdown_write_and_drain(REPLY_DRAIN_WITHIN);
         ReplyEnd::Done
+    }
+
+    /// Shuts down the write half, then drains client bytes until EOF,
+    /// shutdown or `within`: the full-reply close path only. A socket
+    /// timeout bounds one read, not the entire drain if a client keeps
+    /// sending, so the operation budget uses the injected clock. Its
+    /// readiness wait also ends as soon as server shutdown lands.
+    pub(crate) fn shutdown_write_and_drain(&mut self, within: Duration) {
+        match self.stream.shutdown(Shutdown::Write) {
+            Ok(()) | Err(_) => {}
+        }
+        let op = RequestBudget::start_on(&self.shared.clock, within, self.shared.limits.guard);
+        loop {
+            if self.shared.stopping.load(Ordering::SeqCst) || op.expired() {
+                return;
+            }
+            if op.guard_left().is_zero() {
+                guard_expired(&op, &self.name, REPLY_DRAIN_PHASE);
+            }
+            let mut chunk = [0u8; READ_CHUNK];
+            match self.stream.read(&mut chunk) {
+                Ok(0) => return,
+                Ok(_) => {}
+                Err(error) => match classify(&error) {
+                    ReadErr::Wait => {
+                        // One readiness park: the loop top maps shutdown
+                        // and expiry, so no second check here duplicates it.
+                        match self.shared.wait_ready(
+                            &op,
+                            &self.name,
+                            REPLY_DRAIN_PHASE,
+                            &mut self.seq,
+                            &mut self.acked,
+                            Some(self.stream.as_fd()),
+                            true,
+                        ) {
+                            WaitEnd::Waited => {}
+                            WaitEnd::Expired | WaitEnd::Stopped => return,
+                        }
+                    }
+                    ReadErr::Retry => continue,
+                    ReadErr::End => return,
+                },
+            }
+        }
+    }
+
+    /// Installs the one-shot post-reply park for a deterministic close test.
+    #[cfg(test)]
+    pub(crate) fn set_test_post_reply_pause(pause: Pause) {
+        *lock(POST_REPLY_PAUSE.get_or_init(|| Mutex::new(None))) = Some(pause);
+    }
+
+    /// Parks after writing the reply. The first signal lets the test send
+    /// bytes; the second follows a peek that proves they reached the socket,
+    /// while leaving them unread for the close path under test.
+    #[cfg(test)]
+    fn test_post_reply_park(&mut self) {
+        let Some(pause) = lock(POST_REPLY_PAUSE.get_or_init(|| Mutex::new(None))).take() else {
+            return;
+        };
+        const PHASE: &str = "to park after the full reply";
+        match pause.reached.send(()) {
+            Ok(()) | Err(_) => {}
+        }
+        loop {
+            let mut byte = [0u8; 1];
+            match self.stream.peek(&mut byte) {
+                Ok(0) => return,
+                Ok(_) => break,
+                Err(error) => match classify(&error) {
+                    ReadErr::Wait => {
+                        if !self.wait_readable(PHASE) {
+                            return;
+                        }
+                    }
+                    ReadErr::Retry => continue,
+                    ReadErr::End => return,
+                },
+            }
+        }
+        match pause.reached.send(()) {
+            Ok(()) | Err(_) => {}
+        }
+        let op = self.op_budget();
+        loop {
+            match lock(&pause.release).try_recv() {
+                Ok(()) | Err(mpsc::TryRecvError::Disconnected) => return,
+                Err(mpsc::TryRecvError::Empty) => {}
+            }
+            match self
+                .shared
+                .wait(&op, &self.name, PHASE, &mut self.seq, &mut self.acked)
+            {
+                WaitEnd::Waited => {}
+                WaitEnd::Expired | WaitEnd::Stopped => return,
+            }
+        }
     }
 
     /// Streams `pieces` under `head`: chunked framing for a recorded
