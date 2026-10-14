@@ -882,7 +882,9 @@ fn settle_rekills_a_cancelled_survivor_before_answering_true() {
             // park, and an ack's expiry ends the driving — the answer is
             // awaited instead, never another advance. The first park is
             // exact on the unmoved clock; later ones follow each advance.
-            // Completion and every ack share one deadline.
+            // Completion and every ack share one deadline: each ack waits
+            // only a poll pause of it, so a finish racing the ack costs
+            // that pause, never the whole drive.
             let drive = Deadline::after(DEADLINE);
             let poll = clock.origin() + GROUP_POLL;
             assert!(
@@ -896,7 +898,7 @@ fn settle_rekills_a_cancelled_survivor_before_answering_true() {
                     break;
                 }
                 let mark = clock.advance_marked(Duration::from_millis(50));
-                if clock.await_any_parked_since(&mark, drive.left()) {
+                if clock.await_any_parked_since(&mark, drive.left().min(PARK_PAUSE)) {
                     continue;
                 }
                 answer = Some(drive.recv(&settled).expect("the settle"));
@@ -1067,7 +1069,9 @@ fn settle_drains_two_groups_together_within_one_bound() {
     // the drive below stays exact however slowly the real group dies.
     // Each advance follows a confirmed park; an ack's expiry ends the
     // driving and the answer is awaited instead. Completion and every
-    // ack share one deadline.
+    // ack share one deadline: each ack waits only a poll pause of it,
+    // so a finish racing the ack costs that pause, never the whole
+    // drive.
     let drive = Deadline::after(DEADLINE);
     let poll = clock.origin() + GROUP_POLL;
     assert!(
@@ -1081,7 +1085,7 @@ fn settle_drains_two_groups_together_within_one_bound() {
             break;
         }
         let mark = clock.advance_marked(Duration::from_millis(50));
-        if clock.await_any_parked_since(&mark, drive.left()) {
+        if clock.await_any_parked_since(&mark, drive.left().min(PARK_PAUSE)) {
             continue;
         }
         answer = Some(drive.recv(&finished).expect("the settle"));
@@ -1466,6 +1470,11 @@ fn settle_on_thread(
 /// The bound each negative settle receive waits: a settle that may answer
 /// does so in milliseconds, so silence for this long proves it is held.
 const SHORT: Duration = Duration::from_secs(2);
+
+/// One park acknowledgement's wait of the drive's shared deadline: a
+/// re-park after an advance lands in milliseconds, so expiry means the
+/// answer already arrived. A poll pause, not a deadline.
+const PARK_PAUSE: Duration = Duration::from_millis(200);
 
 /// A cancel mid-spawn is settled before exit: the spawn blocks before it
 /// spawns, the cancel lands, and the settle holds until the late spawn
