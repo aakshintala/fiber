@@ -93,8 +93,9 @@ pub(crate) struct Shared {
     gate: Mutex<Option<Arc<CheckGate>>>,
     pub(crate) idle: Mutex<usize>,
     pub(crate) idle_changed: Condvar,
-    /// Started windows, test-only: the test advances only past a window's
-    /// start, so no advance lands before its budget exists.
+    /// Started windows, test-only: announced after the window's budget
+    /// exists, so awaiting a window proves its start precedes the test's
+    /// next advance.
     #[cfg(test)]
     pub(crate) windows: Mutex<usize>,
     #[cfg(test)]
@@ -266,6 +267,10 @@ impl HttpServer {
             self.shared.limits.request,
             self.shared.limits.guard,
         );
+        #[cfg(test)]
+        if matches!(mode, AcceptMode::Persistent) {
+            self.note_window();
+        }
         let mut seq = 0;
         let mut acked = None;
         match self.accept_once(mode, &budget, &mut seq, &mut acked) {
@@ -300,8 +305,6 @@ impl HttpServer {
     /// One persistent window: an accepted connection, an idle end, or a
     /// stopped wait.
     pub(crate) fn accept_window(&self) -> WindowOutcome {
-        #[cfg(test)]
-        self.note_window();
         match self.accept(&AcceptMode::Persistent) {
             Some(conn) => WindowOutcome::Accepted(conn),
             // An empty window ends idle; shutdown ends stopped. The
