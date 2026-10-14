@@ -29,6 +29,13 @@ struct State {
     /// process cannot reach, so a later park's id compares greater with `>`.
     next_id: u64,
     wakers: Vec<Weak<dyn Wake>>,
+    /// Every park recorded while an [`FakeClock::advance_when_parked`] wait is
+    /// active, in arrival order. A watched park that leaves before the helper
+    /// diagnoses it still fails the wait. Cleared when the last active wait
+    /// exits, so it never outlives the wait it belongs to.
+    observed: Vec<(ThreadId, Option<Instant>, u64)>,
+    /// Active [`FakeClock::advance_when_parked`] waits recording into `observed`.
+    watching: usize,
 }
 
 /// Which thread last parked at the instant of an advance, from
@@ -39,8 +46,9 @@ pub struct Mark(Vec<(ThreadId, u64)>);
 
 /// A clock a test drives. `Arc<FakeClock>` coerces to `Arc<dyn Clock>`.
 /// [`FakeClock::new`] reads the process clock once, as an arbitrary origin
-/// it never reads again. [`FakeClock::advance`] and [`Clock::sleep`] are the
-/// only things that move it.
+/// it never reads again. [`FakeClock::advance`], [`FakeClock::advance_marked`],
+/// [`FakeClock::advance_when_parked`] and [`Clock::sleep`] are the only things
+/// that move it.
 pub struct FakeClock {
     origin: Instant,
     state: Mutex<State>,
@@ -49,6 +57,8 @@ pub struct FakeClock {
     await_any_pause: Mutex<Option<(std::sync::mpsc::Sender<()>, std::sync::mpsc::Receiver<()>)>>,
     #[cfg(test)]
     mark_parked_pause: Mutex<Option<(std::sync::mpsc::Sender<()>, std::sync::mpsc::Receiver<()>)>>,
+    #[cfg(test)]
+    advance_pause: Mutex<Option<(std::sync::mpsc::Sender<()>, std::sync::mpsc::Receiver<()>)>>,
 }
 
 impl FakeClock {
@@ -70,12 +80,16 @@ impl FakeClock {
                 latest: Vec::new(),
                 next_id: 0,
                 wakers: Vec::new(),
+                observed: Vec::new(),
+                watching: 0,
             }),
             parked_cv: Condvar::new(),
             #[cfg(test)]
             await_any_pause: Mutex::new(None),
             #[cfg(test)]
             mark_parked_pause: Mutex::new(None),
+            #[cfg(test)]
+            advance_pause: Mutex::new(None),
         })
     }
 
@@ -111,6 +125,145 @@ impl FakeClock {
             waker.wake();
         }
         mark
+    }
+
+    /// The only way a test outside `fakes` moves the clock to a named park
+    /// (`docs/testing.md`, "Fakes"): waits for the expected park, then moves
+    /// `now()` and `wall()` forward by `advance`, returning each thread's
+    /// latest park at the instant `now()` moved (as
+    /// [`FakeClock::advance_marked`]). The park is a finite instant,
+    /// optionally on the named thread, or `None` for an unbounded park. A
+    /// finite park stops at its instant or short of it, never past it.
+    ///
+    /// The wait fails at once, at the caller's line, naming every parked
+    /// thread and its instant, when a watched park arrives at a different
+    /// instant first, when a watched thread parks at a finite instant where
+    /// `None` was named, when the advance would pass the named instant, or
+    /// when `deadline` passes. A named finite instant at or before `now()`,
+    /// and an advance the clock cannot represent, fail the same way. A
+    /// mismatch never moves time. With no thread named, several parked
+    /// threads fail the wait: another thread at the right instant is not
+    /// proof of the watched operation, so the test names the thread.
+    ///
+    /// The lock that sees the park is the lock that moves time, and every
+    /// subscriber wakes after that lock is released, as in
+    /// [`FakeClock::advance_marked`].
+    #[track_caller]
+    #[allow(clippy::panic, reason = "a test helper; a failure is the test's")]
+    pub fn advance_when_parked(
+        &self,
+        expected: Option<Instant>,
+        thread: Option<ThreadId>,
+        advance: Duration,
+        deadline: &crate::deadline::Deadline,
+    ) -> Mark {
+        {
+            let state = lock(&self.state);
+            if let Err(kind) = checked_move(&state, self.origin, expected, advance) {
+                let report = report(&state, expected, thread, advance, kind, None);
+                drop(state);
+                panic!("{report}");
+            }
+        }
+        let mut state = lock(&self.state);
+        state.watching += 1;
+        state.observed.clear();
+        loop {
+            // A watched mismatch fails before any match is considered: a
+            // convenient later park never hides the first wrong one.
+            if let Some(found) = watched_mismatch(&state, expected, thread) {
+                let kind = if expected.is_none() {
+                    "a watched thread parked at a finite instant where None was named"
+                } else if found.1.is_none() {
+                    "a watched park arrived without a deadline where a finite instant was named"
+                } else {
+                    "a watched park arrived at a different instant first"
+                };
+                let report = report(&state, expected, thread, advance, kind, Some(found));
+                leave_wait(&mut state);
+                drop(state);
+                panic!("{report}");
+            }
+            if thread.is_none() && parked_threads(&state) > 1 {
+                let report = report(
+                    &state,
+                    expected,
+                    thread,
+                    advance,
+                    "several threads hold a park and no thread was named: name the thread",
+                    None,
+                );
+                leave_wait(&mut state);
+                drop(state);
+                panic!("{report}");
+            }
+            if matched(&state, expected, thread) {
+                match checked_move(&state, self.origin, expected, advance) {
+                    Ok(moved) => {
+                        let mark = Mark(state.latest.clone());
+                        let wakers = state
+                            .wakers
+                            .iter()
+                            .filter_map(Weak::upgrade)
+                            .collect::<Vec<_>>();
+                        state.offset = moved;
+                        leave_wait(&mut state);
+                        drop(state);
+                        for waker in wakers {
+                            waker.wake();
+                        }
+                        return mark;
+                    }
+                    Err(kind) => {
+                        let report = report(&state, expected, thread, advance, kind, None);
+                        leave_wait(&mut state);
+                        drop(state);
+                        panic!("{report}");
+                    }
+                }
+            }
+            let wait_for = deadline.left();
+            if wait_for.is_zero() {
+                let report = report(
+                    &state,
+                    expected,
+                    thread,
+                    advance,
+                    "the deadline passed before the named park arrived",
+                    None,
+                );
+                leave_wait(&mut state);
+                drop(state);
+                panic!("{report}");
+            }
+            #[cfg(test)]
+            self.advance_wait_checked();
+            let (guard, _) = self
+                .parked_cv
+                .wait_timeout(state, wait_for)
+                .unwrap_or_else(PoisonError::into_inner);
+            state = guard;
+        }
+    }
+
+    /// The `advance_when_parked` wait point, called only while the wait
+    /// predicate holds: no watched match and no watched mismatch yet. Fires
+    /// once per arming; the pause mutex is released before the test signal
+    /// and release wait. A wrong park already held never reaches it, so a
+    /// test that arms it proves the helper waited before the park arrived.
+    #[cfg(test)]
+    fn advance_wait_checked(&self) {
+        let pause = self
+            .advance_pause
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .take();
+        if let Some((checked, release)) = pause {
+            let _sent = checked.send(());
+            crate::deadline::Deadline::after(Duration::from_secs(5))
+                .recv(&release)
+                .expect("waited for the test to release the advance_when_parked wait");
+        }
     }
 
     /// The `until` of each thread now inside [`Clock::wait_until`].
@@ -326,6 +479,11 @@ impl Clock for FakeClock {
                 let thread = std::thread::current().id();
                 state.parked.push(Parked { id, thread, until });
                 record_latest(&mut state, thread, id);
+                // An active advance_when_parked wait sees every arrival, even
+                // one that leaves before the helper diagnoses it.
+                if state.watching > 0 {
+                    state.observed.push((thread, until, id));
+                }
                 self.parked_cv.notify_all();
                 Some(id)
             }
@@ -411,6 +569,143 @@ fn parked_thread(state: &State, thread: ThreadId, until: Option<Instant>) -> boo
 
 fn parked_unbounded(state: &State) -> bool {
     state.parked.iter().any(|parked| parked.until.is_none())
+}
+
+/// The offset after `advance`, or why [`FakeClock::advance_when_parked`] must
+/// fail without moving time. Checked before waiting and again under the lock
+/// that would move time, so neither a named park already passed nor an
+/// unrepresentable advance ever mutates the clock.
+fn checked_move(
+    state: &State,
+    origin: Instant,
+    expected: Option<Instant>,
+    advance: Duration,
+) -> Result<Duration, &'static str> {
+    let now = now_in(state, origin);
+    if let Some(until) = expected {
+        // The named park already passed: waiting could only expire.
+        if until <= now {
+            return Err("the named park already passed: it is at or before now");
+        }
+        // A finite park stops at its instant or short of it, never past it.
+        if now
+            .checked_add(advance)
+            .is_some_and(|target| target > until)
+        {
+            return Err("the advance would pass the named instant");
+        }
+    }
+    let Some(moved) = state.offset.checked_add(advance) else {
+        return Err("the advance overflows the clock");
+    };
+    if origin.checked_add(moved).is_none() || wall_checked(moved).is_none() {
+        return Err("the advance overflows the clock");
+    }
+    Ok(moved)
+}
+
+/// The first watched park at any other instant than `expected`: arrivals the
+/// helper saw first, then parks still held. `None` when every watched park is
+/// the named one. Watched means the named thread when one is named, and every
+/// thread otherwise.
+fn watched_mismatch(
+    state: &State,
+    expected: Option<Instant>,
+    thread: Option<ThreadId>,
+) -> Option<(ThreadId, Option<Instant>)> {
+    let selected = |id: ThreadId| thread.is_none() || thread == Some(id);
+    state
+        .observed
+        .iter()
+        .map(|observation| (observation.0, observation.1))
+        .chain(
+            state
+                .parked
+                .iter()
+                .map(|parked| (parked.thread, parked.until)),
+        )
+        .find(|(id, until)| selected(*id) && *until != expected)
+}
+
+/// Whether [`FakeClock::advance_when_parked`] may advance now: the named
+/// thread holds the named park, or, with no thread named, the one parked
+/// thread holds it. Several parked threads with no thread named stay
+/// unmatched: another thread at the right instant is not proof of the watched
+/// operation.
+fn matched(state: &State, expected: Option<Instant>, thread: Option<ThreadId>) -> bool {
+    match thread {
+        Some(selected) => state
+            .parked
+            .iter()
+            .any(|parked| parked.thread == selected && parked.until == expected),
+        None => {
+            let mut held = state.parked.iter();
+            match (held.next(), held.next()) {
+                (Some(only), None) => only.until == expected,
+                (Some(_), Some(_)) | (None, _) => false,
+            }
+        }
+    }
+}
+
+/// How many threads hold a park now.
+fn parked_threads(state: &State) -> usize {
+    let mut ids: Vec<ThreadId> = Vec::new();
+    for parked in &state.parked {
+        if !ids.contains(&parked.thread) {
+            ids.push(parked.thread);
+        }
+    }
+    ids.len()
+}
+
+/// Closes an [`FakeClock::advance_when_parked`] wait: the observation log
+/// never outlives the last wait it belongs to.
+fn leave_wait(state: &mut State) {
+    state.watching -= 1;
+    if state.watching == 0 {
+        state.observed.clear();
+    }
+}
+
+/// The caller diagnostic for an [`FakeClock::advance_when_parked`] failure:
+/// the failure kind, the expected instant, the named thread when one was
+/// named, the requested advance, the watched park that failed the wait when
+/// one did, and every thread parked now with its instant (`None` for an
+/// unbounded park, `[]` when nobody is parked).
+fn report(
+    state: &State,
+    expected: Option<Instant>,
+    thread: Option<ThreadId>,
+    advance: Duration,
+    kind: &str,
+    found: Option<(ThreadId, Option<Instant>)>,
+) -> String {
+    let mut message = format!(
+        "advance_when_parked failed: {kind}; expected park {expected:?}, thread {thread:?}, advance {advance:?}"
+    );
+    if let Some((id, until)) = found {
+        message.push_str(&format!("; watched park {id:?} at {until:?}"));
+    }
+    message.push_str("; parked threads: [");
+    let mut first = true;
+    for parked in &state.parked {
+        if !first {
+            message.push_str(", ");
+        }
+        first = false;
+        message.push_str(&format!("{:?} at {:?}", parked.thread, parked.until));
+    }
+    message.push(']');
+    message
+}
+
+/// `wall()` without the saturating fallback, so an unrepresentable advance is
+/// rejected instead of clamped.
+fn wall_checked(offset: Duration) -> Option<SystemTime> {
+    UNIX_EPOCH
+        .checked_add(WALL_EPOCH)
+        .and_then(|epoch| epoch.checked_add(offset))
 }
 
 fn lock(state: &Mutex<State>) -> MutexGuard<'_, State> {
