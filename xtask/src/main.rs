@@ -7,7 +7,7 @@
 //!
 //! - `select --base REV`: what a diff from the merge base with REV runs,
 //!   uncommitted and untracked files included, as `key=value` lines;
-//!   `packages` and `libraries` are bare names (for tools that only match
+//!   `packages` are bare names (for tools that only match
 //!   workspace members, such as `cargo fmt -p`), `package_specs` and
 //!   `library_specs` are `name@version` (for `cargo -p`, which resolves a
 //!   bare name against the whole dependency graph and can be ambiguous), and
@@ -50,6 +50,7 @@ mod models_dev;
 mod models_dev_table;
 mod rules;
 mod select;
+mod ticket;
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::io::Read;
@@ -82,25 +83,20 @@ fn run(args: &[String]) -> Result<bool, String> {
         "select" => {
             let members = workspace_members()?;
             let selection = select::classify(&changed_files(&flag(rest, "--base")?)?, &members);
-            let libraries: Vec<&str> = selection
-                .packages()
-                .iter()
-                .filter(|p| members.get(*p).is_some_and(|m| m.library))
-                .map(String::as_str)
-                .collect();
             let package_specs: Vec<String> = selection
                 .packages()
                 .iter()
                 .map(|p| select::spec(p, &members))
                 .collect();
-            let library_specs: Vec<String> = libraries
+            let library_specs: Vec<String> = selection
+                .packages()
                 .iter()
+                .filter(|p| members.get(*p).is_some_and(|m| m.library))
                 .map(|p| select::spec(p, &members))
                 .collect();
             println!("mode={}", selection.mode());
             println!("packages={}", selection.packages().join(" "));
             println!("package_specs={}", package_specs.join(" "));
-            println!("libraries={}", libraries.join(" "));
             println!("library_specs={}", library_specs.join(" "));
             if let Some(extension_packages) =
                 select::extension_packages(&selection, Path::new("."))?
@@ -185,7 +181,7 @@ fn run(args: &[String]) -> Result<bool, String> {
             std::io::stdin()
                 .read_to_string(&mut body)
                 .map_err(|e| format!("stdin: {e}"))?;
-            let numbers = select::ticket(&body);
+            let numbers = ticket::ticket(&body);
             let chosen = match numbers.as_slice() {
                 [] => None,
                 [only] => Some(only.clone()),

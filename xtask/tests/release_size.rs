@@ -12,12 +12,15 @@
 )]
 
 use std::fs;
-use std::os::unix::process::CommandExt as _;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 use std::time::Duration;
 
-use fakes::{TempDir, finished};
+use common::git;
+use fakes::TempDir;
+
+#[path = "common/mod.rs"]
+mod common;
 
 /// How long a test waits for one child, in real time; a passing run never
 /// waits on it, it only bounds a hang.
@@ -27,33 +30,6 @@ const CHILD_WITHIN: Duration = Duration::from_secs(30);
 const BASE_WORKTREE: &str = "release-base";
 /// The path component the head checkout has and the base worktree lacks.
 const HEAD_CHECKOUT: &str = "xtask-rsrepo";
-
-/// Runs `command` to its end under a deadline and returns its exit code and
-/// its output.
-fn run(what: &str, mut command: Command) -> (Option<i32>, String) {
-    let child = command
-        .stdin(Stdio::null())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        .process_group(0)
-        .spawn()
-        .unwrap();
-    let output = finished(what, child, &[], CHILD_WITHIN);
-    let text =
-        String::from_utf8(output.stdout).unwrap() + &String::from_utf8(output.stderr).unwrap();
-    (output.status.code(), text)
-}
-
-fn git(repo: &TempDir, args: &[&str]) -> String {
-    let mut command = Command::new("git");
-    command
-        .args(["-c", "user.name=t", "-c", "user.email=t@example.com"])
-        .args(args)
-        .current_dir(repo.path());
-    let (code, out) = run(&format!("git {args:?}"), command);
-    assert_eq!(code, Some(0), "git {args:?}: {out}");
-    out.trim().to_owned()
-}
 
 /// A repository of three commits on one line: the ancestor, the base, the
 /// head. HEAD is the head.
@@ -113,8 +89,9 @@ impl Repo {
             .env_remove("BASE_MATCHED_KEY")
             .env_remove("GITHUB_STEP_SUMMARY")
             .envs(env.iter().copied())
-            .current_dir(self.dir.path());
-        run("scripts/release-size", command)
+            .current_dir(self.dir.path())
+            .stdin(Stdio::null());
+        common::run("scripts/release-size", command, &[], CHILD_WITHIN)
     }
 
     /// The backstop's run at `rev`: a push, which leaves its binary and
@@ -137,8 +114,9 @@ impl Repo {
             .env("PATH", path)
             .env("RUNNER_TEMP", self.temp.path())
             .env("FAKE_CARGO_FAIL_IN", "never")
-            .current_dir(self.dir.path());
-        let (code, out) = run("scripts/paging-jig", command);
+            .current_dir(self.dir.path())
+            .stdin(Stdio::null());
+        let (code, out) = common::run("scripts/paging-jig", command, &[], CHILD_WITHIN);
         assert_eq!(code, Some(0), "{out}");
         out
     }

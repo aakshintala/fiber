@@ -175,7 +175,12 @@ pub(crate) fn read_request(conn: &mut Connection) -> RequestOutcome {
     };
     // A request with any transfer coding ends in chunked, as before.
     let chunked = headers.iter().any(|(name, _)| name == "transfer-encoding");
-    let (body, malformed) = if chunked {
+    // A CONNECT request has no message body: every byte past the head
+    // is tunnel data, and eating declared bytes as a body would keep
+    // them from `into_tunnel_parts`.
+    let (body, malformed) = if method == "CONNECT" {
+        (Vec::new(), None)
+    } else if chunked {
         match read_chunked(conn, &limits) {
             Ok(decoded) => decoded,
             Err(outcome) => return outcome,
@@ -196,7 +201,9 @@ pub(crate) fn read_request(conn: &mut Connection) -> RequestOutcome {
         // Bulk reads, one bound check per fill: the check before the
         // drain stops an expired budget or a racing shutdown from
         // completing a request from bytes already held, and the fill
-        // checks after each socket read, as the per-byte loop did.
+        // checks after each socket read, as the per-byte loop did. Past
+        // the head's leftover, socket bytes land straight in the body
+        // instead of transiting the lookahead one byte at a time.
         let mut body = Vec::with_capacity(length);
         while body.len() != length {
             if !conn.consume_check("to read the fixed body") {
@@ -209,7 +216,11 @@ pub(crate) fn read_request(conn: &mut Connection) -> RequestOutcome {
             if body.len() == length {
                 break;
             }
-            match conn.fill("to read the fixed body") {
+            // Recomputed past the drain: the cap above counts bytes the
+            // drain already moved, so reusing it reads past the body
+            // into pipelined bytes, and the next subtraction panics.
+            let remaining = length - body.len();
+            match conn.fill_into(&mut body, remaining, "to read the fixed body") {
                 FillOutcome::Held(_) => {}
                 FillOutcome::Eof => return RequestOutcome::Eof,
                 FillOutcome::Stopped => return RequestOutcome::Stopped,

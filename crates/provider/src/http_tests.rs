@@ -1,5 +1,4 @@
 use fakes::Deadline;
-use std::io::Write;
 use std::net::TcpListener;
 use std::sync::mpsc;
 use std::thread;
@@ -538,32 +537,14 @@ fn a_call_cancelled_before_it_starts_never_connects_to_the_proxy() {
 
 #[test]
 fn a_proxy_that_refuses_connect_fails_the_call() {
-    let listener = TcpListener::bind("127.0.0.1:0").unwrap();
-    let port = listener.local_addr().unwrap().port();
-    let refused = thread::spawn(move || {
-        let (mut stream, _) = listener.accept().unwrap();
-        let mut head = String::new();
-        let mut reader = std::io::BufReader::new(stream.try_clone().unwrap());
-        loop {
-            let mut line = String::new();
-            std::io::BufRead::read_line(&mut reader, &mut line).unwrap();
-            head.push_str(&line);
-            if line.trim().is_empty() {
-                break;
-            }
-        }
-        assert!(
-            head.starts_with("CONNECT"),
-            "the client sent CONNECT: {head:?}"
-        );
-        stream
-            .write_all(b"HTTP/1.1 403 Forbidden\r\nconnection: close\r\ncontent-length: 0\r\n\r\n")
-            .unwrap();
-    });
+    let proxy = fakes::RawHttpServer::start(
+        b"HTTP/1.1 403 Forbidden\r\nconnection: close\r\ncontent-length: 0\r\n\r\n",
+    )
+    .unwrap();
     let server = fakes::ProviderServer::start([fakes::Response::status(200, "{}")]).unwrap();
     let denied = ureq::Proxy::builder(ureq::ProxyProtocol::Http)
         .host("127.0.0.1")
-        .port(port)
+        .port(proxy.port())
         .build()
         .unwrap();
     let (result, _) = posted(
@@ -579,12 +560,17 @@ fn a_proxy_that_refuses_connect_fails_the_call() {
         panic!("a refused CONNECT was not a connection failure: {result:?}");
     };
     assert!(why.contains("403"), "the refusal names its status: {why}");
-    fakes::within(
-        "the refusing proxy thread to return",
-        CONNECT_WITHIN,
-        move || refused.join(),
-    )
-    .unwrap();
+    assert!(
+        proxy.await_replies(1, CONNECT_WITHIN),
+        "the refusing proxy answered"
+    );
+    let requests = proxy.requests();
+    assert_eq!(requests.len(), 1, "the proxy saw the CONNECT");
+    assert!(
+        requests[0].method.starts_with("CONNECT"),
+        "the client sent CONNECT: {:?}",
+        requests[0].method
+    );
 }
 
 /// Present in the re-executed child, absent in the parent.

@@ -483,6 +483,17 @@ fn lock(state: &Mutex<State>) -> MutexGuard<'_, State> {
     state.lock().unwrap_or_else(PoisonError::into_inner)
 }
 
+/// Whether the closing adapter discards already-arrived pipelined bytes
+/// past a declared fixed body so the close delivers the reply instead of
+/// resetting. A pure function, so a unit test pins each side directly:
+/// every scripted request carries several headers and no scripted chunked
+/// request carries content-length, so no socket test distinguishes either
+/// operator.
+fn discards_pipelined(headers: &[(String, String)]) -> bool {
+    headers.iter().any(|(name, _)| name == "content-length")
+        && !headers.iter().any(|(name, _)| name == "transfer-encoding")
+}
+
 /// Serves one connection: records the request under the state lock, then
 /// answers from the script, the routes, the responder or the fallback. A
 /// malformed body is the client's bug: it is recorded with its decoded
@@ -493,6 +504,9 @@ fn serve(conn: Connection, state: &Mutex<State>, arrived: &Condvar, clock: &Arc<
         RequestOutcome::Complete(request) => request,
         RequestOutcome::Eof | RequestOutcome::Invalid(_) | RequestOutcome::Stopped => return,
     };
+    if discards_pipelined(&request.headers) {
+        conn.drain_socket();
+    }
     let malformed = request.malformed;
     let response = {
         let mut state = lock(state);
@@ -638,7 +652,7 @@ fn no_scripted_response() -> Response {
 }
 
 /// The recorded request: credentials fingerprinted, exact `body_len`.
-fn project(request: &ParsedRequest) -> Request {
+pub(crate) fn project(request: &ParsedRequest) -> Request {
     Request {
         method: request.method.clone(),
         path: fingerprint_query(&request.target),

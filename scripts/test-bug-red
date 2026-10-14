@@ -84,6 +84,45 @@ cd "$top"
 [ "$rc" -eq 1 ] || { cat "$tmp/out2.txt" >&2; fail "no-test red commit exited $rc, want 1"; }
 grep -Fq "changes no test file" "$tmp/out2.txt" || { cat "$tmp/out2.txt" >&2; fail "no-test red commit names no missing test file"; }
 
+# Every other nextest exit code fails with its own message: the stub
+# selects the code with BUG_RED_NEXTEST_STATUS, defaulting to 100, so a
+# wrong branch in bug-red's case statement fails here.
+cd "$repo"
+for nextest_status in 0 101 4 2; do
+  case "$nextest_status" in
+    0) want="every one of the red commit's tests passes at the red commit" ;;
+    101) want="does not build" ;;
+    4) want="none of the red commit's tests runs at the red commit" ;;
+    *) want="nextest exited $nextest_status" ;;
+  esac
+  export BUG_RED_NEXTEST_STATUS="$nextest_status"
+  rc=0
+  "$bug_red" "$base" "$head" >"$tmp/out-status.txt" 2>&1 || rc=$?
+  unset BUG_RED_NEXTEST_STATUS
+  [ "$rc" -eq 1 ] || { cat "$tmp/out-status.txt" >&2; fail "nextest $nextest_status exited $rc, want 1"; }
+  grep -Fq "$want" "$tmp/out-status.txt" || { cat "$tmp/out-status.txt" >&2; fail "nextest $nextest_status misses \"$want\""; }
+done
+cd "$top"
+
+# A pull request that changes only docs passes at once, before the
+# one-commit check: the stub selects the branch with BUG_RED_DOCS_ONLY.
+repo_docs="$tmp/repo-docs"
+new_repo "$repo_docs"
+mkdir -p "$repo_docs/docs"
+printf 'notes\n' >"$repo_docs/docs/notes.md"
+git -C "$repo_docs" add docs/notes.md
+git -C "$repo_docs" commit -q -m docs
+base_docs=$(git -C "$repo_docs" rev-parse HEAD~1)
+cd "$repo_docs"
+head_docs=$(git rev-parse HEAD)
+export BUG_RED_DOCS_ONLY=true
+rc=0
+"$bug_red" "$base_docs" "$head_docs" >"$tmp/out-docs.txt" 2>&1 || rc=$?
+unset BUG_RED_DOCS_ONLY
+cd "$top"
+[ "$rc" -eq 0 ] || { cat "$tmp/out-docs.txt" >&2; fail "docs-only case exited $rc, want 0"; }
+grep -Fq "changes only docs" "$tmp/out-docs.txt" || { cat "$tmp/out-docs.txt" >&2; fail "docs-only case misses the docs-only message"; }
+
 # A one-commit branch with no HEAD argument reports the one-commit
 # message: the default HEAD resolves to a SHA, so the guard fires.
 repo3="$tmp/repo3"

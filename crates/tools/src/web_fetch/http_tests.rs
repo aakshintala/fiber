@@ -1,7 +1,7 @@
 //! Tests beside [`super`]: the watcher, the socket the hop keeps, and the
 //! resolver that holds a connection to the addresses already checked.
 
-use std::io::{Read, Write};
+use std::io::Read;
 use std::net::{IpAddr, Ipv4Addr, SocketAddr, TcpListener, TcpStream};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -407,30 +407,13 @@ fn the_head_carries_the_stated_length() {
 
 #[test]
 fn the_head_of_a_body_with_no_stated_length_carries_none() {
-    let listener = TcpListener::bind((Ipv4Addr::LOCALHOST, 0)).unwrap();
-    let port = listener.local_addr().unwrap().port();
-    let (served, done) = mpsc::channel();
-    thread::spawn(move || {
-        let (mut stream, _) = fakes::within("the server accepts the request", SIGNAL, move || {
-            listener.accept().unwrap()
-        });
-        stream.set_read_timeout(Some(SIGNAL)).unwrap();
-        let mut stream = fakes::within("the server reads the request", SIGNAL, move || {
-            let mut request = [0u8; 4096];
-            let _read = stream.read(&mut request).unwrap();
-            stream
-        });
-        stream
-            .write_all(b"HTTP/1.1 200 OK\r\nconnection: close\r\n\r\nabc")
-            .unwrap();
-        served.send(()).unwrap();
-    });
+    let server =
+        fakes::RawHttpServer::start(b"HTTP/1.1 200 OK\r\nconnection: close\r\n\r\nabc").unwrap();
+    let port = server.port();
     let head = head_of(
         SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), port),
         &format!("http://127.0.0.1:{port}/"),
     );
-    Deadline::after(SIGNAL)
-        .recv(&done)
-        .expect("the server answered");
+    assert!(server.await_replies(1, SIGNAL), "the server answered");
     assert_eq!(head.content_length, None);
 }
