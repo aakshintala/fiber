@@ -12,6 +12,7 @@ use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
 use std::time::Instant;
 
 use contract::clock::Clock;
+use contract::diag::Timing;
 use contract::signing::{SignRequest, Signer};
 use serde_json::Value;
 use ureq::unversioned::resolver::DefaultResolver;
@@ -206,8 +207,10 @@ fn prepare(
 /// Sends the signed request over `route`: the response with the send
 /// stamp. The stamp is `clock.now()` just before the request is written
 /// to the network, after signing, header checks and agent setup, and is
-/// reported even when the send fails. `None` reads no clock, so the
-/// ordinary path performs no diagnostic work.
+/// reported even when the send fails. `None` reads no clock and starts no
+/// connector scope, so the ordinary path performs no diagnostic work.
+/// When supplied, the observed path selects the timing agent, which times
+/// one actual connector attempt group as `net.connect`.
 fn send(
     url: &str,
     headers: &[(String, String)],
@@ -215,7 +218,7 @@ fn send(
     body: &[u8],
     route: &Route,
     cancel: &Arc<Cancel>,
-    clock: Option<&Arc<dyn Clock>>,
+    observed: Option<&SendObservation<'_>>,
 ) -> (
     Result<ureq::http::Response<ureq::Body>, Error>,
     Option<Instant>,
@@ -226,25 +229,43 @@ fn send(
         Via::Direct => None,
         Via::Through(proxy) => Some(proxy.clone()),
     };
-    let agent = net::agent(
-        net::config()
-            .proxy(proxy)
-            .http_status_as_error(false)
-            .max_redirects(0)
-            .build(),
-        Arc::<Cancel>::clone(cancel),
-        DefaultResolver::default(),
-        route.limits,
-    );
+    let config = net::config()
+        .proxy(proxy)
+        .http_status_as_error(false)
+        .max_redirects(0)
+        .build();
+    let agent = match observed.and_then(|observe| observe.timing) {
+        Some(timing) => net::agent_observed(
+            config,
+            Arc::<Cancel>::clone(cancel),
+            DefaultResolver::default(),
+            route.limits,
+            timing.clone(),
+        ),
+        None => net::agent(
+            config,
+            Arc::<Cancel>::clone(cancel),
+            DefaultResolver::default(),
+            route.limits,
+        ),
+    };
     let mut request = agent.post(url);
     for (name, value) in headers.iter().chain(signed) {
         request = request.header(name, value);
     }
-    let start = clock.map(|clock| clock.now());
+    let start = observed.map(|observe| observe.clock.now());
     let response = request
         .send(body)
         .map_err(|e| Error::Connection(e.to_string()));
     (response, start)
+}
+
+/// What one observed send stamps and times: the clock with the optional
+/// connector timing. Grouped, so the shared send keeps one observation
+/// input beside the call's own.
+struct SendObservation<'a> {
+    clock: &'a Arc<dyn Clock>,
+    timing: Option<&'a Timing>,
 }
 /// A response's status with its `x-should-retry` header, read once the
 /// status line and headers have arrived.
@@ -438,10 +459,12 @@ pub(crate) fn post_signed_observed(
     cancel: &Arc<Cancel>,
     secrets: &mut Secrets,
     clock: &Arc<dyn Clock>,
+    timing: Option<&Timing>,
 ) -> Result<ObservedSend, ObservedFailure> {
     let failed = |error: Error| ObservedFailure { error, sent: None };
     let signed = prepare(url, headers, body, signer, cancel, secrets).map_err(failed)?;
-    let (result, start) = send(url, headers, &signed, body, route, cancel, Some(clock));
+    let observe = SendObservation { clock, timing };
+    let (result, start) = send(url, headers, &signed, body, route, cancel, Some(&observe));
     // `send` stamps only when handed a clock, so this is always set here.
     let start = start.unwrap_or_else(|| clock.now());
     // A failed send after the stamp still reports it, with the response
