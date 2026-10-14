@@ -2109,28 +2109,56 @@ fn a_cancel_mid_spawn_is_settled_before_exit() {
     Deadline::after(DEADLINE)
         .recv(&is_reaping)
         .expect("the spawn reached its reap");
-    // Held past the old 3 s bound with two `SHORT` receives, reusing the
-    // existing bound: the settle stays pending for more than 3 s with the
-    // reap held, so a 3 s positive receive would time out on every run.
-    // No sleep and no new bound: each receive is the hold's own proof.
+    // The settle holds on the raised count while the reap is held: one
+    // bounded negative receive covers the whole hold, so a settle that
+    // answered on the kill alone fails here. One deadline for the whole
+    // hold, never one per receive.
     assert!(
-        Deadline::after(SHORT).recv(&settled).is_err(),
+        Deadline::after(DEADLINE).recv(&settled).is_err(),
         "settle returned with the late child unreaped"
     );
-    assert!(
-        Deadline::after(SHORT).recv(&settled).is_err(),
-        "settle returned with the reap still held past 3 s"
-    );
     free_reap.send(()).expect("the reap's release");
-    // No clock drive: every `GROUP_POLL` park below ends on a wake bump,
-    // and the prune after the reap's bump sees a group killed seconds
-    // earlier whose leader is just reaped, so it retires at once.
+    // The late kill landed while the reap was held, so the shell is
+    // already dead: the wall-clock wait confirms it before the fake clock
+    // moves, never ahead of the real death.
     assert!(
-        Deadline::after(DEADLINE)
+        fakes::matching_exits(&marker, DEADLINE),
+        "the late group is gone"
+    );
+    // A fork that landed inside the kill still lists the group after the
+    // reap: the settle re-kills on its poll cadence and parks between
+    // passes with no further wake, so each advance follows a confirmed
+    // park until the answer arrives, on the stdout-hold timeout's cadence.
+    // The answer still arrives through `DEADLINE`.
+    let drive = Deadline::after(DEADLINE);
+    let mut answer: Option<bool> = None;
+    while answer.is_none() {
+        match settled.try_recv() {
+            Ok(got) => {
+                answer = Some(got);
+                break;
+            }
+            Err(mpsc::TryRecvError::Empty) => {}
+            Err(mpsc::TryRecvError::Disconnected) => break,
+        }
+        if drive.left().is_zero() {
+            break;
+        }
+        let poll = clock
+            .now()
+            .checked_add(GROUP_POLL)
+            .expect("the poll is countable");
+        if clock.await_parked(poll, drive.left().min(PARK_PAUSE)) {
+            clock.advance(GROUP_POLL);
+        }
+    }
+    let answer = match answer {
+        Some(answer) => answer,
+        None => Deadline::after(DEADLINE)
             .recv(&settled)
             .expect("the settle"),
-        "settle waits out the late kill"
-    );
+    };
+    assert!(answer, "settle waits out the late kill");
     let error = Deadline::after(DEADLINE)
         .recv(&finished)
         .expect("the late read")
@@ -2141,10 +2169,6 @@ fn a_cancel_mid_spawn_is_settled_before_exit() {
         listed(&reads).is_empty(),
         "the settle retired the late group: {:?}",
         listed(&reads)
-    );
-    assert!(
-        fakes::matching_exits(&marker, DEADLINE),
-        "the late group is gone"
     );
     watching.stand_down(DEADLINE);
 }
