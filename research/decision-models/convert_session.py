@@ -170,13 +170,19 @@ def check_workspace(value, path, lineno):
     return value, 0
 
 
-def convert_claude(entries, main, side, skipped):
+def convert_claude(entries, main, side, skipped, path):
     """Fold parsed Claude entries into the output sessions."""
-    for (_lineno, entry) in entries:
+    for (lineno, entry) in entries:
         session = side if bool(entry.get("isSidechain")) else main
         kind = entry.get("type")
         if kind == "user":
-            message = entry.get("message") or {}
+            raw = entry.get("message")
+            if raw is None:
+                message = {}
+            elif isinstance(raw, dict):
+                message = raw
+            else:
+                return fail("%s:%d: bad message" % (path, lineno))
             if entry.get("isMeta") or entry.get("isCompactSummary"):
                 continue
             content = message.get("content")
@@ -198,7 +204,13 @@ def convert_claude(entries, main, side, skipped):
             if texts:
                 session.person_turn(texts)
         elif kind == "assistant":
-            message = entry.get("message") or {}
+            raw = entry.get("message")
+            if raw is None:
+                message = {}
+            elif isinstance(raw, dict):
+                message = raw
+            else:
+                return fail("%s:%d: bad message" % (path, lineno))
             content = message.get("content")
             if not isinstance(content, list):
                 continue
@@ -213,6 +225,7 @@ def convert_claude(entries, main, side, skipped):
                 session.handoff()
         else:
             skipped["entry:%s" % (kind,)] += 1
+    return 0
 
 
 def claude_workspace(entries, path):
@@ -357,15 +370,17 @@ def pi_texts(content):
     return texts
 
 
-def convert_pi(branch, session, skipped):
+def convert_pi(branch, session, skipped, path):
     """Fold the active branch's entries into the output session."""
-    for (_lineno, entry) in branch:
+    for (lineno, entry) in branch:
         kind = entry.get("type")
         if kind in PI_NON_PERSON:
             skipped["entry:%s" % kind] += 1
             continue
         if kind == "message":
-            message = entry.get("message") or {}
+            message = entry.get("message")
+            if not isinstance(message, dict):
+                return fail("%s:%d: bad message" % (path, lineno))
             role = message.get("role")
             content = message.get("content")
             if role == "user":
@@ -389,6 +404,7 @@ def convert_pi(branch, session, skipped):
             session.handoff(tokens if isinstance(tokens, int) else 120)
         else:
             skipped["entry:%s" % (kind,)] += 1
+    return 0
 
 
 def pi_request(block, session, skipped):
@@ -468,8 +484,13 @@ def convert_claude_file(path, dest):
     main_session = Session("s_main", workspace)
     side_session = Session("s_side", workspace)
     skipped = Counter()
-    convert_claude(entries, main_session, side_session, skipped)
-    return write_out(dest, {"s_main": main_session, "s_side": side_session}, skipped)
+    status = convert_claude(entries, main_session, side_session, skipped, path)
+    if status:
+        return status
+    sessions = {"s_main": main_session}
+    if any(bool(entry.get("isSidechain")) for _, entry in entries):
+        sessions["s_side"] = side_session
+    return write_out(dest, sessions, skipped)
 
 
 def convert_pi_file(path, dest):
@@ -502,7 +523,9 @@ def convert_pi_file(path, dest):
     if siblings > 0:
         # Entries off the active branch are never merged in.
         skipped["sibling-branch"] += siblings
-    convert_pi(branch, session, skipped)
+    status = convert_pi(branch, session, skipped, path)
+    if status:
+        return status
     return write_out(dest, {"s_pi": session}, skipped)
 
 
