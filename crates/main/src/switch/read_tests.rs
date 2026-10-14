@@ -1034,9 +1034,27 @@ fn settle_drains_two_groups_together_within_one_bound() {
         let script = format!("echo $$ > '{}'; exec sleep 600", ready.display());
         std::thread::spawn(move || reads.command(&mut sh(&script)))
     };
+    // Each spawn pauses after it lists its group: the acknowledgements
+    // prove both groups are listed before the assertion below. A ready
+    // line alone does not, since the child writes it before the spawn
+    // relocks and lists. The pauses are one-shot, so each spawn's pause
+    // is armed before it starts, once the earlier spawn proved it listed.
+    let (listed_one, is_listed_one) = mpsc::channel::<()>();
+    let (free_one, freed_one) = mpsc::channel::<()>();
+    reads.pause_at_listed(listed_one, freed_one);
     let running_one = start(&reads, &ready_one);
+    Deadline::after(DEADLINE)
+        .recv(&is_listed_one)
+        .expect("the first group listed");
+    free_one.send(()).unwrap();
+    let (listed_two, is_listed_two) = mpsc::channel::<()>();
+    let (free_two, freed_two) = mpsc::channel::<()>();
+    reads.pause_at_listed(listed_two, freed_two);
     let running_two = start(&reads, &ready_two);
-    // Each ready line arrives after its own spawn listed its group.
+    Deadline::after(DEADLINE)
+        .recv(&is_listed_two)
+        .expect("the second group listed");
+    free_two.send(()).unwrap();
     let pgid_one: u32 = ready_line(&ready_one).parse().unwrap();
     let pgid_two: u32 = ready_line(&ready_two).parse().unwrap();
     let watchdog_one = fakes::Watchdog::group(pgid_one);
