@@ -1,0 +1,143 @@
+name: Scheduled whole-workspace mutants
+
+# docs/ci.md, "On every pull request that changes code" and "Job time limits".
+on:
+  schedule:
+    - cron: '0 4 * * *'
+
+concurrency:
+  group: mutants-scheduled
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+defaults:
+  run:
+    shell: bash
+
+jobs:
+  baseline:
+    name: Workspace baseline
+    runs-on: ubuntu-24.04
+    # Generous initial bound for a whole-workspace baseline with no scheduled cold-run history.
+    timeout-minutes: 360
+    steps:
+      - name: Checkout scheduled SHA
+        timeout-minutes: 5
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+      - name: Install the toolchain
+        timeout-minutes: 10
+        run: rustup toolchain install
+      - name: Restore the build cache
+        timeout-minutes: 5
+        uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+        with:
+          shared-key: ci
+          save-if: false
+      - name: Install cargo-nextest
+        timeout-minutes: 5
+        uses: taiki-e/install-action@83ac0ad63c0167e6f06796fab0fce28db1bf3db0 # v2.87.22
+        with:
+          tool: cargo-nextest
+      - name: Install zsh and fish
+        timeout-minutes: 5
+        run: scripts/install-shells
+      - name: Run the workspace baseline
+        timeout-minutes: 300
+        run: cargo nextest run --workspace --no-fail-fast
+
+  mutants:
+    name: Mutants (shard ${{ matrix.shard }})
+    needs: baseline
+    runs-on: ubuntu-24.04
+    # Generous initial bound for whole-workspace mutation testing with no scheduled cold-run history.
+    timeout-minutes: 360
+    strategy:
+      fail-fast: false
+      max-parallel: 16
+      matrix:
+        shard: [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15]
+    steps:
+      - name: Checkout scheduled SHA
+        timeout-minutes: 5
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+      - name: Install the toolchain
+        timeout-minutes: 10
+        run: rustup toolchain install
+      - name: Restore the build cache
+        timeout-minutes: 5
+        uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+        with:
+          shared-key: ci
+          save-if: false
+      - name: Install cargo-mutants and cargo-nextest
+        timeout-minutes: 5
+        uses: taiki-e/install-action@83ac0ad63c0167e6f06796fab0fce28db1bf3db0 # v2.87.22
+        with:
+          tool: cargo-mutants,cargo-nextest
+      - name: Install zsh and fish
+        timeout-minutes: 5
+        run: scripts/install-shells
+      - name: List and run workspace mutants
+        timeout-minutes: 300
+        env:
+          SHARD: ${{ matrix.shard }}
+        run: |
+          mutant_list="$RUNNER_TEMP/mutants-scheduled-$SHARD.txt"
+          cargo mutants --workspace --test-tool nextest --shard "$SHARD/16" --sharding round-robin --list >"$mutant_list"
+          if [ ! -s "$mutant_list" ]; then
+            echo "no mutants in shard $SHARD"
+            exit 0
+          fi
+          cat "$mutant_list"
+          sudo loginctl enable-linger "$USER"
+          XDG_RUNTIME_DIR="/run/user/$(id -u)"
+          export XDG_RUNTIME_DIR
+          state=""
+          for _ in $(seq 1 30); do
+            state=$(systemctl --user is-system-running 2>/dev/null || true)
+            if [ "$state" = running ] || [ "$state" = degraded ]; then
+              break
+            fi
+            sleep 1
+          done
+          if [ "$state" != running ] && [ "$state" != degraded ]; then
+            echo "systemd's user instance is not running after 30 s: '$state'"
+            exit 1
+          fi
+          mutant_args=(
+            --workspace
+            --test-tool nextest
+            --baseline=skip
+            --timeout 120
+            --shard "$SHARD/16"
+            --sharding round-robin
+          )
+          if systemd-run --user --scope -p MemoryMax=12G -p OOMPolicy=kill -- cargo mutants "${mutant_args[@]}"; then
+            :
+          else
+            status=$?
+            last_log=$(find mutants.out/log -type f -name '*.log' -printf '%T@ %p\n' 2>/dev/null \
+              | sort -nr | head -n 1 | cut -d' ' -f2- || true)
+            echo "cargo mutants failed with status $status; last mutant:"
+            if [ -n "$last_log" ]; then
+              awk 'NF { print; exit }' "$last_log"
+            else
+              echo "No scenario log found in mutants.out/log."
+            fi
+            exit "$status"
+          fi
+      - name: Upload mutants.out
+        if: always()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: mutants-scheduled-${{ matrix.shard }}
+          path: mutants.out
+          if-no-files-found: ignore

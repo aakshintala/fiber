@@ -208,9 +208,7 @@ too long. A hook's `on_failure` has no default for the same reason: `non-blockin
 would let a forgotten guard fail open, and `blocking` would let a forgotten
 notifier stop a session. A hook's clock starts when Fiber asks, so time
 spent waiting behind earlier items in the stream counts against it. A callback
-past its timeout is stopped ("When an extension misbehaves"). When the hook
-cannot stop the VM, the caller waits 1 second more after the timeout before it
-abandons the VM.
+past its timeout is stopped ("When an extension misbehaves"). When the interrupt cannot stop the VM, Fiber abandons the VM 1 second after the timeout.
 
 Fiber runs a Lua extension's entry script, `init.lua`, when it creates the VM.
 Reading, compiling and running it is bounded at 2 seconds. A provider file,

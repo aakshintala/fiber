@@ -102,6 +102,7 @@ fn workspace() -> TempDir {
     };
     dir.write("crates/a/Cargo.toml", &package("a", ""));
     dir.write("crates/a/src/lib.rs", "//! a\n");
+    dir.write("crates/a/src/deleted.rs", "//! deleted fixture\n");
     dir.write(
         "crates/b/Cargo.toml",
         &package("b", "a = { path = \"../a\" }\n"),
@@ -120,6 +121,43 @@ fn workspace() -> TempDir {
     git(&dir, &["add", "."]);
     git(&dir, &["commit", "-qm", "base"]);
     dir
+}
+
+fn architecture_workspace() -> TempDir {
+    let dir = workspace();
+    dir.write(
+        "Cargo.toml",
+        "[workspace]\nmembers = [\"crates/a\", \"crates/b\", \"crates/c\", \"crates/tools\", \"crates/loop\"]\nexclude = [\"outside\"]\nresolver = \"3\"\n",
+    );
+    dir.write(
+        "crates/tools/Cargo.toml",
+        "[package]\nname = \"tools\"\nversion = \"0.0.0\"\nedition = \"2024\"\n",
+    );
+    dir.write(
+        "crates/tools/src/lib.rs",
+        "pub struct Tool { pub name: String }\npub fn tool() -> Tool { Tool { name: \"shell\".to_owned() } }\n",
+    );
+    dir.write(
+        "crates/loop/Cargo.toml",
+        "[package]\nname = \"loop\"\nversion = \"0.0.0\"\nedition = \"2024\"\n",
+    );
+    dir.write("crates/loop/src/lib.rs", "//! loop\n");
+    dir
+}
+
+fn add_architecture_noise(dir: &TempDir, source: &str) {
+    dir.write(
+        ".gitignore",
+        "target/\nCargo.lock\ncrates/a/src/ignored.rs\n",
+    );
+    dir.write("crates/a/src/ignored.rs", source);
+    dir.write("outside/src/lib.rs", source);
+    dir.write("crates/a/src/lib.rs", "#[cfg(test)]\nmod test_support;\n");
+    dir.write("crates/a/src/test_support.rs", source);
+    dir.write("crates/a/src/architecture_tests.rs", source);
+    dir.write("crates/a/tests/architecture.rs", source);
+    dir.write("crates/a/src/deleted.rs", source);
+    std::fs::remove_file(dir.path().join("crates/a/src/deleted.rs")).unwrap();
 }
 
 #[test]
@@ -502,6 +540,84 @@ fn bug_filter_prints_the_filter_and_packages() {
         out,
         "filter\t(package(b) & test(/^fold::tests::/)) | binary_id(a::t)\n\
          package\ta\npackage\tb\n"
+    );
+}
+
+#[test]
+fn session_paths_cli_reports_an_untracked_production_violation_only() {
+    let dir = architecture_workspace();
+    add_architecture_noise(&dir, "fn fake() { let _ = dir.join(\"sessions\"); }\n");
+    assert_eq!(
+        xtask(&dir, &["session-paths"], &[], ""),
+        (0, "session-paths: ok\n".to_owned())
+    );
+    dir.write(
+        "crates/b/src/new.rs",
+        "fn open_session() { let _ = dir.join(\"sessions\"); }\n",
+    );
+    assert_eq!(
+        xtask(&dir, &["session-paths"], &[], ""),
+        (
+            1,
+            "session-paths: crates/b/src/new.rs:1: session path outside log\n".to_owned()
+        )
+    );
+}
+
+#[test]
+fn fiber_home_paths_cli_reports_an_untracked_production_violation_only() {
+    let dir = architecture_workspace();
+    add_architecture_noise(
+        &dir,
+        "fn fake(home: &Path) { let _ = home.join(\"projects\"); }\n",
+    );
+    assert_eq!(
+        xtask(&dir, &["fiber-home-paths"], &[], ""),
+        (0, "fiber-home-paths: ok\n".to_owned())
+    );
+    dir.write(
+        "crates/b/src/new.rs",
+        "fn read_project(home: &Path) { let _ = home.join(\"projects\"); }\n",
+    );
+    assert_eq!(
+        xtask(&dir, &["fiber-home-paths"], &[], ""),
+        (
+            1,
+            "fiber-home-paths: crates/b/src/new.rs:1: Fiber-home path outside config\n".to_owned()
+        )
+    );
+}
+
+#[test]
+fn loop_tool_names_cli_reports_an_untracked_production_violation_only() {
+    let dir = architecture_workspace();
+    add_architecture_noise(&dir, "fn fake() { let _ = \"shell\"; }\n");
+    assert_eq!(
+        xtask(&dir, &["loop-tool-names"], &[], ""),
+        (0, "loop-tool-names: ok\n".to_owned())
+    );
+    dir.write(
+        "crates/loop/src/new.rs",
+        "fn choose_tool() { let _ = \"shell\"; }\n",
+    );
+    assert_eq!(
+        xtask(&dir, &["loop-tool-names"], &[], ""),
+        (
+            1,
+            "loop-tool-names: crates/loop/src/new.rs:1: built-in tool name shell\n".to_owned()
+        )
+    );
+}
+
+#[test]
+fn architecture_command_reports_source_collection_failure_as_exit_two() {
+    let dir = workspace();
+    std::fs::remove_dir_all(dir.path().join(".git")).unwrap();
+    let (code, out) = xtask(&dir, &["session-paths"], &[], "");
+    assert_eq!(code, 2);
+    assert_eq!(
+        out,
+        "xtask: git ls-files --cached --others --exclude-standard -- crates/a crates/b crates/c: fatal: not a git repository (or any of the parent directories): .git\n"
     );
 }
 
