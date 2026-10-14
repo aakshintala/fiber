@@ -166,7 +166,13 @@ pub fn reviewer_models(
         overrides: Vec::new(),
     })
     .map_err(config_failure)?;
-    let lua = match login_provider(home, providers, name, Arc::new(NoBrowser), Arc::clone(&clock)) {
+    let lua = match login_provider(
+        home,
+        providers,
+        name,
+        Arc::new(NoBrowser),
+        Arc::clone(&clock),
+    ) {
         Ok(lua) => lua,
         Err(e) => {
             return Ok(ReviewerModels {

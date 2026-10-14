@@ -1179,7 +1179,8 @@ fn cancellation_during_discovery_keeps_everything_and_asks_nothing() {
             &worker_stopped,
             None,
         );
-        done.send((result, String::from_utf8(err).unwrap())).unwrap_or(());
+        done.send((result, String::from_utf8(err).unwrap()))
+            .unwrap_or(());
     });
     assert!(
         fakes::Deadline::after(STAGE_WAIT).recv(&entered_rx).is_ok(),
@@ -1247,7 +1248,8 @@ fn cancellation_before_the_claim_writes_nothing() {
             &worker_stopped,
             Some(&probe),
         );
-        done.send((result, String::from_utf8(err).unwrap())).unwrap_or(());
+        done.send((result, String::from_utf8(err).unwrap()))
+            .unwrap_or(());
     });
     // `before reviewer save claim`: selection made, cancellation not yet
     // recorded; recording it now must prevent the write entirely.
@@ -1336,7 +1338,8 @@ fn a_claimed_save_survives_cancellation_before_the_write() {
                 &worker_stopped,
                 Some(&probe),
             );
-            done.send((result, String::from_utf8(err).unwrap())).unwrap_or(());
+            done.send((result, String::from_utf8(err).unwrap()))
+                .unwrap_or(());
         });
         // The claim runs uncancelled: release it straight through.
         assert!(

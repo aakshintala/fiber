@@ -3113,7 +3113,8 @@ fn the_failed_reason_reads_error() {
         let line: String = (0..80).map(|x| buf[(x, y)].symbol()).collect();
         if let Some(start) = line.find("token expired") {
             let start = u16::try_from(start).unwrap_or(u16::MAX);
-            let end = start.saturating_add(u16::try_from("token expired".len()).unwrap_or(u16::MAX));
+            let end =
+                start.saturating_add(u16::try_from("token expired".len()).unwrap_or(u16::MAX));
             for x in start..end {
                 let cell = &buf[(x, y)];
                 if cell.symbol() != " " {
