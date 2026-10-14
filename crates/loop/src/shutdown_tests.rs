@@ -1171,9 +1171,6 @@ fn settle_writes_ahead_before_a_notice_delivered_while_settling() {
     let wait = Deadline::after(DEADLINE);
     assert_eq!(stopped(&stops, &wait), "j_1");
     // Ends `j_1` with a notice whose claim took a resumed run's start.
-    // The send and the list removal hold the one `ids` lock, so the settle
-    // either sees `j_1` running with the notice already queued or sees it
-    // gone and drains the queued notice.
     let ahead = resumed_ahead(&action);
     jobs.send_and_forget(
         "j_1",
