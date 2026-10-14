@@ -168,6 +168,30 @@ impl Connection {
         }
     }
 
+    /// One readiness park on the socket: true once bytes may have
+    /// arrived, false when shutdown stopped the wait. The bound still
+    /// checks past every park, as for one byte: expiry names the request
+    /// and phase. The one wait behind [`Connection::fill`] and
+    /// [`Connection::fill_into`].
+    fn wait_readable(&mut self, phase: &'static str) -> bool {
+        match self.shared.wait_ready(
+            &self.budget,
+            &self.name,
+            phase,
+            &mut self.seq,
+            &mut self.acked,
+            Some(self.stream.as_fd()),
+            true,
+        ) {
+            // Readiness parks end at once when the bytes arrive
+            // instead of sleeping a whole poll past them; the bound
+            // still checks past every park, as for one byte.
+            WaitEnd::Waited => self.consume_check(phase),
+            WaitEnd::Expired => self.expired(phase),
+            WaitEnd::Stopped => false,
+        }
+    }
+
     /// One socket read past the bytes held: how many are held now, `Eof`
     /// on peer close, `Stopped` on shutdown.
     pub(crate) fn fill(&mut self, phase: &'static str) -> FillOutcome {
@@ -192,25 +216,8 @@ impl Connection {
                     ReadErr::End => return FillOutcome::Eof,
                 },
             }
-            match self.shared.wait_ready(
-                &self.budget,
-                &self.name,
-                phase,
-                &mut self.seq,
-                &mut self.acked,
-                Some(self.stream.as_fd()),
-                true,
-            ) {
-                // Readiness parks end at once when the bytes arrive
-                // instead of sleeping a whole poll past them; the bound
-                // still checks past every park, as for one byte.
-                WaitEnd::Waited => {
-                    if !self.consume_check(phase) {
-                        return FillOutcome::Stopped;
-                    }
-                }
-                WaitEnd::Expired => self.expired(phase),
-                WaitEnd::Stopped => return FillOutcome::Stopped,
+            if !self.wait_readable(phase) {
+                return FillOutcome::Stopped;
             }
         }
     }
@@ -286,25 +293,8 @@ impl Connection {
                     ReadErr::End => return FillOutcome::Eof,
                 },
             }
-            match self.shared.wait_ready(
-                &self.budget,
-                &self.name,
-                phase,
-                &mut self.seq,
-                &mut self.acked,
-                Some(self.stream.as_fd()),
-                true,
-            ) {
-                // Readiness parks end at once when the bytes arrive
-                // instead of sleeping a whole poll past them; the bound
-                // still checks past every park, as for one byte.
-                WaitEnd::Waited => {
-                    if !self.consume_check(phase) {
-                        return FillOutcome::Stopped;
-                    }
-                }
-                WaitEnd::Expired => self.expired(phase),
-                WaitEnd::Stopped => return FillOutcome::Stopped,
+            if !self.wait_readable(phase) {
+                return FillOutcome::Stopped;
             }
         }
     }

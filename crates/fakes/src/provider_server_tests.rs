@@ -1,5 +1,5 @@
 use std::io::{Read, Write};
-use std::net::{Shutdown, SocketAddr, TcpStream};
+use std::net::{Shutdown, SocketAddr, TcpListener, TcpStream};
 use std::sync::{
     Arc, Mutex, Weak,
     atomic::{AtomicU64, Ordering},
@@ -1254,5 +1254,167 @@ fn growing_fixed_bodies_bypass_the_lookahead() {
     assert!(
         lookahead <= LOOKAHEAD_BOUND,
         "five growing bodies cost {lookahead} lookahead bytes, at most {LOOKAHEAD_BOUND}: bulk body bytes bypass the lookahead past the head's leftover"
+    );
+}
+
+// A fixed body buffered with its head keeps only its declared length:
+// the socket-read cap is recomputed after the buffered drain, so the
+// tail and the pipelined suffix arriving together never spill into the
+// body. The head and the first bytes go as one burst, so the whole head
+// and every first byte is buffered before the body read parks (pinned by
+// its wait announcement); the tail and the pipelined suffix arrive as a
+// second burst. A stale cap reads past the tail into the suffix, the
+// body exceeds its length, and the next subtraction panics instead of
+// answering.
+#[test]
+fn a_fixed_body_buffered_with_its_head_keeps_only_its_length() {
+    const BODY_LEN: usize = 10_000;
+    // With the head, one burst under one 8 KiB fill: every first byte is
+    // buffered, and the body read parks with the socket empty.
+    const FIRST: usize = 8_100;
+    let clock = FakeClock::new();
+    let server =
+        ProviderServer::start_on(clock.clone(), vec![Response::status(200, "ok")]).unwrap();
+    let acks = server.core.test_acknowledgments();
+    let addr = server.addr;
+
+    let body: Vec<u8> = (0u8..=250).cycle().take(BODY_LEN).collect();
+    let mut pipelined = b"GET /next HTTP/1.1\r\nHost: localhost\r\n\r\n".to_vec();
+    pipelined.resize(2_000, 0xabu8);
+    let mut stream = TcpStream::connect_timeout(&addr, READ_WITHIN)
+        .unwrap_or_else(|e| panic!("the connection arrives within {READ_WITHIN:?}: {e}"));
+    stream.set_read_timeout(Some(READ_WITHIN)).unwrap();
+    stream.set_write_timeout(Some(READ_WITHIN)).unwrap();
+    let mut first =
+        format!("POST /v1 HTTP/1.1\r\nHost: localhost\r\nContent-Length: {BODY_LEN}\r\n\r\n")
+            .into_bytes();
+    first.extend_from_slice(&body[..FIRST]);
+    stream.write_all(&first).unwrap_or_else(|e| {
+        panic!("the head and the first bytes arrive within {READ_WITHIN:?}: {e}")
+    });
+    // The server is out of bytes and parked in the body read: only then
+    // do the tail and the pipelined suffix arrive, together in one burst.
+    // Earlier phases announce first and are passed over; every receive is
+    // bounded, so a missing body wait fails, never hangs.
+    let deadline = Deadline::after(READ_WITHIN);
+    loop {
+        let ack = deadline.recv_or_fail(&acks, "the body read's wait");
+        if ack.phase == "to read the fixed body" {
+            break;
+        }
+    }
+    let mut rest = body[FIRST..].to_vec();
+    rest.extend_from_slice(&pipelined);
+    stream.write_all(&rest).unwrap_or_else(|e| {
+        panic!("the tail and the pipelined suffix arrive within {READ_WITHIN:?}: {e}")
+    });
+    // Wakes the parked read deterministically: the test advances the
+    // fake clock only past the wait the announcement pinned.
+    clock.advance(Duration::from_secs(1));
+    // Anything past the body sees the close: an over-read loses the
+    // reply instead of hanging on it.
+    stream.shutdown(Shutdown::Write).unwrap();
+    let mut response = Vec::new();
+    stream
+        .read_to_end(&mut response)
+        .unwrap_or_else(|e| panic!("the scripted reply arrives within {READ_WITHIN:?}: {e}"));
+    let text = String::from_utf8_lossy(&response);
+    assert!(text.starts_with("HTTP/1.1 200"), "{text}");
+    assert!(response.ends_with(b"ok"), "{text}");
+
+    assert!(
+        server.await_requests(1, READ_WITHIN),
+        "the request is recorded"
+    );
+    let requests = server.requests();
+    assert_eq!(requests.len(), 1);
+    assert_eq!(requests[0].body_len, BODY_LEN);
+    assert_eq!(
+        requests[0].body.len(),
+        body.len(),
+        "the recorded body has the sent length"
+    );
+    assert_eq!(
+        first_diff(&requests[0].body, &body),
+        None,
+        "the recorded body holds its declared bytes, not the pipelined ones"
+    );
+}
+
+// A CONNECT whose payload is larger than the head's initial read tunnels
+// every byte to the origin: the fixed-body discard runs only past a
+// declared body, so payload bytes already on the socket survive the
+// handshake and reach the origin byte-exact. The head goes without its
+// blank line, so the handshake parks (pinned by its wait announcement)
+// before the blank line and the whole payload arrive as one burst: the
+// burst is queued before the parked read wakes, so the discard, if it
+// ran, would certainly find socket bytes to eat.
+#[test]
+fn a_connect_payload_larger_than_the_head_read_reaches_its_origin() {
+    use std::io::BufRead as _;
+
+    const PAYLOAD_LEN: usize = 64_000;
+    let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+    let origin = listener.local_addr().unwrap();
+    let (tx, rx) = mpsc::channel();
+    thread::spawn(move || {
+        let (mut stream, _) = listener.accept().unwrap();
+        stream.set_read_timeout(Some(READ_WITHIN)).unwrap();
+        let mut payload = Vec::new();
+        stream
+            .read_to_end(&mut payload)
+            .unwrap_or_else(|e| panic!("the origin reads the payload within {READ_WITHIN:?}: {e}"));
+        tx.send(payload).unwrap();
+    });
+    let proxy = crate::ConnectProxy::start().unwrap();
+    let acks = proxy.test_acknowledgments();
+    let target = format!("{origin}");
+    let addr: SocketAddr = format!("127.0.0.1:{}", proxy.port()).parse().unwrap();
+    let mut client = TcpStream::connect_timeout(&addr, READ_WITHIN)
+        .unwrap_or_else(|e| panic!("the connection arrives within {READ_WITHIN:?}: {e}"));
+    client.set_read_timeout(Some(READ_WITHIN)).unwrap();
+    client.set_write_timeout(Some(READ_WITHIN)).unwrap();
+    client
+        .write_all(format!("CONNECT {target} HTTP/1.1\r\nHost: {target}\r\n").as_bytes())
+        .unwrap_or_else(|e| panic!("the partial head arrives within {READ_WITHIN:?}: {e}"));
+    let deadline = Deadline::after(READ_WITHIN);
+    loop {
+        let ack = deadline.recv_or_fail(&acks, "the CONNECT head read's wait");
+        if ack.phase == "to read the request line" || ack.phase == "to read the headers" {
+            break;
+        }
+    }
+    let payload: Vec<u8> = (0u8..=250).cycle().take(PAYLOAD_LEN).collect();
+    let mut burst = b"\r\n".to_vec();
+    burst.extend_from_slice(&payload);
+    client.write_all(&burst).unwrap_or_else(|e| {
+        panic!("the blank line and the payload arrive within {READ_WITHIN:?}: {e}")
+    });
+    assert!(
+        proxy.await_connects(1, READ_WITHIN),
+        "the proxy recorded CONNECT {target}"
+    );
+    let mut reader = std::io::BufReader::new(client.try_clone().unwrap());
+    let mut status = String::new();
+    reader
+        .read_line(&mut status)
+        .unwrap_or_else(|e| panic!("the proxy's CONNECT reply within {READ_WITHIN:?}: {e}"));
+    assert!(
+        status.starts_with("HTTP/1.1 200"),
+        "the CONNECT reply: {status:?}"
+    );
+    client.shutdown(Shutdown::Write).unwrap();
+    let heard = Deadline::after(READ_WITHIN)
+        .recv(&rx)
+        .unwrap_or_else(|_| panic!("the origin receives the payload within {READ_WITHIN:?}"));
+    assert_eq!(
+        heard.len(),
+        payload.len(),
+        "the origin holds the whole payload"
+    );
+    assert_eq!(
+        first_diff(&heard, &payload),
+        None,
+        "the tunnelled payload is byte-exact"
     );
 }

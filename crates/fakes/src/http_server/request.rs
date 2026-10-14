@@ -211,6 +211,10 @@ pub(crate) fn read_request(conn: &mut Connection) -> RequestOutcome {
             if body.len() == length {
                 break;
             }
+            // Recomputed past the drain: the cap above counts bytes the
+            // drain already moved, so reusing it reads past the body
+            // into pipelined bytes, and the next subtraction panics.
+            let remaining = length - body.len();
             match conn.fill_into(&mut body, remaining, "to read the fixed body") {
                 FillOutcome::Held(_) => {}
                 FillOutcome::Eof => return RequestOutcome::Eof,
@@ -219,8 +223,13 @@ pub(crate) fn read_request(conn: &mut Connection) -> RequestOutcome {
         }
         // Pipelined bytes the capped reads left on the socket would
         // reset the close instead of delivering the reply: discard one
-        // read of what already arrived, never waiting for more.
-        conn.drain_socket();
+        // read of what already arrived, never waiting for more. Only
+        // past a declared body, on the path that closes after replying:
+        // a zero-length read (a CONNECT, or a reused connection's empty
+        // body) leaves socket bytes the tunnel or the session still owns.
+        if length != 0 {
+            conn.drain_socket();
+        }
         (body, None)
     };
     RequestOutcome::Complete(ParsedRequest {
