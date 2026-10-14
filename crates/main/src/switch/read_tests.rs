@@ -698,6 +698,16 @@ fn cancel_during_settlement_answers_interrupted() {
         clock.await_parked(deadline, DEADLINE),
         "the wait parked at its deadline"
     );
+    // Scripted alive through the controlled poll: a real SIGKILL and the
+    // reaper wake would otherwise complete the timeout before the cancel
+    // below, so settlement stays pending until the cancel ends it. The
+    // scripted sends never touch the real group; the test kills it for
+    // real after the answer.
+    reads.script_group(
+        pgid,
+        (0..10).map(|_| Ok(())).collect(),
+        (0..10).map(|_| Ok(())).collect(),
+    );
     clock.advance(timeout);
     // The settlement re-kills on the poll cadence: parked at its first
     // poll, the wait can only leave through the cancel below.
@@ -710,9 +720,14 @@ fn cancel_during_settlement_answers_interrupted() {
         .recv_or_fail(&finished, "the cancelled read")
         .expect_err("a read cancelled while timing out");
     assert_eq!(error.kind(), std::io::ErrorKind::Interrupted);
+    // The scripted sends never touched the real group: kill it for real
+    // and reap it on every path.
+    match fakes::kill_group(pgid, "KILL") {
+        Ok(_) | Err(_) => {}
+    }
     assert!(
         fakes::group_empties(pgid, DEADLINE),
-        "the cancel killed the group"
+        "the real group is gone"
     );
     watchdog.stand_down(DEADLINE);
     pre.stand_down(DEADLINE);

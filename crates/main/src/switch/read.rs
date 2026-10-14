@@ -460,6 +460,10 @@ impl Reads {
                     // group stays listed for later settlement even if the
                     // leader never exits, so this never blocks past it.
                     loop {
+                        // The generation is captured before the checks, as in
+                        // `credential`: a finish past this point ends the park
+                        // below at once, so no reap lands unheard.
+                        let seen = self.wake.generation();
                         match status_received.try_recv() {
                             Ok(_) | Err(mpsc::TryRecvError::Disconnected) => break,
                             Err(mpsc::TryRecvError::Empty) => {}
@@ -471,16 +475,16 @@ impl Reads {
                         if clock.now() >= end {
                             break;
                         }
-                        // Captured after the check: a send past this point
-                        // ends the park below at once, so no reap lands
-                        // between the check and the park unheard.
-                        let seen = self.wake.generation();
                         let wait_until = clock
                             .now()
                             .checked_add(GROUP_POLL)
                             .map_or(end, |poll| poll.min(end));
                         self.wake.park(clock, Some(wait_until), seen);
                     }
+                }
+                if self.lock().cancelled {
+                    kill_group(group);
+                    return Err(interrupted());
                 }
                 return Err(timed_out());
             }
