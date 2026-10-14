@@ -874,41 +874,39 @@ fn settle_rekills_a_cancelled_survivor_before_answering_true() {
     // Set directly: `cancel` would kill the group and hide the survivor.
     reads.lock().cancelled = true;
     let settled = settle_on_thread(&reads, &clock, doors::SHUTDOWN_BOUND);
-    let answer = match Deadline::after(SHORT).recv(&settled) {
-        Ok(answer) => answer,
-        Err(_) => {
-            // Parked on the clock: the fix kills and rechecks. Drive
-            // rechecks until it answers: the first advance follows the
-            // confirmed park above, and every later advance follows a
-            // confirmed re-park. The first park is exact on the unmoved
-            // clock; later ones follow each advance. Completion and every
-            // ack share one deadline: each ack waits only a poll pause of
-            // it, and an ack's expiry re-checks completion and awaits the
-            // late park under what is left, never stopping the drive while
-            // time remains.
-            let drive = Deadline::after(DEADLINE);
-            let poll = clock.origin() + GROUP_POLL;
-            assert!(
-                clock.await_parked(poll, drive.left()),
-                "the settle parked at its poll"
-            );
-            let mut mark = clock.advance_marked(Duration::from_millis(50));
-            let mut answer = None;
-            loop {
-                if let Ok(got) = settled.try_recv() {
-                    answer = Some(got);
-                    break;
-                }
-                if drive.left().is_zero() {
-                    break;
-                }
-                if clock.await_any_parked_since(&mark, drive.left().min(PARK_PAUSE)) {
-                    mark = clock.advance_marked(Duration::from_millis(50));
+    // Completion or an acknowledged park decides, never a real-time wait:
+    // the fix kills and rechecks, so each advance follows a confirmed
+    // park. The first park is exact on the unmoved clock; later ones
+    // follow each advance. Completion and every ack share one deadline:
+    // each ack waits only a poll pause of it, and an ack's expiry
+    // re-checks completion and awaits the late park under what is left,
+    // never stopping the drive while time remains.
+    let drive = Deadline::after(DEADLINE);
+    let poll = clock.origin() + GROUP_POLL;
+    let mut mark: Option<_> = None;
+    let mut answer = None;
+    loop {
+        if let Ok(got) = settled.try_recv() {
+            answer = Some(got);
+            break;
+        }
+        if drive.left().is_zero() {
+            break;
+        }
+        match &mark {
+            None => {
+                if clock.await_parked(poll, drive.left().min(PARK_PAUSE)) {
+                    mark = Some(clock.advance_marked(Duration::from_millis(50)));
                 }
             }
-            answer.unwrap_or_else(|| drive.recv(&settled).expect("the settle"))
+            Some(parked) => {
+                if clock.await_any_parked_since(parked, drive.left().min(PARK_PAUSE)) {
+                    mark = Some(clock.advance_marked(Duration::from_millis(50)));
+                }
+            }
         }
-    };
+    }
+    let answer = answer.unwrap_or_else(|| drive.recv(&settled).expect("the settle"));
     let lives = fakes::kill_group(pgid, "0").unwrap_or(false);
     // Guarded cleanup before the assertions: the survivor must not
     // outlive the test either way.
