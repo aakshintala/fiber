@@ -532,6 +532,15 @@ impl Shared {
             return (Next::Return(Err(timed_out(name, target, timeout))), unsent);
         }
         let (until, running) = match self.calls.get(&id) {
+            Some(Progress::Started {
+                deadline,
+                parked: false,
+            }) if matches!(target, Target::Hook { .. }) => {
+                // A running hook answers at its deadline (see above), so
+                // wake there: the grace would hold the answer on a
+                // withheld worker delivery.
+                (*deadline, true)
+            }
             Some(Progress::Started { deadline, parked }) => {
                 (deadline.and_then(|at| at.checked_add(GRACE)), !*parked)
             }

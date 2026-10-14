@@ -1381,7 +1381,7 @@ fn a_running_hook_before_its_deadline_waits() {
     else {
         panic!("a hook returned before its deadline")
     };
-    assert_eq!(until, Some(at + GRACE));
+    assert_eq!(until, Some(at));
 }
 
 /// A running hook past its grace still only times out: hooks never abandon
@@ -1446,17 +1446,47 @@ fn a_withheld_hook_completion_passes_other_traffic() {
            run = function(call) return {} end })\n",
     );
     let clock = FakeClock::new();
-    let ext = LuaExtension::new(
+    let ext = Arc::new(LuaExtension::new(
         "fiber.test/other",
         dir.path(),
         PathBuf::from("/nonexistent-fiber-home"),
         clock,
-    );
+    ));
     let (_hold_tx, hold_rx) = mpsc::channel();
     super::schedule::withhold_hook_completion("fiber.test/withheld", "before_message", hold_rx);
-    assert_eq!(ext.command("quick", "").unwrap(), "quick");
-    assert!(ext.hook("after_tool", 0, serde_json::json!({})).is_ok());
-    assert!(ext.hook("before_message", 0, serde_json::json!({})).is_ok());
+    // Each blocking call runs on a thread, received here with a deadline
+    // naming the wait, so a pause that wrongly captured it fails here
+    // instead of hanging the test.
+    let (quick_tx, quick_rx) = mpsc::channel();
+    let quick_caller = Arc::clone(&ext);
+    thread::spawn(move || quick_tx.send(quick_caller.command("quick", "")));
+    assert_eq!(
+        Deadline::after(WAIT)
+            .recv(&quick_rx)
+            .expect("waited for the quick command")
+            .unwrap(),
+        "quick"
+    );
+    let (after_tx, after_rx) = mpsc::channel();
+    let after_caller = Arc::clone(&ext);
+    thread::spawn(move || after_tx.send(after_caller.hook("after_tool", 0, serde_json::json!({}))));
+    assert!(
+        Deadline::after(WAIT)
+            .recv(&after_rx)
+            .expect("waited for the after_tool hook")
+            .is_ok()
+    );
+    let (before_tx, before_rx) = mpsc::channel();
+    let before_caller = Arc::clone(&ext);
+    thread::spawn(move || {
+        before_tx.send(before_caller.hook("before_message", 0, serde_json::json!({})))
+    });
+    assert!(
+        Deadline::after(WAIT)
+            .recv(&before_rx)
+            .expect("waited for the before_message hook")
+            .is_ok()
+    );
     super::schedule::release_hook_completion();
 }
 
