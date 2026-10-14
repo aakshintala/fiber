@@ -263,7 +263,58 @@ fn an_open_body_ending_in_error_writes_once() {
 }
 
 #[test]
-fn a_zero_length_read_without_eof_extends_the_record() {
+fn an_open_body_finishes_at_eof_while_still_alive() {
+    let log = Capture::new(true);
+    let clock = fakes::clock::FakeClock::new();
+    let mut finish = record(&log, &clock, clock.now());
+    finish.sent(clock.now(), 200);
+    finish.set_redact(Secrets::default());
+    let body = std::io::Cursor::new(b"hello".to_vec());
+    let mut open = OpenBody::observed(Box::new(body), finish);
+    let mut text = String::new();
+    std::io::Read::read_to_string(&mut open, &mut text).unwrap();
+    assert_eq!(text, "hello");
+    assert_eq!(
+        log.lines().len(),
+        1,
+        "the end of the stream finishes the line while the reader is still alive"
+    );
+    assert_eq!(log.lines()[0].response_bytes, 5);
+    drop(open);
+    assert_eq!(
+        log.lines().len(),
+        1,
+        "the drop after the end writes nothing more"
+    );
+}
+
+#[test]
+fn an_empty_buffer_read_never_ends_the_record() {
+    let log = Capture::new(true);
+    let clock = fakes::clock::FakeClock::new();
+    let mut finish = record(&log, &clock, clock.now());
+    finish.sent(clock.now(), 200);
+    finish.set_redact(Secrets::default());
+    let body = std::io::Cursor::new(b"hi".to_vec());
+    let mut open = OpenBody::observed(Box::new(body), finish);
+    // A zero-length read without end-of-stream never ends the record.
+    assert_eq!(std::io::Read::read(&mut open, &mut []).unwrap(), 0);
+    assert!(log.lines().is_empty(), "no line on a zero-length read");
+    let mut text = String::new();
+    std::io::Read::read_to_string(&mut open, &mut text).unwrap();
+    assert_eq!(text, "hi");
+    assert_eq!(log.lines().len(), 1);
+    assert_eq!(log.lines()[0].response_bytes, 2);
+    drop(open);
+    assert_eq!(
+        log.lines().len(),
+        1,
+        "the drop after the end writes nothing more"
+    );
+}
+
+#[test]
+fn a_zero_length_read_with_a_nonempty_buffer_ends_the_record() {
     struct EmptyOnce {
         empty: bool,
     }
@@ -287,14 +338,21 @@ fn a_zero_length_read_without_eof_extends_the_record() {
     finish.set_redact(Secrets::default());
     let mut open = OpenBody::observed(Box::new(EmptyOnce { empty: true }), finish);
     let mut one = [0u8; 1];
-    // A zero-length read that is not the end extends the record.
+    // `Ok(0)` with a nonempty buffer is the end of the stream: it
+    // finishes the line while the reader is still alive.
     assert_eq!(std::io::Read::read(&mut open, &mut one).unwrap(), 0);
-    assert!(log.lines().is_empty(), "no line before the end");
-    assert_eq!(std::io::Read::read(&mut open, &mut one).unwrap(), 1);
+    assert_eq!(
+        log.lines().len(),
+        1,
+        "the end finishes the line while the reader is still alive"
+    );
+    assert_eq!(log.lines()[0].response_bytes, 0);
     drop(open);
-    let lines = log.lines();
-    assert_eq!(lines.len(), 1);
-    assert_eq!(lines[0].response_bytes, 1);
+    assert_eq!(
+        log.lines().len(),
+        1,
+        "the drop after the end writes nothing more"
+    );
 }
 
 #[test]

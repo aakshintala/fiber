@@ -260,6 +260,66 @@ fn head(response: &ureq::http::Response<ureq::Body>) -> (u16, Option<bool>) {
     (response.status().as_u16(), should_retry)
 }
 
+/// One non-2xx response's retry fields: the parsed `retry-after` wait,
+/// whether the header was present at all, and the `date` value. Both send
+/// paths read them the same way, so they share this parsing.
+struct StatusMeta {
+    retry_after: Option<f64>,
+    has_retry_after: bool,
+    date: Option<String>,
+}
+
+/// Reads one non-2xx response's retry fields from its headers.
+fn status_meta(headers: &ureq::http::HeaderMap) -> StatusMeta {
+    let header = |name: &str| {
+        headers
+            .get(name)
+            .and_then(|v| v.to_str().ok())
+            .map(|v| v.trim().to_ascii_lowercase())
+    };
+    StatusMeta {
+        retry_after: header("retry-after")
+            .and_then(|v| v.parse::<f64>().ok())
+            .filter(|wait| wait.is_finite() && *wait >= 0.0),
+        // Presence alone vetoes the body's wait: a `retry-after` header
+        // that is present but unparseable leaves `retry_after` unset.
+        has_retry_after: headers.get("retry-after").is_some(),
+        // The date keeps its case: `http_date` matches `GMT` exactly.
+        date: headers
+            .get("date")
+            .and_then(|v| v.to_str().ok())
+            .map(|v| v.trim().to_owned()),
+    }
+}
+
+/// The failure a non-2xx status reports for `body`: the status with the
+/// `retry-after` wait, falling back to the usage-limit body's reset when
+/// the reply carried no `retry-after` header. Both send paths share this
+/// fallback, so an observed failure matches the ordinary one field for
+/// field.
+fn status_failure(
+    status: u16,
+    body: String,
+    should_retry: Option<bool>,
+    url: &str,
+    meta: &StatusMeta,
+) -> Error {
+    let retry_after = meta.retry_after.or_else(|| {
+        if meta.has_retry_after {
+            None
+        } else {
+            usage_reset(&body, meta.date.as_deref())
+        }
+    });
+    Error::Status {
+        status,
+        body,
+        retry_after,
+        should_retry,
+        url: crate::error::target(url),
+    }
+}
+
 /// The failure a non-2xx status reports, reading the error body exactly as
 /// the ordinary path does: the same bounded lossy read, the same stalled
 /// timeout, the same empty fallback and the same `retry-after` wait.
@@ -269,24 +329,7 @@ fn status_error(
     should_retry: Option<bool>,
     status: u16,
 ) -> Error {
-    let header = |name: &str| {
-        response
-            .headers()
-            .get(name)
-            .and_then(|v| v.to_str().ok())
-            .map(|v| v.trim().to_ascii_lowercase())
-    };
-    let retry_after = header("retry-after")
-        .and_then(|v| v.parse::<f64>().ok())
-        .filter(|wait| wait.is_finite() && *wait >= 0.0);
-    // Presence alone vetoes the body's wait: a `retry-after` header
-    // that is present but unparseable leaves `retry_after` unset.
-    let has_retry_after = response.headers().get("retry-after").is_some();
-    let date = response
-        .headers()
-        .get("date")
-        .and_then(|v| v.to_str().ok())
-        .map(|v| v.trim().to_owned());
+    let meta = status_meta(response.headers());
     // A stalled error body is a dropped connection, retried as one,
     // keeping the `x-should-retry` header's effect: a timeout becomes
     // `Stalled`, carrying the veto when the headers sent one. Any
@@ -304,20 +347,7 @@ fn status_error(
             String::new()
         }
     };
-    let retry_after = retry_after.or_else(|| {
-        if has_retry_after {
-            None
-        } else {
-            usage_reset(&body, date.as_deref())
-        }
-    });
-    Error::Status {
-        status,
-        body,
-        retry_after,
-        should_retry,
-        url: crate::error::target(url),
-    }
+    status_failure(status, body, should_retry, url, &meta)
 }
 
 /// The body limit the observed error read shares with the ordinary one:
@@ -447,10 +477,10 @@ pub(crate) fn post_signed_observed(
 }
 
 /// As [`status_error`], counting the error body through the same bounded
-/// lossy read: the reader sits under the limit and the lossy decoding, so
-/// the body matches the ordinary path's byte for byte while the counter
-/// holds the transfer-decoded bytes actually read, including a partial
-/// body when the read fails.
+/// read: the counter sits under ureq's lossy buffering, so the body
+/// matches the ordinary path's byte for byte while the counter holds the
+/// transfer-decoded bytes actually read, including a partial body when
+/// the read fails.
 fn observed_status_error(
     response: ureq::http::Response<ureq::Body>,
     url: &str,
@@ -467,36 +497,27 @@ fn observed_status_error(
             bytes_read,
         })
     };
-    let header = |name: &str| {
-        response
-            .headers()
-            .get(name)
-            .and_then(|v| v.to_str().ok())
-            .map(|v| v.trim().to_ascii_lowercase())
-    };
-    let retry_after = header("retry-after")
-        .and_then(|v| v.parse::<f64>().ok())
-        .filter(|wait| wait.is_finite() && *wait >= 0.0);
-    let has_retry_after = response.headers().get("retry-after").is_some();
-    let date = response
-        .headers()
-        .get("date")
-        .and_then(|v| v.to_str().ok())
-        .map(|v| v.trim().to_owned());
-    // The same bounded lossy read the ordinary path makes, counted: the
-    // counter sits under the limit and the lossy decoding, so the body
-    // matches byte for byte while the count holds what was actually read.
+    let meta = status_meta(response.headers());
+    // Whether the body decodes lossy: ureq applies its lossy reader only
+    // to `text/*` responses, so the recorded body matches the ordinary
+    // path's byte for byte only under the same condition.
+    let is_text = is_text_body(response.headers());
+    // The same bounded read the ordinary path makes, counted beneath
+    // ureq's lossy buffering: the counter wraps the transfer-decoded
+    // reader without the lossy layer, whose 8-byte prefetch would swallow
+    // a short body into its buffer before a stall, and the bytes decode
+    // afterwards, so the body still matches byte for byte while the count
+    // holds what was actually read.
     let mut counted = CountingReader::new(
         response
             .into_body()
             .into_with_config()
             .limit(ERROR_BODY_LIMIT)
-            .lossy_utf8(true)
             .reader(),
     );
-    let mut text = String::new();
-    let body = match counted.read_to_string(&mut text) {
-        Ok(_) => text,
+    let mut raw = Vec::new();
+    let body = match counted.read_to_end(&mut raw) {
+        Ok(_) => decode_error_body(&raw, is_text),
         Err(error) => {
             let bytes_read = counted.count();
             if read_timed_out(&error) {
@@ -512,23 +533,71 @@ fn observed_status_error(
         }
     };
     let bytes_read = counted.count();
-    let retry_after = retry_after.or_else(|| {
-        if has_retry_after {
-            None
-        } else {
-            usage_reset(&body, date.as_deref())
-        }
-    });
     ObservedFailure {
-        error: Error::Status {
-            status,
-            body,
-            retry_after,
-            should_retry,
-            url: crate::error::target(url),
-        },
+        error: status_failure(status, body, should_retry, url, &meta),
         sent: sent(bytes_read),
     }
+}
+
+/// Whether an error body decodes lossy: ureq's lossy reader applies only
+/// to `text/*` responses, so anything else decodes strict, exactly as the
+/// ordinary path does.
+fn is_text_body(headers: &ureq::http::HeaderMap) -> bool {
+    headers
+        .get("content-type")
+        .and_then(|v| v.to_str().ok())
+        .and_then(|v| v.split(';').next())
+        .is_some_and(|mime| mime.starts_with("text/"))
+}
+
+/// Decodes error `raw` bytes exactly as the ordinary bounded lossy read
+/// does: `text/*` replaces invalid UTF-8, anything else must be valid
+/// UTF-8, else the body stays empty as today.
+fn decode_error_body(raw: &[u8], is_text: bool) -> String {
+    if is_text {
+        lossy_question(raw)
+    } else {
+        std::str::from_utf8(raw).unwrap_or("").to_owned()
+    }
+}
+
+/// Replaces invalid UTF-8 with `?`, one per byte, as ureq's lossy reader
+/// does: valid prefixes pass through, and bytes cut short of a character
+/// at the end of the body are replaced too, since the whole body is in
+/// hand and there is nothing more to wait for.
+fn lossy_question(raw: &[u8]) -> String {
+    let mut out = String::with_capacity(raw.len());
+    let mut rest = raw;
+    while !rest.is_empty() {
+        match std::str::from_utf8(rest) {
+            Ok(valid) => {
+                out.push_str(valid);
+                break;
+            }
+            Err(error) => {
+                let valid = error.valid_up_to();
+                let (prefix, tail) = rest.split_at(valid);
+                out.push_str(std::str::from_utf8(prefix).unwrap_or(""));
+                match error.error_len() {
+                    Some(len) => {
+                        for _ in 0..len {
+                            out.push('?');
+                        }
+                        rest = tail.get(len..).unwrap_or(b"");
+                    }
+                    // Cut short at the end of the body: every remaining
+                    // byte is replaced.
+                    None => {
+                        for _ in 0..tail.len() {
+                            out.push('?');
+                        }
+                        break;
+                    }
+                }
+            }
+        }
+    }
+    out
 }
 
 /// Whether a body read through the counted reader failed on a timeout: the

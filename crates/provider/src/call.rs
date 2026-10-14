@@ -270,8 +270,8 @@ impl Call {
     /// enriched with every fixed header value of this attempt.
     fn redact_with(&self, secrets: &Secrets) -> Secrets {
         let mut redact = secrets.clone();
-        for (_, value) in &self.headers {
-            redact.add(contract::Secret::new(value.clone()));
+        for (name, value) in &self.headers {
+            redact.add_header(name, value);
         }
         redact
     }
@@ -557,6 +557,16 @@ impl OpenBody {
 impl Read for OpenBody {
     fn read(&mut self, buf: &mut [u8]) -> std::io::Result<usize> {
         match self.inner.read(buf) {
+            // The end of the stream ends the record while the reader is
+            // still alive. A zero-length read without end-of-stream never
+            // ends it: an empty destination buffer cannot be the end.
+            Ok(0) if !buf.is_empty() => {
+                if let Some(record) = self.finish.as_mut() {
+                    record.set_bytes(self.bytes);
+                    record.finish();
+                }
+                Ok(0)
+            }
             Ok(n) => {
                 self.bytes = self.bytes.saturating_add(n as u64);
                 Ok(n)

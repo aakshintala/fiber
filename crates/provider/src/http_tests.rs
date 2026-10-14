@@ -1484,6 +1484,48 @@ fn a_stalled_error_body_keeps_status_and_bytes() {
 }
 
 #[test]
+fn a_stalled_text_error_body_counts_the_bytes_already_read() {
+    // Shorter than ureq's 8-byte lossy prefetch: the lossy reader pulls
+    // the prefix into its buffer before the stall, so a counter above it
+    // reports zero. Counting beneath the buffering keeps the byte read.
+    let server = fakes::ProviderServer::start([
+        fakes::Response::stall(500, "{", 1000).header("content-type", "text/plain")
+    ])
+    .unwrap();
+    let clock = fakes::clock::FakeClock::new();
+    let (sent, _) = observed(
+        format!("{}/v1", server.url()),
+        &[],
+        b"{}",
+        None,
+        limited_route(),
+        &std::sync::Arc::default(),
+        std::sync::Arc::clone(&clock) as std::sync::Arc<dyn contract::clock::Clock>,
+    );
+    let Err(failed) = sent else {
+        panic!("a stalled text 500 unexpectedly succeeded");
+    };
+    let crate::Error::Stalled { .. } = &failed.error else {
+        panic!(
+            "a stalled text 500 is a dropped connection: {:?}",
+            failed.error
+        );
+    };
+    let Some(dispatched) = failed.sent else {
+        panic!("the stalled failure reports no send");
+    };
+    assert_eq!(dispatched.status, Some(500), "the status is retained");
+    assert!(
+        dispatched.headers_at.is_some(),
+        "the header time is retained"
+    );
+    assert_eq!(
+        dispatched.bytes_read, 1,
+        "the byte read before the stall is counted"
+    );
+}
+
+#[test]
 fn an_observed_success_counts_the_body() {
     let server = fakes::ProviderServer::start([fakes::Response::status(200, "hi")]).unwrap();
     let clock = fakes::clock::FakeClock::new();
@@ -1866,6 +1908,86 @@ fn a_fixed_header_only_secret_is_redacted_from_the_recorded_path() {
         !lines[0].contains(secret),
         "the fixed-header secret is nowhere in the line: {}",
         lines[0]
+    );
+}
+
+#[test]
+fn a_fixed_bearer_token_is_redacted_from_the_recorded_path() {
+    // The bare token lives only inside a fixed `Authorization` value: no
+    // key, no signer, so only the call's fixed-header enrichment can
+    // redact the token the path carries raw and percent-encoded. The
+    // complete value alone never matches the bare token, so without the
+    // bare-credential enrichment the recorded path leaks it.
+    use contract::provider::ModelCall as _;
+    let secret = "fixed-bearer-token-value";
+    let server = fakes::ProviderServer::start([fakes::Response::status(200, "ok")]).unwrap();
+    let endpoint = crate::Endpoint {
+        provider: "fake".to_owned(),
+        model: "m".to_owned(),
+        base_url: server.url(),
+        key: None,
+        headers: vec![("authorization".to_owned(), format!("Bearer {secret}"))],
+        direct: true,
+        ..crate::Endpoint::default()
+    };
+    let request = contract::provider::ModelRequest {
+        system_prompt: "You are terse.".to_owned(),
+        tools: Vec::new(),
+        thinking: None,
+        tool_choice: "auto".to_owned(),
+        cache_lifetime: contract::events::CacheLifetime::OneHour,
+        cache_key: "session_1".to_owned(),
+        conversation: vec![contract::provider::Input::User {
+            text: "hi".to_owned(),
+            images: Vec::new(),
+        }],
+        sent_tools: None,
+        previous_end: None,
+        max_output_tokens: None,
+        session_dir: std::path::PathBuf::new(),
+    };
+    let encoded_secret: String = secret.bytes().map(|byte| format!("%{byte:02X}")).collect();
+    let url = format!("{}/v1/{secret}/files/{encoded_secret}", server.url());
+    let log = std::sync::Arc::new(RedactCapture {
+        lines: std::sync::Mutex::new(Vec::new()),
+    });
+    let clock = fakes::clock::FakeClock::new();
+    let observation = crate::RequestObservation::new(
+        std::sync::Arc::clone(&log) as std::sync::Arc<dyn contract::diag::DebugLog>,
+        std::sync::Arc::clone(&clock) as std::sync::Arc<dyn contract::clock::Clock>,
+        std::num::NonZeroU32::MIN,
+    )
+    .with_model("m".to_owned());
+    let call = crate::call::Call::new(
+        &endpoint,
+        &request,
+        url,
+        vec![("authorization".to_owned(), format!("Bearer {secret}"))],
+        b"{}".to_vec(),
+        plain_decode,
+    )
+    .observed(observation);
+    let reply = fakes::within("the call to return", CALL_WITHIN, move || {
+        let mut deltas = Vec::new();
+        let reply = call.run(&mut |delta| deltas.push(delta));
+        (reply, deltas)
+    });
+    assert!(reply.0.is_ok(), "the call reads: {:?}", reply.0);
+    let lines = log.serialized();
+    assert_eq!(lines.len(), 1);
+    assert!(
+        !lines[0].contains(secret),
+        "the bare bearer token is nowhere in the line: {}",
+        lines[0]
+    );
+    assert!(lines[0].contains("[redacted]"), "{}", lines[0]);
+    // The request itself is unchanged: the server still saw the secret.
+    let requests = server.requests();
+    assert_eq!(requests.len(), 1);
+    assert!(
+        requests[0].path.contains(secret),
+        "the request keeps its path: {}",
+        requests[0].path
     );
 }
 
