@@ -1828,11 +1828,8 @@ fn a_tty_job_past_its_timeout_fails_and_stop_cancels_it() {
     let dir = fakes::TempDir::new("fiber-shell-tty-timeout");
     let ready = Ready::new(dir.path());
     let jobs = FakeJobs::new(dir.path());
-    // One byte is one read, so it goes out in one `job_delta` and nothing
-    // follows it: a split read cannot hold a second chunk on the pacing
-    // hold, and the loop's next park after the send is the timeout (see
-    // #2330, where `echo partial` split across two reads and the loop
-    // parked on the held delta's deadline instead).
+    // One byte goes out in one `job_delta`, so no second chunk can arm
+    // the pacing hold: the loop's next park after the send is the timeout.
     let running = start_tty(
         dir.path().to_path_buf(),
         on_terminal(ready.path(), "printf S\nread x\n"),
@@ -1850,8 +1847,7 @@ fn a_tty_job_past_its_timeout_fails_and_stop_cancels_it() {
     let _receipt = Deadline::after(DEADLINE)
         .recv(&running.output)
         .expect("the receipt");
-    // The send carries the only byte, so this proves the pacing hold is
-    // armed with nothing left to hold back: the loop is out of output.
+    // The send carried the only byte, so the loop is out of output.
     assert!(
         jobs.deltas().wait_for_text("S", DEADLINE),
         "the byte never went out in a job_delta: {:?}",
