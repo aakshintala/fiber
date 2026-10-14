@@ -1185,7 +1185,7 @@ fn each_forced_teardown_position_around_connect_and_set_read_timeout() {
         "a read timeout set after the accept-side drop is EINVAL"
     );
     #[cfg(not(target_os = "macos"))]
-    let _ = timed;
+    drop(timed);
     dropped.release_tx.send(()).unwrap_or(());
     assert_eq!(
         Deadline::after(DEADLINE)
@@ -1212,7 +1212,7 @@ fn each_forced_teardown_position_around_connect_and_set_read_timeout() {
         "a read timeout set after the unlink is EINVAL"
     );
     #[cfg(not(target_os = "macos"))]
-    let _ = timed;
+    drop(timed);
     assert_eq!(
         Deadline::after(DEADLINE)
             .recv(&unlinked.done)
