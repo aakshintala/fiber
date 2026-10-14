@@ -1011,9 +1011,12 @@ fn an_idle_exiting_hub_answers_one_connection_eof_and_leaves_the_next_unanswered
         let environments = Arc::clone(&environments);
         move || environments.is_closed()
     });
-    // The first connection after the claim is dropped unanswered.
+    // The first connection after the claim is dropped unanswered. No
+    // socket-level read timeout: the claim already set `stop`, so the
+    // accept loop may drop the peer between `connect` and any `setsockopt`,
+    // which fails the call (`EINVAL` on macOS, see the forced-positions
+    // test below). The channel receive already bounds the wait.
     let first = UnixStream::connect(temp.socket()).expect("the first connection connects");
-    first.set_read_timeout(Some(DEADLINE)).unwrap();
     let (first_tx, first_rx) = mpsc::channel();
     thread::spawn(move || {
         let mut first = first;
@@ -1182,8 +1185,7 @@ fn each_forced_teardown_position_around_connect_and_set_read_timeout() {
     // listener stays bound: EOF on the clone proves the drop, so the
     // setup call runs strictly after it.
     let dropped = start_stalled_hub();
-    let racy =
-        UnixStream::connect(dropped.temp.socket()).expect("the drop position connects");
+    let racy = UnixStream::connect(dropped.temp.socket()).expect("the drop position connects");
     await_drop(&racy, "at the drop position");
     let timed = racy.set_read_timeout(Some(DEADLINE));
     // A read timeout set after the peer's drop is `EINVAL` where the
@@ -1207,8 +1209,7 @@ fn each_forced_teardown_position_around_connect_and_set_read_timeout() {
     // then the listener drop and unlink after the release. The missing
     // path proves the unlink, so the setup call runs strictly after it.
     let unlinked = start_stalled_hub();
-    let queued =
-        UnixStream::connect(unlinked.temp.socket()).expect("the unlink position connects");
+    let queued = UnixStream::connect(unlinked.temp.socket()).expect("the unlink position connects");
     await_drop(&queued, "at the unlink position");
     unlinked.release_tx.send(()).unwrap_or(());
     await_gone(&unlinked.temp, "at the unlink position");
