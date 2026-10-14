@@ -126,12 +126,6 @@ fn pair_returns_a_token_named_after_the_device_and_writes_its_record() {
         text(Deadline::after(DEADLINE), &client)["payload"]["result"]["clients"],
         1
     );
-    // The paired line follows the client-visible notice, so wait for it
-    // under a deadline instead of reading the log once.
-    crate::testkit::await_true("the hub logs the pairing", {
-        let home = temp.dir.clone();
-        move || super::log_has(&home, "phone was paired by local")
-    });
     let log = temp.log();
     assert!(log.contains("device_paired") && log.contains("phone was paired by local"));
     assert!(!log.contains(&token) && !log.contains(&code));
