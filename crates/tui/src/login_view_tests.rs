@@ -3144,3 +3144,33 @@ fn the_failed_reason_reads_error() {
         }
     }
 }
+
+#[test]
+fn notices_fill_only_the_remaining_budget() {
+    // Two models with one notice: at a budget of three the notice draws,
+    // and at exactly the models' two rows it is clipped away.
+    fn texts(rows: &[overlay::Row]) -> Vec<String> {
+        rows.iter()
+            .map(|row| {
+                row.spans
+                    .iter()
+                    .map(|span| span.content.to_string())
+                    .collect()
+            })
+            .collect()
+    }
+    let models = crate::configure::ReviewerModels {
+        models: ["m1".to_owned(), "m2".to_owned()].to_vec(),
+        selected: None,
+        notices: ["note-one".to_owned()].to_vec(),
+    };
+    let choices = super::Choices::open("acme".to_owned(), models);
+    let (rows, _) = super::choice_rows(&choices, 60, 3, 24);
+    assert_eq!(texts(&rows), ["  1) m1", "  2) m2", "note-one"]);
+    let (rows, _) = super::choice_rows(&choices, 60, 2, 24);
+    assert_eq!(
+        texts(&rows),
+        ["  1) m1", "  2) m2"],
+        "at exactly the budget no notice is added"
+    );
+}

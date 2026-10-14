@@ -751,7 +751,7 @@ fn post_store_reviewer(io: &mut LoginIo<'_>, name: &str, stored_line: &str) -> R
     let clock = Arc::clone(&io.clock);
     let discover = || reviewer_models(home, providers, name, Arc::clone(&clock));
     reviewer_stage_armed(
-        home, name, io.stdin, io.err, &discover, &stopped, terminal, None,
+        home, name, io.stdin, io.err, &discover, &stopped, terminal, &clock, None,
     )
 }
 
@@ -772,13 +772,16 @@ pub(crate) fn reviewer_stage(
     discover: &dyn Fn() -> Result<ReviewerModels, Failure>,
     stopped: &Arc<AtomicBool>,
     terminal: bool,
+    clock: Arc<dyn Clock>,
     probe: Option<&ClaimProbe>,
 ) -> Result<(), Failure> {
     // Armed before discovery, never reset: a SIGINT during the bounded
     // callback is recorded, and after the callback the stage takes the
     // cancelled outcome instead of presenting or saving.
     let _sig = arm_sigint(Arc::clone(stopped))?;
-    reviewer_stage_armed(home, name, input, err, discover, stopped, terminal, probe)
+    reviewer_stage_armed(
+        home, name, input, err, discover, stopped, terminal, &clock, probe,
+    )
 }
 
 /// The armed stage [`reviewer_stage`] and [`post_store_reviewer`] share:
@@ -794,6 +797,7 @@ fn reviewer_stage_armed(
     discover: &dyn Fn() -> Result<ReviewerModels, Failure>,
     stopped: &Arc<AtomicBool>,
     terminal: bool,
+    clock: &Arc<dyn Clock>,
     probe: Option<&ClaimProbe>,
 ) -> Result<(), Failure> {
     let choices = discover()?;
@@ -813,6 +817,7 @@ fn reviewer_stage_armed(
         err,
         &|| stopped.load(Ordering::SeqCst),
         terminal,
+        clock,
     )
     .map_err(terminal_failure)?
     {

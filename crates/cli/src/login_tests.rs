@@ -1178,6 +1178,7 @@ fn cancellation_during_discovery_keeps_everything_and_asks_nothing() {
             },
             &worker_stopped,
             false,
+            fakes::clock::FakeClock::new(),
             None,
         );
         done.send((result, String::from_utf8(err).unwrap()))
@@ -1248,6 +1249,7 @@ fn cancellation_before_the_claim_writes_nothing() {
             &|| Ok(choices(&["m1"])),
             &worker_stopped,
             false,
+            fakes::clock::FakeClock::new(),
             Some(&probe),
         );
         done.send((result, String::from_utf8(err).unwrap()))
@@ -1339,6 +1341,7 @@ fn a_claimed_save_survives_cancellation_before_the_write() {
                 &|| Ok(choices(&["m1"])),
                 &worker_stopped,
                 false,
+                fakes::clock::FakeClock::new(),
                 Some(&probe),
             );
             done.send((result, String::from_utf8(err).unwrap()))
@@ -1396,4 +1399,42 @@ fn a_claimed_save_survives_cancellation_before_the_write() {
             );
         }
     }
+}
+
+#[test]
+fn dropping_the_sig_guard_restores_sigint_handling() {
+    // The guard records SIGINT on the stage latch; dropping it must
+    // unregister, so a later SIGINT reaches only the earlier handler. The
+    // backup is registered after the guard, so its signal proves the
+    // guard's handler already ran for that raise.
+    let stopped = Arc::new(AtomicBool::new(false));
+    let guard = super::arm_sigint(Arc::clone(&stopped)).unwrap();
+    let (fired_tx, fired_rx) = mpsc::channel();
+    let mut backup = signal_hook::iterator::Signals::new([signal_hook::consts::SIGINT]).unwrap();
+    let backup_close = backup.handle();
+    let watcher = thread::spawn(move || {
+        for _ in 0..2 {
+            if backup.forever().next().is_none() {
+                break;
+            }
+            fired_tx.send(()).unwrap_or(());
+        }
+    });
+    let within = fakes::Deadline::after(Duration::from_secs(10));
+    signal_hook::low_level::raise(signal_hook::consts::SIGINT).unwrap();
+    within.recv_or_fail(&fired_rx, "the backup handler after the first raise");
+    assert!(
+        stopped.load(Ordering::SeqCst),
+        "the armed guard records SIGINT"
+    );
+    drop(guard);
+    stopped.store(false, Ordering::SeqCst);
+    signal_hook::low_level::raise(signal_hook::consts::SIGINT).unwrap();
+    within.recv_or_fail(&fired_rx, "the backup handler after the drop");
+    assert!(
+        !stopped.load(Ordering::SeqCst),
+        "a dropped guard records nothing"
+    );
+    backup_close.close();
+    watcher.join().expect("the backup watcher joined");
 }

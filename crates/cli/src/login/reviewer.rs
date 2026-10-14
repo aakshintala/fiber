@@ -5,7 +5,7 @@
 //! and neither starts any other extension.
 
 use std::io::{self, BufRead, Write};
-use std::os::fd::{AsFd, OwnedFd};
+use std::os::fd::{AsFd, BorrowedFd, OwnedFd};
 use std::path::Path;
 use std::process::Command;
 use std::sync::Arc;
@@ -239,7 +239,13 @@ struct NonblockingStdin {
 
 impl NonblockingStdin {
     fn new() -> io::Result<Self> {
-        let fd = io::stdin().as_fd().try_clone_to_owned()?;
+        Self::open(io::stdin().as_fd())
+    }
+
+    /// `fd` nonblocking until the guard drops: the terminal the prompt
+    /// reads, or any fd a test drives, such as a PTY slave.
+    fn open(fd: BorrowedFd<'_>) -> io::Result<Self> {
+        let fd = fd.try_clone_to_owned()?;
         let saved = fcntl_getfl(&fd).map_err(io::Error::from)?;
         fcntl_setfl(&fd, saved.union(OFlags::NONBLOCK)).map_err(io::Error::from)?;
         Ok(Self { fd, saved })
@@ -252,17 +258,36 @@ impl Drop for NonblockingStdin {
     }
 }
 
-/// Waits for terminal input until [`PROMPT_POLL`] passes: the prompt's
-/// recheck point for the cancellation latch. Wakes early on input, a
-/// signal, or a hangup; every outcome returns to the latch check, and
-/// only a wait failure of its own surfaces.
-fn wait_for_input() -> io::Result<()> {
-    let stdin = io::stdin();
-    let timeout = Timespec::try_from(PROMPT_POLL).unwrap_or_default();
-    let mut waiting = [PollFd::new(&stdin, PollFlags::IN)];
-    match poll(&mut waiting, Some(&timeout)) {
-        Ok(_) | Err(Errno::INTR) => Ok(()),
-        Err(e) => Err(io::Error::from(e)),
+/// One poll slice inside [`wait_ready`]: short enough that the latch
+/// recheck stays prompt on the process clock, long enough that a fake
+/// clock reaches the budget in a few advances.
+const POLL_SLICE: Duration = Duration::from_millis(5);
+
+/// Waits for terminal input until [`PROMPT_POLL`] passes on `clock`: the
+/// prompt's recheck point for the cancellation latch. Polls `fd` in short
+/// slices without blocking, sleeping each slice on the login's injected
+/// clock, so a test drives the wait with its fake clock instead of
+/// reading the process one. Any event ends the wait early: input, a
+/// hangup or an error all return to the latch check, and only a wait
+/// failure of its own surfaces.
+fn wait_ready(fd: &impl AsFd, clock: &Arc<dyn Clock>) -> io::Result<()> {
+    let start = clock.now();
+    loop {
+        let mut waiting = [PollFd::new(fd, PollFlags::IN)];
+        match poll(
+            &mut waiting,
+            Some(&Timespec::try_from(Duration::ZERO).unwrap_or_default()),
+        ) {
+            Ok(_) | Err(Errno::INTR) => {}
+            Err(e) => return Err(io::Error::from(e)),
+        }
+        let ready = waiting
+            .first()
+            .is_some_and(|polled| !polled.revents().is_empty());
+        if ready || clock.now().saturating_duration_since(start) >= PROMPT_POLL {
+            return Ok(());
+        }
+        clock.sleep(POLL_SLICE);
     }
 }
 
@@ -297,6 +322,7 @@ pub(crate) fn prompt_choice(
     err: &mut dyn Write,
     stopped: &dyn Fn() -> bool,
     terminal: bool,
+    clock: &Arc<dyn Clock>,
 ) -> io::Result<Pick> {
     if choices.models.is_empty() {
         return Ok(Pick::Cancelled);
@@ -347,7 +373,7 @@ pub(crate) fn prompt_choice(
                     Ok(0) => true,
                     Ok(_) => line.ends_with('\n'),
                     Err(e) if e.kind() == io::ErrorKind::WouldBlock => {
-                        wait_for_input()?;
+                        wait_ready(&io::stdin(), clock)?;
                         continue;
                     }
                     Err(e) if e.kind() == io::ErrorKind::Interrupted => continue,

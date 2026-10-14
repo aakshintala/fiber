@@ -9,15 +9,20 @@
     reason = "test code; a failure is the test's"
 )]
 
+use std::collections::VecDeque;
 use std::fs;
-use std::io::Cursor;
+use std::io::{BufRead, Cursor, ErrorKind, Write};
+use std::os::fd::AsFd;
 use std::path::PathBuf;
-use std::sync::Arc;
-use std::time::Duration;
+use std::process::Command;
+use std::sync::{Arc, Mutex, Weak, mpsc};
+use std::thread;
+use std::time::{Duration, Instant, SystemTime};
 
 use config::{Secret, store_credential};
 use contract::ErrorCode;
-use extensions::Providers;
+use contract::clock::Wake;
+use extensions::{Browser, Providers};
 use fakes::{ProviderServer, Response};
 use serde_json::{Value, json};
 
@@ -652,8 +657,9 @@ fn an_unknown_provider_is_a_usage_error() {
     assert!(failure.message.contains("`nope`"), "{}", failure.message);
 }
 
-/// Asks `input` of `choices`, returning the pick and the terminal text.
+/// Asks `input` of `choices` on a pipe, returning the pick and the terminal text.
 fn ask(name: &str, choices: &ReviewerModels, input: &str) -> (Pick, String) {
+    let clock: Arc<dyn contract::clock::Clock> = fakes::clock::FakeClock::new();
     let mut err = Vec::new();
     let pick = prompt_choice(
         name,
@@ -662,6 +668,7 @@ fn ask(name: &str, choices: &ReviewerModels, input: &str) -> (Pick, String) {
         &mut err,
         &|| false,
         false,
+        &clock,
     )
     .unwrap();
     (pick, String::from_utf8(err).unwrap())
@@ -718,6 +725,7 @@ fn invalid_answers_ask_again_until_a_listed_choice_eof_or_cancel() {
     let (pick, _) = ask("acme", &listed(), "");
     assert_eq!(pick, Pick::Cancelled, "EOF saves nothing");
     let mut err = Vec::new();
+    let clock: Arc<dyn contract::clock::Clock> = fakes::clock::FakeClock::new();
     let pick = prompt_choice(
         "acme",
         &listed(),
@@ -725,6 +733,7 @@ fn invalid_answers_ask_again_until_a_listed_choice_eof_or_cancel() {
         &mut err,
         &|| true,
         false,
+        &clock,
     )
     .unwrap();
     assert_eq!(pick, Pick::Cancelled, "cancellation saves nothing");
@@ -840,4 +849,363 @@ fn a_broken_existing_document_fails_naming_the_key_and_keeps_the_credential() {
             "{existing}: the stored credential stays"
         );
     }
+}
+
+#[test]
+fn a_provider_name_that_parses_to_the_wrong_segments_is_refused_before_any_write() {
+    // `a"."b` displays as `providers."a"."b".reviewer_model`, which parses
+    // to four segments instead of the key's three: the guard must refuse
+    // it, not accept every path the parser returns.
+    let setup = Setup::new();
+    setup.install_data("acme", &["m1"]);
+    fs::write(
+        setup.home().join("config.json"),
+        r#"{"providers": {"acme": {"reviewer_model": "old-m"}}}"#,
+    )
+    .unwrap();
+    let before = fs::read(setup.home().join("config.json")).unwrap();
+    let failure = set_reviewer(&setup.home(), "a\".\"b", "m1").unwrap_err();
+    assert_eq!(failure.code, ErrorCode::ConfigInvalid);
+    assert!(
+        failure.message.contains("providers."),
+        "the failure names the key: {}",
+        failure.message
+    );
+    assert_eq!(
+        fs::read(setup.home().join("config.json")).unwrap(),
+        before,
+        "a refused name writes nothing"
+    );
+}
+
+#[test]
+fn the_discovery_browser_reports_unattended() {
+    // Discovery never opens a browser: the seam answers unattended, so a
+    // callback that branches on it takes the headless path.
+    assert!(!super::NoBrowser.attended());
+}
+
+/// What `run_command` sleeps between child polls: every gated sleep is this.
+const COMMAND_POLL: Duration = Duration::from_millis(10);
+
+/// How long one gated wait lasts.
+const GATE_WAIT: Duration = Duration::from_secs(10);
+
+/// A clock the test advances by hand: each sleep signals its length, then
+/// waits for the test's advance, so time moves only after the operation
+/// shows it is waiting on it. Past the test's disconnect the requested
+/// sleep lands at once, so a stranded worker still ends instead of hanging
+/// the suite.
+struct GateClock {
+    origin: Instant,
+    offset: Mutex<Duration>,
+    slept: Mutex<mpsc::Sender<Duration>>,
+    release: Mutex<mpsc::Receiver<Duration>>,
+}
+
+impl GateClock {
+    fn clock(
+        slept: mpsc::Sender<Duration>,
+        release: mpsc::Receiver<Duration>,
+    ) -> Arc<dyn contract::clock::Clock> {
+        Arc::new(Self {
+            origin: fakes::clock::FakeClock::new().origin(),
+            offset: Mutex::new(Duration::ZERO),
+            slept: Mutex::new(slept),
+            release: Mutex::new(release),
+        })
+    }
+}
+
+impl contract::clock::Clock for GateClock {
+    fn now(&self) -> Instant {
+        let offset = *self.offset.lock().unwrap();
+        self.origin.checked_add(offset).unwrap_or(self.origin)
+    }
+
+    fn wall(&self) -> SystemTime {
+        SystemTime::UNIX_EPOCH
+    }
+
+    fn sleep(&self, duration: Duration) {
+        self.slept.lock().unwrap().send(duration).unwrap_or(());
+        let advance = self.release.lock().unwrap().recv().unwrap_or(duration);
+        *self.offset.lock().unwrap() += advance;
+    }
+
+    fn wait_until(&self, _until: Option<Instant>, wait: &mut dyn FnMut(Option<Duration>)) {
+        wait(Some(Duration::ZERO));
+    }
+
+    fn subscribe(&self, _waker: Weak<dyn Wake>) {}
+}
+
+/// A `sleep 5` child under the gated clock: `slept` signals each wait,
+/// `release` advances it, and `done` carries the outcome. The child
+/// outlives every correct run's kill, so a worker the test lets go still
+/// ends on its own past the disconnect.
+struct Gated {
+    clock: Arc<dyn contract::clock::Clock>,
+    slept: mpsc::Receiver<Duration>,
+    release: mpsc::Sender<Duration>,
+    done: mpsc::Receiver<Result<(), ErrorKind>>,
+    worker: Option<thread::JoinHandle<()>>,
+    start: Instant,
+}
+
+impl Gated {
+    fn run(timeout: Duration) -> Self {
+        let (slept_tx, slept) = mpsc::channel();
+        let (release, release_rx) = mpsc::channel();
+        let (done_tx, done) = mpsc::channel();
+        let clock = GateClock::clock(slept_tx, release_rx);
+        let worker_clock = Arc::clone(&clock);
+        let start = clock.now();
+        let worker = thread::spawn(move || {
+            let mut command = Command::new("sleep");
+            command.arg("5");
+            let outcome = super::run_command(&mut command, timeout, &worker_clock);
+            done_tx
+                .send(outcome.map(|_| ()).map_err(|e| e.kind()))
+                .unwrap_or(());
+        });
+        Self {
+            clock,
+            slept,
+            release,
+            done,
+            worker: Some(worker),
+            start,
+        }
+    }
+
+    /// Takes the next sleep signal and advances it by `advance`.
+    fn advance(&self, within: &fakes::Deadline, advance: Duration) {
+        let slept = within.recv_or_fail(&self.slept, "a sleep while the child runs");
+        assert_eq!(
+            slept, COMMAND_POLL,
+            "run_command polls every {COMMAND_POLL:?}"
+        );
+        self.release.send(advance).unwrap();
+    }
+
+    fn join(&mut self) {
+        if let Some(worker) = self.worker.take() {
+            worker.join().expect("the command worker joined");
+        }
+    }
+}
+
+#[test]
+fn run_command_times_out_after_the_deadline_not_before() {
+    // Nine 10 ms advances leave 90 ms on a 100 ms deadline: the worker is
+    // still waiting, with no result. The tenth lands exactly on it.
+    let within = fakes::Deadline::after(GATE_WAIT);
+    let timeout = Duration::from_millis(100);
+    let mut gated = Gated::run(timeout);
+    for _ in 0..9 {
+        gated.advance(&within, COMMAND_POLL);
+        assert!(
+            gated.done.try_recv().is_err(),
+            "no timeout before the deadline"
+        );
+    }
+    gated.advance(&within, COMMAND_POLL);
+    let outcome = within.recv_or_fail(&gated.done, "the timeout at the deadline");
+    assert_eq!(outcome.unwrap_err(), ErrorKind::TimedOut);
+    assert_eq!(
+        gated.clock.now().duration_since(gated.start),
+        timeout,
+        "the timeout fires at exactly the deadline"
+    );
+    gated.join();
+}
+
+#[test]
+fn run_command_keeps_waiting_before_the_deadline() {
+    // Thirty milliseconds in, the child is still awaited: another sleep
+    // arrives and no result does. A jump past the deadline then ends it.
+    let within = fakes::Deadline::after(GATE_WAIT);
+    let mut gated = Gated::run(Duration::from_millis(100));
+    for _ in 0..3 {
+        gated.advance(&within, COMMAND_POLL);
+    }
+    assert!(
+        gated.done.try_recv().is_err(),
+        "no timeout before the deadline"
+    );
+    gated.advance(&within, Duration::from_secs(1));
+    let outcome = within.recv_or_fail(&gated.done, "the timeout past the deadline");
+    assert_eq!(outcome.unwrap_err(), ErrorKind::TimedOut);
+    gated.join();
+}
+
+#[test]
+fn run_command_fires_just_past_a_near_boundary() {
+    // Twenty milliseconds is under a 25 ms deadline, so the child is still
+    // awaited; the next 10 ms slice crosses it and the timeout fires.
+    let within = fakes::Deadline::after(GATE_WAIT);
+    let mut gated = Gated::run(Duration::from_millis(25));
+    gated.advance(&within, COMMAND_POLL);
+    gated.advance(&within, COMMAND_POLL);
+    assert!(
+        gated.done.try_recv().is_err(),
+        "just under the deadline the child is still awaited"
+    );
+    gated.advance(&within, COMMAND_POLL);
+    let outcome = within.recv_or_fail(&gated.done, "the timeout just past the deadline");
+    assert_eq!(outcome.unwrap_err(), ErrorKind::TimedOut);
+    assert_eq!(
+        gated.clock.now().duration_since(gated.start),
+        Duration::from_millis(30)
+    );
+    gated.join();
+}
+
+#[test]
+fn dropping_the_stdin_guard_restores_its_flags() {
+    // A real PTY slave: nonblocking goes on under the guard and the saved
+    // flags come back when it drops.
+    let (_master, slave_path) = fakes::pty::open().unwrap();
+    let slave = fs::OpenOptions::new()
+        .read(true)
+        .write(true)
+        .open(&slave_path)
+        .unwrap();
+    let before = rustix::fs::fcntl_getfl(&slave).unwrap();
+    assert!(!before.contains(rustix::fs::OFlags::NONBLOCK));
+    {
+        let _guard = super::NonblockingStdin::open(slave.as_fd()).unwrap();
+        assert!(
+            rustix::fs::fcntl_getfl(&slave)
+                .unwrap()
+                .contains(rustix::fs::OFlags::NONBLOCK)
+        );
+    }
+    assert_eq!(rustix::fs::fcntl_getfl(&slave).unwrap(), before);
+}
+
+#[test]
+fn waiting_for_input_blocks_for_the_poll_budget() {
+    // The slave stays open with nothing written: no event is ready, so the
+    // wait lasts the whole budget on the fake clock.
+    let clock: Arc<dyn contract::clock::Clock> = fakes::clock::FakeClock::new();
+    let (master, slave_path) = fakes::pty::open().unwrap();
+    let _slave = fs::OpenOptions::new()
+        .read(true)
+        .write(true)
+        .open(&slave_path)
+        .unwrap();
+    let start = clock.now();
+    super::wait_ready(&master, &clock).unwrap();
+    assert_eq!(
+        clock.now().duration_since(start),
+        super::PROMPT_POLL,
+        "the wait blocks for the whole budget"
+    );
+}
+
+#[test]
+fn ready_input_returns_before_the_poll_budget() {
+    // A byte on the slave readies the master at once: the wait ends
+    // without sleeping the clock.
+    let clock: Arc<dyn contract::clock::Clock> = fakes::clock::FakeClock::new();
+    let (master, slave_path) = fakes::pty::open().unwrap();
+    let mut slave = fs::OpenOptions::new()
+        .read(true)
+        .write(true)
+        .open(&slave_path)
+        .unwrap();
+    slave.write_all(b"x").unwrap();
+    let start = clock.now();
+    super::wait_ready(&master, &clock).unwrap();
+    assert_eq!(clock.now().duration_since(start), Duration::ZERO);
+}
+
+/// One scripted terminal read.
+enum Step {
+    /// `WouldBlock`: the prompt waits and reads on.
+    Block,
+    /// `Interrupted`: the prompt reads on.
+    Intr,
+    /// Any other error: the prompt surfaces it.
+    Fail,
+    /// A line, newline included.
+    Line(&'static str),
+}
+
+/// A terminal reader playing `steps` in order, then EOF.
+struct Script {
+    steps: VecDeque<Step>,
+}
+
+impl std::io::Read for Script {
+    fn read(&mut self, _buf: &mut [u8]) -> std::io::Result<usize> {
+        Ok(0)
+    }
+}
+
+impl BufRead for Script {
+    fn read_line(&mut self, buf: &mut String) -> std::io::Result<usize> {
+        match self.steps.pop_front() {
+            Some(Step::Block) => Err(std::io::Error::new(ErrorKind::WouldBlock, "busy")),
+            Some(Step::Intr) => Err(std::io::Error::new(ErrorKind::Interrupted, "cut in")),
+            Some(Step::Fail) => Err(std::io::Error::other("broken")),
+            Some(Step::Line(line)) => {
+                buf.push_str(line);
+                Ok(line.len())
+            }
+            None => Ok(0),
+        }
+    }
+
+    fn fill_buf(&mut self) -> std::io::Result<&[u8]> {
+        Ok(&[])
+    }
+
+    fn consume(&mut self, _amount: usize) {}
+}
+
+/// Asks `choices` on the terminal through `steps`, returning the outcome
+/// and the terminal text.
+fn ask_term(choices: &ReviewerModels, steps: Vec<Step>) -> (std::io::Result<Pick>, String) {
+    let clock: Arc<dyn contract::clock::Clock> = fakes::clock::FakeClock::new();
+    let mut err = Vec::new();
+    let mut input = Script {
+        steps: steps.into_iter().collect(),
+    };
+    let pick = prompt_choice(
+        "acme",
+        choices,
+        &mut input,
+        &mut err,
+        &|| false,
+        true,
+        &clock,
+    );
+    (pick, String::from_utf8(err).unwrap())
+}
+
+#[test]
+fn a_would_block_retries_until_a_listed_answer() {
+    // A would-block is not an answer: the prompt waits on the terminal and
+    // reads the listed number next.
+    let (pick, out) = ask_term(&listed(), vec![Step::Block, Step::Line("2\n")]);
+    assert_eq!(pick.unwrap(), Pick::Chosen("org/fast".to_owned()));
+    assert!(out.contains("Reviewer for acme:"), "{out}");
+}
+
+#[test]
+fn an_interrupted_read_retries_until_a_listed_answer() {
+    let (pick, _) = ask_term(&listed(), vec![Step::Intr, Step::Line("1\n")]);
+    assert_eq!(pick.unwrap(), Pick::Chosen("m1".to_owned()));
+}
+
+#[test]
+fn an_unexpected_error_surfaces_instead_of_retrying() {
+    // Any other error ends the prompt: it must not retry into the listed
+    // answer waiting behind it.
+    let (pick, _) = ask_term(&listed(), vec![Step::Fail, Step::Line("1\n")]);
+    let error = pick.unwrap_err();
+    assert_eq!(error.kind(), ErrorKind::Other);
 }

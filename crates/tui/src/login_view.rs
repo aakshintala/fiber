@@ -1178,8 +1178,9 @@ fn choice_rows(
     let mut rows: Vec<overlay::Row> = Vec::new();
     // One selectable model row stays visible while the body has room:
     // the stale notice gives up its last row rather than hiding every
-    // choice an invisible Enter could still save.
-    let reserve = usize::from(!choices.models.is_empty() && budget > 0);
+    // choice an invisible Enter could still save. At a zero budget
+    // nothing draws either way, so the reserve needs no budget check.
+    let reserve = usize::from(!choices.models.is_empty());
     let stale_cap = budget.saturating_sub(reserve);
     if let Some(saved) = choices.selected.as_deref().filter(|_| choices.is_stale()) {
         for row in wrapped_rows(
