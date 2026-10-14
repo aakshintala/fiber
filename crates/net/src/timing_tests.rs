@@ -18,7 +18,7 @@ use ureq::unversioned::transport::{
     Buffers, ConnectionDetails, Connector, Either, LazyBuffers, NextTimeout, Transport,
 };
 
-use super::{KeepSocket, open, open_timed};
+use super::{KeepSocket, connect_bound, io_bound, open, open_timed};
 use crate::{Keep, LIMITS};
 
 /// One test's wall-clock bound. Every wait names it.
@@ -30,6 +30,7 @@ struct Call {
     op: Op,
     tool: Option<String>,
     started: bool,
+    start: Instant,
 }
 
 /// A capture Timing: records each invocation and each owned guard's drop
@@ -53,10 +54,12 @@ impl Capture {
     fn timing(self: &Arc<Self>) -> Timing {
         let me = Arc::clone(self);
         Arc::new(move |op, tool, started| {
+            let start = me.clock.now();
             me.calls.lock().unwrap().push(Call {
                 op,
                 tool: tool.map(str::to_owned),
                 started: started.is_some(),
+                start,
             });
             let ends = Arc::clone(&me.ends);
             let clock = Arc::clone(&me.clock);
@@ -71,6 +74,14 @@ impl Capture {
 
     fn ends(&self) -> usize {
         self.ends.lock().unwrap().len()
+    }
+
+    /// The start the `index`th invocation stamped, with every drop stamp.
+    fn scope(&self, index: usize) -> (Instant, Vec<Instant>) {
+        (
+            self.calls.lock().unwrap()[index].start,
+            self.ends.lock().unwrap().clone(),
+        )
     }
 }
 
@@ -847,4 +858,397 @@ fn a_no_proxy_bypass_times_the_direct_socket() {
     );
     assert_eq!(capture.calls(), 1, "the direct socket is the one scope");
     assert_eq!(capture.ends(), 1, "the direct scope drops once");
+}
+
+/// A keep that advances the fake clock at fixed points: the second
+/// address's stop check parks past its clock check until the test
+/// advances 3 ms, and `keep` parks again until the test advances 4 ms.
+/// The clock moves only on the test's signal, so the scope is exactly
+/// 7 ms: a late start would read 4 or 0, an early drop would exclude the
+/// keep. When `refuse` is set, `keep` still parks first and refuses after
+/// the release, so the error path keeps the same scope.
+struct GatedKeep {
+    clock: Arc<fakes::clock::FakeClock>,
+    capture: Arc<Capture>,
+    stops: AtomicUsize,
+    refuse: bool,
+    stop_ack: mpsc::Sender<()>,
+    stop_release: Mutex<mpsc::Receiver<()>>,
+    keep_ack: mpsc::Sender<()>,
+    keep_release: Mutex<mpsc::Receiver<()>>,
+}
+
+impl std::fmt::Debug for GatedKeep {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("GatedKeep").finish_non_exhaustive()
+    }
+}
+
+impl GatedKeep {
+    /// Parks past a clock check until the test advances the clock and
+    /// releases the wait: the acknowledgement runs after the check, so
+    /// the advance can only land inside the scope.
+    fn park(&self, ack: &mpsc::Sender<()>, release: &Mutex<mpsc::Receiver<()>>) {
+        self.clock.wait_until(
+            Some(self.clock.now() + Duration::from_secs(60)),
+            &mut |_| {
+                assert_eq!(
+                    self.capture.ends(),
+                    0,
+                    "the guard is alive across the clock wait"
+                );
+                match ack.send(()) {
+                    Ok(()) | Err(_) => {}
+                }
+                Deadline::after(EACH_WITHIN)
+                    .recv(&release.lock().unwrap())
+                    .expect("the test advances the clock wait");
+            },
+        );
+    }
+}
+
+impl Keep for GatedKeep {
+    fn keep(&self, _socket: &TcpStream) -> io::Result<()> {
+        self.park(&self.keep_ack, &self.keep_release);
+        if self.refuse {
+            return Err(io::Error::other("a gated keep that refuses for the test"));
+        }
+        Ok(())
+    }
+
+    fn is_stopped(&self) -> bool {
+        if self.stops.fetch_add(1, Ordering::SeqCst) == 1 {
+            self.park(&self.stop_ack, &self.stop_release);
+        }
+        false
+    }
+}
+
+/// The channels both gated waits run through: each acknowledgement the
+/// worker sends and each release the test returns, all under [`EACH_WITHIN`].
+struct Gates {
+    stop_ack_rx: mpsc::Receiver<()>,
+    stop_release_tx: mpsc::Sender<()>,
+    keep_ack_rx: mpsc::Receiver<()>,
+    keep_release_tx: mpsc::Sender<()>,
+}
+
+fn gated_keep(capture: &Arc<Capture>, refuse: bool) -> (Arc<GatedKeep>, Gates) {
+    let (stop_ack_tx, stop_ack_rx) = mpsc::channel();
+    let (stop_release_tx, stop_release_rx) = mpsc::channel();
+    let (keep_ack_tx, keep_ack_rx) = mpsc::channel();
+    let (keep_release_tx, keep_release_rx) = mpsc::channel();
+    let keep = Arc::new(GatedKeep {
+        clock: Arc::clone(&capture.clock),
+        capture: Arc::clone(capture),
+        stops: AtomicUsize::new(0),
+        refuse,
+        stop_ack: stop_ack_tx,
+        stop_release: Mutex::new(stop_release_rx),
+        keep_ack: keep_ack_tx,
+        keep_release: Mutex::new(keep_release_rx),
+    });
+    (
+        keep,
+        Gates {
+            stop_ack_rx,
+            stop_release_tx,
+            keep_ack_rx,
+            keep_release_tx,
+        },
+    )
+}
+
+#[test]
+fn the_scope_covers_the_attempts_and_the_keep() {
+    let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+    let live = listener.local_addr().unwrap();
+    let refused = SocketAddr::from(fakes::refused::ADDR);
+    let capture = Capture::new();
+    let clock = Arc::clone(&capture.clock);
+    let (keep, gates) = gated_keep(&capture, false);
+    let timing = capture.timing();
+    let worker = Arc::clone(&capture);
+    let (done_tx, done_rx) = mpsc::channel();
+    std::thread::spawn(move || {
+        let uri: ureq::http::Uri = "http://127.0.0.1/".parse().unwrap();
+        let config = crate::config().proxy(None).build();
+        let resolver = DefaultResolver::default();
+        let mut addrs =
+            ureq::unversioned::resolver::ArrayVec::from_fn(|_| SocketAddr::from(([0, 0, 0, 0], 0)));
+        addrs.truncate(0);
+        addrs.push(refused);
+        addrs.push(live);
+        let origin = worker.clock.origin();
+        let details = ConnectionDetails {
+            uri: &uri,
+            addrs,
+            config: &config,
+            request_level: false,
+            resolver: &resolver,
+            now: ureq::unversioned::transport::time::Instant::Exact(origin),
+            timeout: wait(),
+            current_time: Arc::new(move || {
+                ureq::unversioned::transport::time::Instant::Exact(origin)
+            }),
+            run_connector: Arc::new(|_| Err(ureq::Error::HostNotFound)),
+        };
+        let socket = KeepSocket::new(keep, LIMITS).with_timing(timing);
+        let outcome = match socket.connect(&details, None) {
+            Ok(Some(Either::B(_socket))) => {
+                // The connector dropped the guard after the keep, before
+                // any buffer existed: no scope survives inside the socket.
+                assert_eq!(worker.ends(), 1, "the scope ends before any buffer exists");
+                Ok(())
+            }
+            Ok(_) => Err("the connector answered without a socket".to_owned()),
+            Err(error) => Err(error.to_string()),
+        };
+        match done_tx.send(outcome) {
+            Ok(()) | Err(_) => {}
+        }
+    });
+    Deadline::after(EACH_WITHIN)
+        .recv(&gates.stop_ack_rx)
+        .expect("the second stop check parks");
+    clock.advance(Duration::from_millis(3));
+    gates.stop_release_tx.send(()).unwrap();
+    Deadline::after(EACH_WITHIN)
+        .recv(&gates.keep_ack_rx)
+        .expect("the keep parks");
+    clock.advance(Duration::from_millis(4));
+    gates.keep_release_tx.send(()).unwrap();
+    let outcome = Deadline::after(EACH_WITHIN).recv_or_fail(&done_rx, "the gated open to return");
+    outcome.expect("the gated group connects");
+    assert_eq!(capture.calls(), 1, "two addresses are one scope");
+    let (start, ends) = capture.scope(0);
+    assert_eq!(ends.len(), 1, "the scope drops once, after the return");
+    assert_eq!(
+        ends[0].checked_duration_since(start),
+        Some(Duration::from_millis(7)),
+        "3 ms of attempts plus 4 ms of keep"
+    );
+}
+
+#[test]
+fn a_refused_keep_keeps_the_same_scope() {
+    let server = fakes::ProviderServer::start([fakes::Response::status(200, "{}")]).unwrap();
+    let live = socket_of(&server);
+    let refused = SocketAddr::from(fakes::refused::ADDR);
+    let capture = Capture::new();
+    let clock = Arc::clone(&capture.clock);
+    let (keep, gates) = gated_keep(&capture, true);
+    let timing = capture.timing();
+    let (done_tx, done_rx) = mpsc::channel();
+    std::thread::spawn(move || {
+        let error = crate::agent_observed(
+            crate::config().proxy(None).build(),
+            keep,
+            FixedAddrs(vec![refused, live]),
+            LIMITS,
+            timing,
+        )
+        .get(format!("http://{live}/"))
+        .call()
+        .map(|_| ())
+        .unwrap_err();
+        match done_tx.send(error.to_string()) {
+            Ok(()) | Err(_) => {}
+        }
+    });
+    Deadline::after(EACH_WITHIN)
+        .recv(&gates.stop_ack_rx)
+        .expect("the second stop check parks");
+    clock.advance(Duration::from_millis(3));
+    gates.stop_release_tx.send(()).unwrap();
+    Deadline::after(EACH_WITHIN)
+        .recv(&gates.keep_ack_rx)
+        .expect("the keep parks");
+    clock.advance(Duration::from_millis(4));
+    gates.keep_release_tx.send(()).unwrap();
+    let failed = Deadline::after(EACH_WITHIN).recv_or_fail(&done_rx, "the refused call to return");
+    assert!(
+        failed.contains("a gated keep that refuses for the test"),
+        "the keep's refusal is the error: {failed}"
+    );
+    assert_eq!(capture.calls(), 1, "the refused group started one scope");
+    assert!(
+        server.requests().is_empty(),
+        "entered-but-refused work sent nothing"
+    );
+    let (start, ends) = capture.scope(0);
+    assert_eq!(ends.len(), 1, "the refusal drops its scope once");
+    assert_eq!(
+        ends[0].checked_duration_since(start),
+        Some(Duration::from_millis(7)),
+        "the error path keeps the keep's 4 ms"
+    );
+}
+
+#[test]
+fn a_none_answer_is_final_for_the_group() {
+    let calls = Arc::new(AtomicUsize::new(0));
+    let worker = Arc::clone(&calls);
+    // Returning `None` stamps nothing and reads no clock: there is no
+    // guard, so the single invocation below is the whole diagnostic work.
+    let none: Timing = Arc::new(move |_, _, _| {
+        worker.fetch_add(1, Ordering::SeqCst);
+        None
+    });
+    let refused = SocketAddr::from(fakes::refused::ADDR);
+    let timed = fakes::within(
+        "a none-timed open past two refusals to fail",
+        EACH_WITHIN,
+        move || {
+            open_timed(&[refused, refused], &(), LIMITS, wait(), Some(&none))
+                .map(|_| ())
+                .unwrap_err()
+        },
+    );
+    let plain = fakes::within(
+        "a plain open past two refusals to fail",
+        EACH_WITHIN,
+        move || {
+            open(&[refused, refused], &(), LIMITS, wait())
+                .map(|_| ())
+                .unwrap_err()
+        },
+    );
+    assert_eq!(
+        format!("{timed:?}"),
+        format!("{plain:?}"),
+        "a None scope changes no error"
+    );
+    assert_eq!(
+        calls.load(Ordering::SeqCst),
+        1,
+        "a None answer is never re-read for another address"
+    );
+    let missing = fakes::within(
+        "an untimed open past two refusals to fail",
+        EACH_WITHIN,
+        move || {
+            open_timed(&[refused, refused], &(), LIMITS, wait(), None)
+                .map(|_| ())
+                .unwrap_err()
+        },
+    );
+    assert_eq!(
+        format!("{missing:?}"),
+        format!("{plain:?}"),
+        "no callable performs no diagnostic work"
+    );
+}
+
+/// A ureq deadline of `after` with `reason`.
+fn ureq_after(
+    after: ureq::unversioned::transport::time::Duration,
+    reason: ureq::Timeout,
+) -> NextTimeout {
+    NextTimeout { after, reason }
+}
+
+#[test]
+fn connect_bound_prefers_the_strictly_shorter_ureq_deadline() {
+    use ureq::unversioned::transport::time::Duration as Bound;
+    let limit = Duration::from_secs(15);
+    let (bound, ureq_wins) = connect_bound(
+        limit,
+        ureq_after(
+            Bound::Exact(Duration::from_secs(14)),
+            ureq::Timeout::Connect,
+        ),
+    );
+    assert_eq!(
+        bound,
+        Duration::from_secs(14),
+        "the shorter ureq bound wins"
+    );
+    assert!(ureq_wins, "a ureq timeout keeps its reason");
+    let (bound, ureq_wins) = connect_bound(
+        limit,
+        ureq_after(Bound::Exact(limit), ureq::Timeout::Connect),
+    );
+    assert_eq!(bound, limit, "an equal bound keeps the limit");
+    assert!(
+        !ureq_wins,
+        "an equal bound reports the limit's error, not ureq's"
+    );
+    let (bound, ureq_wins) = connect_bound(
+        limit,
+        ureq_after(
+            Bound::Exact(Duration::from_secs(16)),
+            ureq::Timeout::Connect,
+        ),
+    );
+    assert_eq!(bound, limit, "the longer ureq bound loses");
+    assert!(!ureq_wins, "the limit's error reports");
+    let (bound, ureq_wins) = connect_bound(limit, wait());
+    assert_eq!(bound, limit, "no ureq bound keeps the limit");
+    assert!(!ureq_wins, "no ureq bound reports the limit's error");
+}
+
+#[test]
+fn io_bound_prefers_the_strictly_shorter_ureq_deadline() {
+    use ureq::unversioned::transport::time::Duration as Bound;
+    let idle = Duration::from_secs(300);
+    let (bound, ureq_wins) = io_bound(
+        idle,
+        ureq_after(
+            Bound::Exact(Duration::from_secs(299)),
+            ureq::Timeout::Global,
+        ),
+    );
+    assert_eq!(
+        bound,
+        Duration::from_secs(299),
+        "the shorter ureq bound wins"
+    );
+    assert!(ureq_wins, "a ureq timeout keeps its reason");
+    let (bound, ureq_wins) = io_bound(idle, ureq_after(Bound::Exact(idle), ureq::Timeout::Global));
+    assert_eq!(bound, idle, "an equal bound keeps the idle limit");
+    assert!(!ureq_wins, "an equal bound stalls with the idle error");
+    let (bound, ureq_wins) = io_bound(
+        idle,
+        ureq_after(
+            Bound::Exact(Duration::from_secs(301)),
+            ureq::Timeout::Global,
+        ),
+    );
+    assert_eq!(bound, idle, "the longer ureq bound loses");
+    assert!(!ureq_wins, "the idle error reports");
+    let (bound, ureq_wins) = io_bound(idle, wait());
+    assert_eq!(bound, idle, "no ureq bound keeps the idle limit");
+    assert!(!ureq_wins, "no ureq bound reports the idle error");
+}
+
+#[test]
+fn an_observed_agent_stalls_under_the_same_idle() {
+    let server =
+        fakes::ProviderServer::start([fakes::Response::stall(200, "data: {}\n\n", 100_000)])
+            .unwrap();
+    let url = server.url();
+    let capture = Capture::new();
+    let timing = capture.timing();
+    let limits = crate::Limits::new(Duration::from_secs(1), Duration::from_millis(200))
+        .expect("short limits build");
+    let agent = crate::agent_observed(
+        crate::config().proxy(None).build(),
+        Arc::new(()),
+        DefaultResolver::default(),
+        limits,
+        timing,
+    );
+    let error = get(agent, url).unwrap_err();
+    assert!(
+        crate::timed_out(&error),
+        "the observed stall times out: {error}"
+    );
+    assert!(
+        error.to_string().contains("no bytes for 200ms"),
+        "the observed stall carries the idle bound: {error}"
+    );
+    assert_eq!(capture.calls(), 1, "the stalled group started one scope");
+    assert_eq!(capture.ends(), 1, "the stall drops its scope once");
 }
