@@ -725,8 +725,9 @@ fn terminal(
         Arc::clone(&reads),
     );
     // The viewer's copies live under Fiber home: cloned before the
-    // connect closure moves it.
+    // connect closure moves it, as is the diagnostic writer's.
     let launch_home = home.clone();
+    let diag_home = home.clone();
     let connect: tui::Connect = Box::new(move || connect_hub(&home, &fiber, hub_clock.as_ref()));
     let identity = doors::project(&workspace);
     let mut launch = launch::launch(
@@ -741,7 +742,38 @@ fn terminal(
     launch.models = Some(models);
     launch.configure = Some(seam);
     launch.open_at = open_at;
-    tui::run(tty, launch, connect, Box::new(crash::attach), clock)
+    match tui::run(
+        tty,
+        launch,
+        connect,
+        Box::new(crash::attach),
+        Arc::clone(&clock),
+    ) {
+        Ok(code) => code,
+        Err(error) => {
+            let failure = failed(error.code(), error.to_string());
+            // The terminal never started: one `error` line in
+            // `logs/tui-<pid>.log` keeps the failure diagnosable, as a
+            // startup failure does (`docs/state.md`, "Diagnostic logs").
+            let code = serde_json::to_value(&failure.code)
+                .ok()
+                .and_then(|value| value.as_str().map(str::to_owned))
+                .unwrap_or_else(|| "other".to_owned());
+            let level = if config::diagnostics_debug(&config) {
+                log::diag::Level::Debug
+            } else {
+                log::diag::Level::Info
+            };
+            log::diag::Diag::new(
+                &diag_home,
+                log::diag::Process::Tui,
+                level,
+                Arc::clone(&clock),
+            )
+            .line(log::diag::Severity::Error, None, &code, &failure.message);
+            fail(failure)
+        }
+    }
 }
 
 /// Starts `fiber hub serve` detached, as every client of the hub does when

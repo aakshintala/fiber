@@ -226,3 +226,113 @@ of the sample, and it flags 31% of `allow` cases.
 The owner rules on it; this ticket changes no doc. If OpenAI Decisions
 becomes measurable without a new billed account, rerun `results/sample.txt`
 through it before reopening the question.
+
+## Importing foreign transcripts as session logs (#2265)
+
+`convert_session.py` turns one Claude Code transcript (JSONL, one entry
+per line) into ordinary session directories the loop's own jigs accept:
+one per conversation branch (`s_main`, plus `s_side` when subagent
+entries exist). This is separate from #2244 above: that ticket
+reconstructed reviewer *inputs* from the owner's transcripts in Python
+and sent case texts to an external API; this one converts transcripts
+into session *logs* for the loop's own `review` jig, commits no owner
+data, and keeps every conversion output outside the repository.
+
+```sh
+fixture_dir=$(mktemp -d)
+python3 research/decision-models/convert_session.py --format claude \
+  research/decision-models/fixtures/claude-synthetic.jsonl "$fixture_dir/out"
+for s in "$fixture_dir"/out/*/; do target/debug/examples/check "$s"; done
+target/debug/examples/review --keep-all "$fixture_dir"/out/s_main
+rm -rf "$fixture_dir"
+```
+
+The committed fixture (`fixtures/claude-synthetic.jsonl`) is synthetic,
+written from scratch: fixed timestamps and ids, absolute synthetic
+workspace paths, a genuine person text, tool-use/result correlation, a
+session-origin peer text, a subagent hand-back, and a real
+`compact_boundary`. No owner transcript, transformed owner session,
+credential, or case text is committed, and converted outputs are never
+staged. Retention is local-only: the script reads its input file and
+writes the destination directory, nothing else.
+
+Source shapes, as observed in `extract_cases.py`'s `process_file` and
+`research/tui-prototype/src/bin/from_claude.rs` (a `compact_boundary`
+system entry is a handoff; `isCompactSummary` text is never a prompt):
+
+| Source | Session log |
+|---|---|
+| `user` text (`message.content` str or `text` blocks), not `isMeta`, not `isCompactSummary` | driver message in a `turn_started` |
+| `assistant` `tool_use{id,name,input}` | `tool_call_requested`, preserving name and arguments |
+| `tool_result{tool_use_id}` matching a request | `tool_call_started` with the table's declared effects |
+| `SendMessage{text}` | session-origin `steering_applied`, never driver input and never a reviewed call |
+| sidechain `SubagentHandback{text}` | `tool_call_requested` without a start in `s_side`, plus a session-origin message in `s_main` |
+| `system`/`compact_boundary` | completed `handoff_completed` in the entry's own branch |
+| `assistant` prose, `isCompactSummary`, unmatched results | skipped, never person input |
+| any other tool name | skipped and counted, naming only the source type |
+
+Mapped effects (`DeclaredEffects` shape, paths from the named input key):
+`Bash` executes, irreversible; `Edit`/`Write` writes, reversible, paths
+from `file_path`; `Read` reads, reversible, paths from `file_path`;
+`WebSearch`/`WebFetch` network, reversible. The session workspace is
+preserved from the transcript's `cwd` entries, which must all agree and
+be absolute; a missing, relative, or conflicting workspace fails naming
+its file and line. A corrupt line fails naming its file and line,
+quoting no transcript text, and an existing destination is refused
+rather than overwritten.
+
+A pi transcript is a version-3 session header (`id`, `cwd`) with
+parent-linked message and compaction entries. `--format pi` converts
+one into a single active-branch session (`s_pi`): the last entry's
+parent-linked ancestors, oldest first, so siblings off that branch are
+never merged into one conversation. Custom entries (extension timing
+stamps), branch summaries and extension messages are not person input
+by default. A minimal synthetic example:
+
+```json
+{"type": "session", "version": 3, "id": "s_synthetic", "cwd": "/synthetic/pi-import"}
+{"type": "message", "id": "m_1", "parentId": null, "message": {"role": "user", "content": [{"type": "text", "text": "check the synthetic tests"}]}}
+{"type": "message", "id": "m_2", "parentId": "m_1", "message": {"role": "assistant", "content": [{"type": "text", "text": "on it"}]}}
+{"type": "compaction", "id": "m_3", "parentId": "m_2", "summary": "synthetic checkpoint", "firstKeptEntryId": "m_2", "tokensBefore": 900}
+```
+
+Only the person's messages on the active branch become driver input; the
+compaction entry becomes the handoff boundary. No owner pi session is
+committed; verification uses small synthetic inputs like the above,
+written outside the repository:
+
+```sh
+fixture_dir=$(mktemp -d)
+cat > "$fixture_dir/pi-synthetic.jsonl" <<'EOF'
+{"type":"session","version":3,"id":"s_synthetic","cwd":"/synthetic/pi-import"}
+{"type":"message","id":"m_1","parentId":null,"message":{"role":"user","content":[{"type":"text","text":"check the synthetic tests"}]}}
+{"type":"message","id":"m_2","parentId":"m_1","message":{"role":"assistant","content":[{"type":"toolCall","id":"call_1","name":"bash","arguments":{"command":"echo synthetic"}}]}}
+{"type":"message","id":"m_3","parentId":"m_2","message":{"role":"toolResult","toolCallId":"call_1","toolName":"bash","content":[{"type":"text","text":"synthetic"}]}}
+{"type":"compaction","id":"m_4","parentId":"m_3","summary":"synthetic checkpoint","firstKeptEntryId":"m_5","tokensBefore":900}
+{"type":"message","id":"m_5","parentId":"m_4","message":{"role":"user","content":[{"type":"text","text":"continue after the checkpoint"}]}}
+EOF
+python3 research/decision-models/convert_session.py --format pi \
+  "$fixture_dir/pi-synthetic.jsonl" "$fixture_dir/out"
+target/debug/examples/check "$fixture_dir/out/s_pi"
+target/debug/examples/review --keep-all "$fixture_dir/out/s_pi"
+rm -rf "$fixture_dir"
+```
+
+Pi source shapes and their session log mapping:
+
+| Source | Session log |
+|---|---|
+| `message` `role: user` text blocks on the active branch | driver message in a `turn_started` |
+| `message` `role: assistant` `toolCall{id,name,arguments}` | `tool_call_requested`, preserving name and arguments |
+| `message` `role: toolResult` with `toolCallId` matching a request | `tool_call_started` with the table's declared effects |
+| `compaction` (`summary`, `firstKeptEntryId`, `tokensBefore`) | completed `handoff_completed`; the summary is never person input |
+| `custom`/`custom_message`, model bookkeeping, `system` messages, assistant prose or thinking, unmatched results | skipped, never person input |
+| entries off the active branch | skipped and counted, never merged in |
+| any other tool name | skipped and counted, naming only the source type |
+
+Mapped pi effects (`DeclaredEffects` shape, paths from the named
+arguments key): `bash` executes, irreversible; `read`/`grep`/`find`/
+`ffgrep`/`ls` reads, reversible, paths from `path`; `edit`/`write`
+writes, reversible, paths from `path`. The header `cwd` is the session
+workspace and must be absolute. A missing header, a bad id or parent
+link, or a parent cycle fails naming its file and line.

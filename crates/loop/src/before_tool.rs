@@ -27,16 +27,21 @@ pub(crate) type Started = (Map<String, Value>, Vec<String>);
 /// `rewritten` is `Some(changed_by)` exactly when `arguments` are a hook's,
 /// and `effects` are then the effects function's answer for those
 /// arguments.
+///
+/// Public as [`crate::ReviewPrepared`] for the `review` jig's replay,
+/// which rebuilds one from a source log's recorded declared effects
+/// (`docs/testing.md`, "Jigs"); the loop itself builds one per call it
+/// judges.
 #[derive(Clone)]
-pub(crate) struct Prepared {
+pub struct Prepared {
     /// The tool the call runs on.
-    pub(crate) tool: Arc<dyn Tool>,
+    pub tool: Arc<dyn Tool>,
     /// The arguments the call runs with.
-    pub(crate) arguments: Map<String, Value>,
+    pub arguments: Map<String, Value>,
     /// The effects function's answer for `arguments`.
-    pub(crate) effects: Effects,
+    pub effects: Effects,
     /// The extensions that rewrote the arguments, in run order.
-    pub(crate) rewritten: Option<Vec<String>>,
+    pub rewritten: Option<Vec<String>>,
 }
 
 impl From<Checked> for Prepared {

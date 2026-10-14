@@ -8,8 +8,11 @@ use contract::{ActionId, Seq};
 use serde_json::Value;
 
 /// What one reviewed item is.
+///
+/// Public for the `review` jig's replay (`docs/testing.md`, "Jigs");
+/// the renderer below is the only writer.
 #[derive(Debug, Clone, PartialEq)]
-pub(crate) enum Shown {
+pub enum Shown {
     /// The agent's tool call, by its action.
     Call(ActionId),
     /// A person's message, by the line that holds it.
@@ -18,8 +21,11 @@ pub(crate) enum Shown {
 
 /// One item of what the reviewer is shown (`docs/permissions.md`, "What it
 /// is shown").
+///
+/// Public for the `review` jig's replay (`docs/testing.md`, "Jigs");
+/// the renderer below is the only writer.
 #[derive(Debug, Clone, PartialEq)]
-pub(crate) struct Reviewed {
+pub struct Reviewed {
     /// What this item is: a call or a person's message.
     pub shown: Shown,
     /// The item as the reviewer reads it.
@@ -34,7 +40,10 @@ pub(crate) struct Reviewed {
 /// every tool call. A completed handoff drops every tool call and keeps
 /// every person item, releasing the calls' allocation: the reviewer's
 /// input follows the context window, not the transcript.
-pub(crate) fn render_reviewed(
+///
+/// Public for the `review` jig's replay, which folds a source log through
+/// the same renderer (`docs/testing.md`, "Jigs").
+pub fn render_reviewed(
     reviewed: &mut Vec<Reviewed>,
     event: &Event,
     action: Option<&ActionId>,

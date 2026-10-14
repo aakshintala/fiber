@@ -80,6 +80,8 @@ mod util;
 mod warm;
 
 pub use before_message::OnRewrite;
+pub use before_tool::Prepared as ReviewPrepared;
+pub use calls::Decided as ReviewDecision;
 pub use cancel::TurnCancel;
 pub use caps::{ResultCaps, capped};
 pub use commands::{Commands, commands, skills};
@@ -92,7 +94,7 @@ pub use process::{Exited, extensions_loaded, fiber_exited, fiber_started, mcp_se
 pub use prompt::{DisabledReader, PromptInputs};
 pub use resume::{Resumed, resumed};
 pub use retry::Retry;
-pub use reviewer::{BlockLimits, NO_MODEL_MESSAGE, Reviewer};
+pub use reviewer::{BlockLimits, NO_MODEL_MESSAGE, Reviewed, Reviewer, Shown, render_reviewed};
 pub use rewind::{Rewound, latest_name, rewind_note};
 pub use skill_reader::SkillReader;
 pub use skill_set::SkillSet;
@@ -202,7 +204,11 @@ pub struct Loop {
     /// person's messages, releasing the calls' allocation, so the resident
     /// state follows the context window, not the transcript
     /// (`docs/performance.md`, "What a budget covers").
-    reviewed: Vec<reviewer::Reviewed>,
+    ///
+    /// Public for the `review` jig's replay, which restores the exact
+    /// reviewer input a source log's line had (`docs/testing.md`,
+    /// "Jigs"); the loop itself renders it as its lines are written.
+    pub reviewed: Vec<reviewer::Reviewed>,
     /// The reviewer's cache key: the session's id plus `reviewer`
     /// (`docs/prompt-cache.md`, "Rules for other areas").
     reviewer_key: String,
@@ -222,7 +228,11 @@ pub struct Loop {
     turn_blocked: Option<Failure>,
     /// The workspace as `session_started` records it, for the reviewer's
     /// effects item.
-    workspace_label: String,
+    ///
+    /// Public for the `review` jig's replay, which labels the effects
+    /// item with the source session's workspace (`docs/testing.md`,
+    /// "Jigs").
+    pub workspace_label: String,
     /// Whether a person can answer an approval; `false` for `fiber ask`.
     answerable: bool,
     /// The session's MCP prompt rows and how to run one, if `main`

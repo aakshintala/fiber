@@ -97,7 +97,11 @@ impl Transcript<'_> {
 impl crate::Loop {
     /// Writes `event` to the log and renders it into the conversation and
     /// the reviewer's transcript, through the one [`Transcript`] path.
-    pub(crate) fn write(
+    ///
+    /// Public for the `review` jig's replay, which renders a source log's
+    /// handoff boundary through the same path (`docs/testing.md`,
+    /// "Jigs"); the jig never writes to the source directory.
+    pub fn write(
         &mut self,
         event: &Event,
         turn: Option<&TurnId>,

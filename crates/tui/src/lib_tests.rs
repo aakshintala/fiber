@@ -547,7 +547,8 @@ fn run_quits_on_double_ctrl_c_with_the_reader_blocked() {
     std::thread::Builder::new()
         .name("lib-run".to_owned())
         .spawn(move || {
-            let code = super::run(slave, launch(), once(hub, hello), Box::new(|_| {}), clock);
+            let code = super::run(slave, launch(), once(hub, hello), Box::new(|_| {}), clock)
+                .unwrap_or_else(|error| panic!("run: {error}"));
             match done.send(code) {
                 Ok(()) | Err(_) => {}
             }
@@ -623,7 +624,8 @@ fn run_shows_a_failed_connect_and_still_quits_restored() {
                 Box::new(|| Err(io::Error::other("refused"))),
                 Box::new(|_| {}),
                 fakes::clock::FakeClock::new(),
-            );
+            )
+            .unwrap_or_else(|error| panic!("run: {error}"));
             done.send(code).unwrap_or(());
         })
         .unwrap_or_else(|err| panic!("spawn: {err}"));
@@ -683,7 +685,8 @@ fn run_redraws_on_sigwinch_at_the_new_size() {
                 Box::new(|| Err(io::Error::other("refused"))),
                 Box::new(|_| {}),
                 fakes::clock::FakeClock::new(),
-            );
+            )
+            .unwrap_or_else(|error| panic!("run: {error}"));
             done.send(code).unwrap_or(());
         })
         .unwrap_or_else(|err| panic!("spawn: {err}"));
@@ -750,7 +753,8 @@ fn run_returns_one_when_the_tty_cannot_be_set_up() {
                 Box::new(|| Err(io::Error::other("unused"))),
                 Box::new(|_| {}),
                 fakes::clock::FakeClock::new(),
-            );
+            )
+            .unwrap_or_else(|error| panic!("run: {error}"));
             done.send(code).unwrap_or(());
         })
         .unwrap_or_else(|err| panic!("spawn: {err}"));
@@ -758,6 +762,54 @@ fn run_returns_one_when_the_tty_cannot_be_set_up() {
         .recv(&finished)
         .unwrap_or_else(|err| panic!("waited {DEADLINE:?} for run to return: {err}"));
     assert_eq!(code, 1);
+}
+
+#[test]
+fn failed_reader_start_returns_io_failed() {
+    let pair = open();
+    let slave = pair
+        .slave
+        .try_clone()
+        .unwrap_or_else(|err| panic!("dup: {err}"));
+    // The watcher drains what the first frame writes, so no write blocks.
+    let _frames = watch(&pair.main, Vec::new());
+    let (done, finished) = mpsc::channel();
+    std::thread::Builder::new()
+        .name("lib-run".to_owned())
+        .spawn(move || {
+            let result = super::run_with(
+                slave,
+                launch(),
+                Box::new(|| Err(io::Error::other("refused"))),
+                Box::new(|_| {}),
+                fakes::clock::FakeClock::new(),
+                |tty, tx| {
+                    super::Reader::spawn_with(
+                        tty,
+                        tx,
+                        |_| Err(io::Error::other("no reader")),
+                        io::pipe,
+                        |builder, body| builder.spawn(body),
+                    )
+                },
+            );
+            done.send(result).unwrap_or(());
+        })
+        .unwrap_or_else(|err| panic!("spawn: {err}"));
+    let result = Deadline::after(DEADLINE)
+        .recv(&finished)
+        .unwrap_or_else(|err| panic!("waited {DEADLINE:?} for run to return: {err}"));
+    let error = result.unwrap_err();
+    assert_eq!(error.code(), contract::ErrorCode::IoFailed);
+    assert!(
+        error.to_string().starts_with("terminal:"),
+        "the message names the terminal: {:?}",
+        error.to_string()
+    );
+    // The failure return restores the terminal: the slave is cooked again.
+    assert!(is_cooked(
+        &rustix::termios::tcgetattr(&pair.slave).unwrap_or_else(|err| panic!("attr: {err}"))
+    ));
 }
 
 /// A review request offering the rule `npm test`, as the hub relays it.
@@ -1139,7 +1191,10 @@ fn hand_over_gives_the_terminal_and_its_input_to_the_program() {
         .unwrap_or_else(|err| panic!("dup: {err}"));
     let (mut lp, _) = new_loop(TestBackend::new(60, 12), Some(tty));
     let (tx, rx) = mpsc::channel();
-    lp.reader = super::Reader::spawn(&pair.slave, tx);
+    lp.reader = Some(
+        super::Reader::spawn(&pair.slave, tx)
+            .unwrap_or_else(|error| panic!("the reader started: {error}")),
+    );
     lp.parser.set_kitty();
     let slave = pair
         .slave
@@ -1810,7 +1865,8 @@ fn spawn_run_with_launch(
                 once(hub, hello),
                 Box::new(|_| {}),
                 fakes::clock::FakeClock::new(),
-            );
+            )
+            .unwrap_or_else(|error| panic!("run: {error}"));
             match done.send(code) {
                 Ok(()) | Err(_) => {}
             }
@@ -2517,7 +2573,8 @@ fn a_cached_read_after_the_first_frame_fills_the_catalogue() {
                 Box::new(|| Err(io::Error::other("refused"))),
                 Box::new(|_| {}),
                 fakes::clock::FakeClock::new(),
-            );
+            )
+            .unwrap_or_else(|error| panic!("run: {error}"));
             match done.send(code) {
                 Ok(()) | Err(_) => {}
             }
@@ -2665,7 +2722,8 @@ fn with_no_model_the_picker_opens_at_start() {
     std::thread::Builder::new()
         .name("lib-run".to_owned())
         .spawn(move || {
-            let code = super::run(slave, launch, once(hub, hello()), Box::new(|_| {}), clock);
+            let code = super::run(slave, launch, once(hub, hello()), Box::new(|_| {}), clock)
+                .unwrap_or_else(|error| panic!("run: {error}"));
             match done.send(code) {
                 Ok(()) | Err(_) => {}
             }
@@ -2722,7 +2780,8 @@ fn with_a_model_home_opens_as_before() {
     std::thread::Builder::new()
         .name("lib-run".to_owned())
         .spawn(move || {
-            let code = super::run(slave, launch(), once(hub, hello()), Box::new(|_| {}), clock);
+            let code = super::run(slave, launch(), once(hub, hello()), Box::new(|_| {}), clock)
+                .unwrap_or_else(|error| panic!("run: {error}"));
             match done.send(code) {
                 Ok(()) | Err(_) => {}
             }

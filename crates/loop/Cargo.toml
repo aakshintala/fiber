@@ -20,9 +20,12 @@ thiserror.workspace = true
 fakes = { path = "../fakes" }
 proptest.workspace = true
 
-# The jig (docs/testing.md, "Jigs").
+# The jigs (docs/testing.md, "Jigs").
 [[example]]
 name = "turn"
+
+[[example]]
+name = "review"
 
 [lints]
 workspace = true

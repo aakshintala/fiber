@@ -93,7 +93,10 @@ impl Loop {
     /// selection as `reviewer_kept`, and resets the reviewer's input to
     /// those messages, word for word, then what follows. Only the numbers
     /// leave a selection reply: no reviewer text enters a later prompt.
-    pub(crate) fn reviewer_handoff(&mut self, turn: &TurnId) -> Result<(), Error> {
+    ///
+    /// Public for the `review` jig's replay, which replays a source log's
+    /// handoffs through the same selection (`docs/testing.md`, "Jigs").
+    pub fn reviewer_handoff(&mut self, turn: &TurnId) -> Result<(), Error> {
         let (endpoint, window) = match &self.reviewer {
             Ok(reviewer) => (
                 ReviewEndpoint {
