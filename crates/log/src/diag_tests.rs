@@ -760,3 +760,148 @@ fn a_frame_within_budget_writes_nothing_and_one_past_writes_sixteen() {
     let line: serde_json::Value = serde_json::from_str(other.trim_end()).unwrap();
     assert_eq!(line["data"]["ms"], 16, "the budget binds frames only");
 }
+
+/// Every operation with and without a tool: the op and the tool the line
+/// carries.
+fn every_timed_case() -> Vec<(Op, Option<&'static str>, &'static str)> {
+    use Op::*;
+    let bare = [
+        (StartupConfig, "startup.config"),
+        (StartupExtensions, "startup.extensions"),
+        (StartupPreamble, "startup.preamble"),
+        (StartupSocket, "startup.socket"),
+        (StartupRouting, "startup.routing"),
+        (RoutingSwitch, "routing.switch"),
+        (TuiLogRead, "tui.log_read"),
+        (TuiTranscript, "tui.transcript"),
+        (TuiFirstRender, "tui.first_render"),
+        // `TuiFrame` at rest writes no line; the frame test above times it.
+        (LogAppend, "log.append"),
+        (LogFsync, "log.fsync"),
+        (ToolPermission, "tool.permission"),
+        (ToolReviewer, "tool.reviewer"),
+        (ToolHooks, "tool.hooks"),
+        (ToolRun, "tool.run"),
+        (TurnRequest, "turn.request"),
+        (TurnModelCall, "turn.model_call"),
+        (TurnHandoff, "turn.handoff"),
+        (McpConnect, "mcp.connect"),
+        (JobsStart, "jobs.start"),
+        (WorktreeCreate, "worktree.create"),
+        (WorktreeRemove, "worktree.remove"),
+        (PictureRun, "picture.run"),
+        (HubSessionStart, "hub.session_start"),
+        (HubResume, "hub.resume"),
+        (HubSubscribeReplay, "hub.subscribe_replay"),
+        (NetConnect, "net.connect"),
+        (CliSessionsSearch, "cli.sessions_search"),
+    ];
+    let mut cases = Vec::new();
+    for (op, want) in bare {
+        cases.push((op, None, want));
+        cases.push((op, Some("shell"), want));
+    }
+    use contract::diag::HookChain::*;
+    for (chain, want) in [
+        (SessionStart, "hook.session_start"),
+        (TurnStart, "hook.turn_start"),
+        (BeforeMessage, "hook.before_message"),
+        (BeforeModelCall, "hook.before_model_call"),
+        (TurnEnd, "hook.turn_end"),
+    ] {
+        cases.push((Hook(chain), None, want));
+        cases.push((Hook(chain), Some("shell"), want));
+    }
+    cases
+}
+
+/// Asserts the closed `data` key set on one parsed `op_timing` line: `op`
+/// and `ms`, plus `tool` exactly when the guard carried one. Every new
+/// timing test passes its lines through here.
+fn assert_timing_data(line: &serde_json::Value, op: &str, tool: Option<&str>) {
+    assert_eq!(line["code"], "op_timing");
+    let data = line["data"].as_object().expect("data is an object");
+    let mut keys: Vec<&str> = data.keys().map(String::as_str).collect();
+    keys.sort_unstable();
+    let mut want = vec!["ms", "op"];
+    if tool.is_some() {
+        want.push("tool");
+    }
+    assert_eq!(keys, want, "closed data keys: {line}");
+    assert_eq!(data["op"], op);
+    assert!(data["ms"].is_u64(), "{line}");
+    match tool {
+        Some(tool) => assert_eq!(data["tool"], tool),
+        None => assert!(data.get("tool").is_none(), "{line}"),
+    }
+}
+
+#[test]
+fn op_timing_data_holds_only_op_ms_and_tool() {
+    let home = Home::new("ld-timed-data");
+    let inner = fakes::clock::FakeClock::new();
+    let clock: Arc<dyn Clock> = inner.clone();
+    let diag = Diag::new(home.path(), Process::Hub, Level::Debug, clock);
+    let cases = every_timed_case();
+    for (op, tool, _) in &cases {
+        let start = inner.now();
+        drop(timed(&diag, *op, *tool, Some(start)).expect("debug guard"));
+    }
+    let text = home.text("hub.log");
+    let lines: Vec<&str> = text.lines().collect();
+    assert_eq!(lines.len(), cases.len(), "one line per guard");
+    for (line, (_, tool, want)) in lines.iter().zip(&cases) {
+        // The raw bytes pin the key order: `op`, `ms`, then `tool`.
+        let data = match tool {
+            Some(tool) => format!("\"data\":{{\"op\":\"{want}\",\"ms\":0,\"tool\":\"{tool}\"}}"),
+            None => format!("\"data\":{{\"op\":\"{want}\",\"ms\":0}}"),
+        };
+        assert!(line.contains(&data), "{line}");
+        let parsed: serde_json::Value = serde_json::from_str(line).unwrap();
+        assert_timing_data(&parsed, want, *tool);
+    }
+}
+
+#[test]
+fn every_process_shape_writes_the_closed_data_keys() {
+    for (process, kind) in [
+        (Process::Hub, "hub"),
+        (Process::Session, "session"),
+        (Process::Ask, "ask"),
+        (Process::Tui, "tui"),
+    ] {
+        let home = Home::new("ld-timed-keys");
+        let inner = fakes::clock::FakeClock::new();
+        let clock: Arc<dyn Clock> = inner.clone();
+        let diag = Diag::new(home.path(), process, Level::Debug, clock);
+        for (op, tool, want) in [
+            (Op::ToolRun, Some("shell"), "tool.run"),
+            (Op::TurnRequest, None, "turn.request"),
+        ] {
+            let start = inner.now();
+            drop(timed(&diag, op, tool, Some(start)).expect("debug guard"));
+            let name = if kind == "hub" {
+                "hub.log".to_owned()
+            } else {
+                pid_file(kind)
+            };
+            let text = home.text(&name);
+            let parsed: serde_json::Value =
+                serde_json::from_str(text.lines().last().unwrap()).unwrap();
+            assert_timing_data(&parsed, want, tool);
+        }
+    }
+}
+
+#[test]
+fn info_warn_and_error_lines_carry_no_data() {
+    let home = Home::new("ld-timed-nodata");
+    let diag = home.diag(Process::Hub, Level::Debug);
+    diag.line(Severity::Info, None, "hub_started", "The hub started.");
+    diag.line(Severity::Warn, None, "slow", "Slow.");
+    diag.line(Severity::Error, None, "failed", "Failed.");
+    for line in home.text("hub.log").lines() {
+        let parsed: serde_json::Value = serde_json::from_str(line).unwrap();
+        assert!(parsed.get("data").is_none(), "{line}");
+    }
+}
