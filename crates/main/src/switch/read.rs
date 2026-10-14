@@ -53,6 +53,10 @@ pub(crate) struct Reads {
     /// Absent outside the unit tests.
     #[cfg(test)]
     listed_pause: Mutex<Option<SpawnPause>>,
+    /// The next `command`'s pause before it reaps its leader, armed by a
+    /// test. Absent outside the unit tests.
+    #[cfg(test)]
+    command_pause: Mutex<Option<SpawnPause>>,
 }
 
 /// One pause of a `credential` wait at its checks, for the interleaving
@@ -254,6 +258,10 @@ impl Reads {
     /// `Interrupted`.
     pub(crate) fn command(&self, command: &mut Command) -> io::Result<Output> {
         let child = self.spawn(command)?;
+        // Held only when a test armed a pause, so the leader stays a
+        // zombie and its group stays listed until the test releases it.
+        #[cfg(test)]
+        self.pause_before_command_reap();
         let output = child.wait_with_output()?;
         if self.lock().cancelled {
             return Err(interrupted());
@@ -267,8 +275,11 @@ impl Reads {
     /// returns at once, on any clock. A key finished after the wait's own
     /// end is not a key: a run done past its deadline, or after shutdown
     /// cancelled the reads, is killed and reported as the wait ended. A run
-    /// not finished at the timeout has its group killed and its leader
-    /// reaped before this returns `TimedOut`; the stdout reader is never
+    /// not finished at the timeout has its group killed again until no
+    /// process is left in it, within one bound anchored at the deadline,
+    /// and its leader reaped within the same bound before this returns
+    /// `TimedOut`; at the bound the group stays listed for later
+    /// settlement even if the leader never exits. The stdout reader is never
     /// waited on after the kill, so a process that left the group and holds
     /// stdout keeps only that reader thread alive, never the caller. Once
     /// [`Reads::cancel`] ran, this returns `Interrupted`, whether it was
@@ -286,6 +297,13 @@ impl Reads {
                 "its timeout is longer than this system's clock can count",
             )
         })?;
+        // Settlement and the reap below share this one absolute end,
+        // anchored at the deadline: neither earns a fresh budget, so a
+        // leader that never exits still ends the wait at the end. An end
+        // past what the clock can count expires at once, below.
+        let end = deadline
+            .checked_add(doors::SHUTDOWN_BOUND)
+            .unwrap_or(deadline);
         let mut child = self.spawn(command)?;
         let group = child.id();
         // Taken before the reaper below owns the child.
@@ -403,7 +421,11 @@ impl Reads {
                         return Err(interrupted());
                     }
                     if deadline_due(clock.now(), deadline) {
-                        kill_group(group);
+                        self.settle_group(group, clock, end);
+                        if self.lock().cancelled {
+                            kill_group(group);
+                            return Err(interrupted());
+                        }
                         return Err(timed_out());
                     }
                     {
@@ -432,9 +454,45 @@ impl Reads {
                 return Err(interrupted());
             }
             if deadline_due(clock.now(), deadline) {
-                kill_group(group);
+                self.settle_group(group, clock, end);
+                if self.lock().cancelled {
+                    kill_group(group);
+                    return Err(interrupted());
+                }
                 if exit.is_none() {
-                    let _reaped = status_received.recv();
+                    // The reaper owns the leader's wait: its answer reaps
+                    // the leader. An emptied group already delivered it, so
+                    // this returns at once; the receive is ignored either
+                    // way, since the answer here is `TimedOut`. The reap
+                    // shares settlement's absolute end: at the end the
+                    // group stays listed for later settlement even if the
+                    // leader never exits, so this never blocks past it.
+                    loop {
+                        // The generation is captured before the checks, as in
+                        // `credential`: a finish past this point ends the park
+                        // below at once, so no reap lands unheard.
+                        let seen = self.wake.generation();
+                        match status_received.try_recv() {
+                            Ok(_) | Err(mpsc::TryRecvError::Disconnected) => break,
+                            Err(mpsc::TryRecvError::Empty) => {}
+                        }
+                        if self.lock().cancelled {
+                            kill_group(group);
+                            return Err(interrupted());
+                        }
+                        if clock.now() >= end {
+                            break;
+                        }
+                        let wait_until = clock
+                            .now()
+                            .checked_add(GROUP_POLL)
+                            .map_or(end, |poll| poll.min(end));
+                        self.wake.park(clock, Some(wait_until), seen);
+                    }
+                }
+                if self.lock().cancelled {
+                    kill_group(group);
+                    return Err(interrupted());
                 }
                 return Err(timed_out());
             }
@@ -564,6 +622,53 @@ impl Reads {
                 Some(end)
             };
             self.wake.park(clock, wait_until, seen);
+        }
+    }
+
+    /// Sends SIGKILL to `group` again while a probe still finds a member in
+    /// it, on the group poll cadence within one absolute end: only SRCH
+    /// retires the group, so a fork that landed inside an earlier kill earns
+    /// another send instead of leaving a survivor behind. Scoped to the one
+    /// timed-out group through the shared helper: nothing here cancels
+    /// another read or kills another group. At the end the group stays
+    /// listed for later settlement, as [`Reads::settle`] leaves anything
+    /// still pending at its bound. A cancel ends the settlement at once:
+    /// every pass observes `cancelled` — a cancel bumps the wake, so the
+    /// parked pass ends at once — and the caller answers `Interrupted`, so
+    /// a cancel that lands while timing out is never `TimedOut`.
+    fn settle_group(&self, group: u32, clock: &dyn Clock, end: Instant) {
+        loop {
+            // The generation is captured before the checks, as in
+            // `credential`: a clock move past this point ends the park
+            // below at once, so no advance lands unheard.
+            let seen = self.wake.generation();
+            let empty = {
+                let mut state = self.lock();
+                state.prune_empty();
+                if state.groups.contains(&group) {
+                    state.kill_listed(group);
+                    false
+                } else {
+                    true
+                }
+            };
+            if empty {
+                return;
+            }
+            if self.lock().cancelled {
+                return;
+            }
+            if clock.now() >= end {
+                return;
+            }
+            // A pending group is rechecked on a bounded cadence within
+            // the same end — the next poll or the end, whichever is
+            // first — never a fresh budget, as in [`Reads::settle`].
+            let wait_until = clock
+                .now()
+                .checked_add(GROUP_POLL)
+                .map_or(end, |poll| poll.min(end));
+            self.wake.park(clock, Some(wait_until), seen);
         }
     }
 
@@ -735,6 +840,40 @@ impl Reads {
     fn pause_before_reap(&self) {
         let point = self
             .reap_pause
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .take();
+        if let Some(point) = point {
+            match point.entered.send(()) {
+                Ok(()) | Err(_) => {}
+            }
+            match point.release.recv() {
+                Ok(()) | Err(_) => {}
+            }
+        }
+    }
+
+    /// Arms one pause before the next `command` reaps its leader: the
+    /// command thread sends on `entered` once its spawn listed its group
+    /// and blocks until `release` arrives, so the leader stays a zombie
+    /// and its group stays listed until the test releases it. The pause
+    /// is one-shot.
+    pub(crate) fn pause_at_command_reap(
+        &self,
+        entered: mpsc::Sender<()>,
+        release: mpsc::Receiver<()>,
+    ) {
+        *self
+            .command_pause
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner) = Some(SpawnPause { entered, release });
+    }
+
+    /// Reports the command reached its leader's reap and blocks until the
+    /// test releases it. Runs free unless a test armed a pause meanwhile.
+    fn pause_before_command_reap(&self) {
+        let point = self
+            .command_pause
             .lock()
             .unwrap_or_else(PoisonError::into_inner)
             .take();

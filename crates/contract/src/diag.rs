@@ -1,7 +1,11 @@
 //! The debug level's seam (`docs/state.md`, "Diagnostic logs"): what one
-//! `provider_request` line records, and the sink a caller hands it to. Like
+//! `provider_request` line records, the operations an `op_timing` line may
+//! name, and the sinks a caller hands them to. Like
 //! [`crate::clock::Clock`], it defines the seam and contains no behaviour;
 //! `log::diag::Diag` writes the lines.
+
+use std::sync::Arc;
+use std::time::Instant;
 
 use serde::Serialize;
 
@@ -68,6 +72,164 @@ pub trait DebugLog: Send + Sync {
     /// Writes one `provider_request` line, when debugging.
     fn provider_request(&self, request: &ProviderRequest);
 }
+
+/// One operation an `op_timing` line may name (`docs/state.md`,
+/// "Diagnostic logs"): the `op` in its `data`. The list is closed: a new
+/// module or top-level operation adds its variant in the pull request that
+/// needs it, a one-line change.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Op {
+    /// Reading the configuration.
+    StartupConfig,
+    /// Loading extensions.
+    StartupExtensions,
+    /// Building the preamble: the system prompt, tool definitions and
+    /// request settings.
+    StartupPreamble,
+    /// Bringing the session socket up until it accepts.
+    StartupSocket,
+    /// Picking the model, reading its credential, starting its Lua
+    /// provider and finding the reviewer.
+    StartupRouting,
+    /// A model switch through routing.
+    RoutingSwitch,
+    /// Reading the session log for the terminal's first attach.
+    TuiLogRead,
+    /// Building the transcript for the terminal's first attach.
+    TuiTranscript,
+    /// The terminal's first frame.
+    TuiFirstRender,
+    /// A terminal frame past its 16 ms budget; one within budget writes
+    /// no line.
+    TuiFrame,
+    /// One session-log write attempt.
+    LogAppend,
+    /// One session-log sync, when the durability policy syncs.
+    LogFsync,
+    /// A tool call's permission order, the reviewer included.
+    ToolPermission,
+    /// The reviewer's stages alone, when it runs.
+    ToolReviewer,
+    /// An actual before or after hook chain invocation on a tool call.
+    ToolHooks,
+    /// A tool call's execution, not its permission, review or hooks.
+    ToolRun,
+    /// Assembling a model request from the session's history.
+    TurnRequest,
+    /// A model call, from sending the request until the stream ends.
+    TurnModelCall,
+    /// One handoff, end to end.
+    TurnHandoff,
+    /// One hook chain other than the tool hooks, named by the chain.
+    Hook(HookChain),
+    /// One MCP server, from starting or dialing it until its tool list
+    /// is in hand.
+    McpConnect,
+    /// A background job or delegate, until it runs.
+    JobsStart,
+    /// Creating a git worktree a session or delegate runs in.
+    WorktreeCreate,
+    /// Removing one.
+    WorktreeRemove,
+    /// One image child's work, from spawning it to its answer.
+    PictureRun,
+    /// A hub session start, until the session's socket accepts.
+    HubSessionStart,
+    /// Resuming a session through the hub.
+    HubResume,
+    /// Replaying a subscription to its acknowledgement.
+    HubSubscribeReplay,
+    /// Opening a connection.
+    NetConnect,
+    /// A `sessions search` command, at its entry.
+    CliSessionsSearch,
+}
+
+impl Op {
+    /// The operation's name on the wire: a hook chain reads
+    /// `hook.<chain>`, every other operation its dotted path. A pure
+    /// conversion of the value, as the seam holds no behaviour.
+    pub const fn name(self) -> &'static str {
+        match self {
+            Self::StartupConfig => "startup.config",
+            Self::StartupExtensions => "startup.extensions",
+            Self::StartupPreamble => "startup.preamble",
+            Self::StartupSocket => "startup.socket",
+            Self::StartupRouting => "startup.routing",
+            Self::RoutingSwitch => "routing.switch",
+            Self::TuiLogRead => "tui.log_read",
+            Self::TuiTranscript => "tui.transcript",
+            Self::TuiFirstRender => "tui.first_render",
+            Self::TuiFrame => "tui.frame",
+            Self::LogAppend => "log.append",
+            Self::LogFsync => "log.fsync",
+            Self::ToolPermission => "tool.permission",
+            Self::ToolReviewer => "tool.reviewer",
+            Self::ToolHooks => "tool.hooks",
+            Self::ToolRun => "tool.run",
+            Self::TurnRequest => "turn.request",
+            Self::TurnModelCall => "turn.model_call",
+            Self::TurnHandoff => "turn.handoff",
+            Self::Hook(chain) => chain.hook_name(),
+            Self::McpConnect => "mcp.connect",
+            Self::JobsStart => "jobs.start",
+            Self::WorktreeCreate => "worktree.create",
+            Self::WorktreeRemove => "worktree.remove",
+            Self::PictureRun => "picture.run",
+            Self::HubSessionStart => "hub.session_start",
+            Self::HubResume => "hub.resume",
+            Self::HubSubscribeReplay => "hub.subscribe_replay",
+            Self::NetConnect => "net.connect",
+            Self::CliSessionsSearch => "cli.sessions_search",
+        }
+    }
+}
+
+impl Serialize for Op {
+    fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        serializer.serialize_str(self.name())
+    }
+}
+
+/// One hook chain an `op_timing` line may time: every chain other than the
+/// tool hooks, which `tool.hooks` covers. The operation's suffix.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum HookChain {
+    /// A session's start.
+    SessionStart,
+    /// A turn's start.
+    TurnStart,
+    /// Before one message.
+    BeforeMessage,
+    /// Before one model call.
+    BeforeModelCall,
+    /// A turn's end.
+    TurnEnd,
+}
+
+impl HookChain {
+    /// The `hook.<chain>` operation's name, and its wire form: `Op`'s
+    /// serialization writes this, which the operation test pins.
+    pub const fn hook_name(self) -> &'static str {
+        match self {
+            Self::SessionStart => "hook.session_start",
+            Self::TurnStart => "hook.turn_start",
+            Self::BeforeMessage => "hook.before_message",
+            Self::BeforeModelCall => "hook.before_model_call",
+            Self::TurnEnd => "hook.turn_end",
+        }
+    }
+}
+
+/// Starts an operation's timer: the seam a restricted crate takes instead
+/// of depending on `log`. It invokes the same `log::diag::timed` every
+/// other timed place uses, so there is one timing implementation. An
+/// explicit stamp suppresses the start read, never the end read. `None`
+/// at `info`, before any clock read. The guard is owned and `Send`, so it
+/// may follow the work to its worker; dropping it without stopping stamps
+/// the drop time.
+pub type Timing =
+    Arc<dyn Fn(Op, Option<&str>, Option<Instant>) -> Option<Box<dyn Send>> + Send + Sync>;
 
 #[cfg(test)]
 #[path = "diag_tests.rs"]

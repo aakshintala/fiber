@@ -17,7 +17,7 @@ use extensions::Providers;
 use r#loop::Model;
 
 use crate::{
-    cost, failed, handoff, lua_providers, mcp_servers, prompt_files, scripted, settings, switch,
+    failed, handoff, lua_providers, mcp_servers, prompt_files, scripted, settings, switch,
 };
 
 /// What a session is built from, read before it exists.
@@ -340,7 +340,7 @@ pub(crate) fn parts_in(
         prompt,
         model: Model {
             reference: model.reference(),
-            cost: model.model.cost.clone().map(cost::declared),
+            cost: model.model.cost.clone(),
             subscription: model.model.subscription,
         },
         reviewer,
@@ -430,7 +430,7 @@ pub(crate) fn choose_reviewer(
         provider,
         model: Model {
             reference: model.reference(),
-            cost: model.model.cost.clone().map(cost::declared),
+            cost: model.model.cost.clone(),
             subscription: model.model.subscription,
         },
         cache_lifetime: settings::cache_lifetime(config, &model.reference()),

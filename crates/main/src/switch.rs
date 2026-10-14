@@ -472,7 +472,7 @@ pub(crate) fn prepare(
         provider,
         model: r#loop::Model {
             reference: reference.clone(),
-            cost: resolved.model.cost.clone().map(crate::cost::declared),
+            cost: resolved.model.cost.clone(),
             subscription: resolved.model.subscription,
         },
         thinking,

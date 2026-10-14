@@ -15,8 +15,9 @@ use fakes::clock::FakeClock;
 use fakes::{TempDir, Watchdog, group_empties, kill_pid, pids_exit};
 
 use super::{
-    Decode, Failed, IMAGE_CAP, NO_CLIPBOARD, Reader, apple_script_png, command, drain, png_size,
-    read, read_stdout, refused, signal_after_group, signal_pid, start,
+    Decode, Failed, IMAGE_CAP, NO_CLIPBOARD, Reader, apple_script_png, arm_cleanup_pause, command,
+    drain, group_alive, png_size, probe_means_empty, read, read_stdout, refused, settle_group,
+    signal_after_group, signal_pid, start,
 };
 
 /// One named wall-clock deadline for every blocking wait.
@@ -303,6 +304,67 @@ fn refused_never_names_one_or_none() {
     assert!(refused(0));
     assert!(refused(1));
     assert!(!refused(2));
+}
+
+#[test]
+fn only_a_missing_group_probes_empty() {
+    // An accepted probe holds a member; only SRCH retires the group, and
+    // any other errno keeps it pending for the next pass.
+    assert!(!probe_means_empty(Ok(())));
+    assert!(probe_means_empty(Err(rustix::io::Errno::SRCH)));
+    assert!(!probe_means_empty(Err(rustix::io::Errno::PERM)));
+}
+
+#[test]
+fn settle_group_returns_at_once_for_no_group() {
+    let clock = FakeClock::new();
+    let start = clock.now();
+    let end = start + LIMIT;
+    let clock: Arc<dyn Clock> = clock;
+    // A refused id sends nothing and probes empty, so the bound is never
+    // read past the first probe and the clock never moves.
+    for id in [0, 1] {
+        assert!(settle_group(id, &clock, end));
+    }
+    assert_eq!(clock.now(), start);
+}
+
+#[test]
+fn settle_group_rekills_until_the_bound() {
+    use std::os::unix::process::CommandExt as _;
+    let clock = FakeClock::new();
+    let clock: Arc<dyn Clock> = clock;
+    // At, just below and just above the edge: the bound in milliseconds
+    // with the fake instant the settle stops at, one 10 ms cadence past
+    // the first probe at or past the bound.
+    for (bound_ms, stop_ms) in [(25, 30), (29, 30), (30, 30), (31, 40)] {
+        // A zombie holding its own group: the probe stays up however many
+        // passes re-kill it, so only the bound ends the settle.
+        let mut keeper = std::process::Command::new("sleep")
+            .arg("3600")
+            .process_group(0)
+            .stdin(std::process::Stdio::null())
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null())
+            .spawn()
+            .unwrap();
+        let pgid = keeper.id();
+        let watchdog = Watchdog::group(pgid);
+        assert!(group_alive(pgid));
+        signal_pid(pgid);
+        let start = clock.now();
+        let end = start + Duration::from_millis(bound_ms);
+        assert!(!settle_group(pgid, &clock, end));
+        assert_eq!(
+            clock.now(),
+            start + Duration::from_millis(stop_ms),
+            "a bound of {bound_ms} ms must stop at {stop_ms} ms"
+        );
+        match keeper.wait() {
+            Ok(_) | Err(_) => {}
+        }
+        watchdog.stand_down(DEADLINE);
+    }
 }
 
 /// A child test's directory and ready FIFO.
@@ -1262,4 +1324,86 @@ fn stdout_of_exactly_the_cap_with_a_live_child_is_not_too_large() {
         Err(Failed::TimedOut)
     );
     reaped(watchdog, pgid, "the exact-cap live child");
+}
+
+#[test]
+fn the_timeout_kill_misses_a_member_joined_after_it() {
+    let test = ChildTest::new();
+    let clock = FakeClock::new();
+    let start = clock.now();
+    let end = start + LIMIT;
+    // Exactly 16 bytes at the cap with a live child holding stdout open:
+    // the read parks at its deadline and times out, as in
+    // stdout_of_exactly_the_cap_with_a_live_child_is_not_too_large. The
+    // armed pause lands a join between the timeout kill and the reap on
+    // every run, so the single kill demonstrably misses a member.
+    let reader = test.reader("sleep 3600 & printf '1234567890123456'; wait", Decode::Raw);
+    let rx = spawn_read(reader, Arc::clone(&clock), LIMIT, 16);
+    let (watchdog, pgid) = watch(&test);
+    let (entered_tx, entered_rx) = mpsc::channel();
+    let (release_tx, release_rx) = mpsc::channel();
+    arm_cleanup_pause(pgid, entered_tx, release_rx);
+    waiting(
+        &rx,
+        &clock,
+        end,
+        "the exact-cap live child with its late join",
+    );
+    clock.advance(Duration::from_millis(1));
+    // The worker sent the group's kill and waits: join a sleep to the
+    // group after the kill, so the kill misses it. The leader is still
+    // unreaped while the worker is held, so the group still takes members.
+    match Deadline::after(DEADLINE).recv(&entered_rx) {
+        Ok(()) => {}
+        Err(_) => panic!("waited {DEADLINE:?} for the timeout kill"),
+    }
+    use std::os::unix::process::CommandExt as _;
+    let mut late = std::process::Command::new("sleep")
+        .arg("3600")
+        // The child joins the group itself before it execs: joining from
+        // the parent after the exec is refused.
+        .process_group(pgid.try_into().unwrap())
+        .stdin(std::process::Stdio::null())
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .spawn()
+        .unwrap();
+    match release_tx.send(()) {
+        Ok(()) | Err(_) => {}
+    }
+    assert_eq!(
+        answered(
+            &rx,
+            "the exact-cap live child with its late join",
+            &Deadline::after(DEADLINE)
+        ),
+        Err(Failed::TimedOut)
+    );
+    // The late join is the test's own child, so the test reaps it: the
+    // cleanup SIGKILLed it, so it dies promptly, and the wall-clock bound
+    // only guards a hang. One `try_wait` can miss its death while the
+    // signal is still in flight, leaving a zombie that holds the group
+    // past the read; the poll reaps it however late the death lands.
+    let reap = Deadline::after(DEADLINE);
+    let status = loop {
+        match late.try_wait() {
+            Ok(Some(status)) => break Some(status),
+            Ok(None) => {}
+            Err(error) => panic!("the late join's try_wait failed: {error:?}"),
+        }
+        if reap.left().is_zero() {
+            break None;
+        }
+        std::thread::yield_now();
+    };
+    let status = status.expect("waited {DEADLINE:?} for the late join to die after SIGKILL");
+    assert!(
+        !status.success(),
+        "the late join must die from the cleanup SIGKILL, not exit zero"
+    );
+    reaped(
+        watchdog,
+        pgid,
+        "the exact-cap live child with its late join",
+    );
 }

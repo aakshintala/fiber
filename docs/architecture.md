@@ -48,7 +48,7 @@ ephemeral event where it is display-only.
 |---|---|
 | `contract` | The vocabulary every other module speaks: what an event looks like, what a command looks like, and what a tool, a provider and a hook must each be able to do, and the clock seam, re-exported from `support`. It contains no behaviour beyond checking that a value fits the vocabulary, and pure conversions of its own values, such as a wall time to milliseconds or to a UTC date. Parsing a command line (`CommandLine::deserialize`) and matching an answer to an interaction (`Interaction::fit`) count as checking that a value fits. |
 | `support` | Small shared mechanisms with no domain knowledge: the `Clock` and `Wake` traits, which `contract::clock` re-exports, the process clock, the clock-parked wait, the process-group guard, the poison-ignoring `lock`, the admission lock and the stoppable read. |
-| `log` | Owns the session directory. The only thing that opens `events.jsonl`, holds the lock, mints `seq` and decides fsync order. Also hands events to whoever is watching, and writes the diagnostic files in `logs/`. |
+| `log` | Owns the session directory. The only thing that opens `events.jsonl`, holds the lock, mints `seq` and decides fsync order. Also hands events to whoever is watching, and writes the diagnostic files in `logs/`. Its `diag` module holds the operation timer (`log::diag::timed`) every timed place goes through. |
 | `loop` | Runs turns and steps (`docs/loop.md`). The only thing that decides what happens next. |
 | `provider` | Talks to model APIs: wire formats, credentials, streaming. Reached only through the provider seam. |
 | `tools` | Runs the built-in tools that act on the workspace and the session: shell, file edits, search, web fetch, `ask_user`, session messaging and `tool_search`. Reached only through the tool seam. |
@@ -90,7 +90,7 @@ depends on `contract`, `log` and the three seams, and never on `tui`, `doors`
 or `main`. `tui`, `hub` and `doors` depend on `contract` and on `log`'s reading
 side, the functions `log` exports for reading (taking the lock, deleting a
 log and opening a file by path stay in `log`), and never on `loop`, `provider`, `tools`, `mcp`, `jobs` or
-`extensions`. `cli` depends on `contract`, `log`, `config`, `doors` and
+`extensions`. `tui` also depends on `log` for the diagnostic writer. `cli` depends on `contract`, `log`, `config`, `doors` and
 `extensions`, and never on `loop`. `worktree` depends only on `contract`, and
 `jobs`, `doors` and `cli` may depend on it. `net` depends only on `contract`
 and ureq's TLS stack, and `provider`, `tools`, `mcp` and `extensions` may depend on it,

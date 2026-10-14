@@ -51,7 +51,11 @@ An extension is one directory. Its manifest, `extension.json`, states
   session ends (`exit_timeout_ms`, no default)
 - an install step, if it has one, such as `npm ci`
 - the built-in tools and commands it replaces, and the providers it
-  registers with each one's base URLs (`replaces` and `providers`). An
+  registers with each one's base URLs (`replaces` and `providers`). `replaces`
+  covers the names in `BUILT_IN_TOOLS`, which are the built-in tools in
+  `docs/tools.md`, plus built-in commands. An MCP tool or `mcp_resources` is
+  replaced without a `replaces` entry, by registering its name (`docs/mcp.md`,
+  "Tools and their names"). An
   extension that registers a replacement or a provider its manifest does not
   declare is not loaded for the session, with the notice `extension_failed`,
   and a model whose base URL its provider's entry does not list is left out of
@@ -208,9 +212,7 @@ too long. A hook's `on_failure` has no default for the same reason: `non-blockin
 would let a forgotten guard fail open, and `blocking` would let a forgotten
 notifier stop a session. A hook's clock starts when Fiber asks, so time
 spent waiting behind earlier items in the stream counts against it. A callback
-past its timeout is stopped ("When an extension misbehaves"). When the hook
-cannot stop the VM, the caller waits 1 second more after the timeout before it
-abandons the VM.
+past its timeout is stopped ("When an extension misbehaves"). When the interrupt cannot stop the VM, Fiber abandons the VM 1 second after the timeout.
 
 Fiber runs a Lua extension's entry script, `init.lua`, when it creates the VM.
 Reading, compiling and running it is bounded at 2 seconds. A provider file,

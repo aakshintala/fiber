@@ -283,7 +283,12 @@ fn revoke_from_a_second_device_closes_the_first() {
         "unauthenticated"
     );
     assert!(!temp.dir.join("hub/devices/a").exists());
-    assert!(temp.log().contains("a was revoked by b"));
+    // The revoke line follows the client-visible notices and closes, so
+    // wait for it under a deadline instead of reading the log once.
+    crate::testkit::await_true("the hub logs the revocation", {
+        let home = temp.dir.clone();
+        move || super::log_has(&home, "a was revoked by b")
+    });
     drop((a, b, next));
     stop(&hub, &got, &done);
 }

@@ -15,7 +15,6 @@ mod clock;
 mod completion;
 mod configure;
 mod connect;
-mod cost;
 mod crash;
 mod credential;
 mod delegates;

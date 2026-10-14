@@ -11,11 +11,16 @@
 
 use std::fs;
 use std::os::unix::fs::PermissionsExt;
-use std::sync::{Arc, Mutex, mpsc};
+use std::sync::{
+    Arc, Mutex, Weak,
+    atomic::{AtomicUsize, Ordering},
+    mpsc,
+};
 use std::thread;
-use std::time::Duration;
+use std::time::{Duration, SystemTime};
 
-use contract::diag::Purpose;
+use contract::clock::Wake;
+use contract::diag::{Op, Purpose};
 
 use super::*;
 use fakes::Deadline;
@@ -476,4 +481,426 @@ fn peak_memory_then_info_writes_its_pair_with_nothing_between() {
         ["peak_memory", "hub_stopped"],
     );
     assert_eq!(lines[0]["data"]["peak_kib"], 7);
+}
+
+/// A clock that counts its monotonic reads, proving `timed` reads none
+/// at `info`.
+struct SpyClock {
+    inner: Arc<fakes::clock::FakeClock>,
+    reads: AtomicUsize,
+}
+
+impl SpyClock {
+    fn new() -> (Arc<fakes::clock::FakeClock>, Arc<Self>) {
+        let inner = fakes::clock::FakeClock::new();
+        let spy = Arc::new(Self {
+            inner: Arc::clone(&inner),
+            reads: AtomicUsize::new(0),
+        });
+        (inner, spy)
+    }
+
+    fn reads(spy: &Arc<Self>) -> usize {
+        spy.reads.load(Ordering::SeqCst)
+    }
+}
+
+impl Clock for SpyClock {
+    fn now(&self) -> Instant {
+        self.reads.fetch_add(1, Ordering::SeqCst);
+        self.inner.now()
+    }
+
+    fn wall(&self) -> SystemTime {
+        self.inner.wall()
+    }
+
+    fn sleep(&self, d: Duration) {
+        self.inner.sleep(d);
+    }
+
+    fn wait_until(&self, until: Option<Instant>, wait: &mut dyn FnMut(Option<Duration>)) {
+        self.inner.wait_until(until, wait);
+    }
+
+    fn subscribe(&self, waker: Weak<dyn Wake>) {
+        self.inner.subscribe(waker);
+    }
+}
+
+fn debug_diag(home: &Home, spy: &Arc<SpyClock>) -> Diag {
+    Diag::new(
+        home.path(),
+        Process::Hub,
+        Level::Debug,
+        Arc::clone(spy) as Arc<dyn Clock>,
+    )
+}
+
+fn op_line(home: &Home, name: &str) -> serde_json::Value {
+    let text = home.text(name);
+    let mut lines = text.lines();
+    let line: serde_json::Value = serde_json::from_str(lines.next().unwrap()).unwrap();
+    assert!(lines.next().is_none(), "one line: {text}");
+    line
+}
+
+#[test]
+fn at_info_timed_reads_no_clock_and_writes_nothing() {
+    let home = Home::new("ld-timed-info");
+    let (_inner, spy) = SpyClock::new();
+    let diag = Diag::new(
+        home.path(),
+        Process::Session,
+        Level::Info,
+        Arc::clone(&spy) as Arc<dyn Clock>,
+    );
+    assert!(timed(&diag, Op::TurnRequest, None, None).is_none());
+    assert!(diag.timings()(Op::TurnRequest, None, None).is_none());
+    assert_eq!(SpyClock::reads(&spy), 0);
+    assert!(!home.path().join("logs").exists());
+}
+
+#[test]
+fn at_debug_a_dropped_guard_writes_one_line_and_no_file_before() {
+    let home = Home::new("ld-timed-drop");
+    let (inner, spy) = SpyClock::new();
+    let diag = debug_diag(&home, &spy);
+    let start = inner.now();
+    inner.advance(Duration::from_millis(7));
+    let timer = timed(&diag, Op::ToolRun, Some("read"), Some(start));
+    assert!(timer.is_some(), "a debug guard is active");
+    assert!(!home.path().join("logs").exists(), "no file before drop");
+    drop(timer);
+    assert_eq!(
+        home.text("hub.log"),
+        "{\"ts\":1700000000007,\"level\":\"debug\",\"process\":\"hub\",\
+         \"code\":\"op_timing\",\"message\":\"An operation ended.\",\
+         \"data\":{\"op\":\"tool.run\",\"ms\":7,\"tool\":\"read\"}}\n"
+    );
+}
+
+fn early_return(diag: &Diag, stop: bool) -> u32 {
+    let _timer = timed(diag, Op::TurnRequest, None, None);
+    if stop {
+        return 7;
+    }
+    0
+}
+
+fn propagated_error(diag: &Diag, fail: bool) -> Result<u32, &'static str> {
+    let _timer = timed(diag, Op::TurnRequest, None, None);
+    if fail {
+        return Err("boom");
+    }
+    Ok(0)
+}
+
+#[test]
+fn an_early_return_and_a_propagated_error_each_emit_once() {
+    let home = Home::new("ld-timed-scope");
+    let diag = home.diag(Process::Hub, Level::Debug);
+    assert_eq!(early_return(&diag, true), 7);
+    assert_eq!(
+        propagated_error(&diag, true).unwrap_err(),
+        "boom",
+        "the error still propagates"
+    );
+    let text = fs::read_to_string(home.file("hub.log")).unwrap();
+    let lines: Vec<&str> = text.lines().collect();
+    assert_eq!(lines.len(), 2, "one line per scope");
+    for line in lines {
+        let parsed: serde_json::Value = serde_json::from_str(line).unwrap();
+        assert_eq!(parsed["code"], "op_timing");
+        assert_eq!(parsed["data"]["op"], "turn.request");
+    }
+}
+
+#[test]
+fn stop_stamps_completion_and_drop_emits_it() {
+    let home = Home::new("ld-timed-stop");
+    let (inner, spy) = SpyClock::new();
+    let diag = debug_diag(&home, &spy);
+    let start = inner.now();
+    inner.advance(Duration::from_millis(5));
+    let mut timer = timed(&diag, Op::TurnModelCall, None, Some(start)).expect("debug guard");
+    inner.advance(Duration::from_millis(100));
+    timer.stop();
+    inner.advance(Duration::from_secs(1));
+    drop(timer);
+    let line = op_line(&home, "hub.log");
+    assert_eq!(line["data"]["op"], "turn.model_call");
+    assert_eq!(line["data"]["ms"], 105);
+}
+
+#[test]
+fn a_failed_timing_write_is_silent() {
+    let home = Home::new("ld-timed-unwritable");
+    fs::write(home.path().join("logs"), b"not a directory").unwrap();
+    let diag = home.diag(Process::Hub, Level::Debug);
+    let timer = timed(&diag, Op::HubSessionStart, None, None);
+    assert!(timer.is_some(), "a debug guard is active");
+    drop(timer);
+    assert_eq!(
+        fs::read(home.path().join("logs")).unwrap(),
+        b"not a directory"
+    );
+}
+
+#[test]
+fn every_process_shape_writes_through_the_same_writer() {
+    for (process, kind) in [
+        (Process::Hub, "hub"),
+        (Process::Session, "session"),
+        (Process::Ask, "ask"),
+        (Process::Tui, "tui"),
+    ] {
+        let home = Home::new("ld-timed-shapes");
+        let diag = home.diag(process, Level::Debug);
+        drop(timed(&diag, Op::NetConnect, None, None).expect("debug guard"));
+        let name = if kind == "hub" {
+            "hub.log".to_owned()
+        } else {
+            pid_file(kind)
+        };
+        let line = op_line(&home, &name);
+        assert_eq!(line["level"], "debug", "{kind}");
+        assert_eq!(line["process"], kind, "{kind}");
+        assert_eq!(line["code"], "op_timing", "{kind}");
+        assert_eq!(line["message"], "An operation ended.", "{kind}");
+        assert_eq!(line["data"]["op"], "net.connect", "{kind}");
+        assert!(line["data"]["ms"].is_u64(), "{kind}: {line}");
+    }
+}
+
+#[test]
+fn the_callable_times_without_a_second_check_and_emits_once() {
+    let home = Home::new("ld-timed-callable");
+    let (inner, spy) = SpyClock::new();
+    let diag = debug_diag(&home, &spy);
+    let time = diag.timings();
+    let start = inner.now();
+    inner.advance(Duration::from_millis(3));
+    let guard = time(Op::StartupConfig, None, Some(start)).expect("debug guard");
+    inner.advance(Duration::from_millis(100));
+    drop(guard);
+    let line = op_line(&home, "hub.log");
+    assert_eq!(line["data"]["op"], "startup.config");
+    assert_eq!(line["data"]["ms"], 103);
+}
+
+#[test]
+fn whole_milliseconds_truncate_and_saturate() {
+    for (elapsed, want) in [
+        (Duration::ZERO, 0),
+        (Duration::from_nanos(999_999), 0),
+        (Duration::from_nanos(1_000_000), 1),
+        (Duration::from_nanos(1_999_999), 1),
+        (Duration::from_millis(u64::MAX - 1), u64::MAX - 1),
+        (Duration::from_millis(u64::MAX), u64::MAX),
+    ] {
+        assert_eq!(duration_ms(elapsed), want, "{elapsed:?}");
+    }
+    let past_max = Duration::from_millis(u64::MAX)
+        .checked_add(Duration::from_millis(1))
+        .expect("one millisecond past the maximum");
+    assert_eq!(duration_ms(past_max), u64::MAX);
+}
+
+/// Runs one guard for `elapsed` on the fake clock and returns the file's
+/// text: empty when nothing was written.
+fn timed_text(op: Op, elapsed: Duration) -> String {
+    let home = Home::new("ld-timed-ms");
+    let inner = fakes::clock::FakeClock::new();
+    let clock: Arc<dyn Clock> = inner.clone();
+    let diag = Diag::new(home.path(), Process::Hub, Level::Debug, clock);
+    let start = inner.now();
+    inner.advance(elapsed);
+    drop(timed(&diag, op, None, Some(start)).expect("debug guard"));
+    fs::read_to_string(home.file("hub.log")).unwrap_or_default()
+}
+
+#[test]
+fn a_backwards_clock_contributes_zero() {
+    let home = Home::new("ld-timed-backwards");
+    let inner = fakes::clock::FakeClock::new();
+    let clock: Arc<dyn Clock> = inner.clone();
+    let diag = Diag::new(home.path(), Process::Hub, Level::Debug, clock);
+    let start = inner
+        .now()
+        .checked_add(Duration::from_secs(1))
+        .expect("one second ahead");
+    drop(timed(&diag, Op::TurnHandoff, None, Some(start)).expect("debug guard"));
+    let line = op_line(&home, "hub.log");
+    assert_eq!(line["data"]["op"], "turn.handoff");
+    assert_eq!(line["data"]["ms"], 0);
+}
+
+#[test]
+fn a_frame_within_budget_writes_nothing_and_one_past_writes_sixteen() {
+    let frame = Duration::from_millis(16);
+    let within = timed_text(
+        Op::TuiFrame,
+        frame
+            .checked_sub(Duration::from_nanos(1))
+            .expect("one less"),
+    );
+    assert!(
+        within.is_empty(),
+        "16 ms minus 1 ns writes nothing: {within}"
+    );
+    let at = timed_text(Op::TuiFrame, frame);
+    assert!(at.is_empty(), "16 ms writes nothing: {at}");
+    let past = timed_text(Op::TuiFrame, frame + Duration::from_nanos(1));
+    let line: serde_json::Value = serde_json::from_str(past.trim_end()).unwrap();
+    assert_eq!(line["data"]["op"], "tui.frame");
+    assert_eq!(line["data"]["ms"], 16);
+    let other = timed_text(Op::TurnRequest, frame);
+    let line: serde_json::Value = serde_json::from_str(other.trim_end()).unwrap();
+    assert_eq!(line["data"]["ms"], 16, "the budget binds frames only");
+}
+
+/// Every operation with and without a tool: the op and the tool the line
+/// carries.
+fn every_timed_case() -> Vec<(Op, Option<&'static str>, &'static str)> {
+    use Op::*;
+    let bare = [
+        (StartupConfig, "startup.config"),
+        (StartupExtensions, "startup.extensions"),
+        (StartupPreamble, "startup.preamble"),
+        (StartupSocket, "startup.socket"),
+        (StartupRouting, "startup.routing"),
+        (RoutingSwitch, "routing.switch"),
+        (TuiLogRead, "tui.log_read"),
+        (TuiTranscript, "tui.transcript"),
+        (TuiFirstRender, "tui.first_render"),
+        // `TuiFrame` at rest writes no line; the frame test above times it.
+        (LogAppend, "log.append"),
+        (LogFsync, "log.fsync"),
+        (ToolPermission, "tool.permission"),
+        (ToolReviewer, "tool.reviewer"),
+        (ToolHooks, "tool.hooks"),
+        (ToolRun, "tool.run"),
+        (TurnRequest, "turn.request"),
+        (TurnModelCall, "turn.model_call"),
+        (TurnHandoff, "turn.handoff"),
+        (McpConnect, "mcp.connect"),
+        (JobsStart, "jobs.start"),
+        (WorktreeCreate, "worktree.create"),
+        (WorktreeRemove, "worktree.remove"),
+        (PictureRun, "picture.run"),
+        (HubSessionStart, "hub.session_start"),
+        (HubResume, "hub.resume"),
+        (HubSubscribeReplay, "hub.subscribe_replay"),
+        (NetConnect, "net.connect"),
+        (CliSessionsSearch, "cli.sessions_search"),
+    ];
+    let mut cases = Vec::new();
+    for (op, want) in bare {
+        cases.push((op, None, want));
+        cases.push((op, Some("shell"), want));
+    }
+    use contract::diag::HookChain::*;
+    for (chain, want) in [
+        (SessionStart, "hook.session_start"),
+        (TurnStart, "hook.turn_start"),
+        (BeforeMessage, "hook.before_message"),
+        (BeforeModelCall, "hook.before_model_call"),
+        (TurnEnd, "hook.turn_end"),
+    ] {
+        cases.push((Hook(chain), None, want));
+        cases.push((Hook(chain), Some("shell"), want));
+    }
+    cases
+}
+
+/// Asserts the closed `data` key set on one parsed `op_timing` line: `op`
+/// and `ms`, plus `tool` exactly when the guard carried one. Every new
+/// timing test passes its lines through here.
+fn assert_timing_data(line: &serde_json::Value, op: &str, tool: Option<&str>) {
+    assert_eq!(line["code"], "op_timing");
+    let data = line["data"].as_object().expect("data is an object");
+    let mut keys: Vec<&str> = data.keys().map(String::as_str).collect();
+    keys.sort_unstable();
+    let mut want = vec!["ms", "op"];
+    if tool.is_some() {
+        want.push("tool");
+    }
+    assert_eq!(keys, want, "closed data keys: {line}");
+    assert_eq!(data["op"], op);
+    assert!(data["ms"].is_u64(), "{line}");
+    match tool {
+        Some(tool) => assert_eq!(data["tool"], tool),
+        None => assert!(data.get("tool").is_none(), "{line}"),
+    }
+}
+
+#[test]
+fn op_timing_data_holds_only_op_ms_and_tool() {
+    let home = Home::new("ld-timed-data");
+    let inner = fakes::clock::FakeClock::new();
+    let clock: Arc<dyn Clock> = inner.clone();
+    let diag = Diag::new(home.path(), Process::Hub, Level::Debug, clock);
+    let cases = every_timed_case();
+    for (op, tool, _) in &cases {
+        let start = inner.now();
+        drop(timed(&diag, *op, *tool, Some(start)).expect("debug guard"));
+    }
+    let text = home.text("hub.log");
+    let lines: Vec<&str> = text.lines().collect();
+    assert_eq!(lines.len(), cases.len(), "one line per guard");
+    for (line, (_, tool, want)) in lines.iter().zip(&cases) {
+        // The raw bytes pin the key order: `op`, `ms`, then `tool`.
+        let data = match tool {
+            Some(tool) => format!("\"data\":{{\"op\":\"{want}\",\"ms\":0,\"tool\":\"{tool}\"}}"),
+            None => format!("\"data\":{{\"op\":\"{want}\",\"ms\":0}}"),
+        };
+        assert!(line.contains(&data), "{line}");
+        let parsed: serde_json::Value = serde_json::from_str(line).unwrap();
+        assert_timing_data(&parsed, want, *tool);
+    }
+}
+
+#[test]
+fn every_process_shape_writes_the_closed_data_keys() {
+    for (process, kind) in [
+        (Process::Hub, "hub"),
+        (Process::Session, "session"),
+        (Process::Ask, "ask"),
+        (Process::Tui, "tui"),
+    ] {
+        let home = Home::new("ld-timed-keys");
+        let inner = fakes::clock::FakeClock::new();
+        let clock: Arc<dyn Clock> = inner.clone();
+        let diag = Diag::new(home.path(), process, Level::Debug, clock);
+        for (op, tool, want) in [
+            (Op::ToolRun, Some("shell"), "tool.run"),
+            (Op::TurnRequest, None, "turn.request"),
+        ] {
+            let start = inner.now();
+            drop(timed(&diag, op, tool, Some(start)).expect("debug guard"));
+            let name = if kind == "hub" {
+                "hub.log".to_owned()
+            } else {
+                pid_file(kind)
+            };
+            let text = home.text(&name);
+            let parsed: serde_json::Value =
+                serde_json::from_str(text.lines().last().unwrap()).unwrap();
+            assert_timing_data(&parsed, want, tool);
+        }
+    }
+}
+
+#[test]
+fn info_warn_and_error_lines_carry_no_data() {
+    let home = Home::new("ld-timed-nodata");
+    let diag = home.diag(Process::Hub, Level::Debug);
+    diag.line(Severity::Info, None, "hub_started", "The hub started.");
+    diag.line(Severity::Warn, None, "slow", "Slow.");
+    diag.line(Severity::Error, None, "failed", "Failed.");
+    for line in home.text("hub.log").lines() {
+        let parsed: serde_json::Value = serde_json::from_str(line).unwrap();
+        assert!(parsed.get("data").is_none(), "{line}");
+    }
 }

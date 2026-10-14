@@ -404,13 +404,330 @@ fn a_leader_that_exits_while_its_descendant_holds_stdout_times_out_and_the_group
         "the wait parked at its deadline again"
     );
     clock.advance(Duration::from_millis(1));
-    let error = Deadline::after(fakes::MUST_SUCCEED_WITHIN)
-        .recv_or_fail(&finished, "the timed-out read")
-        .expect_err("a command holding stdout past its timeout");
+    // The timeout re-kills on the poll cadence and parks between passes:
+    // drive each confirmed poll park, as the re-kill test does. The advance
+    // above wakes only one pass, whose probe can still see a
+    // reaped-but-not-yet-reaped zombie alive under load; without further
+    // advances nothing ever bumps again and the wait parks forever. Each
+    // advance follows a confirmed park, and each park waits only a poll
+    // pause of the drive, so an already-retired group still ends the loop
+    // on its answer instead of stalling on a park that never comes.
+    let drive = Deadline::after(DEADLINE);
+    let mut answer: Option<std::io::Result<std::process::Output>> = None;
+    while answer.is_none() {
+        match finished.try_recv() {
+            Ok(got) => {
+                answer = Some(got);
+                break;
+            }
+            Err(mpsc::TryRecvError::Empty) => {}
+            Err(mpsc::TryRecvError::Disconnected) => break,
+        }
+        if drive.left().is_zero() {
+            break;
+        }
+        let poll = clock
+            .now()
+            .checked_add(GROUP_POLL)
+            .expect("the poll is countable");
+        if clock.await_parked(poll, drive.left().min(PARK_PAUSE)) {
+            clock.advance(GROUP_POLL);
+        }
+    }
+    let error = match answer {
+        Some(got) => got.expect_err("a command holding stdout past its timeout"),
+        None => Deadline::after(fakes::MUST_SUCCEED_WITHIN)
+            .recv_or_fail(&finished, "the timed-out read")
+            .expect_err("a command holding stdout past its timeout"),
+    };
     assert_eq!(error.kind(), std::io::ErrorKind::TimedOut);
     assert!(
         fakes::group_empties(pgid, DEADLINE),
         "the timeout killed the group"
+    );
+    watchdog.stand_down(DEADLINE);
+    pre.stand_down(DEADLINE);
+}
+
+/// The timeout kill re-kills a group that survives the first SIGKILL until
+/// no process is left in it: the script answers the first two probes alive
+/// — a fork landing inside the kernel kill walk — and SRCH only after the
+/// second send, so the wait must deliver twice and retire the group on
+/// SRCH. An accepted send never retires the group, only SRCH does.
+#[test]
+fn timeout_rekills_a_group_that_survives_its_first_kill() {
+    let root = fakes::TempDir::new("fiber-read-timeout-rekill");
+    let ready = Ready::new(root.path());
+    let timeout = Duration::from_secs(30);
+    let clock = FakeClock::new();
+    let deadline = clock.origin() + timeout;
+    let reads = Arc::new(Reads::default());
+    // The `sleep` inherits stdout, so the leader's exit is not the run's
+    // end: the wait parks at its deadline with the leader already gone,
+    // and the timeout below needs no reap wait, only the group's kills.
+    let script = format!("echo $$ > '{}'; sleep 600 & exit 0", ready.path().display());
+    let pre = fakes::Watchdog::matching(&ready.path().display().to_string());
+    let finished = credential_on_thread(&reads, sh(&script), timeout, &clock);
+    let pgid = ready.wait(DEADLINE)[0];
+    let watchdog = fakes::Watchdog::group(pgid);
+    assert!(
+        clock.await_parked(deadline, DEADLINE),
+        "the wait parked at its deadline"
+    );
+    // Alive past the first kill, gone after the second.
+    reads.script_group(
+        pgid,
+        vec![Ok(()), Ok(()), Err(Errno::SRCH)],
+        vec![Ok(()), Ok(())],
+    );
+    clock.advance(timeout);
+    // The timeout re-kills on the poll cadence: each advance follows a
+    // confirmed park, so the first two parks each earn one more send and
+    // the third observation retires the group.
+    let poll = deadline + GROUP_POLL;
+    assert!(
+        clock.await_parked(poll, DEADLINE),
+        "the timeout parked at its first poll"
+    );
+    clock.advance(GROUP_POLL);
+    let repoll = poll + GROUP_POLL;
+    assert!(
+        clock.await_parked(repoll, DEADLINE),
+        "the timeout parked at its second poll"
+    );
+    clock.advance(GROUP_POLL);
+    let error = Deadline::after(DEADLINE)
+        .recv_or_fail(&finished, "the timed-out read")
+        .expect_err("a command still running at its timeout");
+    assert_eq!(error.kind(), std::io::ErrorKind::TimedOut);
+    assert_eq!(reads.scripted_sends(), 2, "one send per pass before SRCH");
+    assert!(
+        !listed(&reads).contains(&pgid),
+        "SRCH retires the group: {:?}",
+        listed(&reads)
+    );
+    // The scripted sends never touched the real group: kill it for real
+    // and reap it on every path.
+    match fakes::kill_group(pgid, "KILL") {
+        Ok(_) | Err(_) => {}
+    }
+    assert!(
+        fakes::group_empties(pgid, DEADLINE),
+        "the real group is gone"
+    );
+    watchdog.stand_down(DEADLINE);
+    pre.stand_down(DEADLINE);
+}
+
+/// The timeout gives up re-killing at its bound: one nanosecond short it
+/// is still parked with no answer, at the bound it answers `TimedOut` with
+/// the group still listed for later settlement. Pins the boundary both
+/// sides.
+#[test]
+fn timeout_leaves_a_stubborn_group_listed_at_its_bound() {
+    let root = fakes::TempDir::new("fiber-read-timeout-bound");
+    let ready = Ready::new(root.path());
+    let timeout = Duration::from_secs(30);
+    let clock = FakeClock::new();
+    let deadline = clock.origin() + timeout;
+    let end = deadline + doors::SHUTDOWN_BOUND;
+    let reads = Arc::new(Reads::default());
+    // As in the re-kill test above: the leader's exit is not the run's
+    // end, so the timeout needs no reap wait, only the group's kills.
+    let script = format!("echo $$ > '{}'; sleep 600 & exit 0", ready.path().display());
+    let pre = fakes::Watchdog::matching(&ready.path().display().to_string());
+    let finished = credential_on_thread(&reads, sh(&script), timeout, &clock);
+    let pgid = ready.wait(DEADLINE)[0];
+    let watchdog = fakes::Watchdog::group(pgid);
+    assert!(
+        clock.await_parked(deadline, DEADLINE),
+        "the wait parked at its deadline"
+    );
+    // Alive past every probe within the bound: 600 scripted sends at a
+    // 10 ms cadence outlast the 5 s bound, as in the settle retry test.
+    reads.script_group(
+        pgid,
+        (0..600).map(|_| Ok(())).collect(),
+        (0..600).map(|_| Ok(())).collect(),
+    );
+    clock.advance(timeout);
+    assert!(
+        clock.await_parked(deadline + GROUP_POLL, DEADLINE),
+        "the timeout parked at its first poll"
+    );
+    // Jump to one nanosecond short of the end: every pass between still
+    // found the scripted group alive and sent again.
+    let mark = clock.advance_marked(
+        doors::SHUTDOWN_BOUND
+            .checked_sub(Duration::from_nanos(1))
+            .expect("the bound holds a nanosecond"),
+    );
+    assert!(
+        clock.await_parked_since(&mark, Some(end), DEADLINE),
+        "the timeout parked again short of its bound"
+    );
+    assert!(
+        matches!(finished.try_recv(), Err(mpsc::TryRecvError::Empty)),
+        "timeout answered short of its bound"
+    );
+    clock.advance(Duration::from_nanos(1));
+    let error = Deadline::after(DEADLINE)
+        .recv_or_fail(&finished, "the timed-out read")
+        .expect_err("a command still running at its timeout");
+    assert_eq!(error.kind(), std::io::ErrorKind::TimedOut);
+    assert!(
+        listed(&reads).contains(&pgid),
+        "the bound leaves the group listed: {:?}",
+        listed(&reads)
+    );
+    let sends = reads.scripted_sends();
+    assert!(
+        sends >= 2,
+        "the timeout retried within the bound, not once: {sends}"
+    );
+    // The scripted sends never touched the real group: kill it for real
+    // and reap it on every path.
+    match fakes::kill_group(pgid, "KILL") {
+        Ok(_) | Err(_) => {}
+    }
+    assert!(
+        fakes::group_empties(pgid, DEADLINE),
+        "the real group is gone"
+    );
+    watchdog.stand_down(DEADLINE);
+    pre.stand_down(DEADLINE);
+}
+
+/// The timeout shares one absolute end for settlement and the reap: the
+/// leader below never exits, so an unbounded reap would hang past the
+/// end. One nanosecond short of the end the wait is still parked with no
+/// answer; at the end it answers `TimedOut` with the group still listed
+/// for later settlement. Pins the boundary both sides.
+#[test]
+fn timeout_with_a_live_leader_answers_at_the_bound_without_the_reap() {
+    let root = fakes::TempDir::new("fiber-read-timeout-live-leader");
+    let ready = Ready::new(root.path());
+    let timeout = Duration::from_secs(30);
+    let clock = FakeClock::new();
+    let deadline = clock.origin() + timeout;
+    let end = deadline + doors::SHUTDOWN_BOUND;
+    let reads = Arc::new(Reads::default());
+    // The leader never exits: `sleep` holds both the group and stdout, so
+    // neither the exit nor the output ever arrives.
+    let script = format!("echo $$ > '{}'; exec sleep 600", ready.path().display());
+    let pre = fakes::Watchdog::matching(&ready.path().display().to_string());
+    let finished = credential_on_thread(&reads, sh(&script), timeout, &clock);
+    let pgid = ready.wait(DEADLINE)[0];
+    let watchdog = fakes::Watchdog::group(pgid);
+    assert!(
+        clock.await_parked(deadline, DEADLINE),
+        "the wait parked at its deadline"
+    );
+    // Alive past every probe within the bound: 600 scripted sends at a
+    // 10 ms cadence outlast the 5 s bound, as in the settle retry test.
+    reads.script_group(
+        pgid,
+        (0..600).map(|_| Ok(())).collect(),
+        (0..600).map(|_| Ok(())).collect(),
+    );
+    clock.advance(timeout);
+    assert!(
+        clock.await_parked(deadline + GROUP_POLL, DEADLINE),
+        "the timeout parked at its first poll"
+    );
+    // Jump to one nanosecond short of the end: still parked, no answer.
+    let mark = clock.advance_marked(
+        doors::SHUTDOWN_BOUND
+            .checked_sub(Duration::from_nanos(1))
+            .expect("the bound holds a nanosecond"),
+    );
+    assert!(
+        clock.await_parked_since(&mark, Some(end), DEADLINE),
+        "the timeout parked again short of its bound"
+    );
+    assert!(
+        matches!(finished.try_recv(), Err(mpsc::TryRecvError::Empty)),
+        "timeout answered short of its bound"
+    );
+    clock.advance(Duration::from_nanos(1));
+    let error = Deadline::after(DEADLINE)
+        .recv_or_fail(&finished, "the timed-out read")
+        .expect_err("a live leader still running at its timeout");
+    assert_eq!(error.kind(), std::io::ErrorKind::TimedOut);
+    assert!(
+        listed(&reads).contains(&pgid),
+        "the bound leaves the group listed: {:?}",
+        listed(&reads)
+    );
+    let sends = reads.scripted_sends();
+    assert!(
+        sends >= 2,
+        "the timeout retried within the bound, not once: {sends}"
+    );
+    // The scripted sends never touched the real group: kill it for real
+    // and reap it on every path.
+    match fakes::kill_group(pgid, "KILL") {
+        Ok(_) | Err(_) => {}
+    }
+    assert!(
+        fakes::group_empties(pgid, DEADLINE),
+        "the real group is gone"
+    );
+    watchdog.stand_down(DEADLINE);
+    pre.stand_down(DEADLINE);
+}
+
+/// A cancel that lands while the timeout settles its group answers
+/// `Interrupted`, never `TimedOut`: the cancel bumps the parked
+/// settlement pass, which observes it at once. The settlement below is
+/// parked at its first poll when the cancel lands, on every run.
+#[test]
+fn cancel_during_settlement_answers_interrupted() {
+    let root = fakes::TempDir::new("fiber-read-cancel-during-settlement");
+    let ready = Ready::new(root.path());
+    let timeout = Duration::from_secs(30);
+    let clock = FakeClock::new();
+    let deadline = clock.origin() + timeout;
+    let reads = Arc::new(Reads::default());
+    let script = format!("echo $$ > '{}'; exec sleep 600", ready.path().display());
+    let pre = fakes::Watchdog::matching(&ready.path().display().to_string());
+    let finished = credential_on_thread(&reads, sh(&script), timeout, &clock);
+    let pgid = ready.wait(DEADLINE)[0];
+    let watchdog = fakes::Watchdog::group(pgid);
+    assert!(
+        clock.await_parked(deadline, DEADLINE),
+        "the wait parked at its deadline"
+    );
+    // Scripted alive through the controlled poll: a real SIGKILL and the
+    // reaper wake would otherwise complete the timeout before the cancel
+    // below, so settlement stays pending until the cancel ends it. The
+    // scripted sends never touch the real group; the test kills it for
+    // real after the answer.
+    reads.script_group(
+        pgid,
+        (0..10).map(|_| Ok(())).collect(),
+        (0..10).map(|_| Ok(())).collect(),
+    );
+    clock.advance(timeout);
+    // The settlement re-kills on the poll cadence: parked at its first
+    // poll, the wait can only leave through the cancel below.
+    assert!(
+        clock.await_parked(deadline + GROUP_POLL, DEADLINE),
+        "the timeout parked at its first poll"
+    );
+    reads.cancel();
+    let error = Deadline::after(DEADLINE)
+        .recv_or_fail(&finished, "the cancelled read")
+        .expect_err("a read cancelled while timing out");
+    assert_eq!(error.kind(), std::io::ErrorKind::Interrupted);
+    // The scripted sends never touched the real group: kill it for real
+    // and reap it on every path.
+    match fakes::kill_group(pgid, "KILL") {
+        Ok(_) | Err(_) => {}
+    }
+    assert!(
+        fakes::group_empties(pgid, DEADLINE),
+        "the real group is gone"
     );
     watchdog.stand_down(DEADLINE);
     pre.stand_down(DEADLINE);
@@ -833,6 +1150,184 @@ fn cancel_passes_a_blocked_spawn_and_the_late_child_is_killed() {
     late.stand_down(DEADLINE);
 }
 
+/// Drives a settle to completion on the fake clock and returns its
+/// answer, through a controlled interleaving that shows both halves
+/// while the reap stays held. The blind-probe phase keeps every hold
+/// and runs ten advance-to-confirmed-re-park cycles exactly like the old
+/// drive, proving it spends budget with zero progress: the clock moves
+/// exactly ten advances while the held leader stays unreaped, so the
+/// settle still lists the real group. The listing is read from the
+/// settle itself: a killed-but-unreaped leader probes `EPERM` on some
+/// platforms, which keeps the group pending in the settle (only `SRCH`
+/// retires) while reading empty through the raw probe. The gated phase
+/// then proves the fixed drive holds its budget while the group is
+/// held: a few iterations still list the group, and an await for a park
+/// past the current one must time out — without a clock advance the
+/// settle never leaves its park (its kill path bumps nothing), so no
+/// re-park arrives. Only then are the release senders dropped and the
+/// settle driven to completion: past the release zero-move wakes let
+/// the settle observe it without spending budget, and every budgeted
+/// advance needs both a confirmed re-park and the settle no longer
+/// listing `real`, so a slow real death parks the settle without
+/// spending the bound. Completion and every acknowledgement share the
+/// drive's one deadline: each acknowledgement waits only a poll pause
+/// of it. Fails the test when the drive's deadline runs out first.
+#[track_caller]
+fn drive_settle_to_completion(
+    clock: &Arc<FakeClock>,
+    reads: &Arc<Reads>,
+    finished: &mpsc::Receiver<bool>,
+    drive: &Deadline,
+    real: u32,
+    releases: Vec<mpsc::Sender<()>>,
+) -> bool {
+    let start = clock.origin();
+    let poll = start + GROUP_POLL;
+    assert!(
+        clock.await_parked(poll, drive.left()),
+        "the settle parked at its poll"
+    );
+    // Blind-probe phase, holds maintained: ten advances. Each confirmed
+    // re-park is the held path; once the settle answers early instead
+    // (its group died unheld) later cycles keep the cadence, so the
+    // still-listed assert below names the failure, not these lines.
+    let mut answered = false;
+    let mut mark = clock.advance_marked(Duration::from_millis(50));
+    for _ in 1..10 {
+        let reparked = clock.await_any_parked_since(&mark, drive.left().min(PARK_PAUSE));
+        if !reparked && !answered {
+            answered = finished.try_recv().is_ok();
+        }
+        assert!(
+            reparked || answered,
+            "the settle parked again after the probe advance"
+        );
+        mark = clock.advance_marked(Duration::from_millis(50));
+    }
+    let reparked = clock.await_any_parked_since(&mark, drive.left().min(PARK_PAUSE));
+    if !reparked && !answered {
+        answered = finished.try_recv().is_ok();
+    }
+    assert!(
+        reparked || answered,
+        "the settle parked again after the last probe advance"
+    );
+    assert_eq!(
+        clock.now(),
+        start + Duration::from_millis(500),
+        "the blind probe spent exactly ten advances"
+    );
+    assert!(
+        listed(reads).contains(&real),
+        "the held group is still listed after the blind probe: {:?}",
+        listed(reads)
+    );
+    // Retention phase, holds maintained: the fixed drive spends nothing
+    // while the group is held. Four iterations still list the group,
+    // then an await for a park past the current one must time out:
+    // without a clock advance the settle never leaves its park (its
+    // kill path bumps nothing), so no re-park arrives. The mark below
+    // is taken without waking the settle, so the await is genuine.
+    for _ in 0..4 {
+        assert!(
+            listed(reads).contains(&real),
+            "the held group stays listed while frozen: {:?}",
+            listed(reads)
+        );
+    }
+    let frozen = clock
+        .mark_parked(clock.now() + GROUP_POLL, drive.left())
+        .expect("the settle parked at its poll");
+    assert!(
+        !clock.await_any_parked_since(&frozen, PARK_PAUSE),
+        "the settle re-parked without a clock advance"
+    );
+    assert_eq!(
+        clock.now(),
+        start + Duration::from_millis(500),
+        "the retention spent no budget"
+    );
+    assert!(
+        listed(reads).contains(&real),
+        "the held group is still listed before release: {:?}",
+        listed(reads)
+    );
+    assert!(
+        matches!(finished.try_recv(), Err(mpsc::TryRecvError::Empty)),
+        "the settle answered while its group was held"
+    );
+    for release in releases {
+        drop(release);
+    }
+    // Release observation: the settle learns of the release only on a
+    // wake (its kill path bumps nothing), so each pass below wakes one
+    // without moving the clock — the park the mark names proves the
+    // settle waits on it first. The loop ends once the settle retires
+    // the reaped group (and answers in the same pass) or answers
+    // outright; the clock still sits at the blind-probe mark after.
+    let mut answer = finished.try_recv().ok();
+    while answer.is_none() && listed(reads).contains(&real) {
+        if drive.left().is_zero() {
+            break;
+        }
+        let parked_at = clock.now() + GROUP_POLL;
+        match clock.mark_parked(parked_at, drive.left().min(PARK_PAUSE)) {
+            Some(_) => {
+                clock.advance_marked(Duration::ZERO);
+            }
+            None => {
+                // Never parked again: the pass answered instead.
+                answer = finished.try_recv().ok();
+                break;
+            }
+        }
+        answer = finished.try_recv().ok();
+    }
+    assert_eq!(
+        clock.now(),
+        start + Duration::from_millis(500),
+        "the release observation spent no budget"
+    );
+    // Gated tail: every budgeted advance needs both a confirmed re-park
+    // and the settle no longer listing `real`, so a slow real death
+    // parks the settle without spending the bound. The marks below are
+    // taken without waking the settle, so a hold iteration's
+    // `PARK_PAUSE`-bounded await genuinely times out while frozen.
+    // Usually skipped: the observation above already holds the answer.
+    let answer = match answer {
+        Some(answer) => answer,
+        None => loop {
+            if let Ok(answer) = finished.try_recv() {
+                break answer;
+            }
+            if drive.left().is_zero() {
+                break drive.recv(finished).expect("the settle");
+            }
+            let parked_at = clock.now() + GROUP_POLL;
+            match clock.mark_parked(parked_at, drive.left().min(PARK_PAUSE)) {
+                // No park again: the settle answered instead; take it
+                // under the drive.
+                None => break drive.recv(finished).expect("the settle"),
+                Some(since) => {
+                    if !listed(reads).contains(&real)
+                        && clock.await_any_parked_since(&since, drive.left().min(PARK_PAUSE))
+                    {
+                        clock.advance_marked(Duration::from_millis(50));
+                    }
+                }
+            }
+        },
+    };
+    if answer {
+        assert!(
+            clock.now() < start + doors::SHUTDOWN_BOUND,
+            "the gated drive kept budget: {:?} past {start:?}",
+            clock.now() - start
+        );
+    }
+    answer
+}
+
 /// A cancelled group with a live member is settled by killing it, not by
 /// counting spawns: the command below blocks in `sleep` with nothing in
 /// flight, so a count-only settle answers `true` while the group lives.
@@ -853,6 +1348,13 @@ fn settle_rekills_a_cancelled_survivor_before_answering_true() {
     let (listed_tx, listed_rx) = mpsc::channel::<()>();
     let (release_tx, release_rx) = mpsc::channel::<()>();
     reads.pause_at_listed(listed_tx, release_rx);
+    // Held before the reap: the acknowledgement proves the command thread
+    // reached its leader's reap, so the leader stays a zombie and the
+    // group stays listed until the drive below releases it. The pause is
+    // one-shot, so it is armed before the only command thread starts.
+    let (held_tx, is_held) = mpsc::channel::<()>();
+    let (free_tx, freed_rx) = mpsc::channel::<()>();
+    reads.pause_at_command_reap(held_tx, freed_rx);
     let running = {
         let reads = Arc::clone(&reads);
         std::thread::spawn(move || reads.command(&mut sh(&script)))
@@ -865,6 +1367,9 @@ fn settle_rekills_a_cancelled_survivor_before_answering_true() {
     assert_eq!(listed(&reads), vec![pgid], "listed while it runs");
     assert_eq!(reads.lock().spawning, 0, "nothing in flight");
     release_tx.send(()).unwrap();
+    Deadline::after(DEADLINE)
+        .recv(&is_held)
+        .expect("the command held before its reap");
     assert!(
         fakes::kill_group(pgid, "0").unwrap(),
         "the member lives before the settle"
@@ -874,39 +1379,8 @@ fn settle_rekills_a_cancelled_survivor_before_answering_true() {
     // Set directly: `cancel` would kill the group and hide the survivor.
     reads.lock().cancelled = true;
     let settled = settle_on_thread(&reads, &clock, doors::SHUTDOWN_BOUND);
-    // Completion or an acknowledged park decides, never a real-time wait:
-    // the fix kills and rechecks, so each advance follows a confirmed
-    // park. The first park is exact on the unmoved clock; later ones
-    // follow each advance. Completion and every ack share one deadline:
-    // each ack waits only a poll pause of it, and an ack's expiry
-    // re-checks completion and awaits the late park under what is left,
-    // never stopping the drive while time remains.
     let drive = Deadline::after(DEADLINE);
-    let poll = clock.origin() + GROUP_POLL;
-    let mut mark: Option<_> = None;
-    let mut answer = None;
-    loop {
-        if let Ok(got) = settled.try_recv() {
-            answer = Some(got);
-            break;
-        }
-        if drive.left().is_zero() {
-            break;
-        }
-        match &mark {
-            None => {
-                if clock.await_parked(poll, drive.left().min(PARK_PAUSE)) {
-                    mark = Some(clock.advance_marked(Duration::from_millis(50)));
-                }
-            }
-            Some(parked) => {
-                if clock.await_any_parked_since(parked, drive.left().min(PARK_PAUSE)) {
-                    mark = Some(clock.advance_marked(Duration::from_millis(50)));
-                }
-            }
-        }
-    }
-    let answer = answer.unwrap_or_else(|| drive.recv(&settled).expect("the settle"));
+    let answer = drive_settle_to_completion(&clock, &reads, &settled, &drive, pgid, vec![free_tx]);
     let lives = fakes::kill_group(pgid, "0").unwrap_or(false);
     // Guarded cleanup before the assertions: the survivor must not
     // outlive the test either way.
@@ -923,6 +1397,122 @@ fn settle_rekills_a_cancelled_survivor_before_answering_true() {
         !lives,
         "settle answered `true` while group {pgid} still lives"
     );
+}
+
+/// The superseded blind drive spends the whole bound while a held group
+/// stays listed: with the reap held through the entire drive, every
+/// 50 ms advance only re-parks the settle, so every derived cycle runs,
+/// the settle answers `false` at the bound, and the group is still
+/// listed. This pins the ticket's core scenario — bound spent while the
+/// group stays listed — which the claim tests above now drive through
+/// the gated helper instead. Deterministic with no load: every cycle is
+/// confirmed by a re-park, the group cannot unlist while its leader
+/// stays an unreaped zombie, and the clock moves only through this
+/// test's advances.
+#[test]
+fn settle_withheld_reap_spends_the_bound_with_the_group_listed() {
+    let root = fakes::TempDir::new("fiber-read-settle-withheld");
+    let ready = root.path().join("ready");
+    let clock = FakeClock::new();
+    let reads = Arc::new(Reads::default());
+    let script = format!("echo $$ > '{}'; exec sleep 600", ready.display());
+    // Before the spawn: the group is known only after it starts, so a
+    // command-line watchdog covers a spawn no later watchdog can reach.
+    let pre = fakes::Watchdog::matching(&ready.display().to_string());
+    // Paused after listing: the acknowledgement proves the group is listed
+    // with nothing in flight before the survivor state is seeded below.
+    let (listed_tx, listed_rx) = mpsc::channel::<()>();
+    let (release_tx, release_rx) = mpsc::channel::<()>();
+    reads.pause_at_listed(listed_tx, release_rx);
+    // Held before the reap: the acknowledgement proves the command thread
+    // reached its leader's reap, so the leader stays a zombie and the
+    // group stays listed. Unlike the claim tests, the hold stays armed
+    // through the whole drive below and is dropped only for cleanup.
+    let (held_tx, is_held) = mpsc::channel::<()>();
+    let (free_tx, freed_rx) = mpsc::channel::<()>();
+    reads.pause_at_command_reap(held_tx, freed_rx);
+    let running = {
+        let reads = Arc::clone(&reads);
+        std::thread::spawn(move || reads.command(&mut sh(&script)))
+    };
+    let pgid: u32 = ready_line(&ready).parse().unwrap();
+    let watchdog = fakes::Watchdog::group(pgid);
+    Deadline::after(DEADLINE)
+        .recv(&listed_rx)
+        .expect("the group listed");
+    assert_eq!(listed(&reads), vec![pgid], "listed while it runs");
+    assert_eq!(reads.lock().spawning, 0, "nothing in flight");
+    release_tx.send(()).unwrap();
+    Deadline::after(DEADLINE)
+        .recv(&is_held)
+        .expect("the command held before its reap");
+    assert!(
+        fakes::kill_group(pgid, "0").unwrap(),
+        "the member lives before the settle"
+    );
+    // The probe's post-cancel survivor: cancelled with a live listed group
+    // and no kill sent, as a fork during the kernel kill walk leaves one.
+    // Set directly: `cancel` would kill the group and hide the survivor.
+    reads.lock().cancelled = true;
+    let settled = settle_on_thread(&reads, &clock, doors::SHUTDOWN_BOUND);
+    // The superseded blind pattern, pinned: advance to each confirmed
+    // re-park for the whole bound at the 50 ms cadence — the count is
+    // derived from the bound, never hardcoded — checking the answer each
+    // iteration, since the final advance's pass reaches the bound and
+    // answers instead of re-parking.
+    let drive = Deadline::after(DEADLINE);
+    let poll = clock.origin() + GROUP_POLL;
+    assert!(
+        clock.await_parked(poll, drive.left()),
+        "the settle parked at its poll"
+    );
+    let cycles = (doors::SHUTDOWN_BOUND.as_millis() / 50) as usize;
+    let mut mark = clock.advance_marked(Duration::from_millis(50));
+    let mut answer = None;
+    for _ in 1..cycles {
+        if let Ok(got) = settled.try_recv() {
+            answer = Some(got);
+            break;
+        }
+        // A missing re-park means the settle answered instead of
+        // parking again; the drive takes it below. While the reap stays
+        // held that never happens before the bound.
+        if !clock.await_any_parked_since(&mark, drive.left().min(PARK_PAUSE)) {
+            answer = Some(drive.recv(&settled).expect("the settle"));
+            break;
+        }
+        mark = clock.advance_marked(Duration::from_millis(50));
+    }
+    // The final advance's pass answers at the bound instead of re-parking.
+    let answer = match answer {
+        Some(answer) => answer,
+        None => drive.recv(&settled).expect("the settle"),
+    };
+    assert!(
+        !answer,
+        "the withheld drive spends the bound and settles false"
+    );
+    assert_eq!(
+        clock.now(),
+        clock.origin() + doors::SHUTDOWN_BOUND,
+        "the blind drive spent exactly the bound"
+    );
+    assert!(
+        listed(&reads).contains(&pgid),
+        "the bound leaves the group listed: {:?}",
+        listed(&reads)
+    );
+    // Cleanup: the release drops before anything joins the holder, then
+    // the group is killed for real and the command thread reaped.
+    drop(free_tx);
+    match fakes::kill_group(pgid, "KILL") {
+        Ok(_) | Err(_) => {}
+    }
+    let _finished = fakes::within("the killed command", DEADLINE, move || {
+        running.join().unwrap()
+    });
+    watchdog.stand_down(DEADLINE);
+    pre.stand_down(DEADLINE);
 }
 
 /// A cancelled group that survives the first kill gets SIGKILL again, and
@@ -1031,19 +1621,36 @@ fn settle_drains_two_groups_together_within_one_bound() {
     let (listed_one, is_listed_one) = mpsc::channel::<()>();
     let (free_one, freed_one) = mpsc::channel::<()>();
     reads.pause_at_listed(listed_one, freed_one);
+    // Each command thread also holds before it reaps its leader, so the
+    // second group's leader stays a zombie and the group stays listed
+    // until the drive below releases it. The pauses are one-shot: the
+    // first hold is armed before the first thread starts and acknowledged
+    // before the second is armed, so each thread consumes its own.
+    let (held_one, is_held_one) = mpsc::channel::<()>();
+    let (release_one, freed_reap_one) = mpsc::channel::<()>();
+    reads.pause_at_command_reap(held_one, freed_reap_one);
     let running_one = start(&reads, &ready_one);
     Deadline::after(DEADLINE)
         .recv(&is_listed_one)
         .expect("the first group listed");
     free_one.send(()).unwrap();
+    Deadline::after(DEADLINE)
+        .recv(&is_held_one)
+        .expect("the first command held before its reap");
     let (listed_two, is_listed_two) = mpsc::channel::<()>();
     let (free_two, freed_two) = mpsc::channel::<()>();
     reads.pause_at_listed(listed_two, freed_two);
+    let (held_two, is_held_two) = mpsc::channel::<()>();
+    let (release_two, freed_reap_two) = mpsc::channel::<()>();
+    reads.pause_at_command_reap(held_two, freed_reap_two);
     let running_two = start(&reads, &ready_two);
     Deadline::after(DEADLINE)
         .recv(&is_listed_two)
         .expect("the second group listed");
     free_two.send(()).unwrap();
+    Deadline::after(DEADLINE)
+        .recv(&is_held_two)
+        .expect("the second command held before its reap");
     let pgid_one: u32 = ready_line(&ready_one).parse().unwrap();
     let pgid_two: u32 = ready_line(&ready_two).parse().unwrap();
     let watchdog_one = fakes::Watchdog::group(pgid_one);
@@ -1063,36 +1670,19 @@ fn settle_drains_two_groups_together_within_one_bound() {
     }
     let finished = cancel_and_settle_on_thread(&reads, &clock, doors::SHUTDOWN_BOUND);
     // The cancel's kill and the settle's first pass each deliver to the
-    // scripted group; it parks at its first poll, exact on the unmoved
-    // clock. Later passes find it already retired and cost no probe, so
-    // the drive below stays exact however slowly the real group dies.
-    // The first advance follows the confirmed park above, and every later
-    // advance follows a confirmed re-park. Completion and every ack share
-    // one deadline: each ack waits only a poll pause of it, and an ack's
-    // expiry re-checks completion and awaits the late park under what is
-    // left, never stopping the drive while time remains.
+    // scripted group; the shared drive below advances past each confirmed
+    // park, so the script schedules its SRCH observation on the second
+    // pass, whatever wall time the real group's death takes.
     let drive = Deadline::after(DEADLINE);
-    let poll = clock.origin() + GROUP_POLL;
     assert!(
-        clock.await_parked(poll, drive.left()),
-        "the settle parked at its poll"
-    );
-    let mut mark = clock.advance_marked(Duration::from_millis(50));
-    let mut answer = None;
-    loop {
-        if let Ok(got) = finished.try_recv() {
-            answer = Some(got);
-            break;
-        }
-        if drive.left().is_zero() {
-            break;
-        }
-        if clock.await_any_parked_since(&mark, drive.left().min(PARK_PAUSE)) {
-            mark = clock.advance_marked(Duration::from_millis(50));
-        }
-    }
-    assert!(
-        answer.unwrap_or_else(|| drive.recv(&finished).expect("the settle")),
+        drive_settle_to_completion(
+            &clock,
+            &reads,
+            &finished,
+            &drive,
+            pgid_two,
+            vec![release_one, release_two]
+        ),
         "both groups drain within the one bound"
     );
     assert_eq!(reads.scripted_sends(), 2, "one send per pass before SRCH");

@@ -34,12 +34,13 @@ pub use cache::{
     cached_model_lists, model_cache_age, model_cache_lock_file, read_model_cache, write_model_cache,
 };
 pub use contract::Secret;
+pub use contract::provider::{Cost, Tier};
 pub use credential::{Credentials, Read, Runner};
 pub use credential_file::{CredentialFile, CredentialLock};
 pub use error::ConfigError;
 pub use extension::{
-    Binary, Cost, Login, Manifest, ModelData, Opening, Placeholder, Process, Protocol,
-    ProviderData, Tier, provider_files, read_manifest, read_package_text, read_providers,
+    Binary, Login, Manifest, ModelData, Opening, Placeholder, Process, Protocol, ProviderData,
+    provider_files, read_manifest, read_package_text, read_providers,
 };
 pub use extension_settings::ExtensionSettings;
 pub use home::{

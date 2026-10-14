@@ -59,6 +59,150 @@ fn take_parked_leaves_everything_when_nothing_matches() {
     assert_eq!(ids(&parked), [1, 3]);
 }
 
+/// A ready hub with one 50 ms hook whose running call was judged at its
+/// deadline: the caller took `Timeout` and the abandon watch is armed for
+/// that call. Returns the hub, the watched id, its target, its timeout and
+/// the deadline the watch runs from.
+fn armed_hook() -> (Arc<Hub>, u64, Target, Duration, Instant) {
+    use super::super::declared::{DeclaredHook, HookPhase};
+
+    let hub = Hub::new(fakes::clock::FakeClock::new());
+    let point = "before_message".to_owned();
+    let target = Target::Hook {
+        point: point.clone(),
+        index: 0,
+    };
+    let timeout = Duration::from_millis(50);
+    let now = hub.clock().now();
+    let asked = now.checked_sub(timeout).unwrap();
+    let deadline = asked.checked_add(timeout).unwrap();
+    let watched = {
+        let mut shared = hub.lock();
+        shared.phase = Phase::Ready(Default::default());
+        if let Phase::Ready(timeouts) = &mut shared.phase {
+            timeouts.hooks.by_point.insert(
+                point,
+                vec![DeclaredHook {
+                    phase: HookPhase::Transform,
+                    blocking: false,
+                    timeout,
+                }],
+            );
+        } else {
+            panic!("not ready");
+        }
+        let watched = shared.push(target.clone(), serde_json::Value::Null, asked);
+        shared.queue.clear();
+        shared.calls.insert(
+            watched,
+            Progress::Started {
+                deadline: Some(deadline),
+                parked: false,
+            },
+        );
+        match shared.judge("ext", watched, &target, asked, now) {
+            (super::super::hub::Next::Return(Err(Error::Timeout { .. })), _) => {}
+            _ => panic!("the running hook times out at its deadline"),
+        }
+        assert!(
+            shared
+                .abandon
+                .as_ref()
+                .is_some_and(|watch| watch.id == watched),
+            "the Timeout arms the abandon watch"
+        );
+        watched
+    };
+    (hub, watched, target, timeout, deadline)
+}
+
+/// `park` disarms the abandon watch only for the watched hook: parking any
+/// other call keeps the watch armed, so the abandonment still fires past
+/// the grace; parking the watched hook itself disarms it, so the next judge
+/// past the grace finds the VM still up. With the comparison flipped
+/// (`!=`) the unrelated park would disarm and the watched park would keep
+/// the watch, failing here.
+#[test]
+fn parking_only_the_watched_hook_disarms_its_abandon_watch() {
+    use super::super::hub::Next;
+
+    let past_grace = |deadline: Instant| {
+        deadline
+            .checked_add(GRACE)
+            .and_then(|at| at.checked_add(Duration::from_millis(1)))
+            .unwrap()
+    };
+    // An unrelated park keeps the watch: the next judge past the grace
+    // still abandons the VM.
+    {
+        let lua = mlua::Lua::new();
+        let (hub, watched, target, timeout, deadline) = armed_hook();
+        let mut shared = hub.lock();
+        let mut parked = Vec::new();
+        let other = u64::MAX;
+        park(
+            &mut parked,
+            &mut shared,
+            other,
+            entry(&lua, other).thread,
+            Target::Command("other".to_owned()),
+            None,
+            timeout,
+            None,
+            None,
+            None,
+        );
+        assert!(
+            shared
+                .abandon
+                .as_ref()
+                .is_some_and(|watch| watch.id == watched),
+            "parking an unrelated call keeps the watch armed"
+        );
+        let at = past_grace(deadline);
+        let probe = shared.push(target.clone(), serde_json::Value::Null, at);
+        match shared.judge("ext", probe, &target, at, at) {
+            (Next::Return(Err(Error::Abandoned { .. })), _) => {}
+            _ => panic!("the armed watch past its grace abandons the VM"),
+        }
+        assert!(
+            matches!(shared.phase, Phase::Stopped(_)),
+            "the VM is abandoned"
+        );
+    }
+    // Parking the watched hook disarms the watch: the next judge past the
+    // grace waits for its own deadline with the VM still up.
+    {
+        let lua = mlua::Lua::new();
+        let (hub, watched, target, timeout, deadline) = armed_hook();
+        let mut shared = hub.lock();
+        let mut parked = Vec::new();
+        park(
+            &mut parked,
+            &mut shared,
+            watched,
+            entry(&lua, watched).thread,
+            target.clone(),
+            Some(deadline),
+            timeout,
+            None,
+            None,
+            None,
+        );
+        assert!(
+            shared.abandon.is_none(),
+            "parking the watched hook disarms the watch"
+        );
+        let at = past_grace(deadline);
+        let probe = shared.push(target.clone(), serde_json::Value::Null, at);
+        match shared.judge("ext", probe, &target, at, at) {
+            (Next::Sleep(_), _) => {}
+            _ => panic!("the disarmed watch abandons nothing"),
+        }
+        assert!(matches!(shared.phase, Phase::Ready(_)), "the VM stays up");
+    }
+}
+
 /// A thread `Start` for `dir`, outside any session.
 fn start_in(dir: &std::path::Path) -> Start {
     Start {

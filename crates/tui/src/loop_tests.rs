@@ -1225,9 +1225,9 @@ fn a_batch_settles_once_at_its_end() {
 }
 
 /// `fiber resume` opens through the hub: feed, recent, the subscribe and
-/// the session's commands, then the whole log streams as live lines. The
-/// loop folds every batch and draws the tail: the last reply shows, and
-/// no page is fetched twice.
+/// the session's commands, then the 150 turns / 1,348 envelopes stream as
+/// live lines. The loop folds every batch and draws the tail: the last
+/// reply shows, and no page is fetched twice.
 #[test]
 fn resume_open_replays_the_log_to_the_tail() {
     use std::io::{BufRead, BufReader, Write};
@@ -1285,15 +1285,30 @@ fn resume_open_replays_the_log_to_the_tail() {
         .try_clone()
         .unwrap_or_else(|err| panic!("clone: {err}"));
     let read_tx = tx.clone();
+    // The reader signals when it reaches EOF, so the test waits on the
+    // reader's answer instead of the drain window alone.
+    let (reader_done_tx, reader_done) = mpsc::channel();
     std::thread::Builder::new()
         .name("resume-read".to_owned())
-        .spawn(move || crate::link::read_lines(read_end, &read_tx))
+        .spawn(move || {
+            crate::link::read_lines(read_end, &read_tx);
+            reader_done_tx.send(()).unwrap_or(());
+        })
         .unwrap_or_else(|err| panic!("spawn: {err}"));
-    // The hub: answers commands, then streams the log on subscribe and
-    // hangs up, so the loop drains and returns.
+    // The hub: answers commands, then streams the 150 turns / 1,348
+    // envelopes on subscribe and hangs up, so the loop drains and returns.
     let stream = lines.clone();
     let seen = Arc::new(Mutex::new(Vec::new()));
     let record = Arc::clone(&seen);
+    // The pause point holding the subscribe answer: the hub signals it
+    // reached subscribe, then waits on a channel whose sender the test
+    // owns, so the hold needs no deadline of its own. The test sends to
+    // release it, and dropping the sender on panic releases it too.
+    let (subscribed_tx, subscribed) = mpsc::channel();
+    let (release_tx, release) = mpsc::channel();
+    // The hub signals when it finishes its writes, so the test waits on
+    // the hub's answer instead of the drain window alone.
+    let (hub_done_tx, hub_done) = mpsc::channel();
     std::thread::Builder::new()
         .name("resume-hub".to_owned())
         .spawn(move || {
@@ -1330,11 +1345,15 @@ fn resume_open_replays_the_log_to_the_tail() {
                         // A command naming a session is relayed, never
                         // answered by the hub itself: only the session's
                         // accept arrives, carrying its id, then the log.
+                        // The hub parks here until the test releases it: held
+                        // past DRAIN, the drain wait fails every run.
+                        subscribed_tx.send(()).unwrap_or(());
+                        release.recv().unwrap_or(());
                         write(session_ack(&id, json!({})));
                         for envelope in &stream {
                             write(serde_json::to_value(envelope).unwrap_or(Value::Null));
                         }
-                        return;
+                        break;
                     }
                     Some("commands") => {
                         write(session_ack(&id, json!({"commands": []})));
@@ -1350,6 +1369,7 @@ fn resume_open_replays_the_log_to_the_tail() {
                     _ => write(hub_ack(&id, json!({}))),
                 }
             }
+            hub_done_tx.send(()).unwrap_or(());
         })
         .unwrap_or_else(|err| panic!("spawn: {err}"));
     let hello = contract::HubLine {
@@ -1369,9 +1389,31 @@ fn resume_open_replays_the_log_to_the_tail() {
             done.send((code, lp)).unwrap_or(());
         })
         .unwrap_or_else(|err| panic!("spawn: {err}"));
-    let (code, lp) = Deadline::after(DRAIN)
-        .recv(&finished)
-        .unwrap_or_else(|err| panic!("waited {DRAIN:?} for the loop to drain: {err}"));
+    // The hub parked at subscribe: one deadline for the whole wait.
+    let parked = Deadline::after(DRAIN);
+    parked.recv_or_fail(&subscribed, "the hub to park at subscribe");
+    // The drain cannot answer while the subscribe answer is held: a
+    // bounded receive of its own that must time out. This is a receive
+    // with a bound, not a sleep.
+    assert!(
+        Deadline::after(Duration::from_millis(200))
+            .recv(&finished)
+            .is_err(),
+        "the loop drained while the subscribe answer was held"
+    );
+    release_tx
+        .send(())
+        .unwrap_or_else(|err| panic!("release: {err}"));
+    drop(release_tx);
+    // Drain completion off thread-park and answer events: the hub's
+    // writes, the reader's EOF, then the run thread's return. One
+    // deadline per wait, `DRAIN` kept as each wait's hang guard.
+    let hub_wait = Deadline::after(DRAIN);
+    hub_wait.recv_or_fail(&hub_done, "the hub to finish streaming the log");
+    let reader_wait = Deadline::after(DRAIN);
+    reader_wait.recv_or_fail(&reader_done, "the reader to reach EOF");
+    let drain_wait = Deadline::after(DRAIN);
+    let (code, lp) = drain_wait.recv_or_fail(&finished, "the loop to drain");
     assert_eq!(code, 0);
     assert!(ranges(&seen).is_empty(), "{:?}", ranges(&seen));
     let screen = shown(&lp);
