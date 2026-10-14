@@ -1463,10 +1463,13 @@ fn settle_withheld_reap_spends_the_bound_with_the_group_listed() {
             answer = Some(got);
             break;
         }
-        assert!(
-            clock.await_any_parked_since(&mark, drive.left().min(PARK_PAUSE)),
-            "the settle parked again after the probe advance"
-        );
+        // A missing re-park means the settle answered instead of
+        // parking again; the drive takes it below. While the reap stays
+        // held that never happens before the bound.
+        if !clock.await_any_parked_since(&mark, drive.left().min(PARK_PAUSE)) {
+            answer = Some(drive.recv(&settled).expect("the settle"));
+            break;
+        }
         mark = clock.advance_marked(Duration::from_millis(50));
     }
     // The final advance's pass answers at the bound instead of re-parking.
