@@ -51,7 +51,11 @@ An extension is one directory. Its manifest, `extension.json`, states
   session ends (`exit_timeout_ms`, no default)
 - an install step, if it has one, such as `npm ci`
 - the built-in tools and commands it replaces, and the providers it
-  registers with each one's base URLs (`replaces` and `providers`). An
+  registers with each one's base URLs (`replaces` and `providers`). `replaces`
+  covers the names in `BUILT_IN_TOOLS`, which are the built-in tools in
+  `docs/tools.md`, plus built-in commands. An MCP tool or `mcp_resources` is
+  replaced without a `replaces` entry, by registering its name (`docs/mcp.md`,
+  "Tools and their names"). An
   extension that registers a replacement or a provider its manifest does not
   declare is not loaded for the session, with the notice `extension_failed`,
   and a model whose base URL its provider's entry does not list is left out of
