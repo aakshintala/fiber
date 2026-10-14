@@ -1027,6 +1027,57 @@ fn loop_tool_label_exceptions_allow_zero_or_one_use_but_not_two() {
 }
 
 #[test]
+fn loop_tool_label_allowance_requires_each_context_field_to_match() {
+    let allowance = LABEL_ALLOWANCES[0];
+    let matches = |path, function, context, name, reason| {
+        label_allowance_matches(&allowance, path, function, context, name, reason)
+    };
+
+    assert!(matches(
+        allowance.path,
+        allowance.function,
+        allowance.context,
+        allowance.name,
+        allowance.reason
+    ));
+    assert!(!matches(
+        "crates/loop/src/other.rs",
+        allowance.function,
+        allowance.context,
+        allowance.name,
+        allowance.reason
+    ));
+    assert!(!matches(
+        allowance.path,
+        "other",
+        allowance.context,
+        allowance.name,
+        allowance.reason
+    ));
+    assert!(!matches(
+        allowance.path,
+        allowance.function,
+        "other",
+        allowance.name,
+        allowance.reason
+    ));
+    assert!(!matches(
+        allowance.path,
+        allowance.function,
+        allowance.context,
+        "other",
+        allowance.reason
+    ));
+    assert!(!matches(
+        allowance.path,
+        allowance.function,
+        allowance.context,
+        allowance.name,
+        "other"
+    ));
+}
+
+#[test]
 fn loop_tool_label_exceptions_do_not_exempt_other_uses_in_the_same_files() {
     let tools = registrations(&REGISTERED_TOOLS);
     let files = [
@@ -2125,20 +2176,121 @@ fn test_item_end_ignores_angle_comparisons_in_non_field_items() {
 }
 
 #[test]
-fn test_only_tokens_marks_only_direct_cfg_test_items() {
+fn cfg_test_attribute_requires_every_part_of_the_direct_attribute() {
+    let direct = source_tokens("cfg ( test )").unwrap();
+    assert!(cfg_test_attribute(&direct, 0, direct.len()));
+
+    // Each near miss keeps the right-hand side of one conjunction true while
+    // making its left-hand side false. Replacing any `&&` with `||` then
+    // mistakes the near miss for a direct cfg(test) attribute.
+    for source in [
+        "cfg ( test ) extra", // The span has an extra token.
+        "wrong ( test )",     // Not the cfg attribute.
+        "cfg wrong test )",   // No opening parenthesis.
+        "cfg ( other )",      // The condition is not test.
+        "cfg ( test wrong",   // No closing parenthesis.
+    ] {
+        let tokens = source_tokens(source).unwrap();
+        assert!(!cfg_test_attribute(&tokens, 0, tokens.len()), "{source}");
+    }
+}
+
+#[test]
+fn test_only_tokens_marks_direct_cfg_test_but_not_conditional_or_unattributed_cfg() {
     let tokens = source_tokens(
-        "let production = 1; #[cfg(feature = \"x\")] fn feature() {} #[cfg_attr(test, cfg(test))] fn conditional() {} #[cfg(test)] fn fixture() {}",
+        "let production = 1; #[cfg(feature = \"x\")] fn feature() {} #[cfg_attr(test, cfg(test))] fn conditional() {} #[cfg_attr(test, cfg_attr(feature = \"x\", cfg(test)))] fn deeper() {} cfg(test); fn outside() {} #[cfg(test)] fn fixture() {} mod outer { #[cfg(test)] fn nested() {} }",
     )
     .unwrap();
     let marked = test_only_tokens(&tokens).unwrap();
-    let production = token_with_ident(&tokens, "production");
-    let feature = token_with_ident(&tokens, "feature");
-    let conditional = token_with_ident(&tokens, "conditional");
-    let fixture = token_with_ident(&tokens, "fixture");
-    assert!(!marked[production]);
-    assert!(!marked[feature]);
-    assert!(!marked[conditional]);
-    assert!(marked[fixture]);
+    for name in ["production", "feature", "conditional", "deeper", "outside"] {
+        assert!(!marked[token_with_ident(&tokens, name)], "{name}");
+    }
+    for name in ["fixture", "nested"] {
+        assert!(marked[token_with_ident(&tokens, name)], "{name}");
+    }
+}
+
+#[test]
+fn conditional_cfg_attributes_remain_production_in_source_gates() {
+    let files = [source_file(
+        "hub",
+        "src/cfg_attributes.rs",
+        "#[cfg_attr(test, cfg(test))]\nfn conditional() { let _ = dir.join(\"sessions\"); }\n#[cfg_attr(test, cfg_attr(feature = \"x\", cfg(test)))]\nfn deeper() { let _ = dir.join(\"sessions\"); }\nfn plain_code() { cfg(test); let _ = dir.join(\"sessions\"); }\n#[cfg(test)]\nfn fixture() { let _ = dir.join(\"sessions\"); }\n",
+    )];
+    assert_eq!(
+        session_paths(&files),
+        [
+            "crates/hub/src/cfg_attributes.rs:2: session path outside log",
+            "crates/hub/src/cfg_attributes.rs:4: session path outside log",
+            "crates/hub/src/cfg_attributes.rs:5: session path outside log",
+        ]
+    );
+}
+
+#[test]
+fn path_segment_matches_complete_present_and_absent_segments() {
+    assert!(path_segment("id/events.jsonl", "events.jsonl"));
+    assert!(path_segment("sessions/id/events.jsonl", "sessions"));
+    assert!(!path_segment("id/events.jsonl.old", "events.jsonl"));
+    assert!(!path_segment("sessions_extra/id/events.jsonl", "sessions"));
+}
+
+#[test]
+fn session_paths_match_each_side_of_the_path_and_operation_alternative() {
+    let joined = [source_file(
+        "hub",
+        "src/joined.rs",
+        "fn build() { let _path = dir.join(\"sessions/id\"); }\n",
+    )];
+    assert_eq!(
+        session_paths(&joined),
+        ["crates/hub/src/joined.rs:1: session path outside log"]
+    );
+
+    let read = [source_file(
+        "hub",
+        "src/read.rs",
+        "fn read() { let _path = std::fs::read(\"sessions/id\"); }\n",
+    )];
+    assert_eq!(
+        session_paths(&read),
+        ["crates/hub/src/read.rs:1: session path outside log"]
+    );
+
+    let clean = [source_file(
+        "hub",
+        "src/lookalike.rs",
+        "fn clean() { let _path = std::fs::read(\"sessions_extra/id\"); }\n",
+    )];
+    assert!(session_paths(&clean).is_empty());
+}
+
+#[test]
+fn events_jsonl_segment_is_detected_for_joins_and_file_operations_only() {
+    let files = [
+        source_file(
+            "hub",
+            "src/joined_events.rs",
+            "fn build() { let _path = dir.join(\"id/events.jsonl\"); }\n",
+        ),
+        source_file(
+            "hub",
+            "src/read_events.rs",
+            "fn read() { let _path = std::fs::read(\"id/events.jsonl\"); }\n",
+        ),
+        source_file(
+            "hub",
+            "src/lookalike_events.rs",
+            "fn clean() { let _path = dir.join(\"id/events.jsonl.old\"); let text = \"id/events.jsonl\"; }\n",
+        ),
+    ];
+    assert_eq!(
+        session_paths(&files),
+        [
+            "crates/hub/src/joined_events.rs:1: session path outside log",
+            "crates/hub/src/read_events.rs:1: session path outside log",
+        ]
+    );
 }
 
 #[test]

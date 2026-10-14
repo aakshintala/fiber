@@ -1872,6 +1872,21 @@ fn previous_ident(tokens: &[SourceToken], at: usize, offset: usize, wanted: &str
         .is_some_and(|index| ident(tokens.get(index), wanted))
 }
 
+fn label_allowance_matches(
+    allowance: &LabelAllowance,
+    path: &str,
+    function: &str,
+    context: &str,
+    name: &str,
+    reason: &str,
+) -> bool {
+    allowance.path == path
+        && allowance.function == function
+        && allowance.context == context
+        && allowance.name == name
+        && allowance.reason == reason
+}
+
 #[cfg(test)]
 fn loop_sites(
     file: &RustFile,
@@ -1928,11 +1943,14 @@ fn loop_sites_with_tokens(
             };
             let exception = label.is_some_and(|label| {
                 let matching = label_allowances.iter().position(|allowance| {
-                    allowance.path == file.path.as_str()
-                        && allowance.function == function
-                        && allowance.context == label
-                        && allowance.name == name
-                        && allowance.reason == reason
+                    label_allowance_matches(
+                        allowance,
+                        file.path.as_str(),
+                        function,
+                        label,
+                        name,
+                        reason,
+                    )
                 });
                 if let Some(index) = matching {
                     label_allowances.remove(index);
