@@ -43,6 +43,9 @@ jobs:
         uses: taiki-e/install-action@83ac0ad63c0167e6f06796fab0fce28db1bf3db0 # v2.87.22
         with:
           tool: cargo-nextest
+      - name: Install zsh and fish
+        timeout-minutes: 5
+        run: scripts/install-shells
       - name: Run the workspace baseline
         timeout-minutes: 300
         run: cargo nextest run --workspace --no-fail-fast
@@ -79,6 +82,9 @@ jobs:
         uses: taiki-e/install-action@83ac0ad63c0167e6f06796fab0fce28db1bf3db0 # v2.87.22
         with:
           tool: cargo-mutants,cargo-nextest
+      - name: Install zsh and fish
+        timeout-minutes: 5
+        run: scripts/install-shells
       - name: List and run workspace mutants
         timeout-minutes: 300
         env:

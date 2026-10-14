@@ -217,7 +217,8 @@ On Linux x86_64 alone:
   generating mutants across every workspace package. It runs one full-workspace
   nextest baseline before starting 16 shards, each of which skips its own
   baseline; at most 16 shards run at once, and a concurrency group prevents
-  scheduled runs from overlapping. Each shard always uploads `mutants.out`,
+  scheduled runs from overlapping. Both baseline and shard jobs install zsh
+  and fish for the completion tests. Each shard always uploads `mutants.out`,
   including survivors and logs. The initial job limit is a generous 360 minutes
   because scheduled cold-run history is not available; each mutation step has a
   300-minute limit. This report gates no pull request or merge.
