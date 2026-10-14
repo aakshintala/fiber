@@ -2092,6 +2092,13 @@ fn a_cancel_mid_spawn_is_settled_before_exit() {
     Deadline::after(DEADLINE)
         .recv(&is_entered)
         .expect("the spawn reached its pause");
+    // Armed before the release, so the late spawn stops between its kill
+    // and its reap: the acknowledgement proves the kill is sent while the
+    // leader waits unreaped, so the settle below holds on the count, not
+    // on process timing.
+    let (reaping, is_reaping) = mpsc::channel::<()>();
+    let (free_reap, reap_freed) = mpsc::channel::<()>();
+    reads.pause_at_reap(reaping, reap_freed);
     reads.cancel();
     let settled = settle_on_thread(&reads, &clock, doors::SHUTDOWN_BOUND);
     assert!(
@@ -2099,12 +2106,74 @@ fn a_cancel_mid_spawn_is_settled_before_exit() {
         "settle returned with a spawn in flight"
     );
     release.send(()).expect("the spawn's release");
-    assert!(
-        Deadline::after(Duration::from_secs(3))
-            .recv(&settled)
-            .expect("the settle"),
-        "settle waits out the late kill"
+    Deadline::after(DEADLINE)
+        .recv(&is_reaping)
+        .expect("the spawn reached its reap");
+    // The spawn listed its group before the kill, so the listing holds
+    // the late PGID: the shell itself cannot report it, as the kill lands
+    // before it could run.
+    let groups = listed(&reads);
+    assert_eq!(
+        groups.len(),
+        1,
+        "only the late group is listed: {:?}",
+        groups
     );
+    let pgid = groups[0];
+    // The settle holds on the raised count while the reap is held: one
+    // bounded negative receive covers the whole hold, so a settle that
+    // answered on the kill alone fails here. One deadline for the whole
+    // hold, never one per receive.
+    assert!(
+        Deadline::after(DEADLINE).recv(&settled).is_err(),
+        "settle returned with the late child unreaped"
+    );
+    free_reap.send(()).expect("the reap's release");
+    // The late kill landed while the reap was held, so the shell is
+    // already dead: the wall-clock waits confirm it before the fake clock
+    // moves, never ahead of the real death. The command line only proves
+    // the shell is gone; the group wait proves the whole group is empty
+    // before the drive advances.
+    assert!(
+        fakes::matching_exits(&marker, DEADLINE),
+        "the late group is gone"
+    );
+    assert!(
+        fakes::group_empties(pgid, DEADLINE),
+        "the late group is empty"
+    );
+    // A fork that landed inside the kill still lists the group after the
+    // reap: the settle re-kills on its poll cadence and parks between
+    // passes with no further wake, so each advance follows a confirmed
+    // park until the answer arrives, on the stdout-hold timeout's cadence.
+    // The answer still arrives through `DEADLINE`.
+    let drive = Deadline::after(DEADLINE);
+    let mut answer: Option<bool> = None;
+    while answer.is_none() {
+        match settled.try_recv() {
+            Ok(got) => {
+                answer = Some(got);
+                break;
+            }
+            Err(mpsc::TryRecvError::Empty) => {}
+            Err(mpsc::TryRecvError::Disconnected) => break,
+        }
+        if drive.left().is_zero() {
+            break;
+        }
+        let poll = clock
+            .now()
+            .checked_add(GROUP_POLL)
+            .expect("the poll is countable");
+        if clock.await_parked(poll, drive.left().min(PARK_PAUSE)) {
+            clock.advance(GROUP_POLL);
+        }
+    }
+    let answer = match answer {
+        Some(answer) => answer,
+        None => drive.recv(&settled).expect("the settle"),
+    };
+    assert!(answer, "settle waits out the late kill");
     let error = Deadline::after(DEADLINE)
         .recv(&finished)
         .expect("the late read")
@@ -2115,10 +2184,6 @@ fn a_cancel_mid_spawn_is_settled_before_exit() {
         listed(&reads).is_empty(),
         "the settle retired the late group: {:?}",
         listed(&reads)
-    );
-    assert!(
-        fakes::matching_exits(&marker, DEADLINE),
-        "the late group is gone"
     );
     watching.stand_down(DEADLINE);
 }
