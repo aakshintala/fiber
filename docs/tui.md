@@ -1477,6 +1477,16 @@ widening it. Esc goes back to the provider list.
 - **Done.** "✓ Logged in to anthropic." in `success`. Footer: "Esc back".
 - **Failed.** "Login to anthropic failed: token expired.", the reason in
   `error`. Footer: "Esc back".
+- **Reviewer.** After the key is stored, and after a browser login stores
+  its credential, the provider's models with the saved pick preselected,
+  else the package default: "1) fast-1", the saved row marked
+  " (saved)", or "Saved reviewer `gone` is not listed; Enter keeps it."
+  when the pick left the list. With nothing preselected no row is
+  highlighted until the person moves or clicks; Enter saves the highlighted
+  row, or the kept pick, and stays open otherwise. An empty list keeps the
+  login with a note naming the provider; a failed save keeps it with an
+  error naming the key. Footer: "↑↓ move · Enter save · Esc back". Esc
+  returns to the provider list writing nothing.
 
 ### Quit
 
