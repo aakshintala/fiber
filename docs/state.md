@@ -251,6 +251,15 @@ What is recorded:
   (`VmHWM`) on Linux, and peak physical footprint on macOS
   (`docs/performance.md`, "Measuring"). A peak that cannot be read writes no
   line.
+- **At `debug`, how long a timed operation takes:** one `op_timing` line
+  when it ends, written by the one timer every timed place goes through
+  (`log::diag::timed`). `data` holds `op`, the operation's name, and `ms`,
+  whole milliseconds; a tool's timers add `tool`, the tool's name. No other
+  field is recorded, and never an argument, a path or any content, as for
+  every line in `logs/`. At `info` the cost is one check of the level,
+  except the one monotonic read taken before the configuration is read to
+  time `startup.config`, which is the only extra cost there. A new module
+  or top-level operation lands with its timer in the same pull request.
 
 An event inside a running session is recorded in that session's log and
 nowhere else; a hook that fails in a session, for example, is a `notice` or

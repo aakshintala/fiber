@@ -20,11 +20,17 @@ use contract::clock::{Clock, Wake};
 use rustix::event::{PollFd, PollFlags, Timespec, poll};
 use rustix::io::Errno;
 use rustix::process::{Pid, Signal, WaitId, WaitIdOptions};
+use support::group::GROUP_POLL;
 
 use crate::Input;
 
 /// How long a clipboard read may take, on the injected clock.
 pub(crate) const READ_LIMIT: Duration = Duration::from_secs(10);
+
+/// How long the cleanup re-kills the command's group until it probes
+/// empty, on the injected clock. Past it the read answers as it ended,
+/// the same as without the re-kill.
+const CLEANUP_LIMIT: Duration = Duration::from_secs(10);
 
 /// How many image bytes a paste may hold: 256 MiB.
 pub(crate) const IMAGE_CAP: usize = 256 * 1024 * 1024;
@@ -167,7 +173,8 @@ pub(crate) fn command(
 /// `cap` image bytes. Every read then ends the same way, success
 /// included: SIGKILL to the command's process group, SIGKILL to the
 /// child's pid when it has not exited, the read end dropped, the watcher's
-/// word, then the reap, by this worker alone.
+/// word, then the reap, by this worker alone, then SIGKILL to the group
+/// again until it probes empty.
 pub(crate) fn read(
     reader: &Reader,
     clock: &Arc<dyn Clock>,
@@ -218,6 +225,48 @@ fn signal_group(id: u32) {
     };
     match rustix::process::kill_process_group(pid, Signal::KILL) {
         Ok(_) | Err(_) => {}
+    }
+}
+
+/// Whether a group probe leaves no member behind: only SRCH, no such
+/// group, empties it. An accepted probe, PERM and every other errno keep
+/// the group pending for the next pass. A successful send proves delivery
+/// was accepted, never that the group is empty.
+fn probe_means_empty(outcome: rustix::io::Result<()>) -> bool {
+    match outcome {
+        Ok(()) => false,
+        Err(Errno::SRCH) => true,
+        Err(_) => false,
+    }
+}
+
+/// Whether the command's group still holds a process, through
+/// `kill(-pgid, 0)`. A refused id, or one past what a pid holds, reads
+/// empty: the probe sends nothing for it.
+fn group_alive(id: u32) -> bool {
+    let Some(pid) = pid_of(id) else {
+        return false;
+    };
+    !probe_means_empty(rustix::process::test_kill_process_group(pid))
+}
+
+/// SIGKILL to the command's group until it probes empty, within the
+/// cleanup bound on the injected clock: a member forked past the first
+/// kill is caught by the next pass instead of left behind. Each pass but
+/// the first waits one cadence on the clock, so a fake clock moves only
+/// when the test drives it and the real clock sets the pace. `true`
+/// leaves no group behind; `false` is the bound, and the read answers as
+/// it ended.
+fn settle_group(id: u32, clock: &Arc<dyn Clock>, end: Instant) -> bool {
+    loop {
+        if !group_alive(id) {
+            return true;
+        }
+        if clock.now() >= end {
+            return false;
+        }
+        clock.sleep(GROUP_POLL);
+        signal_group(id);
     }
 }
 
@@ -338,9 +387,58 @@ fn signal_after_group(
     signal_pid(id);
 }
 
+/// The next timeout cleanup's pause at its group kill, armed by a test and
+/// keyed by group id: the worker reports it sent the group's kill and
+/// blocks until the test releases it, so the test lands a fork between the
+/// kill and the reap on every run. One-shot; a group no test armed runs
+/// free and leaves the armed pause in place, so the pause never holds
+/// another test's read.
+#[cfg(test)]
+static CLEANUP_PAUSE: std::sync::Mutex<CleanupPause> = std::sync::Mutex::new(None);
+
+/// What [`CLEANUP_PAUSE`] holds: the armed group id, the worker's report
+/// sender and the test's release receiver.
+#[cfg(test)]
+type CleanupPause = Option<(u32, mpsc::Sender<()>, mpsc::Receiver<()>)>;
+
+/// Arms one pause of the next timeout cleanup of group `pgid` (see
+/// [`CLEANUP_PAUSE`]): the worker sends on `entered` once it sent the
+/// group's kill and blocks until `release` arrives. The pause is one-shot.
+#[cfg(test)]
+fn arm_cleanup_pause(pgid: u32, entered: mpsc::Sender<()>, release: mpsc::Receiver<()>) {
+    *CLEANUP_PAUSE.lock().unwrap_or_else(PoisonError::into_inner) = Some((pgid, entered, release));
+}
+
+/// Reports the worker sent the group's kill and blocks until the test
+/// releases it, when a test armed this group; runs free otherwise. A test
+/// that goes away drops the release sender, which releases the worker too.
+#[cfg(test)]
+fn cleanup_pause(id: u32) {
+    let point = {
+        let mut paused = CLEANUP_PAUSE.lock().unwrap_or_else(PoisonError::into_inner);
+        match paused.as_ref() {
+            Some((pgid, _, _)) if *pgid == id => paused.take(),
+            Some(_) | None => None,
+        }
+    };
+    if let Some((_, entered, release)) = point {
+        match entered.send(()) {
+            Ok(()) | Err(_) => {}
+        }
+        match release.recv() {
+            Ok(()) | Err(_) => {}
+        }
+    }
+}
+
+/// No pause outside the unit tests: the cleanup never blocks.
+#[cfg(not(test))]
+fn cleanup_pause(_id: u32) {}
+
 /// Runs the read of `child` to `end`, then ends it the same way every
 /// time: the signals, the read end dropped, the watcher's word, then the
-/// reap, by this worker alone.
+/// reap, by this worker alone, then SIGKILL to the group again until it
+/// probes empty.
 fn run(
     child: &mut Child,
     decode: Decode,
@@ -454,6 +552,7 @@ fn run(
         });
     };
     signal_after_group(id, exited, &exited_rx, signal_group, signal_pid);
+    cleanup_pause(id);
     let _ = stdout;
     match exited_rx.recv() {
         Ok(_) | Err(_) => {}
@@ -462,6 +561,14 @@ fn run(
         Ok(_) | Err(_) => {}
     }
     let status = child.wait().map(|status| status.success()).unwrap_or(false);
+    // The leader is reaped, so the probe below sees only real survivors:
+    // a member forked past the first kill is killed here, within the one
+    // cleanup bound, and the read still answers as its wait ended.
+    let settle_end = clock
+        .now()
+        .checked_add(CLEANUP_LIMIT)
+        .unwrap_or_else(|| clock.now());
+    settle_group(id, clock, settle_end);
     finish(end, status, out, decode)
 }
 

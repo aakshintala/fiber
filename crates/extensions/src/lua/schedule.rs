@@ -28,6 +28,8 @@ use super::hub::{
     Hub, Job, Phase, Progress, ProviderLoad, Shared, StopReason, not_registered, timed_out,
 };
 use super::{GRACE, LOAD_TIMEOUT, LuaExtension, Step, Target, Vm, expired};
+#[cfg(test)]
+use std::sync::Mutex;
 
 /// A callback suspended on a host call. Its deadline keeps running.
 struct Parked {
@@ -391,6 +393,11 @@ fn park(
             parked: true,
         };
     }
+    // A hook that suspends after its caller took `Timeout` is parked, not
+    // running: it ends at its own deadline without abandoning the VM.
+    if shared.abandon.as_ref().is_some_and(|watch| watch.id == id) {
+        shared.abandon = None;
+    }
 }
 
 /// Ends a spawn that failed after the park: drops exactly the callback
@@ -422,6 +429,72 @@ fn spawn_failed(
     );
 }
 
+/// A test's withheld hook completion: the extension and hook point whose
+/// finished callbacks wait, and the release the test drops to let them
+/// through. No public seam reaches a worker's completion, so an
+/// integration test cannot withhold it: this pause is `cfg(test)` for the
+/// in-crate repro, which states that reason here. The worker blocks holding
+/// no lock, so the test stays free to advance the clock and release it.
+/// Dropping the sender releases every waiter at once, including when the
+/// test panics, so a withheld worker never hangs the suite.
+#[cfg(test)]
+struct Withheld {
+    extension: String,
+    point: String,
+    release: Arc<Mutex<std::sync::mpsc::Receiver<()>>>,
+}
+
+#[cfg(test)]
+static WITHHELD: Mutex<Option<Withheld>> = Mutex::new(None);
+
+/// Withholds the finished callbacks of `extension`'s hooks at `point` until
+/// the test drops the matching sender and clears this. Narrow: only that
+/// extension's hooks at that point wait, so other tests' workers pass
+/// through while it is armed.
+#[cfg(test)]
+pub(super) fn withhold_hook_completion(
+    extension: &str,
+    point: &str,
+    release: std::sync::mpsc::Receiver<()>,
+) {
+    *WITHHELD
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner) = Some(Withheld {
+        extension: extension.to_owned(),
+        point: point.to_owned(),
+        release: Arc::new(Mutex::new(release)),
+    });
+}
+
+/// Stops withholding hook completions.
+#[cfg(test)]
+pub(super) fn release_hook_completion() {
+    *WITHHELD
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner) = None;
+}
+
+/// Waits for the test's release when `target` is a withheld hook
+/// completion, and passes everything else through.
+#[cfg(test)]
+fn await_completion_release(extension: &str, target: &Target) {
+    let waiter = WITHHELD
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
+        .as_ref()
+        .filter(|withheld| {
+            withheld.extension == extension
+                && matches!(target, Target::Hook { point, .. } if point == &withheld.point)
+        })
+        .map(|withheld| Arc::clone(&withheld.release));
+    if let Some(waiter) = waiter {
+        let _ignored = waiter
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .recv();
+    }
+}
+
 /// Records a finished callback's result, or suspends it on its host call.
 /// A finished timer firing ends the firing instead: its result goes nowhere,
 /// and an `every` that was not cancelled fires again.
@@ -445,8 +518,16 @@ fn settle(
         return;
     }
     let (thread, target, deadline, timeout, request) = match step {
-        Ok(Step::Done(value)) => return hub.finish(id, Ok(value)),
-        Err(e) => return hub.finish(id, Err(e)),
+        Ok(Step::Done(value)) => {
+            #[cfg(test)]
+            await_completion_release(&start.name, target);
+            return hub.finish(id, Ok(value));
+        }
+        Err(e) => {
+            #[cfg(test)]
+            await_completion_release(&start.name, target);
+            return hub.finish(id, Err(e));
+        }
         Ok(Step::Suspend {
             thread,
             target,

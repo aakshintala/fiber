@@ -384,24 +384,26 @@ pub enum Finish {
 
 /// A model's prices, in US dollars per million tokens
 /// (`docs/configuration.md`, "A provider's data").
-// debt: duplicates config's Cost and Tier; fixed by #425
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Deserialize)]
 pub struct Cost {
     /// Input tokens.
     pub input: f64,
     /// Output tokens.
     pub output: f64,
     /// Tokens read from the prompt cache. Absent prices those tokens at 0.
+    #[serde(default)]
     pub cache_read: Option<f64>,
     /// Tokens written to the prompt cache. Absent prices those tokens at 0.
+    #[serde(default)]
     pub cache_write: Option<f64>,
     /// Higher input sizes, each with its own four prices.
+    #[serde(default)]
     pub tiers: Vec<Tier>,
 }
 
 /// One price tier when cost varies by request size. A tier states all four
 /// prices (`docs/model-routing.md`, "Cost").
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Deserialize)]
 pub struct Tier {
     /// Input tokens above which this tier's prices apply to the whole call.
     pub input_tokens_above: u64,

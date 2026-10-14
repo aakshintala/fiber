@@ -122,7 +122,7 @@ fn ask(session: &Arc<SessionExtensions>) -> mpsc::Receiver<AfterToolAnswer> {
 }
 
 /// Asks once with the first hook spinning: waits for the spin to start and
-/// the caller to park at `timeout` plus the grace, moves the clock by
+/// the caller to park at `timeout`, moves the clock by
 /// `timeout`, and returns the answer.
 #[allow(clippy::expect_used, reason = "a test helper; a failure is the test's")]
 #[track_caller]
@@ -137,8 +137,8 @@ fn timed_out<T>(
     let answer = ask();
     wait.recv(went).expect("waited for the hook to start");
     assert!(
-        clock.await_parked(asked + timeout + GRACE, WAIT),
-        "waited for the caller to park at the hook's grace"
+        clock.await_parked(asked + timeout, WAIT),
+        "waited for the caller to park at the hook's deadline"
     );
     clock.advance(timeout);
     Deadline::after(WAIT)

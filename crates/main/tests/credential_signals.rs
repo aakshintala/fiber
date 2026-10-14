@@ -27,7 +27,7 @@ use std::time::Duration;
 use fakes::children::Ready;
 use fakes::{Deadline, Watchdog};
 use serde_json::json;
-use support::pty::Run;
+use support::pty::{Grid, Run};
 
 /// A temporary root holding Fiber home and the workspace, removed on drop,
 /// with this test's own path to the built `fiber`.
@@ -128,6 +128,23 @@ impl Setup {
 /// Stderr as text.
 fn stderr(output: &Output) -> String {
     String::from_utf8_lossy(&output.stderr).into_owned()
+}
+
+/// Whether the grid shows the open model picker: the picker's filter row.
+/// The open picker proves the Ctrl+L keystroke landed.
+fn picker_open(screen: &Grid) -> bool {
+    screen.rows.iter().any(|row| row.contains("Type to search"))
+}
+
+/// Whether the grid shows the picker's catalogue read asked: the refreshing
+/// mark once the cached lists arrived or the reading line while they have
+/// not. The asked mark proves the catalogue read was asked, so the
+/// credential command runs and writes its ready line.
+fn picker_read_asked(screen: &Grid) -> bool {
+    screen
+        .rows
+        .iter()
+        .any(|row| row.contains("refreshing") || row.contains("Reading the model lists"))
 }
 
 /// Installs the ruling-4 fixture under `home`: a provider `acme` serving
@@ -589,9 +606,11 @@ fn sigterm_to_the_terminal_while_a_picker_read_runs_exits_143_and_kills_its_grou
     );
     let mut run = Run::spawn(&setup, 120, 32, &[], &[("TERM", "xterm-256color")]);
     run.ready();
-    // Ctrl+L opens the picker, whose catalogue read runs through the
+    // Ctrl+L opens the picker, whose catalogue read is asked through the
     // process's shared reads.
     run.write(b"\x0c");
+    run.wait_screen("the open picker", picker_open);
+    run.wait_screen("the picker's asked catalogue read", picker_read_asked);
     let pgid = ready.wait(setup.deadline.left())[0];
     let group = Watchdog::group(pgid);
     support::kill_pid(setup.deadline, run.id(), "TERM").unwrap();
@@ -614,9 +633,11 @@ fn sighup_to_the_terminal_while_a_picker_read_runs_exits_129_and_kills_its_group
     );
     let mut run = Run::spawn(&setup, 120, 32, &[], &[("TERM", "xterm-256color")]);
     run.ready();
-    // Ctrl+L opens the picker, whose catalogue read runs through the
+    // Ctrl+L opens the picker, whose catalogue read is asked through the
     // process's shared reads.
     run.write(b"\x0c");
+    run.wait_screen("the open picker", picker_open);
+    run.wait_screen("the picker's asked catalogue read", picker_read_asked);
     let pgid = ready.wait(setup.deadline.left())[0];
     let group = Watchdog::group(pgid);
     support::kill_pid(setup.deadline, run.id(), "HUP").unwrap();
