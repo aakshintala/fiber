@@ -18,8 +18,8 @@ use config::{Config, ProjectKey, Sources};
 use contract::events::OfferedKind;
 use contract::signing::{SignRequest, Signer};
 use extensions::{
-    CredentialPair, Error, Fetch, Index, LuaExtension, LuaProvider, Origin, Request, Store,
-    declared_items, hash, plan,
+    CopyHold, CredentialPair, Error, Fetch, Index, LuaExtension, LuaProvider, Origin, RepoItem,
+    Request, Store, declared_items, hash, plan,
 };
 use fakes::Deadline;
 use fakes::clock::FakeClock;
@@ -551,9 +551,49 @@ pub(crate) fn item(setup: &Setup, clock: &Arc<FakeClock>) -> (extensions::RepoIt
     let digest = hash(&mut Index::load(&setup.home()), &found).unwrap();
     (found, digest)
 }
-/// How long an approval may take before the test fails instead of hanging
-/// it.
-const APPROVE_WITHIN: Duration = Duration::from_secs(10);
+/// How long a blocking store operation may take before the test fails
+/// instead of hanging.
+const STORE_OPERATION_WITHIN: Duration = Duration::from_secs(10);
+
+/// Runs one blocking store operation on a worker and receives its result
+/// through one named deadline. Joining after the result proves the worker
+/// has returned before the test continues.
+fn on_worker<T: Send + 'static>(
+    waited_for: &'static str,
+    operation: impl FnOnce() -> T + Send + 'static,
+) -> T {
+    let (done, result) = mpsc::channel();
+    let deadline = Deadline::after(STORE_OPERATION_WITHIN);
+    let worker = std::thread::spawn(move || {
+        done.send(operation()).unwrap();
+    });
+    let result = deadline.recv_or_fail(&result, waited_for);
+    worker.join().unwrap();
+    result
+}
+
+/// Store operations that can block on the filesystem, git or install steps.
+/// Tests use these methods instead of calling the synchronous API directly.
+pub(crate) trait StoreOperations {
+    fn approve_on_worker(&self, item: &RepoItem, hash: &str) -> Result<(), Error>;
+    fn ensure_copy_on_worker(&self, item: &RepoItem, hash: &str) -> Result<CopyHold, Error>;
+}
+
+impl StoreOperations for Store {
+    fn approve_on_worker(&self, item: &RepoItem, hash: &str) -> Result<(), Error> {
+        let store = self.clone();
+        let item = item.clone();
+        let hash = hash.to_owned();
+        on_worker("the approval", move || store.approve(&item, &hash))
+    }
+
+    fn ensure_copy_on_worker(&self, item: &RepoItem, hash: &str) -> Result<CopyHold, Error> {
+        let store = self.clone();
+        let item = item.clone();
+        let hash = hash.to_owned();
+        on_worker("the copy", move || store.ensure_copy(&item, &hash))
+    }
+}
 
 /// Approves the declared extension with its dependencies fetched from
 /// `repos`, and returns its content hash. The approval blocks on git and
@@ -564,13 +604,7 @@ pub(crate) fn approve(setup: &Setup, repos: &Repos) -> String {
     let store = store(setup, repos, &clock);
     let (found, digest) = item(setup, &clock);
     let waiting = digest.clone();
-    let (done, approved) = mpsc::channel();
-    let worker = std::thread::spawn(move || {
-        done.send(store.approve(&found, &waiting)).unwrap();
-    });
-    let bound = Deadline::after(APPROVE_WITHIN);
-    bound.recv_or_fail(&approved, "the approval").unwrap();
-    worker.join().unwrap();
+    on_worker("the approval", move || store.approve(&found, &waiting)).unwrap();
     digest
 }
 /// The content hash of the declared extension, without approving.

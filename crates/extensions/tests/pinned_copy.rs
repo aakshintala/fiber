@@ -16,9 +16,9 @@ use std::fs;
 use std::sync::Arc;
 
 use common::{
-    FIBER, Repos, Setup, approval, approve, copy, counter, counting_root, declare, dep_version,
-    depends_home, digest_of, installing, item, manifest, named, outside, outside_names, project,
-    ready, store, write,
+    FIBER, Repos, Setup, StoreOperations, approval, approve, copy, counter, counting_root, declare,
+    dep_version, depends_home, digest_of, installing, item, manifest, named, outside,
+    outside_names, project, ready, store, write,
 };
 use extensions::{Error, Fetch, Index, Origin, Store, declared_items, hash};
 use fakes::clock::FakeClock;
@@ -77,7 +77,7 @@ fn a_dependency_step_failure_leaves_no_copy_markers_or_approval() {
     let clock = FakeClock::new();
     let (found, digest) = item(&setup, &clock);
     let err = store(&setup, &repos, &clock)
-        .approve(&found, &digest)
+        .approve_on_worker(&found, &digest)
         .unwrap_err();
     assert!(err.to_string().contains(helper), "{err}");
     assert!(!copy(&setup, &digest).exists());
@@ -100,7 +100,7 @@ fn a_root_step_failure_leaves_no_copy_markers_or_approval() {
     let clock = FakeClock::new();
     let (found, digest) = item(&setup, &clock);
     store(&setup, &repos, &clock)
-        .approve(&found, &digest)
+        .approve_on_worker(&found, &digest)
         .unwrap_err();
     assert!(!copy(&setup, &digest).exists());
     assert!(!ready(&setup, &digest).exists());
@@ -130,7 +130,7 @@ fn a_failed_rebuild_keeps_the_earlier_approval_but_no_complete_copy() {
     let clock = FakeClock::new();
     let (found, _) = item(&setup, &clock);
     store(&setup, &repos, &clock)
-        .approve(&found, &digest)
+        .approve_on_worker(&found, &digest)
         .unwrap_err();
     assert_eq!(fs::read(approval(&setup, &digest)).unwrap(), before);
     assert!(!copy(&setup, &digest).exists());
@@ -163,7 +163,7 @@ fn a_record_failure_keeps_the_finished_copy_and_a_retry_records_without_reinstal
     let clock = FakeClock::new();
     let (found, digest) = item(&setup, &clock);
     store(&setup, &repos, &clock)
-        .approve(&found, &digest)
+        .approve_on_worker(&found, &digest)
         .unwrap_err();
     assert!(copy(&setup, &digest).is_dir());
     assert!(ready(&setup, &digest).is_file());
@@ -172,7 +172,7 @@ fn a_record_failure_keeps_the_finished_copy_and_a_retry_records_without_reinstal
     fs::remove_file(&blocked).unwrap();
     let clock = FakeClock::new();
     store(&setup, &repos, &clock)
-        .approve(&found, &digest)
+        .approve_on_worker(&found, &digest)
         .unwrap();
     assert!(approval(&setup, &digest).is_file());
     assert_eq!(
@@ -201,7 +201,7 @@ fn a_completion_failure_leaves_no_markers_no_copy_and_no_approval() {
         let clock = FakeClock::new();
         let (found, digest) = item(&setup, &clock);
         let err = store(&setup, &repos, &clock)
-            .approve(&found, &digest)
+            .approve_on_worker(&found, &digest)
             .unwrap_err();
         assert!(err.to_string().contains(".fiber-depends"), "{what}: {err}");
         assert!(!copy(&setup, &digest).exists(), "{what}");
@@ -232,7 +232,7 @@ fn an_outer_ready_failure_leaves_no_copy_and_no_approval() {
     let (found, digest) = item(&setup, &clock);
     let marker = ready(&setup, &digest);
     let err = store(&setup, &repos, &clock)
-        .approve(&found, &digest)
+        .approve_on_worker(&found, &digest)
         .unwrap_err();
     assert!(
         err.to_string().contains(&marker.display().to_string()),
@@ -258,7 +258,7 @@ fn an_extension_without_dependencies_needs_no_fetch_and_makes_no_dependency_home
     );
     let store = Store::new(&setup.home(), &project(), Arc::clone(&clock) as Arc<_>).fetching(fetch);
     let (found, digest) = item(&setup, &clock);
-    store.approve(&found, &digest).unwrap();
+    store.approve_on_worker(&found, &digest).unwrap();
     assert!(copy(&setup, &digest).is_dir());
     assert!(!depends_home(&setup, &digest).exists());
 }
@@ -274,7 +274,7 @@ fn dependencies_without_a_fetch_fail_and_install_nothing() {
     let clock = FakeClock::new();
     let plain = Store::new(&setup.home(), &project(), Arc::clone(&clock) as Arc<_>);
     let (found, digest) = item(&setup, &clock);
-    let err = plain.approve(&found, &digest).unwrap_err();
+    let err = plain.approve_on_worker(&found, &digest).unwrap_err();
     assert!(matches!(err, Error::Pin { .. }), "{err}");
     assert!(err.to_string().contains("dependencies"), "{err}");
     assert!(!copy(&setup, &digest).exists());
@@ -297,10 +297,10 @@ fn reserved_dependency_paths_are_refused_and_a_similar_prefix_is_allowed() {
         let plain = Store::new(&setup.home(), &project(), Arc::clone(&clock) as Arc<_>);
         let (found, digest) = item(&setup, &clock);
         if allowed {
-            plain.approve(&found, &digest).unwrap();
+            plain.approve_on_worker(&found, &digest).unwrap();
             assert!(copy(&setup, &digest).join(rel).is_file());
         } else {
-            let err = plain.approve(&found, &digest).unwrap_err();
+            let err = plain.approve_on_worker(&found, &digest).unwrap_err();
             assert!(matches!(err, Error::Pin { .. }), "{rel}: {err}");
             assert!(err.to_string().contains(".fiber-depends"), "{rel}: {err}");
             assert!(!copy(&setup, &digest).exists(), "{rel}");
@@ -336,7 +336,7 @@ fn ready_markers_are_empty_for_an_extension_a_hook_and_a_server() {
     assert_eq!(items.len(), 2);
     for found in &items {
         let digest = hash(&mut Index::load(&setup.home()), found).unwrap();
-        plain.approve(found, &digest).unwrap();
+        plain.approve_on_worker(found, &digest).unwrap();
         assert_eq!(fs::read(ready(&setup, &digest)).unwrap(), b"");
     }
 }
@@ -376,7 +376,7 @@ fn a_legacy_copy_with_a_directory_completion_marker_is_refused() {
     let clock = FakeClock::new();
     let (found, _) = item(&setup, &clock);
     let err = store(&setup, &repos, &clock)
-        .approve(&found, &digest)
+        .approve_on_worker(&found, &digest)
         .unwrap_err();
     assert!(matches!(err, Error::Pin { .. }), "{err}");
     assert!(err.to_string().contains(".complete"), "{err}");
@@ -401,7 +401,7 @@ fn a_legacy_copy_with_a_linked_completion_marker_is_refused() {
     let clock = FakeClock::new();
     let (found, _) = item(&setup, &clock);
     let err = store(&setup, &repos, &clock)
-        .approve(&found, &digest)
+        .approve_on_worker(&found, &digest)
         .unwrap_err();
     assert!(matches!(err, Error::Pin { .. }), "{err}");
     assert!(err.to_string().contains(".complete"), "{err}");
@@ -441,7 +441,7 @@ fn a_legacy_copy_without_completion_rebuilds_through_ensure_copy_keeping_its_app
     let (found, _) = item(&setup, &clock);
     // Rebuilding for a load records no approval: the bytes stay identical.
     let held = store(&setup, &repos, &clock)
-        .ensure_copy(&found, &digest)
+        .ensure_copy_on_worker(&found, &digest)
         .unwrap();
     assert_eq!(fs::read(approval(&setup, &digest)).unwrap(), before);
     assert!(depends_home(&setup, &digest).join(".complete").is_file());
@@ -470,7 +470,7 @@ fn a_held_legacy_copy_is_left_alone_then_rebuilds_once_released() {
     let clock = FakeClock::new();
     let (found, _) = item(&setup, &clock);
     let err = store(&setup, &repos, &clock)
-        .approve(&found, &digest)
+        .approve_on_worker(&found, &digest)
         .unwrap_err();
     assert!(matches!(err, Error::Busy), "{err}");
     // Nothing changed: no byte, no inode, no approval, no completion.
@@ -498,11 +498,11 @@ fn a_legacy_copy_without_dependencies_is_kept_without_fetching() {
     // needs it, legacy or not.
     let plain = Store::new(&setup.home(), &project(), Arc::clone(&clock) as Arc<_>);
     let (found, digest) = item(&setup, &clock);
-    plain.approve(&found, &digest).unwrap();
+    plain.approve_on_worker(&found, &digest).unwrap();
     fs::write(copy(&setup, &digest).join("junk"), "junk").unwrap();
     let clock = FakeClock::new();
     let (found, _) = item(&setup, &clock);
-    plain.approve(&found, &digest).unwrap();
+    plain.approve_on_worker(&found, &digest).unwrap();
     assert_eq!(
         fs::read_to_string(copy(&setup, &digest).join("junk")).unwrap(),
         "junk"
@@ -521,7 +521,7 @@ fn a_link_where_the_pinned_root_goes_fails_and_writes_nothing_outside() {
     let clock = FakeClock::new();
     let plain = Store::new(&setup.home(), &project(), Arc::clone(&clock) as Arc<_>);
     let (found, digest) = item(&setup, &clock);
-    let err = plain.approve(&found, &digest).unwrap_err();
+    let err = plain.approve_on_worker(&found, &digest).unwrap_err();
     assert!(matches!(err, Error::Pin { .. }), "{err}");
     assert!(err.to_string().contains("pinned"), "{err}");
     assert!(err.to_string().contains("is a symbolic link"), "{err}");
@@ -541,7 +541,7 @@ fn a_file_where_the_pinned_root_goes_fails_naming_it() {
     let clock = FakeClock::new();
     let plain = Store::new(&setup.home(), &project(), Arc::clone(&clock) as Arc<_>);
     let (found, digest) = item(&setup, &clock);
-    let err = plain.approve(&found, &digest).unwrap_err();
+    let err = plain.approve_on_worker(&found, &digest).unwrap_err();
     assert!(matches!(err, Error::Pin { .. }), "{err}");
     assert!(err.to_string().contains("pinned"), "{err}");
     assert!(err.to_string().contains("is not a directory"), "{err}");
@@ -561,7 +561,7 @@ fn a_link_where_the_ready_marker_goes_is_refused_before_opening() {
     // A stale marker that is a link out of home: refused, never opened.
     fs::create_dir_all(setup.home().join("pinned")).unwrap();
     std::os::unix::fs::symlink(&target, ready(&setup, &digest)).unwrap();
-    let err = plain.approve(&found, &digest).unwrap_err();
+    let err = plain.approve_on_worker(&found, &digest).unwrap_err();
     assert!(matches!(err, Error::Pin { .. }), "{err}");
     assert!(err.to_string().contains(".ready"), "{err}");
     assert!(err.to_string().contains("is a symbolic link"), "{err}");
@@ -579,7 +579,7 @@ fn a_missing_pinned_root_and_a_home_behind_a_link_both_build() {
     let clock = FakeClock::new();
     let plain = Store::new(&setup.home(), &project(), Arc::clone(&clock) as Arc<_>);
     let (found, digest) = item(&setup, &clock);
-    plain.approve(&found, &digest).unwrap();
+    plain.approve_on_worker(&found, &digest).unwrap();
     assert!(copy(&setup, &digest).is_dir());
     // The same home reached through a link builds too: the link itself is
     // trusted, everything under it is checked.
@@ -589,7 +589,7 @@ fn a_missing_pinned_root_and_a_home_behind_a_link_both_build() {
     let clock = FakeClock::new();
     let aliased = Store::new(&alias, &project(), Arc::clone(&clock) as Arc<_>);
     let (found, second) = item(&setup, &clock);
-    aliased.approve(&found, &second).unwrap();
+    aliased.approve_on_worker(&found, &second).unwrap();
     assert!(copy(&setup, &second).is_dir());
 }
 
@@ -615,7 +615,7 @@ fn an_install_step_that_links_the_dependency_home_away_leaves_the_target_alone()
     let clock = FakeClock::new();
     let (found, digest) = item(&setup, &clock);
     let err = store(&setup, &repos, &clock)
-        .approve(&found, &digest)
+        .approve_on_worker(&found, &digest)
         .unwrap_err();
     assert!(matches!(err, Error::Pin { .. }), "{err}");
     assert!(err.to_string().contains(".fiber-depends"), "{err}");
@@ -641,7 +641,7 @@ fn a_finished_copy_with_dependencies_is_reused_without_fetching() {
     let clock = FakeClock::new();
     let plain = Store::new(&setup.home(), &project(), Arc::clone(&clock) as Arc<_>);
     let (found, _) = item(&setup, &clock);
-    plain.approve(&found, &digest).unwrap();
+    plain.approve_on_worker(&found, &digest).unwrap();
     assert_eq!(counter(&setup, &digest), "x\n");
     assert!(approval(&setup, &digest).is_file());
     assert!(depends_home(&setup, &digest).join(".complete").is_file());
@@ -668,7 +668,7 @@ fn a_legacy_copy_whose_dependency_home_is_a_link_is_refused() {
     let clock = FakeClock::new();
     let (found, _) = item(&setup, &clock);
     let err = store(&setup, &repos, &clock)
-        .approve(&found, &digest)
+        .approve_on_worker(&found, &digest)
         .unwrap_err();
     assert!(matches!(err, Error::Pin { .. }), "{err}");
     assert!(err.to_string().contains(".fiber-depends"), "{err}");
@@ -697,7 +697,7 @@ fn an_unreadable_completion_marker_fails_naming_it() {
     let clock = FakeClock::new();
     let (found, _) = item(&setup, &clock);
     let err = store(&setup, &repos, &clock)
-        .approve(&found, &digest)
+        .approve_on_worker(&found, &digest)
         .unwrap_err();
     fs::set_permissions(&home, fs::Permissions::from_mode(0o755)).unwrap();
     assert!(matches!(err, Error::Io { .. }), "{err}");
@@ -752,7 +752,7 @@ fn an_install_step_that_links_the_completion_marker_away_publishes_nothing() {
     let clock = FakeClock::new();
     let (found, digest) = item(&setup, &clock);
     let err = store(&setup, &repos, &clock)
-        .approve(&found, &digest)
+        .approve_on_worker(&found, &digest)
         .unwrap_err();
     assert!(matches!(err, Error::Pin { .. }), "{err}");
     assert!(err.to_string().contains(".complete"), "{err}");
@@ -790,7 +790,7 @@ fn an_install_step_that_links_the_ready_marker_away_publishes_nothing() {
     let clock = FakeClock::new();
     let (found, digest) = item(&setup, &clock);
     let err = store(&setup, &repos, &clock)
-        .approve(&found, &digest)
+        .approve_on_worker(&found, &digest)
         .unwrap_err();
     assert!(matches!(err, Error::Pin { .. }), "{err}");
     assert!(err.to_string().contains(".ready"), "{err}");
@@ -827,7 +827,7 @@ fn a_finished_copy_whose_manifest_is_a_link_is_never_treated_as_finished() {
     let clock = FakeClock::new();
     let (found, _) = item(&setup, &clock);
     let err = store(&setup, &repos, &clock)
-        .approve(&found, &digest)
+        .approve_on_worker(&found, &digest)
         .unwrap_err();
     assert!(matches!(err, Error::Pin { .. }), "{err}");
     assert!(err.to_string().contains("extension.json"), "{err}");

@@ -18,8 +18,8 @@ use std::path::Path;
 use std::sync::Arc;
 
 use common::{
-    FIBER, Repos, Setup, approve, declare, dep_dir, dep_names, dep_record, dep_version,
-    depends_home, item, manifest, named, project, store, write,
+    FIBER, Repos, Setup, StoreOperations, approve, declare, dep_dir, dep_names, dep_record,
+    dep_version, depends_home, item, manifest, named, project, store, write,
 };
 use contract::events::OfferDecision;
 use contract::repository::{Decided, RepositoryCode};
@@ -235,7 +235,7 @@ fn two_majors_stop_naming_both_requirers() {
     let clock = FakeClock::new();
     let (found, digest) = item(&setup, &clock);
     let err = store(&setup, &repos, &clock)
-        .approve(&found, &digest)
+        .approve_on_worker(&found, &digest)
         .unwrap_err();
     let text = err.to_string();
     assert!(text.contains(a) && text.contains(b), "{text}");
@@ -252,7 +252,7 @@ fn a_missing_repository_is_not_found_and_installs_nothing() {
     let clock = FakeClock::new();
     let (found, digest) = item(&setup, &clock);
     let err = store(&setup, &repos, &clock)
-        .approve(&found, &digest)
+        .approve_on_worker(&found, &digest)
         .unwrap_err();
     assert!(matches!(err, Error::NoRepository { .. }), "{err}");
     assert!(!setup.home().join("pinned").join(&digest).exists());
@@ -269,7 +269,7 @@ fn no_tag_meeting_the_minimum_is_no_version_and_installs_nothing() {
     let clock = FakeClock::new();
     let (found, digest) = item(&setup, &clock);
     let err = store(&setup, &repos, &clock)
-        .approve(&found, &digest)
+        .approve_on_worker(&found, &digest)
         .unwrap_err();
     assert!(matches!(err, Error::NoVersion { .. }), "{err}");
     assert!(!setup.home().join("pinned").join(&digest).exists());
@@ -292,7 +292,7 @@ fn a_dependency_needing_a_newer_fiber_or_another_api_is_refused() {
         let clock = FakeClock::new();
         let (found, digest) = item(&setup, &clock);
         let err = store(&setup, &repos, &clock)
-            .approve(&found, &digest)
+            .approve_on_worker(&found, &digest)
             .unwrap_err();
         assert!(err.to_string().contains(check), "{field}: {err}");
         assert!(!setup.home().join("pinned").join(&digest).exists());
@@ -319,7 +319,7 @@ fn two_dependencies_with_one_directory_are_refused_naming_both() {
     let clock = FakeClock::new();
     let (found, digest) = item(&setup, &clock);
     let err = store(&setup, &repos, &clock)
-        .approve(&found, &digest)
+        .approve_on_worker(&found, &digest)
         .unwrap_err();
     let text = err.to_string();
     assert!(text.contains(one) && text.contains(two), "{text}");
@@ -532,7 +532,7 @@ fn an_incompatible_back_edge_minimum_on_the_root_fails_and_commits_nothing() {
     let clock = FakeClock::new();
     let (found, digest) = item(&setup, &clock);
     let err = store(&setup, &repos, &clock)
-        .approve(&found, &digest)
+        .approve_on_worker(&found, &digest)
         .unwrap_err();
     let text = err.to_string();
     assert!(text.contains(root) && text.contains(helper), "{text}");
