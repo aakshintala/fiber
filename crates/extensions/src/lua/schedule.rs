@@ -24,12 +24,12 @@ use crate::oauth::{Browser, Deliver};
 use super::host_calls::{Admitted, Call, admit};
 #[cfg(test)]
 use super::host_calls::{Pause, settle_hook};
-#[cfg(test)]
-use std::sync::Mutex;
 use super::hub::{
     Hub, Job, Phase, Progress, ProviderLoad, Shared, StopReason, not_registered, timed_out,
 };
 use super::{GRACE, LOAD_TIMEOUT, LuaExtension, Step, Target, Vm, expired};
+#[cfg(test)]
+use std::sync::Mutex;
 
 /// A callback suspended on a host call. Its deadline keeps running.
 struct Parked {
@@ -452,7 +452,9 @@ pub(super) fn withhold_hook_completion(
     point: &str,
     release: std::sync::mpsc::Receiver<()>,
 ) {
-    *WITHHELD.lock().unwrap_or_else(std::sync::PoisonError::into_inner) = Some(Withheld {
+    *WITHHELD
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner) = Some(Withheld {
         extension: extension.to_owned(),
         point: point.to_owned(),
         release: Arc::new(Mutex::new(release)),
@@ -462,7 +464,9 @@ pub(super) fn withhold_hook_completion(
 /// Stops withholding hook completions.
 #[cfg(test)]
 pub(super) fn release_hook_completion() {
-    *WITHHELD.lock().unwrap_or_else(std::sync::PoisonError::into_inner) = None;
+    *WITHHELD
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner) = None;
 }
 
 /// Waits for the test's release when `target` is a withheld hook

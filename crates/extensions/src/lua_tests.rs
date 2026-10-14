@@ -1376,7 +1376,8 @@ fn a_running_hook_before_its_deadline_waits() {
             parked: false,
         },
     );
-    let (Next::Sleep(until), _) = shared.judge("ext", id, &hook("before_message"), asked, ago(at, 1))
+    let (Next::Sleep(until), _) =
+        shared.judge("ext", id, &hook("before_message"), asked, ago(at, 1))
     else {
         panic!("a hook returned before its deadline")
     };
@@ -1466,8 +1467,8 @@ fn a_withheld_hook_completion_passes_other_traffic() {
 /// stays usable. With the delivery withheld and no fix, the answer never
 /// comes and this fails at the wait below, every run and under no load.
 #[test]
-fn a_non_blocking_before_message_hook_past_its_timeout_is_dropped_while_its_completion_is_withheld(
-) {
+fn a_non_blocking_before_message_hook_past_its_timeout_is_dropped_while_its_completion_is_withheld()
+{
     let dir = extension(
         "withheld",
         "local calls = 0\n\
@@ -1499,13 +1500,9 @@ fn a_non_blocking_before_message_hook_past_its_timeout_is_dropped_while_its_comp
     // The worker runs the hook, past the arming of its deadline: the signal
     // the advance below waits on.
     assert!(
-        until(&ext.hub, |shared| shared.calls.values().any(|progress| matches!(
-            progress,
-            Progress::Started {
-                parked: false,
-                ..
-            }
-        ))),
+        until(&ext.hub, |shared| shared.calls.values().any(
+            |progress| matches!(progress, Progress::Started { parked: false, .. })
+        )),
         "waited for the worker to run the hook"
     );
     clock.advance(Duration::from_millis(50));
@@ -1525,7 +1522,9 @@ fn a_non_blocking_before_message_hook_past_its_timeout_is_dropped_while_its_comp
     super::schedule::release_hook_completion();
     let (again_tx, again_rx) = mpsc::channel();
     let again_caller = Arc::clone(&ext);
-    thread::spawn(move || again_tx.send(again_caller.hook("before_message", 0, serde_json::json!({}))));
+    thread::spawn(move || {
+        again_tx.send(again_caller.hook("before_message", 0, serde_json::json!({})))
+    });
     Deadline::after(WAIT)
         .recv(&again_rx)
         .expect("waited for the hook to run again after its timeout")
