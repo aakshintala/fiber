@@ -7,8 +7,7 @@
     clippy::expect_used,
     clippy::panic,
     clippy::indexing_slicing,
-    clippy::print_stderr,
-    reason = "test helpers; a failure is the test's; a live test prints each step's elapsed"
+    reason = "test helpers; a failure is the test's"
 )]
 
 mod support;
@@ -20,9 +19,7 @@ use std::path::{Path, PathBuf};
 use std::process::{Child, Command, ExitStatus, Stdio};
 use std::sync::mpsc;
 use std::thread;
-use std::time::Duration;
 
-use contract::clock::Clock;
 use fakes::{ProviderServer, Response, Watchdog};
 use serde_json::{Value, json};
 use support::*;
@@ -1724,56 +1721,29 @@ fn sigterm_during_a_switchs_read_exits_143_and_kills_the_command() {
         line["kind"] == "turn_completed"
     });
     model(&client, "c_model", "other/om", None);
-    let sent = SystemClock.now();
     let command: u32 = ready_line(&setup, &ready).parse().unwrap();
-    eprintln!(
-        "switch-read-sigterm: the switch's read started after {:?}",
-        SystemClock.now().saturating_duration_since(sent)
-    );
     let watchdog = Watchdog::group(command);
     let session = running.group;
     assert!(kill_pid(setup.deadline, session, "TERM").unwrap());
-    eprintln!(
-        "switch-read-sigterm: SIGTERM sent after {:?}",
-        SystemClock.now().saturating_duration_since(sent)
-    );
     let rejected = until(&client, "command_rejected", |line| {
         line["kind"] == "command_rejected"
     });
-    let code = rejected.last().unwrap()["payload"]["code"].clone();
-    eprintln!(
-        "switch-read-sigterm: rejected with {code} after {:?}",
-        SystemClock.now().saturating_duration_since(sent)
-    );
-    assert_eq!(code, "closing");
+    assert_eq!(rejected.last().unwrap()["payload"]["code"], "closing");
     drop(client);
-    // Under the 5 second shutdown bound, which would end the process with
-    // no `fiber_exited`.
-    let (status, stderr) = fakes::within("the session's exit", Duration::from_secs(4), move || {
-        running.wait()
-    });
-    eprintln!(
-        "switch-read-sigterm: the session exited with {:?} after {:?}",
-        status.code(),
-        SystemClock.now().saturating_duration_since(sent)
-    );
+    // The exit takes the test's ordinary deadline, as every other wait
+    // does: the shutdown bound itself is pinned on an injected clock, and
+    // this test pins the outcome.
+    let (status, stderr) = bounded(setup.deadline, "the session's exit", move || running.wait());
     assert_eq!(status.code(), Some(143), "stderr: {stderr}");
-    let alive = group_alive(setup.deadline, command);
-    eprintln!(
-        "switch-read-sigterm: the command's group alive is {alive} after {:?}",
-        SystemClock.now().saturating_duration_since(sent)
+    assert!(
+        !group_alive(setup.deadline, command),
+        "the command was killed"
     );
-    assert!(!alive, "the command was killed");
     watchdog.stand_down(setup.deadline.cleanup());
     // The complete ordered kinds of the session log: the turn, then the
     // exit, with no `model_changed`, since the switch died in its read.
-    let kinds = log_kinds(&setup, &id);
-    eprintln!(
-        "switch-read-sigterm: the session log holds {kinds:?} after {:?}",
-        SystemClock.now().saturating_duration_since(sent)
-    );
     assert_eq!(
-        kinds,
+        log_kinds(&setup, &id),
         [
             "session_started",
             "fiber_started",
@@ -1841,11 +1811,10 @@ fn sigterm_while_a_switchs_read_is_held_exits_143_and_kills_the_command() {
     assert_eq!(rejected.last().unwrap()["payload"]["code"], "closing");
     drop(held);
     drop(client);
-    // Under the 5 second shutdown bound, which would end the process with
-    // no `fiber_exited`.
-    let (status, stderr) = fakes::within("the session's exit", Duration::from_secs(4), move || {
-        running.wait()
-    });
+    // The exit takes the test's ordinary deadline, as every other wait
+    // does: the shutdown bound itself is pinned on an injected clock, and
+    // this test pins the outcome.
+    let (status, stderr) = bounded(setup.deadline, "the session's exit", move || running.wait());
     assert_eq!(status.code(), Some(143), "stderr: {stderr}");
     assert!(
         !group_alive(setup.deadline, command),
@@ -1923,11 +1892,10 @@ fn sigterm_after_a_switchs_read_resolves_keeps_model_changed_and_exits_143() {
     let session = running.group;
     assert!(kill_pid(setup.deadline, session, "TERM").unwrap());
     drop(client);
-    // Under the 5 second shutdown bound, which would end the process with
-    // no `fiber_exited`.
-    let (status, stderr) = fakes::within("the session's exit", Duration::from_secs(4), move || {
-        running.wait()
-    });
+    // The exit takes the test's ordinary deadline, as every other wait
+    // does: the shutdown bound itself is pinned on an injected clock, and
+    // this test pins the outcome.
+    let (status, stderr) = bounded(setup.deadline, "the session's exit", move || running.wait());
     assert_eq!(status.code(), Some(143), "stderr: {stderr}");
     assert!(
         !group_alive(setup.deadline, command),
