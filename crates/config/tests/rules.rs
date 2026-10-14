@@ -192,6 +192,20 @@ fn missing_and_empty_files_list_no_lines() {
 }
 
 #[test]
+fn an_unlistable_project_rules_path_errors_naming_the_file() {
+    let home = home();
+    write(&home.path().join("projects"), "not a directory");
+    let (_, project) = config::list_rules(home.path(), &project_key());
+    let expected = home.path().join("projects/proj/rules");
+    assert_eq!(project.file, expected);
+    let message = project.lines.unwrap_err().to_string();
+    assert!(
+        message.contains(&expected.display().to_string()),
+        "{message}"
+    );
+}
+
+#[test]
 fn a_crlf_line_lists_without_its_cr() {
     let home = home();
     let line = allow("a");

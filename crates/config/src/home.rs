@@ -104,14 +104,6 @@ pub(crate) fn one_file_name(name: &str) -> bool {
 
 /// Refuses a symbolic link, or anything but a directory (`dir`) or a regular
 /// file, at `path`. `false` when nothing is there.
-// exempted: mapping every metadata failure to absent changes nothing a
-// consumer sees. Each repository path this checks is read again by the same
-// load, whose own missing-path guard only passes for a genuinely missing
-// path: a broken path still fails the load as Io, only named at the later
-// read (a workspace file reports `afile/.fiber` clean and
-// `afile/.fiber/config` mutated, both IoFailed), so no test can tell the
-// guard from `true`.
-#[cfg_attr(false, mutants::skip)]
 pub(crate) fn plain(path: &Path, dir: bool) -> Result<bool, ConfigError> {
     match fs::symlink_metadata(path) {
         Ok(meta) if (dir && meta.is_dir()) || (!dir && meta.is_file()) => Ok(true),
