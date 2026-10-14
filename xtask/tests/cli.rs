@@ -6,11 +6,13 @@
     reason = "test code may unwrap (docs/code-quality.md, \"Lints\"); clippy exempts only #[test] functions here"
 )]
 
-use std::os::unix::process::CommandExt as _;
-use std::process::{Command, Output, Stdio};
+use std::process::{Command, Stdio};
 use std::time::Duration;
 
-use fakes::{TempDir, finished};
+use fakes::TempDir;
+
+#[path = "common/mod.rs"]
+mod common;
 
 const DEPENDENCIES: &str = "# Dependencies
 
@@ -47,43 +49,32 @@ const CODE_QUALITY: &str = "# Code quality
 const CHILD_WITHIN: Duration = Duration::from_secs(5);
 
 fn xtask(dir: &TempDir, args: &[&str], env: &[(&str, &str)], stdin: &str) -> (i32, String) {
-    let child = Command::new(env!("CARGO_BIN_EXE_xtask"))
+    let mut command = Command::new(env!("CARGO_BIN_EXE_xtask"));
+    command
         .args(args)
         .envs(env.iter().copied())
         .current_dir(dir.path())
-        .stdin(Stdio::piped())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        .process_group(0)
-        .spawn()
-        .unwrap();
-    let Output {
-        status,
-        stdout,
-        stderr,
-    } = finished(
+        .stdin(Stdio::piped());
+    let (code, text) = common::run(
         &format!("xtask {args:?}"),
-        child,
+        command,
         stdin.as_bytes(),
         CHILD_WITHIN,
     );
-    let text = String::from_utf8(stdout).unwrap() + &String::from_utf8(stderr).unwrap();
-    (status.code().unwrap(), text)
+    (code.unwrap(), text)
 }
 
 fn git(dir: &TempDir, args: &[&str]) {
-    let child = Command::new("git")
+    // This wrapper's shape differs from `common::git` (no output, a 5 s
+    // bound), so it keeps its body and shares only the wait.
+    let mut command = Command::new("git");
+    command
         .args(["-c", "user.name=t", "-c", "user.email=t@example.com"])
         .args(args)
         .current_dir(dir.path())
-        .stdin(Stdio::null())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        .process_group(0)
-        .spawn()
-        .unwrap();
-    let status = finished(&format!("git {args:?}"), child, &[], CHILD_WITHIN).status;
-    assert!(status.success(), "git {args:?}");
+        .stdin(Stdio::null());
+    let (code, out) = common::run(&format!("git {args:?}"), command, &[], CHILD_WITHIN);
+    assert_eq!(code, Some(0), "git {args:?}: {out}");
 }
 
 /// A committed workspace: `a`, `b` depending on `a`, binary-only `c`
