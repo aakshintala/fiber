@@ -1176,7 +1176,9 @@ fn mark_parked_returns_while_a_self_leaving_park_is_held() {
                 Ok(()) | Err(mpsc::SendError(())) => {}
             }
             // The parker leaves on its own bound; the result is ignored.
-            let _ = Deadline::after(Duration::from_secs(2)).recv(&never_rx);
+            match Deadline::after(Duration::from_secs(2)).recv(&never_rx) {
+                Ok(()) | Err(_) => {}
+            }
         });
         if let Ok(()) = exit_tx.send(()) {}
     });

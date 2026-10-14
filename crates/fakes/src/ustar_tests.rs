@@ -82,7 +82,7 @@ fn an_archive_pads_each_member_and_ends_with_two_zero_blocks() {
 /// `gzip` output decodes back to its input through a gzip decoder.
 #[test]
 fn gzip_output_decodes_back_to_its_input() {
-    let bytes: Vec<u8> = (0..1024).map(|i| (i % 251) as u8).collect();
+    let bytes: Vec<u8> = (0..1024u32).map(|i| (i % 251) as u8).collect();
     let compressed = gzip(&bytes);
     let mut decoder = flate2::read::GzDecoder::new(compressed.as_slice());
     let mut back = Vec::new();
