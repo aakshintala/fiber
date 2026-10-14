@@ -18,7 +18,7 @@ use std::time::{Duration, Instant};
 
 use contract::SessionId;
 use contract::clock::{Clock, wall_ms};
-use contract::diag::{DebugLog, Op, ProviderRequest, Stopwatch, Timing};
+use contract::diag::{DebugLog, Op, ProviderRequest, Timing};
 
 pub use memory::peak_kib;
 
@@ -347,7 +347,7 @@ impl Diag {
             start_timer(
                 level, &clock, &logs, process, rotate_at, &state, op, tool, started,
             )
-            .map(|timer| Box::new(timer) as Box<dyn Stopwatch>)
+            .map(|timer| Box::new(timer) as Box<dyn Send>)
         })
     }
 }
@@ -461,10 +461,10 @@ fn start_timer(
     })
 }
 
-impl Stopwatch for Timer {
+impl Timer {
     /// Stamps completion; the drop then emits with the stamped end. The
     /// first stamp wins.
-    fn stop(&mut self) {
+    pub fn stop(&mut self) {
         if self.end.is_none() {
             self.end = Some(self.clock.now());
         }

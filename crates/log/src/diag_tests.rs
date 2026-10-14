@@ -681,9 +681,8 @@ fn the_callable_times_without_a_second_check_and_emits_once() {
     let time = diag.timings();
     let start = inner.now();
     inner.advance(Duration::from_millis(3));
-    let mut guard = time(Op::StartupConfig, None, Some(start)).expect("debug guard");
+    let guard = time(Op::StartupConfig, None, Some(start)).expect("debug guard");
     inner.advance(Duration::from_millis(100));
-    guard.stop();
     drop(guard);
     let line = op_line(&home, "hub.log");
     assert_eq!(line["data"]["op"], "startup.config");

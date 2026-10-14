@@ -14,10 +14,11 @@
 mod support;
 
 use std::fs;
+use std::sync::{Arc, Mutex};
 
 use fakes::ProviderServer;
 use serde_json::{Value, json};
-use support::{HELLO_KINDS, HubProc, Run, Setup, hello, is_status, run_to_exit, write_json};
+use support::{HELLO_KINDS, Run, Setup, connect_hub, hello, is_status, run_to_exit, write_json};
 
 /// Runs `fiber ask hi` in the workspace to exit and parses its stdout.
 #[track_caller]
@@ -90,6 +91,13 @@ fn a_repository_diagnostics_level_is_ignored_with_a_notice() {
         "the model request arrived: a passing test really asked"
     );
     assert!(run.kinds().contains(&"fiber_exited"), "{:?}", run.kinds());
+    let mut want: Vec<&str> = HELLO_KINDS.into();
+    want.insert(3, "notice");
+    assert_eq!(
+        run.kinds(),
+        want,
+        "the notice lands after extensions_loaded"
+    );
     let notice = run
         .all("notice")
         .into_iter()
@@ -110,10 +118,14 @@ fn a_debug_hub_writes_positive_peak_memory() {
     let setup = Setup::new();
     write_json(
         &setup.home().join("config.json"),
-        &json!({"diagnostics": {"level": "debug"}, "hub": {"idle_exit_ms": 200}}),
+        &json!({"diagnostics": {"level": "debug"}}),
     );
-    let hub = HubProc::spawn(&setup);
-    assert_eq!(hub.wait().code(), Some(0));
+    let hub = Arc::new(Mutex::new(None));
+    let (client, _) = connect_hub(&setup, &hub);
+    drop(client);
+    let hub = hub.lock().unwrap().take().expect("the starter ran");
+    hub.kill("TERM");
+    hub.wait();
     let lines = log_lines(&setup);
     let peak = lines
         .iter()

@@ -193,8 +193,7 @@ impl Serialize for Op {
 
 /// One hook chain an `op_timing` line may time: every chain other than the
 /// tool hooks, which `tool.hooks` covers. The operation's suffix.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
-#[serde(rename_all = "snake_case")]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum HookChain {
     /// A session's start.
     SessionStart,
@@ -209,9 +208,8 @@ pub enum HookChain {
 }
 
 impl HookChain {
-    /// The `hook.<chain>` operation's name. Kept beside the derived
-    /// serialization, which a test pins to the same value, so the two
-    /// never drift.
+    /// The `hook.<chain>` operation's name, and its wire form: `Op`'s
+    /// serialization writes this, which the operation test pins.
     pub const fn hook_name(self) -> &'static str {
         match self {
             Self::SessionStart => "hook.session_start",
@@ -223,22 +221,15 @@ impl HookChain {
     }
 }
 
-/// A started operation's handle: [`Stopwatch::stop`] stamps its
-/// completion, and dropping it without `stop` stamps the drop time. The
-/// guard is owned and `Send`, so it may follow the work to its worker;
-/// no timer borrows its caller.
-pub trait Stopwatch: Send {
-    /// Stamps completion; the drop then emits with the stamped end.
-    fn stop(&mut self);
-}
-
 /// Starts an operation's timer: the seam a restricted crate takes instead
 /// of depending on `log`. It invokes the same `log::diag::timed` every
 /// other timed place uses, so there is one timing implementation. An
 /// explicit stamp suppresses the start read, never the end read. `None`
-/// at `info`, before any clock read.
+/// at `info`, before any clock read. The guard is owned and `Send`, so it
+/// may follow the work to its worker; dropping it without stopping stamps
+/// the drop time.
 pub type Timing =
-    Arc<dyn Fn(Op, Option<&str>, Option<Instant>) -> Option<Box<dyn Stopwatch>> + Send + Sync>;
+    Arc<dyn Fn(Op, Option<&str>, Option<Instant>) -> Option<Box<dyn Send>> + Send + Sync>;
 
 #[cfg(test)]
 #[path = "diag_tests.rs"]

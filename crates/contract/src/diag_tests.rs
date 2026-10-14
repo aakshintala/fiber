@@ -113,22 +113,6 @@ fn every_operation_serializes_to_its_wire_name() {
 }
 
 #[test]
-fn every_hook_chain_serializes_to_its_operation_suffix() {
-    use HookChain::*;
-    for chain in [
-        SessionStart,
-        TurnStart,
-        BeforeMessage,
-        BeforeModelCall,
-        TurnEnd,
-    ] {
-        let serialized = serde_json::to_string(&chain).unwrap();
-        let bare: String = serde_json::from_str(&serialized).unwrap();
-        assert_eq!(chain.hook_name(), format!("hook.{bare}"), "{chain:?}");
-    }
-}
-
-#[test]
 fn a_provider_request_writes_present_fields_in_order_and_leaves_absent_ones_out() {
     assert_eq!(
         serde_json::to_string(&full()).unwrap(),
