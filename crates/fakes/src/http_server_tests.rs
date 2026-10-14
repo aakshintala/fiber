@@ -675,6 +675,117 @@ fn shutdown_ends_a_reply_drain_with_an_open_peer() {
     assert_eq!(request.target, "/v1");
 }
 
+/// One raw loopback pair for the close-path unit tests: the server side
+/// (nonblocking, owned by the test's connection) and the client side,
+/// plus a probe clone of the server side that peeks without consuming,
+/// so arrival is proven by the kernel instead of assumed.
+fn raw_pair(server: &HttpServer, name: &str) -> (Connection, TcpStream, TcpStream) {
+    let listener = TcpListener::bind("127.0.0.1:0").expect("the raw pair binds");
+    let addr = listener.local_addr().expect("the raw pair has an address");
+    let client = TcpStream::connect(addr).expect("the test connects");
+    let (server_stream, _) = listener.accept().expect("the test accepts");
+    server_stream
+        .set_nonblocking(true)
+        .expect("the drain reads nonblocking");
+    let probe = server_stream
+        .try_clone()
+        .expect("the test clones its probe");
+    probe
+        .set_nonblocking(true)
+        .expect("the probe peeks nonblocking");
+    let budget = RequestBudget::start_on(
+        &server.shared.clock,
+        Duration::from_secs(10),
+        server.shared.limits.guard,
+    );
+    let conn = Connection::new(
+        server_stream,
+        budget,
+        name.to_owned(),
+        Arc::clone(&server.shared),
+    );
+    (conn, client, probe)
+}
+
+/// Spins until `probe` peeks all `want` bytes: the kernel proves they
+/// arrived while leaving them unread for the drain under test.
+fn await_peeked(probe: &TcpStream, want: usize, what: &str) {
+    let mut peeked = vec![0u8; want];
+    loop {
+        match probe.peek(&mut peeked) {
+            Ok(n) if n == want => return,
+            Ok(_) => continue,
+            Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => continue,
+            Err(error) => panic!("{what} peeks within {OP:?}: {error}"),
+        }
+    }
+}
+
+/// The pre-reply discard consumes what already arrived: a no-op drain
+/// would leave the bytes for the close to reset on, so the peek below
+/// would still see them.
+#[test]
+fn drain_socket_discards_only_already_arrived_bytes() {
+    let clock = fake_clock();
+    let server = bind(&clock);
+    let (mut conn, mut client, probe) = raw_pair(&server, "the drained request");
+    client.write_all(b"held").expect("the held bytes write");
+    await_peeked(&probe, 4, "the held bytes");
+    conn.drain_socket();
+    match probe.peek(&mut [0u8; 1]) {
+        Ok(_) => panic!("the drain leaves no byte unread"),
+        Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => {}
+        Err(error) => panic!("the drained socket peeks within {OP:?}: {error}"),
+    }
+    // A drain on an empty socket ends at once, consuming nothing.
+    conn.drain_socket();
+    match probe.peek(&mut [0u8; 1]) {
+        Ok(_) => panic!("the second drain leaves no byte unread"),
+        Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => {}
+        Err(error) => panic!("the twice-drained socket peeks within {OP:?}: {error}"),
+    }
+    assert!(server.shutdown(), "shutdown reaps the server");
+}
+
+/// Shutdown ends the reply drain before any read: with `&&` the drain
+/// would consume the held bytes first, so the peek below would miss them.
+#[test]
+fn reply_drain_with_shutdown_returns_without_consuming() {
+    let clock = fake_clock();
+    let server = bind(&clock);
+    let (mut conn, mut client, probe) = raw_pair(&server, "the stopping drain");
+    client.write_all(b"held").expect("the held bytes write");
+    await_peeked(&probe, 4, "the held bytes");
+    assert!(server.shutdown(), "shutdown stops the server");
+    conn.shutdown_write_and_drain(Duration::from_secs(30));
+    let mut peeked = [0u8; 4];
+    match probe.peek(&mut peeked) {
+        Ok(4) => assert_eq!(peeked, *b"held", "the stopped drain consumes nothing"),
+        Ok(n) => panic!("the stopped drain leaves 4 bytes unread, peeked {n}"),
+        Err(error) => panic!("the stopped drain leaves the bytes unread: {error}"),
+    }
+}
+
+/// An expired bound ends the reply drain before any read: with `&&` the
+/// drain would consume the held bytes first, so the peek below would
+/// miss them.
+#[test]
+fn reply_drain_when_expired_returns_without_consuming() {
+    let clock = fake_clock();
+    let server = bind(&clock);
+    let (mut conn, mut client, probe) = raw_pair(&server, "the expired drain");
+    client.write_all(b"held").expect("the held bytes write");
+    await_peeked(&probe, 4, "the held bytes");
+    conn.shutdown_write_and_drain(Duration::ZERO);
+    let mut peeked = [0u8; 4];
+    match probe.peek(&mut peeked) {
+        Ok(4) => assert_eq!(peeked, *b"held", "the expired drain consumes nothing"),
+        Ok(n) => panic!("the expired drain leaves 4 bytes unread, peeked {n}"),
+        Err(error) => panic!("the expired drain leaves the bytes unread: {error}"),
+    }
+    assert!(server.shutdown(), "shutdown reaps the server");
+}
+
 /// A released pause before a full reply still sends every scripted
 /// byte: the reply is `Done`, and the wire carries the head and body
 /// exactly. A flipped pause check would stop the reply instead, so the

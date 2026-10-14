@@ -204,23 +204,6 @@ impl Connection {
         }
     }
 
-    /// One readiness wait under a separate operation budget, for the
-    /// post-reply drain whose bound starts after the reply is written.
-    fn wait_readable_for(&mut self, budget: &RequestBudget, phase: &'static str) -> bool {
-        let Self {
-            stream,
-            name,
-            shared,
-            seq,
-            acked,
-            ..
-        } = self;
-        match shared.wait_ready(budget, name, phase, seq, acked, Some(stream.as_fd()), true) {
-            WaitEnd::Waited => !shared.stopping.load(Ordering::SeqCst) && !budget.expired(),
-            WaitEnd::Expired | WaitEnd::Stopped => false,
-        }
-    }
-
     /// One socket read past the bytes held: how many are held now, `Eof`
     /// on peer close, `Stopped` on shutdown.
     pub(crate) fn fill(&mut self, phase: &'static str) -> FillOutcome {
@@ -478,8 +461,19 @@ impl Connection {
                 Ok(_) => {}
                 Err(error) => match classify(&error) {
                     ReadErr::Wait => {
-                        if !self.wait_readable_for(&op, REPLY_DRAIN_PHASE) {
-                            return;
+                        // One readiness park: the loop top maps shutdown
+                        // and expiry, so no second check here duplicates it.
+                        match self.shared.wait_ready(
+                            &op,
+                            &self.name,
+                            REPLY_DRAIN_PHASE,
+                            &mut self.seq,
+                            &mut self.acked,
+                            Some(self.stream.as_fd()),
+                            true,
+                        ) {
+                            WaitEnd::Waited => {}
+                            WaitEnd::Expired | WaitEnd::Stopped => return,
                         }
                     }
                     ReadErr::Retry => continue,
