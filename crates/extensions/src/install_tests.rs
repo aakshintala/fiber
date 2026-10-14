@@ -347,6 +347,18 @@ fn a_journal_that_cannot_be_read_is_an_error_naming_it() {
 }
 
 #[test]
+fn removing_a_missing_directory_succeeds_and_a_file_fails_naming_it() {
+    let dirs = Dirs::new("remove");
+    // A missing directory is already gone: removing it succeeds.
+    super::remove(&dirs.path("no-such-dir")).unwrap();
+    // A regular file is not a directory: removing it fails, naming it.
+    let file = dirs.path("file");
+    fs::write(&file, "x").unwrap();
+    let err = super::remove(&file).unwrap_err();
+    assert!(err.to_string().contains("file"), "{err}");
+}
+
+#[test]
 fn removing_a_missing_journal_succeeds() {
     let dirs = Dirs::new("journal-missing");
     super::remove_journal(&dirs.root).unwrap();
