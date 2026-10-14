@@ -2,13 +2,13 @@
 
 use std::collections::BTreeMap;
 
+use contract::ActionId;
 use contract::events::{
     ContextNudged, Control, HandoffCompleted, Note, Outcome, SkillLoad, ToolCallRequested,
     TurnOutcome,
 };
 use contract::provider::Input;
 use contract::shapes::{Question, Tokens};
-use contract::ActionId;
 use serde_json::json;
 
 use super::{

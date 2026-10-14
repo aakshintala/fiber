@@ -407,10 +407,8 @@ fn already_clean_verdicts_read_without_hanging() {
     assert!(matches!(first, Ok(First::Allow)), "{first:?}");
     let second = Deadline::after(wait).recv_or_fail(&second_rx, "read_second(\"allow\")");
     assert_eq!(second, Ok(Second::Allow { reason: None }));
-    let blocked = Deadline::after(wait).recv_or_fail(
-        &block_rx,
-        "read_second(\"block: force-pushes to main\")",
-    );
+    let blocked = Deadline::after(wait)
+        .recv_or_fail(&block_rx, "read_second(\"block: force-pushes to main\")");
     assert_eq!(
         blocked,
         Ok(Second::Block {

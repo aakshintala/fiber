@@ -7,13 +7,13 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
 
 use contract::ErrorCode;
+use contract::SessionId;
 use contract::clock::Wake;
 use contract::events::{TurnCompleted, TurnOutcome};
 use contract::inbox::Delivery;
 use contract::rules::{Rules, RulesError, StandingRules};
 use contract::shapes::{Failure, Question};
 use contract::tool::Cancel as _;
-use contract::{SessionId};
 use log::Log;
 
 use super::{TurnCancel, interrupted};
@@ -302,14 +302,8 @@ fn looped() -> (Loop, fakes::TempDir) {
     std::fs::create_dir_all(&workspace).unwrap();
     std::fs::create_dir_all(&credentials).unwrap();
     let clock: Arc<dyn contract::clock::Clock> = fakes::clock::FakeClock::new();
-    let log = Arc::new(
-        Log::create(
-            home.path(),
-            SessionId("s_test".into()),
-            Arc::clone(&clock),
-        )
-        .unwrap(),
-    );
+    let log =
+        Arc::new(Log::create(home.path(), SessionId("s_test".into()), Arc::clone(&clock)).unwrap());
     let (_inbox, rx) = std::sync::mpsc::channel::<Delivery>();
     let rules: Arc<dyn Rules> = Arc::new(Still);
     let looped = Loop::start(
