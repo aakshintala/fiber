@@ -112,4 +112,10 @@ mod tests {
                 .is_err()
         );
     }
+
+    #[test]
+    fn display_writes_the_message_it_was_built_with() {
+        let message = "project rules file line 3: not an object";
+        assert_eq!(format!("{}", RulesError(message.to_owned())), message);
+    }
 }

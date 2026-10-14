@@ -110,3 +110,20 @@ fn default_run_asking_forwards_to_run() {
     );
     assert_eq!(tool.run_asking(&arguments, &cancel, &emit, &ask), expected);
 }
+
+/// The default `guidelines` is `None`: a tool that declares none offers
+/// no system-prompt lines.
+#[test]
+fn default_guidelines_is_none() {
+    assert_eq!(EchoTool.guidelines(), None);
+}
+
+/// `Display` writes the held message for both variants.
+#[test]
+fn effects_error_display_writes_the_held_message() {
+    assert_eq!(
+        format!("{}", EffectsError::Arguments("bad path".into())),
+        "bad path"
+    );
+    assert_eq!(format!("{}", EffectsError::Tool("boom".into())), "boom");
+}
