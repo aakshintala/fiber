@@ -5,9 +5,11 @@ use std::fs;
 use std::io::Cursor;
 use std::path::PathBuf;
 use std::process::Command;
+use std::sync::Arc;
 use std::time::Duration;
 
 use contract::ErrorCode;
+use extensions::{Fetch, Origin};
 
 const APPROVE_CHILD: &str = "FIBER_CLI_APPROVE_EXIT_CHILD";
 const CHILD_DEADLINE: Duration = Duration::from_secs(5);
@@ -68,7 +70,26 @@ struct Run {
 }
 
 fn go(setup: &Setup, yes: bool, terminal: bool, input: &str) -> Run {
+    go_version(setup, yes, terminal, input, "0.1.0", missing_origin())
+}
+
+/// Nothing may fetch from here: any fetch attempt fails, so a run that
+/// answers without fetching proves it never tried.
+fn missing_origin() -> Origin {
+    Origin::new("fiber-no-such-git-program", |name| name.to_owned())
+}
+
+fn go_version(
+    setup: &Setup,
+    yes: bool,
+    terminal: bool,
+    input: &str,
+    fiber: &str,
+    origin: Origin,
+) -> Run {
     let (mut out, mut err) = (Vec::new(), Vec::new());
+    let clock: Arc<dyn contract::clock::Clock> = fakes::clock::FakeClock::new();
+    let fetch = Fetch::new(origin, fiber, Arc::clone(&clock));
     let result = run(
         &setup.home(),
         &setup.repo(),
@@ -79,7 +100,8 @@ fn go(setup: &Setup, yes: bool, terminal: bool, input: &str) -> Run {
             out: &mut out,
             err: &mut err,
         },
-        fakes::clock::FakeClock::new(),
+        Arc::clone(&clock),
+        fetch,
     );
     Run {
         result,
@@ -250,6 +272,7 @@ fn approve_returns_zero_on_success_and_two_on_refusal() {
     if let Some(case) = std::env::var_os(APPROVE_CHILD) {
         std::process::exit(super::approve(
             case == "yes",
+            env!("CARGO_PKG_VERSION"),
             fakes::clock::FakeClock::new(),
         ));
     }
@@ -269,4 +292,242 @@ fn approve_returns_zero_on_success_and_two_on_refusal() {
         );
         assert_eq!(output.status.code(), Some(expected), "{case}");
     }
+}
+
+/// A git repository holding one tagged extension, fetched by name.
+struct Deps {
+    tmp: fakes::TempDir,
+}
+
+impl Deps {
+    fn new() -> Self {
+        Self {
+            tmp: fakes::TempDir::new("fiber-approve-deps"),
+        }
+    }
+
+    /// Commit `manifest` as the package of `repo` (empty `dir` for its
+    /// root), tagged `tag`.
+    fn tag(&self, repo: &str, manifest: &str, tag: &str) {
+        let path = self.tmp.path().join(repo.replace('/', "-"));
+        if !path.exists() {
+            fs::create_dir_all(&path).unwrap();
+            fakes::git::git(&path, &["init", "--quiet"]);
+        }
+        fs::create_dir_all(path.join("providers")).unwrap();
+        fs::write(path.join("extension.json"), manifest).unwrap();
+        fs::write(
+            path.join("providers/acme.json"),
+            r#"{"name": "acme", "credential": {"env": "FIBER_TEST_UNSET_KEY"}, "models": [{"id": "m1", "protocol": "openai-responses", "base_url": "http://127.0.0.1:1/v1", "context_window": 1000}]}"#,
+        )
+        .unwrap();
+        fakes::git::git(&path, &["add", "."]);
+        fakes::git::git(
+            &path,
+            &["commit", "--quiet", "--allow-empty", "-m", "release"],
+        );
+        if !tag.is_empty() {
+            fakes::git::git(&path, &["tag", tag]);
+        }
+    }
+
+    fn origin(&self) -> Origin {
+        let root = self.tmp.path().to_path_buf();
+        Origin::new("git", move |repo| {
+            let path = root.join(repo.replace('/', "-"));
+            if path.is_dir() {
+                format!("file://{}", path.display())
+            } else {
+                "file:///nonexistent-repository".to_owned()
+            }
+        })
+    }
+}
+
+/// Declare the package at `dir` with this manifest in the approved
+/// repository.
+fn declare(setup: &Setup, dir: &str, manifest: &str) {
+    let pkg = setup.repo().join(dir);
+    fs::create_dir_all(&pkg).unwrap();
+    fs::write(pkg.join("extension.json"), manifest).unwrap();
+    fs::write(pkg.join("init.lua"), "-- entry\n").unwrap();
+    fs::write(
+        setup.repo().join(".fiber/config.json"),
+        format!(r#"{{"repository_extensions": [{{"path": "{dir}"}}]}}"#),
+    )
+    .unwrap();
+}
+
+fn manifest(name: &str, depends: &str, fiber: &str) -> String {
+    format!(r#"{{"name": "{name}", "version": "v1.0.0", "fiber": "{fiber}", "api": 1{depends}}}"#)
+}
+
+fn depends_on(dep: &str, minimum: &str) -> String {
+    format!(r#", "depends": {{"{dep}": "{minimum}"}}"#)
+}
+
+#[test]
+fn yes_installs_the_dependencies_inside_each_pinned_copy() {
+    let setup = Setup::new();
+    let deps = Deps::new();
+    let helper = "example.com/acme/helper";
+    for tag in ["v1.1.0", "v1.2.0"] {
+        deps.tag(helper, &manifest(helper, "", "0.1.0"), tag);
+    }
+    let root = "fiber.test/root";
+    declare(
+        &setup,
+        "pkg",
+        &manifest(root, &depends_on(helper, "1.2"), "0.1.0"),
+    );
+    let ran = go_version(&setup, true, false, "", "0.1.0", deps.origin());
+    assert!(ran.result.is_ok(), "{:?}", ran.result);
+    // What the person saw: the root, with its version and path.
+    assert!(
+        ran.out.starts_with("extension fiber.test/root (pkg)"),
+        "{}",
+        ran.out
+    );
+    assert!(ran.out.contains("\n  version: v1.0.0\n"), "{}", ran.out);
+    let line = ran.err.trim_end();
+    assert!(
+        line.starts_with("approved extension fiber.test/root "),
+        "{line}"
+    );
+    // The lowest tag meeting the minimum installed inside the root's copy
+    // (the setup's hook has its own copy with no dependencies), with an
+    // unrequested record and no floor.
+    let root = fs::read_dir(setup.home().join("pinned"))
+        .unwrap()
+        .map(|e| e.unwrap().file_name().to_string_lossy().into_owned())
+        .filter(|n| !n.starts_with('.') && !n.ends_with(".ready"))
+        .find(|n| {
+            setup
+                .home()
+                .join("pinned")
+                .join(n)
+                .join(".fiber-depends")
+                .is_dir()
+        })
+        .unwrap();
+    let record = fs::read_to_string(
+        setup
+            .home()
+            .join("pinned")
+            .join(root)
+            .join(".fiber-depends/extensions/example.com-acme-helper/.fiber.json"),
+    )
+    .unwrap();
+    assert!(record.contains(r#""version":"v1.2.0""#), "{record}");
+    assert!(record.contains(r#""requested":false"#), "{record}");
+    assert!(!record.contains("floor"), "{record}");
+    // The root and the setup's hook.
+    assert_eq!(setup.approvals(), 2);
+}
+
+#[test]
+fn a_declined_offer_fetches_nothing() {
+    let setup = Setup::new();
+    let root = "fiber.test/root";
+    declare(
+        &setup,
+        "pkg",
+        &manifest(
+            root,
+            &depends_on("example.com/acme/missing", "1.0"),
+            "0.1.0",
+        ),
+    );
+    // A missing git program: any fetch attempt fails, so declining must
+    // succeed without fetching.
+    let ran = go(&setup, false, false, "n\n");
+    assert!(ran.result.is_ok(), "{:?}", ran.result);
+    assert!(ran.err.ends_with("nothing approved\n"), "{}", ran.err);
+    assert_eq!(setup.approvals(), 0);
+    assert!(!setup.home().join("pinned").exists());
+}
+
+#[test]
+fn a_dependency_failure_keeps_earlier_approvals_and_skips_the_rest() {
+    let setup = Setup::new();
+    let deps = Deps::new();
+    let good = "fiber.test/good";
+    declare(&setup, "good", &manifest(good, "", "0.1.0"));
+    let bad = "fiber.test/bad";
+    declare(
+        &setup,
+        "bad",
+        &manifest(bad, &depends_on("example.com/acme/missing", "1.0"), "0.1.0"),
+    );
+    fs::write(
+        setup.repo().join(".fiber/config.json"),
+        r#"{"repository_extensions": [{"path": "good"}, {"path": "bad"}]}"#,
+    )
+    .unwrap();
+    let ran = go_version(&setup, true, false, "", "0.1.0", deps.origin());
+    let failure = ran.result.unwrap_err();
+    // Pinned stdout, stderr and code: both extensions were shown, only the
+    // first approved, and the hook after the failure never ran.
+    assert!(
+        ran.out.contains("extension fiber.test/good "),
+        "{}",
+        ran.out
+    );
+    assert!(ran.out.contains("extension fiber.test/bad "), "{}", ran.out);
+    assert!(ran.out.contains("hook fmt "), "{}", ran.out);
+    assert!(
+        ran.err.contains("approved extension fiber.test/good "),
+        "{}",
+        ran.err
+    );
+    assert!(
+        !ran.err.contains("approved extension fiber.test/bad"),
+        "{}",
+        ran.err
+    );
+    assert!(!ran.err.contains("approved hook"), "{}", ran.err);
+    assert!(
+        failure.message.contains("extension fiber.test/bad"),
+        "{}",
+        failure.message
+    );
+    assert_eq!(failure.code, ErrorCode::ExtensionNotFound);
+    assert_eq!(setup.approvals(), 1);
+    // Without the failing extension the hook approves.
+    fs::write(
+        setup.repo().join(".fiber/config.json"),
+        r#"{"repository_extensions": [{"path": "good"}]}"#,
+    )
+    .unwrap();
+    go(&setup, true, false, "").result.unwrap();
+    assert_eq!(setup.approvals(), 2);
+}
+
+#[test]
+fn the_passed_fiber_version_decides_dependency_compatibility() {
+    let setup = Setup::new();
+    let deps = Deps::new();
+    let helper = "example.com/acme/helper";
+    deps.tag(helper, &manifest(helper, "", "0.2.0"), "v1.0.0");
+    let root = "fiber.test/root";
+    declare(
+        &setup,
+        "pkg",
+        &manifest(root, &depends_on(helper, "1.0"), "0.1.0"),
+    );
+    // The dependency needs Fiber 0.2.0: the passed 0.1.0 refuses it, while
+    // the passed 0.2.0 installs it, so the check runs on the argument.
+    let refused = go_version(&setup, true, false, "", "0.1.0", deps.origin());
+    let failure = refused.result.unwrap_err();
+    assert!(
+        failure.message.contains("needs Fiber 0.2.0"),
+        "{}",
+        failure.message
+    );
+    assert_eq!(failure.code, ErrorCode::ExtensionIncompatible);
+    assert_eq!(setup.approvals(), 0);
+    let ran = go_version(&setup, true, false, "", "0.2.0", deps.origin());
+    assert!(ran.result.is_ok(), "{:?}", ran.result);
+    // The root and the setup's hook.
+    assert_eq!(setup.approvals(), 2);
 }

@@ -542,3 +542,35 @@ fn script_output(deadline: Deadline, script: &Path) -> String {
     assert!(output.status.success(), "{output:?}");
     String::from_utf8(output.stdout).unwrap()
 }
+
+#[test]
+fn a_package_holding_a_reserved_dependency_path_is_refused() {
+    let setup = Setup::new_with_repository();
+    let repo = setup.workspace();
+    write(
+        &repo.join("pkg/extension.json"),
+        &json!({
+            "name": "fiber.test/pkg", "version": "v1.0.0", "fiber": "0.1.0", "api": 1,
+        })
+        .to_string(),
+    );
+    write(&repo.join("pkg/init.lua"), "-- entry\n");
+    write(&repo.join("pkg/.fiber-depends"), "forged\n");
+    write(
+        &repo.join(".fiber/config.json"),
+        r#"{"repository_extensions": [{"path": "pkg"}]}"#,
+    );
+    let run = setup.approve("w", &["--yes"], None);
+    assert_ne!(run.code, Some(0));
+    assert!(run.stderr.contains(".fiber-depends"), "{}", run.stderr);
+    assert!(run.approvals().is_empty());
+    assert!(Setup::names(&setup.project_approvals("w")).is_empty());
+    assert!(copies(&setup).is_empty());
+    assert!(
+        Setup::names(&setup.home().join("pinned"))
+            .iter()
+            .all(|n| !n.ends_with(".ready")),
+        "{:?}",
+        Setup::names(&setup.home().join("pinned"))
+    );
+}

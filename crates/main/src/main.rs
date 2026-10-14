@@ -219,7 +219,7 @@ fn run() -> i32 {
             mcp_command(command, Arc::clone(&clock))
         }
         cli::Invocation::Run(Some(cli::Commands::Approve(args)), _) => {
-            ::cli::approve(args.yes, Arc::clone(&clock))
+            ::cli::approve(args.yes, env!("CARGO_PKG_VERSION"), Arc::clone(&clock))
         }
         cli::Invocation::Run(Some(cli::Commands::Config(cmd)), _) => match cmd {
             cli::ConfigCommands::Get { key } => ::cli::config_get(&key),

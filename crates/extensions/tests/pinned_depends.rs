@@ -15,13 +15,17 @@ mod common;
 
 use std::fs;
 use std::path::Path;
+use std::sync::Arc;
 
 use common::{
     FIBER, Repos, Setup, approve, declare, dep_dir, dep_names, dep_record, dep_version,
-    depends_home, item, manifest, named, store,
+    depends_home, item, manifest, named, project, store, write,
 };
-use extensions::Error;
+use contract::events::OfferDecision;
+use contract::repository::{Decided, RepositoryCode};
+use extensions::{Error, Fetch, Origin, SessionOffer};
 use fakes::clock::FakeClock;
+use fakes::git::git;
 use serde_json::{Value, json};
 
 #[test]
@@ -393,4 +397,108 @@ fn a_dependency_back_on_the_root_terminates_without_staging_it() {
     declare(&setup, &named(root, &[(helper, "1.0")]));
     let digest = approve(&setup, &repos);
     assert_eq!(dep_names(&setup, &digest), vec![config::dir_name(helper)]);
+}
+
+/// An offer whose dependencies fetch from `repos`, or from nowhere when
+/// `repos` is `None`: anything fetched then fails.
+fn offering(setup: &Setup, repos: Option<&Repos>, clock: &Arc<FakeClock>) -> SessionOffer {
+    let origin = match repos {
+        Some(repos) => repos.origin(),
+        None => Origin::new("fiber-no-such-git-program", |name| name.to_owned()),
+    };
+    SessionOffer::new(
+        &setup.home(),
+        &project(),
+        &setup.workspace(),
+        Fetch::new(origin, FIBER, Arc::clone(clock) as Arc<_>),
+    )
+}
+
+#[test]
+fn an_offered_approval_records_and_installs_dependencies() {
+    let setup = Setup::new();
+    let mut repos = Repos::new(&setup);
+    let helper = "example.com/acme/helper";
+    repos.tag(helper, "", "v1.2.0", &manifest(helper), &[]);
+    let root = "fiber.test/root";
+    declare(&setup, &named(root, &[(helper, "1.2")]));
+    let clock = FakeClock::new();
+    let offer = offering(&setup, Some(&repos), &clock);
+    let pending = offer.unapproved().unwrap();
+    assert_eq!(pending.len(), 1);
+    assert_eq!(
+        offer
+            .decide(&pending[0].offered, OfferDecision::Approve)
+            .unwrap(),
+        Decided::Recorded
+    );
+    assert_eq!(
+        dep_version(&setup, &pending[0].offered.hash, helper),
+        "v1.2.0"
+    );
+}
+
+#[test]
+fn never_skip_and_changed_content_install_nothing() {
+    let setup = Setup::new();
+    let ws = setup.workspace();
+    if !ws.join(".git").exists() {
+        git(&ws, &["init", "--quiet"]);
+    }
+    for package in ["never", "skip", "changed"] {
+        let name = format!("fiber.test/{package}");
+        write(
+            &ws.join(format!("{package}/extension.json")),
+            &named(&name, &[("example.com/acme/helper", "1.0")]).to_string(),
+        );
+        write(&ws.join(format!("{package}/init.lua")), "-- entry\n");
+    }
+    write(
+        &ws.join(".fiber/config.json"),
+        &json!({"repository_extensions": [
+            {"path": "never"}, {"path": "skip"}, {"path": "changed"},
+        ]})
+        .to_string(),
+    );
+    let clock = FakeClock::new();
+    // Nothing may fetch: every decision below must succeed without it.
+    let offer = offering(&setup, None, &clock);
+    let pending = offer.unapproved().unwrap();
+    assert_eq!(pending.len(), 3);
+    let offered = |package: &str| {
+        pending
+            .iter()
+            .find(|u| u.offered.name == format!("fiber.test/{package}"))
+            .unwrap()
+            .offered
+            .clone()
+    };
+    assert_eq!(
+        offer
+            .decide(&offered("never"), OfferDecision::Never)
+            .unwrap(),
+        Decided::Recorded
+    );
+    assert_eq!(
+        offer.decide(&offered("skip"), OfferDecision::Skip).unwrap(),
+        Decided::Obsolete
+    );
+    // Changed since the offer: obsolete, and nothing installs.
+    write(&ws.join("changed/init.lua"), "-- changed\n");
+    assert_eq!(
+        offering(&setup, None, &clock)
+            .decide(&offered("changed"), OfferDecision::Approve)
+            .unwrap(),
+        Decided::Obsolete
+    );
+    for package in ["never", "skip", "changed"] {
+        assert!(
+            !setup
+                .home()
+                .join("pinned")
+                .join(&offered(package).hash)
+                .exists(),
+            "{package}"
+        );
+    }
 }

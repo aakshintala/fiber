@@ -9,7 +9,7 @@ use std::sync::Arc;
 use contract::ErrorCode;
 use contract::clock::Clock;
 use contract::shapes::Failure;
-use extensions::{Index, Store};
+use extensions::{Fetch, Index, Origin, Store};
 
 use crate::{failed, project_of, usage, with_dirs, write_line};
 
@@ -27,12 +27,14 @@ struct Streams<'a> {
 }
 
 /// `fiber approve [--yes]` in the current directory. Without `--yes` it asks
-/// once, and refuses when nobody can answer. The clock bounds an extension's
-/// install step when its copy is built.
-pub fn approve(yes: bool, clock: Arc<dyn Clock>) -> i32 {
+/// once, and refuses when nobody can answer. Dependencies fetch from github
+/// as the running Fiber version, on the clock that also bounds an
+/// extension's install step when its copy is built.
+pub fn approve(yes: bool, fiber_version: &str, clock: Arc<dyn Clock>) -> i32 {
     with_dirs(|home, workspace| {
         let stdin = io::stdin();
         let terminal = stdin.is_terminal();
+        let fetch = Fetch::new(Origin::github(), fiber_version, Arc::clone(&clock));
         run(
             home,
             workspace,
@@ -44,6 +46,7 @@ pub fn approve(yes: bool, clock: Arc<dyn Clock>) -> i32 {
                 err: &mut io::stderr(),
             },
             clock,
+            fetch,
         )
     })
 }
@@ -58,10 +61,11 @@ fn run(
     terminal: bool,
     streams: Streams<'_>,
     clock: Arc<dyn Clock>,
+    fetch: Fetch,
 ) -> Result<(), Failure> {
     let Streams { input, out, err } = streams;
     let (_, project) = project_of(home, workspace)?;
-    let store = Store::new(home, &project, Arc::clone(&clock));
+    let store = Store::new(home, &project, Arc::clone(&clock)).fetching(fetch);
     let mut index = Index::load(home);
     let items =
         extensions::declared_items(workspace, clock.as_ref()).map_err(|e| failed(e.code(), e))?;
