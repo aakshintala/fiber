@@ -416,6 +416,76 @@ fn a_leader_that_exits_while_its_descendant_holds_stdout_times_out_and_the_group
     pre.stand_down(DEADLINE);
 }
 
+/// The timeout kill re-kills a group that survives the first SIGKILL until
+/// no process is left in it: the script answers the first two probes alive
+/// — a fork landing inside the kernel kill walk — and SRCH only after the
+/// second send, so the wait must deliver twice and retire the group on
+/// SRCH. An accepted send never retires the group, only SRCH does.
+#[test]
+fn timeout_rekills_a_group_that_survives_its_first_kill() {
+    let root = fakes::TempDir::new("fiber-read-timeout-rekill");
+    let ready = Ready::new(root.path());
+    let timeout = Duration::from_secs(30);
+    let clock = FakeClock::new();
+    let deadline = clock.origin() + timeout;
+    let reads = Arc::new(Reads::default());
+    // The `sleep` inherits stdout, so the leader's exit is not the run's
+    // end: the wait parks at its deadline with the leader already gone,
+    // and the timeout below needs no reap wait, only the group's kills.
+    let script = format!("echo $$ > '{}'; sleep 600 & exit 0", ready.path().display());
+    let pre = fakes::Watchdog::matching(&ready.path().display().to_string());
+    let finished = credential_on_thread(&reads, sh(&script), timeout, &clock);
+    let pgid = ready.wait(DEADLINE)[0];
+    let watchdog = fakes::Watchdog::group(pgid);
+    assert!(
+        clock.await_parked(deadline, DEADLINE),
+        "the wait parked at its deadline"
+    );
+    // Alive past the first kill, gone after the second.
+    reads.script_group(
+        pgid,
+        vec![Ok(()), Ok(()), Err(Errno::SRCH)],
+        vec![Ok(()), Ok(())],
+    );
+    clock.advance(timeout);
+    // The timeout re-kills on the poll cadence: each advance follows a
+    // confirmed park, so the first two parks each earn one more send and
+    // the third observation retires the group.
+    let poll = deadline + GROUP_POLL;
+    assert!(
+        clock.await_parked(poll, DEADLINE),
+        "the timeout parked at its first poll"
+    );
+    clock.advance(GROUP_POLL);
+    let repoll = poll + GROUP_POLL;
+    assert!(
+        clock.await_parked(repoll, DEADLINE),
+        "the timeout parked at its second poll"
+    );
+    clock.advance(GROUP_POLL);
+    let error = Deadline::after(DEADLINE)
+        .recv_or_fail(&finished, "the timed-out read")
+        .expect_err("a command still running at its timeout");
+    assert_eq!(error.kind(), std::io::ErrorKind::TimedOut);
+    assert_eq!(reads.scripted_sends(), 2, "one send per pass before SRCH");
+    assert!(
+        !listed(&reads).contains(&pgid),
+        "SRCH retires the group: {:?}",
+        listed(&reads)
+    );
+    // The scripted sends never touched the real group: kill it for real
+    // and reap it on every path.
+    match fakes::kill_group(pgid, "KILL") {
+        Ok(_) | Err(_) => {}
+    }
+    assert!(
+        fakes::group_empties(pgid, DEADLINE),
+        "the real group is gone"
+    );
+    watchdog.stand_down(DEADLINE);
+    pre.stand_down(DEADLINE);
+}
+
 #[test]
 fn a_quick_command_answers_without_the_clock_moving() {
     let clock = FakeClock::new();
