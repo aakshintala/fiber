@@ -18,7 +18,7 @@ use std::sync::atomic::AtomicBool;
 use std::sync::mpsc::{self, Receiver, Sender};
 
 use contract::clock::Clock;
-use contract::{Envelope, Seq, SessionId};
+use contract::{Envelope, ErrorCode, Seq, SessionId};
 use ratatui::backend::Backend;
 use signal_hook::consts::{SIGHUP, SIGINT, SIGQUIT, SIGTERM, SIGWINCH};
 use signal_hook::iterator::Signals;
@@ -35,18 +35,50 @@ use crate::screen::Screen;
 use crate::sources::{Reader, spawn_hub, spawn_resize};
 use crate::{Connect, Input, OnAttach, clipboard, editor, files, osc, term};
 
+/// What keeps the terminal from running.
+#[derive(Debug, thiserror::Error)]
+pub enum Error {
+    /// The input reader could not start, so no key would reach the loop.
+    #[error(transparent)]
+    ReaderStart(#[from] crate::sources::SpawnError),
+}
+
+impl Error {
+    /// The stable code a consumer switches on (`docs/errors.md`, "Registry").
+    pub fn code(&self) -> ErrorCode {
+        match self {
+            Self::ReaderStart(_) => ErrorCode::IoFailed,
+        }
+    }
+}
+
 /// Runs the terminal on `tty` for `launch`, starting sessions in its
 /// workspace. `hover` is `launch.hover`: with it off, mouse mode 1003 is
-/// never sent and nothing is tinted under the pointer. Returns 0 on quit
-/// and 1 when the terminal cannot be set up or drawn. The terminal is
-/// restored on every return.
+/// never sent and nothing is tinted under the pointer. `Ok(0)` on quit
+/// and `Ok(1)` when the terminal cannot be set up or drawn. The terminal
+/// is restored on every return.
 pub fn run(
     tty: File,
     launch: Launch,
     connect: Connect,
     on_attach: OnAttach,
     clock: Arc<dyn Clock>,
-) -> i32 {
+) -> Result<i32, Error> {
+    run_with(tty, launch, connect, on_attach, clock, Reader::spawn)
+}
+
+/// Runs as [`run`] does, with the input reader's spawn as a function so
+/// tests fail it. A failed spawn returns the failure without entering the
+/// loop: the terminal is restored by the [`term::Guard`] drop on that
+/// return.
+pub(crate) fn run_with(
+    tty: File,
+    launch: Launch,
+    connect: Connect,
+    on_attach: OnAttach,
+    clock: Arc<dyn Clock>,
+    spawn_reader: impl FnOnce(&File, Sender<Input>) -> Result<Reader, crate::sources::SpawnError>,
+) -> Result<i32, Error> {
     // SIGWINCH is caught from before the size is read, so no resize is
     // missed; its thread starts after the first frame.
     let signals = Signals::new([SIGWINCH]).ok();
@@ -56,7 +88,7 @@ pub fn run(
     // kill the process without restoring, so a refused one fails before
     // any frame.
     let Ok(term_signals) = Signals::new([SIGTERM, SIGHUP]) else {
-        return 1;
+        return Ok(1);
     };
     catch_interrupts();
     let restore = term::Guard;
@@ -64,13 +96,13 @@ pub fn run(
     // child process and reads nothing.
     let hover = launch.hover;
     let Ok((width, height)) = term::setup(&tty, hover) else {
-        return 1;
+        return Ok(1);
     };
     let Ok(out) = tty.try_clone() else {
-        return 1;
+        return Ok(1);
     };
     let Ok(mut screen) = Screen::new(crate::screen::backend(out), width, height) else {
-        return 1;
+        return Ok(1);
     };
     let mut app = App::new(launch.workspace.clone());
     app.set_zone(jiff::tz::TimeZone::system());
@@ -159,7 +191,7 @@ pub fn run(
     // The first frame waits on nothing: the queries are out, and nothing
     // reads the tty or the hub until it is drawn.
     if terminal.screen.draw(&mut terminal.app, None).is_err() {
-        return 1;
+        return Ok(1);
     }
     terminal.write_title();
     let (tx, rx) = mpsc::channel();
@@ -168,10 +200,19 @@ pub fn run(
     // frame draws at once and the picker lists them as soon as the read
     // answers.
     terminal.model_reader.ask(catalogue::Refresh::Cached, &tx);
-    terminal.reader = terminal
+    match terminal
         .tty
         .as_ref()
-        .and_then(|tty| Reader::spawn(tty, tx.clone()));
+        .map(|tty| spawn_reader(tty, tx.clone()))
+    {
+        Some(Ok(reader)) => terminal.reader = Some(reader),
+        // Without the reader no key reaches the loop: fail instead of
+        // running deaf. The guard's drop restores the terminal.
+        Some(Err(error)) => {
+            return Err(Error::from(error));
+        }
+        None => {}
+    }
     spawn_hub(connect, tx.clone(), retry, Arc::clone(&terminal.clock));
     // The tick runs only while something drawn moves: the first frame's
     // asks arm it, and the loop re-arms it after every frame.
@@ -196,7 +237,7 @@ pub fn run(
             writeln!(tty, "{line}").unwrap_or(());
         }
     }
-    code
+    Ok(code)
 }
 
 /// Turns SIGTERM and SIGHUP into [`Input::Signal`] on their own thread,

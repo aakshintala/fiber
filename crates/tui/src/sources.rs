@@ -60,6 +60,31 @@ impl Gate {
     }
 }
 
+/// Why the input reader could not start: the step that failed and the
+/// operating system's reason. Its display is the whole `terminal:`
+/// message the terminal fails with.
+#[derive(Debug)]
+pub struct SpawnError {
+    step: &'static str,
+    source: io::Error,
+}
+
+impl std::fmt::Display for SpawnError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(
+            f,
+            "terminal: could not start the input reader: {}: {}",
+            self.step, self.source
+        )
+    }
+}
+
+impl std::error::Error for SpawnError {
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        Some(&self.source)
+    }
+}
+
 /// The stack of each terminal thread. A thread's default 2 MiB stack can
 /// land on a 2 MiB-aligned span of its own, and the kernel then backs its
 /// first touch with one 2 MiB huge page: the idle terminal measured 2 MiB
@@ -77,6 +102,7 @@ pub(crate) fn builder(name: &str) -> thread::Builder {
 /// Reads the tty on its own thread, polling it and a wake pipe, so the loop
 /// can stop it from reading while another program has the terminal. Left
 /// blocked on quit; it ends with the process.
+#[derive(Debug)]
 pub(crate) struct Reader {
     gate: Arc<Gate>,
     /// Written to wake the reader from its poll.
@@ -84,21 +110,51 @@ pub(crate) struct Reader {
 }
 
 impl Reader {
-    /// Starts reading `tty`, sending each read as [`Input::Bytes`]. `None`
-    /// when the reader cannot start: the terminal then reads no keys, the
-    /// hub thread may still report, and Ctrl+C from the shell ends it.
-    pub(crate) fn spawn(tty: &File, tx: Sender<Input>) -> Option<Self> {
-        let tty = tty.try_clone().ok()?;
-        let (woken, wake) = io::pipe().ok()?;
+    /// Starts reading `tty`, sending each read as [`Input::Bytes`].
+    /// `Err` when the reader cannot start, naming the step that failed:
+    /// nothing reads the keys then, and the caller reports the failure.
+    pub(crate) fn spawn(tty: &File, tx: Sender<Input>) -> Result<Self, SpawnError> {
+        Self::spawn_with(tty, tx, File::try_clone, io::pipe, |builder, body| {
+            builder.spawn(body)
+        })
+    }
+
+    /// Starts reading `tty` as [`Reader::spawn`] does, with one closure
+    /// per fallible step, so tests fail each step: duplicating the tty,
+    /// creating the wake pipe, and spawning the reader thread. No thread
+    /// starts on any `Err`.
+    pub(crate) fn spawn_with(
+        tty: &File,
+        tx: Sender<Input>,
+        clone_tty: impl FnOnce(&File) -> io::Result<File>,
+        make_pipe: impl FnOnce() -> io::Result<(PipeReader, PipeWriter)>,
+        spawn_thread: impl FnOnce(
+            thread::Builder,
+            Box<dyn FnOnce() + Send + 'static>,
+        ) -> io::Result<thread::JoinHandle<()>>,
+    ) -> Result<Self, SpawnError> {
+        let tty = clone_tty(tty).map_err(|source| SpawnError {
+            step: "duplicating the tty",
+            source,
+        })?;
+        let (woken, wake) = make_pipe().map_err(|source| SpawnError {
+            step: "creating the wake pipe",
+            source,
+        })?;
         let gate = Arc::new(Gate::default());
         let shared = Arc::clone(&gate);
-        builder("tui-input")
-            .spawn(move || {
+        spawn_thread(
+            builder("tui-input"),
+            Box::new(move || {
                 read_input(tty, &woken, &shared, &tx);
                 shared.end();
-            })
-            .ok()?;
-        Some(Self { gate, wake })
+            }),
+        )
+        .map_err(|source| SpawnError {
+            step: "spawning the reader thread",
+            source,
+        })?;
+        Ok(Self { gate, wake })
     }
 
     /// Stops the reader from reading the tty, returning once it has parked

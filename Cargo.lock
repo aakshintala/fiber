@@ -3264,6 +3264,7 @@ dependencies = [
  "serde_json",
  "signal-hook",
  "support",
+ "thiserror 2.0.21",
 ]
 
 [[package]]
