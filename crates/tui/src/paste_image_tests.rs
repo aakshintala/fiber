@@ -1379,11 +1379,28 @@ fn the_timeout_kill_misses_a_member_joined_after_it() {
         ),
         Err(Failed::TimedOut)
     );
-    // A dead late join is already reaped here, so no zombie holds the
-    // group past the read; a live one proves the single kill missed it.
-    match late.try_wait() {
-        Ok(_) | Err(_) => {}
-    }
+    // The late join is the test's own child, so the test reaps it: the
+    // cleanup SIGKILLed it, so it dies promptly, and the wall-clock bound
+    // only guards a hang. One `try_wait` can miss its death while the
+    // signal is still in flight, leaving a zombie that holds the group
+    // past the read; the poll reaps it however late the death lands.
+    let reap = Deadline::after(DEADLINE);
+    let status = loop {
+        match late.try_wait() {
+            Ok(Some(status)) => break Some(status),
+            Ok(None) => {}
+            Err(error) => panic!("the late join's try_wait failed: {error:?}"),
+        }
+        if reap.left().is_zero() {
+            break None;
+        }
+        std::thread::yield_now();
+    };
+    let status = status.expect("waited {DEADLINE:?} for the late join to die after SIGKILL");
+    assert!(
+        !status.success(),
+        "the late join must die from the cleanup SIGKILL, not exit zero"
+    );
     reaped(
         watchdog,
         pgid,

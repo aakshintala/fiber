@@ -391,31 +391,22 @@ fn signal_after_group(
 /// keyed by group id: the worker reports it sent the group's kill and
 /// blocks until the test releases it, so the test lands a fork between the
 /// kill and the reap on every run. One-shot; a group no test armed runs
-/// free, so the pause never holds another test's read.
+/// free and leaves the armed pause in place, so the pause never holds
+/// another test's read.
 #[cfg(test)]
-static CLEANUP_PAUSE: std::sync::OnceLock<CleanupPauses> = std::sync::OnceLock::new();
+static CLEANUP_PAUSE: std::sync::Mutex<CleanupPause> = std::sync::Mutex::new(None);
 
-/// What [`CLEANUP_PAUSE`] holds: one pause per armed group, the worker's
-/// report sender and the test's release receiver.
+/// What [`CLEANUP_PAUSE`] holds: the armed group id, the worker's report
+/// sender and the test's release receiver.
 #[cfg(test)]
-type CleanupPauses =
-    std::sync::Mutex<std::collections::HashMap<u32, (mpsc::Sender<()>, mpsc::Receiver<()>)>>;
-
-/// The armed pauses, created on first use.
-#[cfg(test)]
-fn cleanup_pauses() -> &'static CleanupPauses {
-    CLEANUP_PAUSE.get_or_init(|| std::sync::Mutex::new(std::collections::HashMap::new()))
-}
+type CleanupPause = Option<(u32, mpsc::Sender<()>, mpsc::Receiver<()>)>;
 
 /// Arms one pause of the next timeout cleanup of group `pgid` (see
 /// [`CLEANUP_PAUSE`]): the worker sends on `entered` once it sent the
 /// group's kill and blocks until `release` arrives. The pause is one-shot.
 #[cfg(test)]
 fn arm_cleanup_pause(pgid: u32, entered: mpsc::Sender<()>, release: mpsc::Receiver<()>) {
-    cleanup_pauses()
-        .lock()
-        .unwrap_or_else(PoisonError::into_inner)
-        .insert(pgid, (entered, release));
+    *CLEANUP_PAUSE.lock().unwrap_or_else(PoisonError::into_inner) = Some((pgid, entered, release));
 }
 
 /// Reports the worker sent the group's kill and blocks until the test
@@ -423,11 +414,14 @@ fn arm_cleanup_pause(pgid: u32, entered: mpsc::Sender<()>, release: mpsc::Receiv
 /// that goes away drops the release sender, which releases the worker too.
 #[cfg(test)]
 fn cleanup_pause(id: u32) {
-    let point = cleanup_pauses()
-        .lock()
-        .unwrap_or_else(PoisonError::into_inner)
-        .remove(&id);
-    if let Some((entered, release)) = point {
+    let point = {
+        let mut paused = CLEANUP_PAUSE.lock().unwrap_or_else(PoisonError::into_inner);
+        match paused.as_ref() {
+            Some((pgid, _, _)) if *pgid == id => paused.take(),
+            Some(_) | None => None,
+        }
+    };
+    if let Some((_, entered, release)) = point {
         match entered.send(()) {
             Ok(()) | Err(_) => {}
         }
