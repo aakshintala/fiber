@@ -263,6 +263,18 @@ fn signal_sites_ignores_near_miss_paths_and_names() {
 }
 
 #[test]
+fn signal_sites_ignores_a_command_lookalike_without_colons() {
+    // `Command::new("kill")` needs both `::` separators: `Command` beside
+    // `new("kill")` with no colons between them is not a signal.
+    let files = [file(
+        "log",
+        "src/lib.rs",
+        "fn run() {\n    let _ = Command x y new(\"kill\");\n}\n".to_owned(),
+    )];
+    assert_eq!(signal_sites(&files), Vec::<String>::new());
+}
+
+#[test]
 fn signal_sites_ignores_a_signal_in_an_allowlisted_file() {
     // Every allowlist entry may hold a real signal; the list is a trust
     // list, so each entry is covered.
