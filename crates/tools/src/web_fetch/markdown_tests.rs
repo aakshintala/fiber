@@ -353,7 +353,17 @@ fn a_head_never_closed_ends_at_a_tag_that_cannot_be_in_it() {
 fn a_tag_that_cannot_be_in_svg_ends_it() {
     // The HTML standard closes every open `svg` at these tags, so the text
     // after them is shown, closed `svg` or not.
-    assert_eq!(to_markdown("a<svg><svg>s<p>b</p>"), "a\n\nb\n");
+    // The deadline is a hang guard, not a timing assertion: a `>=`-style
+    // mutant that never stops popping fails here naming what it waited
+    // for, instead of hanging to the mutant timeout.
+    let html = "a<svg><svg>s<p>b</p>".to_owned();
+    assert_eq!(
+        with_deadline(
+            "closing every open svg at a tag that cannot be in one",
+            move || to_markdown(&html)
+        ),
+        "a\n\nb\n"
+    );
     assert_eq!(to_markdown("a<svg><g><p>b</p></g></svg>c"), "a\n\nb\n\nc\n");
     assert_eq!(to_markdown("a<svg></p>b"), "a\n\nb\n");
     assert_eq!(to_markdown("a<svg></br>b"), "a\nb\n");

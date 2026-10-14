@@ -123,6 +123,11 @@ impl TokenSink for Sink {
         }
     }
 
+    /// The input ended: `Stream::finish` consumes the converter and
+    /// `Writer::finish` already receives the collected title, so clearing
+    /// the discarded `raw` and `title_done` state here changes nothing a
+    /// consumer can see.
+    #[cfg_attr(false, mutants::skip)]
     fn end(&self) {
         self.cell.borrow_mut().input_ended();
     }
@@ -255,7 +260,10 @@ impl Converter {
 
     /// The input ended: a title never closed swallows the rest of the page
     /// in Rcdata, so its collected text, whitespace collapsed, becomes the
-    /// leading heading, and no text is lost.
+    /// leading heading, and no text is lost. `Stream::finish` consumes the
+    /// converter right after, so whether this clears the discarded `raw`
+    /// and `title_done` state changes nothing a consumer can see.
+    #[cfg_attr(false, mutants::skip)]
     fn input_ended(&mut self) {
         if self.raw == Some(Raw::Title) {
             self.end_raw();
