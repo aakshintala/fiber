@@ -16,8 +16,6 @@ mod harness;
 #[path = "support/wire_tools.rs"]
 mod wire_tools;
 
-use std::io::{BufRead, BufReader};
-use std::net::TcpListener;
 use std::sync::{Arc, mpsc};
 use std::thread;
 
@@ -634,17 +632,8 @@ fn cancelling_from_another_thread_ends_a_blocked_read_and_carries_what_it_saw() 
 #[test]
 fn a_connection_closed_before_any_response_fails_the_call() {
     for wire in wires() {
-        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
-        let url = format!("http://{}", listener.local_addr().unwrap());
-        thread::spawn(move || {
-            // Accept, read the request, and close without answering.
-            let (socket, _) = listener.accept().unwrap();
-            let mut reader = BufReader::new(socket);
-            let mut line = String::new();
-            while reader.read_line(&mut line).unwrap() > 0 && line != "\r\n" {
-                line.clear();
-            }
-        });
+        let server = ProviderServer::start([Response::drop_connection()]).unwrap();
+        let url = server.url();
         let endpoint = Endpoint {
             provider: wire.protocol.name.into(),
             base_url: url,
