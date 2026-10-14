@@ -1055,3 +1055,609 @@ fn a_route_follows_its_endpoint_proxy_and_limits() {
     );
     assert_eq!(route.limits, stall_limits());
 }
+use contract::clock::Clock;
+
+/// A clock that ticks forward on every read: `now()` is the origin plus
+/// one step per call, so milestone order is observable on one thread.
+struct TickClock {
+    origin: std::time::Instant,
+    step: std::time::Duration,
+    next: std::sync::atomic::AtomicU64,
+}
+
+impl TickClock {
+    #[allow(
+        clippy::disallowed_methods,
+        reason = "the ticking clock's origin: every later read is a tick, never the process clock"
+    )]
+    fn new(step: std::time::Duration) -> std::sync::Arc<Self> {
+        std::sync::Arc::new(Self {
+            origin: std::time::Instant::now(),
+            step,
+            next: std::sync::atomic::AtomicU64::new(0),
+        })
+    }
+}
+
+impl contract::clock::Clock for TickClock {
+    fn now(&self) -> std::time::Instant {
+        let n = self.next.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+        let ticks = u32::try_from(n).unwrap_or(u32::MAX);
+        self.origin + self.step * ticks
+    }
+
+    fn wall(&self) -> std::time::SystemTime {
+        std::time::SystemTime::UNIX_EPOCH + std::time::Duration::from_secs(1_700_000_000)
+    }
+
+    fn sleep(&self, _: std::time::Duration) {}
+
+    fn wait_until(
+        &self,
+        _: Option<std::time::Instant>,
+        _: &mut dyn FnMut(Option<std::time::Duration>),
+    ) {
+    }
+
+    fn subscribe(&self, _: std::sync::Weak<dyn contract::clock::Wake>) {}
+}
+
+/// One observed `post_signed` on its own thread under [`CALL_WITHIN`],
+/// returning the outcome with the secrets it reported.
+fn observed(
+    url: String,
+    headers: &[(String, String)],
+    body: &'static [u8],
+    signer: Option<std::sync::Arc<dyn contract::signing::Signer>>,
+    route: super::Route,
+    cancel: &std::sync::Arc<super::Cancel>,
+    clock: std::sync::Arc<dyn contract::clock::Clock>,
+) -> (
+    Result<super::ObservedSend, super::ObservedFailure>,
+    crate::redact::Secrets,
+) {
+    let headers = headers.to_vec();
+    let cancel = std::sync::Arc::clone(cancel);
+    fakes::within(
+        &format!("the observed call to {url}"),
+        CALL_WITHIN,
+        move || {
+            let mut secrets = crate::redact::Secrets::default();
+            let sent = super::post_signed_observed(
+                &url,
+                &headers,
+                body,
+                signer.as_deref(),
+                &route,
+                &cancel,
+                &mut secrets,
+                &clock,
+            );
+            (sent, secrets)
+        },
+    )
+}
+
+fn direct_route() -> super::Route {
+    super::Route {
+        via: super::Via::Direct,
+        limits: net::LIMITS,
+    }
+}
+
+fn limited_route() -> super::Route {
+    super::Route {
+        via: super::Via::Direct,
+        limits: stall_limits(),
+    }
+}
+
+#[test]
+fn signing_completes_before_the_send_stamp() {
+    let server = fakes::ProviderServer::start([fakes::Response::status(200, "hi")]).unwrap();
+    let url = format!("{}/v1", server.url());
+    let clock = TickClock::new(std::time::Duration::from_millis(5));
+    let order = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
+    struct Order {
+        clock: std::sync::Arc<TickClock>,
+        order: std::sync::Arc<std::sync::Mutex<Vec<(&'static str, std::time::Instant)>>>,
+    }
+    impl contract::signing::Signer for Order {
+        fn sign(
+            &self,
+            _: &contract::signing::SignRequest<'_>,
+        ) -> Result<Vec<(String, String)>, contract::signing::Error> {
+            self.order
+                .lock()
+                .unwrap()
+                .push(("sign", contract::clock::Clock::now(&*self.clock)));
+            Ok(vec![("x-signature".to_owned(), "sig".to_owned())])
+        }
+    }
+    let signer = std::sync::Arc::new(Order {
+        clock: std::sync::Arc::clone(&clock),
+        order: std::sync::Arc::clone(&order),
+    });
+    let (sent, _) = observed(
+        url,
+        &[],
+        b"{}",
+        Some(signer),
+        direct_route(),
+        &std::sync::Arc::default(),
+        std::sync::Arc::clone(&clock) as std::sync::Arc<dyn contract::clock::Clock>,
+    );
+    let sent = match sent {
+        Ok(sent) => sent,
+        Err(failed) => panic!("the observed send failed: {:?}", failed.error),
+    };
+    let order = order.lock().unwrap().clone();
+    assert_eq!(order.len(), 1);
+    assert_eq!(order[0].0, "sign");
+    assert!(
+        order[0].1 < sent.start,
+        "signing completes before the send stamp"
+    );
+    assert!(
+        sent.start < sent.headers_at,
+        "the send stamp precedes the headers stamp"
+    );
+    assert_eq!(sent.status, 200);
+}
+
+#[test]
+fn a_refused_peer_sends_one_record_with_response_fields_omitted() {
+    let clock = fakes::clock::FakeClock::new();
+    let (sent, _) = observed(
+        fakes::refused::url(),
+        &[],
+        b"{}",
+        None,
+        direct_route(),
+        &std::sync::Arc::default(),
+        std::sync::Arc::clone(&clock) as std::sync::Arc<dyn contract::clock::Clock>,
+    );
+    let Err(failed) = sent else {
+        panic!("a refused peer unexpectedly answered");
+    };
+    assert!(
+        matches!(failed.error, crate::Error::Connection(_)),
+        "a refused peer fails to connect: {:?}",
+        failed.error
+    );
+    let Some(dispatched) = failed.sent else {
+        panic!("a failed send after the stamp reports it");
+    };
+    assert_eq!(dispatched.headers_at, None);
+    assert_eq!(dispatched.status, None);
+    assert_eq!(dispatched.bytes_read, 0);
+}
+
+#[test]
+fn a_pre_send_cancel_sign_failure_or_refused_header_sends_nothing() {
+    let server = fakes::ProviderServer::start([fakes::Response::status(200, "{}")]).unwrap();
+    let url = format!("{}/v1", server.url());
+    let cancelled: std::sync::Arc<super::Cancel> = std::sync::Arc::default();
+    cancelled.cancel();
+    let as_clock = || {
+        std::sync::Arc::clone(&fakes::clock::FakeClock::new())
+            as std::sync::Arc<dyn contract::clock::Clock>
+    };
+    // Cancelled before it starts.
+    let (sent, _) = observed(
+        url.clone(),
+        &[],
+        b"{}",
+        None,
+        direct_route(),
+        &cancelled,
+        as_clock(),
+    );
+    let Err(failed) = sent else {
+        panic!("a cancelled call sent anyway");
+    };
+    assert!(failed.sent.is_none(), "no send stamp before the send");
+    // Signing failed.
+    let (sent, _) = observed(
+        url.clone(),
+        &[],
+        b"{}",
+        Some(std::sync::Arc::new(Refuses)),
+        direct_route(),
+        &std::sync::Arc::default(),
+        as_clock(),
+    );
+    let Err(failed) = sent else {
+        panic!("an unsigned call sent anyway");
+    };
+    assert!(failed.sent.is_none(), "no send stamp on a signing failure");
+    // A refused signed header.
+    let (sent, _) = observed(
+        url.clone(),
+        &[],
+        b"{}",
+        Some(std::sync::Arc::new(BadHeaderValue)),
+        direct_route(),
+        &std::sync::Arc::default(),
+        as_clock(),
+    );
+    let Err(failed) = sent else {
+        panic!("a call with a refused signed header sent anyway");
+    };
+    assert!(failed.sent.is_none(), "no send stamp on a refused header");
+    // A refused fixed header fails the same way, before the send.
+    let (sent, _) = observed(
+        url.clone(),
+        &[("x-test".to_owned(), "bad\nvalue".to_owned())],
+        b"{}",
+        None,
+        direct_route(),
+        &std::sync::Arc::default(),
+        as_clock(),
+    );
+    let Err(failed) = sent else {
+        panic!("a call with a refused fixed header sent anyway");
+    };
+    let crate::Error::Sign(_) = &failed.error else {
+        panic!(
+            "a refused fixed header is a sign failure: {:?}",
+            failed.error
+        );
+    };
+    assert!(failed.sent.is_none(), "no send stamp on a refused header");
+    assert!(server.requests().is_empty(), "nothing was ever sent");
+}
+
+#[test]
+fn valid_fixed_headers_send_unchanged() {
+    let server = fakes::ProviderServer::start([fakes::Response::status(200, "ok")]).unwrap();
+    let url = format!("{}/v1", server.url());
+    let clock = fakes::clock::FakeClock::new();
+    let (sent, _) = observed(
+        url,
+        &[
+            ("x-test".to_owned(), "fine".to_owned()),
+            ("x-cache-key".to_owned(), "s_1".to_owned()),
+        ],
+        b"{}",
+        None,
+        direct_route(),
+        &std::sync::Arc::default(),
+        std::sync::Arc::clone(&clock) as std::sync::Arc<dyn contract::clock::Clock>,
+    );
+    let sent = match sent {
+        Ok(sent) => sent,
+        Err(failed) => panic!("valid fixed headers failed to send: {:?}", failed.error),
+    };
+    assert_eq!(sent.status, 200);
+    let requests = server.requests();
+    assert_eq!(requests.len(), 1);
+    assert_eq!(requests[0].header("x-test"), Some("fine"));
+    assert_eq!(requests[0].header("x-cache-key"), Some("s_1"));
+}
+
+/// One failure through both sends, asserting the observed failure matches
+/// the ordinary one field for field.
+fn assert_same_error(ordinary: &crate::Error, observed: &crate::Error) {
+    match (ordinary, observed) {
+        (
+            crate::Error::Status {
+                status: a_status,
+                body: a_body,
+                retry_after: a_wait,
+                should_retry: a_retry,
+                ..
+            },
+            crate::Error::Status {
+                status: b_status,
+                body: b_body,
+                retry_after: b_wait,
+                should_retry: b_retry,
+                ..
+            },
+        ) => {
+            assert_eq!(a_status, b_status);
+            assert_eq!(a_body, b_body, "error bodies match byte for byte");
+            assert_eq!(a_wait, b_wait);
+            assert_eq!(a_retry, b_retry);
+        }
+        (
+            crate::Error::Stalled {
+                should_retry: a_retry,
+                ..
+            },
+            crate::Error::Stalled {
+                should_retry: b_retry,
+                ..
+            },
+        ) => {
+            assert_eq!(a_retry, b_retry);
+        }
+        _ => panic!("different failures: {ordinary:?} vs {observed:?}"),
+    }
+}
+
+/// One response through both sends: the ordinary failure with the observed
+/// one, and the observed byte count.
+fn both_sends(
+    make: impl Fn() -> fakes::Response,
+    expected_bytes: u64,
+) -> (crate::Error, crate::Error) {
+    let clock = fakes::clock::FakeClock::new();
+    let as_clock = || std::sync::Arc::clone(&clock) as std::sync::Arc<dyn contract::clock::Clock>;
+    // The ordinary send reads the first answer, the observed send the
+    // second, identical one.
+    let server = fakes::ProviderServer::start([make(), make()]).unwrap();
+    let url = format!("{}/v1", server.url());
+    let cancel: std::sync::Arc<super::Cancel> = std::sync::Arc::default();
+    let Err(ordinary) = called(url.clone(), &[], b"{}", None, direct_route(), &cancel)
+        .0
+        .map(|_| ())
+    else {
+        panic!("the ordinary send unexpectedly succeeded");
+    };
+    let Err(failed) = observed(url, &[], b"{}", None, direct_route(), &cancel, as_clock())
+        .0
+        .map(|_| ())
+    else {
+        panic!("the observed send unexpectedly succeeded");
+    };
+    let Some(dispatched) = failed.sent else {
+        panic!("the observed failure reports no send");
+    };
+    assert_eq!(dispatched.status, Some(500));
+    assert!(
+        dispatched.headers_at.is_some(),
+        "the error keeps its header time"
+    );
+    assert_eq!(
+        dispatched.bytes_read, expected_bytes,
+        "the count holds the bytes actually read"
+    );
+    (ordinary, failed.error)
+}
+
+#[test]
+fn error_bodies_match_the_ordinary_path_byte_for_byte() {
+    let (ordinary, observed) = both_sends(
+        || fakes::Response::status(500, r#"{"error":"boom"}"#),
+        r#"{"error":"boom"}"#.len() as u64,
+    );
+    assert_same_error(&ordinary, &observed);
+    let (ordinary, observed) = both_sends(|| fakes::Response::status(500, ""), 0);
+    assert_same_error(&ordinary, &observed);
+    // Invalid UTF-8 under a JSON content type: both refuse the body the
+    // same way.
+    let (ordinary, observed) = both_sends(|| fakes::Response::status(500, vec![0xff, 0xfe]), 2);
+    assert_same_error(&ordinary, &observed);
+    // Invalid UTF-8 under a text content type: both apply the same lossy
+    // read.
+    let (ordinary, observed) = both_sends(
+        || {
+            fakes::Response::status(500, vec![b'o', 0xff, b'k'])
+                .header("content-type", "text/plain")
+        },
+        3,
+    );
+    assert_same_error(&ordinary, &observed);
+    // Over the 10 MB body limit: both keep the status with an empty body,
+    // while the count holds what was actually read.
+    let (ordinary, observed) = both_sends(
+        || fakes::Response::status(500, vec![b'x'; 10 * 1024 * 1024 + 1]),
+        10 * 1024 * 1024,
+    );
+    assert_same_error(&ordinary, &observed);
+    let crate::Error::Status { body, .. } = &observed else {
+        panic!("an overlong 500 is a status failure: {observed:?}");
+    };
+    assert_eq!(body, "");
+}
+
+#[test]
+fn a_stalled_error_body_keeps_status_and_bytes() {
+    let server = fakes::ProviderServer::start([fakes::Response::stall(500, "{", 1000)]).unwrap();
+    let clock = fakes::clock::FakeClock::new();
+    let (sent, _) = observed(
+        format!("{}/v1", server.url()),
+        &[],
+        b"{}",
+        None,
+        limited_route(),
+        &std::sync::Arc::default(),
+        std::sync::Arc::clone(&clock) as std::sync::Arc<dyn contract::clock::Clock>,
+    );
+    let Err(failed) = sent else {
+        panic!("a stalled 500 unexpectedly succeeded");
+    };
+    let crate::Error::Stalled { .. } = &failed.error else {
+        panic!("a stalled 500 is a dropped connection: {:?}", failed.error);
+    };
+    let Some(dispatched) = failed.sent else {
+        panic!("the stalled failure reports no send");
+    };
+    assert_eq!(dispatched.status, Some(500), "the status is retained");
+    assert!(
+        dispatched.headers_at.is_some(),
+        "the header time is retained"
+    );
+    assert_eq!(dispatched.bytes_read, 1, "the partial body is counted");
+}
+
+#[test]
+fn an_observed_success_counts_the_body() {
+    let server = fakes::ProviderServer::start([fakes::Response::status(200, "hi")]).unwrap();
+    let clock = fakes::clock::FakeClock::new();
+    let (sent, _) = observed(
+        format!("{}/v1", server.url()),
+        &[],
+        b"{}",
+        None,
+        direct_route(),
+        &std::sync::Arc::default(),
+        std::sync::Arc::clone(&clock) as std::sync::Arc<dyn contract::clock::Clock>,
+    );
+    let sent = match sent {
+        Ok(sent) => sent,
+        Err(failed) => panic!("the observed send failed: {:?}", failed.error),
+    };
+    let mut stream = sent.stream;
+    let mut text = String::new();
+    std::io::Read::read_to_string(&mut stream, &mut text).unwrap();
+    assert_eq!(text, "hi");
+    assert_eq!(stream.count(), 2);
+}
+
+#[test]
+fn recorded_targets_hold_no_query_fragment_userinfo_or_secret() {
+    let mut secrets = crate::redact::Secrets::default();
+    secrets.add(contract::Secret::new("SECRET".to_owned()));
+    secrets.add(contract::Secret::new("sig-value".to_owned()));
+    // (url, host, path): a `None` path is omitted entirely.
+    let encoded_secret = "SECRET"
+        .bytes()
+        .map(|byte| format!("%{byte:02X}"))
+        .collect::<String>();
+    let cases: Vec<(String, Option<&str>, Option<&str>)> = vec![
+        (
+            "http://127.0.0.1:50731/v1/responses".into(),
+            Some("127.0.0.1:50731"),
+            Some("/v1/responses"),
+        ),
+        (
+            "https://user:pass@example.com:8443/a".into(),
+            Some("example.com:8443"),
+            Some("/a"),
+        ),
+        ("https://example.com".into(), Some("example.com"), Some("/")),
+        (
+            "example.com/a%20b".into(),
+            Some("example.com"),
+            Some("/a b"),
+        ),
+        (
+            "https://example.com/models/x:streamGenerateContent?alt=sse&key=SECRET#frag".into(),
+            Some("example.com"),
+            Some("/models/x:streamGenerateContent"),
+        ),
+        (
+            "https://example.com/a%2Fb%2fc".into(),
+            Some("example.com"),
+            Some("/a/b/c"),
+        ),
+        ("https://example.com/%FF".into(), Some("example.com"), None),
+        (
+            format!("https://example.com/%FF{encoded_secret}"),
+            Some("example.com"),
+            None,
+        ),
+        (
+            "https://example.com/v1/SECRET-key".into(),
+            Some("example.com"),
+            Some("/v1/[redacted]-key"),
+        ),
+        (
+            format!("https://example.com/v1/{encoded_secret}"),
+            Some("example.com"),
+            Some("/v1/[redacted]"),
+        ),
+        (
+            "https://example.com/?token=sig-value".into(),
+            Some("example.com"),
+            Some("/"),
+        ),
+        (
+            "https://SECRET@example.com/".into(),
+            Some("example.com"),
+            Some("/"),
+        ),
+        (
+            "https://api-SECRET.example.com:8443/x".into(),
+            Some("api-[redacted].example.com:8443"),
+            Some("/x"),
+        ),
+        (
+            "https://example.com/100%sure".into(),
+            Some("example.com"),
+            Some("/100%sure"),
+        ),
+        (
+            "https://example.com/a%".into(),
+            Some("example.com"),
+            Some("/a%"),
+        ),
+    ];
+    for (url, host, path) in cases {
+        let (found_host, found_path) = super::sanitized_target(&url, &secrets);
+        assert_eq!(found_host.as_deref(), host, "host of {url}");
+        assert_eq!(found_path.as_deref(), path, "path of {url}");
+        for value in [&found_host, &found_path].into_iter().flatten() {
+            assert!(!value.contains("SECRET"), "no secret in {url}: {value}");
+            assert!(
+                !value.contains("sig-value"),
+                "no header value in {url}: {value}"
+            );
+            assert!(!value.contains('?'), "no query in {url}: {value}");
+            assert!(!value.contains('#'), "no fragment in {url}: {value}");
+        }
+        if let Some(path) = &found_path {
+            assert!(!path.is_empty(), "a recorded path is never empty");
+        }
+    }
+}
+
+#[test]
+fn the_server_receives_the_original_query_while_the_record_drops_it() {
+    struct Capture {
+        lines: std::sync::Mutex<Vec<contract::diag::ProviderRequest>>,
+    }
+    impl contract::diag::DebugLog for Capture {
+        fn debugging(&self) -> bool {
+            true
+        }
+        fn provider_request(&self, request: &contract::diag::ProviderRequest) {
+            self.lines.lock().unwrap().push(request.clone());
+        }
+    }
+    let server = fakes::ProviderServer::start([fakes::Response::status(200, "ok")]).unwrap();
+    let secret = "SECRET-VALUE";
+    let url = format!(
+        "{}/models/x:streamGenerateContent?alt=sse&key={secret}",
+        server.url()
+    );
+    let log = std::sync::Arc::new(Capture {
+        lines: std::sync::Mutex::new(Vec::new()),
+    });
+    let clock = fakes::clock::FakeClock::new();
+    let observation = crate::RequestObservation::new(
+        std::sync::Arc::clone(&log) as std::sync::Arc<dyn contract::diag::DebugLog>,
+        std::sync::Arc::clone(&clock) as std::sync::Arc<dyn contract::clock::Clock>,
+        std::num::NonZeroU32::MIN,
+    )
+    .with_model("gemini-2.0-flash".to_owned());
+    let mut secrets = crate::redact::Secrets::default();
+    secrets.add(contract::Secret::new(secret.to_owned()));
+    let mut finish =
+        crate::call::ObservationFinish::new(&observation, "gemini", &url, 7, clock.now());
+    finish.sent(clock.now(), 200);
+    finish.set_redact(secrets);
+    finish.set_bytes(2);
+    finish.finish();
+    let lines = log.lines.lock().unwrap().clone();
+    assert_eq!(lines.len(), 1);
+    let line = serde_json::to_vec(&lines[0]).unwrap();
+    let text = String::from_utf8(line).unwrap();
+    assert!(
+        !text.contains(secret),
+        "the key is nowhere in the line: {text}"
+    );
+    assert!(
+        !text.contains('?'),
+        "the query is nowhere in the line: {text}"
+    );
+    assert!(text.contains("/models/x:streamGenerateContent"), "{text}");
+    let requests = server.requests();
+    assert!(
+        requests.is_empty(),
+        "this unit path sends nothing by itself"
+    );
+}
