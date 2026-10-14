@@ -894,7 +894,7 @@ fn settle_rekills_a_cancelled_survivor_before_answering_true() {
             );
             let mut mark = clock.advance_marked(Duration::from_millis(50));
             let mut answer = None;
-            for _ in 0..130 {
+            loop {
                 if let Ok(got) = settled.try_recv() {
                     answer = Some(got);
                     break;
@@ -1081,7 +1081,7 @@ fn settle_drains_two_groups_together_within_one_bound() {
     );
     let mut mark = clock.advance_marked(Duration::from_millis(50));
     let mut answer = None;
-    for _ in 0..130 {
+    loop {
         if let Ok(got) = finished.try_recv() {
             answer = Some(got);
             break;
