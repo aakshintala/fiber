@@ -61,8 +61,8 @@ pub use prepare::platform;
 pub use providers::{Model, Providers, StartedRefresh, leave_out_invalid, refresh_lists};
 pub use release::{Release, install_release};
 pub use repository::{
-    ApprovedServer, CopyHold, Decision, Index, Pending, RepoItem, ServerApproval, SessionOffer,
-    SpawnGuard, Store, declared_items, hash, kind_name, mcp_server_item, pending,
+    ApprovedServer, CopyHold, Decision, Fetch, Index, Pending, RepoItem, ServerApproval,
+    SessionOffer, SpawnGuard, Store, declared_items, hash, kind_name, mcp_server_item, pending,
     repository_servers,
 };
 

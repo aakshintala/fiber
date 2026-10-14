@@ -22,7 +22,9 @@ use super::content::{Index, hash_paths};
 use super::declared::RepoItem;
 use super::kind_name;
 use crate::Error;
+use crate::git::Origin;
 use crate::install::{io as io_error, remove};
+use crate::manage::plan_depends;
 use crate::prepare::prepare;
 
 /// What a person decided about one content.
@@ -34,12 +36,48 @@ pub enum Decision {
     Never,
 }
 
+/// How a dependency-bearing copy fetches its manifest's dependencies:
+/// where they come from, the running Fiber version they must accept, and
+/// the one clock both fetching and their install steps run on.
+#[derive(Clone)]
+pub struct Fetch {
+    origin: Arc<Origin>,
+    fiber_version: String,
+    clock: Arc<dyn Clock>,
+}
+
+impl fmt::Debug for Fetch {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        // The origin's URL closure is configuration, never diagnostics.
+        f.debug_struct("Fetch")
+            .field("fiber_version", &self.fiber_version)
+            .finish_non_exhaustive()
+    }
+}
+
+impl Fetch {
+    /// Fetches from `origin`, accepting manifests for `fiber_version`, on
+    /// `clock`.
+    pub fn new(origin: Origin, fiber_version: impl Into<String>, clock: Arc<dyn Clock>) -> Self {
+        Self {
+            origin: Arc::new(origin),
+            fiber_version: fiber_version.into(),
+            clock,
+        }
+    }
+
+    pub(crate) fn clock(&self) -> Arc<dyn Clock> {
+        Arc::clone(&self.clock)
+    }
+}
+
 /// The approvals and copies in one Fiber home, for one project.
 #[derive(Clone)]
 pub struct Store {
     home: PathBuf,
     project: ProjectKey,
     clock: Arc<dyn Clock>,
+    fetch: Option<Fetch>,
 }
 
 impl fmt::Debug for Store {
@@ -78,7 +116,25 @@ impl Store {
             home: home.to_path_buf(),
             project: project.clone(),
             clock,
+            fetch: None,
         }
+    }
+
+    /// Fetches a dependency-bearing copy's dependencies from `fetch`, on
+    /// its clock. Without it, approving an extension whose manifest names
+    /// `depends` fails.
+    pub fn fetching(mut self, fetch: Fetch) -> Self {
+        self.fetch = Some(fetch);
+        self
+    }
+
+    /// The clock pinning runs on: a fetch's, so fetching and install steps
+    /// share one, else the store's own.
+    fn pin_clock(&self) -> Arc<dyn Clock> {
+        self.fetch
+            .as_ref()
+            .map(Fetch::clock)
+            .unwrap_or_else(|| Arc::clone(&self.clock))
     }
 
     /// An extension's and a hook's approvals are per project; a server's are
@@ -246,11 +302,45 @@ impl Store {
         }
         if item.kind == OfferedKind::Extension {
             let manifest = config::read_manifest(copy)?;
-            prepare(copy, &manifest, self.clock.as_ref())?;
+            let clock = self.pin_clock();
+            self.install_depends(item, copy, &manifest, &clock)?;
+            prepare(copy, &manifest, clock.as_ref())?;
         }
         File::create(&ready).map_err(io_error(&ready))?;
         unfinished.done();
         Ok(())
+    }
+
+    /// Resolves the manifest's `depends` against an empty installed set and
+    /// commits each inside the copy, before its own install step runs, so
+    /// two versions never share one (`docs/extensions.md`, "Pinning").
+    /// With no dependencies nothing is fetched and no directory is made.
+    fn install_depends(
+        &self,
+        item: &RepoItem,
+        copy: &Path,
+        manifest: &config::Manifest,
+        clock: &Arc<dyn Clock>,
+    ) -> Result<(), Error> {
+        if manifest.depends.is_empty() {
+            return Ok(());
+        }
+        let Some(fetch) = &self.fetch else {
+            return Err(Error::Pin {
+                item: item.name.clone(),
+                why: "its manifest names dependencies, which need fetching".to_owned(),
+            });
+        };
+        let home = copy.join(".fiber-depends");
+        fs::create_dir_all(&home).map_err(io_error(&home))?;
+        let planned = plan_depends(
+            &home,
+            manifest,
+            &fetch.fiber_version,
+            fetch.origin.as_ref(),
+            clock.as_ref(),
+        )?;
+        planned.commit().map(|_| ())
     }
 
     fn record(&self, item: &RepoItem, hash: &str, decision: &str) -> Result<(), Error> {
