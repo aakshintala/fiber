@@ -22,6 +22,7 @@ use crate::switch::Reads;
 use fakes::Deadline;
 use fakes::children::Ready;
 use fakes::clock::FakeClock;
+use support::group::GROUP_POLL;
 
 /// The deadline of each wait in these tests.
 const DEADLINE: Duration = Duration::from_secs(10);
@@ -70,7 +71,8 @@ fn credential_on_thread(
 fn the_watcher_drains_a_listed_group_before_it_finishes() {
     let root = fakes::TempDir::new("fiber-cancel-drains-group");
     let ready = Ready::new(root.path());
-    let clock: Arc<dyn Clock> = FakeClock::new();
+    let fake = FakeClock::new();
+    let clock: Arc<dyn Clock> = fake.clone();
     let reads = Arc::new(Reads::default());
     let script = format!("echo $$ > '{}'; exec sleep 600", ready.path().display());
     // Before the spawn: the group is known only after it starts, so a
@@ -104,11 +106,12 @@ fn the_watcher_drains_a_listed_group_before_it_finishes() {
     let (is_fired, guard) = arm_recording(&reads, &clock, &[SIGTERM]);
     signal_hook::low_level::raise(SIGTERM).expect("the test's raise");
     // Held: the spawn is still counted and the group still listed, so the
-    // shared shutdown cannot finish yet. A foreign raise only re-cancels
-    // onto the same held wait, so the silence still proves it is held.
+    // shared shutdown parks at its poll instead of finishing: the park
+    // proves it is held while the spawn remains held.
+    let mut poll = fake.origin() + GROUP_POLL;
     assert!(
-        Deadline::after(SHORT).recv(&is_fired).is_err(),
-        "the watcher finished before the group drained"
+        fake.await_parked(poll, DEADLINE),
+        "the shutdown parked while the spawn is held"
     );
     release.send(()).expect("the spawn's release");
     assert_eq!(
