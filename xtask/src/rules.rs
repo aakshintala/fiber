@@ -1496,7 +1496,9 @@ fn session_sites_with_tokens(
             Some("join:session.lock")
         } else if path_segment(value, "sessions") && (join || file_operation_near(tokens, i)) {
             Some("path:sessions")
-        } else if value == "events.jsonl" && (join || file_operation_near(tokens, i)) {
+        } else if value.rsplit('/').next() == Some("events.jsonl")
+            && (join || file_operation_near(tokens, i))
+        {
             Some("join:events.jsonl")
         } else {
             None

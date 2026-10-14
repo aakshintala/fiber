@@ -605,7 +605,7 @@ fn session_paths_match_segments_joined_paths_and_raw_literals() {
         source_file(
             "main",
             "src/other.rs",
-            "fn third() {\n    let path = dir.join(\"events.jsonl\");\n}\n",
+            "fn third() { let path = dir.join(\"events.jsonl\"); }\nfn fourth() { let path = File::open(\"./events.jsonl\"); }\nfn fifth() { let path = dir.join(\"id/events.jsonl\"); }\nfn sixth() { let path = dir.join(\"myevents.jsonl\"); }\nfn seventh() { let path = File::open(\"myevents.jsonl\"); }\n",
         ),
     ];
     assert_eq!(
@@ -613,7 +613,9 @@ fn session_paths_match_segments_joined_paths_and_raw_literals() {
         [
             "crates/hub/src/new.rs:4: session path outside log",
             "crates/hub/src/new.rs:8: session path outside log",
+            "crates/main/src/other.rs:1: session path outside log",
             "crates/main/src/other.rs:2: session path outside log",
+            "crates/main/src/other.rs:3: session path outside log",
         ]
     );
 }
@@ -623,7 +625,7 @@ fn session_paths_ignore_comments_descriptive_strings_and_segment_lookalikes() {
     let files = [source_file(
         "hub",
         "src/clean.rs",
-        "// fs::read(\"sessions/old/events.jsonl\")\n/* .join(\"sessions\") */\nfn clean() {\n    let text = r#\"sessions/ is documentation\"#;\n    let description = \"sessions/story\"; let _ = read(\"notes.txt\");\n    let a = dir.join(\"sessions_extra\");\n    let b = dir.join(\"my_sessions\");\n    let c = dir.join(\"events.jsonl.old\");\n}\n",
+        "// fs::read(\"sessions/old/events.jsonl\")\n/* .join(\"sessions\") */\nfn clean() {\n    let text = r#\"sessions/ is documentation\"#;\n    let description = \"sessions/story\"; let _ = read(\"notes.txt\");\n    let a = dir.join(\"sessions_extra\");\n    let b = dir.join(\"my_sessions\");\n    let c = dir.join(\"events.jsonl.old\");\n    let d = dir.join(\"id/events.jsonl.old\");\n    let e = dir.join(\"myevents.jsonl\");\n    let f = File::open(\"myevents.jsonl\");\n}\n",
     )];
     assert!(session_paths(&files).is_empty());
 }
