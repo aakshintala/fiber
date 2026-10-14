@@ -119,6 +119,8 @@ impl RawHttpServer {
     /// replies are fully flushed. True once they are; false at the
     /// deadline. Zero admits at once. Dropping the server ends no wait
     /// early.
+    // exempted: waiting while completed <= count instead of < count only waits longer once satisfied; the trailing >= verdict returns the same value, so no test can observe the difference without a timing assert (docs/testing.md "Waits and timeouts"); same wait/verdict shape as the established ProviderServer awaits.
+    #[cfg_attr(false, mutants::skip)]
     pub fn await_replies(&self, count: usize, within: Duration) -> bool {
         let guard = lock(&self.state);
         let (guard, _) = self

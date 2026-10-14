@@ -117,6 +117,16 @@ fn wait_recorded(server: &RawHttpServer, count: usize, what: &str) -> Vec<Reques
 }
 
 #[test]
+fn the_url_carries_the_bound_port() {
+    let server = RawHttpServer::start(LENGTHLESS).unwrap();
+    assert_eq!(
+        addr(&server).port(),
+        server.port(),
+        "the URL carries the bound port"
+    );
+}
+
+#[test]
 fn raw_replies_preserve_the_three_migrated_wire_fixtures() {
     for (name, fixture) in [
         ("refusal", REFUSED),
@@ -312,6 +322,65 @@ fn a_truncated_chunked_request_is_recorded_with_its_decoded_prefix_and_gets_the_
         "the record keeps what decoded before the close"
     );
     assert_eq!(requests[0].body_len, 1);
+}
+
+#[test]
+fn dropping_a_server_with_a_held_reply_releases_it() {
+    let server = RawHttpServer::start(LENGTHLESS).unwrap();
+    server.hold_replies();
+    let address = addr(&server);
+    let (done_tx, done_rx) = mpsc::channel::<Result<Vec<u8>, io::Error>>();
+    let (held_tx, held_rx) = mpsc::channel::<TcpStream>();
+    let client = thread::spawn(move || {
+        let steps = || -> io::Result<()> {
+            let mut stream = TcpStream::connect_timeout(&address, DEADLINE)?;
+            stream.set_read_timeout(Some(DEADLINE))?;
+            stream.set_write_timeout(Some(DEADLINE))?;
+            // A handle the test owns: it drops this before joining
+            // this worker, so no path leaves a blocked client behind.
+            held_tx.send(stream.try_clone()?).unwrap();
+            stream.write_all(b"GET /held-drop HTTP/1.1\r\nHost: fake\r\n\r\n")?;
+            let mut raw = Vec::new();
+            stream.read_to_end(&mut raw)?;
+            done_tx.send(Ok(raw)).unwrap();
+            Ok(())
+        };
+        if let Err(e) = steps() {
+            let _sent = done_tx.send(Err(e));
+        }
+    });
+    let peer_wait = Deadline::after(DEADLINE);
+    let peer = peer_wait.recv_or_fail(&held_rx, "connecting the held-drop client");
+    let recorded = wait_recorded(&server, 1, "the held request to be recorded");
+    assert_eq!(
+        recorded[0].method, "GET",
+        "the held request is recorded before the drop"
+    );
+    assert_eq!(recorded[0].path, "/held-drop");
+    let (drop_tx, drop_rx) = mpsc::channel();
+    let _dropper = thread::spawn(move || {
+        drop(server);
+        let _sent = drop_tx.send(());
+    });
+    let drop_wait = Deadline::after(DEADLINE);
+    drop_wait.recv_or_fail(&drop_rx, "dropping the server with a held reply");
+    // The reply flushed past the released hold, and the close behind
+    // it ends the client's read; dropping this handle closes nothing
+    // while the worker still holds its own.
+    drop(peer);
+    let reply_wait = Deadline::after(DEADLINE);
+    let reply = reply_wait.recv_or_fail(&done_rx, "reading the held reply released by the drop");
+    match client.join() {
+        Ok(()) | Err(_) => {}
+    }
+    match reply {
+        Ok(raw) => assert_eq!(raw, LENGTHLESS, "the released hold sends the fixed reply"),
+        Err(e) => panic!("reading the held reply released by the drop: {e}"),
+    }
+    assert!(
+        TcpStream::connect_timeout(&address, SHORT).is_err(),
+        "the dropped server refuses connections"
+    );
 }
 
 #[test]
