@@ -684,6 +684,37 @@ fn is_stopped(error: &ureq::Error) -> bool {
 }
 
 #[test]
+fn keep_socket_debug_shows_only_whether_timing_is_installed() {
+    let address = SocketAddr::from(([192, 0, 2, 1], 443));
+    let address_text = address.to_string();
+    let timing: Timing = Arc::new(move |_, _, _| {
+        let _port = address.port();
+        None
+    });
+    let plain = format!("{:?}", KeepSocket::new(Arc::new(Untouched), LIMITS));
+    let timed = format!(
+        "{:?}",
+        KeepSocket::new(Arc::new(Untouched), LIMITS).with_timing(timing)
+    );
+
+    assert_eq!(plain.matches("timing: false").count(), 1);
+    assert_eq!(timed.matches("timing: true").count(), 1);
+    assert_eq!(
+        plain.replace("timing: false", "timing: true"),
+        timed,
+        "timing presence is the only difference"
+    );
+    assert!(
+        !plain.contains(&address_text),
+        "the plain connector debug omits addresses: {plain}"
+    );
+    assert!(
+        !timed.contains(&address_text),
+        "the timed connector debug omits addresses: {timed}"
+    );
+}
+
+#[test]
 fn an_already_built_tunnel_passes_through_untouched() {
     let uri: ureq::http::Uri = "http://127.0.0.1/".parse().unwrap();
     let config = crate::config().proxy(None).build();
