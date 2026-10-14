@@ -49,6 +49,27 @@ fn wait_until_at_or_before_now_hands_zero_and_does_not_park() {
     assert!(clock.parked().is_empty());
 }
 
+#[test]
+fn wait_until_just_after_now_parks() {
+    let clock = FakeClock::new();
+    let until = clock.origin().checked_add(Duration::from_nanos(1)).unwrap();
+    let mut observed_park = false;
+    clock.wait_until(Some(until), &mut |bound| {
+        assert_eq!(bound, None);
+        assert_eq!(clock.parked(), vec![Some(until)]);
+        observed_park = true;
+    });
+    assert!(observed_park, "a future instant reaches the park");
+    assert!(
+        clock.parked().is_empty(),
+        "the returned wait leaves its park"
+    );
+    assert!(
+        super::lock(&clock.state).observed.is_empty(),
+        "a park outside an advance wait is not observed"
+    );
+}
+
 /// Stands in for the hub: `wake` takes the mutex before it notifies, the
 /// same order the hub's waiters depend on.
 struct StandIn {
@@ -1741,9 +1762,14 @@ fn advance_when_parked_rejects_an_advance_the_clock_cannot_represent() {
         .recv(&outcome)
         .expect("waited for advance_when_parked to reject the advance")
         .expect_err("advance_when_parked rejects an overflowing advance");
+    let overflow = if clock.origin().checked_add(Duration::MAX).is_none() {
+        "monotonic instant"
+    } else {
+        "wall time"
+    };
     assert!(
-        message.contains("overflows the clock"),
-        "the failure names its kind: {message}",
+        message.contains(&format!("overflows the clock's {overflow}")),
+        "the failure names the overflowing clock: {message}",
     );
     assert_eq!(clock.now(), now, "a rejected wait moves no time");
     assert_eq!(clock.wall(), wall, "a rejected wait moves no time");
@@ -2379,4 +2405,120 @@ fn advance_when_parked_observes_a_park_that_leaves_while_it_waits() {
     Deadline::after(Duration::from_secs(5))
         .recv(&selected_exit_rx)
         .expect("the selected thread exits");
+}
+
+#[test]
+fn a_failed_advance_wait_clears_its_observations_before_the_next_wait() {
+    let clock = FakeClock::new();
+    let first_expected = clock.origin() + Duration::from_secs(30);
+    let wrong = first_expected + Duration::from_secs(1);
+    let (first_checked, release_first_wait) = clock.pause_next_advance_wait();
+    let first = run_advance_when_parked(
+        &clock,
+        Some(first_expected),
+        None,
+        Duration::from_millis(1),
+        Deadline::after(Duration::from_secs(30)),
+    );
+    Deadline::after(Duration::from_secs(5))
+        .recv(&first_checked)
+        .expect("waited for the first advance wait to start");
+    release_first_wait.send(()).unwrap();
+
+    let (wrong_parked, release_wrong, wrong_exit, _) = park_once(&clock, Some(wrong));
+    Deadline::after(Duration::from_secs(5))
+        .recv(&wrong_parked)
+        .expect("waited for the wrong park to arrive");
+    let message = Deadline::after(Duration::from_secs(5))
+        .recv(&first)
+        .expect("waited for the first advance wait to reject the wrong park")
+        .expect_err("the first advance wait rejects a wrong park");
+    assert!(message.contains("different instant first"), "{message}");
+    {
+        let state = super::lock(&clock.state);
+        assert_eq!(state.watching, 0, "the failed wait stops watching");
+        assert!(
+            state.observed.is_empty(),
+            "the failed wait clears observations"
+        );
+    }
+    release_wrong.send(()).unwrap();
+    Deadline::after(Duration::from_secs(5))
+        .recv(&wrong_exit)
+        .expect("the wrong park exits");
+
+    let second_expected = clock.origin() + Duration::from_secs(60);
+    let (second_checked, release_second_wait) = clock.pause_next_advance_wait();
+    let second = run_advance_when_parked(
+        &clock,
+        Some(second_expected),
+        None,
+        Duration::from_millis(1),
+        Deadline::after(Duration::from_secs(30)),
+    );
+    Deadline::after(Duration::from_secs(5))
+        .recv(&second_checked)
+        .expect("waited for the second advance wait to start");
+    release_second_wait.send(()).unwrap();
+    let (right_parked, release_right, right_exit, _) = park_once(&clock, Some(second_expected));
+    Deadline::after(Duration::from_secs(5))
+        .recv(&right_parked)
+        .expect("waited for the second wait's matching park");
+    Deadline::after(Duration::from_secs(5))
+        .recv(&second)
+        .expect("waited for the second advance wait")
+        .expect("the second advance wait succeeds with a different expectation");
+    assert_eq!(clock.now(), clock.origin() + Duration::from_millis(1));
+    release_right.send(()).unwrap();
+    Deadline::after(Duration::from_secs(5))
+        .recv(&right_exit)
+        .expect("the matching park exits");
+}
+
+#[test]
+fn a_failure_with_two_parked_threads_has_one_separator() {
+    let clock = FakeClock::new();
+    let until = clock.origin() + Duration::from_secs(30);
+    let (first_parked, release_first, first_exit, first_id) = park_once(&clock, Some(until));
+    Deadline::after(Duration::from_secs(5))
+        .recv(&first_parked)
+        .expect("waited for the first thread to park");
+    let (second_parked, release_second, second_exit, second_id) = park_once(&clock, Some(until));
+    Deadline::after(Duration::from_secs(5))
+        .recv(&second_parked)
+        .expect("waited for the second thread to park");
+
+    let outcome = run_advance_when_parked(
+        &clock,
+        Some(until),
+        None,
+        Duration::from_millis(1),
+        Deadline::after(Duration::from_secs(5)),
+    );
+    let message = Deadline::after(Duration::from_secs(5))
+        .recv(&outcome)
+        .expect("waited for the ambiguous wait to fail")
+        .expect_err("several parked threads require a named thread");
+    let list = message
+        .split("parked threads: [")
+        .nth(1)
+        .expect("the failure includes the parked thread list");
+    assert_eq!(
+        list,
+        format!(
+            "{first_id:?} at {:?}, {second_id:?} at {:?}]",
+            Some(until),
+            Some(until)
+        ),
+        "two entries have exactly one separator",
+    );
+
+    release_first.send(()).unwrap();
+    release_second.send(()).unwrap();
+    Deadline::after(Duration::from_secs(5))
+        .recv(&first_exit)
+        .expect("the first thread exits");
+    Deadline::after(Duration::from_secs(5))
+        .recv(&second_exit)
+        .expect("the second thread exits");
 }

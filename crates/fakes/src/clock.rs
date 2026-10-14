@@ -611,8 +611,13 @@ fn checked_move(
     let Some(moved) = state.offset.checked_add(advance) else {
         return Err("the advance overflows the clock");
     };
-    if origin.checked_add(moved).is_none() || wall_checked(moved).is_none() {
-        return Err("the advance overflows the clock");
+    // removed: a combined check has no portable single-overflow case because
+    // Instant and SystemTime have platform-specific ceilings.
+    if origin.checked_add(moved).is_none() {
+        return Err("the advance overflows the clock's monotonic instant");
+    }
+    if wall_checked(moved).is_none() {
+        return Err("the advance overflows the clock's wall time");
     }
     Ok(moved)
 }
