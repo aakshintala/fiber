@@ -168,6 +168,30 @@ impl Connection {
         }
     }
 
+    /// One readiness park on the socket: true once bytes may have
+    /// arrived, false when shutdown stopped the wait. The bound still
+    /// checks past every park, as for one byte: expiry names the request
+    /// and phase. The one wait behind [`Connection::fill`] and
+    /// [`Connection::fill_into`].
+    fn wait_readable(&mut self, phase: &'static str) -> bool {
+        match self.shared.wait_ready(
+            &self.budget,
+            &self.name,
+            phase,
+            &mut self.seq,
+            &mut self.acked,
+            Some(self.stream.as_fd()),
+            true,
+        ) {
+            // Readiness parks end at once when the bytes arrive
+            // instead of sleeping a whole poll past them; the bound
+            // still checks past every park, as for one byte.
+            WaitEnd::Waited => self.consume_check(phase),
+            WaitEnd::Expired => self.expired(phase),
+            WaitEnd::Stopped => false,
+        }
+    }
+
     /// One socket read past the bytes held: how many are held now, `Eof`
     /// on peer close, `Stopped` on shutdown.
     pub(crate) fn fill(&mut self, phase: &'static str) -> FillOutcome {
@@ -183,6 +207,7 @@ impl Connection {
                         return FillOutcome::Stopped;
                     }
                     self.ahead.extend(chunk.into_iter().take(read));
+                    self.shared.lookahead_count(read);
                     return FillOutcome::Held(self.ahead.len());
                 }
                 Err(error) => match classify(&error) {
@@ -191,25 +216,8 @@ impl Connection {
                     ReadErr::End => return FillOutcome::Eof,
                 },
             }
-            match self.shared.wait_ready(
-                &self.budget,
-                &self.name,
-                phase,
-                &mut self.seq,
-                &mut self.acked,
-                Some(self.stream.as_fd()),
-                true,
-            ) {
-                // Readiness parks end at once when the bytes arrive
-                // instead of sleeping a whole poll past them; the bound
-                // still checks past every park, as for one byte.
-                WaitEnd::Waited => {
-                    if !self.consume_check(phase) {
-                        return FillOutcome::Stopped;
-                    }
-                }
-                WaitEnd::Expired => self.expired(phase),
-                WaitEnd::Stopped => return FillOutcome::Stopped,
+            if !self.wait_readable(phase) {
+                return FillOutcome::Stopped;
             }
         }
     }
@@ -217,6 +225,78 @@ impl Connection {
     /// One buffered byte without touching the socket.
     pub(crate) fn buffered(&mut self) -> Option<u8> {
         self.ahead.pop_front()
+    }
+
+    /// Discards one read of bytes already on the socket, without waiting
+    /// for more: after a fixed body, the pipelined bytes the capped reads
+    /// left behind. A close with unread bytes resets the connection
+    /// instead of delivering the reply, so what already arrived is
+    /// consumed, as the old over-read did; what has not arrived yet is
+    /// never waited for.
+    #[allow(
+        clippy::unused_io_amount,
+        reason = "a discard read: pipelined bytes past the body are counted nowhere"
+    )]
+    pub(crate) fn drain_socket(&mut self) {
+        loop {
+            let mut chunk = [0u8; READ_CHUNK];
+            match self.stream.read(&mut chunk) {
+                Ok(_) => return,
+                Err(error) => match classify(&error) {
+                    ReadErr::Wait => return,
+                    ReadErr::Retry => continue,
+                    ReadErr::End => return,
+                },
+            }
+        }
+    }
+
+    /// Reads socket bytes straight into `out`, up to `max` of them: the
+    /// fixed-body path's bulk read, so body bytes never transit the
+    /// lookahead one byte at a time. The read is capped at the remaining
+    /// room, never past the body's bytes, so pipelined bytes stay on the
+    /// socket exactly as with a capped drain. Same bound, wait and
+    /// shutdown semantics as [`Connection::fill`]: the caller drains the
+    /// lookahead first, so no buffered byte is reordered past, and
+    /// passes the remaining room, never zero, since its loop breaks
+    /// once complete.
+    pub(crate) fn fill_into(
+        &mut self,
+        out: &mut Vec<u8>,
+        max: usize,
+        phase: &'static str,
+    ) -> FillOutcome {
+        if !self.consume_check(phase) {
+            return FillOutcome::Stopped;
+        }
+        loop {
+            let mut chunk = [0u8; READ_CHUNK];
+            // Capped at the remaining room: the read never takes a byte
+            // past the body, so no pipelined byte is consumed as body.
+            // The split never panics: the cap is at most the chunk.
+            let end = chunk.len().min(max);
+            let (buf, _) = chunk.split_at_mut(end);
+            match self.stream.read(buf) {
+                Ok(0) => return FillOutcome::Eof,
+                Ok(read) => {
+                    if !self.consume_check(phase) {
+                        return FillOutcome::Stopped;
+                    }
+                    // The read never reports more than its buffer holds.
+                    let (seen, _) = chunk.split_at(read);
+                    out.extend_from_slice(seen);
+                    return FillOutcome::Held(out.len());
+                }
+                Err(error) => match classify(&error) {
+                    ReadErr::Wait => {}
+                    ReadErr::Retry => continue,
+                    ReadErr::End => return FillOutcome::Eof,
+                },
+            }
+            if !self.wait_readable(phase) {
+                return FillOutcome::Stopped;
+            }
+        }
     }
 
     /// Moves up to `max` buffered bytes into `out` without touching the
