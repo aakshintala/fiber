@@ -486,9 +486,8 @@ fn timeout_rekills_a_group_that_survives_its_first_kill() {
     // so each advance below drives exactly one pass. The stdout reader
     // never answers while `sleep` holds the pipe, nothing is cancelled,
     // and the clock has not moved, so these are the only two.
-    let wake = Arc::clone(&reads.wake);
     fakes::within("the leader's wake", DEADLINE, {
-        let wake = Arc::clone(&wake);
+        let wake = Arc::clone(&reads.wake);
         move || loop {
             if wake.generation() >= sent + 2 {
                 return;
@@ -497,7 +496,7 @@ fn timeout_rekills_a_group_that_survives_its_first_kill() {
         }
     });
     assert_eq!(
-        wake.generation(),
+        reads.wake.generation(),
         sent + 2,
         "the spawn's listing and the reaper's answer are the only wakes before the timeout"
     );
