@@ -26,6 +26,9 @@ use support::pty::{Grid, Run};
 /// Installs a provider `fake` with the models `alpha`, `beta` and `gamma`
 /// on `openai-responses` at the fake server, reading its key from
 /// `FIBER_TEST_FAKE_KEY`, and makes `fake/alpha` the configured model.
+/// `alpha` declares the thinking levels `low` and `high`, so the
+/// thinking chip opens the picker on its level chips (`docs/tui.md`,
+/// "Home").
 fn install_picker_provider(setup: &Setup, server: &ProviderServer) {
     let source = setup.root.path().join("src");
     support::write_json(
@@ -35,9 +38,14 @@ fn install_picker_provider(setup: &Setup, server: &ProviderServer) {
     let models: Vec<Value> = ["alpha", "beta", "gamma"]
         .iter()
         .map(|id| {
-            json!({"id": id, "protocol": "openai-responses",
+            let mut model = json!({"id": id, "protocol": "openai-responses",
                    "base_url": format!("{}/v1", server.url()),
-                   "context_window": 100000})
+                   "context_window": 100000});
+            if *id == "alpha" {
+                model["thinking_levels"] = json!(["low", "high"]);
+                model["thinking_default"] = json!("low");
+            }
+            model
         })
         .collect();
     support::write_json(
@@ -156,6 +164,211 @@ fn ctrl_s_chooses_the_filtered_model_for_this_session_only() {
     // Quitting is taken in any state; the session-on-beta grid above
     // proves the terminal drew before the quit goes out.
     run.write(b"\x03\x03\r");
+    run.wait_screen("the restored terminal", |screen| {
+        !screen.alternate_screen && !screen.hide_cursor
+    });
+    let finished = run.wait();
+    assert_eq!(finished.status.code(), Some(0));
+}
+
+/// Spawns home at 120x32 with the picker provider installed and `env`
+/// in the child's environment: the fake server answers no turn, since
+/// no prompt goes out. Returns the run once the first frame drew and
+/// the chip row names the configured model, so a click never lands
+/// before its target draws.
+#[track_caller]
+fn home_run(setup: &Setup, env: &[(&str, &str)]) -> Run {
+    let mut full = vec![("FIBER_TEST_FAKE_KEY", "sk-test")];
+    full.extend(env.iter().copied());
+    let mut run = Run::spawn(setup, 120, 32, &[], &full);
+    run.ready();
+    run.wait_screen("home with its chips", |screen| {
+        shows(screen, "[fake/alpha]") && shows(screen, "[thinking:")
+    });
+    run
+}
+
+/// The chip row's cell just inside `needle`'s opening bracket on
+/// `screen`: the coordinates come from the drawn grid, never from a
+/// hard-coded column, so the centred box may sit anywhere.
+#[track_caller]
+fn chip_cell(screen: &Grid, needle: &str) -> (u16, u16) {
+    let y = screen
+        .rows
+        .iter()
+        .position(|row| row.contains(needle))
+        .unwrap_or_else(|| panic!("no chip {needle} in {:?}", screen.rows));
+    let row = &screen.rows[y];
+    let at = row.find(needle).unwrap();
+    assert!(
+        row[..at].is_ascii(),
+        "the chip's columns are countable: {row:?}"
+    );
+    (
+        u16::try_from(at + 1).expect("the chip fits its row"),
+        u16::try_from(y).expect("the chip fits the screen"),
+    )
+}
+
+/// Clicks the cell at `(x, y)`: an SGR press then its release on the
+/// same cell, the pair the rail's click test sends.
+fn click(run: &mut Run, x: u16, y: u16) {
+    run.write(format!("\x1b[<0;{};{}M\x1b[<0;{};{}m", x + 1, y + 1, x + 1, y + 1).as_bytes());
+}
+
+/// Parks the pointer on the cell at `(x, y)`: an SGR motion report
+/// with no button, as the look hover test sends.
+fn hover(run: &mut Run, x: u16, y: u16) {
+    run.write(format!("\x1b[<35;{};{}M", x + 1, y + 1).as_bytes());
+}
+
+/// Whether the picker draws its open catalogue: the filter row and a
+/// model row from the installed list.
+fn picker_open(screen: &Grid) -> bool {
+    shows(screen, "Type to search") && shows(screen, "gamma")
+}
+
+/// Whether the picker's focused row is the current model's level
+/// chips: the `alpha` row carries the focus gutter and the current
+/// mark, and the row under it names the `thinking` levels only a
+/// level row draws.
+fn thinking_focused(screen: &Grid) -> bool {
+    let Some(y) = screen.rows.iter().position(|row| {
+        row.contains("alpha") && row.contains("\u{203a}") && row.contains("current")
+    }) else {
+        return false;
+    };
+    screen
+        .rows
+        .get(y + 1)
+        .is_some_and(|row| row.contains("thinking") && row.contains("low") && row.contains("high"))
+}
+
+/// Closes the open picker with Esc and quits home: the Esc wait proves
+/// the picker closed before the quit goes out, and the primary screen
+/// proves the quit.
+#[track_caller]
+fn close_and_quit(mut run: Run) {
+    run.write(b"\x1b[27u");
+    run.wait_screen("home again", |screen| {
+        !shows(screen, "Type to search") && shows(screen, "[fake/alpha]")
+    });
+    run.write(b"\x03\x03");
+    run.wait_screen("the restored terminal", |screen| {
+        !screen.alternate_screen && !screen.hide_cursor
+    });
+    let finished = run.wait();
+    assert_eq!(finished.status.code(), Some(0));
+}
+
+#[test]
+fn clicking_the_model_chip_opens_the_model_picker() {
+    let setup = Setup::new();
+    let server = ProviderServer::start([support::hello()]).unwrap();
+    install_picker_provider(&setup, &server);
+    let mut run = home_run(&setup, &[("TERM", "xterm-256color")]);
+    // The home grid above proves the chip drew before the click.
+    let (x, y) = chip_cell(&run.screen(), "[fake/alpha]");
+    click(&mut run, x, y);
+    run.wait_screen("the open picker with its catalogue", picker_open);
+    close_and_quit(run);
+}
+
+#[test]
+fn clicking_the_thinking_chip_opens_the_picker_on_its_level_chips() {
+    let setup = Setup::new();
+    let server = ProviderServer::start([support::hello()]).unwrap();
+    install_picker_provider(&setup, &server);
+    let mut run = home_run(&setup, &[("TERM", "xterm-256color")]);
+    // The home grid above proves the chip drew before the click.
+    // A thinking click falls back to an ordinary choose while the
+    // cached model lists have not answered (`open_thinking`), and the
+    // fallback draws exactly like the thinking open, so the first
+    // open warms the lists: it waits for the catalogue, then closes.
+    // Esc closes at once with no query typed.
+    let (x0, y0) = chip_cell(&run.screen(), "[fake/alpha]");
+    click(&mut run, x0, y0);
+    run.wait_screen("the open picker with its catalogue", picker_open);
+    run.write(b"\x1b[27u");
+    let home = run.wait_screen("home again", |screen| {
+        !shows(screen, "Type to search") && shows(screen, "[fake/alpha]")
+    });
+    // The lists now name alpha, so this click opens on its level
+    // chips in Thinking mode, not the fallback choose. The focused
+    // row alone cannot tell the two apart: both land on the current
+    // model with its level chips drawn, so Enter chooses at once
+    // with no chip move. A thinking open starts the current row
+    // touched (`model_picker::open`), saving only the default
+    // level; an ordinary choose would save only the model and write
+    // no level, failing the config read below.
+    let (x, y) = chip_cell(&home, "[thinking:");
+    click(&mut run, x, y);
+    run.wait_screen("the picker on alpha's level chips", |screen| {
+        picker_open(screen) && thinking_focused(screen)
+    });
+    run.write(b"\r");
+    // The closed picker and the renamed chip prove the choice landed
+    // before the config read below.
+    run.wait_screen("home with the saved level", |screen| {
+        !shows(screen, "Type to search")
+            && shows(screen, "[fake/alpha]")
+            && shows(screen, "[thinking: low]")
+    });
+    let config: Value =
+        serde_json::from_slice(&fs::read(setup.home().join("config.json")).unwrap()).unwrap();
+    assert_eq!(
+        config["model"], "fake/alpha",
+        "the model is untouched: {config}"
+    );
+    assert_eq!(
+        config["models"]["fake/alpha"]["thinking"], "low",
+        "only the level saved: {config}"
+    );
+    // The picker already closed on Enter, so the quit goes out at once.
+    run.write(b"\x03\x03");
+    run.wait_screen("the restored terminal", |screen| {
+        !screen.alternate_screen && !screen.hide_cursor
+    });
+    let finished = run.wait();
+    assert_eq!(finished.status.code(), Some(0));
+}
+
+/// The chip's cells on `screen`: `len` cells from `x` on row `y`.
+fn chip_cells(screen: &Grid, x: u16, y: u16, len: u16) -> Vec<support::pty::Cell> {
+    (0..len).map(|dx| screen.cell(x + dx, y)).collect()
+}
+
+#[test]
+fn hovering_a_home_chip_tints_it_and_moving_off_restores_it() {
+    let setup = Setup::new();
+    let server = ProviderServer::start([support::hello()]).unwrap();
+    install_picker_provider(&setup, &server);
+    // Truecolour, as the link hover test runs: at 256 colours the
+    // hover tint and the chips' surface tint share one palette entry,
+    // so a hovered chip reads back unchanged there.
+    let mut run = home_run(&setup, &support::TRUECOLOUR);
+    // The motion enable proves the terminal takes pointer reports
+    // before the first hover goes out.
+    run.wait_bytes(0, support::pty::MOTION, "mouse motion enabled");
+    // Both chips unfocused: nothing sent a key, so focus sits on the
+    // entry bar and no focused chip keeps its highlight by spec.
+    for needle in ["[fake/alpha]", "[thinking:"] {
+        let before = run.screen();
+        let (x, y) = chip_cell(&before, needle);
+        let len = u16::try_from(needle.len()).expect("the chip fits its row");
+        let plain = chip_cells(&before, x, y, len);
+        hover(&mut run, x, y);
+        run.wait_screen(&format!("the hovered chip {needle}"), |screen| {
+            chip_cells(screen, x, y, len) != plain
+        });
+        // The top-left corner holds no target, so parking there
+        // leaves every chip.
+        hover(&mut run, 0, 0);
+        run.wait_screen(&format!("the restored chip {needle}"), |screen| {
+            chip_cells(screen, x, y, len) == plain
+        });
+    }
+    run.write(b"\x03\x03");
     run.wait_screen("the restored terminal", |screen| {
         !screen.alternate_screen && !screen.hide_cursor
     });

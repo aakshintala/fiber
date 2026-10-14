@@ -6,6 +6,7 @@
 use std::collections::VecDeque;
 use std::io::{self, Read, Write};
 use std::net::TcpStream;
+use std::os::fd::AsFd;
 use std::sync::{Arc, Mutex, atomic::Ordering, mpsc};
 
 #[cfg(test)]
@@ -92,6 +93,9 @@ impl Connection {
     }
 
     /// One wait on a would-block socket: expiry names the request.
+    /// Test-only: production reads wait through [`Shared::wait_ready`],
+    /// which ends the park at once when the bytes arrive.
+    #[cfg(test)]
     fn wait(&mut self, phase: &'static str) -> WaitEnd {
         self.shared.wait(
             &self.budget,
@@ -187,7 +191,18 @@ impl Connection {
                     ReadErr::End => return FillOutcome::Eof,
                 },
             }
-            match self.wait(phase) {
+            match self.shared.wait_ready(
+                &self.budget,
+                &self.name,
+                phase,
+                &mut self.seq,
+                &mut self.acked,
+                Some(self.stream.as_fd()),
+                true,
+            ) {
+                // Readiness parks end at once when the bytes arrive
+                // instead of sleeping a whole poll past them; the bound
+                // still checks past every park, as for one byte.
                 WaitEnd::Waited => {
                     if !self.consume_check(phase) {
                         return FillOutcome::Stopped;

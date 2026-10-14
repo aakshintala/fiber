@@ -159,33 +159,66 @@ pub(crate) struct WaitAck {
     pub(crate) until: Option<Instant>,
 }
 
+/// One held waiter's announcement: its phase and its own sequence.
+#[cfg(test)]
+pub(crate) type HeldNote = (&'static str, u64);
+
 /// The test-only check-to-park pause: while armed, a waiter holds after
 /// its check, subscription and acknowledgment but before its park. The
 /// test owns it like a release channel: no deadline of its own applies
-/// while held.
+/// while held. Each holder announces itself before it holds, and a pass
+/// lets exactly one holder of its phase through while the gate stays
+/// armed: a turnstile, so a waiter that sprints to its next hold is held
+/// again instead of racing a re-arm.
 #[cfg(test)]
 pub(crate) struct CheckGate {
     armed: Mutex<bool>,
     changed: Condvar,
+    /// Phases passed and not yet taken, one holder each.
+    passes: Mutex<Vec<&'static str>>,
+    held: mpsc::Sender<HeldNote>,
+    notes: Mutex<Option<mpsc::Receiver<HeldNote>>>,
 }
 
 #[cfg(test)]
 impl CheckGate {
     #[cfg(test)]
     fn new() -> Self {
+        let (held, notes) = mpsc::channel();
         Self {
             armed: Mutex::new(false),
             changed: Condvar::new(),
+            passes: Mutex::new(Vec::new()),
+            held,
+            notes: Mutex::new(Some(notes)),
         }
     }
 
-    fn hold(&self) {
+    /// Announces the waiter, then holds it while armed and unpassed. The
+    /// note goes out under the armed lock, so a pass or a release cannot
+    /// slip between the note and the hold.
+    fn hold(&self, phase: &'static str, seq: u64) {
         let mut armed = lock(&self.armed);
-        while *armed {
+        match self.held.send((phase, seq)) {
+            Ok(()) | Err(_) => {}
+        }
+        while *armed && !self.take_pass(phase) {
             armed = self
                 .changed
                 .wait(armed)
                 .unwrap_or_else(PoisonError::into_inner);
+        }
+    }
+
+    /// Takes one pass for `phase`: true when one was waiting.
+    fn take_pass(&self, phase: &'static str) -> bool {
+        let mut passes = lock(&self.passes);
+        match passes.iter().position(|passed| *passed == phase) {
+            Some(at) => {
+                passes.remove(at);
+                true
+            }
+            None => false,
         }
     }
 
@@ -198,6 +231,28 @@ impl CheckGate {
     pub(crate) fn release(&self) {
         *lock(&self.armed) = false;
         self.changed.notify_all();
+    }
+
+    /// Lets one holder of `phase` through and stays armed.
+    #[cfg(test)]
+    pub(crate) fn pass(&self, phase: &'static str) {
+        let _armed = lock(&self.armed);
+        lock(&self.passes).push(phase);
+        self.changed.notify_all();
+    }
+
+    /// Every held waiter's announcement from here on, once: `None` past
+    /// the first call.
+    #[cfg(test)]
+    pub(crate) fn held_notes(&self) -> Option<mpsc::Receiver<HeldNote>> {
+        lock(&self.notes).take()
+    }
+
+    /// Another sender into the held announcements: a test merges its own
+    /// events into the same ordered stream.
+    #[cfg(test)]
+    pub(crate) fn held_sender(&self) -> mpsc::Sender<HeldNote> {
+        self.held.clone()
     }
 }
 

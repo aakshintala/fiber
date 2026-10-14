@@ -11,6 +11,7 @@ use std::time::{Duration, Instant, SystemTime};
 use super::*;
 use crate::clock::FakeClock;
 use crate::deadline::Deadline;
+use crate::http_server::CheckGate;
 use contract::clock::Wake;
 
 const READ_WITHIN: Duration = crate::MUST_SUCCEED_WITHIN;
@@ -1021,4 +1022,170 @@ fn a_fixed_body_followed_by_pipelined_bytes_keeps_only_its_length() {
         None,
         "the recorded body holds its declared bytes, not the pipelined ones"
     );
+}
+
+/// Releases the armed check-to-park gate when the test unwinds past
+/// it: a waiter held between its check and its park would otherwise
+/// outlive the failed test, and shutdown does not release this gate,
+/// so an earlier assertion or receive panic would leave server threads
+/// held indefinitely. On success the test releases the gate before
+/// shutdown, and this drops as a no-op backstop.
+struct ReleaseOnDrop {
+    gate: Arc<CheckGate>,
+}
+
+impl Drop for ReleaseOnDrop {
+    fn drop(&mut self) {
+        self.gate.release();
+    }
+}
+
+// Twenty bench-shaped POSTs: byte-slice bodies of growing length, each
+// on a fresh connection read to the server's close, against small stream
+// replies. The bodies wait ready-built before the server starts, so no
+// client think time parks the server idle. Every park is held in the
+// test gate and staged: a data park is passed only after its bytes are
+// written, so it ends on readiness by construction, and the readiness
+// counter, which accepts never touch, counts exactly the data parks
+// passed. The poll bound outlasts every receive's deadline, so a staged
+// park never ends at its bound before loopback delivers its bytes. A
+// data park that ignores readiness sleeps its bound past the bytes
+// instead, and the count stays short.
+#[test]
+fn busy_shaped_posts_sleep_only_when_idle() {
+    const CALLS: usize = 20;
+    const STEP: usize = 2_000;
+    const ACCEPT: &str = "to accept the connection";
+    const HEAD: &str = "to read the request line";
+    const BODY: &str = "to read the fixed body";
+    // Not a server phase: the reader's end, merged into the held stream.
+    const REPLY: &str = "the reply read to its close";
+    let clock = FakeClock::new();
+    let script: Vec<Response> = (0..CALLS)
+        .map(|_| Response::stream("event: done\ndata: {}\n\n"))
+        .collect();
+    // Built before the server starts, so the server never parks on the
+    // client building its next body.
+    let bodies: Vec<Vec<u8>> = (0..CALLS)
+        .map(|n| (0u8..=250).cycle().take((n + 1) * STEP).collect())
+        .collect();
+    let core = HttpServer::bind(
+        clock.clone() as Arc<dyn Clock>,
+        Limits {
+            poll: Duration::from_secs(60),
+            ..Limits::default()
+        },
+    )
+    .unwrap();
+    // Armed before the first window, so every park holds from the start.
+    let gate = core.test_gate();
+    gate.arm();
+    let held = gate
+        .held_notes()
+        .expect("the test takes the held announcements");
+    let replied = gate.held_sender();
+    let server = ProviderServer::start_on_core(clock.clone(), core, script);
+    let _release = ReleaseOnDrop {
+        gate: Arc::clone(&gate),
+    };
+    let addr = server.addr;
+    let next = |deadline: &Deadline, what: &str| deadline.recv_or_fail(&held, what).0;
+    let deadline = Deadline::after(READ_WITHIN);
+    assert_eq!(
+        next(&deadline, "the first accept park"),
+        ACCEPT,
+        "nothing has connected"
+    );
+    for body in bodies.iter() {
+        let readied_before = server.core.test_readied_waits();
+        let mut stream = TcpStream::connect_timeout(&addr, READ_WITHIN).unwrap();
+        stream.set_read_timeout(Some(READ_WITHIN)).unwrap();
+        // The held accept takes the pending connection, which parks for
+        // its head, and the next window parks for the next accept, in
+        // either order.
+        gate.pass(ACCEPT);
+        // One wait for both parks, so one deadline spans both receives.
+        let deadline = Deadline::after(READ_WITHIN);
+        let mut parked = [
+            next(&deadline, "the head park or the next accept park"),
+            next(&deadline, "the other of the two"),
+        ];
+        parked.sort_unstable();
+        assert_eq!(parked, [ACCEPT, HEAD], "one accept and one head park");
+        stream
+            .write_all(
+                format!(
+                    "POST /v1 HTTP/1.1\r\nHost: localhost\r\nContent-Length: {}\r\n\r\n",
+                    body.len()
+                )
+                .as_bytes(),
+            )
+            .unwrap();
+        gate.pass(HEAD);
+        // No body byte is on the wire yet, so the body read parks.
+        let deadline = Deadline::after(READ_WITHIN);
+        assert_eq!(
+            next(&deadline, "the body park"),
+            BODY,
+            "the whole head arrives first"
+        );
+        stream.write_all(body).unwrap();
+        gate.pass(BODY);
+        let mut passed = 2u64;
+        let response = thread::scope(|scope| {
+            // The write side stays open until the reply completes: the
+            // server closes, so the read ends at the reply instead of its
+            // bound.
+            let reader = scope.spawn(|| {
+                let mut response = Vec::new();
+                stream.read_to_end(&mut response).unwrap_or_else(|e| {
+                    panic!("the scripted reply arrives within {READ_WITHIN:?}: {e}")
+                });
+                replied.send((REPLY, 0)).unwrap();
+                response
+            });
+            // A body larger than one read can outrun loopback delivery:
+            // each further park comes after all its bytes were written,
+            // so it is passed and counted like the first.
+            loop {
+                // Each pass answers the next receive, so each receive is
+                // its own wait with its own deadline.
+                let deadline = Deadline::after(READ_WITHIN);
+                let phase = next(&deadline, "the rest of the body's parks or the reply");
+                if phase == REPLY {
+                    break;
+                }
+                assert_eq!(phase, BODY, "only the body parks before the reply");
+                gate.pass(BODY);
+                passed += 1;
+            }
+            reader.join().unwrap()
+        });
+        let text = String::from_utf8_lossy(&response);
+        assert!(text.starts_with("HTTP/1.1 200"), "{text}");
+        assert!(response.ends_with(b"{}\n\n"), "{text}");
+        assert_eq!(
+            server.core.test_readied_waits() - readied_before,
+            passed,
+            "every data park passed after its bytes ends on readiness, not its bound"
+        );
+    }
+    assert!(
+        server.await_requests(CALLS, READ_WITHIN),
+        "every request is recorded"
+    );
+    let requests = server.requests();
+    assert_eq!(requests.len(), CALLS);
+    for (request, expected) in requests.iter().zip(bodies.iter()) {
+        assert_eq!(request.body_len, expected.len());
+        assert_eq!(
+            first_diff(&request.body, expected),
+            None,
+            "a recorded body is byte-exact"
+        );
+    }
+    // The last window holds its accept park, announced with the last
+    // connection: released, it ends stopped at shutdown.
+    gate.release();
+    assert!(server.core.shutdown(), "shutdown stops the server");
 }
