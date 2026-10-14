@@ -1151,59 +1151,101 @@ fn cancel_passes_a_blocked_spawn_and_the_late_child_is_killed() {
 }
 
 /// Drives a settle to completion on the fake clock and returns its
-/// answer. The first advance follows the settle's confirmed first park,
-/// exact on the unmoved clock, and every later advance follows a
-/// confirmed re-park. Completion and every acknowledgement share the
-/// drive's one deadline: each acknowledgement waits only a poll pause of
-/// it, and an acknowledgement's expiry re-checks completion and awaits
-/// the late park under what is left, never stopping the drive while time
-/// remains. No advance runs ahead of a real group's death: while a group
-/// in `real` still holds a member, the drive waits it out on the wall
-/// clock without advancing, so a held or slow real death parks the settle
-/// without spending the bound. Held command threads stay held past the
-/// first advance, so their leaders are zombies and their groups stay
-/// listed while the fake clock moves; dropping their release senders then
-/// releases them. Fails the test when the drive's deadline runs out
-/// first.
+/// answer, through a controlled interleaving that shows both halves
+/// while the reap stays held. The blind-probe phase keeps every hold
+/// and runs ten advance-to-confirmed-re-park cycles exactly like the old
+/// drive, proving it spends budget with zero progress: the clock moves
+/// exactly ten advances while the held leader stays unreaped, so the
+/// settle still lists the real group. The listing is read from the
+/// settle itself: a killed-but-unreaped leader probes `EPERM` on some
+/// platforms, which keeps the group pending in the settle (only `SRCH`
+/// retires) while reading empty through the raw probe. The gated phase
+/// then proves the fixed drive retains its budget: the gate's own
+/// `PARK_PAUSE`-bounded emptiness wait runs while the group is still
+/// held, the settle still has no answer, and the clock sits past no
+/// probe mark. Only then are the release senders dropped and the settle
+/// driven to completion through the emptiness gate, which never advances
+/// past a live real group: while `real` still holds a member, the drive
+/// waits it out on the wall clock without advancing, so a held or slow
+/// real death parks the settle without spending the bound. Completion and
+/// every acknowledgement share the drive's one deadline: each
+/// acknowledgement waits only a poll pause of it, and an
+/// acknowledgement's expiry re-checks completion and awaits the late
+/// park under what is left, never stopping the drive while time remains.
+/// Fails the test when the drive's deadline runs out first.
 #[track_caller]
 fn drive_settle_to_completion(
     clock: &Arc<FakeClock>,
+    reads: &Arc<Reads>,
     finished: &mpsc::Receiver<bool>,
     drive: &Deadline,
-    real: &[u32],
+    real: u32,
     releases: Vec<mpsc::Sender<()>>,
 ) -> bool {
-    let poll = clock.origin() + GROUP_POLL;
+    let start = clock.origin();
+    let poll = start + GROUP_POLL;
     assert!(
         clock.await_parked(poll, drive.left()),
         "the settle parked at its poll"
     );
+    // Blind-probe phase, holds maintained: ten advances, each confirmed
+    // by a re-park, exactly like the old drive.
     let mut mark = clock.advance_marked(Duration::from_millis(50));
+    for _ in 1..10 {
+        assert!(
+            clock.await_any_parked_since(&mark, drive.left().min(PARK_PAUSE)),
+            "the settle parked again after the probe advance"
+        );
+        mark = clock.advance_marked(Duration::from_millis(50));
+    }
+    assert!(
+        clock.await_any_parked_since(&mark, drive.left().min(PARK_PAUSE)),
+        "the settle parked again after the last probe advance"
+    );
+    assert_eq!(
+        clock.now(),
+        start + Duration::from_millis(500),
+        "the blind probe spent exactly ten advances"
+    );
+    assert!(
+        listed(reads).contains(&real),
+        "the held group is still listed after the blind probe: {:?}",
+        listed(reads)
+    );
+    // Gated phase: the gate's own wait runs while the group is still
+    // held, with no answer and no budget spent.
+    let probe_mark = clock.now();
+    let _ = fakes::group_empties(real, PARK_PAUSE);
+    assert!(
+        matches!(finished.try_recv(), Err(mpsc::TryRecvError::Empty)),
+        "the settle answered while its group was held"
+    );
+    assert_eq!(clock.now(), probe_mark, "the gated wait spent no budget");
     for release in releases {
         drop(release);
     }
-    loop {
+    let answer = loop {
         if let Ok(answer) = finished.try_recv() {
-            return answer;
+            break answer;
         }
         if drive.left().is_zero() {
-            break;
+            break drive.recv(finished).expect("the settle");
         }
-        let mut death_pending = false;
-        for group in real {
-            if !fakes::group_empties(*group, drive.left().min(PARK_PAUSE)) {
-                death_pending = true;
-                break;
-            }
-        }
-        if death_pending {
+        if !fakes::group_empties(real, drive.left().min(PARK_PAUSE)) {
             continue;
         }
         if clock.await_any_parked_since(&mark, drive.left().min(PARK_PAUSE)) {
             mark = clock.advance_marked(Duration::from_millis(50));
         }
+    };
+    if answer {
+        assert!(
+            clock.now() < start + doors::SHUTDOWN_BOUND,
+            "the gated drive kept budget: {:?} past {start:?}",
+            clock.now() - start
+        );
     }
-    drive.recv(finished).expect("the settle")
+    answer
 }
 
 /// A cancelled group with a live member is settled by killing it, not by
@@ -1258,7 +1300,7 @@ fn settle_rekills_a_cancelled_survivor_before_answering_true() {
     reads.lock().cancelled = true;
     let settled = settle_on_thread(&reads, &clock, doors::SHUTDOWN_BOUND);
     let drive = Deadline::after(DEADLINE);
-    let answer = drive_settle_to_completion(&clock, &settled, &drive, &[pgid], vec![free_tx]);
+    let answer = drive_settle_to_completion(&clock, &reads, &settled, &drive, pgid, vec![free_tx]);
     let lives = fakes::kill_group(pgid, "0").unwrap_or(false);
     // Guarded cleanup before the assertions: the survivor must not
     // outlive the test either way.
@@ -1439,9 +1481,10 @@ fn settle_drains_two_groups_together_within_one_bound() {
     assert!(
         drive_settle_to_completion(
             &clock,
+            &reads,
             &finished,
             &drive,
-            &[pgid_two],
+            pgid_two,
             vec![release_one, release_two]
         ),
         "both groups drain within the one bound"
