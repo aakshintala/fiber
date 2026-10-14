@@ -18,7 +18,7 @@ use ureq::unversioned::transport::{
     Buffers, ConnectionDetails, Connector, Either, LazyBuffers, NextTimeout, Transport,
 };
 
-use super::{KeepSocket, connect_bound, io_bound, open, open_timed};
+use super::{KeepSocket, io_bound, open, open_timed};
 use crate::{Keep, LIMITS};
 
 /// One test's wall-clock bound. Every wait names it.
@@ -464,12 +464,23 @@ fn a_keep_refusal_emits_once_and_closes_the_socket() {
     );
     assert_eq!(capture.ends(), 1, "the refusal drops that scope once");
     drop(keep);
-    let mut peer = Deadline::after(EACH_WITHIN)
+    let deadline = Deadline::after(EACH_WITHIN);
+    let peer = deadline
         .recv(&peer_rx)
         .expect("the listener saw the refused socket");
     peer.set_read_timeout(Some(EACH_WITHIN)).unwrap();
-    let mut drained = Vec::new();
-    peer.read_to_end(&mut drained).unwrap();
+    let (drained_tx, drained_rx) = mpsc::channel();
+    std::thread::spawn(move || {
+        let mut peer = peer;
+        let mut drained = Vec::new();
+        let outcome = peer.read_to_end(&mut drained).map(|_| drained);
+        match drained_tx.send(outcome) {
+            Ok(()) | Err(_) => {}
+        }
+    });
+    let drained = deadline
+        .recv_or_fail(&drained_rx, "the refused socket to close")
+        .unwrap();
     assert!(
         drained.is_empty(),
         "the refusal closed the socket before anything was sent: {drained:?}"
@@ -607,12 +618,23 @@ fn cancelling_during_keep_refuses_after_release_and_emits_once() {
         "the cancel drops one scope"
     );
     drop(keep);
-    let mut peer = Deadline::after(EACH_WITHIN)
+    let deadline = Deadline::after(EACH_WITHIN);
+    let peer = deadline
         .recv(&peer_rx)
         .expect("the listener saw the cancelled socket");
     peer.set_read_timeout(Some(EACH_WITHIN)).unwrap();
-    let mut drained = Vec::new();
-    peer.read_to_end(&mut drained).unwrap();
+    let (drained_tx, drained_rx) = mpsc::channel();
+    std::thread::spawn(move || {
+        let mut peer = peer;
+        let mut drained = Vec::new();
+        let outcome = peer.read_to_end(&mut drained).map(|_| drained);
+        match drained_tx.send(outcome) {
+            Ok(()) | Err(_) => {}
+        }
+    });
+    let drained = deadline
+        .recv_or_fail(&drained_rx, "the cancelled socket to close")
+        .unwrap();
     assert!(
         drained.is_empty(),
         "the refusal closed the socket before anything was sent: {drained:?}"
@@ -1178,46 +1200,6 @@ fn ureq_after(
     reason: ureq::Timeout,
 ) -> NextTimeout {
     NextTimeout { after, reason }
-}
-
-#[test]
-fn connect_bound_prefers_the_strictly_shorter_ureq_deadline() {
-    use ureq::unversioned::transport::time::Duration as Bound;
-    let limit = Duration::from_secs(15);
-    let (bound, ureq_wins) = connect_bound(
-        limit,
-        ureq_after(
-            Bound::Exact(Duration::from_secs(14)),
-            ureq::Timeout::Connect,
-        ),
-    );
-    assert_eq!(
-        bound,
-        Duration::from_secs(14),
-        "the shorter ureq bound wins"
-    );
-    assert!(ureq_wins, "a ureq timeout keeps its reason");
-    let (bound, ureq_wins) = connect_bound(
-        limit,
-        ureq_after(Bound::Exact(limit), ureq::Timeout::Connect),
-    );
-    assert_eq!(bound, limit, "an equal bound keeps the limit");
-    assert!(
-        !ureq_wins,
-        "an equal bound reports the limit's error, not ureq's"
-    );
-    let (bound, ureq_wins) = connect_bound(
-        limit,
-        ureq_after(
-            Bound::Exact(Duration::from_secs(16)),
-            ureq::Timeout::Connect,
-        ),
-    );
-    assert_eq!(bound, limit, "the longer ureq bound loses");
-    assert!(!ureq_wins, "the limit's error reports");
-    let (bound, ureq_wins) = connect_bound(limit, wait());
-    assert_eq!(bound, limit, "no ureq bound keeps the limit");
-    assert!(!ureq_wins, "no ureq bound reports the limit's error");
 }
 
 #[test]

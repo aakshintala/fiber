@@ -2730,12 +2730,23 @@ fn an_observed_proxy_send_times_its_one_socket() {
         as_clock(),
         Some(net.timing()),
     );
-    let mut sent = match sent {
+    let sent = match sent {
         Ok(sent) => sent,
         Err(failed) => panic!("the observed proxy send failed: {:?}", failed.error),
     };
-    let mut text = String::new();
-    std::io::Read::read_to_string(&mut sent.stream, &mut text).unwrap();
+    let deadline = Deadline::after(CALL_WITHIN);
+    let (body_tx, body_rx) = mpsc::channel();
+    thread::spawn(move || {
+        let mut sent = sent;
+        let mut text = String::new();
+        let outcome = std::io::Read::read_to_string(&mut sent.stream, &mut text).map(|_| text);
+        match body_tx.send(outcome) {
+            Ok(()) | Err(_) => {}
+        }
+    });
+    let text = deadline
+        .recv_or_fail(&body_rx, "the proxy response body to be read")
+        .unwrap();
     assert_eq!(text, "{}", "the proxy send reached the origin");
     assert!(
         proxy.await_connects(1, CONNECT_WITHIN),
