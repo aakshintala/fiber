@@ -1027,15 +1027,10 @@ fn a_fixed_body_followed_by_pipelined_bytes_keeps_only_its_length() {
 // on a fresh connection read to the server's close, against small stream
 // replies. The bodies wait ready-built before the server starts, so no
 // client think time parks the server idle. Each body waits for the
-// server's read park: the park is certain, since no body byte is on the
-// wire yet, and the announcement plus the parked check prove the waiter
-// is inside its poll before the bytes arrive. A readiness wait then ends
-// with its fd readable and counts one readiness outcome; a condvar wait
-// sleeps its whole poll bound instead and counts none. Only rendezvoused
-// read parks are counted: idle accept windows between requests, and any
-// re-poll while the client is descheduled, end in timeouts, which never
-// count as readiness, so scheduling alone cannot fail the bound. At base
-// every park sleeps, so no readiness outcome is ever counted.
+// server's read park: no body byte is on the wire yet, and the announced
+// park is checked before sending. Its readiness count is sampled around
+// that body read, so an early timeout cannot be hidden by another park's
+// outcome, and no idle accept window can satisfy a later body.
 #[test]
 fn busy_shaped_posts_sleep_only_when_idle() {
     const CALLS: usize = 20;
@@ -1079,6 +1074,7 @@ fn busy_shaped_posts_sleep_only_when_idle() {
             clock.await_thread_parked(parked.thread, parked.until, READ_WITHIN),
             "the body read parks before its bytes arrive"
         );
+        let readied_before = server.core.test_readied_waits();
         stream.write_all(body).unwrap();
         // The write side stays open until the reply completes: the server
         // closes, so the read ends at the reply instead of its bound.
@@ -1089,6 +1085,12 @@ fn busy_shaped_posts_sleep_only_when_idle() {
         let text = String::from_utf8_lossy(&response);
         assert!(text.starts_with("HTTP/1.1 200"), "{text}");
         assert!(response.ends_with(b"{}\n\n"), "{text}");
+        let readied_after = server.core.test_readied_waits();
+        let readied = readied_after.saturating_sub(readied_before);
+        assert!(
+            readied > 0,
+            "the rendezvoused body read ends on readiness, not a timeout"
+        );
     }
     assert!(
         server.await_requests(CALLS, READ_WITHIN),
@@ -1104,14 +1106,4 @@ fn busy_shaped_posts_sleep_only_when_idle() {
             "a recorded body is byte-exact"
         );
     }
-    // The requests lock synchronises with the serving threads, so every
-    // readiness outcome the requests cost is counted here: one per
-    // rendezvoused body read, since each rendezvoused park finds its bytes
-    // already waiting.
-    let readied = server.core.test_readied_waits();
-    let calls = u64::try_from(CALLS).unwrap();
-    assert!(
-        readied >= calls,
-        "{CALLS} busy-shaped posts end {readied} rendezvoused read parks on readiness, at least {calls}: waits end on readiness, not on a poll"
-    );
 }

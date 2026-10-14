@@ -138,14 +138,13 @@ fn a_readiness_wait_with_nothing_readable_sleeps_its_bound() {
     assert!(server.shutdown(), "shutdown stops the server");
 }
 
-/// A consumed clock wake does not spin the next park: the advance lands
-/// while the waiter is parked, so its first park ends at once on the pipe
-/// byte and spends it; the next park with nothing readable sleeps its
-/// millisecond bound and counts one sleep. The first park's result arriving
-/// proves the wake is consumed before the next park is asserted, so the two
-/// parks rendezvous instead of sharing a real-time sampling window. A drain
-/// that spent nothing would end the next park at once on the stale byte
-/// instead, counting nothing.
+/// A consumed clock wake does not spin the next park: the first park is
+/// held after its check until the clock advances, so it ends on the pipe
+/// byte and spends it. The first result rendezvous lets the controller
+/// permit the next park only after it has observed that wake. That park has
+/// no readable bytes or stale wake and sleeps its millisecond bound. A drain
+/// that spent nothing would end the second park at once on the stale byte
+/// instead, counting no sleep.
 #[test]
 fn a_readiness_wait_after_a_wake_parks_instead_of_spinning() {
     let clock = fake_clock();
@@ -155,33 +154,46 @@ fn a_readiness_wait_after_a_wake_parks_instead_of_spinning() {
     let (unwritten, _held) = UnixStream::pair().expect("the test pipes its stream");
     let budget = budget(&clock);
     let acks = server.test_acknowledgments();
+    let gate = server.test_gate();
+    gate.arm();
+    let (continue_tx, continue_rx) = mpsc::channel();
     let (tx, rx) = mpsc::channel();
     thread::scope(|scope| {
-        scope.spawn(|| {
+        let _release = ReleaseOnDrop {
+            gate: Arc::clone(&gate),
+        };
+        let wait_server = &server;
+        let wait_budget = &budget;
+        let wait_stream = &unwritten;
+        scope.spawn(move || {
             let mut seq = 0;
             let mut acked = None;
-            for _ in 0..2 {
-                let end = server.shared.wait_ready(
-                    &budget,
+            for park in 0..2 {
+                let end = wait_server.shared.wait_ready(
+                    wait_budget,
                     "the test request",
                     "to read the test bytes",
                     &mut seq,
                     &mut acked,
-                    Some(unwritten.as_fd()),
+                    Some(wait_stream.as_fd()),
                 );
                 match tx.send(end) {
                     Ok(()) | Err(_) => {}
                 }
+                if park == 0 {
+                    Deadline::after(OP)
+                        .recv_or_fail(&continue_rx, "the controller before the next park");
+                }
             }
         });
-        let deadline = Deadline::after(OP);
-        let ack = next_acknowledgment(&deadline, &acks, "the readiness wait");
-        assert_eq!(ack.phase, "to read the test bytes");
-        assert!(
-            clock.await_thread_parked(ack.thread, ack.until, OP),
-            "the readiness wait parks before the advance"
+        let ack = next_acknowledgment(
+            &Deadline::after(OP),
+            &acks,
+            "the wake-consuming readiness park",
         );
+        assert_eq!(ack.phase, "to read the test bytes");
         clock.advance(Duration::from_secs(1));
+        gate.release();
         assert!(
             matches!(
                 Deadline::after(OP).recv_or_fail(&rx, "the woken wait"),
@@ -189,6 +201,11 @@ fn a_readiness_wait_after_a_wake_parks_instead_of_spinning() {
             ),
             "the wake ends the first park at once"
         );
+        continue_tx
+            .send(())
+            .expect("the waiter is ready for the next park");
+        let next = next_acknowledgment(&Deadline::after(OP), &acks, "the next readiness park");
+        assert_eq!(next.phase, "to read the test bytes");
         assert!(
             matches!(
                 Deadline::after(OP).recv_or_fail(&rx, "the next wait"),
