@@ -27,6 +27,9 @@ mod servers_tests;
 #[path = "repository/session_tests.rs"]
 mod session_tests;
 #[cfg(test)]
+#[path = "repository/store_sync_tests.rs"]
+mod store_sync_tests;
+#[cfg(test)]
 #[path = "repository/store_tests.rs"]
 mod store_tests;
 

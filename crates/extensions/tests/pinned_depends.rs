@@ -21,7 +21,7 @@ use std::sync::Arc;
 use common::{Repos, Setup, manifest, write};
 use config::ProjectKey;
 use contract::events::OfferedKind;
-use extensions::{Error, Fetch, Index, Store, declared_items, hash};
+use extensions::{Error, Fetch, Index, Origin, Store, declared_items, hash};
 use fakes::clock::FakeClock;
 use fakes::git::git;
 use serde_json::{Value, json};
@@ -500,4 +500,606 @@ fn a_dependency_back_on_the_root_terminates_without_staging_it() {
     declare(&setup, &named(root, &[(helper, "1.0")]));
     let digest = approve(&setup, &repos);
     assert_eq!(dep_names(&setup, &digest), vec![config::dir_name(helper)]);
+}
+
+/// The manifest `name` with `depends` and this install step.
+fn installing(name: &str, depends: &[(&str, &str)], step: &str) -> Value {
+    let mut m = named(name, depends);
+    m.as_object_mut()
+        .unwrap()
+        .insert("install".into(), json!(["sh", "-c", step]));
+    m
+}
+
+/// The approval file for `digest` under the test project.
+fn approval(setup: &Setup, digest: &str) -> PathBuf {
+    setup
+        .home()
+        .join("projects")
+        .join("pin")
+        .join("approvals")
+        .join(digest)
+}
+
+fn ready(setup: &Setup, digest: &str) -> PathBuf {
+    setup.home().join("pinned").join(format!("{digest}.ready"))
+}
+
+fn copy(setup: &Setup, digest: &str) -> PathBuf {
+    setup.home().join("pinned").join(digest)
+}
+
+/// A store with dependencies fetched from `repos`, or with no fetching.
+fn fetching_store(setup: &Setup, repos: &Repos, clock: &Arc<FakeClock>) -> Store {
+    store(setup, repos, clock)
+}
+
+#[test]
+fn the_roots_install_step_sees_committed_dependencies() {
+    let setup = Setup::new();
+    let mut repos = Repos::new(&setup);
+    let helper = "example.com/acme/helper";
+    repos.tag(
+        helper,
+        "",
+        "v1.0.0",
+        &installing(helper, &[], "echo built > built.txt"),
+        &[],
+    );
+    let root = "fiber.test/root";
+    let slug = config::dir_name(helper);
+    declare(
+        &setup,
+        &installing(
+            root,
+            &[(helper, "1.0")],
+            &format!("test -f .fiber-depends/extensions/{slug}/built.txt && pwd > where.txt"),
+        ),
+    );
+    let digest = approve(&setup, &repos);
+    // The root's step found the dependency's install output: the commit
+    // ran before it, at the copy's own path.
+    assert_eq!(
+        fs::read_to_string(copy(&setup, &digest).join("where.txt"))
+            .unwrap()
+            .trim(),
+        fs::canonicalize(copy(&setup, &digest))
+            .unwrap()
+            .to_string_lossy()
+    );
+}
+
+#[test]
+fn a_dependency_step_failure_leaves_no_copy_markers_or_approval() {
+    let setup = Setup::new();
+    let mut repos = Repos::new(&setup);
+    let helper = "example.com/acme/helper";
+    repos.tag(
+        helper,
+        "",
+        "v1.0.0",
+        &installing(helper, &[], "exit 3"),
+        &[],
+    );
+    let root = "fiber.test/root";
+    declare(&setup, &named(root, &[(helper, "1.0")]));
+    let clock = FakeClock::new();
+    let (found, digest) = item(&setup, &clock);
+    let err = fetching_store(&setup, &repos, &clock)
+        .approve(&found, &digest)
+        .unwrap_err();
+    assert!(err.to_string().contains(helper), "{err}");
+    assert!(!copy(&setup, &digest).exists());
+    assert!(!ready(&setup, &digest).exists());
+    assert!(
+        !depends_home(&setup, &digest).exists(),
+        "the copy went with its dependency home"
+    );
+    assert!(!approval(&setup, &digest).exists());
+}
+
+#[test]
+fn a_root_step_failure_leaves_no_copy_markers_or_approval() {
+    let setup = Setup::new();
+    let mut repos = Repos::new(&setup);
+    let helper = "example.com/acme/helper";
+    repos.tag(helper, "", "v1.0.0", &manifest(helper), &[]);
+    let root = "fiber.test/root";
+    declare(&setup, &installing(root, &[(helper, "1.0")], "exit 3"));
+    let clock = FakeClock::new();
+    let (found, digest) = item(&setup, &clock);
+    fetching_store(&setup, &repos, &clock)
+        .approve(&found, &digest)
+        .unwrap_err();
+    assert!(!copy(&setup, &digest).exists());
+    assert!(!ready(&setup, &digest).exists());
+    assert!(!approval(&setup, &digest).exists());
+}
+
+#[test]
+fn a_failed_rebuild_keeps_the_earlier_approval_but_no_complete_copy() {
+    let setup = Setup::new();
+    let mut repos = Repos::new(&setup);
+    let helper = "example.com/acme/helper";
+    repos.tag(helper, "", "v1.0.0", &manifest(helper), &[]);
+    let root = "fiber.test/root";
+    let flag = setup.root().join("fail");
+    let step = format!(
+        "test ! -e '{}' || exit 3",
+        flag.display().to_string().replace('\'', "'\\''")
+    );
+    declare(&setup, &installing(root, &[(helper, "1.0")], &step));
+    let digest = approve(&setup, &repos);
+    let before = fs::read(approval(&setup, &digest)).unwrap();
+    // A legacy copy without its completion marker rebuilds: break the
+    // rebuild, and the approval stays byte-identical with no complete
+    // copy for a later caller to rebuild.
+    fs::remove_file(depends_home(&setup, &digest).join(".complete")).unwrap();
+    fs::write(&flag, "fail").unwrap();
+    let clock = FakeClock::new();
+    let (found, _) = item(&setup, &clock);
+    fetching_store(&setup, &repos, &clock)
+        .approve(&found, &digest)
+        .unwrap_err();
+    assert_eq!(fs::read(approval(&setup, &digest)).unwrap(), before);
+    assert!(!copy(&setup, &digest).exists());
+    assert!(!ready(&setup, &digest).exists());
+    // With the failure gone, the next approval builds the copy again.
+    fs::remove_file(&flag).unwrap();
+    assert_eq!(approve(&setup, &repos), digest);
+    assert!(depends_home(&setup, &digest).join(".complete").is_file());
+}
+
+#[test]
+fn a_record_failure_keeps_the_finished_copy_and_a_retry_records_without_reinstalling() {
+    let setup = Setup::new();
+    let mut repos = Repos::new(&setup);
+    let helper = "example.com/acme/helper";
+    repos.tag(helper, "", "v1.0.0", &manifest(helper), &[]);
+    let root = "fiber.test/root";
+    declare(
+        &setup,
+        &installing(root, &[(helper, "1.0")], "echo x >> counter"),
+    );
+    // A file where the approvals directory belongs makes recording fail
+    // after the copy, with its ready marker, is published.
+    let blocked = approval(&setup, &digest_of(&setup))
+        .parent()
+        .unwrap()
+        .to_path_buf();
+    fs::create_dir_all(blocked.parent().unwrap()).unwrap();
+    fs::write(&blocked, "blocked").unwrap();
+    let clock = FakeClock::new();
+    let (found, digest) = item(&setup, &clock);
+    fetching_store(&setup, &repos, &clock)
+        .approve(&found, &digest)
+        .unwrap_err();
+    assert!(copy(&setup, &digest).is_dir());
+    assert!(ready(&setup, &digest).is_file());
+    assert!(depends_home(&setup, &digest).join(".complete").is_file());
+    // The retry finds the finished copy and only records: the step ran once.
+    fs::remove_file(&blocked).unwrap();
+    let clock = FakeClock::new();
+    fetching_store(&setup, &repos, &clock)
+        .approve(&found, &digest)
+        .unwrap();
+    assert!(approval(&setup, &digest).is_file());
+    assert_eq!(
+        fs::read_to_string(copy(&setup, &digest).join("counter")).unwrap(),
+        "x\n"
+    );
+}
+
+/// The content hash of the declared extension, without approving.
+fn digest_of(setup: &Setup) -> String {
+    let clock = FakeClock::new();
+    item(setup, &clock).1
+}
+
+#[test]
+fn a_completion_failure_leaves_no_markers_no_copy_and_no_approval() {
+    for (step, what) in [
+        // The step removes the dependency home: completion has nowhere to go.
+        ("rm -rf .fiber-depends", "missing"),
+        // The step leaves a file where the home goes: not a directory.
+        ("rm -rf .fiber-depends && touch .fiber-depends", "file"),
+    ] {
+        let setup = Setup::new();
+        let mut repos = Repos::new(&setup);
+        let helper = "example.com/acme/helper";
+        repos.tag(helper, "", "v1.0.0", &manifest(helper), &[]);
+        let root = "fiber.test/root";
+        declare(&setup, &installing(root, &[(helper, "1.0")], step));
+        let clock = FakeClock::new();
+        let (found, digest) = item(&setup, &clock);
+        let err = fetching_store(&setup, &repos, &clock)
+            .approve(&found, &digest)
+            .unwrap_err();
+        assert!(err.to_string().contains(".fiber-depends"), "{what}: {err}");
+        assert!(!copy(&setup, &digest).exists(), "{what}");
+        assert!(!ready(&setup, &digest).exists(), "{what}");
+        assert!(!approval(&setup, &digest).exists(), "{what}");
+    }
+}
+
+#[test]
+fn an_outer_ready_failure_leaves_no_copy_and_no_approval() {
+    let setup = Setup::new();
+    let mut repos = Repos::new(&setup);
+    let helper = "example.com/acme/helper";
+    repos.tag(helper, "", "v1.0.0", &manifest(helper), &[]);
+    let root = "fiber.test/root";
+    // The step parks a directory where the outer marker goes, so writing
+    // it fails after everything else is built.
+    declare(
+        &setup,
+        &installing(
+            root,
+            &[(helper, "1.0")],
+            "mkdir ../\"$(basename \"$PWD\")\".ready",
+        ),
+    );
+    let clock = FakeClock::new();
+    let (found, digest) = item(&setup, &clock);
+    let marker = ready(&setup, &digest);
+    let err = fetching_store(&setup, &repos, &clock)
+        .approve(&found, &digest)
+        .unwrap_err();
+    assert!(
+        err.to_string().contains(&marker.display().to_string()),
+        "{err}"
+    );
+    assert!(matches!(err, Error::Io { path, .. } if path == marker));
+    assert!(!copy(&setup, &digest).exists());
+    assert!(!marker.is_file());
+    assert!(!approval(&setup, &digest).exists());
+}
+
+#[test]
+fn an_extension_without_dependencies_needs_no_fetch_and_makes_no_dependency_home() {
+    let setup = Setup::new();
+    let root = "fiber.test/root";
+    declare(&setup, &manifest(root));
+    let clock = FakeClock::new();
+    // A missing git program: nothing may fetch.
+    let fetch = Fetch::new(
+        Origin::new("fiber-no-such-git-program", |r| r.to_owned()),
+        FIBER,
+        Arc::clone(&clock) as Arc<_>,
+    );
+    let store = Store::new(&setup.home(), &project(), Arc::clone(&clock) as Arc<_>).fetching(fetch);
+    let (found, digest) = item(&setup, &clock);
+    store.approve(&found, &digest).unwrap();
+    assert!(copy(&setup, &digest).is_dir());
+    assert!(!depends_home(&setup, &digest).exists());
+}
+
+#[test]
+fn dependencies_without_a_fetch_fail_and_install_nothing() {
+    let setup = Setup::new();
+    let mut repos = Repos::new(&setup);
+    let helper = "example.com/acme/helper";
+    repos.tag(helper, "", "v1.0.0", &manifest(helper), &[]);
+    let root = "fiber.test/root";
+    declare(&setup, &named(root, &[(helper, "1.0")]));
+    let clock = FakeClock::new();
+    let plain = Store::new(&setup.home(), &project(), Arc::clone(&clock) as Arc<_>);
+    let (found, digest) = item(&setup, &clock);
+    let err = plain.approve(&found, &digest).unwrap_err();
+    assert!(matches!(err, Error::Pin { .. }), "{err}");
+    assert!(err.to_string().contains("dependencies"), "{err}");
+    assert!(!copy(&setup, &digest).exists());
+    assert!(!ready(&setup, &digest).exists());
+    assert!(!approval(&setup, &digest).exists());
+}
+
+#[test]
+fn reserved_dependency_paths_are_refused_and_a_similar_prefix_is_allowed() {
+    for (rel, allowed) in [
+        (".fiber-depends", false),
+        (".fiber-depends/inner.txt", false),
+        (".fiber-depends2.txt", true),
+    ] {
+        let setup = Setup::new();
+        let root = "fiber.test/root";
+        declare(&setup, &manifest(root));
+        write(&setup.workspace().join("pkg").join(rel), "reserved\n");
+        let clock = FakeClock::new();
+        let plain = Store::new(&setup.home(), &project(), Arc::clone(&clock) as Arc<_>);
+        let (found, digest) = item(&setup, &clock);
+        if allowed {
+            plain.approve(&found, &digest).unwrap();
+            assert!(copy(&setup, &digest).join(rel).is_file());
+        } else {
+            let err = plain.approve(&found, &digest).unwrap_err();
+            assert!(matches!(err, Error::Pin { .. }), "{rel}: {err}");
+            assert!(err.to_string().contains(".fiber-depends"), "{rel}: {err}");
+            assert!(!copy(&setup, &digest).exists(), "{rel}");
+            assert!(!approval(&setup, &digest).exists(), "{rel}");
+        }
+    }
+}
+
+#[test]
+fn ready_markers_are_empty_for_an_extension_a_hook_and_a_server() {
+    let setup = Setup::new();
+    let ws = setup.workspace();
+    if !ws.join(".git").exists() {
+        git(&ws, &["init", "--quiet"]);
+    }
+    write(
+        &ws.join("pkg/extension.json"),
+        &manifest("fiber.test/root").to_string(),
+    );
+    write(&ws.join("pkg/init.lua"), "-- entry\n");
+    write(&ws.join("scripts/fmt.sh"), "cargo fmt\n");
+    write(
+        &ws.join(".fiber/config.json"),
+        &json!({"repository_extensions": [{"path": "pkg"}]}).to_string(),
+    );
+    write(
+        &ws.join(".fiber/config/hooks.json"),
+        &json!({"hooks": {"fmt": {"point": "x", "command": "scripts/fmt.sh"}}}).to_string(),
+    );
+    let clock = FakeClock::new();
+    let plain = Store::new(&setup.home(), &project(), Arc::clone(&clock) as Arc<_>);
+    let items = declared_items(&setup.workspace(), &*clock).unwrap();
+    assert_eq!(items.len(), 2);
+    for found in &items {
+        let digest = hash(&mut Index::load(&setup.home()), found).unwrap();
+        plain.approve(found, &digest).unwrap();
+        assert_eq!(fs::read(ready(&setup, &digest)).unwrap(), b"");
+    }
+}
+
+/// Approves a counting root with one dependency, and returns its hash.
+fn counting_root(setup: &Setup, repos: &mut Repos) -> String {
+    let helper = "example.com/acme/helper";
+    repos.tag(helper, "", "v1.0.0", &manifest(helper), &[]);
+    let root = "fiber.test/root";
+    declare(
+        setup,
+        &installing(root, &[(helper, "1.0")], "echo x >> counter"),
+    );
+    approve(setup, repos)
+}
+
+fn counter(setup: &Setup, digest: &str) -> String {
+    fs::read_to_string(copy(setup, digest).join("counter")).unwrap_or_default()
+}
+
+#[test]
+fn a_legacy_copy_without_completion_rebuilds_through_approve() {
+    let setup = Setup::new();
+    let mut repos = Repos::new(&setup);
+    let digest = counting_root(&setup, &mut repos);
+    assert_eq!(counter(&setup, &digest), "x\n");
+    // A copy from before completion markers: the marker is gone, with
+    // junk the rebuild must clear.
+    fs::remove_file(depends_home(&setup, &digest).join(".complete")).unwrap();
+    fs::write(copy(&setup, &digest).join("junk"), "junk").unwrap();
+    assert_eq!(approve(&setup, &repos), digest);
+    // The rebuild clears the copy, so its counter restarts with one run;
+    // the junk is gone and completion is written again.
+    assert_eq!(counter(&setup, &digest), "x\n");
+    assert!(!copy(&setup, &digest).join("junk").exists());
+    assert!(
+        depends_home(&setup, &digest).join(".complete").is_file(),
+        "the rebuild writes completion"
+    );
+}
+
+#[test]
+fn a_legacy_copy_without_completion_rebuilds_through_ensure_copy_keeping_its_approval() {
+    let setup = Setup::new();
+    let mut repos = Repos::new(&setup);
+    let digest = counting_root(&setup, &mut repos);
+    let before = fs::read(approval(&setup, &digest)).unwrap();
+    fs::remove_file(depends_home(&setup, &digest).join(".complete")).unwrap();
+    fs::write(copy(&setup, &digest).join("junk"), "junk").unwrap();
+    let clock = FakeClock::new();
+    let (found, _) = item(&setup, &clock);
+    // Rebuilding for a load records no approval: the bytes stay identical.
+    let held = fetching_store(&setup, &repos, &clock)
+        .ensure_copy(&found, &digest)
+        .unwrap();
+    assert_eq!(fs::read(approval(&setup, &digest)).unwrap(), before);
+    assert!(depends_home(&setup, &digest).join(".complete").is_file());
+    assert!(!copy(&setup, &digest).join("junk").exists());
+    assert_eq!(counter(&setup, &digest), "x\n");
+    drop(held);
+}
+
+#[test]
+fn a_held_legacy_copy_is_left_alone_then_rebuilds_once_released() {
+    use std::fs::File;
+    let setup = Setup::new();
+    let mut repos = Repos::new(&setup);
+    let digest = counting_root(&setup, &mut repos);
+    let before = fs::read(approval(&setup, &digest)).unwrap();
+    fs::remove_file(depends_home(&setup, &digest).join(".complete")).unwrap();
+    fs::write(copy(&setup, &digest).join("junk"), "junk").unwrap();
+    // A session running the copy holds its marker shared.
+    let marker = ready(&setup, &digest);
+    let session = File::options()
+        .read(true)
+        .write(true)
+        .open(&marker)
+        .unwrap();
+    session.lock_shared().unwrap();
+    let clock = FakeClock::new();
+    let (found, _) = item(&setup, &clock);
+    let err = fetching_store(&setup, &repos, &clock)
+        .approve(&found, &digest)
+        .unwrap_err();
+    assert!(matches!(err, Error::Busy), "{err}");
+    // Nothing changed: no byte, no inode, no approval, no completion.
+    assert_eq!(
+        fs::read_to_string(copy(&setup, &digest).join("junk")).unwrap(),
+        "junk"
+    );
+    assert_eq!(counter(&setup, &digest), "x\n");
+    assert_eq!(fs::read(approval(&setup, &digest)).unwrap(), before);
+    assert!(!depends_home(&setup, &digest).join(".complete").exists());
+    drop(session);
+    assert_eq!(approve(&setup, &repos), digest);
+    assert_eq!(counter(&setup, &digest), "x\n");
+    assert!(!copy(&setup, &digest).join("junk").exists());
+    assert!(depends_home(&setup, &digest).join(".complete").is_file());
+}
+
+#[test]
+fn a_legacy_copy_without_dependencies_is_kept_without_fetching() {
+    let setup = Setup::new();
+    let root = "fiber.test/root";
+    declare(&setup, &installing(root, &[], "echo x >> counter"));
+    let clock = FakeClock::new();
+    // No fetching configured at all: a copy without dependencies never
+    // needs it, legacy or not.
+    let plain = Store::new(&setup.home(), &project(), Arc::clone(&clock) as Arc<_>);
+    let (found, digest) = item(&setup, &clock);
+    plain.approve(&found, &digest).unwrap();
+    fs::write(copy(&setup, &digest).join("junk"), "junk").unwrap();
+    let clock = FakeClock::new();
+    let (found, _) = item(&setup, &clock);
+    plain.approve(&found, &digest).unwrap();
+    assert_eq!(
+        fs::read_to_string(copy(&setup, &digest).join("junk")).unwrap(),
+        "junk"
+    );
+    assert_eq!(counter(&setup, &digest), "x\n");
+}
+
+/// A file outside Fiber home with sentinel bytes, and its directory.
+fn outside(root: &Path) -> (PathBuf, PathBuf) {
+    let dir = root.join("outside");
+    fs::create_dir_all(&dir).unwrap();
+    let target = dir.join("target.txt");
+    fs::write(&target, "untouched\n").unwrap();
+    (dir, target)
+}
+
+fn outside_names(dir: &Path) -> Vec<String> {
+    let mut names: Vec<String> = fs::read_dir(dir)
+        .unwrap()
+        .map(|e| e.unwrap().file_name().to_string_lossy().into_owned())
+        .collect();
+    names.sort();
+    names
+}
+
+#[test]
+fn a_link_where_the_pinned_root_goes_fails_and_writes_nothing_outside() {
+    let setup = Setup::new();
+    let (outside_dir, target) = outside(&setup.root());
+    let pinned = setup.home().join("pinned");
+    std::os::unix::fs::symlink(&outside_dir, &pinned).unwrap();
+    let root = "fiber.test/root";
+    declare(&setup, &manifest(root));
+    let clock = FakeClock::new();
+    let plain = Store::new(&setup.home(), &project(), Arc::clone(&clock) as Arc<_>);
+    let (found, digest) = item(&setup, &clock);
+    let err = plain.approve(&found, &digest).unwrap_err();
+    assert!(matches!(err, Error::Pin { .. }), "{err}");
+    assert!(err.to_string().contains("pinned"), "{err}");
+    assert_eq!(outside_names(&outside_dir), ["target.txt"]);
+    assert_eq!(fs::read_to_string(&target).unwrap(), "untouched\n");
+    assert!(!copy(&setup, &digest).exists());
+}
+
+#[test]
+fn a_file_where_the_pinned_root_goes_fails_naming_it() {
+    let setup = Setup::new();
+    let pinned = setup.home().join("pinned");
+    fs::create_dir_all(setup.home()).unwrap();
+    fs::write(&pinned, "stray\n").unwrap();
+    let root = "fiber.test/root";
+    declare(&setup, &manifest(root));
+    let clock = FakeClock::new();
+    let plain = Store::new(&setup.home(), &project(), Arc::clone(&clock) as Arc<_>);
+    let (found, digest) = item(&setup, &clock);
+    let err = plain.approve(&found, &digest).unwrap_err();
+    assert!(matches!(err, Error::Pin { .. }), "{err}");
+    assert!(err.to_string().contains("pinned"), "{err}");
+    assert_eq!(fs::read_to_string(&pinned).unwrap(), "stray\n");
+    assert!(!copy(&setup, &digest).exists());
+}
+
+#[test]
+fn a_link_where_the_ready_marker_goes_is_refused_before_opening() {
+    let setup = Setup::new();
+    let (_outside_dir, target) = outside(&setup.root());
+    let root = "fiber.test/root";
+    declare(&setup, &manifest(root));
+    let clock = FakeClock::new();
+    let plain = Store::new(&setup.home(), &project(), Arc::clone(&clock) as Arc<_>);
+    let (found, digest) = item(&setup, &clock);
+    // A stale marker that is a link out of home: refused, never opened.
+    fs::create_dir_all(setup.home().join("pinned")).unwrap();
+    std::os::unix::fs::symlink(&target, ready(&setup, &digest)).unwrap();
+    let err = plain.approve(&found, &digest).unwrap_err();
+    assert!(matches!(err, Error::Pin { .. }), "{err}");
+    assert!(err.to_string().contains(".ready"), "{err}");
+    assert!(!err.to_string().contains("untouched"), "{err}");
+    assert_eq!(fs::read_to_string(&target).unwrap(), "untouched\n");
+    assert!(!copy(&setup, &digest).exists());
+}
+
+#[test]
+fn a_missing_pinned_root_and_a_home_behind_a_link_both_build() {
+    let setup = Setup::new();
+    assert!(!setup.home().join("pinned").exists());
+    let root = "fiber.test/root";
+    declare(&setup, &manifest(root));
+    let clock = FakeClock::new();
+    let plain = Store::new(&setup.home(), &project(), Arc::clone(&clock) as Arc<_>);
+    let (found, digest) = item(&setup, &clock);
+    plain.approve(&found, &digest).unwrap();
+    assert!(copy(&setup, &digest).is_dir());
+    // The same home reached through a link builds too: the link itself is
+    // trusted, everything under it is checked.
+    let alias = setup.root().join("alias-home");
+    std::os::unix::fs::symlink(setup.home(), &alias).unwrap();
+    declare(&setup, &installing(root, &[], "echo y >> counter"));
+    let clock = FakeClock::new();
+    let aliased = Store::new(&alias, &project(), Arc::clone(&clock) as Arc<_>);
+    let (found, second) = item(&setup, &clock);
+    aliased.approve(&found, &second).unwrap();
+    assert!(copy(&setup, &second).is_dir());
+}
+
+#[test]
+fn an_install_step_that_links_the_dependency_home_away_leaves_the_target_alone() {
+    let setup = Setup::new();
+    let mut repos = Repos::new(&setup);
+    let helper = "example.com/acme/helper";
+    repos.tag(helper, "", "v1.0.0", &manifest(helper), &[]);
+    let (outside_dir, target) = outside(&setup.root());
+    let root = "fiber.test/root";
+    declare(
+        &setup,
+        &installing(
+            root,
+            &[(helper, "1.0")],
+            &format!(
+                "rm -rf .fiber-depends && ln -s '{}' .fiber-depends",
+                target.display().to_string().replace('\'', "'\\''")
+            ),
+        ),
+    );
+    let clock = FakeClock::new();
+    let (found, digest) = item(&setup, &clock);
+    let err = fetching_store(&setup, &repos, &clock)
+        .approve(&found, &digest)
+        .unwrap_err();
+    assert!(matches!(err, Error::Pin { .. }), "{err}");
+    assert!(err.to_string().contains(".fiber-depends"), "{err}");
+    assert!(!err.to_string().contains("untouched"), "{err}");
+    // The link itself goes with the unfinished copy; the target is
+    // byte-identical and holds no copied files.
+    assert!(!copy(&setup, &digest).exists());
+    assert!(!ready(&setup, &digest).exists());
+    assert!(!approval(&setup, &digest).exists());
+    assert_eq!(fs::read_to_string(&target).unwrap(), "untouched\n");
+    assert_eq!(outside_names(&outside_dir), ["target.txt"]);
 }
