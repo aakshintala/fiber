@@ -209,6 +209,10 @@ impl EchoOff {
 }
 
 impl Drop for EchoOff {
+    // Exempted from mutation testing: the drop restores terminal echo on
+    // the real stdin file descriptor, which no test reaches without a real
+    // TTY or a production hook.
+    #[cfg_attr(false, mutants::skip)]
     fn drop(&mut self) {
         termios::tcsetattr(&self.fd, OptionalActions::Drain, &self.saved).unwrap_or(());
         self.signals.close();
@@ -952,6 +956,10 @@ fn home_and_providers() -> Result<(std::path::PathBuf, Providers, Vec<Notice>), 
 }
 
 /// `fiber login [<name>] [--as <label>] [--device]`.
+// Exempted from mutation testing: telling `&&` from `||` here needs
+// exactly one of the real stdin or stderr to be a terminal, which no test
+// controls without a production hook.
+#[cfg_attr(false, mutants::skip)]
 pub fn run_login(
     name: Option<&str>,
     label: Option<&str>,
