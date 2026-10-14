@@ -164,6 +164,23 @@ fn a_run_flag_for_the_whole_settings_object_is_a_usage_error() {
 }
 
 #[test]
+fn a_settings_directory_that_cannot_be_listed_is_io_failed() {
+    let setup = Setup::new();
+    // A file where the home layer's `config/` should be: snapshotting the
+    // layer's settings fails with more than "not found", so the load is
+    // an error rather than empty settings. A missing directory still loads
+    // as empty settings, as every load without settings files shows.
+    std::fs::write(setup.home().join("config"), b"not a directory").unwrap();
+    let e = setup.load(&[]).unwrap_err();
+    assert_eq!(e.code(), ErrorCode::IoFailed);
+    assert!(
+        e.to_string()
+            .starts_with(&setup.home().join("config").display().to_string()),
+        "{e}"
+    );
+}
+
+#[test]
 fn a_repository_settings_file_that_is_a_symbolic_link_is_refused() {
     let setup = Setup::new();
     let outside = setup.root().join("private.json");
