@@ -967,6 +967,29 @@ struct Gated {
     leader: Option<std::process::Child>,
 }
 
+/// Owns the gated group leader between its spawn and `Gated` taking it:
+/// dropping it SIGKILLs the group and reaps the leader, so a panic before
+/// `Gated` owns the leader (notably a `Watchdog::group` panic) cannot leak
+/// the `sleep 300`. Disarmed by taking the leader out once `Gated` owns it.
+/// Never panics, so dropping while unwinding cannot abort.
+struct LeaderOwner {
+    group: u32,
+    leader: Option<std::process::Child>,
+}
+
+impl Drop for LeaderOwner {
+    fn drop(&mut self) {
+        if let Some(mut leader) = self.leader.take() {
+            match fakes::kill_group(self.group, "KILL") {
+                Ok(_) | Err(_) => {}
+            }
+            match leader.wait() {
+                Ok(_) | Err(_) => {}
+            }
+        }
+    }
+}
+
 impl Gated {
     fn run(timeout: Duration) -> Self {
         let (slept_tx, slept) = mpsc::channel();
@@ -980,6 +1003,10 @@ impl Gated {
             .spawn()
             .expect("the gated group leader started");
         let group = leader.id();
+        let mut owner = LeaderOwner {
+            group,
+            leader: Some(leader),
+        };
         let watchdog = fakes::Watchdog::group(group);
         let worker_clock = Arc::clone(&clock);
         let start = clock.now();
@@ -1001,7 +1028,7 @@ impl Gated {
             start,
             group,
             watchdog: Some(watchdog),
-            leader: Some(leader),
+            leader: owner.leader.take(),
         }
     }
 
