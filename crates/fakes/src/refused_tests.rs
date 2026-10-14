@@ -1,7 +1,7 @@
 use std::io::ErrorKind;
 use std::net::{Ipv4Addr, TcpListener, TcpStream};
 
-use super::{ADDR, PORT};
+use super::{ADDR, PORT, url};
 
 #[test]
 fn a_connect_to_it_is_refused() {
@@ -19,4 +19,10 @@ fn a_bind_of_port_zero_never_draws_it() {
             .iter()
             .all(|listener| listener.local_addr().unwrap().port() != PORT)
     );
+}
+
+/// The base URL names the refused loopback address exactly.
+#[test]
+fn url_is_the_http_base_of_the_refused_address() {
+    assert_eq!(url(), format!("http://{ADDR}"));
 }
