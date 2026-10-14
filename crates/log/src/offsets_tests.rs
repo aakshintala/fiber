@@ -1428,3 +1428,48 @@ fn bounded_scan_ends_short_when_exhausted_exactly_on_the_budget() {
         Some(std::io::ErrorKind::UnexpectedEof)
     );
 }
+
+/// A resident window over a cut log fails in the read, not the resolve:
+/// the window over lines 0..3 ends before the table's last line, so every
+/// start it needs is checkpointed and sizing takes no file I/O. A cut
+/// inside it leaves the resolve untouched and trips only the read's
+/// short-read guard, which a `true` mutant would let through as success.
+#[test]
+fn a_resident_window_over_a_cut_log_fails_as_a_short_read() {
+    let (dir, offsets, written) = written("resident-cut", &[10; 6]);
+    let session = dir.path().join("s_1");
+    let whole = std::fs::read(session.join("events.jsonl")).unwrap();
+    let window = offsets.resolve(0, 3, u64::MAX, u64::MAX).unwrap().unwrap();
+    assert_eq!(window.scanned, 0);
+    assert!(window.more);
+    let (second, second_len) = line_at(&whole, 1);
+    // Inside line 1, at its newline, and at the start of line 2: the
+    // whole lines before each cut, then the short read.
+    for (at, expected) in [
+        (second + second_len / 2, &written[..1]),
+        (second + second_len, &written[..1]),
+        (second + second_len + 1, &written[..2]),
+    ] {
+        std::fs::write(session.join("events.jsonl"), &whole).unwrap();
+        let _cut = cut(&session, at);
+        let page = offsets.page(0, 3);
+        assert_eq!(seqs(&page.lines), seqs(expected), "cut at {at}");
+        let After::Failed(Error::Io { source, .. }) = page.after else {
+            panic!("a resident page over a log cut short fails");
+        };
+        assert_eq!(
+            source.kind(),
+            std::io::ErrorKind::UnexpectedEof,
+            "cut at {at}"
+        );
+        let error = offsets.range(0, 3).unwrap_err();
+        let Error::Io { source, .. } = error else {
+            panic!("a resident range over a log cut short fails");
+        };
+        assert_eq!(
+            source.kind(),
+            std::io::ErrorKind::UnexpectedEof,
+            "cut at {at}"
+        );
+    }
+}
