@@ -1150,6 +1150,40 @@ fn cancel_passes_a_blocked_spawn_and_the_late_child_is_killed() {
     late.stand_down(DEADLINE);
 }
 
+/// Drives a settle to completion on the fake clock and returns its
+/// answer. The first advance follows the settle's confirmed first park,
+/// exact on the unmoved clock, and every later advance follows a
+/// confirmed re-park. Completion and every acknowledgement share the
+/// drive's one deadline: each acknowledgement waits only a poll pause of
+/// it, and an acknowledgement's expiry re-checks completion and awaits
+/// the late park under what is left, never stopping the drive while time
+/// remains. Fails the test when the drive's deadline runs out first.
+#[track_caller]
+fn drive_settle_to_completion(
+    clock: &Arc<FakeClock>,
+    finished: &mpsc::Receiver<bool>,
+    drive: &Deadline,
+) -> bool {
+    let poll = clock.origin() + GROUP_POLL;
+    assert!(
+        clock.await_parked(poll, drive.left()),
+        "the settle parked at its poll"
+    );
+    let mut mark = clock.advance_marked(Duration::from_millis(50));
+    loop {
+        if let Ok(answer) = finished.try_recv() {
+            return answer;
+        }
+        if drive.left().is_zero() {
+            break;
+        }
+        if clock.await_any_parked_since(&mark, drive.left().min(PARK_PAUSE)) {
+            mark = clock.advance_marked(Duration::from_millis(50));
+        }
+    }
+    drive.recv(finished).expect("the settle")
+}
+
 /// A cancelled group with a live member is settled by killing it, not by
 /// counting spawns: the command below blocks in `sleep` with nothing in
 /// flight, so a count-only settle answers `true` while the group lives.
@@ -1191,39 +1225,8 @@ fn settle_rekills_a_cancelled_survivor_before_answering_true() {
     // Set directly: `cancel` would kill the group and hide the survivor.
     reads.lock().cancelled = true;
     let settled = settle_on_thread(&reads, &clock, doors::SHUTDOWN_BOUND);
-    // Completion or an acknowledged park decides, never a real-time wait:
-    // the fix kills and rechecks, so each advance follows a confirmed
-    // park. The first park is exact on the unmoved clock; later ones
-    // follow each advance. Completion and every ack share one deadline:
-    // each ack waits only a poll pause of it, and an ack's expiry
-    // re-checks completion and awaits the late park under what is left,
-    // never stopping the drive while time remains.
     let drive = Deadline::after(DEADLINE);
-    let poll = clock.origin() + GROUP_POLL;
-    let mut mark: Option<_> = None;
-    let mut answer = None;
-    loop {
-        if let Ok(got) = settled.try_recv() {
-            answer = Some(got);
-            break;
-        }
-        if drive.left().is_zero() {
-            break;
-        }
-        match &mark {
-            None => {
-                if clock.await_parked(poll, drive.left().min(PARK_PAUSE)) {
-                    mark = Some(clock.advance_marked(Duration::from_millis(50)));
-                }
-            }
-            Some(parked) => {
-                if clock.await_any_parked_since(parked, drive.left().min(PARK_PAUSE)) {
-                    mark = Some(clock.advance_marked(Duration::from_millis(50)));
-                }
-            }
-        }
-    }
-    let answer = answer.unwrap_or_else(|| drive.recv(&settled).expect("the settle"));
+    let answer = drive_settle_to_completion(&clock, &settled, &drive);
     let lives = fakes::kill_group(pgid, "0").unwrap_or(false);
     // Guarded cleanup before the assertions: the survivor must not
     // outlive the test either way.
@@ -1380,36 +1383,12 @@ fn settle_drains_two_groups_together_within_one_bound() {
     }
     let finished = cancel_and_settle_on_thread(&reads, &clock, doors::SHUTDOWN_BOUND);
     // The cancel's kill and the settle's first pass each deliver to the
-    // scripted group; it parks at its first poll, exact on the unmoved
-    // clock. Later passes find it already retired and cost no probe, so
-    // the drive below stays exact however slowly the real group dies.
-    // The first advance follows the confirmed park above, and every later
-    // advance follows a confirmed re-park. Completion and every ack share
-    // one deadline: each ack waits only a poll pause of it, and an ack's
-    // expiry re-checks completion and awaits the late park under what is
-    // left, never stopping the drive while time remains.
+    // scripted group; the shared drive below advances past each confirmed
+    // park, so the script schedules its SRCH observation on the second
+    // pass, whatever wall time the real group's death takes.
     let drive = Deadline::after(DEADLINE);
-    let poll = clock.origin() + GROUP_POLL;
     assert!(
-        clock.await_parked(poll, drive.left()),
-        "the settle parked at its poll"
-    );
-    let mut mark = clock.advance_marked(Duration::from_millis(50));
-    let mut answer = None;
-    loop {
-        if let Ok(got) = finished.try_recv() {
-            answer = Some(got);
-            break;
-        }
-        if drive.left().is_zero() {
-            break;
-        }
-        if clock.await_any_parked_since(&mark, drive.left().min(PARK_PAUSE)) {
-            mark = clock.advance_marked(Duration::from_millis(50));
-        }
-    }
-    assert!(
-        answer.unwrap_or_else(|| drive.recv(&finished).expect("the settle")),
+        drive_settle_to_completion(&clock, &finished, &drive),
         "both groups drain within the one bound"
     );
     assert_eq!(reads.scripted_sends(), 2, "one send per pass before SRCH");
