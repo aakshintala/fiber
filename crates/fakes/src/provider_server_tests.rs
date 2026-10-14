@@ -869,6 +869,17 @@ impl Clock for CountingClock {
     }
 }
 
+/// The first offset where `recorded` and `sent` differ, or `None` when
+/// their shared prefix matches: a large-body assertion reports the length
+/// and this offset instead of printing both payloads whole
+/// (`docs/testing.md`, "What a test asserts").
+fn first_diff(recorded: &[u8], sent: &[u8]) -> Option<usize> {
+    recorded
+        .iter()
+        .zip(sent.iter())
+        .position(|(recorded, sent)| recorded != sent)
+}
+
 // One bench-shaped POST: a large fixed-length body on a fresh connection,
 // answered at once, like each of a busy turn's model calls over its own
 // `connection: close` connection. The reply completes with the body
@@ -897,13 +908,16 @@ fn a_large_fixed_body_costs_one_bound_check_per_fill_not_per_byte() {
         )
         .unwrap();
     stream.write_all(&body).unwrap();
-    // The request ends here: a reader that reads past the body sees the
-    // close instead of an answer, so an over-read fails fast below.
-    stream.shutdown(Shutdown::Write).unwrap();
+    // The write side stays open until the reply completes, like the
+    // bench's client on its fresh connection per call: a reader that
+    // reads past the body waits on the peer instead of answering, so an
+    // over-read fails below instead of ending at the reply.
     let mut response = Vec::new();
     stream
         .read_to_end(&mut response)
         .unwrap_or_else(|e| panic!("the scripted reply arrives within {READ_WITHIN:?}: {e}"));
+    // The reply completed: only now does the client close.
+    drop(stream);
     let text = String::from_utf8_lossy(&response);
     assert!(text.starts_with("HTTP/1.1 200"), "{text}");
     assert!(response.ends_with(b"ok"), "{text}");
@@ -915,7 +929,16 @@ fn a_large_fixed_body_costs_one_bound_check_per_fill_not_per_byte() {
     let requests = server.requests();
     assert_eq!(requests.len(), 1);
     assert_eq!(requests[0].body_len, BODY_LEN);
-    assert_eq!(requests[0].body, body, "the recorded body is byte-exact");
+    assert_eq!(
+        requests[0].body.len(),
+        body.len(),
+        "the recorded body has the sent length"
+    );
+    assert_eq!(
+        first_diff(&requests[0].body, &body),
+        None,
+        "the recorded body is byte-exact"
+    );
     // The requests lock synchronises with the serving thread, so every
     // clock read the request cost is counted here.
     let reads = clock.reads();
@@ -958,8 +981,9 @@ fn a_fixed_body_followed_by_pipelined_bytes_keeps_only_its_length() {
     // do the tail and the pipelined bytes arrive, together. Earlier
     // phases (the accept, the head) announce first and are passed over;
     // every receive is bounded, so a missing body wait fails, never hangs.
+    let deadline = Deadline::after(READ_WITHIN);
     loop {
-        let ack = Deadline::after(READ_WITHIN).recv_or_fail(&acks, "the body read's wait");
+        let ack = deadline.recv_or_fail(&acks, "the body read's wait");
         if ack.phase == "to read the fixed body" {
             break;
         }
@@ -988,7 +1012,13 @@ fn a_fixed_body_followed_by_pipelined_bytes_keeps_only_its_length() {
     assert_eq!(requests.len(), 1);
     assert_eq!(requests[0].body_len, BODY_LEN);
     assert_eq!(
-        requests[0].body, body,
+        requests[0].body.len(),
+        body.len(),
+        "the recorded body has the sent length"
+    );
+    assert_eq!(
+        first_diff(&requests[0].body, &body),
+        None,
         "the recorded body holds its declared bytes, not the pipelined ones"
     );
 }

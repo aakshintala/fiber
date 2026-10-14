@@ -205,13 +205,12 @@ impl Connection {
     }
 
     /// Moves up to `max` buffered bytes into `out` without touching the
-    /// socket: how many were moved. A bulk drain, so a fixed-length body
-    /// pays one bound check per fill instead of one per byte; the caller
-    /// checks the bound before consuming buffered bytes, as for one byte.
-    pub(crate) fn drain_ahead(&mut self, out: &mut Vec<u8>, max: usize) -> usize {
+    /// socket. A bulk drain, so a fixed-length body pays one bound check
+    /// per fill instead of one per byte; the caller checks the bound
+    /// before consuming buffered bytes, as for one byte.
+    pub(crate) fn drain_ahead(&mut self, out: &mut Vec<u8>, max: usize) {
         let take = self.ahead.len().min(max);
         out.extend(self.ahead.drain(..take));
-        take
     }
 
     /// The stream, its bytes read past the head, and the shared state:
