@@ -895,29 +895,31 @@ fn settle_rekills_a_cancelled_survivor_before_answering_true() {
         }
         Err(_) => {
             // Parked on the clock: the fix kills and rechecks. Drive
-            // rechecks until it answers: each advance wakes one more
-            // pass, and an ack's expiry only rechecks the answer, so an
-            // answer racing the ack never hangs here. The first park is
+            // rechecks until it answers: each advance follows a confirmed
+            // park, and an ack's expiry ends the driving — the answer is
+            // awaited instead, never another advance. The first park is
             // exact on the unmoved clock; later ones follow each advance.
+            // Completion and every ack share one deadline.
+            let drive = Deadline::after(DEADLINE);
             let poll = clock.origin() + GROUP_POLL;
             assert!(
-                clock.await_parked(poll, DEADLINE),
+                clock.await_parked(poll, drive.left()),
                 "the settle parked at its poll"
             );
             let mut answer = None;
             for _ in 0..130 {
-                let mark = clock.advance_marked(Duration::from_millis(50));
-                let _ = clock.await_any_parked_since(&mark, Duration::from_millis(200));
                 if let Ok(got) = settled.try_recv() {
                     answer = Some(got);
                     break;
                 }
+                let mark = clock.advance_marked(Duration::from_millis(50));
+                if clock.await_any_parked_since(&mark, drive.left()) {
+                    continue;
+                }
+                answer = Some(drive.recv(&settled).expect("the settle"));
+                break;
             }
-            let answer = answer.unwrap_or_else(|| {
-                Deadline::after(DEADLINE)
-                    .recv(&settled)
-                    .expect("the settle")
-            });
+            let answer = answer.unwrap_or_else(|| drive.recv(&settled).expect("the settle"));
             let lives = fakes::kill_group(pgid, "0").unwrap_or(false);
             match fakes::kill_group(pgid, "KILL") {
                 Ok(_) | Err(_) => {}
@@ -1077,26 +1079,30 @@ fn settle_drains_two_groups_together_within_one_bound() {
     // scripted group; it parks at its first poll, exact on the unmoved
     // clock. Later passes find it already retired and cost no probe, so
     // the drive below stays exact however slowly the real group dies.
+    // Each advance follows a confirmed park; an ack's expiry ends the
+    // driving and the answer is awaited instead. Completion and every
+    // ack share one deadline.
+    let drive = Deadline::after(DEADLINE);
     let poll = clock.origin() + GROUP_POLL;
     assert!(
-        clock.await_parked(poll, DEADLINE),
+        clock.await_parked(poll, drive.left()),
         "the settle parked at its poll"
     );
     let mut answer = None;
     for _ in 0..130 {
-        let mark = clock.advance_marked(Duration::from_millis(50));
-        let _ = clock.await_any_parked_since(&mark, Duration::from_millis(200));
         if let Ok(got) = finished.try_recv() {
             answer = Some(got);
             break;
         }
+        let mark = clock.advance_marked(Duration::from_millis(50));
+        if clock.await_any_parked_since(&mark, drive.left()) {
+            continue;
+        }
+        answer = Some(drive.recv(&finished).expect("the settle"));
+        break;
     }
     assert!(
-        answer.unwrap_or_else(|| {
-            Deadline::after(DEADLINE)
-                .recv(&finished)
-                .expect("the settle")
-        }),
+        answer.unwrap_or_else(|| drive.recv(&finished).expect("the settle")),
         "both groups drain within the one bound"
     );
     assert_eq!(reads.scripted_sends(), 2, "one send per pass before SRCH");
