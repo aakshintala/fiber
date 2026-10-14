@@ -490,7 +490,15 @@ fn serve_once(
     recorded: mpsc::Sender<ParsedRequest>,
     answer: impl FnOnce(Connection) + Send + 'static,
 ) -> (HttpServer, SocketAddr) {
-    let clock = FakeClock::new();
+    serve_once_on(FakeClock::new(), recorded, answer)
+}
+
+/// `serve_once`, on the test's clock so it can drive a drain deadline.
+fn serve_once_on(
+    clock: Arc<FakeClock>,
+    recorded: mpsc::Sender<ParsedRequest>,
+    answer: impl FnOnce(Connection) + Send + 'static,
+) -> (HttpServer, SocketAddr) {
     let server = HttpServer::bind(clock as Arc<dyn Clock>, ten_seconds()).expect("the core binds");
     let addr = server.addr();
     let serving = server.clone();
@@ -530,6 +538,135 @@ fn full_reply_preserves_scripted_headers_and_bytes() {
     let request = Deadline::after(OP).recv_or_fail(&recorded_rx, "the recorded request");
     assert_eq!(request.target, "/v1");
     assert!(server.shutdown(), "shutdown reaps the serving threads");
+}
+
+/// Starts a reply drain while the peer keeps its write side open. The
+/// acknowledgment proves the drain is waiting on its injected deadline.
+fn start_reply_drain(
+    within: Duration,
+) -> (
+    Arc<FakeClock>,
+    HttpServer,
+    TcpStream,
+    mpsc::Receiver<ParsedRequest>,
+    mpsc::Receiver<()>,
+    WaitAck,
+) {
+    use std::io::{Read, Write};
+
+    let clock = fake_clock();
+    let (recorded_tx, recorded_rx) = mpsc::channel();
+    let (drained_tx, drained_rx) = mpsc::channel();
+    let (server, addr) = serve_once_on(clock.clone(), recorded_tx, move |mut conn| {
+        assert!(conn.write_all(b"reply", "to write the test reply"));
+        conn.shutdown_write_and_drain(within);
+        drained_tx.send(()).expect("the test waits for the drain");
+    });
+    let acks = server.test_acknowledgments();
+    let mut client = TcpStream::connect(addr).expect("the test connects");
+    client
+        .set_read_timeout(Some(OP))
+        .expect("the test bounds reads");
+    client
+        .write_all(b"GET /v1 HTTP/1.1\r\nHost: fake\r\n\r\n")
+        .expect("the request writes");
+    let mut reply = [0; 5];
+    client.read_exact(&mut reply).expect("the reply reads");
+    assert_eq!(reply, *b"reply", "the reply arrives before the drain");
+    let mut end = [0; 1];
+    assert_eq!(client.read(&mut end).expect("the write half closes"), 0);
+
+    let deadline = Deadline::after(OP);
+    let ack = loop {
+        let ack = deadline.recv_or_fail(&acks, "the reply drain's clock wait");
+        if ack.phase == "to drain the full reply" {
+            break ack;
+        }
+    };
+    assert!(
+        clock.await_thread_parked(ack.thread, ack.until, OP),
+        "the drain waits on its injected-clock bound"
+    );
+    (clock, server, client, recorded_rx, drained_rx, ack)
+}
+
+/// The injected drain bound expires below, at and above its exact edge.
+/// The production value is pinned, and each edge is driven only after the
+/// drain announces its clock wait.
+#[test]
+fn reply_drain_bound_expires_at_the_exact_edge() {
+    let bound = Duration::from_millis(100);
+    assert_eq!(
+        crate::http_server::connection::REPLY_DRAIN_WITHIN,
+        bound,
+        "the production drain bound is pinned"
+    );
+
+    let (clock, server, _client, requests, drained, ack) = start_reply_drain(bound);
+    let mark = clock.advance_marked(bound - Duration::from_nanos(1));
+    assert!(
+        clock.await_parked_since(&mark, ack.until, OP),
+        "one tick below the bound the drain is still waiting"
+    );
+    assert!(
+        Deadline::after(QUIET).recv(&drained).is_err(),
+        "one tick below the bound the reply drain has not ended"
+    );
+    clock.advance(Duration::from_nanos(1));
+    Deadline::after(OP).recv_or_fail(&drained, "the drain at its bound");
+    let request = Deadline::after(OP).recv_or_fail(&requests, "the recorded request");
+    assert_eq!(request.target, "/v1");
+    assert!(server.shutdown(), "shutdown reaps the serving threads");
+
+    let (clock, server, _client, requests, drained, _ack) = start_reply_drain(bound);
+    clock.advance(bound);
+    Deadline::after(OP).recv_or_fail(&drained, "the drain at its bound");
+    let request = Deadline::after(OP).recv_or_fail(&requests, "the recorded request");
+    assert_eq!(request.target, "/v1");
+    assert!(server.shutdown(), "shutdown reaps the serving threads");
+
+    let (clock, server, _client, requests, drained, _ack) = start_reply_drain(bound);
+    clock.advance(bound + Duration::from_nanos(1));
+    Deadline::after(OP).recv_or_fail(&drained, "the drain past its bound");
+    let request = Deadline::after(OP).recv_or_fail(&requests, "the recorded request");
+    assert_eq!(request.target, "/v1");
+    assert!(server.shutdown(), "shutdown reaps the serving threads");
+}
+
+/// Bytes arriving during the drain do not renew its one operation budget.
+#[test]
+fn reply_drain_progress_does_not_restart_its_bound() {
+    const SHORT: Duration = Duration::from_millis(50);
+    let (clock, server, mut client, requests, drained, ack) = start_reply_drain(SHORT);
+    client.write_all(b"x").expect("the pipelined byte writes");
+    let mark = clock.advance_marked(Duration::from_millis(1));
+    assert!(
+        clock.await_parked_since(&mark, ack.until, OP),
+        "after consuming the byte, the drain waits again on the same bound"
+    );
+    clock.advance(SHORT - Duration::from_millis(1));
+    Deadline::after(OP).recv_or_fail(&drained, "the unchanged drain bound");
+    let request = Deadline::after(OP).recv_or_fail(&requests, "the recorded request");
+    assert_eq!(request.target, "/v1");
+    assert!(server.shutdown(), "shutdown reaps the serving threads");
+}
+
+/// Server shutdown wakes a drain parked on a much longer injected bound.
+#[test]
+fn shutdown_ends_a_reply_drain_with_an_open_peer() {
+    let (clock, server, _client, requests, drained, ack) =
+        start_reply_drain(Duration::from_secs(30));
+    assert!(
+        clock.await_thread_parked(ack.thread, ack.until, OP),
+        "the reply drain is waiting before shutdown"
+    );
+    assert!(
+        server.shutdown(),
+        "shutdown ends and reaps the active drain"
+    );
+    Deadline::after(OP).recv_or_fail(&drained, "the shutdown-stopped drain");
+    let request = Deadline::after(OP).recv_or_fail(&requests, "the recorded request");
+    assert_eq!(request.target, "/v1");
 }
 
 /// A released pause before a full reply still sends every scripted

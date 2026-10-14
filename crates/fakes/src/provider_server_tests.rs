@@ -1022,16 +1022,15 @@ fn a_large_fixed_body_costs_one_bound_check_per_fill_not_per_byte() {
 }
 
 // A fixed body followed by pipelined bytes keeps only its declared
-// length. The post-reply seam first proves the server's nonblocking drain
-// finished, then waits for a peek that proves later bytes reached the
-// socket while leaving them unread. The close therefore resets the reply
-// read every run on macOS, without relying on scheduling or elapsed time.
+// length. The post-reply seam lets the test send bytes after the reply is
+// complete, then waits for a peek that proves they reached the socket while
+// leaving them unread for the close path. No scheduling or elapsed-time
+// assumption decides the result.
 #[test]
 fn a_fixed_body_followed_by_pipelined_bytes_keeps_only_its_length() {
     const BODY_LEN: usize = 20_000;
     let clock = FakeClock::new();
-    let server =
-        ProviderServer::start_on(clock, vec![Response::status(200, "ok")]).unwrap();
+    let server = ProviderServer::start_on(clock, vec![Response::status(200, "ok")]).unwrap();
     let (pause, control) = Pause::new();
     Connection::set_test_post_reply_pause(pause);
     let addr = server.addr;
@@ -1049,11 +1048,11 @@ fn a_fixed_body_followed_by_pipelined_bytes_keeps_only_its_length() {
     stream.write_all(&body).unwrap();
     assert!(
         server.await_requests(1, READ_WITHIN),
-        "the request is recorded after the request-side drain"
+        "the request is recorded"
     );
 
     let deadline = Deadline::after(READ_WITHIN);
-    control.wait_hit(&deadline, "the post-reply seam after its drain");
+    control.wait_hit(&deadline, "the post-reply seam");
     stream.write_all(pipelined).unwrap();
     stream.shutdown(Shutdown::Write).unwrap();
     control.wait_hit(&deadline, "the server's peek of pipelined bytes");
@@ -1188,12 +1187,12 @@ fn busy_shaped_posts_sleep_only_when_idle() {
             "the whole head arrives first"
         );
         stream.write_all(body).unwrap();
+        stream.shutdown(Shutdown::Write).unwrap();
         gate.pass(BODY);
         let mut passed = 2u64;
         let response = thread::scope(|scope| {
-            // The write side stays open until the reply completes: the
-            // server closes, so the read ends at the reply instead of its
-            // bound.
+            // The request's write half is closed after the body, so the
+            // reply drain sees EOF and the read ends at the reply.
             let reader = scope.spawn(|| {
                 let mut response = Vec::new();
                 stream.read_to_end(&mut response).unwrap_or_else(|e| {
