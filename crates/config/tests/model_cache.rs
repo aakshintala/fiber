@@ -77,6 +77,19 @@ fn set_mtime(home: &std::path::Path, mtime: std::time::SystemTime) {
 }
 
 #[test]
+fn a_cache_age_that_cannot_be_read_is_io_failed() {
+    let setup = Setup::new();
+    let home = setup.home();
+    // A file where `cache/models/` should be: reading the list's metadata
+    // fails with more than "not found", so its age is an error, not none.
+    std::fs::create_dir_all(home.join("cache")).unwrap();
+    std::fs::write(home.join("cache/models"), b"not a directory").unwrap();
+    let now = fakes::clock::FakeClock::new().wall();
+    let err = config::model_cache_age(&home, "acme", now).unwrap_err();
+    assert_eq!(err.code(), contract::ErrorCode::IoFailed);
+}
+
+#[test]
 fn a_missing_list_has_no_age() {
     let setup = Setup::new();
     let home = setup.home();
@@ -123,11 +136,35 @@ fn cached_model_lists_names_each_json_stem_sorted() {
 }
 
 #[test]
+fn a_cache_directory_that_cannot_be_listed_is_io_failed() {
+    let setup = Setup::new();
+    let home = setup.home();
+    // A file where `cache/models/` should be: listing it fails with more
+    // than "not found", so the lists are an error, not empty.
+    std::fs::create_dir_all(home.join("cache")).unwrap();
+    std::fs::write(home.join("cache/models"), b"not a directory").unwrap();
+    let err = config::cached_model_lists(&home).unwrap_err();
+    assert_eq!(err.code(), contract::ErrorCode::IoFailed);
+}
+
+#[test]
 fn a_missing_cache_directory_lists_none() {
     let setup = Setup::new();
     assert_eq!(
         config::cached_model_lists(&setup.home()).unwrap(),
         Vec::<String>::new()
+    );
+}
+
+#[test]
+fn the_lock_file_is_beside_the_cached_list() {
+    let setup = Setup::new();
+    let home = setup.home();
+    // The refresh holds this path while it runs, so it must name the
+    // cached list with a `lock` extension, not the default path.
+    assert_eq!(
+        config::model_cache_lock_file(&home, "acme").unwrap(),
+        home.join("cache/models/acme.lock")
     );
 }
 

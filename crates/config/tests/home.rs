@@ -36,6 +36,18 @@ fn an_existing_fiber_home_is_used_as_it_is() {
 }
 
 #[test]
+fn an_empty_fiber_home_names_the_empty_value() {
+    // The empty value gets its own diagnostic: without the guard it would
+    // read as a relative path, whose diagnostic names a different fault.
+    let e = fiber_home_path(Some(OsString::new()), None).unwrap_err();
+    assert_eq!(e.code(), ErrorCode::Usage);
+    assert_eq!(
+        e.to_string(),
+        "FIBER_HOME is empty; set it to an absolute path or unset it."
+    );
+}
+
+#[test]
 fn an_empty_or_relative_fiber_home_is_an_error_naming_it() {
     for value in ["", "relative/fiber", "."] {
         let e = fiber_home(Some(OsString::from(value)), Some("/Users/alice".into())).unwrap_err();
