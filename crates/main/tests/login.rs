@@ -708,9 +708,17 @@ fn the_provider_menu_on_a_terminal_picks_by_number() {
     run.screen.type_text("2\n");
     run.screen.wait_for("Key for beta: ");
     run.screen.type_text(&format!("{KEY}\n"));
-    run.screen
-        .wait_for("fiber: stored credentials/beta/default");
+    // One wait for the input-readiness line: the stored line and the
+    // reviewer burst can arrive in one chunk, so a second wait could
+    // mark past them.
     run.screen.wait_for("Reviewer, by number or name: ");
+    assert!(
+        run.screen
+            .seen
+            .contains("fiber: stored credentials/beta/default"),
+        "{:?}",
+        run.screen.seen
+    );
     run.screen.type_text("1\n");
     run.screen.wait_for("fiber: reviewer beta m");
     let status = run.finish();
@@ -1232,9 +1240,16 @@ fn opencode_go_login_asks_with_nothing_preselected_and_saves_the_pick() {
     let mut run = setup.on_terminal(&["login", "opencode-go"]);
     run.screen.wait_for("Key for opencode-go: ");
     run.screen.type_text(&format!("{KEY}\n"));
-    run.screen
-        .wait_for("fiber: stored credentials/opencode/default");
+    // One wait for the input-readiness line: the stored line and the
+    // reviewer burst can arrive in one chunk, so a second wait could
+    // mark past them.
     let shown = run.screen.wait_for("Reviewer, by number or name: ");
+    assert!(
+        run.screen
+            .seen
+            .contains("fiber: stored credentials/opencode/default"),
+        "the stored credential precedes the question: {shown:?}"
+    );
     assert!(
         shown.contains("Reviewer for opencode-go:"),
         "the stored credential precedes the question: {shown:?}"
@@ -1281,9 +1296,16 @@ fn anthropic_login_preselects_its_vendor_default_for_enter() {
     let mut run = setup.on_terminal(&["login", "anthropic"]);
     run.screen.wait_for("Key for anthropic: ");
     run.screen.type_text(&format!("{KEY}\n"));
-    run.screen
-        .wait_for("fiber: stored credentials/anthropic/default");
+    // One wait for the input-readiness line: the stored line and the
+    // reviewer burst can arrive in one chunk, so a second wait could
+    // mark past them.
     let shown = run.screen.wait_for("Reviewer, by number or name: ");
+    assert!(
+        run.screen
+            .seen
+            .contains("fiber: stored credentials/anthropic/default"),
+        "the stored credential precedes the question: {shown:?}"
+    );
     assert!(
         shown.contains("claude-sonnet-5-5 (saved)"),
         "the vendor default is preselected: {shown:?}"
@@ -1350,10 +1372,18 @@ fn a_relogin_keeps_a_stale_saved_pick_on_enter() {
     let mut first = setup.on_terminal(&["login", "acme"]);
     first.screen.wait_for("Key for acme: ");
     first.screen.type_text(&format!("{KEY}\n"));
-    first
-        .screen
-        .wait_for("fiber: stored credentials/acme/default");
+    // One wait for the input-readiness line: the stored line and the
+    // reviewer burst can arrive in one chunk, so a second wait could
+    // mark past them.
     first.screen.wait_for("Reviewer, by number or name: ");
+    assert!(
+        first
+            .screen
+            .seen
+            .contains("fiber: stored credentials/acme/default"),
+        "{:?}",
+        first.screen.seen
+    );
     first.screen.type_text("1\n");
     first.screen.wait_for("fiber: reviewer acme m");
     assert_eq!(first.finish().code(), Some(0));
@@ -1368,11 +1398,23 @@ fn a_relogin_keeps_a_stale_saved_pick_on_enter() {
     let mut second = setup.on_terminal(&["login", "acme", "--as", "work"]);
     second.screen.wait_for("Key for acme: ");
     second.screen.type_text(&format!("{KEY}\n"));
-    second
-        .screen
-        .wait_for("fiber: stored credentials/acme/work");
-    second.screen.wait_for("Reviewer for acme:");
+    // One wait for the input-readiness line: the stored line, the
+    // heading and the prompt can arrive in one chunk, so a second wait
+    // could mark past them.
     second.screen.wait_for("Reviewer, by number or name: ");
+    assert!(
+        second
+            .screen
+            .seen
+            .contains("fiber: stored credentials/acme/work"),
+        "{:?}",
+        second.screen.seen
+    );
+    assert!(
+        second.screen.seen.contains("Reviewer for acme:"),
+        "{:?}",
+        second.screen.seen
+    );
     assert!(
         second
             .screen
@@ -1397,9 +1439,17 @@ fn two_providers_sharing_a_credential_keep_their_own_picks() {
     let mut go = setup.on_terminal(&["login", "opencode-go"]);
     go.screen.wait_for("Key for opencode-go: ");
     go.screen.type_text(&format!("{KEY}\n"));
-    go.screen
-        .wait_for("fiber: stored credentials/opencode/default");
+    // One wait for the input-readiness line: the stored line and the
+    // reviewer burst can arrive in one chunk, so a second wait could
+    // mark past them.
     go.screen.wait_for("Reviewer, by number or name: ");
+    assert!(
+        go.screen
+            .seen
+            .contains("fiber: stored credentials/opencode/default"),
+        "{:?}",
+        go.screen.seen
+    );
     go.screen.type_text("1\n");
     go.screen.wait_for("fiber: reviewer opencode-go");
     assert_eq!(go.finish().code(), Some(0));
@@ -1408,9 +1458,16 @@ fn two_providers_sharing_a_credential_keep_their_own_picks() {
     let mut zen = setup.on_terminal(&["login", "opencode-zen", "--as", "work"]);
     zen.screen.wait_for("Key for opencode-zen: ");
     zen.screen.type_text(&format!("{KEY}\n"));
-    zen.screen
-        .wait_for("fiber: stored credentials/opencode/work");
+    // One wait for the input-readiness line: the stored line and the
+    // reviewer burst can arrive in one chunk, so a second wait could
+    // mark past them.
     let shown = zen.screen.wait_for("Reviewer, by number or name: ");
+    assert!(
+        zen.screen
+            .seen
+            .contains("fiber: stored credentials/opencode/work"),
+        "the stored credential precedes the question: {shown:?}"
+    );
     assert!(shown.contains("(saved)"), "{shown:?}");
     zen.screen.type_text("\n");
     zen.screen.wait_for("fiber: reviewer opencode-zen");
@@ -1440,12 +1497,62 @@ fn end_of_input_at_the_reviewer_prompt_keeps_the_credential_and_sets_nothing() {
     let mut run = setup.on_terminal(&["login", "acme"]);
     run.screen.wait_for("Key for acme: ");
     run.screen.type_text(&format!("{KEY}\n"));
-    run.screen
-        .wait_for("fiber: stored credentials/acme/default");
+    // One wait for the input-readiness line: the stored line and the
+    // reviewer burst can arrive in one chunk, so a second wait could
+    // mark past them.
     // The reviewer prompt is the input-readiness barrier, not the save:
     // end of input lands after storage with nothing saved.
     run.screen.wait_for("Reviewer, by number or name: ");
+    assert!(
+        run.screen
+            .seen
+            .contains("fiber: stored credentials/acme/default"),
+        "{:?}",
+        run.screen.seen
+    );
     run.screen.type_text("\u{4}");
+    run.screen.wait_for("no reviewer was set");
+    let status = run.finish();
+    let shown = &run.screen.seen;
+    assert_eq!(status.code(), Some(0), "{shown:?}");
+    assert!(run.terminal.echoes(), "echo was not restored");
+    assert_eq!(
+        fs::read_to_string(setup.home().join("credentials/acme/default")).unwrap(),
+        KEY
+    );
+    assert_eq!(
+        global_config(&setup)["providers"]["acme"]["reviewer_model"],
+        json!("old-m"),
+        "the previous reviewer setting stands"
+    );
+}
+
+#[test]
+fn an_interrupt_at_the_reviewer_prompt_keeps_the_credential_and_sets_nothing() {
+    let setup = Setup::new_with_fl_root();
+    setup.install_provider("acme", None, None);
+    fs::write(
+        setup.home().join("config.json"),
+        r#"{"providers": {"acme": {"reviewer_model": "old-m"}}}"#,
+    )
+    .unwrap();
+    let mut run = setup.on_terminal(&["login", "acme"]);
+    run.screen.wait_for("Key for acme: ");
+    run.screen.type_text(&format!("{KEY}\n"));
+    // One wait for the input-readiness line: the stored line and the
+    // reviewer burst can arrive in one chunk, so a second wait could
+    // mark past them.
+    run.screen.wait_for("Reviewer, by number or name: ");
+    assert!(
+        run.screen
+            .seen
+            .contains("fiber: stored credentials/acme/default"),
+        "{:?}",
+        run.screen.seen
+    );
+    // The prompt blocks on terminal input: the interrupt must end the
+    // read with no reviewer set, not hang inside it.
+    assert!(support::kill_group(setup.deadline, run.group, "INT").unwrap());
     run.screen.wait_for("no reviewer was set");
     let status = run.finish();
     let shown = &run.screen.seen;
@@ -1469,9 +1576,17 @@ fn a_reviewer_write_failure_names_the_key_and_keeps_the_credential() {
     let mut run = setup.on_terminal(&["login", "acme"]);
     run.screen.wait_for("Key for acme: ");
     run.screen.type_text(&format!("{KEY}\n"));
-    run.screen
-        .wait_for("fiber: stored credentials/acme/default");
+    // One wait for the input-readiness line: the stored line and the
+    // reviewer burst can arrive in one chunk, so a second wait could
+    // mark past them.
     run.screen.wait_for("Reviewer, by number or name: ");
+    assert!(
+        run.screen
+            .seen
+            .contains("fiber: stored credentials/acme/default"),
+        "{:?}",
+        run.screen.seen
+    );
     // Another writer replaces the whole document with `[]` after the
     // prompt: the save fails instead of destroying it.
     fs::write(setup.home().join("config.json"), "[]").unwrap();

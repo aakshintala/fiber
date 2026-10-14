@@ -1161,9 +1161,12 @@ impl Login {
 /// The picker rows for `choices` at `inner` columns: the stale line when
 /// the preselection names no listed row, the models windowed so the
 /// highlighted row stays visible, then the discovery notices while room
-/// remains. The window shares the step's fixed body count, clipped to
-/// what the area shows, so the overlay never jumps between steps.
-/// Model IDs are cut to one row; the whole ID is still saved.
+/// remains. The stale line is clipped to leave a row for a model whenever
+/// the body has room for one, so a long stale preselection never hides
+/// every choice while arrows still move over them. The window shares the
+/// step's fixed body count, clipped to what the area shows, so the overlay
+/// never jumps between steps. Model IDs are cut to one row; the whole ID
+/// is still saved.
 fn choice_rows(
     choices: &Choices,
     inner: usize,
@@ -1173,13 +1176,18 @@ fn choice_rows(
     let dim = Style::new().add_modifier(Modifier::DIM);
     let budget = kept.min(shown_body_rows(height));
     let mut rows: Vec<overlay::Row> = Vec::new();
+    // One selectable model row stays visible while the body has room:
+    // the stale notice gives up its last row rather than hiding every
+    // choice an invisible Enter could still save.
+    let reserve = usize::from(!choices.models.is_empty() && budget > 0);
+    let stale_cap = budget.saturating_sub(reserve);
     if let Some(saved) = choices.selected.as_deref().filter(|_| choices.is_stale()) {
         for row in wrapped_rows(
             &format!("Saved reviewer `{saved}` is not listed; Enter keeps it."),
             inner,
             dim,
         ) {
-            if rows.len() >= budget {
+            if rows.len() >= stale_cap {
                 break;
             }
             rows.push(row);

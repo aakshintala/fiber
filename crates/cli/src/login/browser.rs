@@ -202,12 +202,14 @@ pub(crate) fn login_with(
         Arc::clone(&io.clock),
         &LoginCancel::default(),
     )?;
-    std::io::Write::write_fmt(io.err, format_args!("fiber: stored {path}\n"))
-        .map_err(super::terminal_failure)?;
     // The same terminal-only question a key login asks: a pipe stores
-    // the credential and asks nothing.
+    // the credential and asks nothing. Cancellation arms before the
+    // stored-line readiness output, as in key login.
     if io.terminal {
-        super::post_store_reviewer(io, name)?;
+        super::post_store_reviewer(io, name, &format!("fiber: stored {path}"))?;
+    } else {
+        std::io::Write::write_fmt(io.err, format_args!("fiber: stored {path}\n"))
+            .map_err(super::terminal_failure)?;
     }
     Ok(())
 }

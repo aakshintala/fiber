@@ -2748,6 +2748,26 @@ fn a_stale_preselection_opens_unhighlighted_and_enter_keeps_it() {
 }
 
 #[test]
+fn a_long_stale_notice_keeps_a_model_visible() {
+    // A stale preselection wrapping past the whole body must not hide
+    // every choice: one model row stays selectable while room remains,
+    // and Enter on it saves that model.
+    let stale = format!("gone-{}", "m".repeat(200));
+    let (fake, mut login) = key_choices(
+        "acme",
+        LoginTicket(1),
+        choices(&["fast-1", "fast-2"], Some(&stale)),
+    );
+    let screen = drawn(&login, 48, 24);
+    assert!(screen.contains("1) fast-1"), "{screen}");
+    press(&mut login, &fake, &[Key::Down, Key::Enter]);
+    assert_eq!(
+        fake.reviewer_saves(),
+        [("acme".to_owned(), "fast-1".to_owned())]
+    );
+}
+
+#[test]
 fn a_listed_preselection_opens_highlighted_and_enter_saves_it() {
     let (fake, mut login) = key_choices("acme", LoginTicket(1), choices(&["m1", "m2"], Some("m2")));
     let (buf, _) = overlaid(&login, 80, 24);

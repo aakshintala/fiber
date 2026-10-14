@@ -670,18 +670,22 @@ pub(crate) fn login(
             } else {
                 "stored"
             };
-            writeln!(io.err, "fiber: {done} {}", stored.path).map_err(terminal_failure)?;
             // The reviewer question follows a stored provider key at a
             // terminal: never a declared secret, a failed store or a
             // pipe, and never a browser login (which asks through its
-            // own post-store step).
+            // own post-store step). Cancellation arms before the
+            // stored-line readiness output, so an interrupt between the
+            // store and the prompt still ends the login with no reviewer
+            // set instead of terminating it.
             if io.terminal
                 && io
                     .providers
                     .get(&name)
                     .is_some_and(|data| data.login != Some(Login::Browser))
             {
-                post_store_reviewer(io, &name)?;
+                post_store_reviewer(io, &name, &format!("fiber: {done} {}", stored.path))?;
+            } else {
+                writeln!(io.err, "fiber: {done} {}", stored.path).map_err(terminal_failure)?;
             }
             Ok(())
         }
@@ -731,18 +735,24 @@ fn arm_sigint(stopped: Arc<AtomicBool>) -> Result<SigGuard, Failure> {
 
 /// Asks for the reviewer's model after `name`'s credential was stored:
 /// the provider's own list with the saved choice preselected, then the
-/// one-key save. EOF or cancellation keeps the credential and the
-/// previous reviewer setting, prints that no reviewer was set and ends
-/// 0; a failed save keeps the credential and names the key with a
-/// non-zero exit. Only the prompt reads the terminal; discovery and the
-/// save never do.
-fn post_store_reviewer(io: &mut LoginIo<'_>, name: &str) -> Result<(), Failure> {
+/// one-key save. Cancellation is armed before `stored_line` is printed,
+/// so an interrupt anywhere past the store takes the cancelled outcome:
+/// EOF or cancellation keeps the credential and the previous reviewer
+/// setting, prints that no reviewer was set and ends 0; a failed save
+/// keeps the credential and names the key with a non-zero exit. Only the
+/// prompt reads the terminal; discovery and the save never do.
+fn post_store_reviewer(io: &mut LoginIo<'_>, name: &str, stored_line: &str) -> Result<(), Failure> {
     let stopped = Arc::new(AtomicBool::new(false));
+    let _sig = arm_sigint(Arc::clone(&stopped))?;
+    writeln!(io.err, "{stored_line}").map_err(terminal_failure)?;
     let home = io.home;
     let providers = io.providers;
+    let terminal = io.terminal;
     let clock = Arc::clone(&io.clock);
     let discover = || reviewer_models(home, providers, name, Arc::clone(&clock));
-    reviewer_stage(home, name, io.stdin, io.err, &discover, &stopped, None)
+    reviewer_stage_armed(
+        home, name, io.stdin, io.err, &discover, &stopped, terminal, None,
+    )
 }
 
 /// The post-store reviewer stage [`post_store_reviewer`] runs: armed
@@ -752,6 +762,7 @@ fn post_store_reviewer(io: &mut LoginIo<'_>, name: &str) -> Result<(), Failure> 
 /// before the save's commit claim prevents the write; once the claim
 /// wins, even during the global-lock wait, the write's own outcome
 /// stands and is never relabelled as cancelled.
+#[cfg(test)]
 #[allow(clippy::too_many_arguments, reason = "one per input the stage reads")]
 pub(crate) fn reviewer_stage(
     home: &Path,
@@ -760,12 +771,31 @@ pub(crate) fn reviewer_stage(
     err: &mut dyn Write,
     discover: &dyn Fn() -> Result<ReviewerModels, Failure>,
     stopped: &Arc<AtomicBool>,
+    terminal: bool,
     probe: Option<&ClaimProbe>,
 ) -> Result<(), Failure> {
     // Armed before discovery, never reset: a SIGINT during the bounded
     // callback is recorded, and after the callback the stage takes the
     // cancelled outcome instead of presenting or saving.
     let _sig = arm_sigint(Arc::clone(stopped))?;
+    reviewer_stage_armed(home, name, input, err, discover, stopped, terminal, probe)
+}
+
+/// The armed stage [`reviewer_stage`] and [`post_store_reviewer`] share:
+/// discovery, the prompt and the claimed save under an already-armed
+/// cancellation latch. `terminal` tells the prompt that `input` is the
+/// process stdin, so it reads stoppably.
+#[allow(clippy::too_many_arguments, reason = "one per input the stage reads")]
+fn reviewer_stage_armed(
+    home: &Path,
+    name: &str,
+    input: &mut dyn BufRead,
+    err: &mut dyn Write,
+    discover: &dyn Fn() -> Result<ReviewerModels, Failure>,
+    stopped: &Arc<AtomicBool>,
+    terminal: bool,
+    probe: Option<&ClaimProbe>,
+) -> Result<(), Failure> {
     let choices = discover()?;
     if stopped.load(Ordering::SeqCst) {
         return no_reviewer_set(err, name);
@@ -776,9 +806,14 @@ pub(crate) fn reviewer_stage(
     if choices.models.is_empty() {
         return Ok(());
     }
-    let id = match reviewer::prompt_choice(name, &choices, input, err, &|| {
-        stopped.load(Ordering::SeqCst)
-    })
+    let id = match reviewer::prompt_choice(
+        name,
+        &choices,
+        input,
+        err,
+        &|| stopped.load(Ordering::SeqCst),
+        terminal,
+    )
     .map_err(terminal_failure)?
     {
         reviewer::Pick::Chosen(id) => id,

@@ -1177,6 +1177,7 @@ fn cancellation_during_discovery_keeps_everything_and_asks_nothing() {
                 Ok(choices(&["m1"]))
             },
             &worker_stopped,
+            false,
             None,
         );
         done.send((result, String::from_utf8(err).unwrap()))
@@ -1246,6 +1247,7 @@ fn cancellation_before_the_claim_writes_nothing() {
             &mut err,
             &|| Ok(choices(&["m1"])),
             &worker_stopped,
+            false,
             Some(&probe),
         );
         done.send((result, String::from_utf8(err).unwrap()))
@@ -1336,6 +1338,7 @@ fn a_claimed_save_survives_cancellation_before_the_write() {
                 &mut err,
                 &|| Ok(choices(&["m1"])),
                 &worker_stopped,
+                false,
                 Some(&probe),
             );
             done.send((result, String::from_utf8(err).unwrap()))

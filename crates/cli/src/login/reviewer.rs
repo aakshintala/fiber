@@ -5,6 +5,7 @@
 //! and neither starts any other extension.
 
 use std::io::{self, BufRead, Write};
+use std::os::fd::{AsFd, OwnedFd};
 use std::path::Path;
 use std::process::Command;
 use std::sync::Arc;
@@ -15,6 +16,9 @@ use contract::clock::Clock;
 use contract::shapes::Failure;
 use doors::failure;
 use extensions::{Browser, Providers, login_provider};
+use rustix::event::{PollFd, PollFlags, Timespec, poll};
+use rustix::fs::{OFlags, fcntl_getfl, fcntl_setfl};
+use rustix::io::Errno;
 use serde_json::Value;
 
 use super::{config_failure, installed};
@@ -218,6 +222,50 @@ pub fn set_reviewer(home: &Path, name: &str, id: &str) -> Result<(), Failure> {
         .map_err(|e| failure(e.code(), format!("could not save `{key}`: {e}")))
 }
 
+/// How long one terminal prompt wait blocks before rechecking the
+/// cancellation latch: a SIGINT during blocked input lands at most this
+/// late, without a helper thread left blocked on stdin.
+const PROMPT_POLL: Duration = Duration::from_millis(50);
+
+/// Standard input nonblocking until it drops, so the reviewer prompt can
+/// wait for a line and still answer cancellation: each read either takes
+/// a buffered or freshly typed line at once, reports EOF, or says it
+/// would block, and the prompt polls the terminal between tries. The
+/// saved flags come back on every way out.
+struct NonblockingStdin {
+    fd: OwnedFd,
+    saved: OFlags,
+}
+
+impl NonblockingStdin {
+    fn new() -> io::Result<Self> {
+        let fd = io::stdin().as_fd().try_clone_to_owned()?;
+        let saved = fcntl_getfl(&fd).map_err(io::Error::from)?;
+        fcntl_setfl(&fd, saved.union(OFlags::NONBLOCK)).map_err(io::Error::from)?;
+        Ok(Self { fd, saved })
+    }
+}
+
+impl Drop for NonblockingStdin {
+    fn drop(&mut self) {
+        fcntl_setfl(&self.fd, self.saved).unwrap_or(());
+    }
+}
+
+/// Waits for terminal input until [`PROMPT_POLL`] passes: the prompt's
+/// recheck point for the cancellation latch. Wakes early on input, a
+/// signal, or a hangup; every outcome returns to the latch check, and
+/// only a wait failure of its own surfaces.
+fn wait_for_input() -> io::Result<()> {
+    let stdin = io::stdin();
+    let timeout = Timespec::try_from(PROMPT_POLL).unwrap_or_default();
+    let mut waiting = [PollFd::new(&stdin, PollFlags::IN)];
+    match poll(&mut waiting, Some(&timeout)) {
+        Ok(_) | Err(Errno::INTR) => Ok(()),
+        Err(e) => Err(io::Error::from(e)),
+    }
+}
+
 /// What the terminal prompt answered.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) enum Pick {
@@ -233,14 +281,22 @@ pub(crate) enum Pick {
 /// range, zero, an overflow, an unknown name and (with nothing preselected)
 /// a blank line each print one line naming the problem and ask again,
 /// until a listed choice, cancellation or EOF. `stopped` is the login's
-/// cancellation scope, checked before every read. Never fabricates or
-/// saves a model: choosing is the caller's, after the store.
+/// cancellation scope, checked before every read. When `terminal` holds,
+/// `input` is the process stdin, and the prompt reads it stoppably:
+/// `signal-hook` installs `SA_RESTART`, so a plain blocking read would
+/// keep waiting through a SIGINT without ever checking the latch. The
+/// prompt instead reads stdin nonblocking and polls the terminal between
+/// tries, on this thread alone: no helper stays blocked on stdin, and the
+/// flags (like the echo, which stays on) are restored on every return.
+/// Never fabricates or saves a model: choosing is the caller's, after the
+/// store.
 pub(crate) fn prompt_choice(
     name: &str,
     choices: &ReviewerModels,
     input: &mut dyn BufRead,
     err: &mut dyn Write,
     stopped: &dyn Fn() -> bool,
+    terminal: bool,
 ) -> io::Result<Pick> {
     if choices.models.is_empty() {
         return Ok(Pick::Cancelled);
@@ -266,6 +322,9 @@ pub(crate) fn prompt_choice(
             "Saved reviewer `{keep}` is not listed; Enter keeps it."
         )?;
     }
+    // Nonblocking for the stoppable terminal read below; restored when
+    // the prompt returns, however it returns. A pipe keeps blocking.
+    let _nonblocking = terminal.then(NonblockingStdin::new).transpose()?;
     loop {
         if stopped() {
             return Ok(Pick::Cancelled);
@@ -273,7 +332,38 @@ pub(crate) fn prompt_choice(
         write!(err, "Reviewer, by number or name: ")?;
         err.flush()?;
         let mut line = String::new();
-        if input.read_line(&mut line)? == 0 {
+        if terminal {
+            // Stoppable: a buffered or freshly typed line lands at once
+            // and EOF ends the read, while a would-block waits on the
+            // terminal until the latch or more input. A partial line
+            // without its newline reads on: EOF follows it. The latch
+            // is checked on every pass, including the waits: a `continue`
+            // below must never skip it.
+            loop {
+                if stopped() {
+                    return Ok(Pick::Cancelled);
+                }
+                let at_end = match input.read_line(&mut line) {
+                    Ok(0) => true,
+                    Ok(_) => line.ends_with('\n'),
+                    Err(e) if e.kind() == io::ErrorKind::WouldBlock => {
+                        wait_for_input()?;
+                        continue;
+                    }
+                    Err(e) if e.kind() == io::ErrorKind::Interrupted => continue,
+                    Err(e) => return Err(e),
+                };
+                if stopped() {
+                    return Ok(Pick::Cancelled);
+                }
+                if at_end {
+                    break;
+                }
+            }
+            if line.is_empty() {
+                return Ok(Pick::Cancelled);
+            }
+        } else if input.read_line(&mut line)? == 0 {
             return Ok(Pick::Cancelled);
         }
         if stopped() {

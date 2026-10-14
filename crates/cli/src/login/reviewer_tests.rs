@@ -661,6 +661,7 @@ fn ask(name: &str, choices: &ReviewerModels, input: &str) -> (Pick, String) {
         &mut Cursor::new(input.as_bytes().to_vec()),
         &mut err,
         &|| false,
+        false,
     )
     .unwrap();
     (pick, String::from_utf8(err).unwrap())
@@ -723,6 +724,7 @@ fn invalid_answers_ask_again_until_a_listed_choice_eof_or_cancel() {
         &mut Cursor::new(b"1\n".to_vec()),
         &mut err,
         &|| true,
+        false,
     )
     .unwrap();
     assert_eq!(pick, Pick::Cancelled, "cancellation saves nothing");
