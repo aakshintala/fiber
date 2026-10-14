@@ -150,6 +150,15 @@ fn the_waiting_login_opens_its_url_and_its_end_stores() {
         }],
     );
     await_opened(&out, &url);
+    // The reviewer read answers one highlighted model: Done success
+    // prepares on its ticket, and Enter on the choices saves it.
+    if let Ok(mut answer) = seam.reviewer_answer.lock() {
+        *answer = Ok(crate::configure::ReviewerModels {
+            models: ["m1".to_owned()].to_vec(),
+            selected: Some("m1".to_owned()),
+            notices: Vec::new(),
+        });
+    }
     seam.answer(
         0,
         Ok(crate::configure::Stored {
@@ -172,10 +181,33 @@ fn the_waiting_login_opens_its_url_and_its_end_stores() {
             })),
         }],
     );
+    // Done success prepares on its ticket; the worker's reviewer read
+    // follows on the same ticket, and Enter on its highlighted row
+    // saves through the seam.
+    let (_, step) = next(&rx, &Deadline::after(WAIT));
+    let step = match step {
+        crate::login_worker::LoginStep::Reviewer(Ok(choices)) => {
+            assert_eq!(choices.models, ["m1"]);
+            crate::login_worker::LoginStep::Reviewer(Ok(choices))
+        }
+        other => panic!("{other:?}"),
+    };
+    feed(
+        &mut lp,
+        vec![Input::Login {
+            ticket: crate::login_worker::LoginTicket(1),
+            step,
+        }],
+    );
+    feed(&mut lp, vec![Input::Bytes(b"\r".to_vec())]);
     let rows = screen(&lp);
     assert!(
         rows.iter().any(|row| row.contains("✓ Logged in to codex.")),
         "{rows:?}"
+    );
+    assert_eq!(
+        seam.reviewer_saves(),
+        [("codex".to_owned(), "m1".to_owned())]
     );
     watchdog.stand_down(WAIT);
 }
@@ -208,6 +240,15 @@ fn without_an_opener_the_url_still_shows_and_the_flow_completes() {
         "{rows:?}"
     );
     assert!(rows.iter().any(|row| row.contains(&url)), "{rows:?}");
+    // The reviewer read answers one highlighted model: Done success
+    // prepares on its ticket, and Enter on the choices saves it.
+    if let Ok(mut answer) = seam.reviewer_answer.lock() {
+        *answer = Ok(crate::configure::ReviewerModels {
+            models: ["m1".to_owned()].to_vec(),
+            selected: Some("m1".to_owned()),
+            notices: Vec::new(),
+        });
+    }
     seam.answer(
         0,
         Ok(crate::configure::Stored {
@@ -230,10 +271,30 @@ fn without_an_opener_the_url_still_shows_and_the_flow_completes() {
             })),
         }],
     );
+    let (_, step) = next(&rx, &Deadline::after(WAIT));
+    let step = match step {
+        crate::login_worker::LoginStep::Reviewer(Ok(choices)) => {
+            assert_eq!(choices.models, ["m1"]);
+            crate::login_worker::LoginStep::Reviewer(Ok(choices))
+        }
+        other => panic!("{other:?}"),
+    };
+    feed(
+        &mut lp,
+        vec![Input::Login {
+            ticket: crate::login_worker::LoginTicket(1),
+            step,
+        }],
+    );
+    feed(&mut lp, vec![Input::Bytes(b"\r".to_vec())]);
     let rows = screen(&lp);
     assert!(
         rows.iter().any(|row| row.contains("✓ Logged in to codex.")),
         "{rows:?}"
+    );
+    assert_eq!(
+        seam.reviewer_saves(),
+        [("codex".to_owned(), "m1".to_owned())]
     );
 }
 

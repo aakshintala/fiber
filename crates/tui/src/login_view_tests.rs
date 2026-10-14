@@ -81,6 +81,41 @@ fn answering_fake(stored: Stored) -> Fake {
     fake
 }
 
+
+/// Reviewer choices with `models` and `selected` preselected.
+fn choices(models: &[&str], selected: Option<&str>) -> crate::configure::ReviewerModels {
+    crate::configure::ReviewerModels {
+        models: models.iter().map(|model| (*model).to_owned()).collect(),
+        selected: selected.map(str::to_owned),
+        notices: Vec::new(),
+    }
+}
+
+/// Answers the fake's reviewer reads with `answer`.
+fn answer_reviewer(fake: &Fake, answer: crate::configure::ReviewerModels) {
+    if let Ok(mut held) = fake.reviewer_answer.lock() {
+        *held = Ok(answer);
+    }
+}
+
+/// Feeds a successful browser `Done` and the reviewer's answer for
+/// `ticket`: the credential stays on its ticket through preparation.
+fn done_then_reviewer(login: &mut Login, ticket: LoginTicket, answer: crate::configure::ReviewerModels) {
+    login.step(
+        ticket,
+        crate::login_worker::LoginStep::Done(Ok(Stored {
+            path: "credentials/codex/alice@example.com".to_owned(),
+            replaced: false,
+        })),
+    );
+    login.step(ticket, crate::login_worker::LoginStep::Reviewer(Ok(answer)));
+}
+
+/// Saves the highlighted reviewer row: Enter on the choices.
+fn save_highlighted(login: &mut Login, fake: &Fake) {
+    assert!(matches!(login.key(&Key::Enter, &ctx(fake)), Act::Stay));
+}
+
 /// A call's context over `fake`, `height` rows tall, in `/w`.
 fn ctx_h(fake: &Fake, height: usize) -> Ctx<'_> {
     Ctx {
@@ -858,7 +893,10 @@ fn a_typed_key_reaches_the_seam_as_typed() {
     typed(&mut login, &fake, "sk-é9x");
     press(&mut login, &fake, &[Key::Backspace]);
     typed(&mut login, &fake, "Z");
-    assert!(matches!(login.key(&Key::Enter, &ctx(&fake)), Act::Stay));
+    assert!(matches!(
+        login.key(&Key::Enter, &ctx(&fake)),
+        Act::Reviewer(name) if name == "acme"
+    ));
     // Backspace deletes a character, not a byte; nothing is trimmed but the
     // ends.
     assert_eq!(fake.secret_of(0), "sk-é9Z");
@@ -886,7 +924,10 @@ fn a_pasted_key_is_one_secret_with_no_token() {
         dots.trim().chars().all(|ch| ch == '•' || ch == '█'),
         "{dots:?}"
     );
-    assert!(matches!(login.key(&Key::Enter, &ctx(&fake)), Act::Stay));
+    assert!(matches!(
+        login.key(&Key::Enter, &ctx(&fake)),
+        Act::Reviewer(name) if name == "acme"
+    ));
     assert_eq!(fake.secret_of(0), pasted.trim());
 }
 
@@ -941,7 +982,10 @@ fn other_edits_leave_the_key() {
         let screen = drawn(&login, 80, 24);
         let dots = screen.lines().find(|row| row.contains('•')).unwrap_or("");
         assert_eq!(dots.trim(), "•••█", "{edit:?}: {dots:?}");
-        assert!(matches!(login.key(&Key::Enter, &ctx(&fake)), Act::Stay));
+        assert!(matches!(
+            login.key(&Key::Enter, &ctx(&fake)),
+            Act::Reviewer(name) if name == "acme"
+        ));
         assert_eq!(fake.secret_of(0), "abc", "{edit:?}");
     }
 }
@@ -1008,7 +1052,10 @@ fn the_label_is_passed_trimmed_and_empty_is_none() {
         typed(&mut login, &fake, "sk-a");
         press(&mut login, &fake, &[Key::Tab]);
         typed(&mut login, &fake, label);
-        assert!(matches!(login.key(&Key::Enter, &ctx(&fake)), Act::Stay));
+        assert!(matches!(
+            login.key(&Key::Enter, &ctx(&fake)),
+            Act::Reviewer(name) if name == "acme"
+        ));
         assert_eq!(fake.stores(), [("acme".to_owned(), stored)], "{label:?}");
     }
 }
@@ -1017,13 +1064,8 @@ fn the_label_is_passed_trimmed_and_empty_is_none() {
 fn login_done_80x24() {
     let fake = fake_with(targets());
     let mut login = waiting(&fake, LoginTicket(1));
-    login.step(
-        LoginTicket(1),
-        crate::login_worker::LoginStep::Done(Ok(Stored {
-            path: "credentials/codex/alice@example.com".to_owned(),
-            replaced: false,
-        })),
-    );
+    done_then_reviewer(&mut login, LoginTicket(1), choices(&["m1"], Some("m1")));
+    save_highlighted(&mut login, &fake);
     let (buf, _) = overlaid(&login, 80, 24);
     insta::assert_snapshot!("login_done_80x24", text_of(&buf, 80, 24).join("\n"));
 }
@@ -1032,13 +1074,8 @@ fn login_done_80x24() {
 fn the_done_line_reads_success() {
     let fake = fake_with(targets());
     let mut login = waiting(&fake, LoginTicket(1));
-    login.step(
-        LoginTicket(1),
-        crate::login_worker::LoginStep::Done(Ok(Stored {
-            path: "credentials/codex/alice@example.com".to_owned(),
-            replaced: false,
-        })),
-    );
+    done_then_reviewer(&mut login, LoginTicket(1), choices(&["m1"], Some("m1")));
+    save_highlighted(&mut login, &fake);
     let (buf, _) = overlaid(&login, 80, 24);
     let success = Role::Success.color();
     let rows = text_of(&buf, 80, 24);
@@ -1587,8 +1624,16 @@ fn a_browser_done_shows_the_done_step_and_drops_the_worker() {
             replaced: false,
         })),
     );
+    // Done success is not the end: the ticket prepares, and the worker's
+    // run already ended, so leaving waiting cancels it.
     assert!(!rows_open(&login));
     assert_eq!(held.cancels(), 1);
+    login.step(
+        LoginTicket(1),
+        crate::login_worker::LoginStep::Reviewer(Ok(choices(&["m1"], Some("m1")))),
+    );
+    save_highlighted(&mut login, &fake);
+    assert_eq!(fake.reviewer_saves(), [("codex".to_owned(), "m1".to_owned())]);
     let (buf, _) = overlaid(&login, 80, 24);
     let screen = text_of(&buf, 80, 24).join("\n");
     assert!(screen.contains("✓ Logged in to codex."), "{screen}");

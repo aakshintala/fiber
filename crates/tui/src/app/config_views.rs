@@ -15,7 +15,7 @@ use crate::ThemeSetting;
 use crate::configure::{Configure, Layer};
 use crate::keys::{Edit, Key};
 use crate::login_view::Login;
-use crate::login_worker::{LoginStart, LoginStep, LoginTicket, LoginWorker};
+use crate::login_worker::{LoginJob, LoginStart, LoginStep, LoginTicket, LoginWorker};
 use crate::rules_view::Rules;
 use crate::settings_view::{Act, Ctx, Settings};
 use crate::skills_view::Skills;
@@ -337,14 +337,38 @@ impl App {
             }
             Act::Open(file) => Effect::OpenFile(file),
             Act::Login(name) => {
-                // The ticket is handed out before use, so the first login
-                // waits on 1 and no two logins share one.
+                // Tickets stay distinct until the counter saturates at
+                // `u64::MAX`, which is then handed out again for every
+                // later start: below saturation every start advances.
                 self.config_views.tickets = self.config_views.tickets.next();
                 let ticket = self.config_views.tickets;
                 if let Some(seam) = self.configure_seam() {
-                    self.config_views.pending_login = Some(LoginStart { ticket, name, seam });
+                    self.config_views.pending_login = Some(LoginStart {
+                        ticket,
+                        name,
+                        seam,
+                        job: LoginJob::Browser,
+                    });
                     if let Some(Open::Login(login)) = &mut self.config_views.open {
                         login.wait(ticket);
+                    }
+                }
+                Effect::None
+            }
+            Act::Reviewer(name) => {
+                // The key is stored; only the reviewer read runs, on a
+                // fresh ticket with the same saturation rule as a login.
+                self.config_views.tickets = self.config_views.tickets.next();
+                let ticket = self.config_views.tickets;
+                if let Some(seam) = self.configure_seam() {
+                    self.config_views.pending_login = Some(LoginStart {
+                        ticket,
+                        name: name.clone(),
+                        seam,
+                        job: LoginJob::Reviewer,
+                    });
+                    if let Some(Open::Login(login)) = &mut self.config_views.open {
+                        login.wait_reviewer(ticket, name);
                     }
                 }
                 Effect::None
