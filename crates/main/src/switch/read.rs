@@ -267,8 +267,10 @@ impl Reads {
     /// returns at once, on any clock. A key finished after the wait's own
     /// end is not a key: a run done past its deadline, or after shutdown
     /// cancelled the reads, is killed and reported as the wait ended. A run
-    /// not finished at the timeout has its group killed and its leader
-    /// reaped before this returns `TimedOut`; the stdout reader is never
+    /// not finished at the timeout has its group killed again until no
+    /// process is left in it, within one bound, and its leader reaped
+    /// before this returns `TimedOut`; at the bound the group stays listed
+    /// for later settlement. The stdout reader is never
     /// waited on after the kill, so a process that left the group and holds
     /// stdout keeps only that reader thread alive, never the caller. Once
     /// [`Reads::cancel`] ran, this returns `Interrupted`, whether it was
@@ -403,7 +405,7 @@ impl Reads {
                         return Err(interrupted());
                     }
                     if deadline_due(clock.now(), deadline) {
-                        kill_group(group);
+                        self.settle_group(group, clock);
                         return Err(timed_out());
                     }
                     {
@@ -432,8 +434,12 @@ impl Reads {
                 return Err(interrupted());
             }
             if deadline_due(clock.now(), deadline) {
-                kill_group(group);
+                self.settle_group(group, clock);
                 if exit.is_none() {
+                    // The reaper owns the leader's wait: its answer reaps
+                    // the leader. An emptied group already delivered it, so
+                    // this returns at once; the receive is ignored either
+                    // way, since the answer here is `TimedOut`.
                     let _reaped = status_received.recv();
                 }
                 return Err(timed_out());
@@ -564,6 +570,49 @@ impl Reads {
                 Some(end)
             };
             self.wake.park(clock, wait_until, seen);
+        }
+    }
+
+    /// Sends SIGKILL to `group` again while a probe still finds a member in
+    /// it, on the group poll cadence within one absolute end: only SRCH
+    /// retires the group, so a fork that landed inside an earlier kill earns
+    /// another send instead of leaving a survivor behind. Scoped to the one
+    /// timed-out group through the shared helper: nothing here cancels
+    /// another read or kills another group. At the end the group stays
+    /// listed for later settlement, as [`Reads::settle`] leaves anything
+    /// still pending at its bound.
+    fn settle_group(&self, group: u32, clock: &dyn Clock) {
+        let now = clock.now();
+        let end = now.checked_add(doors::SHUTDOWN_BOUND).unwrap_or(now);
+        loop {
+            // The generation is captured before the checks, as in
+            // `credential`: a clock move past this point ends the park
+            // below at once, so no advance lands unheard.
+            let seen = self.wake.generation();
+            let empty = {
+                let mut state = self.lock();
+                state.prune_empty();
+                if state.groups.contains(&group) {
+                    state.kill_listed(group);
+                    false
+                } else {
+                    true
+                }
+            };
+            if empty {
+                return;
+            }
+            if clock.now() >= end {
+                return;
+            }
+            // A pending group is rechecked on a bounded cadence within
+            // the same end — the next poll or the end, whichever is
+            // first — never a fresh budget, as in [`Reads::settle`].
+            let wait_until = clock
+                .now()
+                .checked_add(GROUP_POLL)
+                .map_or(end, |poll| poll.min(end));
+            self.wake.park(clock, Some(wait_until), seen);
         }
     }
 

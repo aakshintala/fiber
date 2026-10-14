@@ -486,6 +486,85 @@ fn timeout_rekills_a_group_that_survives_its_first_kill() {
     pre.stand_down(DEADLINE);
 }
 
+/// The timeout gives up re-killing at its bound: one nanosecond short it
+/// is still parked with no answer, at the bound it answers `TimedOut` with
+/// the group still listed for later settlement. Pins the boundary both
+/// sides.
+#[test]
+fn timeout_leaves_a_stubborn_group_listed_at_its_bound() {
+    let root = fakes::TempDir::new("fiber-read-timeout-bound");
+    let ready = Ready::new(root.path());
+    let timeout = Duration::from_secs(30);
+    let clock = FakeClock::new();
+    let deadline = clock.origin() + timeout;
+    let end = deadline + doors::SHUTDOWN_BOUND;
+    let reads = Arc::new(Reads::default());
+    // As in the re-kill test above: the leader's exit is not the run's
+    // end, so the timeout needs no reap wait, only the group's kills.
+    let script = format!("echo $$ > '{}'; sleep 600 & exit 0", ready.path().display());
+    let pre = fakes::Watchdog::matching(&ready.path().display().to_string());
+    let finished = credential_on_thread(&reads, sh(&script), timeout, &clock);
+    let pgid = ready.wait(DEADLINE)[0];
+    let watchdog = fakes::Watchdog::group(pgid);
+    assert!(
+        clock.await_parked(deadline, DEADLINE),
+        "the wait parked at its deadline"
+    );
+    // Alive past every probe within the bound: 600 scripted sends at a
+    // 10 ms cadence outlast the 5 s bound, as in the settle retry test.
+    reads.script_group(
+        pgid,
+        (0..600).map(|_| Ok(())).collect(),
+        (0..600).map(|_| Ok(())).collect(),
+    );
+    clock.advance(timeout);
+    assert!(
+        clock.await_parked(deadline + GROUP_POLL, DEADLINE),
+        "the timeout parked at its first poll"
+    );
+    // Jump to one nanosecond short of the end: every pass between still
+    // found the scripted group alive and sent again.
+    let mark = clock.advance_marked(
+        doors::SHUTDOWN_BOUND
+            .checked_sub(Duration::from_nanos(1))
+            .expect("the bound holds a nanosecond"),
+    );
+    assert!(
+        clock.await_parked_since(&mark, Some(end), DEADLINE),
+        "the timeout parked again short of its bound"
+    );
+    assert!(
+        Deadline::after(SHORT).recv(&finished).is_err(),
+        "timeout answered short of its bound"
+    );
+    clock.advance(Duration::from_nanos(1));
+    let error = Deadline::after(DEADLINE)
+        .recv_or_fail(&finished, "the timed-out read")
+        .expect_err("a command still running at its timeout");
+    assert_eq!(error.kind(), std::io::ErrorKind::TimedOut);
+    assert!(
+        listed(&reads).contains(&pgid),
+        "the bound leaves the group listed: {:?}",
+        listed(&reads)
+    );
+    let sends = reads.scripted_sends();
+    assert!(
+        sends >= 2,
+        "the timeout retried within the bound, not once: {sends}"
+    );
+    // The scripted sends never touched the real group: kill it for real
+    // and reap it on every path.
+    match fakes::kill_group(pgid, "KILL") {
+        Ok(_) | Err(_) => {}
+    }
+    assert!(
+        fakes::group_empties(pgid, DEADLINE),
+        "the real group is gone"
+    );
+    watchdog.stand_down(DEADLINE);
+    pre.stand_down(DEADLINE);
+}
+
 #[test]
 fn a_quick_command_answers_without_the_clock_moving() {
     let clock = FakeClock::new();
