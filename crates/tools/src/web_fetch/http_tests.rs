@@ -408,16 +408,12 @@ fn the_head_carries_the_stated_length() {
 #[test]
 fn the_head_of_a_body_with_no_stated_length_carries_none() {
     let server =
-        fakes::RawHttpServer::start(b"HTTP/1.1 200 OK\r\nconnection: close\r\n\r\nabc")
-            .unwrap();
+        fakes::RawHttpServer::start(b"HTTP/1.1 200 OK\r\nconnection: close\r\n\r\nabc").unwrap();
     let port = server.port();
     let head = head_of(
         SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), port),
         &format!("http://127.0.0.1:{port}/"),
     );
-    assert!(
-        server.await_replies(1, SIGNAL),
-        "the server answered"
-    );
+    assert!(server.await_replies(1, SIGNAL), "the server answered");
     assert_eq!(head.content_length, None);
 }

@@ -1748,10 +1748,7 @@ fn an_html_body_cut_short_is_connection_failed_and_leaves_no_file() {
     let url = format!("{}/page", server.url());
     let rig = Rig::new();
     let output = rig.fetch(&url);
-    assert!(
-        server.await_replies(1, SIGNAL),
-        "the server answered"
-    );
+    assert!(server.await_replies(1, SIGNAL), "the server answered");
     assert_eq!(code(&output), Some(ErrorCode::ConnectionFailed));
     assert_eq!(
         text(&output),
