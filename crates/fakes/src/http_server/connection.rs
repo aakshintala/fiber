@@ -198,6 +198,7 @@ impl Connection {
                 &mut self.seq,
                 &mut self.acked,
                 Some(self.stream.as_fd()),
+                true,
             ) {
                 // Readiness parks end at once when the bytes arrive
                 // instead of sleeping a whole poll past them; the bound

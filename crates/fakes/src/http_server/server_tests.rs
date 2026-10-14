@@ -120,6 +120,7 @@ fn a_readiness_wait_with_nothing_readable_sleeps_its_bound() {
                 &mut seq,
                 &mut acked,
                 Some(unwritten.as_fd()),
+                true,
             );
             match tx.send(end) {
                 Ok(()) | Err(_) => {}
@@ -176,6 +177,7 @@ fn a_readiness_wait_after_a_wake_parks_instead_of_spinning() {
                     &mut seq,
                     &mut acked,
                     Some(wait_stream.as_fd()),
+                    true,
                 );
                 match tx.send(end) {
                     Ok(()) | Err(_) => {}
@@ -393,6 +395,7 @@ fn a_consumed_wake_does_not_end_the_next_readiness_wait() {
                     &mut seq,
                     &mut acked,
                     Some(unwritten.as_fd()),
+                    true,
                 );
                 match tx.send(end) {
                     Ok(()) | Err(_) => {}

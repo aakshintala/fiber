@@ -116,9 +116,10 @@ pub(crate) struct Shared {
     /// millisecond. Only the busy-shape regression test reads it.
     #[cfg(test)]
     slept: AtomicU64,
-    /// How many readiness parks found their waited fd readable: a wait
-    /// whose bytes arrive mid-park ends at once instead of sleeping past
-    /// them. Only the busy-shape regression test reads it.
+    /// How many data readiness parks found their waited fd readable: a
+    /// wait whose bytes arrive mid-park ends at once instead of sleeping
+    /// past them. Accepts never count. Only the busy-shape regression
+    /// test reads it.
     #[cfg(test)]
     readied: AtomicU64,
     #[cfg(test)]
@@ -196,7 +197,12 @@ impl Shared {
     /// accepts. A wait with no wake still sleeps its whole bound, but one
     /// whose bytes arrive mid-park ends at once instead of sleeping past
     /// them. The caller maps expiry and shutdown exactly as with
-    /// [`Shared::wait`].
+    /// [`Shared::wait`]. `count_readiness` marks a data wait, whose
+    /// readable park the test counter counts; accepts pass false.
+    #[allow(
+        clippy::too_many_arguments,
+        reason = "the wait's own state threads through as in `wait`, plus the fd and its kind"
+    )]
     pub(crate) fn wait_ready(
         &self,
         budget: &RequestBudget,
@@ -205,6 +211,7 @@ impl Shared {
         seq: &mut u64,
         acked: &mut Option<(u64, &'static str)>,
         io: Option<BorrowedFd<'_>>,
+        count_readiness: bool,
     ) -> WaitEnd {
         // One count per entry, as in `wait`.
         #[cfg(test)]
@@ -240,11 +247,12 @@ impl Shared {
             match rustix::event::poll(&mut fds, timeout.as_ref()) {
                 // Nothing ready within the bound: the whole bound slept.
                 Ok(0) => slept = true,
-                // The fd or the pipe is readable: a readable fd counts a
-                // readiness outcome, and the pipe's bytes are spent, so
-                // the next park sleeps again instead of spinning on them.
+                // The fd or the pipe is readable: a data wait's readable
+                // fd counts a readiness outcome, and the pipe's bytes are
+                // spent, so the next park sleeps again instead of
+                // spinning on them.
                 Ok(_) => {
-                    if fds.first().is_some_and(|fd| !fd.revents().is_empty()) {
+                    if count_readiness && fds.first().is_some_and(|fd| !fd.revents().is_empty()) {
                         self.readied_count();
                     }
                     self.drain_wake();
@@ -304,9 +312,13 @@ impl Shared {
             }
             *acked = Some((seen, phase));
         }
+        // Bound before the hold: a scrutinee temporary would keep the gate
+        // mutex through the hold, blocking every other waiter's.
         #[cfg(test)]
-        if let Some(gate) = lock(&self.gate).as_ref().map(Arc::clone) {
-            gate.hold();
+        let gate = lock(&self.gate).as_ref().map(Arc::clone);
+        #[cfg(test)]
+        if let Some(gate) = gate {
+            gate.hold(phase, *seq);
         }
         Ok(Park { seen, guard_left })
     }
@@ -558,6 +570,7 @@ impl HttpServer {
                 seq,
                 acked,
                 ready,
+                false,
             ) {
                 WaitEnd::Waited => {}
                 WaitEnd::Expired => return AcceptOutcome::Idle,
