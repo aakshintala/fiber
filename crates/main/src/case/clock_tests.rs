@@ -213,6 +213,14 @@ fn sleep_parks_until_its_deadline_is_advanced() {
         .recv(&started_rx)
         .expect("waited for sleep to start");
 
+    // Sleep answers only after the clock moves: a bounded receive before
+    // the advance must time out. Correct code can never answer here, so
+    // any short bound is exact.
+    assert!(
+        Deadline::after(NO_MATCH).recv(&done_rx).is_err(),
+        "sleep answered before the clock moved"
+    );
+
     assert_eq!(clock.advance_when_parked(delay, WAIT), Ok(()));
     assert_eq!(
         Deadline::after(WAIT)
