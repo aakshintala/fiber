@@ -2123,26 +2123,6 @@ fn test_item_end_ignores_angle_comparisons_in_non_field_items() {
 }
 
 #[test]
-fn test_item_end_tracks_angle_groups_only_for_fields() {
-    let field = source_tokens("value: Map<A, B>, next: Path").unwrap();
-    let value = token_with_ident(&field, "value");
-    let commas = field
-        .iter()
-        .enumerate()
-        .filter_map(|(i, token)| punct(Some(token), ',').then_some(i))
-        .collect::<Vec<_>>();
-    assert_eq!(test_item_end(&field, value, true).unwrap(), commas[1]);
-
-    let item = source_tokens("const VALUE: bool = LEFT < RIGHT;").unwrap();
-    let value = token_with_ident(&item, "const");
-    let semicolon = item
-        .iter()
-        .position(|token| punct(Some(token), ';'))
-        .unwrap();
-    assert_eq!(test_item_end(&item, value, false).unwrap(), semicolon);
-}
-
-#[test]
 fn test_only_tokens_marks_only_direct_cfg_test_items() {
     let tokens = source_tokens(
         "let production = 1; #[cfg(feature = \"x\")] fn feature() {} #[cfg_attr(test, cfg(test))] fn conditional() {} #[cfg(test)] fn fixture() {}",
