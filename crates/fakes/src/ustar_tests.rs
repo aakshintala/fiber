@@ -1,4 +1,4 @@
-use super::{archive, checksum, header};
+use super::{archive, checksum, gzip, header};
 
 /// The header's checksum field, as a number.
 fn stored(block: &[u8; 512]) -> u64 {
@@ -77,4 +77,16 @@ fn an_archive_pads_each_member_and_ends_with_two_zero_blocks() {
     assert_eq!(bytes.len(), 512 * 4);
     assert_eq!(&bytes[512..515], b"abc");
     assert!(bytes[515..].iter().all(|b| *b == 0));
+}
+
+/// `gzip` output decodes back to its input through a gzip decoder.
+#[test]
+fn gzip_output_decodes_back_to_its_input() {
+    let bytes: Vec<u8> = (0..1024).map(|i| (i % 251) as u8).collect();
+    let compressed = gzip(&bytes);
+    let mut decoder = flate2::read::GzDecoder::new(compressed.as_slice());
+    let mut back = Vec::new();
+    std::io::Read::read_to_end(&mut decoder, &mut back)
+        .expect("gzip output is a valid gzip stream");
+    assert_eq!(back, bytes);
 }
