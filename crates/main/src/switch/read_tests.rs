@@ -1437,7 +1437,13 @@ fn settle_drains_two_groups_together_within_one_bound() {
     // pass, whatever wall time the real group's death takes.
     let drive = Deadline::after(DEADLINE);
     assert!(
-        drive_settle_to_completion(&clock, &finished, &drive, &[pgid_two], vec![release_one, release_two]),
+        drive_settle_to_completion(
+            &clock,
+            &finished,
+            &drive,
+            &[pgid_two],
+            vec![release_one, release_two]
+        ),
         "both groups drain within the one bound"
     );
     assert_eq!(reads.scripted_sends(), 2, "one send per pass before SRCH");
