@@ -1309,3 +1309,225 @@ fn a_command_registers_with_and_without_description() {
         ]
     );
 }
+
+/// A hook target at `point`, first in registration order.
+fn hook(point: &str) -> Target {
+    Target::Hook {
+        point: point.to_owned(),
+        index: 0,
+    }
+}
+
+/// Ready with one hook at `point` timing out after `ms`.
+fn ready_hook(point: &str, ms: u64) -> Shared {
+    let mut shared = in_phase(Phase::Ready(CallbackTimeouts::default()));
+    let Phase::Ready(timeouts) = &mut shared.phase else {
+        panic!("not ready");
+    };
+    timeouts.hooks.by_point.insert(
+        point.to_owned(),
+        vec![declared::DeclaredHook {
+            phase: HookPhase::Transform,
+            blocking: false,
+            timeout: Duration::from_millis(ms),
+        }],
+    );
+    shared
+}
+
+/// A running hook at its deadline has failed: the caller takes the timeout
+/// at once, without waiting the grace, and the VM stays up.
+#[test]
+fn a_running_hook_at_its_deadline_times_out_and_leaves_the_vm_up() {
+    let at = now();
+    let asked = ago(at, 50);
+    let mut shared = ready_hook("before_message", 50);
+    let id = shared.push(hook("before_message"), Value::Null, asked);
+    shared.queue.clear();
+    shared.calls.insert(
+        id,
+        Progress::Started {
+            deadline: Some(at),
+            parked: false,
+        },
+    );
+    let err = returned(shared.judge("ext", id, &hook("before_message"), asked, at)).unwrap_err();
+    assert!(
+        matches!(&err, Error::Timeout { callback, timeout_ms: 50, .. } if callback == "before_message"),
+        "{err:?}"
+    );
+    assert!(matches!(shared.phase, Phase::Ready(_)));
+    assert!(shared.calls.is_empty() && shared.queue.is_empty());
+}
+
+/// A running hook just before its deadline still waits: flipping the
+/// deadline comparison to answer early would return here.
+#[test]
+fn a_running_hook_before_its_deadline_waits() {
+    let at = now();
+    let asked = ago(at, 49);
+    let mut shared = ready_hook("before_message", 50);
+    let id = shared.push(hook("before_message"), Value::Null, asked);
+    shared.queue.clear();
+    shared.calls.insert(
+        id,
+        Progress::Started {
+            deadline: Some(at),
+            parked: false,
+        },
+    );
+    let (Next::Sleep(until), _) = shared.judge("ext", id, &hook("before_message"), asked, ago(at, 1))
+    else {
+        panic!("a hook returned before its deadline")
+    };
+    assert_eq!(until, Some(at + GRACE));
+}
+
+/// A running hook past its grace still only times out: hooks never abandon
+/// the VM, which a flipped target check would do here.
+#[test]
+fn a_running_hook_past_its_grace_times_out_instead_of_abandoning() {
+    let at = now();
+    let asked = ago(at, 1200);
+    let mut shared = ready_hook("before_message", 50);
+    let id = shared.push(hook("before_message"), Value::Null, asked);
+    shared.queue.clear();
+    shared.calls.insert(
+        id,
+        Progress::Started {
+            deadline: Some(ago(at, 1100)),
+            parked: false,
+        },
+    );
+    let err = returned(shared.judge("ext", id, &hook("before_message"), asked, at)).unwrap_err();
+    assert!(
+        matches!(&err, Error::Timeout { callback, timeout_ms: 50, .. } if callback == "before_message"),
+        "{err:?}"
+    );
+    assert!(matches!(shared.phase, Phase::Ready(_)));
+}
+
+/// A parked hook at its deadline still waits out its grace: only a hook on
+/// the thread answers at its deadline, which a flipped park check would
+/// break here.
+#[test]
+fn a_parked_hook_at_its_deadline_waits_out_its_grace() {
+    let at = now();
+    let asked = ago(at, 50);
+    let mut shared = ready_hook("before_message", 50);
+    let id = shared.push(hook("before_message"), Value::Null, asked);
+    shared.queue.clear();
+    shared.calls.insert(
+        id,
+        Progress::Started {
+            deadline: Some(at),
+            parked: true,
+        },
+    );
+    let (Next::Sleep(until), _) = shared.judge("ext", id, &hook("before_message"), asked, at)
+    else {
+        panic!("a parked hook returned at its deadline")
+    };
+    assert_eq!(until, Some(at + GRACE));
+}
+
+/// While one extension's hook completion is withheld, other extensions, other
+/// points and commands all complete: the pause passes everything else
+/// through, which a widened check would hold up here. Nothing is released.
+#[test]
+fn a_withheld_hook_completion_passes_other_traffic() {
+    let dir = extension(
+        "other",
+        "fiber.command(\"quick\", { timeout = 5000, run = function() return \"quick\" end })\n\
+         fiber.hook(\"after_tool\", { timeout = 5000, on_failure = \"non-blocking\",\n\
+           run = function(call) return {} end })\n\
+         fiber.hook(\"before_message\", { timeout = 5000, on_failure = \"non-blocking\",\n\
+           run = function(call) return {} end })\n",
+    );
+    let clock = FakeClock::new();
+    let ext = LuaExtension::new(
+        "fiber.test/other",
+        dir.path(),
+        PathBuf::from("/nonexistent-fiber-home"),
+        clock,
+    );
+    let (_hold_tx, hold_rx) = mpsc::channel();
+    super::schedule::withhold_hook_completion("fiber.test/withheld", "before_message", hold_rx);
+    assert_eq!(ext.command("quick", "").unwrap(), "quick");
+    assert!(ext.hook("after_tool", 0, serde_json::json!({})).is_ok());
+    assert!(ext.hook("before_message", 0, serde_json::json!({})).is_ok());
+    super::schedule::release_hook_completion();
+}
+
+/// The `before_message` flake (#2256) forced on every run: a hook spinning
+/// on its first call, whose completion the test withholds past the answer
+/// wait. The timeout answer must arrive off the clock advance, without the
+/// worker's delivery; the worker's late completion is dropped and the VM
+/// stays usable. With the delivery withheld and no fix, the answer never
+/// comes and this fails at the wait below, every run and under no load.
+#[test]
+fn a_non_blocking_before_message_hook_past_its_timeout_is_dropped_while_its_completion_is_withheld(
+) {
+    let dir = extension(
+        "withheld",
+        "local calls = 0\n\
+         fiber.hook(\"before_message\", { timeout = 50, on_failure = \"non-blocking\",\n\
+           run = function(call)\n\
+             calls = calls + 1\n\
+             if calls == 1 then require(\"go_spin\") while true do end end\n\
+             return {} end })\n",
+    );
+    let went = go_module(dir.path(), "spin");
+    let clock = FakeClock::new();
+    let ext = Arc::new(LuaExtension::new(
+        "fiber.test/withheld",
+        dir.path(),
+        PathBuf::from("/nonexistent-fiber-home"),
+        clock.clone(),
+    ));
+    // Calling code that blocks runs on a thread, received here with a
+    // deadline naming the wait.
+    let (tx, rx) = mpsc::channel();
+    let caller = Arc::clone(&ext);
+    thread::spawn(move || tx.send(caller.hook("before_message", 0, serde_json::json!({}))));
+    // Withhold the worker's completion past the answer wait below.
+    let (hold_tx, hold_rx) = mpsc::channel();
+    super::schedule::withhold_hook_completion("fiber.test/withheld", "before_message", hold_rx);
+    Deadline::after(WAIT)
+        .recv(&went)
+        .expect("waited for the hook to start");
+    // The worker runs the hook, past the arming of its deadline: the signal
+    // the advance below waits on.
+    assert!(
+        until(&ext.hub, |shared| shared.calls.values().any(|progress| matches!(
+            progress,
+            Progress::Started {
+                parked: false,
+                ..
+            }
+        ))),
+        "waited for the worker to run the hook"
+    );
+    clock.advance(Duration::from_millis(50));
+    let err = Deadline::after(WAIT)
+        .recv(&rx)
+        .expect("waited for the timeout answer without the worker's delivery")
+        .unwrap_err();
+    assert!(
+        matches!(&err, Error::Timeout { callback, timeout_ms: 50, .. } if callback == "before_message"),
+        "{err:?}"
+    );
+    assert!(err.to_string().contains("50 ms timeout"), "{err:?}");
+    // The answer arrived while the worker was still withheld, so this
+    // release only lets its late completion land, dropped, and the VM stays
+    // usable: the next call runs the hook again.
+    drop(hold_tx);
+    super::schedule::release_hook_completion();
+    let (again_tx, again_rx) = mpsc::channel();
+    let again_caller = Arc::clone(&ext);
+    thread::spawn(move || again_tx.send(again_caller.hook("before_message", 0, serde_json::json!({}))));
+    Deadline::after(WAIT)
+        .recv(&again_rx)
+        .expect("waited for the hook to run again after its timeout")
+        .unwrap();
+}

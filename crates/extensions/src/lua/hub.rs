@@ -517,6 +517,20 @@ impl Shared {
             self.forget(id);
             return (Next::Return(Err(not_registered(name, target))), unsent);
         };
+        if let Some(Progress::Started {
+            deadline,
+            parked: false,
+        }) = self.calls.get(&id)
+            && matches!(target, Target::Hook { .. })
+            && expired(*deadline, now)
+        {
+            // A hook past its timeout has failed: the caller takes the
+            // timeout at its deadline and the chain moves on, while the
+            // worker's stop lands late and is dropped. Waiting the grace
+            // would hold the answer on the worker's delivery.
+            self.forget(id);
+            return (Next::Return(Err(timed_out(name, target, timeout))), unsent);
+        }
         let (until, running) = match self.calls.get(&id) {
             Some(Progress::Started { deadline, parked }) => {
                 (deadline.and_then(|at| at.checked_add(GRACE)), !*parked)
