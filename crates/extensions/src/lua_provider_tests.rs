@@ -6,9 +6,9 @@ use std::fs;
 use std::sync::{Arc, mpsc};
 use std::time::Duration;
 
+use config::{Config, ProjectKey, Sources};
 use contract::Secret;
 use contract::signing::{SignRequest, Signer};
-use config::{Config, ProjectKey, Sources};
 use fakes::Deadline;
 use fakes::clock::FakeClock;
 use serde_json::{Value, json};
