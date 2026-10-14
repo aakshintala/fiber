@@ -26,6 +26,9 @@ use support::pty::{Grid, Run};
 /// Installs a provider `fake` with the models `alpha`, `beta` and `gamma`
 /// on `openai-responses` at the fake server, reading its key from
 /// `FIBER_TEST_FAKE_KEY`, and makes `fake/alpha` the configured model.
+/// `alpha` declares the thinking levels `low` and `high`, so the
+/// thinking chip opens the picker on its level chips (`docs/tui.md`,
+/// "Home").
 fn install_picker_provider(setup: &Setup, server: &ProviderServer) {
     let source = setup.root.path().join("src");
     support::write_json(
@@ -35,9 +38,14 @@ fn install_picker_provider(setup: &Setup, server: &ProviderServer) {
     let models: Vec<Value> = ["alpha", "beta", "gamma"]
         .iter()
         .map(|id| {
-            json!({"id": id, "protocol": "openai-responses",
+            let mut model = json!({"id": id, "protocol": "openai-responses",
                    "base_url": format!("{}/v1", server.url()),
-                   "context_window": 100000})
+                   "context_window": 100000});
+            if *id == "alpha" {
+                model["thinking_levels"] = json!(["low", "high"]);
+                model["thinking_default"] = json!("low");
+            }
+            model
         })
         .collect();
     support::write_json(
@@ -161,4 +169,129 @@ fn ctrl_s_chooses_the_filtered_model_for_this_session_only() {
     });
     let finished = run.wait();
     assert_eq!(finished.status.code(), Some(0));
+}
+
+/// Spawns home at 120x32 with the picker provider installed and `env`
+/// in the child's environment: the fake server answers no turn, since
+/// no prompt goes out. Returns the run once the first frame drew and
+/// the chip row names the configured model, so a click never lands
+/// before its target draws.
+#[track_caller]
+fn home_run(setup: &Setup, env: &[(&str, &str)]) -> Run {
+    let mut full = vec![("FIBER_TEST_FAKE_KEY", "sk-test")];
+    full.extend(env.iter().copied());
+    let mut run = Run::spawn(setup, 120, 32, &[], &full);
+    run.ready();
+    run.wait_screen("home with its chips", |screen| {
+        shows(screen, "[fake/alpha]") && shows(screen, "[thinking:")
+    });
+    run
+}
+
+/// The chip row's cell just inside `needle`'s opening bracket on
+/// `screen`: the coordinates come from the drawn grid, never from a
+/// hard-coded column, so the centred box may sit anywhere.
+#[track_caller]
+fn chip_cell(screen: &Grid, needle: &str) -> (u16, u16) {
+    let y = screen
+        .rows
+        .iter()
+        .position(|row| row.contains(needle))
+        .unwrap_or_else(|| panic!("no chip {needle} in {:?}", screen.rows));
+    let row = &screen.rows[y];
+    let at = row.find(needle).unwrap();
+    assert!(
+        row[..at].is_ascii(),
+        "the chip's columns are countable: {row:?}"
+    );
+    (
+        u16::try_from(at + 1).expect("the chip fits its row"),
+        u16::try_from(y).expect("the chip fits the screen"),
+    )
+}
+
+/// Clicks the cell at `(x, y)`: an SGR press then its release on the
+/// same cell, the pair the rail's click test sends.
+fn click(run: &mut Run, x: u16, y: u16) {
+    run.write(format!("\x1b[<0;{};{}M\x1b[<0;{};{}m", x + 1, y + 1, x + 1, y + 1).as_bytes());
+}
+
+/// Whether the picker draws its open catalogue: the filter row and a
+/// model row from the installed list.
+fn picker_open(screen: &Grid) -> bool {
+    shows(screen, "Type to search") && shows(screen, "gamma")
+}
+
+/// Whether the picker's focused row is the current model's level
+/// chips: the `alpha` row carries the focus gutter and the current
+/// mark, and the row under it names the `thinking` levels only a
+/// level row draws.
+fn thinking_focused(screen: &Grid) -> bool {
+    let Some(y) = screen.rows.iter().position(|row| {
+        row.contains("alpha") && row.contains("\u{203a}") && row.contains("current")
+    }) else {
+        return false;
+    };
+    screen
+        .rows
+        .get(y + 1)
+        .is_some_and(|row| row.contains("thinking") && row.contains("low") && row.contains("high"))
+}
+
+/// Closes the open picker with Esc and quits home: the Esc wait proves
+/// the picker closed before the quit goes out, and the primary screen
+/// proves the quit.
+#[track_caller]
+fn close_and_quit(mut run: Run) {
+    run.write(b"\x1b[27u");
+    run.wait_screen("home again", |screen| {
+        !shows(screen, "Type to search") && shows(screen, "[fake/alpha]")
+    });
+    run.write(b"\x03\x03");
+    run.wait_screen("the restored terminal", |screen| {
+        !screen.alternate_screen && !screen.hide_cursor
+    });
+    let finished = run.wait();
+    assert_eq!(finished.status.code(), Some(0));
+}
+
+#[test]
+fn clicking_the_model_chip_opens_the_model_picker() {
+    let setup = Setup::new();
+    let server = ProviderServer::start([support::hello()]).unwrap();
+    install_picker_provider(&setup, &server);
+    let mut run = home_run(&setup, &[("TERM", "xterm-256color")]);
+    // The home grid above proves the chip drew before the click.
+    let (x, y) = chip_cell(&run.screen(), "[fake/alpha]");
+    click(&mut run, x, y);
+    let opened = run.wait_screen("the open picker with its catalogue", picker_open);
+    assert!(
+        opened.rows.iter().any(|row| row.contains("Type to search")),
+        "the picker shows its filter: {:?}",
+        opened.rows
+    );
+    close_and_quit(run);
+}
+
+#[test]
+fn clicking_the_thinking_chip_opens_the_picker_on_its_level_chips() {
+    let setup = Setup::new();
+    let server = ProviderServer::start([support::hello()]).unwrap();
+    install_picker_provider(&setup, &server);
+    let mut run = home_run(&setup, &[("TERM", "xterm-256color")]);
+    // The home grid above proves the chip drew before the click.
+    let (x, y) = chip_cell(&run.screen(), "[thinking:");
+    click(&mut run, x, y);
+    // The catalogue wait proves the picker opened; the focused row
+    // wait proves it opened on the current model's level chips, not
+    // as an ordinary choose.
+    let opened = run.wait_screen("the picker on alpha's level chips", |screen| {
+        picker_open(screen) && thinking_focused(screen)
+    });
+    assert!(
+        thinking_focused(&opened),
+        "the focus sits on alpha's level chips: {:?}",
+        opened.rows
+    );
+    close_and_quit(run);
 }
