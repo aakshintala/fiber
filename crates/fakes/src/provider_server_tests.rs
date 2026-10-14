@@ -899,6 +899,35 @@ fn read_reply_within(stream: TcpStream, what: &'static str) -> Vec<u8> {
         .unwrap_or_else(|_| panic!("{what} within {READ_WITHIN:?}"))
 }
 
+/// Runs one bench-shaped exchange (connect, head and body writes, reply
+/// read to the server's close) on a worker thread and receives the whole
+/// reply through one named wall-clock deadline: continued partial progress
+/// in any step fails the test at the deadline instead of reaching the
+/// harness kill.
+fn exchange_within(addr: SocketAddr, head: Vec<u8>, body: Vec<u8>, what: &'static str) -> Vec<u8> {
+    let (tx, rx) = mpsc::channel();
+    thread::spawn(move || {
+        let mut stream = TcpStream::connect_timeout(&addr, READ_WITHIN)
+            .unwrap_or_else(|e| panic!("{what} within {READ_WITHIN:?}: {e}"));
+        stream.set_read_timeout(Some(READ_WITHIN)).unwrap();
+        stream.set_write_timeout(Some(READ_WITHIN)).unwrap();
+        stream
+            .write_all(&head)
+            .unwrap_or_else(|e| panic!("{what} within {READ_WITHIN:?}: {e}"));
+        stream
+            .write_all(&body)
+            .unwrap_or_else(|e| panic!("{what} within {READ_WITHIN:?}: {e}"));
+        let mut reply = Vec::new();
+        stream
+            .read_to_end(&mut reply)
+            .unwrap_or_else(|e| panic!("{what} within {READ_WITHIN:?}: {e}"));
+        tx.send(reply).unwrap();
+    });
+    Deadline::after(READ_WITHIN)
+        .recv(&rx)
+        .unwrap_or_else(|_| panic!("{what} within {READ_WITHIN:?}"))
+}
+
 // One bench-shaped POST: a large fixed-length body on a fresh connection,
 // answered at once, like each of a busy turn's model calls over its own
 // `connection: close` connection. The reply completes with the body
@@ -1231,28 +1260,18 @@ fn growing_fixed_bodies_bypass_the_lookahead() {
     let server = ProviderServer::start_on(clock, script).unwrap();
     let addr = server.addr;
     for body in bodies.iter() {
-        let mut stream = TcpStream::connect_timeout(&addr, READ_WITHIN)
-            .unwrap_or_else(|e| panic!("the connection arrives within {READ_WITHIN:?}: {e}"));
-        stream.set_read_timeout(Some(READ_WITHIN)).unwrap();
-        stream.set_write_timeout(Some(READ_WITHIN)).unwrap();
-        stream
-            .write_all(
-                format!(
-                    "POST /v1 HTTP/1.1\r\nHost: localhost\r\nContent-Length: {}\r\n\r\n",
-                    body.len()
-                )
-                .as_bytes(),
-            )
-            .unwrap_or_else(|e| panic!("the head arrives within {READ_WITHIN:?}: {e}"));
-        stream
-            .write_all(body)
-            .unwrap_or_else(|e| panic!("the body arrives within {READ_WITHIN:?}: {e}"));
+        let head = format!(
+            "POST /v1 HTTP/1.1\r\nHost: localhost\r\nContent-Length: {}\r\n\r\n",
+            body.len()
+        )
+        .into_bytes();
         // The write side stays open until the reply completes, like the
         // bench's client on its fresh connection per call: the server
         // closes, so the read ends at the reply instead of its bound.
-        // One wall-clock deadline spans the whole reply, so continued
-        // partial progress fails here instead of at the harness kill.
-        let response = read_reply_within(stream, "the scripted reply arrives");
+        // One wall-clock deadline spans the connect, the writes and the
+        // whole reply, so continued partial progress fails here instead
+        // of at the harness kill.
+        let response = exchange_within(addr, head, body.clone(), "the scripted reply arrives");
         let text = String::from_utf8_lossy(&response);
         assert!(text.starts_with("HTTP/1.1 200"), "{text}");
         assert!(response.ends_with(b"{}\n\n"), "{text}");
