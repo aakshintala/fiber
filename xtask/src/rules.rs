@@ -1889,6 +1889,7 @@ fn loop_sites_with_tokens(
 ) -> Result<(Vec<SourceSite>, Vec<String>), String> {
     let test_only =
         test_only_tokens(tokens).map_err(|stalled| stalled_cursor_diagnostic(file, stalled))?;
+    let mut label_allowances = LABEL_ALLOWANCES.to_vec();
     let mut sites = Vec::new();
     let mut failures = Vec::new();
     for (i, token) in tokens.iter().enumerate() {
@@ -1926,19 +1927,19 @@ fn loop_sites_with_tokens(
                 _ => None,
             };
             let exception = label.is_some_and(|label| {
-                LABEL_ALLOWANCES
-                    .iter()
-                    .find(|allowance| {
-                        allowance.path == file.path.as_str() && allowance.name == name
-                    })
-                    .is_some_and(|allowance| {
-                        (
-                            allowance.function,
-                            allowance.context,
-                            allowance.name,
-                            allowance.reason,
-                        ) == (function, label, name, reason)
-                    })
+                let matching = label_allowances.iter().position(|allowance| {
+                    allowance.path == file.path.as_str()
+                        && allowance.function == function
+                        && allowance.context == label
+                        && allowance.name == name
+                        && allowance.reason == reason
+                });
+                if let Some(index) = matching {
+                    label_allowances.remove(index);
+                    true
+                } else {
+                    false
+                }
             });
             if exception {
                 continue;

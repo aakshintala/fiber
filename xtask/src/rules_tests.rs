@@ -970,6 +970,63 @@ fn loop_tool_names_allows_only_the_five_known_label_contexts() {
 }
 
 #[test]
+fn loop_tool_label_exceptions_allow_zero_or_one_use_but_not_two() {
+    let tools = registrations(&REGISTERED_TOOLS);
+    let sites = [
+        (
+            "src/opening.rs",
+            "render",
+            "shell",
+            "let row = (\"shell\", environment.shell.as_str());",
+        ),
+        (
+            "src/status.rs",
+            "key",
+            "jobs",
+            "let key = match state { SessionState::Jobs => (\"jobs\", None) };",
+        ),
+        (
+            "src/skills.rs",
+            "commands",
+            "skill",
+            "let tag = if skill.model_invocable { \"skill\" } else { \"template\" };",
+        ),
+        (
+            "src/handoff/carry.rs",
+            "restart",
+            "jobs",
+            "let args = &[(\"jobs\", listed.join(\"\\\\n\").as_str())];",
+        ),
+        (
+            "src/reviewer.rs",
+            "sections",
+            "handoff",
+            "let sections = Sections { handoff: crate::prompt::section(md, \"handoff\") };",
+        ),
+    ];
+
+    for (path, function, name, label) in sites {
+        for occurrences in 0..=2 {
+            let body = std::iter::repeat_n(label, occurrences)
+                .collect::<Vec<_>>()
+                .join(" ");
+            let source = format!("fn {function}() {{ {body} }}");
+            let files = [tools.clone(), file("loop", path, source)];
+            let failures = loop_tool_names(&files);
+            if occurrences < 2 {
+                assert!(failures.is_empty(), "{path}: {failures:?}");
+            } else {
+                assert_eq!(
+                    failures,
+                    [format!("crates/loop/{path}:1: built-in tool name {name}")],
+                    "{path}"
+                );
+            }
+        }
+    }
+}
+
+#[test]
 fn loop_tool_label_exceptions_do_not_exempt_other_uses_in_the_same_files() {
     let tools = registrations(&REGISTERED_TOOLS);
     let files = [
