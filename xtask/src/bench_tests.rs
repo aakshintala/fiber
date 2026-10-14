@@ -5,35 +5,35 @@ use super::*;
 
 const DOC: &str = concat!(
     "# Performance\n\n## Budgets\n\n",
-    "| Budget | Ceiling | Gated on | Basis |\n",
-    "|---|---|---|---|\n",
-    "| Session, idle, headless | 12 MiB peak RSS | Linux x86_64 | picked |\n",
-    "| Terminal, idle | 9,048 KiB peak RSS | Linux x86_64 | from components |\n",
-    "| Session, busy or resumed | 24 MiB peak RSS | Linux x86_64 | from components |\n",
-    "| `web_fetch` converting a 10 MiB HTML page, the download cap | within the busy session's 24 MiB peak RSS | Linux x86_64 | from components |\n",
-    "| Idle CPU, session and terminal | zero context switches in the idle window, on every thread | Linux x86_64 | exact |\n",
-    "| Threads, idle headless session | 5, plus 2 per client, plus 1 per Lua extension in use | Linux x86_64 | exact |\n",
-    "| fsyncs | 2 per model request, 2 per tool call | Linux x86_64 | exact |\n",
-    "| Log bytes, 429-call turn | the turn's content plus 2 KiB per tool call | Linux x86_64 | exact |\n",
-    "| Session start, the internal session command to its first line, no hub | 20 ms | Linux x86_64 | picked |\n",
-    "| Terminal to its first frame, new session | 50 ms | Linux x86_64 | picked |\n",
-    "| Terminal to its first frame, attaching | 50 ms plus 10 ms per MiB of session log | Linux x86_64 | picked |\n",
-    "| Terminal, attaching a 10 MiB session | 200 MiB peak RSS | Linux x86_64 | picked |\n",
-    "| Session, memory kept after the busy turn | 200 MiB RssAnon | Linux x86_64 | picked |\n",
-    "| Terminal, memory kept after attaching a 10 MiB session | 200 MiB RssAnon | Linux x86_64 | picked |\n",
-    "| Session, memory kept after 10 busy turns, each followed by its handoff | the memory kept after the first, plus 1 MiB RssAnon | Linux x86_64 | picked |\n",
-    "| Listing 1,000 sessions in one project, warm cache | 50 ms | Linux x86_64 | picked |\n",
-    "| `session_list`, waiting for every running session's status | 2 s for the whole call | Linux x86_64 | picked |\n",
-    "| `paging` jig, its session at scale 1 and 160 by 48 | 21,224 KiB peak RSS | Linux x86_64 | picked |\n",
-    "| `paging` jig, open pass and first frame | 616 ms | Linux x86_64 | picked |\n",
-    "| `paging` jig, slowest frame that loaded pages | 3 ms | Linux x86_64 | picked |\n",
-    "| `paging` jig, slowest jump frame | 6 ms | Linux x86_64 | picked |\n",
-    "| `paging` jig, slowest re-count at a new width | 48 ms | Linux x86_64 | picked |\n",
-    "| `paging` jig at scale 16, slowest re-count at a new width | 20 times the same run's scale-1 re-count | Linux x86_64 | picked |\n",
-    "| `paging` jig at scale 16, a search of the whole session with no match | 20 times the same run's scale-1 search | Linux x86_64 | picked |\n",
-    "| `paging` jig, slowest append frame | 4 ms | Linux x86_64 | picked |\n",
-    "| Terminal, wheel to frame, the `paging` jig's session at scale 1, 160 by 48 | 16 ms | Linux x86_64 | picked |\n",
-    "| Terminal, wheel to frame, one turn with an opened `read` of 300 lines, 160 by 48 | 16 ms | Linux x86_64 | picked |\n",
+    "| Budget | Ceiling | Gated on | Basis | Fast ceiling | Middle ceiling | Slow ceiling | Fast tolerance | Slow tolerance |\n",
+    "|---|---|---|---|---|---|---|---|---|\n",
+    "| Session, idle, headless | 12 MiB peak RSS | Linux x86_64 | picked | — | — | — | — | — |\n",
+    "| Terminal, idle | 9,048 KiB peak RSS | Linux x86_64 | from components | — | — | — | — | — |\n",
+    "| Session, busy or resumed | 24 MiB peak RSS | Linux x86_64 | from components | — | — | — | — | — |\n",
+    "| `web_fetch` converting a 10 MiB HTML page, the download cap | within the busy session's 24 MiB peak RSS | Linux x86_64 | from components | — | — | — | — | — |\n",
+    "| Idle CPU, session and terminal | zero context switches in the idle window, on every thread | Linux x86_64 | exact | — | — | — | — | — |\n",
+    "| Threads, idle headless session | 5, plus 2 per client, plus 1 per Lua extension in use | Linux x86_64 | exact | — | — | — | — | — |\n",
+    "| fsyncs | 2 per model request, 2 per tool call | Linux x86_64 | exact | — | — | — | — | — |\n",
+    "| Log bytes, 429-call turn | the turn's content plus 2 KiB per tool call | Linux x86_64 | exact | — | — | — | — | — |\n",
+    "| Session start, the internal session command to its first line, no hub | 20 ms | Linux x86_64 | picked | 16 ms | 12 ms | 13 ms | 55 % | 9 % |\n",
+    "| Terminal to its first frame, new session | 50 ms | Linux x86_64 | picked | 7 ms | 8 ms | 11 ms | 18 % | 8 % |\n",
+    "| Terminal to its first frame, attaching | 50 ms plus 10 ms per MiB of session log | Linux x86_64 | picked | 898 ms | 1101 ms | 1364 ms | 9 % | 4 % |\n",
+    "| Terminal, attaching a 10 MiB session | 200 MiB peak RSS | Linux x86_64 | picked | — | — | — | — | — |\n",
+    "| Session, memory kept after the busy turn | 200 MiB RssAnon | Linux x86_64 | picked | — | — | — | — | — |\n",
+    "| Terminal, memory kept after attaching a 10 MiB session | 200 MiB RssAnon | Linux x86_64 | picked | — | — | — | — | — |\n",
+    "| Session, memory kept after 10 busy turns, each followed by its handoff | the memory kept after the first, plus 1 MiB RssAnon | Linux x86_64 | picked | — | — | — | — | — |\n",
+    "| Listing 1,000 sessions in one project, warm cache | 50 ms | Linux x86_64 | picked | 32 ms | 34 ms | 41 ms | 21 % | 13 % |\n",
+    "| `session_list`, waiting for every running session's status | 2 s for the whole call | Linux x86_64 | picked | — | — | — | — | — |\n",
+    "| `paging` jig, its session at scale 1 and 160 by 48 | 21,224 KiB peak RSS | Linux x86_64 | picked | — | — | — | — | — |\n",
+    "| `paging` jig, open pass and first frame | 616 ms | Linux x86_64 | picked | 725 ms | 828 ms | 1049 ms | 11 % | 4 % |\n",
+    "| `paging` jig, slowest frame that loaded pages | 3 ms | Linux x86_64 | picked | 8 ms | 5 ms | 10 ms | 16 % | 4 % |\n",
+    "| `paging` jig, slowest jump frame | 6 ms | Linux x86_64 | picked | 9 ms | 9 ms | 13 ms | 11 % | 5 % |\n",
+    "| `paging` jig, slowest re-count at a new width | 48 ms | Linux x86_64 | picked | 67 ms | 77 ms | 99 ms | 16 % | 8 % |\n",
+    "| `paging` jig at scale 16, slowest re-count at a new width | 20 times the same run's scale-1 re-count | Linux x86_64 | picked | — | — | — | — | — |\n",
+    "| `paging` jig at scale 16, a search of the whole session with no match | 20 times the same run's scale-1 search | Linux x86_64 | picked | — | — | — | — | — |\n",
+    "| `paging` jig, slowest append frame | 4 ms | Linux x86_64 | picked | 7 ms | 4 ms | 6 ms | 56 % | 32 % |\n",
+    "| Terminal, wheel to frame, the `paging` jig's session at scale 1, 160 by 48 | 16 ms | Linux x86_64 | picked | 7 ms | 6 ms | 9 ms | 21 % | 12 % |\n",
+    "| Terminal, wheel to frame, one turn with an opened `read` of 300 lines, 160 by 48 | 16 ms | Linux x86_64 | picked | 5 ms | 4 ms | 7 ms | 40 % | 23 % |\n",
     "\n## Measuring\n\n| Not | A budget |\n|---|---|\n| x | y |\n",
 );
 
@@ -287,14 +287,14 @@ fn a_row_in_neither_list_fails() {
 #[test]
 fn a_listed_row_missing_from_the_table_fails() {
     let doc = doc_with(
-        "| Terminal, idle | 9,048 KiB peak RSS | Linux x86_64 | from components |\n",
+        "| Terminal, idle | 9,048 KiB peak RSS | Linux x86_64 | from components | — | — | — | — | — |\n",
         "",
     );
     let out = judge_doc(&doc, &head(), Some(&base()), Event::PullRequest);
     assert!(has(&out.failures, "Terminal, idle"), "{:?}", out.failures);
 
     let doc = doc_with(
-        "| fsyncs | 2 per model request, 2 per tool call | Linux x86_64 | exact |\n",
+        "| fsyncs | 2 per model request, 2 per tool call | Linux x86_64 | exact | — | — | — | — | — |\n",
         "",
     );
     let out = judge_doc(&doc, &head(), Some(&base()), Event::PullRequest);
@@ -2590,12 +2590,12 @@ fn a_legacy_shaped_head_fails_naming_its_missing_metrics() {
 #[test]
 fn the_report_names_the_hard_ratio_exception() {
     // Passing ratios carry the new sentence, never the old blanket one;
-    // absolute paging timings stay advisory.
+    // ungated timings stay advisory.
     let out = judge(&head(), Some(&base()), Event::PullRequest);
     assert_eq!(out.failures, Vec::<String>::new(), "{}", out.comment);
     assert!(
         out.comment.contains(
-            "Exact, memory and paging growth-ratio budgets fail the run; absolute timing budgets are advisory."
+            "Exact, memory, paging growth-ratio and gated timing budgets fail the run; timings without an eligible class gate stay advisory with their reason."
         ),
         "{}",
         out.comment
@@ -2624,7 +2624,7 @@ fn the_report_names_the_hard_ratio_exception() {
     assert_eq!(out.failures.len(), 1, "{:?}", out.failures);
     assert!(
         out.comment.contains(
-            "Exact, memory and paging growth-ratio budgets fail the run; absolute timing budgets are advisory."
+            "Exact, memory, paging growth-ratio and gated timing budgets fail the run; timings without an eligible class gate stay advisory with their reason."
         ),
         "{}",
         out.comment
@@ -2685,5 +2685,1235 @@ fn the_median_pair_is_the_middle_pair_not_the_second_run() {
     assert!(has(&out.failures, budget), "{:?}", out.failures);
     let line = row(&out.comment, budget);
     assert!(line.contains("21.0x of 20x allowed"), "{line}");
+    assert!(line.ends_with("| fail |"), "{line}");
+}
+
+// --- #2039 timing gates: calibration, conjunction, fixtures ---
+
+const FAST_MODEL: &str = "AMD EPYC 9V45 96-Core Processor";
+const MIDDLE_MODEL: &str = "Intel(R) Xeon(R) Platinum 8370C CPU @ 2.80GHz";
+const SLOW_MODEL: &str = "AMD EPYC 7763 64-Core Processor";
+const SLOW_ADVISORY_MODEL: &str = "AMD EPYC 9V74 80-Core Processor";
+const UNCLASSIFIED_MODEL: &str = "INTEL(R) XEON(R) PLATINUM 8573C";
+
+/// Every scalar timing row, by comment lookup prefix and metric id, with
+/// its ruled class ceilings (ms) and fast/slow tolerances (%).
+const SCALAR_ROWS: [(&str, &str, f64, f64, f64, f64, f64); 10] = [
+    (
+        "Session start, the internal session command",
+        "session_start_ms",
+        16.0,
+        12.0,
+        13.0,
+        55.0,
+        9.0,
+    ),
+    (
+        "Terminal to its first frame, new session",
+        "terminal_first_frame_ms",
+        7.0,
+        8.0,
+        11.0,
+        18.0,
+        8.0,
+    ),
+    (
+        "Listing 1,000 sessions",
+        "sessions_list_ms",
+        32.0,
+        34.0,
+        41.0,
+        21.0,
+        13.0,
+    ),
+    (
+        "`paging` jig, open pass",
+        "paging_open_ms",
+        725.0,
+        828.0,
+        1049.0,
+        11.0,
+        4.0,
+    ),
+    (
+        "`paging` jig, slowest frame that loaded",
+        "paging_load_ms",
+        8.0,
+        5.0,
+        10.0,
+        16.0,
+        4.0,
+    ),
+    (
+        "`paging` jig, slowest jump",
+        "paging_jump_ms",
+        9.0,
+        9.0,
+        13.0,
+        11.0,
+        5.0,
+    ),
+    (
+        "`paging` jig, slowest re-count at a new width",
+        "paging_width_ms",
+        67.0,
+        77.0,
+        99.0,
+        16.0,
+        8.0,
+    ),
+    (
+        "`paging` jig, slowest append",
+        "paging_append_ms",
+        7.0,
+        4.0,
+        6.0,
+        56.0,
+        32.0,
+    ),
+    (
+        "Terminal, wheel to frame, the `paging` jig's session",
+        "wheel_paging_ms",
+        7.0,
+        6.0,
+        9.0,
+        21.0,
+        12.0,
+    ),
+    (
+        "Terminal, wheel to frame, one turn with an opened `read`",
+        "wheel_read_ms",
+        5.0,
+        4.0,
+        7.0,
+        40.0,
+        23.0,
+    ),
+];
+
+fn neutral_scalars(target: &str, h: Value) -> Value {
+    let b = base();
+    let mut h = h;
+    for (_, other, _, _, _, _, _) in SCALAR_ROWS {
+        if other != target {
+            h["metrics"][other] = b["metrics"][other].clone();
+        }
+    }
+    h
+}
+
+fn scalar_pair(id: &str, head_vals: Value, base_vals: Value, cpu: &str) -> (Value, Value) {
+    let h = with_cpu(with_metric(neutral_scalars(id, head()), id, head_vals), cpu);
+    let b = with_cpu(with_metric(base(), id, base_vals), cpu);
+    (h, b)
+}
+
+fn attach_pair(
+    ten_head: &[f64],
+    one_head: &[f64],
+    ten_base: &[f64],
+    one_base: &[f64],
+    cpu: &str,
+) -> (Value, Value) {
+    let mut head_entries = attach_entries("1 MiB", 1_050_231, one_head);
+    head_entries.extend(attach_entries("10 MiB", 10_492_016, ten_head));
+    let mut base_entries = attach_entries("1 MiB", 1_050_100, one_base);
+    base_entries.extend(attach_entries("10 MiB", 10_490_000, ten_base));
+    let h = with_cpu(
+        with_metric(
+            neutral_scalars("terminal_attach_ms", head()),
+            "terminal_attach_ms",
+            Value::Array(head_entries),
+        ),
+        cpu,
+    );
+    let b = with_cpu(
+        with_metric(base(), "terminal_attach_ms", Value::Array(base_entries)),
+        cpu,
+    );
+    (h, b)
+}
+
+#[test]
+fn class_ceiling_cells_carry_the_ruled_figures() {
+    for (budget, _, fast, middle, slow, fast_tol, slow_tol) in SCALAR_ROWS {
+        let prefix = format!("| {budget}");
+        let line = DOC
+            .lines()
+            .find(|l| l.starts_with(&prefix))
+            .unwrap_or_else(|| panic!("no {budget} row in DOC"));
+        for want in [
+            format!("{fast:.0} ms"),
+            format!("{middle:.0} ms"),
+            format!("{slow:.0} ms"),
+            format!("{fast_tol:.0} %"),
+            format!("{slow_tol:.0} %"),
+        ] {
+            assert!(line.contains(&want), "{budget}: {line} misses {want}");
+        }
+    }
+    let attach = DOC
+        .lines()
+        .find(|l| l.starts_with("| Terminal to its first frame, attaching"))
+        .unwrap();
+    for want in ["898 ms", "1101 ms", "1364 ms", "9 %", "4 %"] {
+        assert!(attach.contains(want), "{attach} misses {want}");
+    }
+}
+
+#[test]
+fn eligible_models_gate_and_advisory_models_stay_advisory() {
+    for (budget, id, _, _, _, _, _) in SCALAR_ROWS {
+        // Head far over every ceiling, base near zero: both legs exceed.
+        let (eligible_h, eligible_b) = scalar_pair(
+            id,
+            json!([2000.0, 2001.0, 1999.0, 2002.0, 1998.0]),
+            json!([1.0, 1.1, 0.9, 1.0, 1.0]),
+            SLOW_MODEL,
+        );
+        let out = judge(&eligible_h, Some(&eligible_b), Event::PullRequest);
+        assert_eq!(out.failures.len(), 1, "{budget}: {:?}", out.failures);
+        assert!(has(&out.failures, budget), "{budget}: {:?}", out.failures);
+        assert!(
+            row(&out.comment, budget).ends_with("| fail |"),
+            "{}",
+            out.comment
+        );
+        let (eligible_h, eligible_b) = scalar_pair(
+            id,
+            json!([2000.0, 2001.0, 1999.0, 2002.0, 1998.0]),
+            json!([1.0, 1.1, 0.9, 1.0, 1.0]),
+            FAST_MODEL,
+        );
+        let out = judge(&eligible_h, Some(&eligible_b), Event::PullRequest);
+        assert_eq!(out.failures.len(), 1, "{budget} fast: {:?}", out.failures);
+
+        for (model, count) in [
+            (SLOW_ADVISORY_MODEL, "4 stored runs"),
+            (MIDDLE_MODEL, "2 stored runs"),
+            (UNCLASSIFIED_MODEL, "1 stored run"),
+        ] {
+            let (h, b) = scalar_pair(
+                id,
+                json!([2000.0, 2001.0, 1999.0, 2002.0, 1998.0]),
+                json!([1.0, 1.1, 0.9, 1.0, 1.0]),
+                model,
+            );
+            let out = judge(&h, Some(&b), Event::PullRequest);
+            assert_eq!(
+                out.failures,
+                Vec::<String>::new(),
+                "{budget} {model}: {:?}",
+                out.failures
+            );
+            let line = row(&out.comment, budget);
+            assert!(line.ends_with("| advisory |"), "{budget} {model}: {line}");
+            assert!(line.contains("2000.0 ms"), "{budget} {model}: {line}");
+            assert!(line.contains(count), "{budget} {model}: {line}");
+        }
+        // Unknown, missing and empty CPU keys stay advisory.
+        let (h, b) = scalar_pair(
+            id,
+            json!(vec![2000.0; 5]),
+            json!(vec![1.0; 5]),
+            "Some Other CPU 1234",
+        );
+        let out = judge(&h, Some(&b), Event::PullRequest);
+        assert_eq!(out.failures, Vec::<String>::new(), "{budget} unknown");
+        assert!(
+            row(&out.comment, budget).contains("unknown or not recorded"),
+            "{}",
+            out.comment
+        );
+        let h = with_metric(head(), id, json!(vec![2000.0; 5]));
+        let b = with_metric(base(), id, json!(vec![1.0; 5]));
+        let out = judge(&h, Some(&b), Event::PullRequest);
+        assert_eq!(out.failures, Vec::<String>::new(), "{budget} missing cpu");
+        assert!(
+            row(&out.comment, budget).contains("unknown or not recorded"),
+            "{}",
+            out.comment
+        );
+        let (h, b) = scalar_pair(id, json!(vec![2000.0; 5]), json!(vec![1.0; 5]), "");
+        let out = judge(&h, Some(&b), Event::PullRequest);
+        assert_eq!(out.failures, Vec::<String>::new(), "{budget} empty cpu");
+    }
+}
+
+#[test]
+fn model_matching_is_case_insensitive_but_not_a_substring() {
+    let id = "session_start_ms";
+    let upper = SLOW_MODEL.to_ascii_uppercase();
+    let (h, b) = scalar_pair(id, json!(vec![2000.0; 5]), json!(vec![1.0; 5]), &upper);
+    let out = judge(&h, Some(&b), Event::PullRequest);
+    assert_eq!(
+        out.failures.len(),
+        1,
+        "upper-case 7763 should gate: {:?}",
+        out.failures
+    );
+    // A prefix alone is unknown, never a gate.
+    let (h, b) = scalar_pair(
+        id,
+        json!(vec![2000.0; 5]),
+        json!(vec![1.0; 5]),
+        "AMD EPYC 7763",
+    );
+    let out = judge(&h, Some(&b), Event::PullRequest);
+    assert_eq!(out.failures, Vec::<String>::new());
+    assert!(
+        row(&out.comment, "Session start").contains("unknown or not recorded"),
+        "{}",
+        out.comment
+    );
+    let (h, b) = scalar_pair(
+        id,
+        json!(vec![2000.0; 5]),
+        json!(vec![1.0; 5]),
+        "xx AMD EPYC 7763 64-Core Processor xx",
+    );
+    let out = judge(&h, Some(&b), Event::PullRequest);
+    assert_eq!(out.failures, Vec::<String>::new());
+    // Mixed-case head and base keys compare normally.
+    let h = with_cpu(
+        with_metric(
+            neutral_scalars(id, head()),
+            id,
+            json!([6.0, 6.2, 5.8, 6.1, 5.9]),
+        ),
+        SLOW_MODEL,
+    );
+    let b = with_cpu(
+        with_metric(base(), id, json!([6.0, 6.2, 5.8, 6.1, 5.9])),
+        &upper,
+    );
+    let out = judge(&h, Some(&b), Event::PullRequest);
+    assert_eq!(
+        out.failures,
+        Vec::<String>::new(),
+        "case-only base difference compares: {:?}",
+        out.failures
+    );
+    assert!(
+        row(&out.comment, "Session start").ends_with("| pass |"),
+        "{}",
+        out.comment
+    );
+}
+
+#[test]
+fn malformed_class_cells_are_configuration_failures() {
+    let id = "session_start_ms";
+    let (h, b) = scalar_pair(id, json!(vec![2000.0; 5]), json!(vec![1.0; 5]), SLOW_MODEL);
+    // Missing class cells: drop the appended columns from the row.
+    let short = DOC.lines().map(|l| if l.starts_with("| Session start, the internal") { "| Session start, the internal session command to its first line, no hub | 20 ms | Linux x86_64 | picked |\n".to_owned() } else { format!("{l}\n") }).collect::<String>();
+    let out = judge_doc(
+        &format!(
+            "# Performance\n\n## Budgets\n\n{short}\n## Measuring\n\n| Not | A budget |\n|---|---|\n| x | y |\n"
+        ),
+        &h,
+        Some(&b),
+        Event::PullRequest,
+    );
+    assert!(has(&out.failures, "Session start"), "{:?}", out.failures);
+    // Wrong units, negative and non-finite ceilings fail.
+    for bad in ["16 s", "16 KiB", "-16 ms", "NaN ms", "inf ms", "—"] {
+        let doc = doc_with(
+            "| 16 ms | 12 ms | 13 ms | 55 % | 9 % |",
+            &format!("| {bad} | 12 ms | 13 ms | 55 % | 9 % |"),
+        );
+        let out = judge_doc(&doc, &h, Some(&b), Event::PullRequest);
+        assert!(
+            has(&out.failures, "Session start"),
+            "{bad}: {:?}",
+            out.failures
+        );
+    }
+    // Missing and malformed tolerances fail.
+    for bad in ["55", "-55 %", "NaN %", "—"] {
+        let doc = doc_with(
+            "| 16 ms | 12 ms | 13 ms | 55 % | 9 % |",
+            &format!("| 16 ms | 12 ms | 13 ms | {bad} | 9 % |"),
+        );
+        let out = judge_doc(&doc, &h, Some(&b), Event::PullRequest);
+        assert!(
+            has(&out.failures, "Session start"),
+            "{bad}: {:?}",
+            out.failures
+        );
+    }
+    // A malformed calibration fails even for an advisory model, never
+    // silently advisory.
+    let (h, b) = scalar_pair(
+        id,
+        json!(vec![2000.0; 5]),
+        json!(vec![1.0; 5]),
+        SLOW_ADVISORY_MODEL,
+    );
+    let doc = doc_with(
+        "| 16 ms | 12 ms | 13 ms | 55 % | 9 % |",
+        "| — | 12 ms | 13 ms | 55 % | 9 % |",
+    );
+    let out = judge_doc(&doc, &h, Some(&b), Event::PullRequest);
+    assert!(has(&out.failures, "Session start"), "{:?}", out.failures);
+}
+
+#[test]
+fn the_conjunction_needs_both_legs_strictly_over() {
+    // Synthetic 100 ms ceiling with 25% tolerance on the session row.
+    let doc = doc_with(
+        "| 16 ms | 12 ms | 13 ms | 55 % | 9 % |",
+        "| 100 ms | 100 ms | 100 ms | 25 % | 25 % |",
+    );
+    let base80 = || json!([79.0, 81.0, 80.0, 82.0, 78.0]);
+    for (head_vals, median, fails) in [
+        (json!([98.0, 99.0, 101.0, 97.0, 100.0]), 99.0, false),
+        (json!([99.0, 100.0, 102.0, 98.0, 101.0]), 100.0, false),
+        (json!([100.0, 101.0, 103.0, 99.0, 102.0]), 101.0, true),
+    ] {
+        let (h, b) = scalar_pair("session_start_ms", head_vals, base80(), SLOW_MODEL);
+        let out = judge_doc(&doc, &h, Some(&b), Event::PullRequest);
+        assert_eq!(
+            !out.failures.is_empty(),
+            fails,
+            "head {median}: {:?}",
+            out.failures
+        );
+        let line = row(&out.comment, "Session start");
+        assert_eq!(line.ends_with("| fail |"), fails, "{line}");
+        if fails {
+            assert!(has(&out.failures, "session_start_ms"), "{:?}", out.failures);
+            assert!(has(&out.failures, "over"), "{:?}", out.failures);
+        }
+    }
+    // Hold base at 100 ms above a lower 50 ms ceiling: the relative leg decides.
+    let doc = doc_with(
+        "| 16 ms | 12 ms | 13 ms | 55 % | 9 % |",
+        "| 50 ms | 50 ms | 50 ms | 25 % | 25 % |",
+    );
+    let base100 = || json!([99.0, 101.0, 100.0, 102.0, 98.0]);
+    for (head_vals, median, fails) in [
+        (json!([123.0, 124.0, 126.0, 122.0, 125.0]), 124.0, false),
+        (json!([124.0, 125.0, 127.0, 123.0, 126.0]), 125.0, false),
+        (json!([125.0, 126.0, 128.0, 124.0, 127.0]), 126.0, true),
+    ] {
+        let (h, b) = scalar_pair("session_start_ms", head_vals, base100(), SLOW_MODEL);
+        let out = judge_doc(&doc, &h, Some(&b), Event::PullRequest);
+        assert_eq!(
+            !out.failures.is_empty(),
+            fails,
+            "head {median}: {:?}",
+            out.failures
+        );
+    }
+    // Ceiling exceeded but within tolerance passes; tolerance exceeded but
+    // under the ceiling passes.
+    let doc = doc_with(
+        "| 16 ms | 12 ms | 13 ms | 55 % | 9 % |",
+        "| 100 ms | 100 ms | 100 ms | 25 % | 25 % |",
+    );
+    let (h, b) = scalar_pair(
+        "session_start_ms",
+        json!(vec![101.0; 5]),
+        json!(vec![100.0; 5]),
+        SLOW_MODEL,
+    );
+    let out = judge_doc(&doc, &h, Some(&b), Event::PullRequest);
+    assert_eq!(
+        out.failures,
+        Vec::<String>::new(),
+        "over ceiling but within tolerance: {:?}",
+        out.failures
+    );
+    assert!(
+        row(&out.comment, "Session start").ends_with("| pass |"),
+        "{}",
+        out.comment
+    );
+    let (h, b) = scalar_pair(
+        "session_start_ms",
+        json!(vec![90.0; 5]),
+        json!(vec![50.0; 5]),
+        SLOW_MODEL,
+    );
+    let out = judge_doc(&doc, &h, Some(&b), Event::PullRequest);
+    assert_eq!(
+        out.failures,
+        Vec::<String>::new(),
+        "over relative bound but under ceiling: {:?}",
+        out.failures
+    );
+}
+
+#[test]
+fn decisions_follow_the_doc_value_not_a_hard_coded_limit() {
+    let id = "session_start_ms";
+    let (h, b) = scalar_pair(
+        id,
+        json!([100.0, 101.0, 103.0, 99.0, 102.0]),
+        json!([79.0, 81.0, 80.0, 82.0, 78.0]),
+        SLOW_MODEL,
+    );
+    let tight = doc_with(
+        "| 16 ms | 12 ms | 13 ms | 55 % | 9 % |",
+        "| 100 ms | 100 ms | 100 ms | 25 % | 25 % |",
+    );
+    let out = judge_doc(&tight, &h, Some(&b), Event::PullRequest);
+    assert_eq!(out.failures.len(), 1, "{:?}", out.failures);
+    let loose = doc_with(
+        "| 16 ms | 12 ms | 13 ms | 55 % | 9 % |",
+        "| 102 ms | 102 ms | 102 ms | 25 % | 25 % |",
+    );
+    let out = judge_doc(&loose, &h, Some(&b), Event::PullRequest);
+    assert_eq!(out.failures, Vec::<String>::new(), "{:?}", out.failures);
+    assert!(
+        row(&out.comment, "Session start").ends_with("| pass |"),
+        "{}",
+        out.comment
+    );
+}
+
+#[test]
+fn unavailable_bases_stay_advisory_with_their_reason() {
+    let id = "session_start_ms";
+    let headed = || {
+        with_cpu(
+            with_metric(neutral_scalars(id, head()), id, json!(vec![2000.0; 5])),
+            SLOW_MODEL,
+        )
+    };
+    // A push has no base column and stays advisory.
+    let out = judge(&headed(), None, Event::Push);
+    assert_eq!(out.failures, Vec::<String>::new());
+    assert!(
+        row(&out.comment, "Session start").contains("no comparable same-job base timing"),
+        "{}",
+        out.comment
+    );
+    // A pull request without --base is still a configuration failure.
+    let out = judge(&headed(), None, Event::PullRequest);
+    assert!(has(&out.failures, "--base"), "{:?}", out.failures);
+    // A failed base stays advisory and shows why.
+    let mut failed = base();
+    failed["failures"] = json!(["base broke"]);
+    let failed = with_cpu(failed, SLOW_MODEL);
+    let out = judge(&headed(), Some(&failed), Event::PullRequest);
+    assert_eq!(out.failures, Vec::<String>::new());
+    assert!(
+        row(&out.comment, "Session start").contains("base failed: base broke"),
+        "{}",
+        out.comment
+    );
+    // A base predating the workload shows unavailable, never a failure.
+    let mut missing = base();
+    missing["metrics"].as_object_mut().unwrap().remove(id);
+    let missing = with_cpu(missing, SLOW_MODEL);
+    let out = judge(&headed(), Some(&missing), Event::PullRequest);
+    assert_eq!(out.failures, Vec::<String>::new());
+    let line = row(&out.comment, "Session start");
+    assert!(line.contains("unavailable"), "{line}");
+    assert!(line.ends_with("| advisory |"), "{line}");
+    // A malformed base metric is unavailable-for-comparison, not a head overage.
+    let bad = with_cpu(with_metric(base(), id, json!("slow")), SLOW_MODEL);
+    let out = judge(&headed(), Some(&bad), Event::PullRequest);
+    assert_eq!(out.failures, Vec::<String>::new());
+    assert!(
+        row(&out.comment, "Session start").contains("base failed:"),
+        "{}",
+        out.comment
+    );
+    // An absent base CPU key stays advisory.
+    let plain_base = with_metric(base(), id, json!([1.0, 1.1, 0.9, 1.0, 1.0]));
+    let out = judge(&headed(), Some(&plain_base), Event::PullRequest);
+    assert_eq!(out.failures, Vec::<String>::new());
+    assert!(
+        row(&out.comment, "Session start").contains("no comparable same-job base timing"),
+        "{}",
+        out.comment
+    );
+    // A mismatched base model stays advisory.
+    let other = with_cpu(with_metric(base(), id, json!(vec![1.0; 5])), FAST_MODEL);
+    let out = judge(&headed(), Some(&other), Event::PullRequest);
+    assert_eq!(out.failures, Vec::<String>::new());
+    assert!(
+        row(&out.comment, "Session start").contains("no comparable same-job base timing"),
+        "{}",
+        out.comment
+    );
+}
+
+#[test]
+fn zero_and_overflow_edges_hold() {
+    let doc = doc_with(
+        "| 16 ms | 12 ms | 13 ms | 55 % | 9 % |",
+        "| 100 ms | 100 ms | 100 ms | 25 % | 25 % |",
+    );
+    // Zero base is valid: a positive head over the ceiling fails.
+    let (h, b) = scalar_pair(
+        "session_start_ms",
+        json!([100.0, 101.0, 103.0, 99.0, 102.0]),
+        json!(vec![0.0; 5]),
+        SLOW_MODEL,
+    );
+    let out = judge_doc(&doc, &h, Some(&b), Event::PullRequest);
+    assert_eq!(out.failures.len(), 1, "{:?}", out.failures);
+    // A zero head never fails.
+    let (h, b) = scalar_pair(
+        "session_start_ms",
+        json!(vec![0.0; 5]),
+        json!(vec![0.0; 5]),
+        SLOW_MODEL,
+    );
+    let out = judge_doc(&doc, &h, Some(&b), Event::PullRequest);
+    assert_eq!(out.failures, Vec::<String>::new());
+    // An overflowing relative bound is a configuration failure, not a pass:
+    // 1.7e308 is finite, but times 1.25 overflows f64.
+    let (h, b) = scalar_pair(
+        "session_start_ms",
+        json!(vec![200.0; 5]),
+        json!(vec![1.7e308; 5]),
+        SLOW_MODEL,
+    );
+    let out = judge_doc(&doc, &h, Some(&b), Event::PullRequest);
+    assert_eq!(out.failures.len(), 1, "{:?}", out.failures);
+    assert!(has(&out.failures, "overflow"), "{:?}", out.failures);
+}
+
+#[test]
+fn malformed_head_timings_fail_even_on_advisory_models() {
+    let id = "session_start_ms";
+    for cpu in [SLOW_MODEL, SLOW_ADVISORY_MODEL, "unknown cpu"] {
+        let mut missing = with_cpu(head(), cpu);
+        missing["metrics"].as_object_mut().unwrap().remove(id);
+        let b = with_cpu(with_metric(base(), id, json!(vec![1.0; 5])), cpu);
+        let out = judge(&missing, Some(&b), Event::PullRequest);
+        assert!(has(&out.failures, id), "{cpu}: {:?}", out.failures);
+        for bad in [
+            json!("slow"),
+            json!([1.0, 2.0]),
+            json!([-1.0, 1.0, 1.0, 1.0, 1.0]),
+            json!([f64::NAN, 1.0, 1.0, 1.0, 1.0]),
+        ] {
+            let h = with_cpu(with_metric(head(), id, bad), cpu);
+            let out = judge(&h, Some(&b), Event::PullRequest);
+            assert!(has(&out.failures, id), "{cpu}: {:?}", out.failures);
+        }
+    }
+}
+
+#[test]
+fn stored_timings_neither_gate_nor_waive_a_live_timing_failure() {
+    let id = "session_start_ms";
+    // Live head over both legs fails even when stored is well under.
+    let (h, b) = scalar_pair(id, json!(vec![2000.0; 5]), json!(vec![1.0; 5]), SLOW_MODEL);
+    let calm = with_metric(full_base(), id, json!(vec![1.0; 5]));
+    let out = judge_stored(&h, &b, Some(&calm), Event::PullRequest);
+    assert_eq!(out.failures.len(), 1, "{:?}", out.failures);
+    // Live head passing stays passing even when stored is far over.
+    let (h, b) = scalar_pair(
+        id,
+        json!([6.0, 6.2, 5.8, 6.1, 5.9]),
+        json!([6.0, 6.2, 5.8, 6.1, 5.9]),
+        SLOW_MODEL,
+    );
+    let hot = with_metric(full_base(), id, json!(vec![2000.0; 5]));
+    let out = judge_stored(&h, &b, Some(&hot), Event::PullRequest);
+    assert_eq!(out.failures, Vec::<String>::new(), "{:?}", out.failures);
+}
+
+#[test]
+fn three_sample_pr_files_gate_on_stored_evidence_not_sample_count() {
+    let id = "session_start_ms";
+    // Three declared samples on an eligible model still gates.
+    let h = with_cpu(
+        with_metric(
+            with_metric_runs(neutral_scalars(id, head()), &[(id, 3)]),
+            id,
+            json!([2000.0, 2001.0, 1999.0]),
+        ),
+        SLOW_MODEL,
+    );
+    let b = with_cpu(
+        with_metric(
+            with_metric_runs(base(), &[(id, 3)]),
+            id,
+            json!([1.0, 1.1, 0.9]),
+        ),
+        SLOW_MODEL,
+    );
+    let out = judge(&h, Some(&b), Event::PullRequest);
+    assert_eq!(out.failures.len(), 1, "{:?}", out.failures);
+    // Three samples on a 4-file model do not promote it.
+    let h = with_cpu(
+        with_metric(
+            with_metric_runs(neutral_scalars(id, head()), &[(id, 3)]),
+            id,
+            json!([2000.0, 2001.0, 1999.0]),
+        ),
+        SLOW_ADVISORY_MODEL,
+    );
+    let b = with_cpu(
+        with_metric(
+            with_metric_runs(base(), &[(id, 3)]),
+            id,
+            json!([1.0, 1.1, 0.9]),
+        ),
+        SLOW_ADVISORY_MODEL,
+    );
+    let out = judge(&h, Some(&b), Event::PullRequest);
+    assert_eq!(out.failures, Vec::<String>::new());
+}
+
+#[test]
+fn only_the_attach_ten_mib_fixture_gates() {
+    // Both legs over on 10 MiB fails, naming the fixture.
+    let (h, b) = attach_pair(
+        &[1400.0, 1401.0, 1399.0, 1402.0, 1398.0],
+        &[31.0, 31.2, 30.8, 31.1, 30.9],
+        &[800.0; 5],
+        &[30.5; 5],
+        SLOW_MODEL,
+    );
+    let out = judge(&h, Some(&b), Event::PullRequest);
+    assert_eq!(out.failures.len(), 1, "{:?}", out.failures);
+    assert!(has(&out.failures, "10 MiB"), "{:?}", out.failures);
+    let line = row(&out.comment, "Terminal to its first frame, attaching");
+    assert!(line.ends_with("| fail |"), "{line}");
+    assert!(line.contains("1364.0 ms"), "{line}");
+    assert!(line.contains("#1546"), "{line}");
+    // At either exact boundary passes: head at ceiling, and head at the
+    // relative bound.
+    let (h, b) = attach_pair(
+        &[1364.0; 5],
+        &[31.0; 5],
+        &[800.0; 5],
+        &[30.5; 5],
+        SLOW_MODEL,
+    );
+    let out = judge(&h, Some(&b), Event::PullRequest);
+    assert_eq!(out.failures, Vec::<String>::new(), "{:?}", out.failures);
+    assert!(
+        row(&out.comment, "Terminal to its first frame, attaching").ends_with("| pass |"),
+        "{}",
+        out.comment
+    );
+    // Above the ceiling but within tolerance passes.
+    let (h, b) = attach_pair(
+        &[1400.0; 5],
+        &[31.0; 5],
+        &[1400.0; 5],
+        &[30.5; 5],
+        SLOW_MODEL,
+    );
+    let out = judge(&h, Some(&b), Event::PullRequest);
+    assert_eq!(
+        out.failures,
+        Vec::<String>::new(),
+        "within 4% of base: {:?}",
+        out.failures
+    );
+    // 1 MiB far over both bounds while 10 MiB passes: no failure and a
+    // positive 1 MiB advisory naming #1546.
+    let (h, b) = attach_pair(
+        &[800.0; 5],
+        &[5000.0; 5],
+        &[800.0; 5],
+        &[30.5; 5],
+        SLOW_MODEL,
+    );
+    let out = judge(&h, Some(&b), Event::PullRequest);
+    assert_eq!(out.failures, Vec::<String>::new(), "{:?}", out.failures);
+    let line = row(&out.comment, "Terminal to its first frame, attaching");
+    assert!(line.contains("1 MiB") && line.contains("#1546"), "{line}");
+    assert!(line.ends_with("| pass |"), "{line}");
+    // Both fixtures over: only 10 MiB creates the overage.
+    let (h, b) = attach_pair(
+        &[1400.0; 5],
+        &[5000.0; 5],
+        &[800.0; 5],
+        &[30.5; 5],
+        SLOW_MODEL,
+    );
+    let out = judge(&h, Some(&b), Event::PullRequest);
+    assert_eq!(out.failures.len(), 1, "{:?}", out.failures);
+    assert!(has(&out.failures, "10 MiB"), "{:?}", out.failures);
+    assert!(!has(&out.failures, "1 MiB"), "{:?}", out.failures);
+}
+
+#[test]
+fn attach_fixture_errors_fail_and_stages_stay_diagnostic() {
+    // Mixed entry ordering still judges per-fixture medians.
+    let mut entries = attach_entries("10 MiB", 10_492_016, &[1400.0; 5]);
+    entries.extend(attach_entries("1 MiB", 1_050_231, &[31.0; 5]));
+    let h = with_cpu(
+        with_metric(
+            neutral_scalars("terminal_attach_ms", head()),
+            "terminal_attach_ms",
+            Value::Array(entries),
+        ),
+        SLOW_MODEL,
+    );
+    let (_, b) = attach_pair(&[800.0; 5], &[30.5; 5], &[800.0; 5], &[30.5; 5], SLOW_MODEL);
+    let (_, b_only) = attach_pair(&[800.0; 5], &[30.5; 5], &[800.0; 5], &[30.5; 5], SLOW_MODEL);
+    let out = judge(&h, Some(&b_only), Event::PullRequest);
+    assert_eq!(out.failures.len(), 1, "{:?}", out.failures);
+    let _ = b;
+    // Missing and unknown fixtures, missing bytes/ms and wrong counts fail.
+    for build in [
+        Value::Array(attach_entries("1 MiB", 1_050_231, &[31.0; 5])),
+        Value::Array({
+            let mut e = attach_entries("1 MiB", 1_050_231, &[31.0; 5]);
+            e.extend(attach_entries("2 MiB", 2_097_152, &[15.0; 5]));
+            e
+        }),
+        Value::Array({
+            let mut e = attach_entries("1 MiB", 1_050_231, &[31.0; 5]);
+            e.extend(vec![json!({"fixture": "10 MiB", "ms": 20.0}); 5]);
+            e
+        }),
+        Value::Array({
+            let mut e = attach_entries("1 MiB", 1_050_231, &[31.0; 4]);
+            e.extend(attach_entries("10 MiB", 10_492_016, &[88.0; 5]));
+            e
+        }),
+    ] {
+        let h = with_cpu(
+            with_metric(
+                neutral_scalars("terminal_attach_ms", head()),
+                "terminal_attach_ms",
+                build,
+            ),
+            SLOW_MODEL,
+        );
+        let (_, b) = attach_pair(&[800.0; 5], &[30.5; 5], &[800.0; 5], &[30.5; 5], SLOW_MODEL);
+        let out = judge(&h, Some(&b), Event::PullRequest);
+        assert!(
+            has(&out.failures, "terminal_attach_ms"),
+            "{:?}",
+            out.failures
+        );
+    }
+    // A negative or non-finite ms fails even on an advisory model.
+    for ms in [json!(-1.0), json!(f64::NAN)] {
+        let mut entries = attach_entries("1 MiB", 1_050_231, &[31.0; 4]);
+        entries.push(json!({"fixture": "1 MiB", "log_bytes": 1_050_231, "ms": ms}));
+        entries.extend(attach_entries("10 MiB", 10_492_016, &[88.0; 5]));
+        let h = with_cpu(
+            with_metric(
+                neutral_scalars("terminal_attach_ms", head()),
+                "terminal_attach_ms",
+                Value::Array(entries),
+            ),
+            SLOW_ADVISORY_MODEL,
+        );
+        let (_, b) = attach_pair(
+            &[800.0; 5],
+            &[30.5; 5],
+            &[800.0; 5],
+            &[30.5; 5],
+            SLOW_ADVISORY_MODEL,
+        );
+        let out = judge(&h, Some(&b), Event::PullRequest);
+        assert!(
+            has(&out.failures, "terminal_attach_ms"),
+            "{:?}",
+            out.failures
+        );
+    }
+    // A malformed base fixture stays advisory, never a head overage.
+    let (h, _) = attach_pair(
+        &[1400.0; 5],
+        &[31.0; 5],
+        &[800.0; 5],
+        &[30.5; 5],
+        SLOW_MODEL,
+    );
+    let mut bad_base = base();
+    bad_base["metrics"]["terminal_attach_ms"] = json!("slow");
+    let bad_base = with_cpu(bad_base, SLOW_MODEL);
+    let out = judge(&h, Some(&bad_base), Event::PullRequest);
+    assert_eq!(out.failures, Vec::<String>::new());
+    // Attach stages never gate: perturbing them leaves the verdict.
+    let (h, b) = attach_pair(&[800.0; 5], &[31.0; 5], &[800.0; 5], &[30.5; 5], SLOW_MODEL);
+    let staged = with_metric(
+        h,
+        "attach_stage_ms",
+        json!(vec![
+            json!({"fixture": "10 MiB", "log_bytes": 10_492_016, "stage": "frames_64", "frames": 229, "ms": 9999.0});
+            5
+        ]),
+    );
+    let out = judge(&staged, Some(&b), Event::PullRequest);
+    assert_eq!(out.failures, Vec::<String>::new(), "{:?}", out.failures);
+    // Three declared samples judge three per fixture.
+    let declared = with_metric_runs(
+        neutral_scalars("terminal_attach_ms", head()),
+        &[("terminal_attach_ms", 3)],
+    );
+    let trimmed = trim_attach(&declared, 3);
+    let h = with_cpu(
+        with_metric(
+            declared,
+            "terminal_attach_ms",
+            trimmed["metrics"]["terminal_attach_ms"].clone(),
+        ),
+        SLOW_MODEL,
+    );
+    let b =
+        with_cpu(
+            with_metric(
+                with_metric_runs(base(), &[("terminal_attach_ms", 3)]),
+                "terminal_attach_ms",
+                trim_attach(&with_metric_runs(base(), &[("terminal_attach_ms", 3)]), 3)["metrics"]
+                    ["terminal_attach_ms"]
+                    .clone(),
+            ),
+            SLOW_MODEL,
+        );
+    let out = judge(&h, Some(&b), Event::PullRequest);
+    assert_eq!(out.failures, Vec::<String>::new(), "{:?}", out.failures);
+}
+
+#[test]
+fn the_comment_names_gated_timing_verdicts_and_reasons() {
+    let id = "session_start_ms";
+    // A gated failure names the marker, both medians, the class ceiling,
+    // the tolerance and the failure.
+    let (h, b) = scalar_pair(id, json!(vec![2000.0; 5]), json!(vec![1.0; 5]), SLOW_MODEL);
+    let out = judge(&h, Some(&b), Event::PullRequest);
+    assert_eq!(out.failures.len(), 1, "{:?}", out.failures);
+    assert_eq!(out.comment.lines().next(), Some(MARKER));
+    let line = row(&out.comment, "Session start");
+    assert!(line.contains("2000.0 ms"), "{line}");
+    assert!(line.contains("1.0 ms"), "{line}");
+    assert!(line.contains("slow ceiling 13.0 ms"), "{line}");
+    assert!(line.contains("+9% over base"), "{line}");
+    assert!(line.ends_with("| fail |"), "{line}");
+    // A gated pass carries the same ceiling and tolerance, marked pass.
+    let (h, b) = scalar_pair(
+        id,
+        json!([6.0, 6.2, 5.8, 6.1, 5.9]),
+        json!([6.0, 6.2, 5.8, 6.1, 5.9]),
+        SLOW_MODEL,
+    );
+    let out = judge(&h, Some(&b), Event::PullRequest);
+    assert_eq!(out.failures, Vec::<String>::new(), "{:?}", out.failures);
+    let line = row(&out.comment, "Session start");
+    assert!(line.contains("slow ceiling 13.0 ms"), "{line}");
+    assert!(line.contains("+9% over base"), "{line}");
+    assert!(line.ends_with("| pass |"), "{line}");
+    // An advisory row names its reason and stays out of the failures.
+    let (h, b) = scalar_pair(
+        id,
+        json!(vec![2000.0; 5]),
+        json!(vec![1.0; 5]),
+        SLOW_ADVISORY_MODEL,
+    );
+    let out = judge(&h, Some(&b), Event::PullRequest);
+    assert_eq!(out.failures, Vec::<String>::new());
+    let line = row(&out.comment, "Session start");
+    assert!(line.contains("2000.0 ms"), "{line}");
+    assert!(line.contains("4 stored runs"), "{line}");
+    assert!(line.ends_with("| advisory |"), "{line}");
+    // Attach rows show both the active class ceiling and the 1 MiB reason.
+    let (h, b) = attach_pair(&[800.0; 5], &[31.0; 5], &[800.0; 5], &[30.5; 5], SLOW_MODEL);
+    let out = judge(&h, Some(&b), Event::PullRequest);
+    assert_eq!(out.failures, Vec::<String>::new(), "{:?}", out.failures);
+    let line = row(&out.comment, "Terminal to its first frame, attaching");
+    assert!(line.contains("slow ceiling 1364.0 ms"), "{line}");
+    assert!(line.contains("#1546"), "{line}");
+}
+
+// --- #2039 mutant-killing tests (see #2039) ---
+//
+// Each test kills one surviving mutant from the timing-gate diff: the
+// comment names the mutant so the next mapping round can match it.
+
+#[test]
+fn unclassified_model_uses_the_singular_stored_run() {
+    // Kills judge.rs:126 `==` with `!=` in `model_advisory`: the mutant
+    // renders "1 stored runs;", which still contains the bare
+    // "1 stored run" substring every older assertion checks, so this
+    // pins the semicolon-terminated singular.
+    let (h, b) = scalar_pair(
+        "session_start_ms",
+        json!(vec![2000.0; 5]),
+        json!(vec![1.0; 5]),
+        UNCLASSIFIED_MODEL,
+    );
+    let out = judge(&h, Some(&b), Event::PullRequest);
+    assert_eq!(out.failures, Vec::<String>::new(), "{:?}", out.failures);
+    let line = row(&out.comment, "Session start");
+    assert!(line.contains("1 stored run;"), "{line}");
+    assert!(line.ends_with("| advisory |"), "{line}");
+    // Just above the singular edge: two stored runs stay plural (the
+    // mutant renders "2 stored run;" instead).
+    let (h, b) = scalar_pair(
+        "session_start_ms",
+        json!(vec![2000.0; 5]),
+        json!(vec![1.0; 5]),
+        MIDDLE_MODEL,
+    );
+    let out = judge(&h, Some(&b), Event::PullRequest);
+    assert_eq!(out.failures, Vec::<String>::new(), "{:?}", out.failures);
+    let line = row(&out.comment, "Session start");
+    assert!(line.contains("2 stored runs;"), "{line}");
+}
+
+#[test]
+fn attach_ms_of_zero_passes_validation() {
+    // Kills two `attach_medians` mutants of the lower-bound check:
+    // `<` with `==` rejects exactly 0.0, which no older test exercises
+    // (only positive, negative and NaN ms); `<` with `<=` rejects exactly
+    // 0.0 while keeping the negative rejection, so only a 0.0 fixture
+    // bites it.
+    let (h, b) = attach_pair(&[0.0; 5], &[0.0; 5], &[0.0; 5], &[0.0; 5], SLOW_MODEL);
+    let out = judge(&h, Some(&b), Event::PullRequest);
+    assert_eq!(out.failures, Vec::<String>::new(), "{:?}", out.failures);
+    let line = row(&out.comment, "Terminal to its first frame, attaching");
+    assert!(line.ends_with("| pass |"), "{line}");
+    // Just above zero passes; just below fails as a configuration error.
+    let (h, b) = attach_pair(&[0.1; 5], &[0.1; 5], &[0.1; 5], &[0.1; 5], SLOW_MODEL);
+    let out = judge(&h, Some(&b), Event::PullRequest);
+    assert_eq!(out.failures, Vec::<String>::new(), "{:?}", out.failures);
+    let (h, b) = attach_pair(&[-0.1; 5], &[0.1; 5], &[0.1; 5], &[0.1; 5], SLOW_MODEL);
+    let out = judge(&h, Some(&b), Event::PullRequest);
+    assert!(
+        has(&out.failures, "terminal_attach_ms"),
+        "{:?}",
+        out.failures
+    );
+}
+
+/// An over-ceiling 10 MiB head on `SLOW_MODEL` with a valid but
+/// mismatched-model base: the row stays advisory because the base cannot
+/// establish the same-job premise.
+fn mismatched_attach_pair() -> (Value, Value) {
+    let (h, _) = attach_pair(
+        &[1400.0; 5],
+        &[31.0; 5],
+        &[800.0; 5],
+        &[30.5; 5],
+        SLOW_MODEL,
+    );
+    let (_, b) = attach_pair(
+        &[1400.0; 5],
+        &[31.0; 5],
+        &[800.0; 5],
+        &[30.5; 5],
+        FAST_MODEL,
+    );
+    (h, b)
+}
+
+#[test]
+fn a_mismatched_attach_base_never_forces_the_gate() {
+    // Kills three same-job-base guard mutants, each of which gates on the
+    // mismatched base and fails naming 10 MiB: the guard with `true`; the
+    // second `&&` with `||`, whose (contains && is_ok) side is true for
+    // the mismatched valid base; and the first `&&` with `||`, whose
+    // contains side is true for the mismatched valid base.
+    let (h, b) = mismatched_attach_pair();
+    let out = judge(&h, Some(&b), Event::PullRequest);
+    assert_eq!(out.failures, Vec::<String>::new(), "{:?}", out.failures);
+    let line = row(&out.comment, "Terminal to its first frame, attaching");
+    assert!(line.ends_with("| advisory |"), "{line}");
+    assert!(
+        line.contains("no comparable same-job base timing"),
+        "{line}"
+    );
+}
+
+/// The base with `failures` recorded, on `cpu`: `report` reads it as a
+/// failed base.
+fn failed_base(cpu: &str) -> Value {
+    let mut failed = base();
+    failed["failures"] = json!(["base broke"]);
+    with_cpu(failed, cpu)
+}
+
+#[test]
+fn failed_attach_base_stays_advisory() {
+    // Kills judge.rs:1031's deleted `(Base::Failed(_), _)` arm: the mutant
+    // falls through to gating against 0.0 and fails naming 10 MiB.
+    let (h, _) = attach_pair(
+        &[1400.0; 5],
+        &[31.0; 5],
+        &[800.0; 5],
+        &[30.5; 5],
+        SLOW_MODEL,
+    );
+    let out = judge(&h, Some(&failed_base(SLOW_MODEL)), Event::PullRequest);
+    assert_eq!(out.failures, Vec::<String>::new(), "{:?}", out.failures);
+    let line = row(&out.comment, "Terminal to its first frame, attaching");
+    assert!(line.ends_with("| advisory |"), "{line}");
+}
+
+#[test]
+fn failed_attach_base_shows_its_failure() {
+    // Pins judge.rs:1010's failed-base arm (the `!matches!(base,
+    // Base::Failed(_))` guard was redundant: the arm patterns already
+    // exclude a failed base, so replacing the guard with `true` changes
+    // nothing observable and the arm is collapsed without it): the head
+    // cell names the active ceiling and the base failure instead of the
+    // no-comparable-timing reason.
+    let (h, _) = attach_pair(&[800.0; 5], &[31.0; 5], &[800.0; 5], &[30.5; 5], SLOW_MODEL);
+    let out = judge(&h, Some(&failed_base(SLOW_MODEL)), Event::PullRequest);
+    assert_eq!(out.failures, Vec::<String>::new(), "{:?}", out.failures);
+    let line = row(&out.comment, "Terminal to its first frame, attaching");
+    assert!(
+        line.contains("slow ceiling 1364.0 ms; base failed: base broke"),
+        "{line}"
+    );
+    assert!(
+        !line.contains("no comparable same-job base timing"),
+        "{line}"
+    );
+}
+
+#[test]
+fn missing_attach_base_metric_stays_advisory() {
+    // Kills two advisory-arm mutants, each of which gates the 1400 ms
+    // head against 0.0 and fails naming 10 MiB: the guard with `false`,
+    // which skips the advisory arm; and the deleted `!`, which admits
+    // only failed bases to the advisory arm.
+    let (h, _) = attach_pair(
+        &[1400.0; 5],
+        &[31.0; 5],
+        &[800.0; 5],
+        &[30.5; 5],
+        SLOW_MODEL,
+    );
+    let mut missing = base();
+    missing["metrics"]
+        .as_object_mut()
+        .unwrap()
+        .remove("terminal_attach_ms");
+    let missing = with_cpu(missing, SLOW_MODEL);
+    let out = judge(&h, Some(&missing), Event::PullRequest);
+    assert_eq!(out.failures, Vec::<String>::new(), "{:?}", out.failures);
+    let line = row(&out.comment, "Terminal to its first frame, attaching");
+    assert!(line.ends_with("| advisory |"), "{line}");
+    assert!(
+        line.contains("no comparable same-job base timing"),
+        "{line}"
+    );
+}
+
+#[test]
+fn failed_scalar_base_carries_no_unavailable_suffix() {
+    // Pins judge.rs:1135's failed-base arm (the `!matches!(base,
+    // Base::Failed(_))` guard was redundant like its attach twin, so
+    // replacing it with `true` changes nothing observable and the arm is
+    // collapsed without it): a failed base stays advisory showing its
+    // failure, never the no-comparable-timing suffix.
+    let (h, _) = scalar_pair(
+        "session_start_ms",
+        json!(vec![2000.0; 5]),
+        json!(vec![1.0; 5]),
+        SLOW_MODEL,
+    );
+    let out = judge(&h, Some(&failed_base(SLOW_MODEL)), Event::PullRequest);
+    assert_eq!(out.failures, Vec::<String>::new(), "{:?}", out.failures);
+    let line = row(&out.comment, "Session start");
+    assert!(line.contains("2000.0 ms"), "{line}");
+    assert!(line.contains("base failed: base broke"), "{line}");
+    assert!(
+        !line.contains("no comparable same-job base timing"),
+        "{line}"
+    );
+    assert!(line.ends_with("| advisory |"), "{line}");
+}
+
+#[test]
+fn rejected_slow_ceilings_name_the_parse_failure() {
+    // A class ceiling must be a finite number at or above zero: the
+    // report reads every gate number from the doc table, so a malformed
+    // calibration cell is a configuration failure naming the cell, never
+    // a silent pass or a timing overage. Each case sits in the slow
+    // column the eligible head model actually uses. This kills M1 (the
+    // `&&` weakened to `||`, which accepts the negative and +inf) and
+    // M3 (the guard dropped, which accepts all four): under either
+    // mutant the named parse failure disappears into a pass or an
+    // overage.
+    let id = "session_start_ms";
+    for bad in ["-13 ms", "inf ms", "-inf ms", "NaN ms"] {
+        let doc = doc_with(
+            "| 16 ms | 12 ms | 13 ms | 55 % | 9 % |",
+            &format!("| 16 ms | 12 ms | {bad} | 55 % | 9 % |"),
+        );
+        let (h, b) = scalar_pair(
+            id,
+            json!([1999.0, 2001.0, 2000.0, 2002.0, 1998.0]),
+            json!([0.9, 1.1, 1.0, 1.2, 0.8]),
+            SLOW_MODEL,
+        );
+        let out = judge_doc(&doc, &h, Some(&b), Event::PullRequest);
+        assert!(
+            has(&out.failures, "is not a finite number at or above zero"),
+            "{bad}: {:?}",
+            out.failures
+        );
+        let line = row(&out.comment, "Session start");
+        assert!(line.ends_with("| fail |"), "{bad}: {line}");
+    }
+}
+
+#[test]
+fn rejected_slow_tolerances_name_the_parse_failure() {
+    // A tolerance must be a finite number at or above zero, for the same
+    // reason as the ceilings: the doc table is the only source of gate
+    // numbers, so a malformed tolerance cell fails naming the cell. This
+    // kills M2 (the `&&` weakened to `||`, which accepts the negative
+    // and +inf) and M4 (the guard dropped, which accepts all four):
+    // under either mutant the named parse failure disappears into an
+    // overage or an overflow error.
+    let id = "session_start_ms";
+    for bad in ["-9 %", "inf %", "-inf %", "NaN %"] {
+        let doc = doc_with(
+            "| 16 ms | 12 ms | 13 ms | 55 % | 9 % |",
+            &format!("| 16 ms | 12 ms | 13 ms | 55 % | {bad} |"),
+        );
+        let (h, b) = scalar_pair(
+            id,
+            json!([1999.0, 2001.0, 2000.0, 2002.0, 1998.0]),
+            json!([0.9, 1.1, 1.0, 1.2, 0.8]),
+            SLOW_MODEL,
+        );
+        let out = judge_doc(&doc, &h, Some(&b), Event::PullRequest);
+        assert!(
+            has(&out.failures, "is not a finite number at or above zero"),
+            "{bad}: {:?}",
+            out.failures
+        );
+        let line = row(&out.comment, "Session start");
+        assert!(line.ends_with("| fail |"), "{bad}: {line}");
+    }
+}
+
+#[test]
+fn a_head_failure_with_a_missing_base_metric_shows_unavailable() {
+    // When the head metric itself is malformed, the base column still
+    // distinguishes a base that never recorded the metric
+    // ("unavailable") from one that did (its median): a missing base
+    // metric is unavailable-for-comparison, never a synthetic zero. This
+    // kills M5 (the guard replaced with false, which reports "base
+    // failed" for the missing metric), M6 (the guard replaced with
+    // true, which reports "unavailable" for the present metric) and M7
+    // (the negation deleted, which swaps both columns).
+    let id = "session_start_ms";
+    let h = with_cpu(without_metric(&neutral_scalars(id, head()), id), SLOW_MODEL);
+    let missing = with_cpu(without_metric(&base(), id), SLOW_MODEL);
+    let out = judge(&h, Some(&missing), Event::PullRequest);
+    assert!(has(&out.failures, id), "{:?}", out.failures);
+    let line = row(&out.comment, "Session start");
+    assert!(line.contains("unavailable"), "{line}");
+    assert!(line.ends_with("| fail |"), "{line}");
+    let b = with_cpu(with_metric(base(), id, json!(vec![1.0; 5])), SLOW_MODEL);
+    let out = judge(&h, Some(&b), Event::PullRequest);
+    assert!(has(&out.failures, id), "{:?}", out.failures);
+    let line = row(&out.comment, "Session start");
+    assert!(line.contains("1.0 ms"), "{line}");
+    assert!(!line.contains("unavailable"), "{line}");
     assert!(line.ends_with("| fail |"), "{line}");
 }
