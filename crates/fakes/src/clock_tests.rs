@@ -1157,3 +1157,39 @@ fn a_thread_waited_on_by_id_is_in_the_mark_for_its_next_park() {
         .recv(&exit_a)
         .expect("thread A exits");
 }
+
+/// `mark_parked` answers at once while a park is held, even though the
+/// parker leaves on its own bound before the `within` ends. Waiting out
+/// the `within` instead (the inverted predicate) finds nobody parked.
+#[test]
+fn mark_parked_returns_while_a_self_leaving_park_is_held() {
+    let clock = FakeClock::new();
+    let until = clock.origin() + Duration::from_secs(30);
+    let (parked_tx, parked_rx) = mpsc::channel();
+    let (exit_tx, exit_rx) = mpsc::channel();
+    let (_never_tx, never_rx) = mpsc::channel::<()>();
+    let clock_t = Arc::clone(&clock);
+    let parker = thread::spawn(move || {
+        clock_t.wait_until(Some(until), &mut |bound| {
+            assert_eq!(bound, None);
+            match parked_tx.send(()) {
+                Ok(()) | Err(mpsc::SendError(())) => {}
+            }
+            // The parker leaves on its own bound; the result is ignored.
+            let _ = Deadline::after(Duration::from_secs(2)).recv(&never_rx);
+        });
+        if let Ok(()) = exit_tx.send(()) {}
+    });
+    let parker_id = parker.thread().id();
+    Deadline::after(Duration::from_secs(5))
+        .recv(&parked_rx)
+        .expect("waited for the thread to park");
+    let mark = clock
+        .mark_parked(until, Duration::from_secs(5))
+        .expect("a parked thread is marked");
+    assert_eq!(mark.0.len(), 1);
+    assert_eq!(mark.0[0].0, parker_id);
+    Deadline::after(Duration::from_secs(5))
+        .recv(&exit_rx)
+        .expect("the parked thread exits");
+}
