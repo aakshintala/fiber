@@ -578,15 +578,29 @@ const HOME_COMPONENTS: &[&str] = &[
     "skills",
 ];
 
-const MAX_SOURCE_SITES_PER_FILE: usize = 1024;
-// Bound cross-file diagnostics when a broken scope admits sites from the whole workspace.
-const MAX_SOURCE_FAILURES_PER_CHECK: usize = 1024;
 const MAX_HOME_JOIN_WORK: usize = 16_384;
 const MAX_HOME_JOIN_CONTEXT_BYTES: usize = 1_048_576;
 
 #[derive(Debug, PartialEq, Eq)]
 struct StalledCursor {
     line: usize,
+}
+
+/// Keep every scanner collection within the input that produced its entries.
+/// `checked_sub` makes the cap independent of a comparison whose mutation could
+/// turn a fail-closed bound into an unbounded push.
+fn push_bounded<T>(
+    values: &mut Vec<T>,
+    value: T,
+    input_len: usize,
+    line: usize,
+) -> Result<(), StalledCursor> {
+    input_len
+        .checked_sub(values.len())
+        .and_then(|remaining| remaining.checked_sub(1))
+        .ok_or(StalledCursor { line })?;
+    values.push(value);
+    Ok(())
 }
 
 struct HomeJoinBudget {
@@ -715,7 +729,7 @@ fn source_tokens(source: &str) -> Result<Vec<SourceToken>, StalledCursor> {
             while !nesting.is_empty() {
                 if cursor.starts_with("/*") {
                     cursor.consume("/*")?;
-                    nesting.push(());
+                    push_bounded(&mut nesting, (), bytes.len(), cursor.line)?;
                 } else if cursor.starts_with("*/") {
                     cursor.consume("*/")?;
                     nesting.pop();
@@ -755,10 +769,15 @@ fn source_tokens(source: &str) -> Result<Vec<SourceToken>, StalledCursor> {
                 .get(content_start..content_end)
                 .unwrap_or_default()
                 .to_owned();
-            tokens.push(SourceToken {
-                kind: SourceKind::String(value),
-                line: token_line,
-            });
+            push_bounded(
+                &mut tokens,
+                SourceToken {
+                    kind: SourceKind::String(value),
+                    line: token_line,
+                },
+                bytes.len(),
+                token_line,
+            )?;
             if cursor.peek().is_some_and(|(_, character)| character == '"') {
                 cursor.advance()?;
                 if raw {
@@ -782,16 +801,26 @@ fn source_tokens(source: &str) -> Result<Vec<SourceToken>, StalledCursor> {
                 .get(start..cursor.offset())
                 .unwrap_or_default()
                 .to_owned();
-            tokens.push(SourceToken {
-                kind: SourceKind::Ident(value),
-                line: token_line,
-            });
+            push_bounded(
+                &mut tokens,
+                SourceToken {
+                    kind: SourceKind::Ident(value),
+                    line: token_line,
+                },
+                bytes.len(),
+                token_line,
+            )?;
         } else {
             cursor.advance()?;
-            tokens.push(SourceToken {
-                kind: SourceKind::Punct(character),
-                line: token_line,
-            });
+            push_bounded(
+                &mut tokens,
+                SourceToken {
+                    kind: SourceKind::Punct(character),
+                    line: token_line,
+                },
+                bytes.len(),
+                token_line,
+            )?;
         }
     }
     Ok(tokens)
@@ -929,24 +958,49 @@ fn struct_body(tokens: &[SourceToken], at: usize) -> bool {
     })
 }
 
-fn test_item_end(tokens: &[SourceToken], start: usize, field: bool) -> usize {
+fn test_item_end(
+    tokens: &[SourceToken],
+    start: usize,
+    field: bool,
+) -> Result<usize, StalledCursor> {
     let mut groups = Vec::new();
     for i in start..tokens.len() {
         if groups.is_empty() {
             if punct(tokens.get(i), ';') || (field && punct(tokens.get(i), ',')) {
-                return i;
+                return Ok(i);
             }
             if field && punct(tokens.get(i), '}') {
-                return i.saturating_sub(1);
+                return Ok(i.saturating_sub(1));
             }
             if punct(tokens.get(i), '{') {
-                return matching(tokens, i, '{', '}').unwrap_or(tokens.len() - 1);
+                return Ok(matching(tokens, i, '{', '}').unwrap_or(tokens.len() - 1));
             }
         }
         match tokens.get(i).map(|token| &token.kind) {
-            Some(SourceKind::Punct('(')) => groups.push(')'),
-            Some(SourceKind::Punct('[')) => groups.push(']'),
-            Some(SourceKind::Punct('<')) if field => groups.push('>'),
+            Some(SourceKind::Punct('(')) => {
+                push_bounded(
+                    &mut groups,
+                    ')',
+                    tokens.len(),
+                    tokens.get(i).map_or(1, |token| token.line),
+                )?;
+            }
+            Some(SourceKind::Punct('[')) => {
+                push_bounded(
+                    &mut groups,
+                    ']',
+                    tokens.len(),
+                    tokens.get(i).map_or(1, |token| token.line),
+                )?;
+            }
+            Some(SourceKind::Punct('<')) if field => {
+                push_bounded(
+                    &mut groups,
+                    '>',
+                    tokens.len(),
+                    tokens.get(i).map_or(1, |token| token.line),
+                )?;
+            }
             Some(SourceKind::Punct(close @ (')' | ']'))) if groups.last() == Some(close) => {
                 groups.pop();
             }
@@ -956,7 +1010,7 @@ fn test_item_end(tokens: &[SourceToken], start: usize, field: bool) -> usize {
             _ => {}
         }
     }
-    tokens.len().saturating_sub(1)
+    Ok(tokens.len().saturating_sub(1))
 }
 
 fn crate_root_cfg_test(tokens: &[SourceToken]) -> bool {
@@ -976,11 +1030,11 @@ fn crate_root_cfg_test(tokens: &[SourceToken]) -> bool {
 }
 
 /// Marks cfg(test)-guarded items, including inline modules and file modules.
-fn test_only_tokens(tokens: &[SourceToken]) -> Vec<bool> {
+fn test_only_tokens(tokens: &[SourceToken]) -> Result<Vec<bool>, StalledCursor> {
     let mut marked = vec![false; tokens.len()];
     if crate_root_cfg_test(tokens) {
         marked.fill(true);
-        return marked;
+        return Ok(marked);
     }
     for (i, token) in tokens.iter().enumerate() {
         if !punct(Some(token), '#') {
@@ -999,7 +1053,7 @@ fn test_only_tokens(tokens: &[SourceToken]) -> Vec<bool> {
             continue;
         }
         let item = attr_end.saturating_add(1);
-        let end = test_item_end(tokens, item, struct_body(tokens, i));
+        let end = test_item_end(tokens, item, struct_body(tokens, i))?;
         for marked_token in marked
             .iter_mut()
             .take(end.saturating_add(1).min(tokens.len()))
@@ -1008,7 +1062,7 @@ fn test_only_tokens(tokens: &[SourceToken]) -> Vec<bool> {
             *marked_token = true;
         }
     }
-    marked
+    Ok(marked)
 }
 
 fn module_target(
@@ -1064,10 +1118,15 @@ fn production_files(files: &[RustFile]) -> Result<Vec<&RustFile>, String> {
         .collect();
     let paths: BTreeSet<&str> = candidates.iter().map(|f| f.path.as_str()).collect();
     let mut edges = Vec::new();
+    let mut token_budget = 0usize;
     for file in &candidates {
         let tokens = source_tokens(&file.source)
             .map_err(|stalled| stalled_cursor_diagnostic(file, stalled))?;
-        let tests = test_only_tokens(&tokens);
+        let tests = test_only_tokens(&tokens)
+            .map_err(|stalled| stalled_cursor_diagnostic(file, stalled))?;
+        token_budget = token_budget
+            .checked_add(tokens.len())
+            .ok_or_else(|| stalled_cursor_diagnostic(file, StalledCursor { line: 1 }))?;
         for i in 0..tokens.len().saturating_sub(2) {
             if !ident(tokens.get(i), "mod") || !punct(tokens.get(i + 2), ';') {
                 continue;
@@ -1081,11 +1140,17 @@ fn production_files(files: &[RustFile]) -> Result<Vec<&RustFile>, String> {
             if let Some(target) = module_target(file, name, &tokens, i)
                 && paths.contains(target.as_str())
             {
-                edges.push((
-                    file.path.as_str(),
-                    target,
-                    tests.get(i).copied().unwrap_or(false),
-                ));
+                push_bounded(
+                    &mut edges,
+                    (
+                        file.path.as_str(),
+                        target,
+                        tests.get(i).copied().unwrap_or(false),
+                    ),
+                    token_budget,
+                    tokens.get(i).map_or(1, |token| token.line),
+                )
+                .map_err(|stalled| stalled_cursor_diagnostic(file, stalled))?;
             }
         }
     }
@@ -1094,7 +1159,8 @@ fn production_files(files: &[RustFile]) -> Result<Vec<&RustFile>, String> {
     for file in &candidates {
         let has_parent = edges.iter().any(|(_, target, _)| target == &file.path);
         if !has_parent && production.insert(file.path.as_str()) {
-            pending.push(file.path.as_str());
+            push_bounded(&mut pending, file.path.as_str(), candidates.len(), 1)
+                .map_err(|stalled| stalled_cursor_diagnostic(file, stalled))?;
         }
     }
     // Each candidate is enqueued once; cap both visits and queued paths if that invariant breaks.
@@ -1110,13 +1176,17 @@ fn production_files(files: &[RustFile]) -> Result<Vec<&RustFile>, String> {
                 continue;
             }
             if production.insert(target.as_str()) {
-                if pending.len() >= candidates.len() {
-                    if let Some(file) = production_file(&candidates, parent) {
-                        return Err(stalled_cursor_diagnostic(file, StalledCursor { line: 1 }));
-                    }
-                    return Err(format!("{parent}:1: source cursor stopped advancing"));
-                }
-                pending.push(target.as_str());
+                let file = production_file(&candidates, parent);
+                let line = 1;
+                push_bounded(&mut pending, target.as_str(), candidates.len(), line).map_err(
+                    |stalled| {
+                        if let Some(file) = file {
+                            stalled_cursor_diagnostic(file, stalled)
+                        } else {
+                            format!("{parent}:{}: source cursor stopped advancing", stalled.line)
+                        }
+                    },
+                )?;
             }
         }
     }
@@ -1174,16 +1244,17 @@ fn scope_context(tokens: &[SourceToken], at: usize) -> String {
         .find(|i| boundary(*i))
         .unwrap_or(tokens.len());
     let text = |range: std::ops::Range<usize>| {
-        tokens
-            .get(range)
-            .unwrap_or_default()
-            .iter()
-            .map(|token| match &token.kind {
-                SourceKind::Ident(value) | SourceKind::String(value) => value.clone(),
-                SourceKind::Punct(value) => value.to_string(),
-            })
-            .collect::<Vec<_>>()
-            .join(" ")
+        let mut text = String::new();
+        for token in tokens.get(range).unwrap_or_default() {
+            if !text.is_empty() {
+                text.push(' ');
+            }
+            match &token.kind {
+                SourceKind::Ident(value) | SourceKind::String(value) => text.push_str(value),
+                SourceKind::Punct(value) => text.push(*value),
+            }
+        }
+        text
     };
     format!(
         "{}::{}",
@@ -1213,30 +1284,24 @@ fn home_scope_context(
 
 fn push_source_site(
     file: &RustFile,
+    tokens: &[SourceToken],
     sites: &mut Vec<SourceSite>,
     site: SourceSite,
 ) -> Result<(), String> {
-    if sites.len() >= MAX_SOURCE_SITES_PER_FILE {
-        return Err(stalled_cursor_diagnostic(
-            file,
-            StalledCursor { line: site.line },
-        ));
-    }
-    sites.push(site);
-    Ok(())
+    let line = site.line;
+    push_bounded(sites, site, tokens.len(), line)
+        .map_err(|stalled| stalled_cursor_diagnostic(file, stalled))
 }
 
 fn push_source_failure(
     file: &RustFile,
+    input_tokens: usize,
     failures: &mut Vec<String>,
     line: usize,
     failure: String,
 ) -> Result<(), String> {
-    if failures.len() >= MAX_SOURCE_FAILURES_PER_CHECK {
-        return Err(stalled_cursor_diagnostic(file, StalledCursor { line }));
-    }
-    failures.push(failure);
-    Ok(())
+    push_bounded(failures, failure, input_tokens, line)
+        .map_err(|stalled| stalled_cursor_diagnostic(file, stalled))
 }
 
 fn joined_literal(tokens: &[SourceToken], at: usize) -> bool {
@@ -1336,7 +1401,7 @@ fn home_join_context_with_budget(
             })
             .unwrap_or("*");
         budget.spend_bytes(segment.len(), line)?;
-        segments.push(segment.to_owned());
+        push_bounded(&mut segments, segment.to_owned(), tokens.len(), line)?;
         if previous_dot >= join_dot {
             return Err(StalledCursor { line });
         }
@@ -1408,10 +1473,12 @@ fn file_operation_near(tokens: &[SourceToken], at: usize) -> bool {
     false
 }
 
-fn session_sites(file: &RustFile) -> Result<Vec<SourceSite>, String> {
-    let tokens =
-        source_tokens(&file.source).map_err(|stalled| stalled_cursor_diagnostic(file, stalled))?;
-    let test_only = test_only_tokens(&tokens);
+fn session_sites_with_tokens(
+    file: &RustFile,
+    tokens: &[SourceToken],
+) -> Result<Vec<SourceSite>, String> {
+    let test_only =
+        test_only_tokens(tokens).map_err(|stalled| stalled_cursor_diagnostic(file, stalled))?;
     let mut sites = Vec::new();
     if file.krate == "log" {
         return Ok(sites);
@@ -1423,14 +1490,14 @@ fn session_sites(file: &RustFile) -> Result<Vec<SourceSite>, String> {
         let Some(value) = string(Some(token)) else {
             continue;
         };
-        let join = joined_literal(&tokens, i);
+        let join = joined_literal(tokens, i);
         let operation = if value == "sessions" && join {
             Some("join:sessions")
         } else if value == "session.lock" && join {
             Some("join:session.lock")
-        } else if path_segment(value, "sessions") && (join || file_operation_near(&tokens, i)) {
+        } else if path_segment(value, "sessions") && (join || file_operation_near(tokens, i)) {
             Some("path:sessions")
-        } else if value == "events.jsonl" && (join || file_operation_near(&tokens, i)) {
+        } else if value == "events.jsonl" && (join || file_operation_near(tokens, i)) {
             Some("join:events.jsonl")
         } else {
             None
@@ -1438,11 +1505,12 @@ fn session_sites(file: &RustFile) -> Result<Vec<SourceSite>, String> {
         if let Some(operation) = operation {
             push_source_site(
                 file,
+                tokens,
                 &mut sites,
                 SourceSite {
                     path: file.path.clone(),
                     line: token.line,
-                    context: function_context(&tokens, i),
+                    context: function_context(tokens, i),
                     operation: operation.to_owned(),
                 },
             )?;
@@ -1455,10 +1523,19 @@ fn prompt_literal(value: &str) -> bool {
     matches!(value, "SYSTEM.md" | "APPEND_SYSTEM.md")
 }
 
+#[cfg(test)]
 fn home_sites(file: &RustFile) -> Result<Vec<SourceSite>, String> {
     let tokens =
         source_tokens(&file.source).map_err(|stalled| stalled_cursor_diagnostic(file, stalled))?;
-    let test_only = test_only_tokens(&tokens);
+    home_sites_with_tokens(file, &tokens)
+}
+
+fn home_sites_with_tokens(
+    file: &RustFile,
+    tokens: &[SourceToken],
+) -> Result<Vec<SourceSite>, String> {
+    let test_only =
+        test_only_tokens(tokens).map_err(|stalled| stalled_cursor_diagnostic(file, stalled))?;
     let mut sites = Vec::new();
     let mut join_budget = HomeJoinBudget::new(MAX_HOME_JOIN_WORK, MAX_HOME_JOIN_CONTEXT_BYTES);
     if file.krate == "config" {
@@ -1471,12 +1548,12 @@ fn home_sites(file: &RustFile) -> Result<Vec<SourceSite>, String> {
         let Some(value) = string(Some(token)) else {
             continue;
         };
-        let join = joined_literal(&tokens, i);
+        let join = joined_literal(tokens, i);
         let first = value.split('/').next().unwrap_or_default();
         let home_component = HOME_COMPONENTS.contains(&first);
         let prompt_candidate = prompt_literal(value);
         let home_context = if join && (home_component || prompt_candidate) {
-            fiber_home_join_with_budget(&tokens, i - 3, &mut join_budget)
+            fiber_home_join_with_budget(tokens, i - 3, &mut join_budget)
                 .map_err(|stalled| stalled_cursor_diagnostic(file, stalled))?
         } else {
             None
@@ -1484,8 +1561,8 @@ fn home_sites(file: &RustFile) -> Result<Vec<SourceSite>, String> {
         let home_root = home_context.is_some();
         let config_path =
             first == ".fiber" && matches!(value.split('/').nth(1), Some("config.json" | "config"));
-        let prompt = prompt_candidate && (home_root || file_operation_near(&tokens, i));
-        let direct_config = config_path && (join || file_operation_near(&tokens, i));
+        let prompt = prompt_candidate && (home_root || file_operation_near(tokens, i));
+        let direct_config = config_path && (join || file_operation_near(tokens, i));
         let operation = if home_root && home_component {
             Some(format!("join:{value}"))
         } else if prompt {
@@ -1497,12 +1574,13 @@ fn home_sites(file: &RustFile) -> Result<Vec<SourceSite>, String> {
         };
         if let Some(operation) = operation {
             let context = home_context.map_or_else(
-                || function_context(&tokens, i),
-                |root| format!("{}|root:{root}", function_context(&tokens, i)),
+                || function_context(tokens, i),
+                |root| format!("{}|root:{root}", function_context(tokens, i)),
             );
-            let context = home_scope_context(file, &tokens, i, context, &operation);
+            let context = home_scope_context(file, tokens, i, context, &operation);
             push_source_site(
                 file,
+                tokens,
                 &mut sites,
                 SourceSite {
                     path: file.path.clone(),
@@ -1520,11 +1598,11 @@ fn home_sites(file: &RustFile) -> Result<Vec<SourceSite>, String> {
             || !ident(window.get(3), "name")
             || !punct(window.get(4), ')')
             || test_window.get(3).copied().unwrap_or(false)
-            || function_context(&tokens, i) != "fn read_one"
+            || function_context(tokens, i) != "fn read_one"
         {
             continue;
         }
-        let Some(root) = fiber_home_join_with_budget(&tokens, i, &mut join_budget)
+        let Some(root) = fiber_home_join_with_budget(tokens, i, &mut join_budget)
             .map_err(|stalled| stalled_cursor_diagnostic(file, stalled))?
         else {
             continue;
@@ -1535,13 +1613,14 @@ fn home_sites(file: &RustFile) -> Result<Vec<SourceSite>, String> {
         let operation = "join:prompt-name";
         let context = home_scope_context(
             file,
-            &tokens,
+            tokens,
             i,
             format!("fn read_one|root:{root}"),
             operation,
         );
         push_source_site(
             file,
+            tokens,
             &mut sites,
             SourceSite {
                 path: file.path.clone(),
@@ -1583,19 +1662,31 @@ fn consume_allowance(allowances: &[SourceAllowance], site: &SourceSite) -> bool 
 fn source_failures(files: &[RustFile], allowances: &[SourceAllowance], home: bool) -> Vec<String> {
     let mut remaining = allowances.to_vec();
     let mut failures = Vec::new();
+    let mut token_budget = 0usize;
     let production = match production_files(files) {
         Ok(production) => production,
         Err(failure) => return vec![failure],
     };
     for file in production {
-        let sites = match if home {
-            home_sites(file)
+        let tokens = match source_tokens(&file.source) {
+            Ok(tokens) => tokens,
+            Err(stalled) => return vec![stalled_cursor_diagnostic(file, stalled)],
+        };
+        token_budget = match token_budget.checked_add(tokens.len()) {
+            Some(budget) => budget,
+            None => return vec![stalled_cursor_diagnostic(file, StalledCursor { line: 1 })],
+        };
+        let scan = if home {
+            home_sites_with_tokens(file, &tokens)
         } else {
-            session_sites(file)
-        } {
+            session_sites_with_tokens(file, &tokens)
+        };
+        let sites = match scan {
             Ok(sites) => sites,
             Err(failure) => {
-                if let Err(stalled) = push_source_failure(file, &mut failures, 1, failure) {
+                if let Err(stalled) =
+                    push_source_failure(file, token_budget, &mut failures, 1, failure)
+                {
                     return vec![stalled];
                 }
                 continue;
@@ -1610,6 +1701,7 @@ fn source_failures(files: &[RustFile], allowances: &[SourceAllowance], home: boo
                 };
                 if let Err(stalled) = push_source_failure(
                     file,
+                    token_budget,
                     &mut failures,
                     site.line,
                     format!("{}:{}: {message}", site.path, site.line),
@@ -1664,24 +1756,35 @@ fn unrecognized_tool_definition(tokens: &[SourceToken], i: usize) -> bool {
 }
 
 fn derived_tool_names(files: &[RustFile]) -> Result<BTreeSet<String>, String> {
-    let mut names = BTreeSet::new();
+    let mut names = Vec::new();
+    let mut token_budget = 0usize;
     for file in production_files(files)?
         .into_iter()
         .filter(|file| matches!(file.krate.as_str(), "tools" | "jobs"))
     {
         let tokens = source_tokens(&file.source)
             .map_err(|stalled| stalled_cursor_diagnostic(file, stalled))?;
-        let test_only = test_only_tokens(&tokens);
+        token_budget = token_budget
+            .checked_add(tokens.len())
+            .ok_or_else(|| stalled_cursor_diagnostic(file, StalledCursor { line: 1 }))?;
+        let test_only = test_only_tokens(&tokens)
+            .map_err(|stalled| stalled_cursor_diagnostic(file, stalled))?;
         for i in 0..tokens.len() {
             if test_only.get(i).copied().unwrap_or(false) {
                 continue;
             }
             if let Some(name) = owned_tool_definition(&tokens, i) {
-                names.insert(name);
+                push_bounded(
+                    &mut names,
+                    name,
+                    token_budget,
+                    tokens.get(i).map_or(1, |token| token.line),
+                )
+                .map_err(|stalled| stalled_cursor_diagnostic(file, stalled))?;
             }
         }
     }
-    Ok(names)
+    Ok(names.into_iter().collect())
 }
 
 fn previous_punct(tokens: &[SourceToken], at: usize, offset: usize, wanted: char) -> bool {
@@ -1768,33 +1871,42 @@ fn previous_ident(tokens: &[SourceToken], at: usize, offset: usize, wanted: &str
         .is_some_and(|index| ident(tokens.get(index), wanted))
 }
 
+#[cfg(test)]
 fn loop_sites(
     file: &RustFile,
     names: &BTreeSet<String>,
 ) -> Result<(Vec<SourceSite>, Vec<String>), String> {
     let tokens =
         source_tokens(&file.source).map_err(|stalled| stalled_cursor_diagnostic(file, stalled))?;
-    let test_only = test_only_tokens(&tokens);
+    loop_sites_with_tokens(file, &tokens, names)
+}
+
+fn loop_sites_with_tokens(
+    file: &RustFile,
+    tokens: &[SourceToken],
+    names: &BTreeSet<String>,
+) -> Result<(Vec<SourceSite>, Vec<String>), String> {
+    let test_only =
+        test_only_tokens(tokens).map_err(|stalled| stalled_cursor_diagnostic(file, stalled))?;
     let mut sites = Vec::new();
     let mut failures = Vec::new();
-    let mut identities = 0usize;
     for (i, token) in tokens.iter().enumerate() {
         if test_only.get(i).copied().unwrap_or(false) {
             continue;
         }
         if matches!(file.krate.as_str(), "tools" | "jobs")
-            && unrecognized_tool_definition(&tokens, i)
+            && unrecognized_tool_definition(tokens, i)
         {
-            if failures.len() >= MAX_SOURCE_SITES_PER_FILE {
-                return Err(stalled_cursor_diagnostic(
-                    file,
-                    StalledCursor { line: token.line },
-                ));
-            }
-            failures.push(format!(
-                "{}:{}: unrecognized owned tool-name definition",
-                file.path, token.line
-            ));
+            push_bounded(
+                &mut failures,
+                format!(
+                    "{}:{}: unrecognized owned tool-name definition",
+                    file.path, token.line
+                ),
+                tokens.len(),
+                token.line,
+            )
+            .map_err(|stalled| stalled_cursor_diagnostic(file, stalled))?;
         }
         if file.krate != "loop" {
             continue;
@@ -1802,15 +1914,8 @@ fn loop_sites(
         let Some(name) = string(Some(token)).filter(|name| names.contains(*name)) else {
             continue;
         };
-        identities = identities.saturating_add(1);
-        if identities > MAX_SOURCE_SITES_PER_FILE {
-            return Err(stalled_cursor_diagnostic(
-                file,
-                StalledCursor { line: token.line },
-            ));
-        }
-        let mut context = function_context(&tokens, i);
-        if let Some((function, reason)) = label_context(file, &tokens, i, name) {
+        let mut context = function_context(tokens, i);
+        if let Some((function, reason)) = label_context(file, tokens, i, name) {
             let label = match (file.path.as_str(), name) {
                 ("crates/loop/src/opening.rs", "shell") => Some("environment-template"),
                 ("crates/loop/src/status.rs", "jobs") => Some("state-key"),
@@ -1841,6 +1946,7 @@ fn loop_sites(
         }
         push_source_site(
             file,
+            tokens,
             &mut sites,
             SourceSite {
                 path: file.path.clone(),
@@ -1864,24 +1970,38 @@ pub(crate) fn loop_tool_names(files: &[RustFile]) -> Vec<String> {
         Err(failure) => return vec![failure],
     };
     let mut failures = Vec::new();
+    let mut token_budget = 0usize;
     for file in production {
-        let (sites, definitions) = match loop_sites(file, &names) {
+        let tokens = match source_tokens(&file.source) {
+            Ok(tokens) => tokens,
+            Err(stalled) => return vec![stalled_cursor_diagnostic(file, stalled)],
+        };
+        token_budget = match token_budget.checked_add(tokens.len()) {
+            Some(budget) => budget,
+            None => return vec![stalled_cursor_diagnostic(file, StalledCursor { line: 1 })],
+        };
+        let (sites, definitions) = match loop_sites_with_tokens(file, &tokens, &names) {
             Ok(result) => result,
             Err(failure) => {
-                if let Err(stalled) = push_source_failure(file, &mut failures, 1, failure) {
+                if let Err(stalled) =
+                    push_source_failure(file, token_budget, &mut failures, 1, failure)
+                {
                     return vec![stalled];
                 }
                 continue;
             }
         };
         for definition in definitions {
-            if let Err(stalled) = push_source_failure(file, &mut failures, 1, definition) {
+            if let Err(stalled) =
+                push_source_failure(file, token_budget, &mut failures, 1, definition)
+            {
                 return vec![stalled];
             }
         }
         for site in sites {
             if let Err(stalled) = push_source_failure(
                 file,
+                token_budget,
                 &mut failures,
                 site.line,
                 format!(

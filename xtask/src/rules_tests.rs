@@ -1170,79 +1170,95 @@ fn joined_literal_requires_a_complete_join_call() {
 }
 
 #[test]
-fn loop_sites_enforces_the_identity_limit_at_each_cap_edge() {
+fn loop_sites_allow_repetitions_up_to_their_input_token_count() {
     let names = BTreeSet::from(["shell".to_owned()]);
-    for (count, succeeds) in [
-        (MAX_SOURCE_SITES_PER_FILE - 1, true),
-        (MAX_SOURCE_SITES_PER_FILE, true),
-        (MAX_SOURCE_SITES_PER_FILE + 1, false),
-    ] {
-        let source = (0..count).map(|_| "\"shell\";\n").collect::<String>();
-        let file = source_file("loop", "src/many_sites.rs", &source);
-        let result = loop_sites(&file, &names);
-        assert_eq!(result.is_ok(), succeeds, "count: {count}");
-        if succeeds {
-            assert_eq!(result.unwrap().0.len(), count, "count: {count}");
-        } else {
-            assert_eq!(
-                result.unwrap_err(),
-                "crates/loop/src/many_sites.rs:1025: source cursor stopped advancing",
-                "count: {count}"
-            );
-        }
-    }
+    let source = (0..1100).map(|_| "\"shell\";\n").collect::<String>();
+    let file = source_file("loop", "src/many_sites.rs", &source);
+    let tokens = source_tokens(&source).unwrap();
+    let (sites, definitions) = loop_sites(&file, &names).unwrap();
+    assert!(definitions.is_empty());
+    assert_eq!(sites.len(), 1100);
+    assert!(sites.len() <= tokens.len());
 }
 
 #[test]
-fn loop_sites_enforces_the_unrecognized_definition_limit_at_each_cap_edge() {
-    for (count, succeeds) in [
-        (MAX_SOURCE_SITES_PER_FILE - 1, true),
-        (MAX_SOURCE_SITES_PER_FILE, true),
-        (MAX_SOURCE_SITES_PER_FILE + 1, false),
-    ] {
-        let source = (0..count)
-            .map(|_| "name: String::from(\"custom\");\n")
-            .collect::<String>();
-        let file = source_file("tools", "src/many_definitions.rs", &source);
-        let result = loop_sites(&file, &BTreeSet::new());
-        assert_eq!(result.is_ok(), succeeds, "count: {count}");
-        if succeeds {
-            assert_eq!(result.unwrap().1.len(), count, "count: {count}");
-        } else {
-            assert_eq!(
-                result.unwrap_err(),
-                "crates/tools/src/many_definitions.rs:1025: source cursor stopped advancing",
-                "count: {count}"
-            );
-        }
-    }
+fn loop_definitions_allow_repetitions_up_to_their_input_token_count() {
+    let source = (0..1100)
+        .map(|_| "name: String::from(\"custom\");\n")
+        .collect::<String>();
+    let file = source_file("tools", "src/many_definitions.rs", &source);
+    let tokens = source_tokens(&source).unwrap();
+    let (_, definitions) = loop_sites(&file, &BTreeSet::new()).unwrap();
+    assert_eq!(definitions.len(), 1100);
+    assert!(definitions.len() <= tokens.len());
 }
 
 #[test]
-fn push_source_site_enforces_the_per_file_limit_at_each_cap_edge() {
+fn collected_outputs_fail_closed_at_the_input_token_count() {
     let file = source_file("loop", "src/many_sites.rs", "");
-    for (count, succeeds) in [
-        (MAX_SOURCE_SITES_PER_FILE - 1, true),
-        (MAX_SOURCE_SITES_PER_FILE, true),
-        (MAX_SOURCE_SITES_PER_FILE + 1, false),
-    ] {
-        let mut sites = Vec::new();
-        let mut result = Ok(());
-        for _ in 0..count {
-            let site = SourceSite {
+    let tokens = source_tokens("a b c").unwrap();
+    assert_eq!(tokens.len(), 3);
+
+    let mut sites = Vec::new();
+    for token in &tokens {
+        push_source_site(
+            &file,
+            &tokens,
+            &mut sites,
+            SourceSite {
                 path: file.path.clone(),
-                line: 1,
+                line: token.line,
                 context: "fn f".to_owned(),
                 operation: "tool:shell".to_owned(),
-            };
-            result = push_source_site(&file, &mut sites, site);
-            if result.is_err() {
-                break;
-            }
-        }
-        assert_eq!(result.is_ok(), succeeds, "count: {count}");
-        assert_eq!(sites.len(), count.min(MAX_SOURCE_SITES_PER_FILE));
+            },
+        )
+        .unwrap();
     }
+    assert_eq!(sites.len(), tokens.len());
+    assert_eq!(
+        push_source_site(
+            &file,
+            &tokens,
+            &mut sites,
+            SourceSite {
+                path: file.path.clone(),
+                line: 7,
+                context: "fn f".to_owned(),
+                operation: "tool:shell".to_owned(),
+            },
+        ),
+        Err("crates/loop/src/many_sites.rs:7: source cursor stopped advancing".to_owned())
+    );
+    assert_eq!(sites.len(), tokens.len());
+
+    let mut failures = Vec::new();
+    for token in &tokens {
+        push_source_failure(
+            &file,
+            tokens.len(),
+            &mut failures,
+            token.line,
+            "hit".to_owned(),
+        )
+        .unwrap();
+    }
+    assert_eq!(failures.len(), tokens.len());
+    assert_eq!(
+        push_source_failure(&file, tokens.len(), &mut failures, 7, "extra".to_owned()),
+        Err("crates/loop/src/many_sites.rs:7: source cursor stopped advancing".to_owned())
+    );
+    assert_eq!(failures.len(), tokens.len());
+
+    let mut names = Vec::new();
+    for token in &tokens {
+        push_bounded(&mut names, "shell".to_owned(), tokens.len(), token.line).unwrap();
+    }
+    assert_eq!(names.len(), tokens.len());
+    assert_eq!(
+        push_bounded(&mut names, "extra".to_owned(), tokens.len(), 7),
+        Err(StalledCursor { line: 7 })
+    );
+    assert_eq!(names.len(), tokens.len());
 }
 
 #[test]
@@ -1256,8 +1272,13 @@ fn loop_tool_scope_mutant_fails_within_a_bounded_workspace_scan() {
 }
 
 #[test]
-fn source_gate_diagnostics_are_bounded_across_files() {
+fn source_gate_outputs_stay_within_the_total_input_tokens() {
     run_scanner_bound_probe("source-failures");
+}
+
+#[test]
+fn adversarial_scanner_inputs_complete_with_exact_findings() {
+    run_scanner_bound_probe("adversarial");
 }
 
 #[test]
@@ -1427,7 +1448,7 @@ fn scanner_bound_probe() {
         }
         "loop-sites-scope" => {
             let mut files = vec![registrations(&["shell"])];
-            files.extend((0..=MAX_SOURCE_FAILURES_PER_CHECK).map(|index| {
+            files.extend((0..1025).map(|index| {
                 source_file(
                     "hub",
                     &format!("src/hit{index:04}.rs"),
@@ -1443,7 +1464,7 @@ fn scanner_bound_probe() {
             );
         }
         "source-failures" => {
-            let files = (0..=MAX_SOURCE_FAILURES_PER_CHECK)
+            let files = (0..1025)
                 .map(|index| {
                     source_file(
                         "hub",
@@ -1452,13 +1473,65 @@ fn scanner_bound_probe() {
                     )
                 })
                 .collect::<Vec<_>>();
-            for failures in [session_paths(&files), fiber_home_paths(&files)] {
-                assert_eq!(failures.len(), 1, "diagnostics were not capped");
-                assert!(
-                    failures[0].ends_with("source cursor stopped advancing"),
-                    "missing bounded scanner diagnostic: {failures:?}"
-                );
+            let input_tokens = files
+                .iter()
+                .map(|file| source_tokens(&file.source).unwrap().len())
+                .sum::<usize>();
+            for (failures, message) in [
+                (session_paths(&files), "session path outside log"),
+                (fiber_home_paths(&files), "Fiber-home path outside config"),
+            ] {
+                assert_eq!(failures.len(), files.len());
+                assert!(failures.len() <= input_tokens);
+                assert!(failures.iter().all(|failure| failure.ends_with(message)));
             }
+        }
+        "adversarial" => {
+            let opens = "/*".repeat(4096);
+            let closes = "*/".repeat(4096);
+            let deep = format!("{opens}{closes}\nfn f() {{ let _ = dir.join(\"sessions\"); }}");
+            assert_eq!(
+                session_paths(&[source_file("hub", "src/deep.rs", &deep)]),
+                ["crates/hub/src/deep.rs:2: session path outside log"]
+            );
+
+            let nested_type = format!("fn({}u8{})", "[".repeat(512), "; 1]".repeat(512));
+            let nested_source = format!(
+                "struct Fake {{\n#[cfg(test)]\ncallback: {nested_type},\n}}\nfn production() {{\nlet _ = dir.join(\"sessions\");\n}}"
+            );
+            assert_eq!(
+                session_paths(&[source_file("hub", "src/nested_type.rs", &nested_source)]),
+                ["crates/hub/src/nested_type.rs:6: session path outside log"]
+            );
+
+            let repetitions = (0..1024)
+                .map(|_| "fn f() { let _ = dir.join(\"sessions\"); }\n")
+                .collect::<String>();
+            let findings = session_paths(&[source_file("hub", "src/repetitions.rs", &repetitions)]);
+            assert_eq!(findings.len(), 1024);
+            assert_eq!(
+                findings.first().map(String::as_str),
+                Some("crates/hub/src/repetitions.rs:1: session path outside log")
+            );
+            assert_eq!(
+                findings.last().map(String::as_str),
+                Some("crates/hub/src/repetitions.rs:1024: session path outside log")
+            );
+
+            let pathological = [
+                "fn f() {\n",
+                r##"    let _ = r#"/* " sessions */"#;
+"##,
+                r#"    let _ = "escaped \" // sessions";
+"#,
+                "    /* outer /* inner */ still comment */\n",
+                "    let _ = dir.join(\"sessions\");\n}",
+            ]
+            .concat();
+            assert_eq!(
+                session_paths(&[source_file("hub", "src/pathological.rs", &pathological)]),
+                ["crates/hub/src/pathological.rs:5: session path outside log"]
+            );
         }
         "home-join" => {
             let source = format!("home{}", r#".join("segment")"#.repeat(512));
@@ -1922,7 +1995,10 @@ fn test_item_end_tracks_nested_delimiters_and_field_generics() {
         .filter_map(|(i, token)| punct(Some(token), ',').then_some(i))
         .collect::<Vec<_>>();
     assert_eq!(commas.len(), 2);
-    assert_eq!(test_item_end(&function_type, callback, true), commas[1]);
+    assert_eq!(
+        test_item_end(&function_type, callback, true).unwrap(),
+        commas[1]
+    );
 
     let generic = source_tokens("value: Map<A, B>, next: Path").unwrap();
     let value = token_with_ident(&generic, "value");
@@ -1931,7 +2007,7 @@ fn test_item_end_tracks_nested_delimiters_and_field_generics() {
         .enumerate()
         .filter_map(|(i, token)| punct(Some(token), ',').then_some(i))
         .collect::<Vec<_>>();
-    assert_eq!(test_item_end(&generic, value, true), commas[1]);
+    assert_eq!(test_item_end(&generic, value, true).unwrap(), commas[1]);
 }
 
 #[test]
@@ -1943,7 +2019,7 @@ fn test_item_end_does_not_pop_a_mismatched_delimiter() {
         .enumerate()
         .filter_map(|(i, token)| punct(Some(token), ',').then_some(i))
         .collect::<Vec<_>>();
-    assert_eq!(test_item_end(&source, callback, true), commas[1]);
+    assert_eq!(test_item_end(&source, callback, true).unwrap(), commas[1]);
 
     let comparison = source_tokens("callback: fn(A > B, C), next: Path").unwrap();
     let callback = token_with_ident(&comparison, "callback");
@@ -1952,13 +2028,16 @@ fn test_item_end_does_not_pop_a_mismatched_delimiter() {
         .enumerate()
         .filter_map(|(i, token)| punct(Some(token), ',').then_some(i))
         .collect::<Vec<_>>();
-    assert_eq!(test_item_end(&comparison, callback, true), commas[1]);
+    assert_eq!(
+        test_item_end(&comparison, callback, true).unwrap(),
+        commas[1]
+    );
 }
 
 #[test]
 fn test_item_end_returns_the_last_token_for_an_unclosed_body() {
     let tokens = source_tokens("item { body").unwrap();
-    assert_eq!(test_item_end(&tokens, 0, false), tokens.len() - 1);
+    assert_eq!(test_item_end(&tokens, 0, false).unwrap(), tokens.len() - 1);
 }
 
 #[test]
@@ -1969,11 +2048,11 @@ fn test_item_end_ignores_angle_comparisons_in_non_field_items() {
         .iter()
         .position(|token| punct(Some(token), ';'))
         .unwrap();
-    assert_eq!(test_item_end(&tokens, start, false), semicolon);
+    assert_eq!(test_item_end(&tokens, start, false).unwrap(), semicolon);
 
     let tokens =
         source_tokens("#[cfg(test)] const ONLY: bool = LEFT < RIGHT; fn production() {}").unwrap();
-    let marked = test_only_tokens(&tokens);
+    let marked = test_only_tokens(&tokens).unwrap();
     let production = token_with_ident(&tokens, "production");
     assert!(!marked[production]);
 }
@@ -1987,7 +2066,7 @@ fn test_item_end_tracks_angle_groups_only_for_fields() {
         .enumerate()
         .filter_map(|(i, token)| punct(Some(token), ',').then_some(i))
         .collect::<Vec<_>>();
-    assert_eq!(test_item_end(&field, value, true), commas[1]);
+    assert_eq!(test_item_end(&field, value, true).unwrap(), commas[1]);
 
     let item = source_tokens("const VALUE: bool = LEFT < RIGHT;").unwrap();
     let value = token_with_ident(&item, "const");
@@ -1995,7 +2074,7 @@ fn test_item_end_tracks_angle_groups_only_for_fields() {
         .iter()
         .position(|token| punct(Some(token), ';'))
         .unwrap();
-    assert_eq!(test_item_end(&item, value, false), semicolon);
+    assert_eq!(test_item_end(&item, value, false).unwrap(), semicolon);
 }
 
 #[test]
@@ -2004,7 +2083,7 @@ fn test_only_tokens_marks_only_cfg_test_items() {
         "let production = 1; #[cfg(feature = \"x\")] fn feature() {} #[cfg(test)] fn fixture() {}",
     )
     .unwrap();
-    let marked = test_only_tokens(&tokens);
+    let marked = test_only_tokens(&tokens).unwrap();
     let production = token_with_ident(&tokens, "production");
     let feature = token_with_ident(&tokens, "feature");
     let fixture = token_with_ident(&tokens, "fixture");
@@ -2091,6 +2170,10 @@ fn joined_literal_and_file_operation_context_require_the_complete_call() {
     let other_method = source_tokens("home.read(\"projects\")").unwrap();
     let path = token_with_string(&other_method, "projects");
     assert!(!joined_literal(&other_method, path));
+
+    let late_join = source_tokens("a b c d e f . join(\"projects\")").unwrap();
+    let late_path = token_with_string(&late_join, "projects");
+    assert!(joined_literal(&late_join, late_path));
 
     let calls = source_tokens(
         "read(\"SYSTEM.md\"); ordinary(\"SYSTEM.md\"); read(\"other\"); \"SYSTEM.md\"; home.read(\"projects\")",
@@ -2328,6 +2411,18 @@ fn each_label_context_requires_every_neighbour_token() {
             reject_label_after_change(&file, source, name, *offset, replacement.clone());
         }
     }
+}
+
+#[test]
+fn derived_tool_names_scale_with_the_input_token_count() {
+    let source = (0..1100)
+        .map(|index| format!("name: \"tool_{index}\".to_owned();\n"))
+        .collect::<String>();
+    let file = source_file("tools", "src/many_names.rs", &source);
+    let tokens = source_tokens(&source).unwrap();
+    let names = derived_tool_names(&[file]).unwrap();
+    assert_eq!(names.len(), 1100);
+    assert!(names.len() <= tokens.len());
 }
 
 #[test]
