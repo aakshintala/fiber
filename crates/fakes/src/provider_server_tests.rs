@@ -1,12 +1,17 @@
 use std::io::{Read, Write};
-use std::net::{SocketAddr, TcpStream};
-use std::sync::{Arc, Mutex, mpsc};
+use std::net::{Shutdown, SocketAddr, TcpStream};
+use std::sync::{
+    Arc, Mutex, Weak,
+    atomic::{AtomicU64, Ordering},
+    mpsc,
+};
 use std::thread;
-use std::time::Duration;
+use std::time::{Duration, Instant, SystemTime};
 
 use super::*;
 use crate::clock::FakeClock;
 use crate::deadline::Deadline;
+use contract::clock::Wake;
 
 const READ_WITHIN: Duration = crate::MUST_SUCCEED_WITHIN;
 
@@ -815,5 +820,205 @@ fn a_hold_release_pins_every_side() {
     assert!(
         hold_released(false, 1),
         "a released hold with a permit goes"
+    );
+}
+
+// An injected clock that counts monotonic reads, wrapping [`FakeClock`]:
+// the regression test below proves the fixed-body reader checks the
+// bound once per fill rather than once per byte by counting the clock
+// reads one request costs. Every clock delegation keeps the fake's
+// semantics; only `now` adds the count.
+struct CountingClock {
+    inner: Arc<FakeClock>,
+    reads: AtomicU64,
+}
+
+impl CountingClock {
+    fn new() -> Arc<Self> {
+        Arc::new(Self {
+            inner: FakeClock::new(),
+            reads: AtomicU64::new(0),
+        })
+    }
+
+    fn reads(&self) -> u64 {
+        self.reads.load(Ordering::SeqCst)
+    }
+}
+
+impl Clock for CountingClock {
+    fn now(&self) -> Instant {
+        self.reads.fetch_add(1, Ordering::SeqCst);
+        self.inner.now()
+    }
+
+    fn wall(&self) -> SystemTime {
+        self.inner.wall()
+    }
+
+    fn sleep(&self, d: Duration) {
+        self.inner.sleep(d);
+    }
+
+    fn wait_until(&self, until: Option<Instant>, wait: &mut dyn FnMut(Option<Duration>)) {
+        self.inner.wait_until(until, wait);
+    }
+
+    fn subscribe(&self, waker: Weak<dyn Wake>) {
+        self.inner.subscribe(waker);
+    }
+}
+
+/// The first offset where `recorded` and `sent` differ, or `None` when
+/// their shared prefix matches: a large-body assertion reports the length
+/// and this offset instead of printing both payloads whole
+/// (`docs/testing.md`, "What a test asserts").
+fn first_diff(recorded: &[u8], sent: &[u8]) -> Option<usize> {
+    recorded
+        .iter()
+        .zip(sent.iter())
+        .position(|(recorded, sent)| recorded != sent)
+}
+
+// One bench-shaped POST: a large fixed-length body on a fresh connection,
+// answered at once, like each of a busy turn's model calls over its own
+// `connection: close` connection. The reply completes with the body
+// byte-exact, and the frozen injected clock sees only a handful of reads:
+// the bulk reader checks the bound once per fill, while the per-byte
+// reader it replaced read the clock once per body byte (100_003 here),
+// the tax a busy turn paid on every request after #2220.
+#[test]
+fn a_large_fixed_body_costs_one_bound_check_per_fill_not_per_byte() {
+    const BODY_LEN: usize = 100_003;
+    // One check per 8 KiB fill plus the head's bytes is far below this;
+    // one check per body byte exceeds it twentyfold.
+    const NOW_BOUND: u64 = 4_096;
+    let clock = CountingClock::new();
+    let server =
+        ProviderServer::start_on(clock.clone(), vec![Response::status(200, "ok")]).unwrap();
+    let addr = server.addr;
+
+    let body: Vec<u8> = (0u8..=250).cycle().take(BODY_LEN).collect();
+    let mut stream = TcpStream::connect(addr).unwrap();
+    stream.set_read_timeout(Some(READ_WITHIN)).unwrap();
+    stream
+        .write_all(
+            format!("POST /v1 HTTP/1.1\r\nHost: localhost\r\nContent-Length: {BODY_LEN}\r\n\r\n")
+                .as_bytes(),
+        )
+        .unwrap();
+    stream.write_all(&body).unwrap();
+    // The write side stays open until the reply completes, like the
+    // bench's client on its fresh connection per call: a reader that
+    // reads past the body waits on the peer instead of answering, so an
+    // over-read fails below instead of ending at the reply.
+    let mut response = Vec::new();
+    stream
+        .read_to_end(&mut response)
+        .unwrap_or_else(|e| panic!("the scripted reply arrives within {READ_WITHIN:?}: {e}"));
+    // The reply completed: only now does the client close.
+    drop(stream);
+    let text = String::from_utf8_lossy(&response);
+    assert!(text.starts_with("HTTP/1.1 200"), "{text}");
+    assert!(response.ends_with(b"ok"), "{text}");
+
+    assert!(
+        server.await_requests(1, READ_WITHIN),
+        "the request is recorded"
+    );
+    let requests = server.requests();
+    assert_eq!(requests.len(), 1);
+    assert_eq!(requests[0].body_len, BODY_LEN);
+    assert_eq!(
+        requests[0].body.len(),
+        body.len(),
+        "the recorded body has the sent length"
+    );
+    assert_eq!(
+        first_diff(&requests[0].body, &body),
+        None,
+        "the recorded body is byte-exact"
+    );
+    // The requests lock synchronises with the serving thread, so every
+    // clock read the request cost is counted here.
+    let reads = clock.reads();
+    assert!(
+        reads <= NOW_BOUND,
+        "one request costs {reads} injected-clock reads, at most {NOW_BOUND}: the bound is checked per fill, not per byte"
+    );
+}
+
+// A fixed body followed by pipelined bytes keeps only its declared
+// length: the drain is capped by the remaining room, so a second
+// request's bytes already buffered are never consumed as this body.
+// The server is parked waiting for the rest of the body (pinned by its
+// wait announcement) before the tail and the pipelined bytes arrive
+// together, so every fill past the seam straddles it: an uncapped drain
+// overshoots into the pipelined bytes and loses the reply.
+#[test]
+fn a_fixed_body_followed_by_pipelined_bytes_keeps_only_its_length() {
+    const BODY_LEN: usize = 20_000;
+    const FIRST: usize = 1_000;
+    let clock = FakeClock::new();
+    let server =
+        ProviderServer::start_on(clock.clone(), vec![Response::status(200, "ok")]).unwrap();
+    let acks = server.core.test_acknowledgments();
+    let addr = server.addr;
+
+    let body: Vec<u8> = (0u8..=250).cycle().take(BODY_LEN).collect();
+    let pipelined = b"GET /next HTTP/1.1\r\nHost: localhost\r\n\r\n";
+    let mut stream = TcpStream::connect(addr).unwrap();
+    stream.set_read_timeout(Some(READ_WITHIN)).unwrap();
+    stream
+        .write_all(
+            format!("POST /v1 HTTP/1.1\r\nHost: localhost\r\nContent-Length: {BODY_LEN}\r\n\r\n")
+                .as_bytes(),
+        )
+        .unwrap();
+    let (first, rest) = body.split_at(FIRST);
+    stream.write_all(first).unwrap();
+    // The server is out of bytes and parked in the body read: only then
+    // do the tail and the pipelined bytes arrive, together. Earlier
+    // phases (the accept, the head) announce first and are passed over;
+    // every receive is bounded, so a missing body wait fails, never hangs.
+    let deadline = Deadline::after(READ_WITHIN);
+    loop {
+        let ack = deadline.recv_or_fail(&acks, "the body read's wait");
+        if ack.phase == "to read the fixed body" {
+            break;
+        }
+    }
+    stream.write_all(rest).unwrap();
+    stream.write_all(pipelined).unwrap();
+    // Wakes the parked read deterministically: the test advances the
+    // fake clock only past the wait the announcement pinned.
+    clock.advance(Duration::from_secs(1));
+    // Anything past the body sees the close: an over-read loses the
+    // reply instead of hanging on it.
+    stream.shutdown(Shutdown::Write).unwrap();
+    let mut response = Vec::new();
+    stream
+        .read_to_end(&mut response)
+        .unwrap_or_else(|e| panic!("the scripted reply arrives within {READ_WITHIN:?}: {e}"));
+    let text = String::from_utf8_lossy(&response);
+    assert!(text.starts_with("HTTP/1.1 200"), "{text}");
+    assert!(response.ends_with(b"ok"), "{text}");
+
+    assert!(
+        server.await_requests(1, READ_WITHIN),
+        "the request is recorded"
+    );
+    let requests = server.requests();
+    assert_eq!(requests.len(), 1);
+    assert_eq!(requests[0].body_len, BODY_LEN);
+    assert_eq!(
+        requests[0].body.len(),
+        body.len(),
+        "the recorded body has the sent length"
+    );
+    assert_eq!(
+        first_diff(&requests[0].body, &body),
+        None,
+        "the recorded body holds its declared bytes, not the pipelined ones"
     );
 }
