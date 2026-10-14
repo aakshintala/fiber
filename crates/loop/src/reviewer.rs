@@ -20,7 +20,11 @@ mod request;
 mod selection;
 mod shown;
 
-pub(crate) use shown::{Reviewed, render_reviewed};
+/// What the reviewer is shown, and how the loop renders it
+/// (`docs/permissions.md`, "What it is shown"). Public for the `review`
+/// jig's replay, which folds a source log through the same renderer
+/// (`docs/testing.md`, "Jigs").
+pub use shown::{Reviewed, Shown, render_reviewed};
 
 /// What a `no_model` escalation and notice say: nothing chose the
 /// reviewer's model, so every reviewed call goes to a person
@@ -201,7 +205,10 @@ enum StageReply<T> {
 
 impl Loop {
     /// Judges `call` at step 7 (`docs/permissions.md`, "The reviewer").
-    pub(crate) fn review(
+    ///
+    /// Public for the `review` jig's replay, which replays a source log's
+    /// recorded calls through the same judge (`docs/testing.md`, "Jigs").
+    pub fn review(
         &mut self,
         call: &ToolCallRequested,
         id: &ActionId,

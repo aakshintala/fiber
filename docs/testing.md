@@ -364,6 +364,7 @@ A crate's first implementation ticket ships the jigs listed for it:
 | `tui` | `paging` | Generates a large session and measures the terminal paging it: the opening pass, the frames that load pages, jumps, a search of the whole log, a re-count at a new width, and appending to a running turn. |
 | `tui` | `hover` | Sends motion reports through the terminal's screen over an events file and prints the frames, bytes and time per report. |
 | `loop` | `turn` | Runs one turn against the fake provider and test tools and prints its events. |
+| `loop` | `review` | Prints the reviewer's stage inputs and handoff selection requests for a session directory, including unreplayable calls. |
 | `extensions` | `pin_check` | Times checking a repository's declared paths against `pinned.json`, cold and warm, in one process. |
 | `doors` | `connect` | Connects to a running session through the hub, or to its socket, and sends the JSON commands typed on stdin, printing what comes back. |
 

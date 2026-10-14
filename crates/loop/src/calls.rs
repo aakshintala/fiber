@@ -83,7 +83,10 @@ fn encoded(delta: &Progress) -> u64 {
 }
 
 /// A call's decision: it runs, or it completes as given without running.
-pub(crate) type Decided = Result<Prepared, Box<ToolCallCompleted>>;
+///
+/// Public as [`crate::ReviewDecision`] for the `review` jig's replay
+/// (`docs/testing.md`, "Jigs").
+pub type Decided = Result<Prepared, Box<ToolCallCompleted>>;
 
 /// What a person's answer carries onto its `permission_resolved` line.
 pub(crate) struct Answered {
