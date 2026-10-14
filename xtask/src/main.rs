@@ -50,6 +50,7 @@ mod models_dev;
 mod models_dev_table;
 mod rules;
 mod select;
+mod ticket;
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::io::Read;
@@ -180,7 +181,7 @@ fn run(args: &[String]) -> Result<bool, String> {
             std::io::stdin()
                 .read_to_string(&mut body)
                 .map_err(|e| format!("stdin: {e}"))?;
-            let numbers = select::ticket(&body);
+            let numbers = ticket::ticket(&body);
             let chosen = match numbers.as_slice() {
                 [] => None,
                 [only] => Some(only.clone()),
