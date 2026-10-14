@@ -56,61 +56,88 @@ const DEPENDENCIES: &str = "# Dependencies
 | insta | dev-dependency | snapshots |
 ";
 
-fn signal_line(pattern: &str, needs_kill: bool) -> String {
-    let body = if needs_kill {
-        format!("run kill {pattern}1")
-    } else {
-        format!("call {pattern} now")
-    };
-    format!("clean\n{body}")
+/// Each signal the check reports, as (source, line, pattern). Every source
+/// is valid Rust: proc-macro2 reads tokens, not lines, so only code and
+/// string contents count. The shell cases hold `kill` beside the pattern
+/// in one string, so each is built from parts: this file is scanned too,
+/// and one literal holding both would flag itself.
+fn signal_cases() -> Vec<(String, usize, &'static str)> {
+    vec![
+        (
+            "fn clean() {}\nfn run() { let _ = Command::new(\"kill\"); }\n".to_owned(),
+            2,
+            "Command::new(\"kill\")",
+        ),
+        (
+            [
+                "fn clean() {}\nfn run() { let _ = do_it(\"",
+                "kill",
+                " -- -1\"); }\n",
+            ]
+            .concat(),
+            2,
+            "-- -",
+        ),
+        (
+            [
+                "fn clean() {}\nfn run() { let _ = check(\"kill -- \\\"",
+                "-$1",
+                "\\\"\"); }\n",
+            ]
+            .concat(),
+            2,
+            "\"-$",
+        ),
+        (
+            "fn clean() {}\nfn run(id: u32) { kill_process_group(id); }\n".to_owned(),
+            2,
+            "kill_process_group",
+        ),
+        (
+            "fn clean() {}\nfn run(id: u32) { test_kill_process(id); }\n".to_owned(),
+            2,
+            "kill_process(",
+        ),
+        (
+            "fn clean() {}\nfn run(id: u32) { let _ = killpg(id); }\n".to_owned(),
+            2,
+            "killpg",
+        ),
+        (
+            "fn clean() {}\nfn run(id: u32) { let _ = libc::kill(id, 9); }\n".to_owned(),
+            2,
+            "libc::kill",
+        ),
+        (
+            "fn clean() {}\nfn run(id: u32) { let _ = nix::sys::signal::kill(id, 9); }\n"
+                .to_owned(),
+            2,
+            "nix::sys::signal",
+        ),
+    ]
 }
 
 #[test]
-fn signal_sites_reports_each_pattern_outside_the_allowlist() {
-    for &(pattern, needs_kill) in SIGNAL_PATTERNS {
-        let files = [file("log", "src/lib.rs", signal_line(pattern, needs_kill))];
-        let hits = signal_sites(&files);
-        assert!(
-            hits.contains(&format!("crates/log/src/lib.rs:2: {pattern}")),
-            "{pattern}: {hits:?}"
+fn signal_sites_reports_each_signal_in_code() {
+    for (source, line, pattern) in signal_cases() {
+        let files = [file("log", "src/lib.rs", source)];
+        assert_eq!(
+            signal_sites(&files),
+            [format!("crates/log/src/lib.rs:{line}: {pattern}")],
+            "{pattern}"
         );
-        assert!(
-            hits.iter()
-                .all(|hit| hit.starts_with("crates/log/src/lib.rs:2: ")),
-            "{pattern}: {hits:?}"
-        );
-    }
-}
-
-#[test]
-fn signal_sites_ignores_each_pattern_inside_the_allowlist() {
-    for &(pattern, needs_kill) in SIGNAL_PATTERNS {
-        let line = signal_line(pattern, needs_kill);
-        for (krate, rel) in [
-            ("fakes", "src/process_group.rs"),
-            ("cli", "src/extension_test.rs"),
-            ("tui", "src/paste_image.rs"),
-            ("support", "src/group.rs"),
-        ] {
-            let files = [file(krate, rel, line.clone())];
-            assert_eq!(signal_sites(&files), Vec::<String>::new(), "{pattern}");
-        }
     }
 }
 
 #[test]
 fn signal_sites_reports_a_signal_elsewhere_in_tui() {
-    for &(pattern, needs_kill) in SIGNAL_PATTERNS {
-        let files = [file("tui", "src/app.rs", signal_line(pattern, needs_kill))];
+    for (source, line, pattern) in signal_cases() {
+        let files = [file("tui", "src/app.rs", source)];
         let hits = signal_sites(&files);
-        assert!(
-            hits.contains(&format!("crates/tui/src/app.rs:2: {pattern}")),
-            "{pattern}: {hits:?}"
-        );
-        assert!(
-            hits.iter()
-                .all(|hit| hit.starts_with("crates/tui/src/app.rs:2: ")),
-            "{pattern}: {hits:?}"
+        assert_eq!(
+            hits,
+            [format!("crates/tui/src/app.rs:{line}: {pattern}")],
+            "{pattern}"
         );
     }
 }
@@ -139,41 +166,138 @@ fn signal_sites_ignores_the_word_kill_on_its_own() {
 }
 
 #[test]
-fn signal_sites_reports_a_shell_kill_split_across_lines() {
-    // Built from parts so this file holds no signal pattern itself: the
-    // first line ends with a backslash, the second carries the operand.
-    let first = ["kill -TERM ", "\\"].concat();
-    let second = ["  --", " -1\""].concat();
-    let source = format!("{first}\n{second}");
-    let files = [file("log", "src/lib.rs", source)];
-    let dash = ["--", " -"].concat();
-    assert_eq!(
-        signal_sites(&files),
-        [format!("crates/log/src/lib.rs:2: {dash}")]
-    );
+fn signal_sites_ignores_a_signal_spelling_inside_a_string() {
+    // The pattern text is code-shaped, but it sits in a string literal:
+    // strings are values, not signals.
+    let files = [file(
+        "log",
+        "src/lib.rs",
+        "fn clean() {}\nfn run() { let _ = \"killpg\"; }\n".to_owned(),
+    )];
+    assert_eq!(signal_sites(&files), Vec::<String>::new());
 }
 
 #[test]
-fn signal_sites_ignores_a_kill_the_fragment_does_not_continue() {
-    // A kill two lines up, with an unbroken line between, is another
-    // command: the operand's line is not joined to it.
-    let dash = ["--", " -"].concat();
-    let source = format!("kill -TERM 5\nlet x = 1;\nrun {dash}l");
+fn signal_sites_ignores_a_signal_inside_a_line_comment() {
+    let files = [file(
+        "log",
+        "src/lib.rs",
+        "// call killpg now\nfn clean() {}\n".to_owned(),
+    )];
+    assert_eq!(signal_sites(&files), Vec::<String>::new());
+}
+
+#[test]
+fn signal_sites_ignores_a_signal_inside_a_block_comment() {
+    let files = [file(
+        "log",
+        "src/lib.rs",
+        "/* kill_process_group(1); */\nfn clean() {}\n".to_owned(),
+    )];
+    assert_eq!(signal_sites(&files), Vec::<String>::new());
+}
+
+#[test]
+fn signal_sites_ignores_kill_without_an_operand() {
+    // `kill` beside no operand is not a signal, wherever it sits.
+    let files = [file(
+        "log",
+        "src/lib.rs",
+        "fn clean() {}\nfn run() { let _ = (\"kill -9\", \"kill -TERM\"); }\n".to_owned(),
+    )];
+    assert_eq!(signal_sites(&files), Vec::<String>::new());
+}
+
+#[test]
+fn signal_sites_ignores_an_operand_without_kill() {
+    // The operand beside no `kill` is another command's, even one string
+    // down from a `kill` of its own. Built from parts so this file holds
+    // no `kill` beside an operand.
+    let source = [
+        "fn a() { let _ = \"kill\"; }\n",
+        "fn b() { let _ = run(\"-- -1\"); }\n",
+    ]
+    .concat();
     let files = [file("log", "src/lib.rs", source)];
     assert_eq!(signal_sites(&files), Vec::<String>::new());
 }
 
 #[test]
-fn signal_sites_follows_a_chain_of_continued_lines() {
-    let first = ["kill -TERM ", "\\"].concat();
-    let middle = ["  -s KILL ", "\\"].concat();
-    let last = ["  --", " -1"].concat();
-    let source = format!("{first}\n{middle}\n{last}");
+fn signal_sites_reports_a_shell_signal_across_a_string_newline() {
+    // One string holds the whole shell fragment, so the operand joins its
+    // `kill` across the newline; the hit sits where the string starts.
+    // Built from parts so this file holds no `kill` beside an operand.
+    let source = [
+        "fn run() {\n    let _ = do_it(\"",
+        "kill",
+        " -TERM \n        -- -1\");\n}\n",
+    ]
+    .concat();
     let files = [file("log", "src/lib.rs", source)];
-    let dash = ["--", " -"].concat();
     assert_eq!(
         signal_sites(&files),
-        [format!("crates/log/src/lib.rs:3: {dash}")]
+        ["crates/log/src/lib.rs:2: -- -".to_owned()]
+    );
+}
+
+#[test]
+fn signal_sites_ignores_near_miss_paths_and_names() {
+    // Each guard needs every part: the wrong command, the wrong path, a
+    // name without its call, an operand without its `kill`.
+    let files = [file(
+        "log",
+        "src/lib.rs",
+        [
+            "fn clean() {}\n",
+            "fn run(id: u32) {\n",
+            "    let _ = Command::new(\"ps\");\n",
+            "    let _ = libc::abort(1);\n",
+            "    let _ = nix::sys::time::sleep(1);\n",
+            "    let _ = test_kill_process;\n",
+            "    let _ = do_it(\"-$1\");\n",
+            "}\n",
+        ]
+        .concat(),
+    )];
+    assert_eq!(signal_sites(&files), Vec::<String>::new());
+}
+
+#[test]
+fn signal_sites_ignores_a_command_lookalike_without_colons() {
+    // `Command::new("kill")` needs both `::` separators: `Command` beside
+    // `new("kill")` with no colons between them is not a signal.
+    let files = [file(
+        "log",
+        "src/lib.rs",
+        "fn run() {\n    let _ = Command x y new(\"kill\");\n}\n".to_owned(),
+    )];
+    assert_eq!(signal_sites(&files), Vec::<String>::new());
+}
+
+#[test]
+fn signal_sites_ignores_a_signal_in_an_allowlisted_file() {
+    // Every allowlist entry may hold a real signal; the list is a trust
+    // list, so each entry is covered.
+    let source =
+        "fn run(id: u32, sig: i32) { rustix::process::kill_process_group(id, sig); }\n".to_owned();
+    for path in SIGNAL_ALLOWLIST {
+        let rel = path.strip_prefix("crates/").unwrap_or(path);
+        let krate = rel.split('/').next().unwrap_or_default();
+        let rel = rel.split_once('/').map_or(rel, |(_, rest)| rest);
+        let files = [file(krate, rel, source.clone())];
+        assert_eq!(files[0].path, *path);
+        assert_eq!(signal_sites(&files), Vec::<String>::new(), "{path}");
+    }
+}
+
+#[test]
+fn signal_sites_fails_closed_when_a_file_does_not_tokenise() {
+    let files = [file("log", "src/lib.rs", "fn broken() { \\ }\n".to_owned())];
+    let hits = signal_sites(&files);
+    assert_eq!(hits.len(), 1);
+    assert!(
+        hits[0].starts_with("crates/log/src/lib.rs: does not tokenise as Rust: "),
+        "{hits:?}"
     );
 }
 

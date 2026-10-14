@@ -149,7 +149,7 @@ Fiber code, files the issue. No other test retries.
 On Linux x86_64 alone:
 
 - `cargo fmt --check`
-- a process signal appears only in the guarded helpers (`cargo xtask signal-sites`)
+- a process signal appears only in the guarded helpers (`cargo xtask signal-sites`); the check scans Rust tokens, so comments never count, and its allowlist is a trust list: the files it names may send signals, every other file may not
 - the compiled-in list matches the files crates compile in, Markdown
   anywhere or any file outside the crate, every include argument is a
   string literal, and no crate reads a repository file at run time
@@ -170,6 +170,11 @@ On Linux x86_64 alone:
   whether or not it touches anything else; any other `research/` path alone
   selects the docs job alone
 - `shellcheck --shell=sh` on `scripts/install.sh` and its test stubs
+- `shellcheck --shell=bash` on every other `scripts/` shell file: `bug-red`,
+  `cache-prune`, `check`, `check-docs`, `flaky-tests`, `install-shells`,
+  `leak-scan`, `paging-jig`, `release-size`, `stored-results`,
+  `test-bug-red`, `test-bug-red-cargo`, `test-flaky-tests`, `test-leak-probe`,
+  `test-leak-scan`, and `lib/release.sh`
 - actionlint over every file in `.github/workflows/`, when the diff changes
   one. A workflow change runs the whole selection ("Selection"), so the job is
   always selected. No `taiki-e/install-action` tool installs actionlint, so the

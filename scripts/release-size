@@ -26,9 +26,13 @@
 # binary is from: the base, or the ancestor that stands in for it. Runs on Linux (sha256sum, strip).
 set -euo pipefail
 shopt -s inherit_errexit 2> /dev/null || true # bash 4.4; macOS ships 3.2
+# Shared release mechanics, sibling to this script: the checkout this
+# operates on (a fixture in tests) holds no scripts/ of its own, and the
+# base worktree never provides them.
+# shellcheck source=scripts/lib/release.sh
+. "$(dirname "${BASH_SOURCE[0]}")/lib/release.sh"
 cd "$(git rev-parse --show-toplevel)"
 
-readonly target=x86_64-unknown-linux-musl
 readonly limit=25165824 # 24 * 1024 * 1024
 base_commit=${1:-}
 out="${RUNNER_TEMP:?}/release"
@@ -37,8 +41,8 @@ top=$PWD
 # Builds the checkout in the current directory into the shared target
 # directory and writes the stripped binary to $1. Each step is chained, so a
 # failed build fails the function even where errexit does not apply.
-build() {
-  CARGO_TARGET_DIR="$top/target" cargo build --release --locked --target "$target" --bin fiber &&
+build_fiber() {
+  build --bin fiber &&
     mkdir -p "${1%/*}" &&
     strip -o "$1" "$top/target/$target/release/fiber"
 }
@@ -72,7 +76,7 @@ size() {
 
 head_sha=$(git rev-parse --short HEAD)
 # The head is stripped out of target/ before any base build overwrites it.
-build "$out/head/fiber"
+build_fiber "$out/head/fiber"
 head_size=$(size "$out/head/fiber")
 read -r head_bytes head_mib <<<"$head_size"
 echo "release-size: head $head_sha fiber is $head_bytes bytes ($head_mib MiB); the limit is $limit bytes"
@@ -95,12 +99,12 @@ else
     trap 'git -C "$top" worktree remove --force "$worktree" 2> /dev/null || true' EXIT
     # The base may pin another toolchain; each command reads its
     # rust-toolchain.toml.
-    if ! { git worktree add --detach "$worktree" "$base_commit" &&
+    if ! { base_worktree "$base_commit" "$worktree" &&
       (
         cd "$worktree" &&
           rustup toolchain install &&
           rustup target add "$target" &&
-          build "$out/base/fiber"
+          build_fiber "$out/base/fiber"
       ); }; then
       rm -f "$out/base/fiber"
       ancestor=${BASE_MATCHED_KEY:-}

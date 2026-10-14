@@ -12,12 +12,15 @@
 )]
 
 use std::fs;
-use std::os::unix::process::CommandExt as _;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 use std::time::Duration;
 
-use fakes::{TempDir, finished};
+use common::git;
+use fakes::TempDir;
+
+#[path = "common/mod.rs"]
+mod common;
 
 /// How long a test waits for one child, in real time; a passing run never
 /// waits on it, it only bounds a hang.
@@ -25,33 +28,6 @@ const CHILD_WITHIN: Duration = Duration::from_secs(30);
 
 /// The warning the script prints when any read fails.
 const STOPPED: &str = "cache pruning stopped on a failed read";
-
-/// Runs `command` to its end under a deadline and returns its exit code and
-/// its output.
-fn run(what: &str, mut command: Command) -> (Option<i32>, String) {
-    let child = command
-        .stdin(Stdio::null())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        .process_group(0)
-        .spawn()
-        .unwrap();
-    let output = finished(what, child, &[], CHILD_WITHIN);
-    let text =
-        String::from_utf8(output.stdout).unwrap() + &String::from_utf8(output.stderr).unwrap();
-    (output.status.code(), text)
-}
-
-fn git(repo: &TempDir, args: &[&str]) -> String {
-    let mut command = Command::new("git");
-    command
-        .args(["-c", "user.name=t", "-c", "user.email=t@example.com"])
-        .args(args)
-        .current_dir(repo.path());
-    let (code, out) = run(&format!("git {args:?}"), command);
-    assert_eq!(code, Some(0), "git {args:?}: {out}");
-    out.trim().to_owned()
-}
 
 /// The fixture repositories and the commits the cache keys name.
 struct Fixture {
@@ -147,8 +123,9 @@ impl Fixture {
             .env_remove("FAKE_DELETE_LOG")
             .env_remove("FAKE_DELETE_FAIL")
             .envs(vars.iter().copied())
-            .current_dir(self.repo.path());
-        run("scripts/cache-prune", command)
+            .current_dir(self.repo.path())
+            .stdin(Stdio::null());
+        common::run("scripts/cache-prune", command, &[], CHILD_WITHIN)
     }
 
     fn deleted(&self, log: &Path) -> Vec<String> {

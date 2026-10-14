@@ -6,11 +6,13 @@
     reason = "test code may unwrap (docs/code-quality.md, \"Lints\"); clippy exempts only #[test] functions here"
 )]
 
-use std::os::unix::process::CommandExt as _;
-use std::process::{Command, Output, Stdio};
+use std::process::{Command, Stdio};
 use std::time::Duration;
 
-use fakes::{TempDir, finished};
+use fakes::TempDir;
+
+#[path = "common/mod.rs"]
+mod common;
 
 const DEPENDENCIES: &str = "# Dependencies
 
@@ -47,43 +49,32 @@ const CODE_QUALITY: &str = "# Code quality
 const CHILD_WITHIN: Duration = Duration::from_secs(5);
 
 fn xtask(dir: &TempDir, args: &[&str], env: &[(&str, &str)], stdin: &str) -> (i32, String) {
-    let child = Command::new(env!("CARGO_BIN_EXE_xtask"))
+    let mut command = Command::new(env!("CARGO_BIN_EXE_xtask"));
+    command
         .args(args)
         .envs(env.iter().copied())
         .current_dir(dir.path())
-        .stdin(Stdio::piped())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        .process_group(0)
-        .spawn()
-        .unwrap();
-    let Output {
-        status,
-        stdout,
-        stderr,
-    } = finished(
+        .stdin(Stdio::piped());
+    let (code, text) = common::run(
         &format!("xtask {args:?}"),
-        child,
+        command,
         stdin.as_bytes(),
         CHILD_WITHIN,
     );
-    let text = String::from_utf8(stdout).unwrap() + &String::from_utf8(stderr).unwrap();
-    (status.code().unwrap(), text)
+    (code.unwrap(), text)
 }
 
 fn git(dir: &TempDir, args: &[&str]) {
-    let child = Command::new("git")
+    // This wrapper's shape differs from `common::git` (no output, a 5 s
+    // bound), so it keeps its body and shares only the wait.
+    let mut command = Command::new("git");
+    command
         .args(["-c", "user.name=t", "-c", "user.email=t@example.com"])
         .args(args)
         .current_dir(dir.path())
-        .stdin(Stdio::null())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        .process_group(0)
-        .spawn()
-        .unwrap();
-    let status = finished(&format!("git {args:?}"), child, &[], CHILD_WITHIN).status;
-    assert!(status.success(), "git {args:?}");
+        .stdin(Stdio::null());
+    let (code, out) = common::run(&format!("git {args:?}"), command, &[], CHILD_WITHIN);
+    assert_eq!(code, Some(0), "git {args:?}: {out}");
 }
 
 /// A committed workspace: `a`, `b` depending on `a`, binary-only `c`
@@ -164,13 +155,16 @@ fn add_architecture_noise(dir: &TempDir, source: &str) {
 fn select_runs_a_changed_crate_and_its_dependents() {
     let dir = workspace();
     dir.write("crates/a/src/lib.rs", "//! a, changed\n");
+    // The exact output pins the keys `scripts/check` reads (`mode`,
+    // `packages`, `package_specs`, `library_specs`) and the absence of
+    // any `libraries=` line.
     let (code, out) = xtask(&dir, &["select", "--base", "main"], &[], "");
     assert_eq!(
         (code, out.as_str()),
         (
             0,
             "mode=crates\npackages=a b c\npackage_specs=a@0.0.0 b@0.0.0 c@0.0.0\n\
-             libraries=a b\nlibrary_specs=a@0.0.0 b@0.0.0\n"
+             library_specs=a@0.0.0 b@0.0.0\n"
         )
     );
 }
@@ -182,7 +176,7 @@ fn select_counts_untracked_and_committed_changes() {
     let (_, out) = xtask(&dir, &["select", "--base", "main"], &[], "");
     assert_eq!(
         out,
-        "mode=crates\npackages=b\npackage_specs=b@0.0.0\nlibraries=b\nlibrary_specs=b@0.0.0\n"
+        "mode=crates\npackages=b\npackage_specs=b@0.0.0\nlibrary_specs=b@0.0.0\n"
     );
 
     git(&dir, &["checkout", "-qb", "topic"]);
@@ -192,13 +186,13 @@ fn select_counts_untracked_and_committed_changes() {
     let (_, out) = xtask(&dir, &["select", "--base", "main"], &[], "");
     assert_eq!(
         out,
-        "mode=crates\npackages=b\npackage_specs=b@0.0.0\nlibraries=b\nlibrary_specs=b@0.0.0\n"
+        "mode=crates\npackages=b\npackage_specs=b@0.0.0\nlibrary_specs=b@0.0.0\n"
     );
     std::fs::remove_file(dir.path().join("crates/b/src/new.rs")).unwrap();
     let (_, out) = xtask(&dir, &["select", "--base", "main"], &[], "");
     assert_eq!(
         out,
-        "mode=docs\npackages=\npackage_specs=\nlibraries=\nlibrary_specs=\n"
+        "mode=docs\npackages=\npackage_specs=\nlibrary_specs=\n"
     );
 }
 
@@ -234,7 +228,7 @@ fn select_prints_an_unambiguous_spec_for_a_crate_named_like_a_dependency() {
         (
             0,
             "mode=crates\npackages=log\npackage_specs=log@0.0.0\n\
-             libraries=log\nlibrary_specs=log@0.0.0\n"
+             library_specs=log@0.0.0\n"
         )
     );
 }
@@ -670,6 +664,14 @@ fn the_signal_check_fails_a_signal_outside_the_allowlist() {
     // Built from parts so this file holds no signal pattern itself; the
     // file is an untracked test file, which the check still scans.
     let pattern = ["kill", "pg"].concat();
+    dir.write(
+        "crates/b/tests/evil.rs",
+        &format!("// call {pattern}(1);\n"),
+    );
+    assert_eq!(
+        xtask(&dir, &["signal-sites"], &[], ""),
+        (0, "signal-sites: ok\n".to_owned())
+    );
     dir.write("crates/b/tests/evil.rs", &format!("call {pattern}(1);\n"));
     let (code, out) = xtask(&dir, &["signal-sites"], &[], "");
     assert_eq!(code, 1);
