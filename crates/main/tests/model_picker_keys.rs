@@ -216,6 +216,12 @@ fn click(run: &mut Run, x: u16, y: u16) {
     run.write(format!("\x1b[<0;{};{}M\x1b[<0;{};{}m", x + 1, y + 1, x + 1, y + 1).as_bytes());
 }
 
+/// Parks the pointer on the cell at `(x, y)`: an SGR motion report
+/// with no button, as the look hover test sends.
+fn hover(run: &mut Run, x: u16, y: u16) {
+    run.write(format!("\x1b[<35;{};{}M", x + 1, y + 1).as_bytes());
+}
+
 /// Whether the picker draws its open catalogue: the filter row and a
 /// model row from the installed list.
 fn picker_open(screen: &Grid) -> bool {
@@ -294,4 +300,57 @@ fn clicking_the_thinking_chip_opens_the_picker_on_its_level_chips() {
         opened.rows
     );
     close_and_quit(run);
+}
+
+/// The chip's cells on `screen`: `len` cells from `x` on row `y`.
+fn chip_cells(screen: &Grid, x: u16, y: u16, len: u16) -> Vec<support::pty::Cell> {
+    (0..len).map(|dx| screen.cell(x + dx, y)).collect()
+}
+
+#[test]
+fn hovering_a_home_chip_tints_it_and_moving_off_restores_it() {
+    let setup = Setup::new();
+    let server = ProviderServer::start([support::hello()]).unwrap();
+    install_picker_provider(&setup, &server);
+    // Truecolour, as the link hover test runs: at 256 colours the
+    // hover tint and the chips' surface tint share one palette entry,
+    // so a hovered chip reads back unchanged there.
+    let mut run = home_run(&setup, &support::TRUECOLOUR);
+    // The motion enable proves the terminal takes pointer reports
+    // before the first hover goes out.
+    run.wait_bytes(0, support::pty::MOTION, "mouse motion enabled");
+    // Both chips unfocused: nothing sent a key, so focus sits on the
+    // entry bar and no focused chip keeps its highlight by spec.
+    for needle in ["[fake/alpha]", "[thinking:"] {
+        let before = run.screen();
+        let (x, y) = chip_cell(&before, needle);
+        let len = u16::try_from(needle.len()).expect("the chip fits its row");
+        let plain = chip_cells(&before, x, y, len);
+        hover(&mut run, x, y);
+        let tinted = run.wait_screen("the hovered chip", |screen| {
+            chip_cells(screen, x, y, len) != plain
+        });
+        assert_ne!(
+            chip_cells(&tinted, x, y, len),
+            plain,
+            "hover tints {needle}"
+        );
+        // The top-left corner holds no target, so parking there
+        // leaves every chip.
+        hover(&mut run, 0, 0);
+        let restored = run.wait_screen("the restored chip", |screen| {
+            chip_cells(screen, x, y, len) == plain
+        });
+        assert_eq!(
+            chip_cells(&restored, x, y, len),
+            plain,
+            "moving off restores {needle}"
+        );
+    }
+    run.write(b"\x03\x03");
+    run.wait_screen("the restored terminal", |screen| {
+        !screen.alternate_screen && !screen.hide_cursor
+    });
+    let finished = run.wait();
+    assert_eq!(finished.status.code(), Some(0));
 }
