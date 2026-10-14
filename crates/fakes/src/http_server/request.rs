@@ -193,12 +193,26 @@ pub(crate) fn read_request(conn: &mut Connection) -> RequestOutcome {
         if !fits(length, limits.body) {
             return RequestOutcome::Invalid("the body exceeds its cap");
         }
-        let mut body = vec![0u8; length];
-        for slot in body.iter_mut() {
-            match next_byte(conn, "to read the fixed body") {
-                ByteEnd::Byte(byte) => *slot = byte,
-                ByteEnd::Eof => return RequestOutcome::Eof,
-                ByteEnd::Stopped => return RequestOutcome::Stopped,
+        // Bulk reads, one bound check per fill: the check before the
+        // drain stops an expired budget or a racing shutdown from
+        // completing a request from bytes already held, and the fill
+        // checks after each socket read, as the per-byte loop did.
+        let mut body = Vec::with_capacity(length);
+        while body.len() != length {
+            if !conn.consume_check("to read the fixed body") {
+                return RequestOutcome::Stopped;
+            }
+            let remaining = length - body.len();
+            conn.drain_ahead(&mut body, remaining);
+            // Complete without reading past the body: one more fill
+            // would wait on the peer instead of answering.
+            if body.len() == length {
+                break;
+            }
+            match conn.fill("to read the fixed body") {
+                FillOutcome::Held(_) => {}
+                FillOutcome::Eof => return RequestOutcome::Eof,
+                FillOutcome::Stopped => return RequestOutcome::Stopped,
             }
         }
         (body, None)
