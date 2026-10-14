@@ -3824,3 +3824,96 @@ fn failed_scalar_base_carries_no_unavailable_suffix() {
     );
     assert!(line.ends_with("| advisory |"), "{line}");
 }
+
+#[test]
+fn rejected_slow_ceilings_name_the_parse_failure() {
+    // A class ceiling must be a finite number at or above zero: the
+    // report reads every gate number from the doc table, so a malformed
+    // calibration cell is a configuration failure naming the cell, never
+    // a silent pass or a timing overage. Each case sits in the slow
+    // column the eligible head model actually uses. This kills M1 (the
+    // `&&` weakened to `||`, which accepts the negative and +inf) and
+    // M3 (the guard dropped, which accepts all four): under either
+    // mutant the named parse failure disappears into a pass or an
+    // overage.
+    let id = "session_start_ms";
+    for bad in ["-13 ms", "inf ms", "-inf ms", "NaN ms"] {
+        let doc = doc_with(
+            "| 16 ms | 12 ms | 13 ms | 55 % | 9 % |",
+            &format!("| 16 ms | 12 ms | {bad} | 55 % | 9 % |"),
+        );
+        let (h, b) = scalar_pair(
+            id,
+            json!([1999.0, 2001.0, 2000.0, 2002.0, 1998.0]),
+            json!([0.9, 1.1, 1.0, 1.2, 0.8]),
+            SLOW_MODEL,
+        );
+        let out = judge_doc(&doc, &h, Some(&b), Event::PullRequest);
+        assert!(
+            has(&out.failures, "is not a finite number at or above zero"),
+            "{bad}: {:?}",
+            out.failures
+        );
+        let line = row(&out.comment, "Session start");
+        assert!(line.ends_with("| fail |"), "{bad}: {line}");
+    }
+}
+
+#[test]
+fn rejected_slow_tolerances_name_the_parse_failure() {
+    // A tolerance must be a finite number at or above zero, for the same
+    // reason as the ceilings: the doc table is the only source of gate
+    // numbers, so a malformed tolerance cell fails naming the cell. This
+    // kills M2 (the `&&` weakened to `||`, which accepts the negative
+    // and +inf) and M4 (the guard dropped, which accepts all four):
+    // under either mutant the named parse failure disappears into an
+    // overage or an overflow error.
+    let id = "session_start_ms";
+    for bad in ["-9 %", "inf %", "-inf %", "NaN %"] {
+        let doc = doc_with(
+            "| 16 ms | 12 ms | 13 ms | 55 % | 9 % |",
+            &format!("| 16 ms | 12 ms | 13 ms | 55 % | {bad} |"),
+        );
+        let (h, b) = scalar_pair(
+            id,
+            json!([1999.0, 2001.0, 2000.0, 2002.0, 1998.0]),
+            json!([0.9, 1.1, 1.0, 1.2, 0.8]),
+            SLOW_MODEL,
+        );
+        let out = judge_doc(&doc, &h, Some(&b), Event::PullRequest);
+        assert!(
+            has(&out.failures, "is not a finite number at or above zero"),
+            "{bad}: {:?}",
+            out.failures
+        );
+        let line = row(&out.comment, "Session start");
+        assert!(line.ends_with("| fail |"), "{bad}: {line}");
+    }
+}
+
+#[test]
+fn a_head_failure_with_a_missing_base_metric_shows_unavailable() {
+    // When the head metric itself is malformed, the base column still
+    // distinguishes a base that never recorded the metric
+    // ("unavailable") from one that did (its median): a missing base
+    // metric is unavailable-for-comparison, never a synthetic zero. This
+    // kills M5 (the guard replaced with false, which reports "base
+    // failed" for the missing metric), M6 (the guard replaced with
+    // true, which reports "unavailable" for the present metric) and M7
+    // (the negation deleted, which swaps both columns).
+    let id = "session_start_ms";
+    let h = with_cpu(without_metric(&neutral_scalars(id, head()), id), SLOW_MODEL);
+    let missing = with_cpu(without_metric(&base(), id), SLOW_MODEL);
+    let out = judge(&h, Some(&missing), Event::PullRequest);
+    assert!(has(&out.failures, id), "{:?}", out.failures);
+    let line = row(&out.comment, "Session start");
+    assert!(line.contains("unavailable"), "{line}");
+    assert!(line.ends_with("| fail |"), "{line}");
+    let b = with_cpu(with_metric(base(), id, json!(vec![1.0; 5])), SLOW_MODEL);
+    let out = judge(&h, Some(&b), Event::PullRequest);
+    assert!(has(&out.failures, id), "{:?}", out.failures);
+    let line = row(&out.comment, "Session start");
+    assert!(line.contains("1.0 ms"), "{line}");
+    assert!(!line.contains("unavailable"), "{line}");
+    assert!(line.ends_with("| fail |"), "{line}");
+}
