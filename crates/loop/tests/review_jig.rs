@@ -583,6 +583,21 @@ fn person_allowed() -> Event {
     })
 }
 
+/// A standing-rule denial with no start: an explicit non-review
+/// decision, never a review request of its own.
+fn rule_denied(reason: &str) -> Event {
+    Event::PermissionResolved(PermissionResolved {
+        request_id: None,
+        decision: Decision::Deny,
+        decided_by: DecidedBy::StandingRule,
+        reason: Some(reason.into()),
+        feedback: None,
+        grant: None,
+        rule: None,
+        reviewer: None,
+    })
+}
+
 /// A handoff boundary with `outcome`.
 fn handoff_boundary(outcome: Outcome) -> Event {
     Event::HandoffCompleted(HandoffCompleted {
@@ -1182,6 +1197,13 @@ fn inner_hosted_and_non_review_calls_print_no_lines_of_their_own() {
         Some("a_person"),
     );
     fixture.append(&person_allowed(), Some("t_1"), Some("a_person"));
+    // The person's allow carries declared effects, yet the call is still
+    // not a review request: the reviewer never judged it.
+    fixture.append(
+        &started(vec![Effect::Executes], false),
+        Some("t_1"),
+        Some("a_person"),
+    );
     fixture.append(
         &requested("shell", json!({"city": "Paris"})),
         Some("t_1"),
@@ -1204,6 +1226,25 @@ fn inner_hosted_and_non_review_calls_print_no_lines_of_their_own() {
         }),
         Some("t_1"),
         Some("a_standing"),
+    );
+    // A standing ask that let the call through: declared effects logged,
+    // still not a review request.
+    fixture.append(
+        &started(vec![Effect::Executes], false),
+        Some("t_1"),
+        Some("a_standing"),
+    );
+    fixture.append(
+        &requested("shell", json!({"city": "Paris"})),
+        Some("t_1"),
+        Some("a_rule"),
+    );
+    // A standing-rule denial never started: no review judged it, so no
+    // unreplayable line either.
+    fixture.append(
+        &rule_denied("a standing rule forbids it"),
+        Some("t_1"),
+        Some("a_rule"),
     );
     let lines = check_binary_output(&fixture.dir, "", false, &[], &["a_outer"], &[], &[]);
     assert_eq!(lines.len(), 1);
@@ -1255,16 +1296,72 @@ fn requests_before_starts_correlate_by_action_with_a_request_time_cut() {
         Some("t_1"),
         Some("a_1"),
     );
-    let lines = check_binary_output(&fixture.dir, "", false, &[], &["a_2", "a_1"], &[], &[]);
+    // Starts log reversed, but lines print in original request order.
+    let lines = check_binary_output(&fixture.dir, "", false, &[], &["a_1", "a_2"], &[], &[]);
     assert_eq!(lines.len(), 2);
-    // The later request's cut holds the earlier sibling.
+    // The first request's cut never admits its later sibling.
     let first = line_texts(lines.first().unwrap());
     assert!(first.iter().any(|text| text.contains("ALPHA")));
-    assert!(first.iter().any(|text| text.contains("BETA")));
-    // The first request's cut never admits its later sibling.
+    assert!(!first.iter().any(|text| text.contains("BETA")));
+    // The later request's cut holds the earlier sibling.
     let second = line_texts(lines.get(1).unwrap());
     assert!(second.iter().any(|text| text.contains("ALPHA")));
-    assert!(!second.iter().any(|text| text.contains("BETA")));
+    assert!(second.iter().any(|text| text.contains("BETA")));
+}
+
+#[test]
+fn calls_print_at_their_request_position_without_moving_across_handoffs() {
+    let fixture = Fixture::new("s_cross", "/synthetic/workspace");
+    fixture.append(&user_turn(&["standing order"]), Some("t_1"), None);
+    fixture.append(
+        &requested("shell", json!({"city": "Paris"})),
+        Some("t_1"),
+        Some("a_early"),
+    );
+    fixture.append(&review_step("r_early"), Some("t_1"), Some("a_early"));
+    fixture.append(
+        &requested("shell", json!({"city": "Paris"})),
+        Some("t_1"),
+        Some("a_blocked"),
+    );
+    fixture.append(
+        &reviewer_denied("that push rewrites shared history"),
+        Some("t_1"),
+        Some("a_blocked"),
+    );
+    fixture.append(&handoff_boundary(Outcome::Completed), Some("t_1"), None);
+    fixture.append(&user_turn(&["after the handoff"]), Some("t_2"), None);
+    // The early call's start logs after the handoff, yet its review
+    // still prints at its request position, before the selection.
+    fixture.append(
+        &started(vec![Effect::Executes], false),
+        Some("t_2"),
+        Some("a_early"),
+    );
+    let handoffs = completed_handoffs(&fixture.dir);
+    assert_eq!(handoffs.len(), 1);
+    let lines = check_binary_output(
+        &fixture.dir,
+        "1\n",
+        false,
+        &[],
+        &["a_early"],
+        &handoffs,
+        &["a_blocked"],
+    );
+    assert_eq!(lines.len(), 3);
+    assert_eq!(lines[0].get("id").unwrap(), &json!("a_early"));
+    assert!(lines[0].get("stages").is_some());
+    assert_eq!(
+        lines[1],
+        json!({"id": "a_blocked", "unreplayable": "declared effects not logged"}),
+    );
+    assert_eq!(lines[2].get("handoff").unwrap(), &json!(handoffs[0]));
+    // The request-time cut holds: nothing after the handoff enters the
+    // early call's replay.
+    let early = line_texts(&lines[0]);
+    assert!(early.iter().any(|text| text.contains("standing order")));
+    assert!(!early.iter().any(|text| text.contains("after the handoff")));
 }
 
 #[test]

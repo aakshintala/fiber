@@ -1,14 +1,14 @@
-{"type":"user","timestamp":"2026-01-05T10:00:00.000Z","message":{"content":"Please review the diff for the synthetic example."}}
-{"type":"assistant","timestamp":"2026-01-05T10:00:01.000Z","message":{"content":[{"type":"text","text":"I'll start with the diff."},{"type":"tool_use","id":"to_m1","name":"Bash","input":{"command":"git diff --stat"}}]}}
-{"type":"user","timestamp":"2026-01-05T10:00:02.000Z","message":{"content":[{"type":"tool_result","tool_use_id":"to_m1","content":" M synthetic/example.txt"}]}}
-{"type":"assistant","timestamp":"2026-01-05T10:00:03.000Z","message":{"content":[{"type":"text","text":"One tidy edit."},{"type":"tool_use","id":"to_m2","name":"Edit","input":{"file_path":"/synthetic/notes.md","old_string":"draft","new_string":"final"}}]}}
-{"type":"user","timestamp":"2026-01-05T10:00:04.000Z","message":{"content":[{"type":"tool_result","tool_use_id":"to_m2","content":"Edited /synthetic/notes.md"}]}}
-{"type":"assistant","timestamp":"2026-01-05T10:00:05.000Z","message":{"content":[{"type":"tool_use","id":"to_m3","name":"SendMessage","input":{"text":"peer note: the synthetic build passed","recipient":"s_peer"}}]}}
-{"type":"system","subtype":"compact_boundary","timestamp":"2026-01-05T10:00:06.000Z"}
-{"type":"user","timestamp":"2026-01-05T10:00:07.000Z","message":{"content":[{"type":"text","text":"Continue after the compaction."}]}}
-{"type":"assistant","timestamp":"2026-01-05T10:00:08.000Z","message":{"content":[{"type":"tool_use","id":"to_m5","name":"Bash","input":{"command":"git status --short"}}]}}
-{"type":"user","timestamp":"2026-01-05T10:00:09.000Z","message":{"content":[{"type":"tool_result","tool_use_id":"to_m5","content":" M synthetic/notes.md"}]}}
-{"type":"assistant","isSidechain":true,"timestamp":"2026-01-05T10:00:01.500Z","message":{"content":[{"type":"text","text":"Working on the synthetic subtask."},{"type":"tool_use","id":"to_s1","name":"Bash","input":{"command":"echo synthetic"}}]}}
-{"type":"user","isSidechain":true,"timestamp":"2026-01-05T10:00:02.500Z","message":{"content":[{"type":"tool_result","tool_use_id":"to_s1","content":"synthetic"}]}}
-{"type":"assistant","isSidechain":true,"timestamp":"2026-01-05T10:00:03.500Z","message":{"content":[{"type":"tool_use","id":"to_s2","name":"SubagentHandback","input":{"text":"the synthetic subtask is done"}}]}}
-{"type":"user","isSidechain":true,"timestamp":"2026-01-05T10:00:04.500Z","message":{"content":[{"type":"tool_result","tool_use_id":"to_s2","content":"handed back"}]}}
+{"type": "user", "timestamp": "2026-01-05T10:00:00.000Z", "message": {"content": "Please review the diff for the synthetic example."}, "cwd": "/synthetic/claude-import"}
+{"type": "assistant", "timestamp": "2026-01-05T10:00:01.000Z", "message": {"content": [{"type": "text", "text": "I'll start with the diff."}, {"type": "tool_use", "id": "to_m1", "name": "Bash", "input": {"command": "git diff --stat"}}]}, "cwd": "/synthetic/claude-import"}
+{"type": "user", "timestamp": "2026-01-05T10:00:02.000Z", "message": {"content": [{"type": "tool_result", "tool_use_id": "to_m1", "content": " M synthetic/example.txt"}]}, "cwd": "/synthetic/claude-import"}
+{"type": "assistant", "timestamp": "2026-01-05T10:00:03.000Z", "message": {"content": [{"type": "text", "text": "One tidy edit."}, {"type": "tool_use", "id": "to_m2", "name": "Edit", "input": {"file_path": "/synthetic/notes.md", "old_string": "draft", "new_string": "final"}}]}, "cwd": "/synthetic/claude-import"}
+{"type": "user", "timestamp": "2026-01-05T10:00:04.000Z", "message": {"content": [{"type": "tool_result", "tool_use_id": "to_m2", "content": "Edited /synthetic/notes.md"}]}, "cwd": "/synthetic/claude-import"}
+{"type": "assistant", "timestamp": "2026-01-05T10:00:05.000Z", "message": {"content": [{"type": "tool_use", "id": "to_m3", "name": "SendMessage", "input": {"text": "peer note: the synthetic build passed", "recipient": "s_peer"}}]}, "cwd": "/synthetic/claude-import"}
+{"type": "system", "subtype": "compact_boundary", "timestamp": "2026-01-05T10:00:06.000Z", "cwd": "/synthetic/claude-import"}
+{"type": "user", "timestamp": "2026-01-05T10:00:07.000Z", "message": {"content": [{"type": "text", "text": "Continue after the compaction."}]}, "cwd": "/synthetic/claude-import"}
+{"type": "assistant", "timestamp": "2026-01-05T10:00:08.000Z", "message": {"content": [{"type": "tool_use", "id": "to_m5", "name": "Bash", "input": {"command": "git status --short"}}]}, "cwd": "/synthetic/claude-import"}
+{"type": "user", "timestamp": "2026-01-05T10:00:09.000Z", "message": {"content": [{"type": "tool_result", "tool_use_id": "to_m5", "content": " M synthetic/notes.md"}]}, "cwd": "/synthetic/claude-import"}
+{"type": "assistant", "isSidechain": true, "timestamp": "2026-01-05T10:00:01.500Z", "message": {"content": [{"type": "text", "text": "Working on the synthetic subtask."}, {"type": "tool_use", "id": "to_s1", "name": "Bash", "input": {"command": "echo synthetic"}}]}, "cwd": "/synthetic/claude-import"}
+{"type": "user", "isSidechain": true, "timestamp": "2026-01-05T10:00:02.500Z", "message": {"content": [{"type": "tool_result", "tool_use_id": "to_s1", "content": "synthetic"}]}, "cwd": "/synthetic/claude-import"}
+{"type": "assistant", "isSidechain": true, "timestamp": "2026-01-05T10:00:03.500Z", "message": {"content": [{"type": "tool_use", "id": "to_s2", "name": "SubagentHandback", "input": {"text": "the synthetic subtask is done"}}]}, "cwd": "/synthetic/claude-import"}
+{"type": "user", "isSidechain": true, "timestamp": "2026-01-05T10:00:04.500Z", "message": {"content": [{"type": "tool_result", "tool_use_id": "to_s2", "content": "handed back"}]}, "cwd": "/synthetic/claude-import"}

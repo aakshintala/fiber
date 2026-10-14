@@ -2,14 +2,19 @@
 //! loop's reviewer would be sent for a session directory's calls.
 //!
 //! The driver folds the source log's durable lines through the loop's own
-//! [`render_reviewed`](r#loop::render_reviewed), snapshots the reviewer
-//! input at each outer call's request, and replays each requested/started
-//! pair through the loop's own
+//! [`render_reviewed`](r#loop::render_reviewed), after indexing every
+//! declaration and decision attribution ahead of the replay. Each call
+//! prints at its request position in source request order: a requested
+//! call whose start the index holds replays through the loop's own
 //! [`review`](r#loop::Loop::review) on a scratch loop, capturing both
-//! stage requests. A reviewed call without logged started effects prints
-//! one `unreplayable` line instead of invented input. At each completed
-//! handoff with person messages the driver prints the selection request
-//! and reads its answer, driving the loop's own
+//! stage requests, so a call requested before a handoff prints before
+//! that handoff's selection even when its start logs later. A reviewed
+//! call without logged started effects prints one `unreplayable` line
+//! instead of invented input. Calls with explicit non-review native
+//! decisions (a person's allow or deny, a standing rule or grant, a
+//! standing ask) are not review requests and print nothing. At each
+//! completed handoff with person messages the driver prints the selection
+//! request and reads its answer, driving the loop's own
 //! [`reviewer_handoff`](r#loop::Loop::reviewer_handoff); source
 //! `reviewer_kept` lines are history, never a second selection. The source
 //! directory is only read, never written.
@@ -447,41 +452,49 @@ impl Provider for Seam {
     }
 }
 
-/// One outer call the driver indexed: its request, the reviewer input at
-/// that moment, and the start that declared its effects, when one logged.
-struct Pending {
-    /// The call's action.
-    id: ActionId,
+/// One outer call the pre-index found: its request and the start that
+/// declared its effects, when one logged anywhere in the chain.
+struct IndexedCall {
     /// The requested call.
     call: ToolCallRequested,
     /// The turn that requested it.
     turn: Option<TurnId>,
-    /// The reviewer input through this call's own item: later person
-    /// messages and sibling calls never enter its replay.
-    snapshot: Vec<Reviewed>,
-    /// What the call declared, once its start logs.
+    /// What the call declared, when its start logged.
     started: Option<ToolCallStarted>,
     /// The turn that started it.
     start_turn: Option<TurnId>,
 }
 
-/// The replay driver: the scratch loop, the source fold, and the index of
-/// the calls it replays.
+/// What the driver indexes before replaying: every declaration and
+/// decision attribution, so a decision logged after a call's start still
+/// excludes it and a start logged after a handoff still replays at the
+/// call's request position.
+struct CallIndex {
+    /// Every outer call, by action id.
+    calls: HashMap<String, IndexedCall>,
+    /// The actions with recorded reviewer attribution: a review-step
+    /// `permission_requested`, a reviewer or headless `permission_resolved`,
+    /// or a review-stage `usage_recorded`.
+    review: HashSet<String>,
+    /// The actions with explicit non-review native decisions: a standing
+    /// ask, or a `permission_resolved` decided by a person, a standing
+    /// rule or grant, or any other non-reviewer decider. These calls are
+    /// not review requests, even when their starts logged.
+    nonreview: HashSet<String>,
+}
+
+/// The replay driver: the scratch loop, the source fold, and the request
+/// ids it already emitted.
 struct Driver {
     /// The scratch loop, in its own temporary directory.
     looped: Loop,
     /// The recording seam answering its reviewer.
     seam: Arc<Seam>,
-    /// The scratch session's directory, for reading back selections.
-    scratch: PathBuf,
     /// The source fold: what the reviewer is shown, line by line.
     reviewed: Vec<Reviewed>,
-    /// Every outer call in source request order.
-    pending: Vec<Pending>,
-    /// Each pending call's place, by action id.
-    index: HashMap<String, usize>,
-    /// The actions with recorded reviewer attribution.
-    attributed: HashSet<String>,
+    /// The request ids already emitted, so a repeated request id prints
+    /// once.
+    seen: HashSet<String>,
     /// The temporary home, kept alive for the replay.
     _home: fakes::TempDir,
     /// The inbox sender, kept so the scratch inbox never closes.
@@ -568,20 +581,18 @@ impl Driver {
         Ok(Self {
             looped,
             seam,
-            scratch,
             reviewed: Vec::new(),
-            pending: Vec::new(),
-            index: HashMap::new(),
-            attributed: HashSet::new(),
+            seen: HashSet::new(),
             _home: home,
             _inbox: inbox,
         })
     }
 
-    /// Folds the chain and replays it: review lines print where their
-    /// calls started, selections where their handoffs completed, and
-    /// unreplayable lines at the end in source request order.
+    /// Folds the chain and replays it: each call prints at its request
+    /// position in source request order, selections print where their
+    /// handoffs completed, and nothing moves across a handoff.
     fn drive(&mut self, chain: &[Indexed]) -> Result<(), String> {
+        let index = Self::index_chain(chain)?;
         for (position, item) in chain.iter().enumerate() {
             let envelope = &item.envelope;
             let event = Event::from_envelope(envelope).map_err(|error| {
@@ -620,103 +631,173 @@ impl Driver {
                 envelope.action_id.as_ref(),
                 envelope.seq,
             );
-            self.index_event(envelope, &event)?;
-        }
-        for pending in &self.pending {
-            if pending.started.is_none() && self.attributed.contains(&pending.id.0) {
-                let line = json!({
-                    "id": pending.id.0,
-                    "unreplayable": "declared effects not logged",
-                });
-                self.emit(&line)?;
+            if let Event::ToolCallRequested(call) = event {
+                // Inner and provider-hosted calls are history, never reviewed
+                // targets of their own.
+                if call.ran_by.is_none()
+                    && call.provider_item.is_none()
+                    && let Some(action) = envelope.action_id.clone()
+                    && self.seen.insert(action.0.clone())
+                {
+                    self.emit_call(envelope, position, &action, &call, &index)?;
+                }
             }
         }
         Ok(())
     }
 
-    /// Indexes one rendered event: requests snapshot the reviewer input,
-    /// starts replay their calls, and review attribution marks denied
-    /// calls that never started.
-    fn index_event(&mut self, envelope: &contract::Envelope, event: &Event) -> Result<(), String> {
-        if let Event::ToolCallRequested(call) = event {
-            // Inner and provider-hosted calls are history, never reviewed
-            // targets of their own.
-            if call.ran_by.is_none()
-                && call.provider_item.is_none()
-                && let Some(action) = envelope.action_id.clone()
-                && !self.index.contains_key(&action.0)
-            {
-                self.index.insert(action.0.clone(), self.pending.len());
-                self.pending.push(Pending {
-                    id: action,
-                    call: call.clone(),
-                    turn: envelope.turn_id.clone(),
-                    snapshot: self.reviewed.clone(),
-                    started: None,
-                    start_turn: None,
+    /// Indexes every declaration and decision attribution ahead of the
+    /// replay, so a decision logged after a call's start still excludes
+    /// it and a start logged after a handoff still replays at the call's
+    /// request position. A repeated request or start id keeps its first
+    /// line.
+    fn index_chain(chain: &[Indexed]) -> Result<CallIndex, String> {
+        let mut index = CallIndex {
+            calls: HashMap::new(),
+            review: HashSet::new(),
+            nonreview: HashSet::new(),
+        };
+        for (position, item) in chain.iter().enumerate() {
+            let envelope = &item.envelope;
+            let event = Event::from_envelope(envelope).map_err(|error| {
+                format!(
+                    "review: {} {}: a {} payload that does not parse: {error}",
+                    item.dir.display(),
+                    describe(envelope, position),
+                    envelope.kind,
+                )
+            })?;
+            let Some(event) = event else {
+                continue;
+            };
+            match event {
+                Event::ToolCallRequested(call) => {
+                    // Inner and provider-hosted calls are history, never
+                    // reviewed targets of their own.
+                    if call.ran_by.is_none() && call.provider_item.is_none() {
+                        if let Some(action) = envelope.action_id.clone() {
+                            index.calls.entry(action.0).or_insert(IndexedCall {
+                                call,
+                                turn: envelope.turn_id.clone(),
+                                started: None,
+                                start_turn: None,
+                            });
+                        }
+                    }
+                }
+                Event::ToolCallStarted(started) => {
+                    if let Some(action) = envelope.action_id.clone()
+                        && let Some(indexed) = index.calls.get_mut(&action.0)
+                        && indexed.started.is_none()
+                    {
+                        indexed.started = Some(started);
+                        indexed.start_turn = envelope.turn_id.clone();
+                    }
+                }
+                Event::PermissionRequested(request) => {
+                    let Some(action) = envelope.action_id.clone() else {
+                        continue;
+                    };
+                    match request.step {
+                        AskStep::Review { .. } => {
+                            index.review.insert(action.0);
+                        }
+                        AskStep::StandingAsk { .. } => {
+                            index.nonreview.insert(action.0);
+                        }
+                    }
+                }
+                Event::PermissionResolved(resolved) => {
+                    let Some(action) = envelope.action_id.clone() else {
+                        continue;
+                    };
+                    if resolved.reviewer.is_some()
+                        || matches!(
+                            resolved.decided_by,
+                            DecidedBy::Reviewer | DecidedBy::NoReviewer
+                        )
+                    {
+                        index.review.insert(action.0);
+                    } else {
+                        // An explicit non-review native decision: a
+                        // person's allow or deny, a standing rule or
+                        // grant, or any other non-reviewer decider.
+                        index.nonreview.insert(action.0);
+                    }
+                }
+                Event::UsageRecorded(recorded) => {
+                    if let Some(use_of) = recorded.reviewer.clone()
+                        && let ReviewerUse::Stage1 { action_id } | ReviewerUse::Stage2 { action_id } =
+                            use_of
+                    {
+                        index.review.insert(action_id.0);
+                    }
+                }
+                _ => {}
+            }
+        }
+        Ok(index)
+    }
+
+    /// Prints one outer call at its request position: nothing when an
+    /// explicit non-review decision judged it, both captured stage
+    /// requests when its start logged, and one `unreplayable` line when
+    /// the reviewer judged it but no start logged. The reviewer input is
+    /// the fold through this call's own item: later person messages and
+    /// sibling calls never enter its replay.
+    fn emit_call(
+        &mut self,
+        envelope: &contract::Envelope,
+        position: usize,
+        id: &ActionId,
+        call: &ToolCallRequested,
+        index: &CallIndex,
+    ) -> Result<(), String> {
+        let judged = index.review.contains(&id.0);
+        if index.nonreview.contains(&id.0) && !judged {
+            // An explicit non-review native decision is not a review
+            // request, even when the call's start logged its effects.
+            return Ok(());
+        }
+        let Some(indexed) = index.calls.get(&id.0) else {
+            return Ok(());
+        };
+        match indexed.started.clone() {
+            Some(started) => {
+                let snapshot = self.reviewed.clone();
+                let turn = indexed
+                    .start_turn
+                    .clone()
+                    .or(indexed.turn.clone())
+                    .unwrap_or(TurnId("t_replay".to_owned()));
+                self.replay_call(envelope, position, id, call, &snapshot, &started, &turn)
+            }
+            None if judged => {
+                let line = json!({
+                    "id": id.0,
+                    "unreplayable": "declared effects not logged",
                 });
+                self.emit(&line)
             }
-            return Ok(());
+            None => Ok(()),
         }
-        if let Event::ToolCallStarted(started) = event
-            && let Some(action) = envelope.action_id.clone()
-            && let Some(at) = self.index.get(&action.0).copied()
-            && self
-                .pending
-                .get(at)
-                .map(|pending| pending.started.is_none())
-                .unwrap_or(false)
-        {
-            if let Some(pending) = self.pending.get_mut(at) {
-                pending.started = Some(started.clone());
-                pending.start_turn = envelope.turn_id.clone();
-            }
-            self.replay_call(envelope, at)?;
-            return Ok(());
-        } else if matches!(event, Event::ToolCallStarted(_)) {
-            return Ok(());
-        }
-        if let Event::PermissionRequested(request) = event {
-            if matches!(request.step, AskStep::Review { .. })
-                && let Some(action) = envelope.action_id.clone()
-            {
-                self.attributed.insert(action.0);
-            }
-            return Ok(());
-        }
-        if let Event::PermissionResolved(resolved) = event {
-            if (resolved.reviewer.is_some()
-                || matches!(
-                    resolved.decided_by,
-                    DecidedBy::Reviewer | DecidedBy::NoReviewer
-                ))
-                && let Some(action) = envelope.action_id.clone()
-            {
-                self.attributed.insert(action.0);
-            }
-            return Ok(());
-        }
-        if let Event::UsageRecorded(recorded) = event
-            && let Some(use_of) = recorded.reviewer.clone()
-            && let ReviewerUse::Stage1 { action_id } | ReviewerUse::Stage2 { action_id } = use_of
-        {
-            self.attributed.insert(action_id.0);
-        }
-        Ok(())
     }
 
     /// Replays one requested/started pair through the loop's own reviewer
     /// and prints both captured stage requests as one JSON line.
-    fn replay_call(&mut self, envelope: &contract::Envelope, at: usize) -> Result<(), String> {
-        let Some(pending) = self.pending.get(at) else {
-            return Err("review: its call index disagrees with its calls".to_owned());
-        };
-        let Some(started) = pending.started.clone() else {
-            return Err("review: its call index disagrees with its calls".to_owned());
-        };
+    fn replay_call(
+        &mut self,
+        envelope: &contract::Envelope,
+        position: usize,
+        id: &ActionId,
+        call: &ToolCallRequested,
+        snapshot: &[Reviewed],
+        started: &ToolCallStarted,
+        turn: &TurnId,
+    ) -> Result<(), String> {
         let arguments = match started.arguments.clone() {
             Some(rewritten) => rewritten,
-            None => match pending.call.arguments.clone() {
+            None => match call.arguments.clone() {
                 Value::Object(arguments) => arguments,
                 Value::Null
                 | Value::Bool(_)
@@ -742,15 +823,7 @@ impl Driver {
             },
             rewritten,
         };
-        let id = pending.id.clone();
-        let call = pending.call.clone();
-        let snapshot = pending.snapshot.clone();
-        let turn = pending
-            .start_turn
-            .clone()
-            .or(pending.turn.clone())
-            .unwrap_or(TurnId("t_replay".to_owned()));
-        self.looped.reviewed = snapshot;
+        self.looped.reviewed = snapshot.to_vec();
         let before = self
             .seam
             .requests
@@ -759,53 +832,56 @@ impl Driver {
             .len();
         let _decision = self
             .looped
-            .review(&call, &id, &turn, prepared)
+            .review(call, id, turn, prepared)
             .map_err(|error| {
                 format!(
                     "review: {}: cannot replay call {}: {error}",
-                    describe(envelope, at),
+                    describe(envelope, position),
                     id.0,
                 )
             })?;
-        let requests = self
-            .seam
-            .requests
-            .lock()
-            .unwrap_or_else(PoisonError::into_inner)
-            .clone();
-        let stages: Vec<ModelRequest> = requests
-            .iter()
-            .skip(before)
-            .filter_map(|(kind, request)| {
-                if *kind == RequestKind::Stage {
-                    Some(request.clone())
-                } else {
-                    None
-                }
-            })
-            .collect();
+        // Clones only the new stage requests under the one lock hold,
+        // never the whole request history.
+        let stages: Vec<ModelRequest> = {
+            let requests = self
+                .seam
+                .requests
+                .lock()
+                .unwrap_or_else(PoisonError::into_inner);
+            requests
+                .iter()
+                .skip(before)
+                .filter_map(|(kind, request)| {
+                    if *kind == RequestKind::Stage {
+                        Some(request.clone())
+                    } else {
+                        None
+                    }
+                })
+                .collect()
+        };
         let Some(first) = stages.first() else {
             return Err(format!(
                 "review: {}: its reviewer answered no stage request for call {}",
-                describe(envelope, at),
+                describe(envelope, position),
                 id.0,
             ));
         };
         let Some(second) = stages.get(1) else {
             return Err(format!(
                 "review: {}: its reviewer answered one stage request for call {}, not two",
-                describe(envelope, at),
+                describe(envelope, position),
                 id.0,
             ));
         };
         if stages.len() != 2 {
             return Err(format!(
                 "review: {}: its reviewer answered {} stage requests for call {}, not two",
-                describe(envelope, at),
+                describe(envelope, position),
                 stages.len(),
                 id.0,
             ));
-        }
+        };
         let line = json!({
             "id": id.0,
             "stages": [
@@ -817,11 +893,13 @@ impl Driver {
     }
 
     /// Replays one completed handoff: renders its boundary, asks the
-    /// selection through the loop's own handoff path, and folds the kept
-    /// messages the answer selected. With no person message the loop
-    /// records an empty selection itself: no request prints and no answer
-    /// is read. `--keep-all` fails the selection locally before any
-    /// request prints.
+    /// selection through the loop's own handoff path, and keeps the
+    /// selected messages. The scratch loop's `reviewed` already holds
+    /// the kept selection after `reviewer_handoff` renders it through
+    /// the one write path, so the driver copies it instead of rereading
+    /// the scratch log. With no person message the loop records an empty
+    /// selection itself: no request prints and no answer is read.
+    /// `--keep-all` fails the selection locally before any request prints.
     fn completed_handoff(
         &mut self,
         envelope: &contract::Envelope,
@@ -877,36 +955,12 @@ impl Driver {
                 .reviewer_handoff(&turn)
                 .map_err(|error| format!("review: cannot replay its handoff: {error}"))?;
         }
-        self.fold_kept()
-    }
-
-    /// Folds the scratch loop's latest `reviewer_kept` into the source
-    /// fold, so repeated handoffs select from the previously kept
-    /// messages, never the whole earlier transcript.
-    fn fold_kept(&mut self) -> Result<(), String> {
-        let lines = log::read(&self.scratch).map_err(|error| format!("review: {error}"))?;
-        let mut kept = None;
-        for line in &lines {
-            if line.kind == "reviewer_kept" {
-                kept = Some(line.clone());
-            }
-        }
-        let Some(kept) = kept else {
-            return Err("review: its replay wrote no reviewer_kept".to_owned());
-        };
-        let event = Event::from_envelope(&kept)
-            .map_err(|error| format!("review: its replay wrote no reviewer_kept: {error}"))?;
-        if let Some(Event::ReviewerKept(selected)) = event {
-            render_reviewed(
-                &mut self.reviewed,
-                &Event::ReviewerKept(selected),
-                None,
-                kept.seq,
-            );
-            Ok(())
-        } else {
-            Err("review: its replay wrote no reviewer_kept".to_owned())
-        }
+        // `reviewer_handoff` renders the kept selection into the scratch
+        // loop's own input through the one write path; copying it folds
+        // the kept messages, so repeated handoffs select from the
+        // previously kept messages, never the whole earlier transcript.
+        self.reviewed.clone_from(&self.looped.reviewed);
+        Ok(())
     }
 
     /// Prints one projected line.

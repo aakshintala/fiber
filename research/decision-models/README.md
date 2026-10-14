@@ -274,23 +274,65 @@ system entry is a handoff; `isCompactSummary` text is never a prompt):
 Mapped effects (`DeclaredEffects` shape, paths from the named input key):
 `Bash` executes, irreversible; `Edit`/`Write` writes, reversible, paths
 from `file_path`; `Read` reads, reversible, paths from `file_path`;
-`WebSearch`/`WebFetch` network, reversible. A corrupt line fails naming
-its file and line, quoting no transcript text, and an existing
-destination is refused rather than overwritten.
+`WebSearch`/`WebFetch` network, reversible. The session workspace is
+preserved from the transcript's `cwd` entries, which must all agree and
+be absolute; a missing, relative, or conflicting workspace fails naming
+its file and line. A corrupt line fails naming its file and line,
+quoting no transcript text, and an existing destination is refused
+rather than overwritten.
 
 A pi transcript is a version-3 session header (`id`, `cwd`) with
-parent-linked message and compaction entries. To convert one, select the
-active branch first rather than merging siblings into one conversation:
-custom entries (extension timing stamps), branch summaries and extension
-messages are not person input by default. A minimal synthetic example:
+parent-linked message and compaction entries. `--format pi` converts
+one into a single active-branch session (`s_pi`): the last entry's
+parent-linked ancestors, oldest first, so siblings off that branch are
+never merged into one conversation. Custom entries (extension timing
+stamps), branch summaries and extension messages are not person input
+by default. A minimal synthetic example:
 
 ```json
-{"version": 3, "id": "s_synthetic", "cwd": "/synthetic/pi-import"}
-{"id": "m_1", "parentId": null, "message": {"role": "user", "content": "check the synthetic tests"}}
-{"id": "m_2", "parentId": "m_1", "message": {"role": "assistant", "content": "on it"}}
-{"summary": "synthetic checkpoint", "firstKeptEntryId": "m_2", "tokensBefore": 900}
+{"type": "session", "version": 3, "id": "s_synthetic", "cwd": "/synthetic/pi-import"}
+{"type": "message", "id": "m_1", "parentId": null, "message": {"role": "user", "content": [{"type": "text", "text": "check the synthetic tests"}]}}
+{"type": "message", "id": "m_2", "parentId": "m_1", "message": {"role": "assistant", "content": [{"type": "text", "text": "on it"}]}}
+{"type": "compaction", "id": "m_3", "parentId": "m_2", "summary": "synthetic checkpoint", "firstKeptEntryId": "m_2", "tokensBefore": 900}
 ```
 
 Only the person's messages on the active branch become driver input; the
 compaction entry becomes the handoff boundary. No owner pi session is
-committed; verification uses small synthetic inputs like the above.
+committed; verification uses small synthetic inputs like the above,
+written outside the repository:
+
+```sh
+fixture_dir=$(mktemp -d)
+cat > "$fixture_dir/pi-synthetic.jsonl" <<'EOF'
+{"type":"session","version":3,"id":"s_synthetic","cwd":"/synthetic/pi-import"}
+{"type":"message","id":"m_1","parentId":null,"message":{"role":"user","content":[{"type":"text","text":"check the synthetic tests"}]}}
+{"type":"message","id":"m_2","parentId":"m_1","message":{"role":"assistant","content":[{"type":"toolCall","id":"call_1","name":"bash","arguments":{"command":"echo synthetic"}}]}}
+{"type":"message","id":"m_3","parentId":"m_2","message":{"role":"toolResult","toolCallId":"call_1","toolName":"bash","content":[{"type":"text","text":"synthetic"}]}}
+{"type":"compaction","id":"m_4","parentId":"m_3","summary":"synthetic checkpoint","firstKeptEntryId":"m_5","tokensBefore":900}
+{"type":"message","id":"m_5","parentId":"m_4","message":{"role":"user","content":[{"type":"text","text":"continue after the checkpoint"}]}}
+EOF
+python3 research/decision-models/convert_session.py --format pi \
+  "$fixture_dir/pi-synthetic.jsonl" "$fixture_dir/out"
+target/debug/examples/check "$fixture_dir/out/s_pi"
+target/debug/examples/review --keep-all "$fixture_dir/out/s_pi"
+rm -rf "$fixture_dir"
+```
+
+Pi source shapes and their session log mapping:
+
+| Source | Session log |
+|---|---|
+| `message` `role: user` text blocks on the active branch | driver message in a `turn_started` |
+| `message` `role: assistant` `toolCall{id,name,arguments}` | `tool_call_requested`, preserving name and arguments |
+| `message` `role: toolResult` with `toolCallId` matching a request | `tool_call_started` with the table's declared effects |
+| `compaction` (`summary`, `firstKeptEntryId`, `tokensBefore`) | completed `handoff_completed`; the summary is never person input |
+| `custom`/`custom_message`, model bookkeeping, `system` messages, assistant prose or thinking, unmatched results | skipped, never person input |
+| entries off the active branch | skipped and counted, never merged in |
+| any other tool name | skipped and counted, naming only the source type |
+
+Mapped pi effects (`DeclaredEffects` shape, paths from the named
+arguments key): `bash` executes, irreversible; `read`/`grep`/`find`/
+`ffgrep`/`ls` reads, reversible, paths from `path`; `edit`/`write`
+writes, reversible, paths from `path`. The header `cwd` is the session
+workspace and must be absolute. A missing header, a bad id or parent
+link, or a parent cycle fails naming its file and line.
