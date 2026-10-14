@@ -35,6 +35,8 @@ pub struct Lines(
 );
 
 impl fmt::Debug for Lines {
+    // The `"Lines(..)"` string is a developer aid no doc promises and no consumer observes.
+    #[cfg_attr(false, mutants::skip)]
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.write_str("Lines(..)")
     }
@@ -54,6 +56,8 @@ type Writes = dyn Fn(&[u8], &dyn crate::clock::Clock, &dyn crate::tool::Cancel) 
     + Sync;
 
 impl fmt::Debug for Input {
+    // The `"Input(..)"` string is a developer aid no doc promises and no consumer observes.
+    #[cfg_attr(false, mutants::skip)]
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.write_str("Input(..)")
     }
@@ -67,6 +71,8 @@ pub struct Stop(
 );
 
 impl fmt::Debug for Stop {
+    // The `"Stop(..)"` string is a developer aid no doc promises and no consumer observes.
+    #[cfg_attr(false, mutants::skip)]
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.write_str("Stop(..)")
     }
@@ -99,6 +105,8 @@ pub struct End(
 );
 
 impl fmt::Debug for End {
+    // The `"End(..)"` string is a developer aid no doc promises and no consumer observes.
+    #[cfg_attr(false, mutants::skip)]
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.write_str("End(..)")
     }
@@ -215,6 +223,8 @@ pub struct Foreground(
 );
 
 impl fmt::Debug for Foreground {
+    // The `"Foreground(..)"` string is a developer aid no doc promises and no consumer observes.
+    #[cfg_attr(false, mutants::skip)]
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.write_str("Foreground(..)")
     }
