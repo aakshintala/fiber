@@ -47,6 +47,8 @@ pub struct FakeClock {
     parked_cv: Condvar,
     #[cfg(test)]
     await_any_pause: Mutex<Option<(std::sync::mpsc::Sender<()>, std::sync::mpsc::Receiver<()>)>>,
+    #[cfg(test)]
+    mark_parked_pause: Mutex<Option<(std::sync::mpsc::Sender<()>, std::sync::mpsc::Receiver<()>)>>,
 }
 
 impl FakeClock {
@@ -72,6 +74,8 @@ impl FakeClock {
             parked_cv: Condvar::new(),
             #[cfg(test)]
             await_any_pause: Mutex::new(None),
+            #[cfg(test)]
+            mark_parked_pause: Mutex::new(None),
         })
     }
 
@@ -186,12 +190,51 @@ impl FakeClock {
         }
     }
 
+    #[cfg(test)]
+    fn pause_next_mark_parked_predicate(
+        &self,
+    ) -> (std::sync::mpsc::Receiver<()>, std::sync::mpsc::Sender<()>) {
+        let (checked_tx, checked_rx) = std::sync::mpsc::channel();
+        let (release_tx, release_rx) = std::sync::mpsc::channel();
+        *self
+            .mark_parked_pause
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner) = Some((checked_tx, release_rx));
+        (checked_rx, release_tx)
+    }
+
+    /// The `mark_parked` pause point: when armed and nobody is parked at
+    /// `until`, signals the test and blocks on its release without holding
+    /// the clock's lock, so the parker can park meanwhile. Fires once per
+    /// arming; when a park is already present the arming is dropped without
+    /// signalling.
+    #[cfg(test)]
+    #[track_caller]
+    fn mark_parked_predicate_checked(&self, until: Instant) {
+        let pause = self
+            .mark_parked_pause
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .take();
+        let Some((checked, release)) = pause else {
+            return;
+        };
+        if parked_count(&lock(&self.state), until) == 0 {
+            let _sent = checked.send(());
+            crate::deadline::Deadline::after(Duration::from_secs(5))
+                .recv(&release)
+                .expect("waited for the test to release the mark_parked predicate");
+        }
+    }
+
     /// Waits, at most `within` of real time, until a thread is parked in
     /// [`Clock::wait_until`] with this `until`, and returns a [`Mark`] of the
     /// threads parked at `until`, taken under the lock that saw the park.
     /// `None` at the deadline. A later park by one of them matches
     /// [`FakeClock::await_parked_since`], whatever woke it.
     pub fn mark_parked(&self, until: Instant, within: Duration) -> Option<Mark> {
+        #[cfg(test)]
+        self.mark_parked_predicate_checked(until);
         let state = lock(&self.state);
         let (guard, _) = self
             .parked_cv
