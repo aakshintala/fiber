@@ -1,16 +1,23 @@
 //! Tests for [`TurnCancel`](super::TurnCancel), through the signal only:
 //! no contract trait is involved.
 
+#![allow(clippy::unwrap_used, reason = "test setup builds a loop")]
+
 use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
 
 use contract::ErrorCode;
+use contract::SessionId;
 use contract::clock::Wake;
 use contract::events::{TurnCompleted, TurnOutcome};
+use contract::inbox::Delivery;
+use contract::rules::{Rules, RulesError, StandingRules};
 use contract::shapes::{Failure, Question};
 use contract::tool::Cancel as _;
+use log::Log;
 
 use super::{TurnCancel, interrupted};
+use crate::{Loop, Model};
 
 #[derive(Default)]
 struct Counter {
@@ -271,4 +278,96 @@ fn a_late_cancel_leaves_failed_and_interrupted_unchanged() {
         interrupted(&mut after);
         assert_eq!(after, before);
     }
+}
+
+/// Rules that hold nothing, for the loop the disarm tests run through.
+struct Still;
+
+impl Rules for Still {
+    fn read(&self) -> Result<StandingRules, RulesError> {
+        Ok(StandingRules::default())
+    }
+
+    fn remember(&self, _: &str, _: &str, _: &SessionId) -> Result<(), RulesError> {
+        Ok(())
+    }
+}
+
+/// A loop with nothing scripted, holding its scratch directory alive in
+/// `home`: only its cancel signal matters here.
+fn looped() -> (Loop, fakes::TempDir) {
+    let home = fakes::TempDir::new("fiber-disarm-cancel");
+    let workspace = home.path().join("workspace");
+    let credentials = home.path().join("credentials");
+    std::fs::create_dir_all(&workspace).unwrap();
+    std::fs::create_dir_all(&credentials).unwrap();
+    let clock: Arc<dyn contract::clock::Clock> = fakes::clock::FakeClock::new();
+    let log =
+        Arc::new(Log::create(home.path(), SessionId("s_test".into()), Arc::clone(&clock)).unwrap());
+    let (_inbox, rx) = std::sync::mpsc::channel::<Delivery>();
+    let rules: Arc<dyn Rules> = Arc::new(Still);
+    let looped = Loop::start(
+        crate::Session {
+            log,
+            provider: Arc::new(fakes::ScriptedProvider::new(Vec::new())),
+            model: Model {
+                reference: "fake/model".into(),
+                cost: None,
+                subscription: false,
+            },
+            prompt: crate::prompt::PromptInputs::new(
+                home.path().to_path_buf(),
+                "/bin/sh".into(),
+                home.path()
+                    .join("s_test/events.jsonl")
+                    .display()
+                    .to_string(),
+                clock,
+                fakes::CONTEXT_WINDOW,
+            ),
+            inbox: rx,
+            tools: Vec::new(),
+            permissions: crate::Permissions {
+                workspace: workspace.display().to_string(),
+                credentials,
+                credential_files: Vec::new(),
+                rules,
+            },
+        },
+        None,
+    )
+    .unwrap();
+    (looped, home)
+}
+
+#[test]
+fn disarm_cancel_turns_a_cancelled_completed_turn_into_interrupted() {
+    let (looped, _home) = looped();
+    looped.cancel.arm();
+    assert!(looped.cancel.cancel());
+    let mut completed = ended(TurnOutcome::Completed, None, true);
+    looped.disarm_cancel(&mut completed);
+    assert_eq!(completed, ended(TurnOutcome::Interrupted, None, false));
+}
+
+#[test]
+fn disarm_cancel_leaves_failed_and_uncancelled_completed_unchanged() {
+    let (looped, _home) = looped();
+    // No cancel landed: the disarm changes nothing, not even questions.
+    let mut completed = ended(TurnOutcome::Completed, None, true);
+    looped.disarm_cancel(&mut completed);
+    assert_eq!(completed, ended(TurnOutcome::Completed, None, true));
+    // A cancel rewrites a completed turn, never a failed one.
+    looped.cancel.arm();
+    assert!(looped.cancel.cancel());
+    let failure = Failure {
+        code: ErrorCode::Blocked,
+        message: "m".into(),
+        retry_after_ms: None,
+        provider: None,
+    };
+    let mut failed = ended(TurnOutcome::Failed, Some(failure), false);
+    let before = failed.clone();
+    looped.disarm_cancel(&mut failed);
+    assert_eq!(failed, before);
 }

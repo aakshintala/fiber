@@ -2,10 +2,13 @@
 
 use std::collections::BTreeMap;
 
-use contract::events::{Control, HandoffCompleted, Note, Outcome, SkillLoad, ToolCallRequested};
+use contract::ActionId;
+use contract::events::{
+    ContextNudged, Control, HandoffCompleted, Note, Outcome, SkillLoad, ToolCallRequested,
+    TurnOutcome,
+};
 use contract::provider::Input;
 use contract::shapes::{Question, Tokens};
-use contract::{ActionId, events::ContextNudged};
 use serde_json::json;
 
 use super::{
@@ -413,4 +416,16 @@ fn a_restart_on_a_completed_handoff_leaves_skills_empty() {
         note: vec![first.clone()],
     })));
     assert!(carry.skills.is_empty());
+}
+
+#[test]
+fn only_a_cancelled_handoff_ends_the_turn_interrupted() {
+    // A person cancelled the turn: the handoff ends it interrupted.
+    assert_eq!(
+        super::cancelled(Outcome::Cancelled),
+        Some(crate::ended(TurnOutcome::Interrupted, None)),
+    );
+    // Every other ending leaves the turn to the handoff's own outcome.
+    assert_eq!(super::cancelled(Outcome::Completed), None);
+    assert_eq!(super::cancelled(Outcome::Failed), None);
 }

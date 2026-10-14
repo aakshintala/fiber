@@ -9,6 +9,10 @@
     reason = "test code; a failure is the test's"
 )]
 
+use std::sync::mpsc;
+use std::thread;
+use std::time::Duration;
+
 use contract::events::{
     Event, InputItem, ReasoningCompleted, SteeringApplied, TextCompleted, ToolCallArgumentsDelta,
     ToolCallCompleted, ToolCallRequested, TurnStarted,
@@ -20,6 +24,7 @@ use serde_json::{Map, Value, json};
 
 use super::shown::Shown;
 use super::{First, Second, read_first, read_second, render_reviewed, sections, system_prompt};
+use fakes::Deadline;
 
 const PROMPT: &str = include_str!("../prompt/reviewer.md");
 
@@ -377,4 +382,55 @@ fn a_started_rewrite_leaves_the_reviewers_history_as_it_was() {
         Some(Seq(24)),
     );
     assert_eq!(reviewed, before);
+}
+
+#[test]
+fn already_clean_verdicts_read_without_hanging() {
+    // `clean` loops until its word stops changing: with its comparison
+    // flipped it loops forever on already-clean input, so each verdict
+    // parses on its own thread and the test takes the result through a
+    // deadline. A hang then fails naming what was waited for, never hangs.
+    let (first_tx, first_rx) = mpsc::channel();
+    let _first = thread::spawn(move || {
+        let _sent = first_tx.send(read_first("allow"));
+    });
+    let (second_tx, second_rx) = mpsc::channel();
+    let _second = thread::spawn(move || {
+        let _sent = second_tx.send(read_second("allow"));
+    });
+    let (block_tx, block_rx) = mpsc::channel();
+    let _block = thread::spawn(move || {
+        let _sent = block_tx.send(read_second("block: force-pushes to main"));
+    });
+    let wait = Duration::from_secs(5);
+    let first = Deadline::after(wait).recv_or_fail(&first_rx, "read_first(\"allow\")");
+    assert!(matches!(first, Ok(First::Allow)), "{first:?}");
+    let second = Deadline::after(wait).recv_or_fail(&second_rx, "read_second(\"allow\")");
+    assert_eq!(second, Ok(Second::Allow { reason: None }));
+    let blocked = Deadline::after(wait)
+        .recv_or_fail(&block_rx, "read_second(\"block: force-pushes to main\")");
+    assert_eq!(
+        blocked,
+        Ok(Second::Block {
+            reason: "force-pushes to main".into(),
+        })
+    );
+}
+
+#[test]
+fn a_verdict_needing_two_strip_passes_reads() {
+    // `clean` strips quotes, then a trailing `.`, then whitespace, looping
+    // until the word stops changing. `"allow".` needs two passes: the
+    // first leaves `allow"`, the second gives `allow`. With its comparison
+    // flipped `clean` returns after one pass, so this fails synchronously
+    // without waiting on any hang guard.
+    assert!(
+        matches!(read_first("\"allow\"."), Ok(First::Allow)),
+        "{:?}",
+        read_first("\"allow\".")
+    );
+    assert_eq!(
+        read_second("\"allow\"."),
+        Ok(Second::Allow { reason: None })
+    );
 }
