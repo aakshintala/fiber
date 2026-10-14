@@ -47,6 +47,8 @@ pub struct FakeClock {
     parked_cv: Condvar,
     #[cfg(test)]
     await_any_pause: Mutex<Option<(std::sync::mpsc::Sender<()>, std::sync::mpsc::Receiver<()>)>>,
+    #[cfg(test)]
+    mark_parked_pause: Mutex<Option<(std::sync::mpsc::Sender<()>, std::sync::mpsc::Receiver<()>)>>,
 }
 
 impl FakeClock {
@@ -72,6 +74,8 @@ impl FakeClock {
             parked_cv: Condvar::new(),
             #[cfg(test)]
             await_any_pause: Mutex::new(None),
+            #[cfg(test)]
+            mark_parked_pause: Mutex::new(None),
         })
     }
 
@@ -186,6 +190,38 @@ impl FakeClock {
         }
     }
 
+    #[cfg(test)]
+    fn pause_next_mark_parked_predicate(
+        &self,
+    ) -> (std::sync::mpsc::Receiver<()>, std::sync::mpsc::Sender<()>) {
+        let (checked_tx, checked_rx) = std::sync::mpsc::channel();
+        let (release_tx, release_rx) = std::sync::mpsc::channel();
+        *self
+            .mark_parked_pause
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner) = Some((checked_tx, release_rx));
+        (checked_rx, release_tx)
+    }
+
+    /// The `mark_parked` pause point, called only while its wait predicate is
+    /// true. Fires once per arming; the pause mutex is released before the
+    /// test signal and release wait.
+    #[cfg(test)]
+    #[track_caller]
+    fn mark_parked_predicate_checked(&self) {
+        let pause = self
+            .mark_parked_pause
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .take();
+        if let Some((checked, release)) = pause {
+            let _sent = checked.send(());
+            crate::deadline::Deadline::after(Duration::from_secs(5))
+                .recv(&release)
+                .expect("waited for the test to release the mark_parked predicate");
+        }
+    }
+
     /// Waits, at most `within` of real time, until a thread is parked in
     /// [`Clock::wait_until`] with this `until`, and returns a [`Mark`] of the
     /// threads parked at `until`, taken under the lock that saw the park.
@@ -195,7 +231,14 @@ impl FakeClock {
         let state = lock(&self.state);
         let (guard, _) = self
             .parked_cv
-            .wait_timeout_while(state, within, |state| parked_count(state, until) == 0)
+            .wait_timeout_while(state, within, |state| {
+                let waiting = parked_count(state, until) == 0;
+                #[cfg(test)]
+                if waiting {
+                    self.mark_parked_predicate_checked();
+                }
+                waiting
+            })
             .unwrap_or_else(PoisonError::into_inner);
         (parked_count(&guard, until) > 0).then(|| {
             Mark(
