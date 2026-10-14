@@ -282,7 +282,29 @@ fn a_dropped_proxy_refuses_connections() {
 #[test]
 fn coalesced_connect_and_payload_preserves_the_payload() {
     let proxy = ConnectProxy::start().unwrap();
-    let (echo_addr, echo) = echo_once();
+    // The echo answers the coalesced ping and then signals, so the test
+    // holds its first reply read until the answer is on the wire: the
+    // reply and the answer share the socket, and the reply reader buffers
+    // past the head into the answer.
+    let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+    let echo_addr = listener.local_addr().unwrap();
+    let (echoed, answered) = mpsc::channel();
+    let echo = thread::Builder::new()
+        .name("fake-connect-proxy-test-echo".to_owned())
+        .spawn(move || {
+            let (mut stream, _) = listener.accept().unwrap();
+            let mut heard = [0; 4];
+            stream.read_exact(&mut heard).unwrap();
+            stream.write_all(&heard).unwrap();
+            match echoed.send(()) {
+                Ok(()) | Err(_) => {}
+            }
+            let mut rest = Vec::new();
+            match stream.read_to_end(&mut rest) {
+                Ok(_) | Err(_) => {}
+            }
+        })
+        .unwrap();
     let target = format!("{echo_addr}");
     let mut reader = {
         let mut client = connect(&proxy);
@@ -294,6 +316,29 @@ fn coalesced_connect_and_payload_preserves_the_payload() {
         client.flush().unwrap();
         BufReader::new(client)
     };
+    assert_eq!(
+        Deadline::after(CONNECT_WITHIN).recv(&answered),
+        Ok(()),
+        "the echo answers the coalesced ping within {CONNECT_WITHIN:?}"
+    );
+    // The peek proves the reply and the forwarded ping share the
+    // client's socket before the first reply read: the 39-byte 200
+    // plus the 4-byte ping, left unread for the reply reader, so one
+    // read fills it past the head into the ping.
+    let arrived = Deadline::after(CONNECT_WITHIN);
+    let mut peeked = [0u8; 43];
+    loop {
+        match reader.get_ref().peek(&mut peeked) {
+            Ok(43) => break,
+            Ok(_) => assert!(
+                !arrived.left().is_zero(),
+                "the coalesced reply and ping within {CONNECT_WITHIN:?}"
+            ),
+            Err(error) => panic!(
+                "the peek of the coalesced reply and ping within {CONNECT_WITHIN:?}: {error}"
+            ),
+        }
+    }
     let mut status = String::new();
     reader
         .read_line(&mut status)
@@ -308,14 +353,15 @@ fn coalesced_connect_and_payload_preserves_the_payload() {
         proxy.await_connects(1, CONNECT_WITHIN),
         "the proxy recorded CONNECT {target}"
     );
-    // The coalesced ping went to the echo, which answered it.
-    let mut client = reader.into_inner();
+    // The coalesced ping went to the echo, which answered it. The reply
+    // reader buffered past the head into the answer, so the answer is
+    // read from the same reader: its inner stream no longer holds it.
     let mut heard = [0; 4];
-    client
+    reader
         .read_exact(&mut heard)
         .unwrap_or_else(|e| panic!("the coalesced echo within {REPLY_WITHIN:?}: {e}"));
     assert_eq!(&heard, b"ping");
-    drop(client);
+    drop(reader);
     assert!(
         proxy.await_closed(1, CLOSE_WITHIN),
         "the proxy saw the tunnel close"
