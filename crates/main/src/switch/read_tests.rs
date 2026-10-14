@@ -904,8 +904,7 @@ fn settle_rekills_a_cancelled_survivor_before_answering_true() {
                 answer = Some(drive.recv(&settled).expect("the settle"));
                 break;
             }
-            let answer = answer.unwrap_or_else(|| drive.recv(&settled).expect("the settle"));
-            answer
+            answer.unwrap_or_else(|| drive.recv(&settled).expect("the settle"))
         }
     };
     let lives = fakes::kill_group(pgid, "0").unwrap_or(false);
