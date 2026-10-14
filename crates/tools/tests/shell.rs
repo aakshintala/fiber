@@ -1828,9 +1828,11 @@ fn a_tty_job_past_its_timeout_fails_and_stop_cancels_it() {
     let dir = fakes::TempDir::new("fiber-shell-tty-timeout");
     let ready = Ready::new(dir.path());
     let jobs = FakeJobs::new(dir.path());
+    // One byte goes out in one `job_delta`, so no second chunk can arm
+    // the pacing hold: the loop's next park after the send is the timeout.
     let running = start_tty(
         dir.path().to_path_buf(),
-        on_terminal(ready.path(), "echo partial\nread x\n"),
+        on_terminal(ready.path(), "printf S\nread x\n"),
         Some(5_000),
         Arc::clone(&jobs),
     );
@@ -1845,10 +1847,17 @@ fn a_tty_job_past_its_timeout_fails_and_stop_cancels_it() {
     let _receipt = Deadline::after(DEADLINE)
         .recv(&running.output)
         .expect("the receipt");
+    // The send carried the only byte, so the loop is out of output.
+    assert!(
+        jobs.deltas().wait_for_text("S", DEADLINE),
+        "the byte never went out in a job_delta: {:?}",
+        jobs.deltas().text()
+    );
     let timeout_at = running.start + Duration::from_secs(5);
     assert!(
-        running.clock.await_parked(timeout_at, CHILD_START),
-        "the job did not park at its timeout"
+        running.clock.await_parked(timeout_at, DEADLINE),
+        "the job did not park at its timeout; parked at {:?}",
+        running.clock.parked()
     );
     assert!(group_alive(pgid), "stopped before the deadline");
     running.clock.advance(Duration::from_millis(4_750));
