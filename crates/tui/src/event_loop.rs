@@ -759,7 +759,7 @@ impl<B: Backend> Loop<B> {
             }
             match self
                 .hub
-                .fetch(rx, &session, &range, &mut self.app, &mut self.tick)
+                .fetch(rx, &session, &range, &mut self.app, &self.tick)
             {
                 Ok(lines) => {
                     self.app.load(lines);
