@@ -416,3 +416,21 @@ fn already_clean_verdicts_read_without_hanging() {
         })
     );
 }
+
+#[test]
+fn a_verdict_needing_two_strip_passes_reads() {
+    // `clean` strips quotes, then a trailing `.`, then whitespace, looping
+    // until the word stops changing. `"allow".` needs two passes: the
+    // first leaves `allow"`, the second gives `allow`. With its comparison
+    // flipped `clean` returns after one pass, so this fails synchronously
+    // without waiting on any hang guard.
+    assert!(
+        matches!(read_first("\"allow\"."), Ok(First::Allow)),
+        "{:?}",
+        read_first("\"allow\".")
+    );
+    assert_eq!(
+        read_second("\"allow\"."),
+        Ok(Second::Allow { reason: None })
+    );
+}
