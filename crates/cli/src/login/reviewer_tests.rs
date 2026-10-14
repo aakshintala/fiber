@@ -979,11 +979,16 @@ struct LeaderOwner {
 
 impl Drop for LeaderOwner {
     fn drop(&mut self) {
-        if let Some(mut leader) = self.leader.take() {
+        if let Some(leader) = self.leader.take() {
             match fakes::kill_group(self.group, "KILL") {
                 Ok(_) | Err(_) => {}
             }
-            match leader.wait() {
+            let (waited, reaped) = mpsc::channel();
+            thread::spawn(move || {
+                let mut leader = leader;
+                let _sent = waited.send(leader.wait());
+            });
+            match fakes::Deadline::after(GROUP_WAIT).recv(&reaped) {
                 Ok(_) | Err(_) => {}
             }
         }
