@@ -2126,7 +2126,9 @@ fn a_cancel_mid_spawn_is_settled_before_exit() {
     // and the prune after the reap's bump sees a group killed seconds
     // earlier whose leader is just reaped, so it retires at once.
     assert!(
-        Deadline::after(DEADLINE).recv(&settled).expect("the settle"),
+        Deadline::after(DEADLINE)
+            .recv(&settled)
+            .expect("the settle"),
         "settle waits out the late kill"
     );
     let error = Deadline::after(DEADLINE)
