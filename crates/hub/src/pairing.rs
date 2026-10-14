@@ -597,6 +597,10 @@ impl Pairing {
         lock(&self.state).pending.len()
     }
     #[cfg(test)]
+    pub(crate) fn paused(&self, at: Pause) {
+        pause(&mut lock(&self.state), at);
+    }
+    #[cfg(test)]
     pub(crate) fn pause_in_lock(&self, at: Pause, hook: impl FnOnce() + Send + 'static) {
         lock(&self.state).pause = Some((at, Box::new(hook)));
     }
@@ -631,6 +635,10 @@ fn announce(hub: &Hub, notice: Notice, change: &str) {
     // No pairing state lock is held here: shutting a half unblocks a
     // writer holding its mutex.
     close_connections(closers, UnixStream::shutdown);
+    // Test seam: the client-visible announce is out, the diagnostic line
+    // is not. A test holds here to force the log read to race the write.
+    #[cfg(test)]
+    hub.pairing.paused(Pause::BeforeDiagLine);
     hub.diag.line(
         Severity::Info,
         None,
@@ -643,6 +651,7 @@ fn announce(hub: &Hub, notice: Notice, change: &str) {
 pub(crate) enum Pause {
     AfterFound,
     AfterRevokeMarked,
+    BeforeDiagLine,
 }
 #[cfg(test)]
 fn pause(state: &mut State, at: Pause) {
