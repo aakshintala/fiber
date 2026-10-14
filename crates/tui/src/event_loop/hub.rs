@@ -27,6 +27,29 @@ pub(super) const HISTORY_LINES: u64 = 256;
 /// What a lost connection fails a fetch with.
 pub(super) const LOST: &str = "connection lost";
 
+/// A batch always holds its first input, with the inputs ready behind
+/// it folded after in arrival order.
+pub(super) struct Batch {
+    first: Input,
+    rest: Vec<Input>,
+}
+
+impl Batch {
+    /// The batch's first input, in arrival order.
+    pub(super) fn first(&self) -> &Input {
+        &self.first
+    }
+}
+
+impl IntoIterator for Batch {
+    type Item = Input;
+    type IntoIter = std::iter::Chain<std::option::IntoIter<Input>, std::vec::IntoIter<Input>>;
+
+    fn into_iter(self) -> Self::IntoIter {
+        Some(self.first).into_iter().chain(self.rest)
+    }
+}
+
 /// The hub stream, the held inputs and the hub thread's permit, with the
 /// interface the loop uses. All state stays private: the loop passes the
 /// app and the tick to each method that needs them.
@@ -87,12 +110,19 @@ impl Connection {
     /// else the channel's, with what is ready behind it folded in. None
     /// when the stash is empty and every sender is gone, which ends the
     /// loop.
-    pub(super) fn take_batch(&mut self, rx: &Receiver<Input>) -> Option<Vec<Input>> {
+    pub(super) fn take_batch(&mut self, rx: &Receiver<Input>) -> Option<Batch> {
         let first = match self.stash.pop_front() {
             Some(input) => input,
             None => rx.recv().ok()?,
         };
-        Some(batch(first, &mut self.stash, rx))
+        // `batch` always returns its first, so splitting it off leaves
+        // the rest behind it.
+        let mut inputs = batch(first, &mut self.stash, rx).into_iter();
+        let first = inputs.next()?;
+        Some(Batch {
+            first,
+            rest: inputs.collect(),
+        })
     }
 
     /// Stores the connected stream.

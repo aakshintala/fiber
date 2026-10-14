@@ -329,7 +329,7 @@ impl<B: Backend> Loop<B> {
     fn run(&mut self, rx: &Receiver<Input>) -> i32 {
         loop {
             // Nothing stashed and every sender gone ends the loop.
-            let Some(inputs) = self.hub.take_batch(rx) else {
+            let Some(batch) = self.hub.take_batch(rx) else {
                 return 0;
             };
             // Only a batch starting with a hub line or tick holds: a
@@ -339,7 +339,7 @@ impl<B: Backend> Loop<B> {
             // the open page is counted once for the batch, not once per
             // changed line, and the batch settles once at its end, when
             // the counts are exact.
-            let held = inputs.first().is_some_and(batchable);
+            let held = batchable(batch.first());
             // The batch's inputs already folded, in arrival order.
             if held {
                 self.app.begin_batch();
@@ -351,7 +351,7 @@ impl<B: Backend> Loop<B> {
             // non-Bytes batches never enter this branch.
             let mut wheel_prev = false;
             let mut framed = false;
-            for input in inputs {
+            for input in batch {
                 self.wakeups = self.wakeups.saturating_add(1);
                 if let Input::Bytes(bytes) = input {
                     let events = self.parser.feed(&bytes);
