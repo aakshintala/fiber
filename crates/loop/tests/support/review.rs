@@ -483,6 +483,22 @@ struct CallIndex {
     nonreview: HashSet<String>,
 }
 
+/// One call ready to replay: everything `replay_call` needs beyond the
+/// source line naming it in diagnostics.
+struct Replay<'a> {
+    /// The call's action.
+    id: &'a ActionId,
+    /// The requested call.
+    call: &'a ToolCallRequested,
+    /// The reviewer input through the call's own item: later person
+    /// messages and sibling calls never enter its replay.
+    snapshot: &'a [Reviewed],
+    /// What the call declared.
+    started: &'a ToolCallStarted,
+    /// The turn to replay it under.
+    turn: &'a TurnId,
+}
+
 /// The replay driver: the scratch loop, the source fold, and the request
 /// ids it already emitted.
 struct Driver {
@@ -674,15 +690,16 @@ impl Driver {
                 Event::ToolCallRequested(call) => {
                     // Inner and provider-hosted calls are history, never
                     // reviewed targets of their own.
-                    if call.ran_by.is_none() && call.provider_item.is_none() {
-                        if let Some(action) = envelope.action_id.clone() {
-                            index.calls.entry(action.0).or_insert(IndexedCall {
-                                call,
-                                turn: envelope.turn_id.clone(),
-                                started: None,
-                                start_turn: None,
-                            });
-                        }
+                    if call.ran_by.is_none()
+                        && call.provider_item.is_none()
+                        && let Some(action) = envelope.action_id.clone()
+                    {
+                        index.calls.entry(action.0).or_insert(IndexedCall {
+                            call,
+                            turn: envelope.turn_id.clone(),
+                            started: None,
+                            start_turn: None,
+                        });
                     }
                 }
                 Event::ToolCallStarted(started) => {
@@ -733,7 +750,70 @@ impl Driver {
                         index.review.insert(action_id.0);
                     }
                 }
-                _ => {}
+                // Every other kind carries no declaration or decision the
+                // index reads. Each is listed, so a new kind does not
+                // compile until it is placed.
+                Event::FiberStarted(_)
+                | Event::FiberExited(_)
+                | Event::SessionStarted(_)
+                | Event::Rewound(_)
+                | Event::TurnStarted(_)
+                | Event::StepStarted(_)
+                | Event::TurnCompleted(_)
+                | Event::SteeringApplied(_)
+                | Event::SteeringQueue(_)
+                | Event::ShellCommand(_)
+                | Event::SessionNamed(_)
+                | Event::Clients(_)
+                | Event::SessionStatus(_)
+                | Event::ContextAdded(_)
+                | Event::AssistantMessageStarted(_)
+                | Event::AssistantMessageDelta(_)
+                | Event::AssistantMessageCompleted(_)
+                | Event::TextCompleted(_)
+                | Event::ToolCallArgumentsDelta(_)
+                | Event::ReasoningStarted(_)
+                | Event::ReasoningDelta(_)
+                | Event::ReasoningCompleted(_)
+                | Event::ToolCallDelta(_)
+                | Event::ToolCallCompleted(_)
+                | Event::InteractionRequested(_)
+                | Event::InteractionResolved(_)
+                | Event::RepositoryCodeOffered(_)
+                | Event::RepositoryCodeResolved(_)
+                | Event::QuotaNoticed(_)
+                | Event::RetryScheduled(_)
+                | Event::Notice(_)
+                | Event::PreambleBuilt(_)
+                | Event::ModelChanged(_)
+                | Event::OpeningMessage(_)
+                | Event::InstructionFile(_)
+                | Event::DateChanged(_)
+                | Event::SkillsChanged(_)
+                | Event::HandoffStarted(_)
+                | Event::HandoffCompleted(_)
+                | Event::SkillsResent(_)
+                | Event::ContextNudged(_)
+                | Event::ReviewerKept(_)
+                | Event::McpServerFailed(_)
+                | Event::McpServerReady(_)
+                | Event::Reloaded(_)
+                | Event::ExtensionsLoaded(_)
+                | Event::ExtensionStateSet(_)
+                | Event::ExtensionStateUnset(_)
+                | Event::ExtensionUi(_)
+                | Event::ExtensionMessage(_)
+                | Event::ExtensionLog(_)
+                | Event::ExtensionExec(_)
+                | Event::JobStarted(_)
+                | Event::DelegateStarted(_)
+                | Event::JobDelta(_)
+                | Event::JobLine(_)
+                | Event::DelegateFinished(_)
+                | Event::JobCompleted(_)
+                | Event::JobsPendingNotified(_)
+                | Event::CommandAccepted(_)
+                | Event::CommandRejected(_) => {}
             }
         }
         Ok(index)
@@ -770,7 +850,14 @@ impl Driver {
                     .clone()
                     .or(indexed.turn.clone())
                     .unwrap_or(TurnId("t_replay".to_owned()));
-                self.replay_call(envelope, position, id, call, &snapshot, &started, &turn)
+                let replay = Replay {
+                    id,
+                    call,
+                    snapshot: &snapshot,
+                    started: &started,
+                    turn: &turn,
+                };
+                self.replay_call(envelope, position, &replay)
             }
             None if judged => {
                 let line = json!({
@@ -789,12 +876,15 @@ impl Driver {
         &mut self,
         envelope: &contract::Envelope,
         position: usize,
-        id: &ActionId,
-        call: &ToolCallRequested,
-        snapshot: &[Reviewed],
-        started: &ToolCallStarted,
-        turn: &TurnId,
+        replay: &Replay<'_>,
     ) -> Result<(), String> {
+        let Replay {
+            id,
+            call,
+            snapshot,
+            started,
+            turn,
+        } = replay;
         let arguments = match started.arguments.clone() {
             Some(rewritten) => rewritten,
             None => match call.arguments.clone() {
@@ -806,10 +896,10 @@ impl Driver {
                 | Value::Array(_) => Map::new(),
             },
         };
-        let rewritten = match started.arguments.clone() {
-            Some(_) => Some(started.changed_by.clone().unwrap_or_default()),
-            None => None,
-        };
+        let rewritten = started
+            .arguments
+            .clone()
+            .map(|_| started.changed_by.clone().unwrap_or_default());
         let prepared = ReviewPrepared {
             tool: Arc::new(InertTool {
                 declared: started.declared.clone(),
