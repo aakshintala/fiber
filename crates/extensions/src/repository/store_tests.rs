@@ -15,8 +15,9 @@ use fakes::clock::FakeClock;
 use serde_json::{Value, json};
 
 use super::declared_tests::Repo;
-use super::{Decision, Index, RepoItem, Store, hash};
+use super::{Decision, Fetch, Index, RepoItem, Store, hash};
 use crate::Error;
+use crate::Origin;
 use crate::host::exec::{GRACE, GROUP_POLL};
 use crate::prepare::INSTALL_STEP_DEADLINE;
 
@@ -710,6 +711,22 @@ fn store_debug_names_the_type_and_its_fields() {
     assert!(text.contains("project"), "{text}");
     // The clock is skipped: `Arc<dyn Clock>` has no `Debug`.
     assert!(!text.contains("clock"), "{text}");
+}
+
+/// The `Debug` names the fetch's version but never the origin's
+/// internals: a body replaced with an empty `Ok` (the surviving mutant)
+/// prints none of them.
+#[test]
+fn fetch_debug_names_the_version_and_skips_the_origin() {
+    let fetch = Fetch::new(
+        Origin::new("fiber-test-git", |name| name.to_owned()),
+        "0.1.0",
+        fakes::clock::FakeClock::new(),
+    );
+    let text = format!("{fetch:?}");
+    assert!(text.contains("Fetch"), "{text}");
+    assert!(text.contains("0.1.0"), "{text}");
+    assert!(!text.contains("fiber-test-git"), "{text}");
 }
 
 #[test]

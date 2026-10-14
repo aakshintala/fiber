@@ -188,6 +188,9 @@ fn a_completion_failure_leaves_no_markers_no_copy_and_no_approval() {
         ("rm -rf .fiber-depends", "missing"),
         // The step leaves a file where the home goes: not a directory.
         ("rm -rf .fiber-depends && touch .fiber-depends", "file"),
+        // The step removes only the extensions root: the strict re-check
+        // after prepare still fails, so no completion is published.
+        ("rm -rf .fiber-depends/extensions", "extensions"),
     ] {
         let setup = Setup::new();
         let mut repos = Repos::new(&setup);
@@ -359,6 +362,45 @@ fn a_legacy_copy_without_completion_rebuilds_through_approve() {
 }
 
 #[test]
+fn a_legacy_copy_with_a_directory_completion_marker_is_refused() {
+    let setup = Setup::new();
+    let mut repos = Repos::new(&setup);
+    let digest = counting_root(&setup, &mut repos);
+    let before = fs::read(approval(&setup, &digest)).unwrap();
+    // A non-file where the completion marker goes is refused before it
+    // is ever opened, not read as present.
+    let marker = depends_home(&setup, &digest).join(".complete");
+    fs::remove_file(&marker).unwrap();
+    fs::create_dir(&marker).unwrap();
+    let clock = FakeClock::new();
+    let (found, _) = item(&setup, &clock);
+    let err = store(&setup, &repos, &clock)
+        .approve(&found, &digest)
+        .unwrap_err();
+    assert!(matches!(err, Error::Pin { .. }), "{err}");
+    assert!(err.to_string().contains(".complete"), "{err}");
+    assert!(err.to_string().contains("not a regular file"), "{err}");
+    assert_eq!(fs::read(approval(&setup, &digest)).unwrap(), before);
+    assert_eq!(counter(&setup, &digest), "x\n");
+}
+
+#[test]
+fn a_legacy_copy_without_a_dependency_home_rebuilds() {
+    let setup = Setup::new();
+    let mut repos = Repos::new(&setup);
+    let digest = counting_root(&setup, &mut repos);
+    // A copy from before dependency homes: no home at all still rebuilds
+    // instead of failing.
+    fs::remove_dir_all(depends_home(&setup, &digest)).unwrap();
+    assert_eq!(approve(&setup, &repos), digest);
+    assert_eq!(counter(&setup, &digest), "x\n");
+    assert!(
+        depends_home(&setup, &digest).join(".complete").is_file(),
+        "the rebuild writes completion"
+    );
+}
+
+#[test]
 fn a_legacy_copy_without_completion_rebuilds_through_ensure_copy_keeping_its_approval() {
     let setup = Setup::new();
     let mut repos = Repos::new(&setup);
@@ -453,6 +495,7 @@ fn a_link_where_the_pinned_root_goes_fails_and_writes_nothing_outside() {
     let err = plain.approve(&found, &digest).unwrap_err();
     assert!(matches!(err, Error::Pin { .. }), "{err}");
     assert!(err.to_string().contains("pinned"), "{err}");
+    assert!(err.to_string().contains("is a symbolic link"), "{err}");
     assert_eq!(outside_names(&outside_dir), ["target.txt"]);
     assert_eq!(fs::read_to_string(&target).unwrap(), "untouched\n");
     assert!(!copy(&setup, &digest).exists());
@@ -472,6 +515,7 @@ fn a_file_where_the_pinned_root_goes_fails_naming_it() {
     let err = plain.approve(&found, &digest).unwrap_err();
     assert!(matches!(err, Error::Pin { .. }), "{err}");
     assert!(err.to_string().contains("pinned"), "{err}");
+    assert!(err.to_string().contains("is not a directory"), "{err}");
     assert_eq!(fs::read_to_string(&pinned).unwrap(), "stray\n");
     assert!(!copy(&setup, &digest).exists());
 }
@@ -491,6 +535,7 @@ fn a_link_where_the_ready_marker_goes_is_refused_before_opening() {
     let err = plain.approve(&found, &digest).unwrap_err();
     assert!(matches!(err, Error::Pin { .. }), "{err}");
     assert!(err.to_string().contains(".ready"), "{err}");
+    assert!(err.to_string().contains("is a symbolic link"), "{err}");
     assert!(!err.to_string().contains("untouched"), "{err}");
     assert_eq!(fs::read_to_string(&target).unwrap(), "untouched\n");
     assert!(!copy(&setup, &digest).exists());
@@ -545,6 +590,7 @@ fn an_install_step_that_links_the_dependency_home_away_leaves_the_target_alone()
         .unwrap_err();
     assert!(matches!(err, Error::Pin { .. }), "{err}");
     assert!(err.to_string().contains(".fiber-depends"), "{err}");
+    assert!(err.to_string().contains("is a symbolic link"), "{err}");
     assert!(!err.to_string().contains("untouched"), "{err}");
     // The link itself goes with the unfinished copy; the target is
     // byte-identical and holds no copied files.
@@ -574,4 +620,64 @@ fn a_finished_copy_with_dependencies_is_reused_without_fetching() {
         dep_version(&setup, &digest, "example.com/acme/helper"),
         "v1.0.0"
     );
+}
+
+#[test]
+fn a_legacy_copy_whose_dependency_home_is_a_link_is_refused() {
+    use std::os::unix::fs::symlink;
+    let setup = Setup::new();
+    let mut repos = Repos::new(&setup);
+    let digest = counting_root(&setup, &mut repos);
+    let before = fs::read(approval(&setup, &digest)).unwrap();
+    let (outside_dir, target) = outside(&setup.root());
+    // A legacy dependency home replaced by a link out of home: refused
+    // naming the link, with the target untouched.
+    let home = depends_home(&setup, &digest);
+    fs::remove_file(home.join(".complete")).unwrap();
+    fs::remove_dir_all(&home).unwrap();
+    symlink(&target, &home).unwrap();
+    let clock = FakeClock::new();
+    let (found, _) = item(&setup, &clock);
+    let err = store(&setup, &repos, &clock)
+        .approve(&found, &digest)
+        .unwrap_err();
+    assert!(matches!(err, Error::Pin { .. }), "{err}");
+    assert!(err.to_string().contains(".fiber-depends"), "{err}");
+    assert!(err.to_string().contains("is a symbolic link"), "{err}");
+    assert!(!err.to_string().contains("untouched"), "{err}");
+    assert_eq!(fs::read(approval(&setup, &digest)).unwrap(), before);
+    assert_eq!(fs::read_to_string(&target).unwrap(), "untouched\n");
+    assert_eq!(outside_names(&outside_dir), ["target.txt"]);
+    assert!(!home.join(".complete").exists());
+}
+
+#[test]
+fn an_unreadable_completion_marker_fails_naming_it() {
+    use std::os::unix::fs::PermissionsExt;
+    let setup = Setup::new();
+    let mut repos = Repos::new(&setup);
+    let digest = counting_root(&setup, &mut repos);
+    let before = fs::read(approval(&setup, &digest)).unwrap();
+    // A legacy copy whose dependency home lost search permission: reading
+    // the completion marker fails naming the marker, with the copy, its
+    // marker and the approval intact. (Same user, never root: permission
+    // bits only matter outside it.)
+    let home = depends_home(&setup, &digest);
+    fs::remove_file(home.join(".complete")).unwrap();
+    fs::set_permissions(&home, fs::Permissions::from_mode(0o000)).unwrap();
+    let clock = FakeClock::new();
+    let (found, _) = item(&setup, &clock);
+    let err = store(&setup, &repos, &clock)
+        .approve(&found, &digest)
+        .unwrap_err();
+    fs::set_permissions(&home, fs::Permissions::from_mode(0o755)).unwrap();
+    assert!(matches!(err, Error::Io { .. }), "{err}");
+    let marker = home.join(".complete");
+    assert!(
+        matches!(err, Error::Io { ref path, .. } if path == &marker),
+        "{err}"
+    );
+    assert!(copy(&setup, &digest).is_dir());
+    assert!(ready(&setup, &digest).is_file());
+    assert_eq!(fs::read(approval(&setup, &digest)).unwrap(), before);
 }
