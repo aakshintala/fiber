@@ -2017,3 +2017,146 @@ fn percent_decode_decodes_exact_bytes() {
         );
     }
 }
+
+/// One header map with this `content-type`, or none when absent.
+fn content_headers(content_type: Option<&str>) -> ureq::http::HeaderMap {
+    let mut headers = ureq::http::HeaderMap::new();
+    if let Some(value) = content_type {
+        headers.insert("content-type", value.parse().unwrap());
+    }
+    headers
+}
+
+#[test]
+fn is_text_body_matches_only_the_text_mime() {
+    // (content-type, expected): the prefix before `;` decides, so only
+    // `text/*` decodes lossy while anything else stays strict.
+    let cases: Vec<(Option<&str>, bool)> = vec![
+        (Some("text/plain"), true),
+        (Some("text/html; charset=utf-8"), true),
+        (None, false),
+        (Some("application/json"), false),
+        (Some("application/octet-stream"), false),
+    ];
+    for (content_type, expected) in cases {
+        assert_eq!(
+            super::is_text_body(&content_headers(content_type)),
+            expected,
+            "content-type: {content_type:?}"
+        );
+    }
+}
+
+#[test]
+fn lossy_question_replaces_each_invalid_byte_with_one_question() {
+    // (raw, expected): pure-invalid, mixed, cut-short, empty and valid
+    // passthrough. Every nonempty-invalid row returns a nonempty string
+    // that is neither empty nor a constant, and needs the loop to run.
+    let cases: Vec<(&[u8], &str)> = vec![
+        (&[0xFF, 0xFE], "??"),
+        (b"a\xFFb", "a?b"),
+        (b"a\xE2", "a?"),
+        (b"", ""),
+        ("h\u{e9}llo".as_bytes(), "h\u{e9}llo"),
+    ];
+    for (raw, expected) in cases {
+        assert_eq!(super::lossy_question(raw), expected, "raw: {raw:?}");
+    }
+}
+
+#[test]
+fn decode_error_body_splits_text_lossy_from_strict() {
+    // Text decodes exactly as the lossy reader; anything else must be
+    // valid UTF-8, else the body stays empty as the ordinary path does.
+    let text_cases: Vec<(&[u8], &str)> = vec![
+        (&[0xFF, 0xFE], "??"),
+        (b"a\xFFb", "a?b"),
+        (b"a\xE2", "a?"),
+        (b"", ""),
+        ("h\u{e9}llo".as_bytes(), "h\u{e9}llo"),
+    ];
+    for (raw, expected) in text_cases {
+        assert_eq!(
+            super::decode_error_body(raw, true),
+            expected,
+            "text raw: {raw:?}"
+        );
+    }
+    assert_eq!(super::decode_error_body(&[0xFF, 0xFE], false), "");
+    assert_eq!(super::decode_error_body(b"", false), "");
+    assert_eq!(
+        super::decode_error_body("h\u{e9}llo".as_bytes(), false),
+        "h\u{e9}llo"
+    );
+}
+
+/// One scripted non-2xx response carrying exactly one `content-type`
+/// header: `Response::status` defaults to JSON, so a second chained
+/// header would send two content types and leave which one ureq reports
+/// ambiguous.
+fn error_response(status: u16, content_type: &str, body: Vec<u8>) -> fakes::Response {
+    fakes::Response {
+        status,
+        headers: vec![("content-type".to_owned(), content_type.to_owned())],
+        body,
+        drop_connection: false,
+        stall: false,
+    }
+}
+
+#[test]
+fn observed_error_bodies_pin_the_text_strict_split() {
+    let clock = fakes::clock::FakeClock::new();
+    let as_clock = || std::sync::Arc::clone(&clock) as std::sync::Arc<dyn contract::clock::Clock>;
+    // A text error body decodes lossy: the recorded body is the exact
+    // `?`-replaced string and the count is the raw byte count.
+    let raw = vec![b'o', 0xFF, b'k'];
+    let server =
+        fakes::ProviderServer::start([error_response(500, "text/plain", raw.clone())]).unwrap();
+    let (sent, _) = observed(
+        format!("{}/v1", server.url()),
+        &[],
+        b"{}",
+        None,
+        direct_route(),
+        &std::sync::Arc::default(),
+        as_clock(),
+    );
+    let Err(failed) = sent else {
+        panic!("a text 500 unexpectedly succeeded");
+    };
+    let crate::Error::Status { body, .. } = &failed.error else {
+        panic!("a text 500 is a status failure: {:?}", failed.error);
+    };
+    assert_eq!(body, "o?k");
+    let Some(dispatched) = failed.sent else {
+        panic!("the text failure reports no send");
+    };
+    assert_eq!(dispatched.bytes_read, raw.len() as u64);
+    // The same invalid bytes under JSON stay strict: an empty recorded
+    // body while the count still holds the bytes actually read.
+    let raw = vec![0xFF, 0xFE];
+    let server =
+        fakes::ProviderServer::start([error_response(500, "application/json", raw.clone())])
+            .unwrap();
+    let (sent, _) = observed(
+        format!("{}/v1", server.url()),
+        &[],
+        b"{}",
+        None,
+        direct_route(),
+        &std::sync::Arc::default(),
+        as_clock(),
+    );
+    let Err(failed) = sent else {
+        panic!("a JSON 500 unexpectedly succeeded");
+    };
+    let crate::Error::Status { body, .. } = &failed.error else {
+        panic!("a JSON 500 is a status failure: {:?}", failed.error);
+    };
+    assert_eq!(body, "");
+    let Some(dispatched) = failed.sent else {
+        panic!("the JSON failure reports no send");
+    };
+    assert_eq!(dispatched.bytes_read, raw.len() as u64);
+}
