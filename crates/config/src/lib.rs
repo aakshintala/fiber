@@ -602,7 +602,7 @@ pub(crate) fn top_level(source_name: &str) -> ConfigError {
     }
 }
 
-fn check_layer(
+pub(crate) fn check_layer(
     value: Value,
     source: &Source,
     notices: &mut Vec<Notice>,

@@ -131,8 +131,9 @@ pub struct ProviderData {
     pub placeholders: BTreeMap<String, Placeholder>,
     /// Its models.
     pub models: Vec<ModelData>,
-    /// A small, fast model of this provider for the reviewer when
-    /// `reviewer.model` is unset (`docs/model-routing.md`, "What a provider
+    /// The package's own reviewer default: `fiber login` preselects it
+    /// when no reviewer is saved yet, and it is the final fallback when no
+    /// reviewer is configured (`docs/model-routing.md`, "What a provider
     /// extension declares").
     #[serde(default)]
     pub reviewer_model: Option<String>,

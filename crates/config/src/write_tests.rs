@@ -493,3 +493,141 @@ fn two_threads_inserting_different_names_both_land() {
         }}})
     );
 }
+
+#[test]
+fn replace_global_rejects_a_non_object_document_and_keeps_its_bytes() {
+    for existing in ["[]", "5", "null"] {
+        for remove in [false, true] {
+            let dir = TempDir::new("fiber-write-guard");
+            let home = dir.path().to_path_buf();
+            fs::write(home.join("config.json"), existing).unwrap();
+            let before = fs::read(home.join("config.json")).unwrap();
+            let result = if remove {
+                replace_global(&home, "providers.acme.reviewer_model", None)
+            } else {
+                replace_global(
+                    &home,
+                    "providers.acme.reviewer_model",
+                    Some(Value::from("m")),
+                )
+            };
+            let e = result.unwrap_err();
+            assert_eq!(e.code(), contract::ErrorCode::ConfigInvalid, "{existing}");
+            assert!(
+                e.to_string().contains("(the whole file)"),
+                "{existing}: {e}"
+            );
+            assert_eq!(
+                fs::read(home.join("config.json")).unwrap(),
+                before,
+                "{existing}: the rejected write changed the file"
+            );
+        }
+    }
+}
+
+#[test]
+fn replace_global_rejects_a_mistyped_known_subtree_and_keeps_its_bytes() {
+    for existing in [
+        r#"{"providers": {"acme": {"reviewer_model": 5}}}"#,
+        r#"{"providers": {"acme": 5}}"#,
+        r#"{"hub": {"port": "fast"}}"#,
+    ] {
+        for remove in [false, true] {
+            let dir = TempDir::new("fiber-write-guard");
+            let home = dir.path().to_path_buf();
+            fs::write(home.join("config.json"), existing).unwrap();
+            let before = fs::read(home.join("config.json")).unwrap();
+            let result = if remove {
+                replace_global(&home, "providers.acme.reviewer_model", None)
+            } else {
+                replace_global(
+                    &home,
+                    "providers.acme.reviewer_model",
+                    Some(Value::from("m")),
+                )
+            };
+            let e = result.unwrap_err();
+            assert_eq!(e.code(), contract::ErrorCode::ConfigInvalid, "{existing}");
+            assert_eq!(
+                fs::read(home.join("config.json")).unwrap(),
+                before,
+                "{existing}: the rejected write changed the file"
+            );
+        }
+    }
+}
+
+#[test]
+fn replace_global_waits_for_the_lock_then_rejects_a_concurrent_non_object() {
+    let dir = TempDir::new("fiber-write-guard");
+    let home = dir.path().to_path_buf();
+    let file = home.join("config.json");
+    fs::write(&file, "{\"reviewer\": {\"model\": \"all/a\"}}\n").unwrap();
+    let setup = file.clone();
+    let held = within("the test to take the file's lock", move || locked(&setup)).unwrap();
+    let (started, started_rx) = mpsc::channel();
+    let (done, done_rx) = mpsc::channel();
+    let worker_home = home.clone();
+    let worker = thread::spawn(move || {
+        started.send(()).unwrap();
+        let result = replace_global(
+            &worker_home,
+            "providers.acme.reviewer_model",
+            Some(Value::from("m")),
+        );
+        done.send(result).unwrap();
+    });
+    assert!(
+        Deadline::after(DEADLINE).recv(&started_rx).is_ok(),
+        "waited {DEADLINE:?} for the replace to reach the file's lock"
+    );
+    wait_until("the replace to be waiting on the file's lock", || {
+        waiting() == 1
+    });
+    assert!(
+        done_rx.try_recv().is_err(),
+        "the replace finished while the file was locked"
+    );
+    // Another session replaces the whole document with `[]` while the
+    // replace waits: the locked read must fail instead of setting a key
+    // on the array and silently destroying it.
+    fs::write(&file, "[]").unwrap();
+    drop(held);
+    let result = match Deadline::after(DEADLINE).recv(&done_rx) {
+        Ok(result) => result,
+        Err(_) => panic!("waited {DEADLINE:?} for the replace to finish after the release"),
+    };
+    worker.join().unwrap();
+    let e = result.unwrap_err();
+    assert_eq!(e.code(), contract::ErrorCode::ConfigInvalid);
+    assert!(e.to_string().contains("(the whole file)"), "{e}");
+    assert_eq!(fs::read(&file).unwrap(), b"[]");
+}
+
+#[test]
+fn replace_global_on_a_valid_document_keeps_unknown_and_sibling_keys() {
+    let dir = TempDir::new("fiber-write-guard");
+    let home = dir.path().to_path_buf();
+    fs::write(
+        home.join("config.json"),
+        r#"{"providers": {"acme": {"credential": "default"}}, "tomorrow": {"known": false}}"#,
+    )
+    .unwrap();
+    replace_global(
+        &home,
+        "providers.acme.reviewer_model",
+        Some(Value::from("m")),
+    )
+    .unwrap();
+    let root: serde_json::Value =
+        serde_json::from_str(&fs::read_to_string(home.join("config.json")).unwrap()).unwrap();
+    assert_eq!(
+        root,
+        json!({"providers": {"acme": {"credential": "default", "reviewer_model": "m"}}, "tomorrow": {"known": false}}),
+        "unknown and sibling keys survive the guarded write"
+    );
+    // Removing an absent reviewer key writes nothing.
+    let removed = replace_global(&home, "providers.other.reviewer_model", None).unwrap();
+    assert_eq!(removed, None);
+}
