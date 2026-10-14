@@ -1115,7 +1115,7 @@ fn start_stalled_hub() -> Stalled {
     let (release_tx, release_rx) = mpsc::channel::<()>();
     *support::lock(&environments.before_publish) = Some(Box::new(move || {
         held_tx.send(()).unwrap_or(());
-        Deadline::after(DEADLINE).recv(&release_rx).unwrap_or(());
+        release_rx.recv().unwrap_or(());
     }));
     let done = serve_mode_env(
         &temp,
@@ -1148,19 +1148,14 @@ fn await_drop(stream: &UnixStream, what: &str) {
     let (eof_tx, eof_rx) = mpsc::channel();
     thread::spawn(move || {
         let mut probe = probe;
-        let mut got = Vec::new();
-        let read = probe.read_to_end(&mut got);
-        eof_tx.send((read, got)).unwrap_or(());
+        let mut sink = Vec::new();
+        let read = probe.read_to_end(&mut sink).map_err(|error| error.kind());
+        eof_tx.send(read).unwrap_or(());
     });
-    let (read, got) = Deadline::after(DEADLINE)
+    let read = Deadline::after(DEADLINE)
         .recv(&eof_rx)
         .unwrap_or_else(|_| panic!("the accept loop drops the connection {what}"));
-    assert_eq!(
-        read.expect("EOF, not a hello"),
-        0,
-        "the drop carries no bytes {what}"
-    );
-    assert!(got.is_empty(), "the drop carries no bytes {what}");
+    assert_eq!(read, Ok(0), "the drop carries no bytes {what}");
 }
 
 /// #2259: the exiting hub's accept-side drop lands between a client's
