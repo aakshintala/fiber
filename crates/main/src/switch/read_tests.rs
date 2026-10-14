@@ -874,25 +874,8 @@ fn settle_rekills_a_cancelled_survivor_before_answering_true() {
     // Set directly: `cancel` would kill the group and hide the survivor.
     reads.lock().cancelled = true;
     let settled = settle_on_thread(&reads, &clock, doors::SHUTDOWN_BOUND);
-    match Deadline::after(SHORT).recv(&settled) {
-        Ok(answer) => {
-            let lives = fakes::kill_group(pgid, "0").unwrap_or(false);
-            // Guarded cleanup before the assertion: the survivor must not
-            // outlive the test either way.
-            match fakes::kill_group(pgid, "KILL") {
-                Ok(_) | Err(_) => {}
-            }
-            let _finished = fakes::within("the killed command", DEADLINE, move || {
-                running.join().unwrap()
-            });
-            watchdog.stand_down(DEADLINE);
-            pre.stand_down(DEADLINE);
-            assert!(
-                !answer || !lives,
-                "settle answered `true` while group {pgid} still lives"
-            );
-            assert!(answer, "settle answers `true` once the group is empty");
-        }
+    let answer = match Deadline::after(SHORT).recv(&settled) {
+        Ok(answer) => answer,
         Err(_) => {
             // Parked on the clock: the fix kills and rechecks. Drive
             // rechecks until it answers: each advance follows a confirmed
@@ -920,22 +903,25 @@ fn settle_rekills_a_cancelled_survivor_before_answering_true() {
                 break;
             }
             let answer = answer.unwrap_or_else(|| drive.recv(&settled).expect("the settle"));
-            let lives = fakes::kill_group(pgid, "0").unwrap_or(false);
-            match fakes::kill_group(pgid, "KILL") {
-                Ok(_) | Err(_) => {}
-            }
-            let _finished = fakes::within("the killed command", DEADLINE, move || {
-                running.join().unwrap()
-            });
-            watchdog.stand_down(DEADLINE);
-            pre.stand_down(DEADLINE);
-            assert!(answer, "settle answers `true` once the group is empty");
-            assert!(
-                !lives,
-                "settle answered `true` while group {pgid} still lives"
-            );
+            answer
         }
+    };
+    let lives = fakes::kill_group(pgid, "0").unwrap_or(false);
+    // Guarded cleanup before the assertions: the survivor must not
+    // outlive the test either way.
+    match fakes::kill_group(pgid, "KILL") {
+        Ok(_) | Err(_) => {}
     }
+    let _finished = fakes::within("the killed command", DEADLINE, move || {
+        running.join().unwrap()
+    });
+    watchdog.stand_down(DEADLINE);
+    pre.stand_down(DEADLINE);
+    assert!(answer, "settle answers `true` once the group is empty");
+    assert!(
+        !lives,
+        "settle answered `true` while group {pgid} still lives"
+    );
 }
 
 /// A cancelled group that survives the first kill gets SIGKILL again, and
