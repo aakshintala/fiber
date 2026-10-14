@@ -846,6 +846,71 @@ fn a_finished_copy_whose_manifest_is_a_link_is_never_treated_as_finished() {
 }
 
 #[test]
+fn a_directory_manifest_is_refused_without_reading_it() {
+    let setup = Setup::new();
+    let mut repos = Repos::new(&setup);
+    let digest = counting_root(&setup, &mut repos);
+    let before = fs::read(approval(&setup, &digest)).unwrap();
+    fs::write(copy(&setup, &digest).join("junk"), "junk").unwrap();
+    // A directory where the copy's manifest goes: refused before it is
+    // ever read, never taken for finished and never rebuilt.
+    let manifest_path = copy(&setup, &digest).join("extension.json");
+    fs::remove_file(&manifest_path).unwrap();
+    fs::create_dir(&manifest_path).unwrap();
+    let clock = FakeClock::new();
+    let (found, _) = item(&setup, &clock);
+    let err = store(&setup, &repos, &clock)
+        .approve_on_worker(&found, &digest)
+        .unwrap_err();
+    assert!(matches!(err, Error::Pin { .. }), "{err}");
+    assert!(err.to_string().contains("extension.json"), "{err}");
+    assert!(err.to_string().contains("is not a regular file"), "{err}");
+    // The finished copy is byte-identical: no rebuild was attempted.
+    assert_eq!(counter(&setup, &digest), "x\n");
+    assert_eq!(
+        fs::read_to_string(copy(&setup, &digest).join("junk")).unwrap(),
+        "junk"
+    );
+    assert_eq!(fs::read(approval(&setup, &digest)).unwrap(), before);
+    assert!(manifest_path.is_dir());
+}
+
+#[test]
+fn an_unwritable_dependency_home_fails_its_marker_write_as_io() {
+    let setup = Setup::new();
+    let mut repos = Repos::new(&setup);
+    let helper = "example.com/acme/helper";
+    repos.tag(helper, "", "v1.0.0", &manifest(helper), &[]);
+    let root = "fiber.test/root";
+    // The step revokes write permission on the dependency home after the
+    // commit: creating the completion marker then fails with the
+    // marker's own IO error, not an "already exists" refusal. (Same
+    // user, never root: permission bits only matter outside it.)
+    declare(
+        &setup,
+        &installing(root, &[(helper, "1.0")], "chmod a-w .fiber-depends"),
+    );
+    let clock = FakeClock::new();
+    let (found, digest) = item(&setup, &clock);
+    let err = store(&setup, &repos, &clock)
+        .approve_on_worker(&found, &digest)
+        .unwrap_err();
+    let marker = depends_home(&setup, &digest).join(".complete");
+    assert!(matches!(err, Error::Io { .. }), "{err}");
+    assert!(
+        matches!(err, Error::Io { ref path, .. } if path == &marker),
+        "{err}"
+    );
+    assert!(!err.to_string().contains("already exists"), "{err}");
+    // Nothing was published: no marker, no copy ready, no approval. The
+    // copy's own cleanup may leave permission-locked remnants behind,
+    // so only the published state is asserted here.
+    assert!(!marker.exists());
+    assert!(!ready(&setup, &digest).exists());
+    assert!(!approval(&setup, &digest).exists());
+}
+
+#[test]
 fn a_stray_file_with_a_held_marker_is_left_alone_then_rebuilds_once_released() {
     use std::fs::File;
     let setup = Setup::new();
