@@ -1149,3 +1149,46 @@ fn close_now_after_a_signal_while_armed_does_nothing() {
     assert!(calls.try_recv().is_err(), "no second bound ran");
     assert!(did.try_recv().is_err(), "no second exit ran");
 }
+
+#[test]
+fn close_now_after_a_signal_while_committing_does_nothing() {
+    let clock = FakeClock::new();
+    let (signals, did) = recorded(&clock);
+    let (tx, calls) = mpsc::channel();
+    arm(&signals, &tx);
+    assert_eq!(start_only(&signals, &tx), None);
+    let until = clock.now() + KILL_AT;
+    let commit = signals.commit(|| {
+        signals.handle(SIGTERM);
+        assert!(
+            calls.try_recv().is_err(),
+            "the deferred signal runs nothing while the write holds the commit"
+        );
+        signals.close_now();
+        assert!(
+            calls.try_recv().is_err(),
+            "a close with now after a signal while committing does nothing"
+        );
+        7
+    });
+    assert_eq!(commit, Ok(7));
+    assert_eq!(
+        Deadline::after(DEADLINE).recv(&calls).unwrap(),
+        Did::Signal(143),
+        "the shutdown keeps the signal's code"
+    );
+    assert!(
+        calls.try_recv().is_err(),
+        "the deferred signal shuts down exactly once"
+    );
+    assert!(
+        clock.await_parked(until, DEADLINE),
+        "the bound counts from the in-write signal"
+    );
+    clock.advance(KILL_AT);
+    let ended = Deadline::after(DEADLINE);
+    assert_eq!(ended.recv(&calls).unwrap(), Did::Bound);
+    assert_eq!(ended.recv(&did).unwrap(), Did::Exit(143));
+    assert!(calls.try_recv().is_err(), "no second bound ran");
+    assert!(did.try_recv().is_err(), "no second exit ran");
+}
