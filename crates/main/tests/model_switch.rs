@@ -20,8 +20,9 @@ use std::path::{Path, PathBuf};
 use std::process::{Child, Command, ExitStatus, Stdio};
 use std::sync::mpsc;
 use std::thread;
-use std::time::{Duration, Instant};
+use std::time::Duration;
 
+use contract::clock::Clock;
 use fakes::{ProviderServer, Response, Watchdog};
 use serde_json::{Value, json};
 use support::*;
@@ -1723,18 +1724,18 @@ fn sigterm_during_a_switchs_read_exits_143_and_kills_the_command() {
         line["kind"] == "turn_completed"
     });
     model(&client, "c_model", "other/om", None);
-    let sent = Instant::now();
+    let sent = SystemClock.now();
     let command: u32 = ready_line(&setup, &ready).parse().unwrap();
     eprintln!(
         "switch-read-sigterm: the switch's read started after {:?}",
-        sent.elapsed()
+        SystemClock.now().saturating_duration_since(sent)
     );
     let watchdog = Watchdog::group(command);
     let session = running.group;
     assert!(kill_pid(setup.deadline, session, "TERM").unwrap());
     eprintln!(
         "switch-read-sigterm: SIGTERM sent after {:?}",
-        sent.elapsed()
+        SystemClock.now().saturating_duration_since(sent)
     );
     let rejected = until(&client, "command_rejected", |line| {
         line["kind"] == "command_rejected"
@@ -1742,7 +1743,7 @@ fn sigterm_during_a_switchs_read_exits_143_and_kills_the_command() {
     let code = rejected.last().unwrap()["payload"]["code"].clone();
     eprintln!(
         "switch-read-sigterm: rejected with {code} after {:?}",
-        sent.elapsed()
+        SystemClock.now().saturating_duration_since(sent)
     );
     assert_eq!(code, "closing");
     drop(client);
@@ -1754,13 +1755,13 @@ fn sigterm_during_a_switchs_read_exits_143_and_kills_the_command() {
     eprintln!(
         "switch-read-sigterm: the session exited with {:?} after {:?}",
         status.code(),
-        sent.elapsed()
+        SystemClock.now().saturating_duration_since(sent)
     );
     assert_eq!(status.code(), Some(143), "stderr: {stderr}");
     let alive = group_alive(setup.deadline, command);
     eprintln!(
         "switch-read-sigterm: the command's group alive is {alive} after {:?}",
-        sent.elapsed()
+        SystemClock.now().saturating_duration_since(sent)
     );
     assert!(!alive, "the command was killed");
     watchdog.stand_down(setup.deadline.cleanup());
@@ -1769,7 +1770,7 @@ fn sigterm_during_a_switchs_read_exits_143_and_kills_the_command() {
     let kinds = log_kinds(&setup, &id);
     eprintln!(
         "switch-read-sigterm: the session log holds {kinds:?} after {:?}",
-        sent.elapsed()
+        SystemClock.now().saturating_duration_since(sent)
     );
     assert_eq!(
         kinds,
