@@ -824,6 +824,31 @@ fn a_hold_release_pins_every_side() {
     );
 }
 
+/// A pipelined discard pins every side: only a declared fixed body
+/// without transfer-encoding drains already-arrived pipelined bytes.
+#[test]
+fn a_pipelined_discard_pins_every_side() {
+    let content_length = ("content-length".to_string(), "4".to_string());
+    let transfer_encoding = ("transfer-encoding".to_string(), "chunked".to_string());
+    let host = ("host".to_string(), "localhost".to_string());
+    assert!(
+        discards_pipelined(&[content_length.clone()]),
+        "a declared fixed body discards pipelined bytes"
+    );
+    assert!(
+        !discards_pipelined(&[content_length.clone(), transfer_encoding.clone()]),
+        "a chunked declared body never drains"
+    );
+    assert!(
+        !discards_pipelined(&[transfer_encoding.clone()]),
+        "a chunked body with no declared length never drains"
+    );
+    assert!(
+        !discards_pipelined(&[host]),
+        "a request with no declared body never drains"
+    );
+}
+
 // An injected clock that counts monotonic reads, wrapping [`FakeClock`]:
 // the regression test below proves the fixed-body reader checks the
 // bound once per fill rather than once per byte by counting the clock
