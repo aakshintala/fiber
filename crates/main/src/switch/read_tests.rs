@@ -1160,19 +1160,18 @@ fn cancel_passes_a_blocked_spawn_and_the_late_child_is_killed() {
 /// settle itself: a killed-but-unreaped leader probes `EPERM` on some
 /// platforms, which keeps the group pending in the settle (only `SRCH`
 /// retires) while reading empty through the raw probe. The gated phase
-/// then proves the fixed drive retains its budget: the gate's own
-/// `PARK_PAUSE`-bounded emptiness wait runs while the group is still
-/// held, the settle still has no answer, and the clock sits past no
-/// probe mark. Only then are the release senders dropped and the settle
-/// driven to completion through the emptiness gate, which never advances
-/// past a live real group: while `real` still holds a member, the drive
-/// waits it out on the wall clock without advancing, so a held or slow
-/// real death parks the settle without spending the bound. Completion and
-/// every acknowledgement share the drive's one deadline: each
-/// acknowledgement waits only a poll pause of it, and an
-/// acknowledgement's expiry re-checks completion and awaits the late
-/// park under what is left, never stopping the drive while time remains.
-/// Fails the test when the drive's deadline runs out first.
+/// then proves the fixed drive holds its budget while the group is
+/// held: a few iterations still list the group, and an await for a park
+/// past the current one must time out — without a clock advance the
+/// settle never leaves its park (its kill path bumps nothing), so no
+/// re-park arrives. Only then are the release senders dropped and the
+/// settle driven to completion: past the release zero-move wakes let
+/// the settle observe it without spending budget, and every budgeted
+/// advance needs both a confirmed re-park and the settle no longer
+/// listing `real`, so a slow real death parks the settle without
+/// spending the bound. Completion and every acknowledgement share the
+/// drive's one deadline: each acknowledgement waits only a poll pause
+/// of it. Fails the test when the drive's deadline runs out first.
 #[track_caller]
 fn drive_settle_to_completion(
     clock: &Arc<FakeClock>,
@@ -1212,34 +1211,101 @@ fn drive_settle_to_completion(
         "the held group is still listed after the blind probe: {:?}",
         listed(reads)
     );
-    // Gated phase: the gate's own wait runs while the group is still
-    // held, with no answer and no budget spent.
-    let probe_mark = clock.now();
-    // Intentionally unchecked: a killed-but-unreaped leader probes
-    // `EPERM` on some platforms, so this answers at once there and past
-    // the full bound elsewhere. Either way it moves no fake clock.
-    let _held = fakes::group_empties(real, PARK_PAUSE);
+    // Retention phase, holds maintained: the fixed drive spends nothing
+    // while the group is held. Four iterations still list the group,
+    // then an await for a park past the current one must time out:
+    // without a clock advance the settle never leaves its park (its
+    // kill path bumps nothing), so no re-park arrives. The mark below
+    // is taken without waking the settle, so the await is genuine.
+    for _ in 0..4 {
+        assert!(
+            listed(reads).contains(&real),
+            "the held group stays listed while frozen: {:?}",
+            listed(reads)
+        );
+    }
+    let frozen = clock
+        .mark_parked(clock.now() + GROUP_POLL, drive.left())
+        .expect("the settle parked at its poll");
+    assert!(
+        !clock.await_any_parked_since(&frozen, PARK_PAUSE),
+        "the settle re-parked without a clock advance"
+    );
+    assert_eq!(
+        clock.now(),
+        start + Duration::from_millis(500),
+        "the retention spent no budget"
+    );
+    assert!(
+        listed(reads).contains(&real),
+        "the held group is still listed before release: {:?}",
+        listed(reads)
+    );
     assert!(
         matches!(finished.try_recv(), Err(mpsc::TryRecvError::Empty)),
         "the settle answered while its group was held"
     );
-    assert_eq!(clock.now(), probe_mark, "the gated wait spent no budget");
     for release in releases {
         drop(release);
     }
-    let answer = loop {
-        if let Ok(answer) = finished.try_recv() {
-            break answer;
-        }
+    // Release observation: the settle learns of the release only on a
+    // wake (its kill path bumps nothing), so each pass below wakes one
+    // without moving the clock — the park the mark names proves the
+    // settle waits on it first. The loop ends once the settle retires
+    // the reaped group (and answers in the same pass) or answers
+    // outright; the clock still sits at the blind-probe mark after.
+    let mut answer = finished.try_recv().ok();
+    while answer.is_none() && listed(reads).contains(&real) {
         if drive.left().is_zero() {
-            break drive.recv(finished).expect("the settle");
+            break;
         }
-        if !fakes::group_empties(real, drive.left().min(PARK_PAUSE)) {
-            continue;
+        let parked_at = clock.now() + GROUP_POLL;
+        match clock.mark_parked(parked_at, drive.left().min(PARK_PAUSE)) {
+            Some(_) => {
+                clock.advance_marked(Duration::ZERO);
+            }
+            None => {
+                // Never parked again: the pass answered instead.
+                answer = finished.try_recv().ok();
+                break;
+            }
         }
-        if clock.await_any_parked_since(&mark, drive.left().min(PARK_PAUSE)) {
-            mark = clock.advance_marked(Duration::from_millis(50));
-        }
+        answer = finished.try_recv().ok();
+    }
+    assert_eq!(
+        clock.now(),
+        start + Duration::from_millis(500),
+        "the release observation spent no budget"
+    );
+    // Gated tail: every budgeted advance needs both a confirmed re-park
+    // and the settle no longer listing `real`, so a slow real death
+    // parks the settle without spending the bound. The marks below are
+    // taken without waking the settle, so a hold iteration's
+    // `PARK_PAUSE`-bounded await genuinely times out while frozen.
+    // Usually skipped: the observation above already holds the answer.
+    let answer = match answer {
+        Some(answer) => answer,
+        None => loop {
+            if let Ok(answer) = finished.try_recv() {
+                break answer;
+            }
+            if drive.left().is_zero() {
+                break drive.recv(finished).expect("the settle");
+            }
+            let parked_at = clock.now() + GROUP_POLL;
+            match clock.mark_parked(parked_at, drive.left().min(PARK_PAUSE)) {
+                // No park again: the settle answered instead; take it
+                // under the drive.
+                None => break drive.recv(finished).expect("the settle"),
+                Some(since) => {
+                    if !listed(reads).contains(&real)
+                        && clock.await_any_parked_since(&since, drive.left().min(PARK_PAUSE))
+                    {
+                        clock.advance_marked(Duration::from_millis(50));
+                    }
+                }
+            }
+        },
     };
     if answer {
         assert!(
@@ -1320,6 +1386,119 @@ fn settle_rekills_a_cancelled_survivor_before_answering_true() {
         !lives,
         "settle answered `true` while group {pgid} still lives"
     );
+}
+
+/// The superseded blind drive spends the whole bound while a held group
+/// stays listed: with the reap held through the entire drive, every
+/// 50 ms advance only re-parks the settle, so every derived cycle runs,
+/// the settle answers `false` at the bound, and the group is still
+/// listed. This pins the ticket's core scenario — bound spent while the
+/// group stays listed — which the claim tests above now drive through
+/// the gated helper instead. Deterministic with no load: every cycle is
+/// confirmed by a re-park, the group cannot unlist while its leader
+/// stays an unreaped zombie, and the clock moves only through this
+/// test's advances.
+#[test]
+fn settle_withheld_reap_spends_the_bound_with_the_group_listed() {
+    let root = fakes::TempDir::new("fiber-read-settle-withheld");
+    let ready = root.path().join("ready");
+    let clock = FakeClock::new();
+    let reads = Arc::new(Reads::default());
+    let script = format!("echo $$ > '{}'; exec sleep 600", ready.display());
+    // Before the spawn: the group is known only after it starts, so a
+    // command-line watchdog covers a spawn no later watchdog can reach.
+    let pre = fakes::Watchdog::matching(&ready.display().to_string());
+    // Paused after listing: the acknowledgement proves the group is listed
+    // with nothing in flight before the survivor state is seeded below.
+    let (listed_tx, listed_rx) = mpsc::channel::<()>();
+    let (release_tx, release_rx) = mpsc::channel::<()>();
+    reads.pause_at_listed(listed_tx, release_rx);
+    // Held before the reap: the acknowledgement proves the command thread
+    // reached its leader's reap, so the leader stays a zombie and the
+    // group stays listed. Unlike the claim tests, the hold stays armed
+    // through the whole drive below and is dropped only for cleanup.
+    let (held_tx, is_held) = mpsc::channel::<()>();
+    let (free_tx, freed_rx) = mpsc::channel::<()>();
+    reads.pause_at_command_reap(held_tx, freed_rx);
+    let running = {
+        let reads = Arc::clone(&reads);
+        std::thread::spawn(move || reads.command(&mut sh(&script)))
+    };
+    let pgid: u32 = ready_line(&ready).parse().unwrap();
+    let watchdog = fakes::Watchdog::group(pgid);
+    Deadline::after(DEADLINE)
+        .recv(&listed_rx)
+        .expect("the group listed");
+    assert_eq!(listed(&reads), vec![pgid], "listed while it runs");
+    assert_eq!(reads.lock().spawning, 0, "nothing in flight");
+    release_tx.send(()).unwrap();
+    Deadline::after(DEADLINE)
+        .recv(&is_held)
+        .expect("the command held before its reap");
+    assert!(
+        fakes::kill_group(pgid, "0").unwrap(),
+        "the member lives before the settle"
+    );
+    // The probe's post-cancel survivor: cancelled with a live listed group
+    // and no kill sent, as a fork during the kernel kill walk leaves one.
+    // Set directly: `cancel` would kill the group and hide the survivor.
+    reads.lock().cancelled = true;
+    let settled = settle_on_thread(&reads, &clock, doors::SHUTDOWN_BOUND);
+    // The superseded blind pattern, pinned: advance to each confirmed
+    // re-park for the whole bound at the 50 ms cadence — the count is
+    // derived from the bound, never hardcoded — checking the answer each
+    // iteration, since the final advance's pass reaches the bound and
+    // answers instead of re-parking.
+    let drive = Deadline::after(DEADLINE);
+    let poll = clock.origin() + GROUP_POLL;
+    assert!(
+        clock.await_parked(poll, drive.left()),
+        "the settle parked at its poll"
+    );
+    let cycles = (doors::SHUTDOWN_BOUND.as_millis() / 50) as usize;
+    let mut mark = clock.advance_marked(Duration::from_millis(50));
+    let mut answer = None;
+    for _ in 1..cycles {
+        if let Ok(got) = settled.try_recv() {
+            answer = Some(got);
+            break;
+        }
+        assert!(
+            clock.await_any_parked_since(&mark, drive.left().min(PARK_PAUSE)),
+            "the settle parked again after the probe advance"
+        );
+        mark = clock.advance_marked(Duration::from_millis(50));
+    }
+    // The final advance's pass answers at the bound instead of re-parking.
+    let answer = match answer {
+        Some(answer) => answer,
+        None => drive.recv(&settled).expect("the settle"),
+    };
+    assert!(
+        !answer,
+        "the withheld drive spends the bound and settles false"
+    );
+    assert_eq!(
+        clock.now(),
+        clock.origin() + doors::SHUTDOWN_BOUND,
+        "the blind drive spent exactly the bound"
+    );
+    assert!(
+        listed(&reads).contains(&pgid),
+        "the bound leaves the group listed: {:?}",
+        listed(&reads)
+    );
+    // Cleanup: the release drops before anything joins the holder, then
+    // the group is killed for real and the command thread reaped.
+    drop(free_tx);
+    match fakes::kill_group(pgid, "KILL") {
+        Ok(_) | Err(_) => {}
+    }
+    let _finished = fakes::within("the killed command", DEADLINE, move || {
+        running.join().unwrap()
+    });
+    watchdog.stand_down(DEADLINE);
+    pre.stand_down(DEADLINE);
 }
 
 /// A cancelled group that survives the first kill gets SIGKILL again, and
