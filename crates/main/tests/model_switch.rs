@@ -15,8 +15,9 @@ mod support;
 
 use std::fs;
 use std::io::{BufRead, BufReader};
+use std::os::unix::process::CommandExt;
 use std::path::{Path, PathBuf};
-use std::process::{Child, ExitStatus};
+use std::process::{Child, Command, ExitStatus, Stdio};
 use std::sync::mpsc;
 use std::thread;
 use std::time::{Duration, Instant};
@@ -1425,6 +1426,22 @@ fn ready_line(setup: &Setup, file: &Path) -> String {
     })
 }
 
+/// Makes a FIFO at `path` for a switch-read handshake: the credential
+/// command blocks opening it until the test opens the other end, so the
+/// rendezvous proves the read is in flight without reading the clock.
+#[track_caller]
+fn make_fifo(setup: &Setup, path: &Path) {
+    let mut mkfifo = Command::new("mkfifo");
+    mkfifo
+        .arg(path)
+        .process_group(0)
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped());
+    let made = run_to_exit(setup.deadline, "mkfifo", mkfifo);
+    assert!(made.status.success(), "mkfifo: {made:?}");
+}
+
 /// The bodies of the requests the fake server saw, with their
 /// `authorization` header.
 fn authorized(server: &ProviderServer) -> Vec<Option<String>> {
@@ -1769,6 +1786,171 @@ fn sigterm_during_a_switchs_read_exits_143_and_kills_the_command() {
             "usage_recorded",
             "assistant_message_completed",
             "turn_completed",
+            "fiber_exited",
+        ]
+        .map(str::to_owned)
+        .to_vec(),
+    );
+}
+
+/// A SIGTERM held back until the switch's read blocks on its FIFO:
+/// cancellation wins the race on every run, so the switch is rejected
+/// `closing`, the command's group dies, the session exits 143, and the
+/// log holds no `model_changed`.
+#[test]
+fn sigterm_while_a_switchs_read_is_held_exits_143_and_kills_the_command() {
+    let setup = Setup::new();
+    let server = ProviderServer::start([hello()]).unwrap();
+    install_switch_provider(&setup, &server);
+    let ready = setup.root.path().join("ready");
+    let release = setup.root.path().join("release");
+    make_fifo(&setup, &release);
+    let script = format!(
+        "echo $$ > '{}'; read line < '{}'; echo other-key",
+        ready.display(),
+        release.display()
+    );
+    install_other(&setup, &server, &json!({"command": ["sh", "-c", script]}));
+    let id = doors::mint("s_");
+    let running = start_session(&setup, &id, &[]);
+    let client = running.connect(&setup.session_socket(&id));
+    running.wait_for("extensions_loaded");
+    let _subscribed = subscribe(&client);
+    // A turn first: a session never prompted leaves no log behind.
+    prompt(&client, "c_prompt", "hi");
+    until(&client, "turn_completed", |line| {
+        line["kind"] == "turn_completed"
+    });
+    model(&client, "c_model", "other/om", None);
+    let command: u32 = ready_line(&setup, &ready).parse().unwrap();
+    let watchdog = Watchdog::group(command);
+    // The open blocks until the switch's read opens the FIFO: the
+    // rendezvous proves the read is in flight, and the line the test
+    // never writes holds it there, so SIGTERM lands while the read
+    // waits on every run.
+    let held = bounded(setup.deadline, "the switch's read to hold", move || {
+        std::fs::File::create(&release)
+    })
+    .unwrap();
+    let session = running.group;
+    assert!(kill_pid(setup.deadline, session, "TERM").unwrap());
+    let rejected = until(&client, "command_rejected", |line| {
+        line["kind"] == "command_rejected"
+    });
+    assert_eq!(rejected.last().unwrap()["payload"]["code"], "closing");
+    drop(held);
+    drop(client);
+    // Under the 5 second shutdown bound, which would end the process with
+    // no `fiber_exited`.
+    let (status, stderr) = fakes::within("the session's exit", Duration::from_secs(4), move || {
+        running.wait()
+    });
+    assert_eq!(status.code(), Some(143), "stderr: {stderr}");
+    assert!(
+        !group_alive(setup.deadline, command),
+        "the command was killed"
+    );
+    watchdog.stand_down(setup.deadline.cleanup());
+    // The complete ordered kinds of the session log: the turn, then the
+    // exit, with no `model_changed`, since the switch died in its read.
+    assert_eq!(
+        log_kinds(&setup, &id),
+        [
+            "session_started",
+            "fiber_started",
+            "extensions_loaded",
+            "preamble_built",
+            "opening_message",
+            "turn_started",
+            "step_started",
+            "assistant_message_started",
+            "text_completed",
+            "usage_recorded",
+            "assistant_message_completed",
+            "turn_completed",
+            "fiber_exited",
+        ]
+        .map(str::to_owned)
+        .to_vec(),
+    );
+}
+
+/// A SIGTERM sent only after the switch's read resolves: the read wins
+/// the race on every run, so the switch applies, the log keeps its
+/// `model_changed`, the command's group is already dead, and the idle
+/// session still exits 143.
+#[test]
+fn sigterm_after_a_switchs_read_resolves_keeps_model_changed_and_exits_143() {
+    let setup = Setup::new();
+    let server = ProviderServer::start([hello()]).unwrap();
+    install_switch_provider(&setup, &server);
+    let ready = setup.root.path().join("ready");
+    let release = setup.root.path().join("release");
+    make_fifo(&setup, &release);
+    let script = format!(
+        "echo $$ > '{}'; read line < '{}'; echo other-key",
+        ready.display(),
+        release.display()
+    );
+    install_other(&setup, &server, &json!({"command": ["sh", "-c", script]}));
+    let id = doors::mint("s_");
+    let running = start_session(&setup, &id, &[]);
+    let client = running.connect(&setup.session_socket(&id));
+    running.wait_for("extensions_loaded");
+    let _subscribed = subscribe(&client);
+    // A turn first: a session never prompted leaves no log behind.
+    prompt(&client, "c_prompt", "hi");
+    until(&client, "turn_completed", |line| {
+        line["kind"] == "turn_completed"
+    });
+    model(&client, "c_model", "other/om", None);
+    let command: u32 = ready_line(&setup, &ready).parse().unwrap();
+    let watchdog = Watchdog::group(command);
+    // The write's open rendezvouses with the switch's read, and the line
+    // releases it: waiting for `model_changed` next proves the read
+    // resolved and the switch applied before the signal, on every run.
+    let released = bounded(setup.deadline, "the switch's read to release", move || {
+        std::fs::write(&release, "go\n")
+    });
+    released.unwrap();
+    let changed = until(&client, "model_changed", |line| {
+        line["kind"] == "model_changed"
+    });
+    let applied = changed.last().unwrap();
+    assert_eq!(applied["payload"]["before"]["model"], "fake/m");
+    assert_eq!(applied["payload"]["after"]["model"], "other/om");
+    let session = running.group;
+    assert!(kill_pid(setup.deadline, session, "TERM").unwrap());
+    drop(client);
+    // Under the 5 second shutdown bound, which would end the process with
+    // no `fiber_exited`.
+    let (status, stderr) = fakes::within("the session's exit", Duration::from_secs(4), move || {
+        running.wait()
+    });
+    assert_eq!(status.code(), Some(143), "stderr: {stderr}");
+    assert!(
+        !group_alive(setup.deadline, command),
+        "the command was killed"
+    );
+    watchdog.stand_down(setup.deadline.cleanup());
+    // The complete ordered kinds of the session log: the turn, the
+    // applied switch, then the exit.
+    assert_eq!(
+        log_kinds(&setup, &id),
+        [
+            "session_started",
+            "fiber_started",
+            "extensions_loaded",
+            "preamble_built",
+            "opening_message",
+            "turn_started",
+            "step_started",
+            "assistant_message_started",
+            "text_completed",
+            "usage_recorded",
+            "assistant_message_completed",
+            "turn_completed",
+            "model_changed",
             "fiber_exited",
         ]
         .map(str::to_owned)
