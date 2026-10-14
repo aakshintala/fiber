@@ -16,7 +16,7 @@ use std::os::fd::AsFd;
 use std::os::unix::process::CommandExt;
 use std::path::PathBuf;
 use std::process::Command;
-use std::sync::{Arc, Mutex, Weak, mpsc};
+use std::sync::{Arc, Mutex, PoisonError, Weak, mpsc};
 use std::thread;
 use std::time::{Duration, Instant, SystemTime};
 
@@ -924,7 +924,7 @@ impl GateClock {
 
 impl contract::clock::Clock for GateClock {
     fn now(&self) -> Instant {
-        let offset = *self.offset.lock().unwrap();
+        let offset = *self.offset.lock().unwrap_or_else(PoisonError::into_inner);
         self.origin.checked_add(offset).unwrap_or(self.origin)
     }
 
@@ -933,9 +933,18 @@ impl contract::clock::Clock for GateClock {
     }
 
     fn sleep(&self, duration: Duration) {
-        self.slept.lock().unwrap().send(duration).unwrap_or(());
-        let advance = self.release.lock().unwrap().recv().unwrap_or(duration);
-        *self.offset.lock().unwrap() += advance;
+        self.slept
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .send(duration)
+            .unwrap_or(());
+        let advance = self
+            .release
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .recv()
+            .unwrap_or(duration);
+        *self.offset.lock().unwrap_or_else(PoisonError::into_inner) += advance;
     }
 
     fn wait_until(&self, _until: Option<Instant>, wait: &mut dyn FnMut(Option<Duration>)) {
@@ -980,16 +989,24 @@ struct LeaderOwner {
 impl Drop for LeaderOwner {
     fn drop(&mut self) {
         if let Some(leader) = self.leader.take() {
-            match fakes::kill_group(self.group, "KILL") {
-                Ok(_) | Err(_) => {}
+            if self.group > 1 {
+                match fakes::kill_group(self.group, "KILL") {
+                    Ok(_) | Err(_) => {}
+                }
             }
             let (waited, reaped) = mpsc::channel();
-            thread::spawn(move || {
-                let mut leader = leader;
-                let _sent = waited.send(leader.wait());
-            });
-            match fakes::Deadline::after(GROUP_WAIT).recv(&reaped) {
-                Ok(_) | Err(_) => {}
+            let spawned = thread::Builder::new()
+                .name("gated-leader-reap".to_owned())
+                .spawn(move || {
+                    let mut leader = leader;
+                    let _sent = waited.send(leader.wait());
+                });
+            // A reaper that could not start sends nothing: skip the wait
+            // instead of blocking the full bound on a dead channel.
+            if spawned.is_ok() {
+                match fakes::Deadline::after(GROUP_WAIT).recv(&reaped) {
+                    Ok(_) | Err(_) => {}
+                }
             }
         }
     }
@@ -1015,21 +1032,34 @@ impl Gated {
         let watchdog = fakes::Watchdog::group(group);
         let worker_clock = Arc::clone(&clock);
         let start = clock.now();
-        let worker = thread::spawn(move || {
-            let mut command = Command::new("sleep");
-            command.arg("5");
-            command.process_group(group.try_into().unwrap());
-            let outcome = super::run_command(&mut command, timeout, &worker_clock);
-            done_tx
-                .send(outcome.map(|_| ()).map_err(|e| e.kind()))
-                .unwrap_or(());
-        });
+        // `None` when the OS refuses the thread: the `done` sender drops
+        // with the closure, so the tests fail on their bounded deadline
+        // instead of panicking here while `LeaderOwner` owns the leader.
+        let worker = thread::Builder::new()
+            .name("gated-command".to_owned())
+            .spawn(move || {
+                let mut command = Command::new("sleep");
+                command.arg("5");
+                let group: i32 = match group.try_into() {
+                    Ok(group) => group,
+                    Err(_) => {
+                        done_tx.send(Err(ErrorKind::InvalidInput)).unwrap_or(());
+                        return;
+                    }
+                };
+                command.process_group(group);
+                let outcome = super::run_command(&mut command, timeout, &worker_clock);
+                done_tx
+                    .send(outcome.map(|_| ()).map_err(|e| e.kind()))
+                    .unwrap_or(());
+            })
+            .ok();
         Self {
             clock,
             slept,
             release,
             done,
-            worker: Some(worker),
+            worker,
             start,
             group,
             watchdog: Some(watchdog),
@@ -1061,17 +1091,25 @@ impl Gated {
     fn finish(&mut self) {
         self.join();
         let group = self.group;
-        match fakes::kill_group(group, "KILL") {
-            Ok(_) | Err(_) => {}
+        if group > 1 {
+            match fakes::kill_group(group, "KILL") {
+                Ok(_) | Err(_) => {}
+            }
         }
         if let Some(leader) = self.leader.take() {
             let (waited, reaped) = mpsc::channel();
-            thread::spawn(move || {
-                let mut leader = leader;
-                let _sent = waited.send(leader.wait());
-            });
+            let spawned = thread::Builder::new()
+                .name("gated-leader-reap".to_owned())
+                .spawn(move || {
+                    let mut leader = leader;
+                    let _sent = waited.send(leader.wait());
+                });
+            // A reaper that could not start sends nothing: fail fast
+            // instead of waiting the full bound on a dead channel.
+            let reaped =
+                spawned.is_ok() && fakes::Deadline::after(GROUP_WAIT).recv(&reaped).is_ok();
             assert!(
-                fakes::Deadline::after(GROUP_WAIT).recv(&reaped).is_ok(),
+                reaped,
                 "waited {GROUP_WAIT:?} for the gated group leader to be reaped"
             );
         }
@@ -1091,7 +1129,7 @@ impl Drop for Gated {
         // neither sleep leaks. The watchdog kills it too when the test
         // process dies. This never blocks or fails: a drop that panics
         // while unwinding aborts the test process.
-        if self.leader.is_some() || self.watchdog.is_some() {
+        if (self.leader.is_some() || self.watchdog.is_some()) && self.group > 1 {
             match fakes::kill_group(self.group, "KILL") {
                 Ok(_) | Err(_) => {}
             }
