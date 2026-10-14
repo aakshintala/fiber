@@ -135,7 +135,7 @@ impl Clock for CaseClock {
             let state = lock(&self.state);
             let _state = self
                 .changed
-                .wait_while(state, |state| now_in(state, self.origin) < until)
+                .wait_while(state, |state| sleep_pending(state, self.origin, until))
                 .unwrap_or_else(PoisonError::into_inner);
         };
         self.wait_until(Some(until), &mut wait);
@@ -186,6 +186,10 @@ fn move_by(state: &mut State, d: Duration) -> Vec<Arc<dyn Wake>> {
         None => false,
     });
     wakers
+}
+
+fn sleep_pending(state: &State, origin: Instant, until: Instant) -> bool {
+    now_in(state, origin) < until
 }
 
 fn now_in(state: &State, origin: Instant) -> Instant {

@@ -8,6 +8,7 @@ use std::time::{Duration, Instant, SystemTime};
 use contract::clock::{Clock, Wake};
 
 use super::CaseClock;
+use super::sleep_pending;
 use fakes::Deadline;
 
 #[test]
@@ -235,6 +236,37 @@ fn sleep_parks_until_its_deadline_is_advanced() {
             .recv(&done_rx)
             .expect("waited for sleep to finish"),
         before + delay
+    );
+}
+
+#[test]
+fn sleep_pending_before_the_deadline() {
+    let clock = CaseClock::new();
+    let until = clock.now() + Duration::from_millis(1);
+    assert!(
+        sleep_pending(&lock(&clock.state), clock.origin, until),
+        "sleep must wait while now is before its deadline"
+    );
+}
+
+#[test]
+fn sleep_pending_at_the_deadline() {
+    let clock = CaseClock::new();
+    let until = clock.now();
+    assert!(
+        !sleep_pending(&lock(&clock.state), clock.origin, until),
+        "sleep must not wait once now reaches its deadline"
+    );
+}
+
+#[test]
+fn sleep_pending_after_the_deadline() {
+    let clock = CaseClock::new();
+    clock.advance(Duration::from_millis(2));
+    let until = clock.now().checked_sub(Duration::from_millis(1)).unwrap();
+    assert!(
+        !sleep_pending(&lock(&clock.state), clock.origin, until),
+        "sleep must not wait once now passes its deadline"
     );
 }
 
