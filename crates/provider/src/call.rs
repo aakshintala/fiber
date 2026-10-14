@@ -8,7 +8,7 @@ use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use contract::clock::Clock;
-use contract::diag::{DebugLog, ProviderRequest, Purpose};
+use contract::diag::{DebugLog, ProviderRequest, Purpose, Timing};
 use contract::events::CacheLifetime;
 use contract::provider::{CallError, CallUsage, Delta, InputSize, ModelCall, ModelRequest, Reply};
 
@@ -33,13 +33,16 @@ pub(crate) type Decode = fn(
 /// values and the loop passes the attempt explicitly, so no global or
 /// mutable context names the call. The model is bound by the protocol's
 /// `call_observed`, which knows its own endpoint; the direct test seam
-/// binds it explicitly.
+/// binds it explicitly. The optional timing times one connector attempt
+/// group as `net.connect`; without one the call still records its
+/// `provider_request` line over the plain connector.
 #[derive(Clone)]
 pub struct RequestObservation {
     log: Arc<dyn DebugLog>,
     clock: Arc<dyn Clock>,
     attempt: NonZeroU32,
     model: Option<String>,
+    timing: Option<Timing>,
 }
 
 impl RequestObservation {
@@ -51,6 +54,7 @@ impl RequestObservation {
             clock,
             attempt,
             model: None,
+            timing: None,
         }
     }
 
@@ -59,6 +63,15 @@ impl RequestObservation {
     /// the ordinary path clones no model.
     pub fn with_model(mut self, model: String) -> Self {
         self.model = Some(model);
+        self
+    }
+
+    /// Times the call's connector group through `timing`: one `net.connect`
+    /// scope from the first socket attempt to the kept socket. The factory
+    /// captures one route's callable and the loop passes the attempt
+    /// explicitly, so no global or mutable context names the call.
+    pub fn with_timing(mut self, timing: Timing) -> Self {
+        self.timing = Some(timing);
         self
     }
 
@@ -312,6 +325,7 @@ impl Call {
             &self.cancel,
             &mut secrets,
             &observation.clock,
+            observation.timing.as_ref(),
         ) {
             Ok(sent) => {
                 let mut finish = ObservationFinish::new(
@@ -459,6 +473,7 @@ impl Call {
             &self.cancel,
             &mut secrets,
             &observation.clock,
+            observation.timing.as_ref(),
         );
         // The record, built once the send's outcome is known: a request
         // never sent leaves it absent and writes no line.

@@ -1102,6 +1102,28 @@ fn observed(
     Result<super::ObservedSend, super::ObservedFailure>,
     crate::redact::Secrets,
 ) {
+    observed_with(url, headers, body, signer, route, cancel, clock, None)
+}
+
+/// As [`observed`], timing the connector group through `timing` when
+/// supplied: `None` keeps the plain connector with no net scope.
+#[allow(
+    clippy::too_many_arguments,
+    reason = "one observed send with its timing input beside the call's own"
+)]
+fn observed_with(
+    url: String,
+    headers: &[(String, String)],
+    body: &'static [u8],
+    signer: Option<std::sync::Arc<dyn contract::signing::Signer>>,
+    route: super::Route,
+    cancel: &std::sync::Arc<super::Cancel>,
+    clock: std::sync::Arc<dyn contract::clock::Clock>,
+    timing: Option<contract::diag::Timing>,
+) -> (
+    Result<super::ObservedSend, super::ObservedFailure>,
+    crate::redact::Secrets,
+) {
     let headers = headers.to_vec();
     let cancel = std::sync::Arc::clone(cancel);
     fakes::within(
@@ -1118,6 +1140,7 @@ fn observed(
                 &cancel,
                 &mut secrets,
                 &clock,
+                timing.as_ref(),
             );
             (sent, secrets)
         },
@@ -2145,4 +2168,656 @@ fn observed_error_bodies_pin_the_text_strict_split() {
         panic!("the JSON failure reports no send");
     };
     assert_eq!(dispatched.bytes_read, raw.len() as u64);
+}
+
+/// A capture Timing for observed calls: records each invocation's
+/// arguments and each owned guard's drop, pinning one `net.connect`
+/// scope per connector group.
+struct TimingCapture {
+    calls: std::sync::Mutex<Vec<(contract::diag::Op, Option<String>, bool)>>,
+    drops: std::sync::Arc<std::sync::atomic::AtomicU64>,
+}
+
+impl TimingCapture {
+    fn new() -> std::sync::Arc<Self> {
+        std::sync::Arc::new(Self {
+            calls: std::sync::Mutex::new(Vec::new()),
+            drops: std::sync::Arc::new(std::sync::atomic::AtomicU64::new(0)),
+        })
+    }
+
+    fn timing(self: &std::sync::Arc<Self>) -> contract::diag::Timing {
+        let me = std::sync::Arc::clone(self);
+        std::sync::Arc::new(move |op, tool, started| {
+            me.calls
+                .lock()
+                .unwrap()
+                .push((op, tool.map(str::to_owned), started.is_some()));
+            let guard = TimingGuard {
+                drops: std::sync::Arc::clone(&me.drops),
+            };
+            Some(Box::new(guard) as Box<dyn Send>)
+        })
+    }
+
+    fn calls(&self) -> usize {
+        self.calls.lock().unwrap().len()
+    }
+
+    fn arguments(&self) -> Vec<(contract::diag::Op, Option<String>, bool)> {
+        self.calls.lock().unwrap().clone()
+    }
+
+    fn drops(&self) -> u64 {
+        self.drops.load(std::sync::atomic::Ordering::SeqCst)
+    }
+}
+
+/// The capture's owned guard: dropping it counts the scope's end.
+struct TimingGuard {
+    drops: std::sync::Arc<std::sync::atomic::AtomicU64>,
+}
+
+impl Drop for TimingGuard {
+    fn drop(&mut self) {
+        self.drops.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+    }
+}
+
+/// A direct endpoint for `server` holding no key and no signer.
+fn test_endpoint(server: &fakes::ProviderServer) -> crate::Endpoint {
+    crate::Endpoint {
+        provider: "fake".to_owned(),
+        model: "m".to_owned(),
+        base_url: server.url(),
+        direct: true,
+        ..crate::Endpoint::default()
+    }
+}
+
+/// One minimal request: a user turn with no images, tools or rewound state.
+fn test_request() -> contract::provider::ModelRequest {
+    contract::provider::ModelRequest {
+        system_prompt: "You are terse.".to_owned(),
+        tools: Vec::new(),
+        thinking: None,
+        tool_choice: "auto".to_owned(),
+        cache_lifetime: contract::events::CacheLifetime::OneHour,
+        cache_key: "session_1".to_owned(),
+        conversation: vec![contract::provider::Input::User {
+            text: "hi".to_owned(),
+            images: Vec::new(),
+        }],
+        sent_tools: None,
+        previous_end: None,
+        max_output_tokens: None,
+        session_dir: std::path::PathBuf::new(),
+    }
+}
+
+/// One observed call over `endpoint` timing its connector group through
+/// `net`: the observation binds the model, the clock and the attempt.
+#[allow(
+    clippy::too_many_arguments,
+    reason = "one observed call with its log, clock and timing beside the call's own"
+)]
+fn timed_call(
+    endpoint: &crate::Endpoint,
+    request: &contract::provider::ModelRequest,
+    url: String,
+    headers: Vec<(String, String)>,
+    body: Vec<u8>,
+    log: &std::sync::Arc<RedactCapture>,
+    clock: &std::sync::Arc<fakes::clock::FakeClock>,
+    net: &std::sync::Arc<TimingCapture>,
+) -> crate::call::Call {
+    crate::call::Call::new(endpoint, request, url, headers, body, plain_decode).observed(
+        crate::RequestObservation::new(
+            std::sync::Arc::clone(log) as std::sync::Arc<dyn contract::diag::DebugLog>,
+            std::sync::Arc::clone(clock) as std::sync::Arc<dyn contract::clock::Clock>,
+            std::num::NonZeroU32::MIN,
+        )
+        .with_model("m".to_owned())
+        .with_timing(net.timing()),
+    )
+}
+
+/// The exact invocation every connector scope makes: its own operation,
+/// no tool and no explicit stamp.
+fn assert_connector_scope(net: &TimingCapture) {
+    assert_eq!(
+        net.arguments(),
+        vec![(contract::diag::Op::NetConnect, None, false)],
+        "one group starts one connector scope"
+    );
+}
+
+#[test]
+fn an_observed_open_with_timing_times_one_connector_scope() {
+    let server = fakes::ProviderServer::start([fakes::Response::status(200, "ok")]).unwrap();
+    let endpoint = test_endpoint(&server);
+    let request = test_request();
+    let log = std::sync::Arc::new(RedactCapture {
+        lines: std::sync::Mutex::new(Vec::new()),
+    });
+    let clock = fakes::clock::FakeClock::new();
+    let net = TimingCapture::new();
+    let call = timed_call(
+        &endpoint,
+        &request,
+        format!("{}/v1", server.url()),
+        Vec::new(),
+        b"{}".to_vec(),
+        &log,
+        &clock,
+        &net,
+    );
+    let worker = std::sync::Arc::clone(&net);
+    let text = fakes::within("the observed open to return", CALL_WITHIN, move || {
+        let mut body = call.open().expect("the open sends");
+        assert_eq!(
+            worker.calls(),
+            1,
+            "the open counts its scope before any read"
+        );
+        let mut text = String::new();
+        std::io::Read::read_to_string(&mut body, &mut text).unwrap();
+        text
+    });
+    assert_eq!(text, "ok", "the observed body reads unchanged");
+    clock.advance(std::time::Duration::from_millis(50));
+    assert_eq!(
+        net.calls(),
+        1,
+        "reads, drops and later advances add no scope"
+    );
+    assert_eq!(net.drops(), 1, "the scope drops once");
+    assert_eq!(
+        log.serialized().len(),
+        1,
+        "the provider_request line still exists"
+    );
+}
+
+#[test]
+fn an_observed_run_with_timing_times_one_scope_and_reads_the_reply() {
+    use contract::provider::ModelCall as _;
+    let server = fakes::ProviderServer::start([
+        fakes::Response::status(200, "ok"),
+        fakes::Response::status(200, "ok"),
+    ])
+    .unwrap();
+    let endpoint = test_endpoint(&server);
+    let request = test_request();
+    let log = std::sync::Arc::new(RedactCapture {
+        lines: std::sync::Mutex::new(Vec::new()),
+    });
+    let clock = fakes::clock::FakeClock::new();
+    let net = TimingCapture::new();
+    let call = timed_call(
+        &endpoint,
+        &request,
+        format!("{}/v1", server.url()),
+        Vec::new(),
+        b"{}".to_vec(),
+        &log,
+        &clock,
+        &net,
+    );
+    let reply = fakes::within("the observed call to return", CALL_WITHIN, move || {
+        let mut deltas = Vec::new();
+        let reply = call.run(&mut |delta| deltas.push(delta));
+        (reply, deltas)
+    });
+    assert!(reply.0.is_ok(), "the observed run reads: {:?}", reply.0);
+    assert_connector_scope(&net);
+    let plain = crate::call::Call::new(
+        &endpoint,
+        &request,
+        format!("{}/v1", server.url()),
+        Vec::new(),
+        b"{}".to_vec(),
+        plain_decode,
+    );
+    let plain = fakes::within("the plain call to return", CALL_WITHIN, move || {
+        let mut deltas = Vec::new();
+        let reply = plain.run(&mut |delta| deltas.push(delta));
+        (reply, deltas)
+    });
+    assert_eq!(
+        format!("{:?}", reply.0),
+        format!("{:?}", plain.0),
+        "the timing changes no reply"
+    );
+    clock.advance(std::time::Duration::from_millis(50));
+    assert_eq!(net.calls(), 1, "decoding and later advances add no scope");
+    assert_eq!(net.drops(), 1, "the scope drops once");
+    assert_eq!(
+        log.serialized().len(),
+        1,
+        "the provider_request line still exists"
+    );
+}
+
+#[test]
+fn an_observed_run_without_timing_writes_its_line_with_no_net_scope() {
+    use contract::provider::ModelCall as _;
+    let server = fakes::ProviderServer::start([fakes::Response::status(200, "ok")]).unwrap();
+    let endpoint = test_endpoint(&server);
+    let request = test_request();
+    let log = std::sync::Arc::new(RedactCapture {
+        lines: std::sync::Mutex::new(Vec::new()),
+    });
+    let clock = fakes::clock::FakeClock::new();
+    let call = crate::call::Call::new(
+        &endpoint,
+        &request,
+        format!("{}/v1", server.url()),
+        Vec::new(),
+        b"{}".to_vec(),
+        plain_decode,
+    )
+    .observed(
+        crate::RequestObservation::new(
+            std::sync::Arc::clone(&log) as std::sync::Arc<dyn contract::diag::DebugLog>,
+            std::sync::Arc::clone(&clock) as std::sync::Arc<dyn contract::clock::Clock>,
+            std::num::NonZeroU32::MIN,
+        )
+        .with_model("m".to_owned()),
+    );
+    let reply = fakes::within("the untimed call to return", CALL_WITHIN, move || {
+        let mut deltas = Vec::new();
+        let reply = call.run(&mut |delta| deltas.push(delta));
+        (reply, deltas)
+    });
+    assert!(reply.0.is_ok(), "the untimed run reads: {:?}", reply.0);
+    assert_eq!(
+        log.serialized().len(),
+        1,
+        "the provider_request line still exists with no timing"
+    );
+}
+
+/// A writer at `info`: records whatever lines arrive, so the test pins
+/// that none do.
+struct InfoCapture {
+    lines: std::sync::Mutex<Vec<contract::diag::ProviderRequest>>,
+}
+
+impl contract::diag::DebugLog for InfoCapture {
+    fn debugging(&self) -> bool {
+        false
+    }
+
+    fn provider_request(&self, request: &contract::diag::ProviderRequest) {
+        self.lines.lock().unwrap().push(request.clone());
+    }
+}
+
+#[test]
+fn an_info_observation_never_invokes_its_timing() {
+    use contract::provider::ModelCall as _;
+    let server = fakes::ProviderServer::start([
+        fakes::Response::status(200, "ok"),
+        fakes::Response::status(200, "ok"),
+    ])
+    .unwrap();
+    let endpoint = test_endpoint(&server);
+    let request = test_request();
+    let log = std::sync::Arc::new(InfoCapture {
+        lines: std::sync::Mutex::new(Vec::new()),
+    });
+    let clock = fakes::clock::FakeClock::new();
+    let panic_timing: contract::diag::Timing =
+        std::sync::Arc::new(|_, _, _| panic!("an info call starts no scope"));
+    let observed = crate::call::Call::new(
+        &endpoint,
+        &request,
+        format!("{}/v1", server.url()),
+        Vec::new(),
+        b"{}".to_vec(),
+        plain_decode,
+    )
+    .observed(
+        crate::RequestObservation::new(
+            std::sync::Arc::clone(&log) as std::sync::Arc<dyn contract::diag::DebugLog>,
+            std::sync::Arc::clone(&clock) as std::sync::Arc<dyn contract::clock::Clock>,
+            std::num::NonZeroU32::MIN,
+        )
+        .with_model("m".to_owned())
+        .with_timing(panic_timing),
+    );
+    let info = fakes::within("the info call to return", CALL_WITHIN, move || {
+        let mut deltas = Vec::new();
+        let reply = observed.run(&mut |delta| deltas.push(delta));
+        (reply, deltas)
+    });
+    let plain = crate::call::Call::new(
+        &endpoint,
+        &request,
+        format!("{}/v1", server.url()),
+        Vec::new(),
+        b"{}".to_vec(),
+        plain_decode,
+    );
+    let plain = fakes::within("the plain call to return", CALL_WITHIN, move || {
+        let mut deltas = Vec::new();
+        let reply = plain.run(&mut |delta| deltas.push(delta));
+        (reply, deltas)
+    });
+    assert_eq!(
+        format!("{:?}", info.0),
+        format!("{:?}", plain.0),
+        "an info call runs as an ordinary one"
+    );
+    assert!(
+        log.lines.lock().unwrap().is_empty(),
+        "an info call writes no line"
+    );
+}
+
+#[test]
+fn a_precancelled_call_starts_no_scope() {
+    use contract::provider::ModelCall as _;
+    let server = fakes::ProviderServer::start([fakes::Response::status(200, "ok")]).unwrap();
+    let endpoint = test_endpoint(&server);
+    let request = test_request();
+    let log = std::sync::Arc::new(RedactCapture {
+        lines: std::sync::Mutex::new(Vec::new()),
+    });
+    let clock = fakes::clock::FakeClock::new();
+    let net = TimingCapture::new();
+    let url = format!("{}/v1", server.url());
+    let timed = timed_call(
+        &endpoint,
+        &request,
+        url.clone(),
+        Vec::new(),
+        b"{}".to_vec(),
+        &log,
+        &clock,
+        &net,
+    );
+    timed.cancel();
+    let failed = fakes::within("the cancelled call to return", CALL_WITHIN, move || {
+        let mut deltas = Vec::new();
+        let reply = timed.run(&mut |delta| deltas.push(delta));
+        (reply, deltas)
+    });
+    let plain = crate::call::Call::new(
+        &endpoint,
+        &request,
+        url,
+        Vec::new(),
+        b"{}".to_vec(),
+        plain_decode,
+    );
+    plain.cancel();
+    let plain = fakes::within(
+        "the plain cancelled call to return",
+        CALL_WITHIN,
+        move || {
+            let mut deltas = Vec::new();
+            let reply = plain.run(&mut |delta| deltas.push(delta));
+            (reply, deltas)
+        },
+    );
+    assert_eq!(
+        format!("{:?}", failed.0),
+        format!("{:?}", plain.0),
+        "a cancel before the send keeps its ordinary error"
+    );
+    assert!(
+        server.requests().is_empty(),
+        "a cancelled call sends nothing"
+    );
+    assert_eq!(net.calls(), 0, "a call never sent starts no scope");
+    assert!(
+        log.serialized().is_empty(),
+        "a call never sent writes no line"
+    );
+}
+
+/// Runs `build`'s call and returns its reply's shape: every pre-send
+/// failure below must match its plain twin, send nothing and time nothing.
+fn pre_send_outcome(build: impl FnOnce() -> crate::call::Call + Send + 'static) -> String {
+    use contract::provider::ModelCall as _;
+    fakes::within("the pre-send call to return", CALL_WITHIN, move || {
+        let call = build();
+        let mut deltas = Vec::new();
+        let reply = call.run(&mut |delta| deltas.push(delta));
+        format!("{reply:?}")
+    })
+}
+
+#[test]
+fn signing_and_header_failures_start_no_scope() {
+    let refusing = std::sync::Arc::new(Refuses) as std::sync::Arc<dyn contract::signing::Signer>;
+    let bad_value =
+        std::sync::Arc::new(BadHeaderValue) as std::sync::Arc<dyn contract::signing::Signer>;
+    let cases = vec![
+        (
+            "a signing failure",
+            Some(std::sync::Arc::clone(&refusing)),
+            Vec::new(),
+        ),
+        (
+            "a refused fixed header",
+            None,
+            vec![("x-sig\nature".to_owned(), "sig".to_owned())],
+        ),
+        (
+            "a refused signed header",
+            Some(std::sync::Arc::clone(&bad_value)),
+            Vec::new(),
+        ),
+    ];
+    for (what, signer, headers) in cases {
+        let server = fakes::ProviderServer::start([fakes::Response::status(200, "ok")]).unwrap();
+        let mut endpoint = test_endpoint(&server);
+        endpoint.signer = signer.clone();
+        let request = test_request();
+        let url = format!("{}/v1", server.url());
+        let log = std::sync::Arc::new(RedactCapture {
+            lines: std::sync::Mutex::new(Vec::new()),
+        });
+        let clock = fakes::clock::FakeClock::new();
+        let net = TimingCapture::new();
+        let timed = timed_call(
+            &endpoint,
+            &request,
+            url.clone(),
+            headers.clone(),
+            b"{}".to_vec(),
+            &log,
+            &clock,
+            &net,
+        );
+        let failed = pre_send_outcome(move || timed);
+        let plain = crate::call::Call::new(
+            &endpoint,
+            &request,
+            url,
+            headers,
+            b"{}".to_vec(),
+            plain_decode,
+        );
+        let ordinary = pre_send_outcome(move || plain);
+        assert_eq!(failed, ordinary, "{what} keeps its ordinary error");
+        assert!(server.requests().is_empty(), "{what} sends nothing");
+        assert_eq!(net.calls(), 0, "{what} starts no scope");
+        assert_eq!(net.drops(), 0, "{what} drops no scope");
+        assert!(log.serialized().is_empty(), "{what} writes no line");
+    }
+}
+
+#[test]
+fn a_refused_observed_run_times_one_scope_without_milestones() {
+    use contract::provider::ModelCall as _;
+    let endpoint = crate::Endpoint {
+        base_url: fakes::refused::url(),
+        direct: true,
+        ..crate::Endpoint::default()
+    };
+    let request = test_request();
+    let log = std::sync::Arc::new(RedactCapture {
+        lines: std::sync::Mutex::new(Vec::new()),
+    });
+    let clock = fakes::clock::FakeClock::new();
+    let net = TimingCapture::new();
+    let url = format!("{}/v1", fakes::refused::url());
+    let timed = timed_call(
+        &endpoint,
+        &request,
+        url.clone(),
+        Vec::new(),
+        b"{}".to_vec(),
+        &log,
+        &clock,
+        &net,
+    );
+    let failed = fakes::within("the refused call to return", CALL_WITHIN, move || {
+        let mut deltas = Vec::new();
+        let reply = timed.run(&mut |delta| deltas.push(delta));
+        (reply, deltas)
+    });
+    let plain = crate::call::Call::new(
+        &endpoint,
+        &request,
+        url,
+        Vec::new(),
+        b"{}".to_vec(),
+        plain_decode,
+    );
+    let ordinary = fakes::within("the plain refused call to return", CALL_WITHIN, move || {
+        let mut deltas = Vec::new();
+        let reply = plain.run(&mut |delta| deltas.push(delta));
+        (reply, deltas)
+    });
+    assert_eq!(
+        format!("{:?}", failed.0),
+        format!("{:?}", ordinary.0),
+        "a refused send keeps its ordinary error"
+    );
+    assert_connector_scope(&net);
+    assert_eq!(net.drops(), 1, "the refused group drops once");
+    let lines = log.lines.lock().unwrap().clone();
+    assert_eq!(lines.len(), 1, "a sent-but-failed call still records");
+    assert_eq!(lines[0].status, None, "no response means no status");
+    assert_eq!(lines[0].headers_ms, None, "no headers means no header time");
+}
+
+#[test]
+fn an_observed_proxy_send_times_its_one_socket() {
+    let server = fakes::ProviderServer::start([fakes::Response::status(200, "{}")]).unwrap();
+    let proxy = fakes::ConnectProxy::start().unwrap();
+    let target = target_of(&server);
+    let url = format!("{}/v1", server.url());
+    let clock = fakes::clock::FakeClock::new();
+    let as_clock = || std::sync::Arc::clone(&clock) as std::sync::Arc<dyn contract::clock::Clock>;
+    let net = TimingCapture::new();
+    let route = super::Route {
+        via: super::Via::Through(proxy_through(&proxy)),
+        limits: net::LIMITS,
+    };
+    let clock = as_clock();
+    let timing = net.timing();
+    let cancel = std::sync::Arc::default();
+    let (sent, body, _) = fakes::within(
+        "the observed proxy send and response body to be read",
+        CALL_WITHIN,
+        move || {
+            let mut secrets = crate::redact::Secrets::default();
+            let sent = super::post_signed_observed(
+                &url,
+                &[],
+                b"{}",
+                None,
+                &route,
+                &cancel,
+                &mut secrets,
+                &clock,
+                Some(&timing),
+            );
+            match sent {
+                Ok(mut sent) => {
+                    let mut text = String::new();
+                    let body =
+                        std::io::Read::read_to_string(&mut sent.stream, &mut text).map(|_| text);
+                    (Ok(()), body, secrets)
+                }
+                Err(failed) => (Err(failed), Ok(String::new()), secrets),
+            }
+        },
+    );
+    match sent {
+        Ok(()) => {}
+        Err(failed) => panic!("the observed proxy send failed: {:?}", failed.error),
+    }
+    let text = body.unwrap();
+    assert_eq!(text, "{}", "the proxy send reached the origin");
+    assert!(
+        proxy.await_connects(1, CONNECT_WITHIN),
+        "the proxy recorded CONNECT {target}"
+    );
+    assert_eq!(proxy.connects(), [target]);
+    assert_connector_scope(&net);
+    assert_eq!(net.drops(), 1, "the proxy socket drops once");
+}
+
+#[test]
+fn the_net_scope_ends_while_the_response_is_held() {
+    use contract::provider::ModelCall as _;
+    let server = fakes::ProviderServer::start([fakes::Response::status(200, "ok")]).unwrap();
+    server.hold();
+    let endpoint = test_endpoint(&server);
+    let request = test_request();
+    let log = std::sync::Arc::new(RedactCapture {
+        lines: std::sync::Mutex::new(Vec::new()),
+    });
+    let clock = fakes::clock::FakeClock::new();
+    let net = TimingCapture::new();
+    let call = timed_call(
+        &endpoint,
+        &request,
+        format!("{}/v1", server.url()),
+        Vec::new(),
+        b"{}".to_vec(),
+        &log,
+        &clock,
+        &net,
+    );
+    let (done_tx, done_rx) = mpsc::channel();
+    std::thread::spawn(move || {
+        let mut deltas = Vec::new();
+        let reply = call.run(&mut |delta| deltas.push(delta));
+        match done_tx.send(format!("{reply:?}")) {
+            Ok(()) | Err(_) => {}
+        }
+    });
+    assert!(
+        server.await_requests(1, REQUEST_WITHIN),
+        "the server saw the call while holding its response"
+    );
+    assert_connector_scope(&net);
+    assert_eq!(
+        net.drops(),
+        1,
+        "the net scope is already complete while headers stay blocked"
+    );
+    clock.advance(std::time::Duration::from_millis(50));
+    server.release();
+    let reply = Deadline::after(CALL_WITHIN).recv_or_fail(&done_rx, "the held call to return");
+    assert!(
+        reply.contains("Ok("),
+        "the held call reads after release: {reply}"
+    );
+    assert_eq!(net.calls(), 1, "the later work adds no net event");
+    let lines = log.lines.lock().unwrap().clone();
+    assert_eq!(lines.len(), 1);
+    assert!(
+        lines[0].total_ms >= 50,
+        "the provider duration still covers the held work: {}",
+        lines[0].total_ms
+    );
 }

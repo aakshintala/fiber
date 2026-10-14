@@ -273,6 +273,12 @@ What is recorded:
   except the one monotonic read taken before the configuration is read to
   time `startup.config`, which is the only extra cost there. A new module
   or top-level operation lands with its timer in the same pull request.
+  Installed so far is `net.connect`: one scope around an actual connector
+  attempt group for a native observed request, from the first socket attempt
+  through socket admission. It excludes DNS before entry, TLS, CONNECT
+  negotiation and the response body, as well as pre-stopped and empty groups
+  and already-built tunnels. Other plain agent clients stay unobserved, and
+  MCP timing follows in a later part.
 
 An event inside a running session is recorded in that session's log and
 nowhere else, with one exception: a session or ask process's own diagnostic
