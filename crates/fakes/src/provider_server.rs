@@ -303,6 +303,11 @@ impl ProviderServer {
     /// accepts connections when this returns.
     fn start_with(state: State, clock: Arc<dyn Clock>) -> io::Result<Self> {
         let core = HttpServer::bind(Arc::clone(&clock), Limits::default())?;
+        Ok(Self::serve_on(state, clock, core))
+    }
+
+    /// Serves `state` on `core`, bound on `clock`.
+    fn serve_on(state: State, clock: Arc<dyn Clock>, core: HttpServer) -> Self {
         let addr = core.addr();
         let mut state = state;
         state.clock = Arc::clone(&clock);
@@ -318,7 +323,7 @@ impl ProviderServer {
         server
             .core
             .serve_persistent(move |conn| serve(conn, &shared, &wake, &ticking));
-        Ok(server)
+        server
     }
 
     /// [`ProviderServer::start`], on `clock`: the test drives timed holds
@@ -326,14 +331,19 @@ impl ProviderServer {
     /// the process clock.
     #[cfg(test)]
     pub(crate) fn start_on(clock: Arc<dyn Clock>, script: Vec<Response>) -> io::Result<Self> {
-        Self::start_with(
-            State {
-                script: script.into_iter().collect(),
-                fallback: Some(no_scripted_response()),
-                ..State::default()
-            },
-            clock,
-        )
+        Self::start_with(scripted(script), clock)
+    }
+
+    /// [`ProviderServer::start_on`], on a `core` the test bound on `clock`
+    /// and set up before any accept: its limits and gate hold from the
+    /// first window. Test-only.
+    #[cfg(test)]
+    pub(crate) fn start_on_core(
+        clock: Arc<dyn Clock>,
+        core: HttpServer,
+        script: Vec<Response>,
+    ) -> Self {
+        Self::serve_on(scripted(script), clock, core)
     }
 
     /// Receives every held-response wait announcement from here on.
@@ -606,6 +616,17 @@ fn hold_wait(state: &Mutex<State>, arrived: &Condvar, clock: &Arc<dyn Clock>) ->
             predicate,
         )
         .unwrap_or_else(|| lock(state));
+    }
+}
+
+/// A test script's state: `script` in order, then the 500 saying it ran
+/// out.
+#[cfg(test)]
+fn scripted(script: Vec<Response>) -> State {
+    State {
+        script: script.into_iter().collect(),
+        fallback: Some(no_scripted_response()),
+        ..State::default()
     }
 }
 
