@@ -123,10 +123,11 @@ pub(crate) fn carries(dir: &Path, manifest: &Manifest) -> Vec<String> {
 /// was fetched.
 pub struct Plan<'c> {
     root: String,
-    /// In dependency mode, the unstaged root's name and minimums: what the
-    /// pinned copy's own manifest needs, seeding reachability and wants
-    /// without ever staging the root itself. Absent for a personal plan.
-    seed: Option<(String, BTreeMap<String, String>)>,
+    /// In dependency mode, the unstaged root's name, version and
+    /// minimums: what the pinned copy's own manifest needs and is,
+    /// seeding reachability and wants without ever staging the root
+    /// itself. Absent for a personal plan.
+    seed: Option<Seed>,
     items: BTreeMap<String, Item>,
     fresh: BTreeSet<String>,
     damaged: Vec<Damaged>,
@@ -189,6 +190,15 @@ impl Drop for Plan<'_> {
     }
 }
 
+/// The unstaged root a dependency plan resolves from: its name, its
+/// manifest's version, and the minimums it states. Back-edge minima on
+/// the root's name are validated against the version with `root_meets`.
+struct Seed {
+    name: String,
+    version: String,
+    depends: BTreeMap<String, String>,
+}
+
 static NEXT: AtomicUsize = AtomicUsize::new(0);
 
 /// The locked, empty plan over `home`'s extensions, with a fresh scratch
@@ -228,7 +238,11 @@ pub(crate) fn plan_depends<'c>(
 ) -> Result<Plan<'c>, Error> {
     let (mut plan, id) = empty(home, clock)?;
     plan.root = root.name.clone();
-    plan.seed = Some((root.name.clone(), root.depends.clone()));
+    plan.seed = Some(Seed {
+        name: root.name.clone(),
+        version: root.version.clone(),
+        depends: root.depends.clone(),
+    });
     let mut ctx = Ctx {
         id,
         home,
@@ -613,17 +627,20 @@ impl Ctx<'_, '_> {
                 return Err(err);
             }
             // A personal plan replaces its root's minimum with the new
-            // version; a dependency plan keeps its unstaged root out of
-            // the check entirely.
-            if plan.seed.is_none()
-                && let Some(w) = wants.get(&plan.root)
-            {
-                let have = plan
-                    .items
-                    .get(&plan.root)
-                    .map(|item| item.version.clone())
-                    .unwrap_or_default();
-                root_meets(&plan.root, &have, w)?;
+            // version; a dependency plan validates back-edge minima on
+            // the root's name against the unstaged root manifest's
+            // version, and the root stays unstaged.
+            if let Some(w) = wants.get(&plan.root) {
+                if let Some(seed) = &plan.seed {
+                    root_meets(&plan.root, &seed.version, w)?;
+                } else {
+                    let have = plan
+                        .items
+                        .get(&plan.root)
+                        .map(|item| item.version.clone())
+                        .unwrap_or_default();
+                    root_meets(&plan.root, &have, w)?;
+                }
             }
             return Ok(());
         }
@@ -726,12 +743,12 @@ impl Ctx<'_, '_> {
         }
         // The unstaged root's own dependencies, under its name: the seed
         // a dependency plan resolves from, absent for a personal plan.
-        if let Some((name, depends)) = &plan.seed {
-            for (dep, min) in depends {
+        if let Some(seed) = &plan.seed {
+            for (dep, min) in &seed.depends {
                 wants
                     .entry(dep.clone())
                     .or_default()
-                    .insert(name.clone(), min.clone());
+                    .insert(seed.name.clone(), min.clone());
             }
         }
         wants
@@ -755,8 +772,8 @@ fn reachable(plan: &Plan) -> BTreeSet<String> {
         let seeded = plan
             .seed
             .as_ref()
-            .filter(|(root, _)| root == &name)
-            .map(|(_, depends)| depends);
+            .filter(|seed| seed.name == name)
+            .map(|seed| &seed.depends);
         if let Some(depends) = staged.or(seeded) {
             for dep in depends.keys() {
                 if reach.insert(dep.clone()) {

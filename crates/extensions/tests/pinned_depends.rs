@@ -502,3 +502,41 @@ fn never_skip_and_changed_content_install_nothing() {
         );
     }
 }
+
+#[test]
+fn a_compatible_back_edge_minimum_on_the_root_approves() {
+    let setup = Setup::new();
+    let mut repos = Repos::new(&setup);
+    let root = "fiber.test/root";
+    let helper = "example.com/acme/helper";
+    // The helper needs the root itself at a minimum the root manifest's
+    // version meets: the cycle approves without staging the root.
+    repos.tag(helper, "", "v1.0.0", &named(helper, &[(root, "1.0")]), &[]);
+    declare(&setup, &named(root, &[(helper, "1.0")]));
+    let digest = approve(&setup, &repos);
+    assert_eq!(dep_version(&setup, &digest, helper), "v1.0.0");
+    assert_eq!(dep_names(&setup, &digest), vec![config::dir_name(helper)]);
+}
+
+#[test]
+fn an_incompatible_back_edge_minimum_on_the_root_fails_and_commits_nothing() {
+    let setup = Setup::new();
+    let mut repos = Repos::new(&setup);
+    let root = "fiber.test/root";
+    let helper = "example.com/acme/helper";
+    // The helper needs the root at a major version above the root
+    // manifest's v1.0.0: a version conflict naming both, with nothing
+    // committed anywhere.
+    repos.tag(helper, "", "v1.0.0", &named(helper, &[(root, "2.0")]), &[]);
+    declare(&setup, &named(root, &[(helper, "1.0")]));
+    let clock = FakeClock::new();
+    let (found, digest) = item(&setup, &clock);
+    let err = store(&setup, &repos, &clock)
+        .approve(&found, &digest)
+        .unwrap_err();
+    let text = err.to_string();
+    assert!(text.contains(root) && text.contains(helper), "{text}");
+    assert!(matches!(err, Error::MajorConflict { .. }), "{text}");
+    assert!(!setup.home().join("pinned").join(&digest).exists());
+    assert!(!setup.home().join("projects").exists());
+}

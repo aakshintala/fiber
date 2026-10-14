@@ -681,3 +681,20 @@ fn an_unreadable_completion_marker_fails_naming_it() {
     assert!(ready(&setup, &digest).is_file());
     assert_eq!(fs::read(approval(&setup, &digest)).unwrap(), before);
 }
+
+#[test]
+fn fetch_debug_names_the_version_and_skips_the_origin() {
+    // The `Debug` names the fetch's version but never the origin's
+    // internals: a body replaced with an empty `Ok` (the surviving
+    // mutant) prints none of them. The public API suffices: no unit
+    // seam is needed.
+    let fetch = Fetch::new(
+        Origin::new("fiber-test-git", |name| name.to_owned()),
+        "0.1.0",
+        FakeClock::new(),
+    );
+    let text = format!("{fetch:?}");
+    assert!(text.contains("Fetch"), "{text}");
+    assert!(text.contains("0.1.0"), "{text}");
+    assert!(!text.contains("fiber-test-git"), "{text}");
+}
