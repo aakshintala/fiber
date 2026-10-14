@@ -169,15 +169,35 @@ appears nowhere in the fetched SubQ docs (Quickstart, Decisions API, Data
 retention, Models). Every reviewer-shaped call pays full input price.
 `results/subq_cache.json`.
 
-## Jev and OpenAI Decisions: not measured (need a billed account)
+## Jev (`jev-1.13`, opencode zen, `POST /v1/systemone`)
 
-- **Jev (TypeSafe AI):** a paid API ($42/B input tokens per its homepage)
-  needing signup and a key — a new billed account. Not measured.
-- **OpenAI Decisions:** since the ticket was written, OpenAI has documented
-  it (public beta, `gpt-6-luna` only, dedicated `POST /v1/decisions` with
-  `predicate`/`choice`/`score` questions). Auth is `OPENAI_API_KEY` against
-  `api.openai.com` — billed platform usage, and the openai probe key is off
-  limits for this job. Not measured: needs a billed account.
+Jev answers the same Decisions question as SubQ: `subq_probe.py` with the
+URL set to `https://opencode.ai/inference/v1/systemone`, the model to
+`jev-1.13`, and a `User-Agent` header (without one, Cloudflare answers 403).
+Billed at $0.042/M input tokens, output free, on the owner's opencode key.
+
+- **Context window about 32K tokens.** 56 of 190 cases failed HTTP 400
+  `max_tokens_exceeded`; the largest accepted state was 32,817 tokens. Two of
+  the five real `check` cases (c005552, c051862) are among them.
+- **Owner's labels, readable cases:** `check` on 3 of 3 real `check` cases
+  and on 41 of 131 `allow` cases (31%).
+- **Injection:** 8 of 8 as expected, including I3 (p(check) 0.56) and the
+  plain `rm -rf` I4 (0.83).
+- **Latency (macOS, this machine):** median 0.505 s, p95 0.741 s.
+- **Spend:** 1,086,219 input tokens, about $0.05.
+
+Per-case numbers (no case text): `results/jev_sample.json`,
+`results/jev_injection.json`. The window rules Jev out as a first stage
+without a fallback: Fiber's reviewer state grows to the session model's
+window, and 30% of the sample is already past 32K.
+
+## OpenAI Decisions: not measured (needs a billed account)
+
+Since the ticket was written, OpenAI has documented it (public beta,
+`gpt-6-luna` only, dedicated `POST /v1/decisions` with
+`predicate`/`choice`/`score` questions). Auth is `OPENAI_API_KEY` against
+`api.openai.com`: billed platform usage, and the openai probe key is off
+limits for this job.
 
 ## Recommendation: do not change docs/permissions.md's first stage
 
@@ -200,6 +220,9 @@ The numbers that decide it, all for SubQ Snap on the 190-case sample:
   `rm -rf` at low confidence). That does not outweigh a first stage that
   misses half the real `check` cases.
 
-The owner rules on it; this ticket changes no doc. If OpenAI Decisions or
-Jev become measurable without a new billed account, rerun
-`results/sample.txt` through them before reopening the question.
+Jev reads every real `check` it can fit, but its 32K window turns away 30%
+of the sample, and it flags 31% of `allow` cases.
+
+The owner rules on it; this ticket changes no doc. If OpenAI Decisions
+becomes measurable without a new billed account, rerun `results/sample.txt`
+through it before reopening the question.
