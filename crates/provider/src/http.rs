@@ -579,7 +579,7 @@ fn percent_decode(raw: &[u8]) -> Vec<u8> {
         match (look.next(), look.next()) {
             (Some(high), Some(low)) => match (hex_val(high), hex_val(low)) {
                 (Some(high), Some(low)) => {
-                    decoded.push(high << 4 | low);
+                    decoded.push((high << 4) + low);
                     bytes.next();
                     bytes.next();
                 }
