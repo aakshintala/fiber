@@ -529,7 +529,7 @@ impl Reads {
         // An end past what the clock can count expires at once, below.
         let stored = self.lock().shutdown_end;
         let now = clock.now();
-        let end = stored.or_else(|| now.checked_add(bound).or(Some(now)));
+        let end = stored.unwrap_or_else(|| now.checked_add(bound).unwrap_or(now));
         loop {
             // The generation is captured before the checks, as in
             // `credential`: a finish past this point ends the park below
@@ -546,7 +546,7 @@ impl Reads {
             if done {
                 return true;
             }
-            if end.is_some_and(|end| clock.now() >= end) {
+            if clock.now() >= end {
                 return false;
             }
             // A pending group is rechecked on a bounded cadence within
@@ -554,13 +554,14 @@ impl Reads {
             // first — never a fresh budget. A settle with only a count to
             // wait out parks to the end itself, as before.
             let wait_until = if retrying {
-                let poll = clock.now().checked_add(GROUP_POLL);
-                match (poll, end) {
-                    (Some(poll), Some(end)) => Some(poll.min(end)),
-                    (poll, end) => poll.or(end),
-                }
+                Some(
+                    clock
+                        .now()
+                        .checked_add(GROUP_POLL)
+                        .map_or(end, |poll| poll.min(end)),
+                )
             } else {
-                end
+                Some(end)
             };
             self.wake.park(clock, wait_until, seen);
         }
