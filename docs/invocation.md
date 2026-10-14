@@ -760,7 +760,10 @@ and a repeat does nothing. A SIGTERM or SIGINT after it is a second signal.
   process group, and its process group gets SIGTERM, then SIGKILL 800 ms
   later.
 - A credential command a `model` or `credential` switch is reading gets SIGKILL, and the
-  switch is rejected `closing`.
+  switch is rejected `closing`. On a foreground entry path (`fiber models`,
+  `fiber refresh-model-lists`, the terminal picker) it gets SIGKILL again until its
+  group is empty, within the shutdown bound: the entry point exits once every such
+  group is empty, or at the bound.
 - No model request is made, no ending notice is given, and no hook runs.
   Because no `after_tool` hook runs to redact it, a call cancelled by shutdown
   completes with no content and no artifact.

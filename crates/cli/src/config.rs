@@ -14,7 +14,7 @@ use contract::shapes::Failure;
 use extensions::Providers;
 use serde_json::Value;
 
-use crate::{fail, failed, project_of};
+use crate::{failed, project_of, with_dirs, write_line};
 
 /// Prints each notice as one line on standard error: exactly the notice's
 /// message, nothing else (`docs/configuration.md`, "When Fiber reads
@@ -59,16 +59,14 @@ fn run_get(
                 .map_err(|e| failed(ErrorCode::IoFailed, format!("standard error: {e}")))?;
             return Ok(());
         }
-        writeln!(out, "{notes}")
-            .map_err(|e| failed(ErrorCode::IoFailed, format!("standard output: {e}")))?;
+        write_line(out, &notes)?;
         return Ok(());
     }
     match config.get(key, None) {
         Some((value, source)) => {
             let text = serde_json::to_string(&value)
                 .map_err(|e| failed(ErrorCode::IoFailed, format!("a value for `{key}`: {e}")))?;
-            writeln!(out, "{text} from {source}")
-                .map_err(|e| failed(ErrorCode::IoFailed, format!("standard output: {e}")))?;
+            write_line(out, &format!("{text} from {source}"))?;
             Ok(())
         }
         None if !config::known_key(key) => Err(crate::usage(format!(
@@ -136,22 +134,6 @@ pub fn config_set_text(
         .lines()
         .map(str::to_owned)
         .collect())
-}
-
-/// Runs `run` with Fiber home and the current directory, mapping any failure
-/// to its exit code.
-fn with_dirs(run: impl FnOnce(&Path, &Path) -> Result<(), Failure>) -> i32 {
-    let ran = config::fiber_home_from_env()
-        .map_err(|e| failed(e.code(), e))
-        .and_then(|home| {
-            let workspace = std::env::current_dir()
-                .map_err(|e| failed(ErrorCode::IoFailed, format!("the current directory: {e}")))?;
-            run(&home, &workspace)
-        });
-    match ran {
-        Ok(()) => 0,
-        Err(e) => fail(e),
-    }
 }
 
 /// Checks a `model` value against the installed providers' cached model

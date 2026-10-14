@@ -21,7 +21,7 @@ use extensions::{Browser, Decision, Index, Store};
 
 use crate::approve::say;
 use crate::mcp::{Streams, config_failure};
-use crate::{fail, failed, project_of, usage};
+use crate::{failed, project_of, usage, with_dirs};
 
 /// A config path segment holding a `.` is quoted, as the startup seam
 /// reads it: `mcp.servers."a.b".url`.
@@ -214,58 +214,42 @@ pub(crate) fn run_logout(
 
 /// `fiber mcp login <server>` in the current directory.
 pub fn mcp_login(server: &str, remote: &dyn McpRemote, clock: Arc<dyn Clock>) -> i32 {
-    let ran = config::fiber_home_from_env()
-        .map_err(|e| failed(e.code(), e))
-        .and_then(|home| {
-            let workspace = std::env::current_dir()
-                .map_err(|e| failed(ErrorCode::IoFailed, format!("the current directory: {e}")))?;
-            let mut out = io::stdout();
-            let mut err = io::stderr();
-            let browser = extensions::SystemBrowser::default();
-            run_login(
-                &home,
-                &workspace,
-                server,
-                remote,
-                &browser,
-                &|| {},
-                Streams {
-                    out: &mut out,
-                    err: &mut err,
-                },
-                &clock,
-            )
-        });
-    match ran {
-        Ok(()) => 0,
-        Err(e) => fail(e),
-    }
+    with_dirs(|home, workspace| {
+        let mut out = io::stdout();
+        let mut err = io::stderr();
+        let browser = extensions::SystemBrowser::default();
+        run_login(
+            home,
+            workspace,
+            server,
+            remote,
+            &browser,
+            &|| {},
+            Streams {
+                out: &mut out,
+                err: &mut err,
+            },
+            &clock,
+        )
+    })
 }
 
 /// `fiber mcp logout <server>` in the current directory.
 pub fn mcp_logout(server: &str, remote: &dyn McpRemote) -> i32 {
-    let ran = config::fiber_home_from_env()
-        .map_err(|e| failed(e.code(), e))
-        .and_then(|home| {
-            let workspace = std::env::current_dir()
-                .map_err(|e| failed(ErrorCode::IoFailed, format!("the current directory: {e}")))?;
-            let mut out = io::stdout();
-            let mut err = io::stderr();
-            run_logout(
-                &home,
-                &workspace,
-                server,
-                remote,
-                Streams {
-                    out: &mut out,
-                    err: &mut err,
-                },
-            )
-        });
-    match ran {
-        Ok(()) => 0,
-        Err(e) => fail(e),
-    }
+    with_dirs(|home, workspace| {
+        let mut out = io::stdout();
+        let mut err = io::stderr();
+        run_logout(
+            home,
+            workspace,
+            server,
+            remote,
+            Streams {
+                out: &mut out,
+                err: &mut err,
+            },
+        )
+    })
 }
 
 #[cfg(test)]

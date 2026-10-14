@@ -12,7 +12,7 @@ use contract::{ErrorCode, HubLine, SessionId};
 use serde_json::{Value, json};
 
 use crate::approve::{confirmed, say};
-use crate::{fail, failed, project_of, usage};
+use crate::{failed, project_of, usage, with_dirs, write_line};
 
 /// What the delete prompt asks.
 const DELETE_PROMPT: &str = "delete? [y/N]";
@@ -27,17 +27,9 @@ const DELETE_ID: &str = "c_delete";
 /// `fiber sessions export <id> [<path>]` in the current directory: resolves
 /// the session, copies it, and prints the export directory's path.
 pub fn export(selector: &str, path: Option<&Path>) -> i32 {
-    let ran = config::fiber_home_from_env()
-        .map_err(|e| failed(e.code(), e))
-        .and_then(|home| {
-            let workspace = std::env::current_dir()
-                .map_err(|e| failed(ErrorCode::IoFailed, format!("the current directory: {e}")))?;
-            run(&home, &workspace, selector, path, &mut io::stdout())
-        });
-    match ran {
-        Ok(_) => 0,
-        Err(e) => fail(e),
-    }
+    // The inner run's directory value is discarded once its output
+    // succeeds; only the exit code leaves the wrapper.
+    with_dirs(|home, workspace| run(home, workspace, selector, path, &mut io::stdout()).map(|_| ()))
 }
 
 /// Resolves `selector` in the current directory's project and exports the
@@ -62,8 +54,7 @@ fn run(
         None => workspace.join(&id.0),
     };
     log::export(&sessions.join(&id.0), &target).map_err(|e| failed(e.code(), e))?;
-    writeln!(out, "{}", target.display())
-        .map_err(|e| failed(ErrorCode::IoFailed, format!("standard output: {e}")))?;
+    write_line(out, &target.display().to_string())?;
     Ok(target)
 }
 
@@ -78,31 +69,23 @@ pub fn delete(
 ) -> i32 {
     let stdin = io::stdin();
     let terminal = stdin.is_terminal();
-    let ran = config::fiber_home_from_env()
-        .map_err(|e| failed(e.code(), e))
-        .and_then(|home| {
-            let workspace = std::env::current_dir()
-                .map_err(|e| failed(ErrorCode::IoFailed, format!("the current directory: {e}")))?;
-            let ask = Ask {
-                yes,
-                terminal,
-                input: &mut stdin.lock(),
-                err: &mut io::stderr(),
-            };
-            delete_run(
-                &home,
-                &workspace,
-                selector,
-                cascade,
-                ask,
-                &mut io::stdout(),
-                connect,
-            )
-        });
-    match ran {
-        Ok(()) => 0,
-        Err(e) => fail(e),
-    }
+    with_dirs(|home, workspace| {
+        let ask = Ask {
+            yes,
+            terminal,
+            input: &mut stdin.lock(),
+            err: &mut io::stderr(),
+        };
+        delete_run(
+            home,
+            workspace,
+            selector,
+            cascade,
+            ask,
+            &mut io::stdout(),
+            connect,
+        )
+    })
 }
 
 /// How `delete` confirms: `yes` skips the question; otherwise it is asked
@@ -226,8 +209,7 @@ pub(crate) fn request(
 
 fn print_ids(out: &mut dyn Write, ids: &[SessionId]) -> Result<(), Failure> {
     for id in ids {
-        writeln!(out, "{}", id.0)
-            .map_err(|e| failed(ErrorCode::IoFailed, format!("standard output: {e}")))?;
+        write_line(out, &id.0)?;
     }
     Ok(())
 }

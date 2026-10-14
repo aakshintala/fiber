@@ -10,7 +10,7 @@ use contract::shapes::Failure;
 use serde_json::{Map, Value};
 
 use crate::sessions::request;
-use crate::{fail, failed};
+use crate::{failed, finish, write_line};
 
 /// The `id` of the `refresh` command `fiber hub refresh` sends.
 const REFRESH_ID: &str = "c_refresh";
@@ -22,10 +22,7 @@ const STATUS_ID: &str = "c_status";
 /// when none runs. Exits 0 when both commands are accepted; a rejection
 /// prints `fiber: <message>` and exits 1, as `sessions delete` does.
 pub fn hub_refresh(connect: &mut dyn FnMut() -> io::Result<doors::hub::Hub>) -> i32 {
-    match run(&mut io::stdout(), connect) {
-        Ok(()) => 0,
-        Err(e) => fail(e),
-    }
+    finish(run(&mut io::stdout(), connect))
 }
 
 /// Sends `refresh`, then `status`, and prints one line for the new
@@ -61,8 +58,7 @@ pub(crate) fn run(
             "the hub's answer to `status` has no variables",
         ));
     };
-    writeln!(out, "{line}")
-        .map_err(|e| failed(ErrorCode::IoFailed, format!("standard output: {e}")))?;
+    write_line(out, line)?;
     Ok(())
 }
 

@@ -17,11 +17,12 @@ use contract::ErrorCode;
 use contract::clock::Clock;
 use signal_hook::consts::{SIGTERM, SIGUSR1, SIGUSR2};
 
-use super::{CancelOnSignal, FOREGROUND, TERMINAL, guarded};
+use super::{CancelAndSettle, CancelOnSignal, FOREGROUND, TERMINAL, guarded};
 use crate::switch::Reads;
 use fakes::Deadline;
 use fakes::children::Ready;
 use fakes::clock::FakeClock;
+use support::group::GROUP_POLL;
 
 /// The deadline of each wait in these tests.
 const DEADLINE: Duration = Duration::from_secs(10);
@@ -62,7 +63,199 @@ fn credential_on_thread(
     finished
 }
 
-/// Arms `arm` with a recorder as its finish: the channel the signal number
+/// The watcher reaches its finish only after every cancelled group is
+/// empty: a listed sleep group and a held spawn both hold the shared
+/// shutdown. Releasing the spawn drains both, and only then does the
+/// recorded finish arrive, with the group gone.
+#[test]
+fn the_watcher_drains_a_listed_group_before_it_finishes() {
+    let root = fakes::TempDir::new("fiber-cancel-drains-group");
+    let ready = Ready::new(root.path());
+    let fake = FakeClock::new();
+    let clock: Arc<dyn Clock> = fake.clone();
+    let reads = Arc::new(Reads::default());
+    let script = format!("echo $$ > '{}'; exec sleep 600", ready.path().display());
+    // Before the spawn: the group is known only after it starts, so a
+    // command-line watchdog covers a spawn no later watchdog can reach.
+    let pre = fakes::Watchdog::matching(&ready.path().display().to_string());
+    // The listed group first: its ready line arrives after the spawn
+    // listed it, so the pause armed next holds only the spawn below.
+    let listed = {
+        let reads = Arc::clone(&reads);
+        std::thread::spawn(move || reads.command(&mut sh(&script)))
+    };
+    let pgid = ready.wait(DEADLINE)[0];
+    let watchdog = fakes::Watchdog::group(pgid);
+    // Then a held spawn, so the shutdown parks on the count as well as
+    // the group. The marker stays in its command line, so a leaked late
+    // child still matches.
+    let marker = format!("fiber-cancel-drains-{}", root.path().display());
+    let holding = fakes::Watchdog::matching(&marker);
+    let (entered, is_entered) = mpsc::channel::<()>();
+    let (release, freed) = mpsc::channel::<()>();
+    reads.pause_at_spawn(entered, freed);
+    let late = credential_on_thread(
+        &reads,
+        sh(&format!("sleep 30 # {marker}")),
+        Duration::from_secs(30),
+        &clock,
+    );
+    Deadline::after(DEADLINE)
+        .recv(&is_entered)
+        .expect("the spawn reached its pause");
+    let (is_fired, guard) = arm_recording(&reads, &clock, &[SIGTERM]);
+    signal_hook::low_level::raise(SIGTERM).expect("the test's raise");
+    // Held: the spawn is still counted, so the shared shutdown parks
+    // instead of finishing: the park proves it is held while the spawn
+    // remains held. The cancel can kill and retire the listed group
+    // before the settlement checks it; with only the held spawn left,
+    // the settlement parks at its end instead of its poll. Either park
+    // proves it is held.
+    let mut poll = fake.origin() + GROUP_POLL;
+    let end = fake.origin() + doors::SHUTDOWN_BOUND;
+    let held = Deadline::after(DEADLINE);
+    loop {
+        if fake.parked().contains(&Some(poll)) || fake.parked().contains(&Some(end)) {
+            break;
+        }
+        assert!(
+            !held.left().is_zero(),
+            "the shutdown parked while the spawn is held"
+        );
+        // A short ack of either park; expiry re-checks both under the
+        // shared deadline instead of pinning one.
+        if fake.await_parked(poll, held.left().min(Duration::from_millis(200)))
+            || fake.await_parked(end, held.left().min(Duration::from_millis(200)))
+        {
+            break;
+        }
+    }
+    release.send(()).expect("the spawn's release");
+    // The shutdown re-parks at its poll until every group is empty: each
+    // advance follows a confirmed park, and a park that never comes means
+    // the finish already arrived. The whole drive shares one deadline.
+    let drive = Deadline::after(DEADLINE);
+    let signal = loop {
+        match is_fired.try_recv() {
+            Ok(signal) => break signal,
+            Err(mpsc::TryRecvError::Disconnected) => {
+                panic!("the watcher ended without a finish")
+            }
+            Err(mpsc::TryRecvError::Empty) => {}
+        }
+        if fake.await_parked(poll, Duration::from_millis(200)) {
+            fake.advance(GROUP_POLL);
+            poll += GROUP_POLL;
+        } else if drive.left().is_zero() {
+            break drive.recv_or_fail(&is_fired, "the watcher's finish");
+        }
+    };
+    assert_eq!(signal, SIGTERM);
+    assert!(
+        fakes::group_empties(pgid, DEADLINE),
+        "the finish came after the group drained"
+    );
+    assert!(
+        fakes::matching_exits(&marker, DEADLINE),
+        "the late group is gone"
+    );
+    let error = Deadline::after(DEADLINE)
+        .recv(&late)
+        .expect("the late read")
+        .expect_err("a command spawned after the cancel");
+    assert_eq!(error.kind(), std::io::ErrorKind::Interrupted);
+    let _listed = fakes::within("the killed command", DEADLINE, move || {
+        listed.join().unwrap()
+    });
+    // The guard's drop joins the watcher: bounded on its own thread, so a
+    // hung settle fails here instead of hanging the binary.
+    fakes::within("the guard's drop", Duration::from_secs(3), move || {
+        drop(guard);
+    });
+    watchdog.stand_down(DEADLINE);
+    holding.stand_down(DEADLINE);
+    pre.stand_down(DEADLINE);
+}
+
+/// Repeat signals and the normal-return guard share the first shutdown
+/// end: the second signal earns no fresh bound, and the dropped guard
+/// settles on the spent end without parking. The held spawn keeps every
+/// wait parked until the test releases it.
+#[test]
+fn repeat_signals_and_the_return_guard_share_the_first_end() {
+    let fake = FakeClock::new();
+    let clock: Arc<dyn Clock> = fake.clone();
+    let end = fake.origin() + doors::SHUTDOWN_BOUND;
+    let reads = Arc::new(Reads::default());
+    // The marker stays in the held shell's command line, so a leaked late
+    // child still matches: the watchdog reaps the group on every path,
+    // including a failed assertion before the release below.
+    let root = fakes::TempDir::new("fiber-cancel-shared-end");
+    let marker = format!("fiber-cancel-shared-end-{}", root.path().display());
+    let holding = fakes::Watchdog::matching(&marker);
+    let (entered, is_entered) = mpsc::channel::<()>();
+    let (release, freed) = mpsc::channel::<()>();
+    reads.pause_at_spawn(entered, freed);
+    let late = credential_on_thread(
+        &reads,
+        sh(&format!("sleep 30 # {marker}")),
+        Duration::from_secs(30),
+        &clock,
+    );
+    Deadline::after(DEADLINE)
+        .recv(&is_entered)
+        .expect("the spawn reached its pause");
+    let (is_fired, guard) = arm_recording(&reads, &clock, &[SIGTERM]);
+    signal_hook::low_level::raise(SIGTERM).expect("the test's raise");
+    // The exact park pins the stored end: no fresh bound starts here.
+    assert!(
+        fake.await_parked(end, DEADLINE),
+        "the first shutdown parked at its end"
+    );
+    // Raised while the first shutdown still parks, so it queues behind
+    // it; every finish below carries the same number either way.
+    signal_hook::low_level::raise(SIGTERM).expect("the test's second raise");
+    // Past the first end both shutdowns answer `false`.
+    fake.advance(doors::SHUTDOWN_BOUND + Duration::from_secs(1));
+    assert_eq!(
+        Deadline::after(DEADLINE)
+            .recv(&is_fired)
+            .expect("the first finish"),
+        SIGTERM
+    );
+    // On the short bound: a fresh end would park this past every advance
+    // already made, so an arrival proves the repeat reused the spent one.
+    assert_eq!(
+        Deadline::after(SHORT)
+            .recv(&is_fired)
+            .expect("the second finish"),
+        SIGTERM
+    );
+    // The normal-return guard drops onto the same spent end: it answers at
+    // once instead of parking, so the bounded drop below would fail it.
+    let plain = CancelAndSettle(Arc::clone(&reads), Arc::clone(&clock));
+    fakes::within(
+        "the return guard's drop",
+        Duration::from_secs(3),
+        move || {
+            drop(plain);
+        },
+    );
+    release.send(()).expect("the spawn's release");
+    let error = Deadline::after(DEADLINE)
+        .recv(&late)
+        .expect("the late read")
+        .expect_err("a command spawned after the cancel");
+    assert_eq!(error.kind(), std::io::ErrorKind::Interrupted);
+    assert!(
+        fakes::matching_exits(&marker, DEADLINE),
+        "the late group is gone"
+    );
+    fakes::within("the guard's drop", Duration::from_secs(3), move || {
+        drop(guard);
+    });
+    holding.stand_down(DEADLINE);
+}
 /// arrives on, and the guard. The recorder is the only injected part.
 fn arm_recording(
     reads: &Arc<Reads>,

@@ -18,6 +18,7 @@ use contract::shapes::Failure;
 use doors::failure;
 use rustix::process::{Pid, Signal};
 use support::clock::Parker;
+use support::group::GROUP_POLL;
 
 /// Why a read ends once shutdown has started.
 const CLOSING: &str = "The session is shutting down.";
@@ -101,8 +102,112 @@ struct State {
     waiting: BTreeMap<u64, Box<dyn FnOnce() + Send>>,
     next: u64,
     /// Every listed credential command group: one stays listed until no
-    /// process is left in it.
+    /// process is left in it. A spawn that raced a cancel lists its group
+    /// for settlement too: the leader's reap never retires surviving
+    /// descendants. Settlement retires a group only on SRCH and sends
+    /// SIGKILL to the rest again on every pass.
     groups: Vec<u32>,
+    /// The foreground shutdown's absolute end, stored once by the first
+    /// [`Reads::cancel_and_settle`] before its cancel: every later settle
+    /// reuses it, so no retry, no group and no caller earns more time.
+    /// Absent outside a foreground shutdown, where each settle keeps its
+    /// own bound.
+    shutdown_end: Option<Instant>,
+    /// Scripted probe/send outcomes for one owned listed group, armed by a
+    /// test. Absent outside the unit tests.
+    #[cfg(test)]
+    script: Option<GroupScript>,
+}
+
+/// Scripted probe/send outcomes for one owned listed group: the kernel
+/// results a test needs that no external seam can force (a kill the walk
+/// loses, EPERM, a persistent errno). Consulted only after the guarded id
+/// validation, and only for the armed group; every other id takes the real
+/// syscalls. It scripts the repair's policy — what a pending probe earns
+/// — never the macOS walk itself.
+#[cfg(test)]
+struct GroupScript {
+    group: u32,
+    /// Probe errnos consumed in order; exhausted, the real probe runs.
+    probes: std::collections::VecDeque<rustix::io::Result<()>>,
+    /// Send outcomes consumed in order; exhausted, an accepted send.
+    sends: std::collections::VecDeque<rustix::io::Result<()>>,
+    /// Every send to the scripted group, scripted or exhausted.
+    sent: usize,
+}
+
+impl State {
+    /// Drops groups with no member left — only SRCH retires one — without
+    /// signalling: a new spawn prunes, it never kills another group.
+    fn prune_empty(&mut self) {
+        let mut kept = Vec::with_capacity(self.groups.len());
+        for group in std::mem::take(&mut self.groups) {
+            if self.group_alive(group) {
+                kept.push(group);
+            }
+        }
+        self.groups = kept;
+    }
+
+    /// Prunes groups with no member left and sends SIGKILL to every group
+    /// still pending, through the shared helper: the cancel's immediate
+    /// kill and settlement's every pass share this one site.
+    fn kill_pending(&mut self) {
+        self.prune_empty();
+        for group in self.groups.clone() {
+            self.kill_listed(group);
+        }
+    }
+
+    /// Whether a listed group still holds a member: only SRCH retires it.
+    /// An accepted probe, PERM and every other errno keep it pending.
+    fn group_alive(&mut self, group: u32) -> bool {
+        if !signallable(group) || pid(group).is_none() {
+            return false;
+        }
+        #[cfg(test)]
+        if let Some(outcome) = self.scripted_probe(group) {
+            return probe_means_alive(outcome);
+        }
+        alive(group)
+    }
+
+    /// Sends SIGKILL to a listed group through the shared helper. A send
+    /// proves delivery was accepted, never that the group is empty: the
+    /// next probe decides that.
+    fn kill_listed(&mut self, group: u32) {
+        if !signallable(group) || pid(group).is_none() {
+            return;
+        }
+        #[cfg(test)]
+        if let Some(outcome) = self.scripted_send(group) {
+            outcome.unwrap_or(());
+            return;
+        }
+        kill_group(group)
+    }
+
+    /// The next scripted probe outcome for the armed group, if this is it.
+    #[cfg(test)]
+    fn scripted_probe(&mut self, group: u32) -> Option<rustix::io::Result<()>> {
+        let script = self.script.as_mut()?;
+        if script.group != group {
+            return None;
+        }
+        script.probes.pop_front()
+    }
+
+    /// Records a send to the armed group and takes its next scripted
+    /// outcome, if this is it.
+    #[cfg(test)]
+    fn scripted_send(&mut self, group: u32) -> Option<rustix::io::Result<()>> {
+        let script = self.script.as_mut()?;
+        if script.group != group {
+            return None;
+        }
+        script.sent += 1;
+        Some(script.sends.pop_front().unwrap_or(Ok(())))
+    }
 }
 
 impl Reads {
@@ -343,11 +448,12 @@ impl Reads {
 
     /// Refuses when cancelled, counts the spawn, spawns `command` as a
     /// group leader with the lock released, then lists its group under the
-    /// lock. A cancel that landed mid-spawn kills the late group here with
-    /// SIGKILL, reaps the leader, and is `Interrupted` without ever listing
-    /// the group, so no command escapes a cancel. [`Reads::settle`] waits
-    /// for the count to reach zero, so an exit after a cancel never leaves
-    /// a spawn in flight behind.
+    /// lock. A cancel that landed mid-spawn lists the late group for
+    /// settlement under the relock, then kills it with SIGKILL, reaps the
+    /// leader with the lock released, and is `Interrupted`, so no command
+    /// escapes a cancel and no descendant outlives the settle.
+    /// [`Reads::settle`] waits for the count to reach zero, so an exit
+    /// after a cancel never leaves a spawn in flight behind.
     fn spawn(&self, command: &mut Command) -> io::Result<Child> {
         {
             let mut state = self.lock();
@@ -369,24 +475,25 @@ impl Reads {
         };
         let group = child.id();
         let mut state = self.lock();
-        if state.cancelled {
-            kill_group(group);
+        let late = state.cancelled;
+        state.prune_empty();
+        state.groups.push(group);
+        self.wake.bump();
+        if late {
             // Reaped with the lock released: a leader in uninterruptible
             // sleep (a hung filesystem) must not stall a cancel behind it.
-            // The count drops only after the reap, under a fresh lock, so
-            // a settle that returns has seen the leader reaped, never just
-            // the kill sent.
+            // The group stays listed through the reap below, and the count
+            // drops only after it, so a settle that returns has seen the
+            // leader reaped, never just the kill sent.
             drop(state);
+            self.lock().kill_listed(group);
             #[cfg(test)]
             self.pause_before_reap();
             let _reaped = child.wait();
             self.spawned_out();
             return Err(interrupted());
         }
-        state.groups.retain(|group| alive(*group));
-        state.groups.push(group);
         state.spawning -= 1;
-        self.wake.bump();
         drop(state);
         #[cfg(test)]
         self.pause_after_listed();
@@ -401,40 +508,71 @@ impl Reads {
         self.wake.bump();
     }
 
-    /// Waits until no spawn is still in flight, or `bound` on `clock`
-    /// passes: `true` once every counted spawn listed or killed its group
-    /// and reaped its leader, `false` at the bound. A `true` after a
-    /// cancel leaves no group behind: a spawn that raced the cancel has
-    /// relocked, seen it, killed its group and reaped the leader. The
+    /// Waits until no spawn is still in flight and, once cancelled, every
+    /// listed group is empty, or the bound passes. Outside a cancelled
+    /// shutdown this keeps its count-only contract and its own bound: the
     /// clock subscription comes before the first count read, so a clock
     /// advance wakes even a settle that started with nothing spawned.
-    /// `false` is the same SIGKILL-or-hung-filesystem case the bound
-    /// covers elsewhere: the caller exits anyway.
+    /// Within a foreground shutdown it reads the end the first
+    /// [`Reads::cancel_and_settle`] stored, not a fresh bound: neither a
+    /// retry nor another group earns more time. Every pass prunes only
+    /// groups observed SRCH and sends SIGKILL to the rest again, together,
+    /// rechecking on a bounded cadence within the same end. `true` leaves
+    /// no group behind: a spawn that raced the cancel relocked, listed its
+    /// group, killed it and reaped the leader. `false` is the same
+    /// SIGKILL-or-hung-filesystem case the bound covers elsewhere: the
+    /// caller exits anyway.
     pub(crate) fn settle(&self, clock: &dyn Clock, bound: Duration) -> bool {
         let wake = Arc::clone(&self.wake);
         let subscribing: Arc<dyn Wake> = wake.clone();
         clock.subscribe(Arc::downgrade(&subscribing));
-        let end = clock.now().checked_add(bound);
+        // An end past what the clock can count expires at once, below.
+        let stored = self.lock().shutdown_end;
+        let now = clock.now();
+        let end = stored.unwrap_or_else(|| now.checked_add(bound).unwrap_or(now));
         loop {
             // The generation is captured before the checks, as in
             // `credential`: a finish past this point ends the park below
             // at once, so no decrement lands unheard.
             let seen = self.wake.generation();
-            if self.lock().spawning == 0 {
+            let (done, retrying) = {
+                let mut state = self.lock();
+                if state.cancelled {
+                    state.kill_pending();
+                }
+                let done = state.spawning == 0 && (!state.cancelled || state.groups.is_empty());
+                (done, state.cancelled && !state.groups.is_empty())
+            };
+            if done {
                 return true;
             }
-            if end.is_some_and(|end| clock.now() >= end) {
+            if clock.now() >= end {
                 return false;
             }
-            self.wake.park(clock, end, seen);
+            // A pending group is rechecked on a bounded cadence within
+            // the same end — the next poll or the end, whichever is
+            // first — never a fresh budget. A settle with only a count to
+            // wait out parks to the end itself, as before.
+            let wait_until = if retrying {
+                Some(
+                    clock
+                        .now()
+                        .checked_add(GROUP_POLL)
+                        .map_or(end, |poll| poll.min(end)),
+                )
+            } else {
+                Some(end)
+            };
+            self.wake.park(clock, wait_until, seen);
         }
     }
 
     /// Cancels every read: answers each waiting `run` with `closing`, makes
     /// every later `run` and `command` refuse, wakes every `credential`
-    /// wait, and sends SIGKILL to every listed group with a process left.
-    /// A credential command holds no state to tidy, so it gets no grace
-    /// period.
+    /// wait, and sends SIGKILL to every listed group with a process left,
+    /// through the shared helper. Only SRCH retires a listed group; the
+    /// rest stay listed for settlement. A credential command holds no state
+    /// to tidy, so it gets no grace period.
     pub(crate) fn cancel(&self) {
         let mut state = self.lock();
         state.cancelled = true;
@@ -442,12 +580,26 @@ impl Reads {
             wake();
         }
         self.wake.bump();
-        state.groups.retain(|group| alive(*group));
-        for group in &state.groups {
-            if let Some(pid) = signallable(*group).then(|| pid(*group)).flatten() {
-                rustix::process::kill_process_group(pid, Signal::KILL).unwrap_or(());
+        state.kill_pending();
+    }
+
+    /// Cancels the reads and settles them within one shared bound. The
+    /// first call stores the shutdown end from the clock before its
+    /// cancel, and every later call — a repeat signal, another group,
+    /// another guard's drop — reuses it, so no retry, no group and no
+    /// caller earns more time. An end past what the clock can count
+    /// expires at once. Returns what the settle saw: `false` at the bound
+    /// with anything still pending.
+    pub(crate) fn cancel_and_settle(&self, clock: &dyn Clock, bound: Duration) -> bool {
+        {
+            let now = clock.now();
+            let mut state = self.lock();
+            if state.shutdown_end.is_none() {
+                state.shutdown_end = Some(now.checked_add(bound).unwrap_or(now));
             }
         }
+        self.cancel();
+        self.settle(clock, bound)
     }
 
     fn lock(&self) -> std::sync::MutexGuard<'_, State> {
@@ -457,6 +609,29 @@ impl Reads {
 
 #[cfg(test)]
 impl Reads {
+    /// Scripts probe/send outcomes for one owned listed group (see
+    /// [`GroupScript`]): the kernel results no external seam can force.
+    /// Armed only for a group this `Reads` listed; every other id takes
+    /// the real syscalls after the same guarded validation.
+    pub(crate) fn script_group(
+        &self,
+        group: u32,
+        probes: Vec<rustix::io::Result<()>>,
+        sends: Vec<rustix::io::Result<()>>,
+    ) {
+        self.lock().script = Some(GroupScript {
+            group,
+            probes: probes.into(),
+            sends: sends.into(),
+            sent: 0,
+        });
+    }
+
+    /// Every send to the scripted group so far, scripted or exhausted.
+    pub(crate) fn scripted_sends(&self) -> usize {
+        self.lock().script.as_ref().map_or(0, |script| script.sent)
+    }
+
     /// Arms one pause of the next `credential` wait at its checks: the
     /// wait sends on `checked` after passing its checks and blocks until
     /// `release` arrives (`docs/testing.md`, "Waits and timeouts"). The
@@ -617,10 +792,23 @@ fn timed_out() -> io::Error {
     )
 }
 
-/// Whether a process is left in group `group`.
+/// Whether a group probe leaves a member in the group: only SRCH — no
+/// such group — empties it. An accepted probe, PERM and every other errno
+/// keep the group pending for the next pass. A successful send proves
+/// delivery was accepted, never that the group is empty.
+fn probe_means_alive(outcome: rustix::io::Result<()>) -> bool {
+    match outcome {
+        Ok(()) => true,
+        Err(rustix::io::Errno::SRCH) => false,
+        Err(_) => true,
+    }
+}
+/// Whether a process is left in group `group`: only SRCH retires it (see
+/// [`probe_means_alive`]).
 fn alive(group: u32) -> bool {
     signallable(group)
-        && pid(group).is_some_and(|pid| rustix::process::test_kill_process_group(pid).is_ok())
+        && pid(group)
+            .is_some_and(|pid| probe_means_alive(rustix::process::test_kill_process_group(pid)))
 }
 
 /// Group 1 or 0 is never a credential command's: `kill(-1)` reaches every

@@ -11,7 +11,7 @@ use contract::clock::Clock;
 use contract::shapes::Failure;
 use extensions::{Index, Store};
 
-use crate::{fail, failed, project_of, usage};
+use crate::{failed, project_of, usage, with_dirs, write_line};
 
 /// What the prompt asks.
 const PROMPT: &str = "approve all? [y/N]";
@@ -30,19 +30,12 @@ struct Streams<'a> {
 /// once, and refuses when nobody can answer. The clock bounds an extension's
 /// install step when its copy is built.
 pub fn approve(yes: bool, clock: Arc<dyn Clock>) -> i32 {
-    let prepared = config::fiber_home_from_env()
-        .map_err(|e| failed(e.code(), e))
-        .and_then(|home| {
-            let workspace = std::env::current_dir()
-                .map_err(|e| failed(ErrorCode::IoFailed, format!("the current directory: {e}")))?;
-            Ok((home, workspace))
-        });
-    let stdin = io::stdin();
-    let terminal = stdin.is_terminal();
-    let ran = prepared.and_then(|(home, workspace)| {
+    with_dirs(|home, workspace| {
+        let stdin = io::stdin();
+        let terminal = stdin.is_terminal();
         run(
-            &home,
-            &workspace,
+            home,
+            workspace,
             yes,
             terminal,
             Streams {
@@ -52,11 +45,7 @@ pub fn approve(yes: bool, clock: Arc<dyn Clock>) -> i32 {
             },
             clock,
         )
-    });
-    match ran {
-        Ok(()) => 0,
-        Err(e) => fail(e),
-    }
+    })
 }
 
 /// Shows the pending items on `out`, asks on `err` unless `yes`, then
@@ -85,17 +74,18 @@ fn run(
         return Ok(());
     }
     for p in &pending {
-        say(
+        write_line(
             out,
             &format!(
-                "{} {} ({})\n",
+                "{} {} ({})",
                 extensions::kind_name(p.item.kind),
                 p.item.name,
                 p.item.path
             ),
-        );
+        )
+        .unwrap_or(());
         for line in p.offered.summary.lines() {
-            say(out, &format!("  {line}\n"));
+            write_line(out, &format!("  {line}")).unwrap_or(());
         }
         if let Some(diff) = &p.offered.diff {
             say(out, diff);
