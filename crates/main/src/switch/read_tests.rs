@@ -1157,12 +1157,16 @@ fn cancel_passes_a_blocked_spawn_and_the_late_child_is_killed() {
 /// drive's one deadline: each acknowledgement waits only a poll pause of
 /// it, and an acknowledgement's expiry re-checks completion and awaits
 /// the late park under what is left, never stopping the drive while time
-/// remains. Fails the test when the drive's deadline runs out first.
+/// remains. Held command threads stay held past the first advance, so
+/// their leaders are zombies and their groups stay listed while the fake
+/// clock moves; dropping their release senders then releases them.
+/// Fails the test when the drive's deadline runs out first.
 #[track_caller]
 fn drive_settle_to_completion(
     clock: &Arc<FakeClock>,
     finished: &mpsc::Receiver<bool>,
     drive: &Deadline,
+    releases: Vec<mpsc::Sender<()>>,
 ) -> bool {
     let poll = clock.origin() + GROUP_POLL;
     assert!(
@@ -1170,6 +1174,9 @@ fn drive_settle_to_completion(
         "the settle parked at its poll"
     );
     let mut mark = clock.advance_marked(Duration::from_millis(50));
+    for release in releases {
+        drop(release);
+    }
     loop {
         if let Ok(answer) = finished.try_recv() {
             return answer;
@@ -1204,6 +1211,13 @@ fn settle_rekills_a_cancelled_survivor_before_answering_true() {
     let (listed_tx, listed_rx) = mpsc::channel::<()>();
     let (release_tx, release_rx) = mpsc::channel::<()>();
     reads.pause_at_listed(listed_tx, release_rx);
+    // Held before the reap: the acknowledgement proves the command thread
+    // reached its leader's reap, so the leader stays a zombie and the
+    // group stays listed until the drive below releases it. The pause is
+    // one-shot, so it is armed before the only command thread starts.
+    let (held_tx, is_held) = mpsc::channel::<()>();
+    let (free_tx, freed_rx) = mpsc::channel::<()>();
+    reads.pause_at_command_reap(held_tx, freed_rx);
     let running = {
         let reads = Arc::clone(&reads);
         std::thread::spawn(move || reads.command(&mut sh(&script)))
@@ -1216,6 +1230,9 @@ fn settle_rekills_a_cancelled_survivor_before_answering_true() {
     assert_eq!(listed(&reads), vec![pgid], "listed while it runs");
     assert_eq!(reads.lock().spawning, 0, "nothing in flight");
     release_tx.send(()).unwrap();
+    Deadline::after(DEADLINE)
+        .recv(&is_held)
+        .expect("the command held before its reap");
     assert!(
         fakes::kill_group(pgid, "0").unwrap(),
         "the member lives before the settle"
@@ -1226,7 +1243,7 @@ fn settle_rekills_a_cancelled_survivor_before_answering_true() {
     reads.lock().cancelled = true;
     let settled = settle_on_thread(&reads, &clock, doors::SHUTDOWN_BOUND);
     let drive = Deadline::after(DEADLINE);
-    let answer = drive_settle_to_completion(&clock, &settled, &drive);
+    let answer = drive_settle_to_completion(&clock, &settled, &drive, vec![free_tx]);
     let lives = fakes::kill_group(pgid, "0").unwrap_or(false);
     // Guarded cleanup before the assertions: the survivor must not
     // outlive the test either way.
@@ -1351,19 +1368,36 @@ fn settle_drains_two_groups_together_within_one_bound() {
     let (listed_one, is_listed_one) = mpsc::channel::<()>();
     let (free_one, freed_one) = mpsc::channel::<()>();
     reads.pause_at_listed(listed_one, freed_one);
+    // Each command thread also holds before it reaps its leader, so the
+    // second group's leader stays a zombie and the group stays listed
+    // until the drive below releases it. The pauses are one-shot: the
+    // first hold is armed before the first thread starts and acknowledged
+    // before the second is armed, so each thread consumes its own.
+    let (held_one, is_held_one) = mpsc::channel::<()>();
+    let (release_one, freed_reap_one) = mpsc::channel::<()>();
+    reads.pause_at_command_reap(held_one, freed_reap_one);
     let running_one = start(&reads, &ready_one);
     Deadline::after(DEADLINE)
         .recv(&is_listed_one)
         .expect("the first group listed");
     free_one.send(()).unwrap();
+    Deadline::after(DEADLINE)
+        .recv(&is_held_one)
+        .expect("the first command held before its reap");
     let (listed_two, is_listed_two) = mpsc::channel::<()>();
     let (free_two, freed_two) = mpsc::channel::<()>();
     reads.pause_at_listed(listed_two, freed_two);
+    let (held_two, is_held_two) = mpsc::channel::<()>();
+    let (release_two, freed_reap_two) = mpsc::channel::<()>();
+    reads.pause_at_command_reap(held_two, freed_reap_two);
     let running_two = start(&reads, &ready_two);
     Deadline::after(DEADLINE)
         .recv(&is_listed_two)
         .expect("the second group listed");
     free_two.send(()).unwrap();
+    Deadline::after(DEADLINE)
+        .recv(&is_held_two)
+        .expect("the second command held before its reap");
     let pgid_one: u32 = ready_line(&ready_one).parse().unwrap();
     let pgid_two: u32 = ready_line(&ready_two).parse().unwrap();
     let watchdog_one = fakes::Watchdog::group(pgid_one);
@@ -1388,7 +1422,7 @@ fn settle_drains_two_groups_together_within_one_bound() {
     // pass, whatever wall time the real group's death takes.
     let drive = Deadline::after(DEADLINE);
     assert!(
-        drive_settle_to_completion(&clock, &finished, &drive),
+        drive_settle_to_completion(&clock, &finished, &drive, vec![release_one, release_two]),
         "both groups drain within the one bound"
     );
     assert_eq!(reads.scripted_sends(), 2, "one send per pass before SRCH");

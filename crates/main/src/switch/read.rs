@@ -53,6 +53,10 @@ pub(crate) struct Reads {
     /// Absent outside the unit tests.
     #[cfg(test)]
     listed_pause: Mutex<Option<SpawnPause>>,
+    /// The next `command`'s pause before it reaps its leader, armed by a
+    /// test. Absent outside the unit tests.
+    #[cfg(test)]
+    command_pause: Mutex<Option<SpawnPause>>,
 }
 
 /// One pause of a `credential` wait at its checks, for the interleaving
@@ -254,6 +258,10 @@ impl Reads {
     /// `Interrupted`.
     pub(crate) fn command(&self, command: &mut Command) -> io::Result<Output> {
         let child = self.spawn(command)?;
+        // Held only when a test armed a pause, so the leader stays a
+        // zombie and its group stays listed until the test releases it.
+        #[cfg(test)]
+        self.pause_before_command_reap();
         let output = child.wait_with_output()?;
         if self.lock().cancelled {
             return Err(interrupted());
@@ -832,6 +840,40 @@ impl Reads {
     fn pause_before_reap(&self) {
         let point = self
             .reap_pause
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .take();
+        if let Some(point) = point {
+            match point.entered.send(()) {
+                Ok(()) | Err(_) => {}
+            }
+            match point.release.recv() {
+                Ok(()) | Err(_) => {}
+            }
+        }
+    }
+
+    /// Arms one pause before the next `command` reaps its leader: the
+    /// command thread sends on `entered` once its spawn listed its group
+    /// and blocks until `release` arrives, so the leader stays a zombie
+    /// and its group stays listed until the test releases it. The pause
+    /// is one-shot.
+    pub(crate) fn pause_at_command_reap(
+        &self,
+        entered: mpsc::Sender<()>,
+        release: mpsc::Receiver<()>,
+    ) {
+        *self
+            .command_pause
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner) = Some(SpawnPause { entered, release });
+    }
+
+    /// Reports the command reached its leader's reap and blocks until the
+    /// test releases it. Runs free unless a test armed a pause meanwhile.
+    fn pause_before_command_reap(&self) {
+        let point = self
+            .command_pause
             .lock()
             .unwrap_or_else(PoisonError::into_inner)
             .take();
