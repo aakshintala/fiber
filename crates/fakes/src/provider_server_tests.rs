@@ -1079,15 +1079,15 @@ fn busy_shaped_posts_sleep_only_when_idle() {
     .unwrap();
     // Armed before the first window, so every park holds from the start.
     let gate = core.test_gate();
-    let _release = ReleaseOnDrop {
-        gate: Arc::clone(&gate),
-    };
     gate.arm();
     let held = gate
         .held_notes()
         .expect("the test takes the held announcements");
     let replied = gate.held_sender();
     let server = ProviderServer::start_on_core(clock.clone(), core, script);
+    let _release = ReleaseOnDrop {
+        gate: Arc::clone(&gate),
+    };
     let addr = server.addr;
     let next = |deadline: &Deadline, what: &str| deadline.recv_or_fail(&held, what).0;
     let deadline = Deadline::after(READ_WITHIN);
