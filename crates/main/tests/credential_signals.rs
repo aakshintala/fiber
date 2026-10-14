@@ -27,7 +27,7 @@ use std::time::Duration;
 use fakes::children::Ready;
 use fakes::{Deadline, Watchdog};
 use serde_json::json;
-use support::pty::Run;
+use support::pty::{Grid, Run};
 
 /// A temporary root holding Fiber home and the workspace, removed on drop,
 /// with this test's own path to the built `fiber`.
@@ -128,6 +128,20 @@ impl Setup {
 /// Stderr as text.
 fn stderr(output: &Output) -> String {
     String::from_utf8_lossy(&output.stderr).into_owned()
+}
+
+/// Whether the grid shows the open model picker with its catalogue read
+/// owed or running: the picker's filter row, with the refreshing mark
+/// once the cached lists arrived or the reading line while they have
+/// not. The open picker proves the Ctrl+L keystroke landed, and the
+/// owed or running read proves its catalogue read was asked, so the
+/// credential command runs and writes its ready line.
+fn picker_read_running(screen: &Grid) -> bool {
+    screen.rows.iter().any(|row| row.contains("Type to search"))
+        && screen
+            .rows
+            .iter()
+            .any(|row| row.contains("refreshing") || row.contains("Reading the model lists"))
 }
 
 /// Installs the ruling-4 fixture under `home`: a provider `acme` serving
@@ -592,6 +606,13 @@ fn sigterm_to_the_terminal_while_a_picker_read_runs_exits_143_and_kills_its_grou
     // Ctrl+L opens the picker, whose catalogue read runs through the
     // process's shared reads.
     run.write(b"\x0c");
+    // The open picker proves the keystroke landed, and its owed or
+    // running read proves the catalogue read was asked, so the
+    // credential command below runs and writes its ready line.
+    run.wait_screen(
+        "the open picker with its catalogue read running",
+        picker_read_running,
+    );
     let pgid = ready.wait(setup.deadline.left())[0];
     let group = Watchdog::group(pgid);
     support::kill_pid(setup.deadline, run.id(), "TERM").unwrap();
@@ -617,6 +638,13 @@ fn sighup_to_the_terminal_while_a_picker_read_runs_exits_129_and_kills_its_group
     // Ctrl+L opens the picker, whose catalogue read runs through the
     // process's shared reads.
     run.write(b"\x0c");
+    // The open picker proves the keystroke landed, and its owed or
+    // running read proves the catalogue read was asked, so the
+    // credential command below runs and writes its ready line.
+    run.wait_screen(
+        "the open picker with its catalogue read running",
+        picker_read_running,
+    );
     let pgid = ready.wait(setup.deadline.left())[0];
     let group = Watchdog::group(pgid);
     support::kill_pid(setup.deadline, run.id(), "HUP").unwrap();
