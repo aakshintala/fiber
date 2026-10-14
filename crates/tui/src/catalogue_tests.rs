@@ -1,6 +1,7 @@
 //! Tests for the loop's one model-list read at a time: a read asked while
 //! one runs waits, and the widest waiting wins.
 
+use std::io;
 use std::sync::{Arc, Mutex, mpsc};
 use std::time::Duration;
 
@@ -146,4 +147,46 @@ fn no_reader_asks_nothing() {
             .recv(&rx)
             .is_err()
     );
+}
+
+/// A spawn that always fails, so the asked read never starts.
+fn failing_spawn(
+    _: std::thread::Builder,
+    _: Box<dyn FnOnce() + Send + 'static>,
+) -> io::Result<std::thread::JoinHandle<()>> {
+    Err(io::Error::other("no thread"))
+}
+
+#[test]
+fn spawn_failure_fails_the_waiting_and_queued_reads() {
+    let read: ReadModels = Arc::new(|_| Ok(Catalogue::default()));
+    let mut reader = Reader::new(Some(read));
+    // A wider refresh waits behind the asked one.
+    reader.queued = Some(Refresh::Stale);
+    let (tx, rx) = mpsc::channel();
+    reader.ask_with(Refresh::Cached, &tx, failing_spawn);
+    // The failure frees the reader: nothing runs and nothing waits.
+    assert!(!reader.running);
+    assert_eq!(reader.queued, None);
+    // One failure per owed read, the waiting one and the queued one,
+    // carrying the same message.
+    let wait = Deadline::after(DEADLINE);
+    for what in ["the waiting read", "the queued read"] {
+        match wait.recv(&rx) {
+            Ok(Input::Models(Err(message))) => assert_eq!(
+                message, "terminal: could not start the model-list reader: no thread",
+                "{what}"
+            ),
+            Ok(_) => panic!("{what}: the failure, not an answer"),
+            Err(error) => panic!("waited {DEADLINE:?} for {what}: {error}"),
+        }
+    }
+    assert!(matches!(rx.try_recv(), Err(mpsc::TryRecvError::Empty)));
+    // A later ask spawns again: the reader runs once more.
+    reader.ask_with(Refresh::Cached, &tx, |builder, body| builder.spawn(body));
+    assert!(reader.running);
+    assert!(matches!(
+        next(&rx, &Deadline::after(DEADLINE)),
+        Input::Models(Ok(_))
+    ));
 }

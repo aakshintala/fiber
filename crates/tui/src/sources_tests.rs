@@ -31,7 +31,8 @@ fn piped_reader() -> (super::Reader, io::PipeWriter, mpsc::Receiver<Input>) {
     let (read, write) = io::pipe().unwrap_or_else(|err| panic!("pipe: {err}"));
     let tty = File::from(std::os::fd::OwnedFd::from(read));
     let (tx, rx) = mpsc::channel();
-    let reader = super::Reader::spawn(&tty, tx).unwrap_or_else(|| panic!("the reader started"));
+    let reader = super::Reader::spawn(&tty, tx)
+        .unwrap_or_else(|error| panic!("the reader started: {error}"));
     (reader, write, rx)
 }
 
@@ -167,5 +168,70 @@ fn a_terminal_thread_stack_is_under_a_huge_page() {
     assert!(
         stack < HUGE_PAGE,
         "a {stack} byte stack can sit on a whole 2 MiB span"
+    );
+}
+
+/// A pipe read end standing in for the tty, so a failing step is the only
+/// failure.
+fn dummy_tty() -> File {
+    let (read, _write) = io::pipe().unwrap_or_else(|err| panic!("pipe: {err}"));
+    File::from(std::os::fd::OwnedFd::from(read))
+}
+
+/// The real step for every step but the failing one.
+fn real_spawn(
+    builder: std::thread::Builder,
+    body: Box<dyn FnOnce() + Send + 'static>,
+) -> io::Result<std::thread::JoinHandle<()>> {
+    builder.spawn(body)
+}
+
+#[test]
+fn spawn_clone_failure_is_terminal_io_failed() {
+    let tty = dummy_tty();
+    let (tx, _rx) = mpsc::channel();
+    let error = super::Reader::spawn_with(
+        &tty,
+        tx,
+        |_| Err(io::Error::other("no dup")),
+        io::pipe,
+        real_spawn,
+    )
+    .unwrap_err();
+    assert_eq!(
+        error.to_string(),
+        "terminal: could not start the input reader: duplicating the tty: no dup"
+    );
+}
+
+#[test]
+fn spawn_pipe_failure_is_terminal_io_failed() {
+    let tty = dummy_tty();
+    let (tx, _rx) = mpsc::channel();
+    let error = super::Reader::spawn_with(
+        &tty,
+        tx,
+        File::try_clone,
+        || Err(io::Error::other("no pipe")),
+        real_spawn,
+    )
+    .unwrap_err();
+    assert_eq!(
+        error.to_string(),
+        "terminal: could not start the input reader: creating the wake pipe: no pipe"
+    );
+}
+
+#[test]
+fn spawn_thread_failure_is_terminal_io_failed() {
+    let tty = dummy_tty();
+    let (tx, _rx) = mpsc::channel();
+    let error = super::Reader::spawn_with(&tty, tx, File::try_clone, io::pipe, |_, _| {
+        Err(io::Error::other("no thread"))
+    })
+    .unwrap_err();
+    assert_eq!(
+        error.to_string(),
+        "terminal: could not start the input reader: spawning the reader thread: no thread"
     );
 }

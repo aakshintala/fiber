@@ -4,8 +4,10 @@
 //! a time; a read asked while one runs waits, and the widest waiting win
 //! (`docs/model-routing.md`, "Model discovery").
 
+use std::io;
 use std::sync::Arc;
 use std::sync::mpsc::Sender;
+use std::thread;
 
 /// A model's rebuild price in integer micro-dollars per million
 /// tokens, so `ModelEntry` keeps `Eq`. Example: `cache_write: 3.75`
@@ -108,6 +110,21 @@ impl Reader {
     /// Asks for a read at `refresh`: it starts at once, unless one runs,
     /// when the widest asked waits. Without a read, asking does nothing.
     pub(crate) fn ask(&mut self, refresh: Refresh, out: &Sender<crate::Input>) {
+        self.ask_with(refresh, out, |builder, body| builder.spawn(body));
+    }
+
+    /// Asks as [`Reader::ask`] does, with the thread spawn as a closure
+    /// so tests fail it. A failed spawn is dropped here: the asked read
+    /// never answers.
+    pub(crate) fn ask_with(
+        &mut self,
+        refresh: Refresh,
+        out: &Sender<crate::Input>,
+        spawn: impl FnOnce(
+            thread::Builder,
+            Box<dyn FnOnce() + Send + 'static>,
+        ) -> io::Result<thread::JoinHandle<()>>,
+    ) {
         let Some(read) = &self.read else {
             return;
         };
@@ -125,9 +142,12 @@ impl Reader {
         let out = out.clone();
         // A read whose send fails finds the loop closed, and ends: the
         // answer is dropped with the send's error.
-        drop(crate::sources::builder("tui-models").spawn(move || {
-            drop(out.send(crate::Input::Models(read(refresh))));
-        }));
+        drop(spawn(
+            crate::sources::builder("tui-models"),
+            Box::new(move || {
+                drop(out.send(crate::Input::Models(read(refresh))));
+            }),
+        ));
     }
 
     /// A read answered: the widest waiting starts, if one waits.

@@ -121,7 +121,8 @@ fn run_shows_a_theme_files_notice() {
                 Box::new(|| Err(std::io::Error::other("refused"))),
                 Box::new(|_| {}),
                 fakes::clock::FakeClock::new(),
-            );
+            )
+            .unwrap_or_else(|failure| panic!("run: {}", failure.message));
             done.send(code).unwrap_or(());
         })
         .unwrap_or_else(|err| panic!("spawn: {err}"));

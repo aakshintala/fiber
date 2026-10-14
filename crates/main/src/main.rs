@@ -741,7 +741,10 @@ fn terminal(
     launch.models = Some(models);
     launch.configure = Some(seam);
     launch.open_at = open_at;
-    tui::run(tty, launch, connect, Box::new(crash::attach), clock)
+    match tui::run(tty, launch, connect, Box::new(crash::attach), clock) {
+        Ok(code) => code,
+        Err(failure) => fail(failure),
+    }
 }
 
 /// Starts `fiber hub serve` detached, as every client of the hub does when

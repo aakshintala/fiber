@@ -93,7 +93,8 @@ fn spawn_run(connect: crate::Connect, clock: &Arc<FakeClock>) -> (Pair, Receiver
     std::thread::Builder::new()
         .name("lib-run".to_owned())
         .spawn(move || {
-            let code = super::run(slave, launch(), connect, Box::new(|_| {}), clock);
+            let code = super::run(slave, launch(), connect, Box::new(|_| {}), clock)
+                .unwrap_or_else(|failure| panic!("run: {}", failure.message));
             done.send(code).unwrap_or(());
         })
         .unwrap_or_else(|err| panic!("spawn: {err}"));
