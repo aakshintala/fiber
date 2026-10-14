@@ -515,12 +515,12 @@ fn settle(
     let (thread, target, deadline, timeout, request) = match step {
         Ok(Step::Done(value)) => {
             #[cfg(test)]
-            await_completion_release(&start.name, &target);
+            await_completion_release(&start.name, target);
             return hub.finish(id, Ok(value));
         }
         Err(e) => {
             #[cfg(test)]
-            await_completion_release(&start.name, &target);
+            await_completion_release(&start.name, target);
             return hub.finish(id, Err(e));
         }
         Ok(Step::Suspend {
