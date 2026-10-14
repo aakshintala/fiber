@@ -263,7 +263,7 @@ impl Call {
     fn active(&self) -> Option<&RequestObservation> {
         self.observation
             .as_ref()
-            .filter(|observation| observation.log.debugging())
+            .filter(|observation| observation.debugging())
     }
 
     /// The secrets the recorded target is redacted with: the send's own,

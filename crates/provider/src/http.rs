@@ -563,32 +563,34 @@ pub(crate) fn sanitized_target(url: &str, secrets: &Secrets) -> (Option<String>,
 }
 
 /// Percent-decodes `raw`: each `%` followed by two hex digits, in either
-/// case, becomes its byte; anything else stays literal.
+/// case, becomes its byte; anything else stays literal. The bytes are
+/// consumed through the iterator, with no index arithmetic: a `%` peeks at
+/// the next two bytes without taking them, so a cut-short or non-hex
+/// follower is re-scanned as a fresh byte, ready to start another escape.
 fn percent_decode(raw: &[u8]) -> Vec<u8> {
     let mut decoded = Vec::with_capacity(raw.len());
-    let mut at = 0;
-    while let Some(&byte) = raw.get(at) {
+    let mut bytes = raw.iter().copied().peekable();
+    while let Some(byte) = bytes.next() {
         if byte != b'%' {
             decoded.push(byte);
-            at += 1;
             continue;
         }
-        match [raw.get(at + 1), raw.get(at + 2)] {
-            [Some(&high), Some(&low)] => match (hex_val(high), hex_val(low)) {
+        let mut look = bytes.clone();
+        match (look.next(), look.next()) {
+            (Some(high), Some(low)) => match (hex_val(high), hex_val(low)) {
                 (Some(high), Some(low)) => {
                     decoded.push(high << 4 | low);
-                    at += 3;
+                    bytes.next();
+                    bytes.next();
                 }
                 // Not hex: the `%` stays literal.
                 (None, _) | (_, None) => {
                     decoded.push(byte);
-                    at += 1;
                 }
             },
             // Cut short: the `%` stays literal.
             _ => {
                 decoded.push(byte);
-                at += 1;
             }
         }
     }

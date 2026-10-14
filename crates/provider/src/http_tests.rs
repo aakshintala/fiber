@@ -1661,3 +1661,237 @@ fn the_server_receives_the_original_query_while_the_record_drops_it() {
         "this unit path sends nothing by itself"
     );
 }
+
+#[test]
+fn an_observed_out_of_range_retry_after_stays_unset() {
+    // The usage-limit body with a date would yield a 7,200 s wait on its
+    // own: a present `retry-after` vetoes that fallback, and an infinite
+    // or negative one leaves `retry_after` unset on the observed path too.
+    for retry_after in ["Infinity", "-5"] {
+        let server = fakes::ProviderServer::start([fakes::Response::status(429, USAGE_LIMIT_BODY)
+            .header("date", USAGE_DATE)
+            .header("retry-after", retry_after)])
+        .unwrap();
+        let clock = fakes::clock::FakeClock::new();
+        let (sent, _) = observed(
+            format!("{}/v1", server.url()),
+            &[],
+            b"{}",
+            None,
+            direct_route(),
+            &std::sync::Arc::default(),
+            std::sync::Arc::clone(&clock) as std::sync::Arc<dyn contract::clock::Clock>,
+        );
+        let Err(failed) = sent else {
+            panic!("a 429 with retry-after: {retry_after} was not a status failure");
+        };
+        let crate::Error::Status {
+            retry_after: waited,
+            ..
+        } = &failed.error
+        else {
+            panic!(
+                "a 429 with retry-after: {retry_after} was not a status failure: {:?}",
+                failed.error
+            );
+        };
+        assert_eq!(*waited, None, "retry-after: {retry_after}");
+        let Some(dispatched) = failed.sent else {
+            panic!("the observed failure reports no send");
+        };
+        assert_eq!(dispatched.status, Some(429));
+    }
+}
+
+/// Captures the lines one record writes, for the redaction tests below.
+struct RedactCapture {
+    lines: std::sync::Mutex<Vec<contract::diag::ProviderRequest>>,
+}
+
+impl contract::diag::DebugLog for RedactCapture {
+    fn debugging(&self) -> bool {
+        true
+    }
+    fn provider_request(&self, request: &contract::diag::ProviderRequest) {
+        self.lines.lock().unwrap().push(request.clone());
+    }
+}
+
+impl RedactCapture {
+    fn serialized(&self) -> Vec<String> {
+        self.lines
+            .lock()
+            .unwrap()
+            .iter()
+            .map(|line| String::from_utf8(serde_json::to_vec(line).unwrap()).unwrap())
+            .collect()
+    }
+}
+
+/// Percent-encodes `secret`, byte by byte, in upper hex.
+fn encoded(secret: &str) -> String {
+    secret.bytes().map(|byte| format!("%{byte:02X}")).collect()
+}
+
+#[test]
+fn a_secret_in_the_path_raw_and_encoded_reaches_no_line() {
+    // The query is stripped before redaction matters, so the secret hides
+    // in the path twice: raw and percent-encoded. Without the redaction
+    // set neither form may reach the serialized line.
+    let secret = "sk-live-path-secret";
+    let url = format!("http://127.0.0.1:9/v1/{secret}/files/{}", encoded(secret));
+    let log = std::sync::Arc::new(RedactCapture {
+        lines: std::sync::Mutex::new(Vec::new()),
+    });
+    let clock = fakes::clock::FakeClock::new();
+    let observation = crate::RequestObservation::new(
+        std::sync::Arc::clone(&log) as std::sync::Arc<dyn contract::diag::DebugLog>,
+        std::sync::Arc::clone(&clock) as std::sync::Arc<dyn contract::clock::Clock>,
+        std::num::NonZeroU32::MIN,
+    )
+    .with_model("m".to_owned());
+    let mut secrets = crate::redact::Secrets::default();
+    secrets.add(contract::Secret::new(secret.to_owned()));
+    let mut finish =
+        crate::call::ObservationFinish::new(&observation, "fake", &url, 7, clock.now());
+    finish.sent(clock.now(), 200);
+    finish.set_redact(secrets);
+    finish.set_bytes(2);
+    finish.finish();
+    let lines = log.serialized();
+    assert_eq!(lines.len(), 1);
+    assert!(
+        !lines[0].contains(secret),
+        "neither the raw nor the encoded secret is in the line: {}",
+        lines[0]
+    );
+    assert!(lines[0].contains("[redacted]"), "{}", lines[0]);
+}
+
+/// Reads the body and answers done: a decoder with no protocol framing, so
+/// the test pins the call's redaction, not a protocol's decoding.
+#[allow(
+    clippy::result_large_err,
+    reason = "the decode carries its partial alongside the error for the call's usage"
+)]
+fn plain_decode(
+    stream: &mut dyn std::io::BufRead,
+    _: contract::events::CacheLifetime,
+    _: &mut dyn FnMut(contract::provider::Delta),
+) -> Result<contract::provider::Reply, (crate::Error, Option<contract::provider::CallUsage>)> {
+    let mut text = String::new();
+    std::io::Read::read_to_string(&mut *stream, &mut text).unwrap();
+    Ok(contract::provider::Reply {
+        actions: Vec::new(),
+        finish: contract::provider::Finish::Completed,
+        generation_id: None,
+        tokens: contract::shapes::Tokens {
+            input: 0,
+            cache_read: 0,
+            cache_write: std::collections::BTreeMap::new(),
+            output: 0,
+        },
+        web_searches: None,
+        cost: None,
+        input_size: contract::provider::InputSize {
+            bytes: 0,
+            media: false,
+        },
+    })
+}
+
+#[test]
+fn a_fixed_header_only_secret_is_redacted_from_the_recorded_path() {
+    // The secret lives only in a fixed header value: no key, no signer, so
+    // the send's own secrets are empty and only the call's fixed-header
+    // enrichment can redact the secret the path carries. Without it the
+    // recorded path leaks the value.
+    use contract::provider::ModelCall as _;
+    let secret = "fixed-header-secret-value";
+    let server = fakes::ProviderServer::start([fakes::Response::status(200, "ok")]).unwrap();
+    let endpoint = crate::Endpoint {
+        provider: "fake".to_owned(),
+        model: "m".to_owned(),
+        base_url: server.url(),
+        key: None,
+        headers: vec![("x-api-key".to_owned(), secret.to_owned())],
+        direct: true,
+        ..crate::Endpoint::default()
+    };
+    let request = contract::provider::ModelRequest {
+        system_prompt: "You are terse.".to_owned(),
+        tools: Vec::new(),
+        thinking: None,
+        tool_choice: "auto".to_owned(),
+        cache_lifetime: contract::events::CacheLifetime::OneHour,
+        cache_key: "session_1".to_owned(),
+        conversation: vec![contract::provider::Input::User {
+            text: "hi".to_owned(),
+            images: Vec::new(),
+        }],
+        sent_tools: None,
+        previous_end: None,
+        max_output_tokens: None,
+        session_dir: std::path::PathBuf::new(),
+    };
+    let url = format!("{}/v1/{secret}/chat", server.url());
+    let log = std::sync::Arc::new(RedactCapture {
+        lines: std::sync::Mutex::new(Vec::new()),
+    });
+    let clock = fakes::clock::FakeClock::new();
+    let observation = crate::RequestObservation::new(
+        std::sync::Arc::clone(&log) as std::sync::Arc<dyn contract::diag::DebugLog>,
+        std::sync::Arc::clone(&clock) as std::sync::Arc<dyn contract::clock::Clock>,
+        std::num::NonZeroU32::MIN,
+    )
+    .with_model("m".to_owned());
+    let call = crate::call::Call::new(
+        &endpoint,
+        &request,
+        url,
+        vec![("x-api-key".to_owned(), secret.to_owned())],
+        b"{}".to_vec(),
+        plain_decode,
+    )
+    .observed(observation);
+    let reply = fakes::within("the call to return", CALL_WITHIN, move || {
+        let mut deltas = Vec::new();
+        let reply = call.run(&mut |delta| deltas.push(delta));
+        (reply, deltas)
+    });
+    assert!(reply.0.is_ok(), "the call reads: {:?}", reply.0);
+    let lines = log.serialized();
+    assert_eq!(lines.len(), 1);
+    assert!(
+        !lines[0].contains(secret),
+        "the fixed-header secret is nowhere in the line: {}",
+        lines[0]
+    );
+}
+
+#[test]
+fn percent_decode_decodes_exact_bytes() {
+    let cases: Vec<(&[u8], &[u8])> = vec![
+        (b"", b""),
+        (b"plain", b"plain"),
+        (b"a%2Fb", b"a/b"),
+        (b"a%2fb", b"a/b"),
+        (b"%41%42", b"AB"),
+        (b"%%41", b"%A"),
+        (b"%4%41", b"%4A"),
+        (b"%%%41", b"%%A"),
+        (b"%zz", b"%zz"),
+        (b"%2", b"%2"),
+        (b"%", b"%"),
+        (b"100%sure", b"100%sure"),
+        (b"%FF", &[0xFF]),
+        (b"a%20b", b"a b"),
+    ];
+    for (raw, expected) in cases {
+        assert_eq!(
+            super::percent_decode(raw),
+            expected.to_vec(),
+            "decoding {raw:?}"
+        );
+    }
+}

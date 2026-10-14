@@ -331,3 +331,245 @@ fn an_interrupted_read_never_ends_the_record() {
     assert_eq!(lines.len(), 1);
     assert_eq!(lines[0].response_bytes, 1);
 }
+
+/// How long a test waits for one transport call to return: the server
+/// answers at once, so the wait only bounds a hang.
+const CALL_WITHIN: std::time::Duration = std::time::Duration::from_secs(10);
+
+/// One minimal request: a user turn with no images, tools or rewound state.
+fn test_request() -> contract::provider::ModelRequest {
+    contract::provider::ModelRequest {
+        system_prompt: "You are terse.".to_owned(),
+        tools: Vec::new(),
+        thinking: None,
+        tool_choice: "auto".to_owned(),
+        cache_lifetime: contract::events::CacheLifetime::OneHour,
+        cache_key: "session_1".to_owned(),
+        conversation: vec![contract::provider::Input::User {
+            text: "hi".to_owned(),
+            images: Vec::new(),
+        }],
+        sent_tools: None,
+        previous_end: None,
+        max_output_tokens: None,
+        session_dir: std::path::PathBuf::new(),
+    }
+}
+
+/// A direct endpoint for `server` holding no key and no signer.
+fn test_endpoint(server: &fakes::ProviderServer) -> crate::Endpoint {
+    crate::Endpoint {
+        provider: "fake".to_owned(),
+        model: "m".to_owned(),
+        base_url: server.url(),
+        direct: true,
+        ..crate::Endpoint::default()
+    }
+}
+
+/// Reads the body, forwards one text delta and answers done: a decoder with
+/// no protocol framing, so `Call` tests pin observation, not decoding.
+#[allow(
+    clippy::result_large_err,
+    reason = "the decode carries its partial alongside the error for the call's usage"
+)]
+fn stub_decode(
+    stream: &mut dyn std::io::BufRead,
+    _: contract::events::CacheLifetime,
+    sink: &mut dyn FnMut(contract::provider::Delta),
+) -> Result<contract::provider::Reply, (crate::Error, Option<contract::provider::CallUsage>)> {
+    let mut text = String::new();
+    std::io::Read::read_to_string(&mut *stream, &mut text).unwrap();
+    sink(contract::provider::Delta::Text(
+        contract::events::TextDelta { text },
+    ));
+    Ok(contract::provider::Reply {
+        actions: Vec::new(),
+        finish: contract::provider::Finish::Completed,
+        generation_id: None,
+        tokens: contract::shapes::Tokens {
+            input: 0,
+            cache_read: 0,
+            cache_write: std::collections::BTreeMap::new(),
+            output: 0,
+        },
+        web_searches: None,
+        cost: None,
+        input_size: contract::provider::InputSize {
+            bytes: 0,
+            media: false,
+        },
+    })
+}
+
+/// Runs `call` on its own thread, so a call that never returns fails the
+/// test at the deadline instead of hanging it.
+fn run_call(
+    call: Call,
+) -> (
+    Result<contract::provider::Reply, contract::provider::CallError>,
+    Vec<contract::provider::Delta>,
+) {
+    use contract::provider::ModelCall as _;
+    fakes::within("the call to return", CALL_WITHIN, move || {
+        let mut deltas = Vec::new();
+        let reply = call.run(&mut |delta| deltas.push(delta));
+        (reply, deltas)
+    })
+}
+
+/// A clock that counts its `now()` reads, delegating the time itself.
+struct SpyClock {
+    inner: Arc<fakes::clock::FakeClock>,
+    reads: std::sync::atomic::AtomicU64,
+}
+
+impl SpyClock {
+    fn wrap(clock: &Arc<fakes::clock::FakeClock>) -> Arc<Self> {
+        Arc::new(Self {
+            inner: Arc::clone(clock),
+            reads: std::sync::atomic::AtomicU64::new(0),
+        })
+    }
+
+    fn reads(&self) -> u64 {
+        self.reads.load(std::sync::atomic::Ordering::SeqCst)
+    }
+}
+
+impl contract::clock::Clock for SpyClock {
+    fn now(&self) -> std::time::Instant {
+        self.reads.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+        self.inner.now()
+    }
+
+    fn wall(&self) -> std::time::SystemTime {
+        self.inner.wall()
+    }
+
+    fn sleep(&self, duration: Duration) {
+        self.inner.sleep(duration);
+    }
+
+    fn wait_until(
+        &self,
+        until: Option<std::time::Instant>,
+        on_wake: &mut dyn FnMut(Option<Duration>),
+    ) {
+        self.inner.wait_until(until, on_wake);
+    }
+
+    fn subscribe(&self, wake: std::sync::Weak<dyn contract::clock::Wake>) {
+        self.inner.subscribe(wake);
+    }
+}
+
+#[test]
+fn a_non_2xx_through_run_keeps_its_status_and_partial_bytes() {
+    // The failure reaches `finish` only through `dispatched`: no `sent`
+    // head ever arrives on this path, so without it the line loses the
+    // status, the header time and the bytes read so far.
+    let body = r#"{"error":"boom"}"#;
+    let server = fakes::ProviderServer::start([fakes::Response::status(500, body)]).unwrap();
+    let endpoint = test_endpoint(&server);
+    let request = test_request();
+    let url = format!("{}/v1", server.url());
+    let log = Capture::new(true);
+    let clock = fakes::clock::FakeClock::new();
+    let call = Call::new(
+        &endpoint,
+        &request,
+        url,
+        Vec::new(),
+        b"{}".to_vec(),
+        stub_decode,
+    )
+    .observed(observation(&log, &clock, 1));
+    let (reply, _) = run_call(call);
+    let Err(contract::provider::CallError::Failed { .. }) = reply else {
+        panic!("a 500 through run is a failure");
+    };
+    let lines = log.lines();
+    assert_eq!(lines.len(), 1);
+    let line = &lines[0];
+    assert_eq!(line.status, Some(500));
+    assert_eq!(line.response_bytes, body.len() as u64);
+    assert!(line.headers_ms.is_some(), "the error keeps its header time");
+}
+
+#[test]
+fn a_failed_read_finishes_before_the_drop() {
+    struct Fails;
+    impl std::io::Read for Fails {
+        fn read(&mut self, buf: &mut [u8]) -> std::io::Result<usize> {
+            let _ = buf;
+            Err(std::io::Error::other("gone"))
+        }
+    }
+    let log = Capture::new(true);
+    let clock = fakes::clock::FakeClock::new();
+    let mut finish = record(&log, &clock, clock.now());
+    finish.sent(clock.now(), 200);
+    finish.set_redact(Secrets::default());
+    let mut open = OpenBody::observed(Box::new(Fails), finish);
+    let error = std::io::Read::read_to_string(&mut open, &mut String::new()).unwrap_err();
+    assert_eq!(error.to_string(), "gone");
+    assert_eq!(
+        log.lines().len(),
+        1,
+        "the failed read finishes the line while the reader is still alive"
+    );
+    drop(open);
+    assert_eq!(
+        log.lines().len(),
+        1,
+        "the drop after the error writes nothing more"
+    );
+}
+
+#[test]
+fn at_info_an_observed_call_runs_unobserved() {
+    let server = fakes::ProviderServer::start([
+        fakes::Response::status(200, "hi"),
+        fakes::Response::status(200, "hi"),
+    ])
+    .unwrap();
+    let endpoint = test_endpoint(&server);
+    let request = test_request();
+    let plain = Call::new(
+        &endpoint,
+        &request,
+        format!("{}/v1", server.url()),
+        Vec::new(),
+        b"{}".to_vec(),
+        stub_decode,
+    );
+    let (plain_reply, plain_deltas) = run_call(plain);
+    let log = Capture::new(false);
+    let clock = fakes::clock::FakeClock::new();
+    let spy = SpyClock::wrap(&clock);
+    let info = RequestObservation::new(
+        Arc::clone(&log) as Arc<dyn DebugLog>,
+        Arc::clone(&spy) as Arc<dyn contract::clock::Clock>,
+        NonZeroU32::MIN,
+    )
+    .with_model("m".to_owned());
+    let observed = Call::new(
+        &endpoint,
+        &request,
+        format!("{}/v1", server.url()),
+        Vec::new(),
+        b"{}".to_vec(),
+        stub_decode,
+    )
+    .observed(info);
+    let (info_reply, info_deltas) = run_call(observed);
+    assert_eq!(
+        format!("{plain_reply:?}"),
+        format!("{info_reply:?}"),
+        "the same reply"
+    );
+    assert_eq!(plain_deltas, info_deltas, "the same deltas");
+    assert_eq!(spy.reads(), 0, "no diagnostic clock read");
+    assert!(log.lines().is_empty(), "no line at info");
+}
