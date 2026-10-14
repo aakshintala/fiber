@@ -14,10 +14,11 @@ use std::io::Write;
 use std::os::unix::fs::DirBuilderExt;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
+use std::time::{Duration, Instant};
 
 use contract::SessionId;
 use contract::clock::{Clock, wall_ms};
-use contract::diag::{DebugLog, ProviderRequest};
+use contract::diag::{DebugLog, Op, ProviderRequest, Stopwatch, Timing};
 
 pub use memory::peak_kib;
 
@@ -105,6 +106,17 @@ struct Peak {
     peak_kib: u64,
 }
 
+/// The `data` of an `op_timing` line: the operation, whole milliseconds,
+/// and the tool's name on a tool's timers. No other field is recorded,
+/// and never an argument, a path or any content.
+#[derive(serde::Serialize)]
+struct TimingData<'a> {
+    op: Op,
+    ms: u64,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    tool: Option<&'a str>,
+}
+
 /// One lock across every diagnostic file in the process: a pair write
 /// holds it across both appends, and every other write holds it across
 /// its own, so lines from two writers never interleave a pair. Taken
@@ -129,7 +141,7 @@ pub struct Diag {
     /// "Races are forced, not waited for"). Always `None` outside
     /// tests, where the branch below never fires.
     between: Option<Arc<dyn Fn(bool) + Send + Sync>>,
-    state: Mutex<State>,
+    state: Arc<Mutex<State>>,
 }
 
 impl Diag {
@@ -152,10 +164,10 @@ impl Diag {
             rotate_at: None,
             peak: peak_kib,
             between: None,
-            state: Mutex::new(State {
+            state: Arc::new(Mutex::new(State {
                 file,
                 session: None,
-            }),
+            })),
         }
     }
 
@@ -219,12 +231,12 @@ impl Diag {
             rotate_at: None,
             peak: self.peak,
             between: None,
-            state: Mutex::new(State {
+            state: Arc::new(Mutex::new(State {
                 file: self
                     .logs
                     .join(format!("{}-{}.log", self.process.name(), session.0)),
                 session: Some(session.clone()),
-            }),
+            })),
         }
     }
 
@@ -318,14 +330,25 @@ impl Diag {
             message,
             data,
         };
-        let Ok(mut bytes) = serde_json::to_vec(&line) else {
-            return;
-        };
-        bytes.push(b'\n');
-        if let Some(at) = self.rotate_at {
-            rotate(&state.file, at);
-        }
-        append(&state.file, &self.logs, &bytes);
+        append_line(&state.file, &self.logs, self.rotate_at, &line);
+    }
+
+    /// The callable form of [`timed`]: one level check inside, none
+    /// before it, so restricted crates time through the seam without
+    /// depending on `log`.
+    pub fn timings(&self) -> Timing {
+        let level = self.level;
+        let clock = Arc::clone(&self.clock);
+        let logs = self.logs.clone();
+        let process = self.process;
+        let rotate_at = self.rotate_at;
+        let state = Arc::clone(&self.state);
+        Arc::new(move |op, tool, started| {
+            start_timer(
+                level, &clock, &logs, process, rotate_at, &state, op, tool, started,
+            )
+            .map(|timer| Box::new(timer) as Box<dyn Stopwatch>)
+        })
     }
 }
 
@@ -350,6 +373,130 @@ impl DebugLog for Diag {
 
 fn lock<T>(mutex: &Mutex<T>) -> MutexGuard<'_, T> {
     mutex.lock().unwrap_or_else(PoisonError::into_inner)
+}
+
+/// Serializes one line and appends it to `file`, rotating first when due.
+/// The caller holds the files lock and the state lock. A line that does
+/// not serialize, or a write that fails, writes nothing and stops nothing.
+fn append_line<D: serde::Serialize>(
+    file: &Path,
+    logs: &Path,
+    rotate_at: Option<u64>,
+    line: &Line<'_, D>,
+) {
+    let Ok(mut bytes) = serde_json::to_vec(line) else {
+        return;
+    };
+    bytes.push(b'\n');
+    if let Some(at) = rotate_at {
+        rotate(file, at);
+    }
+    append(file, logs, &bytes);
+}
+
+/// A started operation's guard. Dropping it writes one `op_timing` line
+/// with the whole milliseconds from `start` to the stamped end, or to
+/// the drop when never stopped: normal scope drop emits once, including
+/// an early return or a propagated error after entry. A failed write is
+/// silent and never changes the operation's result.
+pub struct Timer {
+    clock: Arc<dyn Clock>,
+    logs: PathBuf,
+    process: Process,
+    rotate_at: Option<u64>,
+    state: Arc<Mutex<State>>,
+    op: Op,
+    tool: Option<String>,
+    start: Instant,
+    end: Option<Instant>,
+}
+
+/// Starts an operation's timer on `diag`: the one function every timed
+/// place goes through. At `info` it returns `None` before any clock read,
+/// clone, allocation, lock or file operation. At `debug` the guard owns
+/// the writer, the clock, the name and the tool, and emits once on drop.
+/// An explicit stamp suppresses the start read, never the end read.
+pub fn timed(diag: &Diag, op: Op, tool: Option<&str>, started: Option<Instant>) -> Option<Timer> {
+    start_timer(
+        diag.level,
+        &diag.clock,
+        &diag.logs,
+        diag.process,
+        diag.rotate_at,
+        &diag.state,
+        op,
+        tool,
+        started,
+    )
+}
+
+/// [`timed`] and [`Diag::timings`] share this one level check and guard
+/// construction, so the two never diverge.
+#[allow(clippy::too_many_arguments, reason = "one call site per entry point")]
+fn start_timer(
+    level: Level,
+    clock: &Arc<dyn Clock>,
+    logs: &Path,
+    process: Process,
+    rotate_at: Option<u64>,
+    state: &Arc<Mutex<State>>,
+    op: Op,
+    tool: Option<&str>,
+    started: Option<Instant>,
+) -> Option<Timer> {
+    if level != Level::Debug {
+        return None;
+    }
+    let start = started.unwrap_or_else(|| clock.now());
+    Some(Timer {
+        clock: Arc::clone(clock),
+        logs: logs.to_owned(),
+        process,
+        rotate_at,
+        state: Arc::clone(state),
+        op,
+        tool: tool.map(str::to_owned),
+        start,
+        end: None,
+    })
+}
+
+impl Stopwatch for Timer {
+    /// Stamps completion; the drop then emits with the stamped end. The
+    /// first stamp wins.
+    fn stop(&mut self) {
+        if self.end.is_none() {
+            self.end = Some(self.clock.now());
+        }
+    }
+}
+
+impl Drop for Timer {
+    fn drop(&mut self) {
+        let end = self.end.unwrap_or_else(|| self.clock.now());
+        // A clock that runs backwards contributes zero: no panic, and no
+        // fabricated duration. A stamp from another clock reads zero too.
+        let elapsed = end
+            .checked_duration_since(self.start)
+            .unwrap_or(Duration::ZERO);
+        let ms = elapsed.as_millis().try_into().unwrap_or(u64::MAX);
+        let _files = lock(&FILES);
+        let state = lock(&self.state);
+        let line = Line {
+            ts: wall_ms(self.clock.wall()),
+            level: "debug",
+            process: self.process.name(),
+            session_id: state.session.as_ref().map(|session| session.0.as_str()),
+            code: "op_timing",
+            message: "An operation ended.",
+            data: Some(TimingData {
+                op: self.op,
+                ms,
+                tool: self.tool.as_deref(),
+            }),
+        };
+        append_line(&state.file, &self.logs, self.rotate_at, &line);
+    }
 }
 
 /// Renames `file` to `<file>.1` when it is over `at` bytes.
