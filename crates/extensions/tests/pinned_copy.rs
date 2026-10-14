@@ -385,6 +385,34 @@ fn a_legacy_copy_with_a_directory_completion_marker_is_refused() {
 }
 
 #[test]
+fn a_legacy_copy_with_a_linked_completion_marker_is_refused() {
+    use std::os::unix::fs::symlink;
+    let setup = Setup::new();
+    let mut repos = Repos::new(&setup);
+    let digest = counting_root(&setup, &mut repos);
+    let before = fs::read(approval(&setup, &digest)).unwrap();
+    let (outside_dir, target) = outside(&setup.root());
+    // A link where the completion marker goes is refused before it is
+    // ever opened, not read through: the target stays untouched.
+    let marker = depends_home(&setup, &digest).join(".complete");
+    fs::remove_file(&marker).unwrap();
+    symlink(&target, &marker).unwrap();
+    let clock = FakeClock::new();
+    let (found, _) = item(&setup, &clock);
+    let err = store(&setup, &repos, &clock)
+        .approve(&found, &digest)
+        .unwrap_err();
+    assert!(matches!(err, Error::Pin { .. }), "{err}");
+    assert!(err.to_string().contains(".complete"), "{err}");
+    assert!(err.to_string().contains("is a symbolic link"), "{err}");
+    assert!(!err.to_string().contains("untouched"), "{err}");
+    assert_eq!(fs::read(approval(&setup, &digest)).unwrap(), before);
+    assert_eq!(fs::read_to_string(&target).unwrap(), "untouched\n");
+    assert_eq!(outside_names(&outside_dir), ["target.txt"]);
+    assert_eq!(counter(&setup, &digest), "x\n");
+}
+
+#[test]
 fn a_legacy_copy_without_a_dependency_home_rebuilds() {
     let setup = Setup::new();
     let mut repos = Repos::new(&setup);
