@@ -1980,3 +1980,403 @@ fn advance_when_parked_names_the_caller_on_the_deadline_with_no_park() {
     );
     assert_eq!(clock.now(), now, "an expiry moves no time");
 }
+
+#[test]
+fn advance_when_parked_fails_a_wrong_park_beside_the_right_one() {
+    let clock = FakeClock::new();
+    let until = clock.origin() + Duration::from_secs(30);
+    let wrong = until + Duration::from_secs(1);
+    let (parked_a, release_a, exit_a, _) = park_once(&clock, Some(wrong));
+    Deadline::after(Duration::from_secs(5))
+        .recv(&parked_a)
+        .expect("waited for the first thread to park");
+    let (parked_b, release_b, exit_b, _) = park_once(&clock, Some(until));
+    Deadline::after(Duration::from_secs(5))
+        .recv(&parked_b)
+        .expect("waited for the second thread to park");
+    let now = clock.now();
+    // The right park is held too, but the first wrong one fails the wait: a
+    // convenient later park never hides it.
+    let outcome = run_advance_when_parked(
+        &clock,
+        Some(until),
+        None,
+        Duration::from_millis(5),
+        Deadline::after(Duration::from_secs(30)),
+    );
+    let message = Deadline::after(Duration::from_secs(5))
+        .recv(&outcome)
+        .expect("waited for advance_when_parked to reject the wrong park")
+        .expect_err("advance_when_parked fails a wrong park beside the right one");
+    assert!(
+        message.contains("a watched park arrived at a different instant first"),
+        "the failure names its kind: {message}",
+    );
+    assert_eq!(clock.now(), now, "a mismatch moves no time");
+    release_a.send(()).unwrap();
+    release_b.send(()).unwrap();
+    Deadline::after(Duration::from_secs(5))
+        .recv(&exit_a)
+        .expect("the first thread exits");
+    Deadline::after(Duration::from_secs(5))
+        .recv(&exit_b)
+        .expect("the second thread exits");
+}
+
+#[test]
+fn advance_when_parked_advances_for_the_selected_thread_beside_a_wrong_park() {
+    let clock = FakeClock::new();
+    let until = clock.origin() + Duration::from_secs(30);
+    let wrong = until + Duration::from_secs(1);
+    let (parked_a, release_a, exit_a, _) = park_once(&clock, Some(wrong));
+    Deadline::after(Duration::from_secs(5))
+        .recv(&parked_a)
+        .expect("waited for the first thread to park");
+    let (parked_b, release_b, exit_b, b_id) = park_once(&clock, Some(until));
+    Deadline::after(Duration::from_secs(5))
+        .recv(&parked_b)
+        .expect("waited for the second thread to park");
+    // Only the named thread is watched: the other thread's wrong park neither
+    // satisfies the wait nor fails it.
+    let outcome = run_advance_when_parked(
+        &clock,
+        Some(until),
+        Some(b_id),
+        Duration::from_millis(5),
+        Deadline::after(Duration::from_secs(5)),
+    );
+    Deadline::after(Duration::from_secs(5))
+        .recv(&outcome)
+        .expect("waited for advance_when_parked to see the named thread")
+        .expect("advance_when_parked advances for the named thread");
+    assert_eq!(clock.now(), clock.origin() + Duration::from_millis(5));
+    release_a.send(()).unwrap();
+    release_b.send(()).unwrap();
+    Deadline::after(Duration::from_secs(5))
+        .recv(&exit_a)
+        .expect("the first thread exits");
+    Deadline::after(Duration::from_secs(5))
+        .recv(&exit_b)
+        .expect("the second thread exits");
+}
+
+#[test]
+fn advance_when_parked_fails_a_wrong_park_that_left_before_the_right_one() {
+    let clock = FakeClock::new();
+    let until = clock.origin() + Duration::from_secs(30);
+    let wrong = until + Duration::from_secs(1);
+    // The pause proves the helper checked with nobody parked and is waiting,
+    // so the wrong park below arrives after the wait starts. No outside held
+    // wait can order the wrong park's leave against the helper's diagnosis,
+    // which is why the helper observes arrivals under its own lock.
+    let (waiting, release_waiter) = clock.pause_next_advance_wait();
+    let outcome = run_advance_when_parked(
+        &clock,
+        Some(until),
+        None,
+        Duration::from_millis(5),
+        Deadline::after(Duration::from_secs(30)),
+    );
+    Deadline::after(Duration::from_secs(5))
+        .recv(&waiting)
+        .expect("waited for advance_when_parked to wait with nobody parked");
+    release_waiter.send(()).unwrap();
+    // Parks wrong, reports from inside the wait (past the park, so the helper
+    // observed it), then leaves at once without any release from the test.
+    let (wrong_tx, wrong_rx) = mpsc::channel();
+    let clock_wrong = Arc::clone(&clock);
+    thread::spawn(move || {
+        clock_wrong.wait_until(Some(wrong), &mut |_bound| match wrong_tx.send(()) {
+            Ok(()) | Err(mpsc::SendError(())) => {}
+        });
+    });
+    Deadline::after(Duration::from_secs(5))
+        .recv(&wrong_rx)
+        .expect("waited for the thread to park at the wrong instant");
+    let (parked, release, exit, _) = park_once(&clock, Some(until));
+    Deadline::after(Duration::from_secs(5))
+        .recv(&parked)
+        .expect("waited for the thread to park at the named instant");
+    let now = clock.now();
+    let message = Deadline::after(Duration::from_secs(5))
+        .recv(&outcome)
+        .expect("waited for advance_when_parked to reject the wrong park")
+        .expect_err("advance_when_parked fails a wrong park that left");
+    assert!(
+        message.contains("a watched park arrived at a different instant first"),
+        "the left park still fails the wait: {message}",
+    );
+    assert_eq!(clock.now(), now, "a mismatch moves no time");
+    release.send(()).unwrap();
+    Deadline::after(Duration::from_secs(5))
+        .recv(&exit)
+        .expect("the parked thread exits");
+}
+
+#[test]
+fn advance_when_parked_with_a_wrong_park_held_never_reaches_its_wait_point() {
+    let clock = FakeClock::new();
+    let until = clock.origin() + Duration::from_secs(30);
+    let wrong = until + Duration::from_secs(1);
+    let (parked, release, exit, _) = park_once(&clock, Some(wrong));
+    Deadline::after(Duration::from_secs(5))
+        .recv(&parked)
+        .expect("waited for the thread to park");
+    // Armed while a watched mismatch is already held: the helper fails before
+    // it could wait, so the wait point never signals. Without the predicate
+    // gate the hook would signal and the bounded receive below would succeed.
+    let (waiting, _release_waiter) = clock.pause_next_advance_wait();
+    let outcome = run_advance_when_parked(
+        &clock,
+        Some(until),
+        None,
+        Duration::from_millis(5),
+        Deadline::after(Duration::from_secs(30)),
+    );
+    assert!(
+        Deadline::after(Duration::from_millis(200))
+            .recv(&waiting)
+            .is_err(),
+        "the wait point does not signal while a mismatch is held",
+    );
+    Deadline::after(Duration::from_secs(5))
+        .recv(&outcome)
+        .expect("waited for advance_when_parked to reject the wrong park")
+        .expect_err("advance_when_parked fails the held wrong park");
+    release.send(()).unwrap();
+    Deadline::after(Duration::from_secs(5))
+        .recv(&exit)
+        .expect("the parked thread exits");
+}
+
+#[test]
+fn advance_when_parked_advances_for_a_re_park_after_a_leave() {
+    let clock = FakeClock::new();
+    let until = clock.origin() + Duration::from_secs(30);
+    let (first, left, second, exit, release, gate) = park_twice(&clock, until);
+    Deadline::after(Duration::from_secs(5))
+        .recv(&first)
+        .expect("waited for the thread to park");
+    release.send(()).unwrap();
+    Deadline::after(Duration::from_secs(5))
+        .recv(&left)
+        .expect("waited for the thread to leave its park");
+    gate.send(()).unwrap();
+    Deadline::after(Duration::from_secs(5))
+        .recv(&second)
+        .expect("waited for the thread to park again");
+    let mark = clock.advance_when_parked(
+        Some(until),
+        None,
+        Duration::from_millis(5),
+        &Deadline::after(Duration::from_secs(5)),
+    );
+    assert_eq!(clock.now(), clock.origin() + Duration::from_millis(5));
+    assert_eq!(
+        mark.0.len(),
+        1,
+        "the returned mark holds the re-parked thread",
+    );
+    release.send(()).unwrap();
+    Deadline::after(Duration::from_secs(5))
+        .recv(&exit)
+        .expect("the parked thread exits");
+}
+
+#[test]
+fn advance_when_parked_wakes_a_subscriber_after_releasing_the_clock_lock() {
+    let clock = FakeClock::new();
+    let until = clock.origin() + Duration::from_secs(10);
+    let barrier = Arc::new(Barrier::new(2));
+    let stand = Arc::new(StandIn {
+        mutex: Mutex::new(()),
+        cv: Condvar::new(),
+        clock: Mutex::new(Some(Arc::clone(&clock))),
+    });
+    let cloned = Arc::clone(&stand);
+    let wake: Arc<dyn Wake> = cloned;
+    clock.subscribe(Arc::downgrade(&wake));
+    let (tx, rx) = mpsc::channel();
+    let clock_t = Arc::clone(&clock);
+    let barrier_t = Arc::clone(&barrier);
+    let stand_t = Arc::clone(&stand);
+    thread::spawn(move || {
+        let guard = stand_t.mutex.lock().unwrap();
+        barrier_t.wait();
+        let mut guard = Some(guard);
+        clock_t.wait_until(Some(until), &mut |bound| {
+            assert_eq!(bound, None);
+            tx.send("parked").unwrap();
+            let held = guard.take().unwrap();
+            let held = stand_t.cv.wait(held).unwrap();
+            guard = Some(held);
+        });
+        tx.send("woke").unwrap();
+    });
+    barrier.wait();
+    assert!(
+        clock.await_parked(until, Duration::from_secs(2)),
+        "waited for the thread to park at its deadline"
+    );
+    assert_eq!(
+        Deadline::after(Duration::from_secs(2))
+            .recv(&rx)
+            .expect("waited for the thread to report it had parked"),
+        "parked"
+    );
+    // The thread still holds the stand-in mutex. The helper wakes it only
+    // after the wait registered the park and the closure is in `Condvar::wait`,
+    // and the wake reads the clock, which deadlocks while the clock lock is held.
+    let mark = clock.advance_when_parked(
+        Some(until),
+        None,
+        Duration::from_secs(10),
+        &Deadline::after(Duration::from_secs(5)),
+    );
+    assert_eq!(mark.0.len(), 1);
+    assert_eq!(
+        Deadline::after(Duration::from_secs(2))
+            .recv(&rx)
+            .expect("waited for advance_when_parked to wake the parked thread"),
+        "woke"
+    );
+    assert!(clock.parked().is_empty());
+}
+
+struct PanicWake;
+
+impl Wake for PanicWake {
+    fn wake(&self) {
+        panic!("the subscriber panicked while waking");
+    }
+}
+
+#[test]
+fn advance_when_parked_moves_time_before_a_panicking_subscriber_wakes() {
+    let clock = FakeClock::new();
+    let until = clock.origin() + Duration::from_secs(30);
+    let (parked, release, exit, _) = park_once(&clock, Some(until));
+    Deadline::after(Duration::from_secs(5))
+        .recv(&parked)
+        .expect("waited for the thread to park");
+    let wake: Arc<dyn Wake> = Arc::new(PanicWake);
+    clock.subscribe(Arc::downgrade(&wake));
+    let outcome = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        clock.advance_when_parked(
+            Some(until),
+            None,
+            Duration::from_millis(5),
+            &Deadline::after(Duration::from_secs(5)),
+        );
+    }));
+    assert!(
+        outcome.is_err(),
+        "the subscriber's panic reaches the helper's caller",
+    );
+    // Time moves before subscribers wake, as advance_marked promises, so the
+    // panic after a successful move does not roll the clock back.
+    assert_eq!(clock.now(), clock.origin() + Duration::from_millis(5));
+    drop(wake);
+    release.send(()).unwrap();
+    Deadline::after(Duration::from_secs(5))
+        .recv(&exit)
+        .expect("the parked thread exits");
+}
+
+/// What `advance_when_parked` has observed while it waits: the parks that
+/// arrived after the wait started, whether they are still held or left.
+#[allow(clippy::unwrap_used, reason = "a test helper; a failure is the test's")]
+fn observed_snapshot(
+    clock: &Arc<FakeClock>,
+) -> Vec<(std::thread::ThreadId, Option<std::time::Instant>)> {
+    super::lock(&clock.state)
+        .observed
+        .iter()
+        .map(|observation| (observation.0, observation.1))
+        .collect()
+}
+
+#[test]
+fn advance_when_parked_observes_a_park_that_leaves_while_it_waits() {
+    let clock = FakeClock::new();
+    let until = clock.origin() + Duration::from_secs(30);
+    // The selected thread gates its park on the test, so its id is known
+    // before the helper starts and it parks only to resolve the wait.
+    let (start_tx, start_rx) = mpsc::channel::<()>();
+    let (selected_tx, selected_rx) = mpsc::channel();
+    let (selected_release_tx, selected_release_rx) = mpsc::channel::<()>();
+    let (selected_exit_tx, selected_exit_rx) = mpsc::channel();
+    let clock_selected = Arc::clone(&clock);
+    let selected = thread::spawn(move || {
+        start_rx
+            .recv()
+            .expect("waited for the test to start the selected thread");
+        clock_selected.wait_until(Some(until), &mut |_bound| {
+            match selected_tx.send(()) {
+                Ok(()) | Err(mpsc::SendError(())) => {}
+            }
+            selected_release_rx
+                .recv()
+                .expect("waited for the test to release the parked thread");
+        });
+        if let Ok(()) = selected_exit_tx.send(()) {}
+    });
+    let selected_id = selected.thread().id();
+    // The pause proves the helper armed its observation before anything
+    // parks, so the park below arrives after the wait starts.
+    let (waiting, release_waiter) = clock.pause_next_advance_wait();
+    let outcome = run_advance_when_parked(
+        &clock,
+        Some(until),
+        Some(selected_id),
+        Duration::from_millis(5),
+        Deadline::after(Duration::from_secs(30)),
+    );
+    Deadline::after(Duration::from_secs(5))
+        .recv(&waiting)
+        .expect("waited for advance_when_parked to wait with nobody parked");
+    release_waiter.send(()).unwrap();
+    // Another thread parks at the named instant but is not selected, so the
+    // helper keeps waiting while observing it.
+    let (parked, release, exit, other_id) = park_once(&clock, Some(until));
+    Deadline::after(Duration::from_secs(5))
+        .recv(&parked)
+        .expect("waited for the other thread to park");
+    assert!(
+        observed_snapshot(&clock)
+            .iter()
+            .any(|(id, parked_until)| *id == other_id && *parked_until == Some(until)),
+        "the helper observed the other thread's arrival",
+    );
+    // The other thread leaves before the helper diagnoses anything: the
+    // observation stays while the held park goes.
+    release.send(()).unwrap();
+    Deadline::after(Duration::from_secs(5))
+        .recv(&exit)
+        .expect("the other thread exits");
+    assert!(
+        !clock.parked().contains(&Some(until)),
+        "the other thread left its park",
+    );
+    assert!(
+        observed_snapshot(&clock)
+            .iter()
+            .any(|(id, parked_until)| *id == other_id && *parked_until == Some(until)),
+        "the helper keeps the observation after the park left",
+    );
+    // The selected thread's park resolves the wait, proving the observation
+    // of the other thread neither satisfied nor failed it.
+    start_tx.send(()).unwrap();
+    Deadline::after(Duration::from_secs(5))
+        .recv(&selected_rx)
+        .expect("waited for the selected thread to park");
+    Deadline::after(Duration::from_secs(5))
+        .recv(&outcome)
+        .expect("waited for advance_when_parked to see the selected thread")
+        .expect("advance_when_parked advances for the selected thread");
+    assert_eq!(clock.now(), clock.origin() + Duration::from_millis(5));
+    selected_release_tx.send(()).unwrap();
+    Deadline::after(Duration::from_secs(5))
+        .recv(&selected_exit_rx)
+        .expect("the selected thread exits");
+}

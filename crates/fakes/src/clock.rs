@@ -246,6 +246,19 @@ impl FakeClock {
         }
     }
 
+    #[cfg(test)]
+    fn pause_next_advance_wait(
+        &self,
+    ) -> (std::sync::mpsc::Receiver<()>, std::sync::mpsc::Sender<()>) {
+        let (checked_tx, checked_rx) = std::sync::mpsc::channel();
+        let (release_tx, release_rx) = std::sync::mpsc::channel();
+        *self
+            .advance_pause
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner) = Some((checked_tx, release_rx));
+        (checked_rx, release_tx)
+    }
+
     /// The `advance_when_parked` wait point, called only while the wait
     /// predicate holds: no watched match and no watched mismatch yet. Fires
     /// once per arming; the pause mutex is released before the test signal
