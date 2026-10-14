@@ -1,10 +1,14 @@
 #!/usr/bin/env bash
-# Stub cargo for scripts/test-bug-red: docs-only exits 1 (not
-# docs-only), bug-filter records its file args in the file named by
-# BUG_RED_RECORD and prints a filter plus one package, and nextest
-# exits 100 (a test failed).
+# Stub cargo for scripts/test-bug-red: docs-only exits 0 only with
+# BUG_RED_DOCS_ONLY=true (a docs-only pull request) and 1 otherwise,
+# bug-filter records its file args in the file named by BUG_RED_RECORD
+# and prints a filter plus one package, and nextest exits
+# BUG_RED_NEXTEST_STATUS (a test failed by default).
 set -euo pipefail
 if [ "${1-}" = xtask ] && [ "${2-}" = docs-only ]; then
+  if [ "${BUG_RED_DOCS_ONLY-}" = true ]; then
+    exit 0
+  fi
   exit 1
 fi
 if [ "${1-}" = xtask ] && [ "${2-}" = bug-filter ]; then
@@ -34,7 +38,7 @@ if [ "${1-}" = xtask ] && [ "${2-}" = bug-filter ]; then
   exit 0
 fi
 if [ "${1-}" = nextest ]; then
-  exit 100
+  exit "${BUG_RED_NEXTEST_STATUS:-100}"
 fi
 echo "stub cargo: unexpected args: $*" >&2
 exit 1
