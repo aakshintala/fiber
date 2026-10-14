@@ -581,23 +581,6 @@ fn a_woken_waiter_never_waits_on_a_later_fetch() {
     assert_eq!(tokens.requests().len(), 3);
 }
 
-/// A provider `p` registering only `credential`: it has one whatever the
-/// session stores.
-fn credentialed_provider(root: &fakes::TempDir) -> Arc<LuaProvider> {
-    let home = root.path().join("home");
-    let dir = root.path().join("ext-cred");
-    fs::create_dir_all(&home).unwrap();
-    fs::create_dir_all(dir.join("providers")).unwrap();
-    fs::write(
-        dir.join("providers/p.lua"),
-        "fiber.provider(\"p\", { credential = { timeout = 5000, run = function() \
-         return { token = \"tok-1\", expires_at = 4102444800 } end } })",
-    )
-    .unwrap();
-    let extension = Arc::new(LuaExtension::new("ext", dir, home, FakeClock::new()));
-    LuaProvider::new(extension, "p")
-}
-
 /// Provider data naming no credential source: only a stored key could
 /// serve it, and the test home stores none.
 fn credentialless_data() -> config::ProviderData {
@@ -630,13 +613,31 @@ fn has_credential_needs_a_registered_credential_or_a_stored_key() {
     let data = credentialless_data();
     // No `credential` function and no key source: nothing to refresh with.
     assert!(
-        !bare.has_credential(&config, &data, &fakes::children::grouped_output),
+        !within({
+            let provider = Arc::clone(&bare);
+            let config = config.clone();
+            let data = data.clone();
+            move || provider.has_credential(&config, &data, &fakes::children::grouped_output)
+        }),
         "a provider with no credential and no stored key has none"
     );
     // A registered `credential` is one whatever the session stores.
-    let credentialed = credentialed_provider(&root);
+    let dir = root.path().join("ext-cred");
+    fs::create_dir_all(dir.join("providers")).unwrap();
+    fs::write(
+        dir.join("providers/p.lua"),
+        "fiber.provider(\"p\", { credential = { timeout = 5000, run = function() \
+         return { token = \"tok-1\", expires_at = 4102444800 } end } })",
+    )
+    .unwrap();
+    let extension = Arc::new(LuaExtension::new("ext", dir, home, FakeClock::new()));
+    let credentialed = LuaProvider::new(extension, "p");
     assert!(
-        credentialed.has_credential(&config, &data, &fakes::children::grouped_output),
+        within({
+            let config = config.clone();
+            let data = data.clone();
+            move || credentialed.has_credential(&config, &data, &fakes::children::grouped_output)
+        }),
         "a provider registering credential has one"
     );
 }
