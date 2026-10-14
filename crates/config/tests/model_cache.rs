@@ -157,6 +157,18 @@ fn a_missing_cache_directory_lists_none() {
 }
 
 #[test]
+fn the_lock_file_is_beside_the_cached_list() {
+    let setup = Setup::new();
+    let home = setup.home();
+    // The refresh holds this path while it runs, so it must name the
+    // cached list with a `lock` extension, not the default path.
+    assert_eq!(
+        config::model_cache_lock_file(&home, "acme").unwrap(),
+        home.join("cache/models/acme.lock")
+    );
+}
+
+#[test]
 fn lock_and_other_files_are_skipped() {
     let setup = Setup::new();
     let home = setup.home();
