@@ -73,12 +73,6 @@ impl Listed {
         self.end_with(id, inbox, None);
     }
 
-    /// Drops `id` from the running list without sending its end: the
-    /// settle stops waiting for it.
-    fn forget(&self, id: &str) {
-        self.ids.lock().unwrap().retain(|listed| listed.0 != id);
-    }
-
     /// [`Listed::end`], with a delegate's finish riding the notice.
     fn end_delegate(&self, id: &str, inbox: &Sender<Delivery>, text: &str) {
         self.end_with(
@@ -120,6 +114,16 @@ impl Listed {
                 delegate,
             }))
             .unwrap();
+        ids.retain(|listed| listed.0 != id);
+    }
+
+    /// Sends `notice` for `id`, then drops `id` from the running list,
+    /// under the one `ids` lock: the settle either sees `id` running with
+    /// the notice already queued, or sees it gone and drains the queued
+    /// notice, so it never blocks on `recv` with nothing left to deliver.
+    fn send_and_forget(&self, id: &str, inbox: &Sender<Delivery>, notice: JobNotice) {
+        let mut ids = self.ids.lock().unwrap();
+        inbox.send(Delivery::Job(notice)).unwrap();
         ids.retain(|listed| listed.0 != id);
     }
 }
@@ -1168,8 +1172,10 @@ fn settle_writes_ahead_before_a_notice_delivered_while_settling() {
     assert_eq!(stopped(&stops, &wait), "j_1");
     // Ends `j_1` with a notice whose claim took a resumed run's start.
     let ahead = resumed_ahead(&action);
-    inbox
-        .send(Delivery::Job(JobNotice {
+    jobs.send_and_forget(
+        "j_1",
+        &inbox,
+        JobNotice {
             completed: JobCompleted {
                 job_id: JobId("j_1".into()),
                 status: Outcome::Cancelled,
@@ -1201,9 +1207,8 @@ fn settle_writes_ahead_before_a_notice_delivered_while_settling() {
                 },
                 worktree: None,
             }),
-        }))
-        .unwrap();
-    jobs.forget("j_1");
+        },
+    );
     ran(&finished);
     assert_eq!(
         held.kinds(),
@@ -1215,5 +1220,6 @@ fn settle_writes_ahead_before_a_notice_delivered_while_settling() {
             "job_completed"
         ]
     );
+    assert_eq!(asked.load(Ordering::SeqCst), 1, "the settle claims once");
     assert_settled_ahead(&held.durable(), &action);
 }
