@@ -37,3 +37,7 @@ impl SessionDiag {
 #[cfg(test)]
 #[path = "diag_tests.rs"]
 mod tests;
+
+#[cfg(test)]
+#[path = "wire_tests.rs"]
+mod wire_tests;

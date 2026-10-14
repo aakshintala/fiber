@@ -3,6 +3,7 @@
 //! reply's lines and how they end the step.
 
 use std::collections::VecDeque;
+use std::num::NonZeroU32;
 use std::sync::Arc;
 
 use contract::events::{
@@ -100,11 +101,13 @@ impl Loop {
         request: &ModelRequest,
         turn: &TurnId,
         message: &ActionId,
+        attempt: NonZeroU32,
     ) -> Result<(Result<Reply, CallError>, VecDeque<ActionId>), Error> {
         let cancel = Arc::clone(&self.cancel);
         let Self {
             log,
             provider,
+            observe,
             model,
             conversation,
             reviewed,
@@ -129,7 +132,13 @@ impl Loop {
         let mut opened: VecDeque<ActionId> = VecDeque::new();
         let mut in_reasoning = false;
         let mut failed = None;
-        let call = provider.call(request);
+        // The session's factory builds the call with its attempt; without
+        // one the call goes straight to the provider, as before.
+        let observe = observe.clone();
+        let call = match observe {
+            Some(observe) => observe(request, attempt),
+            None => provider.call(request),
+        };
         let reply = cancel::run_cancellable(&cancel, call, &mut |delta| {
             let written = match delta {
                 Delta::Text(text) => {

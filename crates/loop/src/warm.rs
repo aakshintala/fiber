@@ -180,7 +180,14 @@ impl Loop {
         let Some(request) = self.warming.resend(now, stop, lifetime) else {
             return Ok(Refreshed::Stopped(now));
         };
-        let call = self.provider.call(&request);
+        // The refresh goes to the session's route through its factory at
+        // the first attempt, so a warming refresh after a switch uses the
+        // new route.
+        let observed = self.observe.clone();
+        let call = match observed {
+            Some(observe) => observe(&request, std::num::NonZeroU32::MIN),
+            None => self.provider.call(&request),
+        };
         let reply = crate::cancel::run_cancellable(&self.cancel, call, &mut |_| {});
         // A refresh writes its usage at once, however it ended, before the
         // notice a failure also writes (`docs/events.md`, "Usage and

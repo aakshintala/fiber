@@ -120,6 +120,12 @@ pub struct Loop {
     provider: Arc<dyn Provider>,
     /// The model `provider` reaches, and how its calls are priced.
     model: Model,
+    /// Builds the session's observed model calls, one per attempt: `None`
+    /// calls the provider directly, leaving `Provider::call` unchanged.
+    observe: Option<contract::diag::Observe>,
+    /// Builds the reviewer's observed calls at the first attempt: `None`
+    /// calls the reviewer's provider directly.
+    reviewer_observe: Option<contract::diag::Observe>,
     /// What the one preamble build reads, once (`docs/prompt-cache.md`,
     /// "The preamble").
     prompt: prompt::PromptInputs,
@@ -504,6 +510,8 @@ impl Loop {
             diag,
             provider,
             model,
+            observe: None,
+            reviewer_observe: None,
             prompt,
             skills,
             preamble_reason: reason,
@@ -617,6 +625,21 @@ impl Loop {
     /// switch.
     pub fn reviewer_notes(mut self, notes: String) -> Self {
         self.reviewer_notes = notes;
+        self
+    }
+
+    /// Observes the session's model calls: the turn's call with its retry
+    /// attempt, and a warming refresh with the first attempt. `None`
+    /// calls the provider directly.
+    pub fn observed(mut self, observe: Option<contract::diag::Observe>) -> Self {
+        self.observe = observe;
+        self
+    }
+
+    /// Observes the reviewer's calls at the first attempt. `None` calls
+    /// the reviewer's provider directly.
+    pub fn reviewer_observed(mut self, observe: Option<contract::diag::Observe>) -> Self {
+        self.reviewer_observe = observe;
         self
     }
 }

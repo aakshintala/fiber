@@ -2781,6 +2781,8 @@ fn prepare_with_window(provider: Arc<ScriptedProvider>, reference: &str, window:
                 notice: None,
                 applied: None,
                 credential_files: Vec::new(),
+                observe: None,
+                reviewer_observe: None,
             })
         },
     )

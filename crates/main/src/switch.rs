@@ -485,6 +485,10 @@ pub(crate) fn prepare(
         addendum: switching.registry.addendum(&resolved).map(str::to_owned),
         handoff: crate::handoff::handoff_settings(&switching.config, &reference),
         reviewer,
+        // The diagnostics wiring builds both factories; until then a
+        // switch carries none.
+        observe: None,
+        reviewer_observe: None,
         web_search,
         // At most one notice: a configured level the model lacks.
         notice: notices.into_iter().next(),

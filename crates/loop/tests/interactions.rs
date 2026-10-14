@@ -1152,6 +1152,8 @@ fn prepare_to(provider: Arc<ScriptedProvider>) -> r#loop::Prepare {
                 notice: None,
                 applied: None,
                 credential_files: Vec::new(),
+                observe: None,
+                reviewer_observe: None,
             })
         },
     )
