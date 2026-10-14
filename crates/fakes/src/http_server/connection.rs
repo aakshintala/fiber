@@ -227,12 +227,12 @@ impl Connection {
         self.ahead.pop_front()
     }
 
-    /// Discards one read of bytes already on the socket, without waiting
-    /// for more: after a fixed body, the pipelined bytes the capped reads
-    /// left behind. A close with unread bytes resets the connection
-    /// instead of delivering the reply, so what already arrived is
-    /// consumed, as the old over-read did; what has not arrived yet is
-    /// never waited for.
+    /// Discards bytes already on the socket, without waiting for more:
+    /// after a fixed body, the pipelined bytes the capped reads left
+    /// behind; after a full reply, what arrived while it went out. A
+    /// close with unread bytes resets the connection instead of
+    /// delivering the reply, so what already arrived is consumed, as the
+    /// old over-read did; what has not arrived yet is never waited for.
     #[allow(
         clippy::unused_io_amount,
         reason = "a discard read: pipelined bytes past the body are counted nowhere"
@@ -241,7 +241,10 @@ impl Connection {
         loop {
             let mut chunk = [0u8; READ_CHUNK];
             match self.stream.read(&mut chunk) {
-                Ok(_) => return,
+                // The peer closed: nothing more can arrive.
+                Ok(0) => return,
+                // Discarded: more may have arrived behind them.
+                Ok(_) => continue,
                 Err(error) => match classify(&error) {
                     ReadErr::Wait => return,
                     ReadErr::Retry => continue,
@@ -394,7 +397,10 @@ impl Connection {
     }
 
     /// Writes the whole head and body, then the connection closes behind
-    /// the caller: the scripted bytes go as supplied.
+    /// the caller: the scripted bytes go as supplied. What arrived while
+    /// the reply went out is discarded first: closing with it unread
+    /// resets the connection on macOS instead of delivering the reply.
+    /// Never waited for, so a quiet peer costs one failed read.
     pub(crate) fn reply_full(
         &mut self,
         head: &[u8],
@@ -416,6 +422,7 @@ impl Connection {
                 return ReplyEnd::Stopped;
             }
         }
+        self.drain_socket();
         ReplyEnd::Done
     }
 

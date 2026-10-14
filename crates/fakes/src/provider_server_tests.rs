@@ -1024,10 +1024,11 @@ fn a_large_fixed_body_costs_one_bound_check_per_fill_not_per_byte() {
 // A fixed body followed by pipelined bytes keeps only its declared
 // length: the drain is capped by the remaining room, so a second
 // request's bytes already buffered are never consumed as this body.
-// The server is parked waiting for the rest of the body (pinned by its
-// wait announcement) before the tail and the pipelined bytes arrive
-// together, so every fill past the seam straddles it: an uncapped drain
-// overshoots into the pipelined bytes and loses the reply.
+// The pipelined bytes arrive only past the record, so the drain already
+// ran: they sit unread when the connection closes, and a close with
+// unread bytes resets the connection on macOS instead of delivering the
+// reply. The held reply parks the server between its drain and its
+// close, so the interleaving holds every run with no sleep and no load.
 #[test]
 fn a_fixed_body_followed_by_pipelined_bytes_keeps_only_its_length() {
     const BODY_LEN: usize = 20_000;
@@ -1035,7 +1036,12 @@ fn a_fixed_body_followed_by_pipelined_bytes_keeps_only_its_length() {
     let clock = FakeClock::new();
     let server =
         ProviderServer::start_on(clock.clone(), vec![Response::status(200, "ok")]).unwrap();
+    // Holds the reply past the record: the server parks between its
+    // drain and its close, so pipelined bytes sent below land after the
+    // drain and before the close every run.
+    server.hold();
     let acks = server.core.test_acknowledgments();
+    let held = server.test_acknowledgments();
     let addr = server.addr;
 
     let body: Vec<u8> = (0u8..=250).cycle().take(BODY_LEN).collect();
@@ -1051,9 +1057,9 @@ fn a_fixed_body_followed_by_pipelined_bytes_keeps_only_its_length() {
     let (first, rest) = body.split_at(FIRST);
     stream.write_all(first).unwrap();
     // The server is out of bytes and parked in the body read: only then
-    // do the tail and the pipelined bytes arrive, together. Earlier
-    // phases (the accept, the head) announce first and are passed over;
-    // every receive is bounded, so a missing body wait fails, never hangs.
+    // does the tail arrive. Earlier phases (the accept, the head)
+    // announce first and are passed over; every receive is bounded, so
+    // a missing wait fails, never hangs.
     let deadline = Deadline::after(READ_WITHIN);
     loop {
         let ack = deadline.recv_or_fail(&acks, "the body read's wait");
@@ -1062,13 +1068,29 @@ fn a_fixed_body_followed_by_pipelined_bytes_keeps_only_its_length() {
         }
     }
     stream.write_all(rest).unwrap();
-    stream.write_all(pipelined).unwrap();
     // Wakes the parked read deterministically: the test advances the
     // fake clock only past the wait the announcement pinned.
     clock.advance(Duration::from_secs(1));
+    // The record lands only past the drain, so reaching it proves the
+    // drain already ran with no pipelined byte yet sent.
+    assert!(
+        server.await_requests(1, READ_WITHIN),
+        "the request is recorded"
+    );
+    // Past the drain, before the close: the held reply keeps the server
+    // parked, and reaching its wait costs round trips the loopback
+    // delivery fits inside, so these bytes sit unread at close.
+    stream.write_all(pipelined).unwrap();
+    loop {
+        let ack = deadline.recv_or_fail(&held, "the held response's wait");
+        if ack.phase == "to wait out the held response" {
+            break;
+        }
+    }
     // Anything past the body sees the close: an over-read loses the
     // reply instead of hanging on it.
     stream.shutdown(Shutdown::Write).unwrap();
+    server.release();
     let mut response = Vec::new();
     stream
         .read_to_end(&mut response)

@@ -604,6 +604,122 @@ fn shutdown_during_the_pause_before_a_full_reply_stops_it() {
     Deadline::after(OP).recv_or_fail(&recorded_rx, "the recorded request");
 }
 
+/// Sends one fixed-length body with `pipelined` bytes behind it, all at
+/// once, then half-closes and reads the reply to the connection's end.
+/// The body is larger than one socket read, so the head's over-read
+/// cannot swallow the suffix into the lookahead: it sits on the socket,
+/// unread, when the reply's close runs, and the suffix is queued before
+/// the server answers, so no wait decides the outcome.
+fn exchange_pipelined(addr: SocketAddr, body: &[u8], pipelined: &[u8]) -> Vec<u8> {
+    use std::io::Read;
+    let mut stream = TcpStream::connect(addr).expect("the test connects");
+    stream
+        .set_read_timeout(Some(OP))
+        .expect("the test bounds its reads");
+    stream
+        .write_all(
+            format!(
+                "POST /v1 HTTP/1.1\r\nHost: fake\r\nContent-Length: {}\r\n\r\n",
+                body.len()
+            )
+            .as_bytes(),
+        )
+        .expect("the head writes");
+    stream.write_all(body).expect("the body writes");
+    stream
+        .write_all(pipelined)
+        .expect("the pipelined bytes write");
+    // Half-closes: the reply's drain meets the suffix, then the end.
+    stream
+        .shutdown(std::net::Shutdown::Write)
+        .expect("the write side closes");
+    let mut raw = Vec::new();
+    stream.read_to_end(&mut raw).expect("the reply reads");
+    raw
+}
+
+/// A fixed body larger than one socket read, for the pipelined-suffix
+/// tests below: small enough to burst at once, large enough that the
+/// head's over-read cannot reach past it into the suffix.
+fn large_body() -> Vec<u8> {
+    vec![b'x'; 20_000]
+}
+
+/// A full reply after a half-close with nothing behind the body still
+/// delivers: the reply's drain meets the peer's end at once, so the
+/// close behind it is clean. The zero-byte edge of the drain's end
+/// check: without it the drain would spin on the end below instead of
+/// closing.
+#[test]
+fn full_reply_after_a_half_close_with_no_unread_bytes_delivers() {
+    let (recorded_tx, recorded_rx) = mpsc::channel();
+    let head = b"HTTP/1.1 200 Fake\r\ncontent-length: 2\r\nconnection: close\r\n\r\n";
+    let (server, addr) = serve_once(recorded_tx, move |mut conn| {
+        assert_eq!(
+            conn.reply_full(head, b"ok", None),
+            ReplyEnd::Done,
+            "the full reply sends"
+        );
+    });
+    let raw = exchange_pipelined(addr, &large_body(), b"");
+    let mut expected = head.to_vec();
+    expected.extend_from_slice(b"ok");
+    assert_eq!(raw, expected, "the wire carries the scripted bytes");
+    let request = Deadline::after(OP).recv_or_fail(&recorded_rx, "the recorded request");
+    assert_eq!(request.target, "/v1");
+    assert!(server.shutdown(), "shutdown reaps the serving threads");
+}
+
+/// A full reply past one unread byte still delivers: the reply's drain
+/// consumes what arrived behind the body before the close behind it, so
+/// the close carries no reset to the client. The one-byte edge past the
+/// drain's end check: without the drain the byte sits unread at close
+/// and the read below resets instead.
+#[test]
+fn full_reply_delivers_past_one_unread_byte() {
+    let (recorded_tx, recorded_rx) = mpsc::channel();
+    let head = b"HTTP/1.1 200 Fake\r\ncontent-length: 2\r\nconnection: close\r\n\r\n";
+    let (server, addr) = serve_once(recorded_tx, move |mut conn| {
+        assert_eq!(
+            conn.reply_full(head, b"ok", None),
+            ReplyEnd::Done,
+            "the full reply sends"
+        );
+    });
+    let raw = exchange_pipelined(addr, &large_body(), b"y");
+    let mut expected = head.to_vec();
+    expected.extend_from_slice(b"ok");
+    assert_eq!(raw, expected, "the wire carries the scripted bytes");
+    let request = Deadline::after(OP).recv_or_fail(&recorded_rx, "the recorded request");
+    assert_eq!(request.target, "/v1");
+    assert!(server.shutdown(), "shutdown reaps the serving threads");
+}
+
+/// A full reply past more than one read of unread bytes still delivers:
+/// the reply's drain keeps consuming until the socket runs dry, so no
+/// tail past its first read sits unread at close. Well past the drain's
+/// end check and past one socket read: stopping after one read would
+/// leave most of the suffix unread and reset the read below instead.
+#[test]
+fn full_reply_delivers_past_more_than_one_read_of_unread_bytes() {
+    let (recorded_tx, recorded_rx) = mpsc::channel();
+    let head = b"HTTP/1.1 200 Fake\r\ncontent-length: 2\r\nconnection: close\r\n\r\n";
+    let (server, addr) = serve_once(recorded_tx, move |mut conn| {
+        assert_eq!(
+            conn.reply_full(head, b"ok", None),
+            ReplyEnd::Done,
+            "the full reply sends"
+        );
+    });
+    let raw = exchange_pipelined(addr, &large_body(), &vec![b'y'; 20_000]);
+    let mut expected = head.to_vec();
+    expected.extend_from_slice(b"ok");
+    assert_eq!(raw, expected, "the wire carries the scripted bytes");
+    let request = Deadline::after(OP).recv_or_fail(&recorded_rx, "the recorded request");
+    assert_eq!(request.target, "/v1");
+    assert!(server.shutdown(), "shutdown reaps the serving threads");
+}
+
 #[test]
 fn chunked_pieces_have_exact_framing() {
     let (recorded_tx, recorded_rx) = mpsc::channel();
