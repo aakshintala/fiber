@@ -15,8 +15,12 @@ use std::sync::{Arc, mpsc};
 use std::time::Duration;
 
 use config::{Config, ProjectKey, Sources};
+use contract::events::OfferedKind;
 use contract::signing::{SignRequest, Signer};
-use extensions::{CredentialPair, Error, LuaExtension, LuaProvider, Origin, Request, plan};
+use extensions::{
+    CredentialPair, Error, Fetch, Index, LuaExtension, LuaProvider, Origin, Request, Store,
+    declared_items, hash, plan,
+};
 use fakes::Deadline;
 use fakes::clock::FakeClock;
 use fakes::git::git;
@@ -490,4 +494,160 @@ pub(crate) fn go_module(dir: &Path, name: &str) -> mpsc::Receiver<()> {
         drop(held);
     });
     rx
+}
+
+/// Pinned-copy fixtures for `pinned_depends` (resolution) and
+/// `pinned_copy` (transaction, completion, legacy, confinement): a
+/// repository workspace declaring one package, approved through the public
+/// [`Store`] API with dependencies from local tagged repositories.
+pub(crate) const FIBER: &str = "0.1.0";
+pub(crate) fn project() -> ProjectKey {
+    ProjectKey::new("pin").unwrap()
+}
+pub(crate) fn named(name: &str, depends: &[(&str, &str)]) -> Value {
+    let mut m = manifest(name);
+    m.as_object_mut().unwrap().insert(
+        "depends".into(),
+        json!(depends.iter().copied().collect::<BTreeMap<_, _>>()),
+    );
+    m
+}
+/// The manifest `name` with `depends` and this install step.
+pub(crate) fn installing(name: &str, depends: &[(&str, &str)], step: &str) -> Value {
+    let mut m = named(name, depends);
+    m.as_object_mut()
+        .unwrap()
+        .insert("install".into(), json!(["sh", "-c", step]));
+    m
+}
+/// The workspace declares the package at `pkg` with this manifest, listed
+/// by git as a repository package is.
+pub(crate) fn declare(setup: &Setup, root: &Value) {
+    let ws = setup.workspace();
+    if !ws.join(".git").exists() {
+        git(&ws, &["init", "--quiet"]);
+    }
+    write(&ws.join("pkg/extension.json"), &root.to_string());
+    write(&ws.join("pkg/init.lua"), "-- entry\n");
+    write(
+        &ws.join(".fiber/config.json"),
+        &json!({"repository_extensions": [{"path": "pkg"}]}).to_string(),
+    );
+}
+pub(crate) fn store(setup: &Setup, repos: &Repos, clock: &Arc<FakeClock>) -> Store {
+    Store::new(&setup.home(), &project(), Arc::clone(clock) as Arc<_>).fetching(Fetch::new(
+        repos.origin(),
+        FIBER,
+        Arc::clone(clock) as Arc<_>,
+    ))
+}
+/// The declared extension and its content hash.
+pub(crate) fn item(setup: &Setup, clock: &Arc<FakeClock>) -> (extensions::RepoItem, String) {
+    let items = declared_items(&setup.workspace(), &**clock).unwrap();
+    let found = items
+        .into_iter()
+        .find(|i| i.kind == OfferedKind::Extension)
+        .unwrap();
+    let digest = hash(&mut Index::load(&setup.home()), &found).unwrap();
+    (found, digest)
+}
+/// Approves the declared extension with its dependencies fetched from
+/// `repos`, and returns its content hash.
+pub(crate) fn approve(setup: &Setup, repos: &Repos) -> String {
+    let clock = FakeClock::new();
+    let store = store(setup, repos, &clock);
+    let (found, digest) = item(setup, &clock);
+    store.approve(&found, &digest).unwrap();
+    digest
+}
+/// The content hash of the declared extension, without approving.
+pub(crate) fn digest_of(setup: &Setup) -> String {
+    let clock = FakeClock::new();
+    item(setup, &clock).1
+}
+pub(crate) fn depends_home(setup: &Setup, digest: &str) -> PathBuf {
+    setup
+        .home()
+        .join("pinned")
+        .join(digest)
+        .join(".fiber-depends")
+}
+pub(crate) fn dep_dir(setup: &Setup, digest: &str, dep: &str) -> PathBuf {
+    depends_home(setup, digest)
+        .join("extensions")
+        .join(config::dir_name(dep))
+}
+/// The installed version of `dep` inside the pinned copy: the tag it was
+/// fetched at, as its install record says (a package's manifest keeps its
+/// own version across tags).
+pub(crate) fn dep_version(setup: &Setup, digest: &str, dep: &str) -> String {
+    dep_record(setup, digest, dep)
+        .get("version")
+        .and_then(Value::as_str)
+        .unwrap()
+        .to_owned()
+}
+/// The install record of `dep` inside the pinned copy.
+pub(crate) fn dep_record(setup: &Setup, digest: &str, dep: &str) -> Value {
+    let text = fs::read_to_string(dep_dir(setup, digest, dep).join(".fiber.json")).unwrap();
+    serde_json::from_str(&text).unwrap()
+}
+/// The names installed inside the pinned copy, in order; dotfiles are
+/// the plan's staging directories, never installs.
+pub(crate) fn dep_names(setup: &Setup, digest: &str) -> Vec<String> {
+    let mut names: Vec<String> = fs::read_dir(depends_home(setup, digest).join("extensions"))
+        .map(|entries| {
+            entries
+                .map(|e| e.unwrap().file_name().to_string_lossy().into_owned())
+                .collect()
+        })
+        .unwrap_or_default();
+    names.retain(|n| !n.starts_with('.'));
+    names.sort();
+    names
+}
+/// The approval file for `digest` under the test project.
+pub(crate) fn approval(setup: &Setup, digest: &str) -> PathBuf {
+    setup
+        .home()
+        .join("projects")
+        .join("pin")
+        .join("approvals")
+        .join(digest)
+}
+pub(crate) fn ready(setup: &Setup, digest: &str) -> PathBuf {
+    setup.home().join("pinned").join(format!("{digest}.ready"))
+}
+pub(crate) fn copy(setup: &Setup, digest: &str) -> PathBuf {
+    setup.home().join("pinned").join(digest)
+}
+/// Approves a counting root with one dependency, and returns its hash.
+pub(crate) fn counting_root(setup: &Setup, repos: &mut Repos) -> String {
+    let helper = "example.com/acme/helper";
+    repos.tag(helper, "", "v1.0.0", &manifest(helper), &[]);
+    let root = "fiber.test/root";
+    declare(
+        setup,
+        &installing(root, &[(helper, "1.0")], "echo x >> counter"),
+    );
+    approve(setup, repos)
+}
+pub(crate) fn counter(setup: &Setup, digest: &str) -> String {
+    fs::read_to_string(copy(setup, digest).join("counter")).unwrap_or_default()
+}
+/// A file outside Fiber home with sentinel bytes, and its directory.
+pub(crate) fn outside(root: &Path) -> (PathBuf, PathBuf) {
+    let dir = root.join("outside");
+    fs::create_dir_all(&dir).unwrap();
+    let target = dir.join("target.txt");
+    fs::write(&target, "untouched\n").unwrap();
+    (dir, target)
+}
+pub(crate) fn outside_names(dir: &Path) -> Vec<String> {
+    let mut names: Vec<String> = fs::read_dir(dir)
+        .unwrap()
+        .map(|e| e.unwrap().file_name().to_string_lossy().into_owned())
+        .collect();
+    names.sort();
+    names
 }
