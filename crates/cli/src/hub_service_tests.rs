@@ -25,8 +25,8 @@ use fakes::clock::FakeClock;
 use serde_json::{Value, json};
 
 use super::{
-    RERUN, Ran, Runner, SystemRunner, hub_answers, hub_install, hub_restart, hub_uninstall,
-    install, read_unit, restart, uninstall,
+    RERUN, Ran, Runner, SystemRunner, current_exe, hub_answers, hub_install, hub_restart,
+    hub_uninstall, install, must, read_unit, restart, uninstall,
 };
 use crate::hub_unit::{Manager, Service, name};
 
@@ -561,6 +561,44 @@ fn another_spawn_failure_names_the_program() {
         error.message.starts_with("running `systemctl`: denied"),
         "{}",
         error.message
+    );
+}
+
+#[test]
+fn a_blank_first_stderr_line_adds_no_quote_to_the_error() {
+    // An empty stderr takes the `None` arm, a whitespace-only first line
+    // trims to empty: neither names stderr in the error.
+    for stderr in [String::new(), "   \nsecond line\n".to_owned()] {
+        let fake = Fake::new({
+            let stderr = stderr.clone();
+            move |_| {
+                Ok(Ran {
+                    success: false,
+                    code: Some(5),
+                    stderr: stderr.clone(),
+                })
+            }
+        });
+        let error = must(
+            &fake,
+            "launchctl",
+            &["bootstrap".to_owned(), "gui/501/x".to_owned()],
+        )
+        .unwrap_err();
+        assert_eq!(error.code, ErrorCode::IoFailed);
+        assert_eq!(
+            error.message, "`launchctl bootstrap gui/501/x` failed with exit code 5.",
+            "stderr {stderr:?}"
+        );
+    }
+}
+
+#[test]
+fn current_exe_is_the_running_binary() {
+    assert_eq!(
+        current_exe().unwrap(),
+        std::env::current_exe().unwrap(),
+        "the hub restart runs this binary"
     );
 }
 
