@@ -3,8 +3,8 @@
 //! credential-safe projection, so a test can pin exact wire bytes a
 //! shaped fake cannot send, such as a reply with no measured length or a
 //! declared length the bytes do not carry. Accepting, head reading and
-//! every reply run on the shared HTTP core; only the fixed reply, the
-//! records and the hold below are this fake's own.
+//! every reply run on the shared HTTP core; only the fixed reply and the
+//! records below are this fake's own.
 //!
 //! A complete request is recorded before its reply is sent, so once a
 //! client holds the whole reply the request is in
@@ -33,10 +33,6 @@ struct State {
     /// counts, so [`RawHttpServer::await_replies`] never claims a reply
     /// the peer cut short.
     completed: usize,
-    /// While set, a recorded request waits for
-    /// [`RawHttpServer::release_replies`] before its reply is sent, so a
-    /// test can reset the peer between the record and the send.
-    hold: bool,
     /// Replies recorded but not yet finished: incremented when a request
     /// is recorded, decremented after its send attempt ends on every
     /// path, so [`RawHttpServer::await_idle`] observes the attempt's end.
@@ -48,7 +44,6 @@ impl State {
         Self {
             requests: Vec::new(),
             completed: 0,
-            hold: false,
             pending: 0,
         }
     }
@@ -107,19 +102,6 @@ impl RawHttpServer {
         lock(&self.state).requests.clone()
     }
 
-    /// Holds every reply after its request is recorded, until
-    /// [`RawHttpServer::release_replies`]: the record is visible while
-    /// the peer waits for bytes that never come.
-    pub fn hold_replies(&self) {
-        lock(&self.state).hold = true;
-    }
-
-    /// Sends the replies [`RawHttpServer::hold_replies`] is holding.
-    pub fn release_replies(&self) {
-        lock(&self.state).hold = false;
-        self.arrived.notify_all();
-    }
-
     /// Waits, at most `within` of real time, until at least `count`
     /// replies are fully flushed. True once they are; false at the
     /// deadline. Zero admits at once. Dropping the server ends no wait
@@ -150,18 +132,6 @@ impl RawHttpServer {
     }
 }
 
-impl Drop for RawHttpServer {
-    fn drop(&mut self) {
-        // Release held replies before reaping: a held reply is sent, and
-        // every serving thread ends past the core's bounded shutdown. The
-        // lock is free before the shutdown joins, so no serving thread
-        // waits on this drop.
-        lock(&self.state).hold = false;
-        self.arrived.notify_all();
-        self.core.shutdown();
-    }
-}
-
 /// A lock that outlives a panicked holder: the state is plain data, and a
 /// test thread that panicked has already failed its test.
 fn lock(state: &Mutex<State>) -> MutexGuard<'_, State> {
@@ -182,9 +152,6 @@ fn serve(conn: Connection, reply: &[u8], state: &Mutex<State>, arrived: &Condvar
         state.requests.push(project(&request));
         state.pending += 1;
         arrived.notify_all();
-        while state.hold {
-            state = arrived.wait(state).unwrap_or_else(PoisonError::into_inner);
-        }
     }
     // The lock is free while the bytes go out, so a slow peer never
     // holds the records; the handler's return closes the connection.

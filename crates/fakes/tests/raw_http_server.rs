@@ -99,7 +99,7 @@ fn exchange(server: &RawHttpServer, request: &[u8], close_write: bool) -> Vec<u8
 
 /// Spins until at least `count` requests are recorded, at most
 /// `DEADLINE`: the record lands on the serving thread just before the
-/// reply, so a test that must observe the record before releasing a hold
+/// reply, so a test that must observe the record before closing the peer
 /// waits for it here, failing naming the wait instead of hanging.
 #[track_caller]
 fn wait_recorded(server: &RawHttpServer, count: usize, what: &str) -> Vec<Request> {
@@ -232,76 +232,28 @@ fn raw_reply_completion_is_observed_after_the_send() {
 }
 
 #[test]
-fn held_replies_wait_for_their_release() {
-    let server = RawHttpServer::start(LENGTHLESS).unwrap();
-    server.hold_replies();
-    let (address, request) = (
-        addr(&server),
-        b"GET /held HTTP/1.1\r\nHost: fake\r\n\r\n".to_vec(),
-    );
-    let (tx, rx) = mpsc::channel();
-    let client = thread::spawn(move || {
-        let steps = || -> io::Result<()> {
-            let mut stream = TcpStream::connect_timeout(&address, DEADLINE)?;
-            stream.set_read_timeout(Some(DEADLINE))?;
-            stream.set_write_timeout(Some(DEADLINE))?;
-            stream.write_all(&request)?;
-            let mut raw = Vec::new();
-            stream.read_to_end(&mut raw)?;
-            tx.send(Ok(raw)).unwrap();
-            Ok(())
-        };
-        if let Err(e) = steps() {
-            tx.send(Err(e)).unwrap();
-        }
-    });
-    let recorded = wait_recorded(&server, 1, "the held request to be recorded");
-    assert_eq!(recorded[0].method, "GET");
-    assert!(
-        !server.await_idle(Duration::ZERO),
-        "a held reply is still unfinished"
-    );
-    assert!(
-        !server.await_replies(1, Duration::ZERO),
-        "a held reply completes nothing"
-    );
-    server.release_replies();
-    assert!(
-        server.await_replies(1, DEADLINE),
-        "the released reply completes"
-    );
-    let step_wait = Deadline::after(DEADLINE);
-    assert_eq!(
-        wait(&rx, "reading the released reply", &step_wait),
-        LENGTHLESS,
-        "the released reply is the fixed bytes"
-    );
-    match client.join() {
-        Ok(()) | Err(_) => {}
-    }
-}
-
-#[test]
 fn an_interrupted_reply_send_publishes_no_completion() {
     // More bytes than any socket buffer can hold past a dead peer, so
     // the send cannot fully flush and the reply never counts.
     let mut huge = b"HTTP/1.1 200 OK\r\nconnection: close\r\n\r\n".to_vec();
     huge.extend(std::iter::repeat_n(b'x', 8 * 1024 * 1024));
     let server = RawHttpServer::start(huge).unwrap();
-    server.hold_replies();
     let address = addr(&server);
     let mut stream = TcpStream::connect_timeout(&address, DEADLINE).unwrap();
     stream.set_write_timeout(Some(DEADLINE)).unwrap();
     stream
         .write_all(b"GET /cut HTTP/1.1\r\nHost: fake\r\n\r\n")
         .unwrap();
-    drop(stream);
     let recorded = wait_recorded(&server, 1, "the interrupted request to be recorded");
     assert_eq!(
         recorded[0].method, "GET",
         "the interrupted request is recorded before its reply"
     );
-    server.release_replies();
+    // Close the peer: the record above proves the read finished, so any
+    // close after it meets a post-read server, and the 8 MiB reply cannot
+    // flush into a non-reading peer, so the send ends stopped, whether
+    // the close lands as a reset or a graceful end.
+    drop(stream);
     assert!(server.await_idle(DEADLINE), "the send attempt ended");
     assert!(
         !server.await_replies(1, Duration::ZERO),
@@ -330,57 +282,51 @@ fn a_truncated_chunked_request_is_recorded_with_its_decoded_prefix_and_gets_the_
 }
 
 #[test]
-fn dropping_a_server_with_a_held_reply_releases_it() {
-    let server = RawHttpServer::start(LENGTHLESS).unwrap();
-    server.hold_replies();
+fn dropping_a_server_with_a_blocked_reply_returns_promptly() {
+    // More bytes than any socket buffer can hold past a peer that never
+    // reads, so the send blocks and only the shutdown ends it; dropping
+    // the server still returns promptly through the core's bounded join.
+    let mut huge = b"HTTP/1.1 200 OK\r\nconnection: close\r\n\r\n".to_vec();
+    huge.extend(std::iter::repeat_n(b'x', 8 * 1024 * 1024));
+    let server = RawHttpServer::start(huge).unwrap();
     let address = addr(&server);
-    let (done_tx, done_rx) = mpsc::channel::<Result<Vec<u8>, io::Error>>();
     let (held_tx, held_rx) = mpsc::channel::<TcpStream>();
+    let (release_tx, release_rx) = mpsc::channel::<()>();
     let client = thread::spawn(move || {
-        let steps = || -> io::Result<()> {
-            let mut stream = TcpStream::connect_timeout(&address, DEADLINE)?;
-            stream.set_read_timeout(Some(DEADLINE))?;
-            stream.set_write_timeout(Some(DEADLINE))?;
-            // A handle the test owns: it drops this before joining
-            // this worker, so no path leaves a blocked client behind.
-            held_tx.send(stream.try_clone()?).unwrap();
-            stream.write_all(b"GET /held-drop HTTP/1.1\r\nHost: fake\r\n\r\n")?;
-            let mut raw = Vec::new();
-            stream.read_to_end(&mut raw)?;
-            done_tx.send(Ok(raw)).unwrap();
-            Ok(())
-        };
-        if let Err(e) = steps() {
-            let _sent = done_tx.send(Err(e));
-        }
+        let mut stream = TcpStream::connect_timeout(&address, DEADLINE).unwrap();
+        stream.set_write_timeout(Some(DEADLINE)).unwrap();
+        // A handle the test owns: it drops this before joining this
+        // worker, so no path leaves a blocked client behind.
+        held_tx.send(stream.try_clone().unwrap()).unwrap();
+        stream
+            .write_all(b"GET /blocked-drop HTTP/1.1\r\nHost: fake\r\n\r\n")
+            .unwrap();
+        // Never reads: the reply outgrows every socket buffer, so the
+        // server's send blocks until the shutdown ends it.
+        let _ignored = release_rx.recv();
     });
     let peer_wait = Deadline::after(DEADLINE);
-    let peer = peer_wait.recv_or_fail(&held_rx, "connecting the held-drop client");
-    let recorded = wait_recorded(&server, 1, "the held request to be recorded");
+    let peer = peer_wait.recv_or_fail(&held_rx, "connecting the blocked-drop client");
+    let recorded = wait_recorded(&server, 1, "the blocked request to be recorded");
     assert_eq!(
         recorded[0].method, "GET",
-        "the held request is recorded before the drop"
+        "the blocked request is recorded before the drop"
     );
-    assert_eq!(recorded[0].path, "/held-drop");
+    assert_eq!(recorded[0].path, "/blocked-drop");
     let (drop_tx, drop_rx) = mpsc::channel();
     let _dropper = thread::spawn(move || {
         drop(server);
         let _sent = drop_tx.send(());
     });
     let drop_wait = Deadline::after(DEADLINE);
-    drop_wait.recv_or_fail(&drop_rx, "dropping the server with a held reply");
-    // The reply flushed past the released hold, and the close behind
-    // it ends the client's read; dropping this handle closes nothing
-    // while the worker still holds its own.
+    drop_wait.recv_or_fail(&drop_rx, "dropping the server with a blocked reply");
+    // Dropping this handle closes nothing while the worker still holds
+    // its own; releasing and joining the worker then leaves no path
+    // with a client blocked behind.
     drop(peer);
-    let reply_wait = Deadline::after(DEADLINE);
-    let reply = reply_wait.recv_or_fail(&done_rx, "reading the held reply released by the drop");
+    let _sent = release_tx.send(());
     match client.join() {
         Ok(()) | Err(_) => {}
-    }
-    match reply {
-        Ok(raw) => assert_eq!(raw, LENGTHLESS, "the released hold sends the fixed reply"),
-        Err(e) => panic!("reading the held reply released by the drop: {e}"),
     }
     assert!(
         TcpStream::connect_timeout(&address, SHORT).is_err(),
