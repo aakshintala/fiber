@@ -756,3 +756,113 @@ fn revoke_watchdog_closes_a_live_device_at_the_deadline_while_answer_is_blocked(
         "the watchdog shuts the device at the deadline"
     );
 }
+
+#[test]
+fn attach_web_stores_the_handle_finish_waits_for_its_drain() {
+    let temp = Temp::new();
+    let clock = FakeClock::new();
+    let hub = test_hub(&temp, &clock);
+    pair_device(&temp.dir, "phone", "token");
+    let who = hub.pairing.authenticate(&hub, 1, "token").unwrap();
+    let listener = std::net::TcpListener::bind(("127.0.0.1", 0)).unwrap();
+    let peer = TcpStream::connect(listener.local_addr().unwrap()).unwrap();
+    let (server, _) = listener.accept().unwrap();
+    let web = Arc::new(Web {
+        control: server.try_clone().unwrap(),
+        sink: Mutex::new(Sink {
+            stream: server,
+            closed: false,
+        }),
+        drained: AtomicBool::new(false),
+    });
+    hub.pairing.attach_web(&who, Arc::clone(&web));
+    let end = clock.now() + STOP_CLOSE_WAIT;
+    let revoked = match hub
+        .pairing
+        .revoke(
+            &hub,
+            &Who::Local,
+            &crate::testkit::args(json!({"device":"phone"})),
+        )
+        .unwrap()
+    {
+        Outcome::Done(revoked) => revoked,
+        Outcome::Dropped => panic!("local revoke dropped"),
+    };
+    let (tx, rx) = mpsc::channel();
+    let working = Arc::clone(&hub);
+    thread::spawn(move || {
+        working.pairing.finish(&working, revoked);
+        tx.send(()).unwrap_or(());
+    });
+    // The stored web never drains, so finish must still be waiting here.
+    assert!(
+        Deadline::after(Duration::from_millis(250))
+            .recv(&rx)
+            .is_err(),
+        "finish waits for the attached web to drain"
+    );
+    assert!(clock.await_parked_count(end, 2, PAIR_WAIT));
+    clock.advance(STOP_CLOSE_WAIT);
+    Deadline::after(DEADLINE).recv_or_fail(&rx, "finish returns at its deadline");
+    drop((peer, web));
+}
+
+#[test]
+fn attach_web_after_revocation_shuts_the_web() {
+    let temp = Temp::new();
+    let clock = FakeClock::new();
+    let hub = test_hub(&temp, &clock);
+    pair_device(&temp.dir, "phone", "token");
+    let who = hub.pairing.authenticate(&hub, 1, "token").unwrap();
+    let listener = std::net::TcpListener::bind(("127.0.0.1", 0)).unwrap();
+    let peer = TcpStream::connect(listener.local_addr().unwrap()).unwrap();
+    let (server, _) = listener.accept().unwrap();
+    let web = Arc::new(Web {
+        control: server.try_clone().unwrap(),
+        sink: Mutex::new(Sink {
+            stream: server,
+            closed: false,
+        }),
+        drained: AtomicBool::new(false),
+    });
+    let revoked = match hub
+        .pairing
+        .revoke(
+            &hub,
+            &Who::Local,
+            &crate::testkit::args(json!({"device":"phone"})),
+        )
+        .unwrap()
+    {
+        Outcome::Done(revoked) => revoked,
+        Outcome::Dropped => panic!("local revoke dropped"),
+    };
+    hub.pairing.attach_web(&who, Arc::clone(&web));
+    // A web attached after revocation is shut, so the peer reads EOF.
+    let (tx, rx) = mpsc::channel();
+    thread::spawn(move || {
+        let mut peer = peer;
+        let mut bytes = [0; 1024];
+        loop {
+            match peer.read(&mut bytes) {
+                Ok(0) | Err(_) => {
+                    tx.send(()).unwrap_or(());
+                    break;
+                }
+                Ok(_) => {}
+            }
+        }
+    });
+    Deadline::after(DEADLINE).recv_or_fail(&rx, "revocation shuts the late web");
+    // The revoke snapshot holds no web or writer, so finish returns at
+    // once and releases the revoke watchdog.
+    let (done_tx, done_rx) = mpsc::channel();
+    let working = Arc::clone(&hub);
+    thread::spawn(move || {
+        working.pairing.finish(&working, revoked);
+        done_tx.send(()).unwrap_or(());
+    });
+    Deadline::after(DEADLINE).recv_or_fail(&done_rx, "finish releases the revoke");
+    drop(web);
+}
