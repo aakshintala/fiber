@@ -759,10 +759,15 @@ fn terminal(
                 .ok()
                 .and_then(|value| value.as_str().map(str::to_owned))
                 .unwrap_or_else(|| "other".to_owned());
+            let level = if config::diagnostics_debug(&config) {
+                log::diag::Level::Debug
+            } else {
+                log::diag::Level::Info
+            };
             log::diag::Diag::new(
                 &diag_home,
                 log::diag::Process::Tui,
-                log::diag::Level::Info,
+                level,
                 Arc::clone(&clock),
             )
             .line(log::diag::Severity::Error, None, &code, &failure.message);
