@@ -410,8 +410,12 @@ pub(crate) fn parts_in(
 }
 
 /// The reviewer model's reference: `reviewer.model` when set, else the
-/// session model's provider's reviewer model. A missing reviewer is not a
-/// startup error: the loop gets it, and every reviewed call escalates it
+/// session provider's own `providers."<name>".reviewer_model`, else the
+/// package's `reviewer_model`, else no reviewer. The provider lookup reads
+/// the effective layers, so a project value wins over the global one and
+/// a repository value is ignored; the stored ID is local and gains the
+/// session provider's prefix once. A missing reviewer is not a startup
+/// error: the loop gets it, and every reviewed call escalates it
 /// (`docs/permissions.md`, "How it runs").
 pub(crate) fn reviewer_reference(
     config: &Config,
@@ -423,6 +427,18 @@ pub(crate) fn reviewer_reference(
     {
         return Ok(typed);
     }
+    // Segments, never dotted text: a provider name holding a dot stays
+    // one segment.
+    let local = [
+        "providers".to_owned(),
+        session.provider.name.clone(),
+        "reviewer_model".to_owned(),
+    ];
+    if let Some((value, _)) = config.get_segments(&local, None)
+        && let Some(id) = value.as_str()
+    {
+        return Ok(format!("{}/{}", session.provider.name, id));
+    }
     match &session.provider.reviewer_model {
         Some(id) => Ok(format!("{}/{}", session.provider.name, id)),
         None => Err(failure(ErrorCode::NoModel, r#loop::NO_MODEL_MESSAGE)),
@@ -430,11 +446,13 @@ pub(crate) fn reviewer_reference(
 }
 
 /// Who judges step 7's calls: `reviewer.model` when set, else the session
-/// model's provider's reviewer model, else no reviewer at all. A failure to
+/// provider's own `providers."<name>".reviewer_model`, else the package's
+/// `reviewer_model`, else no reviewer at all. A failure to
 /// resolve the model or to read its credential is not a startup error: the
 /// loop gets it, and every reviewed call escalates it
-/// (`docs/permissions.md`, "How it runs"). Fiber never reviews with the
-/// session's own model. `credential` reads the startup map first, then the
+/// (`docs/permissions.md`, "How it runs"). There is no automatic fallback
+/// to the session's own model: only an explicit pick may name it.
+/// `credential` reads the startup map first, then the
 /// provider's configured label, so a reviewer on the session's own provider
 /// reuses the session's key and signer, and a `command` credential runs once
 /// per process; a switch passes the access its read returned
