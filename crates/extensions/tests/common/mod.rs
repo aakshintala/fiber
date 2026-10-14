@@ -15,11 +15,13 @@ use std::sync::{Arc, mpsc};
 use std::time::Duration;
 
 use config::{Config, ProjectKey, Sources};
-use contract::events::OfferedKind;
+use contract::events::{OfferDecision, OfferedItem, OfferedKind};
+use contract::repository::{Decided, RepositoryCode};
+use contract::shapes::Failure;
 use contract::signing::{SignRequest, Signer};
 use extensions::{
     CopyHold, CredentialPair, Error, Fetch, Index, LuaExtension, LuaProvider, Origin, RepoItem,
-    Request, Store, declared_items, hash, plan,
+    Request, SessionOffer, Store, declared_items, hash, plan,
 };
 use fakes::Deadline;
 use fakes::clock::FakeClock;
@@ -606,6 +608,19 @@ pub(crate) fn approve(setup: &Setup, repos: &Repos) -> String {
     let waiting = digest.clone();
     on_worker("the approval", move || store.approve(&found, &waiting)).unwrap();
     digest
+}
+/// Runs one offer decision on a worker under one deadline: an approval
+/// blocks on git and install steps, so a stall fails the test instead of
+/// hanging it. `Never` and `Skip` never fetch; only `Approve` needs this,
+/// but every decision reads the same way.
+pub(crate) fn decide_on_worker(
+    offer: &SessionOffer,
+    item: &OfferedItem,
+    decision: OfferDecision,
+) -> Result<Decided, Failure> {
+    let offer = offer.clone();
+    let item = item.clone();
+    on_worker("the decision", move || offer.decide(&item, decision))
 }
 /// The content hash of the declared extension, without approving.
 pub(crate) fn digest_of(setup: &Setup) -> String {

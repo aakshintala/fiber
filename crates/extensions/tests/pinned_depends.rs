@@ -18,8 +18,8 @@ use std::path::Path;
 use std::sync::Arc;
 
 use common::{
-    FIBER, Repos, Setup, StoreOperations, approve, declare, dep_dir, dep_names, dep_record,
-    dep_version, depends_home, item, manifest, named, project, store, write,
+    FIBER, Repos, Setup, StoreOperations, approve, decide_on_worker, declare, dep_dir, dep_names,
+    dep_record, dep_version, depends_home, item, manifest, named, project, store, write,
 };
 use contract::events::OfferDecision;
 use contract::repository::{Decided, RepositoryCode};
@@ -427,9 +427,7 @@ fn an_offered_approval_records_and_installs_dependencies() {
     let pending = offer.unapproved().unwrap();
     assert_eq!(pending.len(), 1);
     assert_eq!(
-        offer
-            .decide(&pending[0].offered, OfferDecision::Approve)
-            .unwrap(),
+        decide_on_worker(&offer, &pending[0].offered, OfferDecision::Approve).unwrap(),
         Decided::Recorded
     );
     assert_eq!(
@@ -486,9 +484,12 @@ fn never_skip_and_changed_content_install_nothing() {
     // Changed since the offer: obsolete, and nothing installs.
     write(&ws.join("changed/init.lua"), "-- changed\n");
     assert_eq!(
-        offering(&setup, None, &clock)
-            .decide(&offered("changed"), OfferDecision::Approve)
-            .unwrap(),
+        decide_on_worker(
+            &offering(&setup, None, &clock),
+            &offered("changed"),
+            OfferDecision::Approve
+        )
+        .unwrap(),
         Decided::Obsolete
     );
     for package in ["never", "skip", "changed"] {
