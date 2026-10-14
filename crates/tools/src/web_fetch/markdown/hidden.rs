@@ -311,7 +311,10 @@ impl Hidden {
     /// Closes every open `svg`, and with them what they hide.
     fn close_svg(&mut self) {
         if self.in_svg() {
-            while self.stack.len() > self.svg_base {
+            // The count is fixed before popping, so no condition flips to
+            // forever once the stack empties.
+            let extra = self.stack.len() - self.svg_base;
+            for _ in 0..extra {
                 self.pop();
             }
             self.shrink();
