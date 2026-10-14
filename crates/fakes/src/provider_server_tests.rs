@@ -1022,3 +1022,69 @@ fn a_fixed_body_followed_by_pipelined_bytes_keeps_only_its_length() {
         "the recorded body holds its declared bytes, not the pipelined ones"
     );
 }
+
+// Twenty bench-shaped POSTs: byte-slice bodies of growing length, each
+// on a fresh connection read to the server's close, against small stream
+// replies. A wait with no wake sleeps its whole poll bound, so each such
+// sleep costs a busy turn about a millisecond; a readiness wait ends when
+// its bytes arrive instead. The bound admits the idle sleeps a turn pays
+// and refuses the per-read sleeps the always-sleeping wait pays: twenty
+// such posts sleep 3460 full bounds at base (nextest, debug, macOS).
+#[test]
+fn busy_shaped_posts_sleep_only_when_idle() {
+    const CALLS: usize = 20;
+    const STEP: usize = 500_000;
+    const SLEPT_BOUND: u64 = 100;
+    let clock = FakeClock::new();
+    let script: Vec<Response> = (0..CALLS)
+        .map(|_| Response::stream("event: done\ndata: {}\n\n"))
+        .collect();
+    let server = ProviderServer::start_on(clock, script).unwrap();
+    let addr = server.addr;
+    for n in 0..CALLS {
+        let body: Vec<u8> = (0u8..=250).cycle().take((n + 1) * STEP).collect();
+        let mut stream = TcpStream::connect_timeout(&addr, READ_WITHIN).unwrap();
+        stream.set_read_timeout(Some(READ_WITHIN)).unwrap();
+        stream
+            .write_all(
+                format!(
+                    "POST /v1 HTTP/1.1\r\nHost: localhost\r\nContent-Length: {}\r\n\r\n",
+                    body.len()
+                )
+                .as_bytes(),
+            )
+            .unwrap();
+        stream.write_all(&body).unwrap();
+        // The write side stays open until the reply completes: the server
+        // closes, so the read ends at the reply instead of its bound.
+        let mut response = Vec::new();
+        stream
+            .read_to_end(&mut response)
+            .unwrap_or_else(|e| panic!("the scripted reply arrives within {READ_WITHIN:?}: {e}"));
+        let text = String::from_utf8_lossy(&response);
+        assert!(text.starts_with("HTTP/1.1 200"), "{text}");
+        assert!(response.ends_with(b"{}\n\n"), "{text}");
+    }
+    assert!(
+        server.await_requests(CALLS, READ_WITHIN),
+        "every request is recorded"
+    );
+    let requests = server.requests();
+    assert_eq!(requests.len(), CALLS);
+    for (n, request) in requests.iter().enumerate() {
+        let expected: Vec<u8> = (0u8..=250).cycle().take((n + 1) * STEP).collect();
+        assert_eq!(request.body_len, expected.len());
+        assert_eq!(
+            first_diff(&request.body, &expected),
+            None,
+            "request {n} is byte-exact"
+        );
+    }
+    // The requests lock synchronises with the serving threads, so every
+    // sleep the requests cost is counted here.
+    let slept = server.core.test_slept_waits();
+    assert!(
+        slept <= SLEPT_BOUND,
+        "{CALLS} busy-shaped posts sleep {slept} full poll bounds, at most {SLEPT_BOUND}: waits end on readiness, not on a poll"
+    );
+}

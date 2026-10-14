@@ -89,6 +89,12 @@ pub(crate) struct Shared {
     /// without a wake.
     #[cfg(test)]
     waits: AtomicU64,
+    /// How many waits slept their whole bound with no wake, test-only: a
+    /// wait the clock never advanced past and shutdown never ended sleeps
+    /// its full poll bound, so each such sleep costs a busy turn about a
+    /// millisecond. The busy-shape regression test bounds this count.
+    #[cfg(test)]
+    slept: AtomicU64,
     #[cfg(test)]
     gate: Mutex<Option<Arc<CheckGate>>>,
     pub(crate) idle: Mutex<usize>,
@@ -192,6 +198,12 @@ impl Shared {
             |wake| woken(seen, *wake),
         );
         drop(parked);
+        // No generation moved past the read above and shutdown never
+        // landed: nothing ended the park early, so the whole bound slept.
+        #[cfg(test)]
+        if !woken(seen, *lock(&self.wake)) && !self.stopping.load(Ordering::SeqCst) {
+            self.slept.fetch_add(1, Ordering::SeqCst);
+        }
         WaitEnd::Waited
     }
 }
@@ -226,6 +238,8 @@ impl HttpServer {
             acks: Mutex::new(None),
             #[cfg(test)]
             waits: AtomicU64::new(0),
+            #[cfg(test)]
+            slept: AtomicU64::new(0),
             #[cfg(test)]
             gate: Mutex::new(None),
             idle: Mutex::new(0),
@@ -448,6 +462,13 @@ impl HttpServer {
     #[cfg(test)]
     pub(crate) fn test_wait_entries(&self) -> u64 {
         self.shared.waits.load(Ordering::SeqCst)
+    }
+
+    /// How many waits slept their whole bound with no wake so far,
+    /// test-only.
+    #[cfg(test)]
+    pub(crate) fn test_slept_waits(&self) -> u64 {
+        self.shared.slept.load(Ordering::SeqCst)
     }
 
     /// The clock-wake generation waiters park on, test-only: each move
