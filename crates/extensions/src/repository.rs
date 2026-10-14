@@ -27,6 +27,9 @@ mod servers_tests;
 #[path = "repository/session_tests.rs"]
 mod session_tests;
 #[cfg(test)]
+#[path = "repository/store_sync_tests.rs"]
+mod store_sync_tests;
+#[cfg(test)]
 #[path = "repository/store_tests.rs"]
 mod store_tests;
 
@@ -37,7 +40,7 @@ pub use declared::{RepoItem, declared_items, mcp_server_item};
 pub use offer::{Pending, pending};
 pub use servers::{ApprovedServer, ServerApproval, SpawnGuard, repository_servers};
 pub use session::SessionOffer;
-pub use store::{CopyHold, Decision, Store};
+pub use store::{CopyHold, Decision, Fetch, Store};
 
 /// The kind as `docs/events.md` and the approval files spell it:
 /// `extension`, `hook` or `mcp_server`.

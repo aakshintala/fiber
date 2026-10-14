@@ -14,6 +14,17 @@ pub(crate) fn written(log: &Log, extensions: &SessionExtensions) -> Result<(), r
     r#loop::extensions_loaded(log, extensions.loaded(), extensions.notices())
 }
 
+/// How the session's repository approvals fetch dependencies: the github
+/// `Origin`, this binary's version, on `clock`. No repository set is
+/// loaded here; that is Part 2.
+pub(crate) fn fetch(clock: &Arc<dyn contract::clock::Clock>) -> extensions::Fetch {
+    extensions::Fetch::new(
+        extensions::Origin::github(),
+        env!("CARGO_PKG_VERSION"),
+        Arc::clone(clock),
+    )
+}
+
 /// `looped` asking the session's hooks, when any extension registered one;
 /// otherwise `looped` as it was.
 pub(crate) fn hooked(looped: Loop, extensions: &Arc<SessionExtensions>) -> Loop {

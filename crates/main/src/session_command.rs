@@ -356,7 +356,7 @@ pub(crate) fn run_new(
         &home,
         &project,
         &workspace,
-        Arc::clone(&clock),
+        crate::session_extensions::fetch(&clock),
     ));
     let log = match Log::create(&sessions, id.clone(), Arc::clone(&clock)) {
         Ok(log) => Arc::new(log),

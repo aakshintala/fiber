@@ -7,7 +7,7 @@
 //! with no approval is what `fiber sessions prune` collects.
 
 use std::fmt;
-use std::fs::{self, File};
+use std::fs::{self, File, TryLockError};
 use std::io;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
@@ -22,7 +22,9 @@ use super::content::{Index, hash_paths};
 use super::declared::RepoItem;
 use super::kind_name;
 use crate::Error;
+use crate::git::Origin;
 use crate::install::{io as io_error, remove};
+use crate::manage::plan_depends;
 use crate::prepare::prepare;
 
 /// What a person decided about one content.
@@ -34,12 +36,39 @@ pub enum Decision {
     Never,
 }
 
+/// How a dependency-bearing copy fetches its manifest's dependencies:
+/// where they come from, the running Fiber version they must accept, and
+/// the one clock both fetching and their install steps run on.
+#[derive(Clone)]
+pub struct Fetch {
+    origin: Arc<Origin>,
+    fiber_version: String,
+    clock: Arc<dyn Clock>,
+}
+
+impl Fetch {
+    /// Fetches from `origin`, accepting manifests for `fiber_version`, on
+    /// `clock`.
+    pub fn new(origin: Origin, fiber_version: impl Into<String>, clock: Arc<dyn Clock>) -> Self {
+        Self {
+            origin: Arc::new(origin),
+            fiber_version: fiber_version.into(),
+            clock,
+        }
+    }
+
+    pub(crate) fn clock(&self) -> Arc<dyn Clock> {
+        Arc::clone(&self.clock)
+    }
+}
+
 /// The approvals and copies in one Fiber home, for one project.
 #[derive(Clone)]
 pub struct Store {
     home: PathBuf,
     project: ProjectKey,
     clock: Arc<dyn Clock>,
+    fetch: Option<Fetch>,
 }
 
 impl fmt::Debug for Store {
@@ -72,13 +101,25 @@ pub struct CopyHold {
 
 impl Store {
     /// The store in `home` for `project`. The clock bounds an extension's
-    /// install step when its copy is built.
+    /// install step when its copy is built; [`Store::fetching`] replaces
+    /// it with the fetch's, so fetching and install steps share one.
     pub fn new(home: &Path, project: &ProjectKey, clock: Arc<dyn Clock>) -> Self {
         Self {
             home: home.to_path_buf(),
             project: project.clone(),
             clock,
+            fetch: None,
         }
+    }
+
+    /// Fetches a dependency-bearing copy's dependencies from `fetch`, on
+    /// its clock: pinning runs on the fetch's clock, so fetching and
+    /// install steps share one. Without it, approving an extension whose
+    /// manifest names `depends` fails.
+    pub fn fetching(mut self, fetch: Fetch) -> Self {
+        self.clock = fetch.clock();
+        self.fetch = Some(fetch);
+        self
     }
 
     /// An extension's and a hook's approvals are per project; a server's are
@@ -140,15 +181,7 @@ impl Store {
     /// `approvals/`. A copy that cannot be made is the caller's error.
     pub fn ensure_copy(&self, item: &RepoItem, hash: &str) -> Result<CopyHold, Error> {
         check(item, hash)?;
-        let pinned = self.home.join("pinned");
-        fs::create_dir_all(&pinned).map_err(io_error(&pinned))?;
-        let lock_path = pinned.join(".lock");
-        let lock = File::options()
-            .create(true)
-            .append(true)
-            .open(&lock_path)
-            .map_err(io_error(&lock_path))?;
-        lock.lock().map_err(io_error(&lock_path))?;
+        let (_lock, pinned) = self.global_lock(item)?;
         let copy = self.copy_dir(hash);
         self.pin_locked(item, hash, &copy, &pinned)?;
         // Still under `pinned/.lock`: the shared hold on a finished copy.
@@ -176,21 +209,40 @@ impl Store {
     /// failing step leaves no copy. A step failure is the step's own
     /// error, unchanged.
     fn pin(&self, item: &RepoItem, hash: &str, copy: &Path) -> Result<(), Error> {
+        let (_lock, pinned) = self.global_lock(item)?;
+        self.pin_locked(item, hash, copy, &pinned)
+    }
+
+    /// `pinned/.lock`, held: what serialises concurrent approvals. The
+    /// pinned root is checked before the lock file is even opened, so a
+    /// link where the root goes never receives one. The lock is blocking,
+    /// including for finished copies: a concurrent approval waits rather
+    /// than racing a rebuild.
+    fn global_lock(&self, item: &RepoItem) -> Result<(File, PathBuf), Error> {
         let pinned = self.home.join("pinned");
+        check_dirs(&item.name, &self.home, &pinned, true)?;
         fs::create_dir_all(&pinned).map_err(io_error(&pinned))?;
+        check_dirs(&item.name, &self.home, &pinned, false)?;
         let lock_path = pinned.join(".lock");
         let lock = File::options()
             .create(true)
             .append(true)
             .open(&lock_path)
             .map_err(io_error(&lock_path))?;
+        signal_lock_attempt();
         lock.lock().map_err(io_error(&lock_path))?;
-        self.pin_locked(item, hash, copy, &pinned)
+        Ok((lock, pinned))
     }
 
-    /// The copy itself, with `pinned/.lock` already held: building it in
-    /// place there, keeping a finished copy, and removing an unfinished
-    /// one. The empty file `pinned/<hash>.ready` is written last.
+    /// The copy itself, with `pinned/.lock` already held: keeping a
+    /// finished copy, rebuilding a legacy dependency-bearing one under
+    /// exclusive marker ownership, and building anything else in place.
+    /// The empty file `pinned/<hash>.ready` is written last, after the
+    /// dependency completion marker, so a copy with no `.ready` is an
+    /// unfinished attempt and is removed and built again. On any error
+    /// after the directory was made, the copy is removed, so a failing
+    /// step leaves no copy. A step failure is the step's own error,
+    /// unchanged.
     fn pin_locked(
         &self,
         item: &RepoItem,
@@ -199,28 +251,81 @@ impl Store {
         pinned: &Path,
     ) -> Result<(), Error> {
         let ready = pinned.join(format!("{hash}.ready"));
-        if copy.is_dir() && ready.is_file() {
-            return Ok(());
+        // A link or any other non-file where the marker goes is refused
+        // before it is ever opened or anything is deleted: only a regular
+        // file can be locked or removed.
+        match fs::symlink_metadata(&ready) {
+            Ok(meta) if meta.file_type().is_symlink() => {
+                return Err(refused(&item.name, &ready, "is a symbolic link"));
+            }
+            Ok(meta) if !meta.file_type().is_file() => {
+                return Err(refused(&item.name, &ready, "is not a regular file"));
+            }
+            _ => {}
         }
-        // A missing copy can leave its marker behind. Remove it before
-        // rebuilding: a kill mid-rebuild would otherwise leave a partial
-        // directory beside the old marker, which the next approval accepts.
-        if let Err(e) = fs::remove_file(&ready)
-            && e.kind() != io::ErrorKind::NotFound
-        {
-            return Err(io_error(&ready)(e));
-        }
+        // The exclusive marker hold, kept until the build below is done:
+        // proving ownership before deleting or replacing anything with a
+        // ready file leaves a held copy alone.
+        let mut _held: Option<File> = None;
         match fs::symlink_metadata(copy) {
             // Nothing there, or unreadable: `create_dir` below fails naming
             // the path when it is the second.
-            Err(_) => {}
-            Ok(meta) if meta.file_type().is_dir() => remove(copy)?,
-            Ok(_) => fs::remove_file(copy).map_err(io_error(copy))?,
+            Err(_) => {
+                // A missing copy can leave its marker behind. Proving
+                // ownership first leaves a held copy alone; removing it
+                // before rebuilding means a kill mid-rebuild cannot leave
+                // a partial directory beside the old marker, which the
+                // next approval would accept.
+                if ready.is_file() {
+                    _held = Some(claim(&ready)?);
+                }
+                if let Err(e) = fs::remove_file(&ready)
+                    && e.kind() != io::ErrorKind::NotFound
+                {
+                    return Err(io_error(&ready)(e));
+                }
+            }
+            Ok(meta) if meta.file_type().is_dir() => {
+                if ready.is_file() {
+                    if self.finished(item, copy)? {
+                        return Ok(());
+                    }
+                    // A legacy dependency-bearing copy: rebuild under
+                    // exclusive ownership, keeping the hold until the new
+                    // marker is written.
+                    _held = Some(claim(&ready)?);
+                    remove(copy)?;
+                    fs::remove_file(&ready).map_err(io_error(&ready))?;
+                } else {
+                    remove(copy)?;
+                }
+            }
+            Ok(_) => {
+                // A stray file or link where the copy goes: claim a stale
+                // marker exactly as the legacy rebuild does, leaving a
+                // held copy alone, or the rebuild below fails on it.
+                if ready.is_file() {
+                    _held = Some(claim(&ready)?);
+                    fs::remove_file(&ready).map_err(io_error(&ready))?;
+                }
+                fs::remove_file(copy).map_err(io_error(copy))?
+            }
         }
         fs::create_dir(copy).map_err(io_error(copy))?;
         let unfinished = Unfinished(Some(copy.to_path_buf()));
         let mut copied = Vec::new();
         for file in &item.files {
+            // The first path component `.fiber-depends` holds what the
+            // install commits, with its completion marker: a package
+            // file there, or under it, could forge either, while a
+            // similarly prefixed name cannot.
+            if file.rel == ".fiber-depends" || file.rel.starts_with(".fiber-depends/") {
+                return Err(refused(
+                    &item.name,
+                    &file.path,
+                    "is reserved for installed dependencies",
+                ));
+            }
             let to = copy.join(&file.rel);
             if let Some(parent) = to.parent() {
                 fs::create_dir_all(parent).map_err(io_error(parent))?;
@@ -246,11 +351,104 @@ impl Store {
         }
         if item.kind == OfferedKind::Extension {
             let manifest = config::read_manifest(copy)?;
-            prepare(copy, &manifest, self.clock.as_ref())?;
+            let clock = Arc::clone(&self.clock);
+            self.install_depends(item, copy, &manifest, &clock)?;
+            prepare(copy, &manifest, clock.as_ref())?;
+            // The install step may have replaced dependency ancestors or
+            // planted either marker: validate again and publish without
+            // ever following a link.
+            if !manifest.depends.is_empty() {
+                let complete = self.complete(item, copy)?;
+                publish(&item.name, &complete)?;
+            }
         }
-        File::create(&ready).map_err(io_error(&ready))?;
+        publish(&item.name, &ready)?;
         unfinished.done();
         Ok(())
+    }
+
+    /// Whether the copy is finished and kept without rebuilding: a hook
+    /// or server (which has no dependencies), or an extension whose
+    /// manifest names none, or whose dependency completion marker is
+    /// present. A dependency-bearing copy without one is legacy and
+    /// rebuilds.
+    fn finished(&self, item: &RepoItem, copy: &Path) -> Result<bool, Error> {
+        if item.kind != OfferedKind::Extension {
+            return Ok(true);
+        }
+        // The copy root was validated as a real directory by the caller.
+        // Confine the manifest before reading it: ancestors already
+        // validated, the file itself a regular file, so a link to an
+        // outside manifest is refused, never read through.
+        let manifest_path = copy.join("extension.json");
+        check_dirs(&item.name, &self.home, copy, false)?;
+        match fs::symlink_metadata(&manifest_path) {
+            Ok(meta) if meta.file_type().is_symlink() => {
+                return Err(refused(&item.name, &manifest_path, "is a symbolic link"));
+            }
+            Ok(meta) if !meta.file_type().is_file() => {
+                return Err(refused(&item.name, &manifest_path, "is not a regular file"));
+            }
+            Ok(_) => {}
+            // Missing or unreadable: the read below fails naming the path.
+            Err(_) => {}
+        }
+        let manifest = config::read_manifest(copy)?;
+        if manifest.depends.is_empty() {
+            return Ok(true);
+        }
+        let home = copy.join(".fiber-depends");
+        // A missing home rebuilds through the missing-ok ancestor walk
+        // below; every other state refuses or errors the same way.
+        check_marker(&item.name, &self.home, &home.join(".complete"))
+    }
+
+    /// The completion marker for a dependency-bearing copy, with its home
+    /// validated again: the dependency home and the extensions root are
+    /// real directories, so an install step that replaced either fails
+    /// the approval instead of publishing over it.
+    fn complete(&self, item: &RepoItem, copy: &Path) -> Result<PathBuf, Error> {
+        let home = copy.join(".fiber-depends");
+        check_dirs(&item.name, &self.home, &home, false)?;
+        check_dirs(&item.name, &self.home, &home.join("extensions"), false)?;
+        Ok(home.join(".complete"))
+    }
+
+    /// Resolves the manifest's `depends` against an empty installed set and
+    /// commits each inside the copy, before its own install step runs, so
+    /// two versions never share one (`docs/extensions.md`, "Pinning").
+    /// With no dependencies nothing is fetched and no directory is made.
+    fn install_depends(
+        &self,
+        item: &RepoItem,
+        copy: &Path,
+        manifest: &config::Manifest,
+        clock: &Arc<dyn Clock>,
+    ) -> Result<(), Error> {
+        if manifest.depends.is_empty() {
+            return Ok(());
+        }
+        let Some(fetch) = &self.fetch else {
+            return Err(Error::Pin {
+                item: item.name.clone(),
+                why: "its manifest names dependencies, which need fetching".to_owned(),
+            });
+        };
+        let home = copy.join(".fiber-depends");
+        // Checked before creating anything under it, so a link where the
+        // home goes never receives a directory.
+        check_dirs(&item.name, &self.home, &home, true)?;
+        fs::create_dir_all(&home).map_err(io_error(&home))?;
+        check_dirs(&item.name, &self.home, &home, false)?;
+        check_dirs(&item.name, &self.home, &home.join("extensions"), true)?;
+        let planned = plan_depends(
+            &home,
+            manifest,
+            &fetch.fiber_version,
+            fetch.origin.as_ref(),
+            clock.as_ref(),
+        )?;
+        planned.commit().map(|_| ())
     }
 
     fn record(&self, item: &RepoItem, hash: &str, decision: &str) -> Result<(), Error> {
@@ -352,6 +550,103 @@ fn check(item: &RepoItem, hash: &str) -> Result<(), Error> {
     }
 }
 
+/// A refusal naming `path`: what it is instead of what was wanted.
+fn refused(item: &str, path: &Path, why: &str) -> Error {
+    Error::Pin {
+        item: item.into(),
+        why: format!("{}: {why}", path.display()),
+    }
+}
+
+/// Every component of `path` from `home` down, `path` included, is a real
+/// directory, or missing when `missing_ok` lets a rebuild create it.
+/// Symbolic links and files fail naming the component; `home` itself is
+/// trusted as given, so a home reached through a link still anchors the
+/// walk. An untrusted candidate is never canonicalized into its own root.
+fn check_dirs(item: &str, home: &Path, path: &Path, missing_ok: bool) -> Result<(), Error> {
+    let rel = path
+        .strip_prefix(home)
+        .map_err(|_| refused(item, path, "is outside Fiber home"))?;
+    let mut prefix = home.to_path_buf();
+    for part in rel.components() {
+        prefix.push(part);
+        match fs::symlink_metadata(&prefix) {
+            Ok(meta) if meta.file_type().is_symlink() => {
+                return Err(refused(item, &prefix, "is a symbolic link"));
+            }
+            Ok(meta) if !meta.file_type().is_dir() => {
+                return Err(refused(item, &prefix, "is not a directory"));
+            }
+            Ok(_) => {}
+            Err(e) if e.kind() == io::ErrorKind::NotFound && missing_ok => return Ok(()),
+            Err(e) => return Err(io_error(&prefix)(e)),
+        }
+    }
+    Ok(())
+}
+
+/// Whether the marker at `path` is present as a regular file: links and
+/// non-files fail naming it before it is ever opened, while a missing
+/// marker is absent. Ancestors under `home` must be real directories,
+/// missing allowed, for a rebuild.
+fn check_marker(item: &str, home: &Path, path: &Path) -> Result<bool, Error> {
+    if let Some(parent) = path.parent() {
+        check_dirs(item, home, parent, true)?;
+    }
+    match fs::symlink_metadata(path) {
+        Ok(meta) if meta.file_type().is_symlink() => Err(refused(item, path, "is a symbolic link")),
+        Ok(meta) if !meta.file_type().is_file() => {
+            Err(refused(item, path, "is not a regular file"))
+        }
+        Ok(_) => Ok(true),
+        Err(e) if e.kind() == io::ErrorKind::NotFound => Ok(false),
+        Err(e) => Err(io_error(path)(e)),
+    }
+}
+
+/// Publishes an empty marker without ever following a link: a marker path
+/// that already exists in any form (an install step may have planted either
+/// marker as a link) fails the approval with nothing published, and
+/// exclusive creation keeps a link planted between the check and the write
+/// from ever being followed.
+fn publish(item: &str, marker: &Path) -> Result<(), Error> {
+    if fs::symlink_metadata(marker).is_ok() {
+        return Err(refused(item, marker, "already exists"));
+    }
+    File::options()
+        .write(true)
+        .create_new(true)
+        .open(marker)
+        .map(|_| ())
+        .map_err(|e| {
+            if e.kind() == io::ErrorKind::AlreadyExists {
+                refused(item, marker, "already exists")
+            } else {
+                io_error(marker)(e)
+            }
+        })
+}
+
+/// Opens the existing marker without creating it and takes it exclusively:
+/// a session running the copy holds it shared, so a held copy fails with
+/// the existing [`Error::Busy`], changing no byte, inode or approval.
+/// Other lock failures propagate. The returned file stays alive across
+/// the removal and rebuild it guards.
+fn claim(ready: &Path) -> Result<File, Error> {
+    // Read-write without create: macOS refuses `O_CREAT` on a read-only
+    // open, and create would forge what ownership is being proved.
+    let marker = File::options()
+        .read(true)
+        .write(true)
+        .open(ready)
+        .map_err(io_error(ready))?;
+    match marker.try_lock() {
+        Ok(()) => Ok(marker),
+        Err(TryLockError::WouldBlock) => Err(Error::Busy),
+        Err(TryLockError::Error(e)) => Err(io_error(ready)(e)),
+    }
+}
+
 fn is_hash(text: &str) -> bool {
     text.len() == 64 && text.bytes().all(|b| matches!(b, b'0'..=b'9' | b'a'..=b'f'))
 }
@@ -360,3 +655,24 @@ pub(super) fn next() -> usize {
     static NEXT: AtomicUsize = AtomicUsize::new(0);
     NEXT.fetch_add(1, Ordering::Relaxed)
 }
+
+#[cfg(test)]
+static LOCK_ATTEMPT: std::sync::Mutex<Option<std::sync::mpsc::Sender<()>>> =
+    std::sync::Mutex::new(None);
+
+/// Sets the test-only signal fired immediately before taking
+/// `pinned/.lock`. Only tests set it; production never does.
+#[cfg(test)]
+pub(crate) fn set_lock_attempt(tx: Option<std::sync::mpsc::Sender<()>>) {
+    *LOCK_ATTEMPT.lock().unwrap() = tx;
+}
+
+#[cfg(test)]
+fn signal_lock_attempt() {
+    if let Some(tx) = LOCK_ATTEMPT.lock().unwrap().as_ref() {
+        tx.send(()).unwrap_or(());
+    }
+}
+
+#[cfg(not(test))]
+fn signal_lock_attempt() {}

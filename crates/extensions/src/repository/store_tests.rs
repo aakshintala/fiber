@@ -585,11 +585,9 @@ fn a_ready_marker_that_cannot_be_removed_fails_before_the_install_step_runs() {
     fs::create_dir_all(marker.parent().unwrap()).unwrap();
     fs::create_dir(&marker).unwrap();
     let e = store(&repo).approve(&item, &hash).unwrap_err();
-    assert!(
-        matches!(&e, Error::Io { path, .. } if path == &marker),
-        "{e}"
-    );
+    assert!(matches!(&e, Error::Pin { .. }), "{e}");
     assert!(e.to_string().contains(&marker.display().to_string()), "{e}");
+    assert!(e.to_string().contains("is not a regular file"), "{e}");
     // The step never ran: its side effect outside the copy is absent. A
     // build that ignored the removal failure would run the step before
     // failing at the marker, leaving this behind.

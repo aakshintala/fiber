@@ -443,7 +443,7 @@ fn resumed_session(
         &home,
         &project,
         &workspace,
-        Arc::clone(&clock),
+        crate::session_extensions::fetch(&clock),
     ));
     let permissions = crate::ask_permissions(
         &home,
