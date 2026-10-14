@@ -1163,18 +1163,6 @@ fn await_drop(stream: &UnixStream, what: &str) {
     assert!(got.is_empty(), "the drop carries no bytes {what}");
 }
 
-/// The socket path is gone: the exit removed it, so the listener is
-/// dropped and the path unlinked.
-fn await_gone(temp: &Temp, what: &str) {
-    let deadline = Deadline::after(DEADLINE);
-    while temp.socket().exists() {
-        if deadline.left().is_zero() {
-            panic!("the exit removes the socket {what}");
-        }
-        thread::yield_now();
-    }
-}
-
 /// #2259: the exiting hub's accept-side drop lands between a client's
 /// `connect` and its `set_read_timeout`, failing the setup call. Each
 /// position below forces the teardown to one side of the setup calls with
@@ -1212,7 +1200,10 @@ fn each_forced_teardown_position_around_connect_and_set_read_timeout() {
     let queued = UnixStream::connect(unlinked.temp.socket()).expect("the unlink position connects");
     await_drop(&queued, "at the unlink position");
     unlinked.release_tx.send(()).unwrap_or(());
-    await_gone(&unlinked.temp, "at the unlink position");
+    crate::testkit::await_true("the exit removes the socket at the unlink position", {
+        let socket = unlinked.temp.socket();
+        move || !socket.exists()
+    });
     let timed = queued.set_read_timeout(Some(DEADLINE));
     #[cfg(target_os = "macos")]
     assert_eq!(
@@ -1232,7 +1223,10 @@ fn each_forced_teardown_position_around_connect_and_set_read_timeout() {
     // the connect runs strictly after it and finds no socket.
     let gone = start_stalled_hub();
     gone.release_tx.send(()).unwrap_or(());
-    await_gone(&gone.temp, "at the gone position");
+    crate::testkit::await_true("the exit removes the socket at the gone position", {
+        let socket = gone.temp.socket();
+        move || !socket.exists()
+    });
     let connected = UnixStream::connect(gone.temp.socket());
     assert_eq!(
         connected.err().map(|error| error.kind()),
