@@ -149,7 +149,7 @@ Fiber code, files the issue. No other test retries.
 On Linux x86_64 alone:
 
 - `cargo fmt --check`
-- a process signal appears only in the guarded helpers (`cargo xtask signal-sites`)
+- a process signal appears only in the guarded helpers (`cargo xtask signal-sites`); the check scans Rust tokens, so comments never count, and its allowlist is a trust list: the files it names may send signals, every other file may not
 - the compiled-in list matches the files crates compile in, Markdown
   anywhere or any file outside the crate, every include argument is a
   string literal, and no crate reads a repository file at run time

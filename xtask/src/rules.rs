@@ -240,8 +240,9 @@ pub(crate) fn unsafe_mismatches(
     Ok(failures)
 }
 
-/// Files that may send a process signal. An entry must refuse an id of 1 or
-/// less before anything runs: group -1 reaches every process the user owns.
+/// Files that may send a process signal: a trust list, not a per-file
+/// test seam. An entry must refuse an id of 1 or less before anything
+/// runs: group -1 reaches every process the user owns.
 const SIGNAL_ALLOWLIST: &[&str] = &[
     "crates/extensions/src/host/exec.rs",
     "crates/fakes/src/process_group.rs",
@@ -251,65 +252,121 @@ const SIGNAL_ALLOWLIST: &[&str] = &[
     "crates/support/src/group.rs",
 ];
 
-/// What counts as a process signal: the pattern, and whether it only counts
-/// beside the word kill, on its own line or in the backslash-continued
-/// lines around it. A bare double dash also starts an operand such as
-/// find's `-delete`, so the shell fragments need their kill. The strings
-/// are joined from halves so this file holds no pattern itself; otherwise
-/// the check would fail on its own source.
-const SIGNAL_PATTERNS: &[(&str, bool)] = &[
-    (concat!("Command::", "new(\"kill\")"), false),
-    (concat!("--", " -"), true),
-    (concat!("\"-", "$"), true),
-    (concat!("kill_process_", "group"), false),
-    (concat!("kill_process", "("), false),
-    (concat!("kill", "pg"), false),
-    (concat!("libc::", "kill"), false),
-    (concat!("nix::sys::", "signal"), false),
-];
-
 pub(crate) fn signal_sites(files: &[RustFile]) -> Vec<String> {
     let mut failures = Vec::new();
     for f in files {
         if SIGNAL_ALLOWLIST.contains(&f.path.as_str()) {
             continue;
         }
-        let lines: Vec<&str> = f.source.lines().collect();
-        for (index, line) in lines.iter().enumerate() {
-            for &(pattern, needs_kill) in SIGNAL_PATTERNS {
-                if !line.contains(pattern) {
-                    continue;
-                }
-                if needs_kill && !chain_has_kill(&lines, index) {
-                    continue;
-                }
-                failures.push(format!("{}:{}: {pattern}", f.path, index + 1));
+        // A file that does not tokenise could hide a signal, so it fails
+        // the check rather than being skipped.
+        let stream: TokenStream = match f.source.parse() {
+            Ok(stream) => stream,
+            Err(e) => {
+                failures.push(format!("{}: does not tokenise as Rust: {e}", f.path));
+                continue;
             }
-        }
+        };
+        let trees: Vec<TokenTree> = stream.into_iter().collect();
+        walk_tokens(&f.path, &trees, &mut failures);
     }
     failures
 }
 
-/// Whether `line` continues a shell command from the line before it: the
-/// earlier text ends with a backslash, possibly followed by the closing
-/// quote or a newline escape.
-fn continues(line: &str) -> bool {
-    let trimmed = line.trim_end();
-    let trimmed = trimmed.strip_suffix('"').unwrap_or(trimmed);
-    let trimmed = trimmed.strip_suffix("\\n").unwrap_or(trimmed);
-    trimmed.ends_with('\\')
+/// Each failure where `trees` holds a process signal. Tokens carry no
+/// comments, so only code and string contents count; a bare `kill` names
+/// nothing on its own. Groups recurse, so signals nested in bodies count
+/// with the line where their first token sits.
+fn walk_tokens(path: &str, trees: &[TokenTree], failures: &mut Vec<String>) {
+    let mut i = 0;
+    while let Some(tree) = trees.get(i) {
+        if let Some(pattern) = signal_at(trees, i) {
+            let line = tree.span().start().line;
+            failures.push(format!("{path}:{line}: {pattern}"));
+        }
+        if let TokenTree::Group(group) = tree {
+            let inner: Vec<TokenTree> = group.stream().into_iter().collect();
+            walk_tokens(path, &inner, failures);
+        }
+        i += 1;
+    }
 }
 
-/// Whether the word kill is on the fragment's own line or on an earlier line
-/// the fragment continues through backslashes. A command names `kill` before
-/// its arguments, so only earlier lines count.
-fn chain_has_kill(lines: &[&str], index: usize) -> bool {
-    let (earlier, rest) = lines.split_at(index.min(lines.len()));
-    let earlier = earlier.iter().rev().take_while(|line| continues(line));
-    rest.iter()
-        .take(1)
-        .chain(earlier)
-        .any(|line| line.contains("kill"))
+/// The signal pattern starting at `trees[i]`, if any: an ident naming a
+/// signal helper, a path to one, or a string holding a shell fragment with
+/// `kill` beside its operand. A shell spelling beside no `kill` is another
+/// command's operand, so the string must hold both.
+fn signal_at(trees: &[TokenTree], i: usize) -> Option<&'static str> {
+    let tree = trees.get(i)?;
+    match tree {
+        TokenTree::Ident(name) => {
+            let name = name.to_string();
+            if name.contains("kill_process_group") {
+                Some("kill_process_group")
+            } else if name.contains("killpg") {
+                Some("killpg")
+            } else if name.ends_with("kill_process")
+                && matches!(trees.get(i + 1), Some(TokenTree::Group(_)))
+            {
+                Some("kill_process(")
+            } else if name == "Command"
+                && is_punct(trees.get(i + 1), ':')
+                && is_punct(trees.get(i + 2), ':')
+                && is_ident(trees.get(i + 3), "new")
+                && is_kill_literal(trees.get(i + 4))
+            {
+                Some("Command::new(\"kill\")")
+            } else if name == "libc"
+                && is_punct(trees.get(i + 1), ':')
+                && is_punct(trees.get(i + 2), ':')
+                && is_ident(trees.get(i + 3), "kill")
+            {
+                Some("libc::kill")
+            } else if name == "nix"
+                && is_punct(trees.get(i + 1), ':')
+                && is_punct(trees.get(i + 2), ':')
+                && is_ident(trees.get(i + 3), "sys")
+                && is_punct(trees.get(i + 4), ':')
+                && is_punct(trees.get(i + 5), ':')
+                && is_ident(trees.get(i + 6), "signal")
+            {
+                Some("nix::sys::signal")
+            } else {
+                None
+            }
+        }
+        TokenTree::Literal(literal) => {
+            let spelling = literal.to_string();
+            if spelling.contains("-- -") && spelling.contains("kill") {
+                Some("-- -")
+            } else if spelling.contains("\"-$") && spelling.contains("kill") {
+                Some("\"-$")
+            } else {
+                None
+            }
+        }
+        TokenTree::Punct(_) | TokenTree::Group(_) => None,
+    }
+}
+
+fn is_punct(tree: Option<&TokenTree>, ch: char) -> bool {
+    matches!(tree, Some(TokenTree::Punct(punct)) if punct.as_char() == ch)
+}
+
+fn is_ident(tree: Option<&TokenTree>, word: &str) -> bool {
+    matches!(tree, Some(TokenTree::Ident(ident)) if ident == word)
+}
+
+/// Whether `tree` is the `"kill"` argument: the command's name on its
+/// own, not a longer string that merely mentions it.
+fn is_kill_literal(tree: Option<&TokenTree>) -> bool {
+    match tree {
+        Some(TokenTree::Group(group)) => group
+            .stream()
+            .into_iter()
+            .any(|tree| matches!(&tree, TokenTree::Literal(literal) if literal.to_string() == "\"kill\"")),
+        _ => false,
+    }
 }
 
 /// Crate names in the tables of "Runtime dependencies" and "Tests and
