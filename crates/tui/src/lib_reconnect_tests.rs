@@ -94,7 +94,7 @@ fn spawn_run(connect: crate::Connect, clock: &Arc<FakeClock>) -> (Pair, Receiver
         .name("lib-run".to_owned())
         .spawn(move || {
             let code = super::run(slave, launch(), connect, Box::new(|_| {}), clock)
-                .unwrap_or_else(|failure| panic!("run: {}", failure.message));
+                .unwrap_or_else(|error| panic!("run: {error}"));
             done.send(code).unwrap_or(());
         })
         .unwrap_or_else(|err| panic!("spawn: {err}"));

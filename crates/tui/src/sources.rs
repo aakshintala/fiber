@@ -64,7 +64,7 @@ impl Gate {
 /// operating system's reason. Its display is the whole `terminal:`
 /// message the terminal fails with.
 #[derive(Debug)]
-pub(crate) struct SpawnError {
+pub struct SpawnError {
     step: &'static str,
     source: io::Error,
 }

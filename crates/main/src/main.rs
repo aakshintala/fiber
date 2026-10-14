@@ -750,27 +750,22 @@ fn terminal(
         Arc::clone(&clock),
     ) {
         Ok(code) => code,
-        Err(failure) => {
+        Err(error) => {
+            let failure = failed(error.code(), error.to_string());
             // The terminal never started: one `error` line in
             // `logs/tui-<pid>.log` keeps the failure diagnosable, as a
             // startup failure does (`docs/state.md`, "Diagnostic logs").
-            let level = if config::diagnostics_debug(&config) {
-                log::diag::Level::Debug
-            } else {
-                log::diag::Level::Info
-            };
+            let code = serde_json::to_value(&failure.code)
+                .ok()
+                .and_then(|value| value.as_str().map(str::to_owned))
+                .unwrap_or_else(|| "other".to_owned());
             log::diag::Diag::new(
                 &diag_home,
                 log::diag::Process::Tui,
-                level,
+                log::diag::Level::Info,
                 Arc::clone(&clock),
             )
-            .line(
-                log::diag::Severity::Error,
-                None,
-                "io_failed",
-                &failure.message,
-            );
+            .line(log::diag::Severity::Error, None, &code, &failure.message);
             fail(failure)
         }
     }

@@ -548,7 +548,7 @@ fn run_quits_on_double_ctrl_c_with_the_reader_blocked() {
         .name("lib-run".to_owned())
         .spawn(move || {
             let code = super::run(slave, launch(), once(hub, hello), Box::new(|_| {}), clock)
-                .unwrap_or_else(|failure| panic!("run: {}", failure.message));
+                .unwrap_or_else(|error| panic!("run: {error}"));
             match done.send(code) {
                 Ok(()) | Err(_) => {}
             }
@@ -625,7 +625,7 @@ fn run_shows_a_failed_connect_and_still_quits_restored() {
                 Box::new(|_| {}),
                 fakes::clock::FakeClock::new(),
             )
-            .unwrap_or_else(|failure| panic!("run: {}", failure.message));
+            .unwrap_or_else(|error| panic!("run: {error}"));
             done.send(code).unwrap_or(());
         })
         .unwrap_or_else(|err| panic!("spawn: {err}"));
@@ -686,7 +686,7 @@ fn run_redraws_on_sigwinch_at_the_new_size() {
                 Box::new(|_| {}),
                 fakes::clock::FakeClock::new(),
             )
-            .unwrap_or_else(|failure| panic!("run: {}", failure.message));
+            .unwrap_or_else(|error| panic!("run: {error}"));
             done.send(code).unwrap_or(());
         })
         .unwrap_or_else(|err| panic!("spawn: {err}"));
@@ -754,7 +754,7 @@ fn run_returns_one_when_the_tty_cannot_be_set_up() {
                 Box::new(|_| {}),
                 fakes::clock::FakeClock::new(),
             )
-            .unwrap_or_else(|failure| panic!("run: {}", failure.message));
+            .unwrap_or_else(|error| panic!("run: {error}"));
             done.send(code).unwrap_or(());
         })
         .unwrap_or_else(|err| panic!("spawn: {err}"));
@@ -799,12 +799,12 @@ fn failed_reader_start_returns_io_failed() {
     let result = Deadline::after(DEADLINE)
         .recv(&finished)
         .unwrap_or_else(|err| panic!("waited {DEADLINE:?} for run to return: {err}"));
-    let failure = result.unwrap_err();
-    assert_eq!(failure.code, contract::ErrorCode::IoFailed);
+    let error = result.unwrap_err();
+    assert_eq!(error.code(), contract::ErrorCode::IoFailed);
     assert!(
-        failure.message.starts_with("terminal:"),
+        error.to_string().starts_with("terminal:"),
         "the message names the terminal: {:?}",
-        failure.message
+        error.to_string()
     );
     // The failure return restores the terminal: the slave is cooked again.
     assert!(is_cooked(
@@ -1866,7 +1866,7 @@ fn spawn_run_with_launch(
                 Box::new(|_| {}),
                 fakes::clock::FakeClock::new(),
             )
-            .unwrap_or_else(|failure| panic!("run: {}", failure.message));
+            .unwrap_or_else(|error| panic!("run: {error}"));
             match done.send(code) {
                 Ok(()) | Err(_) => {}
             }
@@ -2574,7 +2574,7 @@ fn a_cached_read_after_the_first_frame_fills_the_catalogue() {
                 Box::new(|_| {}),
                 fakes::clock::FakeClock::new(),
             )
-            .unwrap_or_else(|failure| panic!("run: {}", failure.message));
+            .unwrap_or_else(|error| panic!("run: {error}"));
             match done.send(code) {
                 Ok(()) | Err(_) => {}
             }
@@ -2723,7 +2723,7 @@ fn with_no_model_the_picker_opens_at_start() {
         .name("lib-run".to_owned())
         .spawn(move || {
             let code = super::run(slave, launch, once(hub, hello()), Box::new(|_| {}), clock)
-                .unwrap_or_else(|failure| panic!("run: {}", failure.message));
+                .unwrap_or_else(|error| panic!("run: {error}"));
             match done.send(code) {
                 Ok(()) | Err(_) => {}
             }
@@ -2781,7 +2781,7 @@ fn with_a_model_home_opens_as_before() {
         .name("lib-run".to_owned())
         .spawn(move || {
             let code = super::run(slave, launch(), once(hub, hello()), Box::new(|_| {}), clock)
-                .unwrap_or_else(|failure| panic!("run: {}", failure.message));
+                .unwrap_or_else(|error| panic!("run: {error}"));
             match done.send(code) {
                 Ok(()) | Err(_) => {}
             }

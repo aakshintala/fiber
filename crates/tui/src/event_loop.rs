@@ -18,7 +18,6 @@ use std::sync::atomic::AtomicBool;
 use std::sync::mpsc::{self, Receiver, Sender};
 
 use contract::clock::Clock;
-use contract::shapes::Failure;
 use contract::{Envelope, ErrorCode, Seq, SessionId};
 use ratatui::backend::Backend;
 use signal_hook::consts::{SIGHUP, SIGINT, SIGQUIT, SIGTERM, SIGWINCH};
@@ -36,6 +35,23 @@ use crate::screen::Screen;
 use crate::sources::{Reader, spawn_hub, spawn_resize};
 use crate::{Connect, Input, OnAttach, clipboard, editor, files, osc, term};
 
+/// What keeps the terminal from running.
+#[derive(Debug, thiserror::Error)]
+pub enum Error {
+    /// The input reader could not start, so no key would reach the loop.
+    #[error(transparent)]
+    ReaderStart(#[from] crate::sources::SpawnError),
+}
+
+impl Error {
+    /// The stable code a consumer switches on (`docs/errors.md`, "Registry").
+    pub fn code(&self) -> ErrorCode {
+        match self {
+            Self::ReaderStart(_) => ErrorCode::IoFailed,
+        }
+    }
+}
+
 /// Runs the terminal on `tty` for `launch`, starting sessions in its
 /// workspace. `hover` is `launch.hover`: with it off, mouse mode 1003 is
 /// never sent and nothing is tinted under the pointer. `Ok(0)` on quit
@@ -47,7 +63,7 @@ pub fn run(
     connect: Connect,
     on_attach: OnAttach,
     clock: Arc<dyn Clock>,
-) -> Result<i32, Failure> {
+) -> Result<i32, Error> {
     run_with(tty, launch, connect, on_attach, clock, Reader::spawn)
 }
 
@@ -62,7 +78,7 @@ pub(crate) fn run_with(
     on_attach: OnAttach,
     clock: Arc<dyn Clock>,
     spawn_reader: impl FnOnce(&File, Sender<Input>) -> Result<Reader, crate::sources::SpawnError>,
-) -> Result<i32, Failure> {
+) -> Result<i32, Error> {
     // SIGWINCH is caught from before the size is read, so no resize is
     // missed; its thread starts after the first frame.
     let signals = Signals::new([SIGWINCH]).ok();
@@ -193,12 +209,7 @@ pub(crate) fn run_with(
         // Without the reader no key reaches the loop: fail instead of
         // running deaf. The guard's drop restores the terminal.
         Some(Err(error)) => {
-            return Err(Failure {
-                code: ErrorCode::IoFailed,
-                message: error.to_string(),
-                retry_after_ms: None,
-                provider: None,
-            });
+            return Err(Error::from(error));
         }
         None => {}
     }
