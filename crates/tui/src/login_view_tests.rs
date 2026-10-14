@@ -90,13 +90,6 @@ fn choices(models: &[&str], selected: Option<&str>) -> crate::configure::Reviewe
     }
 }
 
-/// Answers the fake's reviewer reads with `answer`.
-fn answer_reviewer(fake: &Fake, answer: crate::configure::ReviewerModels) {
-    if let Ok(mut held) = fake.reviewer_answer.lock() {
-        *held = Ok(answer);
-    }
-}
-
 /// Feeds a successful browser `Done` and the reviewer's answer for
 /// `ticket`: the credential stays on its ticket through preparation.
 fn done_then_reviewer(
@@ -3119,8 +3112,8 @@ fn the_failed_reason_reads_error() {
     for y in 0..24 {
         let line: String = (0..80).map(|x| buf[(x, y)].symbol()).collect();
         if let Some(start) = line.find("token expired") {
-            let start = start as u16;
-            let end = start.saturating_add("token expired".len() as u16);
+            let start = u16::try_from(start).unwrap_or(u16::MAX);
+            let end = start.saturating_add(u16::try_from("token expired".len()).unwrap_or(u16::MAX));
             for x in start..end {
                 let cell = &buf[(x, y)];
                 if cell.symbol() != " " {

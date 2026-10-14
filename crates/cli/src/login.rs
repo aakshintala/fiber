@@ -14,7 +14,6 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc;
 use std::thread::{self, JoinHandle};
-use std::time::Duration;
 
 use config::{
     Config, ConfigError, CredentialFile, CredentialLock, Login, ProviderData, Secret, Sources,
@@ -691,15 +690,12 @@ pub(crate) fn login(
     }
 }
 
-/// How long the reviewer save waits at an injected test barrier before
-/// failing the run instead of hanging it. Production never waits: with
-/// no probe there is no barrier.
-const PROBE_WAIT: Duration = Duration::from_secs(30);
-
 /// The two pause points around the reviewer save's commit claim, both
 /// owned by the test: the stage signals each entry and waits for its
 /// release, so a test forces the before-claim and after-claim
-/// interleavings on every run.
+/// interleavings on every run. The waits block: production never takes
+/// them, and the test bounds the whole stage with its own deadline, so a
+/// barrier the test never releases fails the test instead of hanging it.
 #[derive(Debug)]
 pub(crate) struct ClaimProbe {
     /// Entered after selection and the pre-claim checks, before the claim.
@@ -789,11 +785,8 @@ pub(crate) fn reviewer_stage(
         reviewer::Pick::Cancelled => return no_reviewer_set(err, name),
     };
     if let Some(probe) = probe {
-        probe.before_entered.send(()).ok();
-        probe
-            .before_release
-            .recv_timeout(PROBE_WAIT)
-            .map_err(|_| barrier_failed())?;
+        probe.before_entered.send(()).unwrap_or(());
+        probe.before_release.recv().unwrap_or(());
     }
     // The commit boundary, immediately before the write and its
     // global-lock wait: the atomic claim of the save on the same latch
@@ -802,11 +795,8 @@ pub(crate) fn reviewer_stage(
         return no_reviewer_set(err, name);
     }
     if let Some(probe) = probe {
-        probe.after_entered.send(()).ok();
-        probe
-            .after_release
-            .recv_timeout(PROBE_WAIT)
-            .map_err(|_| barrier_failed())?;
+        probe.after_entered.send(()).unwrap_or(());
+        probe.after_release.recv().unwrap_or(());
     }
     match reviewer::set_reviewer(home, name, &id) {
         Ok(()) => writeln!(err, "fiber: reviewer {name} {id}").map_err(terminal_failure),
@@ -822,11 +812,6 @@ fn no_reviewer_set(err: &mut dyn Write, name: &str) -> Result<(), Failure> {
         "fiber: no reviewer was set for {name}; the credential stays."
     )
     .map_err(terminal_failure)
-}
-
-/// A test barrier that never released: the run fails instead of hanging.
-fn barrier_failed() -> Failure {
-    failure(ErrorCode::IoFailed, "the reviewer save barrier timed out")
 }
 
 /// Where a provider's key comes from when nothing is stored: the first

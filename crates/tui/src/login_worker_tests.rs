@@ -244,7 +244,12 @@ fn a_browser_success_posts_done_then_the_reviewer_result() {
             assert_eq!(choices.models, ["m1", "m2"]);
             assert_eq!(choices.selected.as_deref(), Some("m2"));
         }
-        other => panic!("the reviewer result held something else: {other:?}"),
+        LoginStep::Open(_)
+        | LoginStep::Code { .. }
+        | LoginStep::Done(_)
+        | LoginStep::Reviewer(Err(_)) => {
+            panic!("the reviewer result held something else: {step:?}")
+        }
     }
     assert_eq!(seam.reviewer_reads(), ["codex"]);
 }
@@ -271,7 +276,12 @@ fn a_reviewer_only_job_reads_no_credential_and_stores_nothing() {
     assert_eq!(ticket, LoginTicket(9));
     match step {
         LoginStep::Reviewer(Ok(choices)) => assert_eq!(choices.models, ["m1"]),
-        other => panic!("the reviewer result held something else: {other:?}"),
+        LoginStep::Open(_)
+        | LoginStep::Code { .. }
+        | LoginStep::Done(_)
+        | LoginStep::Reviewer(Err(_)) => {
+            panic!("the reviewer result held something else: {step:?}")
+        }
     }
     // No browser login ran and no key was stored: the read owns neither.
     // Discovery runs off the loop thread: any thread but this one.
@@ -306,7 +316,12 @@ fn a_reviewer_read_failure_posts_its_error() {
     assert_eq!(ticket, LoginTicket(11));
     match step {
         LoginStep::Reviewer(Err(error)) => assert_eq!(error.code, ErrorCode::ConfigInvalid),
-        other => panic!("the reviewer result held something else: {other:?}"),
+        LoginStep::Open(_)
+        | LoginStep::Code { .. }
+        | LoginStep::Done(_)
+        | LoginStep::Reviewer(Ok(_)) => {
+            panic!("the reviewer result held something else: {step:?}")
+        }
     }
 }
 
@@ -334,7 +349,12 @@ fn an_empty_reviewer_read_posts_no_models() {
             assert!(choices.models.is_empty());
             assert_eq!(choices.selected.as_deref(), Some("gone-m"));
         }
-        other => panic!("the reviewer result held something else: {other:?}"),
+        LoginStep::Open(_)
+        | LoginStep::Code { .. }
+        | LoginStep::Done(_)
+        | LoginStep::Reviewer(Err(_)) => {
+            panic!("the reviewer result held something else: {step:?}")
+        }
     }
 }
 

@@ -806,44 +806,39 @@ impl Login {
         if choices.models.is_empty() {
             return Act::Stay;
         }
-        match key {
-            Key::Down => {
-                choices.cursor = Some(match choices.cursor {
-                    None => 0,
-                    Some(at) => (at.saturating_add(1)).min(choices.models.len().saturating_sub(1)),
-                });
-            }
-            Key::Up => {
-                choices.cursor = Some(match choices.cursor {
-                    None => choices.models.len().saturating_sub(1),
-                    Some(at) => at.saturating_sub(1),
-                });
-            }
-            Key::Enter => {
-                let pick = choices
-                    .cursor
-                    .and_then(|at| choices.models.get(at).cloned())
-                    .or_else(|| choices.selected.clone());
-                let Some(id) = pick else {
-                    return Act::Stay;
-                };
-                let name = choices.name.clone();
-                match ctx.seam.set_reviewer(&name, &id) {
-                    Ok(()) => {
-                        self.mode = Mode::Ended(Ended {
-                            name,
-                            outcome: Outcome::Done,
-                        });
-                    }
-                    Err(error) => {
-                        self.mode = Mode::Ended(Ended {
-                            name,
-                            outcome: Outcome::StoredWithNote(error.message),
-                        });
-                    }
+        if *key == Key::Down {
+            choices.cursor = Some(match choices.cursor {
+                None => 0,
+                Some(at) => (at.saturating_add(1)).min(choices.models.len().saturating_sub(1)),
+            });
+        } else if *key == Key::Up {
+            choices.cursor = Some(match choices.cursor {
+                None => choices.models.len().saturating_sub(1),
+                Some(at) => at.saturating_sub(1),
+            });
+        } else if *key == Key::Enter {
+            let pick = choices
+                .cursor
+                .and_then(|at| choices.models.get(at).cloned())
+                .or_else(|| choices.selected.clone());
+            let Some(id) = pick else {
+                return Act::Stay;
+            };
+            let name = choices.name.clone();
+            match ctx.seam.set_reviewer(&name, &id) {
+                Ok(()) => {
+                    self.mode = Mode::Ended(Ended {
+                        name,
+                        outcome: Outcome::Done,
+                    });
+                }
+                Err(error) => {
+                    self.mode = Mode::Ended(Ended {
+                        name,
+                        outcome: Outcome::StoredWithNote(error.message),
+                    });
                 }
             }
-            _ => {}
         }
         Act::Stay
     }

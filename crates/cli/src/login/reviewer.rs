@@ -80,23 +80,30 @@ impl Browser for NoBrowser {
 }
 
 /// Runs a credential command to completion, killing it at `timeout`: the
-/// runner discovery's credential check takes. A stored credential answers
+/// runner discovery's credential check takes. Time passes on the login's
+/// injected clock, never the process clock. A stored credential answers
 /// that check first, so this runs only for a configured command source.
-fn run_command(command: &mut Command, timeout: Duration) -> io::Result<std::process::Output> {
+fn run_command(
+    command: &mut Command,
+    timeout: Duration,
+    clock: &Arc<dyn Clock>,
+) -> io::Result<std::process::Output> {
     let mut child = command.spawn()?;
-    let start = std::time::Instant::now();
+    let start = clock.now();
     loop {
         match child.try_wait()? {
             Some(_) => return child.wait_with_output(),
-            None if start.elapsed() >= timeout => {
-                child.kill().ok();
-                let _ = child.wait();
+            None if clock.now().saturating_duration_since(start) >= timeout => {
+                if child.kill().is_err() {
+                    // Already gone: the wait below still reaps it.
+                }
+                drop(child.wait());
                 return Err(io::Error::new(
                     io::ErrorKind::TimedOut,
                     "the credential command timed out",
                 ));
             }
-            None => std::thread::sleep(Duration::from_millis(10)),
+            None => clock.sleep(Duration::from_millis(10)),
         }
     }
 }
@@ -159,7 +166,7 @@ pub fn reviewer_models(
         overrides: Vec::new(),
     })
     .map_err(config_failure)?;
-    let lua = match login_provider(home, providers, name, Arc::new(NoBrowser), clock) {
+    let lua = match login_provider(home, providers, name, Arc::new(NoBrowser), Arc::clone(&clock)) {
         Ok(lua) => lua,
         Err(e) => {
             return Ok(ReviewerModels {
@@ -172,8 +179,9 @@ pub fn reviewer_models(
     // A temporary registry takes the admission: the installed providers
     // stay as loaded, and the VM drops with this return.
     let mut temp = providers.clone();
+    let run = |command: &mut Command, timeout: Duration| run_command(command, timeout, &clock);
     let mut notices: Vec<String> = temp
-        .add_lua(&owner, &lua, &config, &run_command)
+        .add_lua(&owner, &lua, &config, &run)
         .into_iter()
         .map(|notice| redacted(notice.code, name, &owner))
         .collect();

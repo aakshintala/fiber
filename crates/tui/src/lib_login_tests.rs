@@ -190,7 +190,12 @@ fn the_waiting_login_opens_its_url_and_its_end_stores() {
             assert_eq!(choices.models, ["m1"]);
             crate::login_worker::LoginStep::Reviewer(Ok(choices))
         }
-        other => panic!("{other:?}"),
+        crate::login_worker::LoginStep::Open(_)
+        | crate::login_worker::LoginStep::Code { .. }
+        | crate::login_worker::LoginStep::Done(_)
+        | crate::login_worker::LoginStep::Reviewer(Err(_)) => {
+            panic!("the worker posted something else: {step:?}")
+        }
     };
     feed(
         &mut lp,
@@ -277,7 +282,12 @@ fn without_an_opener_the_url_still_shows_and_the_flow_completes() {
             assert_eq!(choices.models, ["m1"]);
             crate::login_worker::LoginStep::Reviewer(Ok(choices))
         }
-        other => panic!("{other:?}"),
+        crate::login_worker::LoginStep::Open(_)
+        | crate::login_worker::LoginStep::Code { .. }
+        | crate::login_worker::LoginStep::Done(_)
+        | crate::login_worker::LoginStep::Reviewer(Err(_)) => {
+            panic!("the worker posted something else: {step:?}")
+        }
     };
     feed(
         &mut lp,
@@ -362,7 +372,12 @@ fn a_key_login_asks_its_reviewer_after_the_worker_and_saves_it() {
             assert_eq!(choices.models, ["m1", "m2"]);
             crate::login_worker::LoginStep::Reviewer(Ok(choices))
         }
-        other => panic!("{other:?}"),
+        crate::login_worker::LoginStep::Open(_)
+        | crate::login_worker::LoginStep::Code { .. }
+        | crate::login_worker::LoginStep::Done(_)
+        | crate::login_worker::LoginStep::Reviewer(Err(_)) => {
+            panic!("the worker posted something else: {step:?}")
+        }
     };
     feed(
         &mut lp,

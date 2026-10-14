@@ -1507,6 +1507,8 @@ fn an_interrupt_during_reviewer_discovery_keeps_the_credential_and_sets_nothing(
     let port = listener.local_addr().unwrap().port();
     let (entered_tx, entered_rx) = mpsc::channel();
     let (release_tx, release_rx) = mpsc::channel();
+    let setup = Setup::new_with_fl_root();
+    let deadline = setup.deadline;
     let server = thread::spawn(move || {
         let (mut stream, _) = listener.accept().unwrap();
         let mut head = Vec::new();
@@ -1519,12 +1521,12 @@ fn an_interrupt_during_reviewer_discovery_keeps_the_credential_and_sets_nothing(
         }
         entered_tx.send(()).unwrap();
         // A disconnect releases the hold, so a failed test cannot wedge
-        // the child in its callback.
-        let _ = release_rx.recv_timeout(std::time::Duration::from_secs(45));
-        let _ = stream
-            .write_all(b"HTTP/1.1 200 OK\r\ncontent-length: 2\r\nconnection: close\r\n\r\n{}");
+        // the child in its callback: the reply still releases it.
+        deadline.recv(&release_rx).unwrap_or(());
+        stream
+            .write_all(b"HTTP/1.1 200 OK\r\ncontent-length: 2\r\nconnection: close\r\n\r\n{}")
+            .unwrap_or(());
     });
-    let setup = Setup::new_with_fl_root();
     let dir = setup.home().join("extensions").join("held");
     fs::create_dir_all(dir.join("providers")).unwrap();
     fs::write(

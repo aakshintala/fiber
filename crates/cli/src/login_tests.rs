@@ -1179,7 +1179,7 @@ fn cancellation_during_discovery_keeps_everything_and_asks_nothing() {
             &worker_stopped,
             None,
         );
-        done.send((result, String::from_utf8(err).unwrap())).ok();
+        done.send((result, String::from_utf8(err).unwrap())).unwrap_or(());
     });
     assert!(
         fakes::Deadline::after(STAGE_WAIT).recv(&entered_rx).is_ok(),
@@ -1224,7 +1224,7 @@ fn cancellation_before_the_claim_writes_nothing() {
     let (before_entered_tx, before_entered_rx) = mpsc::channel();
     let (before_release_tx, before_release_rx) = mpsc::channel();
     let (after_entered_tx, after_entered_rx) = mpsc::channel();
-    let (after_release_tx, after_release_rx) = mpsc::channel();
+    let (_after_release_tx, after_release_rx) = mpsc::channel();
     let stopped = Arc::new(AtomicBool::new(false));
     let home = setup.home();
     let worker_stopped = Arc::clone(&stopped);
@@ -1247,7 +1247,7 @@ fn cancellation_before_the_claim_writes_nothing() {
             &worker_stopped,
             Some(&probe),
         );
-        done.send((result, String::from_utf8(err).unwrap())).ok();
+        done.send((result, String::from_utf8(err).unwrap())).unwrap_or(());
     });
     // `before reviewer save claim`: selection made, cancellation not yet
     // recorded; recording it now must prevent the write entirely.
@@ -1305,6 +1305,7 @@ fn a_claimed_save_survives_cancellation_before_the_write() {
         // waited on it yet when cancellation lands.
         let lock_file = fs::OpenOptions::new()
             .create(true)
+            .truncate(false)
             .write(true)
             .open(setup.home().join("config.json.lock"))
             .unwrap();
@@ -1335,7 +1336,7 @@ fn a_claimed_save_survives_cancellation_before_the_write() {
                 &worker_stopped,
                 Some(&probe),
             );
-            done.send((result, String::from_utf8(err).unwrap())).ok();
+            done.send((result, String::from_utf8(err).unwrap())).unwrap_or(());
         });
         // The claim runs uncancelled: release it straight through.
         assert!(

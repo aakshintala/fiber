@@ -345,21 +345,32 @@ struct Pair {
     workspace: std::path::PathBuf,
 }
 
+impl Pair {
+    /// The file credential both providers read.
+    fn key_file(&self) -> std::path::PathBuf {
+        self.root.path().join("key")
+    }
+}
+
 fn pair(prefix: &str) -> Pair {
     let root = fakes::TempDir::new(prefix);
     let home = root.path().join("home");
     let workspace = root.path().join("workspace");
     std::fs::create_dir_all(&home).unwrap();
     std::fs::create_dir_all(&workspace).unwrap();
-    let key_file = root.path().join("key");
-    std::fs::write(&key_file, "file-key\n").unwrap();
-    let key = serde_json::json!({"file": key_file.to_str().unwrap()});
+    let pair = Pair {
+        root,
+        home,
+        workspace,
+    };
+    std::fs::write(pair.key_file(), "file-key\n").unwrap();
+    let key = serde_json::json!({"file": pair.key_file().to_str().unwrap()});
     let model = |id: &str| {
         serde_json::json!({"id": id, "protocol": "openai-responses",
             "base_url": "http://127.0.0.1:9/v1", "context_window": 1000})
     };
     test_support::install_extension(
-        &home,
+        &pair.home,
         "extensions/two",
         serde_json::from_str(r#"{"name": "two", "version": "v0.0.0", "fiber": "0.0.0", "api": 1}"#)
             .unwrap(),
@@ -387,11 +398,7 @@ fn pair(prefix: &str) -> Pair {
             ),
         ],
     );
-    Pair {
-        root,
-        home,
-        workspace,
-    }
+    pair
 }
 
 fn pair_config(pair: &Pair, overrides: &[&str]) -> config::Config {
