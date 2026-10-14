@@ -887,7 +887,7 @@ fn a_large_fixed_body_costs_one_bound_check_per_fill_not_per_byte() {
         ProviderServer::start_on(clock.clone(), vec![Response::status(200, "ok")]).unwrap();
     let addr = server.addr;
 
-    let body: Vec<u8> = (0..BODY_LEN).map(|i| (i % 251) as u8).collect();
+    let body: Vec<u8> = (0u8..=250).cycle().take(BODY_LEN).collect();
     let mut stream = TcpStream::connect(addr).unwrap();
     stream.set_read_timeout(Some(READ_WITHIN)).unwrap();
     stream
@@ -922,5 +922,73 @@ fn a_large_fixed_body_costs_one_bound_check_per_fill_not_per_byte() {
     assert!(
         reads <= NOW_BOUND,
         "one request costs {reads} injected-clock reads, at most {NOW_BOUND}: the bound is checked per fill, not per byte"
+    );
+}
+
+// A fixed body followed by pipelined bytes keeps only its declared
+// length: the drain is capped by the remaining room, so a second
+// request's bytes already buffered are never consumed as this body.
+// The server is parked waiting for the rest of the body (pinned by its
+// wait announcement) before the tail and the pipelined bytes arrive
+// together, so every fill past the seam straddles it: an uncapped drain
+// overshoots into the pipelined bytes and loses the reply.
+#[test]
+fn a_fixed_body_followed_by_pipelined_bytes_keeps_only_its_length() {
+    const BODY_LEN: usize = 20_000;
+    const FIRST: usize = 1_000;
+    let clock = FakeClock::new();
+    let server =
+        ProviderServer::start_on(clock.clone(), vec![Response::status(200, "ok")]).unwrap();
+    let acks = server.core.test_acknowledgments();
+    let addr = server.addr;
+
+    let body: Vec<u8> = (0u8..=250).cycle().take(BODY_LEN).collect();
+    let pipelined = b"GET /next HTTP/1.1\r\nHost: localhost\r\n\r\n";
+    let mut stream = TcpStream::connect(addr).unwrap();
+    stream.set_read_timeout(Some(READ_WITHIN)).unwrap();
+    stream
+        .write_all(
+            format!("POST /v1 HTTP/1.1\r\nHost: localhost\r\nContent-Length: {BODY_LEN}\r\n\r\n")
+                .as_bytes(),
+        )
+        .unwrap();
+    let (first, rest) = body.split_at(FIRST);
+    stream.write_all(first).unwrap();
+    // The server is out of bytes and parked in the body read: only then
+    // do the tail and the pipelined bytes arrive, together. Earlier
+    // phases (the accept, the head) announce first and are passed over;
+    // every receive is bounded, so a missing body wait fails, never hangs.
+    loop {
+        let ack = Deadline::after(READ_WITHIN).recv_or_fail(&acks, "the body read's wait");
+        if ack.phase == "to read the fixed body" {
+            break;
+        }
+    }
+    stream.write_all(rest).unwrap();
+    stream.write_all(pipelined).unwrap();
+    // Wakes the parked read deterministically: the test advances the
+    // fake clock only past the wait the announcement pinned.
+    clock.advance(Duration::from_secs(1));
+    // Anything past the body sees the close: an over-read loses the
+    // reply instead of hanging on it.
+    stream.shutdown(Shutdown::Write).unwrap();
+    let mut response = Vec::new();
+    stream
+        .read_to_end(&mut response)
+        .unwrap_or_else(|e| panic!("the scripted reply arrives within {READ_WITHIN:?}: {e}"));
+    let text = String::from_utf8_lossy(&response);
+    assert!(text.starts_with("HTTP/1.1 200"), "{text}");
+    assert!(response.ends_with(b"ok"), "{text}");
+
+    assert!(
+        server.await_requests(1, READ_WITHIN),
+        "the request is recorded"
+    );
+    let requests = server.requests();
+    assert_eq!(requests.len(), 1);
+    assert_eq!(requests[0].body_len, BODY_LEN);
+    assert_eq!(
+        requests[0].body, body,
+        "the recorded body holds its declared bytes, not the pipelined ones"
     );
 }
