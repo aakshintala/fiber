@@ -12,9 +12,9 @@ use contract::clock::Clock;
 
 use crate::ThemeSetting;
 use crate::configure::{
-    BrowserLogin, Configure, ConfigureError, KeyEdit, Layer, LoginShow, LoginTarget, Revoked,
-    RulesScope, RulesSection, Saved, SettingRow, Shown, SkillsDisabled, Stored, SwitchScope,
-    ToolGroup, ToolLists, ToolSwitches, WriteScope,
+    BrowserLogin, Configure, ConfigureError, KeyEdit, Layer, LoginShow, LoginTarget,
+    ReviewerModels, Revoked, RulesScope, RulesSection, Saved, SettingRow, Shown, SkillsDisabled,
+    Stored, SwitchScope, ToolGroup, ToolLists, ToolSwitches, WriteScope,
 };
 
 /// A browser login for the views' tests: `run` blocks until the answer
@@ -133,6 +133,23 @@ pub(crate) struct Fake {
     /// The answer sender each browser login waits on, in order: owned by
     /// the seam (which the test owns), never by the login the worker holds.
     answers: Mutex<Vec<std::sync::mpsc::Sender<Result<Stored, ConfigureError>>>>,
+    /// Every reviewer read asked for, in order: the provider name.
+    pub(crate) reviewer_reads: Mutex<Vec<String>>,
+    /// The threads reviewer reads ran on, in order: discovery never runs
+    /// on the loop thread.
+    pub(crate) reviewer_threads: Mutex<Vec<std::thread::ThreadId>>,
+    /// Gates queued for the next reviewer reads: each read takes one
+    /// and waits on it. A test ending drops its sender and releases the
+    /// read, as `FakeLogin` does, so a failed test cannot retain a worker
+    /// forever.
+    pub(crate) reviewer_gates:
+        Mutex<Vec<std::sync::mpsc::Receiver<Result<ReviewerModels, ConfigureError>>>>,
+    /// What an ungated reviewer read answers.
+    pub(crate) reviewer_answer: Mutex<Result<ReviewerModels, ConfigureError>>,
+    /// Every reviewer save asked for, in order: the provider and the id.
+    pub(crate) reviewer_saves: Mutex<Vec<(String, String)>>,
+    /// What reviewer saves answer.
+    pub(crate) reviewer_saved: Mutex<Result<(), ConfigureError>>,
 }
 
 impl Fake {
@@ -175,6 +192,16 @@ impl Fake {
             login_shown: Mutex::new(Vec::new()),
             logins: Mutex::new(Vec::new()),
             answers: Mutex::new(Vec::new()),
+            reviewer_reads: Mutex::new(Vec::new()),
+            reviewer_threads: Mutex::new(Vec::new()),
+            reviewer_gates: Mutex::new(Vec::new()),
+            reviewer_answer: Mutex::new(Ok(ReviewerModels {
+                models: Vec::new(),
+                selected: None,
+                notices: Vec::new(),
+            })),
+            reviewer_saves: Mutex::new(Vec::new()),
+            reviewer_saved: Mutex::new(Ok(())),
         }
     }
 
@@ -207,6 +234,42 @@ impl Fake {
             .lock()
             .ok()
             .and_then(|logins| logins.get(n).cloned())
+    }
+
+    /// The providers asked for reviewer choices so far, in order.
+    pub(crate) fn reviewer_reads(&self) -> Vec<String> {
+        self.reviewer_reads
+            .lock()
+            .map(|reads| reads.clone())
+            .unwrap_or_default()
+    }
+
+    /// The threads reviewer reads ran on, in order.
+    pub(crate) fn reviewer_threads(&self) -> Vec<std::thread::ThreadId> {
+        self.reviewer_threads
+            .lock()
+            .map(|threads| threads.clone())
+            .unwrap_or_default()
+    }
+
+    /// Queues a gate for the next reviewer read, returning its answer
+    /// sender: the read waits until the test answers or drops it.
+    pub(crate) fn gate_reviewer(
+        &self,
+    ) -> std::sync::mpsc::Sender<Result<ReviewerModels, ConfigureError>> {
+        let (tx, rx) = std::sync::mpsc::channel();
+        if let Ok(mut gates) = self.reviewer_gates.lock() {
+            gates.push(rx);
+        }
+        tx
+    }
+
+    /// The reviewer saves asked for so far, in order: provider and id.
+    pub(crate) fn reviewer_saves(&self) -> Vec<(String, String)> {
+        self.reviewer_saves
+            .lock()
+            .map(|saves| saves.clone())
+            .unwrap_or_default()
     }
 
     /// The writes asked for so far.
@@ -417,6 +480,54 @@ impl Configure for Fake {
                 })
             },
             |stored| stored.clone(),
+        )
+    }
+
+    fn reviewer_models(
+        &self,
+        name: &str,
+        clock: Arc<dyn Clock>,
+    ) -> Result<ReviewerModels, ConfigureError> {
+        let _ = clock;
+        if let Ok(mut reads) = self.reviewer_reads.lock() {
+            reads.push(name.to_owned());
+        }
+        if let Ok(mut threads) = self.reviewer_threads.lock() {
+            threads.push(std::thread::current().id());
+        }
+        let gate = self
+            .reviewer_gates
+            .lock()
+            .ok()
+            .and_then(|mut gates| gates.pop());
+        if let Some(rx) = gate {
+            return rx
+                .recv()
+                .unwrap_or_else(|_| panic!("the reviewer read was never answered"));
+        }
+        self.reviewer_answer.lock().map_or_else(
+            |_| {
+                Err(ConfigureError {
+                    code: ErrorCode::IoFailed,
+                    message: "poisoned".to_owned(),
+                })
+            },
+            |answer| answer.clone(),
+        )
+    }
+
+    fn set_reviewer(&self, name: &str, id: &str) -> Result<(), ConfigureError> {
+        if let Ok(mut saves) = self.reviewer_saves.lock() {
+            saves.push((name.to_owned(), id.to_owned()));
+        }
+        self.reviewer_saved.lock().map_or_else(
+            |_| {
+                Err(ConfigureError {
+                    code: ErrorCode::IoFailed,
+                    message: "poisoned".to_owned(),
+                })
+            },
+            |saved| saved.clone(),
         )
     }
 

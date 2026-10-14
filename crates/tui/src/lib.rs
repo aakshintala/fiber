@@ -98,8 +98,8 @@ pub use attention::Attention;
 pub use catalogue::{Catalogue, ListAge, ModelEntry, Price, ReadModels, Refresh};
 pub use configure::{
     BrowserLogin, Configure, ConfigureError, KeyEdit, Layer, LoginKind, LoginShow, LoginTarget,
-    Revoked, RuleRow, RulesScope, RulesSection, Saved, SettingRow, Shown, SkillsDisabled, Stored,
-    SwitchScope, ToolGroup, ToolLists, ToolSwitches, WriteScope,
+    ReviewerModels, Revoked, RuleRow, RulesScope, RulesSection, Saved, SettingRow, Shown,
+    SkillsDisabled, Stored, SwitchScope, ToolGroup, ToolLists, ToolSwitches, WriteScope,
 };
 
 pub use home::Launch;

@@ -150,6 +150,21 @@ pub struct Stored {
     pub replaced: bool,
 }
 
+/// The reviewer choice for one provider: its models as local IDs in its
+/// order, with the saved pick or package default preselected. Empty
+/// `models` is an explicit skip, even when `selected` names a saved pick.
+/// Holds only local IDs and public notices, never a secret.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ReviewerModels {
+    /// The provider's model IDs, in its order.
+    pub models: Vec<String>,
+    /// The saved pick, else the package default, kept even when the list
+    /// does not name it.
+    pub selected: Option<String>,
+    /// One line per discovery problem, already redacted.
+    pub notices: Vec<String>,
+}
+
 /// What a revoke did.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Revoked {
@@ -320,6 +335,19 @@ pub trait Configure: Send + Sync {
         shown: Arc<dyn LoginShow>,
         clock: Arc<dyn Clock>,
     ) -> Arc<dyn BrowserLogin>;
+
+    /// Reads the reviewer choice for the installed provider `name`: its
+    /// models with the saved global pick preselected, else the package
+    /// default. Runs only off the loop thread: discovery blocks.
+    fn reviewer_models(
+        &self,
+        name: &str,
+        clock: Arc<dyn Clock>,
+    ) -> Result<ReviewerModels, ConfigureError>;
+
+    /// Saves `id` as provider `name`'s reviewer, exactly as listed: one
+    /// main-owned global write. Save errors name the key.
+    fn set_reviewer(&self, name: &str, id: &str) -> Result<(), ConfigureError>;
 
     // The `tui.theme` row.
 

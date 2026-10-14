@@ -305,12 +305,15 @@ change of level misses the reviewer's cache (`docs/prompt-cache.md`,
 
 The reviewer's model is chosen separately from the session's, because a
 review on every effectful action at the session model's price and latency is a
-cost nobody chose. It is `reviewer.model` when set (`docs/configuration.md`).
-Otherwise it is the reviewer model the session's provider names in its data
-(`docs/model-routing.md`, "What a provider extension declares"). When neither
-names one, every reviewed call escalates as `reviewer_failed` with the error
-`no_model`, and a `notice` with code `no_model` says to set `reviewer.model`.
-When neither names one, Fiber does not fall back to the session's own model.
+cost nobody chose. It is `reviewer.model` when set (`docs/configuration.md`),
+else the session provider's own `providers."<name>".reviewer_model`, else the
+package's `reviewer_model` (`docs/model-routing.md`, "What a provider
+extension declares"), else no reviewer. The provider setting and the package
+default are local IDs, prefixed once with the session provider. When no
+source names one, every reviewed call escalates as `reviewer_failed` with the
+error `no_model`, and a `notice` with code `no_model` says to set
+`reviewer.model`. There is no automatic fallback to the session's own model:
+only an explicit pick may name it.
 
 ### Its verdict
 

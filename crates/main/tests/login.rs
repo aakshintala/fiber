@@ -114,7 +114,67 @@ impl Setup {
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
             .stderr(Stdio::piped());
-        let (mut child, watchdog) = spawn_watched(&mut command);
+        self.run_piped(&mut command, args, input)
+    }
+
+    /// Runs `fiber` with `args`, stdin on a new pseudo-terminal fed
+    /// `input`, and stdout/stderr on pipes: stdin is a terminal while
+    /// standard error is not, so there is nobody to ask.
+    #[track_caller]
+    fn run_with_terminal_stdin(&self, args: &[&str], input: &str) -> Run {
+        let terminal = Terminal::open();
+        let mut command = self.command(args);
+        command
+            .stdin(terminal.stdio())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped());
+        let (child, watchdog) = spawn_watched(&mut command);
+        let group = child.id();
+        let guard = KillGroup(group);
+        // The key read turns echo off first: typing waits for that, so no
+        // byte precedes the read the way pasted input must not.
+        terminal.wait_for_echo_off(self.deadline);
+        // Typed once echo is off, as `feed` sends a pipe's bytes: the
+        // terminal holds the line until the key prompt reads it.
+        let mut typed = fs::File::from(terminal.main.try_clone().unwrap());
+        let input = input.to_owned();
+        let deadline = self.deadline;
+        thread::spawn(move || {
+            support::bounded(deadline, "typing on the terminal", move || {
+                typed.write_all(input.as_bytes())
+            })
+            .unwrap();
+        });
+        let (done, finished) = mpsc::channel();
+        thread::spawn(move || done.send(child.wait_with_output()).unwrap());
+        let output = match self.deadline.recv(&finished) {
+            Ok(output) => output.unwrap(),
+            Err(_) => support::expired(
+                self.deadline,
+                group,
+                &finished,
+                &format!("`fiber {}` to exit", args.join(" ")),
+            ),
+        };
+        assert!(
+            !group_alive(self.deadline, group),
+            "`fiber` left a process behind"
+        );
+        assert!(terminal.echoes(), "echo was not restored");
+        std::mem::forget(guard);
+        watchdog.stand_down(self.deadline.cleanup());
+        Run {
+            code: output.status.code(),
+            stdout: String::from_utf8(output.stdout).unwrap(),
+            stderr: String::from_utf8(output.stderr).unwrap(),
+        }
+    }
+
+    /// Runs `command` with piped outputs and `input` fed on a thread,
+    /// waiting for the exit under the deadline with nothing left behind.
+    #[track_caller]
+    fn run_piped(&self, command: &mut Command, args: &[&str], input: &str) -> Run {
+        let (mut child, watchdog) = spawn_watched(command);
         let group = child.id();
         let guard = KillGroup(group);
         feed(&mut child, input);
@@ -608,6 +668,13 @@ fn a_key_typed_on_a_terminal_is_not_echoed_and_echo_comes_back() {
     run.screen.type_text(&format!("{KEY}\n"));
     run.screen
         .wait_for("fiber: stored credentials/acme/default");
+    // The stored credential precedes the reviewer question: the one
+    // installed model is chosen by number.
+    // One wait for the input-readiness line: the header, rows and prompt
+    // arrive as one burst, so a second wait could mark past them.
+    run.screen.wait_for("Reviewer, by number or name: ");
+    run.screen.type_text("1\n");
+    run.screen.wait_for("fiber: reviewer acme m");
     let status = run.finish();
     let shown = &run.screen.seen;
     assert_eq!(status.code(), Some(0), "{shown:?}");
@@ -617,6 +684,10 @@ fn a_key_typed_on_a_terminal_is_not_echoed_and_echo_comes_back() {
         fs::read_to_string(setup.home().join("credentials/acme/default")).unwrap(),
         KEY
     );
+    let config: Value =
+        serde_json::from_str(&fs::read_to_string(setup.home().join("config.json")).unwrap())
+            .unwrap();
+    assert_eq!(config["providers"]["acme"]["reviewer_model"], json!("m"));
 }
 
 #[test]
@@ -637,14 +708,29 @@ fn the_provider_menu_on_a_terminal_picks_by_number() {
     run.screen.type_text("2\n");
     run.screen.wait_for("Key for beta: ");
     run.screen.type_text(&format!("{KEY}\n"));
-    run.screen
-        .wait_for("fiber: stored credentials/beta/default");
+    // One wait for the input-readiness line: the stored line and the
+    // reviewer burst can arrive in one chunk, so a second wait could
+    // mark past them.
+    run.screen.wait_for("Reviewer, by number or name: ");
+    assert!(
+        run.screen
+            .seen
+            .contains("fiber: stored credentials/beta/default"),
+        "{:?}",
+        run.screen.seen
+    );
+    run.screen.type_text("1\n");
+    run.screen.wait_for("fiber: reviewer beta m");
     let status = run.finish();
     let shown = &run.screen.seen;
     assert_eq!(status.code(), Some(0), "{shown:?}");
     assert!(!shown.contains(KEY), "{shown:?}");
     assert!(setup.home().join("credentials/beta/default").exists());
     assert!(!setup.home().join("credentials/acme").exists());
+    let config: Value =
+        serde_json::from_str(&fs::read_to_string(setup.home().join("config.json")).unwrap())
+            .unwrap();
+    assert_eq!(config["providers"]["beta"]["reviewer_model"], json!("m"));
 }
 
 #[test]
@@ -1115,4 +1201,511 @@ fn a_device_login_keeps_stderr_the_reader_has_not_yet_sent() {
         "the drain dropped the chunk the reader had not sent: {}",
         login.stderr
     );
+}
+
+/// Copies the first-party package `providers/<name>` into Fiber home, as
+/// `fiber extension install` leaves it, without contacting anything.
+fn install_package(setup: &Setup, name: &str) {
+    let root = Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("../../providers")
+        .join(name);
+    let to = setup.home().join("extensions").join(name);
+    fs::create_dir_all(to.join("providers")).unwrap();
+    fs::write(
+        to.join("extension.json"),
+        fs::read_to_string(root.join("extension.json")).unwrap(),
+    )
+    .unwrap();
+    for entry in fs::read_dir(root.join("providers")).unwrap() {
+        let entry = entry.unwrap();
+        if entry.file_type().unwrap().is_file() {
+            fs::write(
+                to.join("providers").join(entry.file_name()),
+                fs::read(entry.path()).unwrap(),
+            )
+            .unwrap();
+        }
+    }
+    write_record(&to);
+}
+
+fn global_config(setup: &Setup) -> Value {
+    serde_json::from_str(&fs::read_to_string(setup.home().join("config.json")).unwrap()).unwrap()
+}
+
+#[test]
+fn opencode_go_login_asks_with_nothing_preselected_and_saves_the_pick() {
+    let setup = Setup::new_with_fl_root();
+    install_package(&setup, "opencode");
+    let mut run = setup.on_terminal(&["login", "opencode-go"]);
+    run.screen.wait_for("Key for opencode-go: ");
+    run.screen.type_text(&format!("{KEY}\n"));
+    // One wait for the input-readiness line: the stored line and the
+    // reviewer burst can arrive in one chunk, so a second wait could
+    // mark past them.
+    let shown = run.screen.wait_for("Reviewer, by number or name: ");
+    assert!(
+        run.screen
+            .seen
+            .contains("fiber: stored credentials/opencode/default"),
+        "the stored credential precedes the question: {shown:?}"
+    );
+    assert!(
+        shown.contains("Reviewer for opencode-go:"),
+        "the stored credential precedes the question: {shown:?}"
+    );
+    assert!(
+        !shown.contains("(saved)") && !shown.contains("Saved reviewer"),
+        "nothing is preselected on opencode-go: {shown:?}"
+    );
+    // An invalid answer prints one line naming the problem and asks again:
+    // the re-prompt proves the problem line arrived before it.
+    run.screen.type_text("nope\n");
+    let shown = run.screen.wait_for("Reviewer, by number or name: ");
+    assert!(
+        shown.contains("`nope` is not a listed reviewer"),
+        "{shown:?}"
+    );
+    run.screen.type_text("muse-spark-1.3-contributor\n");
+    run.screen
+        .wait_for("fiber: reviewer opencode-go muse-spark-1.3-contributor");
+    let status = run.finish();
+    let shown = &run.screen.seen;
+    assert_eq!(status.code(), Some(0), "{shown:?}");
+    assert!(!shown.contains(KEY), "{shown:?}");
+    assert!(run.terminal.echoes(), "echo was not restored");
+    assert_eq!(
+        fs::read_to_string(setup.home().join("credentials/opencode/default")).unwrap(),
+        KEY
+    );
+    let config = global_config(&setup);
+    assert_eq!(
+        config["providers"]["opencode-go"]["reviewer_model"],
+        json!("muse-spark-1.3-contributor")
+    );
+    assert!(
+        config["providers"].get("opencode").is_none(),
+        "each provider keeps its own pick: {config}"
+    );
+}
+
+#[test]
+fn anthropic_login_preselects_its_vendor_default_for_enter() {
+    let setup = Setup::new_with_fl_root();
+    install_package(&setup, "anthropic");
+    let mut run = setup.on_terminal(&["login", "anthropic"]);
+    run.screen.wait_for("Key for anthropic: ");
+    run.screen.type_text(&format!("{KEY}\n"));
+    // One wait for the input-readiness line: the stored line and the
+    // reviewer burst can arrive in one chunk, so a second wait could
+    // mark past them.
+    let shown = run.screen.wait_for("Reviewer, by number or name: ");
+    assert!(
+        run.screen
+            .seen
+            .contains("fiber: stored credentials/anthropic/default"),
+        "the stored credential precedes the question: {shown:?}"
+    );
+    assert!(
+        shown.contains("claude-sonnet-5-5 (saved)"),
+        "the vendor default is preselected: {shown:?}"
+    );
+    run.screen.type_text("\n");
+    run.screen
+        .wait_for("fiber: reviewer anthropic claude-sonnet-5-5");
+    let status = run.finish();
+    assert_eq!(status.code(), Some(0), "{:?}", run.screen.seen);
+    assert_eq!(
+        global_config(&setup)["providers"]["anthropic"]["reviewer_model"],
+        json!("claude-sonnet-5-5")
+    );
+}
+
+#[test]
+fn a_piped_login_with_a_terminal_stderr_asks_nothing_and_keeps_a_saved_reviewer() {
+    let setup = Setup::new_with_fl_root();
+    setup.install_provider("acme", None, None);
+    fs::write(
+        setup.home().join("config.json"),
+        r#"{"providers": {"acme": {"reviewer_model": "old-m"}}}"#,
+    )
+    .unwrap();
+    let mut run = setup.stderr_on_terminal(&["login", "acme"], &format!("{KEY}\n"));
+    let shown = run
+        .screen
+        .wait_for("fiber: stored credentials/acme/default");
+    let status = run.finish();
+    assert_eq!(status.code(), Some(0), "{shown:?}");
+    assert!(!shown.contains("Reviewer"), "{shown:?}");
+    assert_eq!(
+        global_config(&setup)["providers"]["acme"]["reviewer_model"],
+        json!("old-m"),
+        "a pipe login writes no reviewer"
+    );
+}
+
+#[test]
+fn a_terminal_stdin_with_piped_stderr_is_no_terminal() {
+    let setup = Setup::new_with_fl_root();
+    setup.install_provider("acme", None, None);
+    fs::write(
+        setup.home().join("config.json"),
+        r#"{"providers": {"acme": {"reviewer_model": "old-m"}}}"#,
+    )
+    .unwrap();
+    let run = setup.run_with_terminal_stdin(&["login", "acme"], &format!("{KEY}\n"));
+    assert_eq!(run.code, Some(0), "{}", run.stderr);
+    // The leading newline is the key read's: echo was off on the
+    // terminal stdin, so the unread newline is written out.
+    assert_eq!(run.stderr, "\nfiber: stored credentials/acme/default\n");
+    assert_eq!(
+        global_config(&setup)["providers"]["acme"]["reviewer_model"],
+        json!("old-m"),
+        "without a terminal on stderr nothing is asked"
+    );
+}
+
+#[test]
+fn a_relogin_keeps_a_stale_saved_pick_on_enter() {
+    let setup = Setup::new_with_fl_root();
+    setup.install_provider("acme", None, None);
+    let mut first = setup.on_terminal(&["login", "acme"]);
+    first.screen.wait_for("Key for acme: ");
+    first.screen.type_text(&format!("{KEY}\n"));
+    // One wait for the input-readiness line: the stored line and the
+    // reviewer burst can arrive in one chunk, so a second wait could
+    // mark past them.
+    first.screen.wait_for("Reviewer, by number or name: ");
+    assert!(
+        first
+            .screen
+            .seen
+            .contains("fiber: stored credentials/acme/default"),
+        "{:?}",
+        first.screen.seen
+    );
+    first.screen.type_text("1\n");
+    first.screen.wait_for("fiber: reviewer acme m");
+    assert_eq!(first.finish().code(), Some(0));
+    // A pick the list no longer names stays on Enter.
+    let mut config = global_config(&setup);
+    config["providers"]["acme"]["reviewer_model"] = json!("stale-m");
+    fs::write(
+        setup.home().join("config.json"),
+        serde_json::to_string(&config).unwrap(),
+    )
+    .unwrap();
+    let mut second = setup.on_terminal(&["login", "acme", "--as", "work"]);
+    second.screen.wait_for("Key for acme: ");
+    second.screen.type_text(&format!("{KEY}\n"));
+    // One wait for the input-readiness line: the stored line, the
+    // heading and the prompt can arrive in one chunk, so a second wait
+    // could mark past them.
+    second.screen.wait_for("Reviewer, by number or name: ");
+    assert!(
+        second
+            .screen
+            .seen
+            .contains("fiber: stored credentials/acme/work"),
+        "{:?}",
+        second.screen.seen
+    );
+    assert!(
+        second.screen.seen.contains("Reviewer for acme:"),
+        "{:?}",
+        second.screen.seen
+    );
+    assert!(
+        second
+            .screen
+            .seen
+            .contains("Saved reviewer `stale-m` is not listed; Enter keeps it."),
+        "{:?}",
+        second.screen.seen
+    );
+    second.screen.type_text("\n");
+    second.screen.wait_for("fiber: reviewer acme stale-m");
+    assert_eq!(second.finish().code(), Some(0));
+    assert_eq!(
+        global_config(&setup)["providers"]["acme"]["reviewer_model"],
+        json!("stale-m")
+    );
+}
+
+#[test]
+fn two_providers_sharing_a_credential_keep_their_own_picks() {
+    let setup = Setup::new_with_fl_root();
+    install_package(&setup, "opencode");
+    let mut go = setup.on_terminal(&["login", "opencode-go"]);
+    go.screen.wait_for("Key for opencode-go: ");
+    go.screen.type_text(&format!("{KEY}\n"));
+    // One wait for the input-readiness line: the stored line and the
+    // reviewer burst can arrive in one chunk, so a second wait could
+    // mark past them.
+    go.screen.wait_for("Reviewer, by number or name: ");
+    assert!(
+        go.screen
+            .seen
+            .contains("fiber: stored credentials/opencode/default"),
+        "{:?}",
+        go.screen.seen
+    );
+    go.screen.type_text("1\n");
+    go.screen.wait_for("fiber: reviewer opencode-go");
+    assert_eq!(go.finish().code(), Some(0));
+    // The shared directory's `default` label is taken: the second login
+    // uses a fresh label, and the vendor default is preselected.
+    let mut zen = setup.on_terminal(&["login", "opencode-zen", "--as", "work"]);
+    zen.screen.wait_for("Key for opencode-zen: ");
+    zen.screen.type_text(&format!("{KEY}\n"));
+    // One wait for the input-readiness line: the stored line and the
+    // reviewer burst can arrive in one chunk, so a second wait could
+    // mark past them.
+    let shown = zen.screen.wait_for("Reviewer, by number or name: ");
+    assert!(
+        zen.screen
+            .seen
+            .contains("fiber: stored credentials/opencode/work"),
+        "the stored credential precedes the question: {shown:?}"
+    );
+    assert!(shown.contains("(saved)"), "{shown:?}");
+    zen.screen.type_text("\n");
+    zen.screen.wait_for("fiber: reviewer opencode-zen");
+    assert_eq!(zen.finish().code(), Some(0));
+    let config = global_config(&setup);
+    assert_eq!(
+        config["providers"]["opencode-go"]["reviewer_model"],
+        json!("claude-haiku-5-5"),
+        "the first provider's pick stands: {config}"
+    );
+    assert_eq!(
+        config["providers"]["opencode-zen"]["reviewer_model"],
+        json!("muse-spark-1.3"),
+        "the package default landed on Enter: {config}"
+    );
+}
+
+#[test]
+fn end_of_input_at_the_reviewer_prompt_keeps_the_credential_and_sets_nothing() {
+    let setup = Setup::new_with_fl_root();
+    setup.install_provider("acme", None, None);
+    fs::write(
+        setup.home().join("config.json"),
+        r#"{"providers": {"acme": {"reviewer_model": "old-m"}}}"#,
+    )
+    .unwrap();
+    let mut run = setup.on_terminal(&["login", "acme"]);
+    run.screen.wait_for("Key for acme: ");
+    run.screen.type_text(&format!("{KEY}\n"));
+    // One wait for the input-readiness line: the stored line and the
+    // reviewer burst can arrive in one chunk, so a second wait could
+    // mark past them.
+    // The reviewer prompt is the input-readiness barrier, not the save:
+    // end of input lands after storage with nothing saved.
+    run.screen.wait_for("Reviewer, by number or name: ");
+    assert!(
+        run.screen
+            .seen
+            .contains("fiber: stored credentials/acme/default"),
+        "{:?}",
+        run.screen.seen
+    );
+    run.screen.type_text("\u{4}");
+    run.screen.wait_for("no reviewer was set");
+    let status = run.finish();
+    let shown = &run.screen.seen;
+    assert_eq!(status.code(), Some(0), "{shown:?}");
+    assert!(run.terminal.echoes(), "echo was not restored");
+    assert_eq!(
+        fs::read_to_string(setup.home().join("credentials/acme/default")).unwrap(),
+        KEY
+    );
+    assert_eq!(
+        global_config(&setup)["providers"]["acme"]["reviewer_model"],
+        json!("old-m"),
+        "the previous reviewer setting stands"
+    );
+}
+
+#[test]
+fn an_interrupt_at_the_reviewer_prompt_keeps_the_credential_and_sets_nothing() {
+    let setup = Setup::new_with_fl_root();
+    setup.install_provider("acme", None, None);
+    fs::write(
+        setup.home().join("config.json"),
+        r#"{"providers": {"acme": {"reviewer_model": "old-m"}}}"#,
+    )
+    .unwrap();
+    let mut run = setup.on_terminal(&["login", "acme"]);
+    run.screen.wait_for("Key for acme: ");
+    run.screen.type_text(&format!("{KEY}\n"));
+    // One wait for the input-readiness line: the stored line and the
+    // reviewer burst can arrive in one chunk, so a second wait could
+    // mark past them.
+    run.screen.wait_for("Reviewer, by number or name: ");
+    assert!(
+        run.screen
+            .seen
+            .contains("fiber: stored credentials/acme/default"),
+        "{:?}",
+        run.screen.seen
+    );
+    // The prompt blocks on terminal input: the interrupt must end the
+    // read with no reviewer set, not hang inside it.
+    assert!(support::kill_group(setup.deadline, run.group, "INT").unwrap());
+    run.screen.wait_for("no reviewer was set");
+    let status = run.finish();
+    let shown = &run.screen.seen;
+    assert_eq!(status.code(), Some(0), "{shown:?}");
+    assert!(run.terminal.echoes(), "echo was not restored");
+    assert_eq!(
+        fs::read_to_string(setup.home().join("credentials/acme/default")).unwrap(),
+        KEY
+    );
+    assert_eq!(
+        global_config(&setup)["providers"]["acme"]["reviewer_model"],
+        json!("old-m"),
+        "the previous reviewer setting stands"
+    );
+}
+
+#[test]
+fn a_reviewer_write_failure_names_the_key_and_keeps_the_credential() {
+    let setup = Setup::new_with_fl_root();
+    setup.install_provider("acme", None, None);
+    let mut run = setup.on_terminal(&["login", "acme"]);
+    run.screen.wait_for("Key for acme: ");
+    run.screen.type_text(&format!("{KEY}\n"));
+    // One wait for the input-readiness line: the stored line and the
+    // reviewer burst can arrive in one chunk, so a second wait could
+    // mark past them.
+    run.screen.wait_for("Reviewer, by number or name: ");
+    assert!(
+        run.screen
+            .seen
+            .contains("fiber: stored credentials/acme/default"),
+        "{:?}",
+        run.screen.seen
+    );
+    // Another writer replaces the whole document with `[]` after the
+    // prompt: the save fails instead of destroying it.
+    fs::write(setup.home().join("config.json"), "[]").unwrap();
+    run.screen.type_text("1\n");
+    run.screen.wait_for("providers.acme.reviewer_model");
+    let status = run.finish();
+    let shown = &run.screen.seen;
+    assert_eq!(status.code(), Some(1), "{shown:?}");
+    assert!(
+        !shown.contains("fiber: reviewer"),
+        "no success is claimed for the failed save: {shown:?}"
+    );
+    assert!(
+        !shown.contains(KEY),
+        "no secret reaches the output: {shown:?}"
+    );
+    assert!(run.terminal.echoes(), "echo was not restored");
+    assert_eq!(
+        fs::read_to_string(setup.home().join("credentials/acme/default")).unwrap(),
+        KEY
+    );
+    assert_eq!(
+        fs::read_to_string(setup.home().join("config.json")).unwrap(),
+        "[]"
+    );
+}
+
+#[test]
+fn an_interrupt_during_reviewer_discovery_keeps_the_credential_and_sets_nothing() {
+    // A provider whose `models()` pings a held loopback server: the
+    // request proves discovery is in flight before any reviewer prompt.
+    let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+    let port = listener.local_addr().unwrap().port();
+    let (entered_tx, entered_rx) = mpsc::channel();
+    let (release_tx, release_rx) = mpsc::channel();
+    let setup = Setup::new_with_fl_root();
+    let deadline = setup.deadline;
+    let server = thread::spawn(move || {
+        let (mut stream, _) = listener.accept().unwrap();
+        let mut head = Vec::new();
+        let mut byte = [0u8; 1];
+        while !head.ends_with(b"\r\n\r\n") {
+            if stream.read(&mut byte).unwrap() == 0 {
+                break;
+            }
+            head.push(byte[0]);
+        }
+        entered_tx.send(()).unwrap();
+        // A disconnect releases the hold, so a failed test cannot wedge
+        // the child in its callback: the reply still releases it.
+        deadline.recv(&release_rx).unwrap_or(());
+        stream
+            .write_all(b"HTTP/1.1 200 OK\r\ncontent-length: 2\r\nconnection: close\r\n\r\n{}")
+            .unwrap_or(());
+    });
+    let dir = setup.home().join("extensions").join("held");
+    fs::create_dir_all(dir.join("providers")).unwrap();
+    fs::write(
+        dir.join("extension.json"),
+        json!({"name": "held", "version": "v0.0.0", "fiber": "0.0.0", "api": 1,
+               "providers": {"held": ["http://127.0.0.1:9/v1"]}})
+        .to_string(),
+    )
+    .unwrap();
+    write_record(&dir);
+    fs::write(
+        dir.join("providers/held.json"),
+        json!({"name": "held", "models": [{
+            "id": "data-m", "protocol": "openai-responses",
+            "base_url": "http://127.0.0.1:9/v1", "context_window": 1000}]})
+        .to_string(),
+    )
+    .unwrap();
+    fs::write(
+        dir.join("providers/held.lua"),
+        format!(
+            "fiber.provider(\"held\", {{models = {{timeout = 30000, run = function()\n\
+              host.http({{url = \"http://127.0.0.1:{port}/ping\"}})\n\
+              return {{{{id = \"live-m\", protocol = \"openai-responses\", \
+              base_url = \"http://127.0.0.1:9/v1\", context_window = 1000}}}}\n\
+              end}}}})\n"
+        ),
+    )
+    .unwrap();
+    let mut run = setup.on_terminal(&["login", "held"]);
+    run.screen.wait_for("Key for held: ");
+    run.screen.type_text(&format!("{KEY}\n"));
+    run.screen
+        .wait_for("fiber: stored credentials/held/default");
+    setup
+        .deadline
+        .recv(&entered_rx)
+        .expect("discovery requested while the reviewer prompt was still down");
+    assert!(
+        !run.screen.seen.contains("Reviewer"),
+        "no prompt before discovery ends: {:?}",
+        run.screen.seen
+    );
+    assert!(support::kill_group(setup.deadline, run.group, "INT").unwrap());
+    release_tx.send(()).unwrap();
+    run.screen.wait_for("no reviewer was set");
+    let status = run.finish();
+    let shown = &run.screen.seen;
+    assert_eq!(status.code(), Some(0), "{shown:?}");
+    assert!(
+        !shown.contains("Reviewer, by number or name"),
+        "no reviewer was asked after the interrupt: {shown:?}"
+    );
+    assert!(!shown.contains(KEY), "{shown:?}");
+    assert!(run.terminal.echoes(), "echo was not restored");
+    assert_eq!(
+        fs::read_to_string(setup.home().join("credentials/held/default")).unwrap(),
+        KEY
+    );
+    assert!(
+        !global_config(&setup)["providers"]["held"]
+            .as_object()
+            .is_some_and(|provider| provider.contains_key("reviewer_model")),
+        "no reviewer was written"
+    );
+    server.join().unwrap();
 }

@@ -297,8 +297,9 @@ Most of a provider is data. For the provider:
   reading a key: `browser`, whose device-code form takes `--device`
 - headers sent on every request
 - a `sign()` function, if every request must carry a signature
-- `reviewer_model`, optional: one of its models that reviews calls when
-  `reviewer.model` is unset (`docs/permissions.md`, "How it runs"). A
+- `reviewer_model`, optional: the package default `fiber login` preselects
+  as the provider's reviewer, and the final fallback when no reviewer is
+  configured (`docs/permissions.md`, "How it runs"). A
   first-party package names the model its vendor's own agent reviews with,
   at the current generation: `claude-sonnet-5-5`, `gpt-6-luna`; Google
   ships no reviewer, so `gemini` names its middle tier,
@@ -741,6 +742,14 @@ already stored is refused, and the message names `--as`. The first label a
 provider stores is written to `providers."<name>".credential` in the global
 file, unless that key is already set. A provider that logs in by browser
 also takes `--device`, which logs in with a device code instead.
+
+At a terminal the login asks, once the credential is stored, which model
+reviews that provider's calls: the provider's models with the saved
+`providers."<name>".reviewer_model` preselected, else the package default,
+and nothing preselected when neither exists. The pick is saved to that
+global key, one per provider; `reviewer.model` stays the override that
+applies to every provider. Without a terminal the credential is stored and
+nothing is asked.
 
 ### Which credential a session uses
 

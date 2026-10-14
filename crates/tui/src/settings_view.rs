@@ -137,6 +137,9 @@ pub(crate) enum Act {
     Open(PathBuf),
     /// Start the browser login for this provider.
     Login(String),
+    /// Read the reviewer choices for this stored provider in the
+    /// background, after its key was stored.
+    Reviewer(String),
     /// Copy this URL through OSC 52 and the system clipboard.
     Copy(String),
 }

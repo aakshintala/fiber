@@ -1,0 +1,21 @@
+---
+source: crates/tui/src/login_view_tests.rs
+expression: "text_of(&buf, 80, 24).join(\"\\n\")"
+---
+
+
+
+
+
+
+                 ▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
+
+                   acme                                     ✕
+
+                     1) fast-1
+                     2) fast-2
+
+
+                   ↑↓ move · Enter save · Esc back
+
+                 ▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀

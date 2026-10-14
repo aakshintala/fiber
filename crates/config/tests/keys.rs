@@ -131,6 +131,13 @@ fn rows() -> Vec<(&'static [&'static str], Value, Value, &'static str, bool)> {
             false,
         ),
         (
+            &["providers", "acme", "reviewer_model"],
+            json!("fast-1"),
+            json!(5),
+            STR,
+            false,
+        ),
+        (
             &["providers", "openrouter", "credentials", "work"],
             json!({"env": "OPENROUTER_API_KEY"}),
             json!({"env": 1}),
@@ -813,5 +820,193 @@ fn the_project_file_in_fiber_home_merges_its_keys_with_the_global_file() {
             json!({"send": "ctrl+s", "copy_focused": ["c"]}),
             Source::Project(setup.project())
         ))
+    );
+}
+
+#[test]
+fn provider_reviewer_model_has_no_default_until_login_saves_one() {
+    let setup = Setup::new();
+    let config = setup.load(&[]).unwrap();
+    assert_eq!(config.get("providers.acme.reviewer_model", None), None);
+    assert_eq!(
+        config.get("providers.acme.credential", None),
+        None,
+        "no reviewer default may appear beside the credential key"
+    );
+}
+
+#[test]
+fn provider_reviewer_model_rejects_every_non_string_without_reading_it() {
+    for bad in [
+        json!(true),
+        json!({"model": "m"}),
+        json!(["m"]),
+        json!(null),
+    ] {
+        let setup = Setup::new();
+        setup.write(
+            &setup.global(),
+            &nest(&["providers", "acme", "reviewer_model"], bad.clone()).to_string(),
+        );
+        let e = setup.load(&[]).unwrap_err();
+        assert_eq!(e.code(), ErrorCode::ConfigInvalid, "{bad}");
+        assert_eq!(
+            e.to_string(),
+            format!(
+                "{}: `providers.acme.reviewer_model` must be a string.",
+                setup.global().display()
+            ),
+            "{bad}"
+        );
+    }
+}
+
+#[test]
+fn provider_reviewer_model_with_a_dotted_name_is_one_path_segment() {
+    let setup = Setup::new();
+    setup.write(
+        &setup.global(),
+        r#"{"providers": {"acme.corp": {"reviewer_model": "fast-1"}}}"#,
+    );
+    let config = setup.load(&[]).unwrap();
+    assert!(config.notices().is_empty(), "{:?}", config.notices());
+    assert_eq!(
+        config.get("providers.\"acme.corp\".reviewer_model", None),
+        Some((json!("fast-1"), Source::Global(setup.global())))
+    );
+    assert_eq!(
+        config.get_segments(
+            &[
+                "providers".into(),
+                "acme.corp".into(),
+                "reviewer_model".into()
+            ],
+            None
+        ),
+        Some((json!("fast-1"), Source::Global(setup.global())))
+    );
+}
+
+#[test]
+fn a_repository_reviewer_model_is_ignored_and_the_personal_value_stands() {
+    let setup = Setup::new();
+    setup.write(
+        &setup.global(),
+        r#"{"providers": {"acme": {"reviewer_model": "mine"}}}"#,
+    );
+    setup.write(
+        &setup.repository(),
+        r#"{"providers": {"acme": {"reviewer_model": "theirs"}}}"#,
+    );
+    let config = setup.load(&[]).unwrap();
+    let [notice] = config.notices() else {
+        panic!("{:?}", config.notices());
+    };
+    assert_eq!(notice.code, ErrorCode::ConfigKeyIgnored);
+    assert_eq!(
+        notice.message,
+        format!(
+            "{}: ignored `providers.acme.reviewer_model`, which a repository may not set.",
+            setup.repository().display()
+        )
+    );
+    assert_eq!(
+        config.get("providers.acme.reviewer_model", None),
+        Some((json!("mine"), Source::Global(setup.global())))
+    );
+}
+
+#[test]
+fn reviewer_model_layers_prefer_project_then_override_and_providers_stay_independent() {
+    let setup = Setup::new();
+    setup.write(
+        &setup.global(),
+        r#"{"reviewer": {"model": "all/a"}, "providers": {"acme": {"reviewer_model": "global-a"}, "other": {"reviewer_model": "global-o"}}}"#,
+    );
+    setup.write(
+        &setup.project(),
+        r#"{"providers": {"acme": {"reviewer_model": "project-a"}}}"#,
+    );
+    let config = setup.load(&[]).unwrap();
+    assert!(config.notices().is_empty(), "{:?}", config.notices());
+    assert_eq!(
+        config.get("providers.acme.reviewer_model", None),
+        Some((json!("project-a"), Source::Project(setup.project())))
+    );
+    assert_eq!(
+        config.get("providers.other.reviewer_model", None),
+        Some((json!("global-o"), Source::Global(setup.global())))
+    );
+    assert_eq!(
+        config.get("reviewer.model", None),
+        Some((json!("all/a"), Source::Global(setup.global()))),
+        "the every-provider override is a separate key"
+    );
+    let config = setup
+        .load(&["providers.acme.reviewer_model=flag-a"])
+        .unwrap();
+    assert_eq!(
+        config.get("providers.acme.reviewer_model", None),
+        Some((json!("flag-a"), Source::Run))
+    );
+}
+
+#[test]
+fn replace_global_persists_the_exact_local_id_beside_sibling_keys() {
+    let setup = Setup::new();
+    setup.write(
+        &setup.global(),
+        r#"{"providers": {"acme": {"credential": "default", "credentials": {"work": {"env": "ACME_KEY"}}, "placeholder": "kept"}}}"#,
+    );
+    let before: Value =
+        serde_json::from_str(&std::fs::read_to_string(setup.global()).unwrap()).unwrap();
+    assert_eq!(
+        before,
+        json!({"providers": {"acme": {"credential": "default", "credentials": {"work": {"env": "ACME_KEY"}}, "placeholder": "kept"}}}),
+        "the fixture must hold the siblings the write keeps"
+    );
+    let replaced = config::replace_global(
+        &setup.home(),
+        "providers.acme.reviewer_model",
+        Some(json!("anthropic/claude-sonnet-5.5")),
+    )
+    .unwrap();
+    assert_eq!(replaced, None);
+    let root: Value =
+        serde_json::from_str(&std::fs::read_to_string(setup.global()).unwrap()).unwrap();
+    assert_eq!(
+        root,
+        json!({"providers": {"acme": {"credential": "default", "credentials": {"work": {"env": "ACME_KEY"}}, "placeholder": "kept", "reviewer_model": "anthropic/claude-sonnet-5.5"}}}),
+        "the local ID lands verbatim, siblings untouched"
+    );
+    let replaced = config::replace_global(
+        &setup.home(),
+        "providers.acme.reviewer_model",
+        Some(json!("fast-2")),
+    )
+    .unwrap();
+    assert_eq!(replaced, Some(json!("anthropic/claude-sonnet-5.5")));
+}
+
+#[test]
+fn a_wrongly_typed_reviewer_candidate_writes_nothing() {
+    let setup = Setup::new();
+    setup.write(&setup.global(), r#"{"reviewer": {"model": "all/a"}}"#);
+    let before = std::fs::read(setup.global()).unwrap();
+    let e = config::replace_global(
+        &setup.home(),
+        "providers.acme.reviewer_model",
+        Some(json!(5)),
+    )
+    .unwrap_err();
+    assert_eq!(e.code(), ErrorCode::ConfigInvalid);
+    assert!(
+        e.to_string().contains("`providers.acme.reviewer_model`"),
+        "{e}"
+    );
+    assert_eq!(
+        std::fs::read(setup.global()).unwrap(),
+        before,
+        "a mistyped candidate must fail before changing the file"
     );
 }
