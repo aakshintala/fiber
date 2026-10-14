@@ -178,8 +178,16 @@ impl Hub {
     }
 
     /// Records `result` for the call `id`, if its caller still waits.
+    /// A watched hook that settled disarms its watch instead: its caller
+    /// already took `Timeout`, so the late result is dropped.
     pub(super) fn finish(&self, id: u64, result: Result<Value, Error>) {
-        self.lock().finish(id, result);
+        let mut shared = self.lock();
+        if shared.abandon.as_ref().is_some_and(|watch| watch.id == id) {
+            shared.abandon = None;
+        } else {
+            shared.finish(id, result);
+        }
+        drop(shared);
         self.notify();
     }
 
@@ -273,6 +281,21 @@ pub(crate) struct Shared {
     /// Raised into running Lua by the deadline hook while a cancelled call
     /// runs; set and cleared only under this lock.
     pub(super) interrupt: Arc<std::sync::atomic::AtomicBool>,
+    /// A hook whose caller took `Timeout` at its deadline while it still
+    /// ran on the thread. The worker may be stuck inside the VM — that is
+    /// when abandonment matters — so the next judge to see it past its
+    /// grace abandons the VM (the lane's choice: the next judge, not the
+    /// worker). One slot is enough: only one call runs on the thread at a
+    /// time, and parking or settling the watched hook disarms it.
+    pub(super) abandon: Option<AbandonWatch>,
+}
+
+/// A hook still on the thread after its caller answered `Timeout` at its
+/// deadline: which call to abandon, and the deadline its grace runs from.
+pub(super) struct AbandonWatch {
+    pub(super) id: u64,
+    pub(super) target: Target,
+    pub(super) deadline: Option<Instant>,
 }
 
 pub(super) enum ProviderLoad {
@@ -492,6 +515,23 @@ impl Shared {
             self.forget(id);
             return (Next::Return(Err(e)), Vec::new());
         }
+        // A watched hook still running past its grace: its caller took
+        // `Timeout` at its deadline and is gone, and the worker may be
+        // stuck in the VM, so the next judge to see it abandons the VM
+        // with the abandoned reason, as its own judge would below.
+        let watch_due = self
+            .abandon
+            .as_ref()
+            .is_some_and(|watch| expired(watch.deadline.and_then(|at| at.checked_add(GRACE)), now));
+        if watch_due && let Some(watch) = self.abandon.take() {
+            let reason = StopReason::Abandoned {
+                extension: name.to_owned(),
+                callback: watch.target.to_string(),
+            };
+            let error = reason.error(name);
+            let unsent = self.stop(reason);
+            return (Next::Return(Err(error)), unsent);
+        }
         if !matches!(
             self.calls.get(&id),
             Some(Progress::Queued | Progress::Started { .. })
@@ -524,10 +564,30 @@ impl Shared {
             && matches!(target, Target::Hook { .. })
             && expired(*deadline, now)
         {
+            if expired(deadline.and_then(|at| at.checked_add(GRACE)), now) {
+                // Still on the thread past its grace: the interrupt could
+                // not stop the VM. Abandon it with the abandoned reason,
+                // as for any running call past its grace below; later
+                // calls get the stored error from the stopped phase above.
+                self.forget(id);
+                let reason = StopReason::Abandoned {
+                    extension: name.to_owned(),
+                    callback: target.to_string(),
+                };
+                let error = reason.error(name);
+                let unsent = self.stop(reason);
+                return (Next::Return(Err(error)), unsent);
+            }
             // A hook past its timeout has failed: the caller takes the
             // timeout at its deadline and the chain moves on, while the
             // worker's stop lands late and is dropped. Waiting the grace
-            // would hold the answer on the worker's delivery.
+            // would hold the answer on the worker's delivery. The watch
+            // leaves the abandonment to the next judge past the grace.
+            self.abandon = Some(AbandonWatch {
+                id,
+                target: target.clone(),
+                deadline: *deadline,
+            });
             self.forget(id);
             return (Next::Return(Err(timed_out(name, target, timeout))), unsent);
         }
@@ -585,6 +645,7 @@ impl Shared {
     /// returns what could not be sent, for the caller to drop afterwards.
     pub(super) fn stop(&mut self, reason: StopReason) -> Vec<Delivery> {
         self.phase = Phase::Stopped(reason);
+        self.abandon = None;
         self.replies.clear();
         self.execs.values_mut().for_each(|admit| admit.stop_take());
         // stop_declines_every_held_ask: one `Resolved` per held ask.

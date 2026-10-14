@@ -393,6 +393,11 @@ fn park(
             parked: true,
         };
     }
+    // A hook that suspends after its caller took `Timeout` is parked, not
+    // running: it ends at its own deadline without abandoning the VM.
+    if shared.abandon.as_ref().is_some_and(|watch| watch.id == id) {
+        shared.abandon = None;
+    }
 }
 
 /// Ends a spawn that failed after the park: drops exactly the callback

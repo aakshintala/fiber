@@ -1384,10 +1384,11 @@ fn a_running_hook_before_its_deadline_waits() {
     assert_eq!(until, Some(at));
 }
 
-/// A running hook past its grace still only times out: hooks never abandon
-/// the VM, which a flipped target check would do here.
+/// A hook still on the thread past its grace abandons the VM: the
+/// interrupt could not stop it. The next call fails with the stored
+/// abandoned error.
 #[test]
-fn a_running_hook_past_its_grace_times_out_instead_of_abandoning() {
+fn a_running_hook_past_its_grace_abandons_the_vm() {
     let at = now();
     let asked = ago(at, 1200);
     let mut shared = ready_hook("before_message", 50);
@@ -1402,10 +1403,55 @@ fn a_running_hook_past_its_grace_times_out_instead_of_abandoning() {
     );
     let err = returned(shared.judge("ext", id, &hook("before_message"), asked, at)).unwrap_err();
     assert!(
+        matches!(&err, Error::Abandoned { callback, .. } if callback == "before_message"),
+        "{err:?}"
+    );
+    assert!(matches!(
+        shared.phase,
+        Phase::Stopped(hub::StopReason::Abandoned { .. })
+    ));
+    let next = shared.push(hook("before_message"), Value::Null, at);
+    let err = returned(shared.judge("ext", next, &hook("before_message"), at, at)).unwrap_err();
+    assert!(
+        matches!(&err, Error::Abandoned { callback, .. } if callback == "before_message"),
+        "{err:?}"
+    );
+}
+
+/// A hook that outruns its caller's `Timeout` is abandoned by the next call
+/// past its grace: the worker may be stuck in the VM, so the next judge
+/// stops it. Within its grace the VM stays up.
+#[test]
+fn a_timed_out_hook_still_running_past_its_grace_abandons_on_the_next_call() {
+    let at = now();
+    let asked = ago(at, 1200);
+    let mut shared = ready_hook("before_message", 50);
+    let id = shared.push(hook("before_message"), Value::Null, asked);
+    shared.queue.clear();
+    shared.calls.insert(
+        id,
+        Progress::Started {
+            deadline: Some(ago(at, 1150)),
+            parked: false,
+        },
+    );
+    let err = returned(shared.judge("ext", id, &hook("before_message"), asked, ago(at, 200)))
+        .unwrap_err();
+    assert!(
         matches!(&err, Error::Timeout { callback, timeout_ms: 50, .. } if callback == "before_message"),
         "{err:?}"
     );
     assert!(matches!(shared.phase, Phase::Ready(_)));
+    let next = shared.push(hook("before_message"), Value::Null, at);
+    let err = returned(shared.judge("ext", next, &hook("before_message"), at, at)).unwrap_err();
+    assert!(
+        matches!(&err, Error::Abandoned { callback, .. } if callback == "before_message"),
+        "{err:?}"
+    );
+    assert!(matches!(
+        shared.phase,
+        Phase::Stopped(hub::StopReason::Abandoned { .. })
+    ));
 }
 
 /// A parked hook at its deadline still waits out its grace: only a hook on
