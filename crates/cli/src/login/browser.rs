@@ -203,7 +203,13 @@ pub(crate) fn login_with(
         &LoginCancel::default(),
     )?;
     std::io::Write::write_fmt(io.err, format_args!("fiber: stored {path}\n"))
-        .map_err(super::terminal_failure)
+        .map_err(super::terminal_failure)?;
+    // The same terminal-only question a key login asks: a pipe stores
+    // the credential and asks nothing.
+    if io.terminal {
+        super::post_store_reviewer(io, name)?;
+    }
+    Ok(())
 }
 
 #[cfg(test)]
