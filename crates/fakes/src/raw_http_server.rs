@@ -37,6 +37,10 @@ struct State {
     /// [`RawHttpServer::release_replies`] before its reply is sent, so a
     /// test can reset the peer between the record and the send.
     hold: bool,
+    /// Replies recorded but not yet finished: incremented when a request
+    /// is recorded, decremented after its send attempt ends on every
+    /// path, so [`RawHttpServer::await_idle`] observes the attempt's end.
+    pending: usize,
 }
 
 impl State {
@@ -45,6 +49,7 @@ impl State {
             requests: Vec::new(),
             completed: 0,
             hold: false,
+            pending: 0,
         }
     }
 }
@@ -129,6 +134,20 @@ impl RawHttpServer {
             .unwrap_or_else(PoisonError::into_inner);
         guard.completed >= count
     }
+
+    /// Waits, at most `within` of real time, until no recorded reply is
+    /// still unfinished. True once every send attempt ended; false at the
+    /// deadline. Idle admits at once.
+    // exempted: waiting while pending >= 0 instead of > 0 only waits longer once satisfied; the trailing == verdict returns the same value, so no test can observe the difference without a timing assert (docs/testing.md "Waits and timeouts"); same wait/verdict shape as await_replies above. Both verdict directions stay pinned by the held zero check and the interrupt idle wait.
+    #[cfg_attr(false, mutants::skip)]
+    pub fn await_idle(&self, within: Duration) -> bool {
+        let guard = lock(&self.state);
+        let (guard, _) = self
+            .arrived
+            .wait_timeout_while(guard, within, |state| state.pending > 0)
+            .unwrap_or_else(PoisonError::into_inner);
+        guard.pending == 0
+    }
 }
 
 impl Drop for RawHttpServer {
@@ -161,6 +180,7 @@ fn serve(conn: Connection, reply: &[u8], state: &Mutex<State>, arrived: &Condvar
     {
         let mut state = lock(state);
         state.requests.push(project(&request));
+        state.pending += 1;
         arrived.notify_all();
         while state.hold {
             state = arrived.wait(state).unwrap_or_else(PoisonError::into_inner);
@@ -168,8 +188,13 @@ fn serve(conn: Connection, reply: &[u8], state: &Mutex<State>, arrived: &Condvar
     }
     // The lock is free while the bytes go out, so a slow peer never
     // holds the records; the handler's return closes the connection.
-    if conn.reply_full(reply, b"", None) == ReplyEnd::Done {
-        lock(state).completed += 1;
+    let end = conn.reply_full(reply, b"", None);
+    {
+        let mut state = lock(state);
+        state.pending -= 1;
+        if end == ReplyEnd::Done {
+            state.completed += 1;
+        }
         arrived.notify_all();
     }
 }

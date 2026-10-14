@@ -258,7 +258,11 @@ fn held_replies_wait_for_their_release() {
     let recorded = wait_recorded(&server, 1, "the held request to be recorded");
     assert_eq!(recorded[0].method, "GET");
     assert!(
-        !server.await_replies(1, SHORT),
+        !server.await_idle(Duration::ZERO),
+        "a held reply is still unfinished"
+    );
+    assert!(
+        !server.await_replies(1, Duration::ZERO),
         "a held reply completes nothing"
     );
     server.release_replies();
@@ -298,8 +302,9 @@ fn an_interrupted_reply_send_publishes_no_completion() {
         "the interrupted request is recorded before its reply"
     );
     server.release_replies();
+    assert!(server.await_idle(DEADLINE), "the send attempt ended");
     assert!(
-        !server.await_replies(1, SHORT),
+        !server.await_replies(1, Duration::ZERO),
         "a reply cut short publishes no completion"
     );
 }
