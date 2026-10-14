@@ -1,27 +1,25 @@
 //! Tests of the gated HTTP fake, through its own seam (`gated_http.rs`).
 
-use std::io::{BufRead, BufReader};
-use std::net::SocketAddr;
-use std::os::fd::OwnedFd;
+use std::io::{BufRead, BufReader, Read, Write};
+use std::net::{SocketAddr, TcpStream};
 use std::panic::AssertUnwindSafe;
 use std::sync::mpsc;
+use std::thread;
+use std::time::Duration;
 
 use crate::clock::FakeClock;
 use crate::deadline::Deadline;
+use crate::http_server::{HttpServer, Limits};
 
 use super::*;
 
-/// A clock that lives as long as the test process, as a request
-/// deadline's clock must.
-fn fake_clock() -> &'static FakeClock {
-    Box::leak(Box::new(FakeClock::new()))
-}
+/// How long the fake bounds one request in the trickle test: the core's
+/// own bound, advanced on the injected clock instead of waited out.
+const WAIT: Duration = Duration::from_secs(30);
 
 /// The message a failed request wait carried: the request it names.
 /// The test fails when the wait read instead.
-fn failure_message(
-    caught: std::thread::Result<(TcpStream, String, Vec<u8>, RequestDeadline)>,
-) -> String {
+fn failure_message<T>(caught: std::thread::Result<T>) -> String {
     match caught {
         Ok(_) => panic!("the trickled request read instead of failing"),
         Err(payload) => payload
@@ -45,56 +43,69 @@ fn failure_message(
 /// sleeps.
 #[test]
 fn trickled_header_bytes_fail_within_the_request_bound() {
-    let clock: &'static FakeClock = fake_clock();
-    let listener = TcpListener::bind("127.0.0.1:0").expect("the test binds");
-    let addr = listener.local_addr().expect("an address");
-    listener.set_nonblocking(true).expect("the test polls");
-    let pause = Arc::new((Mutex::new(()), std::sync::Condvar::new()));
-    let waiting = Arc::clone(&pause);
+    let clock = FakeClock::new();
+    let server = HttpServer::bind(clock.clone(), Limits::default()).expect("the core binds");
+    let acks = server.test_acknowledgments();
     let (done_tx, done_rx) = mpsc::channel();
-    let (line_tx, line_rx) = mpsc::channel();
-    *REQUEST_LINE_READ
-        .lock()
-        .unwrap_or_else(PoisonError::into_inner) = Some(line_tx);
-    std::thread::spawn(move || {
-        let caught = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-            accept(&listener, &waiting, "the initialize request", clock)
-        }));
-        done_tx.send(caught).expect("the test waits");
+    thread::scope(|scope| {
+        // Inside the scope so a failure drops the client before the
+        // join: the drop ends the reader's wait instead of hanging it.
+        let mut client = TcpStream::connect(server.addr()).expect("the test connects");
+        // The request line, one byte at a time, queued before the reader
+        // starts: every underlying read succeeds, so one timeout per
+        // read would never fire on this. Its first park is the headers
+        // wait below, so that phase's acknowledgment is the one the test
+        // waits for: an early request-line park would spend the wait's
+        // one acknowledgment for this wake generation, and the headers
+        // wait would park again without announcing itself.
+        for byte in b"POST /mcp HTTP/1.1\r\n" {
+            client
+                .write_all(std::slice::from_ref(byte))
+                .expect("the trickle writes");
+        }
+        scope.spawn(|| {
+            let caught = std::panic::catch_unwind(AssertUnwindSafe(|| {
+                let mut conn = server
+                    .accept_expected("the initialize request")
+                    .expect("a client connects");
+                crate::http_server::request::read_request(&mut conn)
+            }));
+            done_tx.send(caught).expect("the test waits");
+        });
+        // The headers wait announces its own phase: the server is past
+        // its clock check and waiting on the clock before the clock
+        // moves (`docs/testing.md`, "Waits and timeouts").
+        let headers_deadline = Deadline::after(WAIT);
+        let headers = loop {
+            let ack = headers_deadline.recv_or_fail(&acks, "the headers wait");
+            if ack.phase == "to read the headers" {
+                break ack;
+            }
+        };
+        assert!(
+            clock.await_thread_parked(headers.thread, headers.until, WAIT),
+            "the headers wait parks on the clock before it moves"
+        );
+        // A header line, one byte at a time, across more than the bound
+        // overall: its first bytes arrive inside the bound, the rest past
+        // it, while every underlying read still succeeds.
+        clock.advance(WAIT / 2);
+        for byte in b"content-length: 0\r\n".iter().take(10) {
+            client
+                .write_all(std::slice::from_ref(byte))
+                .expect("the trickle writes");
+        }
+        clock.advance(WAIT / 2 + Duration::from_secs(1));
+        client.write_all(b"0").expect("the trickle writes");
+        let caught = Deadline::after(WAIT)
+            .recv(&done_rx)
+            .expect("the bound names the trickled request");
+        let message = failure_message(caught);
+        assert!(
+            message.contains("the initialize request"),
+            "the failure names its request, got: {message}"
+        );
     });
-    let mut client = TcpStream::connect(addr).expect("the test connects");
-    // The request line, one byte at a time: every underlying read
-    // succeeds, so one timeout per read would never fire on this.
-    for byte in b"POST /mcp HTTP/1.1\r\n" {
-        client
-            .write_all(std::slice::from_ref(byte))
-            .expect("the trickle writes");
-    }
-    // After the deadline exists and the request line is read: the
-    // server is waiting on the clock before the clock moves
-    // (`docs/testing.md`, "Waits and timeouts").
-    Deadline::after(WAIT)
-        .recv(&line_rx)
-        .expect("the server read the request line");
-    // A header line, one byte at a time, across more than the bound
-    // overall: its first bytes arrive inside the bound, the rest past
-    // it, while every underlying read still succeeds.
-    clock.advance(WAIT / 2);
-    for byte in b"content-length: 0\r\n".iter().take(10) {
-        client
-            .write_all(std::slice::from_ref(byte))
-            .expect("the trickle writes");
-    }
-    clock.advance(WAIT / 2 + Duration::from_secs(1));
-    client.write_all(b"0").expect("the trickle writes");
-    let caught = Deadline::after(WAIT)
-        .recv(&done_rx)
-        .expect("the bound names the trickled request");
-    let message = failure_message(caught);
-    assert!(
-        message.contains("the initialize request"),
-        "the failure names its request, got: {message}"
-    );
 }
 
 /// How long a test's client socket waits for each underlying read:
@@ -290,6 +301,12 @@ fn call_body() -> String {
     .to_string()
 }
 
+fn read_body() -> String {
+    json!({"jsonrpc": "2.0", "id": "gated-1", "method": "resources/read",
+        "params": {"uri": "fiber://memory"}})
+    .to_string()
+}
+
 /// Runs the handshake the fake answers before its gated stream.
 fn handshake(url: &str) {
     let (status, reply) = post(
@@ -316,6 +333,16 @@ fn open_gated(url: &str) -> (BufReader<TcpStream>, Value) {
     let mut reader = connect(url, "POST", &call_body());
     let (status, _) = read_head(&mut reader);
     assert_eq!(status, 200, "the gated call answers 200");
+    let asked = next_event(&mut reader);
+    (reader, asked)
+}
+
+/// Opens the gated `resources/read`, reads its head and its
+/// elicitation, and returns the stream positioned after it.
+fn open_gated_read(url: &str) -> (BufReader<TcpStream>, Value) {
+    let mut reader = connect(url, "POST", &read_body());
+    let (status, _) = read_head(&mut reader);
+    assert_eq!(status, 200, "the gated read answers 200");
     let asked = next_event(&mut reader);
     (reader, asked)
 }
@@ -377,31 +404,109 @@ fn a_declined_elicitation_leaves_the_gated_call_unanswered() {
     goodbye(&url);
 }
 
-/// A listener whose accept fails outright fails the request's wait at
-/// once, naming the request: it is not polled as if no connection were
-/// pending.
+/// The read shape runs on the same core: its handshake lists no tools
+/// under tools and resources, and its gated read carries the
+/// elicitation before the contents it was given.
 #[test]
-fn accept_fails_at_once_on_a_socket_that_is_not_listening() {
-    let clock: &'static FakeClock = fake_clock();
-    let peer = TcpListener::bind("127.0.0.1:0").expect("the test binds");
-    let client =
-        TcpStream::connect(peer.local_addr().expect("an address")).expect("the test connects");
-    // A connected socket: accept on it is an error, not an empty queue.
-    let listener = TcpListener::from(OwnedFd::from(client));
-    let pause = Arc::new((Mutex::new(()), std::sync::Condvar::new()));
-    let (done_tx, done_rx) = mpsc::channel();
-    std::thread::spawn(move || {
-        let caught = std::panic::catch_unwind(AssertUnwindSafe(|| {
-            accept(&listener, &pause, "the initialize request", clock)
-        }));
-        done_tx.send(caught).expect("the test waits");
-    });
-    let caught = Deadline::after(CLIENT_WAIT)
-        .recv(&done_rx)
-        .expect("the failed accept ends the wait at once");
-    let message = failure_message(caught);
+fn read_shape_uses_the_same_core_and_preserves_contents() {
+    let contents = json!({"contents": [{"uri": "fiber://memory", "text": "kept"}]});
+    let fake = GatedHttp::start_read(elicitation(), contents.clone());
+    let url = fake.url();
+    let (status, reply) = post(
+        &url,
+        &json!({"jsonrpc": "2.0", "id": "init-1", "method": "initialize", "params": {}}),
+    );
+    assert_eq!(status, 200, "initialize answers 200");
+    assert_eq!(
+        reply["result"]["capabilities"],
+        json!({"tools": {}, "resources": {}}),
+        "the read shape lists both capabilities"
+    );
+    let initialized = json!({"jsonrpc": "2.0", "method": "notifications/initialized"});
+    assert_eq!(send(&url, "POST", &initialized.to_string()).0, 202);
+    let (status, listed) = post(
+        &url,
+        &json!({"jsonrpc": "2.0", "id": "list-1", "method": "tools/list"}),
+    );
+    assert_eq!(status, 200, "tools/list answers 200");
+    assert_eq!(listed["result"]["tools"], json!([]));
+    let (gated, asked) = open_gated_read(&url);
+    assert_eq!(asked["id"], json!("el-1"));
+    assert_eq!(post(&url, &accept_body()).0, 202);
+    let answered = json!({"jsonrpc": "2.0", "id": "gated-1", "result": contents});
+    assert_eq!(events(&rest(gated)), vec![answered]);
+    assert_eq!(fake.elicitation_answers(), vec![accept_body()]);
+    goodbye(&url);
+}
+
+/// Dropping the fake before goodbye stops its server: the serving
+/// thread is reaped, and the port refuses connections.
+#[test]
+fn dropping_before_goodbye_stops_the_server() {
+    let fake = GatedHttp::start_call(elicitation(), gated_result());
+    let url = fake.url();
+    handshake(&url);
+    let (gated, asked) = open_gated(&url);
+    assert_eq!(asked["id"], json!("el-1"));
+    drop(gated);
+    drop(fake);
     assert!(
-        message.contains("the initialize request"),
-        "the failure names its request, got: {message}"
+        std::net::TcpStream::connect_timeout(&address(&url), CLIENT_WAIT).is_err(),
+        "the dropped fake's port refuses connections"
+    );
+}
+
+/// Dropping the fake refuses connections promptly: the port is already
+/// closed when the drop returns, so the first connect after it is
+/// refused, without waiting out any bound.
+#[test]
+fn a_dropped_fake_refuses_connections_at_once() {
+    let fake = GatedHttp::start_call(elicitation(), gated_result());
+    let url = fake.url();
+    handshake(&url);
+    drop(fake);
+    let deadline = Deadline::after(CLIENT_WAIT);
+    let refused = loop {
+        match std::net::TcpStream::connect(address(&url)) {
+            Ok(open) => {
+                drop(open);
+                if deadline.left().is_zero() {
+                    break false;
+                }
+            }
+            Err(_) => break true,
+        }
+    };
+    assert!(
+        refused,
+        "the dropped fake's port refuses connections promptly"
+    );
+}
+
+/// Shutdown ends an accept wait at once: the wait returns instead of
+/// polling out its bound, so a stopped server never waits out a bound
+/// it was told to drop.
+#[test]
+fn shutdown_ends_an_accept_wait_at_once() {
+    let clock = FakeClock::new();
+    let server = HttpServer::bind(clock, Limits::default()).expect("the core binds");
+    let (done_tx, done_rx) = mpsc::channel();
+    thread::scope(|scope| {
+        scope.spawn(|| {
+            let accepted = server.accept_expected("the initialize request");
+            match done_tx.send(accepted.is_some()) {
+                Ok(()) | Err(_) => {}
+            }
+        });
+        assert!(server.shutdown(), "shutdown ends the wait");
+        assert!(
+            !Deadline::after(CLIENT_WAIT).recv_or_fail(&done_rx, "the stopped accept"),
+            "shutdown ends the accept stopped"
+        );
+    });
+    // An accept after shutdown ends at once too: it never waits.
+    assert!(
+        server.accept_expected("the initialize request").is_none(),
+        "no accept waits past shutdown"
     );
 }

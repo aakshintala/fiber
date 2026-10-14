@@ -276,3 +276,282 @@ fn a_dropped_proxy_refuses_connections() {
         "the dropped proxy's port refuses connections"
     );
 }
+
+/// Bytes sent with the CONNECT head are the tunnel's first payload, not
+/// dropped lookahead: one write carries the head and the ping together.
+#[test]
+fn coalesced_connect_and_payload_preserves_the_payload() {
+    let proxy = ConnectProxy::start().unwrap();
+    let (echo_addr, echo) = echo_once();
+    let target = format!("{echo_addr}");
+    let mut reader = {
+        let mut client = connect(&proxy);
+        client
+            .write_all(
+                format!("CONNECT {target} HTTP/1.1\r\nHost: {target}\r\n\r\nping").as_bytes(),
+            )
+            .unwrap();
+        client.flush().unwrap();
+        BufReader::new(client)
+    };
+    let mut status = String::new();
+    reader
+        .read_line(&mut status)
+        .unwrap_or_else(|e| panic!("the proxy's CONNECT reply within {REPLY_WITHIN:?}: {e}"));
+    assert!(
+        status.starts_with("HTTP/1.1 200"),
+        "the CONNECT reply: {status:?}"
+    );
+    let mut blank = String::new();
+    reader.read_line(&mut blank).unwrap();
+    assert!(
+        proxy.await_connects(1, CONNECT_WITHIN),
+        "the proxy recorded CONNECT {target}"
+    );
+    // The coalesced ping went to the echo, which answered it.
+    let mut client = reader.into_inner();
+    let mut heard = [0; 4];
+    client
+        .read_exact(&mut heard)
+        .unwrap_or_else(|e| panic!("the coalesced echo within {REPLY_WITHIN:?}: {e}"));
+    assert_eq!(&heard, b"ping");
+    drop(client);
+    assert!(
+        proxy.await_closed(1, CLOSE_WITHIN),
+        "the proxy saw the tunnel close"
+    );
+    echo.join().unwrap();
+}
+
+/// Dropping the proxy closes every open tunnel: the client's read ends
+/// instead of hanging on a tunnel nobody pumps.
+#[test]
+fn dropping_the_proxy_closes_an_open_tunnel() {
+    let proxy = ConnectProxy::start().unwrap();
+    let (echo_addr, echo) = echo_once();
+    let target = format!("{echo_addr}");
+    let mut client = open_tunnel_on(proxy.port(), &target);
+    client.write_all(b"ping").unwrap();
+    let mut heard = [0; 4];
+    client
+        .read_exact(&mut heard)
+        .unwrap_or_else(|e| panic!("the echo through the tunnel within {REPLY_WITHIN:?}: {e}"));
+    assert_eq!(&heard, b"ping");
+    drop(proxy);
+    // The tunnel's sockets are shut: the client's read ends at once.
+    let mut rest = Vec::new();
+    match client.read_to_end(&mut rest) {
+        Ok(_) | Err(_) => {}
+    }
+    drop(client);
+    echo.join().unwrap();
+}
+
+/// Fake targets only: loopback numerics and localhost connect, anything
+/// else is refused before any connect is attempted.
+#[test]
+fn connect_targets_stay_inside_the_fake_boundary() {
+    use crate::http_server::HttpServer;
+    // Loopback IPv4 with a port.
+    assert!(
+        HttpServer::check_target("127.0.0.1:80").is_ok(),
+        "loopback IPv4 connects"
+    );
+    assert!(
+        HttpServer::check_target("127.0.0.2:80").is_ok(),
+        "the whole loopback range connects"
+    );
+    // Bracketed loopback IPv6 with a port.
+    assert!(
+        HttpServer::check_target("[::1]:80").is_ok(),
+        "loopback IPv6 connects"
+    );
+    // Localhost maps to loopback without a DNS lookup.
+    assert_eq!(
+        HttpServer::check_target("localhost:80").unwrap(),
+        "127.0.0.1:80".parse().unwrap(),
+        "localhost maps to loopback"
+    );
+    // A public numeric target never connects.
+    assert!(
+        HttpServer::check_target("192.0.2.1:80").is_err(),
+        "a public numeric target is refused"
+    );
+    // A name only a resolver could answer never resolves here.
+    assert!(
+        HttpServer::check_target("no-such-proxy-target:80").is_err(),
+        "an unresolvable name is refused"
+    );
+    // A target with no port never connects.
+    assert!(
+        HttpServer::check_target("127.0.0.1").is_err(),
+        "a target with no port is refused"
+    );
+}
+
+/// A public numeric target closes the connection with no 200 and no
+/// record, fast: no connect is ever attempted against it.
+#[test]
+fn a_public_numeric_target_closes_without_connecting() {
+    let proxy = ConnectProxy::start().unwrap();
+    let mut client = connect(&proxy);
+    client
+        .write_all(b"CONNECT 192.0.2.1:80 HTTP/1.1\r\nHost: 192.0.2.1:80\r\n\r\n")
+        .unwrap();
+    client.flush().unwrap();
+    // The close, not a 200: the target is rejected before any connect,
+    // so an unroutable address cannot hang the test on its timeout.
+    // The close completes the rejection: nothing recorded by then is
+    // never recorded, so the state is inspected directly.
+    let mut reply = Vec::new();
+    match client.read_to_end(&mut reply) {
+        Ok(_) | Err(_) => {}
+    }
+    assert!(proxy.connects().is_empty());
+}
+
+/// A refused loopback target closes the connection with no 200 and no
+/// record: the fake dials it and the refusal ends the handshake.
+#[test]
+fn a_refused_loopback_target_closes_without_a_tunnel() {
+    let proxy = ConnectProxy::start().unwrap();
+    let mut client = connect(&proxy);
+    let refused = crate::refused::ADDR;
+    client
+        .write_all(format!("CONNECT {refused} HTTP/1.1\r\nHost: {refused}\r\n\r\n").as_bytes())
+        .unwrap();
+    client.flush().unwrap();
+    let mut reply = Vec::new();
+    match client.read_to_end(&mut reply) {
+        Ok(_) | Err(_) => {}
+    }
+    assert!(
+        !reply.starts_with(b"HTTP/1.1 200"),
+        "a refused target gets no tunnel"
+    );
+    assert!(proxy.connects().is_empty());
+}
+
+/// A localhost target tunnels: the name maps to loopback without a DNS
+/// lookup.
+#[test]
+fn a_localhost_target_tunnels_to_loopback() {
+    let proxy = ConnectProxy::start().unwrap();
+    let (echo_addr, echo) = echo_once();
+    let target = format!("localhost:{}", echo_addr.port());
+    let mut client = open_tunnel_on(proxy.port(), &target);
+    assert!(
+        proxy.await_connects(1, CONNECT_WITHIN),
+        "the proxy recorded CONNECT {target}"
+    );
+    assert_eq!(proxy.connects(), [target]);
+    client.write_all(b"ping").unwrap();
+    let mut heard = [0; 4];
+    client
+        .read_exact(&mut heard)
+        .unwrap_or_else(|e| panic!("the echo through the tunnel within {REPLY_WITHIN:?}: {e}"));
+    assert_eq!(&heard, b"ping");
+    drop(client);
+    assert!(
+        proxy.await_closed(1, CLOSE_WITHIN),
+        "the proxy saw the tunnel close"
+    );
+    echo.join().unwrap();
+}
+
+/// A silent handshake stays silent on the injected clock: the reader
+/// parks on the clock waiting for the peer, records nothing, and is
+/// still parked half the bound later. Parked evidence decides it, never
+/// an elapsed-time absence: no client read with a wall timeout takes
+/// part in the verdict.
+#[test]
+fn a_silent_handshake_records_nothing_on_the_injected_clock() {
+    use crate::clock::FakeClock;
+    let clock = FakeClock::new();
+    let proxy = ConnectProxy::start_on(clock.clone()).unwrap();
+    let acks = proxy.test_acknowledgments();
+    let _client = TcpStream::connect(("127.0.0.1", proxy.port())).unwrap();
+    // The handshake reader parks on the clock waiting for the silent
+    // peer: its acknowledgment names the request-line phase past its
+    // clock check, and the parked thread proves it is waiting.
+    let waiting_deadline = Deadline::after(CONNECT_WITHIN);
+    let waiting = loop {
+        let ack = waiting_deadline.recv_or_fail(&acks, "the handshake's clock wait");
+        if ack.phase == "to read the request line" {
+            break ack;
+        }
+    };
+    assert!(
+        clock.await_thread_parked(waiting.thread, waiting.until, CONNECT_WITHIN),
+        "the handshake parks on the clock before it moves"
+    );
+    // Half the bound passes with no client bytes: the same reader
+    // announces its next wait in sequence, still parked on the silent
+    // peer, having answered nothing and recorded nothing.
+    clock.advance(Duration::from_secs(15));
+    let still_deadline = Deadline::after(CONNECT_WITHIN);
+    let still = loop {
+        let ack = still_deadline.recv_or_fail(&acks, "the handshake's next wait");
+        if ack.phase == "to read the request line" {
+            break ack;
+        }
+    };
+    assert_eq!(
+        still.thread, waiting.thread,
+        "the same reader is still waiting on the silent peer"
+    );
+    assert_eq!(
+        still.seq,
+        waiting.seq + 1,
+        "only the announced sequence advances the clock"
+    );
+    assert!(
+        clock.await_thread_parked(still.thread, still.until, CONNECT_WITHIN),
+        "half the bound later the handshake is still parked on the silent peer"
+    );
+    assert!(
+        proxy.connects().is_empty(),
+        "a silent handshake records nothing"
+    );
+}
+
+/// Dropping the proxy closes every open tunnel: a tunnel that ended
+/// earlier does not evict a still-open one from the shutdown.
+#[test]
+fn dropping_the_proxy_closes_every_open_tunnel() {
+    let proxy = ConnectProxy::start().unwrap();
+    let (echo_a_addr, echo_a) = echo_once();
+    let (echo_b_addr, echo_b) = echo_once();
+    let target_a = format!("{echo_a_addr}");
+    let target_b = format!("{echo_b_addr}");
+    let client_a = open_tunnel_on(proxy.port(), &target_a);
+    let mut client_b = open_tunnel_on(proxy.port(), &target_b);
+    // Both tunnels echo, so both echoes are past their first read.
+    for client in [&client_a, &client_b] {
+        let mut client = client.try_clone().expect("the test clones");
+        client.write_all(b"ping").unwrap();
+        let mut heard = [0; 4];
+        client
+            .read_exact(&mut heard)
+            .unwrap_or_else(|e| panic!("the echo through the tunnel within {REPLY_WITHIN:?}: {e}"));
+        assert_eq!(&heard, b"ping");
+    }
+    // The first tunnel ends while the second stays open.
+    drop(client_a);
+    assert!(
+        proxy.await_closed(1, CLOSE_WITHIN),
+        "the proxy saw the first tunnel close"
+    );
+    drop(proxy);
+    // The still-open tunnel's sockets are shut: its read ends at once.
+    client_b
+        .set_read_timeout(Some(QUICK))
+        .expect("the test bounds its reads");
+    let mut rest = Vec::new();
+    client_b
+        .read_to_end(&mut rest)
+        .unwrap_or_else(|e| panic!("the open tunnel ends on drop within {QUICK:?}: {e}"));
+    drop(client_b);
+    echo_a.join().unwrap();
+    echo_b.join().unwrap();
+}

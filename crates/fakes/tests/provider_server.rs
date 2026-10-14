@@ -11,7 +11,6 @@
 
 use std::io::{self, Read, Write};
 use std::net::{Shutdown, SocketAddr, TcpStream};
-use std::path::Path;
 use std::sync::{Arc, mpsc};
 use std::thread;
 use std::time::Duration;
@@ -66,13 +65,18 @@ fn wait(
 /// Sends `request` as written, ends the write side, and reads the reply to
 /// the end of the connection. A client thread does the I/O and reports each
 /// step, so each wait has one overall deadline and a stall names its step.
+/// Every socket takes a timeout and the thread is joined through the
+/// exchange's completion channel, so a failure path never leaves a
+/// blocked client behind.
 #[track_caller]
 fn exchange(server: &ProviderServer, request: &[u8]) -> Reply {
     let (addr, request) = (addr(server), request.to_vec());
     let (tx, rx) = mpsc::channel();
-    thread::spawn(move || {
+    let client = thread::spawn(move || {
         let steps = || -> io::Result<()> {
-            let mut stream = TcpStream::connect(addr)?;
+            let mut stream = TcpStream::connect_timeout(&addr, DEADLINE)?;
+            stream.set_read_timeout(Some(DEADLINE))?;
+            stream.set_write_timeout(Some(DEADLINE))?;
             tx.send(Ok(Vec::new())).unwrap();
             stream.write_all(&request)?;
             stream.shutdown(Shutdown::Write)?;
@@ -90,6 +94,9 @@ fn exchange(server: &ProviderServer, request: &[u8]) -> Reply {
     wait(&rx, "connecting to the fake provider", &step_wait);
     wait(&rx, "writing the request to the fake provider", &step_wait);
     let raw = wait(&rx, "reading the fake provider's whole reply", &step_wait);
+    match client.join() {
+        Ok(()) | Err(_) => {}
+    }
     let split = raw.windows(4).position(|w| w == b"\r\n\r\n").unwrap();
     let head = String::from_utf8(raw[..split].to_vec()).unwrap();
     let mut lines = head.split("\r\n");
@@ -122,18 +129,16 @@ fn header<'a>(reply: &'a Reply, name: &str) -> Option<&'a str> {
         .map(|(_, v)| v.as_str())
 }
 
-/// The response bytes of the first exchange in a probe's recording.
-fn recorded(file: &str) -> Vec<u8> {
-    let path = Path::new(env!("CARGO_MANIFEST_DIR"))
-        .join("../../research")
-        .join(file);
-    let json: serde_json::Value = serde_json::from_slice(&std::fs::read(path).unwrap()).unwrap();
-    json[0]["raw_sse"].as_str().unwrap().as_bytes().to_vec()
+/// The pinned recorded stream, compiled in: 1533 `raw_sse` bytes
+/// extracted verbatim from
+/// `research/anthropic-messages-probe/raw/stream.json`.
+fn recorded_stream() -> Vec<u8> {
+    include_bytes!("fixtures/anthropic-raw-sse.bytes").to_vec()
 }
 
 #[test]
 fn it_serves_a_recorded_stream_byte_for_byte() {
-    let bytes = recorded("anthropic-messages-probe/raw/stream.json");
+    let bytes = recorded_stream();
     assert!(bytes.starts_with(b"event: message_start\n"));
     let server = ProviderServer::start([Response::stream(bytes.clone())]).unwrap();
 
@@ -403,4 +408,38 @@ fn await_requests_is_true_when_more_than_the_count_are_recorded() {
     post(&server, "/two", &[], b"");
     assert!(server.requests().len() > 1);
     assert!(await_requests_within(&server, 1));
+}
+
+#[test]
+fn a_request_line_at_the_cap_boundary_is_accepted() {
+    let server = ProviderServer::start([Response::status(200, "ok")]).unwrap();
+    // A 65536-byte request line with its terminator is admitted: the
+    // target carries the padding, the method and version stay short.
+    let pad = "p".repeat(65536 - "POST / HTTP/1.1\r\n".len());
+    let request = format!("POST /{pad} HTTP/1.1\r\nHost: fake\r\n\r\n");
+    assert_eq!(request.lines().next().unwrap().len() + 2, 65536);
+    let reply = exchange(&server, request.as_bytes());
+    assert_eq!(reply.status, 200);
+    assert_eq!(server.requests().len(), 1);
+}
+
+#[test]
+fn an_incomplete_request_does_not_block_a_complete_one() {
+    let server =
+        ProviderServer::start([Response::status(200, "ok"), Response::status(200, "ok")]).unwrap();
+    let addr: SocketAddr = server.url().trim_start_matches("http://").parse().unwrap();
+    // A first connection stalls mid-head: no blank line ever arrives.
+    let mut stalled = TcpStream::connect_timeout(&addr, DEADLINE).unwrap();
+    stalled.set_read_timeout(Some(DEADLINE)).unwrap();
+    stalled
+        .write_all(b"POST /v1 HTTP/1.1\r\nHost: fake\r\nContent-Length: 100\r\n")
+        .unwrap();
+    // A second connection's complete request is answered meanwhile.
+    let reply = post(&server, "/v1/messages", &[], b"{}");
+    assert_eq!(reply.status, 200);
+    assert_eq!(reply.body, b"ok");
+    let requests = server.requests();
+    assert_eq!(requests.len(), 1);
+    assert_eq!(requests[0].path, "/v1/messages");
+    drop(stalled);
 }
