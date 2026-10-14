@@ -410,10 +410,7 @@ fn choices(models: &[&str], selected: Option<&str>) -> crate::configure::Reviewe
 
 /// Opens `/login`, submits the key on the first row, and takes the
 /// queued reviewer start.
-fn start_key_reviewer(
-    app: &mut App,
-    seam: &Arc<Fake>,
-) -> crate::login_worker::LoginStart {
+fn start_key_reviewer(app: &mut App, seam: &Arc<Fake>) -> crate::login_worker::LoginStart {
     slash_login(app);
     assert!(app.config_view_open());
     assert_eq!(app.on_key(Key::Enter, now()), Effect::None);
@@ -433,15 +430,13 @@ fn a_stored_key_queues_a_reviewer_read_on_a_fresh_ticket() {
     let start = start_key_reviewer(&mut app, &seam);
     assert_eq!(start.ticket, crate::login_worker::LoginTicket(1));
     assert_eq!(start.name, "acme");
-    assert!(matches!(
-        start.job,
-        crate::login_worker::LoginJob::Reviewer
-    ));
+    assert!(matches!(start.job, crate::login_worker::LoginJob::Reviewer));
     assert!(app.take_login_start().is_none());
     // The preparing step shows while the read runs.
     let rows = screen(&app);
     assert!(
-        rows.iter().any(|row| row.contains("Reading acme's reviewer models")),
+        rows.iter()
+            .any(|row| row.contains("Reading acme's reviewer models")),
         "{rows:?}"
     );
 }
@@ -468,7 +463,8 @@ fn a_declared_secret_ends_without_a_reviewer_read() {
     assert!(seam.reviewer_reads().is_empty());
     let rows = screen(&app);
     assert!(
-        rows.iter().any(|row| row.contains("✓ Logged in to acme.api_key.")),
+        rows.iter()
+            .any(|row| row.contains("✓ Logged in to acme.api_key.")),
         "{rows:?}"
     );
 }
@@ -502,7 +498,8 @@ fn a_browser_done_keeps_its_ticket_into_preparation() {
     );
     let rows = screen(&app);
     assert!(
-        rows.iter().any(|row| row.contains("Reading codex's reviewer models")),
+        rows.iter()
+            .any(|row| row.contains("Reading codex's reviewer models")),
         "{rows:?}"
     );
 }
@@ -538,7 +535,10 @@ fn a_second_login_leaves_the_first_ticket_s_result_behind() {
         app.on_key(Key::Char(ch), now());
     }
     assert_eq!(app.on_key(Key::Enter, now()), Effect::None);
-    assert_eq!(seam.stores(), [("acme".to_owned(), None), ("beta".to_owned(), None)]);
+    assert_eq!(
+        seam.stores(),
+        [("acme".to_owned(), None), ("beta".to_owned(), None)]
+    );
     let second = app.take_login_start().expect("a second reviewer read");
     assert_eq!(second.ticket, crate::login_worker::LoginTicket(2));
     assert_eq!(second.name, "beta");
@@ -553,7 +553,8 @@ fn a_second_login_leaves_the_first_ticket_s_result_behind() {
     assert!(seam.reviewer_saves().is_empty());
     let rows = screen(&app);
     assert!(
-        rows.iter().any(|row| row.contains("Reading beta's reviewer models")),
+        rows.iter()
+            .any(|row| row.contains("Reading beta's reviewer models")),
         "{rows:?}"
     );
 }

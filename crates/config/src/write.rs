@@ -395,11 +395,7 @@ pub fn replace_global(
     // spelling) as the read-modify-write document.
     {
         let mut notices = Vec::new();
-        crate::check_layer(
-            root.clone(),
-            &Source::Global(file.clone()),
-            &mut notices,
-        )?;
+        crate::check_layer(root.clone(), &Source::Global(file.clone()), &mut notices)?;
     }
     let previous = match value {
         Some(value) => {

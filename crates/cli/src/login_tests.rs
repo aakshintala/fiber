@@ -1075,11 +1075,16 @@ fn a_terminal_key_login_asks_for_the_reviewer_after_storing() {
     setup.install("alpha", None, None);
     let (result, err) = setup.login(Some("alpha"), true, "1\n", &mut Fake::new(KEY));
     result.unwrap();
-    let stored_at = err.find("fiber: stored credentials/alpha/default\n").unwrap();
+    let stored_at = err
+        .find("fiber: stored credentials/alpha/default\n")
+        .unwrap();
     let asked_at = err.find("Reviewer for alpha:").unwrap();
     assert!(stored_at < asked_at, "{err}");
     assert!(err.ends_with("fiber: reviewer alpha m\n"), "{err}");
-    assert_eq!(setup.global()["providers"]["alpha"]["reviewer_model"], json!("m"));
+    assert_eq!(
+        setup.global()["providers"]["alpha"]["reviewer_model"],
+        json!("m")
+    );
     assert!(!err.contains(KEY));
 }
 
@@ -1110,7 +1115,10 @@ fn a_declared_secret_never_asks_for_a_reviewer() {
     setup.declare("acme", &["api_key"]);
     let (result, err) = setup.login(Some("api_key"), true, "1\n", &mut Fake::new("v1"));
     result.unwrap();
-    assert!(err.ends_with("fiber: stored credentials/api_key\n"), "{err}");
+    assert!(
+        err.ends_with("fiber: stored credentials/api_key\n"),
+        "{err}"
+    );
     assert!(!err.contains("Reviewer"), "{err}");
 }
 
@@ -1244,7 +1252,9 @@ fn cancellation_before_the_claim_writes_nothing() {
     // `before reviewer save claim`: selection made, cancellation not yet
     // recorded; recording it now must prevent the write entirely.
     assert!(
-        fakes::Deadline::after(STAGE_WAIT).recv(&before_entered_rx).is_ok(),
+        fakes::Deadline::after(STAGE_WAIT)
+            .recv(&before_entered_rx)
+            .is_ok(),
         "waited {STAGE_WAIT:?} for before reviewer save claim"
     );
     stopped.store(true, Ordering::SeqCst);
@@ -1329,14 +1339,18 @@ fn a_claimed_save_survives_cancellation_before_the_write() {
         });
         // The claim runs uncancelled: release it straight through.
         assert!(
-            fakes::Deadline::after(STAGE_WAIT).recv(&before_entered_rx).is_ok(),
+            fakes::Deadline::after(STAGE_WAIT)
+                .recv(&before_entered_rx)
+                .is_ok(),
             "waited {STAGE_WAIT:?} for before reviewer save claim"
         );
         before_release_tx.send(()).unwrap();
         // `reviewer save claimed before writer`: the claim won;
         // cancellation now cannot veto the write.
         assert!(
-            fakes::Deadline::after(STAGE_WAIT).recv(&after_entered_rx).is_ok(),
+            fakes::Deadline::after(STAGE_WAIT)
+                .recv(&after_entered_rx)
+                .is_ok(),
             "waited {STAGE_WAIT:?} for reviewer save claimed before writer"
         );
         stopped.store(true, Ordering::SeqCst);

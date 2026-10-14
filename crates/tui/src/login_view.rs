@@ -330,7 +330,11 @@ impl Login {
     pub(crate) fn draw(&self, area: Rect, buf: &mut Buffer, targets: &mut Vec<Target>) {
         if matches!(
             self.mode,
-            Mode::Waiting(_) | Mode::Panel(_) | Mode::Preparing(_) | Mode::Choices(_) | Mode::Ended(_)
+            Mode::Waiting(_)
+                | Mode::Panel(_)
+                | Mode::Preparing(_)
+                | Mode::Choices(_)
+                | Mode::Ended(_)
         ) {
             self.draw_step(area, buf, targets);
             return;
@@ -709,8 +713,9 @@ impl Login {
                 if choices.models.is_empty() {
                     let mut note = choices.notices.join("\n");
                     if note.is_empty() {
-                        note =
-                            format!("`{name}` lists no models; the credential stays, with no reviewer set.");
+                        note = format!(
+                            "`{name}` lists no models; the credential stays, with no reviewer set."
+                        );
                     }
                     self.mode = Mode::Ended(Ended {
                         name,
@@ -805,8 +810,7 @@ impl Login {
             Key::Down => {
                 choices.cursor = Some(match choices.cursor {
                     None => 0,
-                    Some(at) => (at.saturating_add(1))
-                        .min(choices.models.len().saturating_sub(1)),
+                    Some(at) => (at.saturating_add(1)).min(choices.models.len().saturating_sub(1)),
                 });
             }
             Key::Up => {
@@ -851,7 +855,11 @@ impl Login {
     fn submit(&mut self, ctx: &Ctx<'_>) -> Act {
         let (index, label, secret) = match &mut self.mode {
             Mode::Panel(panel) => (panel.target, panel.label.expand(), panel.key.take()),
-            Mode::Rows | Mode::Waiting(_) | Mode::Preparing(_) | Mode::Choices(_) | Mode::Ended(_) => {
+            Mode::Rows
+            | Mode::Waiting(_)
+            | Mode::Preparing(_)
+            | Mode::Choices(_)
+            | Mode::Ended(_) => {
                 return Act::Stay;
             }
         };
@@ -1184,10 +1192,7 @@ fn choice_rows(
     }
     let room = budget.saturating_sub(rows.len());
     let total = choices.models.len();
-    let cursor = choices
-        .cursor
-        .unwrap_or(0)
-        .min(total.saturating_sub(1));
+    let cursor = choices.cursor.unwrap_or(0).min(total.saturating_sub(1));
     let start = window_start(cursor, room, total);
     let gutter = format::width(&format!("  {}) ", total.max(1)));
     for (index, model) in choices.models.iter().enumerate().skip(start).take(room) {

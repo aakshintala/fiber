@@ -34,10 +34,10 @@ use signal_hook::iterator::{Handle, Signals};
 mod browser;
 mod reviewer;
 
+use crate::{LOGOUT_SHAPE, finish, project_of};
 use browser::login_with;
 pub use browser::{LoginCancel, browser_login};
 pub use reviewer::{ReviewerModels, reviewer_models, set_reviewer};
-use crate::{LOGOUT_SHAPE, finish, project_of};
 
 /// The label a login stores under when `--as` is absent and the login
 /// revealed no email.
@@ -746,15 +746,7 @@ fn post_store_reviewer(io: &mut LoginIo<'_>, name: &str) -> Result<(), Failure> 
     let providers = io.providers;
     let clock = Arc::clone(&io.clock);
     let discover = || reviewer_models(home, providers, name, Arc::clone(&clock));
-    reviewer_stage(
-        home,
-        name,
-        io.stdin,
-        io.err,
-        &discover,
-        &stopped,
-        None,
-    )
+    reviewer_stage(home, name, io.stdin, io.err, &discover, &stopped, None)
 }
 
 /// The post-store reviewer stage [`post_store_reviewer`] runs: armed
@@ -788,13 +780,9 @@ pub(crate) fn reviewer_stage(
     if choices.models.is_empty() {
         return Ok(());
     }
-    let id = match reviewer::prompt_choice(
-        name,
-        &choices,
-        input,
-        err,
-        &|| stopped.load(Ordering::SeqCst),
-    )
+    let id = match reviewer::prompt_choice(name, &choices, input, err, &|| {
+        stopped.load(Ordering::SeqCst)
+    })
     .map_err(terminal_failure)?
     {
         reviewer::Pick::Chosen(id) => id,
@@ -829,16 +817,16 @@ pub(crate) fn reviewer_stage(
 /// The cancelled-or-EOF outcome: the credential and any previous reviewer
 /// setting stand, and the login still ends 0.
 fn no_reviewer_set(err: &mut dyn Write, name: &str) -> Result<(), Failure> {
-    writeln!(err, "fiber: no reviewer was set for {name}; the credential stays.")
-        .map_err(terminal_failure)
+    writeln!(
+        err,
+        "fiber: no reviewer was set for {name}; the credential stays."
+    )
+    .map_err(terminal_failure)
 }
 
 /// A test barrier that never released: the run fails instead of hanging.
 fn barrier_failed() -> Failure {
-    failure(
-        ErrorCode::IoFailed,
-        "the reviewer save barrier timed out",
-    )
+    failure(ErrorCode::IoFailed, "the reviewer save barrier timed out")
 }
 
 /// Where a provider's key comes from when nothing is stored: the first

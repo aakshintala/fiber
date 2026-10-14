@@ -361,10 +361,8 @@ fn pair(prefix: &str) -> Pair {
     test_support::install_extension(
         &home,
         "extensions/two",
-        serde_json::from_str(
-            r#"{"name": "two", "version": "v0.0.0", "fiber": "0.0.0", "api": 1}"#,
-        )
-        .unwrap(),
+        serde_json::from_str(r#"{"name": "two", "version": "v0.0.0", "fiber": "0.0.0", "api": 1}"#)
+            .unwrap(),
         &[
             (
                 "alpha",
@@ -406,7 +404,11 @@ fn pair_providers(pair: &Pair) -> extensions::Providers {
 }
 
 /// The reviewer reference for `session` under `overrides`.
-fn reference(pair: &Pair, session: &str, overrides: &[&str]) -> Result<String, contract::shapes::Failure> {
+fn reference(
+    pair: &Pair,
+    session: &str,
+    overrides: &[&str],
+) -> Result<String, contract::shapes::Failure> {
     let config = pair_config(pair, overrides);
     let providers = pair_providers(pair);
     let resolved = providers.resolve(session).unwrap();
@@ -434,8 +436,12 @@ fn explicit_reviewer_model_wins_over_provider_and_package_picks() {
 fn provider_choice_wins_over_the_package_default() {
     let pair = pair("fiber-reviewer-provider");
     assert_eq!(
-        reference(&pair, "alpha/a-session", &["providers.alpha.reviewer_model=a-want"])
-            .unwrap(),
+        reference(
+            &pair,
+            "alpha/a-session",
+            &["providers.alpha.reviewer_model=a-want"]
+        )
+        .unwrap(),
         "alpha/a-want"
     );
 }
@@ -594,7 +600,12 @@ fn an_invalid_saved_model_fails_instead_of_falling_back() {
         ))
     };
     let failure = reviewer_failed(crate::choose_reviewer(
-        &providers, &config, &session, &here, &mut lookup, None,
+        &providers,
+        &config,
+        &session,
+        &here,
+        &mut lookup,
+        None,
     ));
     assert_eq!(failure.code, expected.code());
     assert_eq!(failure.message, expected.to_string());
@@ -664,7 +675,10 @@ fn a_native_debug_reviewer_keeps_its_factory_and_none_or_info_keeps_none() {
         Some(&debug),
     )
     .unwrap();
-    assert!(observed.is_some(), "a native debug reviewer carries a factory");
+    assert!(
+        observed.is_some(),
+        "a native debug reviewer carries a factory"
+    );
     let (_, unobserved) =
         crate::choose_reviewer(&providers, &config, &session, &here, &mut lookup, None).unwrap();
     assert!(unobserved.is_none());
@@ -688,14 +702,16 @@ fn a_native_debug_reviewer_keeps_its_factory_and_none_or_info_keeps_none() {
 
 /// `parts_in` under `overrides` on its own thread: startup can wait on
 /// provider loading, so a hang fails the test instead of hanging it.
-fn bounded_parts(pair: &Pair, overrides: Vec<String>) -> Result<crate::Parts, contract::shapes::Failure> {
+fn bounded_parts(
+    pair: &Pair,
+    overrides: Vec<String>,
+) -> Result<crate::Parts, contract::shapes::Failure> {
     let (home, workspace) = (pair.home.clone(), pair.workspace.clone());
     fakes::within(
         "the startup",
         std::time::Duration::from_secs(20),
         move || {
-            let clock: std::sync::Arc<dyn contract::clock::Clock> =
-                fakes::clock::FakeClock::new();
+            let clock: std::sync::Arc<dyn contract::clock::Clock> = fakes::clock::FakeClock::new();
             let reads = std::sync::Arc::new(crate::switch::Reads::default());
             crate::parts_in(
                 home,
@@ -717,7 +733,10 @@ fn bounded_parts(pair: &Pair, overrides: Vec<String>) -> Result<crate::Parts, co
 /// A failed reviewer: the loop gets it, and `Reviewer` is no `Debug`, so
 /// no `expect_err` or `unwrap_err`.
 fn reviewer_failed(
-    reviewer: Result<(r#loop::Reviewer, Option<contract::diag::Observe>), contract::shapes::Failure>,
+    reviewer: Result<
+        (r#loop::Reviewer, Option<contract::diag::Observe>),
+        contract::shapes::Failure,
+    >,
 ) -> contract::shapes::Failure {
     match reviewer {
         Ok(_) => panic!("the reviewer resolved"),
@@ -758,7 +777,10 @@ fn a_missing_reviewer_is_not_a_startup_failure() {
     let pair = pair("fiber-reviewer-startup-none");
     let parts = bounded_parts(
         &pair,
-        ["model=beta/b-session"].into_iter().map(str::to_owned).collect(),
+        ["model=beta/b-session"]
+            .into_iter()
+            .map(str::to_owned)
+            .collect(),
     )
     .expect("startup stands");
     let failure = reviewer_failed(parts.reviewer.map(|reviewer| (reviewer, None)));

@@ -339,7 +339,11 @@ pub trait Configure: Send + Sync {
     /// Reads the reviewer choice for the installed provider `name`: its
     /// models with the saved global pick preselected, else the package
     /// default. Runs only off the loop thread: discovery blocks.
-    fn reviewer_models(&self, name: &str, clock: Arc<dyn Clock>) -> Result<ReviewerModels, ConfigureError>;
+    fn reviewer_models(
+        &self,
+        name: &str,
+        clock: Arc<dyn Clock>,
+    ) -> Result<ReviewerModels, ConfigureError>;
 
     /// Saves `id` as provider `name`'s reviewer, exactly as listed: one
     /// main-owned global write. Save errors name the key.

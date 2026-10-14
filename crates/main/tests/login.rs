@@ -1285,7 +1285,8 @@ fn anthropic_login_preselects_its_vendor_default_for_enter() {
         run.screen.seen
     );
     run.screen.type_text("\n");
-    run.screen.wait_for("fiber: reviewer anthropic claude-sonnet-5-5");
+    run.screen
+        .wait_for("fiber: reviewer anthropic claude-sonnet-5-5");
     let status = run.finish();
     assert_eq!(status.code(), Some(0), "{:?}", run.screen.seen);
     assert_eq!(
@@ -1304,7 +1305,9 @@ fn a_piped_login_with_a_terminal_stderr_asks_nothing_and_keeps_a_saved_reviewer(
     )
     .unwrap();
     let mut run = setup.stderr_on_terminal(&["login", "acme"], &format!("{KEY}\n"));
-    let shown = run.screen.wait_for("fiber: stored credentials/acme/default");
+    let shown = run
+        .screen
+        .wait_for("fiber: stored credentials/acme/default");
     let status = run.finish();
     assert_eq!(status.code(), Some(0), "{shown:?}");
     assert!(!shown.contains("Reviewer"), "{shown:?}");
@@ -1343,7 +1346,9 @@ fn a_relogin_keeps_a_stale_saved_pick_on_enter() {
     let mut first = setup.on_terminal(&["login", "acme"]);
     first.screen.wait_for("Key for acme: ");
     first.screen.type_text(&format!("{KEY}\n"));
-    first.screen.wait_for("fiber: stored credentials/acme/default");
+    first
+        .screen
+        .wait_for("fiber: stored credentials/acme/default");
     first.screen.wait_for("Reviewer for acme:");
     first.screen.wait_for("Reviewer, by number or name: ");
     first.screen.type_text("1\n");
@@ -1360,11 +1365,16 @@ fn a_relogin_keeps_a_stale_saved_pick_on_enter() {
     let mut second = setup.on_terminal(&["login", "acme", "--as", "work"]);
     second.screen.wait_for("Key for acme: ");
     second.screen.type_text(&format!("{KEY}\n"));
-    second.screen.wait_for("fiber: stored credentials/acme/work");
+    second
+        .screen
+        .wait_for("fiber: stored credentials/acme/work");
     second.screen.wait_for("Reviewer for acme:");
     second.screen.wait_for("Reviewer, by number or name: ");
     assert!(
-        second.screen.seen.contains("Saved reviewer `stale-m` is not listed; Enter keeps it."),
+        second
+            .screen
+            .seen
+            .contains("Saved reviewer `stale-m` is not listed; Enter keeps it."),
         "{:?}",
         second.screen.seen
     );
@@ -1384,7 +1394,8 @@ fn two_providers_sharing_a_credential_keep_their_own_picks() {
     let mut go = setup.on_terminal(&["login", "opencode-go"]);
     go.screen.wait_for("Key for opencode-go: ");
     go.screen.type_text(&format!("{KEY}\n"));
-    go.screen.wait_for("fiber: stored credentials/opencode/default");
+    go.screen
+        .wait_for("fiber: stored credentials/opencode/default");
     go.screen.wait_for("Reviewer for opencode-go:");
     go.screen.wait_for("Reviewer, by number or name: ");
     go.screen.type_text("1\n");
@@ -1395,7 +1406,8 @@ fn two_providers_sharing_a_credential_keep_their_own_picks() {
     let mut zen = setup.on_terminal(&["login", "opencode-zen", "--as", "work"]);
     zen.screen.wait_for("Key for opencode-zen: ");
     zen.screen.type_text(&format!("{KEY}\n"));
-    zen.screen.wait_for("fiber: stored credentials/opencode/work");
+    zen.screen
+        .wait_for("fiber: stored credentials/opencode/work");
     zen.screen.wait_for("Reviewer for opencode-zen:");
     zen.screen.wait_for("Reviewer, by number or name: ");
     assert!(zen.screen.seen.contains("(saved)"), "{:?}", zen.screen.seen);
@@ -1427,7 +1439,8 @@ fn end_of_input_at_the_reviewer_prompt_keeps_the_credential_and_sets_nothing() {
     let mut run = setup.on_terminal(&["login", "acme"]);
     run.screen.wait_for("Key for acme: ");
     run.screen.type_text(&format!("{KEY}\n"));
-    run.screen.wait_for("fiber: stored credentials/acme/default");
+    run.screen
+        .wait_for("fiber: stored credentials/acme/default");
     // The reviewer prompt is the input-readiness barrier, not the save:
     // end of input lands after storage with nothing saved.
     run.screen.wait_for("Reviewer, by number or name: ");
@@ -1455,7 +1468,8 @@ fn a_reviewer_write_failure_names_the_key_and_keeps_the_credential() {
     let mut run = setup.on_terminal(&["login", "acme"]);
     run.screen.wait_for("Key for acme: ");
     run.screen.type_text(&format!("{KEY}\n"));
-    run.screen.wait_for("fiber: stored credentials/acme/default");
+    run.screen
+        .wait_for("fiber: stored credentials/acme/default");
     run.screen.wait_for("Reviewer for acme:");
     run.screen.wait_for("Reviewer, by number or name: ");
     // Another writer replaces the whole document with `[]` after the
@@ -1470,13 +1484,19 @@ fn a_reviewer_write_failure_names_the_key_and_keeps_the_credential() {
         !shown.contains("fiber: reviewer"),
         "no success is claimed for the failed save: {shown:?}"
     );
-    assert!(!shown.contains(KEY), "no secret reaches the output: {shown:?}");
+    assert!(
+        !shown.contains(KEY),
+        "no secret reaches the output: {shown:?}"
+    );
     assert!(run.terminal.echoes(), "echo was not restored");
     assert_eq!(
         fs::read_to_string(setup.home().join("credentials/acme/default")).unwrap(),
         KEY
     );
-    assert_eq!(fs::read_to_string(setup.home().join("config.json")).unwrap(), "[]");
+    assert_eq!(
+        fs::read_to_string(setup.home().join("config.json")).unwrap(),
+        "[]"
+    );
 }
 
 #[test]
@@ -1501,9 +1521,8 @@ fn an_interrupt_during_reviewer_discovery_keeps_the_credential_and_sets_nothing(
         // A disconnect releases the hold, so a failed test cannot wedge
         // the child in its callback.
         let _ = release_rx.recv_timeout(std::time::Duration::from_secs(45));
-        let _ = stream.write_all(
-            b"HTTP/1.1 200 OK\r\ncontent-length: 2\r\nconnection: close\r\n\r\n{}",
-        );
+        let _ = stream
+            .write_all(b"HTTP/1.1 200 OK\r\ncontent-length: 2\r\nconnection: close\r\n\r\n{}");
     });
     let setup = Setup::new_with_fl_root();
     let dir = setup.home().join("extensions").join("held");
@@ -1538,7 +1557,8 @@ fn an_interrupt_during_reviewer_discovery_keeps_the_credential_and_sets_nothing(
     let mut run = setup.on_terminal(&["login", "held"]);
     run.screen.wait_for("Key for held: ");
     run.screen.type_text(&format!("{KEY}\n"));
-    run.screen.wait_for("fiber: stored credentials/held/default");
+    run.screen
+        .wait_for("fiber: stored credentials/held/default");
     setup
         .deadline
         .recv(&entered_rx)

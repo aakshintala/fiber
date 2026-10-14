@@ -113,9 +113,7 @@ fn redacted(code: contract::ErrorCode, provider: &str, owner: &str) -> String {
              keeping the listed ones."
         )
     } else {
-        format!(
-            "`{provider}`'s model list from `{owner}` is unavailable; keeping the stored list."
-        )
+        format!("`{provider}`'s model list from `{owner}` is unavailable; keeping the stored list.")
     }
 }
 
@@ -235,13 +233,24 @@ pub(crate) fn prompt_choice(
     }
     writeln!(err, "Reviewer for {name}:")?;
     for (index, model) in choices.models.iter().enumerate() {
-        let saved = choices.selected.as_deref().is_some_and(|keep| keep == model);
-        writeln!(err, "  {}) {model}{}", index + 1, if saved { " (saved)" } else { "" })?;
+        let saved = choices
+            .selected
+            .as_deref()
+            .is_some_and(|keep| keep == model);
+        writeln!(
+            err,
+            "  {}) {model}{}",
+            index + 1,
+            if saved { " (saved)" } else { "" }
+        )?;
     }
     if let Some(keep) = choices.selected.as_deref()
         && !choices.models.iter().any(|model| model == keep)
     {
-        writeln!(err, "Saved reviewer `{keep}` is not listed; Enter keeps it.")?;
+        writeln!(
+            err,
+            "Saved reviewer `{keep}` is not listed; Enter keeps it."
+        )?;
     }
     loop {
         if stopped() {
@@ -267,7 +276,10 @@ pub(crate) fn prompt_choice(
         if let Some(pick) = parse_pick(answer, choices) {
             return Ok(Pick::Chosen(pick));
         }
-        writeln!(err, "`{answer}` is not a listed reviewer; choose a number or name.")?;
+        writeln!(
+            err,
+            "`{answer}` is not a listed reviewer; choose a number or name."
+        )?;
     }
 }
 

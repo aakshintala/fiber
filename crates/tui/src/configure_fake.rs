@@ -12,9 +12,9 @@ use contract::clock::Clock;
 
 use crate::ThemeSetting;
 use crate::configure::{
-    BrowserLogin, Configure, ConfigureError, KeyEdit, Layer, LoginShow, LoginTarget, Revoked,
-    ReviewerModels, RulesScope, RulesSection, Saved, SettingRow, Shown, SkillsDisabled, Stored,
-    SwitchScope, ToolGroup, ToolLists, ToolSwitches, WriteScope,
+    BrowserLogin, Configure, ConfigureError, KeyEdit, Layer, LoginShow, LoginTarget,
+    ReviewerModels, Revoked, RulesScope, RulesSection, Saved, SettingRow, Shown, SkillsDisabled,
+    Stored, SwitchScope, ToolGroup, ToolLists, ToolSwitches, WriteScope,
 };
 
 /// A browser login for the views' tests: `run` blocks until the answer
@@ -142,7 +142,8 @@ pub(crate) struct Fake {
     /// and waits on it. A test ending drops its sender and releases the
     /// read, as `FakeLogin` does, so a failed test cannot retain a worker
     /// forever.
-    pub(crate) reviewer_gates: Mutex<Vec<std::sync::mpsc::Receiver<Result<ReviewerModels, ConfigureError>>>>,
+    pub(crate) reviewer_gates:
+        Mutex<Vec<std::sync::mpsc::Receiver<Result<ReviewerModels, ConfigureError>>>>,
     /// What an ungated reviewer read answers.
     pub(crate) reviewer_answer: Mutex<Result<ReviewerModels, ConfigureError>>,
     /// Every reviewer save asked for, in order: the provider and the id.
@@ -467,7 +468,8 @@ impl Configure for Fake {
         name: &str,
         label: Option<&str>,
         key: Secret,
-    ) -> Result<Stored, ConfigureError> {        if let Ok(mut stores) = self.stores.lock() {
+    ) -> Result<Stored, ConfigureError> {
+        if let Ok(mut stores) = self.stores.lock() {
             stores.push((name.to_owned(), label.map(str::to_owned), key));
         }
         self.stored.lock().map_or_else(
@@ -499,9 +501,9 @@ impl Configure for Fake {
             .ok()
             .and_then(|mut gates| gates.pop());
         if let Some(rx) = gate {
-            return rx.recv().unwrap_or_else(|_| {
-                panic!("the reviewer read was never answered")
-            });
+            return rx
+                .recv()
+                .unwrap_or_else(|_| panic!("the reviewer read was never answered"));
         }
         self.reviewer_answer.lock().map_or_else(
             |_| {

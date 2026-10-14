@@ -51,17 +51,11 @@ impl Setup {
     /// Installs `extension` with one provider `name`: `data` as its data
     /// file, `urls` as the manifest's declared endpoints, and `lua` as
     /// its optional provider file.
-    fn install(
-        &self,
-        extension: &str,
-        name: &str,
-        data: Value,
-        urls: &[&str],
-        lua: Option<&str>,
-    ) {
+    fn install(&self, extension: &str, name: &str, data: Value, urls: &[&str], lua: Option<&str>) {
         let dir = self.home().join("extensions").join(extension);
         fs::create_dir_all(dir.join("providers")).unwrap();
-        let mut manifest = json!({"name": extension, "version": "v0.0.0", "fiber": "0.0.0", "api": 1});
+        let mut manifest =
+            json!({"name": extension, "version": "v0.0.0", "fiber": "0.0.0", "api": 1});
         manifest["providers"] = json!({name: urls});
         fs::write(dir.join("extension.json"), manifest.to_string()).unwrap();
         write_record(&dir);
@@ -279,11 +273,16 @@ fn an_uncached_discovery_runs_once_caches_and_serves_the_cache() {
         "acme",
         json!({"name": "acme", "models": [model_data("data-m")]}),
         &["http://x/v1"],
-        Some(&models_lua("acme", &ping_then(&url, "/models", &["live-m"]))),
+        Some(&models_lua(
+            "acme",
+            &ping_then(&url, "/models", &["live-m"]),
+        )),
     );
     setup.store("acme");
     assert!(
-        config::read_model_cache(&setup.home(), "acme").unwrap().is_none(),
+        config::read_model_cache(&setup.home(), "acme")
+            .unwrap()
+            .is_none(),
         "no cached copy before the first discovery"
     );
     let first = setup.choices("acme");
@@ -313,7 +312,10 @@ fn a_cached_list_answers_without_running_the_callback() {
         "acme",
         json!({"name": "acme", "models": [model_data("data-m")]}),
         &["http://x/v1"],
-        Some(&models_lua("acme", &ping_then(&url, "/models", &["live-m"]))),
+        Some(&models_lua(
+            "acme",
+            &ping_then(&url, "/models", &["live-m"]),
+        )),
     );
     config::write_model_cache(
         &setup.home(),
@@ -340,7 +342,10 @@ fn without_a_credential_discovery_never_runs_and_data_stands() {
         "acme",
         json!({"name": "acme", "models": [model_data("data-m")]}),
         &["http://x/v1"],
-        Some(&models_lua("acme", &ping_then(&url, "/models", &["live-m"]))),
+        Some(&models_lua(
+            "acme",
+            &ping_then(&url, "/models", &["live-m"]),
+        )),
     );
     // No stored credential: the callback must not run.
     let choices = setup.choices("acme");
@@ -377,7 +382,11 @@ fn a_returned_empty_list_writes_its_cache_and_skips() {
         "even an empty discovery writes the provider's cache"
     );
     assert_eq!(choices.notices.len(), 1);
-    assert!(choices.notices[0].contains("`acme`"), "{}", choices.notices[0]);
+    assert!(
+        choices.notices[0].contains("`acme`"),
+        "{}",
+        choices.notices[0]
+    );
 }
 
 #[test]
@@ -405,7 +414,9 @@ fn a_failing_callback_keeps_the_data_list_behind_a_redacted_notice() {
         choices.notices[0]
     );
     assert!(
-        config::read_model_cache(&setup.home(), "acme").unwrap().is_none(),
+        config::read_model_cache(&setup.home(), "acme")
+            .unwrap()
+            .is_none(),
         "a failed discovery caches nothing"
     );
 }
@@ -455,7 +466,11 @@ fn an_invalid_discovered_model_is_left_out_with_its_typed_notice() {
     );
     setup.store("acme");
     let choices = setup.choices("acme");
-    assert_eq!(choices.models, ["good-m"], "the invalid entry is not selectable");
+    assert_eq!(
+        choices.models,
+        ["good-m"],
+        "the invalid entry is not selectable"
+    );
     assert_eq!(choices.notices.len(), 1);
     assert!(
         choices.notices[0].contains("left out a model"),
@@ -505,9 +520,12 @@ fn only_the_admitted_owners_endpoints_are_listed() {
     );
     setup.store("p");
     let providers = setup.providers();
-    assert_eq!(providers.extension_of("p"), Some("bbb"), "owner bbb is retained");
-    let choices =
-        reviewer_models(&setup.home(), &providers, "p", setup.clock()).unwrap();
+    assert_eq!(
+        providers.extension_of("p"),
+        Some("bbb"),
+        "owner bbb is retained"
+    );
+    let choices = reviewer_models(&setup.home(), &providers, "p", setup.clock()).unwrap();
     assert_eq!(choices.models, ["m-b"]);
     assert_eq!(choices.notices.len(), 1);
     assert!(
@@ -550,7 +568,10 @@ fn only_the_requested_providers_callback_runs() {
         "other",
         json!({"name": "other", "models": [model_data("data-m")]}),
         &["http://x/v1"],
-        Some(&models_lua("other", &ping_then(&url, "/other", &["live-m"]))),
+        Some(&models_lua(
+            "other",
+            &ping_then(&url, "/other", &["live-m"]),
+        )),
     );
     setup.store("foo");
     let providers = setup.providers();
@@ -561,7 +582,11 @@ fn only_the_requested_providers_callback_runs() {
         "the requested provider's callback ran"
     );
     assert_eq!(
-        server.requests().iter().map(|r| r.path.clone()).collect::<Vec<_>>(),
+        server
+            .requests()
+            .iter()
+            .map(|r| r.path.clone())
+            .collect::<Vec<_>>(),
         ["/foo"],
         "neither the sibling nor the unrelated extension's callback ran"
     );
@@ -578,7 +603,11 @@ fn a_callback_reading_the_credential_leaks_neither_path_nor_secret() {
         None,
     );
     setup.store("acme");
-    let credential = setup.home().join("credentials").join("acme").join("default");
+    let credential = setup
+        .home()
+        .join("credentials")
+        .join("acme")
+        .join("default");
     let path = credential.to_str().unwrap().replace('\\', "/");
     let lua = models_lua("acme", &format!("error(host.fs.read(\"{path}\"))"));
     fs::write(setup.home().join("extensions/acme/providers/acme.lua"), lua).unwrap();
@@ -618,8 +647,7 @@ fn an_unknown_provider_is_a_usage_error() {
     let setup = Setup::new();
     setup.install_data("acme", &["m1"]);
     let providers = setup.providers();
-    let failure =
-        reviewer_models(&setup.home(), &providers, "nope", setup.clock()).unwrap_err();
+    let failure = reviewer_models(&setup.home(), &providers, "nope", setup.clock()).unwrap_err();
     assert_eq!(failure.code, ErrorCode::Usage);
     assert!(failure.message.contains("`nope`"), "{}", failure.message);
 }
@@ -668,11 +696,16 @@ fn the_prompt_lists_numbers_names_and_slash_colon_ids() {
 fn invalid_answers_ask_again_until_a_listed_choice_eof_or_cancel() {
     // Each bad line prints one problem line and asks again; the good line
     // then lands.
-    let (pick, out) = ask("acme", &listed(), "0\n99\nnope\n99999999999999999999999\n\n2\n");
+    let (pick, out) = ask(
+        "acme",
+        &listed(),
+        "0\n99\nnope\n99999999999999999999999\n\n2\n",
+    );
     assert_eq!(pick, Pick::Chosen("org/fast".to_owned()));
     assert_eq!(out.matches("is not a listed reviewer").count(), 4, "{out}");
     assert_eq!(
-        out.matches("No reviewer is selected; choose a number or name.").count(),
+        out.matches("No reviewer is selected; choose a number or name.")
+            .count(),
         1,
         "{out}"
     );
@@ -795,7 +828,10 @@ fn a_broken_existing_document_fails_naming_the_key_and_keeps_the_credential() {
         let credential_before = fs::read(setup.home().join("credentials/acme/default")).unwrap();
         fs::write(setup.home().join("config.json"), existing).unwrap();
         let failure = set_reviewer(&setup.home(), "acme", "m1").unwrap_err();
-        assert!(failure.message.contains("providers.acme.reviewer_model"), "{failure:?}");
+        assert!(
+            failure.message.contains("providers.acme.reviewer_model"),
+            "{failure:?}"
+        );
         assert_eq!(
             fs::read(setup.home().join("credentials/acme/default")).unwrap(),
             credential_before,

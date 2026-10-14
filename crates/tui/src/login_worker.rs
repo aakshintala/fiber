@@ -126,7 +126,10 @@ impl LoginWorker {
     /// The worker over only a reviewer read, waiting on `ticket`: no
     /// credential store, no cancel handle.
     pub(crate) fn reviewer(ticket: LoginTicket) -> Self {
-        Self { ticket, login: None }
+        Self {
+            ticket,
+            login: None,
+        }
     }
 
     /// The waiting ticket.

@@ -2,7 +2,10 @@
 //! posts, and that dropping it cancels (`docs/tui.md`, "Logging in").
 
 #![allow(clippy::unwrap_used, reason = "test code; a failure is the test's")]
-#![allow(clippy::indexing_slicing, reason = "test code; a failure is the test's")]
+#![allow(
+    clippy::indexing_slicing,
+    reason = "test code; a failure is the test's"
+)]
 #![allow(clippy::panic, reason = "the test's wait deadline is its failure")]
 
 use std::sync::{Arc, mpsc};
@@ -194,7 +197,10 @@ fn a_browser_failure_posts_no_reviewer_read() {
     assert!(matches!(step, LoginStep::Done(Err(_))), "{step:?}");
     // The failed run posted its end: nothing follows it, so the receive
     // proves no reviewer read ran.
-    assert!(rx.try_recv().is_err(), "a reviewer read followed the failure");
+    assert!(
+        rx.try_recv().is_err(),
+        "a reviewer read followed the failure"
+    );
     assert!(seam.reviewer_reads().is_empty());
 }
 
@@ -229,8 +235,7 @@ fn a_browser_success_posts_done_then_the_reviewer_result() {
     assert_eq!(ticket, LoginTicket(6));
     assert!(matches!(step, LoginStep::Done(Ok(_))), "{step:?}");
     assert!(rx.try_recv().is_err(), "the held read posted early");
-    gate
-        .send(Ok(reviewer_choices(&["m1", "m2"], Some("m2"))))
+    gate.send(Ok(reviewer_choices(&["m1", "m2"], Some("m2"))))
         .unwrap();
     let (ticket, step) = next(&rx, &wait);
     assert_eq!(ticket, LoginTicket(6));

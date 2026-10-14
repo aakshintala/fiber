@@ -1147,14 +1147,8 @@ fn login_with_on_a_terminal_asks_for_the_reviewer_once() {
     let setup = Setup::new();
     install_browser_acme(&setup);
     let providers = setup.providers();
-    let (result, output, _) = run_login_with(
-        setup.home(),
-        providers,
-        setup.clock(),
-        true,
-        false,
-        "1\n",
-    );
+    let (result, output, _) =
+        run_login_with(setup.home(), providers, setup.clock(), true, false, "1\n");
     result.unwrap();
     let stored_at = output
         .find("fiber: stored credentials/acme/alice@example.com\n")
@@ -1176,7 +1170,10 @@ fn login_with_device_on_a_terminal_asks_the_same_question() {
     let (result, output, _) =
         run_login_with(setup.home(), providers, setup.clock(), true, true, "1\n");
     result.unwrap();
-    assert!(output.contains("fiber: stored credentials/acme/alice@example.com\n"), "{output}");
+    assert!(
+        output.contains("fiber: stored credentials/acme/alice@example.com\n"),
+        "{output}"
+    );
     assert!(output.ends_with("fiber: reviewer acme m\n"), "{output}");
 }
 

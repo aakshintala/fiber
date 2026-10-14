@@ -837,7 +837,12 @@ fn provider_reviewer_model_has_no_default_until_login_saves_one() {
 
 #[test]
 fn provider_reviewer_model_rejects_every_non_string_without_reading_it() {
-    for bad in [json!(true), json!({"model": "m"}), json!(["m"]), json!(null)] {
+    for bad in [
+        json!(true),
+        json!({"model": "m"}),
+        json!(["m"]),
+        json!(null),
+    ] {
         let setup = Setup::new();
         setup.write(
             &setup.global(),
@@ -995,7 +1000,10 @@ fn a_wrongly_typed_reviewer_candidate_writes_nothing() {
     )
     .unwrap_err();
     assert_eq!(e.code(), ErrorCode::ConfigInvalid);
-    assert!(e.to_string().contains("`providers.acme.reviewer_model`"), "{e}");
+    assert!(
+        e.to_string().contains("`providers.acme.reviewer_model`"),
+        "{e}"
+    );
     assert_eq!(
         std::fs::read(setup.global()).unwrap(),
         before,

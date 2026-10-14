@@ -2129,7 +2129,11 @@ fn a_provider_local_choice_reuses_the_new_providers_single_read() {
     let made = prepared(&switching, &args("other/m"), None);
     let reviewer = made.reviewer.expect("the reviewer resolved");
     assert_eq!(reviewer.model.reference, "other/m2");
-    assert_eq!(runs(&fixture.marker), 1, "one read serves session and reviewer");
+    assert_eq!(
+        runs(&fixture.marker),
+        1,
+        "one read serves session and reviewer"
+    );
 }
 
 #[test]
@@ -2144,12 +2148,19 @@ fn switching_providers_changes_the_provider_local_reviewer() {
     );
     let made = prepared(&switching, &args("fake/n"), None);
     assert_eq!(
-        made.reviewer.expect("the reviewer resolved").model.reference,
+        made.reviewer
+            .expect("the reviewer resolved")
+            .model
+            .reference,
         "fake/r"
     );
     let moved = prepared(&switching, &args("other/m"), None);
     assert_eq!(
-        moved.reviewer.expect("the reviewer resolved").model.reference,
+        moved
+            .reviewer
+            .expect("the reviewer resolved")
+            .model
+            .reference,
         "other/m2"
     );
     assert_eq!(runs(&fixture.marker), 1, "the new provider reads once");
@@ -2191,10 +2202,16 @@ fn a_provider_local_choice_carries_debug_factories() {
     let switching = diagnosed(&fixture, &["providers.fake.reviewer_model=r"]);
     let made = prepared(&switching, &args("fake/n"), None);
     assert_eq!(
-        made.reviewer.expect("the reviewer resolved").model.reference,
+        made.reviewer
+            .expect("the reviewer resolved")
+            .model
+            .reference,
         "fake/r"
     );
-    assert!(made.observe.is_some(), "the debug session factory is shared");
+    assert!(
+        made.observe.is_some(),
+        "the debug session factory is shared"
+    );
     assert!(
         made.reviewer_observe.is_some(),
         "the debug reviewer factory is shared"

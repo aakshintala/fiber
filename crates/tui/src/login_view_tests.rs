@@ -81,7 +81,6 @@ fn answering_fake(stored: Stored) -> Fake {
     fake
 }
 
-
 /// Reviewer choices with `models` and `selected` preselected.
 fn choices(models: &[&str], selected: Option<&str>) -> crate::configure::ReviewerModels {
     crate::configure::ReviewerModels {
@@ -100,7 +99,11 @@ fn answer_reviewer(fake: &Fake, answer: crate::configure::ReviewerModels) {
 
 /// Feeds a successful browser `Done` and the reviewer's answer for
 /// `ticket`: the credential stays on its ticket through preparation.
-fn done_then_reviewer(login: &mut Login, ticket: LoginTicket, answer: crate::configure::ReviewerModels) {
+fn done_then_reviewer(
+    login: &mut Login,
+    ticket: LoginTicket,
+    answer: crate::configure::ReviewerModels,
+) {
     login.step(
         ticket,
         crate::login_worker::LoginStep::Done(Ok(Stored {
@@ -1633,7 +1636,10 @@ fn a_browser_done_shows_the_done_step_and_drops_the_worker() {
         crate::login_worker::LoginStep::Reviewer(Ok(choices(&["m1"], Some("m1")))),
     );
     save_highlighted(&mut login, &fake);
-    assert_eq!(fake.reviewer_saves(), [("codex".to_owned(), "m1".to_owned())]);
+    assert_eq!(
+        fake.reviewer_saves(),
+        [("codex".to_owned(), "m1".to_owned())]
+    );
     let (buf, _) = overlaid(&login, 80, 24);
     let screen = text_of(&buf, 80, 24).join("\n");
     assert!(screen.contains("✓ Logged in to codex."), "{screen}");
@@ -2514,10 +2520,7 @@ fn key_choices(
         Act::Reviewer(stored) if stored == name
     ));
     login.wait_reviewer(ticket, name.to_owned());
-    login.step(
-        ticket,
-        crate::login_worker::LoginStep::Reviewer(Ok(answer)),
-    );
+    login.step(ticket, crate::login_worker::LoginStep::Reviewer(Ok(answer)));
     (fake, login)
 }
 
@@ -2580,9 +2583,7 @@ fn a_browser_done_prepares_on_its_ticket_until_the_reviewer_lands() {
 
 #[test]
 fn reviewer_results_land_only_in_preparing_on_their_ticket() {
-    let answer = || {
-        crate::login_worker::LoginStep::Reviewer(Ok(choices(&["m1"], Some("m1"))))
-    };
+    let answer = || crate::login_worker::LoginStep::Reviewer(Ok(choices(&["m1"], Some("m1"))));
     // Rows, panel and ended ignore the result; choices is already chosen.
     let fake = fake_with(targets());
     let mut login = Login::open(&ctx(&fake));
@@ -2741,7 +2742,10 @@ fn a_stale_preselection_opens_unhighlighted_and_enter_keeps_it() {
     let (buf, _) = overlaid(&login, 80, 24);
     assert_no_bar(&buf, 80, 24);
     let screen = drawn(&login, 80, 24);
-    assert!(screen.contains("Saved reviewer `gone-m` is not listed;"), "{screen}");
+    assert!(
+        screen.contains("Saved reviewer `gone-m` is not listed;"),
+        "{screen}"
+    );
     assert!(screen.contains("Enter keeps it."), "{screen}");
     assert!(matches!(login.key(&Key::Enter, &ctx(&fake)), Act::Stay));
     assert_eq!(
@@ -2752,11 +2756,7 @@ fn a_stale_preselection_opens_unhighlighted_and_enter_keeps_it() {
 
 #[test]
 fn a_listed_preselection_opens_highlighted_and_enter_saves_it() {
-    let (fake, mut login) = key_choices(
-        "acme",
-        LoginTicket(1),
-        choices(&["m1", "m2"], Some("m2")),
-    );
+    let (fake, mut login) = key_choices("acme", LoginTicket(1), choices(&["m1", "m2"], Some("m2")));
     let (buf, _) = overlaid(&login, 80, 24);
     assert_eq!(barred_rows(&buf, 80, 24).len(), 1);
     let screen = drawn(&login, 80, 24);
@@ -2865,14 +2865,20 @@ fn login_reviewer_default_80x24() {
 fn login_reviewer_none_80x24() {
     let (_, login) = key_choices("acme", LoginTicket(1), choices(&["fast-1", "fast-2"], None));
     let (buf, _) = overlaid(&login, 80, 24);
-    insta::assert_snapshot!("login_reviewer_none_80x24", text_of(&buf, 80, 24).join("\n"));
+    insta::assert_snapshot!(
+        "login_reviewer_none_80x24",
+        text_of(&buf, 80, 24).join("\n")
+    );
 }
 
 #[test]
 fn login_reviewer_stale_48x24() {
     let (_, login) = key_choices("acme", LoginTicket(1), choices(&["fast-1"], Some("gone-m")));
     let (buf, _) = overlaid(&login, 48, 24);
-    insta::assert_snapshot!("login_reviewer_stale_48x24", text_of(&buf, 48, 24).join("\n"));
+    insta::assert_snapshot!(
+        "login_reviewer_stale_48x24",
+        text_of(&buf, 48, 24).join("\n")
+    );
 }
 
 #[test]
@@ -2887,7 +2893,10 @@ fn login_reviewer_empty_80x24() {
         },
     );
     let (buf, _) = overlaid(&login, 80, 24);
-    insta::assert_snapshot!("login_reviewer_empty_80x24", text_of(&buf, 80, 24).join("\n"));
+    insta::assert_snapshot!(
+        "login_reviewer_empty_80x24",
+        text_of(&buf, 80, 24).join("\n")
+    );
 }
 
 #[test]
@@ -3017,11 +3026,7 @@ fn long_and_wide_ids_stay_inside_while_the_save_keeps_them_whole() {
         fake.reviewer_saves(),
         [("acme".to_owned(), "v:2".to_owned())]
     );
-    let (fake, mut login) = key_choices(
-        "acme",
-        LoginTicket(1),
-        choices(&[&wide, &long], None),
-    );
+    let (fake, mut login) = key_choices("acme", LoginTicket(1), choices(&[&wide, &long], None));
     press(&mut login, &fake, &[Key::Down, Key::Down, Key::Enter]);
     assert_eq!(fake.reviewer_saves(), [("acme".to_owned(), long)]);
 }
