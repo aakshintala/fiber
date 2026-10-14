@@ -622,6 +622,15 @@ pub(crate) fn decide_on_worker(
     let item = item.clone();
     on_worker("the decision", move || offer.decide(&item, decision))
 }
+/// Lists the pending offers on a worker under one deadline: gathering
+/// declarations reads the workspace, so a stall fails the test instead of
+/// hanging it.
+pub(crate) fn unapproved_on_worker(
+    offer: &SessionOffer,
+) -> Result<Vec<contract::repository::Unapproved>, Failure> {
+    let offer = offer.clone();
+    on_worker("the offers", move || offer.unapproved())
+}
 /// The content hash of the declared extension, without approving.
 pub(crate) fn digest_of(setup: &Setup) -> String {
     let clock = FakeClock::new();

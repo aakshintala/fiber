@@ -37,7 +37,20 @@ fn ensure_copy_waits_on_the_global_lock_even_for_a_finished_copy() {
     let item = repo.item(contract::events::OfferedKind::Hook, "fmt");
     let digest = hash(&mut Index::load(&repo.home()), &item).unwrap();
     assert_eq!(store(&repo).decision(item.kind, &digest), None);
-    store(&repo).approve(&item, &digest).unwrap();
+    // The first approval blocks on the filesystem, so it runs on a worker
+    // under one deadline: a stall fails the test instead of hanging it.
+    let (done, approved) = mpsc::channel();
+    let approver = store(&repo);
+    let waiting = item.clone();
+    let waiting_digest = digest.clone();
+    let worker = std::thread::spawn(move || {
+        done.send(approver.approve(&waiting, &waiting_digest))
+            .unwrap();
+    });
+    Deadline::after(WAIT)
+        .recv_or_fail(&approved, "the approval")
+        .unwrap();
+    worker.join().unwrap();
     // Hold `pinned/.lock` itself, then start the copy on a worker: its
     // result must not answer while the lock is held.
     let held = File::options()

@@ -844,3 +844,107 @@ fn a_finished_copy_whose_manifest_is_a_link_is_never_treated_as_finished() {
     assert_eq!(counter(&setup, &digest), "x\n");
     assert_eq!(fs::read(approval(&setup, &digest)).unwrap(), before);
 }
+
+#[test]
+fn a_stray_file_with_a_held_marker_is_left_alone_then_rebuilds_once_released() {
+    use std::fs::File;
+    let setup = Setup::new();
+    let root = "fiber.test/root";
+    declare(&setup, &installing(root, &[], "echo x >> counter"));
+    let clock = FakeClock::new();
+    let plain = Store::new(&setup.home(), &project(), Arc::clone(&clock) as Arc<_>);
+    let (found, digest) = item(&setup, &clock);
+    plain.approve_on_worker(&found, &digest).unwrap();
+    let before = fs::read(approval(&setup, &digest)).unwrap();
+    // A stray file where the copy goes, with the finished marker still
+    // behind it.
+    let copy_path = copy(&setup, &digest);
+    fs::remove_dir_all(&copy_path).unwrap();
+    fs::write(&copy_path, "stray\n").unwrap();
+    let marker = ready(&setup, &digest);
+    assert!(marker.is_file());
+    // A session running the copy holds its marker shared.
+    let session = File::options()
+        .read(true)
+        .write(true)
+        .open(&marker)
+        .unwrap();
+    session.lock_shared().unwrap();
+    let clock = FakeClock::new();
+    let (found, _) = item(&setup, &clock);
+    let err = plain.approve_on_worker(&found, &digest).unwrap_err();
+    assert!(matches!(err, Error::Busy), "{err}");
+    // Nothing changed: the stray, the marker and the approval are intact,
+    // and no copy directory was built beside them.
+    assert_eq!(fs::read_to_string(&copy_path).unwrap(), "stray\n");
+    assert!(marker.is_file());
+    assert_eq!(fs::read(approval(&setup, &digest)).unwrap(), before);
+    drop(session);
+    // Released, the next approval replaces the stray and rebuilds.
+    let clock = FakeClock::new();
+    let (found, _) = item(&setup, &clock);
+    plain.approve_on_worker(&found, &digest).unwrap();
+    assert!(copy(&setup, &digest).is_dir());
+    assert_eq!(fs::read(ready(&setup, &digest)).unwrap(), b"");
+    assert!(approval(&setup, &digest).is_file());
+    assert_eq!(counter(&setup, &digest), "x\n");
+}
+
+#[test]
+fn a_stray_file_with_a_stale_marker_rebuilds_with_a_fresh_marker() {
+    let setup = Setup::new();
+    let root = "fiber.test/root";
+    declare(&setup, &installing(root, &[], "echo x >> counter"));
+    let clock = FakeClock::new();
+    let plain = Store::new(&setup.home(), &project(), Arc::clone(&clock) as Arc<_>);
+    let (found, digest) = item(&setup, &clock);
+    plain.approve_on_worker(&found, &digest).unwrap();
+    // A stray file where the copy goes, with its stale marker still
+    // behind it: unheld, so the rebuild claims and removes the marker
+    // before replacing the stray.
+    let copy_path = copy(&setup, &digest);
+    fs::remove_dir_all(&copy_path).unwrap();
+    fs::write(&copy_path, "stray\n").unwrap();
+    assert!(ready(&setup, &digest).is_file());
+    let clock = FakeClock::new();
+    let (found, _) = item(&setup, &clock);
+    plain.approve_on_worker(&found, &digest).unwrap();
+    assert!(copy(&setup, &digest).is_dir());
+    assert_eq!(fs::read(ready(&setup, &digest)).unwrap(), b"");
+    assert!(approval(&setup, &digest).is_file());
+    assert_eq!(counter(&setup, &digest), "x\n");
+}
+
+#[test]
+fn a_directory_where_the_ready_marker_goes_is_refused_without_touching_the_copy() {
+    let setup = Setup::new();
+    let mut repos = Repos::new(&setup);
+    let digest = counting_root(&setup, &mut repos);
+    let before = fs::read(approval(&setup, &digest)).unwrap();
+    fs::write(copy(&setup, &digest).join("junk"), "junk").unwrap();
+    // A directory where the ready marker goes: refused before any copy
+    // is deleted or rebuilt.
+    let marker = ready(&setup, &digest);
+    fs::remove_file(&marker).unwrap();
+    fs::create_dir(&marker).unwrap();
+    let clock = FakeClock::new();
+    let (found, _) = item(&setup, &clock);
+    let err = store(&setup, &repos, &clock)
+        .approve_on_worker(&found, &digest)
+        .unwrap_err();
+    assert!(matches!(err, Error::Pin { .. }), "{err}");
+    assert!(err.to_string().contains(".ready"), "{err}");
+    assert!(err.to_string().contains("is not a regular file"), "{err}");
+    // The finished copy is byte-identical: no rebuild was attempted.
+    assert_eq!(counter(&setup, &digest), "x\n");
+    assert_eq!(
+        fs::read_to_string(copy(&setup, &digest).join("junk")).unwrap(),
+        "junk"
+    );
+    assert_eq!(fs::read(approval(&setup, &digest)).unwrap(), before);
+    assert!(marker.is_dir());
+    assert!(
+        depends_home(&setup, &digest).join(".complete").is_file(),
+        "no rebuild removed completion"
+    );
+}

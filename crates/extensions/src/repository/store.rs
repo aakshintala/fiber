@@ -266,12 +266,17 @@ impl Store {
         pinned: &Path,
     ) -> Result<(), Error> {
         let ready = pinned.join(format!("{hash}.ready"));
-        // A link where the marker goes is refused before it is ever
-        // opened: only a regular file can be locked or removed.
-        if let Ok(meta) = fs::symlink_metadata(&ready)
-            && meta.file_type().is_symlink()
-        {
-            return Err(refused(&item.name, &ready, "is a symbolic link"));
+        // A link or any other non-file where the marker goes is refused
+        // before it is ever opened or anything is deleted: only a regular
+        // file can be locked or removed.
+        match fs::symlink_metadata(&ready) {
+            Ok(meta) if meta.file_type().is_symlink() => {
+                return Err(refused(&item.name, &ready, "is a symbolic link"));
+            }
+            Ok(meta) if !meta.file_type().is_file() => {
+                return Err(refused(&item.name, &ready, "is not a regular file"));
+            }
+            _ => {}
         }
         // The exclusive marker hold, kept until the build below is done:
         // proving ownership before deleting or replacing anything with a
@@ -310,7 +315,16 @@ impl Store {
                     remove(copy)?;
                 }
             }
-            Ok(_) => fs::remove_file(copy).map_err(io_error(copy))?,
+            Ok(_) => {
+                // A stray file or link where the copy goes: claim a stale
+                // marker exactly as the legacy rebuild does, leaving a
+                // held copy alone, or the rebuild below fails on it.
+                if ready.is_file() {
+                    _held = Some(claim(&ready)?);
+                    fs::remove_file(&ready).map_err(io_error(&ready))?;
+                }
+                fs::remove_file(copy).map_err(io_error(copy))?
+            }
         }
         fs::create_dir(copy).map_err(io_error(copy))?;
         let unfinished = Unfinished(Some(copy.to_path_buf()));

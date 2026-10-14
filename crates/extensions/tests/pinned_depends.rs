@@ -19,7 +19,8 @@ use std::sync::Arc;
 
 use common::{
     FIBER, Repos, Setup, StoreOperations, approve, decide_on_worker, declare, dep_dir, dep_names,
-    dep_record, dep_version, depends_home, item, manifest, named, project, store, write,
+    dep_record, dep_version, depends_home, item, manifest, named, project, store,
+    unapproved_on_worker, write,
 };
 use contract::events::OfferDecision;
 use contract::repository::{Decided, RepositoryCode};
@@ -124,27 +125,15 @@ fn an_installed_personal_version_and_floor_neither_constrain_nor_change() {
     let mut repos = Repos::new(&setup);
     let helper = "example.com/acme/helper";
     repos.tag(helper, "", "v2.0.0", &manifest(helper), &[]);
-    // A personal install the person asked for, moved to its floor.
-    extensions::plan(
-        &setup.home(),
-        &extensions::Request::Install(helper.into()),
-        FIBER,
-        &repos.origin(),
-        &*FakeClock::new(),
-    )
-    .unwrap()
-    .commit()
-    .unwrap();
-    extensions::plan(
-        &setup.home(),
-        &extensions::Request::UpdateAll(helper.into()),
-        FIBER,
-        &repos.origin(),
-        &*FakeClock::new(),
-    )
-    .unwrap()
-    .commit()
-    .unwrap();
+    // A personal install the person asked for, moved to its floor. Each
+    // runs on a worker under one deadline: planning borrows its clock,
+    // so the clock, home and origin are built inside the worker.
+    personal_commit(&setup, &repos, extensions::Request::Install(helper.into()));
+    personal_commit(
+        &setup,
+        &repos,
+        extensions::Request::UpdateAll(helper.into()),
+    );
     for tag in ["v1.1.0", "v1.2.0", "v1.4.0"] {
         repos.tag(helper, "", tag, &manifest(helper), &[]);
     }
@@ -181,6 +170,25 @@ fn snapshot(dir: &Path) -> Vec<(String, Vec<u8>)> {
     }
     out.sort();
     out
+}
+
+/// A personal plan and commit on a worker under one deadline: the plan
+/// borrows its clock, so the clock, home and origin are built inside the
+/// worker and only the commit result crosses back.
+fn personal_commit(setup: &Setup, repos: &Repos, request: extensions::Request) {
+    let home = setup.home();
+    let origin = repos.origin();
+    let (done, result) = std::sync::mpsc::channel();
+    let deadline = fakes::Deadline::after(std::time::Duration::from_secs(10));
+    let worker = std::thread::spawn(move || {
+        let clock = FakeClock::new();
+        let planned = extensions::plan(&home, &request, FIBER, &origin, &*clock).unwrap();
+        done.send(planned.commit()).unwrap();
+    });
+    deadline
+        .recv_or_fail(&result, "the personal install")
+        .unwrap();
+    worker.join().unwrap();
 }
 
 #[test]
@@ -424,7 +432,7 @@ fn an_offered_approval_records_and_installs_dependencies() {
     declare(&setup, &named(root, &[(helper, "1.2")]));
     let clock = FakeClock::new();
     let offer = offering(&setup, Some(&repos), &clock);
-    let pending = offer.unapproved().unwrap();
+    let pending = unapproved_on_worker(&offer).unwrap();
     assert_eq!(pending.len(), 1);
     assert_eq!(
         decide_on_worker(&offer, &pending[0].offered, OfferDecision::Approve).unwrap(),
@@ -461,7 +469,7 @@ fn never_skip_and_changed_content_install_nothing() {
     let clock = FakeClock::new();
     // Nothing may fetch: every decision below must succeed without it.
     let offer = offering(&setup, None, &clock);
-    let pending = offer.unapproved().unwrap();
+    let pending = unapproved_on_worker(&offer).unwrap();
     assert_eq!(pending.len(), 3);
     let offered = |package: &str| {
         pending
