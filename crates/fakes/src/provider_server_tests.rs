@@ -1023,26 +1023,74 @@ fn a_fixed_body_followed_by_pipelined_bytes_keeps_only_its_length() {
     );
 }
 
+/// The next announcement naming `phase`, holding any other phase for a
+/// later wait: one channel carries every waiter's announcement, and a
+/// window's accept can announce before the previous request's body does.
+/// Every receive is bounded, so a missing wait fails, never hangs.
+fn next_phase(
+    acks: &mpsc::Receiver<WaitAck>,
+    stashed: &mut Vec<WaitAck>,
+    deadline: &Deadline,
+    phase: &'static str,
+    what: &str,
+) -> WaitAck {
+    if let Some(at) = stashed.iter().position(|ack| ack.phase == phase) {
+        return stashed.remove(at);
+    }
+    loop {
+        let ack = deadline.recv_or_fail(acks, what);
+        if ack.phase == phase {
+            return ack;
+        }
+        stashed.push(ack);
+    }
+}
+
 // Twenty bench-shaped POSTs: byte-slice bodies of growing length, each
 // on a fresh connection read to the server's close, against small stream
-// replies. A wait with no wake sleeps its whole poll bound, so each such
-// sleep costs a busy turn about a millisecond; a readiness wait ends when
-// its bytes arrive instead. The bound admits the idle sleeps a turn pays
-// and refuses the per-read sleeps the always-sleeping wait pays: twenty
-// such posts sleep 3460 full bounds at base (nextest, debug, macOS).
+// replies. The bodies wait ready-built before the server starts, so no
+// client think time parks the server idle. The client then holds each
+// connection until the server parks in its accept, and each body until the
+// server parks in its read, so every request pays two parks: at base each
+// such park sleeps its whole poll bound, about a millisecond, while a
+// readiness wait ends when its bytes arrive instead. The first window may
+// predate the subscription, so nineteen accepts and twenty reads
+// rendezvous: the bound of twenty sits below half the forced parks, with
+// room for the idle sleeps a turn pays besides them. The same twenty posts
+// sleep seventy-one bounds at base (nextest, debug, macOS).
 #[test]
 fn busy_shaped_posts_sleep_only_when_idle() {
     const CALLS: usize = 20;
-    const STEP: usize = 500_000;
-    const SLEPT_BOUND: u64 = 100;
+    const STEP: usize = 2_000;
+    const SLEPT_BOUND: u64 = 20;
     let clock = FakeClock::new();
     let script: Vec<Response> = (0..CALLS)
         .map(|_| Response::stream("event: done\ndata: {}\n\n"))
         .collect();
-    let server = ProviderServer::start_on(clock, script).unwrap();
+    // Built before the server starts, so the server never parks on the
+    // client building its next body.
+    let bodies: Vec<Vec<u8>> = (0..CALLS)
+        .map(|n| (0u8..=250).cycle().take((n + 1) * STEP).collect())
+        .collect();
+    let server = ProviderServer::start_on(clock.clone(), script).unwrap();
+    let acks = server.core.test_acknowledgments();
     let addr = server.addr;
-    for n in 0..CALLS {
-        let body: Vec<u8> = (0u8..=250).cycle().take((n + 1) * STEP).collect();
+    let deadline = Deadline::after(READ_WITHIN);
+    let mut stashed = Vec::new();
+    for (i, body) in bodies.iter().enumerate() {
+        // The connection waits for the server's accept park: the park is
+        // certain, since no client has connected yet. The first window may
+        // park before the acknowledgments below are subscribed, so only
+        // later windows rendezvous; their parks always postdate it.
+        if i != 0 {
+            next_phase(
+                &acks,
+                &mut stashed,
+                &deadline,
+                "to accept the connection",
+                "the accept's wait",
+            );
+        }
         let mut stream = TcpStream::connect_timeout(&addr, READ_WITHIN).unwrap();
         stream.set_read_timeout(Some(READ_WITHIN)).unwrap();
         stream
@@ -1054,7 +1102,20 @@ fn busy_shaped_posts_sleep_only_when_idle() {
                 .as_bytes(),
             )
             .unwrap();
-        stream.write_all(&body).unwrap();
+        // The body waits for the server's read park: the park is certain,
+        // since no body byte is on the wire yet.
+        let parked = next_phase(
+            &acks,
+            &mut stashed,
+            &deadline,
+            "to read the fixed body",
+            "the body read's wait",
+        );
+        assert!(
+            clock.await_thread_parked(parked.thread, parked.until, READ_WITHIN),
+            "the body read parks before its bytes arrive"
+        );
+        stream.write_all(body).unwrap();
         // The write side stays open until the reply completes: the server
         // closes, so the read ends at the reply instead of its bound.
         let mut response = Vec::new();
@@ -1071,13 +1132,12 @@ fn busy_shaped_posts_sleep_only_when_idle() {
     );
     let requests = server.requests();
     assert_eq!(requests.len(), CALLS);
-    for (n, request) in requests.iter().enumerate() {
-        let expected: Vec<u8> = (0u8..=250).cycle().take((n + 1) * STEP).collect();
+    for (request, expected) in requests.iter().zip(bodies.iter()) {
         assert_eq!(request.body_len, expected.len());
         assert_eq!(
-            first_diff(&request.body, &expected),
+            first_diff(&request.body, expected),
             None,
-            "request {n} is byte-exact"
+            "a recorded body is byte-exact"
         );
     }
     // The requests lock synchronises with the serving threads, so every
