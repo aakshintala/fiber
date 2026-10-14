@@ -89,8 +89,9 @@ fn reviewer_lifetime(overrides: &[&str]) -> contract::events::CacheLifetime {
             },
         ))
     };
-    let reviewer =
-        crate::choose_reviewer(&providers, &config, &session, &here, &mut lookup).unwrap();
+    let reviewer = crate::choose_reviewer(&providers, &config, &session, &here, &mut lookup, None)
+        .unwrap()
+        .0;
     assert_eq!(reviewer.model.reference, "fake/reviewer");
     reviewer.cache_lifetime
 }
@@ -197,7 +198,9 @@ fn the_reviewer_connects_with_the_lua_provider_its_access_names() {
             ))
         };
         let reviewer =
-            crate::choose_reviewer(&providers, &config, &session, &here, &mut lookup).unwrap();
+            crate::choose_reviewer(&providers, &config, &session, &here, &mut lookup, None)
+                .unwrap()
+                .0;
         assert_eq!(reviewer.model.reference, reference);
         assert_eq!(reviewer.provider.cost_lookup().is_some(), carries);
     }
@@ -293,12 +296,14 @@ fn the_reviewer_fetches_quota_for_the_lookup_label() {
             &session,
             &here,
             &mut lookup,
+            None,
         )));
     });
     let reviewer = fakes::Deadline::after(QUOTA_WAIT)
         .recv(&rev_ready)
         .expect("choose_reviewer ended in time")
-        .unwrap();
+        .unwrap()
+        .0;
     assert_eq!(reviewer.model.reference, "qp/m2");
     let _call = reviewer.provider.call(&reviewer_request());
     assert!(

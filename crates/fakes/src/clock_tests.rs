@@ -1157,3 +1157,56 @@ fn a_thread_waited_on_by_id_is_in_the_mark_for_its_next_park() {
         .recv(&exit_a)
         .expect("thread A exits");
 }
+
+/// `mark_parked` returns the park that arrives after it starts waiting. The
+/// wait predicate signals while nobody is parked; the test releases the
+/// waiter before starting the parker, so it enters the real condvar wait and
+/// the arriving park wakes it. With the predicate inverted, the hook does not
+/// signal and the bounded receive fails: this kills the
+/// `parked_count(state, until) == 0` mutant.
+#[test]
+fn mark_parked_returns_the_park_that_arrives_after_it_starts() {
+    let clock = FakeClock::new();
+    let until = clock.origin() + Duration::from_secs(30);
+    let (waiting, release_waiter) = clock.pause_next_mark_parked_predicate();
+    let (result_tx, result_rx) = mpsc::channel();
+    let clock_wait = Arc::clone(&clock);
+    thread::spawn(move || {
+        let mark = clock_wait.mark_parked(until, Duration::from_secs(5));
+        match result_tx.send(mark) {
+            Ok(()) | Err(mpsc::SendError(_)) => {}
+        }
+    });
+    Deadline::after(Duration::from_secs(5))
+        .recv(&waiting)
+        .expect("waited for mark_parked to block with nobody parked");
+    release_waiter.send(()).unwrap();
+    let (parker_release_tx, parker_release_rx) = mpsc::channel::<()>();
+    let (parker_exit_tx, parker_exit_rx) = mpsc::channel();
+    let clock_park = Arc::clone(&clock);
+    let parker = thread::spawn(move || {
+        clock_park.wait_until(Some(until), &mut |bound| {
+            assert_eq!(bound, None);
+            parker_release_rx
+                .recv()
+                .expect("waited for the test to release the parked thread");
+        });
+        if let Ok(()) = parker_exit_tx.send(()) {}
+    });
+    let parker_id = parker.thread().id();
+    assert!(
+        clock.await_thread_parked(parker_id, Some(until), Duration::from_secs(5)),
+        "the parker parked at its deadline: {:?}, thread {parker_id:?}",
+        clock.parked(),
+    );
+    let mark = Deadline::after(Duration::from_secs(5))
+        .recv(&result_rx)
+        .expect("waited for mark_parked to return the park")
+        .expect("a parked thread is marked");
+    assert_eq!(mark.0.len(), 1);
+    assert_eq!(mark.0[0].0, parker_id);
+    parker_release_tx.send(()).unwrap();
+    Deadline::after(Duration::from_secs(5))
+        .recv(&parker_exit_rx)
+        .expect("the parked thread exits");
+}

@@ -40,6 +40,8 @@ pub struct Rejection {
 pub struct Ack(pub Box<dyn FnOnce(Answer) + Send>);
 
 impl fmt::Debug for Ack {
+    // The `"Ack(..)"` string is a developer aid no doc promises and no consumer observes.
+    #[cfg_attr(false, mutants::skip)]
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.write_str("Ack(..)")
     }
@@ -189,6 +191,8 @@ pub struct JobNotice {
 pub struct Claim(pub Box<dyn FnOnce() -> Option<Vec<crate::jobs::Taken>> + Send>);
 
 impl fmt::Debug for Claim {
+    // The `"Claim(..)"` string is a developer aid no doc promises and no consumer observes.
+    #[cfg_attr(false, mutants::skip)]
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.write_str("Claim(..)")
     }

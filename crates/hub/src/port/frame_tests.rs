@@ -10,6 +10,11 @@
 )]
 
 use std::io::Cursor;
+use std::sync::mpsc;
+use std::thread;
+use std::time::Duration;
+
+use fakes::Deadline;
 
 use super::*;
 
@@ -84,6 +89,25 @@ fn close(code: u16, reason: &[u8]) -> Vec<u8> {
 /// Reads one item with the first-message cap.
 fn read(bytes: &[u8]) -> Incoming {
     Reader::new(FIRST_MESSAGE_MAX).next(&mut Cursor::new(bytes))
+}
+
+/// How long one read may take: a whole or truncated message answers at
+/// once, so only a mutant spinning the payload loop runs this out.
+const READ_WITHIN: Duration = Duration::from_secs(10);
+
+/// Reads one item on a thread and receives it before [`READ_WITHIN`]:
+/// under a mutant that spins the payload loop the wait expires and
+/// fails the test in seconds instead of the mutant timeout.
+#[track_caller]
+fn read_within(bytes: &[u8], what: &str) -> Incoming {
+    let bytes = bytes.to_vec();
+    let (done_tx, done_rx) = mpsc::channel();
+    thread::spawn(move || {
+        let mut stream = Cursor::new(bytes);
+        let got = Reader::new(FIRST_MESSAGE_MAX).next(&mut stream);
+        done_tx.send(got).unwrap_or(());
+    });
+    Deadline::after(READ_WITHIN).recv_or_fail(&done_rx, what)
 }
 
 #[test]
@@ -374,6 +398,44 @@ fn eof_in_a_header_or_a_payload_reads_as_gone() {
     let partial = text(b"Hello");
     let partial = partial.get(..7).unwrap();
     assert_eq!(read(partial), Incoming::Gone);
+}
+
+#[test]
+fn the_payload_loop_stops_when_no_bytes_remain() {
+    // No bytes remain before the first round, one round reads one byte,
+    // and more than one round spans the per-round take: a `>=` in the
+    // loop condition spins past zero on every one of these.
+    assert_eq!(
+        read_within(&text(b""), "an empty message reads"),
+        Incoming::Text(String::new())
+    );
+    assert_eq!(
+        read_within(&text(b"a"), "a one-byte message reads"),
+        Incoming::Text("a".to_owned())
+    );
+    let payload = vec![b'a'; 5_000];
+    let Incoming::Text(got) = read_within(&text(&payload), "a multi-round message reads") else {
+        panic!("a multi-round message reads as text");
+    };
+    assert_eq!(got.len(), 5_000, "a multi-round message keeps its length");
+}
+
+#[test]
+fn a_truncated_payload_reads_as_gone_without_hanging() {
+    // Fewer bytes than the header claims, and none at all: accepting a
+    // short read keeps a loop that never advances, so these hang when
+    // the full-read guard is broken.
+    let frame = text(b"Hello");
+    let partial = frame.get(..7).unwrap();
+    assert_eq!(
+        read_within(partial, "a short payload reads as gone"),
+        Incoming::Gone
+    );
+    let header = frame.get(..6).unwrap();
+    assert_eq!(
+        read_within(header, "an absent payload reads as gone"),
+        Incoming::Gone
+    );
 }
 
 #[test]

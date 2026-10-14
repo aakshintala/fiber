@@ -1135,3 +1135,171 @@ fn a_credential_failure_marks_the_fetch_failed() {
     );
     assert_eq!(read(&provider), QuotaEntry::Unreachable { last: None });
 }
+
+/// An observed factory over `inner` recording the attempts it builds.
+fn recorder(
+    inner: Arc<crate::test_support::Inner>,
+) -> (contract::diag::Observe, Arc<std::sync::Mutex<Vec<u32>>>) {
+    let attempts = Arc::new(std::sync::Mutex::new(Vec::new()));
+    let seen = Arc::clone(&attempts);
+    let observe: contract::diag::Observe = Arc::new(move |request, attempt| {
+        seen.lock().unwrap().push(attempt.get());
+        inner.call(request)
+    });
+    (observe, attempts)
+}
+
+#[test]
+fn observed_and_ordinary_calls_share_one_due_quota_refresh() {
+    let root = fakes::TempDir::new("fiber-quota-observed-trigger");
+    let server = fakes::ProviderServer::start([ok(windows_body("primary", 10.0, None))]).unwrap();
+    let lua = http_quota_provider(&root, &server.url(), FakeClock::new());
+    let inner = Arc::new(crate::test_support::Inner::default());
+    let (observe, attempts) = recorder(Arc::clone(&inner));
+    let (wrapped, factory) = {
+        let lua = Arc::clone(&lua);
+        let inner = Arc::clone(&inner) as Arc<dyn contract::provider::Provider>;
+        within(move || {
+            lua.with_quota_observed(inner, Some(observe), pair(), None)
+                .unwrap()
+        })
+    };
+    let factory = factory.expect("a quota provider keeps the factory");
+    // The ordinary call builds observed at the first attempt, through the
+    // same preparation as the factory.
+    let _call = wrapped.call(&crate::test_support::request());
+    assert_eq!(
+        read(&lua),
+        QuotaEntry::Reported(percent("primary", 10.0, None)),
+        "the ordinary call's trigger fetched"
+    );
+    let _observed = within({
+        let request = crate::test_support::request();
+        move || factory(&request, std::num::NonZeroU32::new(2).unwrap())
+    });
+    assert_eq!(
+        read(&lua),
+        QuotaEntry::Reported(percent("primary", 10.0, None))
+    );
+    assert_eq!(server.requests().len(), 1, "one due refresh for both paths");
+    assert_eq!(
+        *attempts.lock().unwrap(),
+        vec![1, 2],
+        "the ordinary call builds at the first attempt"
+    );
+    assert_eq!(
+        inner.calls.load(std::sync::atomic::Ordering::SeqCst),
+        2,
+        "both calls reached the inner provider"
+    );
+}
+
+#[test]
+fn the_observed_factory_respects_freshness_for_its_bound_pair() {
+    let root = fakes::TempDir::new("fiber-quota-observed-fresh");
+    let server = fakes::ProviderServer::start([
+        ok(windows_body("primary", 10.0, None)),
+        ok(windows_body("primary", 11.0, None)),
+    ])
+    .unwrap();
+    let clock = FakeClock::new();
+    let lua = http_quota_provider(&root, &server.url(), Arc::clone(&clock));
+    let inner = Arc::new(crate::test_support::Inner::default());
+    let (observe, _) = recorder(Arc::clone(&inner));
+    let (_, factory) = {
+        let lua = Arc::clone(&lua);
+        let inner = Arc::clone(&inner) as Arc<dyn contract::provider::Provider>;
+        within(move || {
+            lua.with_quota_observed(inner, Some(observe), pair(), None)
+                .unwrap()
+        })
+    };
+    let factory = factory.expect("a quota provider keeps the factory");
+    let trigger = |attempt: u32| {
+        let factory = factory.clone();
+        within(move || {
+            factory(
+                &crate::test_support::request(),
+                std::num::NonZeroU32::new(attempt).unwrap(),
+            )
+        })
+    };
+    let _observed = trigger(1);
+    assert_eq!(
+        read(&lua),
+        QuotaEntry::Reported(percent("primary", 10.0, None)),
+        "the factory's trigger fetched"
+    );
+    assert!(
+        server.requests()[0].path.ends_with("/work"),
+        "the fetch ran for the bound pair: {}",
+        server.requests()[0].path
+    );
+    // Exactly five minutes old is fresh: the factory starts no refetch.
+    clock.advance(Duration::from_secs(5 * 60));
+    let _observed = trigger(2);
+    assert_eq!(server.requests().len(), 1);
+    // One nanosecond more, and the factory starts the refetch itself.
+    clock.advance(Duration::from_nanos(1));
+    let _observed = trigger(3);
+    assert!(
+        server.await_requests(2, WAIT),
+        "the factory never started the refetch"
+    );
+    assert_eq!(
+        read(&lua),
+        QuotaEntry::Reported(percent("primary", 11.0, None))
+    );
+}
+
+#[test]
+fn with_quota_observed_without_quota_keeps_both_inputs() {
+    let root = fakes::TempDir::new("fiber-quota-observed-unquoted");
+    let script =
+        "fiber.provider(\"p\", { sign = { timeout = 1000, run = function() return {} end } })\n";
+    let lua = verbatim_provider(&root, script);
+    let inner: Arc<dyn contract::provider::Provider> =
+        Arc::new(crate::test_support::Inner::default());
+    let (observe, _) = recorder(Arc::new(crate::test_support::Inner::default()));
+    let (wrapped, factory) = {
+        let inner = Arc::clone(&inner);
+        let observe = Arc::clone(&observe);
+        within(move || {
+            lua.with_quota_observed(inner, Some(observe), pair(), None)
+                .unwrap()
+        })
+    };
+    assert!(std::ptr::addr_eq(
+        Arc::as_ptr(&wrapped),
+        Arc::as_ptr(&inner)
+    ));
+    let factory = factory.expect("no quota keeps the factory");
+    assert!(std::ptr::addr_eq(
+        Arc::as_ptr(&factory),
+        Arc::as_ptr(&observe)
+    ));
+}
+
+#[test]
+fn with_quota_observed_failure_matches_with_quota() {
+    let root = fakes::TempDir::new("fiber-quota-observed-broken");
+    let lua = verbatim_provider(&root, "this is not lua\n");
+    let inner: Arc<dyn contract::provider::Provider> =
+        Arc::new(crate::test_support::Inner::default());
+    let (observe, _) = recorder(Arc::new(crate::test_support::Inner::default()));
+    let plain = {
+        let lua = Arc::clone(&lua);
+        let inner = Arc::clone(&inner);
+        within(move || lua.with_quota(inner, pair(), None))
+    };
+    assert!(plain.is_err(), "the broken provider fails with_quota");
+    let observed = {
+        let lua = Arc::clone(&lua);
+        let inner = Arc::clone(&inner);
+        within(move || lua.with_quota_observed(inner, Some(observe), pair(), None))
+    };
+    assert!(
+        observed.is_err(),
+        "the broken provider fails with_quota_observed the same way"
+    );
+}

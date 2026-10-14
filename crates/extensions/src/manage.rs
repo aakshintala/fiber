@@ -123,6 +123,11 @@ pub(crate) fn carries(dir: &Path, manifest: &Manifest) -> Vec<String> {
 /// was fetched.
 pub struct Plan<'c> {
     root: String,
+    /// In dependency mode, the unstaged root's name, version and
+    /// minimums: what the pinned copy's own manifest needs and is,
+    /// seeding reachability and wants without ever staging the root
+    /// itself. Absent for a personal plan.
+    seed: Option<Seed>,
     items: BTreeMap<String, Item>,
     fresh: BTreeSet<String>,
     damaged: Vec<Damaged>,
@@ -185,7 +190,73 @@ impl Drop for Plan<'_> {
     }
 }
 
+/// The unstaged root a dependency plan resolves from: its name, its
+/// manifest's version, and the minimums it states. Back-edge minima on
+/// the root's name are validated against the version with `root_meets`.
+struct Seed {
+    name: String,
+    version: String,
+    depends: BTreeMap<String, String>,
+}
+
 static NEXT: AtomicUsize = AtomicUsize::new(0);
+
+/// The locked, empty plan over `home`'s extensions, with a fresh scratch
+/// directory for fetching, keeping `clock` for its commit.
+fn empty<'c>(home: &Path, clock: &'c dyn Clock) -> Result<(Plan<'c>, usize), Error> {
+    let lock = lock(home, clock)?;
+    let id = NEXT.fetch_add(1, Ordering::Relaxed);
+    let scratch = std::env::temp_dir().join(format!("fiber-fetch-{}-{id}", std::process::id()));
+    remove(&scratch)?;
+    fs::create_dir_all(&scratch).map_err(io(&scratch))?;
+    Ok((
+        Plan {
+            root: String::new(),
+            seed: None,
+            items: BTreeMap::new(),
+            fresh: BTreeSet::new(),
+            damaged: Vec::new(),
+            scratch,
+            _lock: lock,
+            clock,
+        },
+        id,
+    ))
+}
+
+/// Fetches and checks what the manifest `root`'s dependencies need, against
+/// an empty installed set in the copy-local home `home` (`docs/extensions.md`,
+/// "Pinning"): the lowest tags meeting every minimum, committed there
+/// before the copy's own install step runs. The root itself is never staged
+/// or committed: only its dependencies appear in the plan.
+pub(crate) fn plan_depends<'c>(
+    home: &Path,
+    root: &Manifest,
+    fiber_version: &str,
+    origin: &Origin,
+    clock: &'c dyn Clock,
+) -> Result<Plan<'c>, Error> {
+    let (mut plan, id) = empty(home, clock)?;
+    plan.root = root.name.clone();
+    plan.seed = Some(Seed {
+        name: root.name.clone(),
+        version: root.version.clone(),
+        depends: root.depends.clone(),
+    });
+    let mut ctx = Ctx {
+        id,
+        home,
+        fiber_version,
+        origin,
+        installed: &[],
+        update_all: false,
+        clock,
+    };
+    ctx.resolve(&mut plan)?;
+    // Nothing is installed in the copy-local home, so all of it is fresh.
+    plan.fresh = plan.items.keys().cloned().collect();
+    Ok(plan)
+}
 
 /// Fetches and checks what `request` and its dependencies need. The plan
 /// keeps `clock` for its commit, which runs each install step under it.
@@ -196,21 +267,9 @@ pub fn plan<'c>(
     origin: &Origin,
     clock: &'c dyn Clock,
 ) -> Result<Plan<'c>, Error> {
-    let lock = lock(home, clock)?;
+    let (mut plan, id) = empty(home, clock)?;
     let listing = read(home)?;
-    let id = NEXT.fetch_add(1, Ordering::Relaxed);
-    let scratch = std::env::temp_dir().join(format!("fiber-fetch-{}-{id}", std::process::id()));
-    remove(&scratch)?;
-    fs::create_dir_all(&scratch).map_err(io(&scratch))?;
-    let mut plan = Plan {
-        root: String::new(),
-        items: BTreeMap::new(),
-        fresh: BTreeSet::new(),
-        damaged: listing.damaged,
-        scratch,
-        _lock: lock,
-        clock,
-    };
+    plan.damaged = listing.damaged;
     let mut ctx = Ctx {
         id,
         home,
@@ -567,13 +626,21 @@ impl Ctx<'_, '_> {
             if let Some(err) = deferred.into_values().next() {
                 return Err(err);
             }
+            // A personal plan replaces its root's minimum with the new
+            // version; a dependency plan validates back-edge minima on
+            // the root's name against the unstaged root manifest's
+            // version, and the root stays unstaged.
             if let Some(w) = wants.get(&plan.root) {
-                let have = plan
-                    .items
-                    .get(&plan.root)
-                    .map(|item| item.version.clone())
-                    .unwrap_or_default();
-                root_meets(&plan.root, &have, w)?;
+                if let Some(seed) = &plan.seed {
+                    root_meets(&plan.root, &seed.version, w)?;
+                } else {
+                    let have = plan
+                        .items
+                        .get(&plan.root)
+                        .map(|item| item.version.clone())
+                        .unwrap_or_default();
+                    root_meets(&plan.root, &have, w)?;
+                }
             }
             return Ok(());
         }
@@ -674,6 +741,16 @@ impl Ctx<'_, '_> {
                     .insert("your update".into(), floor.clone());
             }
         }
+        // The unstaged root's own dependencies, under its name: the seed
+        // a dependency plan resolves from, absent for a personal plan.
+        if let Some(seed) = &plan.seed {
+            for (dep, min) in &seed.depends {
+                wants
+                    .entry(dep.clone())
+                    .or_default()
+                    .insert(seed.name.clone(), min.clone());
+            }
+        }
         wants
     }
 }
@@ -684,13 +761,21 @@ fn is_damaged(hit: &Damaged, name: &str) -> bool {
 }
 
 /// The names reachable from the request through the staged manifests,
-/// including dependencies not fetched yet.
+/// including dependencies not fetched yet. In dependency mode the unstaged
+/// root's own dependencies seed the walk, so a back-edge onto the root
+/// ends there instead of staging it.
 fn reachable(plan: &Plan) -> BTreeSet<String> {
     let mut reach = BTreeSet::from([plan.root.clone()]);
     let mut queue = vec![plan.root.clone()];
     while let Some(name) = queue.pop() {
-        if let Some(item) = plan.items.get(&name) {
-            for dep in item.manifest.depends.keys() {
+        let staged = plan.items.get(&name).map(|item| &item.manifest.depends);
+        let seeded = plan
+            .seed
+            .as_ref()
+            .filter(|seed| seed.name == name)
+            .map(|seed| &seed.depends);
+        if let Some(depends) = staged.or(seeded) {
+            for dep in depends.keys() {
                 if reach.insert(dep.clone()) {
                     queue.push(dep.clone());
                 }

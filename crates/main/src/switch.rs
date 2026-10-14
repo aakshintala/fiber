@@ -75,6 +75,10 @@ pub(crate) struct Switching {
     loaded: Mutex<BTreeMap<String, Arc<LuaProvider>>>,
     loader: Loader,
     reads: Arc<Reads>,
+    /// The session's diagnostic writer: a switch prepares observed
+    /// factories over it. `None` until the session shares its writer, and
+    /// a switch then carries no factories.
+    diag: Option<Arc<log::diag::Diag>>,
 }
 
 /// What a switch publishes to the session's door when it applies.
@@ -127,9 +131,17 @@ impl Switching {
             loaded: Mutex::new(loaded.into_iter().collect()),
             loader,
             reads,
+            diag: None,
         }
     }
 
+    /// Shares the session's diagnostic writer: a switch prepares observed
+    /// factories over it, applied with the route. Without it a switch
+    /// carries no factories.
+    pub(crate) fn diagnostics(mut self, diag: Arc<log::diag::Diag>) -> Self {
+        self.diag = Some(diag);
+        self
+    }
     /// What shutdown cancels: every read a switch has running.
     pub(crate) fn reads(&self) -> Arc<Reads> {
         Arc::clone(&self.reads)
@@ -391,14 +403,30 @@ pub(crate) fn prepare(
         workspace: switching.loader.workspace.clone(),
         clock: Arc::clone(&switching.loader.clock),
     };
-    let provider = crate::connect(
-        resolved,
-        got.access.key.clone(),
-        got.access.signer.clone(),
-        got.access.lua.as_ref().map(|lua| (lua, got.label.as_str())),
-        &here,
-    )
-    .map_err(|failure| invalid(failure.message))?;
+    // The session's route with its observed factory when the session
+    // shared its writer; without one the switch carries no factories.
+    let (provider, observe) = match &switching.diag {
+        Some(diag) => crate::connect_observed(
+            resolved,
+            got.access.key.clone(),
+            got.access.signer.clone(),
+            got.access.lua.as_ref().map(|lua| (lua, got.label.as_str())),
+            &here,
+            diag,
+        )
+        .map_err(|failure| invalid(failure.message))?,
+        None => (
+            crate::connect(
+                resolved,
+                got.access.key.clone(),
+                got.access.signer.clone(),
+                got.access.lua.as_ref().map(|lua| (lua, got.label.as_str())),
+                &here,
+            )
+            .map_err(|failure| invalid(failure.message))?,
+            None,
+        ),
+    };
     let mut lookup = |provider: &ProviderData| -> Result<(String, Access), Failure> {
         match &judge_got {
             _ if provider.name == session => Ok((got.label.clone(), got.access.clone())),
@@ -410,13 +438,20 @@ pub(crate) fn prepare(
             )),
         }
     };
-    let reviewer = crate::choose_reviewer(
+    // The reviewer's failure is not a rejection: the loop gets it with no
+    // factory, and every reviewed call escalates it (`docs/permissions.md`,
+    // "How it runs").
+    let (reviewer, reviewer_observe) = match crate::choose_reviewer(
         &switching.registry,
         &switching.config,
         &resolved,
         &here,
         &mut lookup,
-    );
+        switching.diag.as_ref(),
+    ) {
+        Ok((reviewer, observe)) => (Ok(reviewer), observe),
+        Err(failure) => (Err(failure), None),
+    };
     // The keys and the selected labels publish together, under one lock,
     // only once the whole preparation has succeeded: a `connect` failure
     // or a cancelled read publishes nothing (`docs/model-routing.md`,
@@ -485,6 +520,8 @@ pub(crate) fn prepare(
         addendum: switching.registry.addendum(&resolved).map(str::to_owned),
         handoff: crate::handoff::handoff_settings(&switching.config, &reference),
         reviewer,
+        observe,
+        reviewer_observe,
         web_search,
         // At most one notice: a configured level the model lacks.
         notice: notices.into_iter().next(),

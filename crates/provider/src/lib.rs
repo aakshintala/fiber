@@ -10,6 +10,7 @@ pub mod anthropic_messages;
 mod anthropic_messages_decode;
 mod call;
 mod error;
+pub use call::RequestObservation;
 pub mod google_generative_ai;
 mod google_generative_ai_decode;
 mod google_generative_ai_request;

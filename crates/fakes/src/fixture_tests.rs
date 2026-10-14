@@ -6,7 +6,7 @@ use std::sync::mpsc;
 use std::thread;
 use std::time::Duration;
 
-use super::{mcp_fixture, script};
+use super::{lua_fixture, mcp_fixture, script};
 use crate::TempDir;
 use crate::deadline::Deadline;
 
@@ -157,5 +157,15 @@ fn the_mcp_fixture_fails_its_start_on_a_fail_start_file() {
     assert!(
         !dir.path().join("requests.log").exists(),
         "nothing is read before the exit",
+    );
+}
+
+/// The fixture directory is built from the crate's manifest dir at
+/// compile time; no run-time read of the repository is involved.
+#[test]
+fn lua_fixture_is_the_fixture_directory_beside_the_crate() {
+    assert_eq!(
+        lua_fixture(),
+        std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("lua-fixture")
     );
 }

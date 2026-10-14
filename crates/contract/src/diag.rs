@@ -4,10 +4,13 @@
 //! [`crate::clock::Clock`], it defines the seam and contains no behaviour;
 //! `log::diag::Diag` writes the lines.
 
+use std::num::NonZeroU32;
 use std::sync::Arc;
 use std::time::Instant;
 
 use serde::Serialize;
+
+use crate::provider::{ModelCall, ModelRequest};
 
 /// Why Fiber made a provider request.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
@@ -72,6 +75,14 @@ pub trait DebugLog: Send + Sync {
     /// Writes one `provider_request` line, when debugging.
     fn provider_request(&self, request: &ProviderRequest);
 }
+
+/// Builds one observed model call for `request`: the loop calls the
+/// session's factory for a turn's call with its attempt, the reviewer's
+/// factory for a review with the first attempt, and the session's factory
+/// for a warming refresh with the first attempt. The ordinal starts at 1,
+/// so 0 is unrepresentable. A factory captures its route's identity and
+/// never infers it from mutable session state.
+pub type Observe = Arc<dyn Fn(&ModelRequest, NonZeroU32) -> Box<dyn ModelCall> + Send + Sync>;
 
 /// One operation an `op_timing` line may name (`docs/state.md`,
 /// "Diagnostic logs"): the `op` in its `data`. The list is closed: a new

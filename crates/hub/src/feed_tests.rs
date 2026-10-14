@@ -15,7 +15,7 @@ use std::fs;
 use std::io::{BufRead, BufReader, Read};
 use std::os::unix::net::UnixStream;
 use std::path::PathBuf;
-use std::sync::atomic::Ordering;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex, mpsc};
 use std::thread;
 use std::time::Duration;
@@ -1041,6 +1041,43 @@ fn stop_returns_when_a_silent_session_stays_open() {
     // Joined, not just told to end: the summary thread held the feed.
     assert_eq!(Arc::strong_count(&feed), 1);
     assert!(lock(&feed.state).tracked.is_empty());
+}
+
+#[test]
+fn join_returns_only_after_the_joined_thread_ends() {
+    let finished = Arc::new(AtomicBool::new(false));
+    let (release_tx, release_rx) = mpsc::channel();
+    let worker = thread::spawn({
+        let finished = Arc::clone(&finished);
+        move || {
+            release_rx.recv().unwrap();
+            finished.store(true, Ordering::SeqCst);
+        }
+    });
+    // Armed before the joiner spawns: fires when it is inside `join`.
+    let (inside_tx, inside_rx) = mpsc::channel();
+    pause_join_in_lock(move || {
+        inside_tx.send(()).unwrap_or(());
+    });
+    let (done_tx, done_rx) = mpsc::channel();
+    thread::spawn(move || {
+        join(worker);
+        done_tx.send(()).unwrap_or(());
+    });
+    // The signal proves the joiner is inside `join`, while the worker
+    // is still parked on the release the test holds: a return now means
+    // `join` never waited, not slow scheduling.
+    Deadline::after(DEADLINE).recv_or_fail(&inside_rx, "the joiner reaches inside join");
+    assert!(
+        done_rx.try_recv().is_err(),
+        "join returns before the joined thread ends"
+    );
+    release_tx.send(()).unwrap();
+    Deadline::after(DEADLINE).recv_or_fail(&done_rx, "join returns after the thread ends");
+    assert!(
+        finished.load(Ordering::SeqCst),
+        "join returns after the thread's last write"
+    );
 }
 
 #[test]

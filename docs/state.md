@@ -236,7 +236,7 @@ What is recorded:
   refresh, such as a quota or model list, that fails while no session is
   running.
 - **An extension's `host.log` lines:** each is a line in the session's file
-  with `process` `session`, `code` `extension_log`, the extension's name and
+  with `process` `session` or `ask`, `code` `extension_log`, the extension's name and
   the message as the extension wrote it.
 - **The hub's operations:** `hub_started` and `hub_stopped`;
   `environment_built`, `info` when the login-shell capture succeeded and
@@ -246,11 +246,24 @@ What is recorded:
   `device_paired` and `device_revoked`, naming the device and the client that
   acted; `session_started` and `session_resumed`, naming the session and the
   device that asked.
+- **At `debug`, a native model call's request:** one `provider_request`
+  line when the call ends, with `purpose` `model_call`. `data` holds
+  `provider`, `model`, `host` (the authority without userinfo), `path`
+  (no query string or fragment, percent-decoded), `status` when a response
+  came, `attempt` from 1, `request_bytes` as posted, `response_bytes` as
+  read, and `headers_ms`, `first_token_ms` and `total_ms`, whole
+  milliseconds from the send. A retried call writes one line per attempt;
+  a request never sent writes none. Requests made through Lua providers
+  are not yet recorded.
 - **At `debug`, the hub's peak memory:** a `peak_memory` line just before
   each `hub_stopped`. `data.peak_kib` is the process's peak so far: peak RSS
   (`VmHWM`) on Linux, and peak physical footprint on macOS
   (`docs/performance.md`, "Measuring"). A peak that cannot be read writes no
   line.
+- **At `debug`, a session or ask process's peak memory:** a `peak_memory`
+  line after each turn's `turn_completed` and one more at the process's
+  orderly end. `data.peak_kib` is the process's peak so far, measured the
+  same way. A peak that cannot be read writes no line.
 - **At `debug`, how long a timed operation takes:** one `op_timing` line
   when it ends, written by the one timer every timed place goes through
   (`log::diag::timed`). `data` holds `op`, the operation's name, and `ms`,
@@ -262,13 +275,15 @@ What is recorded:
   or top-level operation lands with its timer in the same pull request.
 
 An event inside a running session is recorded in that session's log and
-nowhere else; a hook that fails in a session, for example, is a `notice` or
+nowhere else, with one exception: a session or ask process's own diagnostic
+lines, its `extension_log`, `provider_request`, `peak_memory` and `op_timing`
+lines, are recorded in `logs/<kind>-<id>.log` beside the session log, never
+in it; a hook that fails in a session, for example, is a `notice` or
 `hook_failed` there (`docs/extensions.md`, "When a hook fails"). Nothing in
 `logs/` holds a credential or token, prompt or model text, a tool's arguments
 or a configuration value, with one exception: an `extension_log` line is the
 extension's own text, and Fiber records it as given. A failed hook is named
-with its code, never its content. A level that records requests, their paths,
-statuses and timings, is not built.
+with its code, never its content.
 
 **Bounds.** `logs/hub.log` is renamed to `logs/hub.log.1` when it passes
 10 MiB, replacing any older one; its single writer makes the rename safe.

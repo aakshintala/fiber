@@ -90,7 +90,7 @@ fn repository_missing(why: &str) -> bool {
 /// Where extensions are fetched from.
 pub struct Origin {
     git: String,
-    url: Box<dyn Fn(&str) -> String>,
+    url: Box<dyn Fn(&str) -> String + Send + Sync>,
 }
 
 impl Origin {
@@ -100,7 +100,10 @@ impl Origin {
     }
 
     /// The `git` program, and the URL a repository name is fetched from.
-    pub fn new(git: impl Into<String>, url: impl Fn(&str) -> String + 'static) -> Self {
+    pub fn new(
+        git: impl Into<String>,
+        url: impl Fn(&str) -> String + Send + Sync + 'static,
+    ) -> Self {
         Self {
             git: git.into(),
             url: Box::new(url),

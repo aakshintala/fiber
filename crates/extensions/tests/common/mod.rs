@@ -8,16 +8,24 @@
     reason = "test helpers; a failure is the test's"
 )]
 
+use std::collections::BTreeMap;
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, mpsc};
 use std::time::Duration;
 
 use config::{Config, ProjectKey, Sources};
+use contract::events::{OfferDecision, OfferedItem, OfferedKind};
+use contract::repository::{Decided, RepositoryCode};
+use contract::shapes::Failure;
 use contract::signing::{SignRequest, Signer};
-use extensions::{CredentialPair, Error, LuaExtension, LuaProvider, Origin, Request, plan};
+use extensions::{
+    CopyHold, CredentialPair, Error, Fetch, Index, LuaExtension, LuaProvider, Origin, RepoItem,
+    Request, SessionOffer, Store, declared_items, hash, plan,
+};
 use fakes::Deadline;
 use fakes::clock::FakeClock;
+use fakes::git::git;
 use serde_json::{Value, json};
 
 #[allow(unused_imports, reason = "each test file uses a different part")]
@@ -404,6 +412,74 @@ pub(crate) fn sign_with(
     }
 }
 
+/// Repositories by name, in the setup's directory.
+pub(crate) struct Repos<'a> {
+    setup: &'a Setup,
+    paths: BTreeMap<String, PathBuf>,
+}
+
+impl<'a> Repos<'a> {
+    pub(crate) fn new(setup: &'a Setup) -> Self {
+        Self {
+            setup,
+            paths: BTreeMap::new(),
+        }
+    }
+
+    /// A repository `host/owner/repo` holding an extension in `dir` (empty
+    /// for its root), committed and tagged `tag`. A later call commits
+    /// again.
+    pub(crate) fn tag(
+        &mut self,
+        repo: &str,
+        dir: &str,
+        tag: &str,
+        manifest: &Value,
+        extra: &[(&str, &str)],
+    ) {
+        let path = self.setup.root().join("repos").join(repo.replace('/', "-"));
+        if !path.exists() {
+            fs::create_dir_all(&path).unwrap();
+            git(&path, &["init", "--quiet"]);
+        }
+        let ext = path.join(dir);
+        write(&ext.join("extension.json"), &manifest.to_string());
+        write(
+            &ext.join("providers/acme.json"),
+            &provider("acme", &["m1"]).to_string(),
+        );
+        for (file, text) in extra {
+            write(&ext.join(file), text);
+        }
+        git(&path, &["add", "."]);
+        git(
+            &path,
+            &["commit", "--quiet", "--allow-empty", "-m", "release"],
+        );
+        if !tag.is_empty() {
+            git(&path, &["tag", tag]);
+        }
+        self.paths.insert(repo.to_owned(), path);
+    }
+
+    pub(crate) fn commit(&self, repo: &str, tag: &str) -> String {
+        git(
+            self.paths
+                .get(repo)
+                .unwrap_or_else(|| panic!("no such repo: {repo}")),
+            &["rev-parse", &format!("{tag}^{{commit}}")],
+        )
+    }
+
+    pub(crate) fn origin(&self) -> Origin {
+        let paths = self.paths.clone();
+        Origin::new("git", move |repo| match paths.get(repo) {
+            Some(path) => format!("file://{}", path.display()),
+            None => "file:///nonexistent-repository".into(),
+        })
+    }
+}
+
 /// `require("go_<name>")` in `dir` signals that the callback has started:
 /// the loader opens the fifo for read, the writer here reports it and
 /// closes the fifo, and the module reads empty.
@@ -420,4 +496,229 @@ pub(crate) fn go_module(dir: &Path, name: &str) -> mpsc::Receiver<()> {
         drop(held);
     });
     rx
+}
+
+/// Pinned-copy fixtures for `pinned_depends` (resolution) and
+/// `pinned_copy` (transaction, completion, legacy, confinement): a
+/// repository workspace declaring one package, approved through the public
+/// [`Store`] API with dependencies from local tagged repositories.
+pub(crate) const FIBER: &str = "0.1.0";
+pub(crate) fn project() -> ProjectKey {
+    ProjectKey::new("pin").unwrap()
+}
+pub(crate) fn named(name: &str, depends: &[(&str, &str)]) -> Value {
+    let mut m = manifest(name);
+    m.as_object_mut().unwrap().insert(
+        "depends".into(),
+        json!(depends.iter().copied().collect::<BTreeMap<_, _>>()),
+    );
+    m
+}
+/// The manifest `name` with `depends` and this install step.
+pub(crate) fn installing(name: &str, depends: &[(&str, &str)], step: &str) -> Value {
+    let mut m = named(name, depends);
+    m.as_object_mut()
+        .unwrap()
+        .insert("install".into(), json!(["sh", "-c", step]));
+    m
+}
+/// The workspace declares the package at `pkg` with this manifest, listed
+/// by git as a repository package is.
+pub(crate) fn declare(setup: &Setup, root: &Value) {
+    let ws = setup.workspace();
+    if !ws.join(".git").exists() {
+        git(&ws, &["init", "--quiet"]);
+    }
+    write(&ws.join("pkg/extension.json"), &root.to_string());
+    write(&ws.join("pkg/init.lua"), "-- entry\n");
+    write(
+        &ws.join(".fiber/config.json"),
+        &json!({"repository_extensions": [{"path": "pkg"}]}).to_string(),
+    );
+}
+pub(crate) fn store(setup: &Setup, repos: &Repos, clock: &Arc<FakeClock>) -> Store {
+    Store::new(&setup.home(), &project(), Arc::clone(clock) as Arc<_>).fetching(Fetch::new(
+        repos.origin(),
+        FIBER,
+        Arc::clone(clock) as Arc<_>,
+    ))
+}
+/// The declared extension and its content hash.
+pub(crate) fn item(setup: &Setup, clock: &Arc<FakeClock>) -> (extensions::RepoItem, String) {
+    let items = declared_items(&setup.workspace(), &**clock).unwrap();
+    let found = items
+        .into_iter()
+        .find(|i| i.kind == OfferedKind::Extension)
+        .unwrap();
+    let digest = hash(&mut Index::load(&setup.home()), &found).unwrap();
+    (found, digest)
+}
+/// How long a blocking store operation may take before the test fails
+/// instead of hanging.
+const STORE_OPERATION_WITHIN: Duration = Duration::from_secs(10);
+
+/// Runs one blocking store operation on a worker and receives its result
+/// through one named deadline. Joining after the result proves the worker
+/// has returned before the test continues.
+fn on_worker<T: Send + 'static>(
+    waited_for: &'static str,
+    operation: impl FnOnce() -> T + Send + 'static,
+) -> T {
+    let (done, result) = mpsc::channel();
+    let deadline = Deadline::after(STORE_OPERATION_WITHIN);
+    let worker = std::thread::spawn(move || {
+        done.send(operation()).unwrap();
+    });
+    let result = deadline.recv_or_fail(&result, waited_for);
+    worker.join().unwrap();
+    result
+}
+
+/// Store operations that can block on the filesystem, git or install steps.
+/// Tests use these methods instead of calling the synchronous API directly.
+pub(crate) trait StoreOperations {
+    fn approve_on_worker(&self, item: &RepoItem, hash: &str) -> Result<(), Error>;
+    fn ensure_copy_on_worker(&self, item: &RepoItem, hash: &str) -> Result<CopyHold, Error>;
+}
+
+impl StoreOperations for Store {
+    fn approve_on_worker(&self, item: &RepoItem, hash: &str) -> Result<(), Error> {
+        let store = self.clone();
+        let item = item.clone();
+        let hash = hash.to_owned();
+        on_worker("the approval", move || store.approve(&item, &hash))
+    }
+
+    fn ensure_copy_on_worker(&self, item: &RepoItem, hash: &str) -> Result<CopyHold, Error> {
+        let store = self.clone();
+        let item = item.clone();
+        let hash = hash.to_owned();
+        on_worker("the copy", move || store.ensure_copy(&item, &hash))
+    }
+}
+
+/// Approves the declared extension with its dependencies fetched from
+/// `repos`, and returns its content hash. The approval blocks on git and
+/// install steps, so it runs on a worker under one deadline: a stall fails
+/// the test instead of hanging it.
+pub(crate) fn approve(setup: &Setup, repos: &Repos) -> String {
+    let clock = FakeClock::new();
+    let store = store(setup, repos, &clock);
+    let (found, digest) = item(setup, &clock);
+    let waiting = digest.clone();
+    on_worker("the approval", move || store.approve(&found, &waiting)).unwrap();
+    digest
+}
+/// Runs one offer decision on a worker under one deadline: an approval
+/// blocks on git and install steps, so a stall fails the test instead of
+/// hanging it. `Never` and `Skip` never fetch; only `Approve` needs this,
+/// but every decision reads the same way.
+pub(crate) fn decide_on_worker(
+    offer: &SessionOffer,
+    item: &OfferedItem,
+    decision: OfferDecision,
+) -> Result<Decided, Failure> {
+    let offer = offer.clone();
+    let item = item.clone();
+    on_worker("the decision", move || offer.decide(&item, decision))
+}
+/// Lists the pending offers on a worker under one deadline: gathering
+/// declarations reads the workspace, so a stall fails the test instead of
+/// hanging it.
+pub(crate) fn unapproved_on_worker(
+    offer: &SessionOffer,
+) -> Result<Vec<contract::repository::Unapproved>, Failure> {
+    let offer = offer.clone();
+    on_worker("the offers", move || offer.unapproved())
+}
+/// The content hash of the declared extension, without approving.
+pub(crate) fn digest_of(setup: &Setup) -> String {
+    let clock = FakeClock::new();
+    item(setup, &clock).1
+}
+pub(crate) fn depends_home(setup: &Setup, digest: &str) -> PathBuf {
+    setup
+        .home()
+        .join("pinned")
+        .join(digest)
+        .join(".fiber-depends")
+}
+pub(crate) fn dep_dir(setup: &Setup, digest: &str, dep: &str) -> PathBuf {
+    depends_home(setup, digest)
+        .join("extensions")
+        .join(config::dir_name(dep))
+}
+/// The installed version of `dep` inside the pinned copy: the tag it was
+/// fetched at, as its install record says (a package's manifest keeps its
+/// own version across tags).
+pub(crate) fn dep_version(setup: &Setup, digest: &str, dep: &str) -> String {
+    dep_record(setup, digest, dep)
+        .get("version")
+        .and_then(Value::as_str)
+        .unwrap()
+        .to_owned()
+}
+/// The install record of `dep` inside the pinned copy.
+pub(crate) fn dep_record(setup: &Setup, digest: &str, dep: &str) -> Value {
+    let text = fs::read_to_string(dep_dir(setup, digest, dep).join(".fiber.json")).unwrap();
+    serde_json::from_str(&text).unwrap()
+}
+/// The names installed inside the pinned copy, in order; dotfiles are
+/// the plan's staging directories, never installs.
+pub(crate) fn dep_names(setup: &Setup, digest: &str) -> Vec<String> {
+    let mut names: Vec<String> = fs::read_dir(depends_home(setup, digest).join("extensions"))
+        .map(|entries| {
+            entries
+                .map(|e| e.unwrap().file_name().to_string_lossy().into_owned())
+                .collect()
+        })
+        .unwrap_or_default();
+    names.retain(|n| !n.starts_with('.'));
+    names.sort();
+    names
+}
+/// The approval file for `digest` under the test project.
+pub(crate) fn approval(setup: &Setup, digest: &str) -> PathBuf {
+    setup
+        .home()
+        .join("projects")
+        .join("pin")
+        .join("approvals")
+        .join(digest)
+}
+pub(crate) fn ready(setup: &Setup, digest: &str) -> PathBuf {
+    setup.home().join("pinned").join(format!("{digest}.ready"))
+}
+pub(crate) fn copy(setup: &Setup, digest: &str) -> PathBuf {
+    setup.home().join("pinned").join(digest)
+}
+/// Approves a counting root with one dependency, and returns its hash.
+pub(crate) fn counting_root(setup: &Setup, repos: &mut Repos) -> String {
+    let helper = "example.com/acme/helper";
+    repos.tag(helper, "", "v1.0.0", &manifest(helper), &[]);
+    let root = "fiber.test/root";
+    declare(
+        setup,
+        &installing(root, &[(helper, "1.0")], "echo x >> counter"),
+    );
+    approve(setup, repos)
+}
+pub(crate) fn counter(setup: &Setup, digest: &str) -> String {
+    fs::read_to_string(copy(setup, digest).join("counter")).unwrap_or_default()
+}
+/// A file outside Fiber home with sentinel bytes, and its directory.
+pub(crate) fn outside(root: &Path) -> (PathBuf, PathBuf) {
+    let dir = root.join("outside");
+    fs::create_dir_all(&dir).unwrap();
+    let target = dir.join("target.txt");
+    fs::write(&target, "untouched\n").unwrap();
+    (dir, target)
+}
+pub(crate) fn outside_names(dir: &Path) -> Vec<String> {
+    let mut names: Vec<String> = fs::read_dir(dir)
+        .unwrap()
+        .map(|e| e.unwrap().file_name().to_string_lossy().into_owned())
+        .collect();
+    names.sort();
+    names
 }

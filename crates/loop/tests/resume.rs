@@ -4239,6 +4239,8 @@ fn resumed_thinking_seeds_the_session_choice_for_the_next_switch() {
                 notice: None,
                 applied: None,
                 credential_files: Vec::new(),
+                observe: None,
+                reviewer_observe: None,
             })
         },
     );

@@ -804,7 +804,32 @@ pub(crate) fn invalid() -> Refused {
     }
 }
 
+/// Test seam: armed once by the `join` test; fires when the joiner is
+/// inside [`join`], before it blocks. Compiles to nothing outside tests
+/// and never alters control flow. Follows the `pairing.rs` `Pause`
+/// precedent: the test arms a hook that signals the code under test has
+/// reached the waiting point.
+#[cfg(test)]
+static JOIN_PAUSE: Mutex<Option<Box<dyn FnOnce() + Send>>> = Mutex::new(None);
+
+#[cfg(test)]
+pub(crate) fn pause_join_in_lock(hook: impl FnOnce() + Send + 'static) {
+    *lock(&JOIN_PAUSE) = Some(Box::new(hook));
+}
+
+#[cfg(test)]
+fn paused_join() {
+    // Taken then run without the lock held, as `pairing.rs` does: a
+    // blocking hook must not stop another thread arming the seam.
+    let hook = lock(&JOIN_PAUSE).take();
+    if let Some(hook) = hook {
+        hook();
+    }
+}
+
 fn join(handle: JoinHandle<()>) {
+    #[cfg(test)]
+    paused_join();
     match handle.join() {
         Ok(()) | Err(_) => {}
     }

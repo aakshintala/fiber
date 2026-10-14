@@ -483,12 +483,11 @@ fn an_after_tool_hook_calling_host_log_writes_one_live_line_and_its_diagnostic_l
     assert_eq!(logs[0]["payload"]["extension"], "fiber.test/log");
     assert_eq!(logs[0]["payload"]["message"], "seen");
     let id = run.lines[0]["session_id"].as_str().unwrap();
-    let text =
-        fs::read_to_string(setup.home().join("logs").join(format!("session-{id}.log"))).unwrap();
+    let text = fs::read_to_string(setup.home().join("logs").join(format!("ask-{id}.log"))).unwrap();
     assert_eq!(text.lines().count(), 1, "one diagnostic line");
     let line: Value = serde_json::from_str(text.trim()).unwrap();
     assert_eq!(line["level"], "info");
-    assert_eq!(line["process"], "session");
+    assert_eq!(line["process"], "ask");
     assert_eq!(line["session_id"], id);
     assert_eq!(line["code"], "extension_log");
     assert_eq!(line["message"], "fiber.test/log: seen");

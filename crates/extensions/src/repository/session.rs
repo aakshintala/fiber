@@ -17,7 +17,7 @@ use super::content::{Index, hash};
 use super::declared::{RepoItem, declared_items};
 use super::kind_name;
 use super::offer::pending;
-use super::store::Store;
+use super::store::{Fetch, Store};
 use crate::Error;
 
 /// The code one session's repository declares, with the approvals in Fiber
@@ -42,11 +42,13 @@ impl std::fmt::Debug for SessionOffer {
 
 impl SessionOffer {
     /// The repository at `workspace`, with approvals in `home` for `project`.
-    /// The clock bounds an extension's install step when its copy is built.
-    pub fn new(home: &Path, project: &ProjectKey, workspace: &Path, clock: Arc<dyn Clock>) -> Self {
+    /// Dependencies fetch through `fetch`, whose clock also bounds an
+    /// extension's install step when its copy is built.
+    pub fn new(home: &Path, project: &ProjectKey, workspace: &Path, fetch: Fetch) -> Self {
+        let clock = fetch.clock();
         Self {
             home: home.to_path_buf(),
-            store: Store::new(home, project, Arc::clone(&clock)),
+            store: Store::new(home, project, Arc::clone(&clock)).fetching(fetch),
             workspace: workspace.to_path_buf(),
             clock,
         }

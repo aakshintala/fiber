@@ -18,7 +18,7 @@ use std::time::Duration;
 
 use contract::clock::Clock;
 
-use common::{Setup, drive, manifest, provider, write};
+use common::{Repos, Setup, drive, manifest, write};
 use contract::ErrorCode;
 use extensions::{Error, Installed, Origin, Provenance, Request, SHORT_NAMES, list, plan, removal};
 use fakes::git::git;
@@ -39,65 +39,6 @@ fn commit(i: &Installed) -> Option<String> {
     match &i.provenance {
         Provenance::Git { commit } => Some(commit.clone()),
         Provenance::Path(_) => None,
-    }
-}
-
-/// Repositories by name, in the setup's directory.
-struct Repos<'a> {
-    setup: &'a Setup,
-    paths: BTreeMap<String, PathBuf>,
-}
-
-impl<'a> Repos<'a> {
-    fn new(setup: &'a Setup) -> Self {
-        Self {
-            setup,
-            paths: BTreeMap::new(),
-        }
-    }
-
-    /// A repository `host/owner/repo` holding an extension in `dir` (empty
-    /// for its root), committed and tagged `tag`. A later call commits
-    /// again.
-    fn tag(&mut self, repo: &str, dir: &str, tag: &str, manifest: &Value, extra: &[(&str, &str)]) {
-        let path = self.setup.root().join("repos").join(repo.replace('/', "-"));
-        if !path.exists() {
-            fs::create_dir_all(&path).unwrap();
-            git(&path, &["init", "--quiet"]);
-        }
-        let ext = path.join(dir);
-        write(&ext.join("extension.json"), &manifest.to_string());
-        write(
-            &ext.join("providers/acme.json"),
-            &provider("acme", &["m1"]).to_string(),
-        );
-        for (file, text) in extra {
-            write(&ext.join(file), text);
-        }
-        git(&path, &["add", "."]);
-        git(
-            &path,
-            &["commit", "--quiet", "--allow-empty", "-m", "release"],
-        );
-        if !tag.is_empty() {
-            git(&path, &["tag", tag]);
-        }
-        self.paths.insert(repo.to_owned(), path);
-    }
-
-    fn commit(&self, repo: &str, tag: &str) -> String {
-        git(
-            &self.paths[repo],
-            &["rev-parse", &format!("{tag}^{{commit}}")],
-        )
-    }
-
-    fn origin(&self) -> Origin {
-        let paths = self.paths.clone();
-        Origin::new("git", move |repo| match paths.get(repo) {
-            Some(path) => format!("file://{}", path.display()),
-            None => "file:///nonexistent-repository".into(),
-        })
     }
 }
 

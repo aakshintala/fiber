@@ -38,3 +38,7 @@ pub trait Drive: Send + Sync {
         answer: crate::inbox::Ack,
     );
 }
+
+#[cfg(test)]
+#[path = "extension_tests.rs"]
+mod tests;

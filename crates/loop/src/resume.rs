@@ -691,6 +691,10 @@ impl Loop {
         }
         let outcome = completed.outcome;
         self.append(&Event::TurnCompleted(completed), turn, None)?;
+        // The turn's peak memory, right after its `turn_completed`: a turn
+        // that ends without one writes none, and a failed append writes
+        // none either. Best-effort: a failed read changes nothing.
+        self.diag.peak_memory();
         Ok(Some(outcome))
     }
 }

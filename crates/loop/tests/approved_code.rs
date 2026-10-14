@@ -1578,6 +1578,8 @@ fn a_switch_before_the_first_prompt_loads_nothing() {
             notice: None,
             applied: None,
             credential_files: Vec::new(),
+            observe: None,
+            reviewer_observe: None,
         })
     });
     let rewound = rewound.switcher(prepare, r#loop::Switchable { chosen: None });

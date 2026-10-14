@@ -147,6 +147,7 @@ fn parts(
         None,
         None,
         reads,
+        log::diag::Process::Session,
     )
 }
 

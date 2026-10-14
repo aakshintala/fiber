@@ -8,18 +8,26 @@ use contract::repository::{Decided, RepositoryCode, Unapproved};
 use serde_json::json;
 
 use super::declared_tests::Repo;
-use super::{Decision, Index, SessionOffer, Store, hash, pending};
+use super::{Decision, Fetch, Index, SessionOffer, Store, hash, pending};
+use crate::Origin;
 
 fn project() -> ProjectKey {
     ProjectKey::new("-p").unwrap()
 }
 
 fn session(repo: &Repo) -> SessionOffer {
+    // A missing git program: nothing here has dependencies, so nothing may
+    // fetch, and any attempt fails instead of hanging on the network.
+    let clock = fakes::clock::FakeClock::new();
     SessionOffer::new(
         &repo.home(),
         &project(),
         &repo.root(),
-        fakes::clock::FakeClock::new(),
+        Fetch::new(
+            Origin::new("fiber-no-such-git-program", |name| name.to_owned()),
+            "0.1.0",
+            clock,
+        ),
     )
 }
 

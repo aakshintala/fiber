@@ -3,8 +3,12 @@
 //! call with them (`docs/model-routing.md`, "Protocols and providers").
 
 use std::io::{BufRead, BufReader, Read};
+use std::num::NonZeroU32;
 use std::sync::Arc;
+use std::time::{Duration, Instant};
 
+use contract::clock::Clock;
+use contract::diag::{DebugLog, ProviderRequest, Purpose};
 use contract::events::CacheLifetime;
 use contract::provider::{CallError, CallUsage, Delta, InputSize, ModelCall, ModelRequest, Reply};
 
@@ -24,6 +28,169 @@ pub(crate) type Decode = fn(
     &mut dyn FnMut(Delta),
 ) -> Result<Reply, (Error, Option<CallUsage>)>;
 
+/// What one observed model call records: the writer, the clock, the
+/// attempt and the model. Immutable: a factory captures one route's
+/// values and the loop passes the attempt explicitly, so no global or
+/// mutable context names the call. The model is bound by the protocol's
+/// `call_observed`, which knows its own endpoint; the direct test seam
+/// binds it explicitly.
+#[derive(Clone)]
+pub struct RequestObservation {
+    log: Arc<dyn DebugLog>,
+    clock: Arc<dyn Clock>,
+    attempt: NonZeroU32,
+    model: Option<String>,
+}
+
+impl RequestObservation {
+    /// Observes one call as `attempt` of its logical request, writing to
+    /// `log` and stamping `clock`. The model binds later, per endpoint.
+    pub fn new(log: Arc<dyn DebugLog>, clock: Arc<dyn Clock>, attempt: NonZeroU32) -> Self {
+        Self {
+            log,
+            clock,
+            attempt,
+            model: None,
+        }
+    }
+
+    /// Binds the model the call goes to: the endpoint's own id. Each
+    /// native `call_observed` binds its own after the debugging check, so
+    /// the ordinary path clones no model.
+    pub fn with_model(mut self, model: String) -> Self {
+        self.model = Some(model);
+        self
+    }
+
+    /// Whether the writer records debug lines: an `info` writer runs the
+    /// call unobserved.
+    pub(crate) fn debugging(&self) -> bool {
+        self.log.debugging()
+    }
+}
+
+/// One model call's diagnostic record while it runs: the milestones every
+/// `_ms` counts from the send start, and the bytes read so far. Built
+/// once the send's outcome is known, finished exactly once when the call
+/// returns or its open reader ends.
+pub(crate) struct ObservationFinish {
+    log: Arc<dyn DebugLog>,
+    clock: Arc<dyn Clock>,
+    provider: String,
+    model: Option<String>,
+    url: String,
+    redact: Secrets,
+    attempt: NonZeroU32,
+    request_bytes: u64,
+    start: Instant,
+    headers_at: Option<Instant>,
+    status: Option<u16>,
+    first_token_at: Option<Instant>,
+    bytes: u64,
+    done: bool,
+}
+
+impl ObservationFinish {
+    pub(crate) fn new(
+        observation: &RequestObservation,
+        provider: &str,
+        url: &str,
+        request_bytes: u64,
+        start: Instant,
+    ) -> Self {
+        Self {
+            log: Arc::clone(&observation.log),
+            clock: Arc::clone(&observation.clock),
+            provider: provider.to_owned(),
+            model: observation.model.clone(),
+            url: url.to_owned(),
+            redact: Secrets::default(),
+            attempt: observation.attempt,
+            request_bytes,
+            start,
+            headers_at: None,
+            status: None,
+            first_token_at: None,
+            bytes: 0,
+            done: false,
+        }
+    }
+
+    /// Records the response head: when it arrived and what status came.
+    pub(crate) fn sent(&mut self, headers_at: Instant, status: u16) {
+        self.headers_at = Some(headers_at);
+        self.status = Some(status);
+    }
+
+    /// Records a sent failure's milestones: the head when it arrived and
+    /// the bytes read so far. A send that failed before the head keeps
+    /// both absent.
+    pub(crate) fn dispatched(&mut self, dispatched: &crate::http::Dispatched) {
+        self.headers_at = dispatched.headers_at;
+        self.status = dispatched.status;
+        self.bytes = dispatched.bytes_read;
+    }
+
+    /// Sets the secrets the recorded target is redacted with: the call's
+    /// own, enriched by the send, with every fixed header value of this
+    /// attempt. Only the recorded host and path go through it; the
+    /// request itself is unchanged.
+    pub(crate) fn set_redact(&mut self, redact: Secrets) {
+        self.redact = redact;
+    }
+
+    /// Stamps the first streamed token, once: the first `Delta` of any
+    /// kind latches it before the delta is forwarded, and a later one
+    /// never overwrites it. Headers, framing and reads alone never set it.
+    pub(crate) fn latch_first_token(&mut self) {
+        if self.first_token_at.is_none() {
+            self.first_token_at = Some(self.clock.now());
+        }
+    }
+
+    /// Holds the response bytes read so far.
+    pub(crate) fn set_bytes(&mut self, bytes: u64) {
+        self.bytes = bytes;
+    }
+
+    /// Writes the one `provider_request` line, once. A second call writes
+    /// nothing: the open reader's error and its drop share this guard.
+    pub(crate) fn finish(&mut self) {
+        if self.done {
+            return;
+        }
+        self.done = true;
+        let total = self.clock.now();
+        let (host, path) = http::sanitized_target(&self.url, &self.redact);
+        self.log.provider_request(&ProviderRequest {
+            provider: self.provider.clone(),
+            model: self.model.clone(),
+            purpose: Purpose::ModelCall,
+            host,
+            path,
+            status: self.status,
+            attempt: self.attempt.get(),
+            request_bytes: self.request_bytes,
+            response_bytes: self.bytes,
+            headers_ms: self.headers_at.map(|at| ms_since(self.start, at)),
+            first_token_ms: self.first_token_at.map(|at| ms_since(self.start, at)),
+            total_ms: ms_since(self.start, total),
+        });
+    }
+}
+
+/// Whole milliseconds from `start` to `end`: truncated, saturating to
+/// `u64::MAX`. A clock that runs backwards contributes zero: no panic
+/// and no fabricated duration.
+pub(crate) fn ms_since(start: Instant, end: Instant) -> u64 {
+    duration_ms(end.checked_duration_since(start).unwrap_or(Duration::ZERO))
+}
+
+/// Whole milliseconds in `elapsed`: truncated, saturating to `u64::MAX`.
+pub(crate) fn duration_ms(elapsed: Duration) -> u64 {
+    elapsed.as_millis().try_into().unwrap_or(u64::MAX)
+}
+
 /// One model call, ready to send.
 pub struct Call {
     url: String,
@@ -38,6 +205,7 @@ pub struct Call {
     lifetime: CacheLifetime,
     decode: Decode,
     on_error: fn(Error) -> Error,
+    observation: Option<RequestObservation>,
 }
 
 impl Call {
@@ -64,6 +232,7 @@ impl Call {
             body,
             decode,
             on_error: std::convert::identity,
+            observation: None,
         }
     }
 
@@ -77,10 +246,64 @@ impl Call {
         }
     }
 
+    /// Observes this call, writing one `provider_request` line when the
+    /// call was sent. At `info` the call runs exactly as an unobserved one
+    /// does: no clock is read and no line is written.
+    #[must_use]
+    pub fn observed(self, observation: RequestObservation) -> Call {
+        Call {
+            observation: Some(observation),
+            ..self
+        }
+    }
+
+    /// The observation when it writes: `Some` only while the writer is at
+    /// `debug`. An `info` writer passed here runs the call unchanged, with
+    /// no clock read, no state and no line.
+    fn active(&self) -> Option<&RequestObservation> {
+        self.observation
+            .as_ref()
+            .filter(|observation| observation.debugging())
+    }
+
+    /// The secrets the recorded target is redacted with: the send's own,
+    /// enriched with every fixed header value of this attempt.
+    fn redact_with(&self, secrets: &Secrets) -> Secrets {
+        let mut redact = secrets.clone();
+        for (name, value) in &self.headers {
+            redact.add_header(name, value);
+        }
+        redact
+    }
+
     /// Sends the request and returns the reply's bytes, unread.
     pub fn open(&self) -> Result<impl Read + use<>, Error> {
+        match self.active() {
+            None => {
+                let mut secrets = self.secrets.clone();
+                http::post_signed(
+                    &self.url,
+                    &self.headers,
+                    &self.body,
+                    self.signer.as_deref(),
+                    &self.route,
+                    &self.cancel,
+                    &mut secrets,
+                )
+                .map(|(body, _)| OpenBody::plain(Box::new(body)))
+            }
+            Some(observation) => self.open_observed(observation),
+        }
+    }
+
+    /// Sends the request observed: the finish guard moves into the returned
+    /// reader, so a read error, the end of the stream or the drop writes
+    /// the one line. A send that fails after the request went out writes
+    /// it at once; one that never sent writes none.
+    fn open_observed(&self, observation: &RequestObservation) -> Result<OpenBody, Error> {
         let mut secrets = self.secrets.clone();
-        http::post_signed(
+        let request_bytes = self.body.len() as u64;
+        match http::post_signed_observed(
             &self.url,
             &self.headers,
             &self.body,
@@ -88,22 +311,82 @@ impl Call {
             &self.route,
             &self.cancel,
             &mut secrets,
-        )
-        .map(|(body, _)| body)
+            &observation.clock,
+        ) {
+            Ok(sent) => {
+                let mut finish = ObservationFinish::new(
+                    observation,
+                    &self.provider,
+                    &self.url,
+                    request_bytes,
+                    sent.start,
+                );
+                finish.sent(sent.headers_at, sent.status);
+                finish.set_redact(self.redact_with(&secrets));
+                Ok(OpenBody::observed(Box::new(sent.stream), finish))
+            }
+            Err(failed) => {
+                if let Some(dispatched) = failed.sent {
+                    let mut finish = ObservationFinish::new(
+                        observation,
+                        &self.provider,
+                        &self.url,
+                        request_bytes,
+                        dispatched.start,
+                    );
+                    finish.dispatched(&dispatched);
+                    finish.set_redact(self.redact_with(&secrets));
+                    finish.finish();
+                }
+                Err(failed.error)
+            }
+        }
     }
 }
 
 impl ModelCall for Call {
     fn run(&self, sink: &mut dyn FnMut(Delta)) -> Result<Reply, CallError> {
-        let mut secrets = self.secrets.clone();
-        let (decoded, should_retry) = match http::post_signed(
+        match self.active() {
+            None => {
+                let mut secrets = self.secrets.clone();
+                let (decoded, should_retry) = self.send_plain(sink, &mut secrets);
+                Self::finish_send(
+                    &self.cancel,
+                    self.input_size,
+                    &self.provider,
+                    &secrets,
+                    decoded,
+                    should_retry,
+                )
+            }
+            Some(observation) => self.run_observed(observation, sink),
+        }
+    }
+
+    fn cancel(&self) {
+        self.cancel.cancel();
+    }
+}
+
+/// A send's outcome: the decoded reply, carrying its partial usage on
+/// failure, with the response's `x-should-retry` header.
+type Decoded = (Result<Reply, (Error, Option<CallUsage>)>, Option<bool>);
+
+impl Call {
+    /// Sends the request unobserved and decodes the reply: today's send.
+    #[allow(
+        clippy::result_large_err,
+        reason = "the decode carries its partial alongside the error for the call's usage"
+    )]
+    fn send_plain(&self, sink: &mut dyn FnMut(Delta), secrets: &mut Secrets) -> Decoded {
+        match http::post_signed(
             &self.url,
             &self.headers,
             &self.body,
             self.signer.as_deref(),
             &self.route,
             &self.cancel,
-            &mut secrets,
+            secrets,
         ) {
             Ok((stream, should_retry)) => (
                 (self.decode)(&mut BufReader::new(stream), self.lifetime, sink),
@@ -113,29 +396,199 @@ impl ModelCall for Call {
                 let should_retry = e.should_retry();
                 (Err(((self.on_error)(e), None)), should_retry)
             }
-        };
+        }
+    }
+
+    /// Builds the call's result from its decoded reply: the cancel that
+    /// landed ends it, whatever it returned.
+    #[allow(
+        clippy::result_large_err,
+        reason = "the error is the model call's, returned unchanged"
+    )]
+    fn finish_send(
+        cancel: &Cancel,
+        input_size: InputSize,
+        provider: &str,
+        secrets: &Secrets,
+        decoded: Result<Reply, (Error, Option<CallUsage>)>,
+        should_retry: Option<bool>,
+    ) -> Result<Reply, CallError> {
         // Whatever a cancelled call returns, the cancel ended it.
-        if self.cancel.is_cancelled() {
+        if cancel.is_cancelled() {
             return Err(CallError::Cancelled {
-                usage: crate::unfinished::carried(&decoded, self.input_size),
+                usage: crate::unfinished::carried(&decoded, input_size),
             });
         }
-        let usage = crate::unfinished::carried(&decoded, self.input_size);
+        let usage = crate::unfinished::carried(&decoded, input_size);
         match decoded {
             Ok(mut reply) => {
-                reply.input_size = self.input_size;
+                reply.input_size = input_size;
                 Ok(reply)
             }
             Err((error, _)) => Err(CallError::Failed {
-                failure: error.failure(&self.provider, &secrets),
+                failure: error.failure(provider, secrets),
                 should_retry,
                 usage,
             }),
         }
     }
 
-    fn cancel(&self) {
-        self.cancel.cancel();
+    /// Runs the call observed: one `provider_request` line when the request
+    /// was sent, whatever the call returns. The total runs through decoding
+    /// and the result above, not merely the last byte read. A request never
+    /// sent writes no line.
+    #[allow(
+        clippy::result_large_err,
+        reason = "the error is the model call's, returned unchanged"
+    )]
+    fn run_observed(
+        &self,
+        observation: &RequestObservation,
+        sink: &mut dyn FnMut(Delta),
+    ) -> Result<Reply, CallError> {
+        let mut secrets = self.secrets.clone();
+        // The request body's length as posted: the same figure as the
+        // call's `InputSize::bytes`.
+        let request_bytes = self.body.len() as u64;
+        let outcome = http::post_signed_observed(
+            &self.url,
+            &self.headers,
+            &self.body,
+            self.signer.as_deref(),
+            &self.route,
+            &self.cancel,
+            &mut secrets,
+            &observation.clock,
+        );
+        // The record, built once the send's outcome is known: a request
+        // never sent leaves it absent and writes no line.
+        let mut finish: Option<ObservationFinish> = None;
+        let (decoded, should_retry) = match outcome {
+            Ok(sent) => {
+                let mut record = ObservationFinish::new(
+                    observation,
+                    &self.provider,
+                    &self.url,
+                    request_bytes,
+                    sent.start,
+                );
+                record.sent(sent.headers_at, sent.status);
+                record.set_redact(self.redact_with(&secrets));
+                let mut counted = sent.stream;
+                // The first `Delta` of any kind latches the token stamp
+                // before it is forwarded; every delta reaches the caller
+                // unchanged.
+                let latched = &mut record;
+                let decoded = (self.decode)(
+                    &mut BufReader::new(&mut counted),
+                    self.lifetime,
+                    &mut |delta| {
+                        latched.latch_first_token();
+                        sink(delta);
+                    },
+                );
+                // The buffered reader may have read ahead: the count, not
+                // the reader's end, says what came.
+                record.set_bytes(counted.count());
+                finish = Some(record);
+                (decoded, sent.should_retry)
+            }
+            Err(failed) => {
+                if let Some(dispatched) = failed.sent {
+                    let mut record = ObservationFinish::new(
+                        observation,
+                        &self.provider,
+                        &self.url,
+                        request_bytes,
+                        dispatched.start,
+                    );
+                    record.dispatched(&dispatched);
+                    record.set_redact(self.redact_with(&secrets));
+                    finish = Some(record);
+                }
+                let should_retry = failed.error.should_retry();
+                (Err(((self.on_error)(failed.error), None)), should_retry)
+            }
+        };
+        let result = Self::finish_send(
+            &self.cancel,
+            self.input_size,
+            &self.provider,
+            &secrets,
+            decoded,
+            should_retry,
+        );
+        if let Some(record) = finish.as_mut() {
+            record.finish();
+        }
+        result
+    }
+}
+
+/// One `open` reply body: the stream with the bytes read so far and the
+/// finish guard the observed path moves into it. A plain `open` carries no
+/// guard and reads exactly as today. A read error, the end of the stream
+/// or the drop ends the record once; a zero-length read without end-of-
+/// stream and an interrupted read never end it.
+struct OpenBody {
+    inner: Box<dyn Read>,
+    bytes: u64,
+    finish: Option<ObservationFinish>,
+}
+
+impl OpenBody {
+    fn plain(inner: Box<dyn Read>) -> Self {
+        Self {
+            inner,
+            bytes: 0,
+            finish: None,
+        }
+    }
+
+    fn observed(inner: Box<dyn Read>, finish: ObservationFinish) -> Self {
+        Self {
+            inner,
+            bytes: 0,
+            finish: Some(finish),
+        }
+    }
+}
+
+impl Read for OpenBody {
+    fn read(&mut self, buf: &mut [u8]) -> std::io::Result<usize> {
+        match self.inner.read(buf) {
+            // The end of the stream ends the record while the reader is
+            // still alive. A zero-length read without end-of-stream never
+            // ends it: an empty destination buffer cannot be the end.
+            Ok(0) if !buf.is_empty() => {
+                if let Some(record) = self.finish.as_mut() {
+                    record.set_bytes(self.bytes);
+                    record.finish();
+                }
+                Ok(0)
+            }
+            Ok(n) => {
+                self.bytes = self.bytes.saturating_add(n as u64);
+                Ok(n)
+            }
+            Err(error) if error.kind() == std::io::ErrorKind::Interrupted => Err(error),
+            Err(error) => {
+                if let Some(record) = self.finish.as_mut() {
+                    record.set_bytes(self.bytes);
+                    record.finish();
+                }
+                Err(error)
+            }
+        }
+    }
+}
+
+impl Drop for OpenBody {
+    fn drop(&mut self) {
+        if let Some(record) = self.finish.as_mut() {
+            record.set_bytes(self.bytes);
+            record.finish();
+        }
     }
 }
 
@@ -174,3 +627,7 @@ pub(crate) fn base_headers(
     }
     headers
 }
+
+#[cfg(test)]
+#[path = "call_tests.rs"]
+mod tests;

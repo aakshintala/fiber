@@ -224,6 +224,14 @@ pub(crate) fn run_new(
     // A rewind's new session runs where the old one did, with the model,
     // credential and thinking level the old log's latest build recorded,
     // as a resume keeps its recorded ones (`docs/events.md`, "Rewind").
+    // The diagnostic process: a one-turn run without a rewind or a parent
+    // is an ask; a delegate child runs one turn but keeps the session's
+    // identity, as does a rewind continuing its session's log.
+    let process = if one_turn && rewound.is_none() && parent.is_none() {
+        log::diag::Process::Ask
+    } else {
+        log::diag::Process::Session
+    };
     let mut parts = match &rewound {
         Some(start) => {
             let home = config::fiber_home_from_env().map_err(|e| failed(e.code(), e))?;
@@ -244,6 +252,7 @@ pub(crate) fn run_new(
                 Arc::clone(&clock),
                 host,
                 Arc::clone(&reads),
+                process,
             )?
         }
         None => parts_with(
@@ -254,6 +263,7 @@ pub(crate) fn run_new(
             Arc::clone(&clock),
             host,
             Arc::clone(&reads),
+            process,
         )?,
     };
     crash::attach(&id);
@@ -263,6 +273,9 @@ pub(crate) fn run_new(
     parts.prompt.session_log = dir.join("events.jsonl").display().to_string();
     let Parts {
         provider,
+        observe,
+        reviewer_observe,
+        diag,
         model,
         prompt: prompt_inputs,
         reviewer,
@@ -343,15 +356,18 @@ pub(crate) fn run_new(
         &home,
         &project,
         &workspace,
-        Arc::clone(&clock),
+        crate::session_extensions::fetch(&clock),
     ));
-    let log = match Log::create(&sessions, id, Arc::clone(&clock)) {
+    let log = match Log::create(&sessions, id.clone(), Arc::clone(&clock)) {
         Ok(log) => Arc::new(log),
         Err(e) => {
             session_servers.servers.stop();
             return Err(failed(e.code(), e));
         }
     };
+    // The durable log exists: the diagnostic writer takes the session's
+    // file and id, so request, extension and memory lines share them.
+    diag.attach(&id);
     job_emit.set(Arc::new(log::WeakEmit::new(&log)) as _);
     let event_output: Box<dyn io::Write + Send> = if case_run.is_some() {
         Box::new(io::sink())
@@ -429,6 +445,7 @@ pub(crate) fn run_new(
         prompt,
         run_one_turn,
         cancel,
+        &diag,
         |inbox, cancel| {
             // The commit writes the session's first lines together, so a
             // signal recorded before them writes nothing: `Loop::start`
@@ -490,10 +507,16 @@ pub(crate) fn run_new(
                 started.map(|looped| {
                     let looped = session_extensions::hooked(looped.jobs(jobs), &extensions);
                     looped
+                        .diagnostics(Arc::clone(&diag))
+                        .observed(observe)
+                        .reviewer_observed(reviewer_observe)
                         .reviewer_notes(reviewer_notes)
                         .handoff(handoff)
                         .on_handoff(forget)
-                        .switcher(switching.closure(door), switchable)
+                        .switcher(
+                            switching.diagnostics(Arc::clone(&diag)).closure(door),
+                            switchable,
+                        )
                         .repository_code(offer)
                         .approved_code(load)
                         .skill_set(skill_set)
