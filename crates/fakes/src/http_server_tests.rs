@@ -612,7 +612,7 @@ fn reply_drain_bound_expires_at_the_exact_edge() {
         "one tick below the bound the drain is still waiting"
     );
     assert!(
-        Deadline::after(QUIET).recv(&drained).is_err(),
+        drained.try_recv().is_err(),
         "one tick below the bound the reply drain has not ended"
     );
     clock.advance(Duration::from_nanos(1));
@@ -707,16 +707,22 @@ fn raw_pair(server: &HttpServer, name: &str) -> (Connection, TcpStream, TcpStrea
     (conn, client, probe)
 }
 
-/// Spins until `probe` peeks all `want` bytes: the kernel proves they
-/// arrived while leaving them unread for the drain under test.
+/// Spins until `probe` peeks all `want` bytes, at most `OP`: the kernel
+/// proves they arrived while leaving them unread for the drain under
+/// test. The bound fails naming the awaited bytes instead of spinning
+/// past a partial arrival or EOF.
 fn await_peeked(probe: &TcpStream, want: usize, what: &str) {
+    let deadline = Deadline::after(OP);
     let mut peeked = vec![0u8; want];
     loop {
         match probe.peek(&mut peeked) {
             Ok(n) if n == want => return,
-            Ok(_) => continue,
-            Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => continue,
+            Ok(_) => {}
+            Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => {}
             Err(error) => panic!("{what} peeks within {OP:?}: {error}"),
+        }
+        if deadline.left().is_zero() {
+            panic!("waited {OP:?} for {what} ({want} bytes): fewer arrived");
         }
     }
 }

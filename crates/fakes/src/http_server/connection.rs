@@ -243,13 +243,19 @@ impl Connection {
     /// after a fixed body, the pipelined bytes the capped reads left
     /// behind. A close with unread bytes resets the connection, so what
     /// already arrived is consumed, as the old over-read did; what has
-    /// not arrived yet is never waited for.
+    /// not arrived yet is never waited for. Each pass re-checks the
+    /// request budget and shutdown, so a feeding peer cannot hold the
+    /// discard past either and the bounded full-reply drain is reached.
     #[allow(
         clippy::unused_io_amount,
         reason = "a discard read: pipelined bytes past the body are counted nowhere"
     )]
     pub(crate) fn drain_socket(&mut self) {
+        const PHASE: &str = "to discard pipelined bytes";
         loop {
+            if !self.consume_check(PHASE) {
+                return;
+            }
             let mut chunk = [0u8; READ_CHUNK];
             match self.stream.read(&mut chunk) {
                 // The peer closed: nothing more can arrive.
