@@ -551,13 +551,26 @@ pub(crate) fn item(setup: &Setup, clock: &Arc<FakeClock>) -> (extensions::RepoIt
     let digest = hash(&mut Index::load(&setup.home()), &found).unwrap();
     (found, digest)
 }
+/// How long an approval may take before the test fails instead of hanging
+/// it.
+const APPROVE_WITHIN: Duration = Duration::from_secs(10);
+
 /// Approves the declared extension with its dependencies fetched from
-/// `repos`, and returns its content hash.
+/// `repos`, and returns its content hash. The approval blocks on git and
+/// install steps, so it runs on a worker under one deadline: a stall fails
+/// the test instead of hanging it.
 pub(crate) fn approve(setup: &Setup, repos: &Repos) -> String {
     let clock = FakeClock::new();
     let store = store(setup, repos, &clock);
     let (found, digest) = item(setup, &clock);
-    store.approve(&found, &digest).unwrap();
+    let waiting = digest.clone();
+    let (done, approved) = mpsc::channel();
+    let worker = std::thread::spawn(move || {
+        done.send(store.approve(&found, &waiting)).unwrap();
+    });
+    let bound = Deadline::after(APPROVE_WITHIN);
+    bound.recv_or_fail(&approved, "the approval").unwrap();
+    worker.join().unwrap();
     digest
 }
 /// The content hash of the declared extension, without approving.

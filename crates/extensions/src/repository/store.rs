@@ -355,14 +355,15 @@ impl Store {
             let clock = self.pin_clock();
             self.install_depends(item, copy, &manifest, &clock)?;
             prepare(copy, &manifest, clock.as_ref())?;
-            // The install step may have replaced dependency ancestors:
-            // validate again before publishing completion.
+            // The install step may have replaced dependency ancestors or
+            // planted either marker: validate again and publish without
+            // ever following a link.
             if !manifest.depends.is_empty() {
                 let complete = self.complete(item, copy)?;
-                File::create(&complete).map_err(io_error(&complete))?;
+                publish(&item.name, &complete)?;
             }
         }
-        File::create(&ready).map_err(io_error(&ready))?;
+        publish(&item.name, &ready)?;
         unfinished.done();
         Ok(())
     }
@@ -377,6 +378,22 @@ impl Store {
             return Ok(true);
         }
         // The copy root was validated as a real directory by the caller.
+        // Confine the manifest before reading it: ancestors already
+        // validated, the file itself a regular file, so a link to an
+        // outside manifest is refused, never read through.
+        let manifest_path = copy.join("extension.json");
+        check_dirs(&item.name, &self.home, copy, false)?;
+        match fs::symlink_metadata(&manifest_path) {
+            Ok(meta) if meta.file_type().is_symlink() => {
+                return Err(refused(&item.name, &manifest_path, "is a symbolic link"));
+            }
+            Ok(meta) if !meta.file_type().is_file() => {
+                return Err(refused(&item.name, &manifest_path, "is not a regular file"));
+            }
+            Ok(_) => {}
+            // Missing or unreadable: the read below fails naming the path.
+            Err(_) => {}
+        }
         let manifest = config::read_manifest(copy)?;
         if manifest.depends.is_empty() {
             return Ok(true);
@@ -586,6 +603,29 @@ fn check_marker(item: &str, home: &Path, path: &Path) -> Result<bool, Error> {
         Err(e) if e.kind() == io::ErrorKind::NotFound => Ok(false),
         Err(e) => Err(io_error(path)(e)),
     }
+}
+
+/// Publishes an empty marker without ever following a link: a marker path
+/// that already exists in any form (an install step may have planted either
+/// marker as a link) fails the approval with nothing published, and
+/// exclusive creation keeps a link planted between the check and the write
+/// from ever being followed.
+fn publish(item: &str, marker: &Path) -> Result<(), Error> {
+    if fs::symlink_metadata(marker).is_ok() {
+        return Err(refused(item, marker, "already exists"));
+    }
+    File::options()
+        .write(true)
+        .create_new(true)
+        .open(marker)
+        .map(|_| ())
+        .map_err(|e| {
+            if e.kind() == io::ErrorKind::AlreadyExists {
+                refused(item, marker, "already exists")
+            } else {
+                io_error(marker)(e)
+            }
+        })
 }
 
 /// Opens the existing marker without creating it and takes it exclusively:

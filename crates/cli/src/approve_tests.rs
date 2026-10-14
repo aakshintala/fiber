@@ -6,13 +6,19 @@ use std::io::Cursor;
 use std::path::PathBuf;
 use std::process::Command;
 use std::sync::Arc;
+use std::sync::mpsc;
 use std::time::Duration;
 
 use contract::ErrorCode;
 use extensions::{Fetch, Origin};
+use fakes::Deadline;
 
 const APPROVE_CHILD: &str = "FIBER_CLI_APPROVE_EXIT_CHILD";
 const CHILD_DEADLINE: Duration = Duration::from_secs(5);
+
+/// How long an approval run may take before the test fails instead of
+/// hanging it.
+const RUN_WITHIN: Duration = Duration::from_secs(10);
 
 use super::run;
 
@@ -87,27 +93,40 @@ fn go_version(
     fiber: &str,
     origin: Origin,
 ) -> Run {
-    let (mut out, mut err) = (Vec::new(), Vec::new());
-    let clock: Arc<dyn contract::clock::Clock> = fakes::clock::FakeClock::new();
-    let fetch = Fetch::new(origin, fiber, Arc::clone(&clock));
-    let result = run(
-        &setup.home(),
-        &setup.repo(),
-        yes,
-        terminal,
-        super::Streams {
-            input: &mut Cursor::new(input.as_bytes().to_vec()),
-            out: &mut out,
-            err: &mut err,
-        },
-        Arc::clone(&clock),
-        fetch,
-    );
-    Run {
-        result,
-        out: String::from_utf8(out).unwrap(),
-        err: String::from_utf8(err).unwrap(),
-    }
+    // `run` blocks on fetching and install steps, so it runs on a worker
+    // under one deadline: a stall fails the test instead of hanging it.
+    let home = setup.home();
+    let repo = setup.repo();
+    let fiber = fiber.to_owned();
+    let input = input.as_bytes().to_vec();
+    let (done, ran) = mpsc::channel();
+    let worker = std::thread::spawn(move || {
+        let (mut out, mut err) = (Vec::new(), Vec::new());
+        let clock: Arc<dyn contract::clock::Clock> = fakes::clock::FakeClock::new();
+        let fetch = Fetch::new(origin, fiber, Arc::clone(&clock));
+        let result = run(
+            &home,
+            &repo,
+            yes,
+            terminal,
+            super::Streams {
+                input: &mut Cursor::new(input),
+                out: &mut out,
+                err: &mut err,
+            },
+            Arc::clone(&clock),
+            fetch,
+        );
+        let _sent = done.send(Run {
+            result,
+            out: String::from_utf8(out).unwrap(),
+            err: String::from_utf8(err).unwrap(),
+        });
+    });
+    let bound = Deadline::after(RUN_WITHIN);
+    let ran = bound.recv_or_fail(&ran, "the approval run");
+    worker.join().unwrap();
+    ran
 }
 
 #[test]

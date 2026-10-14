@@ -217,8 +217,9 @@ fn an_outer_ready_failure_leaves_no_copy_and_no_approval() {
     let helper = "example.com/acme/helper";
     repos.tag(helper, "", "v1.0.0", &manifest(helper), &[]);
     let root = "fiber.test/root";
-    // The step parks a directory where the outer marker goes, so writing
-    // it fails after everything else is built.
+    // The step parks a directory where the outer marker goes, so
+    // publishing it is refused after everything else is built: a marker
+    // path that already exists in any form is never written through.
     declare(
         &setup,
         &installing(
@@ -237,7 +238,7 @@ fn an_outer_ready_failure_leaves_no_copy_and_no_approval() {
         err.to_string().contains(&marker.display().to_string()),
         "{err}"
     );
-    assert!(matches!(err, Error::Io { path, .. } if path == marker));
+    assert!(matches!(err, Error::Pin { .. }), "{err}");
     assert!(!copy(&setup, &digest).exists());
     assert!(!marker.is_file());
     assert!(!approval(&setup, &digest).exists());
@@ -725,4 +726,121 @@ fn fetch_debug_names_the_version_and_skips_the_origin() {
     assert!(text.contains("Fetch"), "{text}");
     assert!(text.contains("0.1.0"), "{text}");
     assert!(!text.contains("fiber-test-git"), "{text}");
+}
+
+#[test]
+fn an_install_step_that_links_the_completion_marker_away_publishes_nothing() {
+    let setup = Setup::new();
+    let mut repos = Repos::new(&setup);
+    let helper = "example.com/acme/helper";
+    repos.tag(helper, "", "v1.0.0", &manifest(helper), &[]);
+    let (outside_dir, target) = outside(&setup.root());
+    let root = "fiber.test/root";
+    // The step forges the completion marker as a link to an outside
+    // sentinel: publication must refuse it, never truncate through it.
+    declare(
+        &setup,
+        &installing(
+            root,
+            &[(helper, "1.0")],
+            &format!(
+                "ln -s '{}' .fiber-depends/.complete",
+                target.display().to_string().replace('\'', "'\\''")
+            ),
+        ),
+    );
+    let clock = FakeClock::new();
+    let (found, digest) = item(&setup, &clock);
+    let err = store(&setup, &repos, &clock)
+        .approve(&found, &digest)
+        .unwrap_err();
+    assert!(matches!(err, Error::Pin { .. }), "{err}");
+    assert!(err.to_string().contains(".complete"), "{err}");
+    // The sentinel is byte-identical: nothing was published through the
+    // link, and the unfinished copy went with it.
+    assert_eq!(fs::read_to_string(&target).unwrap(), "untouched\n");
+    assert_eq!(outside_names(&outside_dir), ["target.txt"]);
+    assert!(!copy(&setup, &digest).exists());
+    assert!(!ready(&setup, &digest).exists());
+    assert!(!approval(&setup, &digest).exists());
+}
+
+#[test]
+fn an_install_step_that_links_the_ready_marker_away_publishes_nothing() {
+    let setup = Setup::new();
+    let mut repos = Repos::new(&setup);
+    let helper = "example.com/acme/helper";
+    repos.tag(helper, "", "v1.0.0", &manifest(helper), &[]);
+    let (outside_dir, target) = outside(&setup.root());
+    let root = "fiber.test/root";
+    // The step forges the sibling ready marker as a link to an outside
+    // sentinel: publication must refuse it, never truncate through it.
+    // The hash is the copy directory's own name.
+    declare(
+        &setup,
+        &installing(
+            root,
+            &[(helper, "1.0")],
+            &format!(
+                "ln -s '{}' ../\"$(basename \"$PWD\")\".ready",
+                target.display().to_string().replace('\'', "'\\''")
+            ),
+        ),
+    );
+    let clock = FakeClock::new();
+    let (found, digest) = item(&setup, &clock);
+    let err = store(&setup, &repos, &clock)
+        .approve(&found, &digest)
+        .unwrap_err();
+    assert!(matches!(err, Error::Pin { .. }), "{err}");
+    assert!(err.to_string().contains(".ready"), "{err}");
+    assert_eq!(fs::read_to_string(&target).unwrap(), "untouched\n");
+    assert_eq!(outside_names(&outside_dir), ["target.txt"]);
+    // The unfinished copy (with its completion marker) is gone, no
+    // approval was recorded, and the forged link was never replaced by a
+    // published marker.
+    assert!(!copy(&setup, &digest).exists());
+    assert!(!approval(&setup, &digest).exists());
+    let meta = fs::symlink_metadata(ready(&setup, &digest)).unwrap();
+    assert!(
+        meta.file_type().is_symlink(),
+        "the forged link is refused, not published over"
+    );
+}
+
+#[test]
+fn a_finished_copy_whose_manifest_is_a_link_is_never_treated_as_finished() {
+    use std::os::unix::fs::symlink;
+    let setup = Setup::new();
+    let mut repos = Repos::new(&setup);
+    let digest = counting_root(&setup, &mut repos);
+    let before = fs::read(approval(&setup, &digest)).unwrap();
+    let (outside_dir, target) = outside(&setup.root());
+    // An outside manifest that is valid and names no dependencies: an
+    // unconfined read would take the copy for finished and reuse it.
+    let decoy = outside_dir.join("extension.json");
+    let decoy_bytes = manifest("fiber.test/decoy").to_string();
+    fs::write(&decoy, &decoy_bytes).unwrap();
+    let manifest_path = copy(&setup, &digest).join("extension.json");
+    fs::remove_file(&manifest_path).unwrap();
+    symlink(&decoy, &manifest_path).unwrap();
+    let clock = FakeClock::new();
+    let (found, _) = item(&setup, &clock);
+    let err = store(&setup, &repos, &clock)
+        .approve(&found, &digest)
+        .unwrap_err();
+    assert!(matches!(err, Error::Pin { .. }), "{err}");
+    assert!(err.to_string().contains("extension.json"), "{err}");
+    assert!(err.to_string().contains("is a symbolic link"), "{err}");
+    // Neither protected byte was read through the link: the decoy and the
+    // sentinel are byte-identical, the copy never reinstalled, and the
+    // approval is unchanged.
+    assert_eq!(fs::read_to_string(&decoy).unwrap(), decoy_bytes);
+    assert_eq!(fs::read_to_string(&target).unwrap(), "untouched\n");
+    assert_eq!(
+        outside_names(&outside_dir),
+        ["extension.json", "target.txt"]
+    );
+    assert_eq!(counter(&setup, &digest), "x\n");
+    assert_eq!(fs::read(approval(&setup, &digest)).unwrap(), before);
 }
