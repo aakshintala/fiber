@@ -16,7 +16,8 @@ use fakes::{TempDir, Watchdog, group_empties, kill_pid, pids_exit};
 
 use super::{
     Decode, Failed, IMAGE_CAP, NO_CLIPBOARD, Reader, apple_script_png, arm_cleanup_pause, command,
-    drain, png_size, read, read_stdout, refused, signal_after_group, signal_pid, start,
+    drain, group_alive, png_size, probe_means_empty, read, read_stdout, refused, settle_group,
+    signal_after_group, signal_pid, start,
 };
 
 /// One named wall-clock deadline for every blocking wait.
@@ -303,6 +304,67 @@ fn refused_never_names_one_or_none() {
     assert!(refused(0));
     assert!(refused(1));
     assert!(!refused(2));
+}
+
+#[test]
+fn only_a_missing_group_probes_empty() {
+    // An accepted probe holds a member; only SRCH retires the group, and
+    // any other errno keeps it pending for the next pass.
+    assert!(!probe_means_empty(Ok(())));
+    assert!(probe_means_empty(Err(rustix::io::Errno::SRCH)));
+    assert!(!probe_means_empty(Err(rustix::io::Errno::PERM)));
+}
+
+#[test]
+fn settle_group_returns_at_once_for_no_group() {
+    let clock = FakeClock::new();
+    let start = clock.now();
+    let end = start + LIMIT;
+    let clock: Arc<dyn Clock> = clock;
+    // A refused id sends nothing and probes empty, so the bound is never
+    // read past the first probe and the clock never moves.
+    for id in [0, 1] {
+        assert!(settle_group(id, &clock, end));
+    }
+    assert_eq!(clock.now(), start);
+}
+
+#[test]
+fn settle_group_rekills_until_the_bound() {
+    use std::os::unix::process::CommandExt as _;
+    let clock = FakeClock::new();
+    let clock: Arc<dyn Clock> = clock;
+    // At, just below and just above the edge: the bound in milliseconds
+    // with the fake instant the settle stops at, one 10 ms cadence past
+    // the first probe at or past the bound.
+    for (bound_ms, stop_ms) in [(25, 30), (29, 30), (30, 30), (31, 40)] {
+        // A zombie holding its own group: the probe stays up however many
+        // passes re-kill it, so only the bound ends the settle.
+        let mut keeper = std::process::Command::new("sleep")
+            .arg("3600")
+            .process_group(0)
+            .stdin(std::process::Stdio::null())
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null())
+            .spawn()
+            .unwrap();
+        let pgid = keeper.id();
+        let watchdog = Watchdog::group(pgid);
+        assert!(group_alive(pgid));
+        signal_pid(pgid);
+        let start = clock.now();
+        let end = start + Duration::from_millis(bound_ms);
+        assert!(!settle_group(pgid, &clock, end));
+        assert_eq!(
+            clock.now(),
+            start + Duration::from_millis(stop_ms),
+            "a bound of {bound_ms} ms must stop at {stop_ms} ms"
+        );
+        match keeper.wait() {
+            Ok(_) | Err(_) => {}
+        }
+        watchdog.stand_down(DEADLINE);
+    }
 }
 
 /// A child test's directory and ready FIFO.
