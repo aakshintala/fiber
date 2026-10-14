@@ -795,14 +795,13 @@ fn attach_web_stores_the_handle_finish_waits_for_its_drain() {
         working.pairing.finish(&working, revoked);
         tx.send(()).unwrap_or(());
     });
-    // The stored web never drains, so finish must still be waiting here.
+    // The watchdog and `finish` are both parked on the clock while the
+    // stored web never drains, so `finish` cannot have returned yet.
+    assert!(clock.await_parked_count(end, 2, PAIR_WAIT));
     assert!(
-        Deadline::after(Duration::from_millis(250))
-            .recv(&rx)
-            .is_err(),
+        rx.try_recv().is_err(),
         "finish waits for the attached web to drain"
     );
-    assert!(clock.await_parked_count(end, 2, PAIR_WAIT));
     clock.advance(STOP_CLOSE_WAIT);
     Deadline::after(DEADLINE).recv_or_fail(&rx, "finish returns at its deadline");
     drop((peer, web));
