@@ -8,7 +8,6 @@ use std::time::{Duration, Instant, SystemTime};
 use contract::clock::{Clock, Wake};
 
 use super::CaseClock;
-use super::sleep_pending;
 use fakes::Deadline;
 
 #[test]
@@ -202,27 +201,19 @@ fn sleep_parks_until_its_deadline_is_advanced() {
     let clock = CaseClock::new();
     let before = clock.now();
     let delay = Duration::from_millis(25);
-    let (started_tx, started_rx) = mpsc::channel();
+    let pause = clock.install_sleep_pause();
     let (done_tx, done_rx) = mpsc::channel();
     let sleeping = Arc::clone(&clock);
     thread::spawn(move || {
-        let _sent = started_tx.send(());
         sleeping.sleep(delay);
         let _sent = done_tx.send(sleeping.now());
     });
+    // The seam fires after the sleeper evaluates its predicate and stays
+    // parked; under the flipped `<` it answers without reaching the seam,
+    // so this receive fails every run. Hang guard only.
     Deadline::after(WAIT)
-        .recv(&started_rx)
-        .expect("waited for sleep to start");
-
-    // The park registration `advance_when_parked` itself waits on: no
-    // advance happens between `before` and the park, so the sleep
-    // deadline is `before + delay`.
-    let parked_until = Deadline::after(WAIT);
-    let parked_target = before + delay;
-    while !clock.parked().contains(&Some(parked_target)) {
-        assert!(!parked_until.left().is_zero(), "waited for sleep to park");
-        thread::yield_now();
-    }
+        .recv(&pause)
+        .expect("waited for sleep to park");
     // No advance has happened, so correct code cannot have answered;
     // `try_recv` reads no clock and waits on nothing.
     assert!(
@@ -236,37 +227,6 @@ fn sleep_parks_until_its_deadline_is_advanced() {
             .recv(&done_rx)
             .expect("waited for sleep to finish"),
         before + delay
-    );
-}
-
-#[test]
-fn sleep_pending_before_the_deadline() {
-    let clock = CaseClock::new();
-    let until = clock.now() + Duration::from_millis(1);
-    assert!(
-        sleep_pending(&lock(&clock.state), clock.origin, until),
-        "sleep must wait while now is before its deadline"
-    );
-}
-
-#[test]
-fn sleep_pending_at_the_deadline() {
-    let clock = CaseClock::new();
-    let until = clock.now();
-    assert!(
-        !sleep_pending(&lock(&clock.state), clock.origin, until),
-        "sleep must not wait once now reaches its deadline"
-    );
-}
-
-#[test]
-fn sleep_pending_after_the_deadline() {
-    let clock = CaseClock::new();
-    clock.advance(Duration::from_millis(2));
-    let until = clock.now().checked_sub(Duration::from_millis(1)).unwrap();
-    assert!(
-        !sleep_pending(&lock(&clock.state), clock.origin, until),
-        "sleep must not wait once now passes its deadline"
     );
 }
 
