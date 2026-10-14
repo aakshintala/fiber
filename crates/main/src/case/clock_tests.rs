@@ -213,11 +213,19 @@ fn sleep_parks_until_its_deadline_is_advanced() {
         .recv(&started_rx)
         .expect("waited for sleep to start");
 
-    // Sleep answers only after the clock moves: a bounded receive before
-    // the advance must time out. Correct code can never answer here, so
-    // any short bound is exact.
+    // The park registration `advance_when_parked` itself waits on: no
+    // advance happens between `before` and the park, so the sleep
+    // deadline is `before + delay`.
+    let parked_until = Deadline::after(WAIT);
+    let parked_target = before + delay;
+    while !clock.parked().contains(&Some(parked_target)) {
+        assert!(!parked_until.left().is_zero(), "waited for sleep to park");
+        thread::yield_now();
+    }
+    // No advance has happened, so correct code cannot have answered;
+    // `try_recv` reads no clock and waits on nothing.
     assert!(
-        Deadline::after(NO_MATCH).recv(&done_rx).is_err(),
+        done_rx.try_recv().is_err(),
         "sleep answered before the clock moved"
     );
 
