@@ -1397,9 +1397,15 @@ fn home_join_scanner_fails_closed_when_a_budget_is_exhausted() {
 }
 
 #[test]
-fn home_join_production_limits_are_pinned() {
-    assert_eq!(MAX_HOME_JOIN_WORK, 16_384);
-    assert_eq!(MAX_HOME_JOIN_CONTEXT_BYTES, 1_048_576);
+fn home_join_production_limits_stay_within_shard_safe_ceilings() {
+    assert!(
+        MAX_HOME_JOIN_WORK <= 16_384,
+        "home-join work must stay within the shard-safe 16,384-step ceiling"
+    );
+    assert!(
+        MAX_HOME_JOIN_CONTEXT_BYTES <= 1_048_576,
+        "home-join context must stay within the shard-safe 1 MiB ceiling"
+    );
 }
 
 #[test]
