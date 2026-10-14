@@ -7,7 +7,8 @@
     clippy::expect_used,
     clippy::panic,
     clippy::indexing_slicing,
-    reason = "test helpers; a failure is the test's"
+    clippy::print_stderr,
+    reason = "test helpers; a failure is the test's; a live test prints each step's elapsed"
 )]
 
 mod support;
@@ -18,7 +19,7 @@ use std::path::{Path, PathBuf};
 use std::process::{Child, ExitStatus};
 use std::sync::mpsc;
 use std::thread;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use fakes::{ProviderServer, Response, Watchdog};
 use serde_json::{Value, json};
@@ -1705,30 +1706,56 @@ fn sigterm_during_a_switchs_read_exits_143_and_kills_the_command() {
         line["kind"] == "turn_completed"
     });
     model(&client, "c_model", "other/om", None);
+    let sent = Instant::now();
     let command: u32 = ready_line(&setup, &ready).parse().unwrap();
+    eprintln!(
+        "switch-read-sigterm: the switch's read started after {:?}",
+        sent.elapsed()
+    );
     let watchdog = Watchdog::group(command);
     let session = running.group;
     assert!(kill_pid(setup.deadline, session, "TERM").unwrap());
+    eprintln!(
+        "switch-read-sigterm: SIGTERM sent after {:?}",
+        sent.elapsed()
+    );
     let rejected = until(&client, "command_rejected", |line| {
         line["kind"] == "command_rejected"
     });
-    assert_eq!(rejected.last().unwrap()["payload"]["code"], "closing");
+    let code = rejected.last().unwrap()["payload"]["code"].clone();
+    eprintln!(
+        "switch-read-sigterm: rejected with {code} after {:?}",
+        sent.elapsed()
+    );
+    assert_eq!(code, "closing");
     drop(client);
     // Under the 5 second shutdown bound, which would end the process with
     // no `fiber_exited`.
     let (status, stderr) = fakes::within("the session's exit", Duration::from_secs(4), move || {
         running.wait()
     });
-    assert_eq!(status.code(), Some(143), "stderr: {stderr}");
-    assert!(
-        !group_alive(setup.deadline, command),
-        "the command was killed"
+    eprintln!(
+        "switch-read-sigterm: the session exited with {:?} after {:?}",
+        status.code(),
+        sent.elapsed()
     );
+    assert_eq!(status.code(), Some(143), "stderr: {stderr}");
+    let alive = group_alive(setup.deadline, command);
+    eprintln!(
+        "switch-read-sigterm: the command's group alive is {alive} after {:?}",
+        sent.elapsed()
+    );
+    assert!(!alive, "the command was killed");
     watchdog.stand_down(setup.deadline.cleanup());
     // The complete ordered kinds of the session log: the turn, then the
     // exit, with no `model_changed`, since the switch died in its read.
+    let kinds = log_kinds(&setup, &id);
+    eprintln!(
+        "switch-read-sigterm: the session log holds {kinds:?} after {:?}",
+        sent.elapsed()
+    );
     assert_eq!(
-        log_kinds(&setup, &id),
+        kinds,
         [
             "session_started",
             "fiber_started",
