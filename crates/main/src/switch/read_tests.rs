@@ -1215,7 +1215,10 @@ fn drive_settle_to_completion(
     // Gated phase: the gate's own wait runs while the group is still
     // held, with no answer and no budget spent.
     let probe_mark = clock.now();
-    let _ = fakes::group_empties(real, PARK_PAUSE);
+    // Intentionally unchecked: a killed-but-unreaped leader probes
+    // `EPERM` on some platforms, so this answers at once there and past
+    // the full bound elsewhere. Either way it moves no fake clock.
+    let _held = fakes::group_empties(real, PARK_PAUSE);
     assert!(
         matches!(finished.try_recv(), Err(mpsc::TryRecvError::Empty)),
         "the settle answered while its group was held"
