@@ -187,7 +187,7 @@ pub struct ModelData {
     pub input: Vec<String>,
     /// Its prices.
     #[serde(default)]
-    pub cost: Option<Cost>,
+    pub cost: Option<contract::provider::Cost>,
     /// Whether a subscription login serves it; absent means false.
     #[serde(default)]
     pub subscription: bool,
@@ -209,40 +209,6 @@ pub struct ModelData {
     /// (`docs/system-prompt.md`, "The model's addendum").
     #[serde(default)]
     pub prompt_addendum: Option<String>,
-}
-
-/// A model's prices, in US dollars per million tokens.
-#[derive(Debug, Clone, PartialEq, Deserialize)]
-pub struct Cost {
-    /// Input tokens.
-    pub input: f64,
-    /// Output tokens.
-    pub output: f64,
-    /// Tokens read from the prompt cache.
-    #[serde(default)]
-    pub cache_read: Option<f64>,
-    /// Tokens written to the prompt cache.
-    #[serde(default)]
-    pub cache_write: Option<f64>,
-    /// Higher input sizes, each with its own four prices; absent means none.
-    #[serde(default)]
-    pub tiers: Vec<Tier>,
-}
-
-/// One price tier when cost varies by request size. A tier states all four
-/// prices.
-#[derive(Debug, Clone, PartialEq, Deserialize)]
-pub struct Tier {
-    /// Input tokens above which this tier's prices apply to the whole call.
-    pub input_tokens_above: u64,
-    /// Input tokens.
-    pub input: f64,
-    /// Output tokens.
-    pub output: f64,
-    /// Tokens read from the prompt cache.
-    pub cache_read: f64,
-    /// Tokens written to the prompt cache.
-    pub cache_write: f64,
 }
 
 /// A wire protocol (`docs/model-routing.md`, "Protocols and providers").
