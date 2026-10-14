@@ -170,7 +170,11 @@ impl crate::Loop {
                 turn,
                 Some(&message),
             )?;
-            let (reply, reasoning) = self.stream(request, turn, &message)?;
+            // The attempt counts the retries already made: the first call
+            // builds at 1, saturating at the top so 0 stays
+            // unrepresentable. A later logical request starts over at 1.
+            let attempt = std::num::NonZeroU32::MIN.saturating_add(retries);
+            let (reply, reasoning) = self.stream(request, turn, &message, attempt)?;
             // A call that ended without a reply writes its usage at once,
             // before anything else the failure or cancel causes
             // (`docs/events.md`, "Usage and notices").

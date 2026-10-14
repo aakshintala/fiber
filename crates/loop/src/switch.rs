@@ -24,6 +24,12 @@ pub struct Prepared {
     pub provider: Arc<dyn contract::provider::Provider>,
     /// The new model, and how its calls are priced.
     pub model: crate::Model,
+    /// Builds the new route's observed session calls; `None` calls the
+    /// new provider directly.
+    pub observe: Option<contract::diag::Observe>,
+    /// Builds the new route's observed reviewer calls; `None` calls the
+    /// new reviewer's provider directly.
+    pub reviewer_observe: Option<contract::diag::Observe>,
     /// The level sent.
     pub thinking: Option<ThinkingLevel>,
     /// The session's explicit choice after this switch.
@@ -261,6 +267,8 @@ impl Loop {
             }
             self.provider = prepared.provider;
             self.model = prepared.model;
+            self.observe = prepared.observe;
+            self.reviewer_observe = prepared.reviewer_observe;
             self.prompt.thinking = prepared.thinking;
             self.prompt.credential = prepared.credential;
             self.prompt.cache_lifetime = prepared.cache_lifetime;

@@ -22,6 +22,19 @@ impl SessionDiag {
         Self { log: Arc::new(log) }
     }
 
+    /// Shares the session's attached writer: `extension_log`, request and
+    /// memory lines go to one file with one session id. The caller sets
+    /// the loop's factories first, so every line shares its identity.
+    pub(crate) fn shared(log: Arc<Diag>) -> Self {
+        Self { log }
+    }
+
+    /// Writes the `peak_memory` line when debugging: best-effort, like
+    /// every diagnostic write. A failed read writes nothing.
+    pub(crate) fn peak_memory(&self) {
+        self.log.peak_memory();
+    }
+
     /// Appends one `extension_log` line. A write failure is ignored: it
     /// never stops the session.
     pub(crate) fn extension_log(&self, extension: &str, message: &str) {
@@ -37,3 +50,7 @@ impl SessionDiag {
 #[cfg(test)]
 #[path = "diag_tests.rs"]
 mod tests;
+
+#[cfg(test)]
+#[path = "wire_tests.rs"]
+mod wire_tests;

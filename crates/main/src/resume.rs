@@ -331,6 +331,13 @@ fn resumed_session(
         .as_deref()
         .and_then(|level| level.parse::<contract::ThinkingLevel>().ok());
     crate::shutdown::arm(signals, &reads);
+    // The diagnostic process: a one-turn resume is an ask; a resumed
+    // session keeps its session identity.
+    let process = if one_turn {
+        log::diag::Process::Ask
+    } else {
+        log::diag::Process::Session
+    };
     let mut parts = crate::parts_with(
         overrides,
         folded.model.as_deref(),
@@ -339,6 +346,7 @@ fn resumed_session(
         Arc::clone(&clock),
         None,
         Arc::clone(&reads),
+        process,
     )?;
     // The session directory's log: the opening message's
     // environment names it.
@@ -346,6 +354,9 @@ fn resumed_session(
     let parts = parts;
     let crate::Parts {
         provider,
+        observe,
+        reviewer_observe,
+        diag,
         model,
         prompt: prompt_inputs,
         reviewer,
@@ -395,7 +406,7 @@ fn resumed_session(
     let delegates = crate::delegates::Delegates::new(
         fiber_path,
         home.clone(),
-        id,
+        id.clone(),
         Path::new(&folded.workspace).to_path_buf(),
         sessions.to_path_buf(),
         Arc::clone(&jobs),
@@ -511,6 +522,9 @@ fn resumed_session(
         }
         Ok(Ok(())) => {}
     }
+    // The durable log is held: the diagnostic writer takes the session's
+    // file and id, so request, extension and memory lines share them.
+    diag.attach(&id);
     let inbox_wake = session.inbox_wake();
     let rewrites = session.rewrites();
     let admission = session.admission();
@@ -528,6 +542,7 @@ fn resumed_session(
         prompt,
         one_turn,
         cancel,
+        &diag,
         |inbox, cancel| {
             crate::finish(
                 Loop::resume(
@@ -545,10 +560,16 @@ fn resumed_session(
                 .map(|looped| {
                     let looped = crate::session_extensions::hooked(looped.jobs(jobs), &extensions);
                     looped
+                        .diagnostics(Arc::clone(&diag))
+                        .observed(observe)
+                        .reviewer_observed(reviewer_observe)
                         .reviewer_notes(reviewer_notes)
                         .handoff(handoff)
                         .on_handoff(forget)
-                        .switcher(switching.closure(door), switchable)
+                        .switcher(
+                            switching.diagnostics(Arc::clone(&diag)).closure(door),
+                            switchable,
+                        )
                         .repository_code(offer)
                         .approved_code(load)
                         .skill_set(skill_set)

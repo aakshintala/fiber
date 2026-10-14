@@ -554,7 +554,14 @@ impl Loop {
             max_output_tokens,
             session_dir: self.log.dir().to_path_buf(),
         };
-        let call = endpoint.provider.call(&request);
+        // The reviewer's own factory builds the call at the first attempt,
+        // never the session's: every review stage and the handoff
+        // selection share this one send.
+        let observed = self.reviewer_observe.clone();
+        let call = match observed {
+            Some(observe) => observe(&request, std::num::NonZeroU32::MIN),
+            None => endpoint.provider.call(&request),
+        };
         let reply = crate::cancel::run_cancellable(&self.cancel, call, &mut |_| {});
         let (usage, inline) = match &reply {
             Ok(reply) => (reply.usage(), reply.cost),

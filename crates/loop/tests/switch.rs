@@ -94,6 +94,8 @@ fn prepare_to(
                 notice: None,
                 applied: None,
                 credential_files: Vec::new(),
+                observe: None,
+                reviewer_observe: None,
             })
         },
     )
@@ -488,6 +490,8 @@ fn run_switch_case(case: &Case) {
                     notice: None,
                     applied: None,
                     credential_files: Vec::new(),
+                    observe: None,
+                    reviewer_observe: None,
                 })
             });
             let mut session = Session::new(vec![Scripted::text("Old.")], None);
@@ -1246,6 +1250,8 @@ fn a_new_model_lacking_the_chosen_level_is_invalid_arguments() {
                 notice: None,
                 applied: None,
                 credential_files: Vec::new(),
+                observe: None,
+                reviewer_observe: None,
             })
         },
     );
@@ -1296,6 +1302,8 @@ fn reviewer_collision_is_invalid_arguments_and_changes_nothing() {
             notice: None,
             applied: None,
             credential_files: Vec::new(),
+            observe: None,
+            reviewer_observe: None,
         })
     });
     let mut session = Session::new(
@@ -1389,6 +1397,8 @@ fn prepare_hosted(
                 count.fetch_add(1, Ordering::SeqCst);
             })),
             credential_files: Vec::new(),
+            observe: None,
+            reviewer_observe: None,
         })
     })
 }
@@ -1553,6 +1563,8 @@ fn applied_never_runs_for_a_rejected_or_noop_switch() {
                 count.fetch_add(1, Ordering::SeqCst);
             })),
             credential_files: Vec::new(),
+            observe: None,
+            reviewer_observe: None,
         })
     });
     let mut session = Session::new(vec![Scripted::text("Old.")], None);
@@ -1595,6 +1607,8 @@ fn applied_never_runs_for_a_rejected_or_noop_switch() {
                 count.fetch_add(1, Ordering::SeqCst);
             })),
             credential_files: Vec::new(),
+            observe: None,
+            reviewer_observe: None,
         })
     });
     let mut session = Session::new(
@@ -1645,6 +1659,8 @@ fn two_switches_apply_in_order_with_one_rebuild() {
                 notice: None,
                 applied: None,
                 credential_files: Vec::new(),
+                observe: None,
+                reviewer_observe: None,
             })
         },
     );
@@ -1714,6 +1730,8 @@ fn a_notice_is_written_after_model_changed() {
             }),
             applied: None,
             credential_files: Vec::new(),
+            observe: None,
+            reviewer_observe: None,
         })
     });
     let mut session = Session::new(vec![Scripted::text("Old.")], None);
@@ -1773,6 +1791,8 @@ fn a_switch_replaces_the_reviewer() {
             notice: None,
             applied: None,
             credential_files: Vec::new(),
+            observe: None,
+            reviewer_observe: None,
         })
     });
     let tool = executes_tool();
@@ -1944,6 +1964,8 @@ fn resume_interleaving_holds_arrival_order() {
                 notice: None,
                 applied: None,
                 credential_files: Vec::new(),
+                observe: None,
+                reviewer_observe: None,
             })
         },
     );
@@ -2095,6 +2117,8 @@ fn prepare_reading(provider: Arc<ScriptedProvider>, read: std::path::PathBuf) ->
             notice: None,
             applied: None,
             credential_files: vec![read.clone()],
+            observe: None,
+            reviewer_observe: None,
         })
     })
 }
@@ -2251,6 +2275,8 @@ fn prepare_keeping_model(provider: Arc<ScriptedProvider>, seen: Seen) -> Prepare
                 notice: None,
                 applied: None,
                 credential_files: Vec::new(),
+                observe: None,
+                reviewer_observe: None,
             })
         },
     )
@@ -2572,6 +2598,8 @@ fn run_deferred_case(case: &DeferredCase) {
                 notice: None,
                 applied: None,
                 credential_files: Vec::new(),
+                observe: None,
+                reviewer_observe: None,
             })
         },
     );

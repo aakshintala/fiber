@@ -76,6 +76,20 @@ impl Responses {
             |stream, _, sink| decode_tracked(stream, sink),
         )
     }
+    /// Builds the observed call for `request`: as the plain request, writing
+    /// one `provider_request` line when the call was sent. At `info` the
+    /// call runs exactly as an unobserved one does, with no model cloned.
+    pub fn call_observed(
+        &self,
+        request: &ModelRequest,
+        observation: crate::RequestObservation,
+    ) -> Box<dyn ModelCall> {
+        let call = self.request(request);
+        if !observation.debugging() {
+            return Box::new(call);
+        }
+        Box::new(call.observed(observation.with_model(self.endpoint.model.clone())))
+    }
 }
 
 impl Provider for Responses {

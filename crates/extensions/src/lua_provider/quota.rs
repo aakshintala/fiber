@@ -4,11 +4,13 @@
 //! model call and read by whoever shows quota.
 
 use std::collections::BTreeMap;
+use std::num::NonZeroU32;
 use std::sync::{Arc, Mutex};
 use std::thread;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use config::Secret;
+use contract::diag::Observe;
 use contract::provider::{ModelCall, ModelRequest, Provider, ToolDefinition};
 use serde_json::{Map, Value, json};
 use support::clock::Parker;
@@ -290,7 +292,44 @@ impl LuaProvider {
             provider: Arc::clone(self),
             pair,
             key,
+            observe: None,
         }))
+    }
+
+    /// As [`LuaProvider::with_quota`], also wrapping `observe`: the
+    /// returned provider's ordinary call builds through the factory at the
+    /// first attempt, and the returned factory triggers the same shared
+    /// preparation before building through it at the caller's attempt. A
+    /// provider that registered no `quota` keeps both inputs unchanged.
+    pub fn with_quota_observed(
+        self: &Arc<Self>,
+        inner: Arc<dyn Provider>,
+        observe: Option<Observe>,
+        pair: CredentialPair,
+        key: Option<Secret>,
+    ) -> Result<(Arc<dyn Provider>, Option<Observe>), Error> {
+        if !self.registers("quota")? {
+            return Ok((inner, observe));
+        }
+        let raw = observe;
+        let factory = raw.clone().map(|observe| {
+            let provider = Arc::clone(self);
+            let pair = pair.clone();
+            let key = key.clone();
+            let factory: Observe = Arc::new(move |request, attempt| {
+                provider.refresh_quota(&pair, key.as_ref());
+                observe(request, attempt)
+            });
+            factory
+        });
+        let quoted = Arc::new(Quoted {
+            inner,
+            provider: Arc::clone(self),
+            pair,
+            key,
+            observe: raw,
+        });
+        Ok((quoted, factory))
     }
 
     /// Starts a fetch for `pair` when one is due and none is in flight, on
@@ -473,14 +512,30 @@ struct Quoted {
     provider: Arc<LuaProvider>,
     pair: CredentialPair,
     key: Option<Secret>,
+    /// The observed factory the ordinary call builds through at the first
+    /// attempt; `None` calls the inner provider directly.
+    observe: Option<Observe>,
+}
+
+impl Quoted {
+    /// Triggers the quota refresh for this attempt: off the request path,
+    /// it only locks the cache and, when due, spawns a fetch thread. It
+    /// never waits, parks, or calls `registers`. The ordinary call and the
+    /// observed factory share this one preparation.
+    fn prepare(&self) {
+        self.provider.refresh_quota(&self.pair, self.key.as_ref());
+    }
 }
 
 impl Provider for Quoted {
     fn call(&self, request: &ModelRequest) -> Box<dyn ModelCall> {
-        // Off the request path: only locks the cache and, when due, spawns
-        // a fetch thread. It never waits, parks, or calls `registers`.
-        self.provider.refresh_quota(&self.pair, self.key.as_ref());
-        self.inner.call(request)
+        self.prepare();
+        match &self.observe {
+            // The factory's own attempt for a debug-provider call made
+            // outside the loop's factories.
+            Some(observe) => observe(request, NonZeroU32::MIN),
+            None => self.inner.call(request),
+        }
     }
 
     fn wire_tools(&self, tools: &[ToolDefinition]) -> Vec<Map<String, Value>> {

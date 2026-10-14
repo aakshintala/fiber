@@ -72,3 +72,77 @@ fn an_unwritable_logs_is_ignored_without_panic() {
     fs::write(home.path().join("logs"), b"not a directory").unwrap();
     diag.extension_log("fiber.test/notes", "hello");
 }
+
+fn some_peak() -> Option<u64> {
+    Some(11840)
+}
+
+fn no_peak() -> Option<u64> {
+    None
+}
+
+fn debug_diag(home: &fakes::TempDir, read: fn() -> Option<u64>) -> std::sync::Arc<log::diag::Diag> {
+    let clock = fakes::clock::FakeClock::new();
+    let diag = log::diag::Diag::new(
+        home.path(),
+        log::diag::Process::Session,
+        log::diag::Level::Debug,
+        clock as std::sync::Arc<dyn contract::clock::Clock>,
+    )
+    .with_peak(read);
+    diag.attach(&SessionId("s-1".into()));
+    std::sync::Arc::new(diag)
+}
+
+#[test]
+fn the_shared_writer_puts_extension_request_and_memory_lines_in_one_file() {
+    let home = fakes::TempDir::new("fiber-diag-shared");
+    let diag = SessionDiag::shared(debug_diag(&home, some_peak));
+    diag.extension_log("fiber.test/notes", "hello");
+    diag.peak_memory();
+    let text = fs::read_to_string(log_path(&home)).unwrap();
+    let lines: Vec<&str> = text.lines().collect();
+    assert_eq!(lines.len(), 2);
+    let first: serde_json::Value = serde_json::from_str(lines[0]).unwrap();
+    let second: serde_json::Value = serde_json::from_str(lines[1]).unwrap();
+    assert_eq!(first["code"], "extension_log");
+    assert_eq!(second["code"], "peak_memory");
+    assert_eq!(second["data"]["peak_kib"], 11840);
+    for line in [&first, &second] {
+        assert_eq!(line["process"], "session");
+        assert_eq!(line["session_id"], "s-1");
+    }
+}
+
+#[test]
+fn a_failed_memory_read_writes_nothing_and_changes_nothing_else() {
+    let home = fakes::TempDir::new("fiber-diag-no-peak");
+    let diag = SessionDiag::shared(debug_diag(&home, no_peak));
+    diag.peak_memory();
+    assert!(
+        !log_path(&home).exists(),
+        "a failed read writes no line and creates no file"
+    );
+    diag.extension_log("fiber.test/notes", "hello");
+    let text = fs::read_to_string(log_path(&home)).unwrap();
+    assert_eq!(text.lines().count(), 1, "other lines are unchanged");
+}
+
+#[test]
+fn an_info_writer_writes_no_memory_line_and_no_debug_file() {
+    let home = fakes::TempDir::new("fiber-diag-info-peak");
+    let clock = fakes::clock::FakeClock::new();
+    let diag = log::diag::Diag::new(
+        home.path(),
+        log::diag::Process::Session,
+        log::diag::Level::Info,
+        clock as std::sync::Arc<dyn contract::clock::Clock>,
+    );
+    diag.attach(&SessionId("s-1".into()));
+    let diag = SessionDiag::shared(std::sync::Arc::new(diag));
+    diag.peak_memory();
+    assert!(
+        !log_path(&home).exists(),
+        "an info writer creates no file for a memory sample"
+    );
+}

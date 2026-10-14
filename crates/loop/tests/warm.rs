@@ -841,6 +841,8 @@ fn a_switch_while_warming_sends_no_refresh_and_restarts_idle_from_the_switch() {
                 notice: None,
                 applied: None,
                 credential_files: Vec::new(),
+                observe: None,
+                reviewer_observe: None,
             })
         },
     );
@@ -937,6 +939,8 @@ fn a_during_turn_switch_followed_by_a_turn_keeps_warming_the_new_cache() {
                 notice: None,
                 applied: None,
                 credential_files: Vec::new(),
+                observe: None,
+                reviewer_observe: None,
             })
         },
     );
