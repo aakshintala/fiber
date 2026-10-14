@@ -183,6 +183,7 @@ impl Connection {
                         return FillOutcome::Stopped;
                     }
                     self.ahead.extend(chunk.into_iter().take(read));
+                    self.shared.lookahead_count(read);
                     return FillOutcome::Held(self.ahead.len());
                 }
                 Err(error) => match classify(&error) {

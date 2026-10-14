@@ -1189,3 +1189,70 @@ fn busy_shaped_posts_sleep_only_when_idle() {
     gate.release();
     assert!(server.core.shutdown(), "shutdown stops the server");
 }
+
+// Five bench-shaped POSTs: byte-slice bodies of growing length, each on
+// a fresh connection read to the server's close, against small stream
+// replies, like five of a busy turn's model calls. Bulk body bytes
+// bypass the lookahead past the head's leftover, so only each head and
+// one fill's over-read transit it: funnelling every body byte through
+// the per-byte lookahead, as after #2220, costs the bodies' whole
+// ~300 KiB here, far past the bound below.
+#[test]
+fn growing_fixed_bodies_bypass_the_lookahead() {
+    const CALLS: usize = 5;
+    const STEP: usize = 20_000;
+    // Each call's head plus one 8 KiB fill's over-read past it.
+    const LOOKAHEAD_BOUND: u64 = 5 * 16_384;
+    let clock = FakeClock::new();
+    let script: Vec<Response> = (0..CALLS)
+        .map(|_| Response::stream("event: done\ndata: {}\n\n"))
+        .collect();
+    let bodies: Vec<Vec<u8>> = (0..CALLS)
+        .map(|n| (0u8..=250).cycle().take((n + 1) * STEP).collect())
+        .collect();
+    let server = ProviderServer::start_on(clock, script).unwrap();
+    let addr = server.addr;
+    for body in bodies.iter() {
+        let mut stream = TcpStream::connect(addr).unwrap();
+        stream.set_read_timeout(Some(READ_WITHIN)).unwrap();
+        stream
+            .write_all(
+                format!(
+                    "POST /v1 HTTP/1.1\r\nHost: localhost\r\nContent-Length: {}\r\n\r\n",
+                    body.len()
+                )
+                .as_bytes(),
+            )
+            .unwrap();
+        stream.write_all(body).unwrap();
+        // The write side stays open until the reply completes, like the
+        // bench's client on its fresh connection per call: the server
+        // closes, so the read ends at the reply instead of its bound.
+        let mut response = Vec::new();
+        stream
+            .read_to_end(&mut response)
+            .unwrap_or_else(|e| panic!("the scripted reply arrives within {READ_WITHIN:?}: {e}"));
+        let text = String::from_utf8_lossy(&response);
+        assert!(text.starts_with("HTTP/1.1 200"), "{text}");
+        assert!(response.ends_with(b"{}\n\n"), "{text}");
+    }
+    assert!(
+        server.await_requests(CALLS, READ_WITHIN),
+        "every request is recorded"
+    );
+    let requests = server.requests();
+    assert_eq!(requests.len(), CALLS);
+    for (request, expected) in requests.iter().zip(bodies.iter()) {
+        assert_eq!(request.body_len, expected.len());
+        assert_eq!(
+            first_diff(&request.body, expected),
+            None,
+            "a recorded body is byte-exact"
+        );
+    }
+    let lookahead = server.core.test_lookahead_bytes();
+    assert!(
+        lookahead <= LOOKAHEAD_BOUND,
+        "five growing bodies cost {lookahead} lookahead bytes, at most {LOOKAHEAD_BOUND}: bulk body bytes bypass the lookahead past the head's leftover"
+    );
+}

@@ -122,6 +122,12 @@ pub(crate) struct Shared {
     /// test reads it.
     #[cfg(test)]
     readied: AtomicU64,
+    /// How many socket bytes the lookahead held so far, test-only: every
+    /// fill appends its read here, so a request whose body bypasses the
+    /// lookahead adds only its head and one fill's over-read. Only the
+    /// fixed-body regression test reads it.
+    #[cfg(test)]
+    lookahead: AtomicU64,
     #[cfg(test)]
     gate: Mutex<Option<Arc<CheckGate>>>,
     pub(crate) idle: Mutex<usize>,
@@ -368,6 +374,18 @@ impl Shared {
     #[cfg(not(test))]
     fn readied_count(&self) {}
 
+    /// Counts socket bytes appended to the lookahead, test-only.
+    #[cfg(test)]
+    pub(crate) fn lookahead_count(&self, bytes: usize) {
+        self.lookahead
+            .fetch_add(u64::try_from(bytes).unwrap_or(u64::MAX), Ordering::SeqCst);
+    }
+
+    /// Counts an append to the lookahead: nothing in non-test builds,
+    /// where no accessor reads the counter.
+    #[cfg(not(test))]
+    pub(crate) fn lookahead_count(&self, _bytes: usize) {}
+
     /// Spends the wake pipe's bytes, so the next park sleeps instead of
     /// ending at once on bytes an earlier wake already consumed. Any
     /// unreadable end breaks the drain; a byte left behind only wakes the
@@ -427,6 +445,8 @@ impl HttpServer {
             slept: AtomicU64::new(0),
             #[cfg(test)]
             readied: AtomicU64::new(0),
+            #[cfg(test)]
+            lookahead: AtomicU64::new(0),
             #[cfg(test)]
             gate: Mutex::new(None),
             idle: Mutex::new(0),
@@ -685,6 +705,12 @@ impl HttpServer {
     #[cfg(test)]
     pub(crate) fn test_readied_waits(&self) -> u64 {
         self.shared.readied.load(Ordering::SeqCst)
+    }
+
+    /// How many socket bytes the lookahead held so far, test-only.
+    #[cfg(test)]
+    pub(crate) fn test_lookahead_bytes(&self) -> u64 {
+        self.shared.lookahead.load(Ordering::SeqCst)
     }
 
     /// The clock-wake generation waiters park on, test-only: each move
