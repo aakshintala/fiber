@@ -29,9 +29,11 @@ use signal_hook::consts::{SIGHUP, SIGINT, SIGTERM};
 use signal_hook::iterator::{Handle, Signals};
 
 mod browser;
+mod reviewer;
 
 use browser::login_with;
 pub use browser::{LoginCancel, browser_login};
+pub use reviewer::{ReviewerModels, reviewer_models, set_reviewer};
 
 use crate::{LOGOUT_SHAPE, finish, project_of};
 
