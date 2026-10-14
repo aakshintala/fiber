@@ -13,6 +13,7 @@ use std::collections::VecDeque;
 use std::fs;
 use std::io::{BufRead, Cursor, ErrorKind, Write};
 use std::os::fd::AsFd;
+use std::os::unix::process::CommandExt;
 use std::path::PathBuf;
 use std::process::Command;
 use std::sync::{Arc, Mutex, Weak, mpsc};
@@ -891,6 +892,10 @@ const COMMAND_POLL: Duration = Duration::from_millis(10);
 /// How long one gated wait lasts.
 const GATE_WAIT: Duration = Duration::from_secs(10);
 
+/// How long the guarded cleanup waits for the gated group to empty and
+/// for its watchdog to stand down.
+const GROUP_WAIT: Duration = Duration::from_secs(10);
+
 /// A clock the test advances by hand: each sleep signals its length, then
 /// waits for the test's advance, so time moves only after the operation
 /// shows it is waiting on it. Past the test's disconnect the requested
@@ -944,6 +949,12 @@ impl contract::clock::Clock for GateClock {
 /// `release` advances it, and `done` carries the outcome. The child
 /// outlives every correct run's kill, so a worker the test lets go still
 /// ends on its own past the disconnect.
+///
+/// The child joins a group led by a `sleep 300` the test owns, under a
+/// `fakes::Watchdog`: `finish` kills that group and reaps the leader on
+/// the passing path, and `Drop` kills it when an assertion unwinds past
+/// `finish`, so a failed test cannot leak either sleep. When the test
+/// process itself dies, the watchdog kills the group.
 struct Gated {
     clock: Arc<dyn contract::clock::Clock>,
     slept: mpsc::Receiver<Duration>,
@@ -951,6 +962,9 @@ struct Gated {
     done: mpsc::Receiver<Result<(), ErrorKind>>,
     worker: Option<thread::JoinHandle<()>>,
     start: Instant,
+    group: u32,
+    watchdog: Option<fakes::Watchdog>,
+    leader: Option<std::process::Child>,
 }
 
 impl Gated {
@@ -959,11 +973,20 @@ impl Gated {
         let (release, release_rx) = mpsc::channel();
         let (done_tx, done) = mpsc::channel();
         let clock = GateClock::clock(slept_tx, release_rx);
+        let mut group_leader = Command::new("sleep");
+        group_leader.arg("300");
+        group_leader.process_group(0);
+        let leader = group_leader
+            .spawn()
+            .expect("the gated group leader started");
+        let group = leader.id();
+        let watchdog = fakes::Watchdog::group(group);
         let worker_clock = Arc::clone(&clock);
         let start = clock.now();
         let worker = thread::spawn(move || {
             let mut command = Command::new("sleep");
             command.arg("5");
+            command.process_group(group.try_into().unwrap());
             let outcome = super::run_command(&mut command, timeout, &worker_clock);
             done_tx
                 .send(outcome.map(|_| ()).map_err(|e| e.kind()))
@@ -976,6 +999,9 @@ impl Gated {
             done,
             worker: Some(worker),
             start,
+            group,
+            watchdog: Some(watchdog),
+            leader: Some(leader),
         }
     }
 
@@ -992,6 +1018,51 @@ impl Gated {
     fn join(&mut self) {
         if let Some(worker) = self.worker.take() {
             worker.join().expect("the command worker joined");
+        }
+    }
+
+    /// Joins the worker, then kills the gated group and reaps the leader:
+    /// nothing the test started may outlive the passing path. The worker
+    /// already reaped the `sleep 5` child; the SIGKILL below takes the
+    /// leader, through the guarded helper, because the fixtures ignore
+    /// SIGTERM on purpose.
+    fn finish(&mut self) {
+        self.join();
+        let group = self.group;
+        match fakes::kill_group(group, "KILL") {
+            Ok(_) | Err(_) => {}
+        }
+        if let Some(leader) = self.leader.take() {
+            let (waited, reaped) = mpsc::channel();
+            thread::spawn(move || {
+                let mut leader = leader;
+                let _sent = waited.send(leader.wait());
+            });
+            assert!(
+                fakes::Deadline::after(GROUP_WAIT).recv(&reaped).is_ok(),
+                "waited {GROUP_WAIT:?} for the gated group leader to be reaped"
+            );
+        }
+        assert!(
+            fakes::group_empties(group, GROUP_WAIT),
+            "the gated group {group} emptied within {GROUP_WAIT:?}"
+        );
+        if let Some(watchdog) = self.watchdog.take() {
+            watchdog.stand_down(GROUP_WAIT);
+        }
+    }
+}
+
+impl Drop for Gated {
+    fn drop(&mut self) {
+        // An assertion unwound past `finish`: SIGKILL the group so
+        // neither sleep leaks. The watchdog kills it too when the test
+        // process dies. This never blocks or fails: a drop that panics
+        // while unwinding aborts the test process.
+        if self.leader.is_some() || self.watchdog.is_some() {
+            match fakes::kill_group(self.group, "KILL") {
+                Ok(_) | Err(_) => {}
+            }
         }
     }
 }
@@ -1018,7 +1089,7 @@ fn run_command_times_out_after_the_deadline_not_before() {
         timeout,
         "the timeout fires at exactly the deadline"
     );
-    gated.join();
+    gated.finish();
 }
 
 #[test]
@@ -1037,7 +1108,7 @@ fn run_command_keeps_waiting_before_the_deadline() {
     gated.advance(&within, Duration::from_secs(1));
     let outcome = within.recv_or_fail(&gated.done, "the timeout past the deadline");
     assert_eq!(outcome.unwrap_err(), ErrorKind::TimedOut);
-    gated.join();
+    gated.finish();
 }
 
 #[test]
@@ -1059,7 +1130,7 @@ fn run_command_fires_just_past_a_near_boundary() {
         gated.clock.now().duration_since(gated.start),
         Duration::from_millis(30)
     );
-    gated.join();
+    gated.finish();
 }
 
 #[test]
