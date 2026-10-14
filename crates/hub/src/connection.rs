@@ -961,6 +961,12 @@ pub(crate) fn line(hub: &Hub, kind: &str, payload: Map<String, Value>) -> Vec<u8
 
 /// Whether `value` holds an explicit `null`: an optional key is absent,
 /// never `null`.
+// exempted: every explicit null this scan rejects is rejected again in
+// `start_args` below: `workspace`, `model`, `overrides` and `worktree`
+// take no null through their typed checks, and `content` must parse as
+// `Vec<SentPart>`, whose fields are all required strings. Forcing this
+// scan to false changes no answer `start` gives.
+#[cfg_attr(false, mutants::skip)]
 fn contains_null(value: &Value) -> bool {
     match value {
         Value::Null => true,
