@@ -1011,9 +1011,12 @@ fn an_idle_exiting_hub_answers_one_connection_eof_and_leaves_the_next_unanswered
         let environments = Arc::clone(&environments);
         move || environments.is_closed()
     });
-    // The first connection after the claim is dropped unanswered.
+    // The first connection after the claim is dropped unanswered. No
+    // socket-level read timeout: the claim already set `stop`, so the
+    // accept loop may drop the peer between `connect` and any `setsockopt`,
+    // which fails the call (`EINVAL` on macOS, see the forced-positions
+    // test below). The channel receive already bounds the wait.
     let first = UnixStream::connect(temp.socket()).expect("the first connection connects");
-    first.set_read_timeout(Some(DEADLINE)).unwrap();
     let (first_tx, first_rx) = mpsc::channel();
     thread::spawn(move || {
         let mut first = first;
@@ -1090,5 +1093,145 @@ fn an_idle_exiting_hub_answers_one_connection_eof_and_leaves_the_next_unanswered
     assert!(
         last.contains("hub_stopped"),
         "the log ends with hub_stopped: {last}"
+    );
+}
+
+/// A hub whose idle exit claimed `stop` and stalled closing its
+/// environment in the test's `before_publish` hold: the accept loop drops
+/// every connection unanswered, while the listener stays bound until the
+/// test releases the hold.
+struct Stalled {
+    temp: Temp,
+    release_tx: mpsc::Sender<()>,
+    done: mpsc::Receiver<i32>,
+}
+
+fn start_stalled_hub() -> Stalled {
+    let temp = Temp::new();
+    let shell = fake_shell(&temp, "export MARK=1\nexec /bin/sh -c \"$4\"");
+    let clock = fakes::clock::FakeClock::new();
+    let environments = crate::Environments::new(inherited_env(&shell, &temp.dir), &temp.dir);
+    let (held_tx, held_rx) = mpsc::channel();
+    let (release_tx, release_rx) = mpsc::channel::<()>();
+    *support::lock(&environments.before_publish) = Some(Box::new(move || {
+        held_tx.send(()).unwrap_or(());
+        release_rx.recv().unwrap_or(());
+    }));
+    let done = serve_mode_env(
+        &temp,
+        IDLE,
+        Arc::clone(&clock),
+        Level::Info,
+        crate::Mode::OnDemand,
+        Arc::clone(&environments),
+    );
+    Deadline::after(DEADLINE)
+        .recv(&held_rx)
+        .expect("the capture holds before publishing");
+    await_idle_park(&clock, clock.origin(), "at start");
+    clock.advance(IDLE);
+    crate::testkit::await_true("close begins", {
+        let environments = Arc::clone(&environments);
+        move || environments.is_closed()
+    });
+    Stalled {
+        temp,
+        release_tx,
+        done,
+    }
+}
+
+/// Reads to EOF on a clone: `Ok(0)` with no bytes proves the accept loop
+/// took the connection and dropped it unanswered.
+fn await_drop(stream: &UnixStream, what: &str) {
+    let probe = stream.try_clone().unwrap();
+    let (eof_tx, eof_rx) = mpsc::channel();
+    thread::spawn(move || {
+        let mut probe = probe;
+        let mut sink = Vec::new();
+        let read = probe.read_to_end(&mut sink).map_err(|error| error.kind());
+        eof_tx.send(read).unwrap_or(());
+    });
+    let read = Deadline::after(DEADLINE)
+        .recv(&eof_rx)
+        .unwrap_or_else(|_| panic!("the accept loop drops the connection {what}"));
+    assert_eq!(read, Ok(0), "the drop carries no bytes {what}");
+}
+
+/// #2259: the exiting hub's accept-side drop lands between a client's
+/// `connect` and its `set_read_timeout`, failing the setup call. Each
+/// position below forces the teardown to one side of the setup calls with
+/// a proof signal first, so every outcome is ordered, not raced.
+#[test]
+fn each_forced_teardown_position_around_connect_and_set_read_timeout() {
+    // The accept-side drop lands before `set_read_timeout` while the
+    // listener stays bound: EOF on the clone proves the drop, so the
+    // setup call runs strictly after it.
+    let dropped = start_stalled_hub();
+    let racy = UnixStream::connect(dropped.temp.socket()).expect("the drop position connects");
+    await_drop(&racy, "at the drop position");
+    let timed = racy.set_read_timeout(Some(DEADLINE));
+    // A read timeout set after the peer's drop is `EINVAL` where the
+    // kernel rejects the option on a dead socket.
+    #[cfg(target_os = "macos")]
+    assert_eq!(
+        timed.map_err(|error| error.raw_os_error()),
+        Err(Some(libc::EINVAL)),
+        "a read timeout set after the accept-side drop is EINVAL"
+    );
+    #[cfg(not(target_os = "macos"))]
+    drop(timed);
+    dropped.release_tx.send(()).unwrap_or(());
+    assert_eq!(
+        Deadline::after(DEADLINE)
+            .recv(&dropped.done)
+            .expect("the drop position exits idle"),
+        0
+    );
+    // Both closes land before `set_read_timeout`: the drop as above,
+    // then the listener drop and unlink after the release. The missing
+    // path proves the unlink, so the setup call runs strictly after it.
+    let unlinked = start_stalled_hub();
+    let queued = UnixStream::connect(unlinked.temp.socket()).expect("the unlink position connects");
+    await_drop(&queued, "at the unlink position");
+    unlinked.release_tx.send(()).unwrap_or(());
+    crate::testkit::await_true("the exit removes the socket at the unlink position", {
+        let socket = unlinked.temp.socket();
+        move || !socket.exists()
+    });
+    let timed = queued.set_read_timeout(Some(DEADLINE));
+    #[cfg(target_os = "macos")]
+    assert_eq!(
+        timed.map_err(|error| error.raw_os_error()),
+        Err(Some(libc::EINVAL)),
+        "a read timeout set after the unlink is EINVAL"
+    );
+    #[cfg(not(target_os = "macos"))]
+    drop(timed);
+    assert_eq!(
+        Deadline::after(DEADLINE)
+            .recv(&unlinked.done)
+            .expect("the unlink position exits idle"),
+        0
+    );
+    // The unlink lands before `connect`: the missing path proves it, so
+    // the connect runs strictly after it and finds no socket.
+    let gone = start_stalled_hub();
+    gone.release_tx.send(()).unwrap_or(());
+    crate::testkit::await_true("the exit removes the socket at the gone position", {
+        let socket = gone.temp.socket();
+        move || !socket.exists()
+    });
+    let connected = UnixStream::connect(gone.temp.socket());
+    assert_eq!(
+        connected.err().map(|error| error.kind()),
+        Some(std::io::ErrorKind::NotFound),
+        "connecting after the unlink finds no socket"
+    );
+    assert_eq!(
+        Deadline::after(DEADLINE)
+            .recv(&gone.done)
+            .expect("the gone position exits idle"),
+        0
     );
 }
