@@ -603,7 +603,10 @@ fn reply_drain_bound_expires_at_the_exact_edge() {
     );
 
     let (clock, server, _client, requests, drained, ack) = start_reply_drain(bound);
-    let mark = clock.advance_marked(bound - Duration::from_nanos(1));
+    let before = bound
+        .checked_sub(Duration::from_nanos(1))
+        .expect("the bound is at least one nanosecond");
+    let mark = clock.advance_marked(before);
     assert!(
         clock.await_parked_since(&mark, ack.until, OP),
         "one tick below the bound the drain is still waiting"
@@ -644,7 +647,10 @@ fn reply_drain_progress_does_not_restart_its_bound() {
         clock.await_parked_since(&mark, ack.until, OP),
         "after consuming the byte, the drain waits again on the same bound"
     );
-    clock.advance(SHORT - Duration::from_millis(1));
+    let rest = SHORT
+        .checked_sub(Duration::from_millis(1))
+        .expect("the short bound exceeds one millisecond");
+    clock.advance(rest);
     Deadline::after(OP).recv_or_fail(&drained, "the unchanged drain bound");
     let request = Deadline::after(OP).recv_or_fail(&requests, "the recorded request");
     assert_eq!(request.target, "/v1");

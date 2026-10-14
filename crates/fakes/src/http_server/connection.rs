@@ -461,7 +461,9 @@ impl Connection {
     /// sending, so the operation budget uses the injected clock. Its
     /// readiness wait also ends as soon as server shutdown lands.
     pub(crate) fn shutdown_write_and_drain(&mut self, within: Duration) {
-        let _ = self.stream.shutdown(Shutdown::Write);
+        match self.stream.shutdown(Shutdown::Write) {
+            Ok(()) | Err(_) => {}
+        }
         let op = RequestBudget::start_on(&self.shared.clock, within, self.shared.limits.guard);
         loop {
             if self.shared.stopping.load(Ordering::SeqCst) || op.expired() {
