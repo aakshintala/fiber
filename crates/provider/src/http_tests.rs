@@ -2720,33 +2720,41 @@ fn an_observed_proxy_send_times_its_one_socket() {
         via: super::Via::Through(proxy_through(&proxy)),
         limits: net::LIMITS,
     };
-    let (sent, _) = observed_with(
-        url,
-        &[],
-        b"{}",
-        None,
-        route,
-        &std::sync::Arc::default(),
-        as_clock(),
-        Some(net.timing()),
+    let clock = as_clock();
+    let timing = net.timing();
+    let cancel = std::sync::Arc::default();
+    let (sent, body, _) = fakes::within(
+        "the observed proxy send and response body to be read",
+        CALL_WITHIN,
+        move || {
+            let mut secrets = crate::redact::Secrets::default();
+            let sent = super::post_signed_observed(
+                &url,
+                &[],
+                b"{}",
+                None,
+                &route,
+                &cancel,
+                &mut secrets,
+                &clock,
+                Some(&timing),
+            );
+            match sent {
+                Ok(mut sent) => {
+                    let mut text = String::new();
+                    let body =
+                        std::io::Read::read_to_string(&mut sent.stream, &mut text).map(|_| text);
+                    (Ok(()), body, secrets)
+                }
+                Err(failed) => (Err(failed), Ok(String::new()), secrets),
+            }
+        },
     );
-    let sent = match sent {
-        Ok(sent) => sent,
+    match sent {
+        Ok(()) => {}
         Err(failed) => panic!("the observed proxy send failed: {:?}", failed.error),
-    };
-    let deadline = Deadline::after(CALL_WITHIN);
-    let (body_tx, body_rx) = mpsc::channel();
-    thread::spawn(move || {
-        let mut sent = sent;
-        let mut text = String::new();
-        let outcome = std::io::Read::read_to_string(&mut sent.stream, &mut text).map(|_| text);
-        match body_tx.send(outcome) {
-            Ok(()) | Err(_) => {}
-        }
-    });
-    let text = deadline
-        .recv_or_fail(&body_rx, "the proxy response body to be read")
-        .unwrap();
+    }
+    let text = body.unwrap();
     assert_eq!(text, "{}", "the proxy send reached the origin");
     assert!(
         proxy.await_connects(1, CONNECT_WITHIN),
