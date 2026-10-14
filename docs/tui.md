@@ -108,6 +108,8 @@ the session starts in a new worktree of the workspace, by the same rules a
 delegate's worktree follows (`docs/invocation.md`, "Isolation"). Outside a git
 repository the switch is not shown.
 
+**The model and thinking chips** name the configured model and its thinking level. Clicking the model or thinking chip opens the model picker. The thinking chip opens it on the model's thinking levels, with focus starting on the level chips.
+
 **The keyboard reaches every part of home.** Focus runs top to bottom: the
 entry bar, the chip row, the session list. ↓ from the entry bar focuses the
 chip row, on the chip focused there last, the workspace chip at first. ← and →
