@@ -33,7 +33,7 @@ mod browser;
 use browser::login_with;
 pub use browser::{LoginCancel, browser_login};
 
-use crate::{LOGOUT_SHAPE, fail, project_of};
+use crate::{LOGOUT_SHAPE, finish, project_of};
 
 /// The label a login stores under when `--as` is absent and the login
 /// revealed no email.
@@ -763,14 +763,6 @@ pub(crate) fn logout(
             .map_err(terminal_failure)?;
     }
     Ok(())
-}
-
-/// Prints a failure the way every command does, and gives its exit code.
-fn finish(result: Result<(), Failure>) -> i32 {
-    match result {
-        Ok(()) => 0,
-        Err(e) => fail(e),
-    }
 }
 
 fn home_and_providers() -> Result<(std::path::PathBuf, Providers, Vec<Notice>), Failure> {

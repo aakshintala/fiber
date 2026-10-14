@@ -103,3 +103,45 @@ fn fail(e: Failure) -> i32 {
     writeln!(io::stderr(), "fiber: {}", e.message).unwrap_or(());
     doors::exit_code(&e)
 }
+
+/// Maps a command result to its exit code through the one error branch.
+fn finish(result: Result<(), Failure>) -> i32 {
+    finish_code(result.map(|()| 0))
+}
+
+/// Maps an integer command result to its exit code: the value on success,
+/// the failure's code once printed on error.
+fn finish_code(result: Result<i32, Failure>) -> i32 {
+    match result {
+        Ok(code) => code,
+        Err(e) => fail(e),
+    }
+}
+
+/// Writes one line to `out`: the line plus one line feed. A write failure
+/// is the shared standard-output failure, for the caller to propagate or
+/// ignore as it already did.
+fn write_line(out: &mut dyn Write, line: &str) -> Result<(), Failure> {
+    writeln!(out, "{line}")
+        .map_err(|e| failed(ErrorCode::IoFailed, format!("standard output: {e}")))
+}
+
+/// Runs `run` with Fiber home and the current directory, mapping any
+/// failure to its exit code.
+fn with_dirs(run: impl FnOnce(&Path, &Path) -> Result<(), Failure>) -> i32 {
+    with_dirs_code(|home, workspace| run(home, workspace).map(|()| 0))
+}
+
+/// Runs `run` with Fiber home and the current directory, keeping its
+/// integer success code and mapping any failure to its exit code. Home
+/// is read before the current directory, as each wrapper did.
+fn with_dirs_code(run: impl FnOnce(&Path, &Path) -> Result<i32, Failure>) -> i32 {
+    let ran = ::config::fiber_home_from_env()
+        .map_err(|e| failed(e.code(), e))
+        .and_then(|home| {
+            let workspace = std::env::current_dir()
+                .map_err(|e| failed(ErrorCode::IoFailed, format!("the current directory: {e}")))?;
+            run(&home, &workspace)
+        });
+    finish_code(ran)
+}

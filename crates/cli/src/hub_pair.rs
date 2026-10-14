@@ -1,5 +1,5 @@
 //! Pairing codes and terminal QR output (`docs/invocation.md`, "Remote clients").
-use crate::{fail, failed, sessions::request};
+use crate::{failed, finish, sessions::request, write_line};
 use contract::{ErrorCode, shapes::Failure};
 use qrcode::{QrCode, render::unicode::Dense1x2};
 use serde_json::{Map, Value};
@@ -67,10 +67,7 @@ pub fn hub_pair(
 ) -> i32 {
     let mut stdout = io::stdout();
     let terminal = stdout.is_terminal();
-    match run(&mut stdout, device, address, terminal, connect) {
-        Ok(()) => 0,
-        Err(error) => fail(error),
-    }
+    finish(run(&mut stdout, device, address, terminal, connect))
 }
 fn run(
     out: &mut dyn Write,
@@ -98,14 +95,14 @@ fn run(
     } else {
         None
     };
-    let print = || -> io::Result<()> {
-        writeln!(out, "{code}")?;
+    let print = || -> Result<(), Failure> {
+        write_line(out, code)?;
         if let Some(qr) = qr {
-            writeln!(out, "\n{qr}")?;
+            write_line(out, &format!("\n{qr}"))?;
         }
         Ok(())
     };
-    print().map_err(|e| failed(ErrorCode::IoFailed, format!("standard output: {e}")))
+    print()
 }
 fn qr_text(address: Option<&Address>, code: &str) -> String {
     address.map_or_else(

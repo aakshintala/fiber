@@ -16,33 +16,25 @@ use contract::shapes::Failure;
 use contract::tool::Cancel;
 use serde::Serialize;
 
-use crate::{fail, failed};
+use crate::{failed, with_dirs, write_line};
 
 /// `fiber sessions search [--all] [--json] <text>` in the current
 /// directory: the shared scan's hits on stdout, its problems on stderr.
 pub fn search(text: &str, all: bool, json: bool) -> i32 {
-    let ran = config::fiber_home_from_env()
-        .map_err(|e| failed(e.code(), e))
-        .and_then(|home| {
-            let workspace = std::env::current_dir()
-                .map_err(|e| failed(ErrorCode::IoFailed, format!("the current directory: {e}")))?;
-            let in_repository = doors::resolve_project(&workspace).in_repository;
-            run(
-                &home,
-                &workspace,
-                Arc::new(doors::project),
-                in_repository,
-                text,
-                all,
-                json,
-                &mut io::stdout(),
-                &mut io::stderr(),
-            )
-        });
-    match ran {
-        Ok(()) => 0,
-        Err(e) => fail(e),
-    }
+    with_dirs(|home, workspace| {
+        let in_repository = doors::resolve_project(workspace).in_repository;
+        run(
+            home,
+            workspace,
+            Arc::new(doors::project),
+            in_repository,
+            text,
+            all,
+            json,
+            &mut io::stdout(),
+            &mut io::stderr(),
+        )
+    })
 }
 
 /// The signal the command scans with: never cancelled. SIGINT, SIGTERM and
@@ -116,8 +108,7 @@ fn json_hits(found: &Found, out: &mut dyn Write) -> Result<(), Failure> {
     for hit in &found.hits {
         let line = serde_json::to_string(&row(hit))
             .map_err(|e| failed(ErrorCode::IoFailed, format!("a search hit: {e}")))?;
-        writeln!(out, "{line}")
-            .map_err(|e| failed(ErrorCode::IoFailed, format!("standard output: {e}")))?;
+        write_line(out, &line)?;
     }
     Ok(())
 }
@@ -135,22 +126,21 @@ fn text_hits(
         } else {
             "this project's"
         };
-        writeln!(
+        write_line(
             out,
-            "No hits for \"{}\" in {scope} sessions.",
-            one_line(text)
-        )
-        .map_err(|e| failed(ErrorCode::IoFailed, format!("standard output: {e}")))?;
+            &format!("No hits for \"{}\" in {scope} sessions.", one_line(text)),
+        )?;
         return Ok(());
     }
-    writeln!(
+    write_line(
         out,
-        "{} of {} hits for \"{}\", best first.",
-        found.hits.len(),
-        found.total,
-        one_line(text)
-    )
-    .map_err(|e| failed(ErrorCode::IoFailed, format!("standard output: {e}")))?;
+        &format!(
+            "{} of {} hits for \"{}\", best first.",
+            found.hits.len(),
+            found.total,
+            one_line(text)
+        ),
+    )?;
     for (at, hit) in found.hits.iter().enumerate() {
         block(out, at + 1, hit)?;
     }
@@ -166,27 +156,25 @@ fn block(out: &mut dyn Write, number: usize, hit: &Hit) -> Result<(), Failure> {
         Label::ToolInput => "tool_input",
         Label::ToolOutput => "tool_output",
     };
-    writeln!(
+    write_line(
         out,
-        "{number}. {label}, session {} \"{}\", seq {}, {}",
-        one_line(&hit.session_id.0),
-        one_line(&hit.name),
-        hit.seq.0,
-        utc(hit.ts / 1_000)
-    )
-    .map_err(|e| failed(ErrorCode::IoFailed, format!("standard output: {e}")))?;
+        &format!(
+            "{number}. {label}, session {} \"{}\", seq {}, {}",
+            one_line(&hit.session_id.0),
+            one_line(&hit.name),
+            hit.seq.0,
+            utc(hit.ts / 1_000)
+        ),
+    )?;
     // A hit in an artifact otherwise names a `seq` whose event does not
     // hold the snippet.
     if let Some(artifact) = &hit.artifact {
-        writeln!(
+        write_line(
             out,
-            "   artifact {}",
-            one_line(&artifact.display().to_string())
-        )
-        .map_err(|e| failed(ErrorCode::IoFailed, format!("standard output: {e}")))?;
+            &format!("   artifact {}", one_line(&artifact.display().to_string())),
+        )?;
     }
-    writeln!(out, "   {}", one_line(&hit.snippet))
-        .map_err(|e| failed(ErrorCode::IoFailed, format!("standard output: {e}")))
+    write_line(out, &format!("   {}", one_line(&hit.snippet)))
 }
 
 /// A hit as one `--json` row.

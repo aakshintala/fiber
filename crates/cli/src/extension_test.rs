@@ -13,6 +13,8 @@ use std::sync::{Arc, Condvar, Mutex, MutexGuard, PoisonError, mpsc};
 use std::thread;
 use std::time::{Duration, Instant, SystemTime};
 
+use crate::{failed, finish_code, write_line};
+use contract::ErrorCode;
 use contract::clock::{Clock, Wake};
 use extensions::{Origin, Request};
 use rustix::process::{Pid, Signal};
@@ -79,10 +81,8 @@ struct RunOptions {
 pub fn extension_test(path: Option<&Path>, fiber: Result<PathBuf, String>) -> i32 {
     let fiber = match fiber {
         Ok(fiber) => fiber,
-        Err(error) => {
-            writeln!(io::stderr().lock(), "fiber: {error}").unwrap_or(());
-            return 1;
-        }
+        // The shared error branch prints the failure and gives code 1.
+        Err(error) => return finish_code(Err(failed(ErrorCode::IoFailed, error))),
     };
     let options = RunOptions {
         clock: Arc::new(ProcessClock),
@@ -141,7 +141,7 @@ fn extension_test_with(
         }
     };
     if cases.is_empty() {
-        writeln!(out, "no cases in {}/tests", package.display()).unwrap_or(());
+        write_line(out, &format!("no cases in {}/tests", package.display())).unwrap_or(());
         return 1;
     }
 
@@ -152,18 +152,19 @@ fn extension_test_with(
         match run_case(&package, &case, &fallback_name, fiber, options) {
             CaseOutcome::Passed { name } => {
                 passed += 1;
-                writeln!(out, "ok {name}").unwrap_or(());
+                write_line(out, &format!("ok {name}")).unwrap_or(());
             }
             CaseOutcome::Failed { name, reasons } => {
                 failed += 1;
-                writeln!(out, "FAIL {name}").unwrap_or(());
+                write_line(out, &format!("FAIL {name}")).unwrap_or(());
                 for reason in reasons {
-                    writeln!(out, "  {}", reason.trim()).unwrap_or(());
+                    write_line(out, &format!("  {}", reason.trim())).unwrap_or(());
                 }
             }
         }
     }
-    write!(out, "{}", summary(passed, failed)).unwrap_or(());
+    let summary = summary(passed, failed);
+    write_line(out, summary.strip_suffix('\n').unwrap_or(&summary)).unwrap_or(());
     if failed == 0 { 0 } else { 1 }
 }
 

@@ -23,7 +23,7 @@ use serde_json::{Map, Value};
 
 use crate::approve::say;
 use crate::login::{KeyReader, NoEcho, Plain};
-use crate::{fail, failed, project_of, usage};
+use crate::{failed, project_of, usage, with_dirs, write_line};
 
 /// A server's declaration as the layer's file holds it. Its `Debug`
 /// prints names only, never values: a url prints redacted (never its
@@ -553,28 +553,20 @@ pub(crate) fn run_remove(
 
 /// `fiber mcp remove [--project | --repo] <name>` in the current directory.
 pub fn mcp_remove(layer: Layer, name: &str) -> i32 {
-    let ran = config::fiber_home_from_env()
-        .map_err(|e| failed(e.code(), e))
-        .and_then(|home| {
-            let workspace = std::env::current_dir()
-                .map_err(|e| failed(ErrorCode::IoFailed, format!("the current directory: {e}")))?;
-            let mut out = io::stdout();
-            let mut err = io::stderr();
-            run_remove(
-                &home,
-                &workspace,
-                layer,
-                name,
-                Streams {
-                    out: &mut out,
-                    err: &mut err,
-                },
-            )
-        });
-    match ran {
-        Ok(()) => 0,
-        Err(e) => fail(e),
-    }
+    with_dirs(|home, workspace| {
+        let mut out = io::stdout();
+        let mut err = io::stderr();
+        run_remove(
+            home,
+            workspace,
+            layer,
+            name,
+            Streams {
+                out: &mut out,
+                err: &mut err,
+            },
+        )
+    })
 }
 
 /// `fiber mcp add [--project | --repo] <name> <url>` or `... -- <command>
@@ -679,34 +671,26 @@ pub(crate) fn run_list(
         ]);
     }
     for line in crate::table::pad(&table) {
-        say(out, &format!("{line}\n"));
+        write_line(out, &line).unwrap_or(());
     }
     Ok(())
 }
 
 /// `fiber mcp list` in the current directory.
 pub fn mcp_list(clock: Arc<dyn Clock>) -> i32 {
-    let ran = config::fiber_home_from_env()
-        .map_err(|e| failed(e.code(), e))
-        .and_then(|home| {
-            let workspace = std::env::current_dir()
-                .map_err(|e| failed(ErrorCode::IoFailed, format!("the current directory: {e}")))?;
-            let mut out = io::stdout();
-            let mut err = io::stderr();
-            run_list(
-                &home,
-                &workspace,
-                Streams {
-                    out: &mut out,
-                    err: &mut err,
-                },
-                &clock,
-            )
-        });
-    match ran {
-        Ok(()) => 0,
-        Err(e) => fail(e),
-    }
+    with_dirs(|home, workspace| {
+        let mut out = io::stdout();
+        let mut err = io::stderr();
+        run_list(
+            home,
+            workspace,
+            Streams {
+                out: &mut out,
+                err: &mut err,
+            },
+            &clock,
+        )
+    })
 }
 
 /// Whether the secret prompt runs with echo off: both stdin and stderr must
@@ -726,47 +710,39 @@ pub fn mcp_add(
     // The declaration is already shaped; the inner call reads it back as
     // the raw parts.
     let (url, env, secret_keys, command) = split_declaration(&declaration);
-    let ran = config::fiber_home_from_env()
-        .map_err(|e| failed(e.code(), e))
-        .and_then(|home| {
-            let workspace = std::env::current_dir()
-                .map_err(|e| failed(ErrorCode::IoFailed, format!("the current directory: {e}")))?;
-            let stdin = io::stdin();
-            let on_terminal = stdin.is_terminal();
-            let mut out = io::stdout();
-            let mut err = io::stderr();
-            let terminal = prompt_on(on_terminal, err.is_terminal());
-            let mut keys: Box<dyn KeyReader> = if on_terminal {
-                Box::new(NoEcho)
-            } else {
-                Box::new(Plain)
-            };
-            run_add(
-                &home,
-                &workspace,
-                layer,
-                name,
-                url,
-                &env,
-                &secret_keys,
-                &command,
-                remote,
-                SecretInput {
-                    keys: keys.as_mut(),
-                    input: &mut stdin.lock(),
-                    terminal,
-                },
-                Streams {
-                    out: &mut out,
-                    err: &mut err,
-                },
-                &clock,
-            )
-        });
-    match ran {
-        Ok(()) => 0,
-        Err(e) => fail(e),
-    }
+    with_dirs(|home, workspace| {
+        let stdin = io::stdin();
+        let on_terminal = stdin.is_terminal();
+        let mut out = io::stdout();
+        let mut err = io::stderr();
+        let terminal = prompt_on(on_terminal, err.is_terminal());
+        let mut keys: Box<dyn KeyReader> = if on_terminal {
+            Box::new(NoEcho)
+        } else {
+            Box::new(Plain)
+        };
+        run_add(
+            home,
+            workspace,
+            layer,
+            name,
+            url,
+            &env,
+            &secret_keys,
+            &command,
+            remote,
+            SecretInput {
+                keys: keys.as_mut(),
+                input: &mut stdin.lock(),
+                terminal,
+            },
+            Streams {
+                out: &mut out,
+                err: &mut err,
+            },
+            &clock,
+        )
+    })
 }
 
 #[cfg(test)]

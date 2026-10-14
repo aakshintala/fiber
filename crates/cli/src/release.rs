@@ -12,7 +12,7 @@ use contract::shapes::Failure;
 use doors::failure;
 use extensions::Release;
 
-use crate::{fail, failed, usage};
+use crate::{failed, finish, usage};
 
 /// Where releases are published.
 pub(crate) const RELEASES: &str = "https://github.com/aakshintala/fiber/releases";
@@ -42,10 +42,7 @@ pub fn release_install(
                 &mut io::stderr(),
             )
         });
-    match ran {
-        Ok(()) => 0,
-        Err(e) => fail(e),
-    }
+    finish(ran)
 }
 
 /// Checks the version and the commit before any request, installs, and
