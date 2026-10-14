@@ -1023,46 +1023,23 @@ fn a_fixed_body_followed_by_pipelined_bytes_keeps_only_its_length() {
     );
 }
 
-/// The next announcement naming `phase`, holding any other phase for a
-/// later wait: one channel carries every waiter's announcement, and a
-/// window's accept can announce before the previous request's body does.
-/// Every receive is bounded, so a missing wait fails, never hangs.
-fn next_phase(
-    acks: &mpsc::Receiver<WaitAck>,
-    stashed: &mut Vec<WaitAck>,
-    deadline: &Deadline,
-    phase: &'static str,
-    what: &str,
-) -> WaitAck {
-    if let Some(at) = stashed.iter().position(|ack| ack.phase == phase) {
-        return stashed.remove(at);
-    }
-    loop {
-        let ack = deadline.recv_or_fail(acks, what);
-        if ack.phase == phase {
-            return ack;
-        }
-        stashed.push(ack);
-    }
-}
-
 // Twenty bench-shaped POSTs: byte-slice bodies of growing length, each
 // on a fresh connection read to the server's close, against small stream
 // replies. The bodies wait ready-built before the server starts, so no
-// client think time parks the server idle. The client then holds each
-// connection until the server parks in its accept, and each body until the
-// server parks in its read, so every request pays two parks: at base each
-// such park sleeps its whole poll bound, about a millisecond, while a
-// readiness wait ends when its bytes arrive instead. The first window may
-// predate the subscription, so nineteen accepts and twenty reads
-// rendezvous: the bound of twenty sits below half the forced parks, with
-// room for the idle sleeps a turn pays besides them. The same twenty posts
-// sleep seventy-one bounds at base (nextest, debug, macOS).
+// client think time parks the server idle. Each body waits for the
+// server's read park: the park is certain, since no body byte is on the
+// wire yet, and the announcement plus the parked check prove the waiter
+// is inside its poll before the bytes arrive. A readiness wait then ends
+// with its fd readable and counts one readiness outcome; a condvar wait
+// sleeps its whole poll bound instead and counts none. Only rendezvoused
+// read parks are counted: idle accept windows between requests, and any
+// re-poll while the client is descheduled, end in timeouts, which never
+// count as readiness, so scheduling alone cannot fail the bound. At base
+// every park sleeps, so no readiness outcome is ever counted.
 #[test]
 fn busy_shaped_posts_sleep_only_when_idle() {
     const CALLS: usize = 20;
     const STEP: usize = 2_000;
-    const SLEPT_BOUND: u64 = 20;
     let clock = FakeClock::new();
     let script: Vec<Response> = (0..CALLS)
         .map(|_| Response::stream("event: done\ndata: {}\n\n"))
@@ -1076,21 +1053,7 @@ fn busy_shaped_posts_sleep_only_when_idle() {
     let acks = server.core.test_acknowledgments();
     let addr = server.addr;
     let deadline = Deadline::after(READ_WITHIN);
-    let mut stashed = Vec::new();
-    for (i, body) in bodies.iter().enumerate() {
-        // The connection waits for the server's accept park: the park is
-        // certain, since no client has connected yet. The first window may
-        // park before the acknowledgments below are subscribed, so only
-        // later windows rendezvous; their parks always postdate it.
-        if i != 0 {
-            next_phase(
-                &acks,
-                &mut stashed,
-                &deadline,
-                "to accept the connection",
-                "the accept's wait",
-            );
-        }
+    for body in bodies.iter() {
         let mut stream = TcpStream::connect_timeout(&addr, READ_WITHIN).unwrap();
         stream.set_read_timeout(Some(READ_WITHIN)).unwrap();
         stream
@@ -1103,14 +1066,15 @@ fn busy_shaped_posts_sleep_only_when_idle() {
             )
             .unwrap();
         // The body waits for the server's read park: the park is certain,
-        // since no body byte is on the wire yet.
-        let parked = next_phase(
-            &acks,
-            &mut stashed,
-            &deadline,
-            "to read the fixed body",
-            "the body read's wait",
-        );
+        // since no body byte is on the wire yet. Other phases may announce
+        // first; every receive is bounded, so a missing body wait fails,
+        // never hangs.
+        let parked = loop {
+            let ack = deadline.recv_or_fail(&acks, "the body read's wait");
+            if ack.phase == "to read the fixed body" {
+                break ack;
+            }
+        };
         assert!(
             clock.await_thread_parked(parked.thread, parked.until, READ_WITHIN),
             "the body read parks before its bytes arrive"
@@ -1141,10 +1105,13 @@ fn busy_shaped_posts_sleep_only_when_idle() {
         );
     }
     // The requests lock synchronises with the serving threads, so every
-    // sleep the requests cost is counted here.
-    let slept = server.core.test_slept_waits();
+    // readiness outcome the requests cost is counted here: one per
+    // rendezvoused body read, since each rendezvoused park finds its bytes
+    // already waiting.
+    let readied = server.core.test_readied_waits();
+    let calls = u64::try_from(CALLS).unwrap();
     assert!(
-        slept <= SLEPT_BOUND,
-        "{CALLS} busy-shaped posts sleep {slept} full poll bounds, at most {SLEPT_BOUND}: waits end on readiness, not on a poll"
+        readied >= calls,
+        "{CALLS} busy-shaped posts end {readied} rendezvoused read parks on readiness, at least {calls}: waits end on readiness, not on a poll"
     );
 }
