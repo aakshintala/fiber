@@ -17,7 +17,7 @@ use std::sync::Arc;
 
 use common::{
     FIBER, Repos, Setup, StoreOperations, approval, approve, copy, counter, counting_root, declare,
-    dep_version, depends_home, digest_of, installing, item, manifest, named, outside,
+    dep_version, depends_home, digest_of, drive, installing, item, manifest, named, outside,
     outside_names, project, ready, store, write,
 };
 use extensions::{Error, Fetch, Index, Origin, Store, declared_items, hash};
@@ -280,6 +280,66 @@ fn dependencies_without_a_fetch_fail_and_install_nothing() {
     assert!(!copy(&setup, &digest).exists());
     assert!(!ready(&setup, &digest).exists());
     assert!(!approval(&setup, &digest).exists());
+}
+
+#[test]
+fn pinning_runs_on_the_fetch_clock_not_the_construction_clock() {
+    let setup = Setup::new();
+    let mut repos = Repos::new(&setup);
+    let helper = "example.com/acme/helper";
+    repos.tag(helper, "", "v1.0.0", &manifest(helper), &[]);
+    let root = "fiber.test/root";
+    let unique = format!("stall-pin-clock-{}", setup.root().display());
+    let watching = unique.clone();
+    // The guard matches this stall alone by its argv: a panic anywhere
+    // below still kills it, by pid and never the test's own group.
+    let watchdog = fakes::Watchdog::matching(&watching);
+    let step = format!("trap '' TERM; while :; do :; done # {unique}");
+    declare(&setup, &installing(root, &[(helper, "1.0")], &step));
+    let construction = FakeClock::new();
+    let fetch_clock = FakeClock::new();
+    let (found, digest) = item(&setup, &fetch_clock);
+    let store = Store::new(
+        &setup.home(),
+        &project(),
+        Arc::clone(&construction) as Arc<_>,
+    )
+    .fetching(Fetch::new(
+        repos.origin(),
+        FIBER,
+        Arc::clone(&fetch_clock) as Arc<_>,
+    ));
+    let (done_tx, done_rx) = std::sync::mpsc::channel();
+    std::thread::Builder::new()
+        .name("stalled pin".into())
+        .spawn(move || {
+            let _sent = done_tx.send(store.approve(&found, &digest));
+        })
+        .unwrap();
+    // The run parks on the fetch's clock: driving it past the install
+    // deadline stops the stalled step. A run waiting on the construction
+    // clock instead would never park here, and this would fail waiting
+    // for the park.
+    let err = drive(&fetch_clock, done_rx, &unique).unwrap_err();
+    assert!(
+        matches!(err, Error::InstallExited { .. }),
+        "a stalled step fails as its install step failed: {err}"
+    );
+    assert!(
+        construction.parked().is_empty(),
+        "nothing ever waited on the construction clock"
+    );
+    // The run kills what it stopped: leftovers fail the test, by pid and
+    // never the test's own group.
+    let leftovers = fakes::matching(&watching).unwrap();
+    for pid in &leftovers {
+        drop(fakes::kill_pid(*pid, "KILL"));
+    }
+    assert!(
+        leftovers.is_empty(),
+        "the stalled install step is gone: {leftovers:?}"
+    );
+    watchdog.stand_down(fakes::MUST_SUCCEED_WITHIN);
 }
 
 #[test]
@@ -709,23 +769,6 @@ fn an_unreadable_completion_marker_fails_naming_it() {
     assert!(copy(&setup, &digest).is_dir());
     assert!(ready(&setup, &digest).is_file());
     assert_eq!(fs::read(approval(&setup, &digest)).unwrap(), before);
-}
-
-#[test]
-fn fetch_debug_names_the_version_and_skips_the_origin() {
-    // The `Debug` names the fetch's version but never the origin's
-    // internals: a body replaced with an empty `Ok` (the surviving
-    // mutant) prints none of them. The public API suffices: no unit
-    // seam is needed.
-    let fetch = Fetch::new(
-        Origin::new("fiber-test-git", |name| name.to_owned()),
-        "0.1.0",
-        FakeClock::new(),
-    );
-    let text = format!("{fetch:?}");
-    assert!(text.contains("Fetch"), "{text}");
-    assert!(text.contains("0.1.0"), "{text}");
-    assert!(!text.contains("fiber-test-git"), "{text}");
 }
 
 #[test]

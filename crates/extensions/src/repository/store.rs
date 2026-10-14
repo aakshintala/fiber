@@ -46,15 +46,6 @@ pub struct Fetch {
     clock: Arc<dyn Clock>,
 }
 
-impl fmt::Debug for Fetch {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        // The origin's URL closure is configuration, never diagnostics.
-        f.debug_struct("Fetch")
-            .field("fiber_version", &self.fiber_version)
-            .finish_non_exhaustive()
-    }
-}
-
 impl Fetch {
     /// Fetches from `origin`, accepting manifests for `fiber_version`, on
     /// `clock`.
@@ -110,7 +101,8 @@ pub struct CopyHold {
 
 impl Store {
     /// The store in `home` for `project`. The clock bounds an extension's
-    /// install step when its copy is built.
+    /// install step when its copy is built; [`Store::fetching`] replaces
+    /// it with the fetch's, so fetching and install steps share one.
     pub fn new(home: &Path, project: &ProjectKey, clock: Arc<dyn Clock>) -> Self {
         Self {
             home: home.to_path_buf(),
@@ -121,20 +113,13 @@ impl Store {
     }
 
     /// Fetches a dependency-bearing copy's dependencies from `fetch`, on
-    /// its clock. Without it, approving an extension whose manifest names
-    /// `depends` fails.
+    /// its clock: pinning runs on the fetch's clock, so fetching and
+    /// install steps share one. Without it, approving an extension whose
+    /// manifest names `depends` fails.
     pub fn fetching(mut self, fetch: Fetch) -> Self {
+        self.clock = fetch.clock();
         self.fetch = Some(fetch);
         self
-    }
-
-    /// The clock pinning runs on: a fetch's, so fetching and install steps
-    /// share one, else the store's own.
-    fn pin_clock(&self) -> Arc<dyn Clock> {
-        self.fetch
-            .as_ref()
-            .map(Fetch::clock)
-            .unwrap_or_else(|| Arc::clone(&self.clock))
     }
 
     /// An extension's and a hook's approvals are per project; a server's are
@@ -366,7 +351,7 @@ impl Store {
         }
         if item.kind == OfferedKind::Extension {
             let manifest = config::read_manifest(copy)?;
-            let clock = self.pin_clock();
+            let clock = Arc::clone(&self.clock);
             self.install_depends(item, copy, &manifest, &clock)?;
             prepare(copy, &manifest, clock.as_ref())?;
             // The install step may have replaced dependency ancestors or
