@@ -11,6 +11,7 @@ use std::time::{Duration, Instant, SystemTime};
 use super::*;
 use crate::clock::FakeClock;
 use crate::deadline::Deadline;
+use crate::http_server::CheckGate;
 use contract::clock::Wake;
 
 const READ_WITHIN: Duration = crate::MUST_SUCCEED_WITHIN;
@@ -1023,6 +1024,22 @@ fn a_fixed_body_followed_by_pipelined_bytes_keeps_only_its_length() {
     );
 }
 
+/// Releases the armed check-to-park gate when the test unwinds past
+/// it: a waiter held between its check and its park would otherwise
+/// outlive the failed test, and shutdown does not release this gate,
+/// so an earlier assertion or receive panic would leave server threads
+/// held indefinitely. On success the test releases the gate before
+/// shutdown, and this drops as a no-op backstop.
+struct ReleaseOnDrop {
+    gate: Arc<CheckGate>,
+}
+
+impl Drop for ReleaseOnDrop {
+    fn drop(&mut self) {
+        self.gate.release();
+    }
+}
+
 // Twenty bench-shaped POSTs: byte-slice bodies of growing length, each
 // on a fresh connection read to the server's close, against small stream
 // replies. The bodies wait ready-built before the server starts, so no
@@ -1062,6 +1079,9 @@ fn busy_shaped_posts_sleep_only_when_idle() {
     .unwrap();
     // Armed before the first window, so every park holds from the start.
     let gate = core.test_gate();
+    let _release = ReleaseOnDrop {
+        gate: Arc::clone(&gate),
+    };
     gate.arm();
     let held = gate
         .held_notes()
@@ -1069,9 +1089,10 @@ fn busy_shaped_posts_sleep_only_when_idle() {
     let replied = gate.held_sender();
     let server = ProviderServer::start_on_core(clock.clone(), core, script);
     let addr = server.addr;
-    let next = |what: &str| Deadline::after(READ_WITHIN).recv_or_fail(&held, what).0;
+    let next = |deadline: &Deadline, what: &str| deadline.recv_or_fail(&held, what).0;
+    let deadline = Deadline::after(READ_WITHIN);
     assert_eq!(
-        next("the first accept park"),
+        next(&deadline, "the first accept park"),
         ACCEPT,
         "nothing has connected"
     );
@@ -1083,9 +1104,11 @@ fn busy_shaped_posts_sleep_only_when_idle() {
         // its head, and the next window parks for the next accept, in
         // either order.
         gate.pass(ACCEPT);
+        // One wait for both parks, so one deadline spans both receives.
+        let deadline = Deadline::after(READ_WITHIN);
         let mut parked = [
-            next("the head park or the next accept park"),
-            next("the other of the two"),
+            next(&deadline, "the head park or the next accept park"),
+            next(&deadline, "the other of the two"),
         ];
         parked.sort_unstable();
         assert_eq!(parked, [ACCEPT, HEAD], "one accept and one head park");
@@ -1100,7 +1123,12 @@ fn busy_shaped_posts_sleep_only_when_idle() {
             .unwrap();
         gate.pass(HEAD);
         // No body byte is on the wire yet, so the body read parks.
-        assert_eq!(next("the body park"), BODY, "the whole head arrives first");
+        let deadline = Deadline::after(READ_WITHIN);
+        assert_eq!(
+            next(&deadline, "the body park"),
+            BODY,
+            "the whole head arrives first"
+        );
         stream.write_all(body).unwrap();
         gate.pass(BODY);
         let mut passed = 2u64;
@@ -1120,7 +1148,10 @@ fn busy_shaped_posts_sleep_only_when_idle() {
             // each further park comes after all its bytes were written,
             // so it is passed and counted like the first.
             loop {
-                let phase = next("the rest of the body's parks or the reply");
+                // Each pass answers the next receive, so each receive is
+                // its own wait with its own deadline.
+                let deadline = Deadline::after(READ_WITHIN);
+                let phase = next(&deadline, "the rest of the body's parks or the reply");
                 if phase == REPLY {
                     break;
                 }
