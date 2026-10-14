@@ -270,12 +270,7 @@ fn clicking_the_model_chip_opens_the_model_picker() {
     // The home grid above proves the chip drew before the click.
     let (x, y) = chip_cell(&run.screen(), "[fake/alpha]");
     click(&mut run, x, y);
-    let opened = run.wait_screen("the open picker with its catalogue", picker_open);
-    assert!(
-        opened.rows.iter().any(|row| row.contains("Type to search")),
-        "the picker shows its filter: {:?}",
-        opened.rows
-    );
+    run.wait_screen("the open picker with its catalogue", picker_open);
     close_and_quit(run);
 }
 
@@ -286,20 +281,56 @@ fn clicking_the_thinking_chip_opens_the_picker_on_its_level_chips() {
     install_picker_provider(&setup, &server);
     let mut run = home_run(&setup, &[("TERM", "xterm-256color")]);
     // The home grid above proves the chip drew before the click.
-    let (x, y) = chip_cell(&run.screen(), "[thinking:");
+    // A thinking click falls back to an ordinary choose while the
+    // cached model lists have not answered (`open_thinking`), and the
+    // fallback draws exactly like the thinking open, so the first
+    // open warms the lists: it waits for the catalogue, then closes.
+    // Esc closes at once with no query typed.
+    let (x0, y0) = chip_cell(&run.screen(), "[fake/alpha]");
+    click(&mut run, x0, y0);
+    run.wait_screen("the open picker with its catalogue", picker_open);
+    run.write(b"\x1b[27u");
+    let home = run.wait_screen("home again", |screen| {
+        !shows(screen, "Type to search") && shows(screen, "[fake/alpha]")
+    });
+    // The lists now name alpha, so this click opens on its level
+    // chips in Thinking mode, not the fallback choose. The focused
+    // row alone cannot tell the two apart: both land on the current
+    // model with its level chips drawn, so Enter chooses at once
+    // with no chip move. A thinking open starts the current row
+    // touched (`model_picker::open`), saving only the default
+    // level; an ordinary choose would save only the model and write
+    // no level, failing the config read below.
+    let (x, y) = chip_cell(&home, "[thinking:");
     click(&mut run, x, y);
-    // The catalogue wait proves the picker opened; the focused row
-    // wait proves it opened on the current model's level chips, not
-    // as an ordinary choose.
-    let opened = run.wait_screen("the picker on alpha's level chips", |screen| {
+    run.wait_screen("the picker on alpha's level chips", |screen| {
         picker_open(screen) && thinking_focused(screen)
     });
-    assert!(
-        thinking_focused(&opened),
-        "the focus sits on alpha's level chips: {:?}",
-        opened.rows
+    run.write(b"\r");
+    // The closed picker and the renamed chip prove the choice landed
+    // before the config read below.
+    run.wait_screen("home with the saved level", |screen| {
+        !shows(screen, "Type to search")
+            && shows(screen, "[fake/alpha]")
+            && shows(screen, "[thinking: low]")
+    });
+    let config: Value =
+        serde_json::from_slice(&fs::read(setup.home().join("config.json")).unwrap()).unwrap();
+    assert_eq!(
+        config["model"], "fake/alpha",
+        "the model is untouched: {config}"
     );
-    close_and_quit(run);
+    assert_eq!(
+        config["models"]["fake/alpha"]["thinking"], "low",
+        "only the level saved: {config}"
+    );
+    // The picker already closed on Enter, so the quit goes out at once.
+    run.write(b"\x03\x03");
+    run.wait_screen("the restored terminal", |screen| {
+        !screen.alternate_screen && !screen.hide_cursor
+    });
+    let finished = run.wait();
+    assert_eq!(finished.status.code(), Some(0));
 }
 
 /// The chip's cells on `screen`: `len` cells from `x` on row `y`.
@@ -327,25 +358,15 @@ fn hovering_a_home_chip_tints_it_and_moving_off_restores_it() {
         let len = u16::try_from(needle.len()).expect("the chip fits its row");
         let plain = chip_cells(&before, x, y, len);
         hover(&mut run, x, y);
-        let tinted = run.wait_screen("the hovered chip", |screen| {
+        run.wait_screen(&format!("the hovered chip {needle}"), |screen| {
             chip_cells(screen, x, y, len) != plain
         });
-        assert_ne!(
-            chip_cells(&tinted, x, y, len),
-            plain,
-            "hover tints {needle}"
-        );
         // The top-left corner holds no target, so parking there
         // leaves every chip.
         hover(&mut run, 0, 0);
-        let restored = run.wait_screen("the restored chip", |screen| {
+        run.wait_screen(&format!("the restored chip {needle}"), |screen| {
             chip_cells(screen, x, y, len) == plain
         });
-        assert_eq!(
-            chip_cells(&restored, x, y, len),
-            plain,
-            "moving off restores {needle}"
-        );
     }
     run.write(b"\x03\x03");
     run.wait_screen("the restored terminal", |screen| {
