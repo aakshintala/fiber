@@ -165,14 +165,34 @@ fn select_runs_a_changed_crate_and_its_dependents() {
     let dir = workspace();
     dir.write("crates/a/src/lib.rs", "//! a, changed\n");
     let (code, out) = xtask(&dir, &["select", "--base", "main"], &[], "");
+    assert_eq!(code, 0, "{out}");
+    assert!(!out.lines().any(|l| l.starts_with("libraries=")), "{out}");
     assert_eq!(
         (code, out.as_str()),
         (
             0,
             "mode=crates\npackages=a b c\npackage_specs=a@0.0.0 b@0.0.0 c@0.0.0\n\
-             libraries=a b\nlibrary_specs=a@0.0.0 b@0.0.0\n"
+             library_specs=a@0.0.0 b@0.0.0\n"
         )
     );
+}
+
+#[test]
+fn select_output_has_the_keys_scripts_check_reads_and_no_libraries_key() {
+    // `scripts/check` reads `mode`, `packages`, `package_specs`,
+    // `library_specs` and `extension_packages`, never `libraries`.
+    let dir = workspace();
+    dir.write("crates/a/src/lib.rs", "//! a, changed\n");
+    let (code, out) = xtask(&dir, &["select", "--base", "main"], &[], "");
+    assert_eq!(code, 0, "{out}");
+    let keys: Vec<&str> = out
+        .lines()
+        .map(|l| l.split('=').next().unwrap_or(""))
+        .collect();
+    for key in ["mode", "packages", "package_specs", "library_specs"] {
+        assert!(keys.contains(&key), "{out}");
+    }
+    assert!(!keys.contains(&"libraries"), "{out}");
 }
 
 #[test]
@@ -180,9 +200,10 @@ fn select_counts_untracked_and_committed_changes() {
     let dir = workspace();
     dir.write("crates/b/src/new.rs", "");
     let (_, out) = xtask(&dir, &["select", "--base", "main"], &[], "");
+    assert!(!out.lines().any(|l| l.starts_with("libraries=")), "{out}");
     assert_eq!(
         out,
-        "mode=crates\npackages=b\npackage_specs=b@0.0.0\nlibraries=b\nlibrary_specs=b@0.0.0\n"
+        "mode=crates\npackages=b\npackage_specs=b@0.0.0\nlibrary_specs=b@0.0.0\n"
     );
 
     git(&dir, &["checkout", "-qb", "topic"]);
@@ -190,15 +211,17 @@ fn select_counts_untracked_and_committed_changes() {
     git(&dir, &["add", "."]);
     git(&dir, &["commit", "-qm", "docs"]);
     let (_, out) = xtask(&dir, &["select", "--base", "main"], &[], "");
+    assert!(!out.lines().any(|l| l.starts_with("libraries=")), "{out}");
     assert_eq!(
         out,
-        "mode=crates\npackages=b\npackage_specs=b@0.0.0\nlibraries=b\nlibrary_specs=b@0.0.0\n"
+        "mode=crates\npackages=b\npackage_specs=b@0.0.0\nlibrary_specs=b@0.0.0\n"
     );
     std::fs::remove_file(dir.path().join("crates/b/src/new.rs")).unwrap();
     let (_, out) = xtask(&dir, &["select", "--base", "main"], &[], "");
+    assert!(!out.lines().any(|l| l.starts_with("libraries=")), "{out}");
     assert_eq!(
         out,
-        "mode=docs\npackages=\npackage_specs=\nlibraries=\nlibrary_specs=\n"
+        "mode=docs\npackages=\npackage_specs=\nlibrary_specs=\n"
     );
 }
 
@@ -229,12 +252,14 @@ fn select_prints_an_unambiguous_spec_for_a_crate_named_like_a_dependency() {
     git(&dir, &["commit", "-qm", "base"]);
     dir.write("crates/log/src/lib.rs", "//! log, changed\n");
     let (code, out) = xtask(&dir, &["select", "--base", "main"], &[], "");
+    assert_eq!(code, 0, "{out}");
+    assert!(!out.lines().any(|l| l.starts_with("libraries=")), "{out}");
     assert_eq!(
         (code, out.as_str()),
         (
             0,
             "mode=crates\npackages=log\npackage_specs=log@0.0.0\n\
-             libraries=log\nlibrary_specs=log@0.0.0\n"
+             library_specs=log@0.0.0\n"
         )
     );
 }
