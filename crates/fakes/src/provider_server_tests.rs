@@ -1,5 +1,5 @@
 use std::io::{Read, Write};
-use std::net::{SocketAddr, TcpStream};
+use std::net::{Shutdown, SocketAddr, TcpStream};
 use std::sync::{
     Arc, Mutex, Weak,
     atomic::{AtomicU64, Ordering},
@@ -897,6 +897,9 @@ fn a_large_fixed_body_costs_one_bound_check_per_fill_not_per_byte() {
         )
         .unwrap();
     stream.write_all(&body).unwrap();
+    // The request ends here: a reader that reads past the body sees the
+    // close instead of an answer, so an over-read fails fast below.
+    stream.shutdown(Shutdown::Write).unwrap();
     let mut response = Vec::new();
     stream
         .read_to_end(&mut response)
