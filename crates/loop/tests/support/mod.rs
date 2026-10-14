@@ -41,6 +41,8 @@ use r#loop::{BlockLimits, Loop, Model, Reviewer, TurnCancel};
 use serde_json::{Map, Value, json};
 
 mod events;
+#[path = "review.rs"]
+pub(crate) mod review;
 
 #[allow(unused_imports, reason = "each test target uses some helpers")]
 pub(crate) use events::{
