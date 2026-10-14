@@ -1828,9 +1828,17 @@ fn a_tty_job_past_its_timeout_fails_and_stop_cancels_it() {
     let dir = fakes::TempDir::new("fiber-shell-tty-timeout");
     let ready = Ready::new(dir.path());
     let jobs = FakeJobs::new(dir.path());
+    // The terminal prints one byte, then waits on a fifo the test holds:
+    // the byte goes out in one `job_delta`, arming the pacing hold, and
+    // the second byte cannot exist before the test releases the fifo, so
+    // the drive loop always parks on the held delta's deadline first.
+    let body = format!(
+        "mkfifo {block}\nprintf S\nread -r _ < {block}\nprintf T\nread x\n",
+        block = quote(&block_of(ready.path())),
+    );
     let running = start_tty(
         dir.path().to_path_buf(),
-        on_terminal(ready.path(), "echo partial\nread x\n"),
+        on_terminal(ready.path(), &body),
         Some(5_000),
         Arc::clone(&jobs),
     );
@@ -1845,10 +1853,30 @@ fn a_tty_job_past_its_timeout_fails_and_stop_cancels_it() {
     let _receipt = Deadline::after(DEADLINE)
         .recv(&running.output)
         .expect("the receipt");
+    // One byte is one read, so the first send carries all of it: this
+    // proves the pacing hold is armed, not just that output was queued.
+    assert!(
+        jobs.deltas().wait_for_text("S", DEADLINE),
+        "the first byte never went out in a job_delta: {:?}",
+        jobs.deltas().text()
+    );
     let timeout_at = running.start + Duration::from_secs(5);
+    let mark = running
+        .clock
+        .mark_parked(timeout_at, DEADLINE)
+        .expect("the job did not park at its timeout after its first send");
+    release_block(ready.path());
+    // The second byte lands while the pacing hold from the first is still
+    // armed, so the loop parks on the hold's deadline instead of the
+    // timeout: this re-park proves it left the timeout park.
+    assert!(
+        running.clock.await_any_parked_since(&mark, DEADLINE),
+        "the job did not park again after the second byte"
+    );
     assert!(
         running.clock.await_parked(timeout_at, CHILD_START),
-        "the job did not park at its timeout"
+        "the job did not park at its timeout; parked at {:?}",
+        running.clock.parked()
     );
     assert!(group_alive(pgid), "stopped before the deadline");
     running.clock.advance(Duration::from_millis(4_750));
