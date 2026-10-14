@@ -1752,3 +1752,231 @@ fn advance_when_parked_rejects_an_advance_the_clock_cannot_represent() {
         .recv(&exit)
         .expect("the parked thread exits");
 }
+
+/// Records each panic's file and line under a temporary hook, restoring the
+/// previous hook on drop so no later phase of the test observes it. The hook
+/// itself never panics: it records through `try_lock` only.
+#[allow(
+    clippy::type_complexity,
+    reason = "the panic hook's type is set by std"
+)]
+struct HookWatch {
+    seen: Arc<Mutex<Vec<(String, u32)>>>,
+    old: Option<Box<dyn Fn(&std::panic::PanicHookInfo<'_>) + Send + Sync + 'static>>,
+}
+
+#[allow(clippy::unwrap_used, reason = "a test helper; a failure is the test's")]
+impl HookWatch {
+    fn install() -> Self {
+        let seen: Arc<Mutex<Vec<(String, u32)>>> = Arc::new(Mutex::new(Vec::new()));
+        let record = Arc::clone(&seen);
+        let old = std::panic::take_hook();
+        std::panic::set_hook(Box::new(move |info| {
+            let (file, line) = info.location().map_or_else(
+                || ("<no location>".to_string(), 0),
+                |location| (location.file().to_string(), location.line()),
+            );
+            if let Ok(mut guard) = record.try_lock() {
+                guard.push((file, line));
+            }
+        }));
+        Self {
+            seen,
+            old: Some(old),
+        }
+    }
+
+    fn locations(&self) -> Vec<(String, u32)> {
+        self.seen.lock().unwrap().clone()
+    }
+}
+
+impl Drop for HookWatch {
+    fn drop(&mut self) {
+        if let Some(old) = self.old.take() {
+            std::panic::set_hook(old);
+        }
+    }
+}
+
+/// Asserts the hook saw exactly one panic at this test's helper call: the
+/// failure belongs to the caller's line.
+#[allow(clippy::unwrap_used, reason = "a test helper; a failure is the test's")]
+#[track_caller]
+fn assert_caller(locations: &[(String, u32)], line: u32) {
+    assert_eq!(
+        locations.len(),
+        1,
+        "the helper fails once, at the caller's line: {locations:?}",
+    );
+    assert!(
+        locations[0].0.ends_with("clock_tests.rs"),
+        "the failure is reported in this test: {:?}",
+        locations[0].0,
+    );
+    assert_eq!(
+        locations[0].1, line,
+        "the failure is reported at the caller's line",
+    );
+}
+
+#[test]
+fn advance_when_parked_names_the_caller_and_every_park_on_a_wrong_instant() {
+    let clock = FakeClock::new();
+    let until = clock.origin() + Duration::from_secs(30);
+    let wrong = until + Duration::from_secs(1);
+    let (parked_a, release_a, exit_a, a_id) = park_once(&clock, Some(wrong));
+    Deadline::after(Duration::from_secs(5))
+        .recv(&parked_a)
+        .expect("waited for the first thread to park");
+    let (parked_b, release_b, exit_b, b_id) = park_once(&clock, None);
+    Deadline::after(Duration::from_secs(5))
+        .recv(&parked_b)
+        .expect("waited for the second thread to park");
+    let now = clock.now();
+    let step = Duration::from_millis(5);
+    let bound = Deadline::after(Duration::from_secs(5));
+    let watch = HookWatch::install();
+    let line = line!() + 1;
+    let run = || clock.advance_when_parked(Some(until), None, step, &bound);
+    let outcome = std::panic::catch_unwind(std::panic::AssertUnwindSafe(run));
+    let locations = watch.locations();
+    drop(watch);
+    let message = outcome
+        .expect_err("advance_when_parked fails a wrong park")
+        .downcast::<String>()
+        .expect("the helper panics with a message");
+    assert_caller(&locations, line);
+    assert!(
+        message.contains("a watched park arrived at a different instant first"),
+        "the failure names its kind: {message}",
+    );
+    assert!(
+        message.contains(&format!("{a_id:?}")),
+        "the failure names the first parked thread: {message}",
+    );
+    assert!(
+        message.contains(&format!("{b_id:?}")),
+        "the failure names the second parked thread: {message}",
+    );
+    assert!(
+        message.contains("at Some("),
+        "the failure reports the finite instant: {message}",
+    );
+    assert!(
+        message.contains("at None"),
+        "the failure reports the unbounded park: {message}",
+    );
+    assert_eq!(clock.now(), now, "a mismatch moves no time");
+    release_a.send(()).unwrap();
+    release_b.send(()).unwrap();
+    Deadline::after(Duration::from_secs(5))
+        .recv(&exit_a)
+        .expect("the first thread exits");
+    Deadline::after(Duration::from_secs(5))
+        .recv(&exit_b)
+        .expect("the second thread exits");
+}
+
+#[test]
+fn advance_when_parked_names_the_caller_on_a_finite_park_where_none_was_named() {
+    let clock = FakeClock::new();
+    let until = clock.origin() + Duration::from_secs(30);
+    let (parked, release, exit, id) = park_once(&clock, Some(until));
+    Deadline::after(Duration::from_secs(5))
+        .recv(&parked)
+        .expect("waited for the thread to park");
+    let now = clock.now();
+    let step = Duration::from_millis(5);
+    let bound = Deadline::after(Duration::from_secs(5));
+    let watch = HookWatch::install();
+    let line = line!() + 1;
+    let run = || clock.advance_when_parked(None, None, step, &bound);
+    let outcome = std::panic::catch_unwind(std::panic::AssertUnwindSafe(run));
+    let locations = watch.locations();
+    drop(watch);
+    let message = outcome
+        .expect_err("advance_when_parked fails a finite park")
+        .downcast::<String>()
+        .expect("the helper panics with a message");
+    assert_caller(&locations, line);
+    assert!(
+        message.contains("where None was named"),
+        "the failure names its kind: {message}",
+    );
+    assert!(
+        message.contains(&format!("{id:?}")),
+        "the failure names the parked thread: {message}",
+    );
+    assert_eq!(clock.now(), now, "a mismatch moves no time");
+    release.send(()).unwrap();
+    Deadline::after(Duration::from_secs(5))
+        .recv(&exit)
+        .expect("the parked thread exits");
+}
+
+#[test]
+fn advance_when_parked_names_the_caller_on_an_advance_past_the_named_park() {
+    let clock = FakeClock::new();
+    let until = clock.origin() + Duration::from_secs(30);
+    let (parked, release, exit, id) = park_once(&clock, Some(until));
+    Deadline::after(Duration::from_secs(5))
+        .recv(&parked)
+        .expect("waited for the thread to park");
+    let now = clock.now();
+    let step = Duration::from_secs(31);
+    let bound = Deadline::after(Duration::from_secs(5));
+    let watch = HookWatch::install();
+    let line = line!() + 1;
+    let run = || clock.advance_when_parked(Some(until), None, step, &bound);
+    let outcome = std::panic::catch_unwind(std::panic::AssertUnwindSafe(run));
+    let locations = watch.locations();
+    drop(watch);
+    let message = outcome
+        .expect_err("advance_when_parked fails the advance")
+        .downcast::<String>()
+        .expect("the helper panics with a message");
+    assert_caller(&locations, line);
+    assert!(
+        message.contains("the advance would pass the named instant"),
+        "the failure names its kind: {message}",
+    );
+    assert!(
+        message.contains(&format!("{id:?}")),
+        "the failure names the parked thread: {message}",
+    );
+    assert_eq!(clock.now(), now, "a mismatch moves no time");
+    release.send(()).unwrap();
+    Deadline::after(Duration::from_secs(5))
+        .recv(&exit)
+        .expect("the parked thread exits");
+}
+
+#[test]
+fn advance_when_parked_names_the_caller_on_the_deadline_with_no_park() {
+    let clock = FakeClock::new();
+    let until = clock.origin() + Duration::from_secs(30);
+    let now = clock.now();
+    let step = Duration::from_millis(5);
+    let bound = Deadline::after(Duration::from_millis(200));
+    let watch = HookWatch::install();
+    let line = line!() + 1;
+    let run = || clock.advance_when_parked(Some(until), None, step, &bound);
+    let outcome = std::panic::catch_unwind(std::panic::AssertUnwindSafe(run));
+    let locations = watch.locations();
+    drop(watch);
+    let message = outcome
+        .expect_err("advance_when_parked fails at the deadline")
+        .downcast::<String>()
+        .expect("the helper panics with a message");
+    assert_caller(&locations, line);
+    assert!(
+        message.contains("the deadline passed"),
+        "the failure names its kind: {message}",
+    );
+    assert!(
+        message.contains("parked threads: []"),
+        "the failure names the empty park list: {message}",
+    );
+    assert_eq!(clock.now(), now, "an expiry moves no time");
+}
