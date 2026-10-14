@@ -1,4 +1,4 @@
-use super::{archive, checksum, gzip, header};
+use super::{archive, checksum, gzip, header, sha256};
 
 /// The header's checksum field, as a number.
 fn stored(block: &[u8; 512]) -> u64 {
@@ -89,4 +89,17 @@ fn gzip_output_decodes_back_to_its_input() {
     std::io::Read::read_to_end(&mut decoder, &mut back)
         .expect("gzip output is a valid gzip stream");
     assert_eq!(back, bytes);
+}
+
+/// `sha256` matches the known digests of its inputs.
+#[test]
+fn sha256_matches_known_digests() {
+    assert_eq!(
+        sha256(b"abc"),
+        "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad"
+    );
+    assert_eq!(
+        sha256(b""),
+        "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    );
 }
