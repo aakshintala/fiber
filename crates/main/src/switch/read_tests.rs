@@ -404,9 +404,42 @@ fn a_leader_that_exits_while_its_descendant_holds_stdout_times_out_and_the_group
         "the wait parked at its deadline again"
     );
     clock.advance(Duration::from_millis(1));
-    let error = Deadline::after(fakes::MUST_SUCCEED_WITHIN)
-        .recv_or_fail(&finished, "the timed-out read")
-        .expect_err("a command holding stdout past its timeout");
+    // The timeout re-kills on the poll cadence and parks between passes:
+    // drive each confirmed poll park, as the re-kill test does. The advance
+    // above wakes only one pass, whose probe can still see a
+    // reaped-but-not-yet-reaped zombie alive under load; without further
+    // advances nothing ever bumps again and the wait parks forever. Each
+    // advance follows a confirmed park, and each park waits only a poll
+    // pause of the drive, so an already-retired group still ends the loop
+    // on its answer instead of stalling on a park that never comes.
+    let drive = Deadline::after(DEADLINE);
+    let mut answer: Option<std::io::Result<std::process::Output>> = None;
+    while answer.is_none() {
+        match finished.try_recv() {
+            Ok(got) => {
+                answer = Some(got);
+                break;
+            }
+            Err(mpsc::TryRecvError::Empty) => {}
+            Err(mpsc::TryRecvError::Disconnected) => break,
+        }
+        if drive.left().is_zero() {
+            break;
+        }
+        let poll = clock
+            .now()
+            .checked_add(GROUP_POLL)
+            .expect("the poll is countable");
+        if clock.await_parked(poll, drive.left().min(PARK_PAUSE)) {
+            clock.advance(GROUP_POLL);
+        }
+    }
+    let error = match answer {
+        Some(got) => got.expect_err("a command holding stdout past its timeout"),
+        None => Deadline::after(fakes::MUST_SUCCEED_WITHIN)
+            .recv_or_fail(&finished, "the timed-out read")
+            .expect_err("a command holding stdout past its timeout"),
+    };
     assert_eq!(error.kind(), std::io::ErrorKind::TimedOut);
     assert!(
         fakes::group_empties(pgid, DEADLINE),
