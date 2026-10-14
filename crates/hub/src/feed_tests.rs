@@ -1043,11 +1043,6 @@ fn stop_returns_when_a_silent_session_stays_open() {
     assert!(lock(&feed.state).tracked.is_empty());
 }
 
-/// How long `join` must stay parked: the joined thread waits on the
-/// release the test still holds, so any return before it is the
-/// empty-body mutant, not slow scheduling.
-const JOIN_STILL_WAITING: Duration = Duration::from_secs(5);
-
 #[test]
 fn join_returns_only_after_the_joined_thread_ends() {
     let finished = Arc::new(AtomicBool::new(false));
@@ -1059,15 +1054,22 @@ fn join_returns_only_after_the_joined_thread_ends() {
             finished.store(true, Ordering::SeqCst);
         }
     });
+    // Armed before the joiner spawns: fires when it is inside `join`.
+    let (inside_tx, inside_rx) = mpsc::channel();
+    pause_join_in_lock(move || {
+        inside_tx.send(()).unwrap_or(());
+    });
     let (done_tx, done_rx) = mpsc::channel();
     thread::spawn(move || {
         join(worker);
         done_tx.send(()).unwrap_or(());
     });
-    // The worker is parked on the release the test still holds: a return
-    // now means `join` never waited.
+    // The signal proves the joiner is inside `join`, while the worker
+    // is still parked on the release the test holds: a return now means
+    // `join` never waited, not slow scheduling.
+    Deadline::after(DEADLINE).recv_or_fail(&inside_rx, "the joiner reaches inside join");
     assert!(
-        Deadline::after(JOIN_STILL_WAITING).recv(&done_rx).is_err(),
+        done_rx.try_recv().is_err(),
         "join returns before the joined thread ends"
     );
     release_tx.send(()).unwrap();
