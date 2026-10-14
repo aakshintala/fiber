@@ -136,6 +136,18 @@ fn cached_model_lists_names_each_json_stem_sorted() {
 }
 
 #[test]
+fn a_cache_directory_that_cannot_be_listed_is_io_failed() {
+    let setup = Setup::new();
+    let home = setup.home();
+    // A file where `cache/models/` should be: listing it fails with more
+    // than "not found", so the lists are an error, not empty.
+    std::fs::create_dir_all(home.join("cache")).unwrap();
+    std::fs::write(home.join("cache/models"), b"not a directory").unwrap();
+    let err = config::cached_model_lists(&home).unwrap_err();
+    assert_eq!(err.code(), contract::ErrorCode::IoFailed);
+}
+
+#[test]
 fn a_missing_cache_directory_lists_none() {
     let setup = Setup::new();
     assert_eq!(
