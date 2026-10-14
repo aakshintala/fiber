@@ -105,14 +105,31 @@ fn the_watcher_drains_a_listed_group_before_it_finishes() {
         .expect("the spawn reached its pause");
     let (is_fired, guard) = arm_recording(&reads, &clock, &[SIGTERM]);
     signal_hook::low_level::raise(SIGTERM).expect("the test's raise");
-    // Held: the spawn is still counted and the group still listed, so the
-    // shared shutdown parks at its poll instead of finishing: the park
-    // proves it is held while the spawn remains held.
+    // Held: the spawn is still counted, so the shared shutdown parks
+    // instead of finishing: the park proves it is held while the spawn
+    // remains held. The cancel can kill and retire the listed group
+    // before the settlement checks it; with only the held spawn left,
+    // the settlement parks at its end instead of its poll. Either park
+    // proves it is held.
     let mut poll = fake.origin() + GROUP_POLL;
-    assert!(
-        fake.await_parked(poll, DEADLINE),
-        "the shutdown parked while the spawn is held"
-    );
+    let end = fake.origin() + doors::SHUTDOWN_BOUND;
+    let held = Deadline::after(DEADLINE);
+    loop {
+        if fake.parked().contains(&Some(poll)) || fake.parked().contains(&Some(end)) {
+            break;
+        }
+        assert!(
+            !held.left().is_zero(),
+            "the shutdown parked while the spawn is held"
+        );
+        // A short ack of either park; expiry re-checks both under the
+        // shared deadline instead of pinning one.
+        if fake.await_parked(poll, held.left().min(Duration::from_millis(200)))
+            || fake.await_parked(end, held.left().min(Duration::from_millis(200)))
+        {
+            break;
+        }
+    }
     release.send(()).expect("the spawn's release");
     // The shutdown re-parks at its poll until every group is empty: each
     // advance follows a confirmed park, and a park that never comes means
