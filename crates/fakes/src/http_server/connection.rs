@@ -8,11 +8,18 @@ use std::io::{self, Read, Write};
 use std::net::TcpStream;
 use std::os::fd::AsFd;
 use std::sync::{Arc, Mutex, atomic::Ordering, mpsc};
+#[cfg(test)]
+use std::sync::OnceLock;
 
 #[cfg(test)]
 use crate::deadline::Deadline;
 
 use super::{READ_CHUNK, RequestBudget, Shared, WaitEnd, expired, guard_expired, lock};
+
+/// The one-shot test seam after a full reply's nonblocking drain and before
+/// the connection closes. It lets the test stage bytes after that drain.
+#[cfg(test)]
+static POST_REPLY_PAUSE: OnceLock<Mutex<Option<Pause>>> = OnceLock::new();
 
 /// What one socket read found.
 #[cfg(test)]
@@ -423,7 +430,65 @@ impl Connection {
             }
         }
         self.drain_socket();
+        #[cfg(test)]
+        self.test_post_reply_park();
         ReplyEnd::Done
+    }
+
+    /// Installs the one-shot post-reply park for a deterministic close test.
+    #[cfg(test)]
+    pub(crate) fn set_test_post_reply_pause(pause: Pause) {
+        *lock(POST_REPLY_PAUSE.get_or_init(|| Mutex::new(None))) = Some(pause);
+    }
+
+    /// Parks after the existing drain. The first signal proves the drain
+    /// finished; the second follows a peek that proves later bytes reached
+    /// the socket, while leaving them unread for the close under test.
+    #[cfg(test)]
+    fn test_post_reply_park(&mut self) {
+        let Some(pause) = lock(POST_REPLY_PAUSE.get_or_init(|| Mutex::new(None))).take() else {
+            return;
+        };
+        const PHASE: &str = "to park after the full reply";
+        match pause.reached.send(()) {
+            Ok(()) | Err(_) => {}
+        }
+        loop {
+            let mut byte = [0u8; 1];
+            match self.stream.peek(&mut byte) {
+                Ok(0) => return,
+                Ok(_) => break,
+                Err(error) => match classify(&error) {
+                    ReadErr::Wait => {
+                        if !self.wait_readable(PHASE) {
+                            return;
+                        }
+                    }
+                    ReadErr::Retry => continue,
+                    ReadErr::End => return,
+                },
+            }
+        }
+        match pause.reached.send(()) {
+            Ok(()) | Err(_) => {}
+        }
+        let op = self.op_budget();
+        loop {
+            match lock(&pause.release).try_recv() {
+                Ok(()) | Err(mpsc::TryRecvError::Disconnected) => return,
+                Err(mpsc::TryRecvError::Empty) => {}
+            }
+            match self.shared.wait(
+                &op,
+                &self.name,
+                PHASE,
+                &mut self.seq,
+                &mut self.acked,
+            ) {
+                WaitEnd::Waited => {}
+                WaitEnd::Expired | WaitEnd::Stopped => return,
+            }
+        }
     }
 
     /// Streams `pieces` under `head`: chunked framing for a recorded
