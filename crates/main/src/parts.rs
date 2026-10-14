@@ -7,8 +7,9 @@ use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::Duration;
 
-use crate::connect::{Here, connect};
+use crate::connect::{Here, connect, connect_observed};
 use config::{Config, Sources};
+use contract::diag::Observe;
 use contract::provider::Provider;
 use contract::shapes::Failure;
 use contract::{ErrorCode, ThinkingLevel};
@@ -27,6 +28,14 @@ pub(crate) struct Parts {
     pub(crate) workspace: PathBuf,
     pub(crate) project: config::ProjectKey,
     pub(crate) provider: Arc<dyn Provider>,
+    /// Builds the session's observed model calls; `None` calls the
+    /// provider directly.
+    pub(crate) observe: Option<Observe>,
+    /// Builds the reviewer's observed calls; `None` calls the reviewer's
+    /// provider directly.
+    pub(crate) reviewer_observe: Option<Observe>,
+    /// The session's diagnostic writer, at the configured level.
+    pub(crate) diag: Arc<log::diag::Diag>,
     pub(crate) model: Model,
     pub(crate) prompt: r#loop::PromptInputs,
     /// Who judges step 7's calls; `Err` leaves every reviewed call to a
@@ -92,6 +101,10 @@ pub(crate) fn per_run(model: Option<String>, overrides: Vec<String>) -> Vec<Stri
 /// (`docs/model-routing.md`, "Choosing the model"). A log with no
 /// `usage_recorded` uses `--model`, then the configured default. A recorded
 /// model or label that no longer resolves fails before any line is written.
+#[allow(
+    clippy::too_many_arguments,
+    reason = "one entry composition: the recorded model, credential, thinking, clock, host, reads and diagnostic process"
+)]
 pub(crate) fn parts_with<'a>(
     overrides: Vec<String>,
     recorded: Option<&str>,
@@ -100,6 +113,7 @@ pub(crate) fn parts_with<'a>(
     clock: Arc<dyn contract::clock::Clock>,
     host: Option<Arc<extensions::HostScript>>,
     reads: Arc<switch::Reads>,
+    process: log::diag::Process,
 ) -> Result<Parts, Failure> {
     let home = config::fiber_home_from_env().map_err(|e| failed(e.code(), e))?;
     let workspace = std::env::current_dir()
@@ -115,6 +129,7 @@ pub(crate) fn parts_with<'a>(
         host,
         prompt_files::agents_home(std::env::var_os("HOME")),
         reads,
+        process,
     )
 }
 
@@ -124,7 +139,7 @@ pub(crate) fn parts_with<'a>(
 /// cannot overflow the fixture model's context.
 #[allow(
     clippy::too_many_arguments,
-    reason = "one composition of the session's parts: homes, model choice, clock and runner host"
+    reason = "one composition of the session's parts: homes, model choice, clock, runner host and diagnostic process"
 )]
 pub(crate) fn parts_in(
     home: PathBuf,
@@ -137,6 +152,7 @@ pub(crate) fn parts_in(
     host: Option<Arc<extensions::HostScript>>,
     agents_home: Option<PathBuf>,
     reads: Arc<switch::Reads>,
+    process: log::diag::Process,
 ) -> Result<Parts, Failure> {
     let (sessions, project) = ::cli::project_of(&home, &workspace)?;
     let config = Config::load(Sources {
@@ -146,6 +162,20 @@ pub(crate) fn parts_in(
         overrides: overrides.clone(),
     })
     .map_err(|e| failed(e.code(), e))?;
+    // One writer for the process, at the configured level: the session's
+    // loop, its factories and its exit sample share it once the durable
+    // log exists. A process reads the level when it starts, so a changed
+    // value reaches new processes only.
+    let diag = Arc::new(log::diag::Diag::new(
+        &home,
+        process,
+        if config::diagnostics_debug(&config) {
+            log::diag::Level::Debug
+        } else {
+            log::diag::Level::Info
+        },
+        Arc::clone(&clock),
+    ));
     // Configuration notices first, then loading, discovery and
     // placeholders, then the thinking notice below: each load's notices
     // are emitted once, after `fiber_started` with the MCP notices.
@@ -207,12 +237,13 @@ pub(crate) fn parts_in(
         workspace: workspace.clone(),
         clock: Arc::clone(&clock),
     };
-    let provider = connect(
+    let (provider, observe) = connect_observed(
         model,
         key,
         signer,
         lua.map(|lua| (lua, label.as_str())),
         &here,
+        &diag,
     )?;
     // The credentials read at startup, seeding `Switching`'s keys: the
     // session's entry first, so a reviewer on its provider reuses them.
@@ -221,7 +252,7 @@ pub(crate) fn parts_in(
         model.provider.name.clone(),
         (label.clone(), session_credential),
     );
-    let reviewer = {
+    let choose = {
         let mut lookup =
             |provider: &config::ProviderData| -> Result<(String, lua_providers::Access), Failure> {
                 let access = scripted::access(provider, || {
@@ -246,7 +277,14 @@ pub(crate) fn parts_in(
                     .unwrap_or_else(|| config.credentials().credential_label(provider));
                 Ok((label, access))
             };
-        choose_reviewer(&providers, &config, &model, &here, &mut lookup)
+        choose_reviewer(&providers, &config, &model, &here, &mut lookup, Some(&diag))
+    };
+    // A reviewer that failed to resolve or read is not a startup error:
+    // the loop gets the failure and every reviewed call escalates it,
+    // with no factory (`docs/permissions.md`, "How it runs").
+    let (reviewer, reviewer_observe) = match choose {
+        Ok((reviewer, observe)) => (Ok(reviewer), observe),
+        Err(failure) => (Err(failure), None),
     };
     // Every refreshed provider the session does not use is unloaded once
     // its list is written: only the session's and the reviewer's stay
@@ -337,6 +375,9 @@ pub(crate) fn parts_in(
         workspace,
         project,
         provider,
+        observe,
+        reviewer_observe,
+        diag,
         prompt,
         model: Model {
             reference: model.reference(),
@@ -408,7 +449,8 @@ pub(crate) fn choose_reviewer(
     credential: &mut impl FnMut(
         &config::ProviderData,
     ) -> Result<(String, lua_providers::Access), Failure>,
-) -> Result<r#loop::Reviewer, Failure> {
+    diag: Option<&Arc<log::diag::Diag>>,
+) -> Result<(r#loop::Reviewer, Option<Observe>), Failure> {
     let typed = reviewer_reference(config, session)?;
     let model = providers.resolve(&typed).map_err(|e| failed(e.code(), e))?;
     let context_window = settings::context_window(model.model, &model.reference())?;
@@ -419,22 +461,38 @@ pub(crate) fn choose_reviewer(
     // The token is read once, so a failing `credential()` fails here:
     // not a startup error, the loop gets it and every reviewed call
     // escalates it (`docs/permissions.md`, "How it runs").
-    let provider = connect(
-        model,
-        access.key,
-        access.signer,
-        access.lua.as_ref().map(|lua| (lua, label.as_str())),
-        here,
-    )?;
-    Ok(r#loop::Reviewer {
-        provider,
-        model: Model {
-            reference: model.reference(),
-            cost: model.model.cost.clone(),
-            subscription: model.model.subscription,
+    let (provider, reviewer_observe) = match diag {
+        Some(diag) => connect_observed(
+            model,
+            access.key,
+            access.signer,
+            access.lua.as_ref().map(|lua| (lua, label.as_str())),
+            here,
+            diag,
+        )?,
+        None => (
+            connect(
+                model,
+                access.key,
+                access.signer,
+                access.lua.as_ref().map(|lua| (lua, label.as_str())),
+                here,
+            )?,
+            None,
+        ),
+    };
+    Ok((
+        r#loop::Reviewer {
+            provider,
+            model: Model {
+                reference: model.reference(),
+                cost: model.model.cost.clone(),
+                subscription: model.model.subscription,
+            },
+            cache_lifetime: settings::cache_lifetime(config, &model.reference()),
+            context_window,
+            thinking_levels: model.model.thinking_levels.clone(),
         },
-        cache_lifetime: settings::cache_lifetime(config, &model.reference()),
-        context_window,
-        thinking_levels: model.model.thinking_levels.clone(),
-    })
+        reviewer_observe,
+    ))
 }

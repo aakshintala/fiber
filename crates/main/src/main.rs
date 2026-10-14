@@ -66,7 +66,7 @@ use std::sync::mpsc::Receiver;
 use std::time::Duration;
 
 use config::{Config, Layer, Sources};
-use connect::{Here, connect};
+use connect::{Here, connect, connect_observed};
 use contract::inbox::Delivery;
 use contract::shapes::Failure;
 use contract::{ErrorCode, SessionId};
@@ -564,6 +564,10 @@ fn finish(
 /// signal, `cancel`, serves the door and the loop, so
 /// a `cancel` ends the turn the prompt starts; a shutdown's code on it is
 /// the exit code.
+#[allow(
+    clippy::too_many_arguments,
+    reason = "one hand-off of the turn's end: the session, log, prompt, mode, cancel, diagnostics and runner"
+)]
 fn run_turn(
     session: &Session,
     log: &Arc<Log>,
@@ -571,6 +575,7 @@ fn run_turn(
     prompt: Option<String>,
     one_turn: bool,
     cancel: Arc<r#loop::TurnCancel>,
+    diag: &Arc<log::diag::Diag>,
     run: impl FnOnce(Receiver<Delivery>, Arc<r#loop::TurnCancel>) -> Result<Option<i32>, Failure>,
 ) -> i32 {
     let door = Arc::clone(&cancel);
@@ -618,6 +623,9 @@ fn run_turn(
             if one_turn && let Some(error) = &exited.error {
                 writeln!(io::stderr(), "fiber: {}", error.message).unwrap_or(());
             }
+            // The process's exit sample, after its successful exit line:
+            // whatever the exit code, a failed read writes nothing.
+            diag.peak_memory();
             exited.code
         }
         Err(_) => 1,

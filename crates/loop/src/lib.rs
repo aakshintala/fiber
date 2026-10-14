@@ -642,4 +642,13 @@ impl Loop {
         self.reviewer_observe = observe;
         self
     }
+
+    /// Shares the session's attached diagnostic writer: `extension_log`,
+    /// request and memory lines go to one file. The caller attaches after
+    /// its durable log exists and installs the factories first, so every
+    /// line shares the writer's identity.
+    pub fn diagnostics(mut self, diag: Arc<log::diag::Diag>) -> Self {
+        self.diag = diag::SessionDiag::shared(diag);
+        self
+    }
 }
