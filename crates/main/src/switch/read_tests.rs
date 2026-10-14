@@ -1157,15 +1157,20 @@ fn cancel_passes_a_blocked_spawn_and_the_late_child_is_killed() {
 /// drive's one deadline: each acknowledgement waits only a poll pause of
 /// it, and an acknowledgement's expiry re-checks completion and awaits
 /// the late park under what is left, never stopping the drive while time
-/// remains. Held command threads stay held past the first advance, so
-/// their leaders are zombies and their groups stay listed while the fake
-/// clock moves; dropping their release senders then releases them.
-/// Fails the test when the drive's deadline runs out first.
+/// remains. No advance runs ahead of a real group's death: while a group
+/// in `real` still holds a member, the drive waits it out on the wall
+/// clock without advancing, so a held or slow real death parks the settle
+/// without spending the bound. Held command threads stay held past the
+/// first advance, so their leaders are zombies and their groups stay
+/// listed while the fake clock moves; dropping their release senders then
+/// releases them. Fails the test when the drive's deadline runs out
+/// first.
 #[track_caller]
 fn drive_settle_to_completion(
     clock: &Arc<FakeClock>,
     finished: &mpsc::Receiver<bool>,
     drive: &Deadline,
+    real: &[u32],
     releases: Vec<mpsc::Sender<()>>,
 ) -> bool {
     let poll = clock.origin() + GROUP_POLL;
@@ -1183,6 +1188,16 @@ fn drive_settle_to_completion(
         }
         if drive.left().is_zero() {
             break;
+        }
+        let mut death_pending = false;
+        for group in real {
+            if !fakes::group_empties(*group, drive.left().min(PARK_PAUSE)) {
+                death_pending = true;
+                break;
+            }
+        }
+        if death_pending {
+            continue;
         }
         if clock.await_any_parked_since(&mark, drive.left().min(PARK_PAUSE)) {
             mark = clock.advance_marked(Duration::from_millis(50));
@@ -1243,7 +1258,7 @@ fn settle_rekills_a_cancelled_survivor_before_answering_true() {
     reads.lock().cancelled = true;
     let settled = settle_on_thread(&reads, &clock, doors::SHUTDOWN_BOUND);
     let drive = Deadline::after(DEADLINE);
-    let answer = drive_settle_to_completion(&clock, &settled, &drive, vec![free_tx]);
+    let answer = drive_settle_to_completion(&clock, &settled, &drive, &[pgid], vec![free_tx]);
     let lives = fakes::kill_group(pgid, "0").unwrap_or(false);
     // Guarded cleanup before the assertions: the survivor must not
     // outlive the test either way.
@@ -1422,7 +1437,7 @@ fn settle_drains_two_groups_together_within_one_bound() {
     // pass, whatever wall time the real group's death takes.
     let drive = Deadline::after(DEADLINE);
     assert!(
-        drive_settle_to_completion(&clock, &finished, &drive, vec![release_one, release_two]),
+        drive_settle_to_completion(&clock, &finished, &drive, &[pgid_two], vec![release_one, release_two]),
         "both groups drain within the one bound"
     );
     assert_eq!(reads.scripted_sends(), 2, "one send per pass before SRCH");
