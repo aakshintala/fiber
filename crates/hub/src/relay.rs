@@ -462,6 +462,18 @@ fn attach_inner(
 ) {
     let mark = crate::rejoin::Mark::now(&hub.home, session);
     let mut replay = replay;
+    // An actual replay starts its timer up front: the guard drops at
+    // once on a failure below, and moves into the pending slot once the
+    // worker can observe its acknowledgement. At info there is no timer.
+    let mut replay_timer = replay.as_ref().and_then(|_| {
+        log::diag::timed(
+            &hub.diag,
+            contract::diag::Op::HubSubscribeReplay,
+            None,
+            None,
+        )
+    });
+    let mut replayed_id: Option<String> = None;
     let admission = candidate_epoch.map(|_| lock(relays));
     if let Some(candidate_epoch) = candidate_epoch {
         let Some(current) = admission
@@ -479,12 +491,14 @@ fn attach_inner(
         let sent = line_bytes(line).is_some_and(|line| write_all(&stream, &line).is_ok());
         if !sent {
             drop(admission);
+            drop(replay_timer);
             if let Some((id, _, _)) = &command {
                 crate::retire::refuse_not_found(writer, hub, relays, session, id);
             }
             return;
         }
-        lock(&replayed).push(minted);
+        lock(&replayed).push(minted.clone());
+        replayed_id = Some(minted);
     };
     let kept: Kept = Arc::new(Mutex::new(
         command
@@ -518,8 +532,20 @@ fn attach_inner(
         None => lock(relays),
     };
     let epoch = held.mint();
+    // The guard moves into the pending slot before the worker can run:
+    // its acknowledgement then completes it instead of leaking, and a
+    // failed admission or spawn below takes it back out again.
+    let pending_key = replayed_id.zip(replay_timer.take()).map(|(minted, timer)| {
+        let key = (session.to_owned(), epoch, minted);
+        held.pending_replay.insert(key.clone(), timer);
+        key
+    });
     if !crate::rejoin::admit(&mut held, session, exclusive, mark, epoch) {
+        let guard = pending_key
+            .as_ref()
+            .and_then(|key| held.pending_replay.remove(key));
         drop(held);
+        drop(guard);
         stream.shutdown(Shutdown::Both).unwrap_or(());
         return;
     }
@@ -541,7 +567,8 @@ fn attach_inner(
         move || relay(owned, &session, reader, &hub, &writer, &relays)
     });
     // A thread that never started leaves no entry: the next command for
-    // the session reconnects.
+    // the session reconnects. Its pending replay guard goes back with
+    // it, emitted outside the lock.
     if let Ok(thread) = relayed {
         held.entries.push(Relay {
             session: session.to_owned(),
@@ -552,6 +579,10 @@ fn attach_inner(
             thread: Some(thread),
             retiring: None,
         });
+    } else if let Some(key) = pending_key {
+        let guard = held.pending_replay.remove(&key);
+        drop(held);
+        drop(guard);
     }
 }
 
@@ -672,6 +703,13 @@ fn relay(
                     }
                 }
                 if replayed_ack {
+                    // The filter hook above already ran: waiting on the
+                    // relays lock here cannot hold it back, so the forced
+                    // transfer interleaving stays possible. The guard
+                    // drops after the lock releases, never under it.
+                    let id = ack.as_ref().map(|ack| ack.id.clone());
+                    let guard = id.and_then(|id| lock(relays).take_replay(session, epoch, &id));
+                    drop(guard);
                     continue;
                 }
                 // An acknowledgement for a command the relay no longer
@@ -769,8 +807,18 @@ fn relay(
     }
     crate::closed::on_end(session, ended && !exiting, hub, writer, relays, &gone);
     crate::retire::drain(session, epoch, &kept, &order, hub, writer, relays);
+    // This worker's outstanding replays complete here, before any
+    // follow-on rewind work: a disconnect or EOF before acknowledgement
+    // ends the timer instead of waiting for a healthy close. Each guard
+    // drops after the lock releases, never under it.
+    let unfinished = lock(relays).take_session_replays(session, epoch);
+    drop(unfinished);
     if ended {
         crate::rewind::follow(hub, writer, relays, session);
+        // Failure-stamped transfers queued above emit here, outside the
+        // lock, without waiting for the target reader to exit.
+        let failed = lock(relays).take_completed_replays();
+        drop(failed);
     }
 }
 

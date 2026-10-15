@@ -1,9 +1,10 @@
-//! Tests for the hub start and resume operation timers
+//! Tests for the hub start, resume and replay operation timers
 //! (`docs/state.md`, "Diagnostic logs"): the `hub.session_start` scope
-//! from `start::run` entry through socket bind, and the `hub.resume` scope
-//! around the whole common reach. Each test pins one line per entered
-//! operation with exactly `op` and `ms`, and proves failures keep their
-//! codes.
+//! from `start::run` entry through socket bind, the `hub.resume` scope
+//! around the whole common reach, and the `hub.subscribe_replay` scope
+//! from a replay write through its acknowledgement. Each test pins one
+//! line per entered operation with exactly `op` and `ms`, and proves
+//! failures keep their codes.
 
 #![allow(
     clippy::unwrap_used,
@@ -27,8 +28,9 @@ use fakes::Deadline;
 use fakes::clock::FakeClock;
 use serde_json::{Value, json};
 
-use crate::connection::{Hub, Refused};
+use crate::connection::{Hub, Refused, lock};
 use crate::fake::{FakeStarter, failure};
+use crate::relay::{Kept, Relay, Relays, Replayed, attach};
 use crate::resume::SHUTDOWN_BOUND;
 use crate::start::{self, Outcome, START_DEADLINE};
 
@@ -87,7 +89,7 @@ impl Temp {
     }
 
     fn hub_log(&self) -> String {
-        fs::read_to_string(self.dir.join("logs").join("hub.log")).unwrap_or_default()
+        read_hub_log(&self.dir)
     }
 
     /// Writes `first` as the first line of `id`'s log in a project.
@@ -145,6 +147,23 @@ impl Temp {
             .to_string(),
         );
     }
+}
+
+/// The hub log's text, empty before its first line.
+fn read_hub_log(dir: &std::path::Path) -> String {
+    fs::read_to_string(dir.join("logs").join("hub.log")).unwrap_or_default()
+}
+
+/// The hub log's `op_timing` lines once `want` completed: completion
+/// removes the slot under the lock and writes the line after, so the
+/// test waits for the line, never the slot.
+#[track_caller]
+fn await_op_lines(temp: &Temp, want: usize) -> Vec<Value> {
+    crate::testkit::await_true("the timer completes", {
+        let dir = temp.dir.clone();
+        move || op_timings(&read_hub_log(&dir)).len() == want
+    });
+    op_timings(&temp.hub_log())
 }
 
 /// Every `op_timing` line in the hub log, in file order.
@@ -718,4 +737,765 @@ fn info_writes_no_timing_for_start_or_resume() {
     assert!(log.contains("\"code\":\"session_started\""), "{log}");
     assert!(log.contains("\"code\":\"session_resumed\""), "{log}");
     assert!(!log.contains("op_timing"), "{log}");
+}
+
+/// A subscribed session id of the test's own: the hub mints the shape,
+/// and the relay checks it, so every replay test uses a fresh one.
+const REPLAY_SID: &str = "s_aaaaaaaaaaaaaaaa";
+
+/// A `subscribe` line at `level`, without its `session_id`: what a
+/// replay sends again.
+fn subscribe_line(id: &str, level: &str) -> serde_json::Map<String, Value> {
+    json!({"id": id, "command": "subscribe", "args": {"level": level}})
+        .as_object()
+        .unwrap()
+        .clone()
+}
+
+/// A connection's relays with replay timing from the debug `hub`:
+/// what production dispatch builds at debug.
+fn timing_relays(hub: &Arc<Hub>) -> Arc<Mutex<Relays>> {
+    Arc::new(Mutex::new(Relays {
+        timing_hub: Some(Arc::downgrade(hub)),
+        ..Relays::default()
+    }))
+}
+
+/// The test end of a client connection: the hub writes here, the test
+/// reads with a deadline.
+fn client() -> (Arc<Mutex<UnixStream>>, UnixStream) {
+    let (write, read) = UnixStream::pair().unwrap();
+    read.set_read_timeout(Some(DEADLINE)).unwrap();
+    (Arc::new(Mutex::new(write)), read)
+}
+
+/// One line the client connection receives, without its newline.
+#[track_caller]
+fn client_line(read: &UnixStream) -> Value {
+    let mut line = String::new();
+    BufReader::new(read.try_clone().unwrap())
+        .read_line(&mut line)
+        .expect("the client receives a line");
+    serde_json::from_str(line.trim_end()).unwrap()
+}
+
+/// The acknowledgement the session sends for `id`: accepted, or
+/// rejected with `invalid_arguments` when `accept` is false.
+fn ack_bytes(id: &Value, accept: bool) -> Vec<u8> {
+    let ack = if accept {
+        json!({
+            "kind": "command_accepted", "ts": 1, "schema_version": 1,
+            "payload": {"command_id": id},
+        })
+    } else {
+        json!({
+            "kind": "command_rejected", "ts": 1, "schema_version": 1,
+            "payload": {
+                "code": "invalid_arguments",
+                "command_id": id,
+                "message": "The arguments do not fit this command.",
+            },
+        })
+    };
+    let mut bytes = serde_json::to_vec(&ack).unwrap();
+    bytes.push(b'\n');
+    bytes
+}
+
+/// Joins a relay thread after its session end, failing at the caller's
+/// line instead of hanging when the thread does not end.
+#[track_caller]
+fn join_relay(thread: thread::JoinHandle<()>) {
+    let (ended_tx, ended) = mpsc::channel();
+    thread::spawn(move || ended_tx.send(thread.join().is_ok()).unwrap_or(()));
+    assert_eq!(
+        Deadline::after(DEADLINE).recv(&ended).ok(),
+        Some(true),
+        "the relay thread ends after its session closed"
+    );
+}
+
+/// Takes the relay thread's handle out of its entry: the worker already
+/// ended, so nothing observes the missing handle.
+#[track_caller]
+fn take_thread(relays: &Arc<Mutex<Relays>>, session: &str, epoch: u64) -> thread::JoinHandle<()> {
+    lock(relays)
+        .entries
+        .iter_mut()
+        .find(|entry| entry.session == session && entry.epoch == epoch)
+        .and_then(|entry| entry.thread.take())
+        .expect("the relay thread is still entered")
+}
+
+/// An initial replay through `attach`, its acknowledgement withheld:
+/// the session end the test drives, and the replayed command id.
+#[track_caller]
+fn replaying(
+    hub: &Arc<Hub>,
+    writer: &Arc<Mutex<UnixStream>>,
+    relays: &Arc<Mutex<Relays>>,
+    session: &str,
+    temp: &Temp,
+    want_pending: usize,
+) -> (UnixStream, Value) {
+    let (hub_end, session_end) = UnixStream::pair().unwrap();
+    session_end.set_read_timeout(Some(DEADLINE)).unwrap();
+    attach(
+        session,
+        hub_end,
+        hub,
+        writer,
+        relays,
+        Some(subscribe_line("c_kept", "full")),
+        None,
+        false,
+    );
+    // The hub's replay, under an id of its own: the worker cannot have
+    // completed it, since no acknowledgement was sent.
+    let mut line = String::new();
+    BufReader::new(session_end.try_clone().unwrap())
+        .read_line(&mut line)
+        .expect("the hub replays the kept subscription");
+    let replay: Value = serde_json::from_str(line.trim_end()).unwrap();
+    assert_eq!(replay["command"], json!("subscribe"), "{replay}");
+    let id = replay.get("id").cloned().unwrap();
+    assert_ne!(id, json!("c_kept"), "the replay carries a minted id");
+    crate::testkit::await_true("the replay registers", {
+        let watching = Arc::clone(relays);
+        move || lock(&watching).pending_replay.len() == want_pending
+    });
+    assert!(
+        op_timings(&temp.hub_log()).is_empty(),
+        "no completed timer while the acknowledgement is withheld"
+    );
+    (session_end, id)
+}
+
+#[test]
+fn an_initial_replay_completes_on_its_accepted_acknowledgement() {
+    let temp = Temp::new();
+    let hub = temp.hub(FakeStarter::hang(&temp.dir));
+    let relays = timing_relays(&hub);
+    let (writer, client_read) = client();
+    let (session_end, id) = replaying(&hub, &writer, &relays, REPLAY_SID, &temp, 1);
+    let epoch = lock(&relays).entries[0].epoch;
+    let mut session_end = session_end;
+    session_end.write_all(&ack_bytes(&id, true)).unwrap();
+    session_end.flush().unwrap();
+    // The whole wait is over in no clock time: the timer reports zero.
+    assert_op_line(&await_op_lines(&temp, 1), "hub.subscribe_replay", 0);
+    assert!(lock(&relays).pending_replay.is_empty());
+    // The acknowledgement was the hub's own: the client never sees it.
+    // A live line behind it is what the client reads first.
+    session_end
+        .write_all(b"{\"kind\":\"session_status\",\"ts\":1,\"schema_version\":1,\"payload\":{}}\n")
+        .unwrap();
+    session_end.flush().unwrap();
+    assert_eq!(client_line(&client_read)["kind"], json!("session_status"));
+    // The acknowledgement came before the disconnect: ending now
+    // completes nothing twice.
+    drop(session_end);
+    join_relay(take_thread(&relays, REPLAY_SID, epoch));
+    assert_op_line(&op_timings(&temp.hub_log()), "hub.subscribe_replay", 0);
+}
+
+#[test]
+fn an_initial_replay_completes_on_its_rejected_acknowledgement() {
+    let temp = Temp::new();
+    let hub = temp.hub(FakeStarter::hang(&temp.dir));
+    let relays = timing_relays(&hub);
+    let (writer, _client_read) = client();
+    let (session_end, id) = replaying(&hub, &writer, &relays, REPLAY_SID, &temp, 1);
+    let mut session_end = session_end;
+    session_end.write_all(&ack_bytes(&id, false)).unwrap();
+    session_end.flush().unwrap();
+    crate::testkit::await_true("the replay completes", {
+        let watching = Arc::clone(&relays);
+        move || lock(&watching).pending_replay.is_empty()
+    });
+    assert_op_line(&await_op_lines(&temp, 1), "hub.subscribe_replay", 0);
+    assert!(lock(&relays).pending_replay.is_empty());
+    drop(session_end);
+    let epoch = lock(&relays).entries[0].epoch;
+    join_relay(take_thread(&relays, REPLAY_SID, epoch));
+    assert_op_line(&op_timings(&temp.hub_log()), "hub.subscribe_replay", 0);
+}
+
+#[test]
+fn a_command_without_a_replay_writes_no_timer() {
+    let temp = Temp::new();
+    let hub = temp.hub(FakeStarter::hang(&temp.dir));
+    let relays = timing_relays(&hub);
+    let (writer, client_read) = client();
+    let (hub_end, mut session_end) = UnixStream::pair().unwrap();
+    session_end.set_read_timeout(Some(DEADLINE)).unwrap();
+    let stripped = json!({"id": "c_1", "command": "prompt", "args": {}})
+        .as_object()
+        .unwrap()
+        .clone();
+    let mut bytes = serde_json::to_vec(&stripped).unwrap();
+    bytes.push(b'\n');
+    attach(
+        REPLAY_SID,
+        hub_end,
+        &hub,
+        &writer,
+        &relays,
+        None,
+        Some((CommandId("c_1".to_owned()), bytes, stripped)),
+        false,
+    );
+    let mut line = String::new();
+    BufReader::new(session_end.try_clone().unwrap())
+        .read_line(&mut line)
+        .expect("the command reaches the session");
+    let command: Value = serde_json::from_str(line.trim_end()).unwrap();
+    session_end
+        .write_all(&ack_bytes(&command["id"], true))
+        .unwrap();
+    session_end.flush().unwrap();
+    assert_eq!(client_line(&client_read)["kind"], json!("command_accepted"));
+    assert!(lock(&relays).pending_replay.is_empty());
+    assert!(
+        op_timings(&temp.hub_log()).is_empty(),
+        "no replay, no timer"
+    );
+    drop(session_end);
+    let epoch = lock(&relays).entries[0].epoch;
+    join_relay(take_thread(&relays, REPLAY_SID, epoch));
+}
+
+#[test]
+fn a_users_own_subscribe_writes_no_timer() {
+    let temp = Temp::new();
+    let hub = temp.hub(FakeStarter::hang(&temp.dir));
+    let relays = timing_relays(&hub);
+    let (writer, client_read) = client();
+    let (hub_end, mut session_end) = UnixStream::pair().unwrap();
+    session_end.set_read_timeout(Some(DEADLINE)).unwrap();
+    let stripped = subscribe_line("c_user", "full");
+    let mut bytes = serde_json::to_vec(&stripped).unwrap();
+    bytes.push(b'\n');
+    attach(
+        REPLAY_SID,
+        hub_end,
+        &hub,
+        &writer,
+        &relays,
+        None,
+        Some((CommandId("c_user".to_owned()), bytes, stripped.clone())),
+        false,
+    );
+    let mut line = String::new();
+    BufReader::new(session_end.try_clone().unwrap())
+        .read_line(&mut line)
+        .expect("the subscribe reaches the session");
+    let command: Value = serde_json::from_str(line.trim_end()).unwrap();
+    session_end
+        .write_all(&ack_bytes(&command["id"], true))
+        .unwrap();
+    session_end.flush().unwrap();
+    // The client's own acknowledgement is forwarded, and its level is
+    // kept for the next reconnect: only a replay is timed, never this.
+    assert_eq!(client_line(&client_read)["kind"], json!("command_accepted"));
+    assert_eq!(lock(&relays).subscription(REPLAY_SID), Some(stripped));
+    assert!(lock(&relays).pending_replay.is_empty());
+    assert!(
+        op_timings(&temp.hub_log()).is_empty(),
+        "no replay, no timer"
+    );
+    drop(session_end);
+    let epoch = lock(&relays).entries[0].epoch;
+    join_relay(take_thread(&relays, REPLAY_SID, epoch));
+}
+
+#[test]
+fn an_unrelated_acknowledgement_completes_nothing() {
+    let temp = Temp::new();
+    let hub = temp.hub(FakeStarter::hang(&temp.dir));
+    let relays = timing_relays(&hub);
+    let epoch = lock(&relays).mint();
+    let timer = log::diag::timed(
+        &hub.diag,
+        contract::diag::Op::HubSubscribeReplay,
+        None,
+        None,
+    )
+    .expect("debug times the replay");
+    lock(&relays)
+        .pending_replay
+        .insert((REPLAY_SID.to_owned(), epoch, "c_replay".to_owned()), timer);
+    // Another id, and another epoch, each finish nothing: the slot
+    // stays until its own acknowledgement arrives.
+    assert!(
+        lock(&relays)
+            .take_replay(REPLAY_SID, epoch, "c_other")
+            .is_none()
+    );
+    assert!(
+        lock(&relays)
+            .take_replay(REPLAY_SID, epoch + 1, "c_replay")
+            .is_none()
+    );
+    assert_eq!(lock(&relays).pending_replay.len(), 1);
+    assert!(op_timings(&temp.hub_log()).is_empty());
+    let guard = lock(&relays).take_replay(REPLAY_SID, epoch, "c_replay");
+    drop(guard);
+    assert_op_line(&op_timings(&temp.hub_log()), "hub.subscribe_replay", 0);
+}
+
+#[test]
+fn a_failed_transfer_is_stamped_for_the_next_drain() {
+    let temp = Temp::new();
+    let hub = temp.hub(FakeStarter::hang(&temp.dir));
+    let relays = timing_relays(&hub);
+    // A live entry whose session is gone: the write fails at once.
+    let (dead, peer) = UnixStream::pair().unwrap();
+    drop(peer);
+    let epoch = lock(&relays).mint();
+    lock(&relays).entries.push(Relay {
+        session: REPLAY_SID.to_owned(),
+        epoch,
+        writer: dead,
+        kept: Kept::default(),
+        replayed: Replayed::default(),
+        thread: None,
+        retiring: None,
+    });
+    assert!(lock(&relays).transfer(REPLAY_SID, &subscribe_line("c_old", "full")));
+    assert!(
+        lock(&relays).pending_replay.is_empty(),
+        "no pending slot survives a failed write"
+    );
+    assert_eq!(
+        lock(&relays).completed_replay.len(),
+        1,
+        "the failure waits in the completed queue"
+    );
+    assert!(
+        op_timings(&temp.hub_log()).is_empty(),
+        "a queued failure emits nothing yet"
+    );
+    // Deferred cleanup past the failure adds no duration: the stamp was
+    // taken at the write, not at the drain.
+    temp.clock.advance(Duration::from_secs(5));
+    let failed = lock(&relays).take_completed_replays();
+    drop(failed);
+    assert_op_line(&op_timings(&temp.hub_log()), "hub.subscribe_replay", 0);
+}
+
+#[test]
+fn a_transfer_with_no_live_relay_starts_no_timer() {
+    let temp = Temp::new();
+    let hub = temp.hub(FakeStarter::hang(&temp.dir));
+    let relays = timing_relays(&hub);
+    // Nothing is relayed: the level is only kept, for the next open to
+    // replay, which starts its own timer then.
+    assert!(!lock(&relays).transfer(REPLAY_SID, &subscribe_line("c_old", "full")));
+    assert_eq!(
+        lock(&relays).subscription(REPLAY_SID),
+        Some(subscribe_line("c_old", "full"))
+    );
+    assert!(lock(&relays).pending_replay.is_empty());
+    assert!(lock(&relays).completed_replay.is_empty());
+    assert!(op_timings(&temp.hub_log()).is_empty());
+}
+
+#[test]
+fn a_transfer_onto_a_held_subscription_starts_no_timer() {
+    let temp = Temp::new();
+    let hub = temp.hub(FakeStarter::hang(&temp.dir));
+    let relays = timing_relays(&hub);
+    lock(&relays)
+        .subscribed
+        .push((REPLAY_SID.to_owned(), subscribe_line("c_kept", "full")));
+    // Already held: nothing is written and nothing is timed.
+    assert!(lock(&relays).transfer(REPLAY_SID, &subscribe_line("c_old", "full")));
+    assert!(lock(&relays).pending_replay.is_empty());
+    assert!(lock(&relays).completed_replay.is_empty());
+    assert!(op_timings(&temp.hub_log()).is_empty());
+}
+
+#[test]
+fn a_refused_admission_releases_the_replay_guard() {
+    let temp = Temp::new();
+    let hub = temp.hub(FakeStarter::hang(&temp.dir));
+    let relays = timing_relays(&hub);
+    let (writer, _client_read) = client();
+    // A live relay for the session: the exclusive attach below admits
+    // nothing, through the existing admission seam.
+    let (live_hub_end, _live_session_end) = UnixStream::pair().unwrap();
+    let epoch = lock(&relays).mint();
+    lock(&relays).entries.push(Relay {
+        session: REPLAY_SID.to_owned(),
+        epoch,
+        writer: live_hub_end,
+        kept: Kept::default(),
+        replayed: Replayed::default(),
+        thread: None,
+        retiring: None,
+    });
+    let (hub_end, _session_end) = UnixStream::pair().unwrap();
+    crate::relay::attach(
+        REPLAY_SID,
+        hub_end,
+        &hub,
+        &writer,
+        &relays,
+        Some(subscribe_line("c_kept", "full")),
+        None,
+        true,
+    );
+    // The replay was written, then admission refused it: the guard is
+    // gone with the slot, emitted once, and no entry was added.
+    assert_op_line(&await_op_lines(&temp, 1), "hub.subscribe_replay", 0);
+    assert!(lock(&relays).pending_replay.is_empty());
+    assert_eq!(lock(&relays).entries.len(), 1);
+}
+
+#[test]
+fn an_old_worker_ending_keeps_the_replacement_slot() {
+    let temp = Temp::new();
+    let hub = temp.hub(FakeStarter::hang(&temp.dir));
+    let relays = timing_relays(&hub);
+    let (writer, _client_read) = client();
+    let (first_end, first_id) = replaying(&hub, &writer, &relays, REPLAY_SID, &temp, 1);
+    let first_epoch = lock(&relays).entries[0].epoch;
+    let (second_end, second_id) = replaying(&hub, &writer, &relays, REPLAY_SID, &temp, 2);
+    // Two epochs, two outstanding replays on one session.
+    assert_eq!(lock(&relays).pending_replay.len(), 2);
+    // The old worker ends before any acknowledgement: only its own
+    // epoch's slot completes, with a zero wait.
+    drop(first_end);
+    join_relay(take_thread(&relays, REPLAY_SID, first_epoch));
+    assert_op_line(&await_op_lines(&temp, 1), "hub.subscribe_replay", 0);
+    assert_eq!(
+        lock(&relays).pending_replay.len(),
+        1,
+        "the replacement slot survives"
+    );
+    // The replacement's acknowledgement completes its own slot.
+    let mut second_end = second_end;
+    second_end.write_all(&ack_bytes(&second_id, true)).unwrap();
+    second_end.flush().unwrap();
+    assert_eq!(await_op_lines(&temp, 2).len(), 2);
+    assert!(lock(&relays).pending_replay.is_empty());
+    drop(second_end);
+    let second_epoch = lock(&relays)
+        .entries
+        .iter()
+        .find(|entry| entry.session == REPLAY_SID && entry.epoch != first_epoch)
+        .map(|entry| entry.epoch)
+        .unwrap();
+    join_relay(take_thread(&relays, REPLAY_SID, second_epoch));
+    assert_eq!(
+        await_op_lines(&temp, 2).len(),
+        2,
+        "no second completion on disconnect"
+    );
+    let _ = first_id;
+}
+
+/// A transfer that answers while still holding the relays lock: the
+/// relay thread observes its acknowledgement through the existing
+/// after-write and after-filter hooks, and still completes its timer
+/// without leaking the acknowledgement or deadlocking.
+#[test]
+fn a_transfer_that_answers_mid_write_completes_its_timer() {
+    let temp = Temp::new();
+    let hub = temp.hub(FakeStarter::hang(&temp.dir));
+    let relays = timing_relays(&hub);
+    let (written_tx, written_rx) = mpsc::channel();
+    let (release_transfer_tx, release_transfer_rx) = mpsc::channel();
+    lock(&relays).after_transfer_write = Some(Box::new(move || {
+        written_tx.send(()).unwrap_or(());
+        Deadline::start()
+            .recv_or_fail(&release_transfer_rx, "the test releases the transfer pause");
+    }));
+    let (filter_tx, filter_rx) = mpsc::channel();
+    let (release_filter_tx, release_filter_rx) = mpsc::channel();
+    *lock(&hub.after_replay_filter) = Some(Box::new(move |_line, muted| {
+        filter_tx.send(muted).unwrap_or(());
+        Deadline::start().recv_or_fail(&release_filter_rx, "the test releases the relay pause");
+    }));
+    let (writer, client_read) = client();
+    // A live relay with no replay of its own: the transfer below
+    // carries the subscription onto it.
+    let (attach_end, session_end) = UnixStream::pair().unwrap();
+    session_end.set_read_timeout(Some(DEADLINE)).unwrap();
+    attach(
+        REPLAY_SID, attach_end, &hub, &writer, &relays, None, None, false,
+    );
+    let epoch = lock(&relays).entries[0].epoch;
+    let line = subscribe_line("c_old", "full");
+    let (transferred_tx, transferred_rx) = mpsc::channel();
+    let transferring = Arc::clone(&relays);
+    thread::Builder::new()
+        .name("hub-test-transfer".to_owned())
+        .spawn(move || {
+            transferred_tx
+                .send(lock(&transferring).transfer(REPLAY_SID, &line))
+                .unwrap_or(());
+        })
+        .unwrap();
+    // The transfer wrote and paused holding the relays lock: answer
+    // now, so the acknowledgement lands mid-write.
+    assert!(
+        Deadline::after(DEADLINE).recv(&written_rx).is_ok(),
+        "transfer reaches its pause"
+    );
+    let mut buf = String::new();
+    BufReader::new(session_end.try_clone().unwrap())
+        .read_line(&mut buf)
+        .expect("the transfer writes the level");
+    let sent: Value = serde_json::from_str(buf.trim_end()).unwrap();
+    let id = sent.get("id").cloned().unwrap();
+    assert_ne!(
+        id,
+        json!("c_old"),
+        "the transfer carries an id of the hub's own"
+    );
+    let mut session_end = session_end;
+    session_end.write_all(&ack_bytes(&id, true)).unwrap();
+    session_end.flush().unwrap();
+    // The relay filtered the acknowledgement while transfer still holds
+    // the lock: the timer cannot complete until the transfer returns.
+    // This is the bad interleaving if the worker waited on the lock
+    // before running the filter hook.
+    assert_eq!(
+        Deadline::after(DEADLINE).recv(&filter_rx).ok(),
+        Some(true),
+        "the acknowledgement is filtered before transfer resumes"
+    );
+    assert!(
+        op_timings(&temp.hub_log()).is_empty(),
+        "no completed timer while transfer holds the lock"
+    );
+    release_transfer_tx.send(()).unwrap_or(());
+    assert_eq!(
+        Deadline::after(DEADLINE).recv(&transferred_rx).ok(),
+        Some(true),
+        "the transfer completed"
+    );
+    release_filter_tx.send(()).unwrap_or(());
+    // The worker completed its slot after the transfer returned, and
+    // dropped the hub-only acknowledgement: a live line behind it is
+    // what the client reads first.
+    session_end
+        .write_all(b"{\"kind\":\"session_status\",\"ts\":1,\"schema_version\":1,\"payload\":{}}\n")
+        .unwrap();
+    session_end.flush().unwrap();
+    assert_eq!(client_line(&client_read)["kind"], json!("session_status"));
+    assert_op_line(&await_op_lines(&temp, 1), "hub.subscribe_replay", 0);
+    assert!(lock(&relays).pending_replay.is_empty());
+    drop(session_end);
+    join_relay(take_thread(&relays, REPLAY_SID, epoch));
+    assert_op_line(&await_op_lines(&temp, 1), "hub.subscribe_replay", 0);
+}
+
+/// A rewind follow whose transfer fails: the failed write is stamped
+/// into the completed queue, and the calling worker emits it after
+/// follow returns, without waiting for the target reader.
+fn follow_with_dead_target(temp: &Temp, old: &str, next: &str) -> (Arc<Hub>, Arc<Mutex<Relays>>) {
+    let hub = temp.hub(FakeStarter::hang(&temp.dir));
+    let relays = timing_relays(&hub);
+    let (writer, _client_read) = client();
+    // The target relay: a parked reader that stays alive, and a writer
+    // whose session is gone, so the transfer fails at once. A drain
+    // that waited for the reader would hang here instead of emitting.
+    let (stop_tx, stop_rx) = mpsc::channel::<()>();
+    let parked = thread::Builder::new()
+        .name("hub-test-parked-reader".to_owned())
+        .spawn(move || {
+            stop_rx.recv().unwrap_or(());
+        })
+        .unwrap();
+    let (dead, peer) = UnixStream::pair().unwrap();
+    drop(peer);
+    let epoch = lock(&relays).mint();
+    lock(&relays).entries.push(Relay {
+        session: next.to_owned(),
+        epoch,
+        writer: dead,
+        kept: Kept::default(),
+        replayed: Replayed::default(),
+        thread: Some(parked),
+        retiring: None,
+    });
+    // The old session's log continues into the next one, at the kept
+    // level the follow transfers.
+    let workspace = temp.workspace();
+    temp.recorded_for(old, &workspace);
+    temp.append_line(
+        old,
+        &json!({
+            "kind": "rewound", "session_id": old, "ts": 2, "schema_version": 1, "seq": 5,
+            "payload": {"new_session_id": next, "seq": 3, "jobs": []},
+        }),
+    );
+    lock(&relays)
+        .subscribed
+        .push((old.to_owned(), subscribe_line("c_old", "full")));
+    // The old worker, with no replay of its own: ending it runs the
+    // follow that fails its transfer onto the dead target.
+    let (hub_end, session_end) = UnixStream::pair().unwrap();
+    attach(old, hub_end, &hub, &writer, &relays, None, None, false);
+    let old_epoch = lock(&relays)
+        .entries
+        .iter()
+        .find(|entry| entry.session == old)
+        .map(|entry| entry.epoch)
+        .unwrap();
+    drop(session_end);
+    join_relay(take_thread(&relays, old, old_epoch));
+    drop(stop_tx);
+    (hub, relays)
+}
+
+#[test]
+fn a_failed_follow_transfer_emits_after_follow_returns() {
+    let temp = Temp::new();
+    let next = "s_ffffffffffffffff";
+    let old = "s_1111111111111111";
+    let (_hub, relays) = follow_with_dead_target(&temp, old, next);
+    // One stamped failure, emitted by the calling worker's post-follow
+    // drain even though the target reader never exited.
+    assert_op_line(&await_op_lines(&temp, 1), "hub.subscribe_replay", 0);
+    assert!(lock(&relays).pending_replay.is_empty());
+    assert!(lock(&relays).completed_replay.is_empty());
+    assert!(
+        lock(&relays)
+            .entries
+            .iter()
+            .any(|entry| entry.session == next),
+        "the dead target entry stays for its reader"
+    );
+}
+
+#[test]
+fn concurrent_failed_follows_emit_each_failure_once() {
+    let temp = Temp::new();
+    let hub = temp.hub(FakeStarter::hang(&temp.dir));
+    let relays = timing_relays(&hub);
+    let (writer, _client_read) = client();
+    // Two old sessions rewound into two dead targets: each follow
+    // transfers onto its own live entry, fails its write, and races
+    // the other through the shared completed queue. One shared target
+    // would hold the level after the first transfer, so the second
+    // follow would correctly transfer nothing.
+    let workspace = temp.workspace();
+    let mut stops = Vec::new();
+    for (old, next) in [
+        ("s_1111111111111111", "s_ffffffffffffffff"),
+        ("s_2222222222222222", "s_eeeeeeeeeeeeeeee"),
+    ] {
+        let (stop_tx, stop_rx) = mpsc::channel::<()>();
+        let parked = thread::Builder::new()
+            .name("hub-test-parked-reader".to_owned())
+            .spawn(move || {
+                stop_rx.recv().unwrap_or(());
+            })
+            .unwrap();
+        let (dead, peer) = UnixStream::pair().unwrap();
+        drop(peer);
+        let epoch = lock(&relays).mint();
+        lock(&relays).entries.push(Relay {
+            session: next.to_owned(),
+            epoch,
+            writer: dead,
+            kept: Kept::default(),
+            replayed: Replayed::default(),
+            thread: Some(parked),
+            retiring: None,
+        });
+        temp.recorded_for(old, &workspace);
+        temp.append_line(
+            old,
+            &json!({
+                "kind": "rewound", "session_id": old, "ts": 2, "schema_version": 1, "seq": 5,
+                "payload": {"new_session_id": next, "seq": 3, "jobs": []},
+            }),
+        );
+        lock(&relays)
+            .subscribed
+            .push((old.to_owned(), subscribe_line("c_old", "full")));
+        let (hub_end, session_end) = UnixStream::pair().unwrap();
+        attach(old, hub_end, &hub, &writer, &relays, None, None, false);
+        drop(session_end);
+        stops.push(stop_tx);
+    }
+    // Both workers end on their own: whatever interleaving the two
+    // post-follow drains take, each failure emits exactly once.
+    let lines = await_op_lines(&temp, 2);
+    assert_eq!(lines.len(), 2, "{lines:?}");
+    for line in &lines {
+        assert_eq!(line["data"]["op"], json!("hub.subscribe_replay"), "{line}");
+        assert!(line["data"]["ms"].is_u64(), "{line}");
+    }
+    // Any guard that landed after both drains still waits: drain it on
+    // the test thread and prove the total stays two.
+    let leftovers = lock(&relays).take_completed_replays();
+    drop(leftovers);
+    drop(stops);
+    // The workers ended; their handles join cleanly.
+    for old in ["s_1111111111111111", "s_2222222222222222"] {
+        let ended = lock(&relays)
+            .entries
+            .iter_mut()
+            .find(|entry| entry.session == old)
+            .and_then(|entry| entry.thread.take());
+        if let Some(thread) = ended {
+            join_relay(thread);
+        }
+    }
+    assert_eq!(
+        await_op_lines(&temp, 2).len(),
+        2,
+        "each failure emitted exactly once"
+    );
+}
+
+#[test]
+fn info_connections_time_no_replay() {
+    let temp = Temp::new();
+    let hub = temp.hub_info(FakeStarter::hang(&temp.dir));
+    // An info connection keeps the fixture default: no timing hub, so
+    // neither the attach replay nor the transfer below starts a timer.
+    let relays = Arc::new(Mutex::new(Relays::default()));
+    let (writer, client_read) = client();
+    let (hub_end, mut session_end) = UnixStream::pair().unwrap();
+    session_end.set_read_timeout(Some(DEADLINE)).unwrap();
+    attach(
+        REPLAY_SID,
+        hub_end,
+        &hub,
+        &writer,
+        &relays,
+        Some(subscribe_line("c_kept", "full")),
+        None,
+        false,
+    );
+    let mut line = String::new();
+    BufReader::new(session_end.try_clone().unwrap())
+        .read_line(&mut line)
+        .expect("the hub replays the kept subscription");
+    let replay: Value = serde_json::from_str(line.trim_end()).unwrap();
+    session_end
+        .write_all(&ack_bytes(&replay["id"], true))
+        .unwrap();
+    session_end.flush().unwrap();
+    session_end
+        .write_all(b"{\"kind\":\"session_status\",\"ts\":1,\"schema_version\":1,\"payload\":{}}\n")
+        .unwrap();
+    session_end.flush().unwrap();
+    assert_eq!(client_line(&client_read)["kind"], json!("session_status"));
+    assert!(lock(&relays).pending_replay.is_empty());
+    assert!(lock(&relays).completed_replay.is_empty());
+    assert!(
+        op_timings(&temp.hub_log()).is_empty(),
+        "info writes no replay timer"
+    );
+    drop(session_end);
+    let epoch = lock(&relays).entries[0].epoch;
+    join_relay(take_thread(&relays, REPLAY_SID, epoch));
 }

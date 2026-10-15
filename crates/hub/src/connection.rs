@@ -494,7 +494,13 @@ fn serve_from(
             )]),
         );
     }
-    let relays: Arc<Mutex<Relays>> = Arc::new(Mutex::new(Relays::default()));
+    let mut fresh = Relays::default();
+    // Replay timing rides this connection's hub: at debug the transfer
+    // path stamps failures on its writer, at info nothing is kept.
+    if hub.diag.debugging() {
+        fresh.timing_hub = Some(Arc::downgrade(&hub));
+    }
+    let relays: Arc<Mutex<Relays>> = Arc::new(Mutex::new(fresh));
     hub.rejoins.register(n, &writer, &relays);
     let Some(heard) = hub
         .feed
