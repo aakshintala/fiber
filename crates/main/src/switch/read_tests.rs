@@ -1233,6 +1233,126 @@ fn cancel_passes_a_blocked_spawn_and_the_late_child_is_killed() {
     late.stand_down(DEADLINE);
 }
 
+/// A spawn prunes without signalling: only SRCH retires a listed group,
+/// so a probe that says PERM keeps it and a later probe that says SRCH
+/// retires it. The two following spawns each prune once, consuming one
+/// scripted probe for A in order.
+#[test]
+fn a_spawn_prune_keeps_a_group_whose_probe_says_perm_and_retires_it_on_srch() {
+    let root = fakes::TempDir::new("fiber-read-prune-perm-srch");
+    let ready_a = root.path().join("ready-a");
+    let ready_b = root.path().join("ready-b");
+    let ready_c = root.path().join("ready-c");
+    let reads = Arc::new(Reads::default());
+    let pre_a = fakes::Watchdog::matching(&ready_a.display().to_string());
+    let pre_b = fakes::Watchdog::matching(&ready_b.display().to_string());
+    let pre_c = fakes::Watchdog::matching(&ready_c.display().to_string());
+    // Group A pauses after it lists its group, so the script below arms
+    // only after A is really listed: the ready file alone does not prove
+    // the spawn listed it yet.
+    let (listed_tx, listed_rx) = mpsc::channel::<()>();
+    let (release_tx, release_rx) = mpsc::channel::<()>();
+    reads.pause_at_listed(listed_tx, release_rx);
+    let running_a = {
+        let reads = Arc::clone(&reads);
+        let script = format!("echo $$ > '{}'; exec sleep 600", ready_a.display());
+        std::thread::spawn(move || reads.command(&mut sh(&script)))
+    };
+    let pid_a: u32 = ready_line(&ready_a).parse().unwrap();
+    let watchdog_a = fakes::Watchdog::group(pid_a);
+    Deadline::after(DEADLINE)
+        .recv(&listed_rx)
+        .expect("group A listed its group");
+    assert_eq!(listed(&reads), vec![pid_a], "group A listed while it runs");
+    release_tx.send(()).unwrap();
+    // The late spawns' prunes read only A's scripted probes; every other
+    // id falls through to the real syscalls after the same validation.
+    reads.script_group(
+        pid_a,
+        vec![Err(Errno::PERM), Err(Errno::SRCH)],
+        vec![],
+    );
+    let spawn_listed = |reads: &Arc<Reads>, ready: &std::path::Path| {
+        let (listed_tx, listed_rx) = mpsc::channel::<()>();
+        let (release_tx, release_rx) = mpsc::channel::<()>();
+        reads.pause_at_listed(listed_tx, release_rx);
+        let running = {
+            let reads = Arc::clone(reads);
+            let script = format!("echo $$ > '{}'; exec sleep 600", ready.display());
+            std::thread::spawn(move || reads.command(&mut sh(&script)))
+        };
+        let pid: u32 = ready_line(ready).parse().unwrap();
+        Deadline::after(DEADLINE)
+            .recv(&listed_rx)
+            .expect("the group listed its group");
+        release_tx.send(()).unwrap();
+        (running, pid)
+    };
+    let (running_b, pid_b) = spawn_listed(&reads, &ready_b);
+    let watchdog_b = fakes::Watchdog::group(pid_b);
+    // Only SRCH retires a listed group: PERM keeps A pending through the
+    // next spawn's prune, so both groups stay listed.
+    assert!(
+        listed(&reads).contains(&pid_a),
+        "PERM keeps the group listed: {:?}",
+        listed(&reads)
+    );
+    assert!(
+        listed(&reads).contains(&pid_b),
+        "the new group is listed: {:?}",
+        listed(&reads)
+    );
+    assert_eq!(listed(&reads).len(), 2, "PERM retires nothing: {:?}", listed(&reads));
+    let (running_c, pid_c) = spawn_listed(&reads, &ready_c);
+    let watchdog_c = fakes::Watchdog::group(pid_c);
+    // SRCH means no member is left, so the prune retires A while the live
+    // groups stay listed.
+    assert!(
+        !listed(&reads).contains(&pid_a),
+        "SRCH retires the group: {:?}",
+        listed(&reads)
+    );
+    assert!(
+        listed(&reads).contains(&pid_b),
+        "the live group stays listed: {:?}",
+        listed(&reads)
+    );
+    assert!(
+        listed(&reads).contains(&pid_c),
+        "the new group is listed: {:?}",
+        listed(&reads)
+    );
+    assert_eq!(
+        listed(&reads).len(),
+        2,
+        "SRCH retires only the empty group: {:?}",
+        listed(&reads)
+    );
+    // The scripted probes never touched the real groups: kill each for
+    // real and reap every command thread on every path.
+    for pid in [pid_a, pid_b, pid_c] {
+        match fakes::kill_group(pid, "KILL") {
+            Ok(_) | Err(_) => {}
+        }
+    }
+    for (what, running) in [
+        ("the first command", running_a),
+        ("the second command", running_b),
+        ("the third command", running_c),
+    ] {
+        let _finished = fakes::within(what, DEADLINE, move || running.join().unwrap());
+    }
+    for pid in [pid_a, pid_b, pid_c] {
+        assert!(fakes::group_empties(pid, DEADLINE), "the real group is gone");
+    }
+    watchdog_a.stand_down(DEADLINE);
+    watchdog_b.stand_down(DEADLINE);
+    watchdog_c.stand_down(DEADLINE);
+    pre_a.stand_down(DEADLINE);
+    pre_b.stand_down(DEADLINE);
+    pre_c.stand_down(DEADLINE);
+}
+
 /// Drives a settle to completion on the fake clock and returns its
 /// answer, through a controlled interleaving that shows both halves
 /// while the reap stays held. The blind-probe phase keeps every hold
