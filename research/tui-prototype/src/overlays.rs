@@ -97,11 +97,44 @@ const CASES: &[Case<Look>] = &[
         },
     },
     Case {
+        name: "history-one",
+        help: "the prompt-history panel with one match",
+        check: "one matching prompt: the typed `back` bold after `›`, `1 match · newest first`, that match `›` on a full-width accent bar; the same panel and footer.",
+        build: || Look {
+            kind: Kind::HistoryOne,
+            narrow: false,
+            tab: None,
+            query: "",
+        },
+    },
+    Case {
+        name: "history-none",
+        help: "the prompt-history panel with no match",
+        check: "a typed query matching nothing: the query row, then dim `no matching prompts` in place of the count row, nothing barred; the same panel and footer.",
+        build: || Look {
+            kind: Kind::HistoryNone,
+            narrow: false,
+            tab: None,
+            query: "",
+        },
+    },
+    Case {
         name: "notice",
         help: "a notice shown in full",
         check: "the whole `key_clash` text should read wrapped to the panel, padded, nothing clipped; the foot a bold-key legend naming no body pair.",
         build: || Look {
             kind: Kind::Notice,
+            narrow: false,
+            tab: None,
+            query: "",
+        },
+    },
+    Case {
+        name: "notices",
+        help: "every notice listed in full",
+        check: "four notices newest first, each a paragraph `code · text` with the code dim, a blank row between paragraphs and none after the last, wrapped to the inner width at the 71-column preference; the title `Notices` bold accent with a dim ✕; the foot `Esc closes`.",
+        build: || Look {
+            kind: Kind::Notices,
             narrow: false,
             tab: None,
             query: "",
@@ -403,7 +436,10 @@ enum Kind {
     Quit,
     Delete,
     History,
+    HistoryOne,
+    HistoryNone,
     Notice,
+    Notices,
     CloseMouse,
 }
 
@@ -661,14 +697,13 @@ fn delete_body(inner: usize) -> Vec<super::Row> {
 
 /// The typed Ctrl+R query; every fixture prompt holds it.
 const QUERY: &str = "back";
-/// Prompt history, newest first: the prompt and where it was recalled from.
-const PROMPTS: &[(&str, &str)] = &[
-    (
-        "how do I backfill embeddings for old sessions?",
-        "this session",
-    ),
-    ("back up the state file before the migration", "project"),
-    ("roll back the handoff note", "project"),
+/// A typed query no fixture prompt holds.
+const NO_HIT_QUERY: &str = "zzz";
+/// Prompt history, newest first.
+const PROMPTS: &[&str] = &[
+    "how do I backfill embeddings for old sessions?",
+    "back up the state file before the migration",
+    "roll back the handoff note",
 ];
 
 /// The query's every occurrence marked, the rest in the base style. The
@@ -695,24 +730,30 @@ fn hl(text: &str, q: &str, base: Style, mark: Style) -> Vec<Span<'static>> {
     out
 }
 
-/// The Ctrl+R prompt-history panel: the typed query, how many match, and the
-/// matches with every hit marked, the first one focused like a choice.
-fn history_body(inner: usize) -> Vec<super::Row> {
-    let mut out = vec![
-        row(vec![sp("› ", fg(CYAN)), sp(QUERY, bold()), sp("█", dim())]),
-        row(vec![sp(
-            format!("{} matches · newest first", PROMPTS.len()),
-            dim(),
-        )]),
-    ];
-    for (i, (prompt, from)) in PROMPTS.iter().enumerate() {
+/// The Ctrl+R prompt-history panel: the typed query, how many match, and
+/// the matches with every hit marked, the first one focused like a choice.
+/// With no match the dim `no matching prompts` takes the count row's place
+/// and nothing is barred.
+fn history_body(inner: usize, query: &str, prompts: &[&str]) -> Vec<super::Row> {
+    let mut out = vec![row(vec![
+        sp("› ", fg(CYAN)),
+        sp(query, bold()),
+        sp("█", dim()),
+    ])];
+    if prompts.is_empty() {
+        out.push(row(vec![sp("no matching prompts", dim())]));
+        return out;
+    }
+    let count = if prompts.len() == 1 {
+        "1 match · newest first".to_string()
+    } else {
+        format!("{} matches · newest first", prompts.len())
+    };
+    out.push(row(vec![sp(count, dim())]));
+    for (i, prompt) in prompts.iter().enumerate() {
         // The focused match reads bold throughout, like every focused choice.
         let base = if i == 0 { bold() } else { Style::new() };
-        let mut spans = hl(prompt, QUERY, base, bold());
-        spans.push(sp(
-            format!(" · {from}"),
-            if i == 0 { dim().patch(bold()) } else { dim() },
-        ));
+        let spans = hl(prompt, query, base, bold());
         let (first, rest) = if i == 0 {
             (vec![sp("› ", bold())], vec![sp("  ", Style::new())])
         } else {
@@ -731,6 +772,39 @@ fn history_body(inner: usize) -> Vec<super::Row> {
     out
 }
 
+/// Every notice listed in full, newest first: the registry code and the
+/// message. The `key_clash` body is the single-notice case's whole text;
+/// the `stream_closed` body is docs/tui.md's, "Notices".
+const NOTICES: &[(&str, &str)] = &[
+    (
+        "extension_failed",
+        "an extension failed to start or missed its deadline, so loading skipped it",
+    ),
+    (
+        "config_invalid",
+        "a configuration file is invalid: one extension key is set under both its full and short name",
+    ),
+    (
+        "stream_closed",
+        "this session's log can't be read past here; reopen the session to try again",
+    ),
+    ("key_clash", NOTICE_TEXT),
+];
+
+/// Every notice as a paragraph: the code and its separator dim, the text in
+/// the normal colour, wrapped to the inner width and flush left, newest
+/// first, a blank row between paragraphs and none after the last.
+fn notices_body(inner: usize) -> Vec<super::Row> {
+    let mut out = vec![];
+    for (i, (code, text)) in NOTICES.iter().enumerate() {
+        if i > 0 {
+            out.push(row(vec![]));
+        }
+        let spans = vec![sp(*code, dim()), sp(" · ", dim()), sp(*text, Style::new())];
+        out.extend(wrap(spans, inner, vec![], vec![]).into_iter().map(row));
+    }
+    out
+}
 /// A notice's whole text, wrapped to the overlay width.
 const NOTICE_TEXT: &str = "Two actions share the key Ctrl+F: `search` and `search_results` act in a context they share, so both entries reverted to their defaults. Rebind one of them with /keys. An entry equal to the defaults counts as unset.";
 
@@ -760,12 +834,27 @@ fn small_content(kind: Kind, inner: usize) -> (&'static str, Vec<super::Row>, su
         ),
         Kind::History => (
             "Prompt history",
-            history_body(inner),
+            history_body(inner, QUERY, PROMPTS),
+            panel::footer_legend(&[("Enter", "recalls"), ("Esc", "closes")]),
+        ),
+        Kind::HistoryOne => (
+            "Prompt history",
+            history_body(inner, QUERY, &PROMPTS[1..2]),
+            panel::footer_legend(&[("Enter", "recalls"), ("Esc", "closes")]),
+        ),
+        Kind::HistoryNone => (
+            "Prompt history",
+            history_body(inner, NO_HIT_QUERY, &[]),
             panel::footer_legend(&[("Enter", "recalls"), ("Esc", "closes")]),
         ),
         Kind::Notice => (
             "Notice · key_clash",
             notice_body(inner),
+            panel::footer_legend(&[("Esc", "closes")]),
+        ),
+        Kind::Notices => (
+            "Notices",
+            notices_body(inner),
             panel::footer_legend(&[("Esc", "closes")]),
         ),
         Kind::CloseMouse => (
@@ -1073,7 +1162,7 @@ mod tests {
                 .iter()
                 .all(|c| crate::cases::lookup(CASES, c.name).is_some())
         );
-        assert_eq!(CASES.len(), 9);
+        assert_eq!(CASES.len(), 12);
         assert!(parse("nope").is_none());
     }
 
@@ -1302,7 +1391,7 @@ mod tests {
 
     #[test]
     fn short_overlays_shrink_to_content_and_sit_centred() {
-        for name in ["quit", "delete", "history"] {
+        for name in ["quit", "delete", "history", "history-one", "history-none"] {
             let (x0, w) = panel_span(&parse(name).unwrap(), 160, 48);
             assert!(x0 > 0, "{name} flush left");
             assert!(w < 76, "{name} did not shrink to its content");
@@ -1310,7 +1399,7 @@ mod tests {
             assert!(rest == x0 || rest == x0 + 1, "{name} off-centre");
         }
         // Long text fills to the cap instead.
-        for name in ["notice", "close-mouse"] {
+        for name in ["notice", "notices", "close-mouse"] {
             let (x0, w) = panel_span(&parse(name).unwrap(), 160, 48);
             assert_eq!(w, 75, "{name} should fill to the cap");
             assert!(x0 > 0, "{name} flush left");
@@ -1433,22 +1522,35 @@ mod tests {
                 .any(|x| buf[(x, y)].symbol() == "S"
                     && buf[(x, y)].modifier.contains(Modifier::BOLD))
         );
-        // History: the first match's source, bold; the rest stay plain dim.
+        // History: the selected match reads bold throughout; a plain
+        // match starts with no hit and no bar, so it stays plain. The
+        // second match starts with its bold hit, so the test reads the
+        // first and third matches instead.
         let c = parse("history").unwrap();
         let (buf, t) = (buffer(&c, 160, 48), text(&c, 160, 48));
         let (y, first) = t
             .split('\n')
             .enumerate()
-            .find(|(_, l)| l.contains("this session") || l.contains("· project"))
+            .find(|(_, l)| l.contains("\u{203a}") && l.contains("how do I backfill"))
             .unwrap();
-        assert!(first.contains("this session"));
-        let dot = first.find('·').unwrap();
-        let col = first[..dot].chars().count() + 2;
+        let col = first[..first.find("how").unwrap()].chars().count();
         assert!(
             buf[(col as u16, y as u16)]
                 .modifier
                 .contains(Modifier::BOLD),
-            "first source not bold"
+            "selected match not bold"
+        );
+        let (y3, third) = t
+            .split('\n')
+            .enumerate()
+            .find(|(_, l)| l.contains("roll back"))
+            .unwrap();
+        let col3 = third[..third.find("roll back").unwrap()].chars().count();
+        assert!(
+            !buf[(col3 as u16, y3 as u16)]
+                .modifier
+                .contains(Modifier::BOLD),
+            "plain match reads bold"
         );
     }
 
@@ -1504,6 +1606,120 @@ mod tests {
         // The keys column wraps, so every word reads, not the whole path.
         for w in "click the overlay's \u{2715} or outside it".split(' ') {
             assert!(t.contains(w), "missing {w}");
+        }
+    }
+
+    #[test]
+    fn history_one_names_its_single_match() {
+        let c = parse("history-one").unwrap();
+        let t = text(&c, 160, 48);
+        assert!(t.contains("Prompt history"));
+        assert!(t.contains("1 match · newest first"));
+        assert!(!t.contains("matches ·"), "plural count for one match");
+        assert!(t.contains("Enter recalls · Esc closes"));
+        let buf = buffer(&c, 160, 48);
+        let barred = (0..48)
+            .filter(|&y| (0..160).any(|x| buf[(x, y)].bg == crate::BLUE))
+            .count();
+        assert_eq!(barred, 1, "one match, one bar");
+    }
+
+    #[test]
+    fn history_none_names_no_match() {
+        let c = parse("history-none").unwrap();
+        let t = text(&c, 160, 48);
+        assert!(t.contains("Prompt history"));
+        assert!(t.contains("no matching prompts"));
+        assert!(!t.contains("newest first"), "count row with no match");
+        assert!(t.contains("Enter recalls · Esc closes"));
+        let buf = buffer(&c, 160, 48);
+        let barred = (0..48)
+            .filter(|&y| (0..160).any(|x| buf[(x, y)].bg == crate::BLUE))
+            .count();
+        assert_eq!(barred, 0, "a bar with no match");
+    }
+
+    #[test]
+    fn history_rows_carry_no_origin_tag() {
+        for name in ["history", "history-one"] {
+            let t = text(&parse(name).unwrap(), 160, 48);
+            assert!(!t.contains("· this session"), "origin tag in {name}");
+            assert!(!t.contains("· project"), "origin tag in {name}");
+        }
+    }
+
+    #[test]
+    fn notices_list_every_code_dim_in_newest_first_order() {
+        use ratatui::style::Modifier;
+        let c = parse("notices").unwrap();
+        let (buf, t) = (buffer(&c, 160, 48), text(&c, 160, 48));
+        assert!(t.contains("Notices"));
+        assert!(t.contains("Esc closes"));
+        let lines: Vec<&str> = t.split('\n').collect();
+        let mut at = 0;
+        let mut starts = vec![];
+        for (code, _) in NOTICES {
+            let (y, line) = lines
+                .iter()
+                .enumerate()
+                .find(|(i, l)| *i >= at && l.contains(code))
+                .unwrap();
+            // Newest first: each paragraph starts below the last.
+            assert!(y >= at, "{code} out of order");
+            let col = line.find(code).unwrap();
+            for (k, ch) in code.chars().enumerate() {
+                let cell = &buf[((col + k) as u16, y as u16)];
+                assert_eq!(cell.symbol(), &ch.to_string(), "{code} moved");
+                assert!(cell.modifier.contains(Modifier::DIM), "{code} not dim");
+            }
+            // The text after the separator reads in the normal colour.
+            let after = line.find('·').unwrap() + '·'.len_utf8() + 1;
+            assert!(
+                !buf[(after as u16, y as u16)]
+                    .modifier
+                    .contains(Modifier::DIM),
+                "{code} text dim"
+            );
+            starts.push(y);
+            at = y + 1;
+        }
+        assert_eq!(starts.len(), NOTICES.len());
+        // Exactly one blank row separates paragraphs, none after the last.
+        let (_, panel) = panel_rows(&c, 160, 48);
+        let plain: Vec<String> = panel.iter().map(crate::plain).collect();
+        let code_rows: Vec<usize> = NOTICES
+            .iter()
+            .map(|(code, _)| plain.iter().position(|l| l.contains(code)).unwrap())
+            .collect();
+        for pair in code_rows.windows(2) {
+            let (a, b) = (pair[0], pair[1]);
+            assert!(!plain[a + 1..b - 1].iter().any(|l| l.trim().is_empty()));
+            assert!(plain[b - 1].trim().is_empty(), "no gap before paragraph");
+        }
+        let last = *code_rows.last().unwrap();
+        let tail = &plain[last + 1..];
+        let first_blank = tail.iter().position(|l| l.trim().is_empty()).unwrap();
+        assert!(
+            !tail[..first_blank].iter().any(|l| l.trim().is_empty()),
+            "gap inside the last paragraph"
+        );
+        // The last paragraph runs into the frame's own blank row only:
+        // the footer follows it directly, with no paragraph gap.
+        assert!(tail[first_blank + 1].contains("Esc"));
+    }
+
+    #[test]
+    fn new_cases_fit_the_40_column_floor() {
+        for name in ["history-one", "history-none", "notices"] {
+            let c = parse(name).unwrap();
+            for ps in frame(&c, 40, 30) {
+                for p in &ps {
+                    assert!(
+                        crate::width(&p.row.spans) <= 40,
+                        "{name} overflows at 40 columns"
+                    );
+                }
+            }
         }
     }
 

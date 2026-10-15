@@ -8073,7 +8073,7 @@ mod tests {
             all,
             [
                 "--home full-sessions, full-empty, full-focus-exited, full-closing, full-picker, rail-focused, live",
-                "--overlay keymap, keymap-tab, keymap-search, keymap-narrow, quit, delete, history, notice, close-mouse",
+                "--overlay keymap, keymap-tab, keymap-search, keymap-narrow, quit, delete, history, history-one, history-none, notice, notices, close-mouse",
                 "--picker list, levels, scoped, scoped-all, refreshing, session-only, filtered, filtered-empty, checklist, checklist-filtered, checklist-empty",
                 "--completions slash, slash-filtered, slash-hint, at, at-empty, at-path, narrow-slash, narrow-at",
                 "--login providers, waiting, key, done, failed",
