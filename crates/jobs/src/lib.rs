@@ -6,6 +6,8 @@ mod delegate;
 mod registry;
 #[cfg(test)]
 mod support;
+#[cfg(test)]
+mod timing_tests;
 mod tool;
 
 pub use delegate::{

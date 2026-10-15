@@ -1058,8 +1058,18 @@ fn append_raw(dir: &std::path::Path, line: &Envelope) {
 
 /// A `text_completed` line at `seq` whose payload does not read as its kind.
 fn unreadable_text(seq: u64) -> Envelope {
+    unreadable("text_completed", seq)
+}
+
+/// A `reasoning_completed` line at `seq` whose payload does not read as
+/// its kind: the resume fold never parses it.
+fn unreadable_reasoning(seq: u64) -> Envelope {
+    unreadable("reasoning_completed", seq)
+}
+
+fn unreadable(kind: &str, seq: u64) -> Envelope {
     Envelope {
-        kind: "text_completed".into(),
+        kind: kind.into(),
         session_id: SessionId("s_9".into()),
         ts: 1,
         schema_version: contract::SCHEMA_VERSION,
@@ -1072,8 +1082,8 @@ fn unreadable_text(seq: u64) -> Envelope {
 
 #[test]
 fn resume_fails_log_corrupt_on_an_unreadable_line_in_its_window() {
-    // The pass reads no `text_completed` payload, so the line passes it; the
-    // window's rebuild reads it and refuses the resume.
+    // The fold reads `text_completed` payloads, so the corrupt line
+    // refuses the resume's fold itself.
     let root = fakes::TempDir::new("fiber-resume");
     let clock: Arc<dyn contract::clock::Clock> = fakes::clock::FakeClock::new();
     let created = Log::create(root.path(), SessionId("s_9".into()), Arc::clone(&clock)).unwrap();
@@ -1105,6 +1115,45 @@ fn resume_fails_log_corrupt_on_an_unreadable_line_in_its_window() {
     drop(created);
     let dir = root.path().join("s_9");
     append_raw(&dir, &unreadable_text(2));
+    let error = match r#loop::resumed(&dir) {
+        Ok(_) => panic!("a fold over an unreadable line resumes"),
+        Err(error) => error,
+    };
+    assert_eq!(error.code(), ErrorCode::LogCorrupt);
+
+    // A kind the fold never parses passes it; the window's rebuild reads
+    // it and refuses the resume.
+    let root = fakes::TempDir::new("fiber-resume-reasoning");
+    let clock: Arc<dyn contract::clock::Clock> = fakes::clock::FakeClock::new();
+    let created = Log::create(root.path(), SessionId("s_9".into()), Arc::clone(&clock)).unwrap();
+    created
+        .append(
+            &Event::SessionStarted(SessionStarted {
+                workspace: root.path().display().to_string(),
+                variables: Variables {
+                    path: String::new(),
+                    names: Vec::new(),
+                    source: VariablesSource::Inherited,
+                },
+                parent: None,
+                forked_from: None,
+                rewind: None,
+                worktree: None,
+            }),
+            None,
+            None,
+        )
+        .unwrap();
+    created
+        .append(
+            &user_turn("one"),
+            Some(contract::TurnId("t_1".into())),
+            None,
+        )
+        .unwrap();
+    drop(created);
+    let dir = root.path().join("s_9");
+    append_raw(&dir, &unreadable_reasoning(2));
     let log = Arc::new(Log::open(root.path(), SessionId("s_9".into()), clock).unwrap());
     let resumed = r#loop::resumed(&dir).unwrap();
     let (_tx, rx) = mpsc::channel();

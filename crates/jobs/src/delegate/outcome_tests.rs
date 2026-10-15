@@ -74,11 +74,29 @@ fn termination_beats_the_exit() {
             Outcome::Failed,
             Some(ErrorCode::OutputCap),
         ),
+        (
+            Termination::Timeout,
+            false,
+            exit(1),
+            Outcome::Failed,
+            Some(ErrorCode::Timeout),
+        ),
+        (
+            Termination::Timeout,
+            true,
+            exit(0),
+            Outcome::Failed,
+            Some(ErrorCode::Timeout),
+        ),
     ] {
         let line = if clean { exited("Done.") } else { errored() };
         let (completed, finished) =
             outcome(Some(termination), Some(&line), None, status, &job_id());
         assert_eq!(completed.status, expected, "{termination:?} clean={clean}");
+        assert_eq!(
+            completed.process.as_ref().unwrap().timed_out,
+            matches!(termination, Termination::Timeout)
+        );
         assert_eq!(
             completed.error.as_ref().map(|error| error.code.clone()),
             code,

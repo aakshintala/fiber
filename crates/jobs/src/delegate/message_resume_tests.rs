@@ -59,6 +59,7 @@ impl Ask for FakeAsk {
 
 /// What a launch was asked, as the tool built it.
 struct Launched {
+    depth: u32,
     session_id: SessionId,
     job_id: JobId,
     parent: SessionId,
@@ -161,6 +162,7 @@ fn resume_rig_with_steer(
     let queued = Arc::new(Mutex::new(VecDeque::from(launches)));
     let launch: Launch = Arc::new(move |launched| {
         recorded.lock().unwrap().push(Launched {
+            depth: launched.depth,
             session_id: launched.session_id.clone(),
             job_id: launched.job_id.clone(),
             parent: launched.parent.clone(),
@@ -255,6 +257,7 @@ fn resume_rig_with_steer(
         },
     );
     let tool = Arc::new(DelegateMessage {
+        depth: 0,
         registry: Arc::clone(&registry),
         parent: SessionId("s_parent".into()),
         clock: Arc::clone(&clock) as Arc<dyn contract::clock::Clock>,
@@ -277,6 +280,32 @@ fn resume_rig_with_steer(
         last_seq_calls,
         steer_calls,
     }
+}
+
+#[test]
+fn a_resume_at_the_concurrency_cap_starts_nothing() {
+    let rig = resume_rig(
+        vec![],
+        vec![],
+        Arc::new(|_| panic!("cap precedes the boundary read")),
+    );
+    let (id, finish) = open_resume_delegate(&rig, "/unused");
+    end_resume_run(finish, &id, "done");
+    let _running: Vec<_> = (0..10)
+        .map(|_| open_resume_delegate(&rig, "/unused"))
+        .collect();
+    let output = rig.tool.run(
+        &resume_args(&id.0, "again"),
+        &CancelToken::new(),
+        &Recorder::default(),
+    );
+    assert_eq!(code_of(&output), ErrorCode::ToolError);
+    assert_eq!(
+        content(&output),
+        "This session already runs 10 delegates, the most it can run at once, so nothing was started; wait for one with `jobs wait` or stop one with `jobs stop`, then try again.\n"
+    );
+    assert!(rig.launched.lock().unwrap().is_empty());
+    assert!(rig.last_seq_calls.lock().unwrap().is_empty());
 }
 
 /// Opens a delegate whose log is `output`.
@@ -565,6 +594,7 @@ fn a_resume_reports_its_launch_and_queues_both_runs() {
     assert_eq!(launched[0].session_id.0, "s_d000000000000001");
     assert_eq!(launched[0].job_id, id);
     assert_eq!(launched[0].parent.0, "s_parent");
+    assert_eq!(launched[0].depth, 1);
     assert_eq!(launched[0].model, "fiber:fake/m");
     assert_eq!(launched[0].prompt, "tell me more");
     assert_eq!(launched[0].workspace.display().to_string(), "/w");

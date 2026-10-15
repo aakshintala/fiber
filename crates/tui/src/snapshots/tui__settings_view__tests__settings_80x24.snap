@@ -1,8 +1,9 @@
 ---
 source: crates/tui/src/settings_view_tests.rs
+assertion_line: 191
 expression: "drawn(&settings, Some(180_000), 80, 24)"
 ---
-Settings                                                                       ✕
+ Settings  /settings                                                 Esc returns
 diagnostics.level                  "info"  default
 handoff.tokens                     400000  default
 model                              "a/b"  global

@@ -11,10 +11,12 @@
 use std::collections::BTreeMap;
 
 use contract::events::{
-    DelegateFinished, Event, InstructionFile, InstructionReason, InstructionSent, JobCompleted,
-    Outcome, SkillListed, SkillSource, SkillsChanged, ToolCallRequested,
+    ContextAdded, DelegateFinished, Environment, Event, FiberStarted, InputItem, InstructionFile,
+    InstructionReason, InstructionSent, JobCompleted, OpeningMessage, Outcome, ReviewerKept,
+    SkillListed, SkillSource, SkillsChanged, ToolCallRequested, TurnStarted,
 };
 use contract::provider::Input;
+use contract::shapes::{ContentPart, Origin, Sender};
 use contract::{ActionId, Envelope, JobId, Seq, SessionId};
 use serde_json::json;
 
@@ -1719,7 +1721,10 @@ mod window {
         let session = Session::new();
         first_context(&session);
         let bad = session.lines().len();
-        session.raw(&unreadable("text_completed", u64::try_from(bad).unwrap()));
+        session.raw(&unreadable(
+            "reasoning_completed",
+            u64::try_from(bad).unwrap(),
+        ));
         drop(session.log);
         let log = log::Log::open(
             session.root.path(),
@@ -3386,4 +3391,139 @@ fn an_unfinished_inner_call_holds_no_job_notice_and_gets_no_fixed_result() {
         matches!(&rebuilt[1], Input::ToolResult { action_id, text, .. } if action_id.0 == "a_outer" && text == "outer done")
     );
     assert!(matches!(&rebuilt[2], Input::User { text, .. } if text.contains("j_done")));
+}
+
+/// A `session_start` test opening message, rendered from its logged
+/// fields only.
+fn start_opening() -> Event {
+    Event::OpeningMessage(OpeningMessage {
+        environment: Environment {
+            date: "2023-11-14".into(),
+            os: "test-os".into(),
+            arch: "test-arch".into(),
+            shell: "/bin/sh".into(),
+            workspace: "/w".into(),
+            git: None,
+            session_log: "/w/s_test/events.jsonl".into(),
+        },
+        instruction_files: Vec::new(),
+        extension_sections: Vec::new(),
+        skills: Vec::new(),
+    })
+}
+
+fn start_context(hook: &str, text: &str) -> Event {
+    Event::ContextAdded(ContextAdded {
+        text: text.into(),
+        extension: "fiber.test/inbox".into(),
+        hook: hook.into(),
+    })
+}
+
+fn start_turn(text: &str) -> Event {
+    Event::TurnStarted(TurnStarted {
+        input: vec![InputItem::Message {
+            content: vec![ContentPart::Text { text: text.into() }],
+            sender: Sender {
+                origin: Origin::Driver,
+                command_id: None,
+            },
+            changed_by: None,
+        }],
+    })
+}
+
+/// Renders `events` live in order and rebuilds their lines: the two
+/// agree, and the caller pins where each message landed.
+fn live_and_rebuilt(staged: &[(&str, Event)]) -> Vec<Input> {
+    let mut live = Vec::new();
+    let mut had = BTreeMap::new();
+    let mut carry = crate::handoff::Carry::default();
+    for (_, event) in staged {
+        render(&mut live, event, None, "fake/model-1", &mut had, &mut carry);
+    }
+    let lines: Vec<Envelope> = staged
+        .iter()
+        .map(|(kind, event)| line(kind, event, None))
+        .collect();
+    let rebuilt = super::rebuild(&lines, "fake/model-1").unwrap();
+    assert_eq!(live, rebuilt, "live equals rebuild");
+    rebuilt
+}
+
+#[test]
+fn two_session_start_contexts_render_after_the_opening_in_order() {
+    let conversation = live_and_rebuilt(&[
+        ("turn_started", start_turn("early")),
+        ("opening_message", start_opening()),
+        ("context_added", start_context("session_start", "one")),
+        ("context_added", start_context("session_start", "two")),
+    ]);
+    assert_eq!(conversation.len(), 4);
+    assert!(matches!(&conversation[0], Input::User { .. }));
+    assert_eq!(user_text(&conversation[1]), "one");
+    assert_eq!(user_text(&conversation[2]), "two");
+    assert_eq!(user_text(&conversation[3]), "early");
+}
+
+#[test]
+fn a_turn_start_context_after_turn_started_appends() {
+    let conversation = live_and_rebuilt(&[
+        ("opening_message", start_opening()),
+        ("turn_started", start_turn("early")),
+        ("context_added", start_context("turn_start", "late")),
+    ]);
+    assert_eq!(conversation.len(), 3);
+    assert_eq!(user_text(&conversation[1]), "early");
+    assert_eq!(user_text(&conversation[2]), "late");
+}
+
+#[test]
+fn a_session_start_context_after_fiber_started_appends() {
+    let conversation = live_and_rebuilt(&[
+        ("opening_message", start_opening()),
+        ("turn_started", start_turn("early")),
+        (
+            "fiber_started",
+            Event::FiberStarted(FiberStarted {
+                version: "0.0.1".into(),
+                resumed: true,
+            }),
+        ),
+        ("context_added", start_context("session_start", "late")),
+    ]);
+    assert_eq!(conversation.len(), 3);
+    assert_eq!(user_text(&conversation[1]), "early");
+    assert_eq!(user_text(&conversation[2]), "late");
+}
+
+#[test]
+fn a_before_message_context_after_an_opening_message_appends() {
+    let conversation = live_and_rebuilt(&[
+        ("turn_started", start_turn("early")),
+        ("opening_message", start_opening()),
+        ("context_added", start_context("before_message", "hooked")),
+    ]);
+    assert_eq!(conversation.len(), 3);
+    assert_eq!(user_text(&conversation[1]), "early");
+    assert_eq!(user_text(&conversation[2]), "hooked");
+}
+
+#[test]
+fn a_durable_event_between_the_opening_and_a_context_clears_the_slot() {
+    let conversation = live_and_rebuilt(&[
+        ("turn_started", start_turn("early")),
+        ("opening_message", start_opening()),
+        (
+            "reviewer_kept",
+            Event::ReviewerKept(ReviewerKept {
+                kept: Vec::new(),
+                failed: None,
+            }),
+        ),
+        ("context_added", start_context("session_start", "late")),
+    ]);
+    assert_eq!(conversation.len(), 3);
+    assert_eq!(user_text(&conversation[1]), "early");
+    assert_eq!(user_text(&conversation[2]), "late");
 }

@@ -5,7 +5,7 @@ use ratatui::buffer::Buffer;
 use ratatui::layout::Rect;
 use ratatui::style::Modifier;
 
-use super::{Frame, Ink, List, Spot, about, render, rows_height};
+use super::{Frame, Ink, List, Spot, about, compact, render, rows_height};
 use crate::keys::Key;
 use crate::mouse::TargetId;
 use crate::theme::Role;
@@ -120,6 +120,36 @@ fn a_shrunk_list_clamps_on_select() {
 }
 
 #[test]
+fn compact_counts_stay_exact_under_a_thousand() {
+    for (tokens, said) in [(0, "0"), (1, "1"), (999, "999")] {
+        assert_eq!(compact(tokens), said);
+    }
+}
+
+#[test]
+fn compact_counts_round_half_up_to_whole_thousands() {
+    for (tokens, said) in [
+        (1000, "1k"),
+        (1499, "1k"),
+        (1500, "2k"),
+        (15_000, "15k"),
+        (120_000, "120k"),
+        (268_000, "268k"),
+        (400_000, "400k"),
+        (999_499, "999k"),
+    ] {
+        assert_eq!(compact(tokens), said, "{tokens}");
+    }
+}
+
+#[test]
+fn compact_counts_past_a_million_read_in_millions() {
+    for (tokens, said) in [(999_500, "1M"), (1_000_000, "1M")] {
+        assert_eq!(compact(tokens), said, "{tokens}");
+    }
+}
+
+#[test]
 fn about_groups_thousands() {
     for (tokens, said) in [
         (0, "0"),
@@ -136,6 +166,7 @@ fn about_groups_thousands() {
 fn frame(rows: usize) -> Frame {
     Frame {
         title: "Settings".to_owned(),
+        command: "/settings",
         rows: (0..rows)
             .map(|at| vec![(format!("row {at}"), None, Ink::Plain)])
             .collect(),
@@ -157,14 +188,17 @@ fn text(buf: &Buffer, y: u16) -> String {
 
 #[test]
 fn the_frame_draws_the_header_rows_below_and_footer() {
-    let area = Rect::new(0, 0, 20, 6);
+    let area = Rect::new(0, 0, 40, 6);
     let mut buf = Buffer::empty(area);
     let mut targets = Vec::new();
     let mut shown = frame(5);
     shown.list.select(1, 5, rows_height(&shown, 6));
     render(&shown, area, &mut buf, &mut targets);
     assert_eq!(rows_height(&shown, 6), 3);
-    assert_eq!(text(&buf, 0), "Settings           ✕");
+    assert_eq!(
+        text(&buf, 0),
+        format!(" Settings  /settings{}Esc returns", " ".repeat(9))
+    );
     assert_eq!(text(&buf, 1), "row 0");
     assert_eq!(text(&buf, 2), "row 1");
     assert_eq!(text(&buf, 3), "row 2");
@@ -184,10 +218,120 @@ fn the_frame_draws_the_header_rows_below_and_footer() {
     );
 }
 
+/// The top row's cells at `width`: name bold, command and `Esc
+/// returns` dim, all on the `surface` tint.
+fn top_row(title: &str, command: &'static str, width: u16) -> Buffer {
+    let area = Rect::new(0, 0, width, 3);
+    let mut buf = Buffer::empty(area);
+    let frame = Frame {
+        title: title.to_owned(),
+        command,
+        rows: Vec::new(),
+        list: List::default(),
+        below: Vec::new(),
+        field: None,
+        footer: String::new(),
+    };
+    render(&frame, area, &mut buf, &mut Vec::new());
+    buf
+}
+
+#[test]
+fn the_top_row_names_the_view_with_its_command_dim() {
+    let buf = top_row("Context", "/context", 40);
+    assert_eq!(
+        text(&buf, 0),
+        format!(" Context  /context{}Esc returns", " ".repeat(11))
+    );
+    // The whole row sits on the `surface` tint.
+    for x in 0..40 {
+        assert_eq!(buf[(x, 0)].bg, Role::Surface.color(), "no tint at {x}");
+    }
+    // The name is bold from column 1; the command follows it, dim.
+    for (at, cell) in "Context".chars().enumerate() {
+        let x = u16::try_from(at + 1).expect("a column");
+        assert_eq!(buf[(x, 0)].symbol(), cell.to_string().as_str());
+        assert!(
+            buf[(x, 0)].modifier.contains(Modifier::BOLD),
+            "not bold at {x}"
+        );
+    }
+    for (at, cell) in "  /context".chars().enumerate() {
+        let x = u16::try_from(at + 8).expect("a column");
+        assert_eq!(buf[(x, 0)].symbol(), cell.to_string().as_str());
+        assert!(
+            buf[(x, 0)].modifier.contains(Modifier::DIM),
+            "not dim at {x}"
+        );
+    }
+    // `Esc returns` ends the row, dim.
+    for (at, cell) in "Esc returns".chars().enumerate() {
+        let x = u16::try_from(at + 29).expect("a column");
+        assert_eq!(buf[(x, 0)].symbol(), cell.to_string().as_str());
+        assert!(
+            buf[(x, 0)].modifier.contains(Modifier::DIM),
+            "Esc not dim at {x}"
+        );
+    }
+    assert!(!text(&buf, 0).contains('✕'), "no cross on the top row");
+}
+
+#[test]
+fn the_whole_top_row_is_the_close_target() {
+    for width in [21, 22, 40] {
+        let area = Rect::new(0, 0, width, 3);
+        let mut buf = Buffer::empty(area);
+        let mut targets = Vec::new();
+        render(&frame(1), area, &mut buf, &mut targets);
+        let close: Vec<Rect> = targets
+            .iter()
+            .filter(|target| target.id == TargetId::View(Spot::Close))
+            .map(|target| target.rect)
+            .collect();
+        assert_eq!(
+            close,
+            [Rect::new(0, 0, width, 1)],
+            "the whole row closes at width {width}"
+        );
+        // The close target is pushed before every row's own target.
+        assert_eq!(targets[0].id, TargetId::View(Spot::Close));
+    }
+}
+
+#[test]
+fn a_narrow_top_row_drops_the_command_before_esc() {
+    // `" Settings"` is 9 cells, `"  /settings"` 11, `Esc returns`
+    // 11: the full row needs 32, the name with Esc 21, the name 9.
+    assert_eq!(
+        text(&top_row("Settings", "/settings", 40), 0),
+        format!(" Settings  /settings{}Esc returns", " ".repeat(9))
+    );
+    assert_eq!(
+        text(&top_row("Settings", "/settings", 32), 0),
+        " Settings  /settings Esc returns"
+    );
+    assert_eq!(
+        text(&top_row("Settings", "/settings", 31), 0),
+        format!(" Settings{}Esc returns", " ".repeat(11))
+    );
+    assert_eq!(
+        text(&top_row("Settings", "/settings", 22), 0),
+        format!(" Settings{}Esc returns", " ".repeat(2))
+    );
+    assert_eq!(
+        text(&top_row("Settings", "/settings", 21), 0),
+        " Settings Esc returns"
+    );
+    assert_eq!(text(&top_row("Settings", "/settings", 20), 0), " Settings");
+    assert_eq!(text(&top_row("Settings", "/settings", 9), 0), " Settings");
+    assert_eq!(text(&top_row("Settings", "/settings", 8), 0), " Setting");
+}
+
 #[test]
 fn a_heading_cell_is_bold_and_a_muted_cell_is_muted() {
     let frame = Frame {
         title: "Models".to_owned(),
+        command: "/model",
         rows: vec![
             vec![("acme".to_owned(), None, Ink::Heading)],
             vec![
@@ -232,6 +376,44 @@ fn a_heading_cell_is_bold_and_a_muted_cell_is_muted() {
 }
 
 #[test]
+fn a_role_cell_draws_its_role_and_a_muted_cell_is_faint() {
+    let frame = Frame {
+        title: "Context".to_owned(),
+        command: "/context",
+        rows: vec![
+            vec![("■ ".to_owned(), None, Ink::Role(Role::Error))],
+            vec![("tail".to_owned(), None, Ink::Muted)],
+        ],
+        list: List::default(),
+        below: Vec::new(),
+        field: None,
+        footer: String::new(),
+    };
+    let area = Rect::new(0, 0, 20, 4);
+    let mut buf = Buffer::empty(area);
+    let mut targets = Vec::new();
+    render(&frame, area, &mut buf, &mut targets);
+    // The role cell draws its role's colour; the muted cell is faint
+    // in the muted colour.
+    assert_eq!(buf[(0, 1)].fg, Role::Error.color());
+    assert_eq!(buf[(0, 2)].fg, Role::Muted.color());
+    assert!(buf[(0, 2)].modifier.contains(Modifier::DIM));
+    assert!(!buf[(0, 1)].modifier.contains(Modifier::DIM));
+}
+
+#[test]
+fn an_empty_footer_draws_nothing() {
+    let area = Rect::new(0, 0, 20, 4);
+    let mut buf = Buffer::empty(area);
+    let mut shown = frame(1);
+    shown.footer = String::new();
+    render(&shown, area, &mut buf, &mut Vec::new());
+    assert_eq!(text(&buf, 1), "row 0");
+    assert_eq!(text(&buf, 2), "below");
+    assert_eq!(text(&buf, 3), "");
+}
+
+#[test]
 fn the_field_scrolls_to_show_its_caret() {
     let area = Rect::new(0, 0, 10, 4);
     let mut buf = Buffer::empty(area);
@@ -270,7 +452,8 @@ fn a_one_row_view_draws_no_footer_over_its_header() {
     let area = Rect::new(0, 0, 20, 1);
     let mut buf = Buffer::empty(area);
     render(&frame(0), area, &mut buf, &mut Vec::new());
-    assert_eq!(text(&buf, 0), "Settings           ✕");
+    // Too narrow for the command with `Esc returns`: the name draws.
+    assert_eq!(text(&buf, 0), " Settings");
 }
 
 #[test]

@@ -48,13 +48,26 @@ An extension may change everything the terminal draws, through the slots in
 
 ## Home
 
-`fiber` opens on home, the command center, drawn full screen with no panel and
-no rail. It is centred. From the top:
+Home is the rail at full width: the same sessions in the same project groups,
+with room to say what each one waits on. `fiber` opens on it. From a session,
+← in an empty input box focuses the rail, and a second ← widens it to home
+("The rail"); ⌥0, `/home`, `/new` and `/resume` go there too. → or Esc goes
+back to the session the person came from. Home has no panel and no rail of
+its own. From the top:
 
-1. the logo, centred over the box
-2. a large input box, whose bottom row carries the workspace chip, the new worktree
-   switch, and the model and thinking chips and "Enter starts a session"
-3. under the box, at its width, the session list ("The session list")
+1. the header: the logo at the top left ("The logo"), and beside it two lines
+   centred on the logo's rows. The first is the version, dim. The second
+   counts the live sessions across every project by state, each count in its
+   state's colour ("State glyphs") and joined by a dim " · ", leaving out a
+   zero count, then the summed spend of the live sessions, dim: "2 waiting on
+   you · 2 working · 1 retrying · 1 crashed · 2 ready · $5.78 live". With no
+   session it reads "no sessions yet", dim.
+2. the session list, filling the rows between the header and the input box
+   ("The session list")
+3. the input box, at the bottom where a session's input box sits, so widening
+   from a session never moves it. Its bottom row carries the workspace chip,
+   the new worktree switch, the model and thinking chips and "Enter starts a
+   session".
 
 A key hint sits at the foot. It names the key map action's bound key,
 leaving the key out when the action is unbound; Ctrl+C cannot be
@@ -111,17 +124,20 @@ repository the switch is not shown.
 **The model and thinking chips** name the configured model and its thinking level. Clicking the model or thinking chip opens the model picker. The thinking chip opens it on the model's thinking levels, with focus starting on the level chips.
 
 **The keyboard reaches every part of home.** Focus runs top to bottom: the
-entry bar, the chip row, the session list. ↓ from the entry bar focuses the
-chip row, on the chip focused there last, the workspace chip at first. ← and →
-move between the chips and stop at the ends. Enter on a focused chip does what
-a click does: the workspace chip opens the workspace picker, the new worktree
-switch toggles, the model chip opens the model picker, and the thinking chip
-opens it at the model's thinking chips. The chip stays focused behind the
-picker. A second ↓ focuses the first session row, and ↓ moves down the rows.
-↑ goes back the same way: from the first row to the chip focused last, and
-from the chip row to the entry bar. With no session, ↓ on the chip row does
-nothing. Typing or Backspace while a chip is focused goes to the entry bar.
-A focused chip is drawn as a hovered one ("Mouse and hover").
+session list, the entry bar, the chip row. Widening from a session focuses
+that session's row; `/new`, and launching `fiber`, focus the entry bar;
+`/resume` focuses the first exited row. ↑ and ↓ move through every row, live
+and exited, across the project sections. ↓ from the last row focuses the
+entry bar, and ↑ from an empty entry bar focuses the last row; on home no
+session is on screen, so ↑ there recalls no prompt. ↓ from the entry bar
+focuses the chip row, on the chip focused there last, the workspace chip at
+first, and ↑ goes back. ← and → move between the chips and stop at the ends.
+Enter on a focused chip does what a click does: the workspace chip opens the
+workspace picker, the new worktree switch toggles, the model chip opens the
+model picker, and the thinking chip opens it at the model's thinking chips.
+The chip stays focused behind the picker. With no session, ↑ on the entry bar
+does nothing. Typing or Backspace while a chip or a row is focused goes to the
+entry bar. A focused chip is drawn as a hovered one ("Mouse and hover").
 
 The first frame draws at once. The session list fills in when the hub's feed
 arrives (`docs/performance.md`).
@@ -139,8 +155,10 @@ who runs `fiber` before reading anything is told what to do next.
 The logo is `⌇ fiber 0.0.1`: the ⌇ in the accent colour, the name in the
 accent gradient, the version dim.
 
-- **On home it is four rows tall,** in pixel letters drawn with half
-  blocks, with each letter's counter shaded.
+- **On home it is four rows tall and 32 columns wide, at the top left of the
+  header,** in pixel letters drawn with half blocks, with each letter's
+  counter shaded. The version sits beside it in the header, not after the
+  name.
 - **Where the terminal speaks an image protocol** (kitty, iTerm2 or Sixel), an
   image replaces the pixel letters in exactly the same cells: a smooth wave
   and the name set in JetBrains Mono ExtraBold, in the gradient. Detection
@@ -185,23 +203,39 @@ puts it aside", both dim.
 
 ### The session list
 
-Home lists sessions, live ones first, then recently exited ones, one row
-each, growing with the number of live sessions and scrolling past the screen:
+Home lists every project, in the rail's order: the launch project first, then
+the others in the order their first session started. Each project is a
+section, and the sections scroll when they outgrow the screen:
 
-- a glyph for the state, as on the rail ("State glyphs"), and ○ for an
-  exited session
-- the name, or the first prompt when it has none
-- what it waits on, such as "approval: shell cargo publish --dry-run" or
-  "question: 2 of 3 answered", and its spend
-- the workspace's last path segment, for a session outside the launch
-  project
+- **The section's header** is the project's name, bold in the accent colour,
+  and a "+" that starts a session in that project, as on the rail; then, dim,
+  "N live · $spend", the count and summed spend of its live sessions; then
+  "N waiting on you" in `attention` when any wait.
+- **Each live session is two rows,** in the order the sessions started, as
+  the rail's cards are. The first row: "⌥N", the card's number, dim; the state
+  glyph ("State glyphs"); and the name, or the first prompt when it has none;
+  then, at the right end, the state's word in its colour and how long the
+  session has been in that state, dim, in the rail's units. The second row,
+  indented and dim: the id, the turns, a ⎇ and the branch, the spend and the
+  context percentage, joined by " · "; then, in `attention`, what it waits
+  on, in full: "approval: shell cargo publish --dry-run", "question: 2 of 3
+  answered".
+- **A session closing after `/clear`** stays a live row, its word "CLOSING",
+  dim, until it exits ("Slash commands").
+- **The project's exited sessions** follow under a dim "exited · N": up to
+  three, the most recent first, each one dim row: ○, the name, and at the
+  right the id, turns, spend and age ("3h ago"). When there are more, a last
+  row reads "… N more", and Enter or a click on it lists the rest of the
+  project's exited sessions in place.
 
-Live sessions come from the hub's feed, across every project. Exited sessions
-come from `recent.jsonl`, then from the hub's paged query for older ones.
-When the terminal was launched inside a git repository, home shows only that
-repository's project, every worktree of it, by the `project` on each live session's `session_status` and on each exited session's `recent.jsonl` row, with a line saying "N waiting in
-other projects" and a toggle to show everything. Outside a git repository it
-shows everything. The rail always shows every project ("The rail").
+The focused row is drawn on the selection bar. With no session, the list's
+rows hold two dim lines, centred: "No sessions yet." and "Type below and
+press Enter to start one."
+
+Live sessions come from the hub's feed, across every project, grouped by the
+`project` on each `session_status`. Exited sessions come from `recent.jsonl`,
+then from the hub's paged query for older ones, grouped by the `project` on
+each row.
 
 Clicking a row, or Enter on it, opens the session: an exited one is resumed by
 the hub. A ✕ on a live row stops that session ("Quit"). Delete on a
@@ -217,8 +251,7 @@ the command to resume it.
 
 ## Layout
 
-The screen is a session rail on the left while two or more sessions are
-live, a conversation column, and a side panel on the right. The conversation
+The screen is a session rail on the left, a conversation column, and a side panel on the right. The conversation
 column has no header row: its first row is conversation. The conversation keeps
 one blank column on each side, so the turn cards start one column in from the
 rail's edge and end one column before the panel's; with the rail hidden its
@@ -245,13 +278,26 @@ is built.
 The rail lists every live session, across every project, as cards grouped
 under project headers. The launch project's group comes first, then the
 others in the order their first session started. The rail is drawn from the
-hub's feed (`docs/invocation.md`, "The hub") and shows while two or more
-sessions are live. Home never shows it.
+hub's feed (`docs/invocation.md`, "The hub") and shows beside every session,
+one session included, unless the person hides it. ⌥R and `/rail` show or hide
+it and save the choice as `tui.rail.shown`, so a person who never wants the
+rail sets it once. Home is the rail at full width ("Home").
+
+**← reaches the rail.** In an empty input box, ← moves focus into the rail,
+on the card of the session on screen; with text in the box, ← moves the
+cursor. The focused card is lifted: its tint 0x14 lighter, as hover draws it
+("Mouse and hover"). The input box's stripe and text dim while the rail has
+focus, and the foot hint reads "← full screen · ↑↓ move · Enter switch · → or
+Esc back to the session · ⌥1–9 jump". ↑ and ↓ move between cards across the
+project groups, Enter switches to the focused card's session, and → or Esc
+gives focus back to the input box. A second ← widens the rail to home. When
+the rail is hidden, by the person or for width ("Shedding"), one ← from an
+empty input box opens home.
 
 A project header holds the project's name, bold in the accent colour, a "+"
 that starts a session in that project, and, right-aligned and dim, the summed
 spend of its live sessions and "N ✓", the count of its exited sessions, which
-opens home's session list for that project.
+widens to home with focus on that project's first exited row.
 
 Each card is four rows on its own tint, inside ▄ and ▀ edges, with a ▌ stripe
 on the left in the state's colour:
@@ -558,8 +604,9 @@ a click on it returns too. The views are:
   whole call", dim. Esc returns to the conversation with the call's row
   still focused.
 - **Search results:** every match with its surrounding lines ("Search").
-  The first row is "3 of 5 · ⌕ <query>". Each match is the lines around it,
-  the match on the `match` tint and the
+  The first row is "3 of 5 · ⌕ <query>". Each match is the lines around it
+  under a path row ending in `turn N`, dim, right-aligned, the
+  match on the `match` tint and the
   current match on `match_current`. The last row is "Enter jumps to the
   match", dim.
 - **The tools view,** `/tools` (`docs/tools.md`, "Seeing the tools"): every
@@ -675,8 +722,9 @@ click on it shows the rail. A hidden rail leaves its grip at the screen's left
 edge, and dragging the grip out shows the rail again, as does ⌥R. Shown while the
 width has no room for it, the rail hides the panel, as ⌥P does; ⌥P brings the
 panel back and the rail sheds again. A rail hidden
-for width returns when the screen grows; one the person hid, by ⌥R or by
-dragging it below its floor, stays hidden until shown. Below the narrow layout, which
+for width returns when the screen grows; one the person hid, by ⌥R, `/rail` or by
+dragging it below its floor, saves `tui.rail.shown` as off and stays hidden,
+across launches, until shown. Below the narrow layout, which
 has already dropped the panel, the screen sheds the status rows, then the
 working line's detail. Below a floor of about 40 by 10
 cells it shows one centred line, "Fiber needs 40×10 · now 32×8". The session
@@ -1191,7 +1239,11 @@ to the previous; both wrap.
 
 Ctrl+F a second time, or a click on the "3 of 41" count, opens the search
 results as a swapped view ("Swapped views"): every match, one row each, with
-the lines around it. Enter, or a click on a row, jumps to that match in the
+the lines around it. Each match's first row ends with `turn N`, dim and
+right-aligned, where N is the number of the turn the match is in, counted
+from 1 as the usage view counts turns; a match outside any turn, or a row
+too narrow to hold it after the path, has no label, and the path is never
+cut for it. Enter, or a click on a row, jumps to that match in the
 conversation and closes the view.
 
 Search is Ctrl+F, and Cmd+F where the terminal forwards it. Ghostty binds
@@ -1403,9 +1455,11 @@ of them when a key arrives:
 - Search: conversation search is open.
 - Conversation: focus is in the conversation.
 - Steering: a queued steering message is selected.
-- Input: the input box has the keyboard, home with nothing open included.
-  On home, ↑, ↓, ← and → move between the entry bar, the chip row and the
-  session list ("Home"); like an overlay's own keys, they are not bindings.
+- Input: the input box has the keyboard, home with nothing open included,
+  and so does a focused rail: typing there goes to the input box. On home,
+  ↑, ↓, ← and → move between the session list, the entry bar and the chip
+  row ("Home"), and on a focused rail ↑, ↓, Enter, → and Esc move and
+  switch ("The rail"); like an overlay's own keys, they are not bindings.
 
 A global action acts in all six. The rest act only where they are listed:
 
@@ -1486,9 +1540,9 @@ later release still applies.
 
 | Command | What it does |
 |---|---|
-| `/home` | Goes home. |
-| `/new` | Goes home with the cursor in the input box. |
-| `/resume` | Opens home at the session list. |
+| `/home` | Goes home, focused on the session on screen's row. |
+| `/new` | Goes home with the cursor in the input box, to pick the workspace, worktree, model and thinking level for a new session. The session left keeps running. |
+| `/resume` | Goes home, focused on the first exited row. |
 | `/model` | Opens the model picker. |
 | `/thinking [<level>]` | Sets the thinking level for the session's model, saving `models."<model>".thinking`; the default model is unchanged. With no level, opens the model picker on the model's chips: Enter saves the level, Ctrl+S applies it to this session only. |
 | `/credential <label>` | Switches the session's credential label, saved as the provider's `credential` unless marked as this session only (`docs/model-routing.md`, "Which credential a session uses"). The terminal first says the switch rebuilds the cache, with its size. With no label, it lists the provider's labels. |
@@ -1522,6 +1576,29 @@ names that command in `replaces` takes its row instead, and runs in its place
 (`docs/extensions.md`, "What a package holds"). An extension's commands run
 with the `command` driver command (`docs/extensions.md`, "Commands and
 screens").
+
+### Clearing
+
+`/clear` asks the hub to start a fresh session in the workspace of the session
+on screen (its worktree included), with that session's model, thinking level
+and credential label, and switches the screen to it with an empty
+conversation. The new session builds its own prompt cache; nothing in the old
+session's prefix changes. The new session takes the old one's card on the
+rail, keeping its number.
+
+The old session is sent `close` without `now` (`docs/invocation.md`, "What
+each command does"): it takes no more prompts, finishes the turn and the jobs
+in flight, and exits. Until it exits, home shows it as a live row marked
+"CLOSING" ("The session list"); then it joins the project's exited rows, where
+it reopens like any exited session. To stop a turn instead of letting it
+finish, the person presses Esc before `/clear`.
+
+When the old session waits on an approval or a question, a `close` without
+`now` would wait for the answer, so `/clear` asks first, in an overlay
+("Look", "Overlays"): the title "Clear", then "review #688 waits on an
+approval." dim, then two choices, "Enter" to clear anyway and "Esc" to stay,
+with Enter's focused. Clearing anyway sends `close` with `now`, which drops
+the wait.
 
 ### Logging in
 
@@ -2216,6 +2293,7 @@ The terminal reads these keys (`docs/configuration.md`, "Keys"):
 
 | Key | What it sets |
 |---|---|
+| `tui.rail.shown` | Whether the rail shows; on by default ("The rail") |
 | `tui.rail.width` | The rail's share of the screen's width |
 | `tui.panel.width` | The panel's share of the screen's width |
 | `tui.panel.cards` | Which cards the panel shows, and their order |

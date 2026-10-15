@@ -3571,7 +3571,8 @@ fn rail_project_head(name: &'static str, dollars: f64, done: u32, w: usize) -> R
 }
 /// The cards (B) design: every project shows, the launch project's group first and the
 /// rest after in start order; numbers follow start order across groups. `density` is
-/// 0 full, 1 medium, 2 compact.
+/// 0 full, 1 medium, 2 compact. `done` is each shown project's exited count.
+#[allow(clippy::too_many_arguments)]
 fn rail_full_b(
     sess: &[Fake],
     shown: &[usize],
@@ -3580,6 +3581,7 @@ fn rail_full_b(
     reduced: bool,
     w: usize,
     density: u8,
+    done: &[u32],
 ) -> (Vec<Row>, Vec<(usize, usize, usize)>) {
     let mut out = vec![];
     // (session index, first row, row count), so a jump can scroll the card into view
@@ -3592,7 +3594,6 @@ fn rail_full_b(
     }
     // the launch project's group first, the rest in start order
     projects.sort_by_key(|p| if **p == *"fiber" { 0 } else { 1 });
-    let done = rail_done();
     for (g, p) in projects.iter().enumerate() {
         if g > 0 {
             out.push(row(vec![sp(" ", Style::new())]));
@@ -3683,6 +3684,59 @@ fn rail_ensure(ui: &mut Ui, lay: &(usize, usize, Vec<(usize, usize, usize)>), i:
         }
     }
 }
+/// The rail's shown sessions in display order (#2424): B shows every
+/// project; A and C hide other projects behind the scope line. Dismissed
+/// sessions are gone.
+fn rail_shown(sess: &[Fake], ui: &Ui) -> Vec<usize> {
+    rail_seq(sess, ui.rail)
+        .into_iter()
+        .filter(|&i| {
+            !ui.dismissed.contains(&i)
+                && (ui.rail == 1 || ui.show_all || sess[i].project == "fiber")
+        })
+        .collect()
+}
+
+/// The widened fleet's sections (#2424): the launch project first, then
+/// first-seen order. Numbers follow start order, as the rail's do. The
+/// conversation view has no id or turns, so its rows skip them.
+fn fleet_projs(sess: &[Fake]) -> Vec<home::RProj<'_>> {
+    let mut order: Vec<&str> = vec![];
+    for s in sess {
+        if !order.contains(&s.project) {
+            order.push(s.project);
+        }
+    }
+    order.sort_by_key(|p| (*p != "fiber") as u8);
+    order
+        .into_iter()
+        .map(|name| home::RProj {
+            name,
+            live: sess
+                .iter()
+                .enumerate()
+                .filter(|(_, s)| s.project == name)
+                .map(|(i, s)| home::RLive {
+                    n: i + 1,
+                    st: s.st,
+                    name: s.name,
+                    branch: s.branch,
+                    spend: &s.spend,
+                    dollars: s.dollars,
+                    ctx: s.ctx,
+                    age: &s.age,
+                    id: None,
+                    turns: None,
+                    wait: &s.wait,
+                    closing: false,
+                    act: Some(Act::Rail(i)),
+                })
+                .collect(),
+            gone: vec![],
+        })
+        .collect()
+}
+
 /// The footer's shared rows: the scope toggle, the marker hint, and the variant chips.
 fn rail_foot(hidden: usize, others: bool, w: usize) -> Vec<Row> {
     let mut out = vec![];
@@ -3934,6 +3988,12 @@ struct Ui {
     resize: Option<u8>,
     /// the person answered an approval or a form since the last input was handled
     answered: bool,
+    /// the rail has the keyboard (#2424): the focused session, by its index
+    rail_focus: Option<usize>,
+    /// the widened full-screen fleet (#2424), instead of the conversation
+    home_full: bool,
+    /// the widened fleet's keyboard and picker state
+    fleet: home::FleetUi,
 }
 impl Ui {
     /// The request on top: the first in arrival order not put aside, or the one clicked through to.
@@ -4000,11 +4060,20 @@ fn input_box(ui: &Ui, w: usize) -> Vec<Row> {
     };
     // while search is open typing goes to the search box, so the draft shows without a cursor
     let cursor = if ui.search.is_none() { "█" } else { "" };
+    // while the rail has focus the stripe and the text dim (#2424)
+    let dimmed = ui.rail_focus.is_some();
+    let stripe = if dimmed {
+        dim()
+    } else if editing {
+        fg(ORANGE)
+    } else {
+        fg(BLUE)
+    };
     let mut line = vec![
-        sp("▌", fg(if editing { ORANGE } else { BLUE })),
+        sp("▌", stripe),
         sp(" ", Style::new()),
         sp("› ", fg(CYAN)),
-        sp(shown, Style::new()),
+        sp(shown, if dimmed { dim() } else { Style::new() }),
         sp(cursor, dim()),
     ];
     if editing {
@@ -4573,6 +4642,15 @@ fn form_panel(f: &Fold, ui: &Ui, k: usize, p: &Pending, fields: &[Value], w: usi
     slab(rows, BC, None, w)
 }
 
+/// The foot hint while the rail has focus (#2424): keys bold, centred.
+fn rail_hint_row(w: usize) -> Row {
+    let spans = home::rail_hint();
+    let tw = width(&spans);
+    let mut all = vec![sp(" ".repeat(w.saturating_sub(tw) / 2), Style::new())];
+    all.extend(spans);
+    row(all)
+}
+
 // the footer reads every part of the frame, so one drawing function takes them all
 #[allow(clippy::too_many_arguments)]
 fn bottom(
@@ -4682,6 +4760,10 @@ fn bottom(
         None => input_box(ui, w),
     };
     out.append(&mut ib);
+    // while the rail has focus the foot hint names its keys (#2424)
+    if ui.rail_focus.is_some() {
+        out.push(rail_hint_row(w));
+    }
     if narrow {
         out.extend(status_rows(f, now, w, &ui.keys, rail_note));
     }
@@ -6098,9 +6180,17 @@ fn run(
             if ui.rail != 2 && cols < rail_w + CONV_MIN {
                 rail_w = 0;
             }
+            // the widened fleet has no rail and no panel (#2424)
+            if ui.home_full {
+                rail_w = 0;
+            }
             let avail = cols.saturating_sub(rail_w);
             let narrow = avail < panel_full_w + CONV_MIN;
-            let panel_w = if narrow { 0 } else { panel_full_w };
+            let panel_w = if ui.home_full || narrow {
+                0
+            } else {
+                panel_full_w
+            };
             let conv_w = avail - panel_w;
             let cw = (conv_w as usize).saturating_sub(2);
             let sess = live_sessions(f, &ui, vnow);
@@ -6290,6 +6380,7 @@ fn run(
                         v.reduced,
                         rail_w as usize,
                         ui.density,
+                        &rail_done(),
                     )
                 } else {
                     (
@@ -6318,8 +6409,43 @@ fn run(
             // synchronised output (DEC mode 2026): the terminal shows the frame only once it is
             // all written, however many writes and flushes it takes
             term.backend_mut().write_all(b"\x1b[?2026h")?;
+            // the widened fleet's rows, replacing rail, conversation and panel (#2424)
+            let fleet_draw: Option<(Vec<Row>, Vec<home::FTag>)> =
+                (ui.home_full && ui.picker.is_none()).then(|| {
+                    let sess = live_sessions(f, &ui, vnow);
+                    let projs = fleet_projs(&sess);
+                    let spend = format!("${:.2}", sess.iter().map(|s| s.dollars).sum::<f64>());
+                    let comp = ui.completions.as_ref().map(|cp| {
+                        completions::view(cp, &ui.input, (cols as usize).saturating_sub(2))
+                    });
+                    let model = f.model.rsplit('/').next().unwrap_or(&f.model);
+                    let model = if model.is_empty() { "opus-5-5" } else { model };
+                    let view = home::FleetView {
+                        projs: &projs,
+                        st: &ui.fleet,
+                        model,
+                        level: &f.effort,
+                        input: &ui.input,
+                        comp: comp.as_deref(),
+                        spend: &spend,
+                        cols: cols as usize,
+                        rows: rows as usize,
+                        image: false,
+                    };
+                    home::fleet_rows(&view)
+                });
             let completed = term.draw(|fr| {
                 let buf = fr.buffer_mut();
+                // the widened fleet replaces the whole frame (#2424)
+                if let Some((frows, ftags)) = fleet_draw.as_ref() {
+                    for (k, r) in frows.iter().enumerate() {
+                        paint(buf, 0, k as u16, cols, r);
+                        if let home::FTag::Live(Some(act), _) = ftags[k] {
+                            hits.push((k as u16, 0, cols, act));
+                        }
+                    }
+                    return;
+                }
                 if let Some(vr) = &vrows {
                     for (k, r) in vr.iter().enumerate() {
                         let (x, w) = if k == 0 {
@@ -6607,6 +6733,13 @@ fn run(
                 } else {
                     None
                 };
+                // the keyboard-focused card lifts with the hovered one (#2424)
+                let focus_card: Option<usize> = if ui.rail == 1 && rail_w > 1 {
+                    ui.rail_focus
+                        .filter(|fi| rmap.iter().any(|&(si, _, _)| si == *fi))
+                } else {
+                    None
+                };
                 if let Some(i) = hover_card {
                     for &(si, srow, len) in &rmap {
                         if si == i {
@@ -6623,6 +6756,20 @@ fn run(
                     for x in x0..x1.min(cols) {
                         let c = &mut buf[(x, y)];
                         c.set_bg(lift(c.bg));
+                    }
+                }
+                // the keyboard-focused card lifts like a hovered one (#2424)
+                if let Some(i) = focus_card.filter(|i| Some(*i) != hover_card) {
+                    for &(si, srow, len) in &rmap {
+                        if si == i {
+                            let end = (srow + len).saturating_sub(ui.rail_top).min(rows as usize);
+                            for y in srow.saturating_sub(ui.rail_top)..end {
+                                for x in 0..rail_w.min(cols) {
+                                    let c = &mut buf[(x, y as u16)];
+                                    c.set_bg(lift(c.bg));
+                                }
+                            }
+                        }
                     }
                 }
                 // `--hover` over a rail row (not a B card): one tooltip line with the full
@@ -6928,6 +7075,7 @@ fn run(
                     }
                     if k == Key::Char('®') && !m.alt {
                         ui.rail_off = !ui.rail_off;
+                        ui.rail_focus = None;
                         panel_cache = None;
                         continue;
                     }
@@ -6944,6 +7092,7 @@ fn run(
                         }
                         if c == 'r' || c == 'R' {
                             ui.rail_off = !ui.rail_off;
+                            ui.rail_focus = None;
                             panel_cache = None;
                             continue;
                         }
@@ -7003,6 +7152,217 @@ fn run(
                     if k == Key::Esc && ui.ctx_view {
                         ui.ctx_view = false;
                         continue;
+                    }
+                    // The focused rail (#2424): arrows move between cards
+                    // across project groups, Enter switches to the session,
+                    // → or Esc gives focus back to the input box, and a
+                    // second ← widens to the full-screen fleet. Typing
+                    // clears focus into the entry bar.
+                    if ui.top(f).is_none()
+                        && ui.qsel.is_none()
+                        && !ui.ctx_view
+                        && ui.picker.is_none()
+                        && ui.completions.is_none()
+                    {
+                        if let Some(fi) = ui.rail_focus {
+                            changed = true;
+                            let sess = live_sessions(f, &ui, vnow);
+                            let shown = rail_shown(&sess, &ui);
+                            match shown.iter().position(|&i| i == fi) {
+                                None => ui.rail_focus = None,
+                                Some(at) => match k {
+                                    Key::Up if plain_key && at > 0 => {
+                                        ui.rail_focus = Some(shown[at - 1]);
+                                    }
+                                    Key::Down if plain_key && at + 1 < shown.len() => {
+                                        ui.rail_focus = Some(shown[at + 1]);
+                                    }
+                                    Key::Enter if plain_key => {
+                                        // switches to the session, as a click does
+                                        if sess.get(fi).is_some_and(|s| s.st == SState::NeedsInput)
+                                        {
+                                            ui.screen = fi;
+                                        } else if sess
+                                            .get(fi)
+                                            .is_some_and(|s| s.st == SState::Crashed)
+                                        {
+                                            send(
+                                                &mut ui,
+                                                &mut cmds,
+                                                "resume",
+                                                Some(sess[fi].name),
+                                                json!({}),
+                                            );
+                                            ui.resumed.insert(fi);
+                                            ui.screen = fi;
+                                        } else {
+                                            ui.screen = fi;
+                                        }
+                                        rail_ensure(&mut ui, &rail_lay, fi);
+                                        ui.rail_focus = None;
+                                    }
+                                    Key::Right if plain_key => ui.rail_focus = None,
+                                    Key::Esc => ui.rail_focus = None,
+                                    Key::Left if plain_key => {
+                                        ui.rail_focus = None;
+                                        ui.home_full = true;
+                                        ui.fleet.sel = Some(0);
+                                    }
+                                    Key::Backspace if plain_key => {
+                                        ui.rail_focus = None;
+                                        ui.input.pop();
+                                    }
+                                    Key::Char(ch) if plain_key => {
+                                        ui.rail_focus = None;
+                                        ui.input.push(ch);
+                                    }
+                                    _ => {}
+                                },
+                            }
+                            continue;
+                        }
+                        if ui.home_full {
+                            changed = true;
+                            // the workspace picker takes its own keys
+                            if ui.fleet.wpick.is_some() {
+                                match k {
+                                    Key::Up if plain_key => {
+                                        ui.fleet.wsel = ui.fleet.wsel.saturating_sub(1);
+                                    }
+                                    Key::Down if plain_key => {
+                                        ui.fleet.wsel =
+                                            (ui.fleet.wsel + 1).min(home::RECENTS.len() - 1);
+                                    }
+                                    Key::Enter if plain_key => {
+                                        ui.fleet.ws = home::RECENTS[ui.fleet.wsel].into();
+                                        ui.fleet.wpick = None;
+                                    }
+                                    Key::Esc => ui.fleet.wpick = None,
+                                    _ => {}
+                                }
+                                continue;
+                            }
+                            let sess = live_sessions(f, &ui, vnow);
+                            let projs = fleet_projs(&sess);
+                            let n = home::fleet_items(&projs).len();
+                            let sel = ui.fleet.sel.filter(|&i| i < n);
+                            match k {
+                                Key::Up if plain_key => {
+                                    if ui.fleet.chip.is_some() {
+                                        ui.fleet.chip = None;
+                                    } else if let Some(i) = sel {
+                                        ui.fleet.sel = i.checked_sub(1);
+                                    } else if n > 0 {
+                                        ui.fleet.sel = Some(n - 1);
+                                    }
+                                }
+                                Key::Down if plain_key => {
+                                    if ui.fleet.chip.is_some() {
+                                        ui.fleet.chip = None;
+                                        ui.fleet.sel = (n > 0).then_some(0);
+                                    } else if let Some(i) = sel {
+                                        ui.fleet.sel = (i + 1 < n).then_some(i + 1);
+                                    } else {
+                                        ui.fleet.chip = Some(ui.fleet.last_chip);
+                                    }
+                                }
+                                Key::Left if plain_key => {
+                                    if let Some(i) = ui.fleet.chip {
+                                        ui.fleet.chip = Some(i.saturating_sub(1));
+                                        ui.fleet.last_chip = ui.fleet.chip.unwrap();
+                                    }
+                                }
+                                Key::Right if plain_key => {
+                                    if let Some(i) = ui.fleet.chip {
+                                        ui.fleet.chip = Some((i + 1).min(3));
+                                        ui.fleet.last_chip = ui.fleet.chip.unwrap();
+                                    } else {
+                                        ui.home_full = false;
+                                    }
+                                }
+                                Key::Esc => ui.home_full = false,
+                                Key::Enter if plain_key => {
+                                    if let Some(i) = ui.fleet.chip {
+                                        match i {
+                                            0 => ui.fleet.wpick = Some(ui.fleet.wsel),
+                                            1 => ui.fleet.worktree = !ui.fleet.worktree,
+                                            2 => {
+                                                ui.picker =
+                                                    Some(model_picker::opened_at(&f.model, None));
+                                                ui.vscroll = 0;
+                                            }
+                                            _ => {
+                                                ui.picker = Some(model_picker::opened_at(
+                                                    &f.model,
+                                                    Some(&f.effort),
+                                                ));
+                                                ui.vscroll = 0;
+                                            }
+                                        }
+                                    } else if let Some(i) = sel {
+                                        // opens the focused session, as a click does
+                                        let sidx = home::fleet_items(&projs)
+                                            .into_iter()
+                                            .nth(i)
+                                            .and_then(|it| match it {
+                                                home::FItem::Live(pi, li) => projs
+                                                    .get(pi)
+                                                    .and_then(|p| p.live.get(li))
+                                                    .and_then(|s| s.act),
+                                                home::FItem::Gone(..) => None,
+                                            });
+                                        if let Some(Act::Rail(si)) = sidx {
+                                            if sess.get(si).is_some_and(|s| s.st == SState::Crashed)
+                                            {
+                                                send(
+                                                    &mut ui,
+                                                    &mut cmds,
+                                                    "resume",
+                                                    Some(sess[si].name),
+                                                    json!({}),
+                                                );
+                                                ui.resumed.insert(si);
+                                            }
+                                            ui.screen = si;
+                                            rail_ensure(&mut ui, &rail_lay, si);
+                                        }
+                                        ui.home_full = false;
+                                    } else if !ui.input.trim().is_empty() {
+                                        enter(f, &mut ui, &mut cmds, ts);
+                                        ui.home_full = false;
+                                    }
+                                }
+                                Key::Backspace if plain_key => {
+                                    ui.fleet.chip = None;
+                                    ui.input.pop();
+                                }
+                                Key::Char(ch) if plain_key => {
+                                    ui.fleet.chip = None;
+                                    ui.fleet.sel = None;
+                                    ui.input.push(ch);
+                                }
+                                _ => {}
+                            }
+                            continue;
+                        }
+                        // ← from an empty box: into the rail, or straight to
+                        // the fleet when the rail cannot show
+                        if k == Key::Left && plain_key && ui.input.is_empty() {
+                            changed = true;
+                            if geom.2 > 1 {
+                                let sess = live_sessions(f, &ui, vnow);
+                                let shown = rail_shown(&sess, &ui);
+                                ui.rail_focus = shown
+                                    .iter()
+                                    .find(|&&i| i == ui.screen)
+                                    .copied()
+                                    .or(shown.first().copied());
+                            } else {
+                                ui.home_full = true;
+                                ui.fleet.sel = Some(0);
+                            }
+                            continue;
+                        }
                     }
                     let page = view_h.saturating_sub(2).max(1) as isize;
                     let d = match k {
@@ -7158,6 +7518,13 @@ fn run(
                             }
                             // the slash commands the prototype runs locally: their views
                             // open at once, anything else sends as usual
+                            // `/rail` shows or hides the rail like ⌥R (#2424)
+                            Key::Enter if ui.qsel.is_none() && ui.input.trim() == "/rail" => {
+                                ui.input.clear();
+                                ui.rail_off = !ui.rail_off;
+                                ui.rail_focus = None;
+                                panel_cache = None;
+                            }
                             Key::Enter if ui.qsel.is_none() && ui.input.trim() == "/context" => {
                                 ui.input.clear();
                                 ui.ctx_view = true;
@@ -7230,6 +7597,8 @@ fn run(
                         }
                         Mouse::Down => {
                             ui.sel = None;
+                            // a click gives focus back to the session (#2424)
+                            ui.rail_focus = None;
                             click = hits
                                 .iter()
                                 .find(|(hy, x0, x1, _)| *hy == y && x >= *x0 && x < *x1)
@@ -7381,6 +7750,9 @@ fn run(
                     }
                     ui.screen = i;
                     rail_ensure(&mut ui, &rail_lay, i);
+                    // a click switches sessions, not focus (#2424)
+                    ui.rail_focus = None;
+                    ui.home_full = false;
                 }
                 Act::RailAll => ui.show_all = !ui.show_all,
                 Act::RailVariant(v) => {
@@ -7391,9 +7763,13 @@ fn run(
                 }
                 Act::RailToggle => {
                     ui.rail_off = !ui.rail_off;
+                    ui.rail_focus = None;
                 }
                 Act::RailDismiss(i) => {
                     ui.dismissed.insert(i);
+                    if ui.rail_focus == Some(i) {
+                        ui.rail_focus = None;
+                    }
                 }
                 Act::RailNew(p) => {
                     say(&mut ui, format!("→ would start a session in {p}"));
@@ -7704,7 +8080,7 @@ mod tests {
         assert_eq!(
             all,
             [
-                "--home empty, sessions, live-only, past-only, selected, live, hover-workspace, hover-worktree, hover-model, hover-thinking, worktree-on, worktree-off, picker-recent, picker-typed, focus-entry, focus-chip-workspace, focus-chip-model, focus-chip-picker, focus-chip-typing, focus-session",
+                "--home full-sessions, full-empty, full-focus-exited, full-closing, full-picker, rail-focused, live",
                 "--overlay keymap, keymap-tab, keymap-search, keymap-narrow, quit, delete, history, notice, close-mouse",
                 "--picker list, levels, scoped, scoped-all, refreshing, session-only, filtered, filtered-empty, checklist, checklist-filtered, checklist-empty",
                 "--completions slash, slash-filtered, slash-hint, at, at-empty, at-path, narrow-slash, narrow-at",
@@ -7752,6 +8128,45 @@ mod tests {
             ..Default::default()
         });
         f
+    }
+
+    #[test]
+    fn rail_shown_lists_every_project_for_cards() {
+        let f = Fold::default();
+        let mut ui = Ui {
+            rail: 1,
+            ..Ui::default()
+        };
+        let sess = live_sessions(&f, &ui, 0);
+        assert_eq!(rail_shown(&sess, &ui).len(), sess.len());
+        // the list design hides other projects behind the scope line
+        ui.rail = 0;
+        let shown = rail_shown(&sess, &ui);
+        assert!(shown.iter().all(|&i| sess[i].project == "fiber"));
+        // a dismissal leaves its number's gap
+        ui.rail = 1;
+        ui.dismissed.insert(0);
+        assert!(!rail_shown(&sess, &ui).contains(&0));
+    }
+
+    #[test]
+    fn fleet_groups_launch_first_with_start_numbers() {
+        let f = Fold::default();
+        let ui = Ui::default();
+        let sess = live_sessions(&f, &ui, 0);
+        let projs = fleet_projs(&sess);
+        assert_eq!(projs[0].name, "fiber");
+        let names: Vec<&str> = projs.iter().map(|p| p.name).collect();
+        assert_eq!(names, ["fiber", "pi-rig", "beacon"]);
+        for p in &projs {
+            for s in &p.live {
+                assert!(matches!(s.act, Some(Act::Rail(_))));
+                assert!(s.id.is_none() && s.turns.is_none());
+            }
+        }
+        // numbers follow start order, as the rail's do
+        assert_eq!(projs[0].live[0].n, 1);
+        assert_eq!(projs[1].live[0].n, 6);
     }
     fn find(rows: &[Row], s: &str) -> usize {
         rows.iter().position(|r| plain(r).contains(s)).unwrap()

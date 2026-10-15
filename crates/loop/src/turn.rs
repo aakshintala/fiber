@@ -59,6 +59,13 @@ impl Loop {
         if !self.ensure_preamble()? {
             self.check_changes()?;
         }
+        // A process's first turn runs `session_start` after the preamble
+        // and the opening message, before the first model request: a
+        // prompt `before_message` refused never reaches here, so it runs
+        // no hook, and a process that never takes a turn runs none. A
+        // `blocking` failure drops the taken prompts uncalled and the
+        // session does not start.
+        let start_contexts = self.session_start_once()?;
         let turn = TurnId(mint("t_"));
         self.cut_off = false;
         let (input, contexts) = self.turn_input(started.pieces);
@@ -71,6 +78,13 @@ impl Loop {
         let cancel = Arc::clone(&self.cancel);
         let event = Event::TurnStarted(TurnStarted { input });
         let Some(written) = cancel.commit(cancel::Commit::Arm, || -> Result<(), Error> {
+            // The hook's contexts go first, with no turn id, so the log
+            // reads `opening_message`, `context_added`, `turn_started`;
+            // the `before_message` contexts still follow it. A shutdown
+            // lands before all of them or after.
+            for added in &start_contexts {
+                self.write(&Event::ContextAdded(added.clone()), None, None)?;
+            }
             self.append(&event, &turn, None)?;
             for added in &contexts {
                 self.append(&Event::ContextAdded(added.clone()), &turn, None)?;

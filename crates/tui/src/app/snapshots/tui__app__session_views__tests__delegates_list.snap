@@ -1,8 +1,9 @@
 ---
 source: crates/tui/src/app/session_views_tests.rs
+assertion_line: 1182
 expression: shown
 ---
-Running delegates                                                              ✕
+ Running delegates  delegates · jobs                                 Esc returns
 ● fiber  test/model
   task j_1
 ● fiber  test/model

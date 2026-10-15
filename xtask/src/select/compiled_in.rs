@@ -14,6 +14,7 @@ use crate::rules::RustFile;
 /// (`docs/ci.md`, "Selection").
 pub(super) const COMPILED_IN: &[(&str, &str)] = &[
     ("docs/ci.md", "xtask"),
+    ("docs/performance.md", "xtask"),
     ("crates/tui/assets/logo-mask.bin", "xtask"),
     ("crates/tools/tests/pages/mdn-anchor.md", "tools"),
     ("crates/tools/tests/pages/mdn-code.md", "tools"),

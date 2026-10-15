@@ -21,7 +21,10 @@ together start one turn, not three.
 
 `before_message` runs on each message before it is logged. Then
 `turn_started` is written, and `turn_start` runs before the first model
-request (`docs/extensions.md`, "Hooks").
+request (`docs/extensions.md`, "Hooks"). A process's first turn first
+runs `session_start` hooks, after the opening message and before
+`turn_started`; a process that never takes a turn runs none
+(`docs/extensions.md`, "The hook points").
 
 ## One step
 

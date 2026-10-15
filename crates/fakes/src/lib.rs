@@ -49,6 +49,10 @@ pub use locks::{FakeLock, NoLock};
 pub use rules::{NoRules, RecordingRules};
 pub use skills::NoSkills;
 pub mod git;
+/// The dropped server's own state, read after the drop: the public path
+/// for integration tests, which reach only the public wrappers.
+#[doc(hidden)]
+pub use http_server::server::DropProbe;
 pub use oauth_server::{OauthReply, OauthRequest, OauthServer, jwt};
 pub use process_group::{
     WATCHDOG_SCRIPT, group_empties, kill_group, kill_matching, kill_pid, matching, matching_exits,

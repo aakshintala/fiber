@@ -7,6 +7,9 @@ mod files;
 mod guidelines;
 mod handoff;
 mod image;
+#[cfg(test)]
+#[path = "job_timing_tests.rs"]
+mod job_timing_tests;
 mod name_session;
 mod pdf;
 #[cfg(test)]

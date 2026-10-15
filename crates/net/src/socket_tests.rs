@@ -349,6 +349,15 @@ fn stalled_idle(error: &ureq::Error) -> Option<std::time::Duration> {
     match inner {
         Error::Stalled { idle } => Some(*idle),
         Error::Stopped | Error::ConnectTimedOut { .. } => None,
+        Error::Resolve { .. }
+        | Error::Connect { .. }
+        | Error::ProxyScheme { .. }
+        | Error::ProxyRefused { .. }
+        | Error::Tls { .. }
+        | Error::Upgrade { .. }
+        | Error::Accept
+        | Error::ReplyTooLong
+        | Error::Io(_) => None,
     }
 }
 

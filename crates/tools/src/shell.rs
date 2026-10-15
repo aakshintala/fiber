@@ -9,6 +9,7 @@ use std::time::Duration;
 
 use contract::ErrorCode;
 use contract::clock::Clock;
+use contract::diag::Timing;
 use contract::emit::Emit;
 use contract::jobs::Jobs;
 use contract::provider::ToolDefinition;
@@ -89,6 +90,10 @@ pub struct Shell {
     /// The session's `artifacts/`, when the call spills its output past
     /// 1 MiB into its artifact file (`docs/tools.md`, "Result and output").
     artifacts: Option<PathBuf>,
+    /// Times a background start as `jobs.start`, when installed by
+    /// [`Shell::with_timing`]. The stamp is read before the spawn work;
+    /// the guard is created and dropped once the job runs.
+    timing: Option<Timing>,
     /// The held ends of a result: the first `start` and the last `end` bytes.
     bound: Bound,
     /// A test's writer around a spill's file, if any.
@@ -105,6 +110,7 @@ impl Shell {
             jobs: None,
             max_deadline_ms: MAX_DEADLINE_MS,
             artifacts: None,
+            timing: None,
             bound: Bound {
                 start: 8192,
                 end: 8192,
@@ -147,6 +153,17 @@ impl Shell {
         let dir = std::path::absolute(&dir).unwrap_or(dir);
         Self {
             artifacts: Some(dir),
+            ..self
+        }
+    }
+
+    /// Times a background start as `jobs.start`, from just before its
+    /// spawn until the job is recorded and its own thread runs. A call
+    /// that never moves writes nothing.
+    #[must_use]
+    pub fn with_timing(self, timing: Timing) -> Self {
+        Self {
+            timing: Some(timing),
             ..self
         }
     }
@@ -261,6 +278,21 @@ impl Tool for Shell {
             wrap: self.spill_wrap.clone(),
             name: None,
         });
+        // The stamp covers the spawn and adoption setup below, never a
+        // foreground call's earlier life: only the three background
+        // policies stamp here, and `take` stamps a moved foreground call
+        // at its own entry. No clock is read without an installed timing.
+        let background = matches!(
+            policy,
+            command::MovePolicy::Background
+                | command::MovePolicy::Terminal
+                | command::MovePolicy::Monitor
+        );
+        let started = if background && self.timing.is_some() {
+            Some(self.clock.now())
+        } else {
+            None
+        };
         match command::execute(
             program,
             &command,
@@ -284,6 +316,8 @@ impl Tool for Shell {
                     matches!(parsed.mode, Mode::Terminal { .. }),
                     cancel,
                     emit,
+                    self.timing.as_ref(),
+                    started,
                 ),
                 None => {
                     let finished = moved.resume(self.clock.as_ref(), cancel, emit);

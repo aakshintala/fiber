@@ -27,6 +27,116 @@ const DEADLINE: Duration = Duration::from_secs(5);
 
 const OUTPUT: &str = "/sessions/s_x/events.jsonl";
 
+#[test]
+fn admissions_count_only_running_delegates_and_reuse_ended_slots() {
+    for count in [9, 10, 11] {
+        let (_dir, registry) = world();
+        let mut finishes = Vec::new();
+        for _ in 0..count.min(10) {
+            finishes.push(open_delegate(&registry));
+        }
+        let mut shells = Vec::new();
+        for _ in 0..5 {
+            shells.push(registry.open(opening("shell")).unwrap());
+        }
+        let called = AtomicBool::new(false);
+        let answer = registry.admit(|| {
+            called.store(true, Ordering::SeqCst);
+            Ok::<_, ()>(open_delegate(&registry))
+        });
+        assert_eq!(answer.is_ok(), count < 10);
+        assert_eq!(called.load(Ordering::SeqCst), count < 10);
+        if count >= 10 {
+            assert!(matches!(answer, Err(super::Admit::Full)));
+            let (id, finish) = finishes.pop().unwrap();
+            end_run(finish, &id, "done");
+            assert!(
+                registry
+                    .admit(|| Ok::<_, ()>(open_delegate(&registry)))
+                    .is_ok()
+            );
+        }
+    }
+    let (_dir, registry) = world();
+    let _running: Vec<_> = (0..9).map(|_| open_delegate(&registry)).collect();
+    assert!(matches!(
+        registry.admit(|| Err::<(), _>("spawn failed")),
+        Err(super::Admit::Start("spawn failed"))
+    ));
+    assert!(
+        registry
+            .admit(|| Ok::<_, ()>(open_delegate(&registry)))
+            .is_ok()
+    );
+}
+
+#[test]
+fn resume_counts_as_a_start_but_a_live_steer_does_not() {
+    for count in [9, 10] {
+        let (_dir, registry) = world();
+        let (id, finish) = open_delegate(&registry);
+        end_run(finish, &id, "done");
+        let running: Vec<_> = (0..count).map(|_| open_delegate(&registry)).collect();
+        let called = AtomicBool::new(false);
+        let answer = registry.resume(&id.0, None, |_| {
+            called.store(true, Ordering::SeqCst);
+            Ok::<_, ()>((Stop(Box::new(|| {})), ()))
+        });
+        assert_eq!(called.load(Ordering::SeqCst), count == 9);
+        assert_eq!(answer.is_ok(), count == 9);
+        if count == 10 {
+            assert!(matches!(answer, Err(Resume::Full)));
+        }
+        assert!(matches!(
+            registry.resume(&running[0].0.0, None, |_| Err::<(Stop, ()), _>(
+                "must not start"
+            )),
+            Err(Resume::Live(_, _))
+        ));
+    }
+}
+
+#[test]
+fn concurrent_admissions_hold_the_gate_through_recording() {
+    let (_dir, registry) = world();
+    let _running: Vec<_> = (0..9).map(|_| open_delegate(&registry)).collect();
+    let (entered_tx, entered_rx) = mpsc::channel();
+    let (release_tx, release_rx) = mpsc::channel::<()>();
+    let (a_tx, a_rx) = mpsc::channel();
+    let a = Arc::clone(&registry);
+    thread::spawn(move || {
+        let answer = a.admit(|| {
+            entered_tx.send(()).unwrap();
+            let _released = release_rx.recv();
+            Ok::<_, ()>(open_delegate(&a))
+        });
+        a_tx.send(answer).unwrap();
+    });
+    let deadline = Deadline::after(DEADLINE);
+    deadline
+        .recv(&entered_rx)
+        .expect("first start holds the gate");
+    assert!(registry.start_gate.try_lock().is_err());
+    let (b_tx, b_rx) = mpsc::channel();
+    let b = Arc::clone(&registry);
+    thread::spawn(move || {
+        b_tx.send(b.admit(|| Ok::<_, ()>(open_delegate(&b))))
+            .unwrap();
+    });
+    assert!(
+        Deadline::after(Duration::from_millis(100))
+            .recv(&b_rx)
+            .is_err()
+    );
+    release_tx.send(()).unwrap();
+    let first = deadline.recv(&a_rx).expect("first start returned");
+    assert!(first.is_ok());
+    assert!(matches!(
+        deadline.recv(&b_rx).expect("second start returned"),
+        Err(super::Admit::Full)
+    ));
+}
+
 fn action() -> ActionId {
     ActionId("a_resume00000001".into())
 }
@@ -658,7 +768,7 @@ fn two_resumes_race_through_the_gate_and_start_one_run() {
     // held here, so the second resume cannot have passed it. A state
     // check, not a wait: it holds however the threads are scheduled.
     assert!(
-        registry.resume_gate.try_lock().is_err(),
+        registry.start_gate.try_lock().is_err(),
         "the first resume holds the gate in start"
     );
     assert!(called_rx.try_recv().is_err(), "the second start never ran");

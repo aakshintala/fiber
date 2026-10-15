@@ -156,6 +156,7 @@ same key. A file that sets one key under both spellings is `config_invalid`.
 | `providers."<name>".credentials."<label>"` | none | no | Where that label's key comes from, when it is not stored in Fiber home ("Secrets"). |
 | `providers."<name>".reviewer_model` | the package's `reviewer_model` | no | The provider's saved reviewer pick, written by `fiber login` ("Secrets"). A reviewed call uses it after `reviewer.model` and before the package default; the stored ID is local and gains the provider's prefix once. |
 | `tui.panel.cards` | `["session", "changed_files", "delegates", "jobs", "quota"]` | no | The cards the terminal's panel shows, in order; an extension widget is listed as `"<extension>/<widget>"`, and a widget the list does not name shows after the listed cards (`docs/tui.md`, "The panel"). The status line of the narrow layout follows the same order. |
+| `tui.rail.shown` | `true` | no | Whether the terminal's rail shows; ⌥R and `/rail` write it (`docs/tui.md`, "The rail"). |
 | `tui.rail.width` | 15 | no | The rail's share of the screen's width, in percent, kept from 22 to 48 columns; dragging its edge writes it (`docs/tui.md`, "Layout"). |
 | `tui.panel.width` | 21 | no | The panel's share of the screen's width, in percent, kept from 30 to 60 columns; dragging its edge writes it. |
 | `tui.theme` | none | no | The theme's name: `auto`, `dark`, `light` or the name of a theme file in Fiber home's `themes/` or an installed, enabled extension's `themes/`. A switched-off extension's themes are not listed, and naming one reads as a missing file. With none or `auto`, the theme follows the terminal's light or dark appearance (`docs/tui.md`, "Themes"). |
@@ -381,6 +382,8 @@ Fiber writes configuration in these places:
   session only (`docs/tui.md`, "Swapped views")
 - dragging the rail's or the panel's edge saves the global `tui.rail.width`
   or `tui.panel.width` (`docs/tui.md`, "Layout")
+- ⌥R, `/rail`, or dragging the rail below its floor saves the global
+  `tui.rail.shown` (`docs/tui.md`, "The rail")
 - `/credential` saves the global `providers."<name>".credential`, unless the
   switch is marked as this session only, and `fiber login`, or the terminal's
   `/login`, writes it when it stores a provider's first label

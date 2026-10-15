@@ -93,7 +93,9 @@ pub(crate) fn builtin_timed(
     let mut files = tools::Files::with_locks(workspace.to_path_buf(), Arc::clone(locks));
     let mut images = tools::ImageChild::new(fiber.clone(), artifacts.to_path_buf());
     // The scan's clone comes before `images` takes `timing`, which moves it.
+    // The shell's clone is taken alongside, for the same reason.
     let scan_timing = timing.clone();
+    let shell_timing = timing.clone();
     if let Some(timing) = timing {
         files = files.with_timing(timing.clone());
         images = images.with_timing(timing);
@@ -104,11 +106,17 @@ pub(crate) fn builtin_timed(
     // Only `fiber ask` reaches here, new or resumed: a non-interactive run.
     // The model's shell and the driver shell spill their output past 1 MiB
     // into the session's `artifacts/`; the driver has no hook.
-    let shell = tools::Shell::new(workspace.to_path_buf(), Arc::clone(clock))
+    let mut shell = tools::Shell::new(workspace.to_path_buf(), Arc::clone(clock))
         .with_search(fiber.clone())
         .with_jobs(moves)
         .with_artifacts(artifacts.to_path_buf())
         .non_interactive();
+    // The model's shell moves commands into jobs, so it times a
+    // background start as `jobs.start`. The driver shell never moves,
+    // so it stays untimed.
+    if let Some(timing) = shell_timing {
+        shell = shell.with_timing(timing);
+    }
     let driver = Arc::new(
         tools::Shell::new(workspace.to_path_buf(), Arc::clone(clock))
             .with_search(fiber)

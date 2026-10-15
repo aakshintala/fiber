@@ -563,7 +563,7 @@ impl Loop {
             cut_off: false,
             ledger,
             late_cost: late_cost::LateCost::default(),
-            lifecycle: lifecycle::State::default(),
+            lifecycle: lifecycle::State::new(reason, &contract::SessionId(session_id.clone())),
             budget: None,
             retry: Retry::default(),
             idle_exit: None,

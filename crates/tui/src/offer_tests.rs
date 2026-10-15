@@ -606,11 +606,17 @@ fn the_top_row_names_the_offer_with_its_command_dim() {
 }
 
 #[test]
-fn a_narrow_top_row_drops_esc_returns_first() {
+fn a_narrow_top_row_drops_the_command_first() {
     let offer = holding(1);
-    // 6 + 17 + 1 + 11 is 35 columns: Esc with one space before it.
+    // `" Offer"` is 6 cells, `"  repository code"` 17, `Esc returns`
+    // 11: the full row needs 35, the name with Esc 18.
     assert_eq!(texts(&offer, 35)[0], " Offer  repository code Esc returns");
-    assert_eq!(texts(&offer, 34)[0], " Offer  repository code");
+    assert_eq!(
+        texts(&offer, 34)[0],
+        format!(" Offer{}Esc returns", " ".repeat(17))
+    );
+    assert_eq!(texts(&offer, 18)[0], " Offer Esc returns");
+    assert_eq!(texts(&offer, 17)[0], " Offer");
 }
 
 #[test]
@@ -619,13 +625,36 @@ fn a_narrow_top_row_pads_the_tint_to_the_width() {
     let row = &spans(&offer, 34)[0];
     let joined: String = row.iter().map(|(text, _)| text.as_str()).collect();
     assert_eq!(crate::format::width(&joined), 34);
-    assert_eq!(row.last(), Some(&(" ".repeat(11), surface())));
+    assert_eq!(
+        row.last(),
+        Some(&("Esc returns".to_owned(), dim_on_surface()))
+    );
 }
 
 #[test]
-fn a_tiny_top_row_truncates_the_command_then_the_name() {
+fn a_name_filling_the_row_pads_nothing() {
     let offer = holding(1);
-    assert_eq!(texts(&offer, 20)[0], " Offer  repository c");
+    // `" Offer"` is 6 cells: at width 6 the name fills the row, so
+    // no padding span draws. With `>=` the row would carry an empty
+    // one, which the spans show even though the text does not.
+    assert_eq!(
+        spans(&offer, 6)[0],
+        [
+            (" ".to_owned(), surface()),
+            ("Offer".to_owned(), bold_on_surface()),
+        ]
+    );
+}
+
+#[test]
+fn a_tiny_top_row_drops_esc_before_truncating_the_name() {
+    let offer = holding(1);
+    assert_eq!(
+        texts(&offer, 20)[0],
+        format!(" Offer{}Esc returns", " ".repeat(3))
+    );
+    assert_eq!(texts(&offer, 6)[0], " Offer");
+    assert_eq!(texts(&offer, 5)[0], " Offe");
     assert_eq!(texts(&offer, 4)[0], " Off");
 }
 
@@ -667,7 +696,8 @@ fn a_narrow_view_drops_the_clipped_targets() {
         .first()
         .map(|row| row.line.to_string())
         .unwrap_or_default();
-    assert_eq!(header, " Offer  repo");
+    // Too narrow for the command with `Esc returns`: the name draws.
+    assert_eq!(header, format!(" Offer{}", " ".repeat(6)));
     assert_eq!(crate::format::width(&header), 12);
 }
 

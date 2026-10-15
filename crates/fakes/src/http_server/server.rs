@@ -90,7 +90,13 @@ pub(crate) struct Shared {
     pub(crate) limits: Limits,
     /// Set by shutdown: every wait ends stopped.
     pub(crate) stopping: AtomicBool,
-    accept: Mutex<Option<JoinHandle<()>>>,
+    accept: Mutex<AcceptSlot>,
+    /// True once the shutdown that took the accept handle joined it
+    /// within the bound, or a shutdown ran on a server that never
+    /// served: the only way a test sees a failed join after the drop.
+    /// Only moves false to true; a timed-out join leaves it false for
+    /// good, including past later shutdown calls.
+    joined: AtomicBool,
     conns: Mutex<Vec<JoinHandle<()>>>,
     /// The wake generation every waiter parks on.
     wake: Mutex<u64>,
@@ -142,6 +148,16 @@ pub(crate) struct Shared {
     /// Open tunnels, broken by shutdown: each entry's sockets end every
     /// blocked copy when the server stops.
     pub(crate) tunnels: Mutex<TunnelState>,
+    /// The next serve that passes its stopping check waits here while
+    /// the test holds it, test-only: the pause sits between the spawn
+    /// and the slot store, inside the accept lock, so no outside seam
+    /// reaches that window.
+    #[cfg(test)]
+    pause: Mutex<Option<(mpsc::Sender<()>, mpsc::Receiver<()>)>>,
+    /// The next shutdown signals immediately before it takes the accept
+    /// lock, test-only: the spawn-race test waits for the actual contest.
+    #[cfg(test)]
+    shutdown_accept_lock: Mutex<Option<mpsc::Sender<()>>>,
 }
 
 impl Shared {
@@ -396,6 +412,14 @@ impl Shared {
     }
 }
 
+/// Which accept thread the server owns: spawned and its handle change
+/// only together under the one accept lock, so a shutdown racing the
+/// spawn never sees a spawned thread as unspawned.
+struct AcceptSlot {
+    spawned: bool,
+    handle: Option<JoinHandle<()>>,
+}
+
 /// What the pre-park checks decided: park bounded by `guard_left`, past
 /// the generation `seen`.
 struct Park {
@@ -409,6 +433,10 @@ struct Park {
 #[derive(Clone)]
 pub(crate) struct HttpServer {
     pub(crate) shared: Arc<Shared>,
+    /// False for the handle the accept thread owns: the serving
+    /// thread's end never stops the server, so only a caller's
+    /// explicit shutdown or a caller-owned drop reaches shutdown.
+    stops_on_drop: bool,
 }
 
 impl HttpServer {
@@ -428,7 +456,11 @@ impl HttpServer {
             clock: Arc::clone(&clock),
             limits,
             stopping: AtomicBool::new(false),
-            accept: Mutex::new(None),
+            accept: Mutex::new(AcceptSlot {
+                spawned: false,
+                handle: None,
+            }),
+            joined: AtomicBool::new(false),
             conns: Mutex::new(Vec::new()),
             wake: Mutex::new(0),
             wake_changed: Condvar::new(),
@@ -459,11 +491,18 @@ impl HttpServer {
                 next: 0,
                 live: Vec::new(),
             }),
+            #[cfg(test)]
+            pause: Mutex::new(None),
+            #[cfg(test)]
+            shutdown_accept_lock: Mutex::new(None),
         });
         // Subscribed before any waiter checks: no advance slips between a
         // check and its park.
         clock.subscribe(Arc::downgrade(&shared._waker) as std::sync::Weak<dyn Wake>);
-        Ok(Self { shared })
+        Ok(Self {
+            shared,
+            stops_on_drop: true,
+        })
     }
 
     /// The loopback address the core listens on.
@@ -601,13 +640,34 @@ impl HttpServer {
 
     /// Serves every connection with `handler` on core-owned threads, all
     /// reaped by shutdown. An idle window renews its budget and accepts
-    /// again.
+    /// again. Serving a stopped server spawns nothing: the slot keeps
+    /// its never-spawned shape, so a later shutdown still reads it as
+    /// never served.
     pub(crate) fn serve_persistent(&self, handler: impl Fn(Connection) + Send + Sync + 'static) {
+        // Taken before the accept lock, so no lock is ever held while
+        // another is taken: a serve past a stop puts it back below.
+        #[cfg(test)]
+        let paused = lock(&self.shared.pause).take();
+        let mut slot = lock(&self.shared.accept);
+        if self.shared.stopping.load(Ordering::SeqCst) {
+            #[cfg(test)]
+            if let Some(paused) = paused {
+                *lock(&self.shared.pause) = Some(paused);
+            }
+            return;
+        }
         let handler = Arc::new(handler);
-        let serving = self.clone();
+        let shared = Arc::clone(&self.shared);
         let accept = thread::Builder::new()
             .name("fakes-http-accept".to_owned())
             .spawn(move || {
+                // Built inside the started thread, never owned by the
+                // spawn closure: a failed spawn drops only an `Arc`,
+                // and the serving thread's end never stops the server.
+                let serving = HttpServer {
+                    shared,
+                    stops_on_drop: false,
+                };
                 loop {
                     match serving.accept_window() {
                         WindowOutcome::Accepted(conn) => {
@@ -639,8 +699,57 @@ impl HttpServer {
                 }
             });
         if let Ok(accept) = accept {
-            *lock(&self.shared.accept) = Some(accept);
+            // Test-only pause between the spawn and the store,
+            // inside the accept lock: a shutdown racing this window
+            // blocks on the lock instead of seeing a spawned thread
+            // as unspawned.
+            #[cfg(test)]
+            if let Some((reached, release)) = paused {
+                match reached.send(()) {
+                    Ok(()) | Err(_) => {}
+                }
+                match release.recv() {
+                    Ok(()) | Err(_) => {}
+                }
+            }
+            slot.spawned = true;
+            slot.handle = Some(accept);
+        } else {
+            #[cfg(test)]
+            if let Some(paused) = paused {
+                *lock(&self.shared.pause) = Some(paused);
+            }
         }
+    }
+
+    /// Reads the dropped server's own state after the drop: the probe
+    /// holds the shared core, so it stays valid past every handle.
+    pub(crate) fn drop_probe(&self) -> DropProbe {
+        DropProbe {
+            shared: Arc::clone(&self.shared),
+        }
+    }
+
+    /// The next serve that passes its stopping check waits between its
+    /// spawn and its slot store until the test releases it, test-only:
+    /// no outside seam reaches that window, so forcing the startup race
+    /// needs this committed pause point. Returns the reached signal and
+    /// the release channel; dropping the release ends the wait too.
+    #[cfg(test)]
+    pub(crate) fn test_pause_after_spawn(&self) -> (mpsc::Receiver<()>, mpsc::Sender<()>) {
+        let (reached_tx, reached_rx) = mpsc::channel();
+        let (release_tx, release_rx) = mpsc::channel();
+        *lock(&self.shared.pause) = Some((reached_tx, release_rx));
+        (reached_rx, release_tx)
+    }
+
+    /// Signals immediately before the next shutdown takes the accept
+    /// lock, test-only: no outside seam reaches the contested acquisition.
+    #[cfg(test)]
+    pub(crate) fn test_shutdown_before_accept_lock(&self) -> mpsc::Receiver<()> {
+        let (reached_tx, reached_rx) = mpsc::channel();
+        *lock(&self.shared.shutdown_accept_lock) = Some(reached_tx);
+        reached_rx
     }
 
     /// Stops the server: waits end stopped, open tunnels break, and
@@ -661,8 +770,11 @@ impl HttpServer {
         // Take and close the listener: the port refuses connections
         // even while stuck connections outlive the server.
         let _listener = lock(&self.shared.listener).take();
+        // Bound to a local before the loop, so no guard lives through
+        // the socket shutdowns below.
+        let live = std::mem::take(&mut lock(&self.shared.tunnels).live);
         // Break every blocked tunnel copy before joining its thread.
-        for (_, client, origin) in std::mem::take(&mut lock(&self.shared.tunnels).live) {
+        for (_, client, origin) in live {
             match client.shutdown(std::net::Shutdown::Both) {
                 Ok(()) | Err(_) => {}
             }
@@ -670,12 +782,38 @@ impl HttpServer {
                 Ok(()) | Err(_) => {}
             }
         }
-        // Bound before matching: a match scrutinee temporary would hold
-        // the mutex through the whole join below, blocking every drop.
-        let accept = lock(&self.shared.accept).take();
+        // Only the spawn-race test installs this signal; with no hook,
+        // shutdown follows the same path directly to the accept lock.
+        #[cfg(test)]
+        if let Some(reached) = lock(&self.shared.shutdown_accept_lock).take() {
+            match reached.send(()) {
+                Ok(()) | Err(_) => {}
+            }
+        }
+        // Read together under one hold, released before the join: the
+        // guard never lives through the join below. Only the call that
+        // took the handle and joined it in time, or a call that found
+        // no handle on a never-served server, records the join; a later
+        // call that finds nothing past a live or failed join records
+        // nothing, so it never turns a failed join into a joined one.
+        let (spawned, accept) = {
+            let mut slot = lock(&self.shared.accept);
+            (slot.spawned, slot.handle.take())
+        };
         match accept {
-            None => true,
-            Some(accept) => join_within(accept, SHUTDOWN_WITHIN),
+            None => {
+                if !spawned {
+                    self.shared.joined.store(true, Ordering::SeqCst);
+                }
+                true
+            }
+            Some(accept) => {
+                let joined = join_within(accept, SHUTDOWN_WITHIN);
+                if joined {
+                    self.shared.joined.store(true, Ordering::SeqCst);
+                }
+                joined
+            }
         }
     }
 
@@ -786,7 +924,33 @@ impl HttpServer {
 
 impl Drop for HttpServer {
     fn drop(&mut self) {
-        self.shutdown();
+        if self.stops_on_drop {
+            self.shutdown();
+        }
+    }
+}
+
+/// The dropped server's own state, read after the drop: a reused port
+/// can no longer flake the verdict, since nothing dials it. Both reads
+/// are pure: they hold no lock across a call. A joined accept implies a
+/// closed listener, because shutdown takes the listener before it joins.
+#[doc(hidden)]
+pub struct DropProbe {
+    shared: Arc<Shared>,
+}
+
+impl DropProbe {
+    /// True once shutdown took and closed the listener.
+    pub fn listener_closed(&self) -> bool {
+        lock(&self.shared.listener).is_none()
+    }
+
+    /// True once the shutdown that took the accept handle joined it
+    /// within the bound, or a shutdown ran on a server that never
+    /// served. False before any shutdown, and for good after a
+    /// timed-out join.
+    pub fn accept_joined(&self) -> bool {
+        self.shared.joined.load(Ordering::SeqCst)
     }
 }
 

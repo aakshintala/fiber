@@ -17,7 +17,7 @@ const DOC: &str = concat!(
     "| Log bytes, 429-call turn | the turn's content plus 2 KiB per tool call | Linux x86_64 | exact | — | — | — | — | — |\n",
     "| Session start, the internal session command to its first line, no hub | 20 ms | Linux x86_64 | picked | 16 ms | 12 ms | 13 ms | 55 % | 9 % |\n",
     "| Terminal to its first frame, new session | 50 ms | Linux x86_64 | picked | 7 ms | 8 ms | 11 ms | 18 % | 8 % |\n",
-    "| Terminal to its first frame, attaching | 50 ms plus 10 ms per MiB of session log | Linux x86_64 | picked | 898 ms | 1101 ms | 1364 ms | 9 % | 4 % |\n",
+    "| Terminal to its first frame, attaching | 50 ms plus 10 ms per MiB of session log | Linux x86_64 | picked | 1008 ms | 1101 ms | 1364 ms | 23 % | 4 % |\n",
     "| Terminal, attaching a 10 MiB session | 200 MiB peak RSS | Linux x86_64 | picked | — | — | — | — | — |\n",
     "| Session, memory kept after the busy turn | 200 MiB RssAnon | Linux x86_64 | picked | — | — | — | — | — |\n",
     "| Terminal, memory kept after attaching a 10 MiB session | 200 MiB RssAnon | Linux x86_64 | picked | — | — | — | — | — |\n",
@@ -2947,7 +2947,7 @@ fn class_ceiling_cells_carry_the_ruled_figures() {
         .lines()
         .find(|l| l.starts_with("| Terminal to its first frame, attaching"))
         .unwrap();
-    for want in ["898 ms", "1101 ms", "1364 ms", "9 %", "4 %"] {
+    for want in ["1008 ms", "1101 ms", "1364 ms", "23 %", "4 %"] {
         assert!(attach.contains(want), "{attach} misses {want}");
     }
 }
@@ -4007,4 +4007,69 @@ fn a_head_failure_with_a_missing_base_metric_shows_unavailable() {
     assert!(line.contains("1.0 ms"), "{line}");
     assert!(!line.contains("unavailable"), "{line}");
     assert!(line.ends_with("| fail |"), "{line}");
+}
+
+// --- #2427 the 9V45 attach class data pins its own ceiling ---
+
+/// Every stored 9V45 file's 10 MiB attach samples: the backstop's `main`
+/// results since October 11, 2026 and the base and head of run 38783449852.
+const FAST_ATTACH_DATA: &str = include_str!("../tests/class_data/9v45-attach-10mib.json");
+const PERFORMANCE_DOC: &str = include_str!("../../docs/performance.md");
+
+/// The attaching row's fast ceiling (ms) and fast tolerance (%) in `docs/performance.md`.
+fn doc_fast_attach_gate() -> (f64, f64) {
+    let line = PERFORMANCE_DOC
+        .lines()
+        .find(|l| l.starts_with("| Terminal to its first frame, attaching"))
+        .expect("attaching row");
+    let cells: Vec<&str> = line.split('|').map(str::trim).collect();
+    let number = |cell: &str| -> f64 {
+        cell.split_whitespace()
+            .next()
+            .and_then(|n| n.parse().ok())
+            .unwrap_or_else(|| panic!("no number in {cell:?}"))
+    };
+    (number(cells[5]), number(cells[8]))
+}
+
+fn median_of(samples: &[f64]) -> f64 {
+    let mut s = samples.to_vec();
+    s.sort_by(f64::total_cmp);
+    s[s.len() / 2]
+}
+
+#[test]
+fn fast_attach_ceiling_covers_every_stored_sample_and_tolerance_the_medians() {
+    let files: Vec<Value> = serde_json::from_str(FAST_ATTACH_DATA).unwrap();
+    assert!(files.len() >= 5, "the class gates only with 5 stored files");
+    let samples: Vec<Vec<f64>> = files
+        .iter()
+        .map(|f| {
+            f["samples"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .map(|s| s.as_f64().unwrap())
+                .collect()
+        })
+        .collect();
+    let max_sample = samples.iter().flatten().copied().fold(0.0, f64::max);
+    let medians: Vec<f64> = samples.iter().map(|s| median_of(s)).collect();
+    let max_median = medians.iter().copied().fold(0.0, f64::max);
+    let min_median = medians.iter().copied().fold(f64::MAX, f64::min);
+    let (ceiling, tolerance) = doc_fast_attach_gate();
+    assert!(
+        ceiling >= max_sample,
+        "fast attach ceiling {ceiling} ms sits below stored sample {max_sample} ms"
+    );
+    assert_eq!(
+        ceiling,
+        max_sample.ceil(),
+        "ceiling is the max sample rounded up"
+    );
+    let want = (100.0 * (max_median / min_median - 1.0)).ceil();
+    assert_eq!(
+        tolerance, want,
+        "fast attach tolerance for the stored medians"
+    );
 }
