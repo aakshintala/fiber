@@ -20,16 +20,22 @@ const SHARD_TIMEOUT_MAX_MINUTES: u64 = 360;
 /// so `crates/benchmark/…` does not match; `xtask/src/bench` is the doc's
 /// literal `bench*` prefix (`bench.rs`, `bench_tests.rs`, `bench/…`).
 const RELEASE_CODE_PREFIXES: [&str; 2] = ["crates/bench/", "xtask/src/bench"];
-/// `docs/ci.md`, "Selection": exact release-code files.
-const RELEASE_CODE_FILES: [&str; 2] = ["scripts/release-size", "scripts/stored-results"];
+/// `docs/ci.md`, "Selection": exact release-code files. The performance
+/// table is release code: the release job judges the run against it.
+const RELEASE_CODE_FILES: [&str; 3] = [
+    "scripts/release-size",
+    "scripts/stored-results",
+    "docs/performance.md",
+];
 
 /// Whether `path` is code the release job runs (`docs/ci.md`, "Selection"):
-/// under a release-code prefix or exactly a release-code file, and never a
-/// docs file, so a Markdown file under release-code paths is not release code.
+/// exactly a release-code file, or under a release-code prefix and never a
+/// docs file, so a Markdown file under release-code paths is not release
+/// code. The exact-file list comes first, so the performance table is
+/// release code even though it is a docs file.
 fn is_release_code(path: &str) -> bool {
-    !super::is_docs_file(path)
-        && (RELEASE_CODE_PREFIXES.iter().any(|p| path.starts_with(p))
-            || RELEASE_CODE_FILES.contains(&path))
+    RELEASE_CODE_FILES.contains(&path)
+        || (!super::is_docs_file(path) && RELEASE_CODE_PREFIXES.iter().any(|p| path.starts_with(p)))
 }
 
 /// `docs/ci.md`, "Selection": prefixes whose diffs also run the

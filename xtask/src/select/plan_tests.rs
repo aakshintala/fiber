@@ -271,6 +271,48 @@ fn a_pull_request_touching_the_stored_results_script_runs_the_release_job() {
 }
 
 #[test]
+fn a_pull_request_touching_only_the_performance_table_runs_the_release_job() {
+    let plan = plan(
+        "crates",
+        &strings(&["xtask"]),
+        "pull_request",
+        false,
+        false,
+        false,
+        0,
+        &strings(&["docs/performance.md"]),
+    );
+    assert_eq!(
+        plan,
+        Plan {
+            jobs: jobs(true, true, false, false, true),
+            shards: 0
+        }
+    );
+}
+
+#[test]
+fn a_pull_request_touching_another_docs_file_skips_the_release_job() {
+    let plan = plan(
+        "crates",
+        &strings(&["xtask"]),
+        "pull_request",
+        false,
+        false,
+        false,
+        0,
+        &strings(&["docs/ci.md"]),
+    );
+    assert_eq!(
+        plan,
+        Plan {
+            jobs: jobs(true, true, false, false, false),
+            shards: 0
+        }
+    );
+}
+
+#[test]
 fn a_pull_request_touching_a_release_path_lookalike_skips_the_release_job() {
     for path in [
         "crates/benchmark/src/lib.rs",
