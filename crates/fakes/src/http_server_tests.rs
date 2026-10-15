@@ -2257,29 +2257,65 @@ fn a_freed_port_is_not_proof_of_a_dropped_server() {
 
 /// Serving a stopped server spawns nothing: the slot keeps its
 /// never-spawned shape, so the shutdown still reads as never served.
-/// The armed pause would fire on any spawn, so its silence within a
-/// poll bound proves no thread started; the join mark stays put either
-/// way.
+/// serve_persistent returns synchronously, so its return proves any
+/// spawn already signalled; the pause's immediate silence then proves
+/// none did, with no wall-clock wait. The serve runs on a worker so a
+/// missing stopping check blocks in the pause and fails at the
+/// completion deadline instead of hanging the test; the release drops
+/// before any join.
 #[test]
 fn serve_after_stop_spawns_nothing() {
+    /// Releases the spawn pause when the test unwinds past it: a serve
+    /// stuck in the pause would otherwise outlive the failed test and
+    /// hang the scope's join, turning a red assertion into a hung suite.
+    struct ReleaseOnDrop {
+        tx: Option<mpsc::Sender<()>>,
+    }
+    impl Drop for ReleaseOnDrop {
+        fn drop(&mut self) {
+            if let Some(tx) = self.tx.take() {
+                match tx.send(()) {
+                    Ok(()) | Err(_) => {}
+                }
+            }
+        }
+    }
     let clock = fake_clock();
     let server = bind(&clock);
     let probe = server.drop_probe();
     assert!(server.shutdown(), "shutdown stops the unserved server");
-    let (reached_rx, _release_tx) = server.test_pause_after_spawn();
-    server.serve_persistent(|_| {});
-    assert!(
-        Deadline::after(QUIET).recv(&reached_rx).is_err(),
-        "serving a stopped server spawns no accept thread"
-    );
-    assert!(
-        probe.listener_closed(),
-        "the stopped server closed its listener"
-    );
-    assert!(
-        probe.accept_joined(),
-        "serving a stopped server leaves the never-served join mark"
-    );
+    let (reached_rx, release_tx) = server.test_pause_after_spawn();
+    let (serve_tx, serve_rx) = mpsc::channel();
+    thread::scope(|scope| {
+        // Dropped on unwind past any assert below, before the scope
+        // ends: a serve stuck in the pause is released, so a red
+        // assertion fails the test instead of hanging it.
+        let _release = ReleaseOnDrop {
+            tx: Some(release_tx.clone()),
+        };
+        scope.spawn(|| {
+            server.serve_persistent(|_| {});
+            match serve_tx.send(()) {
+                Ok(()) | Err(_) => {}
+            }
+        });
+        Deadline::after(OP).recv_or_fail(
+            &serve_rx,
+            "serving a stopped server returning without spawning",
+        );
+        assert!(
+            reached_rx.try_recv().is_err(),
+            "serving a stopped server spawns no accept thread"
+        );
+        assert!(
+            probe.listener_closed(),
+            "the stopped server closed its listener"
+        );
+        assert!(
+            probe.accept_joined(),
+            "serving a stopped server leaves the never-served join mark"
+        );
+    });
     drop(server);
     assert!(
         probe.accept_joined(),
@@ -2290,8 +2326,10 @@ fn serve_after_stop_spawns_nothing() {
 /// A shutdown racing the spawn joins the thread: the pause holds the
 /// serve between its spawn and its slot store, inside the accept lock,
 /// so the racing shutdown blocks on the lock instead of seeing a
-/// spawned thread as unspawned. Its silence within a poll bound, with
-/// no join published, proves the wait; the release then lets both end.
+/// spawned thread as unspawned. The listener closure proves the
+/// shutdown reached the lock window before the release; its silence
+/// within a poll bound, with no join published, then proves the wait.
+/// The release then lets both end.
 #[test]
 fn shutdown_racing_spawn_joins_the_thread() {
     /// Releases the spawn pause when the test unwinds past it: the
@@ -2332,6 +2370,21 @@ fn shutdown_racing_spawn_joins_the_thread() {
         scope.spawn(|| match down_tx.send(server.shutdown()) {
             Ok(()) | Err(_) => {}
         });
+        // Shutdown takes the listener just before blocking on the
+        // contested accept lock, with no blocking work between, so its
+        // closure proves the shutdown thread reached the lock window;
+        // the pause still holds the serve, so the shutdown must block.
+        // Without this, the shutdown thread may still be unscheduled
+        // when the pause releases, and broken publication can pass.
+        let at_lock = Deadline::after(OP);
+        while !probe.listener_closed() {
+            if at_lock.left().is_zero() {
+                panic!(
+                    "waited until the deadline for the racing shutdown reaching the accept lock"
+                );
+            }
+            thread::yield_now();
+        }
         assert!(
             Deadline::after(QUIET).recv(&down_rx).is_err(),
             "shutdown waits for the spawning serve instead of publishing a join"
