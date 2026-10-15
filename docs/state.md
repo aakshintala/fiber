@@ -286,7 +286,19 @@ What is recorded:
   covers one admitted attempt, from entering the model call until its stream
   ends; a cancel observed before admission writes none, and a retry's backoff
   stays outside. `turn.handoff` covers one handoff end to end, from its first
-  record through the restart. The scopes nest instead of adding up: a
+  record through the restart. Installed for one tool call are
+  `tool.permission`, `tool.reviewer`, `tool.hooks` and `tool.run`, each
+  with `tool` naming the registered tool. `tool.permission` covers the
+  permission order from admission to the decision, holding the reviewer's
+  stages and a person's wait; a suspended approval's fresh segment after
+  resume is a new line, never the old process's downtime. `tool.reviewer`
+  covers one entered judgement stage, a re-ask inside it included; a
+  stage never run, and the person's wait after an escalation, write none.
+  `tool.hooks` covers one actual `before_tool` or `check_tool` dispatch,
+  or one actual `after_tool` dispatch on ordinary, spilled or unsaved
+  output; a call with no hooks, or a dispatch a shutdown suppresses,
+  writes none. `tool.run` covers one entered execution on its worker, not
+  the wait for its ordered completion. The scopes nest instead of adding up: a
   requested handoff holds its note's request and model scopes, and
   `provider_request`'s network share sits inside `turn.model_call`. Warming
   refreshes and reviewer judgements run through the same factories but write
