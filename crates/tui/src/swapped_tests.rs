@@ -268,10 +268,18 @@ fn the_whole_top_row_is_the_close_target() {
 #[test]
 fn a_narrow_top_row_drops_the_command_before_esc() {
     // `" Settings"` is 9 cells, `"  /settings"` 11, `Esc returns`
-    // 11: the full row needs 32, the name with Esc 21.
+    // 11: the full row needs 32, the name with Esc 21, the name 9.
     assert_eq!(
         text(&top_row("Settings", "/settings", 40), 0),
         format!(" Settings  /settings{}Esc returns", " ".repeat(9))
+    );
+    assert_eq!(
+        text(&top_row("Settings", "/settings", 32), 0),
+        " Settings  /settings Esc returns"
+    );
+    assert_eq!(
+        text(&top_row("Settings", "/settings", 31), 0),
+        format!(" Settings{}Esc returns", " ".repeat(11))
     );
     assert_eq!(
         text(&top_row("Settings", "/settings", 22), 0),
@@ -281,6 +289,9 @@ fn a_narrow_top_row_drops_the_command_before_esc() {
         text(&top_row("Settings", "/settings", 21), 0),
         " Settings Esc returns"
     );
+    assert_eq!(text(&top_row("Settings", "/settings", 20), 0), " Settings");
+    assert_eq!(text(&top_row("Settings", "/settings", 9), 0), " Settings");
+    assert_eq!(text(&top_row("Settings", "/settings", 8), 0), " Setting");
 }
 
 #[test]

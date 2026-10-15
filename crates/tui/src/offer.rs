@@ -501,21 +501,12 @@ pub(crate) fn title_layout(name: &str, command: &str, width: usize) -> TitleLayo
 /// anywhere on it puts the offer aside: a click on the top row returns.
 /// The command gives way first, then Esc, so `Offer` always draws.
 fn title_row(width: u16) -> Row {
-    const COMMAND: &str = "  repository code";
     const ESC: &str = "Esc returns";
     let tint = Style::new().bg(Role::Surface.color());
     let fit = usize::from(width);
-    let mut name = " Offer".to_owned();
-    while crate::format::width(&name) > fit && !name.is_empty() {
-        name.pop();
-    }
-    let mut command = COMMAND.to_owned();
-    while crate::format::width(&name) + crate::format::width(&command) > fit && !command.is_empty()
-    {
-        command.pop();
-    }
+    let layout = title_layout("Offer", "repository code", fit);
     let mut spans = Vec::new();
-    if let Some(rest) = name.strip_prefix(' ') {
+    if let Some(rest) = layout.name.strip_prefix(' ') {
         spans.push(Span::styled(" ".to_owned(), tint));
         if !rest.is_empty() {
             spans.push(Span::styled(
@@ -524,26 +515,21 @@ fn title_row(width: u16) -> Row {
             ));
         }
     }
-    if !command.is_empty() {
+    if let Some(command) = layout.command {
         spans.push(Span::styled(
-            command.clone(),
+            command,
             style(Role::Muted).bg(Role::Surface.color()),
         ));
     }
-    let used = crate::format::width(&name) + crate::format::width(&command);
     // Esc needs a space before it, or it stays off.
-    let mut shown = used;
-    if used + 1 + ESC.len() <= fit {
-        spans.push(Span::styled(" ".repeat(fit - used - ESC.len()), tint));
+    if layout.pad > 0 {
+        spans.push(Span::styled(" ".repeat(layout.pad), tint));
+    }
+    if layout.esc {
         spans.push(Span::styled(
             ESC,
             style(Role::Muted).bg(Role::Surface.color()),
         ));
-        shown = fit;
-    }
-    // The tint runs the whole row: pad what the spans leave short.
-    if shown < fit {
-        spans.push(Span::styled(" ".repeat(fit - shown), tint));
     }
     let mut line = Line::from(spans);
     line.style = tint;
