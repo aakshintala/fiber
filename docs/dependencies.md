@@ -134,6 +134,7 @@ only that crate, in KiB; the empty program is 323 KiB.
 |---|---|---:|---:|---:|---:|---:|
 | serde, serde_json | the log, the event stream, every wire format | ~0 | ~0 | ~0 | 11 | 418 |
 | ureq, rustls-platform-verifier, rustls-native-certs | HTTP over TLS, trusting the OS certificate store and, on Linux, telling an empty system store from a full one | 3,356 | 3,076 | 2,048 | 31 | 2,545 |
+| rustls, webpki-roots | the hub client's TLS; no change, already in the tree through ureq, with the same features | no change | no change | no change | no change | no change |
 | ratatui | drawing the terminal UI | 1,084 | 1,344 | 1,376 | 41 | 469 |
 | crossterm | terminal input, raw mode and output | ~0 | 256 | ~0 | 28 | 443 |
 | mlua | the extension runtime, Lua 5.4 vendored | 912 | 704 | ~0 | 23 | 785 |
@@ -172,6 +173,7 @@ Notes:
   uses for cryptography, carries C and assembly. aws-lc-rs, the alternative
   provider, adds 6 crates and 663 KiB for nothing Fiber needs.
 - rustls-native-certs: no change, already in the tree through rustls-platform-verifier on Linux, with the same (no) features.
+- rustls, webpki-roots, base64 and ring in `net`: no change, already in the tree through ureq (ring through rustls), with the same features.
 - mlua carries Lua's C source.
 - ratatui's figure is its two 200 by 50 screen buffers. Any full-screen
   terminal UI holds a screen model of that size.
