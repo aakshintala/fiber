@@ -385,6 +385,41 @@ fn the_walk_does_not_start_when_the_base_fills_the_rows() {
 }
 
 #[test]
+fn a_cancelled_search_returns_none() {
+    let dir = seeded(&["a1", "sub/b1"]);
+    let looks = Cell::new(0usize);
+    let cancelled = || {
+        looks.set(looks.get() + 1);
+        looks.get() == 2
+    };
+    let limits = Limits {
+        kept: Limits::SEARCH.kept,
+        visits: Limits::SEARCH.visits,
+        check_every: 1,
+    };
+    assert_eq!(find(dir.path(), "~/proj/", "", &limits, cancelled), None);
+    assert_eq!(looks.get(), 2);
+}
+
+#[test]
+fn a_missing_base_is_an_error_row_reason() {
+    let missing = Path::new("/no/such/base");
+    match found(missing, "/no/such/", "", &search_limits()) {
+        Some(Err(reason)) => assert!(reason.contains("No such file or directory"), "{reason}"),
+        other => panic!("a missing base is an error, not {other:?}"),
+    }
+}
+
+#[test]
+fn a_file_as_base_is_an_error() {
+    let dir = seeded(&["plain.txt"]);
+    match found(&dir.path().join("plain.txt"), "~/proj/plain.txt/", "", &search_limits()) {
+        Some(Err(reason)) => assert!(reason.contains("Not a directory"), "{reason}"),
+        other => panic!("a file base is an error, not {other:?}"),
+    }
+}
+
+#[test]
 fn file_name_matches_come_first_then_shorter_then_by_path() {
     let paths = owned(&[
         "src/main.rs",
