@@ -144,7 +144,9 @@ fn paging_follows_the_timing_count_at_two_three_and_four() {
     // Each new comparison gets a test that fails when it flips: a mutant
     // swapping `timing_runs` for `runs` fails every count here.
     for n in [2, 3, 4] {
-        let got = counts(&format!("--fiber f --out o --runs 5 --timing-runs {n} --paging j"));
+        let got = counts(&format!(
+            "--fiber f --out o --runs 5 --timing-runs {n} --paging j"
+        ));
         assert_eq!(got["paging"], (n, n), "timing-runs {n}");
         assert_eq!(got["session start"], (n, n), "timing-runs {n}");
         assert_eq!(got["session idle"], (5, 5), "timing-runs {n}");

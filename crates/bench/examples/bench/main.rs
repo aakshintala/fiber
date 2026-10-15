@@ -229,12 +229,7 @@ fn selected(args: &Args) -> Vec<(&'static idle::Workload, u32, u32)> {
         // push (`docs/ci.md`, "Selection"). The base pass leaves out
         // the timing rows the diff did not select, after the `only` filter.
         .filter(|(workload, _, _)| !(args.skip_ten_turns && workload.name == busy::TEN_TURNS_NAME))
-        .filter(|(workload, _, _)| {
-            !args
-                .skip_rows
-                .iter()
-                .any(|name| name == workload.name)
-        })
+        .filter(|(workload, _, _)| !args.skip_rows.iter().any(|name| name == workload.name))
         .collect()
 }
 

@@ -442,7 +442,11 @@ fn an_unmapped_path_selects_every_row() {
         "crates/picture/src/lib.rs",
         "crates/newcrate/src/lib.rs",
     ] {
-        assert_eq!(skipped("pull_request", &[path]), Vec::<&'static str>::new(), "{path}");
+        assert_eq!(
+            skipped("pull_request", &[path]),
+            Vec::<&'static str>::new(),
+            "{path}"
+        );
     }
 }
 
@@ -462,10 +466,7 @@ fn a_docs_file_selects_no_row() {
     assert_eq!(skipped("pull_request", &["docs/invocation.md"]), all);
     // Docs beside code change nothing.
     assert_eq!(
-        skipped(
-            "pull_request",
-            &["docs/ci.md", "crates/tui/src/editor.rs"]
-        ),
+        skipped("pull_request", &["docs/ci.md", "crates/tui/src/editor.rs"]),
         vec!["session start", "sessions list"]
     );
 }
@@ -515,7 +516,11 @@ fn odd_paths_select_every_row() {
         "crates/tui",
         "crates/tui_extra/src/x.rs",
     ] {
-        assert_eq!(skipped("pull_request", &[path]), Vec::<&'static str>::new(), "{path}");
+        assert_eq!(
+            skipped("pull_request", &[path]),
+            Vec::<&'static str>::new(),
+            "{path}"
+        );
     }
     // Both ends of a rename count, and duplicates change nothing.
     assert_eq!(
