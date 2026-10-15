@@ -9,9 +9,10 @@
 //! reviewer's selection request and reads one answer line on stdin, in the
 //! selection's number grammar (`none`, or comma-separated numbers). EOF
 //! keeps every person message through the existing fallback, as
-//! `--keep-all` does without asking. A reviewed call without logged
-//! started effects prints one `unreplayable` line instead of invented
-//! input. The source directory is only read, never written.
+//! `--keep-all` does without asking. A reviewed call without its start
+//! or its denial carrying its declared effects prints one `unreplayable`
+//! line instead of invented input. The source directory is only read,
+//! never written.
 
 #![allow(
     clippy::print_stdout,
