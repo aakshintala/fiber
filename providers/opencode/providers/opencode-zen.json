@@ -23,7 +23,8 @@
       ],
       "max_output_tokens": 32000,
       "name": "Big Pickle",
-      "protocol": "openai-completions"
+      "protocol": "openai-completions",
+      "thinking_levels": []
     },
     {
       "base_url": "https://opencode.ai/zen/v1",
@@ -44,7 +45,14 @@
       ],
       "max_output_tokens": 128000,
       "name": "Claude Fable 5",
-      "protocol": "anthropic-messages"
+      "protocol": "anthropic-messages",
+      "thinking_levels": [
+        "low",
+        "medium",
+        "high",
+        "xhigh",
+        "max"
+      ]
     },
     {
       "base_url": "https://opencode.ai/zen/v1",
@@ -65,12 +73,20 @@
       ],
       "max_output_tokens": 128000,
       "name": "Claude Fable 5.1",
-      "protocol": "anthropic-messages"
+      "protocol": "anthropic-messages",
+      "thinking_levels": [
+        "low",
+        "medium",
+        "high",
+        "xhigh",
+        "max"
+      ]
     },
     {
       "base_url": "https://opencode.ai/zen/v1",
       "compat": {
-        "cache_key_header": "x-opencode-session"
+        "cache_key_header": "x-opencode-session",
+        "thinking_budget": true
       },
       "context_window": 200000,
       "cost": {
@@ -86,7 +102,14 @@
       ],
       "max_output_tokens": 64000,
       "name": "Claude Haiku 4.5",
-      "protocol": "anthropic-messages"
+      "protocol": "anthropic-messages",
+      "thinking_levels": [
+        "off",
+        "minimal",
+        "low",
+        "medium",
+        "high"
+      ]
     },
     {
       "base_url": "https://opencode.ai/zen/v1",
@@ -116,12 +139,20 @@
       ],
       "max_output_tokens": 128000,
       "name": "Claude Haiku 5.5",
-      "protocol": "anthropic-messages"
+      "protocol": "anthropic-messages",
+      "thinking_levels": [
+        "low",
+        "medium",
+        "high",
+        "xhigh",
+        "max"
+      ]
     },
     {
       "base_url": "https://opencode.ai/zen/v1",
       "compat": {
-        "cache_key_header": "x-opencode-session"
+        "cache_key_header": "x-opencode-session",
+        "thinking_budget": true
       },
       "context_window": 200000,
       "cost": {
@@ -137,7 +168,14 @@
       ],
       "max_output_tokens": 64000,
       "name": "Claude Opus 4.5",
-      "protocol": "anthropic-messages"
+      "protocol": "anthropic-messages",
+      "thinking_levels": [
+        "off",
+        "minimal",
+        "low",
+        "medium",
+        "high"
+      ]
     },
     {
       "base_url": "https://opencode.ai/zen/v1",
@@ -158,7 +196,14 @@
       ],
       "max_output_tokens": 128000,
       "name": "Claude Opus 4.6",
-      "protocol": "anthropic-messages"
+      "protocol": "anthropic-messages",
+      "thinking_levels": [
+        "off",
+        "low",
+        "medium",
+        "high",
+        "max"
+      ]
     },
     {
       "base_url": "https://opencode.ai/zen/v1",
@@ -179,7 +224,15 @@
       ],
       "max_output_tokens": 128000,
       "name": "Claude Opus 4.7",
-      "protocol": "anthropic-messages"
+      "protocol": "anthropic-messages",
+      "thinking_levels": [
+        "off",
+        "low",
+        "medium",
+        "high",
+        "xhigh",
+        "max"
+      ]
     },
     {
       "base_url": "https://opencode.ai/zen/v1",
@@ -200,7 +253,15 @@
       ],
       "max_output_tokens": 128000,
       "name": "Claude Opus 4.8",
-      "protocol": "anthropic-messages"
+      "protocol": "anthropic-messages",
+      "thinking_levels": [
+        "off",
+        "low",
+        "medium",
+        "high",
+        "xhigh",
+        "max"
+      ]
     },
     {
       "base_url": "https://opencode.ai/zen/v1",
@@ -221,7 +282,14 @@
       ],
       "max_output_tokens": 128000,
       "name": "Claude Opus 5",
-      "protocol": "anthropic-messages"
+      "protocol": "anthropic-messages",
+      "thinking_levels": [
+        "low",
+        "medium",
+        "high",
+        "xhigh",
+        "max"
+      ]
     },
     {
       "base_url": "https://opencode.ai/zen/v1",
@@ -242,12 +310,20 @@
       ],
       "max_output_tokens": 128000,
       "name": "Claude Opus 5.5",
-      "protocol": "anthropic-messages"
+      "protocol": "anthropic-messages",
+      "thinking_levels": [
+        "low",
+        "medium",
+        "high",
+        "xhigh",
+        "max"
+      ]
     },
     {
       "base_url": "https://opencode.ai/zen/v1",
       "compat": {
-        "cache_key_header": "x-opencode-session"
+        "cache_key_header": "x-opencode-session",
+        "thinking_budget": true
       },
       "context_window": 1000000,
       "cost": {
@@ -272,12 +348,20 @@
       ],
       "max_output_tokens": 64000,
       "name": "Claude Sonnet 4",
-      "protocol": "anthropic-messages"
+      "protocol": "anthropic-messages",
+      "thinking_levels": [
+        "off",
+        "minimal",
+        "low",
+        "medium",
+        "high"
+      ]
     },
     {
       "base_url": "https://opencode.ai/zen/v1",
       "compat": {
-        "cache_key_header": "x-opencode-session"
+        "cache_key_header": "x-opencode-session",
+        "thinking_budget": true
       },
       "context_window": 1000000,
       "cost": {
@@ -302,7 +386,14 @@
       ],
       "max_output_tokens": 64000,
       "name": "Claude Sonnet 4.5",
-      "protocol": "anthropic-messages"
+      "protocol": "anthropic-messages",
+      "thinking_levels": [
+        "off",
+        "minimal",
+        "low",
+        "medium",
+        "high"
+      ]
     },
     {
       "base_url": "https://opencode.ai/zen/v1",
@@ -323,7 +414,14 @@
       ],
       "max_output_tokens": 64000,
       "name": "Claude Sonnet 4.6",
-      "protocol": "anthropic-messages"
+      "protocol": "anthropic-messages",
+      "thinking_levels": [
+        "off",
+        "low",
+        "medium",
+        "high",
+        "max"
+      ]
     },
     {
       "base_url": "https://opencode.ai/zen/v1",
@@ -344,7 +442,15 @@
       ],
       "max_output_tokens": 128000,
       "name": "Claude Sonnet 5",
-      "protocol": "anthropic-messages"
+      "protocol": "anthropic-messages",
+      "thinking_levels": [
+        "off",
+        "low",
+        "medium",
+        "high",
+        "xhigh",
+        "max"
+      ]
     },
     {
       "base_url": "https://opencode.ai/zen/v1",
@@ -365,7 +471,14 @@
       ],
       "max_output_tokens": 128000,
       "name": "Claude Sonnet 5.5",
-      "protocol": "anthropic-messages"
+      "protocol": "anthropic-messages",
+      "thinking_levels": [
+        "low",
+        "medium",
+        "high",
+        "xhigh",
+        "max"
+      ]
     },
     {
       "base_url": "https://opencode.ai/zen/v1",
@@ -385,7 +498,15 @@
       ],
       "max_output_tokens": 384000,
       "name": "DeepSeek V4 Flash",
-      "protocol": "openai-completions"
+      "protocol": "openai-completions",
+      "thinking_levels": [
+        "off",
+        "low",
+        "medium",
+        "high",
+        "xhigh",
+        "max"
+      ]
     },
     {
       "base_url": "https://opencode.ai/zen/v1",
@@ -406,7 +527,15 @@
       ],
       "max_output_tokens": 384000,
       "name": "DeepSeek V4 Flash Vision Exp",
-      "protocol": "openai-completions"
+      "protocol": "openai-completions",
+      "thinking_levels": [
+        "off",
+        "low",
+        "medium",
+        "high",
+        "xhigh",
+        "max"
+      ]
     },
     {
       "base_url": "https://opencode.ai/zen/v1",
@@ -426,7 +555,8 @@
       ],
       "max_output_tokens": 384000,
       "name": "DeepSeek V4 Pro",
-      "protocol": "openai-completions"
+      "protocol": "openai-completions",
+      "thinking_levels": []
     },
     {
       "base_url": "https://opencode.ai/zen/v1",
@@ -447,7 +577,15 @@
       ],
       "max_output_tokens": 384000,
       "name": "DeepSeek V4.1 Flash",
-      "protocol": "openai-completions"
+      "protocol": "openai-completions",
+      "thinking_levels": [
+        "off",
+        "low",
+        "medium",
+        "high",
+        "xhigh",
+        "max"
+      ]
     },
     {
       "base_url": "https://opencode.ai/zen/v1",
@@ -467,7 +605,8 @@
       ],
       "max_output_tokens": 131072,
       "name": "Exo Free",
-      "protocol": "openai-completions"
+      "protocol": "openai-completions",
+      "thinking_levels": []
     },
     {
       "base_url": "https://opencode.ai/zen/v1",
@@ -487,7 +626,13 @@
       ],
       "max_output_tokens": 65536,
       "name": "Gemini 3 Flash",
-      "protocol": "google-generative-ai"
+      "protocol": "google-generative-ai",
+      "thinking_levels": [
+        "minimal",
+        "low",
+        "medium",
+        "high"
+      ]
     },
     {
       "base_url": "https://opencode.ai/zen/v1",
@@ -516,7 +661,12 @@
       ],
       "max_output_tokens": 65536,
       "name": "Gemini 3.1 Pro Preview",
-      "protocol": "google-generative-ai"
+      "protocol": "google-generative-ai",
+      "thinking_levels": [
+        "low",
+        "medium",
+        "high"
+      ]
     },
     {
       "base_url": "https://opencode.ai/zen/v1",
@@ -536,7 +686,13 @@
       ],
       "max_output_tokens": 65536,
       "name": "Gemini 3.5 Flash",
-      "protocol": "google-generative-ai"
+      "protocol": "google-generative-ai",
+      "thinking_levels": [
+        "minimal",
+        "low",
+        "medium",
+        "high"
+      ]
     },
     {
       "base_url": "https://opencode.ai/zen/v1",
@@ -556,7 +712,13 @@
       ],
       "max_output_tokens": 65536,
       "name": "Gemini 3.5 Flash Lite",
-      "protocol": "google-generative-ai"
+      "protocol": "google-generative-ai",
+      "thinking_levels": [
+        "minimal",
+        "low",
+        "medium",
+        "high"
+      ]
     },
     {
       "base_url": "https://opencode.ai/zen/v1",
@@ -576,7 +738,13 @@
       ],
       "max_output_tokens": 65536,
       "name": "Gemini 3.6 Flash",
-      "protocol": "google-generative-ai"
+      "protocol": "google-generative-ai",
+      "thinking_levels": [
+        "minimal",
+        "low",
+        "medium",
+        "high"
+      ]
     },
     {
       "base_url": "https://opencode.ai/zen/v1",
@@ -596,7 +764,12 @@
       ],
       "max_output_tokens": 65536,
       "name": "Gemini 3.7 Flash",
-      "protocol": "google-generative-ai"
+      "protocol": "google-generative-ai",
+      "thinking_levels": [
+        "low",
+        "medium",
+        "high"
+      ]
     },
     {
       "base_url": "https://opencode.ai/zen/v1",
@@ -616,7 +789,12 @@
       ],
       "max_output_tokens": 65536,
       "name": "Gemini 3.8 Flash",
-      "protocol": "google-generative-ai"
+      "protocol": "google-generative-ai",
+      "thinking_levels": [
+        "low",
+        "medium",
+        "high"
+      ]
     },
     {
       "base_url": "https://opencode.ai/zen/v1",
@@ -636,7 +814,15 @@
       ],
       "max_output_tokens": 131072,
       "name": "GLM-5",
-      "protocol": "openai-completions"
+      "protocol": "openai-completions",
+      "thinking_levels": [
+        "minimal",
+        "low",
+        "medium",
+        "high",
+        "xhigh",
+        "max"
+      ]
     },
     {
       "base_url": "https://opencode.ai/zen/v1",
@@ -656,7 +842,15 @@
       ],
       "max_output_tokens": 131072,
       "name": "GLM-5.1",
-      "protocol": "openai-completions"
+      "protocol": "openai-completions",
+      "thinking_levels": [
+        "minimal",
+        "low",
+        "medium",
+        "high",
+        "xhigh",
+        "max"
+      ]
     },
     {
       "base_url": "https://opencode.ai/zen/v1",
@@ -676,7 +870,15 @@
       ],
       "max_output_tokens": 131072,
       "name": "GLM-5.2",
-      "protocol": "openai-completions"
+      "protocol": "openai-completions",
+      "thinking_levels": [
+        "minimal",
+        "low",
+        "medium",
+        "high",
+        "xhigh",
+        "max"
+      ]
     },
     {
       "base_url": "https://opencode.ai/zen/v1",
@@ -696,7 +898,15 @@
       ],
       "max_output_tokens": 131072,
       "name": "GLM-5.3",
-      "protocol": "openai-completions"
+      "protocol": "openai-completions",
+      "thinking_levels": [
+        "minimal",
+        "low",
+        "medium",
+        "high",
+        "xhigh",
+        "max"
+      ]
     },
     {
       "base_url": "https://opencode.ai/zen/v1",
@@ -717,7 +927,15 @@
       ],
       "max_output_tokens": 131072,
       "name": "GLM-5.3-Flash",
-      "protocol": "openai-completions"
+      "protocol": "openai-completions",
+      "thinking_levels": [
+        "minimal",
+        "low",
+        "medium",
+        "high",
+        "xhigh",
+        "max"
+      ]
     },
     {
       "base_url": "https://opencode.ai/zen/v1",
@@ -737,7 +955,13 @@
       ],
       "max_output_tokens": 128000,
       "name": "GPT-5",
-      "protocol": "openai-responses"
+      "protocol": "openai-responses",
+      "thinking_levels": [
+        "minimal",
+        "low",
+        "medium",
+        "high"
+      ]
     },
     {
       "base_url": "https://opencode.ai/zen/v1",
@@ -757,7 +981,8 @@
       ],
       "max_output_tokens": 128000,
       "name": "GPT-5 Codex",
-      "protocol": "openai-responses"
+      "protocol": "openai-responses",
+      "thinking_levels": []
     },
     {
       "base_url": "https://opencode.ai/zen/v1",
@@ -777,7 +1002,13 @@
       ],
       "max_output_tokens": 128000,
       "name": "GPT-5 Nano",
-      "protocol": "openai-responses"
+      "protocol": "openai-responses",
+      "thinking_levels": [
+        "minimal",
+        "low",
+        "medium",
+        "high"
+      ]
     },
     {
       "base_url": "https://opencode.ai/zen/v1",
@@ -797,7 +1028,13 @@
       ],
       "max_output_tokens": 128000,
       "name": "GPT-5.1",
-      "protocol": "openai-responses"
+      "protocol": "openai-responses",
+      "thinking_levels": [
+        "off",
+        "low",
+        "medium",
+        "high"
+      ]
     },
     {
       "base_url": "https://opencode.ai/zen/v1",
@@ -817,7 +1054,8 @@
       ],
       "max_output_tokens": 128000,
       "name": "GPT-5.1 Codex",
-      "protocol": "openai-responses"
+      "protocol": "openai-responses",
+      "thinking_levels": []
     },
     {
       "base_url": "https://opencode.ai/zen/v1",
@@ -837,7 +1075,8 @@
       ],
       "max_output_tokens": 128000,
       "name": "GPT-5.1 Codex Max",
-      "protocol": "openai-responses"
+      "protocol": "openai-responses",
+      "thinking_levels": []
     },
     {
       "base_url": "https://opencode.ai/zen/v1",
@@ -857,7 +1096,8 @@
       ],
       "max_output_tokens": 128000,
       "name": "GPT-5.1 Codex Mini",
-      "protocol": "openai-responses"
+      "protocol": "openai-responses",
+      "thinking_levels": []
     },
     {
       "base_url": "https://opencode.ai/zen/v1",
@@ -877,7 +1117,14 @@
       ],
       "max_output_tokens": 128000,
       "name": "GPT-5.2",
-      "protocol": "openai-responses"
+      "protocol": "openai-responses",
+      "thinking_levels": [
+        "off",
+        "low",
+        "medium",
+        "high",
+        "xhigh"
+      ]
     },
     {
       "base_url": "https://opencode.ai/zen/v1",
@@ -897,7 +1144,8 @@
       ],
       "max_output_tokens": 128000,
       "name": "GPT-5.2 Codex",
-      "protocol": "openai-responses"
+      "protocol": "openai-responses",
+      "thinking_levels": []
     },
     {
       "base_url": "https://opencode.ai/zen/v1",
@@ -917,7 +1165,14 @@
       ],
       "max_output_tokens": 128000,
       "name": "GPT-5.3 Codex",
-      "protocol": "openai-responses"
+      "protocol": "openai-responses",
+      "thinking_levels": [
+        "off",
+        "low",
+        "medium",
+        "high",
+        "xhigh"
+      ]
     },
     {
       "base_url": "https://opencode.ai/zen/v1",
@@ -936,7 +1191,13 @@
       ],
       "max_output_tokens": 128000,
       "name": "GPT-5.3 Codex Spark",
-      "protocol": "openai-responses"
+      "protocol": "openai-responses",
+      "thinking_levels": [
+        "low",
+        "medium",
+        "high",
+        "xhigh"
+      ]
     },
     {
       "base_url": "https://opencode.ai/zen/v1",
@@ -965,7 +1226,14 @@
       ],
       "max_output_tokens": 128000,
       "name": "GPT-5.4",
-      "protocol": "openai-responses"
+      "protocol": "openai-responses",
+      "thinking_levels": [
+        "off",
+        "low",
+        "medium",
+        "high",
+        "xhigh"
+      ]
     },
     {
       "base_url": "https://opencode.ai/zen/v1",
@@ -985,7 +1253,14 @@
       ],
       "max_output_tokens": 128000,
       "name": "GPT-5.4 Mini",
-      "protocol": "openai-responses"
+      "protocol": "openai-responses",
+      "thinking_levels": [
+        "off",
+        "low",
+        "medium",
+        "high",
+        "xhigh"
+      ]
     },
     {
       "base_url": "https://opencode.ai/zen/v1",
@@ -1005,7 +1280,14 @@
       ],
       "max_output_tokens": 128000,
       "name": "GPT-5.4 Nano",
-      "protocol": "openai-responses"
+      "protocol": "openai-responses",
+      "thinking_levels": [
+        "off",
+        "low",
+        "medium",
+        "high",
+        "xhigh"
+      ]
     },
     {
       "base_url": "https://opencode.ai/zen/v1",
@@ -1025,7 +1307,12 @@
       ],
       "max_output_tokens": 128000,
       "name": "GPT-5.4 Pro",
-      "protocol": "openai-responses"
+      "protocol": "openai-responses",
+      "thinking_levels": [
+        "medium",
+        "high",
+        "xhigh"
+      ]
     },
     {
       "base_url": "https://opencode.ai/zen/v1",
@@ -1054,7 +1341,14 @@
       ],
       "max_output_tokens": 128000,
       "name": "GPT-5.5",
-      "protocol": "openai-responses"
+      "protocol": "openai-responses",
+      "thinking_levels": [
+        "off",
+        "low",
+        "medium",
+        "high",
+        "xhigh"
+      ]
     },
     {
       "base_url": "https://opencode.ai/zen/v1",
@@ -1074,7 +1368,12 @@
       ],
       "max_output_tokens": 128000,
       "name": "GPT-5.5 Pro",
-      "protocol": "openai-responses"
+      "protocol": "openai-responses",
+      "thinking_levels": [
+        "medium",
+        "high",
+        "xhigh"
+      ]
     },
     {
       "base_url": "https://opencode.ai/zen/v1",
@@ -1104,7 +1403,15 @@
       ],
       "max_output_tokens": 128000,
       "name": "GPT-5.6 Luna",
-      "protocol": "openai-responses"
+      "protocol": "openai-responses",
+      "thinking_levels": [
+        "off",
+        "low",
+        "medium",
+        "high",
+        "xhigh",
+        "max"
+      ]
     },
     {
       "base_url": "https://opencode.ai/zen/v1",
@@ -1134,7 +1441,15 @@
       ],
       "max_output_tokens": 128000,
       "name": "GPT-5.6 Sol",
-      "protocol": "openai-responses"
+      "protocol": "openai-responses",
+      "thinking_levels": [
+        "off",
+        "low",
+        "medium",
+        "high",
+        "xhigh",
+        "max"
+      ]
     },
     {
       "base_url": "https://opencode.ai/zen/v1",
@@ -1164,7 +1479,15 @@
       ],
       "max_output_tokens": 128000,
       "name": "GPT-5.6 Terra",
-      "protocol": "openai-responses"
+      "protocol": "openai-responses",
+      "thinking_levels": [
+        "off",
+        "low",
+        "medium",
+        "high",
+        "xhigh",
+        "max"
+      ]
     },
     {
       "base_url": "https://opencode.ai/zen/v1",
@@ -1194,7 +1517,14 @@
       ],
       "max_output_tokens": 128000,
       "name": "GPT-6 Astra",
-      "protocol": "openai-responses"
+      "protocol": "openai-responses",
+      "thinking_levels": [
+        "low",
+        "medium",
+        "high",
+        "xhigh",
+        "max"
+      ]
     },
     {
       "base_url": "https://opencode.ai/zen/v1",
@@ -1224,7 +1554,15 @@
       ],
       "max_output_tokens": 128000,
       "name": "GPT-6 Luna",
-      "protocol": "openai-responses"
+      "protocol": "openai-responses",
+      "thinking_levels": [
+        "off",
+        "low",
+        "medium",
+        "high",
+        "xhigh",
+        "max"
+      ]
     },
     {
       "base_url": "https://opencode.ai/zen/v1",
@@ -1254,7 +1592,15 @@
       ],
       "max_output_tokens": 128000,
       "name": "GPT-6 Sol",
-      "protocol": "openai-responses"
+      "protocol": "openai-responses",
+      "thinking_levels": [
+        "off",
+        "low",
+        "medium",
+        "high",
+        "xhigh",
+        "max"
+      ]
     },
     {
       "base_url": "https://opencode.ai/zen/v1",
@@ -1291,6 +1637,13 @@
       "max_output_tokens": 128000,
       "name": "GPT-6.1 Sol",
       "protocol": "openai-responses",
+      "thinking_levels": [
+        "low",
+        "medium",
+        "high",
+        "xhigh",
+        "max"
+      ],
       "web_search": "web_search"
     },
     {
@@ -1320,7 +1673,12 @@
       ],
       "max_output_tokens": 500000,
       "name": "Grok 4.5",
-      "protocol": "openai-responses"
+      "protocol": "openai-responses",
+      "thinking_levels": [
+        "low",
+        "medium",
+        "high"
+      ]
     },
     {
       "base_url": "https://opencode.ai/zen/v1",
@@ -1349,7 +1707,13 @@
       ],
       "max_output_tokens": 500000,
       "name": "Grok 4.6",
-      "protocol": "openai-responses"
+      "protocol": "openai-responses",
+      "thinking_levels": [
+        "low",
+        "medium",
+        "high",
+        "xhigh"
+      ]
     },
     {
       "base_url": "https://opencode.ai/zen/v1",
@@ -1378,7 +1742,13 @@
       ],
       "max_output_tokens": 500000,
       "name": "Grok 4.7",
-      "protocol": "openai-responses"
+      "protocol": "openai-responses",
+      "thinking_levels": [
+        "low",
+        "medium",
+        "high",
+        "xhigh"
+      ]
     },
     {
       "base_url": "https://opencode.ai/zen/v1",
@@ -1398,7 +1768,8 @@
       ],
       "max_output_tokens": 256000,
       "name": "Grok Build 0.1",
-      "protocol": "openai-responses"
+      "protocol": "openai-responses",
+      "thinking_levels": []
     },
     {
       "base_url": "https://opencode.ai/zen/v1",
@@ -1419,7 +1790,15 @@
       ],
       "max_output_tokens": 65536,
       "name": "Kimi K2.5",
-      "protocol": "openai-completions"
+      "protocol": "openai-completions",
+      "thinking_levels": [
+        "minimal",
+        "low",
+        "medium",
+        "high",
+        "xhigh",
+        "max"
+      ]
     },
     {
       "base_url": "https://opencode.ai/zen/v1",
@@ -1440,7 +1819,15 @@
       ],
       "max_output_tokens": 65536,
       "name": "Kimi K2.6",
-      "protocol": "openai-completions"
+      "protocol": "openai-completions",
+      "thinking_levels": [
+        "minimal",
+        "low",
+        "medium",
+        "high",
+        "xhigh",
+        "max"
+      ]
     },
     {
       "base_url": "https://opencode.ai/zen/v1",
@@ -1461,7 +1848,15 @@
       ],
       "max_output_tokens": 262144,
       "name": "Kimi K2.7 Code",
-      "protocol": "openai-completions"
+      "protocol": "openai-completions",
+      "thinking_levels": [
+        "minimal",
+        "low",
+        "medium",
+        "high",
+        "xhigh",
+        "max"
+      ]
     },
     {
       "base_url": "https://opencode.ai/zen/v1",
@@ -1482,7 +1877,12 @@
       ],
       "max_output_tokens": 131072,
       "name": "Kimi K3",
-      "protocol": "openai-completions"
+      "protocol": "openai-completions",
+      "thinking_levels": [
+        "low",
+        "high",
+        "max"
+      ]
     },
     {
       "base_url": "https://opencode.ai/zen/v1",
@@ -1502,7 +1902,8 @@
       ],
       "max_output_tokens": 32768,
       "name": "Ling 3.0 Flash Fin Free",
-      "protocol": "openai-completions"
+      "protocol": "openai-completions",
+      "thinking_levels": []
     },
     {
       "base_url": "https://opencode.ai/zen/v1",
@@ -1522,7 +1923,8 @@
       ],
       "max_output_tokens": 32768,
       "name": "Ling 3.1 Flash Free",
-      "protocol": "openai-completions"
+      "protocol": "openai-completions",
+      "thinking_levels": []
     },
     {
       "base_url": "https://opencode.ai/zen/v1",
@@ -1543,7 +1945,15 @@
       ],
       "max_output_tokens": 131072,
       "name": "LongCat 2.5 Preview Free",
-      "protocol": "openai-completions"
+      "protocol": "openai-completions",
+      "thinking_levels": [
+        "off",
+        "low",
+        "medium",
+        "high",
+        "xhigh",
+        "max"
+      ]
     },
     {
       "base_url": "https://opencode.ai/zen/v1",
@@ -1564,7 +1974,14 @@
       ],
       "max_output_tokens": 32000,
       "name": "MiMo-V2.6-Flash Free",
-      "protocol": "openai-completions"
+      "protocol": "openai-completions",
+      "thinking_levels": [
+        "off",
+        "low",
+        "medium",
+        "high",
+        "max"
+      ]
     },
     {
       "base_url": "https://opencode.ai/zen/v1",
@@ -1584,7 +2001,8 @@
       ],
       "max_output_tokens": 131072,
       "name": "MiniMax-M2.5",
-      "protocol": "openai-completions"
+      "protocol": "openai-completions",
+      "thinking_levels": []
     },
     {
       "base_url": "https://opencode.ai/zen/v1",
@@ -1604,7 +2022,8 @@
       ],
       "max_output_tokens": 131072,
       "name": "MiniMax-M2.7",
-      "protocol": "openai-completions"
+      "protocol": "openai-completions",
+      "thinking_levels": []
     },
     {
       "base_url": "https://opencode.ai/zen/v1",
@@ -1625,7 +2044,8 @@
       ],
       "max_output_tokens": 128000,
       "name": "MiniMax-M3",
-      "protocol": "openai-completions"
+      "protocol": "openai-completions",
+      "thinking_levels": []
     },
     {
       "base_url": "https://opencode.ai/zen/v1",
@@ -1646,7 +2066,11 @@
       ],
       "max_output_tokens": 262144,
       "name": "Mistral Large 4",
-      "protocol": "openai-completions"
+      "protocol": "openai-completions",
+      "thinking_levels": [
+        "off",
+        "high"
+      ]
     },
     {
       "base_url": "https://opencode.ai/zen/v1",
@@ -1666,7 +2090,14 @@
       ],
       "max_output_tokens": 131072,
       "name": "Muse Spark 1.2",
-      "protocol": "openai-responses"
+      "protocol": "openai-responses",
+      "thinking_levels": [
+        "minimal",
+        "low",
+        "medium",
+        "high",
+        "xhigh"
+      ]
     },
     {
       "base_url": "https://opencode.ai/zen/v1",
@@ -1714,7 +2145,15 @@
       ],
       "max_output_tokens": 131072,
       "name": "Muse Spark 1.3 Free",
-      "protocol": "openai-responses"
+      "protocol": "openai-responses",
+      "thinking_levels": [
+        "minimal",
+        "low",
+        "medium",
+        "high",
+        "xhigh",
+        "max"
+      ]
     },
     {
       "base_url": "https://opencode.ai/zen/v1",
@@ -1734,7 +2173,8 @@
       ],
       "max_output_tokens": 128000,
       "name": "Nemotron 3 Ultra Free",
-      "protocol": "openai-completions"
+      "protocol": "openai-completions",
+      "thinking_levels": []
     },
     {
       "base_url": "https://opencode.ai/zen/v1",
@@ -1754,7 +2194,8 @@
       ],
       "max_output_tokens": 262144,
       "name": "Nemotron 3.5 Lightning Free",
-      "protocol": "openai-completions"
+      "protocol": "openai-completions",
+      "thinking_levels": []
     },
     {
       "base_url": "https://opencode.ai/zen/v1",
@@ -1775,7 +2216,15 @@
       ],
       "max_output_tokens": 65536,
       "name": "Qwen3.5 Plus",
-      "protocol": "anthropic-messages"
+      "protocol": "anthropic-messages",
+      "thinking_levels": [
+        "off",
+        "low",
+        "medium",
+        "high",
+        "xhigh",
+        "max"
+      ]
     },
     {
       "base_url": "https://opencode.ai/zen/v1",
@@ -1796,7 +2245,15 @@
       ],
       "max_output_tokens": 65536,
       "name": "Qwen3.6 Plus",
-      "protocol": "anthropic-messages"
+      "protocol": "anthropic-messages",
+      "thinking_levels": [
+        "off",
+        "low",
+        "medium",
+        "high",
+        "xhigh",
+        "max"
+      ]
     },
     {
       "base_url": "https://opencode.ai/zen/v1",
@@ -1817,7 +2274,15 @@
       ],
       "max_output_tokens": 131072,
       "name": "Qwen3.8 Flash",
-      "protocol": "anthropic-messages"
+      "protocol": "anthropic-messages",
+      "thinking_levels": [
+        "off",
+        "low",
+        "medium",
+        "high",
+        "xhigh",
+        "max"
+      ]
     },
     {
       "base_url": "https://opencode.ai/zen/v1",
@@ -1839,7 +2304,15 @@
       ],
       "max_output_tokens": 131072,
       "name": "Qwen3.8 Max",
-      "protocol": "openai-completions"
+      "protocol": "openai-completions",
+      "thinking_levels": [
+        "off",
+        "low",
+        "medium",
+        "high",
+        "xhigh",
+        "max"
+      ]
     },
     {
       "base_url": "https://opencode.ai/zen/v1",
@@ -1861,7 +2334,15 @@
       ],
       "max_output_tokens": 524288,
       "name": "Space Bunny Free",
-      "protocol": "openai-completions"
+      "protocol": "openai-completions",
+      "thinking_levels": [
+        "minimal",
+        "low",
+        "medium",
+        "high",
+        "xhigh",
+        "max"
+      ]
     },
     {
       "base_url": "https://opencode.ai/zen/v1",
@@ -1882,7 +2363,15 @@
       ],
       "max_output_tokens": 65536,
       "name": "Step 5 Preview Free",
-      "protocol": "openai-completions"
+      "protocol": "openai-completions",
+      "thinking_levels": [
+        "minimal",
+        "low",
+        "medium",
+        "high",
+        "xhigh",
+        "max"
+      ]
     }
   ],
   "name": "opencode-zen",
