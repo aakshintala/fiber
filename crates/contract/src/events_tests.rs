@@ -1213,8 +1213,15 @@ fn kept_reads_from_a_cut_result_and_is_absent_from_an_uncut_one() {
     let empty = result(json!({"status": "completed", "content": [], "kept": []}));
     assert_eq!(empty.kept, Some(vec![]));
     for kept in [json!([[0, 1, 2]]), json!([[-1, 4]]), json!([[0, null]])] {
-        assert!(read("tool_call_completed", json!({"status": "completed",
-            "content": [], "kept": kept})).is_err(), "{kept}");
+        assert!(
+            read(
+                "tool_call_completed",
+                json!({"status": "completed",
+            "content": [], "kept": kept})
+            )
+            .is_err(),
+            "{kept}"
+        );
     }
 }
 
@@ -1231,10 +1238,21 @@ fn an_artifact_page_result_reads_with_and_without_next() {
     assert_eq!(
         result_of(json!({"command_id": "c", "result": {
             "text": "a\nb\n", "next": 4, "size": 9000}})),
-        CommandResult::ArtifactPage { text: "a\nb\n".into(), next: Some(4), size: 9000 }
+        CommandResult::ArtifactPage {
+            text: "a\nb\n".into(),
+            next: Some(4),
+            size: 9000
+        }
     );
     let last = result_of(json!({"command_id": "c", "result": {"text": "z\n", "size": 9000}}));
-    assert_eq!(last, CommandResult::ArtifactPage { text: "z\n".into(), next: None, size: 9000 });
+    assert_eq!(
+        last,
+        CommandResult::ArtifactPage {
+            text: "z\n".into(),
+            next: None,
+            size: 9000
+        }
+    );
     let written = serde_json::to_value(&last).unwrap();
     assert_eq!(written, json!({"text": "z\n", "size": 9000}));
     assert!(written.get("next").is_none(), "{written}");
