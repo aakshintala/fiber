@@ -21,6 +21,7 @@ use contract::diag::{Op, Timing};
 use contract::inbox::Delivery;
 use contract::jobs::{Foreground, JobRecord, Jobs, Opening};
 use contract::tool::Tool;
+use fakes::children::Ready;
 use fakes::clock::FakeClock;
 use fakes::{CancelToken, Deadline, Recorder, TempDir, Watchdog};
 use serde_json::{Map, Value, json};
@@ -370,10 +371,16 @@ fn run_in_background_times_adoption_setup_only() {
     let fixture = Fixture::new("fiber-p10-bg");
     let marker = "fiber-p10-bg";
     let _watchdog = Watchdog::matching(marker);
+    // The child's own acknowledgement: it writes its pid to this fifo
+    // once started, so the test waits for the child's signal, never the
+    // process table.
+    let ready = Ready::new(fixture.dir.path());
     let (holding, reached, release) = Holding::wrap(Arc::clone(&fixture.jobs));
     holding.arm();
     let shell = fixture.shell(holding);
-    let command = format!(": {marker}; sleep 60");
+    // The fifo lives in the workspace, the call's own workdir, so the
+    // relative name resolves there and the description keeps its shape.
+    let command = format!(": {marker}; echo $$ > ready.fifo; sleep 60");
     let (_ids, output_rx) = run_async(
         shell,
         args(&command, "run_in_background"),
@@ -395,18 +402,18 @@ fn run_in_background_times_adoption_setup_only() {
         vec![job.clone()],
         "one job, recorded"
     );
-    assert_eq!(job.description, format!(": {marker}; sleep 60"));
+    assert_eq!(job.description, command);
     assert_eq!(job.tool.as_deref(), Some("shell"));
-    // One job, no extra process: every live match shares the job's one
-    // process group. The count itself is not pinned: a fork between its
-    // `exec` still carries the marker's command line.
-    let found = fakes::matching(marker).unwrap();
-    assert!(!found.is_empty(), "the job's shell is running");
-    let groups = process_groups(&found);
+    // One job in its own group: the acknowledged pid shares the job's
+    // one process group. The count itself is not pinned: a fork between
+    // its `exec` still carries the marker's command line.
+    let child = ready.wait(STEP);
+    assert!(!child.is_empty(), "the job's shell acknowledged its start");
+    let groups = process_groups(&child);
     assert_eq!(
         groups.len(),
         1,
-        "the marker's group is the only one: {found:?}"
+        "the job's group is the only one: {child:?}"
     );
     assert_eq!(fixture.probe.calls(), 1);
     let record = closed(&fixture.records, deadline);
@@ -762,6 +769,10 @@ fn a_foreground_call_cancelled_before_it_moves_writes_nothing() {
     let fixture = Fixture::new("fiber-p10-fgcancel");
     let marker = "fiber-p10-fgcancel";
     let _watchdog = Watchdog::matching(marker);
+    // The child's own acknowledgement: it writes its pid to this fifo
+    // once started, so the test waits for the child's signal, never the
+    // process table.
+    let ready = Ready::new(fixture.dir.path());
     let jobs = fakes::jobs::FakeJobs::new(fixture.dir.path());
     let shell = Arc::new(
         Shell::new(
@@ -771,7 +782,9 @@ fn a_foreground_call_cancelled_before_it_moves_writes_nothing() {
         .with_jobs(jobs.clone() as _)
         .with_timing(fixture.probe.timing()),
     );
-    let command = format!(": {marker}; sleep 60");
+    // The fifo lives in the workspace, the call's own workdir, so the
+    // relative name resolves there and the description keeps its shape.
+    let command = format!(": {marker}; echo $$ > ready.fifo; sleep 60");
     let mut arguments = Map::new();
     arguments.insert("command".into(), json!(command));
     let cancel = CancelToken::new();
@@ -783,12 +796,11 @@ fn a_foreground_call_cancelled_before_it_moves_writes_nothing() {
             Ok(()) | Err(_) => {}
         }
     });
-    // The child is running: its marker proves the call reached its drive.
+    // The child acknowledged its start: the call reached its drive, so
+    // cancelling now stops it before any move.
     let deadline = Deadline::after(STEP);
-    while fakes::matching(marker).unwrap().is_empty() {
-        assert!(!deadline.left().is_zero(), "the child never started");
-        thread::yield_now();
-    }
+    let child = ready.wait(STEP);
+    assert!(!child.is_empty(), "the child acknowledged its start");
     cancel.cancel();
     let output = deadline.recv_or_fail(&out_rx, "the cancelled result");
     assert!(output.jobs.is_empty(), "cancelled before any move");
