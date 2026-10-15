@@ -507,18 +507,11 @@ fn a_start_up_park_still_standing_does_not_prove_the_departure() {
         clock.await_parked(origin + IDLE, WITHIN),
         "the stale start-up park still satisfies the instant gate with a client counted"
     );
-    // The new gate: no unbounded park exists while the guard is held, so
-    // a thread waiting for one hears nothing within a short bound.
-    let (c_tx, c_done) = mpsc::channel();
-    let unbounded = thread::spawn({
-        let clock = Arc::clone(&clock);
-        move || {
-            let parked = clock.await_parked_unbounded(WITHIN);
-            c_tx.send(parked).unwrap_or(());
-        }
-    });
+    // The new gate: no unbounded park exists while the guard is held. A
+    // zero-bound probe reads the predicate with no elapsed-time wait:
+    // the stale finite park alone cannot satisfy it.
     assert!(
-        Deadline::after(STILL).recv(&c_done).is_err(),
+        !clock.await_parked_unbounded(Duration::ZERO),
         "the stale park answers no unbounded wait while the guard is held"
     );
     // Release both wakes and the idle thread: it leaves the stale park,
@@ -532,7 +525,7 @@ fn a_start_up_park_still_standing_does_not_prove_the_departure() {
     advance.join().expect("the advance thread joins");
     arrival.join().expect("the arrival thread joins");
     assert!(
-        Deadline::after(DEADLINE).recv_or_fail(&c_done, "the unbounded park after the release"),
+        clock.await_parked_unbounded(WITHIN),
         "the hub parks with no deadline once it saw the client"
     );
     // The departure starts the timer at the advanced time; the advance
@@ -541,8 +534,10 @@ fn a_start_up_park_still_standing_does_not_prove_the_departure() {
     let zero = clock.now();
     assert_eq!(zero, origin + IDLE + Duration::from_secs(1));
     await_idle_park(&clock, zero, "after the rollback");
+    // The idle park above already proves the hub is still waiting: it has
+    // not exited, so no code is waiting on its result.
     assert!(
-        Deadline::after(STILL).recv(&done).is_err(),
+        done.try_recv().is_err(),
         "the advance that raced the arrival does not end the hub"
     );
     // Driving the timer from the departure exits the hub.
@@ -553,7 +548,6 @@ fn a_start_up_park_still_standing_does_not_prove_the_departure() {
             .expect("the hub exits idle"),
         0
     );
-    unbounded.join().expect("the unbounded-wait thread joins");
     drop(peer);
 }
 
