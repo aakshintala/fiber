@@ -85,8 +85,21 @@ pub(crate) fn depth_refusal(depth: u32, tool: &str) -> Option<Output> {
 /// string. `model` is checked in `run`, not here, so a missing or
 /// wrongly typed one reaches the tool's own check, which lists the valid
 /// roles and references (`docs/delegates.md`, "Choosing a model").
-fn check_effects_arguments(arguments: &Map<String, Value>) -> Result<(String, String), String> {
-    check_pair(arguments, "description", "prompt")
+fn check_effects_arguments(
+    arguments: &Map<String, Value>,
+) -> Result<(String, String, Option<Duration>), String> {
+    let (description, prompt) = check_pair(arguments, "description", "prompt")?;
+    let timeout = match arguments.get("timeout_ms") {
+        None => None,
+        Some(value) => {
+            let milliseconds = value
+                .as_u64()
+                .filter(|milliseconds| *milliseconds >= 1)
+                .ok_or_else(|| "`timeout_ms` must be an integer of 1 or more.".to_owned())?;
+            Some(Duration::from_millis(milliseconds))
+        }
+    };
+    Ok((description, prompt, timeout))
 }
 
 /// Reads each of the two names from the call's arguments: each is
@@ -149,7 +162,7 @@ impl Tool for DelegateSpawn {
                  wait for it with `jobs wait`. `model` is required: a configured \
                  role name or a full `fiber:` model reference, checked when the \
                  call is made; list the valid roles and references with \
-                 `delegate_models`."
+                 `delegate_models`. Optional `timeout_ms` stops the delegate at its deadline, failed with code `timeout`; there is no default."
                 .to_owned(),
             input_schema: json!({
                 "type": "object",
@@ -161,6 +174,11 @@ impl Tool for DelegateSpawn {
                     "prompt": {
                         "type": "string",
                         "description": "What the child session runs."
+                    },
+                    "timeout_ms": {
+                        "type": "integer",
+                        "minimum": 1,
+                        "description": "Stops the delegate after this many milliseconds; it then ends failed with code timeout. Optional, with no default."
                     },
                     "model": {
                         "description": "The delegate's model: a configured role name or a full `fiber:` reference, checked when the call is made. Required."
@@ -202,7 +220,7 @@ impl Tool for DelegateSpawn {
         if let Some(output) = depth_refusal(self.depth, "delegate_spawn") {
             return output;
         }
-        let (description, prompt) = match check_effects_arguments(arguments) {
+        let (description, prompt, timeout) = match check_effects_arguments(arguments) {
             Ok(call) => call,
             Err(message) => {
                 return crate::registry::failed(
@@ -283,7 +301,7 @@ impl Tool for DelegateSpawn {
             self.cap,
             Arc::clone(&self.watch),
             None,
-            None,
+            timeout,
         );
         let (child, listing) = match runner.spawn(&self.launch, &launched) {
             Ok(child) => child,

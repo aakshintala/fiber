@@ -408,6 +408,113 @@ fn a_spawn_error_fails_io_failed_with_no_job() {
 }
 
 #[test]
+fn timeout_schema_and_argument_edges() {
+    let rig = rig();
+    let spawned = tool(&rig);
+    let schema = spawned.definition().input_schema;
+    let property = &schema["properties"]["timeout_ms"];
+    assert_eq!(property["type"], "integer");
+    assert_eq!(property["minimum"], 1);
+    assert!(
+        !schema["required"]
+            .as_array()
+            .unwrap()
+            .contains(&serde_json::json!("timeout_ms"))
+    );
+    for value in [
+        serde_json::json!(0),
+        serde_json::json!(-1),
+        serde_json::json!(1.5),
+        serde_json::json!("5"),
+        serde_json::Value::Null,
+    ] {
+        let mut call = arguments("fiber:fake/m");
+        call.insert("timeout_ms".into(), value);
+        assert!(
+            matches!(spawned.effects(&call), Err(contract::tool::EffectsError::Arguments(message)) if message == "`timeout_ms` must be an integer of 1 or more.")
+        );
+        let output = spawned.run(&call, &fakes::CancelToken::new(), &Recorder::default());
+        let error = output.error.unwrap();
+        assert_eq!(error.code, contract::ErrorCode::InvalidArguments);
+        assert_eq!(
+            error.message,
+            "`timeout_ms` must be an integer of 1 or more."
+        );
+        assert_eq!(rig.launch_count.load(Ordering::SeqCst), 0);
+    }
+    let mut call = arguments("fiber:fake/m");
+    assert!(spawned.effects(&call).is_ok());
+    for n in [1, 2] {
+        call.insert("timeout_ms".into(), serde_json::json!(n));
+        assert!(spawned.effects(&call).is_ok());
+    }
+}
+
+#[test]
+fn absent_timeout_keeps_the_delegate_running_after_a_poll() {
+    use contract::clock::Clock as _;
+    let rig = rig();
+    let mut spawned = tool(&rig);
+    let (release, held) = mpsc::channel::<()>();
+    let held = std::sync::Mutex::new(held);
+    spawned.watch = Arc::new(move |_, _, _| {
+        let _released = held.lock().unwrap().recv();
+        Err(std::io::Error::other("released"))
+    });
+    let output = spawned.run(
+        &arguments("fiber:fake/m"),
+        &fakes::CancelToken::new(),
+        &Recorder::default(),
+    );
+    let watchdog = child_group(&rig);
+    assert!(output.error.is_none());
+    let deadline = Deadline::after(DEADLINE);
+    let step = Duration::from_secs(1);
+    rig.clock
+        .advance_when_parked(Some(rig.clock.now() + step), None, step, &deadline);
+    assert!(rig.inbox.try_recv().is_err());
+    assert_eq!(rig.registry.stop_delegates(), 1);
+    drop(release);
+    let Delivery::Job(notice) = deadline.recv(&rig.inbox).expect("stopped delegate reports") else {
+        panic!("job notice");
+    };
+    assert_eq!(
+        notice.completed.status,
+        contract::events::Outcome::Cancelled
+    );
+    watchdog.stand_down(DEADLINE);
+}
+
+#[test]
+fn timeout_spawn_stops_and_reaps_its_child() {
+    use contract::clock::Clock as _;
+    let rig = rig();
+    let spawned = tool(&rig);
+    let mut call = arguments("fiber:fake/m");
+    call.insert("timeout_ms".into(), serde_json::json!(1));
+    let output = spawned.run(&call, &fakes::CancelToken::new(), &Recorder::default());
+    let watchdog = child_group(&rig);
+    assert!(output.error.is_none());
+    let deadline = Deadline::after(DEADLINE);
+    let step = Duration::from_millis(1);
+    rig.clock
+        .advance_when_parked(Some(rig.clock.now() + step), None, step, &deadline);
+    let Delivery::Job(notice) = deadline
+        .recv(&rig.inbox)
+        .expect("deadline ended the delegate")
+    else {
+        panic!("job notice");
+    };
+    assert_eq!(notice.completed.status, contract::events::Outcome::Failed);
+    assert_eq!(
+        notice.completed.error.unwrap().code,
+        contract::ErrorCode::Timeout
+    );
+    assert!(notice.completed.process.unwrap().timed_out);
+    watchdog.stand_down(DEADLINE);
+}
+
+#[test]
 fn depth_edges_refuse_by_tool_name() {
     assert!(super::depth_refusal(1, "delegate_spawn").is_none());
     for depth in [2, 3] {
