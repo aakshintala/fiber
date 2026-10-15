@@ -701,9 +701,10 @@ fn hover_over_a_group_line_tints_only_its_row() {
         // The rows' 59 columns: the bar's column keeps its background.
         for x in 0..59 {
             let bg = buf.cell((x, y)).map(|cell| cell.bg);
-            // The written frame is painted: the hover role's colour.
-            let hover = crate::look::Look::default().colour(crate::theme::Role::Hover);
-            let tinted = bg == Some(hover);
+            // The written frame is painted: the group row sits on the
+            // Turn tint, so the hover lifts it 0x14 per channel.
+            let lifted = ratatui::style::Color::Rgb(0x24, 0x24, 0x2b);
+            let tinted = bg == Some(lifted);
             assert_eq!(tinted, y == group, "cell {x},{y}");
         }
     }

@@ -24,7 +24,8 @@ use support::{PIXEL, Setup, TRUECOLOUR};
 /// The dark theme's roles the link look names, as truecolour cells.
 const ACCENT: Colour = Colour::Rgb(110, 170, 254);
 const SURFACE_RAISED: Colour = Colour::Rgb(58, 58, 74);
-const HOVER: Colour = Colour::Rgb(30, 30, 38);
+/// The Turn tint lifted 0x14 per channel: a hovered link's background.
+const LIFTED_TURN: Colour = Colour::Rgb(36, 36, 43);
 
 /// The row's symbols, one per cell.
 #[track_caller]
@@ -252,8 +253,8 @@ fn links_and_the_image_line_take_the_link_look() {
         );
     }
 
-    // The pointer onto another link: the hover tint, with the accent
-    // kept and the focus staying where it was.
+    // The pointer onto another link: the Turn tint lifted 0x14 per
+    // channel, with the accent kept and the focus staying where it was.
     let other = ["the spec", "https://example.com/plain"]
         .iter()
         .find(|needle| *needle != &focused)
@@ -261,7 +262,9 @@ fn links_and_the_image_line_take_the_link_look() {
     let oy = find_row(&screen, other);
     let ox = find_col(&screen, oy, other);
     run.write(format!("\x1b[<35;{};{}M", ox + 1, oy + 1).as_bytes());
-    let screen = run.wait_screen("the hovered link", |screen| screen.cell(ox, oy).bg == HOVER);
+    let screen = run.wait_screen("the hovered link", |screen| {
+        screen.cell(ox, oy).bg == LIFTED_TURN
+    });
     assert_eq!(
         screen.cell(ox, oy).fg,
         ACCENT,
