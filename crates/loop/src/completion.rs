@@ -80,6 +80,7 @@ pub(crate) fn completed(text: String, error: Option<Failure>) -> ToolCallComplet
         },
         details: None,
         artifact: None,
+        kept: None,
         changes: None,
         control: None,
         changed_by: None,

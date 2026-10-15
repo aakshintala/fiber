@@ -115,6 +115,8 @@ pub enum Command {
     Skills,
     /// Answers with durable log lines in a seq range.
     History(HistoryArgs),
+    /// Answers with a page of an artifact's full output.
+    ArtifactPage(ArtifactPageArgs),
     /// Switches model or thinking at the next turn boundary.
     Model(ModelArgs),
     /// Switches the credential label at the next turn boundary.
@@ -309,6 +311,17 @@ pub struct HistoryArgs {
     /// The last `seq` to return, inclusive; absent means the latest line.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub to_seq: Option<Seq>,
+}
+
+/// The `args` of `artifact_page`.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ArtifactPageArgs {
+    /// The path as a result's `artifact` names it.
+    pub path: String,
+    /// The byte offset to start reading from; absent means zero.
+    #[serde(default)]
+    pub offset: u64,
 }
 
 /// The `args` of `model`.

@@ -71,6 +71,7 @@ pub(crate) fn completed_event(text: &str) -> Event {
         content: vec![ContentPart::Text { text: text.into() }],
         details: None,
         artifact: None,
+        kept: None,
         changes: None,
         control: None,
         changed_by: None,
