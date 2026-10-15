@@ -70,11 +70,15 @@ Go (`raw/go-<model>.json`); `*` marks a row citing another record:
 | `deepseek-v4-flash-vision-exp` | all seven | `raw/go-deepseek-v4-flash-vision-exp.json` |
 | `deepseek-v4-pro` | none shown | `raw/go-deepseek-v4-pro.json`, `raw/zen-deepseek-v4-pro.json` (both blocked) |
 | `deepseek-v4.1-flash` | all seven `*` | `raw/zen-deepseek-v4.1-flash.json` |
+| `glm-5` | none shown | `raw/go-glm-5.json` (`Model is unavailable` at every level) |
+| `glm-5.1` | `minimal`–`max` | `raw/go-glm-5.1.json` (`off` 400: thinking-only model; the error names the GLM-5.3 backend) |
 | `glm-5.2` | `minimal`–`max` | `raw/go-glm-5.2.json` (`off` 400: thinking-only model) |
 | `glm-5.3` | `minimal`–`max` | `raw/go-glm-5.3.json` (reasoning tokens move with the level) |
 | `glm-5.3-flash` | all seven | `raw/go-glm-5.3-flash.json` |
 | `hy3` | all seven | `raw/go-hy3.json` (completion tokens move with the level) |
 | `hy4-preview` | all seven | `raw/go-hy4-preview.json` |
+| `kimi-k2.5` | none shown | `raw/go-kimi-k2.5.json` (`Model is unavailable` at every level) |
+| `kimi-k2.6` | all seven | `raw/go-kimi-k2.6.json` (every level 200s, including `off`) |
 | `kimi-k2.7-code` | `minimal`–`max` | `raw/go-kimi-k2.7-code.json` |
 | `longcat-2.0` | all seven | `raw/go-longcat-2.0.json` |
 | `longcat-2.5-preview-free` | all seven | `raw/go-longcat-2.5-preview-free.json` |
@@ -85,6 +89,8 @@ Go (`raw/go-<model>.json`); `*` marks a row citing another record:
 | `minimax-m2.7` | all seven, on `messages` | `raw/go-minimax-m2.7.json`; `raw/go-minimax-m2.7-completions.json` shows `completions` is `ModelProtocolUnsupported` there, so the table drops the stale override |
 | `minimax-m3` | all seven | `raw/go-minimax-m3.json` (thinking blocks in every reply) |
 | `muse-spark-1.2-contributor` | `minimal`–`xhigh` | `raw/go-muse-spark-1.2-contributor.json` (the route enumerates the set) |
+| `qwen3.5-plus` | none shown | `raw/go-qwen3.5-plus.json` (`Model is unavailable` at every level) |
+| `qwen3.6-plus` | `off`, `low`, `medium`, `high`, `xhigh`, `max` | `raw/go-qwen3.6-plus.json` (`minimal` 400, as on its siblings) |
 | `qwen3.7-plus` | `off`, `low`, `medium`, `high`, `xhigh`, `max` | `raw/go-qwen3.7-plus.json` |
 | `qwen3.8-flash` | `off`, `low`, `medium`, `high`, `xhigh`, `max` | `raw/go-qwen3.8-flash.json` (thinking blocks in every reply) |
 | `qwen3.8-max` | `off`, `low`, `medium`, `high`, `xhigh`, `max` | `raw/go-qwen3.8-max.json` |
@@ -103,12 +109,14 @@ Zen (`raw/zen-<model>.json`):
 | `exo-free` | none shown | `raw/zen-exo-free.json` (deprecated) |
 | `gemini-3-flash` | `minimal`–`high` `*` | Google thinking docs (preview values) + `raw/zen-gemini-3-flash.json` (blocked) |
 | `gemini-3.1-pro` | `low`–`high` `*` | Google thinking docs (preview values) + `raw/zen-gemini-3.1-pro.json` (blocked) |
-| `glm-5`, `glm-5.1` | `minimal`–`max` `*` | `raw/go-glm-5.2.json`, `raw/go-glm-5.3.json` + Zhipu thinking-mode docs |
+| `glm-5` | `minimal`–`max` `*` | unavailable on Go (`raw/go-glm-5.json`), disabled on Zen; mirrors the 5.1–5.3 probes + Zhipu thinking-mode docs |
+| `glm-5.1` | `minimal`–`max` `*` | `raw/go-glm-5.1.json` (same-model Go probe) |
 | `glm-5.2`, `glm-5.3` | `minimal`–`max` `*` | `raw/go-glm-5.2.json`, `raw/go-glm-5.3.json` |
 | `glm-5.3-flash` | `minimal`–`max` | `raw/zen-glm-5.3-flash.json` |
 | `gpt-5-codex`, `gpt-5.1-codex`, `gpt-5.1-codex-max`, `gpt-5.1-codex-mini`, `gpt-5.2-codex` | none shown | `raw/zen-<model>.json` (access disabled) |
 | `grok-build-0.1` | none shown | `raw/zen-grok-build-0.1.json` (access disabled; not in xAI docs) |
-| `kimi-k2.5`, `kimi-k2.6` | `minimal`–`max` `*` | `raw/go-kimi-k2.7-code.json` + Moonshot thinking-models docs |
+| `kimi-k2.5` | `minimal`–`max` `*` | unavailable on Go (`raw/go-kimi-k2.5.json`), disabled on Zen; mirrors the k2.7-code probe + Moonshot thinking-models docs |
+| `kimi-k2.6` | all seven `*` | `raw/go-kimi-k2.6.json` (same-model Go probe) |
 | `kimi-k2.7-code` | `minimal`–`max` `*` | `raw/go-kimi-k2.7-code.json` |
 | `ling-3.0-flash-fin-free`, `ling-3.1-flash-free` | none shown | `raw/zen-<model>.json` (unavailable) |
 | `longcat-2.5-preview-free` | all seven `*` | `raw/go-longcat-2.5-preview-free.json` |
@@ -118,7 +126,8 @@ Zen (`raw/zen-<model>.json`):
 | `muse-spark-1.2` | `minimal`–`xhigh` `*` | `raw/go-muse-spark-1.2-contributor.json` |
 | `muse-spark-1.3-contributor-free` | `minimal`–`max` `*` | the 1.3 family rows (vendor + both gateways) + `raw/zen-muse-spark-1.3-contributor-free.json` (blocked) |
 | `nemotron-3-ultra-free`, `nemotron-3.5-lightning-free` | none shown | `raw/zen-<model>.json` (free tier) |
-| `qwen3.5-plus`, `qwen3.6-plus` | `off`, `low`, `medium`, `high`, `xhigh`, `max` `*` | `raw/go-qwen3.7-plus.json`, `raw/go-qwen3.8-flash.json` and the two Zen Qwen probes |
+| `qwen3.5-plus` | `off`, `low`, `medium`, `high`, `xhigh`, `max` `*` | unavailable on Go (`raw/go-qwen3.5-plus.json`), disabled on Zen; mirrors the probed Qwen siblings |
+| `qwen3.6-plus` | `off`, `low`, `medium`, `high`, `xhigh`, `max` `*` | `raw/go-qwen3.6-plus.json` (same-model Go probe) |
 | `qwen3.8-flash` | `off`, `low`, `medium`, `high`, `xhigh`, `max` | `raw/zen-qwen3.8-flash.json` |
 | `qwen3.8-max` | `off`, `low`, `medium`, `high`, `xhigh`, `max` | `raw/zen-qwen3.8-max.json` |
 | `space-bunny-free` | `minimal`–`max` `*` | `raw/go-space-bunny.json` |

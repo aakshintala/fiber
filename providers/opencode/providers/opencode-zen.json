@@ -501,6 +501,7 @@
       "protocol": "openai-completions",
       "thinking_levels": [
         "off",
+        "minimal",
         "low",
         "medium",
         "high",
@@ -530,6 +531,7 @@
       "protocol": "openai-completions",
       "thinking_levels": [
         "off",
+        "minimal",
         "low",
         "medium",
         "high",
@@ -580,6 +582,7 @@
       "protocol": "openai-completions",
       "thinking_levels": [
         "off",
+        "minimal",
         "low",
         "medium",
         "high",
@@ -1821,6 +1824,7 @@
       "name": "Kimi K2.6",
       "protocol": "openai-completions",
       "thinking_levels": [
+        "off",
         "minimal",
         "low",
         "medium",
@@ -1948,6 +1952,7 @@
       "protocol": "openai-completions",
       "thinking_levels": [
         "off",
+        "minimal",
         "low",
         "medium",
         "high",

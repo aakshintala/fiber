@@ -64,6 +64,7 @@
       "subscription": true,
       "thinking_levels": [
         "off",
+        "minimal",
         "low",
         "medium",
         "high",
@@ -94,6 +95,7 @@
       "subscription": true,
       "thinking_levels": [
         "off",
+        "minimal",
         "low",
         "medium",
         "high",
@@ -146,6 +148,7 @@
       "subscription": true,
       "thinking_levels": [
         "off",
+        "minimal",
         "low",
         "medium",
         "high",
@@ -234,6 +237,7 @@
       "subscription": true,
       "thinking_levels": [
         "off",
+        "minimal",
         "low",
         "medium",
         "high",
@@ -413,6 +417,7 @@
       "subscription": true,
       "thinking_levels": [
         "off",
+        "minimal",
         "low",
         "medium",
         "high",
@@ -442,6 +447,7 @@
       "subscription": true,
       "thinking_levels": [
         "off",
+        "minimal",
         "low",
         "medium",
         "high",
@@ -528,6 +534,7 @@
       "subscription": true,
       "thinking_levels": [
         "off",
+        "minimal",
         "low",
         "medium",
         "high",
@@ -558,6 +565,7 @@
       "subscription": true,
       "thinking_levels": [
         "off",
+        "minimal",
         "low",
         "medium",
         "high",
@@ -588,6 +596,7 @@
       "subscription": true,
       "thinking_levels": [
         "off",
+        "minimal",
         "low",
         "medium",
         "high",
@@ -703,6 +712,7 @@
       "subscription": true,
       "thinking_levels": [
         "off",
+        "minimal",
         "low",
         "medium",
         "high",
@@ -741,6 +751,7 @@
       "subscription": true,
       "thinking_levels": [
         "off",
+        "minimal",
         "low",
         "medium",
         "high",

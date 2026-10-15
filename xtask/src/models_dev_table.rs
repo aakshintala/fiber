@@ -57,6 +57,8 @@ pub(crate) struct Package {
 /// The level sets the thinking tables share, each in vocabulary order.
 const OFF_LOW_MEDIUM_HIGH_MAX: &[&str] = &["off", "low", "medium", "high", "max"];
 const OFF_LOW_MEDIUM_HIGH_XHIGH_MAX: &[&str] = &["off", "low", "medium", "high", "xhigh", "max"];
+const OFF_MINIMAL_LOW_MEDIUM_HIGH_XHIGH_MAX: &[&str] =
+    &["off", "minimal", "low", "medium", "high", "xhigh", "max"];
 const OFF_LOW_MEDIUM_HIGH: &[&str] = &["off", "low", "medium", "high"];
 const OFF_HIGH: &[&str] = &["off", "high"];
 /// No thinking level: the model takes none that could be shown, so Fiber
@@ -325,9 +327,10 @@ const OPENCODE_GO: Package = Package {
     drop_deprecated: true,
     skip: &[],
     only: &[],
-    // No overrides: minimax-m2.7 once forced openai-completions, but the
-    // route rejects that protocol and speaks anthropic-messages, which
-    // ByNpm already gives it (research/opencode-thinking/README.md).
+    // No overrides: minimax-m2.7 speaks anthropic-messages on this route
+    // (raw/go-minimax-m2.7.json 200s every level there, while
+    // raw/go-minimax-m2.7-completions.json answers ModelProtocolUnsupported),
+    // which ByNpm already gives it from its `@ai-sdk/anthropic` npm field.
     protocol_overrides: &[],
     every_model: r#"{"subscription":true}"#,
     by_protocol: &[
@@ -342,11 +345,15 @@ const OPENCODE_GO: Package = Package {
     thinking: &[
         // DeepSeek's legacy names are served by DeepSeek-V4.1-Flash
         // (https://api-docs.deepseek.com/); the record below probed it.
-        ("deepseek-v4-flash", OFF_LOW_MEDIUM_HIGH_XHIGH_MAX, None),
+        (
+            "deepseek-v4-flash",
+            OFF_MINIMAL_LOW_MEDIUM_HIGH_XHIGH_MAX,
+            None,
+        ),
         // research/opencode-thinking/raw/go-deepseek-v4-flash-vision-exp.json
         (
             "deepseek-v4-flash-vision-exp",
-            OFF_LOW_MEDIUM_HIGH_XHIGH_MAX,
+            OFF_MINIMAL_LOW_MEDIUM_HIGH_XHIGH_MAX,
             None,
         ),
         // No level could be shown: both routes block this model, so Fiber
@@ -356,7 +363,11 @@ const OPENCODE_GO: Package = Package {
         // research/opencode-thinking/raw/zen-deepseek-v4.1-flash.json: the
         // Go route needs Global regions, so the Go row cites the Zen probe
         // of the same model.
-        ("deepseek-v4.1-flash", OFF_LOW_MEDIUM_HIGH_XHIGH_MAX, None),
+        (
+            "deepseek-v4.1-flash",
+            OFF_MINIMAL_LOW_MEDIUM_HIGH_XHIGH_MAX,
+            None,
+        ),
         // research/opencode-thinking/raw/go-glm-5.2.json (`off` is
         // rejected: a thinking-only model).
         ("glm-5.2", MINIMAL_LOW_MEDIUM_HIGH_XHIGH_MAX, None),
@@ -364,16 +375,16 @@ const OPENCODE_GO: Package = Package {
         // move with the level).
         ("glm-5.3", MINIMAL_LOW_MEDIUM_HIGH_XHIGH_MAX, None),
         // research/opencode-thinking/raw/go-glm-5.3-flash.json
-        ("glm-5.3-flash", OFF_LOW_MEDIUM_HIGH_XHIGH_MAX, None),
+        ("glm-5.3-flash", OFF_MINIMAL_LOW_MEDIUM_HIGH_XHIGH_MAX, None),
         // https://docs.x.ai/developers/model-capabilities/text/reasoning:
         // `reasoning.effort` takes low, medium, high and xhigh (4.6 and
         // later); reasoning cannot be disabled, so no `off`.
         ("grok-4.6", LOW_MEDIUM_HIGH_XHIGH, None),
         ("grok-4.7", LOW_MEDIUM_HIGH_XHIGH, None),
         // research/opencode-thinking/raw/go-hy3.json
-        ("hy3", OFF_LOW_MEDIUM_HIGH_XHIGH_MAX, None),
+        ("hy3", OFF_MINIMAL_LOW_MEDIUM_HIGH_XHIGH_MAX, None),
         // research/opencode-thinking/raw/go-hy4-preview.json
-        ("hy4-preview", OFF_LOW_MEDIUM_HIGH_XHIGH_MAX, None),
+        ("hy4-preview", OFF_MINIMAL_LOW_MEDIUM_HIGH_XHIGH_MAX, None),
         // research/opencode-thinking/raw/go-kimi-k2.7-code.json
         ("kimi-k2.7-code", MINIMAL_LOW_MEDIUM_HIGH_XHIGH_MAX, None),
         // https://platform.moonshot.ai/docs/guide/use-reasoning-effort:
@@ -381,15 +392,15 @@ const OPENCODE_GO: Package = Package {
         // supporting low, high and max with a max default.
         ("kimi-k3", LOW_HIGH_MAX, None),
         // research/opencode-thinking/raw/go-longcat-2.0.json
-        ("longcat-2.0", OFF_LOW_MEDIUM_HIGH_XHIGH_MAX, None),
+        ("longcat-2.0", OFF_MINIMAL_LOW_MEDIUM_HIGH_XHIGH_MAX, None),
         // research/opencode-thinking/raw/go-longcat-2.5-preview-free.json
         (
             "longcat-2.5-preview-free",
-            OFF_LOW_MEDIUM_HIGH_XHIGH_MAX,
+            OFF_MINIMAL_LOW_MEDIUM_HIGH_XHIGH_MAX,
             None,
         ),
         // research/opencode-thinking/raw/go-mimo-v2.5.json
-        ("mimo-v2.5", OFF_LOW_MEDIUM_HIGH_XHIGH_MAX, None),
+        ("mimo-v2.5", OFF_MINIMAL_LOW_MEDIUM_HIGH_XHIGH_MAX, None),
         // research/opencode-thinking/raw/go-mimo-v2.5-pro.json: upstream
         // enumerates none, low, medium, high (plus max, accepted).
         ("mimo-v2.5-pro", OFF_LOW_MEDIUM_HIGH_MAX, None),
@@ -399,9 +410,9 @@ const OPENCODE_GO: Package = Package {
         ("mimo-v2.6-pro", OFF_LOW_MEDIUM_HIGH_MAX, None),
         // research/opencode-thinking/raw/go-minimax-m2.7.json (messages;
         // completions is unsupported there).
-        ("minimax-m2.7", OFF_LOW_MEDIUM_HIGH_XHIGH_MAX, None),
+        ("minimax-m2.7", OFF_MINIMAL_LOW_MEDIUM_HIGH_XHIGH_MAX, None),
         // research/opencode-thinking/raw/go-minimax-m3.json
-        ("minimax-m3", OFF_LOW_MEDIUM_HIGH_XHIGH_MAX, None),
+        ("minimax-m3", OFF_MINIMAL_LOW_MEDIUM_HIGH_XHIGH_MAX, None),
         // research/opencode-thinking/raw/go-muse-spark-1.2-contributor.json:
         // the route enumerates minimal through xhigh.
         (
@@ -409,7 +420,7 @@ const OPENCODE_GO: Package = Package {
             MINIMAL_LOW_MEDIUM_HIGH_XHIGH,
             None,
         ),
-        // Normalized from `by_model`: the vendor's own row, kept verbatim.
+        // Same levels as the vendor muse package's row for this id.
         (
             "muse-spark-1.3-contributor",
             MINIMAL_LOW_MEDIUM_HIGH_XHIGH_MAX,
@@ -476,13 +487,17 @@ const OPENCODE_ZEN: Package = Package {
         ("claude-sonnet-4", OFF_MINIMAL_LOW_MEDIUM_HIGH, None),
         // DeepSeek's legacy names are served by DeepSeek-V4.1-Flash
         // (https://api-docs.deepseek.com/); the record below probed it.
-        ("deepseek-v4-flash", OFF_LOW_MEDIUM_HIGH_XHIGH_MAX, None),
+        (
+            "deepseek-v4-flash",
+            OFF_MINIMAL_LOW_MEDIUM_HIGH_XHIGH_MAX,
+            None,
+        ),
         // research/opencode-thinking/raw/go-deepseek-v4-flash-vision-exp.json:
         // Zen keeps this model disabled, so the row cites the Go probe of
         // the same model.
         (
             "deepseek-v4-flash-vision-exp",
-            OFF_LOW_MEDIUM_HIGH_XHIGH_MAX,
+            OFF_MINIMAL_LOW_MEDIUM_HIGH_XHIGH_MAX,
             None,
         ),
         // No level could be shown: both routes block this model, so Fiber
@@ -490,7 +505,11 @@ const OPENCODE_ZEN: Package = Package {
         // and raw/go-deepseek-v4-pro.json).
         ("deepseek-v4-pro", NO_LEVELS, None),
         // research/opencode-thinking/raw/zen-deepseek-v4.1-flash.json
-        ("deepseek-v4.1-flash", OFF_LOW_MEDIUM_HIGH_XHIGH_MAX, None),
+        (
+            "deepseek-v4.1-flash",
+            OFF_MINIMAL_LOW_MEDIUM_HIGH_XHIGH_MAX,
+            None,
+        ),
         // No level could be shown: the route retired this model
         // (research/opencode-thinking/raw/zen-exo-free.json).
         ("exo-free", NO_LEVELS, None),
@@ -502,11 +521,14 @@ const OPENCODE_ZEN: Package = Package {
         // for the preview of the same model; the GA model stays disabled on
         // Zen (research/opencode-thinking/raw/zen-gemini-3.1-pro.json).
         ("gemini-3.1-pro", LOW_MEDIUM_HIGH, None),
-        // The Zen account keeps GLM-5 and 5.1 disabled, so these rows mirror
-        // the Go-route probes of the same-backend 5.2 and 5.3, beside the
-        // Zhipu thinking-mode docs
-        // (https://docs.z.ai/guides/capabilities/thinking-mode).
+        // research/opencode-thinking/raw/go-glm-5.json: the model is
+        // unavailable on Go and disabled on Zen, so this row mirrors the
+        // same-backend 5.2 and 5.3 probes beside the Zhipu thinking-mode
+        // docs (https://docs.z.ai/guides/capabilities/thinking-mode).
         ("glm-5", MINIMAL_LOW_MEDIUM_HIGH_XHIGH_MAX, None),
+        // research/opencode-thinking/raw/go-glm-5.1.json: Zen keeps this
+        // model disabled, so the row cites the Go probe of the same model
+        // (`minimal` through `max`; `off` is rejected: a thinking-only model).
         ("glm-5.1", MINIMAL_LOW_MEDIUM_HIGH_XHIGH_MAX, None),
         // research/opencode-thinking/raw/go-glm-5.2.json: Zen keeps this
         // model disabled, so the row cites the Go probe of the same model.
@@ -535,12 +557,15 @@ const OPENCODE_ZEN: Package = Package {
         ("grok-4.5", LOW_MEDIUM_HIGH, None),
         ("grok-4.6", LOW_MEDIUM_HIGH_XHIGH, None),
         ("grok-4.7", LOW_MEDIUM_HIGH_XHIGH, None),
-        // The Zen account keeps Kimi K2.5 and K2.6 disabled, so these rows
-        // mirror the Go-route probe of the same-backend k2.7-code, beside
-        // the Moonshot thinking-models docs
-        // (https://platform.moonshot.ai/docs/guide/use-thinking-models).
+        // research/opencode-thinking/raw/go-kimi-k2.5.json: the model is
+        // unavailable on Go and disabled on Zen, so this row mirrors the
+        // same-backend k2.7-code probe beside the Moonshot thinking-models
+        // docs (https://platform.moonshot.ai/docs/guide/use-thinking-models).
         ("kimi-k2.5", MINIMAL_LOW_MEDIUM_HIGH_XHIGH_MAX, None),
-        ("kimi-k2.6", MINIMAL_LOW_MEDIUM_HIGH_XHIGH_MAX, None),
+        // research/opencode-thinking/raw/go-kimi-k2.6.json: Zen keeps this
+        // model disabled, so the row cites the Go probe of the same model
+        // (every level 200s, including `off`).
+        ("kimi-k2.6", OFF_MINIMAL_LOW_MEDIUM_HIGH_XHIGH_MAX, None),
         // research/opencode-thinking/raw/go-kimi-k2.7-code.json: Zen keeps
         // this model disabled, so the row cites the Go probe of the same
         // model.
@@ -559,7 +584,7 @@ const OPENCODE_ZEN: Package = Package {
         // cites the Go probe of the same model.
         (
             "longcat-2.5-preview-free",
-            OFF_LOW_MEDIUM_HIGH_XHIGH_MAX,
+            OFF_MINIMAL_LOW_MEDIUM_HIGH_XHIGH_MAX,
             None,
         ),
         // research/opencode-thinking/raw/go-mimo-v2.6-flash.json: the free
@@ -581,7 +606,7 @@ const OPENCODE_ZEN: Package = Package {
         // Zen keeps 1.2 disabled, so the row cites the Go probe of the same
         // generation's contributor tier.
         ("muse-spark-1.2", MINIMAL_LOW_MEDIUM_HIGH_XHIGH, None),
-        // Normalized from `by_model`: the vendor's own row, kept verbatim.
+        // Same levels as the vendor muse package's row for this id.
         ("muse-spark-1.3", MINIMAL_LOW_MEDIUM_HIGH_XHIGH_MAX, None),
         // The 1.3 family takes minimal through max on both routes; the free
         // tier answers only inside OpenCode on Zen
@@ -596,9 +621,13 @@ const OPENCODE_ZEN: Package = Package {
         // and raw/zen-nemotron-3.5-lightning-free.json).
         ("nemotron-3-ultra-free", NO_LEVELS, None),
         ("nemotron-3.5-lightning-free", NO_LEVELS, None),
-        // The Zen account keeps Qwen 3.5 and 3.6 Plus disabled, so these
-        // rows mirror the probed Qwen siblings on both routes.
+        // research/opencode-thinking/raw/go-qwen3.5-plus.json: the model is
+        // unavailable on Go and disabled on Zen, so this row mirrors the
+        // probed Qwen siblings on both routes.
         ("qwen3.5-plus", OFF_LOW_MEDIUM_HIGH_XHIGH_MAX, None),
+        // research/opencode-thinking/raw/go-qwen3.6-plus.json: Zen keeps
+        // this model disabled, so the row cites the Go probe of the same
+        // model (`minimal` is rejected there, as on its siblings).
         ("qwen3.6-plus", OFF_LOW_MEDIUM_HIGH_XHIGH_MAX, None),
         // research/opencode-thinking/raw/zen-qwen3.8-flash.json
         ("qwen3.8-flash", OFF_LOW_MEDIUM_HIGH_XHIGH_MAX, None),
