@@ -44,25 +44,76 @@ fn script(setup: &Setup) {
     );
 }
 
-/// The sized band's row, its content columns and its sizes column:
-/// the row holds "402k → 32k", the sizes cells read bold and the row
-/// reads on the handoff tint. Every property the test asserts is
-/// checked here, so a partial redraw cannot satisfy the wait.
+/// The sized band's row, its content columns and its sizes column.
+/// Every cell property the test asserts — the arrow and the trigger
+/// text, each span's foreground, bold and dim, the clock's shape, the
+/// right padding, the handoff tint and both edges — is checked here,
+/// so a partial redraw cannot satisfy the wait.
 fn band_cells(grid: &Grid) -> Option<(u16, usize, usize, usize)> {
     let band = find_row(&grid.rows, "402k → 32k")?;
+    let top_y = band.checked_sub(1)?;
+    let below_y = band.checked_add(1)?;
+    if below_y as usize >= grid.rows.len() {
+        return None;
+    }
     // The content columns from the edge run above.
-    let above = row_text(grid, band.checked_sub(1)?, 160);
+    let above = row_text(grid, top_y, 160);
     let first = above.find('▄')?;
     let left = above[..first].chars().count();
     let last = above.rfind('▄')?;
     let right = above[..last].chars().count();
     let text = row_text(grid, band, 160);
+    // Left to right: " ⇄ ", "handoff", then the trigger after " · ".
+    let head = " ⇄ handoff · automatic at 400k";
+    let content: String = text.chars().skip(left).take(right - left + 1).collect();
+    if !content.starts_with(head) || content.chars().count() != right - left + 1 {
+        return None;
+    }
+    // " ⇄ " and "handoff" in secondary and bold; the trigger dim.
+    let secondary = |col: usize| grid.cell(col as u16, band).fg == SECONDARY;
+    let bold = |col: usize| grid.cell(col as u16, band).bold;
+    if !(left..left + 10).all(|col| secondary(col) && bold(col)) {
+        return None;
+    }
+    if !(left + 10..left + 30).all(|col| grid.cell(col as u16, band).dim) {
+        return None;
+    }
+    // Right-aligned, the sizes bold and the clock dim; the clock reads
+    // digits and a colon only, and the row ends in its blank padding.
     let at = text.find("402k → 32k")?;
     let sizes_at = text[..at].chars().count();
-    // The sizes read bold on the handoff tint.
-    let bold = grid.cell(sizes_at as u16, band).bold;
-    let tint = (left..=right).all(|col| grid.cell(col as u16, band).bg == HANDOFF);
-    (bold && tint).then_some((band, left, right, sizes_at))
+    let tail: String = text.chars().skip(sizes_at + 10).collect();
+    if !tail.starts_with(" · ") || !tail.ends_with(' ') {
+        return None;
+    }
+    let clock: String = tail.chars().skip(3).take(5).collect();
+    if !is_clock(&clock) || sizes_at + 18 != right {
+        return None;
+    }
+    if !(sizes_at..sizes_at + 10).all(|col| grid.cell(col as u16, band).bold) {
+        return None;
+    }
+    if !(sizes_at + 10..sizes_at + 19).all(|col| grid.cell(col as u16, band).dim) {
+        return None;
+    }
+    if grid.cell(right as u16, band).symbol.as_str() != " " {
+        return None;
+    }
+    // The content row sits on the handoff tint; half-block edges over
+    // the default background wrap it above and below.
+    if !(left..=right).all(|col| grid.cell(col as u16, band).bg == HANDOFF) {
+        return None;
+    }
+    let edges = [(top_y, "▄"), (below_y, "▀")];
+    if !edges.iter().all(|(row, want)| {
+        (left..=right).all(|col| {
+            let cell = grid.cell(col as u16, *row);
+            cell.symbol.as_str() == *want && cell.fg == HANDOFF && cell.bg == Colour::Default
+        })
+    }) {
+        return None;
+    }
+    Some((band, left, right, sizes_at))
 }
 
 /// The first row containing `needle`.
@@ -162,9 +213,23 @@ fn the_handoff_band_matches_the_doc() {
     }
     // The card above the band and a second card below it both sit on
     // the turn tint; the ▣ line closes the turn once, below the band.
-    // The close lands after the sized band, so it gets its own wait.
+    // The close lands after the sized band, so it gets its own wait:
+    // one ▣ line below the band, none above, both cards on the turn
+    // tint, every property the close assertions read.
     let grid = run.wait_screen("the closed turn", |grid| {
-        band_cells(grid).is_some() && grid.rows.iter().any(|row| row.contains('▣'))
+        let Some((band, left, _, _)) = band_cells(grid) else {
+            return false;
+        };
+        if left + 1 >= 160 {
+            return false;
+        }
+        let closings: Vec<u16> = (0..48)
+            .filter(|y| row_text(grid, *y, 160).contains('▣'))
+            .collect();
+        closings.len() == 1
+            && closings[0] > band
+            && (0..band).any(|y| grid.cell(left as u16 + 1, y).bg == TURN)
+            && grid.cell(left as u16 + 1, closings[0]).bg == TURN
     });
     let (band, left, _right, _) = band_cells(&grid).expect("the sized band");
     let left = left as u16;

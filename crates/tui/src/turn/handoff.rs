@@ -193,9 +193,11 @@ impl Band {
     /// while the note is being written: the "●" that survives the fit,
     /// or `None` when the cut removes it.
     fn band_row(&self, max: usize, zone: &jiff::tz::TimeZone) -> (Vec<Span<'static>>, Option<u16>) {
+        // " ⇄ " and "handoff" read bold in secondary
+        // (`docs/tui.md`, "Handoff").
         let handoff = style(Role::Secondary).add_modifier(Modifier::BOLD);
         let left = vec![
-            Span::styled(" ⇄ ".to_owned(), style(Role::Secondary)),
+            Span::styled(" ⇄ ".to_owned(), handoff),
             Span::styled("handoff".to_owned(), handoff),
             dim_span(format!(" · {}", self.trigger)),
         ];

@@ -122,31 +122,37 @@ fn notice_row(code: &str, text: &str, width: usize) -> Line<'static> {
         (head, format!("{tail}{}", " ".repeat(fill)))
     } else if head_width < room {
         // The message is cut with one "…"; the code keeps its columns.
+        // A wide glyph at the cut can leave the cut short of its
+        // budget, so the pad fills it: the ✕ stays in the last column.
         let kept = format::cut(&tail, room - head_width - 1);
-        (head, format!("{kept}…"))
+        let cut = format!("{kept}…");
+        let fill = room - head_width - format::width(&cut);
+        (head, format!("{cut}{}", " ".repeat(fill)))
     } else {
-        // Even the code does not fit: it is cut with one "…".
+        // Even the code does not fit: it is cut with one "…", padded
+        // the same way.
         let kept = if room > 0 {
-            format!("{}…", format::cut(&head, room - 1))
+            let cut = format!("{}…", format::cut(&head, room - 1));
+            format!("{cut}{}", " ".repeat(room - format::width(&cut)))
         } else {
             String::new()
         };
         (kept, String::new())
     };
+    let dim = Style::default().add_modifier(Modifier::DIM);
     let mut spans = vec![
         Span::styled(head, style(Role::Attention)),
-        Span::styled(tail, Style::default().add_modifier(Modifier::DIM)),
+        Span::styled(tail, dim),
     ];
     if width >= 2 {
-        spans.push(Span::styled(" ".to_owned(), dim()));
+        spans.push(Span::styled(" ".to_owned(), dim));
     }
     if width >= 1 {
-        spans.push(Span::styled("✕".to_owned(), dim()));
+        spans.push(Span::styled("✕".to_owned(), dim));
     }
     Line::from(spans)
 }
 
-/// The dim style of a notice row's message and ✕.
-fn dim() -> Style {
-    Style::default().add_modifier(Modifier::DIM)
-}
+#[cfg(test)]
+#[path = "notice_rows_tests.rs"]
+mod tests;

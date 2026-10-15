@@ -452,9 +452,12 @@ fn the_band_row_styles_each_part() {
     let app = sized_auto();
     let line = band_line(&app);
     let bold = Modifier::BOLD;
-    // " ⇄ " and "handoff" in secondary, "handoff" bold.
+    // " ⇄ " and "handoff" in secondary, both bold.
     assert_eq!(line.spans[0].content, " ⇄ ");
-    assert_eq!(line.spans[0].style, style(Role::Secondary));
+    assert_eq!(
+        line.spans[0].style,
+        style(Role::Secondary).add_modifier(bold)
+    );
     assert_eq!(line.spans[1].content, "handoff");
     assert_eq!(
         line.spans[1].style,
