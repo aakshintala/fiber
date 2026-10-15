@@ -1379,6 +1379,15 @@ pub(super) fn members_with_tools() -> Members {
         },
     );
     members.insert(
+        "provider".to_owned(),
+        Member {
+            dir: "crates/provider".to_owned(),
+            version: "0.0.0".to_owned(),
+            deps: Vec::new(),
+            library: true,
+        },
+    );
+    members.insert(
         "xtask".to_owned(),
         Member {
             dir: "xtask".to_owned(),

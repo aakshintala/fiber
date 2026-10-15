@@ -56,6 +56,15 @@ fn main_src(source: &str) -> RustFile {
     }
 }
 
+fn provider_src(source: &str) -> RustFile {
+    RustFile {
+        krate: "provider".to_owned(),
+        path: "crates/provider/src/error_tests.rs".to_owned(),
+        rel: "src/error_tests.rs".to_owned(),
+        source: source.to_owned(),
+    }
+}
+
 fn extensions_src(source: &str) -> RustFile {
     RustFile {
         krate: "extensions".to_owned(),
@@ -95,6 +104,7 @@ fn listed_files() -> Vec<RustFile> {
         tui_src(&listed_includes("tui")),
         xtask_src(&listed_includes("xtask")),
         main_src(&listed_includes("main")),
+        provider_src(&listed_includes("provider")),
     ]
 }
 
