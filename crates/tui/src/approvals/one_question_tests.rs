@@ -1221,3 +1221,30 @@ fn answering_a_select_from_chat_sends_nothing_and_keeps_it_waiting() {
     assert!(queue.open());
     assert_eq!(header(&queue), before);
 }
+
+#[test]
+fn a_non_digit_key_never_moves_the_cursor_to_an_option() {
+    // ':' is the code past '9' that maps to the tenth option's index, so a
+    // key that is not a digit must still do nothing.
+    let choices: Vec<Choice> = (1..=10).map(|n| choice(&format!("opt{n}"), None)).collect();
+    let mut question = OneQuestion::select("Pick one?".to_owned(), choices);
+    let before = lines(&question);
+    let before_answer = answer(&question);
+    assert_eq!(question.on_key(&Key::Char(':')), Some(PanelKey::Handled));
+    assert_eq!(lines(&question), before);
+    assert_eq!(answer(&question), before_answer);
+}
+
+#[test]
+fn the_words_row_scrolls_so_the_caret_stays_inside_the_width() {
+    // Ten words after a six-cell prefix fill 16 columns exactly. The caret
+    // needs one cell past them, so the row drops the first word.
+    let mut question = OneQuestion::text_input("Words?".to_owned());
+    type_text(&mut question, "abcdefghij");
+    let width = crate::format::width("▸ 1 ✎ ") + 10;
+    let shown = question.panel(&title(), u16::try_from(width).unwrap_or(u16::MAX));
+    assert_eq!(
+        shown.lines.get(4).map(String::as_str),
+        Some("▸ 1 ✎ bcdefghij")
+    );
+}

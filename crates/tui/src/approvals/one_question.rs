@@ -502,11 +502,7 @@ fn clipped_row(built: &mut Builder, segments: &[(&str, Style)], cols: usize) -> 
         .map(|(text, style)| (clean(text), *style))
         .collect();
     let full: String = cleaned.iter().map(|(text, _)| text.as_str()).collect();
-    let drawn = if measure(&full) > cols {
-        cut(&full, cols)
-    } else {
-        full
-    };
+    let drawn = cut(&full, cols);
     let mut rest = drawn.len();
     let mut kept: Vec<(&str, Style)> = Vec::with_capacity(cleaned.len());
     for (text, style) in &cleaned {

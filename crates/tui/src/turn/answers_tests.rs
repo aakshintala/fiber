@@ -579,6 +579,27 @@ fn a_page_loaded_from_history_draws_the_same_card() {
 }
 
 #[test]
+fn the_rule_fill_is_decoration_so_its_dashes_are_no_answer_text() {
+    let mut app = app();
+    feed(&mut app, asking());
+    feed(
+        &mut app,
+        [
+            resolved("r_4f", "person", answers()),
+            completed("a_1", "completed", 4000),
+        ],
+    );
+    let pages = app.pages();
+    let rules: Vec<String> = (0..pages.page_count())
+        .filter_map(|at| pages.page_text_open(at))
+        .flat_map(|(rows, texts)| crate::logical::logical(&rows, &texts))
+        .map(|line| line.text)
+        .filter(|text| text.trim_start().starts_with("you answered"))
+        .collect();
+    assert_eq!(rules, vec!["you answered · 00:00".to_owned()]);
+}
+
+#[test]
 fn fold_reports_a_change() {
     let mut again = form("r_4f", &["a_1"], fields());
     again.payload.insert("resumes".to_owned(), json!(true));

@@ -1580,3 +1580,9 @@ fn a_one_question_title_has_no_count() {
         ]
     );
 }
+
+#[test]
+fn two_one_question_titles_show_their_place() {
+    let queue = folded(&[confirm_asked(S_A, "r_c1"), confirm_asked(S_A, "r_c2")]);
+    assert_eq!(header(&queue), question_title(S_A, None, Some((1, 2))));
+}

@@ -122,11 +122,7 @@ impl Answered {
                 if dashes > 0 {
                     spans.push(Span::styled("─".repeat(dashes), style(Role::Rule)));
                 }
-                let tail = if dashes > 0 {
-                    dashes.saturating_add(1)
-                } else {
-                    0
-                };
+                let tail = dashes.saturating_add(1);
                 out.push_text(
                     (Line::from(spans), None),
                     RowText {
