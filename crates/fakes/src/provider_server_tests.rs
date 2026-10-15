@@ -1239,7 +1239,7 @@ fn busy_shaped_posts_sleep_only_when_idle() {
                     passed += 1;
                     drained = true;
                 } else {
-                    panic!("only the body or the drain parks before the reply, got {phase}");
+                    panic!("only BODY, DRAIN or REPLY follow the body pass, got {phase}");
                 }
                 if replied && drained {
                     break;
@@ -1279,7 +1279,7 @@ fn busy_shaped_posts_sleep_only_when_idle() {
     );
     assert!(
         held.try_recv().is_err(),
-        "a second DRAIN note arrived after the last call"
+        "no held note is left after shutdown"
     );
 }
 
