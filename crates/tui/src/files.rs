@@ -413,7 +413,9 @@ impl Search {
                 let cancelled = || newest.load(Ordering::Relaxed) != generation;
                 let result = match split(&query) {
                     Query::Workspace(seek) => {
-                        if listed.is_none() && let Some(list) = listing.take() {
+                        if listed.is_none()
+                            && let Some(list) = listing.take()
+                        {
                             listed = Some(list());
                         }
                         match &listed {
