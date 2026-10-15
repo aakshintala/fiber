@@ -795,6 +795,7 @@ fn samples() -> Vec<(&'static str, Value)> {
             "command_accepted",
             json!({"command_id": "c", "result": {"text": "z\n", "size": 9000}}),
         ),
+        ("command_accepted", json!({"command_id": "c", "result": {"last_seq": 41}})),
         ("command_accepted", json!({"command_id": "c"})),
         (
             "command_rejected",
@@ -1231,6 +1232,18 @@ fn result_of(payload: Value) -> CommandResult {
         panic!("not a command_accepted");
     };
     accepted.result.expect("a result")
+}
+
+#[test]
+fn a_subscribe_result_names_the_last_fold_line() {
+    assert_eq!(
+        result_of(json!({"command_id": "c", "result": {"last_seq": 41}})),
+        CommandResult::Subscribe { last_seq: crate::Seq(41) }
+    );
+    let Some(Event::CommandAccepted(accepted)) = read("command_accepted", json!({"command_id": "c"})).unwrap() else {
+        panic!("not an acceptance");
+    };
+    assert_eq!(accepted.result, None);
 }
 
 #[test]
