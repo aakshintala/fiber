@@ -38,6 +38,10 @@ const TICK: Duration = Duration::from_millis(5);
 /// Thirty seconds of fake time: the foreground move point.
 const THIRTY: Duration = Duration::from_secs(30);
 
+/// A terminal's first-output wait (`crates/tools/src/shell/tty.rs`): the
+/// test advances past it only once the drive parks there.
+const FIRST_OUTPUT: Duration = Duration::from_millis(250);
+
 /// One closed `jobs.start` scope: the operation, the tool (always none),
 /// the whole milliseconds its guard held, and how many jobs were recorded
 /// when it closed.
@@ -409,6 +413,9 @@ fn run_in_background_times_adoption_setup_only() {
     // its `exec` still carries the marker's command line.
     let child = ready.wait(STEP);
     assert!(!child.is_empty(), "the job's shell acknowledged its start");
+    // The marker cannot match an exec'd child on Linux, so the group is
+    // watched by id: the pid is the group id after `setsid`.
+    let _group = Watchdog::group(child[0]);
     let groups = process_groups(&child);
     assert_eq!(
         groups.len(),
@@ -441,9 +448,10 @@ fn tty_times_the_start_before_the_first_output_wait() {
     holding.arm();
     let shell = fixture.shell(holding);
     let command = format!(": {marker}; echo out; sleep 60");
-    let (_ids, output_rx) = run_async(shell, args(&command, "tty"), CancelToken::new());
+    let (id_rx, output_rx) = run_async(shell, args(&command, "tty"), CancelToken::new());
     through_open(&fixture, &reached, &release);
     let deadline = Deadline::after(STEP);
+    let call_thread = deadline.recv_or_fail(&id_rx, "the drive thread");
     // The record arrives while the call is still waiting for its first
     // output: the result has not answered.
     let record = closed(&fixture.records, deadline);
@@ -453,9 +461,15 @@ fn tty_times_the_start_before_the_first_output_wait() {
         output_rx.try_recv().is_err(),
         "the start closed before the receipt wait"
     );
-    // The frozen clock holds the first-output wait: moving past it lets
-    // the receipt finish.
-    fixture.clock.advance(Duration::from_millis(300));
+    // The frozen clock holds the first-output wait: advancing past it,
+    // once the drive parks there, lets the receipt finish. The thread is
+    // named, because the job's own drive thread parks on this clock too.
+    fixture.clock.advance_when_parked(
+        Some(fixture.origin + TICK + FIRST_OUTPUT),
+        Some(call_thread),
+        FIRST_OUTPUT,
+        &deadline,
+    );
     let output = deadline.recv_or_fail(&output_rx, "the receipt");
     let job = started(&output);
     assert!(output.error.is_none(), "{}", text(&output));
@@ -784,23 +798,30 @@ fn a_foreground_call_cancelled_before_it_moves_writes_nothing() {
     );
     // The fifo lives in the workspace, the call's own workdir, so the
     // relative name resolves there and the description keeps its shape.
-    let command = format!(": {marker}; echo $$ > ready.fifo; sleep 60");
+    // `exec` turns the shell into its last command under the same pid,
+    // so the ready line proves the group's only process exists and no
+    // process is created after it.
+    let command = format!(": {marker}; echo $$ > ready.fifo; exec sleep 60");
     let mut arguments = Map::new();
     arguments.insert("command".into(), json!(command));
     let cancel = CancelToken::new();
-    let worker_cancel = cancel.clone();
-    let (out_tx, out_rx) = mpsc::channel();
-    thread::spawn(move || {
-        let output = shell.run(&arguments, &worker_cancel, &Recorder::default());
-        match out_tx.send(output) {
-            Ok(()) | Err(_) => {}
-        }
-    });
-    // The child acknowledged its start: the call reached its drive, so
+    let (id_rx, out_rx) = run_async(Arc::clone(&shell), arguments, cancel.clone());
+    // The child acknowledged its start: the call reached its drive. The
+    // drive's park proves it waits in `Running`, past any fork, so
     // cancelling now stops it before any move. Each wait below keeps its
     // own wall-clock budget, so a slow spawn does not eat the result wait.
     let child = ready.wait(STEP);
     assert!(!child.is_empty(), "the child acknowledged its start");
+    // `exec` drops the marker from the command line, so the group is
+    // watched by id: the pid is the group id after `setsid`.
+    let _group = Watchdog::group(child[0]);
+    let call_thread = Deadline::after(STEP).recv_or_fail(&id_rx, "the drive thread");
+    assert!(
+        fixture
+            .clock
+            .await_thread_parked(call_thread, Some(fixture.origin + THIRTY), STEP),
+        "the drive parked in Running"
+    );
     cancel.cancel();
     // Its own wall-clock budget: the deadline above was shared with the
     // start acknowledgement, so a slow spawn must not eat this wait.
