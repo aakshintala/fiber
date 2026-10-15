@@ -11,7 +11,6 @@
 
 use std::cell::RefCell;
 use std::fs;
-use std::io;
 use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
 use std::process::Command;
@@ -671,7 +670,7 @@ fn force_through_prune_run_prints_forced_removes_and_frees() {
         wall(),
         ask,
         &mut out,
-        &mut || -> io::Result<doors::hub::Hub> { panic!("nothing connects") },
+        &mut || -> Result<doors::hub::Hub, doors::Error> { panic!("nothing connects") },
     );
     got.unwrap();
     let out = String::from_utf8(out).unwrap();
@@ -793,7 +792,7 @@ fn the_confirmation_names_ignored_files_and_removes_nothing_on_no() {
         wall(),
         ask,
         &mut out,
-        &mut || -> io::Result<doors::hub::Hub> { panic!("nothing connects") },
+        &mut || -> Result<doors::hub::Hub, doors::Error> { panic!("nothing connects") },
     );
     got.unwrap();
     let out = String::from_utf8(out).unwrap();

@@ -118,11 +118,11 @@ fn malformed_device_lists_are_refused_before_printing() {
 /// Runs an exit-code wrapper against one hub answer, or an unreachable hub.
 fn exit_code(
     answer: Option<Value>,
-    run: fn(&mut dyn FnMut() -> io::Result<doors::hub::Hub>) -> i32,
+    run: fn(&mut dyn FnMut() -> Result<doors::hub::Hub, doors::Error>) -> i32,
 ) -> i32 {
     let (tx, rx) = mpsc::channel();
     thread::spawn(move || {
-        let mut connect: Box<dyn FnMut() -> io::Result<doors::hub::Hub>> = match answer {
+        let mut connect: Box<dyn FnMut() -> Result<doors::hub::Hub, doors::Error>> = match answer {
             Some(answer) => {
                 let (client, server) = UnixStream::pair().unwrap();
                 client.set_read_timeout(Some(WAIT)).unwrap();
@@ -146,7 +146,7 @@ fn exit_code(
                     ))
                 })
             }
-            None => Box::new(|| Err(io::Error::other("no hub"))),
+            None => Box::new(|| Err(doors::Error::Local(io::Error::other("no hub")))),
         };
         tx.send(run(&mut *connect)).unwrap_or(());
     });

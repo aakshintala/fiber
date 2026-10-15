@@ -61,9 +61,9 @@ ephemeral event where it is display-only.
 | `tui` | Draws the terminal, in its own process, as a client of the hub. Watches events, sends commands, knows nothing else. |
 | `config` | Reads the configuration files in [Fiber home](state.md) and the repository's `.fiber/` ([Configuration](configuration.md)). Answers questions; never asks any. |
 | `hub` | Lists, starts and resumes sessions and relays every client connection to a session's socket, over its local socket and, when installed with a port, a websocket on `127.0.0.1` that authenticates each device by token (`docs/invocation.md`, "The hub"). Holds no session and no push credential; does no TLS. |
-| `doors` | `fiber ask` (argv or stdin in, JSON lines out), and the internal session command that it, the hub and a parent run. Which doors exist and what a driver may send is `docs/invocation.md`; this page only fixes that none has a privilege the TUI lacks. |
+| `doors` | The hub client: a client's list of hubs and its connections (`docs/invocation.md`, "Several hubs"). Also `fiber ask` (argv or stdin in, JSON lines out), and the internal session command that it, the hub and a parent run. Which doors exist and what a driver may send is `docs/invocation.md`; this page only fixes that none has a privilege the TUI lacks. |
 | `picture` | The image child (`docs/invocation.md`, "Processes"): decodes, refuses, fits and re-encodes one image under the limits in `docs/model-routing.md`, "Image limits", and counts a PDF's pages and cuts a page range. Only `main` depends on it, so no session process runs image code. |
-| `cli` | Every command that does not run a session: `login`, `logout`, `approve`, `sessions`, `sessions export`, `sessions delete`, `sessions prune`, `sessions search`, `models`, `extension install/update/remove/reinstall/list/test`, `config get/set`, `hub install`, `hub uninstall`, `hub status`, `hub refresh`, `hub pair`, `hub token list` and `hub token revoke` today, and later `upgrade` as it is built. It also reads and refreshes the model lists that `fiber models` and the terminal's model picker show. `main` dispatches to it. |
+| `cli` | Every command that does not run a session: `login`, `logout`, `approve`, `sessions`, `sessions export`, `sessions delete`, `sessions prune`, `sessions search`, `models`, `extension install/update/remove/reinstall/list/test`, `config get/set`, `hub add`, `hub remove`, `hub install`, `hub uninstall`, `hub status`, `hub refresh`, `hub pair`, `hub token list` and `hub token revoke` today, and later `upgrade` as it is built. It also reads and refreshes the model lists that `fiber models` and the terminal's model picker show. `main` dispatches to it. |
 | `main` | The composition root. Parses argv, builds everything once, picks a door. No feature logic. |
 
 ### Why contract exists
@@ -90,7 +90,8 @@ depends on `contract`, `log` and the three seams, and never on `tui`, `doors`
 or `main`. `tui`, `hub` and `doors` depend on `contract` and on `log`'s reading
 side, the functions `log` exports for reading (taking the lock, deleting a
 log and opening a file by path stay in `log`), and never on `loop`, `provider`, `tools`, `mcp`, `jobs` or
-`extensions`. `tui` also depends on `log` for the diagnostic writer. `cli` depends on `contract`, `log`, `config`, `doors` and
+`extensions`. `doors` also depends on `config` and `net` for the hub client.
+`tui` also depends on `log` for the diagnostic writer. `cli` depends on `contract`, `log`, `config`, `doors` and
 `extensions`, and never on `loop`. `worktree` depends only on `contract`, and
 `jobs`, `doors` and `cli` may depend on it. `net` depends only on `contract`
 and ureq's TLS stack, the crates already in its tree through ureq included,

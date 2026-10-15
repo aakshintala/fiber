@@ -19,6 +19,28 @@ const NUMBER: &str = "a number";
 const LIST: &str = "a list of strings";
 const WARM_CAP: &str = "a whole number less than 12";
 
+#[test]
+fn hub_client_keys_prefer_the_persons_project_layer() {
+    let setup = Setup::new();
+    setup.write(
+        &setup.global(),
+        r#"{"hub":{"default":"global"},"hubs":{"x":{"address":"ws://global"}}}"#,
+    );
+    setup.write(
+        &setup.project(),
+        r#"{"hub":{"default":"project"},"hubs":{"x":{"address":"unix:/tmp/project"}}}"#,
+    );
+    let config = setup.load(&[]).unwrap();
+    assert_eq!(
+        config.get("hub.default", None),
+        Some((json!("project"), Source::Project(setup.project())))
+    );
+    assert_eq!(
+        config.get("hubs.x.address", None),
+        Some((json!("unix:/tmp/project"), Source::Project(setup.project())))
+    );
+}
+
 /// (path, a good value, a wrong value, what the error says it must be,
 /// whether a repository may set it)
 ///
@@ -32,6 +54,14 @@ const WARM_CAP: &str = "a whole number less than 12";
 fn rows() -> Vec<(&'static [&'static str], Value, Value, &'static str, bool)> {
     vec![
         (&["model"], json!("openai/gpt-5.6"), json!(5), STR, true),
+        (&["hub", "default"], json!("box"), json!(5), STR, false),
+        (
+            &["hubs", "x", "address"],
+            json!("ws://box"),
+            json!(5),
+            STR,
+            false,
+        ),
         (
             &["roles", "fast"],
             json!("fiber:openai/gpt-5.6:xhigh"),

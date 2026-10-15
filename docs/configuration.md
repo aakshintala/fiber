@@ -358,7 +358,8 @@ when (`docs/tui.md`, "Swapped views"):
 
 - `tui.theme` at once: the terminal applies the theme it writes
 - any other `tui.*` key when the terminal starts again
-- `hub.*` and `hubs.*` when the hub starts again
+- `hub.port`, `hub.allowed_origins` and `hub.idle_exit_ms` when the hub starts again
+- `hub.default` and `hubs.*` at a client's next connection: the next `fiber` command, or the terminal's next start
 - `diagnostics.level` when each Fiber process starts again
 - `model` and `thinking` for sessions started after the write
 - `skills.disabled` at the next turn start
@@ -414,9 +415,10 @@ Fiber writes configuration in these places:
   "Standing rules")
 - `fiber mcp add` and `fiber mcp remove` write an entry under `mcp.servers`,
   in the same three files (`docs/mcp.md`, "Configuration")
-- `fiber hub install --port` writes the global `hub.port`, and `fiber hub add`
-  and `fiber hub remove` write the global `hubs` entry and, with `--default`,
-  `hub.default` (`docs/invocation.md`, "The hub")
+- `fiber hub install --port` writes the global `hub.port`. `fiber hub add`
+  and `fiber hub remove` write the global `hubs` entry. With `--default`,
+  `hub add` also writes `hub.default`; `hub remove` clears it when it names
+  that hub (`docs/invocation.md`, "The hub")
 
 Each write takes the lock, reads the file, changes one key and writes the whole
 file back by renaming a temporary file over it (`docs/state.md`, "Concurrent

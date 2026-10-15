@@ -39,8 +39,69 @@ pub(crate) fn script(shell: Shell) -> String {
         Shell::Bash => text.replace(" -o bashdefault -o default", ""),
         Shell::Zsh => text.into_owned(),
         // fish offers file names wherever no other rule matches.
-        Shell::Fish => format!("{text}complete -c fiber -f\n"),
+        Shell::Fish => format!("{text}{}complete -c fiber -f\n", fish_deep_flags(&cmd)),
     }
+}
+
+// clap_complete's fish generator stops at two command levels. Its level-two
+// rules still match deeper commands, so their flags must not be repeated.
+fn fish_deep_flags(cmd: &Command) -> String {
+    fn quoted(text: &str) -> String {
+        format!("'{}'", text.replace('\\', "\\\\").replace('\'', "\\'"))
+    }
+    fn walk(
+        cmd: &Command,
+        path: &[&str],
+        inherited: &std::collections::BTreeSet<String>,
+        out: &mut String,
+    ) {
+        let mut offered = inherited.clone();
+        if path.len() >= 2 {
+            for arg in cmd.get_arguments() {
+                let mut flags = Vec::new();
+                for short in arg.get_short_and_visible_aliases().into_iter().flatten() {
+                    flags.push(format!("-s {short}"));
+                }
+                for long in arg.get_long_and_visible_aliases().into_iter().flatten() {
+                    flags.push(format!("-l {long}"));
+                }
+                let new: Vec<_> = flags
+                    .into_iter()
+                    .filter(|flag| offered.insert(flag.clone()))
+                    .collect();
+                if path.len() >= 3 && !new.is_empty() {
+                    let mut conditions = Vec::new();
+                    for (index, part) in path.iter().enumerate() {
+                        let helper = if index == 0 {
+                            "__fish_fiber_using_subcommand"
+                        } else {
+                            "__fish_seen_subcommand_from"
+                        };
+                        conditions.push(format!("{helper} {}", quoted(part)));
+                    }
+                    out.push_str(&format!(
+                        "complete -c fiber -n \"{}\" {}",
+                        conditions.join("; and "),
+                        new.join(" ")
+                    ));
+                    if arg.get_action().takes_values() {
+                        out.push_str(" -r -f");
+                    }
+                    out.push('\n');
+                }
+            }
+        }
+        for sub in cmd.get_subcommands() {
+            for name in sub.get_name_and_visible_aliases() {
+                let mut path = path.to_vec();
+                path.push(name);
+                walk(sub, &path, &offered, out);
+            }
+        }
+    }
+    let mut out = String::new();
+    walk(cmd, &[], &std::collections::BTreeSet::new(), &mut out);
+    out
 }
 
 /// Writes the script to stdout in one write and exits 0. A closed stdout

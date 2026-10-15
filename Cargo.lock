@@ -790,12 +790,15 @@ name = "doors"
 version = "0.0.0"
 dependencies = [
  "base64 0.23.1",
+ "config",
  "contract",
  "fakes",
  "log 0.0.0",
+ "net",
  "serde_json",
  "signal-hook",
  "support",
+ "thiserror 2.0.21",
  "worktree",
 ]
 

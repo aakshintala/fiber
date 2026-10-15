@@ -17,6 +17,85 @@ const DEADLINE: Duration = Duration::from_secs(10);
 const STEP: Duration = Duration::from_millis(10);
 const WAITS: usize = 1000;
 
+#[test]
+fn clear_global_compares_the_default_under_the_write_lock() {
+    for (next, clears) in [("other", false), ("box", true)] {
+        let dir = fakes::TempDir::new("fiber-hub-default-race");
+        let home = dir.path().to_path_buf();
+        replace_global(&home, "hub.default", Some(json!("box"))).unwrap();
+        thread::scope(|scope| {
+            let (held, held_rx) = mpsc::channel();
+            let (go, go_rx) = mpsc::channel();
+            let (written, written_rx) = mpsc::channel();
+            let (cleared, cleared_rx) = mpsc::channel();
+            let writer_home = home.clone();
+            scope.spawn(move || {
+                before_rename(move || {
+                    held.send(()).unwrap();
+                    // The sender belongs to the test and drops before the scope joins.
+                    let _released = go_rx.recv();
+                });
+                written
+                    .send(replace_global(
+                        &writer_home,
+                        "hub.default",
+                        Some(json!(next)),
+                    ))
+                    .unwrap();
+            });
+            let deadline = Deadline::after(DEADLINE);
+            deadline.recv_or_fail(&held_rx, "the default writer holds its lock");
+            let clear_home = home.clone();
+            scope.spawn(move || {
+                cleared
+                    .send(crate::clear_global_if_equals(
+                        &clear_home,
+                        "hub.default",
+                        &json!("box"),
+                    ))
+                    .unwrap();
+            });
+            let (_never, never_rx) = mpsc::channel::<()>();
+            while waiting() != 1 {
+                assert!(
+                    !deadline.left().is_zero(),
+                    "the clear waits on the config lock"
+                );
+                let _pause = Deadline::after(STEP).recv(&never_rx);
+            }
+            go.send(()).unwrap();
+            deadline
+                .recv_or_fail(&written_rx, "the writer completes")
+                .unwrap();
+            assert_eq!(
+                deadline
+                    .recv_or_fail(&cleared_rx, "the conditional clear completes")
+                    .unwrap(),
+                clears
+            );
+        });
+        assert_eq!(
+            get_global(&home, "hub.default").unwrap(),
+            if clears { None } else { Some(json!("other")) }
+        );
+    }
+}
+
+#[test]
+fn clear_global_absent_key_writes_nothing_and_keeps_siblings() {
+    let dir = fakes::TempDir::new("fiber-hub-default-absent");
+    let home = dir.path();
+    assert!(!crate::clear_global_if_equals(home, "hub.default", &json!("box")).unwrap());
+    assert!(!home.join("config.json").exists());
+    replace_global(home, "hub.port", Some(json!(7777))).unwrap();
+    let before = std::fs::read(home.join("config.json")).unwrap();
+    assert!(!crate::clear_global_if_equals(home, "hub.default", &json!("box")).unwrap());
+    assert_eq!(std::fs::read(home.join("config.json")).unwrap(), before);
+    replace_global(home, "hub.default", Some(json!("box"))).unwrap();
+    assert!(crate::clear_global_if_equals(home, "hub.default", &json!("box")).unwrap());
+    assert_eq!(get_global(home, "hub.port").unwrap(), Some(json!(7777)));
+}
+
 fn project_key() -> ProjectKey {
     ProjectKey::new("test-project").unwrap()
 }

@@ -59,7 +59,7 @@ struct Row {
 pub fn list(
     all: bool,
     json: bool,
-    connect: &mut dyn FnMut() -> io::Result<doors::hub::Hub>,
+    connect: &mut dyn FnMut() -> Result<doors::hub::Hub, doors::Error>,
 ) -> i32 {
     let ran = std::env::current_dir()
         .map_err(|e| failed(ErrorCode::IoFailed, format!("the current directory: {e}")))
@@ -77,7 +77,7 @@ fn run(
     all: bool,
     json: bool,
     out: &mut dyn Write,
-    connect: &mut dyn FnMut() -> io::Result<doors::hub::Hub>,
+    connect: &mut dyn FnMut() -> Result<doors::hub::Hub, doors::Error>,
 ) -> Result<(), Failure> {
     let mut args = serde_json::Map::new();
     if !all && project.in_repository {
@@ -86,8 +86,7 @@ fn run(
             Value::String(log::project_key(&project.path)),
         );
     }
-    let (stream, _) =
-        connect().map_err(|e| failed(ErrorCode::IoFailed, format!("the hub: {e}")))?;
+    let (stream, _) = connect().map_err(crate::sessions::hub_failure)?;
     let result = request(&mut BufReader::new(stream), LIST_ID, "sessions", args)?;
     let answer: Answer = serde_json::from_value(result).map_err(|e| {
         failed(

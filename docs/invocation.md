@@ -221,7 +221,7 @@ pairing code, list devices and revoke one, through the hub commands
 | `hub token revoke <device>` | Revokes a device's token and closes its live connections. |
 | `hub refresh` | Rebuilds the hub's environment for the sessions it starts from now on ("A session's environment"), then prints whether the login-shell capture succeeded. |
 | `hub add [--default] <name> <address>` | Adds a hub to this client's list, asks for its pairing code, and stores the device token it gets. The address is `ws://`, `wss://` or `unix:` followed by a socket path. `--default` makes it the hub this client uses without `--hub`. |
-| `hub remove <name>` | Removes a hub from this client's list and deletes its device token. |
+| `hub remove <name>` | Removes a hub from this client's list, deletes its device token, and clears `hub.default` when it names that hub. |
 
 Every command that talks to the hub takes `--hub <name>` to use a hub from
 the client's list instead of the default.

@@ -55,6 +55,8 @@ Configuration:
   config set [--project | --repo] <key> <value>  Write one key in one layer's file
 
 The hub:
+  hub add [--default] <name> <address>  Add a hub to this client's list
+  hub remove <name>                    Remove a hub from this client's list
   hub install [--port <port>]          Register the hub as a login service
   hub uninstall                        Remove the hub's login service; running sessions carry on
   hub status [--json]                  Print the hub's state: running, version, port, clients, devices, installed
@@ -253,7 +255,7 @@ pub(crate) enum Commands {
         #[arg(long = "base-url", value_name = "url")]
         base_url: Option<String>,
     },
-    /// Manage the hub's login service, or print the hub's state
+    /// Manage this client's hub list, the hub's service and paired devices
     #[command(subcommand, arg_required_else_help = false)]
     Hub(HubCommands),
 }
@@ -261,6 +263,24 @@ pub(crate) enum Commands {
 #[derive(Debug, Subcommand)]
 #[command(disable_help_subcommand = true)]
 pub(crate) enum HubCommands {
+    /// Add a hub to this client's list
+    Add {
+        /// Use this hub when no --hub is given.
+        #[arg(long)]
+        default: bool,
+        /// The hub's name in this client's list.
+        #[arg(value_name = "name")]
+        name: String,
+        /// A ws://, wss:// or unix: address.
+        #[arg(value_name = "address")]
+        address: String,
+    },
+    /// Remove a hub from this client's list
+    Remove {
+        /// The hub's name in this client's list.
+        #[arg(value_name = "name")]
+        name: String,
+    },
     /// Register the hub as a login service
     Install {
         /// Also listen on this port of `127.0.0.1`, where every connection
@@ -278,9 +298,16 @@ pub(crate) enum HubCommands {
         json: bool,
     },
     /// Rebuild the hub's environment for the sessions it starts from now on
-    Refresh,
+    Refresh {
+        /// Use a hub from this client's list.
+        #[arg(long, value_name = "name")]
+        hub: Option<String>,
+    },
     /// Print a pairing code for a device of that name
     Pair {
+        /// Use a hub from this client's list.
+        #[arg(long, value_name = "name")]
+        hub: Option<String>,
         /// The device to pair.
         #[arg(value_name = "device")]
         device: String,
@@ -305,9 +332,16 @@ pub(crate) enum HubCommands {
 #[command(disable_help_subcommand = true, arg_required_else_help = false)]
 pub(crate) enum TokenCommands {
     /// List paired devices: name, when paired, last connection
-    List,
+    List {
+        /// Use a hub from this client's list.
+        #[arg(long, value_name = "name")]
+        hub: Option<String>,
+    },
     /// Revoke a device's token and close its live connections
     Revoke {
+        /// Use a hub from this client's list.
+        #[arg(long, value_name = "name")]
+        hub: Option<String>,
         /// The device to revoke.
         #[arg(value_name = "device")]
         device: String,
@@ -319,6 +353,9 @@ pub(crate) enum TokenCommands {
 #[derive(Debug, clap::Args)]
 #[command(args_conflicts_with_subcommands = true)]
 pub(crate) struct SessionsArgs {
+    /// Use a hub from this client's list.
+    #[arg(long, value_name = "name")]
+    pub(crate) hub: Option<String>,
     #[command(subcommand)]
     pub(crate) command: Option<SessionsCommands>,
     /// List every project, not only this repository's.

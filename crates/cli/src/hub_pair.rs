@@ -63,7 +63,7 @@ impl Address {
 pub fn hub_pair(
     device: &str,
     address: Option<&Address>,
-    connect: &mut dyn FnMut() -> io::Result<doors::hub::Hub>,
+    connect: &mut dyn FnMut() -> Result<doors::hub::Hub, doors::Error>,
 ) -> i32 {
     let mut stdout = io::stdout();
     let terminal = stdout.is_terminal();
@@ -74,10 +74,9 @@ fn run(
     device: &str,
     address: Option<&Address>,
     terminal: bool,
-    connect: &mut dyn FnMut() -> io::Result<doors::hub::Hub>,
+    connect: &mut dyn FnMut() -> Result<doors::hub::Hub, doors::Error>,
 ) -> Result<(), Failure> {
-    let (stream, _) =
-        connect().map_err(|e| failed(ErrorCode::IoFailed, format!("the hub: {e}")))?;
+    let (stream, _) = connect().map_err(crate::sessions::hub_failure)?;
     let mut read = BufReader::new(stream);
     let answer = request(
         &mut read,

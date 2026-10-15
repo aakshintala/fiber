@@ -57,9 +57,9 @@ pub use secret::{
 };
 pub use settings::{SettingInfo, SettingValue};
 pub use write::{
-    Layer, ListChange, ListEdit, Scope, edit_list, get_global, insert_entry, remove_entry,
-    remove_extension_settings, replace_global, set, set_global_if_unset, update_global_entries,
-    write_atomic,
+    Layer, ListChange, ListEdit, Scope, clear_global_if_equals, edit_list, get_global,
+    insert_entry, remove_entry, remove_extension_settings, replace_global, set,
+    set_global_if_unset, update_global_entries, write_atomic,
 };
 
 pub use keys::{WriteScope, diagnostics_debug, parse_duration, refresh_after};

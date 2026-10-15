@@ -4,6 +4,76 @@ use clap::{Arg, ArgAction, Command, ValueHint};
 
 use super::{PARSER, Shell, script, visible};
 
+#[test]
+fn fish_fills_every_deep_command_without_repeating_parent_flags_or_values() {
+    let leaf = Command::new("leaf")
+        .arg(
+            Arg::new("endpoint")
+                .long("endpoint")
+                .short('e')
+                .visible_alias("url"),
+        )
+        .arg(
+            Arg::new("verbose")
+                .long("verbose")
+                .action(ArgAction::SetTrue),
+        )
+        .subcommand(Command::new("deeper").arg(Arg::new("extra").long("extra")))
+        .subcommand(Command::new("sibling").arg(Arg::new("other").long("other")));
+    let mut cmd = Command::new("fiber").subcommand(
+        Command::new("one").subcommand(
+            Command::new("two")
+                .arg(
+                    Arg::new("inherited")
+                        .long("inherited")
+                        .action(ArgAction::SetTrue),
+                )
+                .subcommand(leaf),
+        ),
+    );
+    cmd.build();
+    let text = super::fish_deep_flags(&cmd);
+    assert!(!text.contains("-l help"));
+    assert!(!text.contains("-s h"));
+    assert!(!text.contains("-l inherited"));
+    assert_eq!(text.matches("-l endpoint").count(), 1);
+    assert_eq!(text.matches("-l verbose").count(), 1);
+    assert_eq!(text.matches("-l extra").count(), 1);
+    assert_eq!(text.matches("-l other").count(), 1);
+    let endpoint = text
+        .lines()
+        .find(|line| line.contains("-l endpoint"))
+        .unwrap();
+    assert!(endpoint.contains("-s e"));
+    assert!(endpoint.contains("-l url"));
+    assert!(endpoint.ends_with(" -r -f"));
+    assert!(endpoint.contains("__fish_seen_subcommand_from 'leaf'"));
+    let deeper = text.lines().find(|line| line.contains("-l extra")).unwrap();
+    assert!(deeper.contains("__fish_seen_subcommand_from 'deeper'"));
+    assert!(!text.contains("-a "));
+}
+
+#[test]
+fn fish_deep_rules_leave_bash_and_zsh_bytes_unchanged() {
+    for shell in [Shell::Bash, Shell::Zsh] {
+        let mut cmd = visible(&PARSER);
+        let mut bytes = Vec::new();
+        let generator = if shell == Shell::Bash {
+            clap_complete::Shell::Bash
+        } else {
+            clap_complete::Shell::Zsh
+        };
+        clap_complete::generate(generator, &mut cmd, "fiber", &mut bytes);
+        let expected = String::from_utf8(bytes).unwrap();
+        let expected = if shell == Shell::Bash {
+            expected.replace(" -o bashdefault -o default", "")
+        } else {
+            expected
+        };
+        assert_eq!(script(shell), expected);
+    }
+}
+
 /// One argument as a generator reads it.
 #[derive(Debug, PartialEq, Eq)]
 struct ArgShape {
@@ -243,7 +313,8 @@ fn the_bash_script_completes_without_falling_back_to_file_names() {
         "{text}"
     );
     assert!(lines.contains(&"    complete -F _fiber fiber"), "{text}");
-    assert!(!text.contains("default"), "{text}");
+    assert!(!text.contains("-o default"), "{text}");
+    assert!(!text.contains("-o bashdefault"), "{text}");
     assert!(!text.contains("compgen -f"), "{text}");
 }
 

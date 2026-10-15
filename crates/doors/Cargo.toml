@@ -8,6 +8,9 @@ publish.workspace = true
 [dependencies]
 base64.workspace = true
 contract = { path = "../contract" }
+config = { path = "../config" }
+net = { path = "../net" }
+thiserror.workspace = true
 log = { path = "../log" }
 serde_json.workspace = true
 signal-hook.workspace = true
@@ -17,10 +20,9 @@ worktree = { path = "../worktree" }
 [dev-dependencies]
 fakes = { path = "../fakes" }
 
-# The jig (docs/testing.md, "Jigs"). `test = true` runs its own tests.
+# The jig (docs/testing.md, "Jigs"); its tests run the built binary from `tests/connect_jig.rs`.
 [[example]]
 name = "connect"
-test = true
 
 [lints]
 workspace = true

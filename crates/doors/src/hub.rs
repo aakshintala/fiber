@@ -10,6 +10,11 @@
 //! accepts, so a hub that accepts and never speaks, or trickles its line,
 //! cannot hang the client; the returned stream has no read timeout.
 
+mod address;
+mod listed;
+pub use address::{Address, NAME_RULE, check_name};
+pub use listed::{Target, connect_target, connect_unpaired, load_target, target};
+
 use std::io::{self, Read};
 use std::os::unix::net::UnixStream;
 use std::path::Path;

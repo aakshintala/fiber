@@ -21,7 +21,7 @@ const STATUS_ID: &str = "c_status";
 /// `fiber hub refresh` through the hub `connect` reaches, starting one
 /// when none runs. Exits 0 when both commands are accepted; a rejection
 /// prints `fiber: <message>` and exits 1, as `sessions delete` does.
-pub fn hub_refresh(connect: &mut dyn FnMut() -> io::Result<doors::hub::Hub>) -> i32 {
+pub fn hub_refresh(connect: &mut dyn FnMut() -> Result<doors::hub::Hub, doors::Error>) -> i32 {
     finish(run(&mut io::stdout(), connect))
 }
 
@@ -29,10 +29,9 @@ pub fn hub_refresh(connect: &mut dyn FnMut() -> io::Result<doors::hub::Hub>) -> 
 /// environment on `out`: what sessions started from now on get.
 pub(crate) fn run(
     out: &mut dyn Write,
-    connect: &mut dyn FnMut() -> io::Result<doors::hub::Hub>,
+    connect: &mut dyn FnMut() -> Result<doors::hub::Hub, doors::Error>,
 ) -> Result<(), Failure> {
-    let (stream, _) =
-        connect().map_err(|e| failed(ErrorCode::IoFailed, format!("the hub: {e}")))?;
+    let (stream, _) = connect().map_err(crate::sessions::hub_failure)?;
     let mut read = BufReader::new(stream);
     request(&mut read, REFRESH_ID, "refresh", Map::new())?;
     let result = request(&mut read, STATUS_ID, "status", Map::new())?;
