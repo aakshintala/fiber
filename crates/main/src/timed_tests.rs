@@ -2,6 +2,8 @@
 //! tools' child, reached through the `read` tool, and the shared
 //! standalone child. A stub `fiber` answers both, so no image code runs.
 
+use std::os::unix::process::CommandExt;
+use std::process::{Command, Stdio};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::time::Duration;
@@ -63,14 +65,17 @@ const CALL_WITHIN: Duration = Duration::from_secs(10);
 const PNG: &[u8] = b"\x89PNG\r\n\x1a\nrest";
 
 /// One stub-child fixture: its directory and a matching watchdog armed
-/// before any stub exists. The drivers reap their own children, which
-/// [`ChildFixture::finish`] checks on the success path before standing
-/// the watchdog down; a panic or a timeout drops the watchdog, which kills
-/// every match (`docs/testing.md`, "Running tests"). `fakes::within`
-/// bounds the caller, not the children: this owns them.
+/// before any stub exists. The executable path interposes a test-binary
+/// wrapper that starts the answering stub in its own guarded process group.
+/// Drivers reap their children; [`ChildFixture::finish`] checks both the
+/// wrappers and their groups before standing the watchdog down. A panic or
+/// timeout drops the outer watchdog, whose wrapper's group watchdog kills
+/// the answering group (`docs/testing.md`, "Running tests").
 struct ChildFixture {
     root: fakes::TempDir,
     leaf: String,
+    groups: std::path::PathBuf,
+    fiber: std::path::PathBuf,
     matching: Watchdog,
 }
 
@@ -84,21 +89,61 @@ impl ChildFixture {
             .to_string_lossy()
             .into_owned();
         let matching = Watchdog::matching(&leaf);
+        let answer = fakes::script(
+            root.path(),
+            "fiber-answer",
+            "cat >/dev/null; printf '{\"file\":\"%s.png\",\"mime_type\":\"image/png\",\"width\":1,\"height\":1}\\n' \"$4\"",
+        );
+        let groups = root.path().join("stub-groups");
+        let output = root.path().join("stub-output");
+        let executable = std::env::current_exe().expect("the test executable");
+        let fiber = fakes::script(
+            root.path(),
+            "fiber-stub",
+            &format!(
+                "{} --ignored --exact builtin::timed_tests::guarded_stub_child -- {} {} {} \"$@\" > /dev/null\nstatus=$?\n[ \"$status\" -eq 0 ] || exit \"$status\"\nwhile IFS= read -r line || [ -n \"$line\" ]; do printf '%s\\n' \"$line\"; done < {}",
+                shell_quote(&executable),
+                shell_quote(&answer),
+                shell_quote(&groups),
+                shell_quote(&output),
+                shell_quote(&output),
+            ),
+        );
         Self {
             root,
             leaf,
+            groups,
+            fiber,
             matching,
         }
     }
 
-    /// No stub child outlives the drivers' own reaps: the success path.
-    /// Panic and timeout paths drop the watchdog, which kills every match.
+    /// Checks the success path after drivers reap their wrappers and groups.
+    /// Panic and timeout paths drop the outer watchdog; each wrapper's group
+    /// watchdog then kills its answering group.
     fn finish(self, within: Duration) {
         assert!(
             fakes::matching_exits(&self.leaf, within),
-            "a stub child outlived the test"
+            "a stub wrapper outlived the test"
         );
+        for group in self.group_ids() {
+            assert!(
+                fakes::group_empties(group, within),
+                "stub process group {group} outlived the test"
+            );
+        }
         self.matching.stand_down(within);
+    }
+
+    fn group_ids(&self) -> Vec<u32> {
+        match std::fs::read_to_string(&self.groups) {
+            Ok(ids) => ids
+                .lines()
+                .map(|id| id.parse().expect("a recorded process-group id"))
+                .collect(),
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => Vec::new(),
+            Err(error) => panic!("reading {}: {error}", self.groups.display()),
+        }
     }
 }
 
@@ -118,11 +163,7 @@ fn session(
     let root = &fixture.root;
     std::fs::write(root.path().join("a.png"), PNG).expect("the image");
     let clock: Arc<dyn contract::clock::Clock> = fakes::clock::FakeClock::new();
-    let fiber = fakes::script(
-        root.path(),
-        "fiber-stub",
-        "cat >/dev/null; printf '{\"file\":\"%s.png\",\"mime_type\":\"image/png\",\"width\":1,\"height\":1}\\n' \"$4\"",
-    );
+    let fiber = fixture.fiber.clone();
     let jobs = jobs::Registry::new(
         root.path().join("artifacts"),
         Arc::clone(&clock),
@@ -162,6 +203,55 @@ fn read_output(read: Arc<dyn contract::tool::Tool>) -> contract::tool::Output {
     fakes::within("the read call", CALL_WITHIN, move || {
         read.run(&arguments, &Never, &Quiet)
     })
+}
+
+/// Entry point for the fixture wrapper. The answering stub is a process
+/// group leader; this helper's watchdog owns that group even if the wrapper
+/// process or the test process is killed before the stub exits.
+#[test]
+#[ignore = "started only by the timed-test stub wrapper"]
+fn guarded_stub_child() {
+    let mut arguments = std::env::args_os().skip_while(|arg| arg != "--").skip(1);
+    let answer = arguments.next().expect("the answering stub path");
+    let groups = arguments.next().expect("the process-group ledger");
+    let output_path = arguments.next().expect("the answer output path");
+    let mut child_command = Command::new(answer);
+    child_command
+        .args(arguments)
+        .stdin(Stdio::inherit())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::inherit())
+        .process_group(0);
+    let child = child_command.spawn().expect("the answering stub");
+    let group = child.id();
+    let watchdog = Watchdog::group(group);
+    use std::io::Write as _;
+    let mut ledger = std::fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(groups)
+        .expect("the process-group ledger");
+    writeln!(ledger, "{group}").expect("recording the process group");
+    drop(ledger);
+
+    let output = child
+        .wait_with_output()
+        .expect("waiting for the answering stub");
+    std::fs::write(output_path, &output.stdout).expect("saving the answering output");
+    assert!(
+        fakes::group_empties(group, CALL_WITHIN),
+        "answering process group {group} did not empty"
+    );
+    watchdog.stand_down(CALL_WITHIN);
+    assert!(
+        output.status.success(),
+        "answering stub exited with {}",
+        output.status
+    );
+}
+
+fn shell_quote(path: &std::path::Path) -> String {
+    format!("'{}'", path.to_string_lossy().replace('\'', "'\\''"))
 }
 
 #[test]
