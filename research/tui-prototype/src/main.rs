@@ -5640,20 +5640,12 @@ fn args() -> Args {
                     _ => panic!("--density full|medium|three|compact"),
                 }
             }
-            "--panel-stripe" => panel::set_stripe(
-                match it.next().as_deref().map(|v| v.to_lowercase()).as_deref() {
-                    Some("none") => panel::Stripe::None,
-                    Some("both") => panel::Stripe::Both,
-                    Some("left") => panel::Stripe::Left,
-                    _ => panic!("--panel-stripe none|both|left"),
-                },
-            ),
             "--picker" => a.picker = it.next(),
             "--completions" => a.completions = it.next(),
             "--login" => a.login = it.next(),
             "-h" | "--help" => {
                 print!(
-                    "tui-prototype [FIXTURE] [--speed N] [--static] [--no-pending] [--reduced-motion] [--screen-reader] [--hover] [--home [CASE]] [--overlay CASE] [--rail-case CASE] [--view-case CASE] [--offer-case CASE] [--image-case CASE] [--theme CASE] [--failure-case CASE] [--rail A|B|C] [--density full|medium|three|compact] [--rail-share P] [--panel-share P] [--panel-stripe none|both|left] [--picker CASE] [--completions CASE] [--login CASE] [--commands FILE] [--log-input FILE] [--wheel-lines N] [--lua-renderer FILE.lua [--lua-uncached]] [--paged [--window SCREENS] [--page-lines N] [--verify-copy]] [--paging-bench] [--stats FILE --exit-after S [--warmup S] [--diff-audit]]\n{}",
+                    "tui-prototype [FIXTURE] [--speed N] [--static] [--no-pending] [--reduced-motion] [--screen-reader] [--hover] [--home [CASE]] [--overlay CASE] [--rail-case CASE] [--view-case CASE] [--offer-case CASE] [--image-case CASE] [--theme CASE] [--failure-case CASE] [--rail A|B|C] [--density full|medium|three|compact] [--rail-share P] [--panel-share P] [--picker CASE] [--completions CASE] [--login CASE] [--commands FILE] [--log-input FILE] [--wheel-lines N] [--lua-renderer FILE.lua [--lua-uncached]] [--paged [--window SCREENS] [--page-lines N] [--verify-copy]] [--paging-bench] [--stats FILE --exit-after S [--warmup S] [--diff-audit]]\n{}",
                     cases::help(SURFACES)
                 );
                 std::process::exit(0);
