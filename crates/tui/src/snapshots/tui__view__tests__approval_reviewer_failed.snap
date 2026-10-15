@@ -2,15 +2,15 @@
 source: crates/tui/src/view_tests.rs
 expression: wide(&mut app).0
 ---
-
-                                                                      ▄▄▄▄▄▄▄▄▄
-                                                                       run it ▐
                                                                       ▀▀▀▀▀▀▀▀▀
                                                                      you 00:00
-
+                                                                               ┃
 ▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
-▌ approval · s_aaaaaaaaaaaaaaaa · 1 of 1
-▌ the reviewer failed: the reviewer model did not answer
-▌ › allow once
-▌   deny · type to add feedback
+▌ Approval 1 of 1 · s_aaaaaaaaaaaaaaaa                         Esc puts it aside
+▌ runs a command · the reviewer failed
+▌
+▌ ▸ 1 Allow once
+▌   2 Deny  type to add feedback
+▌
+▌ ↑↓ choose · Enter confirms · typing goes to the feedback · click a choice
 ▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀

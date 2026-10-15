@@ -196,13 +196,14 @@ pub(crate) fn report(
 }
 
 /// The run-count sentence for the head file: the full count, and the
-/// timing-only count when it differs.
+/// timing count when it differs. The paging jig runs the timing count
+/// on a pull request, paired with the base pass at the same count.
 fn run_sentence(head: Option<&results::Results>) -> String {
     match head {
         None => "Each number is the median of its runs on Linux x86_64 (`docs/performance.md`)."
             .to_owned(),
         Some(results) if results.timing_runs != results.runs => format!(
-            "Each number is the median of {} runs on Linux x86_64, a timing-only workload's of {} (`docs/performance.md`).",
+            "Each number is the median of {} runs on Linux x86_64, a timing-only workload's or the paging jig's of {} (`docs/performance.md`).",
             results.runs, results.timing_runs
         ),
         Some(results) => format!(
@@ -328,6 +329,18 @@ fn comment(
     if let Some(line) = stored_line {
         out.push_str(line);
         out.push('\n');
+    }
+    // The base pass runs only the timing rows the diff selects: the
+    // summary names each skipped row (`docs/ci.md`, "Selection"). The
+    // judge is unchanged: a row missing its base metric stays advisory
+    // with no ratio and no gate through the existing unavailable arm.
+    if let Base::Ok(results) = base
+        && !results.skipped.is_empty()
+    {
+        out.push_str(&format!(
+            "The base pass skipped {}: the selection did not choose them (`docs/ci.md`, \"Selection\").\n",
+            results.skipped.join(", ")
+        ));
     }
     out.push('\n');
     for cpu in cpus {

@@ -285,6 +285,10 @@ pub struct ToolCallCompleted {
     /// for it.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub artifact: Option<String>,
+    /// On a cut result, ordered byte ranges of the full output held in `content`,
+    /// each `[start, end]` with an exclusive end.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub kept: Option<Vec<[u64; 2]>>,
     /// On a call that changed files, one entry per file.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub changes: Option<Vec<FileChange>>,

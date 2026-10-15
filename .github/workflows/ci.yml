@@ -52,6 +52,7 @@ jobs:
       shard_total: ${{ steps.plan.outputs.shard_total }}
       shard_timeout: ${{ steps.plan.outputs.shard_timeout }}
       ten_turns: ${{ steps.plan.outputs.ten_turns }}
+      base_skip: ${{ steps.plan.outputs.base_skip }}
     steps:
       - &checkout-full
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -581,12 +582,15 @@ jobs:
           fi
           strace -V
       - name: Run the benchmarks
+        env:
+          BASE_SKIP: ${{ needs.select.outputs.base_skip }}
         run: |
           out=$RUNNER_TEMP/bench
           mkdir -p "$out"
           harness=target/debug/examples/bench
-          # A pull request measures its timing-only workloads 3 times and
-          # the rest 5 times; a push measures every workload 5 times.
+          # A pull request measures its timing-only workloads and the
+          # `paging` jig 3 times and the rest 5 times; a push measures
+          # every workload 5 times.
           runs=()
           if [ "$GITHUB_EVENT_NAME" = pull_request ]; then
             runs=(--timing-runs 3)
@@ -610,12 +614,14 @@ jobs:
             if [ -f "$RUNNER_TEMP/release/base/paging" ]; then
               base_paging=(--paging "$RUNNER_TEMP/release/base/paging")
             fi
-            # The base runs the timing benchmarks only; memory and exact
-            # rows compare against the backstop's stored results, looked up
+            # The base runs only the timing benchmarks the selection
+            # chooses, named by base_skip; memory and exact rows compare
+            # against the backstop's stored results, looked up
             # by scripts/stored-results. A base run that writes no file is
             # reported by bench-report, not here.
             "$harness" --fiber "$RUNNER_TEMP/release/base/fiber" --out "$out/base.json" --only timing \
               "${runs[@]}" \
+              --skip-rows "$BASE_SKIP" \
               "${base_paging[@]}" || echo "::warning::the base binary's benchmarks exited $?"
           fi
       - name: Print the attach stages

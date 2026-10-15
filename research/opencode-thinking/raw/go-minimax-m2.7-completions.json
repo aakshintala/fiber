@@ -1,0 +1,169 @@
+{
+ "route": "go",
+ "protocol": "completions",
+ "model": "minimax-m2.7",
+ "base": "https://opencode.ai/zen/go",
+ "levels": [
+  {
+   "level": "off",
+   "status": 400,
+   "elapsed_s": 0.51,
+   "request": {
+    "model": "minimax-m2.7",
+    "messages": [
+     {
+      "role": "user",
+      "content": "Reply with the single word: ok"
+     }
+    ],
+    "max_tokens": 64,
+    "reasoning_effort": "none"
+   },
+   "response": {
+    "type": "error",
+    "error": {
+     "type": "ModelProtocolUnsupported",
+     "message": "Model does not support this protocol."
+    }
+   }
+  },
+  {
+   "level": "minimal",
+   "status": 400,
+   "elapsed_s": 0.47,
+   "request": {
+    "model": "minimax-m2.7",
+    "messages": [
+     {
+      "role": "user",
+      "content": "Reply with the single word: ok"
+     }
+    ],
+    "max_tokens": 64,
+    "reasoning_effort": "minimal"
+   },
+   "response": {
+    "type": "error",
+    "error": {
+     "type": "ModelProtocolUnsupported",
+     "message": "Model does not support this protocol."
+    }
+   }
+  },
+  {
+   "level": "low",
+   "status": 400,
+   "elapsed_s": 0.45,
+   "request": {
+    "model": "minimax-m2.7",
+    "messages": [
+     {
+      "role": "user",
+      "content": "Reply with the single word: ok"
+     }
+    ],
+    "max_tokens": 64,
+    "reasoning_effort": "low"
+   },
+   "response": {
+    "type": "error",
+    "error": {
+     "type": "ModelProtocolUnsupported",
+     "message": "Model does not support this protocol."
+    }
+   }
+  },
+  {
+   "level": "medium",
+   "status": 400,
+   "elapsed_s": 0.41,
+   "request": {
+    "model": "minimax-m2.7",
+    "messages": [
+     {
+      "role": "user",
+      "content": "Reply with the single word: ok"
+     }
+    ],
+    "max_tokens": 64,
+    "reasoning_effort": "medium"
+   },
+   "response": {
+    "type": "error",
+    "error": {
+     "type": "ModelProtocolUnsupported",
+     "message": "Model does not support this protocol."
+    }
+   }
+  },
+  {
+   "level": "high",
+   "status": 400,
+   "elapsed_s": 0.46,
+   "request": {
+    "model": "minimax-m2.7",
+    "messages": [
+     {
+      "role": "user",
+      "content": "Reply with the single word: ok"
+     }
+    ],
+    "max_tokens": 64,
+    "reasoning_effort": "high"
+   },
+   "response": {
+    "type": "error",
+    "error": {
+     "type": "ModelProtocolUnsupported",
+     "message": "Model does not support this protocol."
+    }
+   }
+  },
+  {
+   "level": "xhigh",
+   "status": 400,
+   "elapsed_s": 0.51,
+   "request": {
+    "model": "minimax-m2.7",
+    "messages": [
+     {
+      "role": "user",
+      "content": "Reply with the single word: ok"
+     }
+    ],
+    "max_tokens": 64,
+    "reasoning_effort": "xhigh"
+   },
+   "response": {
+    "type": "error",
+    "error": {
+     "type": "ModelProtocolUnsupported",
+     "message": "Model does not support this protocol."
+    }
+   }
+  },
+  {
+   "level": "max",
+   "status": 400,
+   "elapsed_s": 0.38,
+   "request": {
+    "model": "minimax-m2.7",
+    "messages": [
+     {
+      "role": "user",
+      "content": "Reply with the single word: ok"
+     }
+    ],
+    "max_tokens": 64,
+    "reasoning_effort": "max"
+   },
+   "response": {
+    "type": "error",
+    "error": {
+     "type": "ModelProtocolUnsupported",
+     "message": "Model does not support this protocol."
+    }
+   }
+  }
+ ]
+}

@@ -541,8 +541,22 @@ a click on it returns too. The views are:
   "diff against HEAD". An untracked file shows as wholly added. Each file is
   a row: the chosen file's path bold, then " · " dim, "+N" in `added` and
   "−N" in `removed`; an untracked file's path, then "· untracked, wholly
-  added" dim. Under the chosen file, each hunk's `@@` line dim, removed lines
-  in `removed` and added lines in `added`, with their `-` and `+`.
+  added" dim. Under the chosen file, its hunks in the diff format an opened
+  edit uses ("Tool groups and the ledger").
+- **A call's view,** from an opened call: the whole call, drawn as it is
+  inline ("Tool groups and the ledger") with no 20-line cap. The top row is
+  the call's kind capitalised, bold, then its target dim ("Shell  cargo test
+  -p log"). When the result has an `artifact`, the view pages the whole
+  saved output from the session with `artifact_page`
+  (`docs/invocation.md`, "What each command does"), as the conversation
+  pages history, and never loads the file whole. A dim marker sits at each
+  edge of the model's view, from the result's `kept`: "── end of the
+  model's view ──" where it stops and "── the model's view resumes ──" where
+  it resumes. A result cut at one end only has the one marker. The view
+  scrolls as the conversation does, y copies the whole call, and search
+  ("Search") matches inside the view only. The last row is "y copies the
+  whole call", dim. Esc returns to the conversation with the call's row
+  still focused.
 - **Search results:** every match with its surrounding lines ("Search").
   The first row is "3 of 5 · ⌕ <query>". Each match is its file and line
   bold, then the lines around it, the match on the `match` tint and the
@@ -582,7 +596,7 @@ a click on it returns too. The views are:
   key                 value         layer
   model               opus-5-5      global
   thinking            high          project
-  permissions.mode    auto          repository
+  handoff.tokens      400000        repository
   budget.usd          20            project
   ```
 - **`/keys`:** the rebinding screen ("Bindings").
@@ -730,7 +744,10 @@ arrived after `sessions` was sent.
 - **Clicking the line, or Ctrl+O, opens the ledger:** one row per call, split
   by step, with each step's number in the gutter and its thinking line first.
   A step is opened by `step_started` (`docs/events.md`, "Session and turn").
-- **Clicking a row opens that call:** its diff, output or error.
+- **Clicking a row opens that call** inline under its row, at most 20
+  lines; Enter on a focused row does the same. Enter again on the opened
+  call, or a click on its "… N more lines (Enter to view)", opens the whole
+  call in a swapped view ("Swapped views").
 - **A call that changed a file is highlighted** in the ledger, with the file's
   name and its lines added and removed, so edits stand out from reads and
   commands. Its counts are in `added` and `removed`, where every other result
@@ -774,9 +791,43 @@ Thought: <heading> · 22s", dim and italic.
       ○ shell    cargo test -p hub lock                      running
 ```
 
-An opened call shows its output, or "<code>: <message>", under its row,
-indented eight columns, at most 20 lines, then "… N more lines" dim. An
-opened thought shows its text there.
+An opened call is drawn under its row, indented eight columns, at most 20
+lines, then "… N more lines (Enter to view)" dim when there is more. A
+failed call shows "<code>: <message>" first. An opened thought shows its
+text there. What an opened call shows depends on its kind, read from the
+call's `details` (`docs/tools.md`, "What a result carries"); a call whose
+`details` the terminal does not recognise shows its `content`:
+
+- **An edit** shows its diff in the diff format below.
+- **A read** shows the text read, with the line-number gutter starting at the
+  first line read, from `details`. **A write** shows the text written, its
+  `content` argument, numbered from 1.
+- **A search** shows its matches grouped under each file's path, the path
+  bold, line numbers in the gutter and the matched text on the `match`
+  tint, from the built-in `grep`'s `details`. A search call without them,
+  such as `rg` or `command grep`, opens as a shell call.
+- **A shell call** shows the full command, "$ " and the command wrapped,
+  then the output, then one closing line: "exit N", in `removed` when N is
+  not 0 and dim when it is, or "killed by <signal>".
+- **An MCP call, an extension's tool, or any tool whose `details` the
+  terminal does not recognise** shows `content` as plain text. Text that is
+  JSON is indented two columns per level.
+
+The diff format is shared by an opened edit and the changed-files view. Each
+line has a dim line-number gutter: the old file's number on a `-` line, the
+new file's on the others. `@@` lines are dim, `-` lines in `removed` and `+`
+lines in `added`. When one removed line pairs with one added line, the words
+that differ are in reverse video. There is no syntax highlighting.
+
+```
+    1 ✓ edit     crates/tui/src/view.rs                      +6 −2
+             @@ -12,5 +12,6 @@ fn paint(
+          12     let spans = fit(&r.spans, w as usize);
+          13 -    buf.set_line(x, y, &line, w);
+          13 +    buf.set_line(x, y, &Line::from(spans), w);
+          14     if let Some(bg) = r.bg {
+          15 +    let line = Line::from(spans);
+```
 
 A group opens by a click, by Ctrl+O, when a search match falls inside its
 ledger, and when one of its calls asks the person.
@@ -954,8 +1005,7 @@ An approval request is a panel at the bottom that replaces the input box
   (`docs/permissions.md`).
 - The asking call's tool group expands so the full call can be read.
 - Esc puts the request aside. It stays pending behind a badge, and clicking the
-  badge reopens it. The badge names the `next_request` action's bound key,
-  leaving the key out when the action is unbound. Denying is always explicit.
+  badge reopens it. Denying is always explicit.
 - Esc steps through waiting requests one at a time. With a question form
   behind an approval, a second Esc declines the form.
 - `/approvals` reopens the waiting queue at the first request. It is the key
@@ -966,9 +1016,22 @@ and a space: the `approval` tint and an `attention` stripe for a standing
 ask, the `alert` tint and an `error` stripe for a reviewer's escalation.
 
 ```
-▌ Approval 1 of 2 · main · irreversible                  Esc puts it aside
+▌ Approval 1 of 1 · main                                     Esc puts it aside
 ▌ shell cargo mutants -p hub
-▌ runs a command, writes files · asked by the project rule cargo
+▌ runs a command · asked by the project rule cargo
+▌
+▌ ▸ 1 Allow once
+▌   2 Deny  type to add feedback
+▌
+▌ ↑↓ choose · Enter confirms · typing goes to the feedback · click a choice
+```
+
+A review that offers a rule shows the remembering choices:
+
+```
+▌ Approval 1 of 1 · main                                      Esc puts it aside
+▌ shell cargo mutants -p hub
+▌ runs a command · the reviewer blocked the last calls: rm -rf
 ▌
 ▌ ▸ 1 Allow once
 ▌   2 Allow for this session cargo mutants *
@@ -1204,8 +1267,9 @@ Shift+Tab moves focus to the newest item in the conversation.
 
 - ↑ and ↓, or k and j, move focus through turns, tool groups and their
   ledger rows, scrolling the conversation as needed.
-- Enter opens the focused item, as a click does: a group's ledger, a call's
-  diff or output, a delegate's view.
+- Enter opens the focused item, as a click does: a group's ledger, a call
+  inline under its row, a delegate's view. Enter on an opened call opens
+  its swapped view.
 - y copies the focused item's text. Ctrl+G opens it in `$VISUAL` or
   `$EDITOR`.
 - Tab moves focus to the panel, then the rail, then back to the
@@ -1314,7 +1378,7 @@ focused. When rows hide below, a dim ↓ takes the last shown row's gutter; a
 screen too short for them scrolls, and its last line reads "↑ 4 more · ↓ 12
 more" dim. The footer is "↑↓ move · ←→ tabs · Esc closes".
 
-Hints that name a key, on home and on the approval badge, name the action's
+Hints that name a key, on home, name the action's
 bound key from this table, leaving the key out when the action is unbound.
 
 Every action acts in some of six contexts, and the terminal is in exactly one

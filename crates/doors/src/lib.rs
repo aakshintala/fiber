@@ -28,6 +28,9 @@ mod session;
 mod shell;
 mod signals;
 mod socket;
+#[cfg(test)]
+#[path = "socket_timing_tests.rs"]
+mod socket_timing_tests;
 mod steer;
 mod watch;
 

@@ -1284,13 +1284,16 @@ fn resume_open_replays_the_log_to_the_tail() {
         .try_clone()
         .unwrap_or_else(|err| panic!("clone: {err}"));
     let read_tx = tx.clone();
+    // The reader takes at the loop's credits, so its queue stays
+    // bounded while the loop drains.
+    let read_feed = crate::link::Feed::new(read_tx, lp.hub.credits());
     // The reader signals when it reaches EOF, so the test waits on the
     // reader's answer instead of the drain window alone.
     let (reader_done_tx, reader_done) = mpsc::channel();
     std::thread::Builder::new()
         .name("resume-read".to_owned())
         .spawn(move || {
-            crate::link::read_lines(read_end, &read_tx);
+            crate::link::read_lines(read_end, &read_feed);
             reader_done_tx.send(()).unwrap_or(());
         })
         .unwrap_or_else(|err| panic!("spawn: {err}"));
@@ -1928,4 +1931,88 @@ fn an_empty_batch_with_no_senders_ends_the_loop() {
     let (tx, rx) = mpsc::channel::<Input>();
     drop(tx);
     assert!(conn.take_batch(&rx).is_none());
+}
+
+#[path = "event_loop/attach_tests.rs"]
+mod attach_tests;
+
+/// Appends hub lines with distinct markers until `inputs` holds
+/// `count`: whole turns while three fit, a `turn_started` plus its
+/// `text_completed` for a tail of two, else one `step_started`, which
+/// folds without drawing a row — so the 4096th input shares its frame
+/// while the 4097th keeps its own. Returns the last
+/// `text_completed` marker pushed, which the final screen shows when
+/// every line folded.
+fn push_markers(inputs: &mut Vec<Input>, count: usize, seq: &mut u64, turn: &mut usize) -> String {
+    let mut last = String::new();
+    while inputs.len() < count {
+        if count - inputs.len() >= 3 {
+            let marker = format!("marker {}", *turn);
+            let lines = turn_lines(&marker, *turn, seq);
+            *turn += 1;
+            last = marker;
+            inputs.extend(lines);
+        } else if count - inputs.len() == 2 {
+            let marker = format!("marker {}", *turn);
+            let mut lines = turn_lines(&marker, *turn, seq);
+            lines.truncate(2);
+            last = marker;
+            inputs.extend(lines);
+        } else {
+            let step = line("step_started", Some(*seq), None, json!({}));
+            *seq += 1;
+            inputs.push(Input::Hub(Line::Session(step)));
+        }
+    }
+    last
+}
+
+#[test]
+fn full_batches_draw_one_frame_up_to_4096() {
+    // 4095, 4096 and 4097 queued hub inputs draw 1, 1 and 2 frames:
+    // at most one frame per batch, the same cadence as before. Each
+    // screen shows its own last marker, so every line folded.
+    let mut flushes = Vec::new();
+    for count in [4095usize, 4096, 4097] {
+        let (mut lp, flush, tx, rx) = counting();
+        let mut seq = 0u64;
+        let mut turn = 0;
+        let mut inputs = Vec::new();
+        let last = push_markers(&mut inputs, count, &mut seq, &mut turn);
+        assert_eq!(run_queued(&mut lp, rx, tx, inputs), 0);
+        flushes.push(flush.get());
+        let screen = counted(&lp);
+        assert!(screen.contains(&last), "{screen}");
+    }
+    assert_eq!(flushes, [1, 1, 2]);
+}
+
+#[test]
+fn a_key_after_a_full_batch_draws_its_own_frame() {
+    let (mut lp, flushes, tx, rx) = counting();
+    let mut seq = 0u64;
+    let mut turn = 0;
+    let mut inputs = Vec::new();
+    push_markers(&mut inputs, 4096, &mut seq, &mut turn);
+    inputs.push(Input::Bytes(b"a".to_vec()));
+    let tail = inputs.len() + 10;
+    push_markers(&mut inputs, tail, &mut seq, &mut turn);
+    assert_eq!(run_queued(&mut lp, rx, tx, inputs), 0);
+    // The full batch, the key's own, the tail.
+    assert_eq!(flushes.get(), 3);
+    assert_eq!(lp.app.draft(), "a");
+}
+
+#[test]
+fn a_disconnect_among_full_batches_ends_the_batch_with_its_own_frame() {
+    let (mut lp, flushes, tx, rx) = counting();
+    let mut seq = 0u64;
+    let mut turn = 0;
+    let mut inputs = Vec::new();
+    push_markers(&mut inputs, 100, &mut seq, &mut turn);
+    inputs.push(Input::Disconnected);
+    let tail = inputs.len() + 100;
+    push_markers(&mut inputs, tail, &mut seq, &mut turn);
+    assert_eq!(run_queued(&mut lp, rx, tx, inputs), 0);
+    assert_eq!(flushes.get(), 3);
 }

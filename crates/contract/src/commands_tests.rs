@@ -96,6 +96,8 @@ fn samples() -> Vec<Value> {
         json!({"id": "c", "command": "skills"}),
         json!({"id": "c", "command": "history", "args": {"from_seq": 0, "to_seq": 10}}),
         json!({"id": "c", "command": "history", "args": {"from_seq": 0}}),
+        json!({"id": "c", "command": "artifact_page", "args": {"path": "artifacts/a_3.txt", "offset": 0}}),
+        json!({"id": "c", "command": "artifact_page", "args": {"path": "artifacts/a_3.txt", "offset": 4096}}),
         json!({"id": "c", "command": "model",
             "args": {"model": "opus", "thinking": "high"}}),
         json!({"id": "c", "command": "model", "args": {"model": "opus"}}),
@@ -133,6 +135,15 @@ fn the_samples_cover_every_command_in_the_doc() {
 
 #[test]
 fn defaults_fill_what_a_client_leaves_out() {
+    let line = parse(r#"{"id":"c","command":"artifact_page","args":{"path":"artifacts/a_3.txt"}}"#)
+        .unwrap();
+    assert_eq!(
+        line.command,
+        Command::ArtifactPage(ArtifactPageArgs {
+            path: "artifacts/a_3.txt".into(),
+            offset: 0,
+        })
+    );
     let line = parse(r#"{"id":"c","command":"rewind","args":{}}"#).unwrap();
     assert_eq!(
         line.command,
@@ -151,6 +162,34 @@ fn defaults_fill_what_a_client_leaves_out() {
             send: false
         })
     );
+}
+
+#[test]
+fn artifact_page_args_that_do_not_fit_are_invalid_arguments() {
+    for args in [
+        json!({}),
+        json!({"offset": 0}),
+        json!({"path": "p", "offset": -1}),
+        json!({"path": "p", "offset": "0"}),
+        json!({"path": "p", "offset": null}),
+        json!({"path": 1}),
+        json!({"path": "p", "extra": true}),
+        json!({"path": "p", "offset": 1.5}),
+    ] {
+        let line = json!({"id": "c", "command": "artifact_page", "args": args});
+        assert!(parse(&line.to_string()).is_err(), "{line}");
+    }
+    for offset in [0, 1, u64::MAX] {
+        let line = json!({"id": "c", "command": "artifact_page",
+            "args": {"path": "p", "offset": offset}});
+        assert_eq!(
+            parse(&line.to_string()).unwrap().command,
+            Command::ArtifactPage(ArtifactPageArgs {
+                path: "p".into(),
+                offset
+            })
+        );
+    }
 }
 
 #[test]
@@ -295,6 +334,7 @@ fn a_missing_args_on_a_command_with_a_required_key_is_refused() {
         "steer",
         "steer_drop",
         "history",
+        "artifact_page",
         "model",
         "name",
         "shell",

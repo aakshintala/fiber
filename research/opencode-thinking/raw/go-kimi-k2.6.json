@@ -1,0 +1,399 @@
+{
+ "route": "go",
+ "protocol": "completions",
+ "model": "kimi-k2.6",
+ "base": "https://opencode.ai/zen/go",
+ "levels": [
+  {
+   "level": "off",
+   "status": 200,
+   "elapsed_s": 1.15,
+   "request": {
+    "model": "kimi-k2.6",
+    "messages": [
+     {
+      "role": "user",
+      "content": "Reply with the single word: ok"
+     }
+    ],
+    "max_tokens": 64,
+    "reasoning_effort": "none"
+   },
+   "response": {
+    "id": "gen-1792042048-diIWn34e0fnefceZpJO9",
+    "object": "chat.completion",
+    "created": 1792042048,
+    "model": "kimi-k2.6",
+    "choices": [
+     {
+      "index": 0,
+      "finish_reason": "stop",
+      "logprobs": null,
+      "message": {
+       "role": "assistant",
+       "content": "ok",
+       "refusal": null,
+       "reasoning": null
+      }
+     }
+    ],
+    "usage": {
+     "prompt_tokens": 14,
+     "completion_tokens": 4,
+     "total_tokens": 18,
+     "prompt_tokens_details": {
+      "audio_tokens": 0,
+      "cached_tokens": 0,
+      "cache_write_tokens": 0
+     },
+     "completion_tokens_details": {
+      "audio_tokens": 0,
+      "reasoning_tokens": 1
+     }
+    }
+   }
+  },
+  {
+   "level": "minimal",
+   "status": 200,
+   "elapsed_s": 2.07,
+   "request": {
+    "model": "kimi-k2.6",
+    "messages": [
+     {
+      "role": "user",
+      "content": "Reply with the single word: ok"
+     }
+    ],
+    "max_tokens": 64,
+    "reasoning_effort": "minimal"
+   },
+   "response": {
+    "id": "gen-1792042049-euOKOR1zGXZtuRWGgg8R",
+    "object": "chat.completion",
+    "created": 1792042049,
+    "model": "kimi-k2.6",
+    "choices": [
+     {
+      "index": 0,
+      "finish_reason": "stop",
+      "logprobs": null,
+      "message": {
+       "role": "assistant",
+       "content": "ok",
+       "refusal": null,
+       "reasoning": "The user wants me to reply with a single word: \"ok\". I should just output that without any additional text or explanation.",
+       "reasoning_details": [
+        {
+         "type": "reasoning.text",
+         "text": "The user wants me to reply with a single word: \"ok\". I should just output that without any additional text or explanation.",
+         "format": "unknown",
+         "index": 0
+        }
+       ]
+      }
+     }
+    ],
+    "usage": {
+     "prompt_tokens": 14,
+     "completion_tokens": 30,
+     "total_tokens": 44,
+     "prompt_tokens_details": {
+      "audio_tokens": 0,
+      "cached_tokens": 0,
+      "cache_write_tokens": 0
+     },
+     "completion_tokens_details": {
+      "audio_tokens": 0,
+      "reasoning_tokens": 27
+     }
+    }
+   }
+  },
+  {
+   "level": "low",
+   "status": 200,
+   "elapsed_s": 2.71,
+   "request": {
+    "model": "kimi-k2.6",
+    "messages": [
+     {
+      "role": "user",
+      "content": "Reply with the single word: ok"
+     }
+    ],
+    "max_tokens": 64,
+    "reasoning_effort": "low"
+   },
+   "response": {
+    "id": "gen-1792042051-8tczD8h9uvwDrEmzeXxL",
+    "object": "chat.completion",
+    "created": 1792042051,
+    "model": "kimi-k2.6",
+    "choices": [
+     {
+      "index": 0,
+      "finish_reason": "stop",
+      "logprobs": null,
+      "message": {
+       "role": "assistant",
+       "content": "ok",
+       "refusal": null,
+       "reasoning": "The user wants me to reply with the single word \"ok\". I should not add any other text, punctuation, or explanation. Just the word \"ok\".",
+       "reasoning_details": [
+        {
+         "type": "reasoning.text",
+         "text": "The user wants me to reply with the single word \"ok\". I should not add any other text, punctuation, or explanation. Just the word \"ok\".",
+         "format": "unknown",
+         "index": 0
+        }
+       ]
+      }
+     }
+    ],
+    "usage": {
+     "prompt_tokens": 14,
+     "completion_tokens": 36,
+     "total_tokens": 50,
+     "prompt_tokens_details": {
+      "audio_tokens": 0,
+      "cached_tokens": 14,
+      "cache_write_tokens": 0
+     },
+     "completion_tokens_details": {
+      "audio_tokens": 0,
+      "reasoning_tokens": 33
+     }
+    }
+   }
+  },
+  {
+   "level": "medium",
+   "status": 200,
+   "elapsed_s": 2.14,
+   "request": {
+    "model": "kimi-k2.6",
+    "messages": [
+     {
+      "role": "user",
+      "content": "Reply with the single word: ok"
+     }
+    ],
+    "max_tokens": 64,
+    "reasoning_effort": "medium"
+   },
+   "response": {
+    "id": "gen-1792042054-xVMXrvnMn44pP39dSbMe",
+    "object": "chat.completion",
+    "created": 1792042054,
+    "model": "kimi-k2.6",
+    "choices": [
+     {
+      "index": 0,
+      "finish_reason": "stop",
+      "logprobs": null,
+      "message": {
+       "role": "assistant",
+       "content": "ok",
+       "refusal": null,
+       "reasoning": "The user wants me to reply with the single word \"ok\". This is very straightforward. I should just output \"ok\" without any additional text, punctuation, or formatting.",
+       "reasoning_details": [
+        {
+         "type": "reasoning.text",
+         "text": "The user wants me to reply with the single word \"ok\". This is very straightforward. I should just output \"ok\" without any additional text, punctuation, or formatting.",
+         "format": "unknown",
+         "index": 0
+        }
+       ]
+      }
+     }
+    ],
+    "usage": {
+     "prompt_tokens": 14,
+     "completion_tokens": 39,
+     "total_tokens": 53,
+     "prompt_tokens_details": {
+      "audio_tokens": 0,
+      "cached_tokens": 14,
+      "cache_write_tokens": 0
+     },
+     "completion_tokens_details": {
+      "audio_tokens": 0,
+      "reasoning_tokens": 36
+     }
+    }
+   }
+  },
+  {
+   "level": "high",
+   "status": 200,
+   "elapsed_s": 2.26,
+   "request": {
+    "model": "kimi-k2.6",
+    "messages": [
+     {
+      "role": "user",
+      "content": "Reply with the single word: ok"
+     }
+    ],
+    "max_tokens": 64,
+    "reasoning_effort": "high"
+   },
+   "response": {
+    "id": "gen-1792042056-wdOtHDGxU8xpL6aKum2f",
+    "object": "chat.completion",
+    "created": 1792042056,
+    "model": "kimi-k2.6",
+    "choices": [
+     {
+      "index": 0,
+      "finish_reason": "stop",
+      "logprobs": null,
+      "message": {
+       "role": "assistant",
+       "content": "ok",
+       "refusal": null,
+       "reasoning": "The user wants me to reply with the single word \"ok\". This is a very simple request. I should just output \"ok\" without any additional text, punctuation, or formatting.",
+       "reasoning_details": [
+        {
+         "type": "reasoning.text",
+         "text": "The user wants me to reply with the single word \"ok\". This is a very simple request. I should just output \"ok\" without any additional text, punctuation, or formatting.",
+         "format": "unknown",
+         "index": 0
+        }
+       ]
+      }
+     }
+    ],
+    "usage": {
+     "prompt_tokens": 14,
+     "completion_tokens": 41,
+     "total_tokens": 55,
+     "prompt_tokens_details": {
+      "audio_tokens": 0,
+      "cached_tokens": 14,
+      "cache_write_tokens": 0
+     },
+     "completion_tokens_details": {
+      "audio_tokens": 0,
+      "reasoning_tokens": 38
+     }
+    }
+   }
+  },
+  {
+   "level": "xhigh",
+   "status": 200,
+   "elapsed_s": 2.76,
+   "request": {
+    "model": "kimi-k2.6",
+    "messages": [
+     {
+      "role": "user",
+      "content": "Reply with the single word: ok"
+     }
+    ],
+    "max_tokens": 64,
+    "reasoning_effort": "xhigh"
+   },
+   "response": {
+    "id": "gen-1792042059-YXgZpnJlFfGBPmXFCMmv",
+    "object": "chat.completion",
+    "created": 1792042059,
+    "model": "kimi-k2.6",
+    "choices": [
+     {
+      "index": 0,
+      "finish_reason": "length",
+      "logprobs": null,
+      "message": {
+       "role": "assistant",
+       "content": null,
+       "refusal": null,
+       "reasoning": "The user wants me to reply with the single word: \"ok\".\n\nThis is a very simple request. I just need to output exactly \"ok\" with no other text, punctuation, or formatting.\n\nLet me verify:\n- Single word: yes, \"ok\" is one word\n- No punctuation needed unless specified",
+       "reasoning_details": [
+        {
+         "type": "reasoning.text",
+         "text": "The user wants me to reply with the single word: \"ok\".\n\nThis is a very simple request. I just need to output exactly \"ok\" with no other text, punctuation, or formatting.\n\nLet me verify:\n- Single word: yes, \"ok\" is one word\n- No punctuation needed unless specified",
+         "format": "unknown",
+         "index": 0
+        }
+       ]
+      }
+     }
+    ],
+    "usage": {
+     "prompt_tokens": 14,
+     "completion_tokens": 64,
+     "total_tokens": 78,
+     "prompt_tokens_details": {
+      "audio_tokens": 0,
+      "cached_tokens": 14,
+      "cache_write_tokens": 0
+     },
+     "completion_tokens_details": {
+      "audio_tokens": 0,
+      "reasoning_tokens": 63
+     }
+    }
+   }
+  },
+  {
+   "level": "max",
+   "status": 200,
+   "elapsed_s": 2.31,
+   "request": {
+    "model": "kimi-k2.6",
+    "messages": [
+     {
+      "role": "user",
+      "content": "Reply with the single word: ok"
+     }
+    ],
+    "max_tokens": 64,
+    "reasoning_effort": "max"
+   },
+   "response": {
+    "id": "gen-1792042061-QSN22zsdZnP7VhRAAi78",
+    "object": "chat.completion",
+    "created": 1792042061,
+    "model": "kimi-k2.6",
+    "choices": [
+     {
+      "index": 0,
+      "finish_reason": "stop",
+      "logprobs": null,
+      "message": {
+       "role": "assistant",
+       "content": "ok",
+       "refusal": null,
+       "reasoning": "The user wants me to reply with a single word: \"ok\". This is straightforward. I should just output \"ok\" without any additional text, punctuation, or formatting to strictly follow the instruction.",
+       "reasoning_details": [
+        {
+         "type": "reasoning.text",
+         "text": "The user wants me to reply with a single word: \"ok\". This is straightforward. I should just output \"ok\" without any additional text, punctuation, or formatting to strictly follow the instruction.",
+         "format": "unknown",
+         "index": 0
+        }
+       ]
+      }
+     }
+    ],
+    "usage": {
+     "prompt_tokens": 14,
+     "completion_tokens": 44,
+     "total_tokens": 58,
+     "prompt_tokens_details": {
+      "audio_tokens": 0,
+      "cached_tokens": 14,
+      "cache_write_tokens": 0
+     },
+     "completion_tokens_details": {
+      "audio_tokens": 0,
+      "reasoning_tokens": 41
+     }
+    }
+   }
+  }
+ ]
+}

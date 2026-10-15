@@ -385,6 +385,165 @@ fn a_push_always_runs_the_ten_turns_workload() {
     }
 }
 
+/// The base timing rows `paths` leaves out on `event`: `paths` are
+/// test inputs, not files.
+fn skipped(event: &str, paths: &[&str]) -> Vec<&'static str> {
+    base_rows_skipped(event, &strings(paths))
+}
+
+#[test]
+fn a_tui_diff_skips_the_session_rows() {
+    assert_eq!(
+        skipped("pull_request", &["crates/tui/src/editor.rs"]),
+        vec!["session start", "sessions list"]
+    );
+}
+
+#[test]
+fn a_loop_diff_skips_the_list_and_paging_rows() {
+    assert_eq!(
+        skipped("pull_request", &["crates/loop/src/status.rs"]),
+        vec!["sessions list", "paging"]
+    );
+}
+
+#[test]
+fn a_hub_diff_skips_only_paging() {
+    assert_eq!(
+        skipped("pull_request", &["crates/hub/src/feed.rs"]),
+        vec!["paging"]
+    );
+}
+
+#[test]
+fn a_cli_diff_skips_session_start_and_paging() {
+    assert_eq!(
+        skipped("pull_request", &["crates/cli/src/hub_status.rs"]),
+        vec!["session start", "paging"]
+    );
+}
+
+#[test]
+fn an_unmapped_path_selects_every_row() {
+    for path in [
+        "crates/bench/examples/bench/main.rs",
+        "crates/bench/README.md",
+        "xtask/src/bench.rs",
+        "xtask/src/bench/judge.rs",
+        "xtask/src/select.rs",
+        "Cargo.lock",
+        "Cargo.toml",
+        "rust-toolchain.toml",
+        "scripts/paging-jig",
+        "scripts/release-size",
+        "scripts/stored-results",
+        ".github/workflows/ci.yml",
+        "crates/fakes/src/lib.rs",
+        "crates/picture/src/lib.rs",
+        "crates/newcrate/src/lib.rs",
+    ] {
+        assert_eq!(
+            skipped("pull_request", &[path]),
+            Vec::<&'static str>::new(),
+            "{path}"
+        );
+    }
+}
+
+#[test]
+fn a_docs_file_selects_no_row() {
+    // The pinned literal list of the six names in table order, cited by
+    // `crates/bench/examples/bench/main_tests.rs`: each side names the
+    // other.
+    let all = vec![
+        "session start",
+        "sessions list",
+        "terminal first frame",
+        "terminal attach",
+        "terminal wheel",
+        "paging",
+    ];
+    // `docs/invocation.md` is compiled in, so `release` runs on it, but
+    // its paths are all docs: every base row is skipped.
+    assert_eq!(skipped("pull_request", &["docs/ci.md"]), all);
+    assert_eq!(skipped("pull_request", &["docs/invocation.md"]), all);
+    // Docs beside code change nothing.
+    assert_eq!(
+        skipped("pull_request", &["docs/ci.md", "crates/tui/src/editor.rs"]),
+        vec!["session start", "sessions list"]
+    );
+}
+
+#[test]
+fn markdown_under_crates_is_code() {
+    // A Markdown file under a measured path is measured code, never a
+    // docs skip: the loop's prompts compile in.
+    assert_eq!(
+        skipped("pull_request", &["crates/loop/prompt/system.md"]),
+        vec!["sessions list", "paging"]
+    );
+    assert_eq!(
+        skipped("pull_request", &["crates/tools/prompt/guidelines.md"]),
+        vec!["sessions list", "paging"]
+    );
+}
+
+#[test]
+fn two_crates_take_the_union() {
+    // The loop selects the session and terminal rows, `cli` the list and
+    // terminal rows: neither selects paging, so only it is skipped.
+    assert_eq!(
+        skipped(
+            "pull_request",
+            &["crates/loop/src/status.rs", "crates/cli/src/hub_status.rs"]
+        ),
+        vec!["paging"]
+    );
+    // The tui selects the terminal and paging rows: with the loop only
+    // the list row is left out.
+    assert_eq!(
+        skipped(
+            "pull_request",
+            &["crates/loop/src/status.rs", "crates/tui/src/editor.rs"]
+        ),
+        vec!["sessions list"]
+    );
+}
+
+#[test]
+fn odd_paths_select_every_row() {
+    // The invariant "a path no row's crate list covers selects every
+    // row": slash-bounded matching keeps lookalikes out.
+    for path in [
+        "CRATES/TUI/SRC/X.RS",
+        "crates/tui",
+        "crates/tui_extra/src/x.rs",
+    ] {
+        assert_eq!(
+            skipped("pull_request", &[path]),
+            Vec::<&'static str>::new(),
+            "{path}"
+        );
+    }
+    // Both ends of a rename count, and duplicates change nothing.
+    assert_eq!(
+        skipped(
+            "pull_request",
+            &["crates/tui/src/x.rs", "crates/tui/src/x.rs"]
+        ),
+        skipped("pull_request", &["crates/tui/src/x.rs"])
+    );
+}
+
+#[test]
+fn an_empty_diff_or_a_push_skips_nothing() {
+    assert_eq!(skipped("pull_request", &[]), Vec::<&'static str>::new());
+    assert_eq!(
+        skipped("push", &["crates/tui/src/editor.rs"]),
+        Vec::<&'static str>::new()
+    );
+}
+
 fn results(pairs: &[(&str, &str)]) -> BTreeMap<String, String> {
     pairs
         .iter()

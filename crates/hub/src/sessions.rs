@@ -6,6 +6,8 @@
 use std::collections::BTreeSet;
 use std::path::Path;
 
+use contract::clock::Clock;
+use contract::diag::{Op, Timing};
 use contract::events::SessionStatus;
 use serde_json::{Map, Value, json};
 
@@ -15,15 +17,20 @@ use crate::recent;
 
 /// Answers `sessions`: the live snapshot is copied first, then
 /// `recent.jsonl` is read, and `exited` leaves out exactly the ids in that
-/// snapshot, so every session is listed once.
-// debt: time this as `sessions.list` with the operation timer
-// (docs/code-quality.md, once the timer is documented); trigger: the
-// timer's function exists.
+/// snapshot, so every session is listed once. The timer covers the whole
+/// attempt, from entry through the snapshot and row reads: an invalid
+/// argument is an entered attempt, not an unlisted one.
 pub(crate) fn answer(
     feed: &Feed,
     home: &Path,
     args: &Map<String, Value>,
+    clock: &dyn Clock,
+    timing: Option<&Timing>,
 ) -> Result<Option<Value>, Refused> {
+    // The start stamp comes from the caller's clock, so the helper takes
+    // no start read of its own; without a callable no clock is read.
+    let started = timing.map(|_| clock.now());
+    let _timer = timing.and_then(|timing| timing(Op::SessionsList, None, started));
     let project = project_arg(args)?;
     feed.settled();
     Ok(Some(list(feed.live(), home, project)))

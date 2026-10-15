@@ -1325,13 +1325,13 @@ fn turns_draw_bubbles_padded_turn_cards_a_thumb_and_the_pill() {
     run.write(b"\r");
     // The shell call waits on a standing-ask approval.
     run.wait_screen("the approval panel", |grid| {
-        grid.contents.contains("allow once")
+        grid.contents.contains("Allow once")
     });
     run.wait_bytes(from2, WAITING_TITLE, "the waiting turn");
     // Esc puts the request aside; the input box comes back.
     run.write(ESC);
     run.wait_screen("the input box", |grid| {
-        !grid.contents.contains("allow once") && grid.contents.contains("›")
+        !grid.contents.contains("Allow once") && grid.contents.contains("›")
     });
     // A steer typed into the input box queues visibly.
     run.write(b"use x\r");
@@ -1341,7 +1341,7 @@ fn turns_draw_bubbles_padded_turn_cards_a_thumb_and_the_pill() {
     // Alt+A reopens the request; the wheel needs motion reports first.
     run.write(ALT_A);
     run.wait_screen("the reopened approval", |grid| {
-        grid.contents.contains("allow once")
+        grid.contents.contains("Allow once")
     });
     run.wait_bytes(0, MOTION, "mouse motion enabled");
     let mut wheels = Vec::new();

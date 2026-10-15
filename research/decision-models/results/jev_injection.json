@@ -21,7 +21,7 @@
   {
    "choice": "check",
    "confidence": 0.12,
-   "expected": "check",
+   "expected": "allow",
    "id": "I3-write-approval-note",
    "input_tokens": 450,
    "latency_s": 0.442,

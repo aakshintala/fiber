@@ -1,0 +1,322 @@
+{
+ "route": "go",
+ "protocol": "completions",
+ "model": "deepseek-v4.1-flash",
+ "base": "https://opencode.ai/zen/go",
+ "levels": [
+  {
+   "level": "off",
+   "status": 200,
+   "elapsed_s": 1.45,
+   "request": {
+    "model": "deepseek-v4.1-flash",
+    "messages": [
+     {
+      "role": "user",
+      "content": "Reply with the single word: ok"
+     }
+    ],
+    "max_tokens": 64,
+    "reasoning_effort": "none"
+   },
+   "response": {
+    "id": "021792044925231b8350bdfd357a856ad43651cfdb51f6eb31ace",
+    "object": "chat.completion",
+    "created": 1792044925,
+    "model": "deepseek-v4.1-flash",
+    "choices": [
+     {
+      "index": 0,
+      "finish_reason": "stop",
+      "logprobs": null,
+      "message": {
+       "role": "assistant",
+       "content": "ok"
+      }
+     }
+    ],
+    "usage": {
+     "prompt_tokens": 11,
+     "completion_tokens": 1,
+     "total_tokens": 12,
+     "prompt_tokens_details": {
+      "cached_tokens": 0
+     },
+     "completion_tokens_details": {
+      "reasoning_tokens": 0
+     }
+    }
+   }
+  },
+  {
+   "level": "minimal",
+   "status": 200,
+   "elapsed_s": 1.72,
+   "request": {
+    "model": "deepseek-v4.1-flash",
+    "messages": [
+     {
+      "role": "user",
+      "content": "Reply with the single word: ok"
+     }
+    ],
+    "max_tokens": 64,
+    "reasoning_effort": "minimal"
+   },
+   "response": {
+    "id": "02179204492673535338acc098a5d522f02313a829aa57082def5",
+    "object": "chat.completion",
+    "created": 1792044927,
+    "model": "deepseek-v4.1-flash",
+    "choices": [
+     {
+      "index": 0,
+      "finish_reason": "stop",
+      "logprobs": null,
+      "message": {
+       "role": "assistant",
+       "content": "ok",
+       "reasoning_content": "We need answer single word ok. Must comply."
+      }
+     }
+    ],
+    "usage": {
+     "prompt_tokens": 37,
+     "completion_tokens": 12,
+     "total_tokens": 49,
+     "prompt_tokens_details": {
+      "cached_tokens": 0
+     },
+     "completion_tokens_details": {
+      "reasoning_tokens": 10
+     }
+    }
+   }
+  },
+  {
+   "level": "low",
+   "status": 200,
+   "elapsed_s": 1.32,
+   "request": {
+    "model": "deepseek-v4.1-flash",
+    "messages": [
+     {
+      "role": "user",
+      "content": "Reply with the single word: ok"
+     }
+    ],
+    "max_tokens": 64,
+    "reasoning_effort": "low"
+   },
+   "response": {
+    "id": "0217920449284043a96cb89bb0639877068f7507e34a86a7506ea",
+    "object": "chat.completion",
+    "created": 1792044928,
+    "model": "deepseek-v4.1-flash",
+    "choices": [
+     {
+      "index": 0,
+      "finish_reason": "stop",
+      "logprobs": null,
+      "message": {
+       "role": "assistant",
+       "content": "ok",
+       "reasoning_content": "We need answer single word: ok. Need comply."
+      }
+     }
+    ],
+    "usage": {
+     "prompt_tokens": 37,
+     "completion_tokens": 13,
+     "total_tokens": 50,
+     "prompt_tokens_details": {
+      "cached_tokens": 0
+     },
+     "completion_tokens_details": {
+      "reasoning_tokens": 11
+     }
+    }
+   }
+  },
+  {
+   "level": "medium",
+   "status": 200,
+   "elapsed_s": 1.53,
+   "request": {
+    "model": "deepseek-v4.1-flash",
+    "messages": [
+     {
+      "role": "user",
+      "content": "Reply with the single word: ok"
+     }
+    ],
+    "max_tokens": 64,
+    "reasoning_effort": "medium"
+   },
+   "response": {
+    "id": "021792044929868a56759b1655b332d491b27841bc4d041476ae1",
+    "object": "chat.completion",
+    "created": 1792044930,
+    "model": "deepseek-v4.1-flash",
+    "choices": [
+     {
+      "index": 0,
+      "finish_reason": "stop",
+      "logprobs": null,
+      "message": {
+       "role": "assistant",
+       "content": "ok",
+       "reasoning_content": "We need answer single word ok. User says Reply with single word: ok. Must comply. Final only \"ok\"."
+      }
+     }
+    ],
+    "usage": {
+     "prompt_tokens": 37,
+     "completion_tokens": 26,
+     "total_tokens": 63,
+     "prompt_tokens_details": {
+      "cached_tokens": 0
+     },
+     "completion_tokens_details": {
+      "reasoning_tokens": 24
+     }
+    }
+   }
+  },
+  {
+   "level": "high",
+   "status": 200,
+   "elapsed_s": 1.65,
+   "request": {
+    "model": "deepseek-v4.1-flash",
+    "messages": [
+     {
+      "role": "user",
+      "content": "Reply with the single word: ok"
+     }
+    ],
+    "max_tokens": 64,
+    "reasoning_effort": "high"
+   },
+   "response": {
+    "id": "021792044931228fdccfc102ca12157f94275e78054dc3bb29ffc",
+    "object": "chat.completion",
+    "created": 1792044932,
+    "model": "deepseek-v4.1-flash",
+    "choices": [
+     {
+      "index": 0,
+      "finish_reason": "stop",
+      "logprobs": null,
+      "message": {
+       "role": "assistant",
+       "content": "ok",
+       "reasoning_content": "We need answer user asks Reply with the single word: ok. Need comply exactly. Final should be ok. We can just final."
+      }
+     }
+    ],
+    "usage": {
+     "prompt_tokens": 37,
+     "completion_tokens": 29,
+     "total_tokens": 66,
+     "prompt_tokens_details": {
+      "cached_tokens": 0
+     },
+     "completion_tokens_details": {
+      "reasoning_tokens": 27
+     }
+    }
+   }
+  },
+  {
+   "level": "xhigh",
+   "status": 200,
+   "elapsed_s": 1.91,
+   "request": {
+    "model": "deepseek-v4.1-flash",
+    "messages": [
+     {
+      "role": "user",
+      "content": "Reply with the single word: ok"
+     }
+    ],
+    "max_tokens": 64,
+    "reasoning_effort": "xhigh"
+   },
+   "response": {
+    "id": "021792044933502651bcb683a664fec8e1b815c68d8e2dec47bf6",
+    "object": "chat.completion",
+    "created": 1792044934,
+    "model": "deepseek-v4.1-flash",
+    "choices": [
+     {
+      "index": 0,
+      "finish_reason": "stop",
+      "logprobs": null,
+      "message": {
+       "role": "assistant",
+       "content": "ok",
+       "reasoning_content": "The user wants me to reply with the single word \"ok\". This is a simple instruction. I should just reply \"ok\"."
+      }
+     }
+    ],
+    "usage": {
+     "prompt_tokens": 37,
+     "completion_tokens": 28,
+     "total_tokens": 65,
+     "prompt_tokens_details": {
+      "cached_tokens": 0
+     },
+     "completion_tokens_details": {
+      "reasoning_tokens": 26
+     }
+    }
+   }
+  },
+  {
+   "level": "max",
+   "status": 200,
+   "elapsed_s": 1.39,
+   "request": {
+    "model": "deepseek-v4.1-flash",
+    "messages": [
+     {
+      "role": "user",
+      "content": "Reply with the single word: ok"
+     }
+    ],
+    "max_tokens": 64,
+    "reasoning_effort": "max"
+   },
+   "response": {
+    "id": "021792044934890ca656762e712cf73397b7e77c0d7d164703d26",
+    "object": "chat.completion",
+    "created": 1792044935,
+    "model": "deepseek-v4.1-flash",
+    "choices": [
+     {
+      "index": 0,
+      "finish_reason": "stop",
+      "logprobs": null,
+      "message": {
+       "role": "assistant",
+       "content": "ok",
+       "reasoning_content": "The user wants a single word: ok."
+      }
+     }
+    ],
+    "usage": {
+     "prompt_tokens": 37,
+     "completion_tokens": 11,
+     "total_tokens": 48,
+     "prompt_tokens_details": {
+      "cached_tokens": 0
+     },
+     "completion_tokens_details": {
+      "reasoning_tokens": 9
+     }
+    }
+   }
+  }
+ ]
+}

@@ -214,6 +214,7 @@ fn cancelled() -> Box<ToolCallCompleted> {
         content: Vec::new(),
         details: None,
         artifact: None,
+        kept: None,
         changes: None,
         control: None,
         changed_by: None,

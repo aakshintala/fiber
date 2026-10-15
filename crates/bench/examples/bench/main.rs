@@ -4,9 +4,10 @@
 //! self-check that failed, as one result file for
 //! `cargo xtask bench-report` to judge. It measures; it judges nothing.
 //!
-//! `bench --fiber <path> --out <file> [--runs 5] [--timing-runs <runs>] [--idle-secs 10] [--only all|timing|wheel] [--paging <jig>] [--skip-ten-turns]`
+//! `bench --fiber <path> --out <file> [--runs 5] [--timing-runs <runs>] [--idle-secs 10] [--only all|timing|wheel] [--paging <jig>] [--skip-ten-turns] [--skip-rows <names>]`
 //! (`--paging` names the `tui` crate's `paging` jig; without it that workload
-//! does not run; `--timing-runs` defaults to the `--runs` value)
+//! does not run; `--timing-runs` defaults to the `--runs` value;
+//! `--skip-rows` is a comma-joined list of timing workloads to leave out)
 //! exits 0 once the file is written (a failed workload is recorded in it),
 //! 2 on a usage error or a host other than Linux, and 1 when the file
 //! cannot be written.
@@ -37,7 +38,8 @@ use std::time::Duration;
 use serde_json::{Value, json};
 
 const USAGE: &str = "usage: bench --fiber <path> --out <file> [--runs 5] [--timing-runs <runs>] \
-     [--idle-secs 10] [--only all|timing|wheel] [--paging <jig>] [--skip-ten-turns]";
+     [--idle-secs 10] [--only all|timing|wheel] [--paging <jig>] [--skip-ten-turns] \
+     [--skip-rows <names>]";
 
 /// The result file's format, which `cargo xtask bench-report` checks.
 const SCHEMA: u32 = 1;
@@ -66,12 +68,20 @@ struct Args {
     /// under `skipped`, so the judge reports it instead of failing the
     /// missing metric.
     skip_ten_turns: bool,
+    /// The timing workloads the base pass leaves out: CI passes this on
+    /// a pull request whose diff selects only some timing rows
+    /// (`docs/ci.md`, "Selection"). The results file records the skip
+    /// under `skipped`, after the 10-busy-turns workload when both are
+    /// skipped, so the judge reports them instead of failing the
+    /// missing metrics.
+    skip_rows: Vec<String>,
 }
 
 fn parse(mut args: impl Iterator<Item = String>) -> Result<Args, String> {
     let (mut fiber, mut out, mut paging) = (None, None, None);
     let (mut runs, mut timing_runs, mut idle_secs, mut only) = (5, None, 10, Only::All);
     let mut skip_ten_turns = false;
+    let mut skip_rows = Vec::new();
     while let Some(flag) = args.next() {
         // A switch, never a value: the selection left the workload out.
         if flag == "--skip-ten-turns" {
@@ -101,6 +111,7 @@ fn parse(mut args: impl Iterator<Item = String>) -> Result<Args, String> {
                 );
             }
             "--idle-secs" => idle_secs = number("--idle-secs")?,
+            "--skip-rows" => skip_rows = parse_skip_rows(&value)?,
             "--only" => {
                 only = match value.as_str() {
                     "all" => Only::All,
@@ -125,14 +136,56 @@ fn parse(mut args: impl Iterator<Item = String>) -> Result<Args, String> {
         only,
         paging,
         skip_ten_turns,
+        skip_rows,
     })
 }
 
+/// Every workload that reports only timings, in selection order: the
+/// names `--skip-rows` may hold.
+fn timing_names() -> Vec<&'static str> {
+    idle::WORKLOADS
+        .iter()
+        .chain(&busy::WORKLOADS)
+        .chain(&busy::ONCE)
+        .chain(&resume::WORKLOADS)
+        .chain(&paging::WORKLOADS)
+        .chain(listing::SAMPLED.iter())
+        .chain(attach::SAMPLED.iter())
+        .chain(wheel::SAMPLED.iter())
+        .filter(|workload| workload.timing)
+        .map(|workload| workload.name)
+        .collect()
+}
+
+/// The workload names in a `--skip-rows` value, comma-joined, in the
+/// order given; an empty value skips nothing. Every name must be a
+/// timing workload, so a typo fails the run instead of silently
+/// skipping nothing.
+fn parse_skip_rows(value: &str) -> Result<Vec<String>, String> {
+    if value.is_empty() {
+        return Ok(Vec::new());
+    }
+    let timing = timing_names();
+    value
+        .split(',')
+        .map(|name| {
+            if timing.contains(&name) {
+                Ok(name.to_owned())
+            } else {
+                Err(format!(
+                    "--skip-rows {value:?}: {name:?} is not a timing workload"
+                ))
+            }
+        })
+        .collect()
+}
+
 /// Each workload `args` selects, with its repeats and its run count: a
-/// repeated workload runs `runs` times, a sampled workload once, and one
-/// pass of `busy::ONCE` is never a sample. A workload that reports a
-/// memory metric keeps the full count; a timing-only workload runs the
-/// pull request's timing count. Sampled workloads take their samples
+/// repeated workload runs the timing count when it reports only timings
+/// and the full count otherwise, a sampled workload once, and one
+/// pass of `busy::ONCE` is never a sample. `terminal attach` reports
+/// memory, so it keeps the full count; the other sampled workloads are
+/// timing-only. Sampled workloads take their samples
 /// inside one run.
 fn selected(args: &Args) -> Vec<(&'static idle::Workload, u32, u32)> {
     let (runs, timing_runs) = (args.runs, args.timing_runs);
@@ -143,13 +196,7 @@ fn selected(args: &Args) -> Vec<(&'static idle::Workload, u32, u32)> {
         .chain(&resume::WORKLOADS)
         .chain(paging)
         .map(|workload| {
-            // `paging` reports memory, so it keeps the full count with
-            // the other memory workloads.
-            let count = if workload.timing && workload.name != "paging" {
-                timing_runs
-            } else {
-                runs
-            };
+            let count = if workload.timing { timing_runs } else { runs };
             (workload, count, count)
         });
     let once = busy::ONCE.iter().map(|workload| (workload, 1, 1));
@@ -179,8 +226,10 @@ fn selected(args: &Args) -> Vec<(&'static idle::Workload, u32, u32)> {
         })
         // The selection runs the 10-busy-turns workload only on a pull
         // request whose diff touches what it measures, and always on a
-        // push (`docs/ci.md`, "Selection").
+        // push (`docs/ci.md`, "Selection"). The base pass leaves out
+        // the timing rows the diff did not select, after the `only` filter.
         .filter(|(workload, _, _)| !(args.skip_ten_turns && workload.name == busy::TEN_TURNS_NAME))
+        .filter(|(workload, _, _)| !args.skip_rows.iter().any(|name| name == workload.name))
         .collect()
 }
 
@@ -201,6 +250,12 @@ fn measure_all(
         eprintln!(
             "bench: skipping {} (the selection did not choose it)",
             busy::TEN_TURNS_NAME
+        );
+    }
+    if !args.skip_rows.is_empty() {
+        eprintln!(
+            "bench: skipping {} (the selection did not choose them)",
+            args.skip_rows.join(", ")
         );
     }
     for (workload, repeats, runs) in selected(args) {
@@ -234,6 +289,11 @@ fn document(
     metric_runs: BTreeMap<&'static str, u32>,
     failures: Vec<String>,
 ) -> Value {
+    let mut skipped = Vec::new();
+    if args.skip_ten_turns {
+        skipped.push(busy::TEN_TURNS_NAME.to_owned());
+    }
+    skipped.extend(args.skip_rows.iter().cloned());
     let mut result = json!({
         "schema": SCHEMA,
         "runs": args.runs,
@@ -245,7 +305,7 @@ fn document(
         "failures": failures,
         // The workloads the selection left out, by name: the judge
         // reports them instead of failing their missing metrics.
-        "skipped": if args.skip_ten_turns { vec![busy::TEN_TURNS_NAME] } else { Vec::new() },
+        "skipped": skipped,
     });
     if let Some(size) = binary_size
         && let Value::Object(map) = &mut result

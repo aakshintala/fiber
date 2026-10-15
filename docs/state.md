@@ -253,8 +253,22 @@ What is recorded:
   came, `attempt` from 1, `request_bytes` as posted, `response_bytes` as
   read, and `headers_ms`, `first_token_ms` and `total_ms`, whole
   milliseconds from the send. A retried call writes one line per attempt;
-  a request never sent writes none. Requests made through Lua providers
-  are not yet recorded.
+  a request never sent writes none.
+- **At `debug`, a Lua provider's HTTP requests:** one `provider_request`
+  line when the request ends, with `purpose` `model_list` for `models()`,
+  `quota` for `quota()`, `token_refresh` for `credential()`, and `cost`
+  for `cost()`. `data` holds `provider`, the provider's registered name,
+  `status` when a response came, `attempt` (always 1: a Lua invocation
+  makes no retry), `request_bytes` as posted, `response_bytes` as read,
+  and `headers_ms` and `total_ms`, whole milliseconds from the send. A
+  body read that fails keeps the status, the headers and the bytes read
+  before the failure. A request that validation rejects before sending
+  writes no line; one that fails after writes one without `status` or
+  `headers_ms` and with zero response bytes. Only these four purposes
+  record: `sign()`, hooks, commands, timers, tools and the entry script's
+  own requests stay silent. No other field is recorded, and never a host,
+  path, model, URL, query string, credential, header value, body or token,
+  as for every line in `logs/`.
 - **At `debug`, the hub's peak memory:** a `peak_memory` line just before
   each `hub_stopped`. `data.peak_kib` is the process's peak so far: peak RSS
   (`VmHWM`) on Linux, and peak physical footprint on macOS
@@ -277,7 +291,13 @@ What is recorded:
   attempt group for a native observed request, from the first socket attempt
   through socket admission. It excludes DNS before entry, TLS, CONNECT
   negotiation and the response body, as well as pre-stopped and empty groups
-  and already-built tunnels. Installed for the loop are `startup.preamble`,
+  and already-built tunnels. Also installed is `picture.run`: one scope per
+  entered image-child invocation, from spawning it to its validated answer,
+  kept through spawn failures, errors and cancellation after entry, while a
+  call cancelled before entry starts none. A PDF count/cut call owns one
+  scope, and each rendered page's own child owns its own; the renderer
+  itself and file inspection stay untimed. Its `data` holds only `op` and
+  `ms`. Installed for the loop are `startup.preamble`,
   `turn.request`, `turn.model_call` and `turn.handoff`. `startup.preamble`
   covers building and installing the preamble after the approved-code load,
   before the opening message, once per session start: a same-session rebuild
@@ -286,17 +306,49 @@ What is recorded:
   covers one admitted attempt, from entering the model call until its stream
   ends; a cancel observed before admission writes none, and a retry's backoff
   stays outside. `turn.handoff` covers one handoff end to end, from its first
-  record through the restart. The scopes nest instead of adding up: a
+  record through the restart. Installed for one tool call are
+  `tool.permission`, `tool.reviewer`, `tool.hooks` and `tool.run`, each
+  with `tool` naming the registered tool. `tool.permission` covers the
+  permission order from admission to the decision, holding the reviewer's
+  stages and a person's wait; a suspended approval's fresh segment after
+  resume is a new line, never the old process's downtime. `tool.reviewer`
+  covers one entered judgement stage, a re-ask inside it included; a
+  stage never run, and the person's wait after an escalation, write none.
+  `tool.hooks` covers one actual `before_tool` or `check_tool` dispatch,
+  or one actual `after_tool` dispatch on ordinary, spilled or unsaved
+  output; a call with no hooks, or a dispatch a shutdown suppresses,
+  writes none. `tool.run` covers one entered execution on its worker, not
+  the wait for its ordered completion. The scopes nest instead of adding up: a
   requested handoff holds its note's request and model scopes, and
   `provider_request`'s network share sits inside `turn.model_call`. Warming
   refreshes and reviewer judgements run through the same factories but write
-  no turn scope. Other plain agent clients stay unobserved.
+  no turn scope. Also installed are the five hook chains other
+  than the tool hooks: `hook.session_start`, `hook.turn_start`,
+  `hook.before_message`, `hook.before_model_call` and `hook.turn_end`, one
+  scope around each entered public dispatch, however it returns, empty
+  chains included. Tool hooks take no scope: `tool.hooks` covers those
+  chains. Other plain agent clients stay unobserved.
   Installed too is `mcp.connect`: one scope around one actual server
   connection attempt, from starting or dialing it until its tool list is
   in hand. It covers stdio and remote servers, eager and required starts,
   lazy first use, restarts, renewals and post-approval starts, with the
   remote server's actual connector work timed as `net.connect` beside it.
   It excludes cache-only declarations, prompt discovery and tool execution.
+  Installed for the hub are `hub.session_start`, `hub.resume` and
+  `hub.subscribe_replay`, and for listing, `sessions.list`.
+  `hub.session_start` covers a start from the request until the session's
+  socket accepts, excluding the summary handshake for a first prompt; a
+  rejected start measures through its failure. `hub.resume` covers one
+  reach for the session, including gate contention, retries and failures.
+  `hub.subscribe_replay` covers one actual kept-subscription replay, from
+  its write through the matching acknowledgement, or through its failure,
+  cancellation or disconnect before it. Installed for the door is
+  `startup.socket`: socket preparation until the bound listener is ready,
+  on new and resumed sessions alike. Installed for listing is
+  `sessions.list`: one listing attempt from entry through feed settlement,
+  snapshot and row reads, including invalid arguments.
+  Request, model, hook and network timings may overlap as nested
+  measurements, never additive phases.
 
 An event inside a running session is recorded in that session's log and
 nowhere else, with one exception: a session or ask process's own diagnostic

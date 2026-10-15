@@ -111,6 +111,9 @@ judged is `docs/permissions.md`; the events themselves are `docs/events.md`.
   tool that changes files sets it, an extension's included.
 - `artifact`: the path to the full output, present when the result was cut or
   when an `after_tool` hook returned text for the artifact.
+- `kept`: on a cut result, the byte ranges of the full output that `content`
+  holds ("Bounded results"), so a client marks the edges of the model's view
+  without reading the cut notice.
 - `control`: instructions to the loop, absent on most results. Four fields
   are defined. `handoff`, a handoff note: the loop restarts the model's
   context from it at the step boundary (`docs/handoff.md`). `questions`, a
@@ -151,7 +154,8 @@ by content.
   both ends are kept, the notice sits between them. A configured cap on such
   a tool is divided in the tool's own start-to-end proportion: the end gets
   its share rounded down, and the start gets the rest. Nothing is lost, only
-  moved out of the model's view. The full output is in the session's `artifacts/`. `read` is the
+  moved out of the model's view. The full output is in the session's `artifacts/`, and the
+  result's `kept` gives the byte ranges of it the model was sent. `read` is the
   exception: the file is the full output, so a cut read writes no artifact
   and its notice gives the offset to continue from.
 - The model reads the rest with the ordinary `read` tool on that path. There is
@@ -217,6 +221,8 @@ path's directory, ending in `/`.
   sent with `strict: false`.
 - Text comes back as it is in the file, without line numbers and without a
   byte order mark. Nothing needs stripping before it is copied into an edit.
+- `details` is `{ "start_line": N }` on a text result, the number of the
+  first line returned, so a client numbers the lines.
 - The cap is the 16 KiB default ("Bounded results"). A cut falls at a line
   boundary, and the notice gives the lines shown, the file's total and the
   `offset` to continue from. No artifact is written.
@@ -304,8 +310,9 @@ path's directory, ending in `/`.
   `unsupported_file`.
 - The result gives, for each block, the lines it replaced and the lines the new
   text now occupies, and says when a block matched only after normalising.
-  The diff goes in `details` for clients and is not sent to the model, and
-  `changes` gives the lines added and removed.
+  The diff goes in `details` as `{ "diff": "<unified diff>" }` for clients
+  and is not sent to the model, and `changes` gives the lines added and
+  removed.
 - Effects: an irreversible `writes`, with the resolved path.
 
 ### Stale files
@@ -546,6 +553,14 @@ that ticket's resolution holds the rationale and the rejected alternatives.
   `nonzero_exit` and `process.exit_code`. A command killed by a signal
   Fiber did not send is `failed` with code `signal` and `process.signal`.
   A timeout is as above; a cancellation is `cancelled`.
+- `details` is `{ "command": "<command>", "exit_code": N }`, or `"signal"`
+  in place of `"exit_code"` when a signal killed it, so a client draws the
+  command and how it ended. When the command is a single built-in `grep`
+  over files ("Search"), `details` also holds `"matches"`: one
+  `{ "path", "lines" }` per file in the order printed, each line a
+  `{ "line", "text", "spans" }`: its line number, its text, and the
+  `[start, end]` byte ranges of the matches in it, empty on a context line,
+  so a client draws matches by file with the matched text picked out. A `grep` reading its standard input, or in a pipeline, adds none.
 - Output follows "Bounded results": the default 16 KiB cap applies, and the
   shell keeps the first 8 KiB and the last 8 KiB. The start is where a
   command reports its setup, its first error or its first matches; the end is

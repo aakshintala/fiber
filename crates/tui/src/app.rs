@@ -708,17 +708,31 @@ impl App {
 
     /// The approval panel, while it is open: its form laid out at the
     /// inset width, past the panel's stripe and gap (`docs/tui.md`,
-    /// "Look").
+    /// "Look"). The session asking shows its name when known, else its
+    /// id (`docs/tui.md`, "An approval").
     pub(crate) fn panel(&self) -> Option<Panel> {
-        self.queue.panel(crate::surface::inset(self.column_width()))
+        let width = crate::surface::inset(self.column_width());
+        self.queue.panel_with(width, &|id| {
+            let name = self
+                .home
+                .as_ref()
+                .and_then(|home| home.sessions.row(id))
+                .map(|row| row.name.clone());
+            if name.as_deref().is_some_and(|name| !name.is_empty()) {
+                return name;
+            }
+            if self.session().is_some_and(|session| session == id) {
+                self.name().map(str::to_owned)
+            } else {
+                None
+            }
+        })
     }
 
-    /// The badge line while the panel is closed and requests wait:
-    /// the `next_request` action's bound key, left out when unbound.
+    /// The badge row while the panel is closed and requests wait
+    /// (`docs/tui.md`, "An approval").
     pub(crate) fn badge(&self) -> Option<String> {
-        let key = self.keys().first_label("next_request");
-        self.queue
-            .badge(usize::from(self.offer.aside()), key.as_deref())
+        self.queue.badge(usize::from(self.offer.aside()))
     }
 
     /// The resident conversation's lines, before wrapping.

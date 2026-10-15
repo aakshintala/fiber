@@ -1993,7 +1993,7 @@ fn the_run_count_sentence_follows_the_head_file() {
     assert!(
         out.comment.contains(
             "Each number is the median of 5 runs on Linux x86_64, \
-             a timing-only workload's of 3 (`docs/performance.md`)."
+             a timing-only workload's or the paging jig's of 3 (`docs/performance.md`)."
         ),
         "{}",
         out.comment
@@ -2021,6 +2021,97 @@ fn the_run_count_sentence_follows_the_head_file() {
         "{}",
         out.comment
     );
+}
+
+#[test]
+fn a_base_that_skipped_rows_names_them_in_the_summary() {
+    let mut unselected = base();
+    for id in ["session_start_ms", "sessions_list_ms"] {
+        unselected["metrics"].as_object_mut().unwrap().remove(id);
+    }
+    let unselected = with_skipped(unselected, &["session start", "sessions list"]);
+    let out = judge(&head(), Some(&unselected), Event::PullRequest);
+    assert_eq!(out.failures, Vec::<String>::new());
+    assert!(
+        out.comment.contains(
+            "The base pass skipped session start, sessions list: \
+             the selection did not choose them (`docs/ci.md`, \"Selection\")."
+        ),
+        "{}",
+        out.comment
+    );
+    // An unselected row still runs on head and is reported with no ratio
+    // and no gate: the base cell reads unavailable and the row stays
+    // advisory, through the existing missing-metric arm.
+    for budget in ["Session start", "Listing 1,000 sessions"] {
+        let line = row(&out.comment, budget);
+        assert!(line.contains("| unavailable |"), "{line}");
+        assert!(line.ends_with("| advisory |"), "{line}");
+    }
+}
+
+#[test]
+fn the_summary_names_no_skip_without_a_skipped_base() {
+    // No sentence when `skipped` is empty or absent, ...
+    let out = judge(
+        &head(),
+        Some(&with_skipped(base(), &[])),
+        Event::PullRequest,
+    );
+    assert!(
+        !out.comment.contains("The base pass skipped"),
+        "{}",
+        out.comment
+    );
+    let out = judge(&head(), Some(&base()), Event::PullRequest);
+    assert!(
+        !out.comment.contains("The base pass skipped"),
+        "{}",
+        out.comment
+    );
+    // ... on a push, which has no base column, ...
+    let out = judge(
+        &head(),
+        Some(&with_skipped(base(), &["session start"])),
+        Event::Push,
+    );
+    assert!(
+        !out.comment.contains("The base pass skipped"),
+        "{}",
+        out.comment
+    );
+    // ... or when the base failed.
+    let mut failed = with_skipped(base(), &["session start"]);
+    failed["failures"] = json!(["base broke"]);
+    let out = judge(&head(), Some(&failed), Event::PullRequest);
+    assert!(
+        !out.comment.contains("The base pass skipped"),
+        "{}",
+        out.comment
+    );
+}
+
+#[test]
+fn a_skipped_base_leaves_the_head_ten_turns_skip_alone() {
+    let headed = with_skipped(head(), &["10 busy turns"]);
+    let unselected = with_skipped(base(), &["session start"]);
+    let out = judge(&headed, Some(&unselected), Event::PullRequest);
+    assert!(
+        out.comment.contains(super::judge::TEN_TURNS_SKIP_NOTE),
+        "{}",
+        out.comment
+    );
+    assert!(
+        out.comment.contains("The base pass skipped session start:"),
+        "{}",
+        out.comment
+    );
+}
+
+/// `results` with its `skipped` list set to `names`.
+fn with_skipped(mut results: Value, names: &[&str]) -> Value {
+    results["skipped"] = json!(names);
+    results
 }
 
 #[test]

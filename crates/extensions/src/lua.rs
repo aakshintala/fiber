@@ -18,6 +18,7 @@ use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use contract::clock::Clock;
+use contract::diag::{DebugLog, Purpose};
 use serde_json::{Value, json};
 
 use crate::oauth::{Browser, LoginSlot, SystemBrowser};
@@ -313,6 +314,37 @@ impl LuaExtension {
     pub fn with_host_script(self, script: Arc<host::script::HostScript>) -> Self {
         self.hub.set_host_script(script);
         self
+    }
+
+    /// Installs the session's diagnostic sink on this VM, once: the first
+    /// installation wins and a later one changes nothing. Runs no
+    /// callback: use before provider work, not as live reconfiguration.
+    pub fn with_diagnostics(self, debug: Arc<dyn DebugLog>) -> Self {
+        self.hub.set_diagnostics(debug);
+        self
+    }
+
+    /// Installs the sink on an already-shared VM, as
+    /// [`SessionExtensions::with_diagnostics`](crate::SessionExtensions::with_diagnostics)
+    /// does for live handles. The first installation wins.
+    pub(crate) fn set_diagnostics(&self, debug: Arc<dyn DebugLog>) {
+        self.hub.set_diagnostics(debug);
+    }
+
+    /// The installed diagnostic sink, if any. Test-only: no public API
+    /// exposes it, and attachment is otherwise observable only through
+    /// HTTP observation.
+    #[cfg(test)]
+    pub(crate) fn hub_diagnostics(&self) -> Option<Arc<dyn DebugLog>> {
+        self.hub.diagnostics()
+    }
+
+    /// Whether the hub lock is free right now. Test-only: the rendezvous
+    /// proof reads it while an observed worker waits past it. No public
+    /// API exposes the lock, and the ordering is otherwise unobservable.
+    #[cfg(test)]
+    pub(crate) fn hub_unlocked(&self) -> bool {
+        self.hub.try_lock().is_some()
     }
 
     /// The clock this extension's deadlines read.
@@ -796,7 +828,7 @@ pub(crate) enum CredentialFor {
 
 /// What a call runs.
 #[derive(Clone)]
-enum Target {
+pub(crate) enum Target {
     /// A command `fiber.command` registered.
     Command(String),
     /// A function `fiber.provider` registered.
@@ -834,6 +866,44 @@ enum Target {
     Effects(String),
 }
 
+/// The eligible provider purpose of `target`: the provider's registered
+/// name and why an HTTP request it makes is recorded. `models`, `quota`,
+/// `credential` (a stored credential and a login alike) and `cost` are
+/// recorded; `sign` and every other target never are, whatever HTTP they
+/// send. A pure mapping of the value, as the seam holds no behaviour.
+pub(crate) fn provider_purpose(target: &Target) -> Option<(&str, Purpose)> {
+    let Target::Provider { name, function, .. } = target else {
+        return None;
+    };
+    let purpose = match *function {
+        "models" => Purpose::ModelList,
+        "quota" => Purpose::Quota,
+        "credential" => Purpose::TokenRefresh,
+        "cost" => Purpose::Cost,
+        _ => return None,
+    };
+    Some((name, purpose))
+}
+
+/// Snapshots the owned observation context for an HTTP request about to
+/// run as `target`: the provider's registered name and the eligible
+/// purpose, with the installed sink and clock. None unless the target is
+/// an eligible provider purpose, a sink is installed and it records debug
+/// lines. No timer starts and nothing is written here: the admitted
+/// worker observes once it executes.
+pub(crate) fn http_observation(hub: &Hub, target: &Target) -> Option<host::HttpObservation> {
+    let (provider, purpose) = provider_purpose(target)?;
+    let debug = hub.diagnostics()?;
+    if !debug.debugging() {
+        return None;
+    }
+    Some(host::HttpObservation {
+        provider: provider.to_owned(),
+        purpose,
+        debug,
+        clock: hub.clock_handle(),
+    })
+}
 /// The callback's name as an error names it: a command's name,
 /// `<provider>.<function>`, a hook's point, a tool's name, a search
 /// backend's name, or
@@ -874,9 +944,15 @@ mod timers;
 mod tool;
 mod vm;
 
+#[cfg(test)]
+pub(crate) use host_calls::{
+    Pause, pause_observed_execution, pause_settle, unpause_observed_execution, unpause_settle,
+};
 pub(crate) use hub::Hub;
 use hub::{CallbackTimeouts, Gate, Next, Phase, Shared};
 pub(crate) use hub::{DeclaredHooks, HookPhase};
+#[cfg(test)]
+pub(crate) use schedule::fail_next_spawn_for;
 pub(crate) use tool::{DeclaredTool, effects_from};
 use vm::{Step, Vm};
 

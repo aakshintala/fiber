@@ -444,7 +444,7 @@ fn resumed_session(
         &delegates,
         skills,
         extensions.tools(),
-        timing,
+        timing.clone(),
     )?;
     let forget = Arc::clone(&session_servers.forget);
     let hosted_stands = crate::switch::hosted_stands(&tools);
@@ -462,13 +462,18 @@ fn resumed_session(
         credential_files,
         &clock,
     );
-    let session = match Session::resume(
+    // The durable log is held: the diagnostic writer takes the session's
+    // file and id, so the door's socket timer and every later line share
+    // them, while MCP and permission lines keep the pre-attach file.
+    diag.attach(&id);
+    let session = match Session::resume_with_timing(
         &home,
         dir,
         &log,
         Arc::clone(&clock),
         infos,
         Box::new(io::stdout()),
+        timing,
     ) {
         Ok(session) => session,
         Err(e) => {
@@ -532,9 +537,8 @@ fn resumed_session(
         }
         Ok(Ok(())) => {}
     }
-    // The durable log is held: the diagnostic writer takes the session's
-    // file and id, so request, extension and memory lines share them.
-    diag.attach(&id);
+    // The session file and id are already attached above, before the
+    // door opened: request, extension and memory lines share them.
     let inbox_wake = session.inbox_wake();
     let rewrites = session.rewrites();
     let admission = session.admission();

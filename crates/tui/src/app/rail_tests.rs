@@ -716,7 +716,12 @@ fn alt_a_opens_the_queue_first() {
     app.on_line(permission(A, "r_a"));
     put_aside(&mut app);
     assert_eq!(press(&mut app, Key::AltA), Effect::None);
-    assert!(panel_text(&app).contains(A), "{}", panel_text(&app));
+    // The header shows the feed row's name, shared by every row here.
+    assert!(
+        panel_text(&app).contains("fix the parser"),
+        "{}",
+        panel_text(&app)
+    );
     assert_eq!(on_screen(&app), Some(A));
 }
 
@@ -762,7 +767,11 @@ fn alt_a_switches_to_the_oldest_waiting_row_and_opens_its_request_on_arrival() {
     app.on_line(permission(B, "r_b"));
     put_aside(&mut app);
     app.on_line(permission(C, "r_c"));
-    assert!(panel_text(&app).contains(C), "{}", panel_text(&app));
+    assert!(
+        panel_text(&app).contains("fix the parser"),
+        "{}",
+        panel_text(&app)
+    );
 }
 
 #[test]
@@ -835,7 +844,11 @@ fn a_request_from_another_session_with_the_same_id_does_not_open() {
     app.on_line(permission(B, "r_c"));
     assert!(app.panel().is_none());
     app.on_line(permission(C, "r_c"));
-    assert!(panel_text(&app).contains(C), "{}", panel_text(&app));
+    assert!(
+        panel_text(&app).contains("fix the parser"),
+        "{}",
+        panel_text(&app)
+    );
 }
 
 #[test]
@@ -848,7 +861,11 @@ fn another_request_from_that_session_does_not_open() {
     app.on_line(permission(C, "r_other"));
     assert!(app.panel().is_none());
     app.on_line(permission(C, "r_c"));
-    assert!(panel_text(&app).contains(C), "{}", panel_text(&app));
+    assert!(
+        panel_text(&app).contains("fix the parser"),
+        "{}",
+        panel_text(&app)
+    );
 }
 
 #[test]
@@ -857,7 +874,7 @@ fn a_request_already_answered_does_not_reopen() {
     // `C`'s request is answered while `A` is on screen; its reply waits
     // for the hub.
     app.on_line(permission(C, "r_c"));
-    assert!(panel_text(&app).contains(C));
+    assert!(panel_text(&app).contains("fix the parser"));
     press(&mut app, Key::Enter);
     assert!(app.panel().is_none());
     let out = sent(press(&mut app, Key::AltA));

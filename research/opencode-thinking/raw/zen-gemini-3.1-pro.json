@@ -1,0 +1,317 @@
+{
+ "route": "zen",
+ "protocol": "google",
+ "model": "gemini-3.1-pro",
+ "base": "https://opencode.ai/zen",
+ "levels": [
+  {
+   "level": "off",
+   "status": 400,
+   "elapsed_s": 0.73,
+   "request": {
+    "contents": [
+     {
+      "role": "user",
+      "parts": [
+       {
+        "text": "Reply with the single word: ok"
+       }
+      ]
+     }
+    ],
+    "generationConfig": {
+     "maxOutputTokens": 16,
+     "thinkingConfig": {
+      "thinkingBudget": 0,
+      "includeThoughts": true
+     }
+    }
+   },
+   "response": {
+    "error": {
+     "code": 400,
+     "status": "INVALID_ARGUMENT",
+     "message": "Upstream request failed: [400] Unable to submit request because Thinking_config.include_thoughts is only enabled when thinking is enabled.. Learn more: https://cloud.google.com/vertex-ai/generative-ai/docs/model-reference/gemini"
+    }
+   }
+  },
+  {
+   "level": "minimal",
+   "status": 400,
+   "elapsed_s": 0.83,
+   "request": {
+    "contents": [
+     {
+      "role": "user",
+      "parts": [
+       {
+        "text": "Reply with the single word: ok"
+       }
+      ]
+     }
+    ],
+    "generationConfig": {
+     "maxOutputTokens": 16,
+     "thinkingConfig": {
+      "thinkingLevel": "MINIMAL",
+      "includeThoughts": true
+     }
+    }
+   },
+   "response": {
+    "error": {
+     "code": 400,
+     "status": "INVALID_ARGUMENT",
+     "message": "Upstream request failed: [400] Unable to submit request because thinking_level MINIMAL is not supported by this model. Learn more: https://cloud.google.com/vertex-ai/generative-ai/docs/model-reference/gemini"
+    }
+   }
+  },
+  {
+   "level": "low",
+   "status": 200,
+   "elapsed_s": 5.34,
+   "request": {
+    "contents": [
+     {
+      "role": "user",
+      "parts": [
+       {
+        "text": "Reply with the single word: ok"
+       }
+      ]
+     }
+    ],
+    "generationConfig": {
+     "maxOutputTokens": 16,
+     "thinkingConfig": {
+      "thinkingLevel": "LOW",
+      "includeThoughts": true
+     }
+    }
+   },
+   "response": {
+    "createTime": "2026-10-15T06:21:24.852325Z",
+    "responseId": "5HDQauWCNKqEotQPnJ72gQc",
+    "modelVersion": "gemini-3.1-pro",
+    "candidates": [
+     {
+      "finishReason": "MAX_TOKENS",
+      "content": {
+       "role": "model",
+       "parts": [
+        {
+         "text": "**My Internal Monologue: Navigating the Nuances of Expert Communication**\n\nAlright, so the core of this request is for me to summarize a given text, but with a very specific constraint: it needs to be in the first person, as if these thoughts are *my* own. And not just a brief summary, but a \"fulsome\" one, detailing the *entire* thought process. The target audience is an \"expert in their field,\" which is a crucial cue. This means I don't need to over-explain basic concepts. Instead, I should lean into the intellectual engagement, the critical analysis, and the strategic decision-making that goes into formulating a response suitable for someone who already possesses a deep understanding of the subject matter.\n\nLet's break down what \"fulsome\" really means in this context. It's not just about length; it's about depth and thoroughness. It implies a comprehensive exploration of how I arrived at the final output. For an expert, this would involve:\n\n*   **Deconstructing the Input:** First, I need to meticulously dissect the provided text. What are its main arguments? What is the author's underlying intent? What are the key pieces of information being conveyed? I'm looking for the central thesis, supporting evidence, and any subtle nuances or assumptions.\n*   **Identifying the \"Me\" Aspect:** The instruction to adopt a first-person perspective requires a shift from objective processing to a subjective, internal voice. This means framing my actions and decisions as personal choices and cognitive steps. It's about articulating *my* understanding, *my* interpretation, and *my* strategic choices.\n*   **Understanding the \"Expert\" Audience:** This is where the strategic thinking comes in. Because the user is an expert, I can assume a certain level of pre-existing knowledge. I don't need to define terms they'd inherently know or explain foundational principles. My summary of the thought process should therefore reflect a level of sophisticated analysis. It's about how I *anticipate* their needs and how I *tailor* my response to resonate with their expertise. This might involve focusing on the more complex interpretive challenges, the potential ambiguities, or the higher-level implications of the text, rather than just the surface-level facts.\n*   **Structuring the \"Fulsome\" Summary:** A \"fulsome\" summary of the thought process implies a narrative. I need to guide the user through my steps logically. This could involve:\n    *   **Initial Grasp:** How I first engaged with the text and what my initial impressions were.\n    *   **Analytical Breakdown:** The process of identifying key components, themes, and potential interpretations.\n    *   **Strategic Formulation:** How I planned to meet the specific requirements of the prompt (first-person, fulsome, expert audience).\n    *   **Refinement and Nuance:** Any adjustments or deeper considerations that shaped the final output.\n    *   **Anticipation of Expert Reception:** How I considered how an expert would perceive my summary and my thought process.\n\nEssentially, I'm constructing a meta-narrative about how I process information and generate responses, specifically for an audience that values intellectual rigor and strategic depth. It's not just about *what* I did, but *why* I did it, and how I made decisions informed by the user's expertise. I'm essentially laying bare my internal workings, but doing so in a way that respects and acknowledges the sophisticated perspective of the expert I'm addressing. The bolded header is a stylistic requirement that signals the start of this introspective exploration.\n\n",
+         "thought": true
+        }
+       ]
+      }
+     }
+    ],
+    "usageMetadata": {
+     "promptTokensDetails": [
+      {
+       "modality": "TEXT",
+       "tokenCount": 7
+      }
+     ],
+     "promptTokenCount": 7,
+     "thoughtsTokenCount": 12,
+     "totalTokenCount": 19
+    }
+   }
+  },
+  {
+   "level": "medium",
+   "status": 200,
+   "elapsed_s": 3.76,
+   "request": {
+    "contents": [
+     {
+      "role": "user",
+      "parts": [
+       {
+        "text": "Reply with the single word: ok"
+       }
+      ]
+     }
+    ],
+    "generationConfig": {
+     "maxOutputTokens": 16,
+     "thinkingConfig": {
+      "thinkingLevel": "MEDIUM",
+      "includeThoughts": true
+     }
+    }
+   },
+   "response": {
+    "createTime": "2026-10-15T06:21:30.008384Z",
+    "responseId": "6nDQasBBz4qXug-wi6-wBA",
+    "modelVersion": "gemini-3.1-pro",
+    "candidates": [
+     {
+      "finishReason": "MAX_TOKENS",
+      "content": {
+       "role": "model",
+       "parts": [
+        {
+         "text": "**My Thought Process**\n\nMy initial step was to meticulously break down the user's request. I recognized that they, as an expert in their field, would expect a thorough and nuanced response that goes beyond a superficial overview. The core requirement was to adopt a first-person perspective, embodying the \"thoughts\" as described in the provided text. This meant not just reporting on the user's thinking process, but *being* that thinking process, articulating it as if it were my own internal monologue.\n\nThe instruction to summarize \"as though the thoughts described are your thoughts\" was the key directive. This dictated a complete shift in voice and framing. I needed to internalize the steps outlined in the \"Thinking Process\" section and present them as my own cognitive journey.\n\nFurthermore, the prompt specified that the output should be a \"fulsome summary,\" implying a detailed and comprehensive account. This means I couldn't simply list the steps; I had to explain the rationale behind each step, the internal considerations, and the emergent understanding that drove the process forward. The user's expertise also signals that they would appreciate a demonstration of analytical rigor and a clear understanding of the task's constraints and objectives.\n\nFinally, the formatting requirement for a bolded header was straightforward but important for structuring the response clearly, immediately signaling the reflective nature of the summary.\n\nIn essence, my task was to inhabit the described \"thinking process,\" articulate it in the first person, provide a detailed and insightful summary that acknowledges the user's expertise, and adhere to the specified formatting. I approached this by sequentially processing each element of the prompt and ensuring my internal articulation mirrored the required persona and depth.\n\n",
+         "thought": true
+        }
+       ]
+      }
+     }
+    ],
+    "usageMetadata": {
+     "promptTokensDetails": [
+      {
+       "modality": "TEXT",
+       "tokenCount": 7
+      }
+     ],
+     "promptTokenCount": 7,
+     "thoughtsTokenCount": 13,
+     "totalTokenCount": 20
+    }
+   }
+  },
+  {
+   "level": "high",
+   "status": 200,
+   "elapsed_s": 5.21,
+   "request": {
+    "contents": [
+     {
+      "role": "user",
+      "parts": [
+       {
+        "text": "Reply with the single word: ok"
+       }
+      ]
+     }
+    ],
+    "generationConfig": {
+     "maxOutputTokens": 16,
+     "thinkingConfig": {
+      "thinkingLevel": "HIGH",
+      "includeThoughts": true
+     }
+    }
+   },
+   "response": {
+    "createTime": "2026-10-15T06:21:33.846757Z",
+    "responseId": "7XDQaqXXM7ObotQPmYONeA",
+    "modelVersion": "gemini-3.1-pro",
+    "candidates": [
+     {
+      "finishReason": "MAX_TOKENS",
+      "content": {
+       "role": "model",
+       "parts": [
+        {
+         "text": "**My Internal Monologue: Navigating the Nuances of Expert Communication**\n\nAlright, so the core of this request is for me to summarize a given text, but with a very specific constraint: it needs to be in the first person, as if these thoughts are *my* own. And not just a brief summary, but a \"fulsome\" one, detailing the *entire* thought process. The target audience is an \"expert in their field,\" which is a crucial cue. This means I don't need to over-explain basic concepts. Instead, I should lean into the intellectual engagement, the critical analysis, and the strategic decision-making that goes into formulating a response suitable for someone who already possesses a deep understanding of the subject matter.\n\nLet's break down what \"fulsome\" really means in this context. It's not just about length; it's about depth and thoroughness. It implies a comprehensive exploration of how I arrived at the final output. For an expert, this would involve:\n\n*   **Deconstructing the Input:** First, I need to meticulously dissect the provided text. What are its main arguments? What is the author's underlying intent? What are the key pieces of information being conveyed? I'm looking for the central thesis, supporting evidence, and any subtle nuances or assumptions.\n*   **Identifying the \"Me\" Aspect:** The instruction to adopt a first-person perspective requires a shift from objective processing to a subjective, internal voice. This means framing my actions and decisions as personal choices and cognitive steps. It's about articulating *my* understanding, *my* interpretation, and *my* strategic choices.\n*   **Understanding the \"Expert\" Audience:** This is where the strategic thinking comes in. Because the user is an expert, I can assume a certain level of pre-existing knowledge. I don't need to define terms they'd inherently know or explain foundational principles. My summary of the thought process should therefore reflect a level of sophisticated analysis. It's about how I *anticipate* their needs and how I *tailor* my response to resonate with their expertise. This might involve focusing on the more complex interpretive challenges, the potential ambiguities, or the higher-level implications of the text, rather than just the surface-level facts.\n*   **Structuring the \"Fulsome\" Summary:** A \"fulsome\" summary of the thought process implies a narrative. I need to guide the user through my steps logically. This could involve:\n    *   **Initial Grasp:** How I first engaged with the text and what my initial impressions were.\n    *   **Analytical Breakdown:** The process of identifying key components, themes, and potential interpretations.\n    *   **Strategic Formulation:** How I planned to meet the specific requirements of the prompt (first-person, fulsome, expert audience).\n    *   **Refinement and Nuance:** Any adjustments or deeper considerations that shaped the final output.\n    *   **Anticipation of Expert Reception:** How I considered how an expert would perceive my summary and my thought process.\n\nEssentially, I'm constructing a meta-narrative about how I process information and generate responses, specifically for an audience that values intellectual rigor and strategic depth. It's not just about *what* I did, but *why* I did it, and how I made decisions informed by the user's expertise. I'm essentially laying bare my internal workings, but doing so in a way that respects and acknowledges the sophisticated perspective of the expert I'm addressing. The bolded header is a stylistic requirement that signals the start of this introspective exploration.\n\n",
+         "thought": true
+        }
+       ]
+      }
+     }
+    ],
+    "usageMetadata": {
+     "promptTokensDetails": [
+      {
+       "modality": "TEXT",
+       "tokenCount": 7
+      }
+     ],
+     "promptTokenCount": 7,
+     "thoughtsTokenCount": 12,
+     "totalTokenCount": 19
+    }
+   }
+  },
+  {
+   "level": "xhigh",
+   "status": 400,
+   "elapsed_s": 0.66,
+   "request": {
+    "contents": [
+     {
+      "role": "user",
+      "parts": [
+       {
+        "text": "Reply with the single word: ok"
+       }
+      ]
+     }
+    ],
+    "generationConfig": {
+     "maxOutputTokens": 16,
+     "thinkingConfig": {
+      "thinkingLevel": "XHIGH",
+      "includeThoughts": true
+     }
+    }
+   },
+   "response": {
+    "error": {
+     "code": 400,
+     "status": "INVALID_ARGUMENT",
+     "message": "Upstream request failed: [400] Invalid value at 'generation_config.thinking_config.thinking_level' (type.googleapis.com/google.cloud.aiplatform.v1.GenerationConfig.ThinkingConfig.ThinkingLevel), \"XHIGH\""
+    }
+   }
+  },
+  {
+   "level": "max",
+   "status": 200,
+   "elapsed_s": 4.94,
+   "request": {
+    "contents": [
+     {
+      "role": "user",
+      "parts": [
+       {
+        "text": "Reply with the single word: ok"
+       }
+      ]
+     }
+    ],
+    "generationConfig": {
+     "maxOutputTokens": 16,
+     "thinkingConfig": {
+      "thinkingLevel": "MAX",
+      "includeThoughts": true
+     }
+    }
+   },
+   "response": {
+    "createTime": "2026-10-15T06:21:39.683814Z",
+    "responseId": "83DQaqbeKfnfsbwPptTyMQ",
+    "modelVersion": "gemini-3.1-pro",
+    "candidates": [
+     {
+      "finishReason": "MAX_TOKENS",
+      "content": {
+       "role": "model",
+       "parts": [
+        {
+         "text": "**My Thought Process for Generating a Fulsome Summary**\n\nMy primary goal here is to internalize the provided \"Thinking Process\" and rephrase it as my own introspective journey. Given that the user is an expert, I need to ensure the summary reflects a deep understanding and a nuanced, perhaps even self-critical, approach to analysis. I'm not just regurgitating steps; I'm articulating the *why* and the *how* of my internal cognitive sequence.\n\n1.  **Deconstructing the \"Thinking Process\":** The first, and most crucial, step is to meticulously break down the provided text. I need to identify each distinct action or contemplation within that process. It's like dissecting a complex argument or a piece of code \u2013 I'm looking for the logical flow, the dependencies, and the underlying assumptions.\n\n2.  **Internalizing the \"Analyze the Input\" Phase:** This initial step in the provided process is foundational. For me, this means a deep dive. I'm not just *reading* the input; I'm trying to grasp its entire context, its implications, and its inherent structure. What are the implicit directives? What are the explicit constraints? As an expert myself, I'd be looking for the subtleties, the potential ambiguities, and the underlying assumptions that might not be immediately obvious to a less experienced observer. This phase is about setting the stage for everything that follows.\n\n3.  **Formulating the First-Person Narrative:** This is where the transformation happens. I need to shift from an objective description of a process to a subjective account of my own internal experience. Phrases like \"I'm looking for,\" \"my goal is,\" \"I need to,\" and \"I'm trying to\" will be paramount. It's about projecting the external steps into my internal monologue.\n\n4.  **Emphasizing the \"Fulsome\" Aspect:** The request for a \"fulsome\" summary implies a detailed, perhaps even elaborative, account. I can't just provide a superficial outline. I need to add a layer of introspection, explaining *why* I'm doing each step, what I'm hoping to achieve, and perhaps even acknowledging potential challenges or alternative approaches I might consider. This demonstrates a thoroughness that resonates with an expert audience.\n\n5.  **Acknowledging the User's Expertise:** The prompt explicitly states the user is an expert. My summary needs to reflect this. I should use language that assumes a shared level of understanding, avoiding overly simplistic explanations. My internal monologue might even include a consideration of how *they* would interpret my process, or what they'd expect from a summary of this nature. This adds a layer of metareflection.\n\n6.  **Structuring the Summary:** The request for a bolded header is a structural cue. I'll use this to clearly delineate the start of my internal thought process narrative. Within the summary itself, I'll aim for a logical progression, mirroring the original thinking process but infused with my personal reflection.\n\nIn essence, my approach is to: understand the raw material, translate it into a personal, introspective voice, enrich it with detail and rationale befitting an expert, and present it in a clear, structured format. It's about demonstrating not just *what* I'm doing, but *how* and *why* I'm thinking this way.\n\n",
+         "thought": true
+        }
+       ]
+      }
+     }
+    ],
+    "usageMetadata": {
+     "promptTokensDetails": [
+      {
+       "modality": "TEXT",
+       "tokenCount": 7
+      }
+     ],
+     "promptTokenCount": 7,
+     "thoughtsTokenCount": 13,
+     "totalTokenCount": 20
+    }
+   }
+  }
+ ]
+}

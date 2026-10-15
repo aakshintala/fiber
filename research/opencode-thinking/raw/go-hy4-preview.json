@@ -1,0 +1,399 @@
+{
+ "route": "go",
+ "protocol": "completions",
+ "model": "hy4-preview",
+ "base": "https://opencode.ai/zen/go",
+ "levels": [
+  {
+   "level": "off",
+   "status": 200,
+   "elapsed_s": 2.55,
+   "request": {
+    "model": "hy4-preview",
+    "messages": [
+     {
+      "role": "user",
+      "content": "Reply with the single word: ok"
+     }
+    ],
+    "max_tokens": 64,
+    "reasoning_effort": "none"
+   },
+   "response": {
+    "id": "gen-1792036723-AzLq7vLhNlZFRSNtPtlg",
+    "object": "chat.completion",
+    "created": 1792036723,
+    "model": "hy4-preview",
+    "choices": [
+     {
+      "index": 0,
+      "finish_reason": "stop",
+      "logprobs": null,
+      "message": {
+       "role": "assistant",
+       "content": "ok",
+       "refusal": null,
+       "reasoning": null
+      }
+     }
+    ],
+    "usage": {
+     "prompt_tokens": 31,
+     "completion_tokens": 2,
+     "total_tokens": 33,
+     "prompt_tokens_details": {
+      "audio_tokens": 0,
+      "cached_tokens": 0,
+      "cache_write_tokens": 0
+     },
+     "completion_tokens_details": {
+      "audio_tokens": 0,
+      "reasoning_tokens": 0
+     }
+    }
+   }
+  },
+  {
+   "level": "minimal",
+   "status": 200,
+   "elapsed_s": 31.8,
+   "request": {
+    "model": "hy4-preview",
+    "messages": [
+     {
+      "role": "user",
+      "content": "Reply with the single word: ok"
+     }
+    ],
+    "max_tokens": 64,
+    "reasoning_effort": "minimal"
+   },
+   "response": {
+    "id": "gen-1792036726-WsEuLsCGNPavGxleyTKs",
+    "object": "chat.completion",
+    "created": 1792036726,
+    "model": "hy4-preview",
+    "choices": [
+     {
+      "index": 0,
+      "finish_reason": "stop",
+      "logprobs": null,
+      "message": {
+       "role": "assistant",
+       "content": "ok",
+       "refusal": null,
+       "reasoning": "We need to respond with the single word \"ok\". The user said: \"Reply with the single word: ok\". So I should just output \"ok\".",
+       "reasoning_details": [
+        {
+         "type": "reasoning.text",
+         "text": "We need to respond with the single word \"ok\". The user said: \"Reply with the single word: ok\". So I should just output \"ok\".",
+         "format": "unknown",
+         "index": 0
+        }
+       ]
+      }
+     }
+    ],
+    "usage": {
+     "prompt_tokens": 28,
+     "completion_tokens": 35,
+     "total_tokens": 63,
+     "prompt_tokens_details": {
+      "audio_tokens": 0,
+      "cached_tokens": 0,
+      "cache_write_tokens": 0
+     },
+     "completion_tokens_details": {
+      "audio_tokens": 0,
+      "reasoning_tokens": 32
+     }
+    }
+   }
+  },
+  {
+   "level": "low",
+   "status": 200,
+   "elapsed_s": 4.37,
+   "request": {
+    "model": "hy4-preview",
+    "messages": [
+     {
+      "role": "user",
+      "content": "Reply with the single word: ok"
+     }
+    ],
+    "max_tokens": 64,
+    "reasoning_effort": "low"
+   },
+   "response": {
+    "id": "gen-1792036758-sbP5GJgaSyBR7visP81p",
+    "object": "chat.completion",
+    "created": 1792036758,
+    "model": "hy4-preview",
+    "choices": [
+     {
+      "index": 0,
+      "finish_reason": "stop",
+      "logprobs": null,
+      "message": {
+       "role": "assistant",
+       "content": "ok",
+       "refusal": null,
+       "reasoning": "We need to respond with a single word: \"ok\". The user instruction says: \"Reply with the single word: ok\". So the output should be exactly \"ok\" without any extra text. I'll produce that.",
+       "reasoning_details": [
+        {
+         "type": "reasoning.text",
+         "text": "We need to respond with a single word: \"ok\". The user instruction says: \"Reply with the single word: ok\". So the output should be exactly \"ok\" without any extra text. I'll produce that.",
+         "format": "unknown",
+         "index": 0
+        }
+       ]
+      }
+     }
+    ],
+    "usage": {
+     "prompt_tokens": 28,
+     "completion_tokens": 48,
+     "total_tokens": 76,
+     "prompt_tokens_details": {
+      "audio_tokens": 0,
+      "cached_tokens": 0,
+      "cache_write_tokens": 0
+     },
+     "completion_tokens_details": {
+      "audio_tokens": 0,
+      "reasoning_tokens": 45
+     }
+    }
+   }
+  },
+  {
+   "level": "medium",
+   "status": 200,
+   "elapsed_s": 4.56,
+   "request": {
+    "model": "hy4-preview",
+    "messages": [
+     {
+      "role": "user",
+      "content": "Reply with the single word: ok"
+     }
+    ],
+    "max_tokens": 64,
+    "reasoning_effort": "medium"
+   },
+   "response": {
+    "id": "gen-1792036762-dOKRyNkzERFL9JtNtCMU",
+    "object": "chat.completion",
+    "created": 1792036762,
+    "model": "hy4-preview",
+    "choices": [
+     {
+      "index": 0,
+      "finish_reason": "stop",
+      "logprobs": null,
+      "message": {
+       "role": "assistant",
+       "content": "ok",
+       "refusal": null,
+       "reasoning": "We are told: \"Reply with the single word: ok\". So the user wants me to reply with just the single word \"ok\". I should output exactly \"ok\" and nothing else.",
+       "reasoning_details": [
+        {
+         "type": "reasoning.text",
+         "text": "We are told: \"Reply with the single word: ok\". So the user wants me to reply with just the single word \"ok\". I should output exactly \"ok\" and nothing else.",
+         "format": "unknown",
+         "index": 0
+        }
+       ]
+      }
+     }
+    ],
+    "usage": {
+     "prompt_tokens": 28,
+     "completion_tokens": 42,
+     "total_tokens": 70,
+     "prompt_tokens_details": {
+      "audio_tokens": 0,
+      "cached_tokens": 0,
+      "cache_write_tokens": 0
+     },
+     "completion_tokens_details": {
+      "audio_tokens": 0,
+      "reasoning_tokens": 39
+     }
+    }
+   }
+  },
+  {
+   "level": "high",
+   "status": 200,
+   "elapsed_s": 3.74,
+   "request": {
+    "model": "hy4-preview",
+    "messages": [
+     {
+      "role": "user",
+      "content": "Reply with the single word: ok"
+     }
+    ],
+    "max_tokens": 64,
+    "reasoning_effort": "high"
+   },
+   "response": {
+    "id": "gen-1792036767-gRcP8EB591BClXR7NZLf",
+    "object": "chat.completion",
+    "created": 1792036767,
+    "model": "hy4-preview",
+    "choices": [
+     {
+      "index": 0,
+      "finish_reason": "stop",
+      "logprobs": null,
+      "message": {
+       "role": "assistant",
+       "content": "ok",
+       "refusal": null,
+       "reasoning": "We need respond with single word: ok. User says \"Reply with the single word: ok\". We should reply exactly \"ok\" likely lowercase, no quotes maybe. Ensure no extra words. Final: ok.",
+       "reasoning_details": [
+        {
+         "type": "reasoning.text",
+         "text": "We need respond with single word: ok. User says \"Reply with the single word: ok\". We should reply exactly \"ok\" likely lowercase, no quotes maybe. Ensure no extra words. Final: ok.",
+         "format": "unknown",
+         "index": 0
+        }
+       ]
+      }
+     }
+    ],
+    "usage": {
+     "prompt_tokens": 28,
+     "completion_tokens": 46,
+     "total_tokens": 74,
+     "prompt_tokens_details": {
+      "audio_tokens": 0,
+      "cached_tokens": 0,
+      "cache_write_tokens": 0
+     },
+     "completion_tokens_details": {
+      "audio_tokens": 0,
+      "reasoning_tokens": 43
+     }
+    }
+   }
+  },
+  {
+   "level": "xhigh",
+   "status": 200,
+   "elapsed_s": 4.66,
+   "request": {
+    "model": "hy4-preview",
+    "messages": [
+     {
+      "role": "user",
+      "content": "Reply with the single word: ok"
+     }
+    ],
+    "max_tokens": 64,
+    "reasoning_effort": "xhigh"
+   },
+   "response": {
+    "id": "gen-1792036771-8OvbXNBwQ0JrLkw3uJy2",
+    "object": "chat.completion",
+    "created": 1792036771,
+    "model": "hy4-preview",
+    "choices": [
+     {
+      "index": 0,
+      "finish_reason": "stop",
+      "logprobs": null,
+      "message": {
+       "role": "assistant",
+       "content": "ok",
+       "refusal": null,
+       "reasoning": "We need to respond with a single word: \"ok\". The user explicitly requested \"Reply with the single word: ok\". So output exactly \"ok\" without any extra text, punctuation, or explanation. Ensure no Markdown formatting, just lowercase ok.",
+       "reasoning_details": [
+        {
+         "type": "reasoning.text",
+         "text": "We need to respond with a single word: \"ok\". The user explicitly requested \"Reply with the single word: ok\". So output exactly \"ok\" without any extra text, punctuation, or explanation. Ensure no Markdown formatting, just lowercase ok.",
+         "format": "unknown",
+         "index": 0
+        }
+       ]
+      }
+     }
+    ],
+    "usage": {
+     "prompt_tokens": 28,
+     "completion_tokens": 53,
+     "total_tokens": 81,
+     "prompt_tokens_details": {
+      "audio_tokens": 0,
+      "cached_tokens": 0,
+      "cache_write_tokens": 0
+     },
+     "completion_tokens_details": {
+      "audio_tokens": 0,
+      "reasoning_tokens": 50
+     }
+    }
+   }
+  },
+  {
+   "level": "max",
+   "status": 200,
+   "elapsed_s": 5.65,
+   "request": {
+    "model": "hy4-preview",
+    "messages": [
+     {
+      "role": "user",
+      "content": "Reply with the single word: ok"
+     }
+    ],
+    "max_tokens": 64,
+    "reasoning_effort": "max"
+   },
+   "response": {
+    "id": "gen-1792036775-YLaqVS6DwoQvREn7yDzH",
+    "object": "chat.completion",
+    "created": 1792036775,
+    "model": "hy4-preview",
+    "choices": [
+     {
+      "index": 0,
+      "finish_reason": "length",
+      "logprobs": null,
+      "message": {
+       "role": "assistant",
+       "content": null,
+       "refusal": null,
+       "reasoning": "We need respond exactly single word \"ok\". Ensure no extra punctuation? User: \"Reply with the single word: ok\". We already have internal analysis message empty? It shows an empty analysis maybe okay. Need final only: ok. Single word. If we add period becomes \"ok.\" not single word maybe includes punctuation",
+       "reasoning_details": [
+        {
+         "type": "reasoning.text",
+         "text": "We need respond exactly single word \"ok\". Ensure no extra punctuation? User: \"Reply with the single word: ok\". We already have internal analysis message empty? It shows an empty analysis maybe okay. Need final only: ok. Single word. If we add period becomes \"ok.\" not single word maybe includes punctuation",
+         "format": "unknown",
+         "index": 0
+        }
+       ]
+      }
+     }
+    ],
+    "usage": {
+     "prompt_tokens": 28,
+     "completion_tokens": 64,
+     "total_tokens": 92,
+     "prompt_tokens_details": {
+      "audio_tokens": 0,
+      "cached_tokens": 0,
+      "cache_write_tokens": 0
+     },
+     "completion_tokens_details": {
+      "audio_tokens": 0,
+      "reasoning_tokens": 66
+     }
+    }
+   }
+  }
+ ]
+}

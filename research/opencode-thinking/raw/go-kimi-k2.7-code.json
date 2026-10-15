@@ -1,0 +1,296 @@
+{
+ "route": "go",
+ "protocol": "completions",
+ "model": "kimi-k2.7-code",
+ "base": "https://opencode.ai/zen/go",
+ "levels": [
+  {
+   "level": "off",
+   "status": 400,
+   "elapsed_s": 0.72,
+   "request": {
+    "model": "kimi-k2.7-code",
+    "messages": [
+     {
+      "role": "user",
+      "content": "Reply with the single word: ok"
+     }
+    ],
+    "max_tokens": 64,
+    "reasoning_effort": "none"
+   },
+   "response": {
+    "error": {
+     "type": "invalid_request_error",
+     "message": "Upstream request failed: [invalid_request_error] invalid thinking: only type=enabled is allowed for this model"
+    }
+   }
+  },
+  {
+   "level": "minimal",
+   "status": 200,
+   "elapsed_s": 1.76,
+   "request": {
+    "model": "kimi-k2.7-code",
+    "messages": [
+     {
+      "role": "user",
+      "content": "Reply with the single word: ok"
+     }
+    ],
+    "max_tokens": 64,
+    "reasoning_effort": "minimal"
+   },
+   "response": {
+    "id": "chatcmpl-6ad04fae0351100b8a3054e8",
+    "object": "chat.completion",
+    "created": 1792036782,
+    "model": "kimi-k2.7-code",
+    "choices": [
+     {
+      "index": 0,
+      "finish_reason": "stop",
+      "message": {
+       "role": "assistant",
+       "content": "ok",
+       "reasoning_content": "The user wants me to reply with the single word \"ok\". I should do exactly that."
+      }
+     }
+    ],
+    "usage": {
+     "prompt_tokens": 14,
+     "completion_tokens": 23,
+     "total_tokens": 37,
+     "completion_tokens_details": {
+      "reasoning_tokens": 20
+     }
+    }
+   }
+  },
+  {
+   "level": "low",
+   "status": 200,
+   "elapsed_s": 1.8,
+   "request": {
+    "model": "kimi-k2.7-code",
+    "messages": [
+     {
+      "role": "user",
+      "content": "Reply with the single word: ok"
+     }
+    ],
+    "max_tokens": 64,
+    "reasoning_effort": "low"
+   },
+   "response": {
+    "id": "chatcmpl-6ad04fb0a89ddb1139c829ab",
+    "object": "chat.completion",
+    "created": 1792036784,
+    "model": "kimi-k2.7-code",
+    "choices": [
+     {
+      "index": 0,
+      "finish_reason": "stop",
+      "message": {
+       "role": "assistant",
+       "content": "ok",
+       "reasoning_content": "The user asked me to reply with the single word \"ok\". I should do exactly that."
+      }
+     }
+    ],
+    "usage": {
+     "prompt_tokens": 14,
+     "completion_tokens": 23,
+     "total_tokens": 37,
+     "cached_tokens": 14,
+     "prompt_tokens_details": {
+      "cached_tokens": 14
+     },
+     "completion_tokens_details": {
+      "reasoning_tokens": 20
+     }
+    }
+   }
+  },
+  {
+   "level": "medium",
+   "status": 200,
+   "elapsed_s": 2.06,
+   "request": {
+    "model": "kimi-k2.7-code",
+    "messages": [
+     {
+      "role": "user",
+      "content": "Reply with the single word: ok"
+     }
+    ],
+    "max_tokens": 64,
+    "reasoning_effort": "medium"
+   },
+   "response": {
+    "id": "chatcmpl-6ad04fb13a2f2068a8fd3a48",
+    "object": "chat.completion",
+    "created": 1792036786,
+    "model": "kimi-k2.7-code",
+    "choices": [
+     {
+      "index": 0,
+      "finish_reason": "stop",
+      "message": {
+       "role": "assistant",
+       "content": "ok",
+       "reasoning_content": "The user asked for a single word reply: \"ok\". I should respond with exactly that word."
+      }
+     }
+    ],
+    "usage": {
+     "prompt_tokens": 14,
+     "completion_tokens": 24,
+     "total_tokens": 38,
+     "cached_tokens": 14,
+     "prompt_tokens_details": {
+      "cached_tokens": 14
+     },
+     "completion_tokens_details": {
+      "reasoning_tokens": 21
+     }
+    }
+   }
+  },
+  {
+   "level": "high",
+   "status": 200,
+   "elapsed_s": 2.52,
+   "request": {
+    "model": "kimi-k2.7-code",
+    "messages": [
+     {
+      "role": "user",
+      "content": "Reply with the single word: ok"
+     }
+    ],
+    "max_tokens": 64,
+    "reasoning_effort": "high"
+   },
+   "response": {
+    "id": "chatcmpl-6ad04fb351d7fadbfe98a96a",
+    "object": "chat.completion",
+    "created": 1792036787,
+    "model": "kimi-k2.7-code",
+    "choices": [
+     {
+      "index": 0,
+      "finish_reason": "stop",
+      "message": {
+       "role": "assistant",
+       "content": "ok",
+       "reasoning_content": "The user wants me to reply with the single word \"ok\". I should just respond with \"ok\" without any additional text or punctuation, as they specifically asked for the single word."
+      }
+     }
+    ],
+    "usage": {
+     "prompt_tokens": 14,
+     "completion_tokens": 41,
+     "total_tokens": 55,
+     "cached_tokens": 14,
+     "prompt_tokens_details": {
+      "cached_tokens": 14
+     },
+     "completion_tokens_details": {
+      "reasoning_tokens": 38
+     }
+    }
+   }
+  },
+  {
+   "level": "xhigh",
+   "status": 200,
+   "elapsed_s": 2.39,
+   "request": {
+    "model": "kimi-k2.7-code",
+    "messages": [
+     {
+      "role": "user",
+      "content": "Reply with the single word: ok"
+     }
+    ],
+    "max_tokens": 64,
+    "reasoning_effort": "xhigh"
+   },
+   "response": {
+    "id": "chatcmpl-6ad04fb687cc2b9b418ae843",
+    "object": "chat.completion",
+    "created": 1792036790,
+    "model": "kimi-k2.7-code",
+    "choices": [
+     {
+      "index": 0,
+      "finish_reason": "stop",
+      "message": {
+       "role": "assistant",
+       "content": "ok",
+       "reasoning_content": "The user wants me to reply with the single word \"ok\". This is a straightforward request. I should respond with just \"ok\" and nothing else."
+      }
+     }
+    ],
+    "usage": {
+     "prompt_tokens": 14,
+     "completion_tokens": 35,
+     "total_tokens": 49,
+     "cached_tokens": 14,
+     "prompt_tokens_details": {
+      "cached_tokens": 14
+     },
+     "completion_tokens_details": {
+      "reasoning_tokens": 32
+     }
+    }
+   }
+  },
+  {
+   "level": "max",
+   "status": 200,
+   "elapsed_s": 2.26,
+   "request": {
+    "model": "kimi-k2.7-code",
+    "messages": [
+     {
+      "role": "user",
+      "content": "Reply with the single word: ok"
+     }
+    ],
+    "max_tokens": 64,
+    "reasoning_effort": "max"
+   },
+   "response": {
+    "id": "chatcmpl-6ad04fb83dfe9337f828ba6e",
+    "object": "chat.completion",
+    "created": 1792036792,
+    "model": "kimi-k2.7-code",
+    "choices": [
+     {
+      "index": 0,
+      "finish_reason": "stop",
+      "message": {
+       "role": "assistant",
+       "content": "ok",
+       "reasoning_content": "The user wants me to reply with a single word: \"ok\". I should just output \"ok\" without any additional text or punctuation."
+      }
+     }
+    ],
+    "usage": {
+     "prompt_tokens": 14,
+     "completion_tokens": 32,
+     "total_tokens": 46,
+     "cached_tokens": 14,
+     "prompt_tokens_details": {
+      "cached_tokens": 14
+     },
+     "completion_tokens_details": {
+      "reasoning_tokens": 29
+     }
+    }
+   }
+  }
+ ]
+}

@@ -9,13 +9,16 @@ use ratatui::layout::Rect;
 use serde_json::{Value, json};
 
 use super::super::{render, text};
-use super::draw;
+use super::{draw, height};
 use crate::app::{App, Effect};
 use crate::approvals::form::Spot;
-use crate::approvals::{Panel, PanelSpot};
+use crate::approvals::{Panel, PanelSpot, Queue};
 use crate::keys::Key;
 use crate::link::Line;
 use crate::mouse::{Target, TargetId};
+use crate::surface;
+use crate::theme::Role;
+use ratatui::style::{Color, Modifier};
 
 const S_A: &str = "s_aaaaaaaaaaaaaaaa";
 
@@ -258,6 +261,7 @@ fn form_two_of_two_behind_an_approval() {
 fn numbered(count: usize, form: bool) -> Panel {
     Panel {
         lines: (0..count).map(|line| format!("l{line}")).collect(),
+        marks: Vec::new(),
         alert: false,
         spots: vec![PanelSpot {
             line: 0,
@@ -518,6 +522,7 @@ fn a_caret_on_a_line_scrolled_off_is_not_drawn() {
 fn approval(lines: &[&str], alert: bool) -> Panel {
     Panel {
         lines: lines.iter().map(|line| (*line).to_owned()).collect(),
+        marks: Vec::new(),
         alert,
         spots: Vec::new(),
         cursor: None,
@@ -880,4 +885,401 @@ fn no_color_suppresses_box_edges_without_room() {
     }
     let first: String = (1..39).map(|x| buf[(x, 0)].symbol()).collect();
     assert!(first.contains("line one"), "{first:?}");
+}
+
+/// A `tool_call_requested` from [`S_A`] for `action` running `command`.
+fn tool_call(action: &str, command: &str) -> contract::Envelope {
+    contract::Envelope {
+        kind: "tool_call_requested".to_owned(),
+        session_id: contract::SessionId(S_A.to_owned()),
+        ts: 0,
+        schema_version: contract::SCHEMA_VERSION,
+        turn_id: None,
+        action_id: Some(contract::ActionId(action.to_owned())),
+        seq: None,
+        payload: json!({"name": "shell", "arguments": {"command": command}})
+            .as_object()
+            .cloned()
+            .unwrap_or_default(),
+    }
+}
+
+/// A `permission_requested` from [`S_A`] for `id` about `action`, with
+/// `keys` beside the declared effects.
+fn approval_request(id: &str, action: &str, keys: Value) -> contract::Envelope {
+    let mut payload = json!({"request_id": id, "effects": ["executes"], "reversible": true});
+    if let (Some(into), Some(from)) = (payload.as_object_mut(), keys.as_object()) {
+        into.extend(from.clone());
+    }
+    contract::Envelope {
+        kind: "permission_requested".to_owned(),
+        session_id: contract::SessionId(S_A.to_owned()),
+        ts: 0,
+        schema_version: contract::SCHEMA_VERSION,
+        turn_id: None,
+        action_id: Some(contract::ActionId(action.to_owned())),
+        seq: None,
+        payload: payload.as_object().cloned().unwrap_or_default(),
+    }
+}
+
+/// A queue holding `lines`, folded in order.
+fn queued(lines: &[contract::Envelope]) -> Queue {
+    let mut queue = Queue::default();
+    for line in lines {
+        queue.fold(line);
+    }
+    queue
+}
+
+/// The open panel padded to the inset of `width` columns.
+fn panel_at(queue: &Queue, width: u16) -> Panel {
+    queue
+        .panel(surface::inset(width))
+        .expect("the panel is open")
+}
+
+/// Draws `panel` into a `width` by `height` area, returning the rows, the
+/// buffer and the targets.
+fn drawn_at(panel: &Panel, width: u16, height: u16) -> (String, Buffer, Vec<Target>) {
+    let area = Rect::new(0, 0, width, height);
+    let mut buf = Buffer::empty(area);
+    let mut targets = Vec::new();
+    draw(panel, area, area.bottom(), &mut buf, &mut targets);
+    (text(&buf), buf, targets)
+}
+
+/// A standing ask for `shell echo hi`, padded for 80 columns.
+fn standing_panel() -> Panel {
+    queued(&[
+        tool_call("a_1", "echo hi"),
+        approval_request(
+            "r_1",
+            "a_1",
+            json!({"step": "standing_ask",
+                "standing_rule": {"scope": "global", "prefix": "echo hi"}}),
+        ),
+    ])
+    .panel(surface::inset(80))
+    .expect("the panel is open")
+}
+
+#[test]
+fn a_standing_ask_draws_every_run_in_its_style() {
+    let panel = standing_panel();
+    let (_, buf, _) = drawn_at(&panel, 80, 12);
+    let cell = |x: u16, y: u16| &buf[(x, y)];
+    // The header: "Approval 1 of 1" bold in `attention`, the session in
+    // `attention`, "Esc puts it aside" dim ending in the last column.
+    for (x, symbol) in [(2, "A"), (16, "1")] {
+        assert_eq!(cell(x, 3).symbol(), symbol);
+        assert_eq!(cell(x, 3).fg, Role::Attention.color(), "({x}, 3)");
+        assert!(cell(x, 3).modifier.contains(Modifier::BOLD), "({x}, 3)");
+    }
+    for (x, symbol) in [(17, " "), (20, "s"), (37, "a")] {
+        assert_eq!(cell(x, 3).symbol(), symbol);
+        assert_eq!(cell(x, 3).fg, Role::Attention.color(), "({x}, 3)");
+        assert!(!cell(x, 3).modifier.contains(Modifier::BOLD), "({x}, 3)");
+    }
+    assert_eq!(cell(38, 3).symbol(), " ");
+    assert_eq!(cell(38, 3).fg, Color::Reset);
+    assert!(!cell(38, 3).modifier.contains(Modifier::DIM));
+    for x in [63, 79] {
+        assert!(cell(x, 3).modifier.contains(Modifier::DIM), "({x}, 3)");
+    }
+    assert_eq!(cell(63, 3).symbol(), "E");
+    assert_eq!(cell(79, 3).symbol(), "e");
+    // The tool's name bold in `info`, its argument bold.
+    assert_eq!(cell(2, 4).symbol(), "s");
+    assert_eq!(cell(2, 4).fg, Role::Info.color());
+    assert!(cell(2, 4).modifier.contains(Modifier::BOLD));
+    assert_eq!(cell(8, 4).symbol(), "e");
+    assert_eq!(cell(8, 4).fg, Color::Reset);
+    assert!(cell(8, 4).modifier.contains(Modifier::BOLD));
+    // The facts line and the hint are dim.
+    for (x, y) in [(2, 5), (30, 5), (2, 10), (40, 10)] {
+        assert!(cell(x, y).modifier.contains(Modifier::DIM), "({x}, {y})");
+    }
+    // The focused choice: "▸ " in `attention", the number dim, the label
+    // bold; the other choice's number dim and its prompt dim.
+    assert_eq!(cell(2, 7).symbol(), "▸");
+    assert_eq!(cell(2, 7).fg, Role::Attention.color());
+    assert!(cell(4, 7).modifier.contains(Modifier::DIM));
+    assert_eq!(cell(6, 7).symbol(), "A");
+    assert!(cell(6, 7).modifier.contains(Modifier::BOLD));
+    assert!(cell(4, 8).modifier.contains(Modifier::DIM));
+    assert_eq!(cell(6, 8).symbol(), "D");
+    assert!(!cell(6, 8).modifier.contains(Modifier::BOLD));
+    assert!(!cell(6, 8).modifier.contains(Modifier::DIM));
+    assert!(cell(10, 8).modifier.contains(Modifier::DIM));
+    // The stripe marks every row including the blank ones, on the
+    // approval tint.
+    for y in 3..11 {
+        assert_eq!(buf[(0, y)].symbol(), "▌", "row {y}");
+        assert_eq!(buf[(0, y)].fg, Role::Attention.color(), "row {y}");
+        for x in 0..80 {
+            assert_eq!(buf[(x, y)].bg, Role::Approval.color(), "({x}, {y})");
+        }
+    }
+    // The call's JSON never draws.
+    let (shown, _, _) = drawn_at(&panel, 80, 12);
+    assert!(!shown.contains("{\""), "{shown}");
+}
+
+#[test]
+fn an_escalation_draws_alert_with_an_error_stripe() {
+    let queue = queued(&[
+        tool_call("a_1", "cargo mutants -p hub"),
+        approval_request(
+            "r_1",
+            "a_1",
+            json!({"reversible": false, "step": "review",
+                "escalation": {"cause": "consecutive_blocks", "reason": "rm -rf"},
+                "rule": {"subject": "cargo mutants -p hub", "prefix": "cargo mutants"}}),
+        ),
+    ]);
+    let panel = panel_at(&queue, 80);
+    assert!(panel.alert);
+    let (_, buf, _) = drawn_at(&panel, 80, 16);
+    let cell = |x: u16, y: u16| &buf[(x, y)];
+    // Ten text rows with edges above and below: header, tool, facts,
+    // blank, four choices, blank, hint.
+    for y in 5..15 {
+        for x in 0..80 {
+            assert_eq!(buf[(x, y)].bg, Role::Alert.color(), "({x}, {y})");
+        }
+        assert_eq!(buf[(0, y)].symbol(), "▌", "row {y}");
+        assert_eq!(buf[(0, y)].fg, Role::Error.color(), "row {y}");
+    }
+    // " · irreversible" in the header is bold in `error`: the session
+    // takes cells 18..36, so the run takes 36..51.
+    for dx in 36..51 {
+        let x = dx + 2;
+        assert!(cell(x, 5).modifier.contains(Modifier::BOLD), "({x}, 5)");
+        assert_eq!(cell(x, 5).fg, Role::Error.color(), "({x}, 5)");
+    }
+    // A remembering choice ends with the prefix and " *" in `info`, and
+    // the numbers stay dim: the second choice draws on row 10.
+    let remembering: String = (2..80).map(|x| buf[(x, 10)].symbol()).collect();
+    assert!(remembering.contains("Allow for this session cargo mutants *"));
+    let star = remembering.find(" *").expect("the star") + 1;
+    let x = u16::try_from(star).unwrap_or(u16::MAX).saturating_add(2);
+    assert_eq!(cell(x, 10).fg, Role::Info.color());
+    assert!(cell(4, 10).modifier.contains(Modifier::DIM));
+    let (shown, _, _) = drawn_at(&panel, 80, 16);
+    assert!(
+        shown.contains("the reviewer blocked the last calls: rm -rf"),
+        "{shown}"
+    );
+    assert!(!shown.contains("{\""), "{shown}");
+}
+
+#[test]
+fn height_counts_the_drawn_rows_for_a_wrapped_argument_and_header() {
+    // A 200-column command wraps the tool row; the drawn rows match.
+    let queue = queued(&[
+        tool_call("a_1", &"w ".repeat(100)),
+        approval_request(
+            "r_1",
+            "a_1",
+            json!({"step": "standing_ask",
+                "standing_rule": {"scope": "global", "prefix": "w"}}),
+        ),
+    ]);
+    let panel = panel_at(&queue, 80);
+    let (shown, _, _) = drawn_at(&panel, 80, 60);
+    let rows: Vec<&str> = shown.lines().collect();
+    let edged = |row: &&str| !row.is_empty() && row.chars().all(|cell| cell == '▄' || cell == '▀');
+    let top = rows.iter().position(edged);
+    let bottom = rows.iter().rposition(edged);
+    let (Some(top), Some(bottom)) = (top, bottom) else {
+        panic!("edges in\n{shown}");
+    };
+    assert_eq!(height(&panel, 80, 60), bottom - top + 1);
+    // A narrow panel wraps the header; the drawn rows match there too.
+    let panel = panel_at(&queue, 30);
+    let (shown, _, _) = drawn_at(&panel, 30, 60);
+    let rows: Vec<&str> = shown.lines().collect();
+    let top = rows.iter().position(edged);
+    let bottom = rows.iter().rposition(edged);
+    let (Some(top), Some(bottom)) = (top, bottom) else {
+        panic!("edges in\n{shown}");
+    };
+    assert_eq!(height(&panel, 30, 60), bottom - top + 1);
+}
+
+#[test]
+fn approval_standing_ask_at_80_columns() {
+    let (shown, _, _) = drawn_at(&standing_panel(), 80, 12);
+    insta::assert_snapshot!("approval_standing_ask_at_80_columns", shown);
+}
+
+#[test]
+fn approval_review_with_remember_rows() {
+    let queue = queued(&[
+        tool_call("a_1", "cargo mutants -p hub"),
+        approval_request(
+            "r_1",
+            "a_1",
+            json!({"step": "review",
+                "escalation": {"cause": "consecutive_blocks",
+                    "reason": "it blocked three in a row"},
+                "rule": {"subject": "cargo mutants -p hub",
+                    "prefix": "cargo mutants"}}),
+        ),
+    ]);
+    let (shown, _, _) = drawn_at(&panel_at(&queue, 80), 80, 16);
+    insta::assert_snapshot!("approval_review_with_remember_rows", shown);
+}
+
+#[test]
+fn no_color_boxes_the_approval_keeping_bold_and_dim() {
+    let panel = panel_at(
+        &queued(&[
+            tool_call("a_1", "echo hi"),
+            approval_request(
+                "r_1",
+                "a_1",
+                json!({"step": "standing_ask",
+                "standing_rule": {"scope": "global", "prefix": "echo hi"}}),
+            ),
+        ]),
+        40,
+    );
+    let (buf, _) = no_color_surfaced(&panel, 20);
+    // No stripe cell anywhere; the head stays bold and the facts dim.
+    // The rows come from the drawn text: the header row and the facts
+    // row by their content.
+    for cell in &buf.content {
+        assert_ne!(cell.symbol(), "▌");
+    }
+    assert!(buf.content.iter().any(|cell| cell.symbol() == "┌"));
+    let rows: Vec<String> = (0..20)
+        .map(|y| (0..40).map(|x| buf[(x, y)].symbol()).collect())
+        .collect();
+    let head = rows
+        .iter()
+        .position(|row| row.contains("Approval 1 of 1"))
+        .expect("the header row");
+    assert!(
+        buf[(1, u16::try_from(head).unwrap_or(u16::MAX))]
+            .modifier
+            .contains(Modifier::BOLD)
+    );
+    let facts = rows
+        .iter()
+        .position(|row| row.contains("runs a command"))
+        .expect("the facts row");
+    assert!(
+        buf[(1, u16::try_from(facts).unwrap_or(u16::MAX))]
+            .modifier
+            .contains(Modifier::DIM)
+    );
+}
+
+#[test]
+fn without_stripes_the_first_column_keeps_the_tint() {
+    crate::surface::init(&|_: &str| None);
+    let panel = standing_panel();
+    let (_, buf, _) = drawn_at(&panel, 80, 12);
+    // The same rows as with stripes, but no stripe cell: the first
+    // column keeps the approval tint.
+    for y in 3..11 {
+        assert_ne!(buf[(0, y)].symbol(), "▌", "row {y}");
+        assert_eq!(buf[(0, y)].bg, Role::Approval.color(), "row {y}");
+    }
+    let (shown, _, _) = drawn_at(&panel, 80, 12);
+    assert!(shown.contains("▸ 1 Allow once"), "{shown}");
+    crate::surface::init(&|name: &str| {
+        if name == "TERM_PROGRAM" {
+            Some("ghostty".to_owned())
+        } else {
+            None
+        }
+    });
+}
+
+/// A one-line panel of `text` with `marks`.
+fn marked(text: &str, marks: Vec<crate::approvals::Mark>) -> Panel {
+    Panel {
+        lines: vec![text.to_owned()],
+        marks,
+        alert: false,
+        spots: Vec::new(),
+        cursor: None,
+        caret: None,
+    }
+}
+
+#[test]
+fn a_run_from_the_line_start_adds_no_empty_plain_run() {
+    let red = ratatui::style::Style::new().fg(Color::Red);
+    let panel = marked(
+        "abcdef",
+        vec![crate::approvals::Mark {
+            line: 0,
+            bytes: 0..3,
+            style: red,
+        }],
+    );
+    assert_eq!(
+        super::styled(&panel, 0, "abcdef"),
+        ratatui::text::Line::from(vec![
+            ratatui::text::Span::styled("abc", red),
+            ratatui::text::Span::raw("def"),
+        ])
+    );
+}
+
+#[test]
+fn a_run_to_the_line_end_adds_no_empty_plain_run() {
+    let red = ratatui::style::Style::new().fg(Color::Red);
+    let panel = marked(
+        "abcdef",
+        vec![crate::approvals::Mark {
+            line: 0,
+            bytes: 0..6,
+            style: red,
+        }],
+    );
+    assert_eq!(
+        super::styled(&panel, 0, "abcdef"),
+        ratatui::text::Line::from(vec![ratatui::text::Span::styled("abcdef", red)])
+    );
+}
+
+#[test]
+fn long_feedback_keeps_the_cursor_on_the_deny_row() {
+    let mut queue = queued(&[approval_request(
+        "r_1",
+        "a_1",
+        json!({"step": "standing_ask",
+            "standing_rule": {"scope": "global", "prefix": "echo hi"}}),
+    )]);
+    for _ in 0..100 {
+        queue.on_key(&crate::keys::Key::Char('y'));
+    }
+    // The prefix takes 8 cells of 78, so the row shows the feedback's
+    // last 70 characters on one row, with the cursor on its last cell.
+    let panel = panel_at(&queue, 80);
+    assert_eq!(panel.caret, Some((4, 78)));
+    let area = Rect::new(0, 0, 80, 12);
+    let mut buf = Buffer::empty(area);
+    let mut targets = Vec::new();
+    draw(&panel, area, area.bottom(), &mut buf, &mut targets);
+    assert_eq!(
+        super::caret(&panel, area, area.bottom()),
+        Some(ratatui::layout::Position::new(79, 8))
+    );
+    // The deny row takes one visual row: the next row is the blank one.
+    let (shown, _, _) = drawn_at(&panel, 80, 12);
+    let rows: Vec<&str> = shown.lines().collect();
+    for (y, row) in rows.iter().enumerate() {
+        if row.contains("Deny") {
+            assert_eq!(y, 8, "{shown}");
+        }
+    }
+    assert!(rows[8].contains("Deny"), "{shown}");
+    // The next row is the blank one: the stripe alone.
+    assert_eq!(rows[9], "▌", "{shown}");
 }

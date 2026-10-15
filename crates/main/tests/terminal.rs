@@ -335,10 +335,10 @@ fn a_standing_ask_opens_the_approval_panel_and_allow_once_runs_the_call() {
     let asking = run.output().len();
     run.write(b"run it\r");
     run.wait_screen("the approval panel", |grid| {
-        grid.contents.contains("asked by a global rule: echo hi")
+        grid.contents.contains("asked by the global rule echo hi")
     });
     run.wait_screen("the approval choices", |grid| {
-        grid.contents.contains("allow once")
+        grid.contents.contains("Allow once")
     });
     // Enter on the first choice allows once; the call runs and the turn
     // finishes with the answer. The waiting title from before the prompt
@@ -432,10 +432,10 @@ fn an_ask_and_a_shell_waiting_on_approval_show_no_call_json() {
         grid.contents.contains("asked 4 questions")
     });
     run.wait_screen("the approval panel", |grid| {
-        grid.contents.contains("asked by a project rule: echo hi")
+        grid.contents.contains("asked by the project rule echo hi")
     });
     run.wait_screen("the approval choices", |grid| {
-        grid.contents.contains("allow once")
+        grid.contents.contains("Allow once")
     });
     let grid = run.screen();
     let rows = grid.rows;
@@ -456,18 +456,12 @@ fn an_ask_and_a_shell_waiting_on_approval_show_no_call_json() {
         !rows.iter().any(|row| row.contains("ask_user {")),
         "{rows:?}"
     );
-    // No row of the conversation holds `{"` except the shell approval
-    // panel's arguments (`{\"command\":\"echo hi\"}`): every occurrence
-    // on the grid is immediately followed by `command"`.
-    let mut rest = grid.contents.as_str();
-    let mut calls = 0;
-    while let Some(at) = rest.find("{\"") {
-        calls += 1;
-        let after = &rest[at + 2..];
-        assert!(after.starts_with("command\""), "{rows:?}");
-        rest = &rest[at + 2..];
-    }
-    assert!(calls > 0, "{rows:?}");
+    // The approval panel shows the shell's main argument for review, so
+    // neither call's JSON ever draws: neither on the group line, in a
+    // ledger row, nor on the panel. The grid reassembles wrapped rows,
+    // so every drawn row is checked.
+    assert!(!rows.iter().any(|row| row.contains("{\"")), "{rows:?}");
+    assert!(grid.contents.contains("shell echo hi"), "{rows:?}");
     // As above: quitting either exits at once or asks first.
     run.write(b"\x03\x03\r");
     run.wait_screen("the primary screen with the resume line", |grid| {
@@ -1177,10 +1171,10 @@ fn journey_prompt_answer_approval_resize_quit() {
     );
     server.release_one();
     run.wait_screen("the approval panel", |grid| {
-        grid.alternate_screen && grid.contents.contains("asked by a global rule: echo hi")
+        grid.alternate_screen && grid.contents.contains("asked by the global rule echo hi")
     });
     run.wait_screen("the approval choices", |grid| {
-        grid.contents.contains("allow once")
+        grid.contents.contains("Allow once")
     });
     // Enter on the first choice allows once; the call runs, the loop sends
     // its output, and the server holds that follow-up request too. The

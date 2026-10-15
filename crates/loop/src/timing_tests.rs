@@ -970,8 +970,23 @@ fn ops(world: &World, op: &str) -> Vec<OpRecord> {
         .collect()
 }
 
-/// Every `op_timing` line carries the session identity and only `op` and
-/// `ms`: never an argument, a path or any content.
+/// Only Part 7's four operations: Part 8's tool timers carry `tool` as a
+/// third key and are asserted in `tool_timing_tests`.
+fn p7_records(world: &World) -> Vec<OpRecord> {
+    op_records(world)
+        .into_iter()
+        .filter(|line| {
+            matches!(
+                line.op.as_str(),
+                "startup.preamble" | "turn.request" | "turn.model_call" | "turn.handoff"
+            )
+        })
+        .collect()
+}
+
+/// Every Part 7 `op_timing` line carries the session identity and only
+/// `op` and `ms`: never an argument, a path or any content. Callers pass
+/// [`p7_records`]; Part 8's tool timers carry `tool` as a third key.
 fn assert_wire(records: &[OpRecord]) {
     for record in records {
         assert_eq!(record.code, "op_timing", "{:?}", record.raw);
@@ -1014,7 +1029,7 @@ fn the_first_build_times_only_the_build() {
         records[0].ms, 3,
         "11 ms of loading and 17 ms of opening stay out"
     );
-    assert_wire(&op_records(&world));
+    assert_wire(&p7_records(&world));
     assert_eq!(
         kinds(&world),
         vec![
@@ -1425,7 +1440,7 @@ fn an_ordinary_send_times_one_closed_request() {
     let records = ops(&world, "turn.request");
     assert_eq!(records.len(), 1, "{:?}", op_records(&world));
     assert_eq!(records[0].ms, 5);
-    assert_wire(&op_records(&world));
+    assert_wire(&p7_records(&world));
     assert_eq!(
         *world.factory_saw.lock().unwrap(),
         vec![(1, 0)],
@@ -1448,7 +1463,7 @@ fn a_note_request_times_its_assembly() {
     assert_eq!(requests.len(), 2, "{:?}", op_records(&world));
     assert_eq!(requests[0].ms, 4, "the note assembly carries its hold");
     assert_eq!(requests[1].ms, 0, "the ordinary send advanced nothing");
-    assert_wire(&op_records(&world));
+    assert_wire(&p7_records(&world));
     assert!(
         kinds(&world).contains(&"handoff_completed".to_owned()),
         "a handoff ran: {:?}",
@@ -1696,7 +1711,7 @@ fn an_admitted_attempt_times_its_run() {
     let models = ops(&world, "turn.model_call");
     assert_eq!(models.len(), 1, "{:?}", op_records(&world));
     assert_eq!(models[0].ms, 7);
-    assert_wire(&op_records(&world));
+    assert_wire(&p7_records(&world));
     assert_eq!(
         *world.factory_saw.lock().unwrap(),
         vec![(1, 0)],
@@ -2198,7 +2213,7 @@ fn an_automatic_handoff_nests_its_note_scopes() {
     );
     let handoffs = ops(&world, "turn.handoff");
     assert_eq!(handoffs.len(), 1, "{:?}", op_records(&world));
-    assert_wire(&op_records(&world));
+    assert_wire(&p7_records(&world));
     assert!(
         world.loop_mut().handoff.step_ran,
         "a requested handoff marks the step as run"
@@ -2710,7 +2725,7 @@ fn a_handoff_measures_its_note_and_restart_end_to_end() {
     let models = ops(&world, "turn.model_call");
     assert_eq!(models.len(), 3);
     assert_eq!(models[1].ms, 3, "the note scope holds only its run");
-    assert_wire(&op_records(&world));
+    assert_wire(&p7_records(&world));
 }
 
 #[test]

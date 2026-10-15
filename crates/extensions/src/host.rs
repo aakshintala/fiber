@@ -10,6 +10,7 @@ use std::time::Duration;
 
 use config::Config;
 use contract::clock::Clock;
+use contract::diag::{DebugLog, ProviderRequest, Purpose};
 use contract::files::PathLock;
 
 use mlua::{Lua, LuaSerdeExt, LuaString, MultiValue, Table, Value as LuaValue};
@@ -278,11 +279,11 @@ pub(crate) fn sha256_hex(bytes: &[u8]) -> String {
 /// It does not follow the time still left on the clock. The scheduler, on
 /// the injected clock, is what stops the callback.
 pub(crate) struct HttpRequest {
-    method: String,
-    url: String,
-    headers: Vec<(String, String)>,
-    body: Option<Vec<u8>>,
-    timeout: Option<Duration>,
+    pub(crate) method: String,
+    pub(crate) url: String,
+    pub(crate) headers: Vec<(String, String)>,
+    pub(crate) body: Option<Vec<u8>>,
+    pub(crate) timeout: Option<Duration>,
 }
 
 /// What a callback waits on when it yields to the host: the tag, a kind
@@ -475,6 +476,50 @@ fn http_request(opts: &Table, timeout: Option<Duration>) -> mlua::Result<HttpReq
 pub(crate) fn perform(
     request: &HttpRequest,
 ) -> Result<(u16, Vec<u8>), (contract::ErrorCode, String)> {
+    execute(request, None)
+}
+
+/// As [`perform`], observed as one `provider_request` line: the provider's
+/// name, the purpose, which attempt (always 1: Lua makes no retry), the
+/// body lengths and the send-to-headers and send-to-end milestones. A
+/// response that never came leaves status and headers absent; a body read
+/// that failed keeps the status, the headers and the bytes read so far.
+/// A request that fails before the send emits nothing. A failed write is
+/// silent and never changes the reply.
+pub(crate) fn perform_observed(
+    request: &HttpRequest,
+    observation: HttpObservation,
+) -> Result<(u16, Vec<u8>), (contract::ErrorCode, String)> {
+    execute(request, Some(&observation))
+}
+
+/// What one observed Lua HTTP request records: the provider's registered
+/// name, why the request was made, and where the line goes with what
+/// clock stamps it. Owned and immutable: snapshotted before admission and
+/// carried to the worker, never read from shared or mutable state. No URL,
+/// credential, body, header or model is held.
+pub(crate) struct HttpObservation {
+    pub(crate) provider: String,
+    pub(crate) purpose: Purpose,
+    pub(crate) debug: Arc<dyn DebugLog>,
+    pub(crate) clock: Arc<dyn Clock>,
+}
+
+/// A response body is read bounded, as `read_to_vec` bounds it: past this
+/// many bytes the read fails and the bytes read so far are kept.
+const BODY_CAP: u64 = 10 * 1024 * 1024;
+
+/// One shared execution for [`perform`] and [`perform_observed`]: the same
+/// request construction, backstop, bound, byte counts and error mapping on
+/// both paths. The request and the agent are built before the send stamp;
+/// a method, URI or header the build rejects returns before any stamp or
+/// line. The send is stamped immediately before the run, the headers
+/// immediately after a response arrives, and the end after the body has
+/// finished, however it finished.
+fn execute(
+    request: &HttpRequest,
+    observation: Option<&HttpObservation>,
+) -> Result<(u16, Vec<u8>), (contract::ErrorCode, String)> {
     use contract::ErrorCode::{ConnectionFailed, Timeout};
     // A passed backstop is `timeout`; DNS, TLS, a refused or dropped
     // connection, and an unreadable body are `connection_failed`.
@@ -498,21 +543,131 @@ pub(crate) fn perform(
         builder = builder.header(name, value);
     }
     let built = request.body.clone();
-    let mut response = match built {
-        Some(body) => agent.run(
-            builder
+    // The build rejects a bad method, URI or header before the send:
+    // that failure emits nothing and stamps nothing.
+    let request_bytes = request.body.as_ref().map_or(0, |body| byte_len(body.len()));
+    let (sent, outcome) = match built {
+        Some(body) => {
+            let send = builder
                 .body(body)
-                .map_err(|e| (ConnectionFailed, format!("host.http: {e}")))?,
-        ),
-        None => agent.run(
-            builder
+                .map_err(|e| (ConnectionFailed, format!("host.http: {e}")))?;
+            (observation.map(|o| o.clock.now()), agent.run(send))
+        }
+        None => {
+            let send = builder
                 .body(())
-                .map_err(|e| (ConnectionFailed, format!("host.http: {e}")))?,
-        ),
+                .map_err(|e| (ConnectionFailed, format!("host.http: {e}")))?;
+            (observation.map(|o| o.clock.now()), agent.run(send))
+        }
+    };
+    let mut response = match outcome {
+        Ok(response) => response,
+        Err(e) => {
+            // Validation the transport itself rejects before sending
+            // emits nothing: the request never went out. A refused, DNS,
+            // TLS or proxy failure after the run's entry still emits one
+            // line, without status or headers and with zero response
+            // bytes.
+            if !matches!(e, ureq::Error::BadUri(_))
+                && let (Some(o), Some(sent)) = (observation, sent)
+            {
+                let end = o.clock.now();
+                write_request(o, None, 1, request_bytes, 0, None, sent, end);
+            }
+            return Err(transport(e));
+        }
+    };
+    let status = response.status().as_u16();
+    let headers_at = observation.map(|o| o.clock.now());
+    // The same bounded read `read_to_vec` does: it keeps the decoded
+    // bytes each read returned, so a failed read keeps the status, the
+    // headers and the bytes read before the failure.
+    let mut bytes = Vec::new();
+    let failed = std::io::Read::read_to_end(
+        &mut response.body_mut().with_config().limit(BODY_CAP).reader(),
+        &mut bytes,
+    )
+    .err();
+    // The bytes actually returned by the reads, saturating rather than
+    // wrapping past `u64::MAX`.
+    let response_bytes = add_bytes(0, bytes.len());
+    if let (Some(o), Some(sent)) = (observation, sent) {
+        let end = o.clock.now();
+        write_request(
+            o,
+            Some(status),
+            1,
+            request_bytes,
+            response_bytes,
+            headers_at.map(|at| ms_since(sent, at)),
+            sent,
+            end,
+        );
     }
-    .map_err(transport)?;
-    let bytes = response.body_mut().read_to_vec().map_err(transport)?;
-    Ok((response.status().as_u16(), bytes))
+    match failed {
+        // The I/O error converts back through ureq's own conversion,
+        // so a cap the limit reader raised and a transport timeout map
+        // exactly as `read_to_vec` maps them.
+        Some(e) => Err(transport(ureq::Error::from(e))),
+        None => Ok((status, bytes)),
+    }
+}
+
+/// Writes the one `provider_request` line for an observed Lua request:
+/// the provider's registered name and the eligible purpose, never a URL.
+/// A Lua invocation makes no retry, so every line's attempt is 1.
+#[allow(
+    clippy::too_many_arguments,
+    reason = "one line's fields, each stamped at its own milestone"
+)]
+fn write_request(
+    observation: &HttpObservation,
+    status: Option<u16>,
+    attempt: u32,
+    request_bytes: u64,
+    response_bytes: u64,
+    headers_ms: Option<u64>,
+    sent: std::time::Instant,
+    end: std::time::Instant,
+) {
+    observation.debug.provider_request(&ProviderRequest {
+        provider: observation.provider.clone(),
+        model: None,
+        purpose: observation.purpose,
+        host: None,
+        path: None,
+        status,
+        attempt,
+        request_bytes,
+        response_bytes,
+        headers_ms,
+        first_token_ms: None,
+        total_ms: ms_since(sent, end),
+    });
+}
+
+/// The body's length in bytes: lengths past `u64::MAX` saturate rather
+/// than wrap.
+pub(crate) fn byte_len(len: usize) -> u64 {
+    u64::try_from(len).unwrap_or(u64::MAX)
+}
+
+/// Adds read bytes to a running count, saturating rather than wrapping:
+/// a body past `u64::MAX` is recorded as `u64::MAX`.
+pub(crate) fn add_bytes(had: u64, got: usize) -> u64 {
+    had.saturating_add(byte_len(got))
+}
+
+/// Whole milliseconds from `start` to `end`: truncated, saturating to
+/// `u64::MAX`. A clock that runs backwards contributes zero: no panic
+/// and no fabricated duration.
+pub(crate) fn ms_since(start: std::time::Instant, end: std::time::Instant) -> u64 {
+    duration_ms(end.checked_duration_since(start).unwrap_or(Duration::ZERO))
+}
+
+/// Whole milliseconds in `elapsed`: truncated, saturating to `u64::MAX`.
+pub(crate) fn duration_ms(elapsed: Duration) -> u64 {
+    elapsed.as_millis().try_into().unwrap_or(u64::MAX)
 }
 
 /// The values `coroutine.yield` returns to the host call that yielded: its
