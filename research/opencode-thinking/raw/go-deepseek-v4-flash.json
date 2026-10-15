@@ -6,8 +6,8 @@
  "levels": [
   {
    "level": "off",
-   "status": 400,
-   "elapsed_s": 0.36,
+   "status": 200,
+   "elapsed_s": 1.34,
    "request": {
     "model": "deepseek-v4-flash",
     "messages": [
@@ -20,16 +20,43 @@
     "reasoning_effort": "none"
    },
    "response": {
-    "error": {
-     "type": "server_error",
-     "message": "Upstream request failed: This Go model requires Global regions. Select Global in your workspace's Privacy settings to use it."
+    "id": "dac154f1c64df5cf069f4aefcacd56ba",
+    "object": "chat.completion",
+    "created": 1792044899,
+    "model": "deepseek-v4-flash",
+    "choices": [
+     {
+      "index": 0,
+      "finish_reason": "stop",
+      "message": {
+       "role": "assistant",
+       "content": "ok"
+      }
+     }
+    ],
+    "usage": {
+     "prompt_tokens": 11,
+     "completion_tokens": 1,
+     "total_tokens": 12,
+     "prompt_tokens_details": {
+      "audio_tokens": 0,
+      "cached_tokens": 0,
+      "cache_creation_input_tokens": 0,
+      "cache_write_tokens": 0
+     },
+     "completion_tokens_details": {
+      "accepted_prediction_tokens": 0,
+      "audio_tokens": 0,
+      "reasoning_tokens": 0,
+      "rejected_prediction_tokens": 0
+     }
     }
    }
   },
   {
    "level": "minimal",
-   "status": 400,
-   "elapsed_s": 0.41,
+   "status": 200,
+   "elapsed_s": 1.51,
    "request": {
     "model": "deepseek-v4-flash",
     "messages": [
@@ -42,16 +69,44 @@
     "reasoning_effort": "minimal"
    },
    "response": {
-    "error": {
-     "type": "server_error",
-     "message": "Upstream request failed: This Go model requires Global regions. Select Global in your workspace's Privacy settings to use it."
+    "id": "7633155df6af125b67af4c7dbd9ae965",
+    "object": "chat.completion",
+    "created": 1792044901,
+    "model": "deepseek-v4-flash",
+    "choices": [
+     {
+      "index": 0,
+      "finish_reason": "stop",
+      "message": {
+       "role": "assistant",
+       "content": "ok",
+       "reasoning_content": "We need answer single word ok. Must comply. Need no extra."
+      }
+     }
+    ],
+    "usage": {
+     "prompt_tokens": 37,
+     "completion_tokens": 16,
+     "total_tokens": 53,
+     "prompt_tokens_details": {
+      "audio_tokens": 0,
+      "cached_tokens": 0,
+      "cache_creation_input_tokens": 0,
+      "cache_write_tokens": 0
+     },
+     "completion_tokens_details": {
+      "accepted_prediction_tokens": 0,
+      "audio_tokens": 0,
+      "reasoning_tokens": 14,
+      "rejected_prediction_tokens": 0
+     }
     }
    }
   },
   {
    "level": "low",
-   "status": 400,
-   "elapsed_s": 0.42,
+   "status": 200,
+   "elapsed_s": 2.19,
    "request": {
     "model": "deepseek-v4-flash",
     "messages": [
@@ -64,16 +119,44 @@
     "reasoning_effort": "low"
    },
    "response": {
-    "error": {
-     "type": "server_error",
-     "message": "Upstream request failed: This Go model requires Global regions. Select Global in your workspace's Privacy settings to use it."
+    "id": "020c63c3664cf75753e0589d6b96f589",
+    "object": "chat.completion",
+    "created": 1792044903,
+    "model": "deepseek-v4-flash",
+    "choices": [
+     {
+      "index": 0,
+      "finish_reason": "stop",
+      "message": {
+       "role": "assistant",
+       "content": "ok",
+       "reasoning_content": "We need answer single word ok. Must comply. Need no analysis. Final only."
+      }
+     }
+    ],
+    "usage": {
+     "prompt_tokens": 37,
+     "completion_tokens": 19,
+     "total_tokens": 56,
+     "prompt_tokens_details": {
+      "audio_tokens": 0,
+      "cached_tokens": 0,
+      "cache_creation_input_tokens": 0,
+      "cache_write_tokens": 0
+     },
+     "completion_tokens_details": {
+      "accepted_prediction_tokens": 0,
+      "audio_tokens": 0,
+      "reasoning_tokens": 17,
+      "rejected_prediction_tokens": 0
+     }
     }
    }
   },
   {
    "level": "medium",
-   "status": 400,
-   "elapsed_s": 0.34,
+   "status": 200,
+   "elapsed_s": 2.63,
    "request": {
     "model": "deepseek-v4-flash",
     "messages": [
@@ -86,16 +169,44 @@
     "reasoning_effort": "medium"
    },
    "response": {
-    "error": {
-     "type": "server_error",
-     "message": "Upstream request failed: This Go model requires Global regions. Select Global in your workspace's Privacy settings to use it."
+    "id": "04c672d11c989de789656bb3274d48ef",
+    "object": "chat.completion",
+    "created": 1792044906,
+    "model": "deepseek-v4-flash",
+    "choices": [
+     {
+      "index": 0,
+      "finish_reason": "length",
+      "message": {
+       "role": "assistant",
+       "content": "",
+       "reasoning_content": "The user wants me to reply with the single word \"ok\". This is a simple instruction-following request. I should just say \"ok\".\n\nBut wait, there's a system prompt about being helpful, and there might be a tension. The user asks for a single word reply. That's harmless. I should"
+      }
+     }
+    ],
+    "usage": {
+     "prompt_tokens": 37,
+     "completion_tokens": 64,
+     "total_tokens": 101,
+     "prompt_tokens_details": {
+      "audio_tokens": 0,
+      "cached_tokens": 0,
+      "cache_creation_input_tokens": 0,
+      "cache_write_tokens": 0
+     },
+     "completion_tokens_details": {
+      "accepted_prediction_tokens": 0,
+      "audio_tokens": 0,
+      "reasoning_tokens": 64,
+      "rejected_prediction_tokens": 0
+     }
     }
    }
   },
   {
    "level": "high",
-   "status": 400,
-   "elapsed_s": 0.4,
+   "status": 200,
+   "elapsed_s": 1.72,
    "request": {
     "model": "deepseek-v4-flash",
     "messages": [
@@ -108,16 +219,44 @@
     "reasoning_effort": "high"
    },
    "response": {
-    "error": {
-     "type": "server_error",
-     "message": "Upstream request failed: This Go model requires Global regions. Select Global in your workspace's Privacy settings to use it."
+    "id": "2b5cd3e22450575a85af14a5f7decbab",
+    "object": "chat.completion",
+    "created": 1792044907,
+    "model": "deepseek-v4-flash",
+    "choices": [
+     {
+      "index": 0,
+      "finish_reason": "stop",
+      "message": {
+       "role": "assistant",
+       "content": "ok",
+       "reasoning_content": "The user wants me to reply with the single word \"ok\". This is a simple instruction-following request."
+      }
+     }
+    ],
+    "usage": {
+     "prompt_tokens": 37,
+     "completion_tokens": 25,
+     "total_tokens": 62,
+     "prompt_tokens_details": {
+      "audio_tokens": 0,
+      "cached_tokens": 0,
+      "cache_creation_input_tokens": 0,
+      "cache_write_tokens": 0
+     },
+     "completion_tokens_details": {
+      "accepted_prediction_tokens": 0,
+      "audio_tokens": 0,
+      "reasoning_tokens": 23,
+      "rejected_prediction_tokens": 0
+     }
     }
    }
   },
   {
    "level": "xhigh",
-   "status": 400,
-   "elapsed_s": 0.4,
+   "status": 200,
+   "elapsed_s": 1.82,
    "request": {
     "model": "deepseek-v4-flash",
     "messages": [
@@ -130,16 +269,44 @@
     "reasoning_effort": "xhigh"
    },
    "response": {
-    "error": {
-     "type": "server_error",
-     "message": "Upstream request failed: This Go model requires Global regions. Select Global in your workspace's Privacy settings to use it."
+    "id": "d2dc77ef9b68ad1b3e85ce42080b9d6a",
+    "object": "chat.completion",
+    "created": 1792044909,
+    "model": "deepseek-v4-flash",
+    "choices": [
+     {
+      "index": 0,
+      "finish_reason": "stop",
+      "message": {
+       "role": "assistant",
+       "content": "ok",
+       "reasoning_content": "We need answer single word \"ok\". Need comply."
+      }
+     }
+    ],
+    "usage": {
+     "prompt_tokens": 37,
+     "completion_tokens": 13,
+     "total_tokens": 50,
+     "prompt_tokens_details": {
+      "audio_tokens": 0,
+      "cached_tokens": 0,
+      "cache_creation_input_tokens": 0,
+      "cache_write_tokens": 0
+     },
+     "completion_tokens_details": {
+      "accepted_prediction_tokens": 0,
+      "audio_tokens": 0,
+      "reasoning_tokens": 11,
+      "rejected_prediction_tokens": 0
+     }
     }
    }
   },
   {
    "level": "max",
-   "status": 400,
-   "elapsed_s": 0.41,
+   "status": 200,
+   "elapsed_s": 1.84,
    "request": {
     "model": "deepseek-v4-flash",
     "messages": [
@@ -152,9 +319,37 @@
     "reasoning_effort": "max"
    },
    "response": {
-    "error": {
-     "type": "server_error",
-     "message": "Upstream request failed: This Go model requires Global regions. Select Global in your workspace's Privacy settings to use it."
+    "id": "03f96b8174d7fc9d4e9d1af0b5f88d88",
+    "object": "chat.completion",
+    "created": 1792044911,
+    "model": "deepseek-v4-flash",
+    "choices": [
+     {
+      "index": 0,
+      "finish_reason": "stop",
+      "message": {
+       "role": "assistant",
+       "content": "ok",
+       "reasoning_content": "The user wants me to reply with a single word: \"ok\". Simple."
+      }
+     }
+    ],
+    "usage": {
+     "prompt_tokens": 37,
+     "completion_tokens": 18,
+     "total_tokens": 55,
+     "prompt_tokens_details": {
+      "audio_tokens": 0,
+      "cached_tokens": 0,
+      "cache_creation_input_tokens": 0,
+      "cache_write_tokens": 0
+     },
+     "completion_tokens_details": {
+      "accepted_prediction_tokens": 0,
+      "audio_tokens": 0,
+      "reasoning_tokens": 16,
+      "rejected_prediction_tokens": 0
+     }
     }
    }
   }

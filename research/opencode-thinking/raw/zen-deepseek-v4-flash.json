@@ -6,8 +6,8 @@
  "levels": [
   {
    "level": "off",
-   "status": 403,
-   "elapsed_s": 0.58,
+   "status": 400,
+   "elapsed_s": 0.62,
    "request": {
     "model": "deepseek-v4-flash",
     "messages": [
@@ -21,15 +21,15 @@
    },
    "response": {
     "error": {
-     "type": "server_error",
-     "message": "Upstream request failed: Model access is disabled"
+     "type": "invalid_request_error",
+     "message": "Upstream request failed: [invalid_request_error] none reasoning effort is not supported by deepseek-v4.1-flash model"
     }
    }
   },
   {
    "level": "minimal",
-   "status": 403,
-   "elapsed_s": 0.45,
+   "status": 400,
+   "elapsed_s": 0.57,
    "request": {
     "model": "deepseek-v4-flash",
     "messages": [
@@ -43,15 +43,15 @@
    },
    "response": {
     "error": {
-     "type": "server_error",
-     "message": "Upstream request failed: Model access is disabled"
+     "type": "invalid_request_error",
+     "message": "Upstream request failed: [invalid_request_error] minimal reasoning effort is not supported by deepseek-v4.1-flash model"
     }
    }
   },
   {
    "level": "low",
-   "status": 403,
-   "elapsed_s": 0.44,
+   "status": 200,
+   "elapsed_s": 0.76,
    "request": {
     "model": "deepseek-v4-flash",
     "messages": [
@@ -64,16 +64,38 @@
     "reasoning_effort": "low"
    },
    "response": {
-    "error": {
-     "type": "server_error",
-     "message": "Upstream request failed: Model access is disabled"
+    "id": "chatcmpl-a2bfa81e-8919-408d-bd5b-efa89fef461e",
+    "object": "chat.completion",
+    "created": 1792044945,
+    "model": "deepseek-v4-flash",
+    "choices": [
+     {
+      "index": 0,
+      "finish_reason": "stop",
+      "logprobs": null,
+      "message": {
+       "role": "assistant",
+       "content": "ok",
+       "refusal": null,
+       "reasoning_content": "We need answer only \"ok\". Need comply. Final only."
+      }
+     }
+    ],
+    "usage": {
+     "prompt_tokens": 37,
+     "completion_tokens": 16,
+     "total_tokens": 53,
+     "cache_read_input_tokens": 0,
+     "completion_tokens_details": {
+      "reasoning_tokens": 13
+     }
     }
    }
   },
   {
    "level": "medium",
-   "status": 403,
-   "elapsed_s": 0.44,
+   "status": 400,
+   "elapsed_s": 0.64,
    "request": {
     "model": "deepseek-v4-flash",
     "messages": [
@@ -87,15 +109,15 @@
    },
    "response": {
     "error": {
-     "type": "server_error",
-     "message": "Upstream request failed: Model access is disabled"
+     "type": "invalid_request_error",
+     "message": "Upstream request failed: [invalid_request_error] medium reasoning effort is not supported by deepseek-v4.1-flash model"
     }
    }
   },
   {
    "level": "high",
-   "status": 403,
-   "elapsed_s": 0.36,
+   "status": 200,
+   "elapsed_s": 0.69,
    "request": {
     "model": "deepseek-v4-flash",
     "messages": [
@@ -108,16 +130,38 @@
     "reasoning_effort": "high"
    },
    "response": {
-    "error": {
-     "type": "server_error",
-     "message": "Upstream request failed: Model access is disabled"
+    "id": "chatcmpl-caf9ee0d-b7e0-4a9e-9bcb-09e1c3bc140f",
+    "object": "chat.completion",
+    "created": 1792044946,
+    "model": "deepseek-v4-flash",
+    "choices": [
+     {
+      "index": 0,
+      "finish_reason": "stop",
+      "logprobs": null,
+      "message": {
+       "role": "assistant",
+       "content": "ok",
+       "refusal": null,
+       "reasoning_content": "The user wants me to reply with a single word: \"ok\". That's simple."
+      }
+     }
+    ],
+    "usage": {
+     "prompt_tokens": 37,
+     "completion_tokens": 21,
+     "total_tokens": 58,
+     "cache_read_input_tokens": 0,
+     "completion_tokens_details": {
+      "reasoning_tokens": 18
+     }
     }
    }
   },
   {
    "level": "xhigh",
-   "status": 403,
-   "elapsed_s": 0.45,
+   "status": 200,
+   "elapsed_s": 0.84,
    "request": {
     "model": "deepseek-v4-flash",
     "messages": [
@@ -130,16 +174,38 @@
     "reasoning_effort": "xhigh"
    },
    "response": {
-    "error": {
-     "type": "server_error",
-     "message": "Upstream request failed: Model access is disabled"
+    "id": "chatcmpl-fd60c018-9d17-4bb7-a315-d2ceaaabf6ab",
+    "object": "chat.completion",
+    "created": 1792044947,
+    "model": "deepseek-v4-flash",
+    "choices": [
+     {
+      "index": 0,
+      "finish_reason": "length",
+      "logprobs": null,
+      "message": {
+       "role": "assistant",
+       "content": null,
+       "refusal": null,
+       "reasoning_content": "The user wants a single word response: \"ok\". This is a simple instruction-following request. I should reply with exactly that single word, nothing more.\n\nBut wait \u2014 the system says I should be helpful. The user explicitly asks for a single word. I'll comply.\n\nThe answer is \"ok\"."
+      }
+     }
+    ],
+    "usage": {
+     "prompt_tokens": 37,
+     "completion_tokens": 64,
+     "total_tokens": 101,
+     "cache_read_input_tokens": 0,
+     "completion_tokens_details": {
+      "reasoning_tokens": 63
+     }
     }
    }
   },
   {
    "level": "max",
-   "status": 403,
-   "elapsed_s": 0.46,
+   "status": 200,
+   "elapsed_s": 0.8,
    "request": {
     "model": "deepseek-v4-flash",
     "messages": [
@@ -152,9 +218,31 @@
     "reasoning_effort": "max"
    },
    "response": {
-    "error": {
-     "type": "server_error",
-     "message": "Upstream request failed: Model access is disabled"
+    "id": "chatcmpl-a579d56d-820f-4b42-8339-327ff8bb8db7",
+    "object": "chat.completion",
+    "created": 1792044948,
+    "model": "deepseek-v4-flash",
+    "choices": [
+     {
+      "index": 0,
+      "finish_reason": "stop",
+      "logprobs": null,
+      "message": {
+       "role": "assistant",
+       "content": "ok",
+       "refusal": null,
+       "reasoning_content": "The user wants me to reply with the single word \"ok\". That's straightforward."
+      }
+     }
+    ],
+    "usage": {
+     "prompt_tokens": 37,
+     "completion_tokens": 20,
+     "total_tokens": 57,
+     "cache_read_input_tokens": 0,
+     "completion_tokens_details": {
+      "reasoning_tokens": 17
+     }
     }
    }
   }

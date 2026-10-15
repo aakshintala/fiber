@@ -6,8 +6,8 @@
  "levels": [
   {
    "level": "off",
-   "status": 403,
-   "elapsed_s": 0.38,
+   "status": 200,
+   "elapsed_s": 4.49,
    "request": {
     "model": "qwen3.6-plus",
     "messages": [
@@ -19,17 +19,34 @@
     "max_tokens": 64
    },
    "response": {
-    "type": "error",
-    "error": {
-     "type": "api_error",
-     "message": "Upstream request failed: Model access is disabled"
+    "id": "msg_fa86a8d6-26db-4b1c-9b75-ac1f971151dc",
+    "type": "message",
+    "role": "assistant",
+    "stop_reason": "end_turn",
+    "model": "qwen3.6-plus",
+    "content": [
+     {
+      "type": "thinking",
+      "thinking": "Here's a thinking process:\n\n1.  **Analyze User Input:**\n   - User says: \"Reply with the single word: ok\"\n   - Constraint: Must reply with exactly one word: \"ok\"\n   - Case sensitivity: Usually case-insensitive, but I'll match exactly as requested: \"ok\" (lowercase as specified).\n\n2.  **Identify Constraints:**\n   - Single word only\n   - The word must be \"ok\"\n\n3.  **Formulate Response:**\n   - Check if any extra words, punctuation, or formatting would violate the constraint.\n   - The simplest valid response is just: ok\n\n4.  **Final Output Generation:**\n   - Output: ok\n   - Verify: Single word? Yes. Matches requested word? Yes. No extra text? Yes.\n\n   Proceed. \n   Output matches exactly.\u2705",
+      "signature": ""
+     },
+     {
+      "type": "text",
+      "text": "ok"
+     }
+    ],
+    "usage": {
+     "input_tokens": 17,
+     "output_tokens": 190,
+     "cache_creation_input_tokens": 0,
+     "cache_read_input_tokens": 0
     }
    }
   },
   {
    "level": "minimal",
-   "status": 403,
-   "elapsed_s": 0.44,
+   "status": 400,
+   "elapsed_s": 0.53,
    "request": {
     "model": "qwen3.6-plus",
     "messages": [
@@ -47,17 +64,13 @@
     }
    },
    "response": {
-    "type": "error",
-    "error": {
-     "type": "api_error",
-     "message": "Upstream request failed: Model access is disabled"
-    }
+    "model": "qwen3.6-plus"
    }
   },
   {
    "level": "low",
-   "status": 403,
-   "elapsed_s": 0.45,
+   "status": 200,
+   "elapsed_s": 4.3,
    "request": {
     "model": "qwen3.6-plus",
     "messages": [
@@ -75,17 +88,34 @@
     }
    },
    "response": {
-    "type": "error",
-    "error": {
-     "type": "api_error",
-     "message": "Upstream request failed: Model access is disabled"
+    "id": "msg_1a3ce1f1-0387-4835-9076-1eb64f1afc0d",
+    "type": "message",
+    "role": "assistant",
+    "stop_reason": "end_turn",
+    "model": "qwen3.6-plus",
+    "content": [
+     {
+      "type": "thinking",
+      "thinking": "Here's a thinking process:\n\n1.  **Analyze User Input:**\n   - User says: \"Reply with the single word: ok\"\n   - Constraint: Reply with exactly one word, which must be \"ok\".\n\n2.  **Identify Key Requirements:**\n   - Single word response\n   - Must be exactly \"ok\" (case sensitivity? Usually case-insensitive, but I'll match exactly as requested: \"ok\" or \"Ok\" - I'll stick to lowercase \"ok\" as specified)\n   - No additional text, punctuation, or formatting\n\n3.  **Formulate Response:**\n   - \"ok\"\n\n4.  **Self-Correction/Verification:**\n   - Does it meet all constraints? Yes, single word, exactly \"ok\".\n   - No extra characters, spaces, or punctuation.\n   - Ready.\u2705",
+      "signature": ""
+     },
+     {
+      "type": "text",
+      "text": "ok"
+     }
+    ],
+    "usage": {
+     "input_tokens": 17,
+     "output_tokens": 188,
+     "cache_creation_input_tokens": 0,
+     "cache_read_input_tokens": 0
     }
    }
   },
   {
    "level": "medium",
-   "status": 403,
-   "elapsed_s": 0.77,
+   "status": 200,
+   "elapsed_s": 3.82,
    "request": {
     "model": "qwen3.6-plus",
     "messages": [
@@ -103,17 +133,34 @@
     }
    },
    "response": {
-    "type": "error",
-    "error": {
-     "type": "api_error",
-     "message": "Upstream request failed: Model access is disabled"
+    "id": "msg_8af7c8f9-5b85-4a76-8cbc-13917dac4309",
+    "type": "message",
+    "role": "assistant",
+    "stop_reason": "end_turn",
+    "model": "qwen3.6-plus",
+    "content": [
+     {
+      "type": "thinking",
+      "thinking": "Here's a thinking process:\n\n1.  **Analyze User Input:** The user says \"Reply with the single word: ok\"\n2.  **Identify Core Instruction:** The instruction is explicit: reply with exactly one word, and that word must be \"ok\".\n3.  **Check Constraints:** \"single word\" - means no extra text, punctuation, or explanations. Just \"ok\".\n4.  **Formulate Response:** ok\n5.  **Verify:** Does it match the instruction exactly? Yes. Is it a single word? Yes. Is it \"ok\"? Yes.\n6.  **Output Generation:** ok",
+      "signature": ""
+     },
+     {
+      "type": "text",
+      "text": "ok"
+     }
+    ],
+    "usage": {
+     "input_tokens": 17,
+     "output_tokens": 140,
+     "cache_creation_input_tokens": 0,
+     "cache_read_input_tokens": 0
     }
    }
   },
   {
    "level": "high",
-   "status": 403,
-   "elapsed_s": 0.58,
+   "status": 200,
+   "elapsed_s": 4.28,
    "request": {
     "model": "qwen3.6-plus",
     "messages": [
@@ -131,17 +178,34 @@
     }
    },
    "response": {
-    "type": "error",
-    "error": {
-     "type": "api_error",
-     "message": "Upstream request failed: Model access is disabled"
+    "id": "msg_9e9acbd5-20e9-400d-8898-e8f0f8cd2e37",
+    "type": "message",
+    "role": "assistant",
+    "stop_reason": "end_turn",
+    "model": "qwen3.6-plus",
+    "content": [
+     {
+      "type": "thinking",
+      "thinking": "Here's a thinking process:\n\n1.  **Analyze User Input:** The user said \"Reply with the single word: ok\"\n2.  **Identify Constraint:** The constraint is explicit: \"Reply with the single word: ok\"\n3.  **Check for Compliance:** I need to output exactly one word, which is \"ok\" (case-insensitive usually, but I'll stick to exactly what's requested: \"ok\").\n4.  **Formulate Response:** \"ok\"\n5.  **Verify:** Does it meet the constraint? Yes. Single word? Yes. Matches requested word? Yes.\n6.  **Output:** ok",
+      "signature": ""
+     },
+     {
+      "type": "text",
+      "text": "ok"
+     }
+    ],
+    "usage": {
+     "input_tokens": 17,
+     "output_tokens": 144,
+     "cache_creation_input_tokens": 0,
+     "cache_read_input_tokens": 0
     }
    }
   },
   {
    "level": "xhigh",
-   "status": 403,
-   "elapsed_s": 0.41,
+   "status": 200,
+   "elapsed_s": 4.26,
    "request": {
     "model": "qwen3.6-plus",
     "messages": [
@@ -159,17 +223,34 @@
     }
    },
    "response": {
-    "type": "error",
-    "error": {
-     "type": "api_error",
-     "message": "Upstream request failed: Model access is disabled"
+    "id": "msg_f82c206c-6eaf-4e02-942c-4a4c73cd8a06",
+    "type": "message",
+    "role": "assistant",
+    "stop_reason": "end_turn",
+    "model": "qwen3.6-plus",
+    "content": [
+     {
+      "type": "thinking",
+      "thinking": "Here's a thinking process:\n\n1.  **Analyze User Input:**\n   - User says: \"Reply with the single word: ok\"\n   - Constraint: Must reply with exactly the single word \"ok\" (case-insensitive usually, but I'll match exactly: \"ok\")\n\n2.  **Identify Constraints:**\n   - Single word only\n   - Must be \"ok\"\n   - No additional text, punctuation, or formatting\n\n3.  **Formulate Response:**\n   - \"ok\"\n\n4.  **Verify:**\n   - Is it a single word? Yes.\n   - Is it exactly \"ok\"? Yes.\n   - Any extra text? No.\n\n   Matches all constraints.\n\n5.  **Output Generation:**\n   - ok",
+      "signature": ""
+     },
+     {
+      "type": "text",
+      "text": "ok"
+     }
+    ],
+    "usage": {
+     "input_tokens": 17,
+     "output_tokens": 172,
+     "cache_creation_input_tokens": 0,
+     "cache_read_input_tokens": 0
     }
    }
   },
   {
    "level": "max",
-   "status": 403,
-   "elapsed_s": 0.45,
+   "status": 200,
+   "elapsed_s": 4.12,
    "request": {
     "model": "qwen3.6-plus",
     "messages": [
@@ -187,10 +268,27 @@
     }
    },
    "response": {
-    "type": "error",
-    "error": {
-     "type": "api_error",
-     "message": "Upstream request failed: Model access is disabled"
+    "id": "msg_0b073169-c550-4ca3-9735-59cf70e31956",
+    "type": "message",
+    "role": "assistant",
+    "stop_reason": "end_turn",
+    "model": "qwen3.6-plus",
+    "content": [
+     {
+      "type": "thinking",
+      "thinking": "Here's a thinking process:\n\n1.  **Analyze User Input:** The user said \"Reply with the single word: ok\"\n2.  **Identify Constraint:** The response must be exactly one word: \"ok\"\n3.  **Check Capitalization/Punctuation:** The prompt says \"ok\" in lowercase. I should probably match it exactly, but typically case-insensitive matching is fine. To be strictly compliant, I'll output exactly \"ok\" with no punctuation.\n4.  **Formulate Response:** ok\n5.  **Verify Constraint:** Is it a single word? Yes. Does it match \"ok\"? Yes.\n6.  **Output Generation:** ok\u2705",
+      "signature": ""
+     },
+     {
+      "type": "text",
+      "text": "ok"
+     }
+    ],
+    "usage": {
+     "input_tokens": 17,
+     "output_tokens": 150,
+     "cache_creation_input_tokens": 0,
+     "cache_read_input_tokens": 0
     }
    }
   }

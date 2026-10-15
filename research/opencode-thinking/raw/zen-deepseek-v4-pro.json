@@ -6,8 +6,8 @@
  "levels": [
   {
    "level": "off",
-   "status": 403,
-   "elapsed_s": 0.41,
+   "status": 200,
+   "elapsed_s": 2.62,
    "request": {
     "model": "deepseek-v4-pro",
     "messages": [
@@ -20,16 +20,38 @@
     "reasoning_effort": "none"
    },
    "response": {
-    "error": {
-     "type": "server_error",
-     "message": "Upstream request failed: Model access is disabled"
+    "id": "fe44d45b-aws_ue1",
+    "object": "chat.completion",
+    "created": 1792044948,
+    "model": "deepseek-v4-pro",
+    "choices": [
+     {
+      "index": 0,
+      "finish_reason": "stop",
+      "message": {
+       "role": "assistant",
+       "content": "ok",
+       "reasoning_content": "We need answer single word ok. Need comply."
+      }
+     }
+    ],
+    "usage": {
+     "prompt_tokens": 11,
+     "completion_tokens": 13,
+     "total_tokens": 24,
+     "prompt_tokens_details": {
+      "cached_tokens": 0
+     },
+     "completion_tokens_details": {
+      "reasoning_tokens": 10
+     }
     }
    }
   },
   {
    "level": "minimal",
-   "status": 403,
-   "elapsed_s": 0.4,
+   "status": 200,
+   "elapsed_s": 61.19,
    "request": {
     "model": "deepseek-v4-pro",
     "messages": [
@@ -42,16 +64,39 @@
     "reasoning_effort": "minimal"
    },
    "response": {
-    "error": {
-     "type": "server_error",
-     "message": "Upstream request failed: Model access is disabled"
+    "id": "chatcmpl-cfe690818aa7f2699fcb168362e8d8cb",
+    "object": "chat.completion",
+    "created": 1792045011,
+    "model": "deepseek-v4-pro",
+    "choices": [
+     {
+      "index": 0,
+      "finish_reason": "stop",
+      "logprobs": null,
+      "message": {
+       "role": "assistant",
+       "content": "ok",
+       "reasoning": "We need answer single word \"ok\". Need comply."
+      }
+     }
+    ],
+    "usage": {
+     "prompt_tokens": 90,
+     "completion_tokens": 14,
+     "total_tokens": 104,
+     "prompt_tokens_details": {
+      "cached_tokens": 0
+     },
+     "completion_tokens_details": {
+      "reasoning_tokens": 11
+     }
     }
    }
   },
   {
    "level": "low",
-   "status": 403,
-   "elapsed_s": 0.43,
+   "status": 200,
+   "elapsed_s": 1.15,
    "request": {
     "model": "deepseek-v4-pro",
     "messages": [
@@ -64,16 +109,39 @@
     "reasoning_effort": "low"
    },
    "response": {
-    "error": {
-     "type": "server_error",
-     "message": "Upstream request failed: Model access is disabled"
+    "id": "chatcmpl-0a67d9ae2f338de9538cf789800ab94b",
+    "object": "chat.completion",
+    "created": 1792045012,
+    "model": "deepseek-v4-pro",
+    "choices": [
+     {
+      "index": 0,
+      "finish_reason": "stop",
+      "logprobs": null,
+      "message": {
+       "role": "assistant",
+       "content": "ok",
+       "reasoning": "We need answer single word \"ok\". Need comply."
+      }
+     }
+    ],
+    "usage": {
+     "prompt_tokens": 90,
+     "completion_tokens": 14,
+     "total_tokens": 104,
+     "prompt_tokens_details": {
+      "cached_tokens": 0
+     },
+     "completion_tokens_details": {
+      "reasoning_tokens": 11
+     }
     }
    }
   },
   {
    "level": "medium",
-   "status": 403,
-   "elapsed_s": 0.54,
+   "status": 200,
+   "elapsed_s": 0.97,
    "request": {
     "model": "deepseek-v4-pro",
     "messages": [
@@ -86,16 +154,39 @@
     "reasoning_effort": "medium"
    },
    "response": {
-    "error": {
-     "type": "server_error",
-     "message": "Upstream request failed: Model access is disabled"
+    "id": "chatcmpl-af444a1961957c841e3ac67b68c625c0",
+    "object": "chat.completion",
+    "created": 1792045013,
+    "model": "deepseek-v4-pro",
+    "choices": [
+     {
+      "index": 0,
+      "finish_reason": "stop",
+      "logprobs": null,
+      "message": {
+       "role": "assistant",
+       "content": "ok",
+       "reasoning": "We need answer user asks \"Reply with the single word: ok\" Need respond exactly \"ok\". No analysis."
+      }
+     }
+    ],
+    "usage": {
+     "prompt_tokens": 90,
+     "completion_tokens": 26,
+     "total_tokens": 116,
+     "prompt_tokens_details": {
+      "cached_tokens": 0
+     },
+     "completion_tokens_details": {
+      "reasoning_tokens": 23
+     }
     }
    }
   },
   {
    "level": "high",
-   "status": 403,
-   "elapsed_s": 0.45,
+   "status": 200,
+   "elapsed_s": 1.16,
    "request": {
     "model": "deepseek-v4-pro",
     "messages": [
@@ -108,16 +199,39 @@
     "reasoning_effort": "high"
    },
    "response": {
-    "error": {
-     "type": "server_error",
-     "message": "Upstream request failed: Model access is disabled"
+    "id": "chatcmpl-e72fbf3420188501b9293374ba238aca",
+    "object": "chat.completion",
+    "created": 1792045014,
+    "model": "deepseek-v4-pro",
+    "choices": [
+     {
+      "index": 0,
+      "finish_reason": "stop",
+      "logprobs": null,
+      "message": {
+       "role": "assistant",
+       "content": "ok",
+       "reasoning": "We need answer single word ok. Need comply."
+      }
+     }
+    ],
+    "usage": {
+     "prompt_tokens": 90,
+     "completion_tokens": 13,
+     "total_tokens": 103,
+     "prompt_tokens_details": {
+      "cached_tokens": 0
+     },
+     "completion_tokens_details": {
+      "reasoning_tokens": 10
+     }
     }
    }
   },
   {
    "level": "xhigh",
-   "status": 403,
-   "elapsed_s": 0.48,
+   "status": 200,
+   "elapsed_s": 1.0,
    "request": {
     "model": "deepseek-v4-pro",
     "messages": [
@@ -130,16 +244,39 @@
     "reasoning_effort": "xhigh"
    },
    "response": {
-    "error": {
-     "type": "server_error",
-     "message": "Upstream request failed: Model access is disabled"
+    "id": "chatcmpl-accf174c653346f72f1e883a7975772f",
+    "object": "chat.completion",
+    "created": 1792045015,
+    "model": "deepseek-v4-pro",
+    "choices": [
+     {
+      "index": 0,
+      "finish_reason": "stop",
+      "logprobs": null,
+      "message": {
+       "role": "assistant",
+       "content": "ok",
+       "reasoning": "We need answer single word \"ok\". Must reply exactly single word. No punctuation."
+      }
+     }
+    ],
+    "usage": {
+     "prompt_tokens": 103,
+     "completion_tokens": 20,
+     "total_tokens": 123,
+     "prompt_tokens_details": {
+      "cached_tokens": 0
+     },
+     "completion_tokens_details": {
+      "reasoning_tokens": 17
+     }
     }
    }
   },
   {
    "level": "max",
-   "status": 403,
-   "elapsed_s": 0.41,
+   "status": 200,
+   "elapsed_s": 1.25,
    "request": {
     "model": "deepseek-v4-pro",
     "messages": [
@@ -152,9 +289,32 @@
     "reasoning_effort": "max"
    },
    "response": {
-    "error": {
-     "type": "server_error",
-     "message": "Upstream request failed: Model access is disabled"
+    "id": "chatcmpl-9d18c5ca43129ba704af7949be81b6f0",
+    "object": "chat.completion",
+    "created": 1792045017,
+    "model": "deepseek-v4-pro",
+    "choices": [
+     {
+      "index": 0,
+      "finish_reason": "stop",
+      "logprobs": null,
+      "message": {
+       "role": "assistant",
+       "content": "ok",
+       "reasoning": "We need answer user asks \"Reply with the single word: ok\". Need comply literally single word: ok. Ensure no punctuation? They said single word: ok. We can reply \"ok\" exactly."
+      }
+     }
+    ],
+    "usage": {
+     "prompt_tokens": 103,
+     "completion_tokens": 44,
+     "total_tokens": 147,
+     "prompt_tokens_details": {
+      "cached_tokens": 0
+     },
+     "completion_tokens_details": {
+      "reasoning_tokens": 41
+     }
     }
    }
   }

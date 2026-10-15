@@ -6,8 +6,8 @@
  "levels": [
   {
    "level": "off",
-   "status": 403,
-   "elapsed_s": 0.47,
+   "status": 400,
+   "elapsed_s": 0.57,
    "request": {
     "model": "grok-build-0.1",
     "input": "Reply with the single word: ok",
@@ -20,16 +20,14 @@
     ]
    },
    "response": {
-    "error": {
-     "type": "server_error",
-     "message": "Upstream request failed: Model access is disabled"
-    }
+    "model": "grok-build-0.1",
+    "error": "Model grok-build-0.1 does not support parameter reasoningEffort."
    }
   },
   {
    "level": "minimal",
-   "status": 403,
-   "elapsed_s": 0.44,
+   "status": 400,
+   "elapsed_s": 0.67,
    "request": {
     "model": "grok-build-0.1",
     "input": "Reply with the single word: ok",
@@ -42,16 +40,14 @@
     ]
    },
    "response": {
-    "error": {
-     "type": "server_error",
-     "message": "Upstream request failed: Model access is disabled"
-    }
+    "model": "grok-build-0.1",
+    "error": "Model grok-build-0.1 does not support parameter reasoningEffort."
    }
   },
   {
    "level": "low",
-   "status": 403,
-   "elapsed_s": 0.43,
+   "status": 400,
+   "elapsed_s": 0.55,
    "request": {
     "model": "grok-build-0.1",
     "input": "Reply with the single word: ok",
@@ -64,16 +60,14 @@
     ]
    },
    "response": {
-    "error": {
-     "type": "server_error",
-     "message": "Upstream request failed: Model access is disabled"
-    }
+    "model": "grok-build-0.1",
+    "error": "Model grok-build-0.1 does not support parameter reasoningEffort."
    }
   },
   {
    "level": "medium",
-   "status": 403,
-   "elapsed_s": 0.4,
+   "status": 400,
+   "elapsed_s": 0.67,
    "request": {
     "model": "grok-build-0.1",
     "input": "Reply with the single word: ok",
@@ -86,16 +80,14 @@
     ]
    },
    "response": {
-    "error": {
-     "type": "server_error",
-     "message": "Upstream request failed: Model access is disabled"
-    }
+    "model": "grok-build-0.1",
+    "error": "Model grok-build-0.1 does not support parameter reasoningEffort."
    }
   },
   {
    "level": "high",
-   "status": 403,
-   "elapsed_s": 0.4,
+   "status": 400,
+   "elapsed_s": 0.61,
    "request": {
     "model": "grok-build-0.1",
     "input": "Reply with the single word: ok",
@@ -108,16 +100,14 @@
     ]
    },
    "response": {
-    "error": {
-     "type": "server_error",
-     "message": "Upstream request failed: Model access is disabled"
-    }
+    "model": "grok-build-0.1",
+    "error": "Model grok-build-0.1 does not support parameter reasoningEffort."
    }
   },
   {
    "level": "xhigh",
-   "status": 403,
-   "elapsed_s": 0.48,
+   "status": 400,
+   "elapsed_s": 0.63,
    "request": {
     "model": "grok-build-0.1",
     "input": "Reply with the single word: ok",
@@ -130,16 +120,14 @@
     ]
    },
    "response": {
-    "error": {
-     "type": "server_error",
-     "message": "Upstream request failed: Model access is disabled"
-    }
+    "model": "grok-build-0.1",
+    "error": "Model grok-build-0.1 does not support parameter reasoningEffort."
    }
   },
   {
    "level": "max",
-   "status": 403,
-   "elapsed_s": 0.52,
+   "status": 400,
+   "elapsed_s": 0.53,
    "request": {
     "model": "grok-build-0.1",
     "input": "Reply with the single word: ok",
@@ -152,10 +140,8 @@
     ]
    },
    "response": {
-    "error": {
-     "type": "server_error",
-     "message": "Upstream request failed: Model access is disabled"
-    }
+    "model": "grok-build-0.1",
+    "error": "Model grok-build-0.1 does not support parameter reasoningEffort."
    }
   }
  ]

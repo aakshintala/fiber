@@ -6,8 +6,8 @@
  "levels": [
   {
    "level": "off",
-   "status": 403,
-   "elapsed_s": 0.48,
+   "status": 410,
+   "elapsed_s": 0.76,
    "request": {
     "model": "kimi-k2.6",
     "messages": [
@@ -22,14 +22,14 @@
    "response": {
     "error": {
      "type": "server_error",
-     "message": "Upstream request failed: Model access is disabled"
+     "message": "Upstream request failed: Endpoint is unavailable."
     }
    }
   },
   {
    "level": "minimal",
-   "status": 403,
-   "elapsed_s": 0.47,
+   "status": 410,
+   "elapsed_s": 0.72,
    "request": {
     "model": "kimi-k2.6",
     "messages": [
@@ -44,14 +44,14 @@
    "response": {
     "error": {
      "type": "server_error",
-     "message": "Upstream request failed: Model access is disabled"
+     "message": "Upstream request failed: Endpoint is unavailable."
     }
    }
   },
   {
    "level": "low",
-   "status": 403,
-   "elapsed_s": 0.4,
+   "status": 410,
+   "elapsed_s": 0.73,
    "request": {
     "model": "kimi-k2.6",
     "messages": [
@@ -66,14 +66,14 @@
    "response": {
     "error": {
      "type": "server_error",
-     "message": "Upstream request failed: Model access is disabled"
+     "message": "Upstream request failed: Endpoint is unavailable."
     }
    }
   },
   {
    "level": "medium",
-   "status": 403,
-   "elapsed_s": 0.47,
+   "status": 410,
+   "elapsed_s": 0.8,
    "request": {
     "model": "kimi-k2.6",
     "messages": [
@@ -88,14 +88,14 @@
    "response": {
     "error": {
      "type": "server_error",
-     "message": "Upstream request failed: Model access is disabled"
+     "message": "Upstream request failed: Endpoint is unavailable."
     }
    }
   },
   {
    "level": "high",
-   "status": 403,
-   "elapsed_s": 0.45,
+   "status": 410,
+   "elapsed_s": 0.55,
    "request": {
     "model": "kimi-k2.6",
     "messages": [
@@ -110,14 +110,14 @@
    "response": {
     "error": {
      "type": "server_error",
-     "message": "Upstream request failed: Model access is disabled"
+     "message": "Upstream request failed: Endpoint is unavailable."
     }
    }
   },
   {
    "level": "xhigh",
-   "status": 403,
-   "elapsed_s": 0.43,
+   "status": 410,
+   "elapsed_s": 0.55,
    "request": {
     "model": "kimi-k2.6",
     "messages": [
@@ -132,14 +132,14 @@
    "response": {
     "error": {
      "type": "server_error",
-     "message": "Upstream request failed: Model access is disabled"
+     "message": "Upstream request failed: Endpoint is unavailable."
     }
    }
   },
   {
    "level": "max",
-   "status": 403,
-   "elapsed_s": 0.45,
+   "status": 410,
+   "elapsed_s": 0.54,
    "request": {
     "model": "kimi-k2.6",
     "messages": [
@@ -154,7 +154,7 @@
    "response": {
     "error": {
      "type": "server_error",
-     "message": "Upstream request failed: Model access is disabled"
+     "message": "Upstream request failed: Endpoint is unavailable."
     }
    }
   }

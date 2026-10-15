@@ -6,8 +6,8 @@
  "levels": [
   {
    "level": "off",
-   "status": 403,
-   "elapsed_s": 0.45,
+   "status": 200,
+   "elapsed_s": 0.95,
    "request": {
     "model": "minimax-m3",
     "messages": [
@@ -20,16 +20,37 @@
     "reasoning_effort": "none"
    },
    "response": {
-    "error": {
-     "type": "server_error",
-     "message": "Upstream request failed: Model access is disabled"
+    "id": "chatcmpl-622ab43b66f841c08a0aff20ed6b22a5",
+    "object": "chat.completion",
+    "created": 1792045111,
+    "model": "minimax-m3",
+    "choices": [
+     {
+      "index": 0,
+      "finish_reason": "stop",
+      "message": {
+       "role": "assistant",
+       "content": "ok"
+      }
+     }
+    ],
+    "usage": {
+     "prompt_tokens": 121,
+     "completion_tokens": 2,
+     "total_tokens": 123,
+     "prompt_tokens_details": {
+      "cached_tokens": 120
+     },
+     "completion_tokens_details": {
+      "reasoning_tokens": 0
+     }
     }
    }
   },
   {
    "level": "minimal",
-   "status": 403,
-   "elapsed_s": 0.46,
+   "status": 400,
+   "elapsed_s": 0.83,
    "request": {
     "model": "minimax-m3",
     "messages": [
@@ -43,15 +64,16 @@
    },
    "response": {
     "error": {
-     "type": "server_error",
-     "message": "Upstream request failed: Model access is disabled"
+     "type": "invalid_request_error",
+     "code": "invalid_request_error",
+     "message": "Upstream request failed: [invalid_request_error] 3 request validation errors: Input should be 'low', 'medium', 'high', 'xhigh', 'max', 'none' or 'adaptive', field: 'reasoning_effort.literal['low','medium','high','xhigh','max','none','adaptive']', value: 'minimal'; Input should be a valid integer, unable to parse string as an integer, field: 'reasoning_effort.int', value: 'minimal'; Input should be a valid boolean, unable to interpret input, field: 'reasoning_effort.bool', value: 'minimal'"
     }
    }
   },
   {
    "level": "low",
-   "status": 403,
-   "elapsed_s": 0.39,
+   "status": 200,
+   "elapsed_s": 0.95,
    "request": {
     "model": "minimax-m3",
     "messages": [
@@ -64,16 +86,38 @@
     "reasoning_effort": "low"
    },
    "response": {
-    "error": {
-     "type": "server_error",
-     "message": "Upstream request failed: Model access is disabled"
+    "id": "chatcmpl-7dfbfd6996c64fc194ec5063fa766846",
+    "object": "chat.completion",
+    "created": 1792045112,
+    "model": "minimax-m3",
+    "choices": [
+     {
+      "index": 0,
+      "finish_reason": "stop",
+      "message": {
+       "role": "assistant",
+       "content": "ok",
+       "reasoning_content": "The user wants me to reply with the single word \"ok\"."
+      }
+     }
+    ],
+    "usage": {
+     "prompt_tokens": 131,
+     "completion_tokens": 16,
+     "total_tokens": 147,
+     "prompt_tokens_details": {
+      "cached_tokens": 130
+     },
+     "completion_tokens_details": {
+      "reasoning_tokens": 13
+     }
     }
    }
   },
   {
    "level": "medium",
-   "status": 403,
-   "elapsed_s": 0.5,
+   "status": 200,
+   "elapsed_s": 1.92,
    "request": {
     "model": "minimax-m3",
     "messages": [
@@ -86,16 +130,38 @@
     "reasoning_effort": "medium"
    },
    "response": {
-    "error": {
-     "type": "server_error",
-     "message": "Upstream request failed: Model access is disabled"
+    "id": "chatcmpl-adbd6bbc32f4462fa55ceeefe4dc1406",
+    "object": "chat.completion",
+    "created": 1792045113,
+    "model": "minimax-m3",
+    "choices": [
+     {
+      "index": 0,
+      "finish_reason": "stop",
+      "message": {
+       "role": "assistant",
+       "content": "ok",
+       "reasoning_content": "The user wants me to reply with the single word \"ok\"."
+      }
+     }
+    ],
+    "usage": {
+     "prompt_tokens": 131,
+     "completion_tokens": 16,
+     "total_tokens": 147,
+     "prompt_tokens_details": {
+      "cached_tokens": 130
+     },
+     "completion_tokens_details": {
+      "reasoning_tokens": 13
+     }
     }
    }
   },
   {
    "level": "high",
-   "status": 403,
-   "elapsed_s": 0.44,
+   "status": 200,
+   "elapsed_s": 1.24,
    "request": {
     "model": "minimax-m3",
     "messages": [
@@ -108,16 +174,38 @@
     "reasoning_effort": "high"
    },
    "response": {
-    "error": {
-     "type": "server_error",
-     "message": "Upstream request failed: Model access is disabled"
+    "id": "chatcmpl-ff171b38e19a41c19a367299e09af131",
+    "object": "chat.completion",
+    "created": 1792045115,
+    "model": "minimax-m3",
+    "choices": [
+     {
+      "index": 0,
+      "finish_reason": "stop",
+      "message": {
+       "role": "assistant",
+       "content": "ok",
+       "reasoning_content": "The user is asking me to reply with the single word \"ok\". This is a simple, straightforward request."
+      }
+     }
+    ],
+    "usage": {
+     "prompt_tokens": 131,
+     "completion_tokens": 25,
+     "total_tokens": 156,
+     "prompt_tokens_details": {
+      "cached_tokens": 130
+     },
+     "completion_tokens_details": {
+      "reasoning_tokens": 22
+     }
     }
    }
   },
   {
    "level": "xhigh",
-   "status": 403,
-   "elapsed_s": 0.43,
+   "status": 200,
+   "elapsed_s": 1.01,
    "request": {
     "model": "minimax-m3",
     "messages": [
@@ -130,16 +218,38 @@
     "reasoning_effort": "xhigh"
    },
    "response": {
-    "error": {
-     "type": "server_error",
-     "message": "Upstream request failed: Model access is disabled"
+    "id": "chatcmpl-530aebfd6ad043c181c4aa1a1d597bb1",
+    "object": "chat.completion",
+    "created": 1792045117,
+    "model": "minimax-m3",
+    "choices": [
+     {
+      "index": 0,
+      "finish_reason": "stop",
+      "message": {
+       "role": "assistant",
+       "content": "ok",
+       "reasoning_content": "The user is asking me to reply with a single word: \"ok\". This is a simple instruction that I should follow."
+      }
+     }
+    ],
+    "usage": {
+     "prompt_tokens": 131,
+     "completion_tokens": 28,
+     "total_tokens": 159,
+     "prompt_tokens_details": {
+      "cached_tokens": 130
+     },
+     "completion_tokens_details": {
+      "reasoning_tokens": 25
+     }
     }
    }
   },
   {
    "level": "max",
-   "status": 403,
-   "elapsed_s": 0.47,
+   "status": 200,
+   "elapsed_s": 1.29,
    "request": {
     "model": "minimax-m3",
     "messages": [
@@ -152,9 +262,31 @@
     "reasoning_effort": "max"
    },
    "response": {
-    "error": {
-     "type": "server_error",
-     "message": "Upstream request failed: Model access is disabled"
+    "id": "chatcmpl-4f4baf4abbcc48f3bd2ea1cecbca1bd1",
+    "object": "chat.completion",
+    "created": 1792045118,
+    "model": "minimax-m3",
+    "choices": [
+     {
+      "index": 0,
+      "finish_reason": "stop",
+      "message": {
+       "role": "assistant",
+       "content": "ok",
+       "reasoning_content": "The user wants me to reply with a single word: \"ok\". I should just do that."
+      }
+     }
+    ],
+    "usage": {
+     "prompt_tokens": 131,
+     "completion_tokens": 23,
+     "total_tokens": 154,
+     "prompt_tokens_details": {
+      "cached_tokens": 130
+     },
+     "completion_tokens_details": {
+      "reasoning_tokens": 20
+     }
     }
    }
   }

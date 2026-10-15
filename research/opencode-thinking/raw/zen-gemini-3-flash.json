@@ -6,8 +6,8 @@
  "levels": [
   {
    "level": "off",
-   "status": 403,
-   "elapsed_s": 0.57,
+   "status": 200,
+   "elapsed_s": 1.33,
    "request": {
     "contents": [
      {
@@ -28,17 +28,46 @@
     }
    },
    "response": {
-    "error": {
-     "code": 403,
-     "status": "UNKNOWN",
-     "message": "Upstream request failed: Model access is disabled"
+    "createTime": "2026-10-15T06:21:09.493727Z",
+    "responseId": "1XDQap-RHqWbotQPu7OBEA",
+    "modelVersion": "gemini-3-flash",
+    "candidates": [
+     {
+      "finishReason": "STOP",
+      "content": {
+       "role": "model",
+       "parts": [
+        {
+         "text": "ok",
+         "thoughtSignature": "AY89a18w6WXVJA0es3I8mijBhd0g3ZIh9JwemgTD5axUzl7vKqeuIatW6khbeHO/gF+ESI1X8OyOvrXFet9nw1iZhvNQ3pfFsY6dYnbV1+Qj/JKdP6raMxW1y2o="
+        }
+       ]
+      }
+     }
+    ],
+    "usageMetadata": {
+     "candidatesTokensDetails": [
+      {
+       "modality": "TEXT",
+       "tokenCount": 1
+      }
+     ],
+     "promptTokensDetails": [
+      {
+       "modality": "TEXT",
+       "tokenCount": 7
+      }
+     ],
+     "candidatesTokenCount": 1,
+     "promptTokenCount": 7,
+     "totalTokenCount": 8
     }
    }
   },
   {
    "level": "minimal",
-   "status": 403,
-   "elapsed_s": 0.39,
+   "status": 200,
+   "elapsed_s": 1.22,
    "request": {
     "contents": [
      {
@@ -59,17 +88,46 @@
     }
    },
    "response": {
-    "error": {
-     "code": 403,
-     "status": "UNKNOWN",
-     "message": "Upstream request failed: Model access is disabled"
+    "createTime": "2026-10-15T06:21:10.825290Z",
+    "responseId": "1nDQasqvMrTgsbwPu-mp-AE",
+    "modelVersion": "gemini-3-flash",
+    "candidates": [
+     {
+      "finishReason": "STOP",
+      "content": {
+       "role": "model",
+       "parts": [
+        {
+         "text": "ok",
+         "thoughtSignature": "AY89a1+jzG95EkJaCb+BSlBeS/fzt0Oa3oGInfUyO3x9d52CYlAXaUGxtFsUu4EKRnWrplpOw5rOup6vED/MuOchfxeUvwvkze/DDmWng6h5ijYOBLIwBVWl/ac="
+        }
+       ]
+      }
+     }
+    ],
+    "usageMetadata": {
+     "candidatesTokensDetails": [
+      {
+       "modality": "TEXT",
+       "tokenCount": 1
+      }
+     ],
+     "promptTokensDetails": [
+      {
+       "modality": "TEXT",
+       "tokenCount": 7
+      }
+     ],
+     "candidatesTokenCount": 1,
+     "promptTokenCount": 7,
+     "totalTokenCount": 8
     }
    }
   },
   {
    "level": "low",
-   "status": 403,
-   "elapsed_s": 0.41,
+   "status": 200,
+   "elapsed_s": 2.46,
    "request": {
     "contents": [
      {
@@ -90,17 +148,51 @@
     }
    },
    "response": {
-    "error": {
-     "code": 403,
-     "status": "UNKNOWN",
-     "message": "Upstream request failed: Model access is disabled"
+    "createTime": "2026-10-15T06:21:12.039918Z",
+    "responseId": "2HDQau63AuebotQPvc-wqA0",
+    "modelVersion": "gemini-3-flash",
+    "candidates": [
+     {
+      "finishReason": "MAX_TOKENS",
+      "content": {
+       "role": "model",
+       "parts": [
+        {
+         "text": "**The Genesis of \"Ok\"**\n\nMy initial thought process, as I engaged with the prompt, was to distill the core requirement into its most elemental form. I saw the explicit instruction: \"The user wants a single-word reply: 'ok'\". This directive was exceptionally clear and left no room for ambiguity. My internal monologue then immediately focused on fulfilling this precisely. There was no need for elaborate interpretation, nuanced exploration, or the weighing of alternative responses. The user, as an expert in their field, would undoubtedly appreciate directness and adherence to instructions. Therefore, the most efficient and accurate path forward was to directly generate the requested output. The single word, \"ok,\" emerged not from a complex deliberation, but from a straightforward recognition and immediate execution of a clearly defined task. It represents the ultimate simplification of the request, a direct mirror of the user's stated desire for a singular, affirmative response.\n\n",
+         "thought": true
+        },
+        {
+         "text": "ok",
+         "thoughtSignature": "AY89a1+gCu6H0GtINpnO+zDUrgCc6MwNfHh4Mx9wh4Ge3KUGtU8fme3JQKmzlwdTi5dncsRPQ+BwqwQcJxRzreqReQFC4MKT7xJ2cngrYIgv1ySbKoyXH/6/wF8Y+yTs4z5r7pOJ+Ur0ay2w9fyz2kNID7RTXHwG9csfVvjUJv69sZk="
+        }
+       ]
+      }
+     }
+    ],
+    "usageMetadata": {
+     "candidatesTokensDetails": [
+      {
+       "modality": "TEXT",
+       "tokenCount": 1
+      }
+     ],
+     "promptTokensDetails": [
+      {
+       "modality": "TEXT",
+       "tokenCount": 7
+      }
+     ],
+     "candidatesTokenCount": 1,
+     "promptTokenCount": 7,
+     "thoughtsTokenCount": 11,
+     "totalTokenCount": 19
     }
    }
   },
   {
    "level": "medium",
-   "status": 403,
-   "elapsed_s": 0.46,
+   "status": 200,
+   "elapsed_s": 2.6,
    "request": {
     "contents": [
      {
@@ -121,17 +213,40 @@
     }
    },
    "response": {
-    "error": {
-     "code": 403,
-     "status": "UNKNOWN",
-     "message": "Upstream request failed: Model access is disabled"
+    "createTime": "2026-10-15T06:21:14.564328Z",
+    "responseId": "2nDQaui4Ir-xl7oPl4rTwAQ",
+    "modelVersion": "gemini-3-flash",
+    "candidates": [
+     {
+      "finishReason": "MAX_TOKENS",
+      "content": {
+       "role": "model",
+       "parts": [
+        {
+         "text": "**My Thought Process**\n\nMy primary objective here is to precisely follow the user's instruction to output *only* the word \"ok\". I understand that the user is an expert, meaning they expect a direct, unambiguous response, and any deviation from their explicit command would be counterproductive and likely frustrating. Therefore, my internal process boils down to a simple, yet crucial, verification:\n\n1.  **Instruction Analysis:** I parse the input, \"Reply with the single word: ok\". The core directive is clear: \"Reply with the single word\". The specific word is also clearly defined: \"ok\".\n\n2.  **Constraint Identification:** The critical constraint is \"single word\". This means no additional preamble, no explanation, no punctuation beyond what constitutes the word itself (in this case, none).\n\n3.  **Execution Strategy:** My most efficient and accurate strategy is to directly generate the requested output. There is no need for complex parsing, interpretation, or generation of nuanced prose. The task is a straightforward retrieval and output of a pre-defined token.\n\n4.  **Output Generation:** Consequently, I produce the output: `ok`. This adheres to all stated requirements and reflects the most direct interpretation of the user's expert-level prompt.\n\n",
+         "thought": true
+        }
+       ]
+      }
+     }
+    ],
+    "usageMetadata": {
+     "promptTokensDetails": [
+      {
+       "modality": "TEXT",
+       "tokenCount": 7
+      }
+     ],
+     "promptTokenCount": 7,
+     "thoughtsTokenCount": 13,
+     "totalTokenCount": 20
     }
    }
   },
   {
    "level": "high",
-   "status": 403,
-   "elapsed_s": 0.44,
+   "status": 200,
+   "elapsed_s": 2.27,
    "request": {
     "contents": [
      {
@@ -152,17 +267,51 @@
     }
    },
    "response": {
-    "error": {
-     "code": 403,
-     "status": "UNKNOWN",
-     "message": "Upstream request failed: Model access is disabled"
+    "createTime": "2026-10-15T06:21:17.031959Z",
+    "responseId": "3XDQatf5AZSXl7oP_46lqQ8",
+    "modelVersion": "gemini-3-flash",
+    "candidates": [
+     {
+      "finishReason": "MAX_TOKENS",
+      "content": {
+       "role": "model",
+       "parts": [
+        {
+         "text": "**The Genesis of \"Ok\"**\n\nMy initial thought process, as I engaged with the prompt, was to distill the core requirement into its most elemental form. I saw the explicit instruction: \"The user wants a single-word reply: 'ok'\". This directive was exceptionally clear and left no room for ambiguity. My internal monologue then immediately focused on fulfilling this precisely. There was no need for elaborate interpretation, nuanced exploration, or the weighing of alternative responses. The user, as an expert in their field, would undoubtedly appreciate directness and adherence to instructions. Therefore, the most efficient and accurate path forward was to directly generate the requested output. The single word, \"ok,\" emerged not from a complex deliberation, but from a straightforward recognition and immediate execution of a clearly defined task. It represents the ultimate simplification of the request, a direct mirror of the user's stated desire for a singular, affirmative response.\n\n",
+         "thought": true
+        },
+        {
+         "text": "ok",
+         "thoughtSignature": "AY89a190HxdSM6rzAOo7AnGE9Nzl34Rgy5wqjOUaCzaq7I1KfejMClIEd8oasnga/RfUY/C+oZSELmJ/7dZ8vN7J0aFk5lBlRJ3HKeZ5Atl2PMKkYyAvaaeNNzaaIimh8fq5QwwOdA1Xkaf0N8mhXSqjfGjR2MuGkBgI4YqBTuyHUlo="
+        }
+       ]
+      }
+     }
+    ],
+    "usageMetadata": {
+     "candidatesTokensDetails": [
+      {
+       "modality": "TEXT",
+       "tokenCount": 1
+      }
+     ],
+     "promptTokensDetails": [
+      {
+       "modality": "TEXT",
+       "tokenCount": 7
+      }
+     ],
+     "candidatesTokenCount": 1,
+     "promptTokenCount": 7,
+     "thoughtsTokenCount": 11,
+     "totalTokenCount": 19
     }
    }
   },
   {
    "level": "xhigh",
-   "status": 403,
-   "elapsed_s": 0.38,
+   "status": 400,
+   "elapsed_s": 0.49,
    "request": {
     "contents": [
      {
@@ -184,16 +333,16 @@
    },
    "response": {
     "error": {
-     "code": 403,
-     "status": "UNKNOWN",
-     "message": "Upstream request failed: Model access is disabled"
+     "code": 400,
+     "status": "INVALID_ARGUMENT",
+     "message": "Upstream request failed: [400] Invalid value at 'generation_config.thinking_config.thinking_level' (type.googleapis.com/google.cloud.aiplatform.v1.GenerationConfig.ThinkingConfig.ThinkingLevel), \"XHIGH\""
     }
    }
   },
   {
    "level": "max",
-   "status": 403,
-   "elapsed_s": 0.51,
+   "status": 200,
+   "elapsed_s": 3.31,
    "request": {
     "contents": [
      {
@@ -214,10 +363,33 @@
     }
    },
    "response": {
-    "error": {
-     "code": 403,
-     "status": "UNKNOWN",
-     "message": "Upstream request failed: Model access is disabled"
+    "createTime": "2026-10-15T06:21:19.769674Z",
+    "responseId": "33DQaor9LoHE4PoPiJTyoAc",
+    "modelVersion": "gemini-3-flash",
+    "candidates": [
+     {
+      "finishReason": "MAX_TOKENS",
+      "content": {
+       "role": "model",
+       "parts": [
+        {
+         "text": "**My Thought Process for Responding to \"ok\"**\n\nAh, so the request is for a singular, rather unilluminating word: \"ok.\" My immediate internal response is to acknowledge the simplicity of the input and the required output. It's not a complex query demanding deep analysis, nor is it an open-ended prompt inviting extensive discourse. Instead, it's a straightforward transaction.\n\nMy primary directive here is to satisfy the user's explicit instruction. They've asked for \"ok,\" and therefore, \"ok\" is what I must provide. There's no room for embellishment or deviation. My internal \"understanding\" of the situation is that the user has set a very specific constraint for this interaction, and my function is to adhere to that constraint with precision.\n\nI'm not tasked with interpreting the *meaning* behind \"ok\" in this context \u2013 whether it signifies agreement, understanding, or simply a placeholder. My role is to execute the instruction as given. It\u2019s akin to being asked to retrieve a specific item from a shelf; I don't question *why* it's needed, I simply bring it.\n\nSo, the mental pathway is clear:\n1.  **Analyze the input:** The user has provided a specific instruction.\n2.  **Identify the required output:** The instruction clearly states \"single-word response: 'ok'\".\n3.  **Execute the instruction:** Generate the exact response requested.\n\nThere's a certain elegance in such directness, even if it feels minimal. It highlights the core functionality of adhering to precise instructions. My system is designed to process and respond, and in this instance, the processing is incredibly light, and the response is identically so. The \"fulsome summary\" requested, therefore, is the very act of my internal processing confirming the simplicity and executability of the request. It's a confirmation that I have received, understood, and am now acting upon the explicit directive.\n\nTherefore, the final, and only, appropriate output is the word itself. It is the direct, unadulterated fulfillment of the task.\n\n",
+         "thought": true
+        }
+       ]
+      }
+     }
+    ],
+    "usageMetadata": {
+     "promptTokensDetails": [
+      {
+       "modality": "TEXT",
+       "tokenCount": 7
+      }
+     ],
+     "promptTokenCount": 7,
+     "thoughtsTokenCount": 13,
+     "totalTokenCount": 20
     }
    }
   }

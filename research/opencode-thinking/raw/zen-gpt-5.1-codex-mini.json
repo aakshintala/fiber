@@ -6,8 +6,8 @@
  "levels": [
   {
    "level": "off",
-   "status": 403,
-   "elapsed_s": 0.48,
+   "status": 400,
+   "elapsed_s": 0.7,
    "request": {
     "model": "gpt-5.1-codex-mini",
     "input": "Reply with the single word: ok",
@@ -20,16 +20,19 @@
     ]
    },
    "response": {
+    "model": "gpt-5.1-codex-mini",
     "error": {
-     "type": "server_error",
-     "message": "Upstream request failed: Model access is disabled"
+     "message": "Unsupported value: 'none' is not supported with the 'gpt-5.1-codex-mini-2025-11-13' model. Supported values are: 'low', 'medium', and 'high'.",
+     "type": "invalid_request_error",
+     "param": "reasoning.effort",
+     "code": "unsupported_value"
     }
    }
   },
   {
    "level": "minimal",
-   "status": 403,
-   "elapsed_s": 0.47,
+   "status": 400,
+   "elapsed_s": 0.74,
    "request": {
     "model": "gpt-5.1-codex-mini",
     "input": "Reply with the single word: ok",
@@ -42,16 +45,19 @@
     ]
    },
    "response": {
+    "model": "gpt-5.1-codex-mini",
     "error": {
-     "type": "server_error",
-     "message": "Upstream request failed: Model access is disabled"
+     "message": "Unsupported value: 'minimal' is not supported with the 'gpt-5.1-codex-mini-2025-11-13' model. Supported values are: 'low', 'medium', and 'high'.",
+     "type": "invalid_request_error",
+     "param": "reasoning.effort",
+     "code": "unsupported_value"
     }
    }
   },
   {
    "level": "low",
-   "status": 403,
-   "elapsed_s": 0.4,
+   "status": 200,
+   "elapsed_s": 2.08,
    "request": {
     "model": "gpt-5.1-codex-mini",
     "input": "Reply with the single word: ok",
@@ -64,16 +70,69 @@
     ]
    },
    "response": {
-    "error": {
-     "type": "server_error",
-     "message": "Upstream request failed: Model access is disabled"
-    }
+    "id": "resp_03347b3ba3cc2166006ad070605b708194bde7af0f2b165c9b",
+    "object": "response",
+    "created_at": 1792045152,
+    "completed_at": null,
+    "status": "incomplete",
+    "parallel_tool_calls": true,
+    "temperature": 1,
+    "top_p": 1,
+    "max_output_tokens": 16,
+    "previous_response_id": null,
+    "background": false,
+    "truncation": "disabled",
+    "top_logprobs": 0,
+    "max_tool_calls": null,
+    "prompt_cache_retention": "in_memory",
+    "model": "gpt-5.1-codex-mini",
+    "error": null,
+    "incomplete_details": {
+     "reason": "max_output_tokens"
+    },
+    "output": [
+     {
+      "id": "rs_03347b3ba3cc2166006ad07061022c8194b33bccf4db189705",
+      "type": "reasoning",
+      "encrypted_content": "gAAAAABq0HBh-krSZaMM9XlWuDA5kcZGkUOybT95_wxwcHI_U01yUh5xF3wF1y6K52AeoHDtRy1W-J9qJEoDu6EsZCPNNwD9BRuEaUnjgni3d9LW-qKTYohSLEO9oy60jrQZjZrCF3tKKkWuiFxuePI_fEB92EbJgHOYIX8wjJLAT_76oXmODD6Ezg3bKO7kx8BmAIZGW3i6nId8_veJLR2FqhyPCG5hu9iTHsbLRuNPO2PAdAGLS3WQqJyA1F3QXF-b5JPCeldCX_IJ_mDq1q8rQhoLvlun39bkuyW8WY-ZFyQWwUVvO_Atldi1bp-7seaoOF4kT8iwxf0IDbHLqRdPyw3tgZOd3TWYZdM6bAcM_hMHwg_M7P6pr6E3zMnQyZzl3kQzbLveEZfEQX1CU0S5rp3xdfDOwmakRtUEfJ6a7d12m9u5ZzmuW4ioOAvLQj0hEN9OKcg0klc5KlvHTlLeFDnp_fPVniEU91rLj5RmPA_A0JaTami9_wLstpsMt3Q_PNKIDl4Y0kawPLL9hVmaQ4SWRnLI82szYKZAAHMMv0Pfm0hv7-N1r1ucy5kZGx1AJ2Y0qwpxniDfvHuTTqmpSJnJ2wp5TyxEaVrotRxjCgiH_uHYgZ2h3ZUHoU3CycLAlK1dOWFW1IGj7N6oHlM3d0PMA6Q6K3AVT38oFS8nAFWZBureMRcTjbZ2eL_nY8MECKTh2Byfcl6L5AGtNyPkCx15nIVa-KuSXwxJoURrHUXCMJ6nNHzPObTd9w5EYQavbCc9rjTjo5EEvJA38bdZQ-0RDHYvhvRwlJ6ff4ric_OA17GTK90e9Tt3ZK8AzVd_InMwi7_wF6j2rZD7M4KtK5sBezj6qIr7a8hcvb5Jcohcj25MNXlc05C2KE2cM6pI1erWZt3cW_e_LZRfdE0oWsCqkfAWiENXY83u65TqoKIT_9SAxkFMnULTkyNIQSHYRz_nsTjtnT9NnobVm7vxSgDxnvW9boLaEl3aa6acRpUXgTznYQ2VoohGq0kjeMTsx32rZpZ8AlB9eEq7XWzmDhBnVRH0i-YzZdB4qbk36JU_c-zAUcFDfOZ_H9WlFhkrVtgsAO4Ix802_0XsRPv4mEBrwupd2WWbpVy1lSPTWyMIkF-_7qsaCLPAzFhn70hXREhB-lqIyEWCbWJ54l5utlbg1Hkzz1JCuNVEq1bTY4qHUWhnlwVwj1-Yv1pcPusCzzXoMtjtKe_5W-vhMPj6-a753XWnbg==",
+      "content": [],
+      "summary": []
+     }
+    ],
+    "usage": {
+     "input_tokens": 13,
+     "output_tokens": 0,
+     "total_tokens": 13,
+     "input_tokens_details": {
+      "cached_tokens": 0,
+      "cache_write_tokens": 0
+     },
+     "output_tokens_details": {
+      "reasoning_tokens": 0
+     }
+    },
+    "instructions": null,
+    "tool_choice": "auto",
+    "tools": [],
+    "reasoning": {
+     "context": "current_turn",
+     "effort": "low",
+     "mode": "standard",
+     "summary": null
+    },
+    "text": {
+     "verbosity": "medium",
+     "format": {
+      "type": "text"
+     }
+    },
+    "moderation": null
    }
   },
   {
    "level": "medium",
-   "status": 403,
-   "elapsed_s": 0.46,
+   "status": 200,
+   "elapsed_s": 1.49,
    "request": {
     "model": "gpt-5.1-codex-mini",
     "input": "Reply with the single word: ok",
@@ -86,16 +145,69 @@
     ]
    },
    "response": {
-    "error": {
-     "type": "server_error",
-     "message": "Upstream request failed: Model access is disabled"
-    }
+    "id": "resp_031e809fd8a16afc006ad070624fc88197a4390acf387027bd",
+    "object": "response",
+    "created_at": 1792045154,
+    "completed_at": null,
+    "status": "incomplete",
+    "parallel_tool_calls": true,
+    "temperature": 1,
+    "top_p": 1,
+    "max_output_tokens": 16,
+    "previous_response_id": null,
+    "background": false,
+    "truncation": "disabled",
+    "top_logprobs": 0,
+    "max_tool_calls": null,
+    "prompt_cache_retention": "in_memory",
+    "model": "gpt-5.1-codex-mini",
+    "error": null,
+    "incomplete_details": {
+     "reason": "max_output_tokens"
+    },
+    "output": [
+     {
+      "id": "rs_031e809fd8a16afc006ad07062ca8c8197926ec00c96789bd2",
+      "type": "reasoning",
+      "encrypted_content": "gAAAAABq0HBjB9REg-W1COKGBTC6MLPNh-kxojnrkQfoYoGZCZVbxQeR5bKdtNqVyHbTZHuDSLentppEaETkF3Nt1cfJp0II4-uR03qlEBngEd5ZwuExqQr6hJYP69Plzbayn0mRZ2ZpoMexQ0KrKIN16Pk8wVKQo_2IzI6axvKpr9Bc6c2IjOj7oimwSPMvUQ_iS7hH7yKt9vqz6WNkT7uuvZVBOsh_d5ne-_snIm6i7f4p4Ds9qIS4DWJGj9LsvBWI7PTRkuWkqaFlLWf2XX5KrkGgdpdbJ62XkcEBIY_JM0csYnbwl1Dxd2TCK6xiA6absoMNfTKpvi1c2htL6_4HP3itBayoE9tebEQHjF4v53IIjzVNHaUQ7Q3LeYKp2vj_MqQ8viS2OlwO5bq9qj2wb9Q7k942v8-jV9NAwmtwia0DR0Ac10ddTOe0wGGZ9H9Z6aDXkKupldheJGbvseUMXKPcxxgNhHI5w95LkDBya14BCAa9fpC6DP7c2tYWD-PiVZnty38CyiUQK-FXi0d_1KHKJZTBuaQiDL7eLWdXH3zHq4nBUrzCrbuGltTCabPbROGO3T4ydZmFpMKttDd07QlOYScKG86NjmF1V48JZZVsDnfT2Aa6Qwp18P8IzAHLP6ySVs3S9llJA1c2QEDZRheK96HdFLDCDJtPWmjKWkvDddPV6lURjEV2rmZxlN5FDw37CLJBxzwwyG7KovFZ8-fwF0093MpBr8zAAq8dM4QGeo4saYr5ir4UpGxkZ0LdgnMeGeV6VIzb5BJNeWHZPBxAukM0CyJzfo4hUxrnySO5DHfCjl7KgoF8thYK9No1edtnBKowE4za32BoHWFsSqFF0aaVNn_HabsGuS1_980GbduCeKjik6ZSZeoYS0JZS8TPqbMjW2QJKKtPYUiKwSaEhLiieUkg8hz99c24fXroxmypcj0Rk2VXFVWvlzbxImRrdokTsPc8X4xV75F-VPVULhR2wWtF98t9_Mjf0IvSCjOXsmq2DAGFsQFjXT-eHa6m65I3eepPiUmG8hrpFMBdTSXfp2YnbXmxHjUL22z7B1aROkPRmwodrgqHwU4dIxar1FQ7ppxhgkctQM3RJO5DM7knt0FfpXLzse9QGN17up4B9YcxSGhVuBGo_CEPpRp0-2yPTYTBedVC6A47DFfGJmGeofE6YwUYyUZE1_BIVSS6NPrif0ZXFkTbxDVhDl6-TGbDPoc1uM7VoglLdoJeD7jzfA==",
+      "content": [],
+      "summary": []
+     }
+    ],
+    "usage": {
+     "input_tokens": 13,
+     "output_tokens": 0,
+     "total_tokens": 13,
+     "input_tokens_details": {
+      "cached_tokens": 0,
+      "cache_write_tokens": 0
+     },
+     "output_tokens_details": {
+      "reasoning_tokens": 0
+     }
+    },
+    "instructions": null,
+    "tool_choice": "auto",
+    "tools": [],
+    "reasoning": {
+     "context": "current_turn",
+     "effort": "medium",
+     "mode": "standard",
+     "summary": null
+    },
+    "text": {
+     "verbosity": "medium",
+     "format": {
+      "type": "text"
+     }
+    },
+    "moderation": null
    }
   },
   {
    "level": "high",
-   "status": 403,
-   "elapsed_s": 0.38,
+   "status": 200,
+   "elapsed_s": 1.17,
    "request": {
     "model": "gpt-5.1-codex-mini",
     "input": "Reply with the single word: ok",
@@ -108,16 +220,69 @@
     ]
    },
    "response": {
-    "error": {
-     "type": "server_error",
-     "message": "Upstream request failed: Model access is disabled"
-    }
+    "id": "resp_08c4e2ae5a305e54006ad07063cc888195873eb42ab69eec81",
+    "object": "response",
+    "created_at": 1792045155,
+    "completed_at": null,
+    "status": "incomplete",
+    "parallel_tool_calls": true,
+    "temperature": 1,
+    "top_p": 1,
+    "max_output_tokens": 16,
+    "previous_response_id": null,
+    "background": false,
+    "truncation": "disabled",
+    "top_logprobs": 0,
+    "max_tool_calls": null,
+    "prompt_cache_retention": "in_memory",
+    "model": "gpt-5.1-codex-mini",
+    "error": null,
+    "incomplete_details": {
+     "reason": "max_output_tokens"
+    },
+    "output": [
+     {
+      "id": "rs_08c4e2ae5a305e54006ad070643014819584fbd1d85502308c",
+      "type": "reasoning",
+      "encrypted_content": "gAAAAABq0HBkWX3eJNE1_Efv9SFU5lYnsz2Iom6B64etkHZamXR-rKZr6a3qhwEUj_3SPAmJLS127kaCAbccqg0VDkf2lJmAPK17EmdLtPwZyaY_yJreK0IYXahATBdNOwUw3m_c7QOOB9YWf9D9l9CXd5y5kYbK3wfBmyLlaayMErBSEt6cYd-By9OMxE3wI3s3B6Qh77FiBgU1epAScefppCXx-90N73_qaVFcurwGiBLZ2ER5IfvklTeUroy_0WVVLihXXbtRbB-GzR5Bha9lIuw7a5v0AXK6Yoc86ZtVCIgXj7LaeFx7AF_N56m251itDC4WrAKs7-6dYDlrP1aUrzJO0KaATXtaGvq6Nmn9xjVjPX22vyiWjE5uPg3aUSoXrzdoBQSwpUSuJ_vFL59BWtm3wfTKjRIyd2W2-ySBVLA8CGCfB45HcXrUcBmLNyPXaY1KzR1y7po1zylQvsAxg0dMwt-BjztsDPvIKqmC3sMc30yBwrr_ZJ4zaPef-cPDUyyo_F9BRp8EYS3_f-cZHbIdmAyFLhahqjC7wT2jLuWbvXlW0r36rzsq-5Xe8UJ_GbjHN369bHktA1efqKpdwBPTbaw11bi3yBhcyyF8F4dU8EpoNoO689WCAn_CEZTR6VR2SZS1Uz7b_XUhcp8RO5aQNXWdDt-LwPdU0zHYBeqeWdHz_eUnFOi7SvGrIsfsYr20MnEw7qML8_aKzVla3kRvVOnPpQyF4NMpjsUK86U2RLLDN9Yg1SFZdeeUQesBSSEo9t1XHoOYrmsKk9EPm1P2dY8EKlzurBl2HoWexwY2TAun2RJ44CSDHtY7qhXqoxXhFrq4M35JOgVZ6GhZ-8MJYhPrG6m7NDZUi6-K4YewjIFSRNb5w2AYk_JfocMpFOioUDSUl6VY7FfTXVWUcesKiOIrdk6umUl456cB33ukRqSL5tV6d4XbtoC15bHklc31L2f3j2Byr_6GPiSUmuIU9Q3Tis2BRq0imLGILMuwUV16fWdBLtWJA8GSGy1VfIyHiZtYzrJJmbH4Lw40RKrVqA935Ge3Vk8cOaPQcx3A5egC_mXItPYaGZwoVPMEy8m1ShNvLGF8YPve9uqLDaRAe7vdPQKvApUhPpu4U1Vl1Xu2FjoFFC2TlDGM211MV7aIckj2r516sMvPoMGBYkDH5Yh3FNKOF3ff_f3c3vKsLWJUtBDaG241YBHRjX-oB0EwvB450_v0g5fF0SRTF8BWJI21Ww==",
+      "content": [],
+      "summary": []
+     }
+    ],
+    "usage": {
+     "input_tokens": 13,
+     "output_tokens": 0,
+     "total_tokens": 13,
+     "input_tokens_details": {
+      "cached_tokens": 0,
+      "cache_write_tokens": 0
+     },
+     "output_tokens_details": {
+      "reasoning_tokens": 0
+     }
+    },
+    "instructions": null,
+    "tool_choice": "auto",
+    "tools": [],
+    "reasoning": {
+     "context": "current_turn",
+     "effort": "high",
+     "mode": "standard",
+     "summary": null
+    },
+    "text": {
+     "verbosity": "medium",
+     "format": {
+      "type": "text"
+     }
+    },
+    "moderation": null
    }
   },
   {
    "level": "xhigh",
-   "status": 403,
-   "elapsed_s": 0.46,
+   "status": 400,
+   "elapsed_s": 0.73,
    "request": {
     "model": "gpt-5.1-codex-mini",
     "input": "Reply with the single word: ok",
@@ -130,16 +295,19 @@
     ]
    },
    "response": {
+    "model": "gpt-5.1-codex-mini",
     "error": {
-     "type": "server_error",
-     "message": "Upstream request failed: Model access is disabled"
+     "message": "Unsupported value: 'xhigh' is not supported with the 'gpt-5.1-codex-mini-2025-11-13' model. Supported values are: 'low', 'medium', and 'high'.",
+     "type": "invalid_request_error",
+     "param": "reasoning.effort",
+     "code": "unsupported_value"
     }
    }
   },
   {
    "level": "max",
-   "status": 403,
-   "elapsed_s": 0.43,
+   "status": 400,
+   "elapsed_s": 0.91,
    "request": {
     "model": "gpt-5.1-codex-mini",
     "input": "Reply with the single word: ok",
@@ -152,9 +320,12 @@
     ]
    },
    "response": {
+    "model": "gpt-5.1-codex-mini",
     "error": {
-     "type": "server_error",
-     "message": "Upstream request failed: Model access is disabled"
+     "message": "Unsupported value: 'max' is not supported with the 'gpt-5.1-codex-mini-2025-11-13' model. Supported values are: 'low', 'medium', and 'high'.",
+     "type": "invalid_request_error",
+     "param": "reasoning.effort",
+     "code": "unsupported_value"
     }
    }
   }

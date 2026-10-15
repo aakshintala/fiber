@@ -27,7 +27,9 @@ pub(crate) struct Package {
     pub(crate) base_url: &'static str,
     /// Whether a model with `status == "deprecated"` is left out.
     pub(crate) drop_deprecated: bool,
-    /// Ids models.dev lists that the vendor rejects.
+    /// Ids models.dev lists that the vendor rejects, or that no probe
+    /// reaches: each skipped gateway id names its blocking probe under
+    /// research/opencode-thinking/.
     pub(crate) skip: &'static [&'static str],
     /// Ids kept from models.dev: empty keeps every model, non-empty
     /// keeps just these ids and drops the rest silently. An id matching
@@ -74,6 +76,10 @@ const LOW_MEDIUM_HIGH: &[&str] = &["low", "medium", "high"];
 const LOW_HIGH_MAX: &[&str] = &["low", "high", "max"];
 const LOW_MEDIUM_HIGH_XHIGH: &[&str] = &["low", "medium", "high", "xhigh"];
 const LOW_MEDIUM_HIGH_XHIGH_MAX: &[&str] = &["low", "medium", "high", "xhigh", "max"];
+const LOW_HIGH_XHIGH_MAX: &[&str] = &["low", "high", "xhigh", "max"];
+const LOW_MEDIUM_HIGH_MAX: &[&str] = &["low", "medium", "high", "max"];
+const OFF_MINIMAL_LOW_MEDIUM_HIGH_MAX: &[&str] =
+    &["off", "minimal", "low", "medium", "high", "max"];
 const MEDIUM_XHIGH: &[&str] = &["medium", "xhigh"];
 const MEDIUM_HIGH_XHIGH: &[&str] = &["medium", "high", "xhigh"];
 const HIGH_ONLY: &[&str] = &["high"];
@@ -343,8 +349,8 @@ const OPENCODE_GO: Package = Package {
     ],
     by_model: &[],
     thinking: &[
-        // DeepSeek's legacy names are served by DeepSeek-V4.1-Flash
-        // (https://api-docs.deepseek.com/); the record below probed it.
+        // research/opencode-thinking/raw/go-deepseek-v4-flash.json (every
+        // level 200s).
         (
             "deepseek-v4-flash",
             OFF_MINIMAL_LOW_MEDIUM_HIGH_XHIGH_MAX,
@@ -356,13 +362,15 @@ const OPENCODE_GO: Package = Package {
             OFF_MINIMAL_LOW_MEDIUM_HIGH_XHIGH_MAX,
             None,
         ),
-        // No level could be shown: both routes block this model, so Fiber
-        // sends none (research/opencode-thinking/raw/go-deepseek-v4-pro.json
-        // and raw/zen-deepseek-v4-pro.json).
-        ("deepseek-v4-pro", NO_LEVELS, None),
-        // research/opencode-thinking/raw/zen-deepseek-v4.1-flash.json: the
-        // Go route needs Global regions, so the Go row cites the Zen probe
-        // of the same model.
+        // research/opencode-thinking/raw/go-deepseek-v4-pro.json (every
+        // level 200s).
+        (
+            "deepseek-v4-pro",
+            OFF_MINIMAL_LOW_MEDIUM_HIGH_XHIGH_MAX,
+            None,
+        ),
+        // research/opencode-thinking/raw/go-deepseek-v4.1-flash.json
+        // (every level 200s).
         (
             "deepseek-v4.1-flash",
             OFF_MINIMAL_LOW_MEDIUM_HIGH_XHIGH_MAX,
@@ -452,7 +460,48 @@ const OPENCODE_ZEN: Package = Package {
     protocol: ProtocolRule::ByNpm,
     base_url: "https://opencode.ai/zen/v1",
     drop_deprecated: true,
-    skip: &[],
+    skip: &[
+        // FreeTierError outside OpenCode
+        // (research/opencode-thinking/raw/zen-big-pickle.json).
+        "big-pickle",
+        // Endpoint is unavailable on Zen; the Go row cites the same-model
+        // Go probe (research/opencode-thinking/raw/zen-deepseek-v4-flash-vision-exp.json).
+        "deepseek-v4-flash-vision-exp",
+        // The route retired this model
+        // (research/opencode-thinking/raw/zen-exo-free.json).
+        "exo-free",
+        // Endpoint is unavailable on Zen, unavailable on Go
+        // (research/opencode-thinking/raw/zen-kimi-k2.5.json and
+        // raw/go-kimi-k2.5.json).
+        "kimi-k2.5",
+        // Upstream reports these models unavailable
+        // (research/opencode-thinking/raw/zen-ling-3.0-flash-fin-free.json
+        // and raw/zen-ling-3.1-flash-free.json).
+        "ling-3.0-flash-fin-free",
+        "ling-3.1-flash-free",
+        // FreeTierError outside OpenCode; the Go row cites the same-model
+        // Go probe
+        // (research/opencode-thinking/raw/zen-longcat-2.5-preview-free.json).
+        "longcat-2.5-preview-free",
+        // FreeTierError outside OpenCode
+        // (research/opencode-thinking/raw/zen-mimo-v2.6-flash-free.json).
+        "mimo-v2.6-flash-free",
+        // FreeTierError outside OpenCode
+        // (research/opencode-thinking/raw/zen-muse-spark-1.3-contributor-free.json).
+        "muse-spark-1.3-contributor-free",
+        // FreeTierError outside OpenCode
+        // (research/opencode-thinking/raw/zen-nemotron-3-ultra-free.json
+        // and raw/zen-nemotron-3.5-lightning-free.json).
+        "nemotron-3-ultra-free",
+        "nemotron-3.5-lightning-free",
+        // FreeTierError outside OpenCode
+        // (research/opencode-thinking/raw/zen-space-bunny-free.json).
+        "space-bunny-free",
+        // FreeTierError outside OpenCode; the Go row cites the same-model
+        // Go probe
+        // (research/opencode-thinking/raw/zen-step-5-preview-free.json).
+        "step-5-preview-free",
+    ],
     only: &[],
     protocol_overrides: &[],
     every_model: r#"{}"#,
@@ -478,78 +527,66 @@ const OPENCODE_ZEN: Package = Package {
         ("claude-sonnet-4-5", GATEWAY_THINKING_BUDGET),
     ],
     thinking: &[
-        // No level could be shown: the free tier answers only inside
-        // OpenCode (research/opencode-thinking/raw/zen-big-pickle.json).
-        ("big-pickle", NO_LEVELS, None),
         // https://docs.anthropic.com/en/docs/build-with-claude/extended-thinking:
         // Claude Sonnet 4 is an earlier Claude 4 model, so it keeps manual
         // budget thinking; the compat layer above carries the budget flag.
         ("claude-sonnet-4", OFF_MINIMAL_LOW_MEDIUM_HIGH, None),
-        // DeepSeek's legacy names are served by DeepSeek-V4.1-Flash
-        // (https://api-docs.deepseek.com/); the record below probed it.
+        // research/opencode-thinking/raw/zen-deepseek-v4-flash.json:
+        // served by deepseek-v4.1-flash upstream, which supports only low,
+        // high, xhigh and max there (off, minimal and medium are rejected
+        // as unsupported).
+        ("deepseek-v4-flash", LOW_HIGH_XHIGH_MAX, None),
+        // research/opencode-thinking/raw/zen-deepseek-v4-pro.json (every
+        // level 200s).
         (
-            "deepseek-v4-flash",
+            "deepseek-v4-pro",
             OFF_MINIMAL_LOW_MEDIUM_HIGH_XHIGH_MAX,
             None,
         ),
-        // research/opencode-thinking/raw/go-deepseek-v4-flash-vision-exp.json:
-        // Zen keeps this model disabled, so the row cites the Go probe of
-        // the same model.
-        (
-            "deepseek-v4-flash-vision-exp",
-            OFF_MINIMAL_LOW_MEDIUM_HIGH_XHIGH_MAX,
-            None,
-        ),
-        // No level could be shown: both routes block this model, so Fiber
-        // sends none (research/opencode-thinking/raw/zen-deepseek-v4-pro.json
-        // and raw/go-deepseek-v4-pro.json).
-        ("deepseek-v4-pro", NO_LEVELS, None),
         // research/opencode-thinking/raw/zen-deepseek-v4.1-flash.json
         (
             "deepseek-v4.1-flash",
             OFF_MINIMAL_LOW_MEDIUM_HIGH_XHIGH_MAX,
             None,
         ),
-        // No level could be shown: the route retired this model
-        // (research/opencode-thinking/raw/zen-exo-free.json).
-        ("exo-free", NO_LEVELS, None),
-        // https://ai.google.dev/gemini-api/docs/thinking lists these levels
-        // for the preview of the same model; the GA model stays disabled on
-        // Zen (research/opencode-thinking/raw/zen-gemini-3-flash.json).
-        ("gemini-3-flash", MINIMAL_LOW_MEDIUM_HIGH, None),
-        // https://ai.google.dev/gemini-api/docs/thinking lists these levels
-        // for the preview of the same model; the GA model stays disabled on
-        // Zen (research/opencode-thinking/raw/zen-gemini-3.1-pro.json).
-        ("gemini-3.1-pro", LOW_MEDIUM_HIGH, None),
-        // research/opencode-thinking/raw/go-glm-5.json: the model is
-        // unavailable on Go and disabled on Zen, so this row mirrors the
-        // same-backend 5.2 and 5.3 probes beside the Zhipu thinking-mode
-        // docs (https://docs.z.ai/guides/capabilities/thinking-mode).
+        // research/opencode-thinking/raw/zen-gemini-3-flash.json (every
+        // level but xhigh 200s; xhigh 400s as an invalid thinking level).
+        ("gemini-3-flash", OFF_MINIMAL_LOW_MEDIUM_HIGH_MAX, None),
+        // research/opencode-thinking/raw/zen-gemini-3.1-pro.json (low,
+        // medium, high and max 200; off, minimal and xhigh 400).
+        ("gemini-3.1-pro", LOW_MEDIUM_HIGH_MAX, None),
+        // research/opencode-thinking/raw/zen-glm-5.json (minimal through
+        // max 200; off 400: a thinking-only model).
         ("glm-5", MINIMAL_LOW_MEDIUM_HIGH_XHIGH_MAX, None),
-        // research/opencode-thinking/raw/go-glm-5.1.json: Zen keeps this
-        // model disabled, so the row cites the Go probe of the same model
-        // (`minimal` through `max`; `off` is rejected: a thinking-only model).
+        // research/opencode-thinking/raw/zen-glm-5.1.json (minimal through
+        // max 200; off 400: a thinking-only model).
         ("glm-5.1", MINIMAL_LOW_MEDIUM_HIGH_XHIGH_MAX, None),
-        // research/opencode-thinking/raw/go-glm-5.2.json: Zen keeps this
-        // model disabled, so the row cites the Go probe of the same model.
+        // research/opencode-thinking/raw/zen-glm-5.2.json (minimal through
+        // max 200; off 400: a thinking-only model).
         ("glm-5.2", MINIMAL_LOW_MEDIUM_HIGH_XHIGH_MAX, None),
-        // research/opencode-thinking/raw/go-glm-5.3.json: Zen keeps this
-        // model disabled, so the row cites the Go probe of the same model.
+        // research/opencode-thinking/raw/zen-glm-5.3.json (minimal through
+        // max 200; off 400: a thinking-only model).
         ("glm-5.3", MINIMAL_LOW_MEDIUM_HIGH_XHIGH_MAX, None),
         // research/opencode-thinking/raw/zen-glm-5.3-flash.json
         ("glm-5.3-flash", MINIMAL_LOW_MEDIUM_HIGH_XHIGH_MAX, None),
-        // No level could be shown: Zen keeps these models disabled, and no
-        // vendor docs settle their levels
-        // (research/opencode-thinking/raw/zen-gpt-5-codex.json and the
-        // matching records).
-        ("gpt-5-codex", NO_LEVELS, None),
-        ("gpt-5.1-codex", NO_LEVELS, None),
-        ("gpt-5.1-codex-max", NO_LEVELS, None),
-        ("gpt-5.1-codex-mini", NO_LEVELS, None),
-        ("gpt-5.2-codex", NO_LEVELS, None),
-        // No level could be shown: Zen keeps this model disabled, and xAI's
-        // docs name no such model
-        // (research/opencode-thinking/raw/zen-grok-build-0.1.json).
+        // research/opencode-thinking/raw/zen-gpt-5-codex.json: the route
+        // enumerates low, medium and high as the supported efforts.
+        ("gpt-5-codex", LOW_MEDIUM_HIGH, None),
+        // research/opencode-thinking/raw/zen-gpt-5.1-codex.json: the route
+        // enumerates low, medium and high as the supported efforts.
+        ("gpt-5.1-codex", LOW_MEDIUM_HIGH, None),
+        // research/opencode-thinking/raw/zen-gpt-5.1-codex-max.json: the
+        // route enumerates low, medium, high and xhigh.
+        ("gpt-5.1-codex-max", LOW_MEDIUM_HIGH_XHIGH, None),
+        // research/opencode-thinking/raw/zen-gpt-5.1-codex-mini.json: the
+        // route enumerates low, medium and high.
+        ("gpt-5.1-codex-mini", LOW_MEDIUM_HIGH, None),
+        // research/opencode-thinking/raw/zen-gpt-5.2-codex.json: the route
+        // enumerates low, medium, high and xhigh.
+        ("gpt-5.2-codex", LOW_MEDIUM_HIGH_XHIGH, None),
+        // research/opencode-thinking/raw/zen-grok-build-0.1.json: every
+        // level 400s `reasoningEffort` unsupported, so the model takes no
+        // level and Fiber sends none.
         ("grok-build-0.1", NO_LEVELS, None),
         // https://docs.x.ai/developers/model-capabilities/text/reasoning:
         // `reasoning.effort` takes low, medium and high on 4.5, plus xhigh
@@ -557,94 +594,47 @@ const OPENCODE_ZEN: Package = Package {
         ("grok-4.5", LOW_MEDIUM_HIGH, None),
         ("grok-4.6", LOW_MEDIUM_HIGH_XHIGH, None),
         ("grok-4.7", LOW_MEDIUM_HIGH_XHIGH, None),
-        // research/opencode-thinking/raw/go-kimi-k2.5.json: the model is
-        // unavailable on Go and disabled on Zen, so this row mirrors the
-        // same-backend k2.7-code probe beside the Moonshot thinking-models
-        // docs (https://platform.moonshot.ai/docs/guide/use-thinking-models).
-        ("kimi-k2.5", MINIMAL_LOW_MEDIUM_HIGH_XHIGH_MAX, None),
-        // research/opencode-thinking/raw/go-kimi-k2.6.json: Zen keeps this
-        // model disabled, so the row cites the Go probe of the same model
-        // (every level 200s, including `off`).
+        // research/opencode-thinking/raw/go-kimi-k2.6.json (every level
+        // 200s, including `off`); Zen answers `Endpoint is unavailable`
+        // (research/opencode-thinking/raw/zen-kimi-k2.6.json).
         ("kimi-k2.6", OFF_MINIMAL_LOW_MEDIUM_HIGH_XHIGH_MAX, None),
-        // research/opencode-thinking/raw/go-kimi-k2.7-code.json: Zen keeps
-        // this model disabled, so the row cites the Go probe of the same
-        // model.
+        // research/opencode-thinking/raw/go-kimi-k2.7-code.json (minimal
+        // through max 200); Zen answers `Endpoint is unavailable`
+        // (research/opencode-thinking/raw/zen-kimi-k2.7-code.json).
         ("kimi-k2.7-code", MINIMAL_LOW_MEDIUM_HIGH_XHIGH_MAX, None),
         // https://platform.moonshot.ai/docs/guide/use-reasoning-effort:
         // K3 configures reasoning effort with top-level `reasoning_effort`,
         // supporting low, high and max with a max default.
         ("kimi-k3", LOW_HIGH_MAX, None),
-        // No level could be shown: upstream reports these models unavailable
-        // (research/opencode-thinking/raw/zen-ling-3.0-flash-fin-free.json
-        // and raw/zen-ling-3.1-flash-free.json).
-        ("ling-3.0-flash-fin-free", NO_LEVELS, None),
-        ("ling-3.1-flash-free", NO_LEVELS, None),
-        // research/opencode-thinking/raw/go-longcat-2.5-preview-free.json:
-        // the free tier answers only inside OpenCode on Zen, so the row
-        // cites the Go probe of the same model.
-        (
-            "longcat-2.5-preview-free",
-            OFF_MINIMAL_LOW_MEDIUM_HIGH_XHIGH_MAX,
-            None,
-        ),
-        // research/opencode-thinking/raw/go-mimo-v2.6-flash.json: the free
-        // tier answers only inside OpenCode on Zen, so the row cites the Go
-        // probe of the paid variant.
-        ("mimo-v2.6-flash-free", OFF_LOW_MEDIUM_HIGH_MAX, None),
-        // No level could be shown: Zen keeps these MiniMax models disabled,
-        // and nothing probes their completions route
-        // (research/opencode-thinking/raw/zen-minimax-m2.5.json and the
-        // matching records).
-        ("minimax-m2.5", NO_LEVELS, None),
-        ("minimax-m2.7", NO_LEVELS, None),
-        ("minimax-m3", NO_LEVELS, None),
+        // research/opencode-thinking/raw/zen-minimax-m2.5.json (every level
+        // but minimal 200s).
+        ("minimax-m2.5", OFF_LOW_MEDIUM_HIGH_XHIGH_MAX, None),
+        // research/opencode-thinking/raw/zen-minimax-m2.7.json (every level
+        // but minimal 200s).
+        ("minimax-m2.7", OFF_LOW_MEDIUM_HIGH_XHIGH_MAX, None),
+        // research/opencode-thinking/raw/zen-minimax-m3.json (every level
+        // but minimal 200s).
+        ("minimax-m3", OFF_LOW_MEDIUM_HIGH_XHIGH_MAX, None),
         // research/opencode-thinking/raw/zen-mistral-large-4.json (the
         // `high` reply carries a thinking chunk) and
         // https://docs.mistral.ai/capabilities/reasoning.
         ("mistral-large-4", OFF_HIGH, None),
-        // research/opencode-thinking/raw/go-muse-spark-1.2-contributor.json:
-        // Zen keeps 1.2 disabled, so the row cites the Go probe of the same
-        // generation's contributor tier.
+        // research/opencode-thinking/raw/zen-muse-spark-1.2.json (minimal
+        // through xhigh 200; off and max are rejected with the supported
+        // set).
         ("muse-spark-1.2", MINIMAL_LOW_MEDIUM_HIGH_XHIGH, None),
         // Same levels as the vendor muse package's row for this id.
         ("muse-spark-1.3", MINIMAL_LOW_MEDIUM_HIGH_XHIGH_MAX, None),
-        // The 1.3 family takes minimal through max on both routes; the free
-        // tier answers only inside OpenCode on Zen
-        // (research/opencode-thinking/raw/zen-muse-spark-1.3-contributor-free.json).
-        (
-            "muse-spark-1.3-contributor-free",
-            MINIMAL_LOW_MEDIUM_HIGH_XHIGH_MAX,
-            None,
-        ),
-        // No level could be shown: the free tier answers only inside
-        // OpenCode (research/opencode-thinking/raw/zen-nemotron-3-ultra-free.json
-        // and raw/zen-nemotron-3.5-lightning-free.json).
-        ("nemotron-3-ultra-free", NO_LEVELS, None),
-        ("nemotron-3.5-lightning-free", NO_LEVELS, None),
-        // research/opencode-thinking/raw/go-qwen3.5-plus.json: the model is
-        // unavailable on Go and disabled on Zen, so this row mirrors the
-        // probed Qwen siblings on both routes.
+        // research/opencode-thinking/raw/zen-qwen3.5-plus.json (every level
+        // but minimal 200s).
         ("qwen3.5-plus", OFF_LOW_MEDIUM_HIGH_XHIGH_MAX, None),
-        // research/opencode-thinking/raw/go-qwen3.6-plus.json: Zen keeps
-        // this model disabled, so the row cites the Go probe of the same
-        // model (`minimal` is rejected there, as on its siblings).
+        // research/opencode-thinking/raw/zen-qwen3.6-plus.json (every level
+        // but minimal 200s).
         ("qwen3.6-plus", OFF_LOW_MEDIUM_HIGH_XHIGH_MAX, None),
         // research/opencode-thinking/raw/zen-qwen3.8-flash.json
         ("qwen3.8-flash", OFF_LOW_MEDIUM_HIGH_XHIGH_MAX, None),
         // research/opencode-thinking/raw/zen-qwen3.8-max.json
         ("qwen3.8-max", OFF_LOW_MEDIUM_HIGH_XHIGH_MAX, None),
-        // research/opencode-thinking/raw/go-space-bunny.json: the free tier
-        // answers only inside OpenCode on Zen, so the row cites the Go
-        // probe of the paid tier.
-        ("space-bunny-free", MINIMAL_LOW_MEDIUM_HIGH_XHIGH_MAX, None),
-        // research/opencode-thinking/raw/go-step-5-preview-free.json: the
-        // free tier answers only inside OpenCode on Zen, so the row cites
-        // the Go probe of the same model.
-        (
-            "step-5-preview-free",
-            MINIMAL_LOW_MEDIUM_HIGH_XHIGH_MAX,
-            None,
-        ),
     ],
 };
 

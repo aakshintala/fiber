@@ -6,8 +6,8 @@
  "levels": [
   {
    "level": "off",
-   "status": 400,
-   "elapsed_s": 0.43,
+   "status": 200,
+   "elapsed_s": 2.08,
    "request": {
     "model": "deepseek-v4-pro",
     "messages": [
@@ -20,16 +20,37 @@
     "reasoning_effort": "none"
    },
    "response": {
-    "error": {
-     "type": "server_error",
-     "message": "Upstream request failed: This Go model requires Global regions. Select Global in your workspace's Privacy settings to use it."
+    "id": "b7211334-b937-47bc-ad0c-b87e815d9173",
+    "object": "chat.completion",
+    "created": 1792044912,
+    "model": "deepseek-v4-pro",
+    "choices": [
+     {
+      "index": 0,
+      "finish_reason": "stop",
+      "logprobs": null,
+      "message": {
+       "role": "assistant",
+       "content": "ok"
+      }
+     }
+    ],
+    "usage": {
+     "prompt_tokens": 11,
+     "completion_tokens": 1,
+     "total_tokens": 12,
+     "prompt_cache_hit_tokens": 0,
+     "prompt_cache_miss_tokens": 11,
+     "prompt_tokens_details": {
+      "cached_tokens": 0
+     }
     }
    }
   },
   {
    "level": "minimal",
-   "status": 400,
-   "elapsed_s": 0.4,
+   "status": 200,
+   "elapsed_s": 2.0,
    "request": {
     "model": "deepseek-v4-pro",
     "messages": [
@@ -42,16 +63,41 @@
     "reasoning_effort": "minimal"
    },
    "response": {
-    "error": {
-     "type": "server_error",
-     "message": "Upstream request failed: This Go model requires Global regions. Select Global in your workspace's Privacy settings to use it."
+    "id": "9d7743dc-e78a-4413-b64e-e3d77875aa53",
+    "object": "chat.completion",
+    "created": 1792044914,
+    "model": "deepseek-v4-pro",
+    "choices": [
+     {
+      "index": 0,
+      "finish_reason": "stop",
+      "logprobs": null,
+      "message": {
+       "role": "assistant",
+       "content": "ok",
+       "reasoning_content": "We need answer single word ok."
+      }
+     }
+    ],
+    "usage": {
+     "prompt_tokens": 11,
+     "completion_tokens": 9,
+     "total_tokens": 20,
+     "prompt_cache_hit_tokens": 0,
+     "prompt_cache_miss_tokens": 11,
+     "prompt_tokens_details": {
+      "cached_tokens": 0
+     },
+     "completion_tokens_details": {
+      "reasoning_tokens": 7
+     }
     }
    }
   },
   {
    "level": "low",
-   "status": 400,
-   "elapsed_s": 0.39,
+   "status": 200,
+   "elapsed_s": 1.87,
    "request": {
     "model": "deepseek-v4-pro",
     "messages": [
@@ -64,16 +110,41 @@
     "reasoning_effort": "low"
    },
    "response": {
-    "error": {
-     "type": "server_error",
-     "message": "Upstream request failed: This Go model requires Global regions. Select Global in your workspace's Privacy settings to use it."
+    "id": "b3f42bb0-f251-48bb-8eaa-33f085ed8733",
+    "object": "chat.completion",
+    "created": 1792044916,
+    "model": "deepseek-v4-pro",
+    "choices": [
+     {
+      "index": 0,
+      "finish_reason": "stop",
+      "logprobs": null,
+      "message": {
+       "role": "assistant",
+       "content": "ok",
+       "reasoning_content": "We need answer single word ok."
+      }
+     }
+    ],
+    "usage": {
+     "prompt_tokens": 11,
+     "completion_tokens": 9,
+     "total_tokens": 20,
+     "prompt_cache_hit_tokens": 0,
+     "prompt_cache_miss_tokens": 11,
+     "prompt_tokens_details": {
+      "cached_tokens": 0
+     },
+     "completion_tokens_details": {
+      "reasoning_tokens": 7
+     }
     }
    }
   },
   {
    "level": "medium",
-   "status": 400,
-   "elapsed_s": 0.39,
+   "status": 200,
+   "elapsed_s": 1.69,
    "request": {
     "model": "deepseek-v4-pro",
     "messages": [
@@ -86,16 +157,41 @@
     "reasoning_effort": "medium"
    },
    "response": {
-    "error": {
-     "type": "server_error",
-     "message": "Upstream request failed: This Go model requires Global regions. Select Global in your workspace's Privacy settings to use it."
+    "id": "98922340-4284-47a1-bc84-b39022a0510e",
+    "object": "chat.completion",
+    "created": 1792044918,
+    "model": "deepseek-v4-pro",
+    "choices": [
+     {
+      "index": 0,
+      "finish_reason": "stop",
+      "logprobs": null,
+      "message": {
+       "role": "assistant",
+       "content": "ok",
+       "reasoning_content": "We need answer single word ok."
+      }
+     }
+    ],
+    "usage": {
+     "prompt_tokens": 90,
+     "completion_tokens": 9,
+     "total_tokens": 99,
+     "prompt_cache_hit_tokens": 0,
+     "prompt_cache_miss_tokens": 90,
+     "prompt_tokens_details": {
+      "cached_tokens": 0
+     },
+     "completion_tokens_details": {
+      "reasoning_tokens": 7
+     }
     }
    }
   },
   {
    "level": "high",
-   "status": 400,
-   "elapsed_s": 0.43,
+   "status": 200,
+   "elapsed_s": 1.53,
    "request": {
     "model": "deepseek-v4-pro",
     "messages": [
@@ -108,16 +204,41 @@
     "reasoning_effort": "high"
    },
    "response": {
-    "error": {
-     "type": "server_error",
-     "message": "Upstream request failed: This Go model requires Global regions. Select Global in your workspace's Privacy settings to use it."
+    "id": "41eca30f-6c1f-4c25-bd70-f4c7469e120b",
+    "object": "chat.completion",
+    "created": 1792044919,
+    "model": "deepseek-v4-pro",
+    "choices": [
+     {
+      "index": 0,
+      "finish_reason": "stop",
+      "logprobs": null,
+      "message": {
+       "role": "assistant",
+       "content": "ok",
+       "reasoning_content": "We need answer single word ok. We can just reply \"ok\". No analysis."
+      }
+     }
+    ],
+    "usage": {
+     "prompt_tokens": 90,
+     "completion_tokens": 19,
+     "total_tokens": 109,
+     "prompt_cache_hit_tokens": 0,
+     "prompt_cache_miss_tokens": 90,
+     "prompt_tokens_details": {
+      "cached_tokens": 0
+     },
+     "completion_tokens_details": {
+      "reasoning_tokens": 17
+     }
     }
    }
   },
   {
    "level": "xhigh",
-   "status": 400,
-   "elapsed_s": 0.48,
+   "status": 200,
+   "elapsed_s": 1.58,
    "request": {
     "model": "deepseek-v4-pro",
     "messages": [
@@ -130,16 +251,41 @@
     "reasoning_effort": "xhigh"
    },
    "response": {
-    "error": {
-     "type": "server_error",
-     "message": "Upstream request failed: This Go model requires Global regions. Select Global in your workspace's Privacy settings to use it."
+    "id": "82cb375f-b2c2-417d-b70f-b50975f761e0",
+    "object": "chat.completion",
+    "created": 1792044921,
+    "model": "deepseek-v4-pro",
+    "choices": [
+     {
+      "index": 0,
+      "finish_reason": "stop",
+      "logprobs": null,
+      "message": {
+       "role": "assistant",
+       "content": "ok",
+       "reasoning_content": "We need answer single word ok. We comply."
+      }
+     }
+    ],
+    "usage": {
+     "prompt_tokens": 90,
+     "completion_tokens": 12,
+     "total_tokens": 102,
+     "prompt_cache_hit_tokens": 0,
+     "prompt_cache_miss_tokens": 90,
+     "prompt_tokens_details": {
+      "cached_tokens": 0
+     },
+     "completion_tokens_details": {
+      "reasoning_tokens": 10
+     }
     }
    }
   },
   {
    "level": "max",
-   "status": 400,
-   "elapsed_s": 0.44,
+   "status": 200,
+   "elapsed_s": 2.34,
    "request": {
     "model": "deepseek-v4-pro",
     "messages": [
@@ -152,9 +298,34 @@
     "reasoning_effort": "max"
    },
    "response": {
-    "error": {
-     "type": "server_error",
-     "message": "Upstream request failed: This Go model requires Global regions. Select Global in your workspace's Privacy settings to use it."
+    "id": "835135fb-8d2b-4e5b-aea6-c185e3df5c88",
+    "object": "chat.completion",
+    "created": 1792044922,
+    "model": "deepseek-v4-pro",
+    "choices": [
+     {
+      "index": 0,
+      "finish_reason": "stop",
+      "logprobs": null,
+      "message": {
+       "role": "assistant",
+       "content": "ok",
+       "reasoning_content": "We need answer user asks \"Reply with the single word: ok\". Need respond single word ok. Need ensure no punctuation? Just \"ok\"."
+      }
+     }
+    ],
+    "usage": {
+     "prompt_tokens": 103,
+     "completion_tokens": 31,
+     "total_tokens": 134,
+     "prompt_cache_hit_tokens": 0,
+     "prompt_cache_miss_tokens": 103,
+     "prompt_tokens_details": {
+      "cached_tokens": 0
+     },
+     "completion_tokens_details": {
+      "reasoning_tokens": 29
+     }
     }
    }
   }
