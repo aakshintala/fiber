@@ -827,10 +827,8 @@ fn notice_row(lp: &super::Loop<TestBackend>) -> u16 {
     lp.screen
         .targets()
         .iter()
-        .find_map(|target| match target.id {
-            crate::mouse::TargetId::Notice(_) => Some(target.rect.y),
-            _ => None,
-        })
+        .find(|target| matches!(target.id, crate::mouse::TargetId::Notice(_)))
+        .map(|target| target.rect.y)
         .expect("a notice target")
 }
 
