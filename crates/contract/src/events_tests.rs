@@ -820,6 +820,23 @@ fn a_retry_scheduled_without_last_attempt_does_not_read() {
 }
 
 #[test]
+fn stream_reopened_samples_round_trip_as_hub_lines() {
+    // Hub lines have no session envelope and are not session Event kinds.
+    let samples = [
+        json!({"session_id": "s_0123456789abcdef", "last_seq": 41}),
+        json!({"session_id": "s_0123456789abcdef"}),
+    ];
+    for payload in samples {
+        let sample = json!({"kind": "stream_reopened", "ts": 1,
+            "schema_version": crate::SCHEMA_VERSION, "payload": payload});
+        let read: crate::HubLine = serde_json::from_value(sample.clone()).unwrap();
+        assert_eq!(read.kind, "stream_reopened");
+        assert_eq!(read.payload, payload.as_object().unwrap().clone());
+        assert_eq!(serde_json::to_value(read).unwrap(), sample);
+    }
+}
+
+#[test]
 fn every_sample_reads_as_its_kind_and_writes_back_unchanged() {
     for (kind, payload) in samples() {
         let event = Event::from_envelope(&line(kind, payload.clone()))
