@@ -55,6 +55,7 @@ fn refused_addresses_name_the_grammar_without_echoing_secrets() {
         "ws://box:65536",
         "ws://box:-1",
         "ws://box:abc",
+        "ws://box:+1",
         "ws://box:",
         "ws://::1",
         "ws://[::1",

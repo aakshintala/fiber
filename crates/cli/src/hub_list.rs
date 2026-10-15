@@ -115,12 +115,7 @@ fn add_run(
             if paired {
                 settle_token(home, name, &error, &held, err);
             }
-            let message = if paired && matches!(error, ConfigError::Unsynced { .. }) {
-                format!("{error} The device token the entry refers to was kept.")
-            } else {
-                error.to_string()
-            };
-            return Err(failed(error.code(), message));
+            return Err(entry_failure(error, paired));
         }
     }
     if default {
@@ -166,6 +161,15 @@ fn settle_token(
     if !matches!(error, ConfigError::Unsynced { .. }) {
         delete_token(home, name, lock, err);
     }
+}
+
+fn entry_failure(error: ConfigError, paired: bool) -> Failure {
+    let message = if paired && matches!(error, ConfigError::Unsynced { .. }) {
+        format!("{error} The device token the entry refers to was kept.")
+    } else {
+        error.to_string()
+    };
+    failed(error.code(), message)
 }
 
 fn door_failure(error: doors::Error) -> Failure {

@@ -330,6 +330,156 @@ fn remove_deletes_the_entry_token_and_only_a_matching_default() {
     }
 }
 
+#[test]
+fn entry_failure_names_a_kept_token_only_after_a_paired_entrys_rename() {
+    for paired in [false, true] {
+        for renamed in [false, true] {
+            let source = io::Error::other("write failed");
+            let file = "/tmp/config.json".into();
+            let error = if renamed {
+                ConfigError::Unsynced { file, source }
+            } else {
+                ConfigError::Io { file, source }
+            };
+            let message = error.to_string();
+            let failure = entry_failure(error, paired);
+            assert_eq!(failure.code, ErrorCode::IoFailed);
+            assert_eq!(
+                failure.message,
+                if paired && renamed {
+                    format!("{message} The device token the entry refers to was kept.")
+                } else {
+                    message
+                }
+            );
+        }
+    }
+}
+
+const PUBLIC_CHILD: &str = "FIBER_HUB_LIST_CHILD";
+
+#[test]
+fn public_add_writes_the_entry_and_reports_usage_on_a_duplicate() {
+    if std::env::var_os(PUBLIC_CHILD).is_some() {
+        let default = std::env::var_os("FIBER_HUB_LIST_DEFAULT").is_some();
+        std::process::exit(hub_add(
+            "fwd",
+            "unix:/tmp/hub",
+            default,
+            fakes::clock::FakeClock::new().as_ref(),
+        ));
+    }
+    for default in [false, true] {
+        let dir = fakes::TempDir::new("fiber-hub-public-add");
+        let args = if default {
+            vec![(PUBLIC_CHILD, "1"), ("FIBER_HUB_LIST_DEFAULT", "1")]
+        } else {
+            vec![(PUBLIC_CHILD, "1")]
+        };
+        let name = module_path!().split_once("::").unwrap().1.to_owned()
+            + "::public_add_writes_the_entry_and_reports_usage_on_a_duplicate";
+        let run = || {
+            fakes::rerun_prepared(&name, &args, Duration::from_secs(10), |command| {
+                command
+                    .env("FIBER_HOME", dir.path())
+                    .current_dir(dir.path());
+            })
+        };
+        let output = run();
+        assert_eq!(output.status.code(), Some(0));
+        assert_eq!(entry(dir.path(), "fwd"), Some(json!("unix:/tmp/hub")));
+        assert_eq!(
+            config::get_global(dir.path(), "hub.default").unwrap(),
+            if default { Some(json!("fwd")) } else { None }
+        );
+        let duplicate = run();
+        assert_eq!(duplicate.status.code(), Some(2));
+        assert!(String::from_utf8_lossy(&duplicate.stderr).contains("fiber hub remove fwd"));
+    }
+}
+
+#[test]
+fn public_remove_deletes_state_and_reports_usage_when_absent() {
+    if std::env::var_os(PUBLIC_CHILD).is_some() {
+        std::process::exit(hub_remove("fwd"));
+    }
+    let dir = fakes::TempDir::new("fiber-hub-public-remove");
+    add_run(
+        dir.path(),
+        "fwd",
+        "unix:/tmp/hub",
+        true,
+        &mut NeverKeys,
+        &mut Cursor::new([]),
+        &mut Vec::new(),
+        &mut Vec::new(),
+        &mut |_| panic!("unix does not connect"),
+    )
+    .unwrap();
+    let name = module_path!().split_once("::").unwrap().1.to_owned()
+        + "::public_remove_deletes_state_and_reports_usage_when_absent";
+    let run = || {
+        fakes::rerun_prepared(
+            &name,
+            &[(PUBLIC_CHILD, "1")],
+            Duration::from_secs(10),
+            |command| {
+                command
+                    .env("FIBER_HOME", dir.path())
+                    .current_dir(dir.path());
+            },
+        )
+    };
+    let output = run();
+    assert_eq!(output.status.code(), Some(0));
+    assert!(entry(dir.path(), "fwd").is_none());
+    assert!(
+        config::get_global(dir.path(), "hub.default")
+            .unwrap()
+            .is_none()
+    );
+    assert_eq!(run().status.code(), Some(2));
+}
+
+#[test]
+fn public_add_reads_plain_input_when_only_stderr_is_a_terminal() {
+    if std::env::var_os(PUBLIC_CHILD).is_some() {
+        std::process::exit(hub_add(
+            "box",
+            "ws://box",
+            false,
+            fakes::clock::FakeClock::new().as_ref(),
+        ));
+    }
+    let dir = fakes::TempDir::new("fiber-hub-public-pipe");
+    let (_master, slave_path) = fakes::pty::open().unwrap();
+    let name = module_path!().split_once("::").unwrap().1.to_owned()
+        + "::public_add_reads_plain_input_when_only_stderr_is_a_terminal";
+    let output = fakes::rerun_prepared(
+        &name,
+        &[(PUBLIC_CHILD, "1")],
+        Duration::from_secs(10),
+        |command| {
+            command
+                .env("FIBER_HOME", dir.path())
+                .current_dir(dir.path())
+                .stdin(std::process::Stdio::null())
+                .stderr(
+                    std::fs::OpenOptions::new()
+                        .write(true)
+                        .open(&slave_path)
+                        .unwrap(),
+                );
+        },
+    );
+    assert_eq!(
+        output.status.code(),
+        Some(2),
+        "empty piped input is usage, not a terminal IO failure"
+    );
+    assert!(entry(dir.path(), "box").is_none());
+}
+
 struct NeverKeys;
 impl KeyReader for NeverKeys {
     fn read_key(

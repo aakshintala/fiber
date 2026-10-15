@@ -90,7 +90,7 @@ impl Address {
                 }
             }
             Some(port) => {
-                if port.is_empty() || !port.bytes().all(|b| b.is_ascii_digit()) {
+                if !port.bytes().all(|b| b.is_ascii_digit()) {
                     return Err(bad_address());
                 }
                 let port = port.parse::<u16>().map_err(|_| bad_address())?;
