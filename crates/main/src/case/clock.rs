@@ -1,5 +1,7 @@
 //! The manual clock an extension case advances (`docs/testing.md`, "Waits and timeouts").
 
+#[cfg(test)]
+use std::sync::mpsc;
 use std::sync::{Arc, Condvar, Mutex, MutexGuard, PoisonError, Weak};
 use std::time::{Duration, Instant, SystemTime};
 
@@ -27,6 +29,11 @@ pub(crate) struct CaseClock {
     origin: Instant,
     state: Mutex<State>,
     changed: Condvar,
+    /// Test-only pause seam [`Clock::sleep`] fires after it evaluates its
+    /// wait predicate and stays parked (`docs/testing.md`, "Waits and
+    /// timeouts"). One-shot: the predicate takes and sends it once.
+    #[cfg(test)]
+    sleep_pause: Mutex<Option<mpsc::Sender<()>>>,
 }
 
 impl CaseClock {
@@ -40,6 +47,8 @@ impl CaseClock {
             origin: Instant::now(),
             state: Mutex::new(State::default()),
             changed: Condvar::new(),
+            #[cfg(test)]
+            sleep_pause: Mutex::new(None),
         })
     }
 
@@ -70,6 +79,18 @@ impl CaseClock {
             .iter()
             .map(|parked| parked.until)
             .collect()
+    }
+
+    /// Installs the [`CaseClock::sleep`] pause seam and returns its fire
+    /// signal. The test calls this before spawning the sleeper.
+    #[cfg(test)]
+    pub(crate) fn install_sleep_pause(&self) -> mpsc::Receiver<()> {
+        let (tx, rx) = mpsc::channel();
+        *self
+            .sleep_pause
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner) = Some(tx);
+        rx
     }
 
     /// Moves case time only after a waiter is parked at exactly `now + d`.
@@ -135,7 +156,20 @@ impl Clock for CaseClock {
             let state = lock(&self.state);
             let _state = self
                 .changed
-                .wait_while(state, |state| now_in(state, self.origin) < until)
+                .wait_while(state, |state| {
+                    let pending = now_in(state, self.origin) < until;
+                    #[cfg(test)]
+                    if pending
+                        && let Some(tx) = self
+                            .sleep_pause
+                            .lock()
+                            .unwrap_or_else(PoisonError::into_inner)
+                            .take()
+                    {
+                        let _sent = tx.send(());
+                    }
+                    pending
+                })
                 .unwrap_or_else(PoisonError::into_inner);
         };
         self.wait_until(Some(until), &mut wait);

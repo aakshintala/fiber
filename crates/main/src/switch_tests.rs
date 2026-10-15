@@ -727,7 +727,13 @@ fn a_bare_id_only_the_naming_list_names_is_invalid_arguments() {
     let switching = over(&fixture.home, providers, naming, config, startup(&["fake"]));
     let rejection = rejected(&switching, &args("rm"), None);
     assert_eq!(rejection.code, ErrorCode::InvalidArguments);
-    assert!(rejection.message.contains("rm"), "{}", rejection.message);
+    // One naming-list match is not ambiguity: the message is the
+    // registry's unknown-model error. A `>=` in place of the `>` reports
+    // the ambiguous template for this single match instead.
+    assert_eq!(
+        rejection.message,
+        "No installed model matches `rm`. Run `fiber models` to list them."
+    );
 }
 
 #[test]

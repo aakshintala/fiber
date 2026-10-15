@@ -201,17 +201,25 @@ fn sleep_parks_until_its_deadline_is_advanced() {
     let clock = CaseClock::new();
     let before = clock.now();
     let delay = Duration::from_millis(25);
-    let (started_tx, started_rx) = mpsc::channel();
+    let pause = clock.install_sleep_pause();
     let (done_tx, done_rx) = mpsc::channel();
     let sleeping = Arc::clone(&clock);
     thread::spawn(move || {
-        let _sent = started_tx.send(());
         sleeping.sleep(delay);
         let _sent = done_tx.send(sleeping.now());
     });
+    // The seam fires after the sleeper evaluates its predicate and stays
+    // parked; under the flipped `<` it answers without reaching the seam,
+    // so this receive fails every run. Hang guard only.
     Deadline::after(WAIT)
-        .recv(&started_rx)
-        .expect("waited for sleep to start");
+        .recv(&pause)
+        .expect("waited for sleep to park");
+    // No advance has happened, so correct code cannot have answered;
+    // `try_recv` reads no clock and waits on nothing.
+    assert!(
+        done_rx.try_recv().is_err(),
+        "sleep answered before the clock moved"
+    );
 
     assert_eq!(clock.advance_when_parked(delay, WAIT), Ok(()));
     assert_eq!(
