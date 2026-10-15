@@ -739,8 +739,9 @@ pub(crate) fn note_row(note: &str) -> String {
     format!("note: {}", quoted(note))
 }
 
-/// `text` as a JSON string, quotes included.
-fn quoted(text: &str) -> String {
+/// `text` as a JSON string, quotes included: the note on a whole form
+/// draws it bold in the turn's card.
+pub(crate) fn quoted(text: &str) -> String {
     Value::String(text.to_owned()).to_string()
 }
 

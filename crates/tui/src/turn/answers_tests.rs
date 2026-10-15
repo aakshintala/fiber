@@ -120,7 +120,15 @@ fn texts(app: &App) -> Vec<String> {
     app.lines().iter().map(ToString::to_string).collect()
 }
 
+
+/// The answered rule's row at 60 columns with the resolution at midnight
+/// UTC: the time and the rule filling the card's inner 58 columns.
+fn rule_row() -> String {
+    format!(" you answered · 00:00 {}", "─".repeat(58 - 12 - 10))
+}
+
 /// The rows of the "you answered" rules, each rule from its first row.
+/// The first row carries the resolution time and the rule.
 /// A card edge row carries no text: the card's half-block edges.
 fn is_edge(text: &str) -> bool {
     !text.is_empty() && text.chars().all(|ch| ch == '▄' || ch == '▀')
@@ -131,7 +139,7 @@ fn rules(app: &App) -> Vec<Vec<String>> {
     texts
         .iter()
         .enumerate()
-        .filter(|(_, text)| *text == " you answered")
+        .filter(|(_, text)| text.trim_start().starts_with("you answered"))
         .map(|(at, _)| {
             texts
                 .iter()
@@ -181,10 +189,10 @@ fn an_answered_form_adds_the_rule_and_reads_answered() {
     assert_eq!(
         rules(&app),
         vec![vec![
-            " you answered",
-            " Base: main (Recommended), dev, \"and tags\"",
-            " Name: skipped",
-            " note: \"by friday\"",
+            rule_row(),
+            " Base         main (Recommended), dev, \"and tags\"".to_owned(),
+            " Name         skipped".to_owned(),
+            " note \"by friday\"".to_owned(),
         ]]
     );
     assert!(ledger(&app).ends_with("answered"), "{}", ledger(&app));
@@ -404,7 +412,7 @@ fn a_new_request_id_on_the_same_call_replaces_asked() {
     feed(&mut app, lines);
     assert_eq!(
         rules(&app),
-        vec![vec![" you answered", " Name: \"fiber-cli\""]]
+        vec![vec![rule_row(), " Name         \"fiber-cli\"".to_owned()]]
     );
     assert!(ledger(&app).ends_with("answered"), "{}", ledger(&app));
 }
@@ -421,7 +429,7 @@ fn answers_shorter_than_fields_draw_only_answered_rows() {
             json!({"answers": [{"labels": ["dev"]}]}),
         )],
     );
-    assert_eq!(rules(&app), vec![vec![" you answered", " Base: dev"]]);
+    assert_eq!(rules(&app), vec![vec![rule_row(), " Base         dev".to_owned()]]);
 }
 
 #[test]
@@ -438,7 +446,7 @@ fn answers_longer_than_fields_drop_the_extra() {
     );
     assert_eq!(
         rules(&app),
-        vec![vec![" you answered", " Base: skipped", " Name: skipped"]]
+        vec![vec![rule_row(), " Base         skipped".to_owned(), " Name         skipped".to_owned()]]
     );
 }
 
@@ -466,8 +474,8 @@ fn the_rule_escapes_newlines_and_quotes() {
     assert_eq!(
         rules(&app),
         vec![vec![
-            " you answered",
-            " Pick\\nnow: a\\tb \\\"c\\\", \"x\\ny\"",
+            rule_row(),
+            " Pick\\nnow    a\\tb \\\"c\\\", \"x\\ny\"".to_owned(),
         ]]
     );
 }
@@ -497,7 +505,7 @@ fn the_rule_sits_where_the_answer_landed_and_the_group_stays_open() {
             && trimmed.contains(['○', '✓', '⊘', '✗', '?'])
             && trimmed.contains("read")
     });
-    let rule = texts.iter().position(|text| text == " you answered");
+    let rule = texts.iter().position(|text| text.trim_start().starts_with("you answered"));
     assert!(read.is_some() && read < rule, "{texts:#?}");
     let groups = texts.iter().filter(|text| text.starts_with(" ● ")).count();
     assert_eq!(groups, 1, "{texts:#?}");
@@ -541,7 +549,7 @@ fn a_page_loaded_from_history_draws_the_same_card() {
     let live = pages.rows();
     assert!(
         live.iter()
-            .any(|(line, _)| line.to_string() == " you answered"),
+            .any(|(line, _)| line.to_string().contains("you answered")),
         "the rule is drawn live"
     );
     assert_eq!(pages.page_count(), 2);
@@ -584,6 +592,7 @@ fn fold_reports_a_change() {
 /// The answered card's screen at `width` by 16.
 fn answered_screen(width: u16) -> String {
     let mut app = App::new(PathBuf::from("/w"));
+    app.set_zone(jiff::tz::TimeZone::UTC);
     app.set_size(width, 16);
     app.attach(contract::SessionId(SESSION.to_owned()));
     feed(&mut app, asking());
@@ -646,4 +655,258 @@ fn the_group_line_counts_the_questions_asked() {
             .any(|text| text.starts_with(" ● Asked 4 questions, called 1 tool")),
         "{texts:#?}"
     );
+}
+
+/// The card's styled rows for `answered` at `width` columns in `zone`.
+fn drawn(
+    answered: &super::Answered,
+    width: u16,
+    zone: &jiff::tz::TimeZone,
+) -> Vec<ratatui::text::Line<'static>> {
+    let mut out = crate::rows::Rows::default();
+    answered.rows(width, zone, &mut out);
+    let (rows, _) = out.into_parts();
+    rows.into_iter().map(|(line, _)| line).collect()
+}
+
+/// Each span's text and style.
+fn spans(line: &ratatui::text::Line<'_>) -> Vec<(String, ratatui::style::Style)> {
+    line
+        .spans
+        .iter()
+        .map(|span| (span.content.to_string(), span.style))
+        .collect()
+}
+
+fn accent_bold() -> ratatui::style::Style {
+    crate::markdown::style(crate::theme::Role::Accent)
+        .add_modifier(ratatui::style::Modifier::BOLD)
+}
+
+fn dim() -> ratatui::style::Style {
+    ratatui::style::Style::default().add_modifier(ratatui::style::Modifier::DIM)
+}
+
+fn bold() -> ratatui::style::Style {
+    ratatui::style::Style::default().add_modifier(ratatui::style::Modifier::BOLD)
+}
+
+fn accent() -> ratatui::style::Style {
+    crate::markdown::style(crate::theme::Role::Accent)
+}
+
+fn rule() -> ratatui::style::Style {
+    crate::markdown::style(crate::theme::Role::Rule)
+}
+
+/// An answered form's rule at 14:16 UTC.
+fn answered_at(ts: u64) -> super::Answered {
+    super::Answered::new(
+        &["Base".to_owned(), "Name".to_owned()],
+        &[
+            contract::events::FormAnswer::Answered {
+                labels: vec!["dev".to_owned()],
+                text: Some("and tags".to_owned()),
+            },
+            contract::events::FormAnswer::Skipped {
+                skipped: contract::shapes::True,
+            },
+        ],
+        Some("by friday"),
+        ts,
+    )
+}
+
+#[test]
+fn the_rule_names_the_resolution_time_and_fills_the_width() {
+    // 14:16 UTC: the rule reads "you answered · 14:16" and dashes fill
+    // the 40 columns past it.
+    let rows = drawn(&answered_at(51_360_000), 40, &jiff::tz::TimeZone::UTC);
+    assert_eq!(rows.len(), 4);
+    assert_eq!(
+        spans(&rows[0]),
+        [
+            ("you answered".to_owned(), accent_bold()),
+            (" · 14:16 ".to_owned(), dim()),
+            ("─".repeat(40 - 12 - 9), rule()),
+        ]
+    );
+    assert_eq!(rows[0].to_string(), format!("you answered · 14:16 {}", "─".repeat(19)));
+}
+
+#[test]
+fn a_narrow_rule_draws_no_dashes() {
+    // "you answered" is 12 cells and " · 14:16 " 9: one below, exact
+    // and one above the fit.
+    let rows = drawn(&answered_at(51_360_000), 20, &jiff::tz::TimeZone::UTC);
+    assert_eq!(spans(&rows[0]).len(), 2);
+    let rows = drawn(&answered_at(51_360_000), 21, &jiff::tz::TimeZone::UTC);
+    assert_eq!(spans(&rows[0]).len(), 2);
+    let rows = drawn(&answered_at(51_360_000), 22, &jiff::tz::TimeZone::UTC);
+    assert_eq!(
+        spans(&rows[0]),
+        [
+            ("you answered".to_owned(), accent_bold()),
+            (" · 14:16 ".to_owned(), dim()),
+            ("─".to_owned(), rule()),
+        ]
+    );
+}
+
+#[test]
+fn answers_draw_bold_and_skipped_and_the_note_draws_bold() {
+    let rows = drawn(&answered_at(0), 80, &jiff::tz::TimeZone::UTC);
+    assert_eq!(
+        spans(&rows[1]),
+        [
+            ("Base         ".to_owned(), accent()),
+            ("dev, \"and tags\"".to_owned(), bold()),
+        ]
+    );
+    assert_eq!(
+        spans(&rows[2]),
+        [("Name         ".to_owned(), accent()), ("skipped".to_owned(), dim())]
+    );
+    assert_eq!(
+        spans(&rows[3]),
+        [
+            ("note".to_owned(), accent()),
+            (" ".to_owned(), ratatui::style::Style::default()),
+            ("\"by friday\"".to_owned(), bold()),
+        ]
+    );
+}
+
+#[test]
+fn a_declined_form_draws_one_dim_row_and_no_rule() {
+    let rows = drawn(&super::Answered::declined(), 80, &jiff::tz::TimeZone::UTC);
+    assert_eq!(rows.len(), 1);
+    assert_eq!(rows[0].style, dim());
+    assert_eq!(
+        spans(&rows[0]),
+        [(
+            "declined: the turn ended so you could answer in your own words".to_owned(),
+            ratatui::style::Style::default()
+        )]
+    );
+}
+
+/// `interaction_resolved` for `request` by `by` at `ts`, with `answer`'s keys.
+fn resolved_at(request: &str, by: &str, answer: Value, ts: u64) -> contract::Envelope {
+    let mut line = resolved(request, by, answer);
+    line.ts = ts;
+    line
+}
+
+#[test]
+fn the_rule_keeps_the_resolution_time() {
+    let mut lines = asking();
+    lines.push(resolved_at("r_4f", "person", answers(), 51_360_000));
+    let (turns, _) = folded(&lines);
+    let ts = turns
+        .iter()
+        .flat_map(|turn| turn.entries.iter())
+        .find_map(|entry| match entry {
+            crate::turn::Entry::Answers(answered) => Some(answered),
+            _ => None,
+        });
+    let Some(super::Answered::Given { ts, .. }) = ts else {
+        panic!("a rule with the resolution time");
+    };
+    assert_eq!(*ts, 51_360_000);
+}
+
+#[test]
+fn a_person_declined_form_draws_the_declined_row() {
+    let mut app = app();
+    feed(&mut app, asking());
+    feed(
+        &mut app,
+        [
+            resolved("r_4f", "person", declined()),
+            completed("a_1", "completed", 0),
+        ],
+    );
+    let texts = texts(&app);
+    let at = texts
+        .iter()
+        .position(|text| text.contains("declined:"))
+        .expect("the declined row");
+    // The row wraps at the card's width: it reads whole across rows.
+    let row: String = texts
+        .iter()
+        .skip(at)
+        .take(2)
+        .map(|text| text.trim().to_owned())
+        .collect::<Vec<_>>()
+        .join(" ");
+    assert_eq!(
+        row,
+        "declined: the turn ended so you could answer in your own words"
+    );
+    assert!(rules(&app).is_empty());
+    assert!(ledger(&app).ends_with("declined"), "{}", ledger(&app));
+}
+
+#[test]
+fn a_duplicate_decline_draws_one_row() {
+    let mut lines = asking();
+    lines.push(resolved("r_4f", "person", declined()));
+    lines.push(resolved("r_4f", "person", declined()));
+    let (_, changed) = folded(&lines);
+    assert_eq!(changed, vec![true, true, true, true, false]);
+    let mut app = app();
+    feed(&mut app, lines);
+    assert_eq!(
+        texts(&app)
+            .iter()
+            .filter(|text| text.contains("declined:"))
+            .count(),
+        1
+    );
+}
+
+#[test]
+fn a_declined_page_loaded_from_history_draws_the_same_row() {
+    let mut lines = asking();
+    lines.push(resolved("r_4f", "person", declined()));
+    lines.push(completed("a_1", "completed", 0));
+    lines.extend(
+        (0..crate::pages::PAGE_LINES)
+            .map(|_| envelope("assistant_message_started", Some("a_m"), 0, json!({}))),
+    );
+    lines.push(envelope(
+        "turn_completed",
+        None,
+        0,
+        json!({"outcome": "completed"}),
+    ));
+    lines.push(started(0));
+    let lines = numbered(lines);
+    let mut pages = Pages::new(60);
+    for line in &lines {
+        pages.apply(line);
+    }
+    let live = pages.rows();
+    assert!(
+        live.iter().any(|(line, _)| line
+            .to_string()
+            .contains("declined: the turn ended so you could answer")),
+        "the declined row is drawn live"
+    );
+    assert_eq!(pages.page_count(), 2);
+    pages.trim(pages.index().start(1).saturating_add(1), 1);
+    assert!(pages.part(0).is_none(), "the first page was dropped");
+    let first = pages.index().pages().first().cloned().unwrap_or_default();
+    let history: Vec<contract::Envelope> = lines
+        .iter()
+        .filter(|line| {
+            line.seq
+                .is_some_and(|seq| (first.first_seq..=first.last_seq).contains(&seq))
+        })
+        .cloned()
+        .collect();
+    pages.load(&history);
+    assert!(pages.part(0).is_some(), "the first page loaded again");
+    assert_eq!(pages.rows(), live);
 }
