@@ -253,8 +253,22 @@ What is recorded:
   came, `attempt` from 1, `request_bytes` as posted, `response_bytes` as
   read, and `headers_ms`, `first_token_ms` and `total_ms`, whole
   milliseconds from the send. A retried call writes one line per attempt;
-  a request never sent writes none. Requests made through Lua providers
-  are not yet recorded.
+  a request never sent writes none.
+- **At `debug`, a Lua provider's HTTP requests:** one `provider_request`
+  line when the request ends, with `purpose` `model_list` for `models()`,
+  `quota` for `quota()`, `token_refresh` for `credential()`, and `cost`
+  for `cost()`. `data` holds `provider`, the provider's registered name,
+  `status` when a response came, `attempt` (always 1: a Lua invocation
+  makes no retry), `request_bytes` as posted, `response_bytes` as read,
+  and `headers_ms` and `total_ms`, whole milliseconds from the send. A
+  body read that fails keeps the status, the headers and the bytes read
+  before the failure. A request that validation rejects before sending
+  writes no line; one that fails after writes one without `status` or
+  `headers_ms` and with zero response bytes. Only these four purposes
+  record: `sign()`, hooks, commands, timers, tools and the entry script's
+  own requests stay silent. No other field is recorded, and never a host,
+  path, model, URL, query string, credential, header value, body or token,
+  as for every line in `logs/`.
 - **At `debug`, the hub's peak memory:** a `peak_memory` line just before
   each `hub_stopped`. `data.peak_kib` is the process's peak so far: peak RSS
   (`VmHWM`) on Linux, and peak physical footprint on macOS
@@ -290,13 +304,20 @@ What is recorded:
   requested handoff holds its note's request and model scopes, and
   `provider_request`'s network share sits inside `turn.model_call`. Warming
   refreshes and reviewer judgements run through the same factories but write
-  no turn scope. Other plain agent clients stay unobserved.
+  no turn scope. Also installed are the five hook chains other
+  than the tool hooks: `hook.session_start`, `hook.turn_start`,
+  `hook.before_message`, `hook.before_model_call` and `hook.turn_end`, one
+  scope around each entered public dispatch, however it returns, empty
+  chains included. Tool hooks take no scope: `tool.hooks` covers those
+  chains. Other plain agent clients stay unobserved.
   Installed too is `mcp.connect`: one scope around one actual server
   connection attempt, from starting or dialing it until its tool list is
   in hand. It covers stdio and remote servers, eager and required starts,
   lazy first use, restarts, renewals and post-approval starts, with the
   remote server's actual connector work timed as `net.connect` beside it.
   It excludes cache-only declarations, prompt discovery and tool execution.
+  Request, model, hook and network timings may overlap as nested
+  measurements, never additive phases.
 
 An event inside a running session is recorded in that session's log and
 nowhere else, with one exception: a session or ask process's own diagnostic
