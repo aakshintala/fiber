@@ -2496,7 +2496,6 @@ fn the_cursor_hides_while_navigating() {
 #[test]
 fn an_open_overlay_draws_its_cross_as_a_target() {
     use crate::mouse::TargetId;
-    let cross = Rect::new(WIDTH - 1, 0, 1, 1);
     let mut app = empty();
     attach(&mut app, S_A);
     app.on_key(Key::F1, fakes::clock::FakeClock::new().now());
@@ -2527,14 +2526,19 @@ fn an_open_overlay_draws_its_cross_as_a_target() {
     ));
     app.open_notice(0);
     let (buf, targets) = pointed(&mut app, WIDTH, HEIGHT, None);
-    assert!(
-        targets
-            .iter()
-            .any(|target| target.id == TargetId::CloseOverlay && target.rect == cross),
-        "the notice overlay draws its cross"
-    );
+    // The notice overlay's ✕ sits on its title row's right end, closing it.
+    let notice_cross = targets
+        .iter()
+        .find(|target| target.id == TargetId::CloseOverlay)
+        .expect("the notice overlay draws its cross");
+    let row: String = (0..WIDTH)
+        .map(|x| buf[(x, notice_cross.rect.y)].symbol().to_owned())
+        .collect();
+    assert!(row.contains("Notice · x"), "{row}");
+    assert_eq!(notice_cross.rect.width, 1);
     assert_eq!(
-        buf.cell((WIDTH - 1, 0)).map(|cell| cell.symbol()),
+        buf.cell((notice_cross.rect.x, notice_cross.rect.y))
+            .map(|cell| cell.symbol()),
         Some("✕")
     );
 }

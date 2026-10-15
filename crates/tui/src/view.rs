@@ -54,7 +54,8 @@ pub(crate) const APPROVAL_TINT: Style = Style::new().bg(Role::Approval.color());
 /// The approval panel's tint when the reviewer escalated.
 pub(crate) const ALERT_TINT: Style = Style::new().bg(Role::Alert.color());
 
-/// The notice overlay's tint.
+/// The notice overlay's tint, until the overlay frame replaces it.
+#[allow(dead_code, reason = "removed in the last commit of #1792")]
 const NOTICE_TINT: Style = Style::new().bg(Role::Surface.color());
 
 /// The background of the click target under the pointer.
@@ -334,20 +335,6 @@ fn put(buf: &mut Buffer, area: Rect, bottom: &mut u16, text: &str, style: Style)
     let (end, _) = buf.set_stringn(area.x, row, text, usize::from(area.width), style);
     *bottom = row;
     Some(Rect::new(area.x, row, end.saturating_sub(area.x), 1))
-}
-
-/// The open overlay's ✕ on the conversation's top-right cell, a click
-/// target closing it; nothing when the conversation shows no rows.
-fn overlay_cross(buf: &mut Buffer, area: Rect, targets: &mut Vec<Target>) {
-    if area.is_empty() {
-        return;
-    }
-    let cross = Rect::new(area.right().saturating_sub(1), area.y, 1, 1);
-    buf.set_string(cross.x, cross.y, "✕", Style::default());
-    targets.push(Target {
-        id: TargetId::CloseOverlay,
-        rect: cross,
-    });
 }
 
 /// Where the terminal cursor shows: at the draft's cursor while the input
