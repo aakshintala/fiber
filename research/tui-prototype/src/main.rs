@@ -8133,7 +8133,7 @@ mod tests {
     #[test]
     fn rail_shown_lists_every_project_for_cards() {
         let f = Fold::default();
-        let ui = Ui {
+        let mut ui = Ui {
             rail: 1,
             ..Ui::default()
         };
