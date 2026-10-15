@@ -9,7 +9,7 @@
     reason = "test code; a failure is the test's"
 )]
 
-use std::sync::mpsc;
+use std::sync::{Arc, mpsc};
 use std::thread;
 use std::time::Duration;
 
@@ -17,9 +17,9 @@ use contract::events::{
     Event, InputItem, ReasoningCompleted, SteeringApplied, TextCompleted, ToolCallArgumentsDelta,
     ToolCallCompleted, ToolCallRequested, TurnStarted,
 };
-use contract::provider::Input;
+use contract::provider::{Input, Provider};
 use contract::shapes::{ContentPart, Origin, Sender};
-use contract::{ActionId, CommandId, Seq};
+use contract::{ActionId, CommandId, Seq, TurnId};
 use serde_json::{Map, Value, json};
 
 use super::shown::Shown;
@@ -434,4 +434,186 @@ fn a_verdict_needing_two_strip_passes_reads() {
         read_second("\"allow\"."),
         Ok(Second::Allow { reason: None })
     );
+}
+
+struct NoRules;
+
+impl contract::rules::Rules for NoRules {
+    fn read(&self) -> Result<contract::rules::StandingRules, contract::rules::RulesError> {
+        Ok(contract::rules::StandingRules::default())
+    }
+
+    fn remember(
+        &self,
+        _: &str,
+        _: &str,
+        _: &contract::SessionId,
+    ) -> Result<(), contract::rules::RulesError> {
+        Ok(())
+    }
+}
+
+/// A reviewed tool: its effects declare one execution, and it never runs.
+struct ReviewTool;
+
+impl contract::tool::Tool for ReviewTool {
+    fn definition(&self) -> contract::provider::ToolDefinition {
+        contract::provider::ToolDefinition {
+            name: "shell".to_owned(),
+            description: "A reviewed tool.".to_owned(),
+            input_schema: json!({"type": "object"}),
+            deferred: false,
+            hosted: None,
+        }
+    }
+
+    fn effects(
+        &self,
+        _: &Map<String, Value>,
+    ) -> Result<contract::tool::Effects, contract::tool::EffectsError> {
+        Ok(contract::tool::Effects {
+            declared: contract::shapes::DeclaredEffects {
+                effects: vec![contract::shapes::Effect::Executes],
+                reversible: true,
+                paths: None,
+            },
+            subject: None,
+            prefix: None,
+            always_reviewed: false,
+        })
+    }
+
+    fn run(
+        &self,
+        _: &Map<String, Value>,
+        _: &dyn contract::tool::Cancel,
+        _: &dyn contract::emit::Emit,
+    ) -> contract::tool::Output {
+        contract::tool::Output::default()
+    }
+}
+
+/// A loop with nothing run, so the reviewer history is rendered straight
+/// in: only what the effects item says is under test.
+fn unrun_loop() -> (crate::Loop, fakes::TempDir) {
+    let home = fakes::TempDir::new("fiber-reviewer-names-call");
+    let workspace = home.path().join("workspace");
+    std::fs::create_dir_all(&workspace).unwrap();
+    let clock: Arc<dyn contract::clock::Clock> = fakes::clock::FakeClock::new();
+    let log = Arc::new(
+        log::Log::create(
+            home.path(),
+            contract::SessionId("s_test".into()),
+            Arc::clone(&clock),
+        )
+        .unwrap(),
+    );
+    let provider = Arc::new(fakes::ScriptedProvider::new(Vec::new()));
+    let (_inbox, rx) = mpsc::channel();
+    let looped = crate::Loop::start(
+        crate::Session {
+            log,
+            provider: Arc::clone(&provider) as Arc<dyn Provider>,
+            model: crate::Model {
+                reference: "fake/model".into(),
+                cost: None,
+                subscription: false,
+            },
+            prompt: crate::prompt::PromptInputs::new(
+                home.path().to_path_buf(),
+                "/bin/sh".into(),
+                home.path()
+                    .join("s_test/events.jsonl")
+                    .display()
+                    .to_string(),
+                Arc::clone(&clock),
+                fakes::CONTEXT_WINDOW,
+            ),
+            inbox: rx,
+            tools: Vec::new(),
+            permissions: crate::Permissions {
+                workspace: workspace.display().to_string(),
+                credentials: home.path().join("credentials"),
+                credential_files: Vec::new(),
+                rules: Arc::new(NoRules),
+            },
+        },
+        None,
+    )
+    .unwrap();
+    (looped, home)
+}
+
+#[test]
+fn the_effects_item_names_the_call_under_review() {
+    // The prompt no longer places the call by position: the effects item
+    // after it names the call instead.
+    assert!(
+        !PROMPT.contains("The call under review comes last."),
+        "reviewer.md still places the call under review by position"
+    );
+    let (mut looped, _home) = unrun_loop();
+    let earlier = ActionId("a_1".into());
+    let under_id = ActionId("a_2".into());
+    render_reviewed(
+        &mut looped.reviewed,
+        &Event::ToolCallRequested(call("shell")),
+        Some(&earlier),
+        Some(Seq(1)),
+    );
+    let under_call = call("shell");
+    render_reviewed(
+        &mut looped.reviewed,
+        &Event::ToolCallRequested(under_call.clone()),
+        Some(&under_id),
+        Some(Seq(2)),
+    );
+    let turn = TurnId("t_test".into());
+    let tool: Arc<dyn contract::tool::Tool> = Arc::new(ReviewTool);
+    let mut arguments = Map::new();
+    arguments.insert("city".into(), Value::String("Paris".into()));
+    let effects = contract::tool::Effects {
+        declared: contract::shapes::DeclaredEffects {
+            effects: vec![contract::shapes::Effect::Executes],
+            reversible: true,
+            paths: None,
+        },
+        subject: None,
+        prefix: None,
+        always_reviewed: false,
+    };
+    for prepared in [
+        crate::before_tool::Prepared {
+            tool: Arc::clone(&tool),
+            arguments: arguments.clone(),
+            effects: effects.clone(),
+            rewritten: None,
+        },
+        crate::before_tool::Prepared {
+            tool,
+            arguments,
+            effects,
+            rewritten: Some(vec!["fiber.test/guard".into()]),
+        },
+    ] {
+        let under = super::UnderReview {
+            call: &under_call,
+            id: &under_id,
+            turn: &turn,
+            prepared: &prepared,
+        };
+        let (conversation, _) = looped.review_conversation(&under, "## first-pass", None);
+        assert_eq!(conversation.len(), 4);
+        let effects = match &conversation[2] {
+            Input::User { text, .. } => text.clone(),
+            _ => panic!(
+                "the effects item is a user message, got {:?}",
+                conversation[2]
+            ),
+        };
+        assert!(
+            effects.starts_with("Call under review: the last tool call above, shell."),
+            "{effects:?}"
+        );
+    }
 }
