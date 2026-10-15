@@ -1,19 +1,21 @@
-//! The home screen and the workspace picker, for #1628.
+//! The full-screen fleet view and the focused-rail still, for #2424.
 //!
-//! A throwaway look prototype: it draws home full screen (no panel, no rail,
-//! centred) from fixtures in this file, with the palette, surface primitive
-//! (`slab`) and roles of `super`. Each case renders one static frame and the
-//! program waits for a key; Esc, q or Ctrl+C quits. The conversation view is
-//! untouched: a home case replaces it.
+//! A throwaway look prototype: the full-screen view draws its still frames
+//! from the fixtures in this file (eight live sessions across three
+//! projects, the mock's layout A with the banner frame), and `--home` bare
+//! runs the interactive fleet. `rail-focused` draws the conversation view
+//! with the rail focused instead. The conversation view itself is untouched:
+//! a home case replaces it. Where the mock and the prototype's palette or
+//! card drawing differ, the prototype wins.
 
 use super::input::{Ev, Key, Mods, Mouse};
 use super::{Act, Args, Term, Ui};
 use super::{
-    BI, BLUE, CYAN, ORANGE, RED, SEL, SState, bold, dim, fg, fit, lift, paint, row, slab, sp,
-    state_glyph,
+    BI, BLUE, BP, CYAN, ORANGE, RED, SEL, SState, bold, cut, dim, fg, fit, lift, paint, row, slab,
+    sp, state_glyph, width,
 };
 use crate::cases::{Case, Surface};
-use ratatui::style::{Color, Modifier, Style};
+use ratatui::style::Style;
 use ratatui::text::Span;
 use std::io::{self, Write};
 use std::time::{Duration, Instant};
@@ -22,177 +24,81 @@ use unicode_width::UnicodeWidthStr;
 /// Every `--home` case, named in README.md.
 const CASES: &[Case<Look>] = &[
     Case {
-        name: "empty",
-        help: "no sessions yet: logo, input box, chips",
-        check: "the pixel logo four rows tall with `0.0.1` dim on the last row; under it the large input box with `/? for shortcuts`, the chip row and `Enter starts a session`; under the box one dim `No sessions yet` line and no headers; the key hint at the foot.",
-        build: || Look {
-            list: List::None,
-            ..base()
-        },
-    },
-    Case {
-        name: "sessions",
-        help: "live and past sessions in two-line rows",
-        check: "a bold `Live sessions` header with `2 waiting on you` in orange, then five two-line live rows; one blank row, then a bold `Past sessions` header with `/resume lists all`, then six two-line exited rows; line one is the glyph, the name or first prompt, its age and its verb, line two dim `id · turns · branch · spend` with the workspace segment and the wait.",
-        build: || base(),
-    },
-    Case {
-        name: "live-only",
-        help: "live sessions only, a still frame",
-        check: "the `Live sessions` header and its five two-line rows; no `Past sessions` header.",
-        build: || Look {
-            list: List::Live,
-            ..base()
-        },
-    },
-    Case {
-        name: "past-only",
-        help: "past sessions only, a still frame",
-        check: "the `Past sessions` header and its six two-line rows; no `Live sessions` header.",
-        build: || Look {
-            list: List::Past,
-            ..base()
-        },
-    },
-    Case {
-        name: "selected",
-        help: "the first live row selected, a still frame",
-        check: "the first live row with the blue `▸` marker, its prompt bold and its verb blue; the other rows unmarked.",
+        name: "full-sessions",
+        help: "the fleet with eight live sessions and exited ones, first row focused",
+        check: "the four-row logo top left with `0.0.1` and the coloured counts beside it; one section per project, launch project first, each headed `name +`, dim `N live · $spend` and orange `N waiting on you`; two-line live rows with `⌥N`, the glyph, the name, the state word and the elapsed, then dim `id · turns · ⎇ branch · spend · context%` with the full wait in orange; dim `exited · N`, up to three dim `○` rows and `… N more · /resume lists all`; the first live row on the selection bar; the prompt box at the bottom and the key hint at the foot.",
         build: || Look {
             sel: Some(0),
+            fleet: FleetUi {
+                sel: Some(0),
+                ..FleetUi::default()
+            },
+            ..base()
+        },
+    },
+    Case {
+        name: "full-empty",
+        help: "the fleet with no sessions",
+        check: "the header's second line dim `no sessions yet`; the middle dim `No sessions yet.` and `Type below and press Enter to start one.`, centred; the prompt box and the hint as usual, no sections.",
+        build: || Look {
+            projs: vec![],
+            ..base()
+        },
+    },
+    Case {
+        name: "full-focus-exited",
+        help: "the fleet with the first exited row focused",
+        check: "the first exited row on the selection bar; live rows unmarked.",
+        build: || Look {
+            sel: Some(5),
+            fleet: FleetUi {
+                sel: Some(5),
+                ..FleetUi::default()
+            },
+            ..base()
+        },
+    },
+    Case {
+        name: "full-closing",
+        help: "the fleet with one live row CLOSING after /clear",
+        check: "the first live row with dim `CLOSING` where the state word sits, its other cells as a live row.",
+        build: || {
+            let mut l = base();
+            l.projs[0].live[0].closing = true;
+            l.sel = Some(0);
+            l.fleet.sel = Some(0);
+            l
+        },
+    },
+    Case {
+        name: "full-picker",
+        help: "the workspace picker open over the fleet",
+        check: "the picker centred over the fleet with `Workspaces` bold accent, four recent workspaces, the first `›` on the bar, and the bold-key legend foot.",
+        build: || Look {
+            sel: Some(0),
+            fleet: FleetUi {
+                sel: Some(0),
+                wpick: Some(0),
+                wsel: 0,
+                ..FleetUi::default()
+            },
+            ..base()
+        },
+    },
+    Case {
+        name: "rail-focused",
+        help: "the conversation view with the rail focused on a NEEDS INPUT card",
+        check: "the rail left with the needs-input card lifted across its whole surface; the dimmed conversation behind; the input box with a dim stripe and dim text; the foot hint with bold keys.",
+        build: || Look {
+            rail: true,
             ..base()
         },
     },
     Case {
         name: "live",
-        help: "the interactive home: type, pick, open rows",
+        help: "the interactive fleet: move, open rows, start sessions",
         check: "not a still frame: `--home` with no case runs the event loop, and this name only names it in `--help`.",
         build: base,
-    },
-    Case {
-        name: "hover-workspace",
-        help: "the workspace chip hovered, a still frame",
-        check: "a still frame of the hover tint: the one chip should sit lighter than its neighbours while keeping its own text colour.",
-        build: || Look {
-            hover: Some(Hover::Workspace),
-            ..base()
-        },
-    },
-    Case {
-        name: "hover-worktree",
-        help: "the worktree switch hovered, a still frame",
-        check: "a still frame of the hover tint: the switch chip should sit lighter with its ● still blue.",
-        build: || Look {
-            hover: Some(Hover::Worktree),
-            ..base()
-        },
-    },
-    Case {
-        name: "hover-model",
-        help: "the model chip hovered, a still frame",
-        check: "a still frame of the hover tint: the one chip should sit lighter than its neighbours while keeping its own text colour.",
-        build: || Look {
-            hover: Some(Hover::Model),
-            ..base()
-        },
-    },
-    Case {
-        name: "hover-thinking",
-        help: "the thinking chip hovered, a still frame",
-        check: "a still frame of the hover tint: the one chip should sit lighter than its neighbours while keeping its own text colour.",
-        build: || Look {
-            hover: Some(Hover::Thinking),
-            ..base()
-        },
-    },
-    Case {
-        name: "worktree-on",
-        help: "new worktree switched on",
-        check: "the switch should read `[● new worktree]` in blue.",
-        build: || base(),
-    },
-    Case {
-        name: "worktree-off",
-        help: "new worktree switched off",
-        check: "the switch should read `[○ new worktree]` dim.",
-        build: || Look {
-            worktree: false,
-            ..base()
-        },
-    },
-    Case {
-        name: "picker-recent",
-        help: "workspace picker over home, recents",
-        check: "the picker should float centred over home with ▄ ▀ edges and the ▌ stripe; `Workspaces` bold accent; four recent workspaces, the first `›` on a full-width accent bar; a bold-key legend foot.",
-        build: || Look {
-            picker: Some(Picker::Recent),
-            ..base()
-        },
-    },
-    Case {
-        name: "picker-typed",
-        help: "workspace picker with a typed path",
-        check: "the typed row should read `› ~/work/fi█` with `fiber` and `fiber-worktrees` under it, the first `›` on the accent bar; the recents below dimmed; same frame and legend foot.",
-        build: || Look {
-            picker: Some(Picker::Typed),
-            ..base()
-        },
-    },
-    Case {
-        name: "focus-entry",
-        help: "the entry bar focused, a still frame",
-        check: "the entry bar focused, today's look: no chip in the hover lift tint and no row marked with `▸`.",
-        build: base,
-    },
-    Case {
-        name: "focus-chip-workspace",
-        help: "the workspace chip focused, a still frame",
-        check: "the chip row focused: the workspace chip in the hover look (the lift tint with its own text colour, as hover-workspace) and no row marked.",
-        build: || Look {
-            chip: Some(0),
-            last_chip: 0,
-            ..base()
-        },
-    },
-    Case {
-        name: "focus-chip-model",
-        help: "the model chip focused, a still frame",
-        check: "the chip row focused after → twice: the model chip in the hover look (the lift tint keeping its cyan, as hover-model), the other chips untinted.",
-        build: || Look {
-            chip: Some(2),
-            last_chip: 2,
-            ..base()
-        },
-    },
-    Case {
-        name: "focus-chip-picker",
-        help: "the workspace picker with chip 0 focused behind",
-        check: "workspace chip Enter: the picker-recent frame with chip 0 still in the hover lift tint behind the picker.",
-        build: || Look {
-            chip: Some(0),
-            last_chip: 0,
-            picker: Some(Picker::Recent),
-            ..base()
-        },
-    },
-    Case {
-        name: "focus-chip-typing",
-        help: "a draft typed after a chip was focused, a still frame",
-        check: "typing after a chip was focused: `fix` in the entry bar, the chip row untinted and no row marked; typing cleared chip focus into the entry bar.",
-        build: || {
-            let mut l = base();
-            l.ui.input = "fix".into();
-            l
-        },
-    },
-    Case {
-        name: "focus-session",
-        help: "the first live row selected from the chip row, a still frame",
-        check: "the second ↓: the first live row with the blue `▸` marker as selected, the chips untinted.",
-        build: || Look {
-            sel: Some(0),
-            ..base()
-        },
     },
 ];
 
@@ -200,65 +106,263 @@ const CASES: &[Case<Look>] = &[
 pub(crate) const SURFACE: Surface = Surface {
     flag: "--home",
     file: "home",
-    title: "Home (#1628)",
+    title: "Home (#2424)",
     docs: || crate::cases::docs(CASES),
 };
 
-/// The home input box and session list width at 160 columns.
-const HOME_W: usize = 84;
-/// The fixture's version, as docs/tui.md's logo reads.
+/// The fixture's version, beside the logo as docs/tui.md's logo reads.
 const VERSION: &str = "0.0.1";
-/// The logo's top row: the four-row logo stands at rows 2..6.
-const LOGO_Y: usize = 2;
+/// The day's spend across all projects, after the counts.
+const TODAY: &str = "$5.78";
+/// The header's rows: the four-row logo, starting at the top.
+const LOGO_Y: usize = 0;
+/// The two lines beside the logo start past its 32 cells and a gap.
+const HTEXT_X: usize = 35;
+/// The session list's first row, below the header.
+const LIST_TOP: usize = 5;
+/// The prompt box's rows: the entry row, a blank row, then the chip row.
+const BOX_H: usize = 3;
+/// The workspace picker's first row over the fleet.
+const PICK_Y: usize = 12;
 
-/// The fewest rows that still fit the four-row logo: the logo, one blank,
-/// the input box, then one list line, the hint row and the last row.
-/// Computed from what `input_box` returns, not typed in.
-fn tall_min() -> usize {
-    LOGO_Y + 4 + 1 + input_box(&base(), HOME_W).len() + 3
+/// The fewest rows that still draw header, one list line, box and hint.
+const fn tall_min() -> usize {
+    LOGO_Y + 4 + 1 + 1 + BOX_H + 1
 }
 
-#[derive(Clone, Copy, PartialEq, Debug)]
-enum Hover {
-    Workspace,
-    Worktree,
-    Model,
-    Thinking,
+// ============================================================ fixtures
+
+/// A live session on the fleet, after the mock's layout A. `n` is the
+/// start-order number the rail keeps (`⌥N`); `wait` is what it waits on in
+/// full, or empty; `closing` is a session finishing after `/clear`.
+struct Live {
+    n: usize,
+    st: SState,
+    name: &'static str,
+    branch: &'static str,
+    spend: &'static str,
+    dollars: f64,
+    ctx: u8,
+    age: &'static str,
+    id: &'static str,
+    turns: u32,
+    wait: &'static str,
+    closing: bool,
 }
 
-#[derive(Clone, Copy, PartialEq, Debug)]
-enum Picker {
-    Recent,
-    Typed,
+/// An exited session on the fleet.
+struct Gone {
+    name: &'static str,
+    id: &'static str,
+    turns: u32,
+    spend: &'static str,
+    age: &'static str,
 }
 
-#[derive(Clone, Copy, PartialEq, Debug)]
-enum List {
-    None,
-    Live,
-    Past,
-    Both,
+struct Proj {
+    name: &'static str,
+    live: Vec<Live>,
+    gone: Vec<Gone>,
+}
+
+fn projs() -> Vec<Proj> {
+    vec![
+        Proj {
+            name: "fiber",
+            live: vec![
+                Live {
+                    n: 1,
+                    st: SState::Working,
+                    name: "fix flaky lock test",
+                    branch: "main",
+                    spend: "$1.35",
+                    dollars: 1.35,
+                    ctx: 12,
+                    age: "16s",
+                    id: "s_9f31ac",
+                    turns: 4,
+                    wait: "",
+                    closing: false,
+                },
+                Live {
+                    n: 2,
+                    st: SState::NeedsInput,
+                    name: "review #688",
+                    branch: "review-688",
+                    spend: "$1.10",
+                    dollars: 1.10,
+                    ctx: 41,
+                    age: "22m",
+                    id: "s_3ab702",
+                    turns: 3,
+                    wait: "approval: shell cargo publish --dry-run",
+                    closing: false,
+                },
+                Live {
+                    n: 4,
+                    st: SState::Crashed,
+                    name: "lsp probe",
+                    branch: "spike/lsp",
+                    spend: "$0.05",
+                    dollars: 0.05,
+                    ctx: 91,
+                    age: "3h",
+                    id: "s_5e91b4",
+                    turns: 3,
+                    wait: "stopped without exiting; 1 job orphaned",
+                    closing: false,
+                },
+                Live {
+                    n: 5,
+                    st: SState::Ready,
+                    name: "docs: rail spec",
+                    branch: "docs/rail-692",
+                    spend: "$0.42",
+                    dollars: 0.42,
+                    ctx: 27,
+                    age: "9m",
+                    id: "s_44d2e1",
+                    turns: 6,
+                    wait: "",
+                    closing: false,
+                },
+                Live {
+                    n: 7,
+                    st: SState::NeedsInput,
+                    name: "bump ratatui",
+                    branch: "deps/ratatui-0.30",
+                    spend: "$1.00",
+                    dollars: 1.00,
+                    ctx: 64,
+                    age: "4m",
+                    id: "s_08f3b9",
+                    turns: 1,
+                    wait: "question: 2 of 3 answered",
+                    closing: false,
+                },
+            ],
+            gone: vec![
+                Gone {
+                    name: "cut the 0.0.1 release",
+                    id: "s_7f20aa",
+                    turns: 5,
+                    spend: "$1.10",
+                    age: "3h",
+                },
+                Gone {
+                    name: "speed up the render loop",
+                    id: "s_61c9d0",
+                    turns: 2,
+                    spend: "$0.58",
+                    age: "5h",
+                },
+                Gone {
+                    name: "port the router to hyper",
+                    id: "s_88f310",
+                    turns: 8,
+                    spend: "$2.02",
+                    age: "1d",
+                },
+                Gone {
+                    name: "audit the event log",
+                    id: "s_3ab7f2",
+                    turns: 3,
+                    spend: "$0.35",
+                    age: "2d",
+                },
+            ],
+        },
+        Proj {
+            name: "pi-rig",
+            live: vec![
+                Live {
+                    n: 3,
+                    st: SState::Retrying,
+                    name: "backfill embeddings",
+                    branch: "backfill/embed",
+                    spend: "$0.87",
+                    dollars: 0.87,
+                    ctx: 33,
+                    age: "12m",
+                    id: "s_50c9d2",
+                    turns: 9,
+                    wait: "retry 2 of 5 in 8s · 529 overloaded",
+                    closing: false,
+                },
+                Live {
+                    n: 6,
+                    st: SState::Working,
+                    name: "migrate every provider adapter to the new streaming contract",
+                    branch: "migrate/streaming",
+                    spend: "$0.64",
+                    dollars: 0.64,
+                    ctx: 58,
+                    age: "2m",
+                    id: "s_77aa01",
+                    turns: 12,
+                    wait: "",
+                    closing: false,
+                },
+            ],
+            gone: vec![Gone {
+                name: "how do I backfill embeddings for old sessions?",
+                id: "s_50c9a1",
+                turns: 9,
+                spend: "$0.87",
+                age: "2d",
+            }],
+        },
+        Proj {
+            name: "beacon",
+            live: vec![Live {
+                n: 8,
+                st: SState::Ready,
+                name: "rewrite onboarding tour",
+                branch: "tour/rewrite",
+                spend: "$0.35",
+                dollars: 0.35,
+                ctx: 19,
+                age: "1h",
+                id: "s_6d1e44",
+                turns: 7,
+                wait: "",
+                closing: false,
+            }],
+            gone: vec![],
+        },
+    ]
+}
+
+/// Recent workspaces, from `recent.jsonl`.
+pub(crate) const RECENTS: &[&str] = &[
+    "~/work/fiber",
+    "~/work/fiber-worktrees",
+    "~/work/beacon",
+    "~/work/pi-rig",
+];
+
+/// The fleet's keyboard and picker state, shared by home's own loop and the
+/// conversation view's widened fleet. `sel` is the focused row across every
+/// section, live and exited; `sel` None with `chip` None is the entry bar.
+#[derive(Default)]
+pub(crate) struct FleetUi {
+    pub sel: Option<usize>,
+    pub chip: Option<usize>,
+    pub last_chip: usize,
+    pub worktree: bool,
+    /// the open workspace picker with its selection, if any
+    pub wpick: Option<usize>,
+    pub wsel: usize,
+    /// the chosen workspace, shown on the workspace chip
+    pub ws: String,
 }
 
 struct Look {
-    list: List,
-    /// the selected session in live-then-past order, if any
+    projs: Vec<Proj>,
+    /// the focused row in live-then-gone order across sections, if any.
+    /// `fleet.sel` mirrors it: keys move `fleet`, and stills read it.
     sel: Option<usize>,
-    /// the focused chip, an index into `chips()`: 0 workspace, 1 worktree,
-    /// 2 model, 3 thinking. Focus runs top to bottom: the entry bar
-    /// (`chip` None, `sel` None), the chip row (`chip` Some, `sel` None),
-    /// then the session list (`sel` Some).
-    chip: Option<usize>,
-    /// the chip last focused, so ↑ from the first session row returns to
-    /// the same chip ↓ from the entry bar left
-    last_chip: usize,
-    hover: Option<Hover>,
-    worktree: bool,
-    picker: Option<Picker>,
-    /// the workspace picker's selection, an index into `RECENTS`
-    wsel: usize,
-    /// the chosen recent workspace, shown on the workspace chip
-    workspace: &'static str,
+    fleet: FleetUi,
     /// the chosen model and thinking level, shown on their chips
     model: &'static str,
     level: &'static str,
@@ -267,377 +371,185 @@ struct Look {
     /// the draft Esc dismissed the completion panel on: `sync` stays shut
     /// until the draft changes
     dismissed: Option<String>,
+    /// the rail-focused still: the conversation view, not the fleet
+    rail: bool,
 }
 
 fn base() -> Look {
     let (model, level) = crate::model_picker::chosen(&crate::model_picker::for_case("list"));
     Look {
-        list: List::Both,
+        projs: projs(),
         sel: None,
-        chip: None,
-        last_chip: 0,
-        hover: None,
-        worktree: true,
-        picker: None,
-        wsel: 0,
-        workspace: RECENTS[0],
+        fleet: FleetUi {
+            ws: RECENTS[0].into(),
+            worktree: true,
+            ..FleetUi::default()
+        },
         model,
         level,
         ui: Ui::default(),
         dismissed: None,
+        rail: false,
     }
 }
 
-/// A session on home's list: live ones carry their rail state, exited ones
-/// none. The prompt is the name, or the first prompt when it has none; the
-/// note is what it waits on, if anything. `ws` is the workspace's last
-/// path segment, for a session outside the launch project (`~/work/fiber`);
-/// `ws: None` is the launch project. `foreign` is a session whose
-/// `schema_version` this terminal cannot read: it says `cannot attach`.
-/// Fixture constants; home talks to no hub.
-#[derive(Clone, Copy, PartialEq)]
-enum State {
-    Live(SState),
-    Exited,
+// ============================================================ the shared fleet
+
+/// A live row for the shared renderer. Home's fixtures fill every field;
+/// the conversation view has no id or turns, so those are optional.
+pub(crate) struct RLive<'a> {
+    pub n: usize,
+    pub st: SState,
+    pub name: &'a str,
+    pub branch: &'a str,
+    pub spend: &'a str,
+    /// live spend in dollars, summed into the project header
+    pub dollars: f64,
+    pub ctx: u8,
+    pub age: &'a str,
+    pub id: Option<&'a str>,
+    pub turns: Option<u32>,
+    pub wait: &'a str,
+    pub closing: bool,
+    /// what a click on the row does in the conversation view, if anything
+    pub act: Option<Act>,
 }
 
-struct Session {
-    id: &'static str,
-    prompt: &'static str,
-    age: &'static str,
-    turns: u32,
-    branch: &'static str,
-    spend: &'static str,
-    ws: Option<&'static str>,
-    note: &'static str,
-    state: State,
-    foreign: bool,
+pub(crate) struct RGone<'a> {
+    pub name: &'a str,
+    pub id: Option<&'a str>,
+    pub turns: Option<u32>,
+    pub spend: &'a str,
+    pub age: &'a str,
 }
 
-/// Live sessions, waiting first.
-const LIVE: &[Session] = &[
-    Session {
-        id: "s_7f20aa",
-        prompt: "cut the 0.0.1 release",
-        age: "2h ago",
-        turns: 5,
-        branch: "release/0.0.1",
-        spend: "$1.10",
-        ws: None,
-        note: "approval: shell cargo publish --dry-run",
-        state: State::Live(SState::NeedsInput),
-        foreign: false,
-    },
-    Session {
-        id: "s_3ab702",
-        prompt: "audit the event log",
-        age: "45m ago",
-        turns: 3,
-        branch: "audit/events",
-        spend: "$0.35",
-        ws: None,
-        note: "question: 2 of 3 answered",
-        state: State::Live(SState::NeedsInput),
-        foreign: false,
-    },
-    Session {
-        id: "s_61c9d0",
-        prompt: "speed up the render loop",
-        age: "12m ago",
-        turns: 2,
-        branch: "perf/render",
-        spend: "$0.58",
-        ws: None,
-        note: "",
-        state: State::Live(SState::Working),
-        foreign: false,
-    },
-    Session {
-        id: "s_88f310",
-        prompt: "port the router to hyper",
-        age: "1h ago",
-        turns: 8,
-        branch: "port/hyper",
-        spend: "$2.02",
-        ws: None,
-        note: "",
-        state: State::Live(SState::Working),
-        foreign: true,
-    },
-    Session {
-        id: "s_5e91b4",
-        prompt: "probe the lsp",
-        age: "3h ago",
-        turns: 3,
-        branch: "spike/lsp",
-        spend: "$0.05",
-        ws: None,
-        note: "stopped without exiting; 1 job orphaned on resume",
-        state: State::Live(SState::Crashed),
-        foreign: false,
-    },
-];
-
-/// Recently exited sessions.
-const PAST: &[Session] = &[
-    Session {
-        id: "s_9f31ac",
-        prompt: "fix flaky lock test",
-        age: "3h ago",
-        turns: 4,
-        branch: "fix/flaky-lock",
-        spend: "$0.42",
-        ws: None,
-        note: "",
-        state: State::Exited,
-        foreign: false,
-    },
-    Session {
-        id: "s_44d2e1",
-        prompt: "docs: rail spec",
-        age: "5h ago",
-        turns: 6,
-        branch: "docs/rail-692",
-        spend: "$1.10",
-        ws: None,
-        note: "",
-        state: State::Exited,
-        foreign: false,
-    },
-    Session {
-        id: "s_77aa01",
-        prompt: "migrate every provider adapter to the new streaming contract",
-        age: "1d ago",
-        turns: 12,
-        branch: "migrate/streaming",
-        spend: "$2.31",
-        ws: Some("pi-rig"),
-        note: "",
-        state: State::Exited,
-        foreign: false,
-    },
-    Session {
-        id: "s_50c9d2",
-        prompt: "how do I backfill embeddings for old sessions?",
-        age: "2d ago",
-        turns: 9,
-        branch: "backfill/embed",
-        spend: "$0.87",
-        ws: Some("fiber-worktrees"),
-        note: "continues s_2b8e11 from seq 812",
-        state: State::Exited,
-        foreign: false,
-    },
-    Session {
-        id: "s_08f3b9",
-        prompt: "bump ratatui",
-        age: "3d ago",
-        turns: 1,
-        branch: "deps/ratatui-0.30",
-        spend: "$0.08",
-        ws: None,
-        note: "",
-        state: State::Exited,
-        foreign: false,
-    },
-    Session {
-        id: "s_6d1e44",
-        prompt: "rewrite onboarding tour",
-        age: "4d ago",
-        turns: 7,
-        branch: "tour/rewrite",
-        spend: "$0.35",
-        ws: Some("beacon"),
-        note: "",
-        state: State::Exited,
-        foreign: false,
-    },
-];
-
-/// Recent workspaces, from `recent.jsonl`.
-const RECENTS: &[&str] = &[
-    "~/work/fiber",
-    "~/work/fiber-worktrees",
-    "~/work/beacon",
-    "~/work/pi-rig",
-];
-/// The fixture's typed prefix and the two completions it shows.
-const TYPED: &str = "~/work/fi";
-const COMPLETIONS: &[&str] = &["fiber", "fiber-worktrees"];
-
-// ============================================================ pieces
-
-/// One chip: bracketed text on the raised surface, lighter under the pointer.
-fn chip(text: &str, st: Style, hovered: bool) -> Span<'static> {
-    let bg = if hovered { lift(SEL) } else { SEL };
-    sp(format!("[{text}]"), st.bg(bg))
+pub(crate) struct RProj<'a> {
+    pub name: &'a str,
+    pub live: Vec<RLive<'a>>,
+    pub gone: Vec<RGone<'a>>,
 }
 
-/// The chip row's clickable chips: target, text, style and hover.
-fn chips(c: &Look) -> Vec<(Target, String, Style, bool)> {
-    // A focused chip reuses the hover look: the lift tint with its own
-    // text colour. Hover and focus may both apply.
-    let h = |k: Hover, i: usize| c.hover == Some(k) || c.chip == Some(i);
-    // The chips start from the model picker's current model, so a pick
-    // agrees with them; a recorded pick moves them.
-    let (worktree, wst) = if c.worktree {
-        ("● new worktree", fg(BLUE))
-    } else {
-        ("○ new worktree", dim())
-    };
-    vec![
-        (
-            Target::Workspace,
-            format!("▣ {}", c.workspace),
-            Style::new(),
-            h(Hover::Workspace, 0),
-        ),
-        (
-            Target::Worktree,
-            worktree.into(),
-            wst,
-            h(Hover::Worktree, 1),
-        ),
-        (Target::Model, c.model.into(), fg(CYAN), h(Hover::Model, 2)),
-        (
-            Target::Thinking,
-            c.level.into(),
-            fg(ORANGE),
-            h(Hover::Thinking, 3),
-        ),
-    ]
+/// One focusable row: a live or an exited session with its address.
+pub(crate) enum FItem {
+    Live(usize, usize),
+    Gone(usize, usize),
 }
 
-fn chip_row(c: &Look) -> Vec<Span<'static>> {
-    let mut s = vec![sp("▌ ", fg(BLUE))];
-    for (i, (_, text, st, hovered)) in chips(c).iter().enumerate() {
-        if i > 0 {
-            s.push(sp(" ", Style::new()));
-        }
-        s.push(chip(text, *st, *hovered));
-    }
-    // No right-aligned tail: when long chips overflow, the hint gives
-    // way, never the chips.
-    s.push(sp("  ", Style::new()));
-    s.push(sp("Enter starts a session", dim()));
-    s
-}
-
-/// The chip row's click targets as row-relative cell ranges.
-fn chip_hits(c: &Look) -> Vec<(usize, usize, Target)> {
-    let mut x = "▌ ".width();
+/// The focusable rows in on-screen order: every live row, then each
+/// project's exited rows up to the three the fleet shows.
+pub(crate) fn fleet_items(projs: &[RProj<'_>]) -> Vec<FItem> {
     let mut out = vec![];
-    for (i, (t, text, _, _)) in chips(c).iter().enumerate() {
-        if i > 0 {
-            x += 1;
+    for (pi, p) in projs.iter().enumerate() {
+        for (li, _) in p.live.iter().enumerate() {
+            out.push(FItem::Live(pi, li));
         }
-        let w = text.width() + 2;
-        out.push((x, x + w, *t));
-        x += w;
+        for (gi, _) in p.gone.iter().enumerate().take(3) {
+            out.push(FItem::Gone(pi, gi));
+        }
     }
     out
 }
 
-/// The large input box: the draft with its cursor, or the
-/// `/? for shortcuts` placeholder when empty, over the chip row,
-/// with the prototype's ▌ stripe.
-fn input_box(c: &Look, w: usize) -> Vec<super::Row> {
-    let stripe = || sp("▌", fg(BLUE));
-    let blank = || row(vec![stripe()]);
-    let mut prompt = vec![stripe(), sp(" ", Style::new()), sp("› ", fg(CYAN))];
-    if c.ui.input.is_empty() {
-        prompt.push(sp("/? for shortcuts", dim()));
-    } else {
-        prompt.push(sp(c.ui.input.clone(), Style::new()));
-    }
-    prompt.push(sp("█", dim()));
-    slab(
-        vec![row(prompt), blank(), blank(), row(chip_row(c))],
-        BI,
-        None,
-        w,
-    )
+/// What the shared renderer needs: the sections, the fleet state, the chip
+/// labels, the entry draft with its completion panel, and the screen.
+pub(crate) struct FleetView<'a> {
+    pub projs: &'a [RProj<'a>],
+    pub st: &'a FleetUi,
+    pub model: &'a str,
+    pub level: &'a str,
+    pub input: &'a str,
+    pub comp: Option<&'a [super::Row]>,
+    pub today: &'a str,
+    pub cols: usize,
+    pub rows: usize,
+    pub image: bool,
 }
 
-/// What Enter or a click on a row does: a live session attaches, a crashed
-/// or exited one resumes, and a foreign one cannot attach at all.
-fn verb(s: &Session) -> &'static str {
-    if s.foreign {
-        "cannot attach"
-    } else if matches!(s.state, State::Live(SState::Crashed) | State::Exited) {
-        "resume"
-    } else {
-        "attach"
+/// What a rendered row is, so home and the conversation view map rows to
+/// their own click targets. `Live` carries the conversation view's click
+/// act and the row's flat index; home ignores the act.
+#[derive(Clone, Copy)]
+pub(crate) enum FTag {
+    Pad,
+    Live(Option<Act>, usize),
+    Gone(usize),
+    Recent(usize),
+}
+
+/// A state's colour on the fleet: waiting reads attention, ready dim.
+fn state_style(st: SState) -> Style {
+    match st {
+        SState::Working => fg(BLUE),
+        SState::Retrying => fg(ORANGE),
+        SState::NeedsInput => fg(ORANGE),
+        SState::Ready => dim(),
+        SState::Crashed => fg(RED),
+        SState::Idle => dim(),
     }
 }
 
-/// A session row's first line at width `rw`: the marker, the glyph and a
-/// space, the prompt fitted to `rw - 4 - 24`, then the age right-aligned
-/// in 9 cells dim, two spaces, and the verb left-aligned in 13 cells. A
-/// long prompt is cut before the age field.
-fn session_line_one(s: &Session, selected: bool, rw: usize) -> Vec<Span<'static>> {
-    let mut line = if selected {
-        vec![sp("▸ ", fg(BLUE))]
-    } else {
-        vec![sp("  ", Style::new())]
+fn state_word(st: SState) -> &'static str {
+    match st {
+        SState::Working => "WORKING",
+        SState::Retrying => "RETRYING",
+        SState::NeedsInput => "NEEDS INPUT",
+        SState::Ready => "READY",
+        SState::Crashed => "CRASHED",
+        SState::Idle => "IDLE",
+    }
+}
+
+/// The header's counts across all projects: each nonzero state in its
+/// colour joined by dim ` · `, then the day's spend dim.
+fn counts_row(projs: &[RProj<'_>], today: &str) -> Vec<Span<'static>> {
+    let count = |st: SState| {
+        projs
+            .iter()
+            .flat_map(|p| &p.live)
+            .filter(|s| s.st == st && !s.closing)
+            .count()
     };
-    line.push(match s.state {
-        State::Live(st) => state_glyph(st, 0, true),
-        State::Exited => sp("○", dim()),
-    });
-    line.push(sp(" ", Style::new()));
-    let prompt = if selected {
-        Style::new().add_modifier(Modifier::BOLD)
-    } else {
-        Style::new()
-    };
-    line.extend(fit(&[sp(s.prompt, prompt)], rw.saturating_sub(28)));
-    line.push(sp(format!("{:>9}", s.age), dim()));
-    line.push(sp("  ", Style::new()));
-    let verb_style = if s.foreign {
-        fg(RED).add_modifier(Modifier::DIM)
-    } else if selected {
-        fg(BLUE)
-    } else {
-        dim()
-    };
-    line.push(sp(format!("{:<13}", verb(s)), verb_style));
-    line
+    let mut parts: Vec<(usize, &'static str, Style)> = vec![];
+    for (st, label) in [
+        (SState::NeedsInput, "waiting on you"),
+        (SState::Working, "working"),
+        (SState::Retrying, "retrying"),
+        (SState::Crashed, "crashed"),
+        (SState::Ready, "ready"),
+    ] {
+        let n = count(st);
+        if n > 0 {
+            parts.push((n, label, state_style(st)));
+        }
+    }
+    if parts.is_empty() {
+        return vec![sp("no sessions yet", dim())];
+    }
+    let mut out = vec![];
+    for (i, (n, label, st)) in parts.iter().enumerate() {
+        if i > 0 {
+            out.push(sp(" · ", dim()));
+        }
+        out.push(sp(format!("{n} {label}"), *st));
+    }
+    out.push(sp(format!(" · {today} today"), dim()));
+    out
 }
 
-/// A session row's second line: four spaces, then dim `id · N turns ·
-/// branch · spend`, the workspace's last segment outside the launch
-/// project, and what it waits on when there is one: orange for a waiting
-/// session, red dim for a crashed one, else dim.
-fn session_line_two(s: &Session, rw: usize) -> Vec<Span<'static>> {
-    let turns = format!("{} turn{}", s.turns, if s.turns == 1 { "" } else { "s" });
-    let mut body = vec![sp(
-        format!("{} · {turns} · {} · {}", s.id, s.branch, s.spend),
-        dim(),
-    )];
-    if let Some(ws) = s.ws {
-        body.push(sp(format!(" · {ws}"), dim()));
-    }
-    if !s.note.is_empty() {
-        let st = match s.state {
-            State::Live(SState::NeedsInput) => fg(ORANGE),
-            State::Live(SState::Crashed) => fg(RED).add_modifier(Modifier::DIM),
-            _ => dim(),
-        };
-        body.push(sp(format!(" · {}", s.note), st));
-    }
-    let mut line = vec![sp("    ", Style::new())];
-    line.extend(fit(&body, rw.saturating_sub(4)));
-    line
-}
-
-/// The live section's header: bold `Live sessions`, then, when any live
-/// session waits, how many wait on the person, in orange.
-fn live_header() -> Vec<Span<'static>> {
-    let mut h = vec![sp("Live sessions", bold())];
-    let waiting = LIVE
+/// One section's header: the name bold in the accent, ` +`, dim
+/// `N live · $spend`, then orange `N waiting on you` when nonzero.
+fn proj_head(p: &RProj<'_>) -> Vec<Span<'static>> {
+    let spend: f64 = p.live.iter().map(|s| s.dollars).sum();
+    let mut h = vec![
+        sp(p.name, bold().fg(BLUE)),
+        sp(" +", fg(BLUE)),
+        sp("  ", Style::new()),
+        sp(format!("{} live · ${spend:.2}", p.live.len()), dim()),
+    ];
+    let waiting = p
+        .live
         .iter()
-        .filter(|s| matches!(s.state, State::Live(SState::NeedsInput)))
+        .filter(|s| s.st == SState::NeedsInput)
         .count();
     if waiting > 0 {
         h.push(sp(format!("  {waiting} waiting on you"), fg(ORANGE)));
@@ -645,110 +557,492 @@ fn live_header() -> Vec<Span<'static>> {
     h
 }
 
-/// The past section's header: bold `Past sessions`, then where the whole
-/// list lives, dim.
-fn past_header() -> Vec<Span<'static>> {
+/// A live row's first line at `w` cells: dim `⌥N`, the state glyph, the
+/// name, then the state word in its colour and the elapsed dim,
+/// right-aligned. A closing row reads dim `CLOSING` for its word.
+fn live_line_one(s: &RLive<'_>, w: usize) -> Vec<Span<'static>> {
+    let left_n = format!("⌥{} ", s.n);
+    let mut line = vec![sp(left_n.clone(), dim()), state_glyph(s.st, 0, true)];
+    line.push(sp(" ", Style::new()));
+    let (word, wst) = if s.closing {
+        ("CLOSING", dim())
+    } else {
+        (state_word(s.st), state_style(s.st))
+    };
+    let rw = word.width() + 2 + s.age.width();
+    let name_max = w.saturating_sub(left_n.width() + 2 + rw + 2);
+    let name = cut(s.name, name_max.max(1));
+    let used = left_n.width() + 2 + name.width() + rw;
+    line.push(sp(name, Style::new()));
+    line.push(sp(" ".repeat(w.saturating_sub(used).max(2)), Style::new()));
+    line.push(sp(word, wst));
+    line.push(sp("  ", Style::new()));
+    line.push(sp(s.age, dim()));
+    line
+}
+
+/// A live row's second line, indented: dim `id · N turns · ⎇ branch ·
+/// spend · context%`, then ` · ` and the full wait in attention when it
+/// waits. The conversation view has no id or turns, so those give way.
+fn live_line_two(s: &RLive<'_>, w: usize) -> Vec<Span<'static>> {
+    let mut body = vec![];
+    if let Some(id) = s.id {
+        body.push(sp(format!("{id} · "), dim()));
+    }
+    if let Some(t) = s.turns {
+        body.push(sp(
+            format!("{t} turn{} · ", if t == 1 { "" } else { "s" }),
+            dim(),
+        ));
+    }
+    body.push(sp(
+        format!("⎇ {} · {} · {}%", s.branch, s.spend, s.ctx),
+        dim(),
+    ));
+    if !s.wait.is_empty() {
+        body.push(sp(format!(" · {}", s.wait), fg(ORANGE)));
+    }
+    let mut line = vec![sp("    ", Style::new())];
+    line.extend(fit(&body, w.saturating_sub(4)));
+    line
+}
+
+/// An exited row, dim: `○ name` with `id · turns · spend · age ago` right.
+fn gone_line(g: &RGone<'_>, w: usize) -> Vec<Span<'static>> {
+    let mut right = String::new();
+    if let Some(id) = g.id {
+        right.push_str(&format!("{id} · "));
+    }
+    if let Some(t) = g.turns {
+        right.push_str(&format!("{t} turn{} · ", if t == 1 { "" } else { "s" }));
+    }
+    right.push_str(&format!("{} · {} ago", g.spend, g.age));
+    let name_max = w.saturating_sub("   ○ ".width() + right.width() + 2);
+    let name = cut(g.name, name_max.max(1));
+    let used = "   ○ ".width() + name.width() + right.width();
     vec![
-        sp("Past sessions", bold()),
-        sp("  /resume lists all", dim()),
+        sp("   ○ ", dim()),
+        sp(name, dim()),
+        sp(" ".repeat(w.saturating_sub(used).max(2)), dim()),
+        sp(right, dim()),
     ]
 }
 
-/// One list line: its left edge, its spans, and the session's index for
-/// clicks. The blank between sections counts for the scroll but draws
-/// nothing.
-type Line = Option<(usize, Vec<Span<'static>>, Option<usize>)>;
+/// One chip: bracketed text on the raised surface, lighter with focus.
+fn chip(text: &str, st: Style, on: bool) -> Span<'static> {
+    let bg = if on { lift(SEL) } else { SEL };
+    sp(format!("[{text}]"), st.bg(bg))
+}
 
-/// Pushes one section's header and two-line rows onto the list's lines.
-/// `at` counts sessions in live-then-past order; `sel_end` becomes the
-/// line index just past the selected row's second line.
-fn push_section(
-    lines: &mut Vec<Line>,
-    geom: (usize, usize),
-    header: Vec<Span<'static>>,
-    sessions: &[Session],
-    sel: Option<usize>,
-    at: &mut usize,
-    sel_end: &mut usize,
-) {
-    let (x0, rw) = geom;
-    lines.push(Some((x0 + 2, header, None)));
-    for s in sessions {
-        let selected = sel == Some(*at);
-        if selected {
-            *sel_end = lines.len() + 2;
+/// The chip row's chips: text, style and focus.
+fn chip_defs(st: &FleetUi, workspace: &str, model: &str, level: &str) -> Vec<(String, Style, bool)> {
+    let on = |i: usize| st.chip == Some(i);
+    let (worktree, wst) = if st.worktree {
+        ("● new worktree", fg(BLUE))
+    } else {
+        ("○ new worktree", dim())
+    };
+    vec![
+        (format!("▣ {workspace}"), Style::new(), on(0)),
+        (worktree.into(), wst, on(1)),
+        (model.into(), fg(CYAN), on(2)),
+        (level.into(), fg(ORANGE), on(3)),
+    ]
+}
+
+fn chip_row(st: &FleetUi, workspace: &str, model: &str, level: &str) -> Vec<Span<'static>> {
+    let mut s = vec![sp("▌ ", fg(BLUE))];
+    for (i, (text, cst, focused)) in chip_defs(st, workspace, model, level).iter().enumerate() {
+        if i > 0 {
+            s.push(sp(" ", Style::new()));
         }
-        let k = *at;
-        *at += 1;
-        lines.push(Some((x0 + 1, session_line_one(s, selected, rw), Some(k))));
-        lines.push(Some((x0 + 1, session_line_two(s, rw), Some(k))));
+        s.push(chip(text, *cst, *focused));
     }
+    s.push(sp("  ", Style::new()));
+    s.push(sp("Enter starts a session", dim()));
+    s
 }
 
-/// How far the list scrolls: the selected row's second line stays on
-/// screen, so the offset is the line index just past it less the area.
-/// Also scrolls the model picker over home, whose focused row stays
-/// visible the same way.
-fn list_offset(sel_end: usize, area: usize) -> usize {
-    sel_end.saturating_sub(area)
-}
-
-/// The workspace picker's rows at an inner width: the typed-path row with
-/// its completions over the recents, or recents alone. The selected recent
-/// rides a full-width selection bar. The typed-path row is a still frame
-/// only: typing never reaches it.
-fn picker_body(p: Picker, wsel: usize) -> Vec<super::Row> {
+/// The chip row's click targets as row-relative cell ranges with the chip.
+fn chip_hits(
+    st: &FleetUi,
+    workspace: &str,
+    model: &str,
+    level: &str,
+) -> Vec<(usize, usize, usize)> {
+    let mut x = "▌ ".width();
     let mut out = vec![];
-    if p == Picker::Typed {
-        out.push(row(vec![
-            sp("› ", fg(CYAN)),
-            sp(TYPED, Style::new()),
-            sp("█", dim()),
-        ]));
-        for (i, name) in COMPLETIONS.iter().enumerate() {
-            if i == 0 {
-                out.extend(super::panel::bar(vec![row(vec![
-                    sp("› ", bold()),
-                    sp(*name, bold()),
-                ])]));
-            } else {
-                out.push(row(vec![sp("  ", Style::new()), sp(*name, Style::new())]));
-            }
+    for (i, (text, _, _)) in chip_defs(st, workspace, model, level).iter().enumerate() {
+        if i > 0 {
+            x += 1;
         }
-        // The dim section header stands off from the completions above it.
-        out.push(row(vec![]));
-        out.push(row(vec![sp("── recents ──", dim())]));
-    }
-    for (i, r) in RECENTS.iter().enumerate() {
-        let selected = p == Picker::Recent && i == wsel;
-        if selected {
-            out.extend(super::panel::bar(vec![row(vec![
-                sp("› ", bold()),
-                sp(r.to_string(), bold()),
-            ])]));
-        } else {
-            out.push(row(vec![
-                sp("  ", Style::new()),
-                sp(
-                    r.to_string(),
-                    if p == Picker::Typed {
-                        dim()
-                    } else {
-                        Style::new()
-                    },
-                ),
-            ]));
-        }
+        let w = text.width() + 2;
+        out.push((i, x, x + w));
+        x += w;
     }
     out
 }
 
-/// The workspace picker over home: recent workspaces, or the typed-path row
-/// with its completions over the recents, in the shared panel frame with a
-/// bold-key legend foot.
-fn picker(p: Picker, wsel: usize, cols: usize) -> Vec<super::Row> {
+/// The fleet's prompt box where the conversation view's input box sits:
+/// the entry row, a blank row, then the chip row.
+fn prompt_box(
+    st: &FleetUi,
+    workspace: &str,
+    model: &str,
+    level: &str,
+    input: &str,
+    w: usize,
+) -> Vec<super::Row> {
+    let mut prompt = vec![sp("▌", fg(BLUE)), sp(" ", Style::new()), sp("› ", fg(CYAN))];
+    if input.is_empty() {
+        prompt.push(sp("/? for shortcuts", dim()));
+    } else {
+        prompt.push(sp(input.to_string(), Style::new()));
+    }
+    prompt.push(sp("█", dim()));
+    slab(
+        vec![
+            row(prompt),
+            row(vec![]),
+            row(chip_row(st, workspace, model, level)),
+        ],
+        BI,
+        None,
+        w,
+    )
+}
+
+/// One bold key with its dim label, joined by dim ` · `.
+fn hint_key(s: &mut Vec<Span<'static>>, k: &str, label: &str) {
+    if !s.is_empty() {
+        s.push(sp(" · ", dim()));
+    }
+    s.push(sp(k, bold()));
+    s.push(sp(format!(" {label}"), dim()));
+}
+
+/// The foot hint with its keys bold.
+fn full_hint() -> Vec<Span<'static>> {
+    let mut s = vec![];
+    hint_key(
+        &mut s,
+        "Enter",
+        "opens the focused session, or starts one from the box",
+    );
+    hint_key(&mut s, "↑↓", "move");
+    s.push(sp(" · ", dim()));
+    s.push(sp("→", bold()));
+    s.push(sp(" or ", dim()));
+    s.push(sp("Esc", bold()));
+    s.push(sp(" back to the session", dim()));
+    hint_key(&mut s, "Delete", "deletes an exited one");
+    s
+}
+
+/// The rail's foot hint while it has focus, keys bold. The conversation
+/// view draws it centred under the input box.
+pub(crate) fn rail_hint() -> Vec<Span<'static>> {
+    let mut s = vec![];
+    hint_key(&mut s, "←", "full screen");
+    hint_key(&mut s, "↑↓", "move");
+    hint_key(&mut s, "Enter", "switch");
+    s.push(sp(" · ", dim()));
+    s.push(sp("→", bold()));
+    s.push(sp(" or ", dim()));
+    s.push(sp("Esc", bold()));
+    s.push(sp(" back to the session", dim()));
+    hint_key(&mut s, "⌥1–9", "jump");
+    s
+}
+
+/// Centres spans in `cols` cells.
+fn centered(spans: &[Span<'static>], cols: usize) -> Vec<Span<'static>> {
+    let w: usize = spans.iter().map(|s| s.content.width()).sum();
+    let mut out = vec![sp(" ".repeat(cols.saturating_sub(w) / 2), Style::new())];
+    out.extend(spans.iter().cloned());
+    out
+}
+
+/// The fleet's rows at `cols` by `rows`: the header, the scrolling session
+/// list, the prompt box and the foot hint. The list scrolls so the focused
+/// row's last line stays on screen.
+pub(crate) fn fleet_rows(v: &FleetView<'_>) -> (Vec<super::Row>, Vec<FTag>) {
+    let (cols, rows) = (v.cols, v.rows);
+    let mut screen: Vec<super::Row> = (0..rows).map(|_| row(vec![])).collect();
+    let mut tags: Vec<FTag> = (0..rows).map(|_| FTag::Pad).collect();
+    if rows == 0 || cols == 0 {
+        return (screen, tags);
+    }
+    let ws = if v.st.ws.is_empty() {
+        RECENTS[0]
+    } else {
+        v.st.ws.as_str()
+    };
+    // The header: the four-row logo top left, beside it the version and the
+    // counts across projects, vertically centred on the logo.
+    for (k, l) in crate::logo::rows("", v.image).iter().enumerate() {
+        let y = LOGO_Y + k;
+        if y < rows {
+            screen[y] = super::Row {
+                spans: fit(l, cols),
+                bg: None,
+                ..Default::default()
+            };
+        }
+    }
+    if LOGO_Y + 1 < rows {
+        screen[LOGO_Y + 1] = super::Row {
+            spans: fit(
+                &[sp(" ".repeat(HTEXT_X), Style::new()), sp(VERSION, dim())],
+                cols,
+            ),
+            bg: None,
+            ..Default::default()
+        };
+    }
+    if LOGO_Y + 2 < rows {
+        let mut counts = vec![sp(" ".repeat(HTEXT_X), Style::new())];
+        counts.extend(counts_row(v.projs, v.today));
+        screen[LOGO_Y + 2] = super::Row {
+            spans: fit(&counts, cols),
+            bg: None,
+            ..Default::default()
+        };
+    }
+    let box_top = rows.saturating_sub(1 + BOX_H);
+    // The session list between header and prompt box: one block of lines
+    // per section, scrolled as one.
+    let items = fleet_items(v.projs);
+    let n = items.len();
+    let sel = v.st.sel.filter(|&i| i < n);
+    // Each entry is the row's spans, its tag, and whether the selection bar
+    // covers it.
+    let mut lines: Vec<(Vec<Span<'static>>, FTag, bool)> = vec![];
+    let mut sel_end = 0;
+    for (fi, it) in items.iter().enumerate() {
+        let focused = sel == Some(fi);
+        match it {
+            FItem::Live(pi, li) => {
+                if *li == 0 {
+                    lines.push((proj_head(&v.projs[*pi]), FTag::Pad, false));
+                }
+                let s = &v.projs[*pi].live[*li];
+                if focused {
+                    sel_end = lines.len() + 2;
+                }
+                lines.push((live_line_one(s, cols), FTag::Live(s.act, fi), focused));
+                lines.push((live_line_two(s, cols), FTag::Live(s.act, fi), focused));
+            }
+            FItem::Gone(pi, gi) => {
+                if *gi == 0 {
+                    lines.push((
+                        vec![sp(
+                            format!("  exited · {}", v.projs[*pi].gone.len()),
+                            dim(),
+                        )],
+                        FTag::Pad,
+                        false,
+                    ));
+                }
+                let g = &v.projs[*pi].gone[*gi];
+                if focused {
+                    sel_end = lines.len() + 1;
+                }
+                lines.push((gone_line(g, cols), FTag::Gone(fi), focused));
+                let shown = v.projs[*pi].gone.len().min(3);
+                if *gi + 1 == shown && v.projs[*pi].gone.len() > 3 {
+                    lines.push((
+                        vec![sp(
+                            format!(
+                                "     … {} more · /resume lists all",
+                                v.projs[*pi].gone.len() - 3
+                            ),
+                            dim(),
+                        )],
+                        FTag::Pad,
+                        false,
+                    ));
+                }
+            }
+        }
+    }
+    let area = box_top.saturating_sub(LIST_TOP);
+    if lines.is_empty() {
+        let mid = LIST_TOP + area.saturating_sub(2) / 2;
+        for (k, text) in [
+            "No sessions yet.",
+            "Type below and press Enter to start one.",
+        ]
+        .iter()
+        .enumerate()
+        {
+            let y = mid + k;
+            if y < rows {
+                screen[y] = super::Row {
+                    spans: fit(&centered(&[sp(*text, dim())], cols), cols),
+                    bg: None,
+                    ..Default::default()
+                };
+            }
+        }
+    } else {
+        let off = sel_end.saturating_sub(area);
+        for (k, (spans, tag, focused)) in lines.iter().enumerate().skip(off).take(area) {
+            let y = LIST_TOP + k - off;
+            if y < rows {
+                screen[y] = super::Row {
+                    spans: fit(spans, cols),
+                    bg: focused.then_some(SEL),
+                    ..Default::default()
+                };
+                tags[y] = *tag;
+            }
+        }
+    }
+    // The `/` and `@` panel draws directly above the prompt box, over the
+    // list's end.
+    if let Some(cp) = v.comp {
+        let keep = cp.len().min(box_top.saturating_sub(LIST_TOP));
+        for (k, r) in cp.iter().take(keep).enumerate() {
+            let y = box_top - keep + k;
+            if y < rows {
+                screen[y] = super::Row {
+                    spans: fit(&r.spans, cols),
+                    bg: r.bg,
+                    ..Default::default()
+                };
+            }
+        }
+    }
+    for (k, r) in prompt_box(v.st, ws, v.model, v.level, v.input, cols)
+        .into_iter()
+        .enumerate()
+    {
+        let y = box_top + k;
+        if y < rows {
+            screen[y] = super::Row {
+                spans: fit(&r.spans, cols),
+                bg: r.bg,
+                ..Default::default()
+            };
+        }
+    }
+    if rows >= 1 {
+        screen[rows - 1] = super::Row {
+            spans: fit(&centered(&full_hint(), cols), cols),
+            bg: None,
+            ..Default::default()
+        };
+    }
+    (screen, tags)
+}
+
+// ============================================================ home frame
+
+/// What a click lands on: home-local targets; the model picker's rows
+/// reuse its own `Act`.
+#[derive(Clone, Copy, PartialEq, Debug)]
+enum Target {
+    Workspace,
+    Worktree,
+    Model,
+    Thinking,
+    /// a fleet row in live-then-gone order across sections
+    Row(usize),
+    /// a recent workspace in the open workspace picker
+    Recent(usize),
+    /// a model picker row or chip
+    Picker(Act),
+}
+
+/// One frame: what is on screen, what a click lands on, and the focused
+/// rail card's cells to lift. Hits are `(row, start, end-exclusive, target)`.
+struct Frame {
+    screen: Vec<Vec<Placed>>,
+    hits: Vec<(u16, u16, u16, Target)>,
+    lift_rect: Option<(u16, u16, u16, u16)>,
+}
+
+/// A row painted at its own offset and width, so a slab's background stays
+/// within its edges instead of extending across the screen.
+struct Placed {
+    x: u16,
+    w: u16,
+    row: super::Row,
+}
+
+/// What a key or a click asks the home loop to do.
+enum Step {
+    Stay,
+    Quit,
+    Conversation,
+}
+
+/// Where the home loop went: out, or into the conversation view.
+pub(crate) enum Done {
+    Quit(String),
+    Conversation,
+}
+
+/// Converts home's owned sections to the shared renderer's borrow.
+fn to_rprojs(c: &Look) -> Vec<RProj<'_>> {
+    c.projs
+        .iter()
+        .map(|p| RProj {
+            name: p.name,
+            live: p
+                .live
+                .iter()
+                .map(|s| RLive {
+                    n: s.n,
+                    st: s.st,
+                    name: s.name,
+                    branch: s.branch,
+                    spend: s.spend,
+                    dollars: s.dollars,
+                    ctx: s.ctx,
+                    age: s.age,
+                    id: Some(s.id),
+                    turns: Some(s.turns),
+                    wait: s.wait,
+                    closing: s.closing,
+                    act: None,
+                })
+                .collect(),
+            gone: p
+                .gone
+                .iter()
+                .map(|g| RGone {
+                    name: g.name,
+                    id: Some(g.id),
+                    turns: Some(g.turns),
+                    spend: g.spend,
+                    age: g.age,
+                })
+                .collect(),
+        })
+        .collect()
+}
+
+/// The workspace picker over the fleet: recent workspaces, the selected one
+/// on a full-width selection bar, in the shared panel frame with a bold-key
+/// legend foot.
+fn picker(wsel: usize, cols: usize) -> Vec<super::Row> {
     const TITLE: &str = "Workspaces";
-    let body = picker_body(p, wsel);
+    let mut body = vec![];
+    for (i, r) in RECENTS.iter().enumerate() {
+        if i == wsel {
+            body.extend(super::panel::bar(vec![row(vec![
+                sp("› ", bold()),
+                sp(r.to_string(), bold()),
+            ])]));
+        } else {
+            body.push(row(vec![
+                sp("  ", Style::new()),
+                sp(r.to_string(), Style::new()),
+            ]));
+        }
+    }
     let natural = body
         .iter()
         .map(|r| super::width(&r.spans))
@@ -769,269 +1063,6 @@ fn picker(p: Picker, wsel: usize, cols: usize) -> Vec<super::Row> {
     )
 }
 
-// ============================================================ frame
-/// A row painted at its own offset and width, so a slab's background stays
-/// within its edges instead of extending across the screen.
-struct Placed {
-    x: u16,
-    w: u16,
-    row: super::Row,
-}
-
-/// What a click lands on: home-local targets; the model picker's rows
-/// reuse its own `Act`.
-#[derive(Clone, Copy, PartialEq, Debug)]
-enum Target {
-    Workspace,
-    Worktree,
-    Model,
-    Thinking,
-    /// a session row in live-then-past order: both its lines hit
-    Session(usize),
-    /// a recent workspace in the open workspace picker
-    Recent(usize),
-    /// a model picker row or chip
-    Picker(Act),
-}
-
-/// One frame: what is on screen, and what a click lands on.
-/// Hits are `(row, start cell, end-exclusive cell, target)`.
-struct Frame {
-    screen: Vec<Vec<Placed>>,
-    hits: Vec<(u16, u16, u16, Target)>,
-}
-
-/// What a key or a click asks the home loop to do.
-enum Step {
-    Stay,
-    Quit,
-    Conversation,
-}
-
-/// Where the home loop went: out, or into the conversation view.
-pub(crate) enum Done {
-    Quit(String),
-    Conversation,
-}
-
-fn put(
-    screen: &mut [Vec<Placed>],
-    y: usize,
-    x: usize,
-    w: usize,
-    spans: Vec<Span<'static>>,
-    bg: Option<Color>,
-) {
-    if y < screen.len() {
-        screen[y] = vec![Placed {
-            x: x as u16,
-            w: w as u16,
-            row: super::Row {
-                spans: fit(&spans, w),
-                bg,
-                ..Default::default()
-            },
-        }];
-    }
-}
-
-fn frame(c: &Look, cols: usize, rows: usize, image: bool) -> Frame {
-    let blank = || {
-        vec![Placed {
-            x: 0,
-            w: cols as u16,
-            row: row(vec![]),
-        }]
-    };
-    let mut screen: Vec<Vec<Placed>> = (0..rows).map(|_| blank()).collect();
-    let mut hits: Vec<(u16, u16, u16, Target)> = vec![];
-    // The model picker opens over home as a full-screen swapped view, as
-    // `/model` does in the conversation.
-    if let Some(p) = &c.ui.picker {
-        let mut all = vec![super::view_header("Models", "/model")];
-        all.extend(crate::model_picker::view(p, cols));
-        // The focused row stays visible: its index, then the header's row.
-        let at = all
-            .iter()
-            .position(|r| r.act == Some(Act::Pick(p.focus)))
-            .unwrap_or(0);
-        let off = list_offset(at + 1, rows.saturating_sub(1));
-        for (k, r) in all.iter().enumerate().skip(off).take(rows) {
-            let y = (k - off) as u16;
-            let bg = r.bg;
-            put(&mut screen, y as usize, 0, cols, r.spans.clone(), bg);
-            // A model row's name focuses it: its whole row is a click
-            // target, while its chips keep their narrower targets below.
-            if let Some(act @ (Act::Back | Act::Pick(_))) = r.act {
-                hits.push((y, 0, cols as u16, Target::Picker(act)));
-            }
-            for &(a, b, act) in &r.hot {
-                hits.push((y, a, b, Target::Picker(act)));
-            }
-        }
-        return Frame { screen, hits };
-    }
-    let w = HOME_W.min(cols.saturating_sub(4)).max(20);
-    let x0 = cols.saturating_sub(w) / 2;
-    let mut y = LOGO_Y;
-    if rows >= tall_min() {
-        // The logo's cells centre in the column; the version hangs past
-        // them on the last row.
-        let lx = logo_x(x0, w);
-        for l in crate::logo::rows(VERSION, image) {
-            put(&mut screen, y, lx, w - (lx - x0), l, None);
-            y += 1;
-        }
-    } else {
-        // Too short for four rows: the one-row logo, centred, and
-        // everything below moves up three rows with it.
-        let l = crate::logo::one_row(VERSION);
-        let lw: usize = l.iter().map(|s| s.content.width()).sum();
-        let lx = x0 + w.saturating_sub(lw) / 2;
-        put(&mut screen, y, lx, w - (lx - x0), l, None);
-        y += 1;
-    }
-    y += 1;
-    let box_top = y;
-    for r in input_box(c, w) {
-        let bg = r.bg;
-        put(&mut screen, y, x0, w, r.spans, bg);
-        y += 1;
-    }
-    // The chip row is the box's fifth row: its chips are click targets,
-    // but only while no workspace picker covers them. An open picker
-    // owns every click: background targets do nothing.
-    if c.picker.is_none() {
-        for (a, b, t) in chip_hits(c) {
-            hits.push(((box_top + 4) as u16, (x0 + a) as u16, (x0 + b) as u16, t));
-        }
-    }
-    // The `/` and `@` panel draws directly above the input box, entries
-    // first: focus starts at the top, so when the panel is taller than
-    // the room above the box its foot gives way, never its head.
-    if let Some(cp) = &c.ui.completions {
-        let panel = crate::completions::view(cp, &c.ui.input, w);
-        let keep = panel.len().min(box_top);
-        for (k, r) in panel.iter().take(keep).enumerate() {
-            let bg = r.bg;
-            put(&mut screen, box_top - keep + k, x0, w, r.spans.clone(), bg);
-        }
-    }
-    // Two blank rows under the box, then the list: live sessions under one
-    // header, exited ones under another, each row two lines. The list's
-    // lines scroll as one block above the key hint; an empty section draws
-    // no header, and with no sessions at all the dim line stays.
-    y += 2;
-    let live: &[Session] = match c.list {
-        List::Live | List::Both => LIVE,
-        _ => &[],
-    };
-    let past: &[Session] = match c.list {
-        List::Past | List::Both => PAST,
-        _ => &[],
-    };
-    let rw = w.saturating_sub(2);
-    if live.is_empty() && past.is_empty() {
-        put(
-            &mut screen,
-            y,
-            x0,
-            w,
-            fit(
-                &[sp(
-                    "No sessions yet — type a prompt above and press Enter.",
-                    dim(),
-                )],
-                w,
-            ),
-            None,
-        );
-    } else {
-        // Each entry is the line's left edge, its spans, and the session's
-        // index for clicks; the blank between sections counts for the
-        // scroll but draws nothing. The session index is the row's
-        // position in live-then-past order.
-        let mut lines: Vec<Line> = vec![];
-        let (mut at, mut sel_end) = (0, 0);
-        if !live.is_empty() {
-            push_section(
-                &mut lines,
-                (x0, rw),
-                live_header(),
-                live,
-                c.sel,
-                &mut at,
-                &mut sel_end,
-            );
-        }
-        if !live.is_empty() && !past.is_empty() {
-            lines.push(None);
-        }
-        if !past.is_empty() {
-            push_section(
-                &mut lines,
-                (x0, rw),
-                past_header(),
-                past,
-                c.sel,
-                &mut at,
-                &mut sel_end,
-            );
-        }
-        if c.sel.is_some_and(|s| s >= at) {
-            sel_end = lines.len();
-        }
-        let list_top = y;
-        let area = rows.saturating_sub(2).saturating_sub(list_top);
-        let off = list_offset(sel_end, area);
-        for (k, l) in lines.iter().enumerate().skip(off).take(area) {
-            if let Some((x, spans, sess)) = l {
-                let sy = list_top + k - off;
-                put(&mut screen, sy, *x, rw, spans.clone(), None);
-                // An open workspace picker covers the list: its blank
-                // rows and footer are not session targets, so clicking
-                // them never enters a conversation.
-                if c.picker.is_none()
-                    && let Some(k) = sess
-                {
-                    hits.push((sy as u16, *x as u16, (*x + rw) as u16, Target::Session(*k)));
-                }
-            }
-        }
-    }
-    let hint = "Enter starts a session · ↑↓ select · q quits";
-    if rows >= 2 {
-        let pad = cols.saturating_sub(hint.width()) / 2;
-        put(
-            &mut screen,
-            rows - 2,
-            0,
-            cols,
-            vec![sp(" ".repeat(pad), Style::new()), sp(hint, dim())],
-            None,
-        );
-    }
-    if let Some(p) = c.picker {
-        let rows = picker(p, c.wsel, cols);
-        let pw = super::width(&rows[0].spans);
-        let px0 = super::panel::x_for(pw, cols);
-        for (k, r) in rows.into_iter().enumerate() {
-            let bg = r.bg;
-            let text: String = r.spans.iter().map(|s| s.content.as_ref()).collect();
-            if let Some(i) = recent_at(&text) {
-                hits.push((
-                    (12 + k) as u16,
-                    px0 as u16,
-                    (px0 + pw) as u16,
-                    Target::Recent(i),
-                ));
-            }
-            put(&mut screen, 12 + k, px0, pw, r.spans, bg);
-        }
-    }
-    Frame { screen, hits }
-}
-
 /// The recent workspace a picker row names, if any: the row's text past
 /// its `› ` or two-space marker, matched exactly.
 fn recent_at(text: &str) -> Option<usize> {
@@ -1041,28 +1072,269 @@ fn recent_at(text: &str) -> Option<usize> {
     RECENTS.iter().position(|&r| r == t)
 }
 
-/// The four-row logo's first column: its `CELLS_W` cells centred in the
-/// home column at `x0`, `w` wide.
-fn logo_x(x0: usize, w: usize) -> usize {
-    x0 + w.saturating_sub(crate::logo::CELLS_W as usize) / 2
+fn frame(c: &Look, cols: usize, rows: usize, image: bool) -> Frame {
+    // The model picker opens over the fleet as a full-screen swapped view,
+    // as `/model` does in the conversation.
+    if let Some(p) = &c.ui.picker {
+        let mut screen: Vec<Vec<Placed>> = (0..rows)
+            .map(|_| {
+                vec![Placed {
+                    x: 0,
+                    w: cols as u16,
+                    row: row(vec![]),
+                }]
+            })
+            .collect();
+        let mut hits: Vec<(u16, u16, u16, Target)> = vec![];
+        let mut all = vec![super::view_header("Models", "/model")];
+        all.extend(crate::model_picker::view(p, cols));
+        // The focused row stays visible: its index, then the header's row.
+        let at = all
+            .iter()
+            .position(|r| r.act == Some(Act::Pick(p.focus)))
+            .unwrap_or(0);
+        let off = (at + 1).saturating_sub(rows.saturating_sub(1));
+        for (k, r) in all.iter().enumerate().skip(off).take(rows) {
+            let y = (k - off) as u16;
+            let bg = r.bg;
+            screen[y as usize] = vec![Placed {
+                x: 0,
+                w: cols as u16,
+                row: super::Row {
+                    spans: fit(&r.spans, cols),
+                    bg,
+                    ..Default::default()
+                },
+            }];
+            if let Some(act @ (Act::Back | Act::Pick(_))) = r.act {
+                hits.push((y, 0, cols as u16, Target::Picker(act)));
+            }
+            for &(a, b, act) in &r.hot {
+                hits.push((y, a, b, Target::Picker(act)));
+            }
+        }
+        return Frame {
+            screen,
+            hits,
+            lift_rect: None,
+        };
+    }
+    if c.rail {
+        return rail_frame(c, cols, rows);
+    }
+    let rprojs = to_rprojs(c);
+    let comp = c
+        .ui
+        .completions
+        .as_ref()
+        .map(|cp| crate::completions::view(cp, &c.ui.input, cols));
+    let view = FleetView {
+        projs: &rprojs,
+        st: &c.fleet,
+        model: c.model,
+        level: c.level,
+        input: &c.ui.input,
+        comp: comp.as_deref(),
+        today: TODAY,
+        cols,
+        rows,
+        image,
+    };
+    let (frows, ftags) = fleet_rows(&view);
+    let mut screen: Vec<Vec<Placed>> = frows
+        .into_iter()
+        .map(|r| {
+            vec![Placed {
+                x: 0,
+                w: cols as u16,
+                row: r,
+            }]
+        })
+        .collect();
+    while screen.len() < rows {
+        screen.push(vec![Placed {
+            x: 0,
+            w: cols as u16,
+            row: row(vec![]),
+        }]);
+    }
+    let mut hits: Vec<(u16, u16, u16, Target)> = vec![];
+    for (y, tag) in ftags.iter().enumerate() {
+        match tag {
+            // An open workspace picker owns every click: background rows do
+            // nothing while it covers them.
+            FTag::Live(_, i) | FTag::Gone(i) if c.fleet.wpick.is_none() => {
+                hits.push((y as u16, 0, cols as u16, Target::Row(*i)));
+            }
+            _ => {}
+        }
+    }
+    // The chip row is the box's last row: its chips are click targets, but
+    // only while no workspace picker covers them.
+    let box_top = rows.saturating_sub(1 + BOX_H);
+    if c.fleet.wpick.is_none() {
+        let ws = if c.fleet.ws.is_empty() {
+            RECENTS[0]
+        } else {
+            c.fleet.ws.as_str()
+        };
+        for (i, a, b) in chip_hits(&c.fleet, ws, c.model, c.level) {
+            let t = match i {
+                0 => Target::Workspace,
+                1 => Target::Worktree,
+                2 => Target::Model,
+                _ => Target::Thinking,
+            };
+            hits.push(((box_top + BOX_H - 1) as u16, a as u16, b as u16, t));
+        }
+    }
+    if let Some(wsel) = c.fleet.wpick {
+        let prows = picker(wsel, cols);
+        let pw = super::width(&prows[0].spans);
+        let px0 = super::panel::x_for(pw, cols);
+        for (k, r) in prows.into_iter().enumerate() {
+            let y = PICK_Y + k;
+            if y >= rows {
+                break;
+            }
+            let text: String = r.spans.iter().map(|s| s.content.as_ref()).collect();
+            if let Some(i) = recent_at(&text) {
+                hits.push((y as u16, px0 as u16, (px0 + pw) as u16, Target::Recent(i)));
+            }
+            screen[y] = vec![Placed {
+                x: px0 as u16,
+                w: pw as u16,
+                row: r,
+            }];
+        }
+    }
+    Frame {
+        screen,
+        hits,
+        lift_rect: None,
+    }
+}
+
+/// The rail-focused still: the rail left with the needs-input card lifted,
+/// the dimmed conversation behind it, a dimmed input box and the foot hint.
+fn rail_frame(c: &Look, cols: usize, rows: usize) -> Frame {
+    let rail_w = 24.min(cols.saturating_sub(2)).max(2);
+    let fakes: Vec<super::Fake> = c
+        .projs
+        .iter()
+        .flat_map(|p| {
+            p.live.iter().map(|s| super::Fake {
+                name: s.name,
+                project: p.name,
+                wait: s.wait.to_string(),
+                model: format!("{} · {}", c.model, c.level),
+                branch: s.branch,
+                ws: p.name,
+                spend: s.spend.to_string(),
+                dollars: 0.0,
+                ctx: s.ctx,
+                age: s.age.to_string(),
+                st: s.st,
+            })
+        })
+        .collect();
+    // The focused card is the waiting one, as ⌥2 jumps to it.
+    let screen_idx = fakes
+        .iter()
+        .position(|s| s.st == SState::NeedsInput)
+        .unwrap_or(0);
+    let shown: Vec<usize> = (0..fakes.len()).collect();
+    let (rrows, rmap) = super::rail_full_b(&fakes, &shown, screen_idx, 0, true, rail_w, 1);
+    let back = crate::overlays::backdrop(cols.saturating_sub(rail_w + 1), rows);
+    let mut screen = vec![];
+    for y in 0..rows {
+        let r = rrows.get(y).cloned().unwrap_or(super::Row {
+            spans: vec![],
+            bg: Some(BP),
+            ..Default::default()
+        });
+        screen.push(vec![
+            Placed {
+                x: 0,
+                w: rail_w as u16,
+                row: super::Row {
+                    spans: fit(&r.spans, rail_w),
+                    bg: r.bg,
+                    ..Default::default()
+                },
+            },
+            Placed {
+                x: rail_w as u16,
+                w: 1,
+                row: row(vec![sp(" ", Style::new())]),
+            },
+            Placed {
+                x: rail_w as u16 + 1,
+                w: cols.saturating_sub(rail_w + 1) as u16,
+                row: back.get(y).cloned().unwrap_or_default(),
+            },
+        ]);
+    }
+    // The input box keeps its place with a dim stripe and dim text while
+    // the rail has focus.
+    if rows >= 2 {
+        let y = rows - 2;
+        let w = cols.saturating_sub(rail_w + 1);
+        screen[y][2] = Placed {
+            x: rail_w as u16 + 1,
+            w: w as u16,
+            row: super::Row {
+                spans: fit(
+                    &[
+                        sp("▌", dim()),
+                        sp(" ", Style::new()),
+                        sp("› ", dim()),
+                        sp("the rail has the keyboard", dim()),
+                    ],
+                    w,
+                ),
+                bg: Some(BI),
+                ..Default::default()
+            },
+        };
+        screen[rows - 1] = vec![Placed {
+            x: 0,
+            w: cols as u16,
+            row: super::Row {
+                spans: fit(&centered(&rail_hint(), cols), cols),
+                bg: None,
+                ..Default::default()
+            },
+        }];
+    }
+    // The focused card lifts the way `--hover` lifts it.
+    let lift_rect = rmap
+        .iter()
+        .find(|&&(i, _, _)| i == screen_idx)
+        .map(|&(_, srow, len)| (0, rail_w as u16, srow as u16, (srow + len) as u16));
+    Frame {
+        screen,
+        hits: vec![],
+        lift_rect,
+    }
 }
 
 /// Whether the kitty image covers the logo on this draw: supported, past
 /// the first draw (the pixel logo draws first and the image replaces it,
 /// so the first frame never waits), no overlay open (an image at z=0
 /// draws above text and would cover a panel), the four-row logo drawn,
-/// and room for its 32 cells.
+/// and room for its 32 cells. The rail still draws no logo.
 fn image_shown(supported: bool, first: bool, c: &Look, cols: usize, rows: usize) -> bool {
-    if !supported || first {
+    if !supported || first || c.rail {
         return false;
     }
-    if c.picker.is_some() || c.ui.picker.is_some() || c.ui.completions.is_some() {
+    if c.fleet.wpick.is_some() || c.ui.picker.is_some() || c.ui.completions.is_some() {
         return false;
     }
     if rows < tall_min() {
         return false;
     }
-    HOME_W.min(cols.saturating_sub(4)).max(20) >= crate::logo::CELLS_W as usize
+    cols >= crate::logo::CELLS_W as usize + HTEXT_X
 }
 
 /// The image's wire state across draws: whether its bytes are up, and
@@ -1097,9 +1369,7 @@ impl Image {
 }
 
 /// How long the home loop waits for input: the reader's Esc deadline, as
-/// the conversation loop does. `wait(None)` would hold a lone Esc in the
-/// reader until the next byte, so Esc would not close a panel or quit
-/// until another key.
+/// the conversation loop does.
 fn wait_for(deadline: Option<Instant>, now: Instant) -> Option<Duration> {
     deadline.map(|d| d.saturating_duration_since(now))
 }
@@ -1113,20 +1383,24 @@ fn draw(
 ) -> io::Result<()> {
     let size = term.size()?;
     let (cols, rows) = (size.width.max(1), size.height.max(1));
-    let w = HOME_W.min(cols.saturating_sub(4) as usize).max(20);
     let shown = image_shown(supported, first, c, cols as usize, rows as usize);
-    let x0 = (cols as usize).saturating_sub(w) / 2;
-    let esc = img.escapes(shown, logo_x(x0, w) as u16, LOGO_Y as u16);
+    let esc = img.escapes(shown, 0, LOGO_Y as u16);
     term.backend_mut().write_all(b"\x1b[?2026h")?;
-    term.draw(|fr| {
-        let buf = fr.buffer_mut();
-        for (y, placements) in frame(c, cols as usize, rows as usize, shown)
-            .screen
-            .iter()
-            .enumerate()
-        {
+    let fr = frame(c, cols as usize, rows as usize, shown);
+    term.draw(|f| {
+        let buf = f.buffer_mut();
+        for (y, placements) in fr.screen.iter().enumerate() {
             for p in placements {
                 paint(buf, p.x, y as u16, p.w, &p.row);
+            }
+        }
+        if let Some((x, w, y0, y1)) = fr.lift_rect {
+            let (bw, bh) = (buf.area.width, buf.area.height);
+            for y in y0..y1.min(bh) {
+                for xx in x..(x + w).min(bw) {
+                    let cell = &mut buf[(xx, y)];
+                    cell.set_bg(lift(cell.bg));
+                }
             }
         }
     })?;
@@ -1144,19 +1418,6 @@ fn free(term: &mut Term) {
     let _ = be.flush();
 }
 
-/// The look's sessions in live-then-past order.
-fn sessions_of(c: &Look) -> Vec<&Session> {
-    let live: &[Session] = match c.list {
-        List::Live | List::Both => LIVE,
-        _ => &[],
-    };
-    let past: &[Session] = match c.list {
-        List::Past | List::Both => PAST,
-        _ => &[],
-    };
-    live.iter().chain(past.iter()).collect()
-}
-
 /// Closes the `/` and `@` panel, unless Esc dismissed it on this draft:
 /// without the dismissal the panel reopens at once, since the draft
 /// still starts with `/`.
@@ -1169,33 +1430,56 @@ fn end_key(c: &mut Look, before: &str) {
     }
 }
 
-/// The live home's keys, first match wins: Ctrl+C quits; the workspace
+/// What a chip does when Enter or a click activates it: the workspace chip
+/// opens the workspace picker, the worktree switch toggles, and the model
+/// and thinking chips open the model picker where the click opens it.
+/// Focus stays on the chip: the caller keeps `chip` as it was.
+fn open_chip(c: &mut Look, i: usize) {
+    match i {
+        0 => {
+            c.fleet.wpick = Some(c.fleet.wsel);
+        }
+        1 => {
+            c.fleet.worktree = !c.fleet.worktree;
+        }
+        2 => {
+            c.ui.picker = Some(crate::model_picker::opened_at(c.model, None));
+            c.ui.vscroll = 0;
+        }
+        _ => {
+            c.ui.picker = Some(crate::model_picker::opened_at(c.model, Some(c.level)));
+            c.ui.vscroll = 0;
+        }
+    }
+}
+
+/// The live fleet's keys, first match wins: Ctrl+C quits; the workspace
 /// picker takes arrows, Enter and Esc and ignores the rest; the model
 /// picker records on Enter and otherwise takes the picker's keys; Ctrl+L
-/// and `/model` open the model picker; `/` opens slash completions, and
-/// `/mo` Enter completes to `/model ` and opens the picker; Esc quits;
-/// focus runs top to bottom, entry bar, chip row, session list: ↓ from the
-/// entry bar focuses the last chip, ↓ from a chip focuses the first row,
-/// ↑ returns the same way, ← → move between chips clamped at the ends,
-/// Enter opens the focused chip as a click does, and typing or Backspace
-/// clears chip focus into the entry bar; Enter switches on a draft or a
-/// row; Backspace pops; `q` on an empty draft with no chip focused quits;
-/// other text fills the box.
+/// and `/model` open the model picker; `/` opens slash completions;
+/// → or Esc goes back to the session; focus runs from the session list
+/// down to the entry bar and the chip row: ↓ past the last row reaches the
+/// entry, ↓ from the entry reaches the chips, ↑ returns the same way, and
+/// ↓ from a chip wraps to the first row; ← → move between chips; Enter
+/// opens the focused row or starts a session from the box; Delete deletes
+/// the focused exited row; other text fills the box.
 fn on_key(c: &mut Look, k: Key, m: Mods) -> Step {
     // Ctrl+C quits, always.
     if k == Key::Char('c') && m.ctrl {
         return Step::Quit;
     }
     // The workspace picker takes its own keys; the rest are ignored.
-    if c.picker.is_some() {
+    if c.fleet.wpick.is_some() {
         match k {
-            Key::Up if !m.alt && !m.ctrl => c.wsel = c.wsel.saturating_sub(1),
-            Key::Down if !m.alt && !m.ctrl => c.wsel = (c.wsel + 1).min(RECENTS.len() - 1),
-            Key::Enter if !m.ctrl && !m.alt && !m.sup => {
-                c.workspace = RECENTS[c.wsel];
-                c.picker = None;
+            Key::Up if !m.alt && !m.ctrl => c.fleet.wsel = c.fleet.wsel.saturating_sub(1),
+            Key::Down if !m.alt && !m.ctrl => {
+                c.fleet.wsel = (c.fleet.wsel + 1).min(RECENTS.len() - 1);
             }
-            Key::Esc => c.picker = None,
+            Key::Enter if !m.ctrl && !m.alt && !m.sup => {
+                c.fleet.ws = RECENTS[c.fleet.wsel].into();
+                c.fleet.wpick = None;
+            }
+            Key::Esc => c.fleet.wpick = None,
             _ => {}
         }
         return Step::Stay;
@@ -1221,11 +1505,9 @@ fn on_key(c: &mut Look, k: Key, m: Mods) -> Step {
     let plain = !m.ctrl && !m.alt && !m.sup;
     // A focused chip's Enter always acts as a click: before the
     // draft-based `/model` dispatch below, which would otherwise consume
-    // Enter on a `/model` draft, clear it and open the wrong picker. The
-    // workspace and model pickers returned above, and the completion panel
-    // is checked here, so this only runs with none of them open.
-    if c.chip.is_some() && c.ui.completions.is_none() && k == Key::Enter && plain {
-        open_chip(c, chip_target(c.chip.unwrap()));
+    // Enter on a `/model` draft, clear it and open the wrong picker.
+    if c.fleet.chip.is_some() && c.ui.completions.is_none() && k == Key::Enter && plain {
+        open_chip(c, c.fleet.chip.unwrap());
         return Step::Stay;
     }
     if crate::model_picker::on_key(&mut c.ui, k, m) {
@@ -1241,106 +1523,87 @@ fn on_key(c: &mut Look, k: Key, m: Mods) -> Step {
         return Step::Stay;
     }
     // Enter that just completed `/mo` to `/model ` opens the picker.
-    // (Unreachable with a chip focused: `had` means the panel was open.)
     if had && k == Key::Enter && crate::model_picker::on_key(&mut c.ui, k, m) {
         end_key(c, &before);
         return Step::Stay;
     }
     // With the completion panel open, arrows keep the panel's keys.
     let overlay = c.ui.completions.is_some();
+    let rprojs = to_rprojs(c);
+    let n = fleet_items(&rprojs).len();
     let step = match k {
-        Key::Esc => Step::Quit,
-        Key::Down if !m.alt && !m.ctrl => {
-            if overlay {
-                let n = sessions_of(c).len();
-                c.sel = Some(match c.sel {
-                    None if n > 0 => 0,
-                    Some(i) => i.saturating_add(1).min(n.saturating_sub(1)),
-                    None => return Step::Stay,
-                });
-                Step::Stay
-            } else if c.chip.is_some() {
-                if !sessions_of(c).is_empty() {
-                    c.chip = None;
-                    c.sel = Some(0);
-                }
-                Step::Stay
+        Key::Esc => Step::Conversation,
+        Key::Right if plain && c.fleet.chip.is_none() => Step::Conversation,
+        Key::Down if !m.alt && !m.ctrl && !overlay => {
+            if c.fleet.chip.is_some() {
+                c.fleet.chip = None;
+                c.sel = if n > 0 { Some(0) } else { None };
+                c.fleet.sel = c.sel;
+            } else if let Some(i) = c.sel {
+                c.sel = (i + 1 < n).then_some(i + 1);
+                c.fleet.sel = c.sel;
             } else {
-                match c.sel {
-                    None => {
-                        c.chip = Some(c.last_chip);
-                        Step::Stay
-                    }
-                    Some(i) => {
-                        let n = sessions_of(c).len();
-                        c.sel = Some(i.saturating_add(1).min(n.saturating_sub(1)));
-                        Step::Stay
-                    }
-                }
+                c.fleet.chip = Some(c.fleet.last_chip);
             }
+            Step::Stay
         }
-        Key::Up if !m.alt && !m.ctrl => {
-            if overlay {
-                c.sel = match c.sel {
-                    Some(0) | None => None,
-                    Some(i) => Some(i - 1),
-                };
-                Step::Stay
-            } else if c.chip.is_some() {
-                c.chip = None;
-                Step::Stay
-            } else {
-                match c.sel {
-                    Some(0) => {
-                        c.sel = None;
-                        c.chip = Some(c.last_chip);
-                        Step::Stay
-                    }
-                    Some(i) => {
-                        c.sel = Some(i - 1);
-                        Step::Stay
-                    }
-                    None => Step::Stay,
-                }
+        Key::Up if !m.alt && !m.ctrl && !overlay => {
+            if c.fleet.chip.is_some() {
+                c.fleet.chip = None;
+            } else if let Some(i) = c.sel {
+                c.sel = i.checked_sub(1);
+                c.fleet.sel = c.sel;
+            } else if n > 0 {
+                c.sel = Some(n - 1);
+                c.fleet.sel = c.sel;
             }
+            Step::Stay
         }
         Key::Left if plain => {
-            if let Some(i) = c.chip {
-                c.chip = Some(i.saturating_sub(1));
-                c.last_chip = c.chip.unwrap();
+            if let Some(i) = c.fleet.chip {
+                c.fleet.chip = Some(i.saturating_sub(1));
+                c.fleet.last_chip = c.fleet.chip.unwrap();
             }
             Step::Stay
         }
         Key::Right if plain => {
-            if let Some(i) = c.chip {
-                c.chip = Some((i + 1).min(3));
-                c.last_chip = c.chip.unwrap();
+            if let Some(i) = c.fleet.chip {
+                c.fleet.chip = Some((i + 1).min(3));
+                c.fleet.last_chip = c.fleet.chip.unwrap();
             }
             Step::Stay
         }
         Key::Enter if plain => {
-            if let Some(i) = c.chip {
-                open_chip(c, chip_target(i));
-                Step::Stay
+            if c.sel.is_some() {
+                Step::Conversation
             } else if !c.ui.input.trim().is_empty() {
                 Step::Conversation
             } else {
-                match c.sel.and_then(|i| sessions_of(c).get(i).copied()) {
-                    Some(s) if !s.foreign => Step::Conversation,
-                    _ => Step::Stay,
-                }
+                Step::Stay
             }
         }
+        Key::Delete if plain => {
+            if let Some(i) = c.sel
+                && let Some(item) = fleet_items(&rprojs).get(i)
+                && let FItem::Gone(pi, gi) = item
+            {
+                c.projs[*pi].gone.remove(*gi);
+                let left = fleet_items(&to_rprojs(c)).len();
+                c.sel = (left > 0).then(|| i.min(left - 1));
+                c.fleet.sel = c.sel;
+            }
+            Step::Stay
+        }
         Key::Backspace if plain => {
-            c.chip = None;
+            c.fleet.chip = None;
             c.ui.input.pop();
             Step::Stay
         }
-        Key::Char('q') if plain && c.ui.input.is_empty() && c.chip.is_none() => Step::Quit,
         Key::Char(ch) if plain => {
-            c.chip = None;
-            c.ui.input.push(ch);
+            c.fleet.chip = None;
             c.sel = None;
+            c.fleet.sel = None;
+            c.ui.input.push(ch);
             Step::Stay
         }
         _ => Step::Stay,
@@ -1349,48 +1612,12 @@ fn on_key(c: &mut Look, k: Key, m: Mods) -> Step {
     step
 }
 
-/// What a chip does when Enter or a click activates it: the workspace chip
-/// opens the workspace picker, the worktree switch toggles, and the model
-/// and thinking chips open the model picker where the click opens it.
-/// Focus stays on the chip: the caller keeps `chip` as it was.
-fn open_chip(c: &mut Look, t: Target) {
-    match t {
-        Target::Workspace => {
-            c.picker = Some(Picker::Recent);
-            c.wsel = 0;
-        }
-        Target::Worktree => {
-            c.worktree = !c.worktree;
-        }
-        Target::Model => {
-            c.ui.picker = Some(crate::model_picker::opened_at(c.model, None));
-            c.ui.vscroll = 0;
-        }
-        Target::Thinking => {
-            c.ui.picker = Some(crate::model_picker::opened_at(c.model, Some(c.level)));
-            c.ui.vscroll = 0;
-        }
-        _ => {}
-    }
-}
-
-/// A focused chip as its click target: index 0 workspace, 1 worktree,
-/// 2 model, 3 thinking, the order of `chips()`.
-fn chip_target(i: usize) -> Target {
-    match i {
-        0 => Target::Workspace,
-        1 => Target::Worktree,
-        2 => Target::Model,
-        _ => Target::Thinking,
-    }
-}
-
-/// The live home's clicks: the chips open their pickers, the worktree
-/// switch toggles, a session row switches unless foreign, and a recent
-/// chooses its workspace. Any click clears chip focus.
+/// The live fleet's clicks: the chips open their pickers, the worktree
+/// switch toggles, a row opens its session, and a recent chooses its
+/// workspace. Any click clears chip focus.
 fn on_click(c: &mut Look, x: u16, y: u16, cols: usize, rows: usize) -> Step {
     // Any mouse click clears chip focus.
-    c.chip = None;
+    c.fleet.chip = None;
     let fr = frame(c, cols, rows, false);
     // Later hits sit above earlier ones: the picker floats over the list.
     let hit = fr
@@ -1402,22 +1629,27 @@ fn on_click(c: &mut Look, x: u16, y: u16, cols: usize, rows: usize) -> Step {
         return Step::Stay;
     };
     match t {
-        Target::Workspace | Target::Worktree | Target::Model | Target::Thinking => {
-            open_chip(c, t);
+        Target::Workspace => {
+            open_chip(c, 0);
             Step::Stay
         }
-        Target::Session(i) => {
-            let foreign = sessions_of(c).get(i).is_some_and(|s| s.foreign);
-            if foreign {
-                Step::Stay
-            } else {
-                Step::Conversation
-            }
+        Target::Worktree => {
+            open_chip(c, 1);
+            Step::Stay
         }
+        Target::Model => {
+            open_chip(c, 2);
+            Step::Stay
+        }
+        Target::Thinking => {
+            open_chip(c, 3);
+            Step::Stay
+        }
+        Target::Row(_) => Step::Conversation,
         Target::Recent(i) => {
-            c.workspace = RECENTS[i];
-            c.wsel = i;
-            c.picker = None;
+            c.fleet.ws = RECENTS[i].into();
+            c.fleet.wsel = i;
+            c.fleet.wpick = None;
             Step::Stay
         }
         Target::Picker(Act::Back) => {
@@ -1432,7 +1664,7 @@ fn on_click(c: &mut Look, x: u16, y: u16, cols: usize, rows: usize) -> Step {
 }
 
 /// Draws home and waits for a key: `--home` bare or `live` runs the
-/// interactive home, the other cases one still frame each. Mutually
+/// interactive fleet, the other cases one still frame each. Mutually
 /// exclusive with the conversation view: the fixture replay never draws.
 /// Every result passes through here, and here frees the image, so a
 /// propagated error never leaves a placement behind.
@@ -1456,7 +1688,7 @@ fn run_home_inner(a: &Args, term: &mut Term) -> io::Result<Done> {
             ),
         ));
     };
-    let supported = crate::logo::supported(|k| std::env::var(k).ok());
+    let supported = !c.rail && crate::logo::supported(|k| std::env::var(k).ok());
     let mut img = Image::default();
     // The first frame always draws the pixel logo; where supported, a
     // second draw at once transmits and places the image, so it shows
@@ -1488,8 +1720,9 @@ fn run_home_inner(a: &Args, term: &mut Term) -> io::Result<Done> {
     }
 }
 
-/// The interactive home: typing fills the box, the pickers open over it,
-/// arrows walk the session list, and Enter switches to the conversation.
+/// The interactive fleet: typing fills the box, the pickers open over it,
+/// arrows walk every row, and Enter opens the focused session or starts
+/// one from the box.
 fn run_live(term: &mut Term) -> io::Result<Done> {
     let mut c = base();
     let supported = crate::logo::supported(|k| std::env::var(k).ok());
@@ -1552,7 +1785,7 @@ mod tests {
                 .iter()
                 .all(|c| crate::cases::lookup(CASES, c.name).is_some())
         );
-        assert_eq!(CASES.len(), 20);
+        assert_eq!(CASES.len(), 7);
         assert!(crate::cases::lookup(CASES, "nope").is_none());
     }
 
@@ -1560,7 +1793,8 @@ mod tests {
     use ratatui::layout::Rect;
     use ratatui::style::Modifier;
 
-    /// `frame` painted with `paint` exactly as `draw` does.
+    /// `frame` painted with `paint` exactly as `draw` does, with the
+    /// focused rail card lifted.
     fn buffer(c: &Look, cols: u16, rows: u16) -> Buffer {
         painted(c, cols, rows, false)
     }
@@ -1572,43 +1806,201 @@ mod tests {
 
     fn painted(c: &Look, cols: u16, rows: u16, image: bool) -> Buffer {
         let mut buf = Buffer::empty(Rect::new(0, 0, cols, rows));
-        for (y, placements) in frame(c, cols as usize, rows as usize, image)
-            .screen
-            .iter()
-            .enumerate()
-        {
+        let fr = frame(c, cols as usize, rows as usize, image);
+        for (y, placements) in fr.screen.iter().enumerate() {
             for p in placements {
                 paint(&mut buf, p.x, y as u16, p.w, &p.row);
+            }
+        }
+        if let Some((x, w, y0, y1)) = fr.lift_rect {
+            for y in y0..y1.min(rows) {
+                for xx in x..(x + w).min(cols) {
+                    let cell = &mut buf[(xx, y)];
+                    cell.set_bg(lift(cell.bg));
+                }
             }
         }
         buf
     }
 
+    fn text(c: &Look, cols: u16, rows: u16) -> String {
+        let fr = frame(c, cols as usize, rows as usize, false);
+        fr.screen
+            .into_iter()
+            .map(|ps| {
+                let mut ps = ps;
+                ps.sort_by_key(|p| p.x);
+                ps.iter()
+                    .map(|p| {
+                        p.row
+                            .spans
+                            .iter()
+                            .map(|s| s.content.as_ref())
+                            .collect::<String>()
+                    })
+                    .collect::<Vec<_>>()
+                    .join("")
+            })
+            .collect::<Vec<_>>()
+            .join("\n")
+    }
+
     #[test]
-    fn home_draws_the_pixel_logo_at_its_place() {
-        // At 160 columns `w = 84` and `x0 = 38`; the 32 logo cells centre at 64.
-        let c = crate::cases::lookup(CASES, "empty").unwrap();
-        let buf = buffer(&c, 160, 48);
-        assert_eq!(buf[(64, 2)].symbol(), "▀");
-        assert_eq!(buf[(64, 2)].fg, BLUE);
-        let mut text = String::new();
-        for x in 97..102 {
-            text.push_str(buf[(x, 5)].symbol());
-            assert!(
-                buf[(x, 5)].modifier.contains(Modifier::DIM),
-                "version not dim at {x}"
-            );
+    fn header_counts_and_version() {
+        let c = crate::cases::lookup(CASES, "full-sessions").unwrap();
+        let t = text(&c, 160, 48);
+        assert!(t.contains("0.0.1"), "version missing");
+        for part in [
+            "2 waiting on you",
+            "2 working",
+            "1 retrying",
+            "1 crashed",
+            "2 ready",
+            "$5.78 today",
+        ] {
+            assert!(t.contains(part), "counts miss {part}");
         }
-        assert_eq!(text, "0.0.1");
+        // The version hangs past nothing: no name text beside the counts.
+        assert!(!t.contains("fiber ·"), "header repeats the name");
+    }
+
+    #[test]
+    fn sections_live_and_exited_rows() {
+        let c = crate::cases::lookup(CASES, "full-sessions").unwrap();
+        let t = text(&c, 160, 48);
+        for proj in ["fiber", "pi-rig", "beacon"] {
+            assert!(t.contains(proj), "missing section {proj}");
+        }
+        assert!(t.contains("5 live · $3.92"), "fiber header wrong");
+        assert!(t.contains("2 waiting on you"), "fiber wait count wrong");
+        assert!(t.contains("⌥1"), "numbers missing");
+        assert!(t.contains("⌥8"), "last number missing");
+        assert!(t.contains("NEEDS INPUT"), "state word missing");
         assert!(
-            !buf.content.iter().any(|c| c.symbol() == "⌇"),
-            "the hand-drawn logo is still drawn"
+            t.contains("approval: shell cargo publish --dry-run"),
+            "full wait missing"
+        );
+        assert!(t.contains("⎇ review-688"), "branch missing");
+        assert!(t.contains("41%"), "context missing");
+        assert!(t.contains("s_3ab702 · 3 turns"), "id and turns missing");
+        assert!(t.contains("exited · 4"), "exited header missing");
+        assert!(
+            t.contains("○ cut the 0.0.1 release"),
+            "exited row missing"
+        );
+        assert!(
+            t.contains("s_7f20aa · 5 turns · $1.10 · 3h ago"),
+            "exited detail missing"
+        );
+        assert!(
+            t.contains("… 1 more · /resume lists all"),
+            "more line missing"
+        );
+        assert!(t.contains("Enter starts a session"), "chips missing");
+    }
+
+    #[test]
+    fn focused_row_sits_on_the_selection_bar() {
+        let c = crate::cases::lookup(CASES, "full-sessions").unwrap();
+        let buf = buffer(&c, 160, 48);
+        let t = text(&c, 160, 48);
+        let y = t
+            .split('\n')
+            .position(|l| l.contains("fix flaky lock test"))
+            .unwrap() as u16;
+        assert_eq!(buf[(0, y)].bg, SEL, "first live row not on the bar");
+        assert_eq!(buf[(0, y + 1)].bg, SEL, "its second line not on the bar");
+        let y2 = t
+            .split('\n')
+            .position(|l| l.contains("review #688"))
+            .unwrap() as u16;
+        assert_ne!(buf[(0, y2)].bg, SEL, "unfocused row on the bar");
+    }
+
+    #[test]
+    fn focus_exited_bars_the_exited_row() {
+        let c = crate::cases::lookup(CASES, "full-focus-exited").unwrap();
+        let buf = buffer(&c, 160, 48);
+        let t = text(&c, 160, 48);
+        let y = t
+            .split('\n')
+            .position(|l| l.contains("cut the 0.0.1 release"))
+            .unwrap() as u16;
+        assert_eq!(buf[(0, y)].bg, SEL, "exited row not on the bar");
+    }
+
+    #[test]
+    fn empty_names_nothing() {
+        let c = crate::cases::lookup(CASES, "full-empty").unwrap();
+        let t = text(&c, 160, 48);
+        assert!(t.contains("no sessions yet"), "header line wrong");
+        assert!(t.contains("No sessions yet."), "middle line wrong");
+        assert!(
+            t.contains("Type below and press Enter to start one."),
+            "prompt line wrong"
+        );
+        assert!(!t.contains("live ·"), "sections drawn without sessions");
+    }
+
+    #[test]
+    fn closing_reads_dim() {
+        let c = crate::cases::lookup(CASES, "full-closing").unwrap();
+        let buf = buffer(&c, 160, 48);
+        let t = text(&c, 160, 48);
+        let y = t
+            .split('\n')
+            .position(|l| l.contains("CLOSING"))
+            .unwrap() as u16;
+        let mut found = false;
+        for x in 0..160 {
+            if buf[(x, y)].symbol() == "C" {
+                assert!(
+                    buf[(x, y)].modifier.contains(Modifier::DIM),
+                    "CLOSING not dim at {x}"
+                );
+                found = true;
+                break;
+            }
+        }
+        assert!(found, "no CLOSING row");
+        assert!(t.contains("fix flaky lock test"), "closing row lost its name");
+    }
+
+    #[test]
+    fn picker_lists_recent_workspaces() {
+        let c = crate::cases::lookup(CASES, "full-picker").unwrap();
+        let t = text(&c, 160, 48);
+        assert!(t.contains("Workspaces"), "picker title missing");
+        for ws in ["~/work/fiber", "~/work/beacon", "~/work/pi-rig"] {
+            assert!(t.contains(ws), "missing recent {ws}");
+        }
+    }
+
+    #[test]
+    fn rail_still_lifts_the_waiting_card() {
+        let c = crate::cases::lookup(CASES, "rail-focused").unwrap();
+        let t = text(&c, 160, 48);
+        assert!(t.contains("NEEDS INPUT"), "waiting card missing");
+        assert!(t.contains("the rail has the keyboard"), "dim input missing");
+        assert!(t.contains("⌥1–9"), "foot hint missing");
+        assert!(t.contains("back to the session"), "hint label missing");
+        // The waiting card is brighter than the working card above it.
+        let buf = buffer(&c, 160, 48);
+        let y = t
+            .split('\n')
+            .position(|l| l.contains("NEEDS INPUT"))
+            .unwrap() as u16;
+        let y0 = t.split('\n').position(|l| l.contains("WORKING")).unwrap() as u16;
+        assert_ne!(
+            buf[(3, y)].bg,
+            buf[(3, y0)].bg,
+            "focused card not lifted"
         );
     }
 
     #[test]
     fn image_shown_boundaries() {
-        let plain = || crate::cases::lookup(CASES, "empty").unwrap();
+        let plain = || crate::cases::lookup(CASES, "full-sessions").unwrap();
         // Supported and past the first draw, nothing open: the image shows.
         assert!(image_shown(true, false, &plain(), 160, 48));
         // Without support, or on the first draw, the pixel logo stays.
@@ -1618,7 +2010,7 @@ mod tests {
         assert!(!image_shown(
             true,
             false,
-            &crate::cases::lookup(CASES, "picker-recent").unwrap(),
+            &crate::cases::lookup(CASES, "full-picker").unwrap(),
             160,
             48
         ));
@@ -1629,11 +2021,19 @@ mod tests {
         panel.ui.input = "/".into();
         panel.ui.completions = Some(crate::completions::for_case("slash"));
         assert!(!image_shown(true, false, &panel, 160, 48));
+        // The rail still draws no logo at all.
+        assert!(!image_shown(
+            true,
+            false,
+            &crate::cases::lookup(CASES, "rail-focused").unwrap(),
+            160,
+            48
+        ));
         // The image needs the four-row logo and its 32 cells.
         assert!(image_shown(true, false, &plain(), 160, tall_min()));
         assert!(!image_shown(true, false, &plain(), 160, tall_min() - 1));
-        assert!(image_shown(true, false, &plain(), 36, 48));
-        assert!(!image_shown(true, false, &plain(), 35, 48));
+        assert!(image_shown(true, false, &plain(), 80, 48));
+        assert!(!image_shown(true, false, &plain(), 66, 48));
     }
 
     #[test]
@@ -1642,15 +2042,15 @@ mod tests {
             transmitted: false,
             placed: false,
         };
-        assert_eq!(img.escapes(false, 38, 2), "");
+        assert_eq!(img.escapes(false, 0, 0), "");
         assert_eq!(
-            img.escapes(true, 38, 2),
-            crate::logo::transmit() + &crate::logo::place(38, 2)
+            img.escapes(true, 0, 0),
+            crate::logo::transmit() + &crate::logo::place(0, 0)
         );
-        assert_eq!(img.escapes(true, 38, 2), crate::logo::place(38, 2));
-        assert_eq!(img.escapes(false, 38, 2), crate::logo::HIDE);
-        assert_eq!(img.escapes(false, 38, 2), "");
-        assert_eq!(img.escapes(true, 38, 2), crate::logo::place(38, 2));
+        assert_eq!(img.escapes(true, 0, 0), crate::logo::place(0, 0));
+        assert_eq!(img.escapes(false, 0, 0), crate::logo::HIDE);
+        assert_eq!(img.escapes(false, 0, 0), "");
+        assert_eq!(img.escapes(true, 0, 0), crate::logo::place(0, 0));
     }
 
     #[test]
@@ -1671,958 +2071,97 @@ mod tests {
 
     #[test]
     fn home_blanks_the_logo_under_the_image() {
-        let c = crate::cases::lookup(CASES, "empty").unwrap();
+        let c = crate::cases::lookup(CASES, "full-sessions").unwrap();
         let buf = buffer_image(&c, 160, 48);
-        for y in 2..6 {
-            for x in 64..96 {
+        for y in 0..4 {
+            for x in 0..32 {
                 assert_eq!(buf[(x, y)].symbol(), " ", "cell ({x}, {y})");
             }
         }
-        let mut text = String::new();
-        for x in 97..102 {
-            text.push_str(buf[(x, 5)].symbol());
-        }
-        assert_eq!(text, "0.0.1");
+        assert!(text(&c, 160, 48).contains("0.0.1"));
     }
 
     #[test]
-    fn short_screens_get_the_one_row_logo() {
-        let tall = tall_min();
-        let empty = || crate::cases::lookup(CASES, "empty").unwrap();
-        let buf = buffer(&empty(), 160, tall as u16);
-        assert_eq!(buf[(64, 2)].symbol(), "▀");
-        assert_eq!(buf[(64, 2)].fg, BLUE);
-        let buf = buffer(&empty(), 160, tall as u16 - 1);
-        let mut got = String::new();
-        // The 13-cell one-row logo centres at 73.
-        for x in 73..86 {
-            got.push_str(buf[(x, 2)].symbol());
-        }
-        assert_eq!(got, "⌇ fiber 0.0.1");
-        // The input box's top edge sits three rows higher than in the tall frame.
-        // The box edge is a full-width run of ▄; the logo's half blocks never
-        // run that long.
-        let edge = |rows: u16| {
-            let t = text(&empty(), 160, rows as usize);
-            t.split('\n')
-                .position(|l| l.chars().filter(|&c| c == '▄').count() >= 40)
-                .unwrap()
-        };
-        assert_eq!(edge(tall as u16) - edge(tall as u16 - 1), 3);
-    }
-
-    fn text(c: &Look, cols: usize, rows: usize) -> String {
-        frame(c, cols, rows, false)
-            .screen
-            .into_iter()
-            .map(|ps| {
-                ps.iter()
-                    .map(|p| {
-                        p.row
-                            .spans
-                            .iter()
-                            .map(|s| s.content.as_ref())
-                            .collect::<String>()
-                    })
-                    .collect::<Vec<_>>()
-                    .join("")
-            })
-            .collect::<Vec<_>>()
-            .join("\n")
-    }
-
-    /// The first screen row holding `needle`, reading cells left to right.
-    fn find_row(buf: &Buffer, cols: u16, rows: u16, needle: &str) -> u16 {
-        for y in 0..rows {
-            let mut line = String::new();
-            for x in 0..cols {
-                line.push_str(buf[(x, y)].symbol());
-            }
-            if line.contains(needle) {
-                return y;
-            }
-        }
-        panic!("{needle:?} not on screen");
-    }
-
-    /// The symbols of one buffer run as text.
-    fn run_text(buf: &Buffer, x: u16, y: u16, len: u16) -> String {
-        (x..x + len).map(|x| buf[(x, y)].symbol()).collect()
-    }
-
-    /// The home column of one text row as text.
-    fn home_col(line: &str, x0: usize, w: usize) -> String {
-        line.chars().skip(x0).take(w).collect()
-    }
-
-    fn sessions() -> Look {
-        crate::cases::lookup(CASES, "sessions").unwrap()
-    }
-
-    #[test]
-    fn both_headers_in_order() {
-        // At 160 columns `w = 84` and `x0 = 38`: headers at 40, rows at 39.
-        let buf = buffer(&sessions(), 160, 48);
-        let live_y = find_row(&buf, 160, 48, "Live sessions");
-        let past_y = find_row(&buf, 160, 48, "Past sessions");
-        assert!(live_y < past_y, "the live header is not first");
-        assert_eq!(run_text(&buf, 40, live_y, 13), "Live sessions");
-        assert!(buf[(40, live_y)].modifier.contains(Modifier::BOLD));
-        assert_eq!(run_text(&buf, 40, past_y, 13), "Past sessions");
-        assert!(buf[(40, past_y)].modifier.contains(Modifier::BOLD));
-        assert_eq!(run_text(&buf, 53, live_y, 18), "  2 waiting on you");
-        for x in 55..69 {
-            assert_eq!(
-                buf[(x, live_y)].fg,
-                ORANGE,
-                "waiting count not orange at {x}"
-            );
-        }
-        assert!(run_text(&buf, 53, past_y, 19).contains("/resume lists all"));
-    }
-
-    #[test]
-    fn two_blank_rows_under_the_box_and_one_between_sections() {
-        let t = text(&sessions(), 160, 48);
-        let lines: Vec<&str> = t.split('\n').collect();
-        let edge = lines
-            .iter()
-            .rposition(|l| l.chars().filter(|&c| c == '▀').count() >= 40)
-            .unwrap();
-        assert!(
-            home_col(lines[edge + 1], 38, 84).trim().is_empty(),
-            "no first blank"
-        );
-        assert!(
-            home_col(lines[edge + 2], 38, 84).trim().is_empty(),
-            "no second blank"
-        );
-        let past = lines
-            .iter()
-            .position(|l| l.contains("Past sessions"))
-            .unwrap();
-        assert!(
-            lines[past - 1].trim().is_empty(),
-            "no blank over the past header"
-        );
-        assert!(
-            lines[past - 2].contains("s_5e91b4"),
-            "the last live row is not above the blank"
-        );
-    }
-
-    #[test]
-    fn waiting_row_tints() {
-        let buf = buffer(&sessions(), 160, 48);
-        let y2 = find_row(&buf, 160, 48, "s_7f20aa");
-        let y1 = y2 - 1;
-        assert_eq!(buf[(41, y1)].symbol(), "!");
-        assert_eq!(buf[(41, y1)].fg, ORANGE);
-        assert!(buf[(41, y1)].modifier.contains(Modifier::BOLD));
-        assert_eq!(run_text(&buf, 43, y1, 21), "cut the 0.0.1 release");
-        for x in 43..64 {
-            assert!(
-                !buf[(x, y1)].modifier.contains(Modifier::BOLD),
-                "prompt went bold at {x}"
-            );
-        }
-        // The age sits right-aligned in its 9-cell field, the verb after two spaces.
-        assert_eq!(run_text(&buf, 97, y1, 9), "   2h ago");
-        for x in 97..106 {
-            assert!(
-                buf[(x, y1)].modifier.contains(Modifier::DIM),
-                "age not dim at {x}"
-            );
-        }
-        assert_eq!(run_text(&buf, 108, y1, 13), "attach       ");
-        assert!(buf[(108, y1)].modifier.contains(Modifier::DIM));
-        assert_eq!(
-            run_text(&buf, 43, y2, 34),
-            "s_7f20aa · 5 turns · release/0.0.1"
-        );
-        for x in 43..80 {
-            assert!(
-                buf[(x, y2)].modifier.contains(Modifier::DIM),
-                "line two not dim at {x}"
-            );
-        }
-        let note_y = find_row(&buf, 160, 48, "approval:");
-        assert_eq!(note_y, y2);
-        for x in 88..97 {
-            assert_eq!(buf[(x, y2)].fg, ORANGE, "the wait is not orange at {x}");
-        }
-    }
-
-    #[test]
-    fn crashed_row_tints() {
-        let buf = buffer(&sessions(), 160, 48);
-        let y2 = find_row(&buf, 160, 48, "s_5e91b4");
-        let y1 = y2 - 1;
-        assert_eq!(buf[(41, y1)].symbol(), "✗");
-        assert_eq!(buf[(41, y1)].fg, RED);
-        assert!(buf[(41, y1)].modifier.contains(Modifier::BOLD));
-        assert_eq!(run_text(&buf, 108, y1, 13), "resume       ");
-        let y = find_row(&buf, 160, 48, "stopped");
-        assert_eq!(y, y2);
-        assert_eq!(buf[(84, y2)].fg, RED);
-        assert!(buf[(84, y2)].modifier.contains(Modifier::DIM));
-    }
-
-    #[test]
-    fn foreign_row_says_cannot_attach() {
-        let buf = buffer(&sessions(), 160, 48);
-        let y1 = find_row(&buf, 160, 48, "s_88f310") - 1;
-        assert_eq!(run_text(&buf, 108, y1, 13), "cannot attach");
-        assert_eq!(buf[(108, y1)].fg, RED);
-        assert!(buf[(108, y1)].modifier.contains(Modifier::DIM));
-    }
-
-    #[test]
-    fn working_row_glyph() {
-        let buf = buffer(&sessions(), 160, 48);
-        let y1 = find_row(&buf, 160, 48, "s_61c9d0") - 1;
-        assert_eq!(buf[(41, y1)].symbol(), "●");
-        assert_eq!(buf[(41, y1)].fg, BLUE);
-    }
-
-    #[test]
-    fn exited_row() {
-        let buf = buffer(&sessions(), 160, 48);
-        let y1 = find_row(&buf, 160, 48, "fix flaky");
-        assert_eq!(buf[(41, y1)].symbol(), "○");
-        assert!(buf[(41, y1)].modifier.contains(Modifier::DIM));
-        assert_eq!(run_text(&buf, 108, y1, 13), "resume       ");
-        let y2 = find_row(&buf, 160, 48, "$2.31");
-        assert!(run_text(&buf, 43, y2, 60).contains("· pi-rig"));
-        // A launch-project session carries no workspace segment.
-        assert_eq!(
-            run_text(&buf, 43, y1 + 1, 43).trim_end(),
-            "s_9f31ac · 4 turns · fix/flaky-lock · $0.42"
-        );
-    }
-
-    #[test]
-    fn one_turn_is_singular() {
-        let buf = buffer(&sessions(), 160, 48);
-        let y2 = find_row(&buf, 160, 48, "bump ratatui") + 1;
-        assert!(run_text(&buf, 43, y2, 60).contains("1 turn ·"));
-        assert!(!run_text(&buf, 43, y2, 60).contains("1 turns"));
-    }
-
-    #[test]
-    fn long_prompt_keeps_the_age_column() {
-        let buf = buffer(&sessions(), 160, 48);
-        let y_long = find_row(&buf, 160, 48, "migrate every");
-        let y_short = find_row(&buf, 160, 48, "fix flaky");
-        // Both verbs sit at the same columns: the long prompt was cut first.
-        assert_eq!(run_text(&buf, 108, y_long, 13), "resume       ");
-        assert_eq!(run_text(&buf, 108, y_short, 13), "resume       ");
-        assert!(run_text(&buf, 43, y_long, 54).ends_with('…'));
-    }
-
-    #[test]
-    fn selected_row() {
-        let c = crate::cases::lookup(CASES, "selected").unwrap();
-        let buf = buffer(&c, 160, 48);
-        let y1 = find_row(&buf, 160, 48, "cut the 0.0.1 release");
-        assert_eq!(buf[(39, y1)].symbol(), "▸");
-        assert_eq!(buf[(39, y1)].fg, BLUE);
-        for x in 43..64 {
-            assert!(
-                buf[(x, y1)].modifier.contains(Modifier::BOLD),
-                "prompt not bold at {x}"
-            );
-        }
-        assert_eq!(run_text(&buf, 108, y1, 13), "attach       ");
-        assert_eq!(buf[(108, y1)].fg, BLUE);
-        let y2 = find_row(&buf, 160, 48, "audit the event");
-        assert_eq!(run_text(&buf, 39, y2, 2), "  ");
-    }
-
-    #[test]
-    fn live_only_has_no_past_header() {
-        let c = crate::cases::lookup(CASES, "live-only").unwrap();
-        let t = text(&c, 160, 48);
-        assert!(t.contains("Live sessions"));
-        assert!(!t.contains("Past sessions"));
-    }
-
-    #[test]
-    fn past_only_has_no_live_header() {
-        let c = crate::cases::lookup(CASES, "past-only").unwrap();
-        let t = text(&c, 160, 48);
-        assert!(t.contains("Past sessions"));
-        assert!(!t.contains("Live sessions"));
-    }
-
-    #[test]
-    fn empty_has_no_headers() {
-        let c = crate::cases::lookup(CASES, "empty").unwrap();
-        let t = text(&c, 160, 48);
-        assert!(!t.contains("Live sessions"));
-        assert!(!t.contains("Past sessions"));
-        assert!(t.contains("No sessions yet"));
-    }
-
-    #[test]
-    fn chips_start_at_the_current_model() {
-        let buf = buffer(&sessions(), 160, 48);
-        // The chip row starts at `x0`: scan for the model chip's start.
-        let y = find_row(&buf, 160, 48, "[claude-opus-5-5]");
-        let mut line = String::new();
-        for x in 0..160 {
-            line.push_str(buf[(x, y)].symbol());
-        }
-        let at = line.find("[claude-opus-5-5]").unwrap();
-        let col = line[..at].chars().count() as u16;
-        for x in col..col + 17 {
-            assert_eq!(buf[(x, y)].fg, CYAN, "model chip not cyan at {x}");
-        }
-        let yh = find_row(&buf, 160, 48, "[high]");
-        assert_eq!(yh, y);
-        let ath = line.find("[high]").unwrap();
-        let colh = line[..ath].chars().count() as u16;
-        for x in colh..colh + 6 {
-            assert_eq!(buf[(x, yh)].fg, ORANGE, "thinking chip not orange at {x}");
-        }
-    }
-
-    #[test]
-    fn list_offset_boundaries() {
-        assert_eq!(list_offset(0, 10), 0);
-        assert_eq!(list_offset(10, 10), 0);
-        assert_eq!(list_offset(11, 10), 1);
-        assert_eq!(list_offset(25, 10), 15);
-    }
-
-    #[test]
-    fn selected_last_row_stays_visible() {
-        let c = Look {
-            sel: Some(10),
-            ..base()
-        };
-        let buf = buffer(&c, 160, 30);
-        let y1 = find_row(&buf, 160, 30, "rewrite onboarding tour");
-        // Both lines sit above the hint row.
-        assert!(y1 + 1 < 28, "the last row scrolled off");
-    }
-
-    fn live_look() -> Look {
-        base()
-    }
-
-    fn press(c: &mut Look, k: Key) -> Step {
-        on_key(c, k, Mods::default())
-    }
-
-    fn type_str(c: &mut Look, s: &str) {
-        for ch in s.chars() {
-            press(c, Key::Char(ch));
-        }
-    }
-
-    /// The first click target for `t` at 160 by 48.
-    fn hit(c: &Look, t: Target) -> (u16, u16) {
-        let fr = frame(c, 160, 48, false);
-        let (y, x0, _, _) = fr.hits.iter().find(|h| h.3 == t).unwrap();
-        (*x0, *y)
-    }
-
-    fn session_hits(c: &Look, i: usize) -> Vec<(u16, u16)> {
-        frame(c, 160, 48, false)
-            .hits
-            .iter()
-            .filter(|h| h.3 == Target::Session(i))
-            .map(|&(y, x0, _, _)| (x0, y))
-            .collect()
-    }
-
-    #[test]
-    fn typing_fills_the_box() {
-        let mut c = live_look();
-        press(&mut c, Key::Char('a'));
-        press(&mut c, Key::Char('b'));
-        let buf = buffer(&c, 160, 48);
-        find_row(&buf, 160, 48, "› ab█");
-        press(&mut c, Key::Backspace);
-        let buf = buffer(&c, 160, 48);
-        find_row(&buf, 160, 48, "› a█");
-    }
-
-    #[test]
-    fn enter_with_a_draft_switches() {
-        let mut c = live_look();
-        type_str(&mut c, "fix it");
-        assert!(matches!(press(&mut c, Key::Enter), Step::Conversation));
-        let mut c = live_look();
-        type_str(&mut c, " ");
-        assert!(matches!(press(&mut c, Key::Enter), Step::Stay));
-    }
-
-    #[test]
-    fn arrows_walk_the_list() {
-        // Focus runs entry bar, chip row, session list: ↓ stops at the
-        // chips before the first row, and ↑ returns the same way.
-        let mut c = live_look();
-        press(&mut c, Key::Down);
-        assert_eq!((c.chip, c.sel), (Some(0), None));
-        press(&mut c, Key::Down);
-        assert_eq!((c.chip, c.sel), (None, Some(0)));
-        press(&mut c, Key::Up);
-        assert_eq!((c.chip, c.sel), (Some(0), None));
-        press(&mut c, Key::Up);
-        assert_eq!((c.chip, c.sel), (None, None));
-        press(&mut c, Key::Up);
-        assert_eq!((c.chip, c.sel), (None, None));
-        c.sel = Some(10);
-        press(&mut c, Key::Down);
-        assert_eq!((c.chip, c.sel), (None, Some(10)));
-        // An empty list still reaches the chips; the next ↓ stays there.
-        let mut empty = Look {
-            list: List::None,
-            ..base()
-        };
-        press(&mut empty, Key::Down);
-        assert_eq!((empty.chip, empty.sel), (Some(0), None));
-        press(&mut empty, Key::Down);
-        assert_eq!((empty.chip, empty.sel), (Some(0), None));
-        let mut c = live_look();
-        press(&mut c, Key::Down);
-        press(&mut c, Key::Down);
-        let buf = buffer(&c, 160, 48);
-        let y1 = find_row(&buf, 160, 48, "cut the 0.0.1 release");
-        assert_eq!(buf[(39, y1)].symbol(), "▸");
-    }
-
-    #[test]
-    fn enter_opens_a_selected_row() {
-        let mut c = live_look();
-        c.sel = Some(0);
-        assert!(matches!(press(&mut c, Key::Enter), Step::Conversation));
-        // The foreign row cannot attach: Enter does nothing.
-        let mut c = live_look();
-        c.sel = Some(3);
-        assert!(matches!(press(&mut c, Key::Enter), Step::Stay));
-    }
-
-    #[test]
-    fn typing_clears_the_selection() {
-        let mut c = live_look();
-        c.sel = Some(2);
-        press(&mut c, Key::Char('x'));
+    fn arrows_walk_list_entry_and_chips() {
+        let mut c = base();
+        // ↓ from the entry bar focuses the chip row.
+        on_key(&mut c, Key::Down, Mods::default());
+        assert_eq!(c.fleet.chip, Some(0));
+        // ↓ from a chip focuses the first row.
+        on_key(&mut c, Key::Down, Mods::default());
+        assert_eq!(c.sel, Some(0));
+        assert_eq!(c.fleet.chip, None);
+        // ↑ from the first row returns to the entry bar.
+        on_key(&mut c, Key::Up, Mods::default());
         assert_eq!(c.sel, None);
-        assert_eq!(c.ui.input, "x");
+        // ↑ from the entry bar focuses the last row.
+        on_key(&mut c, Key::Up, Mods::default());
+        assert!(c.sel.is_some());
+        // ↓ past the last row returns to the entry bar.
+        on_key(&mut c, Key::Down, Mods::default());
+        assert_eq!(c.sel, None);
     }
 
     #[test]
-    fn q_quits_only_on_an_empty_draft() {
-        let mut c = live_look();
-        assert!(matches!(press(&mut c, Key::Char('q')), Step::Quit));
-        let mut c = live_look();
-        press(&mut c, Key::Char('a'));
-        assert!(matches!(press(&mut c, Key::Char('q')), Step::Stay));
-        assert_eq!(c.ui.input, "aq");
-        let mut c = live_look();
-        c.picker = Some(Picker::Recent);
-        assert!(matches!(press(&mut c, Key::Char('q')), Step::Stay));
-        assert!(c.picker.is_some());
+    fn enter_opens_and_esc_leaves() {
+        let mut c = base();
+        c.sel = Some(0);
+        c.fleet.sel = Some(0);
+        assert!(matches!(
+            on_key(&mut c, Key::Enter, Mods::default()),
+            Step::Conversation
+        ));
+        assert!(matches!(
+            on_key(&mut c, Key::Esc, Mods::default()),
+            Step::Conversation
+        ));
+        assert!(matches!(
+            on_key(&mut c, Key::Right, Mods::default()),
+            Step::Conversation
+        ));
     }
 
     #[test]
-    fn ctrl_c_always_quits() {
-        let mut c = live_look();
-        c.ui.picker = Some(crate::model_picker::for_case("list"));
-        let m = Mods {
-            ctrl: true,
-            ..Default::default()
-        };
-        assert!(matches!(on_key(&mut c, Key::Char('c'), m), Step::Quit));
+    fn typing_clears_row_focus_into_the_entry_bar() {
+        let mut c = base();
+        c.sel = Some(2);
+        c.fleet.sel = Some(2);
+        on_key(&mut c, Key::Char('f'), Mods::default());
+        assert_eq!(c.sel, None);
+        assert_eq!(c.fleet.sel, None);
+        assert_eq!(c.ui.input, "f");
     }
 
     #[test]
-    fn esc_closes_then_quits() {
-        let mut c = live_look();
-        c.picker = Some(Picker::Recent);
-        assert!(matches!(press(&mut c, Key::Esc), Step::Stay));
-        assert!(c.picker.is_none());
-        assert!(matches!(press(&mut c, Key::Esc), Step::Quit));
+    fn delete_drops_the_focused_exited_row() {
+        let mut c = base();
+        c.sel = Some(5);
+        c.fleet.sel = Some(5);
+        on_key(&mut c, Key::Delete, Mods::default());
+        let t = text(&c, 160, 48);
+        assert!(
+            !t.contains("cut the 0.0.1 release"),
+            "deleted row still drawn"
+        );
+        assert!(t.contains("speed up the render loop"), "wrong row dropped");
     }
 
     #[test]
-    fn slash_opens_completions() {
-        let mut c = live_look();
-        press(&mut c, Key::Char('/'));
-        assert!(c.ui.completions.is_some());
-        let buf = buffer(&c, 160, 48);
-        let entry = find_row(&buf, 160, 48, "pick the model for this session");
-        let box_top = find_row(&buf, 160, 48, "Enter starts a session");
-        assert!(entry < box_top, "the panel is not above the input box");
-    }
-
-    #[test]
-    fn esc_dismisses_completions_until_the_draft_changes() {
-        let mut c = live_look();
-        press(&mut c, Key::Char('/'));
-        assert!(matches!(press(&mut c, Key::Esc), Step::Stay));
-        assert_eq!(c.ui.input, "/");
-        assert!(c.ui.completions.is_none());
-        assert!(!text(&c, 160, 48).contains("/model"));
-        press(&mut c, Key::Char('m'));
-        assert!(c.ui.completions.is_some());
-        assert_eq!(c.ui.input, "/m");
-        let mut c = live_look();
-        press(&mut c, Key::Char('/'));
-        press(&mut c, Key::Esc);
-        press(&mut c, Key::Backspace);
-        assert_eq!(c.ui.input, "");
-        assert!(c.ui.completions.is_none());
-    }
-
-    #[test]
-    fn slash_mo_enter_opens_the_picker() {
-        let mut c = live_look();
-        type_str(&mut c, "/mo");
-        assert!(matches!(press(&mut c, Key::Enter), Step::Stay));
-        assert!(c.ui.picker.is_some());
-        assert_eq!(c.ui.input, "");
-        let buf = buffer(&c, 160, 48);
-        assert!(run_text(&buf, 0, 0, 20).contains("Models"));
-    }
-
-    #[test]
-    fn slash_model_enter_opens_the_picker() {
-        let mut c = live_look();
-        type_str(&mut c, "/model");
-        press(&mut c, Key::Enter);
-        assert!(c.ui.picker.is_some());
-    }
-
-    #[test]
-    fn picker_enter_records_the_model() {
-        let mut c = live_look();
-        let (x, y) = hit(&c, Target::Model);
-        assert!(matches!(on_click(&mut c, x, y, 160, 48), Step::Stay));
-        press(&mut c, Key::Down);
-        press(&mut c, Key::Enter);
-        assert!(c.ui.picker.is_none());
-        let buf = buffer(&c, 160, 48);
-        find_row(&buf, 160, 48, "[claude-sonnet-5-5]");
-        find_row(&buf, 160, 48, "[medium]");
-    }
-
-    #[test]
-    fn picker_esc_records_nothing() {
-        let mut c = live_look();
-        let (x, y) = hit(&c, Target::Model);
-        on_click(&mut c, x, y, 160, 48);
-        press(&mut c, Key::Down);
-        press(&mut c, Key::Esc);
-        assert!(c.ui.picker.is_none());
-        assert_eq!(c.model, "claude-opus-5-5");
-        assert_eq!(c.level, "high");
-    }
-
-    #[test]
-    fn picker_scroll_follows_focus() {
-        let last = crate::model_picker::fixture()
-            .last()
-            .unwrap()
-            .models
-            .last()
-            .unwrap()
-            .id;
-        let mut c = live_look();
-        let (x, y) = hit(&c, Target::Model);
-        on_click(&mut c, x, y, 160, 48);
-        for _ in 0..11 {
-            press(&mut c, Key::Down);
-        }
-        let buf = buffer(&c, 160, 12);
-        let y = find_row(&buf, 160, 12, last);
-        let mut barred = false;
-        for x in 0..160 {
-            if buf[(x, y)].bg == BLUE {
-                barred = true;
+    fn no_row_overflows_its_screen() {
+        for name in CASES.iter().map(|c| c.name) {
+            let c = crate::cases::lookup(CASES, name).unwrap();
+            let fr = frame(&c, 160, 48, false);
+            assert_eq!(fr.screen.len(), 48, "{name} is not 48 rows");
+            for (y, ps) in fr.screen.iter().enumerate() {
+                for p in ps {
+                    assert!(
+                        width(&p.row.spans) <= p.w as usize,
+                        "{name} row {y} overflows its {w} columns",
+                        w = p.w
+                    );
+                    assert!(p.x + p.w <= 160, "{name} row {y} runs past the screen edge");
+                }
             }
         }
-        assert!(barred, "the focused model is not on the accent bar");
-        for _ in 0..11 {
-            press(&mut c, Key::Up);
-        }
-        let buf = buffer(&c, 160, 12);
-        assert!(run_text(&buf, 0, 0, 20).contains("Models"));
-        find_row(&buf, 160, 12, "claude-opus-5-5");
-    }
-
-    #[test]
-    fn workspace_picker_flow() {
-        let mut c = live_look();
-        let (x, y) = hit(&c, Target::Workspace);
-        on_click(&mut c, x, y, 160, 48);
-        assert_eq!((c.picker, c.wsel), (Some(Picker::Recent), 0));
-        press(&mut c, Key::Down);
-        press(&mut c, Key::Enter);
-        assert!(c.picker.is_none());
-        let buf = buffer(&c, 160, 48);
-        find_row(&buf, 160, 48, "[▣ ~/work/fiber-worktrees]");
-        let mut c = live_look();
-        let (x, y) = hit(&c, Target::Workspace);
-        on_click(&mut c, x, y, 160, 48);
-        for _ in 0..5 {
-            press(&mut c, Key::Down);
-        }
-        assert_eq!(c.wsel, 3);
-    }
-
-    #[test]
-    fn chip_clicks() {
-        let mut c = live_look();
-        let (x, y) = hit(&c, Target::Worktree);
-        on_click(&mut c, x, y, 160, 48);
-        assert!(!c.worktree);
-        let (x, y) = hit(&c, Target::Thinking);
-        on_click(&mut c, x, y, 160, 48);
-        let p = c.ui.picker.as_ref().unwrap();
-        assert_eq!((p.focus, p.chip), (0, Some(2)));
-        // After recording sonnet/medium, a model click opens on sonnet.
-        let mut c = live_look();
-        let (x, y) = hit(&c, Target::Model);
-        on_click(&mut c, x, y, 160, 48);
-        press(&mut c, Key::Down);
-        press(&mut c, Key::Enter);
-        assert_eq!((c.model, c.level), ("claude-sonnet-5-5", "medium"));
-        let (x, y) = hit(&c, Target::Model);
-        on_click(&mut c, x, y, 160, 48);
-        assert_eq!(c.ui.picker.as_ref().unwrap().focus, 1);
-    }
-
-    #[test]
-    fn model_name_click_focuses_that_model() {
-        let mut c = live_look();
-        let (x, y) = hit(&c, Target::Model);
-        on_click(&mut c, x, y, 160, 48);
-        assert_eq!(c.ui.picker.as_ref().unwrap().focus, 0);
-        // The model name in the buffer is a click target: clicking its
-        // row focuses that model instead of doing nothing.
-        let buf = buffer(&c, 160, 48);
-        let y = find_row(&buf, 160, 48, "claude-sonnet-5-5");
-        assert!(matches!(on_click(&mut c, 0, y, 160, 48), Step::Stay));
-        assert!(c.ui.picker.is_some());
-        assert_eq!(c.ui.picker.as_ref().unwrap().focus, 1);
-    }
-
-    #[test]
-    fn open_workspace_picker_swallows_background_clicks() {
-        let mut c = live_look();
-        // Session and chip coordinates from the plain home frame.
-        let rows = session_hits(&c, 0);
-        assert!(!rows.is_empty());
-        let (wx, wy) = hit(&c, Target::Workspace);
-        let fr = frame(&c, 160, 48, false);
-        let (cy, cx0, _, _) = fr
-            .hits
-            .iter()
-            .find(|h| h.3 == Target::Worktree)
-            .copied()
-            .unwrap();
-        on_click(&mut c, wx, wy, 160, 48);
-        assert_eq!(c.picker, Some(Picker::Recent));
-        // Clicking where a session row sits now does nothing: the
-        // picker stays open and home never enters a conversation.
-        for (x, y) in rows {
-            assert!(matches!(on_click(&mut c, x, y, 160, 48), Step::Stay));
-            assert_eq!(c.picker, Some(Picker::Recent));
-        }
-        // A chip click while the picker is open does nothing either.
-        assert!(matches!(on_click(&mut c, cx0, cy, 160, 48), Step::Stay));
-        assert_eq!((c.picker, c.worktree), (Some(Picker::Recent), true));
-    }
-
-    #[test]
-    fn row_click_switches() {
-        let c = live_look();
-        for (x, y) in session_hits(&c, 0) {
-            let mut c = live_look();
-            assert!(matches!(
-                on_click(&mut c, x, y, 160, 48),
-                Step::Conversation
-            ));
-        }
-        assert_eq!(session_hits(&c, 0).len(), 2);
-        let c = live_look();
-        for (x, y) in session_hits(&c, 3) {
-            let mut c = live_look();
-            assert!(matches!(on_click(&mut c, x, y, 160, 48), Step::Stay));
-        }
-    }
-
-    #[test]
-    fn every_workspace_picker_pads_text_off_both_edges() {
-        for p in [Picker::Recent, Picker::Typed] {
-            let rows = picker(p, 0, 160);
-            let t = rows
-                .iter()
-                .map(|r| {
-                    r.spans
-                        .iter()
-                        .map(|s| s.content.as_ref())
-                        .collect::<String>()
-                })
-                .collect::<Vec<_>>()
-                .join("\n");
-            let lines: Vec<&str> = t.split('\n').collect();
-            assert!(lines[1].trim().is_empty(), "no top pad");
-            assert!(lines[lines.len() - 2].trim().is_empty(), "no bottom pad");
-        }
-    }
-
-    #[test]
-    fn the_workspace_picker_is_a_panel_with_a_bar_and_legend() {
-        let c = crate::cases::lookup(CASES, "picker-recent").unwrap();
-        let t = text(&c, 160, 48);
-        assert!(t.contains("Workspaces"));
-        assert!(t.contains("› "));
-        assert!(t.contains("~/work/fiber-worktrees"));
-        assert!(t.contains("↑↓ move · Enter open · Esc closes"));
-        // Centred: the picker's edges sit inside the margins, not full width.
-        let fr = frame(&c, 160, 48, false);
-        let edge = fr
-            .screen
-            .iter()
-            .flatten()
-            .find(|p| p.row.spans.iter().any(|s| s.content.contains("▄▄")))
-            .unwrap();
-        assert!(edge.x > 0, "picker flush left");
-        assert!(edge.x + edge.w < 160, "picker fills the row");
-        let typed = text(
-            &crate::cases::lookup(CASES, "picker-typed").unwrap(),
-            160,
-            48,
-        );
-        assert!(typed.contains("› ~/work/fi"));
-        assert!(typed.contains("── recents ──"));
-        // The dim section header stands off on a blank row.
-        let lines: Vec<&str> = typed.split('\n').collect();
-        let div = lines
-            .iter()
-            .position(|l| l.contains("── recents ──"))
-            .unwrap();
-        assert!(
-            lines[div - 1].trim().is_empty(),
-            "no blank over the recents"
-        );
-    }
-
-    #[test]
-    fn the_selected_workspace_reads_bold_in_the_buffer() {
-        use ratatui::buffer::Buffer;
-        use ratatui::layout::Rect;
-        use ratatui::style::Modifier;
-        let rows = picker(Picker::Recent, 0, 160);
-        let w = crate::width(&rows[0].spans);
-        let mut buf = Buffer::empty(Rect::new(0, 0, w as u16, rows.len() as u16));
-        for (y, r) in rows.iter().enumerate() {
-            crate::paint(&mut buf, 0, y as u16, w as u16, r);
-        }
-        let t = rows
-            .iter()
-            .map(|r| {
-                r.spans
-                    .iter()
-                    .map(|s| s.content.as_ref())
-                    .collect::<String>()
-            })
-            .collect::<Vec<_>>()
-            .join("\n");
-        // The first workspace row is the selected one.
-        let y = t
-            .split('\n')
-            .position(|l| l.contains("~/work/fiber"))
-            .unwrap() as u16;
-        let line = t.split('\n').nth(y as usize).unwrap();
-        let at = line.find("~/work/fiber").unwrap();
-        let col = line[..at].chars().count();
-        assert!(
-            buf[(col as u16, y)].modifier.contains(Modifier::BOLD),
-            "selection not bold"
-        );
-    }
-
-    #[test]
-    fn arrows_move_between_chips_clamped() {
-        let mut c = live_look();
-        press(&mut c, Key::Down);
-        assert_eq!((c.chip, c.last_chip), (Some(0), 0));
-        press(&mut c, Key::Right);
-        assert_eq!((c.chip, c.last_chip), (Some(1), 1));
-        press(&mut c, Key::Right);
-        press(&mut c, Key::Right);
-        assert_eq!((c.chip, c.last_chip), (Some(3), 3));
-        // Clamped at the end: no wrap.
-        press(&mut c, Key::Right);
-        assert_eq!((c.chip, c.last_chip), (Some(3), 3));
-        press(&mut c, Key::Left);
-        assert_eq!((c.chip, c.last_chip), (Some(2), 2));
-        press(&mut c, Key::Left);
-        press(&mut c, Key::Left);
-        assert_eq!((c.chip, c.last_chip), (Some(0), 0));
-        // Clamped at the start.
-        press(&mut c, Key::Left);
-        assert_eq!((c.chip, c.last_chip), (Some(0), 0));
-        // ← → with no chip focused stay, as today.
-        let mut c = live_look();
-        press(&mut c, Key::Left);
-        press(&mut c, Key::Right);
-        assert_eq!((c.chip, c.sel), (None, None));
-    }
-
-    #[test]
-    fn up_returns_to_the_same_chip() {
-        let mut c = live_look();
-        press(&mut c, Key::Down);
-        press(&mut c, Key::Right);
-        press(&mut c, Key::Right);
-        assert_eq!(c.chip, Some(2));
-        press(&mut c, Key::Down);
-        assert_eq!((c.chip, c.sel), (None, Some(0)));
-        press(&mut c, Key::Up);
-        assert_eq!((c.chip, c.sel), (Some(2), None));
-        assert_eq!(c.last_chip, 2);
-        press(&mut c, Key::Up);
-        assert_eq!((c.chip, c.sel), (None, None));
-    }
-
-    #[test]
-    fn enter_on_each_chip() {
-        // Workspace opens the workspace picker; focus stays on the chip.
-        let mut c = live_look();
-        press(&mut c, Key::Down);
-        assert!(matches!(press(&mut c, Key::Enter), Step::Stay));
-        assert_eq!((c.picker, c.chip), (Some(Picker::Recent), Some(0)));
-        press(&mut c, Key::Esc);
-        assert_eq!((c.picker, c.chip), (None, Some(0)));
-        // Worktree toggles.
-        let mut c = live_look();
-        press(&mut c, Key::Down);
-        press(&mut c, Key::Right);
-        assert!(c.worktree);
-        assert!(matches!(press(&mut c, Key::Enter), Step::Stay));
-        assert!(!c.worktree);
-        assert_eq!(c.chip, Some(1));
-        // Model opens the model picker where the click opens it.
-        let mut c = live_look();
-        press(&mut c, Key::Down);
-        press(&mut c, Key::Right);
-        press(&mut c, Key::Right);
-        assert!(matches!(press(&mut c, Key::Enter), Step::Stay));
-        assert_eq!(c.chip, Some(2));
-        let p = c.ui.picker.as_ref().unwrap();
-        assert_eq!((p.focus, p.chip), (0, None));
-        // Thinking opens on the current level.
-        let mut c = live_look();
-        press(&mut c, Key::Down);
-        press(&mut c, Key::Right);
-        press(&mut c, Key::Right);
-        press(&mut c, Key::Right);
-        assert!(matches!(press(&mut c, Key::Enter), Step::Stay));
-        assert_eq!(c.chip, Some(3));
-        let p = c.ui.picker.as_ref().unwrap();
-        assert_eq!((p.focus, p.chip), (0, Some(2)));
-    }
-
-    #[test]
-    fn typing_while_a_chip_is_focused_goes_to_the_entry_bar() {
-        let mut c = live_look();
-        press(&mut c, Key::Down);
-        assert_eq!(c.chip, Some(0));
-        press(&mut c, Key::Char('f'));
-        assert_eq!(c.chip, None);
-        assert_eq!(c.ui.input, "f");
-        // `q` with a chip focused types `q`: it does not quit.
-        let mut c = live_look();
-        press(&mut c, Key::Down);
-        assert!(matches!(press(&mut c, Key::Char('q')), Step::Stay));
-        assert_eq!(c.chip, None);
-        assert_eq!(c.ui.input, "q");
-        // Backspace while a chip is focused clears focus and pops.
-        let mut c = live_look();
-        type_str(&mut c, "ab");
-        press(&mut c, Key::Down);
-        assert_eq!(c.chip, Some(0));
-        press(&mut c, Key::Backspace);
-        assert_eq!(c.chip, None);
-        assert_eq!(c.ui.input, "a");
-    }
-
-    #[test]
-    fn keys_while_a_picker_is_open_ignore_chip_moves() {
-        // The workspace picker keeps its own keys; chip focus stays behind it.
-        let mut c = live_look();
-        press(&mut c, Key::Down);
-        press(&mut c, Key::Enter);
-        assert_eq!((c.picker, c.chip), (Some(Picker::Recent), Some(0)));
-        press(&mut c, Key::Down);
-        assert_eq!((c.wsel, c.chip), (1, Some(0)));
-        press(&mut c, Key::Up);
-        assert_eq!((c.wsel, c.chip), (0, Some(0)));
-        // The model picker keeps its own keys.
-        let mut c = live_look();
-        press(&mut c, Key::Down);
-        press(&mut c, Key::Right);
-        press(&mut c, Key::Right);
-        press(&mut c, Key::Enter);
-        assert!(c.ui.picker.is_some());
-        let focus = c.ui.picker.as_ref().unwrap().focus;
-        press(&mut c, Key::Down);
-        assert_eq!(c.ui.picker.as_ref().unwrap().focus, focus + 1);
-        assert_eq!(c.chip, Some(2));
-        // The completion panel keeps its own keys.
-        let mut c = live_look();
-        press(&mut c, Key::Char('/'));
-        assert!(c.ui.completions.is_some());
-        press(&mut c, Key::Down);
-        assert_eq!((c.chip, c.sel), (None, None));
-    }
-
-    #[test]
-    fn any_click_clears_chip_focus() {
-        let mut c = live_look();
-        press(&mut c, Key::Down);
-        assert_eq!(c.chip, Some(0));
-        // Clicking empty space clears the focus and stays.
-        assert!(matches!(on_click(&mut c, 0, 0, 160, 48), Step::Stay));
-        assert_eq!(c.chip, None);
-    }
-
-    #[test]
-    fn chip_enter_wins_over_the_model_slash_command() {
-        // Type `/model`, dismiss the panel, focus the workspace chip: Enter
-        // opens the workspace picker as a click does. Before the fix, the
-        // draft-based `/model` dispatch consumed Enter first, cleared the
-        // draft and opened the model picker.
-        let mut c = live_look();
-        type_str(&mut c, "/model");
-        assert!(c.ui.completions.is_some());
-        press(&mut c, Key::Esc);
-        assert!(c.ui.completions.is_none());
-        press(&mut c, Key::Down);
-        assert_eq!(c.chip, Some(0));
-        assert!(matches!(press(&mut c, Key::Enter), Step::Stay));
-        assert_eq!(c.picker, Some(Picker::Recent));
-        assert!(c.ui.picker.is_none());
-        assert_eq!(c.ui.input, "/model");
-        assert_eq!(c.chip, Some(0));
-    }
-
-    #[test]
-    fn focused_chip_reuses_the_hover_tint() {
-        let mut focused = base();
-        focused.chip = Some(2);
-        focused.last_chip = 2;
-        let mut hovered = base();
-        hovered.hover = Some(Hover::Model);
-        let f = chips(&focused);
-        let h = chips(&hovered);
-        assert_eq!(f, h);
     }
 }
