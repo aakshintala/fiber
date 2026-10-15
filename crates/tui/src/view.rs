@@ -385,9 +385,14 @@ pub(crate) fn cursor(app: &App, area: Rect) -> Option<Position> {
         return None;
     }
     // The search bar's cursor at its query's end, while it is open
-    // (`docs/tui.md`, "Search").
+    // (`docs/tui.md`, "Search"). While the results view is open the bar
+    // is hidden, so its cursor hides too; the bar state is untouched.
     if let Some(bar) = app.find_bar() {
-        return marks::bar_cursor(&bar, area);
+        return if app.results_open() {
+            None
+        } else {
+            marks::bar_cursor(&bar, area)
+        };
     }
     let (below, col) = input_box::cursor_row(app, area.width, usize::from(area.height));
     let y = status_rows::input_bottom(app, area)
