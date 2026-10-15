@@ -277,7 +277,10 @@ fn an_ask_user_form_draws_the_doc_look_and_answers_into_the_card() {
     for needle in [" ☐ Tests ", " ☐ Docs ", " ✔ Submit "] {
         let x = col_at(&grid, tabs, needle);
         for (dx, _) in needle.chars().enumerate() {
-            let cell = grid.cell(x + dx as u16, tabs);
+            let cell = grid.cell(
+                x.saturating_add(u16::try_from(dx).unwrap_or(u16::MAX)),
+                tabs,
+            );
             assert_eq!(cell.fg, Colour::Default, "{needle} col {dx}");
         }
     }
@@ -426,7 +429,7 @@ fn an_ask_user_form_draws_the_doc_look_and_answers_into_the_card() {
         .take_while(|dx| grid.cell(you + *dx, rule).symbol.as_str() == "─")
         .count();
     assert!(dashes > 10, "the rule fills the card");
-    for dx in 21..21 + dashes as u16 {
+    for dx in 21..21 + u16::try_from(dashes).unwrap_or(u16::MAX) {
         assert_eq!(grid.cell(you + dx, rule).fg, RULE, "col {dx}");
     }
     let scope = row_with(&grid, "Scope");
