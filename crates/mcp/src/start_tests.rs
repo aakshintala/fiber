@@ -357,7 +357,12 @@ fn a_server_that_misses_its_deadline_is_left_out() {
             ))
             .expect("collected");
         });
-        setup.fake.advance_when_parked(Some(deadline), None, DEFAULT_STARTUP_TIMEOUT, &Deadline::after(WITHIN));
+        setup.fake.advance_when_parked(
+            Some(deadline),
+            None,
+            DEFAULT_STARTUP_TIMEOUT,
+            &Deadline::after(WITHIN),
+        );
         let started = Deadline::after(WITHIN)
             .recv(&result)
             .unwrap_or_else(|_| panic!("the failed start ends within {WITHIN:?}"));
@@ -594,7 +599,12 @@ fn a_required_server_that_misses_its_deadline_yields_required_failed() {
         ))
         .expect("collected");
     });
-    setup.fake.advance_when_parked(Some(deadline), None, DEFAULT_STARTUP_TIMEOUT, &Deadline::after(WITHIN));
+    setup.fake.advance_when_parked(
+        Some(deadline),
+        None,
+        DEFAULT_STARTUP_TIMEOUT,
+        &Deadline::after(WITHIN),
+    );
     let started = Deadline::after(WITHIN)
         .recv(&result)
         .unwrap_or_else(|_| panic!("the required start ends within {WITHIN:?}"));

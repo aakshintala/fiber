@@ -598,7 +598,12 @@ fn a_wake_before_the_deadline_keeps_the_pause_until_every_ms_passes() {
     );
     assert!(fake.await_parked_since(&parked, Some(first), WITHIN));
     assert!(received.try_recv().is_err(), "b is not due before 200 ms");
-    fake.advance_when_parked(Some(first), None, Duration::from_millis(1), &Deadline::after(WITHIN));
+    fake.advance_when_parked(
+        Some(first),
+        None,
+        Duration::from_millis(1),
+        &Deadline::after(WITHIN),
+    );
     assert_eq!(
         Deadline::after(WITHIN).recv(&received).unwrap(),
         text_delta("b")

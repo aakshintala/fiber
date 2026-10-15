@@ -1144,10 +1144,7 @@ fn the_whole_fetch_times_out_after_five_minutes_whatever_each_hop_has_left() {
         // Each hop is held short of its own 60-second deadline.
         for n in 1..=hops {
             if n > 1 {
-                assert!(
-                    server.await_requests(n, SIGNAL),
-                    "hop {n} is in flight"
-                );
+                assert!(server.await_requests(n, SIGNAL), "hop {n} is in flight");
             }
             rig.clock.advance_when_parked(
                 Some(origin + Duration::from_secs(now + 60)),

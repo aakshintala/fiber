@@ -257,7 +257,12 @@ fn a_hang_tool_times_out_only_after_the_clock_advances() {
         result.try_recv().is_err(),
         "the call is still waiting a second before its deadline"
     );
-    setup.fake.advance_when_parked(Some(deadline), None, Duration::from_secs(1), &Deadline::after(WITHIN));
+    setup.fake.advance_when_parked(
+        Some(deadline),
+        None,
+        Duration::from_secs(1),
+        &Deadline::after(WITHIN),
+    );
     assert_eq!(
         Deadline::after(WITHIN)
             .recv(&result)
@@ -301,7 +306,9 @@ fn cancel_ends_the_wait_and_sends_cancelled() {
     match Deadline::after(WITHIN).recv(&result) {
         Ok(answer) => assert_eq!(answer, Err(CallError::Cancelled)),
         Err(_) => {
-            setup.fake.advance_when_parked(Some(deadline), None, timeout, &Deadline::after(WITHIN));
+            setup
+                .fake
+                .advance_when_parked(Some(deadline), None, timeout, &Deadline::after(WITHIN));
             match Deadline::after(WITHIN).recv(&result) {
                 Ok(_) | Err(_) => {}
             }
@@ -426,7 +433,9 @@ fn a_server_that_misses_its_startup_deadline_is_left_out() {
         .expect("a silent server misses its deadline");
         done.send(error).expect("collected");
     });
-    setup.fake.advance_when_parked(Some(deadline), None, timeout, &Deadline::after(WITHIN));
+    setup
+        .fake
+        .advance_when_parked(Some(deadline), None, timeout, &Deadline::after(WITHIN));
     assert_eq!(
         Deadline::after(WITHIN)
             .recv(&result)
@@ -696,7 +705,12 @@ fn a_stopped_server_takes_its_grandchild_with_it() {
         .now()
         .checked_add(support::group::GRACE)
         .expect("grace");
-    setup.fake.advance_when_parked(Some(grace), None, support::group::GRACE, &Deadline::after(WITHIN));
+    setup.fake.advance_when_parked(
+        Some(grace),
+        None,
+        support::group::GRACE,
+        &Deadline::after(WITHIN),
+    );
     Deadline::after(WITHIN)
         .recv(&stopped)
         .unwrap_or_else(|_| panic!("the stop returned within {WITHIN:?}"));
@@ -839,7 +853,9 @@ fn endless_pages_end_at_the_startup_deadline() {
         });
         setup.await_requests(&format!(r#""method":"{method}""#), 2);
         let pid = setup.pid();
-        setup.fake.advance_when_parked(Some(deadline), None, timeout, &Deadline::after(WITHIN));
+        setup
+            .fake
+            .advance_when_parked(Some(deadline), None, timeout, &Deadline::after(WITHIN));
         let outcome = Deadline::after(WITHIN)
             .recv(&result)
             .unwrap_or_else(|_| panic!("the paging start ends within {WITHIN:?}"));
@@ -1217,7 +1233,12 @@ fn a_stopped_start_waits_out_the_grace_before_its_kill() {
         fakes::kill_pid(pid, "0").expect("probe"),
         "the server was killed before the grace passed"
     );
-    setup.fake.advance_when_parked(Some(grace), None, support::group::GRACE, &Deadline::after(WITHIN));
+    setup.fake.advance_when_parked(
+        Some(grace),
+        None,
+        support::group::GRACE,
+        &Deadline::after(WITHIN),
+    );
     assert_shutdown_failed(
         Deadline::after(WITHIN)
             .recv(&result)

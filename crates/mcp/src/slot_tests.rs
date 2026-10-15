@@ -298,7 +298,12 @@ fn a_lazy_start_that_misses_its_deadline_fails_with_deadline() {
         );
         done.send(output).expect("collected");
     });
-    setup.fake.advance_when_parked(Some(deadline), None, DEFAULT_STARTUP_TIMEOUT, &Deadline::after(WITHIN));
+    setup.fake.advance_when_parked(
+        Some(deadline),
+        None,
+        DEFAULT_STARTUP_TIMEOUT,
+        &Deadline::after(WITHIN),
+    );
     let output = Deadline::after(WITHIN)
         .recv(&result)
         .expect("the call ends");

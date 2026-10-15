@@ -957,7 +957,9 @@ fn initialized_ack_wait_ends_at_the_startup_deadline() {
         .unwrap();
     });
     assert!(fake.await_requests(2, WITHIN));
-    setup.fake.advance_when_parked(Some(deadline), None, startup, &Deadline::after(WITHIN));
+    setup
+        .fake
+        .advance_when_parked(Some(deadline), None, startup, &Deadline::after(WITHIN));
     assert!(matches!(
         Deadline::after(WITHIN).recv_or_fail(&received, "initialized ack startup ends"),
         Err(StartError::Deadline)
@@ -1106,7 +1108,12 @@ fn startup_deadlines_end_both_token_lock_waits_and_stalled_token_posts() {
         } else {
             assert!(auth.await_requests(1, WITHIN));
         }
-        setup.fake.advance_when_parked(Some(deadline), None, Duration::from_secs(5), &Deadline::after(WITHIN));
+        setup.fake.advance_when_parked(
+            Some(deadline),
+            None,
+            Duration::from_secs(5),
+            &Deadline::after(WITHIN),
+        );
         assert!(matches!(
             Deadline::after(WITHIN).recv_or_fail(&received, "startup deadline interrupts OAuth"),
             Err(StartError::Deadline)
@@ -1336,7 +1343,9 @@ fn a_timed_out_call_shuts_its_socket_and_leaves_the_server_live() {
         server.await_partial(1, WITHIN),
         "the stalled answer starts within {WITHIN:?}"
     );
-    setup.fake.advance_when_parked(Some(deadline), None, timeout, &Deadline::after(WITHIN));
+    setup
+        .fake
+        .advance_when_parked(Some(deadline), None, timeout, &Deadline::after(WITHIN));
     assert_eq!(
         Deadline::after(WITHIN)
             .recv(&result)
@@ -1461,7 +1470,9 @@ fn a_stalled_handshake_misses_its_startup_deadline_and_shuts_its_socket() {
         server.await_partial(1, WITHIN),
         "the stalled answer starts within {WITHIN:?}"
     );
-    setup.fake.advance_when_parked(Some(deadline), None, startup, &Deadline::after(WITHIN));
+    setup
+        .fake
+        .advance_when_parked(Some(deadline), None, startup, &Deadline::after(WITHIN));
     assert_eq!(
         Deadline::after(WITHIN)
             .recv(&result)
@@ -1868,7 +1879,12 @@ fn a_404_read_after_its_call_ended_marks_nothing() {
         let caller = Deadline::after(WITHIN)
             .recv(&received_id)
             .expect("the caller reports its thread before it parks");
-        fake.advance_when_parked(Some(deadline), Some(caller), timeout, &Deadline::after(WITHIN));
+        fake.advance_when_parked(
+            Some(deadline),
+            Some(caller),
+            timeout,
+            &Deadline::after(WITHIN),
+        );
         assert!(
             server.await_closed(1, WITHIN),
             "the abandon shut the socket within {WITHIN:?}"
@@ -2099,7 +2115,9 @@ fn a_call_queued_behind_a_stalled_notice_is_never_sent_once_timed_out() {
         "the queued call is never sent while held: {:?}",
         server.requests()
     );
-    setup.fake.advance_when_parked(Some(deadline), None, timeout, &Deadline::after(WITHIN));
+    setup
+        .fake
+        .advance_when_parked(Some(deadline), None, timeout, &Deadline::after(WITHIN));
     assert_eq!(
         Deadline::after(WITHIN)
             .recv(&second_result)

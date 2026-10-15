@@ -1576,7 +1576,12 @@ fn without_a_callback_the_wait_fails_at_900s_and_stores_nothing() {
         // The authorization URL is shown before the wait.
         fakes::Deadline::after(WITHIN).recv_or_fail(&received_url, "the authorization URL");
         let deadline = clock.origin() + CALLBACK_WAIT;
-        clock.advance_when_parked(Some(deadline), None, CALLBACK_WAIT, &fakes::Deadline::after(WITHIN));
+        clock.advance_when_parked(
+            Some(deadline),
+            None,
+            CALLBACK_WAIT,
+            &fakes::Deadline::after(WITHIN),
+        );
         let result =
             fakes::Deadline::after(WITHIN).recv_or_fail(&received_done, "the timed-out login");
         assert!(matches!(result, Err(LoginError::Timeout)), "{result:?}");
@@ -1695,7 +1700,12 @@ fn a_slow_drip_does_not_stop_the_900s_deadline() {
             }
             drip
         });
-        clock.advance_when_parked(Some(deadline), None, CALLBACK_WAIT, &fakes::Deadline::after(WITHIN));
+        clock.advance_when_parked(
+            Some(deadline),
+            None,
+            CALLBACK_WAIT,
+            &fakes::Deadline::after(WITHIN),
+        );
         let result =
             fakes::Deadline::after(WITHIN).recv_or_fail(&received_done, "the timed-out login");
         assert!(matches!(result, Err(LoginError::Timeout)), "{result:?}");
