@@ -108,7 +108,6 @@ impl Loop {
         // The end-to-end scope begins before the first mutation and ends
         // after recording and the restart, or any error.
         let _timer = self.diag.timed(contract::diag::Op::TurnHandoff);
-        self.handoff.step_ran = true;
         match source {
             Source::Requested {
                 trigger,
@@ -127,6 +126,7 @@ impl Loop {
         instructions: Option<String>,
         tokens_before: u64,
     ) -> Result<Outcome, Error> {
+        self.handoff.step_ran = true;
         #[cfg(test)]
         if crate::timing_tests::take_fail_handoff_started() {
             return Err(crate::timing_tests::log_io_error());

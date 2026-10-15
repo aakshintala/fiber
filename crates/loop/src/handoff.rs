@@ -127,7 +127,7 @@ pub(crate) struct State {
     person_turn: bool,
     /// Whether a handoff of any trigger ran in this step: the overflow rule
     /// runs at most once per step, and a tool's handoff does not follow one.
-    step_ran: bool,
+    pub(crate) step_ran: bool,
 }
 
 impl State {

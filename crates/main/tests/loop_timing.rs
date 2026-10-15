@@ -211,6 +211,9 @@ fn a_repository_debug_level_stays_silent_with_its_notice() {
         "the model request arrived: a passing test really asked"
     );
     assert!(run.kinds().contains(&"fiber_exited"), "{:?}", run.kinds());
+    let mut repo_expected: Vec<&str> = HELLO_KINDS.into();
+    repo_expected.insert(3, "notice");
+    assert_eq!(run.kinds(), repo_expected);
     assert!(
         run.all("notice")
             .into_iter()
@@ -254,12 +257,30 @@ fn a_debug_retry_times_one_request_and_two_attempts() {
         .filter_map(|line| line["data"]["attempt"].as_u64())
         .collect();
     assert_eq!(attempts, vec![1, 2]);
-    assert!(
-        run.kinds().contains(&"retry_scheduled"),
-        "{:?}",
-        run.kinds()
+    assert_eq!(
+        run.kinds(),
+        [
+            "session_started",
+            "fiber_started",
+            "extensions_loaded",
+            "preamble_built",
+            "opening_message",
+            "turn_started",
+            "step_started",
+            "assistant_message_started",
+            "usage_recorded",
+            "assistant_message_completed",
+            "retry_scheduled",
+            "assistant_message_started",
+            "assistant_message_delta",
+            "assistant_message_delta",
+            "text_completed",
+            "usage_recorded",
+            "assistant_message_completed",
+            "turn_completed",
+            "fiber_exited",
+        ]
     );
-    assert!(run.kinds().contains(&"fiber_exited"), "{:?}", run.kinds());
 }
 
 #[test]
@@ -289,4 +310,33 @@ fn a_debug_tool_handoff_times_one_handoff_with_no_note_request() {
         run.kinds()
     );
     assert!(run.kinds().contains(&"fiber_exited"), "{:?}", run.kinds());
+    assert_eq!(
+        run.kinds(),
+        [
+            "session_started",
+            "fiber_started",
+            "extensions_loaded",
+            "preamble_built",
+            "opening_message",
+            "turn_started",
+            "step_started",
+            "assistant_message_started",
+            "tool_call_requested",
+            "usage_recorded",
+            "assistant_message_completed",
+            "tool_call_started",
+            "tool_call_completed",
+            "handoff_completed",
+            "opening_message",
+            "step_started",
+            "assistant_message_started",
+            "assistant_message_delta",
+            "assistant_message_delta",
+            "text_completed",
+            "usage_recorded",
+            "assistant_message_completed",
+            "turn_completed",
+            "fiber_exited",
+        ]
+    );
 }

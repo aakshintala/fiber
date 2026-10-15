@@ -2160,6 +2160,10 @@ fn an_automatic_handoff_nests_its_note_scopes() {
     let handoffs = ops(&world, "turn.handoff");
     assert_eq!(handoffs.len(), 1, "{:?}", op_records(&world));
     assert_wire(&op_records(&world));
+    assert!(
+        world.looped.handoff.step_ran,
+        "a requested handoff marks the step as run"
+    );
     assert_eq!(ops(&world, "turn.request").len(), 3);
     assert_eq!(ops(&world, "turn.model_call").len(), 3);
     let kinds = kinds(&world);
@@ -2198,6 +2202,10 @@ fn a_person_handoff_requests_its_note() {
     assert_eq!(ops(&world, "turn.handoff").len(), 1);
     assert_eq!(ops(&world, "turn.request").len(), 2);
     assert_eq!(ops(&world, "turn.model_call").len(), 2);
+    assert!(
+        world.looped.handoff.step_ran,
+        "a person handoff ran this step"
+    );
     assert!(kinds(&world).contains(&"handoff_started".to_owned()));
 }
 
@@ -2243,6 +2251,10 @@ fn a_tool_handoff_makes_no_note_request() {
         kinds(&world)
     );
     assert_eq!(ops(&world, "turn.handoff").len(), 1);
+    assert!(
+        !world.looped.handoff.step_ran,
+        "a tool handoff leaves the step flag unset"
+    );
     assert!(
         !kinds(&world).contains(&"handoff_started".to_owned()),
         "a tool source writes no started: {:?}",
