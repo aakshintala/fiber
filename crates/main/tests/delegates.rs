@@ -87,14 +87,15 @@ fn providers(setup: &support::Setup, parent: &ProviderServer, child: &ProviderSe
     providers_url(setup, &parent.url(), &child.url(), "openai-responses");
 }
 
-/// A standing allow for `delegate_spawn`: `always_reviewed` skips it, so
-/// the reviewer is still asked.
+/// A standing allow for `delegate_spawn` and `delegate_message`:
+/// `always_reviewed` skips it, so the reviewer is still asked.
 fn standing_allow(setup: &support::Setup) {
     fs::write(
         setup.home().join("rules"),
         format!(
-            "{}\n",
-            json!({"decision": "allow", "tool": "delegate_spawn", "prefix": ""})
+            "{}\n{}\n",
+            json!({"decision": "allow", "tool": "delegate_spawn", "prefix": ""}),
+            json!({"decision": "allow", "tool": "delegate_message", "prefix": ""})
         ),
     )
     .unwrap();
@@ -533,7 +534,7 @@ fn a_depth_one_delegate_starts_depth_two_with_the_same_tools_but_no_grandchild()
     let started = one(&lines, "delegate_started");
     let child_id = started["delegate_session_id"].as_str().unwrap();
     let child_lines = read_lines(&ask_sessions(&setup).join(child_id).join("events.jsonl"));
-    assert_depth_refusal(&child_lines, false);
+    assert_depth_refusal(&child_lines, false, "delegate_spawn");
     let requests = child.requests();
     let body: Value = serde_json::from_slice(&requests[0].body).unwrap();
     let mut names: Vec<_> = body["tools"]
@@ -550,7 +551,7 @@ fn a_depth_one_delegate_starts_depth_two_with_the_same_tools_but_no_grandchild()
     );
 }
 
-fn assert_depth_refusal(lines: &[Value], resumed: bool) {
+fn assert_depth_refusal(lines: &[Value], resumed: bool, tool: &str) {
     let mut expected = vec![
         "session_started",
         "fiber_started",
@@ -580,7 +581,7 @@ fn assert_depth_refusal(lines: &[Value], resumed: bool) {
         expected.remove(0);
     }
     assert_eq!(kinds(lines), expected);
-    let completed = completed_for(lines, "delegate_spawn");
+    let completed = completed_for(lines, tool);
     assert_eq!(completed["payload"]["status"], "failed");
     assert_eq!(completed["payload"]["error"]["code"], "depth_exceeded");
     assert!(lines.iter().all(|line| line["kind"] != "delegate_started"));
@@ -643,7 +644,7 @@ fn a_resumed_depth_two_session_still_refuses_delegate_spawn() {
         let (status, _lines, stderr) = running.wait();
         assert_eq!(status.code(), Some(0), "{stderr}");
         let lines = read_lines(&log);
-        assert_depth_refusal(&lines[before..], resume);
+        assert_depth_refusal(&lines[before..], resume, "delegate_spawn");
     }
     assert!(child.requests().is_empty());
     let lines = read_lines(&ask_sessions(&setup).join(&id).join("events.jsonl"));
@@ -2904,4 +2905,707 @@ fn a_delegate_failing_before_session_reports_its_error_and_no_log_path() {
         .cloned()
         .collect();
     assert_eq!(durable_stdout, logged);
+}
+
+// `delegate_message` at binary level (see #540): steering a running
+// delegate at its next step boundary, resuming a finished one as a second
+// run of the same job, refusing a job this session never started, and
+// refusing at depth 2. Every test arms the watchdog first, runs `fiber`
+// through `Running`, and waits only through `Running::wait_line`,
+// `Running::wait`, `ProviderServer::await_requests` and `support`
+// receives, all under the test's one deadline. No test sleeps or reads a
+// clock.
+
+/// The parent's durable kinds for the steer run, in order, pinned from a
+/// real run: the spawn turn through its receipt, the message call with no
+/// job records, the hello step ending the call's turn, the ending notice
+/// while the delegate still runs, and the wake carrying its finish.
+const STEER_PARENT_DURABLE: &[&str] = &[
+    "session_started",
+    "fiber_started",
+    "extensions_loaded",
+    "preamble_built",
+    "opening_message",
+    "turn_started",
+    "step_started",
+    "assistant_message_started",
+    "tool_call_requested",
+    "usage_recorded",
+    "assistant_message_completed",
+    "usage_recorded",
+    "permission_resolved",
+    "tool_call_started",
+    "job_started",
+    "delegate_started",
+    "tool_call_completed",
+    "step_started",
+    "assistant_message_started",
+    "tool_call_requested",
+    "usage_recorded",
+    "assistant_message_completed",
+    "usage_recorded",
+    "permission_resolved",
+    "tool_call_started",
+    "tool_call_completed",
+    "step_started",
+    "assistant_message_started",
+    "text_completed",
+    "usage_recorded",
+    "assistant_message_completed",
+    "turn_completed",
+    "turn_started",
+    "step_started",
+    "jobs_pending_notified",
+    "assistant_message_started",
+    "text_completed",
+    "usage_recorded",
+    "assistant_message_completed",
+    "turn_completed",
+    "turn_started",
+    "step_started",
+    "delegate_finished",
+    "job_completed",
+    "assistant_message_started",
+    "text_completed",
+    "usage_recorded",
+    "assistant_message_completed",
+    "turn_completed",
+    "fiber_exited",
+];
+
+#[test]
+fn delegate_message_steers_a_running_delegate_at_its_next_step_boundary() {
+    let setup = support::Setup::new();
+    let _guard = arm(&setup);
+    let parent = ProviderServer::start_responding(answering(
+        support::stream(&[spawn_call("fiber:pb/m")]),
+        text_reply("allow"),
+        "call_message",
+        |job| {
+            support::stream(&[function_call(
+                "call_message",
+                "delegate_message",
+                &json!({"id": job, "message": MARK}),
+            )])
+        },
+        support::hello(),
+    ))
+    .unwrap();
+    parent.hold();
+    let child = ProviderServer::start([text_reply("first"), text_reply("after-steer")]).unwrap();
+    child.hold();
+    providers(&setup, &parent, &child);
+    standing_allow(&setup);
+    slow_idle(&setup);
+
+    let mut running = Running::spawn(&setup, &["ask", "scan the tree"]);
+    assert!(
+        parent.await_requests(1, setup.deadline.left()),
+        "the spawn call was requested"
+    );
+    parent.release_one();
+    assert!(
+        parent.await_requests(2, setup.deadline.left()),
+        "the verdict was requested"
+    );
+    parent.release_one();
+    assert!(
+        child.await_requests(1, setup.deadline.left()),
+        "the delegate's first step is in flight"
+    );
+    parent.release();
+    // The delta proves the steer reached the delegate's inbox: the probe
+    // is answered once the delegate's reader queued the message, and the
+    // steer joins at the step boundary after the released reply. A held
+    // stream is no admission point, so the run is released only after it.
+    let mut job = String::new();
+    running.wait_line("the queued delta", |line| {
+        if line["kind"] == "delegate_started" {
+            job = line["payload"]["job_id"].as_str().unwrap().to_owned();
+        }
+        !job.is_empty()
+            && line["kind"] == "tool_call_delta"
+            && line["payload"]["text"].as_str()
+                == Some(&format!(
+                    "Queued for delegate {job}; it joins at the delegate's next step boundary."
+                ))
+    });
+    child.release_one();
+    assert!(
+        child.await_requests(2, setup.deadline.left()),
+        "the delegate's second model call after the steer"
+    );
+    let mut ended = 0;
+    running.wait_line("the call's and ending notice's turn ends", |line| {
+        ended += usize::from(line["kind"] == "turn_completed");
+        ended == 2
+    });
+    child.release();
+    let (status, lines, stderr) = running.wait();
+    assert_eq!(status.code(), Some(0), "stderr: {stderr}");
+
+    assert!(!job.is_empty(), "the run started a delegate");
+    let bodies: Vec<String> = child
+        .requests()
+        .iter()
+        .map(|request| String::from_utf8_lossy(&request.body).into_owned())
+        .collect();
+    assert_eq!(bodies.len(), 2, "{bodies:?}");
+    assert!(
+        !bodies[0].contains(MARK),
+        "the first call predates the steer"
+    );
+    assert!(bodies[1].contains(MARK), "the steer joined the next call");
+    let delegate_id = lines
+        .iter()
+        .find(|line| line["kind"] == "delegate_started")
+        .unwrap()["payload"]["delegate_session_id"]
+        .as_str()
+        .unwrap()
+        .to_owned();
+    let child_lines = read_lines(&ask_sessions(&setup).join(&delegate_id).join("events.jsonl"));
+    assert_eq!(durable_kinds(&child_lines), DELEGATE_DURABLE);
+    let applied = one(&child_lines, "steering_applied");
+    assert_eq!(applied["source"], "driver");
+    assert!(
+        serde_json::to_string(&applied["content"])
+            .unwrap()
+            .contains(MARK),
+        "{applied}"
+    );
+    let completed = completed_for(&lines, "delegate_message");
+    assert_eq!(completed["payload"]["status"], "completed");
+    assert_eq!(
+        completed["payload"]["content"][0]["text"],
+        format!("Steered delegate {job}: the message joins its turn at its next step boundary.")
+    );
+    let action = completed["action_id"].as_str().unwrap();
+    let started = lines
+        .iter()
+        .find(|line| line["kind"] == "tool_call_started" && line["action_id"] == action)
+        .unwrap();
+    assert_eq!(started["payload"]["effects"], json!(["executes"]));
+    assert_eq!(started["payload"]["reversible"], false);
+    assert!(
+        started["payload"]
+            .get("always_reviewed")
+            .is_none_or(|flag| flag == &json!(true)),
+        "{started}"
+    );
+    let resolved = lines
+        .iter()
+        .find(|line| line["kind"] == "permission_resolved" && line["action_id"] == action)
+        .unwrap();
+    assert_eq!(resolved["payload"]["decided_by"], "reviewer");
+    for kind in ["job_started", "job_completed"] {
+        let found: Vec<&Value> = lines.iter().filter(|line| line["kind"] == kind).collect();
+        assert_eq!(found.len(), 1, "{kind} wrote {:?}", kinds(&lines));
+        assert_eq!(found[0]["payload"]["job_id"], job.as_str());
+    }
+    let finished = one(&lines, "delegate_finished");
+    assert_eq!(finished["text"], "after-steer");
+    assert_eq!(durable_kinds(&lines), STEER_PARENT_DURABLE);
+}
+
+/// The resume message carried to the delegate's second run: unique to it,
+/// so its absence from the first run proves the blank call started
+/// nothing.
+const RESUME_MARK: &str = "resume-marker-9d2b4e77";
+
+/// The resumed run's child durable kinds, in order: one `session_started`,
+/// then the resumed run's lines, with no second `session_started` and no
+/// `opening_message`.
+const RESUMED_CHILD_DURABLE: &[&str] = &[
+    "fiber_started",
+    "extensions_loaded",
+    "preamble_built",
+    "turn_started",
+    "step_started",
+    "assistant_message_started",
+    "text_completed",
+    "usage_recorded",
+    "assistant_message_completed",
+    "turn_completed",
+    "fiber_exited",
+];
+
+/// The parent's durable kinds for the resume run, in order, pinned from a
+/// real run: the spawn turn and the ending notice, the wake turn carrying
+/// the blank call's refusal and the resume, the run's own wake, and the
+/// exit. One `jobs_pending_notified`: the ending notice fires once per
+/// process, so the resume's wake turn carries none.
+const RESUME_PARENT_DURABLE: &[&str] = &[
+    "session_started",
+    "fiber_started",
+    "extensions_loaded",
+    "preamble_built",
+    "opening_message",
+    "turn_started",
+    "step_started",
+    "assistant_message_started",
+    "tool_call_requested",
+    "usage_recorded",
+    "assistant_message_completed",
+    "usage_recorded",
+    "permission_resolved",
+    "tool_call_started",
+    "job_started",
+    "delegate_started",
+    "tool_call_completed",
+    "step_started",
+    "assistant_message_started",
+    "text_completed",
+    "usage_recorded",
+    "assistant_message_completed",
+    "turn_completed",
+    "turn_started",
+    "step_started",
+    "jobs_pending_notified",
+    "assistant_message_started",
+    "text_completed",
+    "usage_recorded",
+    "assistant_message_completed",
+    "turn_completed",
+    "turn_started",
+    "step_started",
+    "delegate_finished",
+    "job_completed",
+    "assistant_message_started",
+    "tool_call_requested",
+    "usage_recorded",
+    "assistant_message_completed",
+    "usage_recorded",
+    "permission_resolved",
+    "tool_call_started",
+    "tool_call_completed",
+    "step_started",
+    "assistant_message_started",
+    "tool_call_requested",
+    "usage_recorded",
+    "assistant_message_completed",
+    "usage_recorded",
+    "permission_resolved",
+    "tool_call_started",
+    "job_started",
+    "delegate_started",
+    "tool_call_completed",
+    "step_started",
+    "assistant_message_started",
+    "text_completed",
+    "usage_recorded",
+    "assistant_message_completed",
+    "turn_completed",
+    "turn_started",
+    "step_started",
+    "delegate_finished",
+    "job_completed",
+    "assistant_message_started",
+    "text_completed",
+    "usage_recorded",
+    "assistant_message_completed",
+    "turn_completed",
+    "fiber_exited",
+];
+
+#[test]
+fn delegate_message_resumes_a_finished_delegate_as_a_second_run_of_the_same_job() {
+    let setup = support::Setup::new();
+    let _guard = arm(&setup);
+    let parent = ProviderServer::start_responding(|request: &Request| {
+        let text = String::from_utf8_lossy(&request.body);
+        if !text.contains(r#""name":"delegate_spawn""#) {
+            return text_reply("allow");
+        }
+        if text.contains("run-two-done") {
+            return support::hello();
+        }
+        if text.contains("Resumed delegate") {
+            return support::hello();
+        }
+        if text.contains("must not be empty") {
+            let job = job_id(&text);
+            return support::stream(&[function_call(
+                "call_resume",
+                "delegate_message",
+                &json!({"id": job, "message": RESUME_MARK}),
+            )]);
+        }
+        if text.contains("run-one-done") {
+            let job = job_id(&text);
+            return support::stream(&[function_call(
+                "call_blank",
+                "delegate_message",
+                &json!({"id": job, "message": " \n\t"}),
+            )]);
+        }
+        if text.contains("Started delegate") {
+            return support::hello();
+        }
+        support::stream(&[spawn_call("fiber:pb/m")])
+    })
+    .unwrap();
+    let child =
+        ProviderServer::start([text_reply("run-one-done"), text_reply("run-two-done")]).unwrap();
+    child.hold();
+    providers(&setup, &parent, &child);
+    standing_allow(&setup);
+    slow_idle(&setup);
+
+    let mut running = Running::spawn(&setup, &["ask", "scan the tree"]);
+    let mut ended = 0;
+    running.wait_line("the spawn and ending notice's turn ends", |line| {
+        ended += usize::from(line["kind"] == "turn_completed");
+        ended == 2
+    });
+    child.release_one();
+    assert!(
+        child.await_requests(2, setup.deadline.left()),
+        "the resumed run's model call"
+    );
+    let mut re_ended = 0;
+    running.wait_line("the wake turn's end", |line| {
+        re_ended += usize::from(line["kind"] == "turn_completed");
+        re_ended == 1
+    });
+    child.release();
+    let (status, lines, stderr) = running.wait();
+    assert_eq!(status.code(), Some(0), "stderr: {stderr}");
+
+    let bodies: Vec<String> = child
+        .requests()
+        .iter()
+        .map(|request| String::from_utf8_lossy(&request.body).into_owned())
+        .collect();
+    assert_eq!(bodies.len(), 2, "{bodies:?}");
+    assert!(
+        !bodies[0].contains(RESUME_MARK),
+        "the blank call started nothing"
+    );
+    assert!(
+        bodies[1].contains(RESUME_MARK),
+        "the resume carried the message"
+    );
+    // The two message calls, in request order: the blank refusal, then
+    // the resume.
+    let requested: Vec<&Value> = lines
+        .iter()
+        .filter(|line| {
+            line["kind"] == "tool_call_requested" && line["payload"]["name"] == "delegate_message"
+        })
+        .collect();
+    assert_eq!(requested.len(), 2, "{:?}", kinds(&lines));
+    fn action_of(line: &Value) -> &str {
+        line["action_id"].as_str().unwrap()
+    }
+    let blank_action = action_of(requested[0]);
+    let resume_action = action_of(requested[1]);
+    let completed = |action: &str| {
+        lines
+            .iter()
+            .find(|line| line["kind"] == "tool_call_completed" && line["action_id"] == action)
+            .unwrap()
+    };
+    let blank_done = completed(blank_action);
+    assert_eq!(blank_done["payload"]["status"], "failed");
+    assert_eq!(blank_done["payload"]["error"]["code"], "invalid_arguments");
+    assert_eq!(
+        blank_done["payload"]["error"]["message"],
+        "`message` must not be empty."
+    );
+    // One id for life: two runs of the same job, each writing its start
+    // pair before its finish pair.
+    let of_kind = |kind: &str| {
+        lines
+            .iter()
+            .filter(|line| line["kind"] == kind)
+            .collect::<Vec<&Value>>()
+    };
+    let job = of_kind("job_started")[0]["payload"]["job_id"]
+        .as_str()
+        .unwrap()
+        .to_owned();
+    for kind in [
+        "job_started",
+        "delegate_started",
+        "delegate_finished",
+        "job_completed",
+    ] {
+        let found = of_kind(kind);
+        assert_eq!(found.len(), 2, "{kind} wrote {:?}", kinds(&lines));
+        for line in &found {
+            assert_eq!(line["payload"]["job_id"], job.as_str());
+        }
+    }
+    let run_kinds: Vec<&str> = lines
+        .iter()
+        .filter(|line| {
+            matches!(
+                line["kind"].as_str(),
+                Some("job_started" | "delegate_started" | "delegate_finished" | "job_completed")
+            )
+        })
+        .map(|line| line["kind"].as_str().unwrap())
+        .collect();
+    assert_eq!(
+        run_kinds,
+        [
+            "job_started",
+            "delegate_started",
+            "delegate_finished",
+            "job_completed",
+            "job_started",
+            "delegate_started",
+            "delegate_finished",
+            "job_completed",
+        ],
+        "{run_kinds:?}"
+    );
+    // The resume is a new run of the same job: the resuming call's action
+    // and turn on the second start pair, and the first run's description,
+    // log and session carried over.
+    let starts = of_kind("job_started");
+    let run2 = starts[1];
+    assert_eq!(run2["payload"]["tool"], "delegate_message");
+    assert_eq!(
+        run2["payload"]["description"],
+        starts[0]["payload"]["description"]
+    );
+    assert_eq!(
+        run2["payload"]["output_path"],
+        starts[0]["payload"]["output_path"]
+    );
+    let resume_started = lines
+        .iter()
+        .find(|line| line["kind"] == "tool_call_started" && line["action_id"] == resume_action)
+        .unwrap();
+    assert_eq!(run2["action_id"], resume_started["action_id"]);
+    assert_eq!(run2["turn_id"], resume_started["turn_id"]);
+    let delegates = of_kind("delegate_started");
+    assert_eq!(delegates[1]["action_id"], resume_started["action_id"]);
+    assert_eq!(delegates[1]["turn_id"], resume_started["turn_id"]);
+    assert_eq!(
+        delegates[1]["payload"]["delegate_session_id"],
+        delegates[0]["payload"]["delegate_session_id"]
+    );
+    assert_eq!(
+        delegates[1]["payload"]["model"],
+        delegates[0]["payload"]["model"]
+    );
+    // The resume's start is queued and written through the call's run
+    // before its answer: the start pair falls inside the call.
+    let position = |wanted: &Value| lines.iter().position(|line| line == wanted).unwrap();
+    let resume_done = completed(resume_action);
+    assert!(position(resume_started) < position(run2));
+    assert!(position(run2) < position(delegates[1]));
+    assert!(position(delegates[1]) < position(resume_done));
+    let run1_done = position(of_kind("job_completed")[0]);
+    assert!(run1_done < position(requested[0]));
+    assert_eq!(resume_done["payload"]["status"], "completed");
+    assert_eq!(
+        resume_done["payload"]["content"][0]["text"],
+        format!(
+            "Resumed delegate {job}. Its log is {}.",
+            starts[0]["payload"]["output_path"].as_str().unwrap()
+        )
+    );
+    let resume_resolved = lines
+        .iter()
+        .find(|line| line["kind"] == "permission_resolved" && line["action_id"] == resume_action)
+        .unwrap();
+    assert_eq!(resume_resolved["payload"]["decided_by"], "reviewer");
+    // The delegate's log: one run, then the resumed run's lines, with the
+    // message in the second turn's input and the second finish naming the
+    // second reply.
+    let delegate_id = delegates[0]["payload"]["delegate_session_id"]
+        .as_str()
+        .unwrap()
+        .to_owned();
+    let child_lines = read_lines(&ask_sessions(&setup).join(&delegate_id).join("events.jsonl"));
+    let mut expected: Vec<String> = ROLE_CHILD_DURABLE
+        .iter()
+        .map(|kind| kind.to_string())
+        .collect();
+    expected.extend(RESUMED_CHILD_DURABLE.iter().map(|kind| kind.to_string()));
+    assert_eq!(durable_kinds(&child_lines), expected);
+    let fibered: Vec<&Value> = child_lines
+        .iter()
+        .filter(|line| line["kind"] == "fiber_started")
+        .collect();
+    assert_eq!(fibered.len(), 2);
+    assert_eq!(fibered[1]["payload"]["resumed"], true);
+    let turns: Vec<&Value> = child_lines
+        .iter()
+        .filter(|line| line["kind"] == "turn_started")
+        .collect();
+    assert_eq!(turns.len(), 2);
+    assert!(
+        serde_json::to_string(&turns[1]["payload"]["input"])
+            .unwrap()
+            .contains(RESUME_MARK),
+        "{}",
+        turns[1]["payload"]["input"]
+    );
+    let finished = of_kind("delegate_finished");
+    assert_eq!(finished[0]["payload"]["text"], "run-one-done");
+    assert_eq!(finished[1]["payload"]["text"], "run-two-done");
+    assert_eq!(durable_kinds(&lines), RESUME_PARENT_DURABLE);
+}
+
+/// The parent's durable kinds for the unknown-job run, in order, pinned
+/// from a real run: one step with two calls, the reviewer's verdict for
+/// the message call, each call's start and completion in request order,
+/// then the hello step and the exit.
+const UNKNOWN_PARENT_DURABLE: &[&str] = &[
+    "session_started",
+    "fiber_started",
+    "extensions_loaded",
+    "preamble_built",
+    "opening_message",
+    "turn_started",
+    "step_started",
+    "assistant_message_started",
+    "tool_call_requested",
+    "tool_call_requested",
+    "usage_recorded",
+    "assistant_message_completed",
+    "usage_recorded",
+    "permission_resolved",
+    "tool_call_started",
+    "tool_call_started",
+    "tool_call_completed",
+    "tool_call_completed",
+    "step_started",
+    "assistant_message_started",
+    "text_completed",
+    "usage_recorded",
+    "assistant_message_completed",
+    "turn_completed",
+    "fiber_exited",
+];
+
+#[test]
+fn delegate_message_to_a_job_this_session_never_started_fails_as_jobs_does() {
+    let setup = support::Setup::new();
+    let _guard = arm(&setup);
+    let missing = doors::mint("j_");
+    let missing_call = missing.clone();
+    let parent = ProviderServer::start_responding(move |request: &Request| {
+        let text = String::from_utf8_lossy(&request.body);
+        if !text.contains(r#""name":"jobs""#) {
+            return text_reply("allow");
+        }
+        if text.contains("No job has id") {
+            return support::hello();
+        }
+        support::stream(&[
+            function_call(
+                "call_wait",
+                "jobs",
+                &json!({"action": "wait", "job_id": missing_call.clone(), "timeout_ms": 1000}),
+            ),
+            function_call(
+                "call_message",
+                "delegate_message",
+                &json!({"id": missing_call.clone(), "message": "hi"}),
+            ),
+        ])
+    })
+    .unwrap();
+    let child = ProviderServer::start([]).unwrap();
+    providers(&setup, &parent, &child);
+    standing_allow(&setup);
+
+    let running = Running::spawn(&setup, &["ask", "scan the tree"]);
+    let (status, lines, stderr) = running.wait();
+    assert_eq!(status.code(), Some(0), "stderr: {stderr}");
+
+    let missing_text = format!("No job has id `{missing}`.\n");
+    let waited = completed_for(&lines, "jobs");
+    let messaged = completed_for(&lines, "delegate_message");
+    for done in [&waited, &messaged] {
+        assert_eq!(done["payload"]["status"], "failed");
+        assert_eq!(done["payload"]["error"]["code"], "invalid_arguments");
+        assert_eq!(done["payload"]["content"][0]["text"], missing_text);
+    }
+    assert_eq!(
+        waited["payload"]["error"]["message"],
+        messaged["payload"]["error"]["message"]
+    );
+    assert!(
+        lines
+            .iter()
+            .all(|line| line["kind"] != "job_started" && line["kind"] != "delegate_started"),
+        "a refused message started nothing: {:?}",
+        kinds(&lines)
+    );
+    assert!(child.requests().is_empty());
+    assert_eq!(durable_kinds(&lines), UNKNOWN_PARENT_DURABLE);
+}
+
+#[test]
+fn a_depth_two_session_refuses_delegate_message() {
+    let setup = support::Setup::new();
+    let _guard = arm(&setup);
+    let parent = ProviderServer::start_responding(|request: &Request| {
+        let body: Value = serde_json::from_slice(&request.body).unwrap();
+        if body["tools"]
+            .as_array()
+            .is_none_or(|tools| tools.is_empty())
+        {
+            return text_reply("allow");
+        }
+        let input = body["input"].as_array().unwrap();
+        if input
+            .iter()
+            .any(|item| item["type"] == "function_call_output")
+        {
+            support::hello()
+        } else {
+            support::stream(&[function_call(
+                "call_message",
+                "delegate_message",
+                &json!({"id": "j_0123456789abcdef", "message": "hi"}),
+            )])
+        }
+    })
+    .unwrap();
+    let child = ProviderServer::start([support::hello()]).unwrap();
+    providers(&setup, &parent, &child);
+    standing_allow(&setup);
+    let id = doors::mint("s_");
+    let parent_id = doors::mint("s_");
+    let job = doors::mint("j_");
+    let (mut running, lifeline) = Running::spawn_stdin(
+        &setup,
+        &[
+            "session",
+            "--id",
+            &id,
+            "--workspace",
+            setup.root.path().to_str().unwrap(),
+            "--prompt=delegate",
+            "--parent",
+            &parent_id,
+            "--delegate-id",
+            &job,
+            "--depth",
+            "2",
+        ],
+        Stdio::piped(),
+    );
+    running.wait_line("the depth-two session exits", |line| {
+        line["kind"] == "fiber_exited"
+    });
+    drop(lifeline);
+    let (status, _lines, stderr) = running.wait();
+    assert_eq!(status.code(), Some(0), "{stderr}");
+    let lines = read_lines(&ask_sessions(&setup).join(&id).join("events.jsonl"));
+    assert_depth_refusal(&lines, false, "delegate_message");
+    let completed = completed_for(&lines, "delegate_message");
+    assert_eq!(
+        completed["payload"]["error"]["message"],
+        "This delegate is at depth 2, the deepest a delegate can be, \
+         so it cannot use `delegate_message`; do the work in this session."
+    );
+    assert!(child.requests().is_empty());
 }
