@@ -33,8 +33,10 @@ struct State {
     /// active, in arrival order. A watched park that leaves before the helper
     /// diagnoses it still fails the wait. Cleared when the last active wait
     /// exits, so it never outlives the wait it belongs to.
-    observed: Vec<(ThreadId, Option<Instant>, u64)>,
-    /// Active [`FakeClock::advance_when_parked`] waits recording into `observed`.
+    observed: Vec<(ThreadId, Option<Instant>)>,
+    /// Whether an [`FakeClock::advance_when_parked`] wait is recording into
+    /// `observed` (0 or 1): a second wait while one is active fails rather
+    /// than share the log.
     watching: usize,
 }
 
@@ -143,7 +145,10 @@ impl FakeClock {
     /// and an advance the clock cannot represent, fail the same way. A
     /// mismatch never moves time. With no thread named, several parked
     /// threads fail the wait: another thread at the right instant is not
-    /// proof of the watched operation, so the test names the thread.
+    /// proof of the watched operation, so the test names the thread. A second
+    /// wait while one is already active fails the same way: overlapping waits
+    /// would share one observation log, so the second is rejected and the
+    /// first keeps its observations.
     ///
     /// The lock that sees the park is the lock that moves time, and every
     /// subscriber wakes after that lock is released, as in
@@ -166,6 +171,18 @@ impl FakeClock {
             }
         }
         let mut state = lock(&self.state);
+        if state.watching > 0 {
+            let report = report(
+                &state,
+                expected,
+                thread,
+                advance,
+                "another advance_when_parked wait is already active: overlapping waits share one observation log",
+                None,
+            );
+            drop(state);
+            panic!("{report}");
+        }
         state.watching += 1;
         state.observed.clear();
         loop {
@@ -184,7 +201,7 @@ impl FakeClock {
                 drop(state);
                 panic!("{report}");
             }
-            if thread.is_none() && parked_threads(&state) > 1 {
+            if thread.is_none() && several_threads_parked(&state) {
                 let report = report(
                     &state,
                     expected,
@@ -495,7 +512,7 @@ impl Clock for FakeClock {
                 // An active advance_when_parked wait sees every arrival, even
                 // one that leaves before the helper diagnoses it.
                 if state.watching > 0 {
-                    state.observed.push((thread, until, id));
+                    state.observed.push((thread, until));
                 }
                 self.parked_cv.notify_all();
                 Some(id)
@@ -635,7 +652,7 @@ fn watched_mismatch(
     state
         .observed
         .iter()
-        .map(|observation| (observation.0, observation.1))
+        .copied()
         .chain(
             state
                 .parked
@@ -666,15 +683,20 @@ fn matched(state: &State, expected: Option<Instant>, thread: Option<ThreadId>) -
     }
 }
 
-/// How many threads hold a park now.
-fn parked_threads(state: &State) -> usize {
-    let mut ids: Vec<ThreadId> = Vec::new();
+/// Whether several distinct threads hold a park now: short-circuits on the
+/// second distinct [`ThreadId`], so it allocates nothing. Every failure
+/// through it still names each parked thread with its instant in [`report`],
+/// which lists the whole park, not the count.
+fn several_threads_parked(state: &State) -> bool {
+    let mut first: Option<ThreadId> = None;
     for parked in &state.parked {
-        if !ids.contains(&parked.thread) {
-            ids.push(parked.thread);
+        match first {
+            None => first = Some(parked.thread),
+            Some(held) if held != parked.thread => return true,
+            Some(_) => {}
         }
     }
-    ids.len()
+    false
 }
 
 /// Closes an [`FakeClock::advance_when_parked`] wait: the observation log
