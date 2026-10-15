@@ -461,15 +461,27 @@ fn switch_journey(setup: &Setup, id: &str) -> Vec<Value> {
     // The complete ordered kinds, so a duplicated, missing or reordered
     // event fails (docs/testing.md, "Event streams"): the subscribe
     // acknowledgement, the switch admitted while idle, the turn on the
-    // new model, then the close.
+    // new model, then the close. `clients` is written when the one
+    // connection attaches, on its own trigger, so it is set aside from
+    // the ordered list and its count is asserted instead.
     assert_eq!(
-        kinds(&stream),
+        stream
+            .iter()
+            .filter(|line| line["kind"] == "clients")
+            .count(),
+        1,
+        "{stream:?}"
+    );
+    assert_eq!(
+        kinds(&stream)
+            .into_iter()
+            .filter(|kind| *kind != "clients")
+            .collect::<Vec<_>>(),
         [
             "command_accepted",
             "session_started",
             "fiber_started",
             "extensions_loaded",
-            "clients",
             "command_accepted",
             "model_changed",
             "preamble_built",
