@@ -1109,6 +1109,133 @@ fn a_reply_counts_against_the_message_it_answers_window_share() {
 }
 
 #[test]
+fn the_reviewer_sees_the_reply_a_person_message_answers() {
+    let tool = shell(None, None);
+    let mut session = Session::with_tools(
+        vec![
+            Scripted::text("Delete the 3 stale branches?"),
+            calls_reply("", &[("shell", paris())]),
+            Scripted::text("Done."),
+        ],
+        None,
+        vec![tool as Arc<dyn Tool>],
+    );
+    let reviewer = session.reviewer(vec![Scripted::text("allow")]);
+    prompt_turn(&mut session, "go");
+    prompt_turn(&mut session, "yes");
+    let requests = reviewer.requests();
+    assert_eq!(requests.len(), 1);
+    let seen = texts(&requests[0]);
+    // The reply the person's "yes" answers reaches the reviewer marked
+    // as the agent's, directly before the message.
+    assert_eq!(seen.len(), 6);
+    assert_eq!(seen[0], "The person: go");
+    assert_eq!(seen[1], "The agent: Delete the 3 stale branches?");
+    assert_eq!(seen[2], "The person: yes");
+    assert!(seen[3].starts_with("Tool call: "));
+    assert!(seen[4].starts_with("Call under review: the last tool call above, shell."));
+    assert!(seen[5].starts_with("## first-pass\n"));
+    let at = seen
+        .iter()
+        .position(|text| text == &"The person: yes")
+        .unwrap();
+    assert_eq!(seen[at - 1], "The agent: Delete the 3 stale branches?");
+}
+
+#[test]
+fn a_tool_call_between_the_text_and_the_message_hides_the_reply() {
+    let tool = shell(None, None);
+    let mut session = Session::with_tools(
+        vec![
+            calls_reply("The plan is ready.", &[("shell", paris())]),
+            Scripted::text(""),
+            calls_reply("", &[("shell", paris())]),
+            Scripted::text("Done."),
+        ],
+        None,
+        vec![tool as Arc<dyn Tool>],
+    );
+    let reviewer = session.reviewer(vec![Scripted::text("allow"), Scripted::text("allow")]);
+    prompt_turn(&mut session, "go");
+    prompt_turn(&mut session, "yes");
+    let requests = reviewer.requests();
+    assert_eq!(requests.len(), 2);
+    // The call between the agent's text and "yes" breaks the link: the
+    // second review holds the message with no agent reply before it.
+    let seen = texts(&requests[1]);
+    assert!(seen.contains(&"The person: yes"));
+    assert!(
+        !seen.iter().any(|text| text.starts_with("The agent:")),
+        "no reply survives the tool call: {seen:?}"
+    );
+}
+
+#[test]
+fn a_handoff_keeps_the_pair_and_drops_the_calls() {
+    let tool = shell(None, None);
+    let mut session = Session::with_tools(
+        vec![
+            Scripted::text("Delete the 3 stale branches?"),
+            Scripted::text("On it."),
+            Scripted::text("The note."),
+            calls_reply("", &[("shell", paris())]),
+            Scripted::text("Done."),
+        ],
+        None,
+        vec![tool as Arc<dyn Tool>],
+    );
+    let reviewer =
+        session.reviewer(vec![Scripted::text("1, 2"), Scripted::text("allow")]);
+    let mut lines = prompt_turn(&mut session, "go");
+    lines.extend(prompt_turn(&mut session, "yes"));
+    lines.extend(handoff_turn(&mut session, "c_h"));
+    lines.extend(prompt_turn(&mut session, "now run it"));
+    let kept = kept_lines(&lines);
+    assert_eq!(kept.len(), 1);
+    assert_eq!(
+        kept[0].payload["kept"],
+        json!([
+            {"seq": turn_started_seq(&lines, "go"), "item": 0},
+            {"seq": turn_started_seq(&lines, "yes"), "item": 0}
+        ])
+    );
+    let requests = reviewer.requests();
+    assert_eq!(requests.len(), 2);
+    // The selection holds the kept pair with the reply directly before
+    // its message, and no pre-handoff call.
+    let selecting = texts(&requests[0]);
+    let at = selecting
+        .iter()
+        .position(|text| text == &"The person: yes")
+        .unwrap();
+    assert_eq!(selecting[at - 1], "The agent: Delete the 3 stale branches?");
+    assert!(selecting.contains(&"The person: go"));
+    assert!(
+        !selecting
+            .iter()
+            .any(|text| text.starts_with("Tool call: ")),
+        "no pre-handoff call reaches the selection: {selecting:?}"
+    );
+    // The post-handoff review holds the kept pair too, then the new call
+    // as the only tool call.
+    let after = texts(&requests[1]);
+    let at = after
+        .iter()
+        .position(|text| text == &"The person: yes")
+        .unwrap();
+    assert_eq!(after[at - 1], "The agent: Delete the 3 stale branches?");
+    assert!(after.contains(&"The person: go"));
+    assert!(after.contains(&"The person: now run it"));
+    assert_eq!(
+        after
+            .iter()
+            .filter(|text| text.starts_with("Tool call: "))
+            .count(),
+        1
+    );
+}
+
+#[test]
 fn the_selection_is_not_asked_past_the_spending_budget() {
     let tool = shell(None, None);
     let mut handoffer = TestTool::reads("handoffer", "Noted.");
