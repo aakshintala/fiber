@@ -65,6 +65,12 @@ pub(crate) struct Reads {
     /// test. Absent outside the unit tests.
     #[cfg(test)]
     settle_complete_pause: Mutex<Option<SpawnPause>>,
+    /// The credential reaper's pause before its leader's wait, armed by a
+    /// test. Shared through an `Arc` so the reaper thread owns it: the
+    /// thread outlives the call that armed it. Absent outside the unit
+    /// tests.
+    #[cfg(test)]
+    reaper_pause: Arc<Mutex<Option<SpawnPause>>>,
 }
 
 /// One pause of a `credential` wait at its checks, for the interleaving
@@ -329,9 +335,13 @@ impl Reads {
         {
             let exit_wake = Arc::clone(&self.wake);
             let holder = Arc::clone(&reaper);
+            #[cfg(test)]
+            let reaper_pause = Arc::clone(&self.reaper_pause);
             match std::thread::Builder::new()
                 .name("fiber-credential-wait".to_owned())
                 .spawn(move || {
+                    #[cfg(test)]
+                    Reads::pause_before_reaper_wait(&reaper_pause);
                     let taken = holder.lock().unwrap_or_else(PoisonError::into_inner).take();
                     if let Some(mut child) = taken {
                         let status = child.wait();
@@ -923,6 +933,34 @@ impl Reads {
             .lock()
             .unwrap_or_else(PoisonError::into_inner)
             .take();
+        if let Some(point) = point {
+            match point.entered.send(()) {
+                Ok(()) | Err(_) => {}
+            }
+            match point.release.recv() {
+                Ok(()) | Err(_) => {}
+            }
+        }
+    }
+
+    /// Arms one pause before the credential reaper's leader wait: the
+    /// reaper sends on `entered` once it reached the wait and blocks until
+    /// `release` arrives, so the leader stays unreaped until the test
+    /// releases it. The pause is one-shot; a closed sender releases it.
+    pub(crate) fn pause_at_reaper(&self, entered: mpsc::Sender<()>, release: mpsc::Receiver<()>) {
+        *self
+            .reaper_pause
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner) = Some(SpawnPause { entered, release });
+    }
+
+    /// Reports the reaper reached its leader's wait and blocks until the
+    /// test releases it. The slot is taken into a local first and the
+    /// mutex guard dropped before any send or receive blocks, so no lock
+    /// is held across the pause. Runs free unless a test armed a pause
+    /// meanwhile.
+    fn pause_before_reaper_wait(slot: &Arc<Mutex<Option<SpawnPause>>>) {
+        let point = slot.lock().unwrap_or_else(PoisonError::into_inner).take();
         if let Some(point) = point {
             match point.entered.send(()) {
                 Ok(()) | Err(_) => {}

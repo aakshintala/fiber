@@ -10,7 +10,7 @@
 
 use std::ffi::c_int;
 use std::process::{Command, Stdio};
-use std::sync::{Arc, mpsc};
+use std::sync::{Arc, Mutex, mpsc};
 use std::time::Duration;
 
 use contract::ErrorCode;
@@ -483,21 +483,112 @@ fn a_dropped_guard_leaves_a_later_signal_unhandled_by_the_callback() {
     );
 }
 
+/// Owns the release senders of the terminal watcher tests' holds, so one
+/// drop releases every hold before the guard drops and joins the watcher.
+struct Releases {
+    reaper: Mutex<Option<mpsc::Sender<()>>>,
+    settle: Mutex<Option<mpsc::Sender<()>>>,
+}
+
+impl Releases {
+    /// Releases the credential reaper's hold, if it is still armed.
+    fn release_reaper(&self) {
+        if let Some(release) = self
+            .reaper
+            .lock()
+            .unwrap_or_else(|error| error.into_inner())
+            .take()
+        {
+            release.send(()).unwrap_or(());
+        }
+    }
+
+    /// Releases the settle park's hold, if it is still armed.
+    fn release_settle(&self) {
+        if let Some(release) = self
+            .settle
+            .lock()
+            .unwrap_or_else(|error| error.into_inner())
+            .take()
+        {
+            release.send(()).unwrap_or(());
+        }
+    }
+
+    /// Releases every hold still armed.
+    fn release_all(&self) {
+        self.release_reaper();
+        self.release_settle();
+    }
+}
+
+/// Releases every hold when it drops: declared on the line right after the
+/// guard's creation and before any assertion that can fail, it drops before
+/// the guard on every path, including a failed assertion, so a hold never
+/// outlives the join that waits on it.
+struct ReleaseOnDrop(Arc<Releases>);
+
+impl Drop for ReleaseOnDrop {
+    fn drop(&mut self) {
+        self.0.release_all();
+    }
+}
+
+/// How long the reaper stays held in the slow-drop test: longer than the
+/// 3 s bound the guards used to take, shorter than `DEADLINE`.
+const HELD_FOR: Duration = Duration::from_secs(4);
+
 #[test]
 fn the_terminal_watcher_cancels_and_settles_without_exiting() {
+    terminal_watcher_run(None);
+}
+
+/// A reaper held past the old 3 s bound still lets the terminal watcher's
+/// drop complete: the hold ends on a bounded receive on the wall clock, and
+/// the drop must finish within its bound after the release.
+#[test]
+fn a_reaper_held_past_the_old_bound_still_lets_the_terminal_watcher_drop_complete() {
+    terminal_watcher_run(Some(HELD_FOR));
+}
+
+/// The terminal watcher's cancel-settle-drop run, shared by the plain test
+/// and the slow-drop test above. With `Some(held_for)` the credential
+/// reaper stays held for that long before the test releases it.
+fn terminal_watcher_run(held_for: Option<Duration>) {
     let root = fakes::TempDir::new("fiber-terminal-watch");
     let ready = Ready::new(root.path());
-    let clock: Arc<dyn Clock> = FakeClock::new();
+    let fake = FakeClock::new();
+    let clock: Arc<dyn Clock> = fake.clone();
     let reads = Arc::new(Reads::default());
     let script = format!("echo $$ > '{}'; exec sleep 600", ready.path().display());
     // Before the spawn: the group is known only after it starts, so a
     // command-line watchdog covers a spawn no later watchdog can reach.
     let pre = fakes::Watchdog::matching(&ready.path().display().to_string());
+    let releases = Arc::new(Releases {
+        reaper: Mutex::new(None),
+        settle: Mutex::new(None),
+    });
+    let reaper_entered = held_for.map(|_| {
+        let (entered, is_entered) = mpsc::channel::<()>();
+        let (release, freed) = mpsc::channel::<()>();
+        reads.pause_at_reaper(entered, freed);
+        *releases
+            .reaper
+            .lock()
+            .unwrap_or_else(|error| error.into_inner()) = Some(release);
+        is_entered
+    });
     let finished = credential_on_thread(&reads, sh(&script), Duration::from_secs(30), &clock);
     let pgid = ready.wait(DEADLINE)[0];
     let watchdog = fakes::Watchdog::group(pgid);
     let guard = CancelOnSignal::watch(Arc::clone(&reads), Arc::clone(&clock), &[SIGTERM])
         .expect("the test's registration");
+    let _release = ReleaseOnDrop(Arc::clone(&releases));
+    if let Some(is_entered) = reaper_entered {
+        Deadline::after(DEADLINE)
+            .recv(&is_entered)
+            .expect("the reaper reached its pause");
+    }
     signal_hook::low_level::raise(SIGTERM).expect("the test's raise");
     // The watcher cancels and settles, then keeps watching instead of
     // exiting: survival past the cancel proves no exit, and the
@@ -515,11 +606,56 @@ fn the_terminal_watcher_cancels_and_settles_without_exiting() {
     // A second signal still exits nothing: the process is here to drop
     // the guard.
     signal_hook::low_level::raise(SIGTERM).expect("the test's second raise");
+    if held_for.is_some() {
+        // The settle parked on its poll while the reaper is held: the
+        // leader is killed and unreaped, so the group probes alive and the
+        // poll is the pass's wait.
+        assert!(
+            fake.await_parked(fake.origin() + GROUP_POLL, DEADLINE),
+            "the settle parked on the held reaper"
+        );
+    }
+    // A third signal still exits nothing: the process is here to drop
+    // the guard.
+    signal_hook::low_level::raise(SIGTERM).expect("the test's third raise");
+    let bound = DEADLINE;
     // The guard's drop joins the watcher: bounded on its own thread, so a
     // hung settle fails here instead of hanging the binary.
-    fakes::within("the guard's drop", DEADLINE, move || {
-        drop(guard);
-    });
+    match held_for {
+        Some(held_for) => {
+            let drop_by = Deadline::after(bound);
+            let (dropped, is_dropped) = mpsc::channel::<()>();
+            std::thread::spawn(move || {
+                drop(guard);
+                dropped.send(()).unwrap_or(());
+            });
+            // The hold ends on a bounded receive on the wall clock, not a
+            // sleep: nothing sends on it, so it must time out.
+            let (left_sent, is_left) = mpsc::channel::<Duration>();
+            let releases = Arc::clone(&releases);
+            std::thread::spawn(move || {
+                let (_never, never) = mpsc::channel::<()>();
+                assert!(
+                    Deadline::after(held_for).recv(&never).is_err(),
+                    "the hold ended before {held_for:?}"
+                );
+                left_sent.send(drop_by.left()).unwrap_or(());
+                releases.release_reaper();
+            });
+            if drop_by.recv(&is_dropped).is_err() {
+                panic!("waited {bound:?} for the guard's drop");
+            }
+            match Deadline::after(DEADLINE).recv(&is_left) {
+                Ok(left) => assert!(!left.is_zero(), "waited {bound:?} for the guard's drop"),
+                Err(_) => panic!("waited {bound:?} for the guard's drop"),
+            }
+        }
+        None => {
+            fakes::within("the guard's drop", bound, move || {
+                drop(guard);
+            });
+        }
+    }
     let error = Deadline::after(DEADLINE)
         .recv(&finished)
         .expect("the cancelled read")
