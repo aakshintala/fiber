@@ -281,57 +281,59 @@ fn draw_bar(bar: &FindBar, area: Rect, buf: &mut Buffer, targets: &mut Vec<Targe
         top: slab,
         bottom: slab,
     };
+    // Every content row starts blank; the text overwrites its own row,
+    // and the tint stays either way.
+    for row in rect.rows() {
+        buf.set_stringn(
+            rect.x,
+            row.y,
+            " ".repeat(usize::from(rect.width)),
+            usize::from(rect.width),
+            Style::new(),
+        );
+    }
     if crate::surface::boxed() {
-        for row in 0..rect.height {
-            let y = rect.y.saturating_add(row);
-            buf.set_stringn(
-                rect.x,
-                y,
-                " ".repeat(usize::from(rect.width)),
-                usize::from(rect.width),
-                Style::new(),
-            );
-        }
         crate::surface::draw_box(buf, area, rect, edges);
     } else {
         crate::surface::draw_slab(buf, rect, Role::Surface, None, edges);
-        if slab {
-            for y in [rect.y, rect.y.saturating_add(2)] {
-                buf.set_stringn(
-                    rect.x,
-                    y,
-                    " ".repeat(usize::from(rect.width)),
-                    usize::from(rect.width),
-                    Style::new(),
-                );
-            }
-        }
     }
     let (x, y, room) = content_row(rect);
     let (query, count) = bar_pieces(bar, room);
     let count_width = crate::format::width(&count);
+    let pad = room
+        .saturating_sub(
+            crate::format::width(PREFIX)
+                .saturating_add(crate::format::width(&query))
+                .saturating_add(1),
+        )
+        .saturating_sub(count_width.saturating_add(1));
+    // The row's runs, recording the count's first cell: its cells are
+    // the click target. The trailing blank is already blank.
+    let dim = Style::new().add_modifier(Modifier::DIM);
+    let has_count = !count.is_empty();
+    let pieces = [
+        (
+            PREFIX.to_owned(),
+            Style::new().fg(Role::Attention.color()),
+            false,
+        ),
+        (query, Style::new().add_modifier(Modifier::BOLD), false),
+        ("█".to_owned(), dim, false),
+        (" ".repeat(pad), Style::new(), false),
+        (count, dim, true),
+    ];
     let mut x = x;
     let mut left = room;
-    for (text, style) in [
-        (PREFIX.to_owned(), Style::new().fg(Role::Attention.color())),
-        (query, Style::new().add_modifier(Modifier::BOLD)),
-        ("█".to_owned(), Style::new().add_modifier(Modifier::DIM)),
-    ] {
+    let mut count_x = x;
+    for (text, style, is_count) in pieces {
+        if is_count {
+            count_x = x;
+        }
         let (end, _) = buf.set_stringn(x, y, &text, left, style);
         left = left.saturating_sub(usize::from(end.saturating_sub(x)));
         x = end;
     }
-    // The gap, then the count right-aligned with one trailing blank.
-    let pad = left.saturating_sub(count_width.saturating_add(1));
-    let (end, _) = buf.set_stringn(x, y, " ".repeat(pad), left, Style::new());
-    left = left.saturating_sub(usize::from(end.saturating_sub(x)));
-    x = end;
-    let count_x = x;
-    let (end, _) = buf.set_stringn(x, y, &count, left, Style::new().add_modifier(Modifier::DIM));
-    left = left.saturating_sub(usize::from(end.saturating_sub(x)));
-    x = end;
-    buf.set_stringn(x, y, " ", left, Style::new());
-    if !count.is_empty() {
+    if has_count {
         targets.push(Target {
             id: TargetId::FindCount,
             rect: Rect::new(

@@ -685,6 +685,26 @@ fn an_overlong_query_cuts_at_the_left_and_keeps_the_block() {
 }
 
 #[test]
+fn a_multibyte_control_cuts_without_splitting_it() {
+    // U+0085 is a two-byte control: the grapheme walk filters it, so a
+    // cut past it on either side keeps whole graphemes and never
+    // splits its bytes.
+    let area = Rect::new(0, 0, 41, 10);
+    let bar = find_bar(&format!("a\u{85}{}", "z".repeat(33)), "1 of 1");
+    let (buf, _) = bar_into(area, &bar);
+    let y = bar_row(&buf);
+    let text: String = (0..41).map(|x| buf[(x, y)].symbol().to_owned()).collect();
+    assert!(text.starts_with(" ⌕ azzz"), "{text:?}");
+    assert!(
+        text.contains("zzz█"),
+        "the kept end and the block: {text:?}"
+    );
+    let cursor = super::bar_cursor(&bar, area).expect("the cursor");
+    assert_eq!((cursor.x, cursor.y), (37, y));
+    assert_eq!(buf[(cursor.x, cursor.y)].symbol(), "█");
+}
+
+#[test]
 fn a_wide_query_cuts_on_a_grapheme_boundary() {
     // Sixteen `鎖` (2 cells each) then `tail` is 36 cells: the 34-cell
     // query room drops the first `鎖` whole and keeps `tail`.
