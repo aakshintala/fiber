@@ -765,11 +765,12 @@ fn matched(state: &State, expected: Option<Instant>, thread: Option<ThreadId>) -
         Some(selected) => held.any(|parked| parked.thread == selected && parked.until == expected),
         None => match held.next() {
             Some(first) => {
-                let same_thread = held.clone().all(|parked| parked.thread == first.thread);
-                let at_expected = std::iter::once(first)
+                if held.clone().any(|parked| parked.thread != first.thread) {
+                    return false;
+                }
+                std::iter::once(first)
                     .chain(held)
-                    .any(|parked| parked.until == expected);
-                same_thread && at_expected
+                    .any(|parked| parked.until == expected)
             }
             None => false,
         },
