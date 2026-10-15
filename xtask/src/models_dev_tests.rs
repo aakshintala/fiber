@@ -24,17 +24,24 @@ fn tool_model(extra: Value) -> Value {
     model
 }
 
+/// A catalog holding each source's models.
+fn catalogs(sources: &[(&str, &[(&str, Value)])]) -> Value {
+    let mut catalog = Map::new();
+    for (source, models) in sources {
+        let mut map = Map::new();
+        for (id, model) in *models {
+            map.insert((*id).to_owned(), model.clone());
+        }
+        let mut provider = Map::new();
+        provider.insert("models".to_owned(), Value::Object(map));
+        catalog.insert((*source).to_owned(), Value::Object(provider));
+    }
+    Value::Object(catalog)
+}
+
 /// A catalog holding `models` under `source`.
 fn catalog(source: &str, models: &[(&str, Value)]) -> Value {
-    let mut map = Map::new();
-    for (id, model) in models {
-        map.insert((*id).to_owned(), model.clone());
-    }
-    let mut provider = Map::new();
-    provider.insert("models".to_owned(), Value::Object(map));
-    let mut catalog = Map::new();
-    catalog.insert(source.to_owned(), Value::Object(provider));
-    Value::Object(catalog)
+    catalogs(&[(source, models)])
 }
 
 /// A package on a fixed protocol, writing `providers/t/providers/t.json`.
@@ -311,6 +318,114 @@ fn a_protocol_override_applies_on_its_package_only() {
         generated_model(&output, "minimax-m2.7").unwrap()["protocol"],
         "anthropic-messages"
     );
+}
+
+/// A gateway package writing `providers/opencode/providers/opencode-go.json`:
+/// its path is what marks it as a gateway, so its models inherit a vendor
+/// package's thinking row by exact model id.
+fn gateway_package(source: &'static str) -> Package {
+    Package {
+        path: "providers/opencode/providers/opencode-go.json",
+        ..fixed_package(source, "openai-responses")
+    }
+}
+
+/// A direct-vendor package: its path is what marks its thinking rows as
+/// inheritable by gateways. A `codex` path never is.
+fn vendor_package(source: &'static str, path: &'static str) -> Package {
+    Package {
+        path,
+        ..fixed_package(source, "openai-responses")
+    }
+}
+
+/// The generated output for `file` in `outputs`, such as the gateway's.
+fn output_for<'a>(outputs: &'a [Output], file: &str) -> &'a Output {
+    outputs
+        .iter()
+        .find(|output| output.path.ends_with(file))
+        .unwrap()
+}
+
+#[test]
+fn a_gateway_model_with_no_row_at_all_is_an_error_naming_both() {
+    let gateway = gateway_package("g");
+    let input = catalog("g", &[("m", tool_model(json!({})))]);
+    assert_eq!(
+        generate_err(&gateway, &input),
+        "opencode-go: `m` has neither an inherited nor its own thinking row"
+    );
+    // A non-gateway package with the same content still declares none.
+    let plain = fixed_package("g", "openai-responses");
+    let (output, _) = generate_one(&plain, &[("m", tool_model(json!({})))]);
+    assert!(
+        generated_model(&output, "m")
+            .unwrap()
+            .get("thinking_levels")
+            .is_none()
+    );
+}
+
+#[test]
+fn a_gateway_model_inherits_the_vendor_row_for_its_exact_id() {
+    let mut vendor = vendor_package("v", "providers/openai/providers/openai.json");
+    vendor.thinking = &[("m", &["low", "high"], Some("low"))];
+    let gateway = gateway_package("g");
+    let model = tool_model(json!({}));
+    let input = catalogs(&[("v", &[("m", model.clone())]), ("g", &[("m", model)])]);
+    let (outputs, _) = generate(&input, &[vendor, gateway]).unwrap();
+    let model = generated_model(output_for(&outputs, "opencode-go.json"), "m").unwrap();
+    assert_eq!(model["thinking_levels"], json!(["low", "high"]));
+    assert_eq!(model["thinking_default"], "low");
+}
+
+#[test]
+fn inheritance_matches_the_whole_id_only() {
+    let mut vendor = vendor_package("v", "providers/openai/providers/openai.json");
+    vendor.thinking = &[("m", &["low"], None)];
+    let gateway = gateway_package("g");
+    let model = tool_model(json!({}));
+    let input = catalogs(&[("v", &[("m", model.clone())]), ("g", &[("m-extra", model)])]);
+    assert_eq!(
+        match generate(&input, &[vendor, gateway]) {
+            Err(error) => error,
+            Ok(_) => panic!("generate unexpectedly succeeded"),
+        },
+        "opencode-go: `m-extra` has neither an inherited nor its own thinking row"
+    );
+}
+
+#[test]
+fn a_gateway_own_row_beats_the_vendor_row() {
+    let mut vendor = vendor_package("v", "providers/openai/providers/openai.json");
+    vendor.thinking = &[("m", &["low"], Some("low"))];
+    let mut gateway = gateway_package("g");
+    gateway.thinking = &[("m", &["high"], None)];
+    let model = tool_model(json!({}));
+    let input = catalogs(&[("v", &[("m", model.clone())]), ("g", &[("m", model)])]);
+    let (outputs, _) = generate(&input, &[vendor, gateway]).unwrap();
+    let model = generated_model(output_for(&outputs, "opencode-go.json"), "m").unwrap();
+    assert_eq!(model["thinking_levels"], json!(["high"]));
+    assert!(model.get("thinking_default").is_none());
+}
+
+#[test]
+fn codex_rows_never_reach_a_gateway() {
+    let mut codex = vendor_package("c", "providers/codex/providers/codex.json");
+    codex.thinking = &[("m", &["low"], Some("low"))];
+    let mut openai = vendor_package("v", "providers/openai/providers/openai.json");
+    openai.thinking = &[("m", &["low", "high"], None)];
+    let gateway = gateway_package("g");
+    let model = tool_model(json!({}));
+    let input = catalogs(&[
+        ("c", &[("m", model.clone())]),
+        ("v", &[("m", model.clone())]),
+        ("g", &[("m", model)]),
+    ]);
+    let (outputs, _) = generate(&input, &[codex, openai, gateway]).unwrap();
+    let model = generated_model(output_for(&outputs, "opencode-go.json"), "m").unwrap();
+    assert_eq!(model["thinking_levels"], json!(["low", "high"]));
+    assert!(model.get("thinking_default").is_none());
 }
 
 #[test]
