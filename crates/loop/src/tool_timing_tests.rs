@@ -4962,6 +4962,82 @@ fn cancelling_a_hooked_inner_call_never_runs_it() {
     );
 }
 
+// The three-tool world the returned-anchor tests drive: the middle
+// call forgets the leaf and reports its answer, held until released.
+struct ReturnedAnchor {
+    world: World,
+    leaf: Arc<ProbeTool>,
+    leaf_entered_rx: mpsc::Receiver<()>,
+    leaf_gate_tx: mpsc::Sender<()>,
+    forget_tx: mpsc::Sender<()>,
+    report_rx: mpsc::Receiver<String>,
+}
+
+fn returned_anchor() -> ReturnedAnchor {
+    let rules = Arc::new(FakeRules::default());
+    let outer = Arc::new(ProbeTool::reads("atlas").calling("boreal", json!({})));
+    let middle = Arc::new(ProbeTool::reads("boreal").forgetting("coral", json!({})));
+    let leaf = Arc::new(ProbeTool::reads("coral"));
+    let (forget_tx, forget_rx) = mpsc::channel();
+    middle.hold_forget(forget_rx);
+    let (leaf_entered_tx, leaf_entered_rx) = mpsc::channel();
+    let (leaf_gate_tx, leaf_gate_rx) = mpsc::channel();
+    leaf.gate_run(leaf_entered_tx, leaf_gate_rx);
+    let (report_tx, report_rx) = mpsc::channel();
+    middle.reporting(report_tx);
+    let mut setup = Setup::new(Arc::clone(&rules));
+    setup.tools.push(Arc::clone(&outer));
+    setup.tools.push(Arc::clone(&middle));
+    setup.tools.push(Arc::clone(&leaf));
+    let home = fakes::TempDir::new("fiber-tool-timing");
+    let world = build(
+        &setup,
+        home,
+        vec![tool_answer("atlas", json!({}), 0), text_answer("Done.", 0)],
+    );
+    ReturnedAnchor {
+        world,
+        leaf,
+        leaf_entered_rx,
+        leaf_gate_tx,
+        forget_tx,
+        report_rx,
+    }
+}
+
+// A descendant that returns before its anchor does completes: the leaf
+// answers while the held anchor is still alive, so the completion is
+// written with the anchor unreturned.
+#[test]
+fn a_descendant_that_returns_before_its_anchor_completes() {
+    let ReturnedAnchor {
+        mut world,
+        leaf,
+        leaf_entered_rx,
+        leaf_gate_tx,
+        forget_tx,
+        report_rx,
+    } = returned_anchor();
+    prompt(&world, "hi");
+    let flight = spawn_turn(&mut world);
+    // The leaf runs and answers while the held anchor is unreturned.
+    fakes::Deadline::after(WAIT).recv_or_fail(&leaf_entered_rx, "the leaf run is entered");
+    leaf_gate_tx.send(()).expect("the leaf run waits");
+    let report = fakes::Deadline::after(WAIT).recv_or_fail(&report_rx, "the leaf answers");
+    assert_eq!(
+        report, "answered Completed",
+        "a leaf that beats its anchor completes"
+    );
+    forget_tx.send(()).expect("the forgetter waits");
+    assert_eq!(
+        join_turn(&mut world, flight).unwrap(),
+        Some(TurnOutcome::Completed)
+    );
+    assert_eq!(leaf.ran(), 1, "the descendant run was entered");
+    assert_eq!(ops(&world, "tool.permission").len(), 3);
+    assert_eq!(ops(&world, "tool.run").len(), 3);
+}
+
 // A returned anchor cancels its still-running descendant: the middle
 // call returns while the leaf still runs, and the leaf is cancelled.
 #[test]
