@@ -222,7 +222,13 @@ fn assert_tool_wire_process(lines: &[Value], session_id: &str, tool: &str, proce
         assert!(line["data"]["ms"].as_u64().is_some(), "{line}");
         assert_eq!(line["data"]["tool"], tool, "{line}");
         let raw = line.to_string();
-        for sentinel in ["read the note", "Hello.", "note.txt", "sk-test", "the note says hi"] {
+        for sentinel in [
+            "read the note",
+            "Hello.",
+            "note.txt",
+            "sk-test",
+            "the note says hi",
+        ] {
             assert!(
                 !raw.contains(sentinel),
                 "no prompt, output, argument, credential or content in {raw}"
@@ -363,7 +369,10 @@ fn a_debug_tool_call_times_permission_hooks_and_run() {
     // without them.
     assert_eq!(
         run.logged_kinds(&setup),
-        without_deltas(&run.kinds()).iter().map(|k| k.to_string()).collect::<Vec<_>>()
+        without_deltas(&run.kinds())
+            .iter()
+            .map(|k| k.to_string())
+            .collect::<Vec<_>>()
     );
     let completed = run.completed();
     assert_eq!(completed["status"], "completed");
@@ -371,7 +380,12 @@ fn a_debug_tool_call_times_permission_hooks_and_run() {
     assert_eq!(permission.len(), 1, "{:?}", op_lines(&setup));
     assert_tool_wire(&permission, &session_id, "read");
     let hooks = ops(&setup, "tool.hooks");
-    assert_eq!(hooks.len(), 3, "before, check and after dispatch: {:?}", hooks);
+    assert_eq!(
+        hooks.len(),
+        3,
+        "before, check and after dispatch: {:?}",
+        hooks
+    );
     assert_tool_wire(&hooks, &session_id, "read");
     let runs = ops(&setup, "tool.run");
     assert_eq!(runs.len(), 1);
@@ -460,8 +474,7 @@ fn review_fixture(setup: &Setup, server: &ProviderServer, reviewer: Option<&str>
                    "context_window": 100000})
         })
         .collect();
-    let mut manifest =
-        json!({"name": "syn", "version": "v0.0.0", "fiber": "0.0.0", "api": 1});
+    let mut manifest = json!({"name": "syn", "version": "v0.0.0", "fiber": "0.0.0", "api": 1});
     if let Some(into) = manifest.as_object_mut() {
         into.insert(
             "providers".to_owned(),
@@ -489,8 +502,7 @@ fn review_fixture(setup: &Setup, server: &ProviderServer, reviewer: Option<&str>
 #[test]
 fn a_debug_review_times_one_stage_with_permission_and_run() {
     let setup = Setup::new();
-    let server =
-        ProviderServer::start([shell_true_call(), text_reply("allow"), hello()]).unwrap();
+    let server = ProviderServer::start([shell_true_call(), text_reply("allow"), hello()]).unwrap();
     review_fixture(&setup, &server, Some("pkg"));
     write(
         &setup.home().join("config.json"),
@@ -579,7 +591,10 @@ impl Setup {
     fn standing_ask(&self) {
         fs::write(
             self.home().join("rules"),
-            format!("{}\n", json!({"decision": "ask", "tool": "shell", "prefix": "echo hi"})),
+            format!(
+                "{}\n",
+                json!({"decision": "ask", "tool": "shell", "prefix": "echo hi"})
+            ),
         )
         .unwrap();
     }
@@ -639,11 +654,7 @@ struct Hub {
 }
 
 impl Hub {
-    fn spawn_command(
-        deadline: support::Deadline,
-        serve: &mut Command,
-        workspace: String,
-    ) -> Self {
+    fn spawn_command(deadline: support::Deadline, serve: &mut Command, workspace: String) -> Self {
         let sessions = fakes::Watchdog::matching(&workspace);
         let mut child = serve.spawn().unwrap();
         let group = child.id();
@@ -764,10 +775,7 @@ fn until(client: &Socket, what: &str, mut done: impl FnMut(&Value) -> bool) -> V
 
 /// Connects to the hub, starting `fiber hub serve` when none runs.
 #[track_caller]
-fn connect_hub(
-    setup: &Setup,
-    hub: &std::sync::Arc<std::sync::Mutex<Option<Hub>>>,
-) -> Socket {
+fn connect_hub(setup: &Setup, hub: &std::sync::Arc<std::sync::Mutex<Option<Hub>>>) -> Socket {
     let slot = std::sync::Arc::clone(hub);
     let deadline = setup.deadline;
     let mut serve = setup.fiber_in_workspace(&["hub", "serve"]);
@@ -866,7 +874,10 @@ fn a_debug_escalation_times_two_stages_and_the_wait() {
     }));
     let started = client.next("the start acknowledgement", &[]);
     assert!(acknowledges(&started, "c_start"), "{started}");
-    let id = started["payload"]["result"]["session_id"].as_str().unwrap().to_owned();
+    let id = started["payload"]["result"]["session_id"]
+        .as_str()
+        .unwrap()
+        .to_owned();
     client.send(&subscribe("c_sub", &id));
     until(&client, "the subscribe acknowledgement", |line| {
         acknowledges(line, "c_sub")
@@ -892,7 +903,8 @@ fn a_debug_escalation_times_two_stages_and_the_wait() {
         .expect("the reply resolved the escalation");
     assert_eq!(resolved["payload"]["decided_by"], "person");
     assert!(
-        done.iter().any(|line| line["kind"] == "tool_call_completed"),
+        done.iter()
+            .any(|line| line["kind"] == "tool_call_completed"),
         "the allowed call ran: {done:?}"
     );
     client.send(&close(&id));
@@ -949,7 +961,10 @@ fn a_suspended_approval_resumes_with_a_fresh_segment() {
     }));
     let started = client.next("the start acknowledgement", &[]);
     assert!(acknowledges(&started, "c_start"), "{started}");
-    let id = started["payload"]["result"]["session_id"].as_str().unwrap().to_owned();
+    let id = started["payload"]["result"]["session_id"]
+        .as_str()
+        .unwrap()
+        .to_owned();
     client.send(&subscribe("c_sub", &id));
     until(&client, "the subscribe acknowledgement", |line| {
         acknowledges(line, "c_sub")
@@ -976,7 +991,9 @@ fn a_suspended_approval_resumes_with_a_fresh_segment() {
     assert_eq!(first.len(), 1);
     assert_tool_wire_process(&first, &id, "shell", "session");
     assert!(
-        ops(&setup, "tool.run").iter().all(|line| line["session_id"] != id),
+        ops(&setup, "tool.run")
+            .iter()
+            .all(|line| line["session_id"] != id),
         "the abandoned call never ran"
     );
     setup.idle(None);
@@ -1002,7 +1019,9 @@ fn a_suspended_approval_resumes_with_a_fresh_segment() {
     assert_eq!(resolved["payload"]["request_id"], request.as_str());
     assert_eq!(resolved["payload"]["decided_by"], "person");
     assert!(
-        resumed.iter().any(|line| line["kind"] == "tool_call_completed"),
+        resumed
+            .iter()
+            .any(|line| line["kind"] == "tool_call_completed"),
         "the allowed call ran: {resumed:?}"
     );
     client.send(&close(&id));
@@ -1067,7 +1086,10 @@ fn a_suspended_interaction_resumes_with_no_second_order() {
     }));
     let started = client.next("the start acknowledgement", &[]);
     assert!(acknowledges(&started, "c_start"), "{started}");
-    let id = started["payload"]["result"]["session_id"].as_str().unwrap().to_owned();
+    let id = started["payload"]["result"]["session_id"]
+        .as_str()
+        .unwrap()
+        .to_owned();
     client.send(&subscribe("c_sub", &id));
     until(&client, "the subscribe acknowledgement", |line| {
         acknowledges(line, "c_sub")
@@ -1115,7 +1137,8 @@ fn a_suspended_interaction_resumes_with_no_second_order() {
         "the reply was accepted: {done:?}"
     );
     assert!(
-        done.iter().any(|line| line["kind"] == "tool_call_completed"),
+        done.iter()
+            .any(|line| line["kind"] == "tool_call_completed"),
         "the answered call ran again: {done:?}"
     );
     client.send(&close(&id));
