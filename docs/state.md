@@ -363,7 +363,15 @@ What is recorded:
   searching is `session_search.scan`: one scope per tool search request
   from its entry, including empty, cancelled and problem-only scans;
   `fiber sessions search` writes no line. Their `data` holds only `op`
-  and `ms`.
+  and `ms`. Installed for jobs is `jobs.start`: one scope per background
+  job or delegate run that starts, until it runs: a command started with
+  `run_in_background`, `tty` or `monitor`, and a new or resumed delegate,
+  from just before its spawn; a foreground command that moves, from the
+  move alone, never its earlier run. It ends once the job is recorded and
+  its own thread runs, before the receipt is built. A refused call, a
+  spawn or registration failure, and a call cancelled before its job
+  starts write none, and the job's later life adds nothing. Its `data`
+  holds only `op` and `ms`.
   Request, model, hook and network timings may overlap as nested
   measurements, never additive phases.
 

@@ -8,10 +8,11 @@ use std::hash::BuildHasher;
 use std::io::{Read, Seek, SeekFrom};
 use std::path::{Path, PathBuf};
 use std::sync::mpsc::Sender;
-use std::sync::{Arc, Mutex, MutexGuard, PoisonError, Weak};
+use std::sync::{Arc, Mutex, MutexGuard, OnceLock, PoisonError, Weak};
 use std::time::{Duration, Instant};
 
 use contract::clock::{Clock, Wake};
+use contract::diag::Timing;
 use contract::emit::Emit;
 use contract::events::{
     DelegateFinished, DelegateStarted, JobCompleted, JobLine, JobStarted, Outcome,
@@ -91,6 +92,10 @@ pub struct Registry {
     /// resumes of one job start one run. Taken before the inner lock;
     /// nothing takes them the other way.
     resume_gate: Mutex<()>,
+    /// Times a background start as `jobs.start`, installed once by the
+    /// session before any tool runs. The first install wins; an empty
+    /// cell times nothing.
+    timing: OnceLock<Timing>,
     /// Upgrades to the `Arc` `new` returned, so `open` can hand that `Arc`
     /// to the job's [`End`] while taking `&self`.
     me: Weak<Self>,
@@ -181,11 +186,26 @@ impl Registry {
             }),
             park: Parker::new(),
             resume_gate: Mutex::new(()),
+            timing: OnceLock::new(),
             me: Weak::clone(me),
         });
         let wake: Arc<dyn Wake> = registry.clone();
         clock.subscribe(Arc::downgrade(&wake));
         registry
+    }
+
+    /// Installs the timing a background start is timed as `jobs.start`
+    /// with. The first install wins. Both production callers gate on the
+    /// existing debug check, so at info the cell stays empty and a start
+    /// costs one `OnceLock::get`.
+    pub fn install_timing(&self, timing: Timing) {
+        // A second install is ignored: the first wins.
+        self.timing.get_or_init(|| timing);
+    }
+
+    /// The installed timing, if any.
+    pub(crate) fn timing(&self) -> Option<&Timing> {
+        self.timing.get()
     }
 
     /// Mints the id, creates the empty output file, and records the job

@@ -8,6 +8,9 @@ use std::path::PathBuf;
 use std::process::Child;
 use std::sync::Arc;
 use std::thread;
+use std::time::Instant;
+
+use contract::diag::{Op, Timing};
 
 use contract::shapes::ContentPart;
 use contract::tool::{Cancel, Output};
@@ -42,6 +45,10 @@ struct Started {
     child: Child,
     listing: Listing,
     log: String,
+    /// The start's stamp, carried out of the gated closure: the closure
+    /// only reads the clock, and the guard is created and dropped once
+    /// the run is committed and its thread runs.
+    start: Option<(Timing, Instant)>,
 }
 
 impl DelegateMessage {
@@ -107,6 +114,9 @@ impl DelegateMessage {
         let clock = Arc::clone(&self.clock);
         let bound = self.bound;
         let cap = self.cap;
+        // Cloned before the resume gate is taken: the start closure only
+        // reads the clock, never creates or drops a guard under the gate.
+        let timing = self.registry.timing().cloned();
         self.registry.resume(&id, action, |resumable| {
             // Inside the resume gate, after the "ended" check: no other
             // run can start between the read and the spawn.
@@ -124,6 +134,9 @@ impl DelegateMessage {
                 resume: true,
             };
             let log = resumable.output_path.clone();
+            // The stamp covers building the runner and spawning the
+            // child. No clock is read without an installed timing.
+            let start = timing.as_ref().map(|timing| (timing.clone(), clock.now()));
             let (runner, stop) = Runner::new(
                 JobId(id.clone()),
                 launched.session_id.clone(),
@@ -145,6 +158,7 @@ impl DelegateMessage {
                     child,
                     listing,
                     log,
+                    start,
                 },
             ))
         })
@@ -164,9 +178,15 @@ fn resumed_receipt(id: &str, resumed: Resumed<Started>) -> Output {
                 child,
                 listing,
                 log,
+                start,
             },
     } = resumed;
     thread::spawn(move || runner.drive(child, Some(listing), unreported));
+    // The run is committed and its own drive thread has been spawned:
+    // the start ends here, after the resume gate is released.
+    if let Some((timing, started)) = start {
+        drop(timing(Op::JobsStart, None, Some(started)));
+    }
     Output {
         content: vec![ContentPart::Text {
             text: format!("Resumed delegate {id}. Its log is {log}."),
