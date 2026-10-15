@@ -14,7 +14,7 @@ use crate::format;
 use crate::markdown::{Role, style};
 use crate::mouse::{Target, TargetId};
 use crate::theme;
-use crate::view::panel::{Card, bar_fill, branch_text, cards, fit_spans};
+use crate::view::panel::{Card, bar_spans, branch_text, cards, fit_spans};
 
 /// One status-line row: its line and the targets on it (column offset,
 /// width, spot).
@@ -295,20 +295,15 @@ fn session_segments(app: &App) -> Vec<Segment> {
 }
 
 /// The context segment: "ctx" dim, an 8-cell bar with the size, opening
-/// the context breakdown. The bar shares the panel's fill, with no
-/// handoff marker.
+/// the context breakdown. The bar shares the panel's fill against the
+/// handoff goal, with no handoff marker: the trigger folds into the
+/// window it would otherwise govern.
 fn context_segment(tokens: u64, window: u64, trigger: Option<u64>) -> Segment {
-    let fill = bar_fill(tokens, window, trigger, 8);
     let mut spans = vec![
         Span::styled("ctx", style(Role::Muted)),
         Span::raw(" ".to_owned()),
     ];
-    for _ in 0..fill {
-        spans.push(Span::styled("\u{2586}", style(Role::Info)));
-    }
-    for _ in fill..8 {
-        spans.push(Span::styled("\u{2586}", style(Role::Rule)));
-    }
+    spans.extend(bar_spans(tokens, trigger.unwrap_or(window), None, 8));
     spans.push(Span::raw(" ".to_owned()));
     spans.push(Span::raw(crate::view::panel::short_tokens(tokens)));
     Segment::spotted(spans, Spot::Context)

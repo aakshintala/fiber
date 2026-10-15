@@ -17,8 +17,10 @@
 mod support;
 
 use std::fs;
+use std::path::Path;
+use std::process::{Command, Stdio};
 
-use fakes::{ProviderServer, Response};
+use fakes::{ProviderServer, Response, Watchdog};
 use serde_json::json;
 use support::pty::{Colour, Grid, Run};
 use support::{Deadline, Setup, TRUECOLOUR, write_json};
@@ -42,6 +44,26 @@ fn quit(mut run: Run) {
     assert_eq!(finished.status.code(), Some(0));
 }
 
+/// Makes a FIFO at `path` for the held job to wait on.
+fn mkfifo(setup: &Setup, path: &Path) {
+    let mut command = Command::new("mkfifo");
+    command
+        .arg(path)
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped());
+    let made = support::run_to_exit(setup.deadline, "mkfifo", command);
+    assert!(made.status.success(), "mkfifo {}: {made:?}", path.display());
+}
+
+/// The held background job's release: writing a line lets its read
+/// finish. Dropping the guard kills the job's group, so a failure leaks
+/// nothing.
+struct Release {
+    file: fs::File,
+    guard: Watchdog,
+}
+
 /// The cell index of `needle` in `row`, counting cells.
 fn locate(row: &str, needle: &str) -> u16 {
     let chars: Vec<char> = row.chars().collect();
@@ -54,11 +76,13 @@ fn locate(row: &str, needle: &str) -> u16 {
 }
 
 /// The scripted turn: three edits, a delegate whose model hangs
-/// mid-stream, a held shell call, and a text step reporting 268k of
-/// context, so the panel holds three changed files, a running delegate,
-/// a running job and 268k of the 400k handoff at once. The held call
-/// watches `hold`: deleting it releases the turn, so nothing leaks.
-fn script(hold: &str) -> serde_json::Value {
+/// mid-stream, a background shell call waiting on the hold FIFO, and a
+/// text step reporting 268k of context, so the panel holds three changed
+/// files, a running delegate, a running job and 268k of the 400k handoff
+/// at once. The background call moves to a job at once, so no timing
+/// decides when the count appears; writing a line to the FIFO releases
+/// it, so nothing leaks.
+fn script(job: &str) -> serde_json::Value {
     json!({"steps": [
         {"tool_calls": [
             {"name": "edit", "arguments": {"path": "a.txt",
@@ -76,7 +100,7 @@ fn script(hold: &str) -> serde_json::Value {
             }},
         ], "usage": {"input": 267000, "output": 1000}},
         {"tool_calls": [
-            {"name": "shell", "arguments": {"command": hold}},
+            {"name": "shell", "arguments": {"command": job, "run_in_background": true}},
         ]},
         {"text": ["Done."]},
     ]})
@@ -86,8 +110,8 @@ fn script(hold: &str) -> serde_json::Value {
 /// 400k handoff, the pinned panel, the fake provider serving the
 /// delegate's hung stream, and a reviewer allowing every call, so no
 /// approval stalls the turn. Returns the setup with its provider
-/// server, held to the test's end.
-fn panel_setup() -> (Setup, ProviderServer) {
+/// server, held to the test's end, and the held job's release.
+fn panel_setup() -> (Setup, ProviderServer, Release) {
     // A short root: the status line shows the whole workspace path, and
     // the narrow row must still reach the `ctx` segment in 99 columns.
     let root = fakes::TempDir::under(std::path::Path::new("/tmp"), "pl");
@@ -101,15 +125,19 @@ fn panel_setup() -> (Setup, ProviderServer) {
     fs::write(workspace.join("a.txt"), "A1\n").unwrap();
     fs::write(workspace.join("b.txt"), "B1\n").unwrap();
     fs::write(workspace.join("c.txt"), "C1\n").unwrap();
-    // The held shell call: the marker keeps it running until the test
-    // deletes it, so the turn's job outlives every assertion and nothing
-    // leaks past the quit.
+    // The held shell call runs in the background at once and waits on
+    // the FIFO: the test holds it open, so neither open blocks, and the
+    // job outlives every assertion until the test writes its release.
     let hold = workspace.join("hold");
-    fs::write(&hold, "").unwrap();
-    let command = format!(
-        "i=0; while [ -e '{}' ] && [ $i -lt 2400 ]; do sleep 0.05; i=$((i+1)); done",
-        hold.display()
-    );
+    mkfifo(&setup, &hold);
+    let waiter = workspace.join("wait.sh");
+    fs::write(&waiter, "read -r _ < hold\necho done\n").unwrap();
+    let release = fs::OpenOptions::new()
+        .read(true)
+        .write(true)
+        .open(&hold)
+        .unwrap();
+    let command = format!("sh {}", waiter.display());
     write_json(&workspace.join("s.json"), &script(&command));
     // The reviewer allows far more calls than the turn makes, so every
     // call runs without asking.
@@ -155,7 +183,17 @@ fn panel_setup() -> (Setup, ProviderServer) {
             .collect::<String>(),
     )
     .unwrap();
-    (setup, server)
+    // The job's guard kills its group if the test fails before the
+    // release lets the read finish.
+    let guard = Watchdog::matching(waiter.to_str().unwrap());
+    (
+        setup,
+        server,
+        Release {
+            file: release,
+            guard,
+        },
+    )
 }
 
 /// Starts the scripted turn and waits for the panel's whole state: both
@@ -184,7 +222,7 @@ fn slab_edge_row(grid: &Grid, y: u16) -> Option<(u16, u16)> {
 
 #[test]
 fn panel_cards_match_the_doc() {
-    let (setup, _server) = panel_setup();
+    let (setup, _server, release) = panel_setup();
     // The session shows the canonical workspace, symlinks resolved.
     let workspace = fs::canonicalize(setup.workspace())
         .unwrap()
@@ -304,13 +342,18 @@ fn panel_cards_match_the_doc() {
         }
     }
 
-    fs::remove_file(setup.workspace().join("hold")).unwrap();
+    let Release {
+        file: release,
+        guard,
+    } = release;
+    std::io::Write::write_all(&mut &release, b"\n").unwrap();
+    guard.stand_down(setup.deadline.cleanup());
     quit(run);
 }
 
 #[test]
 fn narrow_status_rows_match_the_doc() {
-    let (setup, _server) = panel_setup();
+    let (setup, _server, release) = panel_setup();
     let env: Vec<(&str, &str)> = [("FIBER_TEST_FAKE_KEY", "sk-test")]
         .into_iter()
         .chain(TRUECOLOUR)
@@ -359,14 +402,19 @@ fn narrow_status_rows_match_the_doc() {
         8,
         "{line:?}"
     );
-    fs::remove_file(setup.workspace().join("hold")).unwrap();
+    let Release {
+        file: release,
+        guard,
+    } = release;
+    std::io::Write::write_all(&mut &release, b"\n").unwrap();
+    guard.stand_down(setup.deadline.cleanup());
     quit(run);
 }
 
 #[test]
 fn panel_tint_quantises_to_233() {
     // 256 colours: xterm without COLORTERM.
-    let (setup, _server) = panel_setup();
+    let (setup, _server, release) = panel_setup();
     let mut run = Run::spawn(
         &setup,
         160,
@@ -393,6 +441,11 @@ fn panel_tint_quantises_to_233() {
             "blank cell ({x}, {blank})"
         );
     }
-    fs::remove_file(setup.workspace().join("hold")).unwrap();
+    let Release {
+        file: release,
+        guard,
+    } = release;
+    std::io::Write::write_all(&mut &release, b"\n").unwrap();
+    guard.stand_down(setup.deadline.cleanup());
     quit(run);
 }
