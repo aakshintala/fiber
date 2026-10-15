@@ -10,7 +10,7 @@
 use super::input::{Ev, Key};
 use super::{Args, Term};
 use super::{BP, Fake, SState, dim, fit, lift, paint, row, sp};
-use super::{panel_rows, rail_card_rows, rail_full_b, rail_spend_row_track};
+use super::{panel_rows, rail_card_rows, rail_done, rail_full_b, rail_spend_row_track};
 use crate::cases::{Case, Surface};
 use ratatui::style::Style;
 use ratatui::text::Span;
@@ -299,7 +299,7 @@ fn rail_screen(rail: &[super::Row], rail_w: usize, cols: usize, rows: usize) -> 
 fn all_states_rows() -> (Vec<super::Row>, Vec<(usize, usize, usize)>) {
     let sess = six();
     let shown: Vec<usize> = (0..sess.len()).collect();
-    rail_full_b(&sess, &shown, 0, TICK, false, 24, DENSITY)
+    rail_full_b(&sess, &shown, 0, TICK, false, 24, DENSITY, &rail_done())
 }
 
 fn all_states(cols: usize, rows: usize) -> Frame {
@@ -384,8 +384,8 @@ fn floor_ceiling(cols: usize, rows: usize) -> Frame {
     const GAP: usize = RAIL_GAP;
     let sess = pair();
     let shown: Vec<usize> = (0..sess.len()).collect();
-    let (floor, _) = rail_full_b(&sess, &shown, 0, TICK, false, LEFT, DENSITY);
-    let (ceiling, _) = rail_full_b(&sess, &shown, 0, TICK, false, RIGHT, DENSITY);
+    let (floor, _) = rail_full_b(&sess, &shown, 0, TICK, false, LEFT, DENSITY, &rail_done());
+    let (ceiling, _) = rail_full_b(&sess, &shown, 0, TICK, false, RIGHT, DENSITY, &rail_done());
     let back = crate::overlays::backdrop(cols.saturating_sub(LEFT + GAP + RIGHT + GAP), rows);
     let x1 = LEFT + GAP;
     let x2 = x1 + RIGHT + GAP;
@@ -830,7 +830,7 @@ mod tests {
     fn width_rows(w: usize) -> Vec<crate::Row> {
         let sess = pair();
         let shown: Vec<usize> = (0..sess.len()).collect();
-        rail_full_b(&sess, &shown, 0, TICK, false, w, DENSITY).0
+        rail_full_b(&sess, &shown, 0, TICK, false, w, DENSITY, &rail_done()).0
     }
 
     /// The text of rail rows on their own, one line each.
