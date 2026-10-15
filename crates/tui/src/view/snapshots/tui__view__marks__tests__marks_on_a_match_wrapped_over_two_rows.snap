@@ -1,13 +1,13 @@
 ---
 source: crates/tui/src/view/marks_tests.rs
-assertion_line: 301
+assertion_line: 374
 expression: "marked(&app, 40, 12)"
 ---
-                find: brown fox · 1 of 1
+▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
 
+ ⌕ brown fox█                   1 of 1
 
-
-
+▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀
 ▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
  xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx
  brown fox jumps
