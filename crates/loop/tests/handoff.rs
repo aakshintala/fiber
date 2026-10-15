@@ -3175,15 +3175,30 @@ fn a_non_blocking_session_start_failure_drops_its_context_with_a_notice() {
 
     let (outcome, lines) = run(&mut session, "hi");
     assert_eq!(outcome, Some(TurnOutcome::Completed));
-    let kinds = kinds(&lines);
-    let noticed_at = kinds.iter().position(|kind| *kind == "notice").unwrap();
-    let completed_at = kinds
-        .iter()
-        .position(|kind| *kind == "handoff_completed")
-        .unwrap();
-    assert!(
-        noticed_at < completed_at,
-        "the notice precedes the completion: {kinds:?}"
+    // The complete stream: the soft failure's notice precedes the
+    // handoff's completion, and no hook context follows the new opening.
+    assert_kinds(
+        &lines,
+        &[
+            OPENING,
+            STEP,
+            CALL_BODY,
+            STEP,
+            &[
+                "handoff_started",
+                "assistant_message_started",
+                "assistant_message_delta",
+                "assistant_message_delta",
+                "text_completed",
+                "usage_recorded",
+                "assistant_message_completed",
+                "notice",
+                "handoff_completed",
+                "opening_message",
+            ],
+            REPLY,
+            ENDED,
+        ],
     );
     let done = of_kind(&lines, "handoff_completed");
     assert_eq!(done.len(), 1);

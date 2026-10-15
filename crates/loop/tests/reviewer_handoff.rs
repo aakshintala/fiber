@@ -1265,21 +1265,35 @@ fn a_handoff_with_session_start_context_and_a_reviewer_completes() {
     let lines = session.lines();
     // The hook's context follows the new opening message, and the
     // reviewer selection runs after it.
-    let kinds = kinds(&lines);
-    let opening_at = kinds
-        .iter()
-        .position(|kind| *kind == "opening_message")
-        .unwrap();
-    let context_at = kinds
-        .iter()
-        .position(|kind| *kind == "context_added")
-        .unwrap();
-    let kept_at = kinds
-        .iter()
-        .position(|kind| *kind == "reviewer_kept")
-        .unwrap();
-    assert!(context_at > opening_at, "{kinds:?}");
-    assert!(kept_at > context_at, "{kinds:?}");
+    assert_eq!(
+        kinds(&lines),
+        [
+            "session_started",
+            "preamble_built",
+            "opening_message",
+            "turn_started",
+            "step_started",
+            "handoff_started",
+            "assistant_message_started",
+            "assistant_message_delta",
+            "assistant_message_delta",
+            "text_completed",
+            "usage_recorded",
+            "assistant_message_completed",
+            "handoff_completed",
+            "opening_message",
+            "context_added",
+            "usage_recorded",
+            "reviewer_kept",
+            "assistant_message_started",
+            "assistant_message_delta",
+            "assistant_message_delta",
+            "text_completed",
+            "usage_recorded",
+            "assistant_message_completed",
+            "turn_completed",
+        ]
+    );
     assert_eq!(
         of_kind(&lines, "context_added")[0].payload["text"],
         "at handoff"

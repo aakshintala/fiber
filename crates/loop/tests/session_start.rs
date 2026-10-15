@@ -192,22 +192,22 @@ fn a_suspended_resume_writes_a_passing_hook_context_after_the_batch_results() {
     // No `context_added` sits between the call and its result: the
     // contexts wait for the next step, after the results and after
     // `step_started`.
-    let kinds = new_kinds(&session, lines_before);
-    let completed_at = kinds
-        .iter()
-        .position(|kind| kind == "tool_call_completed")
-        .unwrap();
-    let stepped_at = kinds
-        .iter()
-        .position(|kind| kind == "step_started")
-        .unwrap();
-    let context_at = kinds
-        .iter()
-        .position(|kind| kind == "context_added")
-        .unwrap();
-    assert!(
-        completed_at < stepped_at && stepped_at < context_at,
-        "results, then the step, then the context: {kinds:?}"
+    assert_eq!(
+        new_kinds(&session, lines_before),
+        vec![
+            "preamble_built",
+            "permission_requested",
+            "permission_resolved",
+            "tool_call_started",
+            "tool_call_completed",
+            "step_started",
+            "context_added",
+            "assistant_message_started",
+            "text_completed",
+            "usage_recorded",
+            "assistant_message_completed",
+            "turn_completed",
+        ]
     );
     let context = log::read(&session.dir).unwrap()[lines_before..]
         .iter()
