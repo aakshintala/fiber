@@ -305,13 +305,7 @@ impl Registry {
         }
         let mut text = String::new();
         for job in &inner.jobs {
-            text.push_str(&format!(
-                "{} {} {} \u{2014} {}\n",
-                job.started.job_id.0,
-                phase_word(&job.phase),
-                job.started.description,
-                job.path.display()
-            ));
+            text.push_str(&entry_text(job));
         }
         text
     }
@@ -525,6 +519,46 @@ fn mint_id() -> String {
 /// same delegate job.
 pub(crate) fn mint_job_id() -> JobId {
     JobId(mint_id())
+}
+
+/// One listing line, in start order. An ended Fiber delegate carries
+/// its stored failure message after its entry, so a failure before its
+/// session exists still names its cause. Its log path is shown unless
+/// the filesystem reports it missing, in which case the path and its
+/// separator go together: anything else keeps its recorded path, and
+/// only a missing log is evidence of one.
+fn entry_text(job: &Job) -> String {
+    let mut line = format!(
+        "{} {} {}",
+        job.started.job_id.0,
+        phase_word(&job.phase),
+        job.started.description,
+    );
+    let failure = match (&job.phase, &job.delegate) {
+        (Phase::Ended(completed), Some(started)) if started.harness == "fiber" => {
+            completed.error.as_ref()
+        }
+        _ => None,
+    };
+    let missing = failure.is_some() && log_missing(&job.path);
+    if !missing {
+        line.push_str(&format!(" \u{2014} {}", job.path.display()));
+    }
+    if let Some(error) = failure {
+        line.push_str(&format!(" \u{2014} {}", error.message));
+    }
+    line.push('\n');
+    line
+}
+
+/// Whether `path` is missing: only a missing file is evidence of a
+/// missing log. Any other metadata failure, such as an unreadable
+/// directory on its way, keeps the recorded path.
+fn log_missing(path: &Path) -> bool {
+    matches!(
+        std::fs::metadata(path),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound
+    )
 }
 
 fn phase_word(phase: &Phase) -> &'static str {
