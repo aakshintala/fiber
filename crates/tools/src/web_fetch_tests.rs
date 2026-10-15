@@ -1001,7 +1001,12 @@ fn a_request_that_takes_over_sixty_seconds_times_out() {
     let rig = Rig::new();
     let call = held(&rig, &server, &server.url(), Duration::from_secs(60));
     assert!(server.await_requests(1, SIGNAL), "the request is in flight");
-    rig.clock.advance(Duration::from_secs(60));
+    rig.clock.advance_when_parked(
+        Some(rig.clock.origin() + Duration::from_secs(60)),
+        None,
+        Duration::from_secs(60),
+        &Deadline::after(SIGNAL),
+    );
     let output = call.wait();
     assert_eq!(code(&output), Some(ErrorCode::Timeout));
     assert!(
@@ -1017,7 +1022,12 @@ fn a_request_one_second_short_of_sixty_is_still_waiting() {
     let rig = Rig::new();
     let call = held(&rig, &server, &server.url(), Duration::from_secs(60));
     assert!(server.await_requests(1, SIGNAL));
-    let mark = rig.clock.advance_marked(Duration::from_secs(59));
+    let mark = rig.clock.advance_when_parked(
+        Some(rig.clock.origin() + Duration::from_secs(60)),
+        None,
+        Duration::from_secs(59),
+        &Deadline::after(SIGNAL),
+    );
     assert!(
         rig.clock.await_parked_since(
             &mark,
@@ -1056,7 +1066,12 @@ fn a_deadline_that_passes_while_the_body_is_read_times_out() {
         server.await_partial(1, SIGNAL),
         "the partial response was sent"
     );
-    rig.clock.advance(Duration::from_secs(60));
+    rig.clock.advance_when_parked(
+        Some(rig.clock.origin() + Duration::from_secs(60)),
+        None,
+        Duration::from_secs(60),
+        &Deadline::after(SIGNAL),
+    );
     let output = call.wait();
     assert_eq!(code(&output), Some(ErrorCode::Timeout), "{}", text(&output));
     assert!(
@@ -1127,14 +1142,19 @@ fn the_whole_fetch_times_out_after_five_minutes_whatever_each_hop_has_left() {
         let origin = rig.clock.origin();
         let mut now = 0u64;
         // Each hop is held short of its own 60-second deadline.
-        for _ in 0..hops {
-            assert!(
-                rig.clock
-                    .await_parked(origin + Duration::from_secs(now + 60), SIGNAL),
-                "hop deadline {} s",
-                now + 60
+        for n in 1..=hops {
+            if n > 1 {
+                assert!(
+                    server.await_requests(n as usize, SIGNAL),
+                    "hop {n} is in flight"
+                );
+            }
+            rig.clock.advance_when_parked(
+                Some(origin + Duration::from_secs(now + 60)),
+                None,
+                Duration::from_secs(hop),
+                &Deadline::after(SIGNAL),
             );
-            rig.clock.advance(Duration::from_secs(hop));
             now += hop;
             server.release_one();
         }
@@ -1142,11 +1162,15 @@ fn the_whole_fetch_times_out_after_five_minutes_whatever_each_hop_has_left() {
         // `now + 60`; the fetch's 300 s is the earlier one.
         assert_eq!(now, 5 * hop);
         assert!(
-            rig.clock
-                .await_parked(origin + Duration::from_secs(300), SIGNAL),
-            "the sixth hop waits for the fetch's deadline"
+            server.await_requests(6, SIGNAL),
+            "the sixth hop is in flight"
         );
-        rig.clock.advance(Duration::from_secs(300 - now));
+        rig.clock.advance_when_parked(
+            Some(origin + Duration::from_secs(300)),
+            None,
+            Duration::from_secs(300 - now),
+            &Deadline::after(SIGNAL),
+        );
         let output = call.wait();
         assert_eq!(code(&output), Some(ErrorCode::Timeout), "hop {hop}s");
         assert!(
@@ -1164,17 +1188,23 @@ fn a_hop_whose_own_deadline_is_earlier_than_the_fetchs_is_a_request_timeout() {
     server.hold();
     let call = rig.start(&format!("{}/0", server.url()));
     let origin = rig.clock.origin();
-    assert!(
-        rig.clock
-            .await_parked(origin + Duration::from_secs(60), SIGNAL)
+    rig.clock.advance_when_parked(
+        Some(origin + Duration::from_secs(60)),
+        None,
+        Duration::from_secs(40),
+        &Deadline::after(SIGNAL),
     );
-    rig.clock.advance(Duration::from_secs(40));
     server.release_one();
     assert!(
-        rig.clock
-            .await_parked(origin + Duration::from_secs(100), SIGNAL)
+        server.await_requests(2, SIGNAL),
+        "the second hop is in flight"
     );
-    rig.clock.advance(Duration::from_secs(60));
+    rig.clock.advance_when_parked(
+        Some(origin + Duration::from_secs(100)),
+        None,
+        Duration::from_secs(60),
+        &Deadline::after(SIGNAL),
+    );
     let output = call.wait();
     assert!(
         text(&output).contains("the request took over 60 seconds"),
@@ -1488,13 +1518,12 @@ fn a_cancel_while_the_download_is_saved_leaves_no_file() {
 #[test]
 fn a_deadline_while_the_download_is_saved_leaves_no_file() {
     let held = held_download();
-    assert!(
-        held.rig
-            .clock
-            .await_parked(held.rig.clock.origin() + Duration::from_secs(60), SIGNAL),
-        "the watcher waits for the deadline"
+    held.rig.clock.advance_when_parked(
+        Some(held.rig.clock.origin() + Duration::from_secs(60)),
+        None,
+        Duration::from_secs(60),
+        &Deadline::after(SIGNAL),
     );
-    held.rig.clock.advance(Duration::from_secs(60));
     held.release.send(()).unwrap();
     let output = held.call.wait();
     assert_eq!(code(&output), Some(ErrorCode::Timeout));
@@ -1695,11 +1724,12 @@ fn a_deadline_that_passes_after_the_read_finished_still_leaves_no_file() {
             .tool
             .read_reply(html_head(), &mut &b"<p>whole</p>"[..], &|| false);
         assert_eq!(fs::read_dir(rig.artifacts()).unwrap().count(), 1);
-        assert!(
-            rig.clock.await_parked(deadline, SIGNAL),
-            "the watcher waits for the deadline"
+        rig.clock.advance_when_parked(
+            Some(deadline),
+            None,
+            Duration::from_secs(60),
+            &Deadline::after(SIGNAL),
         );
-        rig.clock.advance(Duration::from_secs(60));
         reply.map_err(|_| ())
     });
     assert!(matches!(
