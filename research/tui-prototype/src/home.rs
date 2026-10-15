@@ -474,7 +474,7 @@ pub(crate) struct FleetView<'a> {
     pub level: &'a str,
     pub input: &'a str,
     pub comp: Option<&'a [super::Row]>,
-    pub today: &'a str,
+    pub spend: &'a str,
     pub cols: usize,
     pub rows: usize,
     pub image: bool,
@@ -515,7 +515,7 @@ fn state_word(st: SState) -> &'static str {
 
 /// The header's counts across all projects: each nonzero state in its
 /// colour joined by dim ` · `, then the day's spend dim.
-fn counts_row(projs: &[RProj<'_>], today: &str) -> Vec<Span<'static>> {
+fn counts_row(projs: &[RProj<'_>], spend: &str) -> Vec<Span<'static>> {
     let count = |st: SState| {
         projs
             .iter()
@@ -546,7 +546,7 @@ fn counts_row(projs: &[RProj<'_>], today: &str) -> Vec<Span<'static>> {
         }
         out.push(sp(format!("{n} {label}"), *st));
     }
-    out.push(sp(format!(" · {today} today"), dim()));
+    out.push(sp(format!(" · {spend} live"), dim()));
     out
 }
 
@@ -816,7 +816,7 @@ pub(crate) fn fleet_rows(v: &FleetView<'_>) -> (Vec<super::Row>, Vec<FTag>) {
             if k == 1 {
                 spans.push(sp(VERSION, dim()));
             } else if k == 2 {
-                spans.extend(counts_row(v.projs, v.today));
+                spans.extend(counts_row(v.projs, v.spend));
             }
             screen[y] = super::Row {
                 spans: fit(&spans, cols),
@@ -1147,7 +1147,7 @@ fn frame(c: &Look, cols: usize, rows: usize, image: bool) -> Frame {
         level: c.level,
         input: &c.ui.input,
         comp: comp.as_deref(),
-        today: TODAY,
+        spend: TODAY,
         cols,
         rows,
         image,
@@ -1868,7 +1868,7 @@ mod tests {
             "1 retrying",
             "1 crashed",
             "2 ready",
-            "$5.78 today",
+            "$5.78 live",
         ] {
             assert!(t.contains(part), "counts miss {part}");
         }

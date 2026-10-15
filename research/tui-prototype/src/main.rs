@@ -6414,7 +6414,7 @@ fn run(
                 (ui.home_full && ui.picker.is_none()).then(|| {
                     let sess = live_sessions(f, &ui, vnow);
                     let projs = fleet_projs(&sess);
-                    let today = format!("${:.2}", sess.iter().map(|s| s.dollars).sum::<f64>());
+                    let spend = format!("${:.2}", sess.iter().map(|s| s.dollars).sum::<f64>());
                     let comp = ui.completions.as_ref().map(|cp| {
                         completions::view(cp, &ui.input, (cols as usize).saturating_sub(2))
                     });
@@ -6427,7 +6427,7 @@ fn run(
                         level: &f.effort,
                         input: &ui.input,
                         comp: comp.as_deref(),
-                        today: &today,
+                        spend: &spend,
                         cols: cols as usize,
                         rows: rows as usize,
                         image: false,
