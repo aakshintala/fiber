@@ -8,16 +8,16 @@ use std::sync::{
 use std::time::Duration;
 
 pub(crate) fn trusted() -> Arc<ClientConfig> {
+    configured(true, test_roots())
+}
+
+fn test_roots() -> rustls::RootCertStore {
     let mut roots = rustls::RootCertStore::empty();
     let cert =
         rustls::pki_types::CertificateDer::from_pem_slice(include_bytes!("../../fixtures/ca.pem"))
             .unwrap();
     roots.add(cert).unwrap();
-    Arc::new(
-        ClientConfig::builder()
-            .with_root_certificates(roots)
-            .with_no_client_auth(),
-    )
+    roots
 }
 pub(crate) fn server_config() -> Arc<rustls::ServerConfig> {
     Arc::new(
@@ -94,6 +94,59 @@ fn tls_socket_echoes_text_with_the_test_ca() {
 }
 
 #[test]
+fn tls_records_larger_than_the_deframer_buffer_keep_every_byte() {
+    fakes::within(
+        "large TLS websocket message",
+        Duration::from_secs(5),
+        || {
+            let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+            let port = listener.local_addr().unwrap().port();
+            let (done, completed) = std::sync::mpsc::channel();
+            std::thread::spawn(move || {
+                let (tcp, _) = listener.accept().unwrap();
+                tcp.set_read_timeout(Some(Duration::from_secs(2))).unwrap();
+                tcp.set_write_timeout(Some(Duration::from_secs(2))).unwrap();
+                let mut stream = rustls::StreamOwned::new(
+                    rustls::ServerConnection::new(server_config()).unwrap(),
+                    tcp,
+                );
+                let (head, _) = super::super::handshake::headers(&mut stream).unwrap();
+                let key = head
+                    .lines()
+                    .find_map(|line| line.strip_prefix("Sec-WebSocket-Key: "))
+                    .unwrap();
+                let accept = super::super::handshake::accept(key);
+                let mut reply = format!("HTTP/1.1 101 Switching Protocols\r\nUpgrade: websocket\r\nConnection: Upgrade\r\nSec-WebSocket-Accept: {accept}\r\n\r\n").into_bytes();
+                reply.extend_from_slice(&[0x81, 127]);
+                reply.extend_from_slice(&262144u64.to_be_bytes());
+                reply.extend(std::iter::repeat_n(b'x', 262144));
+                stream.write_all(&reply).unwrap();
+                done.send(()).unwrap();
+            });
+            let via = super::super::Via {
+                tls: trusted(),
+                proxy: None,
+                ..super::super::Via::from_env()
+            };
+            let endpoint = super::super::Endpoint {
+                secure: true,
+                host: "127.0.0.1".into(),
+                port,
+                target: "/".into(),
+            };
+            let mut stream = super::super::connect_with(&endpoint, &via).unwrap();
+            let mut line = Vec::new();
+            stream.read_to_end(&mut line).unwrap();
+            assert_eq!(line.len(), 262145);
+            assert_eq!(line.last(), Some(&b'\n'));
+            assert!(line[..262144].iter().all(|byte| *byte == b'x'));
+            fakes::Deadline::after(Duration::from_secs(5))
+                .recv_or_fail(&completed, "TLS server sent all records");
+        },
+    );
+}
+
+#[test]
 fn platform_verifier_refuses_the_private_test_ca() {
     fakes::within("untrusted TLS certificate", Duration::from_secs(5), || {
         let listener = TcpListener::bind("127.0.0.1:0").unwrap();
@@ -111,6 +164,7 @@ fn platform_verifier_refuses_the_private_test_ca() {
             }
         });
         let via = super::super::Via {
+            tls: configured(false, test_roots()),
             proxy: None,
             ..super::super::Via::from_env()
         };
@@ -175,8 +229,4 @@ fn empty_store_decision_is_shared_and_loaded_once() {
         }
         assert_eq!(loads.load(Ordering::SeqCst), 1);
     }
-    assert_eq!(
-        crate::platform_store_is_empty(),
-        crate::platform_store_is_empty()
-    );
 }

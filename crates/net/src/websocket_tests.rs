@@ -173,6 +173,26 @@ fn dropping_the_pair_sends_normal_close_and_ends_both_pumps() {
 }
 
 #[test]
+fn eof_after_an_unterminated_client_line_still_sends_normal_close() {
+    fakes::within("unterminated client line at EOF", WAIT, || {
+        let (endpoint, done) = server(|mut peer| {
+            upgrade(&mut peer);
+            assert_eq!(client_frame(&mut peer), (8, 1000u16.to_be_bytes().to_vec()));
+            eof(&mut peer);
+        });
+        let mut via = direct();
+        let exit = exits(&mut via);
+        let mut stream = connect_with(&endpoint, &via).unwrap();
+        stream.write_all(b"not a complete line").unwrap();
+        stream.shutdown(Shutdown::Write).unwrap();
+        eof(&mut stream);
+        let deadline = fakes::Deadline::after(WAIT);
+        both(deadline, &exit);
+        deadline.recv_or_fail(&done, "normal close after the incomplete client line");
+    });
+}
+
+#[test]
 fn line_feed_in_a_server_message_closes_1007() {
     fakes::within("invalid line message", WAIT, || {
         let (endpoint, done) = server(|mut peer| {

@@ -131,6 +131,17 @@ fn protocol_refusals_have_the_exact_close_code() {
 }
 
 #[test]
+fn controls_at_the_payload_cap_are_valid() {
+    for len in [124, 125] {
+        let payload = vec![b'x'; len];
+        assert_eq!(
+            Reader::default().next(&mut Cursor::new(server(0x89, &payload))),
+            Incoming::Ping(payload)
+        );
+    }
+}
+
+#[test]
 fn close_payloads_are_checked_and_echoable() {
     assert_eq!(
         Reader::default().next(&mut Cursor::new(server(0x88, b""))),

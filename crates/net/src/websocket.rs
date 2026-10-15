@@ -73,8 +73,8 @@ fn bridge(mut socket: tls::Socket, tail: Vec<u8>, via: &Via) -> Result<UnixStrea
 }
 
 fn pump_in(socket: &mut tls::Socket, tail: Vec<u8>, pair: &mut UnixStream) -> io::Result<()> {
-    let reader_socket = socket.try_clone()?;
-    let mut read = BufReader::new(Cursor::new(tail).chain(reader_socket));
+    let mut sender = socket.try_clone()?;
+    let mut read = BufReader::new(Cursor::new(tail).chain(socket));
     let mut frames = frame::Reader::default();
     loop {
         match frames.next(&mut read) {
@@ -82,14 +82,14 @@ fn pump_in(socket: &mut tls::Socket, tail: Vec<u8>, pair: &mut UnixStream) -> io
                 pair.write_all(text.as_bytes())?;
                 pair.write_all(b"\n")?;
             }
-            frame::Incoming::Ping(payload) => send_frame(socket, 10, &payload)?,
+            frame::Incoming::Ping(payload) => send_frame(&mut sender, 10, &payload)?,
             frame::Incoming::Pong => {}
             frame::Incoming::Close(payload) => {
-                send_frame(socket, 8, &payload)?;
+                send_frame(&mut sender, 8, &payload)?;
                 return Ok(());
             }
             frame::Incoming::Fail(code) => {
-                send_frame(socket, 8, &code.to_be_bytes())?;
+                send_frame(&mut sender, 8, &code.to_be_bytes())?;
                 return Ok(());
             }
             frame::Incoming::Gone => return Ok(()),
@@ -107,6 +107,7 @@ fn pump_out(socket: &mut tls::Socket, pair: &mut UnixStream) -> io::Result<()> {
             return Ok(());
         }
         let Some(bytes) = line.strip_suffix(b"\n") else {
+            send_frame(socket, 8, &1000u16.to_be_bytes())?;
             return Ok(());
         };
         send_frame(socket, 1, String::from_utf8_lossy(bytes).as_bytes())?;
@@ -133,10 +134,7 @@ fn shutdown(tcp: &TcpStream, pair: &UnixStream) {
     }
 }
 
-/// Builds a TLS config using the same OS trust-store policy as HTTPS calls.
-pub fn client_config() -> Arc<rustls::ClientConfig> {
-    tls::client_config()
-}
+pub use tls::client_config;
 
 /// The connection policy for a listed hub.
 #[derive(Clone)]

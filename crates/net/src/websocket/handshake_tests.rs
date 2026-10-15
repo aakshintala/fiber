@@ -65,9 +65,19 @@ fn refuses_status_and_invalid_upgrade_headers() {
         switching().replace("Connection: Upgrade\r\n", ""),
         switching().replace("Upgrade: websocket", "Upgrade: other"),
         switching().replace("Connection: Upgrade", "Connection: notupgrade"),
-        switching().replace("HTTP/1.1 101", "HTTP/1.1 1010"),
+        switching().replace(&format!("Sec-WebSocket-Accept: {ACCEPT}\r\n"), ""),
     ] {
-        assert!(reply(&mut Cursor::new(bad), KEY).is_err());
+        assert!(matches!(
+            reply(&mut Cursor::new(bad), KEY),
+            Err(Error::Accept)
+        ));
+    }
+    for status in ["HTTP/1.1 1010", "HTTP/1.0 101"] {
+        let wire = switching().replace("HTTP/1.1 101", status);
+        assert!(matches!(
+            reply(&mut Cursor::new(wire), KEY),
+            Err(Error::Upgrade { .. })
+        ));
     }
     let mut accepted = switching()
         .replace("Connection: Upgrade", "connection: keep-alive, uPgRaDe")
@@ -88,6 +98,11 @@ fn reply_cap_includes_the_blank_line() {
         } else {
             assert!(matches!(result, Err(Error::ReplyTooLong)));
         }
+    }
+    for len in [8191, 8192] {
+        assert!(
+            matches!(reply(&mut Cursor::new(vec![b'x'; len]), KEY), Err(Error::Io(e)) if e.kind() == io::ErrorKind::UnexpectedEof)
+        );
     }
     assert!(matches!(
         reply(&mut Cursor::new(vec![b'x'; 8193]), KEY),

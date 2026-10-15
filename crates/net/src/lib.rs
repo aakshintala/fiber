@@ -60,10 +60,6 @@ pub(crate) fn empty_store_with(cache: &OnceLock<bool>, load: impl FnOnce() -> us
     *cache.get_or_init(|| load() == 0)
 }
 
-pub(crate) fn platform_store_is_empty() -> bool {
-    empty_store_with(&STORE_IS_EMPTY, platform_certificate_count)
-}
-
 /// How many certificates the platform's loader returns: the Linux system
 /// store's count, or 1 elsewhere, where the platform verifier always runs.
 /// One function with inner `cfg` blocks, so a mutant here is always

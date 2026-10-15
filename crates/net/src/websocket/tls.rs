@@ -7,13 +7,19 @@ use std::io::{Read, Write};
 use std::net::TcpStream;
 use std::sync::{Arc, Mutex, PoisonError};
 
-pub(super) fn client_config() -> Arc<ClientConfig> {
+/// Builds a TLS config using the same OS trust-store policy as HTTPS calls.
+pub fn client_config() -> Arc<ClientConfig> {
+    configured(
+        crate::empty_store_with(&crate::STORE_IS_EMPTY, crate::platform_certificate_count),
+        rustls::RootCertStore::from_iter(webpki_roots::TLS_SERVER_ROOTS.iter().cloned()),
+    )
+}
+
+fn configured(empty: bool, fallback: rustls::RootCertStore) -> Arc<ClientConfig> {
     let builder = ClientConfig::builder();
-    let config = if crate::platform_store_is_empty() {
+    let config = if empty {
         builder
-            .with_root_certificates(rustls::RootCertStore::from_iter(
-                webpki_roots::TLS_SERVER_ROOTS.iter().cloned(),
-            ))
+            .with_root_certificates(fallback)
             .with_no_client_auth()
     } else {
         builder
@@ -178,12 +184,9 @@ impl Read for Socket {
         if bytes.is_empty() {
             return Ok(0);
         }
-        let n = self.prefix.read(bytes)?;
-        if n != 0 {
-            return Ok(n);
-        }
         let Some(state) = &self.shared.state else {
-            return self.tcp.read(bytes);
+            let n = self.prefix.read(bytes)?;
+            return if n == 0 { self.tcp.read(bytes) } else { Ok(n) };
         };
         loop {
             let read = state
@@ -196,14 +199,23 @@ impl Read for Socket {
                 Err(e) if e.kind() == io::ErrorKind::WouldBlock => {}
                 Err(e) => return Err(e),
             }
-            let mut encrypted = [0; 16_384];
-            let n = self.tcp.read(&mut encrypted)?;
-            if n == 0 {
-                return Ok(0);
+            // rustls may consume only part of a TCP read. Keep its remainder
+            // until every record and its plaintext have been drained.
+            if self.prefix.position()
+                == u64::try_from(self.prefix.get_ref().len()).unwrap_or(u64::MAX)
+            {
+                let mut encrypted = [0; 16_384];
+                let n = self.tcp.read(&mut encrypted)?;
+                if n == 0 {
+                    return Ok(0);
+                }
+                self.prefix = Cursor::new(encrypted.get(..n).unwrap_or_default().to_vec());
             }
             let pending = {
                 let mut state = state.lock().unwrap_or_else(PoisonError::into_inner);
-                state.read_tls(&mut Cursor::new(encrypted.get(..n).unwrap_or_default()))?;
+                if state.read_tls(&mut self.prefix)? == 0 {
+                    return Ok(0);
+                }
                 state.process_new_packets().map_err(io::Error::other)?;
                 state.wants_write()
             };
