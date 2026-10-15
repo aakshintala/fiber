@@ -606,3 +606,54 @@ fn an_elicitation_with_two_calls_in_flight_names_both() {
         ],
     );
 }
+
+#[test]
+fn a_hold_that_never_reaches_the_server_is_named() {
+    let setup = Setup::new();
+    let _guard = guard(&setup);
+    let dir = fixture(
+        &setup,
+        &json!([hold_tool("hold"), ask_tool()]),
+        &[
+            (
+                "call-hold.json",
+                r#"{"content":[{"type":"text","text":"held"}]}"#,
+            ),
+            (
+                "call-ask.json",
+                r#"{"content":[{"type":"text","text":"asked"}]}"#,
+            ),
+            ("elicit-ask.json", three_fields()),
+        ],
+    );
+    for name in ["release-hold", "held-hold", "release-ask"] {
+        mkfifo(&dir, name);
+    }
+    // Only `ask` is ever called, so `held-hold` is never written and
+    // `tools/call hold` never reaches the server, whatever the order of
+    // events.
+    let server = ProviderServer::start([
+        stream(&[function_call("c_ask", "mcp__fx__ask", &json!({}))]),
+        hello(),
+    ])
+    .unwrap();
+    setup.provider(&server);
+    configure_fx(&setup, &dir, Value::Null);
+    let id = doors::mint("s_");
+    let mut running = setup.start_session(&id, &[]);
+    let client = running.connect_client(&setup.socket(&id));
+    running.wait_for("extensions_loaded");
+    subscribe(setup.deadline, &client);
+    subscribed(setup.deadline, &client);
+    prompt(setup.deadline, &client);
+    let clock = Box::leak(Box::new(FakeClock::new()));
+    let spent = Deadline::on(&**clock);
+    clock.advance(support::WAITS);
+    let message =
+        read_held(spent, setup.deadline, &running, &dir, "hold").unwrap_err();
+    assert!(
+        message.contains("no `tools/call` for hold"),
+        "{message}",
+    );
+    assert!(message.contains("never received"), "{message}");
+}
