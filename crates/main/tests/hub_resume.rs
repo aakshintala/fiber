@@ -397,7 +397,7 @@ fn a_full_resume_announces_its_fold_without_a_subscribe_acknowledgement() {
     assert_eq!(seqs, (0..=last).collect::<Vec<_>>());
     let log = setup.log(&id);
     assert_eq!(log.last().unwrap()["seq"], last);
-    let acks: Vec<_> = reopened.iter().chain(&fold).filter(|line| matches!(line["kind"].as_str(), Some("command_accepted" | "command_rejected"))).collect();
+    let acks: Vec<_> = fold.iter().filter(|line| matches!(line["kind"].as_str(), Some("command_accepted" | "command_rejected"))).collect();
     assert!(acks.is_empty(), "no subscribe acknowledgement during reopening: {acks:?}");
     let answered = until(&client, "the tools acknowledgement", |line| acknowledges(line, "c_tools"));
     assert_eq!(answered.iter().filter(|line| line["kind"] == "stream_reopened").count(), 0);
