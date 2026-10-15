@@ -5,7 +5,7 @@ use ratatui::buffer::Buffer;
 use ratatui::layout::Rect;
 use ratatui::style::Modifier;
 
-use super::{Frame, Ink, List, Spot, about, render, rows_height};
+use super::{Frame, Ink, List, Spot, about, compact, render, rows_height};
 use crate::keys::Key;
 use crate::mouse::TargetId;
 use crate::theme::Role;
@@ -117,6 +117,36 @@ fn a_shrunk_list_clamps_on_select() {
     list.select(list.selected(), 4, 3);
     assert_eq!(list.selected(), 3);
     assert!(list.top() <= 3);
+}
+
+#[test]
+fn compact_counts_stay_exact_under_a_thousand() {
+    for (tokens, said) in [(0, "0"), (1, "1"), (999, "999")] {
+        assert_eq!(compact(tokens), said);
+    }
+}
+
+#[test]
+fn compact_counts_round_half_up_to_whole_thousands() {
+    for (tokens, said) in [
+        (1000, "1k"),
+        (1499, "1k"),
+        (1500, "2k"),
+        (15_000, "15k"),
+        (120_000, "120k"),
+        (268_000, "268k"),
+        (400_000, "400k"),
+        (999_499, "999k"),
+    ] {
+        assert_eq!(compact(tokens), said, "{tokens}");
+    }
+}
+
+#[test]
+fn compact_counts_past_a_million_read_in_millions() {
+    for (tokens, said) in [(999_500, "1M"), (1_000_000, "1M")] {
+        assert_eq!(compact(tokens), said, "{tokens}");
+    }
 }
 
 #[test]

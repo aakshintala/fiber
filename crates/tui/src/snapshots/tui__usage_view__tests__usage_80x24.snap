@@ -1,29 +1,13 @@
 ---
 source: crates/tui/src/usage_view_tests.rs
-assertion_line: 305
+assertion_line: 367
 expression: screen
 ---
  Usage  /usage                                                       Esc returns
-session
-tokens  in 1,234 · cache read 5,678 · cache write 100 · out 1,000
-cost  billed $0.12 · on subscription $0.00
-budget left  $4.88 of $5.00
-by turn
-turn 1
-tokens  in 1,234 · cache read 5,678 · cache write 100 · out 1,000
-cost  billed $0.12 · on subscription $0.00
-by model
-anthropic/claude-x
-tokens  in 1,234 · cache read 5,678 · cache write 100 · out 1,000
-cost  billed $0.12 · on subscription $0.00
-by delegate
-this session
-tokens  in 1,234 · cache read 5,678 · cache write 100 · out 1,000
-cost  billed $0.12 · on subscription $0.00
-
-
-
-
-
-
-↑↓ scroll · Esc close
+By turn
+turn 1 · 1k in · 1k out · 6k cache read · 100 cache write · $0.12 billed · $0.00
+By model
+anthropic/claude-x · 1k in · 1k out · 6k cache read · 100 cache write · $0.12 bi
+By delegate
+this session · 1k in · 1k out · 6k cache read · 100 cache write · $0.12 billed ·
+budget left $4.88 of $5.00

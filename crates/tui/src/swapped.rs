@@ -332,6 +332,20 @@ fn field(text: &str, caret: usize, line: Rect, buf: &mut Buffer) {
     }
 }
 
+/// A compact count as the swapped views say it: exact under 1,000,
+/// whole thousands above, whole millions past that, rounded half up
+/// (`docs/tui.md`, "Swapped views").
+pub(crate) fn compact(n: u64) -> String {
+    if n < 1000 {
+        return n.to_string();
+    }
+    let thousands = n.saturating_add(500) / 1000;
+    if thousands < 1000 {
+        return format!("{thousands}k");
+    }
+    format!("{}M", thousands.saturating_add(500) / 1000)
+}
+
 /// A token count as the views say it: grouped by thousands.
 pub(crate) fn about(tokens: u64) -> String {
     let digits = tokens.to_string();
