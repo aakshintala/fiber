@@ -2560,13 +2560,21 @@ fn a_cached_read_after_the_first_frame_fills_the_catalogue() {
     let mut started = launch();
     started.models = Some(read);
     let (done, finished) = mpsc::channel();
+    // The hub stays unreached until the notice markers match: its
+    // refused notice would take the row the catalogue notice takes,
+    // and the frame diff would split the markers across cursor moves
+    // wherever the two rows share a cell.
+    let (hub_release, hub_held) = mpsc::channel();
     std::thread::Builder::new()
         .name("lib-run".to_owned())
         .spawn(move || {
             let code = super::run(
                 slave,
                 started,
-                Box::new(|| Err(io::Error::other("refused"))),
+                Box::new(move || {
+                    hub_held.recv().ok();
+                    Err(io::Error::other("refused"))
+                }),
                 Box::new(|_| {}),
                 fakes::clock::FakeClock::new(),
             )
@@ -2591,8 +2599,9 @@ fn a_cached_read_after_the_first_frame_fills_the_catalogue() {
     release
         .send(())
         .unwrap_or_else(|err| panic!("release the cached read: {err}"));
-    // Both halves sit on one notice row, drawn in row-major order, so
-    // `the lists` comes first and `are in` follows it.
+    // Both halves sit on one notice row over blank rows, drawn in
+    // row-major order, so `the lists` comes first and `are in` follows
+    // it; the hub waits below, so no other row shares their cells.
     let wait = Deadline::after(DEADLINE);
     let lists = watched(&frames, "the cached read's notice text", &wait);
     assert!(
@@ -2605,6 +2614,9 @@ fn a_cached_read_after_the_first_frame_fills_the_catalogue() {
         "the chunk ends with the notice ending: {ending:?}"
     );
     assert_eq!(*seen.lock().unwrap(), [crate::Refresh::Cached]);
+    // Now the hub may fail; its notice and banner draw after the
+    // markers, past every assertion on them.
+    hub_release.send(()).ok();
     pair.main
         .write_all(&[0x03, 0x03])
         .unwrap_or_else(|err| panic!("write: {err}"));
@@ -2879,6 +2891,7 @@ fn the_signal_thread_sends_each_taken_signal() {
         | Input::Tick => panic!("the signal thread sent something else"),
     }
 }
+
 
 
 
