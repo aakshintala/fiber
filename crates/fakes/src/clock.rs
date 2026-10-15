@@ -61,6 +61,8 @@ pub struct FakeClock {
     mark_parked_pause: Mutex<Option<(std::sync::mpsc::Sender<()>, std::sync::mpsc::Receiver<()>)>>,
     #[cfg(test)]
     advance_pause: Mutex<Option<(std::sync::mpsc::Sender<()>, std::sync::mpsc::Receiver<()>)>>,
+    #[cfg(test)]
+    advance_pass_pause: Mutex<Option<(std::sync::mpsc::Sender<()>, std::sync::mpsc::Receiver<()>)>>,
 }
 
 impl FakeClock {
@@ -92,6 +94,8 @@ impl FakeClock {
             mark_parked_pause: Mutex::new(None),
             #[cfg(test)]
             advance_pause: Mutex::new(None),
+            #[cfg(test)]
+            advance_pass_pause: Mutex::new(None),
         })
     }
 
@@ -186,6 +190,10 @@ impl FakeClock {
         state.watching += 1;
         state.observed.clear();
         loop {
+            #[cfg(test)]
+            {
+                state = self.advance_pass_checked(state);
+            }
             // A watched mismatch fails before any match is considered: a
             // convenient later park never hides the first wrong one.
             if let Some(found) = watched_mismatch(&state, expected, thread) {
@@ -260,6 +268,40 @@ impl FakeClock {
                 .wait_timeout(state, wait_for)
                 .unwrap_or_else(PoisonError::into_inner);
             state = guard;
+        }
+    }
+
+    #[cfg(test)]
+    fn pause_next_advance_pass(
+        &self,
+    ) -> (std::sync::mpsc::Receiver<()>, std::sync::mpsc::Sender<()>) {
+        let (entered_tx, entered_rx) = std::sync::mpsc::channel();
+        let (release_tx, release_rx) = std::sync::mpsc::channel();
+        *self
+            .advance_pass_pause
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner) = Some((entered_tx, release_rx));
+        (entered_rx, release_tx)
+    }
+
+    /// Pauses once before a decision, with the wait registered but no state
+    /// lock held. No outside seam can hold the helper between two events
+    /// that each wake it. The test owns the release sender: sending or
+    /// dropping it releases the pause, including when the test panics.
+    #[cfg(test)]
+    fn advance_pass_checked<'a>(&'a self, state: MutexGuard<'a, State>) -> MutexGuard<'a, State> {
+        let pause = self
+            .advance_pass_pause
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .take();
+        if let Some((entered, release)) = pause {
+            drop(state);
+            let _sent = entered.send(());
+            let _released = release.recv();
+            lock(&self.state)
+        } else {
+            state
         }
     }
 
