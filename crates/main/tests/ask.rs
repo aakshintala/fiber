@@ -2923,15 +2923,6 @@ fn the_muse_1_3_entries_declare_the_thinking_levels_their_routes_accept() {
         .unwrap();
     assert_eq!(model.thinking_levels, levels);
     assert_eq!(model.thinking_default, None);
-    let free = zen
-        .models
-        .iter()
-        .find(|m| m.id == "muse-spark-1.3-contributor-free")
-        .unwrap();
-    // The free tier answers only inside OpenCode; its levels mirror the
-    // 1.3 family on both routes (research/opencode-thinking/README.md).
-    assert_eq!(free.thinking_levels, levels);
-    assert_eq!(free.thinking_default, None);
 }
 
 #[test]

@@ -454,7 +454,7 @@ A provider may also declare a Lua `models()` function that returns its model
 list. Fiber stores the result on disk in [Fiber home](state.md)'s cache, and
 every surface that shows a model list draws from that copy at once: the
 terminal's model picker, `fiber models`, and anything an agent reads. A refresh
-runs in the background and never holds a list back.
+runs in the background and never holds a list back. The generator leaves out ids a package's table skips because the vendor rejects them, and a gateway model no probe reaches is skipped.
 
 - **At start,** Fiber refreshes each provider that has a credential and whose
   cached list is older than `model_lists.refresh_after` (`docs/configuration.md`),
