@@ -688,16 +688,6 @@ pub(super) fn branch_text(app: &App) -> Option<String> {
     }
 }
 
-/// A row that opens `spot` when clicked.
-fn targeted(text: String, spot: Spot) -> Row {
-    Row {
-        line: Line::raw(text),
-        spot: Some(spot),
-        tint: None,
-        edge: false,
-    }
-}
-
 /// `text` cut from the left to at most `max` columns, with a leading `…`.
 fn cut_left(text: &str, max: usize) -> String {
     if format::width(text) <= max {
@@ -752,8 +742,10 @@ fn widget_rows(app: &App, at: usize) -> Vec<Row> {
 
 /// The Changed files card's rows at `text` columns: the five paths with
 /// the most lines changed, ties by path ascending, with the counts at the
-/// row's right edge, then the totals over every path. Per-file counts come
-/// from `tool_call_completed`'s `changes` (`docs/tui.md`, "The panel").
+/// row's right edge, then one last row: dim "… N more" on the left when
+/// files exceed five, with the totals over every path right-aligned, or
+/// the totals alone with five files or fewer. Per-file counts come from
+/// `tool_call_completed`'s `changes` (`docs/tui.md`, "The panel").
 fn changed_files_rows(app: &App, text: usize) -> Vec<Row> {
     let changes = app.panel_state().changes();
     if changes.is_empty() {
@@ -788,13 +780,32 @@ fn changed_files_rows(app: &App, text: usize) -> Vec<Row> {
             )
         },
     );
-    out.push(targeted(
-        format!(
-            "{} changed  +{added} \u{2212}{removed}",
-            format::count(files, "file", "files")
-        ),
-        Spot::ChangedFiles,
+    let mut spans = Vec::new();
+    // The last row the mock shows: dim "… N more" on the left when
+    // files exceed five, with the totals right-aligned, or the totals
+    // alone. The count is the title's figure.
+    if files > 5 {
+        spans.push(Span::styled(
+            format!("\u{2026} {} more", files.saturating_sub(5)),
+            style(Role::Muted),
+        ));
+    }
+    let left_w: usize = spans.iter().map(|span| format::width(&span.content)).sum();
+    let counts = format!("+{added} \u{2212}{removed}");
+    let pad = " ".repeat(text.saturating_sub(left_w + format::width(&counts)).max(1));
+    spans.push(Span::raw(pad));
+    spans.push(Span::styled(format!("+{added}"), style(Role::Added)));
+    spans.push(Span::raw(" ".to_owned()));
+    spans.push(Span::styled(
+        format!("\u{2212}{removed}"),
+        style(Role::Removed),
     ));
+    out.push(Row {
+        line: Line::from(spans),
+        spot: Some(Spot::ChangedFiles),
+        tint: None,
+        edge: false,
+    });
     out
 }
 

@@ -977,10 +977,12 @@ fn the_top_five_by_lines_changed_ties_by_path() {
     }
     assert!(drawn[2].ends_with("+8 \u{2212}2"));
     assert!(drawn[6].ends_with("+4 \u{2212}2"));
-    assert!(
-        drawn
-            .iter()
-            .any(|row| *row == "6 files changed  +33 \u{2212}13")
+    // Six files: five paths, then dim "… 1 more" with the totals over
+    // every path right-aligned.
+    let last = drawn.get(drawn.len() - 2).expect("a last row");
+    assert_eq!(
+        *last,
+        "\u{2026} 1 more".to_owned() + &" ".repeat(21) + "+33 \u{2212}13"
     );
 }
 
@@ -999,11 +1001,10 @@ fn exactly_five_paths_all_show() {
     );
     let drawn = texts(&app, 40);
     assert_eq!(drawn.len(), 9);
-    assert!(
-        drawn
-            .iter()
-            .any(|row| *row == "5 files changed  +5 \u{2212}0")
-    );
+    // With five files or fewer the last row holds the totals alone,
+    // right-aligned.
+    let last = drawn.get(drawn.len() - 2).expect("a last row");
+    assert_eq!(*last, " ".repeat(31) + "+5 \u{2212}0");
 }
 
 #[test]
@@ -1230,7 +1231,7 @@ fn a_row_is_cut_only_past_the_card_width() {
 
 #[test]
 fn a_cut_row_keeps_its_target_and_tint() {
-    let mut row = super::targeted(
+    let mut row = targeted(
         "cost on subscription  $1.10".to_owned(),
         crate::app::panel::Spot::Usage,
     );
@@ -1363,6 +1364,17 @@ fn no_color_boxes_a_sidebar_card_and_keeps_targets_inside() {
     let (rows, span) = super::rows_and_delegates(&app, rect.width);
     assert_eq!(rows.len(), 4);
     assert_eq!(span, None);
+}
+
+/// A local targeted row: the production helper went with the old totals
+/// row, and only these tests need one.
+fn targeted(text: String, spot: crate::app::panel::Spot) -> super::Row {
+    super::Row {
+        line: ratatui::text::Line::raw(text),
+        spot: Some(spot),
+        tint: None,
+        edge: false,
+    }
 }
 
 /// A local plain row: the production helper went with the directory
@@ -1699,4 +1711,88 @@ fn the_tools_row_shows_only_while_a_server_is_down() {
         row.line.spans.last().map(|span| span.style),
         Some(style(Role::Error))
     );
+}
+
+/// Seven files: five paths, then dim "… 2 more" with the totals over
+/// every path, and the title counts every file dim (`docs/tui.md`, "The
+/// panel").
+#[test]
+fn seven_files_count_two_more() {
+    use crate::app::panel::Spot;
+    use crate::markdown::{Role, style};
+    use ratatui::style::Modifier;
+    let mut app = attached(160, 40);
+    fold_changes(
+        &mut app,
+        &[
+            ("src/a.rs", 10, 1),
+            ("src/b.rs", 10, 1),
+            ("src/c.rs", 10, 1),
+            ("src/d.rs", 10, 1),
+            ("src/e.rs", 10, 1),
+            ("src/f.rs", 10, 1),
+            ("src/g.rs", 10, 1),
+        ],
+    );
+    let drawn = rows(&app, 40);
+    // The edge, the title, five paths, the last row, the edge.
+    assert_eq!(drawn.len(), 9);
+    let title = &drawn[1];
+    assert_eq!(
+        title.line.to_string(),
+        "Changed files".to_owned() + &" ".repeat(22) + "7"
+    );
+    assert_eq!(title.spot, None);
+    assert_eq!(title.line.spans.len(), 3);
+    assert_eq!(title.line.spans[0].content, "Changed files");
+    assert_eq!(
+        title.line.spans[0].style,
+        style(Role::Text).add_modifier(Modifier::BOLD)
+    );
+    assert_eq!(title.line.spans[2].content, "7");
+    assert_eq!(title.line.spans[2].style, style(Role::Muted));
+    let last = &drawn[7];
+    assert_eq!(
+        last.line.to_string(),
+        "\u{2026} 2 more".to_owned() + &" ".repeat(22) + "+70 \u{2212}7"
+    );
+    assert_eq!(last.spot, Some(Spot::ChangedFiles));
+    assert_eq!(last.line.spans.len(), 5);
+    assert_eq!(last.line.spans[0].content, "\u{2026} 2 more");
+    assert_eq!(last.line.spans[0].style, style(Role::Muted));
+    assert_eq!(last.line.spans[2].content, "+70");
+    assert_eq!(last.line.spans[2].style, style(Role::Added));
+    assert_eq!(last.line.spans[4].content, "\u{2212}7");
+    assert_eq!(last.line.spans[4].style, style(Role::Removed));
+}
+
+/// The Jobs title counts the running jobs in attention with a dim `▸`,
+/// and keeps the toggle target: closed draws the title alone, open adds
+/// one row per job (`docs/tui.md`, "The panel").
+#[test]
+fn the_jobs_title_counts_running_with_a_toggle() {
+    use crate::app::panel::Spot;
+    use crate::markdown::{Role, style};
+    let mut app = attached(160, 40);
+    fold_job(&mut app, "j_1", "build");
+    fold_job(&mut app, "j_2", "test");
+    let drawn = rows(&app, 40);
+    assert_eq!(drawn.len(), 3);
+    let title = &drawn[1];
+    assert_eq!(
+        title.line.to_string(),
+        "Jobs".to_owned() + &" ".repeat(21) + "2 running \u{25b8}"
+    );
+    assert_eq!(title.spot, Some(Spot::Jobs));
+    assert_eq!(title.line.spans.len(), 4);
+    assert_eq!(title.line.spans[2].content, "2 running");
+    assert_eq!(title.line.spans[2].style, style(Role::Attention));
+    assert_eq!(title.line.spans[3].content, " \u{25b8}");
+    assert_eq!(title.line.spans[3].style, style(Role::Muted));
+    // Open: the title, then one row per job.
+    app.on_click(crate::mouse::TargetId::Panel(Spot::Jobs));
+    let drawn = rows(&app, 40);
+    assert_eq!(drawn.len(), 5);
+    assert_eq!(drawn[2].line.to_string(), "  build");
+    assert_eq!(drawn[3].line.to_string(), "  test");
 }
