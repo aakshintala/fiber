@@ -794,7 +794,7 @@ jobs:
 
   # Files the flake issues for the tests that passed after a retry
   # (docs/testing.md, "Flaky tests"). It holds `contents: read`,
-  # `pull-requests: read` and `issues: write`, checks nothing out and runs
+  # `pull-requests: write` and `issues: write`, checks nothing out and runs
   # no repository code: the test names come from this run's artifacts and
   # go to the API by file. It skips repeat titles, stale bases and PR-only
   # failures. Not in `ci`'s needs: a flake never fails the merge.
