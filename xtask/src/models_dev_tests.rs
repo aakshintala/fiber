@@ -1053,7 +1053,10 @@ fn zen_keeps_its_google_generative_ai_models() {
     let mut zen = gateway_package("z");
     zen.path = "providers/opencode/providers/opencode-zen.json";
     zen.protocol = ProtocolRule::ByNpm;
-    zen.thinking = &[("muse-spark-1.3", &["low"], None), ("minimax-m2.7", &[], None)];
+    zen.thinking = &[
+        ("muse-spark-1.3", &["low"], None),
+        ("minimax-m2.7", &[], None),
+    ];
     let mut go = gateway_package("g");
     go.protocol = ProtocolRule::ByNpm;
     go.thinking = &[
