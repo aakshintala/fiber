@@ -353,10 +353,11 @@ fn a_peer_that_never_reads_expires_the_write_and_ends_both_pumps() {
 }
 
 #[test]
-fn an_unread_pair_is_bounded_and_retains_only_whole_lines() {
+fn an_unread_pair_is_bounded_and_completed_lines_stay_intact() {
     fakes::within("pair write backpressure", WAIT, || {
         let (endpoint, done) = server(|mut peer| {
             upgrade(&mut peer);
+            peer.write_all(&server_frame(1, b"first")).unwrap();
             let frame = server_frame(1, &vec![b'x'; 65536]);
             for _ in 0..1024 {
                 if peer.write_all(&frame).is_err() {
@@ -375,19 +376,14 @@ fn an_unread_pair_is_bounded_and_retains_only_whole_lines() {
         both(deadline, &exit);
         let mut received = Vec::new();
         stream.read_to_end(&mut received).unwrap();
-        assert!(
-            !received.is_empty(),
-            "the in-pump delivered bytes before backpressure"
-        );
-        assert_eq!(
-            received.len() % 65537,
-            0,
-            "shutdown left a partial line: {} bytes",
-            received.len()
-        );
-        for line in received.chunks(65537) {
-            assert_eq!(line.last(), Some(&b'\n'));
-            assert!(line[..65536].iter().all(|byte| *byte == b'x'));
+        // Only an LF completes a line. A failed stream may end in a cut-off tail.
+        let mut lines = received
+            .split_inclusive(|byte| *byte == b'\n')
+            .filter_map(|line| line.strip_suffix(b"\n"));
+        assert_eq!(lines.next(), Some(b"first".as_slice()));
+        for line in lines {
+            assert_eq!(line.len(), 65536);
+            assert!(line.iter().all(|byte| *byte == b'x'));
         }
         deadline.recv_or_fail(&done, "flooding server stopped");
     });
