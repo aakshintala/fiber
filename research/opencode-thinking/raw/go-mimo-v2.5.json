@@ -1,0 +1,399 @@
+{
+ "route": "go",
+ "protocol": "completions",
+ "model": "mimo-v2.5",
+ "base": "https://opencode.ai/zen/go",
+ "levels": [
+  {
+   "level": "off",
+   "status": 200,
+   "elapsed_s": 2.9,
+   "request": {
+    "model": "mimo-v2.5",
+    "messages": [
+     {
+      "role": "user",
+      "content": "Reply with the single word: ok"
+     }
+    ],
+    "max_tokens": 64,
+    "reasoning_effort": "none"
+   },
+   "response": {
+    "id": "gen-1792036837-X3ItezjSZGw0unHol0tP",
+    "object": "chat.completion",
+    "created": 1792036837,
+    "model": "mimo-v2.5",
+    "choices": [
+     {
+      "index": 0,
+      "finish_reason": "stop",
+      "logprobs": null,
+      "message": {
+       "role": "assistant",
+       "content": "ok",
+       "refusal": null,
+       "reasoning": null
+      }
+     }
+    ],
+    "usage": {
+     "prompt_tokens": 16,
+     "completion_tokens": 2,
+     "total_tokens": 18,
+     "prompt_tokens_details": {
+      "audio_tokens": 0,
+      "cached_tokens": 0,
+      "cache_write_tokens": 0
+     },
+     "completion_tokens_details": {
+      "audio_tokens": 0,
+      "reasoning_tokens": 0
+     }
+    }
+   }
+  },
+  {
+   "level": "minimal",
+   "status": 200,
+   "elapsed_s": 5.56,
+   "request": {
+    "model": "mimo-v2.5",
+    "messages": [
+     {
+      "role": "user",
+      "content": "Reply with the single word: ok"
+     }
+    ],
+    "max_tokens": 64,
+    "reasoning_effort": "minimal"
+   },
+   "response": {
+    "id": "gen-1792036840-PkDorX5pMz3PyRAEGA16",
+    "object": "chat.completion",
+    "created": 1792036840,
+    "model": "mimo-v2.5",
+    "choices": [
+     {
+      "index": 0,
+      "finish_reason": "stop",
+      "logprobs": null,
+      "message": {
+       "role": "assistant",
+       "content": "ok",
+       "refusal": null,
+       "reasoning": "Simple request.",
+       "reasoning_details": [
+        {
+         "type": "reasoning.text",
+         "text": "Simple request.",
+         "format": "unknown",
+         "index": 0
+        }
+       ]
+      }
+     }
+    ],
+    "usage": {
+     "prompt_tokens": 14,
+     "completion_tokens": 7,
+     "total_tokens": 21,
+     "prompt_tokens_details": {
+      "audio_tokens": 0,
+      "cached_tokens": 0,
+      "cache_write_tokens": 0
+     },
+     "completion_tokens_details": {
+      "audio_tokens": 0,
+      "reasoning_tokens": 4
+     }
+    }
+   }
+  },
+  {
+   "level": "low",
+   "status": 200,
+   "elapsed_s": 4.32,
+   "request": {
+    "model": "mimo-v2.5",
+    "messages": [
+     {
+      "role": "user",
+      "content": "Reply with the single word: ok"
+     }
+    ],
+    "max_tokens": 64,
+    "reasoning_effort": "low"
+   },
+   "response": {
+    "id": "gen-1792036845-RQXawUPccw30PkrdmtAk",
+    "object": "chat.completion",
+    "created": 1792036845,
+    "model": "mimo-v2.5",
+    "choices": [
+     {
+      "index": 0,
+      "finish_reason": "stop",
+      "logprobs": null,
+      "message": {
+       "role": "assistant",
+       "content": "ok",
+       "refusal": null,
+       "reasoning": "The user wants a single word reply: \"ok\"",
+       "reasoning_details": [
+        {
+         "type": "reasoning.text",
+         "text": "The user wants a single word reply: \"ok\"",
+         "format": "unknown",
+         "index": 0
+        }
+       ]
+      }
+     }
+    ],
+    "usage": {
+     "prompt_tokens": 14,
+     "completion_tokens": 15,
+     "total_tokens": 29,
+     "prompt_tokens_details": {
+      "audio_tokens": 0,
+      "cached_tokens": 0,
+      "cache_write_tokens": 0
+     },
+     "completion_tokens_details": {
+      "audio_tokens": 0,
+      "reasoning_tokens": 12
+     }
+    }
+   }
+  },
+  {
+   "level": "medium",
+   "status": 200,
+   "elapsed_s": 2.91,
+   "request": {
+    "model": "mimo-v2.5",
+    "messages": [
+     {
+      "role": "user",
+      "content": "Reply with the single word: ok"
+     }
+    ],
+    "max_tokens": 64,
+    "reasoning_effort": "medium"
+   },
+   "response": {
+    "id": "gen-1792036850-9riRrvvvUQ6SUt7TYSX1",
+    "object": "chat.completion",
+    "created": 1792036850,
+    "model": "mimo-v2.5",
+    "choices": [
+     {
+      "index": 0,
+      "finish_reason": "stop",
+      "logprobs": null,
+      "message": {
+       "role": "assistant",
+       "content": "ok",
+       "refusal": null,
+       "reasoning": "The user wants me to reply with the single word \"ok\".",
+       "reasoning_details": [
+        {
+         "type": "reasoning.text",
+         "text": "The user wants me to reply with the single word \"ok\".",
+         "format": "unknown",
+         "index": 0
+        }
+       ]
+      }
+     }
+    ],
+    "usage": {
+     "prompt_tokens": 14,
+     "completion_tokens": 17,
+     "total_tokens": 31,
+     "prompt_tokens_details": {
+      "audio_tokens": 0,
+      "cached_tokens": 0,
+      "cache_write_tokens": 0
+     },
+     "completion_tokens_details": {
+      "audio_tokens": 0,
+      "reasoning_tokens": 14
+     }
+    }
+   }
+  },
+  {
+   "level": "high",
+   "status": 200,
+   "elapsed_s": 1.55,
+   "request": {
+    "model": "mimo-v2.5",
+    "messages": [
+     {
+      "role": "user",
+      "content": "Reply with the single word: ok"
+     }
+    ],
+    "max_tokens": 64,
+    "reasoning_effort": "high"
+   },
+   "response": {
+    "id": "gen-1792036853-eJ3fHx5Nm0YA1dwIv2BG",
+    "object": "chat.completion",
+    "created": 1792036853,
+    "model": "mimo-v2.5",
+    "choices": [
+     {
+      "index": 0,
+      "finish_reason": "stop",
+      "logprobs": null,
+      "message": {
+       "role": "assistant",
+       "content": "ok",
+       "refusal": null,
+       "reasoning": "Simple request.",
+       "reasoning_details": [
+        {
+         "type": "reasoning.text",
+         "text": "Simple request.",
+         "format": "unknown",
+         "index": 0
+        }
+       ]
+      }
+     }
+    ],
+    "usage": {
+     "prompt_tokens": 14,
+     "completion_tokens": 7,
+     "total_tokens": 21,
+     "prompt_tokens_details": {
+      "audio_tokens": 0,
+      "cached_tokens": 0,
+      "cache_write_tokens": 0
+     },
+     "completion_tokens_details": {
+      "audio_tokens": 0,
+      "reasoning_tokens": 4
+     }
+    }
+   }
+  },
+  {
+   "level": "xhigh",
+   "status": 200,
+   "elapsed_s": 3.15,
+   "request": {
+    "model": "mimo-v2.5",
+    "messages": [
+     {
+      "role": "user",
+      "content": "Reply with the single word: ok"
+     }
+    ],
+    "max_tokens": 64,
+    "reasoning_effort": "xhigh"
+   },
+   "response": {
+    "id": "gen-1792036854-OwyCGt2L8d0Zc9eSWba9",
+    "object": "chat.completion",
+    "created": 1792036854,
+    "model": "mimo-v2.5",
+    "choices": [
+     {
+      "index": 0,
+      "finish_reason": "stop",
+      "logprobs": null,
+      "message": {
+       "role": "assistant",
+       "content": "ok",
+       "refusal": null,
+       "reasoning": "Simple request.",
+       "reasoning_details": [
+        {
+         "type": "reasoning.text",
+         "text": "Simple request.",
+         "format": "unknown",
+         "index": 0
+        }
+       ]
+      }
+     }
+    ],
+    "usage": {
+     "prompt_tokens": 14,
+     "completion_tokens": 7,
+     "total_tokens": 21,
+     "prompt_tokens_details": {
+      "audio_tokens": 0,
+      "cached_tokens": 0,
+      "cache_write_tokens": 0
+     },
+     "completion_tokens_details": {
+      "audio_tokens": 0,
+      "reasoning_tokens": 4
+     }
+    }
+   }
+  },
+  {
+   "level": "max",
+   "status": 200,
+   "elapsed_s": 4.56,
+   "request": {
+    "model": "mimo-v2.5",
+    "messages": [
+     {
+      "role": "user",
+      "content": "Reply with the single word: ok"
+     }
+    ],
+    "max_tokens": 64,
+    "reasoning_effort": "max"
+   },
+   "response": {
+    "id": "gen-1792036857-OQrnjkINjOSXJ7BzmW5Y",
+    "object": "chat.completion",
+    "created": 1792036857,
+    "model": "mimo-v2.5",
+    "choices": [
+     {
+      "index": 0,
+      "finish_reason": "stop",
+      "logprobs": null,
+      "message": {
+       "role": "assistant",
+       "content": "ok",
+       "refusal": null,
+       "reasoning": "The user wants me to reply with the single word \"ok\".",
+       "reasoning_details": [
+        {
+         "type": "reasoning.text",
+         "text": "The user wants me to reply with the single word \"ok\".",
+         "format": "unknown",
+         "index": 0
+        }
+       ]
+      }
+     }
+    ],
+    "usage": {
+     "prompt_tokens": 14,
+     "completion_tokens": 17,
+     "total_tokens": 31,
+     "prompt_tokens_details": {
+      "audio_tokens": 0,
+      "cached_tokens": 0,
+      "cache_write_tokens": 0
+     },
+     "completion_tokens_details": {
+      "audio_tokens": 0,
+      "reasoning_tokens": 14
+     }
+    }
+   }
+  }
+ ]
+}

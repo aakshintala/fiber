@@ -1,0 +1,296 @@
+{
+ "route": "go",
+ "protocol": "messages",
+ "model": "qwen3.6-plus",
+ "base": "https://opencode.ai/zen/go",
+ "levels": [
+  {
+   "level": "off",
+   "status": 200,
+   "elapsed_s": 3.4,
+   "request": {
+    "model": "qwen3.6-plus",
+    "messages": [
+     {
+      "role": "user",
+      "content": "Reply with the single word: ok"
+     }
+    ],
+    "max_tokens": 64
+   },
+   "response": {
+    "id": "msg_16152b40-cf3f-4217-8fbd-d798f4f6612f",
+    "type": "message",
+    "role": "assistant",
+    "stop_reason": "end_turn",
+    "model": "qwen3.6-plus",
+    "content": [
+     {
+      "type": "thinking",
+      "thinking": "Here's a thinking process:\n\n1.  **Analyze User Input:** The user says \"Reply with the single word: ok\"\n2.  **Identify Constraint:** The response must be exactly one word: \"ok\" (case-insensitive usually, but I'll stick to \"ok\" as requested).\n3.  **Check for Additional Context/Traps:** None. It's a straightforward instruction.\n4.  **Formulate Response:** \"ok\"\n5.  **Verify Constraint:** Is it a single word? Yes. Is it exactly \"ok\"? Yes.\n6.  **Output Generation:** ok",
+      "signature": ""
+     },
+     {
+      "type": "text",
+      "text": "ok"
+     }
+    ],
+    "usage": {
+     "input_tokens": 17,
+     "output_tokens": 137,
+     "cache_creation_input_tokens": 0,
+     "cache_read_input_tokens": 0
+    }
+   }
+  },
+  {
+   "level": "minimal",
+   "status": 400,
+   "elapsed_s": 0.46,
+   "request": {
+    "model": "qwen3.6-plus",
+    "messages": [
+     {
+      "role": "user",
+      "content": "Reply with the single word: ok"
+     }
+    ],
+    "max_tokens": 64,
+    "thinking": {
+     "type": "adaptive"
+    },
+    "output_config": {
+     "effort": "minimal"
+    }
+   },
+   "response": {
+    "model": "qwen3.6-plus"
+   }
+  },
+  {
+   "level": "low",
+   "status": 200,
+   "elapsed_s": 3.15,
+   "request": {
+    "model": "qwen3.6-plus",
+    "messages": [
+     {
+      "role": "user",
+      "content": "Reply with the single word: ok"
+     }
+    ],
+    "max_tokens": 64,
+    "thinking": {
+     "type": "adaptive"
+    },
+    "output_config": {
+     "effort": "low"
+    }
+   },
+   "response": {
+    "id": "msg_3e7484b8-415f-4472-b052-342dfbc98026",
+    "type": "message",
+    "role": "assistant",
+    "stop_reason": "end_turn",
+    "model": "qwen3.6-plus",
+    "content": [
+     {
+      "type": "thinking",
+      "thinking": "Here's a thinking process:\n\n1.  **Analyze User Input:** The user said \"Reply with the single word: ok\"\n2.  **Identify Key Constraint:** The response must be exactly one word: \"ok\" (case-insensitive usually, but I'll match exactly or use standard capitalization if needed, though the prompt says \"ok\").\n3.  **Formulate Response:** \"ok\"\n4.  **Verify Constraint:** Is it a single word? Yes. Is it \"ok\"? Yes.\n5.  **Output Generation:** ok\u2705",
+      "signature": ""
+     },
+     {
+      "type": "text",
+      "text": "ok"
+     }
+    ],
+    "usage": {
+     "input_tokens": 17,
+     "output_tokens": 126,
+     "cache_creation_input_tokens": 0,
+     "cache_read_input_tokens": 0
+    }
+   }
+  },
+  {
+   "level": "medium",
+   "status": 200,
+   "elapsed_s": 4.44,
+   "request": {
+    "model": "qwen3.6-plus",
+    "messages": [
+     {
+      "role": "user",
+      "content": "Reply with the single word: ok"
+     }
+    ],
+    "max_tokens": 64,
+    "thinking": {
+     "type": "adaptive"
+    },
+    "output_config": {
+     "effort": "medium"
+    }
+   },
+   "response": {
+    "id": "msg_83899cd1-9ea8-48a5-8b4e-590a4dab19bf",
+    "type": "message",
+    "role": "assistant",
+    "stop_reason": "end_turn",
+    "model": "qwen3.6-plus",
+    "content": [
+     {
+      "type": "thinking",
+      "thinking": "Here's a thinking process:\n\n1.  **Analyze User Input:**\n   - User says: \"Reply with the single word: ok\"\n   - Constraint: Must reply with exactly one word, which is \"ok\".\n\n2.  **Check Constraints:**\n   - Single word? Yes.\n   - The word must be \"ok\"? Yes.\n   - No extra text, punctuation, or formatting? The prompt says \"single word: ok\", so I should output exactly \"ok\" (or \"Ok\" or \"OK\", but lowercase matches the prompt best).\n\n3.  **Formulate Response:**\n   - Just \"ok\"\n\n4.  **Final Verification:**\n   - Does it match the constraint? Yes.\n   - Is it exactly one word? Yes.\n   - Ready. Output matches exactly.\u2705",
+      "signature": ""
+     },
+     {
+      "type": "text",
+      "text": "ok"
+     }
+    ],
+    "usage": {
+     "input_tokens": 17,
+     "output_tokens": 182,
+     "cache_creation_input_tokens": 0,
+     "cache_read_input_tokens": 0
+    }
+   }
+  },
+  {
+   "level": "high",
+   "status": 200,
+   "elapsed_s": 4.12,
+   "request": {
+    "model": "qwen3.6-plus",
+    "messages": [
+     {
+      "role": "user",
+      "content": "Reply with the single word: ok"
+     }
+    ],
+    "max_tokens": 64,
+    "thinking": {
+     "type": "adaptive"
+    },
+    "output_config": {
+     "effort": "high"
+    }
+   },
+   "response": {
+    "id": "msg_8f090764-e56b-43d2-8186-e6a2a6290469",
+    "type": "message",
+    "role": "assistant",
+    "stop_reason": "end_turn",
+    "model": "qwen3.6-plus",
+    "content": [
+     {
+      "type": "thinking",
+      "thinking": "Here's a thinking process:\n\n1.  **Analyze User Input:** The user says \"Reply with the single word: ok\"\n2.  **Identify Constraints:** \n   - Must reply with a single word.\n   - That word must be \"ok\" (case-insensitive usually, but I'll match exactly or use \"ok\").\n3.  **Formulate Response:** \"ok\"\n4.  **Check Constraints:** Is it a single word? Yes. Is it \"ok\"? Yes.\n5.  **Output Generation:** ok\n   - Self-Correction/Verification during thought: The prompt says \"Reply with the single word: ok\". I will output exactly \"ok\". No extra punctuation if possible, but standard capitalization is fine. I'll stick to \"ok\". All good.\u2705",
+      "signature": ""
+     },
+     {
+      "type": "text",
+      "text": "ok"
+     }
+    ],
+    "usage": {
+     "input_tokens": 17,
+     "output_tokens": 177,
+     "cache_creation_input_tokens": 0,
+     "cache_read_input_tokens": 0
+    }
+   }
+  },
+  {
+   "level": "xhigh",
+   "status": 200,
+   "elapsed_s": 3.54,
+   "request": {
+    "model": "qwen3.6-plus",
+    "messages": [
+     {
+      "role": "user",
+      "content": "Reply with the single word: ok"
+     }
+    ],
+    "max_tokens": 64,
+    "thinking": {
+     "type": "adaptive"
+    },
+    "output_config": {
+     "effort": "xhigh"
+    }
+   },
+   "response": {
+    "id": "msg_fb2b4922-e2f4-4201-8e24-ee462649c214",
+    "type": "message",
+    "role": "assistant",
+    "stop_reason": "end_turn",
+    "model": "qwen3.6-plus",
+    "content": [
+     {
+      "type": "thinking",
+      "thinking": "Here's a thinking process:\n\n1.  **Analyze User Input:** The user says \"Reply with the single word: ok\"\n2.  **Identify Constraint:** The response must be exactly one word: \"ok\" (or \"Ok\", case might not matter but I'll stick to \"ok\").\n3.  **Check for Additional Requirements:** None. Just the single word.\n4.  **Formulate Response:** \"ok\"\n5.  **Final Verification:** Does it match the constraint? Yes, single word. Is it exactly what was requested? Yes.\n   Output: ok\n   Proceed.\u2705",
+      "signature": ""
+     },
+     {
+      "type": "text",
+      "text": "ok"
+     }
+    ],
+    "usage": {
+     "input_tokens": 17,
+     "output_tokens": 138,
+     "cache_creation_input_tokens": 0,
+     "cache_read_input_tokens": 0
+    }
+   }
+  },
+  {
+   "level": "max",
+   "status": 200,
+   "elapsed_s": 4.27,
+   "request": {
+    "model": "qwen3.6-plus",
+    "messages": [
+     {
+      "role": "user",
+      "content": "Reply with the single word: ok"
+     }
+    ],
+    "max_tokens": 64,
+    "thinking": {
+     "type": "adaptive"
+    },
+    "output_config": {
+     "effort": "max"
+    }
+   },
+   "response": {
+    "id": "msg_1ac2f434-8680-476f-9721-432980713c83",
+    "type": "message",
+    "role": "assistant",
+    "stop_reason": "end_turn",
+    "model": "qwen3.6-plus",
+    "content": [
+     {
+      "type": "thinking",
+      "thinking": "Here's a thinking process:\n\n1.  **Analyze User Input:** The user says \"Reply with the single word: ok\"\n2.  **Identify Key Constraint:** The user explicitly requests a response consisting of exactly one word: \"ok\".\n3.  **Evaluate Constraint Compliance:** I need to output only the word \"ok\" (case-insensitive usually, but I'll match exactly \"ok\" as requested).\n4.  **Formulate Response:** \"ok\"\n5.  **Self-Correction/Verification:** Does it meet the constraint? Yes, single word, exactly \"ok\". No extra text, punctuation, or formatting. (Note: I'll just output \"ok\" without quotes or periods to strictly follow \"single word\").\n6.  **Final Output Generation:** ok",
+      "signature": ""
+     },
+     {
+      "type": "text",
+      "text": "ok"
+     }
+    ],
+    "usage": {
+     "input_tokens": 17,
+     "output_tokens": 174,
+     "cache_creation_input_tokens": 0,
+     "cache_read_input_tokens": 0
+    }
+   }
+  }
+ ]
+}

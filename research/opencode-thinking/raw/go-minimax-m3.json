@@ -1,0 +1,330 @@
+{
+ "route": "go",
+ "protocol": "messages",
+ "model": "minimax-m3",
+ "base": "https://opencode.ai/zen/go",
+ "levels": [
+  {
+   "level": "off",
+   "status": 200,
+   "elapsed_s": 1.19,
+   "request": {
+    "model": "minimax-m3",
+    "messages": [
+     {
+      "role": "user",
+      "content": "Reply with the single word: ok"
+     }
+    ],
+    "max_tokens": 64
+   },
+   "response": {
+    "id": "071f83f42688db809319761b61771aef",
+    "type": "message",
+    "role": "assistant",
+    "stop_reason": "end_turn",
+    "model": "minimax-m3",
+    "content": [
+     {
+      "type": "text",
+      "text": "ok"
+     }
+    ],
+    "usage": {
+     "input_tokens": 28,
+     "output_tokens": 1,
+     "cache_creation_input_tokens": 0,
+     "cache_read_input_tokens": 142
+    }
+   }
+  },
+  {
+   "level": "minimal",
+   "status": 200,
+   "elapsed_s": 1.17,
+   "request": {
+    "model": "minimax-m3",
+    "messages": [
+     {
+      "role": "user",
+      "content": "Reply with the single word: ok"
+     }
+    ],
+    "max_tokens": 64,
+    "thinking": {
+     "type": "adaptive"
+    },
+    "output_config": {
+     "effort": "minimal"
+    }
+   },
+   "response": {
+    "id": "071f83f60240fed2cad887bb65a28255",
+    "type": "message",
+    "role": "assistant",
+    "stop_reason": "end_turn",
+    "model": "minimax-m3",
+    "content": [
+     {
+      "type": "thinking",
+      "thinking": "The user is asking me to reply with the single word \"ok\". This is a simple request that I can fulfill directly.",
+      "signature": "99f492fb0dae790c8e8ba7d2149774c7ab73ad6c60a8a63a5c2e779c4493f06d"
+     },
+     {
+      "type": "text",
+      "text": "ok"
+     }
+    ],
+    "usage": {
+     "input_tokens": 25,
+     "output_tokens": 28,
+     "cache_creation_input_tokens": 0,
+     "cache_read_input_tokens": 158,
+     "output_tokens_details": {
+      "thinking_tokens": 27
+     }
+    }
+   }
+  },
+  {
+   "level": "low",
+   "status": 200,
+   "elapsed_s": 2.29,
+   "request": {
+    "model": "minimax-m3",
+    "messages": [
+     {
+      "role": "user",
+      "content": "Reply with the single word: ok"
+     }
+    ],
+    "max_tokens": 64,
+    "thinking": {
+     "type": "adaptive"
+    },
+    "output_config": {
+     "effort": "low"
+    }
+   },
+   "response": {
+    "id": "071f83f7e966ea8cb508e25c62d3eb6f",
+    "type": "message",
+    "role": "assistant",
+    "stop_reason": "end_turn",
+    "model": "minimax-m3",
+    "content": [
+     {
+      "type": "thinking",
+      "thinking": "The user is asking me to reply with a single word: \"ok\". This is a simple instruction that I should follow.",
+      "signature": "7efae288a3c65e959699f04ab0f1ef75f5b064df4333c123bde9675317afd703"
+     },
+     {
+      "type": "text",
+      "text": "ok"
+     }
+    ],
+    "usage": {
+     "input_tokens": 55,
+     "output_tokens": 29,
+     "cache_creation_input_tokens": 0,
+     "cache_read_input_tokens": 128,
+     "output_tokens_details": {
+      "thinking_tokens": 25
+     }
+    }
+   }
+  },
+  {
+   "level": "medium",
+   "status": 200,
+   "elapsed_s": 1.42,
+   "request": {
+    "model": "minimax-m3",
+    "messages": [
+     {
+      "role": "user",
+      "content": "Reply with the single word: ok"
+     }
+    ],
+    "max_tokens": 64,
+    "thinking": {
+     "type": "adaptive"
+    },
+    "output_config": {
+     "effort": "medium"
+    }
+   },
+   "response": {
+    "id": "071f83f95ed2b9e2b615cbcb9548c9a6",
+    "type": "message",
+    "role": "assistant",
+    "stop_reason": "end_turn",
+    "model": "minimax-m3",
+    "content": [
+     {
+      "type": "thinking",
+      "thinking": "The user asked me to reply with the single word \"ok\". I'll comply with that request.",
+      "signature": "38294776fa51aeaee5caf962efe517c274ebade879e37acd435dd6d1d6f56545"
+     },
+     {
+      "type": "text",
+      "text": "ok"
+     }
+    ],
+    "usage": {
+     "input_tokens": 55,
+     "output_tokens": 23,
+     "cache_creation_input_tokens": 0,
+     "cache_read_input_tokens": 128,
+     "output_tokens_details": {
+      "thinking_tokens": 19
+     }
+    }
+   }
+  },
+  {
+   "level": "high",
+   "status": 200,
+   "elapsed_s": 1.09,
+   "request": {
+    "model": "minimax-m3",
+    "messages": [
+     {
+      "role": "user",
+      "content": "Reply with the single word: ok"
+     }
+    ],
+    "max_tokens": 64,
+    "thinking": {
+     "type": "adaptive"
+    },
+    "output_config": {
+     "effort": "high"
+    }
+   },
+   "response": {
+    "id": "071f83fa11a6f07caee9a542f28a3901",
+    "type": "message",
+    "role": "assistant",
+    "stop_reason": "end_turn",
+    "model": "minimax-m3",
+    "content": [
+     {
+      "type": "thinking",
+      "thinking": "The user is asking me to reply with the single word \"ok\". This is a straightforward request. I should comply.",
+      "signature": "5da8c10180f56aab2744b5a756b5483ed75b8d6f0326a4ccce32c7c2d6896118"
+     },
+     {
+      "type": "text",
+      "text": "ok"
+     }
+    ],
+    "usage": {
+     "input_tokens": 55,
+     "output_tokens": 28,
+     "cache_creation_input_tokens": 0,
+     "cache_read_input_tokens": 128,
+     "output_tokens_details": {
+      "thinking_tokens": 24
+     }
+    }
+   }
+  },
+  {
+   "level": "xhigh",
+   "status": 200,
+   "elapsed_s": 0.89,
+   "request": {
+    "model": "minimax-m3",
+    "messages": [
+     {
+      "role": "user",
+      "content": "Reply with the single word: ok"
+     }
+    ],
+    "max_tokens": 64,
+    "thinking": {
+     "type": "adaptive"
+    },
+    "output_config": {
+     "effort": "xhigh"
+    }
+   },
+   "response": {
+    "id": "071f83fbb1d4a48297b69075acc88c71",
+    "type": "message",
+    "role": "assistant",
+    "stop_reason": "end_turn",
+    "model": "minimax-m3",
+    "content": [
+     {
+      "type": "thinking",
+      "thinking": "The user wants me to reply with the single word \"ok\".",
+      "signature": "66d0afb745ac5674a0f2ec8b5621be65a520b3354aed0ebdb6c493477a2afe86"
+     },
+     {
+      "type": "text",
+      "text": "ok"
+     }
+    ],
+    "usage": {
+     "input_tokens": 55,
+     "output_tokens": 17,
+     "cache_creation_input_tokens": 0,
+     "cache_read_input_tokens": 128,
+     "output_tokens_details": {
+      "thinking_tokens": 13
+     }
+    }
+   }
+  },
+  {
+   "level": "max",
+   "status": 200,
+   "elapsed_s": 1.4,
+   "request": {
+    "model": "minimax-m3",
+    "messages": [
+     {
+      "role": "user",
+      "content": "Reply with the single word: ok"
+     }
+    ],
+    "max_tokens": 64,
+    "thinking": {
+     "type": "adaptive"
+    },
+    "output_config": {
+     "effort": "max"
+    }
+   },
+   "response": {
+    "id": "071f83fc7e645505573b73ddac0a7b3e",
+    "type": "message",
+    "role": "assistant",
+    "stop_reason": "end_turn",
+    "model": "minimax-m3",
+    "content": [
+     {
+      "type": "thinking",
+      "thinking": "The user is asking me to reply with a single word: \"ok\". This is a simple instruction that I should follow directly.",
+      "signature": "ebea656a065be65e43fdc9a4b55c09e55000db08ea40a613210955853b54fdf3"
+     },
+     {
+      "type": "text",
+      "text": "ok"
+     }
+    ],
+    "usage": {
+     "input_tokens": 27,
+     "output_tokens": 29,
+     "cache_creation_input_tokens": 0,
+     "cache_read_input_tokens": 156,
+     "output_tokens_details": {
+      "thinking_tokens": 28
+     }
+    }
+   }
+  }
+ ]
+}

@@ -1,0 +1,333 @@
+{
+ "route": "go",
+ "protocol": "completions",
+ "model": "longcat-2.5-preview-free",
+ "base": "https://opencode.ai/zen/go",
+ "levels": [
+  {
+   "level": "off",
+   "status": 200,
+   "elapsed_s": 2.84,
+   "request": {
+    "model": "longcat-2.5-preview-free",
+    "messages": [
+     {
+      "role": "user",
+      "content": "Reply with the single word: ok"
+     }
+    ],
+    "max_tokens": 64,
+    "reasoning_effort": "none"
+   },
+   "response": {
+    "id": "2957edea867044fb8c89c712ae6f2f16",
+    "object": "chat.completion",
+    "created": 1792036816,
+    "model": "longcat-2.5-preview-free",
+    "choices": [
+     {
+      "index": 0,
+      "finish_reason": "length",
+      "logprobs": null,
+      "message": {
+       "role": "assistant",
+       "reasoning_content": "\n1.  **Analyze the Request:** The user is asking me to reply with the single word \"ok\".\n2.  **Identify the Constraints:**\n    *   Reply with a single word.\n    *   That word must be \"ok\".\n3.  **Formulate the Output:** Just the"
+      }
+     }
+    ],
+    "usage": {
+     "prompt_tokens": 14,
+     "completion_tokens": 64,
+     "total_tokens": 78,
+     "prompt_tokens_details": {
+      "audio_tokens": 0,
+      "cached_tokens": 0,
+      "cache_write_tokens": 0
+     },
+     "completion_tokens_details": {
+      "reasoning_tokens": 63
+     }
+    }
+   }
+  },
+  {
+   "level": "minimal",
+   "status": 200,
+   "elapsed_s": 3.1,
+   "request": {
+    "model": "longcat-2.5-preview-free",
+    "messages": [
+     {
+      "role": "user",
+      "content": "Reply with the single word: ok"
+     }
+    ],
+    "max_tokens": 64,
+    "reasoning_effort": "minimal"
+   },
+   "response": {
+    "id": "721490a192f54a7b8976837cbe092bc0",
+    "object": "chat.completion",
+    "created": 1792036819,
+    "model": "longcat-2.5-preview-free",
+    "choices": [
+     {
+      "index": 0,
+      "finish_reason": "length",
+      "logprobs": null,
+      "message": {
+       "role": "assistant",
+       "reasoning_content": "\n1.  **Analyze the Request:** The user wants a reply consisting of the single word \"ok\".\n2.  **Identify the Constraint:** The reply *must* be exactly \"ok\". No punctuation, no other words, no conversational filler.\n3.  **Formulate the Output:** \""
+      }
+     }
+    ],
+    "usage": {
+     "prompt_tokens": 14,
+     "completion_tokens": 64,
+     "total_tokens": 78,
+     "prompt_tokens_details": {
+      "audio_tokens": 0,
+      "cached_tokens": 0,
+      "cache_write_tokens": 0
+     },
+     "completion_tokens_details": {
+      "reasoning_tokens": 63
+     }
+    }
+   }
+  },
+  {
+   "level": "low",
+   "status": 200,
+   "elapsed_s": 3.22,
+   "request": {
+    "model": "longcat-2.5-preview-free",
+    "messages": [
+     {
+      "role": "user",
+      "content": "Reply with the single word: ok"
+     }
+    ],
+    "max_tokens": 64,
+    "reasoning_effort": "low"
+   },
+   "response": {
+    "id": "d8a47f14d56e4d1cbd5ff445de4e314d",
+    "object": "chat.completion",
+    "created": 1792036822,
+    "model": "longcat-2.5-preview-free",
+    "choices": [
+     {
+      "index": 0,
+      "finish_reason": "length",
+      "logprobs": null,
+      "message": {
+       "role": "assistant",
+       "reasoning_content": "\n1.  **Analyze the Request:** The user asked me to reply with a single word: \"ok\".\n2.  **Identify the Constraint:** The constraint is strictly \"single word: ok\".\n3.  **Formulate the Output:** The output must be exactly \"ok\". No punctuation, no"
+      }
+     }
+    ],
+    "usage": {
+     "prompt_tokens": 14,
+     "completion_tokens": 64,
+     "total_tokens": 78,
+     "prompt_tokens_details": {
+      "audio_tokens": 0,
+      "cached_tokens": 0,
+      "cache_write_tokens": 0
+     },
+     "completion_tokens_details": {
+      "reasoning_tokens": 63
+     }
+    }
+   }
+  },
+  {
+   "level": "medium",
+   "status": 200,
+   "elapsed_s": 3.23,
+   "request": {
+    "model": "longcat-2.5-preview-free",
+    "messages": [
+     {
+      "role": "user",
+      "content": "Reply with the single word: ok"
+     }
+    ],
+    "max_tokens": 64,
+    "reasoning_effort": "medium"
+   },
+   "response": {
+    "id": "92878d63f0304b259dc9f7d8e8304a7a",
+    "object": "chat.completion",
+    "created": 1792036825,
+    "model": "longcat-2.5-preview-free",
+    "choices": [
+     {
+      "index": 0,
+      "finish_reason": "stop",
+      "logprobs": null,
+      "message": {
+       "role": "assistant",
+       "content": "ok",
+       "reasoning_content": "\n1.  **Analyze the Request:** The user wants a reply consisting of the single word \"ok\".\n2.  **Identify the Output:** The output must be exactly \"ok\".\n3.  **Format the Output:** No punctuation, no extra text, just \"ok\"."
+      }
+     }
+    ],
+    "usage": {
+     "prompt_tokens": 14,
+     "completion_tokens": 63,
+     "total_tokens": 77,
+     "prompt_tokens_details": {
+      "audio_tokens": 0,
+      "cached_tokens": 0,
+      "cache_write_tokens": 0
+     },
+     "completion_tokens_details": {
+      "reasoning_tokens": 59
+     }
+    }
+   }
+  },
+  {
+   "level": "high",
+   "status": 200,
+   "elapsed_s": 3.47,
+   "request": {
+    "model": "longcat-2.5-preview-free",
+    "messages": [
+     {
+      "role": "user",
+      "content": "Reply with the single word: ok"
+     }
+    ],
+    "max_tokens": 64,
+    "reasoning_effort": "high"
+   },
+   "response": {
+    "id": "34df3d8da110403eb01d558068e88dca",
+    "object": "chat.completion",
+    "created": 1792036829,
+    "model": "longcat-2.5-preview-free",
+    "choices": [
+     {
+      "index": 0,
+      "finish_reason": "stop",
+      "logprobs": null,
+      "message": {
+       "role": "assistant",
+       "content": "ok",
+       "reasoning_content": "\n1.  **Analyze the Request:** The user wants a reply consisting of the single word \"ok\".\n2.  **Identify the Output:** The output must be exactly \"ok\".\n3.  **Format the Output:** No punctuation, no extra text, just \"ok\"."
+      }
+     }
+    ],
+    "usage": {
+     "prompt_tokens": 14,
+     "completion_tokens": 63,
+     "total_tokens": 77,
+     "prompt_tokens_details": {
+      "audio_tokens": 0,
+      "cached_tokens": 0,
+      "cache_write_tokens": 0
+     },
+     "completion_tokens_details": {
+      "reasoning_tokens": 59
+     }
+    }
+   }
+  },
+  {
+   "level": "xhigh",
+   "status": 200,
+   "elapsed_s": 3.59,
+   "request": {
+    "model": "longcat-2.5-preview-free",
+    "messages": [
+     {
+      "role": "user",
+      "content": "Reply with the single word: ok"
+     }
+    ],
+    "max_tokens": 64,
+    "reasoning_effort": "xhigh"
+   },
+   "response": {
+    "id": "289709a5532c41c29f58fbd4856c2a39",
+    "object": "chat.completion",
+    "created": 1792036832,
+    "model": "longcat-2.5-preview-free",
+    "choices": [
+     {
+      "index": 0,
+      "finish_reason": "length",
+      "logprobs": null,
+      "message": {
+       "role": "assistant",
+       "reasoning_content": "\n1.  **Analyze the Request:** The user asked me to reply with the single word: \"ok\".\n2.  **Identify the Constraint:** The constraint is strict: reply with *only* the single word \"ok\".\n3.  **Formulate the output:** \"ok\" (no punctuation"
+      }
+     }
+    ],
+    "usage": {
+     "prompt_tokens": 14,
+     "completion_tokens": 64,
+     "total_tokens": 78,
+     "prompt_tokens_details": {
+      "audio_tokens": 0,
+      "cached_tokens": 0,
+      "cache_write_tokens": 0
+     },
+     "completion_tokens_details": {
+      "reasoning_tokens": 63
+     }
+    }
+   }
+  },
+  {
+   "level": "max",
+   "status": 200,
+   "elapsed_s": 3.83,
+   "request": {
+    "model": "longcat-2.5-preview-free",
+    "messages": [
+     {
+      "role": "user",
+      "content": "Reply with the single word: ok"
+     }
+    ],
+    "max_tokens": 64,
+    "reasoning_effort": "max"
+   },
+   "response": {
+    "id": "33cbe86fad2049d5ae2871eccb288e8e",
+    "object": "chat.completion",
+    "created": 1792036836,
+    "model": "longcat-2.5-preview-free",
+    "choices": [
+     {
+      "index": 0,
+      "finish_reason": "stop",
+      "logprobs": null,
+      "message": {
+       "role": "assistant",
+       "content": "ok",
+       "reasoning_content": "\n1.  **Analyze the Request:** The user wants a reply consisting of the single word \"ok\".\n2.  **Identify the Output:** The output must be exactly \"ok\".\n3.  **Format the Output:** No punctuation, no extra text, just \"ok\"."
+      }
+     }
+    ],
+    "usage": {
+     "prompt_tokens": 14,
+     "completion_tokens": 63,
+     "total_tokens": 77,
+     "prompt_tokens_details": {
+      "audio_tokens": 0,
+      "cached_tokens": 0,
+      "cache_write_tokens": 0
+     },
+     "completion_tokens_details": {
+      "reasoning_tokens": 59
+     }
+    }
+   }
+  }
+ ]
+}

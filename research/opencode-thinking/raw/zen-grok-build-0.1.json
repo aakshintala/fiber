@@ -1,0 +1,148 @@
+{
+ "route": "zen",
+ "protocol": "responses",
+ "model": "grok-build-0.1",
+ "base": "https://opencode.ai/zen",
+ "levels": [
+  {
+   "level": "off",
+   "status": 400,
+   "elapsed_s": 0.57,
+   "request": {
+    "model": "grok-build-0.1",
+    "input": "Reply with the single word: ok",
+    "max_output_tokens": 16,
+    "reasoning": {
+     "effort": "none"
+    },
+    "include": [
+     "reasoning.encrypted_content"
+    ]
+   },
+   "response": {
+    "model": "grok-build-0.1",
+    "error": "Model grok-build-0.1 does not support parameter reasoningEffort."
+   }
+  },
+  {
+   "level": "minimal",
+   "status": 400,
+   "elapsed_s": 0.67,
+   "request": {
+    "model": "grok-build-0.1",
+    "input": "Reply with the single word: ok",
+    "max_output_tokens": 16,
+    "reasoning": {
+     "effort": "minimal"
+    },
+    "include": [
+     "reasoning.encrypted_content"
+    ]
+   },
+   "response": {
+    "model": "grok-build-0.1",
+    "error": "Model grok-build-0.1 does not support parameter reasoningEffort."
+   }
+  },
+  {
+   "level": "low",
+   "status": 400,
+   "elapsed_s": 0.55,
+   "request": {
+    "model": "grok-build-0.1",
+    "input": "Reply with the single word: ok",
+    "max_output_tokens": 16,
+    "reasoning": {
+     "effort": "low"
+    },
+    "include": [
+     "reasoning.encrypted_content"
+    ]
+   },
+   "response": {
+    "model": "grok-build-0.1",
+    "error": "Model grok-build-0.1 does not support parameter reasoningEffort."
+   }
+  },
+  {
+   "level": "medium",
+   "status": 400,
+   "elapsed_s": 0.67,
+   "request": {
+    "model": "grok-build-0.1",
+    "input": "Reply with the single word: ok",
+    "max_output_tokens": 16,
+    "reasoning": {
+     "effort": "medium"
+    },
+    "include": [
+     "reasoning.encrypted_content"
+    ]
+   },
+   "response": {
+    "model": "grok-build-0.1",
+    "error": "Model grok-build-0.1 does not support parameter reasoningEffort."
+   }
+  },
+  {
+   "level": "high",
+   "status": 400,
+   "elapsed_s": 0.61,
+   "request": {
+    "model": "grok-build-0.1",
+    "input": "Reply with the single word: ok",
+    "max_output_tokens": 16,
+    "reasoning": {
+     "effort": "high"
+    },
+    "include": [
+     "reasoning.encrypted_content"
+    ]
+   },
+   "response": {
+    "model": "grok-build-0.1",
+    "error": "Model grok-build-0.1 does not support parameter reasoningEffort."
+   }
+  },
+  {
+   "level": "xhigh",
+   "status": 400,
+   "elapsed_s": 0.63,
+   "request": {
+    "model": "grok-build-0.1",
+    "input": "Reply with the single word: ok",
+    "max_output_tokens": 16,
+    "reasoning": {
+     "effort": "xhigh"
+    },
+    "include": [
+     "reasoning.encrypted_content"
+    ]
+   },
+   "response": {
+    "model": "grok-build-0.1",
+    "error": "Model grok-build-0.1 does not support parameter reasoningEffort."
+   }
+  },
+  {
+   "level": "max",
+   "status": 400,
+   "elapsed_s": 0.53,
+   "request": {
+    "model": "grok-build-0.1",
+    "input": "Reply with the single word: ok",
+    "max_output_tokens": 16,
+    "reasoning": {
+     "effort": "max"
+    },
+    "include": [
+     "reasoning.encrypted_content"
+    ]
+   },
+   "response": {
+    "model": "grok-build-0.1",
+    "error": "Model grok-build-0.1 does not support parameter reasoningEffort."
+   }
+  }
+ ]
+}
