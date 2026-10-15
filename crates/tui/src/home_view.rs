@@ -7,7 +7,7 @@ use ratatui::layout::{Position, Rect};
 use ratatui::style::{Modifier, Style};
 use ratatui::text::Span;
 
-use super::{FOCUS_STYLE, HOVER_TINT, completions};
+use super::{FOCUS_STYLE, completions, lift_hover};
 use crate::app::App;
 use crate::completion_rows::Rows;
 use crate::format::{cut, width, wrap};
@@ -194,8 +194,8 @@ pub(crate) fn max_question_scroll(app: &App, screen: &HomeScreen, area: Rect) ->
 /// and the foot hint on the last row, with the notice rows over the rows
 /// above the foot and the overlay over the whole area.
 /// Returns the click targets drawn; last, as on the conversation screen,
-/// the target under `pointer` gets [`HOVER_TINT`] and the focused target
-/// gets [`FOCUS_STYLE`].
+/// the target under `pointer` gets [`lift_hover`] and the focused target
+/// gets [`FOCUS_STYLE`]..
 pub(super) fn render(
     app: &App,
     screen: &HomeScreen,
@@ -564,16 +564,19 @@ pub(super) fn render(
     }
     if let Some(id) = pointer.and_then(|(col, row)| mouse::hit(&targets, col, row)) {
         for target in targets.iter().filter(|target| target.id == id) {
-            buf.set_style(target.rect, HOVER_TINT);
+            lift_hover(buf, target.rect);
         }
     }
     if let Some(id) = app.focused() {
         // A focused chip draws as a hovered one, never reversed; every
         // other focused target keeps the focus style.
         let chip = matches!(id, TargetId::Home(spot) if spot.is_chip());
-        let style = if chip { HOVER_TINT } else { FOCUS_STYLE };
         for target in targets.iter().filter(|target| target.id == id) {
-            buf.set_style(target.rect, style);
+            if chip {
+                lift_hover(buf, target.rect);
+            } else {
+                buf.set_style(target.rect, FOCUS_STYLE);
+            }
         }
     }
     targets

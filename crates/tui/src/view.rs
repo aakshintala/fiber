@@ -60,6 +60,13 @@ const NOTICE_TINT: Style = Style::new().bg(Role::Surface.color());
 /// The background of the click target under the pointer.
 pub(crate) const HOVER_TINT: Style = Style::new().bg(Role::Hover.color());
 
+/// Paints `rect` as the click target under the pointer: the hover tint
+/// for now; the fix lifts each tinted cell's own background instead
+/// (`docs/tui.md`, palette, `hover`).
+pub(crate) fn lift_hover(buf: &mut Buffer, rect: Rect) {
+    buf.set_style(rect, HOVER_TINT);
+}
+
 /// The focused click target's style in navigate mode: reversed, so it
 /// shows on every theme and with no colour.
 pub(crate) const FOCUS_STYLE: Style = Style::new().add_modifier(Modifier::REVERSED);
@@ -90,7 +97,7 @@ pub(crate) fn rows(line: Line<'_>, width: u16) -> usize {
 /// shown.
 ///
 /// Returns the click targets drawn, in draw order. Last, the target under
-/// `pointer`, if any, gets [`HOVER_TINT`] as its background.
+/// `pointer`, if any, gets [`lift_hover`] as its background.
 pub(crate) fn render(
     app: &App,
     area: Rect,
@@ -127,7 +134,7 @@ pub(crate) fn render(
         }
         if let Some(id) = pointer.and_then(|(col, row)| mouse::hit(&targets, col, row)) {
             for target in targets.iter().filter(|target| target.id == id) {
-                buf.set_style(target.rect, HOVER_TINT);
+                lift_hover(buf, target.rect);
             }
         }
         if let Some(id) = app.focused() {
@@ -276,7 +283,7 @@ pub(crate) fn render(
     }
     if let Some(id) = pointer.and_then(|(col, row)| mouse::hit(&targets, col, row)) {
         for target in targets.iter().filter(|target| target.id == id) {
-            buf.set_style(target.rect, HOVER_TINT);
+            lift_hover(buf, target.rect);
         }
     }
     if let Some(id) = app.focused()
