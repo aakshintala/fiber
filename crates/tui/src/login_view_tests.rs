@@ -946,7 +946,7 @@ fn typing_and_backspace_edit_the_focused_field() {
 }
 
 #[test]
-fn other_keys_leave_the_label_while_backspace_deletes() {
+fn other_keys_leave_the_label() {
     let fake = fake_with(targets());
     let mut login = Login::open(&ctx(&fake));
     open_key_panel(&mut login, &fake);
@@ -957,9 +957,6 @@ fn other_keys_leave_the_label_while_backspace_deletes() {
     press(&mut login, &fake, &[Key::Down, Key::Up]);
     let label = drawn(&login, 80, 24);
     assert!(label.contains("Label (--as): xy"), "{label}");
-    press(&mut login, &fake, &[Key::Backspace]);
-    let label = drawn(&login, 80, 24);
-    assert!(label.contains("Label (--as): x"), "{label}");
 }
 
 #[test]

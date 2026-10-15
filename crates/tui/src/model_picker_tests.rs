@@ -1541,11 +1541,18 @@ fn the_empty_filter_line_needs_a_typed_query() {
 #[test]
 fn an_empty_catalogue_has_no_empty_filter_line() {
     let mut picker = open_over(Vec::new());
+    picker.take_read();
+    picker.store(Ok(Catalogue::default()));
     picker.push_query('q');
     // No installed model, so no empty-filter line: the status names
     // the empty catalogue instead.
     let layout = picker.layout().expect("the picker is open");
+    assert_eq!(layout, vec![RowAt::Filter, RowAt::Buttons]);
     assert!(!layout.contains(&RowAt::NoMatch), "{layout:?}");
+    assert_eq!(
+        view_of(&picker).status,
+        ["No models. Install a provider: fiber extension install <name>.".to_owned()]
+    );
 }
 
 #[test]
