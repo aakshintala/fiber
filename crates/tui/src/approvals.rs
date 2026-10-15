@@ -20,8 +20,10 @@ use crate::keys::{Edit, Key};
 use approval::{Approval, Choice};
 
 mod approval;
+mod builder;
 pub(crate) mod form;
 mod one_question;
+mod text;
 
 /// The envelope kinds the queue folds, from any session.
 pub(crate) const KINDS: [&str; 5] = [
@@ -87,7 +89,9 @@ pub(crate) struct Mark {
 pub(crate) struct Panel {
     /// Its lines, before wrapping: the header, then the request's rows.
     pub(crate) lines: Vec<String>,
-    /// Their styled runs; empty on a question form.
+    /// Their styled runs, on an approval and on a question alike: the
+    /// header's runs and each row's roles, so the draw needs no
+    /// hand-counted offsets.
     pub(crate) marks: Vec<Mark>,
     /// Whether it takes the alert tint: the reviewer escalated. Never on a
     /// question.
@@ -110,6 +114,17 @@ pub(crate) struct PanelSpot {
     pub(crate) line: usize,
     pub(crate) cols: Option<(u16, u16)>,
     pub(crate) spot: form::Spot,
+}
+
+/// Who a question panel asks for and where it sits in the queue: the
+/// asking session's name when it has one, else its id, `place` only when
+/// more than one request waits, and the form's question count, `None` on
+/// a one-question panel (`docs/tui.md`, "A question form").
+#[derive(Debug, Clone)]
+pub(super) struct Title {
+    pub(super) session: String,
+    pub(super) place: Option<(usize, usize)>,
+    pub(super) questions: Option<usize>,
 }
 
 /// What a key did on the open panel.
@@ -166,10 +181,9 @@ impl Queue {
             .position(|index| *index == at)
             .unwrap_or_default()
             .saturating_add(1);
-        let place = format!("{} · {k} of {}", request.session.0, waiting.len());
         let session = name(&request.session)
             .filter(|name| !name.is_empty())
-            .map(|name| form::clean(&name))
+            .map(|name| text::clean(&name))
             .unwrap_or_else(|| request.session.0.clone());
         Some(match &request.ask {
             Ask::Approval(approval) => {
@@ -189,8 +203,22 @@ impl Queue {
                     caret,
                 }
             }
-            Ask::Form(form) => form.panel(format!("question · {place}"), width),
-            Ask::One(question) => question.panel(format!("question · {place}"), width),
+            Ask::Form(form) => {
+                let title = Title {
+                    session,
+                    place: (waiting.len() > 1).then_some((k, waiting.len())),
+                    questions: Some(form.question_count()),
+                };
+                form.panel(&title, width)
+            }
+            Ask::One(question) => {
+                let title = Title {
+                    session,
+                    place: (waiting.len() > 1).then_some((k, waiting.len())),
+                    questions: None,
+                };
+                question.panel(&title, width)
+            }
         })
     }
 
@@ -368,13 +396,13 @@ impl Queue {
                     // The main argument, never JSON: raw text that was not
                     // JSON shows as the model sent it.
                     let summary = match &call.arguments {
-                        Value::String(text) => form::clean(text),
+                        Value::String(text) => text::clean(text),
                         Value::Null
                         | Value::Bool(_)
                         | Value::Number(_)
                         | Value::Array(_)
                         | Value::Object(_) => {
-                            form::clean(&format::summary(&call.name, &call.arguments))
+                            text::clean(&format::summary(&call.name, &call.arguments))
                         }
                     };
                     self.calls
@@ -397,7 +425,7 @@ impl Queue {
                             .clone()
                             .unwrap_or_default()
                             .iter()
-                            .map(|path| form::clean(path))
+                            .map(|path| text::clean(path))
                             .collect(),
                         step: asked.step,
                         feedback: String::new(),

@@ -10,13 +10,18 @@ use contract::Envelope;
 use contract::events::{
     Answer, FormAnswer, Interaction, InteractionRequested, InteractionResolved, ResolvedBy,
 };
-use ratatui::text::Line;
+use jiff::tz::TimeZone;
+use ratatui::style::{Modifier, Style};
+use ratatui::text::{Line, Span};
 
 use super::group::Call;
 use super::{Entry, Turn};
 use crate::app::read;
-use crate::format;
-use crate::rows::Rows;
+use crate::format::{self, answer_parts};
+use crate::local_time::time_of_day;
+use crate::markdown::style;
+use crate::rows::{RowText, Rows};
+use crate::theme::Role;
 
 /// The form a call raised, and how it was resolved.
 #[derive(Debug, Clone)]
@@ -52,35 +57,122 @@ impl Asked {
     }
 }
 
-/// The "you answered" rule: one row per question in `ask_user`'s result
-/// format, then the note.
+/// What a form left in its turn's card: the answers under a rule with
+/// the resolution's time, or one dim row when the person declined it.
 #[derive(Debug, Clone)]
-pub(crate) struct Answered {
-    rows: Vec<String>,
+pub(crate) enum Answered {
+    /// The person answered it: one row per question in `ask_user`'s
+    /// result format, then the note, under the rule with the
+    /// resolution's time.
+    Given {
+        parts: Vec<format::AnswerParts>,
+        note: Option<String>,
+        ts: u64,
+    },
+    /// The person declined it: one dim row, no rule.
+    Declined,
 }
 
 impl Answered {
     /// Fields and answers pair in order; a field with no answer, or an
     /// answer with no field, draws nothing.
-    fn new(headers: &[String], answers: &[FormAnswer], note: Option<&str>) -> Self {
-        let mut rows: Vec<String> = headers
+    fn new(headers: &[String], answers: &[FormAnswer], note: Option<&str>, ts: u64) -> Self {
+        let parts: Vec<format::AnswerParts> = headers
             .iter()
             .zip(answers)
             .map(|(header, answer)| match answer {
-                FormAnswer::Skipped { .. } => format::answer_row(header, None),
+                FormAnswer::Skipped { .. } => answer_parts(header, None),
                 FormAnswer::Answered { labels, text } => {
-                    format::answer_row(header, Some((labels, text.as_deref())))
+                    answer_parts(header, Some((labels, text.as_deref())))
                 }
             })
             .collect();
-        rows.extend(note.map(format::note_row));
-        Self { rows }
+        Self::Given {
+            parts,
+            note: note.map(str::to_owned),
+            ts,
+        }
     }
 
-    pub(crate) fn rows(&self, out: &mut Rows) {
-        out.push((Line::raw("you answered"), None));
-        for row in &self.rows {
-            out.push((Line::raw(row.clone()), None));
+    /// A declined form's row.
+    fn declined() -> Self {
+        Self::Declined
+    }
+
+    /// The card's rows at `width` columns in `zone`: the rule like a
+    /// steering message's, then one row per question with its header in
+    /// `accent` and the answer bold or `skipped` dim, then the note; or
+    /// the one dim declined row.
+    pub(crate) fn rows(&self, width: u16, zone: &TimeZone, out: &mut Rows) {
+        match self {
+            Self::Given { parts, note, ts } => {
+                let middle = match time_of_day(*ts, zone) {
+                    Some(time) => format!(" · {time} "),
+                    None => " ".to_owned(),
+                };
+                let columns = usize::from(width);
+                let dashes = columns.saturating_sub("you answered".len() + format::width(&middle));
+                let mut spans = vec![
+                    Span::styled(
+                        "you answered",
+                        style(Role::Accent).add_modifier(Modifier::BOLD),
+                    ),
+                    Span::styled(middle, Style::default().add_modifier(Modifier::DIM)),
+                ];
+                if dashes > 0 {
+                    spans.push(Span::styled("─".repeat(dashes), style(Role::Rule)));
+                }
+                let tail = dashes.saturating_add(1);
+                out.push_text(
+                    (Line::from(spans), None),
+                    RowText {
+                        tail: u16::try_from(tail).unwrap_or(u16::MAX),
+                        ..RowText::plain()
+                    },
+                );
+                for part in parts {
+                    out.push_text(
+                        (
+                            Line::from(vec![
+                                Span::styled(part.header.clone(), style(Role::Accent)),
+                                Span::styled(
+                                    part.text.clone(),
+                                    if part.skipped {
+                                        Style::default().add_modifier(Modifier::DIM)
+                                    } else {
+                                        Style::default().add_modifier(Modifier::BOLD)
+                                    },
+                                ),
+                            ]),
+                            None,
+                        ),
+                        RowText::plain(),
+                    );
+                }
+                if let Some(note) = note {
+                    out.push_text(
+                        (
+                            Line::from(vec![
+                                Span::styled("note", style(Role::Accent)),
+                                Span::raw(" "),
+                                Span::styled(
+                                    format::quoted(note),
+                                    Style::default().add_modifier(Modifier::BOLD),
+                                ),
+                            ]),
+                            None,
+                        ),
+                        RowText::plain(),
+                    );
+                }
+            }
+            Self::Declined => out.push((
+                Line::styled(
+                    "declined: the turn ended so you could answer in your own words",
+                    Style::default().add_modifier(Modifier::DIM),
+                ),
+                None,
+            )),
         }
     }
 }
@@ -92,9 +184,8 @@ pub(super) fn fold(turns: &mut [Turn], envelope: &Envelope) -> bool {
         "interaction_requested" => {
             read!(envelope, InteractionRequested).is_some_and(|asked| requested(turns, asked))
         }
-        "interaction_resolved" => {
-            read!(envelope, InteractionResolved).is_some_and(|line| resolved(turns, &line))
-        }
+        "interaction_resolved" => read!(envelope, InteractionResolved)
+            .is_some_and(|line| resolved(turns, &line, envelope.ts)),
         _ => false,
     }
 }
@@ -141,15 +232,22 @@ fn call<'a>(turns: &'a mut [Turn], action: &str) -> Option<&'a mut Call> {
 
 /// The first resolution of a waiting form sets how it ended; the person's
 /// answers add the rule to the latest turn holding it.
-fn resolved(turns: &mut [Turn], line: &InteractionResolved) -> bool {
-    let (outcome, mut form) = match line.by {
+/// How a form ended: its answers, or declined by the person.
+#[derive(Debug)]
+enum End<'a> {
+    Answers(&'a [FormAnswer], Option<&'a str>),
+    Declined,
+}
+
+fn resolved(turns: &mut [Turn], line: &InteractionResolved, ts: u64) -> bool {
+    let (outcome, mut end) = match line.by {
         ResolvedBy::Fiber => (Outcome::ByFiber, None),
         ResolvedBy::Person => match &line.answer {
             Answer::Form { answers, note } => (
                 Outcome::Answered,
-                Some((answers.as_slice(), note.as_deref())),
+                Some(End::Answers(answers.as_slice(), note.as_deref())),
             ),
-            Answer::Declined { .. } => (Outcome::Declined, None),
+            Answer::Declined { .. } => (Outcome::Declined, Some(End::Declined)),
             Answer::Confirmed { .. } | Answer::Labels { .. } | Answer::Text { .. } => return false,
         },
     };
@@ -167,8 +265,11 @@ fn resolved(turns: &mut [Turn], line: &InteractionResolved) -> bool {
         for asked in waiting {
             asked.outcome = outcome;
             changed = true;
-            if let Some((answers, note)) = form.take() {
-                rule = Some(Answered::new(&asked.headers, answers, note));
+            if let Some(end) = end.take() {
+                rule = Some(match end {
+                    End::Answers(answers, note) => Answered::new(&asked.headers, answers, note, ts),
+                    End::Declined => Answered::declined(),
+                });
             }
         }
         if let Some(rule) = rule {

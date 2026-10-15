@@ -116,7 +116,7 @@ impl Turn {
                 }
                 Entry::Aside(aside) => aside.rows(inner, out),
                 Entry::Band(_) => {}
-                Entry::Answers(answered) => answered.rows(out),
+                Entry::Answers(answered) => answered.rows(inner, zone, out),
             });
             piece_drew = piece_drew || drew;
             if drew {

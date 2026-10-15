@@ -1063,13 +1063,15 @@ fn merge(payload: &mut serde_json::Value, extra: &serde_json::Value) {
     }
 }
 
-/// Esc on a `confirm`, and Esc and "Chat about this" on a form, each with
-/// `extra` keys: the request and the bytes that decline it.
+/// Esc on a `confirm`, and Esc and Esc from the Submit tab on a form,
+/// each with `extra` keys: the request and the bytes that decline it. The
+/// Submit tab's Chat button declines on click, covered in the panel's
+/// own tests: no keyboard cursor lands on it.
 fn declines(extra: &serde_json::Value) -> Vec<(serde_json::Value, Vec<u8>)> {
     vec![
         (confirm_with(extra), b"\x1b".to_vec()),
         (form_with(extra), b"\x1b".to_vec()),
-        (form_with(extra), b"\x1b[B\x1b[B\x1b[B\x1b[B\r".to_vec()),
+        (form_with(extra), b"\x09\x09\x1b".to_vec()),
     ]
 }
 

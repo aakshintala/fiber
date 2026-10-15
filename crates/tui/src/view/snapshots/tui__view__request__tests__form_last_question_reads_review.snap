@@ -3,14 +3,14 @@ source: crates/tui/src/view/request_tests.rs
 expression: "screen(&app, 60, 12).0"
 ---
 
-
-
-
-▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
-  question · s_aaaaaaaaaaaaaaaa · 1 of 1
-  Base  [Name]  Submit
-  What name?
-  › ✎ answer in words
-    Review →
-    Chat about this
-▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀
+▌ Question from s_aaaaaaaaaaaaaaaa · 2 questions, any can be
+▌ skipped Esc: chat about this
+▌
+▌ ←  ☐ Base    ☐ Name    ✔ Submit  →
+▌
+▌ What name?
+▌
+▌ ▸ 1 ✎ Type an answer
+▌
+▌ ←→ question · ↑↓ choose · Enter chooses and moves on ·
+▌ type to answer in words

@@ -678,31 +678,52 @@ pub(crate) fn opened(text: &str, indent: &str, out: &mut Rows) {
     }
 }
 
-/// One question's answer as `ask_user`'s result writes it (`docs/tools.md`,
-/// "The result"): `<header>: skipped` when `said` is `None`, else the chosen
-/// labels and then the typed text, joined by `, `. A header or label keeps
-/// JSON's escapes without quotes and the text is a JSON string, so the row
-/// stays one line.
-pub(crate) fn answer_row(header: &str, said: Option<(&[String], Option<&str>)>) -> String {
-    let said = match said {
-        None => "skipped".to_owned(),
+/// One answered row's parts for the panel and the card: the header
+/// padded to 13 display cells, at least one trailing space, and the
+/// answer as `ask_user`'s result writes it (`docs/tui.md`, "A question
+/// form").
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct AnswerParts {
+    /// The header escaped and padded to 13 display cells, at least one
+    /// trailing space; a wider header keeps one space after it.
+    pub(crate) header: String,
+    /// The chosen labels then the quoted words, or "skipped".
+    pub(crate) text: String,
+    /// Whether the question was skipped.
+    pub(crate) skipped: bool,
+}
+
+/// [`AnswerParts`] for `header` and `said`: the padded header for the
+/// panel and the card, the answer text as the result writes it.
+pub(crate) fn answer_parts(header: &str, said: Option<(&[String], Option<&str>)>) -> AnswerParts {
+    let header = escaped(header);
+    let pad = 13usize.saturating_sub(width(&header)).max(1);
+    let (text, skipped) = said_text(said);
+    AnswerParts {
+        header: format!("{header}{}", " ".repeat(pad)),
+        text,
+        skipped,
+    }
+}
+
+/// The answer text as `ask_user`'s result writes it and whether it is a
+/// skip: the chosen labels and then the typed text, joined by `, `. A
+/// header or label keeps JSON's escapes without quotes and the text is a
+/// JSON string, so the row stays one line.
+fn said_text(said: Option<(&[String], Option<&str>)>) -> (String, bool) {
+    match said {
+        None => ("skipped".to_owned(), true),
         Some((labels, text)) => {
             let mut parts: Vec<String> = labels.iter().map(|label| escaped(label)).collect();
             parts.extend(text.map(quoted));
-            parts.join(", ")
+            (parts.join(", "), false)
         }
-    };
-    format!("{}: {said}", escaped(header))
+    }
 }
 
-/// The note on a whole form, as `ask_user`'s result writes it: `note: `
-/// and the note as a JSON string (`docs/tools.md`, "The result").
-pub(crate) fn note_row(note: &str) -> String {
-    format!("note: {}", quoted(note))
-}
-
-/// `text` as a JSON string, quotes included.
-fn quoted(text: &str) -> String {
+/// `text` as a JSON string, quotes included: the note on a whole form
+/// draws it bold in the turn's card.
+pub(crate) fn quoted(text: &str) -> String {
     Value::String(text.to_owned()).to_string()
 }
 

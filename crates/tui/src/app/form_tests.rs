@@ -106,7 +106,7 @@ fn asked_outside(kind: &str, id: &str) -> contract::Envelope {
 fn showing() -> App {
     let mut app = attached();
     feed(&mut app, asked());
-    assert_eq!(header(&app), format!("question · {S_A} · 1 of 1"));
+    assert_eq!(header(&app), form_title(S_A, Some(2), None));
     app
 }
 
@@ -118,6 +118,23 @@ fn panel(app: &App) -> Vec<String> {
 /// The panel's header line.
 fn header(app: &App) -> String {
     panel(app).first().cloned().unwrap_or_default()
+}
+
+/// The form's title at the app's default width: the column is 80 wide
+/// and the panel pads to its inset of 78. `questions` is `None` on a
+/// one-question panel, `place` only when more than one request waits.
+fn form_title(session: &str, questions: Option<usize>, place: Option<(usize, usize)>) -> String {
+    let mut left = format!("Question from {session}");
+    if let Some(questions) = questions {
+        left.push_str(&format!(" · {questions} questions, any can be skipped"));
+    }
+    if let Some((k, n)) = place {
+        left.push_str(&format!(" · {k} of {n}"));
+    }
+    let pad = 78_usize
+        .saturating_sub(crate::format::width(&left).saturating_add("Esc: chat about this".len()))
+        .max(1);
+    format!("{left}{}{}", " ".repeat(pad), "Esc: chat about this")
 }
 
 /// An approval's header for `k` of `n` at the app's default width: the
@@ -199,7 +216,7 @@ fn a_decline_with_the_link_down_sends_nothing_and_keeps_the_form() {
     let mut app = showing();
     app.disconnected();
     press(&mut app, Key::Esc);
-    assert_eq!(header(&app), format!("question · {S_A} · 1 of 1"));
+    assert_eq!(header(&app), form_title(S_A, Some(2), None));
 }
 
 #[test]
@@ -209,7 +226,7 @@ fn a_paste_on_the_form_goes_to_the_words_row() {
         app.on_edit(Edit::Paste("fiber\ncli".to_owned())),
         Effect::None
     );
-    assert!(panel(&app).contains(&"› ✎ fiber cli".to_owned()));
+    assert!(panel(&app).contains(&"▸ 3 ✎ fiber cli".to_owned()));
     assert_eq!(app.draft(), "");
 }
 
@@ -227,7 +244,7 @@ fn a_form_over_an_open_prompt_search_takes_the_paste() {
     assert_eq!(search_query(&app).as_deref(), Some("search prompts: "));
     feed(&mut app, asked());
     app.on_edit(Edit::Paste("x".to_owned()));
-    assert!(panel(&app).contains(&"› ✎ x".to_owned()));
+    assert!(panel(&app).contains(&"▸ 3 ✎ x".to_owned()));
     assert_eq!(sends(&mut app, Key::Esc)["args"]["declined"], true);
     assert_eq!(search_query(&app).as_deref(), Some("search prompts: "));
 }
@@ -311,10 +328,9 @@ fn an_accept_before_the_resolution_also_cancels() {
 #[test]
 fn chat_about_this_declines_like_esc() {
     let mut app = showing();
-    for _ in 0..4 {
-        press(&mut app, Key::Down);
-    }
-    let (id, value) = sent(&mut app, Key::Enter);
+    press(&mut app, Key::Tab);
+    press(&mut app, Key::Tab);
+    let (id, value) = without_id_from_effect(app.on_click(TargetId::Form(Spot::Chat)));
     assert_eq!(
         value,
         json!({"command": "reply", "session_id": S_A,
@@ -331,8 +347,8 @@ fn a_rejected_decline_restores_the_form_and_never_cancels() {
     assert!(app.panel().is_none());
     assert!(fold(&mut app, rejected(S_A, &id)).is_empty());
     assert_eq!(app.notice(), Some("gone"));
-    assert_eq!(header(&app), format!("question · {S_A} · 1 of 1"));
-    assert!(panel(&app).contains(&"› ✎ x".to_owned()));
+    assert_eq!(header(&app), form_title(S_A, Some(2), None));
+    assert!(panel(&app).contains(&"▸ 3 ✎ x".to_owned()));
     assert!(fold(&mut app, accepted(S_A, &id)).is_empty());
 }
 
@@ -371,7 +387,7 @@ fn an_approval_reply_accept_sends_no_cancel() {
 fn a_form_from_another_session_is_declined_and_cancelled_there() {
     let mut app = attached();
     feed(&mut app, asked_by(S_B));
-    assert_eq!(header(&app), format!("question · {S_B} · 1 of 1"));
+    assert_eq!(header(&app), form_title(S_B, Some(2), None));
     let (id, value) = sent(&mut app, Key::Esc);
     assert_eq!(value["session_id"], S_B);
     cancels(&mut app, accepted(S_B, &id), S_B);
@@ -384,7 +400,7 @@ fn esc_on_an_approval_then_esc_on_the_form_behind_it_declines_the_form() {
     feed(&mut app, asked());
     assert_eq!(header(&app), approval_header(1, 2));
     press(&mut app, Key::Esc);
-    assert_eq!(header(&app), format!("question · {S_A} · 2 of 2"));
+    assert_eq!(header(&app), form_title(S_A, Some(2), Some((2, 2))));
     assert_eq!(
         sends(&mut app, Key::Esc),
         json!({"command": "reply", "session_id": S_A,
@@ -402,8 +418,8 @@ fn a_rejected_submit_from_another_session_restores_its_form() {
     assert!(app.panel().is_none());
     assert!(fold(&mut app, rejected(S_B, &id)).is_empty());
     assert_eq!(app.notices().len(), 1);
-    assert_eq!(header(&app), format!("question · {S_B} · 1 of 1"));
-    assert!(panel(&app).contains(&"Base: main (Recommended)".to_owned()));
+    assert_eq!(header(&app), form_title(S_B, Some(2), None));
+    assert!(panel(&app).contains(&"Base         main (Recommended)".to_owned()));
 }
 
 #[test]
@@ -412,7 +428,7 @@ fn an_attached_rejection_is_handled_once() {
     let (id, _) = sent(&mut app, Key::Esc);
     assert!(fold(&mut app, rejected(S_A, &id)).is_empty());
     assert_eq!(app.notices().len(), 1);
-    assert_eq!(header(&app), format!("question · {S_A} · 1 of 1"));
+    assert_eq!(header(&app), form_title(S_A, Some(2), None));
 }
 
 #[test]
@@ -444,7 +460,7 @@ fn caret(app: &App) -> Option<(u16, u16)> {
 
 /// The panel's tab line.
 fn tab_line(app: &App) -> String {
-    panel(app).get(1).cloned().unwrap_or_default()
+    panel(app).get(2).cloned().unwrap_or_default()
 }
 
 #[test]
@@ -453,24 +469,24 @@ fn the_form_keys_go_through_the_keyset() {
     app.set_size(60, 12);
     assert_eq!(caret(&app), None);
     assert_eq!(stroke(&mut app, "space"), Effect::None);
-    assert!(panel(&app).contains(&"› (•) main (Recommended) · the default".to_owned()));
+    assert!(panel(&app).contains(&"▸ 1 (•) main (Recommended)  the default".to_owned()));
     stroke(&mut app, "right");
-    assert_eq!(tab_line(&app), "Base ✓  [Name]  Submit");
-    // Six panel lines on the bottom rows: the words row is the fourth,
+    assert_eq!(tab_line(&app), "←  ✔ Base    ☐ Name    ✔ Submit  →");
+    // Nine panel lines on the bottom rows: the words row is the seventh,
     // inset two columns with the bottom edge below.
-    assert_eq!(caret(&app), Some((6, 8)));
+    assert_eq!(caret(&app), Some((8, 8)));
     for ch in "ab".chars() {
         press(&mut app, Key::Char(ch));
     }
-    assert_eq!(caret(&app), Some((8, 8)));
+    assert_eq!(caret(&app), Some((10, 8)));
     stroke(&mut app, "left");
-    assert_eq!(caret(&app), Some((7, 8)));
-    assert_eq!(tab_line(&app), "Base ✓  [Name ✓]  Submit");
+    assert_eq!(caret(&app), Some((9, 8)));
+    assert_eq!(tab_line(&app), "←  ✔ Base    ✔ Name    ✔ Submit  →");
     stroke(&mut app, "shift+tab");
-    assert_eq!(tab_line(&app), "[Base ✓]  Name ✓  Submit");
+    assert_eq!(tab_line(&app), "←  ✔ Base    ✔ Name    ✔ Submit  →");
     assert_eq!(caret(&app), None);
     stroke(&mut app, "tab");
-    assert_eq!(tab_line(&app), "Base ✓  [Name ✓]  Submit");
+    assert_eq!(tab_line(&app), "←  ✔ Base    ✔ Name    ✔ Submit  →");
 }
 
 #[test]
@@ -480,13 +496,13 @@ fn arrows_reach_a_form_over_an_open_prompt_search() {
     app.on_key(Key::CtrlR, now);
     feed(&mut app, asked());
     app.on_edit(Edit::Right);
-    assert_eq!(tab_line(&app), "Base  [Name]  Submit");
+    assert_eq!(tab_line(&app), "←  ☐ Base    ☐ Name    ✔ Submit  →");
     press(&mut app, Key::Char('a'));
     press(&mut app, Key::Char('c'));
     app.on_edit(Edit::Left);
     press(&mut app, Key::Char('b'));
     assert!(
-        panel(&app).contains(&"› ✎ abc".to_owned()),
+        panel(&app).contains(&"▸ 1 ✎ abc".to_owned()),
         "{:?}",
         panel(&app)
     );
@@ -503,7 +519,7 @@ fn a_global_binding_on_a_form_key_wins() {
     app.set_keys(crate::KeysSetup { user });
     stroke(&mut app, "right");
     assert!(app.keymap_top().is_some());
-    assert_eq!(tab_line(&app), "[Base]  Name  Submit");
+    assert_eq!(tab_line(&app), "←  ☐ Base    ☐ Name    ✔ Submit  →");
 }
 
 /// Sends the key sequence that answers one interaction kind.
@@ -618,8 +634,8 @@ fn a_rejected_text_input_reply_restores_its_words() {
     let (reply_id, _) = sent(&mut app, Key::Enter);
     assert!(app.panel().is_none());
     assert!(fold(&mut app, rejected(S_A, &reply_id)).is_empty());
-    assert_eq!(header(&app), format!("question · {S_A} · 1 of 1"));
-    assert!(panel(&app).contains(&"› ✎ hi".to_owned()));
+    assert_eq!(header(&app), form_title(S_A, None, None));
+    assert!(panel(&app).contains(&"▸ 1 ✎ hi".to_owned()));
 }
 
 #[test]
@@ -689,10 +705,9 @@ fn chat_about_this_outside_a_tool_call_never_cancels() {
         let mut asked = asked();
         asked.payload.remove("action_ids");
         feed(&mut app, asked);
-        for _ in 0..4 {
-            press(&mut app, Key::Down);
-        }
-        let (id, reply) = sent(&mut app, Key::Enter);
+        press(&mut app, Key::Tab);
+        press(&mut app, Key::Tab);
+        let (id, reply) = without_id_from_effect(app.on_click(TargetId::Form(Spot::Chat)));
         assert_eq!(
             reply["args"],
             json!({"request_id": "r_4f", "declined": true})

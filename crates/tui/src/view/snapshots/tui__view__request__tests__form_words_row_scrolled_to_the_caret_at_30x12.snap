@@ -2,15 +2,15 @@
 source: crates/tui/src/view/request_tests.rs
 expression: shown
 ---
-
-
-
-▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
-  question ·
-  s_aaaaaaaaaaaaaaaa · 1 of 1
-  Base  [Name ✓]  Submit
-  What name?
-  › ✎ uns past thirty columns
-    Review →
-    Chat about this
-▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀
+▌ Question from
+▌ s_aaaaaaaaaaaaaaaa · 2
+▌ questions, any can be
+▌ skipped Esc: chat about this
+▌
+▌ ←  ☐ Base    ✔ Name    ✔
+▌ Submit  →
+▌
+▌ What name?
+▌
+▌ ▸ 1 ✎ s past thirty columns
+▌

@@ -1,13 +1,55 @@
-//! Tests for one-question interactions on the request panel.
+//! Tests for one-question interactions on the request panel: keys,
+//! digits, their lines with styled runs, and the shared queue.
 
 use contract::commands::ReplyAnswer;
 use contract::shapes::Choice;
+use ratatui::style::{Modifier, Style};
 use serde_json::{Value, json};
 
 use super::OneQuestion;
+use crate::approvals::Title;
 use crate::approvals::form::Spot;
-use crate::approvals::{PanelKey, Queue};
+use crate::approvals::{Panel, PanelKey, Queue};
 use crate::keys::{Edit, Key};
+use crate::theme::Role;
+
+/// In secondary: the cursor's slot, a chosen mark.
+fn secondary() -> Style {
+    Style::new().fg(Role::Secondary.color())
+}
+
+/// Dim: numbers, the hint that is not there, descriptions, unchosen marks.
+fn dim() -> Style {
+    Style::default().add_modifier(Modifier::DIM)
+}
+
+/// Bold: the question, "Review" is not here, typed words.
+fn bold() -> Style {
+    Style::default().add_modifier(Modifier::BOLD)
+}
+
+/// Reversed: " Submit ".
+fn reversed() -> Style {
+    Style::default().add_modifier(Modifier::REVERSED)
+}
+
+/// Underlined: a label under the cursor.
+fn underlined() -> Style {
+    Style::default().add_modifier(Modifier::UNDERLINED)
+}
+
+/// Dim and reversed: the placeholder's first character with the cursor on
+/// its row.
+fn first() -> Style {
+    Style::default()
+        .add_modifier(Modifier::DIM)
+        .add_modifier(Modifier::REVERSED)
+}
+
+/// " Chat about this ": on the rule tint.
+fn chat() -> Style {
+    Style::new().bg(Role::Rule.color())
+}
 
 fn choice(label: &str, description: Option<&str>) -> Choice {
     Choice {
@@ -32,8 +74,26 @@ fn multi_select() -> OneQuestion {
     OneQuestion::multi_select("Pick some?".to_owned(), options())
 }
 
+/// The title for a one-question panel from `main`, nothing else waiting.
+fn title() -> Title {
+    Title {
+        session: "main".to_owned(),
+        place: None,
+        questions: None,
+    }
+}
+
+/// The title row at 80 columns.
+fn title_row() -> String {
+    format!("Question from main{}Esc: chat about this", " ".repeat(42))
+}
+
+fn panel(question: &OneQuestion) -> Panel {
+    question.panel(&title(), 80)
+}
+
 fn lines(question: &OneQuestion) -> Vec<String> {
-    question.panel("h".to_owned(), 80).lines
+    panel(question).lines
 }
 
 fn answer(question: &OneQuestion) -> Value {
@@ -56,13 +116,15 @@ fn type_text(question: &mut OneQuestion, text: &str) {
 fn each_kind_draws_one_question_without_a_tab_row() {
     let confirm = OneQuestion::confirm("Continue?".to_owned());
     assert_eq!(
-        lines(&confirm),
+        lines(&confirm).as_slice(),
         [
-            "h",
+            title_row().as_str(),
+            "",
             "Continue?",
-            "› ( ) yes",
-            "  ( ) no",
-            "  Chat about this",
+            "",
+            "▸ 1 ( ) yes",
+            "  2 ( ) no",
+            "   Chat about this ",
         ]
     );
 
@@ -74,13 +136,15 @@ fn each_kind_draws_one_question_without_a_tab_row() {
         ],
     );
     assert_eq!(
-        lines(&select),
+        lines(&select).as_slice(),
         [
-            "h",
+            title_row().as_str(),
+            "",
             "Pick one?",
-            "› ( ) alpha version · first choice",
-            "  ( ) beta",
-            "  Chat about this",
+            "",
+            "▸ 1 ( ) alpha version  first choice",
+            "  2 ( ) beta",
+            "   Chat about this ",
         ]
     );
 
@@ -89,64 +153,95 @@ fn each_kind_draws_one_question_without_a_tab_row() {
         vec![choice("alpha", Some("first option")), choice("beta", None)],
     );
     assert_eq!(
-        lines(&multi),
+        lines(&multi).as_slice(),
         [
-            "h",
+            title_row().as_str(),
+            "",
             "Pick some?",
-            "› [ ] alpha · first option",
-            "  [ ] beta",
-            "  Submit",
-            "  Chat about this",
+            "choose any",
+            "",
+            "▸ 1 [ ] alpha  first option",
+            "  2 [ ] beta",
+            "   Submit ",
+            "   Chat about this ",
         ]
     );
 
     let text = OneQuestion::text_input("What should it say?".to_owned());
     assert_eq!(
-        lines(&text),
+        lines(&text).as_slice(),
         [
-            "h",
+            title_row().as_str(),
+            "",
             "What should it say?",
-            "› ✎ answer in words",
-            "  Submit",
-            "  Chat about this",
+            "",
+            "▸ 1 ✎ Type an answer",
+            "   Submit ",
+            "   Chat about this ",
         ]
     );
 }
 
 #[test]
-fn initial_cursor_is_on_the_first_actionable_row() {
+fn one_question_titles_carry_no_question_count() {
     for question in [
         OneQuestion::confirm("Continue?".to_owned()),
         select(),
         multi_select(),
+        OneQuestion::text_input("Words?".to_owned()),
     ] {
-        assert_eq!(question.panel("h".to_owned(), 80).cursor, Some(2));
+        let shown = panel(&question);
+        assert!(!shown.lines[0].contains("questions"), "{}", shown.lines[0]);
+        assert!(
+            shown.lines[0].ends_with("Esc: chat about this"),
+            "{}",
+            shown.lines[0]
+        );
+    }
+}
+
+#[test]
+fn initial_cursor_is_on_the_first_actionable_row() {
+    for (question, at) in [
+        (OneQuestion::confirm("Continue?".to_owned()), 4),
+        (select(), 4),
+        (multi_select(), 5),
+    ] {
+        assert_eq!(question.panel(&title(), 80).cursor, Some(at));
     }
     assert_eq!(
         OneQuestion::text_input("Words?".to_owned())
-            .panel("h".to_owned(), 80)
+            .panel(&title(), 80)
             .cursor,
-        Some(2)
+        Some(4)
     );
     assert_eq!(
         OneQuestion::select("None?".to_owned(), Vec::new())
-            .panel("h".to_owned(), 80)
+            .panel(&title(), 80)
             .cursor,
-        Some(2)
+        Some(4)
     );
     assert_eq!(
         OneQuestion::multi_select("None?".to_owned(), Vec::new())
-            .panel("h".to_owned(), 80)
+            .panel(&title(), 80)
             .cursor,
-        Some(2)
+        Some(5)
     );
     assert_eq!(
-        lines(&OneQuestion::select("None?".to_owned(), Vec::new())),
-        ["h", "None?", "› Chat about this"]
+        lines(&OneQuestion::select("None?".to_owned(), Vec::new())).as_slice(),
+        [title_row().as_str(), "", "None?", "", "▸  Chat about this "]
     );
     assert_eq!(
-        lines(&OneQuestion::multi_select("None?".to_owned(), Vec::new())),
-        ["h", "None?", "› Submit", "  Chat about this"]
+        lines(&OneQuestion::multi_select("None?".to_owned(), Vec::new())).as_slice(),
+        [
+            title_row().as_str(),
+            "",
+            "None?",
+            "choose any",
+            "",
+            "▸  Submit ",
+            "   Chat about this "
+        ]
     );
 }
 
@@ -220,11 +315,104 @@ fn multi_select_enter_on_submit_sends_the_answer() {
     let mut question = multi_select();
     press(&mut question, &[Key::Down, Key::Down, Key::Down]);
     assert_eq!(
-        lines(&question).get(5).map(String::as_str),
-        Some("› Submit")
+        lines(&question).get(8).map(String::as_str),
+        Some("▸  Submit ")
     );
     assert_eq!(question.on_key(&Key::Enter), Some(PanelKey::Answer));
+}
+
+#[test]
+fn digits_toggle_multi_select_and_carry_the_labels() {
+    let mut question = multi_select();
+    assert_eq!(question.on_key(&Key::Char('2')), Some(PanelKey::Handled));
+    assert_eq!(
+        lines(&question).get(6).map(String::as_str),
+        Some("▸ 2 [x] beta")
+    );
+    assert_eq!(answer(&question), json!({"labels": ["beta"]}));
+    // Nothing is sent: Enter sends it.
+    assert_eq!(question.on_key(&Key::Enter), Some(PanelKey::Answer));
+    assert_eq!(question.on_key(&Key::Char('2')), Some(PanelKey::Handled));
+    assert_eq!(
+        lines(&question).get(6).map(String::as_str),
+        Some("▸ 2 [ ] beta")
+    );
+}
+
+#[test]
+fn digits_move_the_cursor_on_confirm_and_select_and_send_nothing() {
+    let mut question = OneQuestion::confirm("Continue?".to_owned());
+    assert_eq!(question.on_key(&Key::Char('2')), Some(PanelKey::Handled));
+    assert_eq!(
+        lines(&question).get(5).map(String::as_str),
+        Some("▸ 2 ( ) no")
+    );
+    assert_eq!(answer(&question), json!({"confirmed": false}));
+    // Enter on the option sends it.
+    assert_eq!(question.on_key(&Key::Enter), Some(PanelKey::Answer));
+
+    let mut question = select();
+    assert_eq!(question.on_key(&Key::Char('3')), Some(PanelKey::Handled));
+    assert_eq!(
+        lines(&question).get(6).map(String::as_str),
+        Some("▸ 3 ( ) gamma")
+    );
+    assert_eq!(answer(&question), json!({"labels": ["gamma"]}));
+    assert_eq!(question.on_key(&Key::Enter), Some(PanelKey::Answer));
+}
+
+#[test]
+fn digits_on_text_input_are_typed() {
+    let mut question = OneQuestion::text_input("Words?".to_owned());
+    assert_eq!(question.on_key(&Key::Char('5')), Some(PanelKey::Handled));
+    assert_eq!(lines(&question).get(4).map(String::as_str), Some("▸ 1 ✎ 5"));
+    assert_eq!(answer(&question), json!({"text": "5"}));
+}
+
+#[test]
+fn digits_past_the_last_option_do_nothing() {
+    // Three options: '4' is past the words row that is not there, '0' is
+    // never a row.
+    let mut question = select();
+    let before = lines(&question);
+    assert_eq!(question.on_key(&Key::Char('4')), Some(PanelKey::Handled));
+    assert_eq!(question.on_key(&Key::Char('0')), Some(PanelKey::Handled));
+    assert_eq!(lines(&question), before);
+    assert_eq!(answer(&question), json!({"labels": ["alpha"]}));
+
+    let mut question = OneQuestion::confirm("Continue?".to_owned());
+    let before = lines(&question);
+    assert_eq!(question.on_key(&Key::Char('3')), Some(PanelKey::Handled));
+    assert_eq!(question.on_key(&Key::Char('0')), Some(PanelKey::Handled));
+    assert_eq!(lines(&question), before);
+
+    let mut question = multi_select();
+    let before = lines(&question);
+    assert_eq!(question.on_key(&Key::Char('4')), Some(PanelKey::Handled));
+    assert_eq!(question.on_key(&Key::Char('9')), Some(PanelKey::Handled));
+    assert_eq!(lines(&question), before);
     assert_eq!(answer(&question), json!({"labels": []}));
+}
+
+#[test]
+fn a_paste_of_digits_never_chooses() {
+    for mut question in [
+        OneQuestion::confirm("Continue?".to_owned()),
+        select(),
+        multi_select(),
+    ] {
+        let before = lines(&question);
+        let before_answer = question.answer();
+        question.on_edit(&Edit::Paste("12".to_owned()));
+        assert_eq!(lines(&question), before);
+        assert_eq!(question.answer(), before_answer);
+    }
+    let mut question = OneQuestion::text_input("Words?".to_owned());
+    question.on_edit(&Edit::Paste("12".to_owned()));
+    assert_eq!(
+        lines(&question).get(4).map(String::as_str),
+        Some("▸ 1 ✎ 12")
+    );
 }
 
 #[test]
@@ -250,18 +438,21 @@ fn text_input_edits_at_a_character_cursor_and_clamps_at_both_ends() {
     let mut question = OneQuestion::text_input("Words?".to_owned());
     type_text(&mut question, "ab");
     press(&mut question, &[Key::Backspace]);
-    assert_eq!(lines(&question).get(2).map(String::as_str), Some("› ✎ a"));
+    assert_eq!(lines(&question).get(4).map(String::as_str), Some("▸ 1 ✎ a"));
     question.on_edit(&Edit::Left);
     question.on_edit(&Edit::Left);
     type_text(&mut question, "x");
-    assert_eq!(lines(&question).get(2).map(String::as_str), Some("› ✎ xa"));
+    assert_eq!(
+        lines(&question).get(4).map(String::as_str),
+        Some("▸ 1 ✎ xa")
+    );
     question.on_edit(&Edit::Right);
     question.on_edit(&Edit::Right);
-    assert_eq!(question.panel("h".to_owned(), 80).caret, Some((2, 6)));
+    assert_eq!(question.panel(&title(), 80).caret, Some((4, 8)));
     question.on_edit(&Edit::Left);
-    assert_eq!(question.panel("h".to_owned(), 80).caret, Some((2, 5)));
+    assert_eq!(question.panel(&title(), 80).caret, Some((4, 7)));
     question.on_edit(&Edit::Left);
-    assert_eq!(question.panel("h".to_owned(), 80).caret, Some((2, 4)));
+    assert_eq!(question.panel(&title(), 80).caret, Some((4, 6)));
 }
 
 #[test]
@@ -269,17 +460,17 @@ fn text_cursor_edits_do_nothing_off_the_words_row() {
     let mut question = OneQuestion::text_input("Words?".to_owned());
     type_text(&mut question, "ab");
     press(&mut question, &[Key::Down]);
-    let submit = question.panel("h".to_owned(), 80);
+    let submit = question.panel(&title(), 80);
     press(&mut question, &[Key::Backspace]);
     question.on_edit(&Edit::Left);
     question.on_edit(&Edit::Right);
-    assert_eq!(question.panel("h".to_owned(), 80), submit);
+    assert_eq!(question.panel(&title(), 80), submit);
     press(&mut question, &[Key::Down]);
-    let chat = question.panel("h".to_owned(), 80);
+    let chat = question.panel(&title(), 80);
     press(&mut question, &[Key::Backspace]);
     question.on_edit(&Edit::Left);
     question.on_edit(&Edit::Right);
-    assert_eq!(question.panel("h".to_owned(), 80), chat);
+    assert_eq!(question.panel(&title(), 80), chat);
 }
 
 #[test]
@@ -289,8 +480,8 @@ fn backspace_and_arrows_off_words_leave_text_and_caret_unchanged() {
     press(&mut backspace, &[Key::Down, Key::Backspace]);
     type_text(&mut backspace, "x");
     assert_eq!(
-        lines(&backspace).get(2).map(String::as_str),
-        Some("› ✎ abx")
+        lines(&backspace).get(4).map(String::as_str),
+        Some("▸ 1 ✎ abx")
     );
 
     let mut left = OneQuestion::text_input("Words?".to_owned());
@@ -298,7 +489,7 @@ fn backspace_and_arrows_off_words_leave_text_and_caret_unchanged() {
     press(&mut left, &[Key::Down]);
     left.on_edit(&Edit::Left);
     type_text(&mut left, "x");
-    assert_eq!(lines(&left).get(2).map(String::as_str), Some("› ✎ abx"));
+    assert_eq!(lines(&left).get(4).map(String::as_str), Some("▸ 1 ✎ abx"));
 
     let mut right = OneQuestion::text_input("Words?".to_owned());
     type_text(&mut right, "ab");
@@ -306,7 +497,7 @@ fn backspace_and_arrows_off_words_leave_text_and_caret_unchanged() {
     press(&mut right, &[Key::Down]);
     right.on_edit(&Edit::Right);
     type_text(&mut right, "x");
-    assert_eq!(lines(&right).get(2).map(String::as_str), Some("› ✎ axb"));
+    assert_eq!(lines(&right).get(4).map(String::as_str), Some("▸ 1 ✎ axb"));
 }
 
 #[test]
@@ -314,13 +505,13 @@ fn text_input_paste_turns_control_characters_into_spaces() {
     let mut question = OneQuestion::text_input("Words?".to_owned());
     question.on_edit(&Edit::Paste("a\nb\tc".to_owned()));
     assert_eq!(
-        lines(&question).get(2).map(String::as_str),
-        Some("› ✎ a b c")
+        lines(&question).get(4).map(String::as_str),
+        Some("▸ 1 ✎ a b c")
     );
     press(&mut question, &[Key::Char(' ')]);
     assert_eq!(
-        lines(&question).get(2).map(String::as_str),
-        Some("› ✎ a b c ")
+        lines(&question).get(4).map(String::as_str),
+        Some("▸ 1 ✎ a b c ")
     );
 }
 
@@ -329,8 +520,8 @@ fn text_input_enter_on_submit_sends_the_answer() {
     let mut question = OneQuestion::text_input("Words?".to_owned());
     press(&mut question, &[Key::Down]);
     assert_eq!(
-        lines(&question).get(3).map(String::as_str),
-        Some("› Submit")
+        lines(&question).get(5).map(String::as_str),
+        Some("▸  Submit ")
     );
     assert_eq!(question.on_key(&Key::Enter), Some(PanelKey::Answer));
 }
@@ -352,9 +543,10 @@ fn esc_and_chat_decline_each_kind() {
         for _ in 0..last {
             press(&mut question, &[Key::Down]);
         }
-        assert_eq!(
-            lines(&question).last().map(String::as_str),
-            Some("› Chat about this")
+        assert!(
+            lines(&question)
+                .last()
+                .is_some_and(|line| line.starts_with("▸ "))
         );
         assert_eq!(question.on_key(&Key::Enter), Some(PanelKey::Decline));
     }
@@ -484,8 +676,8 @@ fn clicks_match_the_rows_and_actions() {
     assert_eq!(question.click(Spot::Option(1)), PanelKey::Handled);
     assert!(
         lines(&question)
-            .get(3)
-            .is_some_and(|line| line.starts_with("› [x] beta"))
+            .get(6)
+            .is_some_and(|line| line.starts_with("▸ 2 [x] beta"))
     );
     assert_eq!(question.click(Spot::Send), PanelKey::Answer);
     assert_eq!(answer(&question), json!({"labels": ["beta"]}));
@@ -494,7 +686,24 @@ fn clicks_match_the_rows_and_actions() {
     type_text(&mut question, "hi");
     question.on_edit(&Edit::Left);
     assert_eq!(question.click(Spot::Words), PanelKey::Handled);
-    assert_eq!(question.panel("h".to_owned(), 80).caret, Some((2, 6)));
+    assert_eq!(question.panel(&title(), 80).caret, Some((4, 8)));
+    // Typed words draw bold.
+    let shown = question.panel(&title(), 80);
+    let marks: Vec<_> = shown
+        .marks
+        .iter()
+        .filter(|mark| mark.line == 4)
+        .map(|mark| (mark.bytes.clone(), mark.style))
+        .collect();
+    assert_eq!(
+        marks,
+        [
+            (0..4, secondary()),
+            (4..6, dim()),
+            (6..10, dim()),
+            (10..12, bold()),
+        ]
+    );
     assert_eq!(question.click(Spot::Send), PanelKey::Answer);
     assert_eq!(answer(&question), json!({"text": "hi"}));
 
@@ -519,10 +728,10 @@ fn spots_without_a_row_for_the_kind_do_nothing() {
             Spot::Send,
             Spot::Option(9),
         ] {
-            let before = question.panel("h".to_owned(), 80);
+            let before = question.panel(&title(), 80);
             let before_answer = question.answer();
             assert_eq!(question.click(spot), PanelKey::Handled, "{spot:?}");
-            assert_eq!(question.panel("h".to_owned(), 80), before, "{spot:?}");
+            assert_eq!(question.panel(&title(), 80), before, "{spot:?}");
             assert_eq!(question.answer(), before_answer, "{spot:?}");
         }
     }
@@ -535,19 +744,19 @@ fn spots_without_a_row_for_the_kind_do_nothing() {
         Spot::Words,
         Spot::Option(9),
     ] {
-        let before = multi.panel("h".to_owned(), 80);
+        let before = multi.panel(&title(), 80);
         let before_answer = multi.answer();
         assert_eq!(multi.click(spot), PanelKey::Handled, "{spot:?}");
-        assert_eq!(multi.panel("h".to_owned(), 80), before, "{spot:?}");
+        assert_eq!(multi.panel(&title(), 80), before, "{spot:?}");
         assert_eq!(multi.answer(), before_answer, "{spot:?}");
     }
 
     let mut text = OneQuestion::text_input("Words?".to_owned());
     for spot in [Spot::Tab(0), Spot::Next, Spot::Note, Spot::Option(9)] {
-        let before = text.panel("h".to_owned(), 80);
+        let before = text.panel(&title(), 80);
         let before_answer = text.answer();
         assert_eq!(text.click(spot), PanelKey::Handled, "{spot:?}");
-        assert_eq!(text.panel("h".to_owned(), 80), before, "{spot:?}");
+        assert_eq!(text.panel(&title(), 80), before, "{spot:?}");
         assert_eq!(text.answer(), before_answer, "{spot:?}");
     }
 }
@@ -568,76 +777,175 @@ fn answers_for_confirm_and_select_require_an_option_cursor() {
 #[test]
 fn panel_cursor_caret_and_spots_follow_the_selected_row() {
     let confirm = OneQuestion::confirm("Continue?".to_owned());
-    let panel = confirm.panel("h".to_owned(), 80);
-    assert_eq!(panel.cursor, Some(2));
-    assert_eq!(panel.caret, None);
+    let shown = panel(&confirm);
+    assert_eq!(shown.cursor, Some(4));
+    assert_eq!(shown.caret, None);
     assert_eq!(
-        panel
+        shown
             .spots
             .iter()
             .map(|spot| (spot.line, spot.cols, spot.spot))
             .collect::<Vec<_>>(),
         [
-            (2, None, Spot::Option(0)),
-            (3, None, Spot::Option(1)),
-            (4, None, Spot::Chat),
+            (4, None, Spot::Option(0)),
+            (5, None, Spot::Option(1)),
+            (6, None, Spot::Chat),
         ]
     );
 
     let question = select();
-    let panel = question.panel("h".to_owned(), 80);
-    assert_eq!(panel.cursor, Some(2));
-    assert_eq!(panel.caret, None);
+    let shown = panel(&question);
+    assert_eq!(shown.cursor, Some(4));
+    assert_eq!(shown.caret, None);
     assert_eq!(
-        panel
+        shown
             .spots
             .iter()
             .map(|spot| (spot.line, spot.cols, spot.spot))
             .collect::<Vec<_>>(),
         [
-            (2, None, Spot::Option(0)),
-            (3, None, Spot::Option(1)),
-            (4, None, Spot::Option(2)),
-            (5, None, Spot::Chat),
+            (4, None, Spot::Option(0)),
+            (5, None, Spot::Option(1)),
+            (6, None, Spot::Option(2)),
+            (7, None, Spot::Chat),
         ]
     );
 
     let multi = multi_select();
-    let panel = multi.panel("h".to_owned(), 80);
-    assert_eq!(panel.cursor, Some(2));
-    assert_eq!(panel.caret, None);
+    let shown = panel(&multi);
+    assert_eq!(shown.cursor, Some(5));
+    assert_eq!(shown.caret, None);
     assert_eq!(
-        panel
+        shown
             .spots
             .iter()
             .map(|spot| (spot.line, spot.cols, spot.spot))
             .collect::<Vec<_>>(),
         [
-            (2, None, Spot::Option(0)),
-            (3, None, Spot::Option(1)),
-            (4, None, Spot::Option(2)),
-            (5, None, Spot::Send),
-            (6, None, Spot::Chat),
+            (5, None, Spot::Option(0)),
+            (6, None, Spot::Option(1)),
+            (7, None, Spot::Option(2)),
+            (8, None, Spot::Send),
+            (9, None, Spot::Chat),
         ]
     );
 
     let mut text = OneQuestion::text_input("Words?".to_owned());
     type_text(&mut text, "hi");
-    let panel = text.panel("h".to_owned(), 80);
-    assert_eq!(panel.cursor, Some(2));
-    assert_eq!(panel.caret, Some((2, 6)));
+    let shown = panel(&text);
+    assert_eq!(shown.cursor, Some(4));
+    assert_eq!(shown.caret, Some((4, 8)));
     assert_eq!(
-        panel
+        shown
             .spots
             .iter()
             .map(|spot| (spot.line, spot.cols, spot.spot))
             .collect::<Vec<_>>(),
         [
-            (2, None, Spot::Words),
-            (3, None, Spot::Send),
-            (4, None, Spot::Chat),
+            (4, None, Spot::Words),
+            (5, None, Spot::Send),
+            (6, None, Spot::Chat),
         ]
     );
+}
+
+#[test]
+fn option_rows_mark_each_role() {
+    // "▸ 1 ( ) yes": cursor, unchosen, confirm.
+    let confirm = OneQuestion::confirm("Continue?".to_owned());
+    let shown = panel(&confirm);
+    let marks: Vec<_> = shown
+        .marks
+        .iter()
+        .filter(|mark| mark.line == 4)
+        .map(|mark| (mark.bytes.clone(), mark.style))
+        .collect();
+    assert_eq!(
+        marks,
+        [
+            (0..4, secondary()),
+            (4..6, dim()),
+            (6..9, dim()),
+            (10..13, underlined()),
+        ]
+    );
+    // A chosen multi option: bold and underlined under the cursor.
+    let mut multi = multi_select();
+    press(&mut multi, &[Key::Char(' ')]);
+    let shown = panel(&multi);
+    let marks: Vec<_> = shown
+        .marks
+        .iter()
+        .filter(|mark| mark.line == 5)
+        .map(|mark| (mark.bytes.clone(), mark.style))
+        .collect();
+    assert_eq!(
+        marks,
+        [
+            (0..4, secondary()),
+            (4..6, dim()),
+            (6..9, secondary()),
+            (
+                10..15,
+                Style::default()
+                    .add_modifier(Modifier::BOLD)
+                    .add_modifier(Modifier::UNDERLINED)
+            ),
+            (15..29, dim()),
+        ]
+    );
+}
+
+#[test]
+fn the_words_row_marks_the_placeholder_first_character() {
+    let text = OneQuestion::text_input("Words?".to_owned());
+    let shown = panel(&text);
+    // "▸ 1 ✎ Type an answer": the cursor sits on the placeholder's first
+    // character, drawn reversed, with the caret on its cell.
+    let marks: Vec<_> = shown
+        .marks
+        .iter()
+        .filter(|mark| mark.line == 4)
+        .map(|mark| (mark.bytes.clone(), mark.style))
+        .collect();
+    assert_eq!(
+        marks,
+        [
+            (0..4, secondary()),
+            (4..6, dim()),
+            (6..10, dim()),
+            (10..11, first()),
+            (11..24, dim()),
+        ]
+    );
+    assert_eq!(shown.caret, Some((4, 6)));
+    assert_eq!(shown.lines[4], "▸ 1 ✎ Type an answer");
+}
+
+#[test]
+fn submit_and_chat_rows_mark_the_buttons() {
+    let mut multi = multi_select();
+    press(&mut multi, &[Key::Down, Key::Down, Key::Down]);
+    let shown = panel(&multi);
+    // "▸  Submit": the cursor's slot and the reversed button.
+    let marks: Vec<_> = shown
+        .marks
+        .iter()
+        .filter(|mark| mark.line == 8)
+        .map(|mark| (mark.bytes.clone(), mark.style))
+        .collect();
+    assert_eq!(marks, [(0..4, secondary()), (4..12, reversed())]);
+    assert_eq!(shown.cursor, Some(8));
+    press(&mut multi, &[Key::Down]);
+    let shown = panel(&multi);
+    let marks: Vec<_> = shown
+        .marks
+        .iter()
+        .filter(|mark| mark.line == 9)
+        .map(|mark| (mark.bytes.clone(), mark.style))
+        .collect();
+    assert_eq!(marks, [(0..4, secondary()), (4..21, chat())]);
+    assert_eq!(shown.lines[9], "▸  Chat about this ");
 }
 
 #[test]
@@ -721,10 +1029,20 @@ fn queue_with(request: contract::Envelope) -> Queue {
     queue
 }
 
+/// A one-question title at 80 columns: no question count, no place suffix
+/// with one request waiting.
+fn one_title() -> String {
+    let left = format!("Question from {S_A}");
+    let pad = 80_usize
+        .saturating_sub(crate::format::width(&left).saturating_add("Esc: chat about this".len()))
+        .max(1);
+    format!("{left}{}{}", " ".repeat(pad), "Esc: chat about this")
+}
+
 fn header(queue: &Queue) -> String {
     queue
         .panel(80)
-        .and_then(|panel| panel.lines.first().cloned())
+        .and_then(|shown| shown.lines.first().cloned())
         .unwrap_or_default()
 }
 
@@ -742,7 +1060,7 @@ fn each_one_question_kind_opens_in_the_shared_queue() {
     ] {
         let queue = queue_with(request);
         assert!(queue.open());
-        assert_eq!(header(&queue), format!("question · {S_A} · 1 of 1"));
+        assert_eq!(header(&queue), one_title());
     }
 }
 
@@ -762,9 +1080,16 @@ fn a_one_question_waits_behind_a_put_aside_approval() {
 fn a_one_question_joins_the_queue_after_a_form_and_moves_up_when_answered() {
     let mut queue = queue_with(form_request("r_f"));
     queue.fold(&confirm_request("r_c"));
-    assert_eq!(header(&queue), format!("question · {S_A} · 1 of 2"));
+    let left = format!("Question from {S_A} · 0 questions, any can be skipped · 1 of 2");
+    let pad = 80_usize
+        .saturating_sub(crate::format::width(&left).saturating_add("Esc: chat about this".len()))
+        .max(1);
+    assert_eq!(
+        header(&queue),
+        format!("{left}{}{}", " ".repeat(pad), "Esc: chat about this")
+    );
     assert!(queue.answer("c_f").is_some());
-    assert_eq!(header(&queue), format!("question · {S_A} · 1 of 1"));
+    assert_eq!(header(&queue), one_title());
 }
 
 #[test]
@@ -855,7 +1180,7 @@ fn restoring_a_text_input_reply_keeps_its_words() {
     assert!(
         queue
             .panel(80)
-            .is_some_and(|panel| panel.lines.contains(&"› ✎ hi".to_owned()))
+            .is_some_and(|shown| shown.lines.contains(&"▸ 1 ✎ hi".to_owned()))
     );
 }
 
@@ -871,7 +1196,7 @@ fn a_raised_again_text_input_keeps_its_words() {
     assert!(
         queue
             .panel(80)
-            .is_some_and(|panel| panel.lines.contains(&"› ✎ hi".to_owned()))
+            .is_some_and(|shown| shown.lines.contains(&"▸ 1 ✎ hi".to_owned()))
     );
 }
 
@@ -895,4 +1220,31 @@ fn answering_a_select_from_chat_sends_nothing_and_keeps_it_waiting() {
     assert_eq!(queue.answer("c_s"), None);
     assert!(queue.open());
     assert_eq!(header(&queue), before);
+}
+
+#[test]
+fn a_non_digit_key_never_moves_the_cursor_to_an_option() {
+    // ':' is the code past '9' that maps to the tenth option's index, so a
+    // key that is not a digit must still do nothing.
+    let choices: Vec<Choice> = (1..=10).map(|n| choice(&format!("opt{n}"), None)).collect();
+    let mut question = OneQuestion::select("Pick one?".to_owned(), choices);
+    let before = lines(&question);
+    let before_answer = answer(&question);
+    assert_eq!(question.on_key(&Key::Char(':')), Some(PanelKey::Handled));
+    assert_eq!(lines(&question), before);
+    assert_eq!(answer(&question), before_answer);
+}
+
+#[test]
+fn the_words_row_scrolls_so_the_caret_stays_inside_the_width() {
+    // Ten words after a six-cell prefix fill 16 columns exactly. The caret
+    // needs one cell past them, so the row drops the first word.
+    let mut question = OneQuestion::text_input("Words?".to_owned());
+    type_text(&mut question, "abcdefghij");
+    let width = crate::format::width("▸ 1 ✎ ") + 10;
+    let shown = question.panel(&title(), u16::try_from(width).unwrap_or(u16::MAX));
+    assert_eq!(
+        shown.lines.get(4).map(String::as_str),
+        Some("▸ 1 ✎ bcdefghij")
+    );
 }

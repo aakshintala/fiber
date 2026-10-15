@@ -904,7 +904,10 @@ fn the_question_caret_sits_inside_the_panel_above_the_status_row() {
         rows[rows.len() - 2].chars().all(|cell| cell == '▀'),
         "{rows:?}"
     );
-    assert!(rows[rows.len() - 3].contains("Chat about this"), "{rows:?}");
+    assert!(
+        rows[rows.len() - 3].contains("type to answer in words"),
+        "{rows:?}"
+    );
     assert!(rows[rows.len() - 1].contains("$1.50"), "{rows:?}");
 }
 

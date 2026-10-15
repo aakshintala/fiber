@@ -559,38 +559,6 @@ fn wrapping_keeps_empty_lines_and_spacing_whole() {
 }
 
 #[test]
-fn answer_rows_match_the_result_lines_ask_user_writes() {
-    use super::{answer_row, note_row};
-    let labels = ["main (Recommended)".to_owned(), "dev".to_owned()];
-    assert_eq!(
-        answer_row("Base", Some((&labels, Some("and tags")))),
-        r#"Base: main (Recommended), dev, "and tags""#
-    );
-    assert_eq!(
-        answer_row("Name", Some((&[], Some("fiber-cli")))),
-        r#"Name: "fiber-cli""#
-    );
-    assert_eq!(
-        answer_row("Name", Some((&labels, None))),
-        "Name: main (Recommended), dev"
-    );
-    assert_eq!(answer_row("Name", None), "Name: skipped");
-    assert_eq!(answer_row("Name", Some((&[], None))), "Name: ");
-    assert_eq!(note_row("by friday"), r#"note: "by friday""#);
-}
-
-#[test]
-fn answer_rows_escape_headers_and_labels_onto_one_line() {
-    use super::{answer_row, note_row};
-    let labels = ["a \"b\"".to_owned()];
-    assert_eq!(
-        answer_row("Pick\nnow", Some((&labels, Some("x\ny")))),
-        r#"Pick\nnow: a \"b\", "x\ny""#
-    );
-    assert_eq!(note_row("one\ntwo"), r#"note: "one\ntwo""#);
-}
-
-#[test]
 fn ask_user_counts_its_questions_when_it_has_any() {
     let questions = |arguments| match kind("ask_user", &arguments) {
         Kind::Ask(n) => Some(n),
@@ -720,4 +688,53 @@ fn opened_notes_draw_every_line_uncapped() {
     assert_eq!(rows.len(), 30);
     assert_eq!(rows[0].0.to_string(), "  line 1");
     assert_eq!(rows[29].0.to_string(), "  line 30");
+}
+
+#[test]
+fn answer_parts_pads_the_header_to_13_cells_with_one_space_least() {
+    use super::answer_parts;
+    // 4 cells: 9 spaces pad to 13.
+    let parts = answer_parts("Base", None);
+    assert_eq!(parts.header, "Base         ");
+    assert_eq!(parts.text, "skipped");
+    assert!(parts.skipped);
+    // 12 cells: 1 space. 13 cells: still 1 space. 14 cells: still 1 space.
+    assert_eq!(answer_parts("123456789012", None).header, "123456789012 ");
+    assert_eq!(answer_parts("1234567890123", None).header, "1234567890123 ");
+    assert_eq!(
+        answer_parts("12345678901234", None).header,
+        "12345678901234 "
+    );
+    // A wide header counts cells, not bytes: 2 cells each.
+    assert_eq!(answer_parts("名前", None).header, "名前         ");
+    // The padded header's cells are 13, or the header's cells plus one.
+    for (header, cells) in [("Base", 13), ("1234567890123", 14), ("12345678901234", 15)] {
+        assert_eq!(
+            super::width(&answer_parts(header, None).header),
+            cells,
+            "{header}"
+        );
+    }
+}
+
+#[test]
+fn answer_parts_carries_labels_quoted_words_or_skipped() {
+    use super::answer_parts;
+    let labels = ["main (Recommended)".to_owned(), "dev".to_owned()];
+    let parts = answer_parts("Base", Some((&labels, Some("and tags"))));
+    assert_eq!(parts.header, "Base         ");
+    assert_eq!(parts.text, r#"main (Recommended), dev, "and tags""#);
+    assert!(!parts.skipped);
+    let parts = answer_parts("Name", Some((&[], Some("fiber-cli"))));
+    assert_eq!(parts.text, r#""fiber-cli""#);
+    assert!(!parts.skipped);
+    let parts = answer_parts("Name", Some((&labels, None)));
+    assert_eq!(parts.text, "main (Recommended), dev");
+    assert!(!parts.skipped);
+    // Escapes without quotes, one line.
+    let labels = ["a \"b\"".to_owned()];
+    let parts = answer_parts("Pick\nnow", Some((&labels, Some("x\ny"))));
+    assert_eq!(parts.header, "Pick\\nnow    ");
+    assert_eq!(parts.text, r#"a \"b\", "x\ny""#);
+    assert!(!parts.skipped);
 }

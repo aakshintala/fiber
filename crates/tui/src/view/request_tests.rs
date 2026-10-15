@@ -15,7 +15,7 @@ use crate::approvals::form::Spot;
 use crate::approvals::{Panel, PanelSpot, Queue};
 use crate::keys::Key;
 use crate::link::Line;
-use crate::mouse::{Target, TargetId};
+use crate::mouse::{Target, TargetId, hit};
 use crate::surface;
 use crate::theme::Role;
 use ratatui::style::{Color, Modifier};
@@ -220,16 +220,20 @@ fn form_scrolled_to_the_cursor_at_40x10() {
     }
     let (shown, targets) = screen(&app, 40, 10);
     insta::assert_snapshot!("form_scrolled_to_the_cursor_at_40x10", shown);
-    // "Chat about this" is the panel's last row, and no target is drawn
-    // for a row scrolled off.
-    assert_eq!(shown.lines().last(), Some("  › Chat about this"));
-    assert_eq!(rect_of(&targets, Spot::Chat), Some(Rect::new(2, 9, 38, 1)));
+    // The cursor sits on the words row, kept as the last shown row; a
+    // question tab has no Chat row, and no target is drawn for a row
+    // scrolled off.
+    assert!(
+        shown.lines().last().is_some_and(|row| row.contains("✎")),
+        "{shown}"
+    );
+    assert_eq!(rect_of(&targets, Spot::Chat), None);
     assert!(spots(&targets).iter().all(|(_, rect)| rect.height > 0));
-    // The first option shows only its second row, and its target only
-    // that row.
+    // The first option's line wraps to three rows, showing only its last
+    // two, and its target only those rows.
     assert_eq!(
         rect_of(&targets, Spot::Option(0)),
-        Some(Rect::new(2, 0, 38, 1))
+        Some(Rect::new(2, 1, 38, 2))
     );
     // Back up to the first option, the header shows again.
     for _ in 0..6 {
@@ -237,10 +241,7 @@ fn form_scrolled_to_the_cursor_at_40x10() {
     }
     let (shown, _) = screen(&app, 40, 10);
     insta::assert_snapshot!("form_scrolled_back_to_the_top_at_40x10", shown);
-    assert!(
-        shown.contains(&format!("question · {S_A} · 1 of 1")),
-        "{shown}"
-    );
+    assert!(shown.contains("Question from"), "{shown}");
 }
 
 #[test]
@@ -286,7 +287,7 @@ fn drawn(panel: &Panel, height: u16) -> (String, u16, Vec<Target>) {
 #[test]
 fn a_panel_exactly_as_tall_as_its_space_does_not_scroll() {
     let (shown, top, targets) = drawn(&numbered(4, true), 4);
-    assert_eq!(shown, "  l0\n  l1\n  l2\n  l3\n");
+    assert_eq!(shown, "▌ l0\n▌ l1\n▌ l2\n▌ l3\n");
     assert_eq!(top, 0);
     assert_eq!(targets.len(), 1);
 }
@@ -294,7 +295,7 @@ fn a_panel_exactly_as_tall_as_its_space_does_not_scroll() {
 #[test]
 fn one_row_taller_scrolls_by_one() {
     let (shown, top, targets) = drawn(&numbered(5, true), 4);
-    assert_eq!(shown, "  l1\n  l2\n  l3\n  l4\n");
+    assert_eq!(shown, "▌ l1\n▌ l2\n▌ l3\n▌ l4\n");
     assert_eq!(top, 0);
     // Line 0 is scrolled off, so its target is not drawn.
     assert!(targets.is_empty());
@@ -303,7 +304,7 @@ fn one_row_taller_scrolls_by_one() {
 #[test]
 fn a_panel_shorter_than_its_space_sits_at_the_bottom() {
     let (shown, top, _) = drawn(&numbered(2, true), 4);
-    assert_eq!(shown, "▄▄▄▄▄▄▄▄▄▄\n  l0\n  l1\n▀▀▀▀▀▀▀▀▀▀\n");
+    assert_eq!(shown, "▄▄▄▄▄▄▄▄▄▄\n▌ l0\n▌ l1\n▀▀▀▀▀▀▀▀▀▀\n");
     assert_eq!(top, 0);
 }
 
@@ -324,7 +325,7 @@ fn a_line_partly_scrolled_off_shows_its_last_rows() {
         *first = "aaaa bbbb cccc".to_owned();
     }
     let (shown, _, targets) = drawn(&panel, 3);
-    assert_eq!(shown, "  cccc\n  l1\n  l2\n");
+    assert_eq!(shown, "▌ cccc\n▌ l1\n▌ l2\n");
     assert_eq!(
         targets.first().map(|target| target.rect),
         Some(Rect::new(2, 0, 8, 1))
@@ -335,9 +336,10 @@ fn a_line_partly_scrolled_off_shows_its_last_rows() {
 fn a_click_on_a_tab_opens_it() {
     let mut app = asking(base_and_name(false), 60, 12);
     assert_eq!(click(&mut app, Spot::Tab(1)), Effect::None);
+    assert_eq!(lines(&app).get(4).map(String::as_str), Some("What name?"));
     assert_eq!(
-        lines(&app).get(1).map(String::as_str),
-        Some("Base  [Name]  Submit")
+        lines(&app).get(6).map(String::as_str),
+        Some("▸ 1 ✎ Type an answer")
     );
 }
 
@@ -345,31 +347,28 @@ fn a_click_on_a_tab_opens_it() {
 fn a_click_on_a_multi_choice_option_toggles_it_and_stays() {
     let mut app = asking(base_and_name(true), 60, 12);
     assert_eq!(click(&mut app, Spot::Option(1)), Effect::None);
-    assert_eq!(lines(&app).get(4).map(String::as_str), Some("› [x] dev"));
+    assert_eq!(lines(&app).get(8).map(String::as_str), Some("▸ 2 [x] dev"));
     click(&mut app, Spot::Option(1));
-    assert_eq!(lines(&app).get(4).map(String::as_str), Some("› [ ] dev"));
+    assert_eq!(lines(&app).get(8).map(String::as_str), Some("▸ 2 [ ] dev"));
 }
 
 #[test]
 fn a_click_on_a_single_choice_option_chooses_it_and_moves_on() {
     let mut app = asking(base_and_name(false), 60, 12);
     assert_eq!(click(&mut app, Spot::Option(1)), Effect::None);
-    assert_eq!(
-        lines(&app).get(1).map(String::as_str),
-        Some("Base ✓  [Name]  Submit")
-    );
+    assert_eq!(lines(&app).get(4).map(String::as_str), Some("What name?"));
 }
 
 #[test]
 fn a_click_on_review_lands_on_submit() {
-    let mut app = asking(base_and_name(false), 60, 12);
-    click(&mut app, Spot::Tab(1));
-    assert_eq!(click(&mut app, Spot::Next), Effect::None);
-    assert_eq!(
-        lines(&app).get(1).map(String::as_str),
-        Some("Base  Name  [Submit]")
+    let mut app = asking(
+        json!([{"header": "Pick", "question": "Which?", "multiSelect": true,
+            "options": [{"label": "a"}]}]),
+        60,
+        12,
     );
-    assert_eq!(lines(&app).get(5).map(String::as_str), Some("› Submit"));
+    assert_eq!(click(&mut app, Spot::Next), Effect::None);
+    assert_eq!(lines(&app).get(2).map(String::as_str), Some("Review"));
 }
 
 #[test]
@@ -389,7 +388,39 @@ fn a_click_on_submit_sends_the_reply() {
 #[test]
 fn a_click_on_chat_about_this_declines() {
     let mut app = asking(base_and_name(false), 60, 12);
+    assert_eq!(click(&mut app, Spot::Tab(2)), Effect::None);
     let line = sent(click(&mut app, Spot::Chat));
+    assert_eq!(
+        line,
+        json!({"command": "reply", "session_id": S_A,
+            "args": {"request_id": "r_4f", "declined": true}})
+    );
+}
+
+#[test]
+fn a_narrow_submit_tab_keeps_chat_about_this_clickable() {
+    // Below the width the buttons share one row they stack, so each
+    // button stays a whole-line target through wrapping: at 24 columns
+    // a click on the "Chat about this" label declines.
+    let mut app = asking(base_and_name(false), 24, 40);
+    press(&mut app, &[Key::Tab, Key::Tab]);
+    let (shown, targets) = screen(&app, 24, 40);
+    let row = shown
+        .lines()
+        .position(|row| row.contains("Chat about this"))
+        .expect("chat row drawn");
+    let line = shown.lines().nth(row).unwrap_or_default();
+    let col = line.find("Chat").unwrap_or_default().saturating_add(1);
+    assert_eq!(
+        hit(
+            &targets,
+            u16::try_from(col).unwrap_or(u16::MAX),
+            u16::try_from(row).unwrap_or(u16::MAX)
+        ),
+        Some(TargetId::Form(Spot::Chat)),
+        "{shown}"
+    );
+    let line = sent(app.on_click(TargetId::Form(Spot::Chat)));
     assert_eq!(
         line,
         json!({"command": "reply", "session_id": S_A,
@@ -402,8 +433,8 @@ fn a_click_on_the_words_row_takes_the_cursor() {
     let mut app = asking(base_and_name(false), 60, 12);
     assert_eq!(click(&mut app, Spot::Words), Effect::None);
     assert_eq!(
-        lines(&app).get(5).map(String::as_str),
-        Some("› ✎ answer in words")
+        lines(&app).get(8).map(String::as_str),
+        Some("▸ 3 ✎ Type an answer, alone or with the options")
     );
 }
 
@@ -422,14 +453,14 @@ fn an_option_that_wraps_has_one_target_covering_both_rows() {
     assert_eq!(rect.height, 2, "{shown}");
     let rows: Vec<&str> = shown.lines().collect();
     let first = rows.get(usize::from(rect.y)).copied().unwrap_or_default();
-    assert!(first.starts_with("  › ( ) one"), "{shown}");
+    assert!(first.starts_with("▌ ▸ 1 ( ) one"), "{shown}");
 }
 
 #[test]
 fn tab_targets_are_drawn_only_while_the_tab_line_fits() {
-    // "[Base]  Name  Submit" is 20 cells, so at the inset width it fits
-    // one row from width 22.
-    for (width, tabs) in [(21, 0), (22, 3)] {
+    // "←  ☐ Base    ☐ Name    ✔ Submit  →" is 36 cells, so the tab
+    // targets draw from width 36.
+    for (width, tabs) in [(35, 0), (36, 3)] {
         let app = asking(base_and_name(false), width, 40);
         let (shown, targets) = screen(&app, width, 40);
         let drawn = spots(&targets)
@@ -453,16 +484,16 @@ fn each_tab_target_covers_its_cells() {
     // A wide character's second cell reads as a space in the screen's text.
     assert_eq!(
         rows.get(usize::from(y)).copied(),
-        Some("  [名 前 ]  Name  Submit")
+        Some("▌ ←  ☐ 名 前     ☐ Name    ✔ Submit  →")
     );
-    assert_eq!(rect_of(&targets, Spot::Tab(0)), Some(Rect::new(2, y, 6, 1)));
+    assert_eq!(rect_of(&targets, Spot::Tab(0)), Some(Rect::new(4, y, 8, 1)));
     assert_eq!(
         rect_of(&targets, Spot::Tab(1)),
-        Some(Rect::new(10, y, 4, 1))
+        Some(Rect::new(14, y, 8, 1))
     );
     assert_eq!(
         rect_of(&targets, Spot::Tab(2)),
-        Some(Rect::new(16, y, 6, 1))
+        Some(Rect::new(24, y, 10, 1))
     );
 }
 
@@ -480,7 +511,7 @@ fn form_words_row_scrolled_to_the_caret_at_30x12() {
     let area = Rect::new(0, 0, 30, 12);
     let row = shown
         .lines()
-        .position(|row| row.trim_start().starts_with("› ✎"))
+        .position(|row| row.contains("✎ "))
         .and_then(|row| u16::try_from(row).ok());
     assert_eq!(
         super::super::cursor(&app, area).map(|at| (at.x, Some(at.y))),
@@ -603,20 +634,40 @@ fn the_panel_tint_covers_its_rows_and_edges() {
 }
 
 #[test]
-fn a_form_has_edges_and_no_stripe() {
+fn a_form_has_edges_and_a_secondary_stripe() {
     let (_, buf, _) = surfaced(&numbered(3, true), 12);
-    // Three text rows with an edge above and below, and no stripe cell.
+    // Three text rows with an edge above and below, and every row's
+    // stripe cell in `secondary`.
     for y in [8, 9, 10] {
         for x in 0..10 {
             assert_eq!(buf[(x, y)].bg, crate::theme::Role::Approval.color());
         }
-    }
-    for cell in &buf.content {
-        assert_ne!(cell.symbol(), "▌");
+        assert_eq!(buf[(0, y)].symbol(), "▌");
+        assert_eq!(buf[(0, y)].fg, crate::theme::Role::Secondary.color());
     }
     for x in 0..10 {
         assert_eq!(buf[(x, 7)].symbol(), "▄");
         assert_eq!(buf[(x, 11)].symbol(), "▀");
+    }
+    // An approval panel's stripe stays `attention`.
+    let (_, buf, _) = surfaced(&approval(&["l0", "l1", "l2"], false), 12);
+    for y in [8, 9, 10] {
+        assert_eq!(buf[(0, y)].symbol(), "▌");
+        assert_eq!(buf[(0, y)].fg, crate::theme::Role::Attention.color());
+    }
+    // A form narrower than 3 columns draws no stripe.
+    let area = Rect::new(0, 0, 2, 6);
+    let mut buf = Buffer::empty(area);
+    let mut targets = Vec::new();
+    draw(
+        &numbered(1, true),
+        area,
+        area.bottom(),
+        &mut buf,
+        &mut targets,
+    );
+    for cell in &buf.content {
+        assert_ne!(cell.symbol(), "▌");
     }
 }
 
@@ -685,7 +736,7 @@ fn one_question_panels_have_no_tab_row_or_tab_target() {
             _ => panic!("unknown one-question interaction: {kind}"),
         };
         assert_eq!(
-            lines(&app).get(1).map(String::as_str),
+            lines(&app).get(2).map(String::as_str),
             Some(prompt),
             "{shown}"
         );
@@ -736,7 +787,10 @@ fn clicks_on_one_question_rows_send_or_change_the_answer() {
 
     let mut multi = asking_one("multi_select", 60, 12);
     assert_eq!(click(&mut multi, Spot::Option(1)), Effect::None);
-    assert_eq!(lines(&multi).get(3).map(String::as_str), Some("› [x] beta"));
+    assert_eq!(
+        lines(&multi).get(6).map(String::as_str),
+        Some("▸ 2 [x] beta")
+    );
     assert_eq!(
         sent(click(&mut multi, Spot::Send)),
         json!({"command": "reply", "session_id": S_A,
