@@ -17,6 +17,7 @@ use std::collections::VecDeque;
 use std::io::{Read, Write};
 use std::os::unix::net::UnixStream;
 use std::sync::Arc;
+use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::mpsc;
 use std::time::Duration;
 
@@ -1343,6 +1344,7 @@ struct WireLink {
     current: Vec<u8>,
     at: usize,
     handed: usize,
+    count: Arc<AtomicUsize>,
     eof: bool,
 }
 
@@ -1354,6 +1356,7 @@ impl WireLink {
             current: Vec::new(),
             at: 0,
             handed: 0,
+            count: Arc::new(AtomicUsize::new(0)),
             eof: false,
         }
     }
@@ -1384,6 +1387,7 @@ impl Read for WireLink {
             self.current.clear();
             self.at = 0;
             self.handed += 1;
+            self.count.store(self.handed, Ordering::SeqCst);
             self.handouts.send(self.handed).unwrap_or(());
         }
         Ok(end - start)
@@ -1449,6 +1453,7 @@ fn serve_history(
     wire: Arc<Wire>,
     go: mpsc::Receiver<()>,
     lines: Vec<contract::Envelope>,
+    observed: Option<(Arc<AtomicUsize>, mpsc::Sender<usize>)>,
 ) -> (
     std::thread::JoinHandle<()>,
     mpsc::Receiver<(usize, Vec<contract::Envelope>)>,
@@ -1473,6 +1478,9 @@ fn serve_history(
                     continue;
                 }
                 seen += 1;
+                if let Some((count, report)) = &observed {
+                    report.send(count.load(Ordering::SeqCst)).unwrap_or(());
+                }
                 if let Some(go) = go.take() {
                     // The test's go-ahead, sent once the writer is
                     // joined; a dropped sender releases a panicking
@@ -1499,6 +1507,104 @@ fn serve_history(
         })
         .unwrap_or_else(|err| panic!("spawn: {err}"));
     (hub, done)
+}
+
+#[test]
+fn a_history_waits_for_the_opening_pass_at_the_ten_mib_fixture() {
+    let (pool, _) = ten_mib_fixture();
+    for w in [64usize, 65, 66, 174] {
+        let r = 193 + w;
+        let wire = Wire::new(w);
+        let _guard = CloseOnDrop(Arc::clone(&wire));
+        let (hand_tx, hand_rx) = mpsc::channel();
+        let link = WireLink::new(Arc::clone(&wire), hand_tx);
+        let count = Arc::clone(&link.count);
+        let (mut lp, theirs, tx, rx) = opened();
+        let last = session().len() + r - 1;
+        lp.app.on_line(Line::Session(line(
+            "command_accepted",
+            None,
+            None,
+            json!({"command_id": "opening", "result": {"last_seq": last}}),
+        )));
+        lp.app.set_size(70, 12);
+        let feed = Feed::new(tx.clone(), lp.hub.credits());
+        let (reader, reader_done) = spawn_reader(link, feed);
+        let writer_lines = pool[..r].to_vec();
+        let wire_writer = Arc::clone(&wire);
+        let (writer_done_tx, writer_done) = mpsc::channel();
+        let writer = std::thread::spawn(move || {
+            for line in writer_lines {
+                if !wire_writer.push(line) {
+                    break;
+                }
+            }
+            writer_done_tx.send(()).unwrap_or(());
+        });
+        let (observed_tx, observed) = mpsc::channel();
+        let (go_tx, go_rx) = mpsc::channel();
+        go_tx.send(()).unwrap();
+        let (commands, commands_done) = serve_history(
+            theirs,
+            Arc::clone(&wire),
+            go_rx,
+            session(),
+            Some((count, observed_tx)),
+        );
+        let plateau = Deadline::after(DEADLINE);
+        for want in 1..=65usize {
+            assert_eq!(
+                plateau.recv_or_fail(&hand_rx, "the initial reader plateau"),
+                want
+            );
+        }
+        let (reached_tx, reached) = mpsc::channel();
+        let (release_tx, release) = mpsc::channel();
+        let (done_tx, done) = mpsc::channel();
+        std::thread::spawn(move || {
+            pause::install(reached_tx, release);
+            let code = lp.run(&rx);
+            done_tx.send((code, lp)).unwrap_or(());
+        });
+        Deadline::after(DEADLINE).recv_or_fail(&reached, "chunk one to wait");
+        let mut keys = Vec::new();
+        for _ in 0..10 {
+            for input in super::to_the_top() {
+                let Input::Bytes(bytes) = input else {
+                    panic!("PageUp bytes");
+                };
+                keys.extend(bytes);
+            }
+        }
+        keys.extend_from_slice(b"\x06fixture");
+        tx.send(Input::Bytes(keys)).unwrap();
+        tx.send(Input::FindDue(7)).unwrap();
+        drop(release_tx);
+        let first = Deadline::after(DEADLINE).recv_or_fail(&observed, "history after opening");
+        // The answer follows the finite replay on the same wire.
+        let reads = Deadline::after(DEADLINE);
+        loop {
+            if reads.recv_or_fail(&hand_rx, "the first history answer") == r + 1 {
+                break;
+            }
+        }
+        tx.send(quit()).unwrap();
+        let (code, lp) = Deadline::after(DEADLINE).recv_or_fail(&done, "the loop to quit");
+        wire.close();
+        let peak = lp.hub.answer_stash_peak();
+        drop(lp);
+        Deadline::after(DEADLINE).recv_or_fail(&writer_done, "the finite writer");
+        writer.join().unwrap();
+        Deadline::after(DEADLINE).recv_or_fail(&reader_done, "the reader");
+        reader.join().unwrap();
+        let (seen, _) =
+            Deadline::after(DEADLINE).recv_or_fail(&commands_done, "the command thread");
+        commands.join().unwrap();
+        assert_eq!(first, r, "no history before the last opening line, W = {w}");
+        assert!(peak <= K, "answer stash {peak} exceeds K = {K}, W = {w}");
+        assert!(seen > 0, "pages load after the pass");
+        assert_eq!(code, 0);
+    }
 }
 
 #[test]
@@ -1544,7 +1650,8 @@ fn attach_stash_peak_at_the_ten_mib_fixture() {
             .unwrap_or_else(|err| panic!("spawn: {err}"));
         // The command thread serves history from the session's lines.
         let (go_tx, go_rx) = mpsc::channel();
-        let (commands, commands_done) = serve_history(theirs, Arc::clone(&wire), go_rx, session());
+        let (commands, commands_done) =
+            serve_history(theirs, Arc::clone(&wire), go_rx, session(), None);
         // The loop runs on a worker with the fold held. It starts
         // only once the reader has sent its pre-loop 64: the 65
         // hand-outs force 64 takes, which need no release, so the
