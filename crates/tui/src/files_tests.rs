@@ -1,6 +1,6 @@
 //! Tests for file search: the ranking, the listing and the worker.
 
-use super::{CHECK_EVERY, KEPT, Limits, Query, Roots, Search, entries, list, rank, resolve, split};
+use super::{CHECK_EVERY, KEPT, Limits, Query, Roots, Search, entries, find, list, rank, resolve, split};
 use crate::Input;
 use fakes::Deadline;
 use std::cell::Cell;
@@ -265,6 +265,123 @@ fn a_name_with_a_control_character_is_not_listed() {
         .unwrap_or_else(|err| panic!("{err}"));
     assert_eq!(rows, owned(&["~/proj/fine"]));
     assert_eq!(examined, 2);
+}
+
+/// Runs `find` on `dir`'s entries matching `query` as `@` rows typed as
+/// `base_text`, with `limits` and a worker that is never cancelled.
+#[track_caller]
+fn found(dir: &Path, base_text: &str, query: &str, limits: &Limits) -> Option<Result<Vec<String>, String>> {
+    find(dir, base_text, query, limits, || false)
+}
+
+#[test]
+fn the_walk_honours_gitignore_and_skips_dot_git() {
+    let dir = seeded(&[
+        ".gitignore",
+        ".git/HEAD",
+        ".git/objects/pack",
+        "vendor/ignored.txt",
+        "deep/ignored-too.txt",
+        "deep/kept.txt",
+        "top.txt",
+    ]);
+    std::fs::write(
+        dir.path().join(".gitignore"),
+        "vendor/\ndeep/ignored-too.txt\n",
+    )
+    .unwrap_or_else(|err| panic!(".gitignore: {err}"));
+    let rows = found(dir.path(), "~/proj/", "txt", &search_limits())
+        .unwrap_or_else(|| panic!("cancelled"))
+        .unwrap_or_else(|err| panic!("{err}"));
+    assert_eq!(rows, owned(&["~/proj/top.txt", "~/proj/deep/kept.txt"]));
+}
+
+#[test]
+fn walk_rows_are_relative_to_the_base_as_typed() {
+    let dir = seeded(&["sub/inner.txt", "sub/README.md"]);
+    let rows = found(dir.path(), "~/proj/", "rea", &search_limits())
+        .unwrap_or_else(|| panic!("cancelled"))
+        .unwrap_or_else(|err| panic!("{err}"));
+    assert_eq!(rows, owned(&["~/proj/sub/README.md"]));
+    let rows = found(dir.path(), "/etc/", "inner", &search_limits())
+        .unwrap_or_else(|| panic!("cancelled"))
+        .unwrap_or_else(|err| panic!("{err}"));
+    assert_eq!(rows, owned(&["/etc/sub/inner.txt"]));
+}
+
+#[test]
+fn the_walk_stops_at_the_row_bound() {
+    let names: Vec<String> = (0..8).map(|at| format!("sub/f{at:02}.txt")).collect();
+    let refs: Vec<&str> = names.iter().map(String::as_str).collect();
+    for kept in [5, 6, 7] {
+        let dir = seeded(&refs);
+        let limits = Limits {
+            kept,
+            visits: Limits::SEARCH.visits,
+            check_every: Limits::SEARCH.check_every,
+        };
+        let rows = found(dir.path(), "~/proj/", "f", &limits)
+            .unwrap_or_else(|| panic!("kept {kept}: cancelled"))
+            .unwrap_or_else(|err| panic!("kept {kept}: {err}"));
+        assert_eq!(rows.len(), kept, "kept {kept}");
+    }
+}
+
+#[test]
+fn the_walk_stops_at_the_visit_bound() {
+    // Three depth-1 entries and exactly seven deeper ones, all matching:
+    // ten examined entries in total.
+    let names = [
+        "a1", "a2", "sub/", "sub/b1", "sub/b2", "sub/deep/", "sub/deep/c1",
+        "sub/deep/c2", "sub/deep/c3", "sub/deep/c4",
+    ];
+    for visits in [9, 10, 11] {
+        let dir = seeded(&names);
+        let limits = Limits {
+            kept: Limits::SEARCH.kept,
+            visits,
+            check_every: Limits::SEARCH.check_every,
+        };
+        let rows = found(dir.path(), "~/proj/", "", &limits)
+            .unwrap_or_else(|| panic!("visits {visits}: cancelled"))
+            .unwrap_or_else(|err| panic!("visits {visits}: {err}"));
+        assert_eq!(rows.len(), visits.min(10), "visits {visits}");
+    }
+}
+
+#[test]
+fn the_visit_bound_counts_unyielded_and_depth_one_entries() {
+    // Eight examined entries, only two matching: the depth-1 `m1` and the
+    // deep `sub/zzz/m2`, examined last in the walk's path order.
+    let names = [
+        "m1", "sub/", "sub/n1", "sub/n2", "sub/n3", "sub/n4", "sub/zzz/", "sub/zzz/m2",
+    ];
+    for (visits, want) in [(7, ["~/proj/m1"].as_slice()), (8, ["~/proj/m1", "~/proj/sub/zzz/m2"].as_slice()), (9, ["~/proj/m1", "~/proj/sub/zzz/m2"].as_slice())] {
+        let dir = seeded(&names);
+        let limits = Limits {
+            kept: Limits::SEARCH.kept,
+            visits,
+            check_every: Limits::SEARCH.check_every,
+        };
+        let rows = found(dir.path(), "~/proj/", "m", &limits)
+            .unwrap_or_else(|| panic!("visits {visits}: cancelled"))
+            .unwrap_or_else(|err| panic!("visits {visits}: {err}"));
+        assert_eq!(rows, owned(want), "visits {visits}");
+    }
+}
+
+#[test]
+fn the_walk_does_not_start_when_the_base_fills_the_rows() {
+    let dir = seeded(&["a1", "a2", "sub/deep-match.txt"]);
+    let limits = Limits {
+        kept: 2,
+        visits: Limits::SEARCH.visits,
+        check_every: Limits::SEARCH.check_every,
+    };
+    let rows = found(dir.path(), "~/proj/", "a", &limits)
+        .unwrap_or_else(|| panic!("cancelled"))
+        .unwrap_or_else(|err| panic!("{err}"));
+    assert_eq!(rows, owned(&["~/proj/a1", "~/proj/a2"]));
 }
 
 #[test]

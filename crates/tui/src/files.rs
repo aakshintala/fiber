@@ -104,6 +104,125 @@ pub(crate) fn resolve(base_text: &str, roots: &Roots) -> Result<PathBuf, String>
     Ok(roots.workspace.join(base_text))
 }
 
+/// Entries deeper under `base` whose paths hold `query`: one walk with
+/// the `ignore` crate, honouring `.gitignore` even outside a repository,
+/// skipping `.git`, and stopping with at most `room` rows or `limits`
+/// examined entries in total. Rows read `base_text` plus the path
+/// relative to the base, a directory ending in `/`. Every entry the
+/// walk reaches at depth 2 and below counts as examined, matching or
+/// not; `.gitignore`-skipped entries never reach the walk and are not
+/// counted. `None` when `cancelled` says so: asked, with the shared
+/// `examined` count, at every `check_every`-th examined entry.
+fn walk(
+    base: &Path,
+    base_text: &str,
+    query: &str,
+    room: usize,
+    limits: &Limits,
+    examined: &mut usize,
+    cancelled: impl Fn() -> bool,
+) -> Option<Vec<String>> {
+    if room == 0 {
+        return Some(Vec::new());
+    }
+    let query = query.to_lowercase();
+    let mut aborted = false;
+    let mut builder = ignore::WalkBuilder::new(base);
+    builder
+        .hidden(false)
+        .ignore(false)
+        .git_ignore(true)
+        .git_global(false)
+        .git_exclude(false)
+        .parents(false)
+        .require_git(false)
+        .follow_links(false)
+        .sort_by_file_path(|first, second| first.cmp(second))
+        .filter_entry(|entry| {
+            entry.depth() == 0 || entry.file_name().to_string_lossy() != ".git"
+        });
+    let rows: Vec<String> = builder
+        .build()
+        .take_while(|item| {
+            // The base listing owns depth 0 and 1; only deeper entries
+            // and errors the walk yields count against the visit bound.
+            let countable = match item {
+                Err(_) => true,
+                Ok(entry) => entry.depth() >= 2,
+            };
+            if !countable {
+                return true;
+            }
+            if *examined >= limits.visits {
+                return false;
+            }
+            let at = *examined;
+            *examined += 1;
+            if at % limits.check_every == 0 && cancelled() {
+                aborted = true;
+                return false;
+            }
+            true
+        })
+        .filter_map(|item| {
+            let entry = item.ok()?;
+            if entry.depth() < 2 {
+                return None;
+            }
+            let rel = entry.path().strip_prefix(base).ok()?;
+            let rel = rel.to_string_lossy().replace(std::path::MAIN_SEPARATOR, "/");
+            if !rel.to_lowercase().contains(&query) {
+                return None;
+            }
+            if !listable(&rel) {
+                return None;
+            }
+            let mut row = format!("{base_text}{rel}");
+            let dir = entry
+                .file_type()
+                .map(|kind| is_dir(kind, &entry.path()))
+                .unwrap_or(false);
+            if dir {
+                row.push('/');
+            }
+            Some(row)
+        })
+        .take(room)
+        .collect();
+    if aborted {
+        return None;
+    }
+    Some(rows)
+}
+
+/// The rows a path search shows for `query` under `base`: the base
+/// directory's own matching entries first, then the walk's, at most
+/// `limits.kept` rows over at most `limits.visits` examined entries.
+/// `None` when `cancelled` says so: before the first read, at the first
+/// examined entry and every `check_every`-th one after, and once more
+/// before returning rows. `Some(Err)` when the base cannot be read.
+pub(crate) fn find(
+    base: &Path,
+    base_text: &str,
+    query: &str,
+    limits: &Limits,
+    cancelled: impl Fn() -> bool,
+) -> Option<Result<Vec<String>, String>> {
+    if cancelled() {
+        return None;
+    }
+    let mut examined = 0;
+    let mut rows = match entries(base, base_text, query, limits, &mut examined, &cancelled)? {
+        Ok(rows) => rows,
+        Err(error) => return Some(Err(error)),
+    };
+    let room = limits.kept.saturating_sub(rows.len());
+    rows.extend(walk(base, base_text, query, room, limits, &mut examined, &cancelled)?);
+    if cancelled() {
+        return None;
+    }
+    Some(Ok(rows))
+}
 /// Whether `path` with `file_type` is a directory: its type is one, or
 /// a symlink whose target is one, so a linked directory stays
 /// navigable. The walk never follows links, so a symlinked directory
