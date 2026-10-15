@@ -21,6 +21,7 @@ use std::sync::mpsc::RecvTimeoutError;
 
 use fakes::{Client, ProviderServer, Watchdog};
 use fakes::clock::FakeClock;
+use extension_harness::Running;
 use serde_json::{Value, json};
 use support::{Deadline, Setup, function_call, hello, stream};
 
@@ -220,6 +221,40 @@ fn hold_report_names_a_call_that_never_arrived() {
     assert!(report.contains("never received"), "{report}");
     assert!(report.contains(log), "{report}");
     assert!(report.contains("some stderr"), "{report}");
+}
+
+/// Reads the fixture's `held-<tool>` fifo, and on expiry kills the
+/// session, then fails with the log and stderr saying whether `tools/call`
+/// reached the server. `wait` bounds only the fifo read; `cleanup` bounds
+/// the kill and the stderr receive, so a spent `wait` still leaves room
+/// for the report. A panicked reader thread leads with that fact, not
+/// with what the server never received.
+fn read_held(
+    wait: Deadline,
+    cleanup: Deadline,
+    running: &Running,
+    dir: &Path,
+    tool: &str,
+) -> Result<String, String> {
+    match read_fifo(wait, dir.join(format!("held-{tool}"))) {
+        Ok(line) => Ok(line),
+        Err(error) => {
+            let requests_log = fs::read_to_string(dir.join("requests.log"))
+                .unwrap_or_else(|error| format!("requests.log is unreadable: {error}"));
+            let _ = support::kill_group(cleanup, running.group, "KILL");
+            let stderr = match cleanup.cleanup_phase().recv(&running.stderr) {
+                Ok(stderr) => stderr,
+                Err(error) => format!("the session's stderr did not arrive: {error}"),
+            };
+            let report = hold_report(tool, &requests_log, &stderr);
+            Err(match error {
+                RecvTimeoutError::Timeout => report,
+                RecvTimeoutError::Disconnected => {
+                    format!("the fifo's reader thread panicked before it was read\n{report}")
+                }
+            })
+        }
+    }
 }
 
 /// Writes one line to a FIFO, with the test's deadline naming the wait.
