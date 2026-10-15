@@ -42,6 +42,41 @@ pub(crate) struct Carry {
     /// `control.skill` (`docs/tools.md`, "Skills"). A completed handoff
     /// clears it.
     pub(crate) skills: Vec<SkillLoad>,
+    /// Where the next `session_start` context goes, once an opening
+    /// message rendered: right after it, so the hook's contexts sit
+    /// between the opening and the turn's input and the note
+    /// (`docs/handoff.md`, "What the model sees after a handoff").
+    /// `None` anywhere else: any other rendered event clears it, and only
+    /// a `session_start` context honours it.
+    pub(crate) after_opening: Option<usize>,
+}
+
+impl Carry {
+    /// Takes the opening slot: every rendered durable event clears it,
+    /// and the opening and context arms below set what follows.
+    pub(crate) fn take_after_opening(&mut self) -> Option<usize> {
+        self.after_opening.take()
+    }
+
+    /// The opening message rendered: the next `session_start` context
+    /// goes right after it, at index 1.
+    pub(crate) fn opened(&mut self) {
+        self.after_opening = Some(1);
+    }
+
+    /// Where a `context_added` with hook `hook` goes given the taken
+    /// `slot`, and the slot after it: a `session_start` context takes the
+    /// slot and advances it past itself; anything else appends and leaves
+    /// the slot cleared.
+    pub(crate) fn place_context(&mut self, slot: Option<usize>, hook: &str) -> Option<usize> {
+        match (slot, hook) {
+            (Some(at), "session_start") => {
+                self.after_opening = Some(at + 1);
+                Some(at)
+            }
+            _ => None,
+        }
+    }
 }
 
 /// One call of the last reply: the call, its result once written, and the

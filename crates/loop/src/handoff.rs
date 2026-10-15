@@ -303,8 +303,7 @@ impl Loop {
         }
         let tokens_before = self.context_estimate();
         let outcome = self.run_handoff(turn, note::Source::Tools { note }, tokens_before)?;
-        debug_assert_eq!(outcome, Outcome::Completed);
-        Ok(true)
+        Ok(outcome == Outcome::Completed)
     }
 
     /// The size of the context now: measured, or estimated when no reply has

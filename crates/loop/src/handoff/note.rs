@@ -1,16 +1,19 @@
 //! Owns the note request to the model, its recording, and the handoff run.
 
+use std::sync::Arc;
+
 use contract::events::{
-    Event, HandoffCompleted, HandoffStarted, HandoffTrigger, Note, Outcome, TurnCompleted,
-    TurnOutcome,
+    ContextAdded, Event, HandoffCompleted, HandoffStarted, HandoffTrigger, Note, Outcome,
+    TurnCompleted, TurnOutcome,
 };
 use contract::provider::{Finish, Input, Reply, ReplyAction};
 use contract::shapes::Failure;
 use contract::{ActionId, ErrorCode, TurnId};
 
+use crate::lifecycle::Started;
 use crate::prompt::{fill, message};
 use crate::retry::Attempted;
-use crate::{Error, Loop};
+use crate::{Error, Loop, cancel};
 
 /// The request for the note: `handoff-note`, then `handoff-focus` when there
 /// are instructions.
@@ -76,21 +79,91 @@ pub(super) enum Source {
 }
 
 impl Loop {
-    /// What a completed handoff leaves to do: the next request starts a new
-    /// context, unmeasured and missing the cache for everything after the
-    /// preamble, under a new opening message; the files seen are forgotten.
-    pub(super) fn restarted(&mut self, turn: &TurnId) -> Result<(), Error> {
-        self.sent = None;
-        self.handoff.measured = None;
+    /// What a decided handoff leaves to do: its completion, and on a
+    /// completed one a new context, unmeasured and missing the cache for
+    /// everything after the preamble, under a new opening message with
+    /// the `session_start` contexts right after it; the files seen are
+    /// forgotten. One guard owns the completion, the opening message and
+    /// the contexts, across every outcome the hook decided, so a cancel
+    /// or a shutdown applies all or none: a refused commit records the
+    /// handoff `cancelled`, with no note, no opening message and no
+    /// context. The guard holds the cancellation lock, so only writes
+    /// run under it; forgetting and the reviewer selection run after it
+    /// is released. With no hooks there is no guard and no new write:
+    /// the completion, the opening and the restart go as before.
+    pub(super) fn restarted(
+        &mut self,
+        turn: &TurnId,
+        done: HandoffCompleted,
+        contexts: Vec<ContextAdded>,
+    ) -> Result<Outcome, Error> {
+        let completed = done.outcome == Outcome::Completed;
+        if completed {
+            self.sent = None;
+            self.handoff.measured = None;
+        }
+        let outcome = done.outcome;
+        let tokens_before = done.tokens_before;
+        let instructions = done.instructions.clone();
         #[cfg(test)]
-        if crate::timing_tests::take_fail_restarted() {
-            return Err(crate::timing_tests::log_io_error());
+        crate::lifecycle::pause_after_handoff_start_check();
+        if self.hooks.is_some() {
+            #[cfg(test)]
+            if {
+                let completed = crate::timing_tests::take_fail_handoff_completed();
+                let restarted = crate::timing_tests::take_fail_restarted();
+                completed || restarted
+            } {
+                return Err(crate::timing_tests::log_io_error());
+            }
+            let cancel = Arc::clone(&self.cancel);
+            let written = cancel.commit(cancel::Commit::Step, || -> Result<(), Error> {
+                self.append(&Event::HandoffCompleted(done), turn, None)?;
+                if completed {
+                    self.write_opening(Some(turn))?;
+                    for added in &contexts {
+                        self.append(&Event::ContextAdded(added.clone()), turn, None)?;
+                    }
+                }
+                Ok(())
+            });
+            let Some(written) = written else {
+                self.append(
+                    &Event::HandoffCompleted(HandoffCompleted {
+                        outcome: Outcome::Cancelled,
+                        error: None,
+                        note: None,
+                        tokens_before,
+                        instructions,
+                    }),
+                    turn,
+                    None,
+                )?;
+                return Ok(Outcome::Cancelled);
+            };
+            written?;
+        } else {
+            debug_assert!(contexts.is_empty());
+            #[cfg(test)]
+            if crate::timing_tests::take_fail_handoff_completed() {
+                return Err(crate::timing_tests::log_io_error());
+            }
+            self.append(&Event::HandoffCompleted(done), turn, None)?;
+            #[cfg(test)]
+            if crate::timing_tests::take_fail_restarted() {
+                return Err(crate::timing_tests::log_io_error());
+            }
+            if completed {
+                self.write_opening(Some(turn))?;
+            }
         }
-        self.write_opening(Some(turn))?;
-        if let Some(forget) = &self.handoff.forget {
-            forget();
+        if completed {
+            if let Some(forget) = &self.handoff.forget {
+                forget();
+            }
+            self.reviewer_handoff(turn)?;
         }
-        self.reviewer_handoff(turn)
+        Ok(outcome)
     }
 
     /// One handoff, end to end: `handoff_started`, the note request, then
@@ -137,64 +210,141 @@ impl Loop {
             None,
         )?;
         let noted = self.request_note(turn, trigger, instructions.as_deref())?;
-        let (outcome, error, note) = match noted {
-            Noted::Note(id) => (
-                Outcome::Completed,
-                None,
-                Some(Note::Actions { note: vec![id] }),
-            ),
-            Noted::Failed(failure) => (Outcome::Failed, Some(failure), None),
-            Noted::Cancelled => (Outcome::Cancelled, None, None),
-        };
-        #[cfg(test)]
-        if crate::timing_tests::take_fail_handoff_completed() {
-            return Err(crate::timing_tests::log_io_error());
+        match noted {
+            // The hook runs once the note is ready, with the reason and
+            // not the note; its contexts follow the new opening message.
+            // A `blocking` failure ends the handoff `failed` with
+            // `hook_failed`, and the session goes on. The automatic
+            // trigger does not fire again in that turn.
+            Noted::Note(id) => {
+                let note = Some(Note::Actions { note: vec![id] });
+                let (done, contexts) = match self.handoff_start(turn)? {
+                    Started::Contexts(contexts) => (
+                        HandoffCompleted {
+                            outcome: Outcome::Completed,
+                            error: None,
+                            note,
+                            tokens_before,
+                            instructions,
+                        },
+                        contexts,
+                    ),
+                    Started::Failed(failure) => (
+                        HandoffCompleted {
+                            outcome: Outcome::Failed,
+                            error: Some(failure),
+                            note: None,
+                            tokens_before,
+                            instructions,
+                        },
+                        Vec::new(),
+                    ),
+                    Started::Cancelled => (
+                        HandoffCompleted {
+                            outcome: Outcome::Cancelled,
+                            error: None,
+                            note: None,
+                            tokens_before,
+                            instructions,
+                        },
+                        Vec::new(),
+                    ),
+                };
+                let outcome = self.restarted(turn, done, contexts)?;
+                if outcome == Outcome::Failed {
+                    self.handoff.blocked = true;
+                }
+                Ok(outcome)
+            }
+            Noted::Failed(failure) => {
+                #[cfg(test)]
+                if crate::timing_tests::take_fail_handoff_completed() {
+                    return Err(crate::timing_tests::log_io_error());
+                }
+                self.append(
+                    &Event::HandoffCompleted(HandoffCompleted {
+                        outcome: Outcome::Failed,
+                        error: Some(failure),
+                        note: None,
+                        tokens_before,
+                        instructions,
+                    }),
+                    turn,
+                    None,
+                )?;
+                self.handoff.blocked = true;
+                Ok(Outcome::Failed)
+            }
+            Noted::Cancelled => {
+                #[cfg(test)]
+                if crate::timing_tests::take_fail_handoff_completed() {
+                    return Err(crate::timing_tests::log_io_error());
+                }
+                self.append(
+                    &Event::HandoffCompleted(HandoffCompleted {
+                        outcome: Outcome::Cancelled,
+                        error: None,
+                        note: None,
+                        tokens_before,
+                        instructions,
+                    }),
+                    turn,
+                    None,
+                )?;
+                Ok(Outcome::Cancelled)
+            }
         }
-        self.append(
-            &Event::HandoffCompleted(HandoffCompleted {
-                outcome,
-                error,
-                note,
-                tokens_before,
-                instructions,
-            }),
-            turn,
-            None,
-        )?;
-        match outcome {
-            Outcome::Completed => self.restarted(turn)?,
-            Outcome::Failed => self.handoff.blocked = true,
-            Outcome::Cancelled => {}
-        }
-        Ok(outcome)
     }
 
     /// A tool-started handoff: no `started` and no note request, with the
     /// same completion and restart as a requested one. The state flags
-    /// stay the tool path's own: no block is set.
+    /// stay the tool path's own: no block is set. A `blocking` failure
+    /// writes no opening message and takes no further handoff this step,
+    /// so the call results stay ordinary results.
     fn run_tool_handoff(
         &mut self,
         turn: &TurnId,
         note: Vec<ActionId>,
         tokens_before: u64,
     ) -> Result<Outcome, Error> {
-        #[cfg(test)]
-        if crate::timing_tests::take_fail_handoff_completed() {
-            return Err(crate::timing_tests::log_io_error());
+        let taken = Some(Note::Actions { note });
+        let (done, contexts) = match self.handoff_start(turn)? {
+            Started::Contexts(contexts) => (
+                HandoffCompleted {
+                    outcome: Outcome::Completed,
+                    error: None,
+                    note: taken,
+                    tokens_before,
+                    instructions: None,
+                },
+                contexts,
+            ),
+            Started::Failed(failure) => (
+                HandoffCompleted {
+                    outcome: Outcome::Failed,
+                    error: Some(failure),
+                    note: None,
+                    tokens_before,
+                    instructions: None,
+                },
+                Vec::new(),
+            ),
+            Started::Cancelled => (
+                HandoffCompleted {
+                    outcome: Outcome::Cancelled,
+                    error: None,
+                    note: None,
+                    tokens_before,
+                    instructions: None,
+                },
+                Vec::new(),
+            ),
+        };
+        let outcome = self.restarted(turn, done, contexts)?;
+        if outcome != Outcome::Completed {
+            self.handoff.step_ran = true;
         }
-        self.append(
-            &Event::HandoffCompleted(HandoffCompleted {
-                outcome: Outcome::Completed,
-                error: None,
-                note: Some(Note::Actions { note }),
-                tokens_before,
-                instructions: None,
-            }),
-            turn,
-            None,
-        )?;
-        self.restarted(turn)?;
-        Ok(Outcome::Completed)
+        Ok(outcome)
     }
 
     /// Asks the model for its note: the conversation and one more user

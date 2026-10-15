@@ -42,6 +42,12 @@ const TURN_DEADLINE: Duration = Duration::from_secs(10);
 /// `turn_start`'s own call.
 struct FakeHooks {
     before_message: Mutex<VecDeque<BeforeMessageAnswer>>,
+    session_start: Mutex<VecDeque<ContextAnswer>>,
+    session_start_calls: AtomicUsize,
+    seen_starts: Mutex<Vec<(String, String, String)>>,
+    cancel_in_session: Mutex<Option<Arc<crate::TurnCancel>>>,
+    shutdown_in_session: Mutex<Option<Arc<crate::TurnCancel>>>,
+    pause_in_session: Mutex<Option<(mpsc::Sender<()>, mpsc::Receiver<()>)>>,
     turn_start: Mutex<VecDeque<ContextAnswer>>,
     before_model_call: Mutex<VecDeque<CheckAnswer>>,
     turn_end: Mutex<VecDeque<ContextAnswer>>,
@@ -63,6 +69,12 @@ impl FakeHooks {
     fn new() -> Self {
         Self {
             before_message: Mutex::new(VecDeque::new()),
+            session_start: Mutex::new(VecDeque::new()),
+            session_start_calls: AtomicUsize::new(0),
+            seen_starts: Mutex::new(Vec::new()),
+            cancel_in_session: Mutex::new(None),
+            shutdown_in_session: Mutex::new(None),
+            pause_in_session: Mutex::new(None),
             turn_start: Mutex::new(VecDeque::new()),
             before_model_call: Mutex::new(VecDeque::new()),
             turn_end: Mutex::new(VecDeque::new()),
@@ -83,6 +95,18 @@ impl FakeHooks {
 
     fn answer_before_message(&self, answer: BeforeMessageAnswer) {
         self.before_message.lock().unwrap().push_back(answer);
+    }
+
+    fn answer_session_start(&self, answer: ContextAnswer) {
+        self.session_start.lock().unwrap().push_back(answer);
+    }
+
+    /// Pause `session_start` on a point the test owns: the hook signals
+    /// `started`, waits for `release`, then answers. The test shuts down
+    /// while the hook is parked, forcing the shutdown to land inside the
+    /// hook's call.
+    fn pause_in_session(&self, started: mpsc::Sender<()>, release: mpsc::Receiver<()>) {
+        *self.pause_in_session.lock().unwrap() = Some((started, release));
     }
 
     fn answer_turn_start(&self, answer: ContextAnswer) {
@@ -223,14 +247,28 @@ impl Hooks for FakeHooks {
             .unwrap_or_else(passed_message)
     }
 
-    fn session_start(
-        &self,
-        _start: &contract::hook::SessionStart<'_>,
-    ) -> contract::hook::ContextAnswer {
-        contract::hook::ContextAnswer {
-            outcome: contract::hook::ContextOutcome::Added(Vec::new()),
-            notices: Vec::new(),
+    fn session_start(&self, start: &contract::hook::SessionStart<'_>) -> ContextAnswer {
+        self.session_start_calls.fetch_add(1, Ordering::SeqCst);
+        self.seen_starts.lock().unwrap().push((
+            format!("{:?}", start.reason),
+            start.session_id.0.clone(),
+            start.workspace.to_owned(),
+        ));
+        if let Some((started, release)) = self.pause_in_session.lock().unwrap().take() {
+            started.send(()).unwrap();
+            release.recv().unwrap();
         }
+        if let Some(cancel) = self.cancel_in_session.lock().unwrap().clone() {
+            cancel.cancel();
+        }
+        if let Some(cancel) = self.shutdown_in_session.lock().unwrap().clone() {
+            cancel.shutdown(143);
+        }
+        self.session_start
+            .lock()
+            .unwrap()
+            .pop_front()
+            .unwrap_or_else(|| added(Vec::new()))
     }
 
     fn turn_start(&self, turn: &contract::hook::TurnStart<'_>) -> ContextAnswer {
@@ -919,6 +957,298 @@ fn without_hooks_the_kinds_list_is_unchanged() {
             "assistant_message_completed",
             "turn_completed",
         ]
+    );
+}
+
+#[test]
+fn a_refused_held_write_keeps_session_start_contexts_for_the_next_step() {
+    use contract::events::ContextAdded;
+
+    fn held(text: &str) -> ContextAdded {
+        ContextAdded {
+            text: text.into(),
+            extension: "fiber.test/inbox".into(),
+            hook: "session_start".into(),
+        }
+    }
+    // A refused `Commit::Step` keeps the contexts unwritten.
+    let mut world = started(vec![fakes::Scripted::text("Done.")], None);
+    let turn = TurnId("t_1".into());
+    {
+        let mut looped = world.looped.take().unwrap();
+        looped.lifecycle.start_contexts.push(held("kept"));
+        looped.cancel.shutdown(143);
+        looped.write_held(&turn).unwrap();
+        assert_eq!(
+            looped.lifecycle.start_contexts.len(),
+            1,
+            "a refused commit keeps the contexts"
+        );
+        world.looped = Some(looped);
+    }
+    drop(world.looped.take());
+    assert!(
+        !lines(&world).iter().any(|line| line.kind == "context_added"),
+        "nothing was written"
+    );
+    // The next successful step writes them oldest first.
+    let mut world = started(vec![fakes::Scripted::text("Done.")], None);
+    {
+        let mut looped = world.looped.take().unwrap();
+        looped.lifecycle.start_contexts.push(held("one"));
+        looped.lifecycle.start_contexts.push(held("two"));
+        looped.write_held(&turn).unwrap();
+        assert!(
+            looped.lifecycle.start_contexts.is_empty(),
+            "a successful step drains them"
+        );
+        world.looped = Some(looped);
+    }
+    drop(world.looped.take());
+    let all = lines(&world);
+    let texts: Vec<&str> = all
+        .iter()
+        .filter(|line| line.kind == "context_added")
+        .map(|line| line.payload["text"].as_str().unwrap())
+        .collect();
+    assert_eq!(texts, vec!["one", "two"]);
+}
+
+/// The turn's raw result: [`finish_turn`] unwraps it, which a hook
+/// failure cannot survive.
+fn turn_result(
+    world: &mut World,
+    finished: &Finished,
+) -> Result<Option<TurnOutcome>, crate::Error> {
+    let (looped, outcome) = Deadline::after(TURN_DEADLINE)
+        .recv(finished)
+        .expect("the turn ended");
+    world.looped = Some(looped);
+    outcome
+}
+
+/// The logged opening message, rendered as the model reads it.
+fn opening_text(all: &[Envelope]) -> String {
+    let message: contract::events::OpeningMessage = serde_json::from_value(
+        serde_json::Value::Object(line(all, "opening_message").payload.clone()),
+    )
+    .unwrap();
+    crate::opening::render(&message)
+}
+
+#[test]
+fn a_session_start_context_is_logged_before_turn_started_and_sent_first() {
+    let hooks = Arc::new(FakeHooks::new());
+    hooks.answer_session_start(added(vec![("fiber.test/inbox", "starter pack")]));
+    let mut world = started(
+        vec![
+            fakes::Scripted::text("Done."),
+            fakes::Scripted::text("Done again."),
+        ],
+        Some(hooks.clone()),
+    );
+    let (ack, answered) = capture();
+    world
+        .inbox
+        .send(Delivery::Prompt(driver("c_1", "hello"), ack))
+        .unwrap();
+    let finished = run_turn(&mut world);
+    assert_eq!(
+        finish_turn(&mut world, &finished),
+        Some(TurnOutcome::Completed)
+    );
+    assert!(
+        Deadline::after(TURN_DEADLINE)
+            .recv(&answered)
+            .expect("the prompt's answer")
+            .is_ok(),
+        "the prompt is accepted"
+    );
+    // A second turn runs no hook: once per process.
+    let (again, _) = capture();
+    world
+        .inbox
+        .send(Delivery::Prompt(driver("c_2", "again"), again))
+        .unwrap();
+    let finished = run_turn(&mut world);
+    assert_eq!(
+        finish_turn(&mut world, &finished),
+        Some(TurnOutcome::Completed)
+    );
+    assert_eq!(
+        hooks.session_start_calls.load(Ordering::SeqCst),
+        1,
+        "the hook runs once per process"
+    );
+    drop(world.looped.take());
+
+    let all = lines(&world);
+    assert_eq!(
+        kinds(&all),
+        [
+            "session_started",
+            "preamble_built",
+            "opening_message",
+            "context_added",
+            "turn_started",
+            "step_started",
+            "assistant_message_started",
+            "text_completed",
+            "usage_recorded",
+            "assistant_message_completed",
+            "turn_completed",
+            "turn_started",
+            "step_started",
+            "assistant_message_started",
+            "text_completed",
+            "usage_recorded",
+            "assistant_message_completed",
+            "turn_completed",
+        ],
+        "complete ordered kinds"
+    );
+    let contexts: Vec<&Envelope> = all
+        .iter()
+        .filter(|line| line.kind == "context_added")
+        .collect();
+    assert_eq!(contexts.len(), 1);
+    assert_eq!(contexts[0].payload["hook"], "session_start");
+    assert_eq!(contexts[0].payload["extension"], "fiber.test/inbox");
+    assert_eq!(contexts[0].payload["text"], "starter pack");
+    // The hook saw why the session started, its id and its workspace.
+    let workspace = world
+        .dir
+        .parent()
+        .unwrap()
+        .join("workspace")
+        .display()
+        .to_string();
+    assert_eq!(
+        hooks.seen_starts.lock().unwrap().clone(),
+        vec![("Start".to_owned(), "s_test".to_owned(), workspace)]
+    );
+    // The first request is the opening message, the context, the prompt.
+    let requests = world.provider.requests();
+    assert_eq!(requests.len(), 2);
+    let first: Vec<String> = requests[0]
+        .conversation
+        .iter()
+        .map(|input| match input {
+            contract::provider::Input::User { text, .. } => text.clone(),
+            input => panic!("a user message: {input:?}"),
+        })
+        .collect();
+    assert_eq!(first, vec![opening_text(&all), "starter pack".into(), "hello".into()]);
+}
+
+#[test]
+fn a_blocking_session_start_failure_starts_no_session_and_drops_the_prompt() {
+    let hooks = Arc::new(FakeHooks::new());
+    hooks.answer_session_start(ContextAnswer {
+        outcome: ContextOutcome::Failed(contract::hook::HookFailure {
+            extension: "fiber.test/guard".into(),
+            message: "boom".into(),
+        }),
+        notices: vec![contract::events::Notice {
+            code: ErrorCode::HookFailed,
+            message: "extension fiber.test/soft failed softly".into(),
+            extension: Some("fiber.test/soft".into()),
+        }],
+    });
+    let mut world = started(vec![fakes::Scripted::text("Done.")], Some(hooks));
+    let (ack, answered) = capture();
+    world
+        .inbox
+        .send(Delivery::Prompt(driver("c_1", "hello"), ack))
+        .unwrap();
+    let finished = run_turn(&mut world);
+    let Err(error) = turn_result(&mut world, &finished) else {
+        panic!("the turn fails");
+    };
+    assert_eq!(error.code(), ErrorCode::HookFailed);
+    assert_eq!(
+        error.to_string(),
+        "The `session_start` hook of extension fiber.test/guard failed, \
+         so the session did not start: boom"
+    );
+    assert!(
+        answered.try_recv().is_err(),
+        "the prompt's acknowledgement is dropped uncalled"
+    );
+    drop(world.looped.take());
+
+    let all = streamed(&mut world);
+    assert_eq!(
+        kinds(&all),
+        ["session_started", "preamble_built", "opening_message", "notice"],
+        "no turn starts and the notice is written: {all:?}"
+    );
+    let notice = line(&all, "notice");
+    assert_eq!(notice.payload["code"], "hook_failed");
+    assert_eq!(notice.payload["extension"], "fiber.test/soft");
+    assert!(
+        world.provider.requests().is_empty(),
+        "the provider got no request"
+    );
+}
+
+#[test]
+fn a_shutdown_around_session_start_runs_no_hook_and_starts_no_turn() {
+    // A shutdown started before the turn runs no hook.
+    let hooks = Arc::new(FakeHooks::new());
+    hooks.answer_session_start(added(vec![("fiber.test/inbox", "early")]));
+    let mut world = started(vec![fakes::Scripted::text("Done.")], Some(hooks.clone()));
+    {
+        let looped = world.looped.take().unwrap();
+        looped.cancel.shutdown(143);
+        world.looped = Some(looped);
+    }
+    let (ack, _) = capture();
+    world
+        .inbox
+        .send(Delivery::Prompt(driver("c_1", "hello"), ack))
+        .unwrap();
+    let finished = run_turn(&mut world);
+    assert_eq!(turn_result(&mut world, &finished).unwrap(), None);
+    assert_eq!(
+        hooks.session_start_calls.load(Ordering::SeqCst),
+        0,
+        "no hook runs"
+    );
+    drop(world.looped.take());
+    assert_eq!(kinds(&lines(&world)), ["session_started"]);
+
+    // A shutdown started inside the hook's call writes no context.
+    let hooks = Arc::new(FakeHooks::new());
+    hooks.answer_session_start(added(vec![("fiber.test/inbox", "late")]));
+    let mut world = started(vec![fakes::Scripted::text("Done.")], Some(hooks.clone()));
+    let signal = {
+        let looped = world.looped.take().unwrap();
+        let signal = Arc::clone(&looped.cancel);
+        world.looped = Some(looped);
+        signal
+    };
+    let (signalled, parked) = mpsc::channel();
+    let (release, wait) = mpsc::channel();
+    hooks.pause_in_session(signalled, wait);
+    let (ack, _) = capture();
+    world
+        .inbox
+        .send(Delivery::Prompt(driver("c_1", "hello"), ack))
+        .unwrap();
+    let finished = run_turn(&mut world);
+    Deadline::after(TURN_DEADLINE)
+        .recv(&parked)
+        .expect("the hook parked");
+    signal.shutdown(143);
+    release.send(()).unwrap();
+    assert_eq!(turn_result(&mut world, &finished).unwrap(), None);
+    drop(world.looped.take());
+    let all = lines(&world);
+    assert_eq!(
+        kinds(&all),
+        ["session_started", "preamble_built", "opening_message"],
+        "no context and no turn start: {all:?}"
     );
 }
 

@@ -77,6 +77,9 @@ impl Loop {
         folded.orphans = Vec::new();
         folded.settings = None;
         let mut rewound = Loop::resume(session, folded)?;
+        // A rewound session starts for its own reason, whatever the
+        // preamble it adopted was built for.
+        rewound.lifecycle.reason = contract::hook::StartReason::Rewind;
         if let Some(built) = logged {
             let tools = rewound
                 .tools
