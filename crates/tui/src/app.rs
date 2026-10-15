@@ -3,14 +3,14 @@
 //! "Steering", "Quit", "Approvals and questions", "Approving what a
 //! repository ships").
 
-use std::collections::HashMap;
+use std::collections::{BTreeSet, HashMap};
 use std::hash::{BuildHasher, RandomState};
 use std::ops::RangeInclusive;
 use std::path::PathBuf;
 use std::time::{Duration, Instant};
 
 use contract::events::{
-    CommandAccepted, CommandRejected, Notice, SessionNamed, ShellCommand, SteeringQueue,
+    CommandAccepted, CommandRejected, CommandResult, Notice, SessionNamed, ShellCommand, SteeringQueue,
     TurnStarted,
 };
 use contract::shapes::ContentPart;
@@ -209,7 +209,14 @@ pub(crate) enum Target {
 }
 
 /// The terminal's state.
+enum Pass {
+    Pending,
+    Until(Seq),
+}
+
 pub(crate) struct App {
+    passes: Vec<(SessionId, Pass)>,
+    abandoned_history: BTreeSet<String>,
     /// The launch directory `start` names.
     workspace: PathBuf,
     /// Home's state, once `run` sets it; `None` keeps today's screen.
@@ -311,6 +318,8 @@ impl App {
     /// An empty app in `workspace`, sized 80x24 until the loop sets it.
     pub(crate) fn new(workspace: PathBuf) -> Self {
         Self {
+            passes: Vec::new(),
+            abandoned_history: BTreeSet::new(),
             workspace,
             home: None,
             draft: Draft::default(),
@@ -491,6 +500,9 @@ impl App {
     /// Folds one line from the hub, returning command lines to send. An
     /// answer first releases the line kept for resending.
     pub(crate) fn on_line(&mut self, line: Line) -> Vec<String> {
+        if self.pass_line(&line) {
+            return Vec::new();
+        }
         self.answered_line(&line);
         let mut lines = match self.home_line(&line) {
             Some(consumed) => consumed,
@@ -501,10 +513,71 @@ impl App {
         };
         lines.extend(self.home_outgoing());
         lines.extend(self.sessions_outgoing());
-        lines.extend(self.find_outgoing());
         self.reconcile_attention();
         self.settle();
+        lines.extend(self.find_outgoing());
         lines
+    }
+
+    /// Whether any full stream is still folding its opening pass.
+    pub(crate) fn pass_open(&self) -> bool {
+        !self.passes.is_empty()
+    }
+
+    /// Holds page requests while an earlier stash waits to fold a reopening.
+    pub(crate) fn reopen_pending(&mut self, session: SessionId) {
+        self.passes.retain(|(held, _)| held != &session);
+        self.passes.push((session, Pass::Pending));
+    }
+
+    /// Discards the late answer of a history wait ended by a reopening.
+    pub(crate) fn abandon_history(&mut self, id: String) {
+        self.abandoned_history.insert(id);
+    }
+
+    /// Updates pass boundaries before any view consumes the line. Returns
+    /// true only for an abandoned answer, which must fold nowhere.
+    fn pass_line(&mut self, line: &Line) -> bool {
+        match line {
+            Line::Session(line) => {
+                if matches!(line.kind.as_str(), "command_accepted" | "command_rejected")
+                    && let Some(id) = line.payload.get("command_id").and_then(Value::as_str)
+                    && self.abandoned_history.remove(id)
+                {
+                    return true;
+                }
+                if let Some(seq) = line.seq {
+                    self.passes.retain(|(session, pass)| match pass {
+                        Pass::Pending => true,
+                        Pass::Until(last) => session != &line.session_id || seq < *last,
+                    });
+                }
+                if line.kind == "command_accepted"
+                    && let Some(CommandAccepted { result: Some(CommandResult::Subscribe { last_seq }), .. }) = read!(line, CommandAccepted)
+                {
+                    self.passes.retain(|(session, _)| session != &line.session_id);
+                    self.passes.push((line.session_id.clone(), Pass::Until(last_seq)));
+                }
+            }
+            Line::Hub(line) => {
+                let Some(session) = line.payload.get("session_id").and_then(Value::as_str) else {
+                    return false;
+                };
+                match line.kind.as_str() {
+                    "stream_reopened" => {
+                        self.passes.retain(|(held, _)| held.0 != session);
+                        if let Some(last) = line.payload.get("last_seq").and_then(Value::as_u64) {
+                            self.passes.push((SessionId(session.to_owned()), Pass::Until(Seq(last))));
+                        }
+                    }
+                    "stream_closed" | "session_left" => {
+                        self.passes.retain(|(held, pass)| held.0 != session || matches!(pass, Pass::Pending));
+                    }
+                    _ => {}
+                }
+            }
+        }
+        false
     }
 
     /// Shows `text` as a notice under `code`.
@@ -532,6 +605,8 @@ impl App {
     /// connected, refused for its schema version, keeps the notice that
     /// says why.
     pub(crate) fn disconnected(&mut self) {
+        self.passes.clear();
+        self.abandoned_history.clear();
         if self.link == Link::Up {
             self.link = Link::Down;
             self.notices
@@ -772,6 +847,9 @@ impl App {
 
     /// The seq ranges of pages the next frame needs and does not hold.
     pub(crate) fn needs(&self) -> Vec<RangeInclusive<Seq>> {
+        if self.pass_open() {
+            return Vec::new();
+        }
         self.screen.needs(self.conversation_height())
     }
 

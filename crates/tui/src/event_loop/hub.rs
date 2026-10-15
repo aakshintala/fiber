@@ -27,6 +27,13 @@ pub(super) const HISTORY_LINES: u64 = 256;
 /// What a lost connection fails a fetch with.
 pub(super) const LOST: &str = "connection lost";
 
+/// A history answer, or a reopening that ends the wait before its answer.
+#[derive(Debug, PartialEq)]
+pub(super) enum Answer {
+    Lines(Vec<Envelope>),
+    Reopened,
+}
+
 /// A batch always holds its first input, with the inputs ready behind
 /// it folded after in arrival order.
 pub(super) struct Batch {
@@ -205,7 +212,10 @@ impl Connection {
                 self.lost(app);
                 return Err(LOST.to_owned());
             }
-            let answer = self.answer(rx, &id, app, tick)?;
+            let answer = match self.answer(rx, &id, app, tick)? {
+                Answer::Lines(lines) => lines,
+                Answer::Reopened => return Ok(Vec::new()),
+            };
             let Some(last) = answer.last().and_then(|line| line.seq) else {
                 break;
             };
@@ -225,7 +235,7 @@ impl Connection {
         id: &str,
         app: &mut App,
         tick: &TickThread,
-    ) -> Result<Vec<Envelope>, String> {
+    ) -> Result<Answer, String> {
         loop {
             let Ok(input) = rx.recv() else {
                 self.lost(app);
@@ -234,7 +244,15 @@ impl Connection {
             self.credits.received(&input);
             match input {
                 Input::Hub(Line::Session(line)) if link::answers(&line, id) => {
-                    return link::history_answer(&line);
+                    return link::history_answer(&line).map(Answer::Lines);
+                }
+                Input::Hub(Line::Hub(line)) if line.kind == "stream_reopened" => {
+                    if let Some(session) = line.payload.get("session_id").and_then(serde_json::Value::as_str) {
+                        app.reopen_pending(SessionId(session.to_owned()));
+                    }
+                    app.abandon_history(id.to_owned());
+                    self.push_stash(Input::Hub(Line::Hub(line)));
+                    return Ok(Answer::Reopened);
                 }
                 // A tick while a frame waits for history is acked and
                 // dropped, not stashed: the frame asks again after it
