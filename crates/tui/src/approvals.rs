@@ -4,18 +4,22 @@
 
 use std::collections::HashMap;
 
-use contract::commands::{Remember, RememberScope, Reply, ReplyAnswer};
+use contract::commands::{Reply, ReplyAnswer};
 use contract::events::{
-    AskStep, Decision, Escalation, Interaction, InteractionRequested, PermissionRequested,
-    RuleOffer, RuleScope, ToolCallRequested,
+    AskStep, Interaction, InteractionRequested, PermissionRequested, ToolCallRequested,
 };
 use contract::shapes::True;
 use contract::{Envelope, RequestId, SessionId};
+use ratatui::style::Style;
 use serde_json::Value;
 
 use crate::app::session_command;
+use crate::format;
 use crate::keys::{Edit, Key};
 
+use approval::{Approval, Choice};
+
+mod approval;
 pub(crate) mod form;
 mod one_question;
 
@@ -27,19 +31,6 @@ pub(crate) const KINDS: [&str; 5] = [
     "interaction_requested",
     "interaction_resolved",
 ];
-
-/// A choice on the approval panel.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum Choice {
-    /// Allow once.
-    Once,
-    /// Allow for this session.
-    Session,
-    /// Always allow in this project.
-    Project,
-    /// Deny, with the typed feedback.
-    Deny,
-}
 
 /// One unanswered request in the queue: an approval, a question form or a
 /// one-question interaction.
@@ -69,19 +60,6 @@ enum Ask {
     One(one_question::OneQuestion),
 }
 
-/// An approval: the call it asks about and the person's choice so far.
-#[derive(Debug, Clone)]
-struct Approval {
-    /// The asking call's tool and arguments, when its `tool_call_requested`
-    /// was seen.
-    call: Option<(String, String)>,
-    reversible: bool,
-    step: AskStep,
-    /// What the person typed, kept while the request waits.
-    feedback: String,
-    cursor: Choice,
-}
-
 impl Request {
     /// The queue key: session and request id.
     fn key(&self) -> (String, String) {
@@ -94,201 +72,23 @@ impl Request {
     }
 }
 
-impl Approval {
-    /// The rule an allow can remember, offered only at review.
-    fn rule(&self) -> Option<&RuleOffer> {
-        match &self.step {
-            AskStep::Review { rule, .. } => rule.as_ref(),
-            AskStep::StandingAsk { .. } => None,
-        }
-    }
-
-    /// The choices it shows: the remembering ones only with a rule.
-    fn choices(&self) -> Vec<Choice> {
-        if self.rule().is_some() {
-            vec![Choice::Once, Choice::Session, Choice::Project, Choice::Deny]
-        } else {
-            vec![Choice::Once, Choice::Deny]
-        }
-    }
-
-    /// Why it asked.
-    fn why(&self) -> String {
-        match &self.step {
-            AskStep::StandingAsk { standing_rule } => {
-                let scope = match standing_rule.scope {
-                    RuleScope::Global => "global",
-                    RuleScope::Project => "project",
-                };
-                format!("asked by a {scope} rule: {}", standing_rule.prefix)
-            }
-            AskStep::Review {
-                escalation:
-                    Some(
-                        Escalation::ConsecutiveBlocks { reason }
-                        | Escalation::SessionBlocks { reason },
-                    ),
-                ..
-            } => format!("the reviewer escalated: {reason}"),
-            AskStep::Review {
-                escalation: Some(Escalation::ReviewerFailed { error }),
-                ..
-            } => format!("the reviewer failed: {}", error.message),
-            AskStep::Review {
-                escalation: None, ..
-            } => "no rule allows this call".to_owned(),
-        }
-    }
-
-    /// The answer the cursor's choice sends.
-    fn answer(&self) -> ReplyAnswer {
-        let remember = |scope| {
-            self.rule().map(|rule| Remember {
-                scope,
-                prefix: rule.prefix.clone(),
-            })
-        };
-        let (decision, feedback, remember) = match self.cursor {
-            Choice::Once => (Decision::Allow, None, None),
-            Choice::Session => (Decision::Allow, None, remember(RememberScope::Session)),
-            Choice::Project => (Decision::Allow, None, remember(RememberScope::Project)),
-            Choice::Deny => {
-                let typed = !self.feedback.trim().is_empty();
-                (Decision::Deny, typed.then(|| self.feedback.clone()), None)
-            }
-        };
-        ReplyAnswer::Approval {
-            decision,
-            feedback,
-            remember,
-        }
-    }
-
-    /// One choice row's text.
-    fn label(&self, choice: Choice) -> String {
-        let prefix = self
-            .rule()
-            .map(|rule| rule.prefix.as_str())
-            .unwrap_or_default();
-        match choice {
-            Choice::Once => "allow once".to_owned(),
-            Choice::Session => format!("allow for this session: {prefix}"),
-            Choice::Project => format!("always allow in this project: {prefix}"),
-            Choice::Deny if self.feedback.is_empty() => "deny · type to add feedback".to_owned(),
-            Choice::Deny => format!("deny · {}", self.feedback),
-        }
-    }
-
-    /// The panel's lines under `header`: why it asked, the call, the
-    /// choices.
-    fn lines(&self, mut header: String) -> Vec<String> {
-        if !self.reversible {
-            header.push_str(IRREVERSIBLE);
-        }
-        let mut lines = vec![header, self.why()];
-        if let Some((tool, arguments)) = &self.call {
-            lines.push(format!("{tool} {arguments}"));
-        }
-        for choice in self.choices() {
-            let mark = if choice == self.cursor { '›' } else { ' ' };
-            lines.push(format!("{mark} {}", self.label(choice)));
-        }
-        lines
-    }
-
-    /// A key on the shown approval. Esc and ⌥A act on the queue
-    /// ([`Queue::on_key`]) before this.
-    fn on_key(&mut self, key: &Key) -> Option<PanelKey> {
-        match key {
-            Key::Char(ch) => self.type_char(*ch),
-            Key::Backspace => {
-                self.feedback.pop();
-                self.cursor = Choice::Deny;
-            }
-            Key::Up | Key::Down => {
-                let choices = self.choices();
-                let now = choices
-                    .iter()
-                    .position(|choice| *choice == self.cursor)
-                    .unwrap_or_default();
-                let next = if *key == Key::Up {
-                    now.saturating_sub(1)
-                } else {
-                    now.saturating_add(1)
-                };
-                if let Some(choice) = choices.get(next) {
-                    self.cursor = *choice;
-                }
-            }
-            Key::Enter => return Some(PanelKey::Answer),
-            // Tab, Shift+Tab, Ctrl+G and Ctrl+R do nothing in the panel,
-            // which stands in the input box's place; F1 opens the key map
-            // over it.
-            Key::Esc
-            | Key::AltA
-            | Key::Tab
-            | Key::BackTab
-            | Key::CtrlG
-            | Key::CtrlR
-            | Key::CtrlV
-            | Key::CtrlL => {}
-            // The layout's keys reach the screen behind the panel.
-            Key::PageUp
-            | Key::PageDown
-            | Key::End
-            | Key::CtrlC
-            | Key::CtrlF
-            | Key::F1
-            | Key::CtrlO
-            | Key::AltP
-            | Key::AltR
-            | Key::AltDigit(_) => {
-                return None;
-            }
-            // The steering queue's keys do nothing while the panel is open.
-            Key::AltUp | Key::AltDown | Key::AltX => {}
-        }
-        Some(PanelKey::Handled)
-    }
-
-    /// An editing key: a paste is typed into the feedback, a control
-    /// character as a space; every other edit does nothing.
-    fn on_edit(&mut self, edit: &Edit) {
-        match edit {
-            Edit::Paste(text) => {
-                for ch in text.chars() {
-                    self.type_char(if ch.is_control() { ' ' } else { ch });
-                }
-            }
-            Edit::Left
-            | Edit::Right
-            | Edit::ShiftEnter
-            | Edit::CtrlJ
-            | Edit::WordLeft
-            | Edit::WordRight
-            | Edit::DeleteWord
-            | Edit::LineStart
-            | Edit::LineEnd
-            | Edit::Delete => {}
-        }
-    }
-
-    /// Typing goes to the feedback and moves the cursor to deny.
-    fn type_char(&mut self, ch: char) {
-        self.feedback.push(ch);
-        self.cursor = Choice::Deny;
-    }
+/// One styled run of a panel's line: the bytes `bytes` of `lines[line]`
+/// draw in `style`; unmarked text draws plain. `bytes` lies on char
+/// boundaries of the line, and marks on one line do not overlap.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct Mark {
+    pub(crate) line: usize,
+    pub(crate) bytes: std::ops::Range<usize>,
+    pub(crate) style: Style,
 }
-
-/// What an irreversible call's header ends with (`docs/tui.md`, "An
-/// approval").
-pub(crate) const IRREVERSIBLE: &str = " · irreversible";
 
 /// The request panel as it draws.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct Panel {
     /// Its lines, before wrapping: the header, then the request's rows.
     pub(crate) lines: Vec<String>,
+    /// Their styled runs; empty on a question form.
+    pub(crate) marks: Vec<Mark>,
     /// Whether it takes the alert tint: the reviewer escalated. Never on a
     /// question.
     pub(crate) alert: bool,
@@ -344,8 +144,20 @@ pub(crate) struct Queue {
 impl Queue {
     /// The request panel, while it is open: `approval` or `question`, the
     /// session asking, and its place among the requests waiting. A question
-    /// fits its rows to `width` columns.
+    /// fits its rows to `width` columns. The session's name comes from
+    /// `name`, or its id when the lookup yields nothing or an empty name.
+    /// Tests only: the terminal passes its feed-row lookup.
+    #[cfg(test)]
     pub(crate) fn panel(&self, width: u16) -> Option<Panel> {
+        self.panel_with(width, &|_| None)
+    }
+
+    /// [`Queue::panel`], with the session's name from `name`.
+    pub(crate) fn panel_with(
+        &self,
+        width: u16,
+        name: &dyn Fn(&SessionId) -> Option<String>,
+    ) -> Option<Panel> {
         let at = self.shown_index()?;
         let request = self.requests.get(at)?;
         let waiting: Vec<usize> = self.waiting_indices().collect();
@@ -355,20 +167,28 @@ impl Queue {
             .unwrap_or_default()
             .saturating_add(1);
         let place = format!("{} · {k} of {}", request.session.0, waiting.len());
+        let session = name(&request.session)
+            .filter(|name| !name.is_empty())
+            .map(|name| form::clean(&name))
+            .unwrap_or_else(|| request.session.0.clone());
         Some(match &request.ask {
-            Ask::Approval(approval) => Panel {
-                lines: approval.lines(format!("approval · {place}")),
-                alert: matches!(
-                    approval.step,
-                    AskStep::Review {
-                        escalation: Some(_),
-                        ..
-                    }
-                ),
-                spots: Vec::new(),
-                cursor: None,
-                caret: None,
-            },
+            Ask::Approval(approval) => {
+                let (lines, marks, caret) = approval.render(k, waiting.len(), &session, width);
+                Panel {
+                    lines,
+                    marks,
+                    alert: matches!(
+                        approval.step,
+                        AskStep::Review {
+                            escalation: Some(_),
+                            ..
+                        }
+                    ),
+                    spots: Vec::new(),
+                    cursor: None,
+                    caret,
+                }
+            }
             Ask::Form(form) => form.panel(format!("question · {place}"), width),
             Ask::One(question) => question.panel(format!("question · {place}"), width),
         })
@@ -379,10 +199,10 @@ impl Queue {
         self.shown_index().is_some()
     }
 
-    /// The badge line while the panel is closed and requests wait,
-    /// counting `extra` requests held elsewhere with them. It names the
-    /// `next_request` action's bound key, leaving it out when unbound.
-    pub(crate) fn badge(&self, extra: usize, key: Option<&str>) -> Option<String> {
+    /// The badge row while the panel is closed and requests wait,
+    /// counting `extra` requests held elsewhere with them
+    /// (`docs/tui.md`, "An approval").
+    pub(crate) fn badge(&self, extra: usize) -> Option<String> {
         if self.shown.is_some() {
             return None;
         }
@@ -390,10 +210,7 @@ impl Queue {
         if waiting == 0 {
             return None;
         }
-        match key {
-            Some(key) => Some(format!("! {waiting} waiting · /approvals or {key}")),
-            None => Some(format!("! {waiting} waiting · /approvals")),
-        }
+        Some(format!("  ⚠ {waiting} approvals waiting · click to reopen"))
     }
 
     /// Handles a key while the panel is open; `None` when the panel is
@@ -548,13 +365,20 @@ impl Queue {
                 if let (Some(action), Ok(call)) =
                     (action, serde_json::from_value::<ToolCallRequested>(payload))
                 {
-                    // Raw text that was not JSON shows as the model sent it.
-                    let arguments = call
-                        .arguments
-                        .as_str()
-                        .map_or_else(|| call.arguments.to_string(), str::to_owned);
+                    // The main argument, never JSON: raw text that was not
+                    // JSON shows as the model sent it.
+                    let summary = match &call.arguments {
+                        Value::String(text) => form::clean(text),
+                        Value::Null
+                        | Value::Bool(_)
+                        | Value::Number(_)
+                        | Value::Array(_)
+                        | Value::Object(_) => {
+                            form::clean(&format::summary(&call.name, &call.arguments))
+                        }
+                    };
                     self.calls
-                        .insert((session.0.clone(), action), (call.name, arguments));
+                        .insert((session.0.clone(), action), (call.name, summary));
                 }
             }
             "permission_requested" => {
@@ -566,6 +390,15 @@ impl Queue {
                     Ask::Approval(Approval {
                         call,
                         reversible: asked.declared.reversible,
+                        effects: asked.declared.effects.clone(),
+                        paths: asked
+                            .declared
+                            .paths
+                            .clone()
+                            .unwrap_or_default()
+                            .iter()
+                            .map(|path| form::clean(path))
+                            .collect(),
                         step: asked.step,
                         feedback: String::new(),
                         cursor: Choice::Once,

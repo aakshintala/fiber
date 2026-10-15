@@ -120,6 +120,16 @@ fn header(app: &App) -> String {
     panel(app).first().cloned().unwrap_or_default()
 }
 
+/// An approval's header for `k` of `n` at the app's default width: the
+/// column is 80 wide and the panel pads to its inset of 78.
+fn approval_header(k: usize, n: usize) -> String {
+    let left = format!("Approval {k} of {n} · {S_A}");
+    let pad = 78_usize
+        .saturating_sub(crate::format::width(&left).saturating_add("Esc puts it aside".len()))
+        .max(1);
+    format!("{left}{}{}", " ".repeat(pad), "Esc puts it aside")
+}
+
 /// Presses `key`, which sends nothing.
 fn press(app: &mut App, key: Key) {
     let now = fakes::clock::FakeClock::new().now();
@@ -237,7 +247,7 @@ fn an_approval_over_an_open_prompt_search_takes_the_paste() {
         ),
     );
     app.on_edit(Edit::Paste("no".to_owned()));
-    assert_eq!(panel(&app).last().map(String::as_str), Some("› deny · no"));
+    assert_eq!(panel(&app).get(4).map(String::as_str), Some("▸ 2 Deny  no"));
     press(&mut app, Key::Esc);
     assert_eq!(search_query(&app).as_deref(), Some("search prompts: "));
 }
@@ -372,7 +382,7 @@ fn esc_on_an_approval_then_esc_on_the_form_behind_it_declines_the_form() {
     let mut app = attached();
     feed(&mut app, approval());
     feed(&mut app, asked());
-    assert_eq!(header(&app), format!("approval · {S_A} · 1 of 2"));
+    assert_eq!(header(&app), approval_header(1, 2));
     press(&mut app, Key::Esc);
     assert_eq!(header(&app), format!("question · {S_A} · 2 of 2"));
     assert_eq!(

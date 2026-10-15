@@ -13,7 +13,7 @@ use crate::link::Line;
 
 const S_A: &str = "s_aaaaaaaaaaaaaaaa";
 const S_B: &str = "s_bbbbbbbbbbbbbbbb";
-const BADGE_ONE: &str = "! 1 waiting · /approvals or ⌥A";
+const BADGE_ONE: &str = "  ⚠ 1 approvals waiting · click to reopen";
 
 /// The injected clock's now.
 fn now() -> Instant {
@@ -210,28 +210,25 @@ fn another_clients_resolution_closes_it() {
 }
 
 #[test]
-fn the_badge_names_the_next_requests_bound_key() {
+fn the_badge_ignores_the_next_requests_bound_key() {
     let mut app = attached();
     let mut user = serde_json::Map::new();
     user.insert("next_request".to_owned(), json!("alt+n"));
     app.set_keys(crate::KeysSetup { user });
     assert!(app.on_line(offer(S_A)).is_empty());
     assert_eq!(press(&mut app, Key::Esc), Effect::None);
-    assert_eq!(
-        app.badge().as_deref(),
-        Some("! 1 waiting · /approvals or ⌥N")
-    );
+    assert_eq!(app.badge().as_deref(), Some(BADGE_ONE));
 }
 
 #[test]
-fn the_badge_leaves_the_key_out_when_unbound() {
+fn the_badge_shows_the_same_without_a_bound_key() {
     let mut app = attached();
     let mut user = serde_json::Map::new();
     user.insert("next_request".to_owned(), json!([]));
     app.set_keys(crate::KeysSetup { user });
     assert!(app.on_line(offer(S_A)).is_empty());
     assert_eq!(press(&mut app, Key::Esc), Effect::None);
-    assert_eq!(app.badge().as_deref(), Some("! 1 waiting · /approvals"));
+    assert_eq!(app.badge().as_deref(), Some(BADGE_ONE));
 }
 
 #[test]
@@ -252,7 +249,7 @@ fn the_badge_counts_it_with_a_put_aside_approval() {
     press(&mut app, Key::Esc);
     assert_eq!(
         app.badge().as_deref(),
-        Some("! 2 waiting · /approvals or ⌥A")
+        Some("  ⚠ 2 approvals waiting · click to reopen")
     );
     // ⌥A reopens the offer first.
     press(&mut app, Key::AltA);

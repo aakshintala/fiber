@@ -1524,9 +1524,9 @@ fn the_panel_takes_editing_keys_first_and_a_paste_goes_to_its_feedback() {
     assert_eq!(app.draft(), "d");
     let feedback = app
         .panel()
-        .and_then(|panel| panel.lines.last().cloned())
+        .and_then(|panel| panel.lines.get(4).cloned())
         .unwrap_or_default();
-    assert_eq!(feedback, "› deny · no way");
+    assert_eq!(feedback, "▸ 2 Deny  no way");
 }
 
 /// The `args` of a command line.

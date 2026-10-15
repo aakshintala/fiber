@@ -823,7 +823,7 @@ fn the_approval_panel_draws_above_the_status_row() {
         "{rows:?}"
     );
     assert!(
-        rows[rows.len() - 3].contains("deny · type to add feedback"),
+        rows[rows.len() - 5].contains("Deny  type to add feedback"),
         "{rows:?}"
     );
 }
@@ -850,7 +850,7 @@ fn the_approval_panel_takes_the_bottom_row_once_the_status_sheds() {
         "{rows:?}"
     );
     assert!(
-        rows[rows.len() - 2].contains("deny · type to add feedback"),
+        rows[rows.len() - 4].contains("Deny  type to add feedback"),
         "{rows:?}"
     );
 }
