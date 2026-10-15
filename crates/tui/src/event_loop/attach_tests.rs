@@ -1659,6 +1659,168 @@ fn a_session_left_before_the_boundary_allows_history_on_demand() {
     assert!(!super::ranges(&seen).is_empty());
 }
 
+/// A mouse report against the targets drawn for the app's current view.
+fn select_report(app: &mut crate::app::App, kind: crate::keys::MouseKind, col: u16, row: u16) {
+    let area = ratatui::layout::Rect::new(0, 0, 60, 12);
+    let mut buffer = ratatui::buffer::Buffer::empty(area);
+    let targets = crate::view::render(app, area, &mut buffer, None);
+    app.on_select(&crate::keys::Mouse { kind, col, row }, &targets);
+}
+
+#[test]
+fn an_open_delegate_item_pass_ends_on_the_delegates_session_left() {
+    use crate::app::items::testkit;
+    let mut app = testkit::home();
+    testkit::opened(&mut app);
+    testkit::start_delegate(&mut app, "j_pass", testkit::DELEGATE_A);
+    let outgoing = testkit::open(&mut app, "j_pass");
+    assert!(app.item_open());
+    let mut accepted = line("command_accepted", None, None,
+        json!({"command_id": outgoing[0]["id"], "result": {"last_seq": 9000}}));
+    accepted.session_id = contract::SessionId(testkit::DELEGATE_A.into());
+    app.on_line(Line::Session(accepted));
+    assert!(app.pass_open(), "the item subscribe is consumed only after opening its pass");
+    app.on_line(stream_event("session_left", &contract::SessionId(testkit::DELEGATE_A.into()), None));
+    assert!(!app.pass_open());
+}
+
+#[test]
+fn a_copy_pins_its_dropped_page_without_loading_during_a_pass() {
+    use crate::keys::{Button, Key, MouseKind};
+    let (mut lp, _, _, _) = opened();
+    demand_top(&mut lp);
+    let needed = lp.app.needs();
+    assert!(!needed.is_empty());
+    // A whole page can span several wire answers; the app loads it whole.
+    let first: Vec<_> = session().into_iter().filter(|line| needed[0].contains(&line.seq.unwrap())).collect();
+    lp.app.load(first.clone());
+    assert!(lp.app.pages().part(0).is_some());
+    select_report(&mut lp.app, MouseKind::Press(Button::Left), 0, 0);
+    select_report(&mut lp.app, MouseKind::Drag(Button::Left), 59, 2);
+    lp.app.on_key(Key::End, lp.clock.now());
+    assert!(lp.app.pages().part(0).is_none());
+    let last = session().len() as u64 + 10;
+    opening(&mut lp.app, last);
+    select_report(&mut lp.app, MouseKind::Release, 59, 2);
+    assert!(lp.app.pages().pinned() > 0);
+    assert_eq!(lp.app.take_copy(), None);
+    assert!(lp.app.needs().is_empty());
+    lp.app.on_line(Line::Session(replay(last)));
+    assert!(lp.app.needs().iter().any(|range| range.start().0 == 0));
+    lp.app.load(first);
+    assert!(lp.app.take_copy().expect("copy after its page loads").contains("first"));
+}
+
+/// Runs a history wait whose answer follows a reopening and a finite fold.
+/// The older ending case also queues a key ahead of the reopening.
+fn reopened_history(older_ending: bool) {
+    let (pool, _) = ten_mib_fixture();
+    let r = 367usize;
+    let wire = Wire::new(174);
+    let _guard = CloseOnDrop(Arc::clone(&wire));
+    let (hand_tx, hand_rx) = mpsc::channel();
+    let link = WireLink::new(Arc::clone(&wire), hand_tx);
+    let count = Arc::clone(&link.count);
+    let (mut lp, theirs, tx, rx) = opened();
+    let session_id = lp.app.session().unwrap().clone();
+    let feed = Feed::new(tx.clone(), lp.hub.credits());
+    let (reader, reader_done) = spawn_reader(link, feed);
+    demand_top(&mut lp);
+    let (history_tx, histories) = mpsc::channel();
+    let (server_done_tx, server_done) = mpsc::channel();
+    let server_wire = Arc::clone(&wire);
+    let input = tx.clone();
+    let prefix = if older_ending { 3 } else { 1 };
+    let script = pool[..r].to_vec();
+    let server = std::thread::spawn(move || {
+        let mut commands = std::io::BufReader::new(theirs);
+        let mut text = String::new();
+        let mut seen = 0;
+        loop {
+            text.clear();
+            match std::io::BufRead::read_line(&mut commands, &mut text) {
+                Ok(0) | Err(_) => break,
+                Ok(_) => {}
+            }
+            let command: serde_json::Value = serde_json::from_str(&text).unwrap();
+            if command["command"] != "history" { continue; }
+            seen += 1;
+            history_tx.send(count.load(Ordering::SeqCst)).unwrap_or(());
+            if seen == 1 {
+                let encode = |line: Line| {
+                    let mut bytes = match line {
+                        Line::Hub(line) => serde_json::to_vec(&line).unwrap(),
+                        Line::Session(line) => serde_json::to_vec(&line).unwrap(),
+                    };
+                    bytes.push(b'\n');
+                    bytes
+                };
+                if older_ending {
+                    assert!(server_wire.push(encode(stream_event("session_left", &session_id, None))));
+                    // A second read proves the previous line was sent to
+                    // the input channel before the key is sent there.
+                    assert!(server_wire.push(encode(Line::Session(line("read_marker", None, None, json!({}))))));
+                    let wait = Deadline::after(DEADLINE);
+                    for want in 1..=2 {
+                        assert_eq!(wait.recv_or_fail(&hand_rx, "the older ending to reach the reader"), want);
+                    }
+                    let keys = super::to_the_top().into_iter().flat_map(|input| match input { Input::Bytes(bytes) => bytes, _ => panic!("PageUp bytes") }).collect();
+                    input.send(Input::Bytes(keys)).unwrap();
+                }
+                let last = session().len() + r - 1;
+                assert!(server_wire.push(encode(stream_event("stream_reopened", &session_id, Some(last as u64)))));
+                for line in &script {
+                    if !server_wire.push(line.clone()) { break; }
+                }
+            }
+            let from = command["args"]["from_seq"].as_u64().unwrap();
+            let to = command["args"]["to_seq"].as_u64().unwrap();
+            let id = command["id"].as_str().unwrap();
+            // The abandoned first answer must never populate page zero.
+            let lines = if seen == 1 { Vec::new() } else { super::history(&session(), from, to) };
+            let mut answer = serde_json::to_vec(&command_answer(id, lines)).unwrap();
+            answer.push(b'\n');
+            if !server_wire.push(answer) { break; }
+        }
+        server_done_tx.send(seen).unwrap_or(());
+    });
+    let (done_tx, done) = mpsc::channel();
+    std::thread::spawn(move || {
+        let code = lp.run(&rx);
+        done_tx.send((code, lp)).unwrap_or(());
+    });
+    for input in super::to_the_top() {
+        tx.send(input).unwrap();
+    }
+    let wait = Deadline::after(DEADLINE);
+    assert_eq!(wait.recv_or_fail(&histories, "the initial history request"), 0);
+    let second = wait.recv_or_fail(&histories, "history after the reopened fold");
+    tx.send(quit()).unwrap();
+    let (code, lp) = Deadline::after(DEADLINE).recv_or_fail(&done, "the loop to quit after paging");
+    wire.close();
+    assert!(second >= prefix + r, "history before the last fold line: {second}, prefix {prefix}, replay {r}");
+    assert!(lp.hub.answer_stash_peak() <= K);
+    assert!(!lp.app.pass_open());
+    assert!(lp.app.pages().part(0).is_some(), "the abandoned empty answer did not mark the page loaded");
+    assert_eq!(code, 0);
+    drop(lp);
+    Deadline::after(DEADLINE).recv_or_fail(&reader_done, "the reader to end");
+    reader.join().unwrap();
+    let seen = Deadline::after(DEADLINE).recv_or_fail(&server_done, "the command server to end");
+    server.join().unwrap();
+    assert!(seen > 1, "pages load after the pass ends");
+}
+
+#[test]
+fn a_reopen_ends_the_history_wait_at_the_ten_mib_fixture() {
+    reopened_history(false);
+}
+
+#[test]
+fn a_stashed_session_left_and_page_up_cannot_clear_a_pending_reopen() {
+    reopened_history(true);
+}
+
 #[test]
 fn a_history_waits_for_the_opening_pass_at_the_ten_mib_fixture() {
     let (pool, _) = ten_mib_fixture();
