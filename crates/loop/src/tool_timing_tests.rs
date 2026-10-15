@@ -15,7 +15,7 @@
 )]
 
 use std::collections::VecDeque;
-use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex, PoisonError, mpsc};
 use std::thread;
 use std::time::{Duration, Instant};
@@ -229,12 +229,21 @@ struct ScriptProvider {
     clock: Arc<FakeClock>,
     script: Mutex<VecDeque<Answer>>,
     entered: Mutex<Option<mpsc::Sender<()>>>,
+    hold_pause: Mutex<Option<(mpsc::Sender<()>, mpsc::Receiver<()>)>>,
     calls: AtomicUsize,
 }
 
 impl ScriptProvider {
     fn called(&self) -> usize {
         self.calls.load(Ordering::SeqCst)
+    }
+
+    /// Holds the next call ahead of its hold: the call blocks on
+    /// `release` before it stores its own release, and sends
+    /// `cancelled` once its cancel has been handled. Consumed once;
+    /// later calls run as today.
+    fn pause_hold(&self, cancelled: mpsc::Sender<()>, release: mpsc::Receiver<()>) {
+        *lock(&self.hold_pause) = Some((cancelled, release));
     }
 }
 
@@ -249,12 +258,21 @@ impl Provider for ScriptProvider {
         if let Some(entered) = lock(&self.entered).take() {
             let _sent = entered.send(());
         }
+        let mut signal = None;
+        let mut pause = None;
+        if let Some((cancelled, release)) = lock(&self.hold_pause).take() {
+            signal = Some(cancelled);
+            pause = Some(release);
+        }
         Box::new(ScriptCall {
             clock: Arc::clone(&self.clock),
             answer: lock(&self.script)
                 .pop_front()
                 .expect("the script has a reply"),
             release: Mutex::new(None),
+            cancelled: AtomicBool::new(false),
+            signal,
+            pause: Mutex::new(pause),
         })
     }
 }
@@ -263,6 +281,14 @@ struct ScriptCall {
     clock: Arc<FakeClock>,
     answer: Answer,
     release: Mutex<Option<mpsc::Sender<()>>>,
+    /// Set by every cancel and read after the release store, so a
+    /// cancel that lands before the store is never dropped.
+    cancelled: AtomicBool,
+    /// Sends once the cancel has been handled, on every cancel route.
+    signal: Option<mpsc::Sender<()>>,
+    /// Holds the run ahead of its release store; taken out and dropped
+    /// before the block, so the cancel never meets this lock.
+    pause: Mutex<Option<mpsc::Receiver<()>>>,
 }
 
 impl ModelCall for ScriptCall {
@@ -282,8 +308,25 @@ impl ModelCall for ScriptCall {
             // Parks until the test cancels the call: the release is the
             // signal the code under test is waiting on the cancellation.
             Answer::Hold => {
+                // A wired pause holds the call ahead of its release
+                // store: the test releases it only after the cancel
+                // has been handled. The channel is the test's own, so
+                // the block carries no deadline; a dropped sender
+                // releases it too.
+                let pause = lock(&self.pause).take();
+                if let Some(pause) = pause {
+                    let _released = pause.recv();
+                }
                 let (tx, rx) = mpsc::channel();
                 *lock(&self.release) = Some(tx);
+                // A cancel that landed before the store is seen here;
+                // one after it is seen on the stored release; one in
+                // between is seen on both, and the extra send is harmless.
+                if self.cancelled.load(Ordering::SeqCst) {
+                    return Err(CallError::Cancelled {
+                        usage: Box::new(fakes::unnamed_usage()),
+                    });
+                }
                 fakes::Deadline::after(WAIT).recv_or_fail(&rx, "the test cancels the hold");
                 Err(CallError::Cancelled {
                     usage: Box::new(fakes::unnamed_usage()),
@@ -293,8 +336,15 @@ impl ModelCall for ScriptCall {
     }
 
     fn cancel(&self) {
+        // First, so a hold storing its release next still sees it.
+        self.cancelled.store(true, Ordering::SeqCst);
         if let Some(release) = lock(&self.release).take() {
             let _sent = release.send(());
+        }
+        // After the cancel is handled, on every route; never touches
+        // the pause, so a cancel during the blocked run cannot deadlock.
+        if let Some(signal) = &self.signal {
+            let _sent = signal.send(());
         }
     }
 }
@@ -343,6 +393,16 @@ enum InnerPlan {
     Forget { name: String, args: Value },
 }
 
+/// Wakes a watched leaf's cancel wait: the loop's cancel signal owns
+/// no channel the test could hold, so the wake carries one.
+struct CancelWake(mpsc::Sender<()>);
+
+impl Wake for CancelWake {
+    fn wake(&self) {
+        let _sent = self.0.send(());
+    }
+}
+
 /// A registered tool with scripted effects, schema and synchronous work.
 struct ProbeTool {
     name: String,
@@ -360,6 +420,7 @@ struct ProbeTool {
     forget_gate: Mutex<Option<mpsc::Receiver<()>>>,
     run_entered: Mutex<Option<mpsc::Sender<()>>>,
     run_gate: Mutex<Option<mpsc::Receiver<()>>>,
+    cancel_watch: Mutex<Option<mpsc::Sender<()>>>,
     run_error: Mutex<Option<String>>,
     clock_hold: Mutex<bool>,
     clock: Mutex<Option<Arc<FakeClock>>>,
@@ -428,6 +489,7 @@ impl ProbeTool {
             forget_gate: Mutex::new(None),
             run_entered: Mutex::new(None),
             run_gate: Mutex::new(None),
+            cancel_watch: Mutex::new(None),
             run_error: Mutex::new(None),
             clock_hold: Mutex::new(false),
             clock: Mutex::new(None),
@@ -511,6 +573,12 @@ impl ProbeTool {
         *lock(&self.run_gate) = Some(gate);
     }
 
+    /// Watches the next run for its cancel: the run waits for the loop
+    /// to cancel it before it waits on its gate, then sends `seen`.
+    fn watch_cancel(&self, seen: mpsc::Sender<()>) {
+        *lock(&self.cancel_watch) = Some(seen);
+    }
+
     fn confirming(mut self) -> Self {
         self.ask_confirm = true;
         self
@@ -548,8 +616,8 @@ impl Tool for ProbeTool {
         self.effects.clone()
     }
 
-    fn run(&self, arguments: &Map<String, Value>, _: &dyn Cancel, _: &dyn Emit) -> Output {
-        self.enter_run(arguments);
+    fn run(&self, arguments: &Map<String, Value>, cancel: &dyn Cancel, _: &dyn Emit) -> Output {
+        self.enter_run(arguments, cancel);
         let error = lock(&self.run_error).clone().map(|message| Failure {
             code: ErrorCode::ToolError,
             message,
@@ -582,7 +650,7 @@ impl Tool for ProbeTool {
                 InnerPlan::Forget { name, args } => Some((name, args, true)),
             };
             if let Some((name, args, forget)) = planned {
-                return self.run_inner(arguments, ask, name, args, forget);
+                return self.run_inner(arguments, cancel, ask, name, args, forget);
             }
             return self.run(arguments, cancel, emit);
         }
@@ -615,12 +683,27 @@ impl Tool for ProbeTool {
 impl ProbeTool {
     /// Counts the run, records its arguments and holds it at the test's
     /// gate, then does its synchronous fake work.
-    fn enter_run(&self, arguments: &Map<String, Value>) {
+    fn enter_run(&self, arguments: &Map<String, Value>, cancel: &dyn Cancel) {
         self.ran.fetch_add(1, Ordering::SeqCst);
         lock(&self.ran_args).push(arguments.clone());
         lock(&self.run_threads).push(thread::current().id());
         if let Some(entered) = lock(&self.run_entered).take() {
             let _sent = entered.send(());
+        }
+        if let Some(seen) = lock(&self.cancel_watch).take() {
+            // A watched leaf waits here for the loop to cancel it: the
+            // test sends the run gate only after `seen`, so the leaf
+            // cannot return before its cancel fired. The subscription
+            // keeps only a Weak, so the wake stays alive across the
+            // wait; a cancel that landed before the subscription is
+            // caught by the recheck.
+            let (wake_tx, wake_rx) = mpsc::channel();
+            let wake: Arc<dyn Wake> = Arc::new(CancelWake(wake_tx));
+            cancel.subscribe(Arc::downgrade(&wake));
+            if !cancel.is_cancelled() {
+                fakes::Deadline::after(WAIT).recv_or_fail(&wake_rx, "the loop cancels the leaf");
+            }
+            let _sent = seen.send(());
         }
         if *lock(&self.clock_hold) {
             // Parks on the injected clock while the test holds the gate:
@@ -644,12 +727,13 @@ impl ProbeTool {
     fn run_inner(
         &self,
         arguments: &Map<String, Value>,
+        cancel: &dyn Cancel,
         ask: &dyn Ask,
         name: String,
         args: Value,
         forget: bool,
     ) -> Output {
-        self.enter_run(arguments);
+        self.enter_run(arguments, cancel);
         let Some(inner) = ask.inner_calls() else {
             return Output {
                 content: vec![ContentPart::Text {
@@ -1100,6 +1184,7 @@ fn build(setup: &Setup, home: fakes::TempDir, script: Vec<Answer>) -> World {
         script: Mutex::new(script.into_iter().collect()),
         entered: Mutex::new(None),
         calls: AtomicUsize::new(0),
+        hold_pause: Mutex::new(None),
     });
     // Every timer reads this world's clock: tools, rules and the hook
     // gate advance it from whichever thread they run on.
@@ -1172,6 +1257,7 @@ fn build(setup: &Setup, home: fakes::TempDir, script: Vec<Answer>) -> World {
             script: Mutex::new(review_answers(script).into_iter().collect()),
             entered: Mutex::new(setup.reviewer_wake.clone()),
             calls: AtomicUsize::new(0),
+            hold_pause: Mutex::new(None),
         });
         let (consecutive, session) = setup.reviewer_limits.unwrap_or((3, 20));
         looped = looped.reviewer(
@@ -1489,6 +1575,7 @@ fn exit_and_resume(world: &mut World, request: &str, script: Vec<Answer>) {
         script: Mutex::new(script.into_iter().collect()),
         entered: Mutex::new(None),
         calls: AtomicUsize::new(0),
+        hold_pause: Mutex::new(None),
     });
     let workspace = world.home.path().join("workspace");
     for tool in &world.tools {
@@ -1564,6 +1651,7 @@ fn exit_and_resume(world: &mut World, request: &str, script: Vec<Answer>) {
             script: Mutex::new(review_answers(&script).into_iter().collect()),
             entered: Mutex::new(None),
             calls: AtomicUsize::new(0),
+            hold_pause: Mutex::new(None),
         });
         let (consecutive, session) = world.reviewer_limits.unwrap_or((3, 20));
         looped = looped.reviewer(
@@ -3238,6 +3326,15 @@ fn cancelling_a_stage_ends_cancelled_with_its_record() {
             text_answer("Spare.", 0),
         ],
     );
+    // Declared after `world`: a panic drops the sender first and frees
+    // the held run before `world` drops.
+    let (release_tx, release_rx) = mpsc::channel();
+    let (cancelled_tx, cancelled_rx) = mpsc::channel();
+    world
+        .reviewer
+        .as_ref()
+        .expect("a reviewer")
+        .pause_hold(cancelled_tx, release_rx);
     prompt(&world, "hi");
     let flight = spawn_turn(&mut world);
     fakes::Deadline::after(WAIT).recv_or_fail(&entered_rx, "the stage starts its request");
@@ -3251,6 +3348,67 @@ fn cancelling_a_stage_ends_cancelled_with_its_record() {
         .expect("the inbox is open")
         .send(Delivery::Cancelled)
         .unwrap();
+    // The cancel is handled before the hold stores its release, so
+    // the test never depends on the cancel landing after the store.
+    fakes::Deadline::after(WAIT).recv_or_fail(&cancelled_rx, "the call sees the cancel");
+    release_tx.send(()).expect("the hold waits");
+    assert!(join_turn(&mut world, flight).is_ok());
+    assert_eq!(tool.ran(), 0, "the cancelled call never ran");
+    let records = ops(&world, "tool.reviewer");
+    assert_eq!(records.len(), 1, "the entered stage is timed");
+    assert_tool_wire(&records, "atlas");
+    assert!(
+        kinds(&world).contains(&"tool_call_completed".to_owned()),
+        "the cancelled call still completes"
+    );
+}
+
+// A cancel that lands before the hold stores its release still ends
+// the hold: the pause forces the early-cancel order on every run.
+#[test]
+fn a_cancel_before_the_hold_stores_its_release_still_ends_the_hold() {
+    let rules = Arc::new(FakeRules::default());
+    let tool = Arc::new(ProbeTool::executes("atlas", "atlas run"));
+    let mut setup = Setup::new(Arc::clone(&rules));
+    setup.tools.push(Arc::clone(&tool));
+    setup.reviewer_script = Some(vec![ReviewReply::Hold]);
+    let (entered_tx, entered_rx) = mpsc::channel();
+    setup.reviewer_wake = Some(entered_tx);
+    let home = fakes::TempDir::new("fiber-tool-timing");
+    let mut world = build(
+        &setup,
+        home,
+        vec![
+            tool_answer("atlas", json!({}), 0),
+            text_answer("Done.", 0),
+            text_answer("Spare.", 0),
+            text_answer("Spare.", 0),
+        ],
+    );
+    // Declared after `world`: a panic drops the sender first and frees
+    // the held run before `world` drops.
+    let (release_tx, release_rx) = mpsc::channel();
+    let (cancelled_tx, cancelled_rx) = mpsc::channel();
+    world
+        .reviewer
+        .as_ref()
+        .expect("a reviewer")
+        .pause_hold(cancelled_tx, release_rx);
+    prompt(&world, "hi");
+    let flight = spawn_turn(&mut world);
+    fakes::Deadline::after(WAIT).recv_or_fail(&entered_rx, "the stage starts its request");
+    assert!(
+        world.cancel.cancel(),
+        "the turn is armed while the stage runs"
+    );
+    world
+        .inbox_tx
+        .as_ref()
+        .expect("the inbox is open")
+        .send(Delivery::Cancelled)
+        .unwrap();
+    fakes::Deadline::after(WAIT).recv_or_fail(&cancelled_rx, "the call sees the cancel");
+    release_tx.send(()).expect("the hold waits");
     assert!(join_turn(&mut world, flight).is_ok());
     assert_eq!(tool.ran(), 0, "the cancelled call never ran");
     let records = ops(&world, "tool.reviewer");
@@ -4962,10 +5120,18 @@ fn cancelling_a_hooked_inner_call_never_runs_it() {
     );
 }
 
-// A returned anchor cancels its still-running descendant: the middle
-// call returns while the leaf still runs, and the leaf is cancelled.
-#[test]
-fn a_returned_anchor_cancels_its_running_descendant() {
+// The three-tool world the returned-anchor tests drive: the middle
+// call forgets the leaf and reports its answer, held until released.
+struct ReturnedAnchor {
+    world: World,
+    leaf: Arc<ProbeTool>,
+    leaf_entered_rx: mpsc::Receiver<()>,
+    leaf_gate_tx: mpsc::Sender<()>,
+    forget_tx: mpsc::Sender<()>,
+    report_rx: mpsc::Receiver<String>,
+}
+
+fn returned_anchor() -> ReturnedAnchor {
     let rules = Arc::new(FakeRules::default());
     let outer = Arc::new(ProbeTool::reads("atlas").calling("boreal", json!({})));
     let middle = Arc::new(ProbeTool::reads("boreal").forgetting("coral", json!({})));
@@ -4982,17 +5148,75 @@ fn a_returned_anchor_cancels_its_running_descendant() {
     setup.tools.push(Arc::clone(&middle));
     setup.tools.push(Arc::clone(&leaf));
     let home = fakes::TempDir::new("fiber-tool-timing");
-    let mut world = build(
+    let world = build(
         &setup,
         home,
         vec![tool_answer("atlas", json!({}), 0), text_answer("Done.", 0)],
     );
+    ReturnedAnchor {
+        world,
+        leaf,
+        leaf_entered_rx,
+        leaf_gate_tx,
+        forget_tx,
+        report_rx,
+    }
+}
+
+// A descendant that returns before its anchor does completes: the leaf
+// answers while the held anchor is still alive, so the completion is
+// written with the anchor unreturned.
+#[test]
+fn a_descendant_that_returns_before_its_anchor_completes() {
+    let ReturnedAnchor {
+        mut world,
+        leaf,
+        leaf_entered_rx,
+        leaf_gate_tx,
+        forget_tx,
+        report_rx,
+    } = returned_anchor();
+    prompt(&world, "hi");
+    let flight = spawn_turn(&mut world);
+    // The leaf runs and answers while the held anchor is unreturned.
+    fakes::Deadline::after(WAIT).recv_or_fail(&leaf_entered_rx, "the leaf run is entered");
+    leaf_gate_tx.send(()).expect("the leaf run waits");
+    let report = fakes::Deadline::after(WAIT).recv_or_fail(&report_rx, "the leaf answers");
+    assert_eq!(
+        report, "answered Completed",
+        "a leaf that beats its anchor completes"
+    );
+    forget_tx.send(()).expect("the forgetter waits");
+    assert_eq!(
+        join_turn(&mut world, flight).unwrap(),
+        Some(TurnOutcome::Completed)
+    );
+    assert_eq!(leaf.ran(), 1, "the descendant run was entered");
+    assert_eq!(ops(&world, "tool.permission").len(), 3);
+    assert_eq!(ops(&world, "tool.run").len(), 3);
+}
+
+// A returned anchor cancels its still-running descendant: the middle
+// call returns while the leaf still runs, and the leaf is cancelled.
+#[test]
+fn a_returned_anchor_cancels_its_running_descendant() {
+    let ReturnedAnchor {
+        mut world,
+        leaf,
+        leaf_entered_rx,
+        leaf_gate_tx,
+        forget_tx,
+        report_rx,
+    } = returned_anchor();
+    let (seen_tx, seen_rx) = mpsc::channel();
+    leaf.watch_cancel(seen_tx);
     prompt(&world, "hi");
     let flight = spawn_turn(&mut world);
     // The leaf is admitted while its anchor still runs, then the anchor
     // returns while the leaf still runs.
     fakes::Deadline::after(WAIT).recv_or_fail(&leaf_entered_rx, "the leaf run is entered");
     forget_tx.send(()).expect("the forgetter waits");
+    fakes::Deadline::after(WAIT).recv_or_fail(&seen_rx, "the leaf sees its cancel");
     leaf_gate_tx.send(()).expect("the leaf run waits");
     assert_eq!(
         join_turn(&mut world, flight).unwrap(),
@@ -5000,11 +5224,47 @@ fn a_returned_anchor_cancels_its_running_descendant() {
     );
     assert_eq!(leaf.ran(), 1, "the descendant run was entered");
     let report = fakes::Deadline::after(WAIT).recv_or_fail(&report_rx, "the leaf answers");
-    assert!(
-        report.contains("ancelled"),
-        "the orphaned leaf is cancelled: {report}"
+    assert_eq!(
+        report, "answered Cancelled",
+        "the orphaned leaf is cancelled"
     );
     // All three orders were entered; all three runs started.
+    assert_eq!(ops(&world, "tool.permission").len(), 3);
+    assert_eq!(ops(&world, "tool.run").len(), 3);
+}
+
+// A descendant released before its anchor returns is still cancelled:
+// the leaf waits for its cancel ahead of its gate on every order of
+// the test's two releases.
+#[test]
+fn a_returned_anchor_cancels_a_descendant_released_early() {
+    let ReturnedAnchor {
+        mut world,
+        leaf,
+        leaf_entered_rx,
+        leaf_gate_tx,
+        forget_tx,
+        report_rx,
+    } = returned_anchor();
+    let (seen_tx, seen_rx) = mpsc::channel();
+    leaf.watch_cancel(seen_tx);
+    prompt(&world, "hi");
+    let flight = spawn_turn(&mut world);
+    fakes::Deadline::after(WAIT).recv_or_fail(&leaf_entered_rx, "the leaf run is entered");
+    // The old order: the gate is already queued when the anchor returns.
+    leaf_gate_tx.send(()).expect("the leaf run waits");
+    forget_tx.send(()).expect("the forgetter waits");
+    fakes::Deadline::after(WAIT).recv_or_fail(&seen_rx, "the leaf sees its cancel");
+    assert_eq!(
+        join_turn(&mut world, flight).unwrap(),
+        Some(TurnOutcome::Completed)
+    );
+    assert_eq!(leaf.ran(), 1, "the descendant run was entered");
+    let report = fakes::Deadline::after(WAIT).recv_or_fail(&report_rx, "the leaf answers");
+    assert_eq!(
+        report, "answered Cancelled",
+        "the early leaf is cancelled too"
+    );
     assert_eq!(ops(&world, "tool.permission").len(), 3);
     assert_eq!(ops(&world, "tool.run").len(), 3);
 }
