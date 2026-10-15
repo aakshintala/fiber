@@ -909,34 +909,10 @@ fn the_last_stdout_verdict_wins() {
 fn a_malformed_stdout_line_ends_indeterminate() {
     // Garbage on stdout is no verdict at all: the job ends without a
     // result, and keeps the process's own exit code.
-    let rig = rig(vec![]);
-    // Backstop armed before the shell starts: the child exits on
-    // its own in milliseconds; this only fires if a mutant strands it.
-    let watchdog = Watchdog::matching("fiber-delegate-malformed");
-    rig.start(
-        ": fiber-delegate-malformed; printf '%s\\n' 'not json at all {{{'; exit 1",
-        BOUND,
-        1024,
+    assert_no_verdict(
+        &stdout_report("not json at all{{{", 1, "fiber-delegate-malformed"),
+        1,
     );
-    let notice = reported(&rig);
-    assert_eq!(notice.completed.status, Outcome::Failed);
-    assert_eq!(
-        notice
-            .completed
-            .error
-            .as_ref()
-            .map(|error| error.code.clone()),
-        Some(ErrorCode::Indeterminate)
-    );
-    assert_eq!(
-        notice
-            .completed
-            .process
-            .as_ref()
-            .and_then(|process| process.exit_code),
-        Some(1)
-    );
-    watchdog.stand_down(DEADLINE);
 }
 
 #[test]

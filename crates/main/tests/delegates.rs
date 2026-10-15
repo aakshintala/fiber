@@ -2362,8 +2362,14 @@ fn install_pb_without_credential(setup: &support::Setup, url: &str) {
 
 /// The parent's durable kinds, in order, for the early-failure run below:
 /// the spawn call and its reviewer verdict, the wait that claims the
-/// failure, the list that shows it, and the final text.
-const EARLY_FAILURE_PARENT_DURABLE: &[&str] = &[
+/// failure, the list that shows it, and the final text. Two placements
+/// of the finish pair are permitted: the wait's tool run claims the end
+/// (`_WAIT`), or the notice lands in the inbox before the next step's
+/// drain and the step boundary writes it right after `step_started`
+/// (`_DRAIN`, before the assistant requests the wait). `Loop::step`
+/// drains the inbox before building the request, so whichever wins the
+/// race is a valid execution.
+const EARLY_FAILURE_PARENT_DURABLE_WAIT: &[&str] = &[
     "session_started",
     "fiber_started",
     "extensions_loaded",
@@ -2389,6 +2395,53 @@ const EARLY_FAILURE_PARENT_DURABLE: &[&str] = &[
     "tool_call_started",
     "delegate_finished",
     "job_completed",
+    "tool_call_completed",
+    "step_started",
+    "assistant_message_started",
+    "tool_call_requested",
+    "usage_recorded",
+    "assistant_message_completed",
+    "tool_call_started",
+    "tool_call_completed",
+    "step_started",
+    "assistant_message_started",
+    "text_completed",
+    "usage_recorded",
+    "assistant_message_completed",
+    "turn_completed",
+    "fiber_exited",
+];
+
+/// The same run when the child's end reaches the inbox before the next
+/// step's drain: the boundary writes the finish pair right after
+/// `step_started`, and the wait the assistant then requests finds the
+/// job already ended.
+const EARLY_FAILURE_PARENT_DURABLE_DRAIN: &[&str] = &[
+    "session_started",
+    "fiber_started",
+    "extensions_loaded",
+    "preamble_built",
+    "opening_message",
+    "turn_started",
+    "step_started",
+    "assistant_message_started",
+    "tool_call_requested",
+    "usage_recorded",
+    "assistant_message_completed",
+    "usage_recorded",
+    "permission_resolved",
+    "tool_call_started",
+    "job_started",
+    "delegate_started",
+    "tool_call_completed",
+    "step_started",
+    "delegate_finished",
+    "job_completed",
+    "assistant_message_started",
+    "tool_call_requested",
+    "usage_recorded",
+    "assistant_message_completed",
+    "tool_call_started",
     "tool_call_completed",
     "step_started",
     "assistant_message_started",
@@ -2644,8 +2697,15 @@ fn a_delegate_failing_before_session_reports_its_error_and_no_log_path() {
     );
 
     // The whole parent stream, in order, and its durable lines equal its
-    // log: a duplicated, missing or reordered event fails here.
-    assert_eq!(durable_kinds(&lines), EARLY_FAILURE_PARENT_DURABLE);
+    // log: a duplicated, missing or reordered event fails here. Either
+    // finish placement is valid, so the stream must equal one of the two
+    // pinned orders.
+    let durable = durable_kinds(&lines);
+    assert!(
+        durable == EARLY_FAILURE_PARENT_DURABLE_WAIT
+            || durable == EARLY_FAILURE_PARENT_DURABLE_DRAIN,
+        "{durable:?}"
+    );
     let parent_id = lines[0]["session_id"].as_str().unwrap();
     let logged = read_lines(&ask_sessions(&setup).join(parent_id).join("events.jsonl"));
     let durable_stdout: Vec<Value> = lines
