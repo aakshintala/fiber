@@ -107,8 +107,26 @@ pub(crate) struct Resumed<T> {
     pub(crate) value: T,
 }
 
+pub(crate) const DELEGATE_CAP: usize = 10;
+
+fn running_delegates(inner: &super::Inner) -> usize {
+    inner
+        .jobs
+        .iter()
+        .filter(|job| job.delegate.is_some() && matches!(job.phase, super::Phase::Running))
+        .count()
+}
+
+#[derive(Debug)]
+pub(crate) enum Admit<E> {
+    Full,
+    Start(E),
+}
+
 /// Why `resume` started nothing.
 pub(crate) enum Resume<E> {
+    /// This session already runs the maximum delegates.
+    Full,
     /// No job has this id.
     Unknown,
     /// A job that is not a delegate.
@@ -132,6 +150,14 @@ pub(crate) enum Waited {
 }
 
 impl Registry {
+    pub(crate) fn admit<T, E>(&self, start: impl FnOnce() -> Result<T, E>) -> Result<T, Admit<E>> {
+        let _gate = lock(&self.start_gate);
+        if running_delegates(&lock(&self.inner)) >= DELEGATE_CAP {
+            return Err(Admit::Full);
+        }
+        start().map_err(Admit::Start)
+    }
+
     /// What `id` names: a running delegate pins its run's number, so a
     /// commit for that run refuses once the registry shows another.
     pub(crate) fn target(&self, id: &str) -> Target {
@@ -175,7 +201,7 @@ impl Registry {
         action: Option<ActionId>,
         start: impl FnOnce(&Resumable) -> Result<(Stop, T), E>,
     ) -> Result<Resumed<T>, Resume<E>> {
-        let _gate = lock(&self.resume_gate);
+        let _gate = lock(&self.start_gate);
         let (job_id, next, resumable) = {
             let inner = lock(&self.inner);
             let Some(job) = inner.jobs.iter().find(|job| job.started.job_id.0 == id) else {
@@ -189,6 +215,9 @@ impl Registry {
                     return Err(Resume::Live(delegate.delegate_session_id.clone(), job.run));
                 }
                 super::Phase::Ended(_) => {}
+            }
+            if running_delegates(&inner) >= DELEGATE_CAP {
+                return Err(Resume::Full);
             }
             let Some(next) = job.run.checked_add(1) else {
                 return Err(Resume::Exhausted);

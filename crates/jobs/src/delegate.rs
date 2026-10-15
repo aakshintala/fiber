@@ -268,84 +268,97 @@ impl Tool for DelegateSpawn {
                 );
             }
         };
-        let job_id = mint_job_id();
-        let session_id = run::mint_session_id();
-        let output_path = self
-            .sessions
-            .join(&session_id.0)
-            .join("events.jsonl")
-            .to_string_lossy()
-            .into_owned();
-        let launched = Launched {
-            session_id: session_id.clone(),
-            job_id: job_id.clone(),
-            parent: self.parent.clone(),
-            model: resolved.clone(),
-            prompt,
-            workspace: self.workspace.clone(),
-            resume: false,
-        };
-        // The stamp covers building the runner, spawning and listing the
-        // child, and recording the job. No clock is read without an
-        // installed timing.
-        let start = self
-            .registry
-            .timing()
-            .map(|timing| (timing, self.clock.now()));
-        let (runner, stop) = Runner::new(
-            job_id.clone(),
-            session_id.clone(),
-            PathBuf::from(&output_path),
-            Arc::clone(&self.clock),
-            self.bound,
-            self.cap,
-            Arc::clone(&self.watch),
-            None,
-            timeout,
-        );
-        let (child, listing) = match runner.spawn(&self.launch, &launched) {
-            Ok(child) => child,
-            Err(source) => {
-                let message = format!("Starting the delegate failed: {source}.");
-                return crate::registry::failed(ErrorCode::ToolError, message.clone(), message);
+        let admitted = self.registry.admit(|| {
+            let job_id = mint_job_id();
+            let session_id = run::mint_session_id();
+            let output_path = self
+                .sessions
+                .join(&session_id.0)
+                .join("events.jsonl")
+                .to_string_lossy()
+                .into_owned();
+            let launched = Launched {
+                session_id: session_id.clone(),
+                job_id: job_id.clone(),
+                parent: self.parent.clone(),
+                model: resolved.clone(),
+                prompt,
+                workspace: self.workspace.clone(),
+                resume: false,
+            };
+            // The stamp covers building the runner, spawning and listing the
+            // child, and recording the job. No clock is read without an
+            // installed timing.
+            let start = self
+                .registry
+                .timing()
+                .map(|timing| (timing, self.clock.now()));
+            let (runner, stop) = Runner::new(
+                job_id.clone(),
+                session_id.clone(),
+                PathBuf::from(&output_path),
+                Arc::clone(&self.clock),
+                self.bound,
+                self.cap,
+                Arc::clone(&self.watch),
+                None,
+                timeout,
+            );
+            let (child, listing) = runner.spawn(&self.launch, &launched)?;
+            let delegate = DelegateStarted {
+                job_id: job_id.clone(),
+                delegate_session_id: session_id.clone(),
+                harness: "fiber".to_owned(),
+                // The resolved reference, with any role resolved: a full
+                // reference argument records the same text as before
+                // (`docs/events.md`, "`delegate_started`").
+                model: format!("fiber:{resolved}"),
+                workspace: self.workspace.to_string_lossy().into_owned(),
+                worktree: None,
+                forked_from: None,
+            };
+            let (started, finish) = self.registry.open_started(
+                job_id.clone(),
+                "delegate_spawn".to_owned(),
+                description,
+                output_path.clone(),
+                stop,
+                delegate.clone(),
+            );
+            std::thread::spawn(move || runner.drive(child, Some(listing), finish));
+            Ok::<_, std::io::Error>((
+                Output {
+                    content: vec![ContentPart::Text {
+                        text: format!("Started delegate {}. Its log is {}.", job_id.0, output_path),
+                    }],
+                    jobs: vec![
+                        JobRecord::Started(started),
+                        JobRecord::DelegateStarted(delegate),
+                    ],
+                    ..Output::default()
+                },
+                start,
+            ))
+        });
+        match admitted {
+            Ok((output, start)) => {
+                // Timing emission holds no start gate: its sink may enter the registry.
+                if let Some((timing, started)) = start {
+                    drop(timing(Op::JobsStart, None, Some(started)));
+                }
+                output
             }
-        };
-        let delegate = DelegateStarted {
-            job_id: job_id.clone(),
-            delegate_session_id: session_id.clone(),
-            harness: "fiber".to_owned(),
-            // The resolved reference, with any role resolved: a full
-            // reference argument records the same text as before
-            // (`docs/events.md`, "`delegate_started`").
-            model: format!("fiber:{resolved}"),
-            workspace: self.workspace.to_string_lossy().into_owned(),
-            worktree: None,
-            forked_from: None,
-        };
-        let (started, finish) = self.registry.open_started(
-            job_id.clone(),
-            "delegate_spawn".to_owned(),
-            description,
-            output_path.clone(),
-            stop,
-            delegate.clone(),
-        );
-        std::thread::spawn(move || runner.drive(child, Some(listing), finish));
-        // The job is recorded running and its own drive thread has been
-        // spawned: the start ends here. The guard writes exactly one
-        // `jobs.start` line on drop, with no tool name.
-        if let Some((timing, started)) = start {
-            drop(timing(Op::JobsStart, None, Some(started)));
-        }
-        Output {
-            content: vec![ContentPart::Text {
-                text: format!("Started delegate {}. Its log is {}.", job_id.0, output_path),
-            }],
-            jobs: vec![
-                JobRecord::Started(started),
-                JobRecord::DelegateStarted(delegate),
-            ],
-            ..Output::default()
+            Err(crate::registry::runs::Admit::Full) => {
+                let message = format!(
+                    "This session already runs {} delegates, the most it can run at once, so nothing was started; wait for one with `jobs wait` or stop one with `jobs stop`, then try again.",
+                    crate::registry::runs::DELEGATE_CAP
+                );
+                crate::registry::failed(ErrorCode::ToolError, message.clone(), message)
+            }
+            Err(crate::registry::runs::Admit::Start(source)) => {
+                let message = format!("Starting the delegate failed: {source}.");
+                crate::registry::failed(ErrorCode::ToolError, message.clone(), message)
+            }
         }
     }
 }

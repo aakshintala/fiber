@@ -408,6 +408,77 @@ fn a_spawn_error_fails_io_failed_with_no_job() {
 }
 
 #[test]
+fn concurrent_spawn_cap_is_checked_after_model_validation() {
+    for count in [9, 10] {
+        let rig = rig();
+        let mut finishes = Vec::new();
+        for _ in 0..count {
+            let id = crate::registry::mint_job_id();
+            finishes.push(rig.registry.open_started(
+                id.clone(),
+                "delegate_spawn".into(),
+                "fixture".into(),
+                "/unused".into(),
+                contract::jobs::Stop(Box::new(|| {})),
+                crate::support::delegate_started(&id.0),
+            ));
+        }
+        let spawned = tool(&rig);
+        if count == 10 {
+            rig.registry.install_timing(Arc::new(|_, _, _| {
+                panic!("a refused start writes no jobs.start timing")
+            }));
+        } else {
+            let mut failing = tool(&rig);
+            failing.launch = Arc::new(|_| Command::new("/nonexistent/fiber-cap-test"));
+            let output = failing.run(
+                &arguments("fiber:fake/m"),
+                &fakes::CancelToken::new(),
+                &Recorder::default(),
+            );
+            assert_eq!(output.error.unwrap().code, contract::ErrorCode::ToolError);
+            assert!(
+                output
+                    .content
+                    .iter()
+                    .map(text_of)
+                    .collect::<String>()
+                    .contains("Starting the delegate failed")
+            );
+        }
+        let invalid = spawned.run(
+            &arguments("unknown"),
+            &fakes::CancelToken::new(),
+            &Recorder::default(),
+        );
+        assert_eq!(
+            invalid.error.unwrap().code,
+            contract::ErrorCode::InvalidArguments
+        );
+        let output = spawned.run(
+            &arguments("fiber:fake/m"),
+            &fakes::CancelToken::new(),
+            &Recorder::default(),
+        );
+        if count == 9 {
+            let watchdog = child_group(&rig);
+            assert!(output.error.is_none());
+            assert_eq!(rig.launch_count.load(Ordering::SeqCst), 1);
+            rig.registry.stop_delegates();
+            watchdog.stand_down(DEADLINE);
+        } else {
+            let error = output.error.unwrap();
+            assert_eq!(error.code, contract::ErrorCode::ToolError);
+            assert_eq!(
+                error.message,
+                "This session already runs 10 delegates, the most it can run at once, so nothing was started; wait for one with `jobs wait` or stop one with `jobs stop`, then try again."
+            );
+            assert_eq!(rig.launch_count.load(Ordering::SeqCst), 0);
+        }
+    }
+}
+
+#[test]
 fn timeout_schema_and_argument_edges() {
     let rig = rig();
     let spawned = tool(&rig);

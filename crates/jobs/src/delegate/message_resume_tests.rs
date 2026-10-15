@@ -280,6 +280,32 @@ fn resume_rig_with_steer(
     }
 }
 
+#[test]
+fn a_resume_at_the_concurrency_cap_starts_nothing() {
+    let rig = resume_rig(
+        vec![],
+        vec![],
+        Arc::new(|_| panic!("cap precedes the boundary read")),
+    );
+    let (id, finish) = open_resume_delegate(&rig, "/unused");
+    end_resume_run(finish, &id, "done");
+    let _running: Vec<_> = (0..10)
+        .map(|_| open_resume_delegate(&rig, "/unused"))
+        .collect();
+    let output = rig.tool.run(
+        &resume_args(&id.0, "again"),
+        &CancelToken::new(),
+        &Recorder::default(),
+    );
+    assert_eq!(code_of(&output), ErrorCode::ToolError);
+    assert_eq!(
+        content(&output),
+        "This session already runs 10 delegates, the most it can run at once, so nothing was started; wait for one with `jobs wait` or stop one with `jobs stop`, then try again.\n"
+    );
+    assert!(rig.launched.lock().unwrap().is_empty());
+    assert!(rig.last_seq_calls.lock().unwrap().is_empty());
+}
+
 /// Opens a delegate whose log is `output`.
 fn open_resume_delegate(
     rig: &ResumeRig,
