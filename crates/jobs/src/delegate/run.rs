@@ -18,7 +18,8 @@ use std::time::{Duration, Instant};
 use contract::clock::{Clock, Wake};
 use contract::events::FiberExited;
 use contract::jobs::Stop;
-use contract::{Envelope, JobId, SessionId};
+use contract::shapes::Usage;
+use contract::{Envelope, JobId, PreSessionExit, SessionId};
 use rustix::process::Signal;
 
 use super::group;
@@ -633,13 +634,37 @@ fn drain(
     wake.wake();
 }
 
-/// A stdout line's `fiber_exited`, when the line is one.
+/// A stdout line's `fiber_exited`, when the line is one: either the
+/// normal session envelope, or the startup line a process prints when it
+/// fails before any session exists. The startup shape carries no session
+/// identity, so a line carrying one is judged as a session envelope or
+/// not at all: a malformed envelope never launders into a startup
+/// verdict, and a normal envelope never loses its usage or final
+/// message to the startup branch.
 fn fiber_exited_of_line(line: &str) -> Option<FiberExited> {
-    let envelope: Envelope = serde_json::from_str(line).ok()?;
-    if envelope.kind != "fiber_exited" {
-        return None;
+    let value: serde_json::Value = serde_json::from_str(line).ok()?;
+    let object = value.as_object()?;
+    if object.contains_key("session_id") {
+        let envelope: Envelope = serde_json::from_value(value).ok()?;
+        if envelope.kind != "fiber_exited" {
+            return None;
+        }
+        return fiber_exited_of(&envelope.payload);
     }
-    fiber_exited_of(&envelope.payload)
+    // No session identity: only the startup shape applies. It names its
+    // own kind, so any other kind is no verdict. The normalized result
+    // keeps the child's failure and exit code whole; nothing ran before
+    // the failure, so usage is zero and there is no final message,
+    // question or suspension.
+    let startup: PreSessionExit = serde_json::from_value(value).ok()?;
+    Some(FiberExited {
+        exit_code: startup.payload.exit_code,
+        usage: Usage::default(),
+        final_message: None,
+        error: Some(startup.payload.error),
+        suspended_on: None,
+        questions: None,
+    })
 }
 
 /// A watch envelope's `fiber_exited`.
