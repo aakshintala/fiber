@@ -109,10 +109,11 @@ A pull request runs only what its diff can affect.
   for every first-party package that has cases, not only the changed ones
   ("Testing an extension"). A change to Fiber's own code can break a package
   that did not change.
-- A diff that touches the code the release job runs, `crates/bench`,
-  `xtask/src/bench*`, `scripts/release-size` or `scripts/stored-results`,
-  also runs `release`, so a broken harness or judge fails its own pull request
-  rather than the backstop.
+- A diff that touches the code the release job runs or the table it judges
+  against, `crates/bench`, `xtask/src/bench*`, `scripts/release-size`,
+  `scripts/stored-results` or `docs/performance.md`, also runs `release`, so
+  a broken harness or judge fails its own pull request rather than the
+  backstop.
 - A diff that touches `crates/loop`, `crates/bench` or `xtask/src/bench*` also runs the "Session, memory kept after 10 busy turns" workload (`docs/performance.md`) in `release`. Any other pull request skips it, and the job summary says so. The loop holds the session's state, so a diff elsewhere rarely moves the row, and the backstop catches one that does.
 - On a pull request, the base binary runs only the timing rows the diff selects (`docs/performance.md`). A diff touching one of a row's crates runs it, and the job summary names each skipped row. `session start` runs on `crates/contract`, `crates/support`, `crates/log`, `crates/loop`, `crates/doors`, `crates/provider`, `crates/tools`, `crates/mcp`, `crates/jobs`, `crates/net`, `crates/worktree`, `crates/extensions`, `crates/config`, `crates/hub` or `crates/main`; `sessions list` on `crates/config`, `crates/cli`, `crates/doors`, `crates/hub`, `crates/contract`, `crates/support`, `crates/log` or `crates/main`; the terminal rows (`terminal first frame`, `terminal attach`, `terminal wheel`) on the session-start crates plus `crates/tui` or `crates/cli`; `paging` on `crates/tui`, `crates/contract`, `crates/support` or `crates/log`. Every other path runs every row, and a `.md` file under `crates/` counts as code. A regression that reaches a row through a dependency the mapping misses surfaces at the backstop, the same as the 10-busy-turns row above.
 
