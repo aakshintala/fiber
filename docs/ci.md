@@ -114,6 +114,7 @@ A pull request runs only what its diff can affect.
   also runs `release`, so a broken harness or judge fails its own pull request
   rather than the backstop.
 - A diff that touches `crates/loop`, `crates/bench` or `xtask/src/bench*` also runs the "Session, memory kept after 10 busy turns" workload (`docs/performance.md`) in `release`. Any other pull request skips it, and the job summary says so. The loop holds the session's state, so a diff elsewhere rarely moves the row, and the backstop catches one that does.
+- On a pull request, the base binary runs only the timing rows the diff selects (`docs/performance.md`). A diff touching one of a row's crates runs it, and the job summary names each skipped row. `session start` runs on `crates/contract`, `crates/support`, `crates/log`, `crates/loop`, `crates/doors`, `crates/provider`, `crates/tools`, `crates/mcp`, `crates/jobs`, `crates/net`, `crates/worktree`, `crates/extensions`, `crates/config`, `crates/hub` or `crates/main`; `sessions list` on `crates/config`, `crates/cli`, `crates/doors`, `crates/hub`, `crates/contract`, `crates/support`, `crates/log` or `crates/main`; the terminal rows (`terminal first frame`, `terminal attach`, `terminal wheel`) on the session-start crates plus `crates/tui` or `crates/cli`; `paging` on `crates/tui`, `crates/contract`, `crates/support` or `crates/log`. Every other path runs every row, and a `.md` file under `crates/` counts as code. A regression that reaches a row through a dependency the mapping misses surfaces at the backstop, the same as the 10-busy-turns row above.
 
 The selector has its own tests.
 
@@ -246,8 +247,8 @@ binary comes from the build cache when the backstop stored one for that
 commit, and is built otherwise. The scripts that build and measure both
 binaries are the head's, so a base older than a script still compares. It checks that the stripped head binary is
 under 24 MiB and runs the benchmarks that gate each pull request, the 10-busy-turns workload only when the selection above chooses it,
-(`docs/performance.md`), timing-only workloads at 3 runs and the rest at 5. The base binary
-runs the timing benchmarks only, in the same job on the same runner, so a
+(`docs/performance.md`), timing-only workloads and the `paging` jig at 3 runs and the rest at 5. The base binary
+runs only the timing benchmarks the selection chooses, in the same job on the same runner, so a
 timing comparison never crosses runners. Memory and exact rows compare
 against the backstop's stored results for the base commit, the
 `benchmarks-<sha>` artifact, and a memory or exact budget the base fails

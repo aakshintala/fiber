@@ -268,7 +268,7 @@ fn plan_prints_the_jobs_and_shards() {
     assert_eq!(code, 0);
     assert_eq!(
         out,
-        "jobs={\"bug_red\":true,\"lint\":true,\"mutants\":true,\"release\":false,\"test\":true,\"test_linux\":true}\nshards=[0,1,2]\nshard_total=3\nshard_timeout=40\nten_turns=false\n"
+        "jobs={\"bug_red\":true,\"lint\":true,\"mutants\":true,\"release\":false,\"test\":true,\"test_linux\":true}\nshards=[0,1,2]\nshard_total=3\nshard_timeout=40\nten_turns=false\nbase_skip=\n"
     );
     let bad = [
         "plan",
@@ -341,6 +341,27 @@ fn plan_runs_the_ten_turns_workload_only_where_it_is_measured() {
     assert!(!ten_turns(&dir));
     dir.write("crates/loop/src/status.rs", "//! status\n");
     assert!(ten_turns(&dir));
+}
+
+#[test]
+fn plan_skips_the_base_rows_the_diff_does_not_select() {
+    let dir = workspace();
+    let args = release_plan_args("main");
+    let base_skip = |dir: &TempDir| {
+        let (code, out) = xtask(dir, &args, &[], "");
+        assert_eq!(code, 0, "{out}");
+        let line = out
+            .lines()
+            .find(|line| line.starts_with("base_skip="))
+            .unwrap_or_default();
+        assert!(!line.is_empty(), "{out}");
+        line.to_owned()
+    };
+    assert_eq!(base_skip(&dir), "base_skip=");
+    dir.write("crates/tui/src/x.rs", "//! x\n");
+    assert_eq!(base_skip(&dir), "base_skip=session start,sessions list");
+    dir.write("crates/loop/src/status.rs", "//! status\n");
+    assert_eq!(base_skip(&dir), "base_skip=sessions list");
 }
 
 #[test]

@@ -7,10 +7,19 @@ use serde_json::{Value, json};
 use super::brand_string;
 #[cfg(target_os = "linux")]
 use super::host_cpu;
-use super::{Args, Only, bench, document, measure_all, model_name, parse, selected};
+use super::{
+    Args, Only, attach, bench, busy, document, idle, listing, measure_all, model_name, paging,
+    parse, resume, selected, timing_names, wheel,
+};
 
 fn args(line: &str) -> Result<Args, String> {
     parse(line.split_whitespace().map(str::to_owned))
+}
+
+/// `parse` from whole arguments: `args` splits on spaces, which workload
+/// names contain, so `--skip-rows` values travel as one argument here.
+fn argv(words: &[&str]) -> Result<Args, String> {
+    parse(words.iter().map(|word| (*word).to_owned()))
 }
 
 #[test]
@@ -26,6 +35,7 @@ fn the_defaults_are_five_runs_a_ten_second_window_and_every_workload() {
             only: Only::All,
             paging: None,
             skip_ten_turns: false,
+            skip_rows: Vec::new(),
         })
     );
 }
@@ -43,6 +53,7 @@ fn every_flag_sets_its_value() {
             only: Only::Timing,
             paging: None,
             skip_ten_turns: false,
+            skip_rows: Vec::new(),
         })
     );
 }
@@ -91,7 +102,7 @@ fn counts(line: &str) -> BTreeMap<&'static str, (u32, u32)> {
 }
 
 #[test]
-fn a_pull_request_runs_timing_only_workloads_three_times_and_the_rest_five() {
+fn a_pull_request_runs_timing_workloads_three_times_and_the_rest_five() {
     let got = counts("--fiber f --out o --runs 5 --timing-runs 3 --paging j");
     assert_eq!(
         got,
@@ -104,7 +115,7 @@ fn a_pull_request_runs_timing_only_workloads_three_times_and_the_rest_five() {
             ("web_fetch", (5, 5)),
             ("resume 20,000 tokens", (5, 5)),
             ("resume 2,000,000 tokens", (5, 5)),
-            ("paging", (5, 5)),
+            ("paging", (3, 3)),
             ("fsyncs", (1, 1)),
             ("10 busy turns", (5, 5)),
             ("sessions list", (1, 3)),
@@ -124,8 +135,25 @@ fn a_pull_request_runs_timing_only_workloads_three_times_and_the_rest_five() {
             &"terminal wheel",
         ]
     );
-    assert_eq!(timing["paging"], (5, 5));
+    assert_eq!(timing["paging"], (3, 3));
     assert_eq!(timing["sessions list"], (1, 3));
+}
+
+#[test]
+fn paging_follows_the_timing_count_at_two_three_and_four() {
+    // Each new comparison gets a test that fails when it flips: a mutant
+    // swapping `timing_runs` for `runs` fails every count here.
+    for n in [2, 3, 4] {
+        let got = counts(&format!(
+            "--fiber f --out o --runs 5 --timing-runs {n} --paging j"
+        ));
+        assert_eq!(got["paging"], (n, n), "timing-runs {n}");
+        assert_eq!(got["session start"], (n, n), "timing-runs {n}");
+        assert_eq!(got["session idle"], (5, 5), "timing-runs {n}");
+        assert_eq!(got["terminal attach"], (1, 5), "timing-runs {n}");
+    }
+    let got = counts("--fiber f --out o --runs 4 --paging j");
+    assert_eq!(got["paging"], (4, 4));
 }
 
 #[test]
@@ -221,6 +249,132 @@ fn measure_all_hands_each_workload_its_counts_and_records_them() {
     assert_eq!(metrics["session start_m"].len(), 3);
     assert!(!metrics.contains_key("busy turn_m"));
     assert!(!metric_runs.contains_key("busy turn_m"));
+}
+
+#[test]
+fn skip_rows_leaves_exactly_the_named_timing_workloads_out() {
+    let parsed = argv(&[
+        "--fiber",
+        "f",
+        "--out",
+        "o",
+        "--paging",
+        "j",
+        "--skip-rows",
+        "session start,sessions list",
+    ])
+    .unwrap();
+    assert_eq!(
+        parsed.skip_rows,
+        vec!["session start".to_owned(), "sessions list".to_owned()]
+    );
+    let all = names("--fiber f --out o --paging j");
+    let kept: Vec<&str> = selected(&parsed)
+        .iter()
+        .map(|(workload, _, _)| workload.name)
+        .collect();
+    assert!(!kept.contains(&"session start"), "{kept:?}");
+    assert!(!kept.contains(&"sessions list"), "{kept:?}");
+    assert_eq!(kept.len(), 12, "{kept:?}");
+    assert_eq!(kept.len() + 2, all.len());
+}
+
+#[test]
+fn skip_rows_rejects_anything_but_a_timing_workload() {
+    // Each rejected value names the value, so a typo points at itself.
+    for (value, said) in [
+        ("no such workload", "no such workload"),
+        ("10 busy turns", "10 busy turns"),
+        ("session idle", "session idle"),
+        ("session start,", "session start,"),
+        ("session start,", "is not a timing workload"),
+    ] {
+        let err = argv(&["--fiber", "f", "--out", "o", "--skip-rows", value]).unwrap_err();
+        assert!(err.contains(said), "{value}: {err}");
+    }
+    // An empty value skips nothing; a missing value needs one.
+    assert_eq!(
+        argv(&["--fiber", "f", "--out", "o", "--skip-rows", ""])
+            .unwrap()
+            .skip_rows,
+        Vec::<String>::new()
+    );
+    let err = parse(
+        [
+            "--fiber".to_owned(),
+            "f".to_owned(),
+            "--out".to_owned(),
+            "o".to_owned(),
+            "--skip-rows".to_owned(),
+        ]
+        .into_iter(),
+    )
+    .unwrap_err();
+    assert!(err.contains("needs a value"), "{err}");
+}
+
+#[test]
+fn the_results_document_records_skipped_rows_after_ten_turns() {
+    let parsed = argv(&[
+        "--fiber",
+        "f",
+        "--out",
+        "o",
+        "--skip-rows",
+        "session start,paging",
+        "--skip-ten-turns",
+    ])
+    .unwrap();
+    let recorded = document(
+        &parsed,
+        "CPU-X",
+        None,
+        BTreeMap::new(),
+        BTreeMap::new(),
+        vec![],
+    );
+    assert_eq!(
+        recorded["skipped"],
+        json!(["10 busy turns", "session start", "paging"])
+    );
+    let parsed = argv(&["--fiber", "f", "--out", "o", "--skip-rows", "paging"]).unwrap();
+    let recorded = document(
+        &parsed,
+        "CPU-X",
+        None,
+        BTreeMap::new(),
+        BTreeMap::new(),
+        vec![],
+    );
+    assert_eq!(recorded["skipped"], json!(["paging"]));
+}
+
+#[test]
+fn skip_rows_names_exactly_the_timing_workloads() {
+    // The pinned literal list of the six names, cited by
+    // `xtask/src/select/plan_tests.rs`: each side names the other.
+    let literal = [
+        "session start",
+        "terminal first frame",
+        "paging",
+        "sessions list",
+        "terminal attach",
+        "terminal wheel",
+    ];
+    assert_eq!(timing_names(), literal);
+    let every: Vec<&str> = idle::WORKLOADS
+        .iter()
+        .chain(&busy::WORKLOADS)
+        .chain(&busy::ONCE)
+        .chain(&resume::WORKLOADS)
+        .chain(&paging::WORKLOADS)
+        .chain(listing::SAMPLED.iter())
+        .chain(attach::SAMPLED.iter())
+        .chain(wheel::SAMPLED.iter())
+        .filter(|workload| workload.timing)
+        .map(|workload| workload.name)
+        .collect();
+    assert_eq!(every, literal);
 }
 
 #[test]
