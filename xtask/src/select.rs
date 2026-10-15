@@ -273,8 +273,7 @@ pub(crate) fn runtime_read_mismatches(
         };
         match tokens.next() {
             None => {}
-            Some(TokenTree::Punct(mark))
-                if mark.as_char() == ',' && tokens.next().is_none() => {}
+            Some(TokenTree::Punct(mark)) if mark.as_char() == ',' && tokens.next().is_none() => {}
             _ => return None,
         }
         joined.get(&name.to_string()).cloned()
