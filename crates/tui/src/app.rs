@@ -208,14 +208,17 @@ pub(crate) enum Target {
     Copy { reply: usize, block: usize },
 }
 
-/// The terminal's state.
+/// An opening pass awaiting its reopening line or final sequence.
 enum Pass {
     Pending,
     Until(Seq),
 }
 
+/// The terminal's state.
 pub(crate) struct App {
+    /// Sessions whose opening passes hold history requests.
     passes: Vec<(SessionId, Pass)>,
+    /// History command ids whose late answers are discarded after reopening.
     abandoned_history: BTreeSet<String>,
     /// The launch directory `start` names.
     workspace: PathBuf,
