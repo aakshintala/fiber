@@ -604,8 +604,9 @@ a click on it returns too. The views are:
   whole call", dim. Esc returns to the conversation with the call's row
   still focused.
 - **Search results:** every match with its surrounding lines ("Search").
-  The first row is "3 of 5 · ⌕ <query>". Each match is the lines around it,
-  the match on the `match` tint and the
+  The first row is "3 of 5 · ⌕ <query>". Each match is the lines around it
+  under a path row ending in `turn N`, dim, right-aligned, the
+  match on the `match` tint and the
   current match on `match_current`. The last row is "Enter jumps to the
   match", dim.
 - **The tools view,** `/tools` (`docs/tools.md`, "Seeing the tools"): every
@@ -1238,7 +1239,11 @@ to the previous; both wrap.
 
 Ctrl+F a second time, or a click on the "3 of 41" count, opens the search
 results as a swapped view ("Swapped views"): every match, one row each, with
-the lines around it. Enter, or a click on a row, jumps to that match in the
+the lines around it. Each match's first row ends with `turn N`, dim and
+right-aligned, where N is the number of the turn the match is in, counted
+from 1 as the usage view counts turns; a match outside any turn, or a row
+too narrow to hold it after the path, has no label, and the path is never
+cut for it. Enter, or a click on a row, jumps to that match in the
 conversation and closes the view.
 
 Search is Ctrl+F, and Cmd+F where the terminal forwards it. Ghostty binds

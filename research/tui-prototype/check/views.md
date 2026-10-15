@@ -7,7 +7,7 @@ One run per case: `--view-case CASE`.
 - running: two rows per running delegate, the second ending in its spend and its context bar with the percent, and one row per running job, in start order, each opening that item's view.
 - usage: usage broken down by turn, by model and by delegate, each with tokens by kind, billed and subscription cost, and the budget left.
 - changed-files: the changed files with the chosen file's hunks as a guttered diff against HEAD, differing words in reverse video on paired lines, the untracked file wholly added, removals red and additions green.
-- search-results: every match one row each with the lines around it, the current match brighter, and the jump hint.
+- search-results: every match one row each with the lines around it, each match's header row ending in a dim `turn N`, the current match brighter, and the jump hint.
 - tools: tools by source with state and size, two on/off switches per MCP or extension tool, built-ins without a switch, and the reload cost.
 - rules: global rules then this project's, each with its prefix, when and from which session it was added, and its red ✕.
 - settings: the keys as aligned columns under a dim header row, key, effective value and the layer it comes from (global, project, repository or default), then the reload cost and the file hint.
