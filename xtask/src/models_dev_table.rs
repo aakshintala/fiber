@@ -47,6 +47,10 @@ pub(crate) struct Package {
     /// the same keys. Every level is a thinking-vocabulary name (`off`,
     /// `minimal`, `low`, `medium`, `high`, `xhigh`, `max`); a `None`
     /// default leaves the vendor default in force by sending no level.
+    /// An empty `levels` with no default means the model takes no level.
+    /// A gateway (`opencode-go`, `opencode-zen`) model whose id no row
+    /// here names takes the row of the direct-vendor package listing the
+    /// same id exactly, unless its own table names one.
     pub(crate) thinking: &'static [(&'static str, &'static [&'static str], Option<&'static str>)],
 }
 
@@ -57,8 +61,11 @@ const OFF_LOW_MEDIUM_HIGH: &[&str] = &["off", "low", "medium", "high"];
 const OFF_LOW_MEDIUM_HIGH_XHIGH: &[&str] = &["off", "low", "medium", "high", "xhigh"];
 const MINIMAL_LOW_MEDIUM_HIGH: &[&str] = &["minimal", "low", "medium", "high"];
 const MINIMAL_LOW_MEDIUM_HIGH_XHIGH: &[&str] = &["minimal", "low", "medium", "high", "xhigh"];
+const MINIMAL_LOW_MEDIUM_HIGH_XHIGH_MAX: &[&str] =
+    &["minimal", "low", "medium", "high", "xhigh", "max"];
 const MINIMAL_HIGH: &[&str] = &["minimal", "high"];
 const LOW_MEDIUM_HIGH: &[&str] = &["low", "medium", "high"];
+const LOW_HIGH_MAX: &[&str] = &["low", "high", "max"];
 const LOW_MEDIUM_HIGH_XHIGH: &[&str] = &["low", "medium", "high", "xhigh"];
 const LOW_MEDIUM_HIGH_XHIGH_MAX: &[&str] = &["low", "medium", "high", "xhigh", "max"];
 const MEDIUM_XHIGH: &[&str] = &["medium", "xhigh"];
@@ -282,17 +289,15 @@ const MUSE: Package = Package {
         "openai-responses",
         r#"{"extra_body":{"include":["reasoning.encrypted_content","web_search_call.results"]},"web_search":"web_search"}"#,
     )],
-    by_model: &[
-        (
-            "muse-spark-1.3",
-            r#"{"thinking_levels":["minimal","low","medium","high","xhigh","max"]}"#,
-        ),
+    by_model: &[],
+    thinking: &[
+        ("muse-spark-1.3", MINIMAL_LOW_MEDIUM_HIGH_XHIGH_MAX, None),
         (
             "muse-spark-1.3-contributor",
-            r#"{"thinking_levels":["minimal","low","medium","high","xhigh","max"]}"#,
+            MINIMAL_LOW_MEDIUM_HIGH_XHIGH_MAX,
+            None,
         ),
     ],
-    thinking: &[],
 };
 
 /// The cache-key header every OpenCode model sends.
@@ -300,6 +305,11 @@ const OPENCODE_SESSION: &str = r#"{"compat":{"cache_key_header":"x-opencode-sess
 /// The same, plus the token-limit field for `openai-completions` models.
 const OPENCODE_COMPLETIONS: &str =
     r#"{"compat":{"cache_key_header":"x-opencode-session","max_tokens":true}}"#;
+/// A gateway Claude model on a legacy budget tier: the budget flag beside
+/// the gateway cache-key header, since a table layer replaces the whole
+/// `compat` object rather than deep-merging it.
+const GATEWAY_THINKING_BUDGET: &str =
+    r#"{"compat":{"cache_key_header":"x-opencode-session","thinking_budget":true}}"#;
 
 /// OpenCode Go: a subscription, priced at the API rates.
 const OPENCODE_GO: Package = Package {
@@ -321,11 +331,24 @@ const OPENCODE_GO: Package = Package {
         ("openai-responses", OPENCODE_SESSION),
         ("google-generative-ai", OPENCODE_SESSION),
     ],
-    by_model: &[(
-        "muse-spark-1.3-contributor",
-        r#"{"thinking_levels":["minimal","low","medium","high","xhigh","max"]}"#,
-    )],
-    thinking: &[],
+    by_model: &[],
+    thinking: &[
+        // Normalized from `by_model`: the vendor's own row, kept verbatim.
+        (
+            "muse-spark-1.3-contributor",
+            MINIMAL_LOW_MEDIUM_HIGH_XHIGH_MAX,
+            None,
+        ),
+        // https://docs.x.ai/developers/model-capabilities/text/reasoning:
+        // `reasoning.effort` takes low, medium, high and xhigh (4.6 and
+        // later); reasoning cannot be disabled, so no `off`.
+        ("grok-4.6", LOW_MEDIUM_HIGH_XHIGH, None),
+        ("grok-4.7", LOW_MEDIUM_HIGH_XHIGH, None),
+        // https://platform.moonshot.ai/docs/guide/use-reasoning-effort:
+        // K3 configures reasoning effort with top-level `reasoning_effort`,
+        // supporting low, high and max with a max default.
+        ("kimi-k3", LOW_HIGH_MAX, None),
+    ],
 };
 
 /// OpenCode Zen: billed per token. Its Gemini models are kept: one request
@@ -351,15 +374,35 @@ const OPENCODE_ZEN: Package = Package {
     ],
     by_model: &[
         (
-            "muse-spark-1.3",
-            r#"{"thinking_levels":["minimal","low","medium","high","xhigh","max"]}"#,
-        ),
-        (
             "gpt-6.1-sol",
             r#"{"extra_body":{"include":["reasoning.encrypted_content","web_search_call.action.sources"]},"web_search":"web_search"}"#,
         ),
+        // Each inherits a legacy Claude budget-tier row (off, minimal, low,
+        // medium, high), so it takes the token budget instead of adaptive
+        // thinking (`docs/model-routing.md`, "Thinking").
+        ("claude-haiku-4-5", GATEWAY_THINKING_BUDGET),
+        ("claude-opus-4-5", GATEWAY_THINKING_BUDGET),
+        ("claude-sonnet-4", GATEWAY_THINKING_BUDGET),
+        ("claude-sonnet-4-5", GATEWAY_THINKING_BUDGET),
     ],
-    thinking: &[],
+    thinking: &[
+        // Normalized from `by_model`: the vendor's own row, kept verbatim.
+        ("muse-spark-1.3", MINIMAL_LOW_MEDIUM_HIGH_XHIGH_MAX, None),
+        // https://docs.anthropic.com/en/docs/build-with-claude/extended-thinking:
+        // Claude Sonnet 4 is an earlier Claude 4 model, so it keeps manual
+        // budget thinking; the compat layer above carries the budget flag.
+        ("claude-sonnet-4", OFF_MINIMAL_LOW_MEDIUM_HIGH, None),
+        // https://docs.x.ai/developers/model-capabilities/text/reasoning:
+        // `reasoning.effort` takes low, medium and high on 4.5, plus xhigh
+        // on 4.6 and later; reasoning cannot be disabled, so no `off`.
+        ("grok-4.5", LOW_MEDIUM_HIGH, None),
+        ("grok-4.6", LOW_MEDIUM_HIGH_XHIGH, None),
+        ("grok-4.7", LOW_MEDIUM_HIGH_XHIGH, None),
+        // https://platform.moonshot.ai/docs/guide/use-reasoning-effort:
+        // K3 configures reasoning effort with top-level `reasoning_effort`,
+        // supporting low, high and max with a max default.
+        ("kimi-k3", LOW_HIGH_MAX, None),
+    ],
 };
 
 /// The seven first-party provider files generated from models.dev.

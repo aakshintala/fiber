@@ -636,7 +636,12 @@ fn thinking_entries_name_snapshot_models_and_known_levels() {
                 "{id} is not a models.dev model under `{}`",
                 package.source
             );
-            assert!(!levels.is_empty(), "{id} lists no thinking level");
+            if levels.is_empty() {
+                // An explicitly empty row means the model takes no level,
+                // so it names no default either.
+                assert!(default.is_none(), "{id} lists no level but names a default");
+                continue;
+            }
             for level in *levels {
                 assert!(
                     VOCABULARY.contains(level),
@@ -684,6 +689,43 @@ fn a_model_without_a_thinking_entry_declares_none() {
     let plain = generated_model(&output, "plain").unwrap();
     assert!(plain.get("thinking_levels").is_none());
     assert!(plain.get("thinking_default").is_none());
+}
+
+#[test]
+fn an_explicitly_empty_row_writes_empty_levels_with_no_default() {
+    let mut package = fixed_package("s", "openai-responses");
+    package.thinking = &[("m", &[], None)];
+    let (output, _) = generate_one(&package, &[("m", tool_model(json!({})))]);
+    let model = generated_model(&output, "m").unwrap();
+    assert_eq!(model["thinking_levels"], json!([]));
+    assert!(model.get("thinking_default").is_none());
+}
+
+#[test]
+fn a_legacy_claude_compat_layer_keeps_the_gateway_header() {
+    // A gateway Claude model inheriting a legacy budget-tier row takes
+    // adaptive thinking off via `compat.thinking_budget`; table layers
+    // replace by key rather than deep-merging, so its model-specific
+    // layer repeats the gateway `cache_key_header` or auth breaks.
+    let mut gateway = Package {
+        protocol: ProtocolRule::Fixed("anthropic-messages"),
+        ..gateway_package("g")
+    };
+    gateway.by_protocol = &[(
+        "anthropic-messages",
+        r#"{"compat":{"cache_key_header":"x-opencode-session"}}"#,
+    )];
+    gateway.by_model = &[(
+        "m",
+        r#"{"compat":{"cache_key_header":"x-opencode-session","thinking_budget":true}}"#,
+    )];
+    gateway.thinking = &[("m", &["off", "minimal", "low", "medium", "high"], None)];
+    let (output, _) = generate_one(&gateway, &[("m", tool_model(json!({})))]);
+    let model = generated_model(&output, "m").unwrap();
+    assert_eq!(
+        model["compat"],
+        json!({"cache_key_header": "x-opencode-session", "thinking_budget": true})
+    );
 }
 
 #[test]
