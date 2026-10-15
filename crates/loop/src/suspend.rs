@@ -133,7 +133,12 @@ impl Loop {
             action,
             batch,
             started,
+            // An interaction never re-enters the permission order, so a
+            // resumed question carries no guard: dropping it here closes
+            // the segment once, outside every lock.
+            permission,
         } = suspended;
+        drop(permission);
         let request = pending.request_id().clone();
         // Armed with the re-raise: a shutdown before it leaves the request
         // pending, so the next resume raises it again (`docs/invocation.md`,

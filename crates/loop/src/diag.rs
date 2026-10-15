@@ -53,6 +53,15 @@ impl SessionDiag {
         log::diag::timed(self.writer(), op, None, None)
     }
 
+    /// Starts the one timer for a tool operation with the tool's
+    /// registered name, or nothing at `info` before any clock read,
+    /// clone or allocation, through the same writer above. The name is
+    /// the session map's key for the admitted call, borrowed so an
+    /// untimed level clones nothing.
+    pub(crate) fn timed_tool(&self, op: Op, registered_name: &str) -> Option<Timer> {
+        log::diag::timed(self.writer(), op, Some(registered_name), None)
+    }
+
     /// Whether the first preamble construction already emitted its scope.
     pub(crate) fn preamble_done(&self) -> bool {
         self.preamble_done

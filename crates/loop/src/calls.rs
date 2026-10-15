@@ -478,6 +478,14 @@ impl Loop {
             Ok(prepared) => prepared,
             Err(failed) => return Ok(Err(failed)),
         };
+        // The permission order starts once the call names a registered
+        // tool and fits its schema: the guard spans the judge, the
+        // reviewer and a person's wait, and closes at the decision,
+        // before any run. `call.name` is the session map's key: `checked`
+        // above refused anything else, so no lookup or allocation here.
+        let _permission = self
+            .diag
+            .timed_tool(contract::diag::Op::ToolPermission, &call.name);
         // The rules are read once for every call, including ones that later
         // fast-path, so a revoked rule applies to the next call judged
         // (`docs/tui.md`, "/rules"). `judge` runs the credential deny before
@@ -542,6 +550,12 @@ impl Loop {
         turn: &TurnId,
         resolved: PermissionResolved,
     ) -> Result<(), Error> {
+        // One-shot test fault, outside every commit: the error test proves
+        // a failed decision write ends the turn with the original error.
+        #[cfg(test)]
+        if crate::tool_timing_tests::take_fail_decision_write() {
+            return Err(crate::tool_timing_tests::log_fault());
+        }
         self.append(&Event::PermissionResolved(resolved), turn, Some(id))
     }
 

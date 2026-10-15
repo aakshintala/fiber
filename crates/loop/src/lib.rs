@@ -76,6 +76,8 @@ mod suspend;
 mod switch;
 #[cfg(test)]
 mod timing_tests;
+#[cfg(test)]
+mod tool_timing_tests;
 mod turn;
 mod usage;
 mod util;
