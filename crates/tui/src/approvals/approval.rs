@@ -9,6 +9,7 @@ use ratatui::style::{Modifier, Style};
 use super::Mark;
 use crate::format;
 use crate::keys::{Edit, Key};
+use std::ops::Range;
 
 /// A choice on the approval panel.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -89,6 +90,18 @@ const REMEMBER: Style = Style::new().fg(crate::theme::Role::Info.color());
 
 /// The hint below the choices (`docs/tui.md`, "An approval").
 const HINT: &str = "↑↓ choose · Enter confirms · typing goes to the feedback · click a choice";
+
+/// The styled run `bytes` on the panel's `line`, or nothing when the run
+/// is empty: an empty run draws nothing, so it leaves no mark. Callers
+/// extend the panel's marks with it instead of guarding the push with a
+/// comparison, so the guard cannot mutate.
+fn marked(line: usize, bytes: Range<usize>, style: Style) -> Option<Mark> {
+    if bytes.is_empty() {
+        None
+    } else {
+        Some(Mark { line, bytes, style })
+    }
+}
 
 impl Approval {
     /// The rule an allow can remember, offered only at review.
@@ -271,27 +284,11 @@ impl Approval {
                 style: HEAD,
             });
         }
-        if head.len() < session_end {
-            marks.push(Mark {
-                line: 0,
-                bytes: head.len()..session_end,
-                style: SESSION,
-            });
+        marks.extend(marked(0, head.len()..session_end, SESSION));
+        if !self.reversible {
+            marks.extend(marked(0, session_end..irreversible_end, LOUD));
         }
-        if !self.reversible && session_end < irreversible_end {
-            marks.push(Mark {
-                line: 0,
-                bytes: session_end..irreversible_end,
-                style: LOUD,
-            });
-        }
-        if right_from < last {
-            marks.push(Mark {
-                line: 0,
-                bytes: right_from..last,
-                style: DIM,
-            });
-        }
+        marks.extend(marked(0, right_from..last, DIM));
         // Then the tool's name bold in `info` and its main argument bold,
         // or the tool alone when the summary is empty.
         if let Some((tool, arguments)) = &self.call {
@@ -308,13 +305,7 @@ impl Approval {
             }
             if !arguments.is_empty() {
                 let argument_from = tool_end.saturating_add(1).min(end);
-                if argument_from < end {
-                    marks.push(Mark {
-                        line,
-                        bytes: argument_from..end,
-                        style: ARGUMENT,
-                    });
-                }
+                marks.extend(marked(line, argument_from..end, ARGUMENT));
             }
         }
         // Then the dim facts line, a blank row, the numbered choices, a
@@ -322,13 +313,7 @@ impl Approval {
         let line = lines.len();
         lines.push(self.facts());
         let end = lines.last().map(String::len).unwrap_or_default();
-        if end > 0 {
-            marks.push(Mark {
-                line,
-                bytes: 0..end,
-                style: DIM,
-            });
-        }
+        marks.extend(marked(line, 0..end, DIM));
         lines.push(String::new());
         let mut caret = None;
         for (index, choice) in self.choices().iter().enumerate() {
@@ -353,41 +338,25 @@ impl Approval {
                 });
             }
             let number_end = head_from.saturating_sub(1).min(end);
-            if number_from < number_end {
-                marks.push(Mark {
-                    line,
-                    bytes: number_from..number_end,
-                    style: DIM,
-                });
-            }
+            marks.extend(marked(line, number_from..number_end, DIM));
             let tail_from = head_from.saturating_add(head.len()).min(end);
-            if focused && head_from < tail_from {
-                marks.push(Mark {
-                    line,
-                    bytes: head_from..tail_from,
-                    style: BOLD,
-                });
+            if focused {
+                marks.extend(marked(line, head_from..tail_from, BOLD));
             }
             if let Some((tail, style)) = &tail {
                 let tail_end = tail_from.saturating_add(tail.len()).min(end);
-                if tail_from < tail_end {
-                    let style = if focused {
-                        if style == &DIM {
-                            DIM_BOLD
-                        } else if style == &REMEMBER {
-                            REMEMBER_BOLD
-                        } else {
-                            BOLD
-                        }
+                let style = if focused {
+                    if style == &DIM {
+                        DIM_BOLD
+                    } else if style == &REMEMBER {
+                        REMEMBER_BOLD
                     } else {
-                        *style
-                    };
-                    marks.push(Mark {
-                        line,
-                        bytes: tail_from..tail_end,
-                        style,
-                    });
-                }
+                        BOLD
+                    }
+                } else {
+                    *style
+                };
+                marks.extend(marked(line, tail_from..tail_end, style));
             }
             if focused && *choice == Choice::Deny && !self.feedback.is_empty() {
                 let col = lines
@@ -401,13 +370,7 @@ impl Approval {
         let line = lines.len();
         lines.push(HINT.to_owned());
         let end = lines.last().map(String::len).unwrap_or_default();
-        if end > 0 {
-            marks.push(Mark {
-                line,
-                bytes: 0..end,
-                style: DIM,
-            });
-        }
+        marks.extend(marked(line, 0..end, DIM));
         (lines, marks, caret)
     }
 
