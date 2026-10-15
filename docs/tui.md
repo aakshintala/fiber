@@ -605,7 +605,7 @@ a click on it returns too. The views are:
   still focused.
 - **Search results:** every match with its surrounding lines ("Search").
   The first row is "3 of 5 · ⌕ <query>". Each match is the lines around it
-  under a path row ending in `turn N`, dim, right-aligned ("Search"), the
+  under a path row ending in `turn N`, dim, right-aligned, the
   match on the `match` tint and the
   current match on `match_current`. The last row is "Enter jumps to the
   match", dim.
