@@ -104,6 +104,10 @@ impl ChildFixture {
 
 /// The `builtin_timed` session over the fixture's stub `fiber`, which
 /// answers image calls from this invocation's stem.
+#[allow(
+    clippy::type_complexity,
+    reason = "one test session: its tools and shared images"
+)]
 fn session(
     fixture: &ChildFixture,
     timing: Option<Timing>,
