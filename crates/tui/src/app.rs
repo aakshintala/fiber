@@ -10,8 +10,8 @@ use std::path::PathBuf;
 use std::time::{Duration, Instant};
 
 use contract::events::{
-    CommandAccepted, CommandRejected, CommandResult, Notice, SessionNamed, ShellCommand, SteeringQueue,
-    TurnStarted,
+    CommandAccepted, CommandRejected, CommandResult, Notice, SessionNamed, ShellCommand,
+    SteeringQueue, TurnStarted,
 };
 use contract::shapes::ContentPart;
 use contract::{Envelope, HubLine, Seq, SessionId};
@@ -553,10 +553,15 @@ impl App {
                     });
                 }
                 if line.kind == "command_accepted"
-                    && let Some(CommandAccepted { result: Some(CommandResult::Subscribe { last_seq }), .. }) = read!(line, CommandAccepted)
+                    && let Some(CommandAccepted {
+                        result: Some(CommandResult::Subscribe { last_seq }),
+                        ..
+                    }) = read!(line, CommandAccepted)
                 {
-                    self.passes.retain(|(session, _)| session != &line.session_id);
-                    self.passes.push((line.session_id.clone(), Pass::Until(last_seq)));
+                    self.passes
+                        .retain(|(session, _)| session != &line.session_id);
+                    self.passes
+                        .push((line.session_id.clone(), Pass::Until(last_seq)));
                 }
             }
             Line::Hub(line) => {
@@ -567,11 +572,14 @@ impl App {
                     "stream_reopened" => {
                         self.passes.retain(|(held, _)| held.0 != session);
                         if let Some(last) = line.payload.get("last_seq").and_then(Value::as_u64) {
-                            self.passes.push((SessionId(session.to_owned()), Pass::Until(Seq(last))));
+                            self.passes
+                                .push((SessionId(session.to_owned()), Pass::Until(Seq(last))));
                         }
                     }
                     "stream_closed" | "session_left" => {
-                        self.passes.retain(|(held, pass)| held.0 != session || matches!(pass, Pass::Pending));
+                        self.passes.retain(|(held, pass)| {
+                            held.0 != session || matches!(pass, Pass::Pending)
+                        });
                     }
                     _ => {}
                 }

@@ -247,7 +247,11 @@ impl Connection {
                     return link::history_answer(&line).map(Answer::Lines);
                 }
                 Input::Hub(Line::Hub(line)) if line.kind == "stream_reopened" => {
-                    if let Some(session) = line.payload.get("session_id").and_then(serde_json::Value::as_str) {
+                    if let Some(session) = line
+                        .payload
+                        .get("session_id")
+                        .and_then(serde_json::Value::as_str)
+                    {
                         app.reopen_pending(SessionId(session.to_owned()));
                     }
                     app.abandon_history(id.to_owned());
