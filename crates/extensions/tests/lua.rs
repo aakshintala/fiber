@@ -467,7 +467,7 @@ fn a_command_the_extension_never_registered_is_unknown() {
 /// A `while true` loop, in `body` after the go module, is stopped at the
 /// callback's 50 ms timeout. The go module is the callback's first statement,
 /// so the advance lands after the VM's clock check, and the caller is already
-/// parked at the grace. One case per test: five of them in one test would put
+/// parked at its deadline. One case per test: five of them in one test would put
 /// its deadlines over the 60 s sum.
 #[allow(clippy::unwrap_used, reason = "a test helper; a failure is the test's")]
 #[allow(clippy::expect_used, reason = "a test helper; a failure is the test's")]
@@ -493,13 +493,12 @@ fn spinning_callback_stops_at_its_timeout(command: &'static str, body: &str) {
     Deadline::after(WAIT)
         .recv(&went)
         .expect("waited for the callback to pass its clock check");
-    let parked_at = asked + Duration::from_millis(50) + GRACE;
+    let parked_at = asked + Duration::from_millis(50);
     assert!(
         clock.await_parked(parked_at, WAIT),
-        "waited for {command} to park at its grace"
+        "waited for {command} to park at its deadline"
     );
-    // The hook stops the loop at the deadline. The grace is the caller's
-    // wait, and it has not run out.
+    // The interrupt stops the loop at the deadline.
     clock.advance(Duration::from_millis(50));
     let err = Deadline::after(WAIT)
         .recv(&result)
@@ -584,7 +583,7 @@ fn a_callback_the_hook_cannot_stop_abandons_the_vm_and_the_session_survives() {
     // The go module is the callback's first statement. `spin_gc` then loops
     // in a finalizer, where the hook is off. `spin_find` is one backtracking
     // C call, which the hook does not interrupt. The advance comes after the
-    // go module and after the caller has parked at the grace.
+    // go module and after the caller has parked at its deadline.
     for (command, body) in [
         (
             "spin_gc",
@@ -613,10 +612,10 @@ fn a_callback_the_hook_cannot_stop_abandons_the_vm_and_the_session_survives() {
         Deadline::after(WAIT)
             .recv(&went)
             .expect("waited for the callback to pass its clock check");
-        let parked_at = asked + Duration::from_millis(50) + GRACE;
+        let parked_at = asked + Duration::from_millis(50);
         assert!(
             clock.await_parked(parked_at, WAIT),
-            "waited for {command} to park at its grace"
+            "waited for {command} to park at its deadline"
         );
         clock.advance(Duration::from_millis(50) + GRACE);
         let err = Deadline::after(WAIT)
@@ -630,7 +629,10 @@ fn a_callback_the_hook_cannot_stop_abandons_the_vm_and_the_session_survives() {
         assert_eq!(callback, command);
         assert!(!ext.is_running());
         let err = call(&ext, "echo", "").unwrap_err();
-        assert!(matches!(err, Error::Stopped { .. }), "{err:?}");
+        assert!(
+            matches!(&err, Error::Abandoned { callback, .. } if callback == command),
+            "{err:?}"
+        );
         // The rest of the session goes on: another extension still runs.
         assert_eq!(call(&fixture(), "echo", "on").unwrap(), "on");
     }

@@ -415,7 +415,8 @@ fn a_parked_call_past_its_grace_times_out_and_the_vm_stays() {
     assert!(matches!(shared.phase, Phase::Ready(_)));
 }
 
-/// A running call waits its grace, then abandons the VM.
+/// A running command past its deadline times out and arms the abandon watch,
+/// then past its grace abandons the VM.
 #[test]
 fn a_running_call_past_its_grace_abandons_the_vm() {
     let at = now();
@@ -431,10 +432,16 @@ fn a_running_call_past_its_grace_abandons_the_vm() {
             parked: false,
         },
     );
-    let (Next::Sleep(until), _) = shared.judge("ext", id, &command("spin"), asked, at) else {
-        panic!("returned inside its grace")
-    };
-    assert_eq!(until, Some(inside + GRACE));
+    let err = returned(shared.judge("ext", id, &command("spin"), asked, at)).unwrap_err();
+    assert!(
+        matches!(&err, Error::Timeout { callback, timeout_ms: 100, .. } if callback == "spin"),
+        "{err:?}"
+    );
+    assert!(matches!(shared.phase, Phase::Ready(_)));
+    assert!(
+        shared.abandon.as_ref().is_some_and(|watch| watch.id == id),
+        "the Timeout arms the abandon watch"
+    );
     shared.calls.insert(
         id,
         Progress::Started {
@@ -446,7 +453,7 @@ fn a_running_call_past_its_grace_abandons_the_vm() {
     assert!(matches!(err, Error::Abandoned { .. }), "{err:?}");
     assert!(matches!(
         shared.phase,
-        Phase::Stopped(hub::StopReason::Stopped)
+        Phase::Stopped(hub::StopReason::Abandoned { .. })
     ));
 }
 
@@ -1476,6 +1483,170 @@ fn a_parked_hook_at_its_deadline_waits_out_its_grace() {
         panic!("a parked hook returned at its deadline")
     };
     assert_eq!(until, Some(at + GRACE));
+}
+
+/// A running command at its deadline has failed: the caller takes the timeout
+/// at once, without waiting the grace, and the VM stays up.
+#[test]
+fn a_running_command_at_its_deadline_times_out_and_leaves_the_vm_up() {
+    let at = now();
+    let asked = ago(at, 50);
+    let mut shared = ready(&[("spin", 50)]);
+    let id = shared.push(command("spin"), Value::Null, asked);
+    shared.queue.clear();
+    shared.calls.insert(
+        id,
+        Progress::Started {
+            deadline: Some(at),
+            parked: false,
+        },
+    );
+    let err = returned(shared.judge("ext", id, &command("spin"), asked, at)).unwrap_err();
+    assert!(
+        matches!(&err, Error::Timeout { callback, timeout_ms: 50, .. } if callback == "spin"),
+        "{err:?}"
+    );
+    assert!(matches!(shared.phase, Phase::Ready(_)));
+    assert!(shared.calls.is_empty() && shared.queue.is_empty());
+    assert!(
+        shared.abandon.as_ref().is_some_and(|watch| watch.id == id),
+        "the Timeout arms the abandon watch"
+    );
+}
+
+/// A running command just before its deadline still waits: flipping the
+/// deadline comparison to answer early would return here.
+#[test]
+fn a_running_command_before_its_deadline_waits() {
+    let at = now();
+    let asked = ago(at, 49);
+    let mut shared = ready(&[("spin", 50)]);
+    let id = shared.push(command("spin"), Value::Null, asked);
+    shared.queue.clear();
+    shared.calls.insert(
+        id,
+        Progress::Started {
+            deadline: Some(at),
+            parked: false,
+        },
+    );
+    let (Next::Sleep(until), _) = shared.judge("ext", id, &command("spin"), asked, ago(at, 1))
+    else {
+        panic!("a command returned before its deadline")
+    };
+    assert_eq!(until, Some(at));
+}
+
+/// A running command inside its grace times out, and at its grace it is
+/// abandoned: both sides of the grace boundary.
+#[test]
+fn a_running_command_one_millisecond_inside_its_grace_times_out() {
+    let deadline = now();
+    let asked = ago(deadline, 50);
+    // One millisecond inside the grace: the caller takes the timeout and the
+    // VM stays up.
+    {
+        let at = deadline
+            .checked_add(GRACE)
+            .and_then(|at| at.checked_sub(Duration::from_millis(1)))
+            .unwrap();
+        let mut shared = ready(&[("spin", 50)]);
+        let id = shared.push(command("spin"), Value::Null, asked);
+        shared.queue.clear();
+        shared.calls.insert(
+            id,
+            Progress::Started {
+                deadline: Some(deadline),
+                parked: false,
+            },
+        );
+        let err = returned(shared.judge("ext", id, &command("spin"), asked, at)).unwrap_err();
+        assert!(
+            matches!(&err, Error::Timeout { callback, timeout_ms: 50, .. } if callback == "spin"),
+            "{err:?}"
+        );
+        assert!(matches!(shared.phase, Phase::Ready(_)));
+    }
+    // Exactly at the grace: the VM is abandoned.
+    {
+        let at = deadline + GRACE;
+        let mut shared = ready(&[("spin", 50)]);
+        let id = shared.push(command("spin"), Value::Null, asked);
+        shared.queue.clear();
+        shared.calls.insert(
+            id,
+            Progress::Started {
+                deadline: Some(deadline),
+                parked: false,
+            },
+        );
+        let err = returned(shared.judge("ext", id, &command("spin"), asked, at)).unwrap_err();
+        assert!(
+            matches!(&err, Error::Abandoned { callback, .. } if callback == "spin"),
+            "{err:?}"
+        );
+        assert!(matches!(
+            shared.phase,
+            Phase::Stopped(hub::StopReason::Abandoned { .. })
+        ));
+    }
+}
+
+/// A parked command at its deadline still waits out its grace: only a command
+/// on the thread answers at its deadline.
+#[test]
+fn a_parked_command_at_its_deadline_waits_out_its_grace() {
+    let at = now();
+    let asked = ago(at, 50);
+    let mut shared = ready(&[("spin", 50)]);
+    let id = shared.push(command("spin"), Value::Null, asked);
+    shared.queue.clear();
+    shared.calls.insert(
+        id,
+        Progress::Started {
+            deadline: Some(at),
+            parked: true,
+        },
+    );
+    let (Next::Sleep(until), _) = shared.judge("ext", id, &command("spin"), asked, at) else {
+        panic!("a parked command returned at its deadline")
+    };
+    assert_eq!(until, Some(at + GRACE));
+}
+
+/// A command that outruns its caller's `Timeout` is abandoned by the next call
+/// past its grace: the worker may be stuck in the VM, so the next judge
+/// stops it. Within its grace the VM stays up.
+#[test]
+fn a_timed_out_command_still_running_past_its_grace_abandons_on_the_next_call() {
+    let at = now();
+    let asked = ago(at, 1200);
+    let mut shared = ready(&[("spin", 50)]);
+    let id = shared.push(command("spin"), Value::Null, asked);
+    shared.queue.clear();
+    shared.calls.insert(
+        id,
+        Progress::Started {
+            deadline: Some(ago(at, 1150)),
+            parked: false,
+        },
+    );
+    let err = returned(shared.judge("ext", id, &command("spin"), asked, ago(at, 200))).unwrap_err();
+    assert!(
+        matches!(&err, Error::Timeout { callback, timeout_ms: 50, .. } if callback == "spin"),
+        "{err:?}"
+    );
+    assert!(matches!(shared.phase, Phase::Ready(_)));
+    let next = shared.push(command("spin"), Value::Null, at);
+    let err = returned(shared.judge("ext", next, &command("spin"), at, at)).unwrap_err();
+    assert!(
+        matches!(&err, Error::Abandoned { callback, .. } if callback == "spin"),
+        "{err:?}"
+    );
+    assert!(matches!(
+        shared.phase,
+        Phase::Stopped(hub::StopReason::Abandoned { .. })
+    ));
 }
 
 /// While one extension's hook completion is withheld, other extensions, other
