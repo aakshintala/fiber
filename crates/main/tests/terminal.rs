@@ -1848,11 +1848,13 @@ fn resume_with_an_unknown_credential_on_an_exited_session_stays_home() {
             .iter()
             .any(|row| row.contains("credential_missing") && row.contains("No credential for"))
     });
-    let row = grid
-        .rows
-        .iter()
-        .position(|row| row.contains("credential_missing"))
-        .expect("the notice row") as u16;
+    let row = u16::try_from(
+        grid.rows
+            .iter()
+            .position(|row| row.contains("credential_missing"))
+            .expect("the notice row"),
+    )
+    .expect("the notice row fits in u16");
     run.write(format!("\x1b[<0;3;{}M\x1b[<0;3;{}m", row + 1, row + 1).as_bytes());
     run.wait_screen("the notice overlay", |grid| {
         // The overlay wraps at the width, so each fragment fits on
@@ -1907,11 +1909,13 @@ fn resume_with_an_unknown_credential_on_a_running_session_stays_attached() {
             row.contains("credential_missing") && row.contains("has no credential label")
         })
     });
-    let row = grid
-        .rows
-        .iter()
-        .position(|row| row.contains("credential_missing"))
-        .expect("the notice row") as u16;
+    let row = u16::try_from(
+        grid.rows
+            .iter()
+            .position(|row| row.contains("credential_missing"))
+            .expect("the notice row"),
+    )
+    .expect("the notice row fits in u16");
     second.write(format!("\x1b[<0;3;{}M\x1b[<0;3;{}m", row + 1, row + 1).as_bytes());
     second.wait_screen("the notice overlay", |grid| {
         grid.contents.contains("has no credential label")
