@@ -209,8 +209,6 @@ impl From<Sender<Input>> for Feed {
 /// [`Input::Disconnected`] once the stream ends. A cancelled wait drops
 /// the pending line and ends the stream: the reader sends only its
 /// [`Input::Disconnected`], never capacity-gated.
-/// Reads the hub stream, sending each line to the loop, then
-/// [`Input::Disconnected`] once the stream ends, as above.
 pub(crate) fn read_lines(stream: impl std::io::Read, feed: &Feed) {
     let mut read = BufReader::new(stream);
     let mut buf = String::new();
