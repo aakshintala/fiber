@@ -518,16 +518,21 @@ impl Loop {
             .collect();
         let declared = serde_json::to_string(&under.prepared.effects.declared).unwrap_or_default();
         let workspace = self.workspace_label.clone();
+        // The call stays where it ran: the item after it names it, so the
+        // reviewer never counts on it coming last.
+        let name = &under.call.name;
         let effects = match &under.prepared.rewritten {
             Some(changed_by) => {
                 let names = changed_by.join(", ");
                 let arguments =
                     serde_json::to_string(&under.prepared.arguments).unwrap_or_default();
                 format!(
-                    "Declared effects: {declared}\nExtension {names} rewrote this call's arguments; it runs with {arguments}\nWorkspace root: {workspace}"
+                    "Call under review: the last tool call above, {name}.\nDeclared effects: {declared}\nExtension {names} rewrote this call's arguments; it runs with {arguments}\nWorkspace root: {workspace}"
                 )
             }
-            None => format!("Declared effects: {declared}\nWorkspace root: {workspace}"),
+            None => format!(
+                "Call under review: the last tool call above, {name}.\nDeclared effects: {declared}\nWorkspace root: {workspace}"
+            ),
         };
         conversation.push(Input::User {
             text: effects,

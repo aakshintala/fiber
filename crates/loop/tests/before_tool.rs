@@ -340,6 +340,11 @@ fn a_rewritten_call_is_reviewed_as_the_call_that_will_run() {
     // Then the rewritten call's effects and the arguments it runs with.
     let effects = user_text(users[users.len() - 2]);
     let mut lines = effects.lines();
+    // The first line names the call under review.
+    assert_eq!(
+        lines.next().unwrap(),
+        "Call under review: the last tool call above, probe."
+    );
     let declared: Value = serde_json::from_str(
         lines
             .next()
@@ -389,7 +394,7 @@ fn an_unrewritten_reviewed_call_has_no_rewrite_line() {
     let users = user_inputs(&requests[0].conversation);
     let effects = user_text(users[users.len() - 2]);
     assert!(!effects.contains("rewrote"), "{effects}");
-    assert_eq!(effects.lines().count(), 2);
+    assert_eq!(effects.lines().count(), 3);
     assert_eq!(
         turn_kinds(&session.lines()),
         first_turn_kinds(

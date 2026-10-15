@@ -174,7 +174,7 @@ fn replay_matches_the_native_reviewer_on_a_call_and_a_handoff() {
     assert!(first_texts[1].starts_with("Tool call: "), "{first_texts:?}");
     assert!(first_texts[1].contains("\"shell\""), "{first_texts:?}");
     assert!(
-        first_texts[2].starts_with("Declared effects: "),
+        first_texts[2].starts_with("Call under review: the last tool call above, shell."),
         "{first_texts:?}"
     );
     assert!(
