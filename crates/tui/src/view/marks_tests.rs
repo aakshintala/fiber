@@ -728,6 +728,36 @@ fn in_colour_the_marks_carry_no_modifier() {
 }
 
 #[test]
+fn the_bar_hides_while_the_results_are_open() {
+    use crate::mouse::TargetId;
+    let mut app = replied(40, 12, "needle one\n\nneedle two");
+    search(&mut app, "needle");
+    let now = fakes::clock::FakeClock::new().now();
+    // A second Ctrl+F opens the results; the bar draws nothing over
+    // them, and its count is no target.
+    assert_eq!(app.on_key(Key::CtrlF, now), Effect::None);
+    assert!(app.results_open(), "the results are open");
+    let (buf, targets) = draw(&app, 40, 12);
+    let text = super::super::text(&buf);
+    assert!(!text.contains("⌕"), "the bar draws nothing over the results");
+    assert!(
+        targets.iter().all(|target| target.id != TargetId::FindCount),
+        "no count target over the results"
+    );
+    // Esc closes the view; the bar draws again with its query and
+    // count kept.
+    assert_eq!(app.on_key(Key::Esc, now), Effect::None);
+    assert!(!app.results_open());
+    let (buf, targets) = draw(&app, 40, 12);
+    let text = super::super::text(&buf);
+    assert!(text.contains("⌕ needle"), "the bar draws again: {text:?}");
+    assert!(
+        targets.iter().any(|target| target.id == TargetId::FindCount),
+        "the count target draws again"
+    );
+}
+
+#[test]
 fn the_bar_boxes_with_no_colour() {
     struct Unboxed;
     impl Drop for Unboxed {

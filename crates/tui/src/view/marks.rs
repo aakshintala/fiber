@@ -84,11 +84,14 @@ pub(super) fn draw(
     targets: &mut Vec<Target>,
     gap: Option<u16>,
 ) {
-    if let Some(bar) = app.find_bar() {
-        draw_bar(&bar, area, buf, targets);
-    }
+    // While the results view is open the bar does not draw: it would
+    // cover the view's top rows. Its state stays, and it draws again
+    // when the view closes (`docs/tui.md`, "Search").
     if app.results_open() {
         return;
+    }
+    if let Some(bar) = app.find_bar() {
+        draw_bar(&bar, area, buf, targets);
     }
     // With no colour the marks keep their modifiers and the paint
     // pass strips the tints; in colour the tints carry the marks with

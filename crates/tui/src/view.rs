@@ -236,16 +236,11 @@ pub(crate) fn render(
             match app.offer_rows(conversation.width) {
                 Some((rows, top)) => offer::render(&rows, top, conversation, buf, &mut targets),
                 // The search results swap in for the conversation while
-                // open, with the ✕ closing them (`docs/tui.md`, "Search",
-                // "Swapped views").
+                // open (`docs/tui.md`, "Search", "Swapped views").
                 None => match app.find_results() {
                     Some(view) => {
                         results::render(&view, conversation, buf, &mut targets);
                         marks::draw(app, conversation, buf, &mut targets, None);
-                        // The ✕ draws over the bar's last cell, so the
-                        // view keeps a visible closer (`docs/tui.md`,
-                        // "Swapped views").
-                        overlay_cross(buf, conversation, &mut targets);
                     }
                     None => {
                         // The rows draw in the scroll bar's rows area, one
