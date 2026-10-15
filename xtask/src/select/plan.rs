@@ -55,6 +55,153 @@ pub(crate) fn ten_turns_runs(event: &str, release_paths: &[String]) -> bool {
     event != "pull_request" || release_paths.iter().any(|p| is_ten_turns_path(p))
 }
 
+/// `docs/ci.md`, "Selection": the crates whose change selects the
+/// `session start` timing row on a pull request's base pass. Each member
+/// names a crate the row's process calls: `main` builds the session
+/// (`main/src/session_command.rs`), through `contract`, `support` and
+/// `log` (`session_command.rs:9`, `shutdown.rs:30`,
+/// `session_extensions.rs:9`), the `loop` (`session_extensions.rs:10`),
+/// `doors` (`builtin.rs:126`), `provider` (`lua_providers.rs:14`),
+/// `tools` (`builtin.rs:58`), `mcp` (`mcp_servers.rs:30`), `jobs`
+/// (`delegates.rs:34`), `net` (`connect.rs:193`), `worktree`
+/// (`doors/src/isolation.rs:61`), `extensions` (`session_command.rs:216`),
+/// `config` (`lua_providers.rs:9`) and `hub` (`session_command.rs:605`,
+/// the `hub::RecentRow` it appends). Slash-bounded, so
+/// `crates/loopback/…` does not match.
+const SESSION_CRATES: [&str; 15] = [
+    "crates/contract/",
+    "crates/support/",
+    "crates/log/",
+    "crates/loop/",
+    "crates/doors/",
+    "crates/provider/",
+    "crates/tools/",
+    "crates/mcp/",
+    "crates/jobs/",
+    "crates/net/",
+    "crates/worktree/",
+    "crates/extensions/",
+    "crates/config/",
+    "crates/hub/",
+    "crates/main/",
+];
+
+/// `docs/ci.md`, "Selection": the crates whose change selects the
+/// `sessions list` timing row. The row runs `fiber sessions --json`:
+/// `main` serves it (`main/src/main.rs:816`, `::cli::sessions_list`)
+/// through `config` (`fiber_home_from_env`) and `cli`, `doors` (the hub
+/// `cli` reaches, `cli/src/hub_status.rs:33`, `doors::hub`) and the `hub`
+/// that serves (`main/src/hub_command.rs:55`; `hub/src/start.rs:17` and
+/// `hub/src/feed.rs:137` call into `contract`, `support` and `log`).
+const LIST_CRATES: [&str; 8] = [
+    "crates/config/",
+    "crates/cli/",
+    "crates/doors/",
+    "crates/hub/",
+    "crates/contract/",
+    "crates/support/",
+    "crates/log/",
+    "crates/main/",
+];
+
+/// `docs/ci.md`, "Selection": the crates whose change selects the
+/// terminal timing rows (`terminal first frame`, `terminal attach`,
+/// `terminal wheel`). The rows run the `fiber` terminal, which is the
+/// session-start process plus the terminal itself: `tui`
+/// (`main/src/main.rs:753`, `tui::run`) and `cli`
+/// (`main/src/configure.rs:34`, `::cli::project_of`).
+const TERMINAL_CRATES: [&str; 17] = [
+    "crates/contract/",
+    "crates/support/",
+    "crates/log/",
+    "crates/loop/",
+    "crates/doors/",
+    "crates/provider/",
+    "crates/tools/",
+    "crates/mcp/",
+    "crates/jobs/",
+    "crates/net/",
+    "crates/worktree/",
+    "crates/extensions/",
+    "crates/config/",
+    "crates/hub/",
+    "crates/main/",
+    "crates/tui/",
+    "crates/cli/",
+];
+
+/// `docs/ci.md`, "Selection": the crates whose change selects the
+/// `paging` timing row. The row runs the `tui` crate's `paging` jig
+/// (`tui/examples/paging.rs:40`, `tui::measure_open`), which calls into
+/// `contract` (`paging.rs:25`), `support` (`tui/src/editor.rs:262`) and
+/// `log` (`tui/src/format.rs:582`).
+const PAGING_CRATES: [&str; 4] = [
+    "crates/tui/",
+    "crates/contract/",
+    "crates/support/",
+    "crates/log/",
+];
+
+/// `docs/ci.md`, "Selection": each base timing row with the crates
+/// whose change selects it, in workload order. The names are the
+/// harness's own workload names, cited by
+/// `crates/bench/examples/bench/main_tests.rs`.
+const BASE_ROWS: [(&str, &[&str]); 6] = [
+    ("session start", &SESSION_CRATES),
+    ("sessions list", &LIST_CRATES),
+    ("terminal first frame", &TERMINAL_CRATES),
+    ("terminal attach", &TERMINAL_CRATES),
+    ("terminal wheel", &TERMINAL_CRATES),
+    ("paging", &PAGING_CRATES),
+];
+
+/// Whether `path` is a docs file for the base-row selection: `is_docs_file`
+/// says so, and it is not under `crates/`. Every `.md` under `crates/` is
+/// code, because five are compiled in by `include_str!`
+/// (`crates/loop/prompt/*.md`, `crates/tools/prompt/guidelines.md`).
+fn is_base_docs_file(path: &str) -> bool {
+    super::is_docs_file(path) && !path.starts_with("crates/")
+}
+
+/// The base timing rows no path selects, in table order: on a pull
+/// request the base pass runs only the selected rows
+/// (`docs/ci.md`, "Selection"). A docs file selects nothing. Any other
+/// path selects every row whose crate list holds its `crates/<name>/`
+/// directory; a path no row's list covers selects every row, so
+/// `crates/bench`, `xtask/src/bench*`, `scripts/*`, `.github/*` and the
+/// manifests cost the whole base pass. A non-PR event or an empty path
+/// list skips nothing and runs every row, as does a missing value
+/// downstream: the harness runs every row on an empty `--skip-rows`.
+/// `release_paths` is the diff's paths for the release rule, both ends of
+/// a rename, so a rename counts both ends.
+pub(crate) fn base_rows_skipped(event: &str, release_paths: &[String]) -> Vec<&'static str> {
+    if event != "pull_request" || release_paths.is_empty() {
+        return Vec::new();
+    }
+    let mut selected = [false; BASE_ROWS.len()];
+    for path in release_paths {
+        if is_base_docs_file(path) {
+            continue;
+        }
+        let mut narrowed = false;
+        for (index, (_, crates)) in BASE_ROWS.iter().enumerate() {
+            if crates.iter().any(|dir| path.starts_with(dir)) {
+                selected[index] = true;
+                narrowed = true;
+            }
+        }
+        if !narrowed {
+            selected = [true; BASE_ROWS.len()];
+        }
+    }
+    BASE_ROWS
+        .iter()
+        .zip(selected)
+        .filter(|(_, chosen)| !chosen)
+        .map(|((name, _), _)| *name)
+        .collect()
+}
+
 /// Which CI jobs run, by the job ids in `.github/workflows/ci.yml`, and how
 /// many mutant shards.
 #[derive(Debug, Clone, PartialEq, Eq)]
