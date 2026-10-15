@@ -156,7 +156,7 @@ fn walk(
             }
             let at = *examined;
             *examined += 1;
-            if at % limits.check_every == 0 && cancelled() {
+            if at.is_multiple_of(limits.check_every) && cancelled() {
                 aborted = true;
                 return false;
             }
@@ -180,7 +180,7 @@ fn walk(
             let mut row = format!("{base_text}{rel}");
             let dir = entry
                 .file_type()
-                .map(|kind| is_dir(kind, &entry.path()))
+                .map(|kind| is_dir(kind, entry.path()))
                 .unwrap_or(false);
             if dir {
                 row.push('/');
@@ -271,7 +271,7 @@ fn entries(
     let query = query.to_lowercase();
     let mut found: Vec<(bool, String, String)> = Vec::new();
     for entry in read.take(room) {
-        if *examined % limits.check_every == 0 && cancelled() {
+        if (*examined).is_multiple_of(limits.check_every) && cancelled() {
             return None;
         }
         *examined += 1;
@@ -413,10 +413,8 @@ impl Search {
                 let cancelled = || newest.load(Ordering::Relaxed) != generation;
                 let result = match split(&query) {
                     Query::Workspace(seek) => {
-                        if listed.is_none() {
-                            if let Some(list) = listing.take() {
-                                listed = Some(list());
-                            }
+                        if listed.is_none() && let Some(list) = listing.take() {
+                            listed = Some(list());
                         }
                         match &listed {
                             Some(Ok(paths)) => {

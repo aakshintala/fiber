@@ -391,8 +391,9 @@ impl App {
             Key::Tab | Key::Enter => {
                 let chosen = chosen?;
                 if let Some(panel) = self.overlays.files.take() {
-                    if chosen.ends_with('/') {
-                        if let Some((_, end)) = self.draft.mention(panel.anchor) {
+                    if chosen.ends_with('/')
+                        && let Some((_, end)) = self.draft.mention(panel.anchor)
+                    {
                             // A directory row enters the new base and keeps
                             // searching it: the `@` stays and the text after
                             // it becomes the row, with no trailing space. The
@@ -413,7 +414,6 @@ impl App {
                                 generation: self.overlays.generation,
                                 query,
                             });
-                        }
                     }
                     let end = self
                         .draft
