@@ -340,6 +340,44 @@ fn paint_at_256_writes_palette_entries() {
 }
 
 #[test]
+fn paint_lifts_a_tint_marker() {
+    // Dark `surface` lifted 0x14 per channel (`docs/tui.md`, palette,
+    // `hover`).
+    let look = look(ThemeSetting::Dark, &[("COLORTERM", "truecolor")]);
+    let mut buf = row(&[("a", Style::new().bg(Role::Surface.lifted()))]);
+    look.paint(&mut buf);
+    assert_eq!(buf[(0, 0)].bg, Color::Rgb(0x2e, 0x2e, 0x36));
+}
+
+#[test]
+fn paint_lifts_the_light_surface() {
+    // Light `surface` (#eaeef2) lifted 0x14 per channel saturates two
+    // channels (`docs/tui.md`, palette, `hover`).
+    let look = look(ThemeSetting::Light, &[("COLORTERM", "truecolor")]);
+    let mut buf = row(&[("a", Style::new().bg(Role::Surface.lifted()))]);
+    look.paint(&mut buf);
+    assert_eq!(buf[(0, 0)].bg, Color::Rgb(0xfe, 0xff, 0xff));
+}
+
+#[test]
+fn lifted_light_surface_at_256_takes_the_grey_ramp() {
+    // At 256 colours the lifted light surface takes the surface's grey
+    // ramp entry, not the text range's white cube entry.
+    let look = look(ThemeSetting::Light, &[("TERM", "xterm-256color")]);
+    let mut buf = row(&[("a", Style::new().bg(Role::Surface.lifted()))]);
+    look.paint(&mut buf);
+    let Color::Indexed(index) = buf[(0, 0)].bg else {
+        panic!("lifted surface at 256: {:?}", buf[(0, 0)].bg);
+    };
+    assert!(GREY.contains(&index), "grey ramp: {index}");
+    assert_ne!(
+        Color::Indexed(index),
+        Color::Indexed(ansi256((0xfe, 0xff, 0xff), among(Role::Text))),
+        "not the text range's entry"
+    );
+}
+
+#[test]
 fn literal_rgb_resolves_by_depth() {
     let fg = Style::new()
         .fg(Color::Rgb(0, 0, 0))

@@ -15,6 +15,19 @@ fn all_lists_every_role_once_in_index_order() {
 }
 
 #[test]
+fn lifted_markers_match_no_role() {
+    for role in Role::ALL {
+        let lifted = role.lifted();
+        let ratatui::style::Color::Indexed(index) = lifted else {
+            panic!("a lifted marker: {lifted:?}");
+        };
+        assert!((64..=100).contains(&index), "{index}");
+        assert_eq!(Role::from_index(index), None, "{index}");
+        assert_eq!(Role::from_lifted(index), Some(role), "{index}");
+    }
+}
+
+#[test]
 fn names_round_trip() {
     let names: Vec<&str> = Role::ALL.into_iter().map(Role::name).collect();
     let mut unique = names.clone();

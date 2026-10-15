@@ -1,10 +1,10 @@
 //! Binary-level test of hover and focus on tinted targets (`docs/tui.md`,
 //! palette `hover` row; "Mouse and hover"): the real binary on a 160x48
-//! pty in truecolour on the dark theme, with one live session. The
-//! focused workspace chip draws the surface tint lifted 0x14 per channel
-//! while the other chips keep the surface tint; the pointer over another
-//! chip lifts it the same way; a session row with no tint under it draws
-//! the flat hover colour.
+//! pty in truecolour, with one live session, on the dark theme and again
+//! on the light theme. The focused workspace chip draws the surface tint
+//! lifted 0x14 per channel while the other chips keep the surface tint;
+//! the pointer over another chip lifts it the same way; a session row
+//! with no tint under it draws the flat hover colour.
 
 #![allow(
     clippy::unwrap_used,
@@ -31,6 +31,11 @@ const SURFACE: Colour = Colour::Rgb(0x1a, 0x1a, 0x22);
 const LIFTED: Colour = Colour::Rgb(0x2e, 0x2e, 0x36);
 const HOVER: Colour = Colour::Rgb(0x1e, 0x1e, 0x26);
 
+/// The light theme's surface tint, lifted, and hover in truecolour.
+const LIGHT_SURFACE: Colour = Colour::Rgb(0xea, 0xee, 0xf2);
+const LIGHT_LIFTED: Colour = Colour::Rgb(0xfe, 0xff, 0xff);
+const LIGHT_HOVER: Colour = Colour::Rgb(0xe3, 0xe7, 0xec);
+
 /// The row's symbols, one per cell.
 #[track_caller]
 fn row_text(screen: &Grid, y: u16) -> String {
@@ -53,13 +58,32 @@ fn find_col(screen: &Grid, y: u16, needle: &str) -> u16 {
 
 #[test]
 fn focused_and_hovered_chips_lift_the_surface_tint() {
+    hover_chips_look(
+        json!({"model": "fake/m", "hub": {"idle_exit_ms": 1000}}),
+        SURFACE,
+        LIFTED,
+        HOVER,
+    );
+}
+
+#[test]
+fn light_chips_lift_the_light_surface_tint() {
+    hover_chips_look(
+        json!({"model": "fake/m", "hub": {"idle_exit_ms": 1000}, "tui": {"theme": "light"}}),
+        LIGHT_SURFACE,
+        LIGHT_LIFTED,
+        LIGHT_HOVER,
+    );
+}
+
+/// One hover-look journey at 160x48: the focused and hovered chips draw
+/// `lifted` over the `surface` tint, and a session row with no tint
+/// draws the flat `hover` colour.
+fn hover_chips_look(config: serde_json::Value, surface: Colour, lifted: Colour, hover: Colour) {
     let setup = Setup::new();
     let server = ProviderServer::start([hello()]).unwrap();
     setup.provider(&server);
-    write_json(
-        &setup.home().join("config.json"),
-        &json!({"model": "fake/m", "hub": {"idle_exit_ms": 1000}}),
-    );
+    write_json(&setup.home().join("config.json"), &config);
     let hub = Arc::new(Mutex::new(None));
     let (watch, _) = connect_hub(&setup, &hub);
     let here = setup.workspace().to_string_lossy().into_owned();
@@ -96,7 +120,7 @@ fn focused_and_hovered_chips_lift_the_surface_tint() {
     for dx in 0..wide {
         assert_eq!(
             screen.cell(ws + dx, chip).bg,
-            SURFACE,
+            surface,
             "unfocused chip cell ({}, {chip})",
             ws + dx
         );
@@ -108,13 +132,13 @@ fn focused_and_hovered_chips_lift_the_surface_tint() {
     run.write(b"\x1b[B");
     let screen = run.wait_screen("the focused workspace chip", |screen| {
         let bg = screen.cell(ws, chip).bg;
-        bg == LIFTED || bg == HOVER
+        bg == lifted || bg == hover
     });
     // The focused chip draws the surface tint lifted 0x14 per channel.
     for dx in 0..wide {
         assert_eq!(
             screen.cell(ws + dx, chip).bg,
-            LIFTED,
+            lifted,
             "focused chip cell ({}, {chip})",
             ws + dx
         );
@@ -129,7 +153,7 @@ fn focused_and_hovered_chips_lift_the_surface_tint() {
         }
         assert_eq!(
             screen.cell(x, chip).bg,
-            SURFACE,
+            surface,
             "unfocused chip-row cell ({x}, {chip})"
         );
     }
@@ -148,7 +172,7 @@ fn focused_and_hovered_chips_lift_the_surface_tint() {
     run.write(format!("\x1b[<35;{};{}M", mx + 1, chip + 1).as_bytes());
     let screen = run.wait_screen("the hovered model chip", |screen| {
         let bg = screen.cell(mx, chip).bg;
-        bg == LIFTED || bg == HOVER
+        bg == lifted || bg == hover
     });
     let end = row[mx as usize..]
         .find(']')
@@ -157,14 +181,14 @@ fn focused_and_hovered_chips_lift_the_surface_tint() {
     for x in mx..end {
         assert_eq!(
             screen.cell(x, chip).bg,
-            LIFTED,
+            lifted,
             "hovered chip cell ({x}, {chip})"
         );
     }
     for dx in 0..wide {
         assert_eq!(
             screen.cell(ws + dx, chip).bg,
-            LIFTED,
+            lifted,
             "the focus stays while hovering"
         );
     }
@@ -177,12 +201,12 @@ fn focused_and_hovered_chips_lift_the_surface_tint() {
     let sx = find_col(&screen, srow, "first");
     run.write(format!("\x1b[<35;{};{}M", sx + 1, srow + 1).as_bytes());
     let screen = run.wait_screen("the hovered session row", |screen| {
-        screen.cell(sx, srow).bg == HOVER
+        screen.cell(sx, srow).bg == hover
     });
     for dx in 0..5 {
         assert_eq!(
             screen.cell(sx + dx, srow).bg,
-            HOVER,
+            hover,
             "untinted row cell ({}, {srow})",
             sx + dx
         );

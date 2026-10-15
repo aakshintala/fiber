@@ -13,6 +13,11 @@ use serde_json::Value;
 /// How many roles a theme gives a colour.
 pub(crate) const ROLES: usize = 37;
 
+/// Lifted markers start here: [`Role::lifted`] is `LIFTED_BASE` plus the
+/// role's index, so lifts run 64..=100, past every role marker and the
+/// colours the paint pass leaves alone.
+pub(crate) const LIFTED_BASE: u8 = 64;
+
 /// A colour role: what a colour is for. The order is the doc table's
 /// (`docs/tui.md`, "Themes"), and each role's index is its marker's.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -280,6 +285,21 @@ impl Role {
     pub(crate) fn from_index(index: u8) -> Option<Role> {
         Self::ALL.get(usize::from(index)).copied()
     }
+
+    /// This role's hover-lift marker: what a hovered or focused click
+    /// target takes on this role's tint (`docs/tui.md`, palette,
+    /// `hover`). The look resolves it to the tint 0x14 lighter on each
+    /// channel.
+    pub(crate) fn lifted(self) -> Color {
+        Color::Indexed(LIFTED_BASE.saturating_add(self as u8))
+    }
+
+    /// The role a hover-lift marker lifts, if one is: a marker outside
+    /// 64..=100 lifts nothing, so [`Role::from_index`] never matches a
+    /// lifted marker.
+    pub(crate) fn from_lifted(index: u8) -> Option<Role> {
+        index.checked_sub(LIFTED_BASE).and_then(Self::from_index)
+    }
 }
 
 /// A colour in 24 bits.
@@ -442,49 +462,19 @@ impl Theme {
     }
 }
 
-/// One hovered cell's background: its own tint 0x14 lighter on each
-/// channel, or the hover tint with no tint under it (`docs/tui.md`,
-/// palette, `hover`). The tint resolves through the dark theme: the
-/// draw site carries no look, so the lift is pinned to the dark values
-/// the palette table names.
+/// One hovered cell's background: the cell's tint role as its lifted
+/// marker, or the hover tint with no tint under it (`docs/tui.md`,
+/// palette, `hover`). The page itself counts as no tint: a target drawn
+/// straight on the background takes the flat hover in every theme.
 pub(crate) fn hover_bg(bg: Color) -> Color {
-    match bg {
-        Color::Rgb(red, green, blue) => lifted(red, green, blue),
-        Color::Indexed(index) => match Role::from_index(index) {
-            Some(role) if role.tint() => match Theme::DARK.shade(role) {
-                Shade::Rgb((red, green, blue)) => lifted(red, green, blue),
-                Shade::Terminal | Shade::Dim => Role::Hover.color(),
-            },
-            Some(_) | None => Role::Hover.color(),
-        },
-        Color::Reset
-        | Color::Black
-        | Color::Red
-        | Color::Green
-        | Color::Yellow
-        | Color::Blue
-        | Color::Magenta
-        | Color::Cyan
-        | Color::Gray
-        | Color::DarkGray
-        | Color::LightRed
-        | Color::LightGreen
-        | Color::LightYellow
-        | Color::LightBlue
-        | Color::LightMagenta
-        | Color::LightCyan
-        | Color::White => Role::Hover.color(),
+    if let Color::Indexed(index) = bg
+        && let Some(role) = Role::from_index(index)
+        && role.tint()
+        && !matches!(role, Role::Background)
+    {
+        return role.lifted();
     }
-}
-
-/// One tint lifted 0x14 on each channel.
-fn lifted(red: u8, green: u8, blue: u8) -> Color {
-    const LIFT: u8 = 0x14;
-    Color::Rgb(
-        red.saturating_add(LIFT),
-        green.saturating_add(LIFT),
-        blue.saturating_add(LIFT),
-    )
+    Role::Hover.color()
 }
 
 /// `#rrggbb`, either case, as a colour.

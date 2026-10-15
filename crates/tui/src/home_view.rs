@@ -195,7 +195,7 @@ pub(crate) fn max_question_scroll(app: &App, screen: &HomeScreen, area: Rect) ->
 /// above the foot and the overlay over the whole area.
 /// Returns the click targets drawn; last, as on the conversation screen,
 /// the target under `pointer` gets [`lift_hover`] and the focused target
-/// gets [`FOCUS_STYLE`]..
+/// gets [`FOCUS_STYLE`].
 pub(super) fn render(
     app: &App,
     screen: &HomeScreen,
