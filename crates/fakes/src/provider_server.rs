@@ -17,8 +17,9 @@ use contract::clock::Clock;
 use crate::clock::SystemClock;
 #[cfg(test)]
 use crate::http_server::WaitAck;
+use crate::http_server::server::DropProbe;
 use crate::http_server::{
-    Connection, DropProbe, HttpServer, Limits, StallEnd,
+    Connection, HttpServer, Limits, StallEnd,
     request::{ParsedRequest, RequestOutcome, read_request},
 };
 

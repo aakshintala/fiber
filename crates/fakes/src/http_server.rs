@@ -33,7 +33,7 @@ pub(crate) use connection::{Connection, FillOutcome, ReplyEnd, StallEnd};
 pub(crate) use connection::{Framing, Pause, PauseEnd, ReadErr, ReadOutcome, classify, pump};
 #[cfg(test)]
 pub(crate) use server::woken;
-pub(crate) use server::{DropProbe, HttpServer, Shared};
+pub(crate) use server::{HttpServer, Shared};
 pub(crate) use tunnel::TunnelEnd;
 #[cfg(test)]
 pub(crate) use tunnel::{tunnel_copy, tunnel_handshake};

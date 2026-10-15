@@ -20,8 +20,9 @@ use std::sync::{Arc, Condvar, Mutex, MutexGuard, PoisonError};
 use std::time::Duration;
 
 use crate::clock::SystemClock;
+use crate::http_server::server::DropProbe;
 use crate::http_server::{
-    Connection, DropProbe, HttpServer, Limits, ReplyEnd,
+    Connection, HttpServer, Limits, ReplyEnd,
     request::{RequestOutcome, read_request},
 };
 use crate::provider_server::{Request, project};
