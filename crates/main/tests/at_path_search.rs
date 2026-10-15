@@ -71,9 +71,7 @@ fn an_at_path_lists_matching_entries_and_a_chosen_directory_reopens_the_panel() 
     let mut run = run(&setup);
     // `@~/proj/rea` lists the matching file under the temporary home.
     run.write(b"@~/proj/rea");
-    run.wait_screen("the path match", |screen| {
-        shows(screen, "~/proj/README.md")
-    });
+    run.wait_screen("the path match", |screen| shows(screen, "~/proj/README.md"));
     // Back to the base, then into `su`: the subdirectory row shows.
     run.write(b"\x7f\x7f\x7f");
     run.write(b"su");
