@@ -348,14 +348,71 @@ fn a_credential_command_still_running_at_its_timeout_is_killed_and_times_out() {
         fakes::kill_group(pgid, "0").unwrap(),
         "the group died before its timeout"
     );
+    // Scripted alive past the first kill, gone on the third probe: the
+    // settlement's first pass sends once and parks at its poll, the
+    // second sends again, and only SRCH retires the group — so one
+    // advance past the deadline can never answer it, on any load. A pause
+    // after a real SIGKILL cannot hold the group itself alive, and the
+    // scripted sends never touch the real group, so the test kills it for
+    // real after proving SRCH retired the scripted group. Armed after the
+    // liveness probe above, so the script covers only the settlement's passes.
+    reads.script_group(
+        pgid,
+        vec![Ok(()), Ok(()), Err(Errno::SRCH)],
+        vec![Ok(()), Ok(())],
+    );
+    // Pause after each send to acknowledge that the previous named park
+    // has been left before asking the helper to observe the next one.
+    let (killed, is_killed) = mpsc::channel::<()>();
+    let (release, freed) = mpsc::channel::<()>();
+    reads.pause_at_settle(killed, freed);
+    let (settled, is_settled) = mpsc::channel::<()>();
+    let (release_settled, resume_reaper) = mpsc::channel::<()>();
+    reads.pause_at_settle_complete(settled, resume_reaper);
     clock.advance(Duration::from_millis(1));
+    Deadline::after(DEADLINE).recv_or_fail(&is_killed, "the settlement's first kill");
+    let (killed_again, is_killed_again) = mpsc::channel::<()>();
+    let (release_again, freed_again) = mpsc::channel::<()>();
+    reads.pause_at_settle(killed_again, freed_again);
+    release.send(()).unwrap();
+
+    // Each named advance drives exactly one of the two scripted surviving
+    // passes. The pause after the second send proves the first park was
+    // left before the second helper observes its exact poll instant.
+    let drive = Deadline::after(DEADLINE);
+    let poll = clock
+        .now()
+        .checked_add(GROUP_POLL)
+        .expect("the poll is countable");
+    clock.advance_when_parked(Some(poll), None, GROUP_POLL, &drive);
+    drive.recv_or_fail(&is_killed_again, "the settlement's second kill");
+    release_again.send(()).unwrap();
+    let repoll = clock
+        .now()
+        .checked_add(GROUP_POLL)
+        .expect("the poll is countable");
+    clock.advance_when_parked(Some(repoll), None, GROUP_POLL, &drive);
+    drive.recv_or_fail(&is_settled, "the timeout settlement");
+
+    assert_eq!(reads.scripted_sends(), 2, "one send per pass before SRCH");
+    assert!(
+        !listed(&reads).contains(&pgid),
+        "SRCH retires the group: {:?}",
+        listed(&reads)
+    );
+    // The scripted sends never touched the real group: kill it for real so
+    // the reaper answers and the timed-out read can leave its reap loop.
+    match fakes::kill_group(pgid, "KILL") {
+        Ok(_) | Err(_) => {}
+    }
+    release_settled.send(()).unwrap();
     let error = Deadline::after(fakes::MUST_SUCCEED_WITHIN)
         .recv_or_fail(&finished, "the timed-out read")
         .expect_err("a command still running at its timeout");
     assert_eq!(error.kind(), std::io::ErrorKind::TimedOut);
     assert!(
         fakes::group_empties(pgid, DEADLINE),
-        "the timeout killed the group"
+        "the real group is gone"
     );
     watchdog.stand_down(DEADLINE);
     pre.stand_down(DEADLINE);

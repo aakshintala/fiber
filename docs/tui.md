@@ -582,7 +582,7 @@ a click on it returns too. The views are:
   key                 value         layer
   model               opus-5-5      global
   thinking            high          project
-  permissions.mode    auto          repository
+  handoff.tokens      400000        repository
   budget.usd          20            project
   ```
 - **`/keys`:** the rebinding screen ("Bindings").

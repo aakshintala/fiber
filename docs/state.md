@@ -253,8 +253,22 @@ What is recorded:
   came, `attempt` from 1, `request_bytes` as posted, `response_bytes` as
   read, and `headers_ms`, `first_token_ms` and `total_ms`, whole
   milliseconds from the send. A retried call writes one line per attempt;
-  a request never sent writes none. Requests made through Lua providers
-  are not yet recorded.
+  a request never sent writes none.
+- **At `debug`, a Lua provider's HTTP requests:** one `provider_request`
+  line when the request ends, with `purpose` `model_list` for `models()`,
+  `quota` for `quota()`, `token_refresh` for `credential()`, and `cost`
+  for `cost()`. `data` holds `provider`, the provider's registered name,
+  `status` when a response came, `attempt` (always 1: a Lua invocation
+  makes no retry), `request_bytes` as posted, `response_bytes` as read,
+  and `headers_ms` and `total_ms`, whole milliseconds from the send. A
+  body read that fails keeps the status, the headers and the bytes read
+  before the failure. A request that validation rejects before sending
+  writes no line; one that fails after writes one without `status` or
+  `headers_ms` and with zero response bytes. Only these four purposes
+  record: `sign()`, hooks, commands, timers, tools and the entry script's
+  own requests stay silent. No other field is recorded, and never a host,
+  path, model, URL, query string, credential, header value, body or token,
+  as for every line in `logs/`.
 - **At `debug`, the hub's peak memory:** a `peak_memory` line just before
   each `hub_stopped`. `data.peak_kib` is the process's peak so far: peak RSS
   (`VmHWM`) on Linux, and peak physical footprint on macOS
@@ -277,7 +291,13 @@ What is recorded:
   attempt group for a native observed request, from the first socket attempt
   through socket admission. It excludes DNS before entry, TLS, CONNECT
   negotiation and the response body, as well as pre-stopped and empty groups
-  and already-built tunnels. Installed for the loop are `startup.preamble`,
+  and already-built tunnels. Also installed is `picture.run`: one scope per
+  entered image-child invocation, from spawning it to its validated answer,
+  kept through spawn failures, errors and cancellation after entry, while a
+  call cancelled before entry starts none. A PDF count/cut call owns one
+  scope, and each rendered page's own child owns its own; the renderer
+  itself and file inspection stay untimed. Its `data` holds only `op` and
+  `ms`. Installed for the loop are `startup.preamble`,
   `turn.request`, `turn.model_call` and `turn.handoff`. `startup.preamble`
   covers building and installing the preamble after the approved-code load,
   before the opening message, once per session start: a same-session rebuild
@@ -290,7 +310,12 @@ What is recorded:
   requested handoff holds its note's request and model scopes, and
   `provider_request`'s network share sits inside `turn.model_call`. Warming
   refreshes and reviewer judgements run through the same factories but write
-  no turn scope. Other plain agent clients stay unobserved.
+  no turn scope. Also installed are the five hook chains other
+  than the tool hooks: `hook.session_start`, `hook.turn_start`,
+  `hook.before_message`, `hook.before_model_call` and `hook.turn_end`, one
+  scope around each entered public dispatch, however it returns, empty
+  chains included. Tool hooks take no scope: `tool.hooks` covers those
+  chains. Other plain agent clients stay unobserved.
   Installed too is `mcp.connect`: one scope around one actual server
   connection attempt, from starting or dialing it until its tool list is
   in hand. It covers stdio and remote servers, eager and required starts,
@@ -310,6 +335,8 @@ What is recorded:
   on new and resumed sessions alike. Installed for listing is
   `sessions.list`: one listing attempt from entry through feed settlement,
   snapshot and row reads, including invalid arguments.
+  Request, model, hook and network timings may overlap as nested
+  measurements, never additive phases.
 
 An event inside a running session is recorded in that session's log and
 nowhere else, with one exception: a session or ask process's own diagnostic

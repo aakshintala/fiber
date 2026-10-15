@@ -288,8 +288,18 @@ pub(crate) fn session_tools(
     Failure,
 > {
     let fiber = fiber.map_err(|message| crate::failed(ErrorCode::IoFailed, message))?;
-    let (mut tools, mut infos, driver, forget, images) = crate::builtin::builtin(
-        fiber, home, workspace, artifacts, clock, jobs, locks, web_search, delegates, skills,
+    let (mut tools, mut infos, driver, forget, images) = crate::builtin::builtin_timed(
+        fiber,
+        home,
+        workspace,
+        artifacts,
+        clock,
+        jobs,
+        locks,
+        web_search,
+        delegates,
+        skills,
+        timing.clone(),
     )?;
     // A repository server whose current content is approved starts with
     // the session exactly as a person's server does; any other waits for

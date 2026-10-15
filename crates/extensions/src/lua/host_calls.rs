@@ -27,6 +27,9 @@ pub(super) struct Call<'t> {
     pub(super) id: u64,
     pub(super) target: &'t Target,
     pub(super) deadline: Option<Instant>,
+    /// The snapshotted observation for an eligible provider HTTP request:
+    /// owned context the admitted worker observes with once it executes.
+    pub(super) http: Option<host::HttpObservation>,
 }
 
 /// What an admitted request leaves `settle` to do. The first two still hold
@@ -90,6 +93,7 @@ pub(super) fn admit<'a>(
         id,
         target,
         deadline,
+        http,
     } = call;
     match request {
         Request::Ask(interaction) => {
@@ -171,11 +175,28 @@ pub(super) fn admit<'a>(
                 Admitted::Replied(Reply::Http(script.http(request.case_value())))
             } else {
                 let http_deliver = Deliver::clone(deliver);
+                let worker = Arc::clone(hub);
                 Admitted::Spawning {
                     shared,
                     spawn: Spawn {
                         builder: thread::Builder::new().name(format!("http {name}")),
-                        work: Box::new(move || http_deliver(Reply::Http(host::perform(&request)))),
+                        work: Box::new(move || {
+                            // The rendezvous: the worker crosses the hub
+                            // lock before touching the observer or the
+                            // transport, so nothing is read or written
+                            // while settle still holds the spawning
+                            // admission guard. The lock is released before
+                            // the request runs.
+                            drop(worker.lock());
+                            #[cfg(test)]
+                            if let Some(observation) = http.as_ref() {
+                                await_observed_release(&observation.provider);
+                            }
+                            http_deliver(Reply::Http(match http {
+                                Some(observation) => host::perform_observed(&request, observation),
+                                None => host::perform(&request),
+                            }));
+                        }),
                         exec: false,
                     },
                 }
@@ -400,7 +421,7 @@ pub(super) fn admit<'a>(
 /// The checkpoint a test observes: called with the target and stage reached.
 #[cfg(test)]
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
-pub(super) enum Pause {
+pub(crate) enum Pause {
     Admission,
     Start,
     TimerDone,
@@ -419,7 +440,7 @@ static SETTLE_HOOK: std::sync::Mutex<Option<SettleHook>> = std::sync::Mutex::new
 
 /// Runs `hook` at each `settle` admission point from now on.
 #[cfg(test)]
-pub(super) fn pause_settle(hook: SettleHook) {
+pub(crate) fn pause_settle(hook: SettleHook) {
     *SETTLE_HOOK
         .lock()
         .unwrap_or_else(std::sync::PoisonError::into_inner) = Some(hook);
@@ -427,7 +448,7 @@ pub(super) fn pause_settle(hook: SettleHook) {
 
 /// Stops pausing at each `settle` admission point.
 #[cfg(test)]
-pub(super) fn unpause_settle() {
+pub(crate) fn unpause_settle() {
     *SETTLE_HOOK
         .lock()
         .unwrap_or_else(std::sync::PoisonError::into_inner) = None;
@@ -444,6 +465,68 @@ pub(super) fn settle_hook(target: &Target, pause: Pause) {
     }
 }
 
+/// A test's pause inside an observed HTTP worker, after the hub-lock
+/// rendezvous and before any stamp, read or write. `cfg(test)`: no public
+/// API can freeze that post-spawn interleaving, so the rendezvous proof
+/// needs this pause. Scoped by provider name, so parallel tests with
+/// distinct providers pass through. The worker blocks holding no lock, so
+/// the test stays free to assert and release it; dropping the release
+/// sender frees the worker, so a failing test never hangs the suite.
+#[cfg(test)]
+static OBSERVED_PAUSE: std::sync::Mutex<Option<ObservedPause>> = std::sync::Mutex::new(None);
+
+#[cfg(test)]
+struct ObservedPause {
+    provider: String,
+    arrived: std::sync::mpsc::Sender<()>,
+    release: std::sync::mpsc::Receiver<()>,
+}
+
+/// Pauses the next observed HTTP worker of `provider` before it stamps or
+/// writes, returning the arrival signal and the release. Narrow: only
+/// that provider's observed workers wait, so other tests' workers pass
+/// through while it is armed. Fires once per arming; disarm an unused
+/// arming with [`unpause_observed_execution`].
+#[cfg(test)]
+pub(crate) fn pause_observed_execution(
+    provider: &str,
+) -> (std::sync::mpsc::Receiver<()>, std::sync::mpsc::Sender<()>) {
+    let (arrived_tx, arrived_rx) = std::sync::mpsc::channel();
+    let (release_tx, release_rx) = std::sync::mpsc::channel();
+    *OBSERVED_PAUSE
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner) = Some(ObservedPause {
+        provider: provider.to_owned(),
+        arrived: arrived_tx,
+        release: release_rx,
+    });
+    (arrived_rx, release_tx)
+}
+
+/// Stops pausing observed HTTP workers.
+#[cfg(test)]
+pub(crate) fn unpause_observed_execution() {
+    *OBSERVED_PAUSE
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner) = None;
+}
+
+/// Waits for the test's release when an observed worker of the paused
+/// provider reaches its pause, and passes everything else through. The
+/// worker blocks holding no lock.
+#[cfg(test)]
+fn await_observed_release(provider: &str) {
+    let gate = OBSERVED_PAUSE
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
+        .take_if(|pause| pause.provider == provider);
+    if let Some(pause) = gate {
+        let _ignored = pause.arrived.send(());
+        let _ignored = pause.release.recv();
+    }
+}
+/// line, when it is logged: a scripted result reaches the session exactly
+/// as a real run's (`docs/testing.md`, "Testing an extension").
 /// Sends a finished `host.exec` run to the session as its `extension_exec`
 /// line, when it is logged: a scripted result reaches the session exactly
 /// as a real run's (`docs/testing.md`, "Testing an extension").

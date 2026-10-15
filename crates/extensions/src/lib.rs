@@ -32,6 +32,8 @@ mod search;
 mod stall;
 #[cfg(test)]
 mod test_support;
+#[cfg(test)]
+mod timing_tests;
 
 use std::io;
 use std::path::PathBuf;

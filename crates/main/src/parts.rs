@@ -9,6 +9,7 @@ use std::time::Duration;
 
 use crate::connect::{Here, connect, connect_observed};
 use config::{Config, Sources};
+use contract::diag::DebugLog as _;
 use contract::diag::Observe;
 use contract::provider::Provider;
 use contract::shapes::Failure;
@@ -195,6 +196,16 @@ pub(crate) fn parts_in(
         session_locks,
         host,
     );
+    // The session's diagnostics, installed after load and before any
+    // provider work: at debug the installed writer observes eligible
+    // provider HTTP and times non-tool hook chains, and the retained sink
+    // reaches provider VMs that start late. Any other level stays silent.
+    if diag.debugging() {
+        extensions = extensions.with_diagnostics(
+            diag.timings(),
+            Arc::clone(&diag) as Arc<dyn contract::diag::DebugLog>,
+        );
+    }
     // One runner for every startup credential read: the session key, the
     // Lua discovery and refresh gate, and the reviewer lookup all run
     // through the session's reads, so one cancel reaches them all.

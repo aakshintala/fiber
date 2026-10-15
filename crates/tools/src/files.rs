@@ -12,6 +12,7 @@ use std::path::{Component, Path, PathBuf};
 use std::sync::{Arc, Mutex, MutexGuard, OnceLock, PoisonError};
 
 use contract::ErrorCode;
+use contract::diag::Timing;
 use contract::shapes::Effect;
 use contract::tool::{Effects, EffectsError, Output};
 
@@ -354,6 +355,11 @@ pub(crate) struct Shared {
     /// [`Files::with_renderer`]. Tests point it at a stub; production
     /// never calls it and the child default (`pdftoppm` on `PATH`) applies.
     renderer: OnceLock<PathBuf>,
+    /// Times one image child's work as `picture.run`, set once by
+    /// [`Files::with_timing`] before [`Files::with_images`] builds the
+    /// child. The first installation wins, as the renderer does; setting
+    /// it after `with_images` leaves the built child unchanged.
+    timing: OnceLock<Timing>,
 }
 
 struct Session {
@@ -381,6 +387,7 @@ impl Files {
                 }),
                 images: OnceLock::new(),
                 renderer: OnceLock::new(),
+                timing: OnceLock::new(),
             }),
         }
     }
@@ -394,6 +401,9 @@ impl Files {
         if let Some(renderer) = self.shared.renderer.get() {
             child.renderer = renderer.clone();
         }
+        if let Some(timing) = self.shared.timing.get() {
+            child = child.with_timing(timing.clone());
+        }
         self.shared.images.set(child).unwrap_or(());
         self
     }
@@ -404,6 +414,17 @@ impl Files {
     #[must_use]
     pub fn with_renderer(self, program: PathBuf) -> Self {
         self.shared.renderer.set(program).unwrap_or(());
+        self
+    }
+
+    /// Times one image child's work as `picture.run` for `read`. Set
+    /// before [`Files::with_images`], which builds the child with this
+    /// timing: building starts no scope, and each entered image or PDF
+    /// count/cut call owns its guard. The first installation wins; setting
+    /// it after `with_images` leaves the built child unchanged.
+    #[must_use]
+    pub fn with_timing(self, timing: Timing) -> Self {
+        self.shared.timing.set(timing).unwrap_or(());
         self
     }
 

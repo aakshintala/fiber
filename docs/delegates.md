@@ -62,6 +62,7 @@ behaviour is `docs/tools.md`, "Background jobs"; the events are
   `job_stop`, or the caller's SIGTERM.
 - The output path is the delegate's own `events.jsonl` for a Fiber delegate, and
   the harness's raw stream in the parent's `artifacts/` for any other.
+- If a Fiber delegate fails before its session exists, `jobs list` shows its error and omits the missing log path.
 - Every tool is declared from the first request of a session and never removed.
   A tool that cannot be used, such as a delegate tool at the depth cap, fails
   its call with a stable code.

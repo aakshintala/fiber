@@ -8,6 +8,7 @@ use std::sync::Arc;
 
 use contract::ErrorCode;
 use contract::clock::Clock;
+use contract::diag::Timing;
 use contract::events::{ToolInfo, ToolSource, ToolState};
 use contract::search::SearchBackend;
 use contract::shapes::Failure;
@@ -42,6 +43,7 @@ type SessionTools = (
 /// downloads; the model's `shell` moves commands into `jobs`, which the
 /// `jobs` tool lists, waits on and stops. The driver shell runs in the
 /// foreground only. `fiber` is the executable recorded at process startup.
+#[cfg(test)]
 #[allow(
     clippy::too_many_arguments,
     reason = "one session's built-ins need Fiber home and the recorded executable alongside the session's own paths"
@@ -58,14 +60,44 @@ pub(crate) fn builtin(
     delegates: &crate::delegates::Delegates,
     skills: Arc<dyn contract::skills::Skills>,
 ) -> Result<SessionTools, Failure> {
-    let files = Arc::new(
-        tools::Files::with_locks(workspace.to_path_buf(), Arc::clone(locks))
-            .with_images(fiber.clone(), artifacts.to_path_buf()),
-    );
-    let images: Arc<dyn contract::images::Images> = Arc::new(tools::ImageChild::new(
-        fiber.clone(),
-        artifacts.to_path_buf(),
-    ));
+    // The unit tests' entry: no image-child timing. Production forwards
+    // its timing through `builtin_timed`.
+    builtin_timed(
+        fiber, home, workspace, artifacts, clock, jobs, locks, web_search, delegates, skills, None,
+    )
+}
+
+/// One session's built-in tools with an optional image-child timing: the
+/// same registration as [`builtin`], timing each entered image or PDF
+/// count/cut call as `picture.run` when `timing` is present. The timing is
+/// applied to both image drivers, the file tools' child and the shared
+/// standalone child, before either is built; `None` keeps today's
+/// behaviour with no callable invoked.
+#[allow(
+    clippy::too_many_arguments,
+    reason = "one session's built-ins need Fiber home and the recorded executable alongside the session's own paths"
+)]
+pub(crate) fn builtin_timed(
+    fiber: PathBuf,
+    home: &Path,
+    workspace: &Path,
+    artifacts: &Path,
+    clock: &Arc<dyn Clock>,
+    jobs: &Arc<jobs::Registry>,
+    locks: &Arc<tools::PathLocks>,
+    web_search: Option<(Arc<dyn Tool>, ToolInfo)>,
+    delegates: &crate::delegates::Delegates,
+    skills: Arc<dyn contract::skills::Skills>,
+    timing: Option<Timing>,
+) -> Result<SessionTools, Failure> {
+    let mut files = tools::Files::with_locks(workspace.to_path_buf(), Arc::clone(locks));
+    let mut images = tools::ImageChild::new(fiber.clone(), artifacts.to_path_buf());
+    if let Some(timing) = timing {
+        files = files.with_timing(timing.clone());
+        images = images.with_timing(timing);
+    }
+    let files = Arc::new(files.with_images(fiber.clone(), artifacts.to_path_buf()));
+    let images: Arc<dyn contract::images::Images> = Arc::new(images);
     let moves: Arc<dyn contract::jobs::Jobs> = jobs.clone();
     // Only `fiber ask` reaches here, new or resumed: a non-interactive run.
     // The model's shell and the driver shell spill their output past 1 MiB
@@ -174,3 +206,7 @@ mod tests;
 #[cfg(test)]
 #[path = "tool_budget_tests.rs"]
 mod tool_budget_tests;
+
+#[cfg(test)]
+#[path = "timed_tests.rs"]
+mod timed_tests;

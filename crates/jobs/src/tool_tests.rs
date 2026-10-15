@@ -8,11 +8,11 @@ use std::thread;
 use std::time::{Duration, Instant, SystemTime};
 
 use contract::clock::{Clock, Wake};
-use contract::events::{JobCompleted, Outcome};
+use contract::events::{DelegateFinished, DelegateStarted, JobCompleted, Outcome};
 use contract::jobs::{End, JobRecord, Opening, Stop, Taken};
-use contract::shapes::{ContentPart, Effect, Failure, Process};
+use contract::shapes::{ContentPart, Effect, Failure, Process, Usage};
 use contract::tool::{Cancel, Output, Tool};
-use contract::{ErrorCode, JobId};
+use contract::{ErrorCode, JobId, SessionId};
 use fakes::Deadline;
 use fakes::clock::FakeClock;
 use fakes::{CancelToken, Recorder, TempDir};
@@ -227,6 +227,296 @@ fn list_is_empty_then_shows_jobs_in_start_order() {
         }]
     ));
     drop(running.end);
+}
+
+/// Records an ended Fiber delegate that failed with the stored
+/// message: the listing shows that message, and the log path only when
+/// the log is really there. `harness` names the harness the run
+/// recorded, so a foreign harness pins the unchanged format.
+fn failed_delegate(
+    registry: &Arc<Registry>,
+    description: &str,
+    output: &str,
+    harness: &str,
+) -> String {
+    let id = crate::registry::mint_job_id();
+    let delegate = DelegateStarted {
+        job_id: id.clone(),
+        delegate_session_id: SessionId("s_d000000000000001".into()),
+        harness: harness.into(),
+        model: "fiber:fake/m".into(),
+        workspace: "/w".into(),
+        worktree: None,
+        forked_from: None,
+    };
+    let (_started, finish) = registry.open_started(
+        id.clone(),
+        "delegate_spawn".into(),
+        description.into(),
+        output.into(),
+        idle_stop(),
+        delegate,
+    );
+    finish.report(
+        JobCompleted {
+            job_id: id.clone(),
+            status: Outcome::Failed,
+            error: Some(Failure {
+                code: ErrorCode::InvalidArguments,
+                message: "Bad model.".into(),
+                retry_after_ms: None,
+                provider: None,
+            }),
+            process: Some(Process {
+                exit_code: Some(1),
+                signal: None,
+                timed_out: false,
+            }),
+            output_tail: None,
+        },
+        Some(DelegateFinished {
+            job_id: id.clone(),
+            text: String::new(),
+            artifact: None,
+            questions: None,
+            usage: Usage::default(),
+            worktree: None,
+        }),
+    );
+    id.0.clone()
+}
+
+#[test]
+fn an_ended_fiber_delegate_without_its_log_lists_its_error_and_no_path() {
+    let clock: Arc<dyn Clock> = FakeClock::new();
+    let (dir, registry, tool) = setup(clock);
+    let cancel = CancelToken::new();
+    // Never created: the child failed before its session existed.
+    let output = dir
+        .path()
+        .join("sessions")
+        .join("s_missing")
+        .join("events.jsonl");
+    let output = output.to_string_lossy().into_owned();
+    assert!(std::fs::metadata(&output).is_err());
+    let id = failed_delegate(&registry, "scan", &output, "fiber");
+    let listed = run(&tool, json!({"action": "list"}), &cancel);
+    assert!(listed.error.is_none());
+    assert_eq!(
+        text_of(&listed),
+        format!("{id} failed scan \u{2014} Bad model.\n")
+    );
+    // The whole recorded path is gone, not just its filename.
+    assert!(!text_of(&listed).contains(&output), "{}", text_of(&listed));
+}
+
+#[test]
+fn an_ended_fiber_delegate_with_its_log_lists_path_and_error() {
+    let clock: Arc<dyn Clock> = FakeClock::new();
+    let (dir, registry, tool) = setup(clock);
+    let cancel = CancelToken::new();
+    let output = dir.path().join("s_kept").join("events.jsonl");
+    std::fs::create_dir_all(output.parent().unwrap()).unwrap();
+    std::fs::write(&output, "x").unwrap();
+    let output = output.to_string_lossy().into_owned();
+    let id = failed_delegate(&registry, "scan", &output, "fiber");
+    let listed = run(&tool, json!({"action": "list"}), &cancel);
+    assert!(listed.error.is_none());
+    // An existing log stays visible even on failure, with the stored
+    // error after it and no dangling separator.
+    assert_eq!(
+        text_of(&listed),
+        format!("{id} failed scan \u{2014} {output} \u{2014} Bad model.\n")
+    );
+}
+
+#[test]
+fn a_running_fiber_delegate_lists_its_prospective_path() {
+    let clock: Arc<dyn Clock> = FakeClock::new();
+    let (dir, registry, tool) = setup(clock);
+    let cancel = CancelToken::new();
+    // Never created yet: a running delegate still shows where its log
+    // will grow.
+    let output = dir
+        .path()
+        .join("sessions")
+        .join("s_running")
+        .join("events.jsonl");
+    let output = output.to_string_lossy().into_owned();
+    let id = crate::registry::mint_job_id();
+    let delegate = DelegateStarted {
+        job_id: id.clone(),
+        delegate_session_id: SessionId("s_d000000000000002".into()),
+        harness: "fiber".into(),
+        model: "fiber:fake/m".into(),
+        workspace: "/w".into(),
+        worktree: None,
+        forked_from: None,
+    };
+    let (_started, finish) = registry.open_started(
+        id.clone(),
+        "delegate_spawn".into(),
+        "scan".into(),
+        output.clone(),
+        idle_stop(),
+        delegate,
+    );
+    let listed = run(&tool, json!({"action": "list"}), &cancel);
+    assert!(listed.error.is_none());
+    assert_eq!(
+        text_of(&listed),
+        format!("{} running scan \u{2014} {output}\n", id.0)
+    );
+    drop(finish);
+}
+
+#[test]
+fn a_completed_fiber_delegate_with_its_log_lists_no_error() {
+    let clock: Arc<dyn Clock> = FakeClock::new();
+    let (dir, registry, tool) = setup(clock);
+    let cancel = CancelToken::new();
+    let output = dir.path().join("s_done").join("events.jsonl");
+    std::fs::create_dir_all(output.parent().unwrap()).unwrap();
+    std::fs::write(&output, "x").unwrap();
+    let output = output.to_string_lossy().into_owned();
+    let id = crate::registry::mint_job_id();
+    let delegate = DelegateStarted {
+        job_id: id.clone(),
+        delegate_session_id: SessionId("s_d000000000000003".into()),
+        harness: "fiber".into(),
+        model: "fiber:fake/m".into(),
+        workspace: "/w".into(),
+        worktree: None,
+        forked_from: None,
+    };
+    let (_started, finish) = registry.open_started(
+        id.clone(),
+        "delegate_spawn".into(),
+        "scan".into(),
+        output.clone(),
+        idle_stop(),
+        delegate,
+    );
+    finish.report(
+        JobCompleted {
+            job_id: id.clone(),
+            status: Outcome::Completed,
+            error: None,
+            process: Some(Process {
+                exit_code: Some(0),
+                signal: None,
+                timed_out: false,
+            }),
+            output_tail: None,
+        },
+        Some(DelegateFinished {
+            job_id: id.clone(),
+            text: "Done.".into(),
+            artifact: None,
+            questions: None,
+            usage: Usage::default(),
+            worktree: None,
+        }),
+    );
+    let listed = run(&tool, json!({"action": "list"}), &cancel);
+    assert!(listed.error.is_none());
+    assert_eq!(
+        text_of(&listed),
+        format!("{} completed scan \u{2014} {output}\n", id.0)
+    );
+}
+
+#[test]
+fn a_shell_job_lists_its_path_even_when_the_file_is_gone() {
+    let clock: Arc<dyn Clock> = FakeClock::new();
+    let (_dir, registry, tool) = setup(clock);
+    let cancel = CancelToken::new();
+    let opened = open(&registry, "npm test", idle_stop());
+    let id = opened.started.job_id.0.clone();
+    let path = opened.path.clone();
+    std::fs::remove_file(&path).unwrap();
+    (opened.end.0)(completed(&id, Outcome::Completed));
+    let listed = run(&tool, json!({"action": "list"}), &cancel);
+    assert!(listed.error.is_none());
+    // Ordinary jobs keep their recorded path whatever the filesystem
+    // says: only ended Fiber delegates consult it.
+    assert_eq!(
+        text_of(&listed),
+        format!("{id} completed npm test \u{2014} {}\n", path.display())
+    );
+}
+
+#[test]
+fn a_foreign_delegate_keeps_its_path_and_no_error_suffix() {
+    let clock: Arc<dyn Clock> = FakeClock::new();
+    let (dir, registry, tool) = setup(clock);
+    let cancel = CancelToken::new();
+    // Never created, like the Fiber case above: another harness still
+    // shows the recorded path and no stored error.
+    let output = dir
+        .path()
+        .join("sessions")
+        .join("s_foreign")
+        .join("events.jsonl");
+    let output = output.to_string_lossy().into_owned();
+    let id = failed_delegate(&registry, "scan", &output, "cursor-agent");
+    let listed = run(&tool, json!({"action": "list"}), &cancel);
+    assert!(listed.error.is_none());
+    assert_eq!(
+        text_of(&listed),
+        format!("{id} failed scan \u{2014} {output}\n")
+    );
+}
+
+#[test]
+fn an_ended_fiber_delegate_with_an_unreadable_log_keeps_its_path() {
+    let clock: Arc<dyn Clock> = FakeClock::new();
+    let (dir, registry, tool) = setup(clock);
+    let cancel = CancelToken::new();
+    // A regular file where a directory should be: reading the log
+    // fails, but not with missing-file evidence, so the path stays.
+    let blocker = dir.path().join("blocker");
+    std::fs::write(&blocker, "x").unwrap();
+    let output = blocker.join("events.jsonl");
+    let output = output.to_string_lossy().into_owned();
+    assert_eq!(
+        std::fs::metadata(&output).unwrap_err().kind(),
+        std::io::ErrorKind::NotADirectory
+    );
+    let id = failed_delegate(&registry, "scan", &output, "fiber");
+    let listed = run(&tool, json!({"action": "list"}), &cancel);
+    assert!(listed.error.is_none());
+    assert_eq!(
+        text_of(&listed),
+        format!("{id} failed scan \u{2014} {output} \u{2014} Bad model.\n")
+    );
+}
+
+#[test]
+fn listing_twice_after_the_end_was_claimed_shows_the_same_error() {
+    let clock: Arc<dyn Clock> = FakeClock::new();
+    let (dir, registry, tool) = setup(clock);
+    let cancel = CancelToken::new();
+    let output = dir
+        .path()
+        .join("sessions")
+        .join("s_claimed")
+        .join("events.jsonl");
+    let output = output.to_string_lossy().into_owned();
+    let id = failed_delegate(&registry, "scan", &output, "fiber");
+    // Claiming the end through `wait` changes nothing the list shows.
+    let waited = run(
+        &tool,
+        json!({"action": "wait", "job_id": id, "timeout_ms": 0}),
+        &cancel,
+    );
+    assert!(waited.error.is_none());
+    let expected = format!("{id} failed scan \u{2014} Bad model.\n");
+    for _ in 0..2 {
+        let listed = run(&tool, json!({"action": "list"}), &cancel);
+        assert!(listed.error.is_none());
+        assert_eq!(text_of(&listed), expected);
+    }
 }
 
 #[test]
