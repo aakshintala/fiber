@@ -333,6 +333,48 @@ fn tls_receive_and_shutdown_do_not_wait_for_a_held_send() {
 }
 
 #[test]
+fn shutdown_with_unread_caller_bytes_still_delivers_eof() {
+    fakes::within("shutdown with unread caller bytes", WAIT, || {
+        let (close_peer, close_wait) = mpsc::channel::<()>();
+        let (endpoint, done) = server(move |mut peer| {
+            upgrade(&mut peer);
+            match close_wait.recv() {
+                Ok(()) | Err(_) => {}
+            }
+            peer.shutdown(Shutdown::Both).unwrap();
+        });
+        let (held, is_held) = mpsc::channel();
+        let (release, hold) = mpsc::channel::<()>();
+        let mut via = Via {
+            pause: Some(Arc::new(Pause {
+                held,
+                release: std::sync::Mutex::new(hold),
+            })),
+            ..direct()
+        };
+        let exit = exits(&mut via);
+        let mut stream = connect_with(&endpoint, &via).unwrap();
+        stream.write_all(b"hold the sender\n").unwrap();
+        let deadline = fakes::Deadline::after(WAIT);
+        deadline.recv_or_fail(&is_held, "out-pump held before the TCP write");
+        // The out-pump cannot read these bytes: it is parked inside its send.
+        stream.write_all(b"queued caller bytes\n").unwrap();
+        close_peer.send(()).unwrap();
+        assert_eq!(
+            deadline.recv_or_fail(&exit, "in-pump shutdown while caller bytes are queued"),
+            "net-ws-in"
+        );
+        drop(release);
+        assert_eq!(
+            deadline.recv_or_fail(&exit, "out-pump ends after shutdown"),
+            "net-ws-out"
+        );
+        eof(&mut stream);
+        deadline.recv_or_fail(&done, "server socket closed");
+    });
+}
+
+#[test]
 fn a_peer_that_never_reads_expires_the_write_and_ends_both_pumps() {
     fakes::within("websocket write backpressure", WAIT, || {
         let (release, hold) = mpsc::channel::<()>();

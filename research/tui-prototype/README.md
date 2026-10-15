@@ -19,7 +19,7 @@ cargo run --release -- fixtures/session.jsonl
 | `--static` | loads the whole file at once |
 | `--reduced-motion` | keeps the working line's word still; `FIBER_REDUCED_MOTION=1` does the same |
 | `--hover` | also turns on mode 1003, every mouse motion, and tints the click target under the pointer; see "Hover's cost" |
-| `--home [CASE]` | draws the home screen case instead of the conversation, or the live home with no case; see "Home (#1628, #1657)" |
+| `--home [CASE]` | draws the full-screen fleet case instead of the conversation, or the live fleet with no case; see "Home (#2424)" |
 | `--overlay CASE` | draws one overlay case over a dimmed conversation; see "Overlays (#1630)" |
 | `--rail-case CASE` | draws one rail-cards case instead of the conversation; see "The rail (#692)" |
 | `--theme CASE` | draws the screen in another theme or colour depth; combines with any other flag; see "Themes (#1634)" |
@@ -46,20 +46,25 @@ cargo run --release -- fixtures/session.jsonl
 
 The key map is under "Stage 2".
 
-## Home (#1628, #1657)
+## Home (#2424)
 
-`--home [CASE]` draws the home screen instead of the conversation: the logo,
-the large input box with its chip row, and the session list, or the workspace
-picker over home. With no case, or a `live` case, home runs its event loop:
-typing fills the box and Enter switches to the conversation view; focus runs
-top to bottom, entry bar, chip row, session list: ↓ from the entry bar
-focuses the last chip, ↓ from a chip focuses the first row, ↑ returns the
-same way, ← → move between chips, Enter opens the focused chip as a click
-does, and typing clears chip focus into the entry bar; clicking the workspace
-chip opens the workspace picker; the model and thinking chips open the model
-picker; `/` opens slash completions; q quits. The other cases each draw one still frame from
-the fixtures in `src/home.rs` and wait for a key; Esc, q or Ctrl+C quits.
-Combine with `--static`; the fixture still loads but home ignores it.
+`--home [CASE]` draws the full-screen fleet instead of the conversation:
+the header with the logo, the version and the counts across projects, one
+section per project with two-line live rows and dim exited rows, and the
+prompt box with its chip row at the bottom where the conversation view's
+input box sits. With no case, or a `live` case, home runs its event loop:
+focus runs from the session list down to the entry bar and the chip row
+(↓ past the last row reaches the entry, ↓ from the entry reaches the
+chips, ↑ returns the same way, ↓ from a chip wraps to the first row);
+↑ and ↓ move through every row, live and exited, across sections; Enter
+opens the focused session, or starts one from a non-empty box; typing goes
+to the entry bar; Delete deletes the focused exited row; → or Esc goes back
+to the conversation view; Ctrl+C quits. Clicking the workspace chip opens
+the workspace picker; the worktree switch toggles; the model and thinking
+chips open the model picker; `/` opens slash completions. The other cases
+each draw one still frame from the fixtures in `src/home.rs` and wait for a
+key; Esc, q or Ctrl+C quits. Combine with `--static`; the fixture still
+loads but home ignores it.
 
 The logo is real Fiber's: the pixel letters copied from
 `crates/tui/src/logo.rs`, and where the terminal speaks kitty graphics (kitty,
@@ -70,52 +75,27 @@ replaces it from the second draw, so detection never delays the first frame.
 iTerm2 and Sixel are not drawn; the pixel logo stays there.
 
 ```sh
-cargo run --release -- fixtures/session.jsonl --static --home empty
-cargo run --release -- fixtures/session.jsonl --static --home sessions
-cargo run --release -- fixtures/session.jsonl --static --home live-only
-cargo run --release -- fixtures/session.jsonl --static --home past-only
-cargo run --release -- fixtures/session.jsonl --static --home selected
-cargo run --release -- fixtures/session.jsonl --static --home hover-workspace
-cargo run --release -- fixtures/session.jsonl --static --home hover-worktree
-cargo run --release -- fixtures/session.jsonl --static --home hover-model
-cargo run --release -- fixtures/session.jsonl --static --home hover-thinking
-cargo run --release -- fixtures/session.jsonl --static --home worktree-on
-cargo run --release -- fixtures/session.jsonl --static --home worktree-off
-cargo run --release -- fixtures/session.jsonl --static --home picker-recent
-cargo run --release -- fixtures/session.jsonl --static --home picker-typed
-cargo run --release -- fixtures/session.jsonl --static --home focus-entry
-cargo run --release -- fixtures/session.jsonl --static --home focus-chip-workspace
-cargo run --release -- fixtures/session.jsonl --static --home focus-chip-model
-cargo run --release -- fixtures/session.jsonl --static --home focus-chip-picker
-cargo run --release -- fixtures/session.jsonl --static --home focus-chip-typing
-cargo run --release -- fixtures/session.jsonl --static --home focus-session
+cargo run --release -- fixtures/session.jsonl --static --home full-sessions
+cargo run --release -- fixtures/session.jsonl --static --home full-empty
+cargo run --release -- fixtures/session.jsonl --static --home full-focus-exited
+cargo run --release -- fixtures/session.jsonl --static --home full-closing
+cargo run --release -- fixtures/session.jsonl --static --home full-picker
+cargo run --release -- fixtures/session.jsonl --static --home rail-focused
 ```
 
-- `live`: the interactive home and its keys (see below); `--home` with no
+- `live`: the interactive fleet and its keys (see below); `--home` with no
   case runs this.
-- `empty`: home with an empty session list, a still frame.
-- `sessions`: five live sessions under `Live sessions` and six exited ones
-  under `Past sessions`, each a two-line row (the glyph, the name or first
-  prompt, its age and its verb; dim `id · turns · branch · spend` with the
-  workspace segment and the wait), a still frame.
-- `live-only`, `past-only`: one section only, still frames.
-- `selected`: the first live row selected, a still frame.
-- `hover-workspace`, `hover-worktree`, `hover-model`, `hover-thinking`: one
-  chip hovered (the `lift` tint, as `--hover` does it), still frames.
-- `worktree-on`, `worktree-off`: the new-worktree switch on and off, still
-  frames.
-- `picker-recent`: the picker over home with recent workspaces only, a
-  still frame.
-- `picker-typed`: the picker over home with the typed-path row
-  (`~/work/fi` completing to `fiber` and `fiber-worktrees`, first row
-  selected) over the recents, a still frame; this settles #1604 Q7.
-- `focus-entry`: the entry bar focused (today's look), a still frame.
-- `focus-chip-workspace`, `focus-chip-model`: one chip focused (the `lift`
-  tint, as `--hover` does it), still frames.
-- `focus-chip-picker`: the picker over home with the workspace chip still
-  focused behind it, a still frame.
-- `focus-chip-typing`: a draft typed after a chip was focused, a still frame.
-- `focus-session`: the first live row selected from the chip row, a still frame.
+- `full-sessions`: the eight live fixture sessions under one section per
+  project (launch project first) plus the exited ones, the first live row
+  focused, a still frame.
+- `full-empty`: no sessions: dim `no sessions yet` in the header and the
+  centred middle lines, a still frame.
+- `full-focus-exited`: the first exited row focused, a still frame.
+- `full-closing`: one live row `CLOSING` after `/clear`, a still frame.
+- `full-picker`: the workspace picker open over the fleet, a still frame.
+- `rail-focused`: the conversation view with the rail focused on a
+  NEEDS INPUT card (the lifted card, the dimmed input box, the rail foot
+  hint), a still frame.
 
 `./capture-home.sh` captures every still frame in tmux at 160 by 48, plain
 text and SGR, for the ticket's PR body.
@@ -285,7 +265,8 @@ draws it, and docs/tui.md maps the hub's `idle` status to READY.
 | chips | function keys do not reach every shell, so the rail switches by clicking the `A B C` chips (and, in B, the `full med three compact` chips) in the rail's bottom label; the tabs row carries its own `A B C` chips |
 | ⌥1..⌥9 | jumps to the Nth session in start order and scrolls its card into view; needs Ghostty's `macos-option-as-alt`, as with the other ⌥ keys; the mouse is the fallback |
 | ⌥A | jumps to the oldest waiting session; on macOS where Option is not Alt it arrives as "å", which the prototype also accepts |
-| ⌥R | toggles the rail shown/hidden; on macOS where Option is not Alt it arrives as "®", which the prototype also accepts |
+| ⌥R | toggles the rail shown/hidden; `/rail` does the same; on macOS where Option is not Alt it arrives as "®", which the prototype also accepts |
+| ← | with an empty input box, moves keyboard focus into the rail; with text in the box, ← moves the cursor as before; when the rail is hidden or the window too narrow for it, a single ← opens the full-screen fleet instead |
 
 - A "list": 22 columns, one row per session (`1 ● name…`), waiting sessions with their wait reason on a second dim row, the on-screen session on a tint with a ▌ stripe, other projects under a divider behind "+1 other · show all".
 - B "cards" (the default): rich cards grouped by project, mocked at 40 columns with tinted surfaces and no box borders. The bottom label's chips switch four densities, the current one highlighted; three is the card: medium's rows with cost and context moved into row 1 (number, glyph, state word; coarse elapsed, spend and coloured percentage right-aligned, no bar), both edges, 3 content rows. When row 1 does not fit the elapsed goes first, then the spend; the state word is never cut. Full keeps the 5-row edged card, medium the 4-row edged card and compact the 3-row flat card for comparison. The three default keeps every project on screen at once. Narrow rule as medium. Every row ends 2 cells short of the card's edge (a right inner margin matching the stripe + space on the left). The bar is blue under 60%, orange at 60–85%, red above. The stripe and tint follow the state: working blue, retrying orange, needs-input the pulsing attention colour, ready dim, crashed dimmed red. The on-screen card uses the brighter SEL surface; the rest use their dimmer state tint. A project header names the project in the accent colour, bold, with the group's live spend summed over its cards and a fake "N ✓" right-aligned; the launch project's group comes first, the rest after in start order, and every project shows. A "+" chip after the project name starts a session there (a "→ would start" row); clicking "N ✓" opens that project's session list (a "→ would open" row). Context % values span 12%–91% so all three bar colours show.
@@ -407,6 +388,11 @@ tmux answers the DA1 query itself and does not answer kitty's query, so under tm
 | Scroll the panel | wheel over the panel | same | no |
 | Scroll the rail | wheel over the rail, when its cards overflow | same | no |
 | Jump to a rail session | ⌥N, scrolls its card into view | click its card | no, where Option is Alt |
+| Focus the rail | ← from an empty input box | same | no |
+| Move between rail cards | ↑ ↓, across project groups | same | no |
+| Switch to the focused rail session | Enter | click its card | no |
+| Give focus back to the input box | → or Esc | click the conversation | no |
+| Widen the rail to the full-screen fleet | ← again | same | no |
 | Jump to the oldest waiting session | ⌥A | click its card | no; "å" where Option is not Alt |
 | Toggle the rail shown/hidden | ⌥R | click the Session card's waiting line | no; "®" where Option is not Alt |
 | Jump to the end | End | End, or click the "↓ N lines below" overlay | no |

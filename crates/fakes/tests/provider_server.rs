@@ -280,9 +280,17 @@ fn dropping_the_server_closes_its_port() {
     let addr = addr(&server);
     assert!(TcpStream::connect_timeout(&addr, DEADLINE).is_ok());
 
+    let probe = server.drop_probe();
     drop(server);
 
-    assert!(TcpStream::connect_timeout(&addr, DEADLINE).is_err());
+    assert!(
+        probe.listener_closed(),
+        "the dropped server closed its listener"
+    );
+    assert!(
+        probe.accept_joined(),
+        "the dropped server joined its accept thread"
+    );
 }
 
 #[test]

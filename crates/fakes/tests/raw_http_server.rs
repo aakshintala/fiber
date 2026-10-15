@@ -22,11 +22,6 @@ use fakes::{Deadline, RawHttpServer, Request, fingerprint};
 /// "Waits and timeouts").
 const DEADLINE: Duration = fakes::MUST_SUCCEED_WITHIN;
 
-/// A bound that fails an assertion instead of hanging it when the fake
-/// misbehaves: long enough to absorb scheduling, short enough to keep a
-/// regression fast.
-const SHORT: Duration = Duration::from_millis(500);
-
 /// The refusal the refusing-proxy migration serves: exact bytes, then EOF.
 const REFUSED: &[u8] = b"HTTP/1.1 403 Forbidden\r\nconnection: close\r\ncontent-length: 0\r\n\r\n";
 /// The close-delimited body the lengthless migration serves: no measured
@@ -313,6 +308,7 @@ fn dropping_a_server_with_a_blocked_reply_returns_promptly() {
         "the blocked request is recorded before the drop"
     );
     assert_eq!(recorded[0].path, "/blocked-drop");
+    let probe = server.drop_probe();
     let (drop_tx, drop_rx) = mpsc::channel();
     let _dropper = thread::spawn(move || {
         drop(server);
@@ -329,8 +325,12 @@ fn dropping_a_server_with_a_blocked_reply_returns_promptly() {
         Ok(()) | Err(_) => {}
     }
     assert!(
-        TcpStream::connect_timeout(&address, SHORT).is_err(),
-        "the dropped server refuses connections"
+        probe.listener_closed(),
+        "the dropped server closed its listener"
+    );
+    assert!(
+        probe.accept_joined(),
+        "the dropped server joined its accept thread"
     );
 }
 
@@ -343,6 +343,7 @@ fn dropping_the_raw_server_closes_its_listener_and_incomplete_connection() {
     stream
         .write_all(b"GET / HTTP/1.1\r\nHost: fake\r\n")
         .unwrap();
+    let probe = server.drop_probe();
     drop(server);
     let mut byte = [0u8; 1];
     match stream.read(&mut byte) {
@@ -351,7 +352,11 @@ fn dropping_the_raw_server_closes_its_listener_and_incomplete_connection() {
         Err(_) => {}
     }
     assert!(
-        TcpStream::connect_timeout(&address, SHORT).is_err(),
-        "the dropped server refuses connections"
+        probe.listener_closed(),
+        "the dropped server closed its listener"
+    );
+    assert!(
+        probe.accept_joined(),
+        "the dropped server joined its accept thread"
     );
 }

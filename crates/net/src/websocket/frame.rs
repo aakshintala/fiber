@@ -152,7 +152,7 @@ pub(super) fn encode(
     draw(&mut mask)?;
     let mut out = vec![0x80 | opcode];
     match payload.len() {
-        0..=125 => out.push(0x80 | u8::try_from(payload.len()).unwrap_or(125)),
+        0..=125 => out.push(0x80 + u8::try_from(payload.len()).unwrap_or(125)),
         126..=65_535 => {
             out.push(0xfe);
             out.extend_from_slice(&u16::try_from(payload.len()).unwrap_or(65_535).to_be_bytes());

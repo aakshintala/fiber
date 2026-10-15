@@ -801,6 +801,123 @@ fn a_click_on_more_lists_every_notice() {
     assert_eq!(lp.app.notice_overlay(), Some(listed));
 }
 
+/// An attached loop with home set and a live session row, so a
+/// started turn draws its working line below the notices, moving
+/// their rows up one (`docs/tui.md`, "Notices").
+#[track_caller]
+fn live(inputs: Vec<Input>) -> super::Loop<TestBackend> {
+    use std::path::PathBuf;
+    let (mut lp, _) = new_loop(TestBackend::new(60, 12), None);
+    lp.app.set_home(crate::home::Launch {
+        workspace: PathBuf::from("/w"),
+        project: "-w".to_owned(),
+        ..Default::default()
+    });
+    lp.app
+        .attach(contract::SessionId("s_aaaaaaaaaaaaaaaa".to_owned()));
+    feed(&mut lp, vec![status("s_aaaaaaaaaaaaaaaa", "one")]);
+    feed(&mut lp, inputs);
+    lp
+}
+
+/// The screen row of the first notice box target: the row a
+/// read-then-click would click.
+#[track_caller]
+fn notice_row(lp: &super::Loop<TestBackend>) -> u16 {
+    lp.screen
+        .targets()
+        .iter()
+        .find(|target| matches!(target.id, crate::mouse::TargetId::Notice(_)))
+        .map(|target| target.rect.y)
+        .expect("a notice target")
+}
+
+/// A turn starting on the attached session: its working line draws
+/// below the notices, moving their rows up one.
+fn turn_started() -> Input {
+    session(
+        "turn_started",
+        serde_json::json!({"input": [{"type": "message", "source": "driver",
+            "content": [{"type": "text", "text": "go"}]}]}),
+        None,
+    )
+}
+
+#[test]
+fn a_click_on_a_notice_row_a_later_frame_moved_opens_nothing() {
+    let mut lp = live(notices(1));
+    let old = notice_row(&lp);
+    feed(&mut lp, vec![turn_started()]);
+    // The working line draws below the notices, moving the notice row
+    // up one.
+    let moved = notice_row(&lp);
+    assert_eq!(moved, old.checked_sub(1).expect("the notice row moves up"));
+    // A click on the old row lands below the notice, opening nothing.
+    feed(&mut lp, vec![click(0, old)]);
+    assert_eq!(lp.app.notice_overlay(), None);
+    // The notice opens from its new row.
+    feed(&mut lp, vec![click(0, moved)]);
+    assert_eq!(lp.app.notice_overlay(), Some(vec!["Notice 1.".to_owned()]));
+}
+
+#[test]
+fn a_click_on_a_notice_row_a_second_notice_took_opens_the_newer_notice() {
+    let mut lp = live(notices(1));
+    let old = notice_row(&lp);
+    // The second notice alone: the equivalent of `notices(2)[1..]`.
+    let mut second = notices(2);
+    second.remove(0);
+    feed(&mut lp, second);
+    // The newer notice takes the old row, so the stale click opens it,
+    // not the one read.
+    feed(&mut lp, vec![click(0, old)]);
+    assert_eq!(lp.app.notice_overlay(), Some(vec!["Notice 2.".to_owned()]));
+}
+
+#[test]
+fn enter_on_the_focused_notice_opens_it_after_its_row_moved() {
+    use crate::mouse::TargetId;
+    let mut lp = live(notices(1));
+    feed(&mut lp, vec![Input::Bytes(b"\x1b[Z".to_vec())]);
+    // With no conversation item Shift+Tab focuses the last stop, the
+    // notice's own dismiss cross on the same row; walk to the notice
+    // itself, bounded by the frame's rows.
+    for _ in 0..12 {
+        if matches!(lp.app.focused(), Some(TargetId::Notice(_))) {
+            break;
+        }
+        let up = matches!(lp.app.focused(), Some(TargetId::DismissNotice(_)));
+        feed(
+            &mut lp,
+            vec![Input::Bytes(if up {
+                b"\x1b[A".to_vec()
+            } else {
+                b"\x1b[B".to_vec()
+            })],
+        );
+    }
+    assert!(
+        matches!(lp.app.focused(), Some(TargetId::Notice(_))),
+        "the focus walk reaches the notice, focused is {:?}",
+        lp.app.focused()
+    );
+    let moved_from = notice_row(&lp);
+    feed(&mut lp, vec![turn_started()]);
+    assert_eq!(
+        notice_row(&lp),
+        moved_from.checked_sub(1).expect("the notice row moves up")
+    );
+    // Focus follows the notice by id across the redraw, so Enter opens
+    // it from its new row.
+    assert!(
+        matches!(lp.app.focused(), Some(TargetId::Notice(_))),
+        "focus stays on the notice after its row moved, focused is {:?}",
+        lp.app.focused()
+    );
+    feed(&mut lp, vec![Input::Bytes(b"\r".to_vec())]);
+    assert_eq!(lp.app.notice_overlay(), Some(vec!["Notice 1.".to_owned()]));
+}
+
 #[test]
 fn the_open_notice_overlay_hides_the_conversation_targets() {
     let mut lp = grouped(TestBackend::new(60, 12));

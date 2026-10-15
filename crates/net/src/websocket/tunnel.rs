@@ -3,7 +3,7 @@ use super::{Endpoint, Via, handshake};
 use crate::Error;
 use base64::{Engine, prelude::BASE64_STANDARD as STANDARD};
 use std::io::{self, Write};
-use std::net::TcpStream;
+use std::net::{SocketAddr, TcpStream};
 use std::time::Duration;
 use ureq::unversioned::transport::NextTimeout;
 
@@ -37,7 +37,7 @@ pub(super) fn connect(endpoint: &Endpoint, via: &Via) -> Result<(TcpStream, Vec<
     } else {
         (endpoint.host.as_str(), endpoint.port)
     };
-    let mut stream = dial(host, port, via)?;
+    let mut stream = dial(host, port, via, &mut TcpStream::connect_timeout)?;
     stream.set_read_timeout(Some(via.limits.connect()))?;
     stream.set_write_timeout(Some(via.limits.connect()))?;
     let mut tail = Vec::new();
@@ -71,7 +71,12 @@ pub(super) fn connect(endpoint: &Endpoint, via: &Via) -> Result<(TcpStream, Vec<
     Ok((stream, tail))
 }
 
-fn dial(host: &str, port: u16, via: &Via) -> Result<TcpStream, Error> {
+fn dial(
+    host: &str,
+    port: u16,
+    via: &Via,
+    connect: &mut impl FnMut(&SocketAddr, Duration) -> io::Result<TcpStream>,
+) -> Result<TcpStream, Error> {
     let uri = format!("http://{}/", handshake::authority(host, port))
         .parse::<ureq::http::Uri>()
         .map_err(|_| Error::Resolve {
@@ -97,7 +102,7 @@ fn dial(host: &str, port: u16, via: &Via) -> Result<TcpStream, Error> {
         reason: "no addresses".into(),
     };
     for addr in addresses.iter().copied() {
-        match TcpStream::connect_timeout(&addr, via.limits.connect()) {
+        match connect(&addr, via.limits.connect()) {
             Ok(stream) => return Ok(stream),
             Err(source) if source.kind() == io::ErrorKind::TimedOut => {
                 last = Error::ConnectTimedOut {

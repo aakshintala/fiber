@@ -113,6 +113,11 @@ those.
   warnings` and `cargo test`, with `--manifest-path
   research/tui-prototype/Cargo.toml`.
 - None of the `crates/` rules apply.
+- A pull request whose diff is confined to `research/tui-prototype/` is
+  low process: the orchestrator hands the ticket straight to an implementer,
+  with no separate plan and no review, and merges on a green `CI` check
+  ([#2424](https://github.com/aakshintala/fiber/issues/2424#issuecomment-6199703049)).
+  A diff that also touches `crates/` or `docs/` follows the full workflow.
 
 Any other docs path: `scripts/check-docs`.
 
@@ -191,6 +196,9 @@ given the diff, the ticket, the docs it cites, `GLOSSARY.md` and
 
 - Spec: the diff does what the ticket and its `docs/<area>.md` pages say.
 - Standards: the items in `docs/code-quality.md`, "What a reviewer checks".
+
+A pull request confined to `research/tui-prototype/` has no review ("Rules
+by path").
 
 A pull request that changes only docs, in wording taken from an owner ruling
 recorded on its ticket, has no separate reviewer. The orchestrator checks the

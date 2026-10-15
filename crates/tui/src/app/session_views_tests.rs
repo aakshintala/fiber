@@ -592,7 +592,10 @@ fn slash_context_opens_the_view_and_clears_the_draft() {
     assert!(app.input().is_empty());
     let shown = screen(&app, 80, 24).0;
     assert!(shown.contains("Context"), "{shown}");
-    assert!(shown.contains("context  50 of 100 tokens"), "{shown}");
+    assert!(
+        shown.contains("50 tokens · 50% of the 100 window"),
+        "{shown}"
+    );
     app.on_key(Key::Down, now());
     assert_eq!(app.session_view_screen(0).unwrap().list.selected(), 1);
     assert_eq!(app.on_key(Key::Esc, now()), Effect::None);
@@ -612,12 +615,16 @@ fn context_folds_the_preamble_rate_total_handoff_and_tool_results() {
     open_context(&mut app);
     let shown = screen(&app, 100, 40).0;
     for expected in [
-        "context  50 of 100 tokens · 50%",
-        "█ system prompt  3 tokens",
-        "▓ tool definitions  7 tokens",
-        "▒ tool results  5 tokens",
-        "▆ messages  35 tokens",
-        "handoff at 80 tokens",
+        "50 tokens · 50% of the 100 window · automatic handoff at 80",
+        "■ system prompt",
+        "~3 6%",
+        "■ tool definitions",
+        "~7 14%",
+        "■ tool results",
+        "~5 10%",
+        "■ messages",
+        "~35 70%",
+        "handoff 80",
         "read  ~5 tokens",
     ] {
         assert!(shown.contains(expected), "missing {expected:?} in {shown}");
@@ -685,8 +692,10 @@ fn a_fork_counts_its_own_results_and_completed_handoff_clears_them() {
     }
     open_context(&mut app);
     let shown = screen(&app, 100, 40).0;
-    assert!(shown.contains("▒ tool results  12 tokens"), "{shown}");
-    assert!(shown.contains("▆ messages  78 tokens"), "{shown}");
+    assert!(shown.contains("■ tool results"), "{shown}");
+    assert!(shown.contains("~12 12%"), "{shown}");
+    assert!(shown.contains("■ messages"), "{shown}");
+    assert!(shown.contains("~78 78%"), "{shown}");
     assert!(
         shown.contains("history before the fork counts under messages"),
         "{shown}"
@@ -696,7 +705,8 @@ fn a_fork_counts_its_own_results_and_completed_handoff_clears_them() {
     assert!(!shown.contains("ancestor"), "{shown}");
     app.on_line(context_handoff());
     let after = screen(&app, 100, 40).0;
-    assert!(after.contains("▒ tool results  0 tokens"), "{after}");
+    assert!(after.contains("■ tool results"), "{after}");
+    assert!(after.contains("~0 0%"), "{after}");
     assert!(after.contains("none since the last handoff"), "{after}");
 }
 

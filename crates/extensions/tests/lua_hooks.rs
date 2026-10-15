@@ -787,6 +787,37 @@ fn next_line(rx: &mpsc::Receiver<Vec<u8>>, what: &str, wait: &Deadline) -> Vec<u
     }
 }
 
+/// The first arrival while waiting for a held hook: the `started` fifo
+/// line, or the chain's answer when the hook's write fails before it ever
+/// opens the fifo for writing.
+enum HeldArrival {
+    Line(Vec<u8>),
+    Answer(ContextAnswer),
+}
+
+/// Waits for the held hook's `started` fifo line under `wait`, and names
+/// what the chain answered when the hook never reaches its write. The
+/// caller sends both the fifo line and the chain's answer into `merged`,
+/// so one deadline covers both: a line returns, leaving the answer in
+/// `merged` for the caller's later assert; an answer panics with what it
+/// said; expiry panics still pending.
+#[allow(
+    clippy::panic,
+    reason = "a test helper; a held hook that is not held is the test's failure"
+)]
+#[track_caller]
+fn await_held_hook(merged: &mpsc::Receiver<HeldArrival>, wait: &Deadline, what: &str) {
+    match wait.recv(merged) {
+        Ok(HeldArrival::Line(line)) if line == b"x" => (),
+        Ok(HeldArrival::Line(_)) => panic!("{what} still pending"),
+        Ok(HeldArrival::Answer(answer)) => panic!(
+            "{what} answered: outcome {:?}, notices {:?}",
+            answer.outcome, answer.notices
+        ),
+        Err(_) => panic!("{what} still pending"),
+    }
+}
+
 /// Asserts no fifo line arrives: a timer that must not have fired.
 /// `QUIET` names the listen, so the wait has one named deadline.
 const QUIET: Duration = Duration::from_millis(100);
@@ -1569,8 +1600,23 @@ fn a_blocking_before_model_call_hook_past_its_timeout_fails() {
 /// while it holds and then releasing it never starts the second hook, and
 /// the first hook's message is dropped.
 #[test]
-#[allow(clippy::expect_used, reason = "a failure is the test's")]
 fn a_cancel_between_turn_end_hooks_drops_the_first_hooks_message() {
+    held_turn_end("started.fifo");
+}
+
+#[test]
+#[should_panic(expected = "turn_end answered: outcome")]
+fn a_blocked_started_fifo_reports_the_turn_end_hooks_error() {
+    held_turn_end("blocker/started.fifo");
+}
+
+/// The body both `turn_end` cancel tests share: the held hook writes
+/// `started`, `"started.fifo"` on the normal path or
+/// `"blocker/started.fifo"` past a regular file that fails the write,
+/// while the reader always opens the real `started.fifo`.
+#[allow(clippy::expect_used, reason = "a failure is the test's")]
+#[allow(clippy::panic, reason = "a test helper; a failure is the test's")]
+fn held_turn_end(started: &str) {
     let setup = Setup::new();
     let dir = setup.workspace();
     let init = format!(
@@ -1578,7 +1624,7 @@ fn a_cancel_between_turn_end_hooks_drops_the_first_hooks_message() {
          fiber.hook(\"turn_end\", {{ timeout = 60000, on_failure = \"non-blocking\",\n\
            run = function(call)\n\
              require(\"go_hold\")\n\
-             host.fs.write(dir .. \"/started.fifo\", \"x\")\n\
+             host.fs.write(dir .. \"/{started}\", \"x\")\n\
              host.fs.write(dir .. \"/release.fifo\", \"x\")\n\
              return {{ message = \"first\" }}\n\
            end }})\n\
@@ -1591,36 +1637,56 @@ fn a_cancel_between_turn_end_hooks_drops_the_first_hooks_message() {
     );
     let installed = install_lua(&setup, "hold", &json!({}), &init);
     let went = go_module(&installed, "hold");
+    // The reader always opens the real `started.fifo`; on the blocked path
+    // the hook writes to `blocker/started.fifo` past a regular file, so its
+    // write fails while the reader blocks.
     timer_fifo(&dir, "started.fifo");
+    if started != "started.fifo" {
+        write(&dir.join("blocker"), "");
+    }
     timer_fifo(&dir, "release.fifo");
     let clock = FakeClock::new();
     let session = load(&setup, &[], clock);
     let cancel = fakes::CancelToken::new();
-    let (tx, rx) = mpsc::channel();
-    let asking = Arc::clone(&session);
-    let signal = cancel.clone();
-    std::thread::spawn(move || {
-        let answer = asking.turn_end(&TurnEnd {
-            reply: "Done.",
-            cancel: &signal,
+    let (tx, rx) = mpsc::channel::<HeldArrival>();
+    {
+        let tx = tx.clone();
+        let path = dir.join("started.fifo");
+        std::thread::spawn(move || {
+            let mut content = Vec::new();
+            let result = std::fs::File::open(&path)
+                .and_then(|mut file| std::io::Read::read_to_end(&mut file, &mut content));
+            let line = match result {
+                Ok(_) => content,
+                Err(_) => Vec::new(),
+            };
+            match tx.send(HeldArrival::Line(line)) {
+                Ok(()) | Err(mpsc::SendError(_)) => {}
+            }
         });
-        match tx.send(answer) {
-            Ok(()) | Err(mpsc::SendError(_)) => {}
-        }
-    });
+    }
+    {
+        let tx = tx.clone();
+        let asking = Arc::clone(&session);
+        let signal = cancel.clone();
+        std::thread::spawn(move || {
+            let answer = asking.turn_end(&TurnEnd {
+                reply: "Done.",
+                cancel: &signal,
+            });
+            match tx.send(HeldArrival::Answer(answer)) {
+                Ok(()) | Err(mpsc::SendError(_)) => {}
+            }
+        });
+    }
+    drop(tx);
     // The require proves the first hook started; the `started` fifo proves
     // it is held in its writes before the cancel lands.
     Deadline::after(WAIT)
         .recv(&went)
         .expect("waited for the hook to start");
-    assert_eq!(
-        next_line(
-            &read_fifo(dir.join("started.fifo")),
-            "the held hook",
-            &Deadline::after(WAIT)
-        ),
-        b"x"
-    );
+    let wait = Deadline::after(WAIT);
+    await_held_hook(&rx, &wait, "turn_end");
     cancel.cancel();
     assert_eq!(
         next_line(
@@ -1630,9 +1696,13 @@ fn a_cancel_between_turn_end_hooks_drops_the_first_hooks_message() {
         ),
         b"x"
     );
-    let answer = Deadline::after(WAIT)
-        .recv(&rx)
-        .expect("waited for the answer");
+    let answer = match Deadline::after(WAIT).recv(&rx) {
+        Ok(HeldArrival::Answer(answer)) => answer,
+        Ok(HeldArrival::Line(line)) => {
+            panic!("unexpected started line after the hold: {line:?}")
+        }
+        Err(_) => panic!("waited {WAIT:?} for the answer"),
+    };
     let ContextOutcome::Added(context) = answer.outcome else {
         panic!("the cancel drops the messages: {:?}", answer.outcome);
     };
@@ -1644,8 +1714,23 @@ fn a_cancel_between_turn_end_hooks_drops_the_first_hooks_message() {
 /// A `session_start` chain whose first hook holds in a fifo write: the same
 /// cancel between its hooks drops the first hook's context.
 #[test]
-#[allow(clippy::expect_used, reason = "a failure is the test's")]
 fn a_cancel_between_session_start_hooks_drops_the_first_hooks_context() {
+    held_session_start("started.fifo");
+}
+
+#[test]
+#[should_panic(expected = "session_start answered: outcome")]
+fn a_blocked_started_fifo_reports_the_session_start_hooks_error() {
+    held_session_start("blocker/started.fifo");
+}
+
+/// The body both `session_start` cancel tests share: the held hook writes
+/// `started`, `"started.fifo"` on the normal path or
+/// `"blocker/started.fifo"` past a regular file that fails the write,
+/// while the reader always opens the real `started.fifo`.
+#[allow(clippy::expect_used, reason = "a failure is the test's")]
+#[allow(clippy::panic, reason = "a test helper; a failure is the test's")]
+fn held_session_start(started: &str) {
     let setup = Setup::new();
     let dir = setup.workspace();
     let init = format!(
@@ -1653,7 +1738,7 @@ fn a_cancel_between_session_start_hooks_drops_the_first_hooks_context() {
          fiber.hook(\"session_start\", {{ timeout = 60000, on_failure = \"non-blocking\",\n\
            run = function(call)\n\
              require(\"go_hold\")\n\
-             host.fs.write(dir .. \"/started.fifo\", \"x\")\n\
+             host.fs.write(dir .. \"/{started}\", \"x\")\n\
              host.fs.write(dir .. \"/release.fifo\", \"x\")\n\
              return {{ context = \"first\" }}\n\
            end }})\n\
@@ -1666,38 +1751,58 @@ fn a_cancel_between_session_start_hooks_drops_the_first_hooks_context() {
     );
     let installed = install_lua(&setup, "hold", &json!({}), &init);
     let went = go_module(&installed, "hold");
+    // The reader always opens the real `started.fifo`; on the blocked path
+    // the hook writes to `blocker/started.fifo` past a regular file, so its
+    // write fails while the reader blocks.
     timer_fifo(&dir, "started.fifo");
+    if started != "started.fifo" {
+        write(&dir.join("blocker"), "");
+    }
     timer_fifo(&dir, "release.fifo");
     let clock = FakeClock::new();
     let session = load(&setup, &[], clock);
     let id = contract::SessionId("s_4c1d".into());
     let workspace = dir.display().to_string();
     let cancel = fakes::CancelToken::new();
-    let (tx, rx) = mpsc::channel();
-    let asking = Arc::clone(&session);
-    let signal = cancel.clone();
-    std::thread::spawn(move || {
-        let answer = asking.session_start(&SessionStart {
-            reason: StartReason::Start,
-            session_id: &id,
-            workspace: &workspace,
-            cancel: &signal,
+    let (tx, rx) = mpsc::channel::<HeldArrival>();
+    {
+        let tx = tx.clone();
+        let path = dir.join("started.fifo");
+        std::thread::spawn(move || {
+            let mut content = Vec::new();
+            let result = std::fs::File::open(&path)
+                .and_then(|mut file| std::io::Read::read_to_end(&mut file, &mut content));
+            let line = match result {
+                Ok(_) => content,
+                Err(_) => Vec::new(),
+            };
+            match tx.send(HeldArrival::Line(line)) {
+                Ok(()) | Err(mpsc::SendError(_)) => {}
+            }
         });
-        match tx.send(answer) {
-            Ok(()) | Err(mpsc::SendError(_)) => {}
-        }
-    });
+    }
+    {
+        let tx = tx.clone();
+        let asking = Arc::clone(&session);
+        let signal = cancel.clone();
+        std::thread::spawn(move || {
+            let answer = asking.session_start(&SessionStart {
+                reason: StartReason::Start,
+                session_id: &id,
+                workspace: &workspace,
+                cancel: &signal,
+            });
+            match tx.send(HeldArrival::Answer(answer)) {
+                Ok(()) | Err(mpsc::SendError(_)) => {}
+            }
+        });
+    }
+    drop(tx);
     Deadline::after(WAIT)
         .recv(&went)
         .expect("waited for the hook to start");
-    assert_eq!(
-        next_line(
-            &read_fifo(dir.join("started.fifo")),
-            "the held hook",
-            &Deadline::after(WAIT)
-        ),
-        b"x"
-    );
+    let wait = Deadline::after(WAIT);
+    await_held_hook(&rx, &wait, "session_start");
     cancel.cancel();
     assert_eq!(
         next_line(
@@ -1707,9 +1812,13 @@ fn a_cancel_between_session_start_hooks_drops_the_first_hooks_context() {
         ),
         b"x"
     );
-    let answer = Deadline::after(WAIT)
-        .recv(&rx)
-        .expect("waited for the answer");
+    let answer = match Deadline::after(WAIT).recv(&rx) {
+        Ok(HeldArrival::Answer(answer)) => answer,
+        Ok(HeldArrival::Line(line)) => {
+            panic!("unexpected started line after the hold: {line:?}")
+        }
+        Err(_) => panic!("waited {WAIT:?} for the answer"),
+    };
     let ContextOutcome::Added(context) = answer.outcome else {
         panic!("the cancel drops the contexts: {:?}", answer.outcome);
     };

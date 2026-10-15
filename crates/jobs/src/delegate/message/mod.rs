@@ -62,6 +62,8 @@ pub(crate) struct SteerGate {
 /// Steers a running delegate, or resumes a finished one. The fields are
 /// wired by `main`; `bound` is both the stop bound and the closing wait.
 pub struct DelegateMessage {
+    /// This session's depth in the delegate tree.
+    pub depth: u32,
     /// The session's jobs.
     pub registry: Arc<Registry>,
     /// The parent session.
@@ -183,6 +185,9 @@ impl DelegateMessage {
         cancel: &dyn Cancel,
         emit: &dyn Emit,
     ) -> Output {
+        if let Some(output) = super::depth_refusal(self.depth, "delegate_message") {
+            return output;
+        }
         let (id, message) = match super::check_pair(arguments, "id", "message") {
             Ok(pair) => pair,
             Err(message) => return fail(ErrorCode::InvalidArguments, message),

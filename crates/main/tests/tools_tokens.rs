@@ -104,15 +104,25 @@ fn the_tools_command_gives_tokens_after_the_first_request() {
     let setup = Setup::new();
     let note = "alpha line\n";
     fs::write(setup.workspace().join("note.txt"), note).unwrap();
-    let server = ProviderServer::start([
-        stream(&[function_call(
-            "call_read",
-            "read",
-            &json!({"path": "note.txt"}),
-        )]),
-        hello(),
-    ])
-    .unwrap();
+    // A tools-size test needs enough input tokens that small tools' shares
+    // do not round down to zero as the built-in definitions grow.
+    let events = [
+        function_call("call_read", "read", &json!({"path": "note.txt"})),
+        json!({"type": "response.completed", "response": {
+            "id": "resp_1", "status": "completed",
+            "usage": {"input_tokens": 1000, "input_tokens_details": {"cached_tokens": 4}, "output_tokens": 3}
+        }}),
+    ];
+    let body = events
+        .iter()
+        .map(|event| {
+            format!(
+                "event: {}\ndata: {event}\n\n",
+                event["type"].as_str().unwrap()
+            )
+        })
+        .collect::<String>();
+    let server = ProviderServer::start([fakes::Response::stream(body), hello()]).unwrap();
     setup.provider(&server);
     server.hold();
     let running = start(&setup, &["ask", "read the note"]);

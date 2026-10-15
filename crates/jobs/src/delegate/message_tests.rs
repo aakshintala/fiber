@@ -242,6 +242,7 @@ fn rig(replies: Vec<SteerReply>) -> Rig {
         panic!("no steering test launches");
     });
     let tool = Arc::new(DelegateMessage {
+        depth: 0,
         registry: Arc::clone(&registry),
         parent: SessionId("s_parent".into()),
         clock: Arc::clone(&clock) as Arc<dyn contract::clock::Clock>,
@@ -292,6 +293,38 @@ fn content(output: &Output) -> &str {
 
 fn code_of(output: &Output) -> ErrorCode {
     output.error.as_ref().expect("the call failed").code.clone()
+}
+
+#[test]
+fn depth_refuses_before_steering_or_resuming_with_the_same_definition() {
+    for depth in [2, 3] {
+        let mut rig = rig(vec![]);
+        let (id, _finish) = open_delegate(&rig, "running");
+        let definition = serde_json::to_value(rig.tool.definition()).unwrap();
+        Arc::get_mut(&mut rig.tool).unwrap().depth = depth;
+        assert_eq!(
+            serde_json::to_value(rig.tool.definition()).unwrap(),
+            definition
+        );
+        for call in [args(&id.0, "hello"), Map::new()] {
+            let tool = Arc::clone(&rig.tool);
+            let output = fakes::within("depth refusal", DEADLINE, move || {
+                tool.run(&call, &CancelToken::new(), &Recorder::default())
+            });
+            assert_eq!(code_of(&output), ErrorCode::DepthExceeded);
+            assert!(content(&output).contains("`delegate_message`"));
+            assert!(rig.script.calls().is_empty());
+            assert_eq!(rig.launched.load(Ordering::SeqCst), 0);
+        }
+    }
+    let mut rig = rig(vec![]);
+    Arc::get_mut(&mut rig.tool).unwrap().depth = 1;
+    let output = rig.tool.run(
+        &args("j_unknown", "hello"),
+        &CancelToken::new(),
+        &Recorder::default(),
+    );
+    assert_eq!(code_of(&output), ErrorCode::InvalidArguments);
 }
 
 #[test]

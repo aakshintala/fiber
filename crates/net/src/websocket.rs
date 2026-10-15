@@ -132,6 +132,10 @@ fn shutdown(tcp: &TcpStream, pair: &UnixStream) {
     match pair.shutdown(Shutdown::Both) {
         Ok(()) | Err(_) => {}
     }
+    // Linux resets the peer on last close if caller bytes remain queued.
+    // Shut down first so draining cannot wait for more input from the caller.
+    let mut unread = pair;
+    let _result = io::copy(&mut unread, &mut io::sink());
 }
 
 pub use tls::client_config;

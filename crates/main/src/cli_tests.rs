@@ -771,6 +771,7 @@ fn parses_argv_into_its_invocation() {
                     rewound_from: None,
                     parent: None,
                     delegate_id: None,
+                    depth: None,
                     login_shell: false,
                     credential: None,
                 })),
@@ -802,6 +803,7 @@ fn parses_argv_into_its_invocation() {
                     rewound_from: None,
                     parent: None,
                     delegate_id: None,
+                    depth: None,
                     login_shell: false,
                     credential: None,
                 })),
@@ -829,6 +831,7 @@ fn parses_argv_into_its_invocation() {
                     rewound_from: None,
                     parent: None,
                     delegate_id: None,
+                    depth: None,
                     login_shell: false,
                     credential: None,
                 })),
@@ -857,6 +860,7 @@ fn parses_argv_into_its_invocation() {
                     rewound_from: None,
                     parent: None,
                     delegate_id: None,
+                    depth: None,
                     login_shell: false,
                     credential: None,
                 })),
@@ -890,6 +894,7 @@ fn parses_argv_into_its_invocation() {
                     rewound_from: None,
                     parent: Some("s_aaaaaaaaaaaaaaaa".to_owned()),
                     delegate_id: Some("j_0123456789abcdef".to_owned()),
+                    depth: None,
                     login_shell: false,
                     credential: None,
                 })),
@@ -925,6 +930,7 @@ fn parses_argv_into_its_invocation() {
                     rewound_from: None,
                     parent: Some("s_aaaaaaaaaaaaaaaa".to_owned()),
                     delegate_id: Some("j_bbbbbbbbbbbbbbbb".to_owned()),
+                    depth: None,
                     login_shell: false,
                     credential: None,
                 })),
@@ -954,6 +960,7 @@ fn parses_argv_into_its_invocation() {
                     rewound_from: Some("s_aaaaaaaaaaaaaaaa".to_owned()),
                     parent: None,
                     delegate_id: None,
+                    depth: None,
                     login_shell: false,
                     credential: None,
                 })),
@@ -982,6 +989,7 @@ fn parses_argv_into_its_invocation() {
                     rewound_from: None,
                     parent: None,
                     delegate_id: None,
+                    depth: None,
                     login_shell: true,
                     credential: None,
                 })),
@@ -2191,6 +2199,44 @@ fn session_parent_without_its_delegate_id_or_prompt_is_a_usage_error() {
         "j_bbbbbbbbbbbbbbbb",
     ]);
     assert!(missing_parent.contains("--parent"), "{missing_parent}");
+}
+
+#[test]
+fn session_depth_is_internal_unsigned_and_requires_a_parent() {
+    let base = [
+        "fiber",
+        "session",
+        "--id",
+        "s_0123456789abcdef",
+        "--workspace",
+        "/w",
+        "--prompt",
+        "hi",
+        "--parent",
+        "s_aaaaaaaaaaaaaaaa",
+        "--delegate-id",
+        "j_bbbbbbbbbbbbbbbb",
+    ];
+    let Invocation::Run(Some(Commands::Session(args)), _) = parse_from(base) else {
+        panic!("session parses");
+    };
+    assert_eq!(args.depth, None);
+    for depth in ["0", "1", "2", "3"] {
+        let mut argv = base.to_vec();
+        argv.extend(["--depth", depth]);
+        let Invocation::Run(Some(Commands::Session(args)), _) = parse_from(argv) else {
+            panic!("depth parses");
+        };
+        assert_eq!(args.depth, Some(depth.parse().unwrap()));
+    }
+    for depth in ["x", "-1"] {
+        let mut argv = base.to_vec();
+        argv.extend(["--depth", depth]);
+        assert!(!sentence(&argv).is_empty());
+    }
+    let mut argv = base[..8].to_vec();
+    argv.extend(["--depth", "2"]);
+    assert!(sentence(&argv).contains("--parent"));
 }
 
 #[test]

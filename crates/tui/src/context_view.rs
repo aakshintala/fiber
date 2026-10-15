@@ -6,7 +6,8 @@ use std::collections::BTreeMap;
 use contract::Envelope;
 use log::Rate;
 
-use crate::swapped::{Frame, Ink, List, Spot, about};
+use crate::swapped::{Frame, Ink, List, Spot, about, compact};
+use crate::theme::Role;
 
 /// The number of largest tool results shown.
 pub(crate) const LARGEST_SHOWN: usize = 5;
@@ -153,33 +154,56 @@ pub(crate) fn categories(
     ])
 }
 
-/// The category fills, free cells and handoff marker.
+/// A category's colour on the bar and its rows (`docs/tui.md`,
+/// "Swapped views").
+fn role_of(category: Category) -> Role {
+    match category {
+        Category::SystemPrompt => Role::Accent,
+        Category::ToolDefinitions => Role::Info,
+        Category::ToolResults => Role::Error,
+        Category::Messages => Role::Text,
+    }
+}
+
+/// The bar as coloured runs: one █ run per non-empty category in its
+/// role, ▁ in `rule` for the room left, one │ in `attention` at the
+/// handoff point. The bar spans `span` tokens in `cells` cells; with
+/// no handoff point the frame passes the window and no trigger, so no
+/// marker draws. No run when `cells` or `span` is 0.
 pub(crate) fn bar(
     fill: &[(Category, u64)],
-    window: u64,
+    span: u64,
     trigger: Option<u64>,
     cells: usize,
-) -> String {
-    if cells == 0 || window == 0 {
-        return String::new();
+) -> Vec<(String, Role)> {
+    if cells == 0 || span == 0 {
+        return Vec::new();
     }
     let count = u128::try_from(cells).unwrap_or(u128::MAX);
-    let denominator = u128::from(window);
-    let mut symbols = vec!['░'; cells];
+    let denominator = u128::from(span);
+    let mut painted = vec![Role::Rule; cells];
     let mut start = 0usize;
     let mut cumulative = 0u64;
     for (category, tokens) in fill {
+        if *tokens == 0 {
+            continue;
+        }
         cumulative = cumulative.saturating_add(*tokens);
-        let end = (u128::from(cumulative) * count / denominator)
+        let mut end = (u128::from(cumulative) * count / denominator)
             .min(count)
             .try_into()
             .unwrap_or(cells);
-        for symbol in symbols
+        // A non-empty category rounds to no cell still draws one, so
+        // every non-empty category keeps its run.
+        if end <= start {
+            end = (start + 1).min(cells);
+        }
+        for role in painted
             .iter_mut()
             .skip(start)
             .take(end.saturating_sub(start))
         {
-            *symbol = glyph(*category);
+            *role = role_of(*category);
         }
         start = end;
     }
@@ -188,20 +212,25 @@ pub(crate) fn bar(
             .min(count.saturating_sub(1))
             .try_into()
             .unwrap_or(cells.saturating_sub(1));
-        if let Some(symbol) = symbols.get_mut(marker) {
-            *symbol = '│';
+        if let Some(role) = painted.get_mut(marker) {
+            *role = Role::Attention;
         }
     }
-    symbols.into_iter().collect()
-}
-
-fn glyph(category: Category) -> char {
-    match category {
-        Category::SystemPrompt => '█',
-        Category::ToolDefinitions => '▓',
-        Category::ToolResults => '▒',
-        Category::Messages => '▆',
+    let mut runs: Vec<(String, Role)> = Vec::new();
+    for role in painted {
+        let glyph = if role == Role::Attention {
+            '│'
+        } else if role == Role::Rule {
+            '▁'
+        } else {
+            '█'
+        };
+        match runs.last_mut() {
+            Some((text, last)) if *last == role => text.push(glyph),
+            _ => runs.push((glyph.to_string(), role)),
+        }
     }
+    runs
 }
 
 /// The current context size, model window and automatic handoff point.
@@ -231,14 +260,18 @@ pub(crate) fn frame(
         } else {
             u128::from(sized.total) * 100 / u128::from(sized.window)
         };
-        rows.push(row(
-            format!(
-                "context  {} of {} tokens · {percent}%",
-                about(sized.total),
-                about(sized.window)
+        let mut tail = format!(" · {percent}% of the {} window", compact(sized.window));
+        if let Some(trigger) = sized.trigger {
+            tail.push_str(&format!(" · automatic handoff at {}", compact(trigger)));
+        }
+        rows.push(indented(vec![
+            (
+                format!("{} tokens", compact(sized.total)),
+                None,
+                Ink::Heading,
             ),
-            Ink::Plain,
-        ));
+            (tail, None, Ink::Muted),
+        ]));
         let breakdown = categories(fold, rate, sized.total);
         let fill = breakdown.unwrap_or([
             (Category::SystemPrompt, 0),
@@ -246,21 +279,62 @@ pub(crate) fn frame(
             (Category::ToolResults, 0),
             (Category::Messages, sized.total),
         ]);
-        rows.push(row(
-            bar(&fill, sized.window, sized.trigger, usize::from(width)),
-            Ink::Plain,
-        ));
+        // The bar spans to the handoff point, not the window; with no
+        // handoff point it spans the window and draws no marker. A
+        // window of 0 draws no bar.
+        let span = sized.trigger.unwrap_or(sized.window);
+        // The bar leaves the indent's two columns.
+        let cells = usize::from(width).saturating_sub(2);
+        let runs = if sized.window == 0 {
+            Vec::new()
+        } else {
+            bar(&fill, span, sized.trigger, cells)
+        };
+        let mut bar_row = vec![("  ".to_owned(), None, Ink::Plain)];
+        bar_row.extend(
+            runs.iter()
+                .map(|(text, role)| (text.clone(), None, Ink::Role(*role))),
+        );
+        rows.push(bar_row);
+        if let Some(trigger) = sized.trigger {
+            // The label ends under the marker, in attention; the pad
+            // counts the indent's two columns.
+            let mut end = 0usize;
+            for (text, role) in &runs {
+                end += text.chars().count();
+                if *role == Role::Attention {
+                    break;
+                }
+            }
+            let (pad, label) = if runs.is_empty() {
+                (String::new(), String::new())
+            } else {
+                let label = format!("handoff {}", compact(trigger));
+                (
+                    " ".repeat(
+                        end.saturating_add(2)
+                            .saturating_sub(crate::format::width(&label)),
+                    ),
+                    label,
+                )
+            };
+            rows.push(vec![
+                (pad, None, Ink::Plain),
+                (label, None, Ink::Role(Role::Attention)),
+            ]);
+        }
         if breakdown.is_some() {
             for (category, tokens) in fill {
-                rows.push(row(
-                    format!(
-                        "{} {}  {} tokens",
-                        glyph(category),
-                        label(category),
-                        about(tokens)
-                    ),
-                    Ink::Plain,
-                ));
+                let share = if sized.total == 0 {
+                    0
+                } else {
+                    u128::from(tokens) * 100 / u128::from(sized.total)
+                };
+                rows.push(indented(vec![
+                    ("■ ".to_owned(), None, Ink::Role(role_of(category))),
+                    (format!("{:<20}", label(category)), None, Ink::Plain),
+                    (format!("~{} {}%", compact(tokens), share), None, Ink::Muted),
+                ]));
             }
             below.push(
                 "Sizes are approximate: bytes at the session's own tokens-per-byte rate."
@@ -270,46 +344,45 @@ pub(crate) fn frame(
             below.push("Breakdown after a request without images.".to_owned());
         }
         if fold.forked {
-            rows.push(row(
+            rows.push(indented(row(
                 "history before the fork counts under messages",
                 Ink::Muted,
-            ));
+            )));
         }
-        rows.push(row(
-            match sized.trigger {
-                Some(trigger) => format!(
-                    "│ handoff at {} tokens: Fiber writes a summary and the work continues in a fresh context",
-                    about(trigger)
-                ),
-                None => "automatic handoff off".to_owned(),
-            },
-            Ink::Muted,
-        ));
-        rows.push(row("largest tool results", Ink::Heading));
+        if sized.trigger.is_none() {
+            rows.push(indented(row("automatic handoff off", Ink::Muted)));
+        }
+        rows.push(indented(row("Largest tool results", Ink::Heading)));
         if fold.largest.is_empty() {
-            rows.push(row("  none since the last handoff", Ink::Muted));
+            rows.push(indented(row("  none since the last handoff", Ink::Muted)));
         } else {
             for result in &fold.largest {
                 let size = rate.tokens(result.bytes).map_or_else(
                     || format!("{} bytes", about(result.bytes)),
                     |tokens| format!("~{} tokens", about(tokens)),
                 );
-                rows.push(row(format!("  {}  {size}", result.tool), Ink::Plain));
+                rows.push(indented(vec![
+                    ("  ".to_owned(), None, Ink::Plain),
+                    (result.tool.clone(), None, Ink::Muted),
+                    ("  ".to_owned(), None, Ink::Plain),
+                    (size, None, Ink::Plain),
+                ]));
             }
         }
     } else {
-        rows.push(row(
+        rows.push(indented(row(
             "The context shows after the session's first request.".to_owned(),
             Ink::Muted,
-        ));
+        )));
     }
     Frame {
         title: "Context".to_owned(),
+        command: "/context",
         rows,
         list,
         below,
         field: None,
-        footer: "↑↓ scroll · Esc close".to_owned(),
+        footer: String::new(),
     }
 }
 
@@ -324,6 +397,13 @@ fn label(category: Category) -> &'static str {
 
 fn row(text: impl Into<String>, ink: Ink) -> Vec<(String, Option<Spot>, Ink)> {
     vec![(text.into(), None, ink)]
+}
+
+/// A body row indented two columns, as the breakdown draws
+/// (`docs/tui.md`, "Swapped views").
+fn indented(mut row: Vec<(String, Option<Spot>, Ink)>) -> Vec<(String, Option<Spot>, Ink)> {
+    row.insert(0, ("  ".to_owned(), None, Ink::Plain));
+    row
 }
 
 fn byte_count(bytes: usize) -> u64 {

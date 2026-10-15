@@ -8,8 +8,8 @@ use std::collections::{BTreeMap, HashSet};
 use std::path::Path;
 
 use contract::events::{
-    CallStatus, Control, Event, InputItem, InstructionFile, InstructionReason, InstructionSent,
-    Outcome, ToolCallCompleted, ToolCallRequested,
+    CallStatus, Class, Control, Event, InputItem, InstructionFile, InstructionReason,
+    InstructionSent, Outcome, ToolCallCompleted, ToolCallRequested,
 };
 use contract::provider::{ImageRef, Input, PdfRef};
 use contract::shapes::ContentPart;
@@ -399,6 +399,17 @@ pub(crate) fn render(
     had: &mut BTreeMap<String, String>,
     carry: &mut Carry,
 ) {
+    // The opening slot lives only between an opening message and its
+    // `session_start` contexts: every rendered durable event clears it,
+    // so anything durable between them takes the contexts' place.
+    // Ephemeral events leave it: the live loop never renders them, while
+    // a rebuild still calls this function for them, and the two must
+    // agree.
+    let slot = if event.class() == Class::Durable {
+        carry.take_after_opening()
+    } else {
+        None
+    };
     carry.fold_jobs(event);
     if inner_action(event, action, carry) {
         crate::changes::apply(had, event);
@@ -430,12 +441,18 @@ pub(crate) fn render(
         }
         // A hook's added context: its own user message, holding the text
         // alone. It joins neither the handoff's input nor what the
-        // reviewer is shown (`docs/extensions.md`, "The hook points").
+        // reviewer is shown (`docs/extensions.md`, "The hook points"). A
+        // `session_start` context right after an opening message sits
+        // between the opening and what follows; anywhere else it appends.
         Event::ContextAdded(added) => {
-            conversation.push(Input::User {
+            let context = Input::User {
                 text: added.text.clone(),
                 images: Vec::new(),
-            });
+            };
+            match carry.place_context(slot, &added.hook) {
+                Some(at) => conversation.insert(at.min(conversation.len()), context),
+                None => conversation.push(context),
+            }
         }
         // A rewind's note rides on its `session_started`: one user
         // message, so a live start and a resume render it the same way.
@@ -497,6 +514,7 @@ pub(crate) fn render(
                     text: crate::opening::render(message),
                  images: Vec::new(),},
             );
+            carry.opened();
             carry.session_log.clone_from(&message.environment.session_log);
             crate::changes::apply(had, event);
         }

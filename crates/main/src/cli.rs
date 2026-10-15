@@ -716,6 +716,10 @@ pub(crate) struct SessionArgs {
     )]
     pub(crate) delegate_id: Option<String>,
 
+    /// This session's depth in the delegate tree, passed by its parent.
+    #[arg(long, value_name = "depth", requires = "parent", hide = true)]
+    pub(crate) depth: Option<u32>,
+
     /// Passed by the hub when the session's environment came from the
     /// login-shell capture (`docs/invocation.md`, "A session's
     /// environment").

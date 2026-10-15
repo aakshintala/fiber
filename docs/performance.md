@@ -60,7 +60,7 @@ a 20-thousand-token one fit the same ceiling.
 | Budget | Ceiling | Gated on | Basis | Fast ceiling | Middle ceiling | Slow ceiling | Fast tolerance | Slow tolerance |
 |---|---|---|---|---|---|---|---|---|
 | Session, idle, headless | 12 MiB peak RSS | Linux x86_64 | picked | — | — | — | — | — |
-| Terminal, idle | 9,944 KiB peak RSS | Linux x86_64 | from components | — | — | — | — | — |
+| Terminal, idle | 20,088 KiB peak RSS | Linux x86_64 | measured | — | — | — | — | — |
 | Session, busy or resumed | 46,720 KiB peak RSS | Linux x86_64 | measured | — | — | — | — | — |
 | `web_fetch` converting a 10 MiB HTML page, the download cap | within the busy session's 46,720 KiB peak RSS | Linux x86_64 | measured | — | — | — | — | — |
 | Idle CPU, session and terminal | zero context switches in the idle window, on every thread | Linux x86_64 | exact | — | — | — | — | — |
@@ -69,7 +69,7 @@ a 20-thousand-token one fit the same ceiling.
 | Log bytes, 429-call turn | the turn's content plus 2 KiB per tool call | Linux x86_64 | exact | — | — | — | — | — |
 | Session start, the internal session command to its first line, no hub | 20 ms | Linux x86_64 | picked | 16 ms | 12 ms | 13 ms | 55 % | 9 % |
 | Terminal to its first frame, new session | 50 ms | Linux x86_64 | picked | 7 ms | 8 ms | 11 ms | 18 % | 8 % |
-| Terminal to its first frame, attaching | 50 ms plus 10 ms per MiB of session log | Linux x86_64 | picked | 898 ms | 1101 ms | 1364 ms | 9 % | 4 % |
+| Terminal to its first frame, attaching | 50 ms plus 10 ms per MiB of session log | Linux x86_64 | picked | 1008 ms | 1101 ms | 1364 ms | 23 % | 4 % |
 | Terminal, attaching a 10 MiB session | 45,512 KiB peak RSS | Linux x86_64 | measured | — | — | — | — | — |
 | Session, memory kept after the busy turn | 16,176 KiB RssAnon | Linux x86_64 | measured | — | — | — | — | — |
 | Session, memory kept after 10 busy turns, each followed by its handoff | the memory kept after the first, plus 1 MiB RssAnon | Linux x86_64 | picked | — | — | — | — | — |
@@ -124,7 +124,7 @@ Basis says where a number came from:
 The class columns hold the timing gates per runner speed class, keyed by CPU
 model strings matched case-insensitively. A model's class is the slowest
 cluster its stored runs reach. The fast class is `AMD EPYC 9V45 96-Core
-Processor` (6 stored files, gates); the middle class is `Intel(R) Xeon(R)
+Processor` (29 stored files, gates); the middle class is `Intel(R) Xeon(R)
 Platinum 8370C CPU @ 2.80GHz` (2 stored files, advisory); the slow class is
 `AMD EPYC 7763 64-Core Processor` (13 stored files, gates) and `AMD EPYC 9V74
 80-Core Processor` (4 stored files, advisory). `INTEL(R) XEON(R) PLATINUM 8573C`
@@ -142,7 +142,10 @@ millisecond, so it covers every stored sample as well as every per-file
 median. Each tolerance is `100 * (maximum per-file median / minimum per-file
 median - 1)` for the gated model and row, rounded upward to a whole percent:
 fast uses 9V45, slow uses 7763 only, so the advisory 9V74 never widens 7763's
-tolerance. Middle has no tolerance because no middle model gates.
+tolerance. Middle has no tolerance because no middle model gates. The fast
+attaching ceiling and tolerance are pinned by a test against the 10 MiB
+samples of the fast class's stored files
+(`xtask/tests/class_data/9v45-attach-10mib.json`).
 
 The busy-or-resumed ceiling holds on three workloads:
 

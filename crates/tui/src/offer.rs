@@ -442,27 +442,71 @@ fn dim_row(text: &str) -> Row {
     )))
 }
 
+/// The top row's layout at `width`: the name, the command when the
+/// name, the command and `Esc returns` all fit, Esc when it fits
+/// beside the name, and the trailing padding. `" " + name` always
+/// draws, truncated at its cells when narrower than the row; nothing
+/// else truncates, so the command gives way whole before Esc does
+/// (`docs/tui.md`, "Swapped views").
+pub(crate) struct TitleLayout {
+    /// `" " + name`, cut to `width` when narrower.
+    pub(crate) name: String,
+    /// `"  " + command`, when it fits beside the name and Esc.
+    pub(crate) command: Option<String>,
+    /// Whether `Esc returns` ends the row.
+    pub(crate) esc: bool,
+    /// The trailing padding after the last part.
+    pub(crate) pad: usize,
+}
+
+/// The top row's parts for `name` and `command` at `width` columns.
+pub(crate) fn title_layout(name: &str, command: &str, width: usize) -> TitleLayout {
+    const ESC: &str = "Esc returns";
+    let name_full = format!(" {name}");
+    let command_full = format!("  {command}");
+    let (name_cells, command_cells, esc_cells) = (
+        crate::format::width(&name_full),
+        crate::format::width(&command_full),
+        crate::format::width(ESC),
+    );
+    if name_cells + command_cells + 1 + esc_cells <= width {
+        TitleLayout {
+            name: name_full,
+            command: Some(command_full),
+            esc: true,
+            pad: width - name_cells - command_cells - esc_cells,
+        }
+    } else if name_cells + 1 + esc_cells <= width {
+        TitleLayout {
+            name: name_full,
+            command: None,
+            esc: true,
+            pad: width - name_cells - esc_cells,
+        }
+    } else {
+        let name = crate::format::cut(&name_full, width);
+        let shown = crate::format::width(&name);
+        TitleLayout {
+            name,
+            command: None,
+            esc: false,
+            pad: width.saturating_sub(shown),
+        }
+    }
+}
+
 /// The swapped view's top row: `Offer` bold, `repository code` dim and
 /// `Esc returns` dim right-aligned, on the `surface` tint across the full
 /// width including padding (`docs/tui.md`, "Swapped views"). A click
 /// anywhere on it puts the offer aside: a click on the top row returns.
 /// The command gives way first, then Esc, so `Offer` always draws.
 fn title_row(width: u16) -> Row {
-    const COMMAND: &str = "  repository code";
     const ESC: &str = "Esc returns";
     let tint = Style::new().bg(Role::Surface.color());
     let fit = usize::from(width);
-    let mut name = " Offer".to_owned();
-    while crate::format::width(&name) > fit && !name.is_empty() {
-        name.pop();
-    }
-    let mut command = COMMAND.to_owned();
-    while crate::format::width(&name) + crate::format::width(&command) > fit && !command.is_empty()
-    {
-        command.pop();
-    }
+    let layout = title_layout("Offer", "repository code", fit);
     let mut spans = Vec::new();
-    if let Some(rest) = name.strip_prefix(' ') {
+    if let Some(rest) = layout.name.strip_prefix(' ') {
         spans.push(Span::styled(" ".to_owned(), tint));
         if !rest.is_empty() {
             spans.push(Span::styled(
@@ -471,26 +515,21 @@ fn title_row(width: u16) -> Row {
             ));
         }
     }
-    if !command.is_empty() {
+    if let Some(command) = layout.command {
         spans.push(Span::styled(
-            command.clone(),
+            command,
             style(Role::Muted).bg(Role::Surface.color()),
         ));
     }
-    let used = crate::format::width(&name) + crate::format::width(&command);
     // Esc needs a space before it, or it stays off.
-    let mut shown = used;
-    if used + 1 + ESC.len() <= fit {
-        spans.push(Span::styled(" ".repeat(fit - used - ESC.len()), tint));
+    if layout.pad > 0 {
+        spans.push(Span::styled(" ".repeat(layout.pad), tint));
+    }
+    if layout.esc {
         spans.push(Span::styled(
             ESC,
             style(Role::Muted).bg(Role::Surface.color()),
         ));
-        shown = fit;
-    }
-    // The tint runs the whole row: pad what the spans leave short.
-    if shown < fit {
-        spans.push(Span::styled(" ".repeat(fit - shown), tint));
     }
     let mut line = Line::from(spans);
     line.style = tint;

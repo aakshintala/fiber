@@ -8,7 +8,7 @@ use contract::shapes::Usage;
 use contract::{GenerationId, JobId, SessionId, TurnId};
 
 use crate::format::money;
-use crate::swapped::{Frame, Ink, List, Spot, about};
+use crate::swapped::{Frame, Ink, List, Spot, compact};
 
 /// The latest call line per generation, and its first turn.
 #[derive(Debug, Default)]
@@ -63,19 +63,18 @@ impl UsageFold {
     }
 }
 
-/// The usage rows and footer for the swapped view.
+/// The usage rows and footer for the swapped view: one bold heading
+/// per group, one row per entry, the budget dim and last
+/// (`docs/tui.md`, "Swapped views").
 pub(crate) fn frame(fold: &UsageFold, budget: Option<f64>, list: List) -> Frame {
     let mut rows = Vec::new();
     let calls: Vec<&UsageRecorded> = fold.calls.values().map(|(_, line)| line).collect();
     if calls.is_empty() {
-        budget_row(&mut rows, budget, 0.0);
         rows.push(row("No model calls yet.", Ink::Muted));
+        budget_row(&mut rows, budget, 0.0);
     } else {
         let session = log::usage(calls.iter().copied());
-        append_entry(&mut rows, "session", &session);
-        budget_row(&mut rows, budget, session.cost.unwrap_or(0.0));
-
-        rows.push(row("by turn", Ink::Heading));
+        rows.push(row("By turn", Ink::Heading));
         let known_turns: BTreeSet<TurnId> = fold.turns.iter().cloned().collect();
         let mut turns: BTreeMap<TurnId, Vec<&UsageRecorded>> = BTreeMap::new();
         let mut outside = Vec::new();
@@ -98,7 +97,7 @@ pub(crate) fn frame(fold: &UsageFold, budget: Option<f64>, list: List) -> Frame 
             append_entry(&mut rows, "outside a turn", &usage);
         }
 
-        rows.push(row("by model", Ink::Heading));
+        rows.push(row("By model", Ink::Heading));
         let mut models: BTreeMap<&str, Vec<&UsageRecorded>> = BTreeMap::new();
         for line in &calls {
             models.entry(&line.model).or_default().push(line);
@@ -108,7 +107,7 @@ pub(crate) fn frame(fold: &UsageFold, budget: Option<f64>, list: List) -> Frame 
             append_entry(&mut rows, model, &usage);
         }
 
-        rows.push(row("by delegate", Ink::Heading));
+        rows.push(row("By delegate", Ink::Heading));
         let mut delegates: BTreeMap<SessionId, Vec<&UsageRecorded>> = BTreeMap::new();
         let mut this_session = Vec::new();
         for line in &calls {
@@ -132,50 +131,56 @@ pub(crate) fn frame(fold: &UsageFold, budget: Option<f64>, list: List) -> Frame 
             let usage = log::usage(group.iter().copied());
             append_entry(&mut rows, &label, &usage);
         }
+        budget_row(&mut rows, budget, session.cost.unwrap_or(0.0));
     }
     Frame {
         title: "Usage".to_owned(),
+        command: "/usage",
         rows,
         list,
         below: Vec::new(),
         field: None,
-        footer: "↑↓ scroll · Esc close".to_owned(),
+        footer: String::new(),
     }
 }
 
-fn append_entry(rows: &mut Vec<Vec<(String, Option<Spot>, Ink)>>, heading: &str, usage: &Usage) {
+/// One entry's row: its name, compact counts in and out, the cache
+/// kinds only when non-zero, and what it billed (`docs/tui.md`,
+/// "Swapped views").
+fn append_entry(rows: &mut Vec<Vec<(String, Option<Spot>, Ink)>>, name: &str, usage: &Usage) {
     let tokens = &usage.tokens;
+    let mut counts = format!(
+        "{name} · {} in · {} out",
+        compact(tokens.input),
+        compact(tokens.output)
+    );
+    if tokens.cache_read > 0 {
+        counts.push_str(&format!(" · {} cache read", compact(tokens.cache_read)));
+    }
     let cache_write = tokens
         .cache_write
         .values()
         .fold(0u64, |sum, count| sum.saturating_add(*count));
-    rows.push(row(heading, Ink::Heading));
-    rows.push(row(
-        format!(
-            "tokens  in {} · cache read {} · cache write {} · out {}",
-            about(tokens.input),
-            about(tokens.cache_read),
-            about(cache_write),
-            about(tokens.output)
-        ),
-        Ink::Plain,
-    ));
+    if cache_write > 0 {
+        counts.push_str(&format!(
+            " · {cache_write} cache write",
+            cache_write = compact(cache_write)
+        ));
+    }
     let billed = usage.cost.map_or_else(|| "unknown".to_owned(), money);
-    rows.push(row(
-        format!(
-            "cost  billed {billed} · on subscription {}",
-            money(usage.subscription_cost)
-        ),
-        Ink::Plain,
+    counts.push_str(&format!(
+        " · {billed} billed · {} subscription",
+        money(usage.subscription_cost)
     ));
+    rows.push(row(counts, Ink::Plain));
 }
 
 fn budget_row(rows: &mut Vec<Vec<(String, Option<Spot>, Ink)>>, budget: Option<f64>, billed: f64) {
     if let Some(budget) = budget {
         let left = (budget - billed).max(0.0);
         rows.push(row(
-            format!("budget left  {} of {}", money(left), money(budget)),
-            Ink::Plain,
+            format!("budget left {} of {}", money(left), money(budget)),
+            Ink::Muted,
         ));
     }
 }

@@ -2188,3 +2188,225 @@ impl contract::hook::Hooks for CountingHooks {
 
     fn deliver_to(&self, _inbox: std::sync::mpsc::Sender<Delivery>) {}
 }
+
+/// A scripted `Hooks` fake for `session_start`: a queue of answers, what
+/// each call was shown, and an optional cancel, shutdown or park inside
+/// the call. Every other point passes empty, as `CountingHooks` does.
+pub(crate) struct StartHooks {
+    answers: Mutex<std::collections::VecDeque<contract::hook::ContextAnswer>>,
+    calls: AtomicUsize,
+    seen: Mutex<Vec<(String, String, String)>>,
+    cancel_in_call: Mutex<Option<Arc<TurnCancel>>>,
+    shutdown_in_call: Mutex<Option<Arc<TurnCancel>>>,
+    pause: Mutex<Option<(Sender<()>, mpsc::Receiver<()>)>>,
+    /// The call the parked cancel, shutdown or pause fires in: the
+    /// first call runs the start reason, a handoff the second.
+    inside_at: AtomicUsize,
+    turn_calls: AtomicUsize,
+}
+
+impl StartHooks {
+    pub(crate) fn new() -> Arc<Self> {
+        Arc::new(Self {
+            answers: Mutex::new(std::collections::VecDeque::new()),
+            calls: AtomicUsize::new(0),
+            seen: Mutex::new(Vec::new()),
+            cancel_in_call: Mutex::new(None),
+            shutdown_in_call: Mutex::new(None),
+            pause: Mutex::new(None),
+            inside_at: AtomicUsize::new(1),
+            turn_calls: AtomicUsize::new(0),
+        })
+    }
+
+    /// Answers the next `session_start` call with `answer`.
+    pub(crate) fn answer(&self, answer: contract::hook::ContextAnswer) {
+        self.answers.lock().unwrap().push_back(answer);
+    }
+
+    /// How many `session_start` calls ran.
+    pub(crate) fn calls(&self) -> usize {
+        self.calls.load(Ordering::SeqCst)
+    }
+
+    /// How many `turn_start` calls ran.
+    pub(crate) fn turn_calls(&self) -> usize {
+        self.turn_calls.load(Ordering::SeqCst)
+    }
+
+    /// What each call was shown: the reason, the session id and the
+    /// workspace, in call order.
+    pub(crate) fn seen(&self) -> Vec<(String, String, String)> {
+        self.seen.lock().unwrap().clone()
+    }
+
+    /// Cancels the turn inside the next `session_start` call.
+    pub(crate) fn cancel_inside(&self, cancel: Arc<TurnCancel>) {
+        *self.cancel_in_call.lock().unwrap() = Some(cancel);
+    }
+
+    /// Starts a shutdown inside the next `session_start` call.
+    pub(crate) fn shutdown_inside(&self, cancel: Arc<TurnCancel>) {
+        *self.shutdown_in_call.lock().unwrap() = Some(cancel);
+    }
+
+    /// Parks the next `session_start` call on a point the test owns: the
+    /// hook signals `started`, waits for `release`, then answers.
+    pub(crate) fn pause(&self, started: Sender<()>, release: mpsc::Receiver<()>) {
+        *self.pause.lock().unwrap() = Some((started, release));
+    }
+
+    /// Fires the parked cancel, shutdown or pause in the `n`th
+    /// `session_start` call instead of the first.
+    pub(crate) fn fire_inside_at(&self, n: usize) {
+        self.inside_at.store(n, Ordering::SeqCst);
+    }
+}
+
+/// A `session_start` answer adding `text` as `extension`'s context.
+pub(crate) fn start_added(extension: &str, text: &str) -> contract::hook::ContextAnswer {
+    contract::hook::ContextAnswer {
+        outcome: contract::hook::ContextOutcome::Added(vec![contract::hook::Context {
+            extension: extension.to_owned(),
+            text: text.to_owned(),
+        }]),
+        notices: Vec::new(),
+    }
+}
+
+/// A `session_start` answer adding nothing, with no notice.
+pub(crate) fn start_empty() -> contract::hook::ContextAnswer {
+    contract::hook::ContextAnswer {
+        outcome: contract::hook::ContextOutcome::Added(Vec::new()),
+        notices: Vec::new(),
+    }
+}
+
+/// A `session_start` answer adding nothing, with `extension`'s
+/// `non-blocking` failure as a notice.
+pub(crate) fn start_noticed(extension: &str) -> contract::hook::ContextAnswer {
+    contract::hook::ContextAnswer {
+        outcome: contract::hook::ContextOutcome::Added(Vec::new()),
+        notices: vec![contract::events::Notice {
+            code: contract::ErrorCode::HookFailed,
+            message: format!("extension {extension} failed softly"),
+            extension: Some(extension.to_owned()),
+        }],
+    }
+}
+
+/// A `session_start` answer failing as `extension` with `message`.
+pub(crate) fn start_failed(extension: &str, message: &str) -> contract::hook::ContextAnswer {
+    contract::hook::ContextAnswer {
+        outcome: contract::hook::ContextOutcome::Failed(contract::hook::HookFailure {
+            extension: extension.to_owned(),
+            message: message.to_owned(),
+        }),
+        notices: Vec::new(),
+    }
+}
+
+impl contract::hook::Hooks for StartHooks {
+    fn after_tool(
+        &self,
+        _call: &contract::hook::AfterToolCall<'_>,
+    ) -> contract::hook::AfterToolAnswer {
+        contract::hook::AfterToolAnswer {
+            outcome: contract::hook::AfterToolOutcome::Unchanged,
+            changed_by: Vec::new(),
+            notices: Vec::new(),
+        }
+    }
+
+    fn before_tool(
+        &self,
+        _call: &contract::hook::BeforeToolCall<'_>,
+    ) -> contract::hook::BeforeToolAnswer {
+        contract::hook::BeforeToolAnswer {
+            outcome: contract::hook::BeforeToolOutcome::Unchanged,
+            notices: Vec::new(),
+        }
+    }
+
+    fn check_tool(
+        &self,
+        _call: &contract::hook::BeforeToolCall<'_>,
+    ) -> contract::hook::CheckAnswer {
+        contract::hook::CheckAnswer {
+            outcome: contract::hook::CheckOutcome::Passed,
+            notices: Vec::new(),
+        }
+    }
+
+    fn before_message(
+        &self,
+        _message: &contract::hook::BeforeMessage<'_>,
+    ) -> contract::hook::BeforeMessageAnswer {
+        contract::hook::BeforeMessageAnswer {
+            outcome: contract::hook::BeforeMessageOutcome::Passed {
+                replaced: None,
+                context: Vec::new(),
+            },
+            notices: Vec::new(),
+        }
+    }
+
+    fn session_start(
+        &self,
+        start: &contract::hook::SessionStart<'_>,
+    ) -> contract::hook::ContextAnswer {
+        self.calls.fetch_add(1, Ordering::SeqCst);
+        self.seen.lock().unwrap().push((
+            format!("{:?}", start.reason),
+            start.session_id.0.clone(),
+            start.workspace.to_owned(),
+        ));
+        if self.calls.load(Ordering::SeqCst) == self.inside_at.load(Ordering::SeqCst) {
+            if let Some((started, release)) = self.pause.lock().unwrap().take() {
+                started.send(()).unwrap();
+                release.recv().unwrap();
+            }
+            if let Some(cancel) = self.cancel_in_call.lock().unwrap().clone() {
+                cancel.cancel();
+            }
+            if let Some(cancel) = self.shutdown_in_call.lock().unwrap().clone() {
+                cancel.shutdown(143);
+            }
+        }
+        self.answers
+            .lock()
+            .unwrap()
+            .pop_front()
+            .unwrap_or(contract::hook::ContextAnswer {
+                outcome: contract::hook::ContextOutcome::Added(Vec::new()),
+                notices: Vec::new(),
+            })
+    }
+
+    fn turn_start(&self, _turn: &contract::hook::TurnStart<'_>) -> contract::hook::ContextAnswer {
+        self.turn_calls.fetch_add(1, Ordering::SeqCst);
+        contract::hook::ContextAnswer {
+            outcome: contract::hook::ContextOutcome::Added(Vec::new()),
+            notices: Vec::new(),
+        }
+    }
+
+    fn before_model_call(
+        &self,
+        _call: &contract::hook::BeforeModelCall<'_>,
+    ) -> contract::hook::CheckAnswer {
+        contract::hook::CheckAnswer {
+            outcome: contract::hook::CheckOutcome::Passed,
+            notices: Vec::new(),
+        }
+    }
+
+    fn turn_end(&self, _end: &contract::hook::TurnEnd<'_>) -> contract::hook::ContextAnswer {
+        contract::hook::ContextAnswer {
+            outcome: contract::hook::ContextOutcome::Added(Vec::new()),
+            notices: Vec::new(),
+        }
+    }
+
+    fn deliver_to(&self, _inbox: std::sync::mpsc::Sender<Delivery>) {}
+}

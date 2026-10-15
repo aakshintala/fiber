@@ -2750,3 +2750,61 @@ fn a_tool_handoff_measures_its_restart() {
     assert_eq!(handoffs.len(), 1);
     assert_eq!(handoffs[0].ms, 5, "the tool restart contributes its hold");
 }
+
+#[test]
+fn a_tool_handoff_sets_the_step_flag_only_when_it_does_not_complete() {
+    let mut world = build(plain_build(vec![]));
+    let turn_id = TurnId("t_test".into());
+    let seed = |world: &mut World| {
+        let action = ActionId("a_note".into());
+        let carry = &mut world.loop_mut().handoff.carry;
+        carry.call_requested(
+            &action,
+            &Input::ToolCall {
+                action_id: action.clone(),
+                model: "fake/model".into(),
+                call: ToolCallRequested {
+                    name: "get_weather".into(),
+                    arguments: json!({}),
+                    provider_id: None,
+                    repair: None,
+                    ran_by: None,
+                    provider_item: None,
+                },
+            },
+        );
+        carry.call_completed(
+            &action,
+            &Input::ToolResult {
+                action_id: action.clone(),
+                text: "Sunny.".into(),
+                is_error: false,
+                images: Vec::new(),
+                pdfs: Vec::new(),
+            },
+            None,
+            None,
+        );
+        carry.step.last_mut().unwrap().note = Some("Continue.".into());
+    };
+    seed(&mut world);
+    assert!(
+        world.loop_mut().handoff_from_tools(&turn_id).unwrap(),
+        "a completed tool handoff restarts the context"
+    );
+    assert!(
+        !world.loop_mut().handoff.step_ran,
+        "a completed tool handoff leaves the step flag unset"
+    );
+    seed(&mut world);
+    assert!(world.cancel.arm(), "a turn must be armed to be cancelled");
+    assert!(world.cancel.cancel());
+    assert!(
+        !world.loop_mut().handoff_from_tools(&turn_id).unwrap(),
+        "a cancelled tool handoff does not complete"
+    );
+    assert!(
+        world.loop_mut().handoff.step_ran,
+        "a tool handoff that does not complete sets the step flag"
+    );
+}

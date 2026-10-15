@@ -327,6 +327,8 @@ pub(crate) struct Cell {
     pub(crate) bg: Colour,
     pub(crate) dim: bool,
     pub(crate) bold: bool,
+    /// Whether the cell draws reversed: the focus look.
+    pub(crate) inverse: bool,
 }
 
 impl Cell {
@@ -344,6 +346,7 @@ impl Cell {
             bg: cell.bgcolor().into(),
             dim: cell.dim(),
             bold: cell.bold(),
+            inverse: cell.inverse(),
         }
     }
 }
@@ -375,6 +378,13 @@ impl Grid {
             hide_cursor: screen.hide_cursor(),
             screen: screen.clone(),
         }
+    }
+
+    /// The screen's size as (columns, rows): the bounds for scanning
+    /// cells, since row text trims trailing blanks.
+    pub(crate) fn size(&self) -> (u16, u16) {
+        let (rows, cols) = self.screen.size();
+        (cols, rows)
     }
 
     /// The cell at column `x`, row `y`. Panics past the grid's edges.

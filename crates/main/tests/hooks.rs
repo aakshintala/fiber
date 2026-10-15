@@ -23,7 +23,7 @@ use std::process::{Command, Output, Stdio};
 use std::sync::mpsc;
 use std::thread;
 
-use fakes::ProviderServer;
+use fakes::{ProviderServer, Response};
 use serde_json::{Value, json};
 use support::{
     KillGroup, Run, Setup, function_call, hello_single_delta as hello, is_status, on_disk,
@@ -1553,4 +1553,300 @@ fn a_blocking_turn_end_failure_fails_the_turn_hook_failed() {
     assert_eq!(end["payload"]["outcome"], "failed");
     assert_eq!(end["payload"]["error"]["code"], "hook_failed");
     assert_eq!(server.requests().len(), 1);
+}
+
+/// The user texts of an `openai-responses` request body, in order.
+fn user_messages(body: &[u8]) -> Vec<String> {
+    let body: Value = serde_json::from_slice(body).unwrap();
+    body["input"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter(|item| item["role"] == "user")
+        .map(|item| item["content"].as_str().unwrap().to_owned())
+        .collect()
+}
+
+#[test]
+fn a_session_start_hook_s_context_follows_the_opening_message_in_the_first_request() {
+    let setup = Setup::new();
+    setup.lua(
+        "starter",
+        "fiber.hook(\"session_start\", { timeout = 30000, on_failure = \"blocking\",\n\
+           run = function(call) return { context = \"remember this\" } end })\n",
+    );
+    let server = ProviderServer::start([hello()]).unwrap();
+    setup.provider_with_extra(&server, &json!({}));
+    let run = setup.run(&["ask", "do it"]);
+    assert_eq!(run.code, Some(0), "stderr: {}", run.stderr);
+    assert_eq!(
+        run.kinds(),
+        [
+            "session_started",
+            "fiber_started",
+            "extensions_loaded",
+            "preamble_built",
+            "opening_message",
+            "context_added",
+            "turn_started",
+            "step_started",
+            "assistant_message_started",
+            "assistant_message_delta",
+            "text_completed",
+            "usage_recorded",
+            "assistant_message_completed",
+            "turn_completed",
+            "fiber_exited",
+        ]
+    );
+    let added = run.first("context_added");
+    assert_eq!(added["payload"]["extension"], "fiber.test/starter");
+    assert_eq!(added["payload"]["hook"], "session_start");
+    assert_eq!(added["payload"]["text"], "remember this");
+    let requests = server.requests();
+    assert_eq!(requests.len(), 1);
+    let users = user_messages(&requests[0].body);
+    assert_eq!(users.len(), 3);
+    assert!(
+        users[0].starts_with("This message is from Fiber"),
+        "the first user message is the opening message"
+    );
+    assert_eq!(users[1], "remember this");
+    assert_eq!(users[2], "do it");
+}
+
+#[test]
+fn a_blocking_session_start_failure_exits_1_hook_failed() {
+    let setup = Setup::new();
+    setup.lua(
+        "guard",
+        "fiber.hook(\"session_start\", { timeout = 30000, on_failure = \"blocking\",\n\
+           run = function(call) error(\"boom\") end })\n",
+    );
+    let server = ProviderServer::start(Vec::<Response>::new()).unwrap();
+    setup.provider_with_extra(&server, &json!({}));
+    let run = setup.run(&["ask", "do it"]);
+    assert_eq!(run.code, Some(1), "stderr: {}", run.stderr);
+    assert_eq!(
+        run.kinds(),
+        [
+            "session_started",
+            "fiber_started",
+            "extensions_loaded",
+            "preamble_built",
+            "opening_message",
+            "fiber_exited",
+        ]
+    );
+    let exited = run.first("fiber_exited");
+    assert_eq!(exited["payload"]["error"]["code"], "hook_failed");
+    let message = exited["payload"]["error"]["message"].as_str().unwrap();
+    assert!(
+        message.starts_with(
+            "The `session_start` hook of extension fiber.test/guard failed, \
+             so the session did not start: "
+        ) && message.contains("boom"),
+        "the failure wording: {message}"
+    );
+    assert!(
+        run.stderr.starts_with(
+            "fiber: The `session_start` hook of extension fiber.test/guard failed, \
+             so the session did not start: "
+        ) && run.stderr.contains("boom"),
+        "stderr names the failure: {}",
+        run.stderr
+    );
+    assert!(server.requests().is_empty(), "the server got no request");
+}
+
+#[test]
+fn session_start_runs_again_on_resume_and_appends_its_context() {
+    let setup = Setup::new();
+    setup.lua(
+        "echoer",
+        "fiber.hook(\"session_start\", { timeout = 30000, on_failure = \"blocking\",\n\
+           run = function(call) return { context = \"reason:\" .. call.reason } end })\n",
+    );
+    let server = ProviderServer::start([hello(), hello()]).unwrap();
+    setup.provider_with_extra(&server, &json!({}));
+    let first = setup.run(&["ask", "one"]);
+    assert_eq!(first.code, Some(0), "stderr: {}", first.stderr);
+    let id = first.session_id().to_owned();
+
+    let second = setup.run(&["ask", "--resume", &id[..8], "two"]);
+    assert_eq!(second.code, Some(0), "stderr: {}", second.stderr);
+    assert_eq!(second.session_id(), id);
+    let requests = server.requests();
+    assert_eq!(requests.len(), 2);
+    // The first request holds the start context once.
+    let started = user_messages(&requests[0].body);
+    assert_eq!(started.len(), 3);
+    assert!(started[0].starts_with("This message is from Fiber"));
+    assert_eq!(&started[1..], ["reason:start", "one"]);
+    // The second holds it twice, the resume's after the first turn.
+    let resumed = user_messages(&requests[1].body);
+    assert_eq!(resumed.len(), 5);
+    assert!(resumed[0].starts_with("This message is from Fiber"));
+    assert_eq!(
+        &resumed[1..],
+        ["reason:start", "one", "reason:resume", "two"]
+    );
+    let body = String::from_utf8_lossy(&requests[1].body);
+    assert!(
+        body.find("Hello.").is_some_and(|replied| body
+            .rfind("reason:resume")
+            .is_some_and(|added| replied < added)),
+        "the resume context follows the first turn's reply: {body}"
+    );
+}
+
+#[test]
+fn a_handoff_runs_session_start_with_reason_handoff() {
+    let setup = Setup::new();
+    setup.lua(
+        "echoer",
+        "fiber.hook(\"session_start\", { timeout = 30000, on_failure = \"blocking\",\n\
+           run = function(call) return { context = \"reason:\" .. call.reason } end })\n",
+    );
+    let server = ProviderServer::start([
+        stream(&[function_call(
+            "call_read",
+            "read",
+            &json!({"path": "note.txt"}),
+        )]),
+        support::text_reply("The note."),
+        hello(),
+    ])
+    .unwrap();
+    setup.provider_with_extra(&server, &json!({"handoff": {"tokens": 10, "nudge": false}}));
+    fs::write(
+        setup.workspace().join("note.txt"),
+        "the password is hunter2\n",
+    )
+    .unwrap();
+    let run = setup.run(&["ask", "read the note"]);
+    assert_eq!(run.code, Some(0), "stderr: {}", run.stderr);
+    assert_eq!(
+        run.kinds(),
+        [
+            "session_started",
+            "fiber_started",
+            "extensions_loaded",
+            "preamble_built",
+            "opening_message",
+            "context_added",
+            "turn_started",
+            "step_started",
+            "assistant_message_started",
+            "tool_call_requested",
+            "usage_recorded",
+            "assistant_message_completed",
+            "tool_call_started",
+            "tool_call_completed",
+            "step_started",
+            "handoff_started",
+            "assistant_message_started",
+            "text_completed",
+            "usage_recorded",
+            "assistant_message_completed",
+            "handoff_completed",
+            "opening_message",
+            "context_added",
+            "assistant_message_started",
+            "assistant_message_delta",
+            "text_completed",
+            "usage_recorded",
+            "assistant_message_completed",
+            "turn_completed",
+            "fiber_exited",
+        ]
+    );
+    let done = run.first("handoff_completed");
+    assert_eq!(done["payload"]["outcome"], "completed");
+    let requests = server.requests();
+    assert_eq!(requests.len(), 3);
+    // The request after the handoff is the new opening message, the
+    // handoff context, the turn's input, the note.
+    let users = user_messages(&requests[2].body);
+    assert_eq!(users.len(), 4);
+    assert!(users[0].starts_with("This message is from Fiber"));
+    assert_eq!(
+        &users[1..],
+        ["reason:handoff", "read the note", "The note."]
+    );
+}
+
+#[test]
+fn a_blocking_session_start_failure_at_a_handoff_fails_the_handoff_and_the_session_goes_on() {
+    let setup = Setup::new();
+    setup.lua(
+        "guard",
+        "fiber.hook(\"session_start\", { timeout = 30000, on_failure = \"blocking\",\n\
+           run = function(call)\n\
+             if call.reason == \"handoff\" then error(\"boom\") end\n\
+             return {} end })\n",
+    );
+    let server = ProviderServer::start([
+        stream(&[function_call(
+            "call_read",
+            "read",
+            &json!({"path": "note.txt"}),
+        )]),
+        support::text_reply("The note."),
+        hello(),
+    ])
+    .unwrap();
+    setup.provider_with_extra(&server, &json!({"handoff": {"tokens": 10, "nudge": false}}));
+    fs::write(
+        setup.workspace().join("note.txt"),
+        "the password is hunter2\n",
+    )
+    .unwrap();
+    let run = setup.run(&["ask", "read the note"]);
+    assert_eq!(run.code, Some(0), "stderr: {}", run.stderr);
+    assert_eq!(
+        run.kinds(),
+        [
+            "session_started",
+            "fiber_started",
+            "extensions_loaded",
+            "preamble_built",
+            "opening_message",
+            "turn_started",
+            "step_started",
+            "assistant_message_started",
+            "tool_call_requested",
+            "usage_recorded",
+            "assistant_message_completed",
+            "tool_call_started",
+            "tool_call_completed",
+            "step_started",
+            "handoff_started",
+            "assistant_message_started",
+            "text_completed",
+            "usage_recorded",
+            "assistant_message_completed",
+            "handoff_completed",
+            "assistant_message_started",
+            "assistant_message_delta",
+            "text_completed",
+            "usage_recorded",
+            "assistant_message_completed",
+            "turn_completed",
+            "fiber_exited",
+        ]
+    );
+    let done = run.first("handoff_completed");
+    assert_eq!(done["payload"]["outcome"], "failed");
+    assert_eq!(done["payload"]["error"]["code"], "hook_failed");
+    let message = done["payload"]["error"]["message"].as_str().unwrap();
+    assert!(
+        message.starts_with(
+            "The `session_start` hook of extension fiber.test/guard failed, \
+             so the handoff did not complete: "
+        ) && message.contains("boom"),
+        "the failure wording: {message}"
+    );
+    let end = run.first("turn_completed");
+    assert_eq!(end["payload"]["outcome"], "completed");
 }

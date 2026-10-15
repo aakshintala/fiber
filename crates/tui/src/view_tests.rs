@@ -2670,9 +2670,17 @@ fn a_view_target_under_the_pointer_gets_the_hover_tint_alone() {
     let mut app = home_app();
     app.open_config_view(crate::app::ConfigView::Settings);
     let (hovered, _) = pointed(&mut app, WIDTH, HEIGHT, Some((WIDTH - 1, 0)));
+    // The whole top row is the one close target, so the hover tints
+    // the whole row and no row under it (`docs/tui.md`, "Swapped views").
     let tint = super::HOVER_TINT.bg;
-    assert_eq!(hovered.cell((WIDTH - 1, 0)).map(|cell| cell.bg), tint);
-    assert_ne!(hovered.cell((0, 0)).map(|cell| cell.bg), tint);
+    for x in 0..WIDTH {
+        assert_eq!(
+            hovered.cell((x, 0)).map(|cell| cell.bg),
+            tint,
+            "no hover tint at {x}"
+        );
+    }
+    assert_ne!(hovered.cell((0, 1)).map(|cell| cell.bg), tint);
 }
 
 #[test]

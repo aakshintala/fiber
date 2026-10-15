@@ -357,6 +357,7 @@ impl KeysScreen {
         }
         Frame {
             title: "Keys".to_owned(),
+            command: "/keys",
             rows,
             list: self.list,
             below,

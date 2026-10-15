@@ -269,11 +269,15 @@ fn await_closed_pins_its_deadline() {
 #[test]
 fn a_dropped_proxy_refuses_connections() {
     let proxy = ConnectProxy::start().unwrap();
-    let port = proxy.port();
+    let probe = proxy.core.drop_probe();
     drop(proxy);
     assert!(
-        TcpStream::connect(("127.0.0.1", port)).is_err(),
-        "the dropped proxy's port refuses connections"
+        probe.listener_closed(),
+        "the dropped proxy closed its listener"
+    );
+    assert!(
+        probe.accept_joined(),
+        "the dropped proxy joined its accept thread"
     );
 }
 

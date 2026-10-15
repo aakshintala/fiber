@@ -53,6 +53,8 @@ pub enum Watched {
 
 /// What the launcher receives: everything the child's argv needs.
 pub struct Launched {
+    /// The child's depth in the delegate tree.
+    pub depth: u32,
     /// The delegate's session.
     pub session_id: SessionId,
     /// The delegate's job in its parent: its id for life.
@@ -217,6 +219,7 @@ pub(crate) struct Runner {
     bound: Duration,
     cap: u64,
     watch: Watch,
+    deadline: Option<Instant>,
     /// The `seq` of the delegate log's last complete line before this
     /// run spawned: lines at or before it belong to an earlier run, so
     /// the watch skips them and the fold dedupes from there. `None` on
@@ -246,7 +249,9 @@ impl Runner {
         cap: u64,
         watch: Watch,
         after: Option<u64>,
+        timeout: Option<Duration>,
     ) -> (Self, Stop) {
+        let deadline = timeout.and_then(|timeout| clock.now().checked_add(timeout));
         let shared = Shared::new(Arc::clone(&clock), bound);
         let stopping = Arc::clone(&shared);
         let stop = Stop(Box::new(move || stopping.stop()));
@@ -262,6 +267,7 @@ impl Runner {
                 bound,
                 cap,
                 watch,
+                deadline,
                 after,
                 shared,
                 park,
@@ -372,6 +378,9 @@ impl Runner {
                 self.retire(&mut listing);
                 return;
             }
+            if deadline_due(self.deadline, self.clock.now()) {
+                self.shared.halt(Termination::Timeout);
+            }
             if let Some(kill_at) = self.shared.kill_at()
                 && self.clock.now() >= kill_at
             {
@@ -414,6 +423,11 @@ impl Runner {
                 outstanding,
                 next_retry,
                 self.shared.kill_at(),
+                if self.shared.reason().is_none() {
+                    self.deadline
+                } else {
+                    None
+                },
             );
             self.park.park(self.clock.as_ref(), Some(due), seen);
         }
@@ -556,6 +570,7 @@ pub(crate) fn park_due(
     outstanding: bool,
     next_retry: Instant,
     kill_at: Option<Instant>,
+    deadline: Option<Instant>,
 ) -> Instant {
     let mut due = poll_due;
     if !exited_seen && !outstanding {
@@ -564,7 +579,14 @@ pub(crate) fn park_due(
     if let Some(kill_at) = kill_at {
         due = due.min(kill_at);
     }
+    if let Some(deadline) = deadline {
+        due = due.min(deadline);
+    }
     due
+}
+
+pub(crate) fn deadline_due(deadline: Option<Instant>, now: Instant) -> bool {
+    deadline.is_some_and(|deadline| now >= deadline)
 }
 
 /// Mints a driver command id: `c_` and 16 lowercase hex digits, drawn

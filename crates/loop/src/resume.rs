@@ -420,6 +420,12 @@ impl Loop {
             return offered.map(|_| None);
         }
         self.ensure_preamble()?;
+        // The hook runs before the batch completes; a failure keeps the
+        // suspension for the next resume, and a cancel leaves it intact.
+        match self.start_suspended(&suspended)? {
+            crate::lifecycle::Flow::Stop => return Ok(None),
+            crate::lifecycle::Flow::Continue => {}
+        }
         self.cut_off = false;
         let Pending::Approval(request) = suspended.pending.clone() else {
             return self.finish_suspended_form(suspended);

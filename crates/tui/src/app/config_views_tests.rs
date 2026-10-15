@@ -115,7 +115,7 @@ fn slash_settings_opens_the_view_attached_and_on_home() {
     assert!(app.input().is_empty());
     let rows = screen(&app);
     assert!(
-        rows.first().is_some_and(|row| row.starts_with("Settings")),
+        rows.first().is_some_and(|row| row.starts_with(" Settings")),
         "{rows:?}"
     );
     assert!(
@@ -129,7 +129,7 @@ fn slash_settings_opens_the_view_attached_and_on_home() {
     assert!(app.config_view_open());
     let rows = screen(&app);
     assert!(
-        rows.iter().any(|row| row.starts_with("Settings")),
+        rows.iter().any(|row| row.starts_with(" Settings")),
         "{rows:?}"
     );
     assert!(
@@ -246,6 +246,18 @@ fn without_a_seam_the_view_says_not_available() {
     assert_eq!(app.on_click(TargetId::View(Spot::Row(0))), Effect::None);
     app.on_key(Key::Esc, now());
     assert!(!app.config_view_open());
+}
+
+#[test]
+fn without_a_seam_the_placeholder_carries_the_opening_command() {
+    // One site's pair pins the shape: the title names the view, the
+    // command the slash command that opened it (`docs/tui.md`,
+    // "Swapped views").
+    let mut app = attached(None);
+    slash_settings(&mut app);
+    let frame = app.config_view_screen().expect("the view is open");
+    assert_eq!(frame.title, "Settings");
+    assert_eq!(frame.command, "/settings");
 }
 
 #[test]
@@ -683,7 +695,7 @@ fn slash_rules_opens_the_view_attached_and_on_home() {
     assert!(app.input().is_empty());
     let rows = screen(&app);
     assert!(
-        rows.first().is_some_and(|row| row.starts_with("Rules")),
+        rows.first().is_some_and(|row| row.starts_with(" Rules")),
         "{rows:?}"
     );
     assert!(
@@ -696,7 +708,7 @@ fn slash_rules_opens_the_view_attached_and_on_home() {
     slash_rules(&mut app);
     assert!(app.config_view_open());
     let rows = screen(&app);
-    assert!(rows.iter().any(|row| row.starts_with("Rules")), "{rows:?}");
+    assert!(rows.iter().any(|row| row.starts_with(" Rules")), "{rows:?}");
 }
 
 #[test]

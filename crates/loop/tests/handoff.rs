@@ -30,10 +30,43 @@ use r#loop::{HandoffSettings, Hosted, Prepare, Prepared, Retry, Switchable};
 use serde_json::json;
 
 use support::{
-    DEADLINE, ENDED, MODEL, OPENING, REPLY, STEP, Session, TestTool, assert_kinds,
+    DEADLINE, ENDED, MODEL, OPENING, REPLY, STEP, Session, StartHooks, TestTool, assert_kinds,
     assert_no_stored_attempt, attempt_numbers, calls_reply, delivery, handoff, ignore, kinds,
-    model, of_kind, reasoning_reply, tool_call_reply, with_tokens,
+    model, of_kind, reasoning_reply, start_added, start_empty, start_failed, start_noticed,
+    tool_call_reply, with_tokens,
 };
+
+fn hook(hooks: Arc<StartHooks>, session: &mut Session) {
+    session.looped = session
+        .looped
+        .take()
+        .map(|looped| looped.hooks(hooks as Arc<dyn contract::hook::Hooks>));
+}
+
+/// A handoff that completed on a one-part note, then the hook's context.
+const HANDED_CTX: &[&str] = &[
+    "handoff_started",
+    "assistant_message_started",
+    "assistant_message_delta",
+    "assistant_message_delta",
+    "text_completed",
+    "usage_recorded",
+    "assistant_message_completed",
+    "handoff_completed",
+    "opening_message",
+    "context_added",
+];
+/// A handoff whose note is ready but whose hook failed: no opening.
+const FAILED_CTX: &[&str] = &[
+    "handoff_started",
+    "assistant_message_started",
+    "assistant_message_delta",
+    "assistant_message_delta",
+    "text_completed",
+    "usage_recorded",
+    "assistant_message_completed",
+    "handoff_completed",
+];
 
 /// The trigger in these tests.
 const TRIGGER: u64 = 1_000;
@@ -2869,4 +2902,454 @@ fn a_handoff_after_a_model_switch_sizes_notices_by_the_new_window() {
     let notices = of_kind(&handed, "notice");
     assert_eq!(notices.len(), 1);
     assert_eq!(notices[0].payload["code"], "skills_large");
+}
+
+#[test]
+fn a_person_handoff_runs_session_start_with_reason_handoff() {
+    let hooks = StartHooks::new();
+    hooks.answer(start_empty());
+    hooks.answer(start_added("fiber.test/inbox", "at handoff"));
+    let mut session = injected(
+        handed_after_a_call(),
+        vec![handoff("c_h", None)],
+        settings(),
+    );
+    hook(Arc::clone(&hooks), &mut session);
+
+    let (outcome, lines) = run(&mut session, "hi");
+    assert_eq!(outcome, Some(TurnOutcome::Completed));
+    assert_kinds(
+        &lines,
+        &[OPENING, STEP, CALL_BODY, STEP, HANDED_CTX, REPLY, ENDED],
+    );
+    // The hook sees the reason, as at every other start, and not the
+    // handoff note.
+    let workspace = session.workspace.display().to_string();
+    assert_eq!(
+        hooks.seen(),
+        vec![
+            ("Start".to_owned(), "s_test".to_owned(), workspace.clone()),
+            ("Handoff".to_owned(), "s_test".to_owned(), workspace),
+        ]
+    );
+    let added = of_kind(&lines, "context_added");
+    assert_eq!(added.len(), 1);
+    assert_eq!(added[0].payload["hook"], "session_start");
+    assert_eq!(added[0].payload["extension"], "fiber.test/inbox");
+    assert_eq!(added[0].payload["text"], "at handoff");
+    // The next request is the new opening message, the context, the
+    // turn's input, the note.
+    let requests = session.requests();
+    assert_eq!(requests.len(), 3);
+    let next = &requests[2].conversation;
+    assert_eq!(next.len(), 4);
+    assert!(is_opening(&next[0]));
+    assert_eq!(next[1], user("at handoff"));
+    assert_eq!(next[2], user("hi"));
+    assert_eq!(next[3], user("The note."));
+}
+
+#[test]
+fn an_automatic_handoff_runs_session_start_with_reason_handoff() {
+    let hooks = StartHooks::new();
+    hooks.answer(start_empty());
+    hooks.answer(start_added("fiber.test/inbox", "at handoff"));
+    let mut session = session(
+        vec![
+            called(TRIGGER - 1),
+            Scripted::text("The note."),
+            said("Done.", 50),
+        ],
+        settings(),
+    );
+    hook(Arc::clone(&hooks), &mut session);
+
+    let (outcome, lines) = run(&mut session, "hi");
+    assert_eq!(outcome, Some(TurnOutcome::Completed));
+    assert_kinds(
+        &lines,
+        &[OPENING, STEP, CALL_BODY, STEP, HANDED_CTX, REPLY, ENDED],
+    );
+    assert_eq!(
+        of_kind(&lines, "handoff_started")[0].payload["trigger"],
+        "auto"
+    );
+    assert_eq!(hooks.seen().len(), 2);
+    assert_eq!(hooks.seen()[1].0, "Handoff");
+    let requests = session.requests();
+    assert_eq!(requests.len(), 3);
+    let next = &requests[2].conversation;
+    assert_eq!(next.len(), 4);
+    assert!(is_opening(&next[0]));
+    assert_eq!(next[1], user("at handoff"));
+    assert_eq!(next[2], user("hi"));
+    assert_eq!(next[3], user("The note."));
+}
+
+#[test]
+fn a_tool_handoff_runs_session_start_with_reason_handoff() {
+    let hooks = StartHooks::new();
+    hooks.answer(start_empty());
+    hooks.answer(start_added("fiber.test/inbox", "at handoff"));
+    let mut session = tool_session(
+        vec![calling(&["wrapup"], 500), said("Done.", 50)],
+        vec![wrapping("wrapup", "Tool note.")],
+    );
+    hook(Arc::clone(&hooks), &mut session);
+
+    let (outcome, lines) = run(&mut session, "hi");
+    assert_eq!(outcome, Some(TurnOutcome::Completed));
+    assert_kinds(
+        &lines,
+        &[
+            OPENING,
+            STEP,
+            &call_lines(1),
+            &["handoff_completed", "opening_message", "context_added"],
+            STEP,
+            REPLY,
+            ENDED,
+        ],
+    );
+    assert_eq!(hooks.seen().len(), 2);
+    assert_eq!(hooks.seen()[1].0, "Handoff");
+    let requests = session.requests();
+    assert_eq!(requests.len(), 2);
+    let next = &requests[1].conversation;
+    assert_eq!(next.len(), 4);
+    assert!(is_opening(&next[0]));
+    assert_eq!(next[1], user("at handoff"));
+    assert_eq!(next[2], user("hi"));
+    assert_eq!(next[3], user("Tool note."));
+}
+
+#[test]
+fn a_blocking_session_start_failure_at_a_person_handoff_fails_the_handoff_and_blocks() {
+    let hooks = StartHooks::new();
+    hooks.answer(start_empty());
+    hooks.answer(start_failed("fiber.test/guard", "boom"));
+    // The context stays at the trigger past the failed handoff, so an
+    // unblocked turn would hand off again: one handoff names the block.
+    let mut session = injected(
+        vec![
+            called(TRIGGER - 1),
+            Scripted::text("The note."),
+            called(TRIGGER - 1),
+            said("Done.", 50),
+        ],
+        vec![handoff("c_h", None)],
+        settings(),
+    );
+    hook(Arc::clone(&hooks), &mut session);
+
+    let (outcome, lines) = run(&mut session, "hi");
+    assert_eq!(outcome, Some(TurnOutcome::Completed));
+    // The failed handoff sends from the same step; the blocked check at
+    // the next step starts no second handoff.
+    assert_kinds(
+        &lines,
+        &[
+            OPENING, STEP, CALL_BODY, STEP, FAILED_CTX, CALL_BODY, STEP, REPLY, ENDED,
+        ],
+    );
+    let done = of_kind(&lines, "handoff_completed");
+    assert_eq!(done.len(), 1);
+    assert_eq!(
+        serde_json::Value::Object(done[0].payload.clone()),
+        json!({
+            "outcome": "failed",
+            "error": {
+                "code": "hook_failed",
+                "message": "The `session_start` hook of extension fiber.test/guard failed, so the handoff did not complete: boom",
+            },
+            "tokens_before": TRIGGER,
+        })
+    );
+    // No opening message, no note, no second handoff: the session goes on
+    // with the old conversation.
+    assert_eq!(of_kind(&lines, "opening_message").len(), 1);
+    assert_eq!(of_kind(&lines, "handoff_started").len(), 1);
+    let requests = session.requests();
+    assert_eq!(requests.len(), 4);
+    let next = &requests[2].conversation;
+    assert_eq!(next.len(), 4);
+    assert!(is_opening(&next[0]));
+    assert_eq!(next[1], user("hi"));
+    assert!(matches!(next[2], Input::ToolCall { .. }));
+    assert!(matches!(next[3], Input::ToolResult { .. }));
+}
+
+#[test]
+fn a_blocking_session_start_failure_at_a_tool_handoff_keeps_the_results() {
+    let hooks = StartHooks::new();
+    hooks.answer(start_empty());
+    hooks.answer(start_failed("fiber.test/guard", "boom"));
+    let mut session = tool_session(
+        vec![calling(&["wrapup"], 500), said("Done.", 50)],
+        vec![wrapping("wrapup", "Tool note.")],
+    );
+    hook(Arc::clone(&hooks), &mut session);
+
+    let (outcome, lines) = run(&mut session, "hi");
+    assert_eq!(outcome, Some(TurnOutcome::Completed));
+    assert_kinds(
+        &lines,
+        &[
+            OPENING,
+            STEP,
+            &call_lines(1),
+            &["handoff_completed"],
+            STEP,
+            REPLY,
+            ENDED,
+        ],
+    );
+    let done = of_kind(&lines, "handoff_completed");
+    assert_eq!(done.len(), 1);
+    assert_eq!(done[0].payload["outcome"], "failed");
+    assert_eq!(done[0].payload["error"]["code"], "hook_failed");
+    assert_eq!(
+        done[0].payload["error"]["message"],
+        "The `session_start` hook of extension fiber.test/guard failed, \
+         so the handoff did not complete: boom"
+    );
+    assert!(
+        done[0].payload.get("note").is_none(),
+        "no note: {:?}",
+        done[0].payload
+    );
+    assert_eq!(of_kind(&lines, "opening_message").len(), 1);
+    // The call results stay ordinary results in the old conversation.
+    assert_eq!(of_kind(&lines, "tool_call_completed").len(), 1);
+    let requests = session.requests();
+    assert_eq!(requests.len(), 2);
+    let next = &requests[1].conversation;
+    assert_eq!(next.len(), 4);
+    assert!(is_opening(&next[0]));
+    assert_eq!(next[1], user("hi"));
+    assert!(matches!(next[2], Input::ToolCall { .. }));
+    assert!(matches!(next[3], Input::ToolResult { .. }));
+}
+
+#[test]
+fn a_blocking_session_start_failure_at_an_overflow_handoff_fails_context_overflow() {
+    let hooks = StartHooks::new();
+    hooks.answer(start_empty());
+    hooks.answer(start_failed("fiber.test/guard", "boom"));
+    let mut session = Session::with_tools(
+        vec![called_both(100), overflowing(), Scripted::text("The note.")],
+        None,
+        both_tools(),
+    )
+    .handoff(settings())
+    .retry(no_wait());
+    hook(Arc::clone(&hooks), &mut session);
+
+    let (outcome, lines) = run(&mut session, "hi");
+    assert_eq!(outcome, Some(TurnOutcome::Failed));
+    assert_kinds(
+        &lines,
+        &[OPENING, STEP, TWO_CALLS, STEP, REJECTED, FAILED_CTX, ENDED],
+    );
+    let done = of_kind(&lines, "handoff_completed");
+    assert_eq!(done.len(), 1);
+    assert_eq!(done[0].payload["outcome"], "failed");
+    assert_eq!(done[0].payload["error"]["code"], "hook_failed");
+    let last = lines.last().unwrap();
+    assert_eq!(last.kind, "turn_completed");
+    assert_eq!(last.payload["outcome"], "failed");
+    assert_eq!(last.payload["error"]["code"], "context_overflow");
+}
+
+#[test]
+fn a_non_blocking_session_start_failure_drops_its_context_with_a_notice() {
+    let hooks = StartHooks::new();
+    hooks.answer(start_empty());
+    hooks.answer(start_noticed("fiber.test/soft"));
+    let mut session = injected(
+        handed_after_a_call(),
+        vec![handoff("c_h", None)],
+        settings(),
+    );
+    hook(Arc::clone(&hooks), &mut session);
+
+    let (outcome, lines) = run(&mut session, "hi");
+    assert_eq!(outcome, Some(TurnOutcome::Completed));
+    // The complete stream: the soft failure's notice precedes the
+    // handoff's completion, and no hook context follows the new opening.
+    assert_kinds(
+        &lines,
+        &[
+            OPENING,
+            STEP,
+            CALL_BODY,
+            STEP,
+            &[
+                "handoff_started",
+                "assistant_message_started",
+                "assistant_message_delta",
+                "assistant_message_delta",
+                "text_completed",
+                "usage_recorded",
+                "assistant_message_completed",
+                "notice",
+                "handoff_completed",
+                "opening_message",
+            ],
+            REPLY,
+            ENDED,
+        ],
+    );
+    let done = of_kind(&lines, "handoff_completed");
+    assert_eq!(done.len(), 1);
+    assert_eq!(done[0].payload["outcome"], "completed");
+    let notice = of_kind(&lines, "notice");
+    assert_eq!(notice.len(), 1);
+    assert_eq!(notice[0].payload["code"], "hook_failed");
+    assert_eq!(notice[0].payload["extension"], "fiber.test/soft");
+    // The handoff completes with no context from the hook.
+    assert!(of_kind(&lines, "context_added").is_empty());
+    let requests = session.requests();
+    assert_eq!(requests.len(), 3);
+    let next = &requests[2].conversation;
+    assert_eq!(next.len(), 3);
+    assert!(is_opening(&next[0]));
+    assert_eq!(next[1], user("hi"));
+    assert_eq!(next[2], user("The note."));
+}
+
+#[test]
+fn a_cancel_or_shutdown_inside_the_handoff_hook_cancels_the_handoff() {
+    for shutdown in [false, true] {
+        let hooks = StartHooks::new();
+        hooks.answer(start_empty());
+        hooks.answer(start_added("fiber.test/inbox", "late"));
+        hooks.fire_inside_at(2);
+        let mut session = injected(
+            handed_after_a_call(),
+            vec![handoff("c_h", None)],
+            settings(),
+        );
+        hook(Arc::clone(&hooks), &mut session);
+        if shutdown {
+            hooks.shutdown_inside(Arc::clone(&session.cancel));
+        } else {
+            hooks.cancel_inside(Arc::clone(&session.cancel));
+        }
+        let (outcome, lines) = run(&mut session, "hi");
+        assert_eq!(
+            outcome,
+            Some(TurnOutcome::Interrupted),
+            "shutdown: {shutdown}"
+        );
+        let done = of_kind(&lines, "handoff_completed");
+        assert_eq!(done.len(), 1, "shutdown: {shutdown}");
+        assert_eq!(
+            done[0].payload["outcome"], "cancelled",
+            "shutdown: {shutdown}"
+        );
+        assert!(
+            done[0].payload.get("note").is_none(),
+            "shutdown: {shutdown}"
+        );
+        assert!(
+            done[0].payload.get("error").is_none(),
+            "shutdown: {shutdown}"
+        );
+        assert_eq!(
+            of_kind(&lines, "opening_message").len(),
+            1,
+            "no handoff opening: {shutdown}"
+        );
+        assert!(
+            of_kind(&lines, "context_added").is_empty(),
+            "no context: {shutdown}"
+        );
+        drop(session.looped.take());
+    }
+}
+
+#[test]
+fn turn_start_does_not_run_at_a_handoff() {
+    let hooks = StartHooks::new();
+    hooks.answer(start_empty());
+    hooks.answer(start_added("fiber.test/inbox", "at handoff"));
+    let mut session = injected(
+        handed_after_a_call(),
+        vec![handoff("c_h", None)],
+        settings(),
+    );
+    hook(Arc::clone(&hooks), &mut session);
+
+    let (outcome, _) = run(&mut session, "hi");
+    assert_eq!(outcome, Some(TurnOutcome::Completed));
+    assert_eq!(hooks.calls(), 2);
+    assert_eq!(
+        hooks.turn_calls(),
+        1,
+        "the turn's hook runs once; the handoff runs none"
+    );
+}
+
+#[test]
+fn a_failed_tool_handoff_with_questions_writes_the_taken_lines() {
+    use contract::shapes::{Effect, Question};
+
+    // A tool handoff whose call also asks: `after_calls` writes what the
+    // step took once the handoff fails, and the turn ends on the
+    // questions.
+    let mut tool = TestTool::declaring(
+        "wrapup",
+        "",
+        vec![Effect::Reads],
+        Some(vec!["sub/notes.txt".into()]),
+    );
+    tool.output.content = Vec::new();
+    tool.output.control = Some(Control {
+        handoff: Some("Tool note.".into()),
+        questions: Some(vec![Question {
+            header: "h".into(),
+            question: "Go on?".into(),
+            options: Vec::new(),
+            multi_select: None,
+        }]),
+        skill: None,
+        name: None,
+    });
+    let tool = Arc::new(tool);
+    let mut session = tool_session(vec![calling(&["wrapup"], 500)], vec![tool.clone()]);
+    // Below the workspace: the opening message never reads it, so the
+    // call queues it for the step's end.
+    std::fs::create_dir_all(session.workspace.join("sub")).unwrap();
+    std::fs::write(session.workspace.join("sub/AGENTS.md"), "Sub rules.\n").unwrap();
+    let hooks = StartHooks::new();
+    hooks.answer(start_empty());
+    hooks.answer(start_failed("fiber.test/guard", "boom"));
+    hook(Arc::clone(&hooks), &mut session);
+
+    let (outcome, lines) = run(&mut session, "hi");
+    assert_eq!(outcome, Some(TurnOutcome::Completed));
+    assert_kinds(
+        &lines,
+        &[
+            OPENING,
+            STEP,
+            &call_lines(1),
+            &["handoff_completed", "instruction_file"],
+            ENDED,
+        ],
+    );
+    // The handoff failed, so the taken subdirectory line is written: a
+    // handoff that ran would have dropped it with the old context.
+    let taken = of_kind(&lines, "instruction_file");
+    assert_eq!(taken.len(), 1);
+    assert_eq!(taken[0].payload["reason"], "subdirectory");
+    let last = lines.last().unwrap();
+    assert_eq!(last.payload["outcome"], "completed");
+    assert_eq!(
+        last.payload["questions"][0]["question"], "Go on?",
+        "the turn ends on the questions: {:?}",
+        last.payload
+    );
+    drop(tool);
 }

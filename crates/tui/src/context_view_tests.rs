@@ -3,6 +3,7 @@
 
 use super::{Category, ContextFold, LARGEST_SHOWN, Sized, bar, categories, frame};
 use crate::swapped::{Ink, List, render};
+use crate::theme::Role;
 use contract::Envelope;
 use contract::{ActionId, SCHEMA_VERSION, SessionId};
 use log::{Rate, RateFold};
@@ -119,6 +120,105 @@ fn text(fold: &ContextFold, rate: Rate, sized: Option<Sized>, width: u16) -> Str
 }
 
 #[test]
+fn the_doc_numbers_draw_bold_sizes_a_role_bar_and_an_attention_label() {
+    // 268,000 of a 1,000,000 window with the handoff at 400,000: the
+    // bar spans to the handoff point, so the marker sits on its end.
+    let fold = fold_with_sizes(100_000, 50_000, 118_000);
+    let sized = Sized {
+        total: 268_000,
+        window: 1_000_000,
+        trigger: Some(400_000),
+    };
+    let frame = frame(&fold, rate(), Some(sized), List::default(), 80);
+    // The body is indented two columns: "268k tokens" bold, then the
+    // dim tail, and the bar leaves the indent's two columns.
+    assert_eq!(
+        frame.rows[0][1],
+        ("268k tokens".to_owned(), None, Ink::Heading)
+    );
+    assert_eq!(
+        frame.rows[0][2],
+        (
+            " · 26% of the 1M window · automatic handoff at 400k".to_owned(),
+            None,
+            Ink::Muted
+        )
+    );
+    // One █ run per non-empty category in its role, ▁ for the rest,
+    // one │ in attention on the last cell.
+    let runs: Vec<(usize, Ink)> = frame.rows[1]
+        .iter()
+        .skip(1)
+        .map(|(text, _, ink)| (text.chars().count(), *ink))
+        .collect();
+    assert_eq!(
+        runs,
+        [
+            (19, Ink::Role(Role::Accent)),
+            (10, Ink::Role(Role::Info)),
+            (23, Ink::Role(Role::Error)),
+            (25, Ink::Role(Role::Rule)),
+            (1, Ink::Role(Role::Attention)),
+        ]
+    );
+    let bar: String = frame.rows[1]
+        .iter()
+        .map(|(text, _, _)| text.as_str())
+        .collect();
+    assert_eq!(
+        bar,
+        format!(
+            "  {}{}{}{}│",
+            "█".repeat(19),
+            "█".repeat(10),
+            "█".repeat(23),
+            "▁".repeat(25)
+        )
+    );
+    // The label ends under the marker, in attention.
+    assert_eq!(
+        frame.rows[2]
+            .iter()
+            .map(|(text, _, _)| text.as_str())
+            .collect::<String>(),
+        format!("{}handoff 400k", " ".repeat(68))
+    );
+    assert_eq!(
+        frame.rows[2].last(),
+        Some(&("handoff 400k".to_owned(), None, Ink::Role(Role::Attention)))
+    );
+    // One row per category: the mark in its colour, the padded name,
+    // the size and its share dim.
+    let categories: Vec<String> = frame.rows[3..7]
+        .iter()
+        .map(|row| {
+            row.iter()
+                .map(|(text, _, _)| text.as_str())
+                .collect::<String>()
+        })
+        .collect();
+    assert_eq!(
+        categories,
+        [
+            format!("  ■ {:<20}~100k 37%", "system prompt"),
+            format!("  ■ {:<20}~50k 18%", "tool definitions"),
+            format!("  ■ {:<20}~118k 44%", "tool results"),
+            format!("  ■ {:<20}~0 0%", "messages"),
+        ]
+    );
+    assert_eq!(frame.rows[3][1].2, Ink::Role(Role::Accent));
+    assert_eq!(frame.rows[4][1].2, Ink::Role(Role::Info));
+    assert_eq!(frame.rows[5][1].2, Ink::Role(Role::Error));
+    assert_eq!(frame.rows[6][1].2, Ink::Role(Role::Text));
+    assert_eq!(frame.rows[3][3].2, Ink::Muted);
+    // Then the bold largest heading.
+    assert_eq!(
+        frame.rows[7][1],
+        ("Largest tool results".to_owned(), None, Ink::Heading)
+    );
+}
+
+#[test]
 fn categories_sum_to_the_total_with_messages_as_the_remainder() {
     let fold = fold_with_sizes(4, 5, 6);
     assert_eq!(
@@ -197,43 +297,74 @@ fn preamble_sizes_use_utf8_bytes_and_only_non_deferred_definitions() {
 
 #[test]
 fn a_zero_width_bar_is_empty() {
-    assert_eq!(bar(&[], 100, None, 0), "");
+    assert!(bar(&[], 100, None, 0).is_empty());
 }
 
 #[test]
 fn a_total_past_the_window_fills_every_cell() {
     let fill = [(Category::Messages, 5)];
-    assert_eq!(bar(&fill, 3, None, 4), "▆▆▆▆");
+    assert_eq!(bar(&fill, 3, None, 4), [("████".to_owned(), Role::Text)]);
 }
 
 #[test]
 fn a_zero_total_leaves_every_cell_free() {
     let fill = [(Category::Messages, 0)];
-    assert_eq!(bar(&fill, 100, None, 4), "░░░░");
+    assert_eq!(bar(&fill, 100, None, 4), [("▁▁▁▁".to_owned(), Role::Rule)]);
 }
 
 #[test]
 fn a_zero_window_draws_no_bar_or_marker() {
     let fill = [(Category::Messages, 100)];
-    assert_eq!(bar(&fill, 0, Some(50), 4), "");
+    assert!(bar(&fill, 0, Some(50), 4).is_empty());
 }
 
 #[test]
 fn the_handoff_marker_uses_the_trigger_cell() {
     let fill = [(Category::Messages, 100)];
-    assert_eq!(bar(&fill, 100, Some(25), 8), "▆▆│▆▆▆▆▆");
+    assert_eq!(
+        bar(&fill, 100, Some(25), 8),
+        [
+            ("██".to_owned(), Role::Text),
+            ("│".to_owned(), Role::Attention),
+            ("█████".to_owned(), Role::Text),
+        ]
+    );
 }
 
 #[test]
 fn a_trigger_past_the_window_marks_the_last_cell() {
     let fill = [(Category::Messages, 100)];
-    assert_eq!(bar(&fill, 4, Some(5), 3), "▆▆│");
+    assert_eq!(
+        bar(&fill, 4, Some(5), 3),
+        [
+            ("██".to_owned(), Role::Text),
+            ("│".to_owned(), Role::Attention),
+        ]
+    );
 }
 
 #[test]
 fn no_trigger_draws_no_handoff_marker() {
     let fill = [(Category::Messages, 50)];
-    assert_eq!(bar(&fill, 100, None, 4), "▆▆░░");
+    assert_eq!(
+        bar(&fill, 100, None, 4),
+        [("██".to_owned(), Role::Text), ("▁▁".to_owned(), Role::Rule),]
+    );
+}
+
+#[test]
+fn a_nonzero_category_keeps_one_cell() {
+    // Too small to round to a cell still draws one, so every
+    // non-empty category keeps its run.
+    let fill = [(Category::SystemPrompt, 1), (Category::Messages, 1000)];
+    assert_eq!(
+        bar(&fill, 140_000, None, 80),
+        [
+            ("█".to_owned(), Role::Accent),
+            ("█".to_owned(), Role::Text),
+            ("▁".repeat(78), Role::Rule),
+        ]
+    );
 }
 
 #[test]
@@ -244,7 +375,13 @@ fn a_category_boundary_on_a_cell_edge_ends_before_the_next_cell() {
         (Category::ToolResults, 0),
         (Category::Messages, 0),
     ];
-    assert_eq!(bar(&fill, 4, None, 4), "█▓▓▓");
+    assert_eq!(
+        bar(&fill, 4, None, 4),
+        [
+            ("█".to_owned(), Role::Accent),
+            ("███".to_owned(), Role::Info),
+        ]
+    );
 }
 
 #[test]
@@ -357,11 +494,14 @@ fn no_preamble_or_context_total_says_when_context_appears() {
         let frame = frame(fold, Rate::default(), None, List::default(), 80);
         assert_eq!(
             frame.rows,
-            [vec![(
-                "The context shows after the session's first request.".to_owned(),
-                None,
-                Ink::Muted
-            )]]
+            [vec![
+                ("  ".to_owned(), None, Ink::Plain),
+                (
+                    "The context shows after the session's first request.".to_owned(),
+                    None,
+                    Ink::Muted
+                )
+            ]]
         );
     }
 }
@@ -382,8 +522,18 @@ fn without_a_rate_the_view_draws_one_fill_and_says_when_to_break_down() {
         List::default(),
         12,
     );
-    assert!(row(&frame, "context  ").is_some());
-    assert_eq!(row(&frame, "▆"), Some("▆▆░░░░░░░│░░".to_owned()));
+    assert!(row(&frame, "  20 tokens").is_some());
+    assert_eq!(
+        frame
+            .rows
+            .iter()
+            .find(|row| row.iter().any(|(_, _, ink)| matches!(ink, Ink::Role(_))))
+            .map(|row| row
+                .iter()
+                .map(|(text, _, _)| text.as_str())
+                .collect::<String>()),
+        Some("  ██▁▁▁▁▁▁▁│".to_owned())
+    );
     assert_eq!(frame.below, ["Breakdown after a request without images."]);
     assert!(
         text(
@@ -427,20 +577,53 @@ fn with_a_rate_the_view_shows_each_category_and_sizes_results_in_tokens() {
         80,
     );
     for category in [
-        "█ system prompt",
-        "▓ tool definitions",
-        "▒ tool results",
-        "▆ messages",
+        "system prompt",
+        "tool definitions",
+        "tool results",
+        "messages",
     ] {
         assert!(shown.contains(category), "{shown}");
     }
+    assert!(shown.contains("~4 20%"), "{shown}");
+    assert!(shown.contains("~5 25%"), "{shown}");
+    assert!(shown.contains("~11 55%"), "{shown}");
     assert!(shown.contains("read  ~6 tokens"), "{shown}");
     assert_eq!(frame.title, "Context");
-    assert_eq!(frame.footer, "↑↓ scroll · Esc close");
+    assert_eq!(frame.command, "/context");
+    assert_eq!(frame.footer, "");
     assert_eq!(
         frame.below,
         ["Sizes are approximate: bytes at the session's own tokens-per-byte rate."]
     );
+}
+
+#[test]
+fn tool_results_draw_in_error() {
+    // The only coverage of the tool-result `error` colour: no pty case
+    // can reach it, because the scripted provider reports no rate.
+    let fold = fold_with_sizes(4, 5, 6);
+    let frame = frame(
+        &fold,
+        rate(),
+        Some(Sized {
+            total: 20,
+            window: 100,
+            trigger: Some(80),
+        }),
+        List::default(),
+        80,
+    );
+    let results = frame
+        .rows
+        .iter()
+        .find(|row| {
+            row.iter()
+                .map(|(text, _, _)| text.as_str())
+                .collect::<String>()
+                .contains("tool results")
+        })
+        .expect("the tool results row");
+    assert_eq!(results[1], ("■ ".to_owned(), None, Ink::Role(Role::Error)));
 }
 
 #[test]
@@ -476,7 +659,7 @@ fn the_bar_row_stays_present_and_row_count_does_not_depend_on_width() {
             .iter()
             .map(|(text, _, _)| text.as_str())
             .collect::<String>()),
-        Some(String::new())
+        Some("  ".to_owned())
     );
     assert!(wide.rows.iter().any(|cells| {
         cells

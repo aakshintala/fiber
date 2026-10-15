@@ -27,7 +27,7 @@ use serde_json::json;
 
 use support::{
     DEADLINE, MODEL, REVIEWER_MODEL, Session, TestTool, calls_reply, delivery, handoff, kinds,
-    paris, shell,
+    of_kind, paris, shell,
 };
 
 /// The session script every selection flow shares: a reviewed call, a
@@ -1230,4 +1230,75 @@ fn the_handoff_selection_marks_its_usage_with_no_call() {
         }
     }
     assert_eq!(stages, 2);
+}
+
+#[test]
+fn a_handoff_with_session_start_context_and_a_reviewer_completes() {
+    use support::{StartHooks, start_added, start_empty};
+
+    fn hook(hooks: Arc<StartHooks>, session: &mut Session) {
+        session.looped = session
+            .looped
+            .take()
+            .map(|looped| looped.hooks(hooks as Arc<dyn contract::hook::Hooks>));
+    }
+
+    // A person's handoff during a turn with input, judged by a
+    // reviewer: the selection runs after the handoff's guard is
+    // released, so the handoff completes instead of deadlocking.
+    let mut session = support::Session::new(
+        vec![
+            Scripted::text("Done."),
+            Scripted::text("The note."),
+            Scripted::text("After."),
+        ],
+        None,
+    );
+    let reviewer = session.reviewer(vec![Scripted::text("1")]);
+    let hooks = StartHooks::new();
+    hooks.answer(start_empty());
+    hooks.answer(start_added("fiber.test/inbox", "at handoff"));
+    hook(Arc::clone(&hooks), &mut session);
+    session.inbox.send(delivery("hi")).unwrap();
+    session.inbox.send(handoff("c_h", None)).unwrap();
+    assert_eq!(session.turn(), Some(TurnOutcome::Completed));
+    let lines = session.lines();
+    // The hook's context follows the new opening message, and the
+    // reviewer selection runs after it.
+    assert_eq!(
+        kinds(&lines),
+        [
+            "session_started",
+            "preamble_built",
+            "opening_message",
+            "turn_started",
+            "step_started",
+            "handoff_started",
+            "assistant_message_started",
+            "assistant_message_delta",
+            "assistant_message_delta",
+            "text_completed",
+            "usage_recorded",
+            "assistant_message_completed",
+            "handoff_completed",
+            "opening_message",
+            "context_added",
+            "usage_recorded",
+            "reviewer_kept",
+            "assistant_message_started",
+            "assistant_message_delta",
+            "assistant_message_delta",
+            "text_completed",
+            "usage_recorded",
+            "assistant_message_completed",
+            "turn_completed",
+        ]
+    );
+    assert_eq!(
+        of_kind(&lines, "context_added")[0].payload["text"],
+        "at handoff"
+    );
+    assert_eq!(reviewer.requests().len(), 1);
+    drop(session.looped.take());
+    drop(reviewer);
 }

@@ -62,6 +62,7 @@ fn rig() -> Rig {
     let launch: Launch = Arc::new(move |launched: &Launched| {
         counted.fetch_add(1, Ordering::SeqCst);
         let _sent = launched_tx.send(Launched {
+            depth: launched.depth,
             session_id: launched.session_id.clone(),
             job_id: launched.job_id.clone(),
             parent: launched.parent.clone(),
@@ -125,6 +126,7 @@ fn child_group(rig: &Rig) -> Watchdog {
 
 fn tool(rig: &Rig) -> DelegateSpawn {
     DelegateSpawn {
+        depth: 0,
         registry: Arc::clone(&rig.registry),
         parent: contract::SessionId("s_parent".into()),
         workspace: rig.sessions.parent().unwrap().to_path_buf(),
@@ -374,6 +376,7 @@ fn a_spawn_error_fails_io_failed_with_no_job() {
     let rig = rig();
     let failing: Launch = Arc::new(|_: &Launched| Command::new("/nonexistent/fiber-test-binary"));
     let spawned = DelegateSpawn {
+        depth: 0,
         registry: Arc::clone(&rig.registry),
         parent: contract::SessionId("s_parent".into()),
         workspace: rig.sessions.parent().unwrap().to_path_buf(),
@@ -402,6 +405,242 @@ fn a_spawn_error_fails_io_failed_with_no_job() {
     assert!(
         rig.inbox.try_recv().is_err(),
         "nothing was recorded, so nothing is sent"
+    );
+}
+
+#[test]
+fn concurrent_spawn_cap_is_checked_after_model_validation() {
+    for count in [9, 10] {
+        let rig = rig();
+        let mut finishes = Vec::new();
+        for _ in 0..count {
+            let id = crate::registry::mint_job_id();
+            finishes.push(rig.registry.open_started(
+                id.clone(),
+                "delegate_spawn".into(),
+                "fixture".into(),
+                "/unused".into(),
+                contract::jobs::Stop(Box::new(|| {})),
+                crate::support::delegate_started(&id.0),
+            ));
+        }
+        let spawned = tool(&rig);
+        if count == 10 {
+            rig.registry.install_timing(Arc::new(|_, _, _| {
+                panic!("a refused start writes no jobs.start timing")
+            }));
+        } else {
+            let mut failing = tool(&rig);
+            failing.launch = Arc::new(|_| Command::new("/nonexistent/fiber-cap-test"));
+            let output = failing.run(
+                &arguments("fiber:fake/m"),
+                &fakes::CancelToken::new(),
+                &Recorder::default(),
+            );
+            assert_eq!(output.error.unwrap().code, contract::ErrorCode::ToolError);
+            assert!(
+                output
+                    .content
+                    .iter()
+                    .map(text_of)
+                    .collect::<String>()
+                    .contains("Starting the delegate failed")
+            );
+        }
+        let invalid = spawned.run(
+            &arguments("unknown"),
+            &fakes::CancelToken::new(),
+            &Recorder::default(),
+        );
+        assert_eq!(
+            invalid.error.unwrap().code,
+            contract::ErrorCode::InvalidArguments
+        );
+        let output = spawned.run(
+            &arguments("fiber:fake/m"),
+            &fakes::CancelToken::new(),
+            &Recorder::default(),
+        );
+        if count == 9 {
+            let watchdog = child_group(&rig);
+            assert!(output.error.is_none());
+            assert_eq!(rig.launch_count.load(Ordering::SeqCst), 1);
+            rig.registry.stop_delegates();
+            watchdog.stand_down(DEADLINE);
+        } else {
+            let error = output.error.unwrap();
+            assert_eq!(error.code, contract::ErrorCode::ToolError);
+            assert_eq!(
+                error.message,
+                "This session already runs 10 delegates, the most it can run at once, so nothing was started; wait for one with `jobs wait` or stop one with `jobs stop`, then try again."
+            );
+            assert_eq!(rig.launch_count.load(Ordering::SeqCst), 0);
+        }
+    }
+}
+
+#[test]
+fn timeout_schema_and_argument_edges() {
+    let rig = rig();
+    let spawned = tool(&rig);
+    let schema = spawned.definition().input_schema;
+    let property = &schema["properties"]["timeout_ms"];
+    assert_eq!(property["type"], "integer");
+    assert_eq!(property["minimum"], 1);
+    assert!(
+        !schema["required"]
+            .as_array()
+            .unwrap()
+            .contains(&serde_json::json!("timeout_ms"))
+    );
+    for value in [
+        serde_json::json!(0),
+        serde_json::json!(-1),
+        serde_json::json!(1.5),
+        serde_json::json!("5"),
+        serde_json::Value::Null,
+    ] {
+        let mut call = arguments("fiber:fake/m");
+        call.insert("timeout_ms".into(), value);
+        assert!(
+            matches!(spawned.effects(&call), Err(contract::tool::EffectsError::Arguments(message)) if message == "`timeout_ms` must be an integer of 1 or more.")
+        );
+        let output = spawned.run(&call, &fakes::CancelToken::new(), &Recorder::default());
+        let error = output.error.unwrap();
+        assert_eq!(error.code, contract::ErrorCode::InvalidArguments);
+        assert_eq!(
+            error.message,
+            "`timeout_ms` must be an integer of 1 or more."
+        );
+        assert_eq!(rig.launch_count.load(Ordering::SeqCst), 0);
+    }
+    let mut call = arguments("fiber:fake/m");
+    assert!(spawned.effects(&call).is_ok());
+    for n in [1, 2] {
+        call.insert("timeout_ms".into(), serde_json::json!(n));
+        assert!(spawned.effects(&call).is_ok());
+    }
+}
+
+#[test]
+fn absent_timeout_keeps_the_delegate_running_after_a_poll() {
+    use contract::clock::Clock as _;
+    let rig = rig();
+    let mut spawned = tool(&rig);
+    let (release, held) = mpsc::channel::<()>();
+    let held = std::sync::Mutex::new(held);
+    spawned.watch = Arc::new(move |_, _, _| {
+        let _released = held.lock().unwrap().recv();
+        Err(std::io::Error::other("released"))
+    });
+    let output = spawned.run(
+        &arguments("fiber:fake/m"),
+        &fakes::CancelToken::new(),
+        &Recorder::default(),
+    );
+    let watchdog = child_group(&rig);
+    assert!(output.error.is_none());
+    let deadline = Deadline::after(DEADLINE);
+    let step = Duration::from_secs(1);
+    rig.clock
+        .advance_when_parked(Some(rig.clock.now() + step), None, step, &deadline);
+    assert!(rig.inbox.try_recv().is_err());
+    assert_eq!(rig.registry.stop_delegates(), 1);
+    drop(release);
+    let Delivery::Job(notice) = deadline.recv(&rig.inbox).expect("stopped delegate reports") else {
+        panic!("job notice");
+    };
+    assert_eq!(
+        notice.completed.status,
+        contract::events::Outcome::Cancelled
+    );
+    watchdog.stand_down(DEADLINE);
+}
+
+#[test]
+fn timeout_spawn_stops_and_reaps_its_child() {
+    use contract::clock::Clock as _;
+    let rig = rig();
+    let spawned = tool(&rig);
+    let mut call = arguments("fiber:fake/m");
+    call.insert("timeout_ms".into(), serde_json::json!(1));
+    let output = spawned.run(&call, &fakes::CancelToken::new(), &Recorder::default());
+    let watchdog = child_group(&rig);
+    assert!(output.error.is_none());
+    let deadline = Deadline::after(DEADLINE);
+    let step = Duration::from_millis(1);
+    rig.clock
+        .advance_when_parked(Some(rig.clock.now() + step), None, step, &deadline);
+    let Delivery::Job(notice) = deadline
+        .recv(&rig.inbox)
+        .expect("deadline ended the delegate")
+    else {
+        panic!("job notice");
+    };
+    assert_eq!(notice.completed.status, contract::events::Outcome::Failed);
+    assert_eq!(
+        notice.completed.error.unwrap().code,
+        contract::ErrorCode::Timeout
+    );
+    assert!(notice.completed.process.unwrap().timed_out);
+    watchdog.stand_down(DEADLINE);
+}
+
+#[test]
+fn depth_edges_refuse_by_tool_name() {
+    assert!(super::depth_refusal(1, "delegate_spawn").is_none());
+    for depth in [2, 3] {
+        let output = super::depth_refusal(depth, "delegate_fork").unwrap();
+        let error = output.error.unwrap();
+        assert_eq!(error.code, contract::ErrorCode::DepthExceeded);
+        assert_eq!(
+            error.message,
+            "This delegate is at depth 2, the deepest a delegate can be, so it cannot use `delegate_fork`; do the work in this session."
+        );
+    }
+}
+
+#[test]
+fn depth_precedes_arguments_and_model_lookup_without_changing_the_definition() {
+    for depth in [2, 3] {
+        for model in ["fiber:fake/m", "unknown"] {
+            let rig = rig();
+            let mut spawned = tool(&rig);
+            let definition = serde_json::to_value(spawned.definition()).unwrap();
+            spawned.depth = depth;
+            assert_eq!(
+                serde_json::to_value(spawned.definition()).unwrap(),
+                definition
+            );
+            let lookups = Arc::new(AtomicUsize::new(0));
+            let counted = Arc::clone(&lookups);
+            spawned.resolve.lookup = Arc::new(move |_| {
+                counted.fetch_add(1, Ordering::SeqCst);
+                Err("must not resolve".into())
+            });
+            for call in [arguments(model), serde_json::Map::new()] {
+                let output = spawned.run(&call, &fakes::CancelToken::new(), &Recorder::default());
+                assert_eq!(
+                    output.error.unwrap().code,
+                    contract::ErrorCode::DepthExceeded
+                );
+                assert_eq!(lookups.load(Ordering::SeqCst), 0);
+                assert_eq!(rig.launch_count.load(Ordering::SeqCst), 0);
+                assert_eq!(rig.registry.list_text(), "No jobs.\n");
+            }
+        }
+    }
+    let rig = rig();
+    let mut spawned = tool(&rig);
+    spawned.depth = 1;
+    let output = spawned.run(
+        &arguments("unknown"),
+        &fakes::CancelToken::new(),
+        &Recorder::default(),
+    );
+    assert_eq!(
+        output.error.unwrap().code,
+        contract::ErrorCode::InvalidArguments
     );
 }
 

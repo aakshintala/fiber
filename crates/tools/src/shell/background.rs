@@ -11,6 +11,7 @@ use std::thread;
 use std::time::{Duration, Instant};
 
 use contract::clock::{Clock, Wake};
+use contract::diag::{Op, Timing};
 use contract::emit::Emit;
 use contract::events::{JobCompleted, JobStarted, Outcome};
 use contract::jobs::{Foreground, JobRecord, Jobs, Opened, Opening, Stop};
@@ -210,8 +211,15 @@ pub(crate) fn take(
     terminal: bool,
     cancel: &dyn Cancel,
     emit: &dyn Emit,
+    timing: Option<&Timing>,
+    started: Option<Instant>,
 ) -> Output {
     let job_cancel = JobCancel::new();
+    // A moved foreground call stamps here, so the command's earlier life
+    // in the foreground is never counted. No clock is read without an
+    // installed timing.
+    let start: Option<(&Timing, Instant)> =
+        timing.map(|timing| (timing, started.unwrap_or_else(|| clock.now())));
     match jobs.open(Opening {
         tool: "shell".to_owned(),
         description: description_of(command),
@@ -219,7 +227,9 @@ pub(crate) fn take(
         input: moved.take_input(),
         lines: limit.monitor,
     }) {
-        Ok(opened) => hand_off(moved, opened, job_cancel, clock, limit, terminal, cancel),
+        Ok(opened) => hand_off(
+            moved, opened, job_cancel, clock, limit, terminal, cancel, start,
+        ),
         Err(error) => {
             let line = format!("It could not move to the background: {error}.");
             let finished = moved.resume(clock.as_ref(), cancel, emit);
@@ -228,6 +238,10 @@ pub(crate) fn take(
     }
 }
 
+#[allow(
+    clippy::too_many_arguments,
+    reason = "the moved command, the jobs, the clock and the call's own cancel and emit are one hand-off, with the timing stamp alongside"
+)]
 fn hand_off(
     mut moved: Moved,
     opened: Opened,
@@ -236,6 +250,7 @@ fn hand_off(
     limit: Limit,
     terminal: bool,
     cancel: &dyn Cancel,
+    start: Option<(&Timing, Instant)>,
 ) -> Output {
     let pgid = moved.pgid();
     let shared = moved.shared();
@@ -274,6 +289,12 @@ fn hand_off(
         let finished = moved.drive_job(job_clock.as_ref(), job_cancel.as_ref(), stream, feed);
         (end.0)(to_completed(job_id, &path, finished, limit));
     });
+    // The job is recorded running and its own drive thread has been
+    // spawned: the start ends here, before any receipt work. The guard
+    // writes exactly one `jobs.start` line on drop, with no tool name.
+    if let Some((timing, started)) = start {
+        drop(timing(Op::JobsStart, None, Some(started)));
+    }
     if let Some(sink) = sink {
         return with_spill_line(
             monitor_receipt(&opened.started, &opened.path, &errors, &sink, limit.ms),
