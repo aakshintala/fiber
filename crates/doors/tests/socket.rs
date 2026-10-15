@@ -315,6 +315,20 @@ fn subscribe_is_first_and_unknown_or_unfit_commands_are_rejected() {
                 ),
             );
 
+            send(
+                &client,
+                r#"{"id":"c_page","command":"artifact_page","args":{"path":"artifacts/a_3.txt"}}"#,
+            );
+            assert_eq!(
+                rejection(&response(&client, "c_page")),
+                ("unknown_command", "`artifact_page` is not built in this Fiber yet.")
+            );
+            send(&client, r#"{"id":"c_page_bad","command":"artifact_page"}"#);
+            assert_eq!(
+                rejection(&response(&client, "c_page_bad")),
+                ("unknown_command", "`artifact_page` is not built in this Fiber yet.")
+            );
+
             send(&client, r#"{"id":"c_name","command":"name"}"#);
             assert_eq!(
                 rejection(&response(&client, "c_name")),
