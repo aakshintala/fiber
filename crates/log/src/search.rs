@@ -18,6 +18,7 @@ use std::sync::{Arc, Mutex, OnceLock, PoisonError};
 use std::thread;
 
 use contract::SessionId;
+use contract::diag::{Op, Timing};
 use contract::session_search::{Found, Hit, Label, Query, Scan};
 use contract::tool::Cancel;
 
@@ -43,6 +44,8 @@ pub struct SessionScan {
     /// The calling session's own project identity, found at first use and
     /// kept for the scanner's life.
     own: OnceLock<PathBuf>,
+    /// The operation timer, when the tool path installed one.
+    timing: Option<Timing>,
 }
 
 impl SessionScan {
@@ -54,6 +57,17 @@ impl SessionScan {
             workspace: workspace.to_owned(),
             identity,
             own: OnceLock::new(),
+            timing: None,
+        }
+    }
+
+    /// Times one scan request as `session_search.scan` when the tool path
+    /// installed a timing. The CLI builds no timing, so it writes no line.
+    #[must_use]
+    pub fn with_timing(self, timing: Timing) -> Self {
+        Self {
+            timing: Some(timing),
+            ..self
         }
     }
 
@@ -81,6 +95,12 @@ impl Scan for SessionScan {
     }
 
     fn scan(&self, query: &Query, cancel: &dyn Cancel) -> Found {
+        // The guard is the scan's first statement and lives to the end,
+        // so empty, cancelled and problem-only scans emit one line.
+        let _timer = self
+            .timing
+            .as_ref()
+            .and_then(|timing| timing(Op::SessionSearchScan, None, None));
         self.search(query, cancel, thread::available_parallelism())
     }
 }
@@ -492,3 +512,7 @@ type Key<'a> = (
 #[cfg(test)]
 #[path = "search_tests.rs"]
 mod tests;
+
+#[cfg(test)]
+#[path = "search_timing_tests.rs"]
+mod timing_tests;

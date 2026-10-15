@@ -793,7 +793,6 @@ fn every_timed_case() -> Vec<(Op, Option<&'static str>, &'static str)> {
         (HubResume, "hub.resume"),
         (HubSubscribeReplay, "hub.subscribe_replay"),
         (NetConnect, "net.connect"),
-        (CliSessionsSearch, "cli.sessions_search"),
     ];
     let mut cases = Vec::new();
     for (op, want) in bare {

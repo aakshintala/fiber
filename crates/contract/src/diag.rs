@@ -154,8 +154,8 @@ pub enum Op {
     SessionsList,
     /// Opening a connection.
     NetConnect,
-    /// A `sessions search` command, at its entry.
-    CliSessionsSearch,
+    /// One full session-search scan request.
+    SessionSearchScan,
 }
 
 impl Op {
@@ -194,7 +194,7 @@ impl Op {
             Self::HubSubscribeReplay => "hub.subscribe_replay",
             Self::SessionsList => "sessions.list",
             Self::NetConnect => "net.connect",
-            Self::CliSessionsSearch => "cli.sessions_search",
+            Self::SessionSearchScan => "session_search.scan",
         }
     }
 }
