@@ -44,10 +44,6 @@ impl contract::files::PathLock for NoLock {
 /// is never stopped.
 const WAIT: Duration = Duration::from_secs(5);
 
-/// When the hook cannot stop the VM, the caller waits 1 second more
-/// (`docs/extensions.md`, "How an extension runs").
-const GRACE: Duration = Duration::from_secs(1);
-
 /// A hook at `point` that spins on its first call, after reading the signal
 /// module `go_spin`, and returns `returned` on every later call.
 fn spinning_at(point: &str, on_failure: &str, timeout: u64, returned: &str) -> String {
@@ -1161,10 +1157,10 @@ fn a_queued_command_starts_before_a_due_timer() {
     timer_fifo(&dir, "bstarted.fifo");
     let gate = timer_fifo(&dir, "gate.fifo");
     exec_call(&ext, "nop").expect("loading runs the entry script");
-    // A started call's caller parks at its deadline plus the 1 s grace;
-    // a queued one at its timeout. The first park proves `slow` holds the
-    // thread before `quick` is asked.
-    let slow_started = clock.now() + Duration::from_millis(60000) + GRACE;
+    // A started call's caller parks at its deadline; a queued one at its
+    // timeout. The first park proves `slow` holds the thread before `quick`
+    // is asked.
+    let slow_started = clock.now() + Duration::from_millis(60000);
     let (slow_tx, slow_rx) = mpsc::channel();
     let slow_caller = Arc::clone(&ext);
     std::thread::spawn(move || slow_tx.send(slow_caller.command("slow", "")));
