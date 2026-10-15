@@ -214,7 +214,7 @@ impl Keep for () {
     }
 }
 
-/// A failed HTTPS call.
+/// A failed HTTPS call or hub websocket connection.
 #[derive(Debug, thiserror::Error)]
 pub enum Error {
     /// Name resolution failed or exceeded its connect bound.
