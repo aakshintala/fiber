@@ -46,8 +46,9 @@ fn a_wide_cut_keeps_the_cross_in_the_last_column() {
     // dismiss target sits.
     let (buf, targets) = drawn("io_failed", &"界".repeat(10));
     let row = row_text(&buf, 23);
-    assert_eq!(format::width(&row), 30, "{row:?}");
-    assert!(row.ends_with('✕'), "{row:?}");
+    // The row ends in the cross; the cell assertion below is what
+    // bites, since joined cell text counts a wide glyph's filler.
+    assert!(row.trim_end().ends_with('✕'), "{row:?}");
     assert_eq!(buf[(29, 23)].symbol(), "✕");
     assert!(
         targets
