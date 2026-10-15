@@ -632,6 +632,21 @@ fn a_narrow_top_row_pads_the_tint_to_the_width() {
 }
 
 #[test]
+fn a_name_filling_the_row_pads_nothing() {
+    let offer = holding(1);
+    // `" Offer"` is 6 cells: at width 6 the name fills the row, so
+    // no padding span draws. With `>=` the row would carry an empty
+    // one, which the spans show even though the text does not.
+    assert_eq!(
+        spans(&offer, 6)[0],
+        [
+            (" ".to_owned(), surface()),
+            ("Offer".to_owned(), bold_on_surface()),
+        ]
+    );
+}
+
+#[test]
 fn a_tiny_top_row_drops_esc_before_truncating_the_name() {
     let offer = holding(1);
     assert_eq!(
