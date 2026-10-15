@@ -21,7 +21,7 @@ use std::time::Duration;
 
 use crate::clock::SystemClock;
 use crate::http_server::{
-    Connection, HttpServer, Limits, ReplyEnd,
+    Connection, DropProbe, HttpServer, Limits, ReplyEnd,
     request::{RequestOutcome, read_request},
 };
 use crate::provider_server::{Request, project};
@@ -129,6 +129,14 @@ impl RawHttpServer {
             .wait_timeout_while(guard, within, |state| state.pending > 0)
             .unwrap_or_else(PoisonError::into_inner);
         guard.pending == 0
+    }
+
+    /// The dropped server's own state, read after the drop: take it
+    /// before the drop, since the server moves into the drop. The probe
+    /// holds the shared core, so it stays valid past the drop.
+    #[doc(hidden)]
+    pub fn drop_probe(&self) -> DropProbe {
+        self.core.drop_probe()
     }
 }
 

@@ -2053,6 +2053,304 @@ fn dropping_the_server_refuses_connections() {
     );
 }
 
+/// The probe reads the live server before the drop and the joined one
+/// after: a reused port can no longer flake the verdict, since nothing
+/// dials it. False before the drop kills a constant-true accessor, and
+/// true after kills a constant-false one.
+#[test]
+fn drop_probe_reads_live_then_joined() {
+    let clock = fake_clock();
+    let server = bind(&clock);
+    server.serve_persistent(|_| {});
+    let probe = server.drop_probe();
+    assert!(
+        !probe.listener_closed(),
+        "a serving server still holds its listener"
+    );
+    assert!(
+        !probe.accept_joined(),
+        "a serving server has joined nothing yet"
+    );
+    drop(server);
+    assert!(
+        probe.listener_closed(),
+        "the dropped server closed its listener"
+    );
+    assert!(
+        probe.accept_joined(),
+        "the dropped server joined its accept thread"
+    );
+}
+
+/// A server that never served still reads joined after the drop: the
+/// shutdown that found no handle on a never-spawned slot records the
+/// join. A condition on the wrong spawn arm leaves this false.
+#[test]
+fn drop_probe_marks_a_never_served_server_joined() {
+    let clock = fake_clock();
+    let server = bind(&clock);
+    let probe = server.drop_probe();
+    assert!(
+        !probe.listener_closed(),
+        "a bound server still holds its listener"
+    );
+    assert!(
+        !probe.accept_joined(),
+        "a bound server has joined nothing yet"
+    );
+    drop(server);
+    assert!(
+        probe.listener_closed(),
+        "the dropped server closed its listener"
+    );
+    assert!(
+        probe.accept_joined(),
+        "a never-served server still reads joined after its shutdown"
+    );
+}
+
+/// Repeated shutdowns past a clean join stay joined: only the call
+/// that took the handle records anything, and later calls that find
+/// nothing leave the mark alone.
+#[test]
+fn repeated_shutdowns_after_a_clean_join_stay_joined() {
+    let clock = fake_clock();
+    let server = bind(&clock);
+    server.serve_persistent(|_| {});
+    let probe = server.drop_probe();
+    assert!(
+        server.shutdown(),
+        "the first shutdown joins the accept thread"
+    );
+    assert!(probe.accept_joined(), "the joined accept stays joined");
+    assert!(
+        server.shutdown(),
+        "a second shutdown past a joined accept still reports joined"
+    );
+    assert!(
+        probe.accept_joined(),
+        "the second shutdown leaves the join mark alone"
+    );
+    drop(server);
+    assert!(
+        probe.listener_closed(),
+        "the dropped server closed its listener"
+    );
+    assert!(probe.accept_joined(), "the drop leaves the join mark alone");
+}
+
+/// Repeated shutdowns past a failed join stay unjoined: the call that
+/// timed out records nothing, and no later call turns the failed join
+/// into a joined one. Each blocking shutdown runs on a thread and its
+/// result arrives through a deadline, so a hung shutdown fails the
+/// test instead of hanging it.
+#[test]
+fn repeated_shutdowns_after_a_failed_join_stay_unjoined() {
+    let clock = fake_clock();
+    let server = bind(&clock);
+    let (started_tx, started_rx) = mpsc::channel();
+    let (release_tx, release_rx) = mpsc::channel::<()>();
+    let release_rx = Arc::new(std::sync::Mutex::new(release_rx));
+    server.serve_persistent(move |_conn| {
+        match started_tx.send(()) {
+            Ok(()) | Err(_) => {}
+        }
+        // Stuck past shutdown's bound: shutdown must report it instead
+        // of hanging. The test owns the release, so the handler ends
+        // when the test is done with it.
+        match release_rx
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .recv()
+        {
+            Ok(()) | Err(_) => {}
+        }
+    });
+    let mut client = connect(&server);
+    client
+        .write_all(b"GET /stuck HTTP/1.1\r\nHost: fake\r\n\r\n")
+        .expect("the request writes");
+    Deadline::after(OP).recv_or_fail(&started_rx, "the stuck handler");
+    let probe = server.drop_probe();
+    let limit = SHUTDOWN_WITHIN + Duration::from_secs(5);
+    let (first_tx, first_rx) = mpsc::channel();
+    thread::scope(|scope| {
+        scope.spawn(|| match first_tx.send(server.shutdown()) {
+            Ok(()) | Err(_) => {}
+        });
+        assert!(
+            !Deadline::after(limit)
+                .recv_or_fail(&first_rx, "the first shutdown reporting the stuck handler"),
+            "shutdown reports the stuck handler instead of hanging"
+        );
+    });
+    assert!(
+        !probe.accept_joined(),
+        "a timed-out join never reads joined"
+    );
+    let (second_tx, second_rx) = mpsc::channel();
+    thread::scope(|scope| {
+        scope.spawn(|| match second_tx.send(server.shutdown()) {
+            Ok(()) | Err(_) => {}
+        });
+        Deadline::after(limit).recv_or_fail(
+            &second_rx,
+            "the second shutdown returning past the failed join",
+        );
+    });
+    assert!(
+        !probe.accept_joined(),
+        "a later shutdown never turns a failed join into a joined one"
+    );
+    drop(server);
+    assert!(
+        !probe.accept_joined(),
+        "the drop never turns a failed join into a joined one"
+    );
+    match release_tx.send(()) {
+        Ok(()) | Err(_) => {}
+    }
+    drop(client);
+}
+
+/// A freed port is no proof of a dropped server: something else can
+/// bind it at once, and a connect then succeeds. The probe reads the
+/// dropped server's own state instead, so a reused port cannot flake
+/// the verdict. The rebound listener lives to the test's end, so the
+/// connect lands in its backlog; the connect runs on a thread under
+/// the test's deadline with the socket's own bound kept as well.
+#[test]
+fn a_freed_port_is_not_proof_of_a_dropped_server() {
+    let clock = fake_clock();
+    let server = bind(&clock);
+    let addr = server.addr();
+    server.serve_persistent(|_| {});
+    let probe = server.drop_probe();
+    drop(server);
+    assert!(
+        probe.listener_closed(),
+        "the dropped server closed its listener"
+    );
+    assert!(
+        probe.accept_joined(),
+        "the dropped server joined its accept thread"
+    );
+    let rebound = TcpListener::bind(addr).expect("the freed port rebinds after the drop");
+    let (conn_tx, conn_rx) = mpsc::channel();
+    thread::scope(|scope| {
+        scope.spawn(|| {
+            TcpStream::connect_timeout(&addr, crate::MUST_SUCCEED_WITHIN)
+                .expect("the rebound port accepting a connect");
+            match conn_tx.send(()) {
+                Ok(()) | Err(_) => {}
+            }
+        });
+        Deadline::after(crate::MUST_SUCCEED_WITHIN + Duration::from_secs(5))
+            .recv_or_fail(&conn_rx, "the rebound port accepting a connect");
+    });
+    drop(rebound);
+}
+
+/// Serving a stopped server spawns nothing: the slot keeps its
+/// never-spawned shape, so the shutdown still reads as never served.
+/// The armed pause would fire on any spawn, so its silence within a
+/// poll bound proves no thread started; the join mark stays put either
+/// way.
+#[test]
+fn serve_after_stop_spawns_nothing() {
+    let clock = fake_clock();
+    let server = bind(&clock);
+    let probe = server.drop_probe();
+    assert!(server.shutdown(), "shutdown stops the unserved server");
+    let (reached_rx, _release_tx) = server.test_pause_after_spawn();
+    server.serve_persistent(|_| {});
+    assert!(
+        Deadline::after(QUIET).recv(&reached_rx).is_err(),
+        "serving a stopped server spawns no accept thread"
+    );
+    assert!(
+        probe.listener_closed(),
+        "the stopped server closed its listener"
+    );
+    assert!(
+        probe.accept_joined(),
+        "serving a stopped server leaves the never-served join mark"
+    );
+    drop(server);
+    assert!(
+        probe.accept_joined(),
+        "the drop leaves the never-served join mark alone"
+    );
+}
+
+/// A shutdown racing the spawn joins the thread: the pause holds the
+/// serve between its spawn and its slot store, inside the accept lock,
+/// so the racing shutdown blocks on the lock instead of seeing a
+/// spawned thread as unspawned. Its silence within a poll bound, with
+/// no join published, proves the wait; the release then lets both end.
+#[test]
+fn shutdown_racing_spawn_joins_the_thread() {
+    /// Releases the spawn pause when the test unwinds past it: the
+    /// paused serve would otherwise outlive the failed test and hang
+    /// the scope's join, turning a red assertion into a hung suite.
+    struct ReleaseOnDrop {
+        tx: Option<mpsc::Sender<()>>,
+    }
+    impl Drop for ReleaseOnDrop {
+        fn drop(&mut self) {
+            if let Some(tx) = self.tx.take() {
+                match tx.send(()) {
+                    Ok(()) | Err(_) => {}
+                }
+            }
+        }
+    }
+    let clock = fake_clock();
+    let server = bind(&clock);
+    let probe = server.drop_probe();
+    let (reached_rx, release_tx) = server.test_pause_after_spawn();
+    let (serve_tx, serve_rx) = mpsc::channel();
+    let (down_tx, down_rx) = mpsc::channel();
+    thread::scope(|scope| {
+        // Dropped on unwind past any assert below, before the scope
+        // ends: the paused serve is released, so a red assertion fails
+        // the test instead of hanging it.
+        let _release = ReleaseOnDrop {
+            tx: Some(release_tx.clone()),
+        };
+        scope.spawn(|| {
+            server.serve_persistent(|_| {});
+            match serve_tx.send(()) {
+                Ok(()) | Err(_) => {}
+            }
+        });
+        Deadline::after(OP).recv_or_fail(&reached_rx, "the accept thread spawning");
+        scope.spawn(|| match down_tx.send(server.shutdown()) {
+            Ok(()) | Err(_) => {}
+        });
+        assert!(
+            Deadline::after(QUIET).recv(&down_rx).is_err(),
+            "shutdown waits for the spawning serve instead of publishing a join"
+        );
+        assert!(
+            !probe.accept_joined(),
+            "no join is published while the spawn is paused"
+        );
+        match release_tx.send(()) {
+            Ok(()) | Err(_) => {}
+        }
+        assert!(
+            Deadline::after(OP).recv_or_fail(&down_rx, "the racing shutdown"),
+            "shutdown joins the raced accept thread"
+        );
+        assert!(
+            probe.accept_joined(),
+            "the racing shutdown joined the accept thread"
+        );
+        Deadline::after(OP).recv_or_fail(&serve_rx, "the serve returning past the pause");
+    });
+}
+
 /// Shutdown reports a stuck handler: a serving thread that never ends
 /// fails shutdown instead of hanging the drop.
 #[test]

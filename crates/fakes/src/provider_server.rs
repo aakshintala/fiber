@@ -18,7 +18,7 @@ use crate::clock::SystemClock;
 #[cfg(test)]
 use crate::http_server::WaitAck;
 use crate::http_server::{
-    Connection, HttpServer, Limits, StallEnd,
+    Connection, DropProbe, HttpServer, Limits, StallEnd,
     request::{ParsedRequest, RequestOutcome, read_request},
 };
 
@@ -452,6 +452,14 @@ impl ProviderServer {
             .wait_timeout_while(guard, within, |state| state.closed < count)
             .unwrap_or_else(PoisonError::into_inner);
         guard.closed >= count
+    }
+
+    /// The dropped server's own state, read after the drop: take it
+    /// before the drop, since the server moves into the drop. The probe
+    /// holds the shared core, so it stays valid past the drop.
+    #[doc(hidden)]
+    pub fn drop_probe(&self) -> DropProbe {
+        self.core.drop_probe()
     }
 }
 
