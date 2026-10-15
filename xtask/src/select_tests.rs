@@ -317,10 +317,7 @@ fn a_package_file_plus_a_manifest_runs_everything() {
 #[test]
 fn a_package_file_unions_with_a_crate_change() {
     let selection = classify_with(
-        &strings(&[
-            "providers/opencode/extension.json",
-            "crates/log/src/lib.rs",
-        ]),
+        &strings(&["providers/opencode/extension.json", "crates/log/src/lib.rs"]),
         &members(),
         COMPILED_IN,
         &["config", "main"],
@@ -334,10 +331,7 @@ fn a_package_file_unions_with_a_crate_change() {
 #[test]
 fn a_package_file_plus_a_plain_doc_runs_only_the_package_readers() {
     let selection = classify_with(
-        &strings(&[
-            "providers/opencode/extension.json",
-            "docs/ci.md",
-        ]),
+        &strings(&["providers/opencode/extension.json", "docs/ci.md"]),
         &members(),
         COMPILED_IN,
         &["config", "main"],

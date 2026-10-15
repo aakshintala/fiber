@@ -57,8 +57,7 @@ const PROVIDER_FILES: &[(&str, &str, &str)] = &[
 fn declared_providers() -> Vec<(String, String)> {
     let mut pairs = Vec::new();
     for (package, stem, text) in PROVIDER_FILES.iter().copied() {
-        let data: serde_json::Value =
-            serde_json::from_str(text).expect("provider file parses");
+        let data: serde_json::Value = serde_json::from_str(text).expect("provider file parses");
         let name = data
             .get("name")
             .and_then(|name| name.as_str())
@@ -119,8 +118,7 @@ fn a_provider_no_first_party_package_serves_gets_the_generic_hint() {
 fn first_party_hosted_searches_are_the_marked_models() {
     let mut pairs = Vec::new();
     for (package, _, text) in PROVIDER_FILES.iter().copied() {
-        let data: config::ProviderData =
-            serde_json::from_str(text).expect("provider data parses");
+        let data: config::ProviderData = serde_json::from_str(text).expect("provider data parses");
         let mut models = data.models.clone();
         let notices = extensions::leave_out_invalid(&data.name, package, &mut models);
         assert!(notices.is_empty(), "{package}: {notices:?}");
