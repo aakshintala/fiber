@@ -94,11 +94,6 @@ fn push_segment(joined: &mut Joined, segment: Segment) {
 /// A status row cut to `width - 1`: its line over the joined spans, each
 /// keeping its style and ending in `…` past the width, and its targets
 /// clamped to the visible columns. A row that fits keeps every cell.
-// exempted: the spot filter's `>=`, `||` and `<=` mutants change no
-// reachable behaviour. The map above clamps every spot into range with
-// zero width exactly at the text edge, where all three spellings agree;
-// a zero-width spot before the edge would need an empty segment, and
-// every spotted segment holds at least one cell.
 fn cut_row(joined: Joined, width: usize) -> StatusRow {
     let text = width.saturating_sub(1);
     let wide: usize = joined
@@ -116,13 +111,15 @@ fn cut_row(joined: Joined, width: usize) -> StatusRow {
     let spots = joined
         .spots
         .into_iter()
-        .map(|(start, wide, spot)| {
+        .filter_map(|(start, wide, spot)| {
             let end = start
                 .saturating_add(wide)
                 .min(u16::try_from(text).unwrap_or(u16::MAX));
-            (start.min(end), end.saturating_sub(start.min(end)), spot)
+            let start = start.min(end);
+            // A spot keeps the visible columns it covers: none past the
+            // edge, none without width.
+            (start < end).then(|| (start, end.saturating_sub(start), spot))
         })
-        .filter(|(start, wide, _)| *wide > 0 && usize::from(*start) < text)
         .collect();
     StatusRow { line, spots }
 }

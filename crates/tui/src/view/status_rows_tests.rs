@@ -1285,3 +1285,38 @@ fn the_tools_segment_joins_down_servers_with_a_space() {
         rows[0].line
     );
 }
+
+/// A row of ten cells for the cut_row boundary tests: no targets of its
+/// own, so only the fed spots show.
+fn cut_spots(spots: Vec<(u16, u16, Spot)>, width: usize) -> Vec<(u16, u16, Spot)> {
+    use ratatui::text::Span;
+
+    let joined = super::Joined {
+        spans: vec![Span::raw("0123456789")],
+        spots,
+    };
+    super::cut_row(joined, width).spots
+}
+
+/// cut_row drops a zero-width spot: it covers no column.
+#[test]
+fn cut_row_drops_a_zero_width_spot() {
+    assert!(cut_spots(vec![(5, 0, Spot::Usage)], 100).is_empty());
+}
+
+/// cut_row keeps a spot ending one column past the text's last column:
+/// it still covers that column.
+#[test]
+fn cut_row_keeps_a_spot_covering_the_last_column() {
+    assert_eq!(
+        cut_spots(vec![(98, 5, Spot::Usage)], 100),
+        vec![(98, 1, Spot::Usage)]
+    );
+}
+
+/// cut_row drops a spot starting at the text edge: past it covers
+/// nothing.
+#[test]
+fn cut_row_drops_a_spot_starting_at_the_edge() {
+    assert!(cut_spots(vec![(99, 5, Spot::Usage)], 100).is_empty());
+}
