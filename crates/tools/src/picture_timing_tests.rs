@@ -219,11 +219,11 @@ impl Fixture {
         }
     }
 
-    /// Installs spawn reporting on the calling thread until the guard
-    /// drops: the spawning thread installs it, so an off-thread call
-    /// installs it inside its worker.
-    fn install(&mut self) -> test_spawn::Guard {
-        test_spawn::install(self.tx.take().expect("installed once"))
+    /// A sender for spawn reporting inside a blocking call's worker: the
+    /// worker installs it there, so the child joins a new process group
+    /// owned by the matching watchdog (`test_spawn` in `crate::image`).
+    fn reporter(&self) -> mpsc::Sender<u32> {
+        self.tx.as_ref().expect("the report sender").clone()
     }
 
     /// The next reported spawn's pid, bounded by the deadline.
@@ -261,6 +261,53 @@ fn closed(records: &mpsc::Receiver<Record>, deadline: Deadline) -> Record {
 /// No record is waiting: the last scope closed exactly once.
 fn assert_single(records: &mpsc::Receiver<Record>, what: &str) {
     assert!(records.try_recv().is_err(), "{what}: one entry, one record");
+}
+
+/// Runs `read` of `path` on a detached worker and receives its output
+/// within `deadline`, failing naming `what`. The worker installs spawn
+/// reporting, so the child joins a new process group owned by the
+/// fixture's matching watchdog; a stuck child fails the named wait,
+/// never nextest's kill (`docs/testing.md`, "Waits and timeouts"). The
+/// thread is never joined: expiry fails the test while the watchdog owns
+/// the child.
+#[track_caller]
+fn read_bounded(
+    files: Arc<Files>,
+    path: String,
+    pages: Option<String>,
+    cancel: CancelToken,
+    deadline: Deadline,
+    report: mpsc::Sender<u32>,
+    what: &'static str,
+) -> Output {
+    let (done_tx, done_rx) = mpsc::channel();
+    std::thread::spawn(move || {
+        let _hook = test_spawn::install(report);
+        let output = read_with(&files, &path, pages.as_deref(), &cancel);
+        drop(done_tx.send(output));
+    });
+    deadline.recv_or_fail(&done_rx, what)
+}
+
+/// Runs `process` of `bytes` on a detached worker and receives its result
+/// within `deadline`, failing naming `what`, under the same ownership as
+/// [`read_bounded`].
+#[track_caller]
+fn process_bounded(
+    child: Arc<ImageChild>,
+    bytes: Vec<u8>,
+    cancel: CancelToken,
+    deadline: Deadline,
+    report: mpsc::Sender<u32>,
+    what: &'static str,
+) -> Result<ImageRef, ImageError> {
+    let (done_tx, done_rx) = mpsc::channel();
+    std::thread::spawn(move || {
+        let _hook = test_spawn::install(report);
+        let result = child.process(&bytes, &cancel);
+        drop(done_tx.send(result));
+    });
+    deadline.recv_or_fail(&done_rx, what)
 }
 
 /// The call's arguments object.
@@ -315,15 +362,23 @@ fn image_files(dir: &Path, fiber: &Path, probe: &Probe) -> Files {
 
 #[test]
 fn files_timing_reaches_the_built_child() {
-    let mut fixture = Fixture::new("fiber-picture-files");
-    let _hook = fixture.install();
+    let fixture = Fixture::new("fiber-picture-files");
     fs::write(fixture.path().join("a.png"), PNG).expect("the image");
     let fiber = stub(fixture.path(), IMAGE_ANSWER);
     let (probe, records) = probe();
     let files = image_files(fixture.path(), &fiber, &probe);
+    let files = Arc::new(files);
     let deadline = Deadline::after(STEP);
 
-    let output = read_with(&files, "a.png", None, &CancelToken::new());
+    let output = read_bounded(
+        Arc::clone(&files),
+        "a.png".to_owned(),
+        None,
+        CancelToken::new(),
+        deadline,
+        fixture.reporter(),
+        "the read",
+    );
 
     assert_eq!(code(&output), None);
     assert_eq!(message(&output), "Image: 80x60 image/png.\n");
@@ -342,8 +397,7 @@ fn files_timing_reaches_the_built_child() {
 
 #[test]
 fn first_timing_wins_over_a_second_builder() {
-    let mut fixture = Fixture::new("fiber-picture-first");
-    let _hook = fixture.install();
+    let fixture = Fixture::new("fiber-picture-first");
     fs::write(fixture.path().join("a.png"), PNG).expect("the image");
     let fiber = stub(fixture.path(), IMAGE_ANSWER);
     let (first, first_records) = probe();
@@ -352,13 +406,23 @@ fn first_timing_wins_over_a_second_builder() {
         .with_timing(first.timing())
         .with_timing(second.timing())
         .with_images(fiber, fixture.path().join("artifacts"));
+    let files = Arc::new(files);
 
-    let output = read_with(&files, "a.png", None, &CancelToken::new());
+    let deadline = Deadline::after(STEP);
+    let output = read_bounded(
+        Arc::clone(&files),
+        "a.png".to_owned(),
+        None,
+        CancelToken::new(),
+        deadline,
+        fixture.reporter(),
+        "the read",
+    );
 
     assert_eq!(code(&output), None);
     assert_eq!(first.calls(), 1);
     assert_eq!(second.calls(), 0, "the second installation never runs");
-    closed(&first_records, Deadline::after(STEP));
+    closed(&first_records, deadline);
     assert_single(&first_records, "the read");
     assert!(
         second_records.try_recv().is_err(),
@@ -368,16 +432,25 @@ fn first_timing_wins_over_a_second_builder() {
 
 #[test]
 fn timing_after_with_images_leaves_the_built_child_unchanged() {
-    let mut fixture = Fixture::new("fiber-picture-late");
-    let _hook = fixture.install();
+    let fixture = Fixture::new("fiber-picture-late");
     fs::write(fixture.path().join("a.png"), PNG).expect("the image");
     let fiber = stub(fixture.path(), IMAGE_ANSWER);
     let (probe, records) = probe();
     let files = Files::new(fixture.path().to_path_buf())
         .with_images(fiber, fixture.path().join("artifacts"))
         .with_timing(probe.timing());
+    let files = Arc::new(files);
 
-    let output = read_with(&files, "a.png", None, &CancelToken::new());
+    let deadline = Deadline::after(STEP);
+    let output = read_bounded(
+        Arc::clone(&files),
+        "a.png".to_owned(),
+        None,
+        CancelToken::new(),
+        deadline,
+        fixture.reporter(),
+        "the read",
+    );
 
     assert_eq!(code(&output), None, "the read still works");
     assert_eq!(probe.calls(), 0, "the late timing never runs");
@@ -389,18 +462,35 @@ fn timing_after_with_images_leaves_the_built_child_unchanged() {
 
 #[test]
 fn without_timing_reads_match_the_old_constructors() {
-    let mut fixture = Fixture::new("fiber-picture-old");
-    let _hook = fixture.install();
+    let fixture = Fixture::new("fiber-picture-old");
     fs::write(fixture.path().join("a.png"), PNG).expect("the image");
     fs::write(fixture.path().join("a.pdf"), PDF_MAGIC).expect("the pdf");
     let fiber = fiber_stub(fixture.path(), PDF_ONE_PAGE);
     let files = Files::new(fixture.path().to_path_buf())
         .with_images(fiber, fixture.path().join("artifacts"));
+    let files = Arc::new(files);
 
-    let image = read_with(&files, "a.png", None, &CancelToken::new());
+    let deadline = Deadline::after(STEP);
+    let image = read_bounded(
+        Arc::clone(&files),
+        "a.png".to_owned(),
+        None,
+        CancelToken::new(),
+        deadline,
+        fixture.reporter(),
+        "the read",
+    );
     assert_eq!(code(&image), None);
     assert_eq!(message(&image), "Image: 80x60 image/png.\n");
-    let pdf = read_with(&files, "a.pdf", None, &CancelToken::new());
+    let pdf = read_bounded(
+        Arc::clone(&files),
+        "a.pdf".to_owned(),
+        None,
+        CancelToken::new(),
+        deadline,
+        fixture.reporter(),
+        "the read",
+    );
     assert_eq!(code(&pdf), None, "{pdf:?}");
 }
 
@@ -494,8 +584,7 @@ fn write_pdf(dir: &Path) {
 #[test]
 fn renderer_and_timing_apply_in_either_order() {
     for (name, renderer_first) in [("renderer first", true), ("timing first", false)] {
-        let mut fixture = Fixture::new("fiber-picture-order");
-        let _hook = fixture.install();
+        let fixture = Fixture::new("fiber-picture-order");
         write_pdf(fixture.path());
         let fiber = fiber_stub(fixture.path(), PDF_TWO_PAGES);
         let ppm = ppm_stub(
@@ -517,9 +606,18 @@ fn renderer_and_timing_apply_in_either_order() {
                 .with_renderer(ppm.clone())
                 .with_images(fiber, fixture.path().join("artifacts"))
         };
+        let files = Arc::new(files);
         let deadline = Deadline::after(STEP);
 
-        let output = read_with(&files, "a.pdf", None, &CancelToken::new());
+        let output = read_bounded(
+            Arc::clone(&files),
+            "a.pdf".to_owned(),
+            None,
+            CancelToken::new(),
+            deadline,
+            fixture.reporter(),
+            "the read",
+        );
 
         assert_eq!(code(&output), None, "{name}");
         assert_eq!(
@@ -539,8 +637,7 @@ fn renderer_and_timing_apply_in_either_order() {
 
 #[test]
 fn a_missing_renderer_keeps_the_cut_with_one_scope() {
-    let mut fixture = Fixture::new("fiber-picture-no-ppm");
-    let _hook = fixture.install();
+    let fixture = Fixture::new("fiber-picture-no-ppm");
     write_pdf(fixture.path());
     let fiber = fiber_stub(fixture.path(), PDF_ONE_PAGE);
     let (probe, records) = probe();
@@ -548,9 +645,18 @@ fn a_missing_renderer_keeps_the_cut_with_one_scope() {
         .with_renderer(fixture.path().join("no-such-ppm"))
         .with_timing(probe.timing())
         .with_images(fiber, fixture.path().join("artifacts"));
+    let files = Arc::new(files);
     let deadline = Deadline::after(STEP);
 
-    let output = read_with(&files, "a.pdf", None, &CancelToken::new());
+    let output = read_bounded(
+        Arc::clone(&files),
+        "a.pdf".to_owned(),
+        None,
+        CancelToken::new(),
+        deadline,
+        fixture.reporter(),
+        "the read",
+    );
 
     assert_eq!(code(&output), None);
     assert!(
@@ -658,8 +764,7 @@ fn entered_pdf_failures_keep_their_output_and_drop_once() {
         },
     ];
     for case in cases {
-        let mut fixture = Fixture::new("fiber-picture-pdf-fail");
-        let _hook = fixture.install();
+        let fixture = Fixture::new("fiber-picture-pdf-fail");
         write_pdf(fixture.path());
         let fiber = match case.body {
             Some(body) => fiber_stub(fixture.path(), body),
@@ -669,9 +774,18 @@ fn entered_pdf_failures_keep_their_output_and_drop_once() {
         let files = Files::new(fixture.path().to_path_buf())
             .with_timing(probe.timing())
             .with_images(fiber, fixture.path().join("artifacts"));
+        let files = Arc::new(files);
         let deadline = Deadline::after(STEP);
 
-        let output = read_with(&files, "a.pdf", None, &CancelToken::new());
+        let output = read_bounded(
+            Arc::clone(&files),
+            "a.pdf".to_owned(),
+            None,
+            CancelToken::new(),
+            deadline,
+            fixture.reporter(),
+            "the read",
+        );
 
         assert_eq!(code(&output), case.code.clone(), "{}", case.name);
         assert!(
@@ -744,16 +858,24 @@ fn a_cancel_during_the_count_cut_times_it() {
 
 #[test]
 fn a_failing_renderer_adds_no_picture_scope() {
-    let mut fixture = Fixture::new("fiber-picture-ppm-fail");
-    let _hook = fixture.install();
+    let fixture = Fixture::new("fiber-picture-ppm-fail");
     write_pdf(fixture.path());
     let fiber = fiber_stub(fixture.path(), PDF_ONE_PAGE);
     let ppm = ppm_stub(fixture.path(), "printf 'nope\\n' >&2\nexit 2");
     let (probe, records) = probe();
     let files = pdf_files(fixture.path(), &fiber, &ppm, &probe);
+    let files = Arc::new(files);
     let deadline = Deadline::after(STEP);
 
-    let output = read_with(&files, "a.pdf", None, &CancelToken::new());
+    let output = read_bounded(
+        Arc::clone(&files),
+        "a.pdf".to_owned(),
+        None,
+        CancelToken::new(),
+        deadline,
+        fixture.reporter(),
+        "the read",
+    );
 
     assert_eq!(code(&output), None);
     assert!(
@@ -830,8 +952,7 @@ fn a_cancel_between_pages_adds_no_picture_scope() {
 
 #[test]
 fn a_failing_page_after_a_good_page_times_both_attempts() {
-    let mut fixture = Fixture::new("fiber-picture-page-fail");
-    let _hook = fixture.install();
+    let fixture = Fixture::new("fiber-picture-page-fail");
     write_pdf(fixture.path());
     // The first page child answers; the second refuses. The count file in
     // the fixture directory tells the attempts apart.
@@ -850,9 +971,18 @@ printf '{"file":"%s.png","mime_type":"image/png","width":1,"height":1}\n' "$4""#
     let ppm = ppm_stub(fixture.path(), PPM_OK);
     let (probe, records) = probe();
     let files = pdf_files(fixture.path(), &fiber, &ppm, &probe);
+    let files = Arc::new(files);
     let deadline = Deadline::after(STEP);
 
-    let output = read_with(&files, "a.pdf", None, &CancelToken::new());
+    let output = read_bounded(
+        Arc::clone(&files),
+        "a.pdf".to_owned(),
+        None,
+        CancelToken::new(),
+        deadline,
+        fixture.reporter(),
+        "the read",
+    );
 
     assert_eq!(code(&output), None, "a failed render keeps the cut");
     assert!(
@@ -873,8 +1003,7 @@ printf '{"file":"%s.png","mime_type":"image/png","width":1,"height":1}\n' "$4""#
 
 #[test]
 fn a_pre_cancelled_read_spawns_nothing_and_times_nothing() {
-    let mut fixture = Fixture::new("fiber-picture-read-cancel");
-    let _hook = fixture.install();
+    let fixture = Fixture::new("fiber-picture-read-cancel");
     fs::write(fixture.path().join("a.png"), PNG).expect("the image");
     let fiber = stub(
         fixture.path(),
@@ -883,10 +1012,20 @@ cat >/dev/null"#,
     );
     let (probe, records) = probe();
     let files = image_files(fixture.path(), &fiber, &probe);
+    let files = Arc::new(files);
     let cancel = CancelToken::new();
     cancel.cancel();
 
-    let output = read_with(&files, "a.png", None, &cancel);
+    let deadline = Deadline::after(STEP);
+    let output = read_bounded(
+        Arc::clone(&files),
+        "a.png".to_owned(),
+        None,
+        cancel.clone(),
+        deadline,
+        fixture.reporter(),
+        "the read",
+    );
 
     assert_eq!(code(&output), None);
     assert_eq!(message(&output), "Cancelled before it started.\n");
@@ -940,14 +1079,21 @@ fn stderr_caps_hold_with_timing() {
         },
     ];
     for case in cases {
-        let mut fixture = Fixture::new("fiber-picture-cap");
-        let _hook = fixture.install();
+        let fixture = Fixture::new("fiber-picture-cap");
         let fiber = stub(fixture.path(), &case.body);
         let (probe, records) = probe();
         let child = timed_child(&fiber, fixture.path(), &probe);
+        let child = Arc::new(child);
         let deadline = Deadline::after(STEP);
 
-        let result = child.process(PNG, &CancelToken::new());
+        let result = process_bounded(
+            Arc::clone(&child),
+            PNG.to_vec(),
+            CancelToken::new(),
+            deadline,
+            fixture.reporter(),
+            "the image",
+        );
 
         let Err(ImageError::Failed(message)) = result else {
             panic!("{}: failed: {result:?}", case.name);
@@ -965,14 +1111,21 @@ fn stderr_caps_hold_with_timing() {
 
 #[test]
 fn the_capture_carries_no_stderr_sentinel() {
-    let mut fixture = Fixture::new("fiber-picture-sentinel");
-    let _hook = fixture.install();
+    let fixture = Fixture::new("fiber-picture-sentinel");
     let fiber = stub(fixture.path(), "printf 'CAP-SENTINEL-7\\n' >&2\nexit 3");
     let (probe, records) = probe();
     let child = timed_child(&fiber, fixture.path(), &probe);
+    let child = Arc::new(child);
     let deadline = Deadline::after(STEP);
 
-    let result = child.process(PNG, &CancelToken::new());
+    let result = process_bounded(
+        Arc::clone(&child),
+        PNG.to_vec(),
+        CancelToken::new(),
+        deadline,
+        fixture.reporter(),
+        "the image",
+    );
 
     let Err(ImageError::Failed(message)) = result else {
         panic!("failed: {result:?}");
@@ -1051,14 +1204,21 @@ fn image_filename_validation_with_timing() {
         },
     ];
     for case in cases {
-        let mut fixture = Fixture::new("fiber-picture-names");
-        let _hook = fixture.install();
+        let fixture = Fixture::new("fiber-picture-names");
         let fiber = stub(fixture.path(), &case.body);
         let (probe, records) = probe();
         let child = timed_child(&fiber, fixture.path(), &probe);
+        let child = Arc::new(child);
         let deadline = Deadline::after(STEP);
 
-        let result = child.process(PNG, &CancelToken::new());
+        let result = process_bounded(
+            Arc::clone(&child),
+            PNG.to_vec(),
+            CancelToken::new(),
+            deadline,
+            fixture.reporter(),
+            "the image",
+        );
 
         if case.ok {
             assert!(result.is_ok(), "{}: {result:?}", case.name);
@@ -1104,14 +1264,21 @@ fn unusual_answers_fail_with_timing_on_linux() {
         },
     ];
     for case in cases {
-        let mut fixture = Fixture::new("fiber-picture-linux");
-        let _hook = fixture.install();
+        let fixture = Fixture::new("fiber-picture-linux");
         let fiber = stub(fixture.path(), &case.body);
         let (probe, records) = probe();
         let child = timed_child(&fiber, fixture.path(), &probe);
+        let child = Arc::new(child);
         let deadline = Deadline::after(STEP);
 
-        let result = child.process(PNG, &CancelToken::new());
+        let result = process_bounded(
+            Arc::clone(&child),
+            PNG.to_vec(),
+            CancelToken::new(),
+            deadline,
+            fixture.reporter(),
+            "the image",
+        );
 
         assert!(
             matches!(result, Err(ImageError::Failed(_))),
@@ -1171,8 +1338,7 @@ fn pdf_filename_validation_with_timing() {
         },
     ];
     for case in cases {
-        let mut fixture = Fixture::new("fiber-picture-pdf-names");
-        let _hook = fixture.install();
+        let fixture = Fixture::new("fiber-picture-pdf-names");
         write_pdf(fixture.path());
         let fiber = fiber_stub(fixture.path(), &case.body);
         let (probe, records) = probe();
@@ -1181,9 +1347,18 @@ fn pdf_filename_validation_with_timing() {
             .with_renderer(fixture.path().join("no-such-ppm"))
             .with_timing(probe.timing())
             .with_images(fiber, fixture.path().join("artifacts"));
+        let files = Arc::new(files);
         let deadline = Deadline::after(STEP);
 
-        let output = read_with(&files, "a.pdf", None, &CancelToken::new());
+        let output = read_bounded(
+            Arc::clone(&files),
+            "a.pdf".to_owned(),
+            None,
+            CancelToken::new(),
+            deadline,
+            fixture.reporter(),
+            "the read",
+        );
 
         assert!(
             message(&output).contains(case.want),
@@ -1320,8 +1495,7 @@ fn paths_without_picture_work_emit_nothing() {
     ];
     let (probe, records) = probe();
     for case in cases {
-        let mut fixture = Fixture::new("fiber-picture-quiet");
-        let _hook = fixture.install();
+        let fixture = Fixture::new("fiber-picture-quiet");
         (case.setup)(fixture.path());
         let fiber = stub(
             fixture.path(),
@@ -1333,8 +1507,18 @@ cat >/dev/null"#,
         } else {
             Files::new(fixture.path().to_path_buf()).with_timing(probe.timing())
         };
+        let files = Arc::new(files);
 
-        let output = read_with(&files, case.path, case.pages, &CancelToken::new());
+        let deadline = Deadline::after(STEP);
+        let output = read_bounded(
+            Arc::clone(&files),
+            case.path.to_owned(),
+            case.pages.map(str::to_owned),
+            CancelToken::new(),
+            deadline,
+            fixture.reporter(),
+            "the read",
+        );
 
         assert_eq!(code(&output), case.code.clone(), "{}", case.name);
         assert!(
@@ -1359,14 +1543,21 @@ cat >/dev/null"#,
 
 #[test]
 fn a_timed_success_returns_the_same_answer_with_one_picture_run() {
-    let mut fixture = Fixture::new("fiber-picture-success");
-    let _hook = fixture.install();
+    let fixture = Fixture::new("fiber-picture-success");
     let fiber = stub(fixture.path(), IMAGE_ANSWER);
     let (probe, records) = probe();
     let child = timed_child(&fiber, fixture.path(), &probe);
+    let child = Arc::new(child);
     let deadline = Deadline::after(STEP);
 
-    let result = child.process(PNG, &CancelToken::new());
+    let result = process_bounded(
+        Arc::clone(&child),
+        PNG.to_vec(),
+        CancelToken::new(),
+        deadline,
+        fixture.reporter(),
+        "the image",
+    );
 
     let reference = result.expect("success");
     assert_eq!(
@@ -1397,8 +1588,7 @@ fn a_timed_success_returns_the_same_answer_with_one_picture_run() {
 
 #[test]
 fn building_with_timing_starts_no_scope() {
-    let mut fixture = Fixture::new("fiber-picture-build");
-    let _hook = fixture.install();
+    let fixture = Fixture::new("fiber-picture-build");
     let fiber = stub(fixture.path(), IMAGE_ANSWER);
     let (probe, records) = probe();
 
@@ -1410,12 +1600,20 @@ fn building_with_timing_starts_no_scope() {
 
 #[test]
 fn without_timing_the_same_work_emits_nothing() {
-    let mut fixture = Fixture::new("fiber-picture-untimed");
-    let _hook = fixture.install();
+    let fixture = Fixture::new("fiber-picture-untimed");
     let fiber = stub(fixture.path(), IMAGE_ANSWER);
     let child = ImageChild::new(fiber, fixture.path().join("artifacts"));
+    let child = Arc::new(child);
 
-    let result = child.process(PNG, &CancelToken::new());
+    let deadline = Deadline::after(STEP);
+    let result = process_bounded(
+        Arc::clone(&child),
+        PNG.to_vec(),
+        CancelToken::new(),
+        deadline,
+        fixture.reporter(),
+        "the image",
+    );
 
     let reference = result.expect("success");
     assert_eq!(
@@ -1430,21 +1628,37 @@ fn without_timing_the_same_work_emits_nothing() {
 
 #[test]
 fn a_declining_callable_runs_once_per_call_without_a_scope() {
-    let mut fixture = Fixture::new("fiber-picture-decline");
-    let _hook = fixture.install();
+    let fixture = Fixture::new("fiber-picture-decline");
     let fiber = stub(fixture.path(), IMAGE_ANSWER);
     let probe = Probe::declining();
     let child = ImageChild::new(fiber.clone(), fixture.path().join("artifacts"))
         .with_timing(probe.timing());
+    let child = Arc::new(child);
 
-    let first = child.process(PNG, &CancelToken::new());
+    let deadline = Deadline::after(STEP);
+    let first = process_bounded(
+        Arc::clone(&child),
+        PNG.to_vec(),
+        CancelToken::new(),
+        deadline,
+        fixture.reporter(),
+        "the image",
+    );
 
     assert!(first.is_ok(), "{first:?}");
     assert_eq!(probe.calls(), 1);
     let failing = stub(fixture.path(), "echo boom >&2\nexit 3");
     let declined =
         ImageChild::new(failing, fixture.path().join("artifacts")).with_timing(probe.timing());
-    let second = declined.process(PNG, &CancelToken::new());
+    let declined = Arc::new(declined);
+    let second = process_bounded(
+        Arc::clone(&declined),
+        PNG.to_vec(),
+        CancelToken::new(),
+        deadline,
+        fixture.reporter(),
+        "the image",
+    );
     assert!(matches!(second, Err(ImageError::Failed(_))), "{second:?}");
     assert_eq!(probe.calls(), 2, "one call per entered invocation");
 }
@@ -1508,8 +1722,7 @@ fn the_guard_is_live_while_the_child_is_held() {
 
 #[test]
 fn exact_milliseconds_come_from_the_two_clock_reads() {
-    let mut fixture = Fixture::new("fiber-picture-clock");
-    let _hook = fixture.install();
+    let fixture = Fixture::new("fiber-picture-clock");
     let fiber = stub(fixture.path(), IMAGE_ANSWER);
     let clock = Scripted::plain();
     let origin = clock.origin();
@@ -1517,11 +1730,20 @@ fn exact_milliseconds_come_from_the_two_clock_reads() {
     let (tx, records) = mpsc::channel();
     let probe = Probe::recording(Arc::clone(&clock), tx);
     let child = timed_child(&fiber, fixture.path(), &probe);
+    let child = Arc::new(child);
 
-    let result = child.process(PNG, &CancelToken::new());
+    let deadline = Deadline::after(STEP);
+    let result = process_bounded(
+        Arc::clone(&child),
+        PNG.to_vec(),
+        CancelToken::new(),
+        deadline,
+        fixture.reporter(),
+        "the image",
+    );
 
     assert!(result.is_ok(), "{result:?}");
-    let record = closed(&records, Deadline::after(STEP));
+    let record = closed(&records, deadline);
     assert_eq!(record.ms, 6);
     assert_eq!(clock.reads(), 2, "one read at entry, one at exit");
     clock.now();
@@ -1531,15 +1753,31 @@ fn exact_milliseconds_come_from_the_two_clock_reads() {
 
 #[test]
 fn repeated_calls_open_independent_scopes_with_fresh_names() {
-    let mut fixture = Fixture::new("fiber-picture-repeat");
-    let _hook = fixture.install();
+    let fixture = Fixture::new("fiber-picture-repeat");
     let fiber = stub(fixture.path(), IMAGE_ANSWER);
     let (probe, records) = probe();
     let child = timed_child(&fiber, fixture.path(), &probe);
+    let child = Arc::new(child);
     let deadline = Deadline::after(STEP);
 
-    let first = child.process(PNG, &CancelToken::new()).expect("first");
-    let second = child.process(PNG, &CancelToken::new()).expect("second");
+    let first = process_bounded(
+        Arc::clone(&child),
+        PNG.to_vec(),
+        CancelToken::new(),
+        deadline,
+        fixture.reporter(),
+        "the image",
+    )
+    .expect("first");
+    let second = process_bounded(
+        Arc::clone(&child),
+        PNG.to_vec(),
+        CancelToken::new(),
+        deadline,
+        fixture.reporter(),
+        "the image",
+    )
+    .expect("second");
 
     assert_ne!(first.path, second.path, "a fresh stem per call");
     assert_eq!(probe.calls(), 2);
@@ -1617,17 +1855,24 @@ fn entered_failures_keep_their_error_and_drop_once() {
         },
     ];
     for case in cases {
-        let mut fixture = Fixture::new("fiber-picture-failure");
-        let _hook = fixture.install();
+        let fixture = Fixture::new("fiber-picture-failure");
         let fiber = match case.body {
             Some(body) => stub(fixture.path(), body),
             None => fixture.path().join("no-such-binary"),
         };
         let (probe, records) = probe();
         let child = timed_child(&fiber, fixture.path(), &probe);
+        let child = Arc::new(child);
         let deadline = Deadline::after(STEP);
 
-        let result = child.process(&case.bytes, &CancelToken::new());
+        let result = process_bounded(
+            Arc::clone(&child),
+            case.bytes.clone(),
+            CancelToken::new(),
+            deadline,
+            fixture.reporter(),
+            "the image",
+        );
 
         match (&result, &case.want) {
             (Err(ImageError::Failed(got)), ImageError::Failed(want)) => {
@@ -1649,15 +1894,23 @@ fn entered_failures_keep_their_error_and_drop_once() {
 
 #[test]
 fn a_pre_cancelled_call_spawns_nothing_and_times_nothing() {
-    let mut fixture = Fixture::new("fiber-picture-precancel");
-    let _hook = fixture.install();
+    let fixture = Fixture::new("fiber-picture-precancel");
     let fiber = stub(fixture.path(), "touch \"$(dirname \"$0\")/ran\"");
     let (probe, records) = probe();
     let child = timed_child(&fiber, fixture.path(), &probe);
+    let child = Arc::new(child);
     let cancel = CancelToken::new();
     cancel.cancel();
 
-    let result = child.process(PNG, &cancel);
+    let deadline = Deadline::after(STEP);
+    let result = process_bounded(
+        Arc::clone(&child),
+        PNG.to_vec(),
+        cancel.clone(),
+        deadline,
+        fixture.reporter(),
+        "the image",
+    );
 
     assert_eq!(result, Err(ImageError::Cancelled));
     assert_eq!(probe.calls(), 0, "no timing invocation before entry");
@@ -1776,8 +2029,7 @@ fn a_cancel_after_stdout_and_stderr_closed_stops_and_times_it() {
 
 #[test]
 fn filled_pipes_complete_without_deadlock_with_one_scope() {
-    let mut fixture = Fixture::new("fiber-picture-pipes");
-    let _hook = fixture.install();
+    let fixture = Fixture::new("fiber-picture-pipes");
     let fiber = stub(
         fixture.path(),
         r#"cat > /dev/null
@@ -1787,10 +2039,18 @@ exit 3"#,
     );
     let (probe, records) = probe();
     let child = timed_child(&fiber, fixture.path(), &probe);
+    let child = Arc::new(child);
     let deadline = Deadline::after(STEP);
     let bytes = vec![b'z'; 64 * 1024];
 
-    let result = child.process(&bytes, &CancelToken::new());
+    let result = process_bounded(
+        Arc::clone(&child),
+        bytes.clone(),
+        CancelToken::new(),
+        deadline,
+        fixture.reporter(),
+        "the image",
+    );
 
     let Err(ImageError::Failed(message)) = result else {
         panic!("failed: {result:?}");
