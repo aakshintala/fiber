@@ -15,7 +15,7 @@
 )]
 
 use std::collections::VecDeque;
-use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex, PoisonError, mpsc};
 use std::thread;
 use std::time::{Duration, Instant};
@@ -343,6 +343,16 @@ enum InnerPlan {
     Forget { name: String, args: Value },
 }
 
+/// Wakes a watched leaf's cancel wait: the loop's cancel signal owns
+/// no channel the test could hold, so the wake carries one.
+struct CancelWake(mpsc::Sender<()>);
+
+impl Wake for CancelWake {
+    fn wake(&self) {
+        let _sent = self.0.send(());
+    }
+}
+
 /// A registered tool with scripted effects, schema and synchronous work.
 struct ProbeTool {
     name: String,
@@ -360,6 +370,7 @@ struct ProbeTool {
     forget_gate: Mutex<Option<mpsc::Receiver<()>>>,
     run_entered: Mutex<Option<mpsc::Sender<()>>>,
     run_gate: Mutex<Option<mpsc::Receiver<()>>>,
+    cancel_watch: Mutex<Option<mpsc::Sender<()>>>,
     run_error: Mutex<Option<String>>,
     clock_hold: Mutex<bool>,
     clock: Mutex<Option<Arc<FakeClock>>>,
@@ -428,6 +439,7 @@ impl ProbeTool {
             forget_gate: Mutex::new(None),
             run_entered: Mutex::new(None),
             run_gate: Mutex::new(None),
+            cancel_watch: Mutex::new(None),
             run_error: Mutex::new(None),
             clock_hold: Mutex::new(false),
             clock: Mutex::new(None),
@@ -511,6 +523,12 @@ impl ProbeTool {
         *lock(&self.run_gate) = Some(gate);
     }
 
+    /// Watches the next run for its cancel: the run waits for the loop
+    /// to cancel it before it waits on its gate, then sends `seen`.
+    fn watch_cancel(&self, seen: mpsc::Sender<()>) {
+        *lock(&self.cancel_watch) = Some(seen);
+    }
+
     fn confirming(mut self) -> Self {
         self.ask_confirm = true;
         self
@@ -548,8 +566,8 @@ impl Tool for ProbeTool {
         self.effects.clone()
     }
 
-    fn run(&self, arguments: &Map<String, Value>, _: &dyn Cancel, _: &dyn Emit) -> Output {
-        self.enter_run(arguments);
+    fn run(&self, arguments: &Map<String, Value>, cancel: &dyn Cancel, _: &dyn Emit) -> Output {
+        self.enter_run(arguments, cancel);
         let error = lock(&self.run_error).clone().map(|message| Failure {
             code: ErrorCode::ToolError,
             message,
@@ -582,7 +600,7 @@ impl Tool for ProbeTool {
                 InnerPlan::Forget { name, args } => Some((name, args, true)),
             };
             if let Some((name, args, forget)) = planned {
-                return self.run_inner(arguments, ask, name, args, forget);
+                return self.run_inner(arguments, cancel, ask, name, args, forget);
             }
             return self.run(arguments, cancel, emit);
         }
@@ -615,12 +633,27 @@ impl Tool for ProbeTool {
 impl ProbeTool {
     /// Counts the run, records its arguments and holds it at the test's
     /// gate, then does its synchronous fake work.
-    fn enter_run(&self, arguments: &Map<String, Value>) {
+    fn enter_run(&self, arguments: &Map<String, Value>, cancel: &dyn Cancel) {
         self.ran.fetch_add(1, Ordering::SeqCst);
         lock(&self.ran_args).push(arguments.clone());
         lock(&self.run_threads).push(thread::current().id());
         if let Some(entered) = lock(&self.run_entered).take() {
             let _sent = entered.send(());
+        }
+        if let Some(seen) = lock(&self.cancel_watch).take() {
+            // A watched leaf waits here for the loop to cancel it: the
+            // test sends the run gate only after `seen`, so the leaf
+            // cannot return before its cancel fired. The subscription
+            // keeps only a Weak, so the wake stays alive across the
+            // wait; a cancel that landed before the subscription is
+            // caught by the recheck.
+            let (wake_tx, wake_rx) = mpsc::channel();
+            let wake: Arc<dyn Wake> = Arc::new(CancelWake(wake_tx));
+            cancel.subscribe(Arc::downgrade(&wake));
+            if !cancel.is_cancelled() {
+                fakes::Deadline::after(WAIT).recv_or_fail(&wake_rx, "the loop cancels the leaf");
+            }
+            let _sent = seen.send(());
         }
         if *lock(&self.clock_hold) {
             // Parks on the injected clock while the test holds the gate:
@@ -644,12 +677,13 @@ impl ProbeTool {
     fn run_inner(
         &self,
         arguments: &Map<String, Value>,
+        cancel: &dyn Cancel,
         ask: &dyn Ask,
         name: String,
         args: Value,
         forget: bool,
     ) -> Output {
-        self.enter_run(arguments);
+        self.enter_run(arguments, cancel);
         let Some(inner) = ask.inner_calls() else {
             return Output {
                 content: vec![ContentPart::Text {
@@ -5042,33 +5076,23 @@ fn a_descendant_that_returns_before_its_anchor_completes() {
 // call returns while the leaf still runs, and the leaf is cancelled.
 #[test]
 fn a_returned_anchor_cancels_its_running_descendant() {
-    let rules = Arc::new(FakeRules::default());
-    let outer = Arc::new(ProbeTool::reads("atlas").calling("boreal", json!({})));
-    let middle = Arc::new(ProbeTool::reads("boreal").forgetting("coral", json!({})));
-    let leaf = Arc::new(ProbeTool::reads("coral"));
-    let (forget_tx, forget_rx) = mpsc::channel();
-    middle.hold_forget(forget_rx);
-    let (leaf_entered_tx, leaf_entered_rx) = mpsc::channel();
-    let (leaf_gate_tx, leaf_gate_rx) = mpsc::channel();
-    leaf.gate_run(leaf_entered_tx, leaf_gate_rx);
-    let (report_tx, report_rx) = mpsc::channel();
-    middle.reporting(report_tx);
-    let mut setup = Setup::new(Arc::clone(&rules));
-    setup.tools.push(Arc::clone(&outer));
-    setup.tools.push(Arc::clone(&middle));
-    setup.tools.push(Arc::clone(&leaf));
-    let home = fakes::TempDir::new("fiber-tool-timing");
-    let mut world = build(
-        &setup,
-        home,
-        vec![tool_answer("atlas", json!({}), 0), text_answer("Done.", 0)],
-    );
+    let ReturnedAnchor {
+        mut world,
+        leaf,
+        leaf_entered_rx,
+        leaf_gate_tx,
+        forget_tx,
+        report_rx,
+    } = returned_anchor();
+    let (seen_tx, seen_rx) = mpsc::channel();
+    leaf.watch_cancel(seen_tx);
     prompt(&world, "hi");
     let flight = spawn_turn(&mut world);
     // The leaf is admitted while its anchor still runs, then the anchor
     // returns while the leaf still runs.
     fakes::Deadline::after(WAIT).recv_or_fail(&leaf_entered_rx, "the leaf run is entered");
     forget_tx.send(()).expect("the forgetter waits");
+    fakes::Deadline::after(WAIT).recv_or_fail(&seen_rx, "the leaf sees its cancel");
     leaf_gate_tx.send(()).expect("the leaf run waits");
     assert_eq!(
         join_turn(&mut world, flight).unwrap(),
@@ -5076,9 +5100,9 @@ fn a_returned_anchor_cancels_its_running_descendant() {
     );
     assert_eq!(leaf.ran(), 1, "the descendant run was entered");
     let report = fakes::Deadline::after(WAIT).recv_or_fail(&report_rx, "the leaf answers");
-    assert!(
-        report.contains("ancelled"),
-        "the orphaned leaf is cancelled: {report}"
+    assert_eq!(
+        report, "answered Cancelled",
+        "the orphaned leaf is cancelled"
     );
     // All three orders were entered; all three runs started.
     assert_eq!(ops(&world, "tool.permission").len(), 3);
