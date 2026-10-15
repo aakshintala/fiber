@@ -26,9 +26,14 @@ use jobs::{DelegateSpawn, JobsTool, Registry, Resolve};
 const DEADLINE: Duration = Duration::from_secs(5);
 
 fn args(value: serde_json::Value) -> serde_json::Map<String, serde_json::Value> {
+    use serde_json::Value;
     match value {
-        serde_json::Value::Object(map) => map,
-        _ => panic!("arguments are an object"),
+        Value::Object(map) => map,
+        Value::Null
+        | Value::Bool(_)
+        | Value::Number(_)
+        | Value::String(_)
+        | Value::Array(_) => panic!("arguments are an object"),
     }
 }
 
@@ -119,7 +124,9 @@ fn a_delegate_failing_before_its_session_reports_that_failure_and_no_log() {
         .iter()
         .find_map(|record| match record {
             JobRecord::Started(started) => Some(started.clone()),
-            _ => None,
+            JobRecord::DelegateStarted(_)
+            | JobRecord::DelegateFinished(_)
+            | JobRecord::Completed(_) => None,
         })
         .expect("the spawn records its start");
     let job_id = started.job_id.0.clone();
