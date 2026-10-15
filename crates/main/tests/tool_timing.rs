@@ -17,10 +17,9 @@ mod extension_harness;
 mod support;
 
 use std::fs;
-use std::os::unix::process::CommandExt;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
-use std::sync::mpsc;
+use std::sync::{Arc, Mutex, mpsc};
 use std::thread;
 
 use fakes::ProviderServer;
@@ -559,24 +558,11 @@ fn a_debug_review_times_one_stage_with_permission_and_run() {
     assert_keys(&setup);
 }
 
-/// Binary-level hub harness for the escalation and resume journeys below,
-/// following `hub_resume.rs`: sessions run under `hub serve`, and the test
-/// answers their approvals over the hub socket within one deadline.
+/// Fixture helpers for the escalation and resume journeys below: the
+/// configured model, a standing ask, and the session log. Hub, socket,
+/// session-guard and deadline handling come from the shared [`support`]
+/// harness.
 impl Setup {
-    fn new_with_fr_root() -> Self {
-        let root = fakes::TempDir::new("fr");
-        fs::create_dir_all(root.path().join("h")).unwrap();
-        fs::create_dir_all(root.path().join("w")).unwrap();
-        Self {
-            deadline: support::Deadline::start(),
-            root,
-        }
-    }
-
-    fn workspace_text(&self) -> String {
-        self.workspace().to_string_lossy().into_owned()
-    }
-
     /// The configured model, with `session.idle_exit_ms` when given.
     fn idle(&self, ms: Option<u64>) {
         let config = match ms {
@@ -597,27 +583,6 @@ impl Setup {
             ),
         )
         .unwrap();
-    }
-
-    /// One `fiber` invocation with `args` in the workspace: the environment
-    /// every hub test runs under.
-    fn fiber_in_workspace(&self, args: &[&str]) -> Command {
-        let mut command = Command::new(env!("CARGO_BIN_EXE_fiber"));
-        command
-            .args(args)
-            .current_dir(self.workspace())
-            .env_clear()
-            .envs(fakes::check_run())
-            .env("PATH", std::env::var_os("PATH").unwrap_or_default())
-            .env("HOME", self.root.path())
-            .env("FIBER_HOME", self.home())
-            .env("FIBER_TEST_FAKE_KEY", "sk-test")
-            .env("SYN_API_KEY", "sk-test-syn")
-            .stdin(Stdio::null())
-            .stdout(Stdio::piped())
-            .stderr(Stdio::piped())
-            .process_group(0);
-        command
     }
 
     /// The log of session `id`, wherever its project is.
@@ -643,158 +608,13 @@ impl Setup {
     }
 }
 
-/// A hub the test started, and every session process it starts.
-struct Hub {
-    child: Option<std::process::Child>,
-    group: u32,
-    watchdog: Option<fakes::Watchdog>,
-    sessions: Option<fakes::Watchdog>,
-    workspace: String,
-    deadline: support::Deadline,
-}
-
-impl Hub {
-    fn spawn_command(deadline: support::Deadline, serve: &mut Command, workspace: String) -> Self {
-        let sessions = fakes::Watchdog::matching(&workspace);
-        let mut child = serve.spawn().unwrap();
-        let group = child.id();
-        let _ = child.stdout.take();
-        let _ = child.stderr.take();
-        Self {
-            child: Some(child),
-            group,
-            watchdog: Some(fakes::Watchdog::group(group)),
-            sessions: Some(sessions),
-            workspace,
-            deadline,
-        }
-    }
-
-    /// Kills the hub, then waits for every session holding the workspace
-    /// path to exit on its own.
-    #[track_caller]
-    fn finish(mut self) {
-        support::kill_group(self.deadline, self.group, "KILL").unwrap();
-        if let Some(mut child) = self.child.take() {
-            let (done, finished) = mpsc::channel();
-            thread::spawn(move || done.send(child.wait().is_ok()).unwrap_or(()));
-            match self.deadline.recv(&finished) {
-                Ok(_) => {}
-                Err(_) => support::expired(
-                    self.deadline,
-                    self.group,
-                    &finished,
-                    "the killed hub to exit",
-                ),
-            }
-        }
-        fakes::try_matching_exits(&self.workspace, self.deadline.left()).unwrap_or_else(|err| {
-            panic!("waited until the deadline for every session to exit: {err}")
-        });
-        if let Some(watchdog) = self.watchdog.take() {
-            watchdog.stand_down(self.deadline.cleanup());
-        }
-        if let Some(watchdog) = self.sessions.take() {
-            watchdog.stand_down(self.deadline.cleanup());
-        }
-    }
-}
-
-impl Drop for Hub {
-    fn drop(&mut self) {
-        support::kill_group_detached(self.group, "KILL");
-        support::kill_matching_detached(&self.workspace);
-        if let Some(mut child) = self.child.take() {
-            let (done, reaped) = mpsc::channel();
-            match thread::Builder::new().spawn(move || match done.send(child.wait()) {
-                Ok(()) | Err(_) => {}
-            }) {
-                Ok(_) | Err(_) => {}
-            }
-            match self.deadline.cleanup_phase().recv(&reaped) {
-                Ok(_) | Err(_) => {}
-            }
-        }
-    }
-}
-
-/// A client on the hub's socket. Every read and write takes what remains
-/// of the test's [`Deadline`]: expiry panics naming what was awaited.
-struct Socket {
-    write: std::sync::Mutex<std::os::unix::net::UnixStream>,
-    read: std::sync::Mutex<std::io::BufReader<std::os::unix::net::UnixStream>>,
-    deadline: support::Deadline,
-}
-
-impl Socket {
-    fn from(deadline: support::Deadline, stream: std::os::unix::net::UnixStream) -> Self {
-        let read = stream.try_clone().unwrap();
-        Self {
-            write: std::sync::Mutex::new(stream),
-            read: std::sync::Mutex::new(std::io::BufReader::new(read)),
-            deadline,
-        }
-    }
-
-    fn send(&self, line: &Value) {
-        let mut write = self.write.lock().unwrap();
-        let mut bytes = serde_json::to_vec(line).unwrap();
-        bytes.push(b'\n');
-        if let Err(error) = support::write_line(&mut write, self.deadline, &bytes, "sending a line")
-        {
-            panic!("writing the hub socket: {error}");
-        }
-    }
-
-    fn next(&self, what: &str, got: &[Value]) -> Value {
-        use std::io::ErrorKind;
-        match support::read_line(&mut self.read.lock().unwrap(), self.deadline, what) {
-            Ok(None) => panic!("the hub closed the socket while waiting for {what}; got {got:?}"),
-            Ok(Some(buf)) => serde_json::from_str(buf.trim_end()).unwrap(),
-            Err(error) if error.kind() == ErrorKind::TimedOut => {
-                panic!("waited until the deadline for {what}; got {got:?}")
-            }
-            Err(error) => panic!("reading the hub socket while waiting for {what}: {error}"),
-        }
-    }
-}
-
-/// Collects lines until `done`, each taking what remains of the test's
-/// [`Deadline`].
-fn until(client: &Socket, what: &str, mut done: impl FnMut(&Value) -> bool) -> Vec<Value> {
-    let mut lines = Vec::new();
-    loop {
-        let line = client.next(what, &lines);
-        let stop = done(&line);
-        lines.push(line);
-        if stop {
-            return lines;
-        }
-    }
-}
-
-/// Connects to the hub, starting `fiber hub serve` when none runs.
-#[track_caller]
-fn connect_hub(setup: &Setup, hub: &std::sync::Arc<std::sync::Mutex<Option<Hub>>>) -> Socket {
-    let slot = std::sync::Arc::clone(hub);
-    let deadline = setup.deadline;
-    let mut serve = setup.fiber_in_workspace(&["hub", "serve"]);
-    let workspace = setup.workspace_text();
-    let home = setup.home();
-    let connected = support::bounded(deadline, "the hub to start and say hub_hello", move || {
-        let mut start = move || {
-            *slot.lock().unwrap() =
-                Some(Hub::spawn_command(deadline, &mut serve, workspace.clone()));
-            Ok(())
-        };
-        doors::hub::connect(&home, &mut start, &support::SystemClock)
-    });
-    let (stream, _hello) = connected.unwrap();
-    Socket::from(deadline, stream)
-}
-
 fn command(id: &str, session: &str, command: &str, args: Value) -> Value {
     json!({"id": id, "session_id": session, "command": command, "args": args})
+}
+
+/// Sends one hub command over the shared [`support`] socket.
+fn send(client: &support::Socket, line: &Value) {
+    client.send(&line.to_string());
 }
 
 fn subscribe(id: &str, session: &str) -> Value {
@@ -831,14 +651,15 @@ fn echo_call() -> fakes::Response {
 }
 
 /// Waits for the relayed `fiber_exited`, then for the session process to
-/// be gone.
-fn until_exited(client: &Socket, setup: &Setup) -> Vec<Value> {
-    let lines = until(client, "fiber_exited", |line| {
+/// be gone, over the shared [`support`] socket and deadline helpers.
+fn until_exited(client: &support::Socket, setup: &Setup) -> Vec<Value> {
+    let lines = support::until(client, "fiber_exited", |line| {
         line["kind"] == "fiber_exited"
     });
-    fakes::try_matching_exits(&setup.workspace_text(), setup.deadline.left()).unwrap_or_else(
-        |err| panic!("waited until the deadline for the session process to exit: {err}"),
-    );
+    let workspace = setup.workspace().to_string_lossy().into_owned();
+    fakes::try_matching_exits(&workspace, setup.deadline.left()).unwrap_or_else(|err| {
+        panic!("waited until the deadline for the session process to exit: {err}")
+    });
     lines
 }
 
@@ -846,7 +667,7 @@ fn until_exited(client: &Socket, setup: &Setup) -> Vec<Value> {
 /// wait. The person's allow holds both stages' work and the wait.
 #[test]
 fn a_debug_escalation_times_two_stages_and_the_wait() {
-    let setup = Setup::new_with_fr_root();
+    let setup = Setup::new();
     let server = ProviderServer::start([
         shell_true_call(),
         text_reply("check"),
@@ -856,6 +677,16 @@ fn a_debug_escalation_times_two_stages_and_the_wait() {
     ])
     .unwrap();
     review_fixture(&setup, &server, Some("pkg"));
+    // The hub runs under the shared harness's bare environment, so the
+    // `SYN_API_KEY` the `syn` provider declares never arrives: store the
+    // key the way `fiber login syn` writes it.
+    config::store_credential(
+        &setup.home(),
+        "syn",
+        "default",
+        &contract::Secret::new("sk-test-syn".to_owned()),
+    )
+    .unwrap();
     write(
         &setup.home().join("config.json"),
         &json!({
@@ -865,32 +696,37 @@ fn a_debug_escalation_times_two_stages_and_the_wait() {
         })
         .to_string(),
     );
-    let hub = std::sync::Arc::new(std::sync::Mutex::new(None));
-    let client = connect_hub(&setup, &hub);
-    client.send(&json!({
-        "id": "c_start",
-        "command": "start",
-        "args": {"workspace": setup.workspace_text(), "content": [{"type": "text", "text": "Run true."}]},
-    }));
-    let started = client.next("the start acknowledgement", &[]);
+    let workspace = setup.workspace().to_string_lossy().into_owned();
+    let hub = Arc::new(Mutex::new(None));
+    let (client, _) = support::connect_hub(&setup, &hub);
+    let guard = support::SessionGuard::arm(setup.deadline, &workspace);
+    send(
+        &client,
+        &json!({
+            "id": "c_start",
+            "command": "start",
+            "args": {"workspace": workspace, "content": [{"type": "text", "text": "Run true."}]},
+        }),
+    );
+    let started = support::recv(&client, "the start acknowledgement");
     assert!(acknowledges(&started, "c_start"), "{started}");
     let id = started["payload"]["result"]["session_id"]
         .as_str()
         .unwrap()
         .to_owned();
-    client.send(&subscribe("c_sub", &id));
-    until(&client, "the subscribe acknowledgement", |line| {
+    send(&client, &subscribe("c_sub", &id));
+    support::until(&client, "the subscribe acknowledgement", |line| {
         acknowledges(line, "c_sub")
     });
-    let asked = until(&client, "permission_requested", |line| {
+    let asked = support::until(&client, "permission_requested", |line| {
         line["kind"] == "permission_requested"
     });
     let request = asked.last().unwrap()["payload"]["request_id"]
         .as_str()
         .unwrap()
         .to_owned();
-    client.send(&allow("c_reply", &id, &request));
-    let done = until(&client, "the resumed turn", |line| {
+    send(&client, &allow("c_reply", &id, &request));
+    let done = support::until(&client, "the resumed turn", |line| {
         line["kind"] == "turn_completed"
     });
     assert!(
@@ -907,8 +743,9 @@ fn a_debug_escalation_times_two_stages_and_the_wait() {
             .any(|line| line["kind"] == "tool_call_completed"),
         "the allowed call ran: {done:?}"
     );
-    client.send(&close(&id));
+    send(&client, &close(&id));
     until_exited(&client, &setup);
+    guard.wait_gone();
     drop(client);
     // Two stages, one permission order holding both, one run.
     let reviewer: Vec<Value> = ops(&setup, "tool.reviewer")
@@ -929,7 +766,9 @@ fn a_debug_escalation_times_two_stages_and_the_wait() {
         .collect();
     assert_eq!(runs.len(), 1);
     assert_tool_wire_process(&runs, &id, "shell", "session");
-    hub.lock().unwrap().take().expect("the hub ran").finish();
+    if let Some(running) = hub.lock().unwrap().take() {
+        running.kill_and_wait();
+    }
 }
 
 /// A suspended approval resumes in a fresh process with a fresh segment:
@@ -937,7 +776,7 @@ fn a_debug_escalation_times_two_stages_and_the_wait() {
 /// the resumed decision writes the second.
 #[test]
 fn a_suspended_approval_resumes_with_a_fresh_segment() {
-    let setup = Setup::new_with_fr_root();
+    let setup = Setup::new();
     let server = ProviderServer::start([echo_call(), hello()]).unwrap();
     server.hold();
     setup.provider(&server);
@@ -952,25 +791,30 @@ fn a_suspended_approval_resumes_with_a_fresh_segment() {
         })
         .to_string(),
     );
-    let hub = std::sync::Arc::new(std::sync::Mutex::new(None));
-    let client = connect_hub(&setup, &hub);
-    client.send(&json!({
-        "id": "c_start",
-        "command": "start",
-        "args": {"workspace": setup.workspace_text(), "content": [{"type": "text", "text": "run it"}]},
-    }));
-    let started = client.next("the start acknowledgement", &[]);
+    let workspace = setup.workspace().to_string_lossy().into_owned();
+    let hub = Arc::new(Mutex::new(None));
+    let (client, _) = support::connect_hub(&setup, &hub);
+    let guard = support::SessionGuard::arm(setup.deadline, &workspace);
+    send(
+        &client,
+        &json!({
+            "id": "c_start",
+            "command": "start",
+            "args": {"workspace": workspace, "content": [{"type": "text", "text": "run it"}]},
+        }),
+    );
+    let started = support::recv(&client, "the start acknowledgement");
     assert!(acknowledges(&started, "c_start"), "{started}");
     let id = started["payload"]["result"]["session_id"]
         .as_str()
         .unwrap()
         .to_owned();
-    client.send(&subscribe("c_sub", &id));
-    until(&client, "the subscribe acknowledgement", |line| {
+    send(&client, &subscribe("c_sub", &id));
+    support::until(&client, "the subscribe acknowledgement", |line| {
         acknowledges(line, "c_sub")
     });
     server.release();
-    let asked = until(&client, "permission_requested", |line| {
+    let asked = support::until(&client, "permission_requested", |line| {
         line["kind"] == "permission_requested"
     });
     let request = asked.last().unwrap()["payload"]["request_id"]
@@ -1002,8 +846,8 @@ fn a_suspended_approval_resumes_with_a_fresh_segment() {
         &setup.home().join("config.json"),
         &json!({"model": "fake/m", "diagnostics": {"level": "debug"}}).to_string(),
     );
-    client.send(&allow("c_reply", &id, &request));
-    let resumed = until(&client, "the resumed turn", |line| {
+    send(&client, &allow("c_reply", &id, &request));
+    let resumed = support::until(&client, "the resumed turn", |line| {
         line["kind"] == "turn_completed"
     });
     let raised = resumed
@@ -1024,8 +868,9 @@ fn a_suspended_approval_resumes_with_a_fresh_segment() {
             .any(|line| line["kind"] == "tool_call_completed"),
         "the allowed call ran: {resumed:?}"
     );
-    client.send(&close(&id));
+    send(&client, &close(&id));
     until_exited(&client, &setup);
+    guard.wait_gone();
     drop(client);
     // Two segments, one per process, under the same request id.
     let permission: Vec<Value> = ops(&setup, "tool.permission")
@@ -1041,7 +886,9 @@ fn a_suspended_approval_resumes_with_a_fresh_segment() {
     assert_eq!(runs.len(), 1, "only the resumed segment ran");
     assert_tool_wire_process(&runs, &id, "shell", "session");
     support::assert_one_continued_log(&setup.session_log(&id), 2);
-    hub.lock().unwrap().take().expect("the hub ran").finish();
+    if let Some(running) = hub.lock().unwrap().take() {
+        running.kill_and_wait();
+    }
 }
 
 /// One `ask_user` question: the native tool asks whoever drives the session.
@@ -1064,7 +911,7 @@ fn ask_user_call(questions: &Value) -> fakes::Response {
 /// call was already allowed, so only the resumed run is timed.
 #[test]
 fn a_suspended_interaction_resumes_with_no_second_order() {
-    let setup = Setup::new_with_fr_root();
+    let setup = Setup::new();
     let server = ProviderServer::start([ask_user_call(&one_question()), hello()]).unwrap();
     server.hold();
     setup.provider(&server);
@@ -1077,25 +924,30 @@ fn a_suspended_interaction_resumes_with_no_second_order() {
         })
         .to_string(),
     );
-    let hub = std::sync::Arc::new(std::sync::Mutex::new(None));
-    let client = connect_hub(&setup, &hub);
-    client.send(&json!({
-        "id": "c_start",
-        "command": "start",
-        "args": {"workspace": setup.workspace_text(), "content": [{"type": "text", "text": "ask-me"}]},
-    }));
-    let started = client.next("the start acknowledgement", &[]);
+    let workspace = setup.workspace().to_string_lossy().into_owned();
+    let hub = Arc::new(Mutex::new(None));
+    let (client, _) = support::connect_hub(&setup, &hub);
+    let guard = support::SessionGuard::arm(setup.deadline, &workspace);
+    send(
+        &client,
+        &json!({
+            "id": "c_start",
+            "command": "start",
+            "args": {"workspace": workspace, "content": [{"type": "text", "text": "ask-me"}]},
+        }),
+    );
+    let started = support::recv(&client, "the start acknowledgement");
     assert!(acknowledges(&started, "c_start"), "{started}");
     let id = started["payload"]["result"]["session_id"]
         .as_str()
         .unwrap()
         .to_owned();
-    client.send(&subscribe("c_sub", &id));
-    until(&client, "the subscribe acknowledgement", |line| {
+    send(&client, &subscribe("c_sub", &id));
+    support::until(&client, "the subscribe acknowledgement", |line| {
         acknowledges(line, "c_sub")
     });
     server.release();
-    let asked = until(&client, "interaction_requested", |line| {
+    let asked = support::until(&client, "interaction_requested", |line| {
         line["kind"] == "interaction_requested"
     });
     let request = asked.last().unwrap()["payload"]["request_id"]
@@ -1123,13 +975,16 @@ fn a_suspended_interaction_resumes_with_no_second_order() {
         &setup.home().join("config.json"),
         &json!({"model": "fake/m", "diagnostics": {"level": "debug"}}).to_string(),
     );
-    client.send(&command(
-        "c_reply",
-        &id,
-        "reply",
-        json!({"request_id": request, "answers": [{"labels": ["a"]}]}),
-    ));
-    let done = until(&client, "the resumed turn", |line| {
+    send(
+        &client,
+        &command(
+            "c_reply",
+            &id,
+            "reply",
+            json!({"request_id": request, "answers": [{"labels": ["a"]}]}),
+        ),
+    );
+    let done = support::until(&client, "the resumed turn", |line| {
         line["kind"] == "turn_completed"
     });
     assert!(
@@ -1141,8 +996,9 @@ fn a_suspended_interaction_resumes_with_no_second_order() {
             .any(|line| line["kind"] == "tool_call_completed"),
         "the answered call ran again: {done:?}"
     );
-    client.send(&close(&id));
+    send(&client, &close(&id));
     until_exited(&client, &setup);
+    guard.wait_gone();
     drop(client);
     // No second permission order; the resumed run is timed.
     let permission: Vec<Value> = ops(&setup, "tool.permission")
@@ -1156,5 +1012,7 @@ fn a_suspended_interaction_resumes_with_no_second_order() {
         .collect();
     assert_eq!(runs.len(), 2, "both entered runs are timed");
     assert_tool_wire_process(&runs, &id, "ask_user", "session");
-    hub.lock().unwrap().take().expect("the hub ran").finish();
+    if let Some(running) = hub.lock().unwrap().take() {
+        running.kill_and_wait();
+    }
 }

@@ -366,6 +366,7 @@ struct ProbeTool {
     dir: Mutex<Option<std::path::PathBuf>>,
     ran: AtomicUsize,
     ran_args: Mutex<Vec<Map<String, Value>>>,
+    run_threads: Mutex<Vec<thread::ThreadId>>,
 }
 
 impl ProbeTool {
@@ -433,6 +434,7 @@ impl ProbeTool {
             dir: Mutex::new(None),
             ran: AtomicUsize::new(0),
             ran_args: Mutex::new(Vec::new()),
+            run_threads: Mutex::new(Vec::new()),
         }
     }
 
@@ -516,6 +518,11 @@ impl ProbeTool {
 
     fn ran(&self) -> usize {
         self.ran.load(Ordering::SeqCst)
+    }
+
+    /// Every worker thread that entered a run, in entry order.
+    fn run_threads(&self) -> Vec<thread::ThreadId> {
+        lock(&self.run_threads).clone()
     }
 }
 
@@ -611,6 +618,7 @@ impl ProbeTool {
     fn enter_run(&self, arguments: &Map<String, Value>) {
         self.ran.fetch_add(1, Ordering::SeqCst);
         lock(&self.ran_args).push(arguments.clone());
+        lock(&self.run_threads).push(thread::current().id());
         if let Some(entered) = lock(&self.run_entered).take() {
             let _sent = entered.send(());
         }
@@ -1283,11 +1291,16 @@ fn turn(world: &mut World) -> Result<Option<TurnOutcome>, Error> {
 }
 
 /// The next `permission_requested` on a watcher registered before the turn,
-/// with its request and action ids. Each tap carries the deadline.
-fn wait_requested(watcher: &mut log::Watcher, what: &str) -> (String, String) {
+/// with its request and action ids. One deadline bounds the whole wait:
+/// every skipped line takes what remains of it, never a fresh wait.
+fn wait_requested(
+    watcher: &mut log::Watcher,
+    deadline: &fakes::Deadline,
+    what: &str,
+) -> (String, String) {
     loop {
         let line = watcher
-            .recv_timeout(WAIT)
+            .recv_timeout(deadline.left())
             .unwrap_or_else(|| panic!("a line arrives before the deadline: {what}"))
             .expect("the log stays readable")
             .expect("no end yet");
@@ -1304,11 +1317,16 @@ fn wait_requested(watcher: &mut log::Watcher, what: &str) -> (String, String) {
 
 /// The nth `permission_requested` (1-based) on the watcher: a resumed
 /// turn's watcher replays the first raise, so the finishing turn waits
-/// for the second, the re-raise. Each tap carries the deadline.
-fn wait_requested_nth(watcher: &mut log::Watcher, n: usize, what: &str) -> (String, String) {
+/// for the second, the re-raise. One deadline bounds all `n` taps.
+fn wait_requested_nth(
+    watcher: &mut log::Watcher,
+    deadline: &fakes::Deadline,
+    n: usize,
+    what: &str,
+) -> (String, String) {
     let mut found = (String::new(), String::new());
     for _ in 0..n {
-        found = wait_requested(watcher, what);
+        found = wait_requested(watcher, deadline, what);
     }
     found
 }
@@ -1612,7 +1630,11 @@ fn suspend_on_approval(world: &mut World) -> String {
     let flight = spawn_turn(world);
     let thread = fakes::Deadline::after(WAIT).recv_or_fail(&flight.thread, "the turn starts");
     let mut watcher = world.log.as_ref().expect("the log is open").watch_all();
-    let (request, _) = wait_requested(&mut watcher, "the approval is raised");
+    let (request, _) = wait_requested(
+        &mut watcher,
+        &fakes::Deadline::after(WAIT),
+        "the approval is raised",
+    );
     world.clock.advance_when_parked(
         Some(world.origin + IDLE),
         Some(thread),
@@ -1997,7 +2019,11 @@ fn a_persons_allow_holds_the_wait_inside_permission() {
     let flight = spawn_turn(&mut world);
     let thread = fakes::Deadline::after(WAIT).recv_or_fail(&flight.thread, "the turn starts");
     let mut watcher = world.log.as_ref().expect("the log is open").watch_all();
-    let (request, _) = wait_requested(&mut watcher, "the approval is raised");
+    let (request, _) = wait_requested(
+        &mut watcher,
+        &fakes::Deadline::after(WAIT),
+        "the approval is raised",
+    );
     assert!(
         ops(&world, "tool.permission").is_empty(),
         "no record completes while the person is waited on"
@@ -2043,7 +2069,11 @@ fn a_persons_deny_ends_permission_without_running() {
     prompt(&world, "hi");
     let flight = spawn_turn(&mut world);
     let mut watcher = world.log.as_ref().expect("the log is open").watch_all();
-    let (request, _) = wait_requested(&mut watcher, "the approval is raised");
+    let (request, _) = wait_requested(
+        &mut watcher,
+        &fakes::Deadline::after(WAIT),
+        "the approval is raised",
+    );
     reply(&world, &request, deny());
     assert_eq!(
         join_turn(&mut world, flight).unwrap(),
@@ -2099,7 +2129,11 @@ fn a_closed_inbox_denies_the_waiting_approval() {
     prompt(&world, "hi");
     let flight = spawn_turn(&mut world);
     let mut watcher = world.log.as_ref().expect("the log is open").watch_all();
-    let _ = wait_requested(&mut watcher, "the approval is raised");
+    let _ = wait_requested(
+        &mut watcher,
+        &fakes::Deadline::after(WAIT),
+        "the approval is raised",
+    );
     world.inbox_tx.take();
     assert_eq!(
         join_turn(&mut world, flight).unwrap(),
@@ -2128,7 +2162,11 @@ fn close_while_waiting_denies_with_one_record() {
     prompt(&world, "hi");
     let flight = spawn_turn(&mut world);
     let mut watcher = world.log.as_ref().expect("the log is open").watch_all();
-    let _ = wait_requested(&mut watcher, "the approval is raised");
+    let _ = wait_requested(
+        &mut watcher,
+        &fakes::Deadline::after(WAIT),
+        "the approval is raised",
+    );
     world
         .inbox_tx
         .as_ref()
@@ -2163,7 +2201,11 @@ fn a_cancel_while_waiting_ends_cancelled_with_one_record() {
     prompt(&world, "hi");
     let flight = spawn_turn(&mut world);
     let mut watcher = world.log.as_ref().expect("the log is open").watch_all();
-    let _ = wait_requested(&mut watcher, "the approval is raised");
+    let _ = wait_requested(
+        &mut watcher,
+        &fakes::Deadline::after(WAIT),
+        "the approval is raised",
+    );
     // The cancel lands only once the wait parks on the clock: any earlier
     // and the unarmed signal swallows it.
     assert!(
@@ -2205,7 +2247,11 @@ fn a_stale_and_an_unfit_reply_are_rejected_before_an_allow() {
     prompt(&world, "hi");
     let flight = spawn_turn(&mut world);
     let mut watcher = world.log.as_ref().expect("the log is open").watch_all();
-    let (request, _) = wait_requested(&mut watcher, "the approval is raised");
+    let (request, _) = wait_requested(
+        &mut watcher,
+        &fakes::Deadline::after(WAIT),
+        "the approval is raised",
+    );
     let inbox = world.inbox_tx.as_ref().expect("the inbox is open").clone();
     let answered = |request: &str, answer: ReplyAnswer| {
         let (tx, rx) = mpsc::channel();
@@ -2297,7 +2343,11 @@ fn a_shutdown_while_waiting_abandons_with_one_record() {
     prompt(&world, "hi");
     let flight = spawn_turn(&mut world);
     let mut watcher = world.log.as_ref().expect("the log is open").watch_all();
-    let _ = wait_requested(&mut watcher, "the approval is raised");
+    let _ = wait_requested(
+        &mut watcher,
+        &fakes::Deadline::after(WAIT),
+        "the approval is raised",
+    );
     world.cancel.shutdown(0);
     world
         .inbox_tx
@@ -2363,7 +2413,11 @@ fn a_session_grant_allows_the_next_call() {
     prompt(&world, "hi");
     let flight = spawn_turn(&mut world);
     let mut watcher = world.log.as_ref().expect("the log is open").watch_all();
-    let (request, _) = wait_requested(&mut watcher, "the escalation is raised");
+    let (request, _) = wait_requested(
+        &mut watcher,
+        &fakes::Deadline::after(WAIT),
+        "the escalation is raised",
+    );
     reply(
         &world,
         &request,
@@ -2420,7 +2474,12 @@ fn a_resumed_allow_starts_a_fresh_segment() {
     let flight = spawn_turn(&mut world);
     let thread = fakes::Deadline::after(WAIT).recv_or_fail(&flight.thread, "the turn starts");
     let mut watcher = world.log.as_ref().expect("the log is open").watch_all();
-    let (raised, _) = wait_requested_nth(&mut watcher, 2, "the approval is raised again");
+    let (raised, _) = wait_requested_nth(
+        &mut watcher,
+        &fakes::Deadline::after(WAIT),
+        2,
+        "the approval is raised again",
+    );
     assert_eq!(raised, request, "the same request id is raised again");
     assert_eq!(
         kinds(&world)
@@ -2471,7 +2530,12 @@ fn a_resumed_deny_ends_its_segment_without_running() {
     exit_and_resume(&mut world, &request, vec![text_answer("Done.", 0)]);
     let flight = spawn_turn(&mut world);
     let mut watcher = world.log.as_ref().expect("the log is open").watch_all();
-    let (raised, _) = wait_requested_nth(&mut watcher, 2, "the approval is raised again");
+    let (raised, _) = wait_requested_nth(
+        &mut watcher,
+        &fakes::Deadline::after(WAIT),
+        2,
+        "the approval is raised again",
+    );
     reply(&world, &raised, deny());
     assert_eq!(
         join_turn(&mut world, flight).unwrap(),
@@ -2571,7 +2635,12 @@ fn a_resumed_cancel_ends_its_segment_cancelled() {
     exit_and_resume(&mut world, &request, vec![text_answer("Done.", 0)]);
     let flight = spawn_turn(&mut world);
     let mut watcher = world.log.as_ref().expect("the log is open").watch_all();
-    let _ = wait_requested_nth(&mut watcher, 2, "the approval is raised again");
+    let _ = wait_requested_nth(
+        &mut watcher,
+        &fakes::Deadline::after(WAIT),
+        2,
+        "the approval is raised again",
+    );
     assert!(
         world.clock.await_parked(world.origin + IDLE, WAIT),
         "the resumed wait parks on the clock"
@@ -2611,7 +2680,12 @@ fn a_resumed_idle_abandons_its_own_segment() {
     let flight = spawn_turn(&mut world);
     let thread = fakes::Deadline::after(WAIT).recv_or_fail(&flight.thread, "the turn starts");
     let mut watcher = world.log.as_ref().expect("the log is open").watch_all();
-    let _ = wait_requested_nth(&mut watcher, 2, "the approval is raised again");
+    let _ = wait_requested_nth(
+        &mut watcher,
+        &fakes::Deadline::after(WAIT),
+        2,
+        "the approval is raised again",
+    );
     world.clock.advance_when_parked(
         Some(world.origin + IDLE),
         Some(thread),
@@ -2652,7 +2726,12 @@ fn a_resumed_shutdown_abandons_its_own_segment() {
     exit_and_resume(&mut world, &request, vec![text_answer("Done.", 0)]);
     let flight = spawn_turn(&mut world);
     let mut watcher = world.log.as_ref().expect("the log is open").watch_all();
-    let _ = wait_requested_nth(&mut watcher, 2, "the approval is raised again");
+    let _ = wait_requested_nth(
+        &mut watcher,
+        &fakes::Deadline::after(WAIT),
+        2,
+        "the approval is raised again",
+    );
     world.cancel.shutdown(0);
     world
         .inbox_tx
@@ -2743,7 +2822,12 @@ fn a_resumed_schema_failure_completes_unchecked() {
     exit_and_resume(&mut world, &request, vec![text_answer("Done.", 0)]);
     let flight = spawn_turn(&mut world);
     let mut watcher = world.log.as_ref().expect("the log is open").watch_all();
-    let (raised, _) = wait_requested_nth(&mut watcher, 2, "the recorded request is raised");
+    let (raised, _) = wait_requested_nth(
+        &mut watcher,
+        &fakes::Deadline::after(WAIT),
+        2,
+        "the recorded request is raised",
+    );
     assert_eq!(raised, request);
     reply(&world, &raised, allow());
     assert_eq!(
@@ -2783,7 +2867,12 @@ fn a_resumed_unknown_tool_completes_unchecked() {
     exit_and_resume(&mut world, &request, vec![text_answer("Done.", 0)]);
     let flight = spawn_turn(&mut world);
     let mut watcher = world.log.as_ref().expect("the log is open").watch_all();
-    let (raised, _) = wait_requested_nth(&mut watcher, 2, "the recorded request is raised");
+    let (raised, _) = wait_requested_nth(
+        &mut watcher,
+        &fakes::Deadline::after(WAIT),
+        2,
+        "the recorded request is raised",
+    );
     reply(&world, &raised, allow());
     assert_eq!(
         join_turn(&mut world, flight).unwrap(),
@@ -2883,18 +2972,26 @@ fn dropping_suspended_state_closes_its_guard_once() {
 }
 
 /// The next `interaction_requested` on a watcher, with its request id.
-fn wait_interaction(watcher: &mut log::Watcher, what: &str) -> String {
-    wait_interaction_nth(watcher, 1, what)
+/// One deadline bounds the whole wait.
+fn wait_interaction(watcher: &mut log::Watcher, deadline: &fakes::Deadline, what: &str) -> String {
+    wait_interaction_nth(watcher, deadline, 1, what)
 }
 
 /// The nth `interaction_requested` (1-based): a resumed turn's watcher
 /// replays the first question, so the finishing turn waits for the second.
-fn wait_interaction_nth(watcher: &mut log::Watcher, n: usize, what: &str) -> String {
+/// One deadline bounds all `n` taps: every skipped line takes what
+/// remains of it, never a fresh wait.
+fn wait_interaction_nth(
+    watcher: &mut log::Watcher,
+    deadline: &fakes::Deadline,
+    n: usize,
+    what: &str,
+) -> String {
     let mut found = String::new();
     let mut seen = 0;
     while seen < n {
         let line = watcher
-            .recv_timeout(WAIT)
+            .recv_timeout(deadline.left())
             .unwrap_or_else(|| panic!("a line arrives before the deadline: {what}"))
             .expect("the log stays readable")
             .expect("no end yet");
@@ -2926,7 +3023,11 @@ fn a_resumed_interaction_runs_with_no_second_permission() {
     prompt(&world, "hi");
     let flight = spawn_turn(&mut world);
     let mut watcher = world.log.as_ref().expect("the log is open").watch_all();
-    let asked = wait_interaction(&mut watcher, "the tool asks its question");
+    let asked = wait_interaction(
+        &mut watcher,
+        &fakes::Deadline::after(WAIT),
+        "the tool asks its question",
+    );
     world.cancel.shutdown(0);
     world
         .inbox_tx
@@ -2939,7 +3040,12 @@ fn a_resumed_interaction_runs_with_no_second_permission() {
     exit_and_resume(&mut world, &asked, vec![text_answer("Done.", 0)]);
     let flight = spawn_turn(&mut world);
     let mut watcher = world.log.as_ref().expect("the log is open").watch_all();
-    let raised = wait_interaction_nth(&mut watcher, 2, "the question is raised again");
+    let raised = wait_interaction_nth(
+        &mut watcher,
+        &fakes::Deadline::after(WAIT),
+        2,
+        "the question is raised again",
+    );
     assert_eq!(raised, asked, "the same question is raised again");
     reply(&world, &raised, ReplyAnswer::Confirmed { confirmed: true });
     assert_eq!(
@@ -3055,7 +3161,11 @@ fn a_failing_first_stage_escalates_with_its_record() {
     prompt(&world, "hi");
     let flight = spawn_turn(&mut world);
     let mut watcher = world.log.as_ref().expect("the log is open").watch_all();
-    let (request, _) = wait_requested(&mut watcher, "the escalation is raised");
+    let (request, _) = wait_requested(
+        &mut watcher,
+        &fakes::Deadline::after(WAIT),
+        "the escalation is raised",
+    );
     reply(&world, &request, deny());
     assert_eq!(
         join_turn(&mut world, flight).unwrap(),
@@ -3088,7 +3198,11 @@ fn a_failing_second_stage_keeps_both_records() {
     prompt(&world, "hi");
     let flight = spawn_turn(&mut world);
     let mut watcher = world.log.as_ref().expect("the log is open").watch_all();
-    let (request, _) = wait_requested(&mut watcher, "the escalation is raised");
+    let (request, _) = wait_requested(
+        &mut watcher,
+        &fakes::Deadline::after(WAIT),
+        "the escalation is raised",
+    );
     reply(&world, &request, deny());
     assert_eq!(
         join_turn(&mut world, flight).unwrap(),
@@ -3228,7 +3342,11 @@ fn no_reviewer_model_escalates_with_no_stage_timer() {
     prompt(&world, "hi");
     let flight = spawn_turn(&mut world);
     let mut watcher = world.log.as_ref().expect("the log is open").watch_all();
-    let (request, _) = wait_requested(&mut watcher, "the escalation is raised");
+    let (request, _) = wait_requested(
+        &mut watcher,
+        &fakes::Deadline::after(WAIT),
+        "the escalation is raised",
+    );
     reply(&world, &request, allow());
     assert_eq!(
         join_turn(&mut world, flight).unwrap(),
@@ -3283,7 +3401,11 @@ fn an_escalated_block_splits_stage_and_wait_durations() {
     let flight = spawn_turn(&mut world);
     let thread = fakes::Deadline::after(WAIT).recv_or_fail(&flight.thread, "the turn starts");
     let mut watcher = world.log.as_ref().expect("the log is open").watch_all();
-    let (request, _) = wait_requested(&mut watcher, "the escalation is raised");
+    let (request, _) = wait_requested(
+        &mut watcher,
+        &fakes::Deadline::after(WAIT),
+        "the escalation is raised",
+    );
     world.clock.advance_when_parked(
         None,
         Some(thread),
@@ -4120,15 +4242,21 @@ fn an_entered_outer_run_times_its_hold() {
     prompt(&world, "hi");
     let flight = spawn_turn(&mut world);
     fakes::Deadline::after(WAIT).recv_or_fail(&entered_rx, "the run is entered");
-    assert!(
-        world.clock.await_parked_unbounded(WAIT),
-        "the run parks on the clock"
-    );
+    let worker = tool
+        .run_threads()
+        .into_iter()
+        .next()
+        .expect("the entered run reports its worker");
     assert!(
         ops(&world, "tool.run").is_empty(),
         "no record completes while the run is held"
     );
-    world.clock.advance(Duration::from_millis(2));
+    world.clock.advance_when_parked(
+        None,
+        Some(worker),
+        Duration::from_millis(2),
+        &fakes::Deadline::after(WAIT),
+    );
     gate_tx.send(()).expect("the run waits on the gate");
     assert_eq!(
         join_turn(&mut world, flight).unwrap(),
@@ -4242,7 +4370,11 @@ fn a_cancel_before_the_run_check_times_no_run() {
     prompt(&world, "hi");
     let flight = spawn_turn(&mut world);
     let mut watcher = world.log.as_ref().expect("the log is open").watch_all();
-    let _ = wait_requested(&mut watcher, "the approval is raised");
+    let _ = wait_requested(
+        &mut watcher,
+        &fakes::Deadline::after(WAIT),
+        "the approval is raised",
+    );
     assert!(
         world.clock.await_parked_unbounded(WAIT),
         "the approval wait parks on the clock"
@@ -4291,13 +4423,24 @@ fn concurrent_runs_keep_independent_spans_in_request_order() {
     let flight = spawn_turn(&mut world);
     fakes::Deadline::after(WAIT).recv_or_fail(&first_rx, "the first run is entered");
     fakes::Deadline::after(WAIT).recv_or_fail(&second_rx, "the second run is entered");
-    assert!(
-        world.clock.await_parked_unbounded(WAIT),
-        "a run parks on the clock"
-    );
+    let first_worker = first
+        .run_threads()
+        .into_iter()
+        .next()
+        .expect("the first run reports its worker");
+    let second_worker = second
+        .run_threads()
+        .into_iter()
+        .next()
+        .expect("the second run reports its worker");
     // The second finishes first: two shared milliseconds pass, then only
     // it returns. Its record lands while the first is still held.
-    world.clock.advance(Duration::from_millis(2));
+    world.clock.advance_when_parked(
+        None,
+        Some(second_worker),
+        Duration::from_millis(2),
+        &fakes::Deadline::after(WAIT),
+    );
     second_gate_tx.send(()).expect("the second run waits");
     // The first worker's span must not see the next advance: it lands
     // only after the second worker's guard dropped, proven by its record.
@@ -4312,7 +4455,12 @@ fn concurrent_runs_keep_independent_spans_in_request_order() {
         assert!(!bound.left().is_zero(), "the second run completes first");
         std::thread::yield_now();
     }
-    world.clock.advance(Duration::from_millis(3));
+    world.clock.advance_when_parked(
+        None,
+        Some(first_worker),
+        Duration::from_millis(3),
+        &fakes::Deadline::after(WAIT),
+    );
     first_gate_tx.send(()).expect("the first run waits");
     assert_eq!(
         join_turn(&mut world, flight).unwrap(),
