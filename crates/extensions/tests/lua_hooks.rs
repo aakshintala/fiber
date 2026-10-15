@@ -1585,6 +1585,21 @@ fn a_blocking_before_model_call_hook_past_its_timeout_fails() {
 #[test]
 #[allow(clippy::expect_used, reason = "a failure is the test's")]
 fn a_cancel_between_turn_end_hooks_drops_the_first_hooks_message() {
+    held_turn_end("started.fifo");
+}
+
+#[test]
+#[should_panic(expected = "turn_end answered: outcome")]
+fn a_blocked_started_fifo_reports_the_turn_end_hooks_error() {
+    held_turn_end("blocker/started.fifo");
+}
+
+/// The body both `turn_end` cancel tests share: the held hook writes
+/// `started`, `"started.fifo"` on the normal path or
+/// `"blocker/started.fifo"` past a regular file that blocks the write.
+#[allow(clippy::expect_used, reason = "a failure is the test's")]
+#[allow(clippy::panic, reason = "a test helper; a failure is the test's")]
+fn held_turn_end(started: &str) {
     let setup = Setup::new();
     let dir = setup.workspace();
     let init = format!(
@@ -1592,7 +1607,7 @@ fn a_cancel_between_turn_end_hooks_drops_the_first_hooks_message() {
          fiber.hook(\"turn_end\", {{ timeout = 60000, on_failure = \"non-blocking\",\n\
            run = function(call)\n\
              require(\"go_hold\")\n\
-             host.fs.write(dir .. \"/started.fifo\", \"x\")\n\
+             host.fs.write(dir .. \"/{started}\", \"x\")\n\
              host.fs.write(dir .. \"/release.fifo\", \"x\")\n\
              return {{ message = \"first\" }}\n\
            end }})\n\
@@ -1605,7 +1620,13 @@ fn a_cancel_between_turn_end_hooks_drops_the_first_hooks_message() {
     );
     let installed = install_lua(&setup, "hold", &json!({}), &init);
     let went = go_module(&installed, "hold");
+    // The reader always opens the real `started.fifo`; on the blocked path
+    // the hook writes to `blocker/started.fifo` past a regular file, so its
+    // write fails while the reader blocks.
     timer_fifo(&dir, "started.fifo");
+    if started != "started.fifo" {
+        write(&dir.join("blocker"), "");
+    }
     timer_fifo(&dir, "release.fifo");
     let clock = FakeClock::new();
     let session = load(&setup, &[], clock);
@@ -1660,6 +1681,21 @@ fn a_cancel_between_turn_end_hooks_drops_the_first_hooks_message() {
 #[test]
 #[allow(clippy::expect_used, reason = "a failure is the test's")]
 fn a_cancel_between_session_start_hooks_drops_the_first_hooks_context() {
+    held_session_start("started.fifo");
+}
+
+#[test]
+#[should_panic(expected = "session_start answered: outcome")]
+fn a_blocked_started_fifo_reports_the_session_start_hooks_error() {
+    held_session_start("blocker/started.fifo");
+}
+
+/// The body both `session_start` cancel tests share: the held hook writes
+/// `started`, `"started.fifo"` on the normal path or
+/// `"blocker/started.fifo"` past a regular file that blocks the write.
+#[allow(clippy::expect_used, reason = "a failure is the test's")]
+#[allow(clippy::panic, reason = "a test helper; a failure is the test's")]
+fn held_session_start(started: &str) {
     let setup = Setup::new();
     let dir = setup.workspace();
     let init = format!(
@@ -1667,7 +1703,7 @@ fn a_cancel_between_session_start_hooks_drops_the_first_hooks_context() {
          fiber.hook(\"session_start\", {{ timeout = 60000, on_failure = \"non-blocking\",\n\
            run = function(call)\n\
              require(\"go_hold\")\n\
-             host.fs.write(dir .. \"/started.fifo\", \"x\")\n\
+             host.fs.write(dir .. \"/{started}\", \"x\")\n\
              host.fs.write(dir .. \"/release.fifo\", \"x\")\n\
              return {{ context = \"first\" }}\n\
            end }})\n\
@@ -1680,7 +1716,13 @@ fn a_cancel_between_session_start_hooks_drops_the_first_hooks_context() {
     );
     let installed = install_lua(&setup, "hold", &json!({}), &init);
     let went = go_module(&installed, "hold");
+    // The reader always opens the real `started.fifo`; on the blocked path
+    // the hook writes to `blocker/started.fifo` past a regular file, so its
+    // write fails while the reader blocks.
     timer_fifo(&dir, "started.fifo");
+    if started != "started.fifo" {
+        write(&dir.join("blocker"), "");
+    }
     timer_fifo(&dir, "release.fifo");
     let clock = FakeClock::new();
     let session = load(&setup, &[], clock);
