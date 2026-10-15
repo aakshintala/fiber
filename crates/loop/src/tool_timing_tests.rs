@@ -229,12 +229,21 @@ struct ScriptProvider {
     clock: Arc<FakeClock>,
     script: Mutex<VecDeque<Answer>>,
     entered: Mutex<Option<mpsc::Sender<()>>>,
+    hold_pause: Mutex<Option<(mpsc::Sender<()>, mpsc::Receiver<()>)>>,
     calls: AtomicUsize,
 }
 
 impl ScriptProvider {
     fn called(&self) -> usize {
         self.calls.load(Ordering::SeqCst)
+    }
+
+    /// Holds the next call ahead of its hold: the call blocks on
+    /// `release` before it stores its own release, and sends
+    /// `cancelled` once its cancel has been handled. Consumed once;
+    /// later calls run as today.
+    fn pause_hold(&self, cancelled: mpsc::Sender<()>, release: mpsc::Receiver<()>) {
+        *lock(&self.hold_pause) = Some((cancelled, release));
     }
 }
 
@@ -249,12 +258,20 @@ impl Provider for ScriptProvider {
         if let Some(entered) = lock(&self.entered).take() {
             let _sent = entered.send(());
         }
+        let mut signal = None;
+        let mut pause = None;
+        if let Some((cancelled, release)) = lock(&self.hold_pause).take() {
+            signal = Some(cancelled);
+            pause = Some(release);
+        }
         Box::new(ScriptCall {
             clock: Arc::clone(&self.clock),
             answer: lock(&self.script)
                 .pop_front()
                 .expect("the script has a reply"),
             release: Mutex::new(None),
+            signal,
+            pause: Mutex::new(pause),
         })
     }
 }
@@ -263,6 +280,11 @@ struct ScriptCall {
     clock: Arc<FakeClock>,
     answer: Answer,
     release: Mutex<Option<mpsc::Sender<()>>>,
+    /// Sends once the cancel has been handled, on every cancel route.
+    signal: Option<mpsc::Sender<()>>,
+    /// Holds the run ahead of its release store; taken out and dropped
+    /// before the block, so the cancel never meets this lock.
+    pause: Mutex<Option<mpsc::Receiver<()>>>,
 }
 
 impl ModelCall for ScriptCall {
@@ -282,6 +304,15 @@ impl ModelCall for ScriptCall {
             // Parks until the test cancels the call: the release is the
             // signal the code under test is waiting on the cancellation.
             Answer::Hold => {
+                // A wired pause holds the call ahead of its release
+                // store: the test releases it only after the cancel
+                // has been handled. The channel is the test's own, so
+                // the block carries no deadline; a dropped sender
+                // releases it too.
+                let pause = lock(&self.pause).take();
+                if let Some(pause) = pause {
+                    let _released = pause.recv();
+                }
                 let (tx, rx) = mpsc::channel();
                 *lock(&self.release) = Some(tx);
                 fakes::Deadline::after(WAIT).recv_or_fail(&rx, "the test cancels the hold");
@@ -295,6 +326,11 @@ impl ModelCall for ScriptCall {
     fn cancel(&self) {
         if let Some(release) = lock(&self.release).take() {
             let _sent = release.send(());
+        }
+        // After the cancel is handled, on every route; never touches
+        // the pause, so a cancel during the blocked run cannot deadlock.
+        if let Some(signal) = &self.signal {
+            let _sent = signal.send(());
         }
     }
 }
@@ -1134,6 +1170,7 @@ fn build(setup: &Setup, home: fakes::TempDir, script: Vec<Answer>) -> World {
         script: Mutex::new(script.into_iter().collect()),
         entered: Mutex::new(None),
         calls: AtomicUsize::new(0),
+        hold_pause: Mutex::new(None),
     });
     // Every timer reads this world's clock: tools, rules and the hook
     // gate advance it from whichever thread they run on.
@@ -1206,6 +1243,7 @@ fn build(setup: &Setup, home: fakes::TempDir, script: Vec<Answer>) -> World {
             script: Mutex::new(review_answers(script).into_iter().collect()),
             entered: Mutex::new(setup.reviewer_wake.clone()),
             calls: AtomicUsize::new(0),
+            hold_pause: Mutex::new(None),
         });
         let (consecutive, session) = setup.reviewer_limits.unwrap_or((3, 20));
         looped = looped.reviewer(
@@ -1523,6 +1561,7 @@ fn exit_and_resume(world: &mut World, request: &str, script: Vec<Answer>) {
         script: Mutex::new(script.into_iter().collect()),
         entered: Mutex::new(None),
         calls: AtomicUsize::new(0),
+        hold_pause: Mutex::new(None),
     });
     let workspace = world.home.path().join("workspace");
     for tool in &world.tools {
@@ -1598,6 +1637,7 @@ fn exit_and_resume(world: &mut World, request: &str, script: Vec<Answer>) {
             script: Mutex::new(review_answers(&script).into_iter().collect()),
             entered: Mutex::new(None),
             calls: AtomicUsize::new(0),
+            hold_pause: Mutex::new(None),
         });
         let (consecutive, session) = world.reviewer_limits.unwrap_or((3, 20));
         looped = looped.reviewer(
@@ -3285,6 +3325,63 @@ fn cancelling_a_stage_ends_cancelled_with_its_record() {
         .expect("the inbox is open")
         .send(Delivery::Cancelled)
         .unwrap();
+    assert!(join_turn(&mut world, flight).is_ok());
+    assert_eq!(tool.ran(), 0, "the cancelled call never ran");
+    let records = ops(&world, "tool.reviewer");
+    assert_eq!(records.len(), 1, "the entered stage is timed");
+    assert_tool_wire(&records, "atlas");
+    assert!(
+        kinds(&world).contains(&"tool_call_completed".to_owned()),
+        "the cancelled call still completes"
+    );
+}
+
+// A cancel that lands before the hold stores its release still ends
+// the hold: the pause forces the early-cancel order on every run.
+#[test]
+fn a_cancel_before_the_hold_stores_its_release_still_ends_the_hold() {
+    let rules = Arc::new(FakeRules::default());
+    let tool = Arc::new(ProbeTool::executes("atlas", "atlas run"));
+    let mut setup = Setup::new(Arc::clone(&rules));
+    setup.tools.push(Arc::clone(&tool));
+    setup.reviewer_script = Some(vec![ReviewReply::Hold]);
+    let (entered_tx, entered_rx) = mpsc::channel();
+    setup.reviewer_wake = Some(entered_tx);
+    let home = fakes::TempDir::new("fiber-tool-timing");
+    let mut world = build(
+        &setup,
+        home,
+        vec![
+            tool_answer("atlas", json!({}), 0),
+            text_answer("Done.", 0),
+            text_answer("Spare.", 0),
+            text_answer("Spare.", 0),
+        ],
+    );
+    // Declared after `world`: a panic drops the sender first and frees
+    // the held run before `world` drops.
+    let (release_tx, release_rx) = mpsc::channel();
+    let (cancelled_tx, cancelled_rx) = mpsc::channel();
+    world
+        .reviewer
+        .as_ref()
+        .expect("a reviewer")
+        .pause_hold(cancelled_tx, release_rx);
+    prompt(&world, "hi");
+    let flight = spawn_turn(&mut world);
+    fakes::Deadline::after(WAIT).recv_or_fail(&entered_rx, "the stage starts its request");
+    assert!(
+        world.cancel.cancel(),
+        "the turn is armed while the stage runs"
+    );
+    world
+        .inbox_tx
+        .as_ref()
+        .expect("the inbox is open")
+        .send(Delivery::Cancelled)
+        .unwrap();
+    fakes::Deadline::after(WAIT).recv_or_fail(&cancelled_rx, "the call sees the cancel");
+    release_tx.send(()).expect("the hold waits");
     assert!(join_turn(&mut world, flight).is_ok());
     assert_eq!(tool.ran(), 0, "the cancelled call never ran");
     let records = ops(&world, "tool.reviewer");
