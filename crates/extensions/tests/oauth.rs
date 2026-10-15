@@ -32,6 +32,7 @@ use fakes::Deadline;
 use fakes::OauthReply;
 use fakes::OauthServer;
 use fakes::clock::FakeClock;
+use fakes::{ProviderServer, Response};
 use serde_json::{Value, json};
 
 /// How long a test waits for one call, a socket or a server.
@@ -1661,44 +1662,22 @@ end } })
             .with_secrets(secrets(&["url", "http"])),
     );
     // A test HTTP server that holds its response until released.
-    let listener = TcpListener::bind((Ipv4Addr::LOCALHOST, 0)).unwrap();
-    let http = format!("http://{}/", listener.local_addr().unwrap());
+    let server = ProviderServer::start([Response::status(200, "ok")]).unwrap();
+    server.hold();
+    let http = format!("{}/", server.url());
     env.secret("url", "https://auth.example");
     env.secret("http", &http);
-    let (accepted_tx, accepted_rx) = mpsc::channel();
-    let (release_tx, release_rx) = mpsc::channel::<()>();
-    std::thread::spawn(move || {
-        let mut sock = listener.accept().unwrap().0;
-        sock.set_read_timeout(Some(WAIT)).unwrap();
-        let mut buf = [0; 1];
-        let mut seen = Vec::new();
-        loop {
-            match sock.read(&mut buf) {
-                Ok(0) | Err(_) => break,
-                Ok(_) => seen.push(buf[0]),
-            }
-            if seen.ends_with(b"\r\n\r\n") {
-                break;
-            }
-        }
-        accepted_tx.send(()).unwrap();
-        match release_rx.recv() {
-            Ok(()) | Err(_) => {}
-        }
-        drop(
-            sock.write_all(b"HTTP/1.1 200 OK\r\nContent-Length: 2\r\nConnection: close\r\n\r\nok"),
-        );
-    });
     let provider = LuaProvider::new(Arc::clone(&ext), "acme");
     let rx = start_token(&provider);
-    Deadline::after(WAIT)
-        .recv(&accepted_rx)
-        .expect("the credential never reached the held endpoint");
+    assert!(
+        server.await_requests(1, WAIT),
+        "the credential never reached the held endpoint"
+    );
     assert_eq!(
         run(&ext, "ping", "", &Deadline::after(WAIT)).unwrap(),
         "pong"
     );
-    release_tx.send(()).unwrap();
+    server.release();
     let error = finish(&rx, &Deadline::after(WAIT)).unwrap_err();
     assert_eq!(error.code(), ErrorCode::AuthenticationFailed, "{error}");
     assert!(error.to_string().contains("host.oauth.open"), "{error}");
