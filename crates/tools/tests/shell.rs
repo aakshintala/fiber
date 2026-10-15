@@ -19,7 +19,7 @@ use std::time::{Duration, Instant};
 use contract::ErrorCode;
 use contract::clock::Wake;
 use contract::events::{JobStarted, Outcome};
-use contract::jobs::{JobRecord, Jobs as _};
+use contract::jobs::{Foreground, JobRecord, Jobs, OpenError, Opened, Opening, WriteError};
 use contract::shapes::{ContentPart, Process};
 use contract::tool::{Cancel, Tool};
 use fakes::Deadline;
@@ -1588,6 +1588,92 @@ fn a_failed_open_leaves_the_command_running_in_the_foreground() {
 // `tty`: the command runs in a pseudo-terminal and moves to the background
 // at once (`docs/tools.md`, "Terminal (`tty`)").
 
+/// Holds `FakeJobs::open` until the test releases it, so the pty reader
+/// takes the test's bytes before `attach_output` runs: bytes read before
+/// the attach reach the receipt only, never a `job_delta`.
+struct HeldOpen {
+    jobs: Arc<FakeJobs>,
+    gate: Mutex<mpsc::Receiver<()>>,
+}
+
+impl HeldOpen {
+    fn new(jobs: Arc<FakeJobs>, gate: mpsc::Receiver<()>) -> Arc<Self> {
+        Arc::new(Self {
+            jobs,
+            gate: Mutex::new(gate),
+        })
+    }
+}
+
+impl Jobs for HeldOpen {
+    fn open(&self, opening: Opening) -> Result<Opened, OpenError> {
+        // A closed sender releases the wait too, so the test ending drops
+        // it and never hangs the call thread.
+        let _ = self.gate.lock().unwrap().recv();
+        self.jobs.open(opening)
+    }
+
+    fn stop(&self, job_id: &contract::JobId) -> bool {
+        self.jobs.stop(job_id)
+    }
+
+    fn background(&self) -> usize {
+        self.jobs.background()
+    }
+
+    fn foreground(&self, call: Foreground) {
+        self.jobs.foreground(call);
+    }
+
+    fn running(&self) -> Vec<contract::JobId> {
+        self.jobs.running()
+    }
+
+    fn stop_delegates(&self) -> usize {
+        self.jobs.stop_delegates()
+    }
+
+    fn deliver_to(&self, inbox: mpsc::Sender<contract::inbox::Delivery>) {
+        self.jobs.deliver_to(inbox);
+    }
+
+    fn write(&self, job_id: &contract::JobId, text: &str) -> Result<(), WriteError> {
+        self.jobs.write(job_id, text)
+    }
+}
+
+fn start_tty_held(
+    dir: PathBuf,
+    command: String,
+    timeout_ms: Option<u64>,
+    held: Arc<HeldOpen>,
+    jobs: Arc<FakeJobs>,
+) -> JobRun {
+    let clock = FakeClock::new();
+    let start = clock.origin();
+    let shell = Shell::new(dir, Arc::clone(&clock) as Arc<dyn contract::clock::Clock>)
+        .with_jobs(Arc::clone(&held) as Arc<dyn Jobs>);
+    let mut arguments = args(&command);
+    if let Some(timeout_ms) = timeout_ms {
+        arguments.insert("timeout_ms".into(), json!(timeout_ms));
+    }
+    arguments.insert("tty".into(), json!(true));
+    let recorder = Arc::new(Recorder::default());
+    let tapped = Arc::clone(&recorder);
+    let (tx, rx) = mpsc::channel();
+    thread::spawn(move || {
+        tx.send(shell.run(&arguments, &CancelToken::new(), tapped.as_ref()))
+            .unwrap();
+    });
+    JobRun {
+        clock,
+        start,
+        output: rx,
+        jobs,
+        recorder,
+    }
+}
+
 fn start_tty(
     dir: PathBuf,
     command: String,
@@ -1828,16 +1914,28 @@ fn a_tty_job_past_its_timeout_fails_and_stop_cancels_it() {
     let dir = fakes::TempDir::new("fiber-shell-tty-timeout");
     let ready = Ready::new(dir.path());
     let jobs = FakeJobs::new(dir.path());
+    let (open_tx, open_rx) = mpsc::channel();
+    let held = HeldOpen::new(Arc::clone(&jobs), open_rx);
+    // The filler blocks the child until the pty reader has taken `S`, so
+    // the second ready line proves `S` was consumed before `open` runs.
+    // `open` stays held until then, so `S` lands in the receipt only.
+    let body = format!(
+        "printf S\nhead -c 921600 /dev/zero | tr '\\0' x\necho $$ >> {ready}\nread x\n",
+        ready = quote(ready.path()),
+    );
     // One byte goes out in one `job_delta`, so no second chunk can arm
     // the pacing hold: the loop's next park after the send is the timeout.
-    let running = start_tty(
+    let running = start_tty_held(
         dir.path().to_path_buf(),
-        on_terminal(ready.path(), "printf S\nread x\n"),
+        on_terminal(ready.path(), &body),
         Some(5_000),
+        Arc::clone(&held),
         Arc::clone(&jobs),
     );
     let pgid = ready.wait(CHILD_START)[0];
     let watchdog = Watchdog::group(pgid);
+    let _own = ready.wait(DEADLINE);
+    drop(open_tx);
     assert!(
         running
             .clock
