@@ -113,6 +113,12 @@ fn band_cells(grid: &Grid) -> Option<(u16, usize, usize, usize)> {
     }) {
         return None;
     }
+    // The lower edge starts at the content's left column: no stray ▀
+    // before it.
+    let lower_first = (0..160).find(|col| grid.cell(*col as u16, below_y).symbol == "▀");
+    if lower_first != Some(left) {
+        return None;
+    }
     Some((band, left, right, sizes_at))
 }
 
