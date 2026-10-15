@@ -53,6 +53,16 @@ fn prompt(deadline: Deadline, client: &Client) {
         .unwrap();
 }
 
+/// Waits for the subscribe's `command_accepted`, so the prompt that
+/// follows cannot overtake it.
+fn subscribed(deadline: Deadline, client: &Client) {
+    client
+        .recv_until(deadline.left(), |line| {
+            line["kind"] == "command_accepted" && line["payload"]["command_id"] == "c_sub"
+        })
+        .expect("the subscribe is accepted");
+}
+
 fn requested(deadline: Deadline, client: &Client) -> Value {
     client
         .recv_until(deadline.left(), |line| {
@@ -488,11 +498,13 @@ fn an_elicitation_with_two_calls_in_flight_names_both() {
     let client = running.connect_client(&setup.socket(&id));
     running.wait_for("extensions_loaded");
     subscribe(setup.deadline, &client);
+    subscribed(setup.deadline, &client);
     prompt(setup.deadline, &client);
     // `hold` is held first: its acknowledgement proves it is registered,
     // so the elicitation lists it alongside `ask`.
     assert_eq!(
-        read_fifo(setup.deadline, dir.join("held-hold")).expect("the fifo reads in time"),
+        read_held(setup.deadline, setup.deadline, &running, &dir, "hold")
+            .unwrap_or_else(|message| panic!("{message}")),
         "held\n",
     );
     write_fifo(setup.deadline, dir.join("release-ask"));
