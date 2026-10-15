@@ -1,5 +1,6 @@
 ---
 source: crates/tui/src/view/request_tests.rs
+assertion_line: 209
 expression: "screen(&app, 60, 12).0"
 ---
 ▌ Question from s_aaaaaaaaaaaaaaaa · 2 questions, any can be
@@ -11,6 +12,6 @@ expression: "screen(&app, 60, 12).0"
 ▌ Name         skipped
 ▌ ▸ note by friday
 ▌
-▌  Submit   Chat about this   declines and ends the turn, so
-▌ you can answer in your own words
-▌
+▌  Submit
+▌  Chat about this
+▌   declines and ends the turn, so you can answer in your

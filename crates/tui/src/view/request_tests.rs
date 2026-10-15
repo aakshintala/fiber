@@ -412,7 +412,11 @@ fn a_narrow_submit_tab_keeps_chat_about_this_clickable() {
     let line = shown.lines().nth(row).unwrap_or_default();
     let col = line.find("Chat").unwrap_or_default().saturating_add(1);
     assert_eq!(
-        hit(&targets, u16::try_from(col).unwrap_or(u16::MAX), u16::try_from(row).unwrap_or(u16::MAX)),
+        hit(
+            &targets,
+            u16::try_from(col).unwrap_or(u16::MAX),
+            u16::try_from(row).unwrap_or(u16::MAX)
+        ),
         Some(TargetId::Form(Spot::Chat)),
         "{shown}"
     );

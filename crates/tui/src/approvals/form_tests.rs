@@ -866,7 +866,12 @@ fn the_tab_row_marks_each_state() {
         .collect();
     assert_eq!(
         marks,
-        [(0..4, dim()), (4..15, accent_reversed()), (42..54, dim()), (54..58, dim()),]
+        [
+            (0..4, dim()),
+            (4..15, accent_reversed()),
+            (42..54, dim()),
+            (54..58, dim()),
+        ]
     );
     // Nothing answered: no tab is accent.
     let plain = form(json!([
@@ -885,7 +890,12 @@ fn the_tab_row_marks_each_state() {
         .collect();
     assert_eq!(
         marks,
-        [(0..4, dim()), (4..15, reversed()), (30..42, dim()), (42..46, dim()),]
+        [
+            (0..4, dim()),
+            (4..15, reversed()),
+            (30..42, dim()),
+            (42..46, dim()),
+        ]
     );
 }
 
