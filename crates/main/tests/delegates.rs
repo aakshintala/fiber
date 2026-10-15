@@ -2363,7 +2363,48 @@ fn install_pb_without_credential(setup: &support::Setup, url: &str) {
 /// The parent's durable kinds, in order, for the early-failure run below:
 /// the spawn call and its reviewer verdict, the wait that claims the
 /// failure, the list that shows it, and the final text.
-const EARLY_FAILURE_PARENT_DURABLE: &[&str] = &[];
+const EARLY_FAILURE_PARENT_DURABLE: &[&str] = &[
+    "session_started",
+    "fiber_started",
+    "extensions_loaded",
+    "preamble_built",
+    "opening_message",
+    "turn_started",
+    "step_started",
+    "assistant_message_started",
+    "tool_call_requested",
+    "usage_recorded",
+    "assistant_message_completed",
+    "usage_recorded",
+    "permission_resolved",
+    "tool_call_started",
+    "job_started",
+    "delegate_started",
+    "tool_call_completed",
+    "step_started",
+    "assistant_message_started",
+    "tool_call_requested",
+    "usage_recorded",
+    "assistant_message_completed",
+    "tool_call_started",
+    "delegate_finished",
+    "job_completed",
+    "tool_call_completed",
+    "step_started",
+    "assistant_message_started",
+    "tool_call_requested",
+    "usage_recorded",
+    "assistant_message_completed",
+    "tool_call_started",
+    "tool_call_completed",
+    "step_started",
+    "assistant_message_started",
+    "text_completed",
+    "usage_recorded",
+    "assistant_message_completed",
+    "turn_completed",
+    "fiber_exited",
+];
 
 #[test]
 fn a_delegate_failing_before_session_reports_its_error_and_no_log_path() {
