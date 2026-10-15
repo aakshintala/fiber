@@ -271,7 +271,7 @@ impl Connection {
 
 /// The connection is gone: the hub thread stops waiting for a permit, and
 /// a reader blocked on the stream sees its end. The permit's quit comes
-/// before the hang-up, as the loop's drop did.
+/// before the hang-up.
 impl Drop for Connection {
     fn drop(&mut self) {
         if let Some(retry) = &self.retry {
