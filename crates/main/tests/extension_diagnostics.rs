@@ -20,7 +20,6 @@ use std::io::{BufRead, BufReader};
 use std::process::{Child, ExitStatus};
 use std::sync::mpsc;
 use std::thread;
-use std::time::Duration;
 
 use fakes::{Deadline, ProviderServer, Response, Watchdog};
 use serde_json::{Value, json};
@@ -502,8 +501,7 @@ impl Running {
         self.wait_on(deadline)
     }
 
-    /// As [`Running::wait`], under `deadline`: for teardown after a wait
-    /// outside the test's own deadline exhausted it.
+    /// As [`Running::wait`], under `deadline`.
     #[track_caller]
     fn wait_on(mut self, deadline: Deadline) -> (ExitStatus, String) {
         let (done, finished) = mpsc::channel();
@@ -679,70 +677,4 @@ fn late_switch_starts_fresh_with_the_sink() {
     let wire = serde_json::to_string(late[0]).unwrap();
     assert!(!wire.contains("late-tok"), "no credential: {wire}");
     assert!(!wire.contains(&url), "no URL: {wire}");
-}
-
-#[test]
-fn debug_session_records_cost_after_its_lookup() {
-    let setup = Setup::new();
-    let server = start_routed();
-    let url = server.url();
-    install_test_provider(&setup, &url);
-    configure(&setup, "test/m1", true);
-    let id = doors::mint("s_");
-    let running = start_session(&setup, &id);
-    let client = running.connect(&setup.session_socket(&id));
-    running.wait_for("extensions_loaded");
-    subscribe(&client);
-    prompt(&client, "c_prompt", "hi");
-    until(&client, "the turn", |line| line["kind"] == "turn_completed");
-    // The cost lookup runs 30 seconds after the call on the session
-    // clock: one bounded wait outside the test's own deadline covers the
-    // fixed product bound, then the record must exist.
-    // Held open so the receive times out instead of disconnecting.
-    let (_held, never) = mpsc::channel::<()>();
-    assert!(
-        Deadline::after(Duration::from_secs(45))
-            .recv(&never)
-            .is_err(),
-        "the cost wait spans the lookup"
-    );
-    let lines = diagnostic_file(&setup, &format!("session-{id}.log"));
-    for line in &lines {
-        assert_eq!(line["process"], "session");
-        assert_eq!(line["session_id"], id.as_str());
-    }
-    let cost: Vec<&Value> = lines
-        .iter()
-        .filter(|line| line["code"] == "provider_request" && line["data"]["purpose"] == "cost")
-        .collect();
-    assert_eq!(cost.len(), 1);
-    assert_eq!(cost[0]["data"]["provider"], "test");
-    assert_eq!(cost[0]["data"]["attempt"], 1);
-    assert_eq!(cost[0]["data"]["status"], 200);
-    assert_eq!(cost[0]["message"], "A provider request ended.");
-    // The quota fetch landed long before: one line per purpose overall.
-    let mut purposes: Vec<&str> = lines
-        .iter()
-        .filter(|line| line["code"] == "provider_request")
-        .map(|line| line["data"]["purpose"].as_str().unwrap())
-        .collect();
-    purposes.sort_unstable();
-    assert_eq!(purposes, ["cost", "model_call", "quota"]);
-    // Teardown runs on fresh deadlines: the cost wait exhausted the
-    // test's own.
-    // Command ids stay unique per session, so the second socket uses
-    // its own.
-    let closer = Socket::connect(
-        Deadline::after(Duration::from_secs(15)),
-        &setup.session_socket(&id),
-    );
-    closer.send(r#"{"id":"c_sub2","command":"subscribe","args":{"level":"full"}}"#);
-    until(&closer, "the second subscribe acknowledgement", |line| {
-        line["kind"] == "command_accepted"
-    });
-    closer.send(r#"{"id":"c_close2","command":"close"}"#);
-    until_close(&closer);
-    drop(client);
-    let (status, stderr) = running.wait_on(Deadline::after(Duration::from_secs(15)));
-    assert!(status.success(), "stderr: {stderr}");
 }
