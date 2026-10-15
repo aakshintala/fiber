@@ -422,6 +422,24 @@ fn the_bar_cursor_sits_on_the_block_after_the_query() {
     );
 }
 
+#[test]
+fn the_cursor_hides_while_the_results_are_open() {
+    let mut app = replied(40, 12, "needle one\n\nneedle two");
+    search(&mut app, "needle");
+    let now = fakes::clock::FakeClock::new().now();
+    // A second Ctrl+F opens the results; the bar is hidden, so its
+    // cursor hides too.
+    assert_eq!(app.on_key(Key::CtrlF, now), Effect::None);
+    assert!(app.results_open(), "the results are open");
+    assert_eq!(crate::view::cursor(&app, Rect::new(0, 0, 40, 12)), None);
+    // Esc closes the view; the cursor sits on the bar's block again.
+    assert_eq!(app.on_key(Key::Esc, now), Effect::None);
+    assert!(!app.results_open());
+    let at = crate::view::cursor(&app, Rect::new(0, 0, 40, 12)).expect("the bar cursor");
+    let (buf, _) = draw(&app, 40, 12);
+    assert_eq!(buf[(at.x, at.y)].symbol(), "█");
+}
+
 /// A bar with `query` and `count` for the direct draw tests.
 fn find_bar(query: &str, count: &str) -> FindBar {
     FindBar {
