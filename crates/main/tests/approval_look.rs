@@ -193,6 +193,13 @@ fn a_standing_ask_draws_the_panel_typing_feeds_back_and_esc_puts_it_aside() {
         assert_eq!(cell.fg, ERROR, "col {dx}");
         assert!(cell.bold, "col {dx}");
     }
+    // The session in `attention`, not bold.
+    let session = col_at(&grid, header, "run it");
+    for dx in 0..6 {
+        let cell = grid.cell(session + dx, header);
+        assert_eq!(cell.fg, ATTENTION, "col {dx}");
+        assert!(!cell.bold, "col {dx}");
+    }
     // The tool's name and its main argument, then the facts line: the
     // tool row sits right below the header.
     let tool = header + 1;
@@ -212,10 +219,33 @@ fn a_standing_ask_draws_the_panel_typing_feeds_back_and_esc_puts_it_aside() {
         "{}",
         grid.contents
     );
-    // The choices, numbered, and the hint.
-    row_with(&grid, "▸ 1 Allow once");
+    // The facts line is dim.
+    let runs = col_at(&grid, facts, "runs a command");
+    for dx in [0, 13] {
+        assert!(grid.cell(runs + dx, facts).dim, "col {dx}");
+    }
+    let cargo = col_at(&grid, facts, "cargo");
+    for dx in [0, 4] {
+        assert!(grid.cell(cargo + dx, facts).dim, "col {dx}");
+    }
+    // The choices, numbered, and the hint: the focused mark in
+    // `attention", its label bold, the number dim, the hint dim.
+    let focused = row_with(&grid, "▸ 1 Allow once");
+    let pointed = col_at(&grid, focused, "▸");
+    assert_eq!(grid.cell(pointed, focused).fg, ATTENTION);
+    let chosen = col_at(&grid, focused, "Allow once");
+    for dx in [0, 5, 9] {
+        let cell = grid.cell(chosen + dx, focused);
+        assert!(cell.bold, "col {dx}");
+    }
+    let number = col_at(&grid, focused, "1 Allow once");
+    assert!(grid.cell(number, focused).dim);
     row_with(&grid, "2 Deny");
-    row_with(&grid, "↑↓ choose");
+    let hint = row_with(&grid, "↑↓ choose");
+    let hint_at = col_at(&grid, hint, "↑↓ choose");
+    for dx in [0, 10, 30] {
+        assert!(grid.cell(hint_at + dx, hint).dim, "col {dx}");
+    }
     // Typing "2" is feedback, not a choice: the panel stays open with
     // "2" on deny, and no reply goes out.
     run.write(b"2");
@@ -267,13 +297,24 @@ fn a_reviewer_failure_escalates_to_an_alert_panel() {
         .rev()
         .find(|x| grid.cell(*x, header).bg == ALERT_BG)
         .expect("the tinted run");
-    for y in [header] {
+    // Every panel row takes the alert tint with an error stripe: ten
+    // text rows from the header to the bottom edge.
+    let bottom = (header..48)
+        .find(|y| {
+            grid.rows[usize::from(*y)]
+                .chars()
+                .take(usize::from(end) + 1)
+                .all(|cell| cell == '▀')
+        })
+        .expect("the bottom edge");
+    assert_eq!(bottom - header, 10, "ten text rows to the edge");
+    for y in header..bottom {
         for x in 0..end + 1 {
             assert_eq!(grid.cell(x, y).bg, ALERT_BG, "({x}, {y})");
         }
+        assert_eq!(grid.cell(0, y).symbol.as_str(), "▌", "row {y}");
+        assert_eq!(grid.cell(0, y).fg, ERROR, "row {y}");
     }
-    assert_eq!(grid.cell(0, header).symbol.as_str(), "▌");
-    assert_eq!(grid.cell(0, header).fg, ERROR);
     let facts = row_with(&grid, "the reviewer failed");
     assert!(
         grid.rows[usize::from(facts)]

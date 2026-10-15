@@ -88,6 +88,26 @@ const FOCUS: Style = Style::new().fg(crate::theme::Role::Attention.color());
 /// (`docs/tui.md`, "An approval").
 const REMEMBER: Style = Style::new().fg(crate::theme::Role::Info.color());
 
+/// The tail kept visible on a choice row past `prefix_cells` cells at
+/// `width` columns: the tail's end, like a form's words row, so a long
+/// tail never wraps the row and the cursor stays on it
+/// (`docs/tui.md`, "An approval").
+fn scrolled_tail(tail: &str, prefix_cells: usize, width: usize) -> String {
+    let take = width.saturating_sub(prefix_cells);
+    let mut kept = String::new();
+    let mut taken: usize = 0;
+    for ch in tail.chars().rev() {
+        let mut encoded = [0; 4];
+        let cell = format::width(ch.encode_utf8(&mut encoded));
+        if taken.saturating_add(cell) > take {
+            break;
+        }
+        taken = taken.saturating_add(cell);
+        kept.insert(0, ch);
+    }
+    kept
+}
+
 /// The hint below the choices (`docs/tui.md`, "An approval").
 const HINT: &str = "↑↓ choose · Enter confirms · typing goes to the feedback · click a choice";
 
@@ -321,6 +341,16 @@ impl Approval {
             let number = index.saturating_add(1).to_string();
             let (head, tail) = self.label(*choice);
             let seen = if focused { "▸ " } else { "  " };
+            let tail = tail.map(|(text, style)| {
+                let prefix_cells = format::width(seen)
+                    .saturating_add(number.len())
+                    .saturating_add(1)
+                    .saturating_add(format::width(&head));
+                (
+                    scrolled_tail(&text, prefix_cells, usize::from(width)),
+                    style,
+                )
+            });
             let line = lines.len();
             let number_from = seen.len();
             let head_from = number_from.saturating_add(number.len()).saturating_add(1);

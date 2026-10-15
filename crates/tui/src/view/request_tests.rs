@@ -1247,3 +1247,39 @@ fn a_run_to_the_line_end_adds_no_empty_plain_run() {
         ratatui::text::Line::from(vec![ratatui::text::Span::styled("abcdef", red)])
     );
 }
+
+#[test]
+fn long_feedback_keeps_the_cursor_on_the_deny_row() {
+    let mut queue = queued(&[approval_request(
+        "r_1",
+        "a_1",
+        json!({"step": "standing_ask",
+            "standing_rule": {"scope": "global", "prefix": "echo hi"}}),
+    )]);
+    for _ in 0..100 {
+        queue.on_key(&crate::keys::Key::Char('y'));
+    }
+    // The prefix takes 8 cells of 78, so the row shows the feedback's
+    // last 70 characters on one row, with the cursor on its last cell.
+    let panel = panel_at(&queue, 80);
+    assert_eq!(panel.caret, Some((4, 78)));
+    let area = Rect::new(0, 0, 80, 12);
+    let mut buf = Buffer::empty(area);
+    let mut targets = Vec::new();
+    draw(&panel, area, area.bottom(), &mut buf, &mut targets);
+    assert_eq!(
+        super::caret(&panel, area, area.bottom()),
+        Some(ratatui::layout::Position::new(79, 8))
+    );
+    // The deny row takes one visual row: the next row is the blank one.
+    let (shown, _, _) = drawn_at(&panel, 80, 12);
+    let rows: Vec<&str> = shown.lines().collect();
+    for (y, row) in rows.iter().enumerate() {
+        if row.contains("Deny") {
+            assert_eq!(y, 8, "{shown}");
+        }
+    }
+    assert!(rows[8].contains("Deny"), "{shown}");
+    // The next row is the blank one: the stripe alone.
+    assert_eq!(rows[9], "▌", "{shown}");
+}

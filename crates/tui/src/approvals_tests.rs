@@ -586,6 +586,43 @@ fn focusing_a_choice_bolds_its_label_and_tail() {
 }
 
 #[test]
+fn long_feedback_scrolls_to_its_end_so_the_row_never_wraps() {
+    let mut queue = folded(&[standing_ask(S_A, "a_1", "r_1", "echo hi")]);
+    for ch in "y".repeat(96).chars().chain("END!".chars()) {
+        press(&mut queue, Key::Char(ch), 1);
+    }
+    // The prefix takes 8 cells, so 72 stay for the tail: the row shows
+    // the feedback's end on one 80-cell row, with the cursor after it.
+    let deny = row(&queue, 4);
+    assert_eq!(crate::format::width(&deny), 80);
+    assert!(deny.ends_with("END!"), "{deny}");
+    assert_eq!(rendered(&queue).caret, Some((4, 80)));
+    // Away from deny the row stays scrolled, with no caret.
+    press(&mut queue, Key::Up, 1);
+    assert_eq!(crate::format::width(&row(&queue, 4)), 80);
+    assert_eq!(rendered(&queue).caret, None);
+}
+
+#[test]
+fn feedback_that_exactly_fits_shows_whole_and_one_cell_more_scrolls() {
+    // The prefix takes 8 cells: a 70-character feedback with its two
+    // spaces fits 80 exactly and shows whole.
+    let mut queue = folded(&[standing_ask(S_A, "a_1", "r_1", "echo hi")]);
+    for _ in 0..70 {
+        press(&mut queue, Key::Char('x'), 1);
+    }
+    assert_eq!(row(&queue, 4), format!("▸ 2 Deny  {}", "x".repeat(70)));
+    assert_eq!(rendered(&queue).caret, Some((4, 80)));
+    // One cell more: the leading space gives way to the feedback's end.
+    let mut queue = folded(&[standing_ask(S_A, "a_1", "r_1", "echo hi")]);
+    for _ in 0..71 {
+        press(&mut queue, Key::Char('x'), 1);
+    }
+    assert_eq!(row(&queue, 4), format!("▸ 2 Deny {}", "x".repeat(71)));
+    assert_eq!(rendered(&queue).caret, Some((4, 80)));
+}
+
+#[test]
 fn each_choice_sends_its_answer() {
     let cases = [
         (
