@@ -230,10 +230,11 @@ fn read_input(mut tty: File, mut woken: &PipeReader, gate: &Gate, tx: &Sender<In
 /// which dropping the loop does.
 pub(crate) fn spawn_hub(
     mut connect: Connect,
-    tx: Sender<Input>,
+    feed: impl Into<link::Feed>,
     retry: Arc<Retry>,
     clock: Arc<dyn Clock>,
 ) {
+    let feed = feed.into();
     let hub = builder("tui-hub").spawn(move || {
         loop {
             let connected = connect().and_then(|(stream, hello)| {
@@ -246,19 +247,25 @@ pub(crate) fn spawn_hub(
             // adopts the connection still ends it, and its stop ends it
             // even when `shutdown` misses the wakeup (#1877).
             match connected {
-                Ok((stream, reader, stop, hello)) => match retry.track(&stream, stop) {
-                    Ok(false) => return,
-                    Err(error) => {
-                        drop(tx.send(Input::ConnectFailed(error.to_string())));
-                    }
-                    Ok(true) => {
-                        if tx.send(Input::Connected(stream, hello)).is_ok() {
-                            link::read_lines(reader, &tx);
+                Ok((stream, reader, stop, hello)) => {
+                    // The lane is captured before the stream is tracked:
+                    // a reader `Retry` stops is always a cancelled
+                    // reader, so a capacity wait always ends.
+                    let lane = feed.lane();
+                    match retry.track(&stream, stop) {
+                        Ok(false) => return,
+                        Err(error) => {
+                            drop(feed.send(Input::ConnectFailed(error.to_string())));
                         }
-                        retry.untrack();
+                        Ok(true) => {
+                            if lane.send(Input::Connected(stream, hello)).is_ok() {
+                                link::read_lines(reader, &lane);
+                            }
+                            retry.untrack();
+                        }
                     }
-                },
-                Err(error) => drop(tx.send(Input::ConnectFailed(error.to_string()))),
+                }
+                Err(error) => drop(feed.send(Input::ConnectFailed(error.to_string()))),
             }
             if !retry.wait(clock.as_ref()) {
                 return;
