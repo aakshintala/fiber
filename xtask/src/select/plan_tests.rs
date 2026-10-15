@@ -452,6 +452,9 @@ fn an_unmapped_path_selects_every_row() {
 
 #[test]
 fn a_docs_file_selects_no_row() {
+    // The pinned literal list of the six names in table order, cited by
+    // `crates/bench/examples/bench/main_tests.rs`: each side names the
+    // other.
     let all = vec![
         "session start",
         "sessions list",
@@ -538,24 +541,6 @@ fn an_empty_diff_or_a_push_skips_nothing() {
     assert_eq!(
         skipped("push", &["crates/tui/src/editor.rs"]),
         Vec::<&'static str>::new()
-    );
-}
-
-#[test]
-fn the_six_base_rows_stand_in_table_order() {
-    // The pinned literal list of the six names in table order, cited by
-    // `crates/bench/examples/bench/main_tests.rs`: each side names the
-    // other.
-    assert_eq!(
-        skipped("pull_request", &["docs/ci.md"]),
-        vec![
-            "session start",
-            "sessions list",
-            "terminal first frame",
-            "terminal attach",
-            "terminal wheel",
-            "paging",
-        ]
     );
 }
 
