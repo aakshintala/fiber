@@ -132,14 +132,19 @@ fn col_at(grid: &Grid, y: u16, needle: &str) -> u16 {
 /// satisfy the wait. Returns the content row and the slab's columns.
 fn slab_cells(grid: &Grid) -> Option<(u16, u16, u16)> {
     let y = row_with_or(&grid.rows, "1 of 5")?;
-    let text: String = (0..160u16).map(|x| grid.cell(x, y).symbol.clone()).collect();
+    let text: String = (0..160u16)
+        .map(|x| grid.cell(x, y).symbol.clone())
+        .collect();
     if !text.contains("⌕ lock") {
         return None;
     }
     // The slab's run: the contiguous `surface` run around the count,
     // so other `surface` cells on the row (a rail card, say) stay out.
-    let count_first =
-        u16::try_from(text.find("1 of 5").map(|byte| text[..byte].chars().count())?).ok()?;
+    let count_first = u16::try_from(
+        text.find("1 of 5")
+            .map(|byte| text[..byte].chars().count())?,
+    )
+    .ok()?;
     let mut first = count_first;
     while first > 0 && grid.cell(first - 1, y).bg == SURFACE {
         first -= 1;
@@ -156,7 +161,9 @@ fn slab_cells(grid: &Grid) -> Option<(u16, u16, u16)> {
     }
     // The content row reads " ⌕ lock█" then the count with one trailing
     // blank, right-aligned in its 40 columns.
-    let content: String = (first..=last).map(|x| grid.cell(x, y).symbol.clone()).collect();
+    let content: String = (first..=last)
+        .map(|x| grid.cell(x, y).symbol.clone())
+        .collect();
     if !content.starts_with(" ⌕ lock█") {
         return None;
     }
@@ -165,7 +172,12 @@ fn slab_cells(grid: &Grid) -> Option<(u16, u16, u16)> {
     }
     // " ⌕ " in `attention`, the query bold, the █ and the count dim.
     let at = first.checked_add(
-        u16::try_from(content.find('⌕').map(|byte| content[..byte].chars().count())?).ok()?,
+        u16::try_from(
+            content
+                .find('⌕')
+                .map(|byte| content[..byte].chars().count())?,
+        )
+        .ok()?,
     )?;
     if grid.cell(at, y).fg != ATTENTION {
         return None;
@@ -214,7 +226,9 @@ fn slab_cells(grid: &Grid) -> Option<(u16, u16, u16)> {
 
 /// The first row containing `needle`, if any.
 fn row_with_or(rows: &[String], needle: &str) -> Option<u16> {
-    rows.iter().position(|row| row.contains(needle)).and_then(|y| u16::try_from(y).ok())
+    rows.iter()
+        .position(|row| row.contains(needle))
+        .and_then(|y| u16::try_from(y).ok())
 }
 
 /// A press at `(from, y)`, a drag to `(to, y)` and its release, in one
