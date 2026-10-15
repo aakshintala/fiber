@@ -374,14 +374,21 @@ pub(crate) struct Search {
 }
 
 impl Search {
-    /// Starts the worker on its own thread: `listing` runs there, and each
-    /// result goes to `out` as [`Input::Files`]. The thread is detached;
-    /// it ends once this handle is dropped or `out` hangs up. A worker
-    /// that cannot start answers every search with why, as [`unstarted`].
+    /// Starts the worker on its own thread: each result goes to `out` as
+    /// [`Input::Files`]. The thread is detached; it ends once this handle
+    /// is dropped or `out` hangs up. A worker that cannot start answers
+    /// every search with why, as [`unstarted`].
+    ///
+    /// A workspace query searches the listing, which runs on the worker
+    /// on the first workspace job only, so a path query typed at once
+    /// never waits on `git ls-files`; a path query resolves its base
+    /// against `roots` and walks it instead, ignoring the listing even
+    /// when it failed.
     ///
     /// [`unstarted`]: Self::unstarted
     pub(crate) fn spawn(
         listing: impl FnOnce() -> Result<Vec<String>, String> + Send + 'static,
+        roots: Roots,
         out: Sender<Input>,
     ) -> Self {
         let (jobs, inbox) = mpsc::channel::<(u64, String)>();
@@ -389,21 +396,45 @@ impl Search {
         let newest = Arc::clone(&current);
         let failed = out.clone();
         let worker = crate::sources::builder("tui-files").spawn(move || {
-            let listed = listing();
+            let mut listing = Some(listing);
+            let mut listed: Option<Result<Vec<String>, String>> = None;
             while let Ok(mut job) = inbox.recv() {
                 while let Ok(next) = inbox.try_recv() {
                     job = next;
                 }
                 let (generation, query) = job;
-                let result = match &listed {
-                    Ok(paths) => {
-                        let cancelled = || newest.load(Ordering::Relaxed) != generation;
-                        let Some(found) = rank(paths, &query, cancelled) else {
-                            continue;
-                        };
-                        Ok(found)
+                let cancelled = || newest.load(Ordering::Relaxed) != generation;
+                let result = match split(&query) {
+                    Query::Workspace(seek) => {
+                        if listed.is_none() {
+                            if let Some(list) = listing.take() {
+                                listed = Some(list());
+                            }
+                        }
+                        match &listed {
+                            Some(Ok(paths)) => {
+                                let Some(found) = rank(paths, seek, cancelled) else {
+                                    continue;
+                                };
+                                Ok(found)
+                            }
+                            Some(Err(error)) => Err(error.clone()),
+                            // The listing runs on the first workspace job,
+                            // so it is always held past one.
+                            None => continue,
+                        }
                     }
-                    Err(error) => Err(error.clone()),
+                    Query::Path { base_text, query: seek } => {
+                        match resolve(base_text, &roots) {
+                            Err(reason) => Err(reason),
+                            Ok(base) => {
+                                match find(&base, base_text, seek, &Limits::SEARCH, cancelled) {
+                                    None => continue,
+                                    Some(result) => result,
+                                }
+                            }
+                        }
+                    }
                 };
                 if out.send(Input::Files { generation, result }).is_err() {
                     return;

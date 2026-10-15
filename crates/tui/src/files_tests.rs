@@ -505,6 +505,12 @@ fn a_directory_outside_a_repository_gives_the_error() {
     assert!(!error.contains('\n'), "{error}");
 }
 
+/// Roots over an empty workspace and no home: for worker tests that
+/// never resolve a path.
+fn nowhere() -> Roots {
+    Roots::new(PathBuf::from("/w"), None)
+}
+
 #[test]
 fn the_worker_skips_a_search_superseded_before_it_ran() {
     let (out, rx) = mpsc::channel();
@@ -515,6 +521,7 @@ fn the_worker_skips_a_search_superseded_before_it_ran() {
             gate.recv().map_err(|err| err.to_string())?;
             Ok(owned(&["a.rs", "b.rs"]))
         },
+        nowhere(),
         out,
     );
     search.search(1, "a".to_owned());
@@ -537,12 +544,125 @@ fn the_worker_skips_a_search_superseded_before_it_ran() {
 #[test]
 fn a_failed_listing_answers_every_search_with_its_error() {
     let (out, rx) = mpsc::channel();
-    let search = Search::spawn(|| Err("no git".to_owned()), out);
+    let search = Search::spawn(|| Err("no git".to_owned()), nowhere(), out);
     search.search(4, "x".to_owned());
     assert_eq!(
         next_result(&rx, "the error", &Deadline::after(DEADLINE)),
         (4, Err("no git".to_owned()))
     );
+}
+
+#[test]
+fn a_path_query_is_answered_while_the_listing_is_blocked() {
+    let home = seeded(&["proj/alpha.txt", "proj/beta.txt"]);
+    let (out, rx) = mpsc::channel();
+    let (release, gate) = mpsc::channel::<()>();
+    let search = Search::spawn(
+        move || {
+            gate.recv().map_err(|err| err.to_string())?;
+            Ok(owned(&["a.rs"]))
+        },
+        Roots::new(PathBuf::from("/w"), Some(home.path().as_os_str().to_owned())),
+        out,
+    );
+    search.search(1, "~/proj/al".to_owned());
+    // The rows arrive while the listing is still gated: a path query
+    // never runs or waits on it.
+    assert_eq!(
+        next_result(&rx, "the path search", &Deadline::after(DEADLINE)),
+        (1, Ok(owned(&["~/proj/alpha.txt"])))
+    );
+    release.send(()).unwrap_or_else(|err| panic!("release: {err}"));
+    search.search(2, "a".to_owned());
+    assert_eq!(
+        next_result(&rx, "the workspace search", &Deadline::after(DEADLINE)),
+        (2, Ok(owned(&["a.rs"])))
+    );
+}
+
+#[test]
+fn path_searches_use_the_roots_and_ignore_a_failed_listing() {
+    let home = seeded(&["proj/README.md"]);
+    let (out, rx) = mpsc::channel();
+    let (release, gate) = mpsc::channel::<()>();
+    let search = Search::spawn(
+        move || {
+            gate.recv().map_err(|err| err.to_string())?;
+            Err("no git".to_owned())
+        },
+        Roots::new(PathBuf::from("/w"), Some(home.path().as_os_str().to_owned())),
+        out,
+    );
+    search.search(1, "~/proj/rea".to_owned());
+    assert_eq!(
+        next_result(&rx, "the path search", &Deadline::after(DEADLINE)),
+        (1, Ok(owned(&["~/proj/README.md"])))
+    );
+    release.send(()).unwrap_or_else(|err| panic!("release: {err}"));
+    search.search(2, "read".to_owned());
+    assert_eq!(
+        next_result(&rx, "the failed listing", &Deadline::after(DEADLINE)),
+        (2, Err("no git".to_owned()))
+    );
+    // Without a home, a `~/` search answers why it cannot resolve.
+    let (out, rx) = mpsc::channel();
+    let search = Search::spawn(|| Ok(owned(&["a.rs"])), nowhere(), out);
+    search.search(3, "~/proj/rea".to_owned());
+    assert_eq!(
+        next_result(&rx, "the homeless search", &Deadline::after(DEADLINE)),
+        (3, Err("no home directory".to_owned()))
+    );
+}
+
+#[test]
+fn a_path_search_superseded_before_it_ran_is_skipped() {
+    let home = seeded(&["proj/alpha.txt", "proj/beta.txt"]);
+    let (out, rx) = mpsc::channel();
+    let (release, gate) = mpsc::channel::<()>();
+    let search = Search::spawn(
+        move || {
+            gate.recv().map_err(|err| err.to_string())?;
+            Ok(owned(&["a.rs"]))
+        },
+        Roots::new(PathBuf::from("/w"), Some(home.path().as_os_str().to_owned())),
+        out,
+    );
+    // The workspace job holds the worker in the listing while two path
+    // searches queue behind it.
+    search.search(1, "a".to_owned());
+    search.search(2, "~/proj/al".to_owned());
+    search.search(3, "~/proj/be".to_owned());
+    release.send(()).unwrap_or_else(|err| panic!("release: {err}"));
+    assert_eq!(
+        next_result(&rx, "the newest search", &Deadline::after(DEADLINE)),
+        (3, Ok(owned(&["~/proj/beta.txt"])))
+    );
+    // Generation 2 never ran: the next result is the next search's.
+    search.search(4, "a".to_owned());
+    assert_eq!(
+        next_result(&rx, "the next search", &Deadline::after(DEADLINE)),
+        (4, Ok(owned(&["a.rs"])))
+    );
+}
+
+#[test]
+fn dropping_the_worker_abandons_a_path_search() {
+    let home = seeded(&["proj/alpha.txt"]);
+    let (out, rx) = mpsc::channel();
+    let search = Search::spawn(
+        || Ok(owned(&["a.rs"])),
+        Roots::new(PathBuf::from("/w"), Some(home.path().as_os_str().to_owned())),
+        out,
+    );
+    search.search(1, "~/proj/al".to_owned());
+    drop(search);
+    // The worker ends without posting: the drop tags every generation
+    // abandoned, so the queued path search answers nothing.
+    match Deadline::after(DEADLINE).recv(&rx) {
+        Err(mpsc::RecvTimeoutError::Disconnected) => {}
+        Err(mpsc::RecvTimeoutError::Timeout) => panic!("waited {DEADLINE:?} for the worker to end"),
+        Ok(_) => panic!("a dropped worker posted a result"),
+    }
 }
 
 #[test]
@@ -570,6 +690,7 @@ fn dropping_the_worker_abandons_the_search_it_was_asked_for() {
             gate.recv().map_err(|err| err.to_string())?;
             Ok(owned(&["a.rs"]))
         },
+        nowhere(),
         out,
     );
     search.search(1, "a".to_owned());
