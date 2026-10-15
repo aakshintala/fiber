@@ -270,6 +270,7 @@ impl Provider for ScriptProvider {
                 .pop_front()
                 .expect("the script has a reply"),
             release: Mutex::new(None),
+            cancelled: AtomicBool::new(false),
             signal,
             pause: Mutex::new(pause),
         })
@@ -280,6 +281,9 @@ struct ScriptCall {
     clock: Arc<FakeClock>,
     answer: Answer,
     release: Mutex<Option<mpsc::Sender<()>>>,
+    /// Set by every cancel and read after the release store, so a
+    /// cancel that lands before the store is never dropped.
+    cancelled: AtomicBool,
     /// Sends once the cancel has been handled, on every cancel route.
     signal: Option<mpsc::Sender<()>>,
     /// Holds the run ahead of its release store; taken out and dropped
@@ -315,6 +319,14 @@ impl ModelCall for ScriptCall {
                 }
                 let (tx, rx) = mpsc::channel();
                 *lock(&self.release) = Some(tx);
+                // A cancel that landed before the store is seen here;
+                // one after it is seen on the stored release; one in
+                // between is seen on both, and the extra send is harmless.
+                if self.cancelled.load(Ordering::SeqCst) {
+                    return Err(CallError::Cancelled {
+                        usage: Box::new(fakes::unnamed_usage()),
+                    });
+                }
                 fakes::Deadline::after(WAIT).recv_or_fail(&rx, "the test cancels the hold");
                 Err(CallError::Cancelled {
                     usage: Box::new(fakes::unnamed_usage()),
@@ -324,6 +336,8 @@ impl ModelCall for ScriptCall {
     }
 
     fn cancel(&self) {
+        // First, so a hold storing its release next still sees it.
+        self.cancelled.store(true, Ordering::SeqCst);
         if let Some(release) = lock(&self.release).take() {
             let _sent = release.send(());
         }
@@ -3312,6 +3326,15 @@ fn cancelling_a_stage_ends_cancelled_with_its_record() {
             text_answer("Spare.", 0),
         ],
     );
+    // Declared after `world`: a panic drops the sender first and frees
+    // the held run before `world` drops.
+    let (release_tx, release_rx) = mpsc::channel();
+    let (cancelled_tx, cancelled_rx) = mpsc::channel();
+    world
+        .reviewer
+        .as_ref()
+        .expect("a reviewer")
+        .pause_hold(cancelled_tx, release_rx);
     prompt(&world, "hi");
     let flight = spawn_turn(&mut world);
     fakes::Deadline::after(WAIT).recv_or_fail(&entered_rx, "the stage starts its request");
@@ -3325,6 +3348,10 @@ fn cancelling_a_stage_ends_cancelled_with_its_record() {
         .expect("the inbox is open")
         .send(Delivery::Cancelled)
         .unwrap();
+    // The cancel is handled before the hold stores its release, so
+    // the test never depends on the cancel landing after the store.
+    fakes::Deadline::after(WAIT).recv_or_fail(&cancelled_rx, "the call sees the cancel");
+    release_tx.send(()).expect("the hold waits");
     assert!(join_turn(&mut world, flight).is_ok());
     assert_eq!(tool.ran(), 0, "the cancelled call never ran");
     let records = ops(&world, "tool.reviewer");
