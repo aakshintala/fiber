@@ -1268,11 +1268,7 @@ fn a_spawn_prune_keeps_a_group_whose_probe_says_perm_and_retires_it_on_srch() {
     release_tx.send(()).unwrap();
     // The late spawns' prunes read only A's scripted probes; every other
     // id falls through to the real syscalls after the same validation.
-    reads.script_group(
-        pid_a,
-        vec![Err(Errno::PERM), Err(Errno::SRCH)],
-        vec![],
-    );
+    reads.script_group(pid_a, vec![Err(Errno::PERM), Err(Errno::SRCH)], vec![]);
     let spawn_listed = |reads: &Arc<Reads>, ready: &std::path::Path| {
         let (listed_tx, listed_rx) = mpsc::channel::<()>();
         let (release_tx, release_rx) = mpsc::channel::<()>();
@@ -1303,7 +1299,12 @@ fn a_spawn_prune_keeps_a_group_whose_probe_says_perm_and_retires_it_on_srch() {
         "the new group is listed: {:?}",
         listed(&reads)
     );
-    assert_eq!(listed(&reads).len(), 2, "PERM retires nothing: {:?}", listed(&reads));
+    assert_eq!(
+        listed(&reads).len(),
+        2,
+        "PERM retires nothing: {:?}",
+        listed(&reads)
+    );
     let (running_c, pid_c) = spawn_listed(&reads, &ready_c);
     let watchdog_c = fakes::Watchdog::group(pid_c);
     // SRCH means no member is left, so the prune retires A while the live
@@ -1344,7 +1345,10 @@ fn a_spawn_prune_keeps_a_group_whose_probe_says_perm_and_retires_it_on_srch() {
         let _finished = fakes::within(what, DEADLINE, move || running.join().unwrap());
     }
     for pid in [pid_a, pid_b, pid_c] {
-        assert!(fakes::group_empties(pid, DEADLINE), "the real group is gone");
+        assert!(
+            fakes::group_empties(pid, DEADLINE),
+            "the real group is gone"
+        );
     }
     watchdog_a.stand_down(DEADLINE);
     watchdog_b.stand_down(DEADLINE);
