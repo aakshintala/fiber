@@ -1466,3 +1466,451 @@ fn overlapping_callbacks_keep_their_own_attribution() {
     .expect("the following command succeeds");
     assert_eq!(sink_a.records().len(), 3);
 }
+
+// Session composition: discovery, background refresh and late VMs carry
+// the installed sink.
+
+fn diag_init() -> String {
+    "fiber.hook(\"before_message\", { timeout = 60000, on_failure = \"non-blocking\",\n\
+       run = function(msg) return { context = \"d\" } end })\n"
+        .to_owned()
+}
+
+fn models_file(url: &str) -> String {
+    format!(
+        "fiber.provider(\"p\", {{ models = {{ timeout = 60000, run = function()\n\
+           local reply = host.http({{ url = \"{url}/models\" }})\n\
+           return {{{{ id = \"m1\", protocol = \"openai-responses\", base_url = \"{url}\" }}}}\n\
+         end }} }})\n"
+    )
+}
+
+/// Installs the hook+provider extension `diag` and the provider-only
+/// extension `solo`, then loads the session. Provider files land after
+/// install; manifests declare them upfront.
+fn install_session(setup: &Setup, url: &str, models: &str) -> (PathBuf, PathBuf) {
+    let diag = install_lua(
+        setup,
+        "diag",
+        &json!({"providers": {"p": [], "q": []}}),
+        &diag_init(),
+    );
+    std::fs::create_dir_all(diag.join("providers")).unwrap();
+    std::fs::write(diag.join("providers/p.lua"), models).unwrap();
+    std::fs::write(
+        diag.join("providers/q.lua"),
+        format!(
+            "fiber.provider(\"q\", {{ quota = {{ timeout = 60000, run = function(seen)\n\
+               local reply = host.http({{ url = \"{url}/quota\" }})\n\
+               return {{ windows = {{ {{ name = \"w\", used_percent = 1 }} }} }}\n\
+             end }} }})\n"
+        ),
+    )
+    .unwrap();
+    let solo = install_lua(
+        setup,
+        "solo",
+        &json!({"providers": {"s": [], "t": [], "u": [], "v": []}}),
+        "",
+    );
+    std::fs::remove_file(solo.join("init.lua")).unwrap();
+    std::fs::create_dir_all(solo.join("providers")).unwrap();
+    (diag, solo)
+}
+
+fn session_config(setup: &Setup) -> Config {
+    Config::load(Sources {
+        home: setup.home(),
+        workspace: setup.workspace(),
+        project: ProjectKey::new("p").unwrap(),
+        overrides: Vec::new(),
+    })
+    .unwrap()
+}
+
+fn diagnosed_session(
+    setup: &Setup,
+    clock: Arc<FakeClock>,
+    sink: &Arc<Watching>,
+) -> Arc<SessionExtensions> {
+    let session = load(setup, clock);
+    let (timing, _) = recording();
+    Arc::new(
+        Arc::try_unwrap(session)
+            .unwrap_or_else(|_| panic!("the session is still shared"))
+            .with_diagnostics(timing, sink.clone() as Arc<dyn DebugLog>),
+    )
+}
+
+fn provider_named(session: &Arc<SessionExtensions>, provider: &str) -> Arc<LuaProvider> {
+    session
+        .lua_providers()
+        .iter()
+        .find(|(_, lua)| lua.name() == provider)
+        .map(|(_, lua)| Arc::clone(lua))
+        .unwrap_or_else(|| panic!("provider {provider} loaded"))
+}
+
+#[test]
+fn session_discovery_and_refresh_carry_the_sink() {
+    let setup = Setup::new();
+    let server = fakes::ProviderServer::start_responding(|request| match request.path.as_str() {
+        "/models" => fakes::Response::status(200, "{}"),
+        _ => fakes::Response::status(500, "unexpected"),
+    })
+    .unwrap();
+    server.hold_from(2, Duration::from_secs(30));
+    let url = server.url();
+    install_session(&setup, &url, &models_file(&url));
+    let clock = FakeClock::new();
+    let (sink, _) = Watching::new();
+    let session = diagnosed_session(&setup, clock, &sink);
+    // Uncached discovery is observed on its first call.
+    let models = provider_named(&session, "p");
+    within({
+        let models = Arc::clone(&models);
+        move || models.list_models()
+    })
+    .expect("discovery succeeds");
+    // A stale-list refresh runs detached: its request is received while
+    // held, and its completion is collected through its JoinHandle.
+    let refreshed = models.refresh(None).expect("a stale list refreshes");
+    assert!(
+        server.await_requests(2, WAIT),
+        "the refresh reached its request"
+    );
+    server.release();
+    within(move || refreshed.join())
+        .expect("the refresh thread joins")
+        .expect("the refresh succeeds");
+    // The cache serves from here: no HTTP, no record.
+    within({
+        let models = Arc::clone(&models);
+        move || models.models()
+    })
+    .expect("the cached list serves");
+    assert_eq!(server.requests().len(), 2);
+    let purposes: Vec<String> = sink
+        .records()
+        .iter()
+        .map(|record| {
+            serde_json::to_value(record.purpose)
+                .unwrap()
+                .as_str()
+                .unwrap()
+                .to_owned()
+        })
+        .collect();
+    assert_eq!(purposes, ["model_list", "model_list"]);
+}
+
+#[test]
+fn late_fresh_and_reused_vms_carry_the_sink() {
+    let setup = Setup::new();
+    let server = fakes::ProviderServer::start_responding(|request| match request.path.as_str() {
+        "/models" => fakes::Response::status(200, "{}"),
+        "/quota" => fakes::Response::status(200, "{\"windows\":[]}"),
+        "/token" => fakes::Response::status(200, "{\"token\":\"t\",\"expires_at\":1893456000}"),
+        "/cost" => fakes::Response::status(200, "0.5"),
+        _ => fakes::Response::status(500, "unexpected"),
+    })
+    .unwrap();
+    let url = server.url();
+    let (diag, solo) = install_session(&setup, &url, &models_file(&url));
+    for (name, body) in [
+        (
+            "s",
+            format!(
+                "host.http({{ url = \"{url}/models\" }})\nreturn {{{{ id = \"m1\", protocol = \"openai-responses\", base_url = \"{url}\" }}}}"
+            ),
+        ),
+        (
+            "t",
+            format!(
+                "host.http({{ url = \"{url}/quota\" }})\nreturn {{ windows = {{ {{ name = \"w\", used_percent = 1 }} }} }}"
+            ),
+        ),
+        (
+            "u",
+            format!(
+                "host.http({{ method = \"POST\", url = \"{url}/token\" }})\nreturn {{ token = \"t\", expires_at = 1893456000 }}"
+            ),
+        ),
+        (
+            "v",
+            format!("host.http({{ url = \"{url}/cost\" }})\nreturn 0.5"),
+        ),
+    ] {
+        let function = match name {
+            "s" => "models",
+            "t" => "quota",
+            "u" => "credential",
+            "v" => "cost",
+            _ => unreachable!(),
+        };
+        std::fs::write(
+            solo.join("providers").join(format!("{name}.lua")),
+            format!("fiber.provider(\"{name}\", {{ {function} = {{ timeout = 60000, run = function(seen)\n{body}\nend }} }})\n"),
+        )
+        .unwrap();
+    }
+    let _ = diag;
+    let clock = FakeClock::new();
+    let (sink, _) = Watching::new();
+    let session = diagnosed_session(&setup, clock.clone(), &sink);
+    // Hold the hook+provider extension's handles; the provider-only
+    // extension's handles die with the retain below.
+    let held_p = provider_named(&session, "p");
+    let mut session = Arc::try_unwrap(session).unwrap_or_else(|_| panic!("shared"));
+    session.retain_lua_providers(&[]);
+    let session = Arc::new(session);
+    assert!(session.lua_providers().is_empty());
+    let config = session_config(&setup);
+    let locks: Arc<dyn contract::files::PathLock> = Arc::new(NoLock);
+    // Deferred: the expired provider-only VM starts fresh, and its first
+    // credential, models, quota and cost calls all observe through the
+    // retained sink. Nothing else could serve them: the weak handles died
+    // with the retain, so each fresh start below is a new VM.
+    for (provider, purpose) in [
+        ("s", "model_list"),
+        ("t", "quota"),
+        ("u", "token_refresh"),
+        ("v", "cost"),
+    ] {
+        let started = within({
+            let session = Arc::clone(&session);
+            let config = config.clone();
+            let clock = clock.clone();
+            let locks = Arc::clone(&locks);
+            let provider = provider.to_owned();
+            move || session.start_provider(&config, clock, locks, "fiber.test/solo", &provider)
+        })
+        .unwrap_or_else(|_| panic!("late start of {provider}"));
+        assert_eq!(started.name(), provider);
+        match purpose {
+            "model_list" => {
+                within({
+                    let started = Arc::clone(&started);
+                    move || started.list_models()
+                })
+                .expect("fresh models() succeeds");
+            }
+            "quota" => {
+                let pair = CredentialPair {
+                    credential: "c".to_owned(),
+                    label: "l".to_owned(),
+                };
+                let quota = within({
+                    let started = Arc::clone(&started);
+                    move || started.quota(&pair, None)
+                });
+                assert!(matches!(quota, extensions::QuotaEntry::Reported(_)));
+            }
+            "token_refresh" => {
+                let pair = CredentialPair {
+                    credential: "c".to_owned(),
+                    label: "l".to_owned(),
+                };
+                within({
+                    let started = Arc::clone(&started);
+                    move || started.credential_token(&pair)
+                })
+                .expect("fresh credential() succeeds");
+            }
+            "cost" => {
+                let cost = within({
+                    let started = Arc::clone(&started);
+                    let url = url.clone();
+                    move || started.cost(&GenerationId("g1".into()), &url, None)
+                })
+                .expect("fresh cost() succeeds");
+                assert_eq!(cost, Some(0.5));
+            }
+            _ => unreachable!(),
+        }
+    }
+    // Reused: the hook-held extension lends its running VM, and two
+    // providers on it keep their distinct attribution.
+    let reused = within({
+        let session = Arc::clone(&session);
+        let config = config.clone();
+        let clock = clock.clone();
+        let locks = Arc::clone(&locks);
+        move || session.start_provider(&config, clock, locks, "fiber.test/diag", "p")
+    })
+    .expect("the held VM restarts its provider");
+    within({
+        let reused = Arc::clone(&reused);
+        move || reused.list_models()
+    })
+    .expect("reused models() succeeds");
+    let pair = CredentialPair {
+        credential: "c".to_owned(),
+        label: "l".to_owned(),
+    };
+    let quota = within({
+        let session = Arc::clone(&session);
+        let config = config.clone();
+        let clock = clock.clone();
+        let locks = Arc::clone(&locks);
+        let pair = pair.clone();
+        move || {
+            session
+                .start_provider(&config, clock, locks, "fiber.test/diag", "q")
+                .map(|started| started.quota(&pair, None))
+        }
+    })
+    .expect("the held VM restarts its second provider");
+
+    assert!(matches!(quota, extensions::QuotaEntry::Reported(_)));
+    // The pre-retain handles never mutated: the session, its hooks and
+    // its providers all still work.
+    within({
+        let held_p = Arc::clone(&held_p);
+        move || held_p.list_models()
+    })
+    .expect("the held provider still lists");
+    let content = vec![ContentPart::Text { text: "hi".into() }];
+    let answer = within({
+        let session = Arc::clone(&session);
+        move || session.before_message(&BeforeMessage { content: &content })
+    });
+    match answer.outcome {
+        BeforeMessageOutcome::Passed { context, .. } => assert_eq!(context.len(), 1),
+        BeforeMessageOutcome::Refused(refusal) => {
+            panic!("the hooks survived the retain: {refusal:?}")
+        }
+        BeforeMessageOutcome::Failed(failure) => {
+            panic!("the hooks survived the retain: {failure:?}")
+        }
+    }
+    let purposes: Vec<(String, String)> = sink
+        .records()
+        .iter()
+        .map(|record| {
+            (
+                record.provider.clone(),
+                serde_json::to_value(record.purpose)
+                    .unwrap()
+                    .as_str()
+                    .unwrap()
+                    .to_owned(),
+            )
+        })
+        .collect();
+    assert_eq!(
+        purposes,
+        [
+            ("s".to_owned(), "model_list".to_owned()),
+            ("t".to_owned(), "quota".to_owned()),
+            ("u".to_owned(), "token_refresh".to_owned()),
+            ("v".to_owned(), "cost".to_owned()),
+            ("p".to_owned(), "model_list".to_owned()),
+            ("q".to_owned(), "quota".to_owned()),
+            // The held handle's first models() discovers: list_models
+            // never writes the cache, so nothing cached it, and the late
+            // discovery observes like any other.
+            ("p".to_owned(), "model_list".to_owned()),
+        ]
+    );
+}
+
+#[test]
+fn failed_provider_loads_record_nothing_and_silent_loads_stay_silent() {
+    let setup = Setup::new();
+    let server =
+        fakes::ProviderServer::start_responding(|_| fakes::Response::status(200, "{}")).unwrap();
+    let url = server.url();
+    install_session(&setup, &url, &models_file(&url));
+    // An extension file its manifest never declares.
+    let undecl = install_lua(&setup, "undecl", &json!({}), "");
+    std::fs::remove_file(undecl.join("init.lua")).unwrap();
+    std::fs::create_dir_all(undecl.join("providers")).unwrap();
+    std::fs::write(
+        undecl.join("providers/u.lua"),
+        "fiber.provider(\"u\", {})\n",
+    )
+    .unwrap();
+    let clock = FakeClock::new();
+    let (sink, _) = Watching::new();
+    let session = diagnosed_session(&setup, clock.clone(), &sink);
+    let config = session_config(&setup);
+    let locks: Arc<dyn contract::files::PathLock> = Arc::new(NoLock);
+    // A missing provider and an undeclared one fail the same way with or
+    // without a sink, inventing no request record.
+    for (extension, provider) in [("fiber.test/diag", "missing"), ("fiber.test/undecl", "u")] {
+        let answer = within({
+            let session = Arc::clone(&session);
+            let config = config.clone();
+            let clock = clock.clone();
+            let locks = Arc::clone(&locks);
+            let extension = extension.to_owned();
+            let provider = provider.to_owned();
+            move || session.start_provider(&config, clock, locks, &extension, &provider)
+        });
+        let err = match answer {
+            Ok(_) => panic!("{extension}/{provider} loads, but must not"),
+            Err(err) => err,
+        };
+        assert!(
+            matches!(
+                err,
+                extensions::Error::Lua { .. } | extensions::Error::UndeclaredProvider { .. }
+            ),
+            "a failed load keeps its error: {err:?}"
+        );
+    }
+    assert!(sink.records().is_empty());
+    assert!(server.requests().is_empty());
+    // Without an installed sink the same work succeeds silently: the
+    // request is received and no diagnostic exists to record it.
+    let plain = load(&setup, FakeClock::new());
+    let models = provider_named(&plain, "p");
+    within({
+        let models = Arc::clone(&models);
+        move || models.list_models()
+    })
+    .expect("silent discovery succeeds");
+    assert_eq!(server.requests().len(), 1);
+}
+
+#[test]
+fn failures_retain_the_cached_list_without_observation() {
+    let setup = Setup::new();
+    let server =
+        fakes::ProviderServer::start_responding(|_| fakes::Response::status(200, "{}")).unwrap();
+    let url = server.url();
+    let (diag, _) = install_session(&setup, &url, &models_file(&url));
+    let (sink1, _) = Watching::new();
+    let first = diagnosed_session(&setup, FakeClock::new(), &sink1);
+    let before = within({
+        let models = provider_named(&first, "p");
+        move || models.models()
+    })
+    .expect("discovery writes the cache");
+    assert_eq!(server.requests().len(), 1);
+    assert_eq!(sink1.records().len(), 1);
+    drop(first);
+    // The provider file breaks after the cache landed: the next session
+    // serves the retained list with no HTTP and no record.
+    std::fs::write(
+        diag.join("providers/p.lua"),
+        "fiber.provider(\"p\", { models = { timeout = 60000, run = function()\n\
+           error(\"the list is gone\")\n\
+         end } }})\n",
+    )
+    .unwrap();
+    let (sink2, _) = Watching::new();
+    let second = diagnosed_session(&setup, FakeClock::new(), &sink2);
+    let after = within({
+        let models = provider_named(&second, "p");
+        move || models.models()
+    })
+    .expect("the retained list serves");
+    assert_eq!(
+        after.iter().map(|model| &model.id).collect::<Vec<_>>(),
+        before.iter().map(|model| &model.id).collect::<Vec<_>>()
+    );
+    assert_eq!(server.requests().len(), 1);
+    assert!(sink2.records().is_empty());
+}
