@@ -537,7 +537,11 @@ fn subscribe(
     }
     // The acknowledgement is written here, before the writer starts, so it
     // is the first line the client reads.
-    accept(conn, id, last_seq.map(|last_seq| CommandResult::Subscribe { last_seq }));
+    accept(
+        conn,
+        id,
+        last_seq.map(|last_seq| CommandResult::Subscribe { last_seq }),
+    );
     #[cfg(test)]
     if conn.full {
         conn.gate

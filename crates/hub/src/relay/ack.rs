@@ -114,7 +114,10 @@ pub(crate) fn acknowledgement(line: &[u8]) -> Option<Ack> {
         None
     };
     let last_seq = match verdict {
-        Verdict::Accepted => payload.get("result").and_then(|result| result.get("last_seq")).and_then(Value::as_u64),
+        Verdict::Accepted => payload
+            .get("result")
+            .and_then(|result| result.get("last_seq"))
+            .and_then(Value::as_u64),
         Verdict::Rejected | Verdict::Closing => None,
     };
     Some(Ack {

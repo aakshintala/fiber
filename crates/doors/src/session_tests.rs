@@ -2502,32 +2502,53 @@ fn full_subscriptions_name_the_opening_boundary_and_summary_does_not() {
         reset();
         let opened = Opened::open(Vec::new());
         for _ in 0..count {
-            opened.log.append(&Event::StepStarted(contract::events::Empty {}), None, None).unwrap();
+            opened
+                .log
+                .append(&Event::StepStarted(contract::events::Empty {}), None, None)
+                .unwrap();
         }
         let socket = opened.socket.clone();
-        opened.session.run(Vec::new(), Arc::new(|| false), move |_| {
-            let full = Client::connect(&socket).unwrap();
-            full.send(&subscribe_line("c_full", "full")).unwrap();
-            let answer = recv(&full);
-            assert_eq!(answer["kind"], "command_accepted");
-            assert_eq!(answer["payload"]["command_id"], "c_full");
-            let expected = count.checked_sub(1).map(|last| serde_json::json!({"last_seq": last}));
-            assert_eq!(answer["payload"].get("result"), expected.as_ref());
-            let fold = support::until(&full, |line| line["kind"] == "clients");
-            let durable: Vec<_> = fold.iter().filter_map(|line| line["seq"].as_u64()).collect();
-            assert_eq!(durable, (0..u64::try_from(count).unwrap()).collect::<Vec<_>>());
-            assert_eq!(support::kinds(&fold), std::iter::repeat_n("step_started", count).chain(["clients"]).collect::<Vec<_>>());
-            let summary = Client::connect(&socket).unwrap();
-            summary.send(&subscribe_line("c_summary", "summary")).unwrap();
-            let answer = recv(&summary);
-            assert_eq!(answer["kind"], "command_accepted");
-            assert!(answer["payload"].get("result").is_none());
-            summary.send(&subscribe_line("c_raise", "full")).unwrap();
-            let answer = answer_of(&summary, "c_raise");
-            assert_eq!(answer["kind"], "command_accepted");
-            assert_eq!(answer["payload"].get("result"), expected.as_ref());
-            Ok(())
-        }).unwrap();
+        opened
+            .session
+            .run(Vec::new(), Arc::new(|| false), move |_| {
+                let full = Client::connect(&socket).unwrap();
+                full.send(&subscribe_line("c_full", "full")).unwrap();
+                let answer = recv(&full);
+                assert_eq!(answer["kind"], "command_accepted");
+                assert_eq!(answer["payload"]["command_id"], "c_full");
+                let expected = count
+                    .checked_sub(1)
+                    .map(|last| serde_json::json!({"last_seq": last}));
+                assert_eq!(answer["payload"].get("result"), expected.as_ref());
+                let fold = support::until(&full, |line| line["kind"] == "clients");
+                let durable: Vec<_> = fold
+                    .iter()
+                    .filter_map(|line| line["seq"].as_u64())
+                    .collect();
+                assert_eq!(
+                    durable,
+                    (0..u64::try_from(count).unwrap()).collect::<Vec<_>>()
+                );
+                assert_eq!(
+                    support::kinds(&fold),
+                    std::iter::repeat_n("step_started", count)
+                        .chain(["clients"])
+                        .collect::<Vec<_>>()
+                );
+                let summary = Client::connect(&socket).unwrap();
+                summary
+                    .send(&subscribe_line("c_summary", "summary"))
+                    .unwrap();
+                let answer = recv(&summary);
+                assert_eq!(answer["kind"], "command_accepted");
+                assert!(answer["payload"].get("result").is_none());
+                summary.send(&subscribe_line("c_raise", "full")).unwrap();
+                let answer = answer_of(&summary, "c_raise");
+                assert_eq!(answer["kind"], "command_accepted");
+                assert_eq!(answer["payload"].get("result"), expected.as_ref());
+                Ok(())
+            })
+            .unwrap();
         close_within(opened.session, opened.log);
     }
 }
@@ -3577,7 +3598,10 @@ fn next_switch(inbox: &mpsc::Receiver<Delivery>) -> (String, contract::inbox::Ac
 fn a_first_subscribe_with_a_label_waits_for_the_switch_before_its_acceptance() {
     reset();
     let opened = Opened::open(Vec::new());
-    opened.log.append(&Event::StepStarted(contract::events::Empty {}), None, None).unwrap();
+    opened
+        .log
+        .append(&Event::StepStarted(contract::events::Empty {}), None, None)
+        .unwrap();
     let socket = opened.socket.clone();
     opened
         .session
@@ -3626,7 +3650,10 @@ fn a_first_subscribe_with_a_label_waits_for_the_switch_before_its_acceptance() {
 fn a_first_subscribe_with_an_unknown_label_is_accepted_then_noticed() {
     reset();
     let opened = Opened::open(Vec::new());
-    opened.log.append(&Event::StepStarted(contract::events::Empty {}), None, None).unwrap();
+    opened
+        .log
+        .append(&Event::StepStarted(contract::events::Empty {}), None, None)
+        .unwrap();
     let socket = opened.socket.clone();
     let dir = opened.dir.clone();
     opened
@@ -3940,7 +3967,10 @@ fn a_dead_client_ends_a_label_bearing_subscribe_without_a_hang() {
 fn a_level_change_with_a_label_waits_for_the_switch() {
     reset();
     let opened = Opened::open(Vec::new());
-    opened.log.append(&Event::StepStarted(contract::events::Empty {}), None, None).unwrap();
+    opened
+        .log
+        .append(&Event::StepStarted(contract::events::Empty {}), None, None)
+        .unwrap();
     let socket = opened.socket.clone();
     opened
         .session

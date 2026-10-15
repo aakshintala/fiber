@@ -804,7 +804,10 @@ impl Client {
 fn assert_reopened(line: &Value, last_seq: Option<u64>) {
     assert_eq!(line["kind"], "stream_reopened", "{line}");
     assert_eq!(line["payload"]["session_id"], SID);
-    assert_eq!(line["payload"].get("last_seq"), last_seq.map(Value::from).as_ref());
+    assert_eq!(
+        line["payload"].get("last_seq"),
+        last_seq.map(Value::from).as_ref()
+    );
     assert!(line.get("seq").is_none());
     assert!(line.get("session_id").is_none());
 }
@@ -870,16 +873,35 @@ struct HandResume {
 
 struct HandAlive;
 impl crate::Started for HandAlive {
-    fn exited(&self) -> Option<crate::Failure> { None }
+    fn exited(&self) -> Option<crate::Failure> {
+        None
+    }
 }
 impl crate::Starter for HandResume {
-    fn start(&self, _: &SessionId, _: &std::path::Path, _: Option<&str>, _: &[&str], _: bool) -> std::io::Result<Box<dyn crate::Started>> {
+    fn start(
+        &self,
+        _: &SessionId,
+        _: &std::path::Path,
+        _: Option<&str>,
+        _: &[&str],
+        _: bool,
+    ) -> std::io::Result<Box<dyn crate::Started>> {
         Err(std::io::Error::other("only resumes are expected"))
     }
-    fn rewind(&self, _: &SessionId, _: &std::path::Path, _: &SessionId) -> std::io::Result<Box<dyn crate::Started>> {
+    fn rewind(
+        &self,
+        _: &SessionId,
+        _: &std::path::Path,
+        _: &SessionId,
+    ) -> std::io::Result<Box<dyn crate::Started>> {
         Err(std::io::Error::other("only resumes are expected"))
     }
-    fn resume(&self, id: &SessionId, _: &std::path::Path, _: Option<&str>) -> std::io::Result<Box<dyn crate::Started>> {
+    fn resume(
+        &self,
+        id: &SessionId,
+        _: &std::path::Path,
+        _: Option<&str>,
+    ) -> std::io::Result<Box<dyn crate::Started>> {
         let listener = UnixListener::bind(self.home.join("run").join(&id.0))?;
         self.bound.send(listener).map_err(std::io::Error::other)?;
         Ok(Box::new(HandAlive))
@@ -895,9 +917,19 @@ fn scripted_reopening(level: &str, accepted: bool, last_seq: Option<u64>, path: 
     temp.recorded();
     let (bound_tx, bound) = mpsc::channel();
     let timed: Arc<dyn Clock> = temp.clock.clone();
-    let hub = Arc::new(crate::testkit::hub(&temp.dir, Arc::new(HandResume { home: temp.dir.clone(), bound: bound_tx }), timed));
+    let hub = Arc::new(crate::testkit::hub(
+        &temp.dir,
+        Arc::new(HandResume {
+            home: temp.dir.clone(),
+            bound: bound_tx,
+        }),
+        timed,
+    ));
     let relays = Arc::new(Mutex::new(Relays::default()));
-    let kept = json!({"id": "c_sub", "command": "subscribe", "args": {"level": level}}).as_object().unwrap().clone();
+    let kept = json!({"id": "c_sub", "command": "subscribe", "args": {"level": level}})
+        .as_object()
+        .unwrap()
+        .clone();
     lock(&relays).subscribed.push((SID.into(), kept));
     let (writer, client_read) = UnixStream::pair().unwrap();
     client_read.set_read_timeout(Some(DEADLINE)).unwrap();
@@ -913,7 +945,9 @@ fn scripted_reopening(level: &str, accepted: bool, last_seq: Option<u64>, path: 
     let (played_tx, played) = mpsc::channel();
     let (release_tx, release) = mpsc::channel();
     let player = thread::spawn(move || {
-        let listener = listener.unwrap_or_else(|| Deadline::after(DEADLINE).recv_or_fail(&bound, "the resumed session to bind"));
+        let listener = listener.unwrap_or_else(|| {
+            Deadline::after(DEADLINE).recv_or_fail(&bound, "the resumed session to bind")
+        });
         let (mut stream, _) = listener.accept().unwrap();
         stream.set_read_timeout(Some(DEADLINE)).unwrap();
         let mut reader = BufReader::new(stream.try_clone().unwrap());
@@ -923,15 +957,29 @@ fn scripted_reopening(level: &str, accepted: bool, last_seq: Option<u64>, path: 
         assert_eq!(replay["command"], "subscribe");
         assert_ne!(replay["id"], "c_sub");
         let mut payload = json!({"command_id": replay["id"]});
-        if let Some(last_seq) = last_seq { payload["result"] = json!({"last_seq": last_seq}); }
-        if !accepted { payload["code"] = json!("closing"); }
-        let kind = if accepted { "command_accepted" } else { "command_rejected" };
-        writeln!(stream, "{}", json!({"kind": kind, "ts": 0, "schema_version": 1, "payload": payload})).unwrap();
+        if let Some(last_seq) = last_seq {
+            payload["result"] = json!({"last_seq": last_seq});
+        }
+        if !accepted {
+            payload["code"] = json!("closing");
+        }
+        let kind = if accepted {
+            "command_accepted"
+        } else {
+            "command_rejected"
+        };
+        writeln!(
+            stream,
+            "{}",
+            json!({"kind": kind, "ts": 0, "schema_version": 1, "payload": payload})
+        )
+        .unwrap();
         // A marker after the replay pins the event's position and count.
         writeln!(stream, "{}", json!({"kind": "fold_marker", "session_id": SID, "ts": 0, "schema_version": 1, "payload": {}})).unwrap();
         played_tx.send(()).unwrap();
-        match release.recv() {
-            Ok(()) | Err(_) => {}
+        match Deadline::after(DEADLINE).recv(&release) {
+            Ok(()) | Err(mpsc::RecvTimeoutError::Disconnected) => {}
+            Err(mpsc::RecvTimeoutError::Timeout) => panic!("the scripted replay was not released"),
         }
     });
     if path == "rejoin" {
@@ -942,10 +990,29 @@ fn scripted_reopening(level: &str, accepted: bool, last_seq: Option<u64>, path: 
             assert!(crate::rejoin::admit(&mut held, SID, false, mark, epoch));
             epoch
         };
-        crate::relay::attach_rejoin(SID, UnixStream::connect(temp.dir.join("run").join(SID)).unwrap(), &hub, &writer, &relays, epoch);
+        crate::relay::attach_rejoin(
+            SID,
+            UnixStream::connect(temp.dir.join("run").join(SID)).unwrap(),
+            &hub,
+            &writer,
+            &relays,
+            epoch,
+        );
     } else {
-        let command = json!({"id": "c_next", "command": "reply"}).as_object().unwrap().clone();
-        crate::relay::route(&contract::CommandId("c_next".into()), SID, command, &hub, &writer, &relays, None, false);
+        let command = json!({"id": "c_next", "command": "reply"})
+            .as_object()
+            .unwrap()
+            .clone();
+        crate::relay::route(
+            &contract::CommandId("c_next".into()),
+            SID,
+            command,
+            &hub,
+            &writer,
+            &relays,
+            None,
+            false,
+        );
     }
     Deadline::after(DEADLINE).recv_or_fail(&played, "the scripted replay");
     let mut reader = BufReader::new(client_read);
@@ -956,9 +1023,15 @@ fn scripted_reopening(level: &str, accepted: bool, last_seq: Option<u64>, path: 
         assert_reopened(&first, last_seq);
         text.clear();
         reader.read_line(&mut text).unwrap();
-        assert_eq!(serde_json::from_str::<Value>(&text).unwrap()["kind"], "fold_marker");
+        assert_eq!(
+            serde_json::from_str::<Value>(&text).unwrap()["kind"],
+            "fold_marker"
+        );
     } else {
-        assert_eq!(first["kind"], "fold_marker", "no replay acknowledgement or reopening at summary or rejection");
+        assert_eq!(
+            first["kind"], "fold_marker",
+            "no replay acknowledgement or reopening at summary or rejection"
+        );
     }
     // Drop the release before waiting for the player and relay to end.
     drop(release_tx);
@@ -968,7 +1041,9 @@ fn scripted_reopening(level: &str, accepted: bool, last_seq: Option<u64>, path: 
         done_tx.send(()).unwrap_or(());
     });
     Deadline::after(DEADLINE).recv_or_fail(&done, "the scripted session to end");
-    crate::testkit::await_true("the relay to leave", move || lock(&relays).entries.is_empty());
+    crate::testkit::await_true("the relay to leave", move || {
+        lock(&relays).entries.is_empty()
+    });
 }
 
 #[test]
@@ -1827,7 +1902,9 @@ fn an_accepted_subscribe_is_replayed(prior: Option<&str>) {
         .recv(&routed_rx)
         .expect("the reconnect routes behind the parked acknowledgement");
     release_tx.send(()).unwrap_or(());
-    let lines: Vec<_> = (0..3).map(|_| client.next("the acknowledgements and reopening boundary")).collect();
+    let lines: Vec<_> = (0..3)
+        .map(|_| client.next("the acknowledgements and reopening boundary"))
+        .collect();
     let mut ids = Vec::new();
     let mut reopened = 0;
     for line in &lines {

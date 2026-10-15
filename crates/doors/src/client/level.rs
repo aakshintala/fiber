@@ -166,7 +166,9 @@ pub(super) fn change(
                 conn.gate.clock.as_ref(),
                 &Event::CommandAccepted(CommandAccepted {
                     command_id: id.clone(),
-                    result: watcher.last_seq().map(|last_seq| CommandResult::Subscribe { last_seq }),
+                    result: watcher
+                        .last_seq()
+                        .map(|last_seq| CommandResult::Subscribe { last_seq }),
                 }),
             );
             (watcher, injector, 0, ack, Vec::new())
@@ -200,7 +202,8 @@ pub(super) fn change(
                 conn.gone = true;
                 return;
             };
-            let (ack, response, cancel) = super::settle_response(&conn.gate, id, watcher.last_seq());
+            let (ack, response, cancel) =
+                super::settle_response(&conn.gate, id, watcher.last_seq());
             outbox.settle(cancel);
             conn.gate.deliver(Delivery::Credential(
                 contract::commands::CredentialArgs { label },

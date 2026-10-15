@@ -509,7 +509,13 @@ fn attach_inner(
             return;
         }
         lock(&replayed).push(minted.clone());
-        if reopen && line.get("args").and_then(|args| args.get("level")).and_then(Value::as_str) == Some("full") {
+        if reopen
+            && line
+                .get("args")
+                .and_then(|args| args.get("level"))
+                .and_then(Value::as_str)
+                == Some("full")
+        {
             reopening = Some(minted.clone());
         }
         replayed_id = Some(minted);
