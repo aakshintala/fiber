@@ -311,9 +311,9 @@ fn the_sessions_notices_and_the_terminals_own_share_the_stack() {
     assert_eq!(
         firsts,
         [
-            "Connection lost.",
+            "An extension failed to load.",
             "No requests waiting.",
-            "An extension failed to load."
+            "Connection lost.",
         ]
     );
 }

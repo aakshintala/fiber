@@ -1249,7 +1249,7 @@ fn a_handoff_sized_pages_earlier_reloads_unchanged() {
     // same target id a reload must keep.
     let texts: Vec<String> = live.iter().map(|(line, _)| line.to_string()).collect();
     assert!(
-        texts.iter().any(|line| line.contains("400.0k")),
+        texts.iter().any(|line| line.contains("400k")),
         "{texts:?}"
     );
     drop_all(&mut pages);
@@ -1650,22 +1650,20 @@ fn the_open_page_caches_only_its_lines_too_wide_for_one_row() {
         pages.apply(line);
     }
     // A long line outside any card stays unwrapped, so the open page
-    // caches it.
-    let long: String = std::iter::repeat_n('w', 100).collect();
+    // caches it: the nudge is one line, however long. (A failed MCP
+    // server's warning wraps at draw, so it caches nothing.)
     pages.apply(&Envelope {
-        kind: "mcp_server_failed".to_owned(),
+        kind: "context_nudged".to_owned(),
         session_id: SessionId("s_aaaaaaaaaaaaaaaa".to_owned()),
         ts: 0,
         schema_version: contract::SCHEMA_VERSION,
         turn_id: None,
         action_id: None,
         seq: None,
-        payload: json!({"server": "one", "reason": "died",
-            "will_restart": true, "error": {"code": "mcp_server_unavailable",
-            "message": long}})
-        .as_object()
-        .cloned()
-        .unwrap_or_default(),
+        payload: json!({"tokens": 268_000, "trigger_at": 400_000})
+            .as_object()
+            .cloned()
+            .unwrap_or_default(),
     });
     assert!(!pages.wrapped.is_empty());
     // Exactly the open page's lines wider than the screen are cached, with

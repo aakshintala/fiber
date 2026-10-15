@@ -379,7 +379,7 @@ fn a_lost_connection_ends_the_wait_with_the_notice() {
     // reach the top than the eighty that sufficed for the floating
     // notice; a fetch already waiting sends nothing more.
     let mut top = to_the_top();
-    top.extend((0..5).map(|_| Input::Bytes(PAGE_UP.to_vec())));
+    top.extend((0..40).map(|_| Input::Bytes(PAGE_UP.to_vec())));
     let lp = run(lp, rx, &tx, top);
     assert_eq!(ranges(&seen).len(), 1);
     assert!(!lp.hub.has_stream());
