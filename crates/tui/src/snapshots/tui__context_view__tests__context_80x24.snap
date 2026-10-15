@@ -1,18 +1,18 @@
 ---
 source: crates/tui/src/context_view_tests.rs
-assertion_line: 729
+assertion_line: 734
 expression: screen
 ---
  Context  /context                                                   Esc returns
-61k tokens · 30% of the 200k window · automatic handoff at 140k
-██████████████████████████████████▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁│
+  61k tokens · 30% of the 200k window · automatic handoff at 140k
+  ██████████████████████████████████▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁│
                                                                     handoff 140k
-■ system prompt       ~13 0%
-■ tool definitions    ~17 0%
-■ tool results        ~11 0%
-■ messages            ~61k 99%
-Largest tool results
-  read  ~11 tokens
+  ■ system prompt       ~13 0%
+  ■ tool definitions    ~17 0%
+  ■ tool results        ~11 0%
+  ■ messages            ~61k 99%
+  Largest tool results
+    read  ~11 tokens
 
 
 

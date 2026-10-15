@@ -130,13 +130,14 @@ fn the_doc_numbers_draw_bold_sizes_a_role_bar_and_an_attention_label() {
         trigger: Some(400_000),
     };
     let frame = frame(&fold, rate(), Some(sized), List::default(), 80);
-    // "268k tokens" bold, then the dim tail.
+    // The body is indented two columns: "268k tokens" bold, then the
+    // dim tail, and the bar leaves the indent's two columns.
     assert_eq!(
-        frame.rows[0][0],
+        frame.rows[0][1],
         ("268k tokens".to_owned(), None, Ink::Heading)
     );
     assert_eq!(
-        frame.rows[0][1],
+        frame.rows[0][2],
         (
             " · 26% of the 1M window · automatic handoff at 400k".to_owned(),
             None,
@@ -147,15 +148,16 @@ fn the_doc_numbers_draw_bold_sizes_a_role_bar_and_an_attention_label() {
     // one │ in attention on the last cell.
     let runs: Vec<(usize, Ink)> = frame.rows[1]
         .iter()
+        .skip(1)
         .map(|(text, _, ink)| (text.chars().count(), *ink))
         .collect();
     assert_eq!(
         runs,
         [
-            (20, Ink::Role(Role::Accent)),
+            (19, Ink::Role(Role::Accent)),
             (10, Ink::Role(Role::Info)),
             (23, Ink::Role(Role::Error)),
-            (26, Ink::Role(Role::Rule)),
+            (25, Ink::Role(Role::Rule)),
             (1, Ink::Role(Role::Attention)),
         ]
     );
@@ -166,11 +168,11 @@ fn the_doc_numbers_draw_bold_sizes_a_role_bar_and_an_attention_label() {
     assert_eq!(
         bar,
         format!(
-            "{}{}{}{}│",
-            "█".repeat(20),
+            "  {}{}{}{}│",
+            "█".repeat(19),
             "█".repeat(10),
             "█".repeat(23),
-            "▁".repeat(26)
+            "▁".repeat(25)
         )
     );
     // The label ends under the marker, in attention.
@@ -198,20 +200,20 @@ fn the_doc_numbers_draw_bold_sizes_a_role_bar_and_an_attention_label() {
     assert_eq!(
         categories,
         [
-            format!("■ {:<20}~100k 37%", "system prompt"),
-            format!("■ {:<20}~50k 18%", "tool definitions"),
-            format!("■ {:<20}~118k 44%", "tool results"),
-            format!("■ {:<20}~0 0%", "messages"),
+            format!("  ■ {:<20}~100k 37%", "system prompt"),
+            format!("  ■ {:<20}~50k 18%", "tool definitions"),
+            format!("  ■ {:<20}~118k 44%", "tool results"),
+            format!("  ■ {:<20}~0 0%", "messages"),
         ]
     );
-    assert_eq!(frame.rows[3][0].2, Ink::Role(Role::Accent));
-    assert_eq!(frame.rows[4][0].2, Ink::Role(Role::Info));
-    assert_eq!(frame.rows[5][0].2, Ink::Role(Role::Error));
-    assert_eq!(frame.rows[6][0].2, Ink::Role(Role::Text));
-    assert_eq!(frame.rows[3][2].2, Ink::Muted);
+    assert_eq!(frame.rows[3][1].2, Ink::Role(Role::Accent));
+    assert_eq!(frame.rows[4][1].2, Ink::Role(Role::Info));
+    assert_eq!(frame.rows[5][1].2, Ink::Role(Role::Error));
+    assert_eq!(frame.rows[6][1].2, Ink::Role(Role::Text));
+    assert_eq!(frame.rows[3][3].2, Ink::Muted);
     // Then the bold largest heading.
     assert_eq!(
-        frame.rows[7][0],
+        frame.rows[7][1],
         ("Largest tool results".to_owned(), None, Ink::Heading)
     );
 }
@@ -492,11 +494,14 @@ fn no_preamble_or_context_total_says_when_context_appears() {
         let frame = frame(fold, Rate::default(), None, List::default(), 80);
         assert_eq!(
             frame.rows,
-            [vec![(
-                "The context shows after the session's first request.".to_owned(),
-                None,
-                Ink::Muted
-            )]]
+            [vec![
+                ("  ".to_owned(), None, Ink::Plain),
+                (
+                    "The context shows after the session's first request.".to_owned(),
+                    None,
+                    Ink::Muted
+                )
+            ]]
         );
     }
 }
@@ -517,7 +522,7 @@ fn without_a_rate_the_view_draws_one_fill_and_says_when_to_break_down() {
         List::default(),
         12,
     );
-    assert!(row(&frame, "20 tokens").is_some());
+    assert!(row(&frame, "  20 tokens").is_some());
     assert_eq!(
         frame
             .rows
@@ -527,7 +532,7 @@ fn without_a_rate_the_view_draws_one_fill_and_says_when_to_break_down() {
                 .iter()
                 .map(|(text, _, _)| text.as_str())
                 .collect::<String>()),
-        Some("███▁▁▁▁▁▁▁▁│".to_owned())
+        Some("  ██▁▁▁▁▁▁▁│".to_owned())
     );
     assert_eq!(frame.below, ["Breakdown after a request without images."]);
     assert!(
@@ -618,7 +623,7 @@ fn tool_results_draw_in_error() {
                 .contains("tool results")
         })
         .expect("the tool results row");
-    assert_eq!(results[0], ("■ ".to_owned(), None, Ink::Role(Role::Error)));
+    assert_eq!(results[1], ("■ ".to_owned(), None, Ink::Role(Role::Error)));
 }
 
 #[test]
@@ -654,7 +659,7 @@ fn the_bar_row_stays_present_and_row_count_does_not_depend_on_width() {
             .iter()
             .map(|(text, _, _)| text.as_str())
             .collect::<String>()),
-        Some(String::new())
+        Some("  ".to_owned())
     );
     assert!(wide.rows.iter().any(|cells| {
         cells

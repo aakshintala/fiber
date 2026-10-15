@@ -483,13 +483,13 @@ const REPLY: &str = "The quay ledger balances.";
 
 fn setup_with_read() -> Setup {
     let setup = Setup::new();
-    let mut ledger = String::new();
-    for line in 0..2000 {
-        ledger.push_str(&format!(
-            "ledger line {line:04} with padding to fill bytes\n"
-        ));
-    }
-    fs::write(setup.workspace().join("a.txt"), ledger).unwrap();
+    // One line is enough: the test only checks that the read appears
+    // among the largest tool results.
+    fs::write(
+        setup.workspace().join("a.txt"),
+        "ledger line with padding to fill bytes\n",
+    )
+    .unwrap();
     write_json(
         &setup.workspace().join("s.json"),
         &json!({"steps": [
