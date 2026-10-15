@@ -104,8 +104,12 @@ fn fake_second_hold_waits_while_the_key_is_held() {
     });
     let probe = Arc::clone(&lock);
     let (waiting, waiting_rx) = mpsc::channel();
-    thread::spawn(move || {
+    let poll_deadline = Deadline::after(DEADLINE);
+    let poller = thread::spawn(move || {
         while probe.waiting() != 1 {
+            if poll_deadline.left().is_zero() {
+                return;
+            }
             thread::yield_now();
         }
         waiting.send(()).unwrap();
@@ -125,5 +129,6 @@ fn fake_second_hold_waits_while_the_key_is_held() {
     );
     waiter.join().unwrap();
     holder.join().unwrap();
+    poller.join().unwrap();
     assert_eq!(lock.waiting(), 0);
 }
