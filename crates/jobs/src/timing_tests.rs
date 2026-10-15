@@ -535,7 +535,11 @@ fn a_resumed_delegate_times_the_new_run() {
         "the run end",
     );
     // Then a resume with a held launch and a 9 ms step inside its start.
-    let marker = "fiber-p10-resume";
+    // The marker carries a unique suffix: the bare `fiber-p10-resume`
+    // prefix-matches other fixtures' markers (`resumeunknown`,
+    // `resumefail`, `resumeboundary`, `resumecancel`), and a watchdog
+    // dropping on one would kill another test's processes.
+    let marker = "fiber-p10-resumerun";
     let _watchdog = Watchdog::matching(marker);
     let (launch, reached, release) = hold_launch(marker);
     let tool = Arc::new(fixture.messenger(launch, refused_watch(), Arc::new(|_| Ok(None))));
