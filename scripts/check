@@ -112,7 +112,7 @@ if [ "$scope" != platform ]; then
         crates/main/tests/install_fixture/fiber \
         crates/main/tests/install_fixture/bin/uname \
         crates/main/tests/install_fixture/bin/sysctl
-      shellcheck --shell=bash scripts/check scripts/flaky-tests scripts/test-flaky-tests scripts/leak-scan scripts/test-leak-scan scripts/test-leak-probe scripts/bug-red scripts/test-bug-red scripts/test-bug-red-cargo scripts/cache-prune scripts/check-docs scripts/install-shells scripts/mutants-rotation scripts/test-mutants-rotation scripts/paging-jig scripts/release-size scripts/stored-results scripts/lib/release.sh
+      shellcheck --shell=bash scripts/check scripts/flaky-tests scripts/test-flaky-tests scripts/leak-scan scripts/test-leak-scan scripts/test-leak-probe scripts/bug-red scripts/test-bug-red scripts/test-bug-red-cargo scripts/cache-prune scripts/check-docs scripts/class-data scripts/test-class-data scripts/install-shells scripts/mutants-rotation scripts/test-mutants-rotation scripts/paging-jig scripts/release-size scripts/stored-results scripts/lib/release.sh
     else
       echo "== shellcheck: Linux only (docs/ci.md), not run here"
     fi
@@ -128,6 +128,8 @@ if [ "$scope" != shared ] && [ ${#package_args[@]} -gt 0 ]; then
   scripts/test-mutants-rotation
   echo "== bug-red self-test"
   scripts/test-bug-red
+  echo "== class-data self-test"
+  scripts/test-class-data
   echo "== cargo clippy --all-targets -- -D warnings"
   cargo clippy --all-targets "${package_spec_args[@]}" -- -D warnings
   # A per-run nonce in the environment: every descendant inherits it, so
