@@ -469,7 +469,7 @@ fn a_join_in_a_manifest_file_is_a_run_time_read() {
         "tui",
         "crates/tui/src/theme_tests.rs",
         "src/theme_tests.rs",
-        "let path = std::path::Path::new(env!(\"CARGO_MANIFEST_DIR\")).join(\"../../docs/tui.md\");\n",
+        "let path = read_to_string(std::path::Path::new(env!(\"CARGO_MANIFEST_DIR\")).join(\"../../docs/tui.md\"));\n",
     )];
     assert_eq!(
         runtime_read_mismatches(&files, &members_with_tools()).unwrap(),
@@ -526,6 +526,20 @@ fn a_spawn_join_is_not_a_run_time_read() {
 }
 
 #[test]
+fn a_join_passed_to_a_spawn_or_a_check_is_not_a_run_time_read() {
+    let files = [runtime_src(
+        "contract",
+        "crates/contract/src/golden_tests.rs",
+        "src/golden_tests.rs",
+        "let exe = Path::new(env!(\"CARGO_MANIFEST_DIR\")).join(\"crates/contract/src/tool\");\nlet child = std::process::Command::new(\"tool\").arg(&exe).spawn().unwrap();\nlet present = Path::new(env!(\"CARGO_MANIFEST_DIR\")).join(\"crates/contract/src/tool\").exists();\n",
+    )];
+    assert_eq!(
+        runtime_read_mismatches(&files, &members_with_tools()).unwrap(),
+        Vec::<String>::new()
+    );
+}
+
+#[test]
 fn a_read_of_a_computed_path_is_not_a_run_time_read() {
     let files = [runtime_src(
         "main",
@@ -545,7 +559,7 @@ fn a_join_without_the_manifest_dir_is_not_a_run_time_read() {
         "main",
         "crates/main/tests/release.rs",
         "tests/release.rs",
-        "let path = home.join(\"docs/README.md\");\n",
+        "let path = read_to_string(home.join(\"docs/README.md\"));\n",
     )];
     assert_eq!(
         runtime_read_mismatches(&files, &members_with_tools()).unwrap(),
@@ -559,7 +573,7 @@ fn a_join_onto_a_temp_dir_is_not_a_run_time_read() {
         "main",
         "crates/main/tests/ask.rs",
         "tests/ask.rs",
-        "let m = env!(\"CARGO_MANIFEST_DIR\");\nlet doc = std::fs::read_to_string(home.join(\"docs/README.md\")).unwrap();\nlet dir = home.join(\"docs/skills\");\n",
+        "let m = env!(\"CARGO_MANIFEST_DIR\");\nlet doc = std::fs::read_to_string(home.join(\"docs/README.md\")).unwrap();\nlet dir = read_to_string(home.join(\"docs/skills\"));\n",
     )];
     assert_eq!(
         runtime_read_mismatches(&files, &members_with_tools()).unwrap(),
@@ -584,18 +598,118 @@ fn a_join_on_a_bound_manifest_base_is_a_run_time_read() {
 }
 
 #[test]
-fn a_chained_bound_base_is_a_run_time_read() {
+fn a_join_chained_two_levels_is_not_a_run_time_read() {
     let files = [runtime_src(
         "tui",
         "crates/tui/src/theme_tests.rs",
         "src/theme_tests.rs",
-        "let a = Path::new(env!(\"CARGO_MANIFEST_DIR\"));\nlet b = a.join(\"x\");\nlet doc = b.join(\"docs/y\");\n",
+        "let a = Path::new(env!(\"CARGO_MANIFEST_DIR\"));\nlet b = a.join(\"x\");\nlet doc = read_to_string(b.join(\"docs/y\"));\n",
+    )];
+    assert_eq!(
+        runtime_read_mismatches(&files, &members_with_tools()).unwrap(),
+        Vec::<String>::new()
+    );
+}
+
+#[test]
+fn a_read_of_a_one_level_join_reports_its_literal() {
+    let files = [runtime_src(
+        "tui",
+        "crates/tui/src/theme_tests.rs",
+        "src/theme_tests.rs",
+        "let a = Path::new(env!(\"CARGO_MANIFEST_DIR\"));\nlet b = a.join(\"x\");\nlet doc = read_to_string(&b);\n",
+    )];
+    assert_eq!(
+        runtime_read_mismatches(&files, &members_with_tools()).unwrap(),
+        ["crates/tui/src/theme_tests.rs: reads x at run time; compile it in with include_str!"]
+    );
+}
+
+#[test]
+fn a_joined_name_in_a_read_is_a_run_time_read() {
+    let files = [runtime_src(
+        "contract",
+        "crates/contract/src/golden_tests.rs",
+        "src/golden_tests.rs",
+        "let src = std::fs::read_to_string(Path::new(env!(\"CARGO_MANIFEST_DIR\")).join(\"golden.md\")).unwrap();\n",
     )];
     assert_eq!(
         runtime_read_mismatches(&files, &members_with_tools()).unwrap(),
         [
-            "crates/tui/src/theme_tests.rs: reads docs/y at run time; compile it in with include_str!"
+            "crates/contract/src/golden_tests.rs: reads golden.md at run time; compile it in with include_str!"
         ]
+    );
+}
+
+#[test]
+fn junk_literals_in_a_read_are_not_a_run_time_read() {
+    let files = [runtime_src(
+        "contract",
+        "crates/contract/src/lib.rs",
+        "src/lib.rs",
+        "let base = Path::new(env!(\"CARGO_MANIFEST_DIR\"));\nlet a = std::fs::read_to_string(\".\").unwrap();\nlet b = std::fs::read_to_string(base.join(\"..\")).unwrap();\nlet c = std::fs::read_to_string(base.join(\"/\")).unwrap();\nlet d = std::fs::read_to_string(base.join(\"\")).unwrap();\n",
+    )];
+    assert_eq!(
+        runtime_read_mismatches(&files, &members_with_tools()).unwrap(),
+        Vec::<String>::new()
+    );
+}
+
+#[test]
+fn a_one_level_join_passed_to_a_read_is_a_run_time_read() {
+    let files = [runtime_src(
+        "contract",
+        "crates/contract/src/golden_tests.rs",
+        "src/golden_tests.rs",
+        "let base = Path::new(env!(\"CARGO_MANIFEST_DIR\"));\nlet p = base.join(\"data.bin\");\nlet bytes = std::fs::read(&p).unwrap();\n",
+    )];
+    assert_eq!(
+        runtime_read_mismatches(&files, &members_with_tools()).unwrap(),
+        [
+            "crates/contract/src/golden_tests.rs: reads data.bin at run time; compile it in with include_str!"
+        ]
+    );
+}
+
+#[test]
+fn a_two_level_join_passed_to_a_read_is_not_a_run_time_read() {
+    let files = [runtime_src(
+        "contract",
+        "crates/contract/src/golden_tests.rs",
+        "src/golden_tests.rs",
+        "let base = Path::new(env!(\"CARGO_MANIFEST_DIR\"));\nlet p = base.join(\"data\");\nlet q = p.join(\"out.bin\");\nlet r = p;\nlet a = std::fs::read(q).unwrap();\nlet b = std::fs::read_to_string(r).unwrap();\n",
+    )];
+    assert_eq!(
+        runtime_read_mismatches(&files, &members_with_tools()).unwrap(),
+        Vec::<String>::new()
+    );
+}
+
+#[test]
+fn a_temp_dir_join_in_a_read_is_not_a_run_time_read() {
+    let files = [runtime_src(
+        "contract",
+        "crates/contract/src/golden_tests.rs",
+        "src/golden_tests.rs",
+        "let dir = tempdir().unwrap();\nlet s = std::fs::read_to_string(dir.join(\"out.txt\")).unwrap();\n",
+    )];
+    assert_eq!(
+        runtime_read_mismatches(&files, &members_with_tools()).unwrap(),
+        Vec::<String>::new()
+    );
+}
+
+#[test]
+fn a_manifest_literal_joined_onto_another_base_binds_nothing() {
+    let files = [runtime_src(
+        "contract",
+        "crates/contract/src/golden_tests.rs",
+        "src/golden_tests.rs",
+        "let h = home.join(env!(\"CARGO_MANIFEST_DIR\"));\nlet s = std::fs::read_to_string(h.join(\"data.md\")).unwrap();\n",
+    )];
+    assert_eq!(
+        runtime_read_mismatches(&files, &members_with_tools()).unwrap(),
+        Vec::<String>::new()
     );
 }
 
@@ -619,7 +733,7 @@ fn a_let_without_the_manifest_binds_nothing() {
         "main",
         "crates/main/tests/release.rs",
         "tests/release.rs",
-        "let base = home_dir();\nlet p = base.join(\"docs/x\");\n",
+        "let base = home_dir();\nlet p = read_to_string(base.join(\"docs/x\"));\n",
     )];
     assert_eq!(
         runtime_read_mismatches(&files, &members_with_tools()).unwrap(),
@@ -633,7 +747,7 @@ fn a_typed_manifest_base_is_a_run_time_read() {
         "tui",
         "crates/tui/src/theme_tests.rs",
         "src/theme_tests.rs",
-        "let base: &Path = Path::new(env!(\"CARGO_MANIFEST_DIR\"));\nlet doc = base.join(\"../../docs/tui.md\");\n",
+        "let base: &Path = Path::new(env!(\"CARGO_MANIFEST_DIR\"));\nlet doc = read_to_string(base.join(\"../../docs/tui.md\"));\n",
     )];
     assert_eq!(
         runtime_read_mismatches(&files, &members_with_tools()).unwrap(),
@@ -649,7 +763,7 @@ fn a_mut_manifest_base_is_a_run_time_read() {
         "tui",
         "crates/tui/src/theme_tests.rs",
         "src/theme_tests.rs",
-        "let mut base = Path::new(env!(\"CARGO_MANIFEST_DIR\"));\nlet doc = base.join(\"../../docs/tui.md\");\n",
+        "let mut base = Path::new(env!(\"CARGO_MANIFEST_DIR\"));\nlet doc = read_to_string(base.join(\"../../docs/tui.md\"));\n",
     )];
     assert_eq!(
         runtime_read_mismatches(&files, &members_with_tools()).unwrap(),
@@ -665,7 +779,7 @@ fn a_manifest_base_shadowed_by_a_temp_dir_is_not_a_run_time_read() {
         "main",
         "crates/main/tests/release.rs",
         "tests/release.rs",
-        "let base = Path::new(env!(\"CARGO_MANIFEST_DIR\"));\nlet base = tempdir();\nlet p = base.join(\"docs/x\");\n",
+        "let base = Path::new(env!(\"CARGO_MANIFEST_DIR\"));\nlet base = tempdir();\nlet p = read_to_string(base.join(\"docs/x\"));\n",
     )];
     assert_eq!(
         runtime_read_mismatches(&files, &members_with_tools()).unwrap(),
@@ -679,7 +793,7 @@ fn a_temp_dir_shadowed_by_a_manifest_base_is_a_run_time_read() {
         "main",
         "crates/main/tests/release.rs",
         "tests/release.rs",
-        "let base = tempdir();\nlet base = Path::new(env!(\"CARGO_MANIFEST_DIR\"));\nlet p = base.join(\"docs/x\");\n",
+        "let base = tempdir();\nlet base = Path::new(env!(\"CARGO_MANIFEST_DIR\"));\nlet p = read_to_string(base.join(\"docs/x\"));\n",
     )];
     assert_eq!(
         runtime_read_mismatches(&files, &members_with_tools()).unwrap(),
@@ -693,7 +807,7 @@ fn a_block_binding_does_not_leak_to_a_sibling_block() {
         "main",
         "crates/main/tests/release.rs",
         "tests/release.rs",
-        "{ let base = Path::new(env!(\"CARGO_MANIFEST_DIR\")); }\nlet p = base.join(\"docs/x\");\n",
+        "{ let base = Path::new(env!(\"CARGO_MANIFEST_DIR\")); }\nlet p = read_to_string(base.join(\"docs/x\"));\n",
     )];
     assert_eq!(
         runtime_read_mismatches(&files, &members_with_tools()).unwrap(),
@@ -707,7 +821,7 @@ fn an_outer_binding_is_visible_in_a_nested_block() {
         "main",
         "crates/main/tests/release.rs",
         "tests/release.rs",
-        "let base = Path::new(env!(\"CARGO_MANIFEST_DIR\"));\nif x { base.join(\"docs/x\"); }\n",
+        "let base = Path::new(env!(\"CARGO_MANIFEST_DIR\"));\nif x { read_to_string(base.join(\"docs/x\")); }\n",
     )];
     assert_eq!(
         runtime_read_mismatches(&files, &members_with_tools()).unwrap(),
@@ -735,7 +849,7 @@ fn a_mut_ref_to_a_bound_base_is_a_run_time_read() {
         "main",
         "crates/main/tests/release.rs",
         "tests/release.rs",
-        "let base = Path::new(env!(\"CARGO_MANIFEST_DIR\"));\nlet p = &mut base.join(\"docs/b\");\n",
+        "let base = Path::new(env!(\"CARGO_MANIFEST_DIR\"));\nlet p = read_to_string(&mut base.join(\"docs/b\"));\n",
     )];
     assert_eq!(
         runtime_read_mismatches(&files, &members_with_tools()).unwrap(),
@@ -749,7 +863,7 @@ fn a_deref_of_a_bound_base_is_a_run_time_read() {
         "main",
         "crates/main/tests/release.rs",
         "tests/release.rs",
-        "let base = Path::new(env!(\"CARGO_MANIFEST_DIR\"));\nlet p = *base.join(\"docs/c\");\n",
+        "let base = Path::new(env!(\"CARGO_MANIFEST_DIR\"));\nlet p = read_to_string(*base.join(\"docs/c\"));\n",
     )];
     assert_eq!(
         runtime_read_mismatches(&files, &members_with_tools()).unwrap(),
@@ -763,7 +877,7 @@ fn a_parenthesised_bound_base_is_a_run_time_read() {
         "main",
         "crates/main/tests/release.rs",
         "tests/release.rs",
-        "let base = Path::new(env!(\"CARGO_MANIFEST_DIR\"));\nlet p = (base).join(\"docs/d\");\n",
+        "let base = Path::new(env!(\"CARGO_MANIFEST_DIR\"));\nlet p = read_to_string((base).join(\"docs/d\"));\n",
     )];
     assert_eq!(
         runtime_read_mismatches(&files, &members_with_tools()).unwrap(),
@@ -777,7 +891,7 @@ fn a_parenthesised_ref_to_a_bound_base_is_a_run_time_read() {
         "main",
         "crates/main/tests/release.rs",
         "tests/release.rs",
-        "let base = Path::new(env!(\"CARGO_MANIFEST_DIR\"));\nlet p = (&base).join(\"docs/e\");\n",
+        "let base = Path::new(env!(\"CARGO_MANIFEST_DIR\"));\nlet p = read_to_string((&base).join(\"docs/e\"));\n",
     )];
     assert_eq!(
         runtime_read_mismatches(&files, &members_with_tools()).unwrap(),
@@ -791,7 +905,7 @@ fn a_rebuilt_path_on_a_bound_base_is_a_run_time_read() {
         "main",
         "crates/main/tests/release.rs",
         "tests/release.rs",
-        "let base = Path::new(env!(\"CARGO_MANIFEST_DIR\"));\nlet p = Path::new(base).join(\"docs/f\");\n",
+        "let base = Path::new(env!(\"CARGO_MANIFEST_DIR\"));\nlet p = read_to_string(&Path::new(base).join(\"docs/f\"));\n",
     )];
     assert_eq!(
         runtime_read_mismatches(&files, &members_with_tools()).unwrap(),
@@ -805,7 +919,7 @@ fn a_ref_to_a_temp_dir_is_not_a_run_time_read() {
         "main",
         "crates/main/tests/release.rs",
         "tests/release.rs",
-        "let m = env!(\"CARGO_MANIFEST_DIR\");\nlet p = &home.join(\"docs/a\");\n",
+        "let m = env!(\"CARGO_MANIFEST_DIR\");\nlet p = read_to_string(&home.join(\"docs/a\"));\n",
     )];
     assert_eq!(
         runtime_read_mismatches(&files, &members_with_tools()).unwrap(),
@@ -819,7 +933,7 @@ fn a_mut_ref_to_a_temp_dir_is_not_a_run_time_read() {
         "main",
         "crates/main/tests/release.rs",
         "tests/release.rs",
-        "let m = env!(\"CARGO_MANIFEST_DIR\");\nlet p = &mut home.join(\"docs/b\");\n",
+        "let m = env!(\"CARGO_MANIFEST_DIR\");\nlet p = read_to_string(&mut home.join(\"docs/b\"));\n",
     )];
     assert_eq!(
         runtime_read_mismatches(&files, &members_with_tools()).unwrap(),
@@ -833,7 +947,7 @@ fn a_deref_of_a_temp_dir_is_not_a_run_time_read() {
         "main",
         "crates/main/tests/release.rs",
         "tests/release.rs",
-        "let m = env!(\"CARGO_MANIFEST_DIR\");\nlet p = *home.join(\"docs/c\");\n",
+        "let m = env!(\"CARGO_MANIFEST_DIR\");\nlet p = read_to_string(*home.join(\"docs/c\"));\n",
     )];
     assert_eq!(
         runtime_read_mismatches(&files, &members_with_tools()).unwrap(),
@@ -847,7 +961,7 @@ fn a_parenthesised_temp_dir_is_not_a_run_time_read() {
         "main",
         "crates/main/tests/release.rs",
         "tests/release.rs",
-        "let m = env!(\"CARGO_MANIFEST_DIR\");\nlet p = (home).join(\"docs/d\");\n",
+        "let m = env!(\"CARGO_MANIFEST_DIR\");\nlet p = read_to_string((home).join(\"docs/d\"));\n",
     )];
     assert_eq!(
         runtime_read_mismatches(&files, &members_with_tools()).unwrap(),
@@ -861,7 +975,7 @@ fn a_parenthesised_ref_to_a_temp_dir_is_not_a_run_time_read() {
         "main",
         "crates/main/tests/release.rs",
         "tests/release.rs",
-        "let m = env!(\"CARGO_MANIFEST_DIR\");\nlet p = (&home).join(\"docs/e\");\n",
+        "let m = env!(\"CARGO_MANIFEST_DIR\");\nlet p = read_to_string((&home).join(\"docs/e\"));\n",
     )];
     assert_eq!(
         runtime_read_mismatches(&files, &members_with_tools()).unwrap(),
@@ -875,7 +989,7 @@ fn a_rebuilt_path_on_a_temp_dir_is_not_a_run_time_read() {
         "main",
         "crates/main/tests/release.rs",
         "tests/release.rs",
-        "let m = env!(\"CARGO_MANIFEST_DIR\");\nlet p = Path::new(home).join(\"docs/f\");\n",
+        "let m = env!(\"CARGO_MANIFEST_DIR\");\nlet p = read_to_string(Path::new(home).join(\"docs/f\"));\n",
     )];
     assert_eq!(
         runtime_read_mismatches(&files, &members_with_tools()).unwrap(),
@@ -889,7 +1003,7 @@ fn a_read_argument_block_does_not_leak_its_bindings() {
         "main",
         "crates/main/tests/release.rs",
         "tests/release.rs",
-        "read_to_string({ let base = Path::new(env!(\"CARGO_MANIFEST_DIR\")); \"x\" });\nbase.join(\"docs/x\");\n",
+        "read_to_string({ let base = Path::new(env!(\"CARGO_MANIFEST_DIR\")); \"x\" });\nread_to_string(base.join(\"docs/x\"));\n",
     )];
     assert_eq!(
         runtime_read_mismatches(&files, &members_with_tools()).unwrap(),
@@ -903,7 +1017,7 @@ fn a_concat_argument_block_does_not_leak_its_bindings() {
         "main",
         "crates/main/tests/release.rs",
         "tests/release.rs",
-        "let c = concat!({ let base = Path::new(env!(\"CARGO_MANIFEST_DIR\")); \"x\" });\nbase.join(\"docs/x\");\n",
+        "let c = concat!({ let base = Path::new(env!(\"CARGO_MANIFEST_DIR\")); \"x\" });\nread_to_string(base.join(\"docs/x\"));\n",
     )];
     assert_eq!(
         runtime_read_mismatches(&files, &members_with_tools()).unwrap(),
@@ -917,7 +1031,7 @@ fn a_join_argument_block_does_not_leak_its_bindings() {
         "main",
         "crates/main/tests/release.rs",
         "tests/release.rs",
-        "outer.join({ let base = Path::new(env!(\"CARGO_MANIFEST_DIR\")); \"docs/x\" });\nbase.join(\"docs/y\");\n",
+        "outer.join({ let base = Path::new(env!(\"CARGO_MANIFEST_DIR\")); \"docs/x\" });\nread_to_string(base.join(\"docs/y\"));\n",
     )];
     assert_eq!(
         runtime_read_mismatches(&files, &members_with_tools()).unwrap(),
