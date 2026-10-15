@@ -211,6 +211,21 @@ fn read(
     (reader, done)
 }
 
+/// Waits until one lane parks in `take` at a full cap: every test fills
+/// the cap on its own thread first, so a waiter seen here has reached
+/// the full-capacity branch. A cap that never fills fails here, naming
+/// the waiter, instead of passing on an unscheduled thread.
+#[track_caller]
+fn await_waiter(credits: &Credits, what: &str) {
+    let wait = Deadline::after(DEADLINE);
+    while credits.waiters() == 0 {
+        if wait.left().is_zero() {
+            panic!("waited {DEADLINE:?} for {what}");
+        }
+        std::thread::yield_now();
+    }
+}
+
 #[test]
 fn lines_below_the_cap_end_with_one_disconnect() {
     for count in [63usize, 64] {
@@ -261,12 +276,12 @@ fn the_65th_line_waits_for_a_receive() {
             Err(err) => panic!("waited {DEADLINE:?} for line {seq}: {err}"),
         }
     }
-    // The 65th line is parsed and pending: a bounded receive of its own
-    // that must time out, with no disconnect either.
+    // The 65th line is parsed and pending: the reader parks at the
+    // full-capacity branch, so nothing more arrives, and no disconnect
+    // either.
+    await_waiter(&credits, "the reader to wait at the queue cap");
     assert!(
-        Deadline::after(Duration::from_millis(200))
-            .recv(&rx)
-            .is_err(),
+        rx.try_recv().is_err(),
         "the 65th line arrived with none received"
     );
     // One receive releases the pending line, then EOF ends the reader.
@@ -313,12 +328,11 @@ fn malformed_lines_take_no_unit() {
             Err(err) => panic!("waited {DEADLINE:?} for line {seq}: {err}"),
         }
     }
-    // The 65th valid line waits: a bounded receive of its own that must
-    // time out.
+    // The 65th valid line waits at the full-capacity branch: the
+    // parked reader sends nothing more.
+    await_waiter(&credits, "the reader to wait at the queue cap");
     assert!(
-        Deadline::after(Duration::from_millis(200))
-            .recv(&rx)
-            .is_err(),
+        rx.try_recv().is_err(),
         "line 64 arrived with none received"
     );
     // One receive releases it: a new wait after the release.
@@ -394,9 +408,9 @@ fn takes_past_the_cap_wait_for_a_receive() {
     let lane = Feed::new(std::sync::mpsc::channel().0, Arc::clone(&credits));
     assert!(credits.take(lane.epoch));
     assert!(credits.take(lane.epoch));
-    // The third take waits: a bounded join of its own that must time
-    // out. Each blocking wait has its deadline; the waiter's return has
-    // one too.
+    // The third take waits: a parked waiter at the full-capacity
+    // branch. Each blocking wait has its deadline; the waiter's return
+    // has one too.
     let waiter = Arc::clone(&credits);
     let epoch = lane.epoch;
     let (done_tx, done) = std::sync::mpsc::channel();
@@ -407,18 +421,17 @@ fn takes_past_the_cap_wait_for_a_receive() {
             done_tx.send(took).unwrap_or(());
         })
         .unwrap_or_else(|err| panic!("spawn: {err}"));
+    await_waiter(&credits, "the third take to wait at a cap of 2");
     assert!(
-        Deadline::after(Duration::from_millis(200))
-            .recv(&done)
-            .is_err(),
+        done.try_recv().is_err(),
         "the third take passed a cap of 2"
     );
     credits.received(&Input::Tick);
+    // A tick holds no unit, so the waiter stays parked.
+    assert_eq!(credits.waiters(), 1, "a tick releases nothing");
     assert!(
-        Deadline::after(Duration::from_millis(200))
-            .recv(&done)
-            .is_err(),
-        "a tick releases nothing"
+        done.try_recv().is_err(),
+        "a tick released the waiter"
     );
     credits.received(&hub_line(0));
     assert!(Deadline::after(DEADLINE).recv_or_fail(&done, "the take to return"),);
@@ -449,8 +462,7 @@ fn received_ignores_non_hub_and_empty() {
     assert!(credits.take(lane.epoch));
     // One held: a non-hub receive changes nothing, a hub one releases.
     credits.received(&Input::Resize);
-    // Still held: the next take waits. A bounded take of its own must
-    // time out.
+    // Still held: the next take parks at the full-capacity branch.
     let waiter = Arc::clone(&credits);
     let epoch = lane.epoch;
     let (done_tx, done) = std::sync::mpsc::channel();
@@ -461,10 +473,9 @@ fn received_ignores_non_hub_and_empty() {
             done_tx.send(took).unwrap_or(());
         })
         .unwrap_or_else(|err| panic!("spawn: {err}"));
+    await_waiter(&credits, "the take to wait at a held unit");
     assert!(
-        Deadline::after(Duration::from_millis(200))
-            .recv(&done)
-            .is_err(),
+        done.try_recv().is_err(),
         "a resize released the held unit"
     );
     credits.received(&hub_line(1));
@@ -492,10 +503,9 @@ fn cancel_ends_every_wait_without_taking() {
             done_tx.send(took).unwrap_or(());
         })
         .unwrap_or_else(|err| panic!("spawn: {err}"));
+    await_waiter(&credits, "the take to wait at a full cap");
     assert!(
-        Deadline::after(Duration::from_millis(200))
-            .recv(&done)
-            .is_err(),
+        done.try_recv().is_err(),
         "the take passed a full cap"
     );
     credits.cancel();
@@ -527,10 +537,9 @@ fn a_zero_cap_waits_until_cancelled() {
             done_tx.send(took).unwrap_or(());
         })
         .unwrap_or_else(|err| panic!("spawn: {err}"));
+    await_waiter(&credits, "the take to wait at a cap of 0");
     assert!(
-        Deadline::after(Duration::from_millis(200))
-            .recv(&done)
-            .is_err(),
+        done.try_recv().is_err(),
         "a take passed a cap of 0"
     );
     credits.cancel();
@@ -557,10 +566,9 @@ fn the_queue_cap_holds_64_then_waits() {
             done_tx.send(took).unwrap_or(());
         })
         .unwrap_or_else(|err| panic!("spawn: {err}"));
+    await_waiter(&credits, "the 65th take to wait at the queue cap");
     assert!(
-        Deadline::after(Duration::from_millis(200))
-            .recv(&done)
-            .is_err(),
+        done.try_recv().is_err(),
         "the 65th take passed the queue cap"
     );
     credits.received(&hub_line(0));

@@ -84,10 +84,12 @@ pub(crate) struct Credits {
     changed: Condvar,
 }
 
-/// What the units count, and the epoch cancellation moves on.
+/// What the units count, the epoch cancellation moves on, and how
+/// many lanes wait for a unit.
 struct State {
     held: usize,
     epoch: u64,
+    waiting: usize,
 }
 
 impl Credits {
@@ -95,7 +97,11 @@ impl Credits {
     pub(crate) fn new(cap: usize) -> Arc<Credits> {
         Arc::new(Self {
             cap,
-            state: Mutex::new(State { held: 0, epoch: 0 }),
+            state: Mutex::new(State {
+                held: 0,
+                epoch: 0,
+                waiting: 0,
+            }),
             changed: Condvar::new(),
         })
     }
@@ -112,17 +118,30 @@ impl Credits {
     /// line. Held never passes `cap`.
     fn take(&self, epoch: u64) -> bool {
         let mut state = support::lock(&self.state);
+        // Counted under the same lock hold as the predicate check, so
+        // a test that sees a waiter knows it parked: with the cap
+        // filled first, the waiter can only be in the wait below.
+        state.waiting += 1;
         while state.held >= self.cap && state.epoch == epoch {
             state = self
                 .changed
                 .wait(state)
                 .unwrap_or_else(|poison| poison.into_inner());
         }
+        state.waiting -= 1;
         if state.epoch != epoch {
             return false;
         }
         state.held += 1;
         true
+    }
+
+    /// How many lanes wait for a unit. Tests fill the cap first on
+    /// their own thread, so a waiter seen here has parked at the
+    /// full-capacity branch.
+    #[cfg(test)]
+    pub(crate) fn waiters(&self) -> usize {
+        support::lock(&self.state).waiting
     }
 
     /// Gives back the unit `input` held, if it held one: parsed hub

@@ -8,7 +8,7 @@ use super::{
     turn_lines,
 };
 use crate::Input;
-use crate::link::{Feed, Line, read_lines};
+use crate::link::{Credits, Feed, Line, read_lines};
 use crate::retry::Retry;
 use contract::clock::Clock;
 use fakes::Deadline;
@@ -95,6 +95,21 @@ impl Read for FakeLink {
     }
 }
 
+/// Waits until one lane parks in `take` at a full cap: every test fills
+/// the cap on its own thread first, so a waiter seen here has reached
+/// the full-capacity branch. A cap that never fills fails here, naming
+/// the waiter, instead of passing on an unscheduled thread.
+#[track_caller]
+fn await_waiter(credits: &Credits, what: &str) {
+    let wait = Deadline::after(DEADLINE);
+    while credits.waiters() == 0 {
+        if wait.left().is_zero() {
+            panic!("waited {DEADLINE:?} for {what}");
+        }
+        std::thread::yield_now();
+    }
+}
+
 #[test]
 fn attach_bounded_reader_stops_at_the_queue_cap() {
     let (tx, rx) = mpsc::channel();
@@ -119,13 +134,12 @@ fn attach_bounded_reader_stops_at_the_queue_cap() {
             Err(err) => panic!("waited {DEADLINE:?} for hand-out {want}: {err}"),
         }
     }
-    // The 65th line waits for a unit the loop's first receive releases,
-    // so with no consumer no 66th line is parsed: a bounded receive of
-    // its own that must time out.
+    // The 65th line waits for a unit the loop's first receive releases:
+    // the reader parks at the full-capacity branch, so no 66th line is
+    // parsed.
+    await_waiter(&hub.credits(), "the reader to wait at the queue cap");
     assert!(
-        Deadline::after(Duration::from_millis(200))
-            .recv(&hand_rx)
-            .is_err(),
+        hand_rx.try_recv().is_err(),
         "hand-out 66 arrived with 65 lines unreceived"
     );
     // One receive releases one unit: hand-out 66 follows, and 67 does
@@ -142,10 +156,12 @@ fn attach_bounded_reader_stops_at_the_queue_cap() {
         Ok(got) => assert_eq!(got, 66, "one receive releases one line"),
         Err(err) => panic!("waited {DEADLINE:?} for hand-out 66: {err}"),
     }
+    await_waiter(
+        &hub.credits(),
+        "the reader to wait after one receive",
+    );
     assert!(
-        Deadline::after(Duration::from_millis(200))
-            .recv(&hand_rx)
-            .is_err(),
+        hand_rx.try_recv().is_err(),
         "hand-out 67 arrived after one receive"
     );
     drop(hub);
@@ -176,7 +192,9 @@ fn attach_bounded_live_events_stay_within_k_while_the_fold_is_held() {
         }
     }
     // Then the loop runs on a worker with the fold held: every wait
-    // after this action is a new wait with its own deadline.
+    // after this action is a new wait with its own deadline. The credits
+    // stay here, so the test still sees the reader park.
+    let credits = lp.hub.credits();
     let (reached_tx, reached) = mpsc::channel();
     let (release_tx, release) = mpsc::channel();
     let (done_tx, done) = mpsc::channel();
@@ -197,12 +215,11 @@ fn attach_bounded_live_events_stay_within_k_while_the_fold_is_held() {
         }
     }
     // The fold is held before folding any of the 129 parsed lines, so
-    // the 130th line waits: a bounded receive of its own that must time
-    // out.
+    // the 130th line waits at the full-capacity branch: the parked
+    // reader parses nothing more.
+    await_waiter(&credits, "the reader to wait with the fold held");
     assert!(
-        Deadline::after(Duration::from_millis(200))
-            .recv(&hand_rx)
-            .is_err(),
+        hand_rx.try_recv().is_err(),
         "hand-out 130 arrived with the fold held"
     );
     let handed = 129;
@@ -557,10 +574,11 @@ fn hang_up_while_full_then_reconnect() {
             Err(err) => panic!("waited {DEADLINE:?} for line {seq} of the second stream: {err}"),
         }
     }
+    // The second reader parks at its own plateau, so nothing more
+    // arrives.
+    await_waiter(&hub.credits(), "the second reader to wait at its plateau");
     assert!(
-        Deadline::after(Duration::from_millis(200))
-            .recv(&rx)
-            .is_err(),
+        rx.try_recv().is_err(),
         "the second stream passed its plateau"
     );
     drop(hub);
@@ -655,12 +673,11 @@ fn spawn_hub_full_queue_hang_up_then_reconnect() {
         assert_eq!(kinds(std::slice::from_ref(&input)), [format!("s1-{seq}")]);
         drained.push(input);
     }
-    // The 65th waits for a unit: a bounded receive of its own that must
-    // time out.
+    // The 65th waits for a unit: the reader parks at the
+    // full-capacity branch, so nothing more arrives.
+    await_waiter(&hub.credits(), "the reader to wait at the queue cap");
     assert!(
-        Deadline::after(Duration::from_millis(200))
-            .recv(&rx)
-            .is_err(),
+        rx.try_recv().is_err(),
         "the 65th line arrived with none released"
     );
     // Releasing one unit lets the 65th through: no more, so the 66th
@@ -697,10 +714,11 @@ fn spawn_hub_full_queue_hang_up_then_reconnect() {
     for seq in 0..64u64 {
         recv_line(&rx, &second, &format!("s2-{seq}"));
     }
+    // The second reader parks at its own plateau, so nothing more
+    // arrives.
+    await_waiter(&hub.credits(), "the second reader to wait at its plateau");
     assert!(
-        Deadline::after(Duration::from_millis(200))
-            .recv(&rx)
-            .is_err(),
+        rx.try_recv().is_err(),
         "the second stream passed its plateau"
     );
     drop(hub);
