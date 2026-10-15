@@ -671,7 +671,7 @@ fn a_short_screen_drops_the_badge_after_the_hint() {
     assert_eq!(
         sized(&mut app, 40, 5),
         format!(
-            "! 1 waiting · /approvals or ⌥A\n  ⚠ connection_failed · lost           ✕\n{}\n▌ › █\n{}\n",
+            "  ⚠ 1 approvals waiting · click to reopen\n  ⚠ connection_failed · lost           ✕\n{}\n▌ › █\n{}\n",
             "▄".repeat(40),
             "▀".repeat(40)
         )
