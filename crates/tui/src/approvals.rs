@@ -23,6 +23,7 @@ mod approval;
 mod builder;
 pub(crate) mod form;
 mod one_question;
+mod text;
 
 /// The envelope kinds the queue folds, from any session.
 pub(crate) const KINDS: [&str; 5] = [
@@ -181,7 +182,7 @@ impl Queue {
         let place = format!("{} · {k} of {}", request.session.0, waiting.len());
         let session = name(&request.session)
             .filter(|name| !name.is_empty())
-            .map(|name| form::clean(&name))
+            .map(|name| text::clean(&name))
             .unwrap_or_else(|| request.session.0.clone());
         Some(match &request.ask {
             Ask::Approval(approval) => {
@@ -201,7 +202,14 @@ impl Queue {
                     caret,
                 }
             }
-            Ask::Form(form) => form.panel(format!("question · {place}"), width),
+            Ask::Form(form) => {
+                let title = Title {
+                    session,
+                    place: (waiting.len() > 1).then(|| (k, waiting.len())),
+                    questions: Some(form.question_count()),
+                };
+                form.panel(&title, width)
+            }
             Ask::One(question) => question.panel(format!("question · {place}"), width),
         })
     }
@@ -380,13 +388,13 @@ impl Queue {
                     // The main argument, never JSON: raw text that was not
                     // JSON shows as the model sent it.
                     let summary = match &call.arguments {
-                        Value::String(text) => form::clean(text),
+                        Value::String(text) => text::clean(text),
                         Value::Null
                         | Value::Bool(_)
                         | Value::Number(_)
                         | Value::Array(_)
                         | Value::Object(_) => {
-                            form::clean(&format::summary(&call.name, &call.arguments))
+                            text::clean(&format::summary(&call.name, &call.arguments))
                         }
                     };
                     self.calls
@@ -409,7 +417,7 @@ impl Queue {
                             .clone()
                             .unwrap_or_default()
                             .iter()
-                            .map(|path| form::clean(path))
+                            .map(|path| text::clean(path))
                             .collect(),
                         step: asked.step,
                         feedback: String::new(),

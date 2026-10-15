@@ -8,7 +8,6 @@ use ratatui::style::{Modifier, Style};
 use super::form::Spot;
 use super::{Mark, Panel, PanelSpot, Title};
 use crate::format::width as cells;
-use crate::markdown::style;
 use crate::theme::Role;
 
 /// "Question" in the title: bold in secondary.
@@ -56,7 +55,7 @@ impl Builder {
     pub(super) fn row(&mut self, parts: &[(&str, Style)]) -> usize {
         let segments: Vec<(String, Style)> = parts
             .iter()
-            .map(|(text, style)| (super::form::clean(text), *style))
+            .map(|(text, style)| (super::text::clean(text), *style))
             .collect();
         self.emit(&segments)
     }
@@ -79,7 +78,7 @@ impl Builder {
         let cleaned = |parts: &[(&str, Style)]| {
             parts
                 .iter()
-                .map(|(text, style)| (super::form::clean(text), *style))
+                .map(|(text, style)| (super::text::clean(text), *style))
                 .collect::<Vec<_>>()
         };
         let left = cleaned(left);

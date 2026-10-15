@@ -5,7 +5,7 @@ use contract::commands::ReplyAnswer;
 use contract::shapes::Choice;
 
 use super::form::{self, Spot};
-use super::{Panel, PanelKey};
+use super::{Panel, PanelKey, text};
 use crate::keys::{Edit, Key};
 
 /// One non-form interaction and the answer the person is composing.
@@ -89,7 +89,7 @@ impl OneQuestion {
             },
             Key::Backspace => {
                 if self.at == Row::Words {
-                    form::delete_before(&mut self.words, &mut self.caret);
+                    text::delete_before(&mut self.words, &mut self.caret);
                 }
             }
             Key::Up => self.step(false),
@@ -128,7 +128,7 @@ impl OneQuestion {
             }
             Edit::Left | Edit::Right => {
                 if self.at == Row::Words {
-                    form::move_caret(&self.words, &mut self.caret, *edit == Edit::Right);
+                    text::move_caret(&self.words, &mut self.caret, *edit == Edit::Right);
                 }
             }
             Edit::ShiftEnter
@@ -209,7 +209,7 @@ impl OneQuestion {
                     );
                 }
                 Row::Words => {
-                    let (line, caret) = form::words_row(&self.words, self.caret, here, width);
+                    let (line, caret) = text::words_row(&self.words, self.caret, here, width);
                     if let Some(caret) = caret {
                         panel.caret = Some((panel.lines.len(), caret));
                     }
@@ -299,7 +299,7 @@ impl OneQuestion {
 
     /// Types one character and takes the cursor to the words row.
     fn type_char(&mut self, ch: char) {
-        form::insert_at(&mut self.words, &mut self.caret, ch);
+        text::insert_at(&mut self.words, &mut self.caret, ch);
         self.at = Row::Words;
     }
 

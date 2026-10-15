@@ -721,3 +721,86 @@ fn opened_notes_draw_every_line_uncapped() {
     assert_eq!(rows[0].0.to_string(), "  line 1");
     assert_eq!(rows[29].0.to_string(), "  line 30");
 }
+
+#[test]
+fn answer_parts_pads_the_header_to_13_cells_with_one_space_least() {
+    use super::answer_parts;
+    // 4 cells: 9 spaces pad to 13.
+    let parts = answer_parts("Base", None);
+    assert_eq!(parts.header, "Base         ");
+    assert_eq!(parts.text, "skipped");
+    assert!(parts.skipped);
+    // 12 cells: 1 space. 13 cells: still 1 space. 14 cells: still 1 space.
+    assert_eq!(answer_parts("123456789012", None).header, "123456789012 ");
+    assert_eq!(
+        answer_parts("1234567890123", None).header,
+        "1234567890123 "
+    );
+    assert_eq!(
+        answer_parts("12345678901234", None).header,
+        "12345678901234 "
+    );
+    // A wide header counts cells, not bytes: 2 cells each.
+    assert_eq!(answer_parts("名前", None).header, "名前         ");
+    // The padded header's cells are 13, or the header's cells plus one.
+    for (header, cells) in [("Base", 13), ("1234567890123", 14), ("12345678901234", 15)] {
+        assert_eq!(super::width(&answer_parts(header, None).header), cells, "{header}");
+    }
+}
+
+#[test]
+fn answer_parts_carries_labels_quoted_words_or_skipped() {
+    use super::answer_parts;
+    let labels = ["main (Recommended)".to_owned(), "dev".to_owned()];
+    let parts = answer_parts("Base", Some((&labels, Some("and tags"))));
+    assert_eq!(parts.header, "Base         ");
+    assert_eq!(parts.text, r#"main (Recommended), dev, "and tags""#);
+    assert!(!parts.skipped);
+    let parts = answer_parts("Name", Some((&[], Some("fiber-cli"))));
+    assert_eq!(parts.text, r#""fiber-cli""#);
+    assert!(!parts.skipped);
+    let parts = answer_parts("Name", Some((&labels, None)));
+    assert_eq!(parts.text, "main (Recommended), dev");
+    assert!(!parts.skipped);
+    // Escapes without quotes, one line.
+    let labels = ["a \"b\"".to_owned()];
+    let parts = answer_parts("Pick\nnow", Some((&labels, Some("x\ny"))));
+    assert_eq!(parts.header, "Pick\\nnow    ");
+    assert_eq!(parts.text, r#"a \"b\", "x\ny""#);
+    assert!(!parts.skipped);
+}
+
+#[test]
+fn answer_row_keeps_the_bare_header_and_the_parts_text() {
+    use super::{answer_parts, answer_row};
+    // The padded header never leaks into the result line: the row is the
+    // bare escaped header, a colon and the parts' text.
+    let cases: Vec<(&str, Option<(Vec<String>, Option<String>)>)> = vec![
+        (
+            "Base",
+            Some((vec!["main (Recommended)".to_owned(), "dev".to_owned()], Some("and tags".to_owned()))),
+        ),
+        ("Name", Some((vec![], Some("fiber-cli".to_owned())))),
+        ("Pick\nnow", None),
+        ("12345678901234", None),
+    ];
+    for (header, said) in &cases {
+        let said = said
+            .as_ref()
+            .map(|(labels, text)| (labels.as_slice(), text.as_deref()));
+        let parts = answer_parts(header, said);
+        let row = answer_row(header, said);
+        assert!(!row.starts_with(&parts.header), "{row}");
+        assert!(row.ends_with(&parts.text), "{row}");
+    }
+    assert_eq!(
+        answer_row(
+            "Base",
+            Some((
+                &["main (Recommended)".to_owned(), "dev".to_owned()],
+                Some("and tags")
+            ))
+        ),
+        r#"Base: main (Recommended), dev, "and tags""#
+    );
+}
