@@ -1,0 +1,42 @@
+#!/usr/bin/env bash
+# The scheduled mutants rotation: one day's 16 shards of the
+# whole-workspace mutant list. Usage:
+# scripts/mutants-rotation <count> <epoch_day>, where count is the number
+# of non-empty `cargo mutants --workspace --list` lines and epoch_day is
+# floor(epoch_seconds / 86400). Prints one JSON line naming the rotation
+# length in days, this day's index, the shard total (16 per day) and this
+# day's 16 contiguous shard ids.
+set -euo pipefail
+
+if [ $# -ne 2 ]; then
+  echo "scripts/mutants-rotation: want <count> <epoch_day>" >&2
+  exit 2
+fi
+count=$1
+epoch_day=$2
+case $count in
+  '' | *[!0-9]*) echo "scripts/mutants-rotation: count '$count' is not a non-negative integer" >&2; exit 2 ;;
+esac
+case $epoch_day in
+  '' | *[!0-9]*) echo "scripts/mutants-rotation: epoch_day '$epoch_day' is not a non-negative integer" >&2; exit 2 ;;
+esac
+
+# 16 shards a day, each holding about 800 mutants.
+days=$(( (count + 12799) / 12800 ))
+if [ "$days" -lt 1 ]; then
+  days=1
+fi
+day=$(( epoch_day % days ))
+total=$(( 16 * days ))
+base=$(( day * 16 ))
+
+shards=""
+i=0
+while [ "$i" -lt 16 ]; do
+  if [ "$i" -gt 0 ]; then
+    shards="$shards,"
+  fi
+  shards="$shards$(( base + i ))"
+  i=$(( i + 1 ))
+done
+printf '{"days":%s,"day":%s,"total":%s,"shards":[%s]}\n' "$days" "$day" "$total" "$shards"
