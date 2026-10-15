@@ -8,6 +8,7 @@ use std::sync::Arc;
 
 use contract::ErrorCode;
 use contract::clock::Clock;
+use contract::diag::Timing;
 use contract::events::{ToolInfo, ToolSource, ToolState};
 use contract::search::SearchBackend;
 use contract::shapes::Failure;
@@ -58,14 +59,46 @@ pub(crate) fn builtin(
     delegates: &crate::delegates::Delegates,
     skills: Arc<dyn contract::skills::Skills>,
 ) -> Result<SessionTools, Failure> {
-    let files = Arc::new(
-        tools::Files::with_locks(workspace.to_path_buf(), Arc::clone(locks))
-            .with_images(fiber.clone(), artifacts.to_path_buf()),
-    );
-    let images: Arc<dyn contract::images::Images> = Arc::new(tools::ImageChild::new(
-        fiber.clone(),
-        artifacts.to_path_buf(),
-    ));
+    // The current production caller and the unit tests: no image-child
+    // timing. The debug path forwards its timing through `builtin_timed`
+    // once that composition lands; then this entry becomes its test-only
+    // form.
+    builtin_timed(
+        fiber, home, workspace, artifacts, clock, jobs, locks, web_search, delegates, skills, None,
+    )
+}
+
+/// One session's built-in tools with an optional image-child timing: the
+/// same registration as [`builtin`], timing each entered image or PDF
+/// count/cut call as `picture.run` when `timing` is present. The timing is
+/// applied to both image drivers, the file tools' child and the shared
+/// standalone child, before either is built; `None` keeps today's
+/// behaviour with no callable invoked.
+#[allow(
+    clippy::too_many_arguments,
+    reason = "one session's built-ins need Fiber home and the recorded executable alongside the session's own paths"
+)]
+pub(crate) fn builtin_timed(
+    fiber: PathBuf,
+    home: &Path,
+    workspace: &Path,
+    artifacts: &Path,
+    clock: &Arc<dyn Clock>,
+    jobs: &Arc<jobs::Registry>,
+    locks: &Arc<tools::PathLocks>,
+    web_search: Option<(Arc<dyn Tool>, ToolInfo)>,
+    delegates: &crate::delegates::Delegates,
+    skills: Arc<dyn contract::skills::Skills>,
+    timing: Option<Timing>,
+) -> Result<SessionTools, Failure> {
+    let mut files = tools::Files::with_locks(workspace.to_path_buf(), Arc::clone(locks));
+    let mut images = tools::ImageChild::new(fiber.clone(), artifacts.to_path_buf());
+    if let Some(timing) = timing {
+        files = files.with_timing(timing.clone());
+        images = images.with_timing(timing);
+    }
+    let files = Arc::new(files.with_images(fiber.clone(), artifacts.to_path_buf()));
+    let images: Arc<dyn contract::images::Images> = Arc::new(images);
     let moves: Arc<dyn contract::jobs::Jobs> = jobs.clone();
     // Only `fiber ask` reaches here, new or resumed: a non-interactive run.
     // The model's shell and the driver shell spill their output past 1 MiB
@@ -174,3 +207,200 @@ mod tests;
 #[cfg(test)]
 #[path = "tool_budget_tests.rs"]
 mod tool_budget_tests;
+
+/// `builtin_timed` wires one timing into both image drivers: the file
+/// tools' child, reached through the `read` tool, and the shared
+/// standalone child. A stub `fiber` answers both, so no image code runs.
+#[cfg(test)]
+mod timed_tests {
+    use std::sync::Arc;
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    use std::time::Duration;
+
+    use contract::diag::{Op, Timing};
+    use contract::tool::Cancel;
+
+    struct Never;
+
+    impl Cancel for Never {
+        fn is_cancelled(&self) -> bool {
+            false
+        }
+
+        fn subscribe(&self, _waker: std::sync::Weak<dyn contract::clock::Wake>) {}
+    }
+
+    struct Quiet;
+
+    impl contract::emit::Emit for Quiet {
+        fn emit(&self, _event: &contract::events::Event) {}
+    }
+
+    /// Counts timing calls and closed scopes.
+    struct Probe {
+        calls: AtomicUsize,
+        closed: AtomicUsize,
+    }
+
+    struct Scope {
+        probe: Arc<Probe>,
+    }
+
+    impl Drop for Scope {
+        fn drop(&mut self) {
+            self.probe.closed.fetch_add(1, Ordering::SeqCst);
+        }
+    }
+
+    fn timing(probe: &Arc<Probe>) -> Timing {
+        let probe = Arc::clone(probe);
+        Arc::new(
+            move |op: Op, tool: Option<&str>, _started: Option<std::time::Instant>| {
+                assert_eq!(op, Op::PictureRun);
+                assert_eq!(tool, None);
+                probe.calls.fetch_add(1, Ordering::SeqCst);
+                Some(Box::new(Scope {
+                    probe: Arc::clone(&probe),
+                }) as Box<dyn Send>)
+            },
+        )
+    }
+
+    /// How long one builtin tool call may take: starting a child can stall
+    /// for seconds, and a hang fails the test instead of hanging it.
+    const CALL_WITHIN: Duration = Duration::from_secs(10);
+
+    const PNG: &[u8] = b"\x89PNG\r\n\x1a\nrest";
+
+    /// The `builtin_timed` session over a stub `fiber` that answers image
+    /// calls from this invocation's stem.
+    #[allow(
+        clippy::type_complexity,
+        reason = "one test session: its directory, tools and shared images"
+    )]
+    fn session(
+        timing: Option<Timing>,
+    ) -> (
+        fakes::TempDir,
+        Vec<(String, Arc<dyn contract::tool::Tool>)>,
+        Arc<dyn contract::images::Images>,
+    ) {
+        let root = fakes::TempDir::new("fiber-builtin-timed");
+        std::fs::write(root.path().join("a.png"), PNG).expect("the image");
+        let clock: Arc<dyn contract::clock::Clock> = fakes::clock::FakeClock::new();
+        let fiber = fakes::script(
+            root.path(),
+            "fiber-stub",
+            "cat >/dev/null; printf '{\"file\":\"%s.png\",\"mime_type\":\"image/png\",\"width\":1,\"height\":1}\\n' \"$4\"",
+        );
+        let jobs = jobs::Registry::new(
+            root.path().join("artifacts"),
+            Arc::clone(&clock),
+            Arc::new(fakes::Recorder::default()),
+        );
+        let (tools, _infos, _driver, _forget, images) = super::builtin_timed(
+            fiber,
+            &root.path().join("home"),
+            root.path(),
+            &root.path().join("artifacts"),
+            &clock,
+            &jobs,
+            &Arc::new(tools::PathLocks::new()),
+            None,
+            &super::tests::delegates(),
+            super::tests::skills(),
+            timing,
+        )
+        .expect("the built-ins");
+        (root, tools, images)
+    }
+
+    fn read_tool(
+        tools: &[(String, Arc<dyn contract::tool::Tool>)],
+    ) -> Arc<dyn contract::tool::Tool> {
+        let (_, read) = tools
+            .iter()
+            .find(|(_, tool)| tool.definition().name == "read")
+            .expect("read is registered");
+        Arc::clone(read)
+    }
+
+    fn read_output(read: Arc<dyn contract::tool::Tool>) -> contract::tool::Output {
+        let mut arguments = serde_json::Map::new();
+        arguments.insert(
+            "path".to_owned(),
+            serde_json::Value::String("a.png".to_owned()),
+        );
+        fakes::within("the read call", CALL_WITHIN, move || {
+            read.run(&arguments, &Never, &Quiet)
+        })
+    }
+
+    #[test]
+    fn timed_files_and_images_share_one_timing() {
+        let probe = Arc::new(Probe {
+            calls: AtomicUsize::new(0),
+            closed: AtomicUsize::new(0),
+        });
+        let (_root, tools, images) = session(Some(timing(&probe)));
+
+        let output = read_output(read_tool(&tools));
+        assert_eq!(output.error, None);
+        assert!(
+            output
+                .content
+                .iter()
+                .any(|part| matches!(part, contract::shapes::ContentPart::Image { .. })),
+            "{output:?}"
+        );
+        assert_eq!(probe.calls.load(Ordering::SeqCst), 1);
+        assert_eq!(probe.closed.load(Ordering::SeqCst), 1);
+
+        let bytes = PNG.to_vec();
+        let reference = fakes::within("the images call", CALL_WITHIN, move || {
+            images.process(&bytes, &Never)
+        });
+        let reference = reference.expect("the image");
+        assert_eq!(reference.width, 1);
+        assert_eq!(probe.calls.load(Ordering::SeqCst), 2);
+        assert_eq!(probe.closed.load(Ordering::SeqCst), 2);
+    }
+
+    #[test]
+    fn untimed_builtin_matches_with_no_timing_calls() {
+        let probe = Arc::new(Probe {
+            calls: AtomicUsize::new(0),
+            closed: AtomicUsize::new(0),
+        });
+        let (_root, tools, images) = session(None);
+        let timed_names: Vec<String> = {
+            let (_timed_root, timed_tools, _) = session(Some(timing(&probe)));
+            timed_tools
+                .iter()
+                .map(|(_, tool)| tool.definition().name)
+                .collect()
+        };
+
+        let output = read_output(read_tool(&tools));
+        assert_eq!(output.error, None);
+        assert!(
+            output
+                .content
+                .iter()
+                .any(|part| matches!(part, contract::shapes::ContentPart::Image { .. })),
+            "{output:?}"
+        );
+        let bytes = PNG.to_vec();
+        let reference = fakes::within("the images call", CALL_WITHIN, move || {
+            images.process(&bytes, &Never)
+        })
+        .expect("the image");
+        assert_eq!(reference.width, 1);
+        assert_eq!(probe.calls.load(Ordering::SeqCst), 0, "no callable runs");
+        let names: Vec<String> = tools
+            .iter()
+            .map(|(_, tool)| tool.definition().name)
+            .collect();
+        assert_eq!(names, timed_names, "the same registration");
+    }
+}
