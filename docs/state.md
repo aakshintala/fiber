@@ -277,7 +277,13 @@ What is recorded:
   attempt group for a native observed request, from the first socket attempt
   through socket admission. It excludes DNS before entry, TLS, CONNECT
   negotiation and the response body, as well as pre-stopped and empty groups
-  and already-built tunnels. Other plain agent clients stay unobserved, and
+  and already-built tunnels. Also installed is `picture.run`: one scope per
+  entered image-child invocation, from spawning it to its validated answer,
+  kept through spawn failures, errors and cancellation after entry, while a
+  call cancelled before entry starts none. A PDF count/cut call owns one
+  scope, and each rendered page's own child owns its own; the renderer
+  itself and file inspection stay untimed. Its `data` holds only `op` and
+  `ms`. Other plain agent clients stay unobserved, and
   MCP timing follows in a later part.
 
 An event inside a running session is recorded in that session's log and
