@@ -346,6 +346,14 @@ fn directories_over_serve_accepts_home_and_rejects_relative() {
     });
     let hello = Deadline::after(WITHIN).recv_or_fail(&line_rx, "hub_hello");
     assert_eq!(hello["kind"], "hub_hello");
+    // The start-up park at `origin + idle_exit` still stands while this
+    // client is counted, so that instant alone proves nothing about the
+    // departure below: only a park with no deadline proves the hub saw a
+    // client open, which its idle wait takes only after the count left 0.
+    assert!(
+        clock.await_parked_unbounded(WITHIN),
+        "the hub parks with no deadline while the client is open"
+    );
     writer
         .write_all(
             format!(

@@ -1032,7 +1032,7 @@ generated from its payload.
 
 #### `reviewer_kept`
 
-Durable. The person's messages the reviewer keeps across a handoff.
+Durable. The person's messages the reviewer keeps across a handoff, each with the reply it answered.
 
 | Key | Type | Required | Meaning |
 |---|---|---|---|
