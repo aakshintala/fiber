@@ -82,6 +82,7 @@ fn open_without_the_registry_arc_records_nothing() {
         }),
         park: Parker::new(),
         resume_gate: Mutex::new(()),
+        timing: std::sync::OnceLock::new(),
         me: Weak::new(),
     };
     let Err(error) = registry.open(opening("npm test")) else {
