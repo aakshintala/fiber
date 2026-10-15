@@ -42,9 +42,9 @@ struct State {
     /// even if a park leaves before the helper looks. Cleared on wait exit.
     observed: Vec<Observation>,
     /// Whether an [`FakeClock::advance_when_parked`] wait is recording into
-    /// `observed` (0 or 1): a second wait while one is active fails rather
-    /// than share the log.
-    watching: usize,
+    /// `observed`: a second wait while one is active fails rather than
+    /// share the log.
+    watching: bool,
 }
 
 /// Which thread last parked at the instant of an advance, from
@@ -93,7 +93,7 @@ impl FakeClock {
                 fresh_from: 0,
                 wakers: Vec::new(),
                 observed: Vec::new(),
-                watching: 0,
+                watching: false,
             }),
             parked_cv: Condvar::new(),
             #[cfg(test)]
@@ -145,7 +145,7 @@ impl FakeClock {
     fn move_time(&self, state: &mut State, moved: Duration) {
         state.offset = moved;
         state.fresh_from = state.next_id;
-        if state.watching > 0 {
+        if state.watching {
             state.observed.push(Observation::Moved);
         }
         self.parked_cv.notify_all();
@@ -213,7 +213,7 @@ impl FakeClock {
             }
         }
         let mut state = lock(&self.state);
-        if state.watching > 0 {
+        if state.watching {
             let report = report(
                 &state,
                 expected,
@@ -225,7 +225,7 @@ impl FakeClock {
             drop(state);
             panic!("{report}");
         }
-        state.watching += 1;
+        state.watching = true;
         state.observed.clear();
         loop {
             #[cfg(test)]
@@ -597,7 +597,7 @@ impl Clock for FakeClock {
                 record_latest(&mut state, thread, id);
                 // An active advance_when_parked wait sees every arrival, even
                 // one that leaves before the helper diagnoses it.
-                if state.watching > 0 {
+                if state.watching {
                     state.observed.push(Observation::Park(thread, until));
                 }
                 self.parked_cv.notify_all();
@@ -788,10 +788,8 @@ fn several_threads_parked(state: &State) -> bool {
 /// Closes an [`FakeClock::advance_when_parked`] wait: the observation log
 /// never outlives the last wait it belongs to.
 fn leave_wait(state: &mut State) {
-    state.watching -= 1;
-    if state.watching == 0 {
-        state.observed.clear();
-    }
+    state.watching = false;
+    state.observed.clear();
 }
 
 /// The caller diagnostic for an [`FakeClock::advance_when_parked`] failure:

@@ -1424,6 +1424,30 @@ fn a_step_past_the_named_threads_stale_park_waits_for_its_new_park() {
     Deadline::after(Duration::from_secs(5)).recv_or_fail(&exit, "A's exit");
 }
 
+/// With no active wait, a move is not a competing driver for the next wait.
+#[test]
+fn a_move_before_a_wait_does_not_fail_the_next_advance() {
+    let clock = FakeClock::new();
+    clock.advance(Duration::from_secs(1));
+    let until = clock.now() + Duration::from_secs(30);
+    let (parked, release, exit, thread) = park_seq(&clock, vec![Some(until)]);
+    Deadline::after(Duration::from_secs(5)).recv_or_fail(&parked, "the fresh park");
+    let outcome = run_advance_when_parked(
+        &clock,
+        Some(until),
+        Some(thread),
+        until.duration_since(clock.now()),
+        Deadline::after(Duration::from_secs(5)),
+    );
+    Deadline::after(Duration::from_secs(5))
+        .recv_or_fail(&outcome, "the advance after an unwatched move")
+        .unwrap();
+    assert_eq!(clock.now(), until);
+    assert_eq!(clock.wall(), wall_epoch() + Duration::from_secs(31));
+    release.send(()).unwrap();
+    Deadline::after(Duration::from_secs(5)).recv_or_fail(&exit, "the parked thread's exit");
+}
+
 #[test]
 fn another_drivers_move_fails_an_active_advance_wait() {
     // Fails on the base: no move notification ends the helper's wait.
@@ -1451,7 +1475,7 @@ fn another_drivers_move_fails_an_active_advance_wait() {
         "{message}"
     );
     assert_eq!(clock.now(), before + Duration::from_millis(1));
-    assert_eq!(super::lock(&clock.state).watching, 0);
+    assert!(!super::lock(&clock.state).watching);
 }
 
 #[test]
@@ -2871,7 +2895,7 @@ fn a_failed_advance_wait_clears_its_observations_before_the_next_wait() {
     assert!(message.contains("different instant first"), "{message}");
     {
         let state = super::lock(&clock.state);
-        assert_eq!(state.watching, 0, "the failed wait stops watching");
+        assert!(!state.watching, "the failed wait stops watching");
         assert!(
             state.observed.is_empty(),
             "the failed wait clears observations"
