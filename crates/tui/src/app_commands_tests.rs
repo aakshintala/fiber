@@ -651,6 +651,77 @@ fn at_opens_the_file_panel_and_each_keystroke_searches_anew() {
 }
 
 #[test]
+fn choosing_a_directory_row_keeps_the_panel_and_searches_the_new_base() {
+    let mut app = connected();
+    assert_eq!(key(&mut app, '@'), Effect::ListFiles);
+    type_any(&mut app, "~/proj/s");
+    app.on_files(
+        app.generation(),
+        paths(&["~/proj/sub/", "~/proj/sub/inner.txt"]),
+    );
+    assert_eq!(selected(&app).as_deref(), Some("~/proj/sub/"));
+    let before = app.generation();
+    assert_eq!(
+        app.on_key(Key::Tab, now()),
+        Effect::Search {
+            generation: before + 1,
+            query: "~/proj/sub/".to_owned(),
+        }
+    );
+    assert_eq!(app.draft(), "@~/proj/sub/");
+    assert!(app.files_open());
+    // The new search's rows show once it answers.
+    app.on_files(app.generation(), paths(&["~/proj/sub/inner.txt"]));
+    assert_eq!(shown(&app), ["~/proj/sub/inner.txt"]);
+}
+
+#[test]
+fn a_directory_choice_clears_the_old_rows() {
+    let mut app = connected();
+    assert_eq!(key(&mut app, '@'), Effect::ListFiles);
+    type_any(&mut app, "~/proj/s");
+    app.on_files(
+        app.generation(),
+        paths(&["~/proj/sub/", "~/proj/sub/inner.txt"]),
+    );
+    let before = app.generation();
+    assert_eq!(
+        app.on_key(Key::Tab, now()),
+        Effect::Search {
+            generation: before + 1,
+            query: "~/proj/sub/".to_owned(),
+        }
+    );
+    // Before the new search answers the panel holds no stale rows, and
+    // a late answer for the old base changes nothing.
+    assert!(app.files_open());
+    assert_eq!(app.completions(), None);
+    app.on_files(before, paths(&["~/proj/stale.txt"]));
+    assert_eq!(app.completions(), None);
+}
+
+#[test]
+fn tab_and_enter_both_enter_a_directory() {
+    for press in [Key::Tab, Key::Enter] {
+        let mut app = connected();
+        assert_eq!(key(&mut app, '@'), Effect::ListFiles);
+        type_any(&mut app, "~/proj/s");
+        app.on_files(app.generation(), paths(&["~/proj/sub/"]));
+        let before = app.generation();
+        assert_eq!(
+            app.on_key(press.clone(), now()),
+            Effect::Search {
+                generation: before + 1,
+                query: "~/proj/sub/".to_owned(),
+            },
+            "{press:?}"
+        );
+        assert_eq!(app.draft(), "@~/proj/sub/");
+        assert!(app.files_open());
+    }
+}
+
+#[test]
 fn enter_chooses_a_file_mid_draft_without_sending() {
     let mut app = attached();
     type_text(&mut app, "look at ");
@@ -1207,3 +1278,4 @@ fn a_file_error_is_a_message_with_no_selection() {
     assert_eq!(completions.selected, None);
     assert!(matches!(completions.rows, super::Rows::Message(_)));
 }
+
