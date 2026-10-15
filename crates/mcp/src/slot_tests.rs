@@ -298,11 +298,12 @@ fn a_lazy_start_that_misses_its_deadline_fails_with_deadline() {
         );
         done.send(output).expect("collected");
     });
-    assert!(
-        setup.fake.await_parked(deadline, WITHIN),
-        "the lazy start waits on the startup deadline",
+    setup.fake.advance_when_parked(
+        Some(deadline),
+        None,
+        DEFAULT_STARTUP_TIMEOUT,
+        &Deadline::after(WITHIN),
     );
-    setup.fake.advance(DEFAULT_STARTUP_TIMEOUT);
     let output = Deadline::after(WITHIN)
         .recv(&result)
         .expect("the call ends");

@@ -246,7 +246,12 @@ fn run_with_callback(
         let result = match fakes::Deadline::after(WITHIN).recv(&received_done) {
             Ok(result) => result,
             Err(_) => {
-                clock.advance(CALLBACK_WAIT);
+                clock.advance_when_parked(
+                    Some(clock.origin() + CALLBACK_WAIT),
+                    None,
+                    CALLBACK_WAIT,
+                    &fakes::Deadline::after(WITHIN),
+                );
                 login.join().unwrap();
                 panic!("waited until the deadline for the driven login");
             }
@@ -1571,11 +1576,12 @@ fn without_a_callback_the_wait_fails_at_900s_and_stores_nothing() {
         // The authorization URL is shown before the wait.
         fakes::Deadline::after(WITHIN).recv_or_fail(&received_url, "the authorization URL");
         let deadline = clock.origin() + CALLBACK_WAIT;
-        assert!(
-            clock.await_parked(deadline, WITHIN),
-            "the login never waited on the clock"
+        clock.advance_when_parked(
+            Some(deadline),
+            None,
+            CALLBACK_WAIT,
+            &fakes::Deadline::after(WITHIN),
         );
-        clock.advance(CALLBACK_WAIT);
         let result =
             fakes::Deadline::after(WITHIN).recv_or_fail(&received_done, "the timed-out login");
         assert!(matches!(result, Err(LoginError::Timeout)), "{result:?}");
@@ -1611,10 +1617,6 @@ fn at_899s_the_wait_continues_and_at_900s_it_fails() {
         });
         fakes::Deadline::after(WITHIN).recv_or_fail(&received_url, "the authorization URL");
         let deadline = clock.origin() + CALLBACK_WAIT;
-        assert!(
-            clock.await_parked(deadline, WITHIN),
-            "the login never waited on the clock"
-        );
         // Still waiting: the login parks on the clock again after the
         // advance, so the last second still ends it at 900 s. The mark
         // is each thread's latest park when the clock moves; the await
@@ -1622,12 +1624,22 @@ fn at_899s_the_wait_continues_and_at_900s_it_fails() {
         // ends the wait early never re-parks and fails here. The park
         // is the code's own signal; no real-clock receive expiry paces
         // this test.
-        let mark = clock.advance_marked(Duration::from_secs(899));
+        let mark = clock.advance_when_parked(
+            Some(deadline),
+            None,
+            Duration::from_secs(899),
+            &fakes::Deadline::after(WITHIN),
+        );
         assert!(
             clock.await_parked_since(&mark, Some(deadline), WITHIN),
             "the login ended before 900 s"
         );
-        clock.advance(Duration::from_secs(1));
+        clock.advance_when_parked(
+            Some(deadline),
+            None,
+            Duration::from_secs(1),
+            &fakes::Deadline::after(WITHIN),
+        );
         let result =
             fakes::Deadline::after(WITHIN).recv_or_fail(&received_done, "the timed-out login");
         assert!(matches!(result, Err(LoginError::Timeout)), "{result:?}");
@@ -1688,7 +1700,12 @@ fn a_slow_drip_does_not_stop_the_900s_deadline() {
             }
             drip
         });
-        clock.advance(CALLBACK_WAIT);
+        clock.advance_when_parked(
+            Some(deadline),
+            None,
+            CALLBACK_WAIT,
+            &fakes::Deadline::after(WITHIN),
+        );
         let result =
             fakes::Deadline::after(WITHIN).recv_or_fail(&received_done, "the timed-out login");
         assert!(matches!(result, Err(LoginError::Timeout)), "{result:?}");
@@ -2038,8 +2055,11 @@ fn driven_wait(
         let result = match fakes::Deadline::after(WITHIN).recv(&received) {
             Ok(result) => result,
             Err(_) => {
-                clock.advance(
-                    deadline.saturating_duration_since(clock.now()) + Duration::from_secs(1),
+                clock.advance_when_parked(
+                    Some(deadline),
+                    None,
+                    deadline.saturating_duration_since(clock.now()),
+                    &fakes::Deadline::after(WITHIN),
                 );
                 fakes::Deadline::after(WITHIN).recv_or_fail(&received, "the released callback wait")
             }
@@ -2179,11 +2199,12 @@ fn the_drain_ends_at_twice_the_cap() {
         // this signal may the advance below move past the deadline, so
         // the timeout it returns is the drain's, not a wait that never
         // started.
-        assert!(
-            clock.await_parked(deadline, WITHIN),
-            "the drain never waited on the clock"
+        clock.advance_when_parked(
+            Some(deadline),
+            None,
+            Duration::from_secs(60),
+            &fakes::Deadline::after(WITHIN),
         );
-        clock.advance(Duration::from_secs(61));
         let served =
             fakes::Deadline::after(WITHIN).recv_or_fail(&received, "the parked drain's answer");
         match served {
@@ -2214,7 +2235,12 @@ fn the_drain_ends_at_twice_the_cap() {
         let served = match fakes::Deadline::after(WITHIN).recv(&received) {
             Ok(served) => served,
             Err(_) => {
-                clock.advance(Duration::from_secs(61));
+                clock.advance_when_parked(
+                    Some(deadline),
+                    None,
+                    Duration::from_secs(60),
+                    &fakes::Deadline::after(WITHIN),
+                );
                 fakes::Deadline::after(WITHIN).recv_or_fail(&received, "the capped drain's answer")
             }
         };
@@ -2254,14 +2280,12 @@ fn a_reset_in_the_drain_breaks_the_drain() {
         // next read fails at once instead of consuming a byte. No
         // socket read proves the 431: the client never reads it, so the
         // whole reply stays unread in its own buffer.
-        assert!(
-            clock.await_parked(deadline, WITHIN),
-            "the drain never waited on the clock"
+        let mark = clock.advance_when_parked(
+            Some(deadline),
+            None,
+            Duration::ZERO,
+            &fakes::Deadline::after(WITHIN),
         );
-        // The mark is the drain's latest park: the break below parks no
-        // more, so the clock's latest parks still match it after the
-        // join, while a `true` guard's park moves them.
-        let mark = clock.advance_marked(Duration::ZERO);
         // The whole 431 stays unread in the client's buffer, so the
         // close carries a reset on Linux and macOS alike, never a
         // clean close: the drain's next read fails, it does not read
@@ -2270,7 +2294,12 @@ fn a_reset_in_the_drain_breaks_the_drain() {
         let served = match fakes::Deadline::after(WITHIN).recv(&received) {
             Ok(served) => served,
             Err(_) => {
-                clock.advance(Duration::from_secs(61));
+                clock.advance_when_parked(
+                    Some(deadline),
+                    None,
+                    Duration::from_secs(60),
+                    &fakes::Deadline::after(WITHIN),
+                );
                 fakes::Deadline::after(WITHIN).recv_or_fail(&received, "the reset head's answer")
             }
         };
@@ -2347,27 +2376,38 @@ fn a_refused_head_dripped_past_the_deadline_ends_at_the_deadline() {
         // needs a later park after each write, so a drip the drain never
         // consumed fails here. Without the drain's deadline check the
         // answer never comes and the bound below fails the test.
-        assert!(
-            clock.await_parked(deadline, WITHIN),
-            "the drain never waited on the clock"
-        );
         for _ in 0..8 {
             // Advancing by zero moves no deadline: it only snapshots each
             // thread's latest park, so the await needs a park after the
             // write below.
-            let mark = clock.advance_marked(Duration::ZERO);
+            let mark = clock.advance_when_parked(
+                Some(deadline),
+                None,
+                Duration::ZERO,
+                &fakes::Deadline::after(WITHIN),
+            );
             writer.write_all(b"G").unwrap();
             assert!(
                 clock.await_parked_since(&mark, Some(deadline), WITHIN),
                 "the drain never waited on the clock"
             );
         }
-        let mark = clock.advance_marked(Duration::ZERO);
+        let mark = clock.advance_when_parked(
+            Some(deadline),
+            None,
+            Duration::ZERO,
+            &fakes::Deadline::after(WITHIN),
+        );
         assert!(
             clock.await_parked_since(&mark, Some(deadline), WITHIN),
             "the drain never waited on the clock"
         );
-        clock.advance(Duration::from_secs(61));
+        clock.advance_when_parked(
+            Some(deadline),
+            None,
+            Duration::from_secs(60),
+            &fakes::Deadline::after(WITHIN),
+        );
         let served =
             fakes::Deadline::after(WITHIN).recv_or_fail(&received, "the refused head's answer");
         match served {

@@ -243,11 +243,12 @@ fn a_hang_tool_times_out_only_after_the_clock_advances() {
         );
         done.send(answer).expect("collected");
     });
-    assert!(
-        setup.fake.await_parked(deadline, WITHIN),
-        "the caller waits on the call deadline within {WITHIN:?}",
+    let mark = setup.fake.advance_when_parked(
+        Some(deadline),
+        None,
+        Duration::from_secs(59),
+        &Deadline::after(WITHIN),
     );
-    let mark = setup.fake.advance_marked(Duration::from_secs(59));
     assert!(
         setup.fake.await_parked_since(&mark, Some(deadline), WITHIN),
         "the call waits again a second before its deadline within {WITHIN:?}"
@@ -256,7 +257,12 @@ fn a_hang_tool_times_out_only_after_the_clock_advances() {
         result.try_recv().is_err(),
         "the call is still waiting a second before its deadline"
     );
-    setup.fake.advance(Duration::from_secs(1));
+    setup.fake.advance_when_parked(
+        Some(deadline),
+        None,
+        Duration::from_secs(1),
+        &Deadline::after(WITHIN),
+    );
     assert_eq!(
         Deadline::after(WITHIN)
             .recv(&result)
@@ -300,7 +306,9 @@ fn cancel_ends_the_wait_and_sends_cancelled() {
     match Deadline::after(WITHIN).recv(&result) {
         Ok(answer) => assert_eq!(answer, Err(CallError::Cancelled)),
         Err(_) => {
-            setup.fake.advance(timeout);
+            setup
+                .fake
+                .advance_when_parked(Some(deadline), None, timeout, &Deadline::after(WITHIN));
             match Deadline::after(WITHIN).recv(&result) {
                 Ok(_) | Err(_) => {}
             }
@@ -425,11 +433,9 @@ fn a_server_that_misses_its_startup_deadline_is_left_out() {
         .expect("a silent server misses its deadline");
         done.send(error).expect("collected");
     });
-    assert!(
-        setup.fake.await_parked(deadline, WITHIN),
-        "the start waits on the startup deadline within {WITHIN:?}",
-    );
-    setup.fake.advance(timeout);
+    setup
+        .fake
+        .advance_when_parked(Some(deadline), None, timeout, &Deadline::after(WITHIN));
     assert_eq!(
         Deadline::after(WITHIN)
             .recv(&result)
@@ -699,11 +705,12 @@ fn a_stopped_server_takes_its_grandchild_with_it() {
         .now()
         .checked_add(support::group::GRACE)
         .expect("grace");
-    assert!(
-        setup.fake.await_parked(grace, WITHIN),
-        "the stop waits out the grace within {WITHIN:?}"
+    setup.fake.advance_when_parked(
+        Some(grace),
+        None,
+        support::group::GRACE,
+        &Deadline::after(WITHIN),
     );
-    setup.fake.advance(support::group::GRACE);
     Deadline::after(WITHIN)
         .recv(&stopped)
         .unwrap_or_else(|_| panic!("the stop returned within {WITHIN:?}"));
@@ -830,6 +837,7 @@ fn endless_pages_end_at_the_startup_deadline() {
         let workspace = setup.dir.path().to_path_buf();
         let arg = workspace.display().to_string();
         let clock = setup.clock();
+        let deadline = setup.fake.now().checked_add(timeout).expect("deadline");
         let (done, result) = mpsc::channel();
         thread::spawn(move || {
             let outcome = Server::start(
@@ -845,7 +853,9 @@ fn endless_pages_end_at_the_startup_deadline() {
         });
         setup.await_requests(&format!(r#""method":"{method}""#), 2);
         let pid = setup.pid();
-        setup.fake.advance(timeout + Duration::from_millis(1));
+        setup
+            .fake
+            .advance_when_parked(Some(deadline), None, timeout, &Deadline::after(WITHIN));
         let outcome = Deadline::after(WITHIN)
             .recv(&result)
             .unwrap_or_else(|_| panic!("the paging start ends within {WITHIN:?}"));
@@ -1223,7 +1233,12 @@ fn a_stopped_start_waits_out_the_grace_before_its_kill() {
         fakes::kill_pid(pid, "0").expect("probe"),
         "the server was killed before the grace passed"
     );
-    setup.fake.advance(support::group::GRACE);
+    setup.fake.advance_when_parked(
+        Some(grace),
+        None,
+        support::group::GRACE,
+        &Deadline::after(WITHIN),
+    );
     assert_shutdown_failed(
         Deadline::after(WITHIN)
             .recv(&result)
