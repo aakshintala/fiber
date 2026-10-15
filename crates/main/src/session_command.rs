@@ -49,6 +49,7 @@ pub(crate) fn run(
     // from its login-shell capture: every entry below records it, and a
     // delegate the session starts carries it (`docs/invocation.md`, "A
     // session's environment").
+    crate::delegates::set_depth(args.depth.unwrap_or(0));
     if args.login_shell {
         r#loop::set_variables_source(VariablesSource::LoginShell);
     }

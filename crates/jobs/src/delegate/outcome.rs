@@ -12,14 +12,16 @@ use contract::{ErrorCode, JobId};
 
 /// Why the runner itself ended the delegate. Set once, under the runner's
 /// lock, before the runner's first signal: a delegate the runner ended
-/// therefore ends `cancelled` or `failed` `output_cap`, never `failed`
-/// `signal`.
+/// therefore ends `cancelled`, `failed` `output_cap` or `failed` `timeout`,
+/// never `failed` `signal`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum Termination {
     /// A `jobs stop`, a `job_stop`, a budget end or shutdown.
     Stopped,
     /// The delegate's `events.jsonl` passed the output cap.
     OutputCap,
+    /// The delegate passed its deadline.
+    Timeout,
 }
 
 /// The pure fold. `socket` is the subscription's
@@ -35,7 +37,8 @@ pub(crate) fn outcome(
     // The socket's line is used when the subscription received one; the
     // stdout line only when it did not.
     let exited = socket.or(stdout);
-    let process = process_of(status);
+    let mut process = process_of(status);
+    process.timed_out = matches!(termination, Some(Termination::Timeout));
     let finished = match exited {
         Some(exited) => DelegateFinished {
             job_id: job_id.clone(),
@@ -59,6 +62,12 @@ pub(crate) fn outcome(
             process: Some(process),
             output_tail: None,
         },
+        Some(Termination::Timeout) => failed(
+            job_id,
+            ErrorCode::Timeout,
+            "The delegate passed its `timeout_ms` and was stopped.",
+            process,
+        ),
         Some(Termination::OutputCap) => failed(
             job_id,
             ErrorCode::OutputCap,

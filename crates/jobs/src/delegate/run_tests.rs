@@ -219,6 +219,17 @@ impl Rig {
         cap: u64,
         after: Option<u64>,
     ) -> mpsc::Receiver<()> {
+        self.start_timeout(shell, bound, cap, after, None).0
+    }
+
+    fn start_timeout(
+        &self,
+        shell: &str,
+        bound: Duration,
+        cap: u64,
+        after: Option<u64>,
+        timeout: Option<Duration>,
+    ) -> (mpsc::Receiver<()>, Arc<Parker>) {
         let shell = shell.to_owned();
         let script = Arc::clone(&self.script);
         let watch = Arc::new(
@@ -241,8 +252,10 @@ impl Rig {
             cap,
             watch,
             after,
+            timeout,
         );
         let launched = Launched {
+            depth: 1,
             session_id: SessionId("s_child".into()),
             job_id: self.job.clone(),
             parent: SessionId("s_parent".into()),
@@ -260,12 +273,13 @@ impl Rig {
             stop,
             crate::support::delegate_started(&self.job.0),
         );
+        let park = Arc::clone(&runner.park);
         let (done, waited) = mpsc::channel();
         thread::spawn(move || {
             runner.drive(child, Some(listing), finish);
             let _sent = done.send(());
         });
-        waited
+        (waited, park)
     }
 }
 
@@ -1228,6 +1242,118 @@ fn the_watch_is_not_called_again_after_fiber_exited() {
 }
 
 #[test]
+fn timeout_boundaries_and_parks() {
+    let clock = FakeClock::new();
+    let d = clock.now() + Duration::from_secs(1);
+    assert!(!super::deadline_due(None, d));
+    assert!(!super::deadline_due(
+        Some(d),
+        d.checked_sub(Duration::from_nanos(1)).unwrap()
+    ));
+    assert!(super::deadline_due(Some(d), d));
+    assert!(super::deadline_due(Some(d), d + Duration::from_nanos(1)));
+    assert_eq!(super::park_due(d + BOUND, true, false, d, None, Some(d)), d);
+    assert_eq!(
+        super::park_due(d + BOUND, true, false, d, None, None),
+        d + BOUND
+    );
+}
+
+#[test]
+fn timeout_keeps_the_first_termination_reason() {
+    for (first, second) in [
+        (Termination::Stopped, Termination::Timeout),
+        (Termination::Timeout, Termination::Stopped),
+        (Termination::OutputCap, Termination::Timeout),
+    ] {
+        let clock = FakeClock::new();
+        let shared = super::Shared::new(clock, BOUND);
+        shared.halt(first);
+        shared.halt(second);
+        assert_eq!(shared.reason(), Some(first));
+    }
+}
+
+#[test]
+fn timeout_stops_a_term_trap_without_sigkill() {
+    let dir = TempDir::new("fiber-delegate-timeout");
+    let pidfile = dir.path().join("pid");
+    let ready = dir.path().join("ready");
+    let fifo = fifo(dir.path(), "block");
+    let shell = format!(
+        "echo $$ > '{}'; trap 'exit 143' TERM; echo ready > '{}'; read _ < '{}'",
+        pidfile.display(),
+        ready.display(),
+        fifo.display()
+    );
+    let (_release, held) = mpsc::channel();
+    let rig = rig(vec![WatchReply::Block(held)]);
+    let origin = rig.clock.now();
+    let timeout = Duration::from_millis(500);
+    let (done, park) = rig.start_timeout(&shell, BOUND, 1024, None, Some(timeout));
+    let pgid = pid_in_file(&pidfile);
+    let watchdog = Watchdog::group(pgid);
+    wait_ready(&ready);
+    let deadline = Deadline::after(DEADLINE);
+    rig.clock
+        .advance_when_parked(Some(origin + timeout), None, timeout, &deadline);
+    // Wake subsequent polls without moving beyond the stop bound.
+    let notice = timeout_report(&rig, &park);
+    assert_eq!(notice.completed.status, Outcome::Failed);
+    assert_eq!(
+        notice.completed.error.unwrap().code,
+        contract::ErrorCode::Timeout
+    );
+    let process = notice.completed.process.unwrap();
+    assert!(process.timed_out);
+    assert_eq!(process.exit_code, Some(143));
+    deadline.recv(&done).expect("timeout runner returned");
+    assert!(
+        !crate::delegate::group::sent_signals().contains(&(pgid, rustix::process::Signal::KILL))
+    );
+    watchdog.stand_down(DEADLINE);
+}
+
+#[test]
+fn timeout_does_not_replace_a_childs_own_early_exit() {
+    let dir = TempDir::new("fiber-delegate-before-timeout");
+    let pidfile = dir.path().join("pid");
+    let block = fifo(dir.path(), "block");
+    let rig = rig(vec![]);
+    let shell = format!(
+        "echo $$ > '{}'; read _ < '{}'; printf '%s\\n' '{}'",
+        pidfile.display(),
+        block.display(),
+        json_line(1, "done")
+    );
+    let (done, park) = rig.start_timeout(&shell, BOUND, 1024, None, Some(BOUND * 10));
+    let watchdog = Watchdog::group(pid_in_file(&pidfile));
+    release_fifo(&block, b"go\n");
+    let notice = timeout_report(&rig, &park);
+    assert_eq!(notice.completed.status, Outcome::Completed);
+    assert!(!notice.completed.process.unwrap().timed_out);
+    Deadline::after(DEADLINE)
+        .recv(&done)
+        .expect("early runner returns");
+    watchdog.stand_down(DEADLINE);
+}
+
+fn timeout_report(rig: &Rig, park: &Parker) -> contract::inbox::JobNotice {
+    use contract::clock::Wake as _;
+    let stopped = AtomicBool::new(false);
+    thread::scope(|scope| {
+        scope.spawn(|| {
+            // Spurious wakes exercise the reap without advancing the deadline or stop bound.
+            while !stopped.load(Ordering::Relaxed) {
+                park.wake();
+                thread::yield_now();
+            }
+        });
+        take_report(rig, &stopped, "timeout runner report")
+    })
+}
+
+#[test]
 fn a_stop_on_a_term_trap_cancels_without_sigkill() {
     let dir = TempDir::new("fiber-delegate-trap");
     let pidfile = dir.path().join("pid");
@@ -1560,6 +1686,7 @@ fn a_member_listed_past_the_bound_gets_sigkill_from_retire() {
         1024,
         watch,
         None,
+        None,
     );
     // The stop sets the bound; the member ignores nothing and no other
     // thread signals this group.
@@ -1724,22 +1851,36 @@ fn park_due_takes_the_earliest_live_bound() {
     let poll = t0 + Duration::from_secs(1);
     // A due retry pulls the deadline in.
     assert_eq!(
-        park_due(poll, false, false, t0 + Duration::from_millis(50), None),
+        park_due(
+            poll,
+            false,
+            false,
+            t0 + Duration::from_millis(50),
+            None,
+            None
+        ),
         t0 + Duration::from_millis(50)
     );
     // A future retry leaves the horizon alone.
     assert_eq!(
-        park_due(poll, false, false, t0 + Duration::from_secs(2), None),
+        park_due(poll, false, false, t0 + Duration::from_secs(2), None, None),
         poll
     );
     // Once exited, a stale retry never pulls the deadline back: that
     // would spin instead of parking.
-    assert_eq!(park_due(poll, true, false, t0, None), poll);
+    assert_eq!(park_due(poll, true, false, t0, None, None), poll);
     // While a watcher runs, its stale retry never pulls it back either.
-    assert_eq!(park_due(poll, false, true, t0, None), poll);
+    assert_eq!(park_due(poll, false, true, t0, None, None), poll);
     // The stop timer clamps everything, exited or not.
     assert_eq!(
-        park_due(poll, true, false, t0, Some(t0 + Duration::from_millis(500))),
+        park_due(
+            poll,
+            true,
+            false,
+            t0,
+            Some(t0 + Duration::from_millis(500)),
+            None
+        ),
         t0 + Duration::from_millis(500)
     );
     assert_eq!(
@@ -1748,7 +1889,8 @@ fn park_due_takes_the_earliest_live_bound() {
             false,
             false,
             t0 + Duration::from_millis(50),
-            Some(t0 + Duration::from_millis(500))
+            Some(t0 + Duration::from_millis(500)),
+            None
         ),
         t0 + Duration::from_millis(50)
     );
@@ -1992,8 +2134,10 @@ fn the_fold_starts_from_the_run_boundary() {
         1024,
         watch,
         Some(5),
+        None,
     );
     let launched = Launched {
+        depth: 1,
         session_id: SessionId("s_child".into()),
         job_id: rig.job.clone(),
         parent: SessionId("s_parent".into()),

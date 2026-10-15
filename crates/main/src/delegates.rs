@@ -7,11 +7,21 @@
 
 use std::path::{Path, PathBuf};
 use std::process::Command;
-use std::sync::Arc;
+use std::sync::{Arc, OnceLock};
 
 use contract::SessionId;
 use contract::clock::Clock;
 use contract::events::VariablesSource;
+
+static DEPTH: OnceLock<u32> = OnceLock::new();
+
+pub(crate) fn set_depth(depth: u32) {
+    let _first = DEPTH.set(depth);
+}
+
+pub(crate) fn depth() -> u32 {
+    DEPTH.get().copied().unwrap_or(0)
+}
 
 /// How large a delegate's `events.jsonl` may grow before the runner stops
 /// it as `failed` `output_cap`: the 5 GB every job's output file gets
@@ -23,6 +33,7 @@ pub(crate) const OUTPUT_CAP: u64 = 5_000_000_000;
 /// Built per session, because the parent session id differs for a new and
 /// a resumed session.
 pub(crate) struct Delegates {
+    depth: u32,
     /// The parent session: the child's `--parent`.
     parent: SessionId,
     /// The parent's workspace, which the delegate shares.
@@ -64,6 +75,7 @@ impl Delegates {
         let launch = launcher(&fiber);
         let watch = watcher(&home);
         Self {
+            depth: depth(),
             parent,
             workspace,
             sessions,
@@ -78,6 +90,7 @@ impl Delegates {
     /// The `delegate_spawn` tool this session declares.
     pub(crate) fn tool(&self) -> jobs::DelegateSpawn {
         jobs::DelegateSpawn {
+            depth: self.depth,
             registry: Arc::clone(&self.jobs),
             parent: self.parent.clone(),
             workspace: self.workspace.clone(),
@@ -296,6 +309,8 @@ fn command(fiber: &Path, launched: &jobs::Launched) -> Command {
         &launched.parent.0,
         "--delegate-id",
         &launched.job_id.0,
+        "--depth",
+        &launched.depth.to_string(),
     ]);
     // A delegate carries its parent's environment, so it carries the
     // parent's source too (`docs/invocation.md`, "A session's
