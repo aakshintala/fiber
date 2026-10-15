@@ -356,7 +356,6 @@ fn a_silent_server_past_the_backstop_is_timeout() {
     );
     assert_eq!(code, contract::ErrorCode::Timeout, "{message}");
     assert!(message.starts_with("host.http: "), "{message}");
-    drop(server);
 }
 
 /// The failure a prelude `pcall` of `code` catches: its code and message.
