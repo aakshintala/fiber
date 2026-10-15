@@ -60,7 +60,7 @@ a 20-thousand-token one fit the same ceiling.
 | Budget | Ceiling | Gated on | Basis | Fast ceiling | Middle ceiling | Slow ceiling | Fast tolerance | Slow tolerance |
 |---|---|---|---|---|---|---|---|---|
 | Session, idle, headless | 12 MiB peak RSS | Linux x86_64 | picked | — | — | — | — | — |
-| Terminal, idle | 9,944 KiB peak RSS | Linux x86_64 | from components | — | — | — | — | — |
+| Terminal, idle | 20,088 KiB peak RSS | Linux x86_64 | measured | — | — | — | — | — |
 | Session, busy or resumed | 46,720 KiB peak RSS | Linux x86_64 | measured | — | — | — | — | — |
 | `web_fetch` converting a 10 MiB HTML page, the download cap | within the busy session's 46,720 KiB peak RSS | Linux x86_64 | measured | — | — | — | — | — |
 | Idle CPU, session and terminal | zero context switches in the idle window, on every thread | Linux x86_64 | exact | — | — | — | — | — |
