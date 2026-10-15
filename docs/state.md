@@ -334,6 +334,15 @@ What is recorded:
   lazy first use, restarts, renewals and post-approval starts, with the
   remote server's actual connector work timed as `net.connect` beside it.
   It excludes cache-only declarations, prompt discovery and tool execution.
+  Installed for startup and routing are `startup.config`, from the one
+  pre-load read through opening the writer; `startup.extensions`, loading
+  the installed provider packages and extensions; `startup.routing`, from
+  adding the Lua providers through choosing the model, reading its
+  credential, connecting and choosing the reviewer, with unloading
+  excluded; and `routing.switch`, one entered switch preparation,
+  rejections included, with applying it excluded: the three startup lines
+  are written before the session attaches, so they sit in the pid file
+  with no `session_id`.
   Installed for the hub are `hub.session_start`, `hub.resume` and
   `hub.subscribe_replay`, and for listing, `sessions.list`.
   `hub.session_start` covers a start from the request until the session's

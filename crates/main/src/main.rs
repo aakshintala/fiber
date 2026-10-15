@@ -54,6 +54,9 @@ mod read_signals_entry_tests;
 mod reviewer_tests;
 #[cfg(test)]
 mod test_support;
+#[cfg(test)]
+#[path = "timing_tests.rs"]
+mod timing_tests;
 
 use std::fmt::Display;
 use std::io::{self, IsTerminal, Write};

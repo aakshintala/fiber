@@ -16,6 +16,7 @@ use std::sync::{Arc, Mutex, PoisonError};
 use config::{Config, ProviderData, Secret};
 use contract::clock::Clock;
 use contract::commands::ModelArgs;
+use contract::diag::Op;
 use contract::files::PathLock;
 use contract::inbox::Rejection;
 use contract::shapes::Failure;
@@ -340,6 +341,14 @@ pub(crate) fn prepare(
     label: Option<&str>,
     chosen: Option<ThinkingLevel>,
 ) -> Result<r#loop::Prepared, Rejection> {
+    // One line for every entered preparation, however it ends:
+    // declared first so it drops last, after the remembered lock's block
+    // has ended. The `Applied` closure runs later when the switch
+    // applies, and is not timed. Without a shared writer this stays shut.
+    let _timing = switching
+        .diag
+        .as_ref()
+        .and_then(|diag| log::diag::timed(diag, Op::RoutingSwitch, None, None));
     // An unparseable thinking level rejects before any lookup.
     let asked = match &args.thinking {
         Some(level) => Some(
