@@ -1979,6 +1979,14 @@ fn an_inner_calls_start_carries_always_reviewed() {
     let mut session = session(vec![outer, Arc::new(inner_tool)]);
     assert_eq!(session.turn(), Some(TurnOutcome::Completed));
     let lines = session.lines();
+    assert_turn_events(
+        &lines,
+        &[
+            "tool_call_requested",
+            "tool_call_started",
+            "tool_call_completed",
+        ],
+    );
     let id = inner_id(&lines);
     let started = lines
         .iter()

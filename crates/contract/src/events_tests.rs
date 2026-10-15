@@ -989,16 +989,6 @@ fn a_permission_resolved_with_no_effect_keys_reads_as_no_reviewed_call() {
     assert_eq!(resolved.call, None);
     let written = Value::Object(Event::PermissionResolved(resolved).payload().unwrap());
     assert_eq!(written, payload);
-    for key in [
-        "effects",
-        "reversible",
-        "paths",
-        "always_reviewed",
-        "arguments",
-        "changed_by",
-    ] {
-        assert_eq!(written.get(key), None, "{key}");
-    }
 }
 
 #[test]

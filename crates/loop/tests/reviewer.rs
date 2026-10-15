@@ -2453,8 +2453,6 @@ fn a_block_below_the_limits_logs_the_calls_declared_effects() {
         kinds(&lines),
         kinds_with(&["permission_resolved", "tool_call_completed"], 2)
     );
-    assert!(!kinds(&lines).contains(&"permission_requested"));
-    assert!(!kinds(&lines).contains(&"tool_call_started"));
     let resolved = line(&lines, "permission_resolved");
     assert_eq!(resolved.payload["decision"], "deny");
     assert_eq!(resolved.payload["decided_by"], "reviewer");
@@ -2495,8 +2493,10 @@ fn a_headless_block_at_the_limit_logs_the_calls_declared_effects() {
         },
     );
     let lines = go(&mut session);
-    assert!(!kinds(&lines).contains(&"permission_requested"));
-    assert!(!kinds(&lines).contains(&"tool_call_started"));
+    assert_eq!(
+        kinds(&lines),
+        kinds_with(&["permission_resolved", "tool_call_completed"], 2)
+    );
     let resolved = line(&lines, "permission_resolved");
     assert_eq!(resolved.payload["decision"], "deny");
     assert_eq!(resolved.payload["decided_by"], "reviewer");
@@ -2531,7 +2531,10 @@ fn a_headless_reviewer_failure_logs_the_calls_declared_effects() {
         provider: None,
     })]);
     let lines = go(&mut session);
-    assert!(!kinds(&lines).contains(&"permission_requested"));
+    assert_eq!(
+        kinds(&lines),
+        kinds_with(&["permission_resolved", "tool_call_completed"], 1)
+    );
     let resolved = line(&lines, "permission_resolved");
     assert_eq!(resolved.payload["decision"], "deny");
     assert_eq!(resolved.payload["decided_by"], "reviewer");
@@ -2569,6 +2572,10 @@ fn a_denial_with_no_reviewer_logs_the_calls_declared_effects() {
         )
     });
     let lines = go(&mut session);
+    assert_eq!(
+        kinds(&lines),
+        kinds_with(&["permission_resolved", "tool_call_completed"], 0)
+    );
     let resolved = line(&lines, "permission_resolved");
     assert_eq!(resolved.payload["decision"], "deny");
     assert_eq!(resolved.payload["decided_by"], "no_reviewer");
@@ -2601,6 +2608,10 @@ fn an_always_reviewed_call_logs_always_reviewed_on_its_denial() {
     );
     session.reviewer(vec![Scripted::text("check"), Scripted::text("block no")]);
     let lines = go(&mut session);
+    assert_eq!(
+        kinds(&lines),
+        kinds_with(&["permission_resolved", "tool_call_completed"], 2)
+    );
     let resolved = line(&lines, "permission_resolved");
     assert_eq!(resolved.payload["decision"], "deny");
     assert_eq!(resolved.payload["effects"], json!(["executes"]));
@@ -2709,6 +2720,17 @@ fn an_always_reviewed_call_starts_and_asks_with_always_reviewed() {
     );
     session.reviewer(vec![Scripted::text("allow")]);
     let lines = go(&mut session);
+    assert_eq!(
+        kinds(&lines),
+        kinds_with(
+            &[
+                "permission_resolved",
+                "tool_call_started",
+                "tool_call_completed"
+            ],
+            1
+        )
+    );
     let resolved = line(&lines, "permission_resolved");
     assert_eq!(resolved.payload["decision"], "allow");
     assert_eq!(resolved.payload["always_reviewed"], true);
@@ -2740,6 +2762,17 @@ fn an_always_reviewed_call_starts_and_asks_with_always_reviewed() {
     assert_eq!(session.turn(), Some(TurnOutcome::Completed));
     let lines = session.lines();
     answered.join().unwrap();
+    assert_eq!(
+        kinds(&lines),
+        kinds_with(
+            &[
+                "permission_requested",
+                "permission_resolved",
+                "tool_call_completed"
+            ],
+            2
+        )
+    );
     let requested = line(&lines, "permission_requested");
     assert_eq!(requested.payload["always_reviewed"], true);
     let persons = line(&lines, "permission_resolved");
@@ -2747,6 +2780,17 @@ fn an_always_reviewed_call_starts_and_asks_with_always_reviewed() {
     assert!(tool.ran().is_empty());
     // An ordinary tool writes the key nowhere.
     let (session, tool, _, lines) = reviewed_turn(vec![Scripted::text("allow")]);
+    assert_eq!(
+        kinds(&lines),
+        kinds_with(
+            &[
+                "permission_resolved",
+                "tool_call_started",
+                "tool_call_completed"
+            ],
+            1
+        )
+    );
     assert_eq!(session.requests().len(), 2);
     assert_eq!(tool.ran().len(), 1);
     assert_eq!(
@@ -2842,6 +2886,31 @@ fn a_reviewer_allow_cancelled_before_its_start_keeps_the_effects() {
     assert_eq!(session.turn(), Some(TurnOutcome::Interrupted));
     answered.join().unwrap();
     let lines = session.lines();
+    assert_eq!(
+        kinds(&lines),
+        [
+            "session_started",
+            "preamble_built",
+            "opening_message",
+            "turn_started",
+            "step_started",
+            "assistant_message_started",
+            "assistant_message_delta",
+            "tool_call_arguments_delta",
+            "tool_call_arguments_delta",
+            "tool_call_requested",
+            "tool_call_requested",
+            "usage_recorded",
+            "assistant_message_completed",
+            "usage_recorded",
+            "permission_resolved",
+            "permission_requested",
+            "permission_resolved",
+            "tool_call_completed",
+            "tool_call_completed",
+            "turn_completed",
+        ]
+    );
     // The allow keeps the call's effects, and the approved call never started.
     let allows: Vec<_> = lines
         .iter()

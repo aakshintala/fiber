@@ -1286,6 +1286,26 @@ fn a_hosted_calls_start_keeps_the_registered_tools_always_reviewed() {
     session.inbox.send(delivery("search")).unwrap();
     assert_eq!(session.turn(), Some(TurnOutcome::Completed));
     let lines = session.lines();
+    assert_eq!(
+        kinds(&lines),
+        [
+            "session_started",
+            "preamble_built",
+            "opening_message",
+            "turn_started",
+            "step_started",
+            "assistant_message_started",
+            "assistant_message_delta",
+            "assistant_message_delta",
+            "tool_call_requested",
+            "tool_call_started",
+            "tool_call_completed",
+            "text_completed",
+            "usage_recorded",
+            "assistant_message_completed",
+            "turn_completed",
+        ]
+    );
     let started = lines
         .iter()
         .find(|l| l.kind == "tool_call_started")

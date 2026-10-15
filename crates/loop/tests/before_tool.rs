@@ -384,7 +384,10 @@ fn a_blocked_rewritten_call_logs_the_arguments_it_was_judged_with() {
     session.inbox.send(delivery("go")).unwrap();
     assert_eq!(session.turn(), Some(TurnOutcome::Completed));
     let lines = session.lines();
-    assert!(lines.iter().all(|l| l.kind != "tool_call_started"));
+    assert_eq!(
+        turn_kinds(&lines),
+        first_turn_kinds(&["permission_resolved", "tool_call_completed"], 2)
+    );
     let resolved = line(&lines, "permission_resolved");
     assert_eq!(resolved.payload["decision"], "deny");
     assert_eq!(resolved.payload["decided_by"], "reviewer");
