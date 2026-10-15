@@ -107,24 +107,33 @@ fn row_with(grid: &Grid, needle: &str) -> u16 {
     .unwrap_or(u16::MAX)
 }
 
-/// The column where `needle` starts on `y`, matching the cells one by
-/// one, so a wide cell before it changes nothing.
-fn col_at(grid: &Grid, y: u16, needle: &str) -> u16 {
+/// The column where `needle` starts on `y`, if any, matching the cells
+/// one by one, so a wide cell before it changes nothing.
+fn col_at_or(grid: &Grid, y: u16, needle: &str) -> Option<u16> {
     let want: Vec<char> = needle.chars().collect();
+    if want.is_empty() {
+        return None;
+    }
     for x in 0..160u16 {
-        let mut ok = !want.is_empty();
+        let mut ok = true;
         for (dx, want) in want.iter().enumerate() {
-            let xi = x.saturating_add(u16::try_from(dx).unwrap_or(u16::MAX));
+            let xi = x.checked_add(u16::try_from(dx).ok()?)?;
             if xi >= 160 || grid.cell(xi, y).symbol != want.to_string() {
                 ok = false;
                 break;
             }
         }
         if ok {
-            return x;
+            return Some(x);
         }
     }
-    panic!("{needle:?} on row {y}")
+    None
+}
+
+/// The column where `needle` starts on `y`, matching the cells one by
+/// one, so a wide cell before it changes nothing.
+fn col_at(grid: &Grid, y: u16, needle: &str) -> u16 {
+    col_at_or(grid, y, needle).unwrap_or_else(|| panic!("{needle:?} on row {y}"))
 }
 
 /// The slab's content row: the row holding the count with the search
@@ -229,6 +238,67 @@ fn row_with_or(rows: &[String], needle: &str) -> Option<u16> {
     rows.iter()
         .position(|row| row.contains(needle))
         .and_then(|y| u16::try_from(y).ok())
+}
+
+/// "Copied" with its foreground: its column and row when its six
+/// cells all carry `info`.
+fn copied_at(grid: &Grid) -> Option<(u16, u16)> {
+    let y = row_with_or(&grid.rows, "Copied")?;
+    let at = col_at_or(grid, y, "Copied")?;
+    for dx in 0..6u16 {
+        let x = at.checked_add(dx)?;
+        if x >= 160 || grid.cell(x, y).fg != INFO {
+            return None;
+        }
+    }
+    Some((at, y))
+}
+
+/// The finished drag-select: exactly the dragged cells on the
+/// `selection` tint, and "Copied" in `info` on the top row. Every cell
+/// property the asserts read is checked here, so a partial redraw
+/// cannot satisfy the wait.
+fn drag_selected(grid: &Grid) -> bool {
+    let Some(y) = row_with_or(&grid.rows, "drag across") else {
+        return false;
+    };
+    let Some(from) = col_at_or(grid, y, "across") else {
+        return false;
+    };
+    let Some(to) = from.checked_add(5) else {
+        return false;
+    };
+    if to >= 160 {
+        return false;
+    }
+    // Exactly the dragged span, nowhere else.
+    for row in 0..48u16 {
+        for x in 0..160u16 {
+            let selected = grid.cell(x, row).bg == SELECTION;
+            if selected != (row == y && (from..=to).contains(&x)) {
+                return false;
+            }
+        }
+    }
+    // "Copied" in `info` on the top row.
+    copied_at(grid).is_some_and(|(_, row)| row == 0)
+}
+
+/// "Copied" below the search box: the bar's content row, with "Copied"
+/// in `info` on the row under the slab's lower edge. Every cell property
+/// the asserts read is checked here, so a partial redraw cannot satisfy
+/// the wait.
+fn copied_below(grid: &Grid) -> bool {
+    let Some(bar) = row_with_or(&grid.rows, "⌕") else {
+        return false;
+    };
+    let Some(copied) = bar.checked_add(3) else {
+        return false;
+    };
+    if copied >= 48 {
+        return false;
+    }
+    copied_at(grid).is_some_and(|(_, row)| row == copied)
 }
 
 /// A press at `(from, y)`, a drag to `(to, y)` and its release, in one
@@ -346,9 +416,7 @@ fn a_drag_selects_and_copies() {
     drag(&mut run, y, from, to);
     // The selection once the release copies: every dragged cell on the
     // `selection` tint, and "Copied" at the top-right.
-    let grid = run.wait_screen("the selection", |grid| {
-        !selected_cells(grid).is_empty() && grid.contents.contains("Copied")
-    });
+    let grid = run.wait_screen("the selection", drag_selected);
     let cells = selected_cells(&grid);
     assert!(!cells.is_empty(), "the drag selects");
     for (x, row) in &cells {
@@ -390,9 +458,7 @@ fn copied_sits_below_the_search_box() {
     assert!(y > bar + 2, "the drag stays below the slab");
     let from = col_at(&grid, y, "across");
     drag(&mut run, y, from, from + 5);
-    let grid = run.wait_screen("Copied under the bar", |grid| {
-        grid.contents.contains("Copied")
-    });
+    let grid = run.wait_screen("Copied under the bar", copied_below);
     let copied = row_with(&grid, "Copied");
     // "Copied" sits on the row under the slab's lower edge, never
     // inside it.

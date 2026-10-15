@@ -2302,6 +2302,61 @@ fn copied_sits_on_the_row_under_the_bar() {
 }
 
 #[test]
+fn copied_stays_inside_a_short_or_narrow_area() {
+    // The buffer around each area stays blank: with the bar open, a
+    // five-row area omits "Copied" (its row is the next region's), a
+    // six-row area draws it on row 5, and a four-column area clips it
+    // to its width (`docs/tui.md`, "Selection and copy").
+    for (area, want) in [
+        (Rect::new(0, 0, 60, 5), None),
+        (Rect::new(0, 0, 60, 6), Some(5)),
+        (Rect::new(10, 2, 4, 6), Some(2)),
+    ] {
+        let mut app = replying(60, 24, "copy this line");
+        app.on_key(Key::CtrlF, fakes::clock::FakeClock::new().now());
+        assert!(app.find_bar().is_some(), "the bar is open");
+        let shown = text(&buffer(&app, 60, 24));
+        let row = u16::try_from(
+            shown
+                .lines()
+                .position(|line| line.contains("copy this"))
+                .expect("the reply"),
+        )
+        .expect("a row");
+        select(&mut app, 60, 24, (0, row), (3, row));
+        assert!(
+            text(&buffer(&app, 60, 24)).contains("Copied"),
+            "the drag copies"
+        );
+        let mut buf = Buffer::empty(Rect::new(0, 0, 60, 10));
+        let mut targets = Vec::new();
+        conversation_rows(&app, area, &mut buf, &mut targets);
+        // "Copied" is the only `info` on `surface` here: its cells are
+        // its row, and none sits outside the area.
+        let marked: Vec<(u16, u16)> = (0..60)
+            .flat_map(|x| (0..10).map(move |y| (x, y)))
+            .filter(|(x, y)| {
+                let cell = &buf[(*x, *y)];
+                cell.fg == Role::Info.color() && cell.bg == Role::Surface.color()
+            })
+            .collect();
+        match want {
+            None => assert!(marked.is_empty(), "{area:?} omits Copied"),
+            Some(y) => {
+                assert!(!marked.is_empty(), "{area:?} draws Copied");
+                for (x, cell_y) in &marked {
+                    assert_eq!(*cell_y, y, "{area:?} draws on row {y}");
+                    assert!(
+                        area.contains(Position::new(*x, *cell_y)),
+                        "{area:?} keeps ({x}, {cell_y})"
+                    );
+                }
+            }
+        }
+    }
+}
+
+#[test]
 fn copied_needs_a_conversation_row_to_show_on() {
     let mut app = replying(30, 10, "```rust\nlet x = 1;\n```");
     let shown = text(&buffer(&app, 30, 10));
