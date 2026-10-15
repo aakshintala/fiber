@@ -252,6 +252,148 @@ fn an_idle_websocket_keeps_its_read_open_after_the_upgrade() {
 }
 
 #[test]
+fn tls_receive_and_shutdown_do_not_wait_for_a_held_send() {
+    fakes::within("TLS receive while send is held", WAIT, || {
+        let (send_frame, frame_wait) = mpsc::channel::<()>();
+        let (close_peer, close_wait) = mpsc::channel::<()>();
+        let (mut endpoint, done) = server(move |tcp| {
+            let mut peer = rustls::StreamOwned::new(
+                rustls::ServerConnection::new(tls::tests::server_config()).unwrap(),
+                tcp,
+            );
+            upgrade(&mut peer);
+            match frame_wait.recv() {
+                Ok(()) | Err(_) => {}
+            }
+            peer.write_all(&server_frame(1, b"while held")).unwrap();
+            match close_wait.recv() {
+                Ok(()) | Err(_) => {}
+            }
+            peer.sock.shutdown(Shutdown::Both).unwrap();
+        });
+        endpoint.secure = true;
+        let (held, is_held) = mpsc::channel();
+        let (release, hold) = mpsc::channel::<()>();
+        let mut via = Via {
+            tls: tls::tests::trusted(),
+            pause: Some(Arc::new(Pause {
+                held,
+                release: std::sync::Mutex::new(hold),
+            })),
+            ..direct()
+        };
+        let exit = exits(&mut via);
+        let mut stream = connect_with(&endpoint, &via).unwrap();
+        stream.write_all(b"held send\n").unwrap();
+        let deadline = fakes::Deadline::after(WAIT);
+        deadline.recv_or_fail(&is_held, "sender encrypted and released TLS state");
+        send_frame.send(()).unwrap();
+        let (line, lines) = mpsc::channel();
+        std::thread::spawn(move || {
+            let mut text = String::new();
+            BufReader::new(stream).read_line(&mut text).unwrap();
+            line.send(text).unwrap();
+        });
+        assert_eq!(
+            deadline.recv_or_fail(&lines, "TLS plaintext while the sender is held"),
+            "while held\n"
+        );
+        close_peer.send(()).unwrap();
+        assert_eq!(
+            deadline.recv_or_fail(&exit, "in-pump shutdown without the send lock"),
+            "net-ws-in"
+        );
+        drop(release);
+        assert_eq!(
+            deadline.recv_or_fail(&exit, "held out-pump exits on the shut socket"),
+            "net-ws-out"
+        );
+        deadline.recv_or_fail(&done, "TLS server closed");
+    });
+}
+
+#[test]
+fn a_peer_that_never_reads_expires_the_write_and_ends_both_pumps() {
+    fakes::within("websocket write backpressure", WAIT, || {
+        let (release, hold) = mpsc::channel::<()>();
+        let (endpoint, done) = server(move |mut peer| {
+            upgrade(&mut peer);
+            match hold.recv() {
+                Ok(()) | Err(_) => {}
+            }
+        });
+        let mut via = Via {
+            limits: crate::Limits::new(Duration::from_secs(15), Duration::from_millis(200))
+                .unwrap(),
+            ..direct()
+        };
+        let exit = exits(&mut via);
+        let mut stream = connect_with(&endpoint, &via).unwrap();
+        stream.set_write_timeout(Some(WAIT)).unwrap();
+        let mut reader = stream.try_clone().unwrap();
+        let (finished, eof_rx) = mpsc::channel();
+        let (writer_done, writer_rx) = mpsc::channel();
+        std::thread::spawn(move || {
+            let mut line = vec![b'x'; 65536];
+            line.push(b'\n');
+            while stream.write_all(&line).is_ok() {}
+            writer_done.send(()).unwrap();
+        });
+        std::thread::spawn(move || {
+            eof(&mut reader);
+            finished.send(()).unwrap();
+        });
+        let deadline = fakes::Deadline::after(WAIT);
+        deadline.recv_or_fail(&eof_rx, "EOF after the websocket write stalls");
+        both(deadline, &exit);
+        deadline.recv_or_fail(&writer_rx, "pair writer released by shutdown");
+        drop(release);
+        deadline.recv_or_fail(&done, "non-reading peer released");
+    });
+}
+
+#[test]
+fn an_unread_pair_is_bounded_and_retains_only_whole_lines() {
+    fakes::within("pair write backpressure", WAIT, || {
+        let (endpoint, done) = server(|mut peer| {
+            upgrade(&mut peer);
+            let frame = server_frame(1, &vec![b'x'; 65536]);
+            for _ in 0..1024 {
+                if peer.write_all(&frame).is_err() {
+                    break;
+                }
+            }
+        });
+        let mut via = Via {
+            limits: crate::Limits::new(Duration::from_secs(15), Duration::from_millis(200))
+                .unwrap(),
+            ..direct()
+        };
+        let exit = exits(&mut via);
+        let mut stream = connect_with(&endpoint, &via).unwrap();
+        let deadline = fakes::Deadline::after(WAIT);
+        both(deadline, &exit);
+        let mut received = Vec::new();
+        stream.read_to_end(&mut received).unwrap();
+        assert!(
+            !received.is_empty(),
+            "the in-pump delivered bytes before backpressure"
+        );
+        assert_eq!(
+            received.len() % 65537,
+            0,
+            "shutdown left a partial line: {} bytes",
+            received.len()
+        );
+        for line in received.chunks(65537) {
+            assert_eq!(line.last(), Some(&b'\n'));
+            assert!(line[..65536].iter().all(|byte| *byte == b'x'));
+        }
+        deadline.recv_or_fail(&done, "flooding server stopped");
+    });
+}
+
+#[test]
 fn a_reset_peer_ends_the_pair_and_both_pumps() {
     fakes::within("reset websocket", WAIT, || {
         let (endpoint, done) = server(|mut peer| {
