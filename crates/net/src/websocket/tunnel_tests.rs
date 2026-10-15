@@ -39,6 +39,52 @@ fn via() -> Via {
 }
 
 #[test]
+fn dial_distinguishes_a_timeout_from_other_connect_errors() {
+    let addr: SocketAddr = "127.0.0.1:1234".parse().unwrap();
+    for kind in [
+        io::ErrorKind::TimedOut,
+        io::ErrorKind::WouldBlock,
+        io::ErrorKind::ConnectionRefused,
+    ] {
+        let mut via = via();
+        via.resolver = Arc::new(Recording {
+            addr,
+            calls: Mutex::new(Vec::new()),
+        });
+        let mut calls = Vec::new();
+        let error = dial("box", 1234, &via, &mut |address, bound| {
+            calls.push((*address, bound));
+            Err(io::Error::from(kind))
+        })
+        .unwrap_err();
+        assert_eq!(calls, vec![(addr, via.limits.connect())]);
+        match (kind, error) {
+            (
+                io::ErrorKind::TimedOut,
+                Error::ConnectTimedOut {
+                    addr: actual,
+                    limit,
+                },
+            ) => {
+                assert_eq!(actual, addr);
+                assert_eq!(limit, via.limits.connect());
+            }
+            (
+                io::ErrorKind::WouldBlock | io::ErrorKind::ConnectionRefused,
+                Error::Connect {
+                    addr: actual,
+                    source,
+                },
+            ) => {
+                assert_eq!(actual, addr);
+                assert_eq!(source.kind(), kind);
+            }
+            (_, error) => panic!("wrong connect error for {kind:?}: {error:?}"),
+        }
+    }
+}
+
+#[test]
 fn resolver_gets_connect_limit_and_its_answer_is_dialled() {
     fakes::within("resolved connection", Duration::from_secs(5), || {
         let listener = TcpListener::bind("127.0.0.1:0").unwrap();

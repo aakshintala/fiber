@@ -38,6 +38,65 @@ pub(crate) fn server_config() -> Arc<rustls::ServerConfig> {
 use rustls::pki_types::pem::PemObject;
 
 #[test]
+fn platform_verifier_advertises_the_crypto_providers_signature_schemes() {
+    assert_eq!(
+        Platform.supported_verify_schemes(),
+        rustls::crypto::ring::default_provider()
+            .signature_verification_algorithms
+            .supported_schemes()
+    );
+}
+
+#[test]
+fn an_abrupt_tls_eof_is_reported_without_another_tcp_read() {
+    fakes::within("abrupt TLS EOF", Duration::from_secs(5), || {
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let addr = listener.local_addr().unwrap();
+        let (close, close_wait) = std::sync::mpsc::channel::<()>();
+        let (done, finished) = std::sync::mpsc::channel();
+        std::thread::spawn(move || {
+            let (mut tcp, _) = listener.accept().unwrap();
+            tcp.set_read_timeout(Some(Duration::from_secs(2))).unwrap();
+            tcp.set_write_timeout(Some(Duration::from_secs(2))).unwrap();
+            let mut tls = rustls::ServerConnection::new(server_config()).unwrap();
+            while tls.is_handshaking() {
+                tls.complete_io(&mut tcp).unwrap();
+            }
+            match close_wait.recv() {
+                Ok(()) | Err(_) => {}
+            }
+            tcp.shutdown(std::net::Shutdown::Both).unwrap();
+            done.send(()).unwrap();
+        });
+        let via = super::super::Via {
+            tls: trusted(),
+            proxy: None,
+            ..super::super::Via::from_env()
+        };
+        let endpoint = super::super::Endpoint {
+            secure: true,
+            host: "127.0.0.1".into(),
+            port: addr.port(),
+            target: "/".into(),
+        };
+        let mut socket = Socket::new(
+            TcpStream::connect(addr).unwrap(),
+            Vec::new(),
+            &endpoint,
+            &via,
+        )
+        .unwrap();
+        close.send(()).unwrap();
+        assert_eq!(
+            socket.read(&mut [0]).unwrap_err().kind(),
+            io::ErrorKind::UnexpectedEof
+        );
+        fakes::Deadline::after(Duration::from_secs(5))
+            .recv_or_fail(&finished, "TLS peer closed without close_notify");
+    });
+}
+
+#[test]
 fn tls_socket_echoes_text_with_the_test_ca() {
     fakes::within("TLS websocket echo", Duration::from_secs(5), || {
         let listener = TcpListener::bind("127.0.0.1:0").unwrap();

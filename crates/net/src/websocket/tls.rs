@@ -206,16 +206,12 @@ impl Read for Socket {
             {
                 let mut encrypted = [0; 16_384];
                 let n = self.tcp.read(&mut encrypted)?;
-                if n == 0 {
-                    return Ok(0);
-                }
                 self.prefix = Cursor::new(encrypted.get(..n).unwrap_or_default().to_vec());
             }
             let pending = {
                 let mut state = state.lock().unwrap_or_else(PoisonError::into_inner);
-                if state.read_tls(&mut self.prefix)? == 0 {
-                    return Ok(0);
-                }
+                // Feed TCP EOF too: rustls distinguishes close_notify from truncation.
+                state.read_tls(&mut self.prefix)?;
                 state.process_new_packets().map_err(io::Error::other)?;
                 state.wants_write()
             };
@@ -230,8 +226,10 @@ impl Write for Socket {
         self.send(Some(bytes))?;
         Ok(bytes.len())
     }
+    // Writes already drain TLS records and complete their TCP writes; flush has no output.
+    #[cfg_attr(false, mutants::skip)]
     fn flush(&mut self) -> io::Result<()> {
-        self.send(None)
+        Ok(())
     }
 }
 
