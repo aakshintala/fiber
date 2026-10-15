@@ -2325,3 +2325,256 @@ fn a_fresh_hub_lists_the_parent_and_never_the_running_delegate() {
         }
     }
 }
+
+/// A credential variable nothing in this test sets: the child's read of it
+/// fails before any session exists. `Setup::fiber` clears the command
+/// environment, so it cannot leak in through the parent either.
+const ABSENT_CHILD_CREDENTIAL: &str = "FIBER_TEST_ABSENT_CHILD_KEY_2347";
+
+/// Installs provider `pb` with model `m` whose credential comes from an
+/// environment variable nothing sets: resolving `fiber:pb/m` succeeds, so
+/// the delegate spawns, but starting it fails before its session exists.
+fn install_pb_without_credential(setup: &support::Setup, url: &str) {
+    let source = setup.root.path().join("src-pb-nocred");
+    let manifest = json!({"name": "pb", "version": "v0.0.0", "fiber": "0.0.0", "api": 1,
+        "providers": {"pb": [format!("{url}/v1")]}});
+    support::write_json(&source.join("extension.json"), &manifest);
+    support::write_json(
+        &source.join("providers/pb.json"),
+        &json!({
+            "name": "pb",
+            "credential": {"env": ABSENT_CHILD_CREDENTIAL},
+            "models": [{"id": "m", "protocol": "openai-responses",
+                "base_url": format!("{url}/v1"), "context_window": 100000}]
+        }),
+    );
+    extensions::plan(
+        &setup.home(),
+        &extensions::Request::Path(source),
+        "0.0.0",
+        &extensions::Origin::github(),
+        &*fakes::clock::FakeClock::new(),
+    )
+    .unwrap()
+    .commit()
+    .unwrap();
+}
+
+/// The parent's durable kinds, in order, for the early-failure run below:
+/// the spawn call and its reviewer verdict, the wait that claims the
+/// failure, the list that shows it, and the final text.
+const EARLY_FAILURE_PARENT_DURABLE: &[&str] = &[];
+
+#[test]
+fn a_delegate_failing_before_session_reports_its_error_and_no_log_path() {
+    let setup = support::Setup::new();
+    let _guard = arm(&setup);
+    let child = ProviderServer::start([support::hello()]).unwrap();
+    // The wait names the job the receipt minted, which no script can know,
+    // and the list follows the wait: each step is driven by what the
+    // receipt and the wait call already put in the history, with distinct
+    // call ids, never a sleep or a guessed id. Reviewer requests carry no
+    // tools, so they never match the session check.
+    let parent = ProviderServer::start_responding(|request: &Request| {
+        let text = String::from_utf8_lossy(&request.body);
+        if !text.contains(r#""name":"delegate_spawn""#) {
+            return text_reply("allow");
+        }
+        if !text.contains("Started delegate") {
+            return support::stream(&[spawn_call("fiber:pb/m")]);
+        }
+        if !text.contains("call_wait") {
+            return support::stream(&[function_call(
+                "call_wait",
+                "jobs",
+                &json!({"action": "wait", "job_id": job_id(&text), "timeout_ms": 30000}),
+            )]);
+        }
+        if !text.contains("call_list") {
+            return support::stream(&[function_call("call_list", "jobs", &json!({"action": "list"}))]);
+        }
+        support::hello()
+    })
+    .unwrap();
+    install_url(&setup, "pa", &parent.url(), "openai-responses", &json!({}));
+    install_pb_without_credential(&setup, &child.url());
+    standing_allow(&setup);
+    slow_idle(&setup);
+
+    // The probe runs the child's exact command for the same model: a
+    // missing credential must fail the same way the delegate will, so its
+    // code and message are the expected failure, not an invented one.
+    // Stdin stays open: it is the delegate lifeline, and end of file on it
+    // reads as the parent going away.
+    let probe_id = doors::mint("s_");
+    let probe_parent = doors::mint("s_");
+    let probe_job = doors::mint("j_");
+    let workspace = setup.workspace().to_str().unwrap().to_owned();
+    let (probe, held) = Running::spawn_stdin(
+        &setup,
+        &[
+            "session",
+            "--id",
+            &probe_id,
+            "--workspace",
+            &workspace,
+            "--model",
+            "pb/m",
+            "--prompt",
+            "hi",
+            "--parent",
+            &probe_parent,
+            "--delegate-id",
+            &probe_job,
+        ],
+        Stdio::piped(),
+    );
+    let mut probe = probe;
+    probe.wait_line("the probe's exit line", |line| line["kind"] == "fiber_exited");
+    drop(held);
+    let (probe_status, probe_lines, probe_stderr) = probe.wait();
+    assert_eq!(probe_status.code(), Some(1), "stderr: {probe_stderr}");
+    assert_eq!(probe_lines.len(), 1, "{probe_lines:?}");
+    let probe_exited = &probe_lines[0];
+    assert!(probe_exited.get("session_id").is_none(), "{probe_exited}");
+    assert_eq!(probe_exited["schema_version"], 1);
+    let expected_code = probe_exited["payload"]["error"]["code"]
+        .as_str()
+        .unwrap()
+        .to_owned();
+    let expected_message = probe_exited["payload"]["error"]["message"]
+        .as_str()
+        .unwrap()
+        .to_owned();
+    assert_eq!(probe_exited["payload"]["exit_code"], 1);
+    assert!(
+        probe_stderr.contains(&expected_message),
+        "stderr: {probe_stderr}"
+    );
+    assert!(
+        !sessions_in(&setup.home(), &setup.workspace())
+            .join(&probe_id)
+            .exists(),
+        "the probe made a session directory"
+    );
+
+    // The real parent: its child re-executes this same binary through the
+    // production launch wiring, so the failure above is what arrives.
+    let running = Running::spawn(&setup, &["ask", "scan the tree"]);
+    let (status, lines, stderr) = running.wait();
+    assert_eq!(status.code(), Some(0), "stderr: {stderr}");
+    // The child never reached its provider: no model call, no credential
+    // use, nothing on the wire.
+    assert!(
+        child.requests().is_empty(),
+        "the failed child called its provider"
+    );
+
+    // One delegate, failed with the probe's own error: never the fallback
+    // for a missing result, with the reaped exit code beside it.
+    let started = one(&lines, "delegate_started");
+    let job = started["job_id"].as_str().unwrap().to_owned();
+    let child_id = started["delegate_session_id"].as_str().unwrap().to_owned();
+    let kinds = kinds(&lines);
+    assert_eq!(
+        kinds.iter().filter(|kind| *kind == "delegate_started").count(),
+        1
+    );
+    assert_eq!(
+        kinds.iter().filter(|kind| *kind == "delegate_finished").count(),
+        1,
+        "{kinds:?}"
+    );
+    assert_eq!(
+        kinds.iter().filter(|kind| *kind == "job_completed").count(),
+        1,
+        "{kinds:?}"
+    );
+    let finished_at = kinds.iter().position(|kind| kind == "delegate_finished").unwrap();
+    let completed_at = kinds.iter().position(|kind| kind == "job_completed").unwrap();
+    // The finish is written just before the end, with nothing between.
+    assert_eq!(completed_at, finished_at + 1, "{kinds:?}");
+    let finished = lines[finished_at]["payload"].clone();
+    let done = lines[completed_at]["payload"].clone();
+    assert_eq!(finished["job_id"], job);
+    assert_eq!(done["job_id"], job);
+    assert_eq!(done["status"], "failed");
+    assert_eq!(done["error"]["code"], expected_code);
+    assert_eq!(done["error"]["message"], expected_message);
+    assert_ne!(done["error"]["message"], "The delegate ended without a result.");
+    assert_eq!(done["process"]["exit_code"], 1);
+    // Nothing was ever written to finish with, and no model call ran.
+    assert_eq!(finished["text"], "");
+    assert_eq!(finished["usage"]["tokens"]["input"], 0);
+    assert_eq!(finished["usage"]["tokens"]["output"], 0);
+
+    // The wait and the list each ran once, found by their own call: two
+    // calls share the `jobs` name, so the shared helper cannot tell them
+    // apart.
+    let requested = |action: &str| {
+        lines
+            .iter()
+            .find(|line| {
+                line["kind"] == "tool_call_requested"
+                    && line["payload"]["name"] == "jobs"
+                    && line["payload"]["arguments"]["action"] == action
+            })
+            .unwrap_or_else(|| panic!("no jobs {action} call in {kinds:?}"))
+            .clone()
+    };
+    let wait_action = requested("wait")["action_id"].as_str().unwrap().to_owned();
+    let list_action = requested("list")["action_id"].as_str().unwrap().to_owned();
+    assert_ne!(wait_action, list_action);
+    let completed = |action: &str| {
+        lines
+            .iter()
+            .find(|line| line["kind"] == "tool_call_completed" && line["action_id"] == action)
+            .unwrap_or_else(|| panic!("no completion for {action} in {kinds:?}"))
+            .clone()
+    };
+    let wait_done = completed(&wait_action);
+    let list_done = completed(&list_action);
+    assert_eq!(wait_done["payload"]["status"], "completed");
+    let wait_text = wait_done["payload"]["content"][0]["text"].as_str().unwrap();
+    assert!(wait_text.contains("failed"), "{wait_text}");
+    assert!(wait_text.contains(&expected_message), "{wait_text}");
+    // Whether the failure landed at a step boundary or in the wait, the
+    // pair carries the run's own id: a notice carries none, a claimed end
+    // carries the wait's.
+    let pair_action = lines[finished_at]["action_id"].clone();
+    assert!(
+        pair_action.is_null() || pair_action == json!(wait_action),
+        "{pair_action}"
+    );
+
+    // The same parent's list shows the stored error and no log path: the
+    // child's log was never created, and the receipt's path is gone whole.
+    let spawn_done = completed_for(&lines, "delegate_spawn");
+    let receipt = spawn_done["payload"]["content"][0]["text"].as_str().unwrap();
+    assert!(receipt.contains(&job), "{receipt}");
+    let marker = "Its log is ";
+    let receipt_path = receipt[receipt.find(marker).unwrap() + marker.len()..]
+        .trim_end_matches('.')
+        .to_owned();
+    assert!(receipt_path.ends_with("events.jsonl"), "{receipt}");
+    assert!(receipt_path.contains(&child_id), "{receipt}");
+    assert_eq!(list_done["payload"]["status"], "completed");
+    let list_text = list_done["payload"]["content"][0]["text"].as_str().unwrap();
+    assert_eq!(list_text, format!("{job} failed scan \u{2014} {expected_message}\n"));
+    assert!(!list_text.contains(&receipt_path), "{list_text}");
+    let child_dir = sessions_in(&setup.home(), &setup.workspace()).join(&child_id);
+    assert!(!child_dir.exists(), "the child made a session directory");
+    assert!(!child_dir.join("events.jsonl").exists(), "the child wrote a log");
+
+    // The whole parent stream, in order, and its durable lines equal its
+    // log: a duplicated, missing or reordered event fails here.
+    assert_eq!(durable_kinds(&lines), EARLY_FAILURE_PARENT_DURABLE);
+    let parent_id = lines[0]["session_id"].as_str().unwrap();
+    let logged = read_lines(&ask_sessions(&setup).join(parent_id).join("events.jsonl"));
+    let durable_stdout: Vec<Value> = lines
+        .iter()
+        .filter(|line| line.get("seq").is_some())
+        .cloned()
+        .collect();
+    assert_eq!(durable_stdout, logged);
+}

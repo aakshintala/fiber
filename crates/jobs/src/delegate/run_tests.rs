@@ -26,8 +26,8 @@ use contract::clock::Clock as _;
 use contract::events::{FiberExited, FinalMessage, Outcome};
 use contract::inbox::Delivery;
 use contract::jobs::Jobs as _;
-use contract::shapes::Failure;
-use contract::{ActionId, ErrorCode, JobId, Seq, SessionId};
+use contract::shapes::{Failure, Usage};
+use contract::{ActionId, ErrorCode, JobId, PreSessionExit, Seq, SessionId};
 use fakes::Deadline;
 use fakes::clock::FakeClock;
 use fakes::{Recorder, TempDir, Watchdog, group_empties, kill_pid, pids_exit, within};
@@ -588,26 +588,18 @@ fn the_watch_flow_completes_with_the_delegate_text() {
 
 #[test]
 fn a_pre_session_error_fails_with_that_error() {
-    let errored = FiberExited {
-        exit_code: 1,
-        usage: usage(),
-        final_message: Some(FinalMessage {
-            final_action_id: ActionId("a_1".into()),
-            text: "almost".to_owned(),
-        }),
-        error: Some(Failure {
+    // The production startup shape: `PreSessionExit` has no session
+    // envelope around it, and carries no usage or final message. The
+    // runner must preserve the child's own failure, not report a missing
+    // result.
+    let line = serde_json::to_string(&PreSessionExit::new(
+        1,
+        Failure {
             code: ErrorCode::InvalidArguments,
             message: "Bad model.".to_owned(),
             retry_after_ms: None,
             provider: None,
-        }),
-        suspended_on: None,
-        questions: None,
-    };
-    let line = serde_json::to_string(&envelope(
-        1,
-        "fiber_exited",
-        serde_json::to_value(&errored).unwrap(),
+        },
     ))
     .unwrap();
     // Every watch is refused: the child failed before it could bind.
@@ -631,8 +623,122 @@ fn a_pre_session_error_fails_with_that_error() {
         Some(ErrorCode::InvalidArguments)
     );
     assert_eq!(
+        notice
+            .completed
+            .error
+            .as_ref()
+            .map(|error| error.message.clone()),
+        Some("Bad model.".to_owned())
+    );
+    assert_eq!(
+        notice
+            .completed
+            .process
+            .as_ref()
+            .and_then(|process| process.exit_code),
+        Some(1)
+    );
+    // No final message was ever written: the finish carries no text.
+    assert_eq!(
+        notice.delegate.as_ref().map(|finish| finish.text.clone()),
+        Some("".into())
+    );
+    // No model call ran before the failure: zero usage, not a copy of
+    // some earlier run's totals.
+    assert_eq!(
+        notice.delegate.as_ref().map(|finish| finish.usage.clone()),
+        Some(Usage::default())
+    );
+    watchdog.stand_down(DEADLINE);
+}
+
+#[test]
+fn a_full_envelope_error_keeps_its_usage_and_final_message() {
+    // The normal session shape keeps everything it wrote: a startup
+    // normalization must never erase a real envelope's usage or text.
+    let errored = FiberExited {
+        exit_code: 1,
+        usage: usage(),
+        final_message: Some(FinalMessage {
+            final_action_id: ActionId("a_1".into()),
+            text: "almost".to_owned(),
+        }),
+        error: Some(Failure {
+            code: ErrorCode::InvalidArguments,
+            message: "Bad model.".to_owned(),
+            retry_after_ms: None,
+            provider: None,
+        }),
+        suspended_on: None,
+        questions: None,
+    };
+    let line = serde_json::to_string(&envelope(
+        1,
+        "fiber_exited",
+        serde_json::to_value(&errored).unwrap(),
+    ))
+    .unwrap();
+    // Every watch is refused: the result must come through stdout.
+    let rig = rig(vec![]);
+    // Backstop armed before the shell starts: the child exits on
+    // its own in milliseconds; this only fires if a mutant strands it.
+    let watchdog = Watchdog::matching("fiber-delegate-full-envelope");
+    rig.start(
+        &format!(": fiber-delegate-full-envelope; printf '%s\\n' '{line}'; exit 1"),
+        BOUND,
+        1024,
+    );
+    let notice = reported(&rig);
+    assert_eq!(notice.completed.status, Outcome::Failed);
+    assert_eq!(
+        notice
+            .completed
+            .error
+            .as_ref()
+            .map(|error| error.code.clone()),
+        Some(ErrorCode::InvalidArguments)
+    );
+    assert_eq!(
         notice.delegate.as_ref().map(|finish| finish.text.clone()),
         Some("almost".into())
+    );
+    assert_eq!(
+        notice.delegate.as_ref().map(|finish| finish.usage.clone()),
+        Some(usage())
+    );
+    watchdog.stand_down(DEADLINE);
+}
+
+#[test]
+fn a_malformed_stdout_line_ends_indeterminate() {
+    // Garbage on stdout is no verdict at all: the job ends without a
+    // result, and keeps the process's own exit code.
+    let rig = rig(vec![]);
+    // Backstop armed before the shell starts: the child exits on
+    // its own in milliseconds; this only fires if a mutant strands it.
+    let watchdog = Watchdog::matching("fiber-delegate-malformed");
+    rig.start(
+        ": fiber-delegate-malformed; printf '%s\\n' 'not json at all {{{'; exit 1",
+        BOUND,
+        1024,
+    );
+    let notice = reported(&rig);
+    assert_eq!(notice.completed.status, Outcome::Failed);
+    assert_eq!(
+        notice
+            .completed
+            .error
+            .as_ref()
+            .map(|error| error.code.clone()),
+        Some(ErrorCode::Indeterminate)
+    );
+    assert_eq!(
+        notice
+            .completed
+            .process
+            .as_ref()
+            .and_then(|process| process.exit_code),
+        Some(1)
     );
     watchdog.stand_down(DEADLINE);
 }
