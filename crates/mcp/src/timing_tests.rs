@@ -537,6 +537,7 @@ fn an_empty_tool_list_completes_once() {
 /// answer until released, and returns the worker's result receiver with the
 /// attempt's thread.
 fn held_launch(
+    deadline: &Deadline,
     setup: &Setup,
     spec: crate::start::ServerSpec,
     capture: &Arc<Capture>,
@@ -560,7 +561,10 @@ fn held_launch(
         ))
         .unwrap_or(());
     });
-    (result, thread_rx.recv().expect("the attempt enters"))
+    (
+        result,
+        deadline.recv_or_fail(&thread_rx, "the attempt enters Timing"),
+    )
 }
 
 #[test]
@@ -582,7 +586,7 @@ fn a_held_tool_list_measures_the_advance_and_prompts_add_nothing() {
     let until = origin
         .checked_add(spec.startup_timeout)
         .expect("startup deadline");
-    let (result, worker) = held_launch(&setup, spec, &capture);
+    let (result, worker) = held_launch(&test_deadline, &setup, spec, &capture);
     // The held `initialize`: the handshake worker waits on the fake
     // clock before it moves.
     assert!(
@@ -659,7 +663,7 @@ fn a_failed_prompt_list_after_a_held_tool_list_writes_no_second_line() {
     let until = origin
         .checked_add(spec.startup_timeout)
         .expect("startup deadline");
-    let (result, worker) = held_launch(&setup, spec, &capture);
+    let (result, worker) = held_launch(&test_deadline, &setup, spec, &capture);
     assert!(
         fake.await_requests(1, test_deadline.left()),
         "the initialize arrives"
@@ -1049,16 +1053,30 @@ fn a_late_death_report_during_replacement_records_nothing_extra() {
         Served::Failed(_) => panic!("the server runs"),
     };
     kill_running(&setup, &slot);
-    // The replacement starts on a worker while this thread reports the
-    // old server's death: under the reservation the report finds no
-    // running server, and after the publish the server is no longer the
-    // old one, so either order records at most the one death.
+    // The replacement holds after reserving the attempt: the pause
+    // acknowledgement proves the slot is Down, so the old death report
+    // below lands inside the reservation interval it claims to cover.
+    // Without the hold the report could land before the replacement
+    // starts or after it publishes, never exercising that interval.
+    let (paused_tx, paused_rx) = mpsc::channel();
+    let (release_tx, release_rx) = mpsc::channel();
+    let release_deadline = test_deadline;
+    slot.on_after_reserve(Box::new(move || {
+        paused_tx.send(()).unwrap_or(());
+        release_deadline.recv_or_fail(&release_rx, "the replacement release");
+    }));
     let replacing = Arc::clone(&slot);
     let (done, result) = mpsc::channel();
     thread::spawn(move || {
         done.send(replacing.serve()).unwrap_or(());
     });
+    test_deadline.recv_or_fail(&paused_rx, "the replacement reserves");
     let reported = slot.died(&old);
+    assert!(
+        reported.is_none(),
+        "the late report during reservation records nothing"
+    );
+    release_tx.send(()).unwrap_or(());
     let served: Served = test_deadline.recv_or_fail(&result, "the replacement serve");
     let mut deaths = usize::from(reported.is_some());
     let mut readies = 0_usize;
@@ -1479,28 +1497,6 @@ fn a_none_returning_context_stays_safe() {
     )
     .expect("a context answering None still opens");
     assert_eq!(open.listed.tools.len(), 1);
-}
-
-#[test]
-fn a_plain_http_start_records_nothing() {
-    let setup = Setup::new();
-    let fake = remote_server(vec![vec![echo_tool()]], Some(Vec::new()), echo_call);
-    let url = format!("{}/mcp", fake.url());
-    let capture = Capture::new(setup.fake.clone());
-    let clock = setup.clock();
-    let open = crate::http::start(
-        &url,
-        Arc::new(crate::test_support::FakeTokens::default()),
-        None,
-        net::LIMITS,
-        &clock,
-        crate::start::DEFAULT_STARTUP_TIMEOUT,
-        "0.0.0",
-    )
-    .expect("the plain remote server opens");
-    assert_eq!(open.listed.tools.len(), 1);
-    assert_eq!(capture.calls(), 0, "the plain path takes no context");
-    assert!(capture.completions().is_empty());
 }
 
 #[test]

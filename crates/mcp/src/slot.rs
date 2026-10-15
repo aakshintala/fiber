@@ -53,6 +53,10 @@ pub(crate) struct Slot {
     /// so a test releases its hold only after the contender waits.
     #[cfg(test)]
     wait_hook: Mutex<Option<std::sync::mpsc::Sender<()>>>,
+    /// Test-only: runs after `serve` reserves the attempt and before it
+    /// launches, so a test holds the replacement on the reservation.
+    #[cfg(test)]
+    after_reserve: Mutex<Option<Box<dyn FnOnce() + Send>>>,
     /// Whether the server offers resources to read, fixed from the lists
     /// the slot was declared from: the session keeps its declared tools,
     /// so a server that stops advertising resources is still asked.
@@ -162,6 +166,8 @@ impl Slot {
             wake: Condvar::new(),
             #[cfg(test)]
             wait_hook: Mutex::new(None),
+            #[cfg(test)]
+            after_reserve: Mutex::new(None),
             state: Mutex::new(state),
             #[cfg(test)]
             run_after_serve: Mutex::new(None),
@@ -328,6 +334,10 @@ impl Slot {
                 }
             }
         };
+        #[cfg(test)]
+        if let Some(hook) = lock(&self.after_reserve).take() {
+            hook();
+        }
         let timeout = self.spec.startup_timeout;
         let name = self.spec.name.clone();
         // The slot's own context follows the attempt; the launch owns
@@ -568,6 +578,14 @@ impl Slot {
     #[cfg(test)]
     pub(crate) fn on_lease_wait(&self, hook: std::sync::mpsc::Sender<()>) {
         *lock(&self.wait_hook) = Some(hook);
+    }
+
+    /// Runs `hook` after the next `serve` reserves its attempt and
+    /// before it launches. Test-only: holds the replacement on the
+    /// reservation so a late death report lands inside it.
+    #[cfg(test)]
+    pub(crate) fn on_after_reserve(&self, hook: Box<dyn FnOnce() + Send>) {
+        *lock(&self.after_reserve) = Some(hook);
     }
 
     /// Stops the running server, if any, and leaves the slot dead from any
