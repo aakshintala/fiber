@@ -50,7 +50,8 @@ fn form_setup() -> Setup {
     write_json(&setup.workspace().join("s.json"), &form_script());
     write_json(
         &setup.home().join("config.json"),
-        &json!({"model": "scripted/s.json", "hub": {"idle_exit_ms": 1000}}),
+        &json!({"model": "scripted/s.json", "hub": {"idle_exit_ms": 1000},
+            "tui": {"rail": {"shown": false}}}),
     );
     setup
 }
@@ -183,13 +184,13 @@ fn an_ask_user_form_draws_the_doc_look_and_answers_into_the_card() {
         grid.contents
     );
     // The tint's last cell is the hint's last one: the title is padded to
-    // it with spaces.
+    // it with spaces, one column in past the grip.
     let end = (0..160)
         .rev()
         .find(|x| grid.cell(*x, title).bg == APPROVAL_BG)
         .expect("the tinted run");
-    let pad = end + 1 - 2 - 54 - 20;
-    let want = format!("▌ {left}{}{right}", " ".repeat(usize::from(pad)));
+    let pad = end + 1 - 2 - 54 - 20 - 1;
+    let want = format!(" ▌ {left}{}{right}", " ".repeat(usize::from(pad)));
     assert_eq!(
         grid.rows[usize::from(title)].trim_end(),
         want,
@@ -213,23 +214,27 @@ fn an_ask_user_form_draws_the_doc_look_and_answers_into_the_card() {
     for (dy, want) in rows.iter().enumerate() {
         let y = title + 1 + u16::try_from(dy).unwrap_or(u16::MAX);
         let row = grid.rows[usize::from(y)].trim_end();
-        let row = row.strip_prefix("▌ ").unwrap_or(row);
+        // Past the grip, which takes column 0.
+        let row = row
+            .strip_prefix(" ▌")
+            .map_or_else(|| row.to_owned(), |rest| format!("▌{rest}"));
+        let row = row.strip_prefix("▌ ").unwrap_or(&row);
         assert_eq!(row, *want, "row {y} in\n{}", grid.contents);
     }
     // Nothing is chosen yet: every option mark reads "[ ]" and none "[x]".
     assert!(grid.contents.contains("[ ]"), "{}", grid.contents);
     assert!(!grid.contents.contains("[x]"), "{}", grid.contents);
-    // Every row's first cell is the stripe in `secondary`, every cell up
+    // Every row's second cell is the stripe in `secondary`, every cell up
     // to the tint end has the form's tint, and the edges draw above and
     // below the thirteen rows.
     for y in title..title + 13 {
-        for x in 0..end + 1 {
+        for x in 1..end + 1 {
             assert_eq!(grid.cell(x, y).bg, APPROVAL_BG, "({x}, {y})");
         }
-        assert_eq!(grid.cell(0, y).symbol.as_str(), "▌", "row {y}");
-        assert_eq!(grid.cell(0, y).fg, SECONDARY, "row {y}");
+        assert_eq!(grid.cell(1, y).symbol.as_str(), "▌", "row {y}");
+        assert_eq!(grid.cell(1, y).fg, SECONDARY, "row {y}");
     }
-    for x in 0..end + 1 {
+    for x in 1..end + 1 {
         assert_eq!(grid.cell(x, title - 1).symbol.as_str(), "▄", "top {x}");
         assert_eq!(grid.cell(x, title + 13).symbol.as_str(), "▀", "bottom {x}");
     }

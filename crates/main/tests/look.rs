@@ -651,7 +651,8 @@ fn turn_drawn(grid: &Grid) -> bool {
 
 /// One turn at 160x48 with `env`: the scripted provider answers "Hello.",
 /// the journey types a prompt, sees the answer and quits. Returns the
-/// drawn grid and the whole output.
+/// drawn grid and the whole output. One session: the rail stays hidden,
+/// so the look pinned is the conversation's own.
 #[track_caller]
 fn one_turn(env: &[(&str, &str)]) -> (Grid, Vec<u8>) {
     let setup = Setup::new();
@@ -661,7 +662,8 @@ fn one_turn(env: &[(&str, &str)]) -> (Grid, Vec<u8>) {
     );
     support::write_json(
         &setup.home().join("config.json"),
-        &serde_json::json!({"model": "scripted/s.json", "hub": {"idle_exit_ms": 1000}}),
+        &serde_json::json!({"model": "scripted/s.json", "hub": {"idle_exit_ms": 1000},
+            "tui": {"rail": {"shown": false}}}),
     );
     let mut run = Run::spawn(&setup, 160, 48, &[], env);
     // The end of the first frame proves the input reader runs before
@@ -702,9 +704,9 @@ fn input_row(screen: &Grid) -> (u16, u16) {
 }
 
 /// The input box's stripe cell and edge run, read once from the first
-/// run: with no rail the box spans the 126-column conversation, the
-/// panel grip sitting at column 126.
-const BOX_LEFT: u16 = 0;
+/// run: with the rail hidden the box spans the 125-column conversation
+/// past the grip, the panel grip sitting at column 126.
+const BOX_LEFT: u16 = 1;
 /// The edge run's exclusive end: the panel grip's column.
 const BOX_RIGHT: u16 = 126;
 /// The box's rows at 160x48: its ▄ edge, its text, its ▀ edge.
@@ -904,7 +906,7 @@ fn settled(screen: &Grid, layout: SettledScreen) -> bool {
     match layout {
         SettledScreen::Conversation => {
             (0..126).all(|x| screen.cell(x, 0).symbol == " ")
-                && reply_card(1, 124, 0, 125)
+                && reply_card(2, 124, 1, 125)
                 && panel(126)
                 && (23..=25).all(|y| {
                     let grip = screen.cell(126, y);
@@ -940,18 +942,22 @@ fn settled(screen: &Grid, layout: SettledScreen) -> bool {
 }
 
 /// Spawns 160x48 with the scripted provider, runs one turn to `finished`
-/// and returns the run.
+/// and returns the run. `rail_shown` sets `tui.rail.shown` for the run:
+/// one-session callers hide it, so the look pinned is unchanged, while
+/// the two-session caller keeps it.
 #[track_caller]
-fn started_run() -> (Setup, Run) {
+fn started_run(rail_shown: bool) -> (Setup, Run) {
     let setup = Setup::new();
     support::write_json(
         &setup.workspace().join("s.json"),
         &serde_json::json!({"steps": [{"text": ["Hel", "lo."]}]}),
     );
-    support::write_json(
-        &setup.home().join("config.json"),
-        &serde_json::json!({"model": "scripted/s.json", "hub": {"idle_exit_ms": 1000}}),
-    );
+    let mut config =
+        serde_json::json!({"model": "scripted/s.json", "hub": {"idle_exit_ms": 1000}});
+    if !rail_shown {
+        config["tui"] = serde_json::json!({"rail": {"shown": false}});
+    }
+    support::write_json(&setup.home().join("config.json"), &config);
     let mut run = Run::spawn(&setup, 160, 48, &[], &TRUECOLOUR);
     // The end of the first frame proves the input reader runs before
     // the prompt goes out; the reply stays drawn, so the grid check
@@ -973,7 +979,7 @@ fn quit(mut run: Run) {
 
 #[test]
 fn one_session_has_no_header_row_and_a_blank_column_each_side() {
-    let (_setup, mut run) = started_run();
+    let (_setup, mut run) = started_run(false);
     let screen = run.wait_screen("the conversation", |s| {
         settled(s, SettledScreen::Conversation)
     });
@@ -986,7 +992,7 @@ fn one_session_has_no_header_row_and_a_blank_column_each_side() {
 
 #[test]
 fn hovering_the_panel_edge_tints_its_column_and_brightens_the_grip() {
-    let (_setup, mut run) = started_run();
+    let (_setup, mut run) = started_run(false);
     // The motion enable proves the terminal takes mouse reports; the
     // finished turn the starter waited proves the session is idle.
     run.wait_bytes(0, MOTION, "mouse motion enabled");
@@ -1011,7 +1017,7 @@ fn hovering_the_panel_edge_tints_its_column_and_brightens_the_grip() {
 
 #[test]
 fn two_sessions_show_the_rail_on_panel_and_hiding_it_leaves_the_grip() {
-    let (_setup, mut run) = started_run();
+    let (_setup, mut run) = started_run(true);
     // The finished turn the starter waited proves the session is idle
     // before the home key goes out.
     let home_from = run.output().len();
@@ -1144,7 +1150,7 @@ fn followed_end_is_complete(grid: &Grid) -> bool {
     }
     let bubble: Vec<u16> = (0..48)
         .filter(|y| {
-            (36..=124).all(|x| grid.cell(x, *y).bg == PROMPT_RGB)
+            (58..=124).all(|x| grid.cell(x, *y).bg == PROMPT_RGB)
                 && grid.cell(124, *y).symbol == "▐"
         })
         .collect();
@@ -1155,18 +1161,18 @@ fn followed_end_is_complete(grid: &Grid) -> bool {
     let second = bubble[1];
     if !bubble
         .iter()
-        .all(|y| grid.cell(35, *y).bg == Colour::Default && grid.cell(124, *y).fg == ACCENT_RGB)
+        .all(|y| grid.cell(57, *y).bg == Colour::Default && grid.cell(124, *y).fg == ACCENT_RGB)
     {
         return false;
     }
-    if grid.cell(36, first).symbol != " "
-        || grid.cell(37, first).symbol != "a"
+    if grid.cell(58, first).symbol != " "
+        || grid.cell(59, first).symbol != "a"
         || grid.cell(123, first).symbol != " "
     {
         return false;
     }
     for (y, edge) in [(first - 1, "▄"), (second + 1, "▀")] {
-        if !(36..=124).all(|x| {
+        if !(58..=124).all(|x| {
             let cell = grid.cell(x, y);
             cell.symbol == edge && cell.fg == PROMPT_RGB && cell.bg == Colour::Default
         }) {
@@ -1195,20 +1201,20 @@ fn followed_end_is_complete(grid: &Grid) -> bool {
         return false;
     }
     let card_top = second + 4;
-    if !(1..=124).all(|x| {
+    if !(2..=124).all(|x| {
         let cell = grid.cell(x, card_top);
         cell.symbol == "▄" && cell.fg == TURN_RGB && cell.bg == Colour::Default
     }) {
         return false;
     }
     let Some(card_bottom) = (card_top..48).find(|y| {
-        (1..=124).all(|x| grid.cell(x, *y).symbol == "▀" && grid.cell(x, *y).fg == TURN_RGB)
+        (2..=124).all(|x| grid.cell(x, *y).symbol == "▀" && grid.cell(x, *y).fg == TURN_RGB)
     }) else {
         return false;
     };
     if !(card_top + 1..card_bottom).all(|y| {
-        (1..=124).all(|x| grid.cell(x, y).bg == TURN_RGB)
-            && grid.cell(1, y).symbol == " "
+        (2..=124).all(|x| grid.cell(x, y).bg == TURN_RGB)
+            && grid.cell(2, y).symbol == " "
             && grid.cell(124, y).symbol == " "
     }) {
         return false;
@@ -1232,31 +1238,31 @@ fn followed_end_is_complete(grid: &Grid) -> bool {
     if ![(group, '●'), (steer, 's'), (said, 'u'), (done, 'D')]
         .into_iter()
         .all(|(y, first)| {
-            grid.cell(1, y).symbol == " " && grid.cell(2, y).symbol == first.to_string()
+            grid.cell(2, y).symbol == " " && grid.cell(3, y).symbol == first.to_string()
         })
         || said != steer + 1
         || [(group, steer), (said, done)]
             .into_iter()
             .any(|(first, second)| {
-                second != first + 2 || !(1..=124).all(|x| grid.cell(x, first + 1).symbol == " ")
+                second != first + 2 || !(2..=124).all(|x| grid.cell(x, first + 1).symbol == " ")
             })
     {
         return false;
     }
-    if (2..=6)
+    if (3..=7)
         .map(|x| grid.cell(x, steer).symbol)
         .collect::<String>()
         != "steer"
-        || !(2..=6).all(|x| {
+        || !(3..=7).all(|x| {
             let cell = grid.cell(x, steer);
             cell.fg == ATTENTION_RGB && cell.bold
         })
-        || !(7..=15).all(|x| grid.cell(x, steer).dim)
-        || !(16..=123).all(|x| {
+        || !(8..=16).all(|x| grid.cell(x, steer).dim)
+        || !(17..=123).all(|x| {
             let cell = grid.cell(x, steer);
             cell.symbol == "─" && cell.fg == RULE_RGB
         })
-        || !(2..=6).all(|x| grid.cell(x, said).bold)
+        || !(3..=7).all(|x| grid.cell(x, said).bold)
     {
         return false;
     }
@@ -1270,7 +1276,7 @@ fn followed_end_is_complete(grid: &Grid) -> bool {
     };
     let closed: String = (0..160).map(|x| grid.cell(x, closing).symbol).collect();
     closing == done + 2
-        && (0..125).all(|x| {
+        && (1..125).all(|x| {
             let cell = grid.cell(x, closing);
             cell.symbol == " " || cell.dim
         })
@@ -1310,15 +1316,16 @@ fn turns_draw_bubbles_padded_turn_cards_a_thumb_and_the_pill() {
     .unwrap();
     support::write_json(
         &setup.home().join("config.json"),
-        &serde_json::json!({"model": "scripted/s.json", "hub": {"idle_exit_ms": 1000}}),
+        &serde_json::json!({"model": "scripted/s.json", "hub": {"idle_exit_ms": 1000},
+            "tui": {"rail": {"shown": false}}}),
     );
     let mut run = Run::spawn(&setup, 160, 48, &[], &TRUECOLOUR);
     run.ready();
     let from = run.output().len();
     run.write(b"say hi\r");
     run.turn_finished(from);
-    // A prompt whose first bubble row is exactly 86 cells: 42 a's, a
-    // space, 43 b's, then a second row of c's.
+    // A prompt of 42 a's, 43 b's and 20 c's: the narrower bubble holds
+    // the a's on its first row, the rest on its second.
     let long = format!("{} {} {}", "a".repeat(42), "b".repeat(43), "c".repeat(20));
     let from2 = run.output().len();
     run.write(long.as_bytes());
@@ -1404,28 +1411,29 @@ fn turns_draw_bubbles_padded_turn_cards_a_thumb_and_the_pill() {
     run.write(b"\x1b[F");
     let end = run.wait_screen("the followed end", followed_end_is_complete);
     assert!(!end.contents.contains("New messages below"));
-    // The long prompt's bubble is 89 cells wide: floor(124 × 72 / 100).
+    // The long prompt's bubble is 67 cells wide: its widest row (64)
+    // plus pads, right-aligned past the grip.
     let bubble: Vec<u16> = (0..48)
         .filter(|y| {
-            (36..=124).all(|x| end.cell(x, *y).bg == PROMPT_RGB)
+            (58..=124).all(|x| end.cell(x, *y).bg == PROMPT_RGB)
                 && end.cell(124, *y).symbol.as_str() == "▐"
         })
         .collect();
     assert_eq!(bubble.len(), 2, "two bubble text rows");
     for y in &bubble {
-        for x in 36..=124 {
+        for x in 58..=124 {
             assert_eq!(end.cell(x, *y).bg, PROMPT_RGB, "bubble cell ({x}, {y})");
         }
-        assert_eq!(end.cell(35, *y).bg, Colour::Default);
+        assert_eq!(end.cell(57, *y).bg, Colour::Default);
         assert_eq!(end.cell(124, *y).fg, ACCENT_RGB);
     }
     let first = bubble[0];
-    assert_eq!(end.cell(36, first).symbol.as_str(), " ");
-    assert_eq!(end.cell(37, first).symbol.as_str(), "a");
+    assert_eq!(end.cell(58, first).symbol.as_str(), " ");
+    assert_eq!(end.cell(59, first).symbol.as_str(), "a");
     assert_eq!(end.cell(123, first).symbol.as_str(), " ");
     // Half-block edges above and below, on the terminal background.
     for (y, edge) in [(first - 1, "▄"), (bubble[1] + 1, "▀")] {
-        for x in 36..=124 {
+        for x in 58..=124 {
             let cell = end.cell(x, y);
             assert_eq!(cell.symbol.as_str(), edge, "edge cell ({x}, {y})");
             assert_eq!(cell.fg, PROMPT_RGB, "edge cell ({x}, {y})");
@@ -1463,7 +1471,7 @@ fn turns_draw_bubbles_padded_turn_cards_a_thumb_and_the_pill() {
     for x in 1..=124 {
         assert_eq!(end.cell(x, bubble[1] + 3).symbol.as_str(), " ");
     }
-    for x in 1..=124 {
+    for x in 2..=124 {
         let cell = end.cell(x, bubble[1] + 4);
         assert_eq!(
             cell.symbol.as_str(),
@@ -1484,18 +1492,18 @@ fn turns_draw_bubbles_padded_turn_cards_a_thumb_and_the_pill() {
     let card_top = bubble[1] + 4;
     let card_bottom = (card_top..48)
         .find(|y| {
-            (1..=124)
+            (2..=124)
                 .all(|x| end.cell(x, *y).symbol.as_str() == "▀" && end.cell(x, *y).fg == TURN_RGB)
         })
         .expect("the card's bottom edge");
     for y in card_top + 1..card_bottom {
-        for x in 1..=124 {
+        for x in 2..=124 {
             assert_eq!(end.cell(x, y).bg, TURN_RGB, "card cell ({x}, {y})");
         }
-        assert_eq!(end.cell(1, y).symbol.as_str(), " ");
+        assert_eq!(end.cell(2, y).symbol.as_str(), " ");
         assert_eq!(end.cell(124, y).symbol.as_str(), " ");
     }
-    // Each block starts at column 2 with one blank card row between.
+    // Each block starts at column 3 with one blank card row between.
     let row_with = |needle: &str| {
         (card_top + 1..card_bottom)
             .find(|y| {
@@ -1511,8 +1519,8 @@ fn turns_draw_bubbles_padded_turn_cards_a_thumb_and_the_pill() {
     let said = row_with("use x");
     let done = row_with("Done.");
     for (y, first) in [(group, '●'), (steer, 's'), (said, 'u'), (done, 'D')] {
-        assert_eq!(end.cell(1, y).symbol.as_str(), " ");
-        assert_eq!(end.cell(2, y).symbol.as_str(), &first.to_string());
+        assert_eq!(end.cell(2, y).symbol.as_str(), " ");
+        assert_eq!(end.cell(3, y).symbol.as_str(), &first.to_string());
     }
     // The steered text sits directly under its rule; one blank card
     // row separates every other pair of blocks.
@@ -1521,7 +1529,7 @@ fn turns_draw_bubbles_padded_turn_cards_a_thumb_and_the_pill() {
         assert_eq!(second - first, 2);
         for y in first + 1..second {
             assert!(
-                (1..=124).all(|x| end.cell(x, y).symbol.as_str() == " "),
+                (2..=124).all(|x| end.cell(x, y).symbol.as_str() == " "),
                 "one blank card row between blocks"
             );
         }
@@ -1529,26 +1537,26 @@ fn turns_draw_bubbles_padded_turn_cards_a_thumb_and_the_pill() {
     // The steer rule: the label bold in attention, the time dim, the
     // dashes in rule to column 123.
     assert_eq!(
-        (2..=6)
+        (3..=7)
             .map(|x| end.cell(x, steer).symbol)
             .collect::<String>(),
         "steer"
     );
-    for x in 2..=6 {
+    for x in 3..=7 {
         let cell = end.cell(x, steer);
         assert_eq!(cell.fg, ATTENTION_RGB, "steer cell ({x}, {steer})");
         assert!(cell.bold, "steer cell ({x}, {steer})");
     }
-    for x in 7..=15 {
+    for x in 8..=16 {
         assert!(end.cell(x, steer).dim, "steer time cell ({x}, {steer})");
     }
-    for x in 16..=123 {
+    for x in 17..=123 {
         let cell = end.cell(x, steer);
         assert_eq!(cell.symbol.as_str(), "─", "steer cell ({x}, {steer})");
         assert_eq!(cell.fg, RULE_RGB, "steer cell ({x}, {steer})");
     }
     // The steered text is bold.
-    for x in 2..=6 {
+    for x in 3..=7 {
         assert!(end.cell(x, said).bold, "steered cell ({x}, {said})");
     }
     // The ▣ line is dim, counts the one call, and leaves out zero
@@ -1566,7 +1574,7 @@ fn turns_draw_bubbles_padded_turn_cards_a_thumb_and_the_pill() {
         done + 2,
         "one blank card row before the closing line"
     );
-    for x in 0..125 {
+    for x in 1..125 {
         if end.cell(x, closing).symbol.as_str() != " " {
             assert!(end.cell(x, closing).dim, "closing cell ({x}, {closing})");
         }

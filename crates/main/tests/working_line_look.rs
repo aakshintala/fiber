@@ -111,15 +111,16 @@ fn answer_approval(run: &mut Run) {
     run.write(b"\r");
 }
 
-/// The isolated config with the scripted model, and `tui.reduced_motion`
-/// as asked (`docs/configuration.md`).
+/// The isolated config with the scripted model, `tui.reduced_motion`
+/// as asked (`docs/configuration.md`), and the rail hidden: one session,
+/// so the look pinned is the working line's own.
 fn config(setup: &Setup, reduced_motion: bool) {
     support::write_json(
         &setup.home().join("config.json"),
         &serde_json::json!({
             "model": "scripted/s.json",
             "hub": {"idle_exit_ms": 1000},
-            "tui": {"reduced_motion": reduced_motion},
+            "tui": {"reduced_motion": reduced_motion, "rail": {"shown": false}},
         }),
     );
 }
@@ -443,8 +444,9 @@ fn the_working_line_glimmers_and_the_queue_selects() {
         assert_eq!(grid.cell(x, at(selected)).fg, Colour::Default, "text {x}");
     }
     let box_row = input_row(&grid).expect("the box");
-    assert_eq!(grid.cell(0, box_row).symbol.as_str(), "▌");
-    assert_eq!(grid.cell(0, box_row).fg, ATTENTION);
+    // Past the grip, which takes column 0.
+    assert_eq!(grid.cell(1, box_row).symbol.as_str(), "▌");
+    assert_eq!(grid.cell(1, box_row).fg, ATTENTION);
     let hint = find_row(&grid.rows, "editing a queued message").expect("the hint");
     assert!(
         grid.rows[hint].trim_end().ends_with("Esc stops"),

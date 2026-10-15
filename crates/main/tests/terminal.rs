@@ -97,6 +97,17 @@ fn provider_full(
     write_json(&setup.home().join("config.json"), &config);
 }
 
+/// Hides the rail for a one-session look: the pinned grid is the
+/// conversation's own, not the rail's. Merges into the config the
+/// provider helpers wrote.
+fn hide_rail(setup: &support::Setup) {
+    let path = setup.home().join("config.json");
+    let mut config: Value =
+        serde_json::from_str(&fs::read_to_string(&path).unwrap()).unwrap();
+    config["tui"] = json!({"rail": {"shown": false}});
+    write_json(&path, &config);
+}
+
 /// The project's sessions directory, through the canonical workspace,
 /// as the project key names it.
 fn sessions(setup: &support::Setup) -> PathBuf {
@@ -1134,6 +1145,7 @@ fn journey_prompt_answer_approval_resize_quit() {
     let server = ProviderServer::start([reply("Hello."), calls_echo_hi(), reply("Done.")]).unwrap();
     server.hold();
     provider(&setup, &server);
+    hide_rail(&setup);
     // A standing ask for this exact command: with the terminal connected
     // the loop asks a person (`docs/permissions.md`, "Headless").
     fs::write(
@@ -1208,7 +1220,7 @@ fn journey_prompt_answer_approval_resize_quit() {
     run.wait_screen("the redrawn grid at the new size", |grid| {
         grid.rows.len() == 30
             && grid.rows.iter().any(|row| row.contains("0% of window"))
-            && grid.cursor == (28, 4)
+            && grid.cursor == (28, 5)
     });
     // Quit: the terminal is restored, with one resume line per live
     // session on the primary screen ("On exit").
@@ -1538,12 +1550,12 @@ fn reversed_cells(grid: &support::pty::Grid) -> Vec<(u16, u16)> {
 }
 
 /// The walk's step for a notice row's reversed cells, left to right:
-/// done when the box itself has focus (its run starts the row), Up from
-/// the dismiss cross's focused cell, Down otherwise. The cross sits at
-/// the conversation column's right edge, not the screen's, so any
-/// focused cell past the first means the cross.
+/// done when the box itself has focus (its run starts the row past the
+/// grip), Up from the dismiss cross's focused cell, Down otherwise. The
+/// cross sits at the conversation column's right edge, not the screen's,
+/// so any focused cell past the box's start means the cross.
 fn notice_step(row: &[bool]) -> Option<&'static [u8]> {
-    if row.first().is_some_and(|cell| *cell) {
+    if row.get(1).is_some_and(|cell| *cell) {
         None
     } else if row.iter().any(|cell| *cell) {
         Some(b"\x1b[A")
@@ -1554,8 +1566,14 @@ fn notice_step(row: &[bool]) -> Option<&'static [u8]> {
 
 #[test]
 fn notice_step_heads_back_up_from_the_dismiss_cross() {
-    // The box spans its row: its run starts the row.
-    assert_eq!(notice_step(&[true, true, true]), None);
+    // The box spans its row past the grip: its run starts the row's
+    // second cell.
+    assert_eq!(notice_step(&[false, true, true]), None);
+    // The grip's own cell never ends the walk.
+    assert_eq!(
+        notice_step(&[true, false, false]),
+        Some(b"\x1b[A".as_slice())
+    );
     // The cross sits at the conversation column's right edge, about
     // column 90 of a 120-column screen: a focused cell there steps Up,
     // where a last-column check would step Down.
@@ -1569,10 +1587,10 @@ fn notice_step_heads_back_up_from_the_dismiss_cross() {
 /// (conversation door): Shift+Tab enters navigate mode, then each step
 /// writes Up from the notice's own dismiss cross and Down otherwise,
 /// waiting for the focus look to move each time. Returns only when the
-/// row carrying `code` has its first cell reversed, so the box spans
-/// the row and Enter opens it; never writes Enter, so it never
-/// dismisses. Every wait goes through `wait_screen` under the run's one
-/// deadline.
+/// row carrying `code` has its second cell reversed, so the box spans
+/// the row past the grip and Enter opens it; never writes Enter, so it
+/// never dismisses. Every wait goes through `wait_screen` under the
+/// run's one deadline.
 #[track_caller]
 fn focus_notice(run: &mut support::pty::Run, code: &str) {
     run.write(b"\x1b[Z");
@@ -2017,6 +2035,7 @@ fn resume_with_an_unknown_credential_on_a_running_session_stays_attached() {
     let setup = support::Setup::new();
     let server = ProviderServer::start([hello(), hello()]).unwrap();
     provider(&setup, &server);
+    hide_rail(&setup);
     labels(&setup, "home", &["home", "work"]);
     let mut first = terminal(&setup, 120, 32, &[], &[]);
     first.wait_screen("the first frame", |grid| grid.contents.contains("›"));

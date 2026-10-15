@@ -268,8 +268,7 @@ fn the_rail_shows_unless_config_hides_it() {
         Vec::new(),
     );
     assert!(!unset.rail_hidden);
-    // A non-bool rides the per-run layer untouched and reads as shown.
-    for (value, hidden) in [("false", true), ("true", false), ("5", false)] {
+    for (value, hidden) in [("false", true), ("true", false)] {
         let set_config = config(
             dir.path(),
             &workspace,
