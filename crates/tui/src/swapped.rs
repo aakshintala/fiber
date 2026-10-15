@@ -182,7 +182,10 @@ fn draw_top_row(
             style
         }
     };
-    buf.set_style(Rect::new(area.x, area.y, area.width, 1), paint(Style::new()));
+    buf.set_style(
+        Rect::new(area.x, area.y, area.width, 1),
+        paint(Style::new()),
+    );
     let layout = crate::offer::title_layout(name, command, usize::from(area.width));
     let bold = Style::new().add_modifier(Modifier::BOLD);
     let dim = Style::new().add_modifier(Modifier::DIM);

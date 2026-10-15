@@ -162,7 +162,10 @@ fn append_entry(rows: &mut Vec<Vec<(String, Option<Spot>, Ink)>>, name: &str, us
         .values()
         .fold(0u64, |sum, count| sum.saturating_add(*count));
     if cache_write > 0 {
-        counts.push_str(&format!(" · {cache_write} cache write", cache_write = compact(cache_write)));
+        counts.push_str(&format!(
+            " · {cache_write} cache write",
+            cache_write = compact(cache_write)
+        ));
     }
     let billed = usage.cost.map_or_else(|| "unknown".to_owned(), money);
     counts.push_str(&format!(

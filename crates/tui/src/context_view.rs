@@ -218,10 +218,12 @@ pub(crate) fn bar(
     }
     let mut runs: Vec<(String, Role)> = Vec::new();
     for role in painted {
-        let glyph = match role {
-            Role::Attention => '│',
-            Role::Rule => '▁',
-            _ => '█',
+        let glyph = if role == Role::Attention {
+            '│'
+        } else if role == Role::Rule {
+            '▁'
+        } else {
+            '█'
         };
         match runs.last_mut() {
             Some((text, last)) if *last == role => text.push(glyph),
@@ -258,10 +260,7 @@ pub(crate) fn frame(
         } else {
             u128::from(sized.total) * 100 / u128::from(sized.window)
         };
-        let mut tail = format!(
-            " · {percent}% of the {} window",
-            compact(sized.window)
-        );
+        let mut tail = format!(" · {percent}% of the {} window", compact(sized.window));
         if let Some(trigger) = sized.trigger {
             tail.push_str(&format!(" · automatic handoff at {}", compact(trigger)));
         }
@@ -326,16 +325,8 @@ pub(crate) fn frame(
                 };
                 rows.push(vec![
                     ("■ ".to_owned(), None, Ink::Role(role_of(category))),
-                    (
-                        format!("{:<20}", label(category)),
-                        None,
-                        Ink::Plain,
-                    ),
-                    (
-                        format!("~{} {}%", compact(tokens), share),
-                        None,
-                        Ink::Muted,
-                    ),
+                    (format!("{:<20}", label(category)), None, Ink::Plain),
+                    (format!("~{} {}%", compact(tokens), share), None, Ink::Muted),
                 ]);
             }
             below.push(

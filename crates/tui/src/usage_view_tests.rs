@@ -99,21 +99,27 @@ fn an_entry_is_one_row_with_compact_counts() {
     let headings: Vec<&str> = frame
         .rows
         .iter()
-        .filter(|row| row.iter().any(|(_, _, ink)| *ink == crate::swapped::Ink::Heading))
+        .filter(|row| {
+            row.iter()
+                .any(|(_, _, ink)| *ink == crate::swapped::Ink::Heading)
+        })
         .map(|row| row[0].0.as_str())
         .collect();
     assert_eq!(headings, ["By turn", "By model", "By delegate"]);
     let got = lines(&fold, None);
-    assert!(got.contains(
-        &"turn 1 · 120k in · 15k out · $1.35 billed · $0.00 subscription".to_owned()
-    ));
+    assert!(
+        got.contains(&"turn 1 · 120k in · 15k out · $1.35 billed · $0.00 subscription".to_owned())
+    );
 }
 
 #[test]
 fn a_turn_with_cache_reads_adds_the_cache_kinds() {
     let mut fold = UsageFold::default();
     fold.turn_started(turn("t1"));
-    fold.recorded(Some(turn("t1")), recorded("g1", "m", 120_000, Some(1.35), None));
+    fold.recorded(
+        Some(turn("t1")),
+        recorded("g1", "m", 120_000, Some(1.35), None),
+    );
     let got = lines(&fold, None);
     assert!(got.contains(
         &"turn 1 · 120k in · 1k out · 6k cache read · 100 cache write · $1.35 billed · $0.00 subscription"
@@ -152,8 +158,10 @@ fn a_replacement_is_latest_in_every_total_but_stays_in_its_first_turn() {
 
     let got = text(&fold, None);
     assert_eq!(
-        got.matches("20 in · 1k out · 6k cache read · 100 cache write · $0.50 billed · $0.00 subscription")
-            .count(),
+        got.matches(
+            "20 in · 1k out · 6k cache read · 100 cache write · $0.50 billed · $0.00 subscription"
+        )
+        .count(),
         3
     );
     assert!(got.contains("turn 1 · 20 in"));
@@ -215,7 +223,9 @@ fn calls_without_a_known_turn_are_listed_last() {
     assert!(outside < models);
     assert_eq!(
         got.get(outside).map(String::as_str),
-        Some("outside a turn · 5 in · 2k out · 11k cache read · 200 cache write · $0.50 billed · $0.00 subscription")
+        Some(
+            "outside a turn · 5 in · 2k out · 11k cache read · 200 cache write · $0.50 billed · $0.00 subscription"
+        )
     );
     assert_eq!(
         got.iter()
@@ -245,7 +255,9 @@ fn turn_numbers_follow_start_arrival_order() {
     assert!(first < second);
     assert_eq!(
         got.get(first).map(String::as_str),
-        Some("turn 1 · 2 in · 1k out · 6k cache read · 100 cache write · $0.10 billed · $0.00 subscription")
+        Some(
+            "turn 1 · 2 in · 1k out · 6k cache read · 100 cache write · $0.10 billed · $0.00 subscription"
+        )
     );
 }
 

@@ -181,7 +181,10 @@ fn the_doc_numbers_draw_bold_sizes_a_role_bar_and_an_attention_label() {
             .collect::<String>(),
         format!("{}handoff 400k", " ".repeat(68))
     );
-    assert_eq!(frame.rows[2].last(), Some(&("handoff 400k".to_owned(), None, Ink::Role(Role::Attention))));
+    assert_eq!(
+        frame.rows[2].last(),
+        Some(&("handoff 400k".to_owned(), None, Ink::Role(Role::Attention)))
+    );
     // One row per category: the mark in its colour, the padded name,
     // the size and its share dim.
     let categories: Vec<String> = frame.rows[3..7]
@@ -343,10 +346,7 @@ fn no_trigger_draws_no_handoff_marker() {
     let fill = [(Category::Messages, 50)];
     assert_eq!(
         bar(&fill, 100, None, 4),
-        [
-            ("██".to_owned(), Role::Text),
-            ("▁▁".to_owned(), Role::Rule),
-        ]
+        [("██".to_owned(), Role::Text), ("▁▁".to_owned(), Role::Rule),]
     );
 }
 

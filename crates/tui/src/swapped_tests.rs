@@ -251,7 +251,10 @@ fn the_top_row_names_the_view_with_its_command_dim() {
     for (at, cell) in "Context".chars().enumerate() {
         let x = u16::try_from(at + 1).expect("a column");
         assert_eq!(buf[(x, 0)].symbol(), cell.to_string().as_str());
-        assert!(buf[(x, 0)].modifier.contains(Modifier::BOLD), "not bold at {x}");
+        assert!(
+            buf[(x, 0)].modifier.contains(Modifier::BOLD),
+            "not bold at {x}"
+        );
     }
     for (at, cell) in "  /context".chars().enumerate() {
         let x = u16::try_from(at + 8).expect("a column");
