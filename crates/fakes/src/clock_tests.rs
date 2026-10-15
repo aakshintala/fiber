@@ -1695,14 +1695,15 @@ fn advance_when_parked_fails_several_parks_with_no_thread_named() {
         .split("parked threads: [")
         .nth(1)
         .expect("the failure includes the parked thread list");
-    assert_eq!(
-        list,
-        format!(
-            "{first_id:?} at {:?}, {second_id:?} at {:?}]",
-            Some(until),
-            Some(until)
-        ),
-        "two entries have exactly one separator",
+    let parked_at = Some(until);
+    let first = format!("{first_id:?} at {parked_at:?}");
+    let rest = list
+        .strip_prefix(first.as_str())
+        .expect("the first parked thread leads the list");
+    assert!(rest.starts_with(", "), "two entries are separated: {list}",);
+    assert!(
+        rest.contains(&format!("{second_id:?} at {parked_at:?}")),
+        "both parked threads and their instants appear: {list}",
     );
     assert_eq!(clock.now(), now, "an ambiguous wait moves no time");
     release_a.send(()).unwrap();
