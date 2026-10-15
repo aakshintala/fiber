@@ -1820,13 +1820,13 @@ fn entered_failures_keep_their_error_and_drop_once() {
         },
         FailureCase {
             name: "malformed JSON",
-            body: Some("printf 'not json\\n'"),
+            body: Some("cat >/dev/null; printf 'not json\\n'"),
             want: ImageError::Failed("the image child printed a line that is not JSON.".to_owned()),
             bytes: PNG.to_vec(),
         },
         FailureCase {
             name: "missing fields",
-            body: Some("printf '{\"file\":\"%s.png\"}\\n' \"$4\""),
+            body: Some("cat >/dev/null; printf '{\"file\":\"%s.png\"}\\n' \"$4\""),
             want: ImageError::Failed(
                 "the image child printed a line without file, mime_type, width and height."
                     .to_owned(),
@@ -1836,7 +1836,7 @@ fn entered_failures_keep_their_error_and_drop_once() {
         FailureCase {
             name: "an extra line",
             body: Some(
-                "printf '{\"file\":\"%s.png\",\"mime_type\":\"image/png\",\"width\":1,\"height\":1}\\nsecond\\n' \"$4\"",
+                "cat >/dev/null; printf '{\"file\":\"%s.png\",\"mime_type\":\"image/png\",\"width\":1,\"height\":1}\\nsecond\\n' \"$4\"",
             ),
             want: ImageError::Failed("the image child printed more than one line.".to_owned()),
             bytes: PNG.to_vec(),
