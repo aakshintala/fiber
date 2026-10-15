@@ -9,7 +9,7 @@ use ratatui::style::{Modifier, Style};
 use super::builder::Builder;
 use super::text::{cells, clean, delete_before, insert_at, move_caret};
 use super::{Panel, PanelKey, Title};
-use crate::format::{answer_parts, cut, width as measure};
+use crate::format::{answer_parts, width as measure};
 use crate::keys::{Edit, Key};
 use crate::theme::Role;
 
@@ -358,7 +358,7 @@ impl Form {
         built.blank();
         match self.at {
             Cursor::Question { field, row } => self.question_panel(field, row, width, &mut built),
-            Cursor::Submit(row) => self.submit_panel(row, &mut built),
+            Cursor::Submit(row) => self.submit_panel(row, width, &mut built),
         }
         built.finish()
     }
@@ -481,10 +481,14 @@ impl Form {
                 at = at.saturating_add(2);
             }
             let answered = self.said(tab).is_some();
+            // The Submit tab is never answered; off the cursor it
+            // reads dim (`docs/tui.md`, "A question form").
             let style = if tab == shown {
                 if answered { ACCENT_REVERSED } else { REVERSED }
             } else if answered {
                 ACCENT
+            } else if tab == self.fields.len() {
+                DIM
             } else {
                 Style::default()
             };
@@ -544,7 +548,7 @@ impl Form {
             } else {
                 segments.push((placeholder, DIM));
             }
-            let line = clipped_row(built, &segments, cols);
+            let line = built.clipped_row(&segments, cols);
             built.spot(line, Spot::Words);
             if here {
                 built.here(line);
@@ -572,8 +576,7 @@ impl Form {
         let caret = here.then(|| {
             u16::try_from(prefix_cells.saturating_add(measure(&before(start)))).unwrap_or(u16::MAX)
         });
-        let line = clipped_row(
-            built,
+        let line = built.clipped_row(
             &[
                 (slot, slot_style),
                 (number.as_str(), DIM),
@@ -593,7 +596,7 @@ impl Form {
 
     /// The Submit tab's rows: "Review", each answer, the note, the buttons
     /// and the hint.
-    fn submit_panel(&self, row: SubmitRow, built: &mut Builder) {
+    fn submit_panel(&self, row: SubmitRow, width: u16, built: &mut Builder) {
         built.row(&[("Review", BOLD)]);
         built.blank();
         for (field, question) in self.fields.iter().enumerate() {
@@ -631,28 +634,53 @@ impl Form {
             );
         }
         built.blank();
-        let send_end = cells(" Submit ");
-        let chat_at = send_end.saturating_add(1);
-        let chat_end = chat_at.saturating_add(cells(" Chat about this "));
-        let line = built.row(&[
-            (" Submit ", REVERSED),
-            (" ", Style::default()),
-            (" Chat about this ", CHAT),
-            (
-                "  declines and ends the turn, so you can answer in your own words",
-                DIM,
-            ),
-        ]);
-        built.spot_cols(line, (0, send_end), Spot::Send);
-        built.spot_cols(line, (chat_at, chat_end), Spot::Chat);
-        if row == SubmitRow::Send {
-            built.here(line);
-        }
+        self.buttons_row(row, width, built);
         built.blank();
         built.row(&[(
             "←→ question · Enter submits · type to add the note · Esc: chat about this",
             DIM,
         )]);
+    }
+
+    /// The Submit tab's buttons at `width` columns: " Submit " and
+    /// " Chat about this " share one row with the trailing words while
+    /// they fit, or stack one per row below it. A column target sits on
+    /// a line that fits one row, so stacking keeps each button a
+    /// whole-line target through wrapping and scrolling: a click on the
+    /// wrapped label still declines (`docs/tui.md`, "A question form").
+    fn buttons_row(&self, row: SubmitRow, width: u16, built: &mut Builder) {
+        let send = " Submit ";
+        let chat = " Chat about this ";
+        let rest = "  declines and ends the turn, so you can answer in your own words";
+        let single = cells(send)
+            .saturating_add(1)
+            .saturating_add(cells(chat))
+            .saturating_add(cells(rest));
+        if single <= width {
+            let send_end = cells(send);
+            let chat_at = send_end.saturating_add(1);
+            let chat_end = chat_at.saturating_add(cells(chat));
+            let line = built.row(&[
+                (send, REVERSED),
+                (" ", Style::default()),
+                (chat, CHAT),
+                (rest, DIM),
+            ]);
+            built.spot_cols(line, (0, send_end), Spot::Send);
+            built.spot_cols(line, (chat_at, chat_end), Spot::Chat);
+            if row == SubmitRow::Send {
+                built.here(line);
+            }
+            return;
+        }
+        let send_line = built.row(&[(send, REVERSED)]);
+        built.spot(send_line, Spot::Send);
+        let chat_line = built.row(&[(chat, CHAT)]);
+        built.spot(chat_line, Spot::Chat);
+        built.row(&[(rest, DIM)]);
+        if row == SubmitRow::Send {
+            built.here(send_line);
+        }
     }
 
     /// ← or →: one character on the words row and on the note row,
@@ -879,28 +907,6 @@ impl Form {
         let text = (!answer.words.trim().is_empty()).then(|| answer.words.clone());
         (!labels.is_empty() || text.is_some()).then_some((labels, text))
     }
-}
-
-/// Pushes `segments` as one row clipped to `cols` display cells: the marks
-/// of a clipped tail end at the drawn line, so no mark reaches past it.
-fn clipped_row(built: &mut Builder, segments: &[(&str, Style)], cols: usize) -> usize {
-    let cleaned: Vec<(String, Style)> = segments
-        .iter()
-        .map(|(text, style)| (clean(text), *style))
-        .collect();
-    let full: String = cleaned.iter().map(|(text, _)| text.as_str()).collect();
-    let drawn = cut(&full, cols);
-    let mut rest = drawn.len();
-    let mut kept: Vec<(&str, Style)> = Vec::with_capacity(cleaned.len());
-    for (text, style) in &cleaned {
-        if rest == 0 {
-            break;
-        }
-        let take = text.len().min(rest);
-        kept.push((&text[..take], *style));
-        rest = rest.saturating_sub(take);
-    }
-    built.row(&kept)
 }
 
 #[cfg(test)]

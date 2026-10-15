@@ -7,7 +7,7 @@ use ratatui::style::{Modifier, Style};
 
 use super::form::Spot;
 use super::{Mark, Panel, PanelSpot, Title};
-use crate::format::width as cells;
+use crate::format::{cut, width as cells};
 use crate::theme::Role;
 
 /// "Question" in the title: bold in secondary.
@@ -64,6 +64,29 @@ impl Builder {
     pub(super) fn blank(&mut self) -> usize {
         self.lines.push(String::new());
         self.lines.len().saturating_sub(1)
+    }
+
+    /// Pushes `segments` as one row clipped to `cols` display cells:
+    /// the marks of a clipped tail end at the drawn line, so no mark
+    /// reaches past it. Returns the row's line index.
+    pub(super) fn clipped_row(&mut self, segments: &[(&str, Style)], cols: usize) -> usize {
+        let cleaned: Vec<(String, Style)> = segments
+            .iter()
+            .map(|(text, style)| (super::text::clean(text), *style))
+            .collect();
+        let full: String = cleaned.iter().map(|(text, _)| text.as_str()).collect();
+        let drawn = cut(&full, cols);
+        let mut rest = drawn.len();
+        let mut kept: Vec<(&str, Style)> = Vec::with_capacity(cleaned.len());
+        for (text, style) in &cleaned {
+            if rest == 0 {
+                break;
+            }
+            let take = text.len().min(rest);
+            kept.push((&text[..take], *style));
+            rest = rest.saturating_sub(take);
+        }
+        self.row(&kept)
     }
 
     /// Pushes one row of `left` and right-aligned `right`: at least one

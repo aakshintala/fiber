@@ -566,7 +566,9 @@ fn the_submit_tab_shows_every_answer_and_takes_a_note() {
             "Name         skipped",
             "  note Add a note on the whole form",
             "",
-            " Submit   Chat about this   declines and ends the turn, so you can answer in your own words",
+            " Submit ",
+            " Chat about this ",
+            "  declines and ends the turn, so you can answer in your own words",
             "",
             "←→ question · Enter submits · type to add the note · Esc: chat about this",
         ]
@@ -744,7 +746,9 @@ fn an_empty_form_opens_on_submit_and_answers_nothing() {
             "",
             "  note Add a note on the whole form",
             "",
-            " Submit   Chat about this   declines and ends the turn, so you can answer in your own words",
+            " Submit ",
+            " Chat about this ",
+            "  declines and ends the turn, so you can answer in your own words",
             "",
             "←→ question · Enter submits · type to add the note · Esc: chat about this",
         ]
@@ -862,7 +866,7 @@ fn the_tab_row_marks_each_state() {
         .collect();
     assert_eq!(
         marks,
-        [(0..4, dim()), (4..15, accent_reversed()), (54..58, dim()),]
+        [(0..4, dim()), (4..15, accent_reversed()), (42..54, dim()), (54..58, dim()),]
     );
     // Nothing answered: no tab is accent.
     let plain = form(json!([
@@ -871,13 +875,18 @@ fn the_tab_row_marks_each_state() {
         {"header": "Tests", "question": "Which?", "options": [{"label": "unit"}]}
     ]));
     let shown = plain.panel(&title(2), 80);
+    // The Submit tab reads dim off the cursor; the unanswered question
+    // tabs leave no mark.
     let marks: Vec<_> = shown
         .marks
         .iter()
         .filter(|mark| mark.line == 2)
-        .map(|mark| mark.style)
+        .map(|mark| (mark.bytes.clone(), mark.style))
         .collect();
-    assert_eq!(marks, [dim(), reversed(), dim()]);
+    assert_eq!(
+        marks,
+        [(0..4, dim()), (4..15, reversed()), (30..42, dim()), (42..46, dim()),]
+    );
 }
 
 #[test]
@@ -1070,24 +1079,34 @@ fn the_submit_tab_marks_answers_note_and_buttons() {
         .map(|mark| (mark.bytes.clone(), mark.style))
         .collect();
     assert_eq!(marks, [(2..6, accent()), (6..35, dim())]);
-    // The buttons row: " Submit " reversed, " Chat about this " on the
-    // rule tint, the rest dim.
-    let buttons = " Submit   Chat about this   declines and ends the turn, so you can answer in your own words";
-    assert_eq!(shown.lines[8], buttons);
+    // The buttons stack below the width one row fits, so each button
+    // stays a whole-line click target: " Submit " reversed,
+    // " Chat about this " on the rule tint, the rest dim.
+    assert_eq!(shown.lines[8], " Submit ");
+    assert_eq!(shown.lines[9], " Chat about this ");
+    let rest = "  declines and ends the turn, so you can answer in your own words";
+    assert_eq!(shown.lines[10], rest);
     let marks: Vec<_> = shown
         .marks
         .iter()
         .filter(|mark| mark.line == 8)
         .map(|mark| (mark.bytes.clone(), mark.style))
         .collect();
-    assert_eq!(
-        marks,
-        [
-            (0..8, reversed()),
-            (9..26, chat()),
-            (26..buttons.len(), dim())
-        ]
-    );
+    assert_eq!(marks, [(0..8, reversed())]);
+    let marks: Vec<_> = shown
+        .marks
+        .iter()
+        .filter(|mark| mark.line == 9)
+        .map(|mark| (mark.bytes.clone(), mark.style))
+        .collect();
+    assert_eq!(marks, [(0..17, chat())]);
+    let marks: Vec<_> = shown
+        .marks
+        .iter()
+        .filter(|mark| mark.line == 10)
+        .map(|mark| (mark.bytes.clone(), mark.style))
+        .collect();
+    assert_eq!(marks, [(0..rest.len(), dim())]);
 }
 
 #[test]
@@ -1172,14 +1191,16 @@ fn the_panel_marks_the_cursor_line_and_each_rows_spot() {
         .filter(|spot| spot.cols.is_none())
         .map(|spot| (spot.line, spot.spot))
         .collect();
-    assert_eq!(rows, [(6, Spot::Note)]);
+    assert_eq!(rows, [(6, Spot::Note), (8, Spot::Send), (9, Spot::Chat)]);
     let sends: Vec<_> = shown
         .spots
         .iter()
         .filter(|spot| spot.spot == Spot::Send || spot.spot == Spot::Chat)
         .map(|spot| (spot.line, spot.cols))
         .collect();
-    assert_eq!(sends, [(8, Some((0, 8))), (8, Some((9, 26)))]);
+    // Stacked below one row's width, each button is a whole-line
+    // target, so a click on the wrapped label still declines.
+    assert_eq!(sends, [(8, None), (9, None)]);
 }
 
 #[test]

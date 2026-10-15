@@ -559,38 +559,6 @@ fn wrapping_keeps_empty_lines_and_spacing_whole() {
 }
 
 #[test]
-fn answer_rows_match_the_result_lines_ask_user_writes() {
-    use super::{answer_row, note_row};
-    let labels = ["main (Recommended)".to_owned(), "dev".to_owned()];
-    assert_eq!(
-        answer_row("Base", Some((&labels, Some("and tags")))),
-        r#"Base: main (Recommended), dev, "and tags""#
-    );
-    assert_eq!(
-        answer_row("Name", Some((&[], Some("fiber-cli")))),
-        r#"Name: "fiber-cli""#
-    );
-    assert_eq!(
-        answer_row("Name", Some((&labels, None))),
-        "Name: main (Recommended), dev"
-    );
-    assert_eq!(answer_row("Name", None), "Name: skipped");
-    assert_eq!(answer_row("Name", Some((&[], None))), "Name: ");
-    assert_eq!(note_row("by friday"), r#"note: "by friday""#);
-}
-
-#[test]
-fn answer_rows_escape_headers_and_labels_onto_one_line() {
-    use super::{answer_row, note_row};
-    let labels = ["a \"b\"".to_owned()];
-    assert_eq!(
-        answer_row("Pick\nnow", Some((&labels, Some("x\ny")))),
-        r#"Pick\nnow: a \"b\", "x\ny""#
-    );
-    assert_eq!(note_row("one\ntwo"), r#"note: "one\ntwo""#);
-}
-
-#[test]
 fn ask_user_counts_its_questions_when_it_has_any() {
     let questions = |arguments| match kind("ask_user", &arguments) {
         Kind::Ask(n) => Some(n),
@@ -769,43 +737,4 @@ fn answer_parts_carries_labels_quoted_words_or_skipped() {
     assert_eq!(parts.header, "Pick\\nnow    ");
     assert_eq!(parts.text, r#"a \"b\", "x\ny""#);
     assert!(!parts.skipped);
-}
-
-#[test]
-fn answer_row_keeps_the_bare_header_and_the_parts_text() {
-    use super::{answer_parts, answer_row};
-    // The padded header never leaks into the result line: the row is the
-    // bare escaped header, a colon and the parts' text.
-    type Said = Option<(Vec<String>, Option<String>)>;
-    let cases: Vec<(&str, Said)> = vec![
-        (
-            "Base",
-            Some((
-                vec!["main (Recommended)".to_owned(), "dev".to_owned()],
-                Some("and tags".to_owned()),
-            )),
-        ),
-        ("Name", Some((vec![], Some("fiber-cli".to_owned())))),
-        ("Pick\nnow", None),
-        ("12345678901234", None),
-    ];
-    for (header, said) in &cases {
-        let said = said
-            .as_ref()
-            .map(|(labels, text)| (labels.as_slice(), text.as_deref()));
-        let parts = answer_parts(header, said);
-        let row = answer_row(header, said);
-        assert!(!row.starts_with(&parts.header), "{row}");
-        assert!(row.ends_with(&parts.text), "{row}");
-    }
-    assert_eq!(
-        answer_row(
-            "Base",
-            Some((
-                &["main (Recommended)".to_owned(), "dev".to_owned()],
-                Some("and tags")
-            ))
-        ),
-        r#"Base: main (Recommended), dev, "and tags""#
-    );
 }

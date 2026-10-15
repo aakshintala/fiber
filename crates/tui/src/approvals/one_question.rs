@@ -9,7 +9,7 @@ use super::builder::Builder;
 use super::form::Spot;
 use super::text::{clean, delete_before, insert_at, move_caret};
 use super::{Panel, PanelKey, Title};
-use crate::format::{cut, width as measure};
+use crate::format::width as measure;
 use crate::keys::{Edit, Key};
 use crate::theme::Role;
 
@@ -334,7 +334,7 @@ impl OneQuestion {
             } else {
                 segments.push((placeholder, DIM));
             }
-            let line = clipped_row(built, &segments, cols);
+            let line = built.clipped_row(&segments, cols);
             built.spot(line, Spot::Words);
             if here {
                 built.caret(line, u16::try_from(prefix_cells).unwrap_or(u16::MAX));
@@ -361,8 +361,7 @@ impl OneQuestion {
         let caret = here.then(|| {
             u16::try_from(prefix_cells.saturating_add(measure(&before(start)))).unwrap_or(u16::MAX)
         });
-        let line = clipped_row(
-            built,
+        let line = built.clipped_row(
             &[
                 (slot, slot_style),
                 ("1 ", DIM),
@@ -492,28 +491,6 @@ impl OneQuestion {
         }
         labels
     }
-}
-
-/// Pushes `segments` as one row clipped to `cols` display cells: the marks
-/// of a clipped tail end at the drawn line, so no mark reaches past it.
-fn clipped_row(built: &mut Builder, segments: &[(&str, Style)], cols: usize) -> usize {
-    let cleaned: Vec<(String, Style)> = segments
-        .iter()
-        .map(|(text, style)| (clean(text), *style))
-        .collect();
-    let full: String = cleaned.iter().map(|(text, _)| text.as_str()).collect();
-    let drawn = cut(&full, cols);
-    let mut rest = drawn.len();
-    let mut kept: Vec<(&str, Style)> = Vec::with_capacity(cleaned.len());
-    for (text, style) in &cleaned {
-        if rest == 0 {
-            break;
-        }
-        let take = text.len().min(rest);
-        kept.push((&text[..take], *style));
-        rest = rest.saturating_sub(take);
-    }
-    built.row(&kept)
 }
 
 #[cfg(test)]

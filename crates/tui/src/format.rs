@@ -721,34 +721,6 @@ fn said_text(said: Option<(&[String], Option<&str>)>) -> (String, bool) {
     }
 }
 
-/// One question's answer as `ask_user`'s result writes it (`docs/tools.md`,
-/// "The result"): `<header>: skipped` when `said` is `None`, else the chosen
-/// labels and then the typed text, joined by `, `. No screen renders it
-/// since the doc-literal look pads headers without colons; it stays as the
-/// result format's canonical form, pinned by its tests.
-#[allow(
-    dead_code,
-    reason = "the result format's canonical form, pinned by tests"
-)]
-pub(crate) fn answer_row(header: &str, said: Option<(&[String], Option<&str>)>) -> String {
-    // The result line keeps the bare header; the padded header is for the
-    // panel and the card.
-    let parts = answer_parts(header, said);
-    format!("{}: {}", escaped(header), parts.text)
-}
-
-/// The note on a whole form, as `ask_user`'s result writes it: `note: `
-/// and the note as a JSON string (`docs/tools.md`, "The result"). No
-/// screen renders it since the doc-literal look drops the colon; it stays
-/// as the result format's canonical form, pinned by its tests.
-#[allow(
-    dead_code,
-    reason = "the result format's canonical form, pinned by tests"
-)]
-pub(crate) fn note_row(note: &str) -> String {
-    format!("note: {}", quoted(note))
-}
-
 /// `text` as a JSON string, quotes included: the note on a whole form
 /// draws it bold in the turn's card.
 pub(crate) fn quoted(text: &str) -> String {

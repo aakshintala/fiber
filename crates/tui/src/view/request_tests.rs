@@ -15,7 +15,7 @@ use crate::approvals::form::Spot;
 use crate::approvals::{Panel, PanelSpot, Queue};
 use crate::keys::Key;
 use crate::link::Line;
-use crate::mouse::{Target, TargetId};
+use crate::mouse::{Target, TargetId, hit};
 use crate::surface;
 use crate::theme::Role;
 use ratatui::style::{Color, Modifier};
@@ -390,6 +390,33 @@ fn a_click_on_chat_about_this_declines() {
     let mut app = asking(base_and_name(false), 60, 12);
     assert_eq!(click(&mut app, Spot::Tab(2)), Effect::None);
     let line = sent(click(&mut app, Spot::Chat));
+    assert_eq!(
+        line,
+        json!({"command": "reply", "session_id": S_A,
+            "args": {"request_id": "r_4f", "declined": true}})
+    );
+}
+
+#[test]
+fn a_narrow_submit_tab_keeps_chat_about_this_clickable() {
+    // Below the width the buttons share one row they stack, so each
+    // button stays a whole-line target through wrapping: at 24 columns
+    // a click on the "Chat about this" label declines.
+    let mut app = asking(base_and_name(false), 24, 40);
+    press(&mut app, &[Key::Tab, Key::Tab]);
+    let (shown, targets) = screen(&app, 24, 40);
+    let row = shown
+        .lines()
+        .position(|row| row.contains("Chat about this"))
+        .expect("chat row drawn");
+    let line = shown.lines().nth(row).unwrap_or_default();
+    let col = line.find("Chat").unwrap_or_default().saturating_add(1);
+    assert_eq!(
+        hit(&targets, u16::try_from(col).unwrap_or(u16::MAX), u16::try_from(row).unwrap_or(u16::MAX)),
+        Some(TargetId::Form(Spot::Chat)),
+        "{shown}"
+    );
+    let line = sent(app.on_click(TargetId::Form(Spot::Chat)));
     assert_eq!(
         line,
         json!({"command": "reply", "session_id": S_A,
