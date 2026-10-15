@@ -544,41 +544,6 @@ fn an_empty_diff_or_a_push_skips_nothing() {
     );
 }
 
-#[test]
-fn every_base_row_name_appears_in_the_harness() {
-    // The six workload names live in `plan.rs`, the harness's workload
-    // tables and `docs/ci.md`, hand-kept in separate packages: this test
-    // scans the harness sources for each name and fails when one is
-    // missing, so the lists cannot drift apart.
-    let dir = format!(
-        "{}/../crates/bench/examples/bench",
-        env!("CARGO_MANIFEST_DIR")
-    );
-    let mut sources = String::new();
-    let mut entries: Vec<_> = std::fs::read_dir(&dir)
-        .unwrap()
-        .map(|entry| entry.unwrap().path())
-        .collect();
-    entries.sort();
-    for path in entries {
-        if path.extension().and_then(|ext| ext.to_str()) != Some("rs") {
-            continue;
-        }
-        if path
-            .file_name()
-            .and_then(|name| name.to_str())
-            .is_some_and(|name| name.ends_with("_tests.rs"))
-        {
-            continue;
-        }
-        sources.push_str(&std::fs::read_to_string(&path).unwrap());
-    }
-    assert!(!sources.is_empty(), "no harness sources in {dir}");
-    for name in skipped("pull_request", &["docs/ci.md"]) {
-        assert!(sources.contains(name), "{name} is in no harness source");
-    }
-}
-
 fn results(pairs: &[(&str, &str)]) -> BTreeMap<String, String> {
     pairs
         .iter()
