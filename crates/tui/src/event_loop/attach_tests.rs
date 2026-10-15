@@ -1565,6 +1565,92 @@ fn demand_top(lp: &mut super::super::Loop<ratatui::backend::TestBackend>) {
 }
 
 #[test]
+fn a_history_wait_does_not_end_on_an_unrelated_hub_line() {
+    let (mut lp, _theirs, tx, rx) = opened();
+    let session = lp.app.session().unwrap().clone();
+    let want = vec![replay(1000)];
+    tx.send(Input::Hub(stream_event("attention", &session, None)))
+        .unwrap();
+    tx.send(Input::Hub(Line::Session(command_answer(
+        "a_1",
+        want.clone(),
+    ))))
+    .unwrap();
+    // Every input is ready and EOF bounds the wait without a timer.
+    drop(tx);
+    let answer = lp.hub.answer(&rx, "a_1", &mut lp.app, &lp.tick);
+    assert_eq!(answer, Ok(super::super::hub::Answer::Lines(want)));
+    assert!(!lp.app.pass_open());
+    let stashed = lp.hub.stashed();
+    assert_eq!(stashed.len(), 1);
+    assert!(matches!(&stashed[0], Input::Hub(Line::Hub(line)) if line.kind == "attention"));
+    assert!(matches!(
+        rx.try_recv(),
+        Err(mpsc::TryRecvError::Disconnected)
+    ));
+}
+
+#[test]
+fn a_full_ack_replaces_its_own_boundary_and_keeps_other_sessions_passes() {
+    let (mut lp, _, _, _) = opened();
+    let last = session().len() as u64 + 10;
+    opening(&mut lp.app, last + 10);
+    opening(&mut lp.app, last);
+    lp.app.on_line(Line::Session(replay(last - 1)));
+    assert!(
+        lp.app.pass_open(),
+        "the replacement boundary is not folded yet"
+    );
+    lp.app.on_line(Line::Session(replay(last)));
+    assert!(
+        !lp.app.pass_open(),
+        "the superseded boundary must not remain"
+    );
+
+    let other = contract::SessionId("s_bbbbbbbbbbbbbbbb".into());
+    lp.app
+        .on_line(stream_event("stream_reopened", &other, Some(last + 20)));
+    opening(&mut lp.app, last);
+    lp.app.on_line(Line::Session(replay(last)));
+    assert!(
+        lp.app.pass_open(),
+        "the acknowledgement preserves the other session's pass"
+    );
+    lp.app.on_line(stream_event("stream_closed", &other, None));
+    assert!(!lp.app.pass_open());
+}
+
+#[test]
+fn marking_a_reopen_pending_replaces_its_session_and_keeps_other_pending_passes() {
+    let (mut lp, _, _, _) = opened();
+    let session = lp.app.session().unwrap().clone();
+    let other = contract::SessionId("s_bbbbbbbbbbbbbbbb".into());
+    let last = super::session().len() as u64 + 10;
+    opening(&mut lp.app, last);
+    lp.app.reopen_pending(session.clone());
+    lp.app.on_line(Line::Session(replay(last)));
+    assert!(
+        lp.app.pass_open(),
+        "a pending reopening supersedes the old boundary"
+    );
+    lp.app.reopen_pending(session.clone());
+    assert!(
+        lp.app.pass_open(),
+        "marking the same session pending again keeps it open"
+    );
+    lp.app.reopen_pending(other.clone());
+    lp.app
+        .on_line(stream_event("stream_reopened", &other, None));
+    assert!(
+        lp.app.pass_open(),
+        "marking another session pending must preserve the first"
+    );
+    lp.app
+        .on_line(stream_event("stream_reopened", &session, None));
+    assert!(!lp.app.pass_open(), "both pending passes have now ended");
+}
+
+#[test]
 fn opening_passes_gate_pages_until_the_boundary_is_folded() {
     let (mut lp, _, _, _) = opened();
     demand_top(&mut lp);
