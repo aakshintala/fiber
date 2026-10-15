@@ -246,7 +246,11 @@ fn the_banner_row_is_counted_in_conversation_height() {
         // The conversation ends on the rows above the notice, which
         // sits above the banner.
         let (banner, top) = drawn(&app);
-        assert_eq!(app.conversation_height(), banner - top - 1, "{width}x{height}");
+        assert_eq!(
+            app.conversation_height(),
+            banner - top - 1,
+            "{width}x{height}"
+        );
     }
 }
 

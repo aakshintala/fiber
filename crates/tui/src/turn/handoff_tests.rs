@@ -67,7 +67,13 @@ fn started(app: &mut App, trigger: &str) {
 }
 
 fn started_at(app: &mut App, trigger: &str, ts: u64) {
-    feed_ts(app, "handoff_started", None, ts, json!({ "trigger": trigger }));
+    feed_ts(
+        app,
+        "handoff_started",
+        None,
+        ts,
+        json!({ "trigger": trigger }),
+    );
 }
 
 fn completed(app: &mut App, payload: Value) {
@@ -175,7 +181,11 @@ fn each_trigger_reads_as_the_band_says_it() {
         started_at(&mut app, trigger, TEA);
         assert_eq!(
             band(&app),
-            full_row(&app, &format!(" ⇄ handoff · {says}"), "● writing the note… · 14:20 "),
+            full_row(
+                &app,
+                &format!(" ⇄ handoff · {says}"),
+                "● writing the note… · 14:20 "
+            ),
             "{trigger}"
         );
     }
@@ -187,7 +197,11 @@ fn each_trigger_reads_as_the_band_says_it() {
     started_at(&mut app, "auto", TEA);
     assert_eq!(
         band(&app),
-        full_row(&app, " ⇄ handoff · automatic", "● writing the note… · 14:20 "),
+        full_row(
+            &app,
+            " ⇄ handoff · automatic",
+            "● writing the note… · 14:20 "
+        ),
     );
 }
 
@@ -274,7 +288,11 @@ fn the_note_goes_into_the_band_and_the_size_waits_for_the_next_call() {
     let at = band_at(&app);
     assert_eq!(
         lines[at],
-        full_row(&app, " ⇄ handoff · automatic at 400k", "● writing the note… · 14:20 "),
+        full_row(
+            &app,
+            " ⇄ handoff · automatic at 400k",
+            "● writing the note… · 14:20 "
+        ),
     );
     assert!(lines[at - 1].chars().all(|c| c == '▄'));
     assert!(lines[at + 1].chars().all(|c| c == '▀'));
@@ -304,13 +322,21 @@ fn the_note_goes_into_the_band_and_the_size_waits_for_the_next_call() {
     usage(&mut app, "g_next", 29_000, json!({}));
     assert_eq!(
         band(&app),
-        full_row(&app, " ⇄ handoff · automatic at 400k", "402k → 32k · 14:20 "),
+        full_row(
+            &app,
+            " ⇄ handoff · automatic at 400k",
+            "402k → 32k · 14:20 "
+        ),
     );
     // Only the first call after it sizes it.
     usage(&mut app, "g_later", 90_000, json!({}));
     assert_eq!(
         band(&app),
-        full_row(&app, " ⇄ handoff · automatic at 400k", "402k → 32k · 14:20 "),
+        full_row(
+            &app,
+            " ⇄ handoff · automatic at 400k",
+            "402k → 32k · 14:20 "
+        ),
     );
 }
 
@@ -340,7 +366,11 @@ fn a_call_that_reported_no_input_tokens_leaves_the_size_waiting() {
     usage(&mut app, "g_next", 29_000, json!({}));
     assert_eq!(
         band(&app),
-        full_row(&app, " ⇄ handoff · automatic at 400k", "402k → 32k · 14:20 "),
+        full_row(
+            &app,
+            " ⇄ handoff · automatic at 400k",
+            "402k → 32k · 14:20 "
+        ),
     );
 }
 
@@ -387,10 +417,7 @@ fn a_failed_or_cancelled_handoff_leaves_the_context_unchanged() {
     assert!(lines[at + 2].chars().all(|c| c == '▄'));
     let second = "cancelled · the context is unchanged · 14:20 ";
     assert!(lines[at + 3].ends_with(second));
-    assert_eq!(
-        lines[at + 3].chars().filter(|c| *c == '…').count(),
-        1,
-    );
+    assert_eq!(lines[at + 3].chars().filter(|c| *c == '…').count(), 1,);
     assert_eq!(
         crate::format::width(&lines[at + 3]),
         crate::format::width(&lines[at + 2]),
@@ -563,8 +590,7 @@ fn the_fit_boundary_cuts_left_but_keeps_right() {
         usage(&mut app, "g_next", 29_000, json!({}));
         drawn.push((width, band(&app)));
     }
-    let (whole, cut): (Vec<_>, Vec<_>) =
-        drawn.into_iter().partition(|(_, row)| !row.contains('…'));
+    let (whole, cut): (Vec<_>, Vec<_>) = drawn.into_iter().partition(|(_, row)| !row.contains('…'));
     assert!(!whole.is_empty() && !cut.is_empty());
     // The narrowest whole row is exactly the full width.
     let narrowest = whole
@@ -618,7 +644,11 @@ fn a_writing_band_cut_past_its_dot_marks_nothing() {
         let shown = app.shown(0, usize::MAX);
         assert!(shown.spins.is_empty(), "width {width}");
         let row = band(&app);
-        assert_eq!(crate::format::width(&row), edge_above(&app), "width {width}");
+        assert_eq!(
+            crate::format::width(&row),
+            edge_above(&app),
+            "width {width}"
+        );
     }
 }
 
@@ -644,7 +674,11 @@ fn a_hooks_note_and_a_tool_started_handoff() {
     let at = band_at(&app);
     assert_eq!(
         lines[at],
-        full_row(&app, " ⇄ handoff · the model handed off", "300k → … · 14:20 "),
+        full_row(
+            &app,
+            " ⇄ handoff · the model handed off",
+            "300k → … · 14:20 "
+        ),
     );
     assert!(lines[at - 1].chars().all(|c| c == '▄'));
     assert!(lines[at + 1].chars().all(|c| c == '▀'));

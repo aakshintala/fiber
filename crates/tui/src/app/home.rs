@@ -464,7 +464,8 @@ impl App {
                     // while its replay stays gated: a refused credential
                     // switch reports without opening the gate or
                     // returning home.
-                    self.notices.push(&refusal_code(&envelope.payload), refusal(&envelope.payload));
+                    self.notices
+                        .push(&refusal_code(&envelope.payload), refusal(&envelope.payload));
                     return Some(Vec::new());
                 }
                 if self.gated(&envelope.session_id) {

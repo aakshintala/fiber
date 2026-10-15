@@ -164,12 +164,7 @@ impl Band {
             );
         }
         let band_at = out.len().saturating_sub(1);
-        out.on_surface(
-            band_at,
-            width,
-            Role::Handoff,
-            crate::surface::Edges::BOTH,
-        );
+        out.on_surface(band_at, width, Role::Handoff, crate::surface::Edges::BOTH);
         let note = self.note();
         if matches!(self.state, State::Writing) || note.is_empty() {
             return;
@@ -256,9 +251,7 @@ impl Band {
             // right part keeps its columns, and the "●" survives.
             let mut row = fit(left, max - right_width - 1);
             row.push(dim_span(" ".to_owned()));
-            let spin = spin_at
-                .then(|| max - right_width)
-                .and_then(try_col);
+            let spin = spin_at.then(|| max - right_width).and_then(try_col);
             row.extend(right);
             (row, spin)
         } else {
@@ -293,11 +286,7 @@ fn size(tokens: u64) -> String {
         .unwrap_or(&text);
     text.strip_suffix(".0k")
         .map(|kept| format!("{kept}k"))
-        .or_else(|| {
-            text
-                .strip_suffix(".0M")
-                .map(|kept| format!("{kept}M"))
-        })
+        .or_else(|| text.strip_suffix(".0M").map(|kept| format!("{kept}M")))
         .unwrap_or_else(|| text.to_owned())
 }
 

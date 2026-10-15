@@ -1525,4 +1525,3 @@ fn a_turn_copy_with_nothing_missing_pins_nothing() {
     assert_eq!(app.pages().pinned(), prior);
     assert!(app.pending_turn.is_none());
 }
-

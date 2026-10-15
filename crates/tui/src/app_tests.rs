@@ -1773,9 +1773,7 @@ fn stream_closed_for_the_open_session_is_one_notice_and_keeps_the_lines() {
         Some("this session's log can't be read past here; reopen the session to try again")
     );
     assert_eq!(
-        app.notices()
-            .into_iter()
-            .next(),
+        app.notices().into_iter().next(),
         Some(crate::app::NoticeLine::Notice {
             id: 0,
             code: "stream_closed".to_owned(),

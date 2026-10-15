@@ -12,10 +12,10 @@ use ratatui::text::{Line, Span};
 
 use super::overlay_cross;
 use crate::app::App;
+use crate::app::NoticeLine;
 use crate::format;
 use crate::markdown::{Role, style};
 use crate::mouse::{Target, TargetId};
-use crate::app::NoticeLine;
 
 /// Draws the notice rows bottom-up from `bottom`, moving it up past
 /// them: at most the rows above `area.y`, the lowest rows kept, so rows
@@ -71,7 +71,7 @@ pub(super) fn draw(
 }
 
 /// Draws the notice overlay over `area`, hiding the conversation's
-/// targets exactly as the floating notices did.
+/// targets as before.
 pub(super) fn overlay(app: &App, area: Rect, buf: &mut Buffer, targets: &mut Vec<Target>) {
     let Some(texts) = app.notice_overlay() else {
         return;

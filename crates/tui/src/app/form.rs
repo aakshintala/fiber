@@ -60,8 +60,8 @@ impl App {
                 (accepted.command_id.0, None)
             }
             "command_rejected" => {
-                let Some((Some(id), code, message)) = read!(envelope, CommandRejected)
-                    .map(|rejected| {
+                let Some((Some(id), code, message)) =
+                    read!(envelope, CommandRejected).map(|rejected| {
                         (
                             rejected.command_id,
                             crate::format::code(&rejected.code),

@@ -534,7 +534,8 @@ impl App {
     pub(crate) fn disconnected(&mut self) {
         if self.link == Link::Up {
             self.link = Link::Down;
-            self.notices.push("connection_failed", "Connection lost.".to_owned());
+            self.notices
+                .push("connection_failed", "Connection lost.".to_owned());
         }
         // A lost connection closes an open item view first, swapping the
         // screen back before anything clears it, and drops every wish:
@@ -706,14 +707,8 @@ impl App {
             + usize::from(self.working_row_shown());
         // The notice rows draw above the working line, so their room is
         // what is left above it; the badge and hint draw above them.
-        let notices = self
-            .notices
-            .drawn()
-            .min(room.saturating_sub(under));
-        under
-            + notices
-            + usize::from(self.badge().is_some())
-            + usize::from(self.hint())
+        let notices = self.notices.drawn().min(room.saturating_sub(under));
+        under + notices + usize::from(self.badge().is_some()) + usize::from(self.hint())
     }
 
     /// The approval panel, while it is open: its form laid out at the

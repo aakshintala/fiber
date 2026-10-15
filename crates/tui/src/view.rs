@@ -80,11 +80,11 @@ pub(crate) fn rows(line: Line<'_>, width: u16) -> usize {
 /// Draws `app` into `area` of `buf`, from the bottom up: the narrow
 /// layout's status rows on the last rows, then the input box with a
 /// completion panel above it, or the approval panel in their place, then
-/// the steering queue, the reconnect banner, the
-/// badge and the quit hint when shown, and the conversation in the rows
-/// left with the notices floating over its top-right corner, or the key
-/// map over them while it is open. A screen too short for them all drops
-/// the hint first, then the badge. A panel taller than the screen keeps
+/// the steering queue, the reconnect banner, the working line, the
+/// notice rows above it, and the badge and the quit hint when shown, and
+/// the conversation in the rows left, or the key map over them while it
+/// is open. A screen too short for them all drops the hint first,
+/// then the badge, then the notice rows. A panel taller than the screen keeps
 /// its top, except that a question form scrolls to keep its cursor's row
 /// shown.
 ///

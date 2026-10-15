@@ -388,9 +388,7 @@ fn warning(message: &str, inner: u16) -> (Vec<String>, Vec<crate::rows::RowText>
     .rows(inner, &mut out);
     let (rows, texts) = out.into_parts();
     (
-        rows.into_iter()
-            .map(|(line, _)| line.to_string())
-            .collect(),
+        rows.into_iter().map(|(line, _)| line.to_string()).collect(),
         texts,
     )
 }
@@ -409,12 +407,12 @@ fn a_warning_wraps_under_itself() {
     let two = "a".repeat(19);
     assert_eq!(
         warning(&two, 20).0,
-        [format!("⚠ {}", "a".repeat(18)), format!("  {}", "a".repeat(1))]
+        [
+            format!("⚠ {}", "a".repeat(18)),
+            format!("  {}", "a".repeat(1))
+        ]
     );
-    let (rows, _) = warning(
-        "The MCP server one stopped working this morning",
-        20,
-    );
+    let (rows, _) = warning("The MCP server one stopped working this morning", 20);
     assert_eq!(
         rows,
         [

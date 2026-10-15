@@ -1248,10 +1248,7 @@ fn a_handoff_sized_pages_earlier_reloads_unchanged() {
     // The band read the trigger the preamble set pages earlier, under the
     // same target id a reload must keep.
     let texts: Vec<String> = live.iter().map(|(line, _)| line.to_string()).collect();
-    assert!(
-        texts.iter().any(|line| line.contains("400k")),
-        "{texts:?}"
-    );
+    assert!(texts.iter().any(|line| line.contains("400k")), "{texts:?}");
     drop_all(&mut pages);
     let got = joined(&mut pages, &lines);
     assert_eq!(differs(&got, &live), None);
@@ -2325,7 +2322,9 @@ fn a_cut_after_a_band_opens_the_next_page_with_an_edge() {
     // The page before the cut ends with the band's lower edge, its
     // content row above it.
     assert!(
-        first.last().is_some_and(|row| shown_edge(row.clone(), 40, '▀')),
+        first
+            .last()
+            .is_some_and(|row| shown_edge(row.clone(), 40, '▀')),
         "{first:?}"
     );
     assert!(
@@ -2371,7 +2370,9 @@ fn a_cut_after_a_band_and_a_blank_reply_opens_the_next_page_with_an_edge() {
     // The page before the cut ends with the band's lower edge, its
     // content row above it.
     assert!(
-        first.last().is_some_and(|row| shown_edge(row.clone(), 40, '▀')),
+        first
+            .last()
+            .is_some_and(|row| shown_edge(row.clone(), 40, '▀')),
         "{first:?}"
     );
     assert!(
@@ -2501,9 +2502,7 @@ fn a_cut_before_a_band_closes_the_piece_on_the_page_before() {
         "{second:?}"
     );
     assert!(
-        second
-            .get(1)
-            .is_some_and(|row| row.contains('⇄')),
+        second.get(1).is_some_and(|row| row.contains('⇄')),
         "{second:?}"
     );
     let reference = whole(&pages, &lines);

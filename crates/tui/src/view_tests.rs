@@ -404,10 +404,7 @@ fn a_short_screen_keeps_the_input_line_last() {
     // first, and the badge with the conversation. The edged input box
     // takes the notice's row before the hint's.
     assert_eq!(sized(&mut app, 20, 1), "▌ › █\n");
-    assert_eq!(
-        sized(&mut app, 20, 2),
-        "  ⚠ connection_fa… ✕\n▌ › █\n"
-    );
+    assert_eq!(sized(&mut app, 20, 2), "  ⚠ connection_fa… ✕\n▌ › █\n");
     assert_eq!(
         sized(&mut app, 20, 3),
         "▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄\n▌ › █\n▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀\n"
@@ -1375,7 +1372,12 @@ fn running(width: u16, height: u16) -> App {
         None,
     ));
     app.on_line(turn_started(S_A, "go"));
-    app.on_line(session_line(S_A, "step_started", serde_json::json!({}), None));
+    app.on_line(session_line(
+        S_A,
+        "step_started",
+        serde_json::json!({}),
+        None,
+    ));
     app.on_line(session_line(
         S_A,
         "tool_call_requested",
@@ -1442,7 +1444,11 @@ fn four_notices_three_rows_and_more() {
     let at = row.find(mark).expect("the mark");
     let start = crate::format::width(&row[..at]);
     for col in start..start + crate::format::width(mark) {
-        assert_eq!(buf[(col as u16, working - 4)].fg, Role::Attention.color(), "col {col}");
+        assert_eq!(
+            buf[(col as u16, working - 4)].fg,
+            Role::Attention.color(),
+            "col {col}"
+        );
     }
     let message = row.find("Notice 1.").expect("the message");
     let message_col = crate::format::width(&row[..message]);
@@ -1469,9 +1475,7 @@ fn short_screens_draw_what_fits_above_the_working_line() {
         let drawn = (0..height)
             .filter(|y| buf[(99, *y)].symbol() == "✕")
             .count()
-            + usize::from(
-                (0..height).any(|y| full_row(&buf, y, 100).starts_with("  +"))
-            );
+            + usize::from((0..height).any(|y| full_row(&buf, y, 100).starts_with("  +")));
         assert_eq!(drawn, 4.min(working as usize), "height {height}");
         assert_eq!(
             app.conversation_height(),
@@ -2582,6 +2586,3 @@ fn ledger_rows_show_parsed_arguments_never_json() {
     assert!(shown.contains("rust errors"), "{shown}");
     assert!(!shown.contains("{\""), "{shown}");
 }
-
-
-

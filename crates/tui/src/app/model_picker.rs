@@ -173,10 +173,9 @@ impl App {
                             }
                             self.picker_saved(&key, &choice)
                         }
-                        Err(error) => self.push_notice(
-                            "io_failed",
-                            format!("Saving {key} failed: {error}"),
-                        ),
+                        Err(error) => {
+                            self.push_notice("io_failed", format!("Saving {key} failed: {error}"))
+                        }
                     }
                 }
             }

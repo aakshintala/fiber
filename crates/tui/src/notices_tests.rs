@@ -156,11 +156,7 @@ fn held_notices_wait_for_the_release() {
     notices.open_all();
     assert_eq!(
         notices.overlay(),
-        Some(vec![
-            "three".to_owned(),
-            "two".to_owned(),
-            "one".to_owned()
-        ])
+        Some(vec!["three".to_owned(), "two".to_owned(), "one".to_owned()])
     );
     notices.close();
     // A second hold keeps where the first began.
@@ -324,10 +320,7 @@ fn a_hub_refusal_keeps_its_code() {
     // A refused `reply` carries its draft back with the hub's code.
     app.pending.insert(
         "c_1".to_owned(),
-        (
-            crate::app::Kind::Reply,
-            crate::input::Draft::default(),
-        ),
+        (crate::app::Kind::Reply, crate::input::Draft::default()),
     );
     app.on_line(hub_refused("c_1", Some("busy"), "A turn is running."));
     assert_eq!(
@@ -341,10 +334,7 @@ fn a_hub_refusal_with_no_code_is_malformed() {
     let mut app = attached();
     app.pending.insert(
         "c_1".to_owned(),
-        (
-            crate::app::Kind::Reply,
-            crate::input::Draft::default(),
-        ),
+        (crate::app::Kind::Reply, crate::input::Draft::default()),
     );
     app.on_line(hub_refused("c_1", None, "No code."));
     assert_eq!(first(&app), ("malformed".to_owned(), "No code.".to_owned()));
@@ -355,10 +345,7 @@ fn a_session_refusal_keeps_its_code() {
     let mut app = attached();
     app.pending.insert(
         "c_1".to_owned(),
-        (
-            crate::app::Kind::Reply,
-            crate::input::Draft::default(),
-        ),
+        (crate::app::Kind::Reply, crate::input::Draft::default()),
     );
     app.on_line(session_refused(S_A, "c_1", "busy", "A turn is running."));
     assert_eq!(
@@ -417,7 +404,10 @@ fn keys_notices_are_config_invalid() {
         })
         .collect();
     assert!(!codes.is_empty());
-    assert!(codes.iter().all(|code| code == "config_invalid"), "{codes:?}");
+    assert!(
+        codes.iter().all(|code| code == "config_invalid"),
+        "{codes:?}"
+    );
 }
 
 #[test]

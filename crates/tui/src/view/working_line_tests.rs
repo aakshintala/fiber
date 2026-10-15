@@ -1065,9 +1065,6 @@ fn a_cut_band_mark_spins_while_its_dot_survives() {
     assert!(shown.contains(SPINNER[0]), "{shown}");
     assert_eq!(
         app.take_wake(),
-        clock
-            .origin()
-            .checked_add(Duration::from_millis(120))
+        clock.origin().checked_add(Duration::from_millis(120))
     );
 }
-

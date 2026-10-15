@@ -2891,7 +2891,3 @@ fn the_signal_thread_sends_each_taken_signal() {
         | Input::Tick => panic!("the signal thread sent something else"),
     }
 }
-
-
-
-

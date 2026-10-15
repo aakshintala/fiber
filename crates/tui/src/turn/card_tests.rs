@@ -156,10 +156,6 @@ fn shown_rows(rows: &[Row]) -> Vec<String> {
     rows.iter().map(|(line, _)| line.to_string()).collect()
 }
 
-fn surface() -> Option<ratatui::style::Color> {
-    Some(Role::Surface.color())
-}
-
 fn handoff() -> Option<ratatui::style::Color> {
     Some(Role::Handoff.color())
 }
@@ -463,10 +459,7 @@ fn a_band_first_or_last_draws_no_empty_piece() {
     );
     let shown = shown_rows(&rows);
     assert_eq!(shown[6], "▄".repeat(60));
-    assert!(
-        shown[7].starts_with(" ⇄ handoff · automatic"),
-        "{shown:?}"
-    );
+    assert!(shown[7].starts_with(" ⇄ handoff · automatic"), "{shown:?}");
     assert_eq!(shown[8], "▀".repeat(60));
     assert_eq!(shown[9], "▄".repeat(60));
     let mut cards = fresh();
@@ -543,10 +536,7 @@ fn edges_the_page_withholds_are_not_drawn() {
     assert_eq!(shown[1], " before");
     assert_eq!(shown[2], "▀".repeat(60));
     assert_eq!(shown[3], "▄".repeat(60));
-    assert!(
-        shown[4].starts_with(" ⇄ handoff · automatic"),
-        "{shown:?}"
-    );
+    assert!(shown[4].starts_with(" ⇄ handoff · automatic"), "{shown:?}");
     assert_eq!(shown[5], "▀".repeat(60));
     // The piece after the band still opens with an edge.
     assert_eq!(shown[6], "▄".repeat(60));

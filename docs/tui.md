@@ -880,6 +880,7 @@ one row each until dismissed with ✕, oldest first: "  ⚠ " and the code in
 right-aligned. Clicking a notice shows the whole text in an overlay.
 
 - At most 3 show, then "+N more", which lists them.
+- The "N approvals waiting" row (see "An approval") sits above the notices.
 - A notice that arrives during a drag waits for the release.
 - In the screen-reader mode notices are lines in reading order.
 

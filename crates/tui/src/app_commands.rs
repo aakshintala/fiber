@@ -526,7 +526,8 @@ impl App {
     /// draft stays.
     pub(super) fn command_session(&mut self) -> Option<(contract::SessionId, bool)> {
         let Phase::Attached { session, busy } = &self.phase else {
-            self.notices.push("session_not_found", NO_SESSION.to_owned());
+            self.notices
+                .push("session_not_found", NO_SESSION.to_owned());
             self.draft.clear();
             return None;
         };
