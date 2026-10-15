@@ -1321,3 +1321,18 @@ fn permission_resolved_still_removes_an_approval() {
     assert!(queue.panel(80).is_none());
     assert!(queue.badge(0).is_none());
 }
+
+#[test]
+fn a_call_with_no_name_draws_no_empty_tool_run() {
+    let queue = folded(&[
+        call(S_A, "a_1", "", serde_json::json!({})),
+        request(S_A, "a_1", "r_1", serde_json::json!({"step": "review"})),
+    ]);
+    let shown = rendered(&queue);
+    assert_eq!(shown.lines[1], "");
+    assert!(
+        shown.marks.iter().all(|mark| !mark.bytes.is_empty()),
+        "{:?}",
+        shown.marks
+    );
+}

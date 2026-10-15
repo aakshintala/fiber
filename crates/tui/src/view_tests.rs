@@ -2309,3 +2309,18 @@ fn ledger_rows_show_parsed_arguments_never_json() {
     assert!(shown.contains("rust errors"), "{shown}");
     assert!(!shown.contains("{\""), "{shown}");
 }
+
+#[test]
+fn the_badge_warning_sign_is_split_from_the_rest_of_the_badge() {
+    let attention = ratatui::style::Style::new().fg(crate::theme::Role::Attention.color());
+    assert_eq!(
+        super::badge_spans("⚠ 1 approvals waiting"),
+        vec![
+            ratatui::text::Span::styled("⚠", attention),
+            ratatui::text::Span::styled(
+                " 1 approvals waiting",
+                attention.add_modifier(Modifier::BOLD),
+            ),
+        ]
+    );
+}

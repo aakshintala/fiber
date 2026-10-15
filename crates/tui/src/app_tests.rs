@@ -1792,3 +1792,31 @@ fn stream_closed_with_no_session_open_shows_no_notice() {
     assert!(app.on_line(stream_closed("s_aaaaaaaaaaaaaaaa")).is_empty());
     assert!(app.notice().is_none());
 }
+
+#[test]
+fn an_approval_names_its_session_by_the_session_name() {
+    let clock = fakes::clock::FakeClock::new();
+    let mut app = app();
+    attach(&mut app, clock.now(), "s_aaaaaaaaaaaaaaaa");
+    app.on_line(session_line(
+        "s_aaaaaaaaaaaaaaaa",
+        "session_named",
+        serde_json::json!({"name": "Fix the parser", "by": "person"}),
+        None,
+    ));
+    app.on_line(session_line(
+        "s_aaaaaaaaaaaaaaaa",
+        "permission_requested",
+        serde_json::json!({"request_id": "r_1", "effects": ["executes"],
+            "reversible": true, "step": "review"}),
+        Some("a_1"),
+    ));
+    let header = app
+        .panel()
+        .map(|panel| panel.lines[0].clone())
+        .unwrap_or_default();
+    assert!(
+        header.starts_with("Approval 1 of 1 · Fix the parser"),
+        "{header}"
+    );
+}

@@ -1198,3 +1198,52 @@ fn without_stripes_the_first_column_keeps_the_tint() {
         }
     });
 }
+
+/// A one-line panel of `text` with `marks`.
+fn marked(text: &str, marks: Vec<crate::approvals::Mark>) -> Panel {
+    Panel {
+        lines: vec![text.to_owned()],
+        marks,
+        alert: false,
+        spots: Vec::new(),
+        cursor: None,
+        caret: None,
+    }
+}
+
+#[test]
+fn a_run_from_the_line_start_adds_no_empty_plain_run() {
+    let red = ratatui::style::Style::new().fg(Color::Red);
+    let panel = marked(
+        "abcdef",
+        vec![crate::approvals::Mark {
+            line: 0,
+            bytes: 0..3,
+            style: red,
+        }],
+    );
+    assert_eq!(
+        super::styled(&panel, 0, "abcdef"),
+        ratatui::text::Line::from(vec![
+            ratatui::text::Span::styled("abc", red),
+            ratatui::text::Span::raw("def"),
+        ])
+    );
+}
+
+#[test]
+fn a_run_to_the_line_end_adds_no_empty_plain_run() {
+    let red = ratatui::style::Style::new().fg(Color::Red);
+    let panel = marked(
+        "abcdef",
+        vec![crate::approvals::Mark {
+            line: 0,
+            bytes: 0..6,
+            style: red,
+        }],
+    );
+    assert_eq!(
+        super::styled(&panel, 0, "abcdef"),
+        ratatui::text::Line::from(vec![ratatui::text::Span::styled("abcdef", red)])
+    );
+}
