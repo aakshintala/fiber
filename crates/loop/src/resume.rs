@@ -775,6 +775,7 @@ mod started_arguments_tests {
 
     fn started(action: &str) -> Envelope {
         let event = Event::ToolCallStarted(ToolCallStarted {
+            always_reviewed: false,
             declared: DeclaredEffects {
                 effects: Vec::new(),
                 reversible: true,

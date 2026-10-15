@@ -159,6 +159,7 @@ fn typed(line: &Envelope, n: usize) -> Result<Typed, String> {
         "fiber_started" | "session_started" => Ok(None),
         "tool_call_started" => Ok(Some((
             Event::ToolCallStarted(ToolCallStarted {
+                always_reviewed: false,
                 declared: DeclaredEffects {
                     effects: Vec::new(),
                     reversible: true,
@@ -394,6 +395,7 @@ fn write_read_log(home: &Home, id: &str) -> Result<(), String> {
         ),
         (
             Event::ToolCallStarted(ToolCallStarted {
+                always_reviewed: false,
                 declared: DeclaredEffects {
                     effects: Vec::new(),
                     reversible: true,

@@ -688,6 +688,7 @@ fn review_request(
     rule_subject: &str,
 ) -> Event {
     Event::PermissionRequested(PermissionRequested {
+        always_reviewed: false,
         request_id: RequestId(request_id.into()),
         declared: DeclaredEffects {
             effects: vec![Effect::Reads],

@@ -448,6 +448,7 @@ impl crate::Loop {
         };
         self.write(
             &Event::ToolCallStarted(ToolCallStarted {
+                always_reviewed: false,
                 declared: prepared.effects.declared.clone(),
                 arguments,
                 changed_by,

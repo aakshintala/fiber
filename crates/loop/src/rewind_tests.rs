@@ -32,6 +32,7 @@ fn requested(name: &str, arguments: Value) -> Event {
 
 fn started(effects: Vec<Effect>, paths: Option<Vec<&str>>, arguments: Option<Value>) -> Event {
     Event::ToolCallStarted(ToolCallStarted {
+        always_reviewed: false,
         declared: DeclaredEffects {
             effects,
             reversible: true,

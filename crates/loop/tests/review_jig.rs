@@ -512,6 +512,7 @@ fn requested(name: &str, arguments: Value) -> Event {
 /// The start event of a call declaring `effects`, reversible or not.
 fn started(effects: Vec<Effect>, reversible: bool) -> Event {
     Event::ToolCallStarted(ToolCallStarted {
+        always_reviewed: false,
         declared: DeclaredEffects {
             effects,
             reversible,
@@ -525,6 +526,7 @@ fn started(effects: Vec<Effect>, reversible: bool) -> Event {
 /// A review-step approval carrying `request_id`: reviewer attribution.
 fn review_step(request_id: &str) -> Event {
     Event::PermissionRequested(PermissionRequested {
+        always_reviewed: false,
         request_id: RequestId(request_id.into()),
         declared: DeclaredEffects {
             effects: vec![Effect::Executes],
@@ -542,6 +544,7 @@ fn review_step(request_id: &str) -> Event {
 /// below the escalation limits never started.
 fn reviewer_denied(reason: &str) -> Event {
     Event::PermissionResolved(PermissionResolved {
+        call: None,
         request_id: None,
         decision: Decision::Deny,
         decided_by: DecidedBy::Reviewer,
@@ -559,6 +562,7 @@ fn reviewer_denied(reason: &str) -> Event {
 /// A headless denial with no reviewer and no start.
 fn headless_denied(reason: &str) -> Event {
     Event::PermissionResolved(PermissionResolved {
+        call: None,
         request_id: None,
         decision: Decision::Deny,
         decided_by: DecidedBy::NoReviewer,
@@ -573,6 +577,7 @@ fn headless_denied(reason: &str) -> Event {
 /// A person's allow: an explicit non-review decision.
 fn person_allowed() -> Event {
     Event::PermissionResolved(PermissionResolved {
+        call: None,
         request_id: Some(RequestId("r_person".into())),
         decision: Decision::Allow,
         decided_by: DecidedBy::Person,
@@ -588,6 +593,7 @@ fn person_allowed() -> Event {
 /// decision, never a review request of its own.
 fn rule_denied(reason: &str) -> Event {
     Event::PermissionResolved(PermissionResolved {
+        call: None,
         request_id: None,
         decision: Decision::Deny,
         decided_by: DecidedBy::StandingRule,
@@ -1119,6 +1125,7 @@ fn rewritten_arguments_name_the_rewrite_in_the_effects_item() {
     );
     fixture.append(
         &Event::ToolCallStarted(ToolCallStarted {
+            always_reviewed: false,
             declared: DeclaredEffects {
                 effects: vec![Effect::Executes],
                 reversible: false,
@@ -1212,6 +1219,7 @@ fn inner_hosted_and_non_review_calls_print_no_lines_of_their_own() {
     );
     fixture.append(
         &Event::PermissionRequested(PermissionRequested {
+            always_reviewed: false,
             request_id: RequestId("r_standing".into()),
             declared: DeclaredEffects {
                 effects: vec![Effect::Executes],

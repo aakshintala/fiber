@@ -307,6 +307,7 @@ fn a_session_grant_from_before_the_resume_is_honoured() {
     history.write(requested("exec", "Paris"), Some("a_1"));
     history.write(
         Event::PermissionResolved(PermissionResolved {
+            call: None,
             request_id: None,
             decision: Decision::Allow,
             decided_by: DecidedBy::Person,
@@ -435,6 +436,7 @@ fn reviewer_denies_from_before_the_resume_count_toward_the_session_limit() {
     for _ in 0..20 {
         history.write(
             Event::PermissionResolved(PermissionResolved {
+                call: None,
                 request_id: None,
                 decision: Decision::Deny,
                 decided_by: DecidedBy::Reviewer,
@@ -543,6 +545,7 @@ fn resume_after_prior_denials(decided_by: DecidedBy) -> (History, contract::even
     for _ in 0..20 {
         history.write(
             Event::PermissionResolved(PermissionResolved {
+                call: None,
                 request_id: None,
                 decision: Decision::Deny,
                 decided_by,
@@ -1147,6 +1150,7 @@ use contract::shapes::{Effect, Usage};
 /// a rule offer.
 fn review_request(request_id: &str) -> Event {
     Event::PermissionRequested(PermissionRequested {
+        always_reviewed: false,
         request_id: contract::RequestId(request_id.into()),
         declared: DeclaredEffects {
             effects: vec![Effect::Executes],
@@ -1195,6 +1199,7 @@ fn turn_completed() -> Event {
 
 fn denied_resolved(request_id: Option<&str>) -> Event {
     Event::PermissionResolved(PermissionResolved {
+        call: None,
         request_id: request_id.map(|id| contract::RequestId(id.into())),
         decision: Decision::Deny,
         decided_by: DecidedBy::StandingRule,
@@ -1211,6 +1216,7 @@ fn denied_resolved(request_id: Option<&str>) -> Event {
 /// `permission_resolved`).
 fn closed_resolved(request_id: &str) -> Event {
     Event::PermissionResolved(PermissionResolved {
+        call: None,
         request_id: Some(contract::RequestId(request_id.into())),
         decision: Decision::Deny,
         decided_by: DecidedBy::Cancel,
@@ -1224,6 +1230,7 @@ fn closed_resolved(request_id: &str) -> Event {
 
 fn allowed_resolved() -> Event {
     Event::PermissionResolved(PermissionResolved {
+        call: None,
         request_id: None,
         decision: Decision::Allow,
         decided_by: DecidedBy::Person,
@@ -2353,6 +2360,7 @@ fn twenty_prior_denials(history: &History) {
     for _ in 0..20 {
         history.write(
             Event::PermissionResolved(PermissionResolved {
+                call: None,
                 request_id: None,
                 decision: Decision::Deny,
                 decided_by: DecidedBy::Reviewer,

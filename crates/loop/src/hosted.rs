@@ -40,6 +40,7 @@ impl Loop {
         )?;
         self.append(
             &Event::ToolCallStarted(ToolCallStarted {
+                always_reviewed: false,
                 declared,
                 arguments: None,
                 changed_by: None,

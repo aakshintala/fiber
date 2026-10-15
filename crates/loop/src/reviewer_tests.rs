@@ -367,6 +367,7 @@ fn a_started_rewrite_leaves_the_reviewers_history_as_it_was() {
     render_reviewed(
         &mut reviewed,
         &Event::ToolCallStarted(contract::events::ToolCallStarted {
+            always_reviewed: false,
             declared: contract::shapes::DeclaredEffects {
                 effects: vec![contract::shapes::Effect::Reads],
                 reversible: true,

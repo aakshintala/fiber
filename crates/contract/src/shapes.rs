@@ -270,7 +270,7 @@ pub enum Effect {
     Network,
 }
 
-/// Declared effects, on `tool_call_started` and `permission_requested`.
+/// Declared effects, on `tool_call_started` and `permission_requested`, and on a reviewed call's decision that has no request, `permission_resolved`.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct DeclaredEffects {
     /// Each effect that applies; empty when the call declared none.

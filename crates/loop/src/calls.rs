@@ -295,6 +295,7 @@ impl Loop {
                             };
                             self.append(
                                 &Event::ToolCallStarted(ToolCallStarted {
+                                    always_reviewed: false,
                                     declared: prepared.effects.declared.clone(),
                                     arguments,
                                     changed_by,
@@ -591,6 +592,7 @@ impl Loop {
             return Ok(Asked::Gone(self.unanswerable(id, turn)?));
         }
         let request = PermissionRequested {
+            always_reviewed: false,
             request_id: RequestId(super::mint("r_")),
             declared: declared.clone(),
             step,

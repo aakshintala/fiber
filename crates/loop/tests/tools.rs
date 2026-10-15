@@ -798,6 +798,7 @@ fn events_that_are_not_deltas_write_nothing_extra() {
     let mut tool = TestTool::reads("get_weather", "Sunny.");
     tool.script = vec![
         emit(Event::ToolCallStarted(ToolCallStarted {
+            always_reviewed: false,
             declared: DeclaredEffects {
                 effects: vec![Effect::Reads],
                 reversible: true,

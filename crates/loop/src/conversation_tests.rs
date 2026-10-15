@@ -453,6 +453,7 @@ fn a_job_notice_after_a_crash_follows_the_fixed_result() {
         provider_item: None,
     });
     let started = Event::ToolCallStarted(contract::events::ToolCallStarted {
+        always_reviewed: false,
         declared: contract::shapes::DeclaredEffects {
             effects: Vec::new(),
             reversible: true,
@@ -1251,6 +1252,7 @@ mod window {
 
     fn request(id: &str) -> Event {
         Event::PermissionRequested(PermissionRequested {
+            always_reviewed: false,
             request_id: RequestId(id.into()),
             declared: DeclaredEffects {
                 effects: vec![Effect::Executes],
@@ -1268,6 +1270,7 @@ mod window {
 
     fn resolved(decided_by: DecidedBy, grant: Option<&str>, reviewer: bool) -> Event {
         Event::PermissionResolved(PermissionResolved {
+            call: None,
             request_id: None,
             decision: if grant.is_some() {
                 Decision::Allow
@@ -3229,6 +3232,7 @@ fn inner_lines(crash: bool) -> Vec<Envelope> {
     let requested = inner_requested(false);
     let inner = inner_requested(true);
     let started = Event::ToolCallStarted(contract::events::ToolCallStarted {
+        always_reviewed: false,
         declared: contract::shapes::DeclaredEffects {
             effects: vec![],
             reversible: true,
@@ -3301,6 +3305,7 @@ fn a_completion_not_requested_in_this_window_still_renders() {
 fn the_suspended_batch_excludes_inner_requests() {
     let mut lines = inner_lines(true);
     let permission = Event::PermissionRequested(contract::events::PermissionRequested {
+        always_reviewed: false,
         request_id: contract::RequestId("r_1".into()),
         declared: contract::shapes::DeclaredEffects {
             effects: vec![],

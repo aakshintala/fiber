@@ -1890,6 +1890,7 @@ fn resume_interleaving_holds_arrival_order() {
     );
     append(
         contract::events::Event::PermissionRequested(PermissionRequested {
+            always_reviewed: false,
             request_id: RequestId("r_9".into()),
             declared: DeclaredEffects {
                 effects: vec![contract::shapes::Effect::Executes],
@@ -2525,6 +2526,7 @@ fn run_deferred_case(case: &DeferredCase) {
     );
     append(
         contract::events::Event::PermissionRequested(PermissionRequested {
+            always_reviewed: false,
             request_id: RequestId("r_9".into()),
             declared: DeclaredEffects {
                 effects: vec![contract::shapes::Effect::Executes],

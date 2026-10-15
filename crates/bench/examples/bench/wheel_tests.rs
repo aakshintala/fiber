@@ -158,6 +158,7 @@ fn tool_call_started_is_completed_with_no_effects() {
     assert_eq!(
         event,
         contract::events::Event::ToolCallStarted(contract::events::ToolCallStarted {
+            always_reviewed: false,
             declared: contract::shapes::DeclaredEffects {
                 effects: Vec::new(),
                 reversible: true,

@@ -19,6 +19,7 @@ fn records_a_delta_and_ignores_a_durable_event() {
         details: None,
     }));
     recorder.emit(&Event::ToolCallStarted(ToolCallStarted {
+        always_reviewed: false,
         declared: DeclaredEffects {
             effects: vec![],
             reversible: true,

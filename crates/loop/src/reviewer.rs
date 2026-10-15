@@ -763,6 +763,7 @@ fn resolved(
     reviewer: Option<ReviewerRef>,
 ) -> PermissionResolved {
     PermissionResolved {
+        call: None,
         request_id,
         decision,
         decided_by,

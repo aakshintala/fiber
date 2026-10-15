@@ -276,6 +276,7 @@ fn ready(prepared: Prepared, recorded: &PermissionRequested) -> Again {
         },
     };
     let request = PermissionRequested {
+        always_reviewed: false,
         request_id: recorded.request_id.clone(),
         declared: prepared.effects.declared.clone(),
         step,

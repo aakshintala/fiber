@@ -446,6 +446,11 @@ fn samples() -> Vec<(&'static str, Value)> {
             "changed_by": ["e"]}),
         ),
         (
+            "tool_call_started",
+            json!({"effects": ["executes"], "reversible": false,
+            "always_reviewed": true}),
+        ),
+        (
             "tool_call_delta",
             json!({"text": "t", "details": {"pct": 5}}),
         ),
@@ -507,6 +512,11 @@ fn samples() -> Vec<(&'static str, Value)> {
             "standing_rule": {"scope": "global", "prefix": "npm"}}),
         ),
         (
+            "permission_requested",
+            json!({"request_id": "r", "effects": ["executes"],
+            "reversible": false, "always_reviewed": true, "step": "review"}),
+        ),
+        (
             "permission_resolved",
             json!({"request_id": "r", "decision": "allow",
             "decided_by": "reviewer", "reason": "r", "feedback": "f",
@@ -528,6 +538,14 @@ fn samples() -> Vec<(&'static str, Value)> {
             "permission_resolved",
             json!({"request_id": "r", "decision": "deny", "decided_by": "hook",
             "reason": "Extension e refused this call: no. It did not run."}),
+        ),
+        (
+            "permission_resolved",
+            json!({"decision": "deny", "decided_by": "reviewer",
+            "reason": "no", "reviewer": {"model": "p/m", "stage": 1},
+            "effects": ["executes"], "reversible": false, "paths": ["/a"],
+            "always_reviewed": true, "arguments": {"path": "b.txt"},
+            "changed_by": ["ext"]}),
         ),
         (
             "interaction_requested",
@@ -957,6 +975,103 @@ fn a_permission_request_carries_only_the_keys_its_step_defines() {
             "{payload}"
         );
     }
+}
+
+#[test]
+fn a_permission_resolved_with_no_effect_keys_reads_as_no_reviewed_call() {
+    let payload = json!({"decision": "deny", "decided_by": "reviewer",
+        "reason": "r", "reviewer": {"model": "p/m", "stage": 2}});
+    let Some(Event::PermissionResolved(resolved)) =
+        read("permission_resolved", payload.clone()).unwrap()
+    else {
+        panic!("not a permission_resolved");
+    };
+    assert_eq!(resolved.call, None);
+    let written = Value::Object(
+        Event::PermissionResolved(resolved).payload().unwrap(),
+    );
+    assert_eq!(written, payload);
+    for key in ["effects", "reversible", "paths", "always_reviewed",
+        "arguments", "changed_by"]
+    {
+        assert_eq!(written.get(key), None, "{key}");
+    }
+}
+
+#[test]
+fn a_reviewed_call_writes_always_reviewed_only_when_true() {
+    let base = || json!({"decision": "deny", "decided_by": "reviewer",
+        "reason": "r", "reviewer": {"model": "p/m", "stage": 1},
+        "effects": ["executes"], "reversible": true});
+    let Some(Event::PermissionResolved(resolved)) =
+        read("permission_resolved", base()).unwrap()
+    else {
+        panic!("not a permission_resolved");
+    };
+    let written = Value::Object(
+        Event::PermissionResolved(resolved).payload().unwrap(),
+    );
+    assert_eq!(written.get("always_reviewed"), None);
+    let mut with_true = base();
+    with_true["always_reviewed"] = json!(true);
+    let Some(Event::PermissionResolved(resolved)) =
+        read("permission_resolved", with_true.clone()).unwrap()
+    else {
+        panic!("not a permission_resolved");
+    };
+    assert!(resolved.call.as_ref().unwrap().always_reviewed);
+    let written = Value::Object(
+        Event::PermissionResolved(resolved).payload().unwrap(),
+    );
+    assert_eq!(written, with_true);
+    let mut with_false = base();
+    with_false["always_reviewed"] = json!(false);
+    let Some(Event::PermissionResolved(resolved)) =
+        read("permission_resolved", with_false).unwrap()
+    else {
+        panic!("not a permission_resolved");
+    };
+    let written = Value::Object(
+        Event::PermissionResolved(resolved).payload().unwrap(),
+    );
+    assert_eq!(written, base());
+}
+
+#[test]
+fn a_resolution_with_one_effect_key_reads_as_no_reviewed_call() {
+    for payload in [
+        json!({"decision": "deny", "decided_by": "reviewer",
+            "reason": "r", "reviewer": {"model": "p/m", "stage": 1},
+            "effects": []}),
+        json!({"decision": "deny", "decided_by": "reviewer",
+            "reason": "r", "reviewer": {"model": "p/m", "stage": 1},
+            "reversible": false}),
+    ] {
+        let Some(Event::PermissionResolved(resolved)) =
+            read("permission_resolved", payload.clone()).unwrap()
+        else {
+            panic!("not a permission_resolved: {payload}");
+        };
+        assert_eq!(resolved.call, None, "{payload}");
+    }
+}
+
+#[test]
+fn a_resolution_with_empty_effects_and_reversible_reads_as_a_reviewed_call() {
+    let payload = json!({"decision": "deny", "decided_by": "reviewer",
+        "reason": "r", "reviewer": {"model": "p/m", "stage": 1},
+        "effects": [], "reversible": true});
+    let Some(Event::PermissionResolved(resolved)) =
+        read("permission_resolved", payload.clone()).unwrap()
+    else {
+        panic!("not a permission_resolved");
+    };
+    let call = resolved.call.as_ref().unwrap();
+    assert!(call.declared.effects.is_empty());
+    let written = Value::Object(
+        Event::PermissionResolved(resolved).payload().unwrap(),
+    );
+    assert_eq!(written, payload);
 }
 
 #[test]
