@@ -723,6 +723,19 @@ fn a_wide_query_cuts_on_a_grapheme_boundary() {
 }
 
 #[test]
+fn a_fused_pair_measures_as_drawn_not_as_a_string() {
+    // `لا` measures 1 cell as a whole string but draws 2: the cursor
+    // counts each drawn grapheme, so it sits on the block past both.
+    let area = Rect::new(0, 0, 41, 10);
+    let bar = find_bar("لا", "1 of 1");
+    let (buf, _) = bar_into(area, &bar);
+    let y = bar_row(&buf);
+    let cursor = super::bar_cursor(&bar, area).expect("the cursor");
+    assert_eq!((cursor.x, cursor.y), (5, y));
+    assert_eq!(buf[(cursor.x, cursor.y)].symbol(), "█");
+}
+
+#[test]
 fn an_empty_query_reads_type_to_search() {
     let mut app = replied(80, 24, "the quick brown fox");
     let now = fakes::clock::FakeClock::new().now();

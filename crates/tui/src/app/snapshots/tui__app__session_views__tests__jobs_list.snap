@@ -1,8 +1,9 @@
 ---
 source: crates/tui/src/app/session_views_tests.rs
+assertion_line: 1270
 expression: shown
 ---
-Running jobs                                                                   ✕
+ Running jobs  delegates · jobs                                      Esc returns
   task j_1
   task j_2
 

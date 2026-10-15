@@ -1,9 +1,9 @@
 ---
 source: crates/tui/src/model_picker_view_tests.rs
-assertion_line: 449
+assertion_line: 473
 expression: text
 ---
-Models                                                                         ✕
+ Models  /model                                                      Esc returns
 ▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
 
   › m1█
