@@ -193,10 +193,16 @@ fn row_one_follows_the_card_order_and_is_cut_at_the_edge() {
         100,
     ));
     let (screen, _) = draw(&app, 100, 30);
-    let row: &str = screen.lines().next_back().unwrap_or_default();
-    assert!(row.starts_with("2 files +13 \u{2212}5 · "), "{row}");
+    // The draw lays the row one column in, past the grip.
+    let row: &str = screen.lines().next_back().unwrap_or_default().trim_start();
+    assert!(
+        row.starts_with(
+            "\u{00b1} 2 files +13 \u{2212}5  \u{2502}  /w  \u{2502}  a-model-with-a-very-long-name"
+        ),
+        "{row}"
+    );
     assert!(!row.contains("and-going"), "{row}");
-    assert!(crate::format::width(row) <= 100, "{row}");
+    assert!(crate::format::width(row.trim_start()) <= 99, "{row}");
 }
 
 #[test]
@@ -205,12 +211,17 @@ fn row_one_shows_the_context_share_and_a_zero_window_shows_none() {
     app.on_line(context_status(50, 100));
     app.on_line(preamble("test/model", 100));
     let (screen, _) = draw(&app, 100, 30);
-    assert!(screen.contains("50% context"), "{screen}");
+    // Short context form: dim `ctx`, the 8-cell bar and the size.
+    assert!(
+        screen.contains("ctx \u{2586}\u{2586}\u{2586}\u{2586}\u{2586}\u{2586}\u{2586}\u{2586} 50"),
+        "{screen}"
+    );
+    assert!(!screen.contains("% context"), "{screen}");
     let mut app = attached(100, 30);
     app.on_line(context_status(50, 0));
     app.on_line(preamble("test/model", 0));
     let (screen, _) = draw(&app, 100, 30);
-    assert!(!screen.contains("% context"), "{screen}");
+    assert!(!screen.contains("ctx"), "{screen}");
 }
 
 #[test]
@@ -225,7 +236,7 @@ fn the_context_status_segment_has_a_context_target() {
         .expect("the context segment is clickable");
     let row = screen.lines().nth(usize::from(context.rect.y));
     assert!(
-        row.is_some_and(|row| row.contains("50% context")),
+        row.is_some_and(|row| row.contains("ctx \u{2586}")),
         "{screen}"
     );
 }
@@ -240,8 +251,9 @@ fn row_two_opens_with_delegates_and_jobs() {
     app.on_line(delegated("j_2"));
     app.on_line(delegated("j_3"));
     let (screen, _) = draw(&app, 100, 30);
+    // Each count opens its list, marked and never cut.
     assert!(
-        screen.contains("2 delegates running · 1 job running"),
+        screen.contains("\u{25c6} 2 delegates running  \u{2502}  \u{2699} 1 job running"),
         "{screen}"
     );
 }
@@ -365,7 +377,7 @@ fn n_waiting_leads_row_one_while_the_rail_is_not_drawn() {
     let (screen, targets) = draw(&app, 110, 30);
     // The grip leaves column 0 blank, so the row starts with a space.
     let row: &str = screen.lines().next_back().unwrap_or_default().trim_start();
-    assert!(row.starts_with("1 waiting · "), "{row}");
+    assert!(row.starts_with("1 waiting  \u{2502}  "), "{row}");
     assert!(
         targets
             .iter()
@@ -397,12 +409,13 @@ fn the_waiting_target_covers_only_its_segment() {
         .map(|target| target.rect)
         .collect();
     assert_eq!(waiting.len(), 1);
-    // The rail's grip takes column 0, so the row starts in column 1.
+    // The rail's grip takes column 0 and the draw one more, so the row
+    // starts in column 1.
     let column = app.chrome().layout().expect("a layout").column;
     assert_eq!(
         waiting[0],
         Rect::new(
-            column.x,
+            column.x.saturating_add(1),
             29,
             u16::try_from("1 waiting".len()).unwrap_or(u16::MAX),
             1
@@ -749,8 +762,8 @@ fn waiting_spots(app: &App, width: u16) -> Vec<(u16, u16)> {
 
 #[test]
 fn a_status_segment_at_the_row_width_has_no_target() {
-    // Row one is "1 file +10 −2 · 1 waiting": the waiting segment starts
-    // after the file totals and the separator.
+    // Row one opens with the waiting segment past the file totals:
+    // "± 1 file +10 −2  │  1 waiting  │  …".
     let mut app = attached_with(110, 30, &["changed_files", "session"]);
     app.on_line(changed_call(serde_json::json!([
         {"path": "src/a.rs", "added": 10, "removed": 2},
@@ -761,13 +774,13 @@ fn a_status_segment_at_the_row_width_has_no_target() {
     let whole = waiting_spots(&app, 110);
     assert_eq!(whole.len(), 1, "{whole:?}");
     let (start, wide) = whole[0];
-    assert_eq!(wide, u16::try_from("1 waiting".len()).unwrap_or(u16::MAX));
+    assert_eq!((start, wide), (20, 9), "{whole:?}");
     // A segment starting exactly at the row's width has no target.
-    assert!(waiting_spots(&app, start).is_empty(), "start {start}");
+    assert!(waiting_spots(&app, start + 1).is_empty(), "start {start}");
     // A segment starting beyond the row's width has no target either.
-    assert!(waiting_spots(&app, start - 1).is_empty(), "start {start}");
-    // A segment ending exactly at the row's width keeps its full width.
-    assert_eq!(waiting_spots(&app, start + wide), vec![(start, wide)]);
+    assert!(waiting_spots(&app, start).is_empty(), "start {start}");
+    // A row ending exactly past the segment keeps its full width.
+    assert_eq!(waiting_spots(&app, start + wide + 1), vec![(start, wide)]);
 }
 
 #[test]
@@ -905,23 +918,405 @@ fn row_two_spots_cover_each_running_segment() {
     app.on_line(started("j_3", "lint"));
     app.on_line(delegated("j_2"));
     app.on_line(delegated("j_3"));
-    // "2 delegates running · 1 job running": each segment opens its list.
+    // "◆ 2 delegates running  │  ⚙ 1 job running": each segment opens
+    // its list, glyphs included.
     let rows = crate::view::status_rows::status(&app, 100);
     let row = rows.last().unwrap_or_else(|| panic!("row two"));
-    assert_eq!(row.line.to_string(), "2 delegates running · 1 job running");
+    assert_eq!(
+        row.line.to_string(),
+        "\u{25c6} 2 delegates running  \u{2502}  \u{2699} 1 job running"
+    );
     assert_eq!(
         row.spots,
-        [(0, 19, Spot::DelegateList), (22, 13, Spot::JobList),]
+        [(0, 21, Spot::DelegateList), (26, 15, Spot::JobList),]
     );
-    // A cut row keeps only the visible part: the job segment cut to
-    // nothing leaves no target, the delegate segment keeps its width.
+    // A row exactly filling the width keeps every cell: no `…`.
+    let rows = crate::view::status_rows::status(&app, 42);
+    let row = rows.last().unwrap_or_else(|| panic!("row two"));
+    assert_eq!(
+        row.line.to_string(),
+        "\u{25c6} 2 delegates running  \u{2502}  \u{2699} 1 job running"
+    );
+    // A cut row keeps only the visible part: the whole row is wider
+    // than 22, so the job segment leaves no target while the delegate
+    // segment keeps its width.
     let rows = crate::view::status_rows::status(&app, 22);
     let row = rows.last().unwrap_or_else(|| panic!("row two"));
-    assert_eq!(row.spots, [(0, 19, Spot::DelegateList)]);
+    assert_eq!(row.line.to_string(), "\u{25c6} 2 delegates runnin\u{2026}");
+    assert_eq!(row.spots, [(0, 21, Spot::DelegateList)]);
     let rows = crate::view::status_rows::status(&app, 30);
     let row = rows.last().unwrap_or_else(|| panic!("row two"));
     assert_eq!(
         row.spots,
-        [(0, 19, Spot::DelegateList), (22, 8, Spot::JobList),]
+        [(0, 21, Spot::DelegateList), (26, 3, Spot::JobList),]
     );
+}
+
+/// A `preamble_built` with a trigger and thinking level.
+fn full_preamble() -> Line {
+    session_line(
+        SESSION,
+        "preamble_built",
+        serde_json::json!({
+            "reason": "start", "model": "test/model",
+            "context_window": 1000000, "trigger_at": 400000,
+            "thinking": "high", "tool_choice": "auto",
+            "cache_lifetime": "5m", "system_prompt": "", "tools": [],
+        }),
+    )
+}
+
+/// A `session_status` with git, context and spend for the status line.
+fn full_status() -> Line {
+    session_line(
+        SESSION,
+        "session_status",
+        serde_json::json!({
+            "name": "one", "workspace": "/Users/you/work/fiber",
+            "project": "-w", "state": "idle", "since": 0,
+            "spend": {"tokens": {"input": 900, "cache_read": 100,
+                "cache_write": {"5m": 50}, "output": 200},
+                "cost": 4.12, "subscription_cost": 0.0},
+            "model": "test/model", "delegates": 0, "jobs": 0,
+            "clients": 0, "git": {"branch": "main"},
+            "context": {"tokens": 268000, "window": 1000000},
+        }),
+    )
+}
+
+/// An app with every row-1 segment: git, thinking, context, spend,
+/// cache, a down server and changed files.
+fn full_app() -> App {
+    let mut app = attached(160, 30);
+    app.on_line(full_preamble());
+    app.on_line(full_status());
+    app.on_line(session_line(
+        SESSION,
+        "mcp_server_failed",
+        serde_json::json!({"server": "github", "reason": "died",
+            "will_restart": false,
+            "error": {"code": "mcp_server_unavailable", "message": "died"}}),
+    ));
+    app.on_line(changed_call(serde_json::json!([
+        {"path": "src/a.rs", "added": 10, "removed": 2},
+        {"path": "src/b.rs", "added": 3, "removed": 3},
+    ])));
+    app
+}
+
+/// The style of the span holding `content` in `row`.
+fn style_of(row: &crate::view::status_rows::StatusRow, content: &str) -> ratatui::style::Style {
+    row.line
+        .spans
+        .iter()
+        .find(|span| span.content == content)
+        .unwrap_or_else(|| panic!("a {content:?} span in {}", row.line))
+        .style
+}
+
+/// Row 1 at 160: every segment in card order, each in its roles, with
+/// the spots on the clickable parts (`docs/tui.md`, "The narrow
+/// layout").
+#[test]
+fn status_row_one_lists_every_segment_in_its_roles() {
+    use crate::markdown::{Role, style};
+    let app = full_app();
+    let rows = crate::view::status_rows::status(&app, 160);
+    assert_eq!(rows.len(), 1);
+    let row = &rows[0];
+    assert_eq!(
+        row.line.to_string(),
+        "/Users/you/work/fiber  \u{2502}  git main  \u{2502}  test/model high  \u{2502}  auto  \u{2502}  ctx \u{2586}\u{2586}\u{2586}\u{2586}\u{2586}\u{2586}\u{2586}\u{2586} 268.0k  \u{2502}  $4.12  \u{2502}  cache 9%  \u{2502}  tools \u{2717} github down  \u{2502}  \u{00b1} 2 files +13 \u{2212}5"
+    );
+    // The joiner is dim.
+    assert_eq!(style_of(row, "  \u{2502}  "), style(Role::Muted));
+    // "git" dim, the branch in secondary, spotted alone.
+    assert_eq!(style_of(row, "git"), style(Role::Muted));
+    assert_eq!(style_of(row, "main"), style(Role::Secondary));
+    // The model in accent, thinking and auto in attention.
+    assert_eq!(style_of(row, "test/model"), style(Role::Accent));
+    assert_eq!(style_of(row, "high"), style(Role::Attention));
+    assert_eq!(style_of(row, "auto"), style(Role::Attention));
+    // "ctx" dim, five cells of fill in info over three in rule: 268k
+    // of the 400k handoff over eight cells.
+    assert_eq!(style_of(row, "ctx"), style(Role::Muted));
+    assert_eq!(
+        row.line
+            .spans
+            .iter()
+            .filter(|span| span.content == "\u{2586}" && span.style == style(Role::Info))
+            .count(),
+        5
+    );
+    assert_eq!(
+        row.line
+            .spans
+            .iter()
+            .filter(|span| span.content == "\u{2586}" && span.style == style(Role::Rule))
+            .count(),
+        3
+    );
+    assert_eq!(style_of(row, "268.0k"), ratatui::style::Style::default());
+    // Dim `cache` with its share, dim `tools` with its error value,
+    // dim `±` with the added and removed totals.
+    assert_eq!(style_of(row, "cache"), style(Role::Muted));
+    assert_eq!(style_of(row, "tools"), style(Role::Muted));
+    assert_eq!(style_of(row, "\u{2717} github down"), style(Role::Error));
+    assert_eq!(style_of(row, "\u{00b1}"), style(Role::Muted));
+    assert_eq!(style_of(row, "+13"), style(Role::Added));
+    assert_eq!(style_of(row, "\u{2212}5"), style(Role::Removed));
+    assert_eq!(
+        row.spots,
+        [
+            (30, 4, Spot::Branch),
+            (68, 19, Spot::Context),
+            (92, 5, Spot::Usage),
+            (108, 2, Spot::Usage),
+            (115, 19, Spot::Tools),
+            (139, 16, Spot::ChangedFiles),
+        ]
+    );
+}
+
+/// Row 1 cut at 100: the text ends in `…` keeping its styles, past the
+/// terminal's right edge, and only the visible targets keep.
+#[test]
+fn status_row_one_cut_at_the_edge() {
+    let app = full_app();
+    let rows = crate::view::status_rows::status(&app, 100);
+    assert_eq!(rows.len(), 1);
+    let row = &rows[0];
+    assert_eq!(crate::format::width(&row.line.to_string()), 99);
+    assert!(row.line.to_string().ends_with('\u{2026}'));
+    assert!(row.line.to_string().starts_with("/Users/you/work/fiber"));
+    for (start, wide, _) in &row.spots {
+        assert!(usize::from(*start) < 99, "{}", row.line);
+        assert!(start.saturating_add(*wide) <= 99, "{}", row.line);
+    }
+    // The branch survives the cut; the changed files do not.
+    assert!(row.spots.iter().any(|(_, _, spot)| *spot == Spot::Branch));
+    assert!(
+        row.spots
+            .iter()
+            .all(|(_, _, spot)| *spot != Spot::ChangedFiles)
+    );
+}
+
+/// Row 1 at the 30 and 22 floors: cut mid-span with the cut styled as
+/// the span it cuts, targets clamped.
+#[test]
+fn status_row_one_at_the_floors() {
+    let app = full_app();
+    for width in [30u16, 22] {
+        let text = usize::from(width) - 1;
+        let rows = crate::view::status_rows::status(&app, width);
+        assert_eq!(rows.len(), 1);
+        let row = &rows[0];
+        assert_eq!(crate::format::width(&row.line.to_string()), text);
+        for (start, wide, _) in &row.spots {
+            assert!(usize::from(*start) < text);
+            assert!(usize::from(start.saturating_add(*wide)) <= text);
+        }
+    }
+}
+
+/// The 8-cell bar fills toward the handoff point with no marker: at
+/// zero, below, at and past the trigger, and against the window with
+/// none.
+#[test]
+fn the_narrow_bar_fills_without_a_marker() {
+    use crate::markdown::{Role, style};
+    let mut app = attached(100, 30);
+    app.on_line(full_preamble());
+    // Five of eight at 268k of the 400k handoff, and no attention
+    // marker anywhere in the row: every `│` is the dim joiner.
+    app.on_line(full_status());
+    let row = &crate::view::status_rows::status(&app, 100)[0];
+    assert_eq!(
+        row.line
+            .spans
+            .iter()
+            .filter(|span| span.content == "\u{2586}" && span.style == style(Role::Info))
+            .count(),
+        5
+    );
+    assert!(
+        row.line
+            .spans
+            .iter()
+            .all(|span| { span.content != "\u{2502}" || span.style == style(Role::Muted) }),
+        "{}",
+        row.line
+    );
+}
+
+/// Without a status the row count matches the base's: the model alone
+/// draws one row, and nothing draws no row.
+#[test]
+fn without_a_status_the_row_count_matches_the_base() {
+    // The preamble's model with no status: one row, no new segments.
+    let mut app = attached(100, 30);
+    app.on_line(preamble("test/model", 100));
+    let rows = crate::view::status_rows::status(&app, 100);
+    assert_eq!(rows.len(), 1);
+    assert_eq!(rows[0].line.to_string(), "test/model");
+    assert!(rows[0].spots.is_empty());
+    // Nothing held: no row.
+    let app = attached(100, 30);
+    assert!(crate::view::status_rows::status(&app, 100).is_empty());
+}
+
+/// A status with nothing else takes one row: the working directory
+/// always names one segment.
+#[test]
+fn a_status_with_nothing_else_takes_one_row() {
+    let mut app = attached(100, 30);
+    app.on_line(idle(SESSION, "one"));
+    let rows = crate::view::status_rows::status(&app, 100);
+    assert_eq!(rows.len(), 1);
+    assert!(rows[0].line.to_string().starts_with("/w"));
+}
+
+/// The status rows draw on the `panel` tint one column in; with no
+/// colour no tint is laid.
+#[test]
+fn status_rows_draw_on_the_panel_tint() {
+    use crate::theme::Role;
+    let mut app = attached(100, 30);
+    app.on_line(idle(SESSION, "one"));
+    let area = ratatui::layout::Rect::new(0, 0, 100, 30);
+    let mut buf = ratatui::buffer::Buffer::empty(area);
+    crate::view::render(&app, area, &mut buf, None);
+    let bottom = buf.area.bottom().saturating_sub(1);
+    // The row's cells sit on the panel tint from column 1.
+    assert_eq!(buf[(1, bottom)].bg, Role::Panel.color());
+    assert_eq!(buf[(98, bottom)].bg, Role::Panel.color());
+    // With no colour the tint goes and the text stays.
+    crate::surface::init(&|name: &str| (name == "NO_COLOR").then(|| "1".to_owned()));
+    let mut bare = ratatui::buffer::Buffer::empty(area);
+    crate::view::render(&app, area, &mut bare, None);
+    crate::surface::init(&|_: &str| None);
+    assert_ne!(bare[(1, bottom)].bg, Role::Panel.color());
+    let row: String = (1..99).map(|x| bare[(x, bottom)].symbol()).collect();
+    assert!(row.contains("$1.50"), "{row}");
+}
+
+/// A `session_status` with `input` tokens in: the cache share's edge is
+/// one token inside.
+fn input_status(input: u64) -> Line {
+    session_line(
+        SESSION,
+        "session_status",
+        serde_json::json!({
+            "name": "one", "workspace": "/w", "project": "-w", "state": "idle",
+            "since": 0,
+            "spend": {"tokens": {"input": input, "cache_read": 0,
+                "cache_write": {}, "output": 0},
+                "cost": 0.0, "subscription_cost": 0.0},
+            "model": "test/model", "delegates": 0, "jobs": 0, "clients": 0,
+        }),
+    )
+}
+
+/// Folds a down MCP `server` into `app`.
+fn fail_server(app: &mut App, server: &str) {
+    app.on_line(session_line(
+        SESSION,
+        "mcp_server_failed",
+        serde_json::json!({"server": server, "reason": "died",
+            "will_restart": false,
+            "error": {"code": "mcp_server_unavailable", "message": "died"}}),
+    ));
+}
+
+/// The cache segment needs a token inside: with none the row holds no
+/// share, matching the card; with one it does.
+#[test]
+fn the_cache_segment_needs_tokens_inside() {
+    let mut app = attached(100, 30);
+    app.on_line(preamble("test/model", 100));
+    app.on_line(input_status(0));
+    let rows = crate::view::status_rows::status(&app, 100);
+    assert_eq!(rows.len(), 1);
+    assert!(
+        !rows[0].line.to_string().contains("cache"),
+        "{}",
+        rows[0].line
+    );
+    let mut app = attached(100, 30);
+    app.on_line(preamble("test/model", 100));
+    app.on_line(input_status(1));
+    let rows = crate::view::status_rows::status(&app, 100);
+    assert_eq!(rows.len(), 1);
+    assert!(
+        rows[0].line.to_string().contains("cache 0%"),
+        "{}",
+        rows[0].line
+    );
+}
+
+/// The tools segment joins one down server after another with a space:
+/// the first opens the value, the second follows the joiner.
+#[test]
+fn the_tools_segment_joins_down_servers_with_a_space() {
+    let mut app = attached(100, 30);
+    app.on_line(idle(SESSION, "one"));
+    fail_server(&mut app, "relay");
+    let rows = crate::view::status_rows::status(&app, 100);
+    assert_eq!(rows.len(), 1);
+    assert!(
+        rows[0]
+            .line
+            .to_string()
+            .contains("tools \u{2717} relay down"),
+        "{}",
+        rows[0].line
+    );
+    fail_server(&mut app, "gateway");
+    let rows = crate::view::status_rows::status(&app, 100);
+    assert_eq!(rows.len(), 1);
+    // Sorted: gateway before relay, one space between the values.
+    assert!(
+        rows[0]
+            .line
+            .to_string()
+            .contains("tools \u{2717} gateway down \u{2717} relay down"),
+        "{}",
+        rows[0].line
+    );
+}
+
+/// A row of ten cells for the cut_row boundary tests: no targets of its
+/// own, so only the fed spots show.
+fn cut_spots(spots: Vec<(u16, u16, Spot)>, width: usize) -> Vec<(u16, u16, Spot)> {
+    use ratatui::text::Span;
+
+    let joined = super::Joined {
+        spans: vec![Span::raw("0123456789")],
+        spots,
+    };
+    super::cut_row(joined, width).spots
+}
+
+/// cut_row drops a zero-width spot: it covers no column.
+#[test]
+fn cut_row_drops_a_zero_width_spot() {
+    assert!(cut_spots(vec![(5, 0, Spot::Usage)], 100).is_empty());
+}
+
+/// cut_row keeps a spot ending one column past the text's last column:
+/// it still covers that column.
+#[test]
+fn cut_row_keeps_a_spot_covering_the_last_column() {
+    assert_eq!(
+        cut_spots(vec![(98, 5, Spot::Usage)], 100),
+        vec![(98, 1, Spot::Usage)]
+    );
+}
+
+/// cut_row drops a spot starting at the text edge: past it covers
+/// nothing.
+#[test]
+fn cut_row_drops_a_spot_starting_at_the_edge() {
+    assert!(cut_spots(vec![(99, 5, Spot::Usage)], 100).is_empty());
 }

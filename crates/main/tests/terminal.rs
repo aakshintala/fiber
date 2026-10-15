@@ -864,13 +864,13 @@ impl Screen {
     }
 
     /// The panel's text columns, one right-trimmed row per screen row:
-    /// the card text at the panel's second column, three narrower than
+    /// the card text two columns past the slab, four narrower than
     /// the panel (`panel.rs`).
     fn panel_rows(&self, panel_x: usize, text: usize) -> Vec<String> {
         self.cells
             .iter()
             .map(|row| {
-                row[panel_x + 2..panel_x + 2 + text]
+                row[panel_x + 3..panel_x + 3 + text]
                     .iter()
                     .collect::<String>()
                     .trim_end()
@@ -884,7 +884,7 @@ impl Screen {
     /// width, a row too long ends in `…`, and a row that fits is whole
     /// (`docs/tui.md`, "The panel").
     fn assert_session_cut(&self, cols: u16, panel: u16, workspace: &str) {
-        let (panel_x, text) = (cols as usize - panel as usize, panel as usize - 3);
+        let (panel_x, text) = (cols as usize - panel as usize, panel as usize - 4);
         let rows = self.panel_rows(panel_x, text);
         // The Session card is the panel's only card: its text rows sit
         // between its top and bottom half-block edges, with no second
@@ -910,14 +910,14 @@ impl Screen {
             .map(String::as_str)
             .collect();
         // The card's one-column right padding is the panel's last
-        // column (text starts at the second column and is three
+        // column (text starts two columns past the slab and is four
         // narrower than the panel): no text row may hold a glyph there.
         // Edge rows span the card, so only text rows count.
         for (at, cells) in self.cells.iter().enumerate() {
             if at <= top || at >= bottom {
                 continue;
             }
-            let text_range: String = cells[panel_x + 2..panel_x + 2 + text].iter().collect();
+            let text_range: String = cells[panel_x + 3..panel_x + 3 + text].iter().collect();
             let trimmed = text_range.trim_end();
             if trimmed.is_empty() || is_edge(trimmed, '▄') || is_edge(trimmed, '▀') {
                 continue;
@@ -929,24 +929,44 @@ impl Screen {
             );
         }
         // The speed value tracks elapsed time, so only its shape is
-        // pinned: at the floor its digits never reach the cut, so the
-        // row is one fixed string; at the ceiling the whole row is
-        // `output speed, last reply  N tokens/s`.
+        // pinned: at the floor the label is cut with `…` while the value
+        // stays whole, so the digits stay timing-dependent; at the
+        // ceiling the whole row fits, `speed, last reply  N tokens/s`.
         let speed_at = card
             .iter()
-            .position(|row| row.starts_with("output speed, last reply  "))
+            .position(|row| row.contains("tokens/s"))
             .unwrap_or_else(|| panic!("no speed row at {cols} columns: {card:?}"));
         let speed = if panel == 30 {
-            "output speed, last reply  …".to_owned()
-        } else {
-            let tail = &card[speed_at]["output speed, last reply  ".len()..];
-            let digits = tail.chars().take_while(|ch| ch.is_ascii_digit()).count();
+            let row = card[speed_at];
             assert!(
-                digits > 0 && tail[digits..] == *" tokens/s",
-                "the speed row is not whole at {cols} columns: {:?}",
-                card[speed_at]
+                row.starts_with("speed, last")
+                    && row.contains('\u{2026}')
+                    && row.ends_with(" tokens/s"),
+                "the floor speed row is not cut mid-label at {cols} columns: {row:?}"
             );
-            format!("output speed, last reply  {} tokens/s", &tail[..digits])
+            assert_eq!(
+                row.chars().count(),
+                text,
+                "the floor speed row is not card-wide at {cols} columns: {row:?}"
+            );
+            row.to_owned()
+        } else {
+            // The ceiling row fits whole: the label, one column of pad
+            // and the value.
+            let row = card[speed_at];
+            let label = "speed, last reply";
+            let value = row[label.len()..].trim_start();
+            let digits = value.chars().take_while(|ch| ch.is_ascii_digit()).count();
+            assert!(
+                row.starts_with(label) && digits > 0 && value[digits..] == *" tokens/s",
+                "the speed row is not whole at {cols} columns: {row:?}"
+            );
+            assert_eq!(
+                row.chars().count(),
+                text,
+                "the speed row is not card-wide at {cols} columns: {row:?}"
+            );
+            row.to_owned()
         };
         let mut expected = expected_card(workspace, text, panel);
         expected.insert(speed_at, speed);
@@ -959,38 +979,60 @@ impl Screen {
 }
 
 /// The Session card's exact rows at `text` columns, without the speed
-/// row: the scripted turn's fixed usage reads `tokens in / out  10 /
-/// 3` with 40% cache hits, the context sits at 0% with the handoff
-/// marker at 70.0k, the cost is still unknown, and one turn ran
-/// (`panel.rs`).
-fn expected_card(workspace: &str, text: usize, panel: u16) -> Vec<String> {
+/// row: the title names the working directory with `auto` right-aligned,
+/// the model reads `fake/m` with thinking `high` right-aligned, the
+/// context bar is 17 cells of `▆` with its marker and size, then the
+/// handoff rows; the scripted turn's fixed usage reads
+/// `tokens in / out  10 / 3` with 40% cache hits, the context sits at 0%
+/// with the handoff marker at 70.0k, the cost is still unknown, and one
+/// turn ran (`panel.rs`).
+fn expected_card(workspace: &str, text: usize, _panel: u16) -> Vec<String> {
+    // The title: the directory cut from the left with `auto`
+    // right-aligned.
+    let room = text - "auto".len() - 1;
+    let name = cut_left_path(workspace, room);
+    let pad = text - name.chars().count() - "auto".len();
     let mut rows = vec![
+        format!("{name}{}auto", " ".repeat(pad)),
         format!(
-            "directory  {}",
-            cut_left_path(workspace, text - "directory  ".len())
+            "{}{}high",
+            "fake/m",
+            " ".repeat(text - "fake/m".len() - "high".len())
         ),
-        fit_row("model  fake/m · thinking high", text),
     ];
-    // The new context rows: the 17-cell bar with its marker and size,
-    // then the handoff rows. The trigger reads 70.0k.
-    match panel {
-        30 => rows.extend([
-            "░░░░░░░░░░░░░░░░░│       13".to_owned(),
-            "handoff at 70… 0% of window".to_owned(),
-            fit_row("then a summary, fresh context", text),
-        ]),
-        60 => rows.extend([
-            format!("{}│{}13", "░".repeat(17), " ".repeat(37)),
-            format!("handoff at 70.0k{}0% of window", " ".repeat(29)),
-            "then a summary, fresh context".to_owned(),
-        ]),
-        _ => panic!("unexpected panel width {panel}"),
+    // The context rows: the 17-cell bar with its marker and size, then
+    // the handoff rows. The trigger reads 70.0k.
+    let bar_pad = text - 17 - 1 - "13".len();
+    rows.push(format!(
+        "{}│{}13",
+        "\u{2586}".repeat(17),
+        " ".repeat(bar_pad)
+    ));
+    let handoff = "handoff at 70.0k";
+    let share = "0% of window";
+    if handoff.len() + 1 + share.len() <= text {
+        rows.push(format!(
+            "{handoff}{}0% of window",
+            " ".repeat(text - handoff.len() - share.len())
+        ));
+    } else {
+        let room = text - share.len() - 1;
+        let kept: String = handoff.chars().take(room - 1).collect();
+        rows.push(format!("{kept}… {share}"));
     }
+    rows.push(fit_row("then a summary, fresh context", text));
+    // Every figure: its dim label with the value right-aligned.
+    let figure = |label: &str, value: &str| {
+        format!(
+            "{label}{}{value}",
+            " ".repeat(text - label.len() - value.len())
+        )
+    };
     rows.extend([
-        fit_row("tokens in / out  10 / 3", text),
-        fit_row("cache hits  40%", text),
-        fit_row("cost billed  unknown", text),
-        fit_row("turns  1", text),
+        figure("tokens in / out", "10 / 3"),
+        figure("cache hits", "40%"),
+        figure("cost", "unknown"),
+        figure("turns", "1"),
     ]);
     rows
 }

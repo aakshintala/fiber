@@ -1481,7 +1481,8 @@ fn delegate_spot() -> (Loop<TestBackend>, (u16, u16)) {
         .lines()
         .position(|text| text.contains("task one"))
         .unwrap_or_else(|| panic!("the delegate row"));
-    (lp, (panel.x + 2, u16::try_from(row).unwrap_or(u16::MAX)))
+    // The card text starts two columns past the slab.
+    (lp, (panel.x + 3, u16::try_from(row).unwrap_or(u16::MAX)))
 }
 
 /// A key batch never holds: opening a delegate swaps the shown screen,

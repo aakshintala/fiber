@@ -148,12 +148,12 @@ fn the_wheel_over_another_card_scrolls_the_panel_not_the_card() {
     let mut app = panel_app(&["delegates"]);
     fold_delegates(&mut app, 4);
     big_widget(&mut app);
-    // The card's eight rows with its edges, a blank row, then the
-    // widget's title row.
+    // The card's six shown rows with its edges and title, a blank row,
+    // then the widget's edge and title rows.
     let last = first_row(&app).saturating_add(7);
     wheel(&mut app, false, last);
     assert_eq!(app.panel_state().delegate_scroll(), 1);
-    wheel(&mut app, false, last.saturating_add(1));
+    wheel(&mut app, false, last.saturating_add(2));
     assert_eq!(app.panel_state().delegate_scroll(), 1);
     assert_eq!(app.panel_state().scroll(), 3);
 }
@@ -207,8 +207,10 @@ fn a_stored_offset_past_the_end_clamps_before_moving() {
     assert_eq!(app.panel_state().delegate_scroll(), 3);
     complete(&mut app, "j_5");
     complete(&mut app, "j_6");
+    // Finished delegates stay on the card: six held still clamp at
+    // three, so up moves to two.
     wheel(&mut app, true, row);
-    assert_eq!(app.panel_state().delegate_scroll(), 0);
+    assert_eq!(app.panel_state().delegate_scroll(), 2);
 }
 
 /// The default card list, with the Delegates card.

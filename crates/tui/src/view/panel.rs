@@ -19,6 +19,11 @@ use crate::surface;
 
 pub(crate) mod delegates;
 
+/// The permission mode every session runs in (`docs/permissions.md`,
+/// "One mode"): the literal, shared by the Session title row and the
+/// narrow status line's segment.
+pub(super) const PERMISSION_MODE: &str = "auto";
+
 /// One card the panel draws.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) enum Card {
@@ -147,8 +152,8 @@ pub(crate) fn rows_and_delegates(app: &App, width: u16) -> (Vec<Row>, Option<Ran
 }
 
 /// Draws every card's rows into the panel rect: each card on its surface
-/// tint from the column's second column, its text at `area.x + 2`,
-/// `area.width - 3` columns wide, the first card on `area.y + 1`. The
+/// tint from the column's second column, its text at `area.x + 3`,
+/// `area.width - 4` columns wide, the first card on `area.y + 1`. The
 /// blank row between cards shows the region's `panel` tint. Without
 /// colour each card is a thin box instead: no tint is laid, the edge
 /// rows already draw ┌─┐ and └─┘, and each text row takes │ sides on the
@@ -171,7 +176,9 @@ pub(crate) fn draw(app: &App, area: Rect, buf: &mut Buffer, targets: &mut Vec<Ta
     // Without colour the rows already carry the box: no tint is laid,
     // so every cell keeps the terminal's default colours.
     let boxed = surface::box_fit(area.width);
-    let x = area.x.saturating_add(2);
+    // The doc counts two columns of padding from the slab, so the text
+    // starts two columns past it (`docs/tui.md`, "The panel").
+    let x = area.x.saturating_add(3);
     let mut y = area.y.saturating_add(1);
     let mut drawn: usize = 0;
     for row in rows.iter().skip(skip) {
@@ -204,15 +211,56 @@ pub(crate) fn draw(app: &App, area: Rect, buf: &mut Buffer, targets: &mut Vec<Ta
         y = y.saturating_add(1);
         drawn = drawn.saturating_add(1);
     }
-    // A drawn delegates state row's spinner moves on the tick.
+    // A drawn delegates state row's spinner moves on the tick. The
+    // card's first two rows are its edge and title: the ask range counts
+    // from the first delegate row. An empty range asks nothing, so the
+    // range needs no guard.
+    // removed: the `to > first` guard; asking an empty range is a no-op
+    // because `ask` only fires on a contained state row.
     if let Some(span) = span {
         let from = skip.max(span.start);
         let to = skip.saturating_add(drawn).min(span.end);
-        // Empty or reversed ranges contain no delegate state row.
+        let first = span.start.saturating_add(2);
         delegates::ask(
             app,
-            from.saturating_sub(span.start)..to.saturating_sub(span.start),
+            from.max(first).saturating_sub(first)..to.saturating_sub(first),
         );
+    }
+}
+
+/// A card's title row at `text` columns: `name` bold on the left, the
+/// figures right-aligned (`docs/tui.md`, "The panel"). The name is cut
+/// from the left when the two cannot fit.
+fn title_row(name: &str, figures: Vec<Span<'static>>, text: usize) -> Row {
+    let right_w: usize = figures
+        .iter()
+        .map(|span| format::width(&span.content))
+        .sum();
+    let room = text.saturating_sub(right_w.saturating_add(1));
+    let shown = cut_left(name, room.max(1));
+    let used = format::width(&shown);
+    let pad = text.saturating_sub(used + right_w).max(1);
+    let mut spans = vec![Span::styled(
+        shown,
+        style(Role::Text).add_modifier(Modifier::BOLD),
+    )];
+    spans.push(Span::raw(" ".repeat(pad)));
+    spans.extend(figures);
+    Row {
+        line: Line::from(spans),
+        spot: None,
+        tint: None,
+        edge: false,
+    }
+}
+
+/// `n` running: "1 running", "0 running".
+fn running_figure(n: usize) -> String {
+    let count = u64::try_from(n).unwrap_or(u64::MAX);
+    if count == 1 {
+        "1 running".to_owned()
+    } else {
+        format!("{count} running")
     }
 }
 
@@ -231,7 +279,7 @@ fn fit_rows(rows: Vec<Row>, text: usize) -> Vec<Row> {
 }
 
 /// `spans` cut to `text` columns, ending in `…`.
-fn fit_spans(spans: Vec<Span<'static>>, text: usize) -> Vec<Span<'static>> {
+pub(super) fn fit_spans(spans: Vec<Span<'static>>, text: usize) -> Vec<Span<'static>> {
     let room = text.saturating_sub(1);
     let mut out = Vec::new();
     let mut used = 0;
@@ -249,27 +297,89 @@ fn fit_spans(spans: Vec<Span<'static>>, text: usize) -> Vec<Span<'static>> {
     out
 }
 
-/// One card's rows at `text` columns.
+/// One card's rows at `text` columns: its title row, then its content
+/// rows. A card with no content rows draws nothing: no edge, no title
+/// and no blank row (`docs/tui.md`, "The panel"). Title rows carry no
+/// target, except the Jobs title, whose `▸` toggles the list.
 fn card_rows(app: &App, card: &Card, text: usize) -> Vec<Row> {
     match card {
-        Card::Session => session_rows(app, text),
-        Card::ChangedFiles => changed_files_rows(app, text),
-        Card::Jobs => jobs_rows(app),
-        Card::Delegates => delegates::rows(app, text),
+        Card::Session => {
+            let content = session_rows(app, text);
+            if content.is_empty() {
+                return Vec::new();
+            }
+            let mut out = Vec::new();
+            // Without a status the content rows draw with no title, as
+            // the base drew no directory row.
+            if let Some(status) = app.panel_state().status() {
+                out.push(title_row(
+                    &status.workspace,
+                    vec![Span::styled(PERMISSION_MODE, style(Role::Attention))],
+                    text,
+                ));
+            }
+            out.extend(content);
+            out
+        }
+        Card::ChangedFiles => {
+            let content = changed_files_rows(app, text);
+            if content.is_empty() {
+                return Vec::new();
+            }
+            let count = app.panel_state().changes().len();
+            let mut out = vec![title_row(
+                "Changed files",
+                vec![Span::styled(count.to_string(), style(Role::Muted))],
+                text,
+            )];
+            out.extend(content);
+            out
+        }
+        Card::Jobs => {
+            let running = app.panel_state().running_jobs();
+            if running.is_empty() {
+                return Vec::new();
+            }
+            let figure = running_figure(running.len());
+            let mut title = title_row(
+                "Jobs",
+                vec![
+                    Span::styled(figure, style(Role::Attention)),
+                    Span::styled(" \u{25b8}", style(Role::Muted)),
+                ],
+                text,
+            );
+            title.spot = Some(Spot::Jobs);
+            let mut out = vec![title];
+            out.extend(jobs_rows(app));
+            out
+        }
+        Card::Delegates => {
+            let content = delegates::rows_with_done(app, text);
+            if content.is_empty() {
+                return Vec::new();
+            }
+            let running = app.panel_state().running_delegates().len();
+            let figure = if running > 0 {
+                Span::styled(running_figure(running), style(Role::Attention))
+            } else {
+                Span::styled(running_figure(running), style(Role::Muted))
+            };
+            let mut out = vec![title_row("Delegates", vec![figure], text)];
+            out.extend(content);
+            out
+        }
         Card::Widget(at) => widget_rows(app, *at),
     }
 }
 /// The Session card's rows at `text` columns, each left out when its
-/// value is absent (`docs/tui.md`, "The panel").
+/// value is absent (`docs/tui.md`, "The panel"). Labels read dim with
+/// their figures right-aligned in the text colour; the bar is 17 cells
+/// of `▆` toward the handoff point.
 fn session_rows(app: &App, text: usize) -> Vec<Row> {
     let panel = app.panel_state();
     let mut out = Vec::new();
-    if let Some(status) = panel.status() {
-        out.push(plain(format!(
-            "directory  {}",
-            cut_left(&status.workspace, text.saturating_sub("directory  ".len()))
-        )));
-    }
+    // The title row carries the working directory.
     if let Some(row) = branch_row(app) {
         out.push(row);
     }
@@ -277,11 +387,23 @@ fn session_rows(app: &App, text: usize) -> Vec<Row> {
         .model()
         .or_else(|| panel.status().map(|status| status.model.as_str()));
     if let Some(model) = model {
-        let mut row = format!("model  {model}");
-        if let Some(thinking) = panel.thinking() {
-            row.push_str(&format!(" · thinking {thinking}"));
-        }
-        out.push(targeted(row, Spot::Model));
+        // The model in accent, the thinking level right-aligned in
+        // attention. No `∴`: no thinking-state source is held.
+        // debt: show the `∴` while the model thinks; upgrade trigger: a thinking flag on the panel fold.
+        let line = match panel.thinking() {
+            Some(thinking) => sides(
+                vec![Span::styled(model.to_owned(), style(Role::Accent))],
+                Span::styled(thinking.to_owned(), style(Role::Attention)),
+                text,
+            ),
+            None => Line::from(vec![Span::styled(model.to_owned(), style(Role::Accent))]),
+        };
+        out.push(Row {
+            line,
+            spot: Some(Spot::Model),
+            tint: None,
+            edge: false,
+        });
     }
     let window = panel.window().filter(|window| *window > 0);
     let context = window.and_then(|window| {
@@ -296,7 +418,7 @@ fn session_rows(app: &App, text: usize) -> Vec<Row> {
         // the context size right-aligned (`docs/tui.md`, "The panel").
         out.push(Row {
             line: sides(
-                bar_spans(context.tokens, window, panel.trigger_at()),
+                bar_spans(context.tokens, window, panel.trigger_at(), 17),
                 Span::raw(short_tokens(context.tokens)),
                 text,
             ),
@@ -346,13 +468,11 @@ fn session_rows(app: &App, text: usize) -> Vec<Row> {
             .input
             .saturating_add(tokens.cache_read)
             .saturating_add(written);
-        out.push(targeted(
-            format!(
-                "tokens in / out  {} / {}",
-                short_tokens(inside),
-                short_tokens(tokens.output)
-            ),
-            Spot::Usage,
+        out.push(figure_row(
+            "tokens in / out",
+            format!("{} / {}", short_tokens(inside), short_tokens(tokens.output)),
+            Some(Spot::Usage),
+            text,
         ));
         if inside > 0 {
             let hits = tokens
@@ -360,61 +480,86 @@ fn session_rows(app: &App, text: usize) -> Vec<Row> {
                 .saturating_mul(100)
                 .checked_div(inside)
                 .unwrap_or(0);
-            out.push(targeted(format!("cache hits  {hits}%"), Spot::Usage));
+            out.push(figure_row(
+                "cache hits",
+                format!("{hits}%"),
+                Some(Spot::Usage),
+                text,
+            ));
         }
         // With a budget the cost row always shows spend against it; a
         // cost still null counts as zero until it settles
         // (`docs/loop.md`, "Spending budget").
         match (status.spend.cost, panel.budget()) {
             (Some(cost), Some(budget)) => {
-                out.push(targeted(
-                    format!(
-                        "cost billed  {} of {}",
-                        format::money(cost),
-                        format::money(budget)
-                    ),
-                    Spot::Usage,
+                out.push(figure_row(
+                    "cost",
+                    format!("{} of {}", format::money(cost), format::money(budget)),
+                    Some(Spot::Usage),
+                    text,
                 ));
             }
             (None, Some(budget)) => {
-                out.push(targeted(
-                    format!("cost billed  unknown of {}", format::money(budget)),
-                    Spot::Usage,
+                out.push(figure_row(
+                    "cost",
+                    format!("unknown of {}", format::money(budget)),
+                    Some(Spot::Usage),
+                    text,
                 ));
             }
             (Some(cost), None) if cost > 0.0 => {
-                out.push(targeted(
-                    format!("cost billed  {}", format::money(cost)),
-                    Spot::Usage,
+                out.push(figure_row(
+                    "cost",
+                    format::money(cost),
+                    Some(Spot::Usage),
+                    text,
                 ));
             }
-            (None, None) => out.push(targeted("cost billed  unknown".to_owned(), Spot::Usage)),
+            (None, None) => {
+                out.push(figure_row(
+                    "cost",
+                    "unknown".to_owned(),
+                    Some(Spot::Usage),
+                    text,
+                ));
+            }
             (Some(_), None) => {}
         }
         if status.spend.subscription_cost > 0.0 {
-            out.push(targeted(
-                format!(
-                    "cost on subscription  {}",
-                    format::money(status.spend.subscription_cost)
-                ),
-                Spot::Usage,
+            out.push(figure_row(
+                "cost on subscription",
+                format::money(status.spend.subscription_cost),
+                Some(Spot::Usage),
+                text,
             ));
         }
     }
     if let Some(speed) = panel.speed() {
-        out.push(plain(format!("output speed, last reply  {speed} tokens/s")));
+        out.push(figure_row(
+            "speed, last reply",
+            format!("{speed} tokens/s"),
+            None,
+            text,
+        ));
     }
     if panel.turns() > 0 {
-        out.push(plain(format!("turns  {}", panel.turns())));
+        out.push(figure_row("turns", panel.turns().to_string(), None, text));
     }
     if !panel.down().is_empty() {
-        let servers: Vec<String> = panel
+        // One `✗ <server> down` per down server, joined by a space and
+        // cut from the left when too long for the card.
+        let down: Vec<String> = panel
             .down()
             .iter()
-            .map(|server| format!("{server} down"))
+            .map(|server| format!("\u{2717} {server} down"))
             .collect();
+        let value = cut_left(&down.join(" "), text.saturating_sub("tools".len() + 1));
         out.push(Row {
-            line: Line::raw(format!("tools  {}", servers.join(", "))),
+            line: sides(
+                vec![Span::styled("tools", style(Role::Muted))],
+                Span::styled(value, style(Role::Error)),
+                text,
+            ),
             spot: Some(Spot::Tools),
             tint: None,
             edge: false,
@@ -439,33 +584,58 @@ fn session_rows(app: &App, text: usize) -> Vec<Row> {
     out
 }
 
-/// How many of the bar's 17 cells fill toward the handoff point:
-/// `tokens` against the trigger, or the window with none, clamped to
-/// the bar.
-fn bar_fill(tokens: u64, window: u64, trigger: Option<u64>) -> usize {
-    let goal = trigger.unwrap_or(window);
-    let filled = tokens
-        .saturating_mul(17)
-        .checked_div(goal)
-        .unwrap_or(0)
-        .min(17);
-    usize::try_from(filled).unwrap_or(17)
+/// A figure row: its plain label dim, the figure right-aligned in the
+/// text colour, opening `spot` when clicked (`docs/tui.md`, "The
+/// panel"). No target when `spot` is none.
+fn figure_row(label: &str, value: String, spot: Option<Spot>, text: usize) -> Row {
+    Row {
+        line: sides(
+            vec![Span::styled(label.to_owned(), style(Role::Muted))],
+            Span::styled(value, style(Role::Text)),
+            text,
+        ),
+        spot,
+        tint: None,
+        edge: false,
+    }
 }
 
-/// The context bar's cells: 17 `▆`, filled toward the handoff point,
-/// then the handoff marker when one exists (`docs/tui.md`, "The
-/// panel").
-fn bar_spans(tokens: u64, window: u64, trigger: Option<u64>) -> Vec<Span<'static>> {
-    let fill = bar_fill(tokens, window, trigger);
-    let mut spans = Vec::with_capacity(18);
-    for _ in 0..fill {
-        spans.push(Span::styled("▆", style(Role::Info)));
+/// How many of the bar's `cells` fill toward the handoff point:
+/// `tokens` against the trigger, or the window with none. A zero goal
+/// never divides: empty, not a panic. At or past the goal every cell
+/// fills.
+pub(super) fn bar_fill(tokens: u64, window: u64, trigger: Option<u64>, cells: usize) -> usize {
+    let goal = trigger.unwrap_or(window);
+    if goal == 0 {
+        return 0;
     }
-    for _ in fill..17 {
-        spans.push(Span::styled("░", style(Role::Rule)));
+    if tokens >= goal {
+        return cells;
+    }
+    usize::try_from(tokens.saturating_mul(u64::try_from(cells).unwrap_or(u64::MAX)) / goal)
+        .unwrap_or(cells)
+        .min(cells)
+}
+
+/// The context bar's cells: `cells` `▆`, filled toward the handoff
+/// point in `info` over the rest in `rule`, then the handoff marker
+/// when one exists (`docs/tui.md`, "The panel").
+pub(super) fn bar_spans(
+    tokens: u64,
+    window: u64,
+    trigger: Option<u64>,
+    cells: usize,
+) -> Vec<Span<'static>> {
+    let fill = bar_fill(tokens, window, trigger, cells);
+    let mut spans = Vec::with_capacity(cells.saturating_add(1));
+    for _ in 0..fill {
+        spans.push(Span::styled("\u{2586}", style(Role::Info)));
+    }
+    for _ in fill..cells {
+        spans.push(Span::styled("\u{2586}", style(Role::Rule)));
     }
     if trigger.is_some() {
-        spans.push(Span::styled("│", style(Role::Attention)));
+        spans.push(Span::styled("\u{2502}", style(Role::Attention)));
     }
     spans
 }
@@ -491,44 +661,35 @@ fn sides(left: Vec<Span<'static>>, right: Span<'static>, text: usize) -> Line<'s
     Line::from(out)
 }
 
-/// The Session card's branch row: the last query's answer, else the
-/// status's git. A click runs `git status` (`docs/tui.md`, "Git").
+/// The Session card's branch row: "git" dim and the branch in
+/// secondary. The branch is the last query's answer, else the status's
+/// git. A click runs `git status` (`docs/tui.md`, "Git").
 fn branch_row(app: &App) -> Option<Row> {
-    let panel = app.panel_state();
-    let branch = match panel.branch() {
-        Some(Branch::Named(name)) => name.clone(),
-        Some(Branch::Detached) => "detached".to_owned(),
-        Some(Branch::Absent) => return None,
-        None => {
-            let git = panel.status().and_then(|status| status.git.as_ref())?;
-            git.branch.as_deref().unwrap_or("detached").to_owned()
-        }
-    };
+    let branch = branch_text(app)?;
     Some(Row {
-        line: Line::raw(format!("branch  {branch}")),
+        line: Line::from(vec![
+            Span::styled("git", style(Role::Muted)),
+            Span::raw("  "),
+            Span::styled(branch, style(Role::Secondary)),
+        ]),
         spot: Some(Spot::Branch),
         tint: None,
         edge: false,
     })
 }
 
-/// A plain row with no target.
-fn plain(text: String) -> Row {
-    Row {
-        line: Line::raw(text),
-        spot: None,
-        tint: None,
-        edge: false,
-    }
-}
-
-/// A row that opens `spot` when clicked.
-fn targeted(text: String, spot: Spot) -> Row {
-    Row {
-        line: Line::raw(text),
-        spot: Some(spot),
-        tint: None,
-        edge: false,
+/// The branch the Session card and the narrow status line show: the
+/// last query's answer, else the status's git.
+pub(super) fn branch_text(app: &App) -> Option<String> {
+    let panel = app.panel_state();
+    match panel.branch() {
+        Some(Branch::Named(name)) => Some(name.clone()),
+        Some(Branch::Detached) => Some("detached".to_owned()),
+        Some(Branch::Absent) => None,
+        None => {
+            let git = panel.status().and_then(|status| status.git.as_ref())?;
+            Some(git.branch.as_deref().unwrap_or("detached").to_owned())
+        }
     }
 }
 
@@ -552,7 +713,7 @@ fn cut_left(text: &str, max: usize) -> String {
 }
 
 /// A token count without its trailing `token` word.
-fn short_tokens(n: u64) -> String {
+pub(super) fn short_tokens(n: u64) -> String {
     let text = format::tokens(n);
     text.strip_suffix(" tokens")
         .or_else(|| text.strip_suffix(" token"))
@@ -586,8 +747,10 @@ fn widget_rows(app: &App, at: usize) -> Vec<Row> {
 
 /// The Changed files card's rows at `text` columns: the five paths with
 /// the most lines changed, ties by path ascending, with the counts at the
-/// row's right edge, then the totals over every path. Per-file counts come
-/// from `tool_call_completed`'s `changes` (`docs/tui.md`, "The panel").
+/// row's right edge, then one last row: dim "… N more" on the left when
+/// files exceed five, with the totals over every path right-aligned, or
+/// the totals alone with five files or fewer. Per-file counts come from
+/// `tool_call_completed`'s `changes` (`docs/tui.md`, "The panel").
 fn changed_files_rows(app: &App, text: usize) -> Vec<Row> {
     let changes = app.panel_state().changes();
     if changes.is_empty() {
@@ -622,41 +785,48 @@ fn changed_files_rows(app: &App, text: usize) -> Vec<Row> {
             )
         },
     );
-    out.push(targeted(
-        format!(
-            "{} changed  +{added} \u{2212}{removed}",
-            format::count(files, "file", "files")
-        ),
-        Spot::ChangedFiles,
+    let mut spans = Vec::new();
+    // The last row the mock shows: dim "… N more" on the left when
+    // files exceed five, with the totals right-aligned, or the totals
+    // alone. The count is the title's figure.
+    if files > 5 {
+        spans.push(Span::styled(
+            format!("\u{2026} {} more", files.saturating_sub(5)),
+            style(Role::Muted),
+        ));
+    }
+    let left_w: usize = spans.iter().map(|span| format::width(&span.content)).sum();
+    let counts = format!("+{added} \u{2212}{removed}");
+    let pad = " ".repeat(text.saturating_sub(left_w + format::width(&counts)).max(1));
+    spans.push(Span::raw(pad));
+    spans.push(Span::styled(format!("+{added}"), style(Role::Added)));
+    spans.push(Span::raw(" ".to_owned()));
+    spans.push(Span::styled(
+        format!("\u{2212}{removed}"),
+        style(Role::Removed),
     ));
+    out.push(Row {
+        line: Line::from(spans),
+        spot: Some(Spot::ChangedFiles),
+        tint: None,
+        edge: false,
+    });
     out
 }
 
-/// The Jobs card's rows at `text` columns: one line saying how many run,
-/// shown only while a job runs, then one row per job while open. A
-/// delegate is a job with a `delegate_started`, and its own card shows it
-/// (`docs/tui.md`, "The panel"). Each listed job row carries its job's
-/// serial, so a click opens that job.
+/// The Jobs card's open list rows: one row per running job. The title
+/// row carries the count, so a closed card draws the title alone.
 fn jobs_rows(app: &App) -> Vec<Row> {
     let running = app.panel_state().running_jobs();
     if running.is_empty() {
         return Vec::new();
     }
-    let mut out = vec![Row {
-        line: Line::raw(format!(
-            "{} running",
-            format::count(
-                u64::try_from(running.len()).unwrap_or(u64::MAX),
-                "job",
-                "jobs"
-            )
-        )),
-        spot: Some(Spot::Jobs),
-        tint: None,
-        edge: false,
-    }];
-    if app.panel_state().jobs_open() {
-        out.extend(running.into_iter().map(|(id, description)| {
+    if !app.panel_state().jobs_open() {
+        return Vec::new();
+    }
+    running
+        .into_iter()
+        .map(|(id, description)| {
             let spot = app.serial_of_job(id).map(Spot::Job);
             Row {
                 line: Line::raw(format!("  {description}")),
@@ -664,13 +834,12 @@ fn jobs_rows(app: &App) -> Vec<Row> {
                 tint: None,
                 edge: false,
             }
-        }));
-    }
-    out
+        })
+        .collect()
 }
 
-/// The card text's width: the rect less the edge and one margin column
-/// each side, two narrower where a box takes the sides
+/// The card text's width: the rect less the slab offset and one margin
+/// column each side, two narrower where a box takes the sides
 /// (`docs/tui.md`, "Look").
 fn card_text_width(width: u16) -> usize {
     if surface::box_fit(width) {
@@ -680,10 +849,11 @@ fn card_text_width(width: u16) -> usize {
     }
 }
 
-/// The card text's width: the rect less the edge and one margin column
-/// each side.
+/// The card text's width: the panel less its slab offset and the two
+/// columns of padding on the left and one on the right (`docs/tui.md`,
+/// "The panel").
 fn text_width(width: u16) -> usize {
-    usize::from(width).saturating_sub(3)
+    usize::from(width).saturating_sub(4)
 }
 
 #[cfg(test)]

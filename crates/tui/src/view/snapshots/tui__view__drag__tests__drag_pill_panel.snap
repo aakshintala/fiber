@@ -4,10 +4,10 @@ expression: "crate::view::text(&buf)"
 ---
   w +                  $0.00
 ▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄                                                                                                                          ▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
-▌ 1 ✓ READY               0s                                                                                                                            directory  /w
-▌ one                                                                                                                                                   model  test/model
-▌                                                                                                                                                       tokens in / out  1 / 2
-▌ $0.00                                                                                                                                                 cache hits  0%
+▌ 1 ✓ READY               0s                                                                                                                             /w                                        auto
+▌ one                                                                                                                                                    test/model
+▌                                                                                                                                                        tokens in / out                          1 / 2
+▌ $0.00                                                                                                                                                  cache hits                                  0%
 ▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀                                                                                                                          ▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀
 ▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
 ▌ 2 ✓ READY               0s

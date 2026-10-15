@@ -436,6 +436,122 @@ fn jobs_count_started_without_completed() {
     );
 }
 
+/// A `delegate_started` for `job`.
+fn delegated_line(job: &str) -> Line {
+    session_line(
+        SESSION,
+        "delegate_started",
+        serde_json::json!({"job_id": job,
+            "delegate_session_id": "s_cccccccccccccccc",
+            "harness": "fiber", "model": "test/model", "workspace": "/w"}),
+    )
+}
+
+/// A `job_completed` for `job` with `status`.
+fn completed_line(job: &str, status: &str) -> Line {
+    session_line(
+        SESSION,
+        "job_completed",
+        serde_json::json!({"job_id": job, "status": status}),
+    )
+}
+
+/// A completed delegate stays on its card as done, while a plain job
+/// leaves the fold (`docs/tui.md`, "The panel").
+#[test]
+fn a_completed_delegate_stays_on_the_card_as_done() {
+    let mut app = attached();
+    app.on_line(started_line("j_1", "review the diff"));
+    app.on_line(delegated_line("j_1"));
+    app.on_line(started_line("j_2", "build"));
+    app.on_line(completed_line("j_2", "completed"));
+    assert_eq!(app.panel_state().jobs().len(), 1);
+    app.on_line(completed_line("j_1", "completed"));
+    assert!(app.panel_state().running_delegates().is_empty());
+    assert!(app.panel_state().running_jobs().is_empty());
+    let done = app.panel_state().finished_delegates();
+    assert_eq!(done.len(), 1);
+    assert_eq!(done[0].1, "review the diff");
+    assert_eq!(done[0].2, contract::events::Outcome::Completed);
+    // The delegate's job entry stays, holding its description.
+    assert_eq!(app.panel_state().jobs().len(), 1);
+}
+
+/// A resume is a new run of the same job: it runs again, once, last in
+/// start order (`docs/delegates.md`, "Identity and resume").
+#[test]
+fn a_resumed_job_runs_again() {
+    let mut app = attached();
+    app.on_line(started_line("j_1", "review the diff"));
+    app.on_line(delegated_line("j_1"));
+    app.on_line(completed_line("j_1", "completed"));
+    assert_eq!(app.panel_state().finished_delegates().len(), 1);
+    app.on_line(started_line("j_1", "review the diff"));
+    let running = app.panel_state().running_delegates();
+    assert_eq!(running.len(), 1);
+    assert_eq!(running[0].1, "review the diff");
+    assert!(app.panel_state().finished_delegates().is_empty());
+    assert_eq!(app.panel_state().jobs().len(), 1);
+}
+
+/// Failed and cancelled delegates keep how they ended.
+#[test]
+fn failed_and_cancelled_delegates_keep_their_outcome() {
+    let mut app = attached();
+    app.on_line(started_line("j_1", "first"));
+    app.on_line(delegated_line("j_1"));
+    app.on_line(started_line("j_2", "second"));
+    app.on_line(delegated_line("j_2"));
+    app.on_line(completed_line("j_1", "failed"));
+    app.on_line(completed_line("j_2", "cancelled"));
+    assert!(app.panel_state().running_delegates().is_empty());
+    let done = app.panel_state().finished_delegates();
+    assert_eq!(done.len(), 2);
+    // Start order, not completion order.
+    assert_eq!(done[0].1, "first");
+    assert_eq!(done[0].2, contract::events::Outcome::Failed);
+    assert_eq!(done[1].1, "second");
+    assert_eq!(done[1].2, contract::events::Outcome::Cancelled);
+}
+
+/// Folds a running delegate `job` of `description`.
+fn running_delegate(app: &mut App, job: &str, description: &str) {
+    app.on_line(started_line(job, description));
+    app.on_line(session_line(
+        SESSION,
+        "delegate_started",
+        serde_json::json!({"job_id": job,
+            "delegate_session_id": format!("s_{job:0>16}"),
+            "harness": "fiber", "model": "test/model", "workspace": "/w"}),
+    ));
+}
+
+/// The Delegates card's offset clamps against the held delegates,
+/// running and finished, at both edges (`docs/tui.md`, "The panel").
+#[test]
+fn delegate_scroll_clamps_over_running_and_finished() {
+    let mut app = attached();
+    running_delegate(&mut app, "j_1", "one");
+    running_delegate(&mut app, "j_2", "two");
+    running_delegate(&mut app, "j_3", "three");
+    running_delegate(&mut app, "j_4", "four");
+    running_delegate(&mut app, "j_5", "five");
+    app.on_line(completed_line("j_4", "completed"));
+    app.on_line(completed_line("j_5", "completed"));
+    assert_eq!(app.panel_state().running_delegates().len(), 3);
+    assert_eq!(app.panel_state().finished_delegates().len(), 2);
+    // Five held, three shown: down clamps at two.
+    for _ in 0..9 {
+        app.panel_state.scroll_delegates(false);
+    }
+    assert_eq!(app.panel_state.delegate_scroll(), 2);
+    // Up saturates at the top.
+    for _ in 0..9 {
+        app.panel_state.scroll_delegates(true);
+    }
+    assert_eq!(app.panel_state.delegate_scroll(), 0);
+}
+
 #[test]
 fn a_delegate_is_not_a_job() {
     let mut app = attached();
@@ -995,7 +1111,7 @@ fn a_blank_first_line_leaves_the_branch_row_out() {
     assert!(
         crate::view::panel::rows(&app, 40)
             .iter()
-            .any(|row| row.line.to_string() == "model  test/model")
+            .any(|row| row.line.to_string() == "test/model")
     );
     assert_eq!(app.panel_state().branch(), Some(&Branch::Absent));
 }
@@ -1070,8 +1186,8 @@ fn the_answer_adds_no_conversation_item() {
 fn before_any_answer_the_branch_comes_from_the_status() {
     use crate::app::panel::Spot;
     for (git, branch) in [
-        (json!({"branch": "feat"}), Some("branch  feat")),
-        (json!({"branch": Value::Null}), Some("branch  detached")),
+        (json!({"branch": "feat"}), Some("git  feat")),
+        (json!({"branch": Value::Null}), Some("git  detached")),
         (json!({}), None),
     ] {
         let mut app = home();
@@ -1253,7 +1369,7 @@ fn wheel_up_after_growth_moves_on_the_first_wheel() {
     // The stored 24 draws clamped to 4.
     assert_eq!(
         panel_text(&app).lines().nth(1).unwrap_or_default(),
-        "  line 02"
+        "   line 02"
     );
     // Clamped 4 moves to 1, so the display moves, not stuck at 4
     // (24 - 3 = 21 would stick).
@@ -1261,14 +1377,14 @@ fn wheel_up_after_growth_moves_on_the_first_wheel() {
     assert_eq!(app.panel_state().scroll(), 1);
     assert_eq!(
         panel_text(&app).lines().nth(1).unwrap_or_default(),
-        "  plan \u{b7} tasks"
+        "   plan \u{b7} tasks"
     );
     // Down moves to the new end at 4.
     app.on_wheel(&mouse(MouseKind::WheelDown, 140, 20));
     assert_eq!(app.panel_state().scroll(), 4);
     assert_eq!(
         panel_text(&app).lines().nth(1).unwrap_or_default(),
-        "  line 02"
+        "   line 02"
     );
 }
 
@@ -1292,7 +1408,7 @@ fn wheel_up_after_shrinkage_moves_on_the_first_wheel() {
     // clamped to 14.
     assert_eq!(
         panel_text(&app).lines().nth(1).unwrap_or_default(),
-        "  line 12"
+        "   line 12"
     );
     // Clamped 14 - 3 = 11, so the display moves, not stuck at 14
     // (24 - 3 = 21 would stick).
@@ -1300,14 +1416,14 @@ fn wheel_up_after_shrinkage_moves_on_the_first_wheel() {
     assert_eq!(app.panel_state().scroll(), 11);
     assert_eq!(
         panel_text(&app).lines().nth(1).unwrap_or_default(),
-        "  line 09"
+        "   line 09"
     );
     // Down returns toward the shrunk end: 11 + 3 = 14.
     app.on_wheel(&mouse(MouseKind::WheelDown, 140, 20));
     assert_eq!(app.panel_state().scroll(), 14);
     assert_eq!(
         panel_text(&app).lines().nth(1).unwrap_or_default(),
-        "  line 12"
+        "   line 12"
     );
 }
 

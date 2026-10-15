@@ -160,7 +160,10 @@ fn a_delegate_is_subscribed_drawn_and_scrolled_in_the_loop() {
         vec![Input::Hub(delegate_status(delegates[0], "streaming"))],
     );
     let screen = shown(&lp);
-    assert!(screen.contains("⠋ WORKING"), "{screen}");
+    // The running row names the description with the spinning glyph;
+    // the state word rides the dim row below with the model.
+    assert!(screen.contains("⠋ task j_1"), "{screen}");
+    assert!(screen.contains("WORKING · test/model"), "{screen}");
     assert!(!screen.contains("delegate one"), "{screen}");
     let panel = lp
         .app

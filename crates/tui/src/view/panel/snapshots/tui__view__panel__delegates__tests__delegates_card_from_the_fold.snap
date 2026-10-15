@@ -4,12 +4,13 @@ expression: "crate::view::text(&buf)"
 ---
 
  ▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
-  ● fiber  anthropic/opus
-    review the parser
-  ● claude  sonnet
-    write the docs
+   Delegates            2 running
+   ● review the parser
+     fiber · anthropic/opus
+   ● write the docs
+     claude · sonnet
  ▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀
 
  ▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
-  1 job running
+   Jobs               1 running ▸
  ▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀
