@@ -712,7 +712,7 @@ fn cut_left(text: &str, max: usize) -> String {
 }
 
 /// A token count without its trailing `token` word.
-fn short_tokens(n: u64) -> String {
+pub(super) fn short_tokens(n: u64) -> String {
     let text = format::tokens(n);
     text.strip_suffix(" tokens")
         .or_else(|| text.strip_suffix(" token"))
