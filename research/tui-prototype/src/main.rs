@@ -8133,8 +8133,10 @@ mod tests {
     #[test]
     fn rail_shown_lists_every_project_for_cards() {
         let f = Fold::default();
-        let mut ui = Ui::default();
-        ui.rail = 1;
+        let ui = Ui {
+            rail: 1,
+            ..Ui::default()
+        };
         let sess = live_sessions(&f, &ui, 0);
         assert_eq!(rail_shown(&sess, &ui).len(), sess.len());
         // the list design hides other projects behind the scope line
