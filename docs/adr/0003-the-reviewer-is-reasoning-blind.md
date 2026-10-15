@@ -24,10 +24,13 @@ reviewer can also run read-only tool calls to check local state before ruling.
 The subsystem is about 12,100 lines and carries token budgeting and compaction
 because the prompt grows for the life of the session.
 
-**Claude Code** strips almost all of it. Its classifier sees only user
-messages and the agent's tool calls: no assistant prose, no tool output.
-Anthropic's stated reason is that it is "reasoning-blind by design" so that
-"the agent can't talk the classifier into making a bad call."
+**Claude Code** strips almost all of it. Its classifier sees user messages
+and the agent's tool calls, and no tool output. Anthropic's stated reason is
+that it is "reasoning-blind by design" so that "the agent can't talk the
+classifier into making a bad call." The one piece of assistant prose it keeps
+is a proposal directly before the user's reply: the proposal supplies what a
+bare "yes" refers to, and the reply supplies the consent, for that one action
+and target only (strings in its binary, version 2.1.300).
 
 **pi-automode**, a third-party extension, arrived at the same shape
 independently: deterministic tiers first, a one-token filter, then a
@@ -43,9 +46,11 @@ tool is added.
 
 ## Decision
 
-**The reviewer is shown the human's messages and the agent's tool calls, and
-nothing else.** Model prose, tool results, and project instruction files are
-excluded. It also receives the call under review, its declared effects, the
+**The reviewer is shown the human's messages, the agent's tool calls, and the
+agent's reply each human message answers, and nothing else.** Other model
+prose, tool results, and project instruction files are excluded. The reply
+only names what a short answer refers to; the consent is the person's, and
+covers only the one action and target the reply proposed. It also receives the call under review, its declared effects, the
 workspace root, and the person's own notes about their environment, which only
 the person can set.
 
@@ -55,10 +60,17 @@ loop decides from that vocabulary alone.
 
 ## Consequences
 
-The reviewer's prompt contains no text the agent authored and no text a
-repository produced, so there is nothing in it to argue with. Codex's label
+The reviewer's prompt contains no tool output and no text a repository
+produced. The agent-written text in it is its tool calls and the replies the
+person answered, and a reply counts only through the person's answer, so an
+unanswered argument has nowhere to go. Codex's label
 is enforced by asking the model to honour it; an absent string needs no
 honouring.
+
+Without the answered reply, a person's "yes" or "A" to a proposal named no
+action, and the reviewer blocked calls the person had just approved (#2244's
+eval, three calls). An agent can still word a proposal vaguely to win a vague
+yes; the reviewer judges the call against what the reply named.
 
 The prompt grows with the human's turns rather than with everything that
 happened, so no budgeting or compaction layer is needed around the reviewer.

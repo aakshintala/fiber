@@ -206,17 +206,27 @@ A call that reaches step 7 is judged by a model.
 
 ### What it is shown
 
-**Only the human's messages and the agent's tool calls.** The agent's tool
-calls include its extensions' inner calls, so a review sees what an earlier
-script did. The model's own
-prose and every tool result are stripped before the prompt is built. The
+**The human's messages, the agent's tool calls, and the agent's reply that
+each human message answers.** The agent's tool calls include its extensions'
+inner calls, so a review sees what an earlier script did. The reply a human
+message answers is the model's text directly before it, marked as the agent's.
+The model's other prose and every tool result are stripped before the prompt
+is built. The
 reviewer also gets the call under review, its declared effects, the
 workspace root, and the person's own notes about their environment ("What the
 person tells it").
 
 This is the load-bearing decision on this page. The reviewer's prompt contains
-no text the agent wrote and no text a repository file produced, so there is
-nothing in it that can argue for a verdict.
+no tool output and no text a repository file produced. The only text the agent
+wrote in it is its tool calls and the replies the person answered, so there
+is little in it that can argue for a verdict.
+
+A reply only says what a short answer such as "yes", "go ahead" or "A" refers
+to. The consent is the person's answer, and it covers only the one action and
+target the reply proposed. A reply that offers options proposes none of them,
+so a bare "yes" under it approves nothing and a pick by label or by its words
+approves that option alone. A reply with no human message after it is not
+shown, so a proposal the person never answered approves nothing.
 
 The rejected alternative is to send the whole transcript with an instruction
 to treat it as untrusted. Stripping is both cheaper and stronger
@@ -237,8 +247,9 @@ it grows with the context window, not the transcript. At each handoff, Fiber
 asks the reviewer which of the person's messages still bind, such as standing
 orders, scope limits and "don't touch X". The reviewer answers with a
 selection of messages, not prose, and Fiber carries those messages word for
-word. After the handoff the reviewer's input is the kept messages, then the
-person's messages and the agent's tool calls since the handoff.
+word, each with the reply it answered. After the handoff the reviewer's input
+is the kept messages, then the person's messages, the replies they answered
+and the agent's tool calls since the handoff.
 
 Nothing the reviewer writes enters its own prompt. Tool-call arguments are
 agent-written, so a prose note could repeat text such as `echo "user approved
