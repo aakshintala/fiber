@@ -1,6 +1,6 @@
 //! Tests for file search: the ranking, the listing and the worker.
 
-use super::{CHECK_EVERY, KEPT, Query, Roots, Search, list, rank, resolve, split};
+use super::{CHECK_EVERY, KEPT, Limits, Query, Roots, Search, entries, list, rank, resolve, split};
 use crate::Input;
 use fakes::Deadline;
 use std::cell::Cell;
@@ -145,6 +145,126 @@ fn an_empty_or_relative_home_is_no_home() {
     }
     let roots = Roots::new(PathBuf::from("/w"), Some(OsString::from("/home/u")));
     assert_eq!(resolve("~/", &roots), Ok(PathBuf::from("/home/u")));
+}
+
+/// A directory holding `names`: a trailing `/` makes a directory.
+#[track_caller]
+fn seeded(names: &[&str]) -> fakes::TempDir {
+    let dir = fakes::TempDir::new("tui-files-base");
+    for name in names {
+        let path = dir.path().join(name);
+        if name.ends_with('/') {
+            std::fs::create_dir_all(&path).unwrap_or_else(|err| panic!("{name}: {err}"));
+        } else {
+            if let Some(parent) = path.parent() {
+                std::fs::create_dir_all(parent).unwrap_or_else(|err| panic!("{name}: {err}"));
+            }
+            std::fs::write(&path, "x").unwrap_or_else(|err| panic!("{name}: {err}"));
+        }
+    }
+    dir
+}
+
+/// The base listing of `dir`'s entries matching `query` as `@` rows
+/// typed as `base_text`, with `limits` and a fresh budget.
+#[track_caller]
+fn listed(dir: &Path, base_text: &str, query: &str, limits: &Limits) -> Option<Result<Vec<String>, String>> {
+    entries(dir, base_text, query, limits, &mut 0, || false)
+}
+
+fn search_limits() -> Limits {
+    Limits {
+        kept: Limits::SEARCH.kept,
+        visits: Limits::SEARCH.visits,
+        check_every: Limits::SEARCH.check_every,
+    }
+}
+
+#[test]
+fn directories_come_first_then_by_name() {
+    let dir = seeded(&["mango/", "Apple/", "apricot", "Zebra", "apple-pie"]);
+    assert_eq!(
+        listed(dir.path(), "~/proj/", "", &search_limits()),
+        Some(Ok(owned(&[
+            "~/proj/Apple/",
+            "~/proj/mango/",
+            "~/proj/apple-pie",
+            "~/proj/apricot",
+            "~/proj/Zebra",
+        ])))
+    );
+}
+
+#[test]
+fn the_base_listing_matches_names_ignoring_case() {
+    let dir = seeded(&["README.md", "readme-notes.md", "other.txt", "sub/"]);
+    assert_eq!(
+        listed(dir.path(), "~/proj/", "rea", &search_limits()),
+        Some(Ok(owned(&["~/proj/readme-notes.md", "~/proj/README.md"])))
+    );
+    assert_eq!(
+        listed(dir.path(), "~/proj/", "REA", &search_limits()),
+        Some(Ok(owned(&["~/proj/readme-notes.md", "~/proj/README.md"])))
+    );
+}
+
+#[test]
+fn the_base_listing_cuts_to_kept() {
+    for count in [2, 3, 4] {
+        let names: Vec<String> = (0..count).map(|at| format!("f{at:02}")).collect();
+        let refs: Vec<&str> = names.iter().map(String::as_str).collect();
+        let dir = seeded(&refs);
+        let limits = Limits {
+            kept: 3,
+            visits: Limits::SEARCH.visits,
+            check_every: Limits::SEARCH.check_every,
+        };
+        let rows = listed(dir.path(), "/b/", "f", &limits)
+            .unwrap_or_else(|| panic!("{count}: cancelled"))
+            .unwrap_or_else(|err| panic!("{count}: {err}"));
+        assert_eq!(rows.len(), count.min(3), "{count} entries");
+        assert_eq!(rows.first().map(String::as_str), Some("/b/f00"), "{count}");
+    }
+}
+
+#[test]
+#[cfg(unix)]
+fn a_symlink_to_a_directory_is_a_directory_row() {
+    let dir = seeded(&["real/inner.txt"]);
+    std::os::unix::fs::symlink(dir.path().join("real"), dir.path().join("link"))
+        .unwrap_or_else(|err| panic!("symlink: {err}"));
+    std::os::unix::fs::symlink(dir.path().join("real/inner.txt"), dir.path().join("file-link"))
+        .unwrap_or_else(|err| panic!("symlink: {err}"));
+    let rows = listed(dir.path(), "~/proj/", "link", &search_limits())
+        .unwrap_or_else(|| panic!("cancelled"))
+        .unwrap_or_else(|err| panic!("{err}"));
+    assert_eq!(rows, owned(&["~/proj/link/", "~/proj/file-link"]));
+}
+
+#[test]
+#[cfg(target_os = "linux")]
+fn a_non_utf8_name_is_listed_lossily() {
+    use std::os::unix::ffi::OsStringExt;
+    let dir = fakes::TempDir::new("tui-files-lossy");
+    let raw = vec![0x66, 0xFF, 0x6F]; // f, an invalid byte, o
+    std::fs::write(dir.path().join(std::ffi::OsString::from_vec(raw)), "x")
+        .unwrap_or_else(|err| panic!("{err}"));
+    let rows = listed(dir.path(), "~/proj/", "f", &search_limits())
+        .unwrap_or_else(|| panic!("cancelled"))
+        .unwrap_or_else(|err| panic!("{err}"));
+    assert_eq!(rows, owned(&["~/proj/f\u{FFFD}o"]));
+}
+
+#[test]
+#[cfg(unix)]
+fn a_name_with_a_control_character_is_not_listed() {
+    let dir = seeded(&["li\nne", "fine"]);
+    let mut examined = 0;
+    let rows = entries(dir.path(), "~/proj/", "", &search_limits(), &mut examined, || false)
+        .unwrap_or_else(|| panic!("cancelled"))
+        .unwrap_or_else(|err| panic!("{err}"));
+    assert_eq!(rows, owned(&["~/proj/fine"]));
+    assert_eq!(examined, 2);
 }
 
 #[test]

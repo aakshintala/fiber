@@ -23,6 +23,7 @@ pub(crate) const VISITS: usize = 100_000;
 /// entries between looks at whether the search was abandoned.
 /// `check_every` must be at least 1: the search looks when
 /// `examined % check_every == 0`, which panics on 0.
+#[derive(Clone, Copy, Debug)]
 pub(crate) struct Limits {
     pub(crate) kept: usize,
     pub(crate) visits: usize,
@@ -101,6 +102,74 @@ pub(crate) fn resolve(base_text: &str, roots: &Roots) -> Result<PathBuf, String>
         return Ok(PathBuf::from(base_text));
     }
     Ok(roots.workspace.join(base_text))
+}
+
+/// Whether `path` with `file_type` is a directory: its type is one, or
+/// a symlink whose target is one, so a linked directory stays
+/// navigable. The walk never follows links, so a symlinked directory
+/// inside it is still a row ending in `/` but is not descended.
+fn is_dir(file_type: std::fs::FileType, path: &Path) -> bool {
+    file_type.is_dir()
+        || (file_type.is_symlink()
+            && std::fs::metadata(path).is_ok_and(|meta| meta.is_dir()))
+}
+
+/// Whether `name` can be a row: a row draws on one panel line and is
+/// inserted into the draft, where a control character such as a newline
+/// or escape would break the panel and the draft. The lossy U+FFFD form
+/// of a non-UTF-8 name is not a control character and is listed.
+fn listable(name: &str) -> bool {
+    !name.chars().any(char::is_control)
+}
+
+/// The base directory's own entries whose names hold `query`, ignoring
+/// case: directories first, then by lower-cased name, then by name. A
+/// directory row ends in `/`. Reads at most what the `examined` budget
+/// under `limits` still allows, in `read_dir` order before the sort, and
+/// keeps at most `limits.kept` rows; every entry read counts as
+/// examined, listed or not. `None` when `cancelled` says so, asked at
+/// the first examined entry and every `check_every`-th one after.
+fn entries(
+    base: &Path,
+    base_text: &str,
+    query: &str,
+    limits: &Limits,
+    examined: &mut usize,
+    cancelled: impl Fn() -> bool,
+) -> Option<Result<Vec<String>, String>> {
+    let room = limits.visits.saturating_sub(*examined);
+    let read = match std::fs::read_dir(base) {
+        Ok(read) => read,
+        Err(error) => return Some(Err(error.to_string())),
+    };
+    let query = query.to_lowercase();
+    let mut found: Vec<(bool, String, String)> = Vec::new();
+    for entry in read.take(room) {
+        if *examined % limits.check_every == 0 && cancelled() {
+            return None;
+        }
+        *examined += 1;
+        let Ok(entry) = entry else { continue };
+        let name = entry.file_name().to_string_lossy().into_owned();
+        if !listable(&name) {
+            continue;
+        }
+        if !name.to_lowercase().contains(&query) {
+            continue;
+        }
+        let is_dir = entry
+            .file_type()
+            .map(|kind| is_dir(kind, &entry.path()))
+            .unwrap_or(false);
+        let mut row = format!("{base_text}{name}");
+        if is_dir {
+            row.push('/');
+        }
+        found.push((!is_dir, name.to_lowercase(), row));
+    }
+    found.sort_unstable();
+    found.truncate(limits.kept);
+    Some(Ok(found.into_iter().map(|(_, _, row)| row).collect()))
 }
 
 /// How many paths a search checks between looks at whether it was
