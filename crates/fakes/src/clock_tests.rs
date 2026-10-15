@@ -2747,7 +2747,14 @@ fn advance_when_parked_moves_time_before_a_panicking_subscriber_wakes() {
 fn observed_snapshot(
     clock: &Arc<FakeClock>,
 ) -> Vec<(std::thread::ThreadId, Option<std::time::Instant>)> {
-    super::lock(&clock.state).observed.to_vec()
+    super::lock(&clock.state)
+        .observed
+        .iter()
+        .filter_map(|entry| match entry {
+            super::Observation::Park(thread, until) => Some((*thread, *until)),
+            super::Observation::Moved => None,
+        })
+        .collect()
 }
 
 #[test]

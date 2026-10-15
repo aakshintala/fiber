@@ -17,6 +17,12 @@ struct Parked {
     until: Option<Instant>,
 }
 
+#[derive(Clone, Copy)]
+enum Observation {
+    Park(ThreadId, Option<Instant>),
+    Moved,
+}
+
 struct State {
     offset: Duration,
     parked: Vec<Parked>,
@@ -28,12 +34,13 @@ struct State {
     /// Park ids are one per park; wrapping needs 2^64 parks, which a test
     /// process cannot reach, so a later park's id compares greater with `>`.
     next_id: u64,
+    /// `next_id` at the last move, including a zero-length move.
+    fresh_from: u64,
     wakers: Vec<Weak<dyn Wake>>,
-    /// Every park recorded while an [`FakeClock::advance_when_parked`] wait is
-    /// active, in arrival order. A watched park that leaves before the helper
-    /// diagnoses it still fails the wait. Cleared when the last active wait
-    /// exits, so it never outlives the wait it belongs to.
-    observed: Vec<(ThreadId, Option<Instant>)>,
+    /// Parks and moves during an [`FakeClock::advance_when_parked`] wait,
+    /// in the order they take the state lock. The first failing entry wins,
+    /// even if a park leaves before the helper looks. Cleared on wait exit.
+    observed: Vec<Observation>,
     /// Whether an [`FakeClock::advance_when_parked`] wait is recording into
     /// `observed` (0 or 1): a second wait while one is active fails rather
     /// than share the log.
@@ -83,6 +90,7 @@ impl FakeClock {
                 parked: Vec::new(),
                 latest: Vec::new(),
                 next_id: 0,
+                fresh_from: 0,
                 wakers: Vec::new(),
                 observed: Vec::new(),
                 watching: 0,
@@ -118,7 +126,8 @@ impl FakeClock {
     pub fn advance_marked(&self, d: Duration) -> Mark {
         let (mark, wakers) = {
             let mut state = lock(&self.state);
-            state.offset = state.offset.saturating_add(d);
+            let moved = state.offset.saturating_add(d);
+            self.move_time(&mut state, moved);
             let mark = Mark(state.latest.clone());
             let wakers = state
                 .wakers
@@ -133,30 +142,59 @@ impl FakeClock {
         mark
     }
 
-    /// The only way a test outside `fakes` moves the clock to a named park
-    /// (`docs/testing.md`, "Fakes"): waits for the expected park, then moves
-    /// `now()` and `wall()` forward by `advance`, returning each thread's
-    /// latest park at the instant `now()` moved (as
-    /// [`FakeClock::advance_marked`]). The park is a finite instant,
-    /// optionally on the named thread, or `None` for an unbounded park. A
-    /// finite park stops at its instant or short of it, never past it.
+    fn move_time(&self, state: &mut State, moved: Duration) {
+        state.offset = moved;
+        state.fresh_from = state.next_id;
+        if state.watching > 0 {
+            state.observed.push(Observation::Moved);
+        }
+        self.parked_cv.notify_all();
+    }
+
+    /// The only way a test outside `fakes` advances to a named park
+    /// (`docs/testing.md`, "Fakes"): waits for `expected`, then advances by
+    /// `advance`, returning each thread's latest park as in
+    /// [`FakeClock::advance_marked`]. `None` expects an unbounded park. A
+    /// finite advance stops at the named instant or short of it, never past it.
     ///
-    /// The wait fails at once, at the caller's line, naming every parked
-    /// thread and its instant, when a watched park arrives at a different
-    /// instant first, when a watched thread parks at a finite instant where
-    /// `None` was named, when the advance would pass the named instant, or
-    /// when `deadline` passes. A named finite instant at or before `now()`,
-    /// and an advance the clock cannot represent, fail the same way. A
-    /// mismatch never moves time. With no thread named, several parked
-    /// threads fail the wait: another thread at the right instant is not
-    /// proof of the watched operation, so the test names the thread. A second
-    /// wait while one is already active fails the same way: overlapping waits
-    /// would share one observation log, so the second is rejected and the
-    /// first keeps its observations.
+    /// Only fresh parks count: every move records the next park-id boundary
+    /// under the moving lock, including zero-length moves, moves through
+    /// [`FakeClock::advance_marked`], [`FakeClock::advance`] and [`Clock::sleep`],
+    /// and this helper's own move. Parks made before the last move are stale:
+    /// they neither match, mismatch nor count toward several threads. Before
+    /// the first move every park is fresh. With `thread` named, only that
+    /// thread's fresh parks are watched, and any at `expected` matches. Without
+    /// a name, all fresh parks are watched and must belong to one distinct
+    /// thread; nested parks on one thread count as one. Several fresh threads
+    /// fail with "several threads hold a park and no thread was named".
     ///
-    /// The lock that sees the park is the lock that moves time, and every
-    /// subscriber wakes after that lock is released, as in
-    /// [`FakeClock::advance_marked`].
+    /// Lock order decides the failure. During the wait, arrivals and moves by
+    /// other paths are logged in the order they take the clock's lock. Each
+    /// look takes the first failing entry: a watched arrival at another instant
+    /// is a mismatch (including a finite park where `None` was named), and a
+    /// move fails with "time moved during the wait by another driver". The
+    /// helper then moves no time of its own. After the log, held fresh watched
+    /// parks at other instants are mismatches. Only then are several threads,
+    /// a match, and the deadline considered. A later match never hides an
+    /// earlier failure, even if the mismatching park has left.
+    ///
+    /// Failures panic at the caller's line, naming every parked thread and its
+    /// instant. Validation rejects a finite instant at or before `now()`, an
+    /// overshoot, an unrepresentable advance, or a second active wait (the
+    /// first keeps its observations). Validation, mismatch and expiry move
+    /// no time; each wait closes on failure. The other-driver failure closes
+    /// the wait without moving time itself.
+    ///
+    /// `deadline` bounds waiting for a park, not acquiring the clock's mutex
+    /// or calling [`Wake::wake`]. A match already present when examined is
+    /// satisfied even after the deadline; without one, expiry fails at once.
+    /// The lock that sees the park moves time before releasing the lock and
+    /// waking subscribers. A waker panic propagates after time has moved and
+    /// is not one of the failures above.
+    ///
+    /// There is no atomic end-and-advance protocol: a fresh retirement park
+    /// made after the code under test reports its result is legitimate and
+    /// may advance. Tests assert on that result, not on no advance after end.
     #[track_caller]
     #[allow(clippy::panic, reason = "a test helper; a failure is the test's")]
     pub fn advance_when_parked(
@@ -197,14 +235,20 @@ impl FakeClock {
             // A watched mismatch fails before any match is considered: a
             // convenient later park never hides the first wrong one.
             if let Some(found) = watched_mismatch(&state, expected, thread) {
-                let kind = if expected.is_none() {
-                    "a watched thread parked at a finite instant where None was named"
-                } else if found.1.is_none() {
-                    "a watched park arrived without a deadline where a finite instant was named"
-                } else {
-                    "a watched park arrived at a different instant first"
+                let (kind, park) = match found {
+                    Observation::Moved => ("time moved during the wait by another driver", None),
+                    Observation::Park(id, until) => {
+                        let kind = if expected.is_none() {
+                            "a watched thread parked at a finite instant where None was named"
+                        } else if until.is_none() {
+                            "a watched park arrived without a deadline where a finite instant was named"
+                        } else {
+                            "a watched park arrived at a different instant first"
+                        };
+                        (kind, Some((id, until)))
+                    }
                 };
-                let report = report(&state, expected, thread, advance, kind, Some(found));
+                let report = report(&state, expected, thread, advance, kind, park);
                 leave_wait(&mut state);
                 drop(state);
                 panic!("{report}");
@@ -231,7 +275,7 @@ impl FakeClock {
                             .iter()
                             .filter_map(Weak::upgrade)
                             .collect::<Vec<_>>();
-                        state.offset = moved;
+                        self.move_time(&mut state, moved);
                         leave_wait(&mut state);
                         drop(state);
                         for waker in wakers {
@@ -554,7 +598,7 @@ impl Clock for FakeClock {
                 // An active advance_when_parked wait sees every arrival, even
                 // one that leaves before the helper diagnoses it.
                 if state.watching > 0 {
-                    state.observed.push((thread, until));
+                    state.observed.push(Observation::Park(thread, until));
                 }
                 self.parked_cv.notify_all();
                 Some(id)
@@ -681,15 +725,20 @@ fn checked_move(
     Ok(moved)
 }
 
-/// The first watched park at any other instant than `expected`: arrivals the
-/// helper saw first, then parks still held. `None` when every watched park is
-/// the named one. Watched means the named thread when one is named, and every
-/// thread otherwise.
+/// A park made at or after the last move's boundary is fresh.
+fn fresh(state: &State, parked: &Parked) -> bool {
+    parked.id >= state.fresh_from
+}
+
+/// First failure in lock order, then a held fresh watched mismatch. A move
+/// fails regardless of the selected thread; arrivals watch only that thread
+/// when named. Logged arrivals need no freshness filter: any later move is
+/// itself a failure, so neither it nor a later match hides an earlier mismatch.
 fn watched_mismatch(
     state: &State,
     expected: Option<Instant>,
     thread: Option<ThreadId>,
-) -> Option<(ThreadId, Option<Instant>)> {
+) -> Option<Observation> {
     let selected = |id: ThreadId| thread.is_none() || thread == Some(id);
     state
         .observed
@@ -699,40 +748,40 @@ fn watched_mismatch(
             state
                 .parked
                 .iter()
-                .map(|parked| (parked.thread, parked.until)),
+                .filter(|parked| fresh(state, parked))
+                .map(|parked| Observation::Park(parked.thread, parked.until)),
         )
-        .find(|(id, until)| selected(*id) && *until != expected)
+        .find(|entry| match entry {
+            Observation::Moved => true,
+            Observation::Park(id, until) => selected(*id) && *until != expected,
+        })
 }
 
-/// Whether [`FakeClock::advance_when_parked`] may advance now: the named
-/// thread holds the named park, or, with no thread named, the one parked
-/// thread holds it. Several parked threads with no thread named stay
-/// unmatched: another thread at the right instant is not proof of the watched
-/// operation.
+/// A selected fresh park matches; unnamed parks must belong to exactly one
+/// distinct thread, even when that thread holds nested parks.
 fn matched(state: &State, expected: Option<Instant>, thread: Option<ThreadId>) -> bool {
+    let mut held = state.parked.iter().filter(|parked| fresh(state, parked));
     match thread {
-        Some(selected) => state
-            .parked
-            .iter()
-            .any(|parked| parked.thread == selected && parked.until == expected),
-        None => {
-            let mut held = state.parked.iter();
-            match (held.next(), held.next()) {
-                (Some(only), None) => only.until == expected,
-                (Some(_), Some(_)) | (None, _) => false,
+        Some(selected) => held.any(|parked| parked.thread == selected && parked.until == expected),
+        None => match held.next() {
+            Some(first) => {
+                let same_thread = held.clone().all(|parked| parked.thread == first.thread);
+                let at_expected = std::iter::once(first)
+                    .chain(held)
+                    .any(|parked| parked.until == expected);
+                same_thread && at_expected
             }
-        }
+            None => false,
+        },
     }
 }
 
-/// Whether several distinct threads hold a park now: short-circuits on the
-/// Whether several threads hold a park now. Each thread holds at most one
-/// park (`wait_until` blocks the parker), so a second held park belongs to
-/// another thread. Every failure through it still names each parked thread
-/// with its instant in [`report`], which lists the whole park, not the count.
+/// Whether fresh parks belong to two or more distinct threads. Nested parks
+/// on one thread count as one; diagnostics still list every held park.
 fn several_threads_parked(state: &State) -> bool {
-    let mut held = state.parked.iter();
-    held.next().is_some() && held.next().is_some()
+    let mut held = state.parked.iter().filter(|parked| fresh(state, parked));
+    held.next()
+        .is_some_and(|first| held.any(|parked| parked.thread != first.thread))
 }
 
 /// Closes an [`FakeClock::advance_when_parked`] wait: the observation log
