@@ -130,36 +130,33 @@ fn col_at(grid: &Grid, y: u16, needle: &str) -> u16 {
 /// The slab's content row: the row holding the count with the search
 /// glyph, once every property below holds, so a partial redraw cannot
 /// satisfy the wait. Returns the content row and the slab's columns.
-fn slab_cells(grid: &Grid) -> Option<(u16, usize, usize)> {
+fn slab_cells(grid: &Grid) -> Option<(u16, u16, u16)> {
     let y = row_with_or(&grid.rows, "1 of 5")?;
-    let text: String = (0..160).map(|x| grid.cell(x, y).symbol.clone()).collect();
+    let text: String = (0..160u16).map(|x| grid.cell(x, y).symbol.clone()).collect();
     if !text.contains("⌕ lock") {
         return None;
     }
     // The slab's run: the contiguous `surface` run around the count,
     // so other `surface` cells on the row (a rail card, say) stay out.
-    let count_first = text
-        .find("1 of 5")
-        .map(|byte| text[..byte].chars().count())?;
+    let count_first =
+        u16::try_from(text.find("1 of 5").map(|byte| text[..byte].chars().count())?).ok()?;
     let mut first = count_first;
-    while first > 0 && grid.cell((first - 1) as u16, y).bg == SURFACE {
+    while first > 0 && grid.cell(first - 1, y).bg == SURFACE {
         first -= 1;
     }
     let mut last = count_first;
-    while last + 1 < 160 && grid.cell((last + 1) as u16, y).bg == SURFACE {
+    while last + 1 < 160 && grid.cell(last + 1, y).bg == SURFACE {
         last += 1;
     }
     if last + 1 - first != 40 {
         return None;
     }
-    if !(first..=last).all(|x| grid.cell(x as u16, y).bg == SURFACE) {
+    if !(first..=last).all(|x| grid.cell(x, y).bg == SURFACE) {
         return None;
     }
     // The content row reads " ⌕ lock█" then the count with one trailing
     // blank, right-aligned in its 40 columns.
-    let content: String = (first..=last)
-        .map(|x| grid.cell(x as u16, y).symbol.clone())
-        .collect();
+    let content: String = (first..=last).map(|x| grid.cell(x, y).symbol.clone()).collect();
     if !content.starts_with(" ⌕ lock█") {
         return None;
     }
@@ -167,23 +164,22 @@ fn slab_cells(grid: &Grid) -> Option<(u16, usize, usize)> {
         return None;
     }
     // " ⌕ " in `attention`, the query bold, the █ and the count dim.
-    let at = first
-        + content
-            .find('⌕')
-            .map(|byte| content[..byte].chars().count())?;
-    if grid.cell(at as u16, y).fg != ATTENTION {
+    let at = first.checked_add(
+        u16::try_from(content.find('⌕').map(|byte| content[..byte].chars().count())?).ok()?,
+    )?;
+    if grid.cell(at, y).fg != ATTENTION {
         return None;
     }
-    let query = first + 3;
-    if !(query..query + 4).all(|x| grid.cell(x as u16, y).bold) {
+    let query = first.checked_add(3)?;
+    if !(query..query + 4).all(|x| grid.cell(x, y).bold) {
         return None;
     }
-    let block = query + 4;
-    if grid.cell(block as u16, y).symbol != "█" || !grid.cell(block as u16, y).dim {
+    let block = query.checked_add(4)?;
+    if grid.cell(block, y).symbol != "█" || !grid.cell(block, y).dim {
         return None;
     }
-    let count_at = last - 6;
-    if !(count_at..=last - 1).all(|x| grid.cell(x as u16, y).dim) {
+    let count_at = last.checked_sub(6)?;
+    if !(count_at..=last - 1).all(|x| grid.cell(x, y).dim) {
         return None;
     }
     // Five rows: the ▄ edge above, one blank row, the content row, one
@@ -193,7 +189,7 @@ fn slab_cells(grid: &Grid) -> Option<(u16, usize, usize)> {
     }
     for (row, want) in [(y - 2, "▄"), (y + 2, "▀")] {
         if !(first..=last).all(|x| {
-            let cell = grid.cell(x as u16, row);
+            let cell = grid.cell(x, row);
             cell.symbol == want && cell.fg == SURFACE && cell.bg == Colour::Default
         }) {
             return None;
@@ -201,7 +197,7 @@ fn slab_cells(grid: &Grid) -> Option<(u16, usize, usize)> {
     }
     for row in [y - 1, y + 1] {
         if !(first..=last).all(|x| {
-            let cell = grid.cell(x as u16, row);
+            let cell = grid.cell(x, row);
             cell.symbol == " " && cell.bg == SURFACE
         }) {
             return None;
@@ -209,7 +205,7 @@ fn slab_cells(grid: &Grid) -> Option<(u16, usize, usize)> {
     }
     // The slab ends one column left of the scroll bar's column: the
     // cell past its right edge keeps the default background.
-    let past = grid.cell((last + 1) as u16, y);
+    let past = grid.cell(last + 1, y);
     if past.symbol != " " || past.bg != Colour::Default {
         return None;
     }
@@ -218,9 +214,7 @@ fn slab_cells(grid: &Grid) -> Option<(u16, usize, usize)> {
 
 /// The first row containing `needle`, if any.
 fn row_with_or(rows: &[String], needle: &str) -> Option<u16> {
-    rows.iter()
-        .position(|row| row.contains(needle))
-        .map(|y| y as u16)
+    rows.iter().position(|row| row.contains(needle)).and_then(|y| u16::try_from(y).ok())
 }
 
 /// A press at `(from, y)`, a drag to `(to, y)` and its release, in one
@@ -264,7 +258,6 @@ fn the_search_bar_matches_the_doc() {
     let grid = run.wait_screen("the search bar", |grid| slab_cells(grid).is_some());
     let (y, first, last) = slab_cells(&grid).expect("the search bar");
     assert_eq!(last + 1 - first, 40, "the bar is 40 columns wide");
-    let (first, last) = (first as u16, last as u16);
     // The content row sits on the `surface` tint across its width.
     for x in first..=last {
         assert_eq!(grid.cell(x, y).bg, SURFACE, "({x}, {y})");

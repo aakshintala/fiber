@@ -216,15 +216,15 @@ fn query_end(query: &str, room: usize) -> String {
         .map(|grapheme| (grapheme.symbol, crate::format::width(grapheme.symbol)))
         .collect();
     let mut taken = 0usize;
-    let mut start = pieces.len();
-    for (index, (_, cell)) in pieces.iter().enumerate().rev() {
+    let mut kept: Vec<&str> = Vec::new();
+    for (symbol, cell) in pieces.iter().rev() {
         if taken.saturating_add(*cell) > room {
             break;
         }
         taken = taken.saturating_add(*cell);
-        start = index;
+        kept.push(*symbol);
     }
-    pieces[start..].iter().map(|(symbol, _)| *symbol).collect()
+    kept.into_iter().rev().collect()
 }
 
 /// The bar's query and count in `room` content columns: the query's
