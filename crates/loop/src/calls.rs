@@ -332,13 +332,28 @@ impl Loop {
                         let tool = Arc::clone(&prepared.tool);
                         let arguments = Arc::new(prepared.arguments);
                         let thread_arguments = Arc::clone(&arguments);
+                        // The entered run's worker context: at `info` this
+                        // is `None` and the name stays uncloned, so an
+                        // untimed level changes nothing about the spawn.
+                        let worker = self.diag.worker().map(|diag| (diag, name.clone()));
                         scope.spawn(move || {
-                            let output = tool.run_asking(
-                                &thread_arguments,
-                                call_cancel.as_ref(),
-                                thread_stream.as_ref(),
-                                thread_stream.as_ref(),
-                            );
+                            // The entered run's timer, from entry to return,
+                            // before the stream takes the output: result
+                            // buffering and ordered completion stay outside.
+                            let output = {
+                                let _run = match worker.as_ref() {
+                                    Some((diag, name)) => {
+                                        diag.timed_tool(contract::diag::Op::ToolRun, name)
+                                    }
+                                    None => None,
+                                };
+                                tool.run_asking(
+                                    &thread_arguments,
+                                    call_cancel.as_ref(),
+                                    thread_stream.as_ref(),
+                                    thread_stream.as_ref(),
+                                )
+                            };
                             thread_stream.finish(output);
                         });
                         State::Running {

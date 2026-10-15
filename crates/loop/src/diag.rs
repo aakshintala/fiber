@@ -7,7 +7,7 @@ use std::sync::Arc;
 
 use contract::SessionId;
 use contract::clock::Clock;
-use contract::diag::Op;
+use contract::diag::{DebugLog, Op};
 use log::diag::{Diag, Level, Process, Severity, Timer};
 
 /// Writes `host.log` lines to the session's diagnostic file, over the
@@ -60,6 +60,20 @@ impl SessionDiag {
     /// untimed level clones nothing.
     pub(crate) fn timed_tool(&self, op: Op, registered_name: &str) -> Option<Timer> {
         log::diag::timed(self.writer(), op, Some(registered_name), None)
+    }
+
+    /// Debug-only worker context sharing the session's attached writer, so
+    /// an entered tool run times through the same one-timer path as every
+    /// other operation. `None` at `info`, before any clone: workers then
+    /// do no timing work at all.
+    pub(crate) fn worker(&self) -> Option<SessionDiag> {
+        if !self.log.debugging() {
+            return None;
+        }
+        Some(SessionDiag {
+            log: Arc::clone(&self.log),
+            preamble_done: false,
+        })
     }
 
     /// Whether the first preamble construction already emitted its scope.

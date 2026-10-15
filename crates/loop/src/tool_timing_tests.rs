@@ -142,6 +142,34 @@ fn tool_answer(name: &str, arguments: Value, advance_ms: u64) -> Answer {
     }
 }
 
+/// A model answer calling two tools in order, then nothing else.
+fn tool_answer_two(first: (&str, Value), second: (&str, Value), advance_ms: u64) -> Answer {
+    let mut end = fakes::reply("");
+    let mut deltas = Vec::new();
+    for (index, (name, arguments)) in [first, second].into_iter().enumerate() {
+        end.actions.push(ReplyAction::ToolCall(ToolCallRequested {
+            name: name.into(),
+            arguments: arguments.clone(),
+            provider_id: None,
+            repair: None,
+            ran_by: None,
+            provider_item: None,
+        }));
+        deltas.push(Delta::ToolCallArguments(
+            contract::events::ToolCallArgumentsDelta {
+                index: u32::try_from(index).expect("two calls fit"),
+                name: Some(name.into()),
+                text: arguments.to_string(),
+            },
+        ));
+    }
+    Answer::Run {
+        deltas,
+        end: Ok(end),
+        advance_ms,
+    }
+}
+
 fn error_answer(code: ErrorCode, advance_ms: u64) -> Answer {
     Answer::Run {
         deltas: Vec::new(),
@@ -303,6 +331,18 @@ enum SpillMode {
     UnsavedBadLeft,
 }
 
+/// What a probe tool asks its inner runner for, if anything.
+#[derive(Clone, Default)]
+enum InnerPlan {
+    /// No inner call: an ordinary run.
+    #[default]
+    None,
+    /// One synchronous inner call, propagating its answer.
+    Call { name: String, args: Value },
+    /// One detached inner call, reported off-thread.
+    Forget { name: String, args: Value },
+}
+
 /// A registered tool with scripted effects, schema and synchronous work.
 struct ProbeTool {
     name: String,
@@ -314,6 +354,14 @@ struct ProbeTool {
     boom_on: Option<String>,
     spill: Mutex<SpillMode>,
     jobs: Mutex<Vec<contract::jobs::JobRecord>>,
+    inner_plan: Mutex<InnerPlan>,
+    inner_report: Mutex<Option<mpsc::Sender<String>>>,
+    inner_errors: Mutex<Vec<String>>,
+    forget_gate: Mutex<Option<mpsc::Receiver<()>>>,
+    run_entered: Mutex<Option<mpsc::Sender<()>>>,
+    run_gate: Mutex<Option<mpsc::Receiver<()>>>,
+    run_error: Mutex<Option<String>>,
+    clock_hold: Mutex<bool>,
     clock: Mutex<Option<Arc<FakeClock>>>,
     dir: Mutex<Option<std::path::PathBuf>>,
     ran: AtomicUsize,
@@ -373,6 +421,14 @@ impl ProbeTool {
             boom_on: None,
             spill: Mutex::new(SpillMode::None),
             jobs: Mutex::new(Vec::new()),
+            inner_plan: Mutex::new(InnerPlan::None),
+            inner_report: Mutex::new(None),
+            inner_errors: Mutex::new(Vec::new()),
+            forget_gate: Mutex::new(None),
+            run_entered: Mutex::new(None),
+            run_gate: Mutex::new(None),
+            run_error: Mutex::new(None),
+            clock_hold: Mutex::new(false),
             clock: Mutex::new(None),
             dir: Mutex::new(None),
             ran: AtomicUsize::new(0),
@@ -400,6 +456,59 @@ impl ProbeTool {
     fn ran_args(&self) -> Vec<Map<String, Value>> {
         lock(&self.ran_args).clone()
     }
+    /// Synchronous fake work inside the tool's run, in milliseconds.
+    fn with_work(mut self, ms: u64) -> Self {
+        self.run_ms = ms;
+        self
+    }
+
+    /// One synchronous inner call of `name` with `args` per run.
+    fn calling(self, name: &str, args: Value) -> Self {
+        *lock(&self.inner_plan) = InnerPlan::Call {
+            name: name.into(),
+            args,
+        };
+        self
+    }
+
+    /// One detached inner call of `name` per run, reported off-thread.
+    fn forgetting(self, name: &str, args: Value) -> Self {
+        *lock(&self.inner_plan) = InnerPlan::Forget {
+            name: name.into(),
+            args,
+        };
+        self
+    }
+
+    /// Reports detached inner answers on `report`.
+    fn reporting(&self, report: mpsc::Sender<String>) {
+        *lock(&self.inner_report) = Some(report);
+    }
+
+    /// Holds a forgetting run after it fires until the test releases `gate`:
+    /// the anchor stays alive past the descendant's admission.
+    fn hold_forget(&self, gate: mpsc::Receiver<()>) {
+        *lock(&self.forget_gate) = Some(gate);
+    }
+
+    /// Fails the next runs with `message` as a tool error.
+    fn failing_run(&self, message: &str) {
+        *lock(&self.run_error) = Some(message.into());
+    }
+
+    /// Holds the next runs on the clock at entry until the test releases
+    /// `gate`: the hold itself is the accused park.
+    fn hold_run(self) -> Self {
+        *lock(&self.clock_hold) = true;
+        self
+    }
+
+    /// Holds the next runs at entry until the test releases `gate`.
+    fn gate_run(&self, entered: mpsc::Sender<()>, gate: mpsc::Receiver<()>) {
+        *lock(&self.run_entered) = Some(entered);
+        *lock(&self.run_gate) = Some(gate);
+    }
+
     fn confirming(mut self) -> Self {
         self.ask_confirm = true;
         self
@@ -433,15 +542,18 @@ impl Tool for ProbeTool {
     }
 
     fn run(&self, arguments: &Map<String, Value>, _: &dyn Cancel, _: &dyn Emit) -> Output {
-        self.ran.fetch_add(1, Ordering::SeqCst);
-        lock(&self.ran_args).push(arguments.clone());
-        if let Some(clock) = lock(&self.clock).clone() {
-            clock.sleep(Duration::from_millis(self.run_ms));
-        }
+        self.enter_run(arguments);
+        let error = lock(&self.run_error).clone().map(|message| Failure {
+            code: ErrorCode::ToolError,
+            message,
+            provider: None,
+            retry_after_ms: None,
+        });
         Output {
             content: vec![ContentPart::Text {
                 text: self.text.clone(),
             }],
+            error,
             jobs: lock(&self.jobs).clone(),
             spilled: self.spill_output(),
             ..Output::default()
@@ -455,7 +567,16 @@ impl Tool for ProbeTool {
         emit: &dyn Emit,
         ask: &dyn Ask,
     ) -> Output {
+        // One planned inner call first; an ordinary run otherwise.
         if !self.ask_confirm {
+            let planned = match lock(&self.inner_plan).clone() {
+                InnerPlan::None => None,
+                InnerPlan::Call { name, args } => Some((name, args, false)),
+                InnerPlan::Forget { name, args } => Some((name, args, true)),
+            };
+            if let Some((name, args, forget)) = planned {
+                return self.run_inner(arguments, ask, name, args, forget);
+            }
             return self.run(arguments, cancel, emit);
         }
         self.ran.fetch_add(1, Ordering::SeqCst);
@@ -480,6 +601,91 @@ impl Tool for ProbeTool {
                 }],
                 ..Output::default()
             },
+        }
+    }
+}
+
+impl ProbeTool {
+    /// Counts the run, records its arguments and holds it at the test's
+    /// gate, then does its synchronous fake work.
+    fn enter_run(&self, arguments: &Map<String, Value>) {
+        self.ran.fetch_add(1, Ordering::SeqCst);
+        lock(&self.ran_args).push(arguments.clone());
+        if let Some(entered) = lock(&self.run_entered).take() {
+            let _sent = entered.send(());
+        }
+        if *lock(&self.clock_hold) {
+            // Parks on the injected clock while the test holds the gate:
+            // advancing the clock then sets the run's duration.
+            let clock = lock(&self.clock).clone().expect("the build wires a clock");
+            clock.wait_until(None, &mut |_| {
+                if let Some(gate) = lock(&self.run_gate).take() {
+                    fakes::Deadline::after(WAIT).recv_or_fail(&gate, "the test releases the run");
+                }
+            });
+        } else if let Some(gate) = lock(&self.run_gate).take() {
+            fakes::Deadline::after(WAIT).recv_or_fail(&gate, "the test releases the run");
+        }
+        if let Some(clock) = lock(&self.clock).clone() {
+            clock.sleep(Duration::from_millis(self.run_ms));
+        }
+    }
+
+    /// One inner call per the plan: synchronously, or detached with its
+    /// answer reported off-thread.
+    fn run_inner(
+        &self,
+        arguments: &Map<String, Value>,
+        ask: &dyn Ask,
+        name: String,
+        args: Value,
+        forget: bool,
+    ) -> Output {
+        self.enter_run(arguments);
+        let Some(inner) = ask.inner_calls() else {
+            return Output {
+                content: vec![ContentPart::Text {
+                    text: "no inner calls".into(),
+                }],
+                ..Output::default()
+            };
+        };
+        if forget {
+            let report = lock(&self.inner_report).clone();
+            std::thread::spawn(move || {
+                let message = match inner.run("probe", &name, args) {
+                    Ok(done) => format!("answered {:?}", done.status),
+                    Err(error) => format!("refused {error}"),
+                };
+                if let Some(report) = report {
+                    let _sent = report.send(message);
+                }
+            });
+            if let Some(gate) = lock(&self.forget_gate).take() {
+                fakes::Deadline::after(WAIT).recv_or_fail(&gate, "the test releases the forgetter");
+            }
+            return Output {
+                content: vec![ContentPart::Text {
+                    text: "fired".into(),
+                }],
+                ..Output::default()
+            };
+        }
+        match inner.run("probe", &name, args) {
+            Ok(done) => {
+                let text = crate::conversation::text(&done.content);
+                Output {
+                    content: vec![ContentPart::Text { text }],
+                    ..Output::default()
+                }
+            }
+            Err(error) => {
+                lock(&self.inner_errors).push(error.clone());
+                Output {
+                    content: vec![ContentPart::Text { text: error }],
+                    ..Output::default()
+                }
+            }
         }
     }
 }
@@ -699,12 +905,14 @@ impl ProbeHooks {
 impl Hooks for ProbeHooks {
     fn before_tool(&self, _: &contract::hook::BeforeToolCall<'_>) -> BeforeToolAnswer {
         self.before_calls.fetch_add(1, Ordering::SeqCst);
-        if let Some(entered) = lock(&self.entered).take() {
+        // Every entry signals and waits: entries queue on the receiver
+        // itself, so one gate holds each dispatch in turn.
+        if let Some(entered) = lock(&self.entered).as_ref() {
             let _sent = entered.send(());
         }
-        if let Some(gate) = lock(&self.gate).take() {
+        if lock(&self.gate).is_some() {
             fakes::Deadline::after(WAIT)
-                .recv(&gate)
+                .recv(lock(&self.gate).as_ref().expect("the gate is armed"))
                 .expect("the test releases the gate");
         }
         if let Some(clock) = lock(&self.clock).clone() {
@@ -3891,4 +4099,955 @@ fn an_autonomous_job_end_writes_no_tool_timer() {
         kinds(&world).contains(&"job_completed".to_owned()),
         "the autonomous end still completes"
     );
+}
+
+// An entered outer run times its work: the 2 ms hold sets the record.
+#[test]
+fn an_entered_outer_run_times_its_hold() {
+    let rules = Arc::new(FakeRules::default());
+    let tool = Arc::new(ProbeTool::reads("atlas").hold_run());
+    let (entered_tx, entered_rx) = mpsc::channel();
+    let (gate_tx, gate_rx) = mpsc::channel();
+    tool.gate_run(entered_tx, gate_rx);
+    let mut setup = Setup::new(Arc::clone(&rules));
+    setup.tools.push(Arc::clone(&tool));
+    let home = fakes::TempDir::new("fiber-tool-timing");
+    let mut world = build(
+        &setup,
+        home,
+        vec![tool_answer("atlas", json!({}), 0), text_answer("Done.", 0)],
+    );
+    prompt(&world, "hi");
+    let flight = spawn_turn(&mut world);
+    fakes::Deadline::after(WAIT).recv_or_fail(&entered_rx, "the run is entered");
+    assert!(
+        world.clock.await_parked_unbounded(WAIT),
+        "the run parks on the clock"
+    );
+    assert!(
+        ops(&world, "tool.run").is_empty(),
+        "no record completes while the run is held"
+    );
+    world.clock.advance(Duration::from_millis(2));
+    gate_tx.send(()).expect("the run waits on the gate");
+    assert_eq!(
+        join_turn(&mut world, flight).unwrap(),
+        Some(TurnOutcome::Completed)
+    );
+    let records = ops(&world, "tool.run");
+    assert_eq!(records.len(), 1);
+    assert_eq!(records[0].ms, 2);
+    assert_tool_wire(&records, "atlas");
+}
+
+// Synchronous tool work inside the run sets the record.
+#[test]
+fn synchronous_tool_work_sets_the_run_record() {
+    let rules = Arc::new(FakeRules::default());
+    let tool = Arc::new(ProbeTool::reads("atlas").with_work(2));
+    let mut setup = Setup::new(Arc::clone(&rules));
+    setup.tools.push(Arc::clone(&tool));
+    let home = fakes::TempDir::new("fiber-tool-timing");
+    let mut world = build(
+        &setup,
+        home,
+        vec![tool_answer("atlas", json!({}), 0), text_answer("Done.", 0)],
+    );
+    prompt(&world, "hi");
+    assert_eq!(turn(&mut world).unwrap(), Some(TurnOutcome::Completed));
+    let records = ops(&world, "tool.run");
+    assert_eq!(records.len(), 1);
+    assert_eq!(records[0].ms, 2);
+    assert_tool_wire(&records, "atlas");
+}
+
+// A tool error still closes its run record exactly once.
+#[test]
+fn a_tool_error_closes_its_run_record_once() {
+    let rules = Arc::new(FakeRules::default());
+    let tool = Arc::new(ProbeTool::reads("atlas").with_work(2));
+    tool.failing_run("the ledger is locked");
+    let mut setup = Setup::new(Arc::clone(&rules));
+    setup.tools.push(Arc::clone(&tool));
+    let home = fakes::TempDir::new("fiber-tool-timing");
+    let mut world = build(
+        &setup,
+        home,
+        vec![tool_answer("atlas", json!({}), 0), text_answer("Done.", 0)],
+    );
+    prompt(&world, "hi");
+    assert_eq!(turn(&mut world).unwrap(), Some(TurnOutcome::Completed));
+    let records = ops(&world, "tool.run");
+    assert_eq!(records.len(), 1);
+    assert_tool_wire(&records, "atlas");
+}
+
+// A cancel held out of the run completes the call cancelled with its record.
+#[test]
+fn a_cancel_mid_run_completes_cancelled_with_its_record() {
+    let rules = Arc::new(FakeRules::default());
+    let tool = Arc::new(ProbeTool::reads("atlas").hold_run());
+    let (entered_tx, entered_rx) = mpsc::channel();
+    let (gate_tx, gate_rx) = mpsc::channel();
+    tool.gate_run(entered_tx, gate_rx);
+    let mut setup = Setup::new(Arc::clone(&rules));
+    setup.tools.push(Arc::clone(&tool));
+    let home = fakes::TempDir::new("fiber-tool-timing");
+    let mut world = build(
+        &setup,
+        home,
+        vec![tool_answer("atlas", json!({}), 0), text_answer("Done.", 0)],
+    );
+    prompt(&world, "hi");
+    let flight = spawn_turn(&mut world);
+    fakes::Deadline::after(WAIT).recv_or_fail(&entered_rx, "the run is entered");
+    assert!(
+        world.cancel.cancel(),
+        "the turn is armed while the run holds"
+    );
+    gate_tx.send(()).expect("the run waits on the gate");
+    assert!(join_turn(&mut world, flight).is_ok());
+    assert_eq!(tool.ran(), 1, "the cancelled run was entered");
+    let records = ops(&world, "tool.run");
+    assert_eq!(records.len(), 1, "the entered run is timed");
+    assert_tool_wire(&records, "atlas");
+    let completions: Vec<String> = log::read(&world.home.path().join("s_test"))
+        .unwrap()
+        .into_iter()
+        .filter(|line| line.kind == "tool_call_completed")
+        .map(|line| {
+            line.payload["status"]
+                .as_str()
+                .unwrap_or_default()
+                .to_owned()
+        })
+        .collect();
+    assert_eq!(completions, vec!["cancelled".to_owned()]);
+}
+
+// A cancel before the run check starts nothing and times nothing.
+#[test]
+fn a_cancel_before_the_run_check_times_no_run() {
+    let rules = Arc::new(FakeRules::default());
+    rules.set(ask_rule("atlas", "atlas"));
+    let tool = Arc::new(ProbeTool::executes("atlas", "atlas run"));
+    let mut setup = Setup::new(Arc::clone(&rules));
+    setup.tools.push(Arc::clone(&tool));
+    let home = fakes::TempDir::new("fiber-tool-timing");
+    let mut world = build(
+        &setup,
+        home,
+        vec![tool_answer("atlas", json!({}), 0), text_answer("Done.", 0)],
+    );
+    prompt(&world, "hi");
+    let flight = spawn_turn(&mut world);
+    let mut watcher = world.log.as_ref().expect("the log is open").watch_all();
+    let _ = wait_requested(&mut watcher, "the approval is raised");
+    assert!(
+        world.clock.await_parked_unbounded(WAIT),
+        "the approval wait parks on the clock"
+    );
+    assert!(world.cancel.cancel());
+    world
+        .inbox_tx
+        .as_ref()
+        .expect("the inbox is open")
+        .send(Delivery::Cancelled)
+        .unwrap();
+    assert!(join_turn(&mut world, flight).is_ok());
+    assert_eq!(tool.ran(), 0, "no run was entered");
+    assert!(ops(&world, "tool.run").is_empty());
+    assert!(
+        !kinds(&world).contains(&"tool_call_started".to_owned()),
+        "nothing started"
+    );
+}
+
+// Two concurrent runs keep independent spans and complete in request order.
+#[test]
+fn concurrent_runs_keep_independent_spans_in_request_order() {
+    let rules = Arc::new(FakeRules::default());
+    let first = Arc::new(ProbeTool::reads("atlas").hold_run());
+    let second = Arc::new(ProbeTool::reads("boreal").hold_run());
+    let (first_tx, first_rx) = mpsc::channel();
+    let (first_gate_tx, first_gate_rx) = mpsc::channel();
+    first.gate_run(first_tx, first_gate_rx);
+    let (second_tx, second_rx) = mpsc::channel();
+    let (second_gate_tx, second_gate_rx) = mpsc::channel();
+    second.gate_run(second_tx, second_gate_rx);
+    let mut setup = Setup::new(Arc::clone(&rules));
+    setup.tools.push(Arc::clone(&first));
+    setup.tools.push(Arc::clone(&second));
+    let home = fakes::TempDir::new("fiber-tool-timing");
+    let mut world = build(
+        &setup,
+        home,
+        vec![
+            tool_answer_two(("atlas", json!({})), ("boreal", json!({})), 0),
+            text_answer("Done.", 0),
+        ],
+    );
+    prompt(&world, "hi");
+    let flight = spawn_turn(&mut world);
+    fakes::Deadline::after(WAIT).recv_or_fail(&first_rx, "the first run is entered");
+    fakes::Deadline::after(WAIT).recv_or_fail(&second_rx, "the second run is entered");
+    assert!(
+        world.clock.await_parked_unbounded(WAIT),
+        "a run parks on the clock"
+    );
+    // The second finishes first: two shared milliseconds pass, then only
+    // it returns. Its record lands while the first is still held.
+    world.clock.advance(Duration::from_millis(2));
+    second_gate_tx.send(()).expect("the second run waits");
+    // The first worker's span must not see the next advance: it lands
+    // only after the second worker's guard dropped, proven by its record.
+    let bound = fakes::Deadline::after(WAIT);
+    loop {
+        if ops(&world, "tool.run")
+            .iter()
+            .any(|record| record.tool.as_deref() == Some("boreal"))
+        {
+            break;
+        }
+        assert!(!bound.left().is_zero(), "the second run completes first");
+        std::thread::yield_now();
+    }
+    world.clock.advance(Duration::from_millis(3));
+    first_gate_tx.send(()).expect("the first run waits");
+    assert_eq!(
+        join_turn(&mut world, flight).unwrap(),
+        Some(TurnOutcome::Completed)
+    );
+    let records = ops(&world, "tool.run");
+    assert_eq!(records.len(), 2);
+    let boreal = records
+        .iter()
+        .find(|record| record.tool.as_deref() == Some("boreal"))
+        .expect("the second run is timed");
+    let atlas = records
+        .iter()
+        .find(|record| record.tool.as_deref() == Some("atlas"))
+        .expect("the first run is timed");
+    assert_eq!(boreal.ms, 2, "no buffering time in the second run");
+    assert_eq!(atlas.ms, 5);
+    assert_tool_wire(std::slice::from_ref(boreal), "boreal");
+    assert_tool_wire(std::slice::from_ref(atlas), "atlas");
+    // The second worker returned first, so its line precedes the first's.
+    let boreal_at = op_records(&world)
+        .iter()
+        .position(|line| line.op == "tool.run" && line.tool.as_deref() == Some("boreal"));
+    let atlas_at = op_records(&world)
+        .iter()
+        .position(|line| line.op == "tool.run" && line.tool.as_deref() == Some("atlas"));
+    assert!(boreal_at < atlas_at, "the earlier return writes first");
+    // Completions stay in request order, though the second run ended first.
+    let completed: Vec<String> = log::read(&world.home.path().join("s_test"))
+        .unwrap()
+        .into_iter()
+        .filter(|line| line.kind == "tool_call_completed")
+        .map(|line| line.action_id.clone().map(|id| id.0).unwrap_or_default())
+        .collect();
+    assert_eq!(completed.len(), 2);
+    let requested: Vec<String> = log::read(&world.home.path().join("s_test"))
+        .unwrap()
+        .into_iter()
+        .filter(|line| line.kind == "tool_call_requested")
+        .map(|line| line.action_id.clone().map(|id| id.0).unwrap_or_default())
+        .collect();
+    assert_eq!(completed, requested, "results return in request order");
+}
+
+/// Every `tool_call_completed` status in the session log, in order.
+fn completed_statuses(world: &World) -> Vec<String> {
+    log::read(&world.home.path().join("s_test"))
+        .unwrap()
+        .into_iter()
+        .filter(|line| line.kind == "tool_call_completed")
+        .map(|line| {
+            line.payload["status"]
+                .as_str()
+                .unwrap_or_default()
+                .to_owned()
+        })
+        .collect()
+}
+
+// A consumer error after the run still leaves exactly one run record.
+#[test]
+fn a_consumer_error_after_the_run_keeps_one_record() {
+    let rules = Arc::new(FakeRules::default());
+    // A hook's artifact text is written after the worker returned; with
+    // the artifacts path a file, that write fails the turn.
+    let tool = Arc::new(ProbeTool::reads("atlas").with_work(2));
+    let hooks = Arc::new(ProbeHooks::staged(
+        BeforeToolOutcome::Unchanged,
+        CheckOutcome::Passed,
+        AfterToolOutcome::Changed {
+            content: None,
+            details: None,
+            artifact: Some("hook artifact".into()),
+        },
+        0,
+        0,
+        1,
+    ));
+    let mut setup = Setup::new(Arc::clone(&rules));
+    setup.tools.push(Arc::clone(&tool));
+    setup.hooks = Some(Arc::clone(&hooks));
+    let home = fakes::TempDir::new("fiber-tool-timing");
+    let mut world = build(
+        &setup,
+        home,
+        vec![tool_answer("atlas", json!({}), 0), text_answer("Done.", 0)],
+    );
+    // Break the artifacts directory before the turn: the artifact write
+    // fails, the run does not.
+    let artifacts = world
+        .log
+        .as_ref()
+        .expect("the log is open")
+        .dir()
+        .join("artifacts");
+    if artifacts.exists() {
+        std::fs::remove_dir_all(&artifacts).unwrap();
+    }
+    std::fs::write(&artifacts, b"not a directory").unwrap();
+    prompt(&world, "hi");
+    let Err(error) = turn(&mut world) else {
+        panic!("a failed artifact write fails the turn");
+    };
+    assert_eq!(error.code(), ErrorCode::IoFailed);
+    let records = ops(&world, "tool.run");
+    assert_eq!(records.len(), 1, "the returned run is timed once");
+    assert_tool_wire(&records, "atlas");
+}
+
+// An admitted inner call times its own permission order and run, with no
+// reviewer and no person asked.
+#[test]
+fn an_admitted_inner_call_times_permission_and_run() {
+    let rules = Arc::new(FakeRules::default());
+    *lock(&rules.read_ms) = 5;
+    let outer = Arc::new(ProbeTool::reads("atlas").calling("boreal", json!({})));
+    let inner = Arc::new(ProbeTool::reads("boreal").with_work(2));
+    let mut setup = Setup::new(Arc::clone(&rules));
+    setup.tools.push(Arc::clone(&outer));
+    setup.tools.push(Arc::clone(&inner));
+    let home = fakes::TempDir::new("fiber-tool-timing");
+    let mut world = build(
+        &setup,
+        home,
+        vec![tool_answer("atlas", json!({}), 0), text_answer("Done.", 0)],
+    );
+    prompt(&world, "hi");
+    assert_eq!(turn(&mut world).unwrap(), Some(TurnOutcome::Completed));
+    assert_eq!(outer.ran(), 1);
+    assert_eq!(inner.ran(), 1, "the inner call ran");
+    assert!(
+        !kinds(&world).contains(&"permission_requested".to_owned()),
+        "no reviewer and no person meet an inner call"
+    );
+    let permission = ops(&world, "tool.permission");
+    assert_eq!(permission.len(), 2, "outer and inner orders");
+    assert_eq!(
+        permission[1].ms, 5,
+        "the deny steps are inside the inner order"
+    );
+    assert_tool_wire(&permission[1..], "boreal");
+    let runs = ops(&world, "tool.run");
+    assert_eq!(runs.len(), 2);
+    // The outer run holds the inner admission: 5 ms of deny steps plus
+    // the inner run's own 2 ms. Each record names its own run.
+    let outer_run = runs
+        .iter()
+        .find(|record| record.tool.as_deref() == Some("atlas"))
+        .expect("the outer run is timed");
+    let inner_run = runs
+        .iter()
+        .find(|record| record.tool.as_deref() == Some("boreal"))
+        .expect("the inner run is timed");
+    assert_eq!(outer_run.ms, 7);
+    assert_eq!(inner_run.ms, 2);
+    assert_tool_wire(std::slice::from_ref(inner_run), "boreal");
+}
+
+// An inner credential deny refuses with its own order record and no run.
+#[test]
+fn an_inner_credential_deny_refuses_with_its_record() {
+    let rules = Arc::new(FakeRules::default());
+    let outer = Arc::new(ProbeTool::reads("atlas").calling("boreal", json!({})));
+    let inner = Arc::new(ProbeTool::classified(
+        "boreal",
+        json!({"type": "object"}),
+        Ok(Effects {
+            declared: DeclaredEffects {
+                effects: vec![Effect::Reads],
+                reversible: true,
+                paths: Some(vec!["../credentials".into()]),
+            },
+            subject: None,
+            prefix: None,
+            always_reviewed: false,
+        }),
+        "inner",
+    ));
+    let mut setup = Setup::new(Arc::clone(&rules));
+    setup.tools.push(Arc::clone(&outer));
+    setup.tools.push(Arc::clone(&inner));
+    let home = fakes::TempDir::new("fiber-tool-timing");
+    let mut world = build(
+        &setup,
+        home,
+        vec![tool_answer("atlas", json!({}), 0), text_answer("Done.", 0)],
+    );
+    prompt(&world, "hi");
+    assert_eq!(turn(&mut world).unwrap(), Some(TurnOutcome::Completed));
+    assert_eq!(inner.ran(), 0, "the refused inner call never ran");
+    let permission = ops(&world, "tool.permission");
+    assert_eq!(permission.len(), 2, "outer and refused inner orders");
+    assert_tool_wire(&permission[1..], "boreal");
+    assert!(
+        ops(&world, "tool.run")
+            .iter()
+            .all(|record| record.tool.as_deref() == Some("atlas"))
+    );
+    assert_eq!(
+        resolved_bys(&world),
+        vec![("deny".to_owned(), "credential_deny".to_owned())]
+    );
+}
+
+// An inner standing deny refuses with its own order record and no run.
+#[test]
+fn an_inner_standing_deny_refuses_with_its_record() {
+    let rules = Arc::new(FakeRules::default());
+    rules.set(deny_rule("boreal", "boreal"));
+    let outer = Arc::new(ProbeTool::reads("atlas").calling("boreal", json!({})));
+    let inner = Arc::new(ProbeTool::executes("boreal", "boreal run"));
+    let mut setup = Setup::new(Arc::clone(&rules));
+    setup.tools.push(Arc::clone(&outer));
+    setup.tools.push(Arc::clone(&inner));
+    let home = fakes::TempDir::new("fiber-tool-timing");
+    let mut world = build(
+        &setup,
+        home,
+        vec![tool_answer("atlas", json!({}), 0), text_answer("Done.", 0)],
+    );
+    prompt(&world, "hi");
+    assert_eq!(turn(&mut world).unwrap(), Some(TurnOutcome::Completed));
+    assert_eq!(inner.ran(), 0);
+    let permission = ops(&world, "tool.permission");
+    assert_eq!(permission.len(), 2);
+    assert_tool_wire(&permission[1..], "boreal");
+}
+
+// An inner call naming no tool enters no phase.
+#[test]
+fn an_inner_unknown_tool_enters_no_phase() {
+    let rules = Arc::new(FakeRules::default());
+    let outer = Arc::new(ProbeTool::reads("atlas").calling("ghost", json!({})));
+    let mut setup = Setup::new(Arc::clone(&rules));
+    setup.tools.push(Arc::clone(&outer));
+    let home = fakes::TempDir::new("fiber-tool-timing");
+    let mut world = build(
+        &setup,
+        home,
+        vec![tool_answer("atlas", json!({}), 0), text_answer("Done.", 0)],
+    );
+    prompt(&world, "hi");
+    assert_eq!(turn(&mut world).unwrap(), Some(TurnOutcome::Completed));
+    assert_eq!(
+        ops(&world, "tool.permission").len(),
+        1,
+        "the outer order only"
+    );
+    assert_eq!(ops(&world, "tool.run").len(), 1, "the outer run only");
+}
+
+// An inner call failing its schema enters no phase.
+#[test]
+fn an_inner_schema_failure_enters_no_phase() {
+    let rules = Arc::new(FakeRules::default());
+    let outer = Arc::new(ProbeTool::reads("atlas").calling("boreal", json!({})));
+    let inner = Arc::new(ProbeTool::classified(
+        "boreal",
+        json!({"type": "object", "required": ["target"]}),
+        Ok(Effects {
+            declared: DeclaredEffects {
+                effects: vec![Effect::Reads],
+                reversible: true,
+                paths: None,
+            },
+            subject: None,
+            prefix: None,
+            always_reviewed: false,
+        }),
+        "inner",
+    ));
+    let mut setup = Setup::new(Arc::clone(&rules));
+    setup.tools.push(Arc::clone(&outer));
+    setup.tools.push(Arc::clone(&inner));
+    let home = fakes::TempDir::new("fiber-tool-timing");
+    let mut world = build(
+        &setup,
+        home,
+        vec![tool_answer("atlas", json!({}), 0), text_answer("Done.", 0)],
+    );
+    prompt(&world, "hi");
+    assert_eq!(turn(&mut world).unwrap(), Some(TurnOutcome::Completed));
+    assert_eq!(inner.ran(), 0);
+    assert_eq!(ops(&world, "tool.permission").len(), 1);
+    assert_eq!(ops(&world, "tool.run").len(), 1);
+}
+
+// A tool calling itself is refused with no phase of its own.
+#[test]
+fn a_self_call_is_refused_with_no_phase() {
+    let rules = Arc::new(FakeRules::default());
+    let outer = Arc::new(ProbeTool::reads("atlas").calling("atlas", json!({})));
+    let mut setup = Setup::new(Arc::clone(&rules));
+    setup.tools.push(Arc::clone(&outer));
+    let home = fakes::TempDir::new("fiber-tool-timing");
+    let mut world = build(
+        &setup,
+        home,
+        vec![tool_answer("atlas", json!({}), 0), text_answer("Done.", 0)],
+    );
+    prompt(&world, "hi");
+    assert_eq!(turn(&mut world).unwrap(), Some(TurnOutcome::Completed));
+    assert_eq!(
+        ops(&world, "tool.permission").len(),
+        1,
+        "the outer order only"
+    );
+    assert_eq!(ops(&world, "tool.run").len(), 1, "the outer run only");
+}
+
+// Eight nested levels run; the ninth is refused at the depth cap.
+#[test]
+fn eight_nested_levels_run_and_the_ninth_is_refused() {
+    let rules = Arc::new(FakeRules::default());
+    let left = Arc::new(ProbeTool::reads("atlas").calling("boreal", json!({})));
+    let right = Arc::new(ProbeTool::reads("boreal").calling("atlas", json!({})));
+    let mut setup = Setup::new(Arc::clone(&rules));
+    setup.tools.push(Arc::clone(&left));
+    setup.tools.push(Arc::clone(&right));
+    let home = fakes::TempDir::new("fiber-tool-timing");
+    let mut world = build(
+        &setup,
+        home,
+        vec![tool_answer("atlas", json!({}), 0), text_answer("Done.", 0)],
+    );
+    prompt(&world, "hi");
+    assert_eq!(turn(&mut world).unwrap(), Some(TurnOutcome::Completed));
+    // Five atlas runs (outer plus depths 2, 4, 6, 8) and four boreal runs.
+    assert_eq!(left.ran(), 5);
+    assert_eq!(right.ran(), 4);
+    let permission = ops(&world, "tool.permission");
+    assert_eq!(
+        permission.len(),
+        9,
+        "the outer order and eight admitted inner orders"
+    );
+    let runs = ops(&world, "tool.run");
+    assert_eq!(runs.len(), 9, "the outer run and eight admitted inner runs");
+    for record in permission.iter().skip(1).chain(runs.iter().skip(1)) {
+        assert!(
+            record.tool.as_deref() == Some("atlas") || record.tool.as_deref() == Some("boreal"),
+            "{:?}",
+            record.raw
+        );
+    }
+    assert!(
+        log::read(&world.home.path().join("s_test"))
+            .unwrap()
+            .iter()
+            .filter(|line| line.kind == "tool_call_completed")
+            .any(|line| serde_json::to_string(&line.payload)
+                .unwrap()
+                .contains("depth exceeds 8")),
+        "the ninth call is refused at the cap"
+    );
+}
+
+// An inner worker that fails still closes its run record exactly once.
+#[test]
+fn an_inner_error_closes_its_run_record_once() {
+    let rules = Arc::new(FakeRules::default());
+    let outer = Arc::new(ProbeTool::reads("atlas").calling("boreal", json!({})));
+    let inner = Arc::new(ProbeTool::reads("boreal").with_work(2));
+    inner.failing_run("the boreal ledger is locked");
+    let mut setup = Setup::new(Arc::clone(&rules));
+    setup.tools.push(Arc::clone(&outer));
+    setup.tools.push(Arc::clone(&inner));
+    let home = fakes::TempDir::new("fiber-tool-timing");
+    let mut world = build(
+        &setup,
+        home,
+        vec![tool_answer("atlas", json!({}), 0), text_answer("Done.", 0)],
+    );
+    prompt(&world, "hi");
+    assert_eq!(turn(&mut world).unwrap(), Some(TurnOutcome::Completed));
+    assert_eq!(inner.ran(), 1);
+    let runs = ops(&world, "tool.run");
+    assert_eq!(runs.len(), 2);
+    let inner_run = runs
+        .iter()
+        .find(|record| record.tool.as_deref() == Some("boreal"))
+        .expect("the inner run is timed");
+    assert_eq!(inner_run.ms, 2);
+    assert_tool_wire(std::slice::from_ref(inner_run), "boreal");
+    assert_eq!(
+        completed_statuses(&world),
+        vec!["failed".to_owned(), "completed".to_owned()]
+    );
+}
+
+// Cancelling an inner run completes it cancelled with its records.
+#[test]
+fn cancelling_an_inner_run_completes_it_cancelled() {
+    let rules = Arc::new(FakeRules::default());
+    let outer = Arc::new(ProbeTool::reads("atlas").calling("boreal", json!({})));
+    let inner = Arc::new(ProbeTool::reads("boreal").hold_run());
+    let (entered_tx, entered_rx) = mpsc::channel();
+    let (gate_tx, gate_rx) = mpsc::channel();
+    inner.gate_run(entered_tx, gate_rx);
+    let mut setup = Setup::new(Arc::clone(&rules));
+    setup.tools.push(Arc::clone(&outer));
+    setup.tools.push(Arc::clone(&inner));
+    let home = fakes::TempDir::new("fiber-tool-timing");
+    let mut world = build(
+        &setup,
+        home,
+        vec![tool_answer("atlas", json!({}), 0), text_answer("Done.", 0)],
+    );
+    prompt(&world, "hi");
+    let flight = spawn_turn(&mut world);
+    fakes::Deadline::after(WAIT).recv_or_fail(&entered_rx, "the inner run is entered");
+    assert!(world.cancel.cancel(), "the turn is armed");
+    gate_tx.send(()).expect("the inner run waits");
+    assert!(join_turn(&mut world, flight).is_ok());
+    assert_eq!(inner.ran(), 1, "the inner run was entered");
+    let runs = ops(&world, "tool.run");
+    assert_eq!(runs.len(), 2, "outer and entered inner runs");
+    let inner_run = runs
+        .iter()
+        .find(|record| record.tool.as_deref() == Some("boreal"))
+        .expect("the inner run is timed");
+    assert_tool_wire(std::slice::from_ref(inner_run), "boreal");
+    assert!(completed_statuses(&world).contains(&"cancelled".to_owned()));
+}
+
+// An inner call runs its entered hooks with their own lines.
+#[test]
+fn an_inner_call_runs_its_entered_hooks() {
+    let rules = Arc::new(FakeRules::default());
+    let outer = Arc::new(ProbeTool::reads("atlas").calling("boreal", json!({})));
+    let inner = Arc::new(ProbeTool::reads("boreal"));
+    let hooks = Arc::new(ProbeHooks::staged(
+        BeforeToolOutcome::Unchanged,
+        CheckOutcome::Passed,
+        AfterToolOutcome::Unchanged,
+        1,
+        1,
+        1,
+    ));
+    let mut setup = Setup::new(Arc::clone(&rules));
+    setup.tools.push(Arc::clone(&outer));
+    setup.tools.push(Arc::clone(&inner));
+    setup.hooks = Some(Arc::clone(&hooks));
+    let home = fakes::TempDir::new("fiber-tool-timing");
+    let mut world = build(
+        &setup,
+        home,
+        vec![tool_answer("atlas", json!({}), 0), text_answer("Done.", 0)],
+    );
+    prompt(&world, "hi");
+    assert_eq!(turn(&mut world).unwrap(), Some(TurnOutcome::Completed));
+    // Both calls run the full hook chain: two befores, two checks, two afters.
+    assert_eq!(ops(&world, "tool.hooks").len(), 6);
+    assert_eq!(hooks.after_calls.load(Ordering::SeqCst), 2);
+}
+
+// Cancelling while an inner call is hooked ends it before any run.
+#[test]
+fn cancelling_a_hooked_inner_call_never_runs_it() {
+    let rules = Arc::new(FakeRules::default());
+    let outer = Arc::new(ProbeTool::reads("atlas").calling("boreal", json!({})));
+    let inner = Arc::new(ProbeTool::reads("boreal"));
+    let hooks = ProbeHooks::passing();
+    let (entered_tx, entered_rx) = mpsc::channel();
+    let (gate_tx, gate_rx) = mpsc::channel();
+    *lock(&hooks.entered) = Some(entered_tx);
+    *lock(&hooks.gate) = Some(gate_rx);
+    let hooks = Arc::new(hooks);
+    let mut setup = Setup::new(Arc::clone(&rules));
+    setup.tools.push(Arc::clone(&outer));
+    setup.tools.push(Arc::clone(&inner));
+    setup.hooks = Some(Arc::clone(&hooks));
+    let home = fakes::TempDir::new("fiber-tool-timing");
+    let mut world = build(
+        &setup,
+        home,
+        vec![tool_answer("atlas", json!({}), 0), text_answer("Done.", 0)],
+    );
+    prompt(&world, "hi");
+    let flight = spawn_turn(&mut world);
+    // The outer call's hooks run first; releasing them lets the inner
+    // call reach its own hooks, where the cancel lands.
+    fakes::Deadline::after(WAIT).recv_or_fail(&entered_rx, "a before hook runs");
+    gate_tx.send(()).expect("the hook waits");
+    fakes::Deadline::after(WAIT).recv_or_fail(&entered_rx, "the inner before hook runs");
+    assert!(world.cancel.cancel(), "the turn is armed");
+    gate_tx.send(()).expect("the hook waits");
+    assert!(join_turn(&mut world, flight).is_ok());
+    assert_eq!(inner.ran(), 0, "the cancelled inner call never ran");
+    assert_eq!(
+        ops(&world, "tool.permission").len(),
+        2,
+        "both orders entered"
+    );
+    assert_eq!(
+        ops(&world, "tool.run").len(),
+        1,
+        "only the outer run was entered"
+    );
+}
+
+// A returned anchor cancels its still-running descendant: the middle
+// call returns while the leaf still runs, and the leaf is cancelled.
+#[test]
+fn a_returned_anchor_cancels_its_running_descendant() {
+    let rules = Arc::new(FakeRules::default());
+    let outer = Arc::new(ProbeTool::reads("atlas").calling("boreal", json!({})));
+    let middle = Arc::new(ProbeTool::reads("boreal").forgetting("coral", json!({})));
+    let leaf = Arc::new(ProbeTool::reads("coral"));
+    let (forget_tx, forget_rx) = mpsc::channel();
+    middle.hold_forget(forget_rx);
+    let (leaf_entered_tx, leaf_entered_rx) = mpsc::channel();
+    let (leaf_gate_tx, leaf_gate_rx) = mpsc::channel();
+    leaf.gate_run(leaf_entered_tx, leaf_gate_rx);
+    let (report_tx, report_rx) = mpsc::channel();
+    middle.reporting(report_tx);
+    let mut setup = Setup::new(Arc::clone(&rules));
+    setup.tools.push(Arc::clone(&outer));
+    setup.tools.push(Arc::clone(&middle));
+    setup.tools.push(Arc::clone(&leaf));
+    let home = fakes::TempDir::new("fiber-tool-timing");
+    let mut world = build(
+        &setup,
+        home,
+        vec![tool_answer("atlas", json!({}), 0), text_answer("Done.", 0)],
+    );
+    prompt(&world, "hi");
+    let flight = spawn_turn(&mut world);
+    // The leaf is admitted while its anchor still runs, then the anchor
+    // returns while the leaf still runs.
+    fakes::Deadline::after(WAIT).recv_or_fail(&leaf_entered_rx, "the leaf run is entered");
+    forget_tx.send(()).expect("the forgetter waits");
+    leaf_gate_tx.send(()).expect("the leaf run waits");
+    assert_eq!(
+        join_turn(&mut world, flight).unwrap(),
+        Some(TurnOutcome::Completed)
+    );
+    assert_eq!(leaf.ran(), 1, "the descendant run was entered");
+    let report = fakes::Deadline::after(WAIT).recv_or_fail(&report_rx, "the leaf answers");
+    assert!(
+        report.contains("ancelled"),
+        "the orphaned leaf is cancelled: {report}"
+    );
+    // All three orders were entered; all three runs started.
+    assert_eq!(ops(&world, "tool.permission").len(), 3);
+    assert_eq!(ops(&world, "tool.run").len(), 3);
+}
+
+// A command's inner call runs alone with its own order and run.
+#[test]
+fn a_command_inner_call_runs_alone_with_its_timers() {
+    use contract::inbox::InnerCallRequest;
+    let rules = Arc::new(FakeRules::default());
+    let tool = Arc::new(ProbeTool::reads("atlas").with_work(2));
+    let mut setup = Setup::new(Arc::clone(&rules));
+    setup.tools.push(Arc::clone(&tool));
+    let home = fakes::TempDir::new("fiber-tool-timing");
+    let mut world = build(&setup, home, vec![text_answer("Done.", 0)]);
+    let (answer_tx, answer_rx) = mpsc::channel();
+    world
+        .inbox_tx
+        .as_ref()
+        .expect("the inbox is open")
+        .send(Delivery::InnerCall(InnerCallRequest {
+            extension: "probe".into(),
+            command: CommandId("c_1".into()),
+            name: "atlas".into(),
+            arguments: json!({}),
+            cancel: Arc::new(fakes::CancelToken::new()),
+            taken: Box::new(|| {}),
+            answer: Box::new(move |done| {
+                let _sent = answer_tx.send(done.status);
+            }),
+        }))
+        .unwrap();
+    // The command runs in the idle drain; the prompt starts the turn that
+    // follows it.
+    prompt(&world, "hi");
+    let flight = spawn_turn(&mut world);
+    assert!(join_turn(&mut world, flight).is_ok());
+    assert_eq!(tool.ran(), 1);
+    let status = fakes::Deadline::after(WAIT).recv_or_fail(&answer_rx, "the command answers");
+    assert_eq!(status, contract::events::CallStatus::Completed);
+    let permission = ops(&world, "tool.permission");
+    assert_eq!(permission.len(), 1);
+    assert_tool_wire(&permission, "atlas");
+    let runs = ops(&world, "tool.run");
+    assert_eq!(runs.len(), 1);
+    assert_eq!(runs[0].ms, 2);
+    assert_tool_wire(&runs, "atlas");
+}
+
+// Cancelling a command's inner run completes it cancelled with its timers.
+#[test]
+fn cancelling_a_command_inner_run_completes_it_cancelled() {
+    use contract::events::CallStatus;
+    use contract::inbox::InnerCallRequest;
+    let rules = Arc::new(FakeRules::default());
+    let tool = Arc::new(ProbeTool::reads("atlas").hold_run());
+    let (entered_tx, entered_rx) = mpsc::channel();
+    let (gate_tx, gate_rx) = mpsc::channel();
+    tool.gate_run(entered_tx, gate_rx);
+    let mut setup = Setup::new(Arc::clone(&rules));
+    setup.tools.push(Arc::clone(&tool));
+    let home = fakes::TempDir::new("fiber-tool-timing");
+    let mut world = build(&setup, home, vec![text_answer("Done.", 0)]);
+    let token = Arc::new(fakes::CancelToken::new());
+    let (answer_tx, answer_rx) = mpsc::channel();
+    world
+        .inbox_tx
+        .as_ref()
+        .expect("the inbox is open")
+        .send(Delivery::InnerCall(InnerCallRequest {
+            extension: "probe".into(),
+            command: CommandId("c_1".into()),
+            name: "atlas".into(),
+            arguments: json!({}),
+            cancel: Arc::clone(&token) as Arc<dyn contract::tool::Cancel>,
+            taken: Box::new(|| {}),
+            answer: Box::new(move |done| {
+                let _sent = answer_tx.send(done.status);
+            }),
+        }))
+        .unwrap();
+    prompt(&world, "hi");
+    let flight = spawn_turn(&mut world);
+    fakes::Deadline::after(WAIT).recv_or_fail(&entered_rx, "the command run is entered");
+    token.cancel();
+    gate_tx.send(()).expect("the run waits");
+    assert!(join_turn(&mut world, flight).is_ok());
+    assert_eq!(tool.ran(), 1, "the run was entered");
+    let status = fakes::Deadline::after(WAIT).recv_or_fail(&answer_rx, "the command answers");
+    assert_eq!(status, CallStatus::Cancelled);
+    assert_eq!(ops(&world, "tool.permission").len(), 1);
+    assert_eq!(ops(&world, "tool.run").len(), 1);
+}
+
+// A closed slot answers cancelled without any worker or timer.
+#[test]
+fn a_closed_slot_answers_cancelled_without_a_worker() {
+    use contract::events::CallStatus;
+    use contract::tool::InnerCalls;
+    let wake = Arc::new(crate::progress::SharedWake::default());
+    let slot =
+        crate::inner_calls::InnerSlot::new(wake, ActionId("a_test".into()), "atlas".into(), 0);
+    slot.close();
+    let done = slot
+        .run("probe", "boreal", json!({}))
+        .expect("a closed slot still answers");
+    assert_eq!(done.status, CallStatus::Cancelled);
+}
+
+// At `info` the same outer work runs with no timer and no diagnostic file.
+#[test]
+fn info_runs_outer_work_with_no_timer() {
+    let rules = Arc::new(FakeRules::default());
+    let tool = Arc::new(ProbeTool::reads("atlas").with_work(2));
+    let mut setup = Setup::new(Arc::clone(&rules));
+    setup.tools.push(Arc::clone(&tool));
+    setup.debug = false;
+    let home = fakes::TempDir::new("fiber-tool-timing");
+    let mut world = build(
+        &setup,
+        home,
+        vec![tool_answer("atlas", json!({}), 0), text_answer("Done.", 0)],
+    );
+    prompt(&world, "hi");
+    assert_eq!(turn(&mut world).unwrap(), Some(TurnOutcome::Completed));
+    assert_eq!(tool.ran(), 1, "untimed work still runs");
+    assert!(tool_records(&world).is_empty());
+    assert!(
+        !world
+            .home
+            .path()
+            .join("logs")
+            .join("session-s_test.log")
+            .exists(),
+        "no diagnostic file is written at info"
+    );
+    assert!(kinds(&world).contains(&"tool_call_completed".to_owned()));
+}
+
+// At `info` the same inner work runs with no timer and no worker context.
+#[test]
+fn info_runs_inner_work_with_no_timer() {
+    let rules = Arc::new(FakeRules::default());
+    let outer = Arc::new(ProbeTool::reads("atlas").calling("boreal", json!({})));
+    let inner = Arc::new(ProbeTool::reads("boreal").with_work(2));
+    let mut setup = Setup::new(Arc::clone(&rules));
+    setup.tools.push(Arc::clone(&outer));
+    setup.tools.push(Arc::clone(&inner));
+    setup.debug = false;
+    let home = fakes::TempDir::new("fiber-tool-timing");
+    let mut world = build(
+        &setup,
+        home,
+        vec![tool_answer("atlas", json!({}), 0), text_answer("Done.", 0)],
+    );
+    prompt(&world, "hi");
+    assert_eq!(turn(&mut world).unwrap(), Some(TurnOutcome::Completed));
+    assert_eq!(inner.ran(), 1, "untimed inner work still runs");
+    assert!(tool_records(&world).is_empty());
+}
+
+// A failed diagnostics file changes neither outputs nor event sequence.
+#[test]
+fn a_failed_diagnostics_file_changes_no_output() {
+    fn script() -> Vec<Answer> {
+        vec![tool_answer("atlas", json!({}), 0), text_answer("Done.", 0)]
+    }
+    let run = |broken: bool| {
+        let rules = Arc::new(FakeRules::default());
+        let tool = Arc::new(ProbeTool::reads("atlas").with_work(2));
+        let mut setup = Setup::new(Arc::clone(&rules));
+        setup.tools.push(Arc::clone(&tool));
+        let home = fakes::TempDir::new("fiber-tool-timing");
+        let mut world = build(&setup, home, script());
+        if broken {
+            // The diagnostic file path becomes a directory: every
+            // diagnostic write fails silently.
+            let path = world.home.path().join("logs").join("session-s_test.log");
+            drop(std::fs::remove_file(&path));
+            std::fs::create_dir_all(world.home.path().join("logs")).unwrap();
+            std::fs::create_dir(&path).unwrap();
+        }
+        prompt(&world, "hi");
+        let outcome = turn(&mut world).unwrap();
+        let kinds = kinds(&world);
+        (outcome, kinds, tool.ran())
+    };
+    // The diagnostic file may not exist yet before the first write: run
+    // the control first for its kinds, then the broken run.
+    let (control_outcome, control_kinds, control_ran) = run(false);
+    let (outcome, kinds, ran) = run(true);
+    assert_eq!(outcome, control_outcome);
+    assert_eq!(kinds, control_kinds, "the event sequence is unchanged");
+    assert_eq!(ran, control_ran);
 }
