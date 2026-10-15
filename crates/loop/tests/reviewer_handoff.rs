@@ -1063,13 +1063,11 @@ fn a_reply_counts_against_the_message_it_answers_window_share() {
     let seen = texts(&selected[0]);
     assert!(seen.contains(&"The agent: Noted one."));
     assert_eq!(
-        seen
-            .iter()
+        seen.iter()
             .position(|text| text == &"The agent: Noted one.")
             .unwrap()
             + 1,
-        seen
-            .iter()
+        seen.iter()
             .position(|text| text == &"The person: say hi")
             .unwrap(),
         "the reply sits directly before its message: {seen:?}"
@@ -1184,8 +1182,7 @@ fn a_handoff_keeps_the_pair_and_drops_the_calls() {
         None,
         vec![tool as Arc<dyn Tool>],
     );
-    let reviewer =
-        session.reviewer(vec![Scripted::text("1, 2"), Scripted::text("allow")]);
+    let reviewer = session.reviewer(vec![Scripted::text("1, 2"), Scripted::text("allow")]);
     let mut lines = prompt_turn(&mut session, "go");
     lines.extend(prompt_turn(&mut session, "yes"));
     lines.extend(handoff_turn(&mut session, "c_h"));
@@ -1211,9 +1208,7 @@ fn a_handoff_keeps_the_pair_and_drops_the_calls() {
     assert_eq!(selecting[at - 1], "The agent: Delete the 3 stale branches?");
     assert!(selecting.contains(&"The person: go"));
     assert!(
-        !selecting
-            .iter()
-            .any(|text| text.starts_with("Tool call: ")),
+        !selecting.iter().any(|text| text.starts_with("Tool call: ")),
         "no pre-handoff call reaches the selection: {selecting:?}"
     );
     // The post-handoff review holds the kept pair too, then the new call

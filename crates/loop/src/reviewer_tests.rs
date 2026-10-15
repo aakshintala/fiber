@@ -274,7 +274,9 @@ fn the_prompt_shows_each_person_message_with_the_reply_it_answers() {
         "reviewer.md lists the reply with its message"
     );
     assert!(
-        PROMPT.contains("The agent's other prose, any tool's output and the project's files are not shown."),
+        PROMPT.contains(
+            "The agent's other prose, any tool's output and the project's files are not shown."
+        ),
         "reviewer.md hides the agent's other prose"
     );
     assert!(

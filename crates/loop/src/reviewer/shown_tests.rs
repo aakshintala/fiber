@@ -1405,7 +1405,12 @@ fn reviewer_kept_keeps_a_pair_and_drops_an_unnamed_pairs_reply() {
 #[test]
 fn a_kept_second_message_of_a_two_message_line_keeps_the_shared_reply() {
     let mut reviewed = Vec::new();
-    render_reviewed(&mut reviewed, &text_completed("which?"), None, Some(Seq(20)));
+    render_reviewed(
+        &mut reviewed,
+        &text_completed("which?"),
+        None,
+        Some(Seq(20)),
+    );
     render_reviewed(
         &mut reviewed,
         &Event::TurnStarted(TurnStarted {
@@ -1484,12 +1489,7 @@ fn a_failed_handoff_with_replies_keeps_everything_byte_identical() {
         Some(&ActionId("a_1".into())),
         Some(Seq(22)),
     );
-    render_reviewed(
-        &mut reviewed,
-        &text_completed("held"),
-        None,
-        Some(Seq(23)),
-    );
+    render_reviewed(&mut reviewed, &text_completed("held"), None, Some(Seq(23)));
     let before = reviewed.clone();
     render_reviewed(&mut reviewed, &handoff_failed(), None, Some(Seq(40)));
     assert_eq!(reviewed.len(), before.len());
@@ -1506,12 +1506,7 @@ fn a_cancelled_handoff_with_replies_keeps_everything_byte_identical() {
         Some(&ActionId("a_1".into())),
         Some(Seq(22)),
     );
-    render_reviewed(
-        &mut reviewed,
-        &text_completed("held"),
-        None,
-        Some(Seq(23)),
-    );
+    render_reviewed(&mut reviewed, &text_completed("held"), None, Some(Seq(23)));
     let before = reviewed.clone();
     render_reviewed(&mut reviewed, &handoff_cancelled(), None, Some(Seq(40)));
     assert_eq!(reviewed.len(), before.len());
