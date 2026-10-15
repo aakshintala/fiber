@@ -17,7 +17,10 @@ mod support;
 
 use std::fs;
 use std::path::{Path, PathBuf};
+use std::sync::mpsc::RecvTimeoutError;
 
+use extension_harness::Running;
+use fakes::clock::FakeClock;
 use fakes::{Client, ProviderServer, Watchdog};
 use serde_json::{Value, json};
 use support::{Deadline, Setup, function_call, hello, stream};
@@ -48,6 +51,16 @@ fn prompt(deadline: Deadline, client: &Client) {
             &|| deadline.left(),
         )
         .unwrap();
+}
+
+/// Waits for the subscribe's `command_accepted`, so the prompt that
+/// follows cannot overtake it.
+fn subscribed(deadline: Deadline, client: &Client) {
+    client
+        .recv_until(deadline.left(), |line| {
+            line["kind"] == "command_accepted" && line["payload"]["command_id"] == "c_sub"
+        })
+        .expect("the subscribe is accepted");
 }
 
 fn requested(deadline: Deadline, client: &Client) -> Value {
@@ -146,14 +159,113 @@ fn mkfifo(dir: &Path, name: &str) {
     assert!(status.success(), "mkfifo creates {name}");
 }
 
-/// Reads one FIFO's line, with the test's deadline naming the wait.
-fn read_fifo(deadline: Deadline, path: PathBuf) -> String {
+/// Reads one FIFO's line, with the test's deadline naming the wait. After
+/// `Timeout` the reader thread stays blocked in `open` on the fifo; the
+/// fixture's writer, or process exit, ends it. Nothing joins it, so
+/// nothing hangs.
+fn read_fifo(deadline: Deadline, path: PathBuf) -> Result<String, RecvTimeoutError> {
     let (done, read) = std::sync::mpsc::channel();
     std::thread::spawn(move || {
         let content = fs::read_to_string(&path).expect("the fifo reads");
         done.send(content).expect("collected");
     });
-    deadline.recv(&read).expect("the fifo reads in time")
+    deadline.recv(&read)
+}
+
+#[test]
+fn read_fifo_past_a_spent_deadline_times_out() {
+    let setup = Setup::new();
+    let dir = setup.root.path().join("fifo");
+    fs::create_dir_all(&dir).unwrap();
+    mkfifo(&dir, "never-written");
+    let clock = Box::leak(Box::new(FakeClock::new()));
+    let spent = Deadline::on(&**clock);
+    clock.advance(support::WAITS);
+    assert_eq!(
+        read_fifo(spent, dir.join("never-written")),
+        Err(RecvTimeoutError::Timeout),
+    );
+}
+
+/// Names whether the fixture server received `tools/call` for `tool`,
+/// then prints the whole `requests.log` and the whole session stderr, so
+/// a `Timeout` sighting says which side of the server the stall is on. A
+/// line counts only when it names both the method and the tool, with the
+/// tool's closing quote, so a similarly named tool never matches.
+fn hold_report(tool: &str, requests_log: &str, stderr: &str) -> String {
+    let reached = requests_log.lines().any(|line| {
+        line.contains("\"method\":\"tools/call\"") && line.contains(&format!("\"name\":\"{tool}\""))
+    });
+    let verdict = if reached {
+        format!("`tools/call` for {tool} reached the server, so the stall is after it")
+    } else {
+        format!("no `tools/call` for {tool} in requests.log: the server never received it")
+    };
+    format!("{verdict}\n\nrequests.log:\n{requests_log}\n\nsession stderr:\n{stderr}")
+}
+
+#[test]
+fn hold_report_names_a_call_that_reached_the_server() {
+    let log = concat!(
+        "{\"id\":1,\"jsonrpc\":\"2.0\",\"method\":\"initialize\",\"params\":{}}\n",
+        "{\"id\":2,\"jsonrpc\":\"2.0\",\"method\":\"tools/call\",\"params\":{\"arguments\":{},\"name\":\"hold\"}}\n",
+        "{\"id\":3,\"jsonrpc\":\"2.0\",\"method\":\"tools/call\",\"params\":{\"arguments\":{},\"name\":\"ask\"}}\n",
+    );
+    let report = hold_report("hold", log, "some stderr");
+    assert!(report.contains("reached the server"), "{report}");
+    assert!(report.contains(log), "{report}");
+    assert!(report.contains("some stderr"), "{report}");
+}
+
+#[test]
+fn hold_report_names_a_call_that_never_arrived() {
+    let log = concat!(
+        "{\"id\":1,\"jsonrpc\":\"2.0\",\"method\":\"initialize\",\"params\":{}}\n",
+        "{\"id\":2,\"jsonrpc\":\"2.0\",\"method\":\"tools/list\",\"params\":{}}\n",
+        "{\"id\":3,\"jsonrpc\":\"2.0\",\"method\":\"tools/call\",\"params\":{\"arguments\":{},\"name\":\"ask\"}}\n",
+        "{\"id\":4,\"jsonrpc\":\"2.0\",\"method\":\"tools/call\",\"params\":{\"arguments\":{},\"name\":\"holder\"}}\n",
+    );
+    let report = hold_report("hold", log, "some stderr");
+    assert!(report.contains("no `tools/call` for hold"), "{report}");
+    assert!(report.contains("never received"), "{report}");
+    assert!(report.contains(log), "{report}");
+    assert!(report.contains("some stderr"), "{report}");
+}
+
+/// Reads the fixture's `held-<tool>` fifo, and on expiry kills the
+/// session, then fails with the log and stderr saying whether `tools/call`
+/// reached the server. `wait` bounds only the fifo read; `cleanup` bounds
+/// the kill and the stderr receive, so a spent `wait` still leaves room
+/// for the report. A panicked reader thread leads with that fact, not
+/// with what the server never received.
+fn read_held(
+    wait: Deadline,
+    cleanup: Deadline,
+    running: &Running,
+    dir: &Path,
+    tool: &str,
+) -> Result<String, String> {
+    match read_fifo(wait, dir.join(format!("held-{tool}"))) {
+        Ok(line) => Ok(line),
+        Err(error) => {
+            let requests_log = fs::read_to_string(dir.join("requests.log"))
+                .unwrap_or_else(|error| format!("requests.log is unreadable: {error}"));
+            match support::kill_group(cleanup, running.group, "KILL") {
+                Ok(_) | Err(_) => {}
+            }
+            let stderr = match cleanup.cleanup_phase().recv(&running.stderr) {
+                Ok(stderr) => stderr,
+                Err(error) => format!("the session's stderr did not arrive: {error}"),
+            };
+            let report = hold_report(tool, &requests_log, &stderr);
+            Err(match error {
+                RecvTimeoutError::Timeout => report,
+                RecvTimeoutError::Disconnected => {
+                    format!("the fifo's reader thread panicked before it was read\n{report}")
+                }
+            })
+        }
+    }
 }
 
 /// Writes one line to a FIFO, with the test's deadline naming the wait.
@@ -387,10 +499,15 @@ fn an_elicitation_with_two_calls_in_flight_names_both() {
     let client = running.connect_client(&setup.socket(&id));
     running.wait_for("extensions_loaded");
     subscribe(setup.deadline, &client);
+    subscribed(setup.deadline, &client);
     prompt(setup.deadline, &client);
     // `hold` is held first: its acknowledgement proves it is registered,
     // so the elicitation lists it alongside `ask`.
-    assert_eq!(read_fifo(setup.deadline, dir.join("held-hold")), "held\n",);
+    assert_eq!(
+        read_held(setup.deadline, setup.deadline, &running, &dir, "hold")
+            .unwrap_or_else(|message| panic!("{message}")),
+        "held\n",
+    );
     write_fifo(setup.deadline, dir.join("release-ask"));
     let mut actions = Vec::new();
     for tool in ["mcp__fx__hold", "mcp__fx__ask"] {
@@ -489,4 +606,51 @@ fn an_elicitation_with_two_calls_in_flight_names_both() {
             "fiber_exited",
         ],
     );
+}
+
+#[test]
+fn a_hold_that_never_reaches_the_server_is_named() {
+    let setup = Setup::new();
+    let _guard = guard(&setup);
+    let dir = fixture(
+        &setup,
+        &json!([hold_tool("hold"), ask_tool()]),
+        &[
+            (
+                "call-hold.json",
+                r#"{"content":[{"type":"text","text":"held"}]}"#,
+            ),
+            (
+                "call-ask.json",
+                r#"{"content":[{"type":"text","text":"asked"}]}"#,
+            ),
+            ("elicit-ask.json", three_fields()),
+        ],
+    );
+    for name in ["release-hold", "held-hold", "release-ask"] {
+        mkfifo(&dir, name);
+    }
+    // Only `ask` is ever called, so `held-hold` is never written and
+    // `tools/call hold` never reaches the server, whatever the order of
+    // events.
+    let server = ProviderServer::start([
+        stream(&[function_call("c_ask", "mcp__fx__ask", &json!({}))]),
+        hello(),
+    ])
+    .unwrap();
+    setup.provider(&server);
+    configure_fx(&setup, &dir, Value::Null);
+    let id = doors::mint("s_");
+    let mut running = setup.start_session(&id, &[]);
+    let client = running.connect_client(&setup.socket(&id));
+    running.wait_for("extensions_loaded");
+    subscribe(setup.deadline, &client);
+    subscribed(setup.deadline, &client);
+    prompt(setup.deadline, &client);
+    let clock = Box::leak(Box::new(FakeClock::new()));
+    let spent = Deadline::on(&**clock);
+    clock.advance(support::WAITS);
+    let message = read_held(spent, setup.deadline, &running, &dir, "hold").unwrap_err();
+    assert!(message.contains("no `tools/call` for hold"), "{message}",);
+    assert!(message.contains("never received"), "{message}");
 }
