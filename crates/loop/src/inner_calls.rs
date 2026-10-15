@@ -442,12 +442,10 @@ impl crate::Loop {
             request.answer(done);
             return Ok(());
         }
-        let (arguments, changed_by) = match &prepared.rewritten {
-            Some(names) => (Some(prepared.arguments.clone()), Some(names.clone())),
-            None => (None, None),
-        };
+        let (arguments, changed_by) = prepared.rewrite();
         self.write(
             &Event::ToolCallStarted(ToolCallStarted {
+                always_reviewed: prepared.effects.always_reviewed,
                 declared: prepared.effects.declared.clone(),
                 arguments,
                 changed_by,

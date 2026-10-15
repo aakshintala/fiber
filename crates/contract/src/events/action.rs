@@ -229,6 +229,9 @@ pub struct ToolCallStarted {
     /// What the call declared.
     #[serde(flatten)]
     pub declared: DeclaredEffects,
+    /// True when the tool declared the call always reviewed.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub always_reviewed: bool,
     /// The arguments that ran, when a `before_tool` hook rewrote them.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub arguments: Option<Map<String, Value>>,
@@ -436,6 +439,9 @@ pub struct PermissionRequested {
     /// What the call declared.
     #[serde(flatten)]
     pub declared: DeclaredEffects,
+    /// True when the tool declared the call always reviewed.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub always_reviewed: bool,
     /// Which step raised it, with its keys.
     #[serde(flatten)]
     pub step: AskStep,
@@ -448,6 +454,8 @@ struct PermissionRequestedLine {
     request_id: RequestId,
     #[serde(flatten)]
     declared: DeclaredEffects,
+    #[serde(default)]
+    always_reviewed: bool,
     step: StepName,
     standing_rule: Option<StandingRule>,
     escalation: Option<Escalation>,
@@ -468,6 +476,7 @@ impl TryFrom<PermissionRequestedLine> for PermissionRequested {
         Ok(Self {
             request_id: line.request_id,
             declared: line.declared,
+            always_reviewed: line.always_reviewed,
             step,
         })
     }
@@ -531,7 +540,7 @@ pub struct ReviewerRef {
 }
 
 /// `permission_resolved`. The envelope's `action_id` is the tool call.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct PermissionResolved {
     /// The request it answers; absent when the decision raised none.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -557,6 +566,27 @@ pub struct PermissionResolved {
     /// or the stage that failed.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub reviewer: Option<ReviewerRef>,
+    /// On a reviewed decision with no request_id (a reviewer denial, a no-reviewer denial and a reviewer allow), the call's declared effects and rewrite; absent otherwise.
+    #[serde(flatten)]
+    pub call: Option<ReviewedCall>,
+}
+
+/// A reviewed call's declared effects and rewrite, flattened onto a
+/// `permission_resolved` whose decision raised no request.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct ReviewedCall {
+    /// What the call declared.
+    #[serde(flatten)]
+    pub declared: DeclaredEffects,
+    /// True when the tool declared the call always reviewed.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub always_reviewed: bool,
+    /// The arguments the reviewer judged, when a `before_tool` hook rewrote them.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub arguments: Option<Map<String, Value>>,
+    /// With `arguments`, the extensions whose hooks rewrote them.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub changed_by: Option<Vec<String>>,
 }
 
 /// What an interaction asks, keyed by `kind`, with the keys that kind

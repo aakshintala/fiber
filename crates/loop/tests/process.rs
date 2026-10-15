@@ -448,6 +448,7 @@ fn fiber_exited_after_a_resume_reports_only_the_resumed_process_lines() {
 
 fn permission(id: &str) -> Event {
     Event::PermissionRequested(PermissionRequested {
+        always_reviewed: false,
         request_id: RequestId(id.into()),
         declared: DeclaredEffects {
             effects: vec![Effect::Executes],
@@ -465,6 +466,7 @@ fn permission(id: &str) -> Event {
 
 fn resolved(id: &str) -> Event {
     Event::PermissionResolved(PermissionResolved {
+        call: None,
         request_id: Some(RequestId(id.into())),
         decision: Decision::Deny,
         decided_by: DecidedBy::Cancel,

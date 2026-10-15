@@ -31,6 +31,7 @@ pub(crate) fn resolved(
     feedback: Option<String>,
 ) -> PermissionResolved {
     PermissionResolved {
+        call: None,
         request_id,
         decision,
         decided_by,

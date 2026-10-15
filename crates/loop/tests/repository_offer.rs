@@ -1045,6 +1045,7 @@ fn resolved_event(request: &str, decisions: &[OfferDecision]) -> Event {
 
 fn standing_ask() -> Event {
     Event::PermissionRequested(PermissionRequested {
+        always_reviewed: false,
         request_id: RequestId("r_9".into()),
         declared: DeclaredEffects {
             effects: vec![Effect::Executes],

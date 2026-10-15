@@ -50,6 +50,7 @@ pub(crate) fn requested(name: &str, city: &str) -> Event {
 /// The start event of a call that declares no effects.
 pub(crate) fn started() -> Event {
     Event::ToolCallStarted(ToolCallStarted {
+        always_reviewed: false,
         declared: DeclaredEffects {
             effects: Vec::new(),
             reversible: true,
@@ -82,6 +83,7 @@ pub(crate) fn completed_event(text: &str) -> Event {
 /// A standing-ask approval carrying `request_id`.
 pub(crate) fn standing_request(request_id: &str) -> Event {
     Event::PermissionRequested(PermissionRequested {
+        always_reviewed: false,
         request_id: RequestId(request_id.into()),
         declared: DeclaredEffects {
             effects: vec![Effect::Executes],

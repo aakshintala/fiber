@@ -6,7 +6,7 @@ use std::sync::Arc;
 use contract::diag::DebugLog;
 use contract::events::{
     AskStep, CacheLifetime, DecidedBy, Decision, Escalation, Event, Notice, PermissionResolved,
-    ReviewerRef, ReviewerUse, RuleOffer, ToolCallCompleted, ToolCallRequested,
+    ReviewedCall, ReviewerRef, ReviewerUse, RuleOffer, ToolCallCompleted, ToolCallRequested,
 };
 use contract::provider::{CallError, Cost, Input, ModelRequest, Provider, Reply};
 use contract::shapes::Failure;
@@ -382,17 +382,9 @@ impl Loop {
             model: endpoint.reference.clone(),
             stage,
         });
-        self.append(
-            &Event::PermissionResolved(resolved(
-                None,
-                Decision::Allow,
-                DecidedBy::Reviewer,
-                reason,
-                reviewer,
-            )),
-            under.turn,
-            Some(under.id),
-        )?;
+        let mut line = resolved(None, Decision::Allow, DecidedBy::Reviewer, reason, reviewer);
+        line.call = Some(reviewed_call(under));
+        self.append(&Event::PermissionResolved(line), under.turn, Some(under.id))?;
         Ok(Ok(under.prepared.clone()))
     }
 
@@ -418,7 +410,7 @@ impl Loop {
                 reason: reason.clone(),
             }
         } else {
-            let completed = self.reviewer_deny(under.id, under.turn, None, reason, reviewer)?;
+            let completed = self.reviewer_deny(under, reason, reviewer)?;
             return Ok(Err(completed));
         };
         self.escalate(under, cause, reason, reviewer)
@@ -449,14 +441,14 @@ impl Loop {
         reviewer: Option<ReviewerRef>,
     ) -> Result<Decided, Error> {
         if !self.answerable {
-            let completed = self.reviewer_deny(under.id, under.turn, None, reason, reviewer)?;
+            let completed = self.reviewer_deny(under, reason, reviewer)?;
             return Ok(Err(completed));
         }
         match self.ask(
             under.id,
             under.turn,
             &under.call.name,
-            &under.prepared.effects.declared,
+            &under.prepared.effects,
             AskStep::Review {
                 escalation: Some(escalation),
                 rule: rule_offer(&under.prepared.effects),
@@ -632,9 +624,7 @@ impl Loop {
     /// calls complete.
     fn reviewer_deny(
         &mut self,
-        id: &ActionId,
-        turn: &TurnId,
-        request_id: Option<RequestId>,
+        under: &UnderReview<'_>,
         reason: String,
         reviewer: Option<ReviewerRef>,
     ) -> Result<Box<ToolCallCompleted>, Error> {
@@ -643,17 +633,15 @@ impl Loop {
         } else {
             DecidedBy::NoReviewer
         };
-        self.append(
-            &Event::PermissionResolved(resolved(
-                request_id,
-                Decision::Deny,
-                decided_by,
-                Some(reason.clone()),
-                reviewer,
-            )),
-            turn,
-            Some(id),
-        )?;
+        let mut line = resolved(
+            None,
+            Decision::Deny,
+            decided_by,
+            Some(reason.clone()),
+            reviewer,
+        );
+        line.call = Some(reviewed_call(under));
+        self.append(&Event::PermissionResolved(line), under.turn, Some(under.id))?;
         self.check_block_end();
         Ok(blocked(&reason))
     }
@@ -752,6 +740,19 @@ fn blocked(reason: &str) -> Box<ToolCallCompleted> {
     )
 }
 
+/// The reviewed call's declared effects and rewrite, for a decision that
+/// raised no request: what the reviewer judged, so the `review` jig can
+/// replay a call that never started.
+fn reviewed_call(under: &UnderReview<'_>) -> ReviewedCall {
+    let (arguments, changed_by) = under.prepared.rewrite();
+    ReviewedCall {
+        declared: under.prepared.effects.declared.clone(),
+        always_reviewed: under.prepared.effects.always_reviewed,
+        arguments,
+        changed_by,
+    }
+}
+
 /// A `permission_resolved` line: `request_id`, `decision`, `decided_by`,
 /// `reason` and the deciding reviewer. Nothing else is ever set here: a
 /// grant rides only a person's allow, feedback only a person's deny.
@@ -763,6 +764,7 @@ fn resolved(
     reviewer: Option<ReviewerRef>,
 ) -> PermissionResolved {
     PermissionResolved {
+        call: None,
         request_id,
         decision,
         decided_by,

@@ -149,6 +149,7 @@ fn handoff() -> Event {
 
 fn denied() -> Event {
     Event::PermissionResolved(PermissionResolved {
+        call: None,
         request_id: None,
         decision: Decision::Deny,
         decided_by: DecidedBy::Reviewer,

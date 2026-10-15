@@ -289,6 +289,7 @@ fn requested(name: &str) -> Event {
 
 fn started() -> Event {
     Event::ToolCallStarted(ToolCallStarted {
+        always_reviewed: false,
         declared: DeclaredEffects {
             effects: Vec::new(),
             reversible: true,
@@ -1115,6 +1116,7 @@ fn a_changed_append_system_changes_the_resumed_request() {
 /// A standing-ask approval carrying `request_id`.
 fn ask_request(request_id: &str) -> Event {
     Event::PermissionRequested(contract::events::PermissionRequested {
+        always_reviewed: false,
         request_id: contract::RequestId(request_id.into()),
         declared: DeclaredEffects {
             effects: vec![contract::shapes::Effect::Executes],
@@ -1133,6 +1135,7 @@ fn ask_request(request_id: &str) -> Event {
 /// A review approval carrying `request_id`, an escalation and a rule offer.
 fn review_request(request_id: &str) -> Event {
     Event::PermissionRequested(contract::events::PermissionRequested {
+        always_reviewed: false,
         request_id: contract::RequestId(request_id.into()),
         declared: DeclaredEffects {
             effects: vec![contract::shapes::Effect::Executes],

@@ -21,17 +21,22 @@ impl Loop {
         let id = ActionId(mint("a_"));
         let none = Map::new();
         let arguments = hosted.call.arguments.as_object().unwrap_or(&none);
-        let declared = self
+        let (declared, always_reviewed) = self
             .tools
             .get(&hosted.call.name)
             .and_then(|(_, tool, _)| tool.effects(arguments).ok())
             .map_or_else(
-                || DeclaredEffects {
-                    effects: Vec::new(),
-                    reversible: true,
-                    paths: None,
+                || {
+                    (
+                        DeclaredEffects {
+                            effects: Vec::new(),
+                            reversible: true,
+                            paths: None,
+                        },
+                        false,
+                    )
                 },
-                |effects| effects.declared,
+                |effects| (effects.declared, effects.always_reviewed),
             );
         self.append(
             &Event::ToolCallRequested(hosted.call.clone()),
@@ -40,6 +45,7 @@ impl Loop {
         )?;
         self.append(
             &Event::ToolCallStarted(ToolCallStarted {
+                always_reviewed,
                 declared,
                 arguments: None,
                 changed_by: None,

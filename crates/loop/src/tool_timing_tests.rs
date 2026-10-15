@@ -3046,6 +3046,7 @@ fn dropping_suspended_state_closes_its_guard_once() {
     drop(crate::resume::Suspended {
         turn: TurnId("t_test".into()),
         pending: crate::suspend::Pending::Approval(PermissionRequested {
+            always_reviewed: false,
             request_id: RequestId("r_test".into()),
             declared: DeclaredEffects {
                 effects: vec![Effect::Reads],

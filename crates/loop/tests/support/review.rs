@@ -9,8 +9,8 @@
 //! [`review`](r#loop::Loop::review) on a scratch loop, capturing both
 //! stage requests, so a call requested before a handoff prints before
 //! that handoff's selection even when its start logs later. A reviewed
-//! call without logged started effects prints one `unreplayable` line
-//! instead of invented input. Calls with explicit non-review native
+//! call without its start or its denial carrying its declared effects
+//! prints one `unreplayable` line instead of invented input. Calls with explicit non-review native
 //! decisions (a person's allow or deny, a standing rule or grant, a
 //! standing ask) are not review requests and print nothing. At each
 //! completed handoff with person messages the driver prints the selection
@@ -25,8 +25,8 @@ use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex, PoisonError};
 
 use contract::events::{
-    AskStep, DecidedBy, Event, HandoffCompleted, Outcome, ReviewerUse, ToolCallRequested,
-    ToolCallStarted,
+    AskStep, DecidedBy, Event, HandoffCompleted, Outcome, ReviewedCall, ReviewerUse,
+    ToolCallRequested, ToolCallStarted,
 };
 use contract::provider::{CallError, Delta, ModelCall, ModelRequest, Provider, Reply};
 use contract::rules::{Rules, RulesError, StandingRules};
@@ -459,7 +459,8 @@ struct IndexedCall {
     call: ToolCallRequested,
     /// The turn that requested it.
     turn: Option<TurnId>,
-    /// What the call declared, when its start logged.
+    /// What the call declared: its start, or its denial when the call
+    /// never started.
     started: Option<ToolCallStarted>,
     /// The turn that started it.
     start_turn: Option<TurnId>,
@@ -497,6 +498,18 @@ struct Replay<'a> {
     started: &'a ToolCallStarted,
     /// The turn to replay it under.
     turn: &'a TurnId,
+}
+
+/// The start a reviewed denial stands in for: the call's declared
+/// effects and rewrite, replayed where its start would have logged. The
+/// recorded `always_reviewed` rides along; the replay never shows it.
+fn started_from(call: &ReviewedCall) -> ToolCallStarted {
+    ToolCallStarted {
+        declared: call.declared.clone(),
+        always_reviewed: call.always_reviewed,
+        arguments: call.arguments.clone(),
+        changed_by: call.changed_by.clone(),
+    }
 }
 
 /// The replay driver: the scratch loop, the source fold, and the request
@@ -734,12 +747,24 @@ impl Driver {
                             DecidedBy::Reviewer | DecidedBy::NoReviewer
                         )
                     {
-                        index.review.insert(action.0);
+                        index.review.insert(action.0.clone());
                     } else {
                         // An explicit non-review native decision: a
                         // person's allow or deny, a standing rule or
                         // grant, or any other non-reviewer decider.
-                        index.nonreview.insert(action.0);
+                        index.nonreview.insert(action.0.clone());
+                    }
+                    // A reviewed decision that raised no request carries
+                    // the call's declared effects: index it as the call's
+                    // start when no start logged, so the denial replays. A
+                    // line without the keys, or for an action with no
+                    // indexed request, indexes nothing.
+                    if let Some(call) = resolved.call
+                        && let Some(indexed) = index.calls.get_mut(&action.0)
+                        && indexed.started.is_none()
+                    {
+                        indexed.started = Some(started_from(&call));
+                        indexed.start_turn = envelope.turn_id.clone();
                     }
                 }
                 Event::UsageRecorded(recorded) => {
@@ -821,8 +846,9 @@ impl Driver {
 
     /// Prints one outer call at its request position: nothing when an
     /// explicit non-review decision judged it, both captured stage
-    /// requests when its start logged, and one `unreplayable` line when
-    /// the reviewer judged it but no start logged. The reviewer input is
+    /// requests when its start or its denial logged, and one
+    /// `unreplayable` line when the reviewer judged it but neither
+    /// logged. The reviewer input is
     /// the fold through this call's own item: later person messages and
     /// sibling calls never enter its replay.
     fn emit_call(

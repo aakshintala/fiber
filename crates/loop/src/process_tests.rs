@@ -75,6 +75,7 @@ impl Session {
 
 fn permission(id: &str) -> Event {
     Event::PermissionRequested(PermissionRequested {
+        always_reviewed: false,
         request_id: RequestId(id.into()),
         declared: DeclaredEffects {
             effects: vec![Effect::Executes],

@@ -875,6 +875,7 @@ fn action_envelope(kind: &str, event: &Event, action: &str) -> Envelope {
 /// The `tool_call_started` line of a call `action` declaring `paths`.
 fn started(action: &str, paths: Option<&[&str]>) -> Envelope {
     let event = Event::ToolCallStarted(contract::events::ToolCallStarted {
+        always_reviewed: false,
         declared: declared(paths),
         arguments: None,
         changed_by: None,

@@ -437,7 +437,10 @@ can remember.
 `permission_resolved` carries the decision, the reason, and **what decided it**:
 the credential deny, a human, a standing rule, a session grant or the
 reviewer. A reviewer decision also carries the reviewer's model and which
-stage decided.
+stage decided. A reviewed call's decision that has no request carries the call's
+declared effects and its paths, with `always_reviewed` when the tool declared it,
+and the rewritten `arguments` with `changed_by` when a `before_tool` hook rewrote
+them, because no `permission_requested` and no `tool_call_started` holds them.
 
 The reviewer's own calls carry the same attribution as `usage_recorded`:
 `reviewer.purpose` is `stage_1`, `stage_2` or `handoff`, and
@@ -461,7 +464,8 @@ added from an approval is written to the project's rules file, and its
 An escalation where no answer is possible writes no `permission_requested`.
 It is the reviewer's block, recorded as a `permission_resolved` with
 `decided_by: reviewer`, or with `decided_by: no_reviewer` when no reviewer
-could be set up ("How it runs"). A standing ask where no answer is possible is
+could be set up ("How it runs"). The denial carries the call's declared effects,
+its paths and its rewrite, as `permission_resolved` above says. A standing ask where no answer is possible is
 denied at once, the same way: no `permission_requested`, and a
 `permission_resolved` with `decision: deny` and `decided_by: standing_rule`.
 

@@ -330,6 +330,7 @@ impl Logged {
 
 fn started() -> Event {
     Event::ToolCallStarted(ToolCallStarted {
+        always_reviewed: false,
         declared: DeclaredEffects {
             effects: vec![Effect::Reads],
             reversible: true,

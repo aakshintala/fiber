@@ -22,9 +22,9 @@ use std::time::Duration;
 use contract::events::{
     Anchor, ArgumentRepair, AskStep, CallStatus, DecidedBy, Decision, Event, HandoffCompleted,
     InputItem, InstructionFile, InstructionReason, InstructionSent, Outcome, PermissionRequested,
-    PermissionResolved, RanBy, Repair, RepairFix, ReviewerRef, RuleScope, SessionStarted,
-    StandingRule, SteeringApplied, TextCompleted, ToolCallCompleted, ToolCallRequested,
-    ToolCallStarted, TurnOutcome, TurnStarted, Variables, VariablesSource,
+    PermissionResolved, RanBy, Repair, RepairFix, ReviewedCall, ReviewerRef, RuleScope,
+    SessionStarted, StandingRule, SteeringApplied, TextCompleted, ToolCallCompleted,
+    ToolCallRequested, ToolCallStarted, TurnOutcome, TurnStarted, Variables, VariablesSource,
 };
 use contract::provider::{Input, ModelRequest};
 use contract::shapes::{ContentPart, DeclaredEffects, Effect, Origin, Point, Sender};
@@ -512,6 +512,7 @@ fn requested(name: &str, arguments: Value) -> Event {
 /// The start event of a call declaring `effects`, reversible or not.
 fn started(effects: Vec<Effect>, reversible: bool) -> Event {
     Event::ToolCallStarted(ToolCallStarted {
+        always_reviewed: false,
         declared: DeclaredEffects {
             effects,
             reversible,
@@ -525,6 +526,7 @@ fn started(effects: Vec<Effect>, reversible: bool) -> Event {
 /// A review-step approval carrying `request_id`: reviewer attribution.
 fn review_step(request_id: &str) -> Event {
     Event::PermissionRequested(PermissionRequested {
+        always_reviewed: false,
         request_id: RequestId(request_id.into()),
         declared: DeclaredEffects {
             effects: vec![Effect::Executes],
@@ -539,9 +541,20 @@ fn review_step(request_id: &str) -> Event {
 }
 
 /// A reviewer denial with no `permission_requested`: a blocked call
-/// below the escalation limits never started.
+/// below the escalation limits never started, and its decision carries
+/// the call's declared effects.
 fn reviewer_denied(reason: &str) -> Event {
     Event::PermissionResolved(PermissionResolved {
+        call: Some(ReviewedCall {
+            declared: DeclaredEffects {
+                effects: vec![Effect::Executes],
+                reversible: false,
+                paths: None,
+            },
+            always_reviewed: false,
+            arguments: None,
+            changed_by: None,
+        }),
         request_id: None,
         decision: Decision::Deny,
         decided_by: DecidedBy::Reviewer,
@@ -556,9 +569,55 @@ fn reviewer_denied(reason: &str) -> Event {
     })
 }
 
-/// A headless denial with no reviewer and no start.
+/// A reviewer denial as a log written before the declared-effects change
+/// holds it: no keys, so the call replays as `unreplayable`.
+fn legacy_reviewer_denied(reason: &str) -> Event {
+    Event::PermissionResolved(PermissionResolved {
+        call: None,
+        request_id: None,
+        decision: Decision::Deny,
+        decided_by: DecidedBy::Reviewer,
+        reason: Some(reason.into()),
+        feedback: None,
+        grant: None,
+        rule: None,
+        reviewer: Some(ReviewerRef {
+            model: "fake/reviewer".into(),
+            stage: 2,
+        }),
+    })
+}
+
+/// A headless denial with no reviewer and no start, carrying the call's
+/// declared effects.
 fn headless_denied(reason: &str) -> Event {
     Event::PermissionResolved(PermissionResolved {
+        call: Some(ReviewedCall {
+            declared: DeclaredEffects {
+                effects: vec![Effect::Executes],
+                reversible: false,
+                paths: None,
+            },
+            always_reviewed: false,
+            arguments: None,
+            changed_by: None,
+        }),
+        request_id: None,
+        decision: Decision::Deny,
+        decided_by: DecidedBy::NoReviewer,
+        reason: Some(reason.into()),
+        feedback: None,
+        grant: None,
+        rule: None,
+        reviewer: None,
+    })
+}
+
+/// A headless denial as a log written before the declared-effects change
+/// holds it: no keys, so the call replays as `unreplayable`.
+fn legacy_headless_denied(reason: &str) -> Event {
+    Event::PermissionResolved(PermissionResolved {
+        call: None,
         request_id: None,
         decision: Decision::Deny,
         decided_by: DecidedBy::NoReviewer,
@@ -573,6 +632,7 @@ fn headless_denied(reason: &str) -> Event {
 /// A person's allow: an explicit non-review decision.
 fn person_allowed() -> Event {
     Event::PermissionResolved(PermissionResolved {
+        call: None,
         request_id: Some(RequestId("r_person".into())),
         decision: Decision::Allow,
         decided_by: DecidedBy::Person,
@@ -588,6 +648,7 @@ fn person_allowed() -> Event {
 /// decision, never a review request of its own.
 fn rule_denied(reason: &str) -> Event {
     Event::PermissionResolved(PermissionResolved {
+        call: None,
         request_id: None,
         decision: Decision::Deny,
         decided_by: DecidedBy::StandingRule,
@@ -822,7 +883,7 @@ fn line_texts(line: &Value) -> Vec<String> {
 }
 
 #[test]
-fn built_binary_prints_reviews_selection_and_unreplayable_in_order() {
+fn built_binary_prints_reviews_and_the_selection_in_order() {
     let fixture = main_fixture();
     let before = fixture.bytes();
     let handoffs = completed_handoffs(&fixture.dir);
@@ -832,9 +893,9 @@ fn built_binary_prints_reviews_selection_and_unreplayable_in_order() {
         "1\n",
         false,
         &[],
-        &["a_1", "a_2"],
+        &["a_1", "a_2", "a_blocked", "a_headless"],
         &handoffs,
-        &["a_blocked", "a_headless"],
+        &[],
     );
     assert_eq!(lines.len(), 5);
     // The first call sees both person messages and its own call, with
@@ -918,7 +979,7 @@ fn notes_flag_marks_every_system_prompt_and_empty_notes_match_no_notes() {
         }
     }
     // Two stages per review plus the selection request.
-    assert_eq!(prompts.len(), 5);
+    assert_eq!(prompts.len(), 9);
     for prompt in prompts {
         assert!(prompt.as_str().unwrap().contains("NOTES-MARKER"));
     }
@@ -940,9 +1001,9 @@ fn keep_none_selection_drops_every_earlier_person_message() {
         "none\n",
         false,
         &[],
-        &["a_1", "a_2"],
+        &["a_1", "a_2", "a_blocked", "a_headless"],
         &handoffs,
-        &["a_blocked", "a_headless"],
+        &[],
     );
     let after = line_texts(lines.get(2).unwrap());
     assert!(!after.iter().any(|text| text.contains("never push to main")));
@@ -1119,6 +1180,7 @@ fn rewritten_arguments_name_the_rewrite_in_the_effects_item() {
     );
     fixture.append(
         &Event::ToolCallStarted(ToolCallStarted {
+            always_reviewed: false,
             declared: DeclaredEffects {
                 effects: vec![Effect::Executes],
                 reversible: false,
@@ -1175,6 +1237,35 @@ fn inner_hosted_and_non_review_calls_print_no_lines_of_their_own() {
         Some("t_1"),
         Some("a_inner"),
     );
+    // A denial carrying declared effects for an inner call indexes
+    // nothing: only outer calls replay, so the line count is unchanged.
+    fixture.append(
+        &Event::PermissionResolved(PermissionResolved {
+            call: Some(ReviewedCall {
+                declared: DeclaredEffects {
+                    effects: vec![Effect::Reads],
+                    reversible: true,
+                    paths: None,
+                },
+                always_reviewed: false,
+                arguments: None,
+                changed_by: None,
+            }),
+            request_id: None,
+            decision: Decision::Deny,
+            decided_by: DecidedBy::Reviewer,
+            reason: Some("no".into()),
+            feedback: None,
+            grant: None,
+            rule: None,
+            reviewer: Some(ReviewerRef {
+                model: "fake/reviewer".into(),
+                stage: 1,
+            }),
+        }),
+        Some("t_1"),
+        Some("a_inner"),
+    );
     fixture.append(
         &Event::ToolCallRequested(ToolCallRequested {
             name: "web_search".into(),
@@ -1212,6 +1303,7 @@ fn inner_hosted_and_non_review_calls_print_no_lines_of_their_own() {
     );
     fixture.append(
         &Event::PermissionRequested(PermissionRequested {
+            always_reviewed: false,
             request_id: RequestId("r_standing".into()),
             declared: DeclaredEffects {
                 effects: vec![Effect::Executes],
@@ -1266,9 +1358,9 @@ fn unknown_event_kinds_are_ignored() {
         "1\n",
         false,
         &[],
-        &["a_1", "a_2"],
+        &["a_1", "a_2", "a_blocked", "a_headless"],
         &handoffs,
-        &["a_blocked", "a_headless"],
+        &[],
     );
     assert_eq!(lines.len(), 5);
 }
@@ -1326,7 +1418,7 @@ fn calls_print_at_their_request_position_without_moving_across_handoffs() {
         Some("a_blocked"),
     );
     fixture.append(
-        &reviewer_denied("that push rewrites shared history"),
+        &legacy_reviewer_denied("that push rewrites shared history"),
         Some("t_1"),
         Some("a_blocked"),
     );
@@ -1596,4 +1688,103 @@ fn missing_session_or_start_is_an_input_error() {
         "{}",
         String::from_utf8_lossy(&output.stderr)
     );
+}
+
+/// A log written before the declared-effects change still prints
+/// `unreplayable` for both denials: neither decision carries the keys.
+#[test]
+fn a_log_written_before_the_change_still_prints_unreplayable_for_both_denials() {
+    let fixture = Fixture::new("s_legacy", "/synthetic/workspace");
+    fixture.append(&user_turn(&["go"]), Some("t_1"), None);
+    fixture.append(
+        &requested("shell", json!({"city": "Paris"})),
+        Some("t_1"),
+        Some("a_blocked"),
+    );
+    fixture.append(
+        &legacy_reviewer_denied("that push rewrites shared history"),
+        Some("t_1"),
+        Some("a_blocked"),
+    );
+    fixture.append(
+        &requested("shell", json!({"city": "Paris"})),
+        Some("t_1"),
+        Some("a_headless"),
+    );
+    fixture.append(
+        &legacy_headless_denied("no person can answer"),
+        Some("t_1"),
+        Some("a_headless"),
+    );
+    let lines = check_binary_output(
+        &fixture.dir,
+        "",
+        false,
+        &[],
+        &[],
+        &[],
+        &["a_blocked", "a_headless"],
+    );
+    assert_eq!(lines.len(), 2);
+    assert_eq!(
+        lines[0],
+        json!({"id": "a_blocked", "unreplayable": "declared effects not logged"}),
+    );
+    assert_eq!(
+        lines[1],
+        json!({"id": "a_headless", "unreplayable": "declared effects not logged"}),
+    );
+}
+
+/// A blocked call a hook rewrote replays with the rewritten arguments:
+/// the effects item names the rewrite and the judged city, never the
+/// model's original.
+#[test]
+fn a_blocked_call_a_hook_rewrote_replays_with_the_rewritten_arguments() {
+    let fixture = Fixture::new("s_rewritten_denial", "/synthetic/workspace");
+    fixture.append(&user_turn(&["go"]), Some("t_1"), None);
+    fixture.append(
+        &requested("shell", json!({"city": "Nowhere"})),
+        Some("t_1"),
+        Some("a_1"),
+    );
+    fixture.append(
+        &Event::PermissionResolved(PermissionResolved {
+            call: Some(ReviewedCall {
+                declared: DeclaredEffects {
+                    effects: vec![Effect::Executes],
+                    reversible: false,
+                    paths: None,
+                },
+                always_reviewed: false,
+                arguments: Some(serde_json::from_value(json!({"city": "Paris"})).unwrap()),
+                changed_by: Some(vec!["ext".into()]),
+            }),
+            request_id: None,
+            decision: Decision::Deny,
+            decided_by: DecidedBy::Reviewer,
+            reason: Some("no".into()),
+            feedback: None,
+            grant: None,
+            rule: None,
+            reviewer: Some(ReviewerRef {
+                model: "fake/reviewer".into(),
+                stage: 1,
+            }),
+        }),
+        Some("t_1"),
+        Some("a_1"),
+    );
+    let lines = check_binary_output(&fixture.dir, "", false, &[], &["a_1"], &[], &[]);
+    assert_eq!(lines.len(), 1);
+    let texts = line_texts(lines.first().unwrap());
+    let rewrite_items: Vec<_> = texts
+        .iter()
+        .filter(|text| text.contains("rewrote"))
+        .collect();
+    assert!(!rewrite_items.is_empty(), "{texts:?}");
+    for text in &rewrite_items {
+        assert!(text.contains("Paris"), "{text}");
+        assert!(!text.contains("Nowhere"), "{text}");
+    }
 }

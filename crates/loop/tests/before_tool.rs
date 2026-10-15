@@ -373,6 +373,35 @@ fn a_rewritten_call_is_reviewed_as_the_call_that_will_run() {
     );
 }
 
+/// A blocked rewritten call logs the judged arguments with who rewrote
+/// them: the decision carries the rewrite, and nothing started.
+#[test]
+fn a_blocked_rewritten_call_logs_the_arguments_it_was_judged_with() {
+    let (mut session, tool, _hooks, _reviewer) = reviewed_session(
+        reviewer_texts(&["check", "block no"]),
+        vec![("probe", json!({"path": "a.txt"}))],
+    );
+    session.inbox.send(delivery("go")).unwrap();
+    assert_eq!(session.turn(), Some(TurnOutcome::Completed));
+    let lines = session.lines();
+    assert_eq!(
+        turn_kinds(&lines),
+        first_turn_kinds(&["permission_resolved", "tool_call_completed"], 2)
+    );
+    let resolved = line(&lines, "permission_resolved");
+    assert_eq!(resolved.payload["decision"], "deny");
+    assert_eq!(resolved.payload["decided_by"], "reviewer");
+    assert_eq!(resolved.payload.get("request_id"), None);
+    assert_eq!(resolved.payload["effects"], json!(["reads"]));
+    assert_eq!(resolved.payload["reversible"], true);
+    assert_eq!(resolved.payload["paths"], json!(["b.txt"]));
+    assert_eq!(resolved.payload["arguments"], json!({"path": "b.txt"}));
+    assert_eq!(resolved.payload["changed_by"], json!(["fiber.test/guard"]));
+    let flat = serde_json::to_string(&resolved.payload).unwrap();
+    assert!(!flat.contains("a.txt"), "{flat}");
+    assert!(tool.runs().is_empty());
+}
+
 #[test]
 fn an_unrewritten_reviewed_call_has_no_rewrite_line() {
     let tool = Arc::new(PathTool::reviewed());
@@ -688,6 +717,7 @@ fn review_request(
     rule_subject: &str,
 ) -> Event {
     Event::PermissionRequested(PermissionRequested {
+        always_reviewed: false,
         request_id: RequestId(request_id.into()),
         declared: DeclaredEffects {
             effects: vec![Effect::Reads],
