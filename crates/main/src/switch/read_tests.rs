@@ -1184,6 +1184,10 @@ fn cancel_passes_a_blocked_spawn_and_the_late_child_is_killed() {
         fakes::group_empties(pid_a, DEADLINE),
         "the cancel killed group A"
     );
+    let late_a = fakes::within("the killed command", DEADLINE, move || {
+        running_a.join().unwrap()
+    })
+    .expect_err("a killed command");
     match release_tx.send(()) {
         Ok(()) | Err(_) => {}
     }
@@ -1192,10 +1196,11 @@ fn cancel_passes_a_blocked_spawn_and_the_late_child_is_killed() {
     })
     .expect_err("a command spawned after the cancel");
     assert_eq!(error.kind(), std::io::ErrorKind::Interrupted);
-    // The late group is listed for settlement: A was already empty (the
-    // wait above), so the late spawn's prune retires it and lists only
-    // the late group. The leader's reap never retires surviving
-    // descendants; settlement does, once the probe says SRCH.
+    // A listed group is retired once its probe says SRCH: A's join above
+    // reaped its leader before the release, so the late spawn's prune
+    // retires A and lists only the late group. The leader's reap never
+    // retires surviving descendants; settlement does, once the probe
+    // says SRCH.
     assert_eq!(
         listed(&reads).len(),
         1,
@@ -1223,10 +1228,6 @@ fn cancel_passes_a_blocked_spawn_and_the_late_child_is_killed() {
         "settlement retires the late group: {:?}",
         listed(&reads)
     );
-    let late_a = fakes::within("the killed command", DEADLINE, move || {
-        running_a.join().unwrap()
-    })
-    .expect_err("a killed command");
     assert_eq!(late_a.kind(), std::io::ErrorKind::Interrupted);
     watchdog_a.stand_down(DEADLINE);
     pre_a.stand_down(DEADLINE);
