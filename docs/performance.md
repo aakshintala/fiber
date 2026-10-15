@@ -145,7 +145,9 @@ fast uses 9V45, slow uses 7763 only, so the advisory 9V74 never widens 7763's
 tolerance. Middle has no tolerance because no middle model gates. The fast
 attaching ceiling and tolerance are pinned by a test against the 10 MiB
 samples of the fast class's stored files
-(`xtask/tests/class_data/9v45-attach-10mib.json`).
+(`xtask/tests/class_data/9v45-attach-10mib.json`). `scripts/class-data`
+regenerates that file from the `benchmarks-<sha>` artifacts of `main`
+runs; the committed file keeps entries whose artifacts have expired.
 
 The busy-or-resumed ceiling holds on three workloads:
 
