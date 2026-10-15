@@ -74,6 +74,8 @@ mod status;
 mod step;
 mod suspend;
 mod switch;
+#[cfg(test)]
+mod timing_tests;
 mod turn;
 mod usage;
 mod util;

@@ -4,6 +4,7 @@
 use std::sync::{Arc, Mutex, MutexGuard, PoisonError, Weak};
 
 use contract::clock::Wake;
+use contract::diag::Op;
 use contract::events::{CallStatus, ToolCallCompleted, TurnCompleted, TurnOutcome};
 use contract::provider::{CallError, Delta, ModelCall, Reply};
 use contract::tool::Cancel as _;
@@ -251,14 +252,41 @@ pub(crate) fn run_cancellable(
     call: Box<dyn ModelCall>,
     sink: &mut dyn FnMut(Delta),
 ) -> Result<Reply, CallError> {
+    run_cancellable_timed(cancel, call, sink, None)
+}
+
+/// [`run_cancellable`] with the admitted attempt's `turn.model_call` scope:
+/// the timer starts only on the live branch, after the post-subscription
+/// check, and drops once `run` returns, outside any signal lock. A cancel
+/// observed by that check runs through the same path with no timer: an
+/// entered attempt is timed, a prevented admission never is.
+#[allow(
+    clippy::result_large_err,
+    reason = "the error is the model call's, returned unchanged"
+)]
+pub(crate) fn run_cancellable_timed(
+    cancel: &TurnCancel,
+    call: Box<dyn ModelCall>,
+    sink: &mut dyn FnMut(Delta),
+    diag: Option<&log::diag::Diag>,
+) -> Result<Reply, CallError> {
     let call: Arc<dyn ModelCall> = call.into();
     let waker: Arc<dyn Wake> = Arc::new(CallWaker {
         call: Arc::clone(&call),
     });
     cancel.subscribe(Arc::downgrade(&waker));
+    #[cfg(test)]
+    if crate::timing_tests::take_cancel_after_subscribe() {
+        cancel.cancel();
+    }
     if cancel.is_cancelled() {
         call.cancel();
+        // Held while `run` blocks: the subscription keeps only a `Weak`, so
+        // the waker must stay alive for the wake to reach the call.
+        let _keep = waker;
+        return call.run(sink);
     }
+    let _timer = diag.and_then(|diag| log::diag::timed(diag, Op::TurnModelCall, None, None));
     // Held while `run` blocks: the subscription keeps only a `Weak`, so
     // the waker must stay alive for the wake to reach the call.
     let _keep = waker;

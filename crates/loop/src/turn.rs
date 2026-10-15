@@ -109,6 +109,15 @@ impl Loop {
         // both run `offer` before this. A rewound loop's logged preamble
         // returned above, so no rebuild in that process runs the load.
         self.load_approved()?;
+        // The first actual construction in the process owns the one
+        // `startup.preamble` scope; a same-session rebuild stays silent.
+        // The latch is marked before the build, so a construction that
+        // fails after entry still emits exactly once.
+        let first = !self.diag.preamble_done();
+        self.diag.set_preamble_done();
+        let _timer = first
+            .then(|| self.diag.timed(contract::diag::Op::StartupPreamble))
+            .flatten();
         let unattended = !self.answerable;
         self.set_trigger();
         let (system_prompt, tools, mut event) = prompt::build(
@@ -124,6 +133,10 @@ impl Loop {
         // The loop owns the effective budget; the builder leaves it
         // absent and every build passes through here.
         event.budget = self.budget;
+        #[cfg(test)]
+        if crate::timing_tests::take_fail_preamble_write() {
+            return Err(crate::timing_tests::log_io_error());
+        }
         self.log
             .append(&Event::PreambleBuilt(event.clone()), None, None)?;
         let large = prompt::definitions_notice(&event);
@@ -136,6 +149,11 @@ impl Loop {
             cache_lifetime: event.cache_lifetime,
             thinking: self.prompt.thinking,
         });
+        // The scope ends with the installation, before the opening: the
+        // opening and its notices are session content, not the build.
+        drop(_timer);
+        #[cfg(test)]
+        crate::timing_tests::preamble_exit(self.log.clock().as_ref());
         let opened = self.ensure_opening()?;
         if let Some(notice) = large {
             self.append_early(&Event::Notice(notice))?;
