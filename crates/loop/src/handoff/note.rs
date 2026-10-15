@@ -220,6 +220,9 @@ impl Loop {
             // trigger does not fire again in that turn.
             Noted::Note(id) => {
                 let note = Some(Note::Actions { note: vec![id] });
+                // debt: the same three-case map from `Started` to `HandoffCompleted`
+                // is written here and in the tool path; one helper would take the note,
+                // token count and instructions. Upgrade when a third handoff path needs it.
                 let (done, contexts) = match self.handoff_start(turn)? {
                     Started::Contexts(contexts) => (
                         HandoffCompleted {
@@ -310,6 +313,9 @@ impl Loop {
         tokens_before: u64,
     ) -> Result<Outcome, Error> {
         let taken = Some(Note::Actions { note });
+        // debt: the same three-case map from `Started` to `HandoffCompleted` is
+        // written here and in the tool path; one helper would take the note,
+        // token count and instructions. Upgrade when a third handoff path needs it.
         let (done, contexts) = match self.handoff_start(turn)? {
             Started::Contexts(contexts) => (
                 HandoffCompleted {
