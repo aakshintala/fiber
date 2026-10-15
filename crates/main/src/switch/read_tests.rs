@@ -349,17 +349,52 @@ fn a_credential_command_still_running_at_its_timeout_is_killed_and_times_out() {
         "the group died before its timeout"
     );
     // Armed while the wait is parked: the settlement pauses after its
-    // first kill and is never released, so the group stays alive and
-    // the answer below never comes. The sender lives until the test
-    // ends, so a failure still drops it and frees the settlement.
+    // first kill, so the acknowledgement proves the timeout killed the
+    // group before the drive below moves time again. Releasing it then
+    // lets the settlement re-kill and reap on the poll cadence.
     let (killed, is_killed) = mpsc::channel::<()>();
-    let (_held, freed) = mpsc::channel::<()>();
+    let (release, freed) = mpsc::channel::<()>();
     reads.pause_at_settle(killed, freed);
     clock.advance(Duration::from_millis(1));
     Deadline::after(DEADLINE).recv_or_fail(&is_killed, "the settlement's first kill");
-    let error = Deadline::after(fakes::MUST_SUCCEED_WITHIN)
-        .recv_or_fail(&finished, "the timed-out read")
-        .expect_err("a command still running at its timeout");
+    release.send(()).unwrap();
+    // The timeout re-kills on the poll cadence and parks between passes,
+    // then reaps on the same cadence: drive each confirmed poll park to
+    // the answer, as the stdout-holding test does. The advance above
+    // wakes only one pass, whose probe can still see a reaped-but-not-
+    // yet-reaped zombie alive under load; without further advances
+    // nothing ever bumps again and the wait parks forever. Each advance
+    // names its confirmed park, and each park waits only a poll pause of
+    // the drive, so an already-retired group still ends the loop on its
+    // answer instead of stalling on a park that never comes.
+    let drive = Deadline::after(DEADLINE);
+    let mut answer: Option<std::io::Result<std::process::Output>> = None;
+    while answer.is_none() {
+        match finished.try_recv() {
+            Ok(got) => {
+                answer = Some(got);
+                break;
+            }
+            Err(mpsc::TryRecvError::Empty) => {}
+            Err(mpsc::TryRecvError::Disconnected) => break,
+        }
+        if drive.left().is_zero() {
+            break;
+        }
+        let poll = clock
+            .now()
+            .checked_add(GROUP_POLL)
+            .expect("the poll is countable");
+        if clock.await_parked(poll, drive.left().min(PARK_PAUSE)) {
+            clock.advance_when_parked(Some(poll), None, GROUP_POLL, &drive);
+        }
+    }
+    let error = match answer {
+        Some(got) => got.expect_err("a command still running at its timeout"),
+        None => Deadline::after(fakes::MUST_SUCCEED_WITHIN)
+            .recv_or_fail(&finished, "the timed-out read")
+            .expect_err("a command still running at its timeout"),
+    };
     assert_eq!(error.kind(), std::io::ErrorKind::TimedOut);
     assert!(
         fakes::group_empties(pgid, DEADLINE),
