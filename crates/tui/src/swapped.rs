@@ -42,17 +42,19 @@ pub(crate) enum Spot {
     Item(u64),
 }
 
-/// How a cell draws: plain text, a provider heading, or dimmed text
-/// such as a row's roles. The selected row still reverses over it, so it
-/// shows on every theme and with no colour.
+/// How a cell draws: plain text, a provider heading, dimmed text such
+/// as a row's roles, or one role's colour. The selected row still
+/// reverses over it, so it shows on every theme and with no colour.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum Ink {
     /// Plain text.
     Plain,
     /// A heading: bold.
     Heading,
-    /// Dimmed text: the muted role's colour.
+    /// Dimmed text: faint in the muted role's colour.
     Muted,
+    /// One role's colour, such as a context category's.
+    Role(Role),
 }
 
 impl Ink {
@@ -61,7 +63,10 @@ impl Ink {
         match self {
             Ink::Plain => Style::default(),
             Ink::Heading => Style::new().add_modifier(Modifier::BOLD),
-            Ink::Muted => Style::new().fg(Role::Muted.color()),
+            Ink::Muted => Style::new()
+                .fg(Role::Muted.color())
+                .add_modifier(Modifier::DIM),
+            Ink::Role(role) => Style::new().fg(role.color()),
         }
     }
 }
@@ -296,7 +301,7 @@ pub(crate) fn render(frame: &Frame, area: Rect, buf: &mut Buffer, targets: &mut 
     {
         field(text, *caret, Rect::new(area.x, y, area.width, 1), buf);
     }
-    if footer > area.y {
+    if !frame.footer.is_empty() && footer > area.y {
         buf.set_stringn(area.x, footer, &frame.footer, width, FOOTER);
     }
 }

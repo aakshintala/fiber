@@ -343,6 +343,44 @@ fn a_heading_cell_is_bold_and_a_muted_cell_is_muted() {
 }
 
 #[test]
+fn a_role_cell_draws_its_role_and_a_muted_cell_is_faint() {
+    let frame = Frame {
+        title: "Context".to_owned(),
+        command: "/context",
+        rows: vec![
+            vec![("■ ".to_owned(), None, Ink::Role(Role::Error))],
+            vec![("tail".to_owned(), None, Ink::Muted)],
+        ],
+        list: List::default(),
+        below: Vec::new(),
+        field: None,
+        footer: String::new(),
+    };
+    let area = Rect::new(0, 0, 20, 4);
+    let mut buf = Buffer::empty(area);
+    let mut targets = Vec::new();
+    render(&frame, area, &mut buf, &mut targets);
+    // The role cell draws its role's colour; the muted cell is faint
+    // in the muted colour.
+    assert_eq!(buf[(0, 1)].fg, Role::Error.color());
+    assert_eq!(buf[(0, 2)].fg, Role::Muted.color());
+    assert!(buf[(0, 2)].modifier.contains(Modifier::DIM));
+    assert!(!buf[(0, 1)].modifier.contains(Modifier::DIM));
+}
+
+#[test]
+fn an_empty_footer_draws_nothing() {
+    let area = Rect::new(0, 0, 20, 4);
+    let mut buf = Buffer::empty(area);
+    let mut shown = frame(1);
+    shown.footer = String::new();
+    render(&shown, area, &mut buf, &mut Vec::new());
+    assert_eq!(text(&buf, 1), "row 0");
+    assert_eq!(text(&buf, 2), "below");
+    assert_eq!(text(&buf, 3), "");
+}
+
+#[test]
 fn the_field_scrolls_to_show_its_caret() {
     let area = Rect::new(0, 0, 10, 4);
     let mut buf = Buffer::empty(area);
