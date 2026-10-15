@@ -522,6 +522,12 @@ fn an_unreadable_card_gives_the_notice_and_sends_nothing() {
         app.notice(),
         Some("Cannot attach: this session's schema is newer than this terminal reads.")
     );
+    assert!(app.notices().iter().any(|line| matches!(
+        line,
+        crate::app::NoticeLine::Notice { code, text, .. }
+        if code == "session_held"
+            && text == "Cannot attach: this session's schema is newer than this terminal reads."
+    )));
     assert_eq!(on_screen(&app), Some(A));
 }
 

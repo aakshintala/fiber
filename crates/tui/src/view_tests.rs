@@ -5,6 +5,7 @@ use crate::app::App;
 use crate::keys::{Edit, Key};
 use crate::link::Line;
 use crate::local_time::{new_york, turn_started_at};
+use crate::markdown::Role;
 use contract::clock::Clock;
 use ratatui::buffer::Buffer;
 use ratatui::layout::{Alignment, Position, Rect};
@@ -399,17 +400,21 @@ fn a_short_screen_keeps_the_input_line_last() {
     app.connect_failed("lost".to_owned());
     app.on_key(Key::CtrlC, now);
     // The input line wins the last row with its edges where they fit,
-    // then the hint; a screen too short for them all drops the hint
-    // first, and the notice with the conversation.
+    // then the notice; a screen too short for them all drops the hint
+    // first, and the badge with the conversation. The edged input box
+    // takes the notice's row before the hint's.
     assert_eq!(sized(&mut app, 20, 1), "▌ › █\n");
-    assert_eq!(sized(&mut app, 20, 2), "Press Ctrl+C again t\n▌ › █\n");
+    assert_eq!(
+        sized(&mut app, 20, 2),
+        "  ⚠ connection_fa… ✕\n▌ › █\n"
+    );
     assert_eq!(
         sized(&mut app, 20, 3),
         "▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄\n▌ › █\n▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀\n"
     );
     assert_eq!(
         sized(&mut app, 20, 4),
-        "Press Ctrl+C again t\n▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄\n▌ › █\n▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀\n"
+        "  ⚠ connection_fa… ✕\n▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄\n▌ › █\n▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀\n"
     );
 }
 
@@ -642,9 +647,11 @@ fn a_short_screen_drops_the_badge_after_the_hint() {
     app.on_key(Key::Esc, now);
     app.connect_failed("lost".to_owned());
     app.on_key(Key::CtrlC, now);
-    let badge = "! 1 waiting · /approvals or ⌥A";
     assert_eq!(sized(&mut app, 40, 1), "▌ › █\n");
-    assert_eq!(sized(&mut app, 40, 2), format!("{badge}\n▌ › █\n"));
+    assert_eq!(
+        sized(&mut app, 40, 2),
+        format!("  ⚠ connection_failed · lost           ✕\n▌ › █\n")
+    );
     // The input box's edges take the rows the hint and the badge lose.
     assert_eq!(
         sized(&mut app, 40, 3),
@@ -652,7 +659,20 @@ fn a_short_screen_drops_the_badge_after_the_hint() {
     );
     assert_eq!(
         sized(&mut app, 40, 4),
-        format!("{badge}\n{}\n▌ › █\n{}\n", "▄".repeat(40), "▀".repeat(40))
+        format!(
+            "  ⚠ connection_failed · lost           ✕\n{}\n▌ › █\n{}\n",
+            "▄".repeat(40),
+            "▀".repeat(40)
+        )
+    );
+    // Taller, the badge and the hint return above the notice.
+    assert_eq!(
+        sized(&mut app, 40, 5),
+        format!(
+            "! 1 waiting · /approvals or ⌥A\n  ⚠ connection_failed · lost           ✕\n{}\n▌ › █\n{}\n",
+            "▄".repeat(40),
+            "▀".repeat(40)
+        )
     );
 }
 
@@ -1295,7 +1315,7 @@ fn zero_width_draws_no_steering_drop_target() {
 }
 
 #[test]
-fn notices_float_and_nothing_below_the_conversation_moves() {
+fn notices_above_the_working_line() {
     let mut app = empty();
     attach(&mut app, S_A);
     for n in 1..=4 {
@@ -1313,12 +1333,277 @@ fn notices_float_and_nothing_below_the_conversation_moves() {
         ));
     }
     let after = screen(&app);
+    // The input box stays on the last row; the conversation above it
+    // gives up the notice rows.
     let below = |screen: &str| screen.lines().last().map(str::to_owned);
     assert_eq!(below(&before), below(&after));
     assert_eq!(before.lines().count(), after.lines().count());
-    insta::assert_snapshot!("notices_float", after);
+    insta::assert_snapshot!("notices_above_the_working_line", after);
     app.open_more_notices();
     insta::assert_snapshot!("notices_listed", screen(&app));
+}
+
+/// An app with a running turn at `width` by `height`: home set, the
+/// hub up, the session streaming and a requested call, so the working
+/// line shows.
+fn running(width: u16, height: u16) -> App {
+    let mut app = App::new(PathBuf::from("/w"));
+    app.set_home(crate::home::Launch {
+        workspace: PathBuf::from("/w"),
+        project: "-w".to_owned(),
+        ..Default::default()
+    });
+    app.set_size(width, height);
+    attach(&mut app, S_A);
+    app.on_line(Line::Hub(contract::HubLine {
+        kind: "hub_hello".to_owned(),
+        ts: 0,
+        schema_version: contract::SCHEMA_VERSION,
+        payload: serde_json::Map::new(),
+    }));
+    app.on_line(session_line(
+        S_A,
+        "session_status",
+        serde_json::json!({
+            "name": "work", "workspace": "/w", "project": "-w",
+            "state": "streaming", "since": 0,
+            "spend": {"tokens": {"input": 1, "cache_read": 0,
+                "cache_write": {}, "output": 2},
+                "cost": 0.0, "subscription_cost": 0.0},
+            "model": "test/model", "delegates": 0, "jobs": 0,
+            "clients": 0}),
+        None,
+    ));
+    app.on_line(turn_started(S_A, "go"));
+    app.on_line(session_line(S_A, "step_started", serde_json::json!({}), None));
+    app.on_line(session_line(
+        S_A,
+        "tool_call_requested",
+        serde_json::json!({"name": "read", "arguments": {"path": "a.rs"}}),
+        Some("a_1"),
+    ));
+    assert!(app.working_row_shown(), "a working line");
+    app
+}
+
+/// Four session notices on `app`, "Notice 1." oldest.
+fn raise_four(app: &mut App) {
+    for n in 1..=4 {
+        app.on_line(session_line(
+            S_A,
+            "notice",
+            serde_json::json!({"code": "extension_failed", "message": format!("Notice {n}.")}),
+            None,
+        ));
+    }
+}
+
+/// A row of `buf` as text, trailing spaces kept.
+fn full_row(buf: &Buffer, y: u16, width: u16) -> String {
+    (0..width)
+        .map(|x| buf[(x, y)].symbol().to_owned())
+        .collect()
+}
+
+/// The working line's row: the row running a turn draws.
+fn working_row(buf: &Buffer, width: u16) -> u16 {
+    (0..buf.area.height)
+        .find(|y| full_row(buf, *y, width).contains("Working"))
+        .unwrap_or_else(|| panic!("a working line"))
+}
+
+#[test]
+fn four_notices_three_rows_and_more() {
+    let mut app = running(100, 24);
+    raise_four(&mut app);
+    let buf = buffer(&app, 100, 24);
+    let working = working_row(&buf, 100);
+    // Three rows oldest first, then "+1 more" directly above the
+    // working line.
+    for (at, text) in [
+        (working - 4, "  ⚠ extension_failed · Notice 1."),
+        (working - 3, "  ⚠ extension_failed · Notice 2."),
+        (working - 2, "  ⚠ extension_failed · Notice 3."),
+        (working - 1, "  +1 more"),
+    ] {
+        let row = full_row(&buf, at, 100);
+        assert!(row.starts_with(text), "row {at}: {row:?}");
+    }
+    // Each notice row ends in a dim ✕ in the last column.
+    for row in working - 4..working - 1 {
+        let row_text = full_row(&buf, row, 100);
+        assert_eq!(crate::format::width(&row_text), 100, "row {row}");
+        assert!(row_text.ends_with('✕'), "row {row}: {row_text:?}");
+        assert_eq!(buf[(99, row)].symbol(), "✕");
+    }
+    // "⚠ extension_failed" reads in attention, the message dim.
+    let mark = "⚠ extension_failed";
+    let row = full_row(&buf, working - 4, 100);
+    let at = row.find(mark).expect("the mark");
+    let start = crate::format::width(&row[..at]);
+    for col in start..start + crate::format::width(mark) {
+        assert_eq!(buf[(col as u16, working - 4)].fg, Role::Attention.color(), "col {col}");
+    }
+    let message = row.find("Notice 1.").expect("the message");
+    let message_col = crate::format::width(&row[..message]);
+    assert!(
+        buf[(message_col as u16, working - 4)]
+            .modifier
+            .contains(Modifier::DIM),
+        "row {}",
+        working - 4
+    );
+    insta::assert_snapshot!("four_notices_three_rows_and_more", text(&buf));
+}
+
+#[test]
+fn short_screens_draw_what_fits_above_the_working_line() {
+    // Four notices raised on a running turn: the rows drawn are the
+    // rows above the working line, up to four; `below_rows` counts
+    // the same rows, so the conversation keeps the rest.
+    for height in [14u16, 12, 11, 10] {
+        let mut app = running(100, height);
+        raise_four(&mut app);
+        let buf = buffer(&app, 100, height);
+        let working = working_row(&buf, 100);
+        let drawn = (0..height)
+            .filter(|y| buf[(99, *y)].symbol() == "✕")
+            .count()
+            + usize::from(
+                (0..height).any(|y| full_row(&buf, y, 100).starts_with("  +"))
+            );
+        assert_eq!(drawn, 4.min(working as usize), "height {height}");
+        assert_eq!(
+            app.conversation_height(),
+            usize::from(height).saturating_sub(app.below_rows()),
+            "height {height}"
+        );
+    }
+    // Below the 40×10 floor the screen keeps one line naming its
+    // size; the row math still agrees and nothing panics.
+    for height in [8u16, 6, 5, 4] {
+        let mut app = running(100, height);
+        raise_four(&mut app);
+        let buf = buffer(&app, 100, height);
+        assert!(
+            text(&buf).contains("needs 40×10"),
+            "height {height}: {}",
+            text(&buf)
+        );
+        assert_eq!(
+            app.conversation_height() + app.below_rows(),
+            usize::from(height),
+            "height {height}"
+        );
+    }
+}
+
+#[test]
+fn the_fourth_notice_adds_exactly_the_more_row() {
+    let mut app = running(100, 24);
+    for n in 1..=2 {
+        app.on_line(session_line(
+            S_A,
+            "notice",
+            serde_json::json!({"code": "extension_failed", "message": format!("Notice {n}.")}),
+            None,
+        ));
+    }
+    assert_eq!(app.notices().len(), 2);
+    let two = app.conversation_height();
+    app.on_line(session_line(
+        S_A,
+        "notice",
+        serde_json::json!({"code": "extension_failed", "message": "Notice 3."}),
+        None,
+    ));
+    assert_eq!(app.notices().len(), 3);
+    let three = app.conversation_height();
+    assert_eq!(two - three, 1);
+    app.on_line(session_line(
+        S_A,
+        "notice",
+        serde_json::json!({"code": "extension_failed", "message": "Notice 4."}),
+        None,
+    ));
+    // The fourth notice adds exactly the "+1 more" row.
+    assert_eq!(app.notices().len(), 4);
+    assert_eq!(three - app.conversation_height(), 1);
+}
+
+#[test]
+fn a_long_notice_is_cut_with_ellipsis_before_its_cross() {
+    let width = 100u16;
+    let mut app = running(width, 24);
+    let long: String = "x".repeat(usize::from(width) + 20);
+    app.on_line(session_line(
+        S_A,
+        "notice",
+        serde_json::json!({"code": "extension_failed", "message": long}),
+        None,
+    ));
+    let buf = buffer(&app, width, 24);
+    let row = (0..24)
+        .map(|y| full_row(&buf, y, width))
+        .find(|row| row.contains('…'))
+        .expect("a cut row");
+    let cells: Vec<char> = row.chars().collect();
+    assert_eq!(cells[usize::from(width) - 3], '…');
+    assert_eq!(cells[usize::from(width) - 1], '✕');
+    // A message of exactly the text budget draws without "…".
+    let budget = usize::from(width) - 2 - crate::format::width("  ⚠ extension_failed · ");
+    let mut app = running(width, 24);
+    app.on_line(session_line(
+        S_A,
+        "notice",
+        serde_json::json!({"code": "extension_failed", "message": "x".repeat(budget)}),
+        None,
+    ));
+    let buf = buffer(&app, width, 24);
+    let row = (0..24)
+        .map(|y| full_row(&buf, y, width))
+        .find(|row| row.contains("extension_failed"))
+        .expect("a notice row");
+    assert!(!row.contains('…'), "{row:?}");
+    assert!(row.ends_with('✕'), "{row:?}");
+}
+
+#[test]
+fn narrow_widths_draw_what_fits_and_never_panic() {
+    for width in [12u16, 8, 4] {
+        let mut app = running(width, 24);
+        raise_four(&mut app);
+        let buf = buffer(&app, width, 24);
+        for y in 0..24 {
+            assert!(
+                crate::format::width(&full_row(&buf, y, width)) <= usize::from(width),
+                "{width}x{y}"
+            );
+        }
+    }
+    // Width zero draws nothing.
+    let mut app = running(100, 24);
+    raise_four(&mut app);
+    app.set_size(0, 24);
+    let area = Rect::new(0, 0, 0, 24);
+    let mut buf = Buffer::empty(area);
+    render(&app, area, &mut buf, None);
+}
+
+#[test]
+fn a_click_on_a_notice_cross_removes_that_row() {
+    let mut app = running(100, 24);
+    raise_four(&mut app);
+    let buf = buffer(&app, 100, 24);
+    let working = working_row(&buf, 100);
+    // The first row's ✕ dismisses it; the rows below move up one.
+    click(&mut app, 100, 24, 99, working - 4);
+    let buf = buffer(&app, 100, 24);
+    let working = working_row(&buf, 100);
+    assert!(!full_row(&buf, working - 3, 100).contains("Notice 1."));
+    assert!(full_row(&buf, working - 3, 100).contains("Notice 2."));
+    assert!(full_row(&buf, working - 2, 100).contains("Notice 3."));
+    assert!(full_row(&buf, working - 1, 100).contains("Notice 4."));
 }
 
 /// Renders `app` at `width` by `height` with the pointer at `pointer`,
@@ -2297,3 +2582,6 @@ fn ledger_rows_show_parsed_arguments_never_json() {
     assert!(shown.contains("rust errors"), "{shown}");
     assert!(!shown.contains("{\""), "{shown}");
 }
+
+
+

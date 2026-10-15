@@ -5,7 +5,7 @@
 use serde_json::Value;
 
 use super::super::{App, Effect, Link, Phase, mint, session_command};
-use super::refusal;
+use super::{refusal, refusal_code};
 use crate::home::{Level, Subs};
 use contract::SessionId;
 
@@ -184,6 +184,7 @@ impl App {
         };
         if row.state == crate::home::State::Unreadable {
             self.notices.push(
+                "session_held",
                 "Cannot attach: this session's schema is newer than this terminal reads."
                     .to_owned(),
             );
@@ -243,7 +244,7 @@ impl App {
     /// A rejection of the open's last subscribe fails the open: home again
     /// when still attached, with the message as the row's note and a
     /// notice. A rejection of an earlier step changes nothing by itself.
-    fn fail_open(&mut self, message: String) -> Vec<String> {
+    fn fail_open(&mut self, code: &str, message: String) -> Vec<String> {
         let session = self
             .home
             .as_mut()
@@ -256,7 +257,7 @@ impl App {
             home.sessions.note(&session, message.clone());
         }
         let attached = self.session() == Some(&session);
-        self.notices.push(message);
+        self.notices.push(code, message);
         if attached {
             self.go_home();
         }
@@ -282,7 +283,8 @@ impl App {
                 self.subscribe_refused(session, code, &refusal(payload));
             }
             if !accepted && self.is_ack(id) {
-                return Some(self.fail_open(refusal(payload)));
+                let code = refusal_code(payload);
+                return Some(self.fail_open(&code, refusal(payload)));
             }
             return Some(Vec::new());
         }

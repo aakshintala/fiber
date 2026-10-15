@@ -899,6 +899,12 @@ fn an_unreadable_row_does_not_open_and_says_so() {
         app.notice(),
         Some("Cannot attach: this session's schema is newer than this terminal reads.")
     );
+    assert!(app.notices().iter().any(|line| matches!(
+        line,
+        crate::app::NoticeLine::Notice { code, text, .. }
+        if code == "session_held"
+            && text == "Cannot attach: this session's schema is newer than this terminal reads."
+    )));
 }
 
 #[test]
@@ -3056,6 +3062,12 @@ fn x_on_an_unreadable_row_says_so() {
         app.notice(),
         Some("Cannot attach: this session's schema is newer than this terminal reads.")
     );
+    assert!(app.notices().iter().any(|line| matches!(
+        line,
+        crate::app::NoticeLine::Notice { code, text, .. }
+        if code == "session_held"
+            && text == "Cannot attach: this session's schema is newer than this terminal reads."
+    )));
 }
 
 #[test]

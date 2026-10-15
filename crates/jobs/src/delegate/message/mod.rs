@@ -514,6 +514,7 @@ impl DelegateMessage {
             | ErrorCode::BlockedHost
             | ErrorCode::BudgetExceeded
             | ErrorCode::Busy
+            | ErrorCode::CacheRebuild
             | ErrorCode::CommandConflict
             | ErrorCode::ConfigInvalid
             | ErrorCode::ConfigKeyIgnored
@@ -534,6 +535,7 @@ impl DelegateMessage {
             | ErrorCode::ExtensionUnavailable
             | ErrorCode::FetchFailed
             | ErrorCode::Flooded
+            | ErrorCode::HistoryLoading
             | ErrorCode::HookUnapproved
             | ErrorCode::HttpError
             | ErrorCode::Indeterminate
@@ -553,6 +555,7 @@ impl DelegateMessage {
             | ErrorCode::ModelInvalid
             | ErrorCode::ModelNotFound
             | ErrorCode::ModelUnconfigured
+            | ErrorCode::ModelsLoading
             | ErrorCode::NamePinned
             | ErrorCode::NoMatch
             | ErrorCode::NoModel

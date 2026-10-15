@@ -20,11 +20,11 @@ impl App {
         match &result {
             Ok(catalogue) => {
                 for notice in &catalogue.notices {
-                    self.push_notice(notice.clone());
+                    self.push_notice("model_invalid", notice.clone());
                 }
             }
             Err(error) => {
-                self.push_notice(error.clone());
+                self.push_notice("io_failed", error.clone());
             }
         }
         self.model_picker.store(result);
@@ -94,7 +94,10 @@ impl App {
             return self.choose_on_home(choice);
         };
         if self.link != super::Link::Up {
-            self.push_notice("The hub is not connected; nothing changed.".to_owned());
+            self.push_notice(
+                "connection_failed",
+                "The hub is not connected; nothing changed.".to_owned(),
+            );
             return super::Effect::None;
         }
         // A switch rebuilds the prompt cache: say its size before the
@@ -103,10 +106,13 @@ impl App {
         let changed = Some(choice.reference.as_str()) != self.panel_state.model()
             || choice.level.as_deref() != self.panel_state.thinking();
         if changed && let Some(tokens) = self.usage_on_screen() {
-            self.push_notice(format!(
-                "switching rebuilds the cache: about {} tokens",
-                about(tokens)
-            ));
+            self.push_notice(
+                "cache_rebuild",
+                format!(
+                    "switching rebuilds the cache: about {} tokens",
+                    about(tokens)
+                ),
+            );
         }
         let id = super::mint();
         let line =
@@ -128,6 +134,7 @@ impl App {
             // goes out, for this session only.
             match self.configure_seam() {
                 None => self.push_notice(
+                    "io_failed",
                     "Saving is not available; the switch is for this session only.".to_owned(),
                 ),
                 Some(_) => {
@@ -151,6 +158,7 @@ impl App {
         let workspace = self.workspace();
         match self.configure_seam() {
             None if !saves(&choice).is_empty() => self.push_notice(
+                "io_failed",
                 "Saving is not available; the switch is for this session only.".to_owned(),
             ),
             None => {}
@@ -165,7 +173,10 @@ impl App {
                             }
                             self.picker_saved(&key, &choice)
                         }
-                        Err(error) => self.push_notice(format!("Saving {key} failed: {error}")),
+                        Err(error) => self.push_notice(
+                            "io_failed",
+                            format!("Saving {key} failed: {error}"),
+                        ),
                     }
                 }
             }
@@ -296,7 +307,7 @@ impl App {
                     self.picker_accepted(&key, &text)
                 }
                 Err(error) => {
-                    self.push_notice(format!("Saving {key} failed: {error}"));
+                    self.push_notice("io_failed", format!("Saving {key} failed: {error}"));
                 }
             }
         }
@@ -416,7 +427,7 @@ impl App {
     /// home with no entry the read is asked for instead.
     fn set_level(&mut self, level: &str) -> super::Effect {
         let Some((model, _)) = self.thinking_model() else {
-            self.push_notice("Choose a model first: Ctrl+L.".to_owned());
+            self.push_notice("no_model", "Choose a model first: Ctrl+L.".to_owned());
             return super::Effect::None;
         };
         let declared = self
@@ -429,9 +440,15 @@ impl App {
         match declared {
             Some(levels) if !levels.iter().any(|declared| declared == level) => {
                 if levels.is_empty() {
-                    self.push_notice(format!("{model} takes no thinking level."));
+                    self.push_notice(
+                        "invalid_arguments",
+                        format!("{model} takes no thinking level."),
+                    );
                 } else {
-                    self.push_notice(format!("{model} takes {}.", levels.join(", ")));
+                    self.push_notice(
+                        "invalid_arguments",
+                        format!("{model} takes {}.", levels.join(", ")),
+                    );
                 }
                 super::Effect::None
             }
@@ -451,6 +468,7 @@ impl App {
             }),
             None => {
                 self.push_notice(
+                    "models_loading",
                     "The model list is not read yet; try again in a moment.".to_owned(),
                 );
                 let want = self.model_picker.want;
@@ -528,10 +546,13 @@ impl App {
                     }
                 }
                 Err(error) => {
-                    self.push_notice(format!("Saving scoped_models failed: {error}"));
+                    self.push_notice("io_failed", format!("Saving scoped_models failed: {error}"));
                 }
             },
-            None => self.push_notice("Saving is not available; nothing changed.".to_owned()),
+            None => self.push_notice(
+                "io_failed",
+                "Saving is not available; nothing changed.".to_owned(),
+            ),
         }
         self.model_picker.close();
         super::Effect::None
@@ -539,10 +560,13 @@ impl App {
 
     /// Refuses an unknown thinking word with the seven levels.
     fn refuse_level(&mut self, word: &str) -> super::Effect {
-        self.push_notice(format!(
-            "Unknown thinking level \"{word}\"; the levels are {}.",
-            LEVELS.join(", ")
-        ));
+        self.push_notice(
+            "invalid_arguments",
+            format!(
+                "Unknown thinking level \"{word}\"; the levels are {}.",
+                LEVELS.join(", ")
+            ),
+        );
         super::Effect::None
     }
     /// The open picker's overlay view: the filter, the buttons, one

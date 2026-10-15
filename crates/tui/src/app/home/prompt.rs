@@ -8,7 +8,7 @@ use serde_json::{Map, Value, json};
 
 use super::super::reconnect::UNANSWERED;
 use super::super::{App, Effect, Link, mint, session_command};
-use super::refusal;
+use super::{refusal, refusal_code};
 use crate::home::{Level, Spot, State, dependents};
 use crate::keys::Key;
 use crate::mouse::TargetId;
@@ -162,6 +162,7 @@ impl App {
         };
         if row.state == State::Unreadable {
             self.notices.push(
+                "session_held",
                 "Cannot attach: this session's schema is newer than this terminal reads."
                     .to_owned(),
             );
@@ -326,9 +327,10 @@ impl App {
         match ask {
             Ask::Stop(session) => {
                 if !accepted {
+                    let code = refusal_code(payload);
                     let message = refusal(payload);
                     self.note(&session, message.clone());
-                    self.notices.push(message);
+                    self.notices.push(&code, message);
                 }
                 Vec::new()
             }
@@ -362,7 +364,7 @@ impl App {
                     }
                 }
                 self.note(&id, message.clone());
-                self.notices.push(message);
+                self.notices.push(&refusal_code(payload), message);
                 self.clear_prompt(&id);
                 Vec::new()
             }

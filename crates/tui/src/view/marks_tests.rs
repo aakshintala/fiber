@@ -135,7 +135,7 @@ fn selection_does_not_paint_the_new_below_row() {
 }
 
 #[test]
-fn copied_sits_above_the_notices() {
+fn copied_above_the_notice_rows() {
     let mut app = replied(60, 10, "copy this line");
     app.on_line(session_line(
         "notice",
@@ -153,7 +153,7 @@ fn copied_sits_above_the_notices() {
         Effect::Copy(_)
     ));
     assert!(app.copied());
-    insta::assert_snapshot!("copied_sits_above_the_notices", shown(&app, 60, 10));
+    insta::assert_snapshot!("copied_above_the_notice_rows", shown(&app, 60, 10));
 }
 
 /// Under `NO_COLOR` the selection and the matches keep distinct marks:

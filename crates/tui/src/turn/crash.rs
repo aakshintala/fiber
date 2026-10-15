@@ -105,6 +105,10 @@ impl Fold {
 pub(crate) enum Aside {
     /// One line, as drawn.
     Line(Line<'static>),
+    /// A failed MCP server's message: "⚠ " in `attention`, then the
+    /// message dim, wrapped under itself
+    /// (`docs/tui.md`, "Errors and retries").
+    Warning { message: String },
     /// The jobs a resumed process marked orphaned: each one's name and
     /// message.
     Orphans {
@@ -115,10 +119,11 @@ pub(crate) enum Aside {
 }
 
 impl Aside {
-    /// Its lines.
-    pub(crate) fn rows(&self, out: &mut Rows) {
+    /// Its lines at the card's inner width.
+    pub(crate) fn rows(&self, inner: u16, out: &mut Rows) {
         match self {
             Self::Line(line) => out.push((line.clone(), None)),
+            Self::Warning { message } => warning_rows(message, inner, out),
             Self::Orphans { id, jobs, open } => {
                 let names: Vec<&str> = jobs.iter().map(|(name, _)| name.as_str()).collect();
                 let line = Line::raw(format!("Orphaned jobs: {}", names.join(", ")));
@@ -140,7 +145,7 @@ impl Aside {
                 *flag = open;
                 true
             }
-            Self::Orphans { .. } | Self::Line(_) => false,
+            Self::Orphans { .. } | Self::Line(_) | Self::Warning { .. } => false,
         }
     }
 
@@ -151,7 +156,7 @@ impl Aside {
                 *open = !*open;
                 Some(*open)
             }
-            Self::Orphans { .. } | Self::Line(_) => None,
+            Self::Orphans { .. } | Self::Line(_) | Self::Warning { .. } => None,
         }
     }
 }
@@ -198,7 +203,7 @@ fn orphans<'a>(
         .chain(in_turns)
         .find_map(|aside| match aside {
             Aside::Orphans { id: has, jobs, .. } if *has == id => Some(jobs),
-            Aside::Orphans { .. } | Aside::Line(_) => None,
+            Aside::Orphans { .. } | Aside::Line(_) | Aside::Warning { .. } => None,
         })
 }
 
@@ -207,8 +212,13 @@ fn orphans<'a>(
 pub(crate) fn fold(turns: &mut [Turn], fold: &mut Fold, envelope: &Envelope) -> bool {
     match envelope.kind.as_str() {
         "mcp_server_failed" => read!(envelope, McpServerFailed).is_some_and(|failed| {
-            let line = Line::raw(format!("⚠ {}", failed.error.message));
-            place(turns, fold, Aside::Line(line));
+            place(
+                turns,
+                fold,
+                Aside::Warning {
+                    message: failed.error.message,
+                },
+            );
             true
         }),
         "fiber_exited" => {
@@ -270,6 +280,39 @@ pub(crate) fn fold(turns: &mut [Turn], fold: &mut Fold, envelope: &Envelope) -> 
             true
         }
         _ => false,
+    }
+}
+
+/// A warning's rows: "⚠ " in `attention`, then the message dim,
+/// wrapped at `inner - 2` with every continuation starting under the
+/// message's first column, so a copy joins the wrapped text.
+fn warning_rows(message: &str, inner: u16, out: &mut Rows) {
+    use ratatui::style::{Modifier, Style};
+    use ratatui::text::Span;
+    let width = usize::from(inner).saturating_sub(2).max(1);
+    for (at, (row, join)) in format::wrap_joined(message, width).iter().enumerate() {
+        let line = if at == 0 {
+            Line::from(vec![
+                Span::styled(
+                    "⚠ ".to_owned(),
+                    crate::markdown::style(crate::theme::Role::Attention),
+                ),
+                Span::styled(row.clone(), Style::default().add_modifier(Modifier::DIM)),
+            ])
+        } else {
+            Line::styled(
+                format!("  {row}"),
+                Style::default().add_modifier(Modifier::DIM),
+            )
+        };
+        out.push_text(
+            (line, None),
+            crate::rows::RowText {
+                join: *join,
+                skip: 2,
+                ..crate::rows::RowText::plain()
+            },
+        );
     }
 }
 

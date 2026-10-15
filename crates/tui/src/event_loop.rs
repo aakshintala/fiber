@@ -111,7 +111,7 @@ pub(crate) fn run_with(
     });
     screen.set_look(look);
     if let Some(notice) = notice {
-        app.push_notice(notice);
+        app.push_notice("config_invalid", notice);
     }
     app.set_keys(std::mem::take(&mut launch.keys));
     // The model lists are read off the loop: taken out before home
@@ -865,7 +865,7 @@ impl<B: Backend> Loop<B> {
         let (look, notice) = Look::new(setting, &|name| (self.var)(name));
         self.screen.set_look(look);
         if let Some(notice) = notice {
-            self.app.push_notice(notice);
+            self.app.push_notice("config_invalid", notice);
         }
     }
 

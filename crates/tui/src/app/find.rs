@@ -496,8 +496,10 @@ impl App {
                 // its revision moves, and the count gains ` · incomplete`.
                 let revision = self.screen.pages().index().revision(fetch.page);
                 self.find.unreadable(fetch.page, revision);
-                self.notices
-                    .push(format!("Could not search all of history: {message}"));
+                self.notices.push(
+                    "io_failed",
+                    format!("Could not search all of history: {message}"),
+                );
             }
             Ok(lines) => {
                 fetch.held.extend(lines.iter().cloned());
@@ -557,8 +559,10 @@ impl App {
     /// incomplete with the notice that says why.
     pub(in crate::app) fn find_lost(&mut self) {
         if self.find.lose() {
-            self.notices
-                .push(format!("Could not search all of history: {LOST}"));
+            self.notices.push(
+                "connection_failed",
+                format!("Could not search all of history: {LOST}"),
+            );
         }
     }
 

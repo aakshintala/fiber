@@ -322,7 +322,7 @@ impl App {
             pages: held,
         });
         if !missing.is_empty() {
-            self.notices.push("Loading history…".to_owned());
+            self.notices.push("history_loading", "Loading history…".to_owned());
             return None;
         }
         let text = self.screen.pages().turn_text(at);

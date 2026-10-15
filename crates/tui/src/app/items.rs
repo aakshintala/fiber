@@ -538,12 +538,15 @@ impl App {
                 } else {
                     "A job takes no input here."
                 };
-                self.notices.push(message.to_owned());
+                self.notices.push("invalid_arguments", message.to_owned());
                 return Some(Effect::None);
             }
         };
         if record.outcome.is_some() {
-            self.notices.push("This delegate has finished.".to_owned());
+            self.notices.push(
+                "session_not_found",
+                "This delegate has finished.".to_owned(),
+            );
             return Some(Effect::None);
         }
         // A `/` built-in already ran in `on_enter` before this call, so

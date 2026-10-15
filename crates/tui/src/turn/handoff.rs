@@ -10,18 +10,17 @@ use contract::events::{
     ContextNudged, HandoffCompleted, HandoffStarted, HandoffTrigger, Note, Outcome, PreambleBuilt,
     UsageRecorded,
 };
-use ratatui::style::Style;
-use ratatui::text::Line;
+use ratatui::style::{Modifier, Style};
+use ratatui::text::{Line, Span};
 
 use super::crash::{self, Aside};
+use super::group::{dim_span, fit, spans_width};
 use super::{Entry, Fold, Turn, open};
 use crate::app::{Target, read};
 use crate::format;
+use crate::markdown::style;
 use crate::rows::{RowText, Rows};
 use crate::theme::Role;
-
-/// The band's tint.
-const TINT: Style = Style::new().bg(Role::Surface.color());
 
 /// What the trigger reads for a handoff the model started with its tool,
 /// which writes no `handoff_started`.
@@ -35,9 +34,8 @@ enum State {
     /// It completed: the size before, and after once the first request
     /// after it returns.
     Done { before: u64, after: Option<u64> },
-    /// It failed or was cancelled: the context is unchanged; the error's
-    /// message on a failure.
-    Unchanged(Option<String>),
+    /// It failed or was cancelled: the context is unchanged.
+    Unchanged { cancelled: bool },
 }
 
 /// One text part of the note.
@@ -53,6 +51,10 @@ struct Part {
 pub(crate) struct Band {
     id: usize,
     trigger: String,
+    /// The `handoff_started` envelope's `ts`, or the `handoff_completed`
+    /// envelope's for a band the model started with its tool: the band's
+    /// time reads from it.
+    ts: u64,
     state: State,
     /// The note the model wrote, as it streamed.
     parts: Vec<Part>,
@@ -62,10 +64,11 @@ pub(crate) struct Band {
 }
 
 impl Band {
-    fn new(id: usize, trigger: String) -> Self {
+    fn new(id: usize, trigger: String, ts: u64) -> Self {
         Self {
             id,
             trigger,
+            ts,
             state: State::Writing,
             parts: Vec::new(),
             hook: None,
@@ -141,57 +144,161 @@ impl Band {
         }
     }
 
-    /// Its lines: the band, then "▸ note" once there is a note, and the
-    /// note under it when open.
-    pub(crate) fn rows(&self, out: &mut Rows) {
-        let writing = matches!(self.state, State::Writing);
-        let state = match &self.state {
-            State::Writing => "● writing the note…".to_owned(),
-            State::Done { before, after } => {
-                let after = after.map_or_else(|| "…".to_owned(), size);
-                format!("{} → {after}", size(*before))
-            }
-            State::Unchanged(None) => "context unchanged".to_owned(),
-            State::Unchanged(Some(message)) => format!("context unchanged · {message}"),
-        };
-        let band = format!("⇄ Handoff · {} · {state}", self.trigger);
-        // While the note is being written the band's dot spins on the
-        // tick; a finished band marks nothing.
-        if writing {
-            let before = format!("⇄ Handoff · {} · ", self.trigger);
-            let col = u16::try_from(crate::format::width(&before)).unwrap_or(u16::MAX);
+    /// Its lines: the band row, exactly `width` cells, then "▸ note"
+    /// once there is a note, and the note under it when open. The band
+    /// row is one row on the `handoff` tint with half-block edges; the
+    /// note rows sit under its lower edge on the same tint with no
+    /// edges (`docs/tui.md`, "Handoff", "Look").
+    pub(crate) fn rows(&self, width: u16, zone: &jiff::tz::TimeZone, out: &mut Rows) {
+        let max = usize::from(width);
+        if max == 0 {
+            out.push((Line::default(), None));
+        } else {
+            let (row, spin) = self.band_row(max, zone);
             out.push_text(
-                (Line::styled(band, TINT), None),
+                (Line::from(row), None),
                 RowText {
-                    spin: Some(col),
+                    spin,
                     ..RowText::plain()
                 },
             );
-        } else {
-            out.push((Line::styled(band, TINT), None));
         }
+        let band_at = out.len().saturating_sub(1);
+        out.on_surface(
+            band_at,
+            width,
+            Role::Handoff,
+            crate::surface::Edges::BOTH,
+        );
         let note = self.note();
         if matches!(self.state, State::Writing) || note.is_empty() {
             return;
         }
+        let note_at = out.len();
         out.push((
-            Line::styled("  ▸ note".to_owned(), TINT),
+            Line::raw("  ▸ note".to_owned()),
             Some(Target::Note(self.id)),
         ));
         if out.open_scope(Target::Note(self.id), self.open) {
             format::opened(&note, "    ", out);
         }
         out.end_scope();
+        out.on_surface(
+            note_at,
+            width,
+            Role::Handoff,
+            crate::surface::Edges {
+                top: false,
+                bottom: false,
+            },
+        );
+    }
+
+    /// The band's content row, `max` cells, and the spinning column
+    /// while the note is being written: the "●" that survives the fit,
+    /// or `None` when the cut removes it.
+    fn band_row(&self, max: usize, zone: &jiff::tz::TimeZone) -> (Vec<Span<'static>>, Option<u16>) {
+        let handoff = style(Role::Secondary).add_modifier(Modifier::BOLD);
+        let left = vec![
+            Span::styled(" ⇄ ".to_owned(), style(Role::Secondary)),
+            Span::styled("handoff".to_owned(), handoff),
+            dim_span(format!(" · {}", self.trigger)),
+        ];
+        let time = crate::local_time::time_of_day(self.ts, zone)
+            .map(|time| format!(" · {time} "))
+            .unwrap_or_default();
+        let (right, spin_at) = match &self.state {
+            State::Writing => (
+                vec![
+                    Span::raw("●".to_owned()),
+                    dim_span(format!(" writing the note…{time}")),
+                ],
+                true,
+            ),
+            State::Done { before, after } => {
+                let after = after.map_or_else(|| "…".to_owned(), size);
+                let sizes = format!("{} → {after}", size(*before));
+                (
+                    vec![
+                        Span::styled(sizes, Style::new().add_modifier(Modifier::BOLD)),
+                        dim_span(time),
+                    ],
+                    false,
+                )
+            }
+            State::Unchanged { cancelled } => {
+                let outcome = if *cancelled { "cancelled" } else { "failed" };
+                (
+                    vec![
+                        Span::styled(
+                            format!("{outcome} · the context is unchanged"),
+                            style(Role::Attention),
+                        ),
+                        dim_span(time),
+                    ],
+                    false,
+                )
+            }
+        };
+        // The row fills `width` exactly; what does not fit is cut from
+        // the left part with "…", so the right part keeps its columns.
+        let left_width = spans_width(&left);
+        let right_width = spans_width(&right);
+        if left_width + 1 + right_width <= max {
+            let fill = max - left_width - right_width;
+            let mut row = left;
+            row.push(dim_span(" ".repeat(fill)));
+            let spin = spin_at.then(|| left_width + fill).and_then(try_col);
+            row.extend(right);
+            (row, spin)
+        } else if max >= right_width + 2 {
+            // One truncation: `fit` emits the row's single "…", so the
+            // right part keeps its columns, and the "●" survives.
+            let mut row = fit(left, max - right_width - 1);
+            row.push(dim_span(" ".to_owned()));
+            let spin = spin_at
+                .then(|| max - right_width)
+                .and_then(try_col);
+            row.extend(right);
+            (row, spin)
+        } else {
+            // Even the right part does not fit: the whole row is cut to
+            // `width` with one "…", and nothing spins.
+            let mut row = left;
+            row.push(dim_span(" ".to_owned()));
+            row.extend(right);
+            (fit(row, max), None)
+        }
     }
 }
 
-/// A context size: the figure of [`format::tokens`] without its unit.
+/// A column that fits in a row's mark, or `None` past it.
+fn try_col(col: usize) -> Option<u16> {
+    u16::try_from(col).ok()
+}
+
+/// The size, for tests of its boundaries.
+#[cfg(test)]
+pub(super) fn size_for_tests(tokens: u64) -> String {
+    size(tokens)
+}
+
+/// A context size: the figure of [`format::tokens`] without its unit,
+/// and without a zero decimal, so whole thousands read "402k".
 fn size(tokens: u64) -> String {
     let text = format::tokens(tokens);
-    text.strip_suffix(" tokens")
+    let text = text
+        .strip_suffix(" tokens")
         .or_else(|| text.strip_suffix(" token"))
-        .unwrap_or(&text)
-        .to_owned()
+        .unwrap_or(&text);
+    text.strip_suffix(".0k")
+        .map(|kept| format!("{kept}k"))
+        .or_else(|| {
+            text
+                .strip_suffix(".0M")
+                .map(|kept| format!("{kept}M"))
+        })
+        .unwrap_or_else(|| text.to_owned())
 }
 
 /// What started a handoff, as the band says it; `at` is the automatic
@@ -254,16 +361,18 @@ pub(crate) fn fold(turns: &mut [Turn], fold: &mut Fold, envelope: &Envelope) -> 
         "handoff_started" => read!(envelope, HandoffStarted).is_some_and(|started| {
             let trigger = trigger(started.trigger, fold.trigger_at);
             let id = fold.id();
+            let ts = envelope.ts;
             open(turns).is_some_and(|turn| {
-                turn.band(Band::new(id, trigger));
+                turn.band(Band::new(id, trigger, ts));
                 true
             })
         }),
         "handoff_completed" => read!(envelope, HandoffCompleted).is_some_and(|done| {
             let id = fold.id();
+            let ts = envelope.ts;
             open(turns).is_some_and(|turn| {
                 if turn.writing().is_none() {
-                    turn.band(Band::new(id, BY_MODEL.to_owned()));
+                    turn.band(Band::new(id, BY_MODEL.to_owned(), ts));
                 }
                 if let Some(band) = turn.writing() {
                     if let Some(Note::Hook { note_text, .. }) = done.note {
@@ -274,8 +383,8 @@ pub(crate) fn fold(turns: &mut [Turn], fold: &mut Fold, envelope: &Envelope) -> 
                             before: done.tokens_before,
                             after: None,
                         },
-                        Outcome::Failed => State::Unchanged(done.error.map(|error| error.message)),
-                        Outcome::Cancelled => State::Unchanged(None),
+                        Outcome::Failed => State::Unchanged { cancelled: false },
+                        Outcome::Cancelled => State::Unchanged { cancelled: true },
                     };
                 }
                 true
@@ -333,7 +442,7 @@ pub(crate) fn sized(turns: &mut [Turn], line: &UsageRecorded) -> bool {
             *after = Some(context);
             true
         }
-        Some(State::Done { .. } | State::Writing | State::Unchanged(_)) | None => false,
+        Some(State::Done { .. } | State::Writing | State::Unchanged { .. }) | None => false,
     }
 }
 

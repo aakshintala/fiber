@@ -601,12 +601,12 @@ const GUTTER_BLANK: &str = "      ";
 const INDENT: &str = "        ";
 
 /// A dim span.
-fn dim_span(text: String) -> Span<'static> {
+pub(super) fn dim_span(text: String) -> Span<'static> {
     Span::styled(text, Style::default().add_modifier(Modifier::DIM))
 }
 
 /// How many cells `spans` take on screen.
-fn spans_width(spans: &[Span<'_>]) -> usize {
+pub(super) fn spans_width(spans: &[Span<'_>]) -> usize {
     spans
         .iter()
         .map(|span| crate::format::width(&span.content))
@@ -618,7 +618,7 @@ fn spans_width(spans: &[Span<'_>]) -> usize {
 /// its width and what follows keeps its columns. Content keeps at most
 /// `max − 1` cells, and a wide character's unused column is filled in
 /// the cut span's style (`docs/tui.md`, "Tool groups and the ledger").
-fn fit(spans: Vec<Span<'static>>, max: usize) -> Vec<Span<'static>> {
+pub(super) fn fit(spans: Vec<Span<'static>>, max: usize) -> Vec<Span<'static>> {
     if spans_width(&spans) <= max {
         return spans;
     }

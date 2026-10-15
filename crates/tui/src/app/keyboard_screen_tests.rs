@@ -404,7 +404,7 @@ fn esc_closes_the_notice_overlay_ahead_of_the_screen() {
     let fake = Arc::new(Fake::new(Vec::new()));
     let mut app = homed(Some(Arc::clone(&fake)));
     slash_keys(&mut app);
-    app.notices.push("first".to_owned());
+    app.notices.push("extension_failed", "first".to_owned());
     app.open_more_notices();
     assert!(app.notice_overlay().is_some());
     assert_eq!(tap(&mut app, "esc"), Effect::None);
@@ -421,7 +421,7 @@ fn a_letter_over_the_overlay_is_neither_captured_nor_typed() {
     slash_keys(&mut app);
     down(&mut app, 5);
     assert_eq!(tap(&mut app, "enter"), Effect::None);
-    app.notices.push("first".to_owned());
+    app.notices.push("extension_failed", "first".to_owned());
     app.open_more_notices();
     assert_eq!(tap(&mut app, "x"), Effect::None);
     assert_eq!(app.draft(), "");
@@ -445,7 +445,7 @@ fn ctrl_c_with_the_notice_overlay_open_still_clears_then_quits() {
     let fake = Arc::new(Fake::new(Vec::new()));
     let mut app = homed(Some(Arc::clone(&fake)));
     slash_keys(&mut app);
-    app.notices.push("first".to_owned());
+    app.notices.push("extension_failed", "first".to_owned());
     app.open_more_notices();
     assert_eq!(tap_at(&mut app, "ctrl+c", clock.now()), Effect::None);
     assert!(app.hint());

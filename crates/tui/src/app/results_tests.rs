@@ -270,8 +270,8 @@ fn esc_closes_the_notice_overlay_before_the_results() {
     let mut app = turned(40, 10, &["needle one", "needle two"]);
     scan(&mut app, "needle");
     open(&mut app);
-    app.notices.push("first".to_owned());
-    app.notices.push("second".to_owned());
+    app.notices.push("extension_failed", "first".to_owned());
+    app.notices.push("extension_failed", "second".to_owned());
     app.open_more_notices();
     assert!(app.notice_overlay().is_some());
     // Esc closes the overlay first, the results staying open.

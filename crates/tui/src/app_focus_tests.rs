@@ -376,12 +376,12 @@ fn an_item_off_screen_below_wins_over_the_stop_under_the_conversation() {
 }
 
 #[test]
-fn a_notice_beside_the_items_is_a_stop_between_them() {
+fn a_notice_above_the_working_line_is_a_stop_before_its_cross() {
     let mut app = groups(12, 60, 10);
     while app.top() != Some(0) {
         key(&mut app, Key::PageUp);
     }
-    app.notices.push("Saved.".to_owned());
+    app.notices.push("extension_failed", "Saved.".to_owned());
     frame(&mut app);
     key(&mut app, Key::BackTab);
     // Up to the turn, whose stop is clipped to row 0 and drawn before
@@ -393,33 +393,26 @@ fn a_notice_beside_the_items_is_a_stop_between_them() {
         key(&mut app, Key::Up);
     }
     assert_eq!(app.focused(), Some(TargetId::Turn(0)));
-    let items = app.items();
-    let at = items
-        .iter()
-        .position(|(_, item)| *item == TargetId::Turn(0))
-        .expect("the turn is an item");
-    let (_, after) = items
-        .get(at.saturating_add(1))
-        .copied()
-        .expect("a next item");
-    let (_, after_next) = items
-        .get(at.saturating_add(2))
-        .copied()
-        .expect("the item after that");
-    // Down from the turn walks the row's stops: the line, the notice,
-    // its cross, then the next line.
-    key(&mut app, Key::Down);
-    assert_eq!(app.focused(), Some(after));
-    assert!(matches!(after, TargetId::Line(_)));
-    key(&mut app, Key::Down);
-    assert_eq!(app.focused(), Some(TargetId::Notice(0)));
+    // Down from the turn walks every stop in conversation order; the
+    // notice rows sit above the working line, so the notice and its
+    // cross come together at the walk's bottom end.
+    let mut found = false;
+    for _ in 0..200 {
+        key(&mut app, Key::Down);
+        if app.focused() == Some(TargetId::Notice(0)) {
+            found = true;
+            break;
+        }
+    }
+    assert!(found, "the notice is a stop");
     key(&mut app, Key::Down);
     assert_eq!(app.focused(), Some(TargetId::DismissNotice(0)));
-    key(&mut app, Key::Down);
     let stops = frame(&mut app);
-    assert_eq!(app.focused(), Some(after_next));
-    assert!(matches!(after_next, TargetId::Line(_)));
-    assert!(stops.iter().any(|target| target.id == after_next));
+    assert!(
+        stops
+            .iter()
+            .any(|target| target.id == TargetId::DismissNotice(0))
+    );
 }
 
 #[test]
@@ -538,7 +531,7 @@ fn esc_returns_focus_without_interrupting_then_esc_interrupts() {
 #[test]
 fn esc_closes_the_notice_overlay_before_leaving_navigate_mode() {
     let mut app = attached(60, 24);
-    app.notices.push("Saved.".to_owned());
+    app.notices.push("extension_failed", "Saved.".to_owned());
     app.open_notice(0);
     let badge = Hit {
         id: TargetId::Badge,
@@ -906,7 +899,7 @@ fn y_on_a_paste_token_copies_its_text() {
 #[test]
 fn y_on_a_notice_or_a_steering_row_copies_its_text() {
     let mut app = attached(60, 24);
-    app.notices.push("Saved.".to_owned());
+    app.notices.push("extension_failed", "Saved.".to_owned());
     app.on_line(steering_queue(&[("fix it", Some("c_1"))]));
     let targets = vec![
         Hit {
@@ -1040,7 +1033,7 @@ fn y_on_a_code_blocks_copy_copies_its_code() {
 #[test]
 fn the_overlay_cross_closes_the_key_map_first() {
     let mut app = attached(60, 12);
-    app.notices.push("Saved.".to_owned());
+    app.notices.push("extension_failed", "Saved.".to_owned());
     app.open_notice(0);
     key(&mut app, Key::F1);
     assert!(app.keymap_top().is_some());
@@ -1055,7 +1048,7 @@ fn the_overlay_cross_closes_the_key_map_first() {
 #[test]
 fn the_overlay_cross_closes_the_notice_overlay() {
     let mut app = attached(60, 12);
-    app.notices.push("Saved.".to_owned());
+    app.notices.push("extension_failed", "Saved.".to_owned());
     app.open_notice(0);
     assert!(app.notice_overlay().is_some());
     app.on_click(TargetId::CloseOverlay);
@@ -1230,7 +1223,7 @@ fn enter_on_a_turn_does_nothing() {
 #[test]
 fn the_notice_overlay_hides_the_turn_stops() {
     let mut app = groups(2, 60, 24);
-    app.notices.push("All.".to_owned());
+    app.notices.push("extension_failed", "All.".to_owned());
     app.open_notice(0);
     let stops = frame(&mut app);
     assert!(
@@ -1532,3 +1525,4 @@ fn a_turn_copy_with_nothing_missing_pins_nothing() {
     assert_eq!(app.pages().pinned(), prior);
     assert!(app.pending_turn.is_none());
 }
+

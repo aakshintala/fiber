@@ -292,7 +292,7 @@ impl App {
     pub(in crate::app) fn abandon_copy(&mut self) {
         if self.select.pending.is_some() {
             self.drop_pending_copy();
-            self.notices.push(COPY_FAILED.to_owned());
+            self.notices.push("io_failed", COPY_FAILED.to_owned());
         }
     }
 

@@ -1,30 +1,20 @@
-//! Notices floating in the conversation's top-right corner (`docs/tui.md`,
-//! "Notices").
+//! Notices as rows above the working line (`docs/tui.md`, "Notices").
 //!
 //! A notice is this terminal's own memory: the terminal's own messages and
-//! the attached session's `notice` lines, never written anywhere. Newest on
-//! top, at most three show, then "+N more". A child of `app`, so the calls
+//! the attached session's `notice` lines, never written anywhere. Oldest
+//! first, at most three show, then "+N more". A child of `app`, so the calls
 //! the click layer makes sit here beside the stack.
 
 use super::App;
-use crate::format;
 
 /// How many notices show before "+N more".
 const SHOWN: usize = 3;
-
-/// The lines a notice box wraps to before it cuts.
-const LINES: usize = 3;
-
-/// The widest a notice box gets, in columns.
-const WIDEST: usize = 60;
-
-/// What a box cut short ends with.
-const MORE: &str = "… more";
 
 /// One notice.
 #[derive(Debug)]
 struct Notice {
     id: usize,
+    code: String,
     text: String,
 }
 
@@ -49,21 +39,32 @@ pub(crate) struct Notices {
     held_from: Option<usize>,
 }
 
-/// One box as the view draws it.
+/// One drawn row: a notice, or the "+N more" row for the rest.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub(crate) struct NoticeBox {
-    /// The notice it shows; `None` for the "+N more" row.
-    pub(crate) id: Option<usize>,
-    /// Its rows, each the box's width; a notice's first ends in "✕".
-    pub(crate) rows: Vec<String>,
+pub(crate) enum NoticeLine {
+    /// A notice, oldest shown first.
+    Notice {
+        /// The notice it shows.
+        id: usize,
+        /// Its registry code (`docs/errors.md`, "Registry").
+        code: String,
+        /// Its message.
+        text: String,
+    },
+    /// How many shown notices have no row.
+    More(usize),
 }
 
 impl Notices {
-    /// Adds `text` on top.
-    pub(crate) fn push(&mut self, text: String) {
+    /// Adds `text` under `code` on top.
+    pub(crate) fn push(&mut self, code: &str, text: String) {
         let id = self.next;
         self.next = self.next.saturating_add(1);
-        self.stack.push(Notice { id, text });
+        self.stack.push(Notice {
+            id,
+            code: code.to_owned(),
+            text,
+        });
     }
 
     /// The newest notice's text.
@@ -78,7 +79,7 @@ impl Notices {
         self.held_from.get_or_insert(self.next);
     }
 
-    /// The drag ended: the notices that waited show, newest on top.
+    /// The drag ended: the notices that waited show, oldest first.
     pub(crate) fn release(&mut self) {
         self.held_from = None;
     }
@@ -89,6 +90,31 @@ impl Notices {
         self.stack
             .iter()
             .filter(move |notice| held.is_none_or(|from| notice.id < from))
+    }
+
+    /// How many rows [`Notices::lines`] draws, without building them.
+    pub(crate) fn drawn(&self) -> usize {
+        let shown = self.shown().count();
+        shown.min(SHOWN) + usize::from(shown > SHOWN)
+    }
+
+    /// The rows the view draws, oldest first: at most [`SHOWN`] notices,
+    /// then one `More` for the rest.
+    pub(crate) fn lines(&self) -> Vec<NoticeLine> {
+        let mut lines: Vec<NoticeLine> = self
+            .shown()
+            .take(SHOWN)
+            .map(|notice| NoticeLine::Notice {
+                id: notice.id,
+                code: notice.code.clone(),
+                text: notice.text.clone(),
+            })
+            .collect();
+        let rest = self.shown().count().saturating_sub(SHOWN);
+        if rest > 0 {
+            lines.push(NoticeLine::More(rest));
+        }
+        lines
     }
 
     /// Removes notice `id`, closing an overlay that showed it alone.
@@ -137,71 +163,12 @@ impl Notices {
             .find(|notice| notice.id == id)
             .map(|notice| notice.text.as_str())
     }
-
-    /// The boxes for a conversation `columns` wide, newest first: at most
-    /// [`SHOWN`], then "+N more" for the rest. Each is 40% of the width, at
-    /// most [`WIDEST`] columns, and wraps to [`LINES`] lines, the last cut
-    /// to end "… more".
-    pub(crate) fn boxes(&self, columns: u16) -> Vec<NoticeBox> {
-        let wide = (usize::from(columns).saturating_mul(2) / 5).min(WIDEST);
-        // The text leaves a space and the ✕ at the right.
-        let text = wide.saturating_sub(2);
-        if text == 0 {
-            return Vec::new();
-        }
-        let mut boxes: Vec<NoticeBox> = self
-            .shown()
-            .rev()
-            .take(SHOWN)
-            .map(|notice| NoticeBox {
-                id: Some(notice.id),
-                rows: rows(&notice.text, text),
-            })
-            .collect();
-        let rest = self.shown().count().saturating_sub(SHOWN);
-        if rest > 0 {
-            boxes.push(NoticeBox {
-                id: None,
-                rows: vec![pad(&format::cut(&format!("+{rest} more"), wide), wide)],
-            });
-        }
-        boxes
-    }
-}
-
-/// `text` wrapped to `width` columns in at most [`LINES`] rows, the last
-/// cut to end "… more" when there is more; each row padded, the first
-/// ending in "✕".
-fn rows(text: &str, width: usize) -> Vec<String> {
-    let mut lines = format::wrap(text, width);
-    if lines.len() > LINES {
-        lines.truncate(LINES);
-        if let Some(last) = lines.last_mut() {
-            let room = width.saturating_sub(format::width(MORE).saturating_add(1));
-            let kept = format::cut(last, room);
-            *last = format::cut(format!("{kept} {MORE}").trim_start(), width);
-        }
-    }
-    lines
-        .iter()
-        .enumerate()
-        .map(|(at, line)| {
-            let mark = if at == 0 { "✕" } else { " " };
-            format!("{} {mark}", pad(line, width))
-        })
-        .collect()
-}
-
-/// `text` padded with spaces to `width` columns.
-fn pad(text: &str, width: usize) -> String {
-    let fill = width.saturating_sub(format::width(text));
-    format!("{text}{}", " ".repeat(fill))
 }
 
 impl App {
-    /// The notice boxes the view floats over the conversation.
-    pub(crate) fn notices(&self) -> Vec<NoticeBox> {
-        self.notices.boxes(self.column_width())
+    /// The notice rows the view draws above the working line.
+    pub(crate) fn notices(&self) -> Vec<NoticeLine> {
+        self.notices.lines()
     }
 
     /// The notice overlay's text while it is open.

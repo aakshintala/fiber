@@ -2324,8 +2324,18 @@ fn a_cut_after_a_band_opens_the_next_page_with_an_edge() {
     let mut pages = pages_at(&lines, 40);
     assert_eq!(pages.index().pages().len(), 2);
     let first = cut_texts(&pages, 0);
+    // The page before the cut ends with the band's lower edge, its
+    // content row above it.
     assert!(
-        first.last().is_some_and(|row| row.starts_with("⇄ Handoff")),
+        first.last().is_some_and(|row| shown_edge(row.clone(), 40, '▀')),
+        "{first:?}"
+    );
+    assert!(
+        first
+            .iter()
+            .rev()
+            .nth(1)
+            .is_some_and(|row| row.contains('⇄')),
         "{first:?}"
     );
     let second = cut_texts(&pages, 1);
@@ -2360,8 +2370,18 @@ fn a_cut_after_a_band_and_a_blank_reply_opens_the_next_page_with_an_edge() {
     let mut pages = pages_at(&lines, 40);
     assert_eq!(pages.index().pages().len(), 2);
     let first = cut_texts(&pages, 0);
+    // The page before the cut ends with the band's lower edge, its
+    // content row above it.
     assert!(
-        first.last().is_some_and(|row| row.starts_with("⇄ Handoff")),
+        first.last().is_some_and(|row| shown_edge(row.clone(), 40, '▀')),
+        "{first:?}"
+    );
+    assert!(
+        first
+            .iter()
+            .rev()
+            .nth(1)
+            .is_some_and(|row| row.contains('⇄')),
         "{first:?}"
     );
     let second = cut_texts(&pages, 1);
@@ -2474,10 +2494,18 @@ fn a_cut_before_a_band_closes_the_piece_on_the_page_before() {
         '▀'
     ));
     let second = cut_texts(&pages, 1);
+    // The next page opens with the band's upper edge, its content row
+    // below it.
     assert!(
         second
             .first()
-            .is_some_and(|row| row.starts_with("⇄ Handoff")),
+            .is_some_and(|row| shown_edge(row.clone(), 40, '▄')),
+        "{second:?}"
+    );
+    assert!(
+        second
+            .get(1)
+            .is_some_and(|row| row.contains('⇄')),
         "{second:?}"
     );
     let reference = whole(&pages, &lines);

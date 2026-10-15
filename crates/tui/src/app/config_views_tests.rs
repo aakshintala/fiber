@@ -148,7 +148,7 @@ fn notices_show_above_the_open_view_on_home_and_attached() {
         } else {
             attached(Some(fake()))
         };
-        app.push_notice("The theme solar floats above.".to_owned());
+        app.push_notice("config_invalid", "The theme solar floats above.".to_owned());
         slash_settings(&mut app);
         assert!(app.config_view_open());
         let rows = screen(&app);

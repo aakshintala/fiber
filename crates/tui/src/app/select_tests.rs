@@ -1049,21 +1049,39 @@ fn a_notice_during_a_drag_waits_for_the_release() {
     let at = find(&app, "hello");
     press(&mut app, at);
     drag(&mut app, right(at, 3));
+    notice(&mut app, "arrived first");
     notice(&mut app, "arrived late");
     assert_eq!(shows(&app, "arrived late"), (false, false));
     release(&mut app, right(at, 3));
     assert_eq!(shows(&app, "arrived late"), (true, true));
+    // After the release the oldest notice is the top row.
     let (_, targets) = draw(&app);
-    let top = targets
+    let mut rows: Vec<u16> = targets
         .iter()
         .filter(|target| matches!(target.id, TargetId::Notice(_)))
         .map(|target| target.rect.y)
-        .min();
-    assert_eq!(
-        top,
-        Some(find(&app, "arrived late").1),
-        "the newest is on top"
-    );
+        .collect();
+    rows.sort_unstable();
+    assert_eq!(rows.len(), 2);
+    assert_eq!(find(&app, "arrived first").1, rows[0]);
+    assert_eq!(find(&app, "arrived late").1, rows[1]);
+}
+
+#[test]
+fn a_held_notice_does_not_move_the_conversation() {
+    let mut app = replied(60, 10, "hello there");
+    let height = app.conversation_height();
+    let at = find(&app, "hello");
+    press(&mut app, at);
+    drag(&mut app, right(at, 3));
+    notice(&mut app, "arrived late");
+    // A notice pushed mid-drag draws no row: the conversation keeps
+    // its height and its rows.
+    assert_eq!(app.conversation_height(), height);
+    assert_eq!(shows(&app, "arrived late"), (false, false));
+    release(&mut app, right(at, 3));
+    assert_eq!(app.conversation_height(), height - 1);
+    assert_eq!(shows(&app, "arrived late"), (true, true));
 }
 
 #[test]

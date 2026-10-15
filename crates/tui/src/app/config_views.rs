@@ -123,10 +123,13 @@ impl App {
         match seam.set(&workspace, Layer::Global, key, &format!("{share}")) {
             Ok(saved) => {
                 for warning in saved.warnings {
-                    self.push_notice(warning);
+                    self.push_notice("config_invalid", warning);
                 }
             }
-            Err(error) => self.push_notice(format!("Could not save {key}: {}", error.message)),
+            Err(error) => self.push_notice(
+                "io_failed",
+                format!("Could not save {key}: {}", error.message),
+            ),
         }
     }
 
@@ -462,7 +465,7 @@ impl App {
     /// again, and an error is a notice.
     pub(crate) fn config_file_closed(&mut self, result: Result<(), String>) {
         if let Err(message) = result {
-            self.notices.push(message);
+            self.notices.push("io_failed", message);
         }
         if let Some(seam) = self.config_views.seam.clone() {
             let workspace = self.workspace();

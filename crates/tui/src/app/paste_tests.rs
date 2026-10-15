@@ -310,7 +310,10 @@ fn a_failed_read_is_a_notice_and_the_draft_stays() {
     let firsts: Vec<String> = app
         .notices()
         .iter()
-        .map(|notice| notice.rows[0].trim_end_matches(['✕', ' ']).to_owned())
+        .filter_map(|line| match line {
+            crate::app::NoticeLine::Notice { text, .. } => Some(text.clone()),
+            crate::app::NoticeLine::More(_) => None,
+        })
         .collect();
     assert!(firsts.contains(&"No image on the clipboard.".to_owned()));
 }

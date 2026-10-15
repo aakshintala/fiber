@@ -873,24 +873,41 @@ fn a_hidden_writing_band_asks_nothing() {
 }
 
 #[test]
-fn a_wrapped_writing_band_keeps_its_still_form() {
-    let (mut app, clock) = writing_band(30, 12);
-    app.set_now(clock.origin(), 0);
-    // The band wraps so its dot lands on the second row past the
-    // width: the mark never spins a row it does not start.
-    let area = Rect::new(0, 0, 30, 12);
-    let mut buf = Buffer::empty(area);
-    render(&app, area, &mut buf, None);
-    assert!(text(&buf).contains('●'), "{}", text(&buf));
-    assert!(!text(&buf).contains(SPINNER[0]), "{}", text(&buf));
-    assert_eq!(app.take_wake(), None);
+fn a_writing_band_spins_its_dot_while_it_survives() {
+    // At 60 and at 40 the right part keeps its columns, so the dot
+    // survives the cut and spins on the tick: one row, never wrapped.
+    for width in [60, 40] {
+        let (mut app, clock) = writing_band(width, 12);
+        let origin = clock.origin();
+        app.set_now(origin, 0);
+        let area = Rect::new(0, 0, width, 12);
+        let mut buf = Buffer::empty(area);
+        render(&app, area, &mut buf, None);
+        let shown = text(&buf);
+        let row = shown
+            .lines()
+            .position(|row| row.contains('⇄'))
+            .expect("a band row") as u16;
+        assert!(
+            (0..width).any(|col| buf
+                .cell((col, row))
+                .is_some_and(|cell| cell.symbol() == SPINNER[0])),
+            "{width}: {shown}"
+        );
+        assert!(!shown.contains('●'), "{width}: {shown}");
+        assert_eq!(
+            app.take_wake(),
+            origin.checked_add(Duration::from_millis(120)),
+            "{width}"
+        );
+    }
 }
 
 #[test]
-fn a_mark_past_the_width_draws_nothing() {
-    // The band's dot sits at column 34: at widths 34 and 32 it is past
-    // the row, so nothing draws and nothing asks.
-    for width in [34, 32] {
+fn a_writing_band_cut_past_its_dot_asks_nothing() {
+    // At 30, 20 and 12 the right part alone cannot fit, so the whole
+    // row is cut past its dot: nothing spins and nothing asks.
+    for width in [30, 20, 12] {
         let (mut app, clock) = writing_band(width, 12);
         app.set_now(clock.origin(), 0);
         let area = Rect::new(0, 0, width, 12);
@@ -988,7 +1005,7 @@ fn rest_frames_keep_asking_for_the_next_frame() {
 }
 
 #[test]
-fn a_wrapped_band_mark_keeps_its_still_form() {
+fn a_cut_band_mark_spins_while_its_dot_survives() {
     let clock = FakeClock::new();
     let mut app = App::new(PathBuf::from("/w"));
     // Forty columns: the band wraps in two, its dot on the first row in
@@ -1034,19 +1051,23 @@ fn a_wrapped_band_mark_keeps_its_still_form() {
     let mut buf = Buffer::empty(area);
     render(&app, area, &mut buf, None);
     let shown = text(&buf);
-    // Both band rows show with the dot still: a wrapped mark never
-    // spins.
+    // The band is one row, cut with the right part's columns intact,
+    // so the dot survives and spins: no second band row, no still dot.
+    let row = shown
+        .lines()
+        .position(|row| row.contains('⇄'))
+        .expect("a band row");
     assert!(
-        shown
-            .lines()
-            .nth(7)
-            .is_some_and(|row| row.starts_with("⇄ Handoff")),
+        shown.lines().nth(row).is_some_and(|row| row.contains('…')),
         "{shown}"
     );
-    assert!(
-        shown.lines().nth(7).is_some_and(|row| row.contains('●')),
-        "{shown}"
+    assert!(!shown.contains('●'), "{shown}");
+    assert!(shown.contains(SPINNER[0]), "{shown}");
+    assert_eq!(
+        app.take_wake(),
+        clock
+            .origin()
+            .checked_add(Duration::from_millis(120))
     );
-    assert!(!shown.contains(SPINNER[0]), "{shown}");
-    assert_eq!(app.take_wake(), None);
 }
+

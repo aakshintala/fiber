@@ -191,7 +191,8 @@ pub(crate) fn max_question_scroll(app: &App, screen: &HomeScreen, area: Rect) ->
 
 /// Draws home's `screen` into `area` of `buf`: the one-row logo, the box
 /// with the completion panel above it, the session list under the box,
-/// and the foot hint on the last row, with the notices top-right.
+/// and the foot hint on the last row, with the notice rows over the rows
+/// above the foot and the overlay over the whole area.
 /// Returns the click targets drawn; last, as on the conversation screen,
 /// the target under `pointer` gets [`HOVER_TINT`] and the focused target
 /// gets [`FOCUS_STYLE`].
@@ -553,12 +554,11 @@ pub(super) fn render(
             );
         }
     }
-    super::notices(
-        app,
-        Rect::new(area.x, area.y, area.width, area.height.saturating_sub(1)),
-        buf,
-        &mut targets,
-    );
+    let rows = Rect::new(area.x, area.y, area.width, area.height.saturating_sub(1));
+    super::notice_rows::overlay(app, rows, buf, &mut targets);
+    // The rows sit above the banner, unreserved, over the area's bottom
+    // rows (`docs/tui.md`, "Notices").
+    super::notice_rows::draw(app, rows, buf, &mut bottom, &mut targets);
     if app.quit_open() {
         super::quit::draw(app, area, buf, &mut targets);
     }

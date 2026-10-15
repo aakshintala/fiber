@@ -145,7 +145,8 @@ impl App {
             // writes its first answer waits on.
             self.model_picker_rejected(id);
         } else {
-            self.rejected(id, message);
+            let code = crate::format::code(code);
+            self.rejected(id, &code, message);
         }
     }
 
@@ -171,7 +172,7 @@ impl App {
         }
         if let Phase::Pending { command_id } = &self.phase {
             let id = command_id.clone();
-            self.rejected(&id, UNANSWERED.to_owned());
+            self.rejected(&id, "connection_failed", UNANSWERED.to_owned());
         }
         self.home_reset();
         let mut lines = Vec::new();
