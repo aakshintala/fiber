@@ -6,7 +6,7 @@
 
 use ratatui::buffer::Buffer;
 use ratatui::layout::{Position, Rect};
-use ratatui::style::{Modifier, Style};
+use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::{Paragraph, Widget, Wrap};
 
@@ -14,6 +14,7 @@ use crate::app::App;
 use crate::completion_rows::Rows;
 use crate::markdown::{Role, style};
 use crate::mouse::{self, Target, TargetId};
+use crate::theme::{Shade, Theme};
 
 pub(crate) mod banner;
 pub(crate) mod chrome;
@@ -57,14 +58,62 @@ pub(crate) const ALERT_TINT: Style = Style::new().bg(Role::Alert.color());
 /// The notice overlay's tint.
 const NOTICE_TINT: Style = Style::new().bg(Role::Surface.color());
 
-/// The background of the click target under the pointer.
-pub(crate) const HOVER_TINT: Style = Style::new().bg(Role::Hover.color());
-
-/// Paints `rect` as the click target under the pointer: the hover tint
-/// for now; the fix lifts each tinted cell's own background instead
-/// (`docs/tui.md`, palette, `hover`).
+/// Paints `rect` as the click target under the pointer: each cell takes
+/// its own background 0x14 lighter on each channel where it sits on a
+/// tint, and the hover tint where it has none (`docs/tui.md`, palette,
+/// `hover`).
 pub(crate) fn lift_hover(buf: &mut Buffer, rect: Rect) {
-    buf.set_style(rect, HOVER_TINT);
+    let area = buf.area.intersection(rect);
+    for y in area.top()..area.bottom() {
+        for x in area.left()..area.right() {
+            let bg = buf[(x, y)].bg;
+            buf[(x, y)].set_bg(hover_bg(bg));
+        }
+    }
+}
+
+/// One hovered cell's background: its own tint 0x14 lighter on each
+/// channel, or the hover tint with no tint under it. The tint resolves
+/// through the dark theme: render carries no look, so the lift is pinned
+/// to the dark values the palette table names.
+pub(crate) fn hover_bg(bg: Color) -> Color {
+    match bg {
+        Color::Rgb(red, green, blue) => lifted(red, green, blue),
+        Color::Indexed(index) => match Role::from_index(index) {
+            Some(role) if role.tint() => match Theme::DARK.shade(role) {
+                Shade::Rgb((red, green, blue)) => lifted(red, green, blue),
+                Shade::Terminal | Shade::Dim => Role::Hover.color(),
+            },
+            Some(_) | None => Role::Hover.color(),
+        },
+        Color::Reset
+        | Color::Black
+        | Color::Red
+        | Color::Green
+        | Color::Yellow
+        | Color::Blue
+        | Color::Magenta
+        | Color::Cyan
+        | Color::Gray
+        | Color::DarkGray
+        | Color::LightRed
+        | Color::LightGreen
+        | Color::LightYellow
+        | Color::LightBlue
+        | Color::LightMagenta
+        | Color::LightCyan
+        | Color::White => Role::Hover.color(),
+    }
+}
+
+/// One tint lifted 0x14 on each channel.
+fn lifted(red: u8, green: u8, blue: u8) -> Color {
+    const LIFT: u8 = 0x14;
+    Color::Rgb(
+        red.saturating_add(LIFT),
+        green.saturating_add(LIFT),
+        blue.saturating_add(LIFT),
+    )
 }
 
 /// The focused click target's style in navigate mode: reversed, so it

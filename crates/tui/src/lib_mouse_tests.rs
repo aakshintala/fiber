@@ -1116,7 +1116,7 @@ fn hover_never_tints_a_turn() {
     // cell takes the hover tint.
     let mut buf = Buffer::empty(area);
     crate::view::render(&app, area, &mut buf, Some((3, row)));
-    let tint = crate::view::HOVER_TINT.bg.unwrap_or_default();
+    let tint = crate::theme::Role::Hover.color();
     for y in 0..12 {
         for x in 0..60 {
             let cell = buf.cell((x, y)).expect("a cell");
