@@ -380,6 +380,13 @@ impl Grid {
         }
     }
 
+    /// The screen's size as (columns, rows): the bounds for scanning
+    /// cells, since row text trims trailing blanks.
+    pub(crate) fn size(&self) -> (u16, u16) {
+        let (rows, cols) = self.screen.size();
+        (cols, rows)
+    }
+
     /// The cell at column `x`, row `y`. Panics past the grid's edges.
     pub(crate) fn cell(&self, x: u16, y: u16) -> Cell {
         match self.screen.cell(y, x) {

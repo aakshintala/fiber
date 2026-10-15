@@ -1516,6 +1516,71 @@ fn resumed_turn_kinds() -> Vec<&'static str> {
     ]
 }
 
+/// Whether row `y` of `grid` carries any reversed cell: the focus look.
+fn has_focus_look(grid: &support::pty::Grid, y: u16) -> bool {
+    let (cols, _) = grid.size();
+    (0..cols).any(|x| grid.cell(x, y).inverse)
+}
+
+/// Every reversed cell of `grid`, as (column, row): the focus look's
+/// snapshot, so a step can wait for it to move.
+fn reversed_cells(grid: &support::pty::Grid) -> Vec<(u16, u16)> {
+    let (cols, rows) = grid.size();
+    let mut cells = Vec::new();
+    for y in 0..rows {
+        for x in 0..cols {
+            if grid.cell(x, y).inverse {
+                cells.push((x, y));
+            }
+        }
+    }
+    cells
+}
+
+/// Walks keyboard focus to the notice row carrying `code`
+/// (conversation door): Shift+Tab enters navigate mode, then each step
+/// writes Up from the notice's own dismiss cross (its row, last cell
+/// alone) and Down otherwise, waiting for the focus look to move each
+/// time. Returns only when the row carrying `code` has its first cell
+/// reversed, so the box spans the row and Enter opens it; never writes
+/// Enter, so it never dismisses. Every wait goes through `wait_screen`
+/// under the run's one deadline.
+#[track_caller]
+fn focus_notice(run: &mut support::pty::Run, code: &str) {
+    run.write(b"\x1b[Z");
+    let mut grid = run.wait_screen("a focused row", |grid| {
+        let (_, rows) = grid.size();
+        (0..rows).any(|y| has_focus_look(grid, y))
+    });
+    let (_, rows) = grid.size();
+    for _ in 0..rows {
+        let y = u16::try_from(
+            grid.rows
+                .iter()
+                .position(|row| row.contains(code))
+                .expect("the notice row"),
+        )
+        .expect("the notice row fits in u16");
+        // The notice box spans its row; its dismiss cross is the last
+        // cell alone. Done only on the box, so Enter never dismisses.
+        if grid.cell(0, y).inverse {
+            return;
+        }
+        let (cols, _) = grid.size();
+        if grid.cell(cols - 1, y).inverse {
+            run.write(b"\x1b[A");
+        } else {
+            run.write(b"\x1b[B");
+        }
+        let before = reversed_cells(&grid);
+        grid = run.wait_screen("the focus moved", |next| reversed_cells(next) != before);
+    }
+    panic!(
+        "the focus walk reached no notice row carrying {code}; screen:\n{}",
+        grid.contents
+    );
+}
+
 /// Spawns `fiber resume <id> --credential <label>` on a terminal.
 fn resume_with<'a>(setup: &'a support::Setup, id: &'a str, label: &'a str) -> support::pty::Run {
     terminal(setup, 120, 32, &["resume", id, "--credential", label], &[])
@@ -1891,6 +1956,15 @@ fn resume_with_an_unknown_credential_on_an_exited_session_stays_home() {
             .expect("the notice row"),
     )
     .expect("the notice row fits in u16");
+    // Home draws the notice rows from the foot upward with nothing but
+    // the reconnect banner below them, which this refused open never
+    // raises, and the foot hint sits on the last row: the notice stays
+    // directly above it, so the click below cannot land elsewhere.
+    assert_eq!(
+        usize::from(row) + 1,
+        grid.rows.len() - 1,
+        "the notice stays on the row above the last one"
+    );
     run.write(format!("\x1b[<0;3;{}M\x1b[<0;3;{}m", row + 1, row + 1).as_bytes());
     run.wait_screen("the notice overlay", |grid| {
         // The overlay wraps at the width, so each fragment fits on
@@ -1940,23 +2014,42 @@ fn resume_with_an_unknown_credential_on_a_running_session_stays_attached() {
     // notice naming the labels the provider has: no rejection, no trip
     // home. The row carries the code and the message's start; a click
     // opens the whole text in the overlay (`docs/tui.md`, "Notices").
-    let grid = second.wait_screen("the refusal notice", |grid| {
+    second.wait_screen("the refusal notice", |grid| {
         grid.rows.iter().any(|row| {
             row.contains("credential_missing") && row.contains("has no credential label")
         })
     });
-    let row = u16::try_from(
-        grid.rows
-            .iter()
-            .position(|row| row.contains("credential_missing"))
-            .expect("the notice row"),
-    )
-    .expect("the notice row fits in u16");
-    second.write(format!("\x1b[<0;3;{}M\x1b[<0;3;{}m", row + 1, row + 1).as_bytes());
+    // The attach replays the finished turn, redrawing the stops as
+    // its lines arrive: walk only once the replayed reply and its
+    // close are drawn, so the stops under the walk stay put.
+    second.wait_screen("the replayed turn", |grid| {
+        grid.contents.contains("Hello.") && grid.contents.contains("completed")
+    });
+    // The notice row moves when the layout below it changes, so a
+    // read-then-click can land elsewhere: reach it by keyboard focus,
+    // which follows the notice by id, then Enter opens it whole in the
+    // overlay (`docs/tui.md`, "Notices").
+    focus_notice(&mut second, "credential_missing");
+    second.write(b"\r");
     second.wait_screen("the notice overlay", |grid| {
         grid.contents.contains("has no credential label")
             && grid.contents.contains("`nope`. The labels for `fake` are:")
             && grid.contents.contains("default, home, work")
+    });
+    // Back to the input box: opening the notice keeps its focus, so
+    // typing would stay in navigate mode. The first Esc closes the
+    // overlay with focus staying on the notice, the second leaves
+    // navigate mode, which clears the focus look. Esc is kitty's
+    // `CSI 27 u`: a lone ESC starts a sequence and is held.
+    second.write(b"\x1b[27u");
+    second.wait_screen("the closed notice overlay", |grid| {
+        !grid
+            .contents
+            .contains("`nope`. The labels for `fake` are:")
+    });
+    second.write(b"\x1b[27u");
+    second.wait_screen("the input box back", |grid| {
+        reversed_cells(grid).is_empty()
     });
     // Nothing ran on its own: no new request, no turn, no change event.
     assert_eq!(
