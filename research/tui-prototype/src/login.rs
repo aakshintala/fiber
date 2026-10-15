@@ -84,7 +84,7 @@ pub(crate) const CASES: &[Case<State>] = &[
     Case {
         name: "providers",
         help: "providers and extension credentials, OAuth told from key",
-        check: "four providers under `Providers` with `browser` or `key` tags telling OAuth from key providers, and two extension credentials under `Secrets`; a centred panel with ▄ ▀ edges and the ▌ stripe, `Log in` bold accent with a dim ✕, the focused row `›` on a full-width accent bar, and a bold-key legend foot.",
+        check: "four providers under `Providers` with `browser` or `key` tags telling OAuth from key providers, and two extension credentials under `Secrets`; a centred panel with ▄ ▀ edges, `Log in` bold accent with a dim ✕, the focused row `›` on a full-width accent bar, and a bold-key legend foot.",
         build: || State {
             kind: Kind::Providers,
             focus: 0,
@@ -602,7 +602,6 @@ mod tests {
         let t = rows.iter().map(plain).collect::<Vec<_>>().join("\n");
         assert!(t.contains("\u{2584}"), "no top edge");
         assert!(t.contains("\u{2580}"), "no bottom edge");
-        assert!(t.contains("\u{258c}"), "no stripe");
         assert!(t.contains("\u{203a} "), "no gutter marker");
         // Centred: the edge run neither starts at the margin nor fills the row.
         let edge = t.split('\n').find(|l| l.contains("\u{2584}")).unwrap();

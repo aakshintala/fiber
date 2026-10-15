@@ -22,7 +22,7 @@ const CASES: &[Case<Look>] = &[
     Case {
         name: "keymap",
         help: "the key map, All tab, empty search",
-        check: "the key map should dock at the bottom full width with ▄ ▀ edges and the ▌ stripe; `Key map` bold accent with a dim ✕, a muted purpose and `34 actions, 24 with other paths`; the All tab inverse with the rest muted; a muted search line with an empty query; group, action and keys columns starting together on three fixed columns with other paths dim in the keys; the first row `›` on a full-width accent bar; a `↓` arrow in the gutter whenever rows hide below (as in keymap-narrow); the foot a bold-key legend naming no body pair; nothing clipped.",
+        check: "the key map should dock at the bottom full width with ▄ ▀ edges; `Key map` bold accent with a dim ✕, a muted purpose and `34 actions, 24 with other paths`; the All tab inverse with the rest muted; a muted search line with an empty query; group, action and keys columns starting together on three fixed columns with other paths dim in the keys; the first row `›` on a full-width accent bar; a `↓` arrow in the gutter whenever rows hide below (as in keymap-narrow); the foot a bold-key legend naming no body pair; nothing clipped.",
         build: || Look {
             kind: Kind::Keymap,
             narrow: false,
@@ -99,7 +99,7 @@ const CASES: &[Case<Look>] = &[
     Case {
         name: "notice",
         help: "a notice shown in full",
-        check: "the whole `key_clash` text should read wrapped to the panel, padded and striped, nothing clipped; the foot a bold-key legend naming no body pair.",
+        check: "the whole `key_clash` text should read wrapped to the panel, padded, nothing clipped; the foot a bold-key legend naming no body pair.",
         build: || Look {
             kind: Kind::Notice,
             narrow: false,
@@ -1209,7 +1209,7 @@ mod tests {
         );
         // Everything fits at this height, so no gutter arrow.
         assert!(
-            !t.contains("\u{258c}  \u{2193} "),
+            !t.split('\n').any(|l| l.starts_with("  \u{2193} ")),
             "arrow with nothing below"
         );
     }
@@ -1224,7 +1224,7 @@ mod tests {
             "another group's row leaks"
         );
         assert!(
-            !t.contains("\u{258c}  \u{2193} "),
+            !t.split('\n').any(|l| l.starts_with("  \u{2193} ")),
             "arrow with nothing below"
         );
         let buf = buffer(&c, 160, 48);
@@ -1260,7 +1260,7 @@ mod tests {
         );
         assert!(t.contains("session"), "the query is not shown");
         assert!(
-            !t.contains("\u{258c}  \u{2193} "),
+            !t.split('\n').any(|l| l.starts_with("  \u{2193} ")),
             "arrow with nothing below"
         );
     }
@@ -1312,15 +1312,15 @@ mod tests {
         // Long text fills to the cap instead.
         for name in ["notice", "close-mouse"] {
             let (x0, w) = panel_span(&parse(name).unwrap(), 160, 48);
-            assert_eq!(w, 76, "{name} should fill to the cap");
+            assert_eq!(w, 75, "{name} should fill to the cap");
             assert!(x0 > 0, "{name} flush left");
         }
     }
 
     #[test]
     fn panel_widths_hit_min_and_dock_past_max() {
-        // Content sizes the panel between the clamps: quit needs 49.
-        assert_eq!(panel_span(&parse("quit").unwrap(), 200, 48).1, 49);
+        // Content sizes the panel between the clamps: quit needs 48.
+        assert_eq!(panel_span(&parse("quit").unwrap(), 200, 48).1, 48);
         // A tiny screen wins over every clamp, even MIN.
         assert_eq!(panel_span(&parse("quit").unwrap(), 30, 20).1, 30);
         // The docked key map spans its area uncapped; MAX binds only
@@ -1372,7 +1372,10 @@ mod tests {
     fn narrow_opens_scrolled_with_how_much_hides() {
         let t = text(&parse("keymap-narrow").unwrap(), 100, 40);
         assert!(t.contains("\u{2191} 10 more"), "scroll offset");
-        assert!(t.contains("\u{258c}  \u{2193} "), "scroll arrow");
+        assert!(
+            t.split('\n').any(|l| l.starts_with("  \u{2193} ")),
+            "scroll arrow"
+        );
         assert!(!t.contains("\u{2193} 0 more"), "bottom hidden");
     }
 
@@ -1462,7 +1465,6 @@ mod tests {
     fn history_selects_its_first_match() {
         let t = text(&parse("history").unwrap(), 160, 48);
         assert!(t.contains("Prompt history"));
-        assert!(t.contains("\u{258c}"));
         assert!(t.contains("\u{203a} "));
         assert!(t.contains("3 matches"));
         assert!(t.contains("Enter recalls · Esc closes"));

@@ -2,7 +2,7 @@
 
 One run per case: `--picker CASE`.
 
-- list: three providers with a dozen models between them, roles on the rows, `● current` on claude-opus-5-5, its level chips on the row below; a centred panel with ▄ ▀ edges and the ▌ stripe, dim providers with a blank row between sections, the focused model `›` on a full-width accent bar with its rebuild cost right-aligned, and a bold-key legend foot.
+- list: three providers with a dozen models between them, roles on the rows, `● current` on claude-opus-5-5, its level chips on the row below; a centred panel with ▄ ▀ edges, dim providers with a blank row between sections, the focused model `›` on a full-width accent bar with its rebuild cost right-aligned, and a bold-key legend foot.
 - levels: the current model's thinking chips focused (`[high]`), the rest dim; same panel, bar and legend.
 - scoped: five models only, a `scoped · 5 of 12` chip and a `[show all]` toggle; same panel, bar and legend.
 - scoped-all: all twelve models, the scoped five marked `· scoped`; same panel, bar and legend.
