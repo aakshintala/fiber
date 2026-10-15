@@ -1331,7 +1331,10 @@ fn a_spawn_prune_keeps_a_group_whose_probe_says_perm_and_retires_it_on_srch() {
         listed(&reads)
     );
     // The scripted probes never touched the real groups: kill each for
-    // real and reap every command thread on every path.
+    // real and reap every command thread on every path. Each fixture is
+    // a single `exec sleep`, so the joins reap each leader with no
+    // descendants left behind. The joins already prove the groups are
+    // gone; no real-clock `group_empties` wait here.
     for pid in [pid_a, pid_b, pid_c] {
         match fakes::kill_group(pid, "KILL") {
             Ok(_) | Err(_) => {}
@@ -1342,13 +1345,7 @@ fn a_spawn_prune_keeps_a_group_whose_probe_says_perm_and_retires_it_on_srch() {
         ("the second command", running_b),
         ("the third command", running_c),
     ] {
-        let _finished = fakes::within(what, DEADLINE, move || running.join().unwrap());
-    }
-    for pid in [pid_a, pid_b, pid_c] {
-        assert!(
-            fakes::group_empties(pid, DEADLINE),
-            "the real group is gone"
-        );
+        fakes::within(what, DEADLINE, move || running.join().unwrap()).unwrap();
     }
     watchdog_a.stand_down(DEADLINE);
     watchdog_b.stand_down(DEADLINE);
