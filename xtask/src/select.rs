@@ -249,13 +249,12 @@ pub(crate) fn runtime_read_mismatches(
         (!literals.is_empty()).then_some(literals)
     }
     /// The literals a read reports through a bound name: when the
-    /// argument of a read is one name, directly or behind `&` or `*`,
-    /// holding a one-level join, that join's literals.
+    /// argument of a read is one name, directly or behind `&`, holding
+    /// a one-level join, that join's literals.
     fn read_name(
         group: &proc_macro2::Group,
         joined: &BTreeMap<String, Vec<String>>,
     ) -> Option<Vec<String>> {
-        let mut tokens = group.stream().into_iter().peekable();
         let mut tokens = group.stream().into_iter().peekable();
         while matches!(tokens.peek(), Some(TokenTree::Punct(mark)) if mark.as_char() == '&') {
             tokens.next();
