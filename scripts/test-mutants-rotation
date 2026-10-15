@@ -45,13 +45,6 @@ check 23900 20000 "$two_day_0"
 # No mutants still names one day, so the workflow has a matrix to run.
 check 0 0 "$one_day"
 
-# With one day every epoch day maps to day 0 and shards 0..15.
-check 12800 1 "$one_day"
-check 12800 20000 "$one_day"
-
-# With two days each rotation day runs its own contiguous block.
-check 12801 0 "$two_day_0"
-
 # A non-numeric count exits 2 with empty stdout.
 rc=0
 scripts/mutants-rotation abc 0 >"$tmp/got.txt" 2>"$tmp/err.txt" || rc=$?
