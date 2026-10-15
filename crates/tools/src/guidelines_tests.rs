@@ -9,25 +9,9 @@
 )]
 
 use contract::tool::Tool;
+use fakes::NoSkills;
 
 use super::of;
-
-/// `Skills` with no entry: `file` is `None`, and `body` is an error.
-struct NoSkills;
-
-impl contract::skills::Skills for NoSkills {
-    fn file(&self, _name: &str) -> Option<std::path::PathBuf> {
-        None
-    }
-
-    fn body(
-        &self,
-        _name: &str,
-        _file: &std::path::Path,
-    ) -> Result<String, contract::skills::SkillRead> {
-        Err(contract::skills::SkillRead::Invalid)
-    }
-}
 
 /// A `SearchBackend` with no results.
 struct NoResults;

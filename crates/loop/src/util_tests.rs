@@ -18,11 +18,10 @@ use contract::events::{
 };
 use contract::inbox::{Ack, Delivery, Message};
 use contract::provider::{Delta, Provider, ReplyAction, ToolDefinition};
-use contract::rules::{Rules, RulesError, StandingRules};
 use contract::shapes::{ContentPart, DeclaredEffects, Effect, Failure, Origin, Sender};
 use contract::tool::{Bound, Cancel, Effects, EffectsError, Output, Tool};
 use contract::{ActionId, CommandId, ErrorCode, SessionId, TurnId};
-use fakes::Deadline;
+use fakes::{Deadline, NoRules};
 use log::Log;
 use serde_json::{Map, Value, json};
 
@@ -45,19 +44,6 @@ fn setting_login_shell_is_observed() {
 /// How long a driven turn may take before the test fails naming the
 /// missing turn end, instead of hanging.
 const TURN_DEADLINE: Duration = Duration::from_secs(10);
-
-/// Standing rules that allow nothing and deny nothing.
-struct NoRules;
-
-impl Rules for NoRules {
-    fn read(&self) -> Result<StandingRules, RulesError> {
-        Ok(StandingRules::default())
-    }
-
-    fn remember(&self, _: &str, _: &str, _: &SessionId) -> Result<(), RulesError> {
-        Ok(())
-    }
-}
 
 /// A tool whose calls only read, and return one line.
 struct ProbeTool;

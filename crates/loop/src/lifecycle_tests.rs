@@ -24,11 +24,10 @@ use contract::hook::{
 };
 use contract::inbox::{Ack, Answer, Delivery, Message};
 use contract::provider::{Delta, ReplyAction};
-use contract::rules::{Rules, RulesError, StandingRules};
 use contract::shapes::{ContentPart, DeclaredEffects, Effect, Origin, Sender, Usage};
 use contract::tool::{Bound, Cancel, Effects, EffectsError, Output, Tool};
 use contract::{CommandId, Envelope, ErrorCode, SessionId, TurnId};
-use fakes::Deadline;
+use fakes::{Deadline, NoRules};
 use log::Log;
 
 use crate::{Loop, Model};
@@ -302,18 +301,6 @@ impl Hooks for FakeHooks {
     }
 
     fn deliver_to(&self, _inbox: std::sync::mpsc::Sender<Delivery>) {}
-}
-
-struct NoRules;
-
-impl Rules for NoRules {
-    fn read(&self) -> Result<StandingRules, RulesError> {
-        Ok(StandingRules::default())
-    }
-
-    fn remember(&self, _: &str, _: &str, _: &SessionId) -> Result<(), RulesError> {
-        Ok(())
-    }
 }
 
 /// What a turn-level test drives: the loop, its inbox, and the handles to

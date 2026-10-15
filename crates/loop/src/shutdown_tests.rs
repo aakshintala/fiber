@@ -18,10 +18,10 @@ use contract::clock::Clock as _;
 use contract::events::{DelegateFinished, ExtensionLog, JobCompleted, JobLine, Outcome};
 use contract::inbox::{Ack, Claim, Delivery, JobNotice, Message, Rejection};
 use contract::jobs::{Foreground, Jobs, OpenError, Opened, Opening};
-use contract::rules::{Rules, RulesError, StandingRules};
 use contract::shapes::{ContentPart, Origin, Sender as From, Tokens, Usage};
 use contract::{CommandId, Envelope, ErrorCode, JobId, SessionId};
 use fakes::Deadline;
+use fakes::NoRules;
 use fakes::clock::FakeClock;
 use log::Log;
 
@@ -32,19 +32,6 @@ const DEADLINE: Duration = Duration::from_secs(10);
 
 /// The idle delay a test sets, on the fake clock.
 const IDLE: Duration = Duration::from_secs(60);
-
-/// Rules that hold nothing.
-struct NoRules;
-
-impl Rules for NoRules {
-    fn read(&self) -> Result<StandingRules, RulesError> {
-        Ok(StandingRules::default())
-    }
-
-    fn remember(&self, _: &str, _: &str, _: &SessionId) -> Result<(), RulesError> {
-        Ok(())
-    }
-}
 
 /// Jobs a test lists by hand. Each stop sent is reported on `stops`. An
 /// end is sent under the lock `running` reads, as the registry sends it.

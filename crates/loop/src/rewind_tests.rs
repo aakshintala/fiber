@@ -14,6 +14,7 @@ use std::path::Path;
 use contract::events::{Event, ToolCallRequested, ToolCallStarted};
 use contract::shapes::{DeclaredEffects, Effect};
 use contract::{ActionId, Envelope, SCHEMA_VERSION, Seq, SessionId};
+use fakes::NoRules;
 use serde_json::{Value, json};
 
 use super::*;
@@ -274,27 +275,6 @@ fn a_call_before_the_point_is_not_listed() {
     );
     let note = rewind_note(&dir, Seq(101)).unwrap();
     assert!(note.contains("No file was written and no command was run after this point."));
-}
-
-/// Standing rules that allow nothing and remember nothing.
-struct NoRules;
-
-impl contract::rules::Rules for NoRules {
-    fn read(&self) -> Result<contract::rules::StandingRules, contract::rules::RulesError> {
-        Ok(contract::rules::StandingRules {
-            global: Vec::new(),
-            project: Vec::new(),
-        })
-    }
-
-    fn remember(
-        &self,
-        _tool: &str,
-        _prefix: &str,
-        _session: &contract::SessionId,
-    ) -> Result<(), contract::rules::RulesError> {
-        Ok(())
-    }
 }
 
 #[test]

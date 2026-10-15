@@ -21,7 +21,7 @@ use contract::shapes::Failure;
 use serde_json::{Value, json};
 
 use super::{providers_and_config, refresh_named, refresh_run, run};
-use fakes::Deadline;
+use fakes::{Deadline, NoLock};
 
 #[test]
 fn catalogue_and_cached_model_lists_follow_project_configuration() {
@@ -107,20 +107,6 @@ fn refresh_skips_disabled_malformed_provider_data_and_refreshes_enabled_control(
             );
         },
     );
-}
-
-/// `fiber models` never writes a file, so its lock runs every call straight
-/// through.
-struct NoLock;
-
-impl contract::files::PathLock for NoLock {
-    fn hold(&self, _path: &std::path::Path, run: &mut dyn FnMut()) {
-        run();
-    }
-
-    fn hold_all(&self, _paths: &[PathBuf], run: &mut dyn FnMut()) {
-        run();
-    }
 }
 
 /// Fiber home and a workspace in a temporary directory, removed on drop.

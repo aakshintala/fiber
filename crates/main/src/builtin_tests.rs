@@ -7,6 +7,7 @@ use contract::clock::{Clock, Wake};
 use contract::emit::Emit;
 use contract::events::Event;
 use contract::tool::Cancel;
+use fakes::NoSkills;
 
 struct Never;
 
@@ -47,23 +48,6 @@ pub(super) fn delegates() -> crate::delegates::Delegates {
             catalogue: Arc::from(""),
         },
     )
-}
-
-/// The skills the `builtin` calls load through: none are listed.
-struct NoSkills;
-
-impl contract::skills::Skills for NoSkills {
-    fn file(&self, _name: &str) -> Option<std::path::PathBuf> {
-        None
-    }
-
-    fn body(
-        &self,
-        _name: &str,
-        _file: &std::path::Path,
-    ) -> Result<String, contract::skills::SkillRead> {
-        Err(contract::skills::SkillRead::Invalid)
-    }
 }
 
 pub(super) fn skills() -> Arc<dyn contract::skills::Skills> {

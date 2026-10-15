@@ -21,13 +21,12 @@ use contract::hook::{
 };
 use contract::inbox::{Ack, Delivery, Message};
 use contract::provider::{Delta, Input, ModelRequest, Provider, ReplyAction, ToolDefinition};
-use contract::rules::{Rules, RulesError, StandingRules};
 use contract::shapes::{ContentPart, DeclaredEffects, Effect, Failure, Origin, Process, Sender};
 use contract::tool::{
     Bound, Cancel, Effects, EffectsError, Output, SpillFile, Spilled, Tool, Unsaved,
 };
 use contract::{CommandId, Envelope, ErrorCode, SessionId};
-use fakes::Deadline;
+use fakes::{Deadline, NoRules};
 use log::Log;
 use serde_json::{Map, Value, json};
 
@@ -143,19 +142,6 @@ impl Hooks for FakeHooks {
     }
 
     fn deliver_to(&self, _inbox: std::sync::mpsc::Sender<Delivery>) {}
-}
-
-/// Rules that hold nothing.
-struct NoRules;
-
-impl Rules for NoRules {
-    fn read(&self) -> Result<StandingRules, RulesError> {
-        Ok(StandingRules::default())
-    }
-
-    fn remember(&self, _: &str, _: &str, _: &SessionId) -> Result<(), RulesError> {
-        Ok(())
-    }
 }
 
 /// A tool that returns `output`, after cancelling the turn when `cancel` is
