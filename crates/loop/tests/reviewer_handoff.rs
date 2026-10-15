@@ -887,11 +887,13 @@ fn without_a_reviewer_a_handoff_writes_no_selection() {
 
 #[test]
 fn the_oldest_kept_messages_drop_past_the_reviewers_window() {
-    // "The person: say hi" is 19 bytes, 5 tokens; "The person: never
-    // push to main" is 31 bytes, 8 tokens. A window of 5 fits only the
-    // newest.
-    let window = "The person: say hi".len().div_ceil(4) as u64;
-    assert_eq!(window, 5);
+    // "The person: never push to main" is 31 bytes, 8 tokens, and "The
+    // person: say hi" is 19 bytes, 5 tokens, answered by "The agent: Noted
+    // one." at 21 bytes, 6 tokens: the reply counts against the message
+    // it answers. A window of 11 fits only the newest with its reply.
+    let window = "The person: say hi".len().div_ceil(4) as u64
+        + "The agent: Noted one.".len().div_ceil(4) as u64;
+    assert_eq!(window, 11);
 
     // A selection of both keeps only the second, with no notice.
     let mut session = Session::with_tools(
@@ -1029,6 +1031,81 @@ fn the_oldest_kept_messages_drop_past_the_reviewers_window() {
     assert!(message.contains("context window"), "{message}");
     assert!(!message.contains("every one"), "{message}");
     assert_eq!(reviewer.requests().len(), 1);
+}
+
+#[test]
+fn a_reply_counts_against_the_message_it_answers_window_share() {
+    // "The person: never push to main" is 8 tokens and "The person: say
+    // hi" is 5; the reply "The agent: Noted one." is 6. A window of 13
+    // fits both messages without the reply, but with it the oldest drops.
+    let window = 13;
+    let replies = vec![
+        Scripted::text("Noted one."),
+        Scripted::text("Noted two."),
+        Scripted::text("The note."),
+    ];
+    let mut session = Session::with_tools(replies, None, Vec::new());
+    let reviewer = session.reviewer_windowed(vec![Scripted::text("1, 2")], window);
+    let mut lines = prompt_turn(&mut session, "never push to main");
+    lines.extend(prompt_turn(&mut session, "say hi"));
+    lines.extend(handoff_turn(&mut session, "c_h"));
+    let kept = kept_lines(&lines);
+    assert_eq!(kept.len(), 1);
+    assert_eq!(
+        kept[0].payload["kept"],
+        json!([{"seq": turn_started_seq(&lines, "say hi"), "item": 0}])
+    );
+    assert!(kept[0].payload.get("failed").is_none());
+    assert_eq!(reviewer.requests().len(), 1);
+    // The selection saw the reply above the listing: it is what made the
+    // oldest message exceed the window.
+    let selected = reviewer.requests();
+    let seen = texts(&selected[0]);
+    assert!(seen.contains(&"The agent: Noted one."));
+    assert_eq!(
+        seen
+            .iter()
+            .position(|text| text == &"The agent: Noted one.")
+            .unwrap()
+            + 1,
+        seen
+            .iter()
+            .position(|text| text == &"The person: say hi")
+            .unwrap(),
+        "the reply sits directly before its message: {seen:?}"
+    );
+
+    // The same flow with empty agent text keeps both: no reply, no share.
+    let mut session = Session::with_tools(
+        vec![
+            Scripted::text(""),
+            Scripted::text(""),
+            Scripted::text("The note."),
+        ],
+        None,
+        Vec::new(),
+    );
+    let reviewer = session.reviewer_windowed(vec![Scripted::text("1, 2")], window);
+    let mut lines = prompt_turn(&mut session, "never push to main");
+    lines.extend(prompt_turn(&mut session, "say hi"));
+    lines.extend(handoff_turn(&mut session, "c_h"));
+    let kept = kept_lines(&lines);
+    assert_eq!(kept.len(), 1);
+    assert_eq!(
+        kept[0].payload["kept"],
+        json!([
+            {"seq": turn_started_seq(&lines, "never push to main"), "item": 0},
+            {"seq": turn_started_seq(&lines, "say hi"), "item": 0}
+        ])
+    );
+    assert!(kept[0].payload.get("failed").is_none());
+    assert_eq!(reviewer.requests().len(), 1);
+    assert!(
+        !texts(&reviewer.requests()[0])
+            .iter()
+            .any(|text| text.starts_with("The agent:")),
+        "no reply reaches the selection"
+    );
 }
 
 #[test]
