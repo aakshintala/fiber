@@ -420,6 +420,7 @@ struct ProbeTool {
     forget_gate: Mutex<Option<mpsc::Receiver<()>>>,
     run_entered: Mutex<Option<mpsc::Sender<()>>>,
     run_gate: Mutex<Option<mpsc::Receiver<()>>>,
+    run_rehold: Mutex<Option<mpsc::Receiver<()>>>,
     cancel_watch: Mutex<Option<mpsc::Sender<()>>>,
     run_error: Mutex<Option<String>>,
     clock_hold: Mutex<bool>,
@@ -489,6 +490,7 @@ impl ProbeTool {
             forget_gate: Mutex::new(None),
             run_entered: Mutex::new(None),
             run_gate: Mutex::new(None),
+            run_rehold: Mutex::new(None),
             cancel_watch: Mutex::new(None),
             run_error: Mutex::new(None),
             clock_hold: Mutex::new(false),
@@ -565,6 +567,12 @@ impl ProbeTool {
     fn hold_run(self) -> Self {
         *lock(&self.clock_hold) = true;
         self
+    }
+
+    /// Re-parks a held run after the test releases its first park, without
+    /// moving time, so a later step observes a fresh park.
+    fn rehold_run(&self, gate: mpsc::Receiver<()>) {
+        *lock(&self.run_rehold) = Some(gate);
     }
 
     /// Holds the next runs at entry until the test releases `gate`.
@@ -709,6 +717,12 @@ impl ProbeTool {
             // Parks on the injected clock while the test holds the gate:
             // advancing the clock then sets the run's duration.
             let clock = lock(&self.clock).clone().expect("the build wires a clock");
+            if let Some(rehold) = lock(&self.run_rehold).take() {
+                clock.wait_until(None, &mut |_| {
+                    fakes::Deadline::after(WAIT)
+                        .recv_or_fail(&rehold, "the test releases the run to re-park");
+                });
+            }
             clock.wait_until(None, &mut |_| {
                 if let Some(gate) = lock(&self.run_gate).take() {
                     fakes::Deadline::after(WAIT).recv_or_fail(&gate, "the test releases the run");
@@ -4559,6 +4573,8 @@ fn concurrent_runs_keep_independent_spans_in_request_order() {
     let rules = Arc::new(FakeRules::default());
     let first = Arc::new(ProbeTool::reads("atlas").hold_run());
     let second = Arc::new(ProbeTool::reads("boreal").hold_run());
+    let (rehold_tx, rehold_rx) = mpsc::channel();
+    first.rehold_run(rehold_rx);
     let (first_tx, first_rx) = mpsc::channel();
     let (first_gate_tx, first_gate_rx) = mpsc::channel();
     first.gate_run(first_tx, first_gate_rx);
@@ -4613,6 +4629,7 @@ fn concurrent_runs_keep_independent_spans_in_request_order() {
         assert!(!bound.left().is_zero(), "the second run completes first");
         std::thread::yield_now();
     }
+    rehold_tx.send(()).expect("the first run waits to re-park");
     world.clock.advance_when_parked(
         None,
         Some(first_worker),
