@@ -1396,3 +1396,172 @@ fn a_call_with_no_name_draws_no_empty_tool_run() {
         shown.marks
     );
 }
+
+/// In secondary: the title's session and count.
+fn secondary_style() -> Style {
+    Style::new().fg(Role::Secondary.color())
+}
+
+/// Bold in secondary: the title's "Question" and its place.
+fn secondary_bold_style() -> Style {
+    secondary_style().add_modifier(Modifier::BOLD)
+}
+
+/// An `interaction_requested` form `id` from `session` with one question.
+fn form_asked(session: &str, id: &str) -> contract::Envelope {
+    contract::Envelope {
+        kind: "interaction_requested".to_owned(),
+        session_id: contract::SessionId(session.to_owned()),
+        ts: 0,
+        schema_version: contract::SCHEMA_VERSION,
+        turn_id: None,
+        action_id: None,
+        seq: None,
+        payload: serde_json::json!({"request_id": id, "kind": "form", "fields": [
+            {"header": "Base", "question": "Which branch?",
+             "options": [{"label": "main"}, {"label": "dev"}]}]})
+        .as_object()
+        .cloned()
+        .unwrap_or_default(),
+    }
+}
+
+/// An `interaction_requested` confirm `id` from `session`.
+fn confirm_asked(session: &str, id: &str) -> contract::Envelope {
+    contract::Envelope {
+        kind: "interaction_requested".to_owned(),
+        session_id: contract::SessionId(session.to_owned()),
+        ts: 0,
+        schema_version: contract::SCHEMA_VERSION,
+        turn_id: None,
+        action_id: None,
+        seq: None,
+        payload: serde_json::json!({"request_id": id, "kind": "confirm",
+            "prompt": "Continue?"})
+        .as_object()
+        .cloned()
+        .unwrap_or_default(),
+    }
+}
+
+/// A form's title at width 80 for `session` with `questions` questions and
+/// `place`, or a one-question title when `questions` is `None`.
+fn question_title(session: &str, questions: Option<usize>, place: Option<(usize, usize)>) -> String {
+    let mut left = format!("Question from {session}");
+    if let Some(questions) = questions {
+        left.push_str(&format!(" · {questions} questions, any can be skipped"));
+    }
+    if let Some((k, n)) = place {
+        left.push_str(&format!(" · {k} of {n}"));
+    }
+    let pad = 80_usize
+        .saturating_sub(crate::format::width(&left).saturating_add("Esc: chat about this".len()))
+        .max(1);
+    format!("{left}{}{}", " ".repeat(pad), "Esc: chat about this")
+}
+
+#[test]
+fn a_single_form_title_has_no_place_suffix() {
+    let queue = folded(&[form_asked(S_A, "r_1")]);
+    assert_eq!(header(&queue), question_title(S_A, Some(1), None));
+    assert!(!header(&queue).contains(" of "), "{}", header(&queue));
+    // "Question" is the only bold secondary run.
+    let marks: Vec<_> = rendered(&queue)
+        .marks
+        .iter()
+        .filter(|mark| mark.line == 0 && mark.style == secondary_bold_style())
+        .map(|mark| mark.bytes.clone())
+        .collect();
+    assert_eq!(marks, [0..8]);
+}
+
+#[test]
+fn two_forms_title_the_first_one_of_two() {
+    let queue = folded(&[form_asked(S_A, "r_1"), form_asked(S_A, "r_2")]);
+    assert_eq!(header(&queue), question_title(S_A, Some(1), Some((1, 2))));
+    let shown = rendered(&queue);
+    let line = shown.lines.first().cloned().unwrap_or_default();
+    let place: Vec<_> = shown
+        .marks
+        .iter()
+        .filter(|mark| mark.line == 0 && mark.style == secondary_bold_style())
+        .map(|mark| mark.bytes.clone())
+        .collect();
+    assert_eq!(place.len(), 2);
+    assert_eq!(&line[place[1].clone()], " · 1 of 2");
+}
+
+#[test]
+fn alt_a_moves_to_the_second_form_title() {
+    let mut queue = folded(&[form_asked(S_A, "r_1"), form_asked(S_A, "r_2")]);
+    assert_eq!(queue.on_key(&Key::AltA), Some(PanelKey::Handled));
+    assert_eq!(header(&queue), question_title(S_A, Some(1), Some((2, 2))));
+}
+
+#[test]
+fn answering_the_first_form_leaves_the_second_without_a_suffix() {
+    let mut queue = folded(&[form_asked(S_A, "r_1"), form_asked(S_A, "r_2")]);
+    press(&mut queue, Key::Enter, 1);
+    assert!(queue.answer("c_1").is_some());
+    assert_eq!(header(&queue), question_title(S_A, Some(1), None));
+}
+
+#[test]
+fn three_forms_title_one_of_three() {
+    let queue = folded(&[
+        form_asked(S_A, "r_1"),
+        form_asked(S_A, "r_2"),
+        form_asked(S_A, "r_3"),
+    ]);
+    assert_eq!(header(&queue), question_title(S_A, Some(1), Some((1, 3))));
+}
+
+#[test]
+fn a_form_behind_an_approval_counts_both() {
+    let mut queue = folded(&[standing_ask(S_A, "a_1", "r_a", "ls"), form_asked(S_A, "r_f")]);
+    assert!(queue.open_first());
+    assert_eq!(header(&queue), header_text(1, 2, S_A));
+    assert_eq!(queue.on_key(&Key::Esc), Some(PanelKey::Handled));
+    assert_eq!(header(&queue), question_title(S_A, Some(1), Some((2, 2))));
+}
+
+#[test]
+fn the_title_names_the_session_or_falls_back_to_its_id() {
+    let queue = folded(&[form_asked(S_A, "r_1")]);
+    assert_eq!(
+        named(&queue, Some("run it")).lines.first().cloned().unwrap_or_default(),
+        question_title("run it", Some(1), None)
+    );
+    assert_eq!(header(&queue), question_title(S_A, Some(1), None));
+    assert_eq!(
+        named(&queue, Some("")).lines.first().cloned().unwrap_or_default(),
+        question_title(S_A, Some(1), None)
+    );
+    // Control characters in a name draw as spaces.
+    let shown = named(&queue, Some("a\x1bb"));
+    let line = shown.lines.first().cloned().unwrap_or_default();
+    assert!(line.contains("from a b"), "{line}");
+    assert!(!line.chars().any(|ch| ch.is_control()), "{line}");
+}
+
+#[test]
+fn a_one_question_title_has_no_count() {
+    let queue = folded(&[confirm_asked(S_A, "r_c")]);
+    assert_eq!(header(&queue), question_title(S_A, None, None));
+    assert!(!header(&queue).contains("questions"), "{}", header(&queue));
+    let shown = rendered(&queue);
+    let marks: Vec<_> = shown
+        .marks
+        .iter()
+        .filter(|mark| mark.line == 0)
+        .map(|mark| (mark.bytes.clone(), mark.style))
+        .collect();
+    assert_eq!(
+        marks,
+        [
+            (0..8, secondary_bold_style()),
+            (8..32, secondary_style()),
+            (60..80, dim_style()),
+        ]
+    );
+}

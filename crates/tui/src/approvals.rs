@@ -89,7 +89,9 @@ pub(crate) struct Mark {
 pub(crate) struct Panel {
     /// Its lines, before wrapping: the header, then the request's rows.
     pub(crate) lines: Vec<String>,
-    /// Their styled runs; empty on a question form.
+    /// Their styled runs, on an approval and on a question alike: the
+    /// header's runs and each row's roles, so the draw needs no
+    /// hand-counted offsets.
     pub(crate) marks: Vec<Mark>,
     /// Whether it takes the alert tint: the reviewer escalated. Never on a
     /// question.
