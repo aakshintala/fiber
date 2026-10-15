@@ -327,6 +327,8 @@ pub(crate) struct Cell {
     pub(crate) bg: Colour,
     pub(crate) dim: bool,
     pub(crate) bold: bool,
+    /// Whether the cell draws reversed: the focus look.
+    pub(crate) inverse: bool,
 }
 
 impl Cell {
@@ -344,6 +346,7 @@ impl Cell {
             bg: cell.bgcolor().into(),
             dim: cell.dim(),
             bold: cell.bold(),
+            inverse: cell.inverse(),
         }
     }
 }
