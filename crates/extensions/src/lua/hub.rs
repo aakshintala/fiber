@@ -9,6 +9,7 @@
 //! the entry script returns, or Stopped when it errors, passes its deadline,
 //! or is still running a grace period past it. Ready becomes Stopped when a
 //! running callback is still running a grace period past its own deadline.
+//! A running hook or command is answered at its deadline.
 //! Dropping the extension stops it. Stopped is final.
 
 use std::collections::{HashMap, HashSet, VecDeque};
@@ -206,7 +207,7 @@ impl Hub {
     }
 
     /// Records `result` for the call `id`, if its caller still waits.
-    /// A watched hook that settled disarms its watch instead: its caller
+    /// A watched hook or command that settled disarms its watch instead: its caller
     /// already took `Timeout`, so the late result is dropped.
     pub(super) fn finish(&self, id: u64, result: Result<Value, Error>) {
         let mut shared = self.lock();
@@ -309,7 +310,7 @@ pub(crate) struct Shared {
     /// Raised into running Lua by the deadline hook while a cancelled call
     /// runs; set and cleared only under this lock.
     pub(super) interrupt: Arc<std::sync::atomic::AtomicBool>,
-    /// A hook whose caller took `Timeout` at its deadline while it still
+    /// A hook or command whose caller took `Timeout` at its deadline while it still
     /// ran on the thread. The worker may be stuck inside the VM — that is
     /// when abandonment matters — so the next judge to see it past its
     /// grace abandons the VM (the lane's choice: the next judge, not the
@@ -318,7 +319,7 @@ pub(crate) struct Shared {
     pub(super) abandon: Option<AbandonWatch>,
 }
 
-/// A hook still on the thread after its caller answered `Timeout` at its
+/// A hook or command still on the thread after its caller answered `Timeout` at its
 /// deadline: which call to abandon, and the deadline its grace runs from.
 pub(super) struct AbandonWatch {
     pub(super) id: u64,
@@ -384,6 +385,12 @@ pub(super) enum Gate<'a> {
 pub(super) enum Next {
     Return(Result<Value, Error>),
     Sleep(Option<Instant>),
+}
+
+/// A running hook or command answers at its deadline; every other target
+/// waits out its grace.
+fn answers_at_deadline(target: &Target) -> bool {
+    matches!(target, Target::Hook { .. } | Target::Command(_))
 }
 
 impl Shared {
@@ -543,7 +550,7 @@ impl Shared {
             self.forget(id);
             return (Next::Return(Err(e)), Vec::new());
         }
-        // A watched hook still running past its grace: its caller took
+        // A watched hook or command still running past its grace: its caller took
         // `Timeout` at its deadline and is gone, and the worker may be
         // stuck in the VM, so the next judge to see it abandons the VM
         // with the abandoned reason, as its own judge would below.
@@ -589,7 +596,7 @@ impl Shared {
             deadline,
             parked: false,
         }) = self.calls.get(&id)
-            && matches!(target, Target::Hook { .. })
+            && answers_at_deadline(target)
             && expired(*deadline, now)
         {
             if expired(deadline.and_then(|at| at.checked_add(GRACE)), now) {
@@ -606,7 +613,7 @@ impl Shared {
                 let unsent = self.stop(reason);
                 return (Next::Return(Err(error)), unsent);
             }
-            // A hook past its timeout has failed: the caller takes the
+            // A hook or command past its timeout has failed: the caller takes the
             // timeout at its deadline and the chain moves on, while the
             // worker's stop lands late and is dropped. Waiting the grace
             // would hold the answer on the worker's delivery. The watch
@@ -623,8 +630,8 @@ impl Shared {
             Some(Progress::Started {
                 deadline,
                 parked: false,
-            }) if matches!(target, Target::Hook { .. }) => {
-                // A running hook answers at its deadline (see above), so
+            }) if answers_at_deadline(target) => {
+                // A running hook or command answers at its deadline (see above), so
                 // wake there: the grace would hold the answer on a
                 // withheld worker delivery.
                 (*deadline, true)

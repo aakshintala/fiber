@@ -203,6 +203,136 @@ fn parking_only_the_watched_hook_disarms_its_abandon_watch() {
     }
 }
 
+/// A ready hub with one 50 ms command whose running call was judged at its
+/// deadline: the caller took `Timeout` and the abandon watch is armed for
+/// that call. Returns the hub, the watched id, its target, its timeout and
+/// the deadline the watch runs from.
+fn armed_command() -> (Arc<Hub>, u64, Target, Duration, Instant) {
+    use super::super::declared::DeclaredCommand;
+
+    let hub = Hub::new(fakes::clock::FakeClock::new());
+    let target = Target::Command("spin".to_owned());
+    let timeout = Duration::from_millis(50);
+    let now = hub.clock().now();
+    let asked = now.checked_sub(timeout).unwrap();
+    let deadline = asked.checked_add(timeout).unwrap();
+    let watched = {
+        let mut shared = hub.lock();
+        shared.phase = Phase::Ready(Default::default());
+        if let Phase::Ready(timeouts) = &mut shared.phase {
+            timeouts.commands.insert(
+                "spin".to_owned(),
+                DeclaredCommand {
+                    timeout,
+                    description: String::new(),
+                },
+            );
+        } else {
+            panic!("not ready");
+        }
+        let watched = shared.push(target.clone(), serde_json::Value::Null, asked);
+        shared.queue.clear();
+        shared.calls.insert(
+            watched,
+            Progress::Started {
+                deadline: Some(deadline),
+                parked: false,
+            },
+        );
+        match shared.judge("ext", watched, &target, asked, now) {
+            (super::super::hub::Next::Return(Err(Error::Timeout { .. })), _) => {}
+            _ => panic!("the running command times out at its deadline"),
+        }
+        assert!(
+            shared
+                .abandon
+                .as_ref()
+                .is_some_and(|watch| watch.id == watched),
+            "the Timeout arms the abandon watch"
+        );
+        watched
+    };
+    (hub, watched, target, timeout, deadline)
+}
+
+/// A watched command's late finish is dropped and disarms its watch, while
+/// another id's finish leaves the watch armed: the late result belongs to a
+/// caller that already took `Timeout`.
+#[test]
+fn a_watched_commands_finish_is_dropped_and_disarms_its_watch() {
+    // The watched finish disarms the watch and records nothing.
+    {
+        let (hub, watched, _, _, _) = armed_command();
+        hub.finish(watched, Ok(serde_json::json!("late")));
+        let shared = hub.lock();
+        assert!(
+            shared.abandon.is_none(),
+            "the watched finish disarms the watch"
+        );
+        assert!(
+            !shared.calls.contains_key(&watched),
+            "the late result is dropped"
+        );
+    }
+    // Another id's finish leaves the watch armed.
+    {
+        let (hub, watched, _, _, _) = armed_command();
+        hub.finish(watched.wrapping_add(1), Ok(serde_json::json!("late")));
+        let shared = hub.lock();
+        assert!(
+            shared
+                .abandon
+                .as_ref()
+                .is_some_and(|watch| watch.id == watched),
+            "another call's finish keeps the watch armed"
+        );
+    }
+}
+
+/// A command that parks after its caller took `Timeout` ends at its own
+/// deadline without abandoning the VM: parking disarmed the watch, the call
+/// has no waiter, and the thread fails the parked entry at its deadline.
+#[test]
+fn a_command_that_parks_after_its_caller_answered_ends_at_its_own_deadline() {
+    let lua = mlua::Lua::new();
+    let (hub, watched, target, timeout, deadline) = armed_command();
+    let mut parked = Vec::new();
+    {
+        let mut shared = hub.lock();
+        park(
+            &mut parked,
+            &mut shared,
+            watched,
+            entry(&lua, watched).thread,
+            target.clone(),
+            Some(deadline),
+            timeout,
+            None,
+            None,
+            None,
+        );
+        assert!(
+            shared.abandon.is_none(),
+            "parking the watched command disarms the watch"
+        );
+        assert!(matches!(shared.phase, Phase::Ready(_)), "the VM stays up");
+        assert!(
+            !shared.calls.contains_key(&watched),
+            "the answered call has no waiter"
+        );
+    }
+    // The clock is already at the deadline, so the parked entry fails at
+    // its own deadline.
+    match next("ext", &hub, &mut parked) {
+        Some(Work::Collect) => {}
+        _ => panic!("the parked command ends at its own deadline"),
+    }
+    assert!(
+        matches!(hub.lock().phase, Phase::Ready(_)),
+        "the VM stays up"
+    );
+}
+
 /// A thread `Start` for `dir`, outside any session.
 fn start_in(dir: &std::path::Path) -> Start {
     Start {

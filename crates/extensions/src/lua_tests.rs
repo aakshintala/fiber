@@ -415,7 +415,8 @@ fn a_parked_call_past_its_grace_times_out_and_the_vm_stays() {
     assert!(matches!(shared.phase, Phase::Ready(_)));
 }
 
-/// A running call waits its grace, then abandons the VM.
+/// A running command past its deadline times out and arms the abandon watch,
+/// then past its grace abandons the VM.
 #[test]
 fn a_running_call_past_its_grace_abandons_the_vm() {
     let at = now();
@@ -431,10 +432,16 @@ fn a_running_call_past_its_grace_abandons_the_vm() {
             parked: false,
         },
     );
-    let (Next::Sleep(until), _) = shared.judge("ext", id, &command("spin"), asked, at) else {
-        panic!("returned inside its grace")
-    };
-    assert_eq!(until, Some(inside + GRACE));
+    let err = returned(shared.judge("ext", id, &command("spin"), asked, at)).unwrap_err();
+    assert!(
+        matches!(&err, Error::Timeout { callback, timeout_ms: 100, .. } if callback == "spin"),
+        "{err:?}"
+    );
+    assert!(matches!(shared.phase, Phase::Ready(_)));
+    assert!(
+        shared.abandon.as_ref().is_some_and(|watch| watch.id == id),
+        "the Timeout arms the abandon watch"
+    );
     shared.calls.insert(
         id,
         Progress::Started {
@@ -446,7 +453,7 @@ fn a_running_call_past_its_grace_abandons_the_vm() {
     assert!(matches!(err, Error::Abandoned { .. }), "{err:?}");
     assert!(matches!(
         shared.phase,
-        Phase::Stopped(hub::StopReason::Stopped)
+        Phase::Stopped(hub::StopReason::Abandoned { .. })
     ));
 }
 
@@ -1478,6 +1485,169 @@ fn a_parked_hook_at_its_deadline_waits_out_its_grace() {
     assert_eq!(until, Some(at + GRACE));
 }
 
+/// A running command at its deadline has failed: the caller takes the timeout
+/// at once, without waiting the grace, and the VM stays up.
+#[test]
+fn a_running_command_at_its_deadline_times_out_and_leaves_the_vm_up() {
+    let at = now();
+    let asked = ago(at, 50);
+    let mut shared = ready(&[("spin", 50)]);
+    let id = shared.push(command("spin"), Value::Null, asked);
+    shared.queue.clear();
+    shared.calls.insert(
+        id,
+        Progress::Started {
+            deadline: Some(at),
+            parked: false,
+        },
+    );
+    let err = returned(shared.judge("ext", id, &command("spin"), asked, at)).unwrap_err();
+    assert!(
+        matches!(&err, Error::Timeout { callback, timeout_ms: 50, .. } if callback == "spin"),
+        "{err:?}"
+    );
+    assert!(matches!(shared.phase, Phase::Ready(_)));
+    assert!(
+        shared.abandon.as_ref().is_some_and(|watch| watch.id == id),
+        "the Timeout arms the abandon watch"
+    );
+}
+
+/// A running command just before its deadline still waits: flipping the
+/// deadline comparison to answer early would return here.
+#[test]
+fn a_running_command_before_its_deadline_waits() {
+    let at = now();
+    let asked = ago(at, 49);
+    let mut shared = ready(&[("spin", 50)]);
+    let id = shared.push(command("spin"), Value::Null, asked);
+    shared.queue.clear();
+    shared.calls.insert(
+        id,
+        Progress::Started {
+            deadline: Some(at),
+            parked: false,
+        },
+    );
+    let (Next::Sleep(until), _) = shared.judge("ext", id, &command("spin"), asked, ago(at, 1))
+    else {
+        panic!("a command returned before its deadline")
+    };
+    assert_eq!(until, Some(at));
+}
+
+/// A running command inside its grace times out, and at its grace it is
+/// abandoned: both sides of the grace boundary.
+#[test]
+fn a_running_command_one_millisecond_inside_its_grace_times_out() {
+    let deadline = now();
+    let asked = ago(deadline, 50);
+    // One millisecond inside the grace: the caller takes the timeout and the
+    // VM stays up.
+    {
+        let at = deadline
+            .checked_add(GRACE)
+            .and_then(|at| at.checked_sub(Duration::from_millis(1)))
+            .unwrap();
+        let mut shared = ready(&[("spin", 50)]);
+        let id = shared.push(command("spin"), Value::Null, asked);
+        shared.queue.clear();
+        shared.calls.insert(
+            id,
+            Progress::Started {
+                deadline: Some(deadline),
+                parked: false,
+            },
+        );
+        let err = returned(shared.judge("ext", id, &command("spin"), asked, at)).unwrap_err();
+        assert!(
+            matches!(&err, Error::Timeout { callback, timeout_ms: 50, .. } if callback == "spin"),
+            "{err:?}"
+        );
+        assert!(matches!(shared.phase, Phase::Ready(_)));
+    }
+    // Exactly at the grace: the VM is abandoned.
+    {
+        let at = deadline + GRACE;
+        let mut shared = ready(&[("spin", 50)]);
+        let id = shared.push(command("spin"), Value::Null, asked);
+        shared.queue.clear();
+        shared.calls.insert(
+            id,
+            Progress::Started {
+                deadline: Some(deadline),
+                parked: false,
+            },
+        );
+        let err = returned(shared.judge("ext", id, &command("spin"), asked, at)).unwrap_err();
+        assert!(
+            matches!(&err, Error::Abandoned { callback, .. } if callback == "spin"),
+            "{err:?}"
+        );
+        assert!(matches!(
+            shared.phase,
+            Phase::Stopped(hub::StopReason::Abandoned { .. })
+        ));
+    }
+}
+
+/// A parked command at its deadline still waits out its grace: only a command
+/// on the thread answers at its deadline.
+#[test]
+fn a_parked_command_at_its_deadline_waits_out_its_grace() {
+    let at = now();
+    let asked = ago(at, 50);
+    let mut shared = ready(&[("spin", 50)]);
+    let id = shared.push(command("spin"), Value::Null, asked);
+    shared.queue.clear();
+    shared.calls.insert(
+        id,
+        Progress::Started {
+            deadline: Some(at),
+            parked: true,
+        },
+    );
+    let (Next::Sleep(until), _) = shared.judge("ext", id, &command("spin"), asked, at) else {
+        panic!("a parked command returned at its deadline")
+    };
+    assert_eq!(until, Some(at + GRACE));
+}
+
+/// A command that outruns its caller's `Timeout` is abandoned by the next call
+/// past its grace: the worker may be stuck in the VM, so the next judge
+/// stops it. Within its grace the VM stays up.
+#[test]
+fn a_timed_out_command_still_running_past_its_grace_abandons_on_the_next_call() {
+    let at = now();
+    let asked = ago(at, 1200);
+    let mut shared = ready(&[("spin", 50)]);
+    let id = shared.push(command("spin"), Value::Null, asked);
+    shared.queue.clear();
+    shared.calls.insert(
+        id,
+        Progress::Started {
+            deadline: Some(ago(at, 1150)),
+            parked: false,
+        },
+    );
+    let err = returned(shared.judge("ext", id, &command("spin"), asked, ago(at, 200))).unwrap_err();
+    assert!(
+        matches!(&err, Error::Timeout { callback, timeout_ms: 50, .. } if callback == "spin"),
+        "{err:?}"
+    );
+    assert!(matches!(shared.phase, Phase::Ready(_)));
+    let next = shared.push(command("spin"), Value::Null, at);
+    let err = returned(shared.judge("ext", next, &command("spin"), at, at)).unwrap_err();
+    assert!(
+        matches!(&err, Error::Abandoned { callback, .. } if callback == "spin"),
+        "{err:?}"
+    );
+    assert!(matches!(
+        shared.phase,
+        Phase::Stopped(hub::StopReason::Abandoned { .. })
+    ));
+}
+
 /// While one extension's hook completion is withheld, other extensions, other
 /// points and commands all complete: the pause passes everything else
 /// through, which a widened check would hold up here. Nothing is released.
@@ -1605,4 +1775,71 @@ fn a_non_blocking_before_message_hook_past_its_timeout_is_dropped_while_its_comp
         .recv(&again_rx)
         .expect("waited for the hook to run again after its timeout")
         .unwrap();
+}
+
+/// A command spinning past its timeout is answered while its completion is
+/// withheld: the timeout answer must arrive off the clock advance, without
+/// the worker's delivery; the worker's late completion is dropped and the VM
+/// stays usable. Without the fix the answer waits on the worker's delivery,
+/// so this fails at the wait below on every run.
+#[test]
+fn a_running_command_past_its_timeout_is_answered_while_its_completion_is_withheld() {
+    let dir = extension(
+        "withheld-command",
+        "fiber.command(\"echo\", { timeout = 1000, run = function(text) return text end })\n\
+         fiber.command(\"spin\", { timeout = 50, run = function()\n\
+           require(\"go_spin\") while true do end end })\n",
+    );
+    let went = go_module(dir.path(), "spin");
+    let clock = FakeClock::new();
+    let ext = Arc::new(LuaExtension::new(
+        "fiber.test/withheld-command",
+        dir.path(),
+        PathBuf::from("/nonexistent-fiber-home"),
+        clock.clone(),
+    ));
+    // Withhold the worker's completion past the answer wait below.
+    let (hold_tx, hold_rx) = mpsc::channel();
+    super::schedule::withhold_command_completion("fiber.test/withheld-command", "spin", hold_rx);
+    // Calling code that blocks runs on a thread, received here with a
+    // deadline naming the wait.
+    let (tx, rx) = mpsc::channel();
+    let caller = Arc::clone(&ext);
+    thread::spawn(move || tx.send(caller.command("spin", "")));
+    Deadline::after(WAIT)
+        .recv(&went)
+        .expect("waited for the command to start");
+    // The worker runs the command, past the arming of its deadline: the
+    // signal the advance below waits on.
+    assert!(
+        until(&ext.hub, |shared| shared.calls.values().any(
+            |progress| matches!(progress, Progress::Started { parked: false, .. })
+        )),
+        "waited for the worker to run the command"
+    );
+    clock.advance(Duration::from_millis(50));
+    let err = Deadline::after(WAIT)
+        .recv(&rx)
+        .expect("waited for the timeout answer without the worker's delivery")
+        .unwrap_err();
+    assert!(
+        matches!(&err, Error::Timeout { callback, timeout_ms: 50, .. } if callback == "spin"),
+        "{err:?}"
+    );
+    assert!(err.to_string().contains("50 ms timeout"), "{err:?}");
+    // The answer arrived while the worker was still withheld, so this
+    // release only lets its late completion land, dropped, and the VM stays
+    // usable: the next call runs again.
+    drop(hold_tx);
+    super::schedule::release_hook_completion();
+    let (again_tx, again_rx) = mpsc::channel();
+    let again_caller = Arc::clone(&ext);
+    thread::spawn(move || again_tx.send(again_caller.command("echo", "alive")));
+    assert_eq!(
+        Deadline::after(WAIT)
+            .recv(&again_rx)
+            .expect("waited for the next command after the timeout")
+            .unwrap(),
+        "alive"
+    );
 }
