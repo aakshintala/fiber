@@ -151,6 +151,31 @@ fn cut_output_with_no_tail_does_not_add_a_trailing_newline() {
     );
 }
 
+#[test]
+fn the_opening_boundary_is_fixed_at_the_read_count() {
+    let sessions = fakes::TempDir::new("log-opening-boundary");
+    let log = Log::create(sessions.path(), SessionId("s_1".into()), fakes::clock::FakeClock::new()).unwrap();
+    assert_eq!(log.watch_all().last_seq(), None);
+    log.append(&step(), None, None).unwrap();
+    assert_eq!(log.watch_all().last_seq(), Some(Seq(0)));
+    log.append(&step(), None, None).unwrap();
+    let armed = log.arm(true, |_, _| {});
+    log.append(&step(), None, None).unwrap();
+    let mut watcher = log.finish(armed);
+    assert_eq!(watcher.last_seq(), Some(Seq(2)));
+    assert_eq!(log.watch().last_seq(), None);
+    let total = crate::read::CAPACITY + 1;
+    for _ in 0..total {
+        log.append(&step(), None, None).unwrap();
+    }
+    assert_eq!(watcher.last_seq(), Some(Seq(2)), "later appends do not move the boundary");
+    for seq in 0..u64::try_from(total + 3).unwrap() {
+        assert_eq!(watcher.try_recv().unwrap().unwrap().seq, Some(Seq(seq)));
+    }
+    assert!(watcher.try_recv().unwrap().is_none());
+    assert_eq!(watcher.last_seq(), Some(Seq(2)), "catch-up does not move the boundary");
+}
+
 fn started() -> Event {
     Event::FiberStarted(FiberStarted {
         version: "0".into(),

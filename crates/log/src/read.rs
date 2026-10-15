@@ -9,7 +9,7 @@ use std::path::{Path, PathBuf};
 use std::sync::{Arc, Condvar, Mutex, MutexGuard, PoisonError, Weak};
 use std::time::Duration;
 
-use contract::Envelope;
+use contract::{Envelope, Seq};
 
 use crate::offsets::{After, Offsets, Page};
 use crate::{EVENTS, Error, io_at};
@@ -267,6 +267,8 @@ pub struct Watcher {
     /// queue, behind the kept lines already in it. A catch-up lifts this
     /// to `u64::MAX` to re-read to the table's current end.
     end: u64,
+    /// The opening fold's fixed boundary, independent of later catch-up.
+    last_seq: Option<Seq>,
     /// Lines re-read from the log, not yet returned.
     backlog: VecDeque<Envelope>,
     /// What the watcher reads after its backlog: the queue alone, the next
@@ -315,6 +317,7 @@ impl Watcher {
             offsets,
             next,
             end: u64::MAX,
+            last_seq: None,
             backlog: VecDeque::new(),
             reading: Reading::Live,
         }
@@ -344,9 +347,16 @@ impl Watcher {
             offsets,
             next: 0,
             end,
+            last_seq: end.checked_sub(1).map(Seq),
             reading,
             backlog: VecDeque::from(first.lines),
         }
+    }
+
+    /// The last durable line in the opening fold; absent for an empty
+    /// log or a watcher that reads only live lines. Fixed at creation.
+    pub fn last_seq(&self) -> Option<Seq> {
+        self.last_seq
     }
 
     /// A handle that pushes lines into this watcher's queue and no other.
