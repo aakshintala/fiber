@@ -9,7 +9,7 @@ use std::sync::mpsc;
 use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
 
 use contract::commands::SubscribeLevel;
-use contract::events::{CommandAccepted, Event};
+use contract::events::{CommandAccepted, CommandResult, Event};
 use contract::inbox::Delivery;
 use contract::{CommandId, Envelope, ErrorCode, SessionId};
 use log::Injector;
@@ -31,7 +31,7 @@ pub(crate) struct Switch {
     /// Written directly after the switch: the acknowledgement first, then
     /// (summary only) the latest session_status and extensions_loaded.
     pub(crate) prelude: Vec<Envelope>,
-    /// A label-bearing change's deferred response: bare acceptance, then
+    /// A label-bearing change's deferred response: acceptance, then
     /// a notice on failure, written after the old-level drain and before
     /// the prelude snapshots. `None` for a label-free change, whose
     /// prelude already holds the acceptance.
@@ -166,7 +166,7 @@ pub(super) fn change(
                 conn.gate.clock.as_ref(),
                 &Event::CommandAccepted(CommandAccepted {
                     command_id: id.clone(),
-                    result: None,
+                    result: watcher.last_seq().map(|last_seq| CommandResult::Subscribe { last_seq }),
                 }),
             );
             (watcher, injector, 0, ack, Vec::new())
@@ -200,7 +200,7 @@ pub(super) fn change(
                 conn.gone = true;
                 return;
             };
-            let (ack, response, cancel) = super::settle_response(&conn.gate, id);
+            let (ack, response, cancel) = super::settle_response(&conn.gate, id, watcher.last_seq());
             outbox.settle(cancel);
             conn.gate.deliver(Delivery::Credential(
                 contract::commands::CredentialArgs { label },
@@ -276,7 +276,7 @@ pub(super) fn apply(
             }
         }
     }
-    // The loop's answer to the delivered switch: bare acceptance, then
+    // The loop's answer to the delivered switch: acceptance, then
     // a notice on failure, before the new-level snapshots. A cancelled
     // wait means the reader is gone; ending here lets the join proceed.
     if let Some(response) = switch.response {

@@ -488,6 +488,7 @@ fn subscribe(
             (watcher, None, None)
         }
     };
+    let last_seq = watcher.last_seq();
     let injector = watcher.injector();
     let outbox = level::Outbox::new(injector.clone());
     // A `full` connection is counted before its acknowledgement, so a
@@ -506,7 +507,7 @@ fn subscribe(
         let Some(stream) = conn.writer.take() else {
             return;
         };
-        let (ack, response, cancel) = settle_response(&conn.gate, id);
+        let (ack, response, cancel) = settle_response(&conn.gate, id, last_seq);
         let snapshots = if summary {
             [status, extensions].into_iter().flatten().collect()
         } else {
@@ -536,7 +537,7 @@ fn subscribe(
     }
     // The acknowledgement is written here, before the writer starts, so it
     // is the first line the client reads.
-    accept(conn, id, None);
+    accept(conn, id, last_seq.map(|last_seq| CommandResult::Subscribe { last_seq }));
     #[cfg(test)]
     if conn.full {
         conn.gate
@@ -699,8 +700,8 @@ fn unknown(conn: &mut Conn, id: CommandId, command: &str) {
     );
 }
 
-/// A label-bearing subscribe's deferred response envelopes: bare
-/// acceptance, then a notice on failure.
+/// A label-bearing subscribe's deferred response envelopes: acceptance
+/// with the opening boundary at full, then a notice on failure.
 type Settled = Vec<Envelope>;
 
 /// Cancels a label-bearing subscribe's deferred response when its reader
@@ -721,8 +722,8 @@ impl Drop for SettleCancel {
 /// Builds the deferred response for a label-bearing subscribe: the Ack
 /// the loop answers once the delivered switch admits or refuses, the
 /// receiver the writer emits before history, and the cancel the reader
-/// holds until it leaves. The loop's answer becomes bare subscribe
-/// acceptance, then the rejection as a connection-local notice on
+/// holds until it leaves. The loop's answer becomes subscribe acceptance
+/// with the opening boundary at full, then a connection-local notice on
 /// failure; the subscribe id is never released and no rejection is sent
 /// for it. The sender is taken exactly once, by the answer or by the
 /// cancel, so a late answer after teardown is dropped and a teardown
@@ -731,6 +732,7 @@ impl Drop for SettleCancel {
 fn settle_response(
     gate: &Arc<Gate>,
     id: CommandId,
+    last_seq: Option<contract::Seq>,
 ) -> (Ack, mpsc::Receiver<Settled>, SettleCancel) {
     let (tx, rx) = mpsc::channel();
     let shared = Arc::new(Mutex::new(Some(tx)));
@@ -744,7 +746,7 @@ fn settle_response(
             gate.clock.as_ref(),
             &Event::CommandAccepted(CommandAccepted {
                 command_id: id,
-                result: None,
+                result: last_seq.map(|last_seq| CommandResult::Subscribe { last_seq }),
             }),
         )];
         if let Err(rejection) = result {

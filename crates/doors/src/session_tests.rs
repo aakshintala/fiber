@@ -2497,6 +2497,42 @@ fn a_full_subscriber_sees_the_kept_ui_line_before_a_later_one() {
 }
 
 #[test]
+fn full_subscriptions_name_the_opening_boundary_and_summary_does_not() {
+    for count in [0usize, 1, 3] {
+        reset();
+        let opened = Opened::open(Vec::new());
+        for _ in 0..count {
+            opened.log.append(&Event::StepStarted(contract::events::Empty {}), None, None).unwrap();
+        }
+        let socket = opened.socket.clone();
+        opened.session.run(Vec::new(), Arc::new(|| false), move |_| {
+            let full = Client::connect(&socket).unwrap();
+            full.send(&subscribe_line("c_full", "full")).unwrap();
+            let answer = recv(&full);
+            assert_eq!(answer["kind"], "command_accepted");
+            assert_eq!(answer["payload"]["command_id"], "c_full");
+            let expected = count.checked_sub(1).map(|last| serde_json::json!({"last_seq": last}));
+            assert_eq!(answer["payload"].get("result"), expected.as_ref());
+            let fold = support::until(&full, |line| line["kind"] == "clients");
+            let durable: Vec<_> = fold.iter().filter_map(|line| line["seq"].as_u64()).collect();
+            assert_eq!(durable, (0..u64::try_from(count).unwrap()).collect::<Vec<_>>());
+            assert_eq!(support::kinds(&fold), std::iter::repeat_n("step_started", count).chain(["clients"]).collect::<Vec<_>>());
+            let summary = Client::connect(&socket).unwrap();
+            summary.send(&subscribe_line("c_summary", "summary")).unwrap();
+            let answer = recv(&summary);
+            assert_eq!(answer["kind"], "command_accepted");
+            assert!(answer["payload"].get("result").is_none());
+            summary.send(&subscribe_line("c_raise", "full")).unwrap();
+            let answer = answer_of(&summary, "c_raise");
+            assert_eq!(answer["kind"], "command_accepted");
+            assert_eq!(answer["payload"].get("result"), expected.as_ref());
+            Ok(())
+        }).unwrap();
+        close_within(opened.session, opened.log);
+    }
+}
+
+#[test]
 fn a_full_subscribe_is_counted_before_its_acknowledgement() {
     // A client that reads its acknowledgement is counted in `clients`, so a
     // prompt sent once the acknowledgement arrives finds it connected.
@@ -3541,6 +3577,7 @@ fn next_switch(inbox: &mpsc::Receiver<Delivery>) -> (String, contract::inbox::Ac
 fn a_first_subscribe_with_a_label_waits_for_the_switch_before_its_acceptance() {
     reset();
     let opened = Opened::open(Vec::new());
+    opened.log.append(&Event::StepStarted(contract::events::Empty {}), None, None).unwrap();
     let socket = opened.socket.clone();
     opened
         .session
@@ -3570,18 +3607,15 @@ fn a_first_subscribe_with_a_label_waits_for_the_switch_before_its_acceptance() {
             );
             (ack.0)(Ok(None));
             // The acceptance is the connection's first line: nothing
-            // preceded it, and it answers this subscribe with no result.
+            // preceded it, and it names the last opening line.
             let accepted = recv(&client);
             assert_eq!(accepted["kind"], "command_accepted", "{accepted}");
             assert_eq!(accepted["payload"]["command_id"], "c_sub", "{accepted}");
-            assert!(
-                accepted["payload"].get("result").is_none(),
-                "one bare acceptance: {accepted}"
-            );
+            assert_eq!(accepted["payload"]["result"]["last_seq"], 0, "{accepted}");
             // Folded history follows the acceptance, never precedes it:
-            // a fresh session folds only its `clients` count next.
+            // the seeded step comes before the live `clients` count.
             let lines = support::until(&client, |line| line["kind"] == "clients");
-            assert_eq!(support::kinds(&lines), ["clients"]);
+            assert_eq!(support::kinds(&lines), ["step_started", "clients"]);
             Ok(())
         })
         .unwrap();
@@ -3592,6 +3626,7 @@ fn a_first_subscribe_with_a_label_waits_for_the_switch_before_its_acceptance() {
 fn a_first_subscribe_with_an_unknown_label_is_accepted_then_noticed() {
     reset();
     let opened = Opened::open(Vec::new());
+    opened.log.append(&Event::StepStarted(contract::events::Empty {}), None, None).unwrap();
     let socket = opened.socket.clone();
     let dir = opened.dir.clone();
     opened
@@ -3604,15 +3639,12 @@ fn a_first_subscribe_with_an_unknown_label_is_accepted_then_noticed() {
             let (label, ack) = next_switch(&inbox);
             assert_eq!(label, "nope");
             (ack.0)(Err(unknown_label("nope")));
-            // The subscribe itself still succeeds: one bare acceptance,
+            // The subscribe itself still succeeds: one acceptance,
             // then the refusal as an ephemeral notice, never a rejection
             // of the subscribe id.
             let accepted = answer_of(&client, "c_sub");
             assert_eq!(accepted["kind"], "command_accepted", "{accepted}");
-            assert!(
-                accepted["payload"].get("result").is_none(),
-                "one bare acceptance: {accepted}"
-            );
+            assert_eq!(accepted["payload"]["result"]["last_seq"], 0, "{accepted}");
             let notice = recv(&client);
             assert_eq!(notice["kind"], "notice", "{notice}");
             assert_eq!(notice["payload"]["code"], "credential_missing", "{notice}");
@@ -3625,7 +3657,7 @@ fn a_first_subscribe_with_an_unknown_label_is_accepted_then_noticed() {
                 "no new payload key: {notice}"
             );
             let history = support::until(&client, |line| line["kind"] == "clients");
-            assert_eq!(support::kinds(&history), ["clients"]);
+            assert_eq!(support::kinds(&history), ["step_started", "clients"]);
             // The successful subscription stands: the next prompt is
             // delivered and answered as usual, on the old label.
             send_text(&client, "c_1", "prompt", "hi");
@@ -3908,6 +3940,7 @@ fn a_dead_client_ends_a_label_bearing_subscribe_without_a_hang() {
 fn a_level_change_with_a_label_waits_for_the_switch() {
     reset();
     let opened = Opened::open(Vec::new());
+    opened.log.append(&Event::StepStarted(contract::events::Empty {}), None, None).unwrap();
     let socket = opened.socket.clone();
     opened
         .session
@@ -3935,12 +3968,9 @@ fn a_level_change_with_a_label_waits_for_the_switch() {
             let accepted = recv(&client);
             assert_eq!(accepted["kind"], "command_accepted", "{accepted}");
             assert_eq!(accepted["payload"]["command_id"], "c_2", "{accepted}");
-            assert!(
-                accepted["payload"].get("result").is_none(),
-                "one bare acceptance: {accepted}"
-            );
+            assert_eq!(accepted["payload"]["result"]["last_seq"], 0, "{accepted}");
             let first = support::until(&client, |line| line["kind"] == "clients");
-            assert_eq!(support::kinds(&first), ["clients"]);
+            assert_eq!(support::kinds(&first), ["step_started", "clients"]);
             Ok(())
         })
         .unwrap();
