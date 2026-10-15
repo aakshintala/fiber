@@ -1432,6 +1432,31 @@ fn a_kept_second_message_of_a_two_message_line_keeps_the_shared_reply() {
 }
 
 #[test]
+fn a_reply_answers_only_the_run_on_its_own_line() {
+    let mut reviewed = Vec::new();
+    render_reviewed(
+        &mut reviewed,
+        &text_completed("which?"),
+        None,
+        Some(Seq(20)),
+    );
+    render_reviewed(&mut reviewed, &person_turn("A"), None, Some(Seq(21)));
+    render_reviewed(&mut reviewed, &person_turn("B"), None, Some(Seq(22)));
+    assert_eq!(reviewed.len(), 3);
+    // Only the later line is named: the reply answered the earlier
+    // line, so it goes with it. Keeping the later line must not keep
+    // the earlier line's reply.
+    render_reviewed(
+        &mut reviewed,
+        &kept_event(vec![kept(22, 0)]),
+        None,
+        Some(Seq(40)),
+    );
+    assert_eq!(person_text(&reviewed), ["The person: B"]);
+    assert_eq!(reviewed[0].shown, Shown::Person(kept(22, 0)));
+}
+
+#[test]
 fn a_completed_handoff_keeps_the_pairs_and_a_later_yes_carries_no_reply() {
     let mut reviewed = Vec::new();
     pair(&mut reviewed, "first?", "one", 20);
