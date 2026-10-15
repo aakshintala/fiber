@@ -336,8 +336,7 @@ const GET_WITHIN: Duration = Duration::from_secs(10);
 
 #[test]
 fn a_silent_server_past_the_backstop_is_timeout() {
-    let server =
-        fakes::ProviderServer::start([fakes::Response::status(200, "{}")]).unwrap();
+    let server = fakes::ProviderServer::start([fakes::Response::status(200, "{}")]).unwrap();
     // Hold the reply so the server records the request and never answers:
     // the read, not the connect, passes the backstop.
     server.hold();
