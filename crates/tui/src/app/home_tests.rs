@@ -2960,6 +2960,27 @@ fn a_dependents_refusal_with_no_other_ids_notes_the_row() {
         foot(&app),
         "↓ chips and sessions · F1 the key map · Ctrl+C twice to quit"
     );
+    // The notice carries the refusal's own code, not a default.
+    assert!(app.notices().iter().any(|line| matches!(
+        line,
+        crate::app::NoticeLine::Notice { code, text, .. }
+        if code == "session_has_dependents" && text == message
+    )));
+}
+
+#[test]
+fn a_refusal_code_is_the_payload_code_or_malformed() {
+    // An empty code is no code: the notice then reads `malformed`.
+    let payload = |value: Value| value.as_object().cloned().unwrap_or_default();
+    assert_eq!(
+        super::refusal_code(&payload(json!({"code": "session_held"}))),
+        "session_held"
+    );
+    assert_eq!(
+        super::refusal_code(&payload(json!({"code": ""}))),
+        "malformed"
+    );
+    assert_eq!(super::refusal_code(&payload(json!({}))), "malformed");
 }
 
 #[test]

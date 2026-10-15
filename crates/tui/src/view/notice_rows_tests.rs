@@ -103,3 +103,14 @@ fn a_long_code_cuts_cleanly() {
     assert_eq!(format::width(&text), 30, "{text:?}");
     assert!(text.ends_with('✕'), "{text:?}");
 }
+
+#[test]
+fn a_row_with_no_room_for_its_code_keeps_only_the_cross() {
+    // The room is the width less the closing blank and the ✕. At one
+    // and two columns none is left, so the code is dropped; at three
+    // one column is left, and the code is cut to that "…" alone.
+    let text = |width| row_to_string(&notice_row("code", "msg", width));
+    assert_eq!(text(1), "✕");
+    assert_eq!(text(2), " ✕");
+    assert_eq!(text(3), "… ✕");
+}

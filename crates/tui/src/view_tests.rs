@@ -2383,6 +2383,58 @@ fn no_cross_without_conversation_rows() {
 }
 
 #[test]
+fn a_handoff_note_row_keeps_its_sides_without_colour() {
+    // The handoff tint takes the card's side bars when no colour is set
+    // (`docs/tui.md`, "Look"): a note row sits on that tint alone.
+    crate::surface::init(&|name: &str| (name == "NO_COLOR").then(|| "1".to_owned()));
+    let mut app = App::new(PathBuf::from("/w"));
+    app.set_size(80, 24);
+    attach(&mut app, S_A);
+    app.on_line(turn_started(S_A, "go"));
+    app.on_line(session_line(
+        S_A,
+        "text_completed",
+        serde_json::json!({"text": "Working."}),
+        Some("a_1"),
+    ));
+    app.on_line(session_line(
+        S_A,
+        "handoff_started",
+        serde_json::json!({"trigger": "auto"}),
+        None,
+    ));
+    app.on_line(delta(S_A, "a_n", "## Note"));
+    app.on_line(session_line(
+        S_A,
+        "text_completed",
+        serde_json::json!({"text": "## Note\nkeep going"}),
+        Some("a_n"),
+    ));
+    app.on_line(session_line(
+        S_A,
+        "handoff_completed",
+        serde_json::json!({"outcome": "completed", "tokens_before": 1_000}),
+        None,
+    ));
+    let note = app
+        .targets()
+        .into_iter()
+        .find_map(|(_, target)| matches!(target, crate::app::Target::Note(_)).then_some(target));
+    let Some(note) = note else {
+        panic!("a note target: {:?}", app.lines());
+    };
+    app.open(note);
+    let area = Rect::new(0, 0, 80, 24);
+    let mut buf = Buffer::empty(area);
+    render(&app, area, &mut buf, None);
+    let row = (0..area.height)
+        .find(|y| row_text(&buf, *y).contains("keep going"))
+        .expect("a note row on screen");
+    let text = row_text(&buf, row);
+    assert!(text.contains('│'), "{text:?}");
+}
+
+#[test]
 fn a_turn_spanning_drawn_lines_sums_their_heights() {
     use crate::mouse::TargetId;
     let mut app = empty();
