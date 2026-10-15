@@ -252,3 +252,239 @@ fn an_unknown_model_keeps_its_error_and_still_writes_all_three_lines() {
     assert!(op_lines(&info_root.path().join("home")).is_empty());
     assert_eq!(info_clock.reads(), 1);
 }
+
+/// A door whose `tools` answer goes nowhere.
+fn quiet_door() -> crate::switch::Door {
+    crate::switch::Door {
+        declare: Arc::new(|_, _| {}),
+        hosted_stands: false,
+        backend: None,
+    }
+}
+
+fn switch_args(model: &str, thinking: Option<&str>) -> contract::commands::ModelArgs {
+    contract::commands::ModelArgs {
+        model: model.to_owned(),
+        thinking: thinking.map(str::to_owned),
+    }
+}
+
+/// `prepare` on its own thread, so a hang fails the test instead of
+/// hanging it.
+#[track_caller]
+fn bounded_prepare(
+    switching: &Arc<crate::switch::Switching>,
+    args: &contract::commands::ModelArgs,
+    label: Option<&str>,
+) -> Result<r#loop::Prepared, contract::inbox::Rejection> {
+    let (switching, args, label) = (
+        Arc::clone(switching),
+        contract::commands::ModelArgs {
+            model: args.model.clone(),
+            thinking: args.thinking.clone(),
+        },
+        label.map(str::to_owned),
+    );
+    fakes::within("the preparation", Duration::from_secs(20), move || {
+        crate::switch::prepare(&switching, &quiet_door(), &args, label.as_deref(), None)
+    })
+}
+
+/// The `switching` sharing the session's diagnostic writer: every entered
+/// preparation writes one line through it. `started` is owned, so the
+/// field moves out once its writer is cloned.
+fn diagnosed(started: crate::Parts) -> Arc<crate::switch::Switching> {
+    let diag = Arc::clone(&started.diag);
+    Arc::new(started.switching.diagnostics(diag))
+}
+
+/// The same `switching` without a writer: preparations carry no
+/// factories and write no line.
+fn undiagnosed(started: crate::Parts) -> Arc<crate::switch::Switching> {
+    Arc::new(started.switching)
+}
+
+/// Every `routing.switch` line under the home's `logs/`.
+fn switch_lines(home: &Path) -> Vec<serde_json::Value> {
+    op_lines(home)
+        .into_iter()
+        .filter(|line| line["data"]["op"] == "routing.switch")
+        .collect()
+}
+
+/// The outcome's shape: success with its model reference, or rejection
+/// with its code and message.
+fn outcome(
+    result: &Result<r#loop::Prepared, contract::inbox::Rejection>,
+) -> (bool, String, String) {
+    match result {
+        Ok(prepared) => (true, prepared.model.reference.clone(), String::new()),
+        Err(rejection) => (
+            false,
+            format!("{:?}", rejection.code),
+            rejection.message.clone(),
+        ),
+    }
+}
+
+/// A debug `Parts` over the scripted model and its diagnosing switch.
+fn debug_switching() -> (
+    fakes::TempDir,
+    Arc<ScriptedClock>,
+    Arc<crate::switch::Switching>,
+) {
+    let reads = Arc::new(crate::switch::Reads::default());
+    let (root, clock, started) = parts("debug", "scripted/s.json", reads);
+    let switching = diagnosed(started.unwrap());
+    (root, clock, switching)
+}
+
+#[test]
+fn a_switch_to_the_startup_model_writes_one_line_over_two_reads() {
+    let (root, clock, switching) = debug_switching();
+    let before = clock.reads();
+    let prepared = bounded_prepare(&switching, &switch_args("scripted/s.json", None), None);
+    let result = outcome(&prepared);
+    assert!(result.0);
+    assert_eq!(result.1, "scripted/s.json");
+    let lines = switch_lines(&root.path().join("home"));
+    assert_eq!(lines.len(), 1);
+    assert_eq!(lines[0]["data"]["ms"], before + 2);
+    assert_eq!(clock.reads(), before + 2);
+}
+
+#[test]
+fn a_switch_with_an_unknown_thinking_level_is_rejected_with_one_line() {
+    let (root, clock, switching) = debug_switching();
+    let prepared = bounded_prepare(
+        &switching,
+        &switch_args("scripted/s.json", Some("nonsense")),
+        None,
+    );
+    let result = outcome(&prepared);
+    assert!(!result.0);
+    assert_eq!(result.1, "InvalidArguments");
+    assert_eq!(switch_lines(&root.path().join("home")).len(), 1);
+    let _ = clock;
+}
+
+#[test]
+fn a_switch_to_a_scripted_model_from_another_session_is_rejected_with_one_line() {
+    let (root, clock, switching) = debug_switching();
+    let prepared = bounded_prepare(&switching, &switch_args("scripted/other.json", None), None);
+    let rejection = match prepared {
+        Ok(_) => panic!("the switch prepared"),
+        Err(rejection) => rejection,
+    };
+    assert_eq!(rejection.code, contract::ErrorCode::InvalidArguments);
+    assert_eq!(rejection.message, crate::scripted::START_ONLY);
+    assert_eq!(switch_lines(&root.path().join("home")).len(), 1);
+    let _ = clock;
+}
+
+#[test]
+fn a_switch_on_cancelled_reads_is_rejected_with_the_read_code_and_one_line() {
+    let reads = Arc::new(crate::switch::Reads::default());
+    let (root, clock, started) = parts("debug", "scripted/s.json", Arc::clone(&reads));
+    let switching = diagnosed(started.unwrap());
+    reads.cancel();
+    let prepared = bounded_prepare(&switching, &switch_args("scripted/s.json", None), None);
+    let rejection = match prepared {
+        Ok(_) => panic!("the switch prepared"),
+        Err(rejection) => rejection,
+    };
+    assert_eq!(rejection.code, contract::ErrorCode::Closing);
+    assert_eq!(switch_lines(&root.path().join("home")).len(), 1);
+    let _ = clock;
+}
+
+/// Each outcome above, on an info-started `Parts` and on a `Switching`
+/// with no writer: the same outcome, no line, and no added clock read
+/// at info.
+#[test]
+fn every_switch_outcome_matches_without_a_writer_and_reads_nothing_at_info() {
+    let cases = [
+        ("scripted/s.json", None, false),
+        ("scripted/s.json", Some("nonsense"), false),
+        ("scripted/other.json", None, false),
+        ("scripted/s.json", None, true),
+    ];
+    for (model, thinking, cancelled) in cases {
+        let debug_reads = Arc::new(crate::switch::Reads::default());
+        let (debug_root, _, debug_started) =
+            parts("debug", "scripted/s.json", Arc::clone(&debug_reads));
+        let debug_switching = diagnosed(debug_started.unwrap());
+        if cancelled {
+            debug_reads.cancel();
+        }
+        let args = switch_args(model, thinking);
+        let debug_outcome = outcome(&bounded_prepare(&debug_switching, &args, None));
+
+        let info_reads = Arc::new(crate::switch::Reads::default());
+        let (info_root, info_clock, info_started) =
+            parts("info", "scripted/s.json", Arc::clone(&info_reads));
+        let info_switching = diagnosed(info_started.unwrap());
+        if cancelled {
+            info_reads.cancel();
+        }
+        let info_before = info_clock.reads();
+        let info_outcome = outcome(&bounded_prepare(&info_switching, &args, None));
+        assert_eq!(
+            info_outcome, debug_outcome,
+            "{model} {thinking:?} cancelled={cancelled}"
+        );
+        assert!(switch_lines(&info_root.path().join("home")).is_empty());
+        assert_eq!(info_clock.reads(), info_before);
+
+        let plain_reads = Arc::new(crate::switch::Reads::default());
+        let (plain_root, _, plain_started) =
+            parts("debug", "scripted/s.json", Arc::clone(&plain_reads));
+        let plain_switching = undiagnosed(plain_started.unwrap());
+        if cancelled {
+            plain_reads.cancel();
+        }
+        let plain_outcome = outcome(&bounded_prepare(&plain_switching, &args, None));
+        assert_eq!(
+            plain_outcome, debug_outcome,
+            "{model} {thinking:?} cancelled={cancelled}"
+        );
+        assert!(switch_lines(&plain_root.path().join("home")).is_empty());
+        let _ = debug_root;
+    }
+}
+
+#[test]
+fn switching_keeps_the_process_start_level() {
+    let debug_reads = Arc::new(crate::switch::Reads::default());
+    let (debug_root, _, debug_started) =
+        parts("debug", "scripted/s.json", Arc::clone(&debug_reads));
+    let home = debug_root.path().join("home");
+    std::fs::write(
+        home.join("config.json"),
+        serde_json::json!({"model": "scripted/s.json", "diagnostics": {"level": "info"}})
+            .to_string(),
+    )
+    .unwrap();
+    let debug_switching = diagnosed(debug_started.unwrap());
+    bounded_prepare(
+        &debug_switching,
+        &switch_args("scripted/s.json", None),
+        None,
+    )
+    .unwrap_or_else(|rejection| panic!("the switch rejected: {}", rejection.message));
+    assert_eq!(switch_lines(&home).len(), 1);
+
+    let info_reads = Arc::new(crate::switch::Reads::default());
+    let (info_root, _, info_started) = parts("info", "scripted/s.json", Arc::clone(&info_reads));
+    let info_home = info_root.path().join("home");
+    std::fs::write(
+        info_home.join("config.json"),
+        serde_json::json!({"model": "scripted/s.json", "diagnostics": {"level": "debug"}})
+            .to_string(),
+    )
+    .unwrap();
+    let info_switching = diagnosed(info_started.unwrap());
+    bounded_prepare(&info_switching, &switch_args("scripted/s.json", None), None)
+        .unwrap_or_else(|rejection| panic!("the switch rejected: {}", rejection.message));
+    assert!(switch_lines(&info_home).is_empty());
+}
