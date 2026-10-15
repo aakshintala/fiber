@@ -331,10 +331,7 @@ fn malformed_lines_take_no_unit() {
     // The 65th valid line waits at the full-capacity branch: the
     // parked reader sends nothing more.
     await_waiter(&credits, "the reader to wait at the queue cap");
-    assert!(
-        rx.try_recv().is_err(),
-        "line 64 arrived with none received"
-    );
+    assert!(rx.try_recv().is_err(), "line 64 arrived with none received");
     // One receive releases it: a new wait after the release.
     credits.received(&hub_line(0));
     let released = Deadline::after(DEADLINE);
@@ -422,17 +419,11 @@ fn takes_past_the_cap_wait_for_a_receive() {
         })
         .unwrap_or_else(|err| panic!("spawn: {err}"));
     await_waiter(&credits, "the third take to wait at a cap of 2");
-    assert!(
-        done.try_recv().is_err(),
-        "the third take passed a cap of 2"
-    );
+    assert!(done.try_recv().is_err(), "the third take passed a cap of 2");
     credits.received(&Input::Tick);
     // A tick holds no unit, so the waiter stays parked.
     assert_eq!(credits.waiters(), 1, "a tick releases nothing");
-    assert!(
-        done.try_recv().is_err(),
-        "a tick released the waiter"
-    );
+    assert!(done.try_recv().is_err(), "a tick released the waiter");
     credits.received(&hub_line(0));
     assert!(Deadline::after(DEADLINE).recv_or_fail(&done, "the take to return"),);
 }
@@ -474,10 +465,7 @@ fn received_ignores_non_hub_and_empty() {
         })
         .unwrap_or_else(|err| panic!("spawn: {err}"));
     await_waiter(&credits, "the take to wait at a held unit");
-    assert!(
-        done.try_recv().is_err(),
-        "a resize released the held unit"
-    );
+    assert!(done.try_recv().is_err(), "a resize released the held unit");
     credits.received(&hub_line(1));
     assert!(Deadline::after(DEADLINE).recv_or_fail(&done, "the take to return"),);
 }
@@ -504,10 +492,7 @@ fn cancel_ends_every_wait_without_taking() {
         })
         .unwrap_or_else(|err| panic!("spawn: {err}"));
     await_waiter(&credits, "the take to wait at a full cap");
-    assert!(
-        done.try_recv().is_err(),
-        "the take passed a full cap"
-    );
+    assert!(done.try_recv().is_err(), "the take passed a full cap");
     credits.cancel();
     assert!(!Deadline::after(DEADLINE).recv_or_fail(&done, "the waiter to end"),);
     // After: the old lane stays cancelled, and a lane made after the
@@ -538,10 +523,7 @@ fn a_zero_cap_waits_until_cancelled() {
         })
         .unwrap_or_else(|err| panic!("spawn: {err}"));
     await_waiter(&credits, "the take to wait at a cap of 0");
-    assert!(
-        done.try_recv().is_err(),
-        "a take passed a cap of 0"
-    );
+    assert!(done.try_recv().is_err(), "a take passed a cap of 0");
     credits.cancel();
     assert!(!Deadline::after(DEADLINE).recv_or_fail(&done, "the waiter to end"),);
 }

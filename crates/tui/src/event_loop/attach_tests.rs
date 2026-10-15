@@ -156,10 +156,7 @@ fn attach_bounded_reader_stops_at_the_queue_cap() {
         Ok(got) => assert_eq!(got, 66, "one receive releases one line"),
         Err(err) => panic!("waited {DEADLINE:?} for hand-out 66: {err}"),
     }
-    await_waiter(
-        &hub.credits(),
-        "the reader to wait after one receive",
-    );
+    await_waiter(&hub.credits(), "the reader to wait after one receive");
     assert!(
         hand_rx.try_recv().is_err(),
         "hand-out 67 arrived after one receive"
