@@ -285,6 +285,24 @@ fn the_window_keeps_the_focused_binding_whole() {
 }
 
 #[test]
+fn settle_scrolls_a_focus_below_the_window_into_view() {
+    let total = BINDINGS.len();
+    // Three fit: a focus seven rows down sits below the window.
+    let fits = |_: usize| 3;
+    let mut state = KeyMap {
+        focus: 7,
+        top: 0,
+        ..KeyMap::default()
+    };
+    state.settle(total, &fits);
+    // The scroll moves to the first top holding the focus whole: from
+    // 5 three fit (5, 6, 7). A `==` mutant stops one short at 4 with
+    // the focus still out, and a `>` mutant never scrolls at all.
+    assert_eq!(state.top(), 5);
+    assert!(state.focus() < state.top() + fits(state.top()));
+}
+
+#[test]
 fn the_counts_are_bindings_above_and_below() {
     let keys = Keyset::default();
     let fits = |_: usize| 7;

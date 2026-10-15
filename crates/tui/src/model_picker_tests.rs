@@ -2,7 +2,7 @@
 //! chips, and the movement clamps. The app's keys are tested beside them.
 
 use super::{
-    Choice, Fresh, Mode, ModelPicker, PickerCtx, PickerView, age, command_args, preselect,
+    Choice, Fresh, Mode, ModelPicker, PickerCtx, PickerView, RowAt, age, command_args, preselect,
     rebuild_cost, saves, scoped_save, shown_in, start_args, visible,
 };
 use crate::catalogue::{Catalogue, ModelEntry};
@@ -1520,6 +1520,39 @@ fn the_view_with_no_match_holds_one_line_and_no_focus() {
     assert!(view.sections.is_empty());
     assert_eq!(view.focused, None);
     assert_eq!(view.count, "0 of 5 models");
+}
+
+#[test]
+fn the_empty_filter_line_needs_a_typed_query() {
+    let mut picker = open_over(catalogue());
+    // A scope hiding every installed model leaves no rows, but with
+    // no query typed there is no empty-filter line.
+    picker.scoped = vec!["gone/x".to_owned()];
+    let layout = picker.layout().expect("the picker is open");
+    assert!(!layout.contains(&RowAt::NoMatch), "{layout:?}");
+    // A typed query matching nothing shows the one dim line.
+    picker.push_query('z');
+    picker.push_query('z');
+    picker.push_query('z');
+    let layout = picker.layout().expect("the picker is open");
+    assert!(layout.contains(&RowAt::NoMatch), "{layout:?}");
+}
+
+#[test]
+fn an_empty_catalogue_has_no_empty_filter_line() {
+    let mut picker = open_over(Vec::new());
+    picker.take_read();
+    picker.store(Ok(Catalogue::default()));
+    picker.push_query('q');
+    // No installed model, so no empty-filter line: the status names
+    // the empty catalogue instead.
+    let layout = picker.layout().expect("the picker is open");
+    assert_eq!(layout, vec![RowAt::Filter, RowAt::Buttons]);
+    assert!(!layout.contains(&RowAt::NoMatch), "{layout:?}");
+    assert_eq!(
+        view_of(&picker).status,
+        ["No models. Install a provider: fiber extension install <name>.".to_owned()]
+    );
 }
 
 #[test]
