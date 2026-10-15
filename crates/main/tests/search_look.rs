@@ -59,8 +59,10 @@ fn turned(setup: &Setup, prompt: &str) -> Run {
     run
 }
 
-/// Whether the raw output holds a reverse-video SGR parameter: a `7`
-/// between `;` (or `[`) and `;` (or `m`).
+/// Whether the raw output holds a reverse-video SGR parameter: an SGR
+/// sequence (`ESC [`, only digits and `;`, then `m`) with a `7` among
+/// its parameters. Cursor moves such as `ESC [7;62H` are not SGR and
+/// never match: their final byte is not `m`.
 fn has_reverse(output: &[u8]) -> bool {
     let mut rest = output;
     while let Some(start) = rest.iter().position(|byte| *byte == 0x1b) {
@@ -73,10 +75,14 @@ fn has_reverse(output: &[u8]) -> bool {
             break;
         };
         let params = &rest[2..end];
-        if params
-            .split(|byte| *byte == b';')
-            .any(|param| param == b"7")
-        {
+        // Anything but digits and `;` is another sequence (a cursor
+        // move, say): step one byte on, so a real SGR later on the same
+        // stretch is still seen.
+        if !params.iter().all(|byte| byte.is_ascii_digit() || *byte == b';') {
+            rest = &rest[1..];
+            continue;
+        }
+        if params.split(|byte| *byte == b';').any(|param| param == b"7") {
             return true;
         }
         rest = &rest[end + 1..];
@@ -121,15 +127,20 @@ fn col_at(grid: &Grid, y: u16, needle: &str) -> u16 {
 fn slab_cells(grid: &Grid) -> Option<(u16, usize, usize)> {
     let y = row_with_or(&grid.rows, "1 of 5")?;
     let text: String = (0..160).map(|x| grid.cell(x, y).symbol.clone()).collect();
-    let query_at = text.find("⌕ lock")?;
-    if query_at > 40 {
+    if !text.contains("⌕ lock") {
         return None;
     }
-    let run: Vec<usize> = (0..160)
-        .filter(|x| grid.cell(*x as u16, y).bg == SURFACE)
-        .collect();
-    let first = *run.first()?;
-    let last = *run.last()?;
+    // The slab's run: the contiguous `surface` run around the count,
+    // so other `surface` cells on the row (a rail card, say) stay out.
+    let count_first = text.find("1 of 5").map(|byte| text[..byte].chars().count())?;
+    let mut first = count_first;
+    while first > 0 && grid.cell((first - 1) as u16, y).bg == SURFACE {
+        first -= 1;
+    }
+    let mut last = count_first;
+    while last + 1 < 160 && grid.cell((last + 1) as u16, y).bg == SURFACE {
+        last += 1;
+    }
     if last + 1 - first != 40 {
         return None;
     }
@@ -258,11 +269,12 @@ fn the_search_bar_matches_the_doc() {
     assert_eq!(grid.cell(query + 4, y).symbol, "█");
     assert!(grid.cell(query + 4, y).dim);
     let count = col_at(&grid, y, "1 of 5");
-    for dx in 0..5 {
+    for dx in 0..6 {
         assert!(grid.cell(count + dx, y).dim, "count {dx}");
     }
-    // The count ends two columns before the slab's right edge.
-    assert_eq!(count + 5, last - 1, "the count's right edge");
+    // The count ends one blank before the slab's right edge: its last
+    // cell sits two columns before the slab's right edge.
+    assert_eq!(count + 6, last, "the count's right edge");
     // The slab ends one column left of the scroll bar's column.
     let past = grid.cell(last + 1, y);
     assert_eq!(past.symbol, " ");
