@@ -360,8 +360,6 @@ impl Loop {
         let _timer = has_preamble
             .then(|| self.diag.timed(contract::diag::Op::TurnRequest))
             .flatten();
-        #[cfg(test)]
-        crate::timing_tests::request_send_entry();
         let Some(request) = self.request_for(self.conversation.clone()) else {
             // `turn` builds the preamble before its `turn_started`; reaching
             // a step without one is a bug, so the turn fails closed.

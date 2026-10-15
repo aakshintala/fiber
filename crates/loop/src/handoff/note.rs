@@ -213,8 +213,6 @@ impl Loop {
         let _timer = has_preamble
             .then(|| self.diag.timed(contract::diag::Op::TurnRequest))
             .flatten();
-        #[cfg(test)]
-        crate::timing_tests::request_note_entry();
         let mut conversation = if trigger == HandoffTrigger::Overflow {
             self.moved_results()
         } else {

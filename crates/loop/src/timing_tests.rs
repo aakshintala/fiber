@@ -114,9 +114,6 @@ pub(crate) fn take_fail_preamble_write() -> bool {
     lock(&FAIL_PREAMBLE_WRITE).take().is_some()
 }
 
-/// Runs at the send request scope's entry. Assembly follows it.
-pub(crate) fn request_send_entry() {}
-
 /// Runs at the send request scope's exit, inside the scope. Advances the
 /// armed clock, proving the scope encloses construction.
 pub(crate) fn request_send_exit(clock: &dyn Clock) {
@@ -124,9 +121,6 @@ pub(crate) fn request_send_exit(clock: &dyn Clock) {
         clock.sleep(Duration::from_millis(ms));
     }
 }
-
-/// Runs at the note request scope's entry. Assembly follows it.
-pub(crate) fn request_note_entry() {}
 
 /// Runs at the note request scope's exit, inside the scope.
 pub(crate) fn request_note_exit(clock: &dyn Clock) {
@@ -893,7 +887,16 @@ fn person_handoff(world: &World, instructions: Option<&str>) {
 }
 
 fn turn(world: &mut World) -> Option<TurnOutcome> {
-    world.looped.turn().unwrap()
+    let (done_tx, done_rx) = mpsc::channel();
+    std::thread::scope(|scope| {
+        scope.spawn(|| {
+            let outcome = world.looped.turn();
+            done_tx.send(outcome).unwrap();
+        });
+        fakes::Deadline::after(WAIT)
+            .recv_or_fail(&done_rx, "the turn ends")
+            .unwrap()
+    })
 }
 
 /// Every `op_timing` record in the session's diagnostic file, in order.
@@ -992,27 +995,22 @@ fn the_first_build_times_only_the_build() {
         "11 ms of loading and 17 ms of opening stay out"
     );
     assert_wire(&op_records(&world));
-    let kinds = kinds(&world);
-    for (key, event) in [
-        ("preamble_built", "preamble_built"),
-        ("opening_message", "opening_message"),
-        ("turn_started", "turn_started"),
-    ] {
-        assert!(kinds.contains(&key.to_owned()), "{kinds:?} holds {event}");
-    }
-    let built = kinds
-        .iter()
-        .position(|kind| kind == "preamble_built")
-        .unwrap();
-    let opening = kinds
-        .iter()
-        .position(|kind| kind == "opening_message")
-        .unwrap();
-    let started = kinds
-        .iter()
-        .position(|kind| kind == "turn_started")
-        .unwrap();
-    assert!(built < opening && opening < started, "{kinds:?}");
+    assert_eq!(
+        kinds(&world),
+        vec![
+            "session_started".to_owned(),
+            "preamble_built".to_owned(),
+            "opening_message".to_owned(),
+            "turn_started".to_owned(),
+            "step_started".to_owned(),
+            "assistant_message_started".to_owned(),
+            "text_completed".to_owned(),
+            "usage_recorded".to_owned(),
+            "assistant_message_completed".to_owned(),
+            "turn_completed".to_owned(),
+        ],
+        "the preamble journey writes exactly these durable events",
+    );
 }
 
 #[test]
