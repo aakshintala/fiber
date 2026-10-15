@@ -3,7 +3,7 @@
 //! question form").
 
 use contract::commands::{ReplyAnswer, SentFormAnswer};
-use contract::shapes::{Choice, Question, True};
+use contract::shapes::{Question, True};
 use ratatui::style::{Modifier, Style};
 
 use super::builder::Builder;
@@ -907,34 +907,6 @@ fn clipped_row(built: &mut Builder, segments: &[(&str, Style)], cols: usize) -> 
         rest = rest.saturating_sub(take);
     }
     built.row(&kept)
-}
-
-/// Pushes `text` as the panel's next line, its control characters as
-/// spaces, with `spot` over the whole line and the cursor on it when
-/// `here`.
-pub(super) fn push(panel: &mut Panel, text: &str, spot: Option<Spot>, here: bool) {
-    let line = panel.lines.len();
-    panel.lines.push(clean(text));
-    if let Some(spot) = spot {
-        panel.spots.push(super::PanelSpot {
-            line,
-            cols: None,
-            spot,
-        });
-    }
-    if here {
-        panel.cursor = Some(line);
-    }
-}
-
-/// An option row shared by forms and one-question forms.
-pub(super) fn option_line(mark: char, tick: &str, choice: &Choice) -> String {
-    let mut line = format!("{mark} {tick} {}", choice.label);
-    if let Some(description) = &choice.description {
-        line.push_str(" · ");
-        line.push_str(description);
-    }
-    line
 }
 
 #[cfg(test)]

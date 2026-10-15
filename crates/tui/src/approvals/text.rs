@@ -2,35 +2,7 @@
 //! cells, moving a character cursor, and the words row shared by forms and
 //! one-question forms (`docs/tui.md`, "A question form").
 
-use crate::format::{cut, width as measure};
-
-/// The words row at `cols` columns and, when the cursor is on it (`here`),
-/// the text cursor's column. The row never wraps: it shows the words from
-/// their first character, clipped at the width, unless the text cursor
-/// would reach the width, when it shows them from the first character that
-/// puts the text cursor on the last column.
-pub(super) fn words_row(words: &str, caret: usize, here: bool, cols: u16) -> (String, Option<u16>) {
-    let prefix = format!("{} ✎ ", if here { '›' } else { ' ' });
-    if words.is_empty() {
-        return (
-            format!("{prefix}answer in words"),
-            here.then(|| cells(&prefix)),
-        );
-    }
-    let words: Vec<char> = clean(words).chars().collect();
-    let before =
-        |start: usize| -> String { words.get(start..caret).unwrap_or_default().iter().collect() };
-    let fits = |start: usize| measure(&prefix) + measure(&before(start)) < usize::from(cols);
-    let start = if here {
-        (0..caret).find(|start| fits(*start)).unwrap_or(caret)
-    } else {
-        0
-    };
-    let shown: String = words.get(start..).unwrap_or_default().iter().collect();
-    let line = cut(&format!("{prefix}{shown}"), usize::from(cols));
-    let caret = here.then(|| cells(&prefix).saturating_add(cells(&before(start))));
-    (line, caret)
-}
+use crate::format::width as measure;
 
 /// The byte where the character `chars` characters into `text` starts, or
 /// the end.

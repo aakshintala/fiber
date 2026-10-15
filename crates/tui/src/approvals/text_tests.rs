@@ -1,7 +1,7 @@
 //! Tests for the question panel's stateless text rows: the character
 //! cursor's edges and multi-byte text.
 
-use super::{cells, clean, delete_before, insert_at, move_caret, words_row};
+use super::{cells, clean, delete_before, insert_at, move_caret};
 
 #[test]
 fn inserting_moves_past_the_new_character() {
@@ -46,20 +46,4 @@ fn cells_count_wide_characters_twice() {
     assert_eq!(cells("ab"), 2);
     assert_eq!(cells("名前"), 4);
     assert_eq!(cells("▸ 1 ✎ "), 6);
-}
-
-#[test]
-fn the_words_row_clips_at_the_width_and_keeps_the_caret_last() {
-    assert_eq!(
-        words_row("abcdefgh", 8, true, 12),
-        ("› ✎ bcdefgh".to_owned(), Some(11))
-    );
-    assert_eq!(
-        words_row("abcdefgh", 8, false, 8),
-        ("  ✎ abcd".to_owned(), None)
-    );
-    assert_eq!(
-        words_row("", 0, true, 60),
-        ("› ✎ answer in words".to_owned(), Some(4))
-    );
 }

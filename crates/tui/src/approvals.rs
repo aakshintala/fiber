@@ -179,7 +179,6 @@ impl Queue {
             .position(|index| *index == at)
             .unwrap_or_default()
             .saturating_add(1);
-        let place = format!("{} · {k} of {}", request.session.0, waiting.len());
         let session = name(&request.session)
             .filter(|name| !name.is_empty())
             .map(|name| text::clean(&name))
@@ -210,7 +209,14 @@ impl Queue {
                 };
                 form.panel(&title, width)
             }
-            Ask::One(question) => question.panel(format!("question · {place}"), width),
+            Ask::One(question) => {
+                let title = Title {
+                    session,
+                    place: (waiting.len() > 1).then(|| (k, waiting.len())),
+                    questions: None,
+                };
+                question.panel(&title, width)
+            }
         })
     }
 

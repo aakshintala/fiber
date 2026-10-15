@@ -3,10 +3,44 @@
 
 use contract::commands::ReplyAnswer;
 use contract::shapes::Choice;
+use ratatui::style::{Modifier, Style};
 
-use super::form::{self, Spot};
-use super::{Panel, PanelKey, text};
+use super::builder::Builder;
+use super::form::Spot;
+use super::text::{clean, delete_before, insert_at, move_caret};
+use super::{Panel, PanelKey, Title};
+use crate::format::{cut, width as measure};
 use crate::keys::{Edit, Key};
+use crate::theme::Role;
+
+/// "▸ " on the cursor's row, a chosen mark: in secondary.
+const SECONDARY: Style = Style::new().fg(Role::Secondary.color());
+
+/// The question, typed words: bold.
+const BOLD: Style = Style::new().add_modifier(Modifier::BOLD);
+
+/// A chosen label under the cursor: bold and underlined.
+const BOLD_UNDERLINED: Style = Style::new()
+    .add_modifier(Modifier::BOLD)
+    .add_modifier(Modifier::UNDERLINED);
+
+/// A label under the cursor: underlined.
+const UNDERLINED: Style = Style::new().add_modifier(Modifier::UNDERLINED);
+
+/// " Submit ": reversed.
+const REVERSED: Style = Style::new().add_modifier(Modifier::REVERSED);
+
+/// The placeholder's first character with the cursor on its row: dim and
+/// reversed.
+const FIRST: Style = Style::new()
+    .add_modifier(Modifier::DIM)
+    .add_modifier(Modifier::REVERSED);
+
+/// A number, "choose any", a description, an unchosen mark: dim.
+const DIM: Style = Style::new().add_modifier(Modifier::DIM);
+
+/// " Chat about this ": on the rule tint.
+const CHAT: Style = Style::new().bg(Role::Rule.color());
 
 /// One non-form interaction and the answer the person is composing.
 #[derive(Debug, Clone)]
@@ -84,12 +118,20 @@ impl OneQuestion {
                 Kind::Confirm | Kind::Select => {}
             },
             Key::Char(ch) => match self.kind {
+                // A digit chooses that option: it toggles a multi-choice
+                // option and moves the cursor to a confirm or select one,
+                // sending nothing. '0' and digits past the options do
+                // nothing.
+                Kind::Confirm | Kind::Select | Kind::MultiSelect => {
+                    if ch.is_ascii_digit() && *ch != '0' {
+                        self.digit(*ch);
+                    }
+                }
                 Kind::TextInput => self.type_char(*ch),
-                Kind::Confirm | Kind::Select | Kind::MultiSelect => {}
             },
             Key::Backspace => {
                 if self.at == Row::Words {
-                    text::delete_before(&mut self.words, &mut self.caret);
+                    delete_before(&mut self.words, &mut self.caret);
                 }
             }
             Key::Up => self.step(false),
@@ -116,6 +158,26 @@ impl OneQuestion {
         Some(PanelKey::Handled)
     }
 
+    /// A digit `d` in '1'..='9': toggles a multi-choice option and moves
+    /// the cursor to it, or moves the cursor to a confirm or select option.
+    /// A digit past the options does nothing.
+    fn digit(&mut self, d: char) {
+        let n = (d as u8).saturating_sub(b'0') as usize;
+        let option = n.checked_sub(1);
+        let Some(option) = option.filter(|option| *option < self.options.len()) else {
+            return;
+        };
+        match self.kind {
+            Kind::MultiSelect => {
+                if let Some(toggled) = self.toggled.get_mut(option) {
+                    *toggled = !*toggled;
+                }
+            }
+            Kind::Confirm | Kind::Select | Kind::TextInput => {}
+        }
+        self.at = Row::Option(option);
+    }
+
     /// Applies an edit on the panel. Paste control characters become spaces.
     pub(crate) fn on_edit(&mut self, edit: &Edit) {
         match edit {
@@ -128,7 +190,7 @@ impl OneQuestion {
             }
             Edit::Left | Edit::Right => {
                 if self.at == Row::Words {
-                    text::move_caret(&self.words, &mut self.caret, *edit == Edit::Right);
+                    move_caret(&self.words, &mut self.caret, *edit == Edit::Right);
                 }
             }
             Edit::ShiftEnter
@@ -172,60 +234,147 @@ impl OneQuestion {
         }
     }
 
-    /// Draws the question panel below `header` at `width` columns.
-    pub(crate) fn panel(&self, header: String, width: u16) -> Panel {
-        let mut panel = Panel {
-            lines: Vec::new(),
-            marks: Vec::new(),
-            alert: false,
-            spots: Vec::new(),
-            cursor: None,
-            caret: None,
-        };
-        form::push(&mut panel, &header, None, false);
-        form::push(&mut panel, &self.prompt, None, false);
+    /// Draws the question panel for `title` at `width` columns: the title,
+    /// the question, then its rows, ending with "Chat about this"
+    /// (`docs/tui.md`, "A question form").
+    pub(crate) fn panel(&self, title: &Title, width: u16) -> Panel {
+        let mut built = Builder::new();
+        built.title(title, width);
+        built.blank();
+        built.row(&[(self.prompt.as_str(), BOLD)]);
+        if self.kind == Kind::MultiSelect {
+            built.row(&[("choose any", DIM)]);
+        }
+        built.blank();
         for row in self.rows() {
             let here = row == self.at;
-            match row {
+            let slot = if here {
+                ("▸ ", SECONDARY)
+            } else {
+                ("  ", Style::default())
+            };
+            let line = match row {
                 Row::Option(option) => {
                     let Some(choice) = self.options.get(option) else {
                         continue;
                     };
-                    let tick = match self.kind {
-                        Kind::Confirm | Kind::Select | Kind::TextInput => "( )",
-                        Kind::MultiSelect => {
-                            if self.toggled.get(option).copied().unwrap_or_default() {
-                                "[x]"
-                            } else {
-                                "[ ]"
-                            }
-                        }
+                    let chosen = self.kind == Kind::MultiSelect
+                        && self.toggled.get(option).copied().unwrap_or_default();
+                    let tick = match (self.kind, chosen) {
+                        (Kind::MultiSelect, true) => "[x]",
+                        (Kind::MultiSelect, false) => "[ ]",
+                        (Kind::Confirm | Kind::Select | Kind::TextInput, _) => "( )",
                     };
-                    form::push(
-                        &mut panel,
-                        &form::option_line(if here { '›' } else { ' ' }, tick, choice),
-                        Some(Spot::Option(option)),
-                        here,
-                    );
-                }
-                Row::Words => {
-                    let (line, caret) = text::words_row(&self.words, self.caret, here, width);
-                    if let Some(caret) = caret {
-                        panel.caret = Some((panel.lines.len(), caret));
+                    let number = format!("{} ", option.saturating_add(1));
+                    let label = match (chosen, here) {
+                        (true, true) => BOLD_UNDERLINED,
+                        (true, false) => BOLD,
+                        (false, true) => UNDERLINED,
+                        (false, false) => Style::default(),
+                    };
+                    let mut owned = vec![number];
+                    if let Some(description) = &choice.description {
+                        owned.push(format!("  {description}"));
                     }
-                    form::push(&mut panel, &line, Some(Spot::Words), here);
+                    let mut segments: Vec<(&str, Style)> = vec![
+                        (slot.0, slot.1),
+                        (owned[0].as_str(), DIM),
+                        (tick, if chosen { SECONDARY } else { DIM }),
+                        (" ", Style::default()),
+                        (choice.label.as_str(), label),
+                    ];
+                    if owned.len() > 1 {
+                        segments.push((owned[1].as_str(), DIM));
+                    }
+                    let line = built.row(&segments);
+                    built.spot(line, Spot::Option(option));
+                    line
                 }
+                Row::Words => self.words_line(here, width, &mut built),
                 Row::Submit => {
-                    let line = format!("{} Submit", if here { '›' } else { ' ' });
-                    form::push(&mut panel, &line, Some(Spot::Send), here);
+                    let line = built.row(&[slot, (" Submit ", REVERSED)]);
+                    built.spot(line, Spot::Send);
+                    line
                 }
                 Row::Chat => {
-                    let line = format!("{} Chat about this", if here { '›' } else { ' ' });
-                    form::push(&mut panel, &line, Some(Spot::Chat), here);
+                    let line = built.row(&[slot, (" Chat about this ", CHAT)]);
+                    built.spot(line, Spot::Chat);
+                    line
                 }
+            };
+            if here {
+                built.here(line);
             }
         }
-        panel
+        built.finish()
+    }
+
+    /// The words row, numbered 1: the placeholder dim, its first character
+    /// reversed with the cursor on the row, or the typed words bold,
+    /// clipped at `width` columns. Returns its line index.
+    fn words_line(&self, here: bool, width: u16, built: &mut Builder) -> usize {
+        let slot = if here { "▸ " } else { "  " };
+        let slot_style = if here {
+            SECONDARY
+        } else {
+            Style::default()
+        };
+        let prefix_cells = measure(slot)
+            .saturating_add(measure("1 "))
+            .saturating_add(measure("✎ "));
+        let cols = usize::from(width);
+        if self.words.is_empty() {
+            let placeholder = "Type an answer";
+            let mut segments: Vec<(&str, Style)> =
+                vec![(slot, slot_style), ("1 ", DIM), ("✎ ", DIM)];
+            if here {
+                let mut first = placeholder;
+                let mut rest = "";
+                if let Some(at) = placeholder.char_indices().nth(1).map(|(at, _)| at) {
+                    (first, rest) = placeholder.split_at(at);
+                }
+                segments.push((first, FIRST));
+                segments.push((rest, DIM));
+            } else {
+                segments.push((placeholder, DIM));
+            }
+            let line = clipped_row(built, &segments, cols);
+            built.spot(line, Spot::Words);
+            if here {
+                built.caret(line, u16::try_from(prefix_cells).unwrap_or(u16::MAX));
+            }
+            return line;
+        }
+        let words: Vec<char> = clean(&self.words).chars().collect();
+        let before = |start: usize| -> String {
+            words.get(start..self.caret).unwrap_or_default().iter().collect()
+        };
+        let fits = |start: usize| prefix_cells.saturating_add(measure(&before(start))) < cols;
+        let start = if here {
+            (0..self.caret).find(|start| fits(*start)).unwrap_or(self.caret)
+        } else {
+            0
+        };
+        let shown: String = words.get(start..).unwrap_or_default().iter().collect();
+        let caret = here.then(|| {
+            u16::try_from(prefix_cells.saturating_add(measure(&before(start))))
+                .unwrap_or(u16::MAX)
+        });
+        let line = clipped_row(
+            built,
+            &[
+                (slot, slot_style),
+                ("1 ", DIM),
+                ("✎ ", DIM),
+                (shown.as_str(), BOLD),
+            ],
+            cols,
+        );
+        built.spot(line, Spot::Words);
+        if let Some(caret) = caret {
+            built.caret(line, caret);
+        }
+        line
     }
 
     /// The answer only when the current row can submit one.
@@ -299,7 +448,7 @@ impl OneQuestion {
 
     /// Types one character and takes the cursor to the words row.
     fn type_char(&mut self, ch: char) {
-        text::insert_at(&mut self.words, &mut self.caret, ch);
+        insert_at(&mut self.words, &mut self.caret, ch);
         self.at = Row::Words;
     }
 
@@ -342,6 +491,32 @@ impl OneQuestion {
         }
         labels
     }
+}
+
+/// Pushes `segments` as one row clipped to `cols` display cells: the marks
+/// of a clipped tail end at the drawn line, so no mark reaches past it.
+fn clipped_row(built: &mut Builder, segments: &[(&str, Style)], cols: usize) -> usize {
+    let cleaned: Vec<(String, Style)> = segments
+        .iter()
+        .map(|(text, style)| (clean(text), *style))
+        .collect();
+    let full: String = cleaned.iter().map(|(text, _)| text.as_str()).collect();
+    let drawn = if measure(&full) > cols {
+        cut(&full, cols)
+    } else {
+        full
+    };
+    let mut rest = drawn.len();
+    let mut kept: Vec<(&str, Style)> = Vec::with_capacity(cleaned.len());
+    for (text, style) in &cleaned {
+        if rest == 0 {
+            break;
+        }
+        let take = text.len().min(rest);
+        kept.push((&text[..take], *style));
+        rest = rest.saturating_sub(take);
+    }
+    built.row(&kept)
 }
 
 #[cfg(test)]
