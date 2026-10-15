@@ -606,7 +606,10 @@ fn the_effects_item_names_the_call_under_review() {
         assert_eq!(conversation.len(), 4);
         let effects = match &conversation[2] {
             Input::User { text, .. } => text.clone(),
-            _ => panic!(
+            Input::Assistant { .. }
+            | Input::Reasoning { .. }
+            | Input::ToolCall { .. }
+            | Input::ToolResult { .. } => panic!(
                 "the effects item is a user message, got {:?}",
                 conversation[2]
             ),
