@@ -1375,3 +1375,163 @@ fn the_cap_applies_across_parts_without_cutting_the_stored_text() {
         "a later part never extends a cut body"
     );
 }
+
+/// A reply awaiting its person message, then the message on the next line.
+fn pair(reviewed: &mut Vec<Reviewed>, reply: &str, message: &str, at: u64) {
+    render_reviewed(reviewed, &text_completed(reply), None, Some(Seq(at)));
+    render_reviewed(reviewed, &person_turn(message), None, Some(Seq(at + 1)));
+}
+
+#[test]
+fn reviewer_kept_keeps_a_pair_and_drops_an_unnamed_pairs_reply() {
+    let mut reviewed = Vec::new();
+    pair(&mut reviewed, "first?", "one", 20);
+    pair(&mut reviewed, "second?", "two", 30);
+    assert_eq!(reviewed.len(), 4);
+    render_reviewed(
+        &mut reviewed,
+        &kept_event(vec![kept(31, 0)]),
+        None,
+        Some(Seq(40)),
+    );
+    assert_eq!(
+        person_text(&reviewed),
+        ["The agent: second?", "The person: two"],
+    );
+    assert_eq!(reviewed[0].shown, Shown::Reply("second?".into()));
+    assert_eq!(reviewed[1].shown, Shown::Person(kept(31, 0)));
+}
+
+#[test]
+fn a_kept_second_message_of_a_two_message_line_keeps_the_shared_reply() {
+    let mut reviewed = Vec::new();
+    render_reviewed(&mut reviewed, &text_completed("which?"), None, Some(Seq(20)));
+    render_reviewed(
+        &mut reviewed,
+        &Event::TurnStarted(TurnStarted {
+            input: vec![message("A", driver()), message("B", driver())],
+        }),
+        None,
+        Some(Seq(21)),
+    );
+    render_reviewed(
+        &mut reviewed,
+        &kept_event(vec![kept(21, 1)]),
+        None,
+        Some(Seq(40)),
+    );
+    assert_eq!(
+        person_text(&reviewed),
+        ["The agent: which?", "The person: B"],
+    );
+}
+
+#[test]
+fn a_completed_handoff_keeps_the_pairs_and_a_later_yes_carries_no_reply() {
+    let mut reviewed = Vec::new();
+    pair(&mut reviewed, "first?", "one", 20);
+    render_reviewed(
+        &mut reviewed,
+        &Event::ToolCallRequested(call("shell")),
+        Some(&ActionId("a_1".into())),
+        Some(Seq(22)),
+    );
+    pair(&mut reviewed, "second?", "two", 30);
+    render_reviewed(
+        &mut reviewed,
+        &Event::ToolCallRequested(call("shell")),
+        Some(&ActionId("a_2".into())),
+        Some(Seq(32)),
+    );
+    render_reviewed(
+        &mut reviewed,
+        &text_completed("unanswered"),
+        None,
+        Some(Seq(33)),
+    );
+    render_reviewed(&mut reviewed, &handoff_completed(), None, Some(Seq(40)));
+    assert_eq!(
+        person_text(&reviewed),
+        [
+            "The agent: first?",
+            "The person: one",
+            "The agent: second?",
+            "The person: two"
+        ],
+    );
+    // A proposal made before the handoff is cleared: the "yes" after it
+    // answers nothing.
+    render_reviewed(&mut reviewed, &person_turn("yes"), None, Some(Seq(41)));
+    assert_eq!(
+        person_text(&reviewed),
+        [
+            "The agent: first?",
+            "The person: one",
+            "The agent: second?",
+            "The person: two",
+            "The person: yes"
+        ],
+    );
+}
+
+#[test]
+fn a_failed_handoff_with_replies_keeps_everything_byte_identical() {
+    let mut reviewed = Vec::new();
+    pair(&mut reviewed, "first?", "one", 20);
+    render_reviewed(
+        &mut reviewed,
+        &Event::ToolCallRequested(call("shell")),
+        Some(&ActionId("a_1".into())),
+        Some(Seq(22)),
+    );
+    render_reviewed(
+        &mut reviewed,
+        &text_completed("held"),
+        None,
+        Some(Seq(23)),
+    );
+    let before = reviewed.clone();
+    render_reviewed(&mut reviewed, &handoff_failed(), None, Some(Seq(40)));
+    assert_eq!(reviewed.len(), before.len());
+    assert_eq!(reviewed, before);
+}
+
+#[test]
+fn a_cancelled_handoff_with_replies_keeps_everything_byte_identical() {
+    let mut reviewed = Vec::new();
+    pair(&mut reviewed, "first?", "one", 20);
+    render_reviewed(
+        &mut reviewed,
+        &Event::ToolCallRequested(call("shell")),
+        Some(&ActionId("a_1".into())),
+        Some(Seq(22)),
+    );
+    render_reviewed(
+        &mut reviewed,
+        &text_completed("held"),
+        None,
+        Some(Seq(23)),
+    );
+    let before = reviewed.clone();
+    render_reviewed(&mut reviewed, &handoff_cancelled(), None, Some(Seq(40)));
+    assert_eq!(reviewed.len(), before.len());
+    assert_eq!(reviewed, before);
+}
+
+#[test]
+fn successive_completed_handoffs_keep_old_pairs_intact() {
+    let mut reviewed = Vec::new();
+    pair(&mut reviewed, "first?", "one", 20);
+    render_reviewed(&mut reviewed, &handoff_completed(), None, Some(Seq(30)));
+    pair(&mut reviewed, "second?", "two", 40);
+    render_reviewed(&mut reviewed, &handoff_completed(), None, Some(Seq(50)));
+    assert_eq!(
+        person_text(&reviewed),
+        [
+            "The agent: first?",
+            "The person: one",
+            "The agent: second?",
+            "The person: two"
+        ],
+    );
+}
