@@ -129,7 +129,8 @@ fn concurrent_admissions_hold_the_gate_through_recording() {
             .is_err()
     );
     release_tx.send(()).unwrap();
-    assert!(deadline.recv(&a_rx).expect("first start returned").is_ok());
+    let first = deadline.recv(&a_rx).expect("first start returned");
+    assert!(first.is_ok());
     assert!(matches!(
         deadline.recv(&b_rx).expect("second start returned"),
         Err(super::Admit::Full)
