@@ -486,7 +486,7 @@ fn esc_with_a_notice_open_closes_the_notice_first() {
     opened(&mut app);
     start_delegate(&mut app, 0);
     open_item(&mut app);
-    app.push_notice("later".to_owned());
+    app.push_notice("extension_failed", "later".to_owned());
     // Opening the notice shows its whole text over the view; Esc closes
     // that overlay first and the view stays.
     let (_, targets) = rendered(&app, 80, 24);

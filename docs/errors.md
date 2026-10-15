@@ -266,9 +266,10 @@ the lines that carry it.
 | `blocked_host` | tool call | `web_fetch` named a link-local address or a cloud metadata host (`docs/tools.md`, "Web fetch and web search") |
 | `budget_exceeded` | turn | the spending budget was reached, or an extension refused a model request (`docs/loop.md`, "Spending budget") |
 | `busy` | driver command | `prompt` or `reload` while a turn is running, or `rewind` mid-turn (`docs/invocation.md`, "What each command does") |
+| `cache_rebuild` | notice | the terminal rebuilt its completion cache after a model switch (`docs/tui.md`, "Notices") |
 | `closing` | exit, tool call, extension call, driver command, notice | `session_message` named a session that was sent `close` (`docs/tools.md`, "Messaging other sessions"), or `state.set`, `state.unset` or `host.drive` ran after `fiber_exited` (`docs/extensions.md`, "When a session ends"), or a driver command after `close` (`docs/invocation.md`, "Driver commands"), or the session `fiber ask` attached to ended before its turn completed |
 | `config_invalid` | exit, extension call, notice, driver command (`rewind`) | a configuration or script file is invalid, or an MCP server declares both `command` and `url` or has a user name or password in its `url` |
-| `connection_failed` | exit, extension call, model call, tool call, turn, driver command (`rewind`) | the connection to the provider or its token endpoint failed, or `web_fetch` could not reach the host, or `fiber mcp login` could not reach the server or its authorization server |
+| `connection_failed` | exit, extension call, model call, tool call, turn, notice, driver command (`rewind`) | the connection to the provider or its token endpoint failed, or `web_fetch` could not reach the host, or `fiber mcp login` could not reach the server or its authorization server, or the terminal lost its hub connection |
 | `context_overflow` | model call, turn | the request does not fit the context window |
 | `credential_failed` | exit, extension call, model call, turn, driver command (`rewind`), `mcp_server_failed`, tool call, notice | a stored credential cannot be used, the provider's `credential()` or `sign()` failed, or a stdio MCP server's `{ "secret" }` env value names a stored credential that cannot be read; log in again or fix the credential |
 | `credential_missing` | exit, driver command, `mcp_server_failed`, tool call, notice | no credential was found for the session's model, its credential label names none, or a stdio MCP server's `{ "secret" }` env value names no stored credential; the provider-credential messages list the provider's labels, while a stdio MCP server's message names the missing secret instead |
@@ -284,6 +285,7 @@ the lines that carry it.
 | `extension_unavailable` | tool call | the extension providing the tool died twice |
 | `fetch_failed` | exit, driver command (`rewind`) | an install or update could not fetch: git or the network failed; try again later. Not retried automatically (`docs/extensions.md`, "Installing") |
 | `flooded` | job | a monitor was suppressed for 30 seconds (`docs/tools.md`) |
+| `history_loading` | notice | the terminal is still reading the session's history (`docs/tui.md`, "Notices") |
 | `hook_failed` | tool call, turn, handoff, notice | an extension hook errored or ran out of time |
 | `hook_unapproved` | exit, driver command (`rewind`) | a repository's required hook is not approved; run `fiber approve` in the repository |
 | `http_error` | extension call, tool call | `web_fetch` got a status other than 2xx, was redirected more than 10 times, or was redirected to a URL it cannot parse |
@@ -292,7 +294,7 @@ the lines that carry it.
 | `invalid_request` | model call, turn | the provider rejected the request for any other reason |
 | `io_failed` | exit, driver command, hub command, extension call, notice | a filesystem failure, or a `git` command on a worktree that failed: a log write or fsync, or a configuration or credential file that exists but cannot be read or written; the message names the path; or Fiber could not install its signal handlers, and the message starts `signals:`; or the terminal could not start its input reader, and the message starts `terminal:` |
 | `log_corrupt` | exit, hub command, driver command (`rewind`) | a log line that cannot be encoded, or one read back that does not parse |
-| `malformed` | driver command, hub command | a command line that is not a JSON object, has no string `id` or `command`, has `args` of the wrong type, or has a key no command line takes (`docs/invocation.md`, "Driver commands") |
+| `malformed` | driver command, hub command, notice | a command line that is not a JSON object, has no string `id` or `command`, has `args` of the wrong type, or has a key no command line takes (`docs/invocation.md`, "Driver commands"), or a hub command's answer carried no code the terminal can read |
 | `mcp_cancel_requested` | tool call | a cancelled call the server may still act on |
 | `mcp_prompt_failed` | driver command | Fiber could not get an MCP server's prompt: the server failed, did not answer in time, refused it, or returned content Fiber cannot send |
 | `mcp_required_server_failed` | exit, driver command (`rewind`) | a required MCP server failed to start |
@@ -304,6 +306,7 @@ the lines that carry it.
 | `model_invalid` | notice | a model's `extra_body` names a field Fiber builds, its `web_search` names a type its protocol does not read, it declares no `context_window`, or its `thinking_default` is not among its `thinking_levels`, so the model is left out of the model list (`docs/model-routing.md`, "Extra request body fields", "Hosted web search", "Thinking") |
 | `model_not_found` | model call, turn | the provider's error body says it does not know the model |
 | `model_unconfigured` | exit, notice, driver command (`rewind`) | a model's base URL names a per-account host whose setting has no value or a value that is not a host, so the model is left out of the model list; the message names the model and the setting (`docs/model-routing.md`, "A per-account host") |
+| `models_loading` | notice | the terminal's model list is not read yet (`docs/tui.md`, "Notices") |
 | `name_pinned` | tool call | `name_session` was called while the person's name pins the session |
 | `no_match` | tool call | an edit block's text was not found in the file |
 | `no_model` | exit, notice, driver command (`rewind`) | nothing chose a model, an installed provider lacks the named model, or no installed provider has a bare model id |
@@ -322,14 +325,14 @@ the lines that carry it.
 | `repository_code_skipped` | notice | an extension, hook or MCP server the repository declares was skipped, because nobody approved it and nobody could be asked (`docs/extensions.md`, "Code a repository ships") |
 | `reviewer_selection_failed` | notice | the reviewer could not choose which of the person's messages still bind at a handoff, so it kept every one |
 | `session_has_dependents` | exit, hub command, driver command (`rewind`) | a delete names a session that forks or rewinds point at; the message lists them, and `--cascade` deletes them too (`docs/invocation.md`, "Deleting and pruning") |
-| `session_held` | exit, hub command, driver command (`rewind`) | another process holds the session, or runs it at a schema version this build cannot read (`docs/invocation.md`, "Processes") |
-| `session_not_found` | exit, hub command, driver command (`rewind`) | a resume names no session, or a command whose `session_id` names no session, running or exited, or names a delegate that is not running, or a hub command's `session` argument names none (`docs/invocation.md`, "The hub" and "Lifecycle") |
+| `session_held` | exit, hub command, notice, driver command (`rewind`) | another process holds the session, or runs it at a schema version this build cannot read (`docs/invocation.md`, "Processes"), or the terminal cannot attach: the session's schema is newer than this terminal reads |
+| `session_not_found` | exit, hub command, notice, driver command (`rewind`) | a resume names no session, or a command whose `session_id` names no session, running or exited, or names a delegate that is not running, or a hub command's `session` argument names none (`docs/invocation.md`, "The hub" and "Lifecycle"), or the terminal has no session on screen |
 | `signal` | tool call, job | a process killed by a signal Fiber did not send |
 | `skill_invalid` | notice | a skill's `SKILL.md` header does not parse or lacks `name` or `description`, so it is left out; the message names its path (`docs/system-prompt.md`, "Skills") |
 | `skill_shadowed` | notice | two skills share a name, an MCP server's prompt is named like a skill, or two servers' prompts share a name; the message names both and which one won (`docs/system-prompt.md`, "Skills") |
 | `skills_large` | notice | the skills listing passes 10% of the context window; the message names the sources that add the most (`docs/system-prompt.md`, "Size") |
 | `stale_file` | tool call | a write would replace a file the session has not seen in its current state |
-| `stale_request` | driver command, hub command | the command names a request, steering message, job or turn that is no longer pending, queued or running, or a `dismiss` names a session that is not a crashed session in the feed, or a cascading `delete`'s `expect` differs from the sessions it would remove; the message names them (`docs/invocation.md`, "Deleting and pruning") |
+| `stale_request` | driver command, hub command, notice | the command names a request, steering message, job or turn that is no longer pending, queued or running, or a `dismiss` names a session that is not a crashed session in the feed, or a cascading `delete`'s `expect` differs from the sessions it would remove; the message names them (`docs/invocation.md`, "Deleting and pruning"), or the terminal has no request waiting |
 | `state_too_large` | extension call | a state value over 64 KiB |
 | `stream_closed` | notice | the hub could not read the open session's log to serve this terminal, so the conversation stops at the last line it received; reopening the session subscribes again (`docs/tui.md`, "Notices") |
 | `stream_incomplete` | model call, turn | the stream ended early or carried an unmatched error |

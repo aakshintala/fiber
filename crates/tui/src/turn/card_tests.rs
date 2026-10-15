@@ -156,8 +156,8 @@ fn shown_rows(rows: &[Row]) -> Vec<String> {
     rows.iter().map(|(line, _)| line.to_string()).collect()
 }
 
-fn surface() -> Option<ratatui::style::Color> {
-    Some(Role::Surface.color())
+fn handoff() -> Option<ratatui::style::Color> {
+    Some(Role::Handoff.color())
 }
 
 fn turn() -> Option<ratatui::style::Color> {
@@ -316,19 +316,40 @@ fn a_handoff_breaks_the_card_into_two_surfaces() {
     assert_eq!(shown[6], "▄".repeat(60));
     assert_eq!(shown[7], " before");
     assert_eq!(shown[8], "▀".repeat(60));
-    assert!(shown[9].starts_with("⇄ Handoff"), "{}", shown[9]);
-    assert_eq!(shown[10], "▄".repeat(60));
-    assert_eq!(shown[11], " after");
-    assert_eq!(shown[12], "");
-    assert_eq!(shown[13], " ▣ completed");
-    assert_eq!(shown[14], "▀".repeat(60));
-    assert_eq!(rows[9].0.style.bg, surface());
+    // The band is one content row with half-block edges over SGR 49:
+    // the card ends at the band, and a second card below it continues
+    // the turn.
+    assert_eq!(shown[9], "▄".repeat(60));
+    let left = " ⇄ handoff · automatic";
+    let right = "1k → … · 00:00 ";
+    assert_eq!(
+        shown[10],
+        format!(
+            "{left}{}{right}",
+            " ".repeat(60 - crate::format::width(left) - crate::format::width(right))
+        ),
+        "{shown:?}"
+    );
+    assert_eq!(shown[11], "▀".repeat(60));
+    assert_eq!(shown[12], "▄".repeat(60));
+    assert_eq!(shown[13], " after");
+    assert_eq!(shown[14], "");
+    assert_eq!(shown[15], " ▣ completed");
+    assert_eq!(shown[16], "▀".repeat(60));
+    assert_eq!(rows[10].0.style.bg, handoff());
+    // The ▣ line closes the turn once, below the band; none above it.
+    assert_eq!(
+        shown.iter().filter(|row| row.contains('▣')).count(),
+        1,
+        "{shown:?}"
+    );
 }
 
 #[test]
 fn an_open_note_sits_inside_the_band() {
-    // The band row, "▸ note" and every note row sit on the surface with
-    // no edge between them (`docs/tui.md`, "Handoff").
+    // The band row carries the half-block edges; "▸ note" and every
+    // note row sit under its lower edge on the handoff tint with no
+    // edges (`docs/tui.md`, "Handoff").
     use std::path::PathBuf;
 
     use ratatui::buffer::Buffer;
@@ -391,13 +412,16 @@ fn an_open_note_sits_inside_the_band() {
     let lines: Vec<String> = app.lines().iter().map(ToString::to_string).collect();
     let band_at = lines
         .iter()
-        .position(|line| line.starts_with('⇄'))
+        .position(|line| line.contains('⇄'))
         .expect("a band");
-    assert_eq!(lines[band_at + 1], "  ▸ note");
-    assert_eq!(lines[band_at + 2], "    ## Note");
-    assert_eq!(lines[band_at + 3], "    keep going");
-    for line in app.lines().iter().skip(band_at).take(4) {
-        assert_eq!(line.style.bg, surface());
+    assert!(lines[band_at - 1].chars().all(|c| c == '▄'));
+    assert!(lines[band_at + 1].chars().all(|c| c == '▀'));
+    assert_eq!(lines[band_at + 2], "  ▸ note");
+    assert_eq!(lines[band_at + 3], "    ## Note");
+    assert_eq!(lines[band_at + 4], "    keep going");
+    assert_eq!(app.lines()[band_at].style.bg, handoff());
+    for line in app.lines().iter().skip(band_at + 2).take(3) {
+        assert_eq!(line.style.bg, handoff());
     }
     // Through the view the tint reaches the last text column.
     let area = Rect::new(0, 0, 80, 24);
@@ -411,7 +435,7 @@ fn an_open_note_sits_inside_the_band() {
                 .contains("keep going")
         })
         .expect("a note row on screen");
-    assert_eq!(buf[(78, row)].bg, Role::Surface.color());
+    assert_eq!(buf[(78, row)].bg, Role::Handoff.color());
 }
 
 #[test]
@@ -434,8 +458,10 @@ fn a_band_first_or_last_draws_no_empty_piece() {
         }
     );
     let shown = shown_rows(&rows);
-    assert!(shown[6].starts_with("⇄ Handoff"), "{shown:?}");
-    assert_eq!(shown[7], "▄".repeat(60));
+    assert_eq!(shown[6], "▄".repeat(60));
+    assert!(shown[7].starts_with(" ⇄ handoff · automatic"), "{shown:?}");
+    assert_eq!(shown[8], "▀".repeat(60));
+    assert_eq!(shown[9], "▄".repeat(60));
     let mut cards = fresh();
     start(&mut cards, "go");
     text(&mut cards, "a_1", "before");
@@ -449,10 +475,11 @@ fn a_band_first_or_last_draws_no_empty_piece() {
         }
     );
     let shown = shown_rows(&rows);
+    // The running band is content row and edges: the lower edge is
+    // last, the content row above it.
+    assert_eq!(shown[shown.len() - 1], "▀".repeat(60));
     assert!(
-        shown
-            .last()
-            .is_some_and(|line| line.starts_with("⇄ Handoff")),
+        shown[shown.len() - 2].starts_with(" ⇄ handoff · automatic"),
         "{shown:?}"
     );
 }
@@ -474,10 +501,11 @@ fn a_blank_reply_draws_no_piece() {
         }
     );
     let shown = shown_rows(&rows);
+    // The running band is content row and edges: the lower edge is
+    // last, the content row above it.
+    assert_eq!(shown[shown.len() - 1], "▀".repeat(60));
     assert!(
-        shown
-            .last()
-            .is_some_and(|line| line.starts_with("⇄ Handoff")),
+        shown[shown.len() - 2].starts_with(" ⇄ handoff · automatic"),
         "{shown:?}"
     );
 }
@@ -507,9 +535,11 @@ fn edges_the_page_withholds_are_not_drawn() {
     assert_eq!(shown[0], "");
     assert_eq!(shown[1], " before");
     assert_eq!(shown[2], "▀".repeat(60));
-    assert!(shown[3].starts_with("⇄ Handoff"), "{shown:?}");
+    assert_eq!(shown[3], "▄".repeat(60));
+    assert!(shown[4].starts_with(" ⇄ handoff · automatic"), "{shown:?}");
+    assert_eq!(shown[5], "▀".repeat(60));
     // The piece after the band still opens with an edge.
-    assert_eq!(shown[4], "▄".repeat(60));
+    assert_eq!(shown[6], "▄".repeat(60));
     let (rows, _, _) = draw(
         &cards.turns[0],
         WIDTH,
@@ -1089,7 +1119,7 @@ fn an_open_card_or_a_handoff_does_not_get_a_trailing_gap() {
     assert!(
         shown_rows(&rows)
             .last()
-            .is_some_and(|row| row.starts_with("⇄ Handoff"))
+            .is_some_and(|row| *row == "▀".repeat(60))
     );
 }
 

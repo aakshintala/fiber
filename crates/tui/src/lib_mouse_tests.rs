@@ -770,36 +770,33 @@ fn notices(n: usize) -> Vec<Input> {
 #[test]
 fn a_click_on_a_notice_shows_it_whole_and_its_cross_dismisses_it() {
     let mut lp = attached(notices(2));
-    // Each box is 24 columns at the right, newest on top: its ✕ at 59.
-    assert!(
-        shown(&lp)
-            .lines()
-            .next()
-            .is_some_and(|row| row.contains("Notice 2."))
-    );
-    // Left of the box is the conversation, no target.
-    assert_eq!(hit_at(&lp, 35, 0), None);
-    feed(&mut lp, vec![click(36, 0)]);
+    // Two rows above the input box, oldest first, each ending in ✕.
+    let first = row_of(&lp, "⚠ extension_failed · Notice 1.");
+    let second = row_of(&lp, "⚠ extension_failed · Notice 2.");
+    assert_eq!(first + 1, second);
+    assert!(matches!(
+        hit_at(&lp, 59, second),
+        Some(crate::mouse::TargetId::DismissNotice(_))
+    ));
+    feed(&mut lp, vec![click(0, second)]);
     assert_eq!(lp.app.notice_overlay(), Some(vec!["Notice 2.".to_owned()]));
     feed(&mut lp, vec![esc()]);
     assert_eq!(lp.app.notice_overlay(), None);
-    feed(&mut lp, vec![click(59, 0)]);
+    feed(&mut lp, vec![click(59, second)]);
     assert!(!shown(&lp).contains("Notice 2."), "{}", shown(&lp));
-    assert!(
-        shown(&lp)
-            .lines()
-            .next()
-            .is_some_and(|row| row.contains("Notice 1."))
-    );
+    assert!(shown(&lp).contains("Notice 1."), "{}", shown(&lp));
     assert_eq!(lp.app.notice_overlay(), None);
 }
 
 #[test]
 fn a_click_on_more_lists_every_notice() {
     let mut lp = attached(notices(4));
+    // Three rows, oldest first, then "+1 more" directly above the
+    // input box.
+    let third = row_of(&lp, "⚠ extension_failed · Notice 3.");
     let more = row_of(&lp, "+1 more");
-    assert_eq!(more, 3);
-    feed(&mut lp, vec![click(40, more)]);
+    assert_eq!(third + 1, more);
+    feed(&mut lp, vec![click(2, more)]);
     let listed: Vec<String> = (1..=4).rev().map(|at| format!("Notice {at}.")).collect();
     assert_eq!(lp.app.notice_overlay(), Some(listed));
 }
@@ -809,7 +806,8 @@ fn the_open_notice_overlay_hides_the_conversation_targets() {
     let mut lp = grouped(TestBackend::new(60, 12));
     let group = row_of(&lp, "● Read");
     feed(&mut lp, notices(1));
-    feed(&mut lp, vec![click(36, 0)]);
+    let notice = row_of(&lp, "⚠ extension_failed · Notice 1.");
+    feed(&mut lp, vec![click(0, notice)]);
     assert!(lp.app.notice_overlay().is_some());
     assert_eq!(hit_at(&lp, 0, group), None);
 }

@@ -26,6 +26,7 @@ pub(crate) mod item;
 mod key_map;
 pub(crate) mod marks;
 pub(crate) mod model_picker;
+mod notice_rows;
 mod offer;
 pub(crate) mod overlay;
 pub(crate) mod panel;
@@ -52,7 +53,7 @@ pub(crate) const APPROVAL_TINT: Style = Style::new().bg(Role::Approval.color());
 /// The approval panel's tint when the reviewer escalated.
 pub(crate) const ALERT_TINT: Style = Style::new().bg(Role::Alert.color());
 
-/// A notice's tint.
+/// The notice overlay's tint.
 const NOTICE_TINT: Style = Style::new().bg(Role::Surface.color());
 
 /// The background of the click target under the pointer.
@@ -79,11 +80,11 @@ pub(crate) fn rows(line: Line<'_>, width: u16) -> usize {
 /// Draws `app` into `area` of `buf`, from the bottom up: the narrow
 /// layout's status rows on the last rows, then the input box with a
 /// completion panel above it, or the approval panel in their place, then
-/// the steering queue, the reconnect banner, the
-/// badge and the quit hint when shown, and the conversation in the rows
-/// left with the notices floating over its top-right corner, or the key
-/// map over them while it is open. A screen too short for them all drops
-/// the hint first, then the badge. A panel taller than the screen keeps
+/// the steering queue, the reconnect banner, the working line, the
+/// notice rows above it, and the badge and the quit hint when shown, and
+/// the conversation in the rows left, or the key map over them while it
+/// is open. A screen too short for them all drops the hint first,
+/// then the badge, then the notice rows. A panel taller than the screen keeps
 /// its top, except that a question form scrolls to keep its cursor's row
 /// shown.
 ///
@@ -107,14 +108,16 @@ pub(crate) fn render(
     }
     // A swapped view takes home's place (`docs/tui.md`, "Swapped
     // views"): the `/keys` screen, the configuration view or the model
-    // picker. Notices float above it (`docs/tui.md`, "Notices"), as
-    // over the conversation.
+    // picker. The notice rows draw over its bottom rows, unreserved, and
+    // the overlay over the whole area (`docs/tui.md`, "Notices").
     if (app.config_view_open() || app.model_picker_open() || app.keys_screen_open())
         && app.on_home()
     {
         let mut targets = Vec::new();
         crate::swapped::draw(app, area, buf, &mut targets);
-        notices(app, area, buf, &mut targets);
+        notice_rows::overlay(app, area, buf, &mut targets);
+        let mut rows_bottom = area.bottom();
+        notice_rows::draw(app, area, buf, &mut rows_bottom, &mut targets);
         // The quit question takes every key over these views, so it
         // draws over them too: without it Enter would quit while the
         // choices never show.
@@ -168,6 +171,9 @@ pub(crate) fn render(
     status_rows::draw_delegates(app, area, buf, &mut bottom, &mut targets);
     banner::draw(app, area, buf, &mut bottom);
     working_line::draw(app, area, buf, &mut bottom, &mut targets);
+    // The notice rows sit directly above the working line, oldest first
+    // (`docs/tui.md`, "Notices").
+    notice_rows::draw(app, area, buf, &mut bottom, &mut targets);
     if let Some(rect) = app
         .badge()
         .and_then(|badge| put_spans(buf, area, &mut bottom, badge_spans(&badge)))
@@ -188,15 +194,15 @@ pub(crate) fn render(
         }
         // A swapped view takes the conversation's place: the `/keys`
         // screen, the configuration view, model picker or session view.
-        // Notices float above it
-        // (`docs/tui.md`, "Notices"), as over the conversation.
+        // The notice rows sit below it in the reserved rows, and the
+        // overlay draws over it (`docs/tui.md`, "Notices").
         None if app.config_view_open()
             || app.model_picker_open()
             || app.keys_screen_open()
             || app.session_view_open() =>
         {
             crate::swapped::draw(app, conversation, buf, &mut targets);
-            notices(app, conversation, buf, &mut targets);
+            notice_rows::overlay(app, conversation, buf, &mut targets);
         }
         // An item view swaps into the conversation area and takes all of
         // it: its header on the top rows, then the delegate's transcript
@@ -222,7 +228,7 @@ pub(crate) fn render(
             } else {
                 item::draw_body(app, body, buf);
             }
-            notices(app, conversation, buf, &mut targets);
+            notice_rows::overlay(app, conversation, buf, &mut targets);
         }
         None => {
             // The repository offer swaps in for the conversation.
@@ -254,7 +260,7 @@ pub(crate) fn render(
                     }
                 },
             }
-            notices(app, conversation, buf, &mut targets);
+            notice_rows::overlay(app, conversation, buf, &mut targets);
         }
     }
     drag::draw(app, buf, pointer);
@@ -346,81 +352,6 @@ fn overlay_cross(buf: &mut Buffer, area: Rect, targets: &mut Vec<Target>) {
         id: TargetId::CloseOverlay,
         rect: cross,
     });
-}
-/// top, each a click target with its ✕ a target over it, or the notice
-/// overlay over the whole conversation while it is open, which hides the
-/// conversation's targets.
-fn notices(app: &App, area: Rect, buf: &mut Buffer, targets: &mut Vec<Target>) {
-    let mut y = area.y;
-    if let Some(texts) = app.notice_overlay() {
-        targets.retain(|target| {
-            !matches!(
-                target.id,
-                TargetId::Line(_)
-                    | TargetId::Link { .. }
-                    | TargetId::FindResult(_)
-                    | TargetId::NewBelow
-                    | TargetId::Turn(_)
-                    | TargetId::Offer(_)
-            )
-        });
-        let rows: Vec<String> = texts
-            .iter()
-            .flat_map(|text| crate::format::wrap(text, usize::from(area.width)))
-            .collect();
-        for row in rows {
-            if y >= area.bottom() {
-                return;
-            }
-            let width = usize::from(area.width);
-            let blank = " ".repeat(width);
-            buf.set_stringn(area.x, y, blank, width, NOTICE_TINT);
-            buf.set_stringn(area.x, y, &row, width, NOTICE_TINT);
-            y = y.saturating_add(1);
-        }
-        overlay_cross(buf, area, targets);
-        return;
-    }
-    // "Copied" takes the corner's first row while it shows, below the
-    // search bar while it is open (`docs/tui.md`, "Notices").
-    y = y
-        .saturating_add(u16::from(app.find_bar().is_some()))
-        .saturating_add(u16::from(app.copied()));
-    for notice in app.notices() {
-        let top = y;
-        let mut wide = 0;
-        for row in &notice.rows {
-            if y >= area.bottom() {
-                break;
-            }
-            wide = to_u16(crate::format::width(row)).min(area.width);
-            let x = area.right().saturating_sub(wide);
-            buf.set_stringn(x, y, row, usize::from(wide), NOTICE_TINT);
-            y = y.saturating_add(1);
-        }
-        if y == top {
-            return;
-        }
-        let x = area.right().saturating_sub(wide);
-        let rect = Rect::new(x, top, wide, y.saturating_sub(top));
-        let Some(id) = notice.id else {
-            targets.push(Target {
-                id: TargetId::MoreNotices,
-                rect,
-            });
-            continue;
-        };
-        targets.push(Target {
-            id: TargetId::Notice(id),
-            rect,
-        });
-        // The ✕ ends the first row.
-        let close = Rect::new(area.right().saturating_sub(1), top, 1, 1);
-        targets.push(Target {
-            id: TargetId::DismissNotice(id),
-            rect: close,
-        });
-    }
 }
 
 /// Where the terminal cursor shows: at the draft's cursor while the input
@@ -544,8 +475,9 @@ fn conversation_rows(app: &App, area: Rect, buf: &mut Buffer, targets: &mut Vec<
         // name the surface until the paint pass, so the pads the card
         // keeps are decorated without moving text; the prompt bubble
         // stays edge-free, and a cut card draws no corner it withheld.
-        let turn_tint =
-            fill.bg == Some(Role::Turn.color()) || fill.bg == Some(Role::Surface.color());
+        let turn_tint = fill.bg == Some(Role::Turn.color())
+            || fill.bg == Some(Role::Surface.color())
+            || fill.bg == Some(Role::Handoff.color());
         if crate::surface::box_fit(area.width) && turn_tint {
             crate::surface::draw_sides(buf, rect);
         }

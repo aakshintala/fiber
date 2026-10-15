@@ -43,7 +43,7 @@ impl App {
         let (keys, notices) = load(&setup.user);
         self.keyboard.keys = keys;
         for notice in notices {
-            self.notices.push(notice);
+            self.notices.push("config_invalid", notice);
         }
     }
 

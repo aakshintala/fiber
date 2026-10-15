@@ -378,3 +378,86 @@ fn set_open_reports_whether_the_orphans_line_matched() {
     let mut line = super::Aside::Line(ratatui::text::Line::raw("hi"));
     assert!(!line.set_open(&Target::Orphans(7), true));
 }
+
+/// A warning's rows and their texts at `inner` columns.
+fn warning(message: &str, inner: u16) -> (Vec<String>, Vec<crate::rows::RowText>) {
+    let mut out = crate::rows::Rows::default();
+    super::Aside::Warning {
+        message: message.to_owned(),
+    }
+    .rows(inner, &mut out);
+    let (rows, texts) = out.into_parts();
+    (
+        rows.into_iter().map(|(line, _)| line.to_string()).collect(),
+        texts,
+    )
+}
+
+#[test]
+fn a_warning_wraps_under_itself() {
+    // A short message is one row.
+    assert_eq!(
+        warning("The MCP server one stopped.", 77).0,
+        ["⚠ The MCP server one stopped."]
+    );
+    // A message of exactly `inner - 2` cells is one row, of `inner - 1`
+    // cells is two, every continuation under the message's first column.
+    let one = "a".repeat(18);
+    assert_eq!(warning(&one, 20).0, [format!("⚠ {one}")]);
+    let two = "a".repeat(19);
+    assert_eq!(
+        warning(&two, 20).0,
+        [format!("⚠ {}", "a".repeat(18)), "  a".to_owned()]
+    );
+    let (rows, _) = warning("The MCP server one stopped working this morning", 20);
+    assert_eq!(
+        rows,
+        [
+            "⚠ The MCP server one",
+            "  stopped working",
+            "  this morning",
+        ]
+    );
+    // A word longer than the width breaks hard.
+    let (rows, _) = warning("aaaaaaaaaaaaaaaaaaaaa", 20);
+    assert_eq!(rows, ["⚠ aaaaaaaaaaaaaaaaaa", "  aaa"]);
+}
+
+#[test]
+fn a_warnings_copy_joins_with_a_space() {
+    use crate::rows::Join;
+    let (_, texts) = warning("The MCP server one stopped working", 20);
+    assert_eq!(texts.len(), 2);
+    assert_eq!(texts[0].join, Join::Break);
+    assert_eq!(texts[0].skip, 2);
+    assert_eq!(texts[1].join, Join::WrapSpace);
+    assert_eq!(texts[1].skip, 2);
+}
+
+#[test]
+fn a_warning_reads_its_mark_in_attention_and_its_message_dim() {
+    use ratatui::style::Modifier;
+    let mut out = crate::rows::Rows::default();
+    super::Aside::Warning {
+        message: "boom".to_owned(),
+    }
+    .rows(77, &mut out);
+    let (rows, _) = out.into_parts();
+    let spans = &rows[0].0.spans;
+    assert_eq!(spans[0].content, "⚠ ");
+    assert_eq!(
+        spans[0].style,
+        crate::markdown::style(crate::theme::Role::Attention)
+    );
+    assert_eq!(spans[1].content, "boom");
+    assert!(spans[1].style.add_modifier.contains(Modifier::DIM));
+}
+
+#[test]
+fn set_open_and_toggle_ignore_a_warning() {
+    let mut warning = super::Aside::Warning {
+        message: "boom".to_owned(),
+    };
+    assert!(!warning.set_open(&Target::Orphans(7), true));
+    assert_eq!(warning.toggle(Target::Orphans(7)), None);
+}

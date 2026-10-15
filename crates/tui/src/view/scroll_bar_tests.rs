@@ -277,13 +277,19 @@ fn no_bar_at_one_column() {
 }
 
 #[test]
-fn a_notice_draws_over_the_bar() {
+fn a_notice_draws_below_the_bar() {
     let mut app = tall();
     app.connect_failed("Could not reach the hub: refused".to_owned());
     let buf = rendered(&app, WIDTH, HEIGHT);
-    // The notice floats over the conversation's top-right corner: its
-    // first row ends in its dismiss mark, not a bar glyph.
-    let cell = &buf[(WIDTH - 1, app.conversation_area().y)];
+    let conversation = app.conversation_area();
+    // The notice rows sit below the conversation, above the input box:
+    // the bar's column over the conversation holds no dismiss mark.
+    for y in conversation.top()..conversation.bottom() {
+        assert_ne!(buf[(WIDTH - 1, y)].symbol(), "✕", "row {y}");
+    }
+    // The first notice row ends in its dismiss mark, not a bar glyph.
+    let row = conversation.bottom();
+    let cell = &buf[(WIDTH - 1, row)];
     assert_eq!(cell.symbol(), "✕");
     assert_ne!(cell.symbol(), THUMB);
 }

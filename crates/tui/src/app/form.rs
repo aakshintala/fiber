@@ -60,20 +60,26 @@ impl App {
                 (accepted.command_id.0, None)
             }
             "command_rejected" => {
-                let Some((Some(id), message)) = read!(envelope, CommandRejected)
-                    .map(|rejected| (rejected.command_id, rejected.message))
+                let Some((Some(id), code, message)) =
+                    read!(envelope, CommandRejected).map(|rejected| {
+                        (
+                            rejected.command_id,
+                            crate::format::code(&rejected.code),
+                            rejected.message,
+                        )
+                    })
                 else {
                     return Vec::new();
                 };
-                (id.0, Some(message))
+                (id.0, Some((code, message)))
             }
             _ => return Vec::new(),
         };
         if !matches!(self.pending.get(&id), Some((Kind::Reply, _))) {
             return Vec::new();
         }
-        if let Some(message) = rejection {
-            self.rejected(&id, message);
+        if let Some((code, message)) = rejection {
+            self.rejected(&id, &code, message);
             return Vec::new();
         }
         self.pending.remove(&id);

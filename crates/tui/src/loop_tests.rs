@@ -375,7 +375,12 @@ fn a_lost_connection_ends_the_wait_with_the_notice() {
     let (lp, theirs, tx, rx) = opened();
     let script: Script = Box::new(|_| vec![Input::Disconnected]);
     let seen = serve(theirs, tx.clone(), script);
-    let lp = run(lp, rx, &tx, to_the_top());
+    // The notice row shortens the conversation, so a few more PageUps
+    // reach the top than the eighty that sufficed for the floating
+    // notice; a fetch already waiting sends nothing more.
+    let mut top = to_the_top();
+    top.extend((0..40).map(|_| Input::Bytes(PAGE_UP.to_vec())));
+    let lp = run(lp, rx, &tx, top);
     assert_eq!(ranges(&seen).len(), 1);
     assert!(!lp.hub.has_stream());
     assert_eq!(

@@ -38,6 +38,8 @@ codes! {
     BudgetExceeded,
     /// A turn is running.
     Busy,
+    /// The terminal rebuilt its completion cache after a model switch.
+    CacheRebuild,
     /// The session was sent `close`.
     Closing,
     /// Two extensions registered the same command name.
@@ -84,6 +86,8 @@ codes! {
     FetchFailed,
     /// A monitor was suppressed for 30 seconds.
     Flooded,
+    /// The terminal is still reading the session's history.
+    HistoryLoading,
     /// An extension hook errored or ran out of time.
     HookFailed,
     /// A repository's required hook is not approved.
@@ -129,6 +133,8 @@ codes! {
     /// A model's base URL names a per-account host whose setting has no
     /// value, so the model is left out of the model list.
     ModelUnconfigured,
+    /// The terminal's model list is not read yet.
+    ModelsLoading,
     /// `name_session` was called while the person's name pins the session.
     NamePinned,
     /// An edit block's text was not found in the file.

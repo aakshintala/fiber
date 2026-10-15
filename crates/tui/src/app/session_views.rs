@@ -63,7 +63,8 @@ impl App {
     /// clicks; a slash command clears it before calling this method.
     pub(crate) fn open_session_view(&mut self, view: SessionView) -> Effect {
         if self.session().is_none() {
-            self.notices.push("No session on screen.".to_owned());
+            self.notices
+                .push("session_not_found", "No session on screen.".to_owned());
             return Effect::None;
         }
         self.model_picker.close();

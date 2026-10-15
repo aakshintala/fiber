@@ -238,7 +238,8 @@ impl App {
         match oldest {
             Some(key) => self.switch_to(key),
             None => {
-                self.notices.push("No requests waiting.".to_owned());
+                self.notices
+                    .push("stale_request", "No requests waiting.".to_owned());
                 Effect::None
             }
         }
@@ -284,11 +285,12 @@ impl App {
                 home.sessions.remove(&session);
             }
         } else {
+            let code = super::home::refusal_code(payload);
             let message = super::home::refusal(payload);
             if let Some(home) = self.home.as_mut() {
                 home.sessions.note(&session, message.clone());
             }
-            self.notices.push(message);
+            self.notices.push(&code, message);
         }
         Some(Vec::new())
     }

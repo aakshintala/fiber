@@ -403,15 +403,27 @@ fn notices_are_cut_at_the_column() {
         "notice",
         serde_json::json!({"code": "io_failed", "message": long}),
     ));
-    let (_, targets) = draw(&app, 160, 40);
+    let (shown, targets) = draw(&app, 160, 40);
     let notice = targets
         .iter()
         .find(|target| matches!(target.id, TargetId::Notice(_)))
         .map(|target| target.rect)
         .expect("a notice");
-    // At the column's right edge, 40% of its width at most.
-    assert_eq!(notice.right(), 126);
-    assert!(notice.width <= 51, "{notice:?}");
+    // The row spans the conversation's width, ending in its ✕.
+    assert_eq!((notice.x, notice.width), (0, 126));
+    let dismiss = targets
+        .iter()
+        .find(|target| matches!(target.id, TargetId::DismissNotice(_)))
+        .map(|target| target.rect)
+        .expect("a dismiss");
+    assert_eq!((dismiss.x, dismiss.width), (125, 1));
+    // The message is cut with "…" before the closing blank and ✕.
+    let row = shown
+        .lines()
+        .find(|row| row.contains("io_failed"))
+        .expect("a notice row");
+    assert!(row.ends_with("… ✕"), "{row:?}");
+    assert_eq!(crate::format::width(row), 126, "{row:?}");
 }
 
 #[test]

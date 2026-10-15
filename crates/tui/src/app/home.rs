@@ -361,7 +361,8 @@ impl App {
                             home.feed_id = None;
                         }
                         if !accepted {
-                            self.notices.push(refusal(&hub.payload));
+                            let code = refusal_code(&hub.payload);
+                            self.notices.push(&code, refusal(&hub.payload));
                         }
                         return Some(Vec::new());
                     }
@@ -386,7 +387,8 @@ impl App {
                             }
                             self.list_answered(first, true);
                         } else {
-                            self.notices.push(refusal(&hub.payload));
+                            let code = refusal_code(&hub.payload);
+                            self.notices.push(&code, refusal(&hub.payload));
                             self.list_answered(first, false);
                         }
                         return Some(Vec::new());
@@ -462,7 +464,8 @@ impl App {
                     // while its replay stays gated: a refused credential
                     // switch reports without opening the gate or
                     // returning home.
-                    self.notices.push(refusal(&envelope.payload));
+                    self.notices
+                        .push(&refusal_code(&envelope.payload), refusal(&envelope.payload));
                     return Some(Vec::new());
                 }
                 if self.gated(&envelope.session_id) {
@@ -820,6 +823,17 @@ pub(super) fn refusal(payload: &serde_json::Map<String, Value>) -> String {
         .get("message")
         .and_then(Value::as_str)
         .unwrap_or("rejected")
+        .to_owned()
+}
+
+/// A refusal's code: `malformed` when its answer carries none the
+/// terminal can read as a command answer.
+pub(super) fn refusal_code(payload: &serde_json::Map<String, Value>) -> String {
+    payload
+        .get("code")
+        .and_then(Value::as_str)
+        .filter(|code| !code.is_empty())
+        .unwrap_or("malformed")
         .to_owned()
 }
 

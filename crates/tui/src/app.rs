@@ -28,6 +28,8 @@ use crate::window::Pages;
 use notices::Notices;
 use steering::Steering;
 
+pub(crate) use notices::NoticeLine;
+
 #[path = "notices.rs"]
 mod notices;
 #[path = "steering.rs"]
@@ -505,9 +507,9 @@ impl App {
         lines
     }
 
-    /// Shows `text` as a notice.
-    pub(crate) fn push_notice(&mut self, text: String) {
-        self.notices.push(text);
+    /// Shows `text` as a notice under `code`.
+    pub(crate) fn push_notice(&mut self, code: &str, text: String) {
+        self.notices.push(code, text);
     }
 
     /// The hub could not be reached, or runs a schema this terminal cannot
@@ -516,7 +518,7 @@ impl App {
     pub(crate) fn connect_failed(&mut self, notice: String) {
         self.link = Link::Down;
         if self.notice_due() {
-            self.notices.push(notice);
+            self.notices.push("connection_failed", notice);
         }
         self.held.clear();
         if let Phase::Pending { command_id } = &self.phase {
@@ -532,7 +534,8 @@ impl App {
     pub(crate) fn disconnected(&mut self) {
         if self.link == Link::Up {
             self.link = Link::Down;
-            self.notices.push("Connection lost.".to_owned());
+            self.notices
+                .push("connection_failed", "Connection lost.".to_owned());
         }
         // A lost connection closes an open item view first, swapping the
         // screen back before anything clears it, and drops every wish:
@@ -698,12 +701,14 @@ impl App {
             || crate::surface::edged(self.input_height(), room),
             |panel| crate::view::request::height(&panel, self.column_width(), room),
         );
-        input
+        let under = input
             + self.completion_rows()
             + self.steering_below()
-            + usize::from(self.working_row_shown())
-            + usize::from(self.badge().is_some())
-            + usize::from(self.hint())
+            + usize::from(self.working_row_shown());
+        // The notice rows draw above the working line, so their room is
+        // what is left above it; the badge and hint draw above them.
+        let notices = self.notices.drawn().min(room.saturating_sub(under));
+        under + notices + usize::from(self.badge().is_some()) + usize::from(self.hint())
     }
 
     /// The approval panel, while it is open: its form laid out at the
@@ -782,7 +787,7 @@ impl App {
         self.screen.pages_mut().fail(*range.start());
         self.cancel_pending_turn();
         self.notices
-            .push(format!("Could not load history: {message}"));
+            .push("io_failed", format!("Could not load history: {message}"));
     }
 
     /// Scrolls so `row` is the top row, as dragging the scroll bar does.
@@ -873,13 +878,14 @@ impl App {
             "command_rejected" => {
                 if let Some(id) = command_id {
                     let message = hub_string(&hub.payload, "message").unwrap_or_default();
+                    let code = hub_code(&hub.payload);
                     if self.image_rejected(&id, &message) {
                         return Vec::new();
                     }
                     self.config_views_refused(&id, &message);
                     self.session_views_refused(&id, &message);
-                    if !self.history_rejected(&id, &message) {
-                        self.rejected(&id, message);
+                    if !self.history_rejected(&id, &code, &message) {
+                        self.rejected(&id, &code, message);
                     }
                     self.panel_refused(&id)
                 } else {
@@ -895,7 +901,7 @@ impl App {
             "stream_closed" => {
                 let closed = hub_string(&hub.payload, "session_id");
                 if closed.as_deref() == self.session().map(|session| session.0.as_str()) {
-                    self.notices.push(STREAM_CLOSED.to_owned());
+                    self.notices.push("stream_closed", STREAM_CLOSED.to_owned());
                 }
                 Vec::new()
             }
@@ -918,7 +924,7 @@ impl App {
     /// A command the terminal sent was rejected: a notice, and its draft
     /// back in the box when the box is empty. A rejected `cancel`
     /// shows nothing; after a rejected `start` the next Enter tries again.
-    fn rejected(&mut self, id: &str, message: String) {
+    fn rejected(&mut self, id: &str, code: &str, message: String) {
         // A refused `model` command drops the writes its acceptance
         // would have made.
         self.model_picker_rejected(id);
@@ -937,7 +943,7 @@ impl App {
                 | Kind::Command,
                 _,
             )) => {
-                self.notices.push(message);
+                self.notices.push(code, message);
                 self.fail(id);
             }
         }
@@ -1083,7 +1089,8 @@ impl App {
             }
             "notice" => {
                 if let Some(notice) = read!(envelope, Notice) {
-                    self.notices.push(notice.message);
+                    let code = crate::format::code(&notice.code);
+                    self.notices.push(&code, notice.message);
                 }
             }
             "repository_code_offered" | "repository_code_resolved" => {
@@ -1152,12 +1159,19 @@ pub(crate) fn text_of(parts: &[ContentPart]) -> String {
         .collect()
 }
 
-/// The notice for a `stream_closed` on the open session (`docs/tui.md`, "Notices").
+/// The text of the notice for a `stream_closed` on the open session
+/// (`docs/tui.md`, "Notices").
 const STREAM_CLOSED: &str =
-    "stream_closed · this session's log can't be read past here; reopen the session to try again";
+    "this session's log can't be read past here; reopen the session to try again";
 
 fn hub_string(payload: &Map<String, Value>, key: &str) -> Option<String> {
     payload.get(key).and_then(Value::as_str).map(str::to_owned)
+}
+
+/// A hub `command_rejected`'s code: `malformed` when its answer carries
+/// none the terminal can read as a command answer.
+fn hub_code(payload: &Map<String, Value>) -> String {
+    hub_string(payload, "code").unwrap_or_else(|| "malformed".to_owned())
 }
 
 #[cfg(test)]

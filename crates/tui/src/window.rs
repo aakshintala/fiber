@@ -1228,7 +1228,7 @@ impl Pages {
         for at in 0..=part.turns.len() {
             let after = part.first.saturating_add(at);
             while let Some((_, (_, aside))) = asides.next_if(|(_, (turns, _))| *turns <= after) {
-                aside.rows(&mut out);
+                aside.rows(crate::surface::inset(self.column_width()), &mut out);
             }
             // Shell output lives in the page and turn-after bucket it ran
             // in: only those candidates are examined, in the order they

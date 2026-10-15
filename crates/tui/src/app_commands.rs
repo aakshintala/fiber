@@ -526,7 +526,8 @@ impl App {
     /// draft stays.
     pub(super) fn command_session(&mut self) -> Option<(contract::SessionId, bool)> {
         let Phase::Attached { session, busy } = &self.phase else {
-            self.notices.push(NO_SESSION.to_owned());
+            self.notices
+                .push("session_not_found", NO_SESSION.to_owned());
             self.draft.clear();
             return None;
         };
@@ -656,7 +657,8 @@ impl App {
         let shell = (!has_image).then(|| shell::parse(&text)).flatten();
         let (kind, line) = match (&self.phase, shell) {
             (Phase::Starting | Phase::Pending { .. }, Some(_)) => {
-                self.notices.push("Start a session first.".to_owned());
+                self.notices
+                    .push("session_not_found", "Start a session first.".to_owned());
                 return Effect::None;
             }
             (Phase::Pending { .. }, None) => return Effect::None,
@@ -766,7 +768,7 @@ impl App {
     /// error is the notice, and the draft stays.
     pub(crate) fn editor_returned(&mut self, target: Target, result: Result<String, String>) {
         match (result, target) {
-            (Err(notice), _) => self.notices.push(notice),
+            (Err(notice), _) => self.notices.push("io_failed", notice),
             (Ok(text), Target::Token(number)) => self.draft.set_token(number, &text),
             (Ok(text), Target::Draft) => self.draft.edited(&text),
             (Ok(_), Target::Item) => {}
@@ -787,7 +789,7 @@ impl App {
                 self.settle();
             }
             super::paste::Landed::Notice(notice) => {
-                self.notices.push(notice);
+                self.notices.push("io_failed", notice);
                 self.settle();
             }
             super::paste::Landed::Dropped => {}

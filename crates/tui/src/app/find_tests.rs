@@ -518,12 +518,12 @@ fn find_bar_80x24() {
 }
 
 #[test]
-fn find_bar_with_copied_and_notices_below() {
+fn find_bar_with_copied_and_notice_rows() {
     let mut app = replied(80, 24, "the quick brown fox jumps over the lazy dog");
     search(&mut app, "fox");
     app.copied = true;
-    app.notices.push("A notice.".to_owned());
-    insta::assert_snapshot!("find_bar_with_copied_and_notices_below", screen(&app));
+    app.notices.push("extension_failed", "A notice.".to_owned());
+    insta::assert_snapshot!("find_bar_with_copied_and_notice_rows", screen(&app));
 }
 
 #[test]
@@ -1796,8 +1796,8 @@ fn esc_closes_the_notice_overlay_then_the_bar_then_the_selection() {
         Effect::None
     );
     assert!(app.select.span().is_some());
-    app.notices.push("first".to_owned());
-    app.notices.push("second".to_owned());
+    app.notices.push("extension_failed", "first".to_owned());
+    app.notices.push("extension_failed", "second".to_owned());
     app.open_more_notices();
     assert!(app.notice_overlay().is_some());
     // The overlay first, the bar and the selection staying.

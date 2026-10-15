@@ -161,7 +161,7 @@ impl App {
     fn cant_open(&mut self, name: &str, reason: &str) {
         let reason = reason.strip_suffix('.').unwrap_or(reason);
         self.notices
-            .push(format!("Could not open {name}: {reason}."));
+            .push("io_failed", format!("Could not open {name}: {reason}."));
     }
 }
 

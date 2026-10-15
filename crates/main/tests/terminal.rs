@@ -1876,13 +1876,29 @@ fn resume_with_an_unknown_credential_on_an_exited_session_stays_home() {
     run.wait_screen("the first frame", |grid| grid.contents.contains("›"));
     run.ready();
     // The refused open returns home with the resolver's notice, naming
-    // the labels the provider has.
-    run.wait_screen("the refusal notice", |grid| {
-        // The box wraps the message across its rows, so each
-        // fragment is asserted on its own row.
-        grid.contents.contains("No credential for")
-            && grid.contents.contains("credentials/fake/nope")
-            && grid.contents.contains("The labels for `fake")
+    // the labels the provider has: the row carries the code, and a
+    // click opens the whole text in the overlay (`docs/tui.md`,
+    // "Notices").
+    let grid = run.wait_screen("the refusal notice", |grid| {
+        grid.rows
+            .iter()
+            .any(|row| row.contains("credential_missing") && row.contains("No credential for"))
+    });
+    let row = u16::try_from(
+        grid.rows
+            .iter()
+            .position(|row| row.contains("credential_missing"))
+            .expect("the notice row"),
+    )
+    .expect("the notice row fits in u16");
+    run.write(format!("\x1b[<0;3;{}M\x1b[<0;3;{}m", row + 1, row + 1).as_bytes());
+    run.wait_screen("the notice overlay", |grid| {
+        // The overlay wraps at the width, so each fragment fits on
+        // one of its rows: the message's start and its credential
+        // path, which no wrap splits.
+        grid.contents
+            .contains("No credential for `fake`: nothing is stored in")
+            && grid.contents.contains("credentials/fake/nope,")
     });
     assert_eq!(
         server.requests().len(),
@@ -1922,10 +1938,22 @@ fn resume_with_an_unknown_credential_on_a_running_session_stays_attached() {
     second.ready();
     // The running open is accepted, and the refused switch arrives as a
     // notice naming the labels the provider has: no rejection, no trip
-    // home.
-    second.wait_screen("the refusal notice", |grid| {
-        // The box wraps the message across its rows, so each
-        // fragment is asserted on its own row.
+    // home. The row carries the code and the message's start; a click
+    // opens the whole text in the overlay (`docs/tui.md`, "Notices").
+    let grid = second.wait_screen("the refusal notice", |grid| {
+        grid.rows.iter().any(|row| {
+            row.contains("credential_missing") && row.contains("has no credential label")
+        })
+    });
+    let row = u16::try_from(
+        grid.rows
+            .iter()
+            .position(|row| row.contains("credential_missing"))
+            .expect("the notice row"),
+    )
+    .expect("the notice row fits in u16");
+    second.write(format!("\x1b[<0;3;{}M\x1b[<0;3;{}m", row + 1, row + 1).as_bytes());
+    second.wait_screen("the notice overlay", |grid| {
         grid.contents.contains("has no credential label")
             && grid.contents.contains("`nope`. The labels for `fake` are:")
             && grid.contents.contains("default, home, work")

@@ -809,16 +809,17 @@ fn the_conversation_gives_up_a_row_each_for_input_hint_and_steering() {
     assert_eq!(app.conversation_height(), 9);
     app.on_key(Key::CtrlC, now);
     assert_eq!(app.conversation_height(), 8);
-    // A notice floats over the conversation and takes no row.
+    // A notice takes its row above the working line.
     connect(&mut app);
     app.disconnected();
-    assert_eq!(app.conversation_height(), 8);
+    assert_eq!(app.conversation_height(), 7);
     app.on_key(Key::Char('x'), now);
-    assert_eq!(app.conversation_height(), 9);
+    assert_eq!(app.conversation_height(), 8);
     app.attach(contract::SessionId(S_A.to_owned()));
     app.on_line(steering_queue(S_A, &[("a", Some("c_1")), ("b", None)]));
-    // Two queued rows with the heading above and the footer below them.
-    assert_eq!(app.conversation_height(), 5);
+    // Two queued rows with the heading above and the footer below them,
+    // above the notice's row.
+    assert_eq!(app.conversation_height(), 4);
     app.set_size(60, 1);
     assert_eq!(app.conversation_height(), 0);
 }
@@ -1769,10 +1770,16 @@ fn stream_closed_for_the_open_session_is_one_notice_and_keeps_the_lines() {
     assert!(app.on_line(stream_closed("s_aaaaaaaaaaaaaaaa")).is_empty());
     assert_eq!(
         app.notice(),
-        Some(
-            "stream_closed · this session's log can't be read past here; \
-             reopen the session to try again"
-        )
+        Some("this session's log can't be read past here; reopen the session to try again")
+    );
+    assert_eq!(
+        app.notices().into_iter().next(),
+        Some(crate::app::NoticeLine::Notice {
+            id: 0,
+            code: "stream_closed".to_owned(),
+            text: "this session's log can't be read past here; reopen the session to try again"
+                .to_owned(),
+        })
     );
     assert_eq!(texts(&app), before);
 }

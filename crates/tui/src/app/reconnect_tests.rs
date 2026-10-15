@@ -240,10 +240,17 @@ fn the_banner_row_is_counted_in_conversation_height() {
         let before = app.conversation_height();
         app.disconnected();
         app.next_retry();
-        assert_eq!(app.conversation_height(), before - 1, "{width}x{height}");
-        // The conversation ends on the row above the banner.
+        // The banner takes one row, and the dropped connection's notice
+        // takes one above the working line.
+        assert_eq!(app.conversation_height(), before - 2, "{width}x{height}");
+        // The conversation ends on the rows above the notice, which
+        // sits above the banner.
         let (banner, top) = drawn(&app);
-        assert_eq!(app.conversation_height(), banner - top, "{width}x{height}");
+        assert_eq!(
+            app.conversation_height(),
+            banner - top - 1,
+            "{width}x{height}"
+        );
     }
 }
 

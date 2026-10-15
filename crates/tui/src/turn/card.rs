@@ -92,17 +92,7 @@ impl Turn {
                     broken = true;
                 }
                 out.on_surface(from, width, Role::Turn, Edges { top, bottom: true });
-                let band_at = out.len();
-                band.rows(out);
-                out.on_surface(
-                    band_at,
-                    width,
-                    Role::Surface,
-                    Edges {
-                        top: false,
-                        bottom: false,
-                    },
-                );
+                band.rows(width, zone, out);
                 from = out.len();
                 top = true;
                 separates = false;
@@ -124,7 +114,7 @@ impl Turn {
                         );
                     }
                 }
-                Entry::Aside(aside) => aside.rows(out),
+                Entry::Aside(aside) => aside.rows(inner, out),
                 Entry::Band(_) => {}
                 Entry::Answers(answered) => answered.rows(out),
             });

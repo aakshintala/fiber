@@ -59,6 +59,7 @@ fn a_read_error_is_one_notice_and_keeps_the_catalogue() {
     assert_eq!(app.model_picker.catalogue.models.len(), 1);
     app.on_models(Err("the lists could not be read".to_owned()));
     assert_eq!(app.notice(), Some("the lists could not be read"));
+    assert_eq!(newest_code(&app), "io_failed");
     assert_eq!(app.notices().len(), 2);
     assert_eq!(app.model_picker.catalogue.models.len(), 1);
     assert_eq!(
@@ -82,6 +83,7 @@ fn catalogue_notices_are_pushed_once_per_read() {
     app.on_models(Ok(catalogue.clone()));
     assert_eq!(app.notices().len(), 2);
     assert_eq!(app.notice(), Some("second"));
+    assert_eq!(first_code(&app), "model_invalid");
     app.on_models(Ok(catalogue));
     assert_eq!(app.notices().len(), 4);
 }
@@ -137,6 +139,22 @@ fn attached() -> App {
 
 fn levels(levels: &[&str]) -> Vec<String> {
     levels.iter().map(|level| (*level).to_owned()).collect()
+}
+
+/// The first notice row's code.
+fn first_code(app: &App) -> String {
+    match app.notices().into_iter().next() {
+        Some(crate::app::NoticeLine::Notice { code, .. }) => code,
+        line => panic!("a notice row, not {line:?}"),
+    }
+}
+
+/// The newest notice row's code.
+fn newest_code(app: &App) -> String {
+    match app.notices().into_iter().last() {
+        Some(crate::app::NoticeLine::Notice { code, .. }) => code,
+        line => panic!("a notice row, not {line:?}"),
+    }
 }
 
 /// Three models over two providers: `acme/m1` with two levels,
@@ -1218,11 +1236,14 @@ fn a_failed_write_is_a_notice() {
 }
 
 /// Every notice row showing, joined with its wrapping and padding cut:
-/// what the person reads.
+/// what the person reads, each with its code.
 fn shown_notices(app: &App) -> String {
     app.notices()
         .iter()
-        .flat_map(|notice| notice.rows.clone())
+        .map(|line| match line {
+            crate::app::NoticeLine::Notice { code, text, .. } => format!("{code} {text}"),
+            crate::app::NoticeLine::More(n) => format!("+{n} more"),
+        })
         .collect::<Vec<_>>()
         .join("\n")
         .split_whitespace()
@@ -2231,6 +2252,7 @@ fn with_no_entry_on_home_it_asks_for_a_read() {
         app.notice(),
         Some("The model list is not read yet; try again in a moment.")
     );
+    assert_eq!(first_code(&app), "models_loading");
     assert_eq!(app.take_reads(), Some(crate::catalogue::Refresh::Cached));
 }
 
@@ -2239,6 +2261,7 @@ fn with_no_model_it_says_to_choose_one() {
     let (mut app, _) = choosing_app();
     assert_eq!(run_draft(&mut app, "/thinking high"), Effect::None);
     assert_eq!(app.notice(), Some("Choose a model first: Ctrl+L."));
+    assert_eq!(first_code(&app), "no_model");
     assert!(app.model_picker.awaiting.is_empty());
 
     let mut app = home();
