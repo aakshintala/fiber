@@ -797,12 +797,14 @@ fn a_foreground_call_cancelled_before_it_moves_writes_nothing() {
         }
     });
     // The child acknowledged its start: the call reached its drive, so
-    // cancelling now stops it before any move.
-    let deadline = Deadline::after(STEP);
+    // cancelling now stops it before any move. Each wait below keeps its
+    // own wall-clock budget, so a slow spawn does not eat the result wait.
     let child = ready.wait(STEP);
     assert!(!child.is_empty(), "the child acknowledged its start");
     cancel.cancel();
-    let output = deadline.recv_or_fail(&out_rx, "the cancelled result");
+    // Its own wall-clock budget: the deadline above was shared with the
+    // start acknowledgement, so a slow spawn must not eat this wait.
+    let output = Deadline::after(STEP).recv_or_fail(&out_rx, "the cancelled result");
     assert!(output.jobs.is_empty(), "cancelled before any move");
     assert!(jobs.started().is_empty());
     assert_eq!(fixture.probe.calls(), 0);
