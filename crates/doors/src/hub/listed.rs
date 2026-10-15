@@ -1,7 +1,12 @@
 use super::Address;
 use crate::Error;
 use contract::Secret;
+use contract::{HubLine, clock::Clock};
+use net::websocket::Via;
+use std::io::{self, Read, Write};
+use std::os::unix::net::UnixStream;
 use std::path::Path;
+use std::time::Duration;
 
 /// The hub selected for one client command.
 #[derive(Debug)]
@@ -61,6 +66,179 @@ pub fn target(config: &config::Config, home: &Path, named: Option<&str>) -> Resu
         address,
         token,
     })
+}
+
+/// Connects to the selected hub; only a local target may call `start`.
+pub fn connect_target(
+    home: &Path,
+    target: &Target,
+    start: &mut dyn FnMut() -> io::Result<()>,
+    clock: &dyn Clock,
+) -> Result<super::Hub, Error> {
+    match target {
+        Target::Local => super::connect(home, start, clock).map_err(Error::Local),
+        Target::Listed {
+            name,
+            address,
+            token,
+        } => {
+            let hub = connect_listed_with(name, address, &Via::from_env(), clock)?;
+            if let Address::Web(_) = address {
+                let token = token
+                    .as_ref()
+                    .ok_or_else(|| Error::MissingToken { name: name.clone() })?;
+                authenticate(&hub.0, name, token, clock, net::LIMITS.idle())?;
+            }
+            Ok(hub)
+        }
+    }
+}
+
+/// Connects and reads the hello without presenting a token, for pairing.
+pub fn connect_unpaired(address: &Address, clock: &dyn Clock) -> Result<super::Hub, Error> {
+    connect_listed_with("the hub", address, &Via::from_env(), clock)
+}
+
+fn connect_listed_with(
+    name: &str,
+    address: &Address,
+    via: &Via,
+    clock: &dyn Clock,
+) -> Result<super::Hub, Error> {
+    let stream = match address {
+        Address::Unix(path) => UnixStream::connect(path).map_err(|source| Error::Unix {
+            hub: name.into(),
+            path: path.clone(),
+            source,
+        })?,
+        Address::Web(endpoint) => {
+            net::websocket::connect_with(endpoint, via).map_err(|source| Error::Unreachable {
+                hub: name.into(),
+                source,
+            })?
+        }
+    };
+    let idle = via.limits.idle();
+    let label = match address {
+        Address::Unix(path) => path.clone(),
+        Address::Web(_) => name.into(),
+    };
+    super::read_hello(
+        stream,
+        &label,
+        clock.now().checked_add(idle),
+        idle,
+        clock,
+        &mut || {},
+    )
+    .map_err(|poll| {
+        let source = match poll {
+            super::Poll::Race => io::Error::new(
+                io::ErrorKind::UnexpectedEof,
+                "the hub closed before hub_hello",
+            ),
+            super::Poll::Failed(source) => source,
+        };
+        Error::Hello {
+            hub: name.into(),
+            source,
+        }
+    })
+}
+
+pub(crate) fn authenticate(
+    mut stream: &UnixStream,
+    name: &str,
+    token: &Secret,
+    clock: &dyn Clock,
+    idle: Duration,
+) -> Result<(), Error> {
+    let hello_error = |source| Error::Hello {
+        hub: name.into(),
+        source,
+    };
+    stream.set_write_timeout(Some(idle)).map_err(hello_error)?;
+    let command = serde_json::json!({"id":"c_authenticate", "command":"authenticate", "args":{"token":token.expose()}});
+    serde_json::to_writer(&mut stream, &command)
+        .map_err(|_| hello_error(io::Error::other("could not write authentication command")))?;
+    stream.write_all(b"\n").map_err(hello_error)?;
+    let deadline = clock.now().checked_add(idle);
+    loop {
+        let mut bytes = Vec::new();
+        loop {
+            let left = match deadline {
+                Some(deadline) => Some(
+                    deadline
+                        .checked_duration_since(clock.now())
+                        .filter(|left| !left.is_zero())
+                        .ok_or_else(|| {
+                            hello_error(io::Error::new(
+                                io::ErrorKind::TimedOut,
+                                "authentication timed out",
+                            ))
+                        })?,
+                ),
+                None => None,
+            };
+            super::set_read_timeout(stream, left).map_err(hello_error)?;
+            let mut byte = [0];
+            match stream.read(&mut byte) {
+                Ok(0) => {
+                    return Err(hello_error(io::Error::new(
+                        io::ErrorKind::UnexpectedEof,
+                        "the hub closed before authentication answered",
+                    )));
+                }
+                Ok(_) => {
+                    if byte[0] == b'\n' {
+                        break;
+                    } else {
+                        bytes.push(byte[0]);
+                    }
+                }
+                Err(error) => {
+                    let error = if matches!(
+                        error.kind(),
+                        io::ErrorKind::WouldBlock | io::ErrorKind::TimedOut
+                    ) {
+                        io::Error::new(io::ErrorKind::TimedOut, "authentication timed out")
+                    } else {
+                        error
+                    };
+                    return Err(hello_error(error));
+                }
+            }
+        }
+        let line: HubLine = serde_json::from_slice(&bytes).map_err(|_| {
+            hello_error(io::Error::new(
+                io::ErrorKind::InvalidData,
+                "invalid authentication answer",
+            ))
+        })?;
+        if line
+            .payload
+            .get("command_id")
+            .and_then(serde_json::Value::as_str)
+            != Some("c_authenticate")
+        {
+            continue;
+        }
+        if line.kind == "command_accepted" {
+            super::set_read_timeout(stream, None).map_err(hello_error)?;
+            return Ok(());
+        }
+        if line.kind == "command_rejected" {
+            let message = line
+                .payload
+                .get("message")
+                .and_then(serde_json::Value::as_str)
+                .unwrap_or("authentication refused");
+            return Err(Error::Refused {
+                hub: name.into(),
+                message: message.replace(token.expose(), "[redacted]"),
+            });
+        }
+    }
 }
 
 #[cfg(test)]

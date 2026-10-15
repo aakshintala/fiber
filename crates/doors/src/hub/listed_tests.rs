@@ -1,7 +1,214 @@
 use super::*;
 use config::{Config, ProjectKey, Sources};
 use contract::ErrorCode;
+use fakes::{Deadline, clock::FakeClock};
 use serde_json::json;
+use std::io::{self, BufRead, Write};
+use std::os::unix::net::{UnixListener, UnixStream};
+use std::sync::mpsc;
+use std::thread;
+use std::time::Duration;
+
+#[test]
+fn authenticate_accepts_only_its_ack_and_keeps_the_wire_token_secret() {
+    for (reply, expected) in [
+        (
+            Some(json!({"kind":"command_accepted", "payload":{"command_id":"c_authenticate"}})),
+            None,
+        ),
+        (
+            Some(
+                json!({"kind":"command_rejected", "payload":{"command_id":"c_authenticate", "code":"unauthenticated", "message":"device-token was revoked"}}),
+            ),
+            Some(ErrorCode::AuthenticationFailed),
+        ),
+        (None, Some(ErrorCode::ConnectionFailed)),
+    ] {
+        let (client, mut server) = UnixStream::pair().unwrap();
+        let (done, done_rx) = mpsc::channel();
+        let (wire, wire_rx) = mpsc::channel();
+        let clock = FakeClock::new();
+        thread::spawn(move || {
+            let result = authenticate(
+                &client,
+                "box",
+                &Secret::new("device-token".into()),
+                clock.as_ref(),
+                Duration::from_secs(1),
+            );
+            done.send(result).unwrap();
+        });
+        thread::spawn(move || {
+            let mut line = String::new();
+            io::BufReader::new(server.try_clone().unwrap())
+                .read_line(&mut line)
+                .unwrap();
+            wire.send(serde_json::from_str::<serde_json::Value>(&line).unwrap())
+                .unwrap();
+            if let Some(reply) = reply {
+                writeln!(server, "{}", json!({"ts":1,"schema_version":1,"kind":"command_rejected","payload":{"command_id":"another-command","message":"not our answer"}})).unwrap();
+                writeln!(server, "{}", json!({"ts":1,"schema_version":1,"kind":reply["kind"],"payload":reply["payload"]})).unwrap();
+            }
+        });
+        let deadline = Deadline::after(Duration::from_secs(5));
+        assert_eq!(
+            deadline.recv_or_fail(&wire_rx, "the authentication command"),
+            json!({"id":"c_authenticate","command":"authenticate","args":{"token":"device-token"}})
+        );
+        let result = deadline.recv_or_fail(&done_rx, "the authentication answer");
+        match expected {
+            None => result.unwrap(),
+            Some(code) => {
+                let error = result.unwrap_err();
+                assert_eq!(error.code(), code);
+                if code == ErrorCode::AuthenticationFailed {
+                    assert!(matches!(error, Error::Refused { .. }));
+                    assert!(error.to_string().contains("box"));
+                    assert!(error.to_string().contains("was revoked"));
+                    assert!(!error.to_string().contains("device-token"));
+                } else {
+                    assert!(
+                        matches!(error, Error::Hello { source, .. } if source.kind() == io::ErrorKind::UnexpectedEof)
+                    );
+                }
+            }
+        }
+    }
+}
+
+#[test]
+fn authentication_kernel_timeout_needs_no_fake_time_advance() {
+    let (client, _silent_server) = UnixStream::pair().unwrap();
+    let (done, done_rx) = mpsc::channel();
+    let clock = FakeClock::new();
+    thread::spawn(move || {
+        done.send(authenticate(
+            &client,
+            "box",
+            &Secret::new("device-token".into()),
+            clock.as_ref(),
+            net::Limits::new(Duration::from_secs(15), Duration::from_millis(100))
+                .unwrap()
+                .idle(),
+        ))
+        .unwrap();
+    });
+    let error = Deadline::after(Duration::from_secs(5))
+        .recv_or_fail(&done_rx, "authentication times out on a silent peer")
+        .unwrap_err();
+    assert!(
+        matches!(error, Error::Hello { source, .. } if source.kind() == io::ErrorKind::TimedOut)
+    );
+}
+
+#[test]
+fn listed_unix_connect_reads_hello_and_never_starts_a_hub() {
+    let dir = fakes::TempDir::new("fiber-listed-connect");
+    let path = dir.path().join("socket");
+    let listener = UnixListener::bind(&path).unwrap();
+    let (served, served_rx) = mpsc::channel();
+    thread::spawn(move || {
+        let (mut stream, _) = listener.accept().unwrap();
+        writeln!(
+            stream,
+            "{}",
+            json!({"kind":"hub_hello","ts":1,"schema_version":1,"payload":{}})
+        )
+        .unwrap();
+        served.send(()).unwrap();
+    });
+    let (done, done_rx) = mpsc::channel();
+    let home = dir.path().to_path_buf();
+    let socket = path.clone();
+    thread::spawn(move || {
+        let clock = FakeClock::new();
+        let target = Target::Listed {
+            name: "fwd".into(),
+            address: Address::Unix(socket),
+            token: None,
+        };
+        done.send(connect_target(
+            &home,
+            &target,
+            &mut || panic!("listed hub must not start"),
+            clock.as_ref(),
+        ))
+        .unwrap();
+    });
+    let deadline = Deadline::after(Duration::from_secs(5));
+    let (_, hello) = deadline
+        .recv_or_fail(&done_rx, "the forwarded hub hello")
+        .unwrap();
+    assert_eq!(hello.kind, "hub_hello");
+    deadline.recv_or_fail(&served_rx, "the listener answered");
+    std::fs::remove_file(&path).unwrap();
+    let target = Target::Listed {
+        name: "fwd".into(),
+        address: Address::Unix(path),
+        token: None,
+    };
+    let error = connect_target(
+        dir.path(),
+        &target,
+        &mut || panic!("listed hub must not start"),
+        FakeClock::new().as_ref(),
+    )
+    .unwrap_err();
+    assert!(
+        matches!(error, Error::Unix { source, .. } if matches!(source.kind(), io::ErrorKind::NotFound | io::ErrorKind::ConnectionRefused))
+    );
+}
+
+#[test]
+fn local_target_keeps_the_local_start_failure() {
+    let dir = fakes::TempDir::new("fiber-target-local");
+    let error = connect_target(
+        dir.path(),
+        &Target::Local,
+        &mut || Err(io::Error::other("start refused")),
+        FakeClock::new().as_ref(),
+    )
+    .unwrap_err();
+    assert!(matches!(error, Error::Local(_)));
+    assert_eq!(error.code(), ErrorCode::IoFailed);
+    assert_eq!(error.to_string(), "start refused");
+}
+
+#[test]
+fn unpaired_connect_reads_only_the_hello() {
+    let dir = fakes::TempDir::new("fiber-unpaired-connect");
+    let path = dir.path().join("socket");
+    let listener = UnixListener::bind(&path).unwrap();
+    let (release, release_rx) = mpsc::channel::<()>();
+    let (served, served_rx) = mpsc::channel();
+    thread::spawn(move || {
+        let (mut stream, _) = listener.accept().unwrap();
+        writeln!(
+            stream,
+            "{}",
+            json!({"kind":"hub_hello","ts":1,"schema_version":1,"payload":{}})
+        )
+        .unwrap();
+        // The test keeps the socket alive without sending an authentication answer.
+        let _released = release_rx.recv();
+        served.send(()).unwrap();
+    });
+    let (done, done_rx) = mpsc::channel();
+    thread::spawn(move || {
+        done.send(connect_unpaired(
+            &Address::Unix(path),
+            FakeClock::new().as_ref(),
+        ))
+        .unwrap();
+    });
+    let deadline = Deadline::after(Duration::from_secs(5));
+    let (_, hello) = deadline
+        .recv_or_fail(&done_rx, "the unpaired hello without authentication")
+        .unwrap();
+    assert_eq!(hello.kind, "hub_hello");
+    drop(release);
+    deadline.recv_or_fail(&served_rx, "the unpaired listener ends");
+}
 
 fn load(home: &Path, overrides: &[&str]) -> Config {
     Config::load(Sources {
