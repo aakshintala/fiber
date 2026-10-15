@@ -912,6 +912,90 @@ fn models_lua(name: &str, url: &str) -> String {
     out
 }
 
+/// A clock that gates one park inside the fake clock's wait path, from
+/// this file only. `wait_until` delegates to the inner fake clock, but
+/// when `until` matches the armed target it signals arrival after the
+/// inner clock recorded the park (so `await_parked` already fires) and
+/// blocks before invoking the outer wait closure. The caller still holds
+/// the hub guard until that closure's condvar wait releases it
+/// (`support::clock::park` over `Hub::wait`), so the block holds the
+/// guard in the exact park-recorded-but-not-released window. Fires once
+/// per arming; every other wait passes straight through, so existing
+/// deadlines and the fake clock are unchanged.
+struct GatedClock {
+    inner: Arc<FakeClock>,
+    gate: Mutex<Option<GatedGate>>,
+}
+
+struct GatedGate {
+    target: Option<Instant>,
+    arrived: mpsc::Sender<()>,
+    release: mpsc::Receiver<()>,
+}
+
+impl GatedClock {
+    fn new(inner: Arc<FakeClock>) -> Arc<Self> {
+        Arc::new(Self {
+            inner,
+            gate: Mutex::new(None),
+        })
+    }
+
+    fn arm(&self, target: Option<Instant>) -> (mpsc::Receiver<()>, mpsc::Sender<()>) {
+        let (arrived_tx, arrived_rx) = mpsc::channel();
+        let (release_tx, release_rx) = mpsc::channel();
+        *self.gate.lock().unwrap() = Some(GatedGate {
+            target,
+            arrived: arrived_tx,
+            release: release_rx,
+        });
+        (arrived_rx, release_tx)
+    }
+}
+
+impl Clock for GatedClock {
+    fn now(&self) -> Instant {
+        self.inner.now()
+    }
+
+    fn wall(&self) -> SystemTime {
+        self.inner.wall()
+    }
+
+    fn sleep(&self, d: Duration) {
+        self.inner.sleep(d);
+    }
+
+    fn wait_until(&self, until: Option<Instant>, wait: &mut dyn FnMut(Option<Duration>)) {
+        let armed = self
+            .gate
+            .lock()
+            .unwrap()
+            .as_ref()
+            .is_some_and(|gate| gate.target == until);
+        if !armed {
+            self.inner.wait_until(until, wait);
+            return;
+        }
+        let (arrived, release) = {
+            let mut gate = self.gate.lock().unwrap();
+            let gate = gate.take().expect("the gated window was armed");
+            (gate.arrived, gate.release)
+        };
+        self.inner.wait_until(until, &mut |bound| {
+            // The inner clock recorded the park and notified `await_parked`;
+            // the outer condvar wait has not run, so the hub guard is held.
+            let _ignored = arrived.send(());
+            let _ignored = release.recv();
+            wait(bound);
+        });
+    }
+
+    fn subscribe(&self, waker: std::sync::Weak<dyn contract::clock::Wake>) {
+        self.inner.subscribe(waker);
+    }
+}
+
 /// Waits, at most `within` of real time, until the hub lock is free.
 /// `FakeClock::wait_until` records the caller's park and wakes
 /// `await_parked` before its wait closure runs, and the caller still holds
@@ -919,9 +1003,9 @@ fn models_lua(name: &str, url: &str) -> String {
 /// (`support::clock::park` over `Hub::wait`). A single `hub_unlocked()`
 /// read can land in that window, so the read repeats until one of them
 /// proves the release: success is the proof, and expiry fails naming the
-/// guard, as the assert this replaces did. No pause point can sit in that
-/// window from this file — it spans the fake clock and the shared park —
-/// so waiting for the release-proving read itself is the handshake.
+/// guard, as the assert this replaces did. The `GatedClock` above forces
+/// that window with a blocked gate, so the test proves this wait holds
+/// through it instead of merely passing after it.
 #[track_caller]
 fn await_unlocked(ext: &LuaExtension, within: Duration) {
     let deadline = Deadline::after(within);
@@ -948,15 +1032,17 @@ fn worker_emits_only_after_the_guard_releases() {
         Some(&pausing_hook(&hook_server.url())),
         &[("rz", &models_lua("rz", &server.url()))],
     );
-    let clock = FakeClock::new();
+    let fake = FakeClock::new();
+    let clock = GatedClock::new(Arc::clone(&fake));
+    let clock_dyn: Arc<dyn Clock> = clock.clone();
     let (sink, _) = Watching::new();
     let ext = Arc::new(
-        LuaExtension::new("ext", dir.path(), dir.path(), clock.clone())
+        LuaExtension::new("ext", dir.path(), dir.path(), Arc::clone(&clock_dyn))
             .with_diagnostics(sink.clone() as Arc<dyn DebugLog>),
     );
     let (arrived, release) = pause_observed_execution("rz");
     let (paused, resume) = pause_at_admission();
-    let mark = clock.now();
+    let mark = fake.now();
     let provider = LuaProvider::new(Arc::clone(&ext), "rz");
     let (tx, rx) = mpsc::channel();
     std::thread::spawn(move || {
@@ -984,11 +1070,54 @@ fn worker_emits_only_after_the_guard_releases() {
     // deadline plus the grace for a suspended call, while its callback
     // stays suspended. A transient hold no longer fails the read below.
     assert!(
-        clock.await_parked(mark + Duration::from_secs(60), WAIT),
+        fake.await_parked(mark + Duration::from_secs(60), WAIT),
         "the hook caller parked at its deadline"
     );
     assert!(
-        clock.await_parked(mark + Duration::from_secs(61), WAIT),
+        fake.await_parked(mark + Duration::from_secs(61), WAIT),
+        "the caller parked past its check"
+    );
+    // Gate the models caller's next park past its check: the window where
+    // the fake clock recorded the park but the caller still holds the hub
+    // guard. Both callers are parked above with the guard free; arming now
+    // cannot block their first park, and a zero advance wakes them into a
+    // re-park without moving time, so the gate catches the re-entry
+    // deterministically. The forced interleaving: hold `await_unlocked` in
+    // that window and prove it cannot complete until the release — a
+    // blocked gate plus channels, no sleeps or reruns.
+    let (gated_arrived, gated_release) = clock.arm(Some(mark + Duration::from_secs(61)));
+    fake.advance(Duration::ZERO);
+    Deadline::after(WAIT)
+        .recv(&gated_arrived)
+        .expect("the caller reached the gated park window");
+    {
+        let (done_tx, done_rx) = mpsc::channel();
+        {
+            let ext = Arc::clone(&ext);
+            std::thread::spawn(move || {
+                await_unlocked(&ext, WAIT);
+                let _ignored = done_tx.send(());
+            });
+        }
+        assert!(
+            Deadline::after(Duration::from_millis(200))
+                .recv(&done_rx)
+                .is_err(),
+            "await_unlocked completed while the guard was held in the park window"
+        );
+        assert!(
+            !ext.hub_unlocked(),
+            "the guard is held while the park window is gated"
+        );
+        gated_release
+            .send(())
+            .expect("the gated window takes its release");
+        Deadline::after(WAIT)
+            .recv(&done_rx)
+            .expect("await_unlocked completes after the release");
+    }
+    assert!(
+        fake.await_parked(mark + Duration::from_secs(61), WAIT),
         "the caller parked past its check"
     );
     // With the scheduler frozen past the rendezvous and the worker gated
@@ -997,11 +1126,10 @@ fn worker_emits_only_after_the_guard_releases() {
     // The parked signals above fire when each caller records its park,
     // before its condvar wait releases the hub guard, so the guard is read
     // only once a read proves the release.
-    await_unlocked(&ext, WAIT);
     assert!(sink.records().is_empty());
     // Stamps after this advance prove they ran after the pause: a stamp
     // from before it would end 5000 ms later.
-    clock.advance(Duration::from_millis(5000));
+    fake.advance(Duration::from_millis(5000));
     // Both releases go out before either answer is awaited: the frozen
     // scheduler delivers the worker's reply only once the hook resumes it.
     release.send(()).expect("the worker takes its release");
