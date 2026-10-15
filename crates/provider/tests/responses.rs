@@ -1576,14 +1576,20 @@ fn search_item_with(action: Value, extra: Value) -> Value {
     item
 }
 
-/// A recording saved by the `record` jig, response bytes only.
+/// A recording saved by the `record` jig, response bytes only, compiled in
+/// (`docs/ci.md`, "Selection").
 fn recorded(name: &str) -> Vec<u8> {
-    std::fs::read(
-        Path::new(env!("CARGO_MANIFEST_DIR"))
-            .join("tests/recordings")
-            .join(name),
-    )
-    .unwrap()
+    match name {
+        "openai-web-search.sse" => include_bytes!("recordings/openai-web-search.sse").to_vec(),
+        "openai-web-search-no-sources.sse" => {
+            include_bytes!("recordings/openai-web-search-no-sources.sse").to_vec()
+        }
+        "muse-web-search.sse" => include_bytes!("recordings/muse-web-search.sse").to_vec(),
+        "muse-web-search-sources.sse" => {
+            include_bytes!("recordings/muse-web-search-sources.sse").to_vec()
+        }
+        _ => panic!("unknown recording {name}"),
+    }
 }
 
 /// The recording's `response.output_item.done` items, in order. Lines

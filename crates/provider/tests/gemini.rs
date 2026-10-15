@@ -2080,14 +2080,13 @@ fn a_sent_declaration_without_a_schema_is_not_strict() {
     );
 }
 
-/// A recording saved by the `record` jig, response bytes only.
+/// A recording saved by the `record` jig, response bytes only, compiled in
+/// (`docs/ci.md`, "Selection").
 fn recorded(name: &str) -> Vec<u8> {
-    std::fs::read(
-        Path::new(env!("CARGO_MANIFEST_DIR"))
-            .join("tests/recordings")
-            .join(name),
-    )
-    .unwrap()
+    match name {
+        "gemini-web-search.sse" => include_bytes!("recordings/gemini-web-search.sse").to_vec(),
+        _ => panic!("unknown recording {name}"),
+    }
 }
 
 /// What the Gemini web-search recording holds, read independently of the

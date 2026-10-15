@@ -156,14 +156,23 @@ fn live_reviewer() {
             return;
         }
     };
-    let root = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-        .join("..")
-        .join("..")
-        .join("providers");
     let mut found = None;
-    for package in std::fs::read_dir(&root).unwrap() {
-        let data = config::read_providers(&package.unwrap().path()).unwrap();
-        if let Some(data) = data.into_iter().find(|d| d.name == provider_name) {
+    // Every first-party `providers/<name>.json`, compiled in: listing
+    // them at run time would read the repository at test time
+    // (`docs/ci.md`, "Selection").
+    const PROVIDER_FILES: &[&str] = &[
+        include_str!("../../../providers/anthropic/providers/anthropic.json"),
+        include_str!("../../../providers/codex/providers/codex.json"),
+        include_str!("../../../providers/gemini/providers/gemini.json"),
+        include_str!("../../../providers/muse/providers/muse.json"),
+        include_str!("../../../providers/openai/providers/openai.json"),
+        include_str!("../../../providers/opencode/providers/opencode-go.json"),
+        include_str!("../../../providers/opencode/providers/opencode-zen.json"),
+        include_str!("../../../providers/openrouter/providers/openrouter.json"),
+    ];
+    for text in PROVIDER_FILES {
+        let data: config::ProviderData = serde_json::from_str(text).unwrap();
+        if data.name == provider_name {
             found = Some(data);
             break;
         }

@@ -71,9 +71,6 @@ pub fn dir_name(name: &str) -> String {
 
 #[cfg(test)]
 mod tests {
-    use std::fs;
-    use std::path::Path;
-
     use super::{EXTENSION_SHORT_NAMES, SHORT_NAMES, dir_name, full_name, short_name};
 
     #[test]
@@ -148,19 +145,23 @@ mod tests {
     }
 
     /// The package directories under one top-level directory of Fiber's
-    /// own repository.
+    /// own repository, compiled in: listing them at run time would read
+    /// the repository at test time (`docs/ci.md`, "Selection").
     fn packages(top: &str) -> Vec<String> {
-        let dir = Path::new(env!("CARGO_MANIFEST_DIR"))
-            .join("../..")
-            .join(top);
-        let mut names: Vec<String> = fs::read_dir(&dir)
-            .unwrap_or_else(|e| panic!("{}: {e}", dir.display()))
-            .map(|entry| entry.unwrap())
-            .filter(|entry| entry.file_type().unwrap().is_dir())
-            .map(|entry| entry.file_name().to_string_lossy().into_owned())
-            .collect();
-        names.sort();
-        names
+        let names: &[&str] = match top {
+            "providers" => &[
+                "anthropic",
+                "codex",
+                "gemini",
+                "muse",
+                "openai",
+                "opencode",
+                "openrouter",
+            ],
+            "extensions" => &["memory"],
+            _ => &[],
+        };
+        names.iter().map(|name| (*name).to_owned()).collect()
     }
 
     #[test]

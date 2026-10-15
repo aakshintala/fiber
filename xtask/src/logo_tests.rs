@@ -382,9 +382,7 @@ fn mask_rejects_garbage_font_bytes() {
 
 #[test]
 fn checked_in_mask_is_the_right_size_with_ink_in_both_regions() {
-    let path =
-        std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../crates/tui/assets/logo-mask.bin");
-    let bytes = std::fs::read(&path).unwrap();
+    let bytes = include_bytes!("../../crates/tui/assets/logo-mask.bin");
     assert_eq!(bytes.len(), WIDTH as usize * HEIGHT as usize);
     let stride = WIDTH as usize;
     let wave_px = WAVE_PX as usize;

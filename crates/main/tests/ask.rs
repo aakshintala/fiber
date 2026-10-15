@@ -1899,9 +1899,10 @@ fn the_configured_budget_reaches_preamble_built() {
 /// rebuilt from the lines the probe kept: reasoning, then
 /// `response.incomplete` at the probe's 16-token cap, with no text.
 fn muse_recording() -> Response {
-    let file = Path::new(env!("CARGO_MANIFEST_DIR"))
-        .join("../../research/provider-errors/raw/muse-responses.ok-stream.json");
-    let probe: Value = serde_json::from_slice(&fs::read(file).unwrap()).unwrap();
+    let probe: Value = serde_json::from_str(include_str!(
+        "../../../research/provider-errors/raw/muse-responses.ok-stream.json"
+    ))
+    .unwrap();
     let body: String = probe["stream"]
         .as_array()
         .unwrap()
@@ -2759,44 +2760,50 @@ fn reviewer_model_valid(provider: &config::ProviderData) -> bool {
 
 #[test]
 fn first_party_reviewer_models_name_a_shipped_non_contributor_model() {
-    let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../providers");
-    let mut packages: Vec<PathBuf> = fs::read_dir(&root)
-        .unwrap()
-        .map(|entry| entry.unwrap().path())
-        .filter(|path| path.is_dir())
-        .collect();
-    packages.sort();
-    assert!(!packages.is_empty());
+    // Every first-party `providers/<name>.json`, compiled in: listing them
+    // at run time would read the repository at test time (`docs/ci.md`,
+    // "Selection").
+    const REVIEWED_PROVIDERS: &[&str] = &[
+        include_str!("../../../providers/anthropic/providers/anthropic.json"),
+        include_str!("../../../providers/codex/providers/codex.json"),
+        include_str!("../../../providers/gemini/providers/gemini.json"),
+        include_str!("../../../providers/muse/providers/muse.json"),
+        include_str!("../../../providers/openai/providers/openai.json"),
+        include_str!("../../../providers/opencode/providers/opencode-go.json"),
+        include_str!("../../../providers/opencode/providers/opencode-zen.json"),
+        include_str!("../../../providers/openrouter/providers/openrouter.json"),
+    ];
+    assert!(!REVIEWED_PROVIDERS.is_empty());
     let mut seen: Vec<String> = Vec::new();
-    for dir in &packages {
-        for provider in config::read_providers(dir).unwrap() {
-            // A provider whose `models()` lists live ships no static models, so
-            // its reviewer model can only be checked for not being a contributor.
-            let valid = if provider.models.is_empty() {
-                provider
-                    .reviewer_model
-                    .as_deref()
-                    .is_none_or(|m| !m.contains("contributor"))
-            } else {
-                reviewer_model_valid(&provider)
-            };
-            assert!(
-                valid,
-                "{} names {:?} outside its models or a contributor model",
-                provider.name, provider.reviewer_model
-            );
-            match provider.name.as_str() {
-                "muse" | "opencode-zen" => assert_eq!(
-                    provider.reviewer_model.as_deref(),
-                    Some("muse-spark-1.3"),
-                    "{}",
-                    provider.name
-                ),
-                "opencode-go" => assert_eq!(provider.reviewer_model, None, "opencode-go"),
-                _ => {}
-            }
-            seen.push(provider.name.clone());
+    for text in REVIEWED_PROVIDERS {
+        let provider: config::ProviderData =
+            serde_json::from_str(text).expect("provider data parses");
+        // A provider whose `models()` lists live ships no static models, so
+        // its reviewer model can only be checked for not being a contributor.
+        let valid = if provider.models.is_empty() {
+            provider
+                .reviewer_model
+                .as_deref()
+                .is_none_or(|m| !m.contains("contributor"))
+        } else {
+            reviewer_model_valid(&provider)
+        };
+        assert!(
+            valid,
+            "{} names {:?} outside its models or a contributor model",
+            provider.name, provider.reviewer_model
+        );
+        match provider.name.as_str() {
+            "muse" | "opencode-zen" => assert_eq!(
+                provider.reviewer_model.as_deref(),
+                Some("muse-spark-1.3"),
+                "{}",
+                provider.name
+            ),
+            "opencode-go" => assert_eq!(provider.reviewer_model, None, "opencode-go"),
+            _ => {}
         }
+        seen.push(provider.name.clone());
     }
     for name in ["muse", "opencode-zen", "opencode-go"] {
         assert!(seen.iter().any(|seen| seen == name), "{seen:?}");

@@ -126,6 +126,13 @@ fn is_repo_path(text: &str) -> bool {
         .any(|segment| segment == "docs" || segment == "prompt")
 }
 
+/// Whether `text`, the inside of a string literal joined onto a path,
+/// names a file: any non-empty literal counts but the junk `.`, `..`
+/// and `/`, which name no file on their own.
+fn is_joined_name(text: &str) -> bool {
+    !text.is_empty() && text != "." && text != ".." && text != "/"
+}
+
 /// Whether `tokens` root a path at the manifest directory: they hold
 /// the literal `CARGO_MANIFEST_DIR`, such as through `env!` inside
 /// `Path::new`. A join onto any other base, such as a temporary
@@ -152,12 +159,12 @@ fn is_receiver_boundary(ch: char) -> bool {
 }
 
 /// Whether `tokens` hold an identifier bound to the manifest directory
-/// by an earlier `let`.
-fn holds_bound(tokens: &[TokenTree], bound: &BTreeSet<String>) -> bool {
+/// itself by an earlier `let`, never one bound to a join on it.
+fn holds_root(tokens: &[TokenTree], root: &BTreeSet<String>) -> bool {
     tokens.iter().any(|tree| match tree {
-        TokenTree::Ident(ident) => bound.contains(ident.to_string().as_str()),
+        TokenTree::Ident(ident) => root.contains(ident.to_string().as_str()),
         TokenTree::Group(group) => {
-            holds_bound(&group.stream().into_iter().collect::<Vec<_>>(), bound)
+            holds_root(&group.stream().into_iter().collect::<Vec<_>>(), root)
         }
         TokenTree::Punct(_) | TokenTree::Literal(_) => false,
     })
@@ -185,14 +192,18 @@ fn all_literals(stream: TokenStream, out: &mut Vec<String>) {
 /// is compiled in (`docs/ci.md`, "Selection"). A file has a run-time
 /// read when its tokens hold, literals only, never comments:
 ///
-/// - `read_to_string`, `read` or `open` directly given a string literal
-///   naming a repository path;
+/// - `read_to_string`, `read`, `read_dir` or `open` directly given a string
+///   literal naming a repository path;
 /// - `concat!` holding the literal `CARGO_MANIFEST_DIR` and a literal
 ///   naming a repository path;
-/// - `join` given a literal naming a repository path, on a base rooted
-///   at the manifest directory: the receiver holds the literal, or
-///   holds an identifier an earlier `let` bound to the manifest
-///   directory (or to another bound identifier).
+/// - `join` given a literal naming a joined file, on a base rooted at
+///   the manifest directory, inside the argument of `read_to_string`,
+///   `read`, `read_dir` or `open`: the receiver holds the manifest
+///   literal, or holds an identifier an earlier `let` bound to the
+///   manifest directory itself. A `let` holding such a join reports
+///   its literals when a read takes the name. A join onto any other
+///   base, a join outside every read, and a second join onto a joined
+///   name never report.
 ///
 /// A literal nested inside another call is a computed path, not a named
 /// one: `read_to_string(home.join("docs/README.md"))` reads a temporary
@@ -207,15 +218,80 @@ pub(crate) fn runtime_read_mismatches(
     files: &[RustFile],
     members: &Members,
 ) -> Result<Vec<String>, String> {
+    /// The literals a top-level `join` call in `rhs` joins onto the
+    /// manifest directory or onto a name bound to it: the value a `let`
+    /// holding such a join reports when a read takes its name. A join
+    /// nested inside another call's argument, such as a read's own
+    /// argument, binds nothing: the read reports it inline instead.
+    fn join_on_root(rhs: &[TokenTree], root: &BTreeSet<String>) -> Option<Vec<String>> {
+        let mut literals = Vec::new();
+        // The tokens before the current one: the receiver a `join` builds
+        // on, as the walk's `preceding` holds it, groups included.
+        let mut receiver: Vec<TokenTree> = Vec::new();
+        let mut stream = rhs.iter().peekable();
+        while let Some(tree) = stream.next() {
+            if let TokenTree::Ident(name) = tree
+                && name == "join"
+                && let Some(TokenTree::Group(group)) = stream.peek()
+            {
+                if is_manifest_rooted(&receiver) || holds_root(&receiver, root) {
+                    for tree in group.stream() {
+                        if let TokenTree::Literal(lit) = tree
+                            && let Some(text) = string_literal(&lit.to_string())
+                            && is_joined_name(&text)
+                        {
+                            literals.push(text);
+                        }
+                    }
+                }
+                // The group belongs to this `join`: skipping it keeps the
+                // next receiver aligned with the token stream.
+                stream.next();
+                receiver.push(tree.clone());
+                receiver.push(TokenTree::Group((*group).clone()));
+            } else {
+                receiver.push(tree.clone());
+            }
+        }
+        (!literals.is_empty()).then_some(literals)
+    }
+    /// The literals a read reports through a bound name: when the
+    /// argument of a read is one name, directly or behind `&` with an
+    /// optional trailing comma, holding a one-level join, that join's
+    /// literals.
+    fn read_name(
+        group: &proc_macro2::Group,
+        joined: &BTreeMap<String, Vec<String>>,
+    ) -> Option<Vec<String>> {
+        let mut tokens = group.stream().into_iter().peekable();
+        while matches!(tokens.peek(), Some(TokenTree::Punct(mark)) if mark.as_char() == '&') {
+            tokens.next();
+        }
+        let name = match tokens.next() {
+            Some(TokenTree::Ident(name)) => name,
+            _ => return None,
+        };
+        match tokens.next() {
+            None => {}
+            Some(TokenTree::Punct(mark)) if mark.as_char() == ',' && tokens.next().is_none() => {}
+            _ => return None,
+        }
+        joined.get(&name.to_string()).cloned()
+    }
     /// If `stream` holds a plain binding next (`mut`, a name, an
     /// optional `: <type>`, `=`), rebind the name to its value through
-    /// the terminating `;`: insert it when the value holds the manifest
-    /// literal or a bound name, remove it otherwise. Walk the value
-    /// either way. Anything else stays in the stream for the caller.
+    /// the terminating `;`: a value joining onto the manifest directory
+    /// binds the name to the joined literals; a value holding the
+    /// manifest literal and no `join` binds the name to the manifest
+    /// directory itself; any other value unbinds the name. Walk the
+    /// value either way. Anything else stays in the stream for the
+    /// caller.
     fn bind(
         stream: &mut Peekable<std::vec::IntoIter<TokenTree>>,
-        bound: &mut BTreeSet<String>,
+        root: &mut BTreeSet<String>,
+        joined: &mut BTreeMap<String, Vec<String>>,
         found: &mut BTreeSet<String>,
+        in_read: bool,
     ) {
         if matches!(stream.peek(), Some(TokenTree::Ident(name)) if name == "mut")
             && stream.next().is_none()
@@ -267,25 +343,53 @@ pub(crate) fn runtime_read_mismatches(
             }
             rhs.push(tree);
         }
-        if is_manifest_rooted(&rhs) || holds_bound(&rhs, bound) {
-            bound.insert(name);
+        // Walk the value with the old bindings first: Rust resolves a
+        // shadowing `let`'s value to the previous bindings, so the
+        // value must report through them before the new one replaces
+        // them.
+        let shadowed = join_on_root(&rhs, root);
+        let rooted = is_manifest_rooted(&rhs)
+            && !rhs
+                .iter()
+                .any(|tree| matches!(tree, TokenTree::Ident(join) if join == "join"));
+        walk(rhs, root, joined, found, in_read);
+        if let Some(literals) = shadowed {
+            root.remove(name.as_str());
+            joined.insert(name, literals);
+        } else if rooted {
+            joined.remove(name.as_str());
+            root.insert(name);
         } else {
-            bound.remove(name.as_str());
+            root.remove(name.as_str());
+            joined.remove(name.as_str());
         }
-        walk(rhs, bound, found);
     }
     /// Walk a group's tokens with the bindings scoped to it: bindings
     /// made inside do not leak out, and an inner `let` never changes
     /// the outer set. The one place groups enter a fresh scope.
     fn walk_group(
         group: &proc_macro2::Group,
-        bound: &mut BTreeSet<String>,
+        root: &mut BTreeSet<String>,
+        joined: &mut BTreeMap<String, Vec<String>>,
         found: &mut BTreeSet<String>,
+        in_read: bool,
     ) {
         let tokens: Vec<TokenTree> = group.stream().into_iter().collect();
-        walk(tokens, &mut bound.clone(), found);
+        walk(
+            tokens,
+            &mut root.clone(),
+            &mut joined.clone(),
+            found,
+            in_read,
+        );
     }
-    fn walk(tokens: Vec<TokenTree>, bound: &mut BTreeSet<String>, found: &mut BTreeSet<String>) {
+    fn walk(
+        tokens: Vec<TokenTree>,
+        root: &mut BTreeSet<String>,
+        joined: &mut BTreeMap<String, Vec<String>>,
+        found: &mut BTreeSet<String>,
+        in_read: bool,
+    ) {
         let mut stream = tokens.into_iter().peekable();
         // The current expression back to its nearest boundary: the
         // receiver a `join` builds on.
@@ -299,11 +403,14 @@ pub(crate) fn runtime_read_mismatches(
                     preceding.clear();
                 }
                 TokenTree::Ident(ident) if ident == "let" => {
-                    bind(&mut stream, bound, found);
+                    bind(&mut stream, root, joined, found, in_read);
                     preceding.clear();
                 }
                 TokenTree::Ident(ident)
-                    if ident == "read_to_string" || ident == "read" || ident == "open" =>
+                    if ident == "read_to_string"
+                        || ident == "read"
+                        || ident == "read_dir"
+                        || ident == "open" =>
                 {
                     if matches!(stream.peek(), Some(TokenTree::Group(_)))
                         && let Some(TokenTree::Group(group)) = stream.next()
@@ -316,7 +423,10 @@ pub(crate) fn runtime_read_mismatches(
                                 found.insert(text);
                             }
                         }
-                        walk_group(&group, &mut *bound, found);
+                        if let Some(literals) = read_name(&group, joined) {
+                            found.extend(literals);
+                        }
+                        walk_group(&group, &mut *root, &mut *joined, found, true);
                         preceding.push(TokenTree::Group(group));
                     }
                     preceding.push(TokenTree::Ident(ident));
@@ -337,7 +447,7 @@ pub(crate) fn runtime_read_mismatches(
                                 literals.into_iter().filter(|literal| is_repo_path(literal)),
                             );
                         }
-                        walk_group(&group, &mut *bound, found);
+                        walk_group(&group, &mut *root, &mut *joined, found, in_read);
                         preceding.push(TokenTree::Group(group));
                     }
                     preceding.push(TokenTree::Ident(ident));
@@ -346,23 +456,25 @@ pub(crate) fn runtime_read_mismatches(
                     if matches!(stream.peek(), Some(TokenTree::Group(_)))
                         && let Some(TokenTree::Group(group)) = stream.next()
                     {
-                        if is_manifest_rooted(&preceding) || holds_bound(&preceding, bound) {
+                        if in_read
+                            && (is_manifest_rooted(&preceding) || holds_root(&preceding, root))
+                        {
                             for tree in group.stream() {
                                 if let TokenTree::Literal(lit) = tree
                                     && let Some(text) = string_literal(&lit.to_string())
-                                    && is_repo_path(&text)
+                                    && is_joined_name(&text)
                                 {
                                     found.insert(text);
                                 }
                             }
                         }
-                        walk_group(&group, &mut *bound, found);
+                        walk_group(&group, &mut *root, &mut *joined, found, in_read);
                         preceding.push(TokenTree::Group(group));
                     }
                     preceding.push(TokenTree::Ident(ident));
                 }
                 TokenTree::Group(group) => {
-                    walk_group(&group, &mut *bound, found);
+                    walk_group(&group, &mut *root, &mut *joined, found, in_read);
                     preceding.push(TokenTree::Group(group));
                 }
                 TokenTree::Ident(ident) => preceding.push(TokenTree::Ident(ident)),
@@ -383,9 +495,16 @@ pub(crate) fn runtime_read_mismatches(
             .source
             .parse()
             .map_err(|e| format!("{}: does not tokenise as Rust: {e}", f.path))?;
-        let mut bound = BTreeSet::new();
+        let mut root = BTreeSet::new();
+        let mut joined = BTreeMap::new();
         let mut found = BTreeSet::new();
-        walk(source.into_iter().collect(), &mut bound, &mut found);
+        walk(
+            source.into_iter().collect(),
+            &mut root,
+            &mut joined,
+            &mut found,
+            false,
+        );
         failures.extend(found.into_iter().map(|literal| {
             format!(
                 "{}: reads {literal} at run time; compile it in with include_str!",
