@@ -383,7 +383,7 @@ costs memory the first time a block in its language is highlighted, and
 highlighting more blocks adds almost nothing: on Linux x86_64, one Rust block
 adds 7,636 KiB and 100 blocks 7,524 KiB, one SQL block 25,780 KiB, one block
 in each of Rust, Python and JavaScript 8,480 KiB, and one in each of the 18
-languages 44,252 KiB, against the terminal's idle budget of 27,496 KiB in
+languages 44,252 KiB, against the terminal's idle budget of 20,088 KiB in
 `docs/performance.md` (October 13, 2026, `research/shell-parser-cost/`). tree-sitter-highlight with the same grammar
 crates compiles the same parse tables.
 
