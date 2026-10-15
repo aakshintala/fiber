@@ -109,6 +109,13 @@ pub(crate) struct Resumed<T> {
 
 pub(crate) const DELEGATE_CAP: usize = 10;
 
+pub(crate) fn cap_message() -> String {
+    format!(
+        "This session already runs {} delegates, the most it can run at once, so nothing was started; wait for one with `jobs wait` or stop one with `jobs stop`, then try again.",
+        DELEGATE_CAP
+    )
+}
+
 fn running_delegates(inner: &super::Inner) -> usize {
     inner
         .jobs

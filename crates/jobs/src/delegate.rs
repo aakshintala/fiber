@@ -350,10 +350,7 @@ impl Tool for DelegateSpawn {
                 output
             }
             Err(crate::registry::runs::Admit::Full) => {
-                let message = format!(
-                    "This session already runs {} delegates, the most it can run at once, so nothing was started; wait for one with `jobs wait` or stop one with `jobs stop`, then try again.",
-                    crate::registry::runs::DELEGATE_CAP
-                );
+                let message = crate::registry::runs::cap_message();
                 crate::registry::failed(ErrorCode::ToolError, message.clone(), message)
             }
             Err(crate::registry::runs::Admit::Start(source)) => {

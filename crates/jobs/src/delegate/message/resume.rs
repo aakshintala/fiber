@@ -72,10 +72,7 @@ impl DelegateMessage {
             Ok(resumed) => Attempt::Done(resumed_receipt(id, resumed)),
             Err(Resume::Full) => Attempt::Done(fail(
                 ErrorCode::ToolError,
-                format!(
-                    "This session already runs {} delegates, the most it can run at once, so nothing was started; wait for one with `jobs wait` or stop one with `jobs stop`, then try again.",
-                    crate::registry::runs::DELEGATE_CAP
-                ),
+                crate::registry::runs::cap_message(),
             )),
             Err(Resume::Unknown) => {
                 let message = unknown_message(id);

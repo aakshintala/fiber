@@ -9,6 +9,10 @@ use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::sync::{Arc, OnceLock};
 
+use contract::SessionId;
+use contract::clock::Clock;
+use contract::events::VariablesSource;
+
 static DEPTH: OnceLock<u32> = OnceLock::new();
 
 pub(crate) fn set_depth(depth: u32) {
@@ -18,10 +22,6 @@ pub(crate) fn set_depth(depth: u32) {
 pub(crate) fn depth() -> u32 {
     DEPTH.get().copied().unwrap_or(0)
 }
-
-use contract::SessionId;
-use contract::clock::Clock;
-use contract::events::VariablesSource;
 
 /// How large a delegate's `events.jsonl` may grow before the runner stops
 /// it as `failed` `output_cap`: the 5 GB every job's output file gets
