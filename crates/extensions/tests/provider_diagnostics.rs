@@ -13,7 +13,7 @@
 mod common;
 
 use std::collections::BTreeMap;
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 use std::sync::{
     Arc, Mutex,
     atomic::{AtomicBool, Ordering},
@@ -35,26 +35,12 @@ use contract::hook::{
 use contract::shapes::{ContentPart, DeclaredEffects, Tokens, Usage};
 use contract::tool::Cancel;
 use extensions::SessionExtensions;
-use fakes::Deadline;
 use fakes::clock::FakeClock;
+use fakes::{Deadline, NoLock};
 use serde_json::{Map, json};
 
 /// How long a test waits for one dispatch or signal before failing.
 const WAIT: Duration = Duration::from_secs(5);
-
-/// The session's per-path lock: this test never takes it, so it runs every
-/// call straight through.
-struct NoLock;
-
-impl contract::files::PathLock for NoLock {
-    fn hold(&self, _path: &Path, run: &mut dyn FnMut()) {
-        run();
-    }
-
-    fn hold_all(&self, _paths: &[PathBuf], run: &mut dyn FnMut()) {
-        run();
-    }
-}
 
 /// A cancel that never fires.
 struct Never;

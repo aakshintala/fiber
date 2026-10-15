@@ -8,7 +8,7 @@ use std::thread;
 use std::time::Duration;
 
 use config::{Config, ProjectKey, Sources};
-use fakes::Deadline;
+use fakes::{Deadline, FakeLock};
 use mlua::{Lua, Value as LuaValue};
 use serde_json::Value;
 
@@ -71,7 +71,7 @@ impl Setup {
         crate::host::Session {
             config,
             repo_settings: repo_settings.iter().map(|s| (*s).to_owned()).collect(),
-            locks: Arc::new(super::super::FakeLock::new()),
+            locks: Arc::new(FakeLock::new()),
         }
     }
 
@@ -278,7 +278,7 @@ fn two_sequential_sets_both_land() {
             let session = crate::host::Session {
                 config,
                 repo_settings: Vec::new(),
-                locks: Arc::new(crate::host::FakeLock::new()),
+                locks: Arc::new(FakeLock::new()),
             };
             let lua = Lua::new();
             let host = lua.create_table().unwrap();

@@ -9,7 +9,7 @@
 mod common;
 
 use common::write_record;
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 use std::sync::{Arc, mpsc};
 use std::time::Duration;
 
@@ -18,23 +18,9 @@ use config::{Config, ProjectKey, Secret, Sources, store_secret};
 use contract::events::CallStatus;
 use contract::hook::{AfterToolCall, AfterToolOutcome, Hooks};
 use extensions::{Providers, SessionExtensions};
-use fakes::Deadline;
 use fakes::clock::FakeClock;
+use fakes::{Deadline, NoLock};
 use serde_json::{Map, Value, json};
-
-/// The session's per-path lock, offered to `host.fs`: these tests never
-/// take it.
-struct NoLock;
-
-impl contract::files::PathLock for NoLock {
-    fn hold(&self, _path: &Path, run: &mut dyn FnMut()) {
-        run();
-    }
-
-    fn hold_all(&self, _paths: &[PathBuf], run: &mut dyn FnMut()) {
-        run();
-    }
-}
 
 /// How long a test waits for the extensions to load or a hook to answer
 /// before failing.

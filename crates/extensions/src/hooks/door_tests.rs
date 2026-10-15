@@ -27,8 +27,8 @@ use fakes::clock::FakeClock;
 use serde_json::json;
 
 use super::super::SessionExtensions;
-use crate::host::FakeLock;
 use crate::{Origin, Request, plan};
+use fakes::FakeLock;
 
 /// Wall-clock bound on a wait for a delivery.
 const WAIT: Duration = Duration::from_secs(5);
