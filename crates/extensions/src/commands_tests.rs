@@ -24,9 +24,9 @@ use serde_json::json;
 
 use super::SessionCommands;
 use crate::commands::CommandSource;
-use crate::host::FakeLock;
 use crate::lua::LuaExtension;
 use crate::{Origin, Request, plan};
+use fakes::FakeLock;
 
 /// How long a test waits for a load or a run before failing.
 const WAIT: Duration = Duration::from_secs(10);

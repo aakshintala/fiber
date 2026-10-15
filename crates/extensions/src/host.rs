@@ -32,9 +32,6 @@ pub(crate) mod timers;
 pub(crate) mod tool;
 mod ui;
 
-#[cfg(test)]
-pub(crate) use fs::FakeLock;
-
 /// One Lua extension's session: its own clone of the session's
 /// configuration, the settings keys a repository may set, and the session's
 /// per-path lock (`docs/extensions.md`, "Host calls").

@@ -32,8 +32,8 @@ use fakes::clock::FakeClock;
 use serde_json::{Map, Value, json};
 
 use super::super::SessionExtensions;
-use crate::host::FakeLock;
 use crate::{Origin, Request, plan};
+use fakes::FakeLock;
 
 struct Home {
     root: fakes::TempDir,

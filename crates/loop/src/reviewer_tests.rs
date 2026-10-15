@@ -24,7 +24,7 @@ use serde_json::{Map, Value, json};
 
 use super::shown::Shown;
 use super::{First, Second, read_first, read_second, render_reviewed, sections, system_prompt};
-use fakes::Deadline;
+use fakes::{Deadline, NoRules};
 
 const PROMPT: &str = include_str!("../prompt/reviewer.md");
 
@@ -434,23 +434,6 @@ fn a_verdict_needing_two_strip_passes_reads() {
         read_second("\"allow\"."),
         Ok(Second::Allow { reason: None })
     );
-}
-
-struct NoRules;
-
-impl contract::rules::Rules for NoRules {
-    fn read(&self) -> Result<contract::rules::StandingRules, contract::rules::RulesError> {
-        Ok(contract::rules::StandingRules::default())
-    }
-
-    fn remember(
-        &self,
-        _: &str,
-        _: &str,
-        _: &contract::SessionId,
-    ) -> Result<(), contract::rules::RulesError> {
-        Ok(())
-    }
 }
 
 /// A reviewed tool: its effects declare one execution, and it never runs.

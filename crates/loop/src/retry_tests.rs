@@ -11,12 +11,12 @@ use crate::{Loop, Model};
 use contract::ErrorCode;
 use contract::clock::{Clock, Wake};
 use contract::inbox::{Ack, Delivery, Message};
-use contract::rules::{Rules, RulesError, StandingRules};
+use contract::rules::Rules;
 use contract::shapes::{ContentPart, Failure, Origin, Sender};
 use contract::{CommandId, SessionId};
 use fakes::Deadline;
 use fakes::clock::FakeClock;
-use fakes::{Scripted, ScriptedProvider};
+use fakes::{NoRules, Scripted, ScriptedProvider};
 use log::Log;
 
 use super::{Decision, Retry};
@@ -596,18 +596,6 @@ impl Clock for AdvanceOnScheduledClock {
             .lock()
             .unwrap_or_else(PoisonError::into_inner)
             .push(waker);
-    }
-}
-
-struct NoRules;
-
-impl Rules for NoRules {
-    fn read(&self) -> Result<StandingRules, RulesError> {
-        Ok(StandingRules::default())
-    }
-
-    fn remember(&self, _: &str, _: &str, _: &SessionId) -> Result<(), RulesError> {
-        Ok(())
     }
 }
 

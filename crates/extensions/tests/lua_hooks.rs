@@ -21,23 +21,9 @@ use contract::hook::{
 use contract::inbox::Delivery;
 use contract::shapes::{ContentPart, DeclaredEffects};
 use extensions::{LuaExtension, SessionExtensions};
-use fakes::Deadline;
 use fakes::clock::FakeClock;
+use fakes::{Deadline, NoLock};
 use serde_json::{Map, json};
-
-/// The session's per-path lock, offered to `host.fs`: this test never
-/// takes it, so it runs every call straight through.
-struct NoLock;
-
-impl contract::files::PathLock for NoLock {
-    fn hold(&self, _path: &Path, run: &mut dyn FnMut()) {
-        run();
-    }
-
-    fn hold_all(&self, _paths: &[PathBuf], run: &mut dyn FnMut()) {
-        run();
-    }
-}
 
 /// How long a test waits for a signal or an answer before failing. A hook
 /// that is stopped returns on the fake clock, so this fires only when one

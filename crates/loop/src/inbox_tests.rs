@@ -22,7 +22,7 @@ use super::{TurnInput, Waited};
 use crate::naming::{Named, PINNED};
 use crate::rewind::command::REWOUND_CLOSING;
 use crate::{Loop, Model};
-use fakes::Deadline;
+use fakes::{Deadline, NoRules};
 
 const DEADLINE: Duration = Duration::from_secs(10);
 
@@ -315,18 +315,6 @@ fn start_records_the_worktree_on_session_started() {
     let lines = log::read(&home.path().join("s_test")).unwrap();
     assert_eq!(lines[0].kind, "session_started");
     assert!(!lines[0].payload.contains_key("worktree"));
-}
-
-struct NoRules;
-
-impl contract::rules::Rules for NoRules {
-    fn read(&self) -> Result<contract::rules::StandingRules, contract::rules::RulesError> {
-        Ok(contract::rules::StandingRules::default())
-    }
-
-    fn remember(&self, _: &str, _: &str, _: &SessionId) -> Result<(), contract::rules::RulesError> {
-        Ok(())
-    }
 }
 
 #[test]
