@@ -244,15 +244,27 @@ fn limits(spec: &ServerSpec) -> net::Limits {
 }
 
 /// Starts one spec on its transport and runs the handshake: the only
-/// production caller of [`Server::start`]. Session start ([`open`]) and
-/// every lazy first start and restart ([`Slot::serve`]) both go through
-/// here, so the guard runs immediately before each spawn.
-pub(crate) fn launch(
+/// production caller of [`Server::start_observed`]. Session start
+/// ([`open_observed`]) and every lazy first start and restart
+/// ([`Slot::serve`]) both go through here, so the guard runs immediately
+/// before each spawn. One connection guard starts per attempt through
+/// `timing`: owned here and threaded to the tool-list boundary, which
+/// consumes it; what remains drops here on the failure path, so every
+/// entered attempt completes exactly once. `None` stays untimed. Never
+/// wraps a multi-server loop: each server starts its own.
+pub(crate) fn launch_observed(
     spec: &ServerSpec,
     workspace: &Path,
     clock: &Arc<dyn Clock>,
     version: &str,
+    timing: Option<contract::diag::Timing>,
 ) -> Result<crate::server::OpenServer, crate::server::StartError> {
+    // One guard per launch, from starting or dialing until the tool list
+    // is in hand. No clock read happens here beyond what the timing
+    // callable itself reads.
+    let mut connection = timing
+        .as_ref()
+        .and_then(|timing| timing(contract::diag::Op::McpConnect, None, None));
     match &spec.transport {
         Transport::Stdio(stdio) => {
             if let Some(run) = stdio.run.as_ref()
@@ -285,7 +297,7 @@ pub(crate) fn launch(
                 }
             }
             let (command, args) = stdio.program();
-            Server::start(
+            Server::start_observed(
                 command,
                 args,
                 &env,
@@ -293,9 +305,10 @@ pub(crate) fn launch(
                 clock,
                 spec.startup_timeout,
                 version,
+                &mut connection,
             )
         }
-        Transport::Http { url, tokens } => crate::http::start(
+        Transport::Http { url, tokens } => crate::http::start_observed(
             url,
             tokens.clone(),
             ureq::Proxy::try_from_env(),
@@ -303,6 +316,8 @@ pub(crate) fn launch(
             clock,
             spec.startup_timeout,
             version,
+            timing.clone(),
+            &mut connection,
         ),
     }
 }
@@ -340,6 +355,9 @@ pub struct Started {
 pub struct Servers {
     pub(crate) slots: Arc<Mutex<Vec<Arc<Slot>>>>,
     resources_declared: AtomicBool,
+    /// The timing context attempts start their connection guards from:
+    /// `None` starts untimed, as before. Never logged.
+    timing: Option<contract::diag::Timing>,
 }
 
 impl Servers {
@@ -385,6 +403,13 @@ impl Servers {
     pub fn resources_declared(&self) -> bool {
         self.resources_declared.load(Ordering::SeqCst)
     }
+
+    /// The timing context this start's attempts run under, for a later
+    /// load that starts more servers into it. A clone of the context;
+    /// reading it starts no guard.
+    pub fn timing(&self) -> Option<contract::diag::Timing> {
+        self.timing.clone()
+    }
 }
 
 /// The default startup deadline: 5 seconds (`docs/configuration.md`).
@@ -407,6 +432,29 @@ pub fn start(
     cache: &Path,
     clock: &Arc<dyn Clock>,
     version: &str,
+) -> Started {
+    start_observed(
+        specs, workspace, artifacts, images, cache, clock, version, None,
+    )
+}
+
+/// As [`start`], timing every session-start attempt's connection through
+/// `timing` and keeping the context on the servers for later attempts:
+/// cached declarations start nothing and emit nothing. `None` stays
+/// untimed, as before.
+#[allow(
+    clippy::too_many_arguments,
+    reason = "the observed companion adds only the Timing"
+)]
+pub fn start_observed(
+    specs: Vec<ServerSpec>,
+    workspace: &Path,
+    artifacts: &Path,
+    images: Arc<dyn Images>,
+    cache: &Path,
+    clock: &Arc<dyn Clock>,
+    version: &str,
+    timing: Option<contract::diag::Timing>,
 ) -> Started {
     let mut lazy = Vec::new();
     let mut session = Vec::new();
@@ -432,11 +480,12 @@ pub fn start(
         let cache = cache.to_path_buf();
         let clock = Arc::clone(clock);
         let version = version.to_owned();
+        let timing = timing.clone();
         thread::spawn(move || {
             done.send((
                 index,
-                open(
-                    spec, &workspace, &artifacts, &images, &cache, &clock, &version,
+                open_observed(
+                    spec, &workspace, &artifacts, &images, &cache, &clock, &version, timing,
                 ),
             ))
             .unwrap_or(());
@@ -472,13 +521,14 @@ pub fn start(
     // never calls one never spawns it. Their prompts come from the same
     // cached lists, so a `/name` is answered before anything starts.
     for (_, spec, cached) in lazy {
-        let slot = Slot::lazy(
+        let slot = Slot::lazy_observed(
             spec.clone(),
             workspace,
             cache,
             clock,
             version,
             cached.clone(),
+            timing.clone(),
         );
         let link: Weak<Slot> = Arc::downgrade(&slot);
         slots.push(slot);
@@ -516,6 +566,7 @@ pub fn start(
         servers: Servers {
             slots,
             resources_declared: AtomicBool::new(false),
+            timing,
         },
         prompts: Prompts::collect(sources),
         required_failed,
@@ -546,6 +597,8 @@ pub(crate) enum Opened {
     },
 }
 
+/// Session start without timing: direct-start tests only.
+#[cfg(test)]
 pub(crate) fn open(
     spec: ServerSpec,
     workspace: &Path,
@@ -555,11 +608,33 @@ pub(crate) fn open(
     clock: &Arc<dyn Clock>,
     version: &str,
 ) -> Opened {
+    open_observed(
+        spec, workspace, artifacts, images, cache, clock, version, None,
+    )
+}
+
+/// As [`open`], timing the attempt's connection through `timing`: the
+/// guard is consumed at the tool-list boundary, before prompt discovery.
+/// `None` stays untimed, as before.
+#[allow(
+    clippy::too_many_arguments,
+    reason = "the observed companion adds only the Timing"
+)]
+pub(crate) fn open_observed(
+    spec: ServerSpec,
+    workspace: &Path,
+    artifacts: &Path,
+    images: &Arc<dyn Images>,
+    cache: &Path,
+    clock: &Arc<dyn Clock>,
+    version: &str,
+    timing: Option<contract::diag::Timing>,
+) -> Opened {
     let name = spec.name.clone();
     let required = spec.required;
     let timeout = spec.startup_timeout;
     let remote = spec.remote();
-    let open = match launch(&spec, workspace, clock, version) {
+    let open = match launch_observed(&spec, workspace, clock, version, timing.clone()) {
         Ok(open) => open,
         Err(error) => {
             return if required {
@@ -579,7 +654,7 @@ pub(crate) fn open(
     cache::write(cache, &name, &spec.key(), &live);
     let listed_prompts = live.prompts.clone();
     let tools = live.tools.clone();
-    let slot = Slot::running(
+    let slot = Slot::running_observed(
         spec.clone(),
         workspace,
         cache,
@@ -587,6 +662,7 @@ pub(crate) fn open(
         version,
         open.server,
         live,
+        timing,
     );
     let link: Weak<Slot> = Arc::downgrade(&slot);
     let listed = sources_of(&name, &listed_prompts, &link, spec.call_timeout);

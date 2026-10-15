@@ -10,7 +10,7 @@
 
 use std::collections::HashSet;
 use std::path::{Path, PathBuf};
-use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
+use std::sync::{Arc, Condvar, Mutex, MutexGuard, PoisonError};
 use std::time::Duration;
 
 use contract::ErrorCode;
@@ -40,6 +40,19 @@ pub(crate) struct Slot {
     cache: PathBuf,
     clock: Arc<dyn Clock>,
     version: String,
+    /// The timing context an attempt starts its connection guard from:
+    /// `None` starts untimed, as before. Never logged.
+    timing: Option<contract::diag::Timing>,
+    /// One in-flight start at a time: the flag with its wake. The flag is
+    /// set and cleared under the mutex but never held across a start,
+    /// so a concurrent start or stop waits for the attempt's outcome
+    /// instead of spawning beside it.
+    lease: Mutex<bool>,
+    wake: Condvar,
+    /// Test-only: signaled once when an acquirer finds the lease held,
+    /// so a test releases its hold only after the contender waits.
+    #[cfg(test)]
+    wait_hook: Mutex<Option<std::sync::mpsc::Sender<()>>>,
     /// Whether the server offers resources to read, fixed from the lists
     /// the slot was declared from: the session keeps its declared tools,
     /// so a server that stops advertising resources is still asked.
@@ -130,6 +143,7 @@ impl Slot {
         clock: &Arc<dyn Clock>,
         version: &str,
         state: State,
+        timing: Option<contract::diag::Timing>,
     ) -> Arc<Self> {
         let resources = match &state {
             State::NotStarted { cached } => cached.resources,
@@ -143,6 +157,11 @@ impl Slot {
             clock: Arc::clone(clock),
             version: version.to_owned(),
             resources,
+            timing,
+            lease: Mutex::new(false),
+            wake: Condvar::new(),
+            #[cfg(test)]
+            wait_hook: Mutex::new(None),
             state: Mutex::new(state),
             #[cfg(test)]
             run_after_serve: Mutex::new(None),
@@ -151,6 +170,8 @@ impl Slot {
 
     /// A slot declared from `cached`, starting nothing until the first
     /// call to one of its tools or the first run of one of its prompts.
+    /// Prompt tests only: production declares through `lazy_observed`.
+    #[cfg(test)]
     pub(crate) fn lazy(
         spec: ServerSpec,
         workspace: &Path,
@@ -159,6 +180,20 @@ impl Slot {
         version: &str,
         cached: Cached,
     ) -> Arc<Self> {
+        Self::lazy_observed(spec, workspace, cache, clock, version, cached, None)
+    }
+
+    /// As [`Slot::lazy`], keeping `timing` for the first attempt's
+    /// connection guard: `None` starts untimed, as before.
+    pub(crate) fn lazy_observed(
+        spec: ServerSpec,
+        workspace: &Path,
+        cache: &Path,
+        clock: &Arc<dyn Clock>,
+        version: &str,
+        cached: Cached,
+        timing: Option<contract::diag::Timing>,
+    ) -> Arc<Self> {
         Self::new(
             spec,
             workspace,
@@ -166,12 +201,19 @@ impl Slot {
             clock,
             version,
             State::NotStarted { cached },
+            timing,
         )
     }
 
-    /// A slot for a server [`Server::start`] already runs, holding its raw
-    /// `listed` lists for the removed-tool and cache checks.
-    pub(crate) fn running(
+    /// A slot for a server already running, holding its raw `listed`
+    /// lists for the removed-tool and cache checks, keeping `timing` for
+    /// a later restart or renewal attempt's connection guard: `None` stays
+    /// untimed.
+    #[allow(
+        clippy::too_many_arguments,
+        reason = "the observed companion adds only the Timing"
+    )]
+    pub(crate) fn running_observed(
         spec: ServerSpec,
         workspace: &Path,
         cache: &Path,
@@ -179,6 +221,7 @@ impl Slot {
         version: &str,
         server: Server,
         listed: Cached,
+        timing: Option<contract::diag::Timing>,
     ) -> Arc<Self> {
         Self::new(
             spec,
@@ -192,6 +235,7 @@ impl Slot {
                 listed,
                 restarted: false,
             },
+            timing,
         )
     }
 
@@ -207,60 +251,99 @@ impl Slot {
 
     /// The running server, starting it first when the slot is not
     /// started, and restarting it when it died with its restart unused.
-    /// The lock is held across [`Server::start`], so a concurrent call
-    /// waits for that start (bounded by the startup deadline) and then
-    /// sees the same outcome, and only the call that ran it carries its
-    /// lines.
+    /// One attempt runs at a time under the slot's lease: a concurrent
+    /// call waits for that attempt's outcome, bounded by the startup
+    /// deadline, and then sees the same running server or the same
+    /// failure, and only the call that ran it carries its lines. The
+    /// state lock is released for the launch, and the attempt is
+    /// reserved as down meanwhile, so a late death report for the server
+    /// being replaced finds no running server and records nothing; no
+    /// diagnostic guard is created or dropped with either lock held.
     pub(crate) fn serve(&self) -> Served {
-        let mut state = lock(&self.state);
+        // The lease, held across the attempt and released on unwind too:
+        // a second start never spawns beside this one, and a stop waits
+        // for its result.
+        let _flight = self.acquire();
         let mut records = Vec::new();
         // What the next start is: a first start, a restart after a
         // death, or a renewal after an expiry. Only a restart is
         // recorded as ready; a renewal keeps the restart it replaces.
-        let (listed, restart, ready) = match &*state {
-            State::Running {
-                server,
-                listed,
-                restarted,
-                ..
-            } => {
-                if server.is_expired() {
-                    // The session expired while idle: the next call starts
-                    // a new one, keeping the restart, with no record.
-                    (listed.clone(), *restarted, false)
-                } else if !server.is_gone() {
-                    return Served::Up(Arc::clone(server), records);
-                } else {
-                    // It died while idle: this call is the first to see it.
-                    let record = died(&self.spec.name, !*restarted, self.spec.remote());
-                    records.push(ServerRecord::Failed(record.clone()));
-                    if *restarted {
-                        *state = State::Dead {
-                            error: record.error.clone(),
+        let (listed, restart, ready) = {
+            let mut state = lock(&self.state);
+            match &*state {
+                State::Running {
+                    server,
+                    listed,
+                    restarted,
+                    ..
+                } => {
+                    if server.is_expired() {
+                        // The session expired while idle: the next call starts
+                        // a new one, keeping the restart, with no record.
+                        let listed = listed.clone();
+                        let restart = *restarted;
+                        *state = State::Down {
+                            listed: listed.clone(),
                         };
-                        return Served::Failed(Box::new(RunFailed {
-                            error: record.error,
-                            records,
-                        }));
+                        (listed, restart, false)
+                    } else if !server.is_gone() {
+                        return Served::Up(Arc::clone(server), records);
+                    } else {
+                        // It died while idle: this call is the first to see it.
+                        let record = died(&self.spec.name, !*restarted, self.spec.remote());
+                        records.push(ServerRecord::Failed(record.clone()));
+                        if *restarted {
+                            *state = State::Dead {
+                                error: record.error.clone(),
+                            };
+                            return Served::Failed(Box::new(RunFailed {
+                                error: record.error,
+                                records,
+                            }));
+                        }
+                        let listed = listed.clone();
+                        *state = State::Down {
+                            listed: listed.clone(),
+                        };
+                        (listed, true, true)
                     }
-                    (listed.clone(), true, true)
+                }
+                State::Down { listed } => (listed.clone(), true, true),
+                State::Dead { error } => {
+                    return Served::Failed(Box::new(RunFailed {
+                        error: error.clone(),
+                        records,
+                    }));
+                }
+                // A first start: reserved as down for the launch, so a
+                // late report during it records nothing, exactly as for a
+                // replacement. A failed first start is still the server's
+                // one death.
+                State::NotStarted { cached } => {
+                    let listed = cached.clone();
+                    *state = State::Down {
+                        listed: listed.clone(),
+                    };
+                    (listed, false, false)
                 }
             }
-            State::Down { listed } => (listed.clone(), true, true),
-            State::Dead { error } => {
-                return Served::Failed(Box::new(RunFailed {
-                    error: error.clone(),
-                    records,
-                }));
-            }
-            State::NotStarted { cached } => (cached.clone(), false, false),
         };
         let timeout = self.spec.startup_timeout;
         let name = self.spec.name.clone();
+        // The slot's own context follows the attempt; the launch owns
+        // the guard and consumes it at the tool-list boundary, dropping
+        // what remains on the failure path here, with no lock held.
+        let timing = self.timing.clone();
         // Every spawn runs the spec's guard first: a cached server keeps
         // its spec unspawned until its first call, so a check at
         // preparation alone would run a file created in between unapproved.
-        match crate::start::launch(&self.spec, &self.workspace, &self.clock, &self.version) {
+        match crate::start::launch_observed(
+            &self.spec,
+            &self.workspace,
+            &self.clock,
+            &self.version,
+            timing,
+        ) {
             Ok(open) => {
                 // The session keeps the tools it declared, because a tool
                 // set that changes mid-session misses the whole prompt
@@ -271,7 +354,10 @@ impl Slot {
                 }
                 let tools = names(&live.tools);
                 let server = Arc::new(open.server);
-                *state = State::Running {
+                // Published under the lock before the lease is released,
+                // so a waiter sees the running server, never the
+                // reservation.
+                *lock(&self.state) = State::Running {
                     server: Arc::clone(&server),
                     live: tools,
                     listed: live,
@@ -290,7 +376,7 @@ impl Slot {
                 record.will_restart = !restart;
                 let failure = record.error.clone();
                 records.push(ServerRecord::Failed(record));
-                *state = if restart {
+                *lock(&self.state) = if restart {
                     State::Dead {
                         error: failure.clone(),
                     }
@@ -441,11 +527,55 @@ impl Slot {
         Some(record)
     }
 
+    /// Takes the slot's start lease, waiting while another attempt holds
+    /// it: one start runs at a time, and a stop waits for the in-flight
+    /// one. The mutex is never held across a start, only across the flag;
+    /// the guard releases it on unwind too, so a panic never wedges the
+    /// slot.
+    fn acquire(&self) -> LeaseGuard<'_> {
+        let mut busy = lock(&self.lease);
+        while *busy {
+            #[cfg(test)]
+            self.note_lease_wait();
+            busy = self.wake.wait(busy).unwrap_or_else(PoisonError::into_inner);
+        }
+        *busy = true;
+        LeaseGuard {
+            lease: &self.lease,
+            wake: &self.wake,
+        }
+    }
+
+    /// Whether both locks are free right now: the state lock and the
+    /// lease lock. Test-only: a test's timing guard calls it while the
+    /// attempt's guard drops, proving no diagnostic drop holds either
+    /// lock. A mutant that moves the drop under one fails the test.
+    #[cfg(test)]
+    pub(crate) fn locks_free(&self) -> bool {
+        self.state.try_lock().is_ok() && self.lease.try_lock().is_ok()
+    }
+
+    /// Signals once when an acquirer finds the lease held. Test-only:
+    /// installed before a contender starts, taken on its first wait.
+    #[cfg(test)]
+    fn note_lease_wait(&self) {
+        if let Some(hook) = lock(&self.wait_hook).take() {
+            hook.send(()).unwrap_or(());
+        }
+    }
+
+    /// Installs the one-shot [`Slot::note_lease_wait`] signal. Test-only.
+    #[cfg(test)]
+    pub(crate) fn on_lease_wait(&self, hook: std::sync::mpsc::Sender<()>) {
+        *lock(&self.wait_hook) = Some(hook);
+    }
+
     /// Stops the running server, if any, and leaves the slot dead from any
-    /// state, so nothing spawns or restarts after the stop. A slot an
-    /// in-flight start holds is stopped after that start returns, bounded
-    /// by the startup deadline.
+    /// state, so nothing spawns or restarts after the stop. A slot with an
+    /// in-flight start is stopped after that start returns, bounded by the
+    /// startup deadline: the stop takes the same lease the start holds.
     pub(crate) fn stop(&self) {
+        let _flight = self.acquire();
         let mut state = lock(&self.state);
         let error = match &*state {
             State::Dead { error } => error.clone(),
@@ -515,6 +645,20 @@ pub(crate) fn removed(server: &str, tool: &str) -> String {
     format!(
         "The MCP server `{server}` no longer has the tool `{tool}`; it stays declared until the next session.",
     )
+}
+
+/// One in-flight start's hold on its slot: clearing the flag and waking
+/// the waiters on drop, so an unwind releases the lease too.
+struct LeaseGuard<'a> {
+    lease: &'a Mutex<bool>,
+    wake: &'a Condvar,
+}
+
+impl Drop for LeaseGuard<'_> {
+    fn drop(&mut self) {
+        *lock(self.lease) = false;
+        self.wake.notify_all();
+    }
 }
 
 fn lock<T>(state: &Mutex<T>) -> MutexGuard<'_, T> {

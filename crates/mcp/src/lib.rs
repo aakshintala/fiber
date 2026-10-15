@@ -23,6 +23,9 @@ mod sse;
 mod start;
 #[cfg(test)]
 mod test_support;
+#[cfg(test)]
+#[path = "timing_tests.rs"]
+mod timing_tests;
 mod token;
 mod tool;
 mod wait;
@@ -34,6 +37,6 @@ pub use registry::stop_every_start;
 pub use resources::{RESOURCES_TOOL, resources_definition};
 pub use start::{
     DEFAULT_CALL_TIMEOUT, DEFAULT_STARTUP_TIMEOUT, Program, SecretError, SecretReader, ServerSpec,
-    Servers, Started, StdioSpec, Transport, start,
+    Servers, Started, StdioSpec, Transport, start, start_observed,
 };
 pub use token::{Token, TokenError, store_token, token_key, url_has_userinfo};
