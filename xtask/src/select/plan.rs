@@ -184,9 +184,9 @@ pub(crate) fn base_rows_skipped(event: &str, release_paths: &[String]) -> Vec<&'
             continue;
         }
         let mut narrowed = false;
-        for (index, (_, crates)) in BASE_ROWS.iter().enumerate() {
+        for ((_, crates), chosen) in BASE_ROWS.iter().zip(selected.iter_mut()) {
             if crates.iter().any(|dir| path.starts_with(dir)) {
-                selected[index] = true;
+                *chosen = true;
                 narrowed = true;
             }
         }

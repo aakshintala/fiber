@@ -169,7 +169,7 @@ fn parse_skip_rows(value: &str) -> Result<Vec<String>, String> {
     value
         .split(',')
         .map(|name| {
-            if timing.iter().any(|timed| *timed == name) {
+            if timing.contains(&name) {
                 Ok(name.to_owned())
             } else {
                 Err(format!(

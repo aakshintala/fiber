@@ -334,13 +334,13 @@ fn comment(
     // summary names each skipped row (`docs/ci.md`, "Selection"). The
     // judge is unchanged: a row missing its base metric stays advisory
     // with no ratio and no gate through the existing unavailable arm.
-    if let Base::Ok(results) = base {
-        if !results.skipped.is_empty() {
-            out.push_str(&format!(
-                "The base pass skipped {}: the selection did not choose them (`docs/ci.md`, \"Selection\").\n",
-                results.skipped.join(", ")
-            ));
-        }
+    if let Base::Ok(results) = base
+        && !results.skipped.is_empty()
+    {
+        out.push_str(&format!(
+            "The base pass skipped {}: the selection did not choose them (`docs/ci.md`, \"Selection\").\n",
+            results.skipped.join(", ")
+        ));
     }
     out.push('\n');
     for cpu in cpus {
