@@ -489,7 +489,7 @@ fn with_no_files_the_configuration_is_the_built_in_defaults() {
                     "cards": ["session", "changed_files", "delegates", "jobs", "quota"],
                     "width": 21
                 },
-                "rail": {"width": 15},
+                "rail": {"shown": true, "width": 15},
                 "reduced_motion": false
             }
         })
