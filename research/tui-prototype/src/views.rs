@@ -21,6 +21,7 @@ use ratatui::style::{Color, Style};
 use ratatui::text::Span;
 use serde_json::json;
 use std::io::{self, Write};
+use unicode_width::UnicodeWidthStr;
 
 /// Every `--view-case` case, named in README.md.
 const CASES: &[Case<Look>] = &[
@@ -401,13 +402,30 @@ fn mark(word: &str, current: bool) -> Span<'static> {
     }
 }
 
+/// One search match's header row: the path bold, with the owning turn's
+/// number dim and right-aligned after it. With no owning turn, or without
+/// room for the path, a one-cell gap and the label, the path stands alone
+/// and is never cut to make room: `fit` would cut the row's left side
+/// rather than squeeze the label in.
+fn match_header(path: &str, turn: Option<usize>, w: usize) -> super::Row {
+    let label = turn.map(|n| format!("turn {}", n + 1));
+    match label {
+        Some(label) if path.width() + 1 + label.width() <= w => row(vec![
+            sp(path.to_string(), bold()),
+            super::t(),
+            sp(label, dim()),
+        ]),
+        _ => row(vec![sp(path.to_string(), bold())]),
+    }
+}
+
 /// Search results: every match one row each, with the lines around it.
 /// The first match is the current one.
-fn search_results_rows() -> Vec<super::Row> {
+fn search_results_rows(w: usize) -> Vec<super::Row> {
     vec![
         row(vec![sp("3 of 5 · ⌕ lock", dim())]),
         super::Row::default(),
-        row(vec![sp("crates/log/tests/lock.rs:41", bold())]),
+        match_header("crates/log/tests/lock.rs:41", Some(2), w),
         row(vec![
             sp("    let _guard = ", Style::new()),
             mark("lock", true),
@@ -415,7 +433,7 @@ fn search_results_rows() -> Vec<super::Row> {
         ]),
         row(vec![sp("    map.insert(path, _guard);", Style::new())]),
         super::Row::default(),
-        row(vec![sp("crates/tui/src/main.rs:1905", bold())]),
+        match_header("crates/tui/src/main.rs:1905", Some(6), w),
         row(vec![sp("    // the handoff point", dim())]),
         row(vec![
             sp("    holds the ", Style::new()),
@@ -424,7 +442,7 @@ fn search_results_rows() -> Vec<super::Row> {
         ]),
         row(vec![sp("    while running {", Style::new())]),
         super::Row::default(),
-        row(vec![sp("crates/panel/src/cards.rs:88", bold())]),
+        match_header("crates/panel/src/cards.rs:88", Some(13), w),
         row(vec![sp("    let cards = vec![];", Style::new())]),
         row(vec![
             sp("    for c in ", Style::new()),
@@ -823,7 +841,7 @@ fn body_rows(c: &Look, cols: usize) -> Vec<Placed> {
         Kind::SearchResults => {
             let mut out = placed(vec![view_header("Search", "⌕ lock")], full);
             out.push(blank());
-            out.extend(placed(search_results_rows(), full));
+            out.extend(placed(search_results_rows(cols), full));
             out
         }
         Kind::Tools => {
@@ -1384,8 +1402,12 @@ mod tests {
             let t = text(&c, cols, 48);
             assert!(t.contains("3 of 5"), "no count");
             assert!(t.contains("crates/log/tests/lock.rs:41"), "no first match");
+            assert!(t.contains("turn 3"), "no first turn label");
             assert!(t.contains("let _guard = "), "no surrounding line");
             assert!(t.contains("crates/tui/src/main.rs:1905"), "no second match");
+            assert!(t.contains("turn 7"), "no second turn label");
+            assert!(t.contains("crates/panel/src/cards.rs:88"), "no third match");
+            assert!(t.contains("turn 14"), "no third turn label");
             assert!(t.contains("Enter jumps to the match"), "no jump hint");
         }
     }
@@ -1393,7 +1415,7 @@ mod tests {
     #[test]
     fn search_results_marks_the_current_match_brighter() {
         use ratatui::style::Color;
-        let rows = search_results_rows();
+        let rows = search_results_rows(160);
         let mut current = 0;
         let mut other = 0;
         for r in &rows {
@@ -1411,6 +1433,97 @@ mod tests {
         }
         assert_eq!(current, 1, "not exactly one current match");
         assert_eq!(other, 2, "not two other matches");
+    }
+
+    #[test]
+    fn search_label_is_dim_and_right_aligned() {
+        for cols in [160, NARROW] {
+            let c = parse_case("search-results");
+            let buf = buffer(&c, cols, 48);
+            for (path, label) in [
+                ("crates/log/tests/lock.rs:41", "turn 3"),
+                ("crates/tui/src/main.rs:1905", "turn 7"),
+                ("crates/panel/src/cards.rs:88", "turn 14"),
+            ] {
+                let mut found = None;
+                for y in 0..48u16 {
+                    let line: String = (0..cols as u16)
+                        .map(|x| buf[(x, y)].symbol().to_string())
+                        .collect();
+                    if line.contains(path) && line.contains(label) {
+                        found = Some(y);
+                        break;
+                    }
+                }
+                let y =
+                    found.unwrap_or_else(|| panic!("no {path} header with {label} at {cols} cols"));
+                // the label ends at the last column, dim
+                let start = cols - label.len();
+                for (i, ch) in label.chars().enumerate() {
+                    let cell = &buf[(start as u16 + i as u16, y)];
+                    assert_eq!(
+                        cell.symbol(),
+                        ch.to_string().as_str(),
+                        "label char at {cols} cols"
+                    );
+                    assert!(
+                        cell.modifier.contains(Modifier::DIM),
+                        "the label is not dim at column {}",
+                        start + i
+                    );
+                }
+                // the path starts at column 0, still bold
+                for (i, ch) in path.chars().enumerate() {
+                    let cell = &buf[(i as u16, y)];
+                    assert_eq!(cell.symbol(), ch.to_string().as_str());
+                    assert!(
+                        cell.modifier.contains(Modifier::BOLD),
+                        "the path is not bold at column {i}"
+                    );
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn search_label_is_left_out_without_a_turn_or_room() {
+        let path = "crates/log/tests/lock.rs:41";
+        let label = "turn 3";
+        // no owning turn: the path alone
+        let r = match_header(path, None, 160);
+        assert_eq!(r.spans.len(), 1);
+        assert_eq!(r.spans[0].content, path);
+        // the exact boundary both sides, and one cell of room to spare
+        let w = path.width() + 1 + label.width();
+        let kept = match_header(path, Some(2), w);
+        assert!(
+            kept.spans.iter().any(|s| s.content == label),
+            "the label is missing at the boundary"
+        );
+        let dropped = match_header(path, Some(2), w - 1);
+        assert!(
+            dropped.spans.iter().all(|s| s.content != label),
+            "the label is drawn without room"
+        );
+        assert_eq!(dropped.spans.len(), 1);
+        assert_eq!(dropped.spans[0].content, path);
+        let wide = match_header(path, Some(2), w + 1);
+        assert!(
+            wide.spans.iter().any(|s| s.content == label),
+            "the label is missing with room to spare"
+        );
+        // the turn number counts from 1, dim; the path stays bold and whole
+        let label_span = kept.spans.iter().find(|s| s.content == label).unwrap();
+        assert!(
+            label_span.style.add_modifier.contains(Modifier::DIM),
+            "the label is not dim"
+        );
+        let path_span = &kept.spans[0];
+        assert_eq!(path_span.content, path);
+        assert!(
+            path_span.style.add_modifier.contains(Modifier::BOLD),
+            "the path is not bold"
+        );
     }
 
     #[test]
