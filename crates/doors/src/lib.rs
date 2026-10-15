@@ -16,6 +16,8 @@ mod attach;
 mod client;
 mod close;
 mod drive;
+mod error;
+pub use error::Error;
 pub mod hub;
 mod isolation;
 mod message;
