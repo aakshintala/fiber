@@ -61,6 +61,10 @@ pub(crate) struct Reads {
     /// test. Absent outside the unit tests.
     #[cfg(test)]
     settle_pause: Mutex<Option<SpawnPause>>,
+    /// The timeout settlement's pause before the reaper wait, armed by a
+    /// test. Absent outside the unit tests.
+    #[cfg(test)]
+    settle_complete_pause: Mutex<Option<SpawnPause>>,
 }
 
 /// One pause of a `credential` wait at its checks, for the interleaving
@@ -459,6 +463,8 @@ impl Reads {
             }
             if deadline_due(clock.now(), deadline) {
                 self.settle_group(group, clock, end);
+                #[cfg(test)]
+                self.pause_after_settle_complete();
                 if self.lock().cancelled {
                     kill_group(group);
                     return Err(interrupted());
@@ -913,6 +919,38 @@ impl Reads {
     fn pause_after_settle_kill(&self) {
         let point = self
             .settle_pause
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .take();
+        if let Some(point) = point {
+            match point.entered.send(()) {
+                Ok(()) | Err(_) => {}
+            }
+            match point.release.recv() {
+                Ok(()) | Err(_) => {}
+            }
+        }
+    }
+
+    /// Arms one pause after the timeout settlement and before the reaper
+    /// wait, so a test can inspect group retirement before killing the real
+    /// process group. The pause is one-shot.
+    pub(crate) fn pause_at_settle_complete(
+        &self,
+        entered: mpsc::Sender<()>,
+        release: mpsc::Receiver<()>,
+    ) {
+        *self
+            .settle_complete_pause
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner) = Some(SpawnPause { entered, release });
+    }
+
+    /// Reports timeout settlement completion and blocks until the test
+    /// releases the reaper wait. Runs free unless a test armed a pause.
+    fn pause_after_settle_complete(&self) {
+        let point = self
+            .settle_complete_pause
             .lock()
             .unwrap_or_else(PoisonError::into_inner)
             .take();
