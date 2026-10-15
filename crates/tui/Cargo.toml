@@ -10,6 +10,7 @@ base64.workspace = true
 contract = { path = "../contract" }
 log = { path = "../log" }
 jiff = { version = "0.2", default-features = false, features = ["std", "tz-system", "tzdb-zoneinfo"] }
+ignore.workspace = true
 pulldown-cmark.workspace = true
 ratatui = { version = "0.30", features = ["unstable-rendered-line-info"] }
 rustix.workspace = true

@@ -1,8 +1,10 @@
 //! File search for the `@` panel: one listing of the files git tracks,
-//! searched on a worker thread that drops a search once a newer one is
-//! asked for (`docs/tui.md`, "Keys" › "Rules").
+//! or one bounded walk under a typed path, searched on a worker thread
+//! that drops a search once a newer one is asked for (`docs/tui.md`,
+//! "Keys" › "Rules").
 
-use std::path::Path;
+use std::ffi::OsString;
+use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -12,6 +14,94 @@ use crate::Input;
 
 /// How many paths a search keeps.
 pub(crate) const KEPT: usize = 50;
+
+/// How many entries a path search examines across the base listing and
+/// the walk before it stops.
+pub(crate) const VISITS: usize = 100_000;
+
+/// The bounds a search runs under: rows kept, entries examined, and
+/// entries between looks at whether the search was abandoned.
+/// `check_every` must be at least 1: the search looks when
+/// `examined % check_every == 0`, which panics on 0.
+pub(crate) struct Limits {
+    pub(crate) kept: usize,
+    pub(crate) visits: usize,
+    pub(crate) check_every: usize,
+}
+
+impl Limits {
+    /// The bounds a live search runs under.
+    pub(crate) const SEARCH: Limits = Limits {
+        kept: KEPT,
+        visits: VISITS,
+        check_every: CHECK_EVERY,
+    };
+}
+
+/// What a path search resolves against: the workspace for `../`, and
+/// the home directory for `~/`.
+pub(crate) struct Roots {
+    pub(crate) workspace: PathBuf,
+    pub(crate) home: Option<PathBuf>,
+}
+
+impl Roots {
+    /// Keeps `home` only when it names an absolute directory, as the
+    /// launch and the prompt files rule: an empty or relative `HOME`
+    /// is no home, so a `~/` search answers `Err("no home directory")`.
+    pub(crate) fn new(workspace: PathBuf, home: Option<OsString>) -> Self {
+        let home = home.and_then(|home| {
+            let home = PathBuf::from(home);
+            home.is_absolute().then_some(home)
+        });
+        Self { workspace, home }
+    }
+}
+
+/// What an `@` query searches: the files git tracks, or the entries
+/// under one base directory.
+#[derive(Debug, PartialEq, Eq)]
+pub(crate) enum Query<'a> {
+    /// `typed` does not start with `/`, `~/` or `../`.
+    Workspace(&'a str),
+    /// `base_text` is `typed` up to and including its last `/`, and
+    /// `query` the rest.
+    Path { base_text: &'a str, query: &'a str },
+}
+
+/// Splits `typed`, the text after the `@`, into a workspace query or a
+/// path search: `/`, `~/` or `../` starts a path search, whose base is
+/// the text up to its last `/`; anything else searches the files git
+/// tracks.
+pub(crate) fn split(typed: &str) -> Query<'_> {
+    let path = typed.starts_with('/') || typed.starts_with("~/") || typed.starts_with("../");
+    if !path {
+        return Query::Workspace(typed);
+    }
+    match typed.rfind('/') {
+        Some(at) => Query::Path {
+            base_text: &typed[..at + 1],
+            query: &typed[at + 1..],
+        },
+        // `/`, `~/` and `../` all hold a `/`, so this never runs.
+        None => Query::Workspace(typed),
+    }
+}
+
+/// Resolves a path search's `base_text` against `roots`: `~/rest` joins
+/// the home directory, `/…` is itself, and `../…` joins the workspace.
+pub(crate) fn resolve(base_text: &str, roots: &Roots) -> Result<PathBuf, String> {
+    if let Some(rest) = base_text.strip_prefix("~/") {
+        return match &roots.home {
+            Some(home) => Ok(home.join(rest)),
+            None => Err("no home directory".to_owned()),
+        };
+    }
+    if base_text.starts_with('/') {
+        return Ok(PathBuf::from(base_text));
+    }
+    Ok(roots.workspace.join(base_text))
+}
 
 /// How many paths a search checks between looks at whether it was
 /// abandoned.

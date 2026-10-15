@@ -1,10 +1,11 @@
 //! Tests for file search: the ranking, the listing and the worker.
 
-use super::{CHECK_EVERY, KEPT, Search, list, rank};
+use super::{CHECK_EVERY, KEPT, Query, Roots, Search, list, rank, resolve, split};
 use crate::Input;
 use fakes::Deadline;
 use std::cell::Cell;
-use std::path::Path;
+use std::ffi::OsString;
+use std::path::{Path, PathBuf};
 use std::sync::mpsc::{self, Receiver};
 use std::time::Duration;
 
@@ -81,6 +82,69 @@ fn next_result(
         Ok(_) => panic!("{what}: not a file search result"),
         Err(err) => panic!("waited {DEADLINE:?} for {what}: {err}"),
     }
+}
+
+#[test]
+fn a_path_query_splits_at_its_last_slash() {
+    use Query::{Path, Workspace};
+    for typed in ["foo", "~", "..", "./x", "@~", "~foo", "..foo", ""] {
+        assert_eq!(split(typed), Workspace(typed), "{typed}");
+    }
+    assert_eq!(
+        split("~/proj/rea"),
+        Path {
+            base_text: "~/proj/",
+            query: "rea"
+        }
+    );
+    assert_eq!(
+        split("../../a/b"),
+        Path {
+            base_text: "../../a/",
+            query: "b"
+        }
+    );
+    assert_eq!(split("/"), Path { base_text: "/", query: "" });
+    assert_eq!(split("~/"), Path { base_text: "~/", query: "" });
+    assert_eq!(split("../"), Path { base_text: "../", query: "" });
+    assert_eq!(split("/etc"), Path { base_text: "/", query: "etc" });
+    assert_eq!(
+        split("../x"),
+        Path { base_text: "../", query: "x" }
+    );
+    assert_eq!(
+        split("/a/b/c"),
+        Path { base_text: "/a/b/", query: "c" }
+    );
+}
+
+#[test]
+fn a_base_resolves_against_home_workspace_or_root() {
+    let roots = Roots::new(
+        PathBuf::from("/w"),
+        Some(OsString::from("/home/u")),
+    );
+    assert_eq!(resolve("~/proj/", &roots), Ok(PathBuf::from("/home/u/proj")));
+    assert_eq!(resolve("/etc/", &roots), Ok(PathBuf::from("/etc")));
+    assert_eq!(resolve("../x/", &roots), Ok(PathBuf::from("/w/../x")));
+    let no_home = Roots::new(PathBuf::from("/w"), None);
+    assert_eq!(
+        resolve("~/proj/", &no_home),
+        Err("no home directory".to_owned())
+    );
+}
+
+#[test]
+fn an_empty_or_relative_home_is_no_home() {
+    for home in [None, Some(OsString::from("")), Some(OsString::from("rel"))] {
+        let roots = Roots::new(PathBuf::from("/w"), home);
+        assert_eq!(
+            resolve("~/", &roots),
+            Err("no home directory".to_owned())
+        );
+    }
+    let roots = Roots::new(PathBuf::from("/w"), Some(OsString::from("/home/u")));
+    assert_eq!(resolve("~/", &roots), Ok(PathBuf::from("/home/u")));
 }
 
 #[test]
