@@ -11,6 +11,7 @@ use serde_json::{Value, json};
 use std::fs;
 use std::net::TcpListener;
 use std::os::unix::fs::PermissionsExt;
+use std::os::unix::process::CommandExt;
 use std::process::Output;
 use support::*;
 
@@ -51,6 +52,18 @@ fn entry(setup: &Setup, name: &str) -> Option<Value> {
 fn listed_hubs_pair_list_authenticate_revoke_and_remove_without_a_local_hub() {
     let a = Setup::new();
     let b = Setup::new();
+    // A listed hub must ignore the client's repository scope.
+    let mut git = std::process::Command::new("git");
+    git.args(["init", "-q"])
+        .arg(b.root.path())
+        .env_clear()
+        .envs(fakes::check_run())
+        .env("PATH", std::env::var_os("PATH").unwrap_or_default())
+        .env("HOME", b.root.path())
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::piped())
+        .process_group(0);
+    succeeds(&run_to_exit(b.deadline, "the client's git repository", git));
     let listener = TcpListener::bind(("127.0.0.1", 0)).unwrap();
     let port = listener.local_addr().unwrap().port();
     drop(listener);
