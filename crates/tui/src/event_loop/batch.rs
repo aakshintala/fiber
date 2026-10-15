@@ -8,11 +8,17 @@ use std::collections::VecDeque;
 use std::sync::mpsc::Receiver;
 
 use crate::Input;
+use crate::link::Credits;
 
 /// The most inputs one frame folds, so a stream that never empties still
 /// draws.
 // debt: 4,096 is picked, not measured; a measured fold rate per line on the benchmark runner would set it.
 pub(crate) const HUB_BATCH: usize = 4096;
+
+/// The most inputs one hub chunk holds: the batch's share of K, so a
+/// hub batch folds chunk by chunk inside one logical batch of up to
+/// [`HUB_BATCH`].
+pub(super) const HOLD: usize = 64;
 
 /// Whether the batch takes `input` with the ones waiting, and whether a
 /// batch starting with `input` holds: hub lines and ticks only. Hub
@@ -33,26 +39,34 @@ pub(super) fn joins(first: &Input, next: &Input) -> bool {
 }
 
 /// `first` and the inputs already ready behind it, in arrival order, up
-/// to [`HUB_BATCH`]: the stash's front while it joins, then the
-/// channel's while something waits. A ready input that joins nothing
-/// goes back to the stash's front for the next batch, so it runs before
-/// anything behind it; an empty or closed channel ends this one. Never
-/// blocks, and drops and duplicates nothing.
-pub(super) fn batch(first: Input, stash: &mut VecDeque<Input>, rx: &Receiver<Input>) -> Vec<Input> {
+/// to `left`, at most [`HOLD`] for a hub chunk: the stash's front while
+/// it joins, then the channel's while something waits. A ready input
+/// that joins nothing goes back to the stash's front for the next batch,
+/// so it runs before anything behind it; an empty or closed channel ends
+/// this one. The cap is checked before a pop, so no input is taken and
+/// put back for being over the limit. Never blocks, and drops and
+/// duplicates nothing.
+pub(super) fn batch(
+    first: Input,
+    stash: &mut VecDeque<Input>,
+    rx: &Receiver<Input>,
+    credits: &Credits,
+    left: usize,
+) -> Vec<Input> {
     let mut out = Vec::new();
     if !batchable(&first) && !matches!(&first, Input::Bytes(_)) {
         return vec![first];
     }
+    // A hub chunk holds at most `HOLD`; a terminal-read batch takes up
+    // to `left`.
+    let limit = if batchable(&first) {
+        left.min(HOLD)
+    } else {
+        left
+    };
     out.push(first);
-    loop {
-        if out.len() >= HUB_BATCH {
-            break;
-        }
-        let next = match stash.pop_front() {
-            Some(input) => Some(input),
-            None => rx.try_recv().ok(),
-        };
-        let Some(input) = next else {
+    for _ in 0..limit.saturating_sub(1) {
+        let Some(input) = ready(stash, rx, credits) else {
             break;
         };
         if out.first().is_some_and(|first| joins(first, &input)) {
@@ -63,6 +77,20 @@ pub(super) fn batch(first: Input, stash: &mut VecDeque<Input>, rx: &Receiver<Inp
         }
     }
     out
+}
+
+/// The next ready input: the stash's front, else the channel's,
+/// releasing the unit the loop's receive gives back. Stash pops release
+/// nothing: they were released when received. Never blocks.
+pub(super) fn ready(
+    stash: &mut VecDeque<Input>,
+    rx: &Receiver<Input>,
+    credits: &Credits,
+) -> Option<Input> {
+    if let Some(input) = stash.pop_front() {
+        return Some(input);
+    }
+    rx.try_recv().ok().inspect(|input| credits.received(input))
 }
 
 #[cfg(test)]

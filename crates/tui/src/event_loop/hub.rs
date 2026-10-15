@@ -13,10 +13,10 @@ use std::sync::mpsc::Receiver;
 
 use contract::{Envelope, Seq, SessionId};
 
-use super::batch::batch;
+use super::batch::{HUB_BATCH, batch, batchable, ready};
 use crate::Input;
 use crate::app::{App, mint, session_command};
-use crate::link::{self, Line};
+use crate::link::{self, Credits, Line};
 use crate::retry::Retry;
 use crate::tick::TickThread;
 
@@ -59,6 +59,13 @@ pub(super) struct Connection {
     /// Inputs that arrived while a frame waited for history, handled next
     /// in arrival order.
     stash: VecDeque<Input>,
+    /// The parsed hub lines the loop has not received yet: the reader
+    /// takes a unit before it sends a line, and every receive of an
+    /// `Input::Hub` from the channel gives one back.
+    credits: Arc<Credits>,
+    /// The high-water mark of the stash's length on the answer path:
+    /// what `answer` holds while it waits for a history answer.
+    answer_stash_peak: usize,
     /// The hub thread's permit to connect again (`docs/tui.md`, "A
     /// dropped connection"); none in tests with no hub thread.
     retry: Option<Arc<Retry>>,
@@ -71,6 +78,8 @@ impl Connection {
         Self {
             hub: None,
             stash: VecDeque::new(),
+            credits: Credits::new(link::QUEUE),
+            answer_stash_peak: 0,
             retry,
         }
     }
@@ -85,6 +94,19 @@ impl Connection {
     /// Whether a stream is connected.
     pub(super) fn has_stream(&self) -> bool {
         self.hub.is_some()
+    }
+
+    /// The credits the hub reader takes at: the loop's receives give
+    /// them back.
+    pub(super) fn credits(&self) -> Arc<Credits> {
+        Arc::clone(&self.credits)
+    }
+
+    /// The answer wait's high-water mark: the most inputs `answer` held
+    /// at once. Answer-path pushes only.
+    #[cfg(test)]
+    pub(super) fn answer_stash_peak(&self) -> usize {
+        self.answer_stash_peak
     }
 
     /// The connected stream, for the test that fails the write side.
@@ -109,15 +131,43 @@ impl Connection {
     /// The next batch `run` handles: the stash's front when one waits,
     /// else the channel's, with what is ready behind it folded in. None
     /// when the stash is empty and every sender is gone, which ends the
-    /// loop.
+    /// loop. The first chunk of a logical batch: at most [`HOLD`] for a
+    /// hub or tick first, [`HUB_BATCH`] for a terminal-read first.
     pub(super) fn take_batch(&mut self, rx: &Receiver<Input>) -> Option<Batch> {
         let first = match self.stash.pop_front() {
             Some(input) => input,
-            None => rx.recv().ok()?,
+            None => {
+                let input = rx.recv().ok()?;
+                self.credits.received(&input);
+                input
+            }
         };
         // `batch` always returns its first, so splitting it off leaves
         // the rest behind it.
-        let mut inputs = batch(first, &mut self.stash, rx).into_iter();
+        let mut inputs = batch(first, &mut self.stash, rx, &self.credits, HUB_BATCH).into_iter();
+        let first = inputs.next()?;
+        Some(Batch {
+            first,
+            rest: inputs.collect(),
+        })
+    }
+
+    /// The next chunk of the logical batch `take_batch` started, after
+    /// `taken` inputs: `None` when the batch holds [`HUB_BATCH`], when
+    /// nothing is ready, or when the next input keeps its own batch — it
+    /// waits at the stash's front, the lookahead. Takes nothing more
+    /// then, and never blocks.
+    pub(super) fn next_chunk(&mut self, rx: &Receiver<Input>, taken: usize) -> Option<Batch> {
+        let left = HUB_BATCH.saturating_sub(taken);
+        if left == 0 {
+            return None;
+        }
+        let input = ready(&mut self.stash, rx, &self.credits)?;
+        if !batchable(&input) {
+            self.stash.push_front(input);
+            return None;
+        }
+        let mut inputs = batch(input, &mut self.stash, rx, &self.credits, left).into_iter();
         let first = inputs.next()?;
         Some(Batch {
             first,
@@ -181,6 +231,7 @@ impl Connection {
                 self.lost(app);
                 return Err(LOST.to_owned());
             };
+            self.credits.received(&input);
             match input {
                 Input::Hub(Line::Session(line)) if link::answers(&line, id) => {
                     return link::history_answer(&line);
@@ -198,7 +249,7 @@ impl Connection {
                 // loop quits with the signal's number before handling
                 // anything behind it.
                 Input::Signal(signal) => {
-                    self.stash.push_back(Input::Signal(signal));
+                    self.push_stash(Input::Signal(signal));
                     return Err(LOST.to_owned());
                 }
                 other @ (Input::Bytes(_)
@@ -211,9 +262,16 @@ impl Connection {
                 | Input::Viewed { .. }
                 | Input::Models(_)
                 | Input::Login { .. }
-                | Input::Files { .. }) => self.stash.push_back(other),
+                | Input::Files { .. }) => self.push_stash(other),
             }
         }
+    }
+
+    /// Holds `input` for after the frame, recording the answer wait's
+    /// high-water mark. Only answer-path pushes count.
+    fn push_stash(&mut self, input: Input) {
+        self.stash.push_back(input);
+        self.answer_stash_peak = self.answer_stash_peak.max(self.stash.len());
     }
 
     /// The hub connection ended: the reader sends this once per stream,
@@ -256,13 +314,16 @@ impl Connection {
         }
     }
 
-    /// Stops the hub reader, shuts the hub stream down both ways and drops
-    /// it. The reader thread then sees the end, even when the kernel misses
-    /// the shutdown's wakeup (#1877).
+    /// Stops the hub reader, releases its capacity wait, shuts the hub
+    /// stream down both ways and drops it. The reader thread then sees
+    /// the end, even when the kernel misses the shutdown's wakeup
+    /// (#1877). Ending the tracked read before cancelling means a reader
+    /// `Retry` stops is always a cancelled reader.
     pub(super) fn hang_up(&mut self) {
         if let Some(retry) = &self.retry {
             retry.end_read();
         }
+        self.credits.cancel();
         if let Some(hub) = self.hub.take() {
             hub.shutdown(std::net::Shutdown::Both).unwrap_or(());
         }

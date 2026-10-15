@@ -6,7 +6,7 @@ use std::cell::RefCell;
 use std::sync::mpsc::{Receiver, Sender};
 
 thread_local! {
-    static PAUSE: RefCell<Option<(Sender<()>, Receiver<()>)>> = RefCell::new(None);
+    static PAUSE: RefCell<Option<(Sender<()>, Receiver<()>)>> = const { RefCell::new(None) };
 }
 
 /// Holds the loop at its next fold on this thread: each [`before_fold`]

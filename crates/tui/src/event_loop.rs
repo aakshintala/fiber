@@ -28,7 +28,7 @@ use crate::app::{App, Effect};
 use crate::catalogue;
 use crate::home::Launch;
 use crate::keys::{Button, Event, MouseKind, Parser, Reply};
-use crate::link::Line;
+use crate::link::{Feed, Line};
 use crate::look::Look;
 use crate::mouse::Pointer;
 use crate::retry::Retry;
@@ -212,7 +212,12 @@ pub(crate) fn run_with(
         }
         None => {}
     }
-    spawn_hub(connect, tx.clone(), retry, Arc::clone(&terminal.clock));
+    spawn_hub(
+        connect,
+        Feed::new(tx.clone(), terminal.hub.credits()),
+        retry,
+        Arc::clone(&terminal.clock),
+    );
     // The tick runs only while something drawn moves: the first frame's
     // asks arm it, and the loop re-arms it after every frame.
     terminal.tick.start(Arc::clone(&terminal.clock), tx.clone());
@@ -331,7 +336,7 @@ impl<B: Backend> Loop<B> {
     fn run(&mut self, rx: &Receiver<Input>) -> i32 {
         loop {
             // Nothing stashed and every sender gone ends the loop.
-            let Some(batch) = self.hub.take_batch(rx) else {
+            let Some(first) = self.hub.take_batch(rx) else {
                 return 0;
             };
             // Only a batch starting with a hub line or tick holds: a
@@ -341,14 +346,10 @@ impl<B: Backend> Loop<B> {
             // the open page is counted once for the batch, not once per
             // changed line, and the batch settles once at its end, when
             // the counts are exact.
-            let held = batchable(batch.first());
+            let held = batchable(first.first());
             // The batch's inputs already folded, in arrival order.
             if held {
                 self.app.begin_batch();
-            }
-            #[cfg(test)]
-            if held {
-                pause::before_fold();
             }
             let mut code = None;
             // A frame separates two Bytes inputs unless both are
@@ -357,28 +358,49 @@ impl<B: Backend> Loop<B> {
             // non-Bytes batches never enter this branch.
             let mut wheel_prev = false;
             let mut framed = false;
-            for input in batch {
-                self.wakeups = self.wakeups.saturating_add(1);
-                if let Input::Bytes(bytes) = input {
-                    let events = self.parser.feed(&bytes);
-                    let wheel = Self::wheel_only(&events);
-                    if framed
-                        && !(wheel_prev && wheel)
-                        && let Some(quit) = self.frame(rx)
-                    {
+            // A hub batch folds chunk by chunk inside one logical batch:
+            // one hold and one frame for the batch, so a stream that
+            // never empties still draws, and a key waits only for the
+            // hub inputs that arrived before it.
+            let mut taken: usize = 0;
+            let mut chunk = Some(first);
+            while let Some(batch) = chunk.take() {
+                #[cfg(test)]
+                if held {
+                    pause::before_fold();
+                }
+                for input in batch {
+                    taken = taken.saturating_add(1);
+                    self.wakeups = self.wakeups.saturating_add(1);
+                    if let Input::Bytes(bytes) = input {
+                        let events = self.parser.feed(&bytes);
+                        let wheel = Self::wheel_only(&events);
+                        if framed
+                            && !(wheel_prev && wheel)
+                            && let Some(quit) = self.frame(rx)
+                        {
+                            code = Some(quit);
+                            break;
+                        }
+                        framed = true;
+                        wheel_prev = wheel;
+                        if let Some(quit) = self.handle_events(events) {
+                            code = Some(quit);
+                            break;
+                        }
+                    } else if let Some(quit) = self.handle(input) {
                         code = Some(quit);
                         break;
                     }
-                    framed = true;
-                    wheel_prev = wheel;
-                    if let Some(quit) = self.handle_events(events) {
-                        code = Some(quit);
-                        break;
-                    }
-                } else if let Some(quit) = self.handle(input) {
-                    code = Some(quit);
+                }
+                if code.is_some() {
                     break;
                 }
+                chunk = if held {
+                    self.hub.next_chunk(rx, taken)
+                } else {
+                    None
+                };
             }
             // The batch's end runs on every path out, so a quit never
             // leaves the hold set.
