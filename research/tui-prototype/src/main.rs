@@ -7707,7 +7707,7 @@ mod tests {
                 "--home empty, sessions, live-only, past-only, selected, live, hover-workspace, hover-worktree, hover-model, hover-thinking, worktree-on, worktree-off, picker-recent, picker-typed, focus-entry, focus-chip-workspace, focus-chip-model, focus-chip-picker, focus-chip-typing, focus-session",
                 "--overlay keymap, keymap-tab, keymap-search, keymap-narrow, quit, delete, history, notice, close-mouse",
                 "--picker list, levels, scoped, scoped-all, refreshing, session-only, filtered, filtered-empty, checklist, checklist-filtered, checklist-empty",
-                "--completions slash, slash-filtered, slash-hint, at, at-empty, narrow-slash, narrow-at",
+                "--completions slash, slash-filtered, slash-hint, at, at-empty, at-path, narrow-slash, narrow-at",
                 "--login providers, waiting, key, done, failed",
                 "--rail-case all-states, hovered, context-bars, floor-ceiling, hidden",
                 "--view-case delegate-view, job-pty, running, usage, changed-files, search-results, tools, rules, settings, skills, opened-edit, opened-read, opened-search, opened-shell, opened-mcp, cut-shell",

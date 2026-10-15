@@ -558,7 +558,7 @@ Live keys while it is open: typing filters the list over provider, id and displa
 
 ## Completions (#1631)
 
-Typing `/` opens one completion panel above the input box. Commands, skills, prompt templates and MCP prompts share one list, filtered as the person types. Each row is a name, a one-line description, a skill's `argument-hint` when it has one, and a tag: command, skill, template, the extension's name, or the MCP server's name. Tab completes and Enter runs. Typing `@` opens a file search panel, and choosing a file inserts its path as text. The panel draws from fixtures in `src/completions.rs` (forty entries over every tag kind; eight file paths): the stream has no command list, so both are made up. At most eight rows show with the focused row kept on screen and a scroll hint (`1–8 of 40 · ↓ 32 more`); a long description is cut with an ellipsis keeping the tag, and matched letters read bold.
+Typing `/` opens one completion panel above the input box. Commands, skills, prompt templates and MCP prompts share one list, filtered as the person types. Each row is a name, a one-line description, a skill's `argument-hint` when it has one, and a tag: command, skill, template, the extension's name, or the MCP server's name. Tab completes and Enter runs. Typing `@` opens a file search panel, and choosing a file inserts its path as text. The panel draws from fixtures in `src/completions.rs` (forty entries over every tag kind; ten file paths, two under a `~/proj/` path search): the stream has no command list, so both are made up. At most eight rows show with the focused row kept on screen and a scroll hint (`1–8 of 40 · ↓ 32 more`); a long description is cut with an ellipsis keeping the tag, and matched letters read bold.
 
 | Case | How to reach it |
 |---|---|
@@ -567,6 +567,7 @@ Typing `/` opens one completion panel above the input box. Commands, skills, pro
 | `slash-hint` | `cargo run --release -- fixtures/idle.jsonl --static --completions slash-hint`: the `review` skill focused with its `<path>` hint, and the overlong `login` description cut with … |
 | `at` | `cargo run --release -- fixtures/idle.jsonl --static --completions at`: the input reads `@test`, two file matches |
 | `at-empty` | `cargo run --release -- fixtures/idle.jsonl --static --completions at-empty`: the input reads `@zzz`, a `no files match` row |
+| `at-path` | `cargo run --release -- fixtures/idle.jsonl --static --completions at-path`: the input reads `@~/proj/`, a directory row and a file row |
 | `narrow-slash`, `narrow-at` | the same panels; run in a 100x40 terminal for the existing narrow layout |
 
 Live keys: typing `/` or `@` at the start of the input opens the panel. While it is open: ↑/↓ move, Tab completes and keeps the panel open, Enter on a `/` row completes it and runs it at once (`/context` and `/model` open their views, anything else sends), Enter on an `@` row inserts its path as text, Esc closes.
