@@ -684,19 +684,13 @@ fn matched(state: &State, expected: Option<Instant>, thread: Option<ThreadId>) -
 }
 
 /// Whether several distinct threads hold a park now: short-circuits on the
-/// second distinct [`ThreadId`], so it allocates nothing. Every failure
-/// through it still names each parked thread with its instant in [`report`],
-/// which lists the whole park, not the count.
+/// Whether several threads hold a park now. Each thread holds at most one
+/// park (`wait_until` blocks the parker), so a second held park belongs to
+/// another thread. Every failure through it still names each parked thread
+/// with its instant in [`report`], which lists the whole park, not the count.
 fn several_threads_parked(state: &State) -> bool {
-    let mut first: Option<ThreadId> = None;
-    for parked in &state.parked {
-        match first {
-            None => first = Some(parked.thread),
-            Some(held) if held != parked.thread => return true,
-            Some(_) => {}
-        }
-    }
-    false
+    let mut held = state.parked.iter();
+    held.next().is_some() && held.next().is_some()
 }
 
 /// Closes an [`FakeClock::advance_when_parked`] wait: the observation log
