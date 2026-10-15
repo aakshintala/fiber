@@ -9,6 +9,9 @@ mod handoff;
 mod image;
 mod name_session;
 mod pdf;
+#[cfg(test)]
+#[path = "picture_timing_tests.rs"]
+mod picture_timing_tests;
 mod read;
 mod search;
 mod session_search;

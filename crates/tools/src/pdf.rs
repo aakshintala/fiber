@@ -129,52 +129,60 @@ pub(crate) fn read(
         .arg(child.artifacts())
         .arg(&stem)
         .arg(&what);
-    let Some(output) = run_to_end(&mut command, cancel) else {
-        return text_output("Cancelled and stopped.\n".to_owned());
-    };
-    let output = match output {
-        Ok(output) => output,
-        Err(error) => {
-            return failed(
-                ErrorCode::ToolError,
-                format!("the image child could not start: {error}."),
-            );
-        }
-    };
-    let message = crate::image::capped(&output.stderr);
-    let (page_count, total) = match output.status.code() {
-        Some(0) => match parse_child(&output.stdout, &stem) {
-            Ok(cut) => cut,
-            Err(why) => {
-                return failed(ErrorCode::ToolError, format!("the image child {why}."));
+    // One `picture.run` scope around the count/cut child, from its spawn
+    // to its validated answer. It ends before head formatting and page
+    // rendering: each rendered page's own child owns its timer, and the
+    // renderer itself is never timed. Early returns drop it once, as every
+    // entered image call does.
+    let (page_count, total) = {
+        let _picture = child.timed();
+        let Some(output) = run_to_end(&mut command, cancel) else {
+            return text_output("Cancelled and stopped.\n".to_owned());
+        };
+        let output = match output {
+            Ok(output) => output,
+            Err(error) => {
+                return failed(
+                    ErrorCode::ToolError,
+                    format!("the image child could not start: {error}."),
+                );
             }
-        },
-        Some(4) => match parse_total(&output.stdout) {
-            Some(total) => return past_the_end(path, range, total),
+        };
+        let message = crate::image::capped(&output.stderr);
+        match output.status.code() {
+            Some(0) => match parse_child(&output.stdout, &stem) {
+                Ok(cut) => cut,
+                Err(why) => {
+                    return failed(ErrorCode::ToolError, format!("the image child {why}."));
+                }
+            },
+            Some(4) => match parse_total(&output.stdout) {
+                Some(total) => return past_the_end(path, range, total),
+                None => {
+                    return failed(
+                        ErrorCode::ToolError,
+                        "the image child named no page count.".to_owned(),
+                    );
+                }
+            },
+            Some(1) => {
+                return failed(
+                    ErrorCode::UnsupportedFile,
+                    format!("`{}` cannot be read as a PDF: {message}", path.display()),
+                );
+            }
+            Some(code) => {
+                return failed(
+                    ErrorCode::ToolError,
+                    format!("the image child exited with status {code}: {message}"),
+                );
+            }
             None => {
                 return failed(
                     ErrorCode::ToolError,
-                    "the image child named no page count.".to_owned(),
+                    format!("the image child was killed by a signal: {message}"),
                 );
             }
-        },
-        Some(1) => {
-            return failed(
-                ErrorCode::UnsupportedFile,
-                format!("`{}` cannot be read as a PDF: {message}", path.display()),
-            );
-        }
-        Some(code) => {
-            return failed(
-                ErrorCode::ToolError,
-                format!("the image child exited with status {code}: {message}"),
-            );
-        }
-        None => {
-            return failed(
-                ErrorCode::ToolError,
-                format!("the image child was killed by a signal: {message}"),
-            );
         }
     };
     let head = match range {
