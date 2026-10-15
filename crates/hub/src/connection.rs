@@ -21,6 +21,7 @@ use std::time::{Duration, Instant};
 
 use contract::clock::{Clock, Wake, wall_ms};
 use contract::commands::SentPart;
+use contract::diag::DebugLog;
 use contract::events::CommandResult;
 use contract::events::VariablesSource;
 use contract::{CommandId, ErrorCode, HubLine, SCHEMA_VERSION, SessionId};
@@ -627,12 +628,23 @@ fn on_command(
         "feed" => on_feed(&line.id, &line.args, hub, writer, closer, fed),
         "dismiss" => answer(writer, hub, &line.id, hub.feed.dismiss(&line.args)),
         "recent" => answer(writer, hub, &line.id, hub.feed.recent(&line.args)),
-        "sessions" => answer(
-            writer,
-            hub,
-            &line.id,
-            crate::sessions::answer(&hub.feed, &hub.home, &line.args),
-        ),
+        "sessions" => {
+            // The hub's own writer and clock travel as one pair, and only
+            // at debug: at info no callable is built and no stamp is taken.
+            let timing = hub.diag.debugging().then(|| hub.diag.timings());
+            answer(
+                writer,
+                hub,
+                &line.id,
+                crate::sessions::answer(
+                    &hub.feed,
+                    &hub.home,
+                    &line.args,
+                    hub.clock.as_ref(),
+                    timing.as_ref(),
+                ),
+            )
+        }
         "delete" => answer(
             writer,
             hub,
