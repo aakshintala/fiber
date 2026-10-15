@@ -2,7 +2,7 @@
 source: crates/tui/src/view/panel/delegates_motion_tests.rs
 expression: shown
 ---
-⠋ WORKING  test/model
-  alpha
-⠋ fiber  test/model
-  beta
+⠋ alpha
+  WORKING · test/model
+⠋ beta
+  fiber · test/model

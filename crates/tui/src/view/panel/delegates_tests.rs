@@ -121,9 +121,17 @@ fn text_width(app: &App) -> usize {
     usize::from(panel_width(app)).saturating_sub(4)
 }
 
-/// The Delegates card's rows' text.
+/// The Delegates card's running-only rows' text: the narrow layout's.
 fn card_texts(app: &App) -> Vec<String> {
     super::rows(app, text_width(app))
+        .iter()
+        .map(|row| row.line.to_string())
+        .collect()
+}
+
+/// The Delegates card's combined rows' text: running first, then done.
+fn done_texts(app: &App) -> Vec<String> {
+    super::rows_with_done(app, text_width(app))
         .iter()
         .map(|row| row.line.to_string())
         .collect()
@@ -152,18 +160,25 @@ fn draw_targets(app: &App) -> (Buffer, Vec<crate::mouse::Target>) {
 }
 
 #[test]
-fn a_started_delegate_shows_until_its_job_completes() {
+fn a_running_delegate_shows_its_description_with_its_state_below() {
     let mut app = attached(160, 40);
     fold_delegate(&mut app, "j_1", "fiber", "test/model", "review the parser");
+    // The running-only rows are the narrow layout's.
     assert_eq!(
         card_texts(&app),
         vec![
-            "● fiber  test/model".to_owned(),
-            "  review the parser".to_owned()
+            "\u{25cf} review the parser".to_owned(),
+            "  fiber \u{00b7} test/model".to_owned()
         ]
     );
+    // Once it completes the narrow rows go, and the card keeps it as
+    // done.
     finish(&mut app, "j_1");
     assert!(card_texts(&app).is_empty());
+    assert_eq!(
+        done_texts(&app),
+        vec!["\u{2713} review the parser".to_owned(), "  done".to_owned()]
+    );
 }
 
 #[test]
@@ -175,32 +190,28 @@ fn a_job_without_delegate_started_is_not_a_delegate() {
 }
 
 #[test]
-fn without_a_status_the_rows_show_the_harness_model_and_description() {
+fn without_a_status_the_rows_show_the_description_with_harness_and_model_below() {
     let mut app = attached(160, 40);
     fold_delegate(&mut app, "j_1", "claude", "opus", "write the docs");
     let drawn = super::rows(&app, text_width(&app));
-    let first = drawn.first().unwrap_or_else(|| panic!("a first row"));
-    assert_eq!(first.line.to_string(), "● claude  opus");
+    assert_eq!(drawn.len(), 2);
+    let first = &drawn[0];
+    assert_eq!(first.line.to_string(), "\u{25cf} write the docs");
     let glyph = first
         .line
         .spans
         .first()
         .unwrap_or_else(|| panic!("a glyph span"));
-    assert_eq!(glyph.content, "● claude");
+    assert_eq!(glyph.content, "\u{25cf}");
     assert_eq!(
         glyph.style,
-        crate::markdown::style(crate::markdown::Role::Accent)
+        crate::markdown::style(crate::markdown::Role::Attention)
     );
-    let model = first
-        .line
-        .spans
-        .last()
-        .unwrap_or_else(|| panic!("a model span"));
-    assert_eq!(model.content, "opus");
-    assert_eq!(model.style, ratatui::style::Style::default());
+    let second = &drawn[1];
+    assert_eq!(second.line.to_string(), "  claude \u{00b7} opus");
     assert_eq!(
-        drawn.get(1).map(|row| row.line.to_string()),
-        Some("  write the docs".to_owned())
+        second.line.spans.first().map(|span| span.style),
+        Some(crate::markdown::style(crate::markdown::Role::Muted))
     );
 }
 
@@ -211,7 +222,11 @@ fn three_delegates_show_and_a_fourth_does_not() {
     fold_delegates(&mut app, 3);
     let three = card_texts(&app);
     assert_eq!(three.len(), 6);
-    assert_eq!(three.get(5).map(String::as_str), Some("  task 3"));
+    assert_eq!(three.get(4).map(String::as_str), Some("\u{25cf} task 3"));
+    assert_eq!(
+        three.get(5).map(String::as_str),
+        Some("  fiber \u{00b7} test/model")
+    );
     fold_fiber(&mut app, 4);
     let four = card_texts(&app);
     assert_eq!(four, three);
@@ -229,10 +244,11 @@ fn the_description_is_cut_at_the_text_width() {
         "test/model",
         &"x".repeat(text + 10),
     );
+    // The description rides the first row, cut with `…` past the card.
     let drawn = card_texts(&app);
-    let second = drawn.get(1).unwrap_or_else(|| panic!("a second row"));
-    assert_eq!(crate::format::width(second), text);
-    assert_eq!(*second, format!("  {}\u{2026}", "x".repeat(text - 3)));
+    let first = drawn.first().unwrap_or_else(|| panic!("a first row"));
+    assert_eq!(crate::format::width(first), text);
+    assert_eq!(*first, format!("\u{25cf} {}\u{2026}", "x".repeat(text - 3)));
 }
 
 #[test]
@@ -306,8 +322,8 @@ fn the_card_takes_its_listed_place() {
             String::new(),
             edge,
             delegates,
-            "\u{25cf} fiber  test/model".to_owned(),
-            "  task 1".to_owned(),
+            "\u{25cf} task 1".to_owned(),
+            "  fiber \u{00b7} test/model".to_owned(),
             edge_bottom,
         ]
     );
@@ -381,17 +397,37 @@ fn the_card_shows_from_its_scroll_offset() {
     fold_delegates(&mut app, 5);
     scroll_card(&mut app, 2);
     assert_eq!(app.panel_state().delegate_scroll(), 2);
-    let descriptions: Vec<String> = card_texts(&app).into_iter().skip(1).step_by(2).collect();
-    assert_eq!(descriptions, vec!["  task 3", "  task 4", "  task 5"]);
-    // Two delegates finish while scrolled: the offset clamps when drawn.
+    let firsts: Vec<String> = card_texts(&app).into_iter().step_by(2).collect();
+    assert_eq!(
+        firsts,
+        vec!["\u{25cf} task 3", "\u{25cf} task 4", "\u{25cf} task 5"]
+    );
+    // Two delegates finish while scrolled: they stay on the card after
+    // the running ones, and the narrow rows keep the running ones only.
     for job in ["j_4", "j_5"] {
         app.on_line(session_line(
             "job_completed",
             serde_json::json!({"job_id": job, "status": "completed"}),
         ));
     }
-    let descriptions: Vec<String> = card_texts(&app).into_iter().skip(1).step_by(2).collect();
-    assert_eq!(descriptions, vec!["  task 1", "  task 2", "  task 3"]);
+    assert_eq!(
+        card_texts(&app),
+        vec![
+            "\u{25cf} task 3".to_owned(),
+            "  fiber \u{00b7} test/model".to_owned()
+        ]
+    );
+    assert_eq!(
+        done_texts(&app),
+        vec![
+            "\u{25cf} task 3".to_owned(),
+            "  fiber \u{00b7} test/model".to_owned(),
+            "\u{2713} task 4".to_owned(),
+            "  done".to_owned(),
+            "\u{2713} task 5".to_owned(),
+            "  done".to_owned(),
+        ]
+    );
 }
 
 #[test]
@@ -413,7 +449,7 @@ fn the_span_covers_only_the_card_rows() {
     let texts: Vec<String> = drawn.iter().map(|row| row.line.to_string()).collect();
     let start = texts
         .iter()
-        .position(|row| row == "\u{25cf} fiber  test/model")
+        .position(|row| row == "\u{25cf} task 1")
         .unwrap_or_else(|| panic!("the card's first row"));
     assert!(start > 2);
     // The edge, the title row, then the content: the span covers the
@@ -490,70 +526,54 @@ fn unreadable_status(app: &mut App, job: &str) {
 }
 
 #[test]
-fn with_a_status_the_row_shows_its_glyph_and_word() {
-    for (state, glyph, word, role) in [
-        (
-            serde_json::json!({"state": "streaming"}),
-            "●",
-            "WORKING",
-            crate::markdown::Role::Accent,
-        ),
+fn with_a_status_the_second_row_shows_its_word_and_model() {
+    use crate::markdown::Role;
+    // The first row is always `●` in attention with the description;
+    // the state word rides the dim second row with the started model.
+    for (state, word) in [
+        (serde_json::json!({"state": "streaming"}), "WORKING"),
         (
             serde_json::json!({"state": "tool", "tool": "read"}),
-            "●",
             "WORKING",
-            crate::markdown::Role::Accent,
         ),
-        (
-            serde_json::json!({"state": "retrying"}),
-            "●",
-            "RETRYING",
-            crate::markdown::Role::Warning,
-        ),
-        (
-            serde_json::json!({"state": "jobs"}),
-            "●",
-            "WORKING",
-            crate::markdown::Role::Accent,
-        ),
-        (
-            serde_json::json!({"state": "idle"}),
-            "✓",
-            "READY",
-            crate::markdown::Role::Muted,
-        ),
+        (serde_json::json!({"state": "retrying"}), "RETRYING"),
+        (serde_json::json!({"state": "jobs"}), "WORKING"),
+        (serde_json::json!({"state": "idle"}), "READY"),
     ] {
         let mut app = attached(160, 40);
         fold_fiber(&mut app, 1);
         delegate_status(&mut app, "j_1", state);
         let drawn = super::rows(&app, text_width(&app));
-        let first = drawn.first().unwrap_or_else(|| panic!("a first row"));
-        assert_eq!(
-            first.line.to_string(),
-            format!("{glyph} {word}  test/model")
-        );
-        let state_span = first
+        assert_eq!(drawn.len(), 2);
+        let first = &drawn[0];
+        assert_eq!(first.line.to_string(), "\u{25cf} task 1");
+        let glyph = first
             .line
             .spans
             .first()
-            .unwrap_or_else(|| panic!("a state span"));
-        assert_eq!(state_span.content, format!("{glyph} {word}"));
-        assert_eq!(state_span.style, crate::markdown::style(role));
+            .unwrap_or_else(|| panic!("a glyph span"));
+        assert_eq!(glyph.content, "\u{25cf}");
+        assert_eq!(glyph.style, crate::markdown::style(Role::Attention));
+        let second = &drawn[1];
+        assert_eq!(
+            second.line.to_string(),
+            format!("  {word} \u{00b7} test/model")
+        );
+        assert_eq!(
+            second.line.spans.first().map(|span| span.style),
+            Some(crate::markdown::style(Role::Muted))
+        );
     }
+    // An unreadable status still runs: `●` with its word below.
     let mut app = attached(160, 40);
     fold_fiber(&mut app, 1);
     unreadable_status(&mut app, "j_1");
     let drawn = super::rows(&app, text_width(&app));
-    let first = drawn.first().unwrap_or_else(|| panic!("a first row"));
-    assert_eq!(first.line.to_string(), "? CANNOT ATTACH  test/model");
-    let state_span = first
-        .line
-        .spans
-        .first()
-        .unwrap_or_else(|| panic!("a state span"));
-    assert_eq!(
-        state_span.style,
-        crate::markdown::style(crate::markdown::Role::Muted)
+    assert_eq!(drawn[0].line.to_string(), "\u{25cf} task 1");
+    assert!(
+        drawn[1].line.to_string().contains("CANNOT ATTACH"),
+        "{}",
+        drawn[1].line
     );
 }
 
@@ -569,8 +589,124 @@ fn the_status_row_keeps_the_started_model() {
     );
     delegate_status(&mut app, "j_1", serde_json::json!({"state": "streaming"}));
     let drawn = super::rows(&app, text_width(&app));
-    let first = drawn.first().unwrap_or_else(|| panic!("a first row"));
-    assert_eq!(first.line.to_string(), "● WORKING  started/model");
+    // The first row names the description; the fold's model rides the
+    // dim second row with the state word.
+    assert_eq!(drawn[0].line.to_string(), "\u{25cf} review the parser");
+    assert_eq!(
+        drawn[1].line.to_string(),
+        "  WORKING \u{00b7} started/model"
+    );
+}
+
+/// A delegate's end draws from its outcome: the glyph, the description
+/// and a dim word. Attention is never used for a finished delegate.
+#[test]
+fn finished_delegates_show_how_they_ended() {
+    use crate::markdown::Role;
+    for (status, glyph, tone, word) in [
+        ("completed", "\u{2713}", Role::Success, "done"),
+        ("failed", "\u{2717}", Role::Muted, "failed"),
+        ("cancelled", "\u{2298}", Role::Muted, "cancelled"),
+    ] {
+        let mut app = attached(160, 40);
+        fold_fiber(&mut app, 1);
+        app.on_line(session_line(
+            "job_completed",
+            serde_json::json!({"job_id": "j_1", "status": status}),
+        ));
+        let drawn = super::rows_with_done(&app, text_width(&app));
+        assert_eq!(drawn.len(), 2, "{status}");
+        let first = &drawn[0];
+        assert_eq!(
+            first.line.to_string(),
+            format!("{glyph} task 1"),
+            "{status}"
+        );
+        let mark = first
+            .line
+            .spans
+            .first()
+            .unwrap_or_else(|| panic!("a glyph span"));
+        assert_eq!(mark.content, glyph, "{status}");
+        assert_eq!(mark.style, crate::markdown::style(tone), "{status}");
+        let second = &drawn[1];
+        assert_eq!(second.line.to_string(), format!("  {word}"), "{status}");
+        assert_eq!(
+            second.line.spans.first().map(|span| span.style),
+            Some(crate::markdown::style(Role::Muted)),
+            "{status}"
+        );
+        for row in &drawn {
+            for span in &row.line.spans {
+                assert_ne!(
+                    span.style,
+                    crate::markdown::style(Role::Attention),
+                    "{status}"
+                );
+            }
+        }
+    }
+}
+
+/// The title counts the running delegates only: attention while one
+/// runs, dim with only finished ones held. A card of only finished
+/// delegates still draws.
+#[test]
+fn the_title_counts_only_running() {
+    use crate::markdown::Role;
+    // One running, one done: the figure counts one, in attention.
+    let mut app = attached_with(160, 40, &["delegates"]);
+    fold_fiber(&mut app, 1);
+    fold_fiber(&mut app, 2);
+    finish(&mut app, "j_1");
+    let drawn = texts(&app);
+    assert_eq!(drawn.len(), 7);
+    let title = drawn.get(1).expect("a title row");
+    assert!(title.ends_with("1 running"), "{title}");
+    let rows = crate::view::panel::rows(&app, panel_width(&app));
+    assert_eq!(
+        rows[1].line.spans.last().map(|span| span.style),
+        Some(crate::markdown::style(Role::Attention))
+    );
+    // Only finished ones held: the card draws with a dim `0 running`.
+    let mut app = attached_with(160, 40, &["delegates"]);
+    fold_fiber(&mut app, 1);
+    finish(&mut app, "j_1");
+    let drawn = texts(&app);
+    assert_eq!(drawn.len(), 5);
+    assert!(drawn[1].ends_with("0 running"), "{drawn:?}");
+    assert_eq!(done_texts(&app), vec!["\u{2713} task 1", "  done"]);
+    let rows = crate::view::panel::rows(&app, panel_width(&app));
+    assert_eq!(
+        rows[1].line.spans.last().map(|span| span.style),
+        Some(crate::markdown::style(Role::Muted))
+    );
+}
+
+/// Running delegates come first, so a new running delegate is never
+/// behind finished ones; the narrow rows stay running-only.
+#[test]
+fn a_new_running_delegate_shows_before_finished_ones() {
+    let mut app = attached_with(160, 40, &["delegates"]);
+    fold_fiber(&mut app, 1);
+    finish(&mut app, "j_1");
+    fold_fiber(&mut app, 2);
+    assert_eq!(
+        done_texts(&app),
+        vec![
+            "\u{25cf} task 2".to_owned(),
+            "  fiber \u{00b7} test/model".to_owned(),
+            "\u{2713} task 1".to_owned(),
+            "  done".to_owned(),
+        ]
+    );
+    assert_eq!(
+        card_texts(&app),
+        vec![
+            "\u{25cf} task 2".to_owned(),
+            "  fiber \u{00b7} test/model".to_owned()
+        ]
+    );
 }
 
 #[test]

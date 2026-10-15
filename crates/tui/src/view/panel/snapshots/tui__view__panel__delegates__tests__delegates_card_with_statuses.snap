@@ -5,10 +5,10 @@ expression: "crate::view::text(&buf)"
 
  ▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
    Delegates            3 running
-   ● WORKING  test/model
-     task 1
-   ● claude  sonnet
-     write the docs
-   ● fiber  test/model
-     task 3
+   ● task 1
+     WORKING · test/model
+   ● write the docs
+     claude · sonnet
+   ● task 3
+     fiber · test/model
  ▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀

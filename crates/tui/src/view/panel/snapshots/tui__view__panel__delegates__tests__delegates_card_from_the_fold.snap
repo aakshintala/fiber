@@ -5,10 +5,10 @@ expression: "crate::view::text(&buf)"
 
  ▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
    Delegates            2 running
-   ● fiber  anthropic/opus
-     review the parser
-   ● claude  sonnet
-     write the docs
+   ● review the parser
+     fiber · anthropic/opus
+   ● write the docs
+     claude · sonnet
  ▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀
 
  ▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄

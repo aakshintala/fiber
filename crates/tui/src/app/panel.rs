@@ -9,6 +9,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use contract::Envelope;
 use contract::JobId;
 use contract::SessionId;
+use contract::events::Outcome;
 use contract::events::{
     CommandAccepted, CommandRejected, CommandResult, DelegateStarted, ExtensionUi, FileChange,
     JobCompleted, JobStarted, McpServerFailed, McpServerReady, ModelChanged, PreambleBuilt,
@@ -98,6 +99,10 @@ pub(crate) struct PanelState {
     changes: BTreeMap<String, (u64, u64)>,
     jobs: Vec<(JobId, String)>,
     delegates: BTreeMap<JobId, DelegateStarted>,
+    /// How each finished delegate ended, by job: a `job_completed` for a
+    /// delegate keeps its `jobs` entry and records its `status` here, so
+    /// the card keeps showing it as done (`docs/tui.md`, "The panel").
+    finished: BTreeMap<JobId, Outcome>,
     jobs_open: bool,
     due: bool,
     asked: Option<String>,
@@ -189,6 +194,11 @@ impl PanelState {
             }
             "job_started" => {
                 if let Some(started) = super::read!(envelope, JobStarted) {
+                    // A resume is a new run of the same job: an id held
+                    // from an earlier run goes last in start order, once
+                    // (`docs/delegates.md`, "Identity and resume").
+                    self.jobs.retain(|(id, _)| *id != started.job_id);
+                    self.finished.remove(&started.job_id);
                     self.jobs.push((started.job_id, started.description));
                 }
             }
@@ -199,7 +209,13 @@ impl PanelState {
             }
             "job_completed" => {
                 if let Some(done) = super::read!(envelope, JobCompleted) {
-                    self.jobs.retain(|(id, _)| *id != done.job_id);
+                    // A finished delegate stays on its card as done; a
+                    // plain job leaves the fold.
+                    if self.delegates.contains_key(&done.job_id) {
+                        self.finished.insert(done.job_id, done.status);
+                    } else {
+                        self.jobs.retain(|(id, _)| *id != done.job_id);
+                    }
                 }
             }
             _ => {}
@@ -316,10 +332,27 @@ impl PanelState {
     pub(crate) fn running_delegates(&self) -> Vec<(&DelegateStarted, &str)> {
         self.jobs
             .iter()
+            .filter(|(id, _)| !self.finished.contains_key(id))
             .filter_map(|(id, description)| {
                 self.delegates
                     .get(id)
                     .map(|started| (started, description.as_str()))
+            })
+            .collect()
+    }
+
+    /// Finished delegates in job start order, each with its job's
+    /// description and how it ended: a job with a `delegate_started`
+    /// and a `job_completed` (`docs/tui.md`, "The panel").
+    pub(crate) fn finished_delegates(&self) -> Vec<(&DelegateStarted, &str, Outcome)> {
+        self.jobs
+            .iter()
+            .filter_map(|(id, description)| {
+                self.finished.get(id).and_then(|outcome| {
+                    self.delegates
+                        .get(id)
+                        .map(|started| (started, description.as_str(), *outcome))
+                })
             })
             .collect()
     }
@@ -367,13 +400,15 @@ impl PanelState {
         self.tried.insert(session.clone())
     }
 
-    /// Clamps the Delegates card's offset to the running delegates less
+    /// Clamps the Delegates card's offset to the held delegates less
     /// [`DELEGATES_SHOWN`], then moves it one delegate: down to the clamp,
-    /// up saturating at 0 (`docs/tui.md`, "The panel").
+    /// up saturating at 0 (`docs/tui.md`, "The panel"). Running delegates
+    /// come first, then finished ones, so the clamp counts both.
     pub(super) fn scroll_delegates(&mut self, up: bool) {
         let max = self
             .running_delegates()
             .len()
+            .saturating_add(self.finished_delegates().len())
             .saturating_sub(DELEGATES_SHOWN);
         let clamped = self.delegate_scroll.min(max);
         self.delegate_scroll = if up {

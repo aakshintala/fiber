@@ -211,21 +211,31 @@ fn only_a_description_row_drawn_asks_nothing() {
     let mut app = attached(200, 40);
     delegate(&mut app, "j_1", "alpha");
     app.set_now(clock.origin(), 0);
-    // The panel scrolled so only the delegate's description row shows.
-    let (_, span) = crate::view::panel::rows_and_delegates(&app, 200);
-    let span = span.expect("a delegates span");
-    ask(&app, span.start + 1..span.start + 2);
+    // The ask range counts from the combined window's first delegate
+    // row: the description row alone asks nothing.
+    ask(&app, 1..2);
     assert_eq!(app.take_wake(), None);
     // Its state row asks.
-    ask(&app, span.start..span.start + 1);
+    ask(&app, 0..1);
     assert!(app.take_wake().is_some());
+}
+
+#[test]
+fn panel_draw_ending_at_the_title_row_asks_nothing() {
+    let (app, start) = one_delegate();
+    // `height - 1` rows draw, ending where the title row is: the empty
+    // delegate range past the card's edge and title asks nothing.
+    let height = u16::try_from(start.saturating_add(3)).expect("panel height");
+    draw_panel(&app, height);
+    assert_eq!(app.take_wake(), None);
 }
 
 #[test]
 fn panel_draw_asks_when_a_delegate_state_row_intersects_the_drawn_rows() {
     let (app, start) = one_delegate();
-    // `height - 1` rows draw: this includes the delegate's first state row.
-    let height = u16::try_from(start.saturating_add(2)).expect("panel height");
+    // `height - 1` rows draw: this includes the delegate's first state
+    // row, past the card's edge and title.
+    let height = u16::try_from(start.saturating_add(4)).expect("panel height");
     draw_panel(&app, height);
     assert!(app.take_wake().is_some());
 }
