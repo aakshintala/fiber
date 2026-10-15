@@ -5,13 +5,13 @@ expression: "screen(&app, 160, 40)"
 
                                                                                                                                ▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
                                                                                                                                  /Users/you/work/fiber     auto
-                                                                                                                                 model  test/model · thinking …
-                                                                                                                                 ▆▆▆▆▆▆▆▆░░░░░░░░░          500
+                                                                                                                                 test/model                high
+                                                                                                                                 ▆▆▆▆▆▆▆▆▆▆▆▆▆▆▆▆▆          500
                                                                                                                                  50% of window
-                                                                                                                                 tokens in / out  1.1k / 200
-                                                                                                                                 cache hits  9%
-                                                                                                                                 cost billed  $0.41 of $5.00
-                                                                                                                                 cost on subscription  $1.10
+                                                                                                                                 tokens in / out     1.1k / 200
+                                                                                                                                 cache hits                  9%
+                                                                                                                                 cost            $0.41 of $5.00
+                                                                                                                                 cost on subscription     $1.10
                                                                                                                                ▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀
 
 

@@ -248,7 +248,11 @@ fn cache_hits_need_input() {
         spend(1, 0, 0, 5, serde_json::json!(0.0), 0.0),
         None,
     ));
-    assert!(texts(&app, 40).iter().any(|row| row == "cache hits  0%"));
+    assert!(
+        texts(&app, 40)
+            .iter()
+            .any(|row| *row == "cache hits".to_owned() + &" ".repeat(24) + "0%")
+    );
 }
 
 #[test]
@@ -260,25 +264,22 @@ fn pct_and_bar_floor() {
         Some(serde_json::json!({"tokens": 119, "window": 1000})),
     ));
     let drawn = texts(&app, 40);
-    // Two of 17 cells fill (119 of the 800 trigger), then the marker
-    // and the size right-aligned.
-    let bar = "\u{2586}\u{2586}".to_owned()
-        + &"\u{2591}".repeat(15)
-        + "\u{2502}"
-        + &" ".repeat(15)
-        + "119";
-    assert!(drawn.iter().any(|row| row == &bar), "{drawn:?}");
+    // Seventeen cells of `▆`, then the marker and the size
+    // right-aligned: the text cannot tell fill from track, only the
+    // styles do (see the roles test).
+    let bar = "\u{2586}".repeat(17) + "\u{2502}" + &" ".repeat(15) + "119";
+    assert!(drawn.contains(&bar), "{drawn:?}");
     // The handoff row fits with three of pad, nothing cut.
     assert!(
         drawn
             .iter()
-            .any(|row| row == "handoff at 800         11% of window"),
+            .any(|row| *row == "handoff at 800         11% of window"),
         "{drawn:?}"
     );
     assert!(
         drawn
             .iter()
-            .any(|row| row == "then a summary, fresh context"),
+            .any(|row| *row == "then a summary, fresh context"),
         "{drawn:?}"
     );
 }
@@ -313,7 +314,7 @@ fn a_zero_context_window_has_no_context_rows() {
     assert!(
         drawn
             .iter()
-            .any(|row| row == "model  test/model · thinking high")
+            .any(|row| *row == "test/model".to_owned() + &" ".repeat(22) + "high")
     );
     assert!(
         drawn.iter().all(|row| !row.contains('▆')
@@ -333,9 +334,12 @@ fn a_full_context_fills_every_cell() {
     let drawn = texts(&app, 40);
     // All 17 cells fill, no marker without a trigger, then the size.
     let bar = "\u{2586}".repeat(17) + &" ".repeat(15) + "1.0k";
-    assert!(drawn.iter().any(|row| row == &bar), "{drawn:?}");
+    assert!(drawn.contains(&bar), "{drawn:?}");
     // With no trigger the share stands alone, left-aligned.
-    assert!(drawn.iter().any(|row| row == "100% of window"), "{drawn:?}");
+    assert!(
+        drawn.iter().any(|row| *row == "100% of window"),
+        "{drawn:?}"
+    );
 }
 
 #[test]
@@ -347,26 +351,36 @@ fn the_marker_follows_the_seventeen_cells() {
         Some(serde_json::json!({"tokens": 500, "window": 1000})),
     ));
     let drawn = texts(&app, 40);
-    let bar = "\u{2586}".repeat(8) + &"\u{2591}".repeat(9) + "\u{2502}" + &" ".repeat(15) + "500";
-    assert!(drawn.iter().any(|row| row == &bar), "{drawn:?}");
+    let bar = "\u{2586}".repeat(17) + "\u{2502}" + &" ".repeat(15) + "500";
+    assert!(drawn.contains(&bar), "{drawn:?}");
     // The handoff row fits with two of pad, nothing cut.
     assert!(
         drawn
             .iter()
-            .any(|row| row == "handoff at 1.0k        50% of window"),
+            .any(|row| *row == "handoff at 1.0k        50% of window"),
         "{drawn:?}"
     );
 }
 
 #[test]
 fn the_fill_clamps_at_zero_the_trigger_and_past_it() {
-    assert_eq!(super::bar_fill(0, 1000, Some(800)), 0);
-    assert_eq!(super::bar_fill(800, 1000, Some(800)), 17);
-    assert_eq!(super::bar_fill(900, 1000, Some(800)), 17);
-    assert_eq!(super::bar_fill(500, 1000, None), 8);
+    // Seventeen cells, against the trigger.
+    assert_eq!(super::bar_fill(0, 1000, Some(800), 17), 0);
+    assert_eq!(super::bar_fill(799, 1000, Some(800), 17), 16);
+    assert_eq!(super::bar_fill(800, 1000, Some(800), 17), 17);
+    assert_eq!(super::bar_fill(900, 1000, Some(800), 17), 17);
+    // Eight cells, against the trigger.
+    assert_eq!(super::bar_fill(0, 1000, Some(800), 8), 0);
+    assert_eq!(super::bar_fill(799, 1000, Some(800), 8), 7);
+    assert_eq!(super::bar_fill(800, 1000, Some(800), 8), 8);
+    assert_eq!(super::bar_fill(900, 1000, Some(800), 8), 8);
+    // Against the window with no trigger.
+    assert_eq!(super::bar_fill(500, 1000, None, 17), 8);
+    assert_eq!(super::bar_fill(268_000, 400_000, Some(400_000), 8), 5);
     // A zero goal never divides: empty, not a panic.
-    assert_eq!(super::bar_fill(5, 0, None), 0);
-    assert_eq!(super::bar_fill(5, 1000, Some(0)), 0);
+    assert_eq!(super::bar_fill(5, 0, None, 17), 0);
+    assert_eq!(super::bar_fill(5, 1000, Some(0), 17), 0);
+    assert_eq!(super::bar_fill(5, 1000, Some(0), 8), 0);
 }
 
 #[test]
@@ -389,8 +403,12 @@ fn cost_rows() {
         let mut app = attached(160, 40);
         app.on_line(status_line(spend(1, 0, 0, 2, cost, subscription), None));
         let drawn = texts(&app, 40);
+        // The cost row reads dim "cost" with its figure right-aligned;
+        // the subscription row keeps its prose label.
         assert_eq!(
-            drawn.iter().any(|row| row.starts_with("cost billed")),
+            drawn
+                .iter()
+                .any(|row| row.starts_with("cost ") && !row.starts_with("cost on")),
             billed,
             "{drawn:?}"
         );
@@ -410,7 +428,7 @@ fn cost_rows() {
     assert!(
         texts(&app, 40)
             .iter()
-            .any(|row| row == "cost billed  $0.01")
+            .any(|row| *row == "cost".to_owned() + &" ".repeat(27) + "$0.01")
     );
     let mut app = attached(160, 40);
     app.on_line(status_line(
@@ -420,7 +438,7 @@ fn cost_rows() {
     assert!(
         texts(&app, 40)
             .iter()
-            .any(|row| row == "cost billed  unknown")
+            .any(|row| *row == "cost".to_owned() + &" ".repeat(25) + "unknown")
     );
 }
 
@@ -439,14 +457,23 @@ fn budget_preamble(budget: f64) -> Line {
 #[test]
 fn cost_against_a_budget() {
     for (cost, row) in [
-        (serde_json::json!(0.0), "cost billed  $0.00 of $5.00"),
-        (serde_json::json!(1.25), "cost billed  $1.25 of $5.00"),
-        (serde_json::Value::Null, "cost billed  unknown of $5.00"),
+        (
+            serde_json::json!(0.0),
+            "cost".to_owned() + &" ".repeat(18) + "$0.00 of $5.00",
+        ),
+        (
+            serde_json::json!(1.25),
+            "cost".to_owned() + &" ".repeat(18) + "$1.25 of $5.00",
+        ),
+        (
+            serde_json::Value::Null,
+            "cost".to_owned() + &" ".repeat(16) + "unknown of $5.00",
+        ),
     ] {
         let mut app = attached(160, 40);
         app.on_line(budget_preamble(5.0));
         app.on_line(status_line(spend(1, 0, 0, 2, cost, 0.0), None));
-        assert!(texts(&app, 40).iter().any(|drawn| drawn == row), "{row}");
+        assert!(texts(&app, 40).contains(&row), "{row}");
     }
     // Without a budget the row keeps its rule: hidden at zero,
     // plain above it.
@@ -468,7 +495,7 @@ fn cost_against_a_budget() {
     assert!(
         texts(&app, 40)
             .iter()
-            .any(|row| row == "cost billed  $1.25")
+            .any(|row| *row == "cost".to_owned() + &" ".repeat(27) + "$1.25")
     );
 }
 
@@ -484,11 +511,15 @@ fn the_budget_comparison_counts_billed_spend_only() {
     ));
     let drawn = texts(&app, 40);
     assert!(
-        drawn.iter().any(|row| row == "cost billed  $1.00 of $5.00"),
+        drawn
+            .iter()
+            .any(|row| row.ends_with("$1.00 of $5.00") && row.starts_with("cost ")),
         "{drawn:?}"
     );
     assert!(
-        drawn.iter().any(|row| row == "cost on subscription  $9.00"),
+        drawn
+            .iter()
+            .any(|row| row.ends_with("$9.00") && row.starts_with("cost on subscription")),
         "{drawn:?}"
     );
     // Subscription-only: billed $0 against the budget.
@@ -500,7 +531,9 @@ fn the_budget_comparison_counts_billed_spend_only() {
     ));
     let drawn = texts(&app, 40);
     assert!(
-        drawn.iter().any(|row| row == "cost billed  $0.00 of $5.00"),
+        drawn
+            .iter()
+            .any(|row| row.ends_with("$0.00 of $5.00") && row.starts_with("cost ")),
         "{drawn:?}"
     );
 }
@@ -513,7 +546,11 @@ fn turns_at_zero_are_left_out() {
         "turn_started",
         serde_json::json!({"input": []}),
     ));
-    assert!(texts(&app, 40).iter().any(|row| row == "turns  1"));
+    assert!(
+        texts(&app, 40)
+            .iter()
+            .any(|row| *row == "turns".to_owned() + &" ".repeat(30) + "1")
+    );
 }
 
 #[test]
@@ -523,12 +560,12 @@ fn the_model_falls_back_to_the_status() {
         spend(1, 0, 0, 2, serde_json::json!(0.0), 0.0),
         None,
     ));
-    assert!(texts(&app, 40).iter().any(|row| row == "model  test/model"));
+    assert!(texts(&app, 40).iter().any(|row| *row == "test/model"));
     app.on_line(preamble_line(Some(800)));
     assert!(
         texts(&app, 40)
             .iter()
-            .any(|row| row == "model  test/model · thinking high")
+            .any(|row| *row == "test/model".to_owned() + &" ".repeat(22) + "high")
     );
 }
 
@@ -943,7 +980,7 @@ fn the_top_five_by_lines_changed_ties_by_path() {
     assert!(
         drawn
             .iter()
-            .any(|row| row == "6 files changed  +33 \u{2212}13")
+            .any(|row| *row == "6 files changed  +33 \u{2212}13")
     );
 }
 
@@ -965,7 +1002,7 @@ fn exactly_five_paths_all_show() {
     assert!(
         drawn
             .iter()
-            .any(|row| row == "5 files changed  +5 \u{2212}0")
+            .any(|row| *row == "5 files changed  +5 \u{2212}0")
     );
 }
 
@@ -1006,7 +1043,8 @@ fn the_tools_line_is_a_click_target() {
         .collect::<String>()
         .trim_end()
         .to_owned();
-    assert!(line.contains("tools  relay down"), "{line}");
+    assert!(line.contains("tools"), "{line}");
+    assert!(line.contains("\u{2717} relay down"), "{line}");
 }
 
 #[test]
@@ -1152,7 +1190,7 @@ fn session_card_rows_are_cut_with_an_ellipsis() {
     let mut app = attached(140, 24);
     full_session(&mut app);
     for width in [30u16, 60] {
-        let text = usize::from(width) - 3;
+        let text = usize::from(width) - 4;
         let rows = texts(&app, width);
         for row in rows
             .iter()
@@ -1160,14 +1198,18 @@ fn session_card_rows_are_cut_with_an_ellipsis() {
         {
             assert!(crate::format::width(row) <= text, "{width}: {row:?}");
         }
+        // The speed row is cut mid-label at the floor and whole at 60.
         let speed = rows
             .iter()
-            .find(|row| row.starts_with("output speed"))
+            .find(|row| row.contains("250 tokens/s"))
             .unwrap_or_else(|| panic!("{width}: {rows:?}"));
         if width == 30 {
-            assert!(speed.ends_with('\u{2026}'), "{speed:?}");
+            assert_eq!(*speed, "speed, last \u{2026} 250 tokens/s");
         } else {
-            assert!(speed.ends_with("tokens/s"), "{speed:?}");
+            assert_eq!(
+                *speed,
+                "speed, last reply".to_owned() + &" ".repeat(27) + "250 tokens/s"
+            );
         }
     }
 }
@@ -1178,11 +1220,11 @@ fn session_card_rows_are_cut_with_an_ellipsis() {
 fn a_row_is_cut_only_past_the_card_width() {
     let text = "turns  12";
     let width = crate::format::width(text);
-    let kept = super::fit_rows(vec![super::plain(text.to_owned())], width);
+    let kept = super::fit_rows(vec![plain(text.to_owned())], width);
     assert_eq!(kept[0].line.to_string(), text);
-    let cut = super::fit_rows(vec![super::plain(text.to_owned())], width - 1);
+    let cut = super::fit_rows(vec![plain(text.to_owned())], width - 1);
     assert_eq!(cut[0].line.to_string(), "turns  \u{2026}");
-    let one = super::fit_rows(vec![super::plain(text.to_owned())], 1);
+    let one = super::fit_rows(vec![plain(text.to_owned())], 1);
     assert_eq!(one[0].line.to_string(), "\u{2026}");
 }
 
@@ -1224,14 +1266,20 @@ fn a_row_of_spans_is_cut_in_the_overflowing_span() {
 #[test]
 fn the_context_bar_is_drawn_in_its_roles() {
     use crate::markdown::{Role, style};
-    let spans = super::bar_spans(500, 1000, Some(800));
+    let spans = super::bar_spans(500, 1000, Some(800), 17);
+    // Ten of 17 cells fill: info over a rule track of the same cell,
+    // then the marker in attention.
     assert_eq!(spans.len(), 18);
+    assert!(spans.iter().take(10).all(|span| span.content == "\u{2586}"));
     assert_eq!(spans[0].style, style(Role::Info));
     assert_eq!(spans[9].style, style(Role::Info));
     assert_eq!(spans[10].style, style(Role::Rule));
     assert_eq!(spans[16].style, style(Role::Rule));
-    assert_eq!(spans[17].content, "│");
+    assert_eq!(spans[16].content, "\u{2586}");
+    assert_eq!(spans[17].content, "\u{2502}");
     assert_eq!(spans[17].style, style(Role::Attention));
+    // The eight-cell narrow bar shares the fill: five of eight.
+    assert_eq!(super::bar_fill(268_000, 400_000, Some(400_000), 8), 5);
 }
 
 /// The panel rect drawn and painted without colour, with its targets.
@@ -1315,6 +1363,17 @@ fn no_color_boxes_a_sidebar_card_and_keeps_targets_inside() {
     let (rows, span) = super::rows_and_delegates(&app, rect.width);
     assert_eq!(rows.len(), 4);
     assert_eq!(span, None);
+}
+
+/// A local plain row: the production helper went with the directory
+/// row, and only these tests need one.
+fn plain(text: String) -> super::Row {
+    super::Row {
+        line: ratatui::text::Line::raw(text),
+        spot: None,
+        tint: None,
+        edge: false,
+    }
 }
 
 /// Draws `app`'s panel at `width` columns: the buffer, row by row.
@@ -1438,11 +1497,206 @@ fn cards_without_content_draw_nothing() {
     assert!(drawn[0].edge);
     assert_eq!(
         drawn[1].line.to_string(),
-        "model  test/model · thinking high"
+        "test/model".to_owned() + &" ".repeat(22) + "high"
     );
     assert!(
         drawn
             .iter()
             .all(|row| !row.line.to_string().contains("auto"))
+    );
+}
+
+/// A session with every row present, on `main`, for the width-34 pin.
+fn full_session_on_main(app: &mut App) {
+    app.on_line(preamble_line(Some(800)));
+    app.on_line(session_line(
+        "session_status",
+        serde_json::json!({
+            "name": "work", "workspace": "/Users/you/work/fiber",
+            "project": "-w", "state": "idle", "since": 0,
+            "spend": {"tokens": {"input": 900, "cache_read": 100,
+                "cache_write": {"5m": 50}, "output": 200},
+                "cost": 0.41, "subscription_cost": 1.10},
+            "model": "test/model", "delegates": 0, "jobs": 0,
+            "clients": 0, "git": {"branch": "main"},
+            "context": {"tokens": 500, "window": 1000},
+        }),
+    ));
+    app.on_line(session_line(
+        "turn_started",
+        serde_json::json!({"input": []}),
+    ));
+    app.on_line(timed_line(
+        "assistant_message_started",
+        1000,
+        serde_json::json!({}),
+    ));
+    app.on_line(timed_line(
+        "usage_recorded",
+        3000,
+        serde_json::json!({
+            "generation_id": "g_1", "model": "test/model",
+            "tokens": {"input": 10, "cache_read": 0,
+                "cache_write": {}, "output": 500},
+            "input_bytes": 0, "cost": 0.01,
+        }),
+    ));
+    app.on_line(session_line(
+        "mcp_server_failed",
+        serde_json::json!({"server": "relay", "reason": "died",
+            "will_restart": false,
+            "error": {"code": "mcp_server_unavailable", "message": "died"}}),
+    ));
+}
+
+/// The Session card's rows at width 34: the title, "git" and the branch,
+/// the model and thinking, the 17-cell bar with its handoff rows, and
+/// every figure with its label dim and its value right-aligned
+/// (`docs/tui.md`, "The panel").
+#[test]
+fn session_card_rows_match_the_doc_at_width_34() {
+    use crate::app::panel::Spot;
+    use crate::markdown::{Role, style};
+    use ratatui::style::Modifier;
+    let mut app = attached(160, 40);
+    full_session_on_main(&mut app);
+    let drawn = rows(&app, 34);
+    let lines: Vec<String> = drawn.iter().map(|row| row.line.to_string()).collect();
+    let bar = "\u{2586}".repeat(10) + &"\u{2586}".repeat(7) + "\u{2502}" + &" ".repeat(9) + "500";
+    assert_eq!(
+        lines,
+        vec![
+            "\u{2584}".repeat(33),
+            "/Users/you/work/fiber     auto".to_owned(),
+            "git  main".to_owned(),
+            "test/model".to_owned() + &" ".repeat(16) + "high",
+            bar,
+            "handoff at 800   50% of window".to_owned(),
+            "then a summary, fresh context".to_owned(),
+            "tokens in / out".to_owned() + &" ".repeat(5) + "1.1k / 200",
+            "cache hits".to_owned() + &" ".repeat(18) + "9%",
+            "cost".to_owned() + &" ".repeat(21) + "$0.41",
+            "cost on subscription     $1.10".to_owned(),
+            "speed, last reply 250 tokens/s".to_owned(),
+            "turns".to_owned() + &" ".repeat(24) + "1",
+            "tools".to_owned() + &" ".repeat(13) + "\u{2717} relay down",
+            "\u{2580}".repeat(33),
+        ]
+    );
+    let spots: Vec<Option<Spot>> = drawn.iter().map(|row| row.spot).collect();
+    assert_eq!(
+        spots,
+        vec![
+            None,
+            None,
+            Some(Spot::Branch),
+            Some(Spot::Model),
+            Some(Spot::Context),
+            Some(Spot::Context),
+            Some(Spot::Context),
+            Some(Spot::Usage),
+            Some(Spot::Usage),
+            Some(Spot::Usage),
+            Some(Spot::Usage),
+            None,
+            None,
+            Some(Spot::Tools),
+            None,
+        ]
+    );
+    // "git" dim, the branch in secondary.
+    assert_eq!(drawn[2].line.spans.len(), 3);
+    assert_eq!(drawn[2].line.spans[0].content, "git");
+    assert_eq!(drawn[2].line.spans[0].style, style(Role::Muted));
+    assert_eq!(drawn[2].line.spans[2].content, "main");
+    assert_eq!(drawn[2].line.spans[2].style, style(Role::Secondary));
+    // The model in accent, the thinking level in attention.
+    assert_eq!(drawn[3].line.spans[0].content, "test/model");
+    assert_eq!(drawn[3].line.spans[0].style, style(Role::Accent));
+    assert_eq!(drawn[3].line.spans[2].content, "high");
+    assert_eq!(drawn[3].line.spans[2].style, style(Role::Attention));
+    // A figure row: its label dim, its value in the text colour.
+    assert_eq!(drawn[7].line.spans[0].content, "tokens in / out");
+    assert_eq!(drawn[7].line.spans[0].style, style(Role::Muted));
+    assert_eq!(drawn[7].line.spans[2].content, "1.1k / 200");
+    assert_eq!(drawn[7].line.spans[2].style, style(Role::Text));
+    // The title keeps the card's name bold with the figure right-aligned.
+    assert_eq!(
+        drawn[1].line.spans[0].style,
+        style(Role::Text).add_modifier(Modifier::BOLD)
+    );
+}
+
+/// No row reads the empty track: the bar rests in `▆` in `rule`, never
+/// `░`, anywhere in the panel (`docs/tui.md`, "The panel").
+#[test]
+fn no_row_reads_the_empty_track() {
+    let mut app = attached(140, 24);
+    full_session(&mut app);
+    for width in [34u16, 30] {
+        for row in rows(&app, width) {
+            assert!(
+                !row.line.to_string().contains('\u{2591}'),
+                "{width}: {}",
+                row.line
+            );
+        }
+    }
+}
+
+/// Folds a down MCP `server` into `app`.
+fn fail_server(app: &mut App, server: &str) {
+    app.on_line(session_line(
+        "mcp_server_failed",
+        serde_json::json!({"server": server, "reason": "died",
+            "will_restart": false,
+            "error": {"code": "mcp_server_unavailable", "message": "died"}}),
+    ));
+}
+
+/// The tools row shows only while a server is down: dim "tools" with
+/// one `✗ <server> down` in error per server, cut from the left when
+/// too long for the card (`docs/tui.md`, "The panel").
+#[test]
+fn the_tools_row_shows_only_while_a_server_is_down() {
+    use crate::app::panel::Spot;
+    use crate::markdown::{Role, style};
+    let app = status_only();
+    assert!(
+        rows(&app, 40)
+            .iter()
+            .all(|row| !row.line.to_string().contains('\u{2717}'))
+    );
+    let mut app = status_only();
+    fail_server(&mut app, "relay");
+    let row = rows(&app, 40)
+        .into_iter()
+        .find(|row| row.spot == Some(Spot::Tools))
+        .expect("a tools row");
+    assert_eq!(
+        row.line.to_string(),
+        "tools".to_owned() + &" ".repeat(19) + "\u{2717} relay down"
+    );
+    assert_eq!(row.line.spans.len(), 3);
+    assert_eq!(row.line.spans[0].content, "tools");
+    assert_eq!(row.line.spans[0].style, style(Role::Muted));
+    assert_eq!(row.line.spans[2].content, "\u{2717} relay down");
+    assert_eq!(row.line.spans[2].style, style(Role::Error));
+    // Two names overflow the card: the value is cut from the left and
+    // keeps the error style past the cut.
+    let mut app = status_only();
+    fail_server(&mut app, "alpha");
+    fail_server(&mut app, "beta-server");
+    let row = rows(&app, 40)
+        .into_iter()
+        .find(|row| row.spot == Some(Spot::Tools))
+        .expect("a tools row");
+    let text = row.line.to_string();
+    assert_eq!(crate::format::width(&text), 36);
+    assert!(text.starts_with("tools \u{2026}"), "{text}");
+    assert!(text.ends_with("\u{2717} beta-server down"), "{text}");
+    assert_eq!(
+        row.line.spans.last().map(|span| span.style),
+        Some(style(Role::Error))
     );
 }

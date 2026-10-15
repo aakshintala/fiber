@@ -5,17 +5,17 @@ expression: "super::super::text(&buf)"
 
  ▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
    /Users/you/work/fiber     auto
-   model  test/model · thinking …
-   ▆▆▆▆▆▆▆▆▆▆░░░░░░░│         500
+   test/model                high
+   ▆▆▆▆▆▆▆▆▆▆▆▆▆▆▆▆▆│         500
    handoff at 800   50% of window
    then a summary, fresh context
-   tokens in / out  1.1k / 200
-   cache hits  9%
-   cost billed  $0.41
-   cost on subscription  $1.10
-   output speed, last reply  250…
-   turns  1
-   tools  relay down
+   tokens in / out     1.1k / 200
+   cache hits                  9%
+   cost                     $0.41
+   cost on subscription     $1.10
+   speed, last reply 250 tokens/s
+   turns                        1
+   tools             ✗ relay down
  ▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀
 
  ▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄

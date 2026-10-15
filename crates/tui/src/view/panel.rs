@@ -274,7 +274,7 @@ fn fit_rows(rows: Vec<Row>, text: usize) -> Vec<Row> {
 }
 
 /// `spans` cut to `text` columns, ending in `…`.
-fn fit_spans(spans: Vec<Span<'static>>, text: usize) -> Vec<Span<'static>> {
+pub(super) fn fit_spans(spans: Vec<Span<'static>>, text: usize) -> Vec<Span<'static>> {
     let room = text.saturating_sub(1);
     let mut out = Vec::new();
     let mut used = 0;
@@ -368,7 +368,9 @@ fn card_rows(app: &App, card: &Card, text: usize) -> Vec<Row> {
     }
 }
 /// The Session card's rows at `text` columns, each left out when its
-/// value is absent (`docs/tui.md`, "The panel").
+/// value is absent (`docs/tui.md`, "The panel"). Labels read dim with
+/// their figures right-aligned in the text colour; the bar is 17 cells
+/// of `▆` toward the handoff point.
 fn session_rows(app: &App, text: usize) -> Vec<Row> {
     let panel = app.panel_state();
     let mut out = Vec::new();
@@ -380,11 +382,23 @@ fn session_rows(app: &App, text: usize) -> Vec<Row> {
         .model()
         .or_else(|| panel.status().map(|status| status.model.as_str()));
     if let Some(model) = model {
-        let mut row = format!("model  {model}");
-        if let Some(thinking) = panel.thinking() {
-            row.push_str(&format!(" · thinking {thinking}"));
-        }
-        out.push(targeted(row, Spot::Model));
+        // The model in accent, the thinking level right-aligned in
+        // attention. No `∴`: no thinking-state source is held.
+        // debt: show the `∴` while the model thinks; upgrade trigger: a thinking flag on the panel fold.
+        let line = match panel.thinking() {
+            Some(thinking) => sides(
+                vec![Span::styled(model.to_owned(), style(Role::Accent))],
+                Span::styled(thinking.to_owned(), style(Role::Attention)),
+                text,
+            ),
+            None => Line::from(vec![Span::styled(model.to_owned(), style(Role::Accent))]),
+        };
+        out.push(Row {
+            line,
+            spot: Some(Spot::Model),
+            tint: None,
+            edge: false,
+        });
     }
     let window = panel.window().filter(|window| *window > 0);
     let context = window.and_then(|window| {
@@ -399,7 +413,7 @@ fn session_rows(app: &App, text: usize) -> Vec<Row> {
         // the context size right-aligned (`docs/tui.md`, "The panel").
         out.push(Row {
             line: sides(
-                bar_spans(context.tokens, window, panel.trigger_at()),
+                bar_spans(context.tokens, window, panel.trigger_at(), 17),
                 Span::raw(short_tokens(context.tokens)),
                 text,
             ),
@@ -449,13 +463,11 @@ fn session_rows(app: &App, text: usize) -> Vec<Row> {
             .input
             .saturating_add(tokens.cache_read)
             .saturating_add(written);
-        out.push(targeted(
-            format!(
-                "tokens in / out  {} / {}",
-                short_tokens(inside),
-                short_tokens(tokens.output)
-            ),
-            Spot::Usage,
+        out.push(figure_row(
+            "tokens in / out",
+            format!("{} / {}", short_tokens(inside), short_tokens(tokens.output)),
+            Some(Spot::Usage),
+            text,
         ));
         if inside > 0 {
             let hits = tokens
@@ -463,61 +475,86 @@ fn session_rows(app: &App, text: usize) -> Vec<Row> {
                 .saturating_mul(100)
                 .checked_div(inside)
                 .unwrap_or(0);
-            out.push(targeted(format!("cache hits  {hits}%"), Spot::Usage));
+            out.push(figure_row(
+                "cache hits",
+                format!("{hits}%"),
+                Some(Spot::Usage),
+                text,
+            ));
         }
         // With a budget the cost row always shows spend against it; a
         // cost still null counts as zero until it settles
         // (`docs/loop.md`, "Spending budget").
         match (status.spend.cost, panel.budget()) {
             (Some(cost), Some(budget)) => {
-                out.push(targeted(
-                    format!(
-                        "cost billed  {} of {}",
-                        format::money(cost),
-                        format::money(budget)
-                    ),
-                    Spot::Usage,
+                out.push(figure_row(
+                    "cost",
+                    format!("{} of {}", format::money(cost), format::money(budget)),
+                    Some(Spot::Usage),
+                    text,
                 ));
             }
             (None, Some(budget)) => {
-                out.push(targeted(
-                    format!("cost billed  unknown of {}", format::money(budget)),
-                    Spot::Usage,
+                out.push(figure_row(
+                    "cost",
+                    format!("unknown of {}", format::money(budget)),
+                    Some(Spot::Usage),
+                    text,
                 ));
             }
             (Some(cost), None) if cost > 0.0 => {
-                out.push(targeted(
-                    format!("cost billed  {}", format::money(cost)),
-                    Spot::Usage,
+                out.push(figure_row(
+                    "cost",
+                    format::money(cost),
+                    Some(Spot::Usage),
+                    text,
                 ));
             }
-            (None, None) => out.push(targeted("cost billed  unknown".to_owned(), Spot::Usage)),
+            (None, None) => {
+                out.push(figure_row(
+                    "cost",
+                    "unknown".to_owned(),
+                    Some(Spot::Usage),
+                    text,
+                ));
+            }
             (Some(_), None) => {}
         }
         if status.spend.subscription_cost > 0.0 {
-            out.push(targeted(
-                format!(
-                    "cost on subscription  {}",
-                    format::money(status.spend.subscription_cost)
-                ),
-                Spot::Usage,
+            out.push(figure_row(
+                "cost on subscription",
+                format::money(status.spend.subscription_cost),
+                Some(Spot::Usage),
+                text,
             ));
         }
     }
     if let Some(speed) = panel.speed() {
-        out.push(plain(format!("output speed, last reply  {speed} tokens/s")));
+        out.push(figure_row(
+            "speed, last reply",
+            format!("{speed} tokens/s"),
+            None,
+            text,
+        ));
     }
     if panel.turns() > 0 {
-        out.push(plain(format!("turns  {}", panel.turns())));
+        out.push(figure_row("turns", panel.turns().to_string(), None, text));
     }
     if !panel.down().is_empty() {
-        let servers: Vec<String> = panel
+        // One `✗ <server> down` per down server, joined by a space and
+        // cut from the left when too long for the card.
+        let down: Vec<String> = panel
             .down()
             .iter()
-            .map(|server| format!("{server} down"))
+            .map(|server| format!("\u{2717} {server} down"))
             .collect();
+        let value = cut_left(&down.join(" "), text.saturating_sub("tools".len() + 1));
         out.push(Row {
-            line: Line::raw(format!("tools  {}", servers.join(", "))),
+            line: sides(
+                vec![Span::styled("tools", style(Role::Muted))],
+                Span::styled(value, style(Role::Error)),
+                text,
+            ),
             spot: Some(Spot::Tools),
             tint: None,
             edge: false,
@@ -542,33 +579,58 @@ fn session_rows(app: &App, text: usize) -> Vec<Row> {
     out
 }
 
-/// How many of the bar's 17 cells fill toward the handoff point:
-/// `tokens` against the trigger, or the window with none, clamped to
-/// the bar.
-fn bar_fill(tokens: u64, window: u64, trigger: Option<u64>) -> usize {
-    let goal = trigger.unwrap_or(window);
-    let filled = tokens
-        .saturating_mul(17)
-        .checked_div(goal)
-        .unwrap_or(0)
-        .min(17);
-    usize::try_from(filled).unwrap_or(17)
+/// A figure row: its plain label dim, the figure right-aligned in the
+/// text colour, opening `spot` when clicked (`docs/tui.md`, "The
+/// panel"). No target when `spot` is none.
+fn figure_row(label: &str, value: String, spot: Option<Spot>, text: usize) -> Row {
+    Row {
+        line: sides(
+            vec![Span::styled(label.to_owned(), style(Role::Muted))],
+            Span::styled(value, style(Role::Text)),
+            text,
+        ),
+        spot,
+        tint: None,
+        edge: false,
+    }
 }
 
-/// The context bar's cells: 17 `▆`, filled toward the handoff point,
-/// then the handoff marker when one exists (`docs/tui.md`, "The
-/// panel").
-fn bar_spans(tokens: u64, window: u64, trigger: Option<u64>) -> Vec<Span<'static>> {
-    let fill = bar_fill(tokens, window, trigger);
-    let mut spans = Vec::with_capacity(18);
-    for _ in 0..fill {
-        spans.push(Span::styled("▆", style(Role::Info)));
+/// How many of the bar's `cells` fill toward the handoff point:
+/// `tokens` against the trigger, or the window with none. A zero goal
+/// never divides: empty, not a panic. At or past the goal every cell
+/// fills.
+pub(super) fn bar_fill(tokens: u64, window: u64, trigger: Option<u64>, cells: usize) -> usize {
+    let goal = trigger.unwrap_or(window);
+    if goal == 0 {
+        return 0;
     }
-    for _ in fill..17 {
-        spans.push(Span::styled("░", style(Role::Rule)));
+    if tokens >= goal {
+        return cells;
+    }
+    usize::try_from(tokens.saturating_mul(u64::try_from(cells).unwrap_or(u64::MAX)) / goal)
+        .unwrap_or(cells)
+        .min(cells)
+}
+
+/// The context bar's cells: `cells` `▆`, filled toward the handoff
+/// point in `info` over the rest in `rule`, then the handoff marker
+/// when one exists (`docs/tui.md`, "The panel").
+pub(super) fn bar_spans(
+    tokens: u64,
+    window: u64,
+    trigger: Option<u64>,
+    cells: usize,
+) -> Vec<Span<'static>> {
+    let fill = bar_fill(tokens, window, trigger, cells);
+    let mut spans = Vec::with_capacity(cells.saturating_add(1));
+    for _ in 0..fill {
+        spans.push(Span::styled("\u{2586}", style(Role::Info)));
+    }
+    for _ in fill..cells {
+        spans.push(Span::styled("\u{2586}", style(Role::Rule)));
     }
     if trigger.is_some() {
-        spans.push(Span::styled("│", style(Role::Attention)));
+        spans.push(Span::styled("\u{2502}", style(Role::Attention)));
     }
     spans
 }
@@ -594,34 +656,35 @@ fn sides(left: Vec<Span<'static>>, right: Span<'static>, text: usize) -> Line<'s
     Line::from(out)
 }
 
-/// The Session card's branch row: the last query's answer, else the
-/// status's git. A click runs `git status` (`docs/tui.md`, "Git").
+/// The Session card's branch row: "git" dim and the branch in
+/// secondary. The branch is the last query's answer, else the status's
+/// git. A click runs `git status` (`docs/tui.md`, "Git").
 fn branch_row(app: &App) -> Option<Row> {
-    let panel = app.panel_state();
-    let branch = match panel.branch() {
-        Some(Branch::Named(name)) => name.clone(),
-        Some(Branch::Detached) => "detached".to_owned(),
-        Some(Branch::Absent) => return None,
-        None => {
-            let git = panel.status().and_then(|status| status.git.as_ref())?;
-            git.branch.as_deref().unwrap_or("detached").to_owned()
-        }
-    };
+    let branch = branch_text(app)?;
     Some(Row {
-        line: Line::raw(format!("branch  {branch}")),
+        line: Line::from(vec![
+            Span::styled("git", style(Role::Muted)),
+            Span::raw("  "),
+            Span::styled(branch, style(Role::Secondary)),
+        ]),
         spot: Some(Spot::Branch),
         tint: None,
         edge: false,
     })
 }
 
-/// A plain row with no target.
-fn plain(text: String) -> Row {
-    Row {
-        line: Line::raw(text),
-        spot: None,
-        tint: None,
-        edge: false,
+/// The branch the Session card and the narrow status line show: the
+/// last query's answer, else the status's git.
+pub(super) fn branch_text(app: &App) -> Option<String> {
+    let panel = app.panel_state();
+    match panel.branch() {
+        Some(Branch::Named(name)) => Some(name.clone()),
+        Some(Branch::Detached) => Some("detached".to_owned()),
+        Some(Branch::Absent) => None,
+        None => {
+            let git = panel.status().and_then(|status| status.git.as_ref())?;
+            Some(git.branch.as_deref().unwrap_or("detached").to_owned())
+        }
     }
 }
 

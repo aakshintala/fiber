@@ -5,10 +5,10 @@ expression: "super::super::text(&buf)"
 
  ▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
    /Users/you/work/fiber     auto
-   model  test/model · thinking …
-   ▆▆▆▆▆▆▆▆░░░░░░░░░          500
+   test/model                high
+   ▆▆▆▆▆▆▆▆▆▆▆▆▆▆▆▆▆          500
    50% of window
-   tokens in / out  1.1k / 200
-   cache hits  9%
-   cost billed  $0.41
+   tokens in / out     1.1k / 200
+   cache hits                  9%
+   cost                     $0.41
  ▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀
