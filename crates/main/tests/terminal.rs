@@ -1537,14 +1537,42 @@ fn reversed_cells(grid: &support::pty::Grid) -> Vec<(u16, u16)> {
     cells
 }
 
+/// The walk's step for a notice row's reversed cells, left to right:
+/// done when the box itself has focus (its run starts the row), Up from
+/// the dismiss cross's focused cell, Down otherwise. The cross sits at
+/// the conversation column's right edge, not the screen's, so any
+/// focused cell past the first means the cross.
+fn notice_step(row: &[bool]) -> Option<&'static [u8]> {
+    if row.first().is_some_and(|cell| *cell) {
+        None
+    } else if row.iter().any(|cell| *cell) {
+        Some(b"\x1b[A")
+    } else {
+        Some(b"\x1b[B")
+    }
+}
+
+#[test]
+fn notice_step_heads_back_up_from_the_dismiss_cross() {
+    // The box spans its row: its run starts the row.
+    assert_eq!(notice_step(&[true, true, true]), None);
+    // The cross sits at the conversation column's right edge, about
+    // column 90 of a 120-column screen: a focused cell there steps Up,
+    // where a last-column check would step Down.
+    let mut row = [false; 120];
+    row[90] = true;
+    assert_eq!(notice_step(&row), Some(b"\x1b[A".as_slice()));
+    assert_eq!(notice_step(&[false; 120]), Some(b"\x1b[B".as_slice()));
+}
+
 /// Walks keyboard focus to the notice row carrying `code`
 /// (conversation door): Shift+Tab enters navigate mode, then each step
-/// writes Up from the notice's own dismiss cross (its row, last cell
-/// alone) and Down otherwise, waiting for the focus look to move each
-/// time. Returns only when the row carrying `code` has its first cell
-/// reversed, so the box spans the row and Enter opens it; never writes
-/// Enter, so it never dismisses. Every wait goes through `wait_screen`
-/// under the run's one deadline.
+/// writes Up from the notice's own dismiss cross and Down otherwise,
+/// waiting for the focus look to move each time. Returns only when the
+/// row carrying `code` has its first cell reversed, so the box spans
+/// the row and Enter opens it; never writes Enter, so it never
+/// dismisses. Every wait goes through `wait_screen` under the run's one
+/// deadline.
 #[track_caller]
 fn focus_notice(run: &mut support::pty::Run, code: &str) {
     run.write(b"\x1b[Z");
@@ -1553,7 +1581,7 @@ fn focus_notice(run: &mut support::pty::Run, code: &str) {
         (0..rows).any(|y| has_focus_look(grid, y))
     });
     let (_, rows) = grid.size();
-    for _ in 0..rows {
+    for _ in 0..=rows {
         let y = u16::try_from(
             grid.rows
                 .iter()
@@ -1561,17 +1589,13 @@ fn focus_notice(run: &mut support::pty::Run, code: &str) {
                 .expect("the notice row"),
         )
         .expect("the notice row fits in u16");
-        // The notice box spans its row; its dismiss cross is the last
-        // cell alone. Done only on the box, so Enter never dismisses.
-        if grid.cell(0, y).inverse {
-            return;
-        }
+        // Done only on the box, so Enter never dismisses.
         let (cols, _) = grid.size();
-        if grid.cell(cols - 1, y).inverse {
-            run.write(b"\x1b[A");
-        } else {
-            run.write(b"\x1b[B");
-        }
+        let row: Vec<bool> = (0..cols).map(|x| grid.cell(x, y).inverse).collect();
+        let Some(key) = notice_step(&row) else {
+            return;
+        };
+        run.write(key);
         let before = reversed_cells(&grid);
         grid = run.wait_screen("the focus moved", |next| reversed_cells(next) != before);
     }
