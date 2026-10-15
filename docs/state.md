@@ -291,7 +291,13 @@ What is recorded:
   attempt group for a native observed request, from the first socket attempt
   through socket admission. It excludes DNS before entry, TLS, CONNECT
   negotiation and the response body, as well as pre-stopped and empty groups
-  and already-built tunnels. Installed for the loop are `startup.preamble`,
+  and already-built tunnels. Also installed is `picture.run`: one scope per
+  entered image-child invocation, from spawning it to its validated answer,
+  kept through spawn failures, errors and cancellation after entry, while a
+  call cancelled before entry starts none. A PDF count/cut call owns one
+  scope, and each rendered page's own child owns its own; the renderer
+  itself and file inspection stay untimed. Its `data` holds only `op` and
+  `ms`. Installed for the loop are `startup.preamble`,
   `turn.request`, `turn.model_call` and `turn.handoff`. `startup.preamble`
   covers building and installing the preamble after the approved-code load,
   before the opening message, once per session start: a same-session rebuild

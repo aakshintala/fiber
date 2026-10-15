@@ -13,6 +13,7 @@ use std::thread;
 use std::time::Duration;
 
 use contract::ErrorCode;
+use contract::diag::{Op, Timing};
 use contract::images::{ImageError, Images};
 use contract::provider::ImageRef;
 use contract::shapes::ContentPart;
@@ -31,6 +32,10 @@ pub struct ImageChild {
     /// The program that renders a PDF's pages (`docs/tools.md`, "read"):
     /// `pdftoppm` on `PATH` unless [`crate::Files::with_renderer`] said otherwise.
     pub(crate) renderer: PathBuf,
+    /// Times one image child's work as `picture.run`, when installed by
+    /// [`ImageChild::with_timing`]. Each invocation starts its own scope;
+    /// nothing is kept on the driver.
+    timing: Option<Timing>,
 }
 
 impl ImageChild {
@@ -41,7 +46,31 @@ impl ImageChild {
             fiber,
             artifacts,
             renderer: PathBuf::from("pdftoppm"),
+            timing: None,
         }
+    }
+
+    /// Times one image child's work as `picture.run`, from spawning it to
+    /// its answer. Set before the call, as [`crate::Files::with_timing`]
+    /// does while building the child: building starts no scope, and each
+    /// entered invocation owns its guard.
+    #[must_use]
+    pub fn with_timing(self, timing: Timing) -> Self {
+        Self {
+            timing: Some(timing),
+            ..self
+        }
+    }
+
+    /// Starts one `picture.run` scope through the installed timing: `None`
+    /// when no timing is installed, or when the installed callable answers
+    /// `None`, which never rearms later in the same invocation. The one
+    /// shared timing implementation owns the clock and the writer, so no
+    /// clock is read and no arithmetic happens here.
+    pub(crate) fn timed(&self) -> Option<Box<dyn Send>> {
+        self.timing
+            .as_ref()
+            .and_then(|timing| timing(Op::PictureRun, None, None))
     }
 
     /// The running binary `read` runs again as the child.
@@ -60,21 +89,87 @@ impl ImageChild {
     }
 }
 
+/// Test-only spawn reporting for unit fixtures: each spawn on an installed
+/// thread joins a new process group and reports the child's pid, so the test
+/// arms that group's watchdog. Production grouping and cancellation are
+/// unchanged, and release builds hold no hook.
+#[cfg(test)]
+pub(crate) mod test_spawn {
+    use std::cell::RefCell;
+    use std::os::unix::process::CommandExt as _;
+    use std::process::Command;
+    use std::sync::mpsc::Sender;
+
+    thread_local! {
+        static REPORT: RefCell<Option<Sender<u32>>> = const { RefCell::new(None) };
+    }
+
+    /// Reporting installed until the guard drops. Installed on the thread
+    /// that spawns, which is the worker thread for calls that run
+    /// off-thread; that thread's exit clears it.
+    pub(crate) struct Guard;
+
+    /// Reports every later spawn on this thread to `report` until the
+    /// returned guard drops.
+    pub(crate) fn install(report: Sender<u32>) -> Guard {
+        REPORT.with(|slot| *slot.borrow_mut() = Some(report));
+        Guard
+    }
+
+    /// Joins the spawn to a new group when reporting is installed.
+    pub(crate) fn before_spawn(command: &mut Command) {
+        REPORT.with(|slot| {
+            if slot.borrow().is_some() {
+                command.process_group(0);
+            }
+        });
+    }
+
+    /// Reports one spawned child's pid.
+    pub(crate) fn after_spawn(id: u32) {
+        REPORT.with(|slot| {
+            if let Some(report) = slot.borrow().as_ref() {
+                match report.send(id) {
+                    Ok(()) | Err(_) => {}
+                }
+            }
+        });
+    }
+
+    impl Drop for Guard {
+        fn drop(&mut self) {
+            REPORT.with(|slot| slot.borrow_mut().take());
+        }
+    }
+}
+
 impl Images for ImageChild {
     fn process(&self, bytes: &[u8], cancel: &dyn Cancel) -> Result<ImageRef, ImageError> {
         if cancel.is_cancelled() {
             return Err(ImageError::Cancelled);
         }
         let stem = fresh_stem("i");
-        let spawned = Command::new(&self.fiber)
+        let mut command = Command::new(&self.fiber);
+        command
             .arg("image")
             .arg("/dev/stdin")
             .arg(&self.artifacts)
             .arg(&stem)
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
-            .stderr(Stdio::piped())
-            .spawn();
+            .stderr(Stdio::piped());
+        // The scope starts after the pre-cancel check, the fresh stem and
+        // the command's assembly, immediately before the spawn: a spawn
+        // failure is an entered call and drops it once, as every later
+        // return after entry does.
+        let _timer = self.timed();
+        #[cfg(test)]
+        test_spawn::before_spawn(&mut command);
+        let spawned = command.spawn();
+        #[cfg(test)]
+        if let Ok(child) = spawned.as_ref() {
+            test_spawn::after_spawn(child.id());
+        }
         let mut process = match spawned {
             Ok(process) => process,
             Err(error) => {
@@ -260,6 +355,8 @@ pub(crate) fn run_to_end(
     command: &mut Command,
     cancel: &dyn Cancel,
 ) -> Option<std::io::Result<Collected>> {
+    #[cfg(test)]
+    test_spawn::before_spawn(&mut *command);
     let spawned = command
         .stdin(Stdio::null())
         .stdout(Stdio::piped())
@@ -269,6 +366,8 @@ pub(crate) fn run_to_end(
         Ok(process) => process,
         Err(error) => return Some(Err(error)),
     };
+    #[cfg(test)]
+    test_spawn::after_spawn(process.id());
     let out = process.stdout.take().map(drain);
     let err = process.stderr.take().map(drain);
     let status = loop {
