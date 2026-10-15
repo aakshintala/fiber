@@ -341,16 +341,23 @@ impl Approval {
             let number = index.saturating_add(1).to_string();
             let (head, tail) = self.label(*choice);
             let seen = if focused { "▸ " } else { "  " };
-            let tail = tail.map(|(text, style)| {
-                let prefix_cells = format::width(seen)
-                    .saturating_add(number.len())
-                    .saturating_add(1)
-                    .saturating_add(format::width(&head));
-                (
-                    scrolled_tail(&text, prefix_cells, usize::from(width)),
-                    style,
-                )
-            });
+            // Long feedback scrolls to its visible end, like a form's
+            // words row, so the deny row never wraps and the cursor
+            // stays on it. Remembering tails stay complete: the rule's
+            // prefix always shows (`docs/tui.md`, "An approval").
+            let tail = match choice {
+                Choice::Deny => tail.map(|(text, style)| {
+                    let prefix_cells = format::width(seen)
+                        .saturating_add(number.len())
+                        .saturating_add(1)
+                        .saturating_add(format::width(&head));
+                    (
+                        scrolled_tail(&text, prefix_cells, usize::from(width)),
+                        style,
+                    )
+                }),
+                Choice::Once | Choice::Session | Choice::Project => tail,
+            };
             let line = lines.len();
             let number_from = seen.len();
             let head_from = number_from.saturating_add(number.len()).saturating_add(1);

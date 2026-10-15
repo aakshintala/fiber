@@ -623,6 +623,29 @@ fn feedback_that_exactly_fits_shows_whole_and_one_cell_more_scrolls() {
 }
 
 #[test]
+fn a_long_rule_prefix_stays_complete_on_remembering_rows() {
+    let prefix = "p".repeat(100);
+    let queue = folded(&[review(
+        S_A,
+        "r_1",
+        serde_json::json!({"rule": {"subject": "npm test --watch", "prefix": prefix}}),
+    )]);
+    let shown = rendered(&queue);
+    // Scrolling is Deny feedback only: the remembering rows keep the
+    // whole prefix, past the width if needed.
+    for head in ["Allow for this session", "Always allow in this project"] {
+        let row = shown
+            .lines
+            .iter()
+            .find(|row| row.contains(head))
+            .cloned()
+            .unwrap_or_default();
+        assert!(row.contains(&format!("{prefix} *")), "{row}");
+        assert!(crate::format::width(&row) > 80, "{row}");
+    }
+}
+
+#[test]
 fn each_choice_sends_its_answer() {
     let cases = [
         (
