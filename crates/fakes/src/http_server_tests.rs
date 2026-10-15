@@ -2044,12 +2044,16 @@ fn a_stalled_pause_releases_and_stops() {
 fn dropping_the_server_refuses_connections() {
     let clock = fake_clock();
     let server = bind(&clock);
-    let addr = server.addr();
     server.serve_persistent(|_| {});
+    let probe = server.drop_probe();
     drop(server);
     assert!(
-        TcpStream::connect(addr).is_err(),
-        "a dropped server refuses connections"
+        probe.listener_closed(),
+        "a dropped server closes its listener"
+    );
+    assert!(
+        probe.accept_joined(),
+        "a dropped server joins its accept thread"
     );
 }
 
