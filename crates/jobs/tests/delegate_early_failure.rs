@@ -29,11 +29,9 @@ fn args(value: serde_json::Value) -> serde_json::Map<String, serde_json::Value> 
     use serde_json::Value;
     match value {
         Value::Object(map) => map,
-        Value::Null
-        | Value::Bool(_)
-        | Value::Number(_)
-        | Value::String(_)
-        | Value::Array(_) => panic!("arguments are an object"),
+        Value::Null | Value::Bool(_) | Value::Number(_) | Value::String(_) | Value::Array(_) => {
+            panic!("arguments are an object")
+        }
     }
 }
 
