@@ -221,13 +221,23 @@ On Linux x86_64 alone:
 
   A separate workflow runs daily at 04:00 UTC against the scheduled commit,
   generating mutants across every workspace package. It runs one full-workspace
-  nextest baseline before starting 16 shards, each of which skips its own
-  baseline; at most 16 shards run at once, and a concurrency group prevents
-  scheduled runs from overlapping. Both baseline and shard jobs install zsh
-  and fish for the completion tests. Each shard always uploads `mutants.out`,
-  including survivors and logs. The initial job limit is a generous 360 minutes
-  because scheduled cold-run history is not available; each mutation step has a
-  300-minute limit. This report gates no pull request or merge.
+  nextest baseline, then a list job counts the workspace mutants and picks one
+  rotation day's 16 shards, and the shards run once the baseline passes; at most
+  16 shards run at once, and a concurrency group prevents scheduled runs from
+  overlapping. The rotation covers the whole list over `days = max(1,
+  ceil(count / 12800))` days, so each day runs 16 shards of about 800 mutants:
+  the day is the days since 1970-01-01 modulo the rotation length, and its
+  shards are `--shard k/T` with round-robin sharding for the 16 values of `k`
+  starting at 16 times the day, where `T` is 16 times the rotation length. Each
+  shard's artifact name and job summary carry its `k`, `T` and rotation day.
+  The 800-mutant target comes from run 38541652244, which listed about 23,900
+  workspace mutants and tested about 15 seconds a mutant (1,194 of shard 0's
+  1,492 mutants in 300 minutes), so 800 mutants keep a shard near 200 minutes.
+  Both baseline and shard jobs install zsh and fish for the completion tests.
+  Each shard always uploads `mutants.out`, including survivors and logs. The
+  initial job limit is a generous 360 minutes because scheduled cold-run history
+  is not available; each mutation step has a 300-minute limit. This report gates
+  no pull request or merge.
 - for a pull request where any issue its body resolves is labelled
   `bug`, the tests its first commit, the red commit, adds or changes run
   at the red commit, and every test the pull request adds or changes runs at
