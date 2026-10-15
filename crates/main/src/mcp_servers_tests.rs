@@ -837,6 +837,7 @@ fn wired(
                 &delegates,
                 skills,
                 extension_tools,
+                None,
             )
             .expect("the session builds")
         });

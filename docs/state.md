@@ -302,8 +302,13 @@ What is recorded:
   requested handoff holds its note's request and model scopes, and
   `provider_request`'s network share sits inside `turn.model_call`. Warming
   refreshes and reviewer judgements run through the same factories but write
-  no turn scope. Other plain agent clients stay unobserved, and
-  MCP timing follows in a later part.
+  no turn scope. Other plain agent clients stay unobserved.
+  Installed too is `mcp.connect`: one scope around one actual server
+  connection attempt, from starting or dialing it until its tool list is
+  in hand. It covers stdio and remote servers, eager and required starts,
+  lazy first use, restarts, renewals and post-approval starts, with the
+  remote server's actual connector work timed as `net.connect` beside it.
+  It excludes cache-only declarations, prompt discovery and tool execution.
 
 An event inside a running session is recorded in that session's log and
 nowhere else, with one exception: a session or ask process's own diagnostic

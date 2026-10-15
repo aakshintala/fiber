@@ -219,6 +219,8 @@ impl Server {
     /// advertises tools, and `prompts/list` when it advertises prompts,
     /// under `startup_timeout` on `clock`. `client_version` is Fiber's own version, sent as
     /// `clientInfo`. A failure kills and reaps the child exactly once.
+    /// A direct start without timing: test-support starts only.
+    #[cfg(test)]
     pub(crate) fn start(
         command: &str,
         args: &[String],
@@ -227,6 +229,36 @@ impl Server {
         clock: &Arc<dyn Clock>,
         startup_timeout: Duration,
         client_version: &str,
+    ) -> Result<OpenServer, StartError> {
+        Self::start_observed(
+            command,
+            args,
+            env,
+            workspace,
+            clock,
+            startup_timeout,
+            client_version,
+            &mut None,
+        )
+    }
+
+    /// As [`Server::start`], threading the attempt's connection guard to
+    /// the tool-list boundary: the handshake drops it once the full tool
+    /// list is in hand, before any prompt discovery, and the caller drops
+    /// what remains on the failure path. `None` stays untimed.
+    #[allow(
+        clippy::too_many_arguments,
+        reason = "the observed companion adds only the connection guard"
+    )]
+    pub(crate) fn start_observed(
+        command: &str,
+        args: &[String],
+        env: &BTreeMap<String, String>,
+        workspace: &Path,
+        clock: &Arc<dyn Clock>,
+        startup_timeout: Duration,
+        client_version: &str,
+        connection: &mut Option<Box<dyn Send>>,
     ) -> Result<OpenServer, StartError> {
         // Sticky: a start after the stop spawns nothing.
         if Stopping.is_cancelled() {
@@ -263,29 +295,34 @@ impl Server {
                 reading.gone();
             }
         });
-        Self::open(
+        Self::open_observed(
             shared,
             writer,
             Peer::Child(Mutex::new(Some((child, listing)))),
             clock,
             startup_timeout,
             client_version,
+            connection,
         )
     }
 
     /// Runs the handshake on a wire already open: `initialize`,
     /// `notifications/initialized`, the capability-gated `tools/list` and
     /// `prompts/list` under `startup_timeout` on `clock`, then the opened
-    /// server. A failure stops or shuts it exactly once, so neither
-    /// transport repeats the failure path: `stop` then "Fiber is shutting
-    /// down." when stopping, else `shutdown`.
-    pub(crate) fn open(
+    /// server. Consumes the attempt's connection guard once the full tool
+    /// list is in hand, before any prompt discovery: a prompt that errors
+    /// or pages past the tool boundary writes no second line. A failure
+    /// stops or shuts the server exactly once, so neither transport
+    /// repeats the failure path: `stop` then "Fiber is shutting down."
+    /// when stopping, else `shutdown`.
+    pub(crate) fn open_observed(
         shared: Arc<Shared>,
         writer: Arc<mpsc::SyncSender<Vec<u8>>>,
         peer: Peer,
         clock: &Arc<dyn Clock>,
         startup_timeout: Duration,
         client_version: &str,
+        connection: &mut Option<Box<dyn Send>>,
     ) -> Result<OpenServer, StartError> {
         let stopping = Stopping;
         clock.subscribe(Arc::downgrade(&(Arc::clone(&shared) as Arc<dyn Wake>)));
@@ -303,7 +340,7 @@ impl Server {
         // `Cancelled` is just another failed start, not a deadline.
         let not_a_list =
             || StartError::StartFailed("The server's tool list was not a result.".to_owned());
-        let handshake = |server: &Server| -> Result<Cached, StartError> {
+        let mut handshake = |server: &Server| -> Result<Cached, StartError> {
             let initialize = match server.request(
                 "initialize",
                 &serde_json::json!({
@@ -359,6 +396,12 @@ impl Server {
             } else {
                 Vec::new()
             };
+            // The connection timer ends here, with the full tool list in
+            // hand: prompt discovery runs after the boundary and can
+            // neither extend the line nor write a second one. With no
+            // advertised tools capability the known empty list is that
+            // same boundary.
+            drop(connection.take());
             // `prompts/list` runs only when `initialize` advertises the
             // `prompts` capability as an object, and a list that errors
             // or is not a result leaves the server with no prompts while

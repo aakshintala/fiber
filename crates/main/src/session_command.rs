@@ -7,6 +7,7 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 use contract::clock::wall_ms;
+use contract::diag::DebugLog;
 use contract::events::{Parent, VariablesSource};
 use contract::shapes::{Failure, Worktree};
 use contract::{ErrorCode, SessionId};
@@ -326,6 +327,13 @@ pub(crate) fn run_new(
     let skills: Arc<dyn contract::skills::Skills> = Arc::new(skill_set.reader());
     let web_search =
         crate::builtin::web_search(web_search.as_deref(), extensions.search_backend().as_ref())?;
+    // The connection timing rides the session's MCP starts at debug; at
+    // info no callable is built, so starting costs the one level check.
+    let timing = if diag.debugging() {
+        Some(diag.timings())
+    } else {
+        None
+    };
     let (tools, infos, driver, session_servers) = mcp_servers::session_tools(
         fiber,
         &home,
@@ -342,6 +350,7 @@ pub(crate) fn run_new(
         &delegates,
         skills,
         extensions.tools(),
+        timing,
     )?;
     let forget = Arc::clone(&session_servers.forget);
     let hosted_stands = crate::switch::hosted_stands(&tools);

@@ -946,6 +946,20 @@ fn typing_and_backspace_edit_the_focused_field() {
 }
 
 #[test]
+fn other_keys_leave_the_label() {
+    let fake = fake_with(targets());
+    let mut login = Login::open(&ctx(&fake));
+    open_key_panel(&mut login, &fake);
+    press(&mut login, &fake, &[Key::Tab]);
+    typed(&mut login, &fake, "xy");
+    // Arrows reach the label field but edit nothing: only a typed
+    // character or Backspace touches it.
+    press(&mut login, &fake, &[Key::Down, Key::Up]);
+    let label = drawn(&login, 80, 24);
+    assert!(label.contains("Label (--as): xy"), "{label}");
+}
+
+#[test]
 fn delete_word_clears_the_key() {
     let fake = fake_with(targets());
     let mut login = Login::open(&ctx(&fake));
