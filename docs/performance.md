@@ -70,7 +70,7 @@ a 20-thousand-token one fit the same ceiling.
 | Session start, the internal session command to its first line, no hub | 20 ms | Linux x86_64 | picked | 16 ms | 12 ms | 13 ms | 55 % | 9 % |
 | Terminal to its first frame, new session | 50 ms | Linux x86_64 | picked | 7 ms | 8 ms | 11 ms | 18 % | 8 % |
 | Terminal to its first frame, attaching | 50 ms plus 10 ms per MiB of session log | Linux x86_64 | picked | 898 ms | 1101 ms | 1364 ms | 9 % | 4 % |
-| Terminal, attaching a 10 MiB session | 81,392 KiB peak RSS | Linux x86_64 | measured | — | — | — | — | — |
+| Terminal, attaching a 10 MiB session | 45,512 KiB peak RSS | Linux x86_64 | measured | — | — | — | — | — |
 | Session, memory kept after the busy turn | 16,176 KiB RssAnon | Linux x86_64 | measured | — | — | — | — | — |
 | Session, memory kept after 10 busy turns, each followed by its handoff | the memory kept after the first, plus 1 MiB RssAnon | Linux x86_64 | picked | — | — | — | — | — |
 | Terminal, memory kept after attaching a 10 MiB session | 12,048 KiB RssAnon | Linux x86_64 | measured | — | — | — | — | — |
