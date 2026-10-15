@@ -6,56 +6,65 @@
 #![allow(clippy::panic, reason = "test helpers; a failure is the test's")]
 #![allow(clippy::expect_used, reason = "test helpers; a failure is the test's")]
 
-use std::path::Path;
-
 use extensions::Error;
 
+/// Every first-party `providers/<package>/providers/<name>.json`, compiled
+/// in: reading them at run time would read the repository at test time
+/// (`docs/ci.md`, "Selection").
+const PROVIDER_FILES: &[(&str, &str, &str)] = &[
+    (
+        "anthropic",
+        "anthropic",
+        include_str!("../../../providers/anthropic/providers/anthropic.json"),
+    ),
+    (
+        "codex",
+        "codex",
+        include_str!("../../../providers/codex/providers/codex.json"),
+    ),
+    (
+        "gemini",
+        "gemini",
+        include_str!("../../../providers/gemini/providers/gemini.json"),
+    ),
+    (
+        "muse",
+        "muse",
+        include_str!("../../../providers/muse/providers/muse.json"),
+    ),
+    (
+        "openai",
+        "openai",
+        include_str!("../../../providers/openai/providers/openai.json"),
+    ),
+    (
+        "opencode",
+        "opencode-go",
+        include_str!("../../../providers/opencode/providers/opencode-go.json"),
+    ),
+    (
+        "opencode",
+        "opencode-zen",
+        include_str!("../../../providers/opencode/providers/opencode-zen.json"),
+    ),
+    (
+        "openrouter",
+        "openrouter",
+        include_str!("../../../providers/openrouter/providers/openrouter.json"),
+    ),
+];
+
 fn declared_providers() -> Vec<(String, String)> {
-    let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../providers");
     let mut pairs = Vec::new();
-    let mut packages: Vec<_> = std::fs::read_dir(&root)
-        .expect("providers directory reads")
-        .map(|entry| entry.expect("package entry reads").path())
-        .collect();
-    packages.sort();
-    for package_dir in packages {
-        if !package_dir.is_dir() {
-            continue;
-        }
-        let package = package_dir
-            .file_name()
-            .expect("package dir has a name")
-            .to_string_lossy()
-            .into_owned();
-        let providers_dir = package_dir.join("providers");
-        let entries = match std::fs::read_dir(&providers_dir) {
-            Ok(entries) => entries,
-            Err(error) if error.kind() == std::io::ErrorKind::NotFound => continue,
-            Err(error) => panic!("{}: {error}", providers_dir.display()),
-        };
-        let mut files: Vec<_> = entries
-            .map(|entry| entry.expect("provider entry reads").path())
-            .collect();
-        files.sort();
-        for file in files {
-            if file.extension().and_then(|ext| ext.to_str()) != Some("json") {
-                continue;
-            }
-            let stem = file
-                .file_stem()
-                .expect("json file has a stem")
-                .to_string_lossy()
-                .into_owned();
-            let text = std::fs::read_to_string(&file).expect("provider file reads");
-            let data: serde_json::Value =
-                serde_json::from_str(&text).expect("provider file parses");
-            let name = data
-                .get("name")
-                .and_then(|name| name.as_str())
-                .expect("provider file names itself");
-            assert_eq!(name, stem, "{}", file.display());
-            pairs.push((name.to_owned(), package.clone()));
-        }
+    for (package, stem, text) in PROVIDER_FILES.iter().copied() {
+        let data: serde_json::Value =
+            serde_json::from_str(text).expect("provider file parses");
+        let name = data
+            .get("name")
+            .and_then(|name| name.as_str())
+            .expect("provider file names itself");
+        assert_eq!(name, stem, "{package}/{stem} names itself");
+        pairs.push((name.to_owned(), package.to_owned()));
     }
     pairs
 }
@@ -108,41 +117,27 @@ fn a_provider_no_first_party_package_serves_gets_the_generic_hint() {
 /// `/v1/responses`, every Gemini model, and OpenCode's OpenAI pass-through.
 #[test]
 fn first_party_hosted_searches_are_the_marked_models() {
-    let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../providers");
-    let mut packages: Vec<_> = std::fs::read_dir(&root)
-        .expect("providers directory reads")
-        .map(|entry| entry.expect("package entry reads").path())
-        .collect();
-    packages.sort();
     let mut pairs = Vec::new();
-    for package_dir in packages {
-        if !package_dir.is_dir() {
-            continue;
-        }
-        let package = package_dir
-            .file_name()
-            .expect("package dir has a name")
-            .to_string_lossy()
-            .into_owned();
-        for data in config::read_providers(&package_dir).expect("provider data reads") {
-            let mut models = data.models.clone();
-            let notices = extensions::leave_out_invalid(&data.name, &package, &mut models);
-            assert!(notices.is_empty(), "{package}: {notices:?}");
-            for model in &models {
-                if let Some(kind) = &model.web_search {
-                    pairs.push((format!("{}/{}", data.name, model.id), kind.clone()));
-                }
-                if let Some(include) = model.extra_body.get("include") {
-                    assert_eq!(
-                        include.as_array().and_then(|items| items.first()),
-                        Some(&serde_json::Value::String(
-                            "reasoning.encrypted_content".into()
-                        )),
-                        "{}/{} keeps reasoning replay first",
-                        data.name,
-                        model.id
-                    );
-                }
+    for (package, _, text) in PROVIDER_FILES.iter().copied() {
+        let data: config::ProviderData =
+            serde_json::from_str(text).expect("provider data parses");
+        let mut models = data.models.clone();
+        let notices = extensions::leave_out_invalid(&data.name, package, &mut models);
+        assert!(notices.is_empty(), "{package}: {notices:?}");
+        for model in &models {
+            if let Some(kind) = &model.web_search {
+                pairs.push((format!("{}/{}", data.name, model.id), kind.clone()));
+            }
+            if let Some(include) = model.extra_body.get("include") {
+                assert_eq!(
+                    include.as_array().and_then(|items| items.first()),
+                    Some(&serde_json::Value::String(
+                        "reasoning.encrypted_content".into()
+                    )),
+                    "{}/{} keeps reasoning replay first",
+                    data.name,
+                    model.id
+                );
             }
         }
     }
