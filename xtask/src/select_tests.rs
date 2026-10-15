@@ -480,6 +480,52 @@ fn a_join_in_a_manifest_file_is_a_run_time_read() {
 }
 
 #[test]
+fn a_manifest_rooted_join_read_is_a_run_time_read() {
+    let files = [runtime_src(
+        "contract",
+        "crates/contract/src/golden_tests.rs",
+        "src/golden_tests.rs",
+        "let src = std::fs::read_to_string(Path::new(env!(\"CARGO_MANIFEST_DIR\")).join(\"crates/contract/src/golden.rs\")).unwrap();\n",
+    )];
+    assert_eq!(
+        runtime_read_mismatches(&files, &members_with_tools()).unwrap(),
+        [
+            "crates/contract/src/golden_tests.rs: reads crates/contract/src/golden.rs at run time; compile it in with include_str!"
+        ]
+    );
+}
+
+#[test]
+fn a_read_dir_of_a_manifest_rooted_join_is_a_run_time_read() {
+    let files = [runtime_src(
+        "contract",
+        "crates/contract/src/golden_tests.rs",
+        "src/golden_tests.rs",
+        "let entries = std::fs::read_dir(Path::new(env!(\"CARGO_MANIFEST_DIR\")).join(\"crates/contract/src/data\")).unwrap();\n",
+    )];
+    assert_eq!(
+        runtime_read_mismatches(&files, &members_with_tools()).unwrap(),
+        [
+            "crates/contract/src/golden_tests.rs: reads crates/contract/src/data at run time; compile it in with include_str!"
+        ]
+    );
+}
+
+#[test]
+fn a_spawn_join_is_not_a_run_time_read() {
+    let files = [runtime_src(
+        "contract",
+        "crates/contract/src/golden_tests.rs",
+        "src/golden_tests.rs",
+        "let child = std::process::Command::new(\"tool\").arg(Path::new(env!(\"CARGO_MANIFEST_DIR\")).join(\"crates/contract/src/golden.rs\")).spawn().unwrap();\n",
+    )];
+    assert_eq!(
+        runtime_read_mismatches(&files, &members_with_tools()).unwrap(),
+        Vec::<String>::new()
+    );
+}
+
+#[test]
 fn a_read_of_a_computed_path_is_not_a_run_time_read() {
     let files = [runtime_src(
         "main",
