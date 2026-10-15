@@ -129,10 +129,12 @@ fn a_standing_ask_draws_the_panel_typing_feeds_back_and_esc_puts_it_aside() {
     run.wait_screen("the first frame", |grid| grid.contents.contains("›"));
     run.ready();
     run.write(b"run it\r");
+    // The session shows its name, the first prompt: the first frame can
+    // still carry the session id, so the wait holds until the named
+    // header draws.
     let grid = run.wait_screen("the approval panel", |grid| {
-        grid.contents.contains("Approval 1 of 1")
+        grid.contents.contains("Approval 1 of 1 · run it")
     });
-    // The session shows its name: the first prompt.
     let header = row_with(&grid, "Approval 1 of 1");
     // The panel's tinted run: every cell of the panel's text rows takes
     // the approval tint.
