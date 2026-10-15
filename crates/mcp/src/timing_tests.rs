@@ -1605,3 +1605,27 @@ fn a_remote_death_restarts_timed() {
     );
     setup.stop(started.servers);
 }
+
+#[test]
+fn servers_keep_the_start_timing_context_for_later_loads() {
+    let setup = Setup::with_tools(&json!([{
+        "name": "echo",
+        "description": "Echoes.",
+        "inputSchema": {"type": "object"},
+    }]));
+    let capture = Capture::new(setup.fake.clone());
+    let observed = start_observed(&setup, vec![setup.spec("fx")], &capture);
+    assert!(observed.failed.is_empty());
+    assert!(
+        observed.servers.timing().is_some(),
+        "the observed start keeps its context for Later::load"
+    );
+    setup.stop(observed.servers);
+    let plain = setup.start(vec![setup.spec("plain")]);
+    assert!(plain.failed.is_empty());
+    assert!(
+        plain.servers.timing().is_none(),
+        "the plain start keeps no context"
+    );
+    setup.stop(plain.servers);
+}
