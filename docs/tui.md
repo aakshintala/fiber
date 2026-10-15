@@ -1895,6 +1895,20 @@ the session's offset table (`docs/invocation.md`, "Driver commands";
   subscription sends them. It builds the panel's cards, and counts every row,
   keeping each row's `seq`. No event is kept: each is
   applied to the panel's folds and dropped.
+  The terminal opens a pass on a `full` acknowledgement with `last_seq`,
+  or on `stream_reopened` with `last_seq` (`docs/events.md`). It ends the
+  pass when it folds that `seq`. No `last_seq` means no pass is open.
+  A pass of any session the terminal holds at `full`, an open item's
+  included, blocks `history`. Until it ends, a frame draws the cards held
+  and leaves dropped pages blank; recounting at a new width, search and
+  copy wait. EOF, `stream_closed`, a failed read, a disconnect and lowering
+  to `summary` end the pass too. The feed's `session_left` for a session
+  ends that session's pass. Waiting work then runs against what is held,
+  or fails as usual with no connection.
+  If `stream_reopened` arrives during a `history` wait, the wait ends at
+  once. Stashed lines fold in order before the new fold, whose lines are
+  never stashed. The late answer is discarded by its id, and the page
+  loads in a frame after the pass ends.
 - **Pages are cut inside turns,** at `step_started`, about 64 lines each, and
   never inside a tool group, so each page renders on its own.
 - **The window** is the pages on screen plus one screen of rows above and
