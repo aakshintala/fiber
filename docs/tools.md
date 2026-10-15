@@ -1072,7 +1072,7 @@ does not know, is read as UTF-8, and bytes that are not valid UTF-8 become
   a hosted search make their hosts known, as `hosts_surfaced` does.
 - A query string does not make a fetch suspicious. A search on a known host,
   such as a Jira query URL, needs no review.
-- What the reviewer is shown does not change: the person's messages and the
+- What the reviewer is shown does not change: the person's messages, the replies they answer, and the
   agent's tool calls, never a fetched page (`docs/permissions.md`, "What it is
   shown").
 - A standing deny still applies first, so the person can deny a host.

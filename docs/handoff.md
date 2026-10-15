@@ -133,7 +133,7 @@ boundary in the log follows as usual. This is the rule `docs/prompt-cache.md`
 builds on.
 
 The reviewer hands off at the same boundary. It keeps the person's messages
-that still bind, word for word, and starts again from them
+that still bind, word for word, each with the reply it answered, and starts again from them
 (`docs/permissions.md`, "At a handoff").
 
 ## Looking back
