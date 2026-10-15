@@ -255,7 +255,7 @@ fn the_request_body_holds_only_what_the_reviewer_is_shown() {
     assert_eq!(
         user_text(&request.conversation[2]),
         format!(
-            "Declared effects: {{\"effects\":[\"executes\"],\"reversible\":true}}\nWorkspace root: {}",
+            "Call under review: the last tool call above, shell.\nDeclared effects: {{\"effects\":[\"executes\"],\"reversible\":true}}\nWorkspace root: {}",
             session.workspace.display()
         )
     );

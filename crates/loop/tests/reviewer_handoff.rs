@@ -237,7 +237,7 @@ fn the_reviewer_keeps_the_selected_messages_then_what_follows() {
     assert_eq!(after_texts[0], "The person: never push to main");
     assert_eq!(after_texts[1], "The person: now run it");
     assert!(after_texts[2].starts_with("Tool call: "));
-    assert!(after_texts[3].starts_with("Declared effects: "));
+    assert!(after_texts[3].starts_with("Call under review: the last tool call above, shell."));
     assert!(after_texts[4].starts_with("## first-pass\n"));
     // The input's prefix changed, so the first review after the handoff
     // sends `previous_end: None`.
