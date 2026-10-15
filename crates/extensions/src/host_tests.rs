@@ -329,44 +329,20 @@ fn a_refused_connection_is_connection_failed() {
     assert!(message.starts_with("host.http: "), "{message}");
 }
 
-/// How long the silent fake waits for the request before failing the test.
+/// The bound of `await_requests` on the silent server's recorded request.
 const ACCEPT_WITHIN: Duration = Duration::from_secs(10);
 /// How long the test waits for the blocking `get` before failing it.
 const GET_WITHIN: Duration = Duration::from_secs(10);
-/// How often the silent fake polls for the request while waiting.
-const ACCEPT_POLL: Duration = Duration::from_millis(20);
 
 #[test]
 fn a_silent_server_past_the_backstop_is_timeout() {
-    let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
-    listener.set_nonblocking(true).unwrap();
-    let port = listener.local_addr().unwrap().port();
-    std::thread::spawn(move || {
-        // Accept and never reply: the read, not the connect, passes the backstop.
-        // Both waits are bounded: the polls end at `ACCEPT_WITHIN`, and the
-        // held connection is released at `GET_WITHIN`.
-        let (_held_tx, held) = std::sync::mpsc::channel::<()>();
-        let polls = ACCEPT_WITHIN.as_millis() / ACCEPT_POLL.as_millis();
-        for _ in 0..polls {
-            match listener.accept() {
-                Ok((_held, _)) => {
-                    match Deadline::after(GET_WITHIN).recv(&held) {
-                        Ok(()) | Err(_) => {}
-                    }
-                    return;
-                }
-                Err(source) if source.kind() == std::io::ErrorKind::WouldBlock => {
-                    match Deadline::after(ACCEPT_POLL).recv(&held) {
-                        Ok(()) | Err(_) => {}
-                    }
-                }
-                Err(source) => panic!("the silent server failed to accept: {source}"),
-            }
-        }
-        panic!("waited {ACCEPT_WITHIN:?} for the silent server to accept");
-    });
+    let server =
+        fakes::ProviderServer::start([fakes::Response::status(200, "{}")]).unwrap();
+    // Hold the reply so the server records the request and never answers:
+    // the read, not the connect, passes the backstop.
+    server.hold();
     let (tx, rx) = std::sync::mpsc::channel();
-    let url = format!("http://127.0.0.1:{port}/");
+    let url = format!("{}/", server.url());
     std::thread::spawn(move || {
         tx.send(get(&url, Some(Duration::from_millis(300))))
             .unwrap_or(());
@@ -375,8 +351,13 @@ fn a_silent_server_past_the_backstop_is_timeout() {
         .recv(&rx)
         .expect("waited {GET_WITHIN:?} for the silent-server get")
         .unwrap_err();
+    assert!(
+        server.await_requests(1, ACCEPT_WITHIN),
+        "the silent server never received the request"
+    );
     assert_eq!(code, contract::ErrorCode::Timeout, "{message}");
     assert!(message.starts_with("host.http: "), "{message}");
+    drop(server);
 }
 
 /// The failure a prelude `pcall` of `code` catches: its code and message.
