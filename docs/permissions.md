@@ -210,6 +210,7 @@ A call that reaches step 7 is judged by a model.
 each human message answers.** The agent's tool calls include its extensions'
 inner calls, so a review sees what an earlier script did. The reply a human
 message answers is the model's text directly before it, marked as the agent's.
+A tool call between that text and the human message breaks the link, so no reply is shown.
 The model's other prose and every tool result are stripped before the prompt
 is built. The
 reviewer also gets the call under review, its declared effects, the
@@ -227,6 +228,8 @@ target the reply proposed. A reply that offers options proposes none of them,
 so a bare "yes" under it approves nothing and a pick by label or by its words
 approves that option alone. A reply with no human message after it is not
 shown, so a proposal the person never answered approves nothing.
+A reply longer than 6,000 characters is cut to its first 6,000, followed by
+a line saying how many characters were left out.
 
 The rejected alternative is to send the whole transcript with an instruction
 to treat it as untrusted. Stripping is both cheaper and stronger

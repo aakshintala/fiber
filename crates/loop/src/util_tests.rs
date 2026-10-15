@@ -461,7 +461,8 @@ fn a_reviewerless_handoff_cut_drops_pre_handoff_calls_from_reviewed() {
     assert_eq!(driven.turn(), Some(TurnOutcome::Completed));
     let looped = driven.looped.as_ref().unwrap();
     // Both person messages survive word for word; only the post-cut call
-    // stays, exactly once.
+    // stays, exactly once. The last reply stays held at the tail: no
+    // person message answers it yet.
     let texts: Vec<&str> = looped
         .reviewed
         .iter()
@@ -473,6 +474,7 @@ fn a_reviewerless_handoff_cut_drops_pre_handoff_calls_from_reviewed() {
             "The person: never push to main",
             "The person: now run it",
             r#"Tool call: {"tool":"probe","arguments":{"city":"Paris"}}"#,
+            "The agent: Done.",
         ],
         "{texts:?}"
     );
