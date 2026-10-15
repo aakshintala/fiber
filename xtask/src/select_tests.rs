@@ -666,6 +666,22 @@ fn a_one_level_join_passed_to_a_read_is_a_run_time_read() {
 }
 
 #[test]
+fn a_shadowed_joined_name_reads_through_the_old_binding() {
+    let files = [runtime_src(
+        "contract",
+        "crates/contract/src/golden_tests.rs",
+        "src/golden_tests.rs",
+        "let p = Path::new(env!(\"CARGO_MANIFEST_DIR\")).join(\"data.bin\");\nlet p = std::fs::read(&p).unwrap();\n",
+    )];
+    assert_eq!(
+        runtime_read_mismatches(&files, &members_with_tools()).unwrap(),
+        [
+            "crates/contract/src/golden_tests.rs: reads data.bin at run time; compile it in with include_str!"
+        ]
+    );
+}
+
+#[test]
 fn a_two_level_join_passed_to_a_read_is_not_a_run_time_read() {
     let files = [runtime_src(
         "contract",
