@@ -301,6 +301,24 @@ fn target_errors_do_not_fall_back_to_local() {
 }
 
 #[test]
+fn malformed_selected_names_are_missing_entries_not_credential_paths() {
+    let dir = fakes::TempDir::new("fiber-listed-bad-name");
+    let home = dir.path();
+    write(
+        &home.join("config.json"),
+        json!({"hub":{"default":"bad/name"}}),
+    );
+    let cfg = load(home, &[]);
+    let default = target(&cfg, home, None).unwrap_err();
+    assert_eq!(default.code(), ErrorCode::ConfigInvalid);
+    assert!(matches!(default, Error::MissingDefault { .. }));
+    let named = target(&cfg, home, Some("bad/name")).unwrap_err();
+    assert_eq!(named.code(), ErrorCode::Usage);
+    assert!(matches!(named, Error::UnknownHub { .. }));
+    assert!(!home.join("credentials").exists());
+}
+
+#[test]
 fn websocket_target_needs_a_token_but_unix_never_reads_one() {
     let dir = fakes::TempDir::new("fiber-listed-token");
     let home = dir.path();

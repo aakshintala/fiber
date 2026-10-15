@@ -39,15 +39,16 @@ pub fn target(config: &config::Config, home: &Path, named: Option<&str>) -> Resu
     let Some(name) = named.or(default.as_deref()) else {
         return Ok(Target::Local);
     };
-    super::check_name(name)?;
-    let key = format!("hubs.\"{name}\".address");
-    let Some((value, _)) = config.get(&key, None) else {
-        return Err(if named.is_some() {
+    let missing = || {
+        if named.is_some() {
             Error::UnknownHub { name: name.into() }
         } else {
             Error::MissingDefault { name: name.into() }
-        });
+        }
     };
+    super::check_name(name).map_err(|_| missing())?;
+    let key = format!("hubs.\"{name}\".address");
+    let (value, _) = config.get(&key, None).ok_or_else(missing)?;
     let address = Address::parse(value.as_str().unwrap_or_default()).map_err(|error| {
         Error::StoredAddress {
             key,
