@@ -44,8 +44,9 @@ pub(crate) use home::max_question_scroll;
 /// The overlay shown while scrolled up once new output arrives.
 const NEW_BELOW: &str = " ↓ New messages below · End ";
 
-/// Shown on the conversation's top row after a copy.
-const COPIED: &str = "Copied";
+/// Shown in the conversation's top-right corner after a copy, below
+/// the search box when it is open.
+const COPIED: &str = " Copied ";
 
 /// The approval panel's tint when a standing rule or review asked.
 pub(crate) const APPROVAL_TINT: Style = Style::new().bg(Role::Approval.color());
@@ -235,16 +236,11 @@ pub(crate) fn render(
             match app.offer_rows(conversation.width) {
                 Some((rows, top)) => offer::render(&rows, top, conversation, buf, &mut targets),
                 // The search results swap in for the conversation while
-                // open, with the ✕ closing them (`docs/tui.md`, "Search",
-                // "Swapped views").
+                // open (`docs/tui.md`, "Search", "Swapped views").
                 None => match app.find_results() {
                     Some(view) => {
                         results::render(&view, conversation, buf, &mut targets);
                         marks::draw(app, conversation, buf, &mut targets, None);
-                        // The ✕ draws over the bar's last cell, so the
-                        // view keeps a visible closer (`docs/tui.md`,
-                        // "Swapped views").
-                        overlay_cross(buf, conversation, &mut targets);
                     }
                     None => {
                         // The rows draw in the scroll bar's rows area, one
@@ -389,9 +385,14 @@ pub(crate) fn cursor(app: &App, area: Rect) -> Option<Position> {
         return None;
     }
     // The search bar's cursor at its query's end, while it is open
-    // (`docs/tui.md`, "Search").
+    // (`docs/tui.md`, "Search"). While the results view is open the bar
+    // is hidden, so its cursor hides too; the bar state is untouched.
     if let Some(bar) = app.find_bar() {
-        return marks::bar_cursor(&bar, area);
+        return if app.results_open() {
+            None
+        } else {
+            marks::bar_cursor(&bar, area)
+        };
     }
     let (below, col) = input_box::cursor_row(app, area.width, usize::from(area.height));
     let y = status_rows::input_bottom(app, area)
@@ -587,12 +588,35 @@ fn conversation_rows(app: &App, area: Rect, buf: &mut Buffer, targets: &mut Vec<
             rect: Rect::new(start, row, end.saturating_sub(start), 1),
         });
     }
-    if app.copied() && area.height > 0 {
-        let width = to_u16(COPIED.len());
-        let x = area.x.saturating_add(area.width.saturating_sub(width));
-        let y = area.y.saturating_add(u16::from(app.find_bar().is_some()));
-        let shown = usize::from(area.width);
-        buf.set_stringn(x, y, COPIED, shown, style(Role::Accent));
+    if app.copied() {
+        // " Copied " in `info` on the `surface` tint: on the row under
+        // the bar when the bar draws, else on the top row
+        // (`docs/tui.md`, "Selection and copy").
+        let offset = if app.find_bar().is_some() && !app.results_open() {
+            // The bar draws in the conversation's area with the scroll
+            // bar's column; this area drops that column on the main path.
+            let room = Rect::new(area.x, area.y, area.width.saturating_add(1), area.height);
+            match marks::bar_rect(room).map(|rect| rect.height) {
+                Some(3) => 5,
+                Some(_) => 1,
+                None => 0,
+            }
+        } else {
+            0
+        };
+        let y = area.y.saturating_add(offset);
+        // The row under a five-row bar in a five-row area is the next
+        // region's: omit the confirmation rather than cover it, and clip
+        // its width to the area (`docs/tui.md`, "Selection and copy").
+        if y < area.bottom() {
+            let width = to_u16(crate::format::width(COPIED)).min(area.width);
+            let x = area.x.saturating_add(area.width.saturating_sub(width));
+            buf.set_style(
+                Rect::new(x, y, width, 1),
+                Style::new().bg(Role::Surface.color()),
+            );
+            buf.set_stringn(x, y, COPIED, usize::from(width), style(Role::Info));
+        }
     }
 }
 

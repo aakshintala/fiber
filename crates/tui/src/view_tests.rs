@@ -1,6 +1,6 @@
 //! Screen snapshots: the whole in-memory screen against stored files.
 
-use super::{cursor, render, text};
+use super::{conversation_rows, cursor, render, text};
 use crate::app::App;
 use crate::keys::{Edit, Key};
 use crate::link::Line;
@@ -1650,6 +1650,20 @@ fn buffer(app: &App, width: u16, height: u16) -> Buffer {
     buf
 }
 
+/// A press at `from`, a drag to `to` and its release: selecting copies.
+fn select(app: &mut App, width: u16, height: u16, from: (u16, u16), to: (u16, u16)) {
+    use crate::keys::{Button, Mouse, MouseKind};
+    let report = |app: &mut App, kind: MouseKind, (col, row): (u16, u16)| {
+        let area = Rect::new(0, 0, width, height);
+        let mut buf = Buffer::empty(area);
+        let targets = render(app, area, &mut buf, None);
+        app.on_select(&Mouse { kind, col, row }, &targets)
+    };
+    report(app, MouseKind::Press(Button::Left), from);
+    report(app, MouseKind::Drag(Button::Left), to);
+    report(app, MouseKind::Release, to);
+}
+
 /// Clicks the target drawn at `col`, `row` of `app` at `width` by
 /// `height`, if any.
 fn click(app: &mut App, width: u16, height: u16, col: u16, row: u16) {
@@ -2212,12 +2226,169 @@ fn copied_shows_on_the_conversations_top_row_until_the_next_key() {
     click(&mut app, 30, 10, 27, header);
     let buf = buffer(&app, 30, 10);
     insta::assert_snapshot!("copied", text(&buf));
-    assert_eq!(
-        buf.cell((24, 0)).map(|cell| cell.fg),
-        Some(crate::markdown::Role::Accent.color())
-    );
+    // " Copied " in `info` on the `surface` tint, on the top row with
+    // the bar closed.
+    let row = text(&buf)
+        .lines()
+        .position(|line| line.contains("Copied"))
+        .expect("Copied shows");
+    assert_eq!(row, 0);
+    let line = text(&buf).lines().nth(row).expect("its row").to_owned();
+    let col = u16::try_from(
+        line[..line.find("Copied").expect("its column")]
+            .chars()
+            .count()
+            .saturating_sub(1),
+    )
+    .expect("a column");
+    for dx in 0..8 {
+        let cell = &buf[(col + dx, 0)];
+        assert_eq!(cell.fg, Role::Info.color(), "Copied {dx}");
+        assert_eq!(cell.bg, Role::Surface.color(), "Copied {dx}");
+    }
     app.on_key(Key::Char('x'), fakes::clock::FakeClock::new().now());
     assert!(!text(&buffer(&app, 30, 10)).contains("Copied"));
+}
+
+#[test]
+fn copied_sits_on_the_row_under_the_bar() {
+    // (area width, area height, bar open, Copied's row): under the
+    // five-row slab, under the bare row, on the top row with the bar
+    // closed, and on the top row under the width floor, both sides of it.
+    for (width, height, bar, want) in [
+        (40, 10, false, 0),
+        (60, 10, true, 5),
+        (60, 4, true, 1),
+        (5, 10, true, 5),
+        (4, 10, true, 0),
+    ] {
+        let mut app = replying(60, 24, "copy this line");
+        if bar {
+            app.on_key(Key::CtrlF, fakes::clock::FakeClock::new().now());
+            assert!(app.find_bar().is_some(), "the bar is open");
+        }
+        let shown = text(&buffer(&app, 60, 24));
+        let row = u16::try_from(
+            shown
+                .lines()
+                .position(|line| line.contains("copy this"))
+                .expect("the reply"),
+        )
+        .expect("a row");
+        select(&mut app, 60, 24, (0, row), (3, row));
+        assert!(
+            text(&buffer(&app, 60, 24)).contains("Copied"),
+            "the drag copies"
+        );
+        let area = Rect::new(0, 0, width, height);
+        let mut buf = Buffer::empty(area);
+        let mut targets = Vec::new();
+        conversation_rows(&app, area, &mut buf, &mut targets);
+        // " Copied " is the only `info` on `surface`: its rows are its
+        // row, even where the area clips its text.
+        let rows: Vec<u16> = (0..height)
+            .filter(|y| {
+                (0..width).any(|x| {
+                    let cell = &buf[(x, *y)];
+                    cell.fg == Role::Info.color() && cell.bg == Role::Surface.color()
+                })
+            })
+            .collect();
+        assert_eq!(rows, vec![want], "{width}x{height} bar {bar}");
+        let shown = text(&buf);
+        let line = shown.lines().nth(usize::from(want)).expect("its row");
+        assert!(line.contains("Cop"), "{width}x{height}: {line:?}");
+    }
+}
+
+#[test]
+fn copied_stays_inside_a_short_or_narrow_area() {
+    // The buffer around each area stays blank: with the bar open, a
+    // five-row area omits "Copied" (its row is the next region's), a
+    // six-row area draws it on row 5, and a four-column area clips it
+    // to its width (`docs/tui.md`, "Selection and copy").
+    for (area, want) in [
+        (Rect::new(0, 0, 60, 5), None),
+        (Rect::new(0, 0, 60, 6), Some(5)),
+        (Rect::new(10, 2, 4, 6), Some(2)),
+    ] {
+        let mut app = replying(60, 24, "copy this line");
+        app.on_key(Key::CtrlF, fakes::clock::FakeClock::new().now());
+        assert!(app.find_bar().is_some(), "the bar is open");
+        let shown = text(&buffer(&app, 60, 24));
+        let row = u16::try_from(
+            shown
+                .lines()
+                .position(|line| line.contains("copy this"))
+                .expect("the reply"),
+        )
+        .expect("a row");
+        select(&mut app, 60, 24, (0, row), (3, row));
+        assert!(
+            text(&buffer(&app, 60, 24)).contains("Copied"),
+            "the drag copies"
+        );
+        let mut buf = Buffer::empty(Rect::new(0, 0, 60, 10));
+        let mut targets = Vec::new();
+        conversation_rows(&app, area, &mut buf, &mut targets);
+        // "Copied" is the only `info` on `surface` here: its cells are
+        // its row, and none sits outside the area.
+        let marked: Vec<(u16, u16)> = (0..60)
+            .flat_map(|x| (0..10).map(move |y| (x, y)))
+            .filter(|(x, y)| {
+                let cell = &buf[(*x, *y)];
+                cell.fg == Role::Info.color() && cell.bg == Role::Surface.color()
+            })
+            .collect();
+        match want {
+            None => assert!(marked.is_empty(), "{area:?} omits Copied"),
+            Some(y) => {
+                assert!(!marked.is_empty(), "{area:?} draws Copied");
+                for (x, cell_y) in &marked {
+                    assert_eq!(*cell_y, y, "{area:?} draws on row {y}");
+                    assert!(
+                        area.contains(Position::new(*x, *cell_y)),
+                        "{area:?} keeps ({x}, {cell_y})"
+                    );
+                }
+            }
+        }
+    }
+}
+
+#[test]
+fn copied_draws_nothing_on_a_zero_height_area() {
+    // A conversation area with no rows draws no confirmation and takes
+    // no target, even with `copied` set: there is no top row, and the
+    // row guard omits the confirmation (`docs/tui.md`, "Selection and
+    // copy"). The buffer around the area stays blank.
+    let mut app = replying(60, 24, "copy this line");
+    let shown = text(&buffer(&app, 60, 24));
+    let row = u16::try_from(
+        shown
+            .lines()
+            .position(|line| line.contains("copy this"))
+            .expect("the reply"),
+    )
+    .expect("a row");
+    select(&mut app, 60, 24, (0, row), (3, row));
+    assert!(
+        text(&buffer(&app, 60, 24)).contains("Copied"),
+        "the drag copies"
+    );
+    let mut buf = Buffer::empty(Rect::new(0, 0, 60, 10));
+    let mut targets = Vec::new();
+    conversation_rows(&app, Rect::new(0, 0, 60, 0), &mut buf, &mut targets);
+    assert!(targets.is_empty(), "no target on a zero-height area");
+    for y in 0..10u16 {
+        for x in 0..60u16 {
+            assert_eq!(
+                buf[(x, y)].bg,
+                ratatui::style::Color::Reset,
+                "({x}, {y}) stays blank"
+            );
+        }
+    }
 }
 
 #[test]

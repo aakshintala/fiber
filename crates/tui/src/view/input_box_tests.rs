@@ -141,7 +141,12 @@ fn the_cursor_hides_with_search_open() {
     // Typing goes to the search box: the draft shows without a cursor
     // (`docs/tui.md`, "The input box").
     for cell in buf.content.iter() {
-        assert_ne!(cell.symbol(), "█");
+        if cell.symbol() == "█" {
+            assert!(
+                cell.modifier.contains(ratatui::style::Modifier::DIM),
+                "only the bar's block shows"
+            );
+        }
     }
 }
 

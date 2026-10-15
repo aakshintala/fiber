@@ -1,8 +1,9 @@
 ---
 source: crates/tui/src/view/results_tests.rs
+assertion_line: 69
 expression: "screen(&app, 80, 24)"
 ---
-3 matches for “needle”                                     find: needle · 1 of ✕
+3 matches for “needle”
 the first needle here a long line with a needle in it xxxxxxxxxxxxxxxxxxxxxxxxxx
 first needle here a long line with a needle in it xxxxxxxxxxxxxxxxxxxxxxxxxxxxxx
 xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx a last needle

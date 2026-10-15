@@ -455,7 +455,9 @@ fn a_pause_from_before_a_close_does_nothing_after_the_bar_reopens() {
 
 #[test]
 fn esc_closes_the_bar_before_the_selection() {
-    let mut app = replied(40, 10, "hello there");
+    // The reply sits below the search bar's slab, so it stays visible
+    // and selectable while the bar is open (`docs/tui.md`, "Search").
+    let mut app = replied(40, 24, "hello there");
     search(&mut app, "hell");
     let at = find(&app, "hello");
     assert_eq!(
@@ -1784,7 +1786,8 @@ fn the_ctrl_r_panel_takes_typing_over_the_bar() {
 
 #[test]
 fn esc_closes_the_notice_overlay_then_the_bar_then_the_selection() {
-    let mut app = replied(40, 10, "hello there");
+    // As above: the reply stays below the slab while the bar is open.
+    let mut app = replied(40, 24, "hello there");
     search(&mut app, "hell");
     let at = find(&app, "hello");
     assert_eq!(

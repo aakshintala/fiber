@@ -1,13 +1,14 @@
 ---
 source: crates/tui/src/app/find_tests.rs
+assertion_line: 528
 expression: screen(&app)
 ---
-                                                                       find: fox
-                                                                         Copied
+                                       ▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
 
+                                        ⌕ fox█
 
-
-
+                                       ▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀
+                                                                        Copied
 
 
 

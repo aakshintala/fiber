@@ -239,7 +239,7 @@ fn a_click_on_an_entry_jumps() {
 }
 
 #[test]
-fn esc_ctrl_f_and_the_cross_close_with_nothing_changed() {
+fn esc_and_ctrl_f_close_with_nothing_changed() {
     let mut app = turned(40, 10, &["needle one", "needle two", "needle three"]);
     scan(&mut app, "needle");
     open(&mut app);
@@ -252,14 +252,10 @@ fn esc_ctrl_f_and_the_cross_close_with_nothing_changed() {
     assert_eq!(app.on_key(Key::CtrlF, now()), Effect::None);
     assert!(!app.results_open());
     assert_eq!(count(&app), current);
+    // The results view draws no ✕: Esc and Ctrl+F close it, and the
+    // bar keeps its query and count (`docs/tui.md`, "Search").
     open(&mut app);
-    let (_, targets) = draw(&app, 40, 10);
-    let id = targets
-        .iter()
-        .find(|target| target.id == TargetId::CloseOverlay)
-        .map(|target| target.id)
-        .expect("the view draws its ✕");
-    app.on_click(id);
+    assert_eq!(app.on_key(Key::Esc, now()), Effect::None);
     assert!(!app.results_open());
     assert_eq!(count(&app), current);
     assert_eq!(query(&app), "needle");
@@ -349,7 +345,7 @@ fn a_count_cut_off_by_the_bar_is_no_target() {
         "a count the bar cuts off is no target"
     );
     assert!(
-        crate::view::text(&buf).contains("find: "),
+        crate::view::text(&buf).contains("⌕"),
         "the bar itself still draws"
     );
 }

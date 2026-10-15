@@ -558,8 +558,8 @@ a click on it returns too. The views are:
   whole call", dim. Esc returns to the conversation with the call's row
   still focused.
 - **Search results:** every match with its surrounding lines ("Search").
-  The first row is "3 of 5 · ⌕ <query>". Each match is its file and line
-  bold, then the lines around it, the match on the `match` tint and the
+  The first row is "3 of 5 · ⌕ <query>". Each match is the lines around it,
+  the match on the `match` tint and the
   current match on `match_current`. The last row is "Enter jumps to the
   match", dim.
 - **The tools view,** `/tools` (`docs/tools.md`, "Seeing the tools"): every
