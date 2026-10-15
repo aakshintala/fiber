@@ -41,6 +41,7 @@ fn completed(text: &str) -> Box<ToolCallCompleted> {
         content: vec![ContentPart::Text { text: text.into() }],
         details: None,
         artifact: None,
+        kept: None,
         changes: None,
         control: None,
         changed_by: None,

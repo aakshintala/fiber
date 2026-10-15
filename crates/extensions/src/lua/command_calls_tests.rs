@@ -19,6 +19,7 @@ fn completion() -> Box<ToolCallCompleted> {
         changes: None,
         control: None,
         artifact: None,
+        kept: None,
         changed_by: None,
         content: vec![contract::shapes::ContentPart::Text {
             text: "answer".into(),

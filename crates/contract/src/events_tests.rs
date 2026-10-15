@@ -453,6 +453,7 @@ fn samples() -> Vec<(&'static str, Value)> {
             "tool_call_completed",
             json!({"status": "failed", "reason": "r", "error": error,
             "process": process, "content": content, "details": [1], "artifact": "artifacts/x",
+            "kept": [[0, 8192], [1040384, 1048576]],
             "changes": [{"path": "/a", "added": 1, "removed": 2}],
             "control": {"handoff": "note"}, "changed_by": ["e"]}),
         ),
@@ -1186,6 +1187,27 @@ fn provider_item_is_read_from_a_hosted_call_and_absent_from_an_ordinary_one() {
     assert_eq!(ordinary.provider_item, None);
     let written = serde_json::to_value(&ordinary).unwrap();
     assert!(written.get("provider_item").is_none(), "{written}");
+}
+
+#[test]
+fn kept_reads_from_a_cut_result_and_is_absent_from_an_uncut_one() {
+    let result = |payload: Value| match read("tool_call_completed", payload).unwrap() {
+        Some(Event::ToolCallCompleted(done)) => done,
+        other => panic!("{other:?}"),
+    };
+    let cut = result(json!({"status": "completed", "content": [],
+        "kept": [[0, 8192], [1040384, 1048576]]}));
+    assert_eq!(cut.kept, Some(vec![[0, 8192], [1040384, 1048576]]));
+    let uncut = result(json!({"status": "completed", "content": []}));
+    assert_eq!(uncut.kept, None);
+    let written = serde_json::to_value(&uncut).unwrap();
+    assert!(written.get("kept").is_none(), "{written}");
+    let empty = result(json!({"status": "completed", "content": [], "kept": []}));
+    assert_eq!(empty.kept, Some(vec![]));
+    for kept in [json!([[0, 1, 2]]), json!([[-1, 4]]), json!([[0, null]])] {
+        assert!(read("tool_call_completed", json!({"status": "completed",
+            "content": [], "kept": kept})).is_err(), "{kept}");
+    }
 }
 
 /// The variant a `command_accepted` sample's `result` reads as.
