@@ -15,10 +15,14 @@
 mod support;
 
 use std::fs;
+use std::sync::{Arc, Mutex};
 
 use serde_json::json;
 use support::pty::{Colour, Grid, Run};
-use support::{Setup, TRUECOLOUR, write_json};
+use support::{
+    SessionGuard, Setup, Socket, TRUECOLOUR, close_session, connect_hub, recv, start_session,
+    subscribe, until, write_json,
+};
 
 /// The standing-ask tint in truecolour.
 const APPROVAL_BG: Colour = Colour::Rgb(26, 26, 34);
@@ -118,6 +122,34 @@ fn quit(mut run: Run) {
     });
     let output = run.wait();
     assert_eq!(output.status.code(), Some(0));
+}
+
+/// The rail's ceiling in columns (`crates/tui/src/layout.rs`,
+/// `RAIL_CEILING`): the rail never reaches past it, so a click at or
+/// right of here missed the rail.
+const RAIL_MAX_COLS: u16 = 48;
+
+/// A standing global ask for `prefix`: headless sessions allow shell
+/// without asking, so without this the other session would run past its
+/// call instead of waiting (`docs/permissions.md`, "Headless").
+fn global_ask_rule(setup: &Setup, prefix: &str) {
+    fs::write(
+        setup.home().join("rules"),
+        format!(
+            "{}\n",
+            json!({"decision": "ask", "tool": "shell", "prefix": prefix})
+        ),
+    )
+    .unwrap();
+}
+
+/// The panel's header row from its own start: the header is inset right
+/// of the rail, so the rail's copy of either session's name sits left of
+/// it or on another row. Which request a header labels reads here, not
+/// anywhere on screen.
+fn panel_header_text(grid: &Grid, y: u16, head: &str) -> String {
+    let from = col_at(grid, y, head);
+    (from..160).map(|x| grid.cell(x, y).symbol).collect()
 }
 
 #[test]
@@ -362,4 +394,180 @@ fn an_escalation_takes_palette_52_at_256_colours() {
         grid.contents.contains("approvals waiting")
     });
     quit(run);
+}
+
+#[test]
+fn two_sessions_approvals_share_one_queue_and_esc_steps_then_badges() {
+    let setup = Setup::new();
+    configure(&setup, json!({}));
+    global_ask_rule(&setup, "echo hi");
+    // One waiting turn per workspace: the shell call asks, and the two
+    // text steps after it let the turn end once answered.
+    let script = json!({"steps": [
+        {"tool_calls": [{"name": "shell", "arguments": {"command": "echo hi"}}]},
+        {"text": ["done."]},
+        {"text": ["done."]},
+    ]});
+    write_json(&setup.workspace().join("s.json"), &script);
+    let second_dir = setup.root.path().join("b");
+    fs::create_dir_all(&second_dir).unwrap();
+    write_json(&second_dir.join("s.json"), &script);
+    let hub = Arc::new(Mutex::new(None));
+    let (watch, _) = connect_hub(&setup, &hub);
+    let away = second_dir.to_string_lossy().into_owned();
+    let guard = SessionGuard::arm(setup.deadline, &away);
+    let control = Socket::connect(setup.deadline, &setup.hub_socket());
+    assert_eq!(recv(&control, "hub_hello")["kind"], "hub_hello");
+    let b = start_session(&control, &away, "second");
+    let mut run = terminal(&setup, &TRUECOLOUR);
+    run.wait_screen("the first frame", |grid| grid.contents.contains("›"));
+    run.ready();
+    // B's turn runs headless: by the time A asks it waits on the
+    // standing ask, and the rail carries both waiting cards. B's
+    // request never folds on this terminal before the switch, so A's
+    // panel reads 1 of 1.
+    run.write(b"run it\r");
+    run.wait_screen("A's approval panel", |grid| {
+        grid.contents.contains("Approval 1 of 1 · run it")
+    });
+    // Both sessions wait: A's card for its open panel, B's headless
+    // one. Two NEEDS INPUT rows prove B waits before the switch below
+    // sets the arrival its request opens.
+    run.wait_screen("both sessions waiting", |grid| {
+        grid.rows
+            .iter()
+            .filter(|row| row.contains("NEEDS INPUT"))
+            .count()
+            >= 2
+            && grid.contents.contains("second")
+    });
+    // Esc puts A aside behind its badge.
+    run.write(b"\x1b[27u");
+    let grid = run.wait_screen("the badge for one", |grid| {
+        grid.contents
+            .contains("1 approvals waiting · click to reopen")
+    });
+    // Click B's waiting card: the row below a NEEDS INPUT row holding
+    // B's name. A's own card waits too, so the name picks B's.
+    let card = grid
+        .rows
+        .iter()
+        .enumerate()
+        .find(|(y, _)| {
+            grid.rows
+                .get(y + 1)
+                .is_some_and(|below| below.contains("second"))
+                && grid.rows[*y].contains("NEEDS INPUT")
+        })
+        .map(|(y, _)| u16::try_from(y).unwrap())
+        .expect("B's waiting card");
+    let at = col_at(&grid, card + 1, "second");
+    assert!(at < RAIL_MAX_COLS, "the click lands on the rail");
+    run.write(
+        format!(
+            "\x1b[<0;{};{}M\x1b[<0;{};{}m",
+            at + 1,
+            card + 2,
+            at + 1,
+            card + 2
+        )
+        .as_bytes(),
+    );
+    // The switch opens B's request, queued behind A's: 2 of 2.
+    run.wait_screen("B's approval panel", |grid| {
+        grid.contents.contains("Approval 2 of 2 · second")
+    });
+    // B is the last waiting request, so one Esc closes the panel.
+    run.write(b"\x1b[27u");
+    run.wait_screen("the badge for both", |grid| {
+        grid.contents
+            .contains("2 approvals waiting · click to reopen")
+    });
+    // `/approvals` reopens the queue at its first request: A's.
+    run.write(b"/approvals\r");
+    let grid = run.wait_screen("the queue back at A", |grid| {
+        grid.contents.contains("Approval 1 of 2")
+    });
+    let header = row_with(&grid, "Approval 1 of 2");
+    let text = panel_header_text(&grid, header, "Approval 1 of 2");
+    assert!(
+        text.contains("run it"),
+        "the first header names A:\n{}",
+        grid.contents
+    );
+    assert!(
+        !text.contains("second"),
+        "the first header names only A:\n{}",
+        grid.contents
+    );
+    // Esc steps to the next waiting request: B's.
+    run.write(b"\x1b[27u");
+    run.wait_screen("the queue stepped to B", |grid| {
+        grid.contents.contains("Approval 2 of 2 · second")
+    });
+    // A second Esc puts both aside behind the badge.
+    run.write(b"\x1b[27u");
+    run.wait_screen("the badge for both again", |grid| {
+        grid.contents
+            .contains("2 approvals waiting · click to reopen")
+    });
+    run.write(b"/approvals\r");
+    let grid = run.wait_screen("the queue at A again", |grid| {
+        grid.contents.contains("Approval 1 of 2")
+    });
+    let header = row_with(&grid, "Approval 1 of 2");
+    let text = panel_header_text(&grid, header, "Approval 1 of 2");
+    assert!(
+        text.contains("run it"),
+        "the first header names A:\n{}",
+        grid.contents
+    );
+    assert!(
+        !text.contains("second"),
+        "the first header names only A:\n{}",
+        grid.contents
+    );
+    // A's id is the feed's other session: the first status that is not
+    // B's. A `full` subscribe folds A's stream, so its resolution
+    // reaches this test as evidence the answer below landed.
+    control.send(r#"{"id":"c_feed","command":"feed"}"#);
+    let fed = until(&control, "A's status on the feed", |line| {
+        line["kind"] == "session_status" && line["session_id"].as_str().is_some_and(|id| id != b)
+    });
+    let a = fed.last().unwrap()["session_id"]
+        .as_str()
+        .unwrap()
+        .to_owned();
+    subscribe(&control, &a);
+    // Allow A: the queue drops it and shows B alone.
+    run.write(b"\r");
+    let grid = run.wait_screen("B's request alone", |grid| {
+        grid.contents.contains("Approval 1 of 1 · second")
+    });
+    let header = row_with(&grid, "Approval 1 of 1");
+    let text = panel_header_text(&grid, header, "Approval 1 of 1");
+    assert!(
+        text.contains("second"),
+        "the last header names B:\n{}",
+        grid.contents
+    );
+    until(&control, "A's permission_resolved", |line| {
+        line["kind"] == "permission_resolved"
+            && line["payload"]["decision"] == "allow"
+            && line["payload"]["decided_by"] == "person"
+    });
+    // Allow B: the queue empties and the panel closes.
+    run.write(b"\r");
+    run.wait_screen("the queue emptied", |grid| {
+        !grid.contents.contains("Approval 1 of 1")
+    });
+    // Quitting waits for the hub to exit, which needs no client open:
+    // drop this test's hub clients first. Closing B goes over its own
+    // session socket, so it needs no hub.
+    drop((watch, control));
+    quit(run);
+    close_session(&Socket::connect(setup.deadline, &setup.session_socket(&b)));
+    guard.wait_gone();
+    let hub = hub.lock().unwrap().take().expect("the starter ran");
+    hub.wait();
 }
