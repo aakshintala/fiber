@@ -215,8 +215,11 @@ fn guarded_stub_child() {
     let answer = arguments.next().expect("the answering stub path");
     let groups = arguments.next().expect("the process-group ledger");
     let output_path = arguments.next().expect("the answer output path");
-    let mut child_command = Command::new(answer);
+    // A script the test wrote is never executed directly: its first
+    // execution can stall on macOS, so it always runs through /bin/sh.
+    let mut child_command = Command::new("/bin/sh");
     child_command
+        .arg(answer)
         .args(arguments)
         .stdin(Stdio::inherit())
         .stdout(Stdio::piped())
