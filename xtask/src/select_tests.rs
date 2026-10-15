@@ -150,6 +150,13 @@ fn a_compiled_in_ci_doc_runs_xtask() {
 }
 
 #[test]
+fn a_compiled_in_performance_doc_runs_xtask() {
+    let selection = classify(&strings(&["docs/performance.md"]), &members_with_tools());
+    assert_eq!(selection, Selection::Crates(strings(&["xtask"])));
+    assert_eq!(selection.mode(), "crates");
+}
+
+#[test]
 fn readme_alone_runs_the_docs_job() {
     assert_eq!(
         classify(&strings(&["README.md"]), &members()),
