@@ -1721,7 +1721,10 @@ mod window {
         let session = Session::new();
         first_context(&session);
         let bad = session.lines().len();
-        session.raw(&unreadable("text_completed", u64::try_from(bad).unwrap()));
+        session.raw(&unreadable(
+            "reasoning_completed",
+            u64::try_from(bad).unwrap(),
+        ));
         drop(session.log);
         let log = log::Log::open(
             session.root.path(),

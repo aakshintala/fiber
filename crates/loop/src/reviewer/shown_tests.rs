@@ -10,15 +10,16 @@
 )]
 
 use contract::events::{
-    Event, HandoffCompleted, InputItem, KeptMessage, Note, Outcome, ReviewerKept, SessionStarted,
-    SteeringApplied, ToolCallRequested, TurnStarted, Variables, VariablesSource,
+    AssistantMessageCompleted, Event, HandoffCompleted, InputItem, KeptMessage, MessageOutcome,
+    Note, Outcome, ReviewerKept, SessionStarted, SteeringApplied, TextCompleted, ToolCallRequested,
+    TurnCompleted, TurnOutcome, TurnStarted, Variables, VariablesSource,
 };
 use contract::provider::Input;
 use contract::shapes::{ContentPart, Failure, Origin, Sender};
 use contract::{ActionId, CommandId, ErrorCode, Seq, SessionId, TurnId};
 use serde_json::json;
 
-use super::{Reviewed, Shown, render_reviewed};
+use super::{REPLY_CAP, Reviewed, Shown, render_reviewed};
 
 fn driver() -> Sender {
     Sender {
@@ -74,6 +75,34 @@ fn kept(seq: u64, item: u64) -> KeptMessage {
 
 fn kept_event(kept: Vec<KeptMessage>) -> Event {
     Event::ReviewerKept(ReviewerKept { kept, failed: None })
+}
+
+fn text_completed(text: &str) -> Event {
+    Event::TextCompleted(TextCompleted {
+        text: text.into(),
+        provider_item: None,
+    })
+}
+
+fn assistant_completed(outcome: MessageOutcome) -> Event {
+    Event::AssistantMessageCompleted(AssistantMessageCompleted {
+        outcome,
+        error: None,
+    })
+}
+
+fn turn_completed(outcome: TurnOutcome) -> Event {
+    Event::TurnCompleted(TurnCompleted {
+        outcome,
+        error: None,
+        questions: None,
+    })
+}
+
+fn person_turn(text: &str) -> Event {
+    Event::TurnStarted(TurnStarted {
+        input: vec![message(text, driver())],
+    })
 }
 
 #[test]
@@ -752,14 +781,67 @@ fn the_live_fold_and_the_history_fold_agree_at_each_side_of_the_cut() {
     .unwrap();
     log.append(
         &Event::ToolCallRequested(call("shell")),
-        Some(after),
+        Some(after.clone()),
         Some(ActionId("a_2".into())),
+    )
+    .unwrap();
+    // A reply-then-person pair, then a text-then-call-then-person run:
+    // only the text after the call answers the last message.
+    let third = TurnId("t_3".into());
+    let fourth = TurnId("t_4".into());
+    log.append(
+        &Event::TextCompleted(TextCompleted {
+            text: "Done.".into(),
+            provider_item: None,
+        }),
+        Some(after),
+        None,
+    )
+    .unwrap();
+    log.append(
+        &Event::TurnStarted(TurnStarted {
+            input: vec![message("say hi", driver())],
+        }),
+        Some(third.clone()),
+        None,
+    )
+    .unwrap();
+    log.append(
+        &Event::TextCompleted(TextCompleted {
+            text: "Stale.".into(),
+            provider_item: None,
+        }),
+        Some(third.clone()),
+        None,
+    )
+    .unwrap();
+    log.append(
+        &Event::ToolCallRequested(call("shell")),
+        Some(third.clone()),
+        Some(ActionId("a_3".into())),
+    )
+    .unwrap();
+    log.append(
+        &Event::TextCompleted(TextCompleted {
+            text: "Fresh.".into(),
+            provider_item: None,
+        }),
+        Some(third),
+        None,
+    )
+    .unwrap();
+    log.append(
+        &Event::TurnStarted(TurnStarted {
+            input: vec![message("go", driver())],
+        }),
+        Some(fourth),
+        None,
     )
     .unwrap();
     // Before the cut, at it and after it, folding the log to that point
     // reads the same reviewer input as rendering every line to it: the
     // live path and resume share one fold, never two implementations.
-    for point in [2, 3, 5] {
+    for point in [2, 3, 5, 7, 8, 10, 11, 12] {
         let folded = crate::history::forked(&dir, Seq(point)).unwrap();
         let mut live = Vec::new();
         for line in log::read(&dir).unwrap() {
@@ -772,4 +854,524 @@ fn the_live_fold_and_the_history_fold_agree_at_each_side_of_the_cut() {
         }
         assert_eq!(folded.reviewed, live, "at seq {point}");
     }
+}
+
+#[test]
+fn a_reply_then_a_person_message_keeps_the_pair() {
+    let mut reviewed = Vec::new();
+    render_reviewed(
+        &mut reviewed,
+        &text_completed("Delete the 3 stale branches?"),
+        None,
+        Some(Seq(20)),
+    );
+    render_reviewed(&mut reviewed, &person_turn("yes"), None, Some(Seq(21)));
+    assert_eq!(
+        reviewed,
+        vec![
+            Reviewed {
+                shown: Shown::Reply("Delete the 3 stale branches?".into()),
+                input: Input::User {
+                    text: "The agent: Delete the 3 stale branches?".into(),
+                    images: Vec::new(),
+                },
+            },
+            Reviewed {
+                shown: Shown::Person(kept(21, 0)),
+                input: Input::User {
+                    text: "The person: yes".into(),
+                    images: Vec::new(),
+                },
+            },
+        ],
+    );
+}
+
+#[test]
+fn a_reply_with_no_person_message_after_it_stays_held() {
+    let mut reviewed = Vec::new();
+    render_reviewed(
+        &mut reviewed,
+        &text_completed("Delete the 3 stale branches?"),
+        None,
+        Some(Seq(20)),
+    );
+    assert_eq!(reviewed.len(), 1);
+    assert!(
+        matches!(reviewed[0].shown, Shown::Reply(_)),
+        "an unanswered reply stays held at the tail: {reviewed:?}"
+    );
+    assert!(
+        reviewed
+            .iter()
+            .all(|item| !matches!(item.shown, Shown::Person(_))),
+        "no person message follows the reply: {reviewed:?}"
+    );
+}
+
+#[test]
+fn agent_text_then_a_tool_call_then_a_person_message_carries_no_reply() {
+    let mut reviewed = Vec::new();
+    render_reviewed(
+        &mut reviewed,
+        &text_completed("Delete the 3 stale branches?"),
+        None,
+        Some(Seq(20)),
+    );
+    render_reviewed(
+        &mut reviewed,
+        &Event::ToolCallRequested(call("shell")),
+        Some(&ActionId("a_1".into())),
+        Some(Seq(21)),
+    );
+    render_reviewed(&mut reviewed, &person_turn("yes"), None, Some(Seq(22)));
+    assert!(
+        reviewed
+            .iter()
+            .all(|item| !matches!(item.shown, Shown::Reply(_))),
+        "a tool call between the text and the message breaks the link: {reviewed:?}"
+    );
+    assert!(person_text(&reviewed).contains(&"The person: yes"));
+}
+
+#[test]
+fn an_unshown_tool_call_between_text_and_message_breaks_the_link() {
+    let mut reviewed = Vec::new();
+    render_reviewed(
+        &mut reviewed,
+        &text_completed("Delete the 3 stale branches?"),
+        None,
+        Some(Seq(20)),
+    );
+    // A hosted call carries no action, so the reviewer never sees it, but
+    // it still breaks the link.
+    render_reviewed(
+        &mut reviewed,
+        &Event::ToolCallRequested(call("shell")),
+        None,
+        Some(Seq(21)),
+    );
+    render_reviewed(&mut reviewed, &person_turn("yes"), None, Some(Seq(22)));
+    assert!(
+        reviewed
+            .iter()
+            .all(|item| !matches!(item.shown, Shown::Reply(_))),
+        "an unshown call breaks the link too: {reviewed:?}"
+    );
+    assert!(person_text(&reviewed).contains(&"The person: yes"));
+}
+
+#[test]
+fn text_tool_call_text_person_shows_only_the_second_text() {
+    let mut reviewed = Vec::new();
+    render_reviewed(&mut reviewed, &text_completed("first"), None, Some(Seq(20)));
+    render_reviewed(
+        &mut reviewed,
+        &Event::ToolCallRequested(call("shell")),
+        Some(&ActionId("a_1".into())),
+        Some(Seq(21)),
+    );
+    render_reviewed(
+        &mut reviewed,
+        &text_completed("second"),
+        None,
+        Some(Seq(22)),
+    );
+    render_reviewed(&mut reviewed, &person_turn("yes"), None, Some(Seq(23)));
+    assert_eq!(
+        reviewed,
+        vec![
+            Reviewed {
+                shown: Shown::Call(ActionId("a_1".into())),
+                input: Input::User {
+                    text: r#"Tool call: {"tool":"shell","arguments":{"city":"Paris"}}"#.into(),
+                    images: Vec::new(),
+                },
+            },
+            Reviewed {
+                shown: Shown::Reply("second".into()),
+                input: Input::User {
+                    text: "The agent: second".into(),
+                    images: Vec::new(),
+                },
+            },
+            Reviewed {
+                shown: Shown::Person(kept(23, 0)),
+                input: Input::User {
+                    text: "The person: yes".into(),
+                    images: Vec::new(),
+                },
+            },
+        ],
+    );
+}
+
+#[test]
+fn two_text_parts_join_with_a_newline() {
+    let mut reviewed = Vec::new();
+    render_reviewed(
+        &mut reviewed,
+        &text_completed("line one"),
+        None,
+        Some(Seq(20)),
+    );
+    render_reviewed(
+        &mut reviewed,
+        &text_completed("line two"),
+        None,
+        Some(Seq(21)),
+    );
+    assert_eq!(
+        reviewed,
+        vec![Reviewed {
+            shown: Shown::Reply("line one\nline two".into()),
+            input: Input::User {
+                text: "The agent: line one\nline two".into(),
+                images: Vec::new(),
+            },
+        }],
+    );
+}
+
+#[test]
+fn an_empty_or_whitespace_part_adds_nothing() {
+    let mut reviewed = Vec::new();
+    render_reviewed(&mut reviewed, &text_completed(""), None, Some(Seq(20)));
+    render_reviewed(&mut reviewed, &text_completed("   "), None, Some(Seq(21)));
+    assert!(
+        reviewed.is_empty(),
+        "empty parts start no reply: {reviewed:?}"
+    );
+    render_reviewed(&mut reviewed, &text_completed("kept"), None, Some(Seq(22)));
+    render_reviewed(&mut reviewed, &text_completed("  "), None, Some(Seq(23)));
+    assert_eq!(
+        reviewed,
+        vec![Reviewed {
+            shown: Shown::Reply("kept".into()),
+            input: Input::User {
+                text: "The agent: kept".into(),
+                images: Vec::new(),
+            },
+        }],
+    );
+}
+
+#[test]
+fn two_driver_messages_on_one_line_share_one_reply() {
+    let mut reviewed = Vec::new();
+    render_reviewed(
+        &mut reviewed,
+        &text_completed("which?"),
+        None,
+        Some(Seq(20)),
+    );
+    render_reviewed(
+        &mut reviewed,
+        &Event::TurnStarted(TurnStarted {
+            input: vec![message("A", driver()), message("B", driver())],
+        }),
+        None,
+        Some(Seq(21)),
+    );
+    assert_eq!(
+        person_text(&reviewed),
+        ["The agent: which?", "The person: A", "The person: B"],
+    );
+    assert_eq!(reviewed[0].shown, Shown::Reply("which?".into()));
+    assert_eq!(reviewed[1].shown, Shown::Person(kept(21, 0)));
+    assert_eq!(reviewed[2].shown, Shown::Person(kept(21, 1)));
+}
+
+#[test]
+fn an_extension_message_after_a_reply_removes_it() {
+    let mut reviewed = Vec::new();
+    render_reviewed(
+        &mut reviewed,
+        &text_completed("proposal"),
+        None,
+        Some(Seq(20)),
+    );
+    render_reviewed(
+        &mut reviewed,
+        &Event::TurnStarted(TurnStarted {
+            input: vec![message("from elsewhere", extension_sender())],
+        }),
+        None,
+        Some(Seq(21)),
+    );
+    assert!(
+        reviewed.is_empty(),
+        "a line with no person message settles the held reply: {reviewed:?}"
+    );
+}
+
+#[test]
+fn a_driver_message_with_no_seq_after_a_reply_removes_it() {
+    let mut reviewed = Vec::new();
+    render_reviewed(
+        &mut reviewed,
+        &text_completed("proposal"),
+        None,
+        Some(Seq(20)),
+    );
+    render_reviewed(
+        &mut reviewed,
+        &Event::TurnStarted(TurnStarted {
+            input: vec![message("run it", driver())],
+        }),
+        None,
+        None,
+    );
+    assert!(
+        reviewed.is_empty(),
+        "a message with no durable identity settles the held reply: {reviewed:?}"
+    );
+}
+
+#[test]
+fn a_drivers_steering_message_after_a_reply_keeps_it() {
+    let mut reviewed = Vec::new();
+    render_reviewed(
+        &mut reviewed,
+        &text_completed("proposal"),
+        None,
+        Some(Seq(20)),
+    );
+    render_reviewed(
+        &mut reviewed,
+        &Event::SteeringApplied(SteeringApplied {
+            content: text_part("and the linter"),
+            sender: driver(),
+            changed_by: None,
+        }),
+        None,
+        Some(Seq(21)),
+    );
+    assert_eq!(
+        person_text(&reviewed),
+        ["The agent: proposal", "The person: and the linter"],
+    );
+}
+
+#[test]
+fn an_extensions_steering_message_after_a_reply_removes_it() {
+    let mut reviewed = Vec::new();
+    render_reviewed(
+        &mut reviewed,
+        &text_completed("proposal"),
+        None,
+        Some(Seq(20)),
+    );
+    render_reviewed(
+        &mut reviewed,
+        &Event::SteeringApplied(SteeringApplied {
+            content: text_part("an extension steers"),
+            sender: extension_sender(),
+            changed_by: None,
+        }),
+        None,
+        Some(Seq(21)),
+    );
+    assert!(
+        reviewed.is_empty(),
+        "steering from elsewhere settles the held reply: {reviewed:?}"
+    );
+}
+
+#[test]
+fn a_failed_assistant_message_removes_the_held_reply() {
+    let mut reviewed = Vec::new();
+    render_reviewed(
+        &mut reviewed,
+        &text_completed("proposal"),
+        None,
+        Some(Seq(20)),
+    );
+    render_reviewed(
+        &mut reviewed,
+        &assistant_completed(MessageOutcome::Failed),
+        None,
+        Some(Seq(21)),
+    );
+    assert!(
+        reviewed.is_empty(),
+        "a failed reply never reached the person: {reviewed:?}"
+    );
+}
+
+#[test]
+fn a_completed_assistant_message_keeps_the_held_reply() {
+    let mut reviewed = Vec::new();
+    render_reviewed(
+        &mut reviewed,
+        &text_completed("proposal"),
+        None,
+        Some(Seq(20)),
+    );
+    render_reviewed(
+        &mut reviewed,
+        &assistant_completed(MessageOutcome::Completed),
+        None,
+        Some(Seq(21)),
+    );
+    assert_eq!(reviewed.len(), 1);
+    assert_eq!(reviewed[0].shown, Shown::Reply("proposal".into()));
+}
+
+#[test]
+fn an_interrupted_turn_removes_the_held_reply() {
+    let mut reviewed = Vec::new();
+    render_reviewed(
+        &mut reviewed,
+        &text_completed("proposal"),
+        None,
+        Some(Seq(20)),
+    );
+    render_reviewed(
+        &mut reviewed,
+        &turn_completed(TurnOutcome::Interrupted),
+        None,
+        Some(Seq(21)),
+    );
+    assert!(
+        reviewed.is_empty(),
+        "an interrupted turn's text answers nothing: {reviewed:?}"
+    );
+}
+
+#[test]
+fn a_failed_turn_removes_the_held_reply() {
+    let mut reviewed = Vec::new();
+    render_reviewed(
+        &mut reviewed,
+        &text_completed("proposal"),
+        None,
+        Some(Seq(20)),
+    );
+    render_reviewed(
+        &mut reviewed,
+        &turn_completed(TurnOutcome::Failed),
+        None,
+        Some(Seq(21)),
+    );
+    assert!(
+        reviewed.is_empty(),
+        "a failed turn's text answers nothing: {reviewed:?}"
+    );
+}
+
+#[test]
+fn a_completed_turn_keeps_the_held_reply() {
+    let mut reviewed = Vec::new();
+    render_reviewed(
+        &mut reviewed,
+        &text_completed("proposal"),
+        None,
+        Some(Seq(20)),
+    );
+    render_reviewed(
+        &mut reviewed,
+        &turn_completed(TurnOutcome::Completed),
+        None,
+        Some(Seq(21)),
+    );
+    assert_eq!(reviewed.len(), 1);
+    assert_eq!(reviewed[0].shown, Shown::Reply("proposal".into()));
+}
+
+#[test]
+fn a_reply_at_one_under_and_at_the_cap_shows_whole() {
+    for len in [REPLY_CAP - 1, REPLY_CAP] {
+        let mut reviewed = Vec::new();
+        let body = "x".repeat(len);
+        render_reviewed(&mut reviewed, &text_completed(&body), None, Some(Seq(20)));
+        assert_eq!(reviewed.len(), 1, "at length {len}");
+        assert_eq!(
+            reviewed[0].input,
+            Input::User {
+                text: format!("The agent: {body}"),
+                images: Vec::new(),
+            },
+            "at length {len}"
+        );
+        assert_eq!(
+            reviewed[0].shown,
+            Shown::Reply(body),
+            "the stored text is never cut, at length {len}"
+        );
+    }
+}
+
+#[test]
+fn a_reply_one_over_the_cap_cuts_the_head_and_counts_the_rest() {
+    let mut reviewed = Vec::new();
+    let raw = "x".repeat(REPLY_CAP + 1);
+    render_reviewed(&mut reviewed, &text_completed(&raw), None, Some(Seq(20)));
+    assert_eq!(reviewed.len(), 1);
+    assert_eq!(
+        reviewed[0].input,
+        Input::User {
+            text: format!(
+                "The agent: {}\n[Reply cut here; characters not shown: 1]",
+                "x".repeat(REPLY_CAP)
+            ),
+            images: Vec::new(),
+        },
+    );
+    assert_eq!(
+        reviewed[0].shown,
+        Shown::Reply(raw),
+        "the stored text is never cut"
+    );
+}
+
+#[test]
+fn the_cap_counts_characters_never_bytes() {
+    for (len, count) in [(REPLY_CAP + 1, 1), (REPLY_CAP + 7, 7)] {
+        let mut reviewed = Vec::new();
+        render_reviewed(
+            &mut reviewed,
+            &text_completed(&"é".repeat(len)),
+            None,
+            Some(Seq(20)),
+        );
+        assert_eq!(reviewed.len(), 1, "at length {len}");
+        assert_eq!(
+            reviewed[0].input,
+            Input::User {
+                text: format!(
+                    "The agent: {}\n[Reply cut here; characters not shown: {count}]",
+                    "é".repeat(REPLY_CAP)
+                ),
+                images: Vec::new(),
+            },
+            "at length {len}"
+        );
+    }
+}
+
+#[test]
+fn the_cap_applies_across_parts_without_cutting_the_stored_text() {
+    let mut reviewed = Vec::new();
+    let first = "y".repeat(7_000);
+    let second = "z".repeat(50);
+    render_reviewed(&mut reviewed, &text_completed(&first), None, Some(Seq(20)));
+    render_reviewed(&mut reviewed, &text_completed(&second), None, Some(Seq(21)));
+    let raw = format!("{first}\n{second}");
+    assert_eq!(raw.chars().count(), 7_000 + 1 + 50);
+    assert_eq!(
+        reviewed[0].input,
+        Input::User {
+            text: format!(
+                "The agent: {}\n[Reply cut here; characters not shown: 1051]",
+                "y".repeat(REPLY_CAP)
+            ),
+            images: Vec::new(),
+        },
+    );
+    assert_eq!(
+        reviewed[0].shown,
+        Shown::Reply(raw),
+        "a later part never extends a cut body"
+    );
 }

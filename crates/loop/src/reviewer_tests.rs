@@ -209,7 +209,25 @@ fn the_models_prose_reasoning_and_results_are_left_out() {
     ] {
         render_reviewed(&mut reviewed, &event, Some(&action), Some(Seq(20)));
     }
-    assert!(reviewed.is_empty());
+    // The model's text stays held for the person's next message; nothing
+    // else reaches the reviewer.
+    assert_eq!(reviewed.len(), 1);
+    assert_eq!(
+        reviewed[0].shown,
+        Shown::Reply("I will run the tests.".into())
+    );
+    assert_eq!(
+        reviewed[0].input,
+        Input::User {
+            text: "The agent: I will run the tests.".into(),
+            images: Vec::new(),
+        },
+    );
+    assert!(
+        reviewed
+            .iter()
+            .all(|item| !matches!(item.shown, Shown::Person(_) | Shown::Call(_)))
+    );
 }
 
 #[test]

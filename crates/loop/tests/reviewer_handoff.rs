@@ -570,11 +570,12 @@ fn a_failed_selection_keeps_every_earlier_person_message() {
     assert_eq!(reviewer.requests().len(), 3);
     let requests = reviewer.requests();
     let after_texts = texts(&requests[2]);
-    assert_eq!(after_texts.len(), 6);
+    assert_eq!(after_texts.len(), 7);
     assert_eq!(after_texts[0], "The person: never push to main");
-    assert_eq!(after_texts[1], "The person: say hi");
-    assert_eq!(after_texts[2], "The person: now run it");
-    assert!(after_texts[3].starts_with("Tool call: "));
+    assert_eq!(after_texts[1], "The agent: Done.");
+    assert_eq!(after_texts[2], "The person: say hi");
+    assert_eq!(after_texts[3], "The person: now run it");
+    assert!(after_texts[4].starts_with("Tool call: "));
     assert_eq!(
         after_texts
             .iter()
