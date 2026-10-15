@@ -916,10 +916,15 @@ fn wait_behind_replay(
     std::thread::Builder::new()
         .name("attach-answer".to_owned())
         .spawn(move || {
-            let result = lp.hub.answer(&rx, "a_1", &mut lp.app, &lp.tick).map(|answer| match answer {
-                super::super::hub::Answer::Lines(lines) => lines,
-                super::super::hub::Answer::Reopened => panic!("no reopening in this script"),
-            });
+            let result =
+                lp.hub
+                    .answer(&rx, "a_1", &mut lp.app, &lp.tick)
+                    .map(|answer| match answer {
+                        super::super::hub::Answer::Lines(lines) => lines,
+                        super::super::hub::Answer::Reopened => {
+                            panic!("no reopening in this script")
+                        }
+                    });
             let peak = lp.hub.answer_stash_peak();
             let stashed = lp.hub.stashed().len();
             answered_tx
@@ -996,10 +1001,15 @@ fn an_answer_first_leaves_no_stash() {
     std::thread::Builder::new()
         .name("attach-answer".to_owned())
         .spawn(move || {
-            let result = lp.hub.answer(&rx, "a_1", &mut lp.app, &lp.tick).map(|answer| match answer {
-                super::super::hub::Answer::Lines(lines) => lines,
-                super::super::hub::Answer::Reopened => panic!("no reopening in this script"),
-            });
+            let result =
+                lp.hub
+                    .answer(&rx, "a_1", &mut lp.app, &lp.tick)
+                    .map(|answer| match answer {
+                        super::super::hub::Answer::Lines(lines) => lines,
+                        super::super::hub::Answer::Reopened => {
+                            panic!("no reopening in this script")
+                        }
+                    });
             let peak = lp.hub.answer_stash_peak();
             let stashed = lp.hub.stashed().len();
             answered_tx.send((result, peak, stashed, lp)).unwrap_or(());
@@ -1223,10 +1233,15 @@ fn a_history_wait_at_the_plateau_stashes_queue_plus_one() {
     std::thread::Builder::new()
         .name("attach-answer".to_owned())
         .spawn(move || {
-            let result = lp.hub.answer(&rx, "a_1", &mut lp.app, &lp.tick).map(|answer| match answer {
-                super::super::hub::Answer::Lines(lines) => lines,
-                super::super::hub::Answer::Reopened => panic!("no reopening in this script"),
-            });
+            let result =
+                lp.hub
+                    .answer(&rx, "a_1", &mut lp.app, &lp.tick)
+                    .map(|answer| match answer {
+                        super::super::hub::Answer::Lines(lines) => lines,
+                        super::super::hub::Answer::Reopened => {
+                            panic!("no reopening in this script")
+                        }
+                    });
             let peak = lp.hub.answer_stash_peak();
             let stashed = lp.hub.stashed().len();
             answered_tx.send((result, peak, stashed, lp)).unwrap_or(());
@@ -1520,16 +1535,26 @@ fn serve_history(
 
 /// A full subscription's opening boundary, without adding a durable line.
 fn opening(app: &mut crate::app::App, last: u64) {
-    app.on_line(Line::Session(line("command_accepted", None, None,
-        json!({"command_id": "opening", "result": {"last_seq": last}}))));
+    app.on_line(Line::Session(line(
+        "command_accepted",
+        None,
+        None,
+        json!({"command_id": "opening", "result": {"last_seq": last}}),
+    )));
 }
 
 /// A hub event naming one session, with or without a fold boundary.
 fn stream_event(kind: &str, session: &contract::SessionId, last: Option<u64>) -> Line {
     let mut payload = json!({"session_id": session.0, "how": "crashed"});
-    if let Some(last) = last { payload["last_seq"] = json!(last); }
-    Line::Hub(contract::HubLine { kind: kind.into(), ts: 0,
-        schema_version: contract::SCHEMA_VERSION, payload: payload.as_object().unwrap().clone() })
+    if let Some(last) = last {
+        payload["last_seq"] = json!(last);
+    }
+    Line::Hub(contract::HubLine {
+        kind: kind.into(),
+        ts: 0,
+        schema_version: contract::SCHEMA_VERSION,
+        payload: payload.as_object().unwrap().clone(),
+    })
 }
 
 /// Scrolls to the dropped first page using the app's injected clock.
@@ -1558,7 +1583,12 @@ fn opening_passes_gate_pages_until_the_boundary_is_folded() {
     opening(&mut lp.app, last);
     lp.app.on_line(Line::Session(replay(last + 1)));
     assert!(!lp.app.pass_open());
-    let empty = line("command_accepted", None, None, json!({"command_id": "empty"}));
+    let empty = line(
+        "command_accepted",
+        None,
+        None,
+        json!({"command_id": "empty"}),
+    );
     lp.app.on_line(Line::Session(empty));
     assert!(!lp.app.pass_open());
 }
@@ -1575,17 +1605,23 @@ fn stream_endings_close_only_the_named_pass_and_disconnect_clears_all() {
         lp.app.on_line(stream_event(kind, &session, None));
         assert!(!lp.app.pass_open());
     }
-    lp.app.on_line(stream_event("stream_reopened", &session, Some(9000)));
+    lp.app
+        .on_line(stream_event("stream_reopened", &session, Some(9000)));
     assert!(lp.app.pass_open());
-    lp.app.on_line(stream_event("stream_reopened", &other, Some(9001)));
-    lp.app.on_line(stream_event("stream_closed", &session, None));
+    lp.app
+        .on_line(stream_event("stream_reopened", &other, Some(9001)));
+    lp.app
+        .on_line(stream_event("stream_closed", &session, None));
     assert!(lp.app.pass_open(), "the delegate session's pass remains");
     lp.app.on_line(stream_event("session_left", &other, None));
     assert!(!lp.app.pass_open(), "a delegate crash ends its pass too");
-    lp.app.on_line(stream_event("stream_reopened", &session, Some(9002)));
-    lp.app.on_line(stream_event("stream_reopened", &other, None));
+    lp.app
+        .on_line(stream_event("stream_reopened", &session, Some(9002)));
+    lp.app
+        .on_line(stream_event("stream_reopened", &other, None));
     assert!(lp.app.pass_open());
-    lp.app.on_line(stream_event("stream_reopened", &session, None));
+    lp.app
+        .on_line(stream_event("stream_reopened", &session, None));
     assert!(!lp.app.pass_open(), "an empty reopening has no pass");
     opening(&mut lp.app, 9000);
     lp.app.disconnected();
@@ -1603,7 +1639,8 @@ fn pending_reopen_survives_older_end_events_and_seq_lines() {
     }
     lp.app.on_line(Line::Session(replay(9999)));
     assert!(lp.app.pass_open(), "only the reopening resolves Pending");
-    lp.app.on_line(stream_event("stream_reopened", &session, Some(10000)));
+    lp.app
+        .on_line(stream_event("stream_reopened", &session, Some(10000)));
     lp.app.on_line(Line::Session(replay(9999)));
     assert!(lp.app.pass_open());
     lp.app.on_line(Line::Session(replay(10000)));
@@ -1618,18 +1655,30 @@ fn abandoned_history_answers_are_discarded_once_by_id() {
     for kind in ["command_accepted", "command_rejected"] {
         let (mut lp, _, _, _) = opened();
         lp.app.abandon_history("late".into());
-        let mut answer = line(kind, None, None, json!({"command_id": "late", "result": {"last_seq": 9000}}));
+        let mut answer = line(
+            kind,
+            None,
+            None,
+            json!({"command_id": "late", "result": {"last_seq": 9000}}),
+        );
         lp.app.on_line(Line::Session(answer.clone()));
         assert!(!lp.app.pass_open());
         answer.kind = "command_accepted".into();
         lp.app.on_line(Line::Session(answer));
-        assert!(lp.app.pass_open(), "the abandoned id leaves the set on its first answer");
+        assert!(
+            lp.app.pass_open(),
+            "the abandoned id leaves the set on its first answer"
+        );
     }
     let (mut lp, _, _, _) = opened();
     lp.app.abandon_history("late".into());
     lp.app.disconnected();
-    lp.app.on_line(Line::Session(line("command_accepted", None, None,
-        json!({"command_id": "late", "result": {"last_seq": 9000}}))));
+    lp.app.on_line(Line::Session(line(
+        "command_accepted",
+        None,
+        None,
+        json!({"command_id": "late", "result": {"last_seq": 9000}}),
+    )));
     assert!(lp.app.pass_open(), "disconnect clears abandoned ids");
 }
 
@@ -1642,7 +1691,9 @@ fn the_boundary_line_sends_a_deferred_search_without_another_hub_line() {
     lp.app.on_key(crate::keys::Key::Char('z'), lp.clock.now());
     assert!(lp.app.find_due(1).is_empty());
     let outgoing = lp.app.on_line(Line::Session(replay(last)));
-    assert!(outgoing.iter().any(|text| serde_json::from_str::<serde_json::Value>(text).unwrap()["command"] == "history"));
+    assert!(outgoing.iter().any(
+        |text| serde_json::from_str::<serde_json::Value>(text).unwrap()["command"] == "history"
+    ));
 }
 
 #[test]
@@ -1675,12 +1726,23 @@ fn an_open_delegate_item_pass_ends_on_the_delegates_session_left() {
     testkit::start_delegate(&mut app, "j_pass", testkit::DELEGATE_A);
     let outgoing = testkit::open(&mut app, "j_pass");
     assert!(app.item_open());
-    let mut accepted = line("command_accepted", None, None,
-        json!({"command_id": outgoing[0]["id"], "result": {"last_seq": 9000}}));
+    let mut accepted = line(
+        "command_accepted",
+        None,
+        None,
+        json!({"command_id": outgoing[0]["id"], "result": {"last_seq": 9000}}),
+    );
     accepted.session_id = contract::SessionId(testkit::DELEGATE_A.into());
     app.on_line(Line::Session(accepted));
-    assert!(app.pass_open(), "the item subscribe is consumed only after opening its pass");
-    app.on_line(stream_event("session_left", &contract::SessionId(testkit::DELEGATE_A.into()), None));
+    assert!(
+        app.pass_open(),
+        "the item subscribe is consumed only after opening its pass"
+    );
+    app.on_line(stream_event(
+        "session_left",
+        &contract::SessionId(testkit::DELEGATE_A.into()),
+        None,
+    ));
     assert!(!app.pass_open());
 }
 
@@ -1692,7 +1754,10 @@ fn a_copy_pins_its_dropped_page_without_loading_during_a_pass() {
     let needed = lp.app.needs();
     assert!(!needed.is_empty());
     // A whole page can span several wire answers; the app loads it whole.
-    let first: Vec<_> = session().into_iter().filter(|line| needed[0].contains(&line.seq.unwrap())).collect();
+    let first: Vec<_> = session()
+        .into_iter()
+        .filter(|line| needed[0].contains(&line.seq.unwrap()))
+        .collect();
     lp.app.load(first.clone());
     assert!(lp.app.pages().part(0).is_some());
     select_report(&mut lp.app, MouseKind::Press(Button::Left), 0, 0);
@@ -1708,7 +1773,12 @@ fn a_copy_pins_its_dropped_page_without_loading_during_a_pass() {
     lp.app.on_line(Line::Session(replay(last)));
     assert!(lp.app.needs().iter().any(|range| range.start().0 == 0));
     lp.app.load(first);
-    assert!(lp.app.take_copy().expect("copy after its page loads").contains("first"));
+    assert!(
+        lp.app
+            .take_copy()
+            .expect("copy after its page loads")
+            .contains("first")
+    );
 }
 
 /// Runs a history wait whose answer follows a reopening and a finite fold.
@@ -1743,7 +1813,9 @@ fn reopened_history(older_ending: bool) {
                 Ok(_) => {}
             }
             let command: serde_json::Value = serde_json::from_str(&text).unwrap();
-            if command["command"] != "history" { continue; }
+            if command["command"] != "history" {
+                continue;
+            }
             seen += 1;
             history_tx.send(count.load(Ordering::SeqCst)).unwrap_or(());
             if seen == 1 {
@@ -1756,31 +1828,63 @@ fn reopened_history(older_ending: bool) {
                     bytes
                 };
                 if older_ending {
-                    assert!(server_wire.push(encode(stream_event("session_left", &session_id, None))));
+                    assert!(server_wire.push(encode(stream_event(
+                        "session_left",
+                        &session_id,
+                        None
+                    ))));
                     // A second read proves the previous line was sent to
                     // the input channel before the key is sent there.
-                    assert!(server_wire.push(encode(Line::Session(line("read_marker", None, None, json!({}))))));
+                    assert!(server_wire.push(encode(Line::Session(line(
+                        "read_marker",
+                        None,
+                        None,
+                        json!({})
+                    )))));
                     let wait = Deadline::after(DEADLINE);
                     for want in 1..=2 {
-                        assert_eq!(wait.recv_or_fail(&hand_rx, "the older ending to reach the reader"), want);
+                        assert_eq!(
+                            wait.recv_or_fail(&hand_rx, "the older ending to reach the reader"),
+                            want
+                        );
                     }
-                    let keys = super::to_the_top().into_iter().flat_map(|input| match input { Input::Bytes(bytes) => bytes, _ => panic!("PageUp bytes") }).collect();
+                    let keys = super::to_the_top()
+                        .into_iter()
+                        .flat_map(|input| {
+                            let Input::Bytes(bytes) = input else {
+                                panic!("PageUp bytes");
+                            };
+                            bytes
+                        })
+                        .collect();
                     input.send(Input::Bytes(keys)).unwrap();
                 }
                 let last = session().len() + r - 1;
-                assert!(server_wire.push(encode(stream_event("stream_reopened", &session_id, Some(last as u64)))));
+                assert!(server_wire.push(encode(stream_event(
+                    "stream_reopened",
+                    &session_id,
+                    Some(last as u64)
+                ))));
                 for line in &script {
-                    if !server_wire.push(line.clone()) { break; }
+                    if !server_wire.push(line.clone()) {
+                        break;
+                    }
                 }
             }
             let from = command["args"]["from_seq"].as_u64().unwrap();
             let to = command["args"]["to_seq"].as_u64().unwrap();
             let id = command["id"].as_str().unwrap();
             // The abandoned first answer must never populate page zero.
-            let lines = if seen == 1 { Vec::new() } else { super::history(&session(), from, to) };
+            let lines = if seen == 1 {
+                Vec::new()
+            } else {
+                super::history(&session(), from, to)
+            };
             let mut answer = serde_json::to_vec(&command_answer(id, lines)).unwrap();
             answer.push(b'\n');
-            if !server_wire.push(answer) { break; }
+            if !server_wire.push(answer) {
+                break;
+            }
         }
         server_done_tx.send(seen).unwrap_or(());
     });
@@ -1793,15 +1897,24 @@ fn reopened_history(older_ending: bool) {
         tx.send(input).unwrap();
     }
     let wait = Deadline::after(DEADLINE);
-    assert_eq!(wait.recv_or_fail(&histories, "the initial history request"), 0);
+    assert_eq!(
+        wait.recv_or_fail(&histories, "the initial history request"),
+        0
+    );
     let second = wait.recv_or_fail(&histories, "history after the reopened fold");
     tx.send(quit()).unwrap();
     let (code, lp) = Deadline::after(DEADLINE).recv_or_fail(&done, "the loop to quit after paging");
     wire.close();
-    assert!(second >= prefix + r, "history before the last fold line: {second}, prefix {prefix}, replay {r}");
+    assert!(
+        second >= prefix + r,
+        "history before the last fold line: {second}, prefix {prefix}, replay {r}"
+    );
     assert!(lp.hub.answer_stash_peak() <= K);
     assert!(!lp.app.pass_open());
-    assert!(lp.app.pages().part(0).is_some(), "the abandoned empty answer did not mark the page loaded");
+    assert!(
+        lp.app.pages().part(0).is_some(),
+        "the abandoned empty answer did not mark the page loaded"
+    );
     assert_eq!(code, 0);
     drop(lp);
     Deadline::after(DEADLINE).recv_or_fail(&reader_done, "the reader to end");
