@@ -533,7 +533,19 @@ struct World {
     factory_saw: Arc<Mutex<Vec<(usize, usize)>>>,
     inbox_tx: mpsc::Sender<Delivery>,
     cancel: Arc<crate::TurnCancel>,
-    looped: Loop,
+    /// The loop, parked here between turns. [`turn`] takes it onto its
+    /// detached worker for the turn and parks it back with the outcome, so
+    /// the deadline can fail the test without joining a hung turn.
+    looped: Option<Loop>,
+}
+
+impl World {
+    /// Borrows the loop parked in the world.
+    fn loop_mut(&mut self) -> &mut Loop {
+        self.looped
+            .as_mut()
+            .expect("the loop is parked in the world")
+    }
 }
 
 struct SwitchRig {
@@ -646,7 +658,7 @@ fn switcher_for(provider_b: Arc<TimingProvider>) -> crate::Prepare {
 
 fn switch_model(world: &mut World) {
     world
-        .looped
+        .loop_mut()
         .take_switch(
             crate::switch::Asked::Model(contract::commands::ModelArgs {
                 model: "fake/model-2".into(),
@@ -853,7 +865,7 @@ fn build(mut opts: Build) -> World {
         reviewer: world_reviewer,
         inbox_tx,
         cancel,
-        looped,
+        looped: Some(looped),
     }
 }
 
@@ -888,15 +900,23 @@ fn person_handoff(world: &World, instructions: Option<&str>) {
 
 fn turn(world: &mut World) -> Option<TurnOutcome> {
     let (done_tx, done_rx) = mpsc::channel();
-    std::thread::scope(|scope| {
-        scope.spawn(|| {
-            let outcome = world.looped.turn();
-            done_tx.send(outcome).unwrap();
-        });
-        fakes::Deadline::after(WAIT)
-            .recv_or_fail(&done_rx, "the turn ends")
-            .unwrap()
-    })
+    let mut looped = world
+        .looped
+        .take()
+        .expect("the loop is parked in the world");
+    // Detached and never joined: the deadline below must fail the test even
+    // when the turn hangs. A scoped worker would hold the test at scope exit
+    // until the hung turn ends, so the expiry panic could never unwind and
+    // the test would hang until nextest kills it (docs/testing.md, "Waits
+    // and timeouts"). The worker owns the loop; on expiry it is left behind
+    // with it, and the park-back below runs only when the turn ends in time.
+    std::thread::spawn(move || {
+        let outcome = looped.turn();
+        let _sent = done_tx.send((outcome, looped));
+    });
+    let (outcome, looped) = fakes::Deadline::after(WAIT).recv_or_fail(&done_rx, "the turn ends");
+    world.looped = Some(looped);
+    outcome.unwrap()
 }
 
 /// Every `op_timing` record in the session's diagnostic file, in order.
@@ -1120,7 +1140,7 @@ fn a_resumed_process_builds_once_more() {
         reviewer: None,
         inbox_tx,
         cancel: Arc::new(crate::TurnCancel::default()),
-        looped,
+        looped: Some(looped),
     };
     prompt(&second, "again");
     assert_eq!(turn(&mut second), Some(TurnOutcome::Completed));
@@ -1189,7 +1209,7 @@ fn a_rewound_loop_reuses_its_logged_preamble_silently() {
         },
     )
     .unwrap();
-    world.looped = rewound;
+    world.looped = Some(rewound);
     prompt(&world, "again");
     assert_eq!(turn(&mut world), Some(TurnOutcome::Completed));
     assert_eq!(
@@ -1251,7 +1271,7 @@ fn a_failed_approved_load_writes_no_preamble_timing() {
         })),
         ..plain_build(vec![])
     });
-    let Err(error) = world.looped.ensure_preamble() else {
+    let Err(error) = world.loop_mut().ensure_preamble() else {
         panic!("a failed load fails the build");
     };
     assert!(matches!(error, Error::RepositoryCode(_)));
@@ -1262,13 +1282,13 @@ fn a_failed_approved_load_writes_no_preamble_timing() {
 fn a_failed_preamble_write_times_once_and_installs_nothing() {
     let mut world = build(plain_build(vec![run_answer("Hello.", 0)]));
     arm_fail_preamble_write();
-    let Err(error) = world.looped.ensure_preamble() else {
+    let Err(error) = world.loop_mut().ensure_preamble() else {
         panic!("a failed write fails the build");
     };
     assert!(matches!(error, Error::Log(_)));
     assert_eq!(ops(&world, "startup.preamble").len(), 1);
     // Nothing installed: the retry builds successfully, and stays silent.
-    let opened = world.looped.ensure_preamble().unwrap();
+    let opened = world.loop_mut().ensure_preamble().unwrap();
     assert!(opened, "the retry installs the preamble");
     prompt(&world, "hi");
     assert_eq!(turn(&mut world), Some(TurnOutcome::Completed));
@@ -1440,7 +1460,7 @@ fn a_note_request_times_its_assembly() {
 fn a_missing_preamble_fails_closed_with_no_request_or_model_timing() {
     let mut world = build(plain_build(vec![]));
     let turn_id = TurnId("t_test".into());
-    let step = world.looped.send(&turn_id).unwrap();
+    let step = world.loop_mut().send(&turn_id).unwrap();
     assert!(
         matches!(step, crate::Step::Ended(_)),
         "the turn fails closed without a preamble"
@@ -1454,12 +1474,12 @@ fn a_missing_preamble_overflow_moves_results_but_times_neither() {
     use contract::events::ToolCallArgumentsDelta;
     let mut world = build(plain_build(vec![]));
     let action = ActionId("a_result".into());
-    world.looped.conversation.push(Input::Assistant {
+    world.loop_mut().conversation.push(Input::Assistant {
         model: "fake/model".into(),
         text: "Working.".into(),
         provider_item: None,
     });
-    world.looped.conversation.push(Input::ToolCall {
+    world.loop_mut().conversation.push(Input::ToolCall {
         action_id: action.clone(),
         model: "fake/model".into(),
         call: ToolCallRequested {
@@ -1471,7 +1491,7 @@ fn a_missing_preamble_overflow_moves_results_but_times_neither() {
             provider_item: None,
         },
     });
-    world.looped.conversation.push(Input::ToolResult {
+    world.loop_mut().conversation.push(Input::ToolResult {
         action_id: action,
         text: "Sunny.".into(),
         is_error: false,
@@ -1484,7 +1504,7 @@ fn a_missing_preamble_overflow_moves_results_but_times_neither() {
         text: String::new(),
     };
     let turn_id = TurnId("t_test".into());
-    let step = world.looped.overflowed(&turn_id, None).unwrap();
+    let step = world.loop_mut().overflowed(&turn_id, None).unwrap();
     assert!(matches!(step, crate::Step::Ended(_)));
     assert!(ops(&world, "turn.request").is_empty());
     assert!(ops(&world, "turn.model_call").is_empty());
@@ -1772,7 +1792,11 @@ fn a_cancel_mid_call_times_one_scope() {
         let (done_tx, done_rx) = mpsc::channel();
         std::thread::scope(|scope| {
             scope.spawn(|| {
-                let outcome = world.looped.turn();
+                let outcome = world
+                    .looped
+                    .as_mut()
+                    .expect("the loop is parked in the world")
+                    .turn();
                 done_tx.send(outcome).unwrap();
             });
             // The hold parks far out: the test cancels only once the park
@@ -1806,7 +1830,10 @@ fn a_cancel_before_the_call_is_sent_runs_no_model_scope() {
         ..plain_build(vec![run_answer("Unused.", 7)])
     });
     prompt(&world, "hi");
-    assert_eq!(world.looped.turn().unwrap(), Some(TurnOutcome::Interrupted));
+    assert_eq!(
+        world.loop_mut().turn().unwrap(),
+        Some(TurnOutcome::Interrupted)
+    );
     assert!(
         ops(&world, "turn.model_call").is_empty(),
         "a prevented admission never starts timing"
@@ -1824,7 +1851,10 @@ fn a_cancel_at_subscription_runs_uncancelled_work_with_no_scope() {
     let mut world = build(plain_build(vec![run_answer("Hello.", 7)]));
     arm_cancel_after_subscribe();
     prompt(&world, "hi");
-    assert_eq!(world.looped.turn().unwrap(), Some(TurnOutcome::Interrupted));
+    assert_eq!(
+        world.loop_mut().turn().unwrap(),
+        Some(TurnOutcome::Interrupted)
+    );
     assert!(
         ops(&world, "turn.model_call").is_empty(),
         "a prevented admission never starts timing"
@@ -1852,7 +1882,7 @@ fn a_stream_write_error_closes_one_scope_and_returns_the_error() {
     let mut world = build(plain_build(vec![run_answer("Hello.", 7)]));
     arm_fail_stream_write();
     prompt(&world, "hi");
-    let Err(error) = world.looped.turn() else {
+    let Err(error) = world.loop_mut().turn() else {
         panic!("a failed sink write fails the turn");
     };
     assert_eq!(error.code(), ErrorCode::IoFailed);
@@ -1886,7 +1916,11 @@ fn a_retry_measures_runs_without_the_backoff() {
         let (done_tx, done_rx) = mpsc::channel();
         std::thread::scope(|scope| {
             scope.spawn(|| {
-                let outcome = world.looped.turn();
+                let outcome = world
+                    .looped
+                    .as_mut()
+                    .expect("the loop is parked in the world")
+                    .turn();
                 done_tx.send(outcome).unwrap();
             });
             // The backoff parks two seconds past the failed run's 7 ms: the
@@ -1929,7 +1963,11 @@ fn a_cancel_during_the_backoff_runs_nothing_more() {
         let (done_tx, done_rx) = mpsc::channel();
         std::thread::scope(|scope| {
             scope.spawn(|| {
-                let outcome = world.looped.turn();
+                let outcome = world
+                    .looped
+                    .as_mut()
+                    .expect("the loop is parked in the world")
+                    .turn();
                 done_tx.send(outcome).unwrap();
             });
             let backoff_until = world.origin + Duration::from_millis(7) + Duration::from_secs(2);
@@ -2052,9 +2090,12 @@ fn a_warming_refresh_runs_but_adds_no_turn_scope() {
     assert_eq!(ops(&world, "turn.model_call").len(), 1);
     assert_eq!(ops(&world, "turn.request").len(), 1);
     let start = world.clock.now();
-    let stop = world.looped.warm_stop(start).expect("the session warms");
+    let stop = world
+        .loop_mut()
+        .warm_stop(start)
+        .expect("the session warms");
     world.clock.advance(Duration::from_secs(3575));
-    let refreshed = world.looped.refresh(stop).unwrap();
+    let refreshed = world.loop_mut().refresh(stop).unwrap();
     assert!(matches!(refreshed, crate::warm::Refreshed::Sent));
     assert_eq!(
         ops(&world, "turn.model_call").len(),
@@ -2159,7 +2200,7 @@ fn an_automatic_handoff_nests_its_note_scopes() {
     assert_eq!(handoffs.len(), 1, "{:?}", op_records(&world));
     assert_wire(&op_records(&world));
     assert!(
-        world.looped.handoff.step_ran,
+        world.loop_mut().handoff.step_ran,
         "a requested handoff marks the step as run"
     );
     assert_eq!(ops(&world, "turn.request").len(), 3);
@@ -2201,7 +2242,7 @@ fn a_person_handoff_requests_its_note() {
     assert_eq!(ops(&world, "turn.request").len(), 2);
     assert_eq!(ops(&world, "turn.model_call").len(), 2);
     assert!(
-        world.looped.handoff.step_ran,
+        world.loop_mut().handoff.step_ran,
         "a person handoff ran this step"
     );
     assert!(kinds(&world).contains(&"handoff_started".to_owned()));
@@ -2250,7 +2291,7 @@ fn a_tool_handoff_makes_no_note_request() {
     );
     assert_eq!(ops(&world, "turn.handoff").len(), 1);
     assert!(
-        !world.looped.handoff.step_ran,
+        !world.loop_mut().handoff.step_ran,
         "a tool handoff leaves the step flag unset"
     );
     assert!(
@@ -2492,7 +2533,11 @@ fn a_cancel_before_note_admission_times_handoff_but_no_note_model() {
         run_tokens_tool_answer("get_weather", json!({}), 1_000, 3, 0),
         run_answer("The note.", 7),
     ]);
-    world.looped = world.looped.observed({
+    let parked = world
+        .looped
+        .take()
+        .expect("the loop is parked in the world");
+    world.looped = Some(parked.observed({
         let provider = Arc::clone(&world.provider);
         let saw = Arc::clone(&world.factory_saw);
         let diag_path = world.home.path().join("logs").join("session-s_test.log");
@@ -2512,9 +2557,12 @@ fn a_cancel_before_note_admission_times_handoff_but_no_note_model() {
             provider.call(request)
         });
         Some(observe)
-    });
+    }));
     prompt(&world, "hi");
-    assert_eq!(world.looped.turn().unwrap(), Some(TurnOutcome::Interrupted));
+    assert_eq!(
+        world.loop_mut().turn().unwrap(),
+        Some(TurnOutcome::Interrupted)
+    );
     assert_eq!(ops(&world, "turn.handoff").len(), 1);
     assert_eq!(
         ops(&world, "turn.model_call").len(),
@@ -2541,7 +2589,11 @@ fn a_cancel_mid_note_times_handoff_and_the_entered_note() {
         let (done_tx, done_rx) = mpsc::channel();
         std::thread::scope(|scope| {
             scope.spawn(|| {
-                let outcome = world.looped.turn();
+                let outcome = world
+                    .looped
+                    .as_mut()
+                    .expect("the loop is parked in the world")
+                    .turn();
                 done_tx.send(outcome).unwrap();
             });
             assert!(
@@ -2571,7 +2623,7 @@ fn a_failed_handoff_start_writes_one_scope_and_no_started() {
     ]);
     arm_fail_handoff_started();
     prompt(&world, "hi");
-    let Err(error) = world.looped.turn() else {
+    let Err(error) = world.loop_mut().turn() else {
         panic!("a failed record fails the turn");
     };
     assert_eq!(error.code(), ErrorCode::IoFailed);
@@ -2592,7 +2644,7 @@ fn a_failed_handoff_completion_writes_one_scope_and_no_fabrication() {
     ]);
     arm_fail_handoff_completed();
     prompt(&world, "hi");
-    let Err(error) = world.looped.turn() else {
+    let Err(error) = world.loop_mut().turn() else {
         panic!("a failed record fails the turn");
     };
     assert_eq!(error.code(), ErrorCode::IoFailed);
@@ -2613,7 +2665,7 @@ fn a_failed_restart_writes_one_scope_and_no_second_opening() {
     ]);
     arm_fail_restarted();
     prompt(&world, "hi");
-    let Err(error) = world.looped.turn() else {
+    let Err(error) = world.loop_mut().turn() else {
         panic!("a failed restart fails the turn");
     };
     assert_eq!(error.code(), ErrorCode::IoFailed);
