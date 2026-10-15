@@ -135,6 +135,7 @@ pub(crate) fn frame(fold: &UsageFold, budget: Option<f64>, list: List) -> Frame 
     }
     Frame {
         title: "Usage".to_owned(),
+        command: "/usage",
         rows,
         list,
         below: Vec::new(),

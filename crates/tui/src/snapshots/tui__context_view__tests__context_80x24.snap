@@ -1,8 +1,9 @@
 ---
 source: crates/tui/src/context_view_tests.rs
+assertion_line: 551
 expression: screen
 ---
-Context                                                                        ✕
+ Context  /context                                                   Esc returns
 context  61,234 of 200,000 tokens · 30%
 ▆▆▆▆▆▆▆▆▆▆▆▆▆▆▆▆▆▆▆▆▆▆▆▆░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░│░░░░░░░░░░░░░░░░░░░░░░░
 █ system prompt  13 tokens

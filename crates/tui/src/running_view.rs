@@ -60,6 +60,7 @@ fn frame(title: &str, rows: Vec<(String, Option<u64>)>, list: List) -> Frame {
     let empty = rows.is_empty();
     Frame {
         title: title.to_owned(),
+        command: "delegates · jobs",
         rows: rows
             .into_iter()
             .map(|(text, serial)| vec![(text, serial.map(Spot::Item), Ink::Plain)])

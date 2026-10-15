@@ -442,6 +442,59 @@ fn dim_row(text: &str) -> Row {
     )))
 }
 
+/// The top row's layout at `width`: the name, the command when the
+/// name, the command and `Esc returns` all fit, Esc when it fits
+/// beside the name, and the trailing padding. `" " + name` always
+/// draws, truncated at its cells when narrower than the row; nothing
+/// else truncates, so the command gives way whole before Esc does
+/// (`docs/tui.md`, "Swapped views").
+pub(crate) struct TitleLayout {
+    /// `" " + name`, cut to `width` when narrower.
+    pub(crate) name: String,
+    /// `"  " + command`, when it fits beside the name and Esc.
+    pub(crate) command: Option<String>,
+    /// Whether `Esc returns` ends the row.
+    pub(crate) esc: bool,
+    /// The trailing padding after the last part.
+    pub(crate) pad: usize,
+}
+
+/// The top row's parts for `name` and `command` at `width` columns.
+pub(crate) fn title_layout(name: &str, command: &str, width: usize) -> TitleLayout {
+    const ESC: &str = "Esc returns";
+    let name_full = format!(" {name}");
+    let command_full = format!("  {command}");
+    let (name_cells, command_cells, esc_cells) = (
+        crate::format::width(&name_full),
+        crate::format::width(&command_full),
+        crate::format::width(ESC),
+    );
+    if name_cells + command_cells + 1 + esc_cells <= width {
+        TitleLayout {
+            name: name_full,
+            command: Some(command_full),
+            esc: true,
+            pad: width - name_cells - command_cells - esc_cells,
+        }
+    } else if name_cells + 1 + esc_cells <= width {
+        TitleLayout {
+            name: name_full,
+            command: None,
+            esc: true,
+            pad: width - name_cells - esc_cells,
+        }
+    } else {
+        let name = crate::format::cut(&name_full, width);
+        let shown = crate::format::width(&name);
+        TitleLayout {
+            name,
+            command: None,
+            esc: false,
+            pad: width.saturating_sub(shown),
+        }
+    }
+}
+
 /// The swapped view's top row: `Offer` bold, `repository code` dim and
 /// `Esc returns` dim right-aligned, on the `surface` tint across the full
 /// width including padding (`docs/tui.md`, "Swapped views"). A click

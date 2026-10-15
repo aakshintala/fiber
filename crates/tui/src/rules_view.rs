@@ -174,6 +174,7 @@ impl Rules {
     pub(crate) fn frame(&self) -> Frame {
         Frame {
             title: "Rules".to_owned(),
+            command: "/rules",
             rows: self
                 .items
                 .iter()

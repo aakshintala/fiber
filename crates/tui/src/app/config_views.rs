@@ -53,8 +53,9 @@ enum Open {
     Rules(Rules),
     /// `/login`.
     Login(Login),
-    /// A view with no seam to read through, by its title.
-    Unavailable(&'static str),
+    /// A view with no seam to read through, by its title and the
+    /// command that opened it.
+    Unavailable(&'static str, &'static str),
 }
 
 impl Open {
@@ -64,7 +65,7 @@ impl Open {
         match self {
             Open::Tools(tools) => tools.rejected(id, message),
             Open::Skills(skills) => skills.rejected(id, message),
-            Open::Settings(_) | Open::Rules(_) | Open::Login(_) | Open::Unavailable(_) => {}
+            Open::Settings(_) | Open::Rules(_) | Open::Login(_) | Open::Unavailable(..) => {}
         }
     }
 }
@@ -159,11 +160,11 @@ impl App {
                 let workspace = self.workspace();
                 Open::Login(Login::open(&self.config_ctx(seam.as_ref(), &workspace)))
             }
-            (None, ConfigView::Settings) => Open::Unavailable("Settings"),
-            (None, ConfigView::Tools) => Open::Unavailable("Tools"),
-            (None, ConfigView::Skills) => Open::Unavailable("Skills"),
-            (None, ConfigView::Rules) => Open::Unavailable("Rules"),
-            (None, ConfigView::Login) => Open::Unavailable("Log in"),
+            (None, ConfigView::Settings) => Open::Unavailable("Settings", "/settings"),
+            (None, ConfigView::Tools) => Open::Unavailable("Tools", "/tools"),
+            (None, ConfigView::Skills) => Open::Unavailable("Skills", "/skills"),
+            (None, ConfigView::Rules) => Open::Unavailable("Rules", "/rules"),
+            (None, ConfigView::Login) => Open::Unavailable("Log in", "/login"),
         };
         self.config_views.open = Some(open);
         Effect::None
@@ -260,7 +261,7 @@ impl App {
                     Some(Open::Skills(skills)) => skills.key(key, &ctx),
                     Some(Open::Rules(rules)) => rules.key(key, &ctx),
                     Some(Open::Login(login)) => login.key(key, &ctx),
-                    Some(Open::Unavailable(_)) | None => esc(key),
+                    Some(Open::Unavailable(..)) | None => esc(key),
                 }
             }
             None => esc(key),
@@ -294,7 +295,7 @@ impl App {
                         login.edit_key(edit);
                         Act::Stay
                     }
-                    Some(Open::Unavailable(_)) | None => Act::Stay,
+                    Some(Open::Unavailable(..)) | None => Act::Stay,
                 }
             }
             None => Act::Stay,
@@ -315,7 +316,7 @@ impl App {
                     Some(Open::Skills(skills)) => skills.click(spot, &ctx),
                     Some(Open::Rules(rules)) => rules.click(spot, &ctx),
                     Some(Open::Login(login)) => login.click(spot, &ctx),
-                    Some(Open::Unavailable(_)) | None => Act::Stay,
+                    Some(Open::Unavailable(..)) | None => Act::Stay,
                 }
             }
             (None, Spot::Row(_) | Spot::Switch { .. } | Spot::Revoke(_) | Spot::Item(_)) => {
@@ -434,8 +435,9 @@ impl App {
             Open::Skills(skills) => skills.frame(self.config_view_height()),
             Open::Rules(rules) => rules.frame(),
             Open::Login(_) => return None,
-            Open::Unavailable(title) => Frame {
+            Open::Unavailable(title, command) => Frame {
                 title: (*title).to_owned(),
+                command,
                 rows: Vec::new(),
                 list: List::default(),
                 below: vec![UNAVAILABLE.to_owned()],
@@ -474,7 +476,7 @@ impl App {
                 Some(Open::Settings(settings)) => settings.reread(&ctx),
                 Some(Open::Rules(rules)) => rules.reread(&ctx),
                 Some(Open::Skills(skills)) => skills.reread(&ctx),
-                Some(Open::Tools(_) | Open::Login(_) | Open::Unavailable(_)) | None => {}
+                Some(Open::Tools(_) | Open::Login(_) | Open::Unavailable(..)) | None => {}
             }
         }
     }
@@ -516,7 +518,7 @@ impl App {
                             Open::Settings(_)
                             | Open::Rules(_)
                             | Open::Login(_)
-                            | Open::Unavailable(_),
+                            | Open::Unavailable(..),
                         )
                         | None => {}
                     }

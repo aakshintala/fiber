@@ -1,8 +1,9 @@
 ---
 source: crates/tui/src/usage_view_tests.rs
+assertion_line: 305
 expression: screen
 ---
-Usage                                                                          ✕
+ Usage  /usage                                                       Esc returns
 session
 tokens  in 1,234 · cache read 5,678 · cache write 100 · out 1,000
 cost  billed $0.12 · on subscription $0.00
