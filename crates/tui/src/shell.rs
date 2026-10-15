@@ -43,6 +43,7 @@ pub(crate) fn answered(text: &str, result: Option<CommandResult>) -> Option<Stri
         | CommandResult::Commands { .. }
         | CommandResult::Skills { .. }
         | CommandResult::History { .. }
+        | CommandResult::ArtifactPage { .. }
         | CommandResult::Start { .. }
         | CommandResult::Status { .. } => None,
     }

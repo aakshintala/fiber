@@ -360,6 +360,16 @@ pub enum CommandResult {
         /// At most 256 durable event lines.
         lines: Vec<Envelope>,
     },
+    /// For `artifact_page`: one page of an artifact's full output.
+    ArtifactPage {
+        /// The page's text, whole lines from the requested offset.
+        text: String,
+        /// The byte offset after the page; absent at the end of the file.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        next: Option<u64>,
+        /// The file's size in bytes.
+        size: u64,
+    },
     /// For `shell` sent with `send` false, as on `shell_command`.
     Shell {
         /// Its output.

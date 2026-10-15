@@ -787,6 +787,14 @@ fn samples() -> Vec<(&'static str, Value)> {
              "tag": "template"},
             {"name": "tdd", "description": "Test first.", "tag": "skill"}]}}),
         ),
+        (
+            "command_accepted",
+            json!({"command_id": "c", "result": {"text": "a\nb\n", "next": 4, "size": 9000}}),
+        ),
+        (
+            "command_accepted",
+            json!({"command_id": "c", "result": {"text": "z\n", "size": 9000}}),
+        ),
         ("command_accepted", json!({"command_id": "c"})),
         (
             "command_rejected",
@@ -1216,6 +1224,20 @@ fn result_of(payload: Value) -> CommandResult {
         panic!("not a command_accepted");
     };
     accepted.result.expect("a result")
+}
+
+#[test]
+fn an_artifact_page_result_reads_with_and_without_next() {
+    assert_eq!(
+        result_of(json!({"command_id": "c", "result": {
+            "text": "a\nb\n", "next": 4, "size": 9000}})),
+        CommandResult::ArtifactPage { text: "a\nb\n".into(), next: Some(4), size: 9000 }
+    );
+    let last = result_of(json!({"command_id": "c", "result": {"text": "z\n", "size": 9000}}));
+    assert_eq!(last, CommandResult::ArtifactPage { text: "z\n".into(), next: None, size: 9000 });
+    let written = serde_json::to_value(&last).unwrap();
+    assert_eq!(written, json!({"text": "z\n", "size": 9000}));
+    assert!(written.get("next").is_none(), "{written}");
 }
 
 #[test]
