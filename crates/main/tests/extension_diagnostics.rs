@@ -318,6 +318,7 @@ fn debug_ask_records_lua_requests_and_hook_chains() {
         [
             "hook.before_message",
             "hook.before_model_call",
+            "hook.session_start",
             "hook.turn_end",
             "hook.turn_start"
         ]

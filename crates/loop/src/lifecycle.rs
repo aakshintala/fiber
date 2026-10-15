@@ -3,13 +3,14 @@
 //! and how its answer reaches the turn.
 
 use contract::events::{
-    ContextAdded, Event, InputItem, SteeringApplied, TurnCompleted, TurnOutcome,
+    ContextAdded, Event, InputItem, PreambleReason, SteeringApplied, TurnCompleted, TurnOutcome,
 };
 use contract::hook::{
-    BeforeModelCall, CheckAnswer, CheckOutcome, ContextAnswer, ContextOutcome, TurnEnd, TurnStart,
+    BeforeModelCall, CheckAnswer, CheckOutcome, ContextAnswer, ContextOutcome, SessionStart,
+    StartReason, TurnEnd, TurnStart,
 };
 use contract::shapes::{ContentPart, Failure, Origin, Sender};
-use contract::{ErrorCode, TurnId};
+use contract::{ErrorCode, SessionId, TurnId};
 
 use std::sync::Arc;
 
@@ -27,6 +28,11 @@ thread_local! {
     /// messages' guarded write: the same forced order on the next step's
     /// path.
     static BEFORE_HELD_WRITE: std::cell::RefCell<Option<Box<dyn FnOnce()>>> =
+        std::cell::RefCell::new(None);
+    /// A shutdown the test runs after a handoff's `session_start` final
+    /// check, before the guarded completion write: the order a shutdown
+    /// landing between the two would force.
+    static AFTER_HANDOFF_START_CHECK: std::cell::RefCell<Option<Box<dyn FnOnce()>>> =
         std::cell::RefCell::new(None);
 }
 
@@ -50,14 +56,216 @@ fn pause_before_held_write() {
     });
 }
 
+/// Runs the hook [`AFTER_HANDOFF_START_CHECK`] holds, if any, then clears
+/// it.
+#[cfg(test)]
+pub(crate) fn pause_after_handoff_start_check() {
+    AFTER_HANDOFF_START_CHECK.with(|hook| {
+        if let Some(paused) = hook.borrow_mut().take() {
+            paused();
+        }
+    });
+}
+
+/// Parks the next handoff completion on `paused`: it runs after the
+/// `session_start` final check, before the guarded completion write.
+#[cfg(test)]
+pub(crate) fn pause_after_handoff_start(paused: Box<dyn FnOnce()>) {
+    AFTER_HANDOFF_START_CHECK.with(|hook| {
+        *hook.borrow_mut() = Some(paused);
+    });
+}
+
 /// What `turn_end` hooks returned and the next step writes, and what a
-/// resumed turn's `session_start` contexts wait in (Part 3): held across
-/// calls, never in `queued`, so a cancel never carries them into another
-/// turn.
-#[derive(Default)]
+/// resumed turn's `session_start` contexts wait in: held across calls,
+/// never in `queued`, so a cancel never carries them into another turn.
+/// `ran` is set before the hook runs, so a failed or cancelled run is
+/// never retried in the process; a handoff never touches it.
 pub(crate) struct State {
     /// Messages `turn_end` hooks continued the turn with, oldest first.
     pub(crate) continued: Vec<contract::hook::Context>,
+    /// Why this process's first turn runs `session_start`: `start` on a
+    /// new session, `resume` on a resumed one, `rewind` once the rewound
+    /// loop adopts it. A handoff always tells the hook `handoff`.
+    pub(crate) reason: StartReason,
+    /// The session's id, as the hook is told it.
+    session: SessionId,
+    /// Whether this process already ran `session_start`.
+    ran: bool,
+    /// A resumed turn's `session_start` contexts, waiting for the next
+    /// step to write them after its results.
+    start_contexts: Vec<ContextAdded>,
+}
+
+impl Default for State {
+    fn default() -> Self {
+        Self {
+            continued: Vec::new(),
+            reason: StartReason::Start,
+            session: SessionId(String::new()),
+            ran: false,
+            start_contexts: Vec::new(),
+        }
+    }
+}
+
+impl State {
+    /// The state for a loop whose preamble builds for `reason`: a new
+    /// session starts, anything resumed continues, whatever the build's
+    /// own wording (`reload`, `switch`) calls it.
+    pub(crate) fn new(reason: PreambleReason, session: &SessionId) -> Self {
+        let reason = match reason {
+            PreambleReason::Start => StartReason::Start,
+            PreambleReason::Resume | PreambleReason::Reload | PreambleReason::Switch => {
+                StartReason::Resume
+            }
+        };
+        Self {
+            reason,
+            session: session.clone(),
+            ..Self::default()
+        }
+    }
+}
+
+/// What a `session_start` chain decided: its contexts unwritten, its
+/// notices already written, or nothing applied under a cancel.
+pub(crate) enum Started {
+    /// The contexts the hooks added, in run order, unwritten.
+    Contexts(Vec<ContextAdded>),
+    /// A `blocking` hook failed with this `hook_failed` failure.
+    Failed(Failure),
+    /// A cancel or a shutdown landed: nothing is applied.
+    Cancelled,
+}
+
+/// Whether a suspended turn's `session_start` run lets it finish.
+pub(crate) enum Flow {
+    /// The turn finishes as resumed.
+    Continue,
+    /// The suspension stays for the next resume.
+    Stop,
+}
+
+impl Loop {
+    /// Runs the session's `session_start` hooks for `reason`, and writes
+    /// the chain's notices at once (`docs/extensions.md`, "When a hook
+    /// fails"). A passing chain's contexts come back unwritten, in run
+    /// order; a `blocking` failure comes back with the caller's wording
+    /// (`failed_so`: what did not happen). A cancel or a shutdown before
+    /// the call runs no hook, and one after it applies none of the
+    /// answer: only the notices are written either way.
+    fn session_start_chain(
+        &mut self,
+        turn: Option<&TurnId>,
+        reason: StartReason,
+        failed_so: &str,
+    ) -> Result<Started, Error> {
+        // A cancel or a shutdown runs no hook. Before the first turn is
+        // armed this is a shutdown only.
+        if self.turn_cancelled() {
+            return Ok(Started::Cancelled);
+        }
+        let Some(hooks) = self.hooks.clone() else {
+            return Ok(Started::Contexts(Vec::new()));
+        };
+        let answer = hooks.session_start(&SessionStart {
+            reason,
+            session_id: &self.lifecycle.session,
+            workspace: &self.workspace_label,
+            cancel: &*self.cancel,
+        });
+        let ContextAnswer { outcome, notices } = answer;
+        for notice in notices {
+            self.write(&Event::Notice(notice), turn, None)?;
+        }
+        // A cancel that landed while the hooks ran applies none of the
+        // answer: only the notices above are written.
+        if self.turn_cancelled() {
+            return Ok(Started::Cancelled);
+        }
+        match outcome {
+            // A failure drops the chain's earlier contexts with it: the
+            // thing the start guarded does not happen.
+            ContextOutcome::Added(contexts) => Ok(Started::Contexts(
+                contexts
+                    .into_iter()
+                    .map(|added| ContextAdded {
+                        text: added.text,
+                        extension: added.extension,
+                        hook: "session_start".to_owned(),
+                    })
+                    .collect(),
+            )),
+            ContextOutcome::Failed(failure) => Ok(Started::Failed(Failure {
+                code: ErrorCode::HookFailed,
+                message: format!(
+                    "The `session_start` hook of extension {} failed, so {}: {}",
+                    failure.extension, failed_so, failure.message
+                ),
+                retry_after_ms: None,
+                provider: None,
+            })),
+        }
+    }
+
+    /// Runs `session_start` once per process, at its first turn: a new,
+    /// resumed or rewound session's start (`docs/extensions.md`, "The
+    /// hook points"). Empty when already run, with no hooks, or when
+    /// cancelled. A `blocking` failure is `Error::HookFailed`, so the
+    /// session does not start.
+    pub(crate) fn session_start_once(&mut self) -> Result<Vec<ContextAdded>, Error> {
+        if self.lifecycle.ran {
+            return Ok(Vec::new());
+        }
+        self.lifecycle.ran = true;
+        match self.session_start_chain(None, self.lifecycle.reason, "the session did not start")? {
+            Started::Contexts(contexts) => Ok(contexts),
+            Started::Failed(failure) => Err(Error::HookFailed(Box::new(failure))),
+            Started::Cancelled => Ok(Vec::new()),
+        }
+    }
+
+    /// Runs `session_start` once for a suspended turn's finish, before its
+    /// batch completes (`docs/extensions.md`, "The hook points"). A
+    /// passing chain's contexts wait in `start_contexts` for the next
+    /// step, never between a call and its result. A `blocking` failure
+    /// keeps the suspension for the next resume, then fails; a cancel
+    /// keeps it and stops.
+    pub(crate) fn start_suspended(
+        &mut self,
+        suspended: &crate::resume::Suspended,
+    ) -> Result<Flow, Error> {
+        if self.lifecycle.ran {
+            return Ok(Flow::Continue);
+        }
+        self.lifecycle.ran = true;
+        match self.session_start_chain(None, self.lifecycle.reason, "the session did not start")? {
+            Started::Contexts(contexts) => {
+                self.lifecycle.start_contexts.extend(contexts);
+                Ok(Flow::Continue)
+            }
+            Started::Failed(failure) => {
+                self.keep_suspended(suspended)?;
+                Err(Error::HookFailed(Box::new(failure)))
+            }
+            Started::Cancelled => {
+                self.keep_suspended(suspended)?;
+                Ok(Flow::Stop)
+            }
+        }
+    }
+
+    /// Runs `session_start` with reason `handoff`, once the note is ready
+    /// (`docs/extensions.md`, "The hook points"). The hook sees the
+    /// reason and not the note. Never touches `ran`.
+    pub(crate) fn handoff_start(&mut self, turn: &TurnId) -> Result<Started, Error> {
+        self.session_start_chain(
+            Some(turn),
+            StartReason::Handoff,
+            "the handoff did not complete",
+        )
+    }
 }
 
 impl Loop {
@@ -272,13 +480,34 @@ impl Loop {
         }
     }
 
-    /// Writes what the hooks held for the next step: `turn_end` messages as
-    /// `steering_applied`, after `step_started` and the jobs notice, before
-    /// the drain. Each is the extension's own message, with no command.
-    /// Guarded with `Commit::Step` so a shutdown landing after
-    /// `step_started` applies none of them: a refused commit drops them
-    /// unwritten (`docs/invocation.md`, "What is written").
+    /// Writes what the hooks held for the next step: a resumed turn's
+    /// `session_start` contexts as `context_added`, then `turn_end`
+    /// messages as `steering_applied`, after `step_started` and the jobs
+    /// notice, before the drain. Each is the extension's own message,
+    /// with no command. Each `session_start` context is guarded with its
+    /// own `Commit::Step`: a refused commit keeps the rest unwritten for
+    /// the next successful step. The `turn_end` messages are guarded
+    /// together, so a shutdown landing after `step_started` applies none
+    /// of them: a refused commit drops them unwritten
+    /// (`docs/invocation.md`, "What is written").
     pub(crate) fn write_held(&mut self, turn: &TurnId) -> Result<(), Error> {
+        // Oldest first: the next successful step writes what a refused
+        // one kept, after the results the resumed turn just wrote, never
+        // between a call and its result.
+        while let Some(first) = self.lifecycle.start_contexts.first().cloned() {
+            let cancel = Arc::clone(&self.cancel);
+            let written = cancel.commit(cancel::Commit::Step, || {
+                self.append(&Event::ContextAdded(first), turn, None)
+            });
+            match written {
+                // Refused: the contexts stay for the next step.
+                None => return Ok(()),
+                Some(result) => {
+                    result?;
+                    self.lifecycle.start_contexts.remove(0);
+                }
+            }
+        }
         if self.lifecycle.continued.is_empty() {
             return Ok(());
         }
