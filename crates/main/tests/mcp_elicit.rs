@@ -250,7 +250,9 @@ fn read_held(
         Err(error) => {
             let requests_log = fs::read_to_string(dir.join("requests.log"))
                 .unwrap_or_else(|error| format!("requests.log is unreadable: {error}"));
-            let _ = support::kill_group(cleanup, running.group, "KILL");
+            match support::kill_group(cleanup, running.group, "KILL") {
+                Ok(_) | Err(_) => {}
+            }
             let stderr = match cleanup.cleanup_phase().recv(&running.stderr) {
                 Ok(stderr) => stderr,
                 Err(error) => format!("the session's stderr did not arrive: {error}"),
