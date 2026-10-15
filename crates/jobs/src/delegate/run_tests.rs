@@ -255,6 +255,7 @@ impl Rig {
             timeout,
         );
         let launched = Launched {
+            depth: 1,
             session_id: SessionId("s_child".into()),
             job_id: self.job.clone(),
             parent: SessionId("s_parent".into()),
@@ -2136,6 +2137,7 @@ fn the_fold_starts_from_the_run_boundary() {
         None,
     );
     let launched = Launched {
+        depth: 1,
         session_id: SessionId("s_child".into()),
         job_id: rig.job.clone(),
         parent: SessionId("s_parent".into()),

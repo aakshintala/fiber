@@ -53,6 +53,8 @@ pub enum Watched {
 
 /// What the launcher receives: everything the child's argv needs.
 pub struct Launched {
+    /// The child's depth in the delegate tree.
+    pub depth: u32,
     /// The delegate's session.
     pub session_id: SessionId,
     /// The delegate's job in its parent: its id for life.

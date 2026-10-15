@@ -285,6 +285,7 @@ fn lookup_and_catalogue_agree_for_every_role() {
 /// The launch the runner receives for one delegate.
 fn launched() -> jobs::Launched {
     jobs::Launched {
+        depth: 1,
         session_id: SessionId("s_child".into()),
         job_id: contract::JobId("j_1".into()),
         parent: SessionId("s_parent".into()),
@@ -320,8 +321,64 @@ fn the_launch_runs_the_child_session_with_its_ids_model_and_prompt() {
             "s_parent",
             "--delegate-id",
             "j_1",
+            "--depth",
+            "1",
         ]
     );
+}
+
+#[test]
+fn launch_carries_the_childs_depth() {
+    let mut launched = launched();
+    launched.depth = 2;
+    let command = launcher(std::path::Path::new("/bin/fiber"))(&launched);
+    let argv: Vec<_> = command
+        .get_args()
+        .map(|arg| arg.to_string_lossy().into_owned())
+        .collect();
+    assert!(
+        argv.windows(4)
+            .any(|args| args == ["--delegate-id", "j_1", "--depth", "2"])
+    );
+}
+
+fn tool_depth() -> u32 {
+    let dir = fakes::TempDir::new("fiber-delegate-depth");
+    let clock: Arc<dyn contract::clock::Clock> = fakes::clock::FakeClock::new();
+    let jobs = jobs::Registry::new(
+        dir.path().join("artifacts"),
+        Arc::clone(&clock),
+        Arc::new(fakes::Recorder::default()),
+    );
+    super::Delegates::new(
+        "/bin/fiber".into(),
+        dir.path().into(),
+        SessionId("s_parent".into()),
+        dir.path().into(),
+        dir.path().join("sessions"),
+        jobs,
+        clock,
+        jobs::Resolve {
+            lookup: Arc::new(|_| Err("unused".into())),
+            catalogue: Arc::from("unused"),
+        },
+    )
+    .tool()
+    .depth
+}
+
+#[test]
+fn top_level_depth_defaults_to_zero() {
+    assert_eq!(super::depth(), 0);
+    assert_eq!(tool_depth(), 0);
+}
+
+#[test]
+fn the_first_session_depth_reaches_its_tool() {
+    super::set_depth(1);
+    super::set_depth(2);
+    assert_eq!(super::depth(), 1);
+    assert_eq!(tool_depth(), 1);
 }
 
 #[test]
@@ -439,6 +496,7 @@ fn watch_bounded(
 
 fn resumed() -> jobs::Launched {
     jobs::Launched {
+        depth: 1,
         session_id: SessionId("s_child".into()),
         job_id: contract::JobId("j_1".into()),
         parent: SessionId("s_parent".into()),
@@ -473,6 +531,8 @@ fn a_resume_builds_the_resume_argv_with_the_message_whole_and_no_model() {
             "s_parent",
             "--delegate-id",
             "j_1",
+            "--depth",
+            "1",
         ]
     );
     assert!(!argv.iter().any(|arg| arg == "--model"));

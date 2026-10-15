@@ -62,6 +62,7 @@ fn rig() -> Rig {
     let launch: Launch = Arc::new(move |launched: &Launched| {
         counted.fetch_add(1, Ordering::SeqCst);
         let _sent = launched_tx.send(Launched {
+            depth: launched.depth,
             session_id: launched.session_id.clone(),
             job_id: launched.job_id.clone(),
             parent: launched.parent.clone(),

@@ -278,6 +278,7 @@ impl Tool for DelegateSpawn {
                 .to_string_lossy()
                 .into_owned();
             let launched = Launched {
+                depth: self.depth.saturating_add(1),
                 session_id: session_id.clone(),
                 job_id: job_id.clone(),
                 parent: self.parent.clone(),

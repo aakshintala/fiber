@@ -132,6 +132,7 @@ impl DelegateMessage {
                 Err(reason) => return Err(StartFailed::Boundary(reason)),
             };
             let launched = Launched {
+                depth: self.depth.saturating_add(1),
                 session_id: resumable.delegate.delegate_session_id.clone(),
                 job_id: JobId(id.clone()),
                 parent: parent.clone(),

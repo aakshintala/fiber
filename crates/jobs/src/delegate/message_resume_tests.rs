@@ -59,6 +59,7 @@ impl Ask for FakeAsk {
 
 /// What a launch was asked, as the tool built it.
 struct Launched {
+    depth: u32,
     session_id: SessionId,
     job_id: JobId,
     parent: SessionId,
@@ -161,6 +162,7 @@ fn resume_rig_with_steer(
     let queued = Arc::new(Mutex::new(VecDeque::from(launches)));
     let launch: Launch = Arc::new(move |launched| {
         recorded.lock().unwrap().push(Launched {
+            depth: launched.depth,
             session_id: launched.session_id.clone(),
             job_id: launched.job_id.clone(),
             parent: launched.parent.clone(),
@@ -592,6 +594,7 @@ fn a_resume_reports_its_launch_and_queues_both_runs() {
     assert_eq!(launched[0].session_id.0, "s_d000000000000001");
     assert_eq!(launched[0].job_id, id);
     assert_eq!(launched[0].parent.0, "s_parent");
+    assert_eq!(launched[0].depth, 1);
     assert_eq!(launched[0].model, "fiber:fake/m");
     assert_eq!(launched[0].prompt, "tell me more");
     assert_eq!(launched[0].workspace.display().to_string(), "/w");
