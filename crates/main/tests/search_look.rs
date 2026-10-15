@@ -649,6 +649,9 @@ fn the_context_usage_and_tools_top_rows_match_the_doc() {
     run.wait_screen("the conversation back", |grid| {
         grid.contents.contains(REPLY)
     });
+    // The click leaves the pointer on row 0, where it would hover the
+    // next view's top row off its tint: move it to a body row first.
+    run.write(b"\x1b[<35;1;21M");
     // `/usage`: the top row, the three bold group headings, and the
     // dim budget row with `budget.usd` set.
     let grid = open_view(&mut run, "usage");
