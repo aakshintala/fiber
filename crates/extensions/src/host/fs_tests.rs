@@ -11,11 +11,11 @@ use std::time::Duration;
 
 use config::{Config, ProjectKey, Sources};
 use contract::files::PathLock;
-use fakes::Deadline;
+use fakes::{Deadline, FakeLock};
 use mlua::{Lua, LuaString, Table, Value as LuaValue};
 use serde_json::Value;
 
-use super::{Ctx, FakeLock, Fs, install};
+use super::{Ctx, Fs, install};
 
 /// How long a test waits for a lock or a thread before failing.
 const DEADLINE: Duration = Duration::from_secs(10);

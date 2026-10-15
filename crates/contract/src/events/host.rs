@@ -396,6 +396,11 @@ pub enum CommandResult {
         /// The environment sessions the hub starts now get, as `session_started` carries it.
         variables: Variables,
     },
+    /// For a nonempty `full` subscribe: the opening fold's boundary.
+    Subscribe {
+        /// The last durable line sent before the stream goes live.
+        last_seq: crate::Seq,
+    },
 }
 
 /// One declared tool (`docs/tools.md`, "Seeing the tools").

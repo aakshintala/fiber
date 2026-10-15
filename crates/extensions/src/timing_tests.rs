@@ -23,8 +23,8 @@ use contract::diag::{DebugLog, ProviderRequest, Purpose, Timing};
 use fakes::clock::FakeClock;
 
 use super::SessionExtensions;
-use crate::host::FakeLock;
 use crate::{LuaExtension, Origin, Request, plan};
+use fakes::FakeLock;
 
 /// A sink that keeps every request it is given.
 #[derive(Default)]

@@ -70,7 +70,7 @@ verdict whatever happened.
 {"kind":"fiber_exited","schema_version":1,"payload":{"error":{"code":"no_model","message":"No model is configured. Set one in a configuration file or pass --model."},"exit_code":1}}
 ```
 
-The hub sends five lines of its own, only on a connection to the hub and
+The hub sends six lines of its own, only on a connection to the hub and
 never to a log (`docs/invocation.md`, "The hub"). Each carries `kind`, `ts`,
 `schema_version` and `payload`, and no `session_id` in the envelope, since it
 is about the hub or names its session in the payload:
@@ -93,6 +93,11 @@ is about the hub or names its session in the payload:
   holds `session_id` (string). It carries no `seq`, and comes after every line
   the session sent on that connection. The client then holds no subscription
   to that session (`docs/invocation.md`, "The hub").
+- `stream_reopened`, when the hub subscribes a resumed or reconnected session
+  again at `full` for a client: `payload` holds `session_id` (string) and
+  `last_seq` (integer, absent when the log holds no line), the `seq` of the
+  last line of the new fold. It carries no `seq`, and comes before every
+  line of that fold.
 
 The hub's `command_accepted` and `command_rejected` for a hub command carry
 no `session_id` in the envelope either.
@@ -1310,6 +1315,7 @@ Every driver command is answered with exactly one of these, echoing its id
 | `tools` | `tools`, an array with one object per declared tool: `name` (string), `source` (`builtin`, `extension` or `mcp`), `server` or `extension` (string, the tool's server or extension, when not built in), `tool` (string, the server's own name for the tool, when the source is `mcp`), `state` (`full`, `deferred` or `loaded`), `bytes` (integer) and `tokens` (integer, estimated, absent before the first request) (`docs/tools.md`, "Seeing the tools") |
 | `commands` | `commands`, an array with one object per `/name` the session runs: `name` (string), `description` (string), `argument_hint` (string, the skill's `argument-hint` or an MCP prompt's arguments, absent when it has none) and `tag` (string: `skill`, `template`, the extension's name, or the MCP server's name) (`docs/invocation.md`, "What each command does") |
 | `skills` | `skills`, an array with one object per skill discovery found, switched-off and shadowed ones included: `name` (string), `description` (string), `path` (string, its `SKILL.md`), `source` (`repository`, `personal`, `extension` or `builtin`), `extension` (string, the extension's name, only when `source` is `extension`), `model_invocable` (boolean, false for a skill with `disable-model-invocation` and for one in an extension's `prompts/`), `disabled` (boolean, true when `skills.disabled` names it), `shadows` (array of strings, the `SKILL.md` paths of the skills it shadows) and `shadowed_by` (string, the winning skill's `SKILL.md` path, only on a shadowed skill) (`docs/invocation.md`, "What each command does") |
+| `subscribe` | at `full`, `last_seq` (integer), the `seq` of the last line the fold sends before the stream goes live; `result` is absent on an empty log or at `summary` |
 | `history` | `lines`, an array of the session's durable lines in the range asked for, each a whole line as the log holds it, in `seq` order |
 | `artifact_page` | `text` (string), the page, whole lines from `offset`; `next` (integer), the byte offset after the page, absent at the end of the file; and `size` (integer), the file's size in bytes |
 | `shell` | `output` (string), `artifact` (string, when cut) and `process` (`process`), as on `shell_command` |

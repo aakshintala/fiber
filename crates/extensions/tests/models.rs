@@ -14,7 +14,7 @@ use config::{ModelData, write_model_cache};
 use contract::ErrorCode;
 use contract::clock::Clock;
 use extensions::{Error, Providers, leave_out_invalid};
-use fakes::Deadline;
+use fakes::{Deadline, NoLock};
 use serde_json::json;
 
 #[test]
@@ -139,7 +139,7 @@ fn fresh_cache_is_used_before_loading_or_refreshing_provider_lua() {
         &setup.home(),
         &configuration,
         fakes::clock::FakeClock::new(),
-        Arc::new(NoopLock),
+        Arc::new(NoLock),
         None,
     );
     let lua = Arc::clone(&session.lua_providers()[0].1);
@@ -2023,23 +2023,11 @@ fn add_session_drops_the_data_of_an_extension_rejected_for_its_lua() {
     assert!(providers.get("c").is_some());
     let config = config(&setup, &[]);
     let clock = fakes::clock::FakeClock::new();
-    let locks: Arc<dyn contract::files::PathLock> = Arc::new(NoopLock);
+    let locks: Arc<dyn contract::files::PathLock> = Arc::new(NoLock);
     let extensions = SessionExtensions::load(&setup.home(), &config, clock, locks, None);
     assert_eq!(extensions.rejected(), ["c-ext"]);
     let notices = providers.add_session(&extensions, &config, &fakes::children::grouped_output);
     assert!(notices.is_empty(), "{notices:?}");
     assert!(providers.get("c").is_none());
     assert!(providers.resolve("d/m").is_ok());
-}
-
-struct NoopLock;
-
-impl contract::files::PathLock for NoopLock {
-    fn hold(&self, _path: &std::path::Path, run: &mut dyn FnMut()) {
-        run();
-    }
-
-    fn hold_all(&self, _paths: &[std::path::PathBuf], run: &mut dyn FnMut()) {
-        run();
-    }
 }

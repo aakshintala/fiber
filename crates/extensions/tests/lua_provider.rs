@@ -22,8 +22,8 @@ use contract::ErrorCode;
 use contract::clock::Clock;
 use contract::signing::{SignRequest, Signer};
 use extensions::{Error, LuaExtension, LuaProvider, REFRESH_BEFORE};
-use fakes::Deadline;
 use fakes::clock::FakeClock;
+use fakes::{Deadline, NoLock};
 use fakes::{ProviderServer, Response, fingerprint};
 use serde_json::json;
 
@@ -1037,15 +1037,6 @@ fn an_unattended_login_at_send_time_marks_the_credential() {
 
 #[test]
 fn declared_provider_files_list_owners_in_order_without_running_lua() {
-    struct NoopLock;
-    impl contract::files::PathLock for NoopLock {
-        fn hold(&self, _: &std::path::Path, run: &mut dyn FnMut()) {
-            run();
-        }
-        fn hold_all(&self, _: &[std::path::PathBuf], run: &mut dyn FnMut()) {
-            run();
-        }
-    }
     let setup = Setup::new();
     let mut manifest = common::manifest("fiber.test/lazy");
     manifest["providers"] = json!({"b":[], "a":[]});
@@ -1060,7 +1051,7 @@ fn declared_provider_files_list_owners_in_order_without_running_lua() {
             &home,
             &configuration,
             FakeClock::new(),
-            Arc::new(NoopLock),
+            Arc::new(NoLock),
             None,
         )
     });

@@ -21,11 +21,10 @@ use contract::hook::{
 };
 use contract::inbox::{Ack, Delivery, Message};
 use contract::provider::{Delta, Provider, ReplyAction};
-use contract::rules::{Rules, RulesError, StandingRules};
 use contract::shapes::{ContentPart, DeclaredEffects, Effect, Origin, Sender};
 use contract::tool::{Bound, Cancel, Effects, EffectsError, Output, Tool};
 use contract::{CommandId, Envelope, SessionId};
-use fakes::Deadline;
+use fakes::{Deadline, NoRules};
 use log::Log;
 use serde_json::{Map, Value, json};
 
@@ -201,18 +200,6 @@ impl Hooks for FakeHooks {
     }
 
     fn deliver_to(&self, _inbox: std::sync::mpsc::Sender<Delivery>) {}
-}
-
-struct NoRules;
-
-impl Rules for NoRules {
-    fn read(&self) -> Result<StandingRules, RulesError> {
-        Ok(StandingRules::default())
-    }
-
-    fn remember(&self, _: &str, _: &str, _: &SessionId) -> Result<(), RulesError> {
-        Ok(())
-    }
 }
 
 /// A schema'd counting tool: schema takes an optional string `path` and an

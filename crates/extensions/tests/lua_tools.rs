@@ -11,7 +11,7 @@
 mod common;
 
 use std::collections::BTreeMap;
-use std::path::{Path, PathBuf};
+use std::path::Path;
 use std::sync::{Arc, mpsc};
 use std::time::Duration;
 
@@ -26,7 +26,7 @@ use contract::tool::{Effects, EffectsError, Output, Tool};
 use extensions::{LuaExtension, LuaTool, SessionExtensions};
 use fakes::Deadline;
 use fakes::clock::FakeClock;
-use fakes::{CancelToken, ProviderServer, Recorder, Response};
+use fakes::{CancelToken, NoLock, ProviderServer, Recorder, Response};
 use serde_json::{Map, Value, json};
 
 /// How long a test waits for a signal or an answer before failing.
@@ -621,18 +621,6 @@ fiber.tool("refresh", {
 
 // Settling names across a session's extensions (`docs/extensions.md`,
 // "What a package holds" and "Registering").
-
-struct NoLock;
-
-impl contract::files::PathLock for NoLock {
-    fn hold(&self, _path: &Path, run: &mut dyn FnMut()) {
-        run();
-    }
-
-    fn hold_all(&self, _paths: &[PathBuf], run: &mut dyn FnMut()) {
-        run();
-    }
-}
 
 /// The session's extensions with these config overrides, loaded on a
 /// thread under `WAIT`.

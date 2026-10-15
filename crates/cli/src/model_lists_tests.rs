@@ -16,6 +16,7 @@ use std::time::Duration;
 use config::Config;
 use contract::clock::Clock;
 use extensions::{Providers, SessionExtensions};
+use fakes::NoLock;
 use serde_json::{Value, json};
 
 use super::{ModelLists, ModelListsError, model_lists, roles_of};
@@ -133,20 +134,6 @@ impl Setup {
             })
             .collect();
         config::write_model_cache(&self.home(), name, &Value::Array(models)).unwrap();
-    }
-}
-
-/// `model_lists` never holds a lock: the loader in these tests runs
-/// straight through.
-struct NoLock;
-
-impl contract::files::PathLock for NoLock {
-    fn hold(&self, _path: &Path, run: &mut dyn FnMut()) {
-        run();
-    }
-
-    fn hold_all(&self, _paths: &[PathBuf], run: &mut dyn FnMut()) {
-        run();
     }
 }
 

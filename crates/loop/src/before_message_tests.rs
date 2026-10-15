@@ -24,7 +24,7 @@ use contract::inbox::{Ack, Answer, Delivery, Message};
 use contract::jobs::{Foreground, Jobs, OpenError, Opened, Opening};
 use contract::shapes::{ContentPart, Origin, Sender};
 use contract::{CommandId, Envelope, ErrorCode, JobId, SessionId, TurnId};
-use fakes::Deadline;
+use fakes::{Deadline, NoRules};
 use log::Log;
 
 use crate::before_message::Hooked;
@@ -219,18 +219,6 @@ impl Hooks for FakeHooks {
     }
 
     fn deliver_to(&self, _inbox: std::sync::mpsc::Sender<Delivery>) {}
-}
-
-struct NoRules;
-
-impl contract::rules::Rules for NoRules {
-    fn read(&self) -> Result<contract::rules::StandingRules, contract::rules::RulesError> {
-        Ok(contract::rules::StandingRules::default())
-    }
-
-    fn remember(&self, _: &str, _: &str, _: &SessionId) -> Result<(), contract::rules::RulesError> {
-        Ok(())
-    }
 }
 
 /// The replacements `on_rewrite` reported, in call order.

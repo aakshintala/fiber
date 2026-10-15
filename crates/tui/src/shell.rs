@@ -45,7 +45,8 @@ pub(crate) fn answered(text: &str, result: Option<CommandResult>) -> Option<Stri
         | CommandResult::History { .. }
         | CommandResult::ArtifactPage { .. }
         | CommandResult::Start { .. }
-        | CommandResult::Status { .. } => None,
+        | CommandResult::Status { .. }
+        | CommandResult::Subscribe { .. } => None,
     }
 }
 

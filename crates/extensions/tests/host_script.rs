@@ -3,7 +3,7 @@
 mod common;
 
 use std::fs;
-use std::path::{Path, PathBuf};
+use std::path::Path;
 use std::sync::Arc;
 use std::sync::mpsc;
 use std::time::Duration;
@@ -18,9 +18,9 @@ use contract::shapes::Process;
 use extensions::{
     Error, ExecEntry, ExecReply, HostScript, HttpEntry, LuaExtension, SessionExtensions,
 };
-use fakes::Deadline;
 use fakes::ProviderServer;
 use fakes::clock::FakeClock;
+use fakes::{Deadline, NoLock};
 use serde_json::json;
 
 const WAIT: Duration = Duration::from_secs(5);
@@ -89,18 +89,6 @@ fn oauth_script_reaches_pkce_open_show_and_callback_without_external_work() {
         json!({"verifier": "v", "code": "yes", "failed": true, "error": "io_failed"})
     );
     assert!(script.unmet().is_empty(), "{:?}", script.unmet());
-}
-
-struct NoLock;
-
-impl PathLock for NoLock {
-    fn hold(&self, _path: &Path, run: &mut dyn FnMut()) {
-        run();
-    }
-
-    fn hold_all(&self, _paths: &[PathBuf], run: &mut dyn FnMut()) {
-        run();
-    }
 }
 
 #[allow(

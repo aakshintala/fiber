@@ -5,6 +5,7 @@
 
 use std::time::Duration;
 
+use fakes::NoSkills;
 use serde_json::json;
 
 use super::specs;
@@ -748,24 +749,6 @@ fn delegates() -> crate::delegates::Delegates {
             catalogue: std::sync::Arc::from(""),
         },
     )
-}
-
-/// The skills the `builtin` calls load through: none are listed. A local
-/// copy of `builtin_tests`' helper, which is `pub(super)` there.
-struct NoSkills;
-
-impl contract::skills::Skills for NoSkills {
-    fn file(&self, _name: &str) -> Option<std::path::PathBuf> {
-        None
-    }
-
-    fn body(
-        &self,
-        _name: &str,
-        _file: &std::path::Path,
-    ) -> Result<String, contract::skills::SkillRead> {
-        Err(contract::skills::SkillRead::Invalid)
-    }
 }
 
 fn skills() -> std::sync::Arc<dyn contract::skills::Skills> {

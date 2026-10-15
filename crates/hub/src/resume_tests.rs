@@ -800,6 +800,18 @@ impl Client {
     }
 }
 
+/// The hub's replacement for a muted full replay acknowledgement.
+fn assert_reopened(line: &Value, last_seq: Option<u64>) {
+    assert_eq!(line["kind"], "stream_reopened", "{line}");
+    assert_eq!(line["payload"]["session_id"], SID);
+    assert_eq!(
+        line["payload"].get("last_seq"),
+        last_seq.map(Value::from).as_ref()
+    );
+    assert!(line.get("seq").is_none());
+    assert!(line.get("session_id").is_none());
+}
+
 /// What the fake sessions received, as `(id, command)`.
 fn received(starter: &FakeStarter) -> Vec<(String, String)> {
     starter
@@ -853,6 +865,197 @@ fn a_command_for_a_session_with_no_log_is_session_not_found() {
     assert_eq!(line["payload"]["message"], format!("No session `{SID}`."));
 }
 
+/// A resumed session binds its socket for the test to play by hand.
+struct HandResume {
+    home: PathBuf,
+    bound: mpsc::Sender<UnixListener>,
+}
+
+struct HandAlive;
+impl crate::Started for HandAlive {
+    fn exited(&self) -> Option<crate::Failure> {
+        None
+    }
+}
+impl crate::Starter for HandResume {
+    fn start(
+        &self,
+        _: &SessionId,
+        _: &std::path::Path,
+        _: Option<&str>,
+        _: &[&str],
+        _: bool,
+    ) -> std::io::Result<Box<dyn crate::Started>> {
+        Err(std::io::Error::other("only resumes are expected"))
+    }
+    fn rewind(
+        &self,
+        _: &SessionId,
+        _: &std::path::Path,
+        _: &SessionId,
+    ) -> std::io::Result<Box<dyn crate::Started>> {
+        Err(std::io::Error::other("only resumes are expected"))
+    }
+    fn resume(
+        &self,
+        id: &SessionId,
+        _: &std::path::Path,
+        _: Option<&str>,
+    ) -> std::io::Result<Box<dyn crate::Started>> {
+        let listener = UnixListener::bind(self.home.join("run").join(&id.0))?;
+        self.bound.send(listener).map_err(std::io::Error::other)?;
+        Ok(Box::new(HandAlive))
+    }
+}
+
+/// Replays a kept level through a route reconnect or a sweep rejoin.
+fn scripted_reopening(level: &str, accepted: bool, last_seq: Option<u64>, path: &str) {
+    use crate::connection::lock;
+    use crate::relay::Relays;
+    use std::sync::Mutex;
+    let temp = Temp::new();
+    temp.recorded();
+    let (bound_tx, bound) = mpsc::channel();
+    let timed: Arc<dyn Clock> = temp.clock.clone();
+    let hub = Arc::new(crate::testkit::hub(
+        &temp.dir,
+        Arc::new(HandResume {
+            home: temp.dir.clone(),
+            bound: bound_tx,
+        }),
+        timed,
+    ));
+    let relays = Arc::new(Mutex::new(Relays::default()));
+    let kept = json!({"id": "c_sub", "command": "subscribe", "args": {"level": level}})
+        .as_object()
+        .unwrap()
+        .clone();
+    lock(&relays).subscribed.push((SID.into(), kept));
+    let (writer, client_read) = UnixStream::pair().unwrap();
+    client_read.set_read_timeout(Some(DEADLINE)).unwrap();
+    let writer = Arc::new(Mutex::new(writer));
+    fs::create_dir_all(temp.dir.join("run")).unwrap();
+    let listener = match path {
+        "resume" => {
+            temp.append("fiber_exited");
+            None
+        }
+        _ => Some(UnixListener::bind(temp.dir.join("run").join(SID)).unwrap()),
+    };
+    let (played_tx, played) = mpsc::channel();
+    let (release_tx, release) = mpsc::channel();
+    let player = thread::spawn(move || {
+        let listener = listener.unwrap_or_else(|| {
+            Deadline::after(DEADLINE).recv_or_fail(&bound, "the resumed session to bind")
+        });
+        let (mut stream, _) = listener.accept().unwrap();
+        stream.set_read_timeout(Some(DEADLINE)).unwrap();
+        let mut reader = BufReader::new(stream.try_clone().unwrap());
+        let mut text = String::new();
+        reader.read_line(&mut text).unwrap();
+        let replay: Value = serde_json::from_str(&text).unwrap();
+        assert_eq!(replay["command"], "subscribe");
+        assert_ne!(replay["id"], "c_sub");
+        let mut payload = json!({"command_id": replay["id"]});
+        if let Some(last_seq) = last_seq {
+            payload["result"] = json!({"last_seq": last_seq});
+        }
+        if !accepted {
+            payload["code"] = json!("closing");
+        }
+        let kind = if accepted {
+            "command_accepted"
+        } else {
+            "command_rejected"
+        };
+        writeln!(
+            stream,
+            "{}",
+            json!({"kind": kind, "ts": 0, "schema_version": 1, "payload": payload})
+        )
+        .unwrap();
+        // A marker after the replay pins the event's position and count.
+        writeln!(stream, "{}", json!({"kind": "fold_marker", "session_id": SID, "ts": 0, "schema_version": 1, "payload": {}})).unwrap();
+        played_tx.send(()).unwrap();
+        match Deadline::after(DEADLINE).recv(&release) {
+            Ok(()) | Err(mpsc::RecvTimeoutError::Disconnected) => {}
+            Err(mpsc::RecvTimeoutError::Timeout) => panic!("the scripted replay was not released"),
+        }
+    });
+    if path == "rejoin" {
+        let mark = crate::rejoin::Mark::now(&temp.dir, SID);
+        let epoch = {
+            let mut held = lock(&relays);
+            let epoch = held.mint();
+            assert!(crate::rejoin::admit(&mut held, SID, false, mark, epoch));
+            epoch
+        };
+        crate::relay::attach_rejoin(
+            SID,
+            UnixStream::connect(temp.dir.join("run").join(SID)).unwrap(),
+            &hub,
+            &writer,
+            &relays,
+            epoch,
+        );
+    } else {
+        let command = json!({"id": "c_next", "command": "reply"})
+            .as_object()
+            .unwrap()
+            .clone();
+        crate::relay::route(
+            &contract::CommandId("c_next".into()),
+            SID,
+            command,
+            &hub,
+            &writer,
+            &relays,
+            None,
+            false,
+        );
+    }
+    Deadline::after(DEADLINE).recv_or_fail(&played, "the scripted replay");
+    let mut reader = BufReader::new(client_read);
+    let mut text = String::new();
+    reader.read_line(&mut text).unwrap();
+    let first: Value = serde_json::from_str(&text).unwrap();
+    if level == "full" && accepted {
+        assert_reopened(&first, last_seq);
+        text.clear();
+        reader.read_line(&mut text).unwrap();
+        assert_eq!(
+            serde_json::from_str::<Value>(&text).unwrap()["kind"],
+            "fold_marker"
+        );
+    } else {
+        assert_eq!(
+            first["kind"], "fold_marker",
+            "no replay acknowledgement or reopening at summary or rejection"
+        );
+    }
+    // Drop the release before waiting for the player and relay to end.
+    drop(release_tx);
+    let (done_tx, done) = mpsc::channel();
+    thread::spawn(move || {
+        player.join().unwrap();
+        done_tx.send(()).unwrap_or(());
+    });
+    Deadline::after(DEADLINE).recv_or_fail(&done, "the scripted session to end");
+    crate::testkit::await_true("the relay to leave", move || {
+        lock(&relays).entries.is_empty()
+    });
+}
+
+#[test]
+fn reconnect_and_rejoin_replace_full_replay_acknowledgements_with_boundaries() {
+    for path in ["reconnect", "resume", "rejoin"] {
+        scripted_reopening("full", true, Some(41), path);
+        scripted_reopening("full", true, None, path);
+        scripted_reopening("summary", true, Some(41), path);
+        scripted_reopening("full", false, Some(41), path);
+    }
+}
+
 #[test]
 fn a_reconnect_sends_the_subscription_again_before_the_command() {
     let temp = Temp::new();
@@ -867,7 +1070,8 @@ fn a_reconnect_sends_the_subscription_again_before_the_command() {
 
     client.send("c_2", "reply");
     // The session acknowledges the replayed subscribe first; the client
-    // sees only its own command's acknowledgement.
+    // sees the reopening boundary, then its own command's acknowledgement.
+    assert_reopened(&client.next("the reopened stream"), None);
     assert_eq!(client.acknowledged("the reply"), "c_2");
     assert_eq!(starter.resumed().len(), 2);
     let got = received(&starter);
@@ -1321,7 +1525,8 @@ fn a_resume_replays_the_level_the_connection_last_changed_to() {
     assert_eq!(client.acknowledged("the change"), "c_2");
     assert!(starter.stop(&sid(), DEADLINE), "the fake session ended");
     client.send("c_3", "reply");
-    // The client's lines are exactly the three acknowledgements.
+    // The replay's acknowledgement is replaced by the reopening boundary.
+    assert_reopened(&client.next("the reopened stream"), None);
     assert_eq!(client.acknowledged("the reply"), "c_3");
     let got = received_levels(&starter);
     assert_eq!(got.len(), 4, "{got:?}");
@@ -1697,11 +1902,23 @@ fn an_accepted_subscribe_is_replayed(prior: Option<&str>) {
         .recv(&routed_rx)
         .expect("the reconnect routes behind the parked acknowledgement");
     release_tx.send(()).unwrap_or(());
-    let first = client.acknowledged("the first acknowledgement");
-    let second = client.acknowledged("the second acknowledgement");
-    let mut ids = [first, second];
+    let lines: Vec<_> = (0..3)
+        .map(|_| client.next("the acknowledgements and reopening boundary"))
+        .collect();
+    let mut ids = Vec::new();
+    let mut reopened = 0;
+    for line in &lines {
+        if line["kind"] == "stream_reopened" {
+            assert_reopened(line, None);
+            reopened += 1;
+        } else {
+            assert_eq!(line["kind"], "command_accepted");
+            ids.push(line["payload"]["command_id"].as_str().unwrap().to_owned());
+        }
+    }
     ids.sort();
     assert_eq!(ids, [accepted.to_owned(), reply.to_owned()]);
+    assert_eq!(reopened, 1);
     assert_eq!(starter.resumed().len(), 2);
     let got = received_levels(&starter);
     assert_eq!(got.len(), before + 3, "{got:?}");

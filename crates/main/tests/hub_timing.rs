@@ -70,8 +70,9 @@ const FIRST_TURN_KINDS: [&str; 14] = [
 /// closed on, then the resumed process's start through its
 /// `turn_completed`. Deltas are live-only lines, so the resumed stream
 /// carries none: the hub replays what the log holds.
-const SECOND_TURN_KINDS: [&str; 13] = [
+const SECOND_TURN_KINDS: [&str; 14] = [
     "fiber_exited",
+    "stream_reopened",
     "session_started",
     "fiber_started",
     "extensions_loaded",

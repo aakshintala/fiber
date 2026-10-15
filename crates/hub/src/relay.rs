@@ -8,7 +8,8 @@
 //! socket: a `subscribe` is kept once the session accepts it, and a later
 //! accepted `subscribe` replaces the kept one, so a reconnect to that
 //! session sends it again under a hub-minted id before the client's
-//! command, dropping the session's acknowledgement of it. A `subscribe`
+//! command, replacing its accepted full acknowledgement with `stream_reopened`
+//! before the fold and muting other replay acknowledgements. A `subscribe`
 //! the session rejects, or never answers, is not kept. A reconnect waits
 //! for the old relay thread to deliver every acknowledgement it read
 //! before it reads the kept subscription, so the replay is the accepted
@@ -25,7 +26,8 @@
 //! the order they were read (`crate::retire`).
 //!
 //! A session that resumes is subscribed again at the level the connection
-//! last held, with no client command (`crate::rejoin`). A running session
+//! last held, with no client command (`crate::rejoin`), and a full replay
+//! sends `stream_reopened` before the fold. A running session
 //! that closes the connection gets `stream_closed` and loses the kept
 //! level first (`crate::closed`).
 
@@ -381,7 +383,7 @@ pub(crate) fn route(
     };
     // The connection's subscription first, under an id of the hub's own,
     // so the client's command reaches a subscribed connection.
-    attach(
+    attach_inner(
         session,
         stream,
         hub,
@@ -390,11 +392,14 @@ pub(crate) fn route(
         kept,
         Some((id.clone(), bytes, stripped)),
         false,
+        None,
+        true,
     );
 }
 
 /// Sends the kept subscription again under a hub-minted id the relay
-/// thread drops, then the client's command when one is relayed, and
+/// thread mutes (without `stream_reopened` for this redirect), then the
+/// client's command when one is relayed, and
 /// follows the session on a relay thread: shared by a new relay and the
 /// rewind redirect, which sends only the subscription (its caller keeps
 /// the level first). A write that fails answers the client's command
@@ -417,7 +422,7 @@ pub(crate) fn attach(
     exclusive: bool,
 ) {
     attach_inner(
-        session, stream, hub, writer, relays, replay, command, exclusive, None,
+        session, stream, hub, writer, relays, replay, command, exclusive, None, false,
     );
 }
 
@@ -443,6 +448,7 @@ pub(crate) fn attach_rejoin(
         None,
         true,
         Some(candidate_epoch),
+        true,
     );
 }
 
@@ -460,10 +466,12 @@ fn attach_inner(
     command: Option<(CommandId, Vec<u8>, Map<String, Value>)>,
     exclusive: bool,
     candidate_epoch: Option<u64>,
+    reopen: bool,
 ) {
     let mark = crate::rejoin::Mark::now(&hub.home, session);
     let mut replay = replay;
     let mut replayed_id: Option<String> = None;
+    let mut reopening = None;
     let admission = candidate_epoch.map(|_| lock(relays));
     if let Some(candidate_epoch) = candidate_epoch {
         let Some(current) = admission
@@ -501,6 +509,15 @@ fn attach_inner(
             return;
         }
         lock(&replayed).push(minted.clone());
+        if reopen
+            && line
+                .get("args")
+                .and_then(|args| args.get("level"))
+                .and_then(Value::as_str)
+                == Some("full")
+        {
+            reopening = Some(minted.clone());
+        }
         replayed_id = Some(minted);
     };
     let kept: Kept = Arc::new(Mutex::new(
@@ -562,6 +579,7 @@ fn attach_inner(
         let kept = Arc::clone(&kept);
         let owned = RelayThread {
             epoch,
+            reopen: reopening,
             replayed: Arc::clone(&replayed),
             kept,
             order: Arc::clone(&order),
@@ -596,6 +614,7 @@ fn attach_inner(
 /// without the thread taking the relays lock to find it.
 struct RelayThread {
     epoch: u64,
+    reopen: Option<String>,
     replayed: Replayed,
     kept: Kept,
     order: Arc<AckOrder>,
@@ -632,6 +651,7 @@ pub(crate) fn spawn_for_test(
                 RelayThread {
                     epoch,
                     replayed: Replayed::default(),
+                    reopen: None,
                     kept,
                     order,
                     gone,
@@ -653,7 +673,8 @@ fn not_found(writer: &Arc<Mutex<UnixStream>>, hub: &Hub, id: &CommandId, session
 
 /// Copies every session line back verbatim onto the client's shared
 /// writer, except the acknowledgement of the subscription the hub sent
-/// again, which the client never sent, and a `closing` answer from a
+/// again, replaced at full by `stream_reopened` before the fold on a
+/// resume or reconnect, and a `closing` answer from a
 /// session whose log ends in `fiber_exited`: that retires this thread's
 /// relay and routes the command again, passing its queue on after. An
 /// accepted `subscribe` becomes the connection's kept subscription before
@@ -676,6 +697,7 @@ fn relay(
         kept,
         order,
         gone,
+        mut reopen,
     } = owned;
     let mut read = BufReader::new(reader);
     let mut buf = Vec::new();
@@ -706,6 +728,19 @@ fn relay(
                     }
                 }
                 if replayed_ack {
+                    if let Some(ack) = ack.as_ref()
+                        && reopen.as_deref() == Some(ack.id.as_str())
+                    {
+                        reopen = None;
+                        if ack.verdict == Verdict::Accepted {
+                            let mut payload = Map::new();
+                            payload.insert("session_id".into(), Value::String(session.to_owned()));
+                            if let Some(last_seq) = ack.last_seq {
+                                payload.insert("last_seq".into(), Value::from(last_seq));
+                            }
+                            crate::connection::send(writer, hub, "stream_reopened", payload);
+                        }
+                    }
                     // The filter hook above already ran: waiting on the
                     // relays lock here cannot hold it back, so the forced
                     // transfer interleaving stays possible. The guard
@@ -773,6 +808,7 @@ fn relay(
                                         id,
                                         verdict: Verdict::Rejected,
                                         rewound: None,
+                                        last_seq: None,
                                     });
                                     lock(relays).subscribed.retain(|(kept, _)| kept != session);
                                 }

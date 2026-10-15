@@ -970,7 +970,12 @@ fn a_kept_subscription_rejoin_times_its_replay_to_acknowledgement() {
     assert_op_line(&await_op_lines(&temp, 1), "hub.subscribe_replay", 0);
     assert!(lock(&relays).pending_replay.is_empty());
     // The acknowledgement was the hub's own: the client never sees it.
-    // A live line behind it is what the client reads first.
+    // The reopening boundary precedes every fold line.
+    let reopened = client_line(&client_read);
+    assert_eq!(reopened["kind"], "stream_reopened");
+    assert_eq!(reopened["payload"]["session_id"], REPLAY_SID);
+    assert!(reopened["payload"].get("last_seq").is_none());
+    assert!(reopened.get("seq").is_none());
     session_end
         .write_all(b"{\"kind\":\"session_status\",\"ts\":1,\"schema_version\":1,\"payload\":{}}\n")
         .unwrap();
