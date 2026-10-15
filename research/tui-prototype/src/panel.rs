@@ -8,54 +8,19 @@
 use super::{BI, BLUE, Row, bold, dim, fg, fit, row, slab, sp, t, width, wrap_rows};
 use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::Span;
-use std::cell::Cell;
 use unicode_width::UnicodeWidthStr;
-
-/// Which chrome a panel draws on its content rows (#1765): the stripe on
-/// the left only, on both sides, or neither. The default is `Left`, which
-/// is exactly what every panel drew before the flag existed.
-#[derive(Clone, Copy, PartialEq, Eq, Debug, Default)]
-pub(crate) enum Stripe {
-    None,
-    Both,
-    #[default]
-    Left,
-}
-
-thread_local! {
-    static MODE: Cell<Stripe> = const { Cell::new(Stripe::Left) };
-}
-
-/// Sets the stripe mode, from `--panel-stripe`. Main-thread only, like the
-/// render path that reads it; tests that switch mode reset it to `Left`.
-pub(crate) fn set_stripe(s: Stripe) {
-    MODE.set(s);
-}
-
-/// The current stripe mode.
-pub(crate) fn stripe_mode() -> Stripe {
-    MODE.get()
-}
 
 /// The narrowest a panel ever draws, in cells.
 pub(crate) const MIN_W: usize = 40;
 /// The widest a panel ever draws, in cells.
 pub(crate) const MAX_W: usize = 150;
-/// A content row's chrome on the left: the stripe and its two blank columns,
-/// or two blank columns with no stripe.
+/// A content row's blank columns on the left: two.
 fn left_w() -> usize {
-    match stripe_mode() {
-        Stripe::None => 2,
-        Stripe::Left | Stripe::Both => 3,
-    }
+    2
 }
-/// The blank columns on the right of the content: two, or two plus the
-/// right stripe with `Both`.
+/// The blank columns on the right of the content: two.
 fn pad_r() -> usize {
-    match stripe_mode() {
-        Stripe::Both => 3,
-        Stripe::None | Stripe::Left => 2,
-    }
+    2
 }
 
 /// The content width inside a panel this wide.
@@ -176,25 +141,16 @@ pub(crate) fn footer_legend(items: &[(&str, &str)]) -> Row {
     row(spans)
 }
 
-/// Opens a content row with the stripe and its padding. Blank rows stay
-/// blank: the frame's padding rows carry no stripe. Click targets move with
+/// Opens a content row with two blank columns. Blank rows stay blank:
+/// the frame's padding rows carry no padding. Click targets move with
 /// the text they cover.
 fn stripe(r: Row, inner: usize) -> Row {
     if width(&r.spans) == 0 {
         return r;
     }
     let dx = left_w() as u16;
-    let mut spans = match stripe_mode() {
-        Stripe::None => vec![sp("  ", Style::new())],
-        Stripe::Left | Stripe::Both => vec![sp("▌", fg(BLUE)), sp("  ", Style::new())],
-    };
+    let mut spans = vec![sp("  ", Style::new())];
     spans.extend(fit(&r.spans, inner));
-    if stripe_mode() == Stripe::Both {
-        // The row is `fit` to inner, so the right stripe sits after the
-        // same two blank cells the left stripe keeps before the text.
-        spans.push(sp("  ", Style::new()));
-        spans.push(sp("▐", fg(BLUE)));
-    }
     Row {
         spans,
         hot: r.hot.iter().map(|&(a, b, k)| (a + dx, b + dx, k)).collect(),
@@ -203,7 +159,7 @@ fn stripe(r: Row, inner: usize) -> Row {
     }
 }
 
-/// Stripes content rows and edges the panel. Blank rows stay blank.
+/// Pads content rows and edges the panel. Blank rows stay blank.
 pub(crate) fn slab_rows(rows: Vec<Row>, panel_w: usize) -> Vec<Row> {
     let inner = inner_w(panel_w);
     slab(
