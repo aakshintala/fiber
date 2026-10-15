@@ -27,6 +27,15 @@ enum Overlay {
     All,
 }
 
+/// What the overlay shows: one notice's whole text, or every notice.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct NoticeOverlay {
+    /// True for the list form.
+    pub(crate) all: bool,
+    /// `(code, text)`, newest first.
+    pub(crate) entries: Vec<(String, String)>,
+}
+
 /// The notices, oldest first, and the overlay.
 #[derive(Debug, Default)]
 pub(crate) struct Notices {
@@ -144,16 +153,29 @@ impl Notices {
         self.overlay.take().is_some()
     }
 
-    /// The overlay's text, newest first, while it is open.
-    pub(crate) fn overlay(&self) -> Option<Vec<String>> {
+    /// The overlay's entries, newest first, while it is open.
+    pub(crate) fn overlay_entries(&self) -> Option<NoticeOverlay> {
         let overlay = self.overlay?;
-        Some(
-            self.shown()
+        Some(NoticeOverlay {
+            all: overlay == Overlay::All,
+            entries: self
+                .shown()
                 .rev()
                 .filter(|notice| overlay == Overlay::All || overlay == Overlay::One(notice.id))
-                .map(|notice| notice.text.clone())
+                .map(|notice| (notice.code.clone(), notice.text.clone()))
                 .collect(),
-        )
+        })
+    }
+
+    /// The overlay's text, newest first, while it is open.
+    pub(crate) fn overlay(&self) -> Option<Vec<String>> {
+        self.overlay_entries().map(|entries| {
+            entries
+                .entries
+                .into_iter()
+                .map(|(_, text)| text)
+                .collect()
+        })
     }
 
     /// Notice `id`'s whole text, while it is in the stack.
@@ -169,6 +191,11 @@ impl App {
     /// The notice rows the view draws above the working line.
     pub(crate) fn notices(&self) -> Vec<NoticeLine> {
         self.notices.lines()
+    }
+
+    /// The notice overlay's entries while it is open.
+    pub(crate) fn notice_overlay_entries(&self) -> Option<NoticeOverlay> {
+        self.notices.overlay_entries()
     }
 
     /// The notice overlay's text while it is open.
