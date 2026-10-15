@@ -412,6 +412,29 @@ pub fn replace_global(
     Ok(previous)
 }
 
+/// Clears a global key only when its value equals `expected`, comparing and
+/// writing under the same lock. An absent or different value writes nothing.
+pub fn clear_global_if_equals(
+    home: &Path,
+    key: &str,
+    expected: &Value,
+) -> Result<bool, ConfigError> {
+    let file = home.join("config.json");
+    let segments = path::parse(key).ok_or_else(|| ConfigError::Override { arg: key.into() })?;
+    let _lock = locked(&file)?;
+    let Some(mut root) = read(&file)? else {
+        return Ok(false);
+    };
+    if path::get(&root, &segments) != Some(expected) {
+        return Ok(false);
+    }
+    let mut notices = Vec::new();
+    crate::check_layer(root.clone(), &Source::Global(file.clone()), &mut notices)?;
+    path::remove(&mut root, &segments);
+    write_root(&file, &root)?;
+    Ok(true)
+}
+
 /// Inserts one named entry under `key` in a layer's file (`fiber mcp add`
 /// writing `mcp.servers`). The value is type-checked as [`set`] checks it,
 /// so on any `Err` the file is unchanged. `true` when it wrote; `false`

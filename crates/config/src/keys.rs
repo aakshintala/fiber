@@ -269,6 +269,8 @@ pub(crate) const KEYS: &[Key] = &[
     key("roles.*", Role, YES, None),
     key("hub.idle_exit_ms", Count, NO, Some("1800000")),
     key("hub.port", CountBelow(65536), NO, None),
+    key("hub.default", Str, NO, None),
+    key("hubs.*.address", Str, NO, None),
     key("hub.allowed_origins", StrList, NO, Some("[]")),
     key("session.idle_exit_ms", Count, NO, Some("1800000")),
     key("reviewer.model", Str, NO, None),
