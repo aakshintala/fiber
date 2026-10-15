@@ -322,16 +322,6 @@ fn child_oversized_write_reports_io() {
     );
 }
 
-/// Kills its process group when dropped: the short-write child is reaped
-/// on every path.
-struct KillOnDrop(u32);
-
-impl Drop for KillOnDrop {
-    fn drop(&mut self) {
-        drop(fakes::kill_group(self.0, "KILL"));
-    }
-}
-
 #[test]
 fn a_short_write_emits_its_append_and_no_fsync() {
     reset_hooks();
@@ -359,17 +349,29 @@ fn a_short_write_emits_its_append_and_no_fsync() {
         .spawn()
         .unwrap();
     let group = child.id();
-    let _kill = KillOnDrop(group);
+    // A watchdog kills the group when the test fails or times out, even
+    // when destructors never run; the wait below reaps the child once.
+    let watchdog = fakes::Watchdog::group(group);
     // The exit status arrives on a channel under the one deadline.
     let (tx, rx) = mpsc::channel();
     thread::spawn(move || {
         tx.send(child.wait()).unwrap();
     });
-    let status = Deadline::after(WITHIN)
-        .recv(&rx)
-        .expect("the short-write child to exit")
-        .unwrap();
+    let status = match Deadline::after(WITHIN).recv(&rx) {
+        Ok(status) => status.unwrap(),
+        Err(_) => {
+            drop(fakes::kill_group(group, "KILL"));
+            let reaped = Deadline::after(WITHIN).recv(&rx).is_ok();
+            panic!("waited {WITHIN:?} for the short-write child to exit (reaped: {reaped})");
+        }
+    };
     assert!(status.success(), "{status:?}");
+    drop(fakes::kill_group(group, "KILL"));
+    assert!(
+        fakes::group_empties(group, WITHIN),
+        "the short-write child left its process group {group} alive"
+    );
+    watchdog.stand_down(WITHIN);
     // Two small appends, then exactly one append for the oversized
     // write and no fsync for it.
     let lines = op_lines(&dir);
