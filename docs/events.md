@@ -197,7 +197,7 @@ both written to `artifacts/` and named by path.
 
 ### Declared effects
 
-Three keys, on `tool_call_started` and `permission_requested`, in the
+Four keys, on `tool_call_started`, `permission_requested` and, for a reviewed call's decision that has no request, `permission_resolved`, in the
 vocabulary of `docs/permissions.md`, "Effects":
 
 | Key | Type | Required | Meaning |
@@ -205,6 +205,7 @@ vocabulary of `docs/permissions.md`, "Effects":
 | `effects` | array of strings | yes | each of `reads`, `writes`, `executes` and `network` that applies, a closed set; empty when the call declared none |
 | `reversible` | boolean | yes | whether the call is reversible |
 | `paths` | array of strings | no | the paths the call touches, where the tool declared them |
+| `always_reviewed` | boolean | no | true when the tool declared the call always reviewed (`docs/permissions.md`, "Effects"); omitted when false |
 
 ### `tokens`
 
@@ -603,6 +604,7 @@ the provider reports as in progress.
 | `effects` | array of strings | yes | as in "Declared effects" |
 | `reversible` | boolean | yes | as in "Declared effects" |
 | `paths` | array of strings | no | as in "Declared effects" |
+| `always_reviewed` | boolean | no | as in "Declared effects" |
 | `arguments` | object | no | the arguments that ran, when a `before_tool` hook rewrote them |
 | `changed_by` | `changed_by` | no | with `arguments` |
 
@@ -648,7 +650,7 @@ change: any tool may set it, so a client shows the counts without knowing
 which tool ran (`docs/tools.md`, "What a result carries").
 
 A line whose content a hook changed carries `changed_by`. It appears on
-`tool_call_started` for rewritten arguments, on `tool_call_completed` for a
+`tool_call_started` for rewritten arguments, on `permission_resolved` for a reviewed call's decision that has no request and whose arguments a `before_tool` hook rewrote, on `tool_call_completed` for a
 rewritten result, and on a `turn_started` message and `steering_applied` for
 a rewritten message. The line holds what the hook returned; the original is
 never logged (`docs/extensions.md`, "Hooks").
@@ -668,6 +670,7 @@ Durable. The envelope's `action_id` is the tool call.
 | `effects` | array of strings | yes | as in "Declared effects" |
 | `reversible` | boolean | yes | as in "Declared effects" |
 | `paths` | array of strings | no | as in "Declared effects" |
+| `always_reviewed` | boolean | no | as in "Declared effects" |
 | `step` | string | yes | which step of `docs/permissions.md`, "The order a call is judged in", raised it: `standing_ask` (3) or `review` (7); a closed set |
 | `standing_rule` | object | no | on `standing_ask`, the rule that asked: `scope` (`global` or `project`) and `prefix` (string) |
 | `escalation` | object | no | on `review`, why the reviewer handed the call to a person: `cause`, which is `consecutive_blocks`, `session_blocks` or `reviewer_failed`, a closed set; `reason` (string), the reviewer's reason for blocking this call, on the two block causes; `error` (`error`), on `reviewer_failed` |
@@ -687,6 +690,12 @@ Durable. The envelope's `action_id` is the tool call.
 | `grant` | object | no | on a person's `allow` that added a session grant: `tool` and `prefix` (strings), the later calls it allows (`docs/permissions.md`, "What a rule matches") |
 | `rule` | object | no | on a person's `allow` that added a standing rule to the project's rules file: `tool` and `prefix` (strings) |
 | `reviewer` | object | no | present whenever `decided_by` is `reviewer`: `model` (string, a model reference) and `stage` (integer, `1` or `2`), the stage that decided or, on a reviewer failure, the stage that failed |
+| `effects` | array of strings | no | as in "Declared effects", on a reviewed call's decision that has no `request_id` |
+| `reversible` | boolean | no | as in "Declared effects", with the keys above |
+| `paths` | array of strings | no | as in "Declared effects", with the keys above |
+| `always_reviewed` | boolean | no | as in "Declared effects", with the keys above |
+| `arguments` | object | no | the arguments the reviewer judged, when a `before_tool` hook rewrote them, with the keys above |
+| `changed_by` | `changed_by` | no | with `arguments`, with the keys above |
 
 Both are durable so that a driver reconnecting to an unattended session learns
 it is blocked on a human rather than hanging on silence, and so that a session
