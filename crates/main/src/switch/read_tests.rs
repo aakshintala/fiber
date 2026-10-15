@@ -348,7 +348,15 @@ fn a_credential_command_still_running_at_its_timeout_is_killed_and_times_out() {
         fakes::kill_group(pgid, "0").unwrap(),
         "the group died before its timeout"
     );
+    // Armed while the wait is parked: the settlement pauses after its
+    // first kill and is never released, so the group stays alive and
+    // the answer below never comes. The sender lives until the test
+    // ends, so a failure still drops it and frees the settlement.
+    let (killed, is_killed) = mpsc::channel::<()>();
+    let (_held, freed) = mpsc::channel::<()>();
+    reads.pause_at_settle(killed, freed);
     clock.advance(Duration::from_millis(1));
+    Deadline::after(DEADLINE).recv_or_fail(&is_killed, "the settlement's first kill");
     let error = Deadline::after(fakes::MUST_SUCCEED_WITHIN)
         .recv_or_fail(&finished, "the timed-out read")
         .expect_err("a command still running at its timeout");

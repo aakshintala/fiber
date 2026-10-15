@@ -57,6 +57,10 @@ pub(crate) struct Reads {
     /// test. Absent outside the unit tests.
     #[cfg(test)]
     command_pause: Mutex<Option<SpawnPause>>,
+    /// The timeout settlement's pause after its first kill, armed by a
+    /// test. Absent outside the unit tests.
+    #[cfg(test)]
+    settle_pause: Mutex<Option<SpawnPause>>,
 }
 
 /// One pause of a `credential` wait at its checks, for the interleaving
@@ -655,6 +659,11 @@ impl Reads {
             if empty {
                 return;
             }
+            // Held after the first kill when a test armed a pause: the
+            // take consumes it, so later passes run free and only the
+            // first kill ever pauses.
+            #[cfg(test)]
+            self.pause_after_settle_kill();
             if self.lock().cancelled {
                 return;
             }
@@ -874,6 +883,36 @@ impl Reads {
     fn pause_before_command_reap(&self) {
         let point = self
             .command_pause
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .take();
+        if let Some(point) = point {
+            match point.entered.send(()) {
+                Ok(()) | Err(_) => {}
+            }
+            match point.release.recv() {
+                Ok(()) | Err(_) => {}
+            }
+        }
+    }
+
+    /// Arms one pause after the timeout settlement's first kill: the
+    /// settlement sends on `entered` once it killed its group and blocks
+    /// until `release` arrives, so the test holds the group alive past
+    /// the first kill on every run. The pause is one-shot.
+    pub(crate) fn pause_at_settle(&self, entered: mpsc::Sender<()>, release: mpsc::Receiver<()>) {
+        *self
+            .settle_pause
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner) = Some(SpawnPause { entered, release });
+    }
+
+    /// Reports the settlement killed its group and blocks until the test
+    /// releases it. Runs free unless a test armed a pause meanwhile; the
+    /// first pass consumes it, so later passes run free.
+    fn pause_after_settle_kill(&self) {
+        let point = self
+            .settle_pause
             .lock()
             .unwrap_or_else(PoisonError::into_inner)
             .take();
