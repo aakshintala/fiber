@@ -46,14 +46,22 @@ fn tls_config_with(
     load: impl FnOnce() -> usize,
     fallback: RootCerts,
 ) -> TlsConfig {
-    let empty = cache.get_or_init(|| load() == 0);
+    let empty = empty_store_with(cache, load);
     TlsConfig::builder()
-        .root_certs(if *empty {
+        .root_certs(if empty {
             fallback
         } else {
             RootCerts::PlatformVerifier
         })
         .build()
+}
+
+pub(crate) fn empty_store_with(cache: &OnceLock<bool>, load: impl FnOnce() -> usize) -> bool {
+    *cache.get_or_init(|| load() == 0)
+}
+
+pub(crate) fn platform_store_is_empty() -> bool {
+    empty_store_with(&STORE_IS_EMPTY, platform_certificate_count)
 }
 
 /// How many certificates the platform's loader returns: the Linux system
