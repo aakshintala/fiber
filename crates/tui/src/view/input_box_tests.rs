@@ -138,10 +138,13 @@ fn the_cursor_hides_with_search_open() {
     let area = Rect::new(0, 0, 80, 12);
     let mut buf = Buffer::empty(area);
     crate::view::render(&app, area, &mut buf, None);
-    // Typing goes to the search box: the draft shows without a cursor
-    // (`docs/tui.md`, "The input box").
+    // Typing goes to the search box: the draft shows without its own
+    // cursor, while the search bar keeps its dim block (`docs/tui.md`,
+    // "The input box", "Search").
     for cell in buf.content.iter() {
-        assert_ne!(cell.symbol(), "█");
+        if cell.symbol() == "█" {
+            assert!(cell.modifier.contains(ratatui::style::Modifier::DIM), "only the bar's block shows");
+        }
     }
 }
 

@@ -154,6 +154,23 @@ fn copied_above_the_notice_rows() {
         Effect::Copy(_)
     ));
     assert!(app.copied());
+    // With the bar closed "Copied" sits on the top row, in `info` on
+    // the `surface` tint.
+    let (buf, _) = draw(&app, 60, 10);
+    let screen = super::super::text(&buf);
+    let at = screen.lines().position(|line| line.contains("Copied")).expect("Copied shows");
+    assert_eq!(at, 0);
+    let col = u16::try_from(
+        screen.lines().nth(at).map(|line| line[..line.find("Copied").expect("its column")].chars().count())
+            .expect("its column")
+            .saturating_sub(1),
+    )
+    .expect("a column");
+    for dx in 0..8 {
+        let cell = &buf[(col + dx, 0)];
+        assert_eq!(cell.fg, Role::Info.color(), "Copied {dx}");
+        assert_eq!(cell.bg, Role::Surface.color(), "Copied {dx}");
+    }
     insta::assert_snapshot!("copied_above_the_notice_rows", shown(&app, 60, 10));
 }
 

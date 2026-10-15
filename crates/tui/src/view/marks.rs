@@ -5,11 +5,11 @@
 
 use ratatui::buffer::Buffer;
 use ratatui::layout::{Position, Rect};
-use ratatui::style::{Color, Modifier, Style};
+use ratatui::style::{Modifier, Style};
 use ratatui::text::Span;
 
 use crate::app::{App, FindBar};
-use crate::look::BAR_TEXT;
+use crate::look::{BAR_TEXT, TAB_BAR};
 use crate::mouse::{Target, TargetId};
 use crate::theme::Role;
 
@@ -18,10 +18,9 @@ use crate::theme::Role;
 const SELECTION: Style = Style::new().bg(Role::Selection.color());
 
 /// A match's highlight: the `match` tint with white text, with no
-/// modifier (`docs/tui.md`, "Search").
-const MATCH: Style = Style::new()
-    .bg(Role::Match.color())
-    .fg(Color::Rgb(255, 255, 255));
+/// modifier (`docs/tui.md`, "Search"). White is the look's shared
+/// white, so no new colour is named outside the theme and the look.
+const MATCH: Style = Style::new().bg(Role::Match.color()).fg(TAB_BAR);
 
 /// The current match's highlight: the brighter `match_current` tint
 /// with black text, with no modifier (`docs/tui.md`, "Search").

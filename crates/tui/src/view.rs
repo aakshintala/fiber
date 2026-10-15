@@ -44,8 +44,9 @@ pub(crate) use home::max_question_scroll;
 /// The overlay shown while scrolled up once new output arrives.
 const NEW_BELOW: &str = " ↓ New messages below · End ";
 
-/// Shown on the conversation's top row after a copy.
-const COPIED: &str = "Copied";
+/// Shown in the conversation's top-right corner after a copy, below
+/// the search box when it is open.
+const COPIED: &str = " Copied ";
 
 /// The approval panel's tint when a standing rule or review asked.
 pub(crate) const APPROVAL_TINT: Style = Style::new().bg(Role::Approval.color());
@@ -588,11 +589,26 @@ fn conversation_rows(app: &App, area: Rect, buf: &mut Buffer, targets: &mut Vec<
         });
     }
     if app.copied() && area.height > 0 {
-        let width = to_u16(COPIED.len());
+        // " Copied " in `info` on the `surface` tint: on the row under
+        // the bar when the bar draws, else on the top row
+        // (`docs/tui.md`, "Selection and copy").
+        let offset = if app.find_bar().is_some() && !app.results_open() {
+            // The bar draws in the conversation's area with the scroll
+            // bar's column; this area drops that column on the main path.
+            let room = Rect::new(area.x, area.y, area.width.saturating_add(1), area.height);
+            match marks::bar_rect(room).map(|rect| rect.height) {
+                Some(3) => 5,
+                Some(_) => 1,
+                None => 0,
+            }
+        } else {
+            0
+        };
+        let y = area.y.saturating_add(offset);
+        let width = to_u16(crate::format::width(COPIED));
         let x = area.x.saturating_add(area.width.saturating_sub(width));
-        let y = area.y.saturating_add(u16::from(app.find_bar().is_some()));
-        let shown = usize::from(area.width);
-        buf.set_stringn(x, y, COPIED, shown, style(Role::Accent));
+        buf.set_style(Rect::new(x, y, width, 1), Style::new().bg(Role::Surface.color()));
+        buf.set_stringn(x, y, COPIED, usize::from(width), style(Role::Info));
     }
 }
 
