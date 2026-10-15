@@ -788,7 +788,7 @@ fn alt_a_opens_a_waiting_question_on_arrival() {
     app.on_line(permission(B, "r_b"));
     put_aside(&mut app);
     app.on_line(question(C, "r_c"));
-    assert!(panel_text(&app).contains(C), "{}", panel_text(&app));
+    assert!(panel_text(&app).contains("fix the parser"), "{}", panel_text(&app));
 }
 
 #[test]

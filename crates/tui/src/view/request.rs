@@ -184,20 +184,18 @@ pub(super) fn draw(
                 APPROVAL_TINT
             },
         );
-        // The stripe marks an approval; a form's stripe cell keeps the tint
-        // (`docs/tui.md`, "Look"). Too narrow for a stripe, there is none.
-        if panel.cursor.is_none() && area.width >= 3 {
-            surface::draw_stripe(
-                buf,
-                rect,
-                if panel.alert {
-                    Role::Error
-                } else {
-                    Role::Attention
-                },
-                tint,
-                false,
-            );
+        // The stripe marks an approval in `attention` or `error`, and a
+        // question form in `secondary` (`docs/tui.md`, "Look"). Too
+        // narrow for a stripe, there is none.
+        if area.width >= 3 {
+            let stripe = if panel.cursor.is_some() {
+                Role::Secondary
+            } else if panel.alert {
+                Role::Error
+            } else {
+                Role::Attention
+            };
+            surface::draw_stripe(buf, rect, stripe, tint, false);
         }
     }
     for (line, text) in panel.lines.iter().enumerate() {

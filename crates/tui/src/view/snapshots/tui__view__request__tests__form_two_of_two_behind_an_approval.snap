@@ -2,15 +2,15 @@
 source: crates/tui/src/view/request_tests.rs
 expression: "screen(&app, 60, 12).0"
 ---
-
-
-▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
-  question · s_aaaaaaaaaaaaaaaa · 2 of 2
-  [Base]  Name  Submit
-  Which branch?
-  › ( ) main (Recommended) · the default
-    ( ) dev
-    ✎ answer in words
-    Next →
-    Chat about this
-▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀
+▌ Question from s_aaaaaaaaaaaaaaaa · 2 questions, any can be
+▌ skipped · 2 of 2 Esc: chat about this
+▌
+▌ ←  ☐ Base    ☐ Name    ✔ Submit  →
+▌
+▌ Which branch?
+▌
+▌ ▸ 1 ( ) main (Recommended)  the default
+▌   2 ( ) dev
+▌   3 ✎ Type an answer, alone or with the options
+▌
+▌ ←→ question · ↑↓ choose · Enter chooses and moves on ·

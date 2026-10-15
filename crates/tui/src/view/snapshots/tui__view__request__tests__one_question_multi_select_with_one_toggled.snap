@@ -2,15 +2,15 @@
 source: crates/tui/src/view/request_tests.rs
 expression: "screen(&multi, 60, 12).0"
 ---
-
-
-
 ▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
-  question · s_aaaaaaaaaaaaaaaa · 1 of 1
-  Pick some?
-  › [x] alpha
-    [ ] beta
-    [ ] gamma
-    Submit
-    Chat about this
+▌ Question from s_aaaaaaaaaaaaaaaa      Esc: chat about this
+▌
+▌ Pick some?
+▌ choose any
+▌
+▌ ▸ 1 [x] alpha
+▌   2 [ ] beta
+▌   3 [ ] gamma
+▌    Submit
+▌    Chat about this
 ▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀
