@@ -7,7 +7,7 @@ use ring::rand::SecureRandom;
 use super::Endpoint;
 use crate::Error;
 
-fn accept(key: &str) -> String {
+pub(super) fn accept(key: &str) -> String {
     let mut digest = ring::digest::Context::new(&ring::digest::SHA1_FOR_LEGACY_USE_ONLY);
     digest.update(key.as_bytes());
     digest.update(b"258EAFA5-E914-47DA-95CA-C5AB0DC85B11");

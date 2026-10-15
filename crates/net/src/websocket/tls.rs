@@ -2,7 +2,10 @@
 use rustls::client::danger::{HandshakeSignatureValid, ServerCertVerified, ServerCertVerifier};
 use rustls::pki_types::{CertificateDer, ServerName, UnixTime};
 use rustls::{ClientConfig, DigitallySignedStruct, SignatureScheme};
-use std::sync::Arc;
+use std::io::{self, Cursor};
+use std::io::{Read, Write};
+use std::net::TcpStream;
+use std::sync::{Arc, Mutex, PoisonError};
 
 pub(super) fn client_config() -> Arc<ClientConfig> {
     let builder = ClientConfig::builder();
@@ -69,3 +72,157 @@ impl ServerCertVerifier for Platform {
             .supported_schemes()
     }
 }
+
+/// One socket handle per pump; no blocking TCP call holds the TLS state lock.
+pub(super) struct Socket {
+    pub(super) tcp: TcpStream,
+    shared: Arc<Shared>,
+    prefix: Cursor<Vec<u8>>,
+}
+struct Shared {
+    send: Mutex<()>,
+    state: Option<Mutex<rustls::ClientConnection>>,
+    #[cfg(test)]
+    pause: Option<Arc<super::Pause>>,
+}
+impl Socket {
+    pub(super) fn new(
+        mut tcp: TcpStream,
+        tail: Vec<u8>,
+        endpoint: &super::Endpoint,
+        via: &super::Via,
+    ) -> Result<Self, crate::Error> {
+        let (state, prefix) = if endpoint.secure {
+            let name =
+                ServerName::try_from(endpoint.host.clone()).map_err(|e| crate::Error::Tls {
+                    reason: e.to_string(),
+                })?;
+            let mut state =
+                rustls::ClientConnection::new(Arc::clone(&via.tls), name).map_err(|e| {
+                    crate::Error::Tls {
+                        reason: e.to_string(),
+                    }
+                })?;
+            state.set_buffer_limit(None);
+            if !tail.is_empty() {
+                state.read_tls(&mut Cursor::new(tail))?;
+                state.process_new_packets().map_err(|e| crate::Error::Tls {
+                    reason: e.to_string(),
+                })?;
+            }
+            while state.is_handshaking() {
+                state.complete_io(&mut tcp).map_err(|e| {
+                    if e.kind() == io::ErrorKind::InvalidData {
+                        crate::Error::Tls {
+                            reason: e.to_string(),
+                        }
+                    } else {
+                        super::tunnel::io_error(e, via.limits.connect())
+                    }
+                })?;
+            }
+            (Some(Mutex::new(state)), Vec::new())
+        } else {
+            (None, tail)
+        };
+        Ok(Self {
+            tcp,
+            shared: Arc::new(Shared {
+                send: Mutex::new(()),
+                state,
+                #[cfg(test)]
+                pause: via.pause.clone(),
+            }),
+            prefix: Cursor::new(prefix),
+        })
+    }
+    pub(super) fn try_clone(&self) -> io::Result<Self> {
+        Ok(Self {
+            tcp: self.tcp.try_clone()?,
+            shared: Arc::clone(&self.shared),
+            prefix: Cursor::new(Vec::new()),
+        })
+    }
+    fn outgoing(&self, plaintext: Option<&[u8]>) -> io::Result<Vec<u8>> {
+        let Some(state) = &self.shared.state else {
+            return Ok(plaintext.unwrap_or_default().to_vec());
+        };
+        let mut state = state.lock().unwrap_or_else(PoisonError::into_inner);
+        if let Some(bytes) = plaintext {
+            state.writer().write_all(bytes)?;
+        }
+        let mut records = Vec::new();
+        while state.wants_write() {
+            state.write_tls(&mut records)?;
+        }
+        Ok(records)
+    }
+    fn send(&self, plaintext: Option<&[u8]>) -> io::Result<()> {
+        let _send = self
+            .shared
+            .send
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner);
+        let records = self.outgoing(plaintext)?;
+        #[cfg(test)]
+        if std::thread::current().name() == Some("net-ws-out")
+            && let Some(pause) = &self.shared.pause
+        {
+            pause.wait();
+        }
+        (&self.tcp).write_all(&records)
+    }
+}
+impl Read for Socket {
+    fn read(&mut self, bytes: &mut [u8]) -> io::Result<usize> {
+        if bytes.is_empty() {
+            return Ok(0);
+        }
+        let n = self.prefix.read(bytes)?;
+        if n != 0 {
+            return Ok(n);
+        }
+        let Some(state) = &self.shared.state else {
+            return self.tcp.read(bytes);
+        };
+        loop {
+            let read = state
+                .lock()
+                .unwrap_or_else(PoisonError::into_inner)
+                .reader()
+                .read(bytes);
+            match read {
+                Ok(n) => return Ok(n),
+                Err(e) if e.kind() == io::ErrorKind::WouldBlock => {}
+                Err(e) => return Err(e),
+            }
+            let mut encrypted = [0; 16_384];
+            let n = self.tcp.read(&mut encrypted)?;
+            if n == 0 {
+                return Ok(0);
+            }
+            let pending = {
+                let mut state = state.lock().unwrap_or_else(PoisonError::into_inner);
+                state.read_tls(&mut Cursor::new(encrypted.get(..n).unwrap_or_default()))?;
+                state.process_new_packets().map_err(io::Error::other)?;
+                state.wants_write()
+            };
+            if pending {
+                self.send(None)?;
+            }
+        }
+    }
+}
+impl Write for Socket {
+    fn write(&mut self, bytes: &[u8]) -> io::Result<usize> {
+        self.send(Some(bytes))?;
+        Ok(bytes.len())
+    }
+    fn flush(&mut self) -> io::Result<()> {
+        self.send(None)
+    }
+}
+
+#[cfg(test)]
+#[path = "tls_tests.rs"]
+pub(crate) mod tests;
