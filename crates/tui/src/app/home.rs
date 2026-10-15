@@ -79,6 +79,10 @@ impl App {
     pub(crate) fn set_home(&mut self, launch: Launch) {
         self.set_reduced_motion(launch.reduced_motion);
         self.set_project(launch.project.clone());
+        // A launch that saved the rail hidden starts with it hidden;
+        // this is the launch's state, not a person-caused hide, so it
+        // queues nothing.
+        let rail_hidden = launch.rail_hidden;
         // The picker's scope starts from launch, then from what
         // `/scoped-models` saves.
         self.model_picker.scoped = launch.scoped_models.clone();
@@ -97,6 +101,9 @@ impl App {
             questions: Questions::default(),
             left_after_attach: None,
         });
+        if rail_hidden {
+            self.chrome.hide_rail();
+        }
     }
 
     /// Stores bare `fiber`'s `--model` and `-c`, normalized into the

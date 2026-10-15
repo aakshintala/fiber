@@ -45,11 +45,10 @@ pub(crate) struct Shares {
 /// Which regions the session screen wants, before width decides.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub(crate) struct Want {
-    /// The rail: two or more sessions are live and the person has not
-    /// hidden it.
+    /// The rail: the person has not hidden it.
     pub(crate) rail: bool,
-    /// Two or more sessions are live, hidden or not: a rail not drawn
-    /// leaves its grip.
+    /// The rail is wanted, hidden or not: a rail not drawn leaves its
+    /// grip.
     pub(crate) rail_by_count: bool,
     /// The panel: the person has not hidden it.
     pub(crate) panel: bool,
@@ -61,8 +60,8 @@ pub(crate) struct Want {
 pub(crate) struct Layout {
     /// The rail, its last column the draggable edge.
     pub(crate) rail: Option<Rect>,
-    /// The hidden rail's grip: column 0, while the rail is wanted by count
-    /// and not drawn.
+    /// The hidden rail's grip: column 0, while the rail is wanted and
+    /// not drawn.
     pub(crate) grip: Option<Rect>,
     /// The conversation column, its header row included.
     pub(crate) column: Rect,
@@ -177,7 +176,7 @@ pub(crate) fn share_of(width: u16, share: f64, floor: u16, ceiling: u16) -> u16 
 }
 
 /// Splits a `width` by `height` screen. The rail sheds before the panel:
-/// the panel's fit never counts the rail. A rail wanted by count but not
+/// the panel's fit never counts the rail. A wanted rail that is not
 /// drawn leaves a one-column grip at the left edge, and the panel shows
 /// only while the conversation keeps its minimum beside the grip.
 pub(crate) fn split(width: u16, height: u16, shares: &Shares, want: &Want) -> Layout {

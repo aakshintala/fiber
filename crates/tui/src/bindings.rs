@@ -297,7 +297,7 @@ pub(crate) const BINDINGS: &[Binding] = &[
         when: "",
         description: "Show or hide the rail",
         keys: "⌥R",
-        other_paths: "drag its edge",
+        other_paths: "/rail; drag its edge",
         contexts: Contexts::ALL,
         defaults: &["alt+r"],
         events: &[Canon::Key(Key::AltR)],

@@ -2,9 +2,9 @@
 source: crates/tui/src/view/item_tests.rs
 expression: "rows.join(\"\\n\")"
 ---
-fix the parser › ◆ task j_1                                                    ✕
-● running · harness claude · model other/model · — · 0s · session s_ddd · ■ stop
-Output since this terminal attached · /tmp/other.out
+ fix the parser › ◆ task j_1                                                   ✕
+ ● running · harness claude · model other/model · — · 0s · session s_dd · ■ stop
+ Output since this terminal attached · /tmp/other.out
 
 
 
@@ -13,16 +13,16 @@ Output since this terminal attached · /tmp/other.out
 
 
 
+⋮
+⋮
+⋮
 
 
 
-
-
-
-● task j_1
-  claude · other/model
-▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
-▌ › █
-▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀
- $0.00
- ◆ 1 delegate running
+ ● task j_1
+   claude · other/model
+ ▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
+ ▌ › █
+ ▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀
+  0 waiting  │  $0.00
+  ◆ 1 delegate running

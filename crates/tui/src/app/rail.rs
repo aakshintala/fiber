@@ -145,15 +145,10 @@ impl App {
             return None;
         }
         if *key == Key::AltR {
-            let Some(layout) = self.chrome.layout() else {
+            let Some(_) = self.chrome.layout() else {
                 return Some(Effect::None);
             };
-            if layout.rail.is_some() {
-                self.chrome.hide_rail();
-                self.settle();
-                return Some(Effect::None);
-            }
-            return Some(self.show_rail());
+            return Some(self.toggle_rail());
         }
         let Key::AltDigit(digit) = key else {
             return None;
@@ -168,12 +163,40 @@ impl App {
         Some(card.map_or(Effect::None, |key| self.switch_to(key)))
     }
 
-    /// ⌥R on a hidden rail, or a click on "N waiting": the rail shows,
-    /// and when the screen has no room for it beside a drawn panel, the
-    /// panel hides as ⌥P hides it (`docs/tui.md`, "Shedding"). ⌥P brings
-    /// the panel back, and the rail sheds again.
+    /// Hides the rail and saves the choice as `tui.rail.shown` off, so
+    /// it stays hidden across launches until shown (`docs/tui.md`, "The
+    /// rail"). The caller settles.
+    pub(super) fn hide_rail(&mut self) {
+        self.chrome.hide_rail();
+        self.queue_save("tui.rail.shown", "false".to_owned());
+    }
+
+    /// Shows or hides the rail and saves the choice as
+    /// `tui.rail.shown` (`docs/tui.md`, "The rail"): nothing without
+    /// the session screen's layout; a drawn rail hides; otherwise the
+    /// rail shows.
+    pub(super) fn toggle_rail(&mut self) -> Effect {
+        let Some(layout) = self.chrome.layout() else {
+            return Effect::None;
+        };
+        if layout.rail.is_some() {
+            self.hide_rail();
+            self.settle();
+            return Effect::None;
+        }
+        self.show_rail()
+    }
+
+    /// A person-caused show of the rail (⌥R on a hidden rail, `/rail`,
+    /// a click on "N waiting", a drag of the grip past the floor): the
+    /// rail shows and the choice saves as `tui.rail.shown` on, so it
+    /// stays shown across launches. When the screen has no room for it
+    /// beside a drawn panel, the panel hides as ⌥P hides it
+    /// (`docs/tui.md`, "Shedding"). ⌥P brings the panel back, and the
+    /// rail sheds again.
     pub(super) fn show_rail(&mut self) -> Effect {
         self.chrome.show_rail();
+        self.queue_save("tui.rail.shown", "true".to_owned());
         self.settle();
         if self
             .chrome

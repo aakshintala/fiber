@@ -16,8 +16,6 @@ use crate::layout::{self, Layout, Shares, Want};
 pub(crate) struct HomeState {
     /// The rail's and the panel's shares from the launch description.
     pub(crate) shares: Shares,
-    /// How many sessions are live.
-    pub(crate) live: usize,
     /// Home draws: no layout applies.
     pub(crate) on_home: bool,
 }
@@ -55,18 +53,17 @@ impl Chrome {
     }
 
     /// Lays a `width` by `height` screen out, returning whether the
-    /// regions moved. The rail is wanted while two or more sessions are
-    /// live and the person has not hidden it.
+    /// regions moved. The rail is wanted unless the person hid it; a
+    /// rail the width sheds leaves its grip.
     pub(crate) fn lay_out(&mut self, width: u16, height: u16, home: Option<HomeState>) -> bool {
         let before = self.layout;
         self.floor = home.and_then(|_| layout::floor_line(width, height));
         self.layout = home
             .filter(|home| !home.on_home && self.floor.is_none())
             .map(|home| {
-                let by_count = home.live >= 2;
                 let want = Want {
-                    rail: by_count && !self.rail_hidden,
-                    rail_by_count: by_count,
+                    rail: !self.rail_hidden,
+                    rail_by_count: true,
                     panel: !self.panel_hidden,
                 };
                 layout::split(width, height, &home.shares, &want)
@@ -201,7 +198,6 @@ impl App {
                 rail: home.launch.rail_share,
                 panel: home.launch.panel_share,
             },
-            live: home.sessions.live().len(),
             on_home: self.on_home(),
         });
         let moved = self

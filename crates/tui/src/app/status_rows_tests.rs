@@ -20,20 +20,28 @@ const CARDS: [&str; 5] = ["session", "changed_files", "delegates", "jobs", "quot
 /// Whether `row` is blank once the bar's glyph is trimmed: a gap row in
 /// the card (`docs/tui.md`, "Turns").
 fn blank_gap(row: &str) -> bool {
-    row.trim_end_matches([' ', '█', '│', '┃']).is_empty()
+    // The grip's ⋮ and the scroll bar are not content: a row holding
+    // only blanks, edges and those marks is a gap.
+    row.trim_matches([' ', '█', '│', '┃', '⋮']).is_empty()
 }
 
 /// Whether `row` is a right-aligned prompt bubble edge inside the column:
-/// the bar's glyph may end it.
+/// the bar's glyph may end it. The grip's ⋮ at mid-height may sit in
+/// column 0, where the input box's edge overlaps it on a short screen:
+/// it reads as the blank it covers. The edge starts at the column's
+/// own left edge, past nothing.
 fn prompt_edge(row: &str, app: &App) -> bool {
     let left = app
         .chrome()
         .layout()
         .map_or(0, |layout| usize::from(layout.column.x));
     let row = row.trim_end_matches(['█', '│', '┃']);
+    let row = row
+        .strip_prefix('⋮')
+        .map_or_else(|| row.to_owned(), |rest| format!(" {rest}"));
     row.chars()
         .position(|cell| cell != ' ')
-        .is_some_and(|first| first > left)
+        .is_some_and(|first| first >= left)
         && row.chars().all(|cell| matches!(cell, ' ' | '▄' | '▀'))
 }
 

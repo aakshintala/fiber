@@ -1428,10 +1428,10 @@ fn four_notices_three_rows_and_more() {
     // Three rows oldest first, then "+1 more" directly above the
     // working line.
     for (at, text) in [
-        (working - 4, "  ⚠ extension_failed · Notice 1."),
-        (working - 3, "  ⚠ extension_failed · Notice 2."),
-        (working - 2, "  ⚠ extension_failed · Notice 3."),
-        (working - 1, "  +1 more"),
+        (working - 4, "   ⚠ extension_failed · Notice 1."),
+        (working - 3, "   ⚠ extension_failed · Notice 2."),
+        (working - 2, "   ⚠ extension_failed · Notice 3."),
+        (working - 1, "   +1 more"),
     ] {
         let row = full_row(&buf, at, 100);
         assert!(row.starts_with(text), "row {at}: {row:?}");
@@ -1483,7 +1483,7 @@ fn short_screens_draw_what_fits_above_the_working_line() {
         let drawn = (0..height)
             .filter(|y| buf[(99, *y)].symbol() == "✕")
             .count()
-            + usize::from((0..height).any(|y| full_row(&buf, y, 100).starts_with("  +")));
+            + usize::from((0..height).any(|y| full_row(&buf, y, 100).contains("+1 more")));
         assert_eq!(drawn, 4.min(working as usize), "height {height}");
         assert_eq!(
             app.conversation_height(),
@@ -1562,8 +1562,9 @@ fn a_long_notice_is_cut_with_ellipsis_before_its_cross() {
     let cells: Vec<char> = row.chars().collect();
     assert_eq!(cells[usize::from(width) - 3], '…');
     assert_eq!(cells[usize::from(width) - 1], '✕');
-    // A message of exactly the text budget draws without "…".
-    let budget = usize::from(width) - 2 - crate::format::width("  ⚠ extension_failed · ");
+    // A message of exactly the text budget draws without "…": one less
+    // past the grip, which takes column 0.
+    let budget = usize::from(width) - 3 - crate::format::width("  ⚠ extension_failed · ");
     let mut app = running(width, 24);
     app.on_line(session_line(
         S_A,

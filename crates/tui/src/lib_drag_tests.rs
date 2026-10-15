@@ -117,6 +117,51 @@ fn step(lp: &mut super::Loop<TestBackend>, bytes: &[u8]) {
 }
 
 #[test]
+fn alt_r_saves_the_choice_through_the_configure_seam() {
+    let fake = Arc::new(Fake::new(Vec::new()));
+    let mut lp = wide(Some(Arc::clone(&fake)));
+    lp.app.on_line(live(A));
+    lp.app.on_line(live(B));
+    feed(&mut lp, vec![Input::Bytes(b"\x1b[114;3u".to_vec())]);
+    feed(&mut lp, vec![Input::Bytes(b"\x1b[114;3u".to_vec())]);
+    // Each ⌥R writes the rail's new state to the global file, in order.
+    assert_eq!(
+        fake.writes(),
+        vec![
+            (
+                PathBuf::from("/w"),
+                Layer::Global,
+                "tui.rail.shown".to_owned(),
+                "false".to_owned()
+            ),
+            (
+                PathBuf::from("/w"),
+                Layer::Global,
+                "tui.rail.shown".to_owned(),
+                "true".to_owned()
+            ),
+        ]
+    );
+}
+
+#[test]
+fn a_failed_rail_save_is_a_notice() {
+    let fake = Arc::new(Fake::new(Vec::new()));
+    if let Ok(mut refuse) = fake.refuse.lock() {
+        *refuse = Some("disk full".to_owned());
+    }
+    let mut lp = wide(Some(fake));
+    lp.app.on_line(live(A));
+    lp.app.on_line(live(B));
+    feed(&mut lp, vec![Input::Bytes(b"\x1b[114;3u".to_vec())]);
+    assert!(
+        shown(&lp).contains("Could not save tui.rail.shown: disk full"),
+        "{}",
+        shown(&lp)
+    );
+}
+
+#[test]
 fn a_drag_saves_through_the_configure_seam() {
     let fake = Arc::new(Fake::new(Vec::new()));
     let mut lp = wide(Some(Arc::clone(&fake)));

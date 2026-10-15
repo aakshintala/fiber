@@ -707,11 +707,11 @@ impl<B: Backend> Loop<B> {
         }
     }
 
-    /// Saves the shares a drag's release queued, in order, through the
-    /// configuration seam.
+    /// Saves the settings a show, hide or release queued, in order,
+    /// through the configuration seam.
     fn save_shares(&mut self) {
-        for (key, share) in self.app.take_saves() {
-            self.app.save_share(key, share);
+        for (key, value) in self.app.take_saves() {
+            self.app.save_setting(key, &value);
         }
     }
 

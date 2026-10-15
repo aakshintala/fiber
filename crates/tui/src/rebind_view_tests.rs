@@ -182,5 +182,6 @@ fn the_screen_draws_first_on_home_and_attached() {
     let mut app = attached(80, 24);
     slash_keys(&mut app);
     let rows: Vec<String> = screen(&app, 80, 24).lines().map(str::to_owned).collect();
-    assert!(rows.iter().any(|row| row.starts_with(" Keys")), "{rows:?}");
+    // Attached, the grip takes column 0, so the view starts one in.
+    assert!(rows.iter().any(|row| row.starts_with("  Keys")), "{rows:?}");
 }

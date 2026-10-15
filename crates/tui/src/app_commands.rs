@@ -457,6 +457,10 @@ impl App {
                 self.draft.clear();
                 self.toggle_panel()
             }
+            "rail" => {
+                self.draft.clear();
+                self.toggle_rail()
+            }
             "handoff" => {
                 let args = (!rest.is_empty()).then(|| json!({ "instructions": rest }));
                 self.send_command("handoff", args)

@@ -1043,6 +1043,13 @@ fn panel_rect(app: &App) -> Option<ratatui::layout::Rect> {
     app.chrome().layout().and_then(|layout| layout.panel)
 }
 
+/// Types `text` into the draft.
+fn type_text(app: &mut App, text: &str) {
+    for ch in text.chars() {
+        press(app, Key::Char(ch));
+    }
+}
+
 /// `A` and `B` live with `A` on screen, at `width` by 40.
 fn sized(width: u16) -> App {
     let mut app = opened(&[A, B], A);
@@ -1056,6 +1063,11 @@ fn alt_r_hides_and_shows() {
     assert!(rail_rect(&app).is_some());
     assert_eq!(press(&mut app, Key::AltR), Effect::None);
     assert!(rail_rect(&app).is_none());
+    // Hiding the rail is person-caused: it saves off.
+    assert_eq!(
+        app.take_saves(),
+        vec![("tui.rail.shown", "false".to_owned())]
+    );
     assert!(
         app.chrome()
             .layout()
@@ -1065,6 +1077,11 @@ fn alt_r_hides_and_shows() {
     assert!(panel_rect(&app).is_some());
     assert_eq!(press(&mut app, Key::AltR), Effect::None);
     assert!(rail_rect(&app).is_some());
+    // Showing it saves on.
+    assert_eq!(
+        app.take_saves(),
+        vec![("tui.rail.shown", "true".to_owned())]
+    );
     // The rail fits beside the panel, so the panel stays.
     assert!(panel_rect(&app).is_some());
 }
@@ -1085,6 +1102,8 @@ fn a_rail_hidden_for_width_returns_when_the_screen_grows() {
     app.set_size(136, 40);
     assert!(rail_rect(&app).is_some());
     assert!(panel_rect(&app).is_some());
+    // Shedding for width is not person-caused: nothing saved.
+    assert!(app.take_saves().is_empty());
 }
 
 #[test]
@@ -1094,6 +1113,11 @@ fn alt_r_on_a_rail_hidden_for_width_hides_the_panel_and_shows_the_rail() {
     press(&mut app, Key::AltR);
     assert_eq!(rail_rect(&app).map(|rail| rail.width), Some(22));
     assert!(panel_rect(&app).is_none());
+    // The person asked to show: it saves on, even from a width shed.
+    assert_eq!(
+        app.take_saves(),
+        vec![("tui.rail.shown", "true".to_owned())]
+    );
 }
 
 #[test]
@@ -1113,9 +1137,15 @@ fn alt_p_after_that_brings_the_panel_back_and_the_rail_sheds() {
     let mut app = sized(130);
     press(&mut app, Key::AltR);
     assert!(panel_rect(&app).is_none());
+    assert_eq!(
+        app.take_saves(),
+        vec![("tui.rail.shown", "true".to_owned())]
+    );
     press(&mut app, Key::AltP);
     assert!(panel_rect(&app).is_some());
     assert!(rail_rect(&app).is_none());
+    // The shed for width saves nothing more.
+    assert!(app.take_saves().is_empty());
 }
 
 #[test]
@@ -1164,6 +1194,57 @@ fn a_click_on_n_waiting_shows_the_rail() {
     let mut app = sized(200);
     press(&mut app, Key::AltR);
     assert!(rail_rect(&app).is_none());
+    assert_eq!(
+        app.take_saves(),
+        vec![("tui.rail.shown", "false".to_owned())]
+    );
     app.on_click(TargetId::Panel(crate::app::panel::Spot::Waiting));
+    assert!(rail_rect(&app).is_some());
+    // The click is person-caused: it saves on.
+    assert_eq!(
+        app.take_saves(),
+        vec![("tui.rail.shown", "true".to_owned())]
+    );
+}
+
+#[test]
+fn slash_rail_hides_a_drawn_rail_and_saves_false() {
+    let mut app = sized(200);
+    assert!(rail_rect(&app).is_some());
+    type_text(&mut app, "/rail");
+    press(&mut app, Key::Enter);
+    assert!(rail_rect(&app).is_none());
+    assert!(app.input().is_empty());
+    assert_eq!(
+        app.take_saves(),
+        vec![("tui.rail.shown", "false".to_owned())]
+    );
+}
+
+#[test]
+fn slash_rail_shows_a_hidden_rail_and_saves_true() {
+    let mut app = sized(200);
+    press(&mut app, Key::AltR);
+    assert!(rail_rect(&app).is_none());
+    assert_eq!(
+        app.take_saves(),
+        vec![("tui.rail.shown", "false".to_owned())]
+    );
+    type_text(&mut app, "/rail");
+    press(&mut app, Key::Enter);
+    assert!(rail_rect(&app).is_some());
+    assert_eq!(
+        app.take_saves(),
+        vec![("tui.rail.shown", "true".to_owned())]
+    );
+}
+
+#[test]
+fn slash_rail_on_home_does_nothing() {
+    let mut app = with(&[A, B]);
+    type_text(&mut app, "/rail");
+    press(&mut app, Key::Enter);
+    assert!(app.take_saves().is_empty());
+    open(&mut app, A);
     assert!(rail_rect(&app).is_some());
 }
