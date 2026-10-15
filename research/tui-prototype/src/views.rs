@@ -64,7 +64,7 @@ const CASES: &[Case<Look>] = &[
     Case {
         name: "search-results",
         help: "every search match with its surrounding lines",
-        check: "every match one row each with the lines around it, the current match brighter, and the jump hint.",
+        check: "every match one row each with the lines around it, each match's header row ending in a dim `turn N`, the current match brighter, and the jump hint.",
         build: || Look {
             kind: Kind::SearchResults,
         },
