@@ -831,15 +831,8 @@ fn hub_target(named: Option<&str>) -> Result<(PathBuf, doors::hub::Target), Fail
     let home = config::fiber_home_from_env().map_err(|e| failed(e.code(), e))?;
     let workspace = std::env::current_dir()
         .map_err(|e| failed(ErrorCode::IoFailed, format!("the current directory: {e}")))?;
-    let (_, project) = ::cli::project_of(&home, &workspace)?;
-    let config = Config::load(Sources {
-        home: home.clone(),
-        workspace,
-        project,
-        overrides: Vec::new(),
-    })
-    .map_err(|e| failed(e.code(), e))?;
-    let target = doors::hub::target(&config, &home, named).map_err(|e| failed(e.code(), e))?;
+    let target =
+        doors::hub::load_target(&home, &workspace, named).map_err(|e| failed(e.code(), e))?;
     Ok((home, target))
 }
 

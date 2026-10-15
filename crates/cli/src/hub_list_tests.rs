@@ -12,11 +12,7 @@ fn entry(home: &Path, name: &str) -> Option<Value> {
     config::get_global(home, &format!("hubs.\"{name}\".address")).unwrap()
 }
 
-fn pair(
-    home: &Path,
-    accepted: bool,
-    break_config: bool,
-) -> (Result<(), Failure>, Vec<u8>, Vec<u8>) {
+fn pair(home: &Path, accepted: bool, break_config: bool) -> (Result<(), Failure>, Vec<u8>) {
     let (client, mut server) = UnixStream::pair().unwrap();
     let (done, done_rx) = mpsc::channel();
     let (served, served_rx) = mpsc::channel();
@@ -25,7 +21,7 @@ fn pair(
         let client_home = home.to_owned();
         scope.spawn(move || {
             let mut input = Cursor::new(b"  ABCDE12345\n");
-            let mut out = Vec::new();
+
             let mut err = Vec::new();
             let mut stream = Some(client);
             let result = add_run(
@@ -36,10 +32,9 @@ fn pair(
                 &mut Plain,
                 &mut input,
                 &mut err,
-                &mut out,
                 &mut |_| Ok((stream.take().unwrap(), hello())),
             );
-            done.send((result, out, err)).unwrap();
+            done.send((result, err)).unwrap();
         });
         scope.spawn(move || {
             server.set_read_timeout(Some(Duration::from_secs(5))).unwrap();
@@ -65,9 +60,9 @@ fn hello() -> contract::HubLine {
 #[test]
 fn add_pairs_stores_private_token_entry_and_default_and_prints_nothing() {
     let dir = fakes::TempDir::new("fiber-hub-add");
-    let (result, out, err) = pair(dir.path(), true, false);
+    let (result, err) = pair(dir.path(), true, false);
     result.unwrap();
-    assert!(out.is_empty());
+
     assert_eq!(err, b"pairing code: ");
     assert_eq!(entry(dir.path(), "box"), Some(json!("ws://box")));
     assert_eq!(
@@ -98,11 +93,11 @@ fn refused_pairing_or_failed_entry_write_leaves_no_token() {
         (true, true, ErrorCode::IoFailed),
     ] {
         let dir = fakes::TempDir::new("fiber-hub-add-failed");
-        let (result, out, err) = pair(dir.path(), accepted, broken);
+        let (result, err) = pair(dir.path(), accepted, broken);
         let error = result.unwrap_err();
         assert_eq!(error.code, code);
         assert!(!error.message.contains("ABCDE12345"));
-        assert!(out.is_empty());
+
         assert_eq!(err, b"pairing code: ");
         assert!(
             config::read_credential(dir.path(), "hubs", "box")
@@ -118,7 +113,7 @@ fn refused_pairing_or_failed_entry_write_leaves_no_token() {
 #[test]
 fn unix_add_never_reads_or_connects_and_default_is_optional() {
     let dir = fakes::TempDir::new("fiber-hub-add-unix");
-    let mut out = Vec::new();
+
     add_run(
         dir.path(),
         "fwd",
@@ -127,11 +122,10 @@ fn unix_add_never_reads_or_connects_and_default_is_optional() {
         &mut NeverKeys,
         &mut Cursor::new([]),
         &mut Vec::new(),
-        &mut out,
         &mut |_| panic!("unix add must not connect"),
     )
     .unwrap();
-    assert!(out.is_empty());
+
     assert_eq!(entry(dir.path(), "fwd"), Some(json!("unix:/tmp/hub")));
     assert!(
         config::get_global(dir.path(), "hub.default")
@@ -151,7 +145,6 @@ fn unix_add_never_reads_or_connects_and_default_is_optional() {
         &mut NeverKeys,
         &mut Cursor::new([]),
         &mut Vec::new(),
-        &mut out,
         &mut |_| panic!("existing name must not connect"),
     )
     .unwrap_err();
@@ -170,7 +163,6 @@ fn empty_code_and_unreachable_hub_store_nothing() {
         &mut Plain,
         &mut Cursor::new(b" \n"),
         &mut Vec::new(),
-        &mut Vec::new(),
         &mut |_| panic!("empty code must not connect"),
     )
     .unwrap_err();
@@ -182,7 +174,6 @@ fn empty_code_and_unreachable_hub_store_nothing() {
         false,
         &mut Plain,
         &mut Cursor::new(b"ABCDE12345\n"),
-        &mut Vec::new(),
         &mut Vec::new(),
         &mut |_| {
             Err(doors::Error::Hello {
@@ -221,11 +212,10 @@ fn add_and_remove_refuse_a_held_name_lock_without_touching_its_token() {
         &mut NeverKeys,
         &mut Cursor::new([]),
         &mut Vec::new(),
-        &mut Vec::new(),
         &mut |_| panic!("held lock must not connect"),
     )
     .unwrap_err();
-    let remove = remove_run(dir.path(), "box", &mut Vec::new()).unwrap_err();
+    let remove = remove_run(dir.path(), "box").unwrap_err();
     for error in [add, remove] {
         assert_eq!(error.code, ErrorCode::IoFailed);
         assert!(
@@ -294,7 +284,6 @@ fn remove_deletes_the_entry_token_and_only_a_matching_default() {
             &mut NeverKeys,
             &mut Cursor::new([]),
             &mut Vec::new(),
-            &mut Vec::new(),
             &mut |_| panic!("unix add must not connect"),
         )
         .unwrap();
@@ -306,9 +295,9 @@ fn remove_deletes_the_entry_token_and_only_a_matching_default() {
         )
         .unwrap();
         config::replace_global(dir.path(), "hub.default", Some(json!(default))).unwrap();
-        let mut out = Vec::new();
-        remove_run(dir.path(), "box", &mut out).unwrap();
-        assert!(out.is_empty());
+
+        remove_run(dir.path(), "box").unwrap();
+
         assert!(entry(dir.path(), "box").is_none());
         assert!(
             config::read_credential(dir.path(), "hubs", "box")
@@ -324,7 +313,7 @@ fn remove_deletes_the_entry_token_and_only_a_matching_default() {
             }
         );
         assert_eq!(
-            remove_run(dir.path(), "box", &mut out).unwrap_err().code,
+            remove_run(dir.path(), "box").unwrap_err().code,
             ErrorCode::Usage
         );
     }
@@ -411,7 +400,6 @@ fn public_remove_deletes_state_and_reports_usage_when_absent() {
         true,
         &mut NeverKeys,
         &mut Cursor::new([]),
-        &mut Vec::new(),
         &mut Vec::new(),
         &mut |_| panic!("unix does not connect"),
     )

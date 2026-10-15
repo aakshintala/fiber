@@ -31,6 +31,18 @@ impl Target {
     }
 }
 
+/// Loads the workspace's configuration layers and resolves its selected hub.
+pub fn load_target(home: &Path, workspace: &Path, named: Option<&str>) -> Result<Target, Error> {
+    let project = config::ProjectKey::new(log::project_key(&crate::project(workspace)))?;
+    let config = config::Config::load(config::Sources {
+        home: home.to_path_buf(),
+        workspace: workspace.to_path_buf(),
+        project,
+        overrides: Vec::new(),
+    })?;
+    target(&config, home, named)
+}
+
 /// Resolves the flag or configured default from this command's loaded layers.
 pub fn target(config: &config::Config, home: &Path, named: Option<&str>) -> Result<Target, Error> {
     let default = config

@@ -13,7 +13,7 @@ pub fn hub_add(name: &str, address: &str, default: bool, clock: &dyn Clock) -> i
     with_dirs(|home, _| {
         let mut input = io::stdin().lock();
         let mut err = io::stderr();
-        let mut out = io::stdout();
+
         let mut keys: Box<dyn KeyReader> = if io::stdin().is_terminal() && err.is_terminal() {
             Box::new(NoEcho)
         } else {
@@ -27,7 +27,6 @@ pub fn hub_add(name: &str, address: &str, default: bool, clock: &dyn Clock) -> i
             keys.as_mut(),
             &mut input,
             &mut err,
-            &mut out,
             &mut |address| doors::hub::connect_unpaired(address, clock),
         )
     })
@@ -35,7 +34,7 @@ pub fn hub_add(name: &str, address: &str, default: bool, clock: &dyn Clock) -> i
 
 /// Removes a named hub, its device token and a matching default.
 pub fn hub_remove(name: &str) -> i32 {
-    with_dirs(|home, _| remove_run(home, name, &mut io::stdout()))
+    with_dirs(|home, _| remove_run(home, name))
 }
 
 #[allow(
@@ -50,10 +49,8 @@ fn add_run(
     keys: &mut dyn KeyReader,
     input: &mut dyn BufRead,
     err: &mut dyn Write,
-    out: &mut dyn Write,
     connect: &mut dyn FnMut(&Address) -> Result<Hub, doors::Error>,
 ) -> Result<(), Failure> {
-    let _ = out;
     doors::hub::check_name(name).map_err(door_failure)?;
     let parsed = Address::parse(address).map_err(door_failure)?;
     let held = lock_name(home, name)?;
@@ -125,8 +122,7 @@ fn add_run(
     Ok(())
 }
 
-fn remove_run(home: &Path, name: &str, out: &mut dyn Write) -> Result<(), Failure> {
-    let _ = out;
+fn remove_run(home: &Path, name: &str) -> Result<(), Failure> {
     doors::hub::check_name(name).map_err(door_failure)?;
     let held = lock_name(home, name)?;
     let project = config::ProjectKey::new("hub-list").map_err(crate::mcp::config_failure)?;

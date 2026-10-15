@@ -13,7 +13,7 @@
 mod address;
 mod listed;
 pub use address::{Address, NAME_RULE, check_name};
-pub use listed::{Target, connect_target, connect_unpaired, target};
+pub use listed::{Target, connect_target, connect_unpaired, load_target, target};
 
 use std::io::{self, Read};
 use std::os::unix::net::UnixStream;

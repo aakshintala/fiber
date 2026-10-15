@@ -233,6 +233,35 @@ fn listed_name(target: Target) -> String {
 }
 
 #[test]
+fn load_target_uses_the_workspaces_layered_config_and_propagates_load_errors() {
+    let dir = fakes::TempDir::new("fiber-load-listed-target");
+    let home = dir.path();
+    let workspace = home.join("workspace");
+    std::fs::create_dir_all(&workspace).unwrap();
+    write(
+        &home.join("config.json"),
+        json!({"hub":{"default":"global"},"hubs":{"global":{"address":"unix:/tmp/global"},"project":{"address":"unix:/tmp/project"}}}),
+    );
+    let key = log::project_key(&std::fs::canonicalize(&workspace).unwrap());
+    let resolve = |named: Option<&str>| {
+        let home = home.to_path_buf();
+        let workspace = workspace.clone();
+        let named = named.map(str::to_owned);
+        fakes::within(
+            "loading the workspace's hub target",
+            Duration::from_secs(5),
+            move || load_target(&home, &workspace, named.as_deref()),
+        )
+    };
+    let project_file = home.join("projects").join(key).join("config.json");
+    write(&project_file, json!({"hub":{"default":"project"}}));
+    assert_eq!(listed_name(resolve(None).unwrap()), "project");
+    assert_eq!(listed_name(resolve(Some("global")).unwrap()), "global");
+    write(&project_file, json!({"hub":{"default":12}}));
+    assert_eq!(resolve(None).unwrap_err().code(), ErrorCode::ConfigInvalid);
+}
+
+#[test]
 fn target_reads_each_loaded_config_without_caching() {
     let dir = fakes::TempDir::new("fiber-listed-target");
     let home = dir.path();

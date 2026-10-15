@@ -18,7 +18,6 @@ use connect_args::{Args, parse};
 use std::io::{self, BufRead, BufReader, Read, Write};
 use std::os::unix::net::UnixStream;
 use std::os::unix::process::CommandExt;
-use std::path::Path;
 use std::process::{Command, ExitCode, Stdio};
 use std::thread;
 
@@ -54,21 +53,7 @@ fn hub_session(
 ) -> io::Result<()> {
     let home = config::fiber_home_from_env().map_err(io::Error::other)?;
     let workspace = std::env::current_dir()?;
-    let sessions = log::sessions_dir(&home, &doors::project(&workspace));
-    let project = sessions
-        .parent()
-        .and_then(Path::file_name)
-        .and_then(|name| name.to_str())
-        .unwrap_or_default();
-    let project = config::ProjectKey::new(project).map_err(io::Error::other)?;
-    let config = config::Config::load(config::Sources {
-        home: home.clone(),
-        workspace,
-        project,
-        overrides: Vec::new(),
-    })
-    .map_err(io::Error::other)?;
-    let target = doors::hub::target(&config, &home, named).map_err(io::Error::other)?;
+    let target = doors::hub::load_target(&home, &workspace, named).map_err(io::Error::other)?;
     if !target.is_listed() && binary.is_none() {
         return Err(io::Error::new(
             io::ErrorKind::InvalidInput,
