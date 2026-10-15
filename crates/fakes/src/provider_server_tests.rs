@@ -1102,12 +1102,15 @@ impl Drop for ReleaseOnDrop {
 // replies. The bodies wait ready-built before the server starts, so no
 // client think time parks the server idle. Every park is held in the
 // test gate and staged: a data park is passed only after its bytes are
-// written, so it ends on readiness by construction, and the readiness
-// counter, which accepts never touch, counts exactly the data parks
-// passed. The poll bound outlasts every receive's deadline, so a staged
-// park never ends at its bound before loopback delivers its bytes. A
-// data park that ignores readiness sleeps its bound past the bytes
-// instead, and the count stays short.
+// written, so it ends on readiness by construction. The client withholds
+// its FIN until the server's post-reply drain park, then writes it and
+// passes the park, so the drain ends on readiness too and the count
+// includes one drain per call. The readiness counter, which accepts never
+// touch, is read once after shutdown joins every connection thread, and
+// equals every iteration's passed parks in total. The poll bound outlasts
+// every receive's deadline, so a staged park never ends at its bound
+// before loopback delivers its bytes. A data park that ignores readiness
+// sleeps its bound past the bytes instead, and the count stays short.
 #[test]
 fn busy_shaped_posts_sleep_only_when_idle() {
     const CALLS: usize = 20;
@@ -1117,6 +1120,8 @@ fn busy_shaped_posts_sleep_only_when_idle() {
     const BODY: &str = "to read the fixed body";
     // Not a server phase: the reader's end, merged into the held stream.
     const REPLY: &str = "the reply read to its close";
+    // The server's post-reply drain park, held like every other park.
+    const DRAIN: &str = "to drain the full reply";
     let clock = FakeClock::new();
     let script: Vec<Response> = (0..CALLS)
         .map(|_| Response::stream("event: done\ndata: {}\n\n"))
@@ -1140,7 +1145,7 @@ fn busy_shaped_posts_sleep_only_when_idle() {
     let held = gate
         .held_notes()
         .expect("the test takes the held announcements");
-    let replied = gate.held_sender();
+    let reply_tx = gate.held_sender();
     let server = ProviderServer::start_on_core(clock.clone(), core, script);
     let _release = ReleaseOnDrop {
         gate: Arc::clone(&gate),
@@ -1153,10 +1158,12 @@ fn busy_shaped_posts_sleep_only_when_idle() {
         ACCEPT,
         "nothing has connected"
     );
+    let readied_at_start = server.core.test_readied_waits();
+    let mut total_passed = 0u64;
     for body in bodies.iter() {
-        let readied_before = server.core.test_readied_waits();
         let mut stream = TcpStream::connect_timeout(&addr, READ_WITHIN).unwrap();
         stream.set_read_timeout(Some(READ_WITHIN)).unwrap();
+        stream.set_write_timeout(Some(READ_WITHIN)).unwrap();
         // The held accept takes the pending connection, which parks for
         // its head, and the next window parks for the next accept, in
         // either order.
@@ -1177,7 +1184,7 @@ fn busy_shaped_posts_sleep_only_when_idle() {
                 )
                 .as_bytes(),
             )
-            .unwrap();
+            .unwrap_or_else(|e| panic!("the request writes within {READ_WITHIN:?}: {e}"));
         gate.pass(HEAD);
         // No body byte is on the wire yet, so the body read parks.
         let deadline = Deadline::after(READ_WITHIN);
@@ -1186,46 +1193,64 @@ fn busy_shaped_posts_sleep_only_when_idle() {
             BODY,
             "the whole head arrives first"
         );
-        stream.write_all(body).unwrap();
-        stream.shutdown(Shutdown::Write).unwrap();
+        stream
+            .write_all(body)
+            .unwrap_or_else(|e| panic!("the request writes within {READ_WITHIN:?}: {e}"));
         gate.pass(BODY);
         let mut passed = 2u64;
         let response = thread::scope(|scope| {
-            // The request's write half is closed after the body, so the
-            // reply drain sees EOF and the read ends at the reply.
             let reader = scope.spawn(|| {
                 let mut response = Vec::new();
-                stream.read_to_end(&mut response).unwrap_or_else(|e| {
+                (&stream).read_to_end(&mut response).unwrap_or_else(|e| {
                     panic!("the scripted reply arrives within {READ_WITHIN:?}: {e}")
                 });
-                replied.send((REPLY, 0)).unwrap();
+                reply_tx.send((REPLY, 0)).unwrap();
                 response
             });
             // A body larger than one read can outrun loopback delivery:
             // each further park comes after all its bytes were written,
-            // so it is passed and counted like the first.
+            // so it is passed and counted like the first. The drain park
+            // and the reply arrive in either order: the FIN is written
+            // only after the drain park holds, then passed, so the drain
+            // ends on readiness and is counted once for the call.
+            let mut replied = false;
+            let mut drained = false;
             loop {
                 // Each pass answers the next receive, so each receive is
                 // its own wait with its own deadline.
                 let deadline = Deadline::after(READ_WITHIN);
-                let phase = next(&deadline, "the rest of the body's parks or the reply");
-                if phase == REPLY {
+                let phase = next(
+                    &deadline,
+                    "the rest of the body's parks, the drain park or the reply",
+                );
+                if phase == BODY {
+                    assert!(!drained, "no body park follows the drain park, got {phase}");
+                    gate.pass(BODY);
+                    passed += 1;
+                } else if phase == REPLY {
+                    assert!(!replied, "the reply arrives once, got {phase}");
+                    replied = true;
+                } else if phase == DRAIN {
+                    assert!(!drained, "the drain parks once, got {phase}");
+                    // The drain read parked on an empty socket, so the
+                    // FIN written here ends that park on readiness.
+                    stream.shutdown(Shutdown::Write).unwrap();
+                    gate.pass(DRAIN);
+                    passed += 1;
+                    drained = true;
+                } else {
+                    panic!("only the body or the drain parks before the reply, got {phase}");
+                }
+                if replied && drained {
                     break;
                 }
-                assert_eq!(phase, BODY, "only the body parks before the reply");
-                gate.pass(BODY);
-                passed += 1;
             }
             reader.join().unwrap()
         });
         let text = String::from_utf8_lossy(&response);
         assert!(text.starts_with("HTTP/1.1 200"), "{text}");
         assert!(response.ends_with(b"{}\n\n"), "{text}");
-        assert_eq!(
-            server.core.test_readied_waits() - readied_before,
-            passed,
-            "every data park passed after its bytes ends on readiness, not its bound"
-        );
+        total_passed += passed;
     }
     assert!(
         server.await_requests(CALLS, READ_WITHIN),
@@ -1245,6 +1270,17 @@ fn busy_shaped_posts_sleep_only_when_idle() {
     // connection: released, it ends stopped at shutdown.
     gate.release();
     assert!(server.core.shutdown(), "shutdown stops the server");
+    // Read only after shutdown, which joins every connection thread:
+    // each passed park, drain included, has ended on readiness by now.
+    assert_eq!(
+        server.core.test_readied_waits() - readied_at_start,
+        total_passed,
+        "every data park passed after its bytes ends on readiness, not its bound"
+    );
+    assert!(
+        held.try_recv().is_err(),
+        "a second DRAIN note arrived after the last call"
+    );
 }
 
 // Five bench-shaped POSTs: byte-slice bodies of growing length, each on
