@@ -48,6 +48,7 @@ struct FakeHooks {
     cancel_in_session: Mutex<Option<Arc<crate::TurnCancel>>>,
     shutdown_in_session: Mutex<Option<Arc<crate::TurnCancel>>>,
     pause_in_session: Mutex<Option<(mpsc::Sender<()>, mpsc::Receiver<()>)>>,
+    shutdown_after_handoff_check: Mutex<Option<Arc<crate::TurnCancel>>>,
     turn_start: Mutex<VecDeque<ContextAnswer>>,
     before_model_call: Mutex<VecDeque<CheckAnswer>>,
     turn_end: Mutex<VecDeque<ContextAnswer>>,
@@ -75,6 +76,7 @@ impl FakeHooks {
             cancel_in_session: Mutex::new(None),
             shutdown_in_session: Mutex::new(None),
             pause_in_session: Mutex::new(None),
+            shutdown_after_handoff_check: Mutex::new(None),
             turn_start: Mutex::new(VecDeque::new()),
             before_model_call: Mutex::new(VecDeque::new()),
             turn_end: Mutex::new(VecDeque::new()),
@@ -263,6 +265,13 @@ impl Hooks for FakeHooks {
         }
         if let Some(cancel) = self.shutdown_in_session.lock().unwrap().clone() {
             cancel.shutdown(143);
+        }
+        // On the turn thread: a shutdown forced after this call's final
+        // check, before the handoff's guarded completion write.
+        if start.reason == contract::hook::StartReason::Handoff {
+            if let Some(signal) = self.shutdown_after_handoff_check.lock().unwrap().clone() {
+                super::pause_after_handoff_start(Box::new(move || signal.shutdown(143)));
+            }
         }
         self.session_start
             .lock()
@@ -1250,6 +1259,97 @@ fn a_shutdown_around_session_start_runs_no_hook_and_starts_no_turn() {
         ["session_started", "preamble_built", "opening_message"],
         "no context and no turn start: {all:?}"
     );
+}
+
+#[test]
+fn a_shutdown_between_the_handoff_hook_and_its_commit_cancels_the_handoff() {
+    for fails in [false, true] {
+        let hooks = Arc::new(FakeHooks::new());
+        hooks.answer_session_start(added(Vec::new()));
+        hooks.answer_session_start(if fails {
+            failed("fiber.test/guard", "boom")
+        } else {
+            added(vec![("fiber.test/inbox", "late")])
+        });
+        let mut world = started_with_tools(
+            vec![
+                with_tokens(
+                    tool_call_reply("", "probe", serde_json::json!({"path": "a.txt"}), 0.0),
+                    999,
+                    0,
+                ),
+                fakes::Scripted::text("The note."),
+                fakes::Scripted::text("Done."),
+            ],
+            Some(hooks.clone()),
+            vec![Arc::new(Probe)],
+        );
+        {
+            let looped = world.looped.take().unwrap();
+            // After the handoff hook's final check, before the guarded
+            // completion write: the shutdown applies none of the answer.
+            // Armed from the hook itself, which runs on the turn thread.
+            hooks.shutdown_after_handoff_check
+                .lock()
+                .unwrap()
+                .replace(Arc::clone(&looped.cancel));
+            world.looped = Some(looped.handoff(crate::HandoffSettings {
+                tokens: 1_000,
+                nudge: false,
+                ..crate::HandoffSettings::default()
+            }));
+        }
+        let (ack, _) = capture();
+        world
+            .inbox
+            .send(Delivery::Prompt(driver("c_1", "hello"), ack))
+            .unwrap();
+        let finished = run_turn(&mut world);
+        assert_eq!(
+            finish_turn(&mut world, &finished),
+            Some(TurnOutcome::Interrupted),
+            "fails: {fails}"
+        );
+        drop(world.looped.take());
+        let all = lines(&world);
+        assert_eq!(
+            kinds(&all),
+            [
+                "session_started",
+                "preamble_built",
+                "opening_message",
+                "turn_started",
+                "step_started",
+                "assistant_message_started",
+                "tool_call_requested",
+                "usage_recorded",
+                "assistant_message_completed",
+                "tool_call_started",
+                "tool_call_completed",
+                "step_started",
+                "handoff_started",
+                "assistant_message_started",
+                "text_completed",
+                "usage_recorded",
+                "assistant_message_completed",
+                "handoff_completed",
+                "turn_completed",
+            ],
+            "fails: {fails}, {all:?}"
+        );
+        let done: Vec<&Envelope> = all
+            .iter()
+            .filter(|line| line.kind == "handoff_completed")
+            .collect();
+        assert_eq!(done.len(), 1);
+        assert_eq!(
+            done[0].payload["outcome"], "cancelled",
+            "a shutdown applies none of the answer, failed or not: {:?}, fails: {fails}",
+            done[0].payload
+        );
+        let end = line(&all, "turn_completed");
+        assert_eq!(end.payload["outcome"], "interrupted");
+    }
 }
 
 #[test]

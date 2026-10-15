@@ -429,3 +429,33 @@ fn only_a_cancelled_handoff_ends_the_turn_interrupted() {
     assert_eq!(super::cancelled(Outcome::Completed), None);
     assert_eq!(super::cancelled(Outcome::Failed), None);
 }
+
+#[test]
+fn two_session_start_contexts_take_the_opening_slot_in_order() {
+    let mut carry = Carry::default();
+    assert_eq!(carry.take_after_opening(), None);
+    carry.opened();
+    assert_eq!(carry.take_after_opening(), Some(1));
+    // Every take clears: the second take finds nothing.
+    assert_eq!(carry.take_after_opening(), None);
+    carry.opened();
+    // The first context takes index 1 and advances the slot past itself.
+    assert_eq!(carry.place_context(Some(1), "session_start"), Some(1));
+    // The second takes index 2, in run order.
+    assert_eq!(carry.place_context(Some(2), "session_start"), Some(2));
+    assert_eq!(carry.take_after_opening(), Some(3));
+}
+
+#[test]
+fn only_a_session_start_context_honours_the_opening_slot() {
+    let mut carry = Carry::default();
+    carry.opened();
+    let slot = carry.take_after_opening();
+    // Any other hook appends and leaves the slot cleared.
+    assert_eq!(carry.place_context(slot, "turn_start"), None);
+    assert_eq!(carry.take_after_opening(), None);
+    carry.opened();
+    let slot = carry.take_after_opening();
+    assert_eq!(carry.place_context(slot, "before_message"), None);
+    assert_eq!(carry.take_after_opening(), None);
+}

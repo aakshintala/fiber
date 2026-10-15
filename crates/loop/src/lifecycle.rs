@@ -67,6 +67,15 @@ pub(crate) fn pause_after_handoff_start_check() {
     });
 }
 
+/// Parks the next handoff completion on `paused`: it runs after the
+/// `session_start` final check, before the guarded completion write.
+#[cfg(test)]
+pub(crate) fn pause_after_handoff_start(paused: Box<dyn FnOnce()>) {
+    AFTER_HANDOFF_START_CHECK.with(|hook| {
+        *hook.borrow_mut() = Some(paused);
+    });
+}
+
 /// What `turn_end` hooks returned and the next step writes, and what a
 /// resumed turn's `session_start` contexts wait in: held across calls,
 /// never in `queued`, so a cancel never carries them into another turn.

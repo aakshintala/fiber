@@ -2199,6 +2199,10 @@ pub(crate) struct StartHooks {
     cancel_in_call: Mutex<Option<Arc<TurnCancel>>>,
     shutdown_in_call: Mutex<Option<Arc<TurnCancel>>>,
     pause: Mutex<Option<(Sender<()>, mpsc::Receiver<()>)>>,
+    /// The call the parked cancel, shutdown or pause fires in: the
+    /// first call runs the start reason, a handoff the second.
+    inside_at: AtomicUsize,
+    turn_calls: AtomicUsize,
 }
 
 impl StartHooks {
@@ -2210,6 +2214,8 @@ impl StartHooks {
             cancel_in_call: Mutex::new(None),
             shutdown_in_call: Mutex::new(None),
             pause: Mutex::new(None),
+            inside_at: AtomicUsize::new(1),
+            turn_calls: AtomicUsize::new(0),
         })
     }
 
@@ -2221,6 +2227,11 @@ impl StartHooks {
     /// How many `session_start` calls ran.
     pub(crate) fn calls(&self) -> usize {
         self.calls.load(Ordering::SeqCst)
+    }
+
+    /// How many `turn_start` calls ran.
+    pub(crate) fn turn_calls(&self) -> usize {
+        self.turn_calls.load(Ordering::SeqCst)
     }
 
     /// What each call was shown: the reason, the session id and the
@@ -2244,6 +2255,12 @@ impl StartHooks {
     pub(crate) fn pause(&self, started: Sender<()>, release: mpsc::Receiver<()>) {
         *self.pause.lock().unwrap() = Some((started, release));
     }
+
+    /// Fires the parked cancel, shutdown or pause in the `n`th
+    /// `session_start` call instead of the first.
+    pub(crate) fn fire_inside_at(&self, n: usize) {
+        self.inside_at.store(n, Ordering::SeqCst);
+    }
 }
 
 /// A `session_start` answer adding `text` as `extension`'s context.
@@ -2254,6 +2271,27 @@ pub(crate) fn start_added(extension: &str, text: &str) -> contract::hook::Contex
             text: text.to_owned(),
         }]),
         notices: Vec::new(),
+    }
+}
+
+/// A `session_start` answer adding nothing, with no notice.
+pub(crate) fn start_empty() -> contract::hook::ContextAnswer {
+    contract::hook::ContextAnswer {
+        outcome: contract::hook::ContextOutcome::Added(Vec::new()),
+        notices: Vec::new(),
+    }
+}
+
+/// A `session_start` answer adding nothing, with `extension`'s
+/// `non-blocking` failure as a notice.
+pub(crate) fn start_noticed(extension: &str) -> contract::hook::ContextAnswer {
+    contract::hook::ContextAnswer {
+        outcome: contract::hook::ContextOutcome::Added(Vec::new()),
+        notices: vec![contract::events::Notice {
+            code: contract::ErrorCode::HookFailed,
+            message: format!("extension {extension} failed softly"),
+            extension: Some(extension.to_owned()),
+        }],
     }
 }
 
@@ -2320,15 +2358,17 @@ impl contract::hook::Hooks for StartHooks {
             start.session_id.0.clone(),
             start.workspace.to_owned(),
         ));
-        if let Some((started, release)) = self.pause.lock().unwrap().take() {
-            started.send(()).unwrap();
-            release.recv().unwrap();
-        }
-        if let Some(cancel) = self.cancel_in_call.lock().unwrap().clone() {
-            cancel.cancel();
-        }
-        if let Some(cancel) = self.shutdown_in_call.lock().unwrap().clone() {
-            cancel.shutdown(143);
+        if self.calls.load(Ordering::SeqCst) == self.inside_at.load(Ordering::SeqCst) {
+            if let Some((started, release)) = self.pause.lock().unwrap().take() {
+                started.send(()).unwrap();
+                release.recv().unwrap();
+            }
+            if let Some(cancel) = self.cancel_in_call.lock().unwrap().clone() {
+                cancel.cancel();
+            }
+            if let Some(cancel) = self.shutdown_in_call.lock().unwrap().clone() {
+                cancel.shutdown(143);
+            }
         }
         self.answers
             .lock()
@@ -2341,6 +2381,7 @@ impl contract::hook::Hooks for StartHooks {
     }
 
     fn turn_start(&self, _turn: &contract::hook::TurnStart<'_>) -> contract::hook::ContextAnswer {
+        self.turn_calls.fetch_add(1, Ordering::SeqCst);
         contract::hook::ContextAnswer {
             outcome: contract::hook::ContextOutcome::Added(Vec::new()),
             notices: Vec::new(),
