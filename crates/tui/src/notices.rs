@@ -169,13 +169,8 @@ impl Notices {
 
     /// The overlay's text, newest first, while it is open.
     pub(crate) fn overlay(&self) -> Option<Vec<String>> {
-        self.overlay_entries().map(|entries| {
-            entries
-                .entries
-                .into_iter()
-                .map(|(_, text)| text)
-                .collect()
-        })
+        self.overlay_entries()
+            .map(|entries| entries.entries.into_iter().map(|(_, text)| text).collect())
     }
 
     /// Notice `id`'s whole text, while it is in the stack.
