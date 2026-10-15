@@ -102,9 +102,7 @@ impl Hub {
         }
     }
 
-    /// The installed sink, if any. Test-only until the HTTP
-    /// observation snapshot reads it.
-    #[cfg(test)]
+    /// The installed sink, if any.
     pub(crate) fn diagnostics(&self) -> Option<Arc<dyn DebugLog>> {
         self.diagnostics
             .lock()

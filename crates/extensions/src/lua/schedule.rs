@@ -538,6 +538,19 @@ fn settle(
     };
     #[cfg(test)]
     settle_hook(&target, Pause::Admission);
+    // The eligible HTTP observation is snapshotted before admission, as
+    // owned context: no timer starts and nothing is written until the
+    // admitted worker executes. Every other host call carries none.
+    let http = match &request {
+        host::Request::Http(_) => super::http_observation(hub, &target),
+        host::Request::Ask(_)
+        | host::Request::Tool(_)
+        | host::Request::Drive(_)
+        | host::Request::Exec(_)
+        | host::Request::Callback { .. }
+        | host::Request::Lock
+        | host::Request::Sleep(_) => None,
+    };
     // Read before the admission lock below takes it.
     let driver = hub.driver();
     // Every host call is admitted here: a stopped extension, whose callback
@@ -555,6 +568,7 @@ fn settle(
         id,
         target: &target,
         deadline,
+        http,
     };
     let admitted = admit(start, hub, shared, call, request, driver, &deliver);
     let (mut shared, wake, cancel, ask, unsent, spawn) = match admitted {
@@ -572,6 +586,10 @@ fn settle(
         Admitted::Sleep(wake) => (hub.lock(), Some(wake), None, None, None, None),
         Admitted::Nothing => (hub.lock(), None, None, None, None, None),
     };
+    // Test-only: the spawn-failure seam fires only for spawned work of
+    // the armed provider. Checked before `park` moves the target.
+    #[cfg(test)]
+    let fail_spawn = spawn.as_ref().is_some_and(|_| take_spawn_failure(&target));
     park(
         parked,
         &mut shared,
@@ -584,15 +602,64 @@ fn settle(
         cancel,
         ask,
     );
-    if let Some(spawn) = spawn
-        && let Err(source) = spawn.builder.spawn(spawn.work)
-    {
-        spawn_failed(hub, parked, shared, id, dir, source, spawn.exec);
-        return;
+    if let Some(spawn) = spawn {
+        // Test-only: no public API can make the spawn fail, so the
+        // spawn-failure path takes this seam.
+        #[cfg(test)]
+        if fail_spawn {
+            spawn_failed(
+                hub,
+                parked,
+                shared,
+                id,
+                dir,
+                std::io::Error::other("the test failed the spawn"),
+                spawn.exec,
+            );
+            return;
+        }
+        if let Err(source) = spawn.builder.spawn(spawn.work) {
+            spawn_failed(hub, parked, shared, id, dir, source, spawn.exec);
+            return;
+        }
     }
     drop(shared);
     hub.notify();
     drop(unsent);
+}
+
+/// Forces the next spawned off-thread work of `provider` to fail as a
+/// spawn failure. `cfg(test)`: no public API can make the spawn fail, so
+/// the spawn-failure path needs this seam. Scoped by provider name, so
+/// parallel tests never trip it; fires once per arming.
+#[cfg(test)]
+static FAIL_SPAWN: std::sync::Mutex<Option<String>> = std::sync::Mutex::new(None);
+
+/// Arms the spawn-failure seam for the next spawned work of `provider`.
+#[cfg(test)]
+pub(crate) fn fail_next_spawn_for(provider: &str) {
+    *FAIL_SPAWN
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner) = Some(provider.to_owned());
+}
+
+/// Takes a pending spawn failure for `target`, disarming the seam when it
+/// fires. Any other target passes through and leaves the arming in place.
+#[cfg(test)]
+fn take_spawn_failure(target: &Target) -> bool {
+    let armed = FAIL_SPAWN
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
+        .clone();
+    match (armed, target) {
+        (Some(provider), Target::Provider { name, .. }) if *name == provider => {
+            *FAIL_SPAWN
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner) = None;
+            true
+        }
+        _ => false,
+    }
 }
 
 /// Drops the parked callback `id`, when it is still parked, and reports

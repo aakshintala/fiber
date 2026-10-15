@@ -743,3 +743,726 @@ fn a_hook_past_its_deadline_fails_inside_its_scope() {
     server.release();
     worker.join().expect("the dispatch thread joins");
 }
+
+// Provider purposes through the public API: each eligible Lua HTTP
+// request records once with its provider and purpose, and nothing else
+// records.
+
+use contract::GenerationId;
+use contract::signing::{SignRequest, Signer};
+use extensions::{CredentialPair, HostScript, HttpEntry, LuaProvider};
+
+/// A sink that signals each record it is given.
+struct Watching {
+    requests: Mutex<Vec<ProviderRequest>>,
+    arrived: std::sync::mpsc::Sender<ProviderRequest>,
+}
+
+impl Watching {
+    fn new() -> (Arc<Self>, std::sync::mpsc::Receiver<ProviderRequest>) {
+        let (tx, rx) = std::sync::mpsc::channel();
+        (
+            Arc::new(Self {
+                requests: Mutex::new(Vec::new()),
+                arrived: tx,
+            }),
+            rx,
+        )
+    }
+
+    fn records(&self) -> Vec<ProviderRequest> {
+        self.requests.lock().unwrap().clone()
+    }
+}
+
+impl DebugLog for Watching {
+    fn debugging(&self) -> bool {
+        true
+    }
+
+    fn provider_request(&self, request: &ProviderRequest) {
+        self.requests.lock().unwrap().push(request.clone());
+        let _ignored = self.arrived.send(request.clone());
+    }
+}
+
+/// A directory holding `init.lua` and one provider file per entry.
+fn ext_dir(init: Option<&str>, providers: &[(&str, &str)]) -> fakes::TempDir {
+    let dir = fakes::TempDir::new("fiber-provider-observation");
+    if let Some(init) = init {
+        std::fs::write(dir.path().join("init.lua"), init).unwrap();
+    }
+    std::fs::create_dir_all(dir.path().join("providers")).unwrap();
+    for (name, lua) in providers {
+        std::fs::write(
+            dir.path().join("providers").join(format!("{name}.lua")),
+            lua,
+        )
+        .unwrap();
+    }
+    dir
+}
+
+fn observed_ext(
+    dir: &fakes::TempDir,
+    clock: Arc<FakeClock>,
+    sink: &Arc<Watching>,
+) -> Arc<extensions::LuaExtension> {
+    Arc::new(
+        extensions::LuaExtension::new("ext", dir.path(), dir.path(), clock)
+            .with_diagnostics(sink.clone() as Arc<dyn DebugLog>),
+    )
+}
+
+fn models_lua(url: &str) -> String {
+    models_named_lua("p", url)
+}
+
+fn models_named_lua(name: &str, url: &str) -> String {
+    format!(
+        "fiber.provider(\"{name}\", {{ models = {{ timeout = 60000, run = function()\n\
+           local reply = host.http({{ url = \"{url}/models\" }})\n\
+           return {{{{ id = \"m1\", protocol = \"openai-responses\", base_url = \"{url}\" }}}}\n\
+         end }} }})\n"
+    )
+}
+
+#[test]
+fn provider_purposes_record_once_per_attempt() {
+    let server = fakes::ProviderServer::start_responding(|request| match request.path.as_str() {
+        "/models" => fakes::Response::status(200, "{}"),
+        "/quota" => fakes::Response::status(200, "{\"windows\":[]}"),
+        "/token" => fakes::Response::status(200, "{\"token\":\"t\",\"expires_at\":1893456000}"),
+        "/cost" => fakes::Response::status(200, "0.5"),
+        _ => fakes::Response::status(500, "unexpected"),
+    })
+    .unwrap();
+    let url = server.url();
+    let dir = ext_dir(
+        None,
+        &[
+            (
+                "p",
+                &format!(
+                    "fiber.provider(\"p\", {{\n\
+                       models = {{ timeout = 60000, run = function()\n\
+                         host.http({{ url = \"{url}/models\" }})\n\
+                         return {{{{ id = \"m1\", protocol = \"openai-responses\", base_url = \"{url}\" }}}}\n\
+                       end }},\n\
+                       quota = {{ timeout = 60000, run = function(q)\n\
+                         host.http({{ url = \"{url}/quota\" }})\n\
+                         return {{ windows = {{ }} }}\n\
+                       end }},\n\
+                       cost = {{ timeout = 60000, run = function(c)\n\
+                         host.http({{ url = \"{url}/cost\" }})\n\
+                         return 0.5\n\
+                       end }},\n\
+                     }})\n"
+                ),
+            ),
+            (
+                "c",
+                &format!(
+                    "fiber.provider(\"c\", {{\n\
+                       credential = {{ timeout = 60000, run = function()\n\
+                         host.http({{ method = \"POST\", url = \"{url}/token\" }})\n\
+                         return {{ token = \"t\", expires_at = 1893456000 }}\n\
+                       end }},\n\
+                     }})\n"
+                ),
+            ),
+        ],
+    );
+    let clock = FakeClock::new();
+    let (sink, _) = Watching::new();
+    let ext = observed_ext(&dir, clock, &sink);
+    let models = LuaProvider::new(Arc::clone(&ext), "p");
+    let credentials = LuaProvider::new(Arc::clone(&ext), "c");
+    let listed = within({
+        let models = Arc::clone(&models);
+        move || models.list_models()
+    })
+    .expect("discovery succeeds");
+    assert_eq!(listed.0.len(), 1);
+    let pair = CredentialPair {
+        credential: "c".to_owned(),
+        label: "l".to_owned(),
+    };
+    let quota = within({
+        let models = Arc::clone(&models);
+        let pair = pair.clone();
+        move || models.quota(&pair, None)
+    });
+    assert!(matches!(
+        quota,
+        extensions::QuotaEntry::Reported(_) | extensions::QuotaEntry::NoQuota
+    ));
+    let token = within({
+        let credentials = Arc::clone(&credentials);
+        let pair = pair.clone();
+        move || credentials.credential_token(&pair)
+    });
+    assert!(token.is_ok(), "the stored credential refresh succeeds");
+    let cost = within({
+        let models = Arc::clone(&models);
+        move || models.cost(&GenerationId("g1".into()), &url, None)
+    })
+    .expect("the cost lookup succeeds");
+    assert_eq!(cost, Some(0.5));
+    // One line per actual HTTP request, with the provider's registered
+    // name (not the extension's), the eligible purpose and attempt 1.
+    let records = sink.records();
+    let purposes: Vec<(String, String)> = records
+        .iter()
+        .map(|record| {
+            (
+                record.provider.clone(),
+                serde_json::to_value(record.purpose)
+                    .unwrap()
+                    .as_str()
+                    .unwrap()
+                    .to_owned(),
+            )
+        })
+        .collect();
+    assert_eq!(
+        purposes,
+        [
+            ("p".to_owned(), "model_list".to_owned()),
+            ("p".to_owned(), "quota".to_owned()),
+            ("c".to_owned(), "token_refresh".to_owned()),
+            ("p".to_owned(), "cost".to_owned()),
+        ]
+    );
+    for record in &records {
+        assert_eq!(record.attempt, 1);
+        assert_eq!(record.status, Some(200));
+    }
+}
+
+#[test]
+fn two_calls_in_one_callback_emit_two_attempt_ones() {
+    let server =
+        fakes::ProviderServer::start_responding(|_| fakes::Response::status(200, "{}")).unwrap();
+    let url = server.url();
+    let dir = ext_dir(
+        None,
+        &[(
+            "p",
+            &format!(
+                "fiber.provider(\"p\", {{ models = {{ timeout = 60000, run = function()\n\
+                   host.http({{ url = \"{url}/one\" }})\n\
+                   host.http({{ url = \"{url}/two\" }})\n\
+                   return {{{{ id = \"m1\", protocol = \"openai-responses\", base_url = \"{url}\" }}}}\n\
+                 end }} }})\n"
+            ),
+        )],
+    );
+    let clock = FakeClock::new();
+    let (sink, _) = Watching::new();
+    let ext = observed_ext(&dir, clock, &sink);
+    let provider = LuaProvider::new(ext, "p");
+    within({
+        let provider = Arc::clone(&provider);
+        move || provider.list_models()
+    })
+    .expect("two HTTP calls in one callback succeed");
+    assert_eq!(server.requests().len(), 2);
+    let records = sink.records();
+    assert_eq!(records.len(), 2);
+    for record in &records {
+        assert_eq!(record.provider, "p");
+        assert_eq!(record.attempt, 1);
+        assert_eq!(
+            serde_json::to_value(record.purpose).unwrap(),
+            serde_json::Value::String("model_list".to_owned())
+        );
+    }
+}
+
+#[test]
+fn cache_hits_and_scripted_replies_emit_nothing() {
+    let server =
+        fakes::ProviderServer::start_responding(|_| fakes::Response::status(200, "{}")).unwrap();
+    let url = server.url();
+    let dir = ext_dir(None, &[("p", &models_lua(&url))]);
+    let clock = FakeClock::new();
+    let (sink, _) = Watching::new();
+    let ext = observed_ext(&dir, clock, &sink);
+    let provider = LuaProvider::new(Arc::clone(&ext), "p");
+    within({
+        let provider = Arc::clone(&provider);
+        move || provider.models()
+    })
+    .expect("discovery succeeds");
+    // Served from memory now: no HTTP, no record.
+    within({
+        let provider = Arc::clone(&provider);
+        move || provider.models()
+    })
+    .expect("the cached list serves");
+    assert_eq!(server.requests().len(), 1);
+    assert_eq!(sink.records().len(), 1);
+    // A scripted reply is not an HTTP request: it emits nothing and still
+    // returns its models.
+    let script_dir = ext_dir(
+        None,
+        &[(
+            "sq",
+            "fiber.provider(\"sq\", { models = { timeout = 60000, run = function()\n\
+               local reply = host.http({ url = \"http://scripted.invalid/models\" })\n\
+               return json.decode(reply.body)\n\
+             end } })\n",
+        )],
+    );
+    let script = HostScript::new(
+        vec![HttpEntry {
+            request: serde_json::json!({"url": "http://scripted.invalid/models"}),
+            reply: Ok((
+                200,
+                br#"[{"id":"m9","protocol":"openai-responses","base_url":"http://scripted.invalid"}]"#.to_vec(),
+            )),
+        }],
+        Vec::new(),
+        Vec::new(),
+    );
+    let scripted_ext = Arc::new(
+        extensions::LuaExtension::new(
+            "ext",
+            script_dir.path(),
+            script_dir.path(),
+            FakeClock::new(),
+        )
+        .with_host_script(script)
+        .with_diagnostics(sink.clone() as Arc<dyn DebugLog>),
+    );
+    let quoted = LuaProvider::new(scripted_ext, "sq");
+    let (listed, _) = within(move || quoted.list_models()).expect("the scripted reply parses");
+    assert_eq!(
+        listed
+            .iter()
+            .map(|model| model.id.as_str())
+            .collect::<Vec<_>>(),
+        ["m9"]
+    );
+    assert_eq!(sink.records().len(), 1);
+}
+
+#[test]
+fn sign_command_and_entry_load_send_unobserved() {
+    let server =
+        fakes::ProviderServer::start_responding(|_| fakes::Response::status(200, "{}")).unwrap();
+    let url = server.url();
+    let dir = ext_dir(
+        Some(&format!(
+            "fiber.command(\"ping\", {{ timeout = 60000, description = \"ping\",\n\
+               run = function(text) host.http({{ url = \"{url}/command\" }}) return \"pong\" end }})\n"
+        )),
+        &[
+            (
+                "s",
+                &format!(
+                    "host.http({{ url = \"{url}/load\" }})\n\
+                     fiber.provider(\"s\", {{\n\
+                       sign = {{ timeout = 60000, run = function(request)\n\
+                         host.http({{ url = \"{url}/sign\" }})\n\
+                         return {{}}\n\
+                       end }},\n\
+                     }})\n"
+                ),
+            ),
+            ("p", &models_lua(&url)),
+        ],
+    );
+    let clock = FakeClock::new();
+    let (sink, _) = Watching::new();
+    let ext = observed_ext(&dir, clock, &sink);
+    // The entry script's command runs actual HTTP, unobserved.
+    let pong = within({
+        let ext = Arc::clone(&ext);
+        move || ext.command("ping", "")
+    })
+    .expect("the command succeeds");
+    assert_eq!(pong, "pong");
+    // Signing sends actual HTTP, unobserved even with a sink installed.
+    let signer = LuaProvider::new(Arc::clone(&ext), "s");
+    let signed: Vec<(String, String)> = within({
+        move || {
+            signer.sign(&SignRequest {
+                method: "GET",
+                url: "http://example.invalid/",
+                headers: &[],
+                body: b"",
+            })
+        }
+    })
+    .expect("signing succeeds");
+    assert!(signed.is_empty());
+    // The provider file's top-level HTTP ran at first use, unobserved.
+    let provider = LuaProvider::new(ext, "p");
+    within({
+        let provider = Arc::clone(&provider);
+        move || provider.list_models()
+    })
+    .expect("discovery succeeds");
+    let paths: Vec<String> = server
+        .requests()
+        .iter()
+        .map(|request| request.path.clone())
+        .collect();
+    for path in ["/command", "/sign", "/load", "/models"] {
+        assert!(paths.contains(&path.to_owned()), "sent {path}: {paths:?}");
+    }
+    let records = sink.records();
+    assert_eq!(records.len(), 1, "only the models() call records");
+    assert_eq!(records[0].provider, "p");
+}
+
+#[test]
+fn hook_http_sends_unobserved_with_a_sink_installed() {
+    let setup = Setup::new();
+    let server =
+        fakes::ProviderServer::start_responding(|_| fakes::Response::status(200, "{}")).unwrap();
+    let url = server.url();
+    install_lua(
+        &setup,
+        "one",
+        &json!({}),
+        &format!(
+            "fiber.hook(\"before_message\", {{ timeout = 60000, on_failure = \"non-blocking\",\n\
+               run = function(msg) host.http({{ url = \"{url}/hook\" }}) return nil end }})\n"
+        ),
+    );
+    let clock = FakeClock::new();
+    let session = load(&setup, clock);
+    let sink = Arc::new(Sink::default());
+    let (session, _) = diagnosed(session, Arc::clone(&sink));
+    let content = vec![ContentPart::Text { text: "hi".into() }];
+    within({
+        let session = Arc::clone(&session);
+        move || session.before_message(&BeforeMessage { content: &content })
+    });
+    assert_eq!(server.requests().len(), 1);
+    assert!(sink.requests.lock().unwrap().is_empty());
+}
+
+/// The serialized keys of one record, sorted: `to_value` holds them in
+/// a map, so declaration order is pinned by the struct, not this helper.
+fn wire_keys(record: &ProviderRequest) -> Vec<String> {
+    let value = serde_json::to_value(record).unwrap();
+    let mut keys: Vec<String> = value.as_object().unwrap().keys().cloned().collect();
+    keys.sort();
+    keys
+}
+
+#[test]
+fn request_lines_carry_no_url_or_content() {
+    let server = fakes::ProviderServer::start_routed(
+        [("/models", fakes::Response::status(200, "{}"))],
+        fakes::Response::status(500, "unrouted"),
+    )
+    .unwrap();
+    let port = server.url().rsplit(':').next().unwrap().to_owned();
+    // A query string, as a key in the query would: sent, never recorded.
+    let query_url = format!("{}/models?token=SECRET-QUERY", server.url());
+    let query_dir = ext_dir(None, &[("p", &models_lua(&query_url))]);
+    let (sink, _) = Watching::new();
+    let query_ext = observed_ext(&query_dir, FakeClock::new(), &sink);
+    within({
+        let provider = LuaProvider::new(query_ext, "p");
+        move || provider.list_models()
+    })
+    .expect("the query-string request succeeds");
+    let requests = server.requests();
+    assert_eq!(requests.len(), 1);
+    assert!(
+        requests[0].path.contains("SECRET-QUERY"),
+        "the query was sent: {}",
+        requests[0].path
+    );
+    // A userinfo-bearing loopback URL ureq accepts: sent, never recorded.
+    let user_url = format!("http://USERINFO-SENTINEL:pass@127.0.0.1:{port}/models");
+    let user_dir = ext_dir(None, &[("p", &models_lua(&user_url))]);
+    let user_ext = observed_ext(&user_dir, FakeClock::new(), &sink);
+    within({
+        let provider = LuaProvider::new(user_ext, "p");
+        move || provider.list_models()
+    })
+    .expect("the userinfo request succeeds");
+    assert_eq!(server.requests().len(), 2);
+    // A secret-bearing hostname without public DNS: the request fails,
+    // and the failure line still records no hostname.
+    let dns_dir = ext_dir(None, &[("p", &models_lua("http://secret-host.invalid"))]);
+    let dns_ext = observed_ext(&dns_dir, FakeClock::new(), &sink);
+    let dns_err = within({
+        let provider = LuaProvider::new(dns_ext, "p");
+        move || provider.list_models()
+    })
+    .unwrap_err();
+    assert_eq!(dns_err.code(), contract::ErrorCode::ExtensionFailed);
+    let records = sink.records();
+    assert_eq!(records.len(), 3);
+    for record in &records[..2] {
+        assert_eq!(
+            wire_keys(record),
+            [
+                "attempt",
+                "headers_ms",
+                "provider",
+                "purpose",
+                "request_bytes",
+                "response_bytes",
+                "status",
+                "total_ms",
+            ]
+        );
+    }
+    assert_eq!(
+        wire_keys(&records[2]),
+        [
+            "attempt",
+            "provider",
+            "purpose",
+            "request_bytes",
+            "response_bytes",
+            "total_ms",
+        ]
+    );
+    // The exact key sets above already prove no `host`, `path`, `model`
+    // or `first_token_ms` key, present or null. The sent values below
+    // prove no URL content reaches the bytes either.
+    for record in &records {
+        let bytes = serde_json::to_vec(record).unwrap();
+        let text = String::from_utf8(bytes).unwrap();
+        for sentinel in ["SECRET-QUERY", "USERINFO-SENTINEL", "secret-host"] {
+            assert!(!text.contains(sentinel), "no {sentinel} in {text}");
+        }
+    }
+}
+
+/// A sink that records no debug lines: any record is a failure.
+struct Dark;
+
+impl DebugLog for Dark {
+    fn debugging(&self) -> bool {
+        false
+    }
+
+    fn provider_request(&self, _request: &ProviderRequest) {
+        panic!("an info sink records nothing");
+    }
+}
+
+#[test]
+fn without_a_sink_or_below_debug_nothing_records() {
+    let server =
+        fakes::ProviderServer::start_responding(|_| fakes::Response::status(200, "{}")).unwrap();
+    let url = server.url();
+    // No sink installed: the request succeeds and records nowhere.
+    let plain_dir = ext_dir(None, &[("p", &models_lua(&url))]);
+    let plain_ext = Arc::new(extensions::LuaExtension::new(
+        "ext",
+        plain_dir.path(),
+        plain_dir.path(),
+        FakeClock::new(),
+    ));
+    within({
+        let provider = LuaProvider::new(plain_ext, "p");
+        move || provider.list_models()
+    })
+    .expect("a request without a sink succeeds");
+    assert_eq!(server.requests().len(), 1);
+    // A sink that records no debug lines: the request succeeds and the
+    // sink stays silent.
+    let dark_dir = ext_dir(None, &[("p", &models_lua(&url))]);
+    let dark_ext = Arc::new(
+        extensions::LuaExtension::new("ext", dark_dir.path(), dark_dir.path(), FakeClock::new())
+            .with_diagnostics(Arc::new(Dark)),
+    );
+    within({
+        let provider = LuaProvider::new(dark_ext, "p");
+        move || provider.list_models()
+    })
+    .expect("a request below debug succeeds");
+    assert_eq!(server.requests().len(), 2);
+}
+
+#[test]
+fn background_refresh_is_observed() {
+    let server =
+        fakes::ProviderServer::start_responding(|_| fakes::Response::status(200, "{}")).unwrap();
+    let url = server.url();
+    let dir = ext_dir(None, &[("p", &models_lua(&url))]);
+    let (sink, _) = Watching::new();
+    let ext = observed_ext(&dir, FakeClock::new(), &sink);
+    let provider = LuaProvider::new(ext, "p");
+    let handle = provider.refresh(None).expect("a stale list refreshes");
+    within(move || handle.join())
+        .expect("the refresh thread joins")
+        .expect("the background refresh succeeds");
+    assert_eq!(server.requests().len(), 1);
+    let records = sink.records();
+    assert_eq!(records.len(), 1);
+    assert_eq!(records[0].provider, "p");
+    assert_eq!(
+        serde_json::to_value(records[0].purpose).unwrap(),
+        serde_json::Value::String("model_list".to_owned())
+    );
+}
+
+#[test]
+fn overlapping_callbacks_keep_their_own_attribution() {
+    let held_a = fakes::ProviderServer::start([fakes::Response::status(200, "{}")]).unwrap();
+    held_a.hold_from(1, Duration::from_secs(30));
+    let held_p = fakes::ProviderServer::start([
+        fakes::Response::status(200, "{}"),
+        fakes::Response::status(200, "{}"),
+    ])
+    .unwrap();
+    held_p.hold_from(1, Duration::from_secs(30));
+    let open_q = fakes::ProviderServer::start_responding(|_| {
+        fakes::Response::status(200, "{\"windows\":[]}")
+    })
+    .unwrap();
+    let open_r =
+        fakes::ProviderServer::start_responding(|_| fakes::Response::status(200, "{}")).unwrap();
+    let (url_a, url_p, url_q, url_r) = (held_a.url(), held_p.url(), open_q.url(), open_r.url());
+    let dir_a = ext_dir(
+        Some(&format!(
+            "fiber.command(\"a\", {{ timeout = 60000, description = \"a\",\n\
+               run = function(text) host.http({{ url = \"{url_a}/command\" }}) return \"a\" end }})\n\
+             fiber.command(\"b\", {{ timeout = 60000, description = \"b\",\n\
+               run = function(text) host.http({{ url = \"{url_a}/command\" }}) return \"b\" end }})\n"
+        )),
+        &[
+            (
+                "p",
+                &format!(
+                    "fiber.provider(\"p\", {{ models = {{ timeout = 60000, run = function()\n\
+                       host.http({{ url = \"{url_p}/first\" }})\n\
+                       host.http({{ url = \"{url_p}/second\" }})\n\
+                       return {{{{ id = \"m1\", protocol = \"openai-responses\", base_url = \"{url_p}\" }}}}\n\
+                     end }} }})\n"
+                ),
+            ),
+            (
+                "q",
+                &format!(
+                    "fiber.provider(\"q\", {{ quota = {{ timeout = 60000, run = function(seen)\n\
+                       host.http({{ url = \"{url_q}/quota\" }})\n\
+                       return {{ windows = {{ }} }}\n\
+                     end }} }})\n"
+                ),
+            ),
+        ],
+    );
+    let dir_b = ext_dir(None, &[("r", &models_named_lua("r", &url_r))]);
+    let clock = FakeClock::new();
+    let (sink_a, _) = Watching::new();
+    let (sink_b, _) = Watching::new();
+    let ext_a = observed_ext(&dir_a, clock, &sink_a);
+    let ext_b = observed_ext(&dir_b, FakeClock::new(), &sink_b);
+    // Command A suspends on its held request.
+    let (cmd_tx, cmd_rx) = std::sync::mpsc::channel();
+    {
+        let ext_a = Arc::clone(&ext_a);
+        std::thread::spawn(move || {
+            let _sent = cmd_tx.send(ext_a.command("a", ""));
+        });
+    }
+    assert!(
+        held_a.await_requests(1, WAIT),
+        "command A suspended on HTTP"
+    );
+    // Provider p suspends on its first held request while A waits.
+    let provider_p = LuaProvider::new(Arc::clone(&ext_a), "p");
+    let (models_tx, models_rx) = std::sync::mpsc::channel();
+    std::thread::spawn(move || {
+        let _sent = models_tx.send(provider_p.list_models());
+    });
+    assert!(
+        held_p.await_requests(1, WAIT),
+        "provider p suspended on HTTP"
+    );
+    // Quota q runs on the same VM and completes; the second VM overlaps
+    // with its own writer and provider.
+    let pair = CredentialPair {
+        credential: "c".to_owned(),
+        label: "l".to_owned(),
+    };
+    let provider_q = LuaProvider::new(Arc::clone(&ext_a), "q");
+    let quota = within({
+        let provider_q = Arc::clone(&provider_q);
+        let pair = pair.clone();
+        move || provider_q.quota(&pair, None)
+    });
+    assert!(matches!(quota, extensions::QuotaEntry::Reported(_)));
+    let provider_r = LuaProvider::new(ext_b, "r");
+    within(move || provider_r.models()).expect("the second VM lists its models");
+    // Release p's requests in order, then the command: p's callback issues
+    // its second HTTP after its resume.
+    held_p.release();
+    assert!(
+        held_p.await_requests(2, WAIT),
+        "provider p resumed into its second HTTP"
+    );
+    held_a.release();
+    Deadline::after(WAIT)
+        .recv(&models_rx)
+        .expect("waited for p")
+        .expect("p lists its models");
+    Deadline::after(WAIT)
+        .recv(&cmd_rx)
+        .expect("waited for the command")
+        .expect("the command completes");
+    // Each request carries its own provider and purpose: two attempt-1
+    // model-list lines for p, one quota line for q, nothing for commands.
+    // The second VM's writer holds only its provider's line.
+    let mut own: Vec<(String, String, u32)> = sink_a
+        .records()
+        .iter()
+        .map(|record| {
+            (
+                record.provider.clone(),
+                serde_json::to_value(record.purpose)
+                    .unwrap()
+                    .as_str()
+                    .unwrap()
+                    .to_owned(),
+                record.attempt,
+            )
+        })
+        .collect();
+    own.sort();
+    assert_eq!(
+        own,
+        [
+            ("p".to_owned(), "model_list".to_owned(), 1),
+            ("p".to_owned(), "model_list".to_owned(), 1),
+            ("q".to_owned(), "quota".to_owned(), 1),
+        ]
+    );
+    let other: Vec<(String, String)> = sink_b
+        .records()
+        .iter()
+        .map(|record| {
+            (
+                record.provider.clone(),
+                serde_json::to_value(record.purpose)
+                    .unwrap()
+                    .as_str()
+                    .unwrap()
+                    .to_owned(),
+            )
+        })
+        .collect();
+    assert_eq!(other, [("r".to_owned(), "model_list".to_owned())]);
+    // A following command stays unobserved: no stale context leaks
+    // between callbacks.
+    within({
+        let ext_a = Arc::clone(&ext_a);
+        move || ext_a.command("b", "")
+    })
+    .expect("the following command succeeds");
+    assert_eq!(sink_a.records().len(), 3);
+}
