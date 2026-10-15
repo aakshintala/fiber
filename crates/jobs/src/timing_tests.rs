@@ -218,6 +218,7 @@ impl Fixture {
 
     fn spawner(&self, launch: Launch, watch: Watch) -> DelegateSpawn {
         DelegateSpawn {
+            depth: 0,
             registry: Arc::clone(&self.registry),
             parent: SessionId("s_parent".into()),
             workspace: self._dir.path().to_path_buf(),
@@ -233,6 +234,7 @@ impl Fixture {
 
     fn messenger(&self, launch: Launch, watch: Watch, last_seq: LastSeq) -> DelegateMessage {
         DelegateMessage {
+            depth: 0,
             registry: Arc::clone(&self.registry),
             parent: SessionId("s_parent".into()),
             clock: Arc::clone(&self.clock) as Arc<dyn contract::clock::Clock>,

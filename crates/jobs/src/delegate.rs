@@ -39,6 +39,8 @@ use crate::registry::{Registry, mint_job_id};
 /// and log under `sessions`; `bound` is the stop bound and `cap` the
 /// output cap.
 pub struct DelegateSpawn {
+    /// This session's depth in the delegate tree.
+    pub depth: u32,
     /// The session's jobs.
     pub registry: Arc<Registry>,
     /// The parent session: the child's `--parent`.
@@ -60,6 +62,23 @@ pub struct DelegateSpawn {
     pub launch: Launch,
     /// Watches the child's socket.
     pub watch: Watch,
+}
+
+pub(crate) const DEPTH_CAP: u32 = 2;
+
+pub(crate) fn depth_refusal(depth: u32, tool: &str) -> Option<Output> {
+    if depth >= DEPTH_CAP {
+        let message = format!(
+            "This delegate is at depth {DEPTH_CAP}, the deepest a delegate can be, so it cannot use `{tool}`; do the work in this session."
+        );
+        Some(crate::registry::failed(
+            ErrorCode::DepthExceeded,
+            message.clone(),
+            message,
+        ))
+    } else {
+        None
+    }
 }
 
 /// Reads `description` and `prompt`: each is required, and each is a
@@ -180,6 +199,9 @@ impl Tool for DelegateSpawn {
         _cancel: &dyn Cancel,
         _emit: &dyn Emit,
     ) -> Output {
+        if let Some(output) = depth_refusal(self.depth, "delegate_spawn") {
+            return output;
+        }
         let (description, prompt) = match check_effects_arguments(arguments) {
             Ok(call) => call,
             Err(message) => {

@@ -255,6 +255,7 @@ fn resume_rig_with_steer(
         },
     );
     let tool = Arc::new(DelegateMessage {
+        depth: 0,
         registry: Arc::clone(&registry),
         parent: SessionId("s_parent".into()),
         clock: Arc::clone(&clock) as Arc<dyn contract::clock::Clock>,

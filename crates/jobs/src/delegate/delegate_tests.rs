@@ -125,6 +125,7 @@ fn child_group(rig: &Rig) -> Watchdog {
 
 fn tool(rig: &Rig) -> DelegateSpawn {
     DelegateSpawn {
+        depth: 0,
         registry: Arc::clone(&rig.registry),
         parent: contract::SessionId("s_parent".into()),
         workspace: rig.sessions.parent().unwrap().to_path_buf(),
@@ -374,6 +375,7 @@ fn a_spawn_error_fails_io_failed_with_no_job() {
     let rig = rig();
     let failing: Launch = Arc::new(|_: &Launched| Command::new("/nonexistent/fiber-test-binary"));
     let spawned = DelegateSpawn {
+        depth: 0,
         registry: Arc::clone(&rig.registry),
         parent: contract::SessionId("s_parent".into()),
         workspace: rig.sessions.parent().unwrap().to_path_buf(),
@@ -402,6 +404,64 @@ fn a_spawn_error_fails_io_failed_with_no_job() {
     assert!(
         rig.inbox.try_recv().is_err(),
         "nothing was recorded, so nothing is sent"
+    );
+}
+
+#[test]
+fn depth_edges_refuse_by_tool_name() {
+    assert!(super::depth_refusal(1, "delegate_spawn").is_none());
+    for depth in [2, 3] {
+        let output = super::depth_refusal(depth, "delegate_fork").unwrap();
+        let error = output.error.unwrap();
+        assert_eq!(error.code, contract::ErrorCode::DepthExceeded);
+        assert_eq!(
+            error.message,
+            "This delegate is at depth 2, the deepest a delegate can be, so it cannot use `delegate_fork`; do the work in this session."
+        );
+    }
+}
+
+#[test]
+fn depth_precedes_arguments_and_model_lookup_without_changing_the_definition() {
+    for depth in [2, 3] {
+        for model in ["fiber:fake/m", "unknown"] {
+            let rig = rig();
+            let mut spawned = tool(&rig);
+            let definition = serde_json::to_value(spawned.definition()).unwrap();
+            spawned.depth = depth;
+            assert_eq!(
+                serde_json::to_value(spawned.definition()).unwrap(),
+                definition
+            );
+            let lookups = Arc::new(AtomicUsize::new(0));
+            let counted = Arc::clone(&lookups);
+            spawned.resolve.lookup = Arc::new(move |_| {
+                counted.fetch_add(1, Ordering::SeqCst);
+                Err("must not resolve".into())
+            });
+            for call in [arguments(model), serde_json::Map::new()] {
+                let output = spawned.run(&call, &fakes::CancelToken::new(), &Recorder::default());
+                assert_eq!(
+                    output.error.unwrap().code,
+                    contract::ErrorCode::DepthExceeded
+                );
+                assert_eq!(lookups.load(Ordering::SeqCst), 0);
+                assert_eq!(rig.launch_count.load(Ordering::SeqCst), 0);
+                assert_eq!(rig.registry.list_text(), "No jobs.\n");
+            }
+        }
+    }
+    let rig = rig();
+    let mut spawned = tool(&rig);
+    spawned.depth = 1;
+    let output = spawned.run(
+        &arguments("unknown"),
+        &fakes::CancelToken::new(),
+        &Recorder::default(),
+    );
+    assert_eq!(
+        output.error.unwrap().code,
+        contract::ErrorCode::InvalidArguments
     );
 }
 
