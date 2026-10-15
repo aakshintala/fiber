@@ -71,6 +71,16 @@ pub(crate) struct Reads {
     /// tests.
     #[cfg(test)]
     reaper_pause: Arc<Mutex<Option<SpawnPause>>>,
+    /// The `settle` loop's pause before its park, armed by a test. Absent
+    /// outside the unit tests.
+    #[cfg(test)]
+    settle_park_pause: Mutex<Option<SpawnPause>>,
+    /// The completion notes a test counts before it releases the settle
+    /// park: the reaper thread and the stdout reader thread each send one
+    /// after their wake bump. Shared through an `Arc` so the threads own
+    /// it. Absent outside the unit tests.
+    #[cfg(test)]
+    completion_notes: Arc<Mutex<Option<mpsc::Sender<()>>>>,
 }
 
 /// One pause of a `credential` wait at its checks, for the interleaving
@@ -337,6 +347,8 @@ impl Reads {
             let holder = Arc::clone(&reaper);
             #[cfg(test)]
             let reaper_pause = Arc::clone(&self.reaper_pause);
+            #[cfg(test)]
+            let reaper_notes = Arc::clone(&self.completion_notes);
             match std::thread::Builder::new()
                 .name("fiber-credential-wait".to_owned())
                 .spawn(move || {
@@ -350,6 +362,8 @@ impl Reads {
                         }
                     }
                     exit_wake.bump();
+                    #[cfg(test)]
+                    Reads::note_completion(&reaper_notes);
                 }) {
                 Ok(_) => {}
                 Err(error) => {
@@ -372,6 +386,8 @@ impl Reads {
         let (sent, received) = mpsc::channel();
         if let Some(mut stdout) = stdout {
             let (sent, wake) = (sent, Arc::clone(&wake));
+            #[cfg(test)]
+            let reader_notes = Arc::clone(&self.completion_notes);
             match std::thread::Builder::new()
                 .name("fiber-credential-stdout".to_owned())
                 .spawn(move || {
@@ -381,6 +397,8 @@ impl Reads {
                         Ok(()) | Err(_) => {}
                     }
                     wake.bump();
+                    #[cfg(test)]
+                    Reads::note_completion(&reader_notes);
                 }) {
                 Ok(_) => {}
                 Err(error) => {
@@ -641,6 +659,8 @@ impl Reads {
             } else {
                 Some(end)
             };
+            #[cfg(test)]
+            self.pause_before_settle_park();
             self.wake.park(clock, wait_until, seen);
         }
     }
@@ -968,6 +988,63 @@ impl Reads {
             match point.release.recv() {
                 Ok(()) | Err(_) => {}
             }
+        }
+    }
+
+    /// Arms one pause before the next `settle` pass's park: the pass sends
+    /// on `entered` once it captured its generation and computed its wait,
+    /// and blocks until `release` arrives, so the test lands the reaper's
+    /// bump between the generation and the park on every run. The pause
+    /// is one-shot; a closed sender releases it.
+    pub(crate) fn pause_at_settle_park(
+        &self,
+        entered: mpsc::Sender<()>,
+        release: mpsc::Receiver<()>,
+    ) {
+        *self
+            .settle_park_pause
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner) = Some(SpawnPause { entered, release });
+    }
+
+    /// Reports the settle reached its park and blocks until the test
+    /// releases it. The slot is taken into a local first and the mutex
+    /// guard dropped before any send or receive blocks, so no lock is
+    /// held across the pause. Runs free unless a test armed a pause
+    /// meanwhile.
+    fn pause_before_settle_park(&self) {
+        let point = self
+            .settle_park_pause
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .take();
+        if let Some(point) = point {
+            match point.entered.send(()) {
+                Ok(()) | Err(_) => {}
+            }
+            match point.release.recv() {
+                Ok(()) | Err(_) => {}
+            }
+        }
+    }
+
+    /// Arms the completion notes a test counts before it releases the
+    /// settle park: the reaper thread and the stdout reader thread each
+    /// send one after their wake bump, in no claimed order.
+    pub(crate) fn note_completions(&self, sender: mpsc::Sender<()>) {
+        *self
+            .completion_notes
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner) = Some(sender);
+    }
+
+    /// Sends one completion note after a credential thread's wake bump, if
+    /// a test armed one. The sender is cloned into a local first and the
+    /// mutex guard dropped before the send, so no lock is held across it.
+    fn note_completion(slot: &Arc<Mutex<Option<mpsc::Sender<()>>>>) {
+        let note = slot.lock().unwrap_or_else(PoisonError::into_inner).clone();
+        if let Some(note) = note {
+            note.send(()).unwrap_or(());
         }
     }
 

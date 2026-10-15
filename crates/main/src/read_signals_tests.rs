@@ -551,6 +551,88 @@ fn a_reaper_held_past_the_old_bound_still_lets_the_terminal_watcher_drop_complet
     terminal_watcher_run(Some(HELD_FOR));
 }
 
+/// The reaper's and the reader's bumps before the settle's park still wake
+/// it: both bumps are counted before the settle resumes, so no later bump
+/// can rescue a park that ignored its generation.
+#[test]
+fn a_reapers_and_a_readers_bumps_before_the_settles_park_still_wake_it() {
+    let root = fakes::TempDir::new("fiber-terminal-watch");
+    let ready = Ready::new(root.path());
+    let fake = FakeClock::new();
+    let clock: Arc<dyn Clock> = fake.clone();
+    let reads = Arc::new(Reads::default());
+    let script = format!("echo $$ > '{}'; exec sleep 600", ready.path().display());
+    // Before the spawn: the group is known only after it starts, so a
+    // command-line watchdog covers a spawn no later watchdog can reach.
+    let pre = fakes::Watchdog::matching(&ready.path().display().to_string());
+    let releases = Arc::new(Releases {
+        reaper: Mutex::new(None),
+        settle: Mutex::new(None),
+    });
+    let (entered, is_entered) = mpsc::channel::<()>();
+    let (release, freed) = mpsc::channel::<()>();
+    reads.pause_at_reaper(entered, freed);
+    *releases
+        .reaper
+        .lock()
+        .unwrap_or_else(|error| error.into_inner()) = Some(release);
+    let (noted, notes) = mpsc::channel::<()>();
+    reads.note_completions(noted);
+    let (parked, is_parked) = mpsc::channel::<()>();
+    let (resume, held) = mpsc::channel::<()>();
+    reads.pause_at_settle_park(parked, held);
+    *releases
+        .settle
+        .lock()
+        .unwrap_or_else(|error| error.into_inner()) = Some(resume);
+    let finished = credential_on_thread(&reads, sh(&script), Duration::from_secs(30), &clock);
+    let pgid = ready.wait(DEADLINE)[0];
+    let watchdog = fakes::Watchdog::group(pgid);
+    let guard = CancelOnSignal::watch(Arc::clone(&reads), Arc::clone(&clock), &[SIGTERM])
+        .expect("the test's registration");
+    let _release = ReleaseOnDrop(Arc::clone(&releases));
+    Deadline::after(DEADLINE)
+        .recv(&is_entered)
+        .expect("the reaper reached its pause");
+    signal_hook::low_level::raise(SIGTERM).expect("the test's raise");
+    // The first pass saw the group alive, captured its generation, and
+    // sits before its park.
+    Deadline::after(DEADLINE)
+        .recv(&is_parked)
+        .expect("the settle reached its park");
+    releases.release_reaper();
+    // Both bumps land before the settle resumes: the reaper's and the
+    // stdout reader's, each noted after its bump. One deadline drains the
+    // one stream; nothing else bumps afterwards.
+    let drain = Deadline::after(DEADLINE);
+    drain.recv(&notes).expect("the first completion note");
+    drain.recv(&notes).expect("the second completion note");
+    // The drop joins the watcher: started on its own thread before the
+    // release and received within its bound, so a hang fails here instead
+    // of hanging the binary. With no clock advance the park must answer
+    // on the counted bumps alone.
+    let (dropped, is_dropped) = mpsc::channel::<()>();
+    std::thread::spawn(move || {
+        drop(guard);
+        dropped.send(()).unwrap_or(());
+    });
+    releases.release_settle();
+    Deadline::after(DEADLINE)
+        .recv(&is_dropped)
+        .expect("the guard's drop");
+    let error = Deadline::after(DEADLINE)
+        .recv(&finished)
+        .expect("the cancelled read")
+        .expect_err("a cancelled read");
+    assert_eq!(error.kind(), std::io::ErrorKind::Interrupted);
+    assert!(
+        fakes::group_empties(pgid, DEADLINE),
+        "the cancel killed the group"
+    );
+    watchdog.stand_down(DEADLINE);
+    pre.stand_down(DEADLINE);
+}
+
 /// The terminal watcher's cancel-settle-drop run, shared by the plain test
 /// and the slow-drop test above. With `Some(held_for)` the credential
 /// reaper stays held for that long before the test releases it.
