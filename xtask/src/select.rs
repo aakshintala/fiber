@@ -256,8 +256,9 @@ pub(crate) fn runtime_read_mismatches(
         (!literals.is_empty()).then_some(literals)
     }
     /// The literals a read reports through a bound name: when the
-    /// argument of a read is one name, directly or behind `&`, holding
-    /// a one-level join, that join's literals.
+    /// argument of a read is one name, directly or behind `&` with an
+    /// optional trailing comma, holding a one-level join, that join's
+    /// literals.
     fn read_name(
         group: &proc_macro2::Group,
         joined: &BTreeMap<String, Vec<String>>,
@@ -266,10 +267,17 @@ pub(crate) fn runtime_read_mismatches(
         while matches!(tokens.peek(), Some(TokenTree::Punct(mark)) if mark.as_char() == '&') {
             tokens.next();
         }
-        match (tokens.next(), tokens.next()) {
-            (Some(TokenTree::Ident(name)), None) => joined.get(&name.to_string()).cloned(),
-            _ => None,
+        let name = match tokens.next() {
+            Some(TokenTree::Ident(name)) => name,
+            _ => return None,
+        };
+        match tokens.next() {
+            None => {}
+            Some(TokenTree::Punct(mark))
+                if mark.as_char() == ',' && tokens.next().is_none() => {}
+            _ => return None,
         }
+        joined.get(&name.to_string()).cloned()
     }
     /// If `stream` holds a plain binding next (`mut`, a name, an
     /// optional `: <type>`, `=`), rebind the name to its value through
@@ -336,21 +344,26 @@ pub(crate) fn runtime_read_mismatches(
             }
             rhs.push(tree);
         }
-        if let Some(literals) = join_on_root(&rhs, root) {
-            root.remove(name.as_str());
-            joined.insert(name, literals);
-        } else if is_manifest_rooted(&rhs)
+        // Walk the value with the old bindings first: Rust resolves a
+        // shadowing `let`'s value to the previous bindings, so the
+        // value must report through them before the new one replaces
+        // them.
+        let shadowed = join_on_root(&rhs, root);
+        let rooted = is_manifest_rooted(&rhs)
             && !rhs
                 .iter()
-                .any(|tree| matches!(tree, TokenTree::Ident(join) if join == "join"))
-        {
+                .any(|tree| matches!(tree, TokenTree::Ident(join) if join == "join"));
+        walk(rhs, root, joined, found, in_read);
+        if let Some(literals) = shadowed {
+            root.remove(name.as_str());
+            joined.insert(name, literals);
+        } else if rooted {
             joined.remove(name.as_str());
             root.insert(name);
         } else {
             root.remove(name.as_str());
             joined.remove(name.as_str());
         }
-        walk(rhs, root, joined, found, in_read);
     }
     /// Walk a group's tokens with the bindings scoped to it: bindings
     /// made inside do not leak out, and an inner `let` never changes
