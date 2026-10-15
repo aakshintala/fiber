@@ -348,10 +348,23 @@ fn a_credential_command_still_running_at_its_timeout_is_killed_and_times_out() {
         fakes::kill_group(pgid, "0").unwrap(),
         "the group died before its timeout"
     );
+    // Scripted alive past the first kill, gone on the third probe: the
+    // settlement's first pass sends once and parks at its poll, the
+    // second sends again, and only SRCH retires the group — so one
+    // advance past the deadline can never answer it, on any load. A pause
+    // after a real SIGKILL cannot hold the group itself alive, and the
+    // scripted sends never touch the real group, so the test kills it for
+    // real after the answer. Armed after the liveness probe above, so the
+    // script covers only the settlement's passes.
+    reads.script_group(
+        pgid,
+        vec![Ok(()), Ok(()), Err(Errno::SRCH)],
+        vec![Ok(()), Ok(())],
+    );
     // Armed while the wait is parked: the settlement pauses after its
-    // first kill, so the acknowledgement proves the timeout killed the
-    // group before the drive below moves time again. Releasing it then
-    // lets the settlement re-kill and reap on the poll cadence.
+    // first kill, so the acknowledgement proves the first send went out
+    // before the drive below moves time again. Releasing it before the
+    // answer lets the settlement re-kill on the poll cadence.
     let (killed, is_killed) = mpsc::channel::<()>();
     let (release, freed) = mpsc::channel::<()>();
     reads.pause_at_settle(killed, freed);
@@ -361,11 +374,11 @@ fn a_credential_command_still_running_at_its_timeout_is_killed_and_times_out() {
     // The timeout re-kills on the poll cadence and parks between passes,
     // then reaps on the same cadence: drive each confirmed poll park to
     // the answer, as the stdout-holding test does. The advance above
-    // wakes only one pass, whose probe can still see a reaped-but-not-
-    // yet-reaped zombie alive under load; without further advances
-    // nothing ever bumps again and the wait parks forever. Each advance
-    // names its confirmed park, and each park waits only a poll pause of
-    // the drive, so an already-retired group still ends the loop on its
+    // wakes only one pass; without further advances nothing ever bumps
+    // again and the wait parks forever, which is what the script above
+    // forces on every run. The park is observed once per pass, and a
+    // finish that lands on the observation is acknowledged before time
+    // moves, so an already-retired group still ends the loop on its
     // answer instead of stalling on a park that never comes.
     let drive = Deadline::after(DEADLINE);
     let mut answer: Option<std::io::Result<std::process::Output>> = None;
@@ -386,7 +399,13 @@ fn a_credential_command_still_running_at_its_timeout_is_killed_and_times_out() {
             .checked_add(GROUP_POLL)
             .expect("the poll is countable");
         if clock.await_parked(poll, drive.left().min(PARK_PAUSE)) {
-            clock.advance_when_parked(Some(poll), None, GROUP_POLL, &drive);
+            // A reaper or stdout wake may have ended the wait on the
+            // confirmed park: acknowledge it before moving time.
+            if let Ok(got) = finished.try_recv() {
+                answer = Some(got);
+                break;
+            }
+            clock.advance(GROUP_POLL);
         }
     }
     let error = match answer {
@@ -396,9 +415,20 @@ fn a_credential_command_still_running_at_its_timeout_is_killed_and_times_out() {
             .expect_err("a command still running at its timeout"),
     };
     assert_eq!(error.kind(), std::io::ErrorKind::TimedOut);
+    assert_eq!(reads.scripted_sends(), 2, "one send per pass before SRCH");
+    assert!(
+        !listed(&reads).contains(&pgid),
+        "SRCH retires the group: {:?}",
+        listed(&reads)
+    );
+    // The scripted sends never touched the real group: kill it for real
+    // and reap it on every path.
+    match fakes::kill_group(pgid, "KILL") {
+        Ok(_) | Err(_) => {}
+    }
     assert!(
         fakes::group_empties(pgid, DEADLINE),
-        "the timeout killed the group"
+        "the real group is gone"
     );
     watchdog.stand_down(DEADLINE);
     pre.stand_down(DEADLINE);
