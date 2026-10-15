@@ -530,7 +530,9 @@ impl Loop {
                     "Call under review: the last tool call above, {name}.\nDeclared effects: {declared}\nExtension {names} rewrote this call's arguments; it runs with {arguments}\nWorkspace root: {workspace}"
                 )
             }
-            None => format!("Call under review: the last tool call above, {name}.\nDeclared effects: {declared}\nWorkspace root: {workspace}"),
+            None => format!(
+                "Call under review: the last tool call above, {name}.\nDeclared effects: {declared}\nWorkspace root: {workspace}"
+            ),
         };
         conversation.push(Input::User {
             text: effects,
