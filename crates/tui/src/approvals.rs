@@ -20,6 +20,7 @@ use crate::keys::{Edit, Key};
 use approval::{Approval, Choice};
 
 mod approval;
+mod builder;
 pub(crate) mod form;
 mod one_question;
 
@@ -110,6 +111,17 @@ pub(crate) struct PanelSpot {
     pub(crate) line: usize,
     pub(crate) cols: Option<(u16, u16)>,
     pub(crate) spot: form::Spot,
+}
+
+/// Who a question panel asks for and where it sits in the queue: the
+/// asking session's name when it has one, else its id, `place` only when
+/// more than one request waits, and the form's question count, `None` on
+/// a one-question panel (`docs/tui.md`, "A question form").
+#[derive(Debug, Clone)]
+pub(super) struct Title {
+    pub(super) session: String,
+    pub(super) place: Option<(usize, usize)>,
+    pub(super) questions: Option<usize>,
 }
 
 /// What a key did on the open panel.
