@@ -39,6 +39,22 @@ pub(super) const COMPILED_IN: &[(&str, &str)] = &[
     ("providers/opencode/providers/opencode-go.json", "extensions"),
     ("providers/opencode/providers/opencode-zen.json", "extensions"),
     ("providers/openrouter/providers/openrouter.json", "extensions"),
+    ("providers/anthropic/providers/anthropic.json", "main"),
+    ("providers/codex/providers/codex.json", "main"),
+    ("providers/gemini/providers/gemini.json", "main"),
+    ("providers/muse/providers/muse.json", "main"),
+    ("providers/openai/providers/openai.json", "main"),
+    ("providers/opencode/providers/opencode-go.json", "main"),
+    ("providers/opencode/providers/opencode-zen.json", "main"),
+    ("providers/openrouter/providers/openrouter.json", "main"),
+    (
+        "providers/openrouter/tests/models-from-the-recording.json",
+        "main",
+    ),
+    (
+        "research/provider-errors/raw/muse-responses.ok-stream.json",
+        "main",
+    ),
     ("providers/opencode/providers/opencode-go.lua", "main"),
     (
         "providers/opencode/tests/quota-recorded-usage-returns-three-windows.json",

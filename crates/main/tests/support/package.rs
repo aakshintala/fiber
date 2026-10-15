@@ -34,10 +34,10 @@ pub(crate) fn copy_package(name: &str, to: &Path, origin: &str, url: &str) -> Pa
 /// The recorded OpenRouter listing `models()` serves in the `ask` tests:
 /// the reply body of `models-from-the-recording.json`'s scripted request.
 pub(crate) fn openrouter_listing() -> Vec<u8> {
-    let path = Path::new(env!("CARGO_MANIFEST_DIR"))
-        .join("../../providers/openrouter/tests/models-from-the-recording.json");
-    let case: Value =
-        serde_json::from_slice(&fs::read(path).unwrap()).expect("the recording case reads");
+    let case: Value = serde_json::from_str(include_str!(
+        "../../../../providers/openrouter/tests/models-from-the-recording.json"
+    ))
+    .expect("the recording case reads");
     case["host"]["http"][0]["reply"]["body"]
         .as_str()
         .expect("the recording case holds one body")
