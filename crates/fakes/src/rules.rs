@@ -11,6 +11,8 @@ use contract::rules::{Rules, RulesError, StandingRules};
 pub struct NoRules;
 
 impl Rules for NoRules {
+    // Exempt: body already returns StandingRules::default(), so Ok(Default::default()) is the same value.
+    #[cfg_attr(false, mutants::skip)]
     fn read(&self) -> Result<StandingRules, RulesError> {
         Ok(StandingRules::default())
     }
@@ -50,6 +52,8 @@ impl Default for RecordingRules {
 }
 
 impl Rules for RecordingRules {
+    // Exempt: body already returns StandingRules::default(), so Ok(Default::default()) is the same value.
+    #[cfg_attr(false, mutants::skip)]
     fn read(&self) -> Result<StandingRules, RulesError> {
         Ok(StandingRules::default())
     }
