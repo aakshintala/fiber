@@ -577,3 +577,316 @@ fn the_watch_without_a_boundary_takes_the_replayed_exit() {
     assert!(matches!(watched, jobs::Watched::Exited));
     assert_eq!(*seen.lock().unwrap(), ["fiber_exited"]);
 }
+
+/// Serves one steer on the socket `home/run/<id>`: answers the subscribe
+/// with this build's schema, reads the steer line and the tools probe,
+/// answers the probe, then answers the steer. Bound before returning, so
+/// the socket exists when the seam connects; the thread owns the listener
+/// and serves the one connection. The parsed steer line comes back over
+/// the channel: `None` when the client closed after the subscribe, so no
+/// byte of the steer line was written.
+fn serve_steer(
+    home: &std::path::Path,
+    id: &str,
+    reject: bool,
+) -> (
+    std::thread::JoinHandle<()>,
+    std::sync::mpsc::Receiver<Option<serde_json::Value>>,
+) {
+    let run = home.join("run");
+    std::fs::create_dir_all(&run).unwrap();
+    // Bound before returning, so the socket file exists when the seam
+    // connects; only the accept runs on the thread.
+    let listener = UnixListener::bind(run.join(id)).unwrap();
+    let (seen, received) = std::sync::mpsc::channel();
+    let served = std::thread::spawn(move || {
+        let (stream, _) = listener.accept().unwrap();
+        let mut reader = BufReader::new(stream.try_clone().unwrap());
+        let mut writer = stream;
+        let mut line = String::new();
+        reader.read_line(&mut line).unwrap();
+        let sub: serde_json::Value = serde_json::from_str(&line).unwrap();
+        let accepted = json!({
+            "kind": "command_accepted",
+            "payload": {"command_id": sub["id"]},
+            "schema_version": contract::SCHEMA_VERSION,
+            "ts": 0,
+        });
+        writeln!(writer, "{accepted}").unwrap();
+        // The steer line, unless the commit refused it and the client
+        // closed instead.
+        line.clear();
+        if reader.read_line(&mut line).unwrap() == 0 {
+            seen.send(None).unwrap_or(());
+            return;
+        }
+        let steered: serde_json::Value = serde_json::from_str(&line).unwrap();
+        // The tools probe follows the steer line on the same connection.
+        line.clear();
+        reader.read_line(&mut line).unwrap();
+        let probe: serde_json::Value = serde_json::from_str(&line).unwrap();
+        // The probe's answer proves the message is queued, so it goes
+        // first; the steer's answer ends the attempt.
+        let probe_ok = json!({
+            "kind": "command_accepted",
+            "payload": {"command_id": probe["id"]},
+            "schema_version": contract::SCHEMA_VERSION,
+            "ts": 0,
+        });
+        writeln!(writer, "{probe_ok}").unwrap();
+        let answer = if reject {
+            json!({
+                "kind": "command_rejected",
+                "payload": {
+                    "command_id": steered["id"],
+                    "code": "message_refused",
+                    "message": "no thanks",
+                },
+                "schema_version": contract::SCHEMA_VERSION,
+                "ts": 0,
+            })
+        } else {
+            json!({
+                "kind": "command_accepted",
+                "payload": {"command_id": steered["id"]},
+                "schema_version": contract::SCHEMA_VERSION,
+                "ts": 0,
+            })
+        };
+        writeln!(writer, "{answer}").unwrap();
+        seen.send(Some(steered)).unwrap_or(());
+    });
+    (served, received)
+}
+
+/// Runs the steer seam on its own thread and receives its outcome within
+/// 5 s: every blocking socket read happens there, so a steer that never
+/// returns fails the test instead of hanging it. `commit` and `on_queued`
+/// count their calls in the returned counters.
+#[track_caller]
+fn steer_bounded(
+    steer: &jobs::Steer,
+    id: &SessionId,
+    command: &str,
+    text: &str,
+    commit: bool,
+) -> (
+    jobs::Steered,
+    std::sync::Arc<std::sync::atomic::AtomicUsize>,
+    std::sync::Arc<std::sync::atomic::AtomicUsize>,
+) {
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    let steer = Arc::clone(steer);
+    let id = id.clone();
+    let command = command.to_owned();
+    let text = text.to_owned();
+    let commits = Arc::new(AtomicUsize::new(0));
+    let queued = Arc::new(AtomicUsize::new(0));
+    let (done, finished) = std::sync::mpsc::channel();
+    let counted = Arc::clone(&commits);
+    let probed = Arc::clone(&queued);
+    std::thread::spawn(move || {
+        let mut commit_once = || {
+            counted.fetch_add(1, Ordering::SeqCst);
+            commit
+        };
+        let mut on_queued = || {
+            probed.fetch_add(1, Ordering::SeqCst);
+        };
+        done.send(steer(
+            &id,
+            &command,
+            &text,
+            &mut commit_once,
+            &mut on_queued,
+        ))
+        .unwrap_or(());
+    });
+    let outcome = Deadline::after(std::time::Duration::from_secs(5))
+        .recv_or_fail(&finished, "the steer to return");
+    (outcome, commits, queued)
+}
+
+#[test]
+fn the_steer_seam_maps_an_accepted_steer() {
+    use std::sync::atomic::Ordering;
+    let root = fakes::TempDir::new("dm-steer");
+    let home = root.path().join("home");
+    let id = SessionId("s_steer_ok".into());
+    let (_served, seen) = serve_steer(&home, &id.0, false);
+    let (outcome, commits, queued) =
+        steer_bounded(&super::steerer(&home), &id, "c_1", "check the lint", true);
+    assert!(matches!(outcome, jobs::Steered::Accepted), "{outcome:?}");
+    assert_eq!(commits.load(Ordering::SeqCst), 1);
+    assert_eq!(queued.load(Ordering::SeqCst), 1);
+    let line = Deadline::after(std::time::Duration::from_secs(5))
+        .recv_or_fail(&seen, "the server to observe the steer")
+        .expect("the client wrote the steer line");
+    assert_eq!(line["id"], "c_1");
+    assert_eq!(line["command"], "steer");
+    assert_eq!(
+        line["args"]["content"],
+        json!([{"type": "text", "text": "check the lint"}])
+    );
+}
+
+#[test]
+fn the_steer_seam_maps_a_rejected_steer() {
+    use std::sync::atomic::Ordering;
+    let root = fakes::TempDir::new("dm-steer");
+    let home = root.path().join("home");
+    let id = SessionId("s_steer_no".into());
+    let (_served, seen) = serve_steer(&home, &id.0, true);
+    let (outcome, commits, queued) =
+        steer_bounded(&super::steerer(&home), &id, "c_2", "check the lint", true);
+    let jobs::Steered::Rejected(failure) = outcome else {
+        panic!("a refused steer is not rejected: {outcome:?}");
+    };
+    assert_eq!(failure.code, contract::ErrorCode::MessageRefused);
+    assert_eq!(failure.message, "no thanks");
+    assert_eq!(commits.load(Ordering::SeqCst), 1);
+    assert_eq!(queued.load(Ordering::SeqCst), 1);
+    let line = Deadline::after(std::time::Duration::from_secs(5))
+        .recv_or_fail(&seen, "the server to observe the steer")
+        .expect("the client wrote the steer line");
+    assert_eq!(line["id"], "c_2");
+}
+
+#[test]
+fn the_steer_seam_maps_a_missing_socket_to_gone() {
+    use std::sync::atomic::Ordering;
+    let root = fakes::TempDir::new("dm-steer");
+    let home = root.path().join("home");
+    std::fs::create_dir_all(home.join("run")).unwrap();
+    let id = SessionId("s_steer_gone".into());
+    let (outcome, commits, _queued) =
+        steer_bounded(&super::steerer(&home), &id, "c_3", "check the lint", true);
+    assert!(matches!(outcome, jobs::Steered::Gone), "{outcome:?}");
+    assert_eq!(commits.load(Ordering::SeqCst), 0);
+}
+
+#[test]
+fn the_steer_seam_maps_a_refused_commit_to_withheld() {
+    let root = fakes::TempDir::new("dm-steer");
+    let home = root.path().join("home");
+    let id = SessionId("s_steer_hold".into());
+    let (_served, seen) = serve_steer(&home, &id.0, false);
+    let (outcome, _, _) =
+        steer_bounded(&super::steerer(&home), &id, "c_4", "check the lint", false);
+    assert!(matches!(outcome, jobs::Steered::Withheld), "{outcome:?}");
+    // The server saw the subscribe, then end of file: no steer line.
+    let line = Deadline::after(std::time::Duration::from_secs(5))
+        .recv_or_fail(&seen, "the server to observe the close");
+    assert!(line.is_none(), "a refused commit wrote: {line:?}");
+}
+
+/// Writes `lines` as the log `<sessions>/<sid>/events.jsonl`, each with a
+/// trailing newline.
+fn write_log(sessions: &std::path::Path, sid: &str, lines: &[serde_json::Value]) {
+    let dir = sessions.join(sid);
+    std::fs::create_dir_all(&dir).unwrap();
+    let mut text = String::new();
+    for line in lines {
+        text.push_str(&line.to_string());
+        text.push('\n');
+    }
+    std::fs::write(dir.join("events.jsonl"), text).unwrap();
+}
+
+/// One envelope line carrying `seq`, in the served shape.
+fn envelope(seq: u64) -> serde_json::Value {
+    json!({
+        "kind": "fiber_exited",
+        "session_id": "s_test",
+        "ts": 0,
+        "schema_version": contract::SCHEMA_VERSION,
+        "seq": seq,
+        "payload": {},
+    })
+}
+
+#[test]
+fn the_last_seq_seam_reads_the_last_complete_lines_seq() {
+    let root = fakes::TempDir::new("dm-seq");
+    let sessions = root.path().join("sessions");
+    write_log(&sessions, "s_seq", &[envelope(1), envelope(7)]);
+    let last = super::last_seq_reader(&sessions)(&SessionId("s_seq".into()));
+    assert_eq!(last, Ok(Some(7)));
+}
+
+#[test]
+fn the_last_seq_seam_reads_an_empty_log_as_none() {
+    let root = fakes::TempDir::new("dm-seq");
+    let sessions = root.path().join("sessions");
+    write_log(&sessions, "s_empty", &[]);
+    let last = super::last_seq_reader(&sessions)(&SessionId("s_empty".into()));
+    assert_eq!(last, Ok(None));
+}
+
+#[test]
+fn the_last_seq_seam_names_a_missing_log_in_its_reason() {
+    let root = fakes::TempDir::new("dm-seq");
+    let sessions = root.path().join("sessions");
+    std::fs::create_dir_all(&sessions).unwrap();
+    let Err(reason) = super::last_seq_reader(&sessions)(&SessionId("s_missing".into())) else {
+        panic!("a missing log reads a boundary");
+    };
+    assert!(
+        reason.contains("sessions/s_missing/events.jsonl"),
+        "{reason}"
+    );
+}
+
+/// One session's delegates with its registry held back, for the
+/// `message()` wiring cases.
+fn message_rig() -> (super::Delegates, Arc<jobs::Registry>) {
+    let dir = fakes::TempDir::new("fiber-delegate-message");
+    let clock: Arc<dyn contract::clock::Clock> = fakes::clock::FakeClock::new();
+    let jobs = jobs::Registry::new(
+        dir.path().join("artifacts"),
+        Arc::clone(&clock),
+        Arc::new(fakes::Recorder::default()),
+    );
+    let delegates = super::Delegates::new(
+        dir.path().join("fiber-stub"),
+        dir.path().into(),
+        SessionId("s_parent".into()),
+        dir.path().into(),
+        dir.path().join("sessions"),
+        Arc::clone(&jobs),
+        clock,
+        jobs::Resolve {
+            lookup: Arc::new(|_| Err("unused".into())),
+            catalogue: Arc::from("unused"),
+        },
+    );
+    (delegates, jobs)
+}
+
+#[test]
+fn the_message_tool_shares_the_spawn_tools_registry_launch_watch_and_depth() {
+    use contract::tool::Tool as _;
+    let (delegates, jobs) = message_rig();
+    let message = delegates.message();
+    let spawned = delegates.tool();
+    assert_eq!(message.depth, spawned.depth);
+    assert_eq!(message.depth, 0);
+    assert!(Arc::ptr_eq(&message.registry, &jobs));
+    assert!(Arc::ptr_eq(&message.launch, &spawned.launch));
+    assert!(Arc::ptr_eq(&message.watch, &spawned.watch));
+    assert!(Arc::ptr_eq(&message.steer, &delegates.steer));
+    assert!(Arc::ptr_eq(&message.last_seq, &delegates.last_seq));
+    assert_eq!(message.parent, SessionId("s_parent".into()));
+    assert_eq!(message.bound, doors::SHUTDOWN_BOUND);
+    assert_eq!(message.cap, super::OUTPUT_CAP);
+    assert_eq!(message.definition().name, "delegate_message");
+}
+
+#[test]
+fn the_session_depth_reaches_the_message_tool() {
+    super::set_depth(1);
+    super::set_depth(2);
+    assert_eq!(super::depth(), 1);
+    let (delegates, _jobs) = message_rig();
+    assert_eq!(delegates.message().depth, 1);
+}

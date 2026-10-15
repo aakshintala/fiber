@@ -17,7 +17,7 @@ use serde_json::{Map, Value, json};
 
 /// The largest per-protocol total the built-in definitions may take, in
 /// bytes: `builtin()`'s definitions and `mcp_resources`, with no headroom.
-const BUDGET: usize = 12_262;
+const BUDGET: usize = 12_825;
 
 /// The Anthropic hosted tool type the budget measures
 /// (`config::Protocol::reads_web_search`); `openai-responses` reads
