@@ -2,7 +2,7 @@
 //!
 //! A throwaway look prototype, so this draws the owner's verdict directly:
 //! every floating surface reuses the input box's idiom, a ▄ edge above, a ▀
-//! edge below, a raised surface, every content row opened by a ▌ stripe.
+//! edge below, a raised surface, two blank columns on each side of the text.
 //! No new frame style lives here; surfaces that need one say so in the PR.
 
 use super::{BI, BLUE, Row, bold, dim, fg, fit, row, slab, sp, t, width, wrap_rows};
@@ -299,12 +299,12 @@ mod tests {
             assert_eq!(buf[(x, y)].symbol(), "▀");
             assert_eq!(buf[(x, y)].fg, BI);
         }
-        // A raised surface behind the content, the stripe opening each row.
-        assert_eq!(buf[(0, 2)].symbol(), "▌");
-        assert_eq!(buf[(0, 2)].fg, BLUE);
+        // A raised surface behind the content, two blank columns opening each row.
+        assert_eq!(buf[(0, 2)].symbol(), " ");
+        assert_eq!(buf[(1, 2)].symbol(), " ");
         assert_eq!(buf[(4, 4)].bg, BI);
-        // No new frame style: no border glyphs anywhere.
-        assert!(!text(&rows).chars().any(|c| "│─┌┐└┘├┤┬┴┼".contains(c)));
+        // No new frame style: no border glyphs anywhere, and no stripe either.
+        assert!(!text(&rows).chars().any(|c| "│─┌┐└┘├┤┬┴┼▌▐".contains(c)));
     }
 
     #[test]
@@ -316,13 +316,13 @@ mod tests {
             // The first and last interior rows are blank: no text touches an edge.
             assert!(lines[1].trim().is_empty(), "no top pad: {:?}", lines[1]);
             assert!(lines[lines.len() - 2].trim().is_empty(), "no bottom pad");
-            // Two blank columns after the stripe and at the row's end.
+            // Two blank columns at each end of the row.
             for (i, l) in lines.iter().enumerate().skip(1).take(lines.len() - 2) {
                 if l.trim().is_empty() {
                     continue;
                 }
                 let cells: Vec<char> = l.chars().collect();
-                assert_eq!(&cells[1..3], &[' ', ' '], "row {i} touches the stripe");
+                assert_eq!(&cells[0..2], &[' ', ' '], "row {i} touches the left edge");
                 assert_eq!(
                     &cells[cells.len() - 2..],
                     &[' ', ' '],
@@ -336,16 +336,16 @@ mod tests {
     fn width_is_content_plus_padding_between_min_and_max() {
         // At, just below and just above both clamps; the area wins when tiny.
         let wide = 200;
-        assert_eq!(width_for(MIN_W - 5 - 1, wide), MIN_W);
-        assert_eq!(width_for(MIN_W - 5, wide), MIN_W);
-        assert_eq!(width_for(MIN_W - 5 + 1, wide), MIN_W + 1);
-        assert_eq!(width_for(MAX_W - 5 - 1, wide), MAX_W - 1);
-        assert_eq!(width_for(MAX_W - 5, wide), MAX_W);
-        assert_eq!(width_for(MAX_W - 5 + 1, wide), MAX_W);
+        assert_eq!(width_for(MIN_W - 4 - 1, wide), MIN_W);
+        assert_eq!(width_for(MIN_W - 4, wide), MIN_W);
+        assert_eq!(width_for(MIN_W - 4 + 1, wide), MIN_W + 1);
+        assert_eq!(width_for(MAX_W - 4 - 1, wide), MAX_W - 1);
+        assert_eq!(width_for(MAX_W - 4, wide), MAX_W);
+        assert_eq!(width_for(MAX_W - 4 + 1, wide), MAX_W);
         assert_eq!(width_for(60, 50), 50);
         // Wrapping content shrinks to what it needs, never under the floor.
         assert_eq!(fit_width(20, 71, 160), MIN_W);
-        assert_eq!(fit_width(210, 71, 160), 76);
+        assert_eq!(fit_width(210, 71, 160), 75);
         assert_eq!(fit_width(210, 71, 60), 60);
     }
 
@@ -463,7 +463,7 @@ mod tests {
         let rows = demo(Some(title_row("Title", None)));
         let foot = rows.iter().find(|r| plain(r).contains("a hint")).unwrap();
         let t = plain(foot);
-        assert!(t.starts_with("▌  a hint"), "centred or flush: {t:?}");
+        assert!(t.starts_with("  a hint"), "centred or flush: {t:?}");
     }
 
     #[test]
@@ -479,8 +479,8 @@ mod tests {
             .flat_map(|r| r.hot.iter().map(|&(a, b, _)| (a, b)))
             .collect();
         assert_eq!(hot.len(), 1);
-        // Past the margin and the stripe: the target covers the word alone.
-        assert_eq!(hot[0], (m as u16 + 3, m as u16 + 3 + 8));
+        // Past the margin and the padding: the target covers the word alone.
+        assert_eq!(hot[0], (m as u16 + 2, m as u16 + 2 + 8));
         // The margins carry no background: the panel never fills the area.
         let buf = buffer(&rows, 100);
         assert_ne!(buf[(0, 2)].bg, BI);
@@ -500,62 +500,34 @@ mod tests {
     }
 
     #[test]
-    fn stripe_modes_resize_the_chrome() {
-        // (mode, chrome): left keeps today's 3 + 2, none drops the stripe
-        // to 2 + 2, both adds a right stripe for 3 + 3.
-        for (mode, chrome) in [(Stripe::Left, 5), (Stripe::None, 4), (Stripe::Both, 6)] {
-            set_stripe(mode);
-            assert_eq!(left_w() + pad_r(), chrome, "chrome in {mode:?}");
-            assert_eq!(inner_w(48), 48 - chrome, "inner_w in {mode:?}");
-            assert_eq!(inner_w(MIN_W), MIN_W - chrome, "inner_w floor in {mode:?}");
-            assert_eq!(
-                inner_w(MAX_W),
-                MAX_W - chrome,
-                "inner_w ceiling in {mode:?}"
-            );
-            let wide = 200;
-            assert_eq!(width_for(MIN_W - chrome, wide), MIN_W, "floor in {mode:?}");
-            assert_eq!(
-                width_for(MIN_W - chrome + 1, wide),
-                MIN_W + 1,
-                "above the floor in {mode:?}"
-            );
-            assert_eq!(
-                width_for(MAX_W - chrome, wide),
-                MAX_W,
-                "ceiling in {mode:?}"
-            );
-            assert_eq!(
-                width_for(MAX_W - chrome + 1, wide),
-                MAX_W,
-                "above the ceiling in {mode:?}"
-            );
-            assert_eq!(width_for(60, 50), 50, "the area wins in {mode:?}");
-        }
-        set_stripe(Stripe::Left);
+    fn the_chrome_is_two_blank_columns_each_side() {
+        // Overlays dropped the stripe: two blank columns on each side of the
+        // text, so the chrome is 4 on every panel.
+        assert_eq!(left_w() + pad_r(), 4, "chrome drifted");
+        assert_eq!(inner_w(48), 44, "inner width drifted");
+        assert_eq!(inner_w(MIN_W), MIN_W - 4, "inner width floor drifted");
+        assert_eq!(inner_w(MAX_W), MAX_W - 4, "inner width ceiling drifted");
+        let wide = 200;
+        assert_eq!(width_for(MIN_W - 4 - 1, wide), MIN_W);
+        assert_eq!(width_for(MIN_W - 4, wide), MIN_W);
+        assert_eq!(width_for(MIN_W - 4 + 1, wide), MIN_W + 1);
+        assert_eq!(width_for(MAX_W - 4 - 1, wide), MAX_W - 1);
+        assert_eq!(width_for(MAX_W - 4, wide), MAX_W);
+        assert_eq!(width_for(MAX_W - 4 + 1, wide), MAX_W);
+        assert_eq!(width_for(60, 50), 50, "the area wins");
     }
 
     #[test]
-    fn stripe_modes_draw_in_the_buffer() {
-        // Left is exactly today's output: the stripe opens row 2 and the
-        // row ends two cells short of the edge, with no right stripe.
-        set_stripe(Stripe::Left);
-        let rows = demo(Some(title_row("Title", None)));
-        let buf = buffer(&rows, 48);
-        assert_eq!(buf[(0, 2)].symbol(), "▌");
-        assert_eq!(buf[(0, 2)].fg, BLUE);
-        assert_eq!(buf[(47, 2)].symbol(), " ");
-        assert_eq!(inner_w(48), 43);
-        // None draws no stripe on either side, with symmetric padding:
-        // two blank cells left and right of every content row.
-        set_stripe(Stripe::None);
+    fn content_starts_two_columns_in_with_no_stripe() {
+        // Every content row opens two blank columns in and ends two blank
+        // columns short of the edge, with no stripe on either side.
         let rows = demo(Some(title_row("Title", None)));
         let buf = buffer(&rows, 48);
         for y in 0..rows.len() as u16 {
             for x in 0..48 {
                 assert!(
                     !matches!(buf[(x, y)].symbol(), "▌" | "▐"),
-                    "a stripe in none at ({x}, {y})"
+                    "a stripe at ({x}, {y})"
                 );
             }
         }
@@ -573,61 +545,24 @@ mod tests {
                 "row {y} touches the right edge"
             );
         }
-        // Both keeps the left stripe and closes each content row with a
-        // right one, two blank columns between each stripe and the text.
-        set_stripe(Stripe::Both);
-        let rows = demo(Some(title_row("Title", None)));
-        let buf = buffer(&rows, 48);
-        let t = text(&rows);
-        let lines: Vec<&str> = t.split('\n').collect();
-        for (y, l) in lines.iter().enumerate().skip(1).take(lines.len() - 2) {
-            let y = y as u16;
-            if l.trim().is_empty() {
-                // Blank rows stay blank: no stripe on either side.
-                assert_eq!(buf[(0, y)].symbol(), " ", "a left stripe on blank row {y}");
-                assert_eq!(
-                    buf[(47, y)].symbol(),
-                    " ",
-                    "a right stripe on blank row {y}"
-                );
-                continue;
-            }
-            assert!(l.starts_with('▌'), "no left stripe on row {y}: {l:?}");
-            assert!(l.ends_with('▐'), "no right stripe on row {y}: {l:?}");
-            assert_eq!(buf[(0, y)].symbol(), "▌", "no left stripe on row {y}");
-            assert_eq!(buf[(0, y)].fg, BLUE, "the left stripe lost its colour");
-            assert_eq!(buf[(47, y)].symbol(), "▐", "no right stripe on row {y}");
-            assert_eq!(buf[(47, y)].fg, BLUE, "the right stripe lost its colour");
-            for x in [1, 2, 45, 46] {
-                assert_eq!(buf[(x, y)].symbol(), " ", "row {y} touches a stripe at {x}");
-            }
-        }
-        set_stripe(Stripe::Left);
+        assert_eq!(inner_w(48), 44);
     }
 
     #[test]
-    fn stripe_modes_shift_click_targets_with_the_chrome() {
-        for (mode, dx) in [
-            (Stripe::Left, 3u16),
-            (Stripe::None, 2u16),
-            (Stripe::Both, 3u16),
-        ] {
-            set_stripe(mode);
-            let body = vec![crate::hot_row(vec![(
-                sp("thinking", dim()),
-                Some(crate::Act::PickRefresh),
-            )])];
-            let rows = frame(None, body, None, 40);
-            let hot: Vec<(u16, u16)> = rows
-                .iter()
-                .flat_map(|r| r.hot.iter().map(|&(a, b, _)| (a, b)))
-                .collect();
-            assert_eq!(hot.len(), 1);
-            // Past the left chrome: the target covers the word alone.
-            assert_eq!(hot[0], (dx, dx + 8), "click target in {mode:?}");
-            let marked = rows.iter().find(|r| !r.hot.is_empty()).unwrap();
-            assert_eq!(marked.pre, dx, "pre in {mode:?}");
-        }
-        set_stripe(Stripe::Left);
+    fn click_targets_follow_the_two_column_padding() {
+        let body = vec![crate::hot_row(vec![(
+            sp("thinking", dim()),
+            Some(crate::Act::PickRefresh),
+        )])];
+        let rows = frame(None, body, None, 40);
+        let hot: Vec<(u16, u16)> = rows
+            .iter()
+            .flat_map(|r| r.hot.iter().map(|&(a, b, _)| (a, b)))
+            .collect();
+        assert_eq!(hot.len(), 1);
+        // Past the two blank columns: the target covers the word alone.
+        assert_eq!(hot[0], (2, 2 + 8));
+        let marked = rows.iter().find(|r| !r.hot.is_empty()).unwrap();
+        assert_eq!(marked.pre, 2);
     }
 }
