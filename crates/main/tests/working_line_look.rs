@@ -82,11 +82,11 @@ fn held_tool(setup: &Setup) -> PathBuf {
 /// turn's.
 fn run_held_tool(run: &mut Run) {
     run.wait_screen("the approval", |grid| {
-        grid.rows.iter().any(|row| row.contains("allow once"))
+        grid.rows.iter().any(|row| row.contains("Allow once"))
     });
     run.write(b"\r");
     run.wait_screen("the tool running", |grid| {
-        !grid.rows.iter().any(|row| row.contains("allow once")) && session_box(grid).is_some()
+        !grid.rows.iter().any(|row| row.contains("Allow once")) && session_box(grid).is_some()
     });
 }
 
@@ -94,7 +94,7 @@ fn run_held_tool(run: &mut Run) {
 /// waits for the box.
 fn aside_approval(run: &mut Run) {
     run.wait_screen("the approval", |grid| {
-        grid.rows.iter().any(|row| row.contains("allow once"))
+        grid.rows.iter().any(|row| row.contains("Allow once"))
     });
     run.write(ESC);
     run.wait_screen("the box behind the badge", |grid| {
@@ -106,7 +106,7 @@ fn aside_approval(run: &mut Run) {
 fn answer_approval(run: &mut Run) {
     run.write(ALT_A);
     run.wait_screen("the reopened approval", |grid| {
-        grid.rows.iter().any(|row| row.contains("allow once"))
+        grid.rows.iter().any(|row| row.contains("Allow once"))
     });
     run.write(b"\r");
 }
@@ -372,7 +372,7 @@ fn the_working_line_glimmers_and_the_queue_selects() {
     // removes the marker.
     answer_approval(&mut run);
     run.wait_screen("the tool running", |grid| {
-        !grid.rows.iter().any(|row| row.contains("allow once")) && working(grid).is_some()
+        !grid.rows.iter().any(|row| row.contains("Allow once")) && working(grid).is_some()
     });
 
     // Frame A: the band shows on the running tool's line.

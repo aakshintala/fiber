@@ -1,0 +1,318 @@
+{
+ "route": "go",
+ "protocol": "responses",
+ "model": "muse-spark-1.2-contributor",
+ "base": "https://opencode.ai/zen/go",
+ "levels": [
+  {
+   "level": "off",
+   "status": 400,
+   "elapsed_s": 0.65,
+   "request": {
+    "model": "muse-spark-1.2-contributor",
+    "input": "Reply with the single word: ok",
+    "max_output_tokens": 16,
+    "reasoning": {
+     "effort": "none"
+    },
+    "include": [
+     "reasoning.encrypted_content"
+    ]
+   },
+   "response": {
+    "model": "muse-spark-1.2-contributor",
+    "error": {
+     "code": null,
+     "message": "\"reasoning.effort\" does not support \"none\" with this model.",
+     "param": "reasoning.effort",
+     "type": "invalid_request_error"
+    }
+   }
+  },
+  {
+   "level": "minimal",
+   "status": 200,
+   "elapsed_s": 0.91,
+   "request": {
+    "model": "muse-spark-1.2-contributor",
+    "input": "Reply with the single word: ok",
+    "max_output_tokens": 16,
+    "reasoning": {
+     "effort": "minimal"
+    },
+    "include": [
+     "reasoning.encrypted_content"
+    ]
+   },
+   "response": {
+    "id": "resp_6ad04f019d74ad94396c4d98",
+    "object": "response",
+    "created_at": 1792036609,
+    "status": "incomplete",
+    "parallel_tool_calls": true,
+    "temperature": 1,
+    "top_p": 1,
+    "max_output_tokens": 16,
+    "background": false,
+    "truncation": "disabled",
+    "top_logprobs": 0,
+    "model": "muse-spark-1.2-contributor",
+    "error": null,
+    "incomplete_details": {
+     "reason": "max_output_tokens"
+    },
+    "output": [],
+    "usage": {
+     "input_tokens": 14,
+     "output_tokens": 16,
+     "total_tokens": 30,
+     "input_tokens_details": {
+      "cached_tokens": 0
+     },
+     "output_tokens_details": {
+      "reasoning_tokens": 13
+     }
+    },
+    "instructions": null,
+    "tool_choice": "auto",
+    "tools": [],
+    "reasoning": {
+     "effort": "minimal"
+    }
+   }
+  },
+  {
+   "level": "low",
+   "status": 200,
+   "elapsed_s": 0.84,
+   "request": {
+    "model": "muse-spark-1.2-contributor",
+    "input": "Reply with the single word: ok",
+    "max_output_tokens": 16,
+    "reasoning": {
+     "effort": "low"
+    },
+    "include": [
+     "reasoning.encrypted_content"
+    ]
+   },
+   "response": {
+    "id": "resp_6ad04f02fca9679659bc48a0",
+    "object": "response",
+    "created_at": 1792036609,
+    "status": "incomplete",
+    "parallel_tool_calls": true,
+    "temperature": 1,
+    "top_p": 1,
+    "max_output_tokens": 16,
+    "background": false,
+    "truncation": "disabled",
+    "top_logprobs": 0,
+    "model": "muse-spark-1.2-contributor",
+    "error": null,
+    "incomplete_details": {
+     "reason": "max_output_tokens"
+    },
+    "output": [],
+    "usage": {
+     "input_tokens": 14,
+     "output_tokens": 16,
+     "total_tokens": 30,
+     "input_tokens_details": {
+      "cached_tokens": 0
+     },
+     "output_tokens_details": {
+      "reasoning_tokens": 13
+     }
+    },
+    "instructions": null,
+    "tool_choice": "auto",
+    "tools": [],
+    "reasoning": {
+     "effort": "low"
+    }
+   }
+  },
+  {
+   "level": "medium",
+   "status": 200,
+   "elapsed_s": 0.81,
+   "request": {
+    "model": "muse-spark-1.2-contributor",
+    "input": "Reply with the single word: ok",
+    "max_output_tokens": 16,
+    "reasoning": {
+     "effort": "medium"
+    },
+    "include": [
+     "reasoning.encrypted_content"
+    ]
+   },
+   "response": {
+    "id": "resp_6ad04f022fa93d1ddec84e4a",
+    "object": "response",
+    "created_at": 1792036610,
+    "status": "incomplete",
+    "parallel_tool_calls": true,
+    "temperature": 1,
+    "top_p": 1,
+    "max_output_tokens": 16,
+    "background": false,
+    "truncation": "disabled",
+    "top_logprobs": 0,
+    "model": "muse-spark-1.2-contributor",
+    "error": null,
+    "incomplete_details": {
+     "reason": "max_output_tokens"
+    },
+    "output": [],
+    "usage": {
+     "input_tokens": 14,
+     "output_tokens": 16,
+     "total_tokens": 30,
+     "input_tokens_details": {
+      "cached_tokens": 0
+     },
+     "output_tokens_details": {
+      "reasoning_tokens": 13
+     }
+    },
+    "instructions": null,
+    "tool_choice": "auto",
+    "tools": [],
+    "reasoning": {
+     "effort": "medium"
+    }
+   }
+  },
+  {
+   "level": "high",
+   "status": 200,
+   "elapsed_s": 0.87,
+   "request": {
+    "model": "muse-spark-1.2-contributor",
+    "input": "Reply with the single word: ok",
+    "max_output_tokens": 16,
+    "reasoning": {
+     "effort": "high"
+    },
+    "include": [
+     "reasoning.encrypted_content"
+    ]
+   },
+   "response": {
+    "id": "resp_6ad04f03dcaabc1c593845cb",
+    "object": "response",
+    "created_at": 1792036611,
+    "status": "incomplete",
+    "parallel_tool_calls": true,
+    "temperature": 1,
+    "top_p": 1,
+    "max_output_tokens": 16,
+    "background": false,
+    "truncation": "disabled",
+    "top_logprobs": 0,
+    "model": "muse-spark-1.2-contributor",
+    "error": null,
+    "incomplete_details": {
+     "reason": "max_output_tokens"
+    },
+    "output": [],
+    "usage": {
+     "input_tokens": 14,
+     "output_tokens": 16,
+     "total_tokens": 30,
+     "input_tokens_details": {
+      "cached_tokens": 0
+     },
+     "output_tokens_details": {
+      "reasoning_tokens": 13
+     }
+    },
+    "instructions": null,
+    "tool_choice": "auto",
+    "tools": [],
+    "reasoning": {
+     "effort": "high"
+    }
+   }
+  },
+  {
+   "level": "xhigh",
+   "status": 200,
+   "elapsed_s": 2.5,
+   "request": {
+    "model": "muse-spark-1.2-contributor",
+    "input": "Reply with the single word: ok",
+    "max_output_tokens": 16,
+    "reasoning": {
+     "effort": "xhigh"
+    },
+    "include": [
+     "reasoning.encrypted_content"
+    ]
+   },
+   "response": {
+    "id": "resp_6ad04f06b2b7a7d3225f4e65",
+    "object": "response",
+    "created_at": 1792036614,
+    "status": "incomplete",
+    "parallel_tool_calls": true,
+    "temperature": 1,
+    "top_p": 1,
+    "max_output_tokens": 16,
+    "background": false,
+    "truncation": "disabled",
+    "top_logprobs": 0,
+    "model": "muse-spark-1.2-contributor",
+    "error": null,
+    "incomplete_details": {
+     "reason": "max_output_tokens"
+    },
+    "output": [],
+    "usage": {
+     "input_tokens": 14,
+     "output_tokens": 16,
+     "total_tokens": 30,
+     "input_tokens_details": {
+      "cached_tokens": 0
+     },
+     "output_tokens_details": {
+      "reasoning_tokens": 13
+     }
+    },
+    "instructions": null,
+    "tool_choice": "auto",
+    "tools": [],
+    "reasoning": {
+     "effort": "xhigh"
+    }
+   }
+  },
+  {
+   "level": "max",
+   "status": 400,
+   "elapsed_s": 0.59,
+   "request": {
+    "model": "muse-spark-1.2-contributor",
+    "input": "Reply with the single word: ok",
+    "max_output_tokens": 16,
+    "reasoning": {
+     "effort": "max"
+    },
+    "include": [
+     "reasoning.encrypted_content"
+    ]
+   },
+   "response": {
+    "model": "muse-spark-1.2-contributor",
+    "error": {
+     "code": null,
+     "message": "reasoning_effort 'max' is not supported for model 'muse-spark-1.2-contributor'. Supported values: [minimal, low, medium, high, xhigh]",
+     "param": "reasoning.effort",
+     "type": "invalid_request_error"
+    }
+   }
+  }
+ ]
+}

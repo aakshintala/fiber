@@ -540,6 +540,15 @@ fn header(queue: &Queue) -> String {
     panel(queue).first().cloned().unwrap_or_default()
 }
 
+/// An approval's header for `k` of `n` at width 80.
+fn approval_header(k: usize, n: usize) -> String {
+    let left = format!("Approval {k} of {n} · {S_A}");
+    let pad = 80_usize
+        .saturating_sub(crate::format::width(&left).saturating_add("Esc puts it aside".len()))
+        .max(1);
+    format!("{left}{}{}", " ".repeat(pad), "Esc puts it aside")
+}
+
 #[test]
 fn a_form_joins_the_queue_behind_an_approval() {
     let mut queue = folded(&[approval("r_1")]);
@@ -548,17 +557,17 @@ fn a_form_joins_the_queue_behind_an_approval() {
     // Behind a request put aside, the form waits under the badge.
     assert!(queue.panel(80).is_none());
     assert_eq!(
-        queue.badge(0, Some("⌥A")).as_deref(),
-        Some("! 2 waiting · /approvals or ⌥A")
+        queue.badge(0).as_deref(),
+        Some("  ⚠ 2 approvals waiting · click to reopen")
     );
     assert!(queue.open_first());
-    assert_eq!(header(&queue), format!("approval · {S_A} · 1 of 2"));
+    assert_eq!(header(&queue), approval_header(1, 2));
     assert_eq!(queue.on_key(&Key::Esc), Some(PanelKey::Handled));
     assert_eq!(header(&queue), format!("question · {S_A} · 2 of 2"));
     assert_eq!(queue.panel(80).map(|panel| panel.alert), Some(false));
     // ⌥A moves on from the form as from an approval.
     assert_eq!(queue.on_key(&Key::AltA), Some(PanelKey::Handled));
-    assert_eq!(header(&queue), format!("approval · {S_A} · 1 of 2"));
+    assert_eq!(header(&queue), approval_header(1, 2));
 }
 
 #[test]
@@ -576,7 +585,7 @@ fn a_resolved_form_leaves_the_queue() {
             "answers": [{"labels": ["main"]}]}),
     ));
     assert!(queue.panel(80).is_none());
-    assert!(queue.badge(0, Some("⌥A")).is_none());
+    assert!(queue.badge(0).is_none());
 }
 
 #[test]
@@ -587,7 +596,7 @@ fn a_form_resolved_by_fiber_leaves_the_queue() {
         json!({"request_id": "r_4f", "by": "fiber", "declined": true}),
     ));
     assert!(queue.panel(80).is_none());
-    assert!(queue.badge(0, Some("⌥A")).is_none());
+    assert!(queue.badge(0).is_none());
 }
 
 #[test]
@@ -631,7 +640,7 @@ fn enter_on_submit_answers_with_the_form() {
 fn decline_names_only_a_form() {
     let mut queue = folded(&[approval("r_1")]);
     assert_eq!(queue.decline("c_1"), None);
-    assert_eq!(header(&queue), format!("approval · {S_A} · 1 of 1"));
+    assert_eq!(header(&queue), approval_header(1, 1));
     let mut queue = folded(&[asked("r_4f", json!({"action_ids": ["a_1"]}))]);
     let line = queue.decline("c_1").unwrap_or_default();
     assert_eq!(

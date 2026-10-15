@@ -2,15 +2,15 @@
 source: crates/tui/src/view_tests.rs
 expression: wide(&mut app).0
 ---
-                                                                      ▄▄▄▄▄▄▄▄▄
-                                                                       run it ▐┃
-                                                                      ▀▀▀▀▀▀▀▀▀┃
-                                                                     you 00:00 ┃
+                                                                     you 00:00
                                                                                ┃
 ▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
-▌ approval · s_bbbbbbbbbbbbbbbb · 2 of 3
-▌ asked by a global rule: echo hi
-▌ shell {"command":"echo hi"}
-▌ › allow once
-▌   deny · type to add feedback
+▌ Approval 2 of 3 · s_bbbbbbbbbbbbbbbb                         Esc puts it aside
+▌ shell echo hi
+▌ runs a command · asked by the global rule echo hi
+▌
+▌ ▸ 1 Allow once
+▌   2 Deny  type to add feedback
+▌
+▌ ↑↓ choose · Enter confirms · typing goes to the feedback · click a choice
 ▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀

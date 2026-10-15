@@ -2911,7 +2911,10 @@ fn the_muse_1_3_entries_declare_the_thinking_levels_their_routes_accept() {
         .iter()
         .find(|m| m.id == "muse-spark-1.2-contributor")
         .unwrap();
-    assert!(old.thinking_levels.is_empty());
+    // The Go route takes minimal through xhigh here
+    // (research/opencode-thinking/raw/go-muse-spark-1.2-contributor.json).
+    assert_eq!(old.thinking_levels, vec![Minimal, Low, Medium, High, Xhigh]);
+    assert_eq!(old.thinking_default, None);
     let zen = opencode.iter().find(|p| p.name == "opencode-zen").unwrap();
     let model = zen
         .models
@@ -2920,12 +2923,6 @@ fn the_muse_1_3_entries_declare_the_thinking_levels_their_routes_accept() {
         .unwrap();
     assert_eq!(model.thinking_levels, levels);
     assert_eq!(model.thinking_default, None);
-    let free = zen
-        .models
-        .iter()
-        .find(|m| m.id == "muse-spark-1.3-contributor-free")
-        .unwrap();
-    assert!(free.thinking_levels.is_empty());
 }
 
 #[test]

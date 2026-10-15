@@ -1,0 +1,169 @@
+{
+ "route": "zen",
+ "protocol": "completions",
+ "model": "space-bunny-free",
+ "base": "https://opencode.ai/zen",
+ "levels": [
+  {
+   "level": "off",
+   "status": 403,
+   "elapsed_s": 0.47,
+   "request": {
+    "model": "space-bunny-free",
+    "messages": [
+     {
+      "role": "user",
+      "content": "Reply with the single word: ok"
+     }
+    ],
+    "max_tokens": 64,
+    "reasoning_effort": "none"
+   },
+   "response": {
+    "type": "error",
+    "error": {
+     "type": "FreeTierError",
+     "message": "OpenCode's free tier can only be used from within OpenCode. Download it at https://opencode.ai and keep building."
+    }
+   }
+  },
+  {
+   "level": "minimal",
+   "status": 403,
+   "elapsed_s": 0.33,
+   "request": {
+    "model": "space-bunny-free",
+    "messages": [
+     {
+      "role": "user",
+      "content": "Reply with the single word: ok"
+     }
+    ],
+    "max_tokens": 64,
+    "reasoning_effort": "minimal"
+   },
+   "response": {
+    "type": "error",
+    "error": {
+     "type": "FreeTierError",
+     "message": "OpenCode's free tier can only be used from within OpenCode. Download it at https://opencode.ai and keep building."
+    }
+   }
+  },
+  {
+   "level": "low",
+   "status": 403,
+   "elapsed_s": 0.32,
+   "request": {
+    "model": "space-bunny-free",
+    "messages": [
+     {
+      "role": "user",
+      "content": "Reply with the single word: ok"
+     }
+    ],
+    "max_tokens": 64,
+    "reasoning_effort": "low"
+   },
+   "response": {
+    "type": "error",
+    "error": {
+     "type": "FreeTierError",
+     "message": "OpenCode's free tier can only be used from within OpenCode. Download it at https://opencode.ai and keep building."
+    }
+   }
+  },
+  {
+   "level": "medium",
+   "status": 403,
+   "elapsed_s": 0.32,
+   "request": {
+    "model": "space-bunny-free",
+    "messages": [
+     {
+      "role": "user",
+      "content": "Reply with the single word: ok"
+     }
+    ],
+    "max_tokens": 64,
+    "reasoning_effort": "medium"
+   },
+   "response": {
+    "type": "error",
+    "error": {
+     "type": "FreeTierError",
+     "message": "OpenCode's free tier can only be used from within OpenCode. Download it at https://opencode.ai and keep building."
+    }
+   }
+  },
+  {
+   "level": "high",
+   "status": 403,
+   "elapsed_s": 0.44,
+   "request": {
+    "model": "space-bunny-free",
+    "messages": [
+     {
+      "role": "user",
+      "content": "Reply with the single word: ok"
+     }
+    ],
+    "max_tokens": 64,
+    "reasoning_effort": "high"
+   },
+   "response": {
+    "type": "error",
+    "error": {
+     "type": "FreeTierError",
+     "message": "OpenCode's free tier can only be used from within OpenCode. Download it at https://opencode.ai and keep building."
+    }
+   }
+  },
+  {
+   "level": "xhigh",
+   "status": 403,
+   "elapsed_s": 0.42,
+   "request": {
+    "model": "space-bunny-free",
+    "messages": [
+     {
+      "role": "user",
+      "content": "Reply with the single word: ok"
+     }
+    ],
+    "max_tokens": 64,
+    "reasoning_effort": "xhigh"
+   },
+   "response": {
+    "type": "error",
+    "error": {
+     "type": "FreeTierError",
+     "message": "OpenCode's free tier can only be used from within OpenCode. Download it at https://opencode.ai and keep building."
+    }
+   }
+  },
+  {
+   "level": "max",
+   "status": 403,
+   "elapsed_s": 0.39,
+   "request": {
+    "model": "space-bunny-free",
+    "messages": [
+     {
+      "role": "user",
+      "content": "Reply with the single word: ok"
+     }
+    ],
+    "max_tokens": 64,
+    "reasoning_effort": "max"
+   },
+   "response": {
+    "type": "error",
+    "error": {
+     "type": "FreeTierError",
+     "message": "OpenCode's free tier can only be used from within OpenCode. Download it at https://opencode.ai and keep building."
+    }
+   }
+  }
+ ]
+}

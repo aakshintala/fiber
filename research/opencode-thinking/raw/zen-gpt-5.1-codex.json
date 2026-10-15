@@ -1,0 +1,359 @@
+{
+ "route": "zen",
+ "protocol": "responses",
+ "model": "gpt-5.1-codex",
+ "base": "https://opencode.ai/zen",
+ "levels": [
+  {
+   "level": "off",
+   "status": 400,
+   "elapsed_s": 0.81,
+   "request": {
+    "model": "gpt-5.1-codex",
+    "input": "Reply with the single word: ok",
+    "max_output_tokens": 16,
+    "reasoning": {
+     "effort": "none"
+    },
+    "include": [
+     "reasoning.encrypted_content"
+    ]
+   },
+   "response": {
+    "model": "gpt-5.1-codex",
+    "error": {
+     "message": "Unsupported value: 'none' is not supported with the 'gpt-5.1-codex-2025-11-13' model. Supported values are: 'low', 'medium', and 'high'.",
+     "type": "invalid_request_error",
+     "param": "reasoning.effort",
+     "code": "unsupported_value"
+    }
+   }
+  },
+  {
+   "level": "minimal",
+   "status": 400,
+   "elapsed_s": 0.71,
+   "request": {
+    "model": "gpt-5.1-codex",
+    "input": "Reply with the single word: ok",
+    "max_output_tokens": 16,
+    "reasoning": {
+     "effort": "minimal"
+    },
+    "include": [
+     "reasoning.encrypted_content"
+    ]
+   },
+   "response": {
+    "model": "gpt-5.1-codex",
+    "error": {
+     "message": "Unsupported value: 'minimal' is not supported with the 'gpt-5.1-codex-2025-11-13' model. Supported values are: 'low', 'medium', and 'high'.",
+     "type": "invalid_request_error",
+     "param": "reasoning.effort",
+     "code": "unsupported_value"
+    }
+   }
+  },
+  {
+   "level": "low",
+   "status": 200,
+   "elapsed_s": 1.46,
+   "request": {
+    "model": "gpt-5.1-codex",
+    "input": "Reply with the single word: ok",
+    "max_output_tokens": 16,
+    "reasoning": {
+     "effort": "low"
+    },
+    "include": [
+     "reasoning.encrypted_content"
+    ]
+   },
+   "response": {
+    "id": "resp_0aa18fb660892ce1006ad0704b496881908347a20867b6369b",
+    "object": "response",
+    "created_at": 1792045131,
+    "completed_at": 1792045132,
+    "status": "completed",
+    "parallel_tool_calls": true,
+    "temperature": 1,
+    "top_p": 1,
+    "max_output_tokens": 16,
+    "previous_response_id": null,
+    "background": false,
+    "truncation": "disabled",
+    "top_logprobs": 0,
+    "max_tool_calls": null,
+    "prompt_cache_retention": "in_memory",
+    "model": "gpt-5.1-codex",
+    "error": null,
+    "incomplete_details": null,
+    "output": [
+     {
+      "id": "rs_0aa18fb660892ce1006ad0704bba988190ae02ca0904aa1045",
+      "type": "reasoning",
+      "encrypted_content": "gAAAAABq0HBM8jT1Spm-jSmuAtD8-4VP7s3vFxF8iy8O7zRnln2jg6xfUwwqmD5AVhsrD3AKnWQ-RS3LkejJTkQnnomK38dYw43VGiiP4qe6cXOw0vcJMheZyMFhW7QcESM_JZh77JmssTnUpKYvuZr3-y4L6nVnDc9L-ZrgmmPpDaIml8L9nDItfukIsoSRQUqzG1WKloEFZJq75sPQulUaiZT_CcObwqikhyUkUc-hXsy1rP5-43ZtMC7ZBF9ga2rkhZJI7mWcD1YPhQzXpcHqVEA11Xyz7Eb2YU3AQwLPpu-TZDv3tLnXc5wgxdR8wW39cfFqxxumWAni-6hBj7dP0NInvQqqqexnl7ymNA5HHumMeekFwj5ISfIEmA5uyU4vvbT7fHARYiNBpI63ybVji4nAeHTTW4pvwP3Uj1StaFOYqkOVJ0-QDcjZX2NVydWFuoCju9sRQGbJOtWG_WK572l7pEeYUeMDpN2WNu9uMo5PUnXw7YMnTMpYyOUlUlBh2cse-fWsDjCLJ_9bZc_XeZAEdGJuAAFeHnDJFgFe8QRjCjAFy98wUhUB1BePZHoh7IDwgrHB89fC0gZFco8Imv_0NgCPV9rFOmgDO7LUiaq77KZ3vh_M75O0tks_KT2f1ax-gJxbK-odmiJnOqwxEGJofKv8n8pY6qfS15suDqkvJWv6yWguW9ujc9nzuw-Xq5FPX2ogy01XPyfW8qSSdhNCcOh6heMBnIO7pG3bDh0dlNTpCaz89B8IZ84wHvZlXwKBHy57iD_76hOGGnaxlss5ysqbek4JZZziXxULKYbXHAlWXGBEU0jesI4Kck3DsNWuPPjV1oiu232YTG2Rw56DD5qZN3JcbEQ3fL1SoC_e19xJaG6y9WV99_j4sVDxBFhH54lKa9B9e1gyCDqFTBEW6eEAuT1OinIREzFnlvO25S5yeqcdXQR0yFiRzD7zfIVk54qD6ihc8edLhbyREFs36e7PFbFYdnbzNovK3hbrtw46zD3yqJfEiuOhfeaZNb5HrlVLAqmXkZUKwcQCFHKH9dTa3Wt-DTEdH47xw5lucUxwZIiOBWO_RYZSnzSZps8yiA6vcPSKJyEJ3RsNFb2Va88858EnCR1gnu-mruW8m4AJxGaEnbPxnBS6an2VOddj90ipKY4SUtIvtCobrbREVTnucg==",
+      "content": [],
+      "summary": []
+     },
+     {
+      "id": "msg_0aa18fb660892ce1006ad0704bc51481909fae9d0c41ea284d",
+      "type": "message",
+      "status": "completed",
+      "role": "assistant",
+      "content": [
+       {
+        "type": "output_text",
+        "text": "ok",
+        "annotations": [],
+        "logprobs": []
+       }
+      ]
+     }
+    ],
+    "usage": {
+     "input_tokens": 13,
+     "output_tokens": 15,
+     "total_tokens": 28,
+     "input_tokens_details": {
+      "cached_tokens": 0,
+      "cache_write_tokens": 0
+     },
+     "output_tokens_details": {
+      "reasoning_tokens": 0
+     }
+    },
+    "instructions": null,
+    "tool_choice": "auto",
+    "tools": [],
+    "reasoning": {
+     "context": "current_turn",
+     "effort": "low",
+     "mode": "standard",
+     "summary": null
+    },
+    "text": {
+     "verbosity": "medium",
+     "format": {
+      "type": "text"
+     }
+    },
+    "moderation": null
+   }
+  },
+  {
+   "level": "medium",
+   "status": 200,
+   "elapsed_s": 1.67,
+   "request": {
+    "model": "gpt-5.1-codex",
+    "input": "Reply with the single word: ok",
+    "max_output_tokens": 16,
+    "reasoning": {
+     "effort": "medium"
+    },
+    "include": [
+     "reasoning.encrypted_content"
+    ]
+   },
+   "response": {
+    "id": "resp_0f6c8e4057f91f5e006ad0704ce6d881959bf6eddbeef4c422",
+    "object": "response",
+    "created_at": 1792045132,
+    "completed_at": null,
+    "status": "incomplete",
+    "parallel_tool_calls": true,
+    "temperature": 1,
+    "top_p": 1,
+    "max_output_tokens": 16,
+    "previous_response_id": null,
+    "background": false,
+    "truncation": "disabled",
+    "top_logprobs": 0,
+    "max_tool_calls": null,
+    "prompt_cache_retention": "in_memory",
+    "model": "gpt-5.1-codex",
+    "error": null,
+    "incomplete_details": {
+     "reason": "max_output_tokens"
+    },
+    "output": [
+     {
+      "id": "rs_0f6c8e4057f91f5e006ad0704d77bc81958dcaa9103ca753dd",
+      "type": "reasoning",
+      "encrypted_content": "gAAAAABq0HBNfSOzPH8x8_66dXEhX-PoOjZYZO6rstAWnxJy3UexFvNz8zApWKCbO-meBt5uxZjNIU7d6GxWHDa2uZmlH-bKEjJs6aOV-TFv84vvZBeWYbHCPjHegZeodhOwEPgRSxXNacX68_V_ouadDxdpnoeqZkj2TeCpMkQUdC_zilBW8-FGXlP2nO_ANscS4sM7bNPA-rh0UoFrkVdFdvaaZl4f40PQAAzFVWnSLoLynFkXnY2rnuOBXTb5AojwhVa1SGGSbV3WjxRimf1x7MOBacf6A3tCdbUz2XNM3gNx9yoKwTlSoc0W4YWK3DTno8aoXw6uX5Peo4O789W7Mj3WykUoCGzAOSgupApmsnCKLsrUhZ8NwQ-UuU2ThuJD52xz58Wh_2oehnNcajYeGci0korTumnwn3W-9X6apOQctdAZ7zuc9C4zFXEJHv0NutTSxPPYVnbfZHM8kju1rZdT5UgQrZPhY6WCqDvMN5jLrXQBwDpVG1SfAtKN79-ZzXyhAaysQ7P6cv7kDNF-yCYbs1zB5Gwp-s23rkNZKuADKTDitvLgkRbVOvM4dw4RqkxTq3Cfn0Fv139S26LM2L_HHJ59S9Qyd1POstCQ9zH_biilQfmy8DoIzAtAO8YcPgcBXB2-xxAXrRYZCYLqpB0KoI4mvcB4qBglQ765usDaIH-nn4YirGwifuZtwB9GVHQrsKSjXICOOdJDH82nniia0H-6VQ-pM8a6wR-DxAYv-I13DLQqP9szAbcmbutQbiVBql8Pm021HUbyzMHiQ7mauAXMvWgxNGwsL-a2YA8CMQqEmpbFl8dIKUuo0xVV8wvHxQ7gIFz8ae9PKAS5jb13r40-gFGanB8FCpLcm7_INJZCslHSA3nbOtOIOmKEZGURgQNji5IxOXVEH25PitWDHMYbbZ77-LbRQ9Sqb1gGxwK6N0ZNhTTUTasWjO9p87fv0b5f1q-oUSjy_K45MGeSkzzneKQVeQxSMEBawes3IogaJrZb9i5EptLphyEE5oEK1rf1EimAHE-6qNhs6ooBf-bbIZnn_vQortQNK-nouGacsqFMHU9oKtBxtskkCyvNX9Ut2FCBWxVNSz4ZWYo9ulcpOLe4doKvFL-k6rkfIlo-CbankYagfgE6d57UMu9kWSnCmh977KE30l8NDyOq8dp8vbOV50vgzXTgWp1KNigCrNpM1V_SG3nY2kqDyPO3cArBqWxWGUXCTRrhUhHea8mgHw==",
+      "content": [],
+      "summary": []
+     }
+    ],
+    "usage": {
+     "input_tokens": 13,
+     "output_tokens": 0,
+     "total_tokens": 13,
+     "input_tokens_details": {
+      "cached_tokens": 0,
+      "cache_write_tokens": 0
+     },
+     "output_tokens_details": {
+      "reasoning_tokens": 0
+     }
+    },
+    "instructions": null,
+    "tool_choice": "auto",
+    "tools": [],
+    "reasoning": {
+     "context": "current_turn",
+     "effort": "medium",
+     "mode": "standard",
+     "summary": null
+    },
+    "text": {
+     "verbosity": "medium",
+     "format": {
+      "type": "text"
+     }
+    },
+    "moderation": null
+   }
+  },
+  {
+   "level": "high",
+   "status": 200,
+   "elapsed_s": 2.88,
+   "request": {
+    "model": "gpt-5.1-codex",
+    "input": "Reply with the single word: ok",
+    "max_output_tokens": 16,
+    "reasoning": {
+     "effort": "high"
+    },
+    "include": [
+     "reasoning.encrypted_content"
+    ]
+   },
+   "response": {
+    "id": "resp_062e024e0a79085f006ad0704eaf048193a7325887d9c30b65",
+    "object": "response",
+    "created_at": 1792045134,
+    "completed_at": null,
+    "status": "incomplete",
+    "parallel_tool_calls": true,
+    "temperature": 1,
+    "top_p": 1,
+    "max_output_tokens": 16,
+    "previous_response_id": null,
+    "background": false,
+    "truncation": "disabled",
+    "top_logprobs": 0,
+    "max_tool_calls": null,
+    "prompt_cache_retention": "in_memory",
+    "model": "gpt-5.1-codex",
+    "error": null,
+    "incomplete_details": {
+     "reason": "max_output_tokens"
+    },
+    "output": [
+     {
+      "id": "rs_062e024e0a79085f006ad0704fe6888193a5bcf29f75c58bd2",
+      "type": "reasoning",
+      "encrypted_content": "gAAAAABq0HBQFgmTJKORuXxK2reuBKpmWkoZGAmVmj6IVniwj3AuYI1u9hlGpSz_mSS_SaSBOJDQ3izh4vHHFcOtU85aJs27vItpzcCfKjc5SWjOqTwnrHjiT8DFeBuIyGdMQ0_g1m7ML0MmBAE2QjbrSkirvKLST_AsePhJU_IYCje1kRdLp6XHSPT-71kKXTFbcnSwdw56dEdLjubqQk4qfLzM56f7qPqBJIOzfdY5Q478A_AKV2GmTHAy30kod-p9Ft67KTF0FDGHnBS8nTCvKiVkIS-IV5cwNGLAi4nUZwMJjeN7XdZPAoBko8h4w-AfMEjB-jI-znHfjvOSd5ncflEuTvDVJcvpAK4566wJHF08NPg6ujPt7QWLUxULvGuURfwlMBkeY-5uSYxW-3xBdAZEr5f9yVl3CteZvAnINnalMcFqsetmd5LagFMQNKlaTEzAOrXELy_PRlhm6Ie1V_fFdR-KIBiNSbcRVapc1URFmpLmkI3NVPXLEhzEPZ5Wr1brKT4H2QxFTuYdbGqwf32dOei8nlQdUZBQezD4ohz3IjvK1AaPuwlpyzzlz6vGADP-mv4XVbxdN06lzVPLFNQRMXb_IMUOiYh0XJFDEYSCppELEPy6TFrzRnyv4O-Mcs5-yuBegVqi0EyKoU-agZ-EyhlxhDOPS8HADJ45C-CQlXQLoPXaNYBlv6eLVeQyYKOxPDQoVirIFYwyJAKOiQMWl26uZHCc8jreoQ4VAoVzC6y9CTx61yHpSUyjRGn_701JM-0sVwsF6N6UkAidZbO00B75wi6yH8W_pW_MqnUoqv65d_hql3TiCXs8c1hmob1jE_t08ee_Suujhe1HU1UYkBsZOrMtHq5GJouLXhw9eAoAsaxr0jjrC2Abn4JhBWaqGEOmIoknTSx2-OLkG-Ic59Fab9P7oD8ZZxoLvpkQwgBe46KM-vsqAi6vf5RIanrJbkN309o7IuzezIx7jU3Nh03J52uooyPQvuD1ZNAvc_FXYEmqCG_J8UubMYeUwgpEqr5exKIvDhlw8InbneekwfA699T8rXl494swYFxr4VGjUbc4nTDq0lErTS2Yzg1Vi0ui8YEfHsRiMDoyKJ6zoxjeHlPjwpr5MpvR5mYwwDvJwxLf7b3ClQMq92VrP3E7I9k8ggJothj1EAdP0Q9RgkcsMsQeF3S6NzgdbnzHrMzvLE4=",
+      "content": [],
+      "summary": []
+     },
+     {
+      "id": "msg_062e024e0a79085f006ad0705028ec8193acf2a96e47492c53",
+      "type": "message",
+      "status": "incomplete",
+      "role": "assistant",
+      "content": [
+       {
+        "type": "output_text",
+        "text": "",
+        "annotations": [],
+        "logprobs": []
+       }
+      ]
+     }
+    ],
+    "usage": {
+     "input_tokens": 13,
+     "output_tokens": 16,
+     "total_tokens": 29,
+     "input_tokens_details": {
+      "cached_tokens": 0,
+      "cache_write_tokens": 0
+     },
+     "output_tokens_details": {
+      "reasoning_tokens": 0
+     }
+    },
+    "instructions": null,
+    "tool_choice": "auto",
+    "tools": [],
+    "reasoning": {
+     "context": "current_turn",
+     "effort": "high",
+     "mode": "standard",
+     "summary": null
+    },
+    "text": {
+     "verbosity": "medium",
+     "format": {
+      "type": "text"
+     }
+    },
+    "moderation": null
+   }
+  },
+  {
+   "level": "xhigh",
+   "status": 400,
+   "elapsed_s": 0.74,
+   "request": {
+    "model": "gpt-5.1-codex",
+    "input": "Reply with the single word: ok",
+    "max_output_tokens": 16,
+    "reasoning": {
+     "effort": "xhigh"
+    },
+    "include": [
+     "reasoning.encrypted_content"
+    ]
+   },
+   "response": {
+    "model": "gpt-5.1-codex",
+    "error": {
+     "message": "Unsupported value: 'xhigh' is not supported with the 'gpt-5.1-codex-2025-11-13' model. Supported values are: 'low', 'medium', and 'high'.",
+     "type": "invalid_request_error",
+     "param": "reasoning.effort",
+     "code": "unsupported_value"
+    }
+   }
+  },
+  {
+   "level": "max",
+   "status": 400,
+   "elapsed_s": 0.79,
+   "request": {
+    "model": "gpt-5.1-codex",
+    "input": "Reply with the single word: ok",
+    "max_output_tokens": 16,
+    "reasoning": {
+     "effort": "max"
+    },
+    "include": [
+     "reasoning.encrypted_content"
+    ]
+   },
+   "response": {
+    "model": "gpt-5.1-codex",
+    "error": {
+     "message": "Unsupported value: 'max' is not supported with the 'gpt-5.1-codex-2025-11-13' model. Supported values are: 'low', 'medium', and 'high'.",
+     "type": "invalid_request_error",
+     "param": "reasoning.effort",
+     "code": "unsupported_value"
+    }
+   }
+  }
+ ]
+}

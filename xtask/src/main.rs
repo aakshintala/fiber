@@ -150,6 +150,10 @@ fn run(args: &[String]) -> Result<bool, String> {
                     "false"
                 }
             );
+            println!(
+                "base_skip={}",
+                select::base_rows_skipped(&flag(rest, "--event")?, &release_paths).join(",")
+            );
             Ok(true)
         }
         "verdict" => {

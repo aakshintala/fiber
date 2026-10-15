@@ -1,0 +1,294 @@
+{
+ "route": "zen",
+ "protocol": "completions",
+ "model": "minimax-m2.7",
+ "base": "https://opencode.ai/zen",
+ "levels": [
+  {
+   "level": "off",
+   "status": 200,
+   "elapsed_s": 1.22,
+   "request": {
+    "model": "minimax-m2.7",
+    "messages": [
+     {
+      "role": "user",
+      "content": "Reply with the single word: ok"
+     }
+    ],
+    "max_tokens": 64,
+    "reasoning_effort": "none"
+   },
+   "response": {
+    "id": "chatcmpl-12ec31d214434f0ea37761bfe46d6450",
+    "object": "chat.completion",
+    "created": 1792045103,
+    "model": "minimax-m2.7",
+    "choices": [
+     {
+      "index": 0,
+      "finish_reason": "stop",
+      "message": {
+       "role": "assistant",
+       "content": "ok"
+      }
+     }
+    ],
+    "usage": {
+     "prompt_tokens": 121,
+     "completion_tokens": 2,
+     "total_tokens": 123,
+     "prompt_tokens_details": {
+      "cached_tokens": 120
+     },
+     "completion_tokens_details": {
+      "reasoning_tokens": 0
+     }
+    }
+   }
+  },
+  {
+   "level": "minimal",
+   "status": 400,
+   "elapsed_s": 0.72,
+   "request": {
+    "model": "minimax-m2.7",
+    "messages": [
+     {
+      "role": "user",
+      "content": "Reply with the single word: ok"
+     }
+    ],
+    "max_tokens": 64,
+    "reasoning_effort": "minimal"
+   },
+   "response": {
+    "error": {
+     "type": "invalid_request_error",
+     "code": "invalid_request_error",
+     "message": "Upstream request failed: [invalid_request_error] 3 request validation errors: Input should be 'low', 'medium', 'high', 'xhigh', 'max', 'none' or 'adaptive', field: 'reasoning_effort.literal['low','medium','high','xhigh','max','none','adaptive']', value: 'minimal'; Input should be a valid integer, unable to parse string as an integer, field: 'reasoning_effort.int', value: 'minimal'; Input should be a valid boolean, unable to interpret input, field: 'reasoning_effort.bool', value: 'minimal'"
+    }
+   }
+  },
+  {
+   "level": "low",
+   "status": 200,
+   "elapsed_s": 1.0,
+   "request": {
+    "model": "minimax-m2.7",
+    "messages": [
+     {
+      "role": "user",
+      "content": "Reply with the single word: ok"
+     }
+    ],
+    "max_tokens": 64,
+    "reasoning_effort": "low"
+   },
+   "response": {
+    "id": "chatcmpl-38b097882ec8415a96e38b2c5261a996",
+    "object": "chat.completion",
+    "created": 1792045105,
+    "model": "minimax-m2.7",
+    "choices": [
+     {
+      "index": 0,
+      "finish_reason": "stop",
+      "message": {
+       "role": "assistant",
+       "content": "ok",
+       "reasoning_content": "The user is asking me to reply with a single word: \"ok\"."
+      }
+     }
+    ],
+    "usage": {
+     "prompt_tokens": 131,
+     "completion_tokens": 18,
+     "total_tokens": 149,
+     "prompt_tokens_details": {
+      "cached_tokens": 130
+     },
+     "completion_tokens_details": {
+      "reasoning_tokens": 15
+     }
+    }
+   }
+  },
+  {
+   "level": "medium",
+   "status": 200,
+   "elapsed_s": 1.29,
+   "request": {
+    "model": "minimax-m2.7",
+    "messages": [
+     {
+      "role": "user",
+      "content": "Reply with the single word: ok"
+     }
+    ],
+    "max_tokens": 64,
+    "reasoning_effort": "medium"
+   },
+   "response": {
+    "id": "chatcmpl-bcb98933e4f84ec38a28192b902300c7",
+    "object": "chat.completion",
+    "created": 1792045106,
+    "model": "minimax-m2.7",
+    "choices": [
+     {
+      "index": 0,
+      "finish_reason": "stop",
+      "message": {
+       "role": "assistant",
+       "content": "ok",
+       "reasoning_content": "The user wants me to reply with the single word \"ok\". This is a simple request."
+      }
+     }
+    ],
+    "usage": {
+     "prompt_tokens": 131,
+     "completion_tokens": 22,
+     "total_tokens": 153,
+     "prompt_tokens_details": {
+      "cached_tokens": 130
+     },
+     "completion_tokens_details": {
+      "reasoning_tokens": 19
+     }
+    }
+   }
+  },
+  {
+   "level": "high",
+   "status": 200,
+   "elapsed_s": 1.19,
+   "request": {
+    "model": "minimax-m2.7",
+    "messages": [
+     {
+      "role": "user",
+      "content": "Reply with the single word: ok"
+     }
+    ],
+    "max_tokens": 64,
+    "reasoning_effort": "high"
+   },
+   "response": {
+    "id": "chatcmpl-71abdd04977a47a693eeac52236397f1",
+    "object": "chat.completion",
+    "created": 1792045107,
+    "model": "minimax-m2.7",
+    "choices": [
+     {
+      "index": 0,
+      "finish_reason": "stop",
+      "message": {
+       "role": "assistant",
+       "content": "ok",
+       "reasoning_content": "The user wants me to reply with the single word \"ok\". This is a simple request. I should just respond with \"ok\"."
+      }
+     }
+    ],
+    "usage": {
+     "prompt_tokens": 131,
+     "completion_tokens": 30,
+     "total_tokens": 161,
+     "prompt_tokens_details": {
+      "cached_tokens": 130
+     },
+     "completion_tokens_details": {
+      "reasoning_tokens": 27
+     }
+    }
+   }
+  },
+  {
+   "level": "xhigh",
+   "status": 200,
+   "elapsed_s": 1.05,
+   "request": {
+    "model": "minimax-m2.7",
+    "messages": [
+     {
+      "role": "user",
+      "content": "Reply with the single word: ok"
+     }
+    ],
+    "max_tokens": 64,
+    "reasoning_effort": "xhigh"
+   },
+   "response": {
+    "id": "chatcmpl-f821861d4dde47a69855f67ee036e0fe",
+    "object": "chat.completion",
+    "created": 1792045108,
+    "model": "minimax-m2.7",
+    "choices": [
+     {
+      "index": 0,
+      "finish_reason": "stop",
+      "message": {
+       "role": "assistant",
+       "content": "ok",
+       "reasoning_content": "The user is asking me to reply with a single word: \"ok\". This is a simple request that I can fulfill."
+      }
+     }
+    ],
+    "usage": {
+     "prompt_tokens": 131,
+     "completion_tokens": 28,
+     "total_tokens": 159,
+     "prompt_tokens_details": {
+      "cached_tokens": 130
+     },
+     "completion_tokens_details": {
+      "reasoning_tokens": 25
+     }
+    }
+   }
+  },
+  {
+   "level": "max",
+   "status": 200,
+   "elapsed_s": 1.31,
+   "request": {
+    "model": "minimax-m2.7",
+    "messages": [
+     {
+      "role": "user",
+      "content": "Reply with the single word: ok"
+     }
+    ],
+    "max_tokens": 64,
+    "reasoning_effort": "max"
+   },
+   "response": {
+    "id": "chatcmpl-07787be2cf21470c8aa92ddf70177797",
+    "object": "chat.completion",
+    "created": 1792045109,
+    "model": "minimax-m2.7",
+    "choices": [
+     {
+      "index": 0,
+      "finish_reason": "stop",
+      "message": {
+       "role": "assistant",
+       "content": "ok",
+       "reasoning_content": "The user is asking me to reply with a single word: \"ok\". This is a straightforward request that I can fulfill."
+      }
+     }
+    ],
+    "usage": {
+     "prompt_tokens": 131,
+     "completion_tokens": 28,
+     "total_tokens": 159,
+     "prompt_tokens_details": {
+      "cached_tokens": 130
+     },
+     "completion_tokens_details": {
+      "reasoning_tokens": 25
+     }
+    }
+   }
+  }
+ ]
+}

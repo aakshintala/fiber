@@ -30,8 +30,8 @@ const USAGE: &str =
 const REPORTS: u16 = 20_000;
 /// Runs per case; the median is printed.
 const RUNS: usize = 5;
-/// The badge's width: `! 1 waiting · /approvals or ⌥A`.
-const BADGE: u16 = 30;
+/// The badge's width: `  ⚠ 1 approvals waiting · click to reopen`.
+const BADGE: u16 = 41;
 
 fn main() -> ExitCode {
     let args: Vec<String> = std::env::args().skip(1).collect();

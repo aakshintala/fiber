@@ -1,0 +1,283 @@
+{
+ "route": "go",
+ "protocol": "messages",
+ "model": "minimax-m2.7",
+ "base": "https://opencode.ai/zen/go",
+ "levels": [
+  {
+   "level": "off",
+   "status": 200,
+   "elapsed_s": 2.63,
+   "request": {
+    "model": "minimax-m2.7",
+    "messages": [
+     {
+      "role": "user",
+      "content": "Reply with the single word: ok"
+     }
+    ],
+    "max_tokens": 64
+   },
+   "response": {
+    "id": "071f83cd38a48bee3027ea417984b8fc",
+    "type": "message",
+    "role": "assistant",
+    "stop_reason": "max_tokens",
+    "model": "minimax-m2.7",
+    "content": [
+     {
+      "type": "thinking",
+      "thinking": "The user says: \"Reply with the single word: ok\". The user requests that we reply with just the single word \"ok\". This is a simple request. There's no disallowed content. So we should comply.\n\nBut note the policy about \"non-violent\" content. No problem. There's no conflict with the",
+      "signature": "86f35756d31a4a8e3931cce05f6334fc1ef7bf60de90f1a9e0f4f08c459549de"
+     }
+    ],
+    "usage": {
+     "input_tokens": 48,
+     "output_tokens": 64
+    }
+   }
+  },
+  {
+   "level": "minimal",
+   "status": 200,
+   "elapsed_s": 3.14,
+   "request": {
+    "model": "minimax-m2.7",
+    "messages": [
+     {
+      "role": "user",
+      "content": "Reply with the single word: ok"
+     }
+    ],
+    "max_tokens": 64,
+    "thinking": {
+     "type": "adaptive"
+    },
+    "output_config": {
+     "effort": "minimal"
+    }
+   },
+   "response": {
+    "id": "071f83cf8b41c143316f18ddbf2cb088",
+    "type": "message",
+    "role": "assistant",
+    "stop_reason": "max_tokens",
+    "model": "minimax-m2.7",
+    "content": [
+     {
+      "type": "thinking",
+      "thinking": "The user asks: \"Reply with the single word: ok\". They want the assistant to reply with the single word \"ok\". There's no policy violation. Should respond with just \"ok\". No extra punctuation? The user says \"Reply with the single word: ok\". So just reply \"ok\". Usually they",
+      "signature": "d3e5f82ceb9af1122d57443c281815742f5721db95e8da97f7a400d747905ff4"
+     }
+    ],
+    "usage": {
+     "input_tokens": 48,
+     "output_tokens": 64
+    }
+   }
+  },
+  {
+   "level": "low",
+   "status": 200,
+   "elapsed_s": 2.63,
+   "request": {
+    "model": "minimax-m2.7",
+    "messages": [
+     {
+      "role": "user",
+      "content": "Reply with the single word: ok"
+     }
+    ],
+    "max_tokens": 64,
+    "thinking": {
+     "type": "adaptive"
+    },
+    "output_config": {
+     "effort": "low"
+    }
+   },
+   "response": {
+    "id": "071f83d22d289d6f6745316b7d6b4e14",
+    "type": "message",
+    "role": "assistant",
+    "stop_reason": "end_turn",
+    "model": "minimax-m2.7",
+    "content": [
+     {
+      "type": "thinking",
+      "thinking": "The user asks: \"Reply with the single word: ok\". This is a simple request. We should comply: just respond with \"ok\". There's no policy violation. So we output \"ok\".",
+      "signature": "dd8a5a756c0f095a0069df8f3033f6d6b67569abe2e07bb5e91589e1e844bf4d"
+     },
+     {
+      "type": "text",
+      "text": "ok"
+     }
+    ],
+    "usage": {
+     "input_tokens": 48,
+     "output_tokens": 45
+    }
+   }
+  },
+  {
+   "level": "medium",
+   "status": 200,
+   "elapsed_s": 3.29,
+   "request": {
+    "model": "minimax-m2.7",
+    "messages": [
+     {
+      "role": "user",
+      "content": "Reply with the single word: ok"
+     }
+    ],
+    "max_tokens": 64,
+    "thinking": {
+     "type": "adaptive"
+    },
+    "output_config": {
+     "effort": "medium"
+    }
+   },
+   "response": {
+    "id": "071f83d59233107981f6e195d1a4ff98",
+    "type": "message",
+    "role": "assistant",
+    "stop_reason": "max_tokens",
+    "model": "minimax-m2.7",
+    "content": [
+     {
+      "type": "thinking",
+      "thinking": "The user says: \"Reply with the single word: ok\". They want a response that is a single word \"ok\". They are instructing the assistant to respond with that word.\n\nThe user is simply asking for a minimal reply: \"ok\". This is permissible. There's no policy violation. It's a simple request",
+      "signature": "11bd517429e08c3a37e896f4713b2210efd679c4da4ff77e3a043208a35c91c7"
+     }
+    ],
+    "usage": {
+     "input_tokens": 48,
+     "output_tokens": 64
+    }
+   }
+  },
+  {
+   "level": "high",
+   "status": 200,
+   "elapsed_s": 2.51,
+   "request": {
+    "model": "minimax-m2.7",
+    "messages": [
+     {
+      "role": "user",
+      "content": "Reply with the single word: ok"
+     }
+    ],
+    "max_tokens": 64,
+    "thinking": {
+     "type": "adaptive"
+    },
+    "output_config": {
+     "effort": "high"
+    }
+   },
+   "response": {
+    "id": "071f83d8c3d82e98fd58ef49a7edd955",
+    "type": "message",
+    "role": "assistant",
+    "stop_reason": "end_turn",
+    "model": "minimax-m2.7",
+    "content": [
+     {
+      "type": "thinking",
+      "thinking": "The user says: \"Reply with the single word: ok\". The user wants the assistant to respond with exactly the single word \"ok\". That is permissible: it's a simple request. There's no disallowed content. So respond \"ok\".",
+      "signature": "8938a53fb6a79d680436b6a416a8cf93d7053df45767c9ab57f25af24e6e2b63"
+     },
+     {
+      "type": "text",
+      "text": "ok"
+     }
+    ],
+    "usage": {
+     "input_tokens": 48,
+     "output_tokens": 52
+    }
+   }
+  },
+  {
+   "level": "xhigh",
+   "status": 200,
+   "elapsed_s": 3.24,
+   "request": {
+    "model": "minimax-m2.7",
+    "messages": [
+     {
+      "role": "user",
+      "content": "Reply with the single word: ok"
+     }
+    ],
+    "max_tokens": 64,
+    "thinking": {
+     "type": "adaptive"
+    },
+    "output_config": {
+     "effort": "xhigh"
+    }
+   },
+   "response": {
+    "id": "071f83db1583769517d34ca16c5602a4",
+    "type": "message",
+    "role": "assistant",
+    "stop_reason": "max_tokens",
+    "model": "minimax-m2.7",
+    "content": [
+     {
+      "type": "thinking",
+      "thinking": "We need to respond with the single word: \"ok\". The user says: \"Reply with the single word: ok\". So answer with \"ok\". There's no policy conflict; it's just a simple response. Should be exactly \"ok\". Ensure no extra punctuation? The user says \"Reply with the single word",
+      "signature": "ffc201a14adcf343812047c09d11b90a3eb2acb96838ea016a50e1ec6ff95a3f"
+     }
+    ],
+    "usage": {
+     "input_tokens": 48,
+     "output_tokens": 64
+    }
+   }
+  },
+  {
+   "level": "max",
+   "status": 200,
+   "elapsed_s": 2.9,
+   "request": {
+    "model": "minimax-m2.7",
+    "messages": [
+     {
+      "role": "user",
+      "content": "Reply with the single word: ok"
+     }
+    ],
+    "max_tokens": 64,
+    "thinking": {
+     "type": "adaptive"
+    },
+    "output_config": {
+     "effort": "max"
+    }
+   },
+   "response": {
+    "id": "071f83de6d7e5d2b0859b93918c021a4",
+    "type": "message",
+    "role": "assistant",
+    "stop_reason": "max_tokens",
+    "model": "minimax-m2.7",
+    "content": [
+     {
+      "type": "thinking",
+      "thinking": "The user asks: \"Reply with the single word: ok\". They want a response that is just the word \"ok\". This is a straightforward request. There's no policy violation. So we comply: output \"ok\". Ensure no extra punctuation or spaces, just \"ok\". Let's consider if they want exactly \"",
+      "signature": "fb21926684d45996030333abf02767b704797acdfee99dfcd8dc7ccb9e055d91"
+     }
+    ],
+    "usage": {
+     "input_tokens": 48,
+     "output_tokens": 64
+    }
+   }
+  }
+ ]
+}

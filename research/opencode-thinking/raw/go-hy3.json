@@ -1,0 +1,399 @@
+{
+ "route": "go",
+ "protocol": "completions",
+ "model": "hy3",
+ "base": "https://opencode.ai/zen/go",
+ "levels": [
+  {
+   "level": "off",
+   "status": 200,
+   "elapsed_s": 1.86,
+   "request": {
+    "model": "hy3",
+    "messages": [
+     {
+      "role": "user",
+      "content": "Reply with the single word: ok"
+     }
+    ],
+    "max_tokens": 64,
+    "reasoning_effort": "none"
+   },
+   "response": {
+    "id": "gen-1792036708-VSWo4UbqBiTNYOCg8zZk",
+    "object": "chat.completion",
+    "created": 1792036708,
+    "model": "hy3",
+    "choices": [
+     {
+      "index": 0,
+      "finish_reason": "stop",
+      "logprobs": null,
+      "message": {
+       "role": "assistant",
+       "content": "ok",
+       "refusal": null,
+       "reasoning": null
+      }
+     }
+    ],
+    "usage": {
+     "prompt_tokens": 22,
+     "completion_tokens": 2,
+     "total_tokens": 24,
+     "prompt_tokens_details": {
+      "audio_tokens": 0,
+      "cached_tokens": 0,
+      "cache_write_tokens": 0
+     },
+     "completion_tokens_details": {
+      "audio_tokens": 0,
+      "reasoning_tokens": 0
+     }
+    }
+   }
+  },
+  {
+   "level": "minimal",
+   "status": 200,
+   "elapsed_s": 2.7,
+   "request": {
+    "model": "hy3",
+    "messages": [
+     {
+      "role": "user",
+      "content": "Reply with the single word: ok"
+     }
+    ],
+    "max_tokens": 64,
+    "reasoning_effort": "minimal"
+   },
+   "response": {
+    "id": "gen-1792036711-w81kxphHHEyk4icjELHK",
+    "object": "chat.completion",
+    "created": 1792036711,
+    "model": "hy3",
+    "choices": [
+     {
+      "index": 0,
+      "finish_reason": "stop",
+      "logprobs": null,
+      "message": {
+       "role": "assistant",
+       "content": "ok",
+       "refusal": null,
+       "reasoning": "We are asked to reply with the single word: ok. So the response should be exactly \"ok\". No other text.",
+       "reasoning_details": [
+        {
+         "type": "reasoning.text",
+         "text": "We are asked to reply with the single word: ok. So the response should be exactly \"ok\". No other text.",
+         "format": "unknown",
+         "index": 0
+        }
+       ]
+      }
+     }
+    ],
+    "usage": {
+     "prompt_tokens": 19,
+     "completion_tokens": 28,
+     "total_tokens": 47,
+     "prompt_tokens_details": {
+      "audio_tokens": 0,
+      "cached_tokens": 0,
+      "cache_write_tokens": 0
+     },
+     "completion_tokens_details": {
+      "audio_tokens": 0,
+      "reasoning_tokens": 25
+     }
+    }
+   }
+  },
+  {
+   "level": "low",
+   "status": 200,
+   "elapsed_s": 2.08,
+   "request": {
+    "model": "hy3",
+    "messages": [
+     {
+      "role": "user",
+      "content": "Reply with the single word: ok"
+     }
+    ],
+    "max_tokens": 64,
+    "reasoning_effort": "low"
+   },
+   "response": {
+    "id": "gen-1792036713-taqzyNpMDaZcfWhQm47y",
+    "object": "chat.completion",
+    "created": 1792036713,
+    "model": "hy3",
+    "choices": [
+     {
+      "index": 0,
+      "finish_reason": "stop",
+      "logprobs": null,
+      "message": {
+       "role": "assistant",
+       "content": "ok",
+       "refusal": null,
+       "reasoning": "We are asked to reply with the single word: ok. So the response should be exactly \"ok\". No other text.",
+       "reasoning_details": [
+        {
+         "type": "reasoning.text",
+         "text": "We are asked to reply with the single word: ok. So the response should be exactly \"ok\". No other text.",
+         "format": "unknown",
+         "index": 0
+        }
+       ]
+      }
+     }
+    ],
+    "usage": {
+     "prompt_tokens": 19,
+     "completion_tokens": 28,
+     "total_tokens": 47,
+     "prompt_tokens_details": {
+      "audio_tokens": 0,
+      "cached_tokens": 0,
+      "cache_write_tokens": 0
+     },
+     "completion_tokens_details": {
+      "audio_tokens": 0,
+      "reasoning_tokens": 25
+     }
+    }
+   }
+  },
+  {
+   "level": "medium",
+   "status": 200,
+   "elapsed_s": 2.01,
+   "request": {
+    "model": "hy3",
+    "messages": [
+     {
+      "role": "user",
+      "content": "Reply with the single word: ok"
+     }
+    ],
+    "max_tokens": 64,
+    "reasoning_effort": "medium"
+   },
+   "response": {
+    "id": "gen-1792036715-MmDakaH8nMc5mtzWzS1Y",
+    "object": "chat.completion",
+    "created": 1792036715,
+    "model": "hy3",
+    "choices": [
+     {
+      "index": 0,
+      "finish_reason": "stop",
+      "logprobs": null,
+      "message": {
+       "role": "assistant",
+       "content": "ok",
+       "refusal": null,
+       "reasoning": "We are asked to reply with the single word: ok.\nSo I will output \"ok\".",
+       "reasoning_details": [
+        {
+         "type": "reasoning.text",
+         "text": "We are asked to reply with the single word: ok.\nSo I will output \"ok\".",
+         "format": "unknown",
+         "index": 0
+        }
+       ]
+      }
+     }
+    ],
+    "usage": {
+     "prompt_tokens": 19,
+     "completion_tokens": 23,
+     "total_tokens": 42,
+     "prompt_tokens_details": {
+      "audio_tokens": 0,
+      "cached_tokens": 0,
+      "cache_write_tokens": 0
+     },
+     "completion_tokens_details": {
+      "audio_tokens": 0,
+      "reasoning_tokens": 20
+     }
+    }
+   }
+  },
+  {
+   "level": "high",
+   "status": 200,
+   "elapsed_s": 1.95,
+   "request": {
+    "model": "hy3",
+    "messages": [
+     {
+      "role": "user",
+      "content": "Reply with the single word: ok"
+     }
+    ],
+    "max_tokens": 64,
+    "reasoning_effort": "high"
+   },
+   "response": {
+    "id": "gen-1792036717-tajeErF4BUuwX3as8Fdb",
+    "object": "chat.completion",
+    "created": 1792036717,
+    "model": "hy3",
+    "choices": [
+     {
+      "index": 0,
+      "finish_reason": "stop",
+      "logprobs": null,
+      "message": {
+       "role": "assistant",
+       "content": "ok",
+       "refusal": null,
+       "reasoning": "The user wants me to reply with the single word \"ok\".",
+       "reasoning_details": [
+        {
+         "type": "reasoning.text",
+         "text": "The user wants me to reply with the single word \"ok\".",
+         "format": "unknown",
+         "index": 0
+        }
+       ]
+      }
+     }
+    ],
+    "usage": {
+     "prompt_tokens": 19,
+     "completion_tokens": 16,
+     "total_tokens": 35,
+     "prompt_tokens_details": {
+      "audio_tokens": 0,
+      "cached_tokens": 0,
+      "cache_write_tokens": 0
+     },
+     "completion_tokens_details": {
+      "audio_tokens": 0,
+      "reasoning_tokens": 13
+     }
+    }
+   }
+  },
+  {
+   "level": "xhigh",
+   "status": 200,
+   "elapsed_s": 2.23,
+   "request": {
+    "model": "hy3",
+    "messages": [
+     {
+      "role": "user",
+      "content": "Reply with the single word: ok"
+     }
+    ],
+    "max_tokens": 64,
+    "reasoning_effort": "xhigh"
+   },
+   "response": {
+    "id": "gen-1792036719-M7rFIiZvLebOw0gBOvgg",
+    "object": "chat.completion",
+    "created": 1792036719,
+    "model": "hy3",
+    "choices": [
+     {
+      "index": 0,
+      "finish_reason": "stop",
+      "logprobs": null,
+      "message": {
+       "role": "assistant",
+       "content": "ok",
+       "refusal": null,
+       "reasoning": "We need to respond with the single word: ok. The user said: \"Reply with the single word: ok\". So we should output exactly \"ok\" without any additional text.",
+       "reasoning_details": [
+        {
+         "type": "reasoning.text",
+         "text": "We need to respond with the single word: ok. The user said: \"Reply with the single word: ok\". So we should output exactly \"ok\" without any additional text.",
+         "format": "unknown",
+         "index": 0
+        }
+       ]
+      }
+     }
+    ],
+    "usage": {
+     "prompt_tokens": 19,
+     "completion_tokens": 40,
+     "total_tokens": 59,
+     "prompt_tokens_details": {
+      "audio_tokens": 0,
+      "cached_tokens": 0,
+      "cache_write_tokens": 0
+     },
+     "completion_tokens_details": {
+      "audio_tokens": 0,
+      "reasoning_tokens": 37
+     }
+    }
+   }
+  },
+  {
+   "level": "max",
+   "status": 200,
+   "elapsed_s": 2.46,
+   "request": {
+    "model": "hy3",
+    "messages": [
+     {
+      "role": "user",
+      "content": "Reply with the single word: ok"
+     }
+    ],
+    "max_tokens": 64,
+    "reasoning_effort": "max"
+   },
+   "response": {
+    "id": "gen-1792036721-TyX3HtSKUYSZ22oDoAAS",
+    "object": "chat.completion",
+    "created": 1792036721,
+    "model": "hy3",
+    "choices": [
+     {
+      "index": 0,
+      "finish_reason": "stop",
+      "logprobs": null,
+      "message": {
+       "role": "assistant",
+       "content": "ok",
+       "refusal": null,
+       "reasoning": "We are asked to reply with the single word: ok. So I will output \"ok\".",
+       "reasoning_details": [
+        {
+         "type": "reasoning.text",
+         "text": "We are asked to reply with the single word: ok. So I will output \"ok\".",
+         "format": "unknown",
+         "index": 0
+        }
+       ]
+      }
+     }
+    ],
+    "usage": {
+     "prompt_tokens": 19,
+     "completion_tokens": 22,
+     "total_tokens": 41,
+     "prompt_tokens_details": {
+      "audio_tokens": 0,
+      "cached_tokens": 0,
+      "cache_write_tokens": 0
+     },
+     "completion_tokens_details": {
+      "audio_tokens": 0,
+      "reasoning_tokens": 19
+     }
+    }
+   }
+  }
+ ]
+}

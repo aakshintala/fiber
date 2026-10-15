@@ -73,6 +73,8 @@ fn ops(setup: &Setup, op: &str) -> Vec<Value> {
 /// The wire promise on every Part 7 line: the ask identity, exactly the
 /// keys `op` and `ms` with an unsigned `ms`, and none of the session's
 /// prompt, output, tool arguments or credential anywhere in the line.
+/// Part 7's four operations only: Part 8's tool timers carry `tool` as a
+/// third key and are asserted in `tool_timing.rs`.
 #[track_caller]
 fn assert_wire(lines: &[Value], session_id: &str) {
     assert!(!lines.is_empty(), "the test proved its lines exist first");
@@ -93,6 +95,21 @@ fn assert_wire(lines: &[Value], session_id: &str) {
             );
         }
     }
+}
+
+/// Only Part 7's four operations: `startup.preamble`, `turn.request`,
+/// `turn.model_call` and `turn.handoff`. Tool timers land here too once
+/// Part 8 times them, under their own exact keys.
+fn p7_lines(setup: &Setup) -> Vec<Value> {
+    op_lines(setup)
+        .into_iter()
+        .filter(|line| {
+            matches!(
+                line["data"]["op"].as_str(),
+                Some("startup.preamble" | "turn.request" | "turn.model_call" | "turn.handoff")
+            )
+        })
+        .collect()
 }
 
 fn debug_config(setup: &Setup, extra: Value) {
@@ -143,7 +160,7 @@ fn a_debug_ask_times_its_preamble_requests_and_attempts() {
         "one scope per admitted attempt"
     );
     assert!(ops(&setup, "turn.handoff").is_empty());
-    assert_wire(&op_lines(&setup), &session_id);
+    assert_wire(&p7_lines(&setup), &session_id);
     assert_eq!(
         run.kinds(),
         [
@@ -250,7 +267,7 @@ fn a_debug_retry_times_one_request_and_two_attempts() {
         "one logical request constructs once"
     );
     assert_eq!(ops(&setup, "turn.model_call").len(), 2);
-    assert_wire(&op_lines(&setup), &session_id);
+    assert_wire(&p7_lines(&setup), &session_id);
     let attempts: Vec<u64> = log_lines(&setup)
         .iter()
         .filter(|line| line["code"] == "provider_request")
@@ -298,7 +315,7 @@ fn a_debug_tool_handoff_times_one_handoff_with_no_note_request() {
     assert_eq!(server.requests().len(), 2);
     let session_id = run.session_id().to_owned();
     assert_eq!(ops(&setup, "turn.handoff").len(), 1);
-    assert_wire(&op_lines(&setup), &session_id);
+    assert_wire(&p7_lines(&setup), &session_id);
     assert!(
         !run.kinds().contains(&"handoff_started"),
         "a tool source writes no started: {:?}",

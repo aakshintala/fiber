@@ -28,6 +28,7 @@ use std::path::{Path, PathBuf};
 use std::sync::PoisonError;
 use std::time::Duration;
 
+use contract::diag::Op;
 use contract::{ErrorCode, SessionId};
 use log::diag::Severity;
 use serde_json::Value;
@@ -103,6 +104,9 @@ fn reach(
     credential: Option<&str>,
     trusted: bool,
 ) -> Result<UnixStream, Refused> {
+    // Declared before the gate: the guard's drop writes after the gate
+    // releases, and every attempt shares this one guard.
+    let _timer = log::diag::timed(&hub.diag, Op::HubResume, None, None);
     let socket = hub.home.join("run").join(&session.0);
     let _gate = hub
         .resume_gate

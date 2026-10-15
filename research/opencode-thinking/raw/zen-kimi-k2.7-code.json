@@ -1,0 +1,162 @@
+{
+ "route": "zen",
+ "protocol": "completions",
+ "model": "kimi-k2.7-code",
+ "base": "https://opencode.ai/zen",
+ "levels": [
+  {
+   "level": "off",
+   "status": 410,
+   "elapsed_s": 0.76,
+   "request": {
+    "model": "kimi-k2.7-code",
+    "messages": [
+     {
+      "role": "user",
+      "content": "Reply with the single word: ok"
+     }
+    ],
+    "max_tokens": 64,
+    "reasoning_effort": "none"
+   },
+   "response": {
+    "error": {
+     "type": "server_error",
+     "message": "Upstream request failed: Endpoint is unavailable."
+    }
+   }
+  },
+  {
+   "level": "minimal",
+   "status": 410,
+   "elapsed_s": 0.71,
+   "request": {
+    "model": "kimi-k2.7-code",
+    "messages": [
+     {
+      "role": "user",
+      "content": "Reply with the single word: ok"
+     }
+    ],
+    "max_tokens": 64,
+    "reasoning_effort": "minimal"
+   },
+   "response": {
+    "error": {
+     "type": "server_error",
+     "message": "Upstream request failed: Endpoint is unavailable."
+    }
+   }
+  },
+  {
+   "level": "low",
+   "status": 410,
+   "elapsed_s": 0.68,
+   "request": {
+    "model": "kimi-k2.7-code",
+    "messages": [
+     {
+      "role": "user",
+      "content": "Reply with the single word: ok"
+     }
+    ],
+    "max_tokens": 64,
+    "reasoning_effort": "low"
+   },
+   "response": {
+    "error": {
+     "type": "server_error",
+     "message": "Upstream request failed: Endpoint is unavailable."
+    }
+   }
+  },
+  {
+   "level": "medium",
+   "status": 410,
+   "elapsed_s": 0.73,
+   "request": {
+    "model": "kimi-k2.7-code",
+    "messages": [
+     {
+      "role": "user",
+      "content": "Reply with the single word: ok"
+     }
+    ],
+    "max_tokens": 64,
+    "reasoning_effort": "medium"
+   },
+   "response": {
+    "error": {
+     "type": "server_error",
+     "message": "Upstream request failed: Endpoint is unavailable."
+    }
+   }
+  },
+  {
+   "level": "high",
+   "status": 410,
+   "elapsed_s": 0.58,
+   "request": {
+    "model": "kimi-k2.7-code",
+    "messages": [
+     {
+      "role": "user",
+      "content": "Reply with the single word: ok"
+     }
+    ],
+    "max_tokens": 64,
+    "reasoning_effort": "high"
+   },
+   "response": {
+    "error": {
+     "type": "server_error",
+     "message": "Upstream request failed: Endpoint is unavailable."
+    }
+   }
+  },
+  {
+   "level": "xhigh",
+   "status": 410,
+   "elapsed_s": 0.72,
+   "request": {
+    "model": "kimi-k2.7-code",
+    "messages": [
+     {
+      "role": "user",
+      "content": "Reply with the single word: ok"
+     }
+    ],
+    "max_tokens": 64,
+    "reasoning_effort": "xhigh"
+   },
+   "response": {
+    "error": {
+     "type": "server_error",
+     "message": "Upstream request failed: Endpoint is unavailable."
+    }
+   }
+  },
+  {
+   "level": "max",
+   "status": 410,
+   "elapsed_s": 0.58,
+   "request": {
+    "model": "kimi-k2.7-code",
+    "messages": [
+     {
+      "role": "user",
+      "content": "Reply with the single word: ok"
+     }
+    ],
+    "max_tokens": 64,
+    "reasoning_effort": "max"
+   },
+   "response": {
+    "error": {
+     "type": "server_error",
+     "message": "Upstream request failed: Endpoint is unavailable."
+    }
+   }
+  }
+ ]
+}

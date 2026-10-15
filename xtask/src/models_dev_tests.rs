@@ -24,17 +24,24 @@ fn tool_model(extra: Value) -> Value {
     model
 }
 
+/// A catalog holding each source's models.
+fn catalogs(sources: &[(&str, &[(&str, Value)])]) -> Value {
+    let mut catalog = Map::new();
+    for (source, models) in sources {
+        let mut map = Map::new();
+        for (id, model) in *models {
+            map.insert((*id).to_owned(), model.clone());
+        }
+        let mut provider = Map::new();
+        provider.insert("models".to_owned(), Value::Object(map));
+        catalog.insert((*source).to_owned(), Value::Object(provider));
+    }
+    Value::Object(catalog)
+}
+
 /// A catalog holding `models` under `source`.
 fn catalog(source: &str, models: &[(&str, Value)]) -> Value {
-    let mut map = Map::new();
-    for (id, model) in models {
-        map.insert((*id).to_owned(), model.clone());
-    }
-    let mut provider = Map::new();
-    provider.insert("models".to_owned(), Value::Object(map));
-    let mut catalog = Map::new();
-    catalog.insert(source.to_owned(), Value::Object(provider));
-    Value::Object(catalog)
+    catalogs(&[(source, models)])
 }
 
 /// A package on a fixed protocol, writing `providers/t/providers/t.json`.
@@ -313,6 +320,114 @@ fn a_protocol_override_applies_on_its_package_only() {
     );
 }
 
+/// A gateway package writing `providers/opencode/providers/opencode-go.json`:
+/// its path is what marks it as a gateway, so its models inherit a vendor
+/// package's thinking row by exact model id.
+fn gateway_package(source: &'static str) -> Package {
+    Package {
+        path: "providers/opencode/providers/opencode-go.json",
+        ..fixed_package(source, "openai-responses")
+    }
+}
+
+/// A direct-vendor package: its path is what marks its thinking rows as
+/// inheritable by gateways. A `codex` path never is.
+fn vendor_package(source: &'static str, path: &'static str) -> Package {
+    Package {
+        path,
+        ..fixed_package(source, "openai-responses")
+    }
+}
+
+/// The generated output for `file` in `outputs`, such as the gateway's.
+fn output_for<'a>(outputs: &'a [Output], file: &str) -> &'a Output {
+    outputs
+        .iter()
+        .find(|output| output.path.ends_with(file))
+        .unwrap()
+}
+
+#[test]
+fn a_gateway_model_with_no_row_at_all_is_an_error_naming_both() {
+    let gateway = gateway_package("g");
+    let input = catalog("g", &[("m", tool_model(json!({})))]);
+    assert_eq!(
+        generate_err(&gateway, &input),
+        "opencode-go: `m` has neither an inherited nor its own thinking row"
+    );
+    // A non-gateway package with the same content still declares none.
+    let plain = fixed_package("g", "openai-responses");
+    let (output, _) = generate_one(&plain, &[("m", tool_model(json!({})))]);
+    assert!(
+        generated_model(&output, "m")
+            .unwrap()
+            .get("thinking_levels")
+            .is_none()
+    );
+}
+
+#[test]
+fn a_gateway_model_inherits_the_vendor_row_for_its_exact_id() {
+    let mut vendor = vendor_package("v", "providers/openai/providers/openai.json");
+    vendor.thinking = &[("m", &["low", "high"], Some("low"))];
+    let gateway = gateway_package("g");
+    let model = tool_model(json!({}));
+    let input = catalogs(&[("v", &[("m", model.clone())]), ("g", &[("m", model)])]);
+    let (outputs, _) = generate(&input, &[vendor, gateway]).unwrap();
+    let model = generated_model(output_for(&outputs, "opencode-go.json"), "m").unwrap();
+    assert_eq!(model["thinking_levels"], json!(["low", "high"]));
+    assert_eq!(model["thinking_default"], "low");
+}
+
+#[test]
+fn inheritance_matches_the_whole_id_only() {
+    let mut vendor = vendor_package("v", "providers/openai/providers/openai.json");
+    vendor.thinking = &[("m", &["low"], None)];
+    let gateway = gateway_package("g");
+    let model = tool_model(json!({}));
+    let input = catalogs(&[("v", &[("m", model.clone())]), ("g", &[("m-extra", model)])]);
+    assert_eq!(
+        match generate(&input, &[vendor, gateway]) {
+            Err(error) => error,
+            Ok(_) => panic!("generate unexpectedly succeeded"),
+        },
+        "opencode-go: `m-extra` has neither an inherited nor its own thinking row"
+    );
+}
+
+#[test]
+fn a_gateway_own_row_beats_the_vendor_row() {
+    let mut vendor = vendor_package("v", "providers/openai/providers/openai.json");
+    vendor.thinking = &[("m", &["low"], Some("low"))];
+    let mut gateway = gateway_package("g");
+    gateway.thinking = &[("m", &["high"], None)];
+    let model = tool_model(json!({}));
+    let input = catalogs(&[("v", &[("m", model.clone())]), ("g", &[("m", model)])]);
+    let (outputs, _) = generate(&input, &[vendor, gateway]).unwrap();
+    let model = generated_model(output_for(&outputs, "opencode-go.json"), "m").unwrap();
+    assert_eq!(model["thinking_levels"], json!(["high"]));
+    assert!(model.get("thinking_default").is_none());
+}
+
+#[test]
+fn codex_rows_never_reach_a_gateway() {
+    let mut codex = vendor_package("c", "providers/codex/providers/codex.json");
+    codex.thinking = &[("m", &["low"], Some("low"))];
+    let mut openai = vendor_package("v", "providers/openai/providers/openai.json");
+    openai.thinking = &[("m", &["low", "high"], None)];
+    let gateway = gateway_package("g");
+    let model = tool_model(json!({}));
+    let input = catalogs(&[
+        ("c", &[("m", model.clone())]),
+        ("v", &[("m", model.clone())]),
+        ("g", &[("m", model)]),
+    ]);
+    let (outputs, _) = generate(&input, &[codex, openai, gateway]).unwrap();
+    let model = generated_model(output_for(&outputs, "opencode-go.json"), "m").unwrap();
+    assert_eq!(model["thinking_levels"], json!(["low", "high"]));
+    assert!(model.get("thinking_default").is_none());
+}
+
 #[test]
 fn context_absent_and_zero_are_left_out_with_a_line() {
     let package = fixed_package("s", "openai-responses");
@@ -521,7 +636,12 @@ fn thinking_entries_name_snapshot_models_and_known_levels() {
                 "{id} is not a models.dev model under `{}`",
                 package.source
             );
-            assert!(!levels.is_empty(), "{id} lists no thinking level");
+            if levels.is_empty() {
+                // An explicitly empty row means the model takes no level,
+                // so it names no default either.
+                assert!(default.is_none(), "{id} lists no level but names a default");
+                continue;
+            }
             for level in *levels {
                 assert!(
                     VOCABULARY.contains(level),
@@ -569,6 +689,43 @@ fn a_model_without_a_thinking_entry_declares_none() {
     let plain = generated_model(&output, "plain").unwrap();
     assert!(plain.get("thinking_levels").is_none());
     assert!(plain.get("thinking_default").is_none());
+}
+
+#[test]
+fn an_explicitly_empty_row_writes_empty_levels_with_no_default() {
+    let mut package = fixed_package("s", "openai-responses");
+    package.thinking = &[("m", &[], None)];
+    let (output, _) = generate_one(&package, &[("m", tool_model(json!({})))]);
+    let model = generated_model(&output, "m").unwrap();
+    assert_eq!(model["thinking_levels"], json!([]));
+    assert!(model.get("thinking_default").is_none());
+}
+
+#[test]
+fn a_legacy_claude_compat_layer_keeps_the_gateway_header() {
+    // A gateway Claude model inheriting a legacy budget-tier row takes
+    // adaptive thinking off via `compat.thinking_budget`; table layers
+    // replace by key rather than deep-merging, so its model-specific
+    // layer repeats the gateway `cache_key_header` or auth breaks.
+    let mut gateway = Package {
+        protocol: ProtocolRule::Fixed("anthropic-messages"),
+        ..gateway_package("g")
+    };
+    gateway.by_protocol = &[(
+        "anthropic-messages",
+        r#"{"compat":{"cache_key_header":"x-opencode-session"}}"#,
+    )];
+    gateway.by_model = &[(
+        "m",
+        r#"{"compat":{"cache_key_header":"x-opencode-session","thinking_budget":true}}"#,
+    )];
+    gateway.thinking = &[("m", &["off", "minimal", "low", "medium", "high"], None)];
+    let (output, _) = generate_one(&gateway, &[("m", tool_model(json!({})))]);
+    let model = generated_model(&output, "m").unwrap();
+    assert_eq!(
+        model["compat"],
+        json!({"cache_key_header": "x-opencode-session", "thinking_budget": true})
+    );
 }
 
 #[test]
@@ -880,23 +1037,64 @@ fn fetch_names_a_failed_curl() {
 #[test]
 fn zen_keeps_its_google_generative_ai_models() {
     let google = || tool_model(json!({"provider": {"npm": "@ai-sdk/google"}}));
-    let other = || tool_model(json!({"provider": {"npm": "@ai-sdk/openai"}}));
-    let zen = PACKAGES
-        .iter()
-        .find(|package| package.path.ends_with("opencode-zen.json"))
-        .unwrap();
-    let (output, left_out) = generate_one(
-        zen,
-        &[
-            ("gemini-3.8-flash", google()),
-            ("gpt-6-luna", other()),
-            ("muse-spark-1.3", other()),
-            ("gpt-6.1-sol", other()),
-        ],
-    );
-    assert!(generated_model(&output, "gemini-3.8-flash").is_some());
+    let openai = || tool_model(json!({"provider": {"npm": "@ai-sdk/openai"}}));
+    let anthropic = || tool_model(json!({"provider": {"npm": "@ai-sdk/anthropic"}}));
+    // Focused fixtures: the vendor rows the gateways inherit, and each
+    // gateway's own rows for the asserted models. The drift test in
+    // xtask/tests/models_dev.rs already checks the real tables for stale
+    // entries across packages.
+    let mut gemini = vendor_package("v-gemini", "providers/gemini/providers/gemini.json");
+    gemini.thinking = &[("gemini-3.8-flash", &["low", "medium", "high"], None)];
+    let mut vendor = vendor_package("v-openai", "providers/openai/providers/openai.json");
+    vendor.thinking = &[
+        ("gpt-6-luna", &["low"], None),
+        ("gpt-6.1-sol", &["low"], None),
+    ];
+    let mut zen = gateway_package("z");
+    zen.path = "providers/opencode/providers/opencode-zen.json";
+    zen.protocol = ProtocolRule::ByNpm;
+    zen.thinking = &[
+        ("muse-spark-1.3", &["low"], None),
+        ("minimax-m2.7", &[], None),
+    ];
+    let mut go = gateway_package("g");
+    go.protocol = ProtocolRule::ByNpm;
+    go.thinking = &[
+        ("muse-spark-1.3-contributor", &["low"], None),
+        ("minimax-m2.7", &["low"], None),
+    ];
+    let input = catalogs(&[
+        ("v-gemini", &[("gemini-3.8-flash", google())]),
+        (
+            "v-openai",
+            &[("gpt-6-luna", openai()), ("gpt-6.1-sol", openai())],
+        ),
+        (
+            "z",
+            &[
+                ("gemini-3.8-flash", google()),
+                ("gpt-6-luna", openai()),
+                ("muse-spark-1.3", openai()),
+                ("gpt-6.1-sol", openai()),
+                ("minimax-m2.7", anthropic()),
+            ],
+        ),
+        (
+            "g",
+            &[
+                ("gemini-3.8-flash", google()),
+                ("muse-spark-1.3-contributor", openai()),
+                ("minimax-m2.7", anthropic()),
+            ],
+        ),
+    ]);
+    let (outputs, left_out) = generate(&input, &[gemini, vendor, zen, go]).unwrap();
+    let output = output_for(&outputs, "opencode-zen.json");
+    let gemini = generated_model(output, "gemini-3.8-flash").unwrap();
+    assert_eq!(gemini["protocol"], "google-generative-ai");
+    assert_eq!(gemini["thinking_levels"], json!(["low", "medium", "high"]));
     for id in ["gpt-6-luna", "muse-spark-1.3", "gpt-6.1-sol"] {
-        assert!(generated_model(&output, id).is_some(), "{id}");
+        assert!(generated_model(output, id).is_some(), "{id}");
     }
     assert!(
         !left_out
@@ -904,33 +1102,9 @@ fn zen_keeps_its_google_generative_ai_models() {
             .any(|line| line.contains("gemini-3.8-flash")),
         "{left_out:?}"
     );
-    let go = PACKAGES
-        .iter()
-        .find(|package| package.path.ends_with("opencode-go.json"))
-        .unwrap();
-    let (output, _) = generate_one(
-        go,
-        &[
-            ("gemini-3.8-flash", google()),
-            ("muse-spark-1.3-contributor", other()),
-            (
-                "minimax-m2.7",
-                tool_model(json!({"provider": {"npm": "@ai-sdk/anthropic"}})),
-            ),
-        ],
-    );
-    assert!(generated_model(&output, "gemini-3.8-flash").is_some());
-    let gemini = PACKAGES
-        .iter()
-        .find(|package| package.path.ends_with("providers/gemini.json"))
-        .unwrap();
-    let models: Vec<(&str, Value)> = gemini
-        .by_model
-        .iter()
-        .map(|(id, _)| *id)
-        .chain(gemini.thinking.iter().map(|(id, _, _)| *id))
-        .map(|id| (id, tool_model(json!({}))))
-        .collect();
-    let (output, _) = generate_one(gemini, &models);
-    assert!(generated_model(&output, "gemini-3.8-flash").is_some());
+    let output = output_for(&outputs, "opencode-go.json");
+    assert!(generated_model(output, "gemini-3.8-flash").is_some());
+    for id in ["muse-spark-1.3-contributor", "minimax-m2.7"] {
+        assert!(generated_model(output, id).is_some(), "{id}");
+    }
 }

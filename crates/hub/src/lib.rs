@@ -45,6 +45,9 @@ mod start;
 #[cfg(test)]
 pub(crate) mod testkit;
 mod tick;
+#[cfg(test)]
+#[path = "timing_tests.rs"]
+mod timing_tests;
 
 use std::io;
 use std::path::Path;

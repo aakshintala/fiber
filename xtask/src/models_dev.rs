@@ -311,9 +311,52 @@ fn leave_out_line(package: &Package, protocol: &str, id: &str, model: &Value) ->
     }
 }
 
+/// Whether the package is a gateway (`opencode-go`, `opencode-zen`):
+/// its models inherit a vendor package's thinking row by exact model id.
+fn is_gateway(package: &Package) -> bool {
+    package.path.ends_with("opencode-go.json") || package.path.ends_with("opencode-zen.json")
+}
+
+/// Whether the package is a direct vendor (`anthropic`, `openai`,
+/// `gemini`, `muse`) whose thinking rows a gateway inherits: the
+/// subscription-specific `codex` rows carry Codex-backend defaults that do
+/// not hold on a gateway route, so they never apply there.
+fn is_thinking_vendor(package: &Package) -> bool {
+    ["anthropic.json", "gemini.json", "openai.json", "muse.json"]
+        .iter()
+        .any(|file| package.path.ends_with(file))
+}
+
+/// The thinking row for `id`: the package's own row, else a direct-vendor
+/// package's row naming the same id exactly, on a gateway package only. A
+/// gateway's own row beats the vendor's row for the same id.
+fn thinking_row<'a>(
+    packages: &'a [Package],
+    package: &'a Package,
+    id: &str,
+) -> Option<(&'a [&'a str], Option<&'a str>)> {
+    if let Some(entry) = package.thinking.iter().find(|entry| entry.0 == id) {
+        return Some((entry.1, entry.2));
+    }
+    if !is_gateway(package) {
+        return None;
+    }
+    packages
+        .iter()
+        .filter(|vendor| is_thinking_vendor(vendor))
+        .find_map(|vendor| {
+            vendor
+                .thinking
+                .iter()
+                .find(|entry| entry.0 == id)
+                .map(|entry| (entry.1, entry.2))
+        })
+}
+
 /// One generated model: its derived fields, then the table layers, with a
 /// later key replacing an earlier one.
 fn generate_model(
+    packages: &[Package],
     package: &Package,
     protocol: &'static str,
     id: &str,
@@ -371,13 +414,20 @@ fn generate_model(
             generated.insert(key, value);
         }
     }
-    if let Some((_, levels, default)) = package.thinking.iter().find(|entry| entry.0 == id) {
+    let thinking = thinking_row(packages, package, id);
+    if is_gateway(package) && thinking.is_none() {
+        return Err(format!(
+            "{}: `{id}` has neither an inherited nor its own thinking row",
+            stem(package)
+        ));
+    }
+    if let Some((levels, default)) = thinking {
         generated.insert(
             "thinking_levels".to_owned(),
             Value::Array(levels.iter().map(|level| Value::from(*level)).collect()),
         );
         if let Some(default) = default {
-            generated.insert("thinking_default".to_owned(), Value::from(*default));
+            generated.insert("thinking_default".to_owned(), Value::from(default));
         }
     }
     Ok(generated)
@@ -413,7 +463,10 @@ pub(crate) fn generate(catalog: &Value, packages: &[Package]) -> Result<Generate
                 left_out.push(line);
                 continue;
             }
-            generated.push((id.clone(), generate_model(package, protocol, id, model)?));
+            generated.push((
+                id.clone(),
+                generate_model(packages, package, protocol, id, model)?,
+            ));
         }
         for id in package.only.iter().copied() {
             if !generated.iter().any(|model| model.0 == id) {

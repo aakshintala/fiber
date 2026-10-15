@@ -66,6 +66,7 @@ fn text_joins_text_parts_in_order_and_skips_the_rest() {
                 }],
                 details: None,
                 artifact: None,
+                kept: None,
                 changes: None,
                 control: None,
                 changed_by: None,

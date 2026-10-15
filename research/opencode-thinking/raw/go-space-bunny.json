@@ -1,0 +1,282 @@
+{
+ "route": "go",
+ "protocol": "completions",
+ "model": "space-bunny",
+ "base": "https://opencode.ai/zen/go",
+ "levels": [
+  {
+   "level": "off",
+   "status": 400,
+   "elapsed_s": 0.51,
+   "request": {
+    "model": "space-bunny",
+    "messages": [
+     {
+      "role": "user",
+      "content": "Reply with the single word: ok"
+     }
+    ],
+    "max_tokens": 64,
+    "reasoning_effort": "none"
+   },
+   "response": {
+    "error": {
+     "type": "invalid_request_error",
+     "message": "Upstream request failed: [invalid_request_error] invalid request"
+    }
+   }
+  },
+  {
+   "level": "minimal",
+   "status": 200,
+   "elapsed_s": 1.21,
+   "request": {
+    "model": "space-bunny",
+    "messages": [
+     {
+      "role": "user",
+      "content": "Reply with the single word: ok"
+     }
+    ],
+    "max_tokens": 64,
+    "reasoning_effort": "minimal"
+   },
+   "response": {
+    "id": "071f8378e0b94ee808832a8a87fba327",
+    "object": "chat.completion",
+    "created": 1792036985,
+    "model": "space-bunny",
+    "choices": [
+     {
+      "index": 0,
+      "finish_reason": "stop",
+      "message": {
+       "role": "assistant",
+       "content": "ok"
+      }
+     }
+    ],
+    "usage": {
+     "prompt_tokens": 163,
+     "completion_tokens": 3,
+     "total_tokens": 166,
+     "prompt_tokens_details": {
+      "cached_tokens": 140
+     }
+    }
+   }
+  },
+  {
+   "level": "low",
+   "status": 200,
+   "elapsed_s": 0.87,
+   "request": {
+    "model": "space-bunny",
+    "messages": [
+     {
+      "role": "user",
+      "content": "Reply with the single word: ok"
+     }
+    ],
+    "max_tokens": 64,
+    "reasoning_effort": "low"
+   },
+   "response": {
+    "id": "071f837a10246e3c3167fc48c62af08d",
+    "object": "chat.completion",
+    "created": 1792036986,
+    "model": "space-bunny",
+    "choices": [
+     {
+      "index": 0,
+      "finish_reason": "stop",
+      "message": {
+       "role": "assistant",
+       "content": "ok"
+      }
+     }
+    ],
+    "usage": {
+     "prompt_tokens": 163,
+     "completion_tokens": 3,
+     "total_tokens": 166,
+     "prompt_tokens_details": {
+      "cached_tokens": 162
+     }
+    }
+   }
+  },
+  {
+   "level": "medium",
+   "status": 200,
+   "elapsed_s": 0.97,
+   "request": {
+    "model": "space-bunny",
+    "messages": [
+     {
+      "role": "user",
+      "content": "Reply with the single word: ok"
+     }
+    ],
+    "max_tokens": 64,
+    "reasoning_effort": "medium"
+   },
+   "response": {
+    "id": "071f837a21c18947c4187951d1ab92e8",
+    "object": "chat.completion",
+    "created": 1792036987,
+    "model": "space-bunny",
+    "choices": [
+     {
+      "index": 0,
+      "finish_reason": "stop",
+      "message": {
+       "role": "assistant",
+       "content": "ok"
+      }
+     }
+    ],
+    "usage": {
+     "prompt_tokens": 163,
+     "completion_tokens": 3,
+     "total_tokens": 166,
+     "prompt_tokens_details": {
+      "cached_tokens": 130
+     }
+    }
+   }
+  },
+  {
+   "level": "high",
+   "status": 200,
+   "elapsed_s": 0.87,
+   "request": {
+    "model": "space-bunny",
+    "messages": [
+     {
+      "role": "user",
+      "content": "Reply with the single word: ok"
+     }
+    ],
+    "max_tokens": 64,
+    "reasoning_effort": "high"
+   },
+   "response": {
+    "id": "071f837b01c0828d20cb51c1aae2bcf6",
+    "object": "chat.completion",
+    "created": 1792036987,
+    "model": "space-bunny",
+    "choices": [
+     {
+      "index": 0,
+      "finish_reason": "stop",
+      "message": {
+       "role": "assistant",
+       "content": "ok",
+       "reasoning_content": "We need answer single word ok."
+      }
+     }
+    ],
+    "usage": {
+     "prompt_tokens": 163,
+     "completion_tokens": 11,
+     "total_tokens": 174,
+     "prompt_tokens_details": {
+      "cached_tokens": 130
+     },
+     "completion_tokens_details": {
+      "reasoning_tokens": 7
+     }
+    }
+   }
+  },
+  {
+   "level": "xhigh",
+   "status": 200,
+   "elapsed_s": 0.94,
+   "request": {
+    "model": "space-bunny",
+    "messages": [
+     {
+      "role": "user",
+      "content": "Reply with the single word: ok"
+     }
+    ],
+    "max_tokens": 64,
+    "reasoning_effort": "xhigh"
+   },
+   "response": {
+    "id": "071f837cacd8362735f57baecfd81cac",
+    "object": "chat.completion",
+    "created": 1792036988,
+    "model": "space-bunny",
+    "choices": [
+     {
+      "index": 0,
+      "finish_reason": "stop",
+      "message": {
+       "role": "assistant",
+       "content": "ok",
+       "reasoning_content": "We need answer single word ok."
+      }
+     }
+    ],
+    "usage": {
+     "prompt_tokens": 163,
+     "completion_tokens": 11,
+     "total_tokens": 174,
+     "prompt_tokens_details": {
+      "cached_tokens": 129
+     },
+     "completion_tokens_details": {
+      "reasoning_tokens": 7
+     }
+    }
+   }
+  },
+  {
+   "level": "max",
+   "status": 200,
+   "elapsed_s": 2.58,
+   "request": {
+    "model": "space-bunny",
+    "messages": [
+     {
+      "role": "user",
+      "content": "Reply with the single word: ok"
+     }
+    ],
+    "max_tokens": 64,
+    "reasoning_effort": "max"
+   },
+   "response": {
+    "id": "071f837dab3a1006d95942a7aeb4a157",
+    "object": "chat.completion",
+    "created": 1792036989,
+    "model": "space-bunny",
+    "choices": [
+     {
+      "index": 0,
+      "finish_reason": "stop",
+      "message": {
+       "role": "assistant",
+       "content": "ok",
+       "reasoning_content": "We need respond single word ok. Need no punctuation? User says single word: ok. Final exactly ok."
+      }
+     }
+    ],
+    "usage": {
+     "prompt_tokens": 163,
+     "completion_tokens": 26,
+     "total_tokens": 189,
+     "prompt_tokens_details": {
+      "cached_tokens": 130
+     },
+     "completion_tokens_details": {
+      "reasoning_tokens": 22
+     }
+    }
+   }
+  }
+ ]
+}

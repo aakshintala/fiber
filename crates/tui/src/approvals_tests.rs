@@ -1,10 +1,15 @@
 //! Tests for the approval queue: folding, the panel, keys and answers.
 
-use super::{PanelKey, Queue};
+use super::{Mark, Panel, PanelKey, Queue};
 use crate::keys::Key;
+use crate::theme::Role;
+use ratatui::style::{Modifier, Style};
+use std::ops::Range;
 
 const S_A: &str = "s_aaaaaaaaaaaaaaaa";
 const S_B: &str = "s_bbbbbbbbbbbbbbbb";
+
+const HINT: &str = "↑↓ choose · Enter confirms · typing goes to the feedback · click a choice";
 
 /// One session envelope.
 fn envelope(
@@ -98,6 +103,18 @@ fn folded(lines: &[contract::Envelope]) -> Queue {
     queue
 }
 
+/// The open panel at width 80.
+fn rendered(queue: &Queue) -> Panel {
+    queue.panel(80).expect("the panel is open")
+}
+
+/// The open panel with the session name from `name`.
+fn named(queue: &Queue, name: Option<&str>) -> Panel {
+    queue
+        .panel_with(80, &|_| name.map(str::to_owned))
+        .expect("the panel is open")
+}
+
 /// The panel's lines, or none when it is closed.
 fn panel(queue: &Queue) -> Vec<String> {
     queue.panel(80).map(|panel| panel.lines).unwrap_or_default()
@@ -111,6 +128,86 @@ fn row(queue: &Queue, row: usize) -> String {
 /// The panel's header line.
 fn header(queue: &Queue) -> String {
     row(queue, 0)
+}
+
+/// The header for `k` of `n` from `session` at width 80: the left part,
+/// spaces, and right-aligned "Esc puts it aside".
+fn header_text(k: usize, n: usize, session: &str) -> String {
+    header_at(k, n, session, 80)
+}
+
+/// The header for `k` of `n` from `session` at `width` columns.
+fn header_at(k: usize, n: usize, session: &str, width: usize) -> String {
+    let left = format!("Approval {k} of {n} · {session}");
+    let pad = width
+        .saturating_sub(crate::format::width(&left).saturating_add("Esc puts it aside".len()))
+        .max(1);
+    format!("{left}{}{}", " ".repeat(pad), "Esc puts it aside")
+}
+
+/// "Approval k of n": bold in `attention`.
+fn head_style() -> Style {
+    Style::new()
+        .fg(Role::Attention.color())
+        .add_modifier(Modifier::BOLD)
+}
+
+/// The asking session: in `attention`.
+fn session_style() -> Style {
+    Style::new().fg(Role::Attention.color())
+}
+
+/// "irreversible": bold in `error`.
+fn loud_style() -> Style {
+    Style::new()
+        .fg(Role::Error.color())
+        .add_modifier(Modifier::BOLD)
+}
+
+/// A dim run.
+fn dim_style() -> Style {
+    Style::new().add_modifier(Modifier::DIM)
+}
+
+/// A focused label.
+fn bold_style() -> Style {
+    Style::new().add_modifier(Modifier::BOLD)
+}
+
+/// A focused label over a dim run.
+fn dim_bold_style() -> Style {
+    Style::new()
+        .add_modifier(Modifier::DIM)
+        .add_modifier(Modifier::BOLD)
+}
+
+/// A focused label over an `info` run.
+fn remember_bold_style() -> Style {
+    Style::new()
+        .fg(Role::Info.color())
+        .add_modifier(Modifier::BOLD)
+}
+
+/// The tool's name: bold in `info`.
+fn tool_style() -> Style {
+    Style::new()
+        .fg(Role::Info.color())
+        .add_modifier(Modifier::BOLD)
+}
+
+/// The focused choice's mark: in `attention`.
+fn focus_style() -> Style {
+    Style::new().fg(Role::Attention.color())
+}
+
+/// A remembering choice's rule prefix: in `info`.
+fn remember_style() -> Style {
+    Style::new().fg(Role::Info.color())
+}
+
+/// One expected styled run.
+fn mark(line: usize, bytes: Range<usize>, style: Style) -> Mark {
+    Mark { line, bytes, style }
 }
 
 /// Presses `key` `times` times on the open panel.
@@ -128,7 +225,7 @@ fn answer(queue: &mut Queue) -> serde_json::Value {
 }
 
 #[test]
-fn a_standing_ask_shows_the_rule_the_call_and_no_remembering_rows() {
+fn a_standing_ask_shows_two_choices_with_marks() {
     let queue = folded(&[
         call(
             S_A,
@@ -138,33 +235,414 @@ fn a_standing_ask_shows_the_rule_the_call_and_no_remembering_rows() {
         ),
         standing_ask(S_A, "a_1", "r_1", "echo hi"),
     ]);
+    let shown = rendered(&queue);
+    let facts = "runs a command · asked by the global rule echo hi";
     assert_eq!(
-        panel(&queue),
+        shown.lines,
         vec![
-            format!("approval · {S_A} · 1 of 1"),
-            "asked by a global rule: echo hi".to_owned(),
-            r#"shell {"command":"echo hi"}"#.to_owned(),
-            "› allow once".to_owned(),
-            "  deny · type to add feedback".to_owned(),
+            header_text(1, 1, S_A),
+            "shell echo hi".to_owned(),
+            facts.to_owned(),
+            String::new(),
+            "▸ 1 Allow once".to_owned(),
+            "  2 Deny  type to add feedback".to_owned(),
+            String::new(),
+            HINT.to_owned(),
         ]
     );
-    assert_eq!(queue.panel(80).map(|panel| panel.alert), Some(false));
+    assert!(!shown.alert);
+    assert_eq!(shown.caret, None);
+    assert_eq!(
+        shown.marks,
+        vec![
+            mark(0, 0..15, head_style()),
+            mark(0, 15..37, session_style()),
+            mark(0, 64..81, dim_style()),
+            mark(1, 0..5, tool_style()),
+            mark(1, 6..13, bold_style()),
+            mark(2, 0..facts.len(), dim_style()),
+            mark(4, 0..4, focus_style()),
+            mark(4, 4..5, dim_style()),
+            mark(4, 6..16, bold_style()),
+            mark(5, 2..3, dim_style()),
+            mark(5, 8..30, dim_style()),
+            mark(7, 0..HINT.len(), dim_style()),
+        ]
+    );
 }
 
 #[test]
 fn a_request_offering_a_rule_shows_both_remembering_rows() {
     let queue = folded(&[offering(S_A, "r_1")]);
+    let shown = rendered(&queue);
+    let facts = "runs a command · no rule allows this call";
+    assert_eq!(
+        shown.lines,
+        vec![
+            header_text(1, 1, S_A),
+            facts.to_owned(),
+            String::new(),
+            "▸ 1 Allow once".to_owned(),
+            "  2 Allow for this session npm test *".to_owned(),
+            "  3 Always allow in this project npm test *".to_owned(),
+            "  4 Deny  type to add feedback".to_owned(),
+            String::new(),
+            HINT.to_owned(),
+        ]
+    );
+    assert!(!shown.alert);
+    assert_eq!(shown.caret, None);
+    assert_eq!(
+        shown.marks,
+        vec![
+            mark(0, 0..15, head_style()),
+            mark(0, 15..37, session_style()),
+            mark(0, 64..81, dim_style()),
+            mark(1, 0..facts.len(), dim_style()),
+            mark(3, 0..4, focus_style()),
+            mark(3, 4..5, dim_style()),
+            mark(3, 6..16, bold_style()),
+            mark(4, 2..3, dim_style()),
+            mark(4, 27..37, remember_style()),
+            mark(5, 2..3, dim_style()),
+            mark(5, 33..43, remember_style()),
+            mark(6, 2..3, dim_style()),
+            mark(6, 8..30, dim_style()),
+            mark(8, 0..HINT.len(), dim_style()),
+        ]
+    );
+}
+
+#[test]
+fn a_review_without_a_rule_shows_two_choices() {
+    let queue = folded(&[review(S_A, "r_1", serde_json::json!({}))]);
     assert_eq!(
         panel(&queue),
         vec![
-            format!("approval · {S_A} · 1 of 1"),
-            "no rule allows this call".to_owned(),
-            "› allow once".to_owned(),
-            "  allow for this session: npm test".to_owned(),
-            "  always allow in this project: npm test".to_owned(),
-            "  deny · type to add feedback".to_owned(),
+            header_text(1, 1, S_A),
+            "runs a command · no rule allows this call".to_owned(),
+            String::new(),
+            "▸ 1 Allow once".to_owned(),
+            "  2 Deny  type to add feedback".to_owned(),
+            String::new(),
+            HINT.to_owned(),
         ]
     );
+    assert!(!rendered(&queue).alert);
+}
+
+#[test]
+fn the_facts_line_words_effects_paths_and_reasons() {
+    // Each declared effect in words.
+    for (effect, words) in [
+        ("executes", "runs a command"),
+        ("writes", "writes files"),
+        ("reads", "reads files"),
+        ("network", "uses the network"),
+    ] {
+        let queue = folded(&[request(
+            S_A,
+            "a_1",
+            "r_1",
+            serde_json::json!({"effects": [effect],
+                "step": "standing_ask",
+                "standing_rule": {"scope": "global", "prefix": "echo hi"}}),
+        )]);
+        assert_eq!(
+            row(&queue, 1),
+            format!("{words} · asked by the global rule echo hi"),
+            "{effect}"
+        );
+    }
+    // Two effects join with ", ".
+    let queue = folded(&[request(
+        S_A,
+        "a_1",
+        "r_1",
+        serde_json::json!({"effects": ["reads", "network"],
+            "step": "standing_ask",
+            "standing_rule": {"scope": "global", "prefix": "echo hi"}}),
+    )]);
+    assert_eq!(
+        row(&queue, 1),
+        "reads files, uses the network · asked by the global rule echo hi"
+    );
+    // Paths join with ", " after the effects.
+    let queue = folded(&[request(
+        S_A,
+        "a_1",
+        "r_1",
+        serde_json::json!({"paths": ["a/b", "c.txt"],
+            "step": "standing_ask",
+            "standing_rule": {"scope": "global", "prefix": "echo hi"}}),
+    )]);
+    assert_eq!(
+        row(&queue, 1),
+        "runs a command · a/b, c.txt · asked by the global rule echo hi"
+    );
+    // No effects and no paths: the line starts at why it asked.
+    let queue = folded(&[request(
+        S_A,
+        "a_1",
+        "r_1",
+        serde_json::json!({"effects": [],
+            "step": "standing_ask",
+            "standing_rule": {"scope": "global", "prefix": "echo hi"}}),
+    )]);
+    assert_eq!(row(&queue, 1), "asked by the global rule echo hi");
+    // No effects with paths: the line starts at the paths.
+    let queue = folded(&[request(
+        S_A,
+        "a_1",
+        "r_1",
+        serde_json::json!({"effects": [], "paths": ["notes.md"],
+            "step": "standing_ask",
+            "standing_rule": {"scope": "global", "prefix": "echo hi"}}),
+    )]);
+    assert_eq!(
+        row(&queue, 1),
+        "notes.md · asked by the global rule echo hi"
+    );
+}
+
+#[test]
+fn the_session_name_comes_from_the_lookup() {
+    let queue = folded(&[standing_ask(S_A, "a_1", "r_1", "echo hi")]);
+    assert_eq!(
+        named(&queue, Some("main")).lines[0],
+        header_text(1, 1, "main")
+    );
+    // No name, or an empty one, falls back to the id.
+    assert_eq!(named(&queue, None).lines[0], header_text(1, 1, S_A));
+    assert_eq!(named(&queue, Some("")).lines[0], header_text(1, 1, S_A));
+    // Control characters in a name become spaces.
+    assert_eq!(
+        named(&queue, Some("ma\nin")).lines[0],
+        header_text(1, 1, "ma in")
+    );
+}
+
+#[test]
+fn the_header_pads_esc_to_the_right_and_wraps_past_the_width() {
+    let queue = folded(&[standing_ask(S_A, "a_1", "r_1", "echo hi")]);
+    let left = format!("Approval 1 of 1 · {S_A}");
+    let right = "Esc puts it aside";
+    let at = |width: u16| {
+        queue
+            .panel(width)
+            .map(|panel| panel.lines)
+            .unwrap_or_default()
+            .into_iter()
+            .next()
+            .unwrap_or_default()
+    };
+    // Left and right alone: one space, past the width, so the line wraps.
+    assert_eq!(at(53), format!("{left} {right}"));
+    // One column more: one space, ending in the last column.
+    assert_eq!(at(54), format!("{left} {right}"));
+    assert_eq!(crate::format::width(&at(54)), 54);
+    // Two columns more: two spaces, ending in the last column.
+    assert_eq!(at(55), format!("{left}  {right}"));
+    assert_eq!(crate::format::width(&at(55)), 55);
+}
+
+#[test]
+fn two_requests_move_to_the_next_on_answer_or_put_aside() {
+    let mut queue = folded(&[
+        standing_ask(S_A, "a_1", "r_1", "one"),
+        standing_ask(S_A, "a_2", "r_2", "two"),
+    ]);
+    assert_eq!(header(&queue), header_text(1, 2, S_A));
+    answer(&mut queue);
+    assert_eq!(header(&queue), header_text(1, 1, S_A));
+    assert_eq!(
+        row(&queue, 1),
+        "runs a command · asked by the global rule two"
+    );
+    // Esc on the first of two shows the second, still counted behind it.
+    let mut queue = folded(&[
+        standing_ask(S_A, "a_1", "r_1", "one"),
+        standing_ask(S_A, "a_2", "r_2", "two"),
+    ]);
+    press(&mut queue, Key::Esc, 1);
+    assert_eq!(header(&queue), header_text(2, 2, S_A));
+    press(&mut queue, Key::Esc, 1);
+    assert!(queue.panel(80).is_none());
+    assert_eq!(
+        queue.badge(0).as_deref(),
+        Some("  ⚠ 2 approvals waiting · click to reopen")
+    );
+}
+
+#[test]
+fn digits_type_feedback_instead_of_choosing() {
+    // Two choices: "2" is feedback, and the panel stays open.
+    let mut queue = folded(&[standing_ask(S_A, "a_1", "r_1", "echo hi")]);
+    assert_eq!(queue.on_key(&Key::Char('2')), Some(PanelKey::Handled));
+    assert_eq!(row(&queue, 4), "▸ 2 Deny  2");
+    assert_eq!(rendered(&queue).caret, Some((4, 11)));
+    assert!(queue.badge(0).is_none());
+    // Enter denies with the feedback.
+    assert_eq!(queue.on_key(&Key::Enter), Some(PanelKey::Answer));
+    let line = queue.answer("c_1").unwrap_or_default();
+    let reply: serde_json::Value = serde_json::from_str(&line).unwrap_or_default();
+    assert_eq!(
+        reply["args"],
+        serde_json::json!({"request_id": "r_1", "decision": "deny", "feedback": "2"})
+    );
+    // Four choices: "3" is feedback too.
+    let mut queue = folded(&[offering(S_A, "r_1")]);
+    assert_eq!(queue.on_key(&Key::Char('3')), Some(PanelKey::Handled));
+    assert_eq!(row(&queue, 6), "▸ 4 Deny  3");
+    assert_eq!(queue.on_key(&Key::Enter), Some(PanelKey::Answer));
+    let line = queue.answer("c_1").unwrap_or_default();
+    let reply: serde_json::Value = serde_json::from_str(&line).unwrap_or_default();
+    assert_eq!(
+        reply["args"],
+        serde_json::json!({"request_id": "r_1", "decision": "deny", "feedback": "3"})
+    );
+}
+
+#[test]
+fn the_caret_shows_only_with_feedback_on_deny() {
+    let mut queue = folded(&[standing_ask(S_A, "a_1", "r_1", "echo hi")]);
+    assert_eq!(rendered(&queue).caret, None);
+    press(&mut queue, Key::Char('a'), 1);
+    assert_eq!(row(&queue, 4), "▸ 2 Deny  a");
+    assert_eq!(rendered(&queue).caret, Some((4, 11)));
+    // Backspace to empty clears the caret and the prompt returns.
+    press(&mut queue, Key::Backspace, 1);
+    assert_eq!(row(&queue, 4), "▸ 2 Deny  type to add feedback");
+    assert_eq!(rendered(&queue).caret, None);
+    // Away from deny there is no caret even with feedback kept.
+    press(&mut queue, Key::Char('b'), 1);
+    press(&mut queue, Key::Up, 1);
+    assert_eq!(row(&queue, 3), "▸ 1 Allow once");
+    assert_eq!(rendered(&queue).caret, None);
+}
+
+#[test]
+fn the_badge_counts_waiting_and_extra() {
+    // Nothing waiting: no badge.
+    assert_eq!(Queue::default().badge(0), None);
+    // The panel open: no badge even with extra held elsewhere.
+    let mut queue = folded(&[standing_ask(S_A, "a_1", "r_1", "one")]);
+    assert_eq!(queue.badge(1), None);
+    press(&mut queue, Key::Esc, 1);
+    assert_eq!(
+        queue.badge(0).as_deref(),
+        Some("  ⚠ 1 approvals waiting · click to reopen")
+    );
+    // Extra held elsewhere counts with the waiting ones.
+    assert_eq!(
+        queue.badge(2).as_deref(),
+        Some("  ⚠ 3 approvals waiting · click to reopen")
+    );
+    // Two waiting: N = 2.
+    let mut queue = folded(&[
+        standing_ask(S_A, "a_1", "r_1", "one"),
+        standing_ask(S_A, "a_2", "r_2", "two"),
+    ]);
+    press(&mut queue, Key::Esc, 2);
+    assert_eq!(
+        queue.badge(0).as_deref(),
+        Some("  ⚠ 2 approvals waiting · click to reopen")
+    );
+}
+
+#[test]
+fn focusing_a_choice_bolds_its_label_and_tail() {
+    let mut queue = folded(&[offering(S_A, "r_1")]);
+    press(&mut queue, Key::Down, 1);
+    assert_eq!(row(&queue, 4), "▸ 2 Allow for this session npm test *");
+    assert_eq!(
+        rendered(&queue).marks,
+        vec![
+            mark(0, 0..15, head_style()),
+            mark(0, 15..37, session_style()),
+            mark(0, 64..81, dim_style()),
+            mark(1, 0..42, dim_style()),
+            mark(3, 2..3, dim_style()),
+            mark(4, 0..4, focus_style()),
+            mark(4, 4..5, dim_style()),
+            mark(4, 6..29, bold_style()),
+            mark(4, 29..39, remember_bold_style()),
+            mark(5, 2..3, dim_style()),
+            mark(5, 33..43, remember_style()),
+            mark(6, 2..3, dim_style()),
+            mark(6, 8..30, dim_style()),
+            mark(8, 0..HINT.len(), dim_style()),
+        ]
+    );
+    // Deny focused with no feedback: the prompt is dim and bold.
+    press(&mut queue, Key::Down, 2);
+    assert_eq!(row(&queue, 6), "▸ 4 Deny  type to add feedback");
+    let marks = rendered(&queue).marks;
+    assert!(marks.contains(&mark(6, 6..10, bold_style())), "{marks:?}");
+    assert!(
+        marks.contains(&mark(6, 10..32, dim_bold_style())),
+        "{marks:?}"
+    );
+}
+
+#[test]
+fn long_feedback_scrolls_to_its_end_so_the_row_never_wraps() {
+    let mut queue = folded(&[standing_ask(S_A, "a_1", "r_1", "echo hi")]);
+    for ch in "y".repeat(96).chars().chain("END!".chars()) {
+        press(&mut queue, Key::Char(ch), 1);
+    }
+    // The prefix takes 8 cells, so 72 stay for the tail: the row shows
+    // the feedback's end on one 80-cell row, with the cursor after it.
+    let deny = row(&queue, 4);
+    assert_eq!(crate::format::width(&deny), 80);
+    assert!(deny.ends_with("END!"), "{deny}");
+    assert_eq!(rendered(&queue).caret, Some((4, 80)));
+    // Away from deny the row stays scrolled, with no caret.
+    press(&mut queue, Key::Up, 1);
+    assert_eq!(crate::format::width(&row(&queue, 4)), 80);
+    assert_eq!(rendered(&queue).caret, None);
+}
+
+#[test]
+fn feedback_that_exactly_fits_shows_whole_and_one_cell_more_scrolls() {
+    // The prefix takes 8 cells: a 70-character feedback with its two
+    // spaces fits 80 exactly and shows whole.
+    let mut queue = folded(&[standing_ask(S_A, "a_1", "r_1", "echo hi")]);
+    for _ in 0..70 {
+        press(&mut queue, Key::Char('x'), 1);
+    }
+    assert_eq!(row(&queue, 4), format!("▸ 2 Deny  {}", "x".repeat(70)));
+    assert_eq!(rendered(&queue).caret, Some((4, 80)));
+    // One cell more: the leading space gives way to the feedback's end.
+    let mut queue = folded(&[standing_ask(S_A, "a_1", "r_1", "echo hi")]);
+    for _ in 0..71 {
+        press(&mut queue, Key::Char('x'), 1);
+    }
+    assert_eq!(row(&queue, 4), format!("▸ 2 Deny {}", "x".repeat(71)));
+    assert_eq!(rendered(&queue).caret, Some((4, 80)));
+}
+
+#[test]
+fn a_long_rule_prefix_stays_complete_on_remembering_rows() {
+    let prefix = "p".repeat(100);
+    let queue = folded(&[review(
+        S_A,
+        "r_1",
+        serde_json::json!({"rule": {"subject": "npm test --watch", "prefix": prefix}}),
+    )]);
+    let shown = rendered(&queue);
+    // Scrolling is Deny feedback only: the remembering rows keep the
+    // whole prefix, past the width if needed.
+    for head in ["Allow for this session", "Always allow in this project"] {
+        let row = shown
+            .lines
+            .iter()
+            .find(|row| row.contains(head))
+            .cloned()
+            .unwrap_or_default();
+        assert!(row.contains(&format!("{prefix} *")), "{row}");
+        assert!(crate::format::width(&row) > 80, "{row}");
+    }
 }
 
 #[test]
@@ -198,7 +676,7 @@ fn each_choice_sends_its_answer() {
             "{downs} down"
         );
         assert!(queue.panel(80).is_none());
-        assert!(queue.badge(0, Some("⌥A")).is_none());
+        assert!(queue.badge(0).is_none());
     }
 }
 
@@ -215,7 +693,7 @@ fn feedback_goes_with_deny_only_when_it_has_text() {
         press(&mut queue, Key::Char(ch), 1);
     }
     press(&mut queue, Key::Backspace, 1);
-    assert_eq!(row(&queue, 5), "› deny · use pnpm");
+    assert_eq!(row(&queue, 6), "▸ 4 Deny  use pnpm");
     assert_eq!(
         answer(&mut queue)["args"],
         serde_json::json!({"request_id": "r_2", "decision": "deny", "feedback": "use pnpm"})
@@ -226,11 +704,11 @@ fn feedback_goes_with_deny_only_when_it_has_text() {
 fn typing_or_backspace_moves_the_cursor_to_deny() {
     let mut queue = folded(&[offering(S_A, "r_1")]);
     press(&mut queue, Key::Char('x'), 1);
-    assert!(row(&queue, 5).starts_with('›'));
+    assert!(row(&queue, 6).starts_with("▸"));
     press(&mut queue, Key::Up, 3);
-    assert_eq!(row(&queue, 2), "› allow once");
+    assert_eq!(row(&queue, 3), "▸ 1 Allow once");
     press(&mut queue, Key::Backspace, 1);
-    assert_eq!(row(&queue, 5), "› deny · type to add feedback");
+    assert_eq!(row(&queue, 6), "▸ 4 Deny  type to add feedback");
 }
 
 #[test]
@@ -257,28 +735,29 @@ fn the_panel_says_why_it_asked_and_tints_an_escalation() {
     let cases = [
         (
             serde_json::json!({"escalation": {"cause": "consecutive_blocks", "reason": "rm -rf"}}),
-            "the reviewer escalated: rm -rf",
+            "runs a command · the reviewer blocked the last calls: rm -rf",
         ),
         (
             serde_json::json!({"escalation": {"cause": "session_blocks", "reason": "too many"}}),
-            "the reviewer escalated: too many",
+            "runs a command · the reviewer has blocked too many calls: too many",
         ),
         (
             serde_json::json!({"escalation": {"cause": "reviewer_failed",
                 "error": {"code": "io_failed", "message": "no model"}}}),
-            "the reviewer failed: no model",
+            "runs a command · the reviewer failed",
         ),
     ];
-    for (extra, why) in cases {
+    for (extra, facts) in cases {
         let queue = folded(&[review(S_A, "r_1", extra)]);
-        assert_eq!(row(&queue, 1), why);
+        assert_eq!(row(&queue, 1), facts);
         assert_eq!(
             queue.panel(80).map(|panel| panel.alert),
             Some(true),
-            "{why}"
+            "{facts}"
         );
     }
     let queue = folded(&[review(S_A, "r_1", serde_json::json!({}))]);
+    assert_eq!(row(&queue, 1), "runs a command · no rule allows this call");
     assert_eq!(queue.panel(80).map(|panel| panel.alert), Some(false));
     let queue = folded(&[request(
         S_A,
@@ -287,20 +766,49 @@ fn the_panel_says_why_it_asked_and_tints_an_escalation() {
         serde_json::json!({"step": "standing_ask",
             "standing_rule": {"scope": "project", "prefix": "git push"}}),
     )]);
-    assert_eq!(row(&queue, 1), "asked by a project rule: git push");
+    assert_eq!(
+        row(&queue, 1),
+        "runs a command · asked by the project rule git push"
+    );
 }
 
 #[test]
-fn an_irreversible_call_says_so_in_the_header() {
-    let queue = folded(&[request(
+fn an_irreversible_call_says_so_in_the_header_only_when_not_reversible() {
+    let irreversible = folded(&[request(
         S_A,
         "a_1",
         "r_1",
         serde_json::json!({"reversible": false, "step": "review"}),
     )]);
+    let left = format!("Approval 1 of 1 · {S_A} · irreversible");
+    let pad = 80_usize
+        .saturating_sub(crate::format::width(&left).saturating_add("Esc puts it aside".len()))
+        .max(1);
     assert_eq!(
-        header(&queue),
-        format!("approval · {S_A} · 1 of 1 · irreversible")
+        header(&irreversible),
+        format!("{left}{}{}", " ".repeat(pad), "Esc puts it aside")
+    );
+    let marks = rendered(&irreversible).marks;
+    assert!(
+        marks
+            .iter()
+            .any(|mark| mark.line == 0 && mark.style == loud_style()),
+        "{marks:?}"
+    );
+    // Reversible: the header ends at the session, with no loud run.
+    let queue = folded(&[request(
+        S_A,
+        "a_1",
+        "r_1",
+        serde_json::json!({"reversible": true, "step": "review"}),
+    )]);
+    assert_eq!(header(&queue), header_text(1, 1, S_A));
+    assert!(
+        rendered(&queue)
+            .marks
+            .iter()
+            .all(|mark| mark.style != loud_style()),
+        "{marks:?}"
     );
 }
 
@@ -310,7 +818,7 @@ fn a_raw_string_argument_shows_as_typed() {
         call(S_A, "a_1", "shell", serde_json::json!("not {json")),
         standing_ask(S_A, "a_1", "r_1", "echo hi"),
     ]);
-    assert_eq!(row(&queue, 2), "shell not {json");
+    assert_eq!(row(&queue, 1), "shell not {json");
 }
 
 #[test]
@@ -321,21 +829,21 @@ fn requests_from_two_sessions_share_one_queue() {
         standing_ask(S_B, "a_1", "r_1", "two"),
         standing_ask(S_A, "a_2", "r_2", "three"),
     ]);
-    assert_eq!(header(&queue), format!("approval · {S_A} · 1 of 3"));
+    assert_eq!(header(&queue), header_text(1, 3, S_A));
     assert_eq!(answer(&mut queue)["session_id"], S_A);
-    assert_eq!(header(&queue), format!("approval · {S_B} · 1 of 2"));
-    assert_eq!(row(&queue, 2), r#"read {"path":"b"}"#);
+    assert_eq!(header(&queue), header_text(1, 2, S_B));
+    assert_eq!(row(&queue, 1), "read b");
     let answered = answer(&mut queue);
     assert_eq!(answered["session_id"], S_B);
     assert_eq!(answered["args"]["request_id"], "r_1");
-    assert_eq!(header(&queue), format!("approval · {S_A} · 1 of 1"));
+    assert_eq!(header(&queue), header_text(1, 1, S_A));
 }
 
 #[test]
 fn a_repeated_request_adds_nothing() {
     let line = standing_ask(S_A, "a_1", "r_1", "one");
     let queue = folded(&[line.clone(), line]);
-    assert_eq!(header(&queue), format!("approval · {S_A} · 1 of 1"));
+    assert_eq!(header(&queue), header_text(1, 1, S_A));
 }
 
 /// A queue with three requests, the panel on the first.
@@ -350,17 +858,17 @@ fn three() -> Queue {
 #[test]
 fn esc_steps_through_the_queue_then_closes() {
     let mut queue = three();
-    assert_eq!(header(&queue), format!("approval · {S_A} · 1 of 3"));
+    assert_eq!(header(&queue), header_text(1, 3, S_A));
     press(&mut queue, Key::Esc, 1);
-    assert_eq!(header(&queue), format!("approval · {S_A} · 2 of 3"));
+    assert_eq!(header(&queue), header_text(2, 3, S_A));
     press(&mut queue, Key::Esc, 1);
-    assert_eq!(header(&queue), format!("approval · {S_A} · 3 of 3"));
-    assert!(queue.badge(0, Some("⌥A")).is_none());
+    assert_eq!(header(&queue), header_text(3, 3, S_A));
+    assert!(queue.badge(0).is_none());
     press(&mut queue, Key::Esc, 1);
     assert!(queue.panel(80).is_none());
     assert_eq!(
-        queue.badge(0, Some("⌥A")).as_deref(),
-        Some("! 3 waiting · /approvals or ⌥A")
+        queue.badge(0).as_deref(),
+        Some("  ⚠ 3 approvals waiting · click to reopen")
     );
     // A closed panel takes no key.
     assert_eq!(queue.on_key(&Key::Esc), None);
@@ -382,15 +890,18 @@ fn a_request_after_one_put_aside_waits_behind_the_badge() {
     queue.fold(&standing_ask(S_A, "a_2", "r_2", "two"));
     assert!(queue.panel(80).is_none());
     assert_eq!(
-        queue.badge(0, Some("⌥A")).as_deref(),
-        Some("! 2 waiting · /approvals or ⌥A")
+        queue.badge(0).as_deref(),
+        Some("  ⚠ 2 approvals waiting · click to reopen")
     );
     // Once the one put aside resolves, a new request opens at itself.
     queue.fold(&resolved(S_A, "r_1"));
     queue.fold(&resolved(S_A, "r_2"));
-    assert!(queue.badge(0, Some("⌥A")).is_none());
+    assert!(queue.badge(0).is_none());
     queue.fold(&standing_ask(S_A, "a_3", "r_3", "three"));
-    assert_eq!(row(&queue, 1), "asked by a global rule: three");
+    assert_eq!(
+        row(&queue, 1),
+        "runs a command · asked by the global rule three"
+    );
 }
 
 #[test]
@@ -399,8 +910,11 @@ fn a_request_while_the_panel_is_open_joins_the_queue() {
         standing_ask(S_A, "a_1", "r_1", "one"),
         standing_ask(S_A, "a_2", "r_2", "two"),
     ]);
-    assert_eq!(header(&queue), format!("approval · {S_A} · 1 of 2"));
-    assert_eq!(row(&queue, 1), "asked by a global rule: one");
+    assert_eq!(header(&queue), header_text(1, 2, S_A));
+    assert_eq!(
+        row(&queue, 1),
+        "runs a command · asked by the global rule one"
+    );
 }
 
 #[test]
@@ -410,22 +924,22 @@ fn open_first_reopens_at_the_first_request_with_its_feedback() {
     press(&mut queue, Key::Char('x'), 1);
     press(&mut queue, Key::Esc, 3);
     assert!(queue.open_first());
-    assert_eq!(header(&queue), format!("approval · {S_A} · 1 of 3"));
+    assert_eq!(header(&queue), header_text(1, 3, S_A));
     // Feedback typed for a request stays with it while it waits.
-    assert_eq!(row(&queue, 3), "› deny · x");
+    assert_eq!(row(&queue, 4), "▸ 2 Deny  x");
 }
 
 #[test]
 fn alt_a_moves_to_the_next_wrapping() {
     let mut queue = three();
     press(&mut queue, Key::AltA, 1);
-    assert_eq!(header(&queue), format!("approval · {S_A} · 2 of 3"));
+    assert_eq!(header(&queue), header_text(2, 3, S_A));
     press(&mut queue, Key::AltA, 2);
-    assert_eq!(header(&queue), format!("approval · {S_A} · 1 of 3"));
+    assert_eq!(header(&queue), header_text(1, 3, S_A));
     // Alone in the queue, it stays.
     let mut queue = folded(&[standing_ask(S_A, "a_1", "r_1", "one")]);
     press(&mut queue, Key::AltA, 1);
-    assert_eq!(header(&queue), format!("approval · {S_A} · 1 of 1"));
+    assert_eq!(header(&queue), header_text(1, 1, S_A));
 }
 
 #[test]
@@ -433,15 +947,21 @@ fn a_restored_reply_puts_its_request_back_where_it_was() {
     let mut queue = three();
     press(&mut queue, Key::AltA, 1);
     answer(&mut queue);
-    assert_eq!(header(&queue), format!("approval · {S_A} · 2 of 2"));
+    assert_eq!(header(&queue), header_text(2, 2, S_A));
     queue.restore("c_9");
-    assert_eq!(header(&queue), format!("approval · {S_A} · 2 of 2"));
+    assert_eq!(header(&queue), header_text(2, 2, S_A));
     queue.restore("c_1");
-    assert_eq!(header(&queue), format!("approval · {S_A} · 3 of 3"));
+    assert_eq!(header(&queue), header_text(3, 3, S_A));
     press(&mut queue, Key::AltA, 1);
-    assert_eq!(row(&queue, 1), "asked by a global rule: p1");
+    assert_eq!(
+        row(&queue, 1),
+        "runs a command · asked by the global rule p1"
+    );
     press(&mut queue, Key::AltA, 1);
-    assert_eq!(row(&queue, 1), "asked by a global rule: p2");
+    assert_eq!(
+        row(&queue, 1),
+        "runs a command · asked by the global rule p2"
+    );
 }
 
 #[test]
@@ -450,7 +970,7 @@ fn a_restored_reply_reopens_a_closed_panel() {
     answer(&mut queue);
     assert!(queue.panel(80).is_none());
     queue.restore("c_1");
-    assert_eq!(header(&queue), format!("approval · {S_A} · 1 of 1"));
+    assert_eq!(header(&queue), header_text(1, 1, S_A));
 }
 
 #[test]
@@ -462,7 +982,7 @@ fn a_reopened_request_is_no_longer_put_aside() {
     assert!(queue.panel(80).is_none());
     queue.restore("c_1");
     // Nothing waits put aside, so the request back opens the panel.
-    assert_eq!(header(&queue), format!("approval · {S_A} · 1 of 1"));
+    assert_eq!(header(&queue), header_text(1, 1, S_A));
 }
 
 #[test]
@@ -471,20 +991,20 @@ fn a_resolved_request_leaves_the_queue() {
     // Requests never seen change nothing.
     queue.fold(&resolved(S_A, "r_9"));
     queue.fold(&resolved(S_B, "r_1"));
-    assert_eq!(header(&queue), format!("approval · {S_A} · 1 of 3"));
+    assert_eq!(header(&queue), header_text(1, 3, S_A));
     answer(&mut queue);
     // An answered request resolving leaves the shown one in place, and a
     // later restore of its reply puts nothing back.
     queue.fold(&resolved(S_A, "r_1"));
-    assert_eq!(header(&queue), format!("approval · {S_A} · 1 of 2"));
+    assert_eq!(header(&queue), header_text(1, 2, S_A));
     queue.restore("c_1");
-    assert_eq!(header(&queue), format!("approval · {S_A} · 1 of 2"));
+    assert_eq!(header(&queue), header_text(1, 2, S_A));
     // The shown request resolving elsewhere moves the panel on.
     queue.fold(&resolved(S_A, "r_2"));
-    assert_eq!(header(&queue), format!("approval · {S_A} · 1 of 1"));
+    assert_eq!(header(&queue), header_text(1, 1, S_A));
     queue.fold(&resolved(S_A, "r_3"));
     assert!(queue.panel(80).is_none());
-    assert!(queue.badge(0, Some("⌥A")).is_none());
+    assert!(queue.badge(0).is_none());
 }
 
 /// The queue through the app: keys, `/approvals`, and replies on the link.
@@ -572,6 +1092,17 @@ mod through_the_app {
         panel(app).first().cloned().unwrap_or_default()
     }
 
+    /// The expected header at the app's default width: the column is 80
+    /// wide and the panel pads to its inset of 78.
+    fn app_header(k: usize, n: usize, session: &str) -> String {
+        super::header_at(k, n, session, 78)
+    }
+
+    /// The panel's line at `row`.
+    fn row(app: &App, row: usize) -> String {
+        panel(app).get(row).cloned().unwrap_or_default()
+    }
+
     /// Presses `key` `times` times, each doing nothing visible to the hub.
     fn press(app: &mut App, key: Key, times: usize, now: std::time::Instant) {
         for _ in 0..times {
@@ -604,14 +1135,18 @@ mod through_the_app {
             ),
         );
         feed(&mut app, standing_ask(S_A, "a_1", "r_1", "echo hi"));
+        let facts = "runs a command · asked by the global rule echo hi";
         assert_eq!(
             panel(&app),
             vec![
-                format!("approval · {S_A} · 1 of 1"),
-                "asked by a global rule: echo hi".to_owned(),
-                r#"shell {"command":"echo hi"}"#.to_owned(),
-                "› allow once".to_owned(),
-                "  deny · type to add feedback".to_owned(),
+                app_header(1, 1, S_A),
+                "shell echo hi".to_owned(),
+                facts.to_owned(),
+                String::new(),
+                "▸ 1 Allow once".to_owned(),
+                "  2 Deny  type to add feedback".to_owned(),
+                String::new(),
+                super::HINT.to_owned(),
             ]
         );
         assert_eq!(app.panel().map(|panel| panel.alert), Some(false));
@@ -641,18 +1176,18 @@ mod through_the_app {
         let now = fakes::clock::FakeClock::new().now();
         let mut app = three();
         feed(&mut app, turn_started(S_A, "hi"));
-        assert_eq!(header(&app), format!("approval · {S_A} · 1 of 3"));
+        assert_eq!(header(&app), app_header(1, 3, S_A));
         // Esc never cancels while the panel is open.
         assert_eq!(app.on_key(Key::Esc, now), Effect::None);
-        assert_eq!(header(&app), format!("approval · {S_A} · 2 of 3"));
+        assert_eq!(header(&app), app_header(2, 3, S_A));
         assert_eq!(app.on_key(Key::Esc, now), Effect::None);
-        assert_eq!(header(&app), format!("approval · {S_A} · 3 of 3"));
+        assert_eq!(header(&app), app_header(3, 3, S_A));
         assert!(app.badge().is_none());
         assert_eq!(app.on_key(Key::Esc, now), Effect::None);
         assert!(app.panel().is_none());
         assert_eq!(
             app.badge().as_deref(),
-            Some("! 3 waiting · /approvals or ⌥A")
+            Some("  ⚠ 3 approvals waiting · click to reopen")
         );
         // With the panel closed, Esc cancels a busy turn again.
         let line = one_line(app.on_key(Key::Esc, now));
@@ -670,9 +1205,9 @@ mod through_the_app {
         assert!(app.panel().is_none());
         assert_eq!(send(&mut app, "/approvals ", now), Effect::None);
         assert_eq!(app.draft(), "");
-        assert_eq!(header(&app), format!("approval · {S_A} · 1 of 3"));
+        assert_eq!(header(&app), app_header(1, 3, S_A));
         // Feedback typed for a request stays with it while it waits.
-        assert_eq!(panel(&app).last().map(String::as_str), Some("› deny · x"));
+        assert_eq!(row(&app, 4), "▸ 2 Deny  x");
     }
 
     #[test]
@@ -694,11 +1229,11 @@ mod through_the_app {
         let mut app = three();
         press(&mut app, Key::Esc, 3, now);
         press(&mut app, Key::AltA, 1, now);
-        assert_eq!(header(&app), format!("approval · {S_A} · 1 of 3"));
+        assert_eq!(header(&app), app_header(1, 3, S_A));
         press(&mut app, Key::AltA, 1, now);
-        assert_eq!(header(&app), format!("approval · {S_A} · 2 of 3"));
+        assert_eq!(header(&app), app_header(2, 3, S_A));
         press(&mut app, Key::AltA, 2, now);
-        assert_eq!(header(&app), format!("approval · {S_A} · 1 of 3"));
+        assert_eq!(header(&app), app_header(1, 3, S_A));
     }
 
     #[test]
@@ -736,7 +1271,7 @@ mod through_the_app {
                 "a_0",
             ),
         );
-        assert_eq!(header(&app), format!("approval · {S_A} · 1 of 1"));
+        assert_eq!(header(&app), app_header(1, 1, S_A));
     }
 
     #[test]
@@ -746,7 +1281,7 @@ mod through_the_app {
         feed(&mut app, standing_ask(S_A, "a_1", "r_1", "one"));
         app.disconnected();
         assert_eq!(app.on_key(Key::Enter, now), Effect::None);
-        assert_eq!(header(&app), format!("approval · {S_A} · 1 of 1"));
+        assert_eq!(header(&app), app_header(1, 1, S_A));
     }
 
     #[test]
@@ -757,7 +1292,7 @@ mod through_the_app {
         let line = one_line(app.on_key(Key::Enter, now));
         assert!(app.panel().is_none());
         app.write_failed(&[line]);
-        assert_eq!(header(&app), format!("approval · {S_A} · 1 of 1"));
+        assert_eq!(header(&app), app_header(1, 1, S_A));
         assert_eq!(app.draft(), "");
     }
 
@@ -768,9 +1303,9 @@ mod through_the_app {
         app.set_size(60, 20);
         assert_eq!(app.conversation_height(), 17);
         feed(&mut app, standing_ask(S_A, "a_1", "r_1", "one"));
-        // Header, why, allow once and deny with the panel's edges
+        // Header, facts, two choices and the hint with the panel's edges
         // replace the input line.
-        assert_eq!(app.conversation_height(), 14);
+        assert_eq!(app.conversation_height(), 10);
         feed(
             &mut app,
             call(S_A, "a_2", "shell", serde_json::json!("w ".repeat(35))),
@@ -778,7 +1313,7 @@ mod through_the_app {
         feed(&mut app, standing_ask(S_A, "a_2", "r_2", "two"));
         app.on_key(Key::AltA, now);
         // The call wraps onto two rows.
-        assert_eq!(app.conversation_height(), 12);
+        assert_eq!(app.conversation_height(), 8);
         press(&mut app, Key::Esc, 1, now);
         assert!(app.panel().is_none());
         assert_eq!(app.conversation_height(), 16);
@@ -792,7 +1327,7 @@ mod through_the_app {
         // Another session's other lines stay out.
         feed(&mut app, turn_started(S_B, "hi"));
         assert!(app.lines().is_empty());
-        assert_eq!(header(&app), format!("approval · {S_B} · 1 of 1"));
+        assert_eq!(header(&app), app_header(1, 1, S_B));
         // Typing goes to the feedback; the draft is untouched.
         for ch in "no".chars() {
             assert_eq!(app.on_key(Key::Char(ch), now), Effect::None);
@@ -836,7 +1371,7 @@ fn an_unknown_kind_naming_a_waiting_request_changes_nothing() {
         serde_json::json!({"request_id": "r_1", "message": "hi"}),
         "a_1",
     ));
-    assert_eq!(header(&queue), format!("approval · {S_A} · 1 of 1"));
+    assert_eq!(header(&queue), header_text(1, 1, S_A));
 }
 
 #[test]
@@ -844,5 +1379,20 @@ fn permission_resolved_still_removes_an_approval() {
     let mut queue = folded(&[standing_ask(S_A, "a_1", "r_1", "one")]);
     queue.fold(&resolved(S_A, "r_1"));
     assert!(queue.panel(80).is_none());
-    assert!(queue.badge(0, Some("⌥A")).is_none());
+    assert!(queue.badge(0).is_none());
+}
+
+#[test]
+fn a_call_with_no_name_draws_no_empty_tool_run() {
+    let queue = folded(&[
+        call(S_A, "a_1", "", serde_json::json!({})),
+        request(S_A, "a_1", "r_1", serde_json::json!({"step": "review"})),
+    ]);
+    let shown = rendered(&queue);
+    assert_eq!(shown.lines[1], "");
+    assert!(
+        shown.marks.iter().all(|mark| !mark.bytes.is_empty()),
+        "{:?}",
+        shown.marks
+    );
 }

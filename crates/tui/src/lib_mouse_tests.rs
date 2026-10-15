@@ -21,7 +21,7 @@ fn motion(col: u16, row: u16) -> Input {
 }
 
 /// Esc, which puts the request shown aside, so the badge shows on row 10
-/// of the 60x12 screen, at columns 0 to 29.
+/// of the 60x12 screen, at columns 0 to 40.
 fn esc() -> Input {
     Input::Bytes(b"\x1b".to_vec())
 }
@@ -422,7 +422,7 @@ fn a_click_on_the_badge_reopens_the_approval_queue() {
     feed(&mut lp, vec![offering("r_1"), esc()]);
     assert!(lp.app.panel().is_none());
     // A click beside the badge does nothing.
-    feed(&mut lp, vec![click(30, 8)]);
+    feed(&mut lp, vec![click(41, 8)]);
     assert!(lp.app.panel().is_none());
     feed(&mut lp, vec![click(29, 8)]);
     assert!(lp.app.panel().is_some());
@@ -501,8 +501,8 @@ fn hover_writes_only_when_the_target_under_the_pointer_changes() {
     assert!(wrote(&mut lp, motion(2, 8)) > 0, "onto the badge");
     assert_eq!(wrote(&mut lp, motion(2, 8)), 0, "the same cell");
     assert_eq!(wrote(&mut lp, motion(29, 8)), 0, "the same target");
-    assert!(wrote(&mut lp, motion(30, 8)) > 0, "off the badge");
-    assert_eq!(wrote(&mut lp, motion(31, 8)), 0, "still off");
+    assert!(wrote(&mut lp, motion(41, 8)) > 0, "off the badge");
+    assert_eq!(wrote(&mut lp, motion(42, 8)), 0, "still off");
 }
 
 #[test]
@@ -512,8 +512,8 @@ fn hover_redraws_only_the_targets_row() {
     lp.screen.backend_mut().drawn.clear();
     feed(&mut lp, vec![motion(2, 8)]);
     let drawn = &lp.screen.backend().drawn;
-    assert_eq!(drawn.len(), 30);
-    assert!(drawn.iter().all(|&(x, y)| y == 8 && x < 30), "{drawn:?}");
+    assert_eq!(drawn.len(), 41);
+    assert!(drawn.iter().all(|&(x, y)| y == 8 && x < 41), "{drawn:?}");
 }
 
 #[test]

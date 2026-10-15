@@ -263,6 +263,7 @@ fn tool_answer() -> Box<contract::events::ToolCallCompleted> {
         process: None,
         details: None,
         artifact: None,
+        kept: None,
         changes: None,
         control: None,
         changed_by: None,

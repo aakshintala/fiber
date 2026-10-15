@@ -100,6 +100,7 @@ fn every_operation_serializes_to_its_wire_name() {
         (Op::HubSessionStart, "hub.session_start"),
         (Op::HubResume, "hub.resume"),
         (Op::HubSubscribeReplay, "hub.subscribe_replay"),
+        (Op::SessionsList, "sessions.list"),
         (Op::NetConnect, "net.connect"),
         (Op::CliSessionsSearch, "cli.sessions_search"),
     ] {

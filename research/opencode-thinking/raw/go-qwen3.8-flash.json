@@ -1,0 +1,296 @@
+{
+ "route": "go",
+ "protocol": "messages",
+ "model": "qwen3.8-flash",
+ "base": "https://opencode.ai/zen/go",
+ "levels": [
+  {
+   "level": "off",
+   "status": 200,
+   "elapsed_s": 1.72,
+   "request": {
+    "model": "qwen3.8-flash",
+    "messages": [
+     {
+      "role": "user",
+      "content": "Reply with the single word: ok"
+     }
+    ],
+    "max_tokens": 64
+   },
+   "response": {
+    "id": "msg_9e735c92-df48-41ff-abb3-6adce8bb5059",
+    "type": "message",
+    "role": "assistant",
+    "stop_reason": "end_turn",
+    "model": "qwen3.8-flash",
+    "content": [
+     {
+      "type": "thinking",
+      "thinking": "We need to respond to user: \"Reply with the single word: ok\". Need final output only ok. Ensure single word.",
+      "signature": ""
+     },
+     {
+      "type": "text",
+      "text": "ok"
+     }
+    ],
+    "usage": {
+     "input_tokens": 68,
+     "output_tokens": 29,
+     "cache_creation_input_tokens": 0,
+     "cache_read_input_tokens": 0
+    }
+   }
+  },
+  {
+   "level": "minimal",
+   "status": 400,
+   "elapsed_s": 0.48,
+   "request": {
+    "model": "qwen3.8-flash",
+    "messages": [
+     {
+      "role": "user",
+      "content": "Reply with the single word: ok"
+     }
+    ],
+    "max_tokens": 64,
+    "thinking": {
+     "type": "adaptive"
+    },
+    "output_config": {
+     "effort": "minimal"
+    }
+   },
+   "response": {
+    "model": "qwen3.8-flash"
+   }
+  },
+  {
+   "level": "low",
+   "status": 200,
+   "elapsed_s": 2.48,
+   "request": {
+    "model": "qwen3.8-flash",
+    "messages": [
+     {
+      "role": "user",
+      "content": "Reply with the single word: ok"
+     }
+    ],
+    "max_tokens": 64,
+    "thinking": {
+     "type": "adaptive"
+    },
+    "output_config": {
+     "effort": "low"
+    }
+   },
+   "response": {
+    "id": "msg_0bf167b9-dd13-4f25-898a-2627079838fe",
+    "type": "message",
+    "role": "assistant",
+    "stop_reason": "end_turn",
+    "model": "qwen3.8-flash",
+    "content": [
+     {
+      "type": "thinking",
+      "thinking": "The user wants me to reply with the single word \"ok\". This is straightforward.",
+      "signature": ""
+     },
+     {
+      "type": "text",
+      "text": "ok"
+     }
+    ],
+    "usage": {
+     "input_tokens": 56,
+     "output_tokens": 21,
+     "cache_creation_input_tokens": 0,
+     "cache_read_input_tokens": 0
+    }
+   }
+  },
+  {
+   "level": "medium",
+   "status": 200,
+   "elapsed_s": 2.21,
+   "request": {
+    "model": "qwen3.8-flash",
+    "messages": [
+     {
+      "role": "user",
+      "content": "Reply with the single word: ok"
+     }
+    ],
+    "max_tokens": 64,
+    "thinking": {
+     "type": "adaptive"
+    },
+    "output_config": {
+     "effort": "medium"
+    }
+   },
+   "response": {
+    "id": "msg_ea4d1f89-0851-4573-9416-afbbbc3cbe52",
+    "type": "message",
+    "role": "assistant",
+    "stop_reason": "end_turn",
+    "model": "qwen3.8-flash",
+    "content": [
+     {
+      "type": "thinking",
+      "thinking": "The user wants me to reply with the single word \"ok\".",
+      "signature": ""
+     },
+     {
+      "type": "text",
+      "text": "ok"
+     }
+    ],
+    "usage": {
+     "input_tokens": 30,
+     "output_tokens": 17,
+     "cache_creation_input_tokens": 0,
+     "cache_read_input_tokens": 0
+    }
+   }
+  },
+  {
+   "level": "high",
+   "status": 200,
+   "elapsed_s": 2.86,
+   "request": {
+    "model": "qwen3.8-flash",
+    "messages": [
+     {
+      "role": "user",
+      "content": "Reply with the single word: ok"
+     }
+    ],
+    "max_tokens": 64,
+    "thinking": {
+     "type": "adaptive"
+    },
+    "output_config": {
+     "effort": "high"
+    }
+   },
+   "response": {
+    "id": "msg_51135a45-6be2-4b3d-8b54-7b53c1262ac6",
+    "type": "message",
+    "role": "assistant",
+    "stop_reason": "end_turn",
+    "model": "qwen3.8-flash",
+    "content": [
+     {
+      "type": "thinking",
+      "thinking": "We need to respond to user: \"Reply with the single word: ok\". Need final only ok. Ensure no punctuation? single word ok.",
+      "signature": ""
+     },
+     {
+      "type": "text",
+      "text": "ok"
+     }
+    ],
+    "usage": {
+     "input_tokens": 68,
+     "output_tokens": 33,
+     "cache_creation_input_tokens": 0,
+     "cache_read_input_tokens": 0
+    }
+   }
+  },
+  {
+   "level": "xhigh",
+   "status": 200,
+   "elapsed_s": 1.53,
+   "request": {
+    "model": "qwen3.8-flash",
+    "messages": [
+     {
+      "role": "user",
+      "content": "Reply with the single word: ok"
+     }
+    ],
+    "max_tokens": 64,
+    "thinking": {
+     "type": "adaptive"
+    },
+    "output_config": {
+     "effort": "xhigh"
+    }
+   },
+   "response": {
+    "id": "msg_9d698dc1-db3a-41d6-8e10-228eb58fbf3f",
+    "type": "message",
+    "role": "assistant",
+    "stop_reason": "end_turn",
+    "model": "qwen3.8-flash",
+    "content": [
+     {
+      "type": "thinking",
+      "thinking": "We need to respond to user: \"Reply with the single word: ok\". Need final single word ok. Ensure no extra.",
+      "signature": ""
+     },
+     {
+      "type": "text",
+      "text": "ok"
+     }
+    ],
+    "usage": {
+     "input_tokens": 68,
+     "output_tokens": 30,
+     "cache_creation_input_tokens": 0,
+     "cache_read_input_tokens": 0
+    }
+   }
+  },
+  {
+   "level": "max",
+   "status": 200,
+   "elapsed_s": 2.24,
+   "request": {
+    "model": "qwen3.8-flash",
+    "messages": [
+     {
+      "role": "user",
+      "content": "Reply with the single word: ok"
+     }
+    ],
+    "max_tokens": 64,
+    "thinking": {
+     "type": "adaptive"
+    },
+    "output_config": {
+     "effort": "max"
+    }
+   },
+   "response": {
+    "id": "msg_9aba5516-e8d0-484c-a9b3-6dc62a80463f",
+    "type": "message",
+    "role": "assistant",
+    "stop_reason": "end_turn",
+    "model": "qwen3.8-flash",
+    "content": [
+     {
+      "type": "thinking",
+      "thinking": "We need respond to user: \"Reply with the single word: ok\". We already calling. Need final only ok? Ensure single word maybe \"ok\". User asks reply with single word: ok. final ok.",
+      "signature": ""
+     },
+     {
+      "type": "text",
+      "text": "ok"
+     }
+    ],
+    "usage": {
+     "input_tokens": 68,
+     "output_tokens": 46,
+     "cache_creation_input_tokens": 0,
+     "cache_read_input_tokens": 0
+    }
+   }
+  }
+ ]
+}

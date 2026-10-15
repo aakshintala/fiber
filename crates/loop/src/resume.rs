@@ -141,6 +141,12 @@ pub(crate) struct Suspended {
     /// again with. `None` for an approval, and for a call that never
     /// started.
     pub(crate) started: Option<crate::before_tool::Started>,
+    /// The finishing turn's permission timer, once its approval re-enters
+    /// the permission order: process-local, never folded or serialized.
+    /// `None` when folded, for an unchecked historic name, a settled hook
+    /// refusal, or an already-started interaction. The segment it times
+    /// ends at the resumed decision, before any run.
+    pub(crate) permission: Option<Box<dyn Send>>,
 }
 
 /// The suspended turn `lines` describe, if any: the last line is a
@@ -241,6 +247,7 @@ pub(crate) fn suspended(lines: &[Envelope]) -> Result<Option<Suspended>, Error> 
         action,
         batch,
         started,
+        permission: None,
     }))
 }
 
@@ -401,7 +408,7 @@ impl Loop {
     /// `busy`; a reply to the request among them answers it.
     pub(crate) fn finish_suspended(
         &mut self,
-        suspended: Suspended,
+        mut suspended: Suspended,
     ) -> Result<Option<TurnOutcome>, Error> {
         self.deferred.extend(self.inbox.try_iter());
         // The repository's offer resolves before the first request. A
@@ -467,6 +474,16 @@ impl Loop {
             }
             crate::before_tool::Again::Ready(prepared, rebuilt) => {
                 let allow: Decided = Ok(prepared);
+                // The resumed approval re-enters the permission order:
+                // its fresh segment starts here, with the current
+                // registry's name for the validated call. An unchecked
+                // historic name never reaches this arm. The borrow of the
+                // batch ends at the timer, so the guard below moves in.
+                let permission = self
+                    .diag
+                    .timed_tool(contract::diag::Op::ToolPermission, &call.name)
+                    .map(|timer| Box::new(timer) as Box<dyn Send>);
+                suspended.permission = permission;
                 self.finish_ready(suspended, allow, rebuilt)
             }
             crate::before_tool::Again::Unchecked(failed) => {
@@ -484,7 +501,7 @@ impl Loop {
     /// one for a prepared one.
     fn finish_ready(
         &mut self,
-        suspended: Suspended,
+        mut suspended: Suspended,
         allow: Decided,
         request: contract::events::PermissionRequested,
     ) -> Result<Option<TurnOutcome>, Error> {
@@ -533,7 +550,9 @@ impl Loop {
             };
             refused?;
             // The refusal stands as decided: it is passed as is, never
-            // re-checked into an allow.
+            // re-checked into an allow. The resumed segment ends with
+            // the refusal, before the batch runs.
+            drop(suspended.permission.take());
             let decision: Decided = Err(crate::completion::denied("credentials", text));
             let calls = crate::suspend::form_batch(
                 suspended.batch,
@@ -578,6 +597,9 @@ impl Loop {
                 None,
             ),
         )?;
+        // Nobody decided the re-raised request: the resumed segment ends
+        // with this refusal, before its completions are written.
+        drop(suspended.permission.take());
         let denied = calls::no_person();
         for (id, _) in &suspended.batch {
             let completed = if *id == suspended.action {
@@ -607,10 +629,14 @@ impl Loop {
             turn,
             action,
             batch,
+            // Taken below: the resumed segment ends at the decision,
+            // before the batch runs, never across it.
+            permission,
             ..
         } = suspended;
         // `suspended` only returns a batch that holds the action.
         let Some((_, call)) = batch.iter().find(|(id, _)| *id == action) else {
+            drop(permission);
             return self.run_steps(&turn);
         };
         let decision: Decided = match self.await_answer(&action, &turn, &call.name, request)? {
@@ -629,6 +655,9 @@ impl Loop {
             // (`docs/events.md`, `permission_resolved`).
             Asked::Closed => Err(crate::calls::no_person()),
         };
+        // The resumed decision is in: the segment ends here, before the
+        // batch runs and its workers start their own timers.
+        drop(permission);
         let calls = crate::suspend::form_batch(
             batch,
             &action,

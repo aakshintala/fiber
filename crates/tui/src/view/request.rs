@@ -4,32 +4,42 @@
 
 use ratatui::buffer::Buffer;
 use ratatui::layout::{Position, Rect};
-use ratatui::style::{Modifier, Style};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::Widget;
 
 use super::{ALERT_TINT, APPROVAL_TINT, paragraph, rows, to_u16};
-use crate::approvals::{IRREVERSIBLE, Panel};
+use crate::approvals::Panel;
 use crate::mouse::{Target, TargetId};
 use crate::surface;
 use crate::theme::Role;
 
-/// "irreversible" in an approval's header: bold, in the error colour, on
-/// whatever tint asked (`docs/tui.md`, "An approval").
-const LOUD: Style = Style::new()
-    .fg(Role::Error.color())
-    .add_modifier(Modifier::BOLD);
-
-/// Panel line `line`, `text`: the header's "irreversible" loud.
-fn styled(line: usize, text: &str) -> Line<'_> {
-    match text.strip_suffix(IRREVERSIBLE) {
-        Some(head) if line == 0 => Line::from(vec![
-            Span::raw(head),
-            Span::raw(" · "),
-            Span::styled("irreversible", LOUD),
-        ]),
-        Some(_) | None => Line::raw(text),
+/// Panel line `line` with its styled runs: the marks' bytes in their
+/// style, the rest plain. Wrapping measures the same spans, so the rows
+/// drawn and the rows counted agree.
+fn styled<'a>(panel: &'a Panel, line: usize, text: &'a str) -> Line<'a> {
+    let mut runs: Vec<&crate::approvals::Mark> = panel
+        .marks
+        .iter()
+        .filter(|mark| mark.line == line)
+        .collect();
+    runs.sort_by_key(|mark| mark.bytes.start);
+    let mut spans = Vec::new();
+    let mut at = 0;
+    for run in runs {
+        let from = run.bytes.start.max(at);
+        if from > at {
+            spans.push(Span::raw(text.get(at..from).unwrap_or_default()));
+        }
+        spans.push(Span::styled(
+            text.get(run.bytes.clone()).unwrap_or_default(),
+            run.style,
+        ));
+        at = run.bytes.end.max(at);
     }
+    if at < text.len() {
+        spans.push(Span::raw(text.get(at..).unwrap_or_default()));
+    }
+    Line::from(spans)
 }
 
 /// Where the panel's lines land in the rows above `bottom`.
@@ -55,7 +65,8 @@ impl Layout {
         let rows: Vec<usize> = panel
             .lines
             .iter()
-            .map(|line| rows(Line::raw(line.as_str()), width))
+            .enumerate()
+            .map(|(line, text)| rows(styled(panel, line, text), width))
             .collect();
         let space = usize::from(bottom.saturating_sub(area.y));
         let total: usize = rows.iter().sum();
@@ -107,7 +118,8 @@ fn text_rows(panel: &Panel, width: u16) -> usize {
     panel
         .lines
         .iter()
-        .map(|line| rows(Line::raw(line.as_str()), surface::inset(width)))
+        .enumerate()
+        .map(|(line, text)| rows(styled(panel, line, text), surface::inset(width)))
         .sum()
 }
 
@@ -190,7 +202,7 @@ pub(super) fn draw(
     }
     for (line, text) in panel.lines.iter().enumerate() {
         if let Some((rect, skip)) = layout.place(line, area) {
-            paragraph(styled(line, text))
+            paragraph(styled(panel, line, text))
                 .scroll((to_u16(skip), 0))
                 .render(rect, buf);
         }

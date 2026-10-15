@@ -1098,6 +1098,7 @@ fn hosted_action() -> contract::provider::ReplyAction {
             }],
             details: None,
             artifact: None,
+            kept: None,
             changes: None,
             control: None,
             changed_by: None,

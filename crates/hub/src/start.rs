@@ -14,6 +14,7 @@ use std::os::unix::net::UnixStream;
 use std::path::Path;
 use std::time::Duration;
 
+use contract::diag::Op;
 use contract::{CommandId, ErrorCode, SessionId};
 use log::diag::Severity;
 use serde_json::Value;
@@ -71,6 +72,9 @@ pub(crate) fn run(
     worktree: bool,
     content: Option<&Value>,
 ) -> Outcome {
+    // Stamped at bind, emitted at return: a failure measures through
+    // the failure, and an invalid request is an entered start.
+    let mut timer = log::diag::timed(&hub.diag, Op::HubSessionStart, None, None);
     let workspace_path = Path::new(workspace);
     if !workspace_path.is_absolute() {
         return invalid("The workspace is not an absolute path.");
@@ -90,7 +94,14 @@ pub(crate) fn run(
     };
     let socket = hub.home.join("run").join(&id.0);
     let stream = match await_bind(hub, &socket, started.as_ref()) {
-        Bind::Connected(stream) => stream,
+        Bind::Connected(stream) => {
+            // The session's socket accepts here: the content handshake
+            // after this is its own wait, not this start's.
+            if let Some(timer) = timer.as_mut() {
+                timer.stop();
+            }
+            stream
+        }
         Bind::Exited => return exited_or_io(hub, &id, started.as_ref()),
         Bind::TimedOut => return io_failed(hub, &id, "it did not bind its socket."),
         Bind::Failed(detail) => return io_failed(hub, &id, &detail),

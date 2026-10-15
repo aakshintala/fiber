@@ -200,6 +200,7 @@ fn the_models_prose_reasoning_and_results_are_left_out() {
             content: text_part("all green"),
             details: None,
             artifact: None,
+            kept: None,
             changes: None,
             control: None,
             changed_by: None,

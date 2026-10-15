@@ -116,11 +116,11 @@ fn content(grid: &Grid, y: u16, left: u16, right: u16) -> String {
 /// with the approval panel gone.
 fn run_held_tool(run: &mut Run) {
     run.wait_screen("the approval", |grid| {
-        grid.rows.iter().any(|row| row.contains("allow once"))
+        grid.rows.iter().any(|row| row.contains("Allow once"))
     });
     run.write(b"\r");
     run.wait_screen("the tool running", |grid| {
-        !grid.rows.iter().any(|row| row.contains("allow once"))
+        !grid.rows.iter().any(|row| row.contains("Allow once"))
     });
 }
 

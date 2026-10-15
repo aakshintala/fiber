@@ -1,0 +1,279 @@
+{
+ "route": "go",
+ "protocol": "completions",
+ "model": "mimo-v2.6-pro",
+ "base": "https://opencode.ai/zen/go",
+ "levels": [
+  {
+   "level": "off",
+   "status": 200,
+   "elapsed_s": 4.14,
+   "request": {
+    "model": "mimo-v2.6-pro",
+    "messages": [
+     {
+      "role": "user",
+      "content": "Reply with the single word: ok"
+     }
+    ],
+    "max_tokens": 64,
+    "reasoning_effort": "none"
+   },
+   "response": {
+    "id": "3ba14460-127e-4824-bbe2-10452a695e5b_2bd8aed82f2b40cd8eff5980427724d0",
+    "object": "chat.completion",
+    "created": 1792036971,
+    "model": "mimo-v2.6-pro",
+    "choices": [
+     {
+      "index": 0,
+      "finish_reason": "stop",
+      "message": {
+       "role": "assistant",
+       "content": "ok",
+       "reasoning_content": null,
+       "tool_calls": null
+      }
+     }
+    ],
+    "usage": {
+     "prompt_tokens": 16,
+     "completion_tokens": 2,
+     "total_tokens": 18,
+     "prompt_tokens_details": {
+      "cached_tokens": 0
+     },
+     "completion_tokens_details": {
+      "reasoning_tokens": 0
+     }
+    }
+   }
+  },
+  {
+   "level": "minimal",
+   "status": 400,
+   "elapsed_s": 0.74,
+   "request": {
+    "model": "mimo-v2.6-pro",
+    "messages": [
+     {
+      "role": "user",
+      "content": "Reply with the single word: ok"
+     }
+    ],
+    "max_tokens": 64,
+    "reasoning_effort": "minimal"
+   },
+   "response": {
+    "error": {
+     "param": "reasoning_effort must be one of 'none', 'low', 'medium' or 'high'.",
+     "type": "server_error",
+     "message": "Upstream request failed: [400] Param Incorrect"
+    }
+   }
+  },
+  {
+   "level": "low",
+   "status": 200,
+   "elapsed_s": 2.17,
+   "request": {
+    "model": "mimo-v2.6-pro",
+    "messages": [
+     {
+      "role": "user",
+      "content": "Reply with the single word: ok"
+     }
+    ],
+    "max_tokens": 64,
+    "reasoning_effort": "low"
+   },
+   "response": {
+    "id": "8802fac1-1415-48e7-98c5-cb7536cb13ee_1f85eefa69284a09a037e782588a1a3c",
+    "object": "chat.completion",
+    "created": 1792036974,
+    "model": "mimo-v2.6-pro",
+    "choices": [
+     {
+      "index": 0,
+      "finish_reason": "stop",
+      "message": {
+       "role": "assistant",
+       "content": "ok",
+       "reasoning_content": "The user wants me to reply with the single word \"ok\".",
+       "tool_calls": null
+      }
+     }
+    ],
+    "usage": {
+     "prompt_tokens": 14,
+     "completion_tokens": 17,
+     "total_tokens": 31,
+     "prompt_tokens_details": {
+      "cached_tokens": 0
+     },
+     "completion_tokens_details": {
+      "reasoning_tokens": 14
+     }
+    }
+   }
+  },
+  {
+   "level": "medium",
+   "status": 200,
+   "elapsed_s": 4.36,
+   "request": {
+    "model": "mimo-v2.6-pro",
+    "messages": [
+     {
+      "role": "user",
+      "content": "Reply with the single word: ok"
+     }
+    ],
+    "max_tokens": 64,
+    "reasoning_effort": "medium"
+   },
+   "response": {
+    "id": "1fd52ed8-7e56-427d-a2f9-2c7e655fc2d2_e3e8f3398b604a93896ef7fa15d10b39",
+    "object": "chat.completion",
+    "created": 1792036978,
+    "model": "mimo-v2.6-pro",
+    "choices": [
+     {
+      "index": 0,
+      "finish_reason": "stop",
+      "message": {
+       "role": "assistant",
+       "content": "ok",
+       "reasoning_content": "The user wants me to reply with the single word \"ok\".",
+       "tool_calls": null
+      }
+     }
+    ],
+    "usage": {
+     "prompt_tokens": 14,
+     "completion_tokens": 17,
+     "total_tokens": 31,
+     "prompt_tokens_details": {
+      "cached_tokens": 0
+     },
+     "completion_tokens_details": {
+      "reasoning_tokens": 14
+     }
+    }
+   }
+  },
+  {
+   "level": "high",
+   "status": 200,
+   "elapsed_s": 1.81,
+   "request": {
+    "model": "mimo-v2.6-pro",
+    "messages": [
+     {
+      "role": "user",
+      "content": "Reply with the single word: ok"
+     }
+    ],
+    "max_tokens": 64,
+    "reasoning_effort": "high"
+   },
+   "response": {
+    "id": "3fcb787d-df9a-4819-b24c-68783f103759_99ea373a90cd41a195edeaf9c8930466",
+    "object": "chat.completion",
+    "created": 1792036980,
+    "model": "mimo-v2.6-pro",
+    "choices": [
+     {
+      "index": 0,
+      "finish_reason": "stop",
+      "message": {
+       "role": "assistant",
+       "content": "ok",
+       "reasoning_content": "The user wants me to reply with the single word \"ok\".",
+       "tool_calls": null
+      }
+     }
+    ],
+    "usage": {
+     "prompt_tokens": 14,
+     "completion_tokens": 17,
+     "total_tokens": 31,
+     "prompt_tokens_details": {
+      "cached_tokens": 0
+     },
+     "completion_tokens_details": {
+      "reasoning_tokens": 14
+     }
+    }
+   }
+  },
+  {
+   "level": "xhigh",
+   "status": 400,
+   "elapsed_s": 0.76,
+   "request": {
+    "model": "mimo-v2.6-pro",
+    "messages": [
+     {
+      "role": "user",
+      "content": "Reply with the single word: ok"
+     }
+    ],
+    "max_tokens": 64,
+    "reasoning_effort": "xhigh"
+   },
+   "response": {
+    "error": {
+     "param": "reasoning_effort must be one of 'none', 'low', 'medium' or 'high'.",
+     "type": "server_error",
+     "message": "Upstream request failed: [400] Param Incorrect"
+    }
+   }
+  },
+  {
+   "level": "max",
+   "status": 200,
+   "elapsed_s": 2.19,
+   "request": {
+    "model": "mimo-v2.6-pro",
+    "messages": [
+     {
+      "role": "user",
+      "content": "Reply with the single word: ok"
+     }
+    ],
+    "max_tokens": 64,
+    "reasoning_effort": "max"
+   },
+   "response": {
+    "id": "54816b66-1d72-4854-b413-24b434c71d02_dce84dc5b2484844b12078326a50322d",
+    "object": "chat.completion",
+    "created": 1792036983,
+    "model": "mimo-v2.6-pro",
+    "choices": [
+     {
+      "index": 0,
+      "finish_reason": "stop",
+      "message": {
+       "role": "assistant",
+       "content": "ok",
+       "reasoning_content": "The user wants me to reply with just the single word \"ok\".",
+       "tool_calls": null
+      }
+     }
+    ],
+    "usage": {
+     "prompt_tokens": 14,
+     "completion_tokens": 18,
+     "total_tokens": 32,
+     "prompt_tokens_details": {
+      "cached_tokens": 0
+     },
+     "completion_tokens_details": {
+      "reasoning_tokens": 15
+     }
+    }
+   }
+  }
+ ]
+}

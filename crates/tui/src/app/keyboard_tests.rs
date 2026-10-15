@@ -717,7 +717,7 @@ fn rebound_search_steps_type_into_the_approval_feedback() {
     assert!(app.panel().is_some());
     assert_eq!(press(&mut app, "n"), Effect::None);
     let panel = app.panel().expect("the panel stays open");
-    assert!(panel.lines.iter().any(|line| line.contains("deny · n")));
+    assert!(panel.lines.iter().any(|line| line.contains("Deny  n")));
 }
 
 #[test]

@@ -1,0 +1,209 @@
+{
+ "route": "zen",
+ "protocol": "completions",
+ "model": "mistral-large-4",
+ "base": "https://opencode.ai/zen",
+ "levels": [
+  {
+   "level": "off",
+   "status": 200,
+   "elapsed_s": 1.29,
+   "request": {
+    "model": "mistral-large-4",
+    "messages": [
+     {
+      "role": "user",
+      "content": "Reply with the single word: ok"
+     }
+    ],
+    "max_tokens": 64,
+    "reasoning_effort": "none"
+   },
+   "response": {
+    "id": "652c3003da18422892f71b7a71e16b9e",
+    "object": "chat.completion",
+    "created": 1792037353,
+    "model": "mistral-large-4",
+    "choices": [
+     {
+      "index": 0,
+      "finish_reason": "stop",
+      "logprobs": null,
+      "message": {
+       "role": "assistant",
+       "content": "ok",
+       "tool_calls": null
+      }
+     }
+    ],
+    "usage": {
+     "prompt_tokens": 10,
+     "completion_tokens": 2,
+     "total_tokens": 12,
+     "prompt_tokens_details": {
+      "cached_tokens": 0
+     },
+     "completion_tokens_details": {
+      "reasoning_tokens": 0
+     }
+    }
+   }
+  },
+  {
+   "level": "minimal",
+   "status": 400,
+   "elapsed_s": 0.75,
+   "request": {
+    "model": "mistral-large-4",
+    "messages": [
+     {
+      "role": "user",
+      "content": "Reply with the single word: ok"
+     }
+    ],
+    "max_tokens": 64,
+    "reasoning_effort": "minimal"
+   },
+   "response": {
+    "object": "error",
+    "model": "mistral-large-4"
+   }
+  },
+  {
+   "level": "low",
+   "status": 400,
+   "elapsed_s": 0.8,
+   "request": {
+    "model": "mistral-large-4",
+    "messages": [
+     {
+      "role": "user",
+      "content": "Reply with the single word: ok"
+     }
+    ],
+    "max_tokens": 64,
+    "reasoning_effort": "low"
+   },
+   "response": {
+    "object": "error",
+    "model": "mistral-large-4"
+   }
+  },
+  {
+   "level": "medium",
+   "status": 400,
+   "elapsed_s": 0.72,
+   "request": {
+    "model": "mistral-large-4",
+    "messages": [
+     {
+      "role": "user",
+      "content": "Reply with the single word: ok"
+     }
+    ],
+    "max_tokens": 64,
+    "reasoning_effort": "medium"
+   },
+   "response": {
+    "object": "error",
+    "model": "mistral-large-4"
+   }
+  },
+  {
+   "level": "high",
+   "status": 200,
+   "elapsed_s": 1.67,
+   "request": {
+    "model": "mistral-large-4",
+    "messages": [
+     {
+      "role": "user",
+      "content": "Reply with the single word: ok"
+     }
+    ],
+    "max_tokens": 64,
+    "reasoning_effort": "high"
+   },
+   "response": {
+    "id": "0993ea7386524191bac86af4c7dcbee0",
+    "object": "chat.completion",
+    "created": 1792037356,
+    "model": "mistral-large-4",
+    "choices": [
+     {
+      "index": 0,
+      "finish_reason": "length",
+      "logprobs": null,
+      "message": {
+       "role": "assistant",
+       "content": [
+        {
+         "type": "thinking",
+         "thinking": [
+          {
+           "type": "text",
+           "text": "The user wants me to reply with the single word: \"ok\"\n\nThis is a straightforward request. I should simply output \"ok\" without any additional text, punctuation, or explanation.\n\nLet me verify:\n- User asked: \"Reply with the single word: ok\"\n- I should reply: ok\n\nThat's"
+          }
+         ],
+         "closed": true
+        }
+       ],
+       "tool_calls": null
+      }
+     }
+    ],
+    "usage": {
+     "prompt_tokens": 10,
+     "completion_tokens": 64,
+     "total_tokens": 74,
+     "prompt_tokens_details": {
+      "cached_tokens": 0
+     },
+     "completion_tokens_details": {
+      "reasoning_tokens": 63
+     }
+    }
+   }
+  },
+  {
+   "level": "xhigh",
+   "status": 400,
+   "elapsed_s": 0.76,
+   "request": {
+    "model": "mistral-large-4",
+    "messages": [
+     {
+      "role": "user",
+      "content": "Reply with the single word: ok"
+     }
+    ],
+    "max_tokens": 64,
+    "reasoning_effort": "xhigh"
+   },
+   "response": {
+    "object": "error",
+    "model": "mistral-large-4"
+   }
+  },
+  {
+   "level": "max",
+   "status": 400,
+   "elapsed_s": 0.71,
+   "request": {
+    "model": "mistral-large-4",
+    "messages": [
+     {
+      "role": "user",
+      "content": "Reply with the single word: ok"
+     }
+    ],
+    "max_tokens": 64,
+    "reasoning_effort": "max"
+   },
+   "response": {
+    "object": "error",
+    "model": "mistral-large-4"
+   }
+  }
+ ]
+}

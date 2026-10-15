@@ -306,7 +306,19 @@ What is recorded:
   covers one admitted attempt, from entering the model call until its stream
   ends; a cancel observed before admission writes none, and a retry's backoff
   stays outside. `turn.handoff` covers one handoff end to end, from its first
-  record through the restart. The scopes nest instead of adding up: a
+  record through the restart. Installed for one tool call are
+  `tool.permission`, `tool.reviewer`, `tool.hooks` and `tool.run`, each
+  with `tool` naming the registered tool. `tool.permission` covers the
+  permission order from admission to the decision, holding the reviewer's
+  stages and a person's wait; a suspended approval's fresh segment after
+  resume is a new line, never the old process's downtime. `tool.reviewer`
+  covers one entered judgement stage, a re-ask inside it included; a
+  stage never run, and the person's wait after an escalation, write none.
+  `tool.hooks` covers one actual `before_tool` or `check_tool` dispatch,
+  or one actual `after_tool` dispatch on ordinary, spilled or unsaved
+  output; a call with no hooks, or a dispatch a shutdown suppresses,
+  writes none. `tool.run` covers one entered execution on its worker, not
+  the wait for its ordered completion. The scopes nest instead of adding up: a
   requested handoff holds its note's request and model scopes, and
   `provider_request`'s network share sits inside `turn.model_call`. Warming
   refreshes and reviewer judgements run through the same factories but write
@@ -322,6 +334,19 @@ What is recorded:
   lazy first use, restarts, renewals and post-approval starts, with the
   remote server's actual connector work timed as `net.connect` beside it.
   It excludes cache-only declarations, prompt discovery and tool execution.
+  Installed for the hub are `hub.session_start`, `hub.resume` and
+  `hub.subscribe_replay`, and for listing, `sessions.list`.
+  `hub.session_start` covers a start from the request until the session's
+  socket accepts, excluding the summary handshake for a first prompt; a
+  rejected start measures through its failure. `hub.resume` covers one
+  reach for the session, including gate contention, retries and failures.
+  `hub.subscribe_replay` covers one actual kept-subscription replay, from
+  its write through the matching acknowledgement, or through its failure,
+  cancellation or disconnect before it. Installed for the door is
+  `startup.socket`: socket preparation until the bound listener is ready,
+  on new and resumed sessions alike. Installed for listing is
+  `sessions.list`: one listing attempt from entry through feed settlement,
+  snapshot and row reads, including invalid arguments.
   Request, model, hook and network timings may overlap as nested
   measurements, never additive phases.
 

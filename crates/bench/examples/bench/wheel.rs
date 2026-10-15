@@ -414,6 +414,7 @@ fn write_read_log(home: &Home, id: &str) -> Result<(), String> {
                 content: vec![ContentPart::Text { text: output }],
                 details: None,
                 artifact: None,
+                kept: None,
                 changes: None,
                 control: None,
                 changed_by: None,

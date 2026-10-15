@@ -1515,6 +1515,7 @@ impl contract::tool::InnerCalls for ScriptRunner {
             }],
             details: None,
             artifact: None,
+            kept: None,
             changes: None,
             control: None,
             changed_by: None,
