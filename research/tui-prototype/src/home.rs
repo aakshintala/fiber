@@ -113,7 +113,7 @@ pub(crate) const SURFACE: Surface = Surface {
 /// The fixture's version, beside the logo as docs/tui.md's logo reads.
 const VERSION: &str = "0.0.1";
 /// The day's spend across all projects, after the counts.
-const TODAY: &str = "$5.78";
+const LIVE_SPEND: &str = "$5.78";
 /// The header's rows: the four-row logo, starting at the top.
 const LOGO_Y: usize = 0;
 /// The two lines beside the logo start past its 32 cells and a gap.
@@ -1147,7 +1147,7 @@ fn frame(c: &Look, cols: usize, rows: usize, image: bool) -> Frame {
         level: c.level,
         input: &c.ui.input,
         comp: comp.as_deref(),
-        spend: TODAY,
+        spend: LIVE_SPEND,
         cols,
         rows,
         image,
