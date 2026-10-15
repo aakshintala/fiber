@@ -2432,7 +2432,11 @@ fn a_delegate_failing_before_session_reports_its_error_and_no_log_path() {
             )]);
         }
         if !text.contains("call_list") {
-            return support::stream(&[function_call("call_list", "jobs", &json!({"action": "list"}))]);
+            return support::stream(&[function_call(
+                "call_list",
+                "jobs",
+                &json!({"action": "list"}),
+            )]);
         }
         support::hello()
     })
@@ -2471,7 +2475,9 @@ fn a_delegate_failing_before_session_reports_its_error_and_no_log_path() {
         Stdio::piped(),
     );
     let mut probe = probe;
-    probe.wait_line("the probe's exit line", |line| line["kind"] == "fiber_exited");
+    probe.wait_line("the probe's exit line", |line| {
+        line["kind"] == "fiber_exited"
+    });
     drop(held);
     let (probe_status, probe_lines, probe_stderr) = probe.wait();
     assert_eq!(probe_status.code(), Some(1), "stderr: {probe_stderr}");
@@ -2518,11 +2524,17 @@ fn a_delegate_failing_before_session_reports_its_error_and_no_log_path() {
     let child_id = started["delegate_session_id"].as_str().unwrap().to_owned();
     let kinds = kinds(&lines);
     assert_eq!(
-        kinds.iter().filter(|kind| *kind == "delegate_started").count(),
+        kinds
+            .iter()
+            .filter(|kind| *kind == "delegate_started")
+            .count(),
         1
     );
     assert_eq!(
-        kinds.iter().filter(|kind| *kind == "delegate_finished").count(),
+        kinds
+            .iter()
+            .filter(|kind| *kind == "delegate_finished")
+            .count(),
         1,
         "{kinds:?}"
     );
@@ -2531,8 +2543,14 @@ fn a_delegate_failing_before_session_reports_its_error_and_no_log_path() {
         1,
         "{kinds:?}"
     );
-    let finished_at = kinds.iter().position(|kind| kind == "delegate_finished").unwrap();
-    let completed_at = kinds.iter().position(|kind| kind == "job_completed").unwrap();
+    let finished_at = kinds
+        .iter()
+        .position(|kind| kind == "delegate_finished")
+        .unwrap();
+    let completed_at = kinds
+        .iter()
+        .position(|kind| kind == "job_completed")
+        .unwrap();
     // The finish is written just before the end, with nothing between.
     assert_eq!(completed_at, finished_at + 1, "{kinds:?}");
     let finished = lines[finished_at]["payload"].clone();
@@ -2542,7 +2560,10 @@ fn a_delegate_failing_before_session_reports_its_error_and_no_log_path() {
     assert_eq!(done["status"], "failed");
     assert_eq!(done["error"]["code"], expected_code);
     assert_eq!(done["error"]["message"], expected_message);
-    assert_ne!(done["error"]["message"], "The delegate ended without a result.");
+    assert_ne!(
+        done["error"]["message"],
+        "The delegate ended without a result."
+    );
     assert_eq!(done["process"]["exit_code"], 1);
     // Nothing was ever written to finish with, and no model call ran.
     assert_eq!(finished["text"], "");
@@ -2591,7 +2612,9 @@ fn a_delegate_failing_before_session_reports_its_error_and_no_log_path() {
     // The same parent's list shows the stored error and no log path: the
     // child's log was never created, and the receipt's path is gone whole.
     let spawn_done = completed_for(&lines, "delegate_spawn");
-    let receipt = spawn_done["payload"]["content"][0]["text"].as_str().unwrap();
+    let receipt = spawn_done["payload"]["content"][0]["text"]
+        .as_str()
+        .unwrap();
     assert!(receipt.contains(&job), "{receipt}");
     let marker = "Its log is ";
     let receipt_path = receipt[receipt.find(marker).unwrap() + marker.len()..]
@@ -2601,11 +2624,17 @@ fn a_delegate_failing_before_session_reports_its_error_and_no_log_path() {
     assert!(receipt_path.contains(&child_id), "{receipt}");
     assert_eq!(list_done["payload"]["status"], "completed");
     let list_text = list_done["payload"]["content"][0]["text"].as_str().unwrap();
-    assert_eq!(list_text, format!("{job} failed scan \u{2014} {expected_message}\n"));
+    assert_eq!(
+        list_text,
+        format!("{job} failed scan \u{2014} {expected_message}\n")
+    );
     assert!(!list_text.contains(&receipt_path), "{list_text}");
     let child_dir = sessions_in(&setup.home(), &setup.workspace()).join(&child_id);
     assert!(!child_dir.exists(), "the child made a session directory");
-    assert!(!child_dir.join("events.jsonl").exists(), "the child wrote a log");
+    assert!(
+        !child_dir.join("events.jsonl").exists(),
+        "the child wrote a log"
+    );
 
     // The whole parent stream, in order, and its durable lines equal its
     // log: a duplicated, missing or reordered event fails here.

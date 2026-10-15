@@ -752,8 +752,8 @@ fn assert_no_verdict(notice: &contract::inbox::JobNotice, code: i32) {
 
 #[test]
 fn a_session_line_of_another_kind_is_no_verdict() {
-    let line = serde_json::to_string(&envelope(1, "turn_completed", serde_json::json!({})))
-        .unwrap();
+    let line =
+        serde_json::to_string(&envelope(1, "turn_completed", serde_json::json!({}))).unwrap();
     let notice = stdout_report(&line, 1, "fiber-delegate-wrong-kind");
     assert_no_verdict(&notice, 1);
 }
@@ -832,11 +832,7 @@ fn a_session_envelope_carrying_a_startup_payload_is_no_verdict() {
 
 #[test]
 fn an_unrelated_object_line_is_no_verdict() {
-    let notice = stdout_report(
-        r#"{"hello":"world"}"#,
-        1,
-        "fiber-delegate-unrelated",
-    );
+    let notice = stdout_report(r#"{"hello":"world"}"#, 1, "fiber-delegate-unrelated");
     assert_no_verdict(&notice, 1);
 }
 

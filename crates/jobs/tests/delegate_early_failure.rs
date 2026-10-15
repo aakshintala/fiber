@@ -75,9 +75,7 @@ fn a_delegate_failing_before_its_session_reports_that_failure_and_no_log() {
         let mut command = std::process::Command::new("sh");
         command.args([
             "-c",
-            &format!(
-                ": fiber-jobs-early-failure; printf '%s\\n' '{line}'; exit 1"
-            ),
+            &format!(": fiber-jobs-early-failure; printf '%s\\n' '{line}'; exit 1"),
         ]);
         command
     });
@@ -161,10 +159,7 @@ fn a_delegate_failing_before_its_session_reports_that_failure_and_no_log() {
         Some(1)
     );
     assert_eq!(
-        notice
-            .delegate
-            .as_ref()
-            .map(|finish| finish.text.clone()),
+        notice.delegate.as_ref().map(|finish| finish.text.clone()),
         Some(String::new())
     );
 
@@ -176,7 +171,11 @@ fn a_delegate_failing_before_its_session_reports_that_failure_and_no_log() {
     let tool = JobsTool::new(Arc::clone(&registry));
     let expected = format!("{job_id} failed scan \u{2014} Bad model.\n");
     for _ in 0..2 {
-        let listed = tool.run(&args(serde_json::json!({"action": "list"})), &cancel, &Recorder::default());
+        let listed = tool.run(
+            &args(serde_json::json!({"action": "list"})),
+            &cancel,
+            &Recorder::default(),
+        );
         assert!(listed.error.is_none());
         assert_eq!(text_of(&listed), expected);
         // The whole recorded path is gone, not just its filename.

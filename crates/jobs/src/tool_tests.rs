@@ -233,7 +233,12 @@ fn list_is_empty_then_shows_jobs_in_start_order() {
 /// message: the listing shows that message, and the log path only when
 /// the log is really there. `harness` names the harness the run
 /// recorded, so a foreign harness pins the unchanged format.
-fn failed_delegate(registry: &Arc<Registry>, description: &str, output: &str, harness: &str) -> String {
+fn failed_delegate(
+    registry: &Arc<Registry>,
+    description: &str,
+    output: &str,
+    harness: &str,
+) -> String {
     let id = crate::registry::mint_job_id();
     let delegate = DelegateStarted {
         job_id: id.clone(),
@@ -297,13 +302,12 @@ fn an_ended_fiber_delegate_without_its_log_lists_its_error_and_no_path() {
     let id = failed_delegate(&registry, "scan", &output, "fiber");
     let listed = run(&tool, json!({"action": "list"}), &cancel);
     assert!(listed.error.is_none());
-    assert_eq!(text_of(&listed), format!("{id} failed scan \u{2014} Bad model.\n"));
-    // The whole recorded path is gone, not just its filename.
-    assert!(
-        !text_of(&listed).contains(&output),
-        "{}",
-        text_of(&listed)
+    assert_eq!(
+        text_of(&listed),
+        format!("{id} failed scan \u{2014} Bad model.\n")
     );
+    // The whole recorded path is gone, not just its filename.
+    assert!(!text_of(&listed).contains(&output), "{}", text_of(&listed));
 }
 
 #[test]
