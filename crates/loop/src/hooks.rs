@@ -99,15 +99,27 @@ impl Loop {
                 .capped(parts, full, ran.details, None, bound, id)?
                 .with(ran.images));
         };
-        let answer = hooks.after_tool(&AfterToolCall {
-            tool: ran.tool,
-            arguments: ran.arguments,
-            status: ran.status,
-            content: &full,
-            details: ran.details.as_ref(),
-            process: ran.process,
-            spilled: None,
-        });
+        let answer = {
+            // The one actual `after_tool` dispatch on ordinary output:
+            // the guard closes before the notices, so the cap and the
+            // artifact work stay outside.
+            let _dispatch = self
+                .diag
+                .timed_tool(contract::diag::Op::ToolHooks, ran.tool);
+            hooks.after_tool(&AfterToolCall {
+                tool: ran.tool,
+                arguments: ran.arguments,
+                status: ran.status,
+                content: &full,
+                details: ran.details.as_ref(),
+                process: ran.process,
+                spilled: None,
+            })
+        };
+        // Test-only boundary past the closed timer: later work the timer
+        // must already have left out.
+        #[cfg(test)]
+        crate::tool_timing_tests::after_dispatch_exit(self.log.clock().as_ref());
         for notice in answer.notices {
             self.write(&Event::Notice(notice), turn, None)?;
         }
@@ -254,18 +266,27 @@ impl Loop {
         };
         let shown = lined(&cut);
         let answer = match self.hooks.clone() {
-            Some(hooks) => hooks.after_tool(&AfterToolCall {
-                tool,
-                arguments,
-                status,
-                content: &shown,
-                details: details.as_ref(),
-                process,
-                spilled: Some(&SpillFile {
-                    path: path.clone(),
-                    size,
-                }),
-            }),
+            Some(hooks) => {
+                // The one actual `after_tool` dispatch on spilled output.
+                let answer = {
+                    let _dispatch = self.diag.timed_tool(contract::diag::Op::ToolHooks, tool);
+                    hooks.after_tool(&AfterToolCall {
+                        tool,
+                        arguments,
+                        status,
+                        content: &shown,
+                        details: details.as_ref(),
+                        process,
+                        spilled: Some(&SpillFile {
+                            path: path.clone(),
+                            size,
+                        }),
+                    })
+                };
+                #[cfg(test)]
+                crate::tool_timing_tests::after_dispatch_exit(self.log.clock().as_ref());
+                answer
+            }
             None => AfterToolAnswer {
                 outcome: AfterToolOutcome::Unchanged,
                 changed_by: Vec::new(),
@@ -382,15 +403,24 @@ impl Loop {
         let notice = cut_notice(removed, Err(&message));
         let shown = lined(&cut_joined(&head, &notice, &tail));
         let answer = match self.hooks.clone() {
-            Some(hooks) => hooks.after_tool(&AfterToolCall {
-                tool,
-                arguments,
-                status,
-                content: &shown,
-                details: details.as_ref(),
-                process,
-                spilled: None,
-            }),
+            Some(hooks) => {
+                // The one actual `after_tool` dispatch on unsaved output.
+                let answer = {
+                    let _dispatch = self.diag.timed_tool(contract::diag::Op::ToolHooks, tool);
+                    hooks.after_tool(&AfterToolCall {
+                        tool,
+                        arguments,
+                        status,
+                        content: &shown,
+                        details: details.as_ref(),
+                        process,
+                        spilled: None,
+                    })
+                };
+                #[cfg(test)]
+                crate::tool_timing_tests::after_dispatch_exit(self.log.clock().as_ref());
+                answer
+            }
             None => AfterToolAnswer {
                 outcome: AfterToolOutcome::Unchanged,
                 changed_by: Vec::new(),

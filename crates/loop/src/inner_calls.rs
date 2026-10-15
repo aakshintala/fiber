@@ -401,7 +401,14 @@ impl crate::Loop {
             }
             Ok(prepared) => prepared,
         };
-        if let crate::permission::Verdict::Deny { by, reason, why } =
+        // The inner permission order starts once the call is prepared:
+        // the guard spans the deny steps and closes before any start
+        // line. `call.name` is the session map's key, refused above when
+        // it named nothing registered.
+        let verdict = {
+            let _permission = self
+                .diag
+                .timed_tool(contract::diag::Op::ToolPermission, &call.name);
             crate::permission::inner_verdict(
                 &call.name,
                 &prepared.effects,
@@ -410,7 +417,8 @@ impl crate::Loop {
                 &self.credentials,
                 &self.credential_files,
             )
-        {
+        };
+        if let crate::permission::Verdict::Deny { by, reason, why } = verdict {
             let message = format!("{why} It did not run.");
             self.write(
                 &Event::PermissionResolved(crate::completion::resolved(
@@ -468,13 +476,24 @@ impl crate::Loop {
         let worker_arguments = Arc::clone(&arguments);
         let tool = prepared.tool;
         let bound = tool.bound();
+        // The entered inner run's worker context, gated like the outer
+        // call's, so `info` clones nothing.
+        let worker = self.diag.worker().map(|diag| (diag, call.name.clone()));
         scope.spawn(move || {
-            let output = tool.run_asking(
-                &worker_arguments,
-                worker_cancel.as_ref(),
-                worker_stream.as_ref(),
-                worker_stream.as_ref(),
-            );
+            // The entered inner run's timer, before the stream takes the
+            // output, as the outer call's is.
+            let output = {
+                let _run = match worker.as_ref() {
+                    Some((diag, name)) => diag.timed_tool(contract::diag::Op::ToolRun, name),
+                    None => None,
+                };
+                tool.run_asking(
+                    &worker_arguments,
+                    worker_cancel.as_ref(),
+                    worker_stream.as_ref(),
+                    worker_stream.as_ref(),
+                )
+            };
             worker_stream.finish(output);
         });
         inner.push(InnerRunning {
