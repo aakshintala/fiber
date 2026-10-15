@@ -2543,18 +2543,25 @@ fn a_delegate_failing_before_session_reports_its_error_and_no_log_path() {
         1,
         "{kinds:?}"
     );
-    let finished_at = kinds
+    // `session_status` lines are ephemeral observer output, never pinned:
+    // one can land between any two lines, including this pair. The
+    // adjacency below is over the stream with them set aside.
+    let ordered: Vec<&Value> = lines
         .iter()
-        .position(|kind| kind == "delegate_finished")
+        .filter(|line| line["kind"] != "session_status")
+        .collect();
+    let finished_at = ordered
+        .iter()
+        .position(|line| line["kind"] == "delegate_finished")
         .unwrap();
-    let completed_at = kinds
+    let completed_at = ordered
         .iter()
-        .position(|kind| kind == "job_completed")
+        .position(|line| line["kind"] == "job_completed")
         .unwrap();
     // The finish is written just before the end, with nothing between.
     assert_eq!(completed_at, finished_at + 1, "{kinds:?}");
-    let finished = lines[finished_at]["payload"].clone();
-    let done = lines[completed_at]["payload"].clone();
+    let finished = ordered[finished_at]["payload"].clone();
+    let done = ordered[completed_at]["payload"].clone();
     assert_eq!(finished["job_id"], job);
     assert_eq!(done["job_id"], job);
     assert_eq!(done["status"], "failed");
@@ -2603,7 +2610,7 @@ fn a_delegate_failing_before_session_reports_its_error_and_no_log_path() {
     // Whether the failure landed at a step boundary or in the wait, the
     // pair carries the run's own id: a notice carries none, a claimed end
     // carries the wait's.
-    let pair_action = lines[finished_at]["action_id"].clone();
+    let pair_action = ordered[finished_at]["action_id"].clone();
     assert!(
         pair_action.is_null() || pair_action == json!(wait_action),
         "{pair_action}"
