@@ -859,10 +859,7 @@ fn a_click_on_a_notice_row_a_later_frame_moved_opens_nothing() {
     assert_eq!(lp.app.notice_overlay(), None);
     // The notice opens from its new row.
     feed(&mut lp, vec![click(0, moved)]);
-    assert_eq!(
-        lp.app.notice_overlay(),
-        Some(vec!["Notice 1.".to_owned()])
-    );
+    assert_eq!(lp.app.notice_overlay(), Some(vec!["Notice 1.".to_owned()]));
 }
 
 #[test]
@@ -876,10 +873,7 @@ fn a_click_on_a_notice_row_a_second_notice_took_opens_the_newer_notice() {
     // The newer notice takes the old row, so the stale click opens it,
     // not the one read.
     feed(&mut lp, vec![click(0, old)]);
-    assert_eq!(
-        lp.app.notice_overlay(),
-        Some(vec!["Notice 2.".to_owned()])
-    );
+    assert_eq!(lp.app.notice_overlay(), Some(vec!["Notice 2.".to_owned()]));
 }
 
 #[test]
@@ -923,10 +917,7 @@ fn enter_on_the_focused_notice_opens_it_after_its_row_moved() {
         lp.app.focused()
     );
     feed(&mut lp, vec![Input::Bytes(b"\r".to_vec())]);
-    assert_eq!(
-        lp.app.notice_overlay(),
-        Some(vec!["Notice 1.".to_owned()])
-    );
+    assert_eq!(lp.app.notice_overlay(), Some(vec!["Notice 1.".to_owned()]));
 }
 
 #[test]

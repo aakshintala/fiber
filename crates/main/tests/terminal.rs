@@ -2043,14 +2043,10 @@ fn resume_with_an_unknown_credential_on_a_running_session_stays_attached() {
     // `CSI 27 u`: a lone ESC starts a sequence and is held.
     second.write(b"\x1b[27u");
     second.wait_screen("the closed notice overlay", |grid| {
-        !grid
-            .contents
-            .contains("`nope`. The labels for `fake` are:")
+        !grid.contents.contains("`nope`. The labels for `fake` are:")
     });
     second.write(b"\x1b[27u");
-    second.wait_screen("the input box back", |grid| {
-        reversed_cells(grid).is_empty()
-    });
+    second.wait_screen("the input box back", |grid| reversed_cells(grid).is_empty());
     // Nothing ran on its own: no new request, no turn, no change event.
     assert_eq!(
         server.requests().len(),
