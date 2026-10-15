@@ -168,7 +168,8 @@ fn opened() -> (Setup, Run) {
 fn an_ask_user_form_draws_the_doc_look_and_answers_into_the_card() {
     let (_setup, mut run) = opened();
     let grid = run.wait_screen("the first question", |grid| {
-        grid.contents.contains("Which crates should the change touch?")
+        grid.contents
+            .contains("Which crates should the change touch?")
     });
     // The title row, then a blank row, the tab row, a blank row, the
     // question, "choose any", a blank row, the options, the words row,
@@ -176,7 +177,11 @@ fn an_ask_user_form_draws_the_doc_look_and_answers_into_the_card() {
     let title = row_with(&grid, "Question from run it");
     let left = "Question from run it · 3 questions, any can be skipped";
     let right = "Esc: chat about this";
-    assert!(!grid.rows[usize::from(title)].contains(" · 1 of"), "{}", grid.contents);
+    assert!(
+        !grid.rows[usize::from(title)].contains(" · 1 of"),
+        "{}",
+        grid.contents
+    );
     // The tint's last cell is the hint's last one: the title is padded to
     // it with spaces.
     let end = (0..160)
@@ -185,7 +190,12 @@ fn an_ask_user_form_draws_the_doc_look_and_answers_into_the_card() {
         .expect("the tinted run");
     let pad = end + 1 - 2 - 54 - 20;
     let want = format!("▌ {left}{}{right}", " ".repeat(usize::from(pad)));
-    assert_eq!(grid.rows[usize::from(title)].trim_end(), want, "{}", grid.contents);
+    assert_eq!(
+        grid.rows[usize::from(title)].trim_end(),
+        want,
+        "{}",
+        grid.contents
+    );
     let rows = [
         "▌",
         "←  ☐ Scope    ☐ Tests    ☐ Docs    ✔ Submit  →",
@@ -258,7 +268,12 @@ fn an_ask_user_form_draws_the_doc_look_and_answers_into_the_card() {
     let current = col_at(&grid, tabs, " ☐ Scope ");
     assert_inverse(screen, tabs, current, " ☐ Scope ");
     assert_not_inverse(screen, tabs, col_at(&grid, tabs, " ☐ Tests "), " ☐ Tests ");
-    assert_not_inverse(screen, tabs, col_at(&grid, tabs, " ✔ Submit "), " ✔ Submit ");
+    assert_not_inverse(
+        screen,
+        tabs,
+        col_at(&grid, tabs, " ✔ Submit "),
+        " ✔ Submit ",
+    );
     for needle in [" ☐ Tests ", " ☐ Docs ", " ✔ Submit "] {
         let x = col_at(&grid, tabs, needle);
         for (dx, _) in needle.chars().enumerate() {
@@ -319,8 +334,7 @@ fn an_ask_user_form_draws_the_doc_look_and_answers_into_the_card() {
     });
     run.write(b"\t");
     let grid = run.wait_screen("the Docs words row", |grid| {
-        grid.contents.contains("Which docs change?")
-            && grid.contents.contains("Type an answer")
+        grid.contents.contains("Which docs change?") && grid.contents.contains("Type an answer")
     });
     let words = row_with(&grid, "Type an answer");
     let placeholder = col_at(&grid, words, "Type an answer");
@@ -353,7 +367,12 @@ fn an_ask_user_form_draws_the_doc_look_and_answers_into_the_card() {
     let submit = row_with(&grid, " Submit ");
     let screen = parsed(&run.output());
     let screen = screen.screen();
-    assert_inverse(screen, submit, col_at(&grid, submit, " Submit "), " Submit ");
+    assert_inverse(
+        screen,
+        submit,
+        col_at(&grid, submit, " Submit "),
+        " Submit ",
+    );
     let chatting = col_at(&grid, submit, " Chat about this ");
     for dx in 0..17u16 {
         assert_eq!(grid.cell(chatting + dx, submit).bg, RULE, "col {dx}");
@@ -378,7 +397,9 @@ fn an_ask_user_form_draws_the_doc_look_and_answers_into_the_card() {
     // each header padded to 13 cells in `accent` with the answer bold or
     // "skipped" dim.
     run.write(b"\r");
-    let grid = run.wait_screen("the answered card", |grid| grid.contents.contains("you answered"));
+    let grid = run.wait_screen("the answered card", |grid| {
+        grid.contents.contains("you answered")
+    });
     let rule = row_with(&grid, "you answered");
     let you = col_at(&grid, rule, "you answered");
     for dx in 0..12u16 {
@@ -387,19 +408,16 @@ fn an_ask_user_form_draws_the_doc_look_and_answers_into_the_card() {
         assert!(cell.bold, "col {dx}");
     }
     // " · HH:MM": the shape, never the clock.
-    for (dx, want) in [
-        (12, " "),
-        (13, "·"),
-        (14, " "),
-        (17, ":"),
-        (20, " "),
-    ] {
+    for (dx, want) in [(12, " "), (13, "·"), (14, " "), (17, ":"), (20, " ")] {
         assert_eq!(grid.cell(you + dx, rule).symbol.as_str(), want, "col {dx}");
         assert!(grid.cell(you + dx, rule).dim, "col {dx}");
     }
     for dx in [15, 16, 18, 19] {
         assert!(
-            grid.cell(you + dx, rule).symbol.chars().all(|ch| ch.is_ascii_digit()),
+            grid.cell(you + dx, rule)
+                .symbol
+                .chars()
+                .all(|ch| ch.is_ascii_digit()),
             "col {dx}"
         );
         assert!(grid.cell(you + dx, rule).dim, "col {dx}");
@@ -416,15 +434,24 @@ fn an_ask_user_form_draws_the_doc_look_and_answers_into_the_card() {
     for dx in 0..13u16 {
         assert_eq!(grid.cell(header + dx, scope).fg, ACCENT, "col {dx}");
     }
-    assert_eq!(&grid.rows[usize::from(scope)][usize::from(header)..usize::from(header) + 13], "Scope        ");
+    assert_eq!(
+        &grid.rows[usize::from(scope)][usize::from(header)..usize::from(header) + 13],
+        "Scope        "
+    );
     let answered = col_at(&grid, scope, "tui");
     assert!(grid.cell(answered, scope).bold);
     let tests = row_with(&grid, "Tests");
-    assert_eq!(&grid.rows[usize::from(tests)][usize::from(header)..usize::from(header) + 13], "Tests        ");
+    assert_eq!(
+        &grid.rows[usize::from(tests)][usize::from(header)..usize::from(header) + 13],
+        "Tests        "
+    );
     let skipped = col_at(&grid, tests, "skipped");
     assert!(grid.cell(skipped, tests).dim);
     let docs = row_with(&grid, "Docs");
-    assert_eq!(&grid.rows[usize::from(docs)][usize::from(header)..usize::from(header) + 13], "Docs         ");
+    assert_eq!(
+        &grid.rows[usize::from(docs)][usize::from(header)..usize::from(header) + 13],
+        "Docs         "
+    );
     let quoted = col_at(&grid, docs, "\"2\"");
     for dx in 0..3u16 {
         assert!(grid.cell(quoted + dx, docs).bold, "col {dx}");
