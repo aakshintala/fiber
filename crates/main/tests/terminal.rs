@@ -456,18 +456,12 @@ fn an_ask_and_a_shell_waiting_on_approval_show_no_call_json() {
         !rows.iter().any(|row| row.contains("ask_user {")),
         "{rows:?}"
     );
-    // No row of the conversation holds `{"` except the shell approval
-    // panel's arguments (`{\"command\":\"echo hi\"}`): every occurrence
-    // on the grid is immediately followed by `command"`.
-    let mut rest = grid.contents.as_str();
-    let mut calls = 0;
-    while let Some(at) = rest.find("{\"") {
-        calls += 1;
-        let after = &rest[at + 2..];
-        assert!(after.starts_with("command\""), "{rows:?}");
-        rest = &rest[at + 2..];
-    }
-    assert!(calls > 0, "{rows:?}");
+    // The approval panel shows the shell's main argument for review, so
+    // neither call's JSON ever draws: neither on the group line, in a
+    // ledger row, nor on the panel. The grid reassembles wrapped rows,
+    // so every drawn row is checked.
+    assert!(!rows.iter().any(|row| row.contains("{\"")), "{rows:?}");
+    assert!(grid.contents.contains("shell echo hi"), "{rows:?}");
     // As above: quitting either exits at once or asks first.
     run.write(b"\x03\x03\r");
     run.wait_screen("the primary screen with the resume line", |grid| {
