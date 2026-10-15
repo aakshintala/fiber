@@ -602,7 +602,10 @@ fn conversation_rows(app: &App, area: Rect, buf: &mut Buffer, targets: &mut Vec<
         let y = area.y.saturating_add(offset);
         let width = to_u16(crate::format::width(COPIED));
         let x = area.x.saturating_add(area.width.saturating_sub(width));
-        buf.set_style(Rect::new(x, y, width, 1), Style::new().bg(Role::Surface.color()));
+        buf.set_style(
+            Rect::new(x, y, width, 1),
+            Style::new().bg(Role::Surface.color()),
+        );
         buf.set_stringn(x, y, COPIED, usize::from(width), style(Role::Info));
     }
 }

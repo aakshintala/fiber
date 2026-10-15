@@ -344,7 +344,10 @@ fn a_count_cut_off_by_the_bar_is_no_target() {
             .all(|target| target.id != TargetId::FindCount),
         "a count the bar cuts off is no target"
     );
-    assert!(crate::view::text(&buf).contains("⌕"), "the bar itself still draws");
+    assert!(
+        crate::view::text(&buf).contains("⌕"),
+        "the bar itself still draws"
+    );
 }
 
 #[test]

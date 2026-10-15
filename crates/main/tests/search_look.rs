@@ -78,11 +78,17 @@ fn has_reverse(output: &[u8]) -> bool {
         // Anything but digits and `;` is another sequence (a cursor
         // move, say): step one byte on, so a real SGR later on the same
         // stretch is still seen.
-        if !params.iter().all(|byte| byte.is_ascii_digit() || *byte == b';') {
+        if !params
+            .iter()
+            .all(|byte| byte.is_ascii_digit() || *byte == b';')
+        {
             rest = &rest[1..];
             continue;
         }
-        if params.split(|byte| *byte == b';').any(|param| param == b"7") {
+        if params
+            .split(|byte| *byte == b';')
+            .any(|param| param == b"7")
+        {
             return true;
         }
         rest = &rest[end + 1..];
@@ -132,7 +138,9 @@ fn slab_cells(grid: &Grid) -> Option<(u16, usize, usize)> {
     }
     // The slab's run: the contiguous `surface` run around the count,
     // so other `surface` cells on the row (a rail card, say) stay out.
-    let count_first = text.find("1 of 5").map(|byte| text[..byte].chars().count())?;
+    let count_first = text
+        .find("1 of 5")
+        .map(|byte| text[..byte].chars().count())?;
     let mut first = count_first;
     while first > 0 && grid.cell((first - 1) as u16, y).bg == SURFACE {
         first -= 1;
@@ -159,7 +167,10 @@ fn slab_cells(grid: &Grid) -> Option<(u16, usize, usize)> {
         return None;
     }
     // " ⌕ " in `attention`, the query bold, the █ and the count dim.
-    let at = first + content.find('⌕').map(|byte| content[..byte].chars().count())?;
+    let at = first
+        + content
+            .find('⌕')
+            .map(|byte| content[..byte].chars().count())?;
     if grid.cell(at as u16, y).fg != ATTENTION {
         return None;
     }
@@ -168,9 +179,7 @@ fn slab_cells(grid: &Grid) -> Option<(u16, usize, usize)> {
         return None;
     }
     let block = query + 4;
-    if grid.cell(block as u16, y).symbol != "█"
-        || !grid.cell(block as u16, y).dim
-    {
+    if grid.cell(block as u16, y).symbol != "█" || !grid.cell(block as u16, y).dim {
         return None;
     }
     let count_at = last - 6;
@@ -315,19 +324,14 @@ fn the_search_bar_matches_the_doc() {
     assert!(plain > 0, "a match is marked");
     assert!(current > 0, "the current match is brighter");
     // No cell takes the reverse attribute.
-    assert!(
-        !has_reverse(&run.output()),
-        "no cell is reversed"
-    );
+    assert!(!has_reverse(&run.output()), "no cell is reversed");
 }
 
 #[test]
 fn a_drag_selects_and_copies() {
     let setup = setup_with_reply("drag across this line to copy it");
     let mut run = turned(&setup, "go");
-    let grid = run.wait_screen("the reply", |grid| {
-        grid.contents.contains("drag across")
-    });
+    let grid = run.wait_screen("the reply", |grid| grid.contents.contains("drag across"));
     let y = row_with(&grid, "drag across");
     let from = col_at(&grid, y, "across");
     let to = from + 5;
@@ -353,10 +357,7 @@ fn a_drag_selects_and_copies() {
             "the dragged cell ({x}, {y}) is selected"
         );
     }
-    assert!(
-        !has_reverse(&run.output()[before..]),
-        "no cell is reversed"
-    );
+    assert!(!has_reverse(&run.output()[before..]), "no cell is reversed");
     // On release "Copied" shows in `info` at the top-right, row 0 with
     // the bar closed.
     let copied = row_with(&grid, "Copied");
@@ -373,9 +374,7 @@ fn copied_sits_below_the_search_box() {
     let mut run = turned(&setup, "go");
     run.write(b"\x06lock");
     // The bar opens first: its content row anchors the slab.
-    let grid = run.wait_screen("the search bar", |grid| {
-        grid.contents.contains('⌕')
-    });
+    let grid = run.wait_screen("the search bar", |grid| grid.contents.contains('⌕'));
     let bar = row_with(&grid, "⌕");
     let grid = run.wait_screen("the reply under the bar", |grid| {
         grid.contents.contains("drag across")

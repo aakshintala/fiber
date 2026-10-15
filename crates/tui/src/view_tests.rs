@@ -2234,8 +2234,13 @@ fn copied_shows_on_the_conversations_top_row_until_the_next_key() {
         .expect("Copied shows");
     assert_eq!(row, 0);
     let line = text(&buf).lines().nth(row).expect("its row").to_owned();
-    let col = u16::try_from(line[..line.find("Copied").expect("its column")].chars().count().saturating_sub(1))
-        .expect("a column");
+    let col = u16::try_from(
+        line[..line.find("Copied").expect("its column")]
+            .chars()
+            .count()
+            .saturating_sub(1),
+    )
+    .expect("a column");
     for dx in 0..8 {
         let cell = &buf[(col + dx, 0)];
         assert_eq!(cell.fg, Role::Info.color(), "Copied {dx}");
@@ -2264,11 +2269,17 @@ fn copied_sits_on_the_row_under_the_bar() {
         }
         let shown = text(&buffer(&app, 60, 24));
         let row = u16::try_from(
-            shown.lines().position(|line| line.contains("copy this")).expect("the reply"),
+            shown
+                .lines()
+                .position(|line| line.contains("copy this"))
+                .expect("the reply"),
         )
         .expect("a row");
         select(&mut app, 60, 24, (0, row), (3, row));
-        assert!(text(&buffer(&app, 60, 24)).contains("Copied"), "the drag copies");
+        assert!(
+            text(&buffer(&app, 60, 24)).contains("Copied"),
+            "the drag copies"
+        );
         let area = Rect::new(0, 0, width, height);
         let mut buf = Buffer::empty(area);
         let mut targets = Vec::new();

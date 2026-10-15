@@ -143,7 +143,10 @@ fn the_cursor_hides_with_search_open() {
     // "The input box", "Search").
     for cell in buf.content.iter() {
         if cell.symbol() == "█" {
-            assert!(cell.modifier.contains(ratatui::style::Modifier::DIM), "only the bar's block shows");
+            assert!(
+                cell.modifier.contains(ratatui::style::Modifier::DIM),
+                "only the bar's block shows"
+            );
         }
     }
 }

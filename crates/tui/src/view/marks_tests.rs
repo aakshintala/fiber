@@ -158,10 +158,20 @@ fn copied_above_the_notice_rows() {
     // the `surface` tint.
     let (buf, _) = draw(&app, 60, 10);
     let screen = super::super::text(&buf);
-    let at = screen.lines().position(|line| line.contains("Copied")).expect("Copied shows");
+    let at = screen
+        .lines()
+        .position(|line| line.contains("Copied"))
+        .expect("Copied shows");
     assert_eq!(at, 0);
     let col = u16::try_from(
-        screen.lines().nth(at).map(|line| line[..line.find("Copied").expect("its column")].chars().count())
+        screen
+            .lines()
+            .nth(at)
+            .map(|line| {
+                line[..line.find("Copied").expect("its column")]
+                    .chars()
+                    .count()
+            })
             .expect("its column")
             .saturating_sub(1),
     )
@@ -449,15 +459,11 @@ fn surface_run(buf: &Buffer, y: u16) -> (u16, u16) {
         .find(|x| buf.cell((*x, y)).is_some_and(|cell| cell.symbol() == "⌕"))
         .expect("the search glyph");
     let mut first = at;
-    while first > area.left()
-        && buf.cell((first - 1, y)).is_some_and(|cell| cell.bg == tint)
-    {
+    while first > area.left() && buf.cell((first - 1, y)).is_some_and(|cell| cell.bg == tint) {
         first -= 1;
     }
     let mut last = at;
-    while last + 1 < area.right()
-        && buf.cell((last + 1, y)).is_some_and(|cell| cell.bg == tint)
-    {
+    while last + 1 < area.right() && buf.cell((last + 1, y)).is_some_and(|cell| cell.bg == tint) {
         last += 1;
     }
     (first, last)
@@ -471,18 +477,42 @@ fn the_bar_rect_pins_the_widths_and_the_floors() {
     assert_eq!(bar_rect(Rect::new(0, 0, 40, 0)), None);
     // Under 6 columns the bar draws nothing; at 6 it is 5 wide.
     assert_eq!(bar_rect(Rect::new(0, 0, 5, 10)), None);
-    assert_eq!(bar_rect(Rect::new(0, 0, 6, 10)), Some(Rect::new(0, 1, 5, 3)));
+    assert_eq!(
+        bar_rect(Rect::new(0, 0, 6, 10)),
+        Some(Rect::new(0, 1, 5, 3))
+    );
     // The bar caps at 40: 39, 40 and 40 wide at areas 40, 41 and 42.
-    assert_eq!(bar_rect(Rect::new(0, 0, 40, 10)).map(|rect| rect.width), Some(39));
-    assert_eq!(bar_rect(Rect::new(0, 0, 41, 10)).map(|rect| rect.width), Some(40));
-    assert_eq!(bar_rect(Rect::new(0, 0, 42, 10)).map(|rect| rect.width), Some(40));
+    assert_eq!(
+        bar_rect(Rect::new(0, 0, 40, 10)).map(|rect| rect.width),
+        Some(39)
+    );
+    assert_eq!(
+        bar_rect(Rect::new(0, 0, 41, 10)).map(|rect| rect.width),
+        Some(40)
+    );
+    assert_eq!(
+        bar_rect(Rect::new(0, 0, 42, 10)).map(|rect| rect.width),
+        Some(40)
+    );
     // The right edge sits one column left of the area's right edge.
-    assert_eq!(bar_rect(Rect::new(10, 0, 41, 10)), Some(Rect::new(10, 1, 40, 3)));
+    assert_eq!(
+        bar_rect(Rect::new(10, 0, 41, 10)),
+        Some(Rect::new(10, 1, 40, 3))
+    );
     // Five rows take the slab's three content rows; four take the bare
     // content row, on the area's first row.
-    assert_eq!(bar_rect(Rect::new(0, 0, 80, 5)), Some(Rect::new(39, 1, 40, 3)));
-    assert_eq!(bar_rect(Rect::new(0, 0, 80, 4)), Some(Rect::new(39, 0, 40, 1)));
-    assert_eq!(bar_rect(Rect::new(0, 0, 80, 1)), Some(Rect::new(39, 0, 40, 1)));
+    assert_eq!(
+        bar_rect(Rect::new(0, 0, 80, 5)),
+        Some(Rect::new(39, 1, 40, 3))
+    );
+    assert_eq!(
+        bar_rect(Rect::new(0, 0, 80, 4)),
+        Some(Rect::new(39, 0, 40, 1))
+    );
+    assert_eq!(
+        bar_rect(Rect::new(0, 0, 80, 1)),
+        Some(Rect::new(39, 0, 40, 1))
+    );
 }
 
 #[test]
@@ -504,7 +534,10 @@ fn the_bar_rect_pins_the_no_color_floor() {
     });
     // The box's two sides take two columns, so the floor is one higher.
     assert_eq!(bar_rect(Rect::new(0, 0, 6, 10)), None);
-    assert_eq!(bar_rect(Rect::new(0, 0, 7, 10)), Some(Rect::new(0, 1, 6, 3)));
+    assert_eq!(
+        bar_rect(Rect::new(0, 0, 7, 10)),
+        Some(Rect::new(0, 1, 6, 3))
+    );
 }
 
 #[test]
@@ -546,14 +579,25 @@ fn the_bar_draws_its_prefix_query_block_and_count() {
     }
     // The block dim.
     assert_eq!(cell(first + 5).symbol(), "█");
-    assert!(cell(first + 5).modifier.contains(ratatui::style::Modifier::DIM));
+    assert!(
+        cell(first + 5)
+            .modifier
+            .contains(ratatui::style::Modifier::DIM)
+    );
     // The count dim and right-aligned with one trailing blank.
-    let text: String = (first..=last).map(|x| cell(x).symbol().to_owned()).collect();
+    let text: String = (first..=last)
+        .map(|x| cell(x).symbol().to_owned())
+        .collect();
     assert!(text.ends_with("1 of 1 "), "{text:?}");
-    let at = text[..text.find("1 of 1 ").expect("the count")].chars().count();
+    let at = text[..text.find("1 of 1 ").expect("the count")]
+        .chars()
+        .count();
     for dx in 0..6 {
         let x = first + u16::try_from(at + dx).expect("a column");
-        assert!(cell(x).modifier.contains(ratatui::style::Modifier::DIM), "count {x}");
+        assert!(
+            cell(x).modifier.contains(ratatui::style::Modifier::DIM),
+            "count {x}"
+        );
     }
     // Five rows: the edges above and below, one blank row inside each.
     for (row, want) in [(0, "▄"), (4, "▀")] {
@@ -573,7 +617,11 @@ fn the_bar_draws_its_prefix_query_block_and_count() {
     // The count's cells are the click target; nothing else is.
     assert_eq!(targets.len(), 1);
     assert_eq!(targets[0].id, crate::mouse::TargetId::FindCount);
-    assert_eq!(targets[0].rect, Rect::new(last - 6, y, 6, 1), "the count's cells");
+    assert_eq!(
+        targets[0].rect,
+        Rect::new(last - 6, y, 6, 1),
+        "the count's cells"
+    );
 }
 
 #[test]
@@ -584,7 +632,9 @@ fn a_count_cut_to_nothing_is_no_target_and_one_cell_is() {
     let (buf, targets) = bar_into(area, &find_bar(&"z".repeat(34), "no matches"));
     assert!(bar_row(&buf) < 10, "the bar itself still draws");
     assert!(
-        targets.iter().all(|target| target.id != crate::mouse::TargetId::FindCount),
+        targets
+            .iter()
+            .all(|target| target.id != crate::mouse::TargetId::FindCount),
         "a count cut to nothing is no target"
     );
     let (buf, targets) = bar_into(area, &find_bar(&"z".repeat(33), "no matches"));
@@ -592,7 +642,11 @@ fn a_count_cut_to_nothing_is_no_target_and_one_cell_is() {
     let (first, last) = surface_run(&buf, y);
     assert_eq!((first, last), (0, 39));
     assert_eq!(targets.len(), 1);
-    assert_eq!(targets[0].rect, Rect::new(last - 1, y, 1, 1), "the one kept cell");
+    assert_eq!(
+        targets[0].rect,
+        Rect::new(last - 1, y, 1, 1),
+        "the one kept cell"
+    );
 }
 
 #[test]
@@ -603,7 +657,10 @@ fn an_overlong_query_cuts_at_the_left_and_keeps_the_block() {
     let y = bar_row(&buf);
     let text: String = (0..40).map(|x| buf[(x, y)].symbol().to_owned()).collect();
     assert!(text.starts_with(" ⌕ yyy"), "{text:?}");
-    assert!(text.contains("tail█"), "the kept end and the block: {text:?}");
+    assert!(
+        text.contains("tail█"),
+        "the kept end and the block: {text:?}"
+    );
     // The cursor sits on the drawn block.
     let cursor = super::bar_cursor(&bar, area).expect("the cursor");
     assert_eq!(buf[(cursor.x, cursor.y)].symbol(), "█");
@@ -618,7 +675,10 @@ fn a_wide_query_cuts_on_a_grapheme_boundary() {
     let (buf, _) = bar_into(area, &bar);
     let y = bar_row(&buf);
     let text: String = (0..41).map(|x| buf[(x, y)].symbol().to_owned()).collect();
-    assert!(text.contains("tail█"), "the kept end and the block: {text:?}");
+    assert!(
+        text.contains("tail█"),
+        "the kept end and the block: {text:?}"
+    );
     let cursor = super::bar_cursor(&bar, area).expect("the cursor");
     assert_eq!(buf[(cursor.x, cursor.y)].symbol(), "█");
     assert_eq!((cursor.x, cursor.y), (37, y));
@@ -632,13 +692,20 @@ fn an_empty_query_reads_type_to_search() {
     let (buf, _) = draw(&app, 80, 24);
     let y = bar_row(&buf);
     let (first, last) = surface_run(&buf, y);
-    let text: String = (first..=last).map(|x| buf[(x, y)].symbol().to_owned()).collect();
+    let text: String = (first..=last)
+        .map(|x| buf[(x, y)].symbol().to_owned())
+        .collect();
     assert!(text.starts_with(" ⌕ █"), "{text:?}");
     assert!(text.ends_with("type to search "), "{text:?}");
-    let at = text[..text.find("type to search").expect("the hint")].chars().count();
+    let at = text[..text.find("type to search").expect("the hint")]
+        .chars()
+        .count();
     for dx in 0.."type to search".len() {
         let cell = &buf[(first + u16::try_from(at + dx).expect("a column"), y)];
-        assert!(cell.modifier.contains(ratatui::style::Modifier::DIM), "the hint is dim");
+        assert!(
+            cell.modifier.contains(ratatui::style::Modifier::DIM),
+            "the hint is dim"
+        );
     }
 }
 
@@ -689,32 +756,60 @@ fn a_click_on_the_slab_falls_through() {
 #[test]
 fn in_colour_the_marks_carry_no_modifier() {
     use super::{CURRENT, MATCH};
-    assert!(!SELECTION.add_modifier.contains(ratatui::style::Modifier::REVERSED));
+    assert!(
+        !SELECTION
+            .add_modifier
+            .contains(ratatui::style::Modifier::REVERSED)
+    );
     assert_eq!(SELECTION.bg, Some(Role::Selection.color()));
     assert_eq!(
         (MATCH.bg, MATCH.fg),
-        (Some(Role::Match.color()), Some(ratatui::style::Color::Rgb(255, 255, 255)))
+        (
+            Some(Role::Match.color()),
+            Some(ratatui::style::Color::Rgb(255, 255, 255))
+        )
     );
     assert_eq!(
         (CURRENT.bg, CURRENT.fg),
-        (Some(Role::MatchCurrent.color()), Some(crate::look::BAR_TEXT))
+        (
+            Some(Role::MatchCurrent.color()),
+            Some(crate::look::BAR_TEXT)
+        )
     );
     for style in [SELECTION, MATCH, CURRENT] {
-        assert_eq!(style.add_modifier, ratatui::style::Modifier::empty(), "{style:?}");
+        assert_eq!(
+            style.add_modifier,
+            ratatui::style::Modifier::empty(),
+            "{style:?}"
+        );
     }
     let mut app = replied(40, 12, "alpha beta needle one needle two gamma");
     let text = super::super::text(&draw(&app, 40, 12).0);
-    let row =
-        u16::try_from(text.lines().position(|row| row.contains("alpha")).expect("the reply's row"))
-            .expect("a row");
-    let col = u16::try_from(text.lines().find_map(|row| row.find("alpha")).expect("alpha"))
-        .expect("a column");
-    assert!(matches!(select(&mut app, 40, 12, (col, row), (col + 4, row)), Effect::Copy(_)));
+    let row = u16::try_from(
+        text.lines()
+            .position(|row| row.contains("alpha"))
+            .expect("the reply's row"),
+    )
+    .expect("a row");
+    let col = u16::try_from(
+        text.lines()
+            .find_map(|row| row.find("alpha"))
+            .expect("alpha"),
+    )
+    .expect("a column");
+    assert!(matches!(
+        select(&mut app, 40, 12, (col, row), (col + 4, row)),
+        Effect::Copy(_)
+    ));
     search(&mut app, "needle");
     let (buf, _) = draw(&app, 40, 12);
     let selected = (col, row);
     assert_eq!(buf[selected].bg, Role::Selection.color());
-    assert!(!buf[selected].modifier.contains(ratatui::style::Modifier::REVERSED));
+    assert!(
+        !buf[selected]
+            .modifier
+            .contains(ratatui::style::Modifier::REVERSED)
+    );
     let current = (0..40)
         .flat_map(|x| (0..12).map(move |y| (x, y)))
         .find(|at| buf[*at].bg == Role::MatchCurrent.color())
@@ -739,9 +834,14 @@ fn the_bar_hides_while_the_results_are_open() {
     assert!(app.results_open(), "the results are open");
     let (buf, targets) = draw(&app, 40, 12);
     let text = super::super::text(&buf);
-    assert!(!text.contains("⌕"), "the bar draws nothing over the results");
     assert!(
-        targets.iter().all(|target| target.id != TargetId::FindCount),
+        !text.contains("⌕"),
+        "the bar draws nothing over the results"
+    );
+    assert!(
+        targets
+            .iter()
+            .all(|target| target.id != TargetId::FindCount),
         "no count target over the results"
     );
     // Esc closes the view; the bar draws again with its query and
@@ -752,7 +852,9 @@ fn the_bar_hides_while_the_results_are_open() {
     let text = super::super::text(&buf);
     assert!(text.contains("⌕ needle"), "the bar draws again: {text:?}");
     assert!(
-        targets.iter().any(|target| target.id == TargetId::FindCount),
+        targets
+            .iter()
+            .any(|target| target.id == TargetId::FindCount),
         "the count target draws again"
     );
 }
@@ -798,4 +900,3 @@ fn the_bar_boxes_with_no_colour() {
     assert_eq!((cursor.x, cursor.y), (6, y));
     assert_eq!(buf[(cursor.x, cursor.y)].symbol(), "█");
 }
-

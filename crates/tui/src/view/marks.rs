@@ -24,9 +24,7 @@ const MATCH: Style = Style::new().bg(Role::Match.color()).fg(TAB_BAR);
 
 /// The current match's highlight: the brighter `match_current` tint
 /// with black text, with no modifier (`docs/tui.md`, "Search").
-const CURRENT: Style = Style::new()
-    .bg(Role::MatchCurrent.color())
-    .fg(BAR_TEXT);
+const CURRENT: Style = Style::new().bg(Role::MatchCurrent.color()).fg(BAR_TEXT);
 
 /// The selection's mark with no colour: reversed, so it shows
 /// (`docs/tui.md`, "Look").
@@ -186,7 +184,11 @@ const OVERHEAD: usize = 6;
 fn content_row(rect: Rect) -> (u16, u16, usize) {
     let y = rect.y.saturating_add(u16::from(rect.height == 3));
     if crate::surface::boxed() {
-        (rect.x.saturating_add(1), y, usize::from(rect.width.saturating_sub(2)))
+        (
+            rect.x.saturating_add(1),
+            y,
+            usize::from(rect.width.saturating_sub(2)),
+        )
     } else {
         (rect.x, y, usize::from(rect.width))
     }
@@ -255,8 +257,7 @@ pub(super) fn bar_rect(area: Rect) -> Option<Rect> {
         return None;
     }
     let width =
-        u16::try_from(BAR_WIDTH.min(usize::from(area.width).saturating_sub(1)))
-            .unwrap_or(u16::MAX);
+        u16::try_from(BAR_WIDTH.min(usize::from(area.width).saturating_sub(1))).unwrap_or(u16::MAX);
     let x = area.right().saturating_sub(1).saturating_sub(width);
     if area.height >= 5 {
         Some(Rect::new(x, area.y.saturating_add(1), width, 3))
@@ -276,7 +277,10 @@ fn draw_bar(bar: &FindBar, area: Rect, buf: &mut Buffer, targets: &mut Vec<Targe
         return;
     };
     let slab = rect.height == 3;
-    let edges = crate::surface::Edges { top: slab, bottom: slab };
+    let edges = crate::surface::Edges {
+        top: slab,
+        bottom: slab,
+    };
     if crate::surface::boxed() {
         for row in 0..rect.height {
             let y = rect.y.saturating_add(row);
@@ -323,15 +327,19 @@ fn draw_bar(bar: &FindBar, area: Rect, buf: &mut Buffer, targets: &mut Vec<Targe
     left = left.saturating_sub(usize::from(end.saturating_sub(x)));
     x = end;
     let count_x = x;
-    let (end, _) =
-        buf.set_stringn(x, y, &count, left, Style::new().add_modifier(Modifier::DIM));
+    let (end, _) = buf.set_stringn(x, y, &count, left, Style::new().add_modifier(Modifier::DIM));
     left = left.saturating_sub(usize::from(end.saturating_sub(x)));
     x = end;
     buf.set_stringn(x, y, " ", left, Style::new());
     if !count.is_empty() {
         targets.push(Target {
             id: TargetId::FindCount,
-            rect: Rect::new(count_x, y, u16::try_from(count_width).unwrap_or(u16::MAX), 1),
+            rect: Rect::new(
+                count_x,
+                y,
+                u16::try_from(count_width).unwrap_or(u16::MAX),
+                1,
+            ),
         });
     }
 }
