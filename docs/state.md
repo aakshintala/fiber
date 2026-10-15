@@ -343,6 +343,19 @@ What is recorded:
   rejections included, with applying it excluded: the three startup lines
   are written before the session attaches, so they sit in the pid file
   with no `session_id`.
+  Installed for the hub are `hub.session_start`, `hub.resume` and
+  `hub.subscribe_replay`, and for listing, `sessions.list`.
+  `hub.session_start` covers a start from the request until the session's
+  socket accepts, excluding the summary handshake for a first prompt; a
+  rejected start measures through its failure. `hub.resume` covers one
+  reach for the session, including gate contention, retries and failures.
+  `hub.subscribe_replay` covers one actual kept-subscription replay, from
+  its write through the matching acknowledgement, or through its failure,
+  cancellation or disconnect before it. Installed for the door is
+  `startup.socket`: socket preparation until the bound listener is ready,
+  on new and resumed sessions alike. Installed for listing is
+  `sessions.list`: one listing attempt from entry through feed settlement,
+  snapshot and row reads, including invalid arguments.
   Request, model, hook and network timings may overlap as nested
   measurements, never additive phases.
 

@@ -150,6 +150,8 @@ pub enum Op {
     HubResume,
     /// Replaying a subscription to its acknowledgement.
     HubSubscribeReplay,
+    /// Listing a project's sessions.
+    SessionsList,
     /// Opening a connection.
     NetConnect,
     /// A `sessions search` command, at its entry.
@@ -190,6 +192,7 @@ impl Op {
             Self::HubSessionStart => "hub.session_start",
             Self::HubResume => "hub.resume",
             Self::HubSubscribeReplay => "hub.subscribe_replay",
+            Self::SessionsList => "sessions.list",
             Self::NetConnect => "net.connect",
             Self::CliSessionsSearch => "cli.sessions_search",
         }
