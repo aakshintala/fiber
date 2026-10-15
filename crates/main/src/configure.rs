@@ -249,6 +249,18 @@ impl tui::Configure for Seam {
         login::browser_login(&self.home, name, shown, clock)
     }
 
+    fn reviewer_models(
+        &self,
+        name: &str,
+        clock: std::sync::Arc<dyn contract::clock::Clock>,
+    ) -> Result<tui::ReviewerModels, ConfigureError> {
+        login::reviewer_models(&self.home, name, clock)
+    }
+
+    fn set_reviewer(&self, name: &str, id: &str) -> Result<(), ConfigureError> {
+        login::set_reviewer(&self.home, name, id)
+    }
+
     fn themes(&self, workspace: &Path) -> Vec<String> {
         match self.load(workspace) {
             Ok(config) => crate::theme_setting::names(&self.home, &|name| {

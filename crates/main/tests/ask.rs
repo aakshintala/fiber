@@ -4139,3 +4139,157 @@ fn a_per_run_cache_lifetime_marks_anthropic_markers_without_ttl() {
         assert_eq!(marker, &json!({"type": "ephemeral"}));
     }
 }
+
+/// Installs the synthetic provider `syn` with the session model `sess`
+/// and three reviewer candidates, `over`, `prov` and `pkg`, behind one
+/// loopback server: `reviewer` is the package default, if any. Every
+/// request lands on `server`, told apart by its `model`.
+fn review_fixture(setup: &Setup, server: &ProviderServer, reviewer: Option<&str>) {
+    let source = setup.root.path().join("src");
+    let models: Vec<Value> = ["sess", "over", "prov", "pkg"]
+        .iter()
+        .map(|id| {
+            json!({"id": id, "protocol": "openai-responses",
+                   "base_url": format!("{}/v1", server.url()),
+                   "context_window": 100000})
+        })
+        .collect();
+    let mut manifest = json!({"name": "syn", "version": "v0.0.0", "fiber": "0.0.0", "api": 1});
+    if let Some(into) = manifest.as_object_mut() {
+        into.insert(
+            "providers".to_owned(),
+            json!({"syn": [format!("{}/v1", server.url())]}),
+        );
+    }
+    let mut data = json!({"name": "syn", "credential": {"env": "SYN_API_KEY"}, "models": models});
+    if let Some(reviewer) = reviewer {
+        data["reviewer_model"] = json!(reviewer);
+    }
+    write(&source.join("extension.json"), &manifest);
+    write(&source.join("providers/syn.json"), &data);
+    extensions::plan(
+        &setup.home(),
+        &extensions::Request::Path(source),
+        "0.0.0",
+        &extensions::Origin::github(),
+        &*fakes::clock::FakeClock::new(),
+    )
+    .unwrap()
+    .commit()
+    .unwrap();
+}
+
+/// Every `model` the fake server was asked for, in request order.
+fn requested_models(server: &ProviderServer) -> Vec<String> {
+    server
+        .requests()
+        .iter()
+        .map(|request| {
+            serde_json::from_slice::<Value>(&request.body).unwrap()["model"]
+                .as_str()
+                .unwrap()
+                .to_owned()
+        })
+        .collect()
+}
+
+/// The reviewed call's `permission_resolved` line.
+fn resolved(run: &Run) -> &Value {
+    run.lines
+        .iter()
+        .find(|line| line["kind"] == "permission_resolved")
+        .expect("the reviewed call resolves")
+}
+
+#[test]
+fn an_explicit_reviewer_model_wins_over_provider_and_package_picks() {
+    let setup = Setup::new_with_started_deadline();
+    let server = ProviderServer::start([shell_true_call(), allow_text(), hello()]).unwrap();
+    review_fixture(&setup, &server, Some("pkg"));
+    let run = setup.fiber_with_env(
+        &[
+            "ask",
+            "-c",
+            "reviewer.model=syn/over",
+            "-c",
+            "providers.syn.reviewer_model=prov",
+            "--model",
+            "syn/sess",
+            "Run true.",
+        ],
+        &[("SYN_API_KEY", "sk-test-syn")],
+    );
+    assert_eq!(run.code, Some(0), "stderr: {}", run.stderr);
+    let resolved = resolved(&run);
+    assert_eq!(resolved["payload"]["decided_by"], "reviewer");
+    assert_eq!(resolved["payload"]["reviewer"]["model"], "syn/over");
+    assert_eq!(requested_models(&server), ["sess", "over", "sess"]);
+}
+
+#[test]
+fn a_provider_reviewer_pick_wins_over_the_package_default() {
+    let setup = Setup::new_with_started_deadline();
+    let server = ProviderServer::start([shell_true_call(), allow_text(), hello()]).unwrap();
+    review_fixture(&setup, &server, Some("pkg"));
+    let run = setup.fiber_with_env(
+        &[
+            "ask",
+            "-c",
+            "providers.syn.reviewer_model=prov",
+            "--model",
+            "syn/sess",
+            "Run true.",
+        ],
+        &[("SYN_API_KEY", "sk-test-syn")],
+    );
+    assert_eq!(run.code, Some(0), "stderr: {}", run.stderr);
+    let resolved = resolved(&run);
+    assert_eq!(resolved["payload"]["decided_by"], "reviewer");
+    assert_eq!(resolved["payload"]["reviewer"]["model"], "syn/prov");
+    assert_eq!(requested_models(&server), ["sess", "prov", "sess"]);
+}
+
+#[test]
+fn the_package_reviewer_default_decides_when_nothing_is_saved() {
+    let setup = Setup::new_with_started_deadline();
+    let server = ProviderServer::start([shell_true_call(), allow_text(), hello()]).unwrap();
+    review_fixture(&setup, &server, Some("pkg"));
+    let run = setup.fiber_with_env(
+        &["ask", "--model", "syn/sess", "Run true."],
+        &[("SYN_API_KEY", "sk-test-syn")],
+    );
+    assert_eq!(run.code, Some(0), "stderr: {}", run.stderr);
+    let resolved = resolved(&run);
+    assert_eq!(resolved["payload"]["decided_by"], "reviewer");
+    assert_eq!(resolved["payload"]["reviewer"]["model"], "syn/pkg");
+    assert_eq!(requested_models(&server), ["sess", "pkg", "sess"]);
+}
+
+#[test]
+fn with_no_reviewer_anywhere_the_call_is_denied_with_no_reviewer_request() {
+    let setup = Setup::new_with_started_deadline();
+    let server = ProviderServer::start([shell_true_call(), hello()]).unwrap();
+    review_fixture(&setup, &server, None);
+    let run = setup.fiber_with_env(
+        &["ask", "--model", "syn/sess", "Run true."],
+        &[("SYN_API_KEY", "sk-test-syn")],
+    );
+    assert_eq!(run.code, Some(0), "stderr: {}", run.stderr);
+    let resolved = resolved(&run);
+    assert_eq!(resolved["payload"]["decision"], "deny");
+    assert_eq!(resolved["payload"]["decided_by"], "no_reviewer");
+    assert_eq!(resolved["payload"]["reason"], r#loop::NO_MODEL_MESSAGE);
+    // The once-per-session notice before the escalation it explains.
+    let notices: Vec<_> = run
+        .lines
+        .iter()
+        .filter(|line| line["kind"] == "notice")
+        .collect();
+    assert_eq!(notices.len(), 1, "{:?}", run.kinds());
+    assert_eq!(notices[0]["payload"]["code"], "no_model");
+    assert_eq!(notices[0]["payload"]["message"], r#loop::NO_MODEL_MESSAGE);
+    // Only the session model was ever requested: nothing fell back to it
+    // as a reviewer, and no reviewer request ran. The second request is
+    // the session continuing after the denial.
+    assert_eq!(requested_models(&server), ["sess", "sess"]);
+}

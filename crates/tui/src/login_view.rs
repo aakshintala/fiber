@@ -164,6 +164,13 @@ enum Mode {
     /// A browser login running: its ticket, the provider, what it showed
     /// and the worker, owned here so every way out cancels it.
     Waiting(Waiting),
+    /// A reviewer read in flight after a stored credential: its ticket
+    /// and the provider. The key is already stored; only the choice is
+    /// pending, so Esc returns to the rows storing nothing more.
+    Preparing(Preparing),
+    /// The reviewer picker: the provider's models with the saved pick
+    /// preselected. Holds no secret.
+    Choices(Choices),
     /// A login's end, kept until Esc or the ✕.
     Ended(Ended),
 }
@@ -175,6 +182,65 @@ enum Outcome {
     Done,
     /// The login failed with the seam's message.
     Failed(String),
+    /// Stored, with this note: an empty or unreadable model list, or a
+    /// reviewer save that failed naming its key. The credential stands.
+    StoredWithNote(String),
+}
+
+/// A reviewer read in flight after a stored credential.
+#[derive(Debug)]
+struct Preparing {
+    /// The read's ticket: only its result lands.
+    ticket: LoginTicket,
+    /// The provider logging in.
+    name: String,
+}
+
+/// The reviewer picker.
+#[derive(Debug)]
+struct Choices {
+    /// The provider logging in.
+    name: String,
+    /// The provider's model IDs, in its order.
+    models: Vec<String>,
+    /// The highlighted row, if any: the preselected row at open, else
+    /// none until the person moves or clicks.
+    cursor: Option<usize>,
+    /// The preselected model ID: the saved pick or package default, kept
+    /// even when the list does not name it.
+    selected: Option<String>,
+    /// Discovery notices, shown under the list.
+    notices: Vec<String>,
+}
+
+impl Choices {
+    /// The picker over `choices`: the preselected row opens highlighted;
+    /// a stale or absent preselection opens with no row highlighted.
+    fn open(name: String, choices: crate::configure::ReviewerModels) -> Self {
+        let cursor = choices
+            .selected
+            .as_deref()
+            .and_then(|id| choices.models.iter().position(|model| model == id));
+        Self {
+            name,
+            models: choices.models,
+            cursor,
+            selected: choices.selected,
+            notices: choices.notices,
+        }
+    }
+
+    /// Whether `id` is the preselected row.
+    fn is_saved(&self, id: &str) -> bool {
+        self.selected.as_deref().is_some_and(|saved| saved == id)
+    }
+
+    /// Whether the preselection names no listed row.
+    fn is_stale(&self) -> bool {
+        self.selected
+            .as_deref()
+            .is_some_and(|saved| !self.models.iter().any(|model| model == saved))
+    }
 }
 
 /// A login's end: the provider and how it ended.
@@ -264,7 +330,11 @@ impl Login {
     pub(crate) fn draw(&self, area: Rect, buf: &mut Buffer, targets: &mut Vec<Target>) {
         if matches!(
             self.mode,
-            Mode::Waiting(_) | Mode::Panel(_) | Mode::Ended(_)
+            Mode::Waiting(_)
+                | Mode::Panel(_)
+                | Mode::Preparing(_)
+                | Mode::Choices(_)
+                | Mode::Ended(_)
         ) {
             self.draw_step(area, buf, targets);
             return;
@@ -401,10 +471,19 @@ impl Login {
     /// Handles one key.
     pub(crate) fn key(&mut self, key: &Key, ctx: &Ctx<'_>) -> Act {
         if matches!(self.mode, Mode::Panel(_)) {
-            self.panel_key(key, ctx);
-            Act::Stay
+            self.panel_key(key, ctx)
         } else if matches!(self.mode, Mode::Waiting(_)) {
             self.waiting_key(key)
+        } else if matches!(self.mode, Mode::Preparing(_)) {
+            // The read is in flight: Esc returns to the rows storing
+            // nothing more, and anything else waits on.
+            if *key == Key::Esc {
+                self.mode = Mode::Rows;
+                self.said.clear();
+            }
+            Act::Stay
+        } else if matches!(self.mode, Mode::Choices(_)) {
+            self.choices_key(key, ctx)
         } else if matches!(self.mode, Mode::Ended(_)) {
             // Done and failed stay until Esc or the ✕; Esc goes back
             // to the list with the focus kept.
@@ -552,21 +631,32 @@ impl Login {
     }
 
     /// Keeps the started worker when waiting on its ticket; a worker for
-    /// another ticket is dropped, cancelling it at once.
+    /// another ticket is dropped, cancelling it at once. A preparing or
+    /// choosing view holds no worker: the browser run already ended, and
+    /// a reviewer-only read owns no cancel handle.
     pub(crate) fn started(&mut self, worker: LoginWorker) {
         match &mut self.mode {
             Mode::Waiting(waiting) if waiting.ticket == worker.ticket() => {
                 waiting.worker = Some(worker);
             }
-            Mode::Rows | Mode::Panel(_) | Mode::Waiting(_) | Mode::Ended(_) => drop(worker),
+            Mode::Rows
+            | Mode::Panel(_)
+            | Mode::Waiting(_)
+            | Mode::Preparing(_)
+            | Mode::Choices(_)
+            | Mode::Ended(_) => drop(worker),
         }
     }
 
     /// Folds the waiting ticket's progress into the view: an event for
     /// another ticket changes nothing and opens nothing. `Open` returns
-    /// the URL to open; the end stays as the done or failed step until
-    /// Esc or the ✕.
+    /// the URL to open; reviewer events return `None`. A successful
+    /// browser `Done` keeps its ticket through preparation into the
+    /// choices; any other end stays as its step until Esc or the ✕.
     pub(crate) fn step(&mut self, ticket: LoginTicket, step: LoginStep) -> Option<String> {
+        if let LoginStep::Reviewer(result) = step {
+            return self.step_reviewer(ticket, result);
+        }
         let Mode::Waiting(waiting) = &mut self.mode else {
             return None;
         };
@@ -584,30 +674,88 @@ impl Login {
             }
             LoginStep::Done(result) => {
                 let name = waiting.name.clone();
-                let outcome = match result {
-                    Ok(_) => Outcome::Done,
-                    Err(error) => Outcome::Failed(error.message),
-                };
-                self.mode = Mode::Ended(Ended { name, outcome });
+                match result {
+                    // The credential is stored; the reviewer stage ends
+                    // the login, on this same ticket.
+                    Ok(_) => {
+                        self.mode = Mode::Preparing(Preparing { ticket, name });
+                    }
+                    Err(error) => {
+                        self.mode = Mode::Ended(Ended {
+                            name,
+                            outcome: Outcome::Failed(error.message),
+                        });
+                    }
+                }
                 None
             }
+            LoginStep::Reviewer(_) => None,
         }
     }
 
+    /// Folds the read's result into a preparing view on its ticket: the
+    /// choices, or the stored end with its note. Any other mode or ticket
+    /// changes nothing: a late result cannot reopen or write.
+    fn step_reviewer(
+        &mut self,
+        ticket: LoginTicket,
+        result: Result<crate::configure::ReviewerModels, crate::configure::ConfigureError>,
+    ) -> Option<String> {
+        let Mode::Preparing(preparing) = &self.mode else {
+            return None;
+        };
+        if preparing.ticket != ticket {
+            return None;
+        }
+        let name = preparing.name.clone();
+        match result {
+            Ok(choices) => {
+                if choices.models.is_empty() {
+                    let mut note = choices.notices.join("\n");
+                    if note.is_empty() {
+                        note = format!(
+                            "`{name}` lists no models; the credential stays, with no reviewer set."
+                        );
+                    }
+                    self.mode = Mode::Ended(Ended {
+                        name,
+                        outcome: Outcome::StoredWithNote(note),
+                    });
+                } else {
+                    self.mode = Mode::Choices(Choices::open(name, choices));
+                }
+            }
+            Err(error) => {
+                self.mode = Mode::Ended(Ended {
+                    name,
+                    outcome: Outcome::StoredWithNote(error.message),
+                });
+            }
+        }
+        None
+    }
+
+    /// The reviewer read queued for `ticket` after `name`'s key was
+    /// stored: the panel gives way to the preparing step.
+    pub(crate) fn wait_reviewer(&mut self, ticket: LoginTicket, name: String) {
+        self.said.clear();
+        self.mode = Mode::Preparing(Preparing { ticket, name });
+    }
+
     /// A key in the panel: type, move between the fields, store, or close
-    /// it storing nothing.
-    fn panel_key(&mut self, key: &Key, ctx: &Ctx<'_>) {
+    /// it storing nothing. A stored key queues its reviewer read; a
+    /// stored secret ends the login at once.
+    fn panel_key(&mut self, key: &Key, ctx: &Ctx<'_>) -> Act {
         if *key == Key::Esc {
             self.mode = Mode::Rows;
             self.said.clear();
-            return;
+            return Act::Stay;
         }
         if *key == Key::Enter {
-            self.submit(ctx);
-            return;
+            return self.submit(ctx);
         }
         let Mode::Panel(panel) = &mut self.mode else {
-            return;
+            return Act::Stay;
         };
         let secret = self
             .targets
@@ -620,7 +768,7 @@ impl Login {
                     Focus::Label => Focus::Key,
                 };
             }
-            return;
+            return Act::Stay;
         }
         match panel.focus {
             Focus::Key => {
@@ -638,18 +786,80 @@ impl Login {
                 }
             }
         }
+        Act::Stay
+    }
+
+    /// A key over the reviewer picker: move over the models, save the
+    /// highlighted row or the kept preselection, or close storing nothing.
+    /// With no row highlighted and nothing preselected Enter stays open;
+    /// text and pastes never reach the draft. Saving writes the one
+    /// provider key through the seam.
+    fn choices_key(&mut self, key: &Key, ctx: &Ctx<'_>) -> Act {
+        if *key == Key::Esc {
+            self.mode = Mode::Rows;
+            self.said.clear();
+            return Act::Stay;
+        }
+        let Mode::Choices(choices) = &mut self.mode else {
+            return Act::Stay;
+        };
+        if choices.models.is_empty() {
+            return Act::Stay;
+        }
+        if *key == Key::Down {
+            choices.cursor = Some(match choices.cursor {
+                None => 0,
+                Some(at) => (at.saturating_add(1)).min(choices.models.len().saturating_sub(1)),
+            });
+        } else if *key == Key::Up {
+            choices.cursor = Some(match choices.cursor {
+                None => choices.models.len().saturating_sub(1),
+                Some(at) => at.saturating_sub(1),
+            });
+        } else if *key == Key::Enter {
+            let pick = choices
+                .cursor
+                .and_then(|at| choices.models.get(at).cloned())
+                .or_else(|| choices.selected.clone());
+            let Some(id) = pick else {
+                return Act::Stay;
+            };
+            let name = choices.name.clone();
+            match ctx.seam.set_reviewer(&name, &id) {
+                Ok(()) => {
+                    self.mode = Mode::Ended(Ended {
+                        name,
+                        outcome: Outcome::Done,
+                    });
+                }
+                Err(error) => {
+                    self.mode = Mode::Ended(Ended {
+                        name,
+                        outcome: Outcome::StoredWithNote(error.message),
+                    });
+                }
+            }
+        }
+        Act::Stay
     }
 
     /// Stores the panel's key: the key trimmed, the label trimmed with an
-    /// empty one meaning none. Success and refusal both stay as the done
-    /// or failed step; a refusal drops the key and the label.
-    fn submit(&mut self, ctx: &Ctx<'_>) {
+    /// empty one meaning none. A stored key queues its reviewer read; a
+    /// stored secret ends the login at once. Refusal ends as the failed
+    /// step; a refusal drops the key and the label.
+    fn submit(&mut self, ctx: &Ctx<'_>) -> Act {
         let (index, label, secret) = match &mut self.mode {
             Mode::Panel(panel) => (panel.target, panel.label.expand(), panel.key.take()),
-            Mode::Rows | Mode::Waiting(_) | Mode::Ended(_) => return,
+            Mode::Rows
+            | Mode::Waiting(_)
+            | Mode::Preparing(_)
+            | Mode::Choices(_)
+            | Mode::Ended(_) => {
+                return Act::Stay;
+            }
         };
         let Some(target) = self.targets.get(index) else {
-            return;
+            return Act::Stay;
         };
         let (name, kind) = (target.name.clone(), target.kind);
         let label = if kind == LoginKind::Secret {
@@ -660,16 +870,22 @@ impl Login {
         };
         match ctx.seam.store_key(&name, label.as_deref(), secret) {
             Ok(_) => {
-                self.mode = Mode::Ended(Ended {
-                    name,
-                    outcome: Outcome::Done,
-                });
+                if kind == LoginKind::Secret {
+                    self.mode = Mode::Ended(Ended {
+                        name,
+                        outcome: Outcome::Done,
+                    });
+                    Act::Stay
+                } else {
+                    Act::Reviewer(name)
+                }
             }
             Err(error) => {
                 self.mode = Mode::Ended(Ended {
                     name,
                     outcome: Outcome::Failed(error.message),
                 });
+                Act::Stay
             }
         }
     }
@@ -711,17 +927,24 @@ impl Login {
         }
     }
 
-    /// A click: the ✕ closes, a target row over the rows selects it,
-    /// and a row while a step is open keeps its mode. A click on a
-    /// heading, the gap, the note or past the last item does nothing.
+    /// A click: the ✕ closes, a target row over the rows selects it, a
+    /// model row over the choices highlights it, and a row while any
+    /// other step is open keeps its mode. A click on a heading, the gap,
+    /// the note, past the last item or past the last model does nothing.
     pub(crate) fn click(&mut self, spot: Spot, _ctx: &Ctx<'_>) -> Act {
         match spot {
             Spot::Close => Act::Close,
             Spot::Switch { .. } | Spot::Revoke(_) | Spot::Cell(_, _) | Spot::Item(_) => Act::Stay,
             Spot::Row(at) => {
+                if let Mode::Choices(choices) = &mut self.mode {
+                    if choices.models.get(at).is_some() {
+                        choices.cursor = Some(at);
+                    }
+                    return Act::Stay;
+                }
                 if matches!(
                     self.mode,
-                    Mode::Panel(_) | Mode::Waiting(_) | Mode::Ended(_)
+                    Mode::Panel(_) | Mode::Waiting(_) | Mode::Preparing(_) | Mode::Ended(_)
                 ) {
                     return Act::Stay;
                 }
@@ -742,6 +965,8 @@ impl Login {
         match &self.mode {
             Mode::Rows => None,
             Mode::Waiting(waiting) => Some(waiting.name.clone()),
+            Mode::Preparing(preparing) => Some(preparing.name.clone()),
+            Mode::Choices(choices) => Some(choices.name.clone()),
             Mode::Panel(panel) => self
                 .targets
                 .get(panel.target)
@@ -884,7 +1109,27 @@ impl Login {
                         overlay::legend(&[("Esc", "back")]),
                     )
                 }
+                Outcome::StoredWithNote(note) => {
+                    let mut rows = wrapped_rows(
+                        &format!("✓ Logged in to {name}."),
+                        inner,
+                        Style::new().fg(Role::Success.color()),
+                    );
+                    rows.extend(wrapped_rows(note, inner, Style::new()));
+                    (rows, overlay::legend(&[("Esc", "back")]))
+                }
             },
+            Mode::Preparing(_) => (
+                wrapped_rows(
+                    &format!("Reading {name}'s reviewer models…"),
+                    inner,
+                    Style::new(),
+                ),
+                overlay::legend(&[("Esc", "back")]),
+            ),
+            Mode::Choices(choices) => {
+                choice_rows(choices, inner, self.body_count(), usize::from(area.height))
+            }
         };
         let kept = self.body_count();
         let mut body = content_rows;
@@ -911,6 +1156,75 @@ impl Login {
         };
         overlay::draw(buf, area, &framed, overlay::Place::Centre, targets_out);
     }
+}
+
+/// The picker rows for `choices` at `inner` columns: the stale line when
+/// the preselection names no listed row, the models windowed so the
+/// highlighted row stays visible, then the discovery notices while room
+/// remains. The stale line is clipped to leave a row for a model whenever
+/// the body has room for one, so a long stale preselection never hides
+/// every choice while arrows still move over them. The window shares the
+/// step's fixed body count, clipped to what the area shows, so the overlay
+/// never jumps between steps. Model IDs are cut to one row; the whole ID
+/// is still saved.
+fn choice_rows(
+    choices: &Choices,
+    inner: usize,
+    kept: usize,
+    height: usize,
+) -> (Vec<overlay::Row>, overlay::Row) {
+    let dim = Style::new().add_modifier(Modifier::DIM);
+    let budget = kept.min(shown_body_rows(height));
+    let mut rows: Vec<overlay::Row> = Vec::new();
+    // One selectable model row stays visible while the body has room:
+    // the stale notice gives up its last row rather than hiding every
+    // choice an invisible Enter could still save. At a zero budget
+    // nothing draws either way, so the reserve needs no budget check.
+    let reserve = usize::from(!choices.models.is_empty());
+    let stale_cap = budget.saturating_sub(reserve);
+    if let Some(saved) = choices.selected.as_deref().filter(|_| choices.is_stale()) {
+        for row in wrapped_rows(
+            &format!("Saved reviewer `{saved}` is not listed; Enter keeps it."),
+            inner,
+            dim,
+        ) {
+            if rows.len() >= stale_cap {
+                break;
+            }
+            rows.push(row);
+        }
+    }
+    let room = budget.saturating_sub(rows.len());
+    let total = choices.models.len();
+    let cursor = choices.cursor.unwrap_or(0).min(total.saturating_sub(1));
+    let start = window_start(cursor, room, total);
+    let gutter = format::width(&format!("  {}) ", total.max(1)));
+    for (index, model) in choices.models.iter().enumerate().skip(start).take(room) {
+        let mut label = format!(
+            "  {}) {}",
+            index.saturating_add(1),
+            format::cut(model, inner.saturating_sub(gutter))
+        );
+        if choices.is_saved(model) {
+            label.push_str(" (saved)");
+        }
+        rows.push(overlay::Row {
+            spans: vec![Span::raw(label)],
+            right: Vec::new(),
+            targets: vec![(0, u16::MAX, TargetId::View(Spot::Row(index)))],
+            barred: choices.cursor == Some(index),
+        });
+    }
+    for notice in &choices.notices {
+        if rows.len() >= budget {
+            break;
+        }
+        rows.extend(wrapped_rows(notice, inner, dim));
+    }
+    (
+        rows,
+        overlay::legend(&[("↑↓", "move"), ("Enter", "save"), ("Esc", "back")]),
+    )
 }
 
 /// One overlay body row holding `text` in `style`.
@@ -1030,6 +1344,7 @@ fn step_content_width(name: &str, targets: &[LoginTarget]) -> usize {
         "y copy URL · Esc back",
         "Tab key or label · Enter submit · Esc back",
         "Enter submit · Esc back",
+        "↑↓ move · Enter save · Esc back",
     ] {
         wide = wide.max(format::width(footer));
     }

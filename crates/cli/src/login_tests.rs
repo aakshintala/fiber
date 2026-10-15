@@ -13,6 +13,12 @@ use std::fs;
 use std::io::{self, BufRead, Cursor, Write};
 use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
+use std::sync::{
+    Arc,
+    atomic::{AtomicBool, Ordering},
+    mpsc,
+};
+use std::thread;
 use std::time::Duration;
 
 use config::{
@@ -26,8 +32,9 @@ use serde_json::{Value, json};
 use doors::failure;
 
 use super::{
-    KeyReader, LoginIo, LoginName, LoginStored, LogoutTarget, Plain, credential_key, login,
-    login_store, login_targets, login_with_notices, logout, run_login, run_logout, write_prompt,
+    ClaimProbe, KeyReader, LoginIo, LoginName, LoginStored, LogoutTarget, Plain, ReviewerModels,
+    credential_key, login, login_store, login_targets, login_with_notices, logout, reviewer_stage,
+    run_login, run_logout, write_prompt,
 };
 use crate::finish;
 
@@ -522,10 +529,10 @@ fn menu_setup() -> Setup {
 #[test]
 fn the_menu_picks_a_provider_by_number_or_by_name() {
     for (typed, stored) in [
-        ("1\n", "alpha"),
-        ("2\n", "beta"),
-        (" beta \n", "beta"),
-        ("alpha\n", "alpha"),
+        ("1\n1\n", "alpha"),
+        ("2\n1\n", "beta"),
+        (" beta \n1\n", "beta"),
+        ("alpha\n1\n", "alpha"),
     ] {
         let setup = menu_setup();
         let (result, err) = setup.login(None, true, typed, &mut Fake::new(KEY));
@@ -537,13 +544,25 @@ fn the_menu_picks_a_provider_by_number_or_by_name() {
             "{err}"
         );
         assert!(err.contains(&format!("Key for {stored}: ")), "{err}");
+        // The stored credential precedes the reviewer question: each
+        // installed provider lists its one model `m`.
+        let stored_at = err
+            .find(&format!("fiber: stored credentials/{stored}/default\n"))
+            .unwrap();
+        let asked_at = err.find("Reviewer for ").unwrap();
+        assert!(stored_at < asked_at, "{err}");
         assert!(
-            err.ends_with(&format!("fiber: stored credentials/{stored}/default\n")),
+            err.ends_with(&format!("fiber: reviewer {stored} m\n")),
             "{err}"
         );
         assert_eq!(
             setup.stored(stored, "default").as_deref(),
             Some(KEY),
+            "{typed:?}"
+        );
+        assert_eq!(
+            setup.global()["providers"][stored]["reviewer_model"],
+            json!("m"),
             "{typed:?}"
         );
         assert!(!err.contains(KEY));
@@ -1037,4 +1056,385 @@ fn read_key_exact_keeps_spaces_and_drops_only_the_final_newline() {
             .unwrap();
         assert_eq!(secret.expose(), stored, "input {input:?}");
     }
+}
+
+/// How long a test waits for one stage barrier or worker.
+const STAGE_WAIT: Duration = Duration::from_secs(10);
+
+fn choices(models: &[&str]) -> ReviewerModels {
+    ReviewerModels {
+        models: models.iter().map(|model| (*model).to_owned()).collect(),
+        selected: None,
+        notices: Vec::new(),
+    }
+}
+
+#[test]
+fn a_terminal_key_login_asks_for_the_reviewer_after_storing() {
+    let setup = Setup::new();
+    setup.install("alpha", None, None);
+    let (result, err) = setup.login(Some("alpha"), true, "1\n", &mut Fake::new(KEY));
+    result.unwrap();
+    let stored_at = err
+        .find("fiber: stored credentials/alpha/default\n")
+        .unwrap();
+    let asked_at = err.find("Reviewer for alpha:").unwrap();
+    assert!(stored_at < asked_at, "{err}");
+    assert!(err.ends_with("fiber: reviewer alpha m\n"), "{err}");
+    assert_eq!(
+        setup.global()["providers"]["alpha"]["reviewer_model"],
+        json!("m")
+    );
+    assert!(!err.contains(KEY));
+}
+
+#[test]
+fn without_a_terminal_a_key_login_asks_nothing_and_keeps_a_saved_reviewer() {
+    let setup = Setup::new();
+    setup.install("alpha", None, None);
+    setup.write_config(&json!({"providers": {"alpha": {"reviewer_model": "old-m"}}}));
+    let (result, err) = setup.login(
+        Some("alpha"),
+        false,
+        &format!("{KEY}\n1\n"),
+        &mut Fake::new(KEY),
+    );
+    result.unwrap();
+    assert_eq!(err, "fiber: stored credentials/alpha/default\n");
+    assert!(!err.contains("Reviewer"), "{err}");
+    assert_eq!(
+        setup.global()["providers"]["alpha"]["reviewer_model"],
+        json!("old-m"),
+        "a pipe login writes no reviewer"
+    );
+}
+
+#[test]
+fn a_declared_secret_never_asks_for_a_reviewer() {
+    let setup = Setup::new();
+    setup.declare("acme", &["api_key"]);
+    let (result, err) = setup.login(Some("api_key"), true, "1\n", &mut Fake::new("v1"));
+    result.unwrap();
+    assert!(
+        err.ends_with("fiber: stored credentials/api_key\n"),
+        "{err}"
+    );
+    assert!(!err.contains("Reviewer"), "{err}");
+}
+
+#[test]
+fn a_failed_store_never_asks_for_a_reviewer() {
+    let setup = Setup::new();
+    setup.install("alpha", None, None);
+    let (first, _) = setup.login(Some("alpha"), true, "1\n", &mut Fake::new(KEY));
+    first.unwrap();
+    let (result, err) = setup.login_as(
+        Some("alpha"),
+        Some("default"),
+        true,
+        "1\n",
+        &mut Fake::new(KEY),
+    );
+    let failure = failed(result);
+    assert_eq!(failure.code, ErrorCode::Usage);
+    assert!(failure.message.contains("--as"), "{}", failure.message);
+    assert!(!err.contains("Reviewer"), "{err}");
+}
+
+#[test]
+fn cancellation_during_discovery_keeps_everything_and_asks_nothing() {
+    let setup = Setup::new();
+    setup.install("alpha", None, None);
+    store_credential(
+        &setup.home(),
+        "alpha",
+        "default",
+        &Secret::new(KEY.to_owned()),
+    )
+    .unwrap();
+    setup.write_config(&json!({"providers": {"alpha": {"reviewer_model": "old-m"}}}));
+    let config_before = fs::read(setup.home().join("config.json")).unwrap();
+    let credential_before = fs::read(setup.home().join("credentials/alpha/default")).unwrap();
+    // `discovery entered after storage`: the stage armed cancellation
+    // before discovery, not at terminal input.
+    let (entered_tx, entered_rx) = mpsc::channel();
+    let (release_tx, release_rx) = mpsc::channel();
+    let stopped = Arc::new(AtomicBool::new(false));
+    let home = setup.home();
+    let worker_stopped = Arc::clone(&stopped);
+    let (done, finished) = mpsc::channel();
+    let worker = thread::spawn(move || {
+        let mut err = Vec::new();
+        let mut reading = Cursor::new(Vec::new());
+        let result = reviewer_stage(
+            &home,
+            "alpha",
+            &mut reading,
+            &mut err,
+            &|| {
+                entered_tx.send(()).unwrap();
+                release_rx.recv().unwrap();
+                Ok(choices(&["m1"]))
+            },
+            &worker_stopped,
+            false,
+            fakes::clock::FakeClock::new(),
+            None,
+        );
+        done.send((result, String::from_utf8(err).unwrap()))
+            .unwrap_or(());
+    });
+    assert!(
+        fakes::Deadline::after(STAGE_WAIT).recv(&entered_rx).is_ok(),
+        "waited {STAGE_WAIT:?} for discovery entered after storage"
+    );
+    stopped.store(true, Ordering::SeqCst);
+    release_tx.send(()).unwrap();
+    let (result, err) = match fakes::Deadline::after(STAGE_WAIT).recv(&finished) {
+        Ok(outcome) => outcome,
+        Err(_) => panic!("waited {STAGE_WAIT:?} for the cancelled stage to finish"),
+    };
+    worker.join().expect("the stage worker joined");
+    result.unwrap();
+    assert_eq!(
+        err, "fiber: no reviewer was set for alpha; the credential stays.\n",
+        "no prompt, no discovery notice: {err}"
+    );
+    assert_eq!(
+        fs::read(setup.home().join("config.json")).unwrap(),
+        config_before,
+        "the previous reviewer setting stands"
+    );
+    assert_eq!(
+        fs::read(setup.home().join("credentials/alpha/default")).unwrap(),
+        credential_before
+    );
+}
+
+#[test]
+fn cancellation_before_the_claim_writes_nothing() {
+    let setup = Setup::new();
+    setup.install("alpha", None, None);
+    store_credential(
+        &setup.home(),
+        "alpha",
+        "default",
+        &Secret::new(KEY.to_owned()),
+    )
+    .unwrap();
+    setup.write_config(&json!({"providers": {"alpha": {"reviewer_model": "old-m"}}}));
+    let config_before = fs::read(setup.home().join("config.json")).unwrap();
+    let (before_entered_tx, before_entered_rx) = mpsc::channel();
+    let (before_release_tx, before_release_rx) = mpsc::channel();
+    let (after_entered_tx, after_entered_rx) = mpsc::channel();
+    let (_after_release_tx, after_release_rx) = mpsc::channel();
+    let stopped = Arc::new(AtomicBool::new(false));
+    let home = setup.home();
+    let worker_stopped = Arc::clone(&stopped);
+    let (done, finished) = mpsc::channel();
+    let worker = thread::spawn(move || {
+        let mut err = Vec::new();
+        let mut reading = Cursor::new(b"1\n".to_vec());
+        let probe = ClaimProbe {
+            before_entered: before_entered_tx,
+            before_release: before_release_rx,
+            after_entered: after_entered_tx,
+            after_release: after_release_rx,
+        };
+        let result = reviewer_stage(
+            &home,
+            "alpha",
+            &mut reading,
+            &mut err,
+            &|| Ok(choices(&["m1"])),
+            &worker_stopped,
+            false,
+            fakes::clock::FakeClock::new(),
+            Some(&probe),
+        );
+        done.send((result, String::from_utf8(err).unwrap()))
+            .unwrap_or(());
+    });
+    // `before reviewer save claim`: selection made, cancellation not yet
+    // recorded; recording it now must prevent the write entirely.
+    assert!(
+        fakes::Deadline::after(STAGE_WAIT)
+            .recv(&before_entered_rx)
+            .is_ok(),
+        "waited {STAGE_WAIT:?} for before reviewer save claim"
+    );
+    stopped.store(true, Ordering::SeqCst);
+    before_release_tx.send(()).unwrap();
+    let (result, err) = match fakes::Deadline::after(STAGE_WAIT).recv(&finished) {
+        Ok(outcome) => outcome,
+        Err(_) => panic!("waited {STAGE_WAIT:?} for the cancelled save to finish"),
+    };
+    worker.join().expect("the stage worker joined");
+    result.unwrap();
+    assert!(err.contains("no reviewer was set"), "{err}");
+    assert!(!err.contains("fiber: reviewer"), "{err}");
+    assert!(
+        after_entered_rx.try_recv().is_err(),
+        "the claim never ran, so no later barrier was reached"
+    );
+    assert_eq!(
+        fs::read(setup.home().join("config.json")).unwrap(),
+        config_before,
+        "set_reviewer never ran"
+    );
+}
+
+#[test]
+fn a_claimed_save_survives_cancellation_before_the_write() {
+    for valid in [true, false] {
+        let setup = Setup::new();
+        setup.install("alpha", None, None);
+        store_credential(
+            &setup.home(),
+            "alpha",
+            "default",
+            &Secret::new(KEY.to_owned()),
+        )
+        .unwrap();
+        if valid {
+            fs::write(
+                setup.home().join("config.json"),
+                "{\"providers\": {\"alpha\": {\"credential\": \"default\"}}, \"kept\": {\"a\": 1}}",
+            )
+            .unwrap();
+        } else {
+            // Invalid under the held lock: the claimed write still runs
+            // and reports its precise-key failure, never a cancellation.
+            fs::write(setup.home().join("config.json"), "{bad").unwrap();
+        }
+        // The global lock held while the claim wins: the save cannot have
+        // waited on it yet when cancellation lands.
+        let lock_file = fs::OpenOptions::new()
+            .create(true)
+            .truncate(false)
+            .write(true)
+            .open(setup.home().join("config.json.lock"))
+            .unwrap();
+        lock_file.lock().unwrap();
+        let (before_entered_tx, before_entered_rx) = mpsc::channel();
+        let (before_release_tx, before_release_rx) = mpsc::channel();
+        let (after_entered_tx, after_entered_rx) = mpsc::channel();
+        let (after_release_tx, after_release_rx) = mpsc::channel();
+        let stopped = Arc::new(AtomicBool::new(false));
+        let home = setup.home();
+        let worker_stopped = Arc::clone(&stopped);
+        let (done, finished) = mpsc::channel();
+        let worker = thread::spawn(move || {
+            let mut err = Vec::new();
+            let mut reading = Cursor::new(b"1\n".to_vec());
+            let probe = ClaimProbe {
+                before_entered: before_entered_tx,
+                before_release: before_release_rx,
+                after_entered: after_entered_tx,
+                after_release: after_release_rx,
+            };
+            let result = reviewer_stage(
+                &home,
+                "alpha",
+                &mut reading,
+                &mut err,
+                &|| Ok(choices(&["m1"])),
+                &worker_stopped,
+                false,
+                fakes::clock::FakeClock::new(),
+                Some(&probe),
+            );
+            done.send((result, String::from_utf8(err).unwrap()))
+                .unwrap_or(());
+        });
+        // The claim runs uncancelled: release it straight through.
+        assert!(
+            fakes::Deadline::after(STAGE_WAIT)
+                .recv(&before_entered_rx)
+                .is_ok(),
+            "waited {STAGE_WAIT:?} for before reviewer save claim"
+        );
+        before_release_tx.send(()).unwrap();
+        // `reviewer save claimed before writer`: the claim won;
+        // cancellation now cannot veto the write.
+        assert!(
+            fakes::Deadline::after(STAGE_WAIT)
+                .recv(&after_entered_rx)
+                .is_ok(),
+            "waited {STAGE_WAIT:?} for reviewer save claimed before writer"
+        );
+        stopped.store(true, Ordering::SeqCst);
+        drop(lock_file);
+        after_release_tx.send(()).unwrap();
+        let (result, err) = match fakes::Deadline::after(STAGE_WAIT).recv(&finished) {
+            Ok(outcome) => outcome,
+            Err(_) => panic!("waited {STAGE_WAIT:?} for the claimed save to finish"),
+        };
+        worker.join().expect("the stage worker joined");
+        if valid {
+            result.unwrap();
+            assert!(err.contains("fiber: reviewer alpha m1"), "{err}");
+            assert!(!err.contains("no reviewer was set"), "{err}");
+            assert_eq!(
+                setup.global(),
+                json!({
+                    "providers": {"alpha": {"credential": "default", "reviewer_model": "m1"}},
+                    "kept": {"a": 1},
+                }),
+                "the claimed save and the sibling stand"
+            );
+        } else {
+            let failure = result.unwrap_err();
+            assert_eq!(failure.code, ErrorCode::ConfigInvalid);
+            assert!(
+                failure.message.contains("providers.alpha.reviewer_model"),
+                "{}",
+                failure.message
+            );
+            assert!(!err.contains("fiber: reviewer"), "{err}");
+            assert!(!err.contains("no reviewer was set"), "{err}");
+            assert_eq!(
+                fs::read_to_string(setup.home().join("config.json")).unwrap(),
+                "{bad"
+            );
+        }
+    }
+}
+
+#[test]
+fn dropping_the_sig_guard_restores_sigint_handling() {
+    // The guard records SIGINT on the stage latch; dropping it must
+    // unregister, so a later SIGINT reaches only the earlier handler. The
+    // backup is registered after the guard, so its signal proves the
+    // guard's handler already ran for that raise.
+    let stopped = Arc::new(AtomicBool::new(false));
+    let guard = super::arm_sigint(Arc::clone(&stopped)).unwrap();
+    let (fired_tx, fired_rx) = mpsc::channel();
+    let mut backup = signal_hook::iterator::Signals::new([signal_hook::consts::SIGINT]).unwrap();
+    let backup_close = backup.handle();
+    let watcher = thread::spawn(move || {
+        for _ in 0..2 {
+            if backup.forever().next().is_none() {
+                break;
+            }
+            fired_tx.send(()).unwrap_or(());
+        }
+    });
+    let within = fakes::Deadline::after(Duration::from_secs(10));
+    signal_hook::low_level::raise(signal_hook::consts::SIGINT).unwrap();
+    within.recv_or_fail(&fired_rx, "the backup handler after the first raise");
+    assert!(
+        stopped.load(Ordering::SeqCst),
+        "the armed guard records SIGINT"
+    );
+    drop(guard);
+    stopped.store(false, Ordering::SeqCst);
+    signal_hook::low_level::raise(signal_hook::consts::SIGINT).unwrap();
+    within.recv_or_fail(&fired_rx, "the backup handler after the drop");
+    assert!(
+        !stopped.load(Ordering::SeqCst),
+        "a dropped guard records nothing"
+    );
+    backup_close.close();
+    watcher.join().expect("the backup watcher joined");
 }

@@ -1,0 +1,21 @@
+---
+source: crates/tui/src/login_view_tests.rs
+expression: "text_of(&buf, 48, 24).join(\"\\n\")"
+---
+
+
+
+
+
+
+ ▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
+
+   acme                                     ✕
+
+   Saved reviewer `gone-m` is not listed;
+   Enter keeps it.
+     1) fast-1
+
+   ↑↓ move · Enter save · Esc back
+
+ ▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀

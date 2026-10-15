@@ -141,12 +141,17 @@ where
     }
     let log = Arc::clone(diag) as Arc<dyn DebugLog>;
     let clock = Arc::clone(clock);
+    // The connector timing rides each attempt beside the writer and the
+    // clock: one `net.connect` scope per actual attempt group, obtained
+    // only at debug before the writer is erased into the observation.
+    let timings = diag.timings();
     Some(Arc::new(
         move |request: &ModelRequest, attempt: std::num::NonZeroU32| {
             call(
                 &protocol,
                 request,
-                RequestObservation::new(Arc::clone(&log), Arc::clone(&clock), attempt),
+                RequestObservation::new(Arc::clone(&log), Arc::clone(&clock), attempt)
+                    .with_timing(Arc::clone(&timings)),
             )
         },
     ))

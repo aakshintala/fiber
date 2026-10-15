@@ -2109,3 +2109,123 @@ fn a_standing_web_search_is_kept_whatever_the_backend() {
         assert!(declared.lock().unwrap().is_empty(), "{model}");
     }
 }
+
+#[test]
+fn a_provider_local_choice_resolves_on_the_session_provider() {
+    let fixture = fixture("fiber-switch-provider-reviewer");
+    let switching = switching(&fixture, &["providers.fake.reviewer_model=r"]);
+    let made = prepared(&switching, &args("fake/n"), None);
+    let reviewer = made.reviewer.expect("the reviewer resolved");
+    assert_eq!(reviewer.model.reference, "fake/r");
+    assert_eq!(runs(&fixture.marker), 0, "the session key is reused");
+    assert!(made.observe.is_none());
+    assert!(made.reviewer_observe.is_none());
+}
+
+#[test]
+fn a_provider_local_choice_reuses_the_new_providers_single_read() {
+    let fixture = fixture("fiber-switch-provider-reuse");
+    let switching = switching(&fixture, &["providers.other.reviewer_model=m2"]);
+    let made = prepared(&switching, &args("other/m"), None);
+    let reviewer = made.reviewer.expect("the reviewer resolved");
+    assert_eq!(reviewer.model.reference, "other/m2");
+    assert_eq!(
+        runs(&fixture.marker),
+        1,
+        "one read serves session and reviewer"
+    );
+}
+
+#[test]
+fn switching_providers_changes_the_provider_local_reviewer() {
+    let fixture = fixture("fiber-switch-provider-move");
+    let switching = switching(
+        &fixture,
+        &[
+            "providers.fake.reviewer_model=r",
+            "providers.other.reviewer_model=m2",
+        ],
+    );
+    let made = prepared(&switching, &args("fake/n"), None);
+    assert_eq!(
+        made.reviewer
+            .expect("the reviewer resolved")
+            .model
+            .reference,
+        "fake/r"
+    );
+    let moved = prepared(&switching, &args("other/m"), None);
+    assert_eq!(
+        moved
+            .reviewer
+            .expect("the reviewer resolved")
+            .model
+            .reference,
+        "other/m2"
+    );
+    assert_eq!(runs(&fixture.marker), 1, "the new provider reads once");
+}
+
+#[test]
+fn a_provider_local_collision_is_refused_before_any_read() {
+    let fixture = fixture("fiber-switch-provider-collision");
+    let switching = switching(&fixture, &["providers.fake.reviewer_model=r"]);
+    let collision = rejected(&switching, &args("fake/r"), None);
+    assert_eq!(collision.code, ErrorCode::InvalidArguments);
+    assert_eq!(
+        collision.message,
+        "`fake/r` is this session's reviewer model; set `reviewer.model` to another model first."
+    );
+    assert_eq!(runs(&fixture.marker), 0, "no read ran");
+}
+
+/// `Switching` sharing a debug writer, as `parts_in` shares it: both
+/// routes prepare observed factories.
+fn diagnosed(fixture: &Fixture, overrides: &[&str]) -> Arc<Switching> {
+    let switching = switching(fixture, overrides);
+    let diag = Arc::new(log::diag::Diag::new(
+        &fixture.home,
+        log::diag::Process::Session,
+        log::diag::Level::Debug,
+        fakes::clock::FakeClock::new(),
+    ));
+    Arc::new(
+        Arc::into_inner(switching)
+            .expect("the test holds the only Switching")
+            .diagnostics(diag),
+    )
+}
+
+#[test]
+fn a_provider_local_choice_carries_debug_factories() {
+    let fixture = fixture("fiber-switch-provider-factories");
+    let switching = diagnosed(&fixture, &["providers.fake.reviewer_model=r"]);
+    let made = prepared(&switching, &args("fake/n"), None);
+    assert_eq!(
+        made.reviewer
+            .expect("the reviewer resolved")
+            .model
+            .reference,
+        "fake/r"
+    );
+    assert!(
+        made.observe.is_some(),
+        "the debug session factory is shared"
+    );
+    assert!(
+        made.reviewer_observe.is_some(),
+        "the debug reviewer factory is shared"
+    );
+}
+
+#[test]
+fn without_a_reviewer_the_switch_stands_with_no_factories() {
+    let fixture = fixture("fiber-switch-no-reviewer-observe");
+    let switching = switching(&fixture, &[]);
+    let made = prepared(&switching, &args("fake/n"), None);
+    let failure = reviewer_failed(made.reviewer);
+    assert_eq!(failure.code, ErrorCode::NoModel);
+    assert_eq!(failure.message, r#loop::NO_MODEL_MESSAGE);
+    assert!(made.observe.is_none());
+    assert!(made.reviewer_observe.is_none());
+}

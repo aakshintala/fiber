@@ -143,6 +143,34 @@ fn ask_debug_writes_one_provider_request_and_two_peak_memory_lines() {
             "no content in the line: {sentinel}"
         );
     }
+    let timings: Vec<&Value> = lines
+        .iter()
+        .filter(|line| line["code"] == "op_timing" && line["data"]["op"] == "net.connect")
+        .collect();
+    assert_eq!(timings.len(), 1, "one connection writes one net scope");
+    let timing = timings[0];
+    assert_eq!(timing["level"], "debug");
+    assert_eq!(timing["process"], "ask");
+    assert_eq!(timing["session_id"], id.as_str());
+    assert_eq!(timing["message"], "An operation ended.");
+    let data = timing["data"]
+        .as_object()
+        .expect("the timing data is an object");
+    let mut keys: Vec<&String> = data.keys().collect();
+    keys.sort();
+    assert_eq!(keys, ["ms", "op"], "the timing data holds only op and ms");
+    assert!(
+        timing["data"]["ms"].is_u64(),
+        "whole milliseconds, never a value to compare: {timing}"
+    );
+    let wire = serde_json::to_string(timing).unwrap();
+    assert!(!wire.contains("null"), "no null in the timing: {wire}");
+    for sentinel in [host, "/v1/responses", "sk-test"] {
+        assert!(
+            !wire.contains(sentinel),
+            "no request content in the timing: {sentinel}"
+        );
+    }
     let peaks: Vec<&Value> = lines
         .iter()
         .filter(|line| line["code"] == "peak_memory")
@@ -194,6 +222,24 @@ fn a_retried_call_writes_one_line_per_attempt() {
     assert_eq!(requests[1]["data"]["attempt"], 2);
     assert_eq!(requests[1]["data"]["status"], 200);
     assert!(requests[1]["data"].get("first_token_ms").is_some());
+    let timings: Vec<&Value> = lines
+        .iter()
+        .filter(|line| line["code"] == "op_timing" && line["data"]["op"] == "net.connect")
+        .collect();
+    assert_eq!(timings.len(), 2, "two connections write two net scopes");
+    for timing in &timings {
+        assert_eq!(timing["level"], "debug");
+        assert_eq!(timing["process"], "ask");
+        assert_eq!(timing["session_id"], id.as_str());
+        assert!(
+            timing["data"]["ms"].is_u64(),
+            "whole milliseconds, never a value to compare: {timing}"
+        );
+        assert!(
+            timing["data"].get("tool").is_none(),
+            "a connector scope names no tool: {timing}"
+        );
+    }
 }
 
 #[test]
@@ -239,10 +285,10 @@ fn at_default_no_provider_request_is_written() {
         "{lines:?}"
     );
     assert!(
-        lines
-            .iter()
-            .all(|line| line["code"] != "provider_request" && line["code"] != "peak_memory"),
-        "no native request or memory line at the default: {lines:?}"
+        lines.iter().all(|line| line["code"] != "provider_request"
+            && line["code"] != "peak_memory"
+            && line["code"] != "op_timing"),
+        "no native request, memory or timing line at the default: {lines:?}"
     );
 }
 
@@ -269,9 +315,9 @@ fn a_repository_level_is_ignored_for_native_requests() {
     );
     let lines = log_lines(&setup);
     assert!(
-        lines
-            .iter()
-            .all(|line| line["code"] != "provider_request" && line["code"] != "peak_memory"),
+        lines.iter().all(|line| line["code"] != "provider_request"
+            && line["code"] != "peak_memory"
+            && line["code"] != "op_timing"),
         "the repository value stays ignored: {lines:?}"
     );
 }

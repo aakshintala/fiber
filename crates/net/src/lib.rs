@@ -89,7 +89,33 @@ pub fn agent(
     resolver: impl Resolver,
     limits: Limits,
 ) -> ureq::Agent {
-    let connector = ConnectProxyConnector::default().chain(KeepSocket::new(keep, limits));
+    build(config, resolver, KeepSocket::new(keep, limits))
+}
+
+/// As [`agent`], timing one actual connector attempt group through
+/// `timing`: one `net.connect` scope from the first socket attempt to the
+/// kept socket, including the proxy's own socket when one tunnels. An
+/// already-built tunnel passes through untimed. Building the agent starts
+/// no scope.
+pub fn agent_observed(
+    config: ureq::config::Config,
+    keep: Arc<dyn Keep>,
+    resolver: impl Resolver,
+    limits: Limits,
+    timing: contract::diag::Timing,
+) -> ureq::Agent {
+    build(
+        config,
+        resolver,
+        KeepSocket::new(keep, limits).with_timing(timing),
+    )
+}
+
+/// One agent over the shared connector chain: the proxy step, then the
+/// socket the call keeps, then TLS. Both agents share it, so neither the
+/// tunnel order nor the transport policy can drift between them.
+fn build(config: ureq::config::Config, resolver: impl Resolver, socket: KeepSocket) -> ureq::Agent {
+    let connector = ConnectProxyConnector::default().chain(socket);
     let connector = connector.chain(RustlsConnector::default());
     ureq::Agent::with_parts(config, connector, resolver)
 }

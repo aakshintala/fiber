@@ -704,6 +704,90 @@ fn fiber_login_is_attended_whatever_stdin_is() {
     assert!(Attended::attached().attended());
 }
 
+/// Installs the synthetic browser provider `acme`: `login: browser`
+/// with a local `credential()` returning a test token, and one data model
+/// `m`. The flow opens nothing and contacts nothing.
+fn install_browser_acme(setup: &Setup) {
+    let home = setup.home();
+    let dir = home.join("extensions").join("acme-ext");
+    fs::create_dir_all(dir.join("providers")).unwrap();
+    fs::write(
+        dir.join("extension.json"),
+        json!({ "name": "acme-ext", "version": "v1.0.0", "fiber": "0.1.0", "api": 1,
+                "providers": {"acme": ["http://127.0.0.1:1/v1"]} })
+        .to_string(),
+    )
+    .unwrap();
+    write_record(&dir);
+    fs::write(
+        dir.join("providers/acme.json"),
+        json!({
+            "name": "acme",
+            "login": "browser",
+            "models": [{
+                "id": "m",
+                "protocol": "openai-responses",
+                "base_url": "http://127.0.0.1:1/v1",
+                "context_window": 1000
+            }]
+        })
+        .to_string(),
+    )
+    .unwrap();
+    fs::write(
+        { std::fs::create_dir_all((dir.join("providers/acme.lua")).parent().unwrap()).unwrap(); dir.join("providers/acme.lua") },
+        r#"fiber.provider("acme", {
+          credential = { timeout = 60000, run = function()
+            local stored = host.oauth.refresh(function()
+              return { token = "test-token", expires_at = 4102444800 }
+            end)
+            return { token = stored.token, expires_at = stored.expires_at, email = "alice@example.com" }
+          end }
+        })"#,
+    )
+    .unwrap();
+}
+
+/// Runs `login_with` for `acme` on a worker under [`WAIT`], returning its
+/// result and terminal text.
+fn run_login_with(
+    home: PathBuf,
+    providers: Providers,
+    clock: Arc<dyn contract::clock::Clock>,
+    terminal: bool,
+    device: bool,
+    input: &str,
+) -> (Result<(), Failure>, String, u64) {
+    let (done, finished) = mpsc::channel();
+    let input = input.to_owned();
+    thread::spawn(move || {
+        let mut output = Vec::new();
+        let mut stdin = Cursor::new(input);
+        let mut keys = Plain;
+        let result = login_with(
+            &mut LoginIo {
+                home: &home,
+                providers: &providers,
+                terminal,
+                stdin: &mut stdin,
+                err: &mut output,
+                keys: &mut keys,
+                device,
+                clock,
+            },
+            "acme",
+            None,
+        );
+        match done.send((result, String::from_utf8(output).unwrap(), stdin.position())) {
+            Ok(()) | Err(_) => {}
+        }
+    });
+    match Deadline::after(WAIT).recv(&finished) {
+        Ok(outcome) => outcome,
+        Err(_) => panic!("login_with did not finish within {WAIT:?}"),
+    }
+}
+
 #[test]
 fn login_with_runs_the_provider_and_prints_its_stored_result() {
     let setup = Setup::new();
@@ -1056,4 +1140,59 @@ fn a_browser_login_cancelled_while_it_waits_stores_nothing() {
             thread::yield_now();
         }
     });
+}
+
+#[test]
+fn login_with_on_a_terminal_asks_for_the_reviewer_once() {
+    let setup = Setup::new();
+    install_browser_acme(&setup);
+    let providers = setup.providers();
+    let (result, output, _) =
+        run_login_with(setup.home(), providers, setup.clock(), true, false, "1\n");
+    result.unwrap();
+    let stored_at = output
+        .find("fiber: stored credentials/acme/alice@example.com\n")
+        .unwrap();
+    let asked_at = output.find("Reviewer for acme:").unwrap();
+    assert!(stored_at < asked_at, "{output}");
+    assert!(output.ends_with("fiber: reviewer acme m\n"), "{output}");
+    let config: Value =
+        serde_json::from_str(&fs::read_to_string(setup.home().join("config.json")).unwrap())
+            .unwrap();
+    assert_eq!(config["providers"]["acme"]["reviewer_model"], json!("m"));
+}
+
+#[test]
+fn login_with_device_on_a_terminal_asks_the_same_question() {
+    let setup = Setup::new();
+    install_browser_acme(&setup);
+    let providers = setup.providers();
+    let (result, output, _) =
+        run_login_with(setup.home(), providers, setup.clock(), true, true, "1\n");
+    result.unwrap();
+    assert!(
+        output.contains("fiber: stored credentials/acme/alice@example.com\n"),
+        "{output}"
+    );
+    assert!(output.ends_with("fiber: reviewer acme m\n"), "{output}");
+}
+
+#[test]
+fn login_with_refusal_never_asks_for_a_reviewer() {
+    let setup = Setup::new();
+    install_browser_acme(&setup);
+    fs::create_dir_all(setup.home().join("credentials/acme")).unwrap();
+    fs::write(
+        setup.home().join("credentials/acme/alice@example.com"),
+        json!({"token": "old", "expires_at": 4102444800u64}).to_string(),
+    )
+    .unwrap();
+    let providers = setup.providers();
+    let (result, output, position) =
+        run_login_with(setup.home(), providers, setup.clock(), true, false, "1\n");
+    let failure = result.unwrap_err();
+    assert_eq!(failure.code, ErrorCode::Usage);
+    assert!(failure.message.contains("--as"), "{}", failure.message);
+    assert!(!output.contains("Reviewer"), "{output}");
+    assert_eq!(position, 0, "the refused login read no reviewer answer");
 }

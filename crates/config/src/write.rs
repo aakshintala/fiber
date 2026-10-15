@@ -388,6 +388,15 @@ pub fn replace_global(
     };
     let _lock = locked(&file)?;
     let mut root = read(&file)?.unwrap_or_else(|| Value::Object(Map::new()));
+    // A concurrent write may have replaced the whole document with a
+    // shape no layer may hold, such as `[]`, which `path::set` below
+    // would silently destroy. Validate the locked read against "Keys"
+    // on a clone, keeping the original root (with its unknown keys and
+    // spelling) as the read-modify-write document.
+    {
+        let mut notices = Vec::new();
+        crate::check_layer(root.clone(), &Source::Global(file.clone()), &mut notices)?;
+    }
     let previous = match value {
         Some(value) => {
             let previous = path::get(&root, &segments).cloned();

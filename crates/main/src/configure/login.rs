@@ -83,6 +83,29 @@ pub(super) fn browser_login(
     })
 }
 
+/// Reads the reviewer choice for the installed provider `name` through
+/// the same steps as `fiber login`'s post-store question.
+pub(super) fn reviewer_models(
+    home: &Path,
+    name: &str,
+    clock: Arc<dyn Clock>,
+) -> Result<tui::ReviewerModels, ConfigureError> {
+    let providers = cli::providers_in(home).map_err(super::from_failure)?;
+    cli::reviewer_models(home, &providers, name, clock)
+        .map(|choices| tui::ReviewerModels {
+            models: choices.models,
+            selected: choices.selected,
+            notices: choices.notices,
+        })
+        .map_err(super::from_failure)
+}
+
+/// Saves `id` as provider `name`'s reviewer: one main-owned global
+/// write. Save errors name the key.
+pub(super) fn set_reviewer(home: &Path, name: &str, id: &str) -> Result<(), ConfigureError> {
+    cli::set_reviewer(home, name, id).map_err(super::from_failure)
+}
+
 /// The installed providers as key rows, then the declared secrets.
 pub(super) fn targets(home: &Path) -> Result<Vec<LoginTarget>, ConfigureError> {
     ::cli::login_targets(home)
