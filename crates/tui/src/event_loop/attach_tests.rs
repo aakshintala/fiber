@@ -1237,9 +1237,9 @@ fn a_history_wait_at_the_plateau_stashes_queue_plus_one() {
 
 /// The fake hub's socket buffer: a bounded queue of serialized lines.
 /// The writer pushes replay lines, the link pops one line per read,
-/// and the command thread appends the history answer behind them. It
-/// closes on drop, releasing every waiter, so a panicking test releases
-/// both threads.
+/// and the command thread appends the history answer behind them.
+/// Workers retain their own `Arc`, so the test's [`CloseOnDrop`] guard
+/// closes it on unwind, releasing every waiter.
 struct Wire {
     state: std::sync::Mutex<WireState>,
     changed: std::sync::Condvar,
@@ -1272,16 +1272,19 @@ impl Wire {
             .unwrap_or_else(|poison| poison.into_inner())
     }
 
-    /// Pushes a line, waiting for room. False when closed.
+    /// Pushes a line, waiting for room with the test's deadline. False
+    /// when closed, or when the wait expires: expiry ends the writer
+    /// like a close, and the test's own deadline then names the
+    /// missing hand-out.
     fn push(&self, line: Vec<u8>) -> bool {
-        let mut state = self.lock();
-        while state.lines.len() >= self.cap && !state.closed {
-            state = self
-                .changed
-                .wait(state)
-                .unwrap_or_else(|poison| poison.into_inner());
-        }
-        if state.closed {
+        let state = self.lock();
+        let (mut state, waited) = self
+            .changed
+            .wait_timeout_while(state, DEADLINE, |state| {
+                state.lines.len() >= self.cap && !state.closed
+            })
+            .unwrap_or_else(|poison| poison.into_inner());
+        if state.closed || (waited.timed_out() && state.lines.len() >= self.cap) {
             return false;
         }
         state.lines.push_back(line);
@@ -1289,14 +1292,19 @@ impl Wire {
         true
     }
 
-    /// Pops the oldest line. None when closed and empty.
+    /// Pops the oldest line. None when closed and empty, or when the
+    /// wait expires: expiry ends the reader like a close, and the
+    /// test's own deadline then names the missing hand-out.
     fn pop(&self) -> Option<Vec<u8>> {
-        let mut state = self.lock();
-        while state.lines.is_empty() && !state.closed {
-            state = self
-                .changed
-                .wait(state)
-                .unwrap_or_else(|poison| poison.into_inner());
+        let state = self.lock();
+        let (mut state, waited) = self
+            .changed
+            .wait_timeout_while(state, DEADLINE, |state| {
+                state.lines.is_empty() && !state.closed
+            })
+            .unwrap_or_else(|poison| poison.into_inner());
+        if waited.timed_out() && state.lines.is_empty() && !state.closed {
+            return None;
         }
         let line = state.lines.pop_front();
         if line.is_some() {
@@ -1315,6 +1323,17 @@ impl Wire {
 impl Drop for Wire {
     fn drop(&mut self) {
         self.close();
+    }
+}
+
+/// Closes the wire when the test unwinds: it holds its own `Arc`, apart
+/// from the ones the workers retain, so dropping the test's `Arc`
+/// releases nothing but dropping this guard still closes the wire.
+struct CloseOnDrop(Arc<Wire>);
+
+impl Drop for CloseOnDrop {
+    fn drop(&mut self) {
+        self.0.close();
     }
 }
 
@@ -1502,6 +1521,9 @@ fn attach_stash_peak_at_the_ten_mib_fixture() {
         // W; one line more and the writer blocks on a full wire.
         let r = 193 + w;
         let wire = Wire::new(w);
+        // Apart from the workers' `Arc`s: unwinding closes the wire
+        // during the unwind, releasing every waiter.
+        let _guard = CloseOnDrop(Arc::clone(&wire));
         let (hand_tx, hand_rx) = mpsc::channel();
         let link = WireLink::new(Arc::clone(&wire), hand_tx);
         let (mut lp, theirs, tx, rx) = opened();
