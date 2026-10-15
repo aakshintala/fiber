@@ -1446,7 +1446,11 @@ fn confirm_asked(session: &str, id: &str) -> contract::Envelope {
 
 /// A form's title at width 80 for `session` with `questions` questions and
 /// `place`, or a one-question title when `questions` is `None`.
-fn question_title(session: &str, questions: Option<usize>, place: Option<(usize, usize)>) -> String {
+fn question_title(
+    session: &str,
+    questions: Option<usize>,
+    place: Option<(usize, usize)>,
+) -> String {
     let mut left = format!("Question from {session}");
     if let Some(questions) = questions {
         left.push_str(&format!(" · {questions} questions, any can be skipped"));
@@ -1472,7 +1476,7 @@ fn a_single_form_title_has_no_place_suffix() {
         .filter(|mark| mark.line == 0 && mark.style == secondary_bold_style())
         .map(|mark| mark.bytes.clone())
         .collect();
-    assert_eq!(marks, [0..8]);
+    assert!(matches!(marks.as_slice(), [only] if *only == (0..8)));
 }
 
 #[test]
@@ -1518,7 +1522,10 @@ fn three_forms_title_one_of_three() {
 
 #[test]
 fn a_form_behind_an_approval_counts_both() {
-    let mut queue = folded(&[standing_ask(S_A, "a_1", "r_a", "ls"), form_asked(S_A, "r_f")]);
+    let mut queue = folded(&[
+        standing_ask(S_A, "a_1", "r_a", "ls"),
+        form_asked(S_A, "r_f"),
+    ]);
     assert!(queue.open_first());
     assert_eq!(header(&queue), header_text(1, 2, S_A));
     assert_eq!(queue.on_key(&Key::Esc), Some(PanelKey::Handled));
@@ -1529,12 +1536,20 @@ fn a_form_behind_an_approval_counts_both() {
 fn the_title_names_the_session_or_falls_back_to_its_id() {
     let queue = folded(&[form_asked(S_A, "r_1")]);
     assert_eq!(
-        named(&queue, Some("run it")).lines.first().cloned().unwrap_or_default(),
+        named(&queue, Some("run it"))
+            .lines
+            .first()
+            .cloned()
+            .unwrap_or_default(),
         question_title("run it", Some(1), None)
     );
     assert_eq!(header(&queue), question_title(S_A, Some(1), None));
     assert_eq!(
-        named(&queue, Some("")).lines.first().cloned().unwrap_or_default(),
+        named(&queue, Some(""))
+            .lines
+            .first()
+            .cloned()
+            .unwrap_or_default(),
         question_title(S_A, Some(1), None)
     );
     // Control characters in a name draw as spaces.

@@ -104,19 +104,16 @@ impl Builder {
     /// Returns the row's line index.
     pub(super) fn title(&mut self, title: &Title, width: u16) -> usize {
         let session = format!(" from {}", title.session);
-        let mut owned = vec![session];
-        if let Some(questions) = title.questions {
-            owned.push(format!(" · {questions} questions, any can be skipped"));
+        let count = title
+            .questions
+            .map(|questions| format!(" · {questions} questions, any can be skipped"));
+        let place = title.place.map(|(k, n)| format!(" · {k} of {n}"));
+        let mut left: Vec<(&str, Style)> = vec![("Question", HEAD), (session.as_str(), TITLE)];
+        if let Some(count) = count.as_ref() {
+            left.push((count.as_str(), TITLE));
         }
-        if let Some((k, n)) = title.place {
-            owned.push(format!(" · {k} of {n}"));
-        }
-        let mut left: Vec<(&str, Style)> = vec![("Question", HEAD), (owned[0].as_str(), TITLE)];
-        if title.questions.is_some() {
-            left.push((owned[1].as_str(), TITLE));
-        }
-        if title.place.is_some() {
-            left.push((owned.last().map(String::as_str).unwrap_or_default(), PLACE));
+        if let Some(place) = place.as_ref() {
+            left.push((place.as_str(), PLACE));
         }
         self.right_aligned(&left, &[("Esc: chat about this", HINT)], width)
     }

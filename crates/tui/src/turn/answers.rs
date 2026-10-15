@@ -111,8 +111,7 @@ impl Answered {
                     None => " ".to_owned(),
                 };
                 let columns = usize::from(width);
-                let dashes =
-                    columns.saturating_sub("you answered".len() + format::width(&middle));
+                let dashes = columns.saturating_sub("you answered".len() + format::width(&middle));
                 let mut spans = vec![
                     Span::styled(
                         "you answered",
@@ -189,9 +188,8 @@ pub(super) fn fold(turns: &mut [Turn], envelope: &Envelope) -> bool {
         "interaction_requested" => {
             read!(envelope, InteractionRequested).is_some_and(|asked| requested(turns, asked))
         }
-        "interaction_resolved" => {
-            read!(envelope, InteractionResolved).is_some_and(|line| resolved(turns, &line, envelope.ts))
-        }
+        "interaction_resolved" => read!(envelope, InteractionResolved)
+            .is_some_and(|line| resolved(turns, &line, envelope.ts)),
         _ => false,
     }
 }

@@ -732,10 +732,7 @@ fn answer_parts_pads_the_header_to_13_cells_with_one_space_least() {
     assert!(parts.skipped);
     // 12 cells: 1 space. 13 cells: still 1 space. 14 cells: still 1 space.
     assert_eq!(answer_parts("123456789012", None).header, "123456789012 ");
-    assert_eq!(
-        answer_parts("1234567890123", None).header,
-        "1234567890123 "
-    );
+    assert_eq!(answer_parts("1234567890123", None).header, "1234567890123 ");
     assert_eq!(
         answer_parts("12345678901234", None).header,
         "12345678901234 "
@@ -744,7 +741,11 @@ fn answer_parts_pads_the_header_to_13_cells_with_one_space_least() {
     assert_eq!(answer_parts("名前", None).header, "名前         ");
     // The padded header's cells are 13, or the header's cells plus one.
     for (header, cells) in [("Base", 13), ("1234567890123", 14), ("12345678901234", 15)] {
-        assert_eq!(super::width(&answer_parts(header, None).header), cells, "{header}");
+        assert_eq!(
+            super::width(&answer_parts(header, None).header),
+            cells,
+            "{header}"
+        );
     }
 }
 
@@ -775,10 +776,14 @@ fn answer_row_keeps_the_bare_header_and_the_parts_text() {
     use super::{answer_parts, answer_row};
     // The padded header never leaks into the result line: the row is the
     // bare escaped header, a colon and the parts' text.
-    let cases: Vec<(&str, Option<(Vec<String>, Option<String>)>)> = vec![
+    type Said = Option<(Vec<String>, Option<String>)>;
+    let cases: Vec<(&str, Said)> = vec![
         (
             "Base",
-            Some((vec!["main (Recommended)".to_owned(), "dev".to_owned()], Some("and tags".to_owned()))),
+            Some((
+                vec!["main (Recommended)".to_owned(), "dev".to_owned()],
+                Some("and tags".to_owned()),
+            )),
         ),
         ("Name", Some((vec![], Some("fiber-cli".to_owned())))),
         ("Pick\nnow", None),

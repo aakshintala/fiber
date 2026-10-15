@@ -272,19 +272,19 @@ impl OneQuestion {
                         (false, true) => UNDERLINED,
                         (false, false) => Style::default(),
                     };
-                    let mut owned = vec![number];
-                    if let Some(description) = &choice.description {
-                        owned.push(format!("  {description}"));
-                    }
+                    let description = choice
+                        .description
+                        .as_ref()
+                        .map(|description| format!("  {description}"));
                     let mut segments: Vec<(&str, Style)> = vec![
                         (slot.0, slot.1),
-                        (owned[0].as_str(), DIM),
+                        (number.as_str(), DIM),
                         (tick, if chosen { SECONDARY } else { DIM }),
                         (" ", Style::default()),
                         (choice.label.as_str(), label),
                     ];
-                    if owned.len() > 1 {
-                        segments.push((owned[1].as_str(), DIM));
+                    if let Some(description) = description.as_ref() {
+                        segments.push((description.as_str(), DIM));
                     }
                     let line = built.row(&segments);
                     built.spot(line, Spot::Option(option));
@@ -314,11 +314,7 @@ impl OneQuestion {
     /// clipped at `width` columns. Returns its line index.
     fn words_line(&self, here: bool, width: u16, built: &mut Builder) -> usize {
         let slot = if here { "▸ " } else { "  " };
-        let slot_style = if here {
-            SECONDARY
-        } else {
-            Style::default()
-        };
+        let slot_style = if here { SECONDARY } else { Style::default() };
         let prefix_cells = measure(slot)
             .saturating_add(measure("1 "))
             .saturating_add(measure("✎ "));
@@ -347,18 +343,23 @@ impl OneQuestion {
         }
         let words: Vec<char> = clean(&self.words).chars().collect();
         let before = |start: usize| -> String {
-            words.get(start..self.caret).unwrap_or_default().iter().collect()
+            words
+                .get(start..self.caret)
+                .unwrap_or_default()
+                .iter()
+                .collect()
         };
         let fits = |start: usize| prefix_cells.saturating_add(measure(&before(start))) < cols;
         let start = if here {
-            (0..self.caret).find(|start| fits(*start)).unwrap_or(self.caret)
+            (0..self.caret)
+                .find(|start| fits(*start))
+                .unwrap_or(self.caret)
         } else {
             0
         };
         let shown: String = words.get(start..).unwrap_or_default().iter().collect();
         let caret = here.then(|| {
-            u16::try_from(prefix_cells.saturating_add(measure(&before(start))))
-                .unwrap_or(u16::MAX)
+            u16::try_from(prefix_cells.saturating_add(measure(&before(start)))).unwrap_or(u16::MAX)
         });
         let line = clipped_row(
             built,

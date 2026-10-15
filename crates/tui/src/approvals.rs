@@ -206,7 +206,7 @@ impl Queue {
             Ask::Form(form) => {
                 let title = Title {
                     session,
-                    place: (waiting.len() > 1).then(|| (k, waiting.len())),
+                    place: (waiting.len() > 1).then_some((k, waiting.len())),
                     questions: Some(form.question_count()),
                 };
                 form.panel(&title, width)
@@ -214,7 +214,7 @@ impl Queue {
             Ask::One(question) => {
                 let title = Title {
                     session,
-                    place: (waiting.len() > 1).then(|| (k, waiting.len())),
+                    place: (waiting.len() > 1).then_some((k, waiting.len())),
                     questions: None,
                 };
                 question.panel(&title, width)

@@ -120,7 +120,6 @@ fn texts(app: &App) -> Vec<String> {
     app.lines().iter().map(ToString::to_string).collect()
 }
 
-
 /// The answered rule's row at 60 columns with the resolution at midnight
 /// UTC: the time and the rule filling the card's inner 58 columns.
 fn rule_row() -> String {
@@ -429,7 +428,10 @@ fn answers_shorter_than_fields_draw_only_answered_rows() {
             json!({"answers": [{"labels": ["dev"]}]}),
         )],
     );
-    assert_eq!(rules(&app), vec![vec![rule_row(), " Base         dev".to_owned()]]);
+    assert_eq!(
+        rules(&app),
+        vec![vec![rule_row(), " Base         dev".to_owned()]]
+    );
 }
 
 #[test]
@@ -446,7 +448,11 @@ fn answers_longer_than_fields_drop_the_extra() {
     );
     assert_eq!(
         rules(&app),
-        vec![vec![rule_row(), " Base         skipped".to_owned(), " Name         skipped".to_owned()]]
+        vec![vec![
+            rule_row(),
+            " Base         skipped".to_owned(),
+            " Name         skipped".to_owned()
+        ]]
     );
 }
 
@@ -505,7 +511,9 @@ fn the_rule_sits_where_the_answer_landed_and_the_group_stays_open() {
             && trimmed.contains(['○', '✓', '⊘', '✗', '?'])
             && trimmed.contains("read")
     });
-    let rule = texts.iter().position(|text| text.trim_start().starts_with("you answered"));
+    let rule = texts
+        .iter()
+        .position(|text| text.trim_start().starts_with("you answered"));
     assert!(read.is_some() && read < rule, "{texts:#?}");
     let groups = texts.iter().filter(|text| text.starts_with(" ● ")).count();
     assert_eq!(groups, 1, "{texts:#?}");
@@ -671,16 +679,14 @@ fn drawn(
 
 /// Each span's text and style.
 fn spans(line: &ratatui::text::Line<'_>) -> Vec<(String, ratatui::style::Style)> {
-    line
-        .spans
+    line.spans
         .iter()
         .map(|span| (span.content.to_string(), span.style))
         .collect()
 }
 
 fn accent_bold() -> ratatui::style::Style {
-    crate::markdown::style(crate::theme::Role::Accent)
-        .add_modifier(ratatui::style::Modifier::BOLD)
+    crate::markdown::style(crate::theme::Role::Accent).add_modifier(ratatui::style::Modifier::BOLD)
 }
 
 fn dim() -> ratatui::style::Style {
@@ -731,7 +737,10 @@ fn the_rule_names_the_resolution_time_and_fills_the_width() {
             ("─".repeat(40 - 12 - 9), rule()),
         ]
     );
-    assert_eq!(rows[0].to_string(), format!("you answered · 14:16 {}", "─".repeat(19)));
+    assert_eq!(
+        rows[0].to_string(),
+        format!("you answered · 14:16 {}", "─".repeat(19))
+    );
 }
 
 #[test]
@@ -765,7 +774,10 @@ fn answers_draw_bold_and_skipped_and_the_note_draws_bold() {
     );
     assert_eq!(
         spans(&rows[2]),
-        [("Name         ".to_owned(), accent()), ("skipped".to_owned(), dim())]
+        [
+            ("Name         ".to_owned(), accent()),
+            ("skipped".to_owned(), dim())
+        ]
     );
     assert_eq!(
         spans(&rows[3]),
@@ -808,7 +820,11 @@ fn the_rule_keeps_the_resolution_time() {
         .flat_map(|turn| turn.entries.iter())
         .find_map(|entry| match entry {
             crate::turn::Entry::Answers(answered) => Some(answered),
-            _ => None,
+            crate::turn::Entry::Reply { .. }
+            | crate::turn::Entry::Steer(_)
+            | crate::turn::Entry::Group(_)
+            | crate::turn::Entry::Aside(_)
+            | crate::turn::Entry::Band(_) => None,
         });
     let Some(super::Answered::Given { ts, .. }) = ts else {
         panic!("a rule with the resolution time");

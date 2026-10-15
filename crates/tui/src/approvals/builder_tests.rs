@@ -46,8 +46,7 @@ fn assert_valid(lines: &[String], marks: &[crate::approvals::Mark]) {
         assert!(line.is_char_boundary(mark.bytes.end), "{mark:?}");
         if let Some((line_at, end_at)) = at {
             assert!(
-                mark.line > line_at
-                    || (mark.line == line_at && mark.bytes.start >= end_at),
+                mark.line > line_at || (mark.line == line_at && mark.bytes.start >= end_at),
                 "{mark:?} after {line_at}:{end_at}"
             );
         }
@@ -59,7 +58,12 @@ fn assert_valid(lines: &[String], marks: &[crate::approvals::Mark]) {
 fn a_row_marks_each_styled_segment_at_its_byte_range() {
     let mut built = Builder::new();
     // "▸ " is 4 bytes, "1 " 2, "[x] " 4, "hub" 3.
-    let line = built.row(&[("▸ ", body()), ("1 ", dim()), ("[x] ", body()), ("hub", head())]);
+    let line = built.row(&[
+        ("▸ ", body()),
+        ("1 ", dim()),
+        ("[x] ", body()),
+        ("hub", head()),
+    ]);
     assert_eq!(line, 0);
     let panel = built.finish();
     assert_eq!(panel.lines, ["▸ 1 [x] hub"]);
@@ -111,7 +115,10 @@ fn the_placeholder_with_the_cursor_on_its_row_is_three_adjacent_marks() {
     built.here(line);
     built.caret(line, 8);
     let panel = built.finish();
-    assert_eq!(panel.lines, ["  3 ✎ Type an answer, alone or with the options"]);
+    assert_eq!(
+        panel.lines,
+        ["  3 ✎ Type an answer, alone or with the options"]
+    );
     assert_eq!(panel.cursor, Some(0));
     assert_eq!(panel.caret, Some((0, 8)));
     let marks: Vec<_> = panel
@@ -126,7 +133,11 @@ fn the_placeholder_with_the_cursor_on_its_row_is_three_adjacent_marks() {
 #[test]
 fn an_empty_or_plain_segment_leaves_no_mark() {
     let mut built = Builder::new();
-    built.row(&[("", body()), ("x", Style::default()), ("", Style::default())]);
+    built.row(&[
+        ("", body()),
+        ("x", Style::default()),
+        ("", Style::default()),
+    ]);
     built.row(&[("y", Style::default())]);
     let panel = built.finish();
     assert_eq!(panel.lines, ["x", "y"]);
@@ -140,7 +151,10 @@ fn control_characters_in_segments_draw_as_spaces() {
     let panel = built.finish();
     assert_eq!(panel.lines, ["a [31mb c"]);
     assert!(
-        panel.lines.iter().all(|line| !line.chars().any(|ch| ch.is_control())),
+        panel
+            .lines
+            .iter()
+            .all(|line| !line.chars().any(|ch| ch.is_control())),
         "{:?}",
         panel.lines
     );
@@ -177,7 +191,10 @@ fn rows_across_states_keep_valid_marks() {
     }
     built.blank();
     let panel = built.finish();
-    assert_eq!(panel.lines.len(), prefixes.len() * ticks.len() * labels.len() * descriptions.len() + 1);
+    assert_eq!(
+        panel.lines.len(),
+        prefixes.len() * ticks.len() * labels.len() * descriptions.len() + 1
+    );
     assert_valid(&panel.lines, &panel.marks);
     assert!(panel.lines.last().is_some_and(String::is_empty));
 }
@@ -256,7 +273,9 @@ fn the_title_draws_the_session_count_place_and_hint() {
     let panel = built.finish();
     let left = "Question from main · 3 questions, any can be skipped · 1 of 2";
     let right = "Esc: chat about this";
-    let pad = 100usize.saturating_sub(width(&left).saturating_add(width(right))).max(1);
+    let pad = 100usize
+        .saturating_sub(width(left).saturating_add(width(right)))
+        .max(1);
     assert_eq!(panel.lines, [format!("{left}{}{right}", " ".repeat(pad))]);
     let marks: Vec<_> = panel
         .marks
@@ -288,10 +307,18 @@ fn the_title_without_a_place_or_count_reads_as_one_question() {
         100,
     );
     let panel = built.finish();
-    assert!(panel.lines[0].starts_with("Question from s_1"), "{}", panel.lines[0]);
+    assert!(
+        panel.lines[0].starts_with("Question from s_1"),
+        "{}",
+        panel.lines[0]
+    );
     assert!(!panel.lines[0].contains("questions"), "{}", panel.lines[0]);
     assert!(!panel.lines[0].contains(" of "), "{}", panel.lines[0]);
-    assert!(panel.lines[0].ends_with("Esc: chat about this"), "{}", panel.lines[0]);
+    assert!(
+        panel.lines[0].ends_with("Esc: chat about this"),
+        "{}",
+        panel.lines[0]
+    );
 }
 
 #[test]

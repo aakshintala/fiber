@@ -237,7 +237,7 @@ fn space_toggles_a_multi_choice_option_and_enter_moves_on_without_toggling() {
     press(&mut form, &[Key::Down, Key::Enter]);
     // Enter moves on to Submit without toggling: the cursor lands on the
     // buttons row.
-    assert_eq!(cursor_line(&form).starts_with(" Submit "), true);
+    assert!(cursor_line(&form).starts_with(" Submit "));
     assert_eq!(answer(&form)["answers"], json!([{"labels": ["a", "c"]}]));
 }
 
@@ -254,7 +254,10 @@ fn space_on_a_single_choice_option_chooses_it_and_stays_then_clears_it() {
         json!({"labels": ["main (Recommended)"]})
     );
     press(&mut form, &[Key::Char(' ')]);
-    assert_eq!(cursor_line(&form), "▸ 1 ( ) main (Recommended)  the default");
+    assert_eq!(
+        cursor_line(&form),
+        "▸ 1 ( ) main (Recommended)  the default"
+    );
     assert_eq!(answer(&form)["answers"][0], json!({"skipped": true}));
 }
 
@@ -305,7 +308,10 @@ fn a_digit_on_the_words_row_is_typed() {
     press(&mut form, &[Key::Down, Key::Down, Key::Down]);
     assert_eq!(form.on_key(&Key::Char('2')), Some(PanelKey::Handled));
     assert_eq!(cursor_line(&form), "▸ 4 ✎ 2");
-    assert_eq!(answer(&form)["answers"], json!([{"labels": [], "text": "2"}]));
+    assert_eq!(
+        answer(&form)["answers"],
+        json!([{"labels": [], "text": "2"}])
+    );
 }
 
 #[test]
@@ -325,7 +331,10 @@ fn digits_reach_only_the_first_nine_rows() {
     assert_eq!(form.on_key(&Key::Char('8')), Some(PanelKey::Handled));
     assert_eq!(cursor_line(&form), "▸ 8 [x] o8");
     assert_eq!(form.on_key(&Key::Char('9')), Some(PanelKey::Handled));
-    assert_eq!(cursor_line(&form), "▸ 9 ✎ Type an answer, alone or with the options");
+    assert_eq!(
+        cursor_line(&form),
+        "▸ 9 ✎ Type an answer, alone or with the options"
+    );
     assert_eq!(answer(&form)["answers"], json!([{"labels": ["o8"]}]));
     // Nine options: '9' toggles the ninth.
     let mut form = n_options(9, true);
@@ -343,7 +352,10 @@ fn digits_reach_only_the_first_nine_rows() {
     assert_eq!(form.on_key(&Key::Char('2')), Some(PanelKey::Handled));
     assert_eq!(cursor_line(&form), "▸ 2 [x] o2");
     assert_eq!(form.on_key(&Key::Char('3')), Some(PanelKey::Handled));
-    assert_eq!(cursor_line(&form), "▸ 3 ✎ Type an answer, alone or with the options");
+    assert_eq!(
+        cursor_line(&form),
+        "▸ 3 ✎ Type an answer, alone or with the options"
+    );
     press(&mut form, &[Key::Up]);
     let before = lines(&form);
     assert_eq!(form.on_key(&Key::Char('4')), Some(PanelKey::Handled));
@@ -395,9 +407,15 @@ fn backspace_deletes_on_the_words_row_only() {
 fn up_and_down_stop_at_the_first_and_last_rows() {
     let mut form = base_and_name(true);
     press(&mut form, &[Key::Up]);
-    assert_eq!(cursor_line(&form), "▸ 1 [ ] main (Recommended)  the default");
+    assert_eq!(
+        cursor_line(&form),
+        "▸ 1 [ ] main (Recommended)  the default"
+    );
     press(&mut form, &[Key::Down, Key::Down]);
-    assert_eq!(cursor_line(&form), "▸ 3 ✎ Type an answer, alone or with the options");
+    assert_eq!(
+        cursor_line(&form),
+        "▸ 3 ✎ Type an answer, alone or with the options"
+    );
     press(&mut form, &[Key::Down, Key::Down]);
     assert_eq!(cursor_line(&form), "▸ Next →");
     press(&mut form, &[Key::Tab, Key::Tab]);
@@ -428,7 +446,10 @@ fn tab_and_shift_tab_move_between_tabs_and_stop_at_the_ends() {
     press(&mut form, &[Key::BackTab]);
     assert_eq!(cursor_line(&form), "▸ 1 ✎ Type an answer");
     press(&mut form, &[Key::BackTab]);
-    assert_eq!(cursor_line(&form), "▸ 1 [ ] main (Recommended)  the default");
+    assert_eq!(
+        cursor_line(&form),
+        "▸ 1 [ ] main (Recommended)  the default"
+    );
 }
 
 #[test]
@@ -651,10 +672,16 @@ fn a_paste_of_digits_chooses_nothing() {
     let mut form = three_options();
     form.on_edit(&Edit::Paste("2".to_owned()));
     assert_eq!(cursor_line(&form), "▸ 4 ✎ 2");
-    assert_eq!(answer(&form)["answers"], json!([{"labels": [], "text": "2"}]));
+    assert_eq!(
+        answer(&form)["answers"],
+        json!([{"labels": [], "text": "2"}])
+    );
     let mut form = base_and_name(false);
     form.on_edit(&Edit::Paste("1".to_owned()));
-    assert_eq!(answer(&form)["answers"][0], json!({"labels": [], "text": "1"}));
+    assert_eq!(
+        answer(&form)["answers"][0],
+        json!({"labels": [], "text": "1"})
+    );
 }
 
 #[test]
@@ -835,11 +862,7 @@ fn the_tab_row_marks_each_state() {
         .collect();
     assert_eq!(
         marks,
-        [
-            (0..4, dim()),
-            (4..15, accent_reversed()),
-            (54..58, dim()),
-        ]
+        [(0..4, dim()), (4..15, accent_reversed()), (54..58, dim()),]
     );
     // Nothing answered: no tab is accent.
     let plain = form(json!([
@@ -886,14 +909,7 @@ fn an_option_row_marks_each_role() {
         .filter(|mark| mark.line == 8)
         .map(|mark| (mark.bytes.clone(), mark.style))
         .collect();
-    assert_eq!(
-        marks,
-        [
-            (2..4, dim()),
-            (4..7, dim()),
-            (11..25, dim()),
-        ]
-    );
+    assert_eq!(marks, [(2..4, dim()), (4..7, dim()), (11..25, dim()),]);
 }
 
 #[test]
@@ -930,14 +946,7 @@ fn the_words_row_marks_the_placeholder_and_its_first_character() {
         .filter(|mark| mark.line == 9)
         .map(|mark| (mark.bytes.clone(), mark.style))
         .collect();
-    assert_eq!(
-        marks,
-        [
-            (2..4, dim()),
-            (4..8, dim()),
-            (8..49, dim()),
-        ]
-    );
+    assert_eq!(marks, [(2..4, dim()), (4..8, dim()), (8..49, dim()),]);
     assert_eq!(shown.caret, None);
     // With the cursor on the row: the first character reversed, the caret
     // on its cell.
@@ -1073,7 +1082,11 @@ fn the_submit_tab_marks_answers_note_and_buttons() {
         .collect();
     assert_eq!(
         marks,
-        [(0..8, reversed()), (9..26, chat()), (26..buttons.len(), dim())]
+        [
+            (0..8, reversed()),
+            (9..26, chat()),
+            (26..buttons.len(), dim())
+        ]
     );
 }
 
@@ -1091,18 +1104,20 @@ fn a_header_wider_than_13_cells_keeps_one_space() {
         let mut form = unanswered;
         press(&mut form, &[Key::Char(' '), Key::Tab]);
         let shown = form.panel(&title(1), 80);
-        assert_eq!(
-            shown.lines[4],
-            format!("{padded}a"),
-            "{header}"
-        );
+        assert_eq!(shown.lines[4], format!("{padded}a"), "{header}");
         let marks: Vec<_> = shown
             .marks
             .iter()
             .filter(|mark| mark.line == 4)
             .map(|mark| (mark.bytes.clone(), mark.style))
             .collect();
-        assert_eq!(marks, [(0..padded.len(), accent()), (padded.len()..padded.len() + 1, bold())]);
+        assert_eq!(
+            marks,
+            [
+                (0..padded.len(), accent()),
+                (padded.len()..padded.len() + 1, bold())
+            ]
+        );
     }
 }
 

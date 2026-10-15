@@ -241,10 +241,7 @@ fn form_scrolled_to_the_cursor_at_40x10() {
     }
     let (shown, _) = screen(&app, 40, 10);
     insta::assert_snapshot!("form_scrolled_back_to_the_top_at_40x10", shown);
-    assert!(
-        shown.contains("Question from"),
-        "{shown}"
-    );
+    assert!(shown.contains("Question from"), "{shown}");
 }
 
 #[test]
@@ -339,10 +336,7 @@ fn a_line_partly_scrolled_off_shows_its_last_rows() {
 fn a_click_on_a_tab_opens_it() {
     let mut app = asking(base_and_name(false), 60, 12);
     assert_eq!(click(&mut app, Spot::Tab(1)), Effect::None);
-    assert_eq!(
-        lines(&app).get(4).map(String::as_str),
-        Some("What name?")
-    );
+    assert_eq!(lines(&app).get(4).map(String::as_str), Some("What name?"));
     assert_eq!(
         lines(&app).get(6).map(String::as_str),
         Some("▸ 1 ✎ Type an answer")
@@ -362,10 +356,7 @@ fn a_click_on_a_multi_choice_option_toggles_it_and_stays() {
 fn a_click_on_a_single_choice_option_chooses_it_and_moves_on() {
     let mut app = asking(base_and_name(false), 60, 12);
     assert_eq!(click(&mut app, Spot::Option(1)), Effect::None);
-    assert_eq!(
-        lines(&app).get(4).map(String::as_str),
-        Some("What name?")
-    );
+    assert_eq!(lines(&app).get(4).map(String::as_str), Some("What name?"));
 }
 
 #[test]
@@ -637,7 +628,13 @@ fn a_form_has_edges_and_a_secondary_stripe() {
     let area = Rect::new(0, 0, 2, 6);
     let mut buf = Buffer::empty(area);
     let mut targets = Vec::new();
-    draw(&numbered(1, true), area, area.bottom(), &mut buf, &mut targets);
+    draw(
+        &numbered(1, true),
+        area,
+        area.bottom(),
+        &mut buf,
+        &mut targets,
+    );
     for cell in &buf.content {
         assert_ne!(cell.symbol(), "▌");
     }
@@ -759,7 +756,10 @@ fn clicks_on_one_question_rows_send_or_change_the_answer() {
 
     let mut multi = asking_one("multi_select", 60, 12);
     assert_eq!(click(&mut multi, Spot::Option(1)), Effect::None);
-    assert_eq!(lines(&multi).get(6).map(String::as_str), Some("▸ 2 [x] beta"));
+    assert_eq!(
+        lines(&multi).get(6).map(String::as_str),
+        Some("▸ 2 [x] beta")
+    );
     assert_eq!(
         sent(click(&mut multi, Spot::Send)),
         json!({"command": "reply", "session_id": S_A,

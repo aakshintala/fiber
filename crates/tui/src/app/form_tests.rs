@@ -707,8 +707,7 @@ fn chat_about_this_outside_a_tool_call_never_cancels() {
         feed(&mut app, asked);
         press(&mut app, Key::Tab);
         press(&mut app, Key::Tab);
-        let (id, reply) =
-            without_id_from_effect(app.on_click(TargetId::Form(Spot::Chat)));
+        let (id, reply) = without_id_from_effect(app.on_click(TargetId::Form(Spot::Chat)));
         assert_eq!(
             reply["args"],
             json!({"request_id": "r_4f", "declined": true})

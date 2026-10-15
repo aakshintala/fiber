@@ -723,9 +723,13 @@ fn said_text(said: Option<(&[String], Option<&str>)>) -> (String, bool) {
 
 /// One question's answer as `ask_user`'s result writes it (`docs/tools.md`,
 /// "The result"): `<header>: skipped` when `said` is `None`, else the chosen
-/// labels and then the typed text, joined by `, `. A header or label keeps
-/// JSON's escapes without quotes and the text is a JSON string, so the row
-/// stays one line.
+/// labels and then the typed text, joined by `, `. No screen renders it
+/// since the doc-literal look pads headers without colons; it stays as the
+/// result format's canonical form, pinned by its tests.
+#[allow(
+    dead_code,
+    reason = "the result format's canonical form, pinned by tests"
+)]
 pub(crate) fn answer_row(header: &str, said: Option<(&[String], Option<&str>)>) -> String {
     // The result line keeps the bare header; the padded header is for the
     // panel and the card.
@@ -734,7 +738,13 @@ pub(crate) fn answer_row(header: &str, said: Option<(&[String], Option<&str>)>) 
 }
 
 /// The note on a whole form, as `ask_user`'s result writes it: `note: `
-/// and the note as a JSON string (`docs/tools.md`, "The result").
+/// and the note as a JSON string (`docs/tools.md`, "The result"). No
+/// screen renders it since the doc-literal look drops the colon; it stays
+/// as the result format's canonical form, pinned by its tests.
+#[allow(
+    dead_code,
+    reason = "the result format's canonical form, pinned by tests"
+)]
 pub(crate) fn note_row(note: &str) -> String {
     format!("note: {}", quoted(note))
 }

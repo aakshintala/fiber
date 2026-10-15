@@ -192,7 +192,11 @@ fn one_question_titles_carry_no_question_count() {
     ] {
         let shown = panel(&question);
         assert!(!shown.lines[0].contains("questions"), "{}", shown.lines[0]);
-        assert!(shown.lines[0].ends_with("Esc: chat about this"), "{}", shown.lines[0]);
+        assert!(
+            shown.lines[0].ends_with("Esc: chat about this"),
+            "{}",
+            shown.lines[0]
+        );
     }
 }
 
@@ -229,7 +233,15 @@ fn initial_cursor_is_on_the_first_actionable_row() {
     );
     assert_eq!(
         lines(&OneQuestion::multi_select("None?".to_owned(), Vec::new())).as_slice(),
-        [title_row().as_str(), "", "None?", "choose any", "", "▸  Submit ", "   Chat about this "]
+        [
+            title_row().as_str(),
+            "",
+            "None?",
+            "choose any",
+            "",
+            "▸  Submit ",
+            "   Chat about this "
+        ]
     );
 }
 
@@ -353,10 +365,7 @@ fn digits_move_the_cursor_on_confirm_and_select_and_send_nothing() {
 fn digits_on_text_input_are_typed() {
     let mut question = OneQuestion::text_input("Words?".to_owned());
     assert_eq!(question.on_key(&Key::Char('5')), Some(PanelKey::Handled));
-    assert_eq!(
-        lines(&question).get(4).map(String::as_str),
-        Some("▸ 1 ✎ 5")
-    );
+    assert_eq!(lines(&question).get(4).map(String::as_str), Some("▸ 1 ✎ 5"));
     assert_eq!(answer(&question), json!({"text": "5"}));
 }
 
@@ -433,7 +442,10 @@ fn text_input_edits_at_a_character_cursor_and_clamps_at_both_ends() {
     question.on_edit(&Edit::Left);
     question.on_edit(&Edit::Left);
     type_text(&mut question, "x");
-    assert_eq!(lines(&question).get(4).map(String::as_str), Some("▸ 1 ✎ xa"));
+    assert_eq!(
+        lines(&question).get(4).map(String::as_str),
+        Some("▸ 1 ✎ xa")
+    );
     question.on_edit(&Edit::Right);
     question.on_edit(&Edit::Right);
     assert_eq!(question.panel(&title(), 80).caret, Some((4, 8)));
@@ -531,7 +543,11 @@ fn esc_and_chat_decline_each_kind() {
         for _ in 0..last {
             press(&mut question, &[Key::Down]);
         }
-        assert!(lines(&question).last().is_some_and(|line| line.starts_with("▸ ")));
+        assert!(
+            lines(&question)
+                .last()
+                .is_some_and(|line| line.starts_with("▸ "))
+        );
         assert_eq!(question.on_key(&Key::Enter), Some(PanelKey::Decline));
     }
 }
@@ -671,6 +687,23 @@ fn clicks_match_the_rows_and_actions() {
     question.on_edit(&Edit::Left);
     assert_eq!(question.click(Spot::Words), PanelKey::Handled);
     assert_eq!(question.panel(&title(), 80).caret, Some((4, 8)));
+    // Typed words draw bold.
+    let shown = question.panel(&title(), 80);
+    let marks: Vec<_> = shown
+        .marks
+        .iter()
+        .filter(|mark| mark.line == 4)
+        .map(|mark| (mark.bytes.clone(), mark.style))
+        .collect();
+    assert_eq!(
+        marks,
+        [
+            (0..4, secondary()),
+            (4..6, dim()),
+            (6..10, dim()),
+            (10..12, bold()),
+        ]
+    );
     assert_eq!(question.click(Spot::Send), PanelKey::Answer);
     assert_eq!(answer(&question), json!({"text": "hi"}));
 

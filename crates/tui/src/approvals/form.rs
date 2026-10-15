@@ -404,19 +404,19 @@ impl Form {
                 (false, true) => UNDERLINED,
                 (false, false) => Style::default(),
             };
-            let mut owned = vec![number];
-            if let Some(description) = &choice.description {
-                owned.push(format!("  {description}"));
-            }
+            let description = choice
+                .description
+                .as_ref()
+                .map(|description| format!("  {description}"));
             let mut segments: Vec<(&str, Style)> = vec![
-                (slot.0, slot.1),
-                (owned[0].as_str(), DIM),
+                slot,
+                (number.as_str(), DIM),
                 (mark.0, mark.1),
                 (" ", Style::default()),
                 (choice.label.as_str(), label),
             ];
-            if owned.len() > 1 {
-                segments.push((owned[1].as_str(), DIM));
+            if let Some(description) = description.as_ref() {
+                segments.push((description.as_str(), DIM));
             }
             let line = built.row(&segments);
             built.spot(line, Spot::Option(option));
@@ -437,7 +437,7 @@ impl Form {
             } else {
                 ("  ", Style::default())
             };
-            let line = built.row(&[slot, (next, here.then_some(SECONDARY_BOLD).unwrap_or(SECONDARY))]);
+            let line = built.row(&[slot, (next, if here { SECONDARY_BOLD } else { SECONDARY })]);
             built.spot(line, Spot::Next);
             if here {
                 built.here(line);
@@ -506,18 +506,21 @@ impl Form {
     /// Question `field`'s words row, numbered after its options: the
     /// placeholder dim, its first character reversed with the cursor on the
     /// row, or the typed words bold, clipped at `width` columns.
-    fn words_line(&self, field: usize, answer: &Field, here: bool, width: u16, built: &mut Builder) {
+    fn words_line(
+        &self,
+        field: usize,
+        answer: &Field,
+        here: bool,
+        width: u16,
+        built: &mut Builder,
+    ) {
         let options = self
             .fields
             .get(field)
             .map_or(0, |question| question.options.len());
         let number = format!("{} ", options.saturating_add(1));
         let slot = if here { "▸ " } else { "  " };
-        let slot_style = if here {
-            SECONDARY
-        } else {
-            Style::default()
-        };
+        let slot_style = if here { SECONDARY } else { Style::default() };
         let prefix_cells = measure(slot)
             .saturating_add(measure(&number))
             .saturating_add(measure("✎ "));
@@ -533,11 +536,7 @@ impl Form {
             if here {
                 let mut first = placeholder;
                 let mut rest = "";
-                if let Some(at) = placeholder
-                    .char_indices()
-                    .nth(1)
-                    .map(|(at, _)| at)
-                {
+                if let Some(at) = placeholder.char_indices().nth(1).map(|(at, _)| at) {
                     (first, rest) = placeholder.split_at(at);
                 }
                 segments.push((first, FIRST));
@@ -555,18 +554,23 @@ impl Form {
         }
         let words: Vec<char> = clean(&answer.words).chars().collect();
         let before = |start: usize| -> String {
-            words.get(start..answer.caret).unwrap_or_default().iter().collect()
+            words
+                .get(start..answer.caret)
+                .unwrap_or_default()
+                .iter()
+                .collect()
         };
         let fits = |start: usize| prefix_cells.saturating_add(measure(&before(start))) < cols;
         let start = if here {
-            (0..answer.caret).find(|start| fits(*start)).unwrap_or(answer.caret)
+            (0..answer.caret)
+                .find(|start| fits(*start))
+                .unwrap_or(answer.caret)
         } else {
             0
         };
         let shown: String = words.get(start..).unwrap_or_default().iter().collect();
         let caret = here.then(|| {
-            u16::try_from(prefix_cells.saturating_add(measure(&before(start))))
-                .unwrap_or(u16::MAX)
+            u16::try_from(prefix_cells.saturating_add(measure(&before(start)))).unwrap_or(u16::MAX)
         });
         let line = clipped_row(
             built,
@@ -599,14 +603,8 @@ impl Form {
                 .map(|(labels, text)| (labels.as_slice(), text.as_deref()));
             let parts = answer_parts(&question.header, said);
             built.row(&[
-                (
-                    parts.header.as_str(),
-                    ACCENT,
-                ),
-                (
-                    parts.text.as_str(),
-                    if parts.skipped { DIM } else { BOLD },
-                ),
+                (parts.header.as_str(), ACCENT),
+                (parts.text.as_str(), if parts.skipped { DIM } else { BOLD }),
             ]);
         }
         let slot = if row == SubmitRow::Note {
