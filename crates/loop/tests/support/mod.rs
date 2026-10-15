@@ -2351,7 +2351,10 @@ impl contract::hook::Hooks for StartHooks {
         }
     }
 
-    fn session_start(&self, start: &contract::hook::SessionStart<'_>) -> contract::hook::ContextAnswer {
+    fn session_start(
+        &self,
+        start: &contract::hook::SessionStart<'_>,
+    ) -> contract::hook::ContextAnswer {
         self.calls.fetch_add(1, Ordering::SeqCst);
         self.seen.lock().unwrap().push((
             format!("{:?}", start.reason),

@@ -2909,7 +2909,11 @@ fn a_person_handoff_runs_session_start_with_reason_handoff() {
     let hooks = StartHooks::new();
     hooks.answer(start_empty());
     hooks.answer(start_added("fiber.test/inbox", "at handoff"));
-    let mut session = injected(handed_after_a_call(), vec![handoff("c_h", None)], settings());
+    let mut session = injected(
+        handed_after_a_call(),
+        vec![handoff("c_h", None)],
+        settings(),
+    );
     hook(Arc::clone(&hooks), &mut session);
 
     let (outcome, lines) = run(&mut session, "hi");
@@ -2966,7 +2970,10 @@ fn an_automatic_handoff_runs_session_start_with_reason_handoff() {
         &lines,
         &[OPENING, STEP, CALL_BODY, STEP, HANDED_CTX, REPLY, ENDED],
     );
-    assert_eq!(of_kind(&lines, "handoff_started")[0].payload["trigger"], "auto");
+    assert_eq!(
+        of_kind(&lines, "handoff_started")[0].payload["trigger"],
+        "auto"
+    );
     assert_eq!(hooks.seen().len(), 2);
     assert_eq!(hooks.seen()[1].0, "Handoff");
     let requests = session.requests();
@@ -3106,7 +3113,11 @@ fn a_blocking_session_start_failure_at_a_tool_handoff_keeps_the_results() {
         "The `session_start` hook of extension fiber.test/guard failed, \
          so the handoff did not complete: boom"
     );
-    assert!(done[0].payload.get("note").is_none(), "no note: {:?}", done[0].payload);
+    assert!(
+        done[0].payload.get("note").is_none(),
+        "no note: {:?}",
+        done[0].payload
+    );
     assert_eq!(of_kind(&lines, "opening_message").len(), 1);
     // The call results stay ordinary results in the old conversation.
     assert_eq!(of_kind(&lines, "tool_call_completed").len(), 1);
@@ -3126,11 +3137,7 @@ fn a_blocking_session_start_failure_at_an_overflow_handoff_fails_context_overflo
     hooks.answer(start_empty());
     hooks.answer(start_failed("fiber.test/guard", "boom"));
     let mut session = Session::with_tools(
-        vec![
-            called_both(100),
-            overflowing(),
-            Scripted::text("The note."),
-        ],
+        vec![called_both(100), overflowing(), Scripted::text("The note.")],
         None,
         both_tools(),
     )
@@ -3159,14 +3166,21 @@ fn a_non_blocking_session_start_failure_drops_its_context_with_a_notice() {
     let hooks = StartHooks::new();
     hooks.answer(start_empty());
     hooks.answer(start_noticed("fiber.test/soft"));
-    let mut session = injected(handed_after_a_call(), vec![handoff("c_h", None)], settings());
+    let mut session = injected(
+        handed_after_a_call(),
+        vec![handoff("c_h", None)],
+        settings(),
+    );
     hook(Arc::clone(&hooks), &mut session);
 
     let (outcome, lines) = run(&mut session, "hi");
     assert_eq!(outcome, Some(TurnOutcome::Completed));
     let kinds = kinds(&lines);
     let noticed_at = kinds.iter().position(|kind| *kind == "notice").unwrap();
-    let completed_at = kinds.iter().position(|kind| *kind == "handoff_completed").unwrap();
+    let completed_at = kinds
+        .iter()
+        .position(|kind| *kind == "handoff_completed")
+        .unwrap();
     assert!(
         noticed_at < completed_at,
         "the notice precedes the completion: {kinds:?}"
@@ -3196,8 +3210,11 @@ fn a_cancel_or_shutdown_inside_the_handoff_hook_cancels_the_handoff() {
         hooks.answer(start_empty());
         hooks.answer(start_added("fiber.test/inbox", "late"));
         hooks.fire_inside_at(2);
-        let mut session =
-            injected(handed_after_a_call(), vec![handoff("c_h", None)], settings());
+        let mut session = injected(
+            handed_after_a_call(),
+            vec![handoff("c_h", None)],
+            settings(),
+        );
         hook(Arc::clone(&hooks), &mut session);
         if shutdown {
             hooks.shutdown_inside(Arc::clone(&session.cancel));
@@ -3205,12 +3222,25 @@ fn a_cancel_or_shutdown_inside_the_handoff_hook_cancels_the_handoff() {
             hooks.cancel_inside(Arc::clone(&session.cancel));
         }
         let (outcome, lines) = run(&mut session, "hi");
-        assert_eq!(outcome, Some(TurnOutcome::Interrupted), "shutdown: {shutdown}");
+        assert_eq!(
+            outcome,
+            Some(TurnOutcome::Interrupted),
+            "shutdown: {shutdown}"
+        );
         let done = of_kind(&lines, "handoff_completed");
         assert_eq!(done.len(), 1, "shutdown: {shutdown}");
-        assert_eq!(done[0].payload["outcome"], "cancelled", "shutdown: {shutdown}");
-        assert!(done[0].payload.get("note").is_none(), "shutdown: {shutdown}");
-        assert!(done[0].payload.get("error").is_none(), "shutdown: {shutdown}");
+        assert_eq!(
+            done[0].payload["outcome"], "cancelled",
+            "shutdown: {shutdown}"
+        );
+        assert!(
+            done[0].payload.get("note").is_none(),
+            "shutdown: {shutdown}"
+        );
+        assert!(
+            done[0].payload.get("error").is_none(),
+            "shutdown: {shutdown}"
+        );
         assert_eq!(
             of_kind(&lines, "opening_message").len(),
             1,
@@ -3229,7 +3259,11 @@ fn turn_start_does_not_run_at_a_handoff() {
     let hooks = StartHooks::new();
     hooks.answer(start_empty());
     hooks.answer(start_added("fiber.test/inbox", "at handoff"));
-    let mut session = injected(handed_after_a_call(), vec![handoff("c_h", None)], settings());
+    let mut session = injected(
+        handed_after_a_call(),
+        vec![handoff("c_h", None)],
+        settings(),
+    );
     hook(Arc::clone(&hooks), &mut session);
 
     let (outcome, _) = run(&mut session, "hi");
@@ -3268,10 +3302,7 @@ fn a_failed_tool_handoff_with_questions_writes_the_taken_lines() {
         name: None,
     });
     let tool = Arc::new(tool);
-    let mut session = tool_session(
-        vec![calling(&["wrapup"], 500)],
-        vec![tool.clone()],
-    );
+    let mut session = tool_session(vec![calling(&["wrapup"], 500)], vec![tool.clone()]);
     // Below the workspace: the opening message never reads it, so the
     // call queues it for the step's end.
     std::fs::create_dir_all(session.workspace.join("sub")).unwrap();

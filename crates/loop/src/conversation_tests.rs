@@ -13,7 +13,7 @@ use std::collections::BTreeMap;
 use contract::events::{
     ContextAdded, DelegateFinished, Environment, Event, FiberStarted, InputItem, InstructionFile,
     InstructionReason, InstructionSent, JobCompleted, OpeningMessage, Outcome, ReviewerKept,
-    SkillListed, SkillSource, SkillsChanged, TurnStarted, ToolCallRequested,
+    SkillListed, SkillSource, SkillsChanged, ToolCallRequested, TurnStarted,
 };
 use contract::provider::Input;
 use contract::shapes::{ContentPart, Origin, Sender};

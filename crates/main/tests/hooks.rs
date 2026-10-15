@@ -1656,10 +1656,7 @@ fn a_blocking_session_start_failure_exits_1_hook_failed() {
         "stderr names the failure: {}",
         run.stderr
     );
-    assert!(
-        server.requests().is_empty(),
-        "the server got no request"
-    );
+    assert!(server.requests().is_empty(), "the server got no request");
 }
 
 #[test]
@@ -1690,12 +1687,15 @@ fn session_start_runs_again_on_resume_and_appends_its_context() {
     let resumed = user_messages(&requests[1].body);
     assert_eq!(resumed.len(), 5);
     assert!(resumed[0].starts_with("This message is from Fiber"));
-    assert_eq!(&resumed[1..], ["reason:start", "one", "reason:resume", "two"]);
+    assert_eq!(
+        &resumed[1..],
+        ["reason:start", "one", "reason:resume", "two"]
+    );
     let body = String::from_utf8_lossy(&requests[1].body);
     assert!(
-        body.find("Hello.").is_some_and(|replied| body.rfind("reason:resume").is_some_and(
-            |added| replied < added
-        )),
+        body.find("Hello.").is_some_and(|replied| body
+            .rfind("reason:resume")
+            .is_some_and(|added| replied < added)),
         "the resume context follows the first turn's reply: {body}"
     );
 }
@@ -1719,7 +1719,11 @@ fn a_handoff_runs_session_start_with_reason_handoff() {
     ])
     .unwrap();
     setup.provider_with_extra(&server, &json!({"handoff": {"tokens": 10, "nudge": false}}));
-    fs::write(setup.workspace().join("note.txt"), "the password is hunter2\n").unwrap();
+    fs::write(
+        setup.workspace().join("note.txt"),
+        "the password is hunter2\n",
+    )
+    .unwrap();
     let run = setup.run(&["ask", "read the note"]);
     assert_eq!(run.code, Some(0), "stderr: {}", run.stderr);
     assert_eq!(
@@ -1766,7 +1770,10 @@ fn a_handoff_runs_session_start_with_reason_handoff() {
     let users = user_messages(&requests[2].body);
     assert_eq!(users.len(), 4);
     assert!(users[0].starts_with("This message is from Fiber"));
-    assert_eq!(&users[1..], ["reason:handoff", "read the note", "The note."]);
+    assert_eq!(
+        &users[1..],
+        ["reason:handoff", "read the note", "The note."]
+    );
 }
 
 #[test]
@@ -1790,7 +1797,11 @@ fn a_blocking_session_start_failure_at_a_handoff_fails_the_handoff_and_the_sessi
     ])
     .unwrap();
     setup.provider_with_extra(&server, &json!({"handoff": {"tokens": 10, "nudge": false}}));
-    fs::write(setup.workspace().join("note.txt"), "the password is hunter2\n").unwrap();
+    fs::write(
+        setup.workspace().join("note.txt"),
+        "the password is hunter2\n",
+    )
+    .unwrap();
     let run = setup.run(&["ask", "read the note"]);
     assert_eq!(run.code, Some(0), "stderr: {}", run.stderr);
     assert_eq!(

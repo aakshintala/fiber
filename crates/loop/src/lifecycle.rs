@@ -219,8 +219,7 @@ impl Loop {
             return Ok(Vec::new());
         }
         self.lifecycle.ran = true;
-        match self.session_start_chain(None, self.lifecycle.reason, "the session did not start")?
-        {
+        match self.session_start_chain(None, self.lifecycle.reason, "the session did not start")? {
             Started::Contexts(contexts) => Ok(contexts),
             Started::Failed(failure) => Err(Error::HookFailed(failure)),
             Started::Cancelled => Ok(Vec::new()),
@@ -241,8 +240,7 @@ impl Loop {
             return Ok(Flow::Continue);
         }
         self.lifecycle.ran = true;
-        match self.session_start_chain(None, self.lifecycle.reason, "the session did not start")?
-        {
+        match self.session_start_chain(None, self.lifecycle.reason, "the session did not start")? {
             Started::Contexts(contexts) => {
                 self.lifecycle.start_contexts.extend(contexts);
                 Ok(Flow::Continue)
@@ -262,7 +260,11 @@ impl Loop {
     /// (`docs/extensions.md`, "The hook points"). The hook sees the
     /// reason and not the note. Never touches `ran`.
     pub(crate) fn handoff_start(&mut self, turn: &TurnId) -> Result<Started, Error> {
-        self.session_start_chain(Some(turn), StartReason::Handoff, "the handoff did not complete")
+        self.session_start_chain(
+            Some(turn),
+            StartReason::Handoff,
+            "the handoff did not complete",
+        )
     }
 }
 

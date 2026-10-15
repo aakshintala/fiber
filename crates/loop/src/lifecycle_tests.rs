@@ -997,7 +997,9 @@ fn a_refused_held_write_keeps_session_start_contexts_for_the_next_step() {
     }
     drop(world.looped.take());
     assert!(
-        !lines(&world).iter().any(|line| line.kind == "context_added"),
+        !lines(&world)
+            .iter()
+            .any(|line| line.kind == "context_added"),
         "nothing was written"
     );
     // The next successful step writes them oldest first.
@@ -1147,7 +1149,10 @@ fn a_session_start_context_is_logged_before_turn_started_and_sent_first() {
             input => panic!("a user message: {input:?}"),
         })
         .collect();
-    assert_eq!(first, vec![opening_text(&all), "starter pack".into(), "hello".into()]);
+    assert_eq!(
+        first,
+        vec![opening_text(&all), "starter pack".into(), "hello".into()]
+    );
 }
 
 #[test]
@@ -1189,7 +1194,12 @@ fn a_blocking_session_start_failure_starts_no_session_and_drops_the_prompt() {
     let all = streamed(&mut world);
     assert_eq!(
         kinds(&all),
-        ["session_started", "preamble_built", "opening_message", "notice"],
+        [
+            "session_started",
+            "preamble_built",
+            "opening_message",
+            "notice"
+        ],
         "no turn starts and the notice is written: {all:?}"
     );
     let notice = line(&all, "notice");
@@ -1289,7 +1299,8 @@ fn a_shutdown_between_the_handoff_hook_and_its_commit_cancels_the_handoff() {
             // After the handoff hook's final check, before the guarded
             // completion write: the shutdown applies none of the answer.
             // Armed from the hook itself, which runs on the turn thread.
-            hooks.shutdown_after_handoff_check
+            hooks
+                .shutdown_after_handoff_check
                 .lock()
                 .unwrap()
                 .replace(Arc::clone(&looped.cancel));

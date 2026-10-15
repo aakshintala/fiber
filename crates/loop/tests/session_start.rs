@@ -77,10 +77,7 @@ fn standing(tool: &str, decision: RuleDecision, prefix: &str) -> StandingRules {
 #[test]
 fn a_resumed_session_runs_session_start_again_with_reason_resume() {
     let mut session = Session::new(
-        vec![
-            Scripted::text("First."),
-            Scripted::text("Second."),
-        ],
+        vec![Scripted::text("First."), Scripted::text("Second.")],
         None,
     );
     let hooks = StartHooks::new();
@@ -186,7 +183,8 @@ fn a_suspended_resume_writes_a_passing_hook_context_after_the_batch_results() {
     );
     allowed.join().unwrap();
     assert_eq!(
-        hooks.seen()[0].0, "Resume",
+        hooks.seen()[0].0,
+        "Resume",
         "the suspended finish runs the hook: {:?}",
         hooks.seen()
     );
@@ -195,9 +193,18 @@ fn a_suspended_resume_writes_a_passing_hook_context_after_the_batch_results() {
     // contexts wait for the next step, after the results and after
     // `step_started`.
     let kinds = new_kinds(&session, lines_before);
-    let completed_at = kinds.iter().position(|kind| kind == "tool_call_completed").unwrap();
-    let stepped_at = kinds.iter().position(|kind| kind == "step_started").unwrap();
-    let context_at = kinds.iter().position(|kind| kind == "context_added").unwrap();
+    let completed_at = kinds
+        .iter()
+        .position(|kind| kind == "tool_call_completed")
+        .unwrap();
+    let stepped_at = kinds
+        .iter()
+        .position(|kind| kind == "step_started")
+        .unwrap();
+    let context_at = kinds
+        .iter()
+        .position(|kind| kind == "context_added")
+        .unwrap();
     assert!(
         completed_at < stepped_at && stepped_at < context_at,
         "results, then the step, then the context: {kinds:?}"
@@ -215,14 +222,8 @@ fn a_suspended_resume_writes_a_passing_hook_context_after_the_batch_results() {
     let requests = session.requests();
     assert_eq!(requests.len(), 2);
     let conversation = &requests[1].conversation;
-    assert!(matches!(
-        &conversation[2],
-        Input::ToolCall { .. }
-    ));
-    assert!(matches!(
-        &conversation[3],
-        Input::ToolResult { .. }
-    ));
+    assert!(matches!(&conversation[2], Input::ToolCall { .. }));
+    assert!(matches!(&conversation[3], Input::ToolResult { .. }));
     assert_eq!(user_texts(conversation)[2], "resumed context");
     drop(session.looped.take());
 }
@@ -361,7 +362,12 @@ fn a_rewound_loop_runs_session_start_with_reason_rewind() {
     let home = session.dir.parent().unwrap().to_path_buf();
     let clock = Arc::clone(&session.clock) as Arc<dyn contract::clock::Clock>;
     let log = Arc::new(
-        log::Log::create(&home, contract::SessionId("s_rewound".into()), clock.clone()).unwrap(),
+        log::Log::create(
+            &home,
+            contract::SessionId("s_rewound".into()),
+            clock.clone(),
+        )
+        .unwrap(),
     );
     let provider = Arc::new(ScriptedProvider::new(vec![Scripted::text("Third.")]));
     let (tx, rx) = mpsc::channel();

@@ -1266,12 +1266,24 @@ fn a_handoff_with_session_start_context_and_a_reviewer_completes() {
     // The hook's context follows the new opening message, and the
     // reviewer selection runs after it.
     let kinds = kinds(&lines);
-    let opening_at = kinds.iter().position(|kind| *kind == "opening_message").unwrap();
-    let context_at = kinds.iter().position(|kind| *kind == "context_added").unwrap();
-    let kept_at = kinds.iter().position(|kind| *kind == "reviewer_kept").unwrap();
+    let opening_at = kinds
+        .iter()
+        .position(|kind| *kind == "opening_message")
+        .unwrap();
+    let context_at = kinds
+        .iter()
+        .position(|kind| *kind == "context_added")
+        .unwrap();
+    let kept_at = kinds
+        .iter()
+        .position(|kind| *kind == "reviewer_kept")
+        .unwrap();
     assert!(context_at > opening_at, "{kinds:?}");
     assert!(kept_at > context_at, "{kinds:?}");
-    assert_eq!(of_kind(&lines, "context_added")[0].payload["text"], "at handoff");
+    assert_eq!(
+        of_kind(&lines, "context_added")[0].payload["text"],
+        "at handoff"
+    );
     assert_eq!(reviewer.requests().len(), 1);
     drop(session.looped.take());
     drop(reviewer);
