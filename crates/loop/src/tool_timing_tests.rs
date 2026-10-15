@@ -5109,6 +5109,42 @@ fn a_returned_anchor_cancels_its_running_descendant() {
     assert_eq!(ops(&world, "tool.run").len(), 3);
 }
 
+// A descendant released before its anchor returns is still cancelled:
+// the leaf waits for its cancel ahead of its gate on every order of
+// the test's two releases.
+#[test]
+fn a_returned_anchor_cancels_a_descendant_released_early() {
+    let ReturnedAnchor {
+        mut world,
+        leaf,
+        leaf_entered_rx,
+        leaf_gate_tx,
+        forget_tx,
+        report_rx,
+    } = returned_anchor();
+    let (seen_tx, seen_rx) = mpsc::channel();
+    leaf.watch_cancel(seen_tx);
+    prompt(&world, "hi");
+    let flight = spawn_turn(&mut world);
+    fakes::Deadline::after(WAIT).recv_or_fail(&leaf_entered_rx, "the leaf run is entered");
+    // The old order: the gate is already queued when the anchor returns.
+    leaf_gate_tx.send(()).expect("the leaf run waits");
+    forget_tx.send(()).expect("the forgetter waits");
+    fakes::Deadline::after(WAIT).recv_or_fail(&seen_rx, "the leaf sees its cancel");
+    assert_eq!(
+        join_turn(&mut world, flight).unwrap(),
+        Some(TurnOutcome::Completed)
+    );
+    assert_eq!(leaf.ran(), 1, "the descendant run was entered");
+    let report = fakes::Deadline::after(WAIT).recv_or_fail(&report_rx, "the leaf answers");
+    assert_eq!(
+        report, "answered Cancelled",
+        "the early leaf is cancelled too"
+    );
+    assert_eq!(ops(&world, "tool.permission").len(), 3);
+    assert_eq!(ops(&world, "tool.run").len(), 3);
+}
+
 // A command's inner call runs alone with its own order and run.
 #[test]
 fn a_command_inner_call_runs_alone_with_its_timers() {
