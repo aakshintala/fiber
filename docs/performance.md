@@ -60,7 +60,7 @@ a 20-thousand-token one fit the same ceiling.
 | Budget | Ceiling | Gated on | Basis | Fast ceiling | Middle ceiling | Slow ceiling | Fast tolerance | Slow tolerance |
 |---|---|---|---|---|---|---|---|---|
 | Session, idle, headless | 12 MiB peak RSS | Linux x86_64 | picked | — | — | — | — | — |
-| Terminal, idle | 9,944 KiB peak RSS | Linux x86_64 | from components | — | — | — | — | — |
+| Terminal, idle | 27,496 KiB peak RSS | Linux x86_64 | from components | — | — | — | — | — |
 | Session, busy or resumed | 46,720 KiB peak RSS | Linux x86_64 | measured | — | — | — | — | — |
 | `web_fetch` converting a 10 MiB HTML page, the download cap | within the busy session's 46,720 KiB peak RSS | Linux x86_64 | measured | — | — | — | — | — |
 | Idle CPU, session and terminal | zero context switches in the idle window, on every thread | Linux x86_64 | exact | — | — | — | — | — |
@@ -94,7 +94,11 @@ Basis says where a number came from:
   twice pulldown-cmark's 428 KiB on Linux x86_64, for rendering replies as
   markdown (`docs/dependencies.md`, "Runtime dependencies"), then 896 KiB,
   twice the 448 KiB the system root store costs when the TLS connector loads
-  it (`crates/net`; Linux x86_64, release run 38052645277). The terminal's
+  it (`crates/net`; Linux x86_64, release run 38052645277), then 17,552 KiB,
+  twice the 8,776 KiB of the binary's own pages resident at idle (RssFile at
+  the end of the idle window; Linux x86_64, CI run 38770038428). Those pages
+  move with code layout as much as with binary size: a 12 KiB larger binary
+  added 256 KiB of them, while RssAnon stayed at 1,268 KiB. The terminal's
   syntax highlighting is its own code and admits no crate. Admitting a
   crate for the terminal raises its ceiling by twice the crate's measured cost
   in the same pull request; its idle CPU and first
