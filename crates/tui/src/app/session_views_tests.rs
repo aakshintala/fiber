@@ -353,13 +353,14 @@ fn a_session_card_spend_click_opens_usage_and_keeps_the_draft() {
     ));
     app.on_edit(Edit::Paste("keep this draft".to_owned()));
     let (shown, targets) = screen(&app, 160, 40);
-    assert!(shown.contains("cost billed  $1.25"));
+    // The cost row reads dim `cost` with its figure right-aligned.
+    assert!(shown.contains("$1.25"));
     assert!(targets.iter().any(|target| {
         target.id == TargetId::Panel(PanelSpot::Usage)
             && shown
                 .lines()
                 .nth(usize::from(target.rect.y))
-                .is_some_and(|line| line.contains("cost billed"))
+                .is_some_and(|line| line.contains("cost") && line.contains("$1.25"))
     }));
     assert_eq!(
         app.on_click(TargetId::Panel(PanelSpot::Usage)),
@@ -748,7 +749,11 @@ fn the_narrow_context_segment_opens_the_view_and_keeps_the_draft() {
     app.on_line(context_status(50, 100));
     app.on_edit(Edit::Paste("keep this draft".to_owned()));
     let (shown, targets) = screen(&app, 100, 30);
-    assert!(shown.contains("50% context"), "{shown}");
+    // Short context form: dim `ctx`, the 8-cell bar and the size.
+    assert!(
+        shown.contains("ctx \u{2586}\u{2586}\u{2586}\u{2586}\u{2586}\u{2586}\u{2586}\u{2586} 50"),
+        "{shown}"
+    );
     assert!(
         targets
             .iter()
