@@ -317,7 +317,7 @@ pub(crate) const CASES: &[Case<State>] = &[
     Case {
         name: "slash",
         help: "the `/` list, eight of forty-one rows",
-        check: "the panel sits above the input box in the shared frame with ▄ ▀ edges and the ▌ stripe; eight rows of name in one fixed column, dim description and right-aligned tag, the focused row `›` on a full-width accent bar, sized to its content and centred, with a `1–8 of 41 · ↓ 33 more` footer.",
+        check: "the panel sits above the input box in the shared frame with ▄ ▀ edges; eight rows of name in one fixed column, dim description and right-aligned tag, the focused row `›` on a full-width accent bar, sized to its content and centred, with a `1–8 of 41 · ↓ 33 more` footer.",
         build: || State { focus: 0 },
     },
     Case {
@@ -889,7 +889,6 @@ mod tests {
         let t = text(&rows);
         assert!(t.contains("\u{2584}"), "no top edge");
         assert!(t.contains("\u{2580}"), "no bottom edge");
-        assert!(t.contains("\u{258c}"), "no stripe");
         assert!(t.contains("\u{203a} "), "no gutter marker");
         // Names in one fixed column: descriptions start in the same cell on
         // every row. The stripe and marker are multibyte, so count cells.

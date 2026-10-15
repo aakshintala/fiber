@@ -213,7 +213,7 @@ pub(crate) const CASES: &[Case<State>] = &[
     Case {
         name: "list",
         help: "providers and models, current marked",
-        check: "three providers with a dozen models between them, roles on the rows, `● current` on claude-opus-5-5, its level chips on the row below; a centred panel with ▄ ▀ edges and the ▌ stripe, dim providers with a blank row between sections, the focused model `›` on a full-width accent bar with its rebuild cost right-aligned, and a bold-key legend foot.",
+        check: "three providers with a dozen models between them, roles on the rows, `● current` on claude-opus-5-5, its level chips on the row below; a centred panel with ▄ ▀ edges, dim providers with a blank row between sections, the focused model `›` on a full-width accent bar with its rebuild cost right-aligned, and a bold-key legend foot.",
         build: base,
     },
     // after a click on the thinking chip: the current level focused
@@ -1001,7 +1001,6 @@ mod tests {
         let t = text(&rows);
         assert!(t.contains("\u{2584}"), "no top edge");
         assert!(t.contains("\u{2580}"), "no bottom edge");
-        assert!(t.contains("\u{258c}"), "no stripe");
         assert!(t.contains("\u{203a} "), "no gutter marker");
         // Centred: the edge run neither starts at the margin nor fills the row.
         let edge = t.split('\n').find(|l| l.contains("\u{2584}")).unwrap();
