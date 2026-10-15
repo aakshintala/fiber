@@ -26,14 +26,16 @@ impl Loop {
             .get(&hosted.call.name)
             .and_then(|(_, tool, _)| tool.effects(arguments).ok())
             .map_or_else(
-                || (
-                    DeclaredEffects {
-                        effects: Vec::new(),
-                        reversible: true,
-                        paths: None,
-                    },
-                    false,
-                ),
+                || {
+                    (
+                        DeclaredEffects {
+                            effects: Vec::new(),
+                            reversible: true,
+                            paths: None,
+                        },
+                        false,
+                    )
+                },
                 |effects| (effects.declared, effects.always_reviewed),
             );
         self.append(

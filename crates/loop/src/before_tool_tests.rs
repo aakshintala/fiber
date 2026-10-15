@@ -1307,8 +1307,7 @@ fn the_next_request_sends_the_models_call_with_the_lines_result() {
 #[test]
 fn rewrite_yields_both_fields_or_neither() {
     let tool = Arc::new(CountingTool::new("ok"));
-    let arguments: Map<String, Value> =
-        serde_json::from_value(json!({"path": "a.txt"})).unwrap();
+    let arguments: Map<String, Value> = serde_json::from_value(json!({"path": "a.txt"})).unwrap();
     let effects = Effects {
         declared: DeclaredEffects {
             effects: vec![Effect::Reads],

@@ -2599,10 +2599,7 @@ fn an_always_reviewed_call_logs_always_reviewed_on_its_denial() {
         None,
         vec![tool.clone() as Arc<dyn Tool>],
     );
-    session.reviewer(vec![
-        Scripted::text("check"),
-        Scripted::text("block no"),
-    ]);
+    session.reviewer(vec![Scripted::text("check"), Scripted::text("block no")]);
     let lines = go(&mut session);
     let resolved = line(&lines, "permission_resolved");
     assert_eq!(resolved.payload["decision"], "deny");
@@ -2691,8 +2688,7 @@ fn a_block_a_person_answers_leaves_the_effects_on_the_request_alone() {
 }
 
 fn always_reviewed_tool() -> Arc<TestTool> {
-    let mut declaring =
-        TestTool::declaring("shell", "Ran it.", vec![Effect::Executes], None);
+    let mut declaring = TestTool::declaring("shell", "Ran it.", vec![Effect::Executes], None);
     declaring.always_reviewed = true;
     Arc::new(declaring)
 }
@@ -2730,10 +2726,7 @@ fn an_always_reviewed_call_starts_and_asks_with_always_reviewed() {
         vec![tool.clone() as Arc<dyn Tool>],
     );
     session.reviewer_limits(
-        vec![
-            Scripted::text("check"),
-            Scripted::text("block no"),
-        ],
+        vec![Scripted::text("check"), Scripted::text("block no")],
         r#loop::BlockLimits {
             consecutive: 1,
             session: 20,
@@ -2820,8 +2813,7 @@ fn standing(tool: &str, decision: RuleDecision, prefix: &str) -> StandingRules {
 /// the allow's effects in the log with no start.
 #[test]
 fn a_reviewer_allow_cancelled_before_its_start_keeps_the_effects() {
-    let reviewed =
-        TestTool::declaring("reviewed", "Reviewed done.", vec![Effect::Executes], None);
+    let reviewed = TestTool::declaring("reviewed", "Reviewed done.", vec![Effect::Executes], None);
     let ask = shell(Some("npm publish"), None);
     let mut session = Session::with_tools(
         vec![calls_reply(
@@ -2853,9 +2845,7 @@ fn a_reviewer_allow_cancelled_before_its_start_keeps_the_effects() {
     // The allow keeps the call's effects, and the approved call never started.
     let allows: Vec<_> = lines
         .iter()
-        .filter(|l| {
-            l.kind == "permission_resolved" && l.payload["decision"] == "allow"
-        })
+        .filter(|l| l.kind == "permission_resolved" && l.payload["decision"] == "allow")
         .collect();
     assert_eq!(allows.len(), 1);
     assert_eq!(allows[0].payload.get("request_id"), None);

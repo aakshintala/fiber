@@ -987,30 +987,32 @@ fn a_permission_resolved_with_no_effect_keys_reads_as_no_reviewed_call() {
         panic!("not a permission_resolved");
     };
     assert_eq!(resolved.call, None);
-    let written = Value::Object(
-        Event::PermissionResolved(resolved).payload().unwrap(),
-    );
+    let written = Value::Object(Event::PermissionResolved(resolved).payload().unwrap());
     assert_eq!(written, payload);
-    for key in ["effects", "reversible", "paths", "always_reviewed",
-        "arguments", "changed_by"]
-    {
+    for key in [
+        "effects",
+        "reversible",
+        "paths",
+        "always_reviewed",
+        "arguments",
+        "changed_by",
+    ] {
         assert_eq!(written.get(key), None, "{key}");
     }
 }
 
 #[test]
 fn a_reviewed_call_writes_always_reviewed_only_when_true() {
-    let base = || json!({"decision": "deny", "decided_by": "reviewer",
+    let base = || {
+        json!({"decision": "deny", "decided_by": "reviewer",
         "reason": "r", "reviewer": {"model": "p/m", "stage": 1},
-        "effects": ["executes"], "reversible": true});
-    let Some(Event::PermissionResolved(resolved)) =
-        read("permission_resolved", base()).unwrap()
+        "effects": ["executes"], "reversible": true})
+    };
+    let Some(Event::PermissionResolved(resolved)) = read("permission_resolved", base()).unwrap()
     else {
         panic!("not a permission_resolved");
     };
-    let written = Value::Object(
-        Event::PermissionResolved(resolved).payload().unwrap(),
-    );
+    let written = Value::Object(Event::PermissionResolved(resolved).payload().unwrap());
     assert_eq!(written.get("always_reviewed"), None);
     let mut with_true = base();
     with_true["always_reviewed"] = json!(true);
@@ -1020,9 +1022,7 @@ fn a_reviewed_call_writes_always_reviewed_only_when_true() {
         panic!("not a permission_resolved");
     };
     assert!(resolved.call.as_ref().unwrap().always_reviewed);
-    let written = Value::Object(
-        Event::PermissionResolved(resolved).payload().unwrap(),
-    );
+    let written = Value::Object(Event::PermissionResolved(resolved).payload().unwrap());
     assert_eq!(written, with_true);
     let mut with_false = base();
     with_false["always_reviewed"] = json!(false);
@@ -1031,9 +1031,7 @@ fn a_reviewed_call_writes_always_reviewed_only_when_true() {
     else {
         panic!("not a permission_resolved");
     };
-    let written = Value::Object(
-        Event::PermissionResolved(resolved).payload().unwrap(),
-    );
+    let written = Value::Object(Event::PermissionResolved(resolved).payload().unwrap());
     assert_eq!(written, base());
 }
 
@@ -1068,9 +1066,7 @@ fn a_resolution_with_empty_effects_and_reversible_reads_as_a_reviewed_call() {
     };
     let call = resolved.call.as_ref().unwrap();
     assert!(call.declared.effects.is_empty());
-    let written = Value::Object(
-        Event::PermissionResolved(resolved).payload().unwrap(),
-    );
+    let written = Value::Object(Event::PermissionResolved(resolved).payload().unwrap());
     assert_eq!(written, payload);
 }
 

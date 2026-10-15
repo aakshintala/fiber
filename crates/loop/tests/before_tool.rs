@@ -393,10 +393,7 @@ fn a_blocked_rewritten_call_logs_the_arguments_it_was_judged_with() {
     assert_eq!(resolved.payload["reversible"], true);
     assert_eq!(resolved.payload["paths"], json!(["b.txt"]));
     assert_eq!(resolved.payload["arguments"], json!({"path": "b.txt"}));
-    assert_eq!(
-        resolved.payload["changed_by"],
-        json!(["fiber.test/guard"])
-    );
+    assert_eq!(resolved.payload["changed_by"], json!(["fiber.test/guard"]));
     let flat = serde_json::to_string(&resolved.payload).unwrap();
     assert!(!flat.contains("a.txt"), "{flat}");
     assert!(tool.runs().is_empty());

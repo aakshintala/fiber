@@ -60,10 +60,7 @@ impl Prepared {
     /// neither when no hook rewrote the call.
     pub(crate) fn rewrite(&self) -> (Option<Map<String, Value>>, Option<Vec<String>>) {
         match &self.rewritten {
-            Some(changed_by) => (
-                Some(self.arguments.clone()),
-                Some(changed_by.clone()),
-            ),
+            Some(changed_by) => (Some(self.arguments.clone()), Some(changed_by.clone())),
             None => (None, None),
         }
     }

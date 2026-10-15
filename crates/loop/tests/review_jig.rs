@@ -22,9 +22,9 @@ use std::time::Duration;
 use contract::events::{
     Anchor, ArgumentRepair, AskStep, CallStatus, DecidedBy, Decision, Event, HandoffCompleted,
     InputItem, InstructionFile, InstructionReason, InstructionSent, Outcome, PermissionRequested,
-    PermissionResolved, RanBy, Repair, RepairFix, ReviewedCall, ReviewerRef, RuleScope, SessionStarted,
-    StandingRule, SteeringApplied, TextCompleted, ToolCallCompleted, ToolCallRequested,
-    ToolCallStarted, TurnOutcome, TurnStarted, Variables, VariablesSource,
+    PermissionResolved, RanBy, Repair, RepairFix, ReviewedCall, ReviewerRef, RuleScope,
+    SessionStarted, StandingRule, SteeringApplied, TextCompleted, ToolCallCompleted,
+    ToolCallRequested, ToolCallStarted, TurnOutcome, TurnStarted, Variables, VariablesSource,
 };
 use contract::provider::{Input, ModelRequest};
 use contract::shapes::{ContentPart, DeclaredEffects, Effect, Origin, Point, Sender};

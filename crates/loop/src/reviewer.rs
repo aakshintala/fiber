@@ -382,13 +382,7 @@ impl Loop {
             model: endpoint.reference.clone(),
             stage,
         });
-        let mut line = resolved(
-            None,
-            Decision::Allow,
-            DecidedBy::Reviewer,
-            reason,
-            reviewer,
-        );
+        let mut line = resolved(None, Decision::Allow, DecidedBy::Reviewer, reason, reviewer);
         line.call = Some(reviewed_call(under));
         self.append(&Event::PermissionResolved(line), under.turn, Some(under.id))?;
         Ok(Ok(under.prepared.clone()))
