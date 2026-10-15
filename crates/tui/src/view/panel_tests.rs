@@ -196,8 +196,9 @@ fn the_session_card_ends_with_the_hidden_rail_line() {
     );
     assert_eq!(line.line.spans[1].content, " 2 waiting · hidden · show");
     assert_eq!(line.line.spans[1].style, style(Role::Attention));
-    // The line ends the card: the first text row is the directory.
-    assert!(drawn[1].line.to_string().starts_with("directory"));
+    // The line ends the card: the first text row is the title, naming
+    // the working directory with the permission mode right-aligned.
+    assert!(drawn[1].line.to_string().ends_with("auto"));
 }
 
 /// With the rail hidden and three live sessions but none waiting,
@@ -261,13 +262,17 @@ fn pct_and_bar_floor() {
     let drawn = texts(&app, 40);
     // Two of 17 cells fill (119 of the 800 trigger), then the marker
     // and the size right-aligned.
-    let bar = "▆▆".to_owned() + &"░".repeat(15) + "│" + &" ".repeat(16) + "119";
+    let bar = "\u{2586}\u{2586}".to_owned()
+        + &"\u{2591}".repeat(15)
+        + "\u{2502}"
+        + &" ".repeat(15)
+        + "119";
     assert!(drawn.iter().any(|row| row == &bar), "{drawn:?}");
     // The handoff row fits with three of pad, nothing cut.
     assert!(
         drawn
             .iter()
-            .any(|row| row == "handoff at 800          11% of window"),
+            .any(|row| row == "handoff at 800         11% of window"),
         "{drawn:?}"
     );
     assert!(
@@ -327,7 +332,7 @@ fn a_full_context_fills_every_cell() {
     ));
     let drawn = texts(&app, 40);
     // All 17 cells fill, no marker without a trigger, then the size.
-    let bar = "▆".repeat(17) + &" ".repeat(16) + "1.0k";
+    let bar = "\u{2586}".repeat(17) + &" ".repeat(15) + "1.0k";
     assert!(drawn.iter().any(|row| row == &bar), "{drawn:?}");
     // With no trigger the share stands alone, left-aligned.
     assert!(drawn.iter().any(|row| row == "100% of window"), "{drawn:?}");
@@ -342,13 +347,13 @@ fn the_marker_follows_the_seventeen_cells() {
         Some(serde_json::json!({"tokens": 500, "window": 1000})),
     ));
     let drawn = texts(&app, 40);
-    let bar = "▆".repeat(8) + &"░".repeat(9) + "│" + &" ".repeat(16) + "500";
+    let bar = "\u{2586}".repeat(8) + &"\u{2591}".repeat(9) + "\u{2502}" + &" ".repeat(15) + "500";
     assert!(drawn.iter().any(|row| row == &bar), "{drawn:?}");
     // The handoff row fits with two of pad, nothing cut.
     assert!(
         drawn
             .iter()
-            .any(|row| row == "handoff at 1.0k         50% of window"),
+            .any(|row| row == "handoff at 1.0k        50% of window"),
         "{drawn:?}"
     );
 }
@@ -827,7 +832,7 @@ fn widget_rows_are_cut_at_the_text_width() {
         .layout()
         .and_then(|layout| layout.panel)
         .unwrap_or_else(|| panic!("a panel rect"));
-    let text = usize::from(rect.width).saturating_sub(3);
+    let text = usize::from(rect.width).saturating_sub(4);
     fold_widget(&mut app, "plan", "tasks", &["x".repeat(text + 10).as_str()]);
     let drawn: Vec<String> = rows(&app, rect.width)
         .iter()
@@ -838,8 +843,8 @@ fn widget_rows_are_cut_at_the_text_width() {
     assert!(drawn[1].starts_with("plan · tasks"));
     assert_eq!(crate::format::width(&drawn[2]), text);
     assert!(drawn[2].ends_with('\u{2026}'), "{:?}", drawn[2]);
-    assert_eq!(crate::format::width(&drawn[0]), text + 2);
-    assert_eq!(crate::format::width(&drawn[3]), text + 2);
+    assert_eq!(crate::format::width(&drawn[0]), text + 3);
+    assert_eq!(crate::format::width(&drawn[3]), text + 3);
 }
 
 /// Folds `paths` of `(path, added, removed)` as one completed call.
@@ -906,7 +911,7 @@ fn a_scroll_past_the_end_after_a_resize_is_clamped_when_drawn() {
     app.set_size(160, 60);
     let (buf, _) = draw_targets(&app);
     let shown = super::super::text(&buf);
-    assert_eq!(shown.lines().nth(1).unwrap_or_default(), "  line 02");
+    assert_eq!(shown.lines().nth(1).unwrap_or_default(), "   line 02");
 }
 
 #[test]
@@ -924,7 +929,8 @@ fn the_top_five_by_lines_changed_ties_by_path() {
         ],
     );
     let drawn = texts(&app, 40);
-    let files: Vec<&String> = drawn.iter().skip(1).take(5).collect();
+    // The edge, the title, then the five paths.
+    let files: Vec<&String> = drawn.iter().skip(2).take(5).collect();
     assert_eq!(files.len(), 5);
     for (row, path) in files
         .iter()
@@ -932,8 +938,8 @@ fn the_top_five_by_lines_changed_ties_by_path() {
     {
         assert!(row.starts_with(path), "{row}");
     }
-    assert!(drawn[1].ends_with("+8 \u{2212}2"));
-    assert!(drawn[5].ends_with("+4 \u{2212}2"));
+    assert!(drawn[2].ends_with("+8 \u{2212}2"));
+    assert!(drawn[6].ends_with("+4 \u{2212}2"));
     assert!(
         drawn
             .iter()
@@ -955,7 +961,7 @@ fn exactly_five_paths_all_show() {
         ],
     );
     let drawn = texts(&app, 40);
-    assert_eq!(drawn.len(), 8);
+    assert_eq!(drawn.len(), 9);
     assert!(
         drawn
             .iter()
@@ -1010,7 +1016,11 @@ fn one_job_shows_the_card() {
     fold_job(&mut app, "j_2", "test");
     assert_eq!(
         texts(&app, 40),
-        vec!["▄".repeat(39), "2 jobs running".to_owned(), "▀".repeat(39)]
+        vec![
+            "\u{2584}".repeat(39),
+            "Jobs                     2 running \u{25b8}".to_owned(),
+            "\u{2580}".repeat(39)
+        ]
     );
 }
 
@@ -1023,22 +1033,19 @@ fn the_jobs_line_and_its_rows_are_targets() {
     let (_, targets) = draw_targets(&app);
     assert_eq!(targets.len(), 1);
     assert_eq!(targets[0].id, crate::mouse::TargetId::Panel(Spot::Jobs));
-    assert_eq!(targets[0].rect.x, 2);
+    assert_eq!(targets[0].rect.x, 3);
     assert_eq!(targets[0].rect.y, 2);
-    assert_eq!(
-        targets[0].rect.width,
-        u16::try_from("2 jobs running".len()).unwrap_or(u16::MAX)
-    );
+    assert_eq!(targets[0].rect.width, 30);
     app.on_click(crate::mouse::TargetId::Panel(Spot::Jobs));
     let drawn = texts(&app, 40);
     assert_eq!(
         drawn,
         vec![
-            "▄".repeat(39),
-            "2 jobs running".to_owned(),
+            "\u{2584}".repeat(39),
+            "Jobs                     2 running \u{25b8}".to_owned(),
             "  build".to_owned(),
             "  test".to_owned(),
-            "▀".repeat(39)
+            "\u{2580}".repeat(39)
         ]
     );
     // Each listed job row carries its job's serial.
@@ -1308,4 +1315,134 @@ fn no_color_boxes_a_sidebar_card_and_keeps_targets_inside() {
     let (rows, span) = super::rows_and_delegates(&app, rect.width);
     assert_eq!(rows.len(), 4);
     assert_eq!(span, None);
+}
+
+/// Draws `app`'s panel at `width` columns: the buffer, row by row.
+fn draw_at(app: &App, width: u16, height: u16) -> Buffer {
+    let area = Rect::new(0, 0, width, height);
+    let mut buf = Buffer::empty(area);
+    super::draw(app, area, &mut buf, &mut Vec::new());
+    buf
+}
+
+/// An app with only a status: the Session card draws its title and the
+/// model row the status names.
+fn status_only() -> App {
+    let mut app = attached(160, 40);
+    app.on_line(status_line(
+        spend(1, 0, 0, 2, serde_json::json!(0.0), 0.0),
+        None,
+    ));
+    app
+}
+
+/// The Session card's title names the working directory in bold, with
+/// the permission mode right-aligned in attention (`docs/tui.md`, "The
+/// panel"): at the 34-column panel and at the 30-column floor.
+#[test]
+fn the_session_title_names_the_workspace_with_auto_right_aligned() {
+    use crate::markdown::{Role, style};
+    use ratatui::style::Modifier;
+    for (width, title) in [
+        (34u16, "/Users/you/work/fiber     auto"),
+        (30u16, "/Users/you/work/fiber auto"),
+    ] {
+        let app = status_only();
+        let drawn = rows(&app, width);
+        // The top edge, the title, the model, tokens and cache rows,
+        // the bottom edge.
+        assert_eq!(drawn.len(), 6, "{width}");
+        assert!(drawn[0].edge);
+        assert_eq!(drawn[1].line.to_string(), title, "{width}");
+        // A title row opens no view.
+        assert_eq!(drawn[1].spot, None);
+        assert_eq!(drawn[1].line.spans.len(), 3);
+        assert_eq!(drawn[1].line.spans[0].content, "/Users/you/work/fiber");
+        assert_eq!(
+            drawn[1].line.spans[0].style,
+            style(Role::Text).add_modifier(Modifier::BOLD)
+        );
+        assert_eq!(drawn[1].line.spans[2].content, "auto");
+        assert_eq!(drawn[1].line.spans[2].style, style(Role::Attention));
+    }
+}
+
+/// The slab starts at the panel's second column and its text two columns
+/// past it, ending one column before the slab's right edge
+/// (`docs/tui.md`, "The panel"): 30 text columns at 34.
+#[test]
+fn card_text_starts_two_columns_past_the_slab() {
+    let app = status_only();
+    let buf = draw_at(&app, 34, 20);
+    // The slab covers columns 1 to 33; the title reads at 3 to 32.
+    let title: String = (3..33).map(|x| buf[(x, 2)].symbol()).collect();
+    assert_eq!(title.trim_end(), "/Users/you/work/fiber     auto");
+    // The right value ends one column before the slab's right edge,
+    // which keeps the tint but no text.
+    assert_eq!(buf[(32, 2)].symbol(), "o");
+    assert_eq!(buf[(33, 2)].symbol(), " ");
+    assert_eq!(buf[(33, 2)].bg, crate::theme::Role::Surface.color());
+}
+
+/// Each card sits on its surface tint with half-block edges in the
+/// surface colour over the panel colour (`docs/tui.md`, "Look").
+#[test]
+fn each_cards_edges_draw_in_surface() {
+    let app = status_only();
+    let buf = draw_at(&app, 34, 20);
+    let surface = crate::theme::Role::Surface.color();
+    // The top edge on row 1, four text rows, the bottom edge on row 6.
+    for x in 1..34 {
+        assert_eq!(buf[(x, 1)].symbol(), "\u{2584}", "top at {x}");
+        assert_eq!(buf[(x, 1)].fg, surface, "top at {x}");
+        assert_eq!(buf[(x, 6)].symbol(), "\u{2580}", "bottom at {x}");
+        assert_eq!(buf[(x, 6)].fg, surface, "bottom at {x}");
+    }
+    for y in 2..=5 {
+        for x in 1..34 {
+            assert_eq!(buf[(x, y)].bg, surface, "text at ({x}, {y})");
+        }
+    }
+}
+
+/// The blank row after a card shows the panel's tint, not the card's:
+/// the rows report no tint for it (`docs/tui.md`, "The panel").
+#[test]
+fn the_blank_row_after_a_card_shows_no_card_tint() {
+    let mut app = status_only();
+    fold_widget(&mut app, "ext", "one", &["hello"]);
+    let drawn = rows(&app, 34);
+    // The Session card's six rows, the blank row, the widget's four.
+    assert_eq!(drawn.len(), 11);
+    assert_eq!(drawn[6].line.to_string(), "");
+    assert_eq!(drawn[6].tint, None);
+    assert_eq!(drawn[6].spot, None);
+    assert!(!drawn[6].edge);
+    let buf = draw_at(&app, 34, 20);
+    let surface = crate::theme::Role::Surface.color();
+    assert_ne!(buf[(3, 7)].bg, surface);
+}
+
+/// A card with no content rows draws nothing: no edge, no title and no
+/// blank row (`docs/tui.md`, "The panel").
+#[test]
+fn cards_without_content_draw_nothing() {
+    let app = attached(160, 40);
+    assert!(rows(&app, 40).is_empty());
+    // Without a status the session content draws with no title, as the
+    // base drew no directory row: the card opens on the model row.
+    let mut app = attached(160, 40);
+    app.on_line(preamble_line(Some(800)));
+    let drawn = rows(&app, 40);
+    assert_eq!(drawn.len(), 3);
+    assert!(drawn[0].edge);
+    assert_eq!(
+        drawn[1].line.to_string(),
+        "model  test/model · thinking high"
+    );
+    assert!(
+        drawn
+            .iter()
+            .all(|row| !row.line.to_string().contains("auto"))
+    );
 }

@@ -115,9 +115,10 @@ fn panel_width(app: &App) -> u16 {
         .width
 }
 
-/// The text width of the panel's cards.
+/// The text width of the panel's cards: the slab offset and the two
+/// columns of padding on the left and one on the right.
 fn text_width(app: &App) -> usize {
-    usize::from(panel_width(app)).saturating_sub(3)
+    usize::from(panel_width(app)).saturating_sub(4)
 }
 
 /// The Delegates card's rows' text.
@@ -285,17 +286,27 @@ fn the_card_takes_its_listed_place() {
     let mut app = attached_with(160, 40, &["jobs", "delegates"]);
     fold_job(&mut app, "j_0", "build");
     fold_delegates(&mut app, 1);
-    let edge = "▄".repeat(usize::from(panel_width(&app).saturating_sub(1)));
-    let edge_bottom = "▀".repeat(usize::from(panel_width(&app).saturating_sub(1)));
+    let edge = "\u{2584}".repeat(usize::from(panel_width(&app).saturating_sub(1)));
+    let edge_bottom = "\u{2580}".repeat(usize::from(panel_width(&app).saturating_sub(1)));
+    let text = text_width(&app);
+    let jobs = format!(
+        "Jobs{}1 running \u{25b8}",
+        " ".repeat(text - "Jobs".len() - crate::format::width("1 running \u{25b8}"))
+    );
+    let delegates = format!(
+        "Delegates{}1 running",
+        " ".repeat(text - "Delegates".len() - "1 running".len())
+    );
     assert_eq!(
         texts(&app),
         vec![
             edge.clone(),
-            "1 job running".to_owned(),
+            jobs,
             edge_bottom.clone(),
             String::new(),
             edge,
-            "● fiber  test/model".to_owned(),
+            delegates,
+            "\u{25cf} fiber  test/model".to_owned(),
             "  task 1".to_owned(),
             edge_bottom,
         ]
@@ -306,12 +317,14 @@ fn the_card_takes_its_listed_place() {
 fn no_delegates_draws_no_card_and_no_blank_row() {
     let mut app = attached_with(160, 40, &["delegates", "jobs"]);
     fold_job(&mut app, "j_0", "build");
-    let edge = "▄".repeat(usize::from(panel_width(&app).saturating_sub(1)));
-    let edge_bottom = "▀".repeat(usize::from(panel_width(&app).saturating_sub(1)));
-    assert_eq!(
-        texts(&app),
-        vec![edge, "1 job running".to_owned(), edge_bottom]
+    let edge = "\u{2584}".repeat(usize::from(panel_width(&app).saturating_sub(1)));
+    let edge_bottom = "\u{2580}".repeat(usize::from(panel_width(&app).saturating_sub(1)));
+    let text = text_width(&app);
+    let jobs = format!(
+        "Jobs{}1 running \u{25b8}",
+        " ".repeat(text - "Jobs".len() - crate::format::width("1 running \u{25b8}"))
     );
+    assert_eq!(texts(&app), vec![edge, jobs, edge_bottom]);
 }
 
 #[test]
@@ -400,19 +413,26 @@ fn the_span_covers_only_the_card_rows() {
     let texts: Vec<String> = drawn.iter().map(|row| row.line.to_string()).collect();
     let start = texts
         .iter()
-        .position(|row| row == "● fiber  test/model")
+        .position(|row| row == "\u{25cf} fiber  test/model")
         .unwrap_or_else(|| panic!("the card's first row"));
-    assert!(start > 1);
-    assert_eq!(span, Some(start - 1..start + 5));
-    assert_eq!(texts.get(start - 2).map(String::as_str), Some(""));
+    assert!(start > 2);
+    // The edge, the title row, then the content: the span covers the
+    // card's rows from its top edge to its bottom edge.
+    assert_eq!(span, Some(start - 2..start + 5));
+    assert!(texts[start - 1].starts_with("Delegates"));
+    assert_eq!(texts.get(start - 3).map(String::as_str), Some(""));
     assert_eq!(texts.get(start + 5).map(String::as_str), Some(""));
     assert!(
-        texts.get(start + 6).is_some_and(|row| row.starts_with('▄')),
+        texts
+            .get(start + 6)
+            .is_some_and(|row| row.starts_with('\u{2584}')),
         "{texts:?}"
     );
-    assert_eq!(
-        texts.get(start + 7).map(String::as_str),
-        Some("1 job running")
+    assert!(
+        texts
+            .get(start + 7)
+            .is_some_and(|row| row.ends_with("1 running \u{25b8}")),
+        "{texts:?}"
     );
 }
 

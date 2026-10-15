@@ -4,7 +4,7 @@ expression: "super::super::text(&buf)"
 ---
 
  ▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
-  2 jobs running
-    build the workspace
-    test the workspace
+   Jobs               2 running ▸
+     build the workspace
+     test the workspace
  ▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀

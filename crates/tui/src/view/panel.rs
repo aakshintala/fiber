@@ -19,6 +19,11 @@ use crate::surface;
 
 pub(crate) mod delegates;
 
+/// The permission mode every session runs in (`docs/permissions.md`,
+/// "One mode"): the literal, shared by the Session title row and the
+/// narrow status line's segment.
+pub(super) const PERMISSION_MODE: &str = "auto";
+
 /// One card the panel draws.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) enum Card {
@@ -147,8 +152,8 @@ pub(crate) fn rows_and_delegates(app: &App, width: u16) -> (Vec<Row>, Option<Ran
 }
 
 /// Draws every card's rows into the panel rect: each card on its surface
-/// tint from the column's second column, its text at `area.x + 2`,
-/// `area.width - 3` columns wide, the first card on `area.y + 1`. The
+/// tint from the column's second column, its text at `area.x + 3`,
+/// `area.width - 4` columns wide, the first card on `area.y + 1`. The
 /// blank row between cards shows the region's `panel` tint. Without
 /// colour each card is a thin box instead: no tint is laid, the edge
 /// rows already draw ┌─┐ and └─┘, and each text row takes │ sides on the
@@ -171,7 +176,9 @@ pub(crate) fn draw(app: &App, area: Rect, buf: &mut Buffer, targets: &mut Vec<Ta
     // Without colour the rows already carry the box: no tint is laid,
     // so every cell keeps the terminal's default colours.
     let boxed = surface::box_fit(area.width);
-    let x = area.x.saturating_add(2);
+    // The doc counts two columns of padding from the slab, so the text
+    // starts two columns past it (`docs/tui.md`, "The panel").
+    let x = area.x.saturating_add(3);
     let mut y = area.y.saturating_add(1);
     let mut drawn: usize = 0;
     for row in rows.iter().skip(skip) {
@@ -216,6 +223,42 @@ pub(crate) fn draw(app: &App, area: Rect, buf: &mut Buffer, targets: &mut Vec<Ta
     }
 }
 
+/// A card's title row at `text` columns: `name` bold on the left, the
+/// figures right-aligned (`docs/tui.md`, "The panel"). The name is cut
+/// from the left when the two cannot fit.
+fn title_row(name: &str, figures: Vec<Span<'static>>, text: usize) -> Row {
+    let right_w: usize = figures
+        .iter()
+        .map(|span| format::width(&span.content))
+        .sum();
+    let room = text.saturating_sub(right_w.saturating_add(1));
+    let shown = cut_left(name, room.max(1));
+    let used = format::width(&shown);
+    let pad = text.saturating_sub(used + right_w).max(1);
+    let mut spans = vec![Span::styled(
+        shown,
+        style(Role::Text).add_modifier(Modifier::BOLD),
+    )];
+    spans.push(Span::raw(" ".repeat(pad)));
+    spans.extend(figures);
+    Row {
+        line: Line::from(spans),
+        spot: None,
+        tint: None,
+        edge: false,
+    }
+}
+
+/// `n` running: "1 running", "0 running".
+fn running_figure(n: usize) -> String {
+    let count = u64::try_from(n).unwrap_or(u64::MAX);
+    if count == 1 {
+        "1 running".to_owned()
+    } else {
+        format!("{count} running")
+    }
+}
+
 /// `rows` with each row wider than `text` cut to fit, its last cell a
 /// `…` in the style of the span it cuts (`docs/tui.md`, "The panel"). A
 /// row keeps its target, tint and spans before the cut.
@@ -249,13 +292,78 @@ fn fit_spans(spans: Vec<Span<'static>>, text: usize) -> Vec<Span<'static>> {
     out
 }
 
-/// One card's rows at `text` columns.
+/// One card's rows at `text` columns: its title row, then its content
+/// rows. A card with no content rows draws nothing: no edge, no title
+/// and no blank row (`docs/tui.md`, "The panel"). Title rows carry no
+/// target, except the Jobs title, whose `▸` toggles the list.
 fn card_rows(app: &App, card: &Card, text: usize) -> Vec<Row> {
     match card {
-        Card::Session => session_rows(app, text),
-        Card::ChangedFiles => changed_files_rows(app, text),
-        Card::Jobs => jobs_rows(app),
-        Card::Delegates => delegates::rows(app, text),
+        Card::Session => {
+            let content = session_rows(app, text);
+            if content.is_empty() {
+                return Vec::new();
+            }
+            let mut out = Vec::new();
+            // Without a status the content rows draw with no title, as
+            // the base drew no directory row.
+            if let Some(status) = app.panel_state().status() {
+                out.push(title_row(
+                    &status.workspace,
+                    vec![Span::styled(PERMISSION_MODE, style(Role::Attention))],
+                    text,
+                ));
+            }
+            out.extend(content);
+            out
+        }
+        Card::ChangedFiles => {
+            let content = changed_files_rows(app, text);
+            if content.is_empty() {
+                return Vec::new();
+            }
+            let count = app.panel_state().changes().len();
+            let mut out = vec![title_row(
+                "Changed files",
+                vec![Span::styled(count.to_string(), style(Role::Muted))],
+                text,
+            )];
+            out.extend(content);
+            out
+        }
+        Card::Jobs => {
+            let running = app.panel_state().running_jobs();
+            if running.is_empty() {
+                return Vec::new();
+            }
+            let figure = running_figure(running.len());
+            let mut title = title_row(
+                "Jobs",
+                vec![
+                    Span::styled(figure, style(Role::Attention)),
+                    Span::styled(" \u{25b8}", style(Role::Muted)),
+                ],
+                text,
+            );
+            title.spot = Some(Spot::Jobs);
+            let mut out = vec![title];
+            out.extend(jobs_rows(app));
+            out
+        }
+        Card::Delegates => {
+            let content = delegates::rows(app, text);
+            if content.is_empty() {
+                return Vec::new();
+            }
+            let running = app.panel_state().running_delegates().len();
+            let figure = if running > 0 {
+                Span::styled(running_figure(running), style(Role::Attention))
+            } else {
+                Span::styled(running_figure(running), style(Role::Muted))
+            };
+            let mut out = vec![title_row("Delegates", vec![figure], text)];
+            out.extend(content);
+            out
+        }
         Card::Widget(at) => widget_rows(app, *at),
     }
 }
@@ -264,12 +372,7 @@ fn card_rows(app: &App, card: &Card, text: usize) -> Vec<Row> {
 fn session_rows(app: &App, text: usize) -> Vec<Row> {
     let panel = app.panel_state();
     let mut out = Vec::new();
-    if let Some(status) = panel.status() {
-        out.push(plain(format!(
-            "directory  {}",
-            cut_left(&status.workspace, text.saturating_sub("directory  ".len()))
-        )));
-    }
+    // The title row carries the working directory.
     if let Some(row) = branch_row(app) {
         out.push(row);
     }
@@ -632,31 +735,19 @@ fn changed_files_rows(app: &App, text: usize) -> Vec<Row> {
     out
 }
 
-/// The Jobs card's rows at `text` columns: one line saying how many run,
-/// shown only while a job runs, then one row per job while open. A
-/// delegate is a job with a `delegate_started`, and its own card shows it
-/// (`docs/tui.md`, "The panel"). Each listed job row carries its job's
-/// serial, so a click opens that job.
+/// The Jobs card's open list rows: one row per running job. The title
+/// row carries the count, so a closed card draws the title alone.
 fn jobs_rows(app: &App) -> Vec<Row> {
     let running = app.panel_state().running_jobs();
     if running.is_empty() {
         return Vec::new();
     }
-    let mut out = vec![Row {
-        line: Line::raw(format!(
-            "{} running",
-            format::count(
-                u64::try_from(running.len()).unwrap_or(u64::MAX),
-                "job",
-                "jobs"
-            )
-        )),
-        spot: Some(Spot::Jobs),
-        tint: None,
-        edge: false,
-    }];
-    if app.panel_state().jobs_open() {
-        out.extend(running.into_iter().map(|(id, description)| {
+    if !app.panel_state().jobs_open() {
+        return Vec::new();
+    }
+    running
+        .into_iter()
+        .map(|(id, description)| {
             let spot = app.serial_of_job(id).map(Spot::Job);
             Row {
                 line: Line::raw(format!("  {description}")),
@@ -664,13 +755,12 @@ fn jobs_rows(app: &App) -> Vec<Row> {
                 tint: None,
                 edge: false,
             }
-        }));
-    }
-    out
+        })
+        .collect()
 }
 
-/// The card text's width: the rect less the edge and one margin column
-/// each side, two narrower where a box takes the sides
+/// The card text's width: the rect less the slab offset and one margin
+/// column each side, two narrower where a box takes the sides
 /// (`docs/tui.md`, "Look").
 fn card_text_width(width: u16) -> usize {
     if surface::box_fit(width) {
@@ -680,10 +770,11 @@ fn card_text_width(width: u16) -> usize {
     }
 }
 
-/// The card text's width: the rect less the edge and one margin column
-/// each side.
+/// The card text's width: the panel less its slab offset and the two
+/// columns of padding on the left and one on the right (`docs/tui.md`,
+/// "The panel").
 fn text_width(width: u16) -> usize {
-    usize::from(width).saturating_sub(3)
+    usize::from(width).saturating_sub(4)
 }
 
 #[cfg(test)]

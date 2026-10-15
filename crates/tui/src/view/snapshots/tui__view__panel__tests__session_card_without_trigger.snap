@@ -4,11 +4,11 @@ expression: "super::super::text(&buf)"
 ---
 
  ▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
-  directory  …sers/you/work/fiber
-  model  test/model · thinking h…
-  ▆▆▆▆▆▆▆▆░░░░░░░░░           500
-  50% of window
-  tokens in / out  1.1k / 200
-  cache hits  9%
-  cost billed  $0.41
+   /Users/you/work/fiber     auto
+   model  test/model · thinking …
+   ▆▆▆▆▆▆▆▆░░░░░░░░░          500
+   50% of window
+   tokens in / out  1.1k / 200
+   cache hits  9%
+   cost billed  $0.41
  ▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀
