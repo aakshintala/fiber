@@ -283,6 +283,7 @@ impl Tool for DelegateSpawn {
             self.cap,
             Arc::clone(&self.watch),
             None,
+            None,
         );
         let (child, listing) = match runner.spawn(&self.launch, &launched) {
             Ok(child) => child,
