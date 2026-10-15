@@ -894,8 +894,9 @@ fn an_initial_replay_completes_on_its_accepted_acknowledgement() {
     assert_eq!(client_line(&client_read)["kind"], json!("session_status"));
     // The acknowledgement came before the disconnect: ending now
     // completes nothing twice.
+    let thread = take_thread(&relays, REPLAY_SID, epoch);
     drop(session_end);
-    join_relay(take_thread(&relays, REPLAY_SID, epoch));
+    join_relay(thread);
     assert_op_line(&op_timings(&temp.hub_log()), "hub.subscribe_replay", 0);
 }
 
@@ -915,9 +916,10 @@ fn an_initial_replay_completes_on_its_rejected_acknowledgement() {
     });
     assert_op_line(&await_op_lines(&temp, 1), "hub.subscribe_replay", 0);
     assert!(lock(&relays).pending_replay.is_empty());
-    drop(session_end);
     let epoch = lock(&relays).entries[0].epoch;
-    join_relay(take_thread(&relays, REPLAY_SID, epoch));
+    let thread = take_thread(&relays, REPLAY_SID, epoch);
+    drop(session_end);
+    join_relay(thread);
     assert_op_line(&op_timings(&temp.hub_log()), "hub.subscribe_replay", 0);
 }
 
@@ -976,9 +978,10 @@ fn a_kept_subscription_rejoin_times_its_replay_to_acknowledgement() {
     assert_eq!(client_line(&client_read)["kind"], json!("session_status"));
     // The acknowledgement came before the disconnect: ending now
     // completes nothing twice.
-    drop(session_end);
     let epoch = lock(&relays).entries[0].epoch;
-    join_relay(take_thread(&relays, REPLAY_SID, epoch));
+    let thread = take_thread(&relays, REPLAY_SID, epoch);
+    drop(session_end);
+    join_relay(thread);
     assert_op_line(&op_timings(&temp.hub_log()), "hub.subscribe_replay", 0);
 }
 
@@ -1046,9 +1049,10 @@ fn a_command_without_a_replay_writes_no_timer() {
         op_timings(&temp.hub_log()).is_empty(),
         "no replay, no timer"
     );
-    drop(session_end);
     let epoch = lock(&relays).entries[0].epoch;
-    join_relay(take_thread(&relays, REPLAY_SID, epoch));
+    let thread = take_thread(&relays, REPLAY_SID, epoch);
+    drop(session_end);
+    join_relay(thread);
 }
 
 #[test]
@@ -1090,9 +1094,10 @@ fn a_users_own_subscribe_writes_no_timer() {
         op_timings(&temp.hub_log()).is_empty(),
         "no replay, no timer"
     );
-    drop(session_end);
     let epoch = lock(&relays).entries[0].epoch;
-    join_relay(take_thread(&relays, REPLAY_SID, epoch));
+    let thread = take_thread(&relays, REPLAY_SID, epoch);
+    drop(session_end);
+    join_relay(thread);
 }
 
 #[test]
@@ -1252,8 +1257,9 @@ fn an_old_worker_ending_keeps_the_replacement_slot() {
     assert_eq!(lock(&relays).pending_replay.len(), 2);
     // The old worker ends before any acknowledgement: only its own
     // epoch's slot completes, with a zero wait.
+    let first_thread = take_thread(&relays, REPLAY_SID, first_epoch);
     drop(first_end);
-    join_relay(take_thread(&relays, REPLAY_SID, first_epoch));
+    join_relay(first_thread);
     assert_op_line(&await_op_lines(&temp, 1), "hub.subscribe_replay", 0);
     assert_eq!(
         lock(&relays).pending_replay.len(),
@@ -1266,14 +1272,15 @@ fn an_old_worker_ending_keeps_the_replacement_slot() {
     second_end.flush().unwrap();
     assert_eq!(await_op_lines(&temp, 2).len(), 2);
     assert!(lock(&relays).pending_replay.is_empty());
-    drop(second_end);
     let second_epoch = lock(&relays)
         .entries
         .iter()
         .find(|entry| entry.session == REPLAY_SID && entry.epoch != first_epoch)
         .map(|entry| entry.epoch)
         .unwrap();
-    join_relay(take_thread(&relays, REPLAY_SID, second_epoch));
+    let second_thread = take_thread(&relays, REPLAY_SID, second_epoch);
+    drop(second_end);
+    join_relay(second_thread);
     assert_eq!(
         await_op_lines(&temp, 2).len(),
         2,
@@ -1374,8 +1381,9 @@ fn a_transfer_that_answers_mid_write_completes_its_timer() {
     assert_eq!(client_line(&client_read)["kind"], json!("session_status"));
     assert_op_line(&await_op_lines(&temp, 1), "hub.subscribe_replay", 0);
     assert!(lock(&relays).pending_replay.is_empty());
+    let thread = take_thread(&relays, REPLAY_SID, epoch);
     drop(session_end);
-    join_relay(take_thread(&relays, REPLAY_SID, epoch));
+    join_relay(thread);
     assert_op_line(&await_op_lines(&temp, 1), "hub.subscribe_replay", 0);
 }
 
@@ -1432,8 +1440,9 @@ fn follow_with_dead_target(temp: &Temp, old: &str, next: &str) -> (Arc<Hub>, Arc
         .find(|entry| entry.session == old)
         .map(|entry| entry.epoch)
         .unwrap();
+    let old_thread = take_thread(&relays, old, old_epoch);
     drop(session_end);
-    join_relay(take_thread(&relays, old, old_epoch));
+    join_relay(old_thread);
     drop(stop_tx);
     (hub, relays)
 }
@@ -1581,7 +1590,8 @@ fn info_connections_time_no_replay() {
         op_timings(&temp.hub_log()).is_empty(),
         "info writes no replay timer"
     );
-    drop(session_end);
     let epoch = lock(&relays).entries[0].epoch;
-    join_relay(take_thread(&relays, REPLAY_SID, epoch));
+    let thread = take_thread(&relays, REPLAY_SID, epoch);
+    drop(session_end);
+    join_relay(thread);
 }
