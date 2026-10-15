@@ -147,7 +147,8 @@ attaching ceiling and tolerance are pinned by a test against the 10 MiB
 samples of the fast class's stored files
 (`xtask/tests/class_data/9v45-attach-10mib.json`). `scripts/class-data`
 regenerates that file from the `benchmarks-<sha>` artifacts of `main`
-runs; the committed file keeps entries whose artifacts have expired.
+runs; entries whose artifacts have expired, and entries from non-main runs,
+stay in the committed file by hand.
 
 The busy-or-resumed ceiling holds on three workloads:
 

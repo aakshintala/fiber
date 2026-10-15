@@ -1,15 +1,17 @@
 #!/usr/bin/env bash
-# The offline self-test for scripts/class-data (#2446): with
-# CLASS_DATA_FROM pointed at scripts/class-data-fixture, the fast 10 MiB
-# run reproduces the committed file's entries for the fixture's main
-# files byte for byte; usage errors and unknown classes exit 2; and an
-# artifact whose CPU is outside the class stays out of the output.
+# The offline self-test for scripts/class-data (#2446): with a fixture
+# directory as the fourth argument, the fast "Terminal to its first
+# frame, attaching" 10 MiB run reproduces the committed file's entries
+# for the fixture's main files byte for byte; usage errors, unknown
+# classes, unknown rows and unknown fixtures exit 2; and an artifact
+# whose CPU is outside the class stays out of the output.
 # No network: a shadow gh on the PATH fails the test if the script calls it.
 set -euo pipefail
 cd "$(git rev-parse --show-toplevel)"
 
 fixture=$PWD/scripts/class-data-fixture
 committed=xtask/tests/class_data/9v45-attach-10mib.json
+row="Terminal to its first frame, attaching"
 err=$(mktemp)
 tmp=$(mktemp -d)
 cleanup() {
@@ -31,7 +33,8 @@ printf '#!/usr/bin/env bash\necho "scripts/test-class-data: unexpected gh call: 
 chmod +x "$tmp/bin/gh"
 PATH="$tmp/bin:$PATH"
 
-# Usage errors exit 2: no arguments, one argument.
+# Usage errors exit 2: no arguments, one argument, two arguments, and
+# five arguments (the usage takes three or four).
 rc=0
 scripts/class-data >/dev/null 2>"$err" || rc=$?
 [ "$rc" -eq 2 ] || fail "no arguments exited $rc, want 2"
@@ -39,27 +42,26 @@ rc=0
 scripts/class-data fast >/dev/null 2>"$err" || rc=$?
 [ "$rc" -eq 2 ] || fail "one argument exited $rc, want 2"
 rc=0
-CLASS_DATA_FROM="$fixture" scripts/class-data fast "10 MiB" "$fixture" extra >/dev/null 2>"$err" || rc=$?
-[ "$rc" -eq 2 ] || fail "four arguments exited $rc, want 2"
-
-# An unknown class exits 2, and so does an unknown row.
+scripts/class-data fast "$row" >/dev/null 2>"$err" || rc=$?
+[ "$rc" -eq 2 ] || fail "two arguments exited $rc, want 2"
 rc=0
-CLASS_DATA_FROM="$fixture" scripts/class-data plaid "10 MiB" "$fixture" >/dev/null 2>"$err" || rc=$?
+scripts/class-data fast "$row" "10 MiB" "$fixture" extra >/dev/null 2>"$err" || rc=$?
+[ "$rc" -eq 2 ] || fail "five arguments exited $rc, want 2"
+
+# An unknown class exits 2, and so do an unknown row and an unknown fixture.
+rc=0
+scripts/class-data plaid "$row" "10 MiB" "$fixture" >/dev/null 2>"$err" || rc=$?
 [ "$rc" -eq 2 ] || fail "unknown class exited $rc, want 2"
 rc=0
-CLASS_DATA_FROM="$fixture" scripts/class-data fast "1 MiB" "$fixture" >/dev/null 2>"$err" || rc=$?
+scripts/class-data fast "Terminal to its first frame" "10 MiB" "$fixture" >/dev/null 2>"$err" || rc=$?
 [ "$rc" -eq 2 ] || fail "unknown row exited $rc, want 2"
+rc=0
+scripts/class-data fast "$row" "1 MiB" "$fixture" >/dev/null 2>"$err" || rc=$?
+[ "$rc" -eq 2 ] || fail "unknown fixture exited $rc, want 2"
 
-# The fast 10 MiB run over the fixture, three arguments and the
-# CLASS_DATA_FROM two-argument form, which must agree byte for byte.
-if ! CLASS_DATA_FROM="$fixture" scripts/class-data fast "10 MiB" "$fixture" >"$tmp/out.json" 2>"$err"; then
-  echo "scripts/test-class-data: class-data fast 10 MiB failed:" >&2; cat "$err" >&2; exit 1
-fi
-if ! CLASS_DATA_FROM="$fixture" scripts/class-data fast "10 MiB" >"$tmp/out-env.json" 2>"$err"; then
-  echo "scripts/test-class-data: class-data fast 10 MiB without a directory failed:" >&2; cat "$err" >&2; exit 1
-fi
-if ! diff "$tmp/out.json" "$tmp/out-env.json" >/dev/null; then
-  fail "directory argument and CLASS_DATA_FROM disagree"
+# The fast attaching 10 MiB run over the fixture directory.
+if ! scripts/class-data fast "$row" "10 MiB" "$fixture" >"$tmp/out.json" 2>"$err"; then
+  echo "scripts/test-class-data: class-data fast attaching 10 MiB failed:" >&2; cat "$err" >&2; exit 1
 fi
 
 # The fixture's main files, in file order: the set the script must emit.
@@ -117,7 +119,7 @@ jq --arg fast "$fast_name" --arg slow "$slow_name" --arg gone "$gone_name" --arg
   '.artifacts[0] as $one | {total_count: 6, artifacts: [$one, ($one | .name = $slow), ($one | .name = $gone | .expired = true), ($one | .name = $fork | .workflow_run.head_branch = "other"), ($one | .name = $stranger | .workflow_run.head_repository_id = 1), ($one | .name = "mutants-0")]}' \
   "$fixture/listing.json" >"$mixed/listing.json"
 
-if ! CLASS_DATA_FROM="$mixed" scripts/class-data fast "10 MiB" "$mixed" >"$tmp/fast.json" 2>"$err"; then
+if ! scripts/class-data fast "$row" "10 MiB" "$mixed" >"$tmp/fast.json" 2>"$err"; then
   echo "scripts/test-class-data: class-data over the mixed fixture failed:" >&2; cat "$err" >&2; exit 1
 fi
 [ "$(grep -c '"file"' "$tmp/fast.json" || true)" -eq 1 ] || fail "fast output over the mixed fixture has no single entry:"
@@ -126,14 +128,14 @@ grep -Fq "${slow_full:0:8}" "$tmp/fast.json" && fail "fast output holds the slow
 grep -Fq "${gone_full:0:8}" "$tmp/fast.json" && fail "fast output holds the expired head"
 grep -Fq "${fork_full:0:8}" "$tmp/fast.json" && fail "fast output holds the other-branch head"
 grep -Fq "${stranger_full:0:8}" "$tmp/fast.json" && fail "fast output holds the forked-repository head"
-if ! CLASS_DATA_FROM="$mixed" scripts/class-data slow "10 MiB" "$mixed" >"$tmp/slow.json" 2>"$err"; then
+if ! scripts/class-data slow "$row" "10 MiB" "$mixed" >"$tmp/slow.json" 2>"$err"; then
   echo "scripts/test-class-data: class-data slow over the mixed fixture failed:" >&2; cat "$err" >&2; exit 1
 fi
 [ "$(grep -c '"file"' "$tmp/slow.json" || true)" -eq 1 ] || fail "slow output over the mixed fixture has no single entry"
 grep -Fq "\"file\": \"main ${slow_full:0:8}\"" "$tmp/slow.json" || fail "slow output lost the slow head"
 grep -Fq "$fast_short" "$tmp/slow.json" && fail "slow output holds the fast head"
 # The middle class holds none of the mixed heads: an empty document.
-if ! CLASS_DATA_FROM="$mixed" scripts/class-data middle "10 MiB" "$mixed" >"$tmp/middle.json" 2>"$err"; then
+if ! scripts/class-data middle "$row" "10 MiB" "$mixed" >"$tmp/middle.json" 2>"$err"; then
   echo "scripts/test-class-data: class-data middle over the mixed fixture failed:" >&2; cat "$err" >&2; exit 1
 fi
 [ "$(grep -c '"file"' "$tmp/middle.json" || true)" -eq 0 ] || fail "middle output over the mixed fixture is not empty"
@@ -143,7 +145,7 @@ mkdir -p "$nosamples"
 jq '{total_count: 1, artifacts: [.artifacts[0]]}' "$fixture/listing.json" >"$nosamples/listing.json"
 mkdir -p "$nosamples/$fast_name"
 jq '.metrics = {}' "$fixture/$fast_name/head.json" >"$nosamples/$fast_name/head.json"
-if ! CLASS_DATA_FROM="$nosamples" scripts/class-data fast "10 MiB" "$nosamples" >"$tmp/nosamples.json" 2>"$err"; then
+if ! scripts/class-data fast "$row" "10 MiB" "$nosamples" >"$tmp/nosamples.json" 2>"$err"; then
   echo "scripts/test-class-data: class-data over the sample-less fixture failed:" >&2; cat "$err" >&2; exit 1
 fi
 [ "$(grep -c '"file"' "$tmp/nosamples.json" || true)" -eq 0 ] || fail "sample-less head contributed an entry"
@@ -153,5 +155,5 @@ missing=$tmp/missing
 mkdir -p "$missing"
 jq '{total_count: 1, artifacts: [.artifacts[0]]}' "$fixture/listing.json" >"$missing/listing.json"
 rc=0
-CLASS_DATA_FROM="$missing" scripts/class-data fast "10 MiB" "$missing" >/dev/null 2>"$err" || rc=$?
+scripts/class-data fast "$row" "10 MiB" "$missing" >/dev/null 2>"$err" || rc=$?
 [ "$rc" -eq 1 ] || fail "missing head.json exited $rc, want 1"

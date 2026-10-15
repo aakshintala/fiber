@@ -6,34 +6,37 @@
 # in the named class (docs/performance.md, "The class columns") and writes
 # the class JSON to stdout: [{"file": "main <short sha>", "samples":
 # [...]}], ordered by file, one object per line. Entries whose artifacts
-# have expired stay in the committed file as the record; the script emits
-# only what the listing still holds.
+# have expired, and entries from non-main runs, stay in the committed file
+# as the record; the script emits only what the listing still holds.
 #
-# Usage: scripts/class-data <class> <row> [<dir>]
+# Usage: scripts/class-data <class> <row> <fixture> [<dir>]
 #
-#   class  fast, middle or slow, as docs/performance.md names them.
-#   row    the benchmark row's fixture; only "10 MiB" (the gated attach
-#          fixture, GATED_ATTACH_FIXTURE in xtask/src/bench/judge.rs) is
-#          supported, read from the terminal_attach_ms metric.
-#   dir    a directory holding listing.json (the artifact listing as the
-#          API returns it) and one benchmarks-<sha>/head.json per
-#          artifact. CLASS_DATA_FROM names the directory instead when set
-#          and wins over dir. With neither, the script reads the live API.
+#   class    fast, middle or slow, as docs/performance.md names them.
+#   row      the benchmark row, as docs/performance.md names it; only
+#            "Terminal to its first frame, attaching" is supported, read
+#            from the terminal_attach_ms metric.
+#   fixture  the row's fixture, as docs/performance.md names it; only
+#            "10 MiB" (the gated attach fixture, GATED_ATTACH_FIXTURE in
+#            xtask/src/bench/judge.rs) is supported.
+#   dir      a directory holding listing.json (the artifact listing as the
+#            API returns it) and one benchmarks-<sha>/head.json per
+#            artifact. With no dir, the script reads the live API.
 #
 # Exit 0 on success, 2 on a usage error, 1 on a read failure.
 set -euo pipefail
 
 usage() {
-  echo "usage: scripts/class-data <class: fast|middle|slow> <row: 10 MiB> [<dir>]" >&2
+  echo "usage: scripts/class-data <class: fast|middle|slow> <row: Terminal to its first frame, attaching> <fixture: 10 MiB> [<dir>]" >&2
 }
 
-if [ $# -ne 2 ] && [ $# -ne 3 ]; then
+if [ $# -ne 3 ] && [ $# -ne 4 ]; then
   usage
   exit 2
 fi
 class=$1
 row=$2
-dir=${3:-${CLASS_DATA_FROM:-}}
+fixture=$3
+dir=${4:-}
 
 # The class's CPU model from docs/performance.md, "The class columns",
 # lowercased: the file's cpu strings match case-insensitively.
@@ -47,13 +50,16 @@ case $class in
     ;;
 esac
 
-# The only supported row: the gated attach fixture and its metric.
-if [ "$row" != "10 MiB" ]; then
+# The only supported row and fixture: the gated attach row and its metric.
+if [ "$row" != "Terminal to its first frame, attaching" ]; then
   usage
   exit 2
 fi
 metric=terminal_attach_ms
-fixture="10 MiB"
+if [ "$fixture" != "10 MiB" ]; then
+  usage
+  exit 2
+fi
 
 lines=$(mktemp)
 scratch=$(mktemp -d)
@@ -101,9 +107,13 @@ if [ -n "$dir" ]; then
 else
   # The live API, as scripts/stored-results reads it: every main commit
   # young enough that its artifact may be unexpired (the repository keeps
-  # artifacts 90 days), nearest first.
+  # artifacts 90 days), nearest first. The fetch keeps origin/main fresh,
+  # which scripts/stored-results gets from its checkout instead; the
+  # 90-day window stays, since bounding it to stored-results' 10 commits
+  # would drop live entries the regeneration must keep.
   cd "$(git rev-parse --show-toplevel)" || exit 1
   repo=${GITHUB_REPOSITORY:-aakshintala/fiber}
+  git fetch origin main || exit 1
   commits=$(git rev-list --first-parent --since="90 days ago" origin/main) || exit 1
   for sha in $commits; do
     name="benchmarks-$sha"
