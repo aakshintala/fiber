@@ -212,3 +212,7 @@ pub struct Endpoint {
     /// The HTTP request target.
     pub target: String,
 }
+
+#[cfg(test)]
+#[path = "websocket_tests.rs"]
+mod tests;
