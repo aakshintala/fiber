@@ -956,9 +956,9 @@ fn worker_emits_only_after_the_guard_releases() {
     Deadline::after(WAIT)
         .recv(&paused)
         .expect("the scheduler reached its pause");
-    // With the scheduler frozen past the rendezvous and the worker gated
-    // past it, the admission guard is free and no probe has run: a worker
-    // holding the lock across its pause, or a write before it, fails here.
+    let (held, _unhold) = crate::lua::pause_judge_done("rz");
+    release.send(()).expect("the worker takes its release");
+    Deadline::after(WAIT).recv(&held).expect("the caller reached its hold");
     assert!(ext.hub_unlocked(), "the guard released before emission");
     assert!(sink.records().is_empty());
     // The caller waits on the suspended callback past its own check: its
