@@ -384,7 +384,7 @@ fn run_in_background_times_adoption_setup_only() {
     let shell = fixture.shell(holding);
     // The fifo lives in the workspace, the call's own workdir, so the
     // relative name resolves there and the description keeps its shape.
-    let command = format!(": {marker}; echo $$ > ready.fifo; sleep 60");
+    let command = format!(": {marker}; echo $$ > ready.fifo; exec sleep 60");
     let (_ids, output_rx) = run_async(
         shell,
         args(&command, "run_in_background"),
@@ -444,10 +444,14 @@ fn tty_times_the_start_before_the_first_output_wait() {
     let fixture = Fixture::new("fiber-p10-tty");
     let marker = "fiber-p10-tty";
     let _watchdog = Watchdog::matching(marker);
+    // The child's own acknowledgement: it writes its pid to this fifo
+    // once started, so the test waits for the child's signal, never the
+    // process table.
+    let ready = Ready::new(fixture.dir.path());
     let (holding, reached, release) = Holding::wrap(Arc::clone(&fixture.jobs));
     holding.arm();
     let shell = fixture.shell(holding);
-    let command = format!(": {marker}; echo out; sleep 60");
+    let command = format!(": {marker}; echo out; echo $$ > ready.fifo; exec sleep 60");
     let (id_rx, output_rx) = run_async(shell, args(&command, "tty"), CancelToken::new());
     through_open(&fixture, &reached, &release);
     let deadline = Deadline::after(STEP);
@@ -475,6 +479,9 @@ fn tty_times_the_start_before_the_first_output_wait() {
     assert!(output.error.is_none(), "{}", text(&output));
     assert_eq!(fixture.probe.calls(), 1);
     assert_none(&fixture.records, "the start");
+    let child = ready.wait(STEP);
+    assert!(!child.is_empty(), "the job acknowledged its start");
+    let _group = Watchdog::group(child[0]);
     stop_and_end(&fixture.jobs, &job.job_id, marker);
 }
 
@@ -483,10 +490,14 @@ fn monitor_times_its_start() {
     let fixture = Fixture::new("fiber-p10-monitor");
     let marker = "fiber-p10-monitor";
     let _watchdog = Watchdog::matching(marker);
+    // The child's own acknowledgement: it writes its pid to this fifo
+    // once started, so the test waits for the child's signal, never the
+    // process table.
+    let ready = Ready::new(fixture.dir.path());
     let (holding, reached, release) = Holding::wrap(Arc::clone(&fixture.jobs));
     holding.arm();
     let shell = fixture.shell(holding);
-    let command = format!(": {marker}; sleep 60");
+    let command = format!(": {marker}; echo $$ > ready.fifo; exec sleep 60");
     let (_ids, output_rx) = run_async(shell, args(&command, "monitor"), CancelToken::new());
     through_open(&fixture, &reached, &release);
     let deadline = Deadline::after(STEP);
@@ -498,6 +509,9 @@ fn monitor_times_its_start() {
     assert_eq!((record.op, record.ms), (Op::JobsStart, 5));
     assert_eq!(record.tool, None);
     assert_eq!(record.jobs, 1);
+    let child = ready.wait(STEP);
+    assert!(!child.is_empty(), "the job acknowledged its start");
+    let _group = Watchdog::group(child[0]);
     stop_and_end(&fixture.jobs, &job.job_id, marker);
     assert_none(&fixture.records, "the end");
 }
@@ -507,10 +521,14 @@ fn a_foreground_call_moved_after_thirty_seconds_times_the_move_only() {
     let fixture = Fixture::new("fiber-p10-thirty");
     let marker = "fiber-p10-thirty";
     let _watchdog = Watchdog::matching(marker);
+    // The child's own acknowledgement: it writes its pid to this fifo
+    // once started, so the test waits for the child's signal, never the
+    // process table.
+    let ready = Ready::new(fixture.dir.path());
     let (holding, reached, release) = Holding::wrap(Arc::clone(&fixture.jobs));
     holding.arm();
     let shell = fixture.shell(Arc::clone(&holding));
-    let command = format!(": {marker}; sleep 60");
+    let command = format!(": {marker}; echo $$ > ready.fifo; exec sleep 60");
     let mut arguments = Map::new();
     arguments.insert("command".into(), json!(command));
     let (id_rx, output_rx) = run_async(shell, arguments, CancelToken::new());
@@ -539,6 +557,9 @@ fn a_foreground_call_moved_after_thirty_seconds_times_the_move_only() {
         (Op::JobsStart, 5),
         "the foreground's 30 seconds are never counted"
     );
+    let child = ready.wait(STEP);
+    assert!(!child.is_empty(), "the job acknowledged its start");
+    let _group = Watchdog::group(child[0]);
     assert!(holding.stop(&job.job_id));
     stop_and_end(&fixture.jobs, &job.job_id, marker);
 }
@@ -548,10 +569,14 @@ fn the_background_command_moves_a_call_with_one_start() {
     let fixture = Fixture::new("fiber-p10-commanded");
     let marker = "fiber-p10-commanded";
     let _watchdog = Watchdog::matching(marker);
+    // The child's own acknowledgement: it writes its pid to this fifo
+    // once started, so the test waits for the child's signal, never the
+    // process table.
+    let ready = Ready::new(fixture.dir.path());
     let (holding, reached, release) = Holding::wrap(Arc::clone(&fixture.jobs));
     holding.arm();
     let shell = fixture.shell(Arc::clone(&holding));
-    let command = format!(": {marker}; sleep 60");
+    let command = format!(": {marker}; echo $$ > ready.fifo; exec sleep 60");
     let mut arguments = Map::new();
     arguments.insert("command".into(), json!(command));
     let (_ids, output_rx) = run_async(shell, arguments, CancelToken::new());
@@ -572,6 +597,9 @@ fn the_background_command_moves_a_call_with_one_start() {
     let record = closed(&fixture.records, deadline);
     assert_eq!((record.op, record.ms), (Op::JobsStart, 5));
     let job = started(&output);
+    let child = ready.wait(STEP);
+    assert!(!child.is_empty(), "the job acknowledged its start");
+    let _group = Watchdog::group(child[0]);
     assert!(holding.stop(&job.job_id));
     stop_and_end(&fixture.jobs, &job.job_id, marker);
 }
@@ -745,7 +773,7 @@ fn failures_and_foreground_ends_write_nothing() {
             .with_jobs(fixture.jobs.clone() as _)
             .with_timing(fixture.probe.timing()),
         );
-        let mut arguments = args(": fiber-p10-nomove; sleep 30", "run_in_background");
+        let mut arguments = args(": fiber-p10-nomove; exec sleep 30", "run_in_background");
         arguments.insert("timeout_ms".into(), json!(0));
         let output = shell.run(&arguments, &CancelToken::new(), &Recorder::default());
         assert!(output.jobs.is_empty());
@@ -851,7 +879,8 @@ fn untimed_and_timed_background_receipts_agree() {
         // The runs are sequential, and each watchdog drops with its run.
         let marker = "fiber-p10-agree-marker";
         let _watchdog = Watchdog::matching(marker);
-        let command = format!(": {marker}; sleep 60");
+        let ready = Ready::new(dir.path());
+        let command = format!(": {marker}; echo $$ > ready.fifo; exec sleep 60");
         let (_ids, output_rx) = run_async(
             shell,
             args(&command, "run_in_background"),
@@ -859,6 +888,9 @@ fn untimed_and_timed_background_receipts_agree() {
         );
         let output = Deadline::after(STEP).recv_or_fail(&output_rx, "the receipt");
         let job = started(&output);
+        let child = ready.wait(STEP);
+        assert!(!child.is_empty(), "the job acknowledged its start");
+        let _group = Watchdog::group(child[0]);
         assert!(jobs.stop(&job.job_id));
         let ended = jobs.ended(STEP).expect("the stopped job to end");
         // The receipt names the run's own directory: washed before compare.
