@@ -5,6 +5,8 @@
 
 pub(crate) mod batch;
 mod hub;
+#[cfg(test)]
+mod pause;
 
 use batch::batchable;
 use hub::Connection;
@@ -343,6 +345,10 @@ impl<B: Backend> Loop<B> {
             // The batch's inputs already folded, in arrival order.
             if held {
                 self.app.begin_batch();
+            }
+            #[cfg(test)]
+            if held {
+                pause::before_fold();
             }
             let mut code = None;
             // A frame separates two Bytes inputs unless both are

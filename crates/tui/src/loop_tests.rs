@@ -1928,3 +1928,6 @@ fn an_empty_batch_with_no_senders_ends_the_loop() {
     drop(tx);
     assert!(conn.take_batch(&rx).is_none());
 }
+
+#[path = "event_loop/attach_tests.rs"]
+mod attach_tests;
