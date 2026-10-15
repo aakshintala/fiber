@@ -91,7 +91,7 @@ fn counts(line: &str) -> BTreeMap<&'static str, (u32, u32)> {
 }
 
 #[test]
-fn a_pull_request_runs_timing_only_workloads_three_times_and_the_rest_five() {
+fn a_pull_request_runs_timing_workloads_three_times_and_the_rest_five() {
     let got = counts("--fiber f --out o --runs 5 --timing-runs 3 --paging j");
     assert_eq!(
         got,
@@ -104,7 +104,7 @@ fn a_pull_request_runs_timing_only_workloads_three_times_and_the_rest_five() {
             ("web_fetch", (5, 5)),
             ("resume 20,000 tokens", (5, 5)),
             ("resume 2,000,000 tokens", (5, 5)),
-            ("paging", (5, 5)),
+            ("paging", (3, 3)),
             ("fsyncs", (1, 1)),
             ("10 busy turns", (5, 5)),
             ("sessions list", (1, 3)),
@@ -124,8 +124,23 @@ fn a_pull_request_runs_timing_only_workloads_three_times_and_the_rest_five() {
             &"terminal wheel",
         ]
     );
-    assert_eq!(timing["paging"], (5, 5));
+    assert_eq!(timing["paging"], (3, 3));
     assert_eq!(timing["sessions list"], (1, 3));
+}
+
+#[test]
+fn paging_follows_the_timing_count_at_two_three_and_four() {
+    // Each new comparison gets a test that fails when it flips: a mutant
+    // swapping `timing_runs` for `runs` fails every count here.
+    for n in [2, 3, 4] {
+        let got = counts(&format!("--fiber f --out o --runs 5 --timing-runs {n} --paging j"));
+        assert_eq!(got["paging"], (n, n), "timing-runs {n}");
+        assert_eq!(got["session start"], (n, n), "timing-runs {n}");
+        assert_eq!(got["session idle"], (5, 5), "timing-runs {n}");
+        assert_eq!(got["terminal attach"], (1, 5), "timing-runs {n}");
+    }
+    let got = counts("--fiber f --out o --runs 4 --paging j");
+    assert_eq!(got["paging"], (4, 4));
 }
 
 #[test]

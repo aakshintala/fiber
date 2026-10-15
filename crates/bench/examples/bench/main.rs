@@ -129,10 +129,11 @@ fn parse(mut args: impl Iterator<Item = String>) -> Result<Args, String> {
 }
 
 /// Each workload `args` selects, with its repeats and its run count: a
-/// repeated workload runs `runs` times, a sampled workload once, and one
-/// pass of `busy::ONCE` is never a sample. A workload that reports a
-/// memory metric keeps the full count; a timing-only workload runs the
-/// pull request's timing count. Sampled workloads take their samples
+/// repeated workload runs the timing count when it reports only timings
+/// and the full count otherwise, a sampled workload once, and one
+/// pass of `busy::ONCE` is never a sample. `terminal attach` reports
+/// memory, so it keeps the full count; the other sampled workloads are
+/// timing-only. Sampled workloads take their samples
 /// inside one run.
 fn selected(args: &Args) -> Vec<(&'static idle::Workload, u32, u32)> {
     let (runs, timing_runs) = (args.runs, args.timing_runs);
@@ -143,13 +144,7 @@ fn selected(args: &Args) -> Vec<(&'static idle::Workload, u32, u32)> {
         .chain(&resume::WORKLOADS)
         .chain(paging)
         .map(|workload| {
-            // `paging` reports memory, so it keeps the full count with
-            // the other memory workloads.
-            let count = if workload.timing && workload.name != "paging" {
-                timing_runs
-            } else {
-                runs
-            };
+            let count = if workload.timing { timing_runs } else { runs };
             (workload, count, count)
         });
     let once = busy::ONCE.iter().map(|workload| (workload, 1, 1));
