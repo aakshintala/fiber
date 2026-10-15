@@ -2357,6 +2357,41 @@ fn copied_stays_inside_a_short_or_narrow_area() {
 }
 
 #[test]
+fn copied_draws_nothing_on_a_zero_height_area() {
+    // A conversation area with no rows draws no confirmation and takes
+    // no target, even with `copied` set: there is no top row, and the
+    // row guard omits the confirmation (`docs/tui.md`, "Selection and
+    // copy"). The buffer around the area stays blank.
+    let mut app = replying(60, 24, "copy this line");
+    let shown = text(&buffer(&app, 60, 24));
+    let row = u16::try_from(
+        shown
+            .lines()
+            .position(|line| line.contains("copy this"))
+            .expect("the reply"),
+    )
+    .expect("a row");
+    select(&mut app, 60, 24, (0, row), (3, row));
+    assert!(
+        text(&buffer(&app, 60, 24)).contains("Copied"),
+        "the drag copies"
+    );
+    let mut buf = Buffer::empty(Rect::new(0, 0, 60, 10));
+    let mut targets = Vec::new();
+    conversation_rows(&app, Rect::new(0, 0, 60, 0), &mut buf, &mut targets);
+    assert!(targets.is_empty(), "no target on a zero-height area");
+    for y in 0..10u16 {
+        for x in 0..60u16 {
+            assert_eq!(
+                buf[(x, y)].bg,
+                ratatui::style::Color::Reset,
+                "({x}, {y}) stays blank"
+            );
+        }
+    }
+}
+
+#[test]
 fn copied_needs_a_conversation_row_to_show_on() {
     let mut app = replying(30, 10, "```rust\nlet x = 1;\n```");
     let shown = text(&buffer(&app, 30, 10));

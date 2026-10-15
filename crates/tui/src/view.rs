@@ -588,7 +588,7 @@ fn conversation_rows(app: &App, area: Rect, buf: &mut Buffer, targets: &mut Vec<
             rect: Rect::new(start, row, end.saturating_sub(start), 1),
         });
     }
-    if app.copied() && area.height > 0 {
+    if app.copied() {
         // " Copied " in `info` on the `surface` tint: on the row under
         // the bar when the bar draws, else on the top row
         // (`docs/tui.md`, "Selection and copy").
