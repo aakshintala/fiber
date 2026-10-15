@@ -1257,9 +1257,17 @@ what it started keeps running.
   inserts its path as text. It is drawn as the `/` panel is, one path per
   row in `accent`, cut from the left when long so the file name stays, and
   "no files match" dim when nothing does. The model reads the file itself if it needs it.
-  The search runs on demand, each keystroke cancels the last, and it covers
-  the files git tracks, so a huge repository costs one listing, never a walk of
-  the tree.
+  `@foo` searches the files git tracks in the workspace's repository, so a huge
+  repository costs one listing, never a walk of the tree. `@` followed by `/`,
+  `~/` or `../` searches the machine instead: the text up to its last `/` is the
+  base directory (`~/` starts at home, `../` at the workspace) and the rest is
+  the query. The base's own matching entries come first, directories first, then
+  matching entries deeper under it from one walk that honours `.gitignore`, skips
+  `.git`, and stops at 50 rows or 100,000 examined entries (entries the walker
+  skips are not counted). Rows read as typed, a directory ending in `/`: choosing
+  one enters it and keeps the panel open on the new base, choosing a file inserts
+  its path and closes the panel, and a base that cannot be read says why.
+  Each keystroke cancels the last search, in either mode.
 
 ### Moving through the conversation
 
