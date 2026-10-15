@@ -8,15 +8,17 @@ use std::fs::{self, DirBuilder, File, OpenOptions};
 use std::io::{self, Write};
 use std::os::unix::fs::DirBuilderExt;
 use std::path::{Path, PathBuf};
-use std::sync::{Arc, Mutex, MutexGuard, PoisonError, Weak};
+use std::sync::{Arc, Mutex, MutexGuard, OnceLock, PoisonError, Weak};
 use std::time::Duration;
 
 use contract::clock::{Clock, wall_ms};
+use contract::diag::Op;
 use contract::emit::Emit;
 use contract::events::{Class, Event};
 use contract::tool::Bound;
 use contract::{ActionId, Envelope, SCHEMA_VERSION, Seq, SessionId, TurnId};
 
+use crate::diag::{Diag, Timer, timed};
 use crate::offsets::Offsets;
 use crate::rate::{Rate, RateFold};
 use crate::read::{Queue, Watcher};
@@ -36,6 +38,8 @@ pub struct Log {
     clock: Arc<dyn Clock>,
     /// The session directory, copied out of `inner` so [`Log::dir`] can lend it.
     dir: PathBuf,
+    /// The diagnostic writer timing appends, installed once per process.
+    diag: OnceLock<Arc<Diag>>,
 }
 
 struct Inner {
@@ -153,6 +157,11 @@ impl Log {
         turn_id: Option<TurnId>,
         action_id: Option<ActionId>,
     ) -> Result<Envelope, Error> {
+        // Declared before the lock: reverse-declaration drop order drops
+        // the guard first and the timers after, on every return path,
+        // so no diagnostic write happens under the session lock.
+        let mut spans = Spans::default();
+        let installed = self.diag.get().map(Arc::as_ref);
         let mut inner = self.lock();
         if let Some(cause) = &inner.failed {
             return Err(Error::Poisoned {
@@ -176,7 +185,7 @@ impl Log {
                 line.seq = Some(Seq(inner.next));
                 let mut bytes = serde_json::to_vec(&line)?;
                 bytes.push(b'\n');
-                if let Err(e) = inner.write(&bytes, sync) {
+                if let Err(e) = inner.write(&bytes, sync, installed, &mut spans) {
                     inner.stop(&e);
                     return Err(e);
                 }
@@ -361,7 +370,17 @@ impl Log {
             offsets: Arc::clone(&inner.offsets),
             inner: Mutex::new(inner),
             clock,
+            diag: OnceLock::new(),
         }
+    }
+
+    /// Installs the diagnostic writer timing writes as `log.append` and
+    /// `log.fsync`. The first install wins. Both production callers gate
+    /// on the existing debug check, so at info the cell stays empty and
+    /// an append costs one `OnceLock::get`.
+    pub fn install_timing(&self, diag: Arc<crate::diag::Diag>) {
+        // A second install is ignored: the first wins.
+        self.diag.get_or_init(|| diag);
     }
 }
 
@@ -421,6 +440,15 @@ impl Drop for Log {
     }
 }
 
+/// One append's pending timers: stamped at each I/O call's completion
+/// under the session lock, emitted when dropped after the lock is
+/// released. Field order is emission order: the write, then the sync.
+#[derive(Default)]
+struct Spans {
+    append: Option<Timer>,
+    fsync: Option<Timer>,
+}
+
 impl Inner {
     fn new(
         session_id: SessionId,
@@ -447,10 +475,24 @@ impl Inner {
 
     /// Appends one line in one write, and fsyncs it when `sync` says. A write
     /// that stops short is a failure, not retried: the part written is
-    /// already a torn tail, which reopening truncates.
-    fn write(&mut self, bytes: &[u8], sync: bool) -> Result<(), Error> {
+    /// already a torn tail, which reopening truncates. Each timer starts
+    /// immediately before its I/O call and is stamped as soon as that call
+    /// returns, while the lock is held; the holder emits them after the
+    /// lock is released. No diagnostic write happens under this lock.
+    fn write(
+        &mut self,
+        bytes: &[u8],
+        sync: bool,
+        diag: Option<&Diag>,
+        spans: &mut Spans,
+    ) -> Result<(), Error> {
         let path = self.dir.join(EVENTS);
-        let written = self.events.write(bytes).map_err(io_at(&path))?;
+        spans.append = diag.and_then(|diag| timed(diag, Op::LogAppend, None, None));
+        let written = self.events.write(bytes);
+        if let Some(timer) = spans.append.as_mut() {
+            timer.stop();
+        }
+        let written = written.map_err(io_at(&path))?;
         if written < bytes.len() {
             let short = format!("wrote {written} of {} bytes", bytes.len());
             return Err(io_at(&path)(io::Error::new(
@@ -468,8 +510,22 @@ impl Inner {
                     hook();
                 }
             });
+            // The pause point above stays outside the fsync scope.
+            spans.fsync = diag.and_then(|diag| timed(diag, Op::LogFsync, None, None));
             self.fsyncs += 1;
-            self.events.sync_data().map_err(io_at(&path))?;
+            let synced = self.events.sync_data().map_err(io_at(&path));
+            #[cfg(test)]
+            let synced = AFTER_SYNC.with(|cell| {
+                let replacement = cell.borrow().as_ref().and_then(|hook| hook());
+                match replacement {
+                    Some(error) => Err(io_at(&path)(error)),
+                    None => synced,
+                }
+            });
+            if let Some(timer) = spans.fsync.as_mut() {
+                timer.stop();
+            }
+            synced?;
         }
         Ok(())
     }
@@ -717,6 +773,68 @@ pub(crate) fn before_sync(hook: impl Fn() + 'static) {
     BEFORE_SYNC.with(|cell| *cell.borrow_mut() = Some(Box::new(hook)));
 }
 
+// Failure and emission hooks beside `BEFORE_SYNC`, following its pattern.
+// Test-only; non-test builds never call them.
+#[cfg(test)]
+type SyncHook = Box<dyn Fn() -> Option<io::Error>>;
+#[cfg(test)]
+thread_local! {
+    static AFTER_SYNC: std::cell::RefCell<Option<SyncHook>> = std::cell::RefCell::new(None);
+    static BEFORE_EMIT: std::cell::RefCell<Option<Box<dyn FnOnce()>>> =
+        std::cell::RefCell::new(None);
+}
+
+/// Installs the hook run after `sync_data` returns and before the fsync
+/// timer stops, on the current thread. `Some` replaces the sync result
+/// with a failure. It stays installed, like `BEFORE_SYNC`.
+#[cfg(test)]
+pub(crate) fn after_sync(hook: impl Fn() -> Option<io::Error> + 'static) {
+    AFTER_SYNC.with(|cell| *cell.borrow_mut() = Some(Box::new(hook)));
+}
+
+/// Installs the hook run when one append's timers are emitted, after the
+/// session lock is released, on the current thread. One-shot: the drop
+/// takes it out before running it, so a nested or poisoned append made
+/// inside the hook finds no hook and cannot recurse.
+#[cfg(test)]
+pub(crate) fn before_emit(hook: impl FnOnce() + 'static) {
+    BEFORE_EMIT.with(|cell| *cell.borrow_mut() = Some(Box::new(hook)));
+}
+
+#[cfg(test)]
+impl Drop for Spans {
+    fn drop(&mut self) {
+        let hook = BEFORE_EMIT.with(|cell| cell.borrow_mut().take());
+        if let Some(hook) = hook {
+            hook();
+        }
+    }
+}
+
+impl Log {
+    /// Whether the session lock is held: true exactly when `try_lock`
+    /// reports `WouldBlock`. Test-only.
+    #[cfg(test)]
+    pub(crate) fn held(&self) -> bool {
+        matches!(
+            self.inner.try_lock(),
+            Err(std::sync::TryLockError::WouldBlock)
+        )
+    }
+
+    /// Replaces the event file with a read-only handle on it, so the next
+    /// write fails for real. Test-only.
+    #[cfg(test)]
+    pub(crate) fn break_writes(&self) {
+        let mut inner = self.lock();
+        let path = inner.dir.join(EVENTS);
+        inner.events = OpenOptions::new()
+            .read(true)
+            .open(&path)
+            .expect("reopening events.jsonl read-only");
+    }
+}
+
 impl Drop for Lock {
     fn drop(&mut self) {
         // Best effort: the lock itself is released when the file closes.
@@ -762,3 +880,7 @@ fn holder(path: &Path, clock: &dyn Clock) -> String {
 #[cfg(test)]
 #[path = "write_tests.rs"]
 mod tests;
+
+#[cfg(test)]
+#[path = "write_timing_tests.rs"]
+mod timing_tests;

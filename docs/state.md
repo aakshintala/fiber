@@ -355,7 +355,15 @@ What is recorded:
   `startup.socket`: socket preparation until the bound listener is ready,
   on new and resumed sessions alike. Installed for listing is
   `sessions.list`: one listing attempt from entry through feed settlement,
-  snapshot and row reads, including invalid arguments.
+  snapshot and row reads, including invalid arguments. Installed for the
+  session log are `log.append` and `log.fsync`: one scope per actual
+  `events.jsonl` write attempt and one per actual sync, separate and never
+  nested, stamped at completion and written after the session lock is
+  released. Directory, lock and artifact syncs stay untimed. Installed for
+  searching is `session_search.scan`: one scope per tool search request
+  from its entry, including empty, cancelled and problem-only scans;
+  `fiber sessions search` writes no line. Their `data` holds only `op`
+  and `ms`.
   Request, model, hook and network timings may overlap as nested
   measurements, never additive phases.
 

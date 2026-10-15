@@ -102,7 +102,7 @@ fn every_operation_serializes_to_its_wire_name() {
         (Op::HubSubscribeReplay, "hub.subscribe_replay"),
         (Op::SessionsList, "sessions.list"),
         (Op::NetConnect, "net.connect"),
-        (Op::CliSessionsSearch, "cli.sessions_search"),
+        (Op::SessionSearchScan, "session_search.scan"),
     ] {
         assert_eq!(op.name(), want, "{op:?}");
         assert_eq!(

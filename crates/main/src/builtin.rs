@@ -92,6 +92,8 @@ pub(crate) fn builtin_timed(
 ) -> Result<SessionTools, Failure> {
     let mut files = tools::Files::with_locks(workspace.to_path_buf(), Arc::clone(locks));
     let mut images = tools::ImageChild::new(fiber.clone(), artifacts.to_path_buf());
+    // The scan's clone comes before `images` takes `timing`, which moves it.
+    let scan_timing = timing.clone();
     if let Some(timing) = timing {
         files = files.with_timing(timing.clone());
         images = images.with_timing(timing);
@@ -120,11 +122,11 @@ pub(crate) fn builtin_timed(
         registered(tools::Handoff)?,
         registered(tools::NameSession)?,
         registered(files.read())?,
-        registered(tools::SessionSearch::new(Arc::new(log::SessionScan::new(
-            home,
-            workspace,
-            Arc::new(doors::project),
-        ))))?,
+        registered(tools::SessionSearch::new(Arc::new(match scan_timing {
+            Some(scan_timing) => log::SessionScan::new(home, workspace, Arc::new(doors::project))
+                .with_timing(scan_timing),
+            None => log::SessionScan::new(home, workspace, Arc::new(doors::project)),
+        })))?,
         registered(shell)?,
         registered(tools::Skill::new(skills))?,
         registered(tools::WebFetch::new(

@@ -374,6 +374,11 @@ pub(crate) fn run_new(
             return Err(failed(e.code(), e));
         }
     };
+    // `Log::create` writes no event line: installing before any append
+    // times every write the process makes.
+    if timing.is_some() {
+        log.install_timing(Arc::clone(&diag));
+    }
     // The durable log exists: the diagnostic writer takes the session's
     // file and id, so request, extension and memory lines share them.
     diag.attach(&id);
