@@ -1828,21 +1828,40 @@ fn a_tty_job_past_its_timeout_fails_and_stop_cancels_it() {
     let dir = fakes::TempDir::new("fiber-shell-tty-timeout");
     let ready = Ready::new(dir.path());
     let jobs = FakeJobs::new(dir.path());
+    let block = block_of(ready.path());
+    // The command prints `S` once the test has seen the call park for its
+    // first output, which it does only after the job opened, so `S` is
+    // `job_delta` text and the only chunk.
     // One byte goes out in one `job_delta`, so no second chunk can arm
     // the pacing hold: the loop's next park after the send is the timeout.
+    let body = format!(
+        "mkfifo {block}\necho $$ >> {ready}\nread -r _ < {block}\nprintf S\nread x\n",
+        block = quote(&block),
+        ready = quote(ready.path()),
+    );
     let running = start_tty(
         dir.path().to_path_buf(),
-        on_terminal(ready.path(), "printf S\nread x\n"),
+        on_terminal(ready.path(), &body),
         Some(5_000),
         Arc::clone(&jobs),
     );
     let pgid = ready.wait(CHILD_START)[0];
     let watchdog = Watchdog::group(pgid);
+    let _own = ready.wait(DEADLINE);
     assert!(
         running
             .clock
             .await_parked(running.start + Duration::from_millis(250), DEADLINE)
     );
+    let block = ready.path().to_path_buf();
+    let (released, release) = mpsc::channel();
+    thread::spawn(move || {
+        release_block(&block);
+        let _sent = released.send(());
+    });
+    Deadline::after(DEADLINE)
+        .recv(&release)
+        .expect("waited for the command's read of the block fifo");
     running.clock.advance(Duration::from_millis(250));
     let _receipt = Deadline::after(DEADLINE)
         .recv(&running.output)
