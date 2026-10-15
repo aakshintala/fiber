@@ -225,13 +225,16 @@ pub(crate) fn runtime_read_mismatches(
     /// argument, binds nothing: the read reports it inline instead.
     fn join_on_root(rhs: &[TokenTree], root: &BTreeSet<String>) -> Option<Vec<String>> {
         let mut literals = Vec::new();
-        let mut index = 0;
-        while index < rhs.len() {
-            if let TokenTree::Ident(name) = &rhs[index]
+        // The tokens before the current one: the receiver a `join` builds
+        // on, as the walk's `preceding` holds it, groups included.
+        let mut receiver: Vec<TokenTree> = Vec::new();
+        let mut stream = rhs.iter().peekable();
+        while let Some(tree) = stream.next() {
+            if let TokenTree::Ident(name) = tree
                 && name == "join"
-                && let Some(TokenTree::Group(group)) = rhs.get(index + 1)
+                && let Some(TokenTree::Group(group)) = stream.peek()
             {
-                if is_manifest_rooted(&rhs[..index]) || holds_root(&rhs[..index], root) {
+                if is_manifest_rooted(&receiver) || holds_root(&receiver, root) {
                     for tree in group.stream() {
                         if let TokenTree::Literal(lit) = tree
                             && let Some(text) = string_literal(&lit.to_string())
@@ -241,9 +244,13 @@ pub(crate) fn runtime_read_mismatches(
                         }
                     }
                 }
-                index += 2;
+                // The group belongs to this `join`: skipping it keeps the
+                // next receiver aligned with the token stream.
+                stream.next();
+                receiver.push(tree.clone());
+                receiver.push(TokenTree::Group((*group).clone()));
             } else {
-                index += 1;
+                receiver.push(tree.clone());
             }
         }
         (!literals.is_empty()).then_some(literals)
