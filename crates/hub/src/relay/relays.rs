@@ -4,14 +4,20 @@
 
 use std::collections::HashMap;
 use std::net::Shutdown;
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Mutex, Weak};
 
+use contract::diag::Op;
+use log::diag::{Timer, timed};
 use serde_json::{Map, Value};
 
 use super::{Relay, line_bytes, relay_slot, write_all};
-use crate::connection::lock;
+use crate::connection::{Hub, lock};
 use crate::first::First;
 use crate::retire::{AckOrder, Retire};
+
+/// One subscription replay's in-flight timer, by the session, the relay
+/// epoch and the hub-minted command id that identify it.
+pub(crate) type ReplayKey = (String, u64, String);
 
 /// A connection's relays, the last epoch minted on it, and the last
 /// `subscribe` each session accepted from it. Epochs are never reused for the
@@ -54,6 +60,21 @@ pub(crate) struct Relays {
     pub(crate) awaiting: Vec<(String, Arc<First>)>,
     /// What the rejoin sweep needs: each session's opening marks and marks.
     pub(crate) rejoin: crate::rejoin::Rejoin,
+    /// The hub whose diagnostic writer times subscription replays, held
+    /// weakly so connections never keep it alive: `Some` on debug
+    /// production connections, `None` on info ones and on unit fixtures
+    /// that bypass connection dispatch.
+    pub(crate) timing_hub: Option<Weak<Hub>>,
+    /// One in-flight replay timer per outstanding replay, by session,
+    /// relay epoch and minted command id: a worker completes only its
+    /// own session and epoch, so a stale acknowledgement, another epoch
+    /// or a removed relay finishes nothing.
+    pub(crate) pending_replay: HashMap<ReplayKey, Timer>,
+    /// Replay timers stamped at a failed transfer, in failure order:
+    /// the next post-follow drain emits them outside the relays lock.
+    /// Each entry's duration is fixed at its failure, so which worker
+    /// emits it changes no `ms`.
+    pub(crate) completed_replay: Vec<Timer>,
 }
 
 impl Relays {
@@ -163,24 +184,60 @@ impl Relays {
             // relay at all the caller connects one.
             return self.entries.iter().any(|entry| entry.session == session);
         };
+        let epoch = self.entries.get(at).map(|entry| entry.epoch).unwrap_or(0);
         let mut line = line.clone();
         let minted = crate::start::mint("c_");
         line.insert("id".to_owned(), Value::String(minted.clone()));
         let Some(bytes) = line_bytes(&line) else {
             return true;
         };
-        let Some(entry) = self.entries.get_mut(at) else {
-            return true;
+        // The replay's timer registers before the write, beside the muted
+        // id below: an instant reply completes it instead of leaking. The
+        // key is built only with a timing context, so at info one `Option`
+        // check finds no context and nothing is allocated or touched.
+        let replay_key: Option<ReplayKey> = if let Some(weak) = self.timing_hub.as_ref() {
+            let key = (session.to_owned(), epoch, minted.clone());
+            if let Some(hub) = weak.upgrade()
+                && let Some(timer) = timed(&hub.diag, Op::HubSubscribeReplay, None, None)
+            {
+                self.pending_replay.insert(key.clone(), timer);
+                Some(key)
+            } else {
+                None
+            }
+        } else {
+            None
         };
-        lock(&entry.replayed).push(minted.clone());
-        if write_all(&entry.writer, &bytes).is_err() {
-            lock(&entry.replayed).retain(|muted| *muted != minted);
-            // The relay died with its socket: it keeps no more writes,
-            // but its thread still reads every buffered answer. The
-            // thread handle stays in the entry.
-            entry.retiring = Some(Retire::Dead);
-            match entry.writer.shutdown(Shutdown::Write) {
-                Ok(()) | Err(_) => {}
+        let wrote = {
+            let Some(entry) = self.entries.get_mut(at) else {
+                if let Some(key) = replay_key.as_ref() {
+                    self.pending_replay.remove(key);
+                }
+                return true;
+            };
+            lock(&entry.replayed).push(minted.clone());
+            let wrote = write_all(&entry.writer, &bytes).is_ok();
+            if !wrote {
+                lock(&entry.replayed).retain(|muted| *muted != minted);
+                // The relay died with its socket: it keeps no more writes,
+                // but its thread still reads every buffered answer. The
+                // thread handle stays in the entry.
+                entry.retiring = Some(Retire::Dead);
+                match entry.writer.shutdown(Shutdown::Write) {
+                    Ok(()) | Err(_) => {}
+                }
+            }
+            wrote
+        };
+        if !wrote {
+            // Stamped at this failure for the next post-follow drain,
+            // which emits it outside the relays lock; the duration never
+            // covers the deferred cleanup.
+            if let Some(key) = replay_key.as_ref()
+                && let Some(mut timer) = self.pending_replay.remove(key)
+            {
+                timer.stop();
+                self.completed_replay.push(timer);
             }
             return true;
         }
@@ -197,6 +254,40 @@ impl Relays {
             .iter()
             .find(|(kept, _)| kept == session)
             .map(|(_, line)| line.clone())
+    }
+
+    /// Takes the in-flight replay timer the acknowledgement `id` settles,
+    /// on `session`'s `epoch` only: an unrelated acknowledgement, another
+    /// epoch or a removed slot completes nothing. The caller drops what
+    /// comes back after releasing the relays lock, so emission never
+    /// happens under it.
+    pub(crate) fn take_replay(&mut self, session: &str, epoch: u64, id: &str) -> Option<Timer> {
+        self.pending_replay
+            .remove(&(session.to_owned(), epoch, id.to_owned()))
+    }
+
+    /// Takes every in-flight replay timer of `session`'s `epoch`: what a
+    /// terminating worker completes before any follow-on rewind work, so
+    /// no guard waits for a healthy connection to close. The caller drops
+    /// them after releasing the relays lock.
+    pub(crate) fn take_session_replays(&mut self, session: &str, epoch: u64) -> Vec<Timer> {
+        let owned: Vec<ReplayKey> = self
+            .pending_replay
+            .keys()
+            .filter(|(kept, kept_epoch, _)| kept == session && *kept_epoch == epoch)
+            .cloned()
+            .collect();
+        owned
+            .into_iter()
+            .filter_map(|key| self.pending_replay.remove(&key))
+            .collect()
+    }
+
+    /// Takes every failure-stamped replay timer: what the calling worker
+    /// emits after `rewind::follow` returns. Removal under the lock keeps
+    /// emission exactly once across concurrent workers.
+    pub(crate) fn take_completed_replays(&mut self) -> Vec<Timer> {
+        std::mem::take(&mut self.completed_replay)
     }
 }
 
