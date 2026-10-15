@@ -14,6 +14,17 @@ use crate::rules::RustFile;
 /// (`docs/ci.md`, "Selection").
 pub(super) const COMPILED_IN: &[(&str, &str)] = &[
     ("docs/ci.md", "xtask"),
+    ("crates/tui/assets/logo-mask.bin", "xtask"),
+    ("crates/tools/tests/pages/mdn-anchor.md", "tools"),
+    ("crates/tools/tests/pages/mdn-code.md", "tools"),
+    ("crates/tools/tests/pages/mdn-table.md", "tools"),
+    ("crates/tools/tests/pages/python-datastructures.md", "tools"),
+    ("crates/tools/tests/pages/python-errors.md", "tools"),
+    ("crates/tools/tests/pages/python-introduction.md", "tools"),
+    ("crates/tools/tests/pages/rust-data-types.md", "tools"),
+    ("crates/tools/tests/pages/rust-option.md", "tools"),
+    ("crates/tools/tests/pages/rust-ownership.md", "tools"),
+    ("crates/tools/tests/pages/wiki-toml.md", "tools"),
     ("docs/errors.md", "contract"),
     ("docs/events.md", "contract"),
     ("docs/extensions.md", "extensions"),

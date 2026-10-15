@@ -74,11 +74,22 @@ fn listed_includes(krate: &str) -> String {
         .collect()
 }
 
+/// The listed includes of the extensions crate, whose fixture source sits
+/// one directory deeper than the others, so each path climbs one more
+/// level to the repository root.
+fn listed_extensions_includes() -> String {
+    COMPILED_IN
+        .iter()
+        .filter(|(_, listed)| *listed == "extensions")
+        .map(|(path, _)| format!("include_str!(\"../../../../{path}\");\n"))
+        .collect()
+}
+
 /// Every listed include, each in a source of the crate the list names.
 fn listed_files() -> Vec<RustFile> {
     vec![
         contract_src(&listed_includes("contract")),
-        extensions_src("include_str!(\"../../../../docs/extensions.md\");\n"),
+        extensions_src(&listed_extensions_includes()),
         loop_src(&listed_includes("loop")),
         tools_src(&listed_includes("tools")),
         tui_src(&listed_includes("tui")),

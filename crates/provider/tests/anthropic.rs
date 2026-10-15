@@ -1930,12 +1930,9 @@ fn a_cache_marker_on_a_hosted_block_is_the_only_key_added() {
 
 /// One live hosted search on `claude-sonnet-5-5`, recorded with the `record`
 /// jig from the request Fiber builds for a model whose `web_search` is
-/// `web_search_20250305`.
+/// `web_search_20250305`, compiled in (`docs/ci.md`, "Selection").
 fn web_search_recording() -> Vec<u8> {
-    std::fs::read(
-        Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/recordings/anthropic-web-search.sse"),
-    )
-    .unwrap()
+    include_bytes!("recordings/anthropic-web-search.sse").to_vec()
 }
 
 #[test]

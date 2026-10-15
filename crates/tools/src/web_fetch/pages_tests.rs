@@ -17,34 +17,81 @@ fn may_update() -> bool {
 
 #[test]
 fn real_pages_convert_to_their_expected_markdown() {
-    let dir = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tests/pages");
-    let mut pages: Vec<_> = std::fs::read_dir(&dir)
-        .unwrap()
-        .map(|entry| entry.unwrap().path())
-        .filter(|path| path.extension().is_some_and(|ext| ext == "html"))
-        .collect();
-    pages.sort();
-    assert!(!pages.is_empty(), "no pages in {}", dir.display());
-    for page in pages {
-        let bytes = std::fs::read(&page).unwrap();
-        let html = String::from_utf8_lossy(&bytes);
-        let markdown = to_markdown(&html);
-        let expected_path = page.with_extension("md");
+    // The snapshot pages beside this test, compiled in: reading them at
+    // run time would read the repository at test time (`docs/ci.md`,
+    // "Selection"). Each entry names the page, then holds its HTML and
+    // its expected markdown.
+    const PAGES: &[(&str, &str, &str)] = &[
+        (
+            "mdn-anchor",
+            include_str!("../../tests/pages/mdn-anchor.html"),
+            include_str!("../../tests/pages/mdn-anchor.md"),
+        ),
+        (
+            "mdn-code",
+            include_str!("../../tests/pages/mdn-code.html"),
+            include_str!("../../tests/pages/mdn-code.md"),
+        ),
+        (
+            "mdn-table",
+            include_str!("../../tests/pages/mdn-table.html"),
+            include_str!("../../tests/pages/mdn-table.md"),
+        ),
+        (
+            "python-datastructures",
+            include_str!("../../tests/pages/python-datastructures.html"),
+            include_str!("../../tests/pages/python-datastructures.md"),
+        ),
+        (
+            "python-errors",
+            include_str!("../../tests/pages/python-errors.html"),
+            include_str!("../../tests/pages/python-errors.md"),
+        ),
+        (
+            "python-introduction",
+            include_str!("../../tests/pages/python-introduction.html"),
+            include_str!("../../tests/pages/python-introduction.md"),
+        ),
+        (
+            "rust-data-types",
+            include_str!("../../tests/pages/rust-data-types.html"),
+            include_str!("../../tests/pages/rust-data-types.md"),
+        ),
+        (
+            "rust-option",
+            include_str!("../../tests/pages/rust-option.html"),
+            include_str!("../../tests/pages/rust-option.md"),
+        ),
+        (
+            "rust-ownership",
+            include_str!("../../tests/pages/rust-ownership.html"),
+            include_str!("../../tests/pages/rust-ownership.md"),
+        ),
+        (
+            "wiki-toml",
+            include_str!("../../tests/pages/wiki-toml.html"),
+            include_str!("../../tests/pages/wiki-toml.md"),
+        ),
+    ];
+    assert!(!PAGES.is_empty(), "no pages compiled in");
+    for (name, html, expected) in PAGES.iter().copied() {
+        let markdown = to_markdown(html);
         if may_update() {
+            let expected_path = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+                .join("tests/pages")
+                .join(format!("{name}.md"));
             std::fs::write(&expected_path, &markdown).unwrap();
             continue;
         }
-        let expected = std::fs::read_to_string(&expected_path)
-            .unwrap_or_else(|_| panic!("no expected markdown at {}", expected_path.display()));
-        if expected != markdown {
-            let diff = similar::TextDiff::from_lines(&expected, &markdown)
+        if markdown != expected {
+            let diff = similar::TextDiff::from_lines(expected, &markdown)
                 .unified_diff()
                 .header(
-                    &format!("expected {}", expected_path.display()),
-                    &format!("actual {}", page.display()),
+                    &format!("expected {name}.md"),
+                    &format!("actual {name}.html"),
                 )
                 .to_string();
-            panic!("{} changed:\n{diff}", page.display());
+            panic!("{name} changed:\n{diff}");
         }
     }
 }
