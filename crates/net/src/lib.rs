@@ -20,6 +20,8 @@ use ureq::unversioned::transport::{ConnectProxyConnector, Connector, RustlsConne
 use crate::socket::KeepSocket;
 
 mod socket;
+/// The hub client's websocket transport.
+pub mod websocket;
 
 /// The TLS configuration every HTTPS call uses: the platform verifier, or
 /// on Linux Mozilla's roots compiled in through ureq when the system store
