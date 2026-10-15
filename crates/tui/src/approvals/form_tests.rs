@@ -1120,29 +1120,29 @@ fn the_submit_tab_marks_answers_note_and_buttons() {
 }
 
 #[test]
-fn the_submit_buttons_share_a_row_at_92_cells_and_stack_below_it() {
+fn the_submit_buttons_share_a_row_at_91_cells_and_stack_below_it() {
     let send = " Submit ";
     let chat = " Chat about this ";
     let rest = "  declines and ends the turn, so you can answer in your own words";
     let mut form = base_and_name(false);
     press(&mut form, &[Key::Tab, Key::Tab]);
     let heading = title(form.question_count());
-    // At 92 cells the two buttons and the rest share line 8, and the
+    // At 91 cells the two buttons and the rest share line 8, and the
     // cursor on Submit marks that line.
-    let wide = form.panel(&heading, 92);
+    let wide = form.panel(&heading, 91);
     assert_eq!(wide.lines[8], format!("{send} {chat}{rest}"));
     assert_eq!(wide.cursor, Some(8));
-    // At 91 cells they stack, one per row, and the cursor still marks
+    // At 90 cells they stack, one per row, and the cursor still marks
     // the Submit button's line.
-    let narrow = form.panel(&heading, 91);
+    let narrow = form.panel(&heading, 90);
     assert_eq!(narrow.lines[8], send);
     assert_eq!(narrow.lines[9], chat);
     assert_eq!(narrow.lines[10], rest);
     assert_eq!(narrow.cursor, Some(8));
     // On the note row, the cursor marks the note line at either width.
     press(&mut form, &[Key::Up]);
-    assert_eq!(form.panel(&heading, 92).cursor, Some(6));
     assert_eq!(form.panel(&heading, 91).cursor, Some(6));
+    assert_eq!(form.panel(&heading, 90).cursor, Some(6));
 }
 
 #[test]
