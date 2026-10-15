@@ -2572,7 +2572,9 @@ fn a_cached_read_after_the_first_frame_fills_the_catalogue() {
                 slave,
                 started,
                 Box::new(move || {
-                    hub_held.recv().ok();
+                    match hub_held.recv() {
+                        Ok(()) | Err(_) => {}
+                    }
                     Err(io::Error::other("refused"))
                 }),
                 Box::new(|_| {}),
@@ -2616,7 +2618,9 @@ fn a_cached_read_after_the_first_frame_fills_the_catalogue() {
     assert_eq!(*seen.lock().unwrap(), [crate::Refresh::Cached]);
     // Now the hub may fail; its notice and banner draw after the
     // markers, past every assertion on them.
-    hub_release.send(()).ok();
+    match hub_release.send(()) {
+        Ok(()) | Err(_) => {}
+    }
     pair.main
         .write_all(&[0x03, 0x03])
         .unwrap_or_else(|err| panic!("write: {err}"));

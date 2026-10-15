@@ -887,7 +887,8 @@ fn a_writing_band_spins_its_dot_while_it_survives() {
         let row = shown
             .lines()
             .position(|row| row.contains('⇄'))
-            .expect("a band row") as u16;
+            .expect("a band row");
+        let row = u16::try_from(row).expect("a row");
         assert!(
             (0..width).any(|col| buf
                 .cell((col, row))

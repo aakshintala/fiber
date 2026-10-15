@@ -19,20 +19,23 @@ fn stack(code: &str, texts: &[&str]) -> Notices {
     notices
 }
 
-/// Each line's notice id, or the `More` count as a negative.
-fn ids(lines: &[NoticeLine]) -> Vec<i64> {
+/// Each line's row: `notice <id>`, oldest first, or `more <n>`.
+fn ids(lines: &[NoticeLine]) -> Vec<String> {
     lines
         .iter()
         .map(|line| match line {
-            NoticeLine::Notice { id, .. } => *id as i64,
-            NoticeLine::More(n) => -(*n as i64),
+            NoticeLine::Notice { id, .. } => format!("notice {id}"),
+            NoticeLine::More(n) => format!("more {n}"),
         })
         .collect()
 }
 
 #[test]
 fn two_notices_draw_two_rows_and_no_more() {
-    assert_eq!(ids(&stack("extension_failed", &["a", "b"]).lines()), [0, 1]);
+    assert_eq!(
+        ids(&stack("extension_failed", &["a", "b"]).lines()),
+        ["notice 0", "notice 1"]
+    );
 }
 
 #[test]
@@ -40,16 +43,16 @@ fn three_oldest_then_more() {
     // At the cap three rows show, oldest first, and no "+N more".
     assert_eq!(
         ids(&stack("extension_failed", &["a", "b", "c"]).lines()),
-        [0, 1, 2]
+        ["notice 0", "notice 1", "notice 2"]
     );
     // Past it the three oldest show, then one "+N more" row last.
     assert_eq!(
         ids(&stack("extension_failed", &["a", "b", "c", "d"]).lines()),
-        [0, 1, 2, -1]
+        ["notice 0", "notice 1", "notice 2", "more 1"]
     );
     assert_eq!(
         ids(&stack("extension_failed", &["a", "b", "c", "d", "e"]).lines()),
-        [0, 1, 2, -2]
+        ["notice 0", "notice 1", "notice 2", "more 2"]
     );
     assert!(Notices::default().lines().is_empty());
 }
@@ -60,16 +63,19 @@ fn dismiss_reveals_the_next_oldest() {
     notices.dismiss(0);
     // Dismissing a shown row reveals the next oldest; the "+N more" row
     // goes, since three show again.
-    assert_eq!(ids(&notices.lines()), [1, 2, 3]);
+    assert_eq!(ids(&notices.lines()), ["notice 1", "notice 2", "notice 3"]);
     notices.dismiss(3);
-    assert_eq!(ids(&notices.lines()), [1, 2]);
+    assert_eq!(ids(&notices.lines()), ["notice 1", "notice 2"]);
 }
 
 #[test]
 fn dismissing_a_hidden_notice_drops_the_more_count() {
     let mut notices = stack("extension_failed", &["a", "b", "c", "d", "e"]);
     notices.dismiss(4);
-    assert_eq!(ids(&notices.lines()), [0, 1, 2, -1]);
+    assert_eq!(
+        ids(&notices.lines()),
+        ["notice 0", "notice 1", "notice 2", "more 1"]
+    );
 }
 
 #[test]
@@ -368,9 +374,8 @@ fn a_history_refusal_keeps_its_code() {
         payload: serde_json::Map::default(),
     }));
     let now = fakes::clock::FakeClock::new().now();
-    let sent = match app.on_key(Key::Up, now) {
-        crate::app::Effect::Send(lines) => lines,
-        effect => panic!("a send, not {effect:?}"),
+    let crate::app::Effect::Send(sent) = app.on_key(Key::Up, now) else {
+        panic!("a send");
     };
     let id = sent
         .iter()

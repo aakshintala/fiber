@@ -166,7 +166,7 @@ fn the_handoff_band_matches_the_doc() {
     let grid = run.wait_screen("the closed turn", |grid| {
         band_cells(grid).is_some() && grid.rows.iter().any(|row| row.contains('▣'))
     });
-    let (band, left, right, _) = band_cells(&grid).expect("the sized band");
+    let (band, left, _right, _) = band_cells(&grid).expect("the sized band");
     let left = left as u16;
     let closings: Vec<u16> = (0..48)
         .filter(|y| row_text(&grid, *y, 160).contains('▣'))

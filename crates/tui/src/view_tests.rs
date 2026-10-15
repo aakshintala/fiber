@@ -647,7 +647,7 @@ fn a_short_screen_drops_the_badge_after_the_hint() {
     assert_eq!(sized(&mut app, 40, 1), "▌ › █\n");
     assert_eq!(
         sized(&mut app, 40, 2),
-        format!("  ⚠ connection_failed · lost           ✕\n▌ › █\n")
+        "  ⚠ connection_failed · lost           ✕\n▌ › █\n".to_owned()
     );
     // The input box's edges take the rows the hint and the badge lose.
     assert_eq!(
@@ -1443,17 +1443,20 @@ fn four_notices_three_rows_and_more() {
     let row = full_row(&buf, working - 4, 100);
     let at = row.find(mark).expect("the mark");
     let start = crate::format::width(&row[..at]);
-    for col in start..start + crate::format::width(mark) {
+    let start = u16::try_from(start).expect("a column");
+    let width = u16::try_from(crate::format::width(mark)).expect("a width");
+    for col in start..start + width {
         assert_eq!(
-            buf[(col as u16, working - 4)].fg,
+            buf[(col, working - 4)].fg,
             Role::Attention.color(),
             "col {col}"
         );
     }
     let message = row.find("Notice 1.").expect("the message");
     let message_col = crate::format::width(&row[..message]);
+    let message_col = u16::try_from(message_col).expect("a column");
     assert!(
-        buf[(message_col as u16, working - 4)]
+        buf[(message_col, working - 4)]
             .modifier
             .contains(Modifier::DIM),
         "row {}",

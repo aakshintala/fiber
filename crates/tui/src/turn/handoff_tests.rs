@@ -626,7 +626,8 @@ fn a_writing_band_marks_its_dot_where_it_lands() {
         .expect("a band line");
     let text = shown.lines[at].0.to_string();
     let col = text.chars().take_while(|c| *c != '●').count();
-    assert_eq!(shown.spins, vec![(at, col as u16)]);
+    let col = u16::try_from(col).expect("a column");
+    assert_eq!(shown.spins, vec![(at, col)]);
     // The dot lands after the left part and the fill.
     assert_eq!(col, 51);
 }

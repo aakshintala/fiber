@@ -407,10 +407,7 @@ fn a_warning_wraps_under_itself() {
     let two = "a".repeat(19);
     assert_eq!(
         warning(&two, 20).0,
-        [
-            format!("⚠ {}", "a".repeat(18)),
-            format!("  {}", "a".repeat(1))
-        ]
+        [format!("⚠ {}", "a".repeat(18)), "  a".to_owned()]
     );
     let (rows, _) = warning("The MCP server one stopped working this morning", 20);
     assert_eq!(

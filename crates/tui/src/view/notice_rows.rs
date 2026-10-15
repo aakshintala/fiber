@@ -40,7 +40,7 @@ pub(super) fn draw(
         };
         match line {
             NoticeLine::Notice { id, code, text } => {
-                buf.set_line(area.x, row, &notice_row(code, text, width), width as u16);
+                buf.set_line(area.x, row, &notice_row(code, text, width), area.width);
                 targets.push(Target {
                     id: TargetId::Notice(*id),
                     rect: Rect::new(area.x, row, area.width, 1),
@@ -62,7 +62,7 @@ pub(super) fn draw(
                 );
                 targets.push(Target {
                     id: TargetId::MoreNotices,
-                    rect: Rect::new(area.x, row, kept as u16, 1),
+                    rect: Rect::new(area.x, row, super::to_u16(kept), 1),
                 });
             }
         }
