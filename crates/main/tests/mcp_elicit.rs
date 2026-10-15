@@ -176,6 +176,52 @@ fn read_fifo_past_a_spent_deadline_times_out() {
     );
 }
 
+/// Names whether the fixture server received `tools/call` for `tool`,
+/// then prints the whole `requests.log` and the whole session stderr, so
+/// a `Timeout` sighting says which side of the server the stall is on. A
+/// line counts only when it names both the method and the tool, with the
+/// tool's closing quote, so a similarly named tool never matches.
+fn hold_report(tool: &str, requests_log: &str, stderr: &str) -> String {
+    let reached = requests_log.lines().any(|line| {
+        line.contains("\"method\":\"tools/call\"")
+            && line.contains(&format!("\"name\":\"{tool}\""))
+    });
+    let verdict = if reached {
+        format!("`tools/call` for {tool} reached the server, so the stall is after it")
+    } else {
+        format!("no `tools/call` for {tool} in requests.log: the server never received it")
+    };
+    format!("{verdict}\n\nrequests.log:\n{requests_log}\n\nsession stderr:\n{stderr}")
+}
+
+#[test]
+fn hold_report_names_a_call_that_reached_the_server() {
+    let log = concat!(
+        "{\"id\":1,\"jsonrpc\":\"2.0\",\"method\":\"initialize\",\"params\":{}}\n",
+        "{\"id\":2,\"jsonrpc\":\"2.0\",\"method\":\"tools/call\",\"params\":{\"arguments\":{},\"name\":\"hold\"}}\n",
+        "{\"id\":3,\"jsonrpc\":\"2.0\",\"method\":\"tools/call\",\"params\":{\"arguments\":{},\"name\":\"ask\"}}\n",
+    );
+    let report = hold_report("hold", log, "some stderr");
+    assert!(report.contains("reached the server"), "{report}");
+    assert!(report.contains(log), "{report}");
+    assert!(report.contains("some stderr"), "{report}");
+}
+
+#[test]
+fn hold_report_names_a_call_that_never_arrived() {
+    let log = concat!(
+        "{\"id\":1,\"jsonrpc\":\"2.0\",\"method\":\"initialize\",\"params\":{}}\n",
+        "{\"id\":2,\"jsonrpc\":\"2.0\",\"method\":\"tools/list\",\"params\":{}}\n",
+        "{\"id\":3,\"jsonrpc\":\"2.0\",\"method\":\"tools/call\",\"params\":{\"arguments\":{},\"name\":\"ask\"}}\n",
+        "{\"id\":4,\"jsonrpc\":\"2.0\",\"method\":\"tools/call\",\"params\":{\"arguments\":{},\"name\":\"holder\"}}\n",
+    );
+    let report = hold_report("hold", log, "some stderr");
+    assert!(report.contains("no `tools/call` for hold"), "{report}");
+    assert!(report.contains("never received"), "{report}");
+    assert!(report.contains(log), "{report}");
+    assert!(report.contains("some stderr"), "{report}");
+}
+
 /// Writes one line to a FIFO, with the test's deadline naming the wait.
 fn write_fifo(deadline: Deadline, path: PathBuf) {
     let (done, wrote) = std::sync::mpsc::channel();
