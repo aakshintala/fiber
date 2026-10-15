@@ -1200,3 +1200,88 @@ fn status_rows_draw_on_the_panel_tint() {
     let row: String = (1..99).map(|x| bare[(x, bottom)].symbol()).collect();
     assert!(row.contains("$1.50"), "{row}");
 }
+
+/// A `session_status` with `input` tokens in: the cache share's edge is
+/// one token inside.
+fn input_status(input: u64) -> Line {
+    session_line(
+        SESSION,
+        "session_status",
+        serde_json::json!({
+            "name": "one", "workspace": "/w", "project": "-w", "state": "idle",
+            "since": 0,
+            "spend": {"tokens": {"input": input, "cache_read": 0,
+                "cache_write": {}, "output": 0},
+                "cost": 0.0, "subscription_cost": 0.0},
+            "model": "test/model", "delegates": 0, "jobs": 0, "clients": 0,
+        }),
+    )
+}
+
+/// Folds a down MCP `server` into `app`.
+fn fail_server(app: &mut App, server: &str) {
+    app.on_line(session_line(
+        SESSION,
+        "mcp_server_failed",
+        serde_json::json!({"server": server, "reason": "died",
+            "will_restart": false,
+            "error": {"code": "mcp_server_unavailable", "message": "died"}}),
+    ));
+}
+
+/// The cache segment needs a token inside: with none the row holds no
+/// share, matching the card; with one it does.
+#[test]
+fn the_cache_segment_needs_tokens_inside() {
+    let mut app = attached(100, 30);
+    app.on_line(preamble("test/model", 100));
+    app.on_line(input_status(0));
+    let rows = crate::view::status_rows::status(&app, 100);
+    assert_eq!(rows.len(), 1);
+    assert!(
+        !rows[0].line.to_string().contains("cache"),
+        "{}",
+        rows[0].line
+    );
+    let mut app = attached(100, 30);
+    app.on_line(preamble("test/model", 100));
+    app.on_line(input_status(1));
+    let rows = crate::view::status_rows::status(&app, 100);
+    assert_eq!(rows.len(), 1);
+    assert!(
+        rows[0].line.to_string().contains("cache 0%"),
+        "{}",
+        rows[0].line
+    );
+}
+
+/// The tools segment joins one down server after another with a space:
+/// the first opens the value, the second follows the joiner.
+#[test]
+fn the_tools_segment_joins_down_servers_with_a_space() {
+    let mut app = attached(100, 30);
+    app.on_line(idle(SESSION, "one"));
+    fail_server(&mut app, "relay");
+    let rows = crate::view::status_rows::status(&app, 100);
+    assert_eq!(rows.len(), 1);
+    assert!(
+        rows[0]
+            .line
+            .to_string()
+            .contains("tools \u{2717} relay down"),
+        "{}",
+        rows[0].line
+    );
+    fail_server(&mut app, "gateway");
+    let rows = crate::view::status_rows::status(&app, 100);
+    assert_eq!(rows.len(), 1);
+    // Sorted: gateway before relay, one space between the values.
+    assert!(
+        rows[0]
+            .line
+            .to_string()
+            .contains("tools \u{2717} gateway down \u{2717} relay down"),
+        "{}",
+        rows[0].line
+    );
+}

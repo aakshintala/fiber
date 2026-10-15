@@ -213,17 +213,18 @@ pub(crate) fn draw(app: &App, area: Rect, buf: &mut Buffer, targets: &mut Vec<Ta
     }
     // A drawn delegates state row's spinner moves on the tick. The
     // card's first two rows are its edge and title: the ask range counts
-    // from the first delegate row.
+    // from the first delegate row. An empty range asks nothing, so the
+    // range needs no guard.
+    // removed: the `to > first` guard; asking an empty range is a no-op
+    // because `ask` only fires on a contained state row.
     if let Some(span) = span {
         let from = skip.max(span.start);
         let to = skip.saturating_add(drawn).min(span.end);
         let first = span.start.saturating_add(2);
-        if to > first {
-            delegates::ask(
-                app,
-                from.max(first).saturating_sub(first)..to.saturating_sub(first),
-            );
-        }
+        delegates::ask(
+            app,
+            from.max(first).saturating_sub(first)..to.saturating_sub(first),
+        );
     }
 }
 

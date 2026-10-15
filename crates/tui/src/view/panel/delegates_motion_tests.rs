@@ -292,3 +292,35 @@ fn counting_rows_for_the_fit_asks_nothing() {
     let _ = app.narrow_fit();
     assert_eq!(app.take_wake(), None);
 }
+
+/// A still delegate keeps its dot past the epoch while a working one
+/// spins: the still row reads `●`, the working row the frame's spinner.
+#[test]
+fn a_still_delegate_keeps_its_dot_while_a_working_one_spins() {
+    use std::time::Duration;
+
+    let clock = FakeClock::new();
+    let mut app = attached(200, 40);
+    delegate(&mut app, "j_1", "alpha");
+    subscribe(&mut app, "j_1", json!({"state": "streaming"}));
+    delegate(&mut app, "j_2", "beta");
+    subscribe(&mut app, "j_2", json!({"state": "idle"}));
+    // Midway through frame 1: the spinner differs from the still dot.
+    let origin = clock.origin();
+    app.set_now(origin, 0);
+    app.set_now(
+        origin
+            .checked_add(Duration::from_millis(150))
+            .expect("after the origin"),
+        150,
+    );
+    assert_eq!(
+        lines(&app, 97),
+        vec![
+            format!("{} alpha", SPINNER[1]),
+            "  WORKING · test/model".to_owned(),
+            "● beta".to_owned(),
+            "  READY · test/model".to_owned(),
+        ]
+    );
+}
