@@ -11,6 +11,7 @@ use std::sync::{Arc, Mutex, Weak};
 use config::Config;
 use contract::ErrorCode;
 use contract::clock::Clock;
+use contract::diag::{DebugLog, HookChain, Op, Timing};
 use contract::events::{LoadedExtension, Notice};
 use contract::files::PathLock;
 use contract::hook::{
@@ -81,6 +82,12 @@ pub struct SessionExtensions {
     /// The `session_start`, `turn_start`, `before_model_call` and `turn_end`
     /// chains, in run order.
     lifecycle: chain::Lifecycle,
+    /// Starts one timer around each non-tool hook dispatch, when
+    /// installed. Tool hooks have no timer: `tool.hooks` covers them.
+    timing: Option<Timing>,
+    /// The session's diagnostic sink, installed on every live VM and
+    /// kept for late provider VMs.
+    diagnostics: Option<Arc<dyn DebugLog>>,
     /// Whether any hook registered at any point.
     any: bool,
     /// The session's extension commands, built once from the same final names.
@@ -396,6 +403,75 @@ impl SessionExtensions {
         &self.rejected
     }
 
+    /// Installs the session's diagnostics after `load`, before any
+    /// provider work: `timing` starts one guard around each non-tool
+    /// hook dispatch, and `debug` observes eligible provider HTTP on
+    /// every live VM, hook and provider-only alike. Attachment runs no
+    /// provider callback, and a later installation never redirects a VM
+    /// that already has a sink: the first one wins.
+    pub fn with_diagnostics(mut self, timing: Timing, debug: Arc<dyn DebugLog>) -> Self {
+        self.timing = Some(timing);
+        self.diagnostics = Some(Arc::clone(&debug));
+        let mut vms: Vec<Arc<LuaExtension>> = self.lua.iter().map(Arc::clone).collect();
+        // Collected under the mutex and released before attaching: no
+        // setter runs under it.
+        let provider_vms: Vec<Weak<LuaExtension>> = self
+            .provider_vms
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .values()
+            .cloned()
+            .collect();
+        for vm in vms.drain(..) {
+            vm.set_diagnostics(Arc::clone(&debug));
+        }
+        for weak in provider_vms {
+            if let Some(vm) = weak.upgrade() {
+                vm.set_diagnostics(Arc::clone(&debug));
+            }
+        }
+        self
+    }
+
+    /// The installed diagnostic sink, kept for late provider VMs after
+    /// `retain_lua_providers` clears the handles.
+    pub(crate) fn diagnostics(&self) -> Option<Arc<dyn DebugLog>> {
+        self.diagnostics.clone()
+    }
+
+    /// Every live VM handle diagnostics attached to: the hook VMs and
+    /// every live weak provider VM. Test-only: no public API exposes VM
+    /// handles, and attachment is otherwise observable only through HTTP
+    /// observation, which a later task adds.
+    #[cfg(test)]
+    pub(crate) fn attached_vms(&self) -> Vec<Arc<LuaExtension>> {
+        let mut vms: Vec<Arc<LuaExtension>> = self.lua.iter().map(Arc::clone).collect();
+        let provider_vms: Vec<Weak<LuaExtension>> = self
+            .provider_vms
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .values()
+            .cloned()
+            .collect();
+        for weak in provider_vms {
+            if let Some(vm) = weak.upgrade()
+                && !vms.iter().any(|held| Arc::ptr_eq(held, &vm))
+            {
+                vms.push(vm);
+            }
+        }
+        vms
+    }
+
+    /// Starts the chain's timer, when installed: one owned guard around
+    /// the whole public dispatch, dropped however it returns. No tool
+    /// hook takes one: `tool.hooks` covers those chains.
+    fn timed(&self, chain: HookChain) -> Option<Box<dyn Send>> {
+        self.timing
+            .as_ref()
+            .and_then(|timing| timing(Op::Hook(chain), None, None))
+    }
+
     /// Drops every Lua provider except those in `keep`, by provider name.
     /// An extension that registered hooks stays for them; one that only
     /// provided models is then held by nothing, once any refresh thread
@@ -621,22 +697,27 @@ impl Hooks for SessionExtensions {
     }
 
     fn before_message(&self, message: &BeforeMessage<'_>) -> BeforeMessageAnswer {
+        let _timer = self.timed(HookChain::BeforeMessage);
         before::before_message(self, message)
     }
 
     fn session_start(&self, start: &SessionStart<'_>) -> ContextAnswer {
+        let _timer = self.timed(HookChain::SessionStart);
         lifecycle::session_start(self, start)
     }
 
     fn turn_start(&self, turn: &TurnStart<'_>) -> ContextAnswer {
+        let _timer = self.timed(HookChain::TurnStart);
         lifecycle::turn_start(self, turn)
     }
 
     fn before_model_call(&self, call: &BeforeModelCall<'_>) -> CheckAnswer {
+        let _timer = self.timed(HookChain::BeforeModelCall);
         lifecycle::before_model_call(self, call)
     }
 
     fn turn_end(&self, end: &TurnEnd<'_>) -> ContextAnswer {
+        let _timer = self.timed(HookChain::TurnEnd);
         lifecycle::turn_end(self, end)
     }
 

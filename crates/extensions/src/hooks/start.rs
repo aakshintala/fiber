@@ -146,10 +146,17 @@ impl SessionExtensions {
             None => {
                 let (lua, _) =
                     start_vm(extension, dir, &self.home, config, &manifest, clock, locks)?;
-                let lua = Arc::new(match &self.host_script {
+                let lua = match &self.host_script {
                     Some(script) => lua.with_host_script(Arc::clone(script)),
                     None => lua,
-                });
+                };
+                // The retained session sink reaches a late fresh VM
+                // before its handle escapes; a reused VM already has it.
+                let lua = match self.diagnostics() {
+                    Some(debug) => lua.with_diagnostics(debug),
+                    None => lua,
+                };
+                let lua = Arc::new(lua);
                 vms.insert(extension.to_owned(), Arc::downgrade(&lua));
                 lua
             }
