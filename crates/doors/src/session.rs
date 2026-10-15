@@ -15,6 +15,7 @@ use crate::client;
 use crate::socket::{bind, remove_socket};
 use crate::{failure, mint};
 use contract::clock::{Clock, Wake};
+use contract::diag::Timing;
 use contract::emit::Emit;
 use contract::events::{Clients, CommandInfo, Event, SkillInfo, ToolInfo};
 use contract::inbox::{Ack, Delivery, Message};
@@ -139,7 +140,28 @@ impl Session {
         tools: Vec<ToolInfo>,
         out: Box<dyn Write + Send>,
     ) -> Result<Self, Failure> {
-        let opened = open_in(home, dir, log, clock, tools, out);
+        let opened = open_in(home, dir, log, clock, tools, out, None);
+        if opened.is_err() {
+            fs::remove_dir_all(dir).unwrap_or(());
+        }
+        opened
+    }
+
+    /// Opens the door side of a new session with the session's timer:
+    /// as [`Session::open`], timing socket preparation as
+    /// `startup.socket` until the bound listener is ready. The only
+    /// production caller is the session command; helpers keep the
+    /// untimed [`Session::open`].
+    pub fn open_with_timing(
+        home: &Path,
+        dir: &Path,
+        log: &Arc<Log>,
+        clock: Arc<dyn Clock>,
+        tools: Vec<ToolInfo>,
+        out: Box<dyn Write + Send>,
+        timing: Option<Timing>,
+    ) -> Result<Self, Failure> {
+        let opened = open_in(home, dir, log, clock, tools, out, timing);
         if opened.is_err() {
             fs::remove_dir_all(dir).unwrap_or(());
         }
@@ -158,7 +180,24 @@ impl Session {
         tools: Vec<ToolInfo>,
         out: Box<dyn Write + Send>,
     ) -> Result<Self, Failure> {
-        open_in(home, dir, log, clock, tools, out)
+        open_in(home, dir, log, clock, tools, out, None)
+    }
+
+    /// Opens the door side of a resumed session with the session's
+    /// timer: as [`Session::resume`], timing socket preparation as
+    /// `startup.socket` until the bound listener is ready. The only
+    /// production caller is the resume command; helpers keep the untimed
+    /// [`Session::resume`].
+    pub fn resume_with_timing(
+        home: &Path,
+        dir: &Path,
+        log: &Arc<Log>,
+        clock: Arc<dyn Clock>,
+        tools: Vec<ToolInfo>,
+        out: Box<dyn Write + Send>,
+        timing: Option<Timing>,
+    ) -> Result<Self, Failure> {
+        open_in(home, dir, log, clock, tools, out, timing)
     }
 
     /// Sends `first` on the inbox, then serves clients until `run` returns.
@@ -621,8 +660,19 @@ fn open_in(
     clock: Arc<dyn Clock>,
     tools: Vec<ToolInfo>,
     out: Box<dyn Write + Send>,
+    timing: Option<Timing>,
 ) -> Result<Session, Failure> {
+    // The stamp comes from the session clock before binding, so the
+    // helper takes no start read of its own; without a callable the
+    // bind costs no clock read. The guard drops at binding readiness,
+    // before the printer starts: a failure measures through the
+    // failure instead.
+    let started = timing.as_ref().map(|_| clock.now());
+    let timer = timing
+        .as_ref()
+        .and_then(|timing| timing(contract::diag::Op::StartupSocket, None, started));
     let (socket, listener) = bind(home, dir)?;
+    drop(timer);
     let session_id = SessionId(
         dir.file_name()
             .unwrap_or_default()

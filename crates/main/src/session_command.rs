@@ -350,7 +350,7 @@ pub(crate) fn run_new(
         &delegates,
         skills,
         extensions.tools(),
-        timing,
+        timing.clone(),
     )?;
     let forget = Arc::clone(&session_servers.forget);
     let hosted_stands = crate::switch::hosted_stands(&tools);
@@ -383,7 +383,15 @@ pub(crate) fn run_new(
     } else {
         Box::new(io::stdout())
     };
-    let session = match Session::open(&home, &dir, &log, Arc::clone(&clock), infos, event_output) {
+    let session = match Session::open_with_timing(
+        &home,
+        &dir,
+        &log,
+        Arc::clone(&clock),
+        infos,
+        event_output,
+        timing,
+    ) {
         Ok(session) => session,
         Err(e) => {
             session_servers.servers.stop();
