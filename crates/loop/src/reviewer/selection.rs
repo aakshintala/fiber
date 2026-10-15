@@ -112,19 +112,29 @@ impl Loop {
             Err(_) => return Ok(()),
         };
         // The person messages in the current input, oldest first, each with
-        // its text and its size against the reviewer's window.
+        // its text and its size against the reviewer's window. A reply
+        // answers the person message after it, so its size counts against
+        // that message's share: the estimate errs large, never small.
         let mut persons: Vec<(KeptMessage, String, u64)> = Vec::new();
+        let mut pending: u64 = 0;
         for item in &self.reviewed {
-            // A person item is always a user item (`shown.rs` only builds
-            // `Shown::Person` with one), so anything else is skipped.
-            if let Shown::Person(message) = &item.shown
-                && let Input::User { text, .. } = &item.input
-            {
-                persons.push((
-                    *message,
-                    text.clone(),
-                    crate::handoff::estimate(&item.input),
-                ));
+            match &item.shown {
+                Shown::Reply(_) => {
+                    pending = pending.saturating_add(crate::handoff::estimate(&item.input));
+                }
+                Shown::Person(message) => {
+                    // A person item is always a user item (`shown.rs` only builds
+                    // `Shown::Person` with one), so anything else is skipped.
+                    if let Input::User { text, .. } = &item.input {
+                        persons.push((
+                            *message,
+                            text.clone(),
+                            pending.saturating_add(crate::handoff::estimate(&item.input)),
+                        ));
+                        pending = 0;
+                    }
+                }
+                Shown::Call(_) => {}
             }
         }
         if persons.is_empty() {

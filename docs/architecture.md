@@ -54,7 +54,7 @@ ephemeral event where it is display-only.
 | `tools` | Runs the built-in tools that act on the workspace and the session: shell, file edits, search, web fetch, `ask_user`, session messaging and `tool_search`. Reached only through the tool seam. |
 | `mcp` | The MCP client: both transports, OAuth, the cached tool lists and `mcp_resources` (`docs/mcp.md`), and `fiber mcp serve`. Reached only through the tool seam. |
 | `jobs` | Background jobs and delegates: starting, watching and stopping them, the runner for delegates on another harness, and their worktrees, through `worktree` (`docs/delegates.md`). Reached only through the tool seam. |
-| `net` | The TLS configuration every HTTPS call uses: the platform verifier, or on Linux, when the system store has no certificates, Mozilla's roots compiled in through ureq (`docs/dependencies.md`), and the connector that keeps each request's socket so another thread can close it ("Cancellation"), with the connect and idle limits (`docs/model-routing.md`, "When a model call fails"). |
+| `net` | The TLS configuration every HTTPS call uses: the platform verifier, or on Linux, when the system store has no certificates, Mozilla's roots compiled in through ureq (`docs/dependencies.md`), and the connector that keeps each request's socket so another thread can close it ("Cancellation"), with the connect and idle limits (`docs/model-routing.md`, "When a model call fails"), and the hub client's websocket transport (`docs/invocation.md`, "What the hub speaks"). |
 | `worktree` | Creates and removes the git worktrees sessions and delegates run in, by running the `git` program (`docs/invocation.md`, "Isolation"). |
 | `extensions` | Loads extension code, hosts the runtime, and wires what extensions register into the three seams. |
 | `routing` | Model routing: picks the model for a session or a switch, looks up its credential, starts its Lua provider, builds its `Provider`, and finds the reviewer. The one module that uses `config`, `extensions` and `provider` together. `main` calls it at startup and when a session switches models. |
@@ -93,7 +93,8 @@ log and opening a file by path stay in `log`), and never on `loop`, `provider`, 
 `extensions`. `tui` also depends on `log` for the diagnostic writer. `cli` depends on `contract`, `log`, `config`, `doors` and
 `extensions`, and never on `loop`. `worktree` depends only on `contract`, and
 `jobs`, `doors` and `cli` may depend on it. `net` depends only on `contract`
-and ureq's TLS stack, and `provider`, `tools`, `mcp` and `extensions` may depend on it,
+and ureq's TLS stack, the crates already in its tree through ureq included,
+and `provider`, `tools`, `mcp`, `extensions` and `doors` may depend on it,
 so `hub` and `tui` still do no TLS. `routing` depends on `contract`,
 `config`, `extensions` and `provider`, and is the only crate that depends on
 both `extensions` and `provider`; only `main` depends on it. `main` depends on

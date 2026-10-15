@@ -20,6 +20,8 @@ use ureq::unversioned::transport::{ConnectProxyConnector, Connector, RustlsConne
 use crate::socket::KeepSocket;
 
 mod socket;
+/// The hub client's websocket transport.
+pub mod websocket;
 
 /// The TLS configuration every HTTPS call uses: the platform verifier, or
 /// on Linux Mozilla's roots compiled in through ureq when the system store
@@ -44,14 +46,18 @@ fn tls_config_with(
     load: impl FnOnce() -> usize,
     fallback: RootCerts,
 ) -> TlsConfig {
-    let empty = cache.get_or_init(|| load() == 0);
+    let empty = empty_store_with(cache, load);
     TlsConfig::builder()
-        .root_certs(if *empty {
+        .root_certs(if empty {
             fallback
         } else {
             RootCerts::PlatformVerifier
         })
         .build()
+}
+
+pub(crate) fn empty_store_with(cache: &OnceLock<bool>, load: impl FnOnce() -> usize) -> bool {
+    *cache.get_or_init(|| load() == 0)
 }
 
 /// How many certificates the platform's loader returns: the Linux system
@@ -208,9 +214,58 @@ impl Keep for () {
     }
 }
 
-/// A failed HTTPS call.
+/// A failed HTTPS call or hub websocket connection.
 #[derive(Debug, thiserror::Error)]
 pub enum Error {
+    /// Name resolution failed or exceeded its connect bound.
+    #[error("could not resolve {host}: {reason}")]
+    Resolve {
+        /// The requested host.
+        host: String,
+        /// The resolver's failure, without credentials.
+        reason: String,
+    },
+    /// An address refused the connection.
+    #[error("could not connect to {addr}: {source}")]
+    Connect {
+        /// The resolved address.
+        addr: SocketAddr,
+        /// The socket failure.
+        source: io::Error,
+    },
+    /// Only an HTTP CONNECT proxy is supported.
+    #[error("unsupported proxy scheme: {scheme}")]
+    ProxyScheme {
+        /// The unsupported scheme, without the proxy URL.
+        scheme: String,
+    },
+    /// A proxy refused CONNECT.
+    #[error("proxy refused CONNECT: {status_line}")]
+    ProxyRefused {
+        /// The proxy's status line.
+        status_line: String,
+    },
+    /// TLS negotiation or verification failed.
+    #[error("TLS failed: {reason}")]
+    Tls {
+        /// The TLS failure.
+        reason: String,
+    },
+    /// The server did not switch protocols.
+    #[error("websocket upgrade refused: {status_line}")]
+    Upgrade {
+        /// The server's status line.
+        status_line: String,
+    },
+    /// The upgrade headers or accept digest were wrong.
+    #[error("invalid websocket upgrade headers")]
+    Accept,
+    /// The HTTP reply headers exceeded 8,192 bytes.
+    #[error("HTTP reply headers exceed 8192 bytes")]
+    ReplyTooLong,
+    /// A socket failed during negotiation.
+    #[error("websocket connection failed: {0}")]
+    Io(#[from] io::Error),
     /// The call was stopped before a connect attempt started.
     #[error("the call was stopped")]
     Stopped,
@@ -234,6 +289,15 @@ impl Error {
     /// The stable code a consumer switches on.
     pub fn code(&self) -> contract::ErrorCode {
         match self {
+            Self::Resolve { .. } => contract::ErrorCode::ConnectionFailed,
+            Self::Connect { .. } => contract::ErrorCode::ConnectionFailed,
+            Self::ProxyScheme { .. } => contract::ErrorCode::ConnectionFailed,
+            Self::ProxyRefused { .. } => contract::ErrorCode::ConnectionFailed,
+            Self::Tls { .. } => contract::ErrorCode::ConnectionFailed,
+            Self::Upgrade { .. } => contract::ErrorCode::ConnectionFailed,
+            Self::Accept => contract::ErrorCode::ConnectionFailed,
+            Self::ReplyTooLong => contract::ErrorCode::ConnectionFailed,
+            Self::Io(_) => contract::ErrorCode::ConnectionFailed,
             Self::Stopped => contract::ErrorCode::ConnectionFailed,
             Self::Stalled { .. } => contract::ErrorCode::ConnectionFailed,
             Self::ConnectTimedOut { .. } => contract::ErrorCode::ConnectionFailed,

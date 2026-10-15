@@ -1,8 +1,9 @@
 //! The frame every configuration view draws in (`docs/tui.md`, "Swapped
-//! views"): a header with the view's title and a ✕, the rows with one
-//! selected, the lines below them, an edit field when one is open, and a
-//! footer naming the view's keys. Attached, a view takes the conversation
-//! area; on home it takes the whole screen.
+//! views"): a top row with the view's name, its command and `Esc
+//! returns`, the rows with one selected, the lines below them, an edit
+//! field when one is open, and a footer naming the view's keys.
+//! Attached, a view takes the conversation area; on home it takes the
+//! whole screen.
 
 use ratatui::buffer::Buffer;
 use ratatui::layout::Rect;
@@ -23,7 +24,7 @@ const FOOTER: Style = Style::new().fg(Role::Muted.color());
 /// A click target in a view.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum Spot {
-    /// The header's ✕: closes the view.
+    /// The top row: closes the view.
     Close,
     /// A row, by its index: selects it, or chooses it in a choice list.
     Row(usize),
@@ -41,17 +42,19 @@ pub(crate) enum Spot {
     Item(u64),
 }
 
-/// How a cell draws: plain text, a provider heading, or dimmed text
-/// such as a row's roles. The selected row still reverses over it, so it
-/// shows on every theme and with no colour.
+/// How a cell draws: plain text, a provider heading, dimmed text such
+/// as a row's roles, or one role's colour. The selected row still
+/// reverses over it, so it shows on every theme and with no colour.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum Ink {
     /// Plain text.
     Plain,
     /// A heading: bold.
     Heading,
-    /// Dimmed text: the muted role's colour.
+    /// Dimmed text: faint in the muted role's colour.
     Muted,
+    /// One role's colour, such as a context category's.
+    Role(Role),
 }
 
 impl Ink {
@@ -60,7 +63,10 @@ impl Ink {
         match self {
             Ink::Plain => Style::default(),
             Ink::Heading => Style::new().add_modifier(Modifier::BOLD),
-            Ink::Muted => Style::new().fg(Role::Muted.color()),
+            Ink::Muted => Style::new()
+                .fg(Role::Muted.color())
+                .add_modifier(Modifier::DIM),
+            Ink::Role(role) => Style::new().fg(role.color()),
         }
     }
 }
@@ -124,6 +130,10 @@ impl List {
 pub(crate) struct Frame {
     /// The header's title.
     pub(crate) title: String,
+    /// The slash command that opened the view, or what did for a view
+    /// with no slash command: always non-empty, drawn dim on the top
+    /// row after the title (`docs/tui.md`, "Swapped views").
+    pub(crate) command: &'static str,
     /// The rows, each in cells drawn left to right, some with a click
     /// target of their own, each with how it draws.
     pub(crate) rows: Vec<Vec<(String, Option<Spot>, Ink)>>,
@@ -145,28 +155,71 @@ pub(crate) fn rows_height(frame: &Frame, height: usize) -> usize {
     height.saturating_sub(fixed)
 }
 
+/// The top row: `" " + name` bold, `"  " + command` dim and `Esc
+/// returns` dim right-aligned, all on the `surface` tint across the
+/// full width (`docs/tui.md`, "Swapped views"). The whole row is one
+/// click target closing the view, pushed before any row's own target,
+/// so a row's target still wins on its cells. With no colour the row
+/// is plain: bold and dim stay, with no tint and no box.
+fn draw_top_row(
+    buf: &mut Buffer,
+    area: Rect,
+    name: &str,
+    command: &str,
+    targets: &mut Vec<Target>,
+) {
+    targets.push(Target {
+        id: TargetId::View(Spot::Close),
+        rect: Rect::new(area.x, area.y, area.width, 1),
+    });
+    // The tint runs the whole row, padding included; each part paints
+    // its own cells over it.
+    let tinted = !crate::surface::boxed();
+    let paint = |style: Style| {
+        if tinted {
+            style.bg(Role::Surface.color())
+        } else {
+            style
+        }
+    };
+    buf.set_style(
+        Rect::new(area.x, area.y, area.width, 1),
+        paint(Style::new()),
+    );
+    let layout = crate::offer::title_layout(name, command, usize::from(area.width));
+    let bold = Style::new().add_modifier(Modifier::BOLD);
+    let dim = Style::new().add_modifier(Modifier::DIM);
+    let mut parts = vec![(layout.name, bold)];
+    if let Some(command) = layout.command {
+        parts.push((command, dim));
+    }
+    parts.push((" ".repeat(layout.pad), Style::new()));
+    if layout.esc {
+        parts.push(("Esc returns".to_owned(), dim));
+    }
+    let mut x = area.x;
+    for (text, style) in parts {
+        let (end, _) = buf.set_stringn(
+            x,
+            area.y,
+            text.as_str(),
+            usize::from(area.right().saturating_sub(x)),
+            paint(style),
+        );
+        x = end;
+    }
+}
+
 /// Draws the open swapped view into `area`, pushing its click targets:
 /// the model picker while it is open, else the open configuration view.
-/// The picker keeps the view's top row with its title and ✕, and draws
-/// in the overlay frame under it.
+/// The picker keeps the view's top row with its title and command, and
+/// draws in the overlay frame under it.
 pub(crate) fn draw(app: &App, area: Rect, buf: &mut Buffer, targets: &mut Vec<Target>) {
     if area.is_empty() {
         return;
     }
     if let Some(view) = app.model_picker_view() {
-        buf.set_stringn(
-            area.x,
-            area.y,
-            "Models",
-            usize::from(area.width),
-            Style::default(),
-        );
-        let cross = Rect::new(area.right().saturating_sub(1), area.y, 1, 1);
-        buf.set_string(cross.x, cross.y, "✕", Style::default());
-        targets.push(Target {
-            id: TargetId::View(Spot::Close),
-            rect: cross,
-        });
+        draw_top_row(buf, area, "Models", "/model", targets);
         let below = Rect::new(
             area.x,
             area.y.saturating_add(1),
@@ -190,20 +243,14 @@ pub(crate) fn draw(app: &App, area: Rect, buf: &mut Buffer, targets: &mut Vec<Ta
     }
 }
 
-/// Draws `frame` into `area`: what fits, top down, the footer on the last
-/// row.
+/// Draws `frame` into `area`: the top row, then what fits top down,
+/// the footer on the last row.
 pub(crate) fn render(frame: &Frame, area: Rect, buf: &mut Buffer, targets: &mut Vec<Target>) {
     if area.is_empty() {
         return;
     }
     let width = usize::from(area.width);
-    buf.set_stringn(area.x, area.y, &frame.title, width, Style::default());
-    let cross = Rect::new(area.right().saturating_sub(1), area.y, 1, 1);
-    buf.set_string(cross.x, cross.y, "✕", Style::default());
-    targets.push(Target {
-        id: TargetId::View(Spot::Close),
-        rect: cross,
-    });
+    draw_top_row(buf, area, &frame.title, frame.command, targets);
     let shown = rows_height(frame, usize::from(area.height));
     let mut y = area.y.saturating_add(1);
     for (at, cells) in frame
@@ -257,7 +304,7 @@ pub(crate) fn render(frame: &Frame, area: Rect, buf: &mut Buffer, targets: &mut 
     {
         field(text, *caret, Rect::new(area.x, y, area.width, 1), buf);
     }
-    if footer > area.y {
+    if !frame.footer.is_empty() && footer > area.y {
         buf.set_stringn(area.x, footer, &frame.footer, width, FOOTER);
     }
 }
@@ -286,6 +333,20 @@ fn field(text: &str, caret: usize, line: Rect, buf: &mut Buffer) {
             SELECTED,
         );
     }
+}
+
+/// A compact count as the swapped views say it: exact under 1,000,
+/// whole thousands above, whole millions past that, rounded half up
+/// (`docs/tui.md`, "Swapped views").
+pub(crate) fn compact(n: u64) -> String {
+    if n < 1000 {
+        return n.to_string();
+    }
+    let thousands = n.saturating_add(500) / 1000;
+    if thousands < 1000 {
+        return format!("{thousands}k");
+    }
+    format!("{}M", thousands.saturating_add(500) / 1000)
 }
 
 /// A token count as the views say it: grouped by thousands.

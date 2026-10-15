@@ -1,5 +1,5 @@
 #!/bin/sh
-# Captures every --home still frame (#1657) in tmux at 160 by 48, plain text
+# Captures every --home still frame (#2424) in tmux at 160 by 48, plain text
 # and SGR. Writes flywheel/run/fiber-1657-captures/<case>.txt and
 # sgr/<case>.ansi. Each case draws one static frame and stays up, so the
 # script quits it with q after the capture (which also exercises the home
@@ -13,7 +13,7 @@ if [ ! -x "$BIN" ]; then
   CARGO_BUILD_JOBS=3 cargo build --release
 fi
 mkdir -p "$OUT/sgr"
-for c in empty sessions live-only past-only selected hover-workspace hover-worktree hover-model hover-thinking worktree-on worktree-off picker-recent picker-typed focus-entry focus-chip-workspace focus-chip-model focus-chip-picker focus-chip-typing focus-session; do
+for c in full-sessions full-empty full-focus-exited full-closing full-picker rail-focused; do
   tmux kill-session -t home1657 2>/dev/null || true
   # shellcheck disable=SC2086
   tmux new-session -d -x 160 -y 48 -s home1657 "$BIN $FIX --static --home $c"

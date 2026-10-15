@@ -94,6 +94,7 @@ pub(crate) fn frame(
     let (files, added, removed) = totals(changes);
     Frame {
         title: "Changed files".to_owned(),
+        command: "diff against HEAD",
         rows,
         list,
         below: vec![format!(
@@ -136,6 +137,7 @@ fn diff_frame(path: &str, diff: &Diff, list: List) -> Frame {
     };
     Frame {
         title: format!("Changed files › {} · diff against HEAD", safe_line(path)),
+        command: "diff against HEAD",
         rows,
         list,
         below,

@@ -134,6 +134,7 @@ only that crate, in KiB; the empty program is 323 KiB.
 |---|---|---:|---:|---:|---:|---:|
 | serde, serde_json | the log, the event stream, every wire format | ~0 | ~0 | ~0 | 11 | 418 |
 | ureq, rustls-platform-verifier, rustls-native-certs | HTTP over TLS, trusting the OS certificate store and, on Linux, telling an empty system store from a full one | 3,356 | 3,076 | 2,048 | 31 | 2,545 |
+| rustls, webpki-roots | the hub client's TLS; no change, already in the tree through ureq, with the same features | no change | no change | no change | no change | no change |
 | ratatui | drawing the terminal UI | 1,084 | 1,344 | 1,376 | 41 | 469 |
 | crossterm | terminal input, raw mode and output | ~0 | 256 | ~0 | 28 | 443 |
 | mlua | the extension runtime, Lua 5.4 vendored | 912 | 704 | ~0 | 23 | 785 |
@@ -142,8 +143,8 @@ only that crate, in KiB; the empty program is 323 KiB.
 | clap_complete | the shell completion scripts `fiber completion` prints (`docs/invocation.md`, "Commands and flags") | 796 | 1,020 | 1,136 | 18 | 967 |
 | thiserror | error types in library crates | ~0 | ~0 | ~0 | 6 | 325 |
 | signal-hook | SIGTERM, SIGINT and SIGHUP | ~0 | ~0 | ~0 | 4 | 352 |
-| ring | SHA-256, for PKCE, extension binary checksums, the content hash a repository's approvals pin, and an MCP tool's cut-short name; HMAC-SHA256, for `host.hmac_sha256`; credential fingerprints in the fake provider server; the hub's websocket handshake (SHA-1) and device-token hashes; secure random pairing codes and device tokens | ~0 | ~0 | ~0 | 8 | 341 |
-| base64 | PKCE, attachments sent to providers, images a client pastes, the terminal's copy through OSC 52 (`docs/tui.md`, "Selection and copy"), and the files the hub's `read_file` answers with | ~0 | ~0 | ~0 | 1 | 328 |
+| ring | SHA-256, for PKCE, extension binary checksums, the content hash a repository's approvals pin, and an MCP tool's cut-short name; HMAC-SHA256, for `host.hmac_sha256`; credential fingerprints in the fake provider server; the hub's websocket handshake (SHA-1) and device-token hashes; the hub client's websocket handshake (SHA-1); secure random pairing codes and device tokens | ~0 | ~0 | ~0 | 8 | 341 |
+| base64 | PKCE, attachments sent to providers, images a client pastes, the terminal's copy through OSC 52 (`docs/tui.md`, "Selection and copy"), the files the hub's `read_file` answers with, the hub client's websocket key and a proxy's credentials | ~0 | ~0 | ~0 | 1 | 328 |
 | rustix | the shell tool's pseudo-terminal, new session and process group, and reading a key without echo; `host.exec`'s process groups; signalling MCP servers; killing a credential command at its timeout, or on shutdown; signalling a Fiber delegate's process group; the terminal's clipboard read: its process group, its pipe's poll and waiting for its exit; and the test fakes' process and process-group probes; and the process-group guard and the stoppable read's poll in `support` | ~0 | ~0 | ~0 | 4 | 330 |
 | libc | macOS only: the peak physical footprint for a `peak_memory` line (`docs/state.md`, "What each part holds") | n/a | n/a | ~0 | 1 | n/a |
 | ignore, grep-searcher, grep-regex, grep-matcher | the search behind the shell's `grep` and `find` (`docs/tools.md`, "Search") and `session_search`'s scan (`docs/tools.md`, "Searching past sessions") | 2,656 | 2,480 | 1,904 | 25 | 2,886 |
@@ -172,6 +173,7 @@ Notes:
   uses for cryptography, carries C and assembly. aws-lc-rs, the alternative
   provider, adds 6 crates and 663 KiB for nothing Fiber needs.
 - rustls-native-certs: no change, already in the tree through rustls-platform-verifier on Linux, with the same (no) features.
+- rustls, webpki-roots, base64 and ring in `net`: no change, already in the tree through ureq (ring through rustls), with the same features.
 - mlua carries Lua's C source.
 - ratatui's figure is its two 200 by 50 screen buffers. Any full-screen
   terminal UI holds a screen model of that size.
@@ -348,6 +350,7 @@ rusqlite carries SQLite's C source.
 | Timestamps | the log's `ts` is milliseconds since the epoch, from `std::time` |
 | Syntax highlighting in the terminal | see below |
 | The hub's websocket server | RFC 6455's server side for text messages; tungstenite's blocking socket has one owner, and the hub writes to a connection from several threads |
+| The hub client's websocket | RFC 6455's client side for text messages; tungstenite's blocking socket has one owner, and the client reads and writes a connection from two threads |
 
 The hub's websocket server peaks at 2,704 KiB of macOS footprint with no
 client and 4,144 KiB with 10 authenticated websocket clients: the hub's

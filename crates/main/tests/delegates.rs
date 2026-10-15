@@ -467,6 +467,196 @@ fn answering(
     }
 }
 
+/// Session requests declare tools; reviewer requests do not. Each new
+/// prompt's first reply delegates, and its receipt's reply ends the turn.
+fn depth_responder(request: &Request) -> Response {
+    let body: Value = serde_json::from_slice(&request.body).unwrap();
+    if body["tools"]
+        .as_array()
+        .is_none_or(|tools| tools.is_empty())
+    {
+        return text_reply("allow");
+    }
+    let input = body["input"].as_array().unwrap();
+    if input
+        .iter()
+        .any(|item| item["type"] == "function_call_output")
+    {
+        support::hello()
+    } else {
+        support::stream(&[spawn_call("fiber:pb/m")])
+    }
+}
+
+#[test]
+fn a_depth_one_delegate_starts_depth_two_with_the_same_tools_but_no_grandchild() {
+    let setup = support::Setup::new();
+    let _guard = arm(&setup);
+    let parent = ProviderServer::start_responding(depth_responder).unwrap();
+    let child = ProviderServer::start_responding(depth_responder).unwrap();
+    providers(&setup, &parent, &child);
+    standing_allow(&setup);
+    let id = doors::mint("s_");
+    let parent_id = doors::mint("s_");
+    let job = doors::mint("j_");
+    let (mut running, lifeline) = Running::spawn_stdin(
+        &setup,
+        &[
+            "session",
+            "--id",
+            &id,
+            "--workspace",
+            setup.root.path().to_str().unwrap(),
+            "--model",
+            "pa/m",
+            "--prompt",
+            "delegate",
+            "--parent",
+            &parent_id,
+            "--delegate-id",
+            &job,
+            "--depth",
+            "1",
+        ],
+        Stdio::piped(),
+    );
+    running.wait_line("the depth-one session exits", |line| {
+        line["kind"] == "fiber_exited"
+    });
+    drop(lifeline);
+    let (status, lines, stderr) = running.wait();
+    assert_eq!(status.code(), Some(0), "{stderr}");
+    assert_eq!(
+        completed_for(&lines, "delegate_spawn")["payload"]["status"],
+        "completed"
+    );
+    let started = one(&lines, "delegate_started");
+    let child_id = started["delegate_session_id"].as_str().unwrap();
+    let child_lines = read_lines(&ask_sessions(&setup).join(child_id).join("events.jsonl"));
+    assert_depth_refusal(&child_lines, false);
+    let requests = child.requests();
+    let body: Value = serde_json::from_slice(&requests[0].body).unwrap();
+    let mut names: Vec<_> = body["tools"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|tool| tool["name"].as_str().unwrap())
+        .collect();
+    names.sort();
+    assert_eq!(names, support::TOOL_NAMES);
+    assert_eq!(
+        one(&child_lines, "session_started")["parent"],
+        json!({"session_id": id, "delegate_id": started["job_id"]})
+    );
+}
+
+fn assert_depth_refusal(lines: &[Value], resumed: bool) {
+    let mut expected = vec![
+        "session_started",
+        "fiber_started",
+        "extensions_loaded",
+        "preamble_built",
+        "opening_message",
+        "turn_started",
+        "step_started",
+        "assistant_message_started",
+        "tool_call_requested",
+        "usage_recorded",
+        "assistant_message_completed",
+        "usage_recorded",
+        "permission_resolved",
+        "tool_call_started",
+        "tool_call_completed",
+        "step_started",
+        "assistant_message_started",
+        "text_completed",
+        "usage_recorded",
+        "assistant_message_completed",
+        "turn_completed",
+        "fiber_exited",
+    ];
+    if resumed {
+        expected.remove(4);
+        expected.remove(0);
+    }
+    assert_eq!(kinds(lines), expected);
+    let completed = completed_for(lines, "delegate_spawn");
+    assert_eq!(completed["payload"]["status"], "failed");
+    assert_eq!(completed["payload"]["error"]["code"], "depth_exceeded");
+    assert!(lines.iter().all(|line| line["kind"] != "delegate_started"));
+    assert!(lines.iter().any(|line| line["kind"] == "turn_completed"));
+}
+
+#[test]
+fn a_resumed_depth_two_session_still_refuses_delegate_spawn() {
+    let setup = support::Setup::new();
+    let _guard = arm(&setup);
+    let session_calls = Mutex::new(0usize);
+    let parent = ProviderServer::start_responding(move |request| {
+        let body: Value = serde_json::from_slice(&request.body).unwrap();
+        if body["tools"]
+            .as_array()
+            .is_none_or(|tools| tools.is_empty())
+        {
+            return text_reply("allow");
+        }
+        let mut calls = session_calls.lock().unwrap();
+        *calls += 1;
+        if [1, 3].contains(&*calls) {
+            support::stream(&[spawn_call("fiber:pb/m")])
+        } else {
+            support::hello()
+        }
+    })
+    .unwrap();
+    let child = ProviderServer::start([support::hello()]).unwrap();
+    providers(&setup, &parent, &child);
+    standing_allow(&setup);
+    let id = doors::mint("s_");
+    let parent_id = doors::mint("s_");
+    let job = doors::mint("j_");
+    for resume in [false, true] {
+        let log = ask_sessions(&setup).join(&id).join("events.jsonl");
+        let before = read_lines(&log).len();
+        let mut args = vec![
+            "session",
+            "--id",
+            &id,
+            "--workspace",
+            setup.root.path().to_str().unwrap(),
+            "--prompt=delegate",
+            "--parent",
+            &parent_id,
+            "--delegate-id",
+            &job,
+            "--depth",
+            "2",
+        ];
+        if resume {
+            args.push("--resume");
+        }
+        let (mut running, lifeline) = Running::spawn_stdin(&setup, &args, Stdio::piped());
+        running.wait_line("the depth-two session exits", |line| {
+            line["kind"] == "fiber_exited"
+        });
+        drop(lifeline);
+        let (status, _lines, stderr) = running.wait();
+        assert_eq!(status.code(), Some(0), "{stderr}");
+        let lines = read_lines(&log);
+        assert_depth_refusal(&lines[before..], resume);
+    }
+    assert!(child.requests().is_empty());
+    let lines = read_lines(&ask_sessions(&setup).join(&id).join("events.jsonl"));
+    assert_eq!(
+        lines
+            .iter()
+            .filter(|line| line["kind"] == "tool_call_completed"
+                && line["payload"]["error"]["code"] == "depth_exceeded")
+            .count(),
+        2
+    );
+}
+
 #[test]
 fn a_delegate_runs_to_its_end_and_its_finish_wakes_the_parent() {
     let setup = support::Setup::new();

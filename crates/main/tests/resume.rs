@@ -1461,7 +1461,7 @@ fn append_raw(dir: &Path, line: &contract::Envelope) {
 fn an_unreadable_line_before_the_last_handoff_does_not_fail_the_resume() {
     // Only the window a resume actually needs is parsed (`docs/events.md`,
     // "Only the window a consumer actually needs is parsed"): the
-    // unreadable `text_completed` line sits before the handoff turn's
+    // unreadable `reasoning_completed` line sits before the handoff turn's
     // `turn_started`, where the window starts, so the resume never reads
     // its payload.
     let setup = Setup::new_with_fa_root();
@@ -1482,7 +1482,7 @@ fn an_unreadable_line_before_the_last_handoff_does_not_fail_the_resume() {
             (text("early answer"), Some(t()), Some(a("a_0"))),
         ],
     );
-    // A `text_completed` line, a kind the pass never folds, whose envelope
+    // A `reasoning_completed` line, a kind the pass never folds, whose envelope
     // reads but whose payload does not read as its kind (`text` is a
     // number, not a string).
     let dir = setup.sessions().join("s_unread1");
@@ -1493,7 +1493,7 @@ fn an_unreadable_line_before_the_last_handoff_does_not_fail_the_resume() {
     append_raw(
         &dir,
         &contract::Envelope {
-            kind: "text_completed".into(),
+            kind: "reasoning_completed".into(),
             session_id: SessionId("s_unread1".into()),
             ts: 1,
             schema_version: contract::SCHEMA_VERSION,

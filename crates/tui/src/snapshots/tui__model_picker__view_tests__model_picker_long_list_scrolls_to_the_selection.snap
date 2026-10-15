@@ -3,7 +3,7 @@ source: crates/tui/src/model_picker_view_tests.rs
 assertion_line: 235
 expression: text
 ---
-Models                                                                         ✕
+ Models  /model                                                      Esc returns
 ▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
 
   Type to search █

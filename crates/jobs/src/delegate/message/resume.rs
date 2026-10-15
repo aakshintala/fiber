@@ -70,6 +70,10 @@ impl DelegateMessage {
         }
         match self.resume(id, message, action.clone()) {
             Ok(resumed) => Attempt::Done(resumed_receipt(id, resumed)),
+            Err(Resume::Full) => Attempt::Done(fail(
+                ErrorCode::ToolError,
+                crate::registry::runs::cap_message(),
+            )),
             Err(Resume::Unknown) => {
                 let message = unknown_message(id);
                 Attempt::Done(fail(ErrorCode::InvalidArguments, message))
@@ -125,6 +129,7 @@ impl DelegateMessage {
                 Err(reason) => return Err(StartFailed::Boundary(reason)),
             };
             let launched = Launched {
+                depth: self.depth.saturating_add(1),
                 session_id: resumable.delegate.delegate_session_id.clone(),
                 job_id: JobId(id.clone()),
                 parent: parent.clone(),
@@ -146,6 +151,7 @@ impl DelegateMessage {
                 cap,
                 Arc::clone(&watch),
                 after,
+                None,
             );
             let (child, listing) = match runner.spawn(&launch, &launched) {
                 Ok(started) => started,

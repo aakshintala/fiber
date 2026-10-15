@@ -205,6 +205,19 @@ fn bar_count(bar: &FindBar) -> &str {
     }
 }
 
+/// The columns `text` draws: each grapheme's own cells summed, as
+/// `Buffer::set_stringn` draws them. A whole string fuses some pairs
+/// (`لا` measures 1) while the buffer draws a cell per grapheme, so a
+/// whole-string measure puts the cursor before the block
+/// (`docs/tui.md`, "Search").
+fn drawn_width(text: &str) -> usize {
+    Span::raw(text)
+        .styled_graphemes(Style::default())
+        .filter(|grapheme| !grapheme.symbol.contains(char::is_control))
+        .map(|grapheme| crate::format::width(grapheme.symbol))
+        .sum()
+}
+
 /// The query's end kept in `room` columns: an overlong query cuts at
 /// the left of its kept end, so the block after it always shows. The
 /// cut falls on a grapheme boundary, as the draw does
@@ -234,7 +247,7 @@ fn bar_pieces(bar: &FindBar, room: usize) -> (String, String) {
     let query = query_end(&bar.query, room.saturating_sub(OVERHEAD));
     let count_room = room
         .saturating_sub(OVERHEAD)
-        .saturating_sub(crate::format::width(&query));
+        .saturating_sub(drawn_width(&query));
     let count = crate::format::cut(bar_count(bar), count_room);
     (query, count)
 }
@@ -303,7 +316,7 @@ fn draw_bar(bar: &FindBar, area: Rect, buf: &mut Buffer, targets: &mut Vec<Targe
     let pad = room
         .saturating_sub(
             crate::format::width(PREFIX)
-                .saturating_add(crate::format::width(&query))
+                .saturating_add(drawn_width(&query))
                 .saturating_add(1),
         )
         .saturating_sub(count_width.saturating_add(1));
@@ -354,7 +367,7 @@ pub(super) fn bar_cursor(bar: &FindBar, area: Rect) -> Option<Position> {
     let (query, _) = bar_pieces(bar, room);
     let x = x
         .saturating_add(u16::try_from(crate::format::width(PREFIX)).unwrap_or(u16::MAX))
-        .saturating_add(u16::try_from(crate::format::width(&query)).unwrap_or(u16::MAX));
+        .saturating_add(u16::try_from(drawn_width(&query)).unwrap_or(u16::MAX));
     Some(Position::new(x, y))
 }
 

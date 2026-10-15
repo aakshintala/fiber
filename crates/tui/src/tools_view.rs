@@ -377,6 +377,7 @@ impl Tools {
         };
         Frame {
             title: "Tools".to_owned(),
+            command: "/tools",
             rows,
             list: self.list,
             below,

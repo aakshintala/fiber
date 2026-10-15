@@ -458,6 +458,100 @@ fn a_spawn_failure_rollback_restarts_the_timer() {
 }
 
 #[test]
+fn a_start_up_park_still_standing_does_not_prove_the_departure() {
+    let temp = Temp::new();
+    let clock = fakes::clock::FakeClock::new();
+    let origin = clock.origin();
+    let (hub, _got, done) = serve_with_hub(&temp, IDLE, Arc::clone(&clock));
+    await_idle_park(&clock, origin, "at start");
+    // Hold the tick lock so the notified idle thread cannot leave its
+    // start-up park: the advance and the arrival below both block in
+    // `Tick::wake` until the guard drops.
+    let held = hub.tick.hold();
+    // Thread A moves fake time past the idle exit. Its wake finds the
+    // guard held and reports through the armed attempt at once, before
+    // it blocks on the guard: the report proves the offset already moved.
+    let (attempt_tx, attempt_rx) = mpsc::channel();
+    *support::lock(&hub.tick.attempt) = Some(attempt_tx);
+    let (a_tx, a_done) = mpsc::channel();
+    let advance = thread::spawn({
+        let clock = Arc::clone(&clock);
+        move || {
+            clock.advance(IDLE + Duration::from_secs(1));
+            a_tx.send(()).unwrap_or(());
+        }
+    });
+    Deadline::after(DEADLINE).recv_or_fail(&attempt_rx, "the advance to reach its wake");
+    // Thread B counts a client through a fresh arm. Counting clears
+    // `zero_since` before the wake, which blocks on the guard the same
+    // way: the report proves the count is in place.
+    let (attempt_tx, attempt_rx) = mpsc::channel();
+    *support::lock(&hub.tick.attempt) = Some(attempt_tx);
+    let (counted, peer) = UnixStream::pair().unwrap();
+    let (b_tx, b_done) = mpsc::channel();
+    let arrival = thread::spawn({
+        let hub = Arc::clone(&hub);
+        move || {
+            let n = hub.register(&counted);
+            b_tx.send(n).unwrap_or(());
+        }
+    });
+    Deadline::after(DEADLINE).recv_or_fail(&attempt_rx, "the arrival to reach its wake");
+    // The stale state, read with no waits: a client is counted, yet the
+    // only park is still the start-up one.
+    assert_eq!(hub.clients(), 1);
+    assert_eq!(clock.parked(), vec![Some(origin + IDLE)]);
+    // The old gate: the stale park still satisfies the instant wait even
+    // with a client counted, so advancing on it races the arrival.
+    assert!(
+        clock.await_parked(origin + IDLE, WITHIN),
+        "the stale start-up park still satisfies the instant gate with a client counted"
+    );
+    // The new gate: no unbounded park exists while the guard is held. A
+    // zero-bound probe reads the predicate with no elapsed-time wait:
+    // the stale finite park alone cannot satisfy it.
+    assert!(
+        !clock.await_parked_unbounded(Duration::ZERO),
+        "the stale park answers no unbounded wait while the guard is held"
+    );
+    // Release both wakes and the idle thread: it leaves the stale park,
+    // rechecks under the tick lock with the count and the later time in
+    // place, finds a client open, and parks with no deadline.
+    drop(held);
+    Deadline::after(DEADLINE).recv_or_fail(&a_done, "the advance to finish its wake");
+    let n = Deadline::after(DEADLINE)
+        .recv_or_fail(&b_done, "the arrival to finish its wake")
+        .expect("the clone succeeds");
+    advance.join().expect("the advance thread joins");
+    arrival.join().expect("the arrival thread joins");
+    assert!(
+        clock.await_parked_unbounded(WITHIN),
+        "the hub parks with no deadline once it saw the client"
+    );
+    // The departure starts the timer at the advanced time; the advance
+    // that raced the arrival ends nothing while fake time stays frozen.
+    hub.rollback(n);
+    let zero = clock.now();
+    assert_eq!(zero, origin + IDLE + Duration::from_secs(1));
+    await_idle_park(&clock, zero, "after the rollback");
+    // The idle park above already proves the hub is still waiting: it has
+    // not exited, so no code is waiting on its result.
+    assert!(
+        done.try_recv().is_err(),
+        "the advance that raced the arrival does not end the hub"
+    );
+    // Driving the timer from the departure exits the hub.
+    clock.advance(IDLE);
+    assert_eq!(
+        Deadline::after(DEADLINE)
+            .recv(&done)
+            .expect("the hub exits idle"),
+        0
+    );
+    drop(peer);
+}
+
+#[test]
 fn an_accept_after_the_exit_claim_gets_eof_without_hello() {
     let temp = Temp::new();
     let clock = fakes::clock::FakeClock::new();

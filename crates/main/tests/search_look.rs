@@ -1,18 +1,24 @@
 //! Binary-level tests of the search look (`docs/tui.md`, "Search" and
-//! "Selection and copy"): the real binary on a 160x48 pty in truecolour,
+//! "Selection and copy") and of the swapped views' top row (`docs/tui.md",
+//! "Swapped views"): the real binary on a 160x48 pty in truecolour,
 //! with the scripted provider answering, draws the search bar as a
 //! `surface` slab with half-block edges, the selection on the `selection`
-//! tint, and "Copied" in `info` below the search box when it is open.
+//! tint, "Copied" in `info` below the search box when it is open, and
+//! every swapped view's top row as its name bold, its command dim and
+//! "Esc returns" dim right-aligned on the `surface` tint.
 
 #![allow(
     clippy::unwrap_used,
     clippy::expect_used,
     clippy::panic,
     clippy::indexing_slicing,
+    clippy::cast_possible_truncation,
     reason = "test helpers; a failure is the test's"
 )]
 
 mod support;
+
+use std::fs;
 
 use serde_json::json;
 use support::pty::{Colour, Grid, Run};
@@ -467,4 +473,205 @@ fn copied_sits_below_the_search_box() {
     for dx in 0..6 {
         assert_eq!(grid.cell(at + dx, copied).fg, INFO, "Copied {dx}");
     }
+}
+
+/// A setup whose scripted model reads a large file and then answers
+/// `REPLY`: the read gives the `/context` view tool results to draw,
+/// and both steps report usage under the 400k handoff point, so no
+/// handoff clears them before the views open.
+const REPLY: &str = "The quay ledger balances.";
+
+fn setup_with_read() -> Setup {
+    let setup = Setup::new();
+    // One line is enough: the test only checks that the read appears
+    // among the largest tool results.
+    fs::write(
+        setup.workspace().join("a.txt"),
+        "ledger line with padding to fill bytes\n",
+    )
+    .unwrap();
+    write_json(
+        &setup.workspace().join("s.json"),
+        &json!({"steps": [
+            {"tool_calls": [{"name": "read", "arguments": {"path": "a.txt"}}],
+             "usage": {"input": 200000, "output": 10}},
+            {"text": [REPLY], "usage": {"input": 300000, "output": 5}},
+        ]}),
+    );
+    write_json(
+        &setup.home().join("config.json"),
+        &json!({"model": "scripted/s.json", "handoff": {"tokens": 400000},
+            "budget": {"usd": 20}, "hub": {"idle_exit_ms": 1000}}),
+    );
+    setup
+}
+
+/// Clicks the cell at `(x, y)`: an SGR press then its release on the
+/// same cell.
+fn click(run: &mut Run, x: u16, y: u16) {
+    run.write(format!("\x1b[<0;{};{}M\x1b[<0;{};{}m", x + 1, y + 1, x + 1, y + 1).as_bytes());
+}
+
+/// The top row's `surface` run around the view's title: row 0 holds
+/// `" {name}"`, so the run is found from the title and widened over
+/// the contiguous `surface` cells. The search walks row 0 only, so a
+/// `surface` card elsewhere on the screen stays out.
+fn top_run(grid: &Grid, name: &str) -> (u16, u16) {
+    let needle = format!(" {name}");
+    let first = col_at_or(grid, 0, &needle)
+        .unwrap_or_else(|| panic!("the {name} top row in\n{}", grid.contents));
+    let mut last = first;
+    while last + 1 < 160 && grid.cell(last + 1, 0).bg == SURFACE {
+        last += 1;
+    }
+    (first, last)
+}
+
+/// Asserts row 0 reads `" {name}  {command}"` then `"Esc returns"`
+/// ending at the run's last cell: the whole run on `surface`, the name
+/// bold, the command and `"Esc returns"` dim, and no ✕ anywhere in
+/// it. Returns the run for the click that closes the view.
+fn assert_top_row(grid: &Grid, name: &str, command: &str) -> (u16, u16) {
+    let (first, last) = top_run(grid, name);
+    assert!(last > first + 30, "the top row spans its row");
+    for x in first..=last {
+        assert_eq!(grid.cell(x, 0).bg, SURFACE, "top row ({x}, 0)");
+    }
+    let text: String = (first..=last)
+        .map(|x| grid.cell(x, 0).symbol.clone())
+        .collect();
+    let head = format!(" {name}  {command}");
+    assert!(
+        text.starts_with(&head),
+        "the top row names its view: {text:?}"
+    );
+    assert!(
+        text.ends_with("Esc returns"),
+        "Esc returns ends the row: {text:?}"
+    );
+    assert!(!text.contains('✕'), "no ✕ on the top row: {text:?}");
+    let name_at = first + 1;
+    for (dx, _cell) in name.chars().enumerate() {
+        let x = name_at + dx as u16;
+        assert!(grid.cell(x, 0).bold, "the name is bold ({x}, 0)");
+    }
+    let command_at = name_at + name.chars().count() as u16 + 2;
+    for dx in 0..command.chars().count() as u16 {
+        assert!(grid.cell(command_at + dx, 0).dim, "the command is dim");
+    }
+    let esc_at = last - 10;
+    for dx in 0..11 {
+        assert!(grid.cell(esc_at + dx, 0).dim, "Esc returns is dim");
+    }
+    (first, last)
+}
+
+/// Opens the slash command `command` and waits for the conversation to
+/// give way to its view: the reply leaves the screen. The wait reads
+/// content only, so it passes at the base; the asserts after it fail
+/// there, which is what makes this test red before the fix.
+fn open_view(run: &mut Run, command: &str) -> Grid {
+    run.write(format!("/{command}\r").as_bytes());
+    run.wait_screen("the view", |grid| !grid.contents.contains(REPLY))
+}
+
+/// Esc closes the open view: the reply is back on the screen.
+fn esc_closes(run: &mut Run) {
+    run.write(b"\x1b[27u");
+    run.wait_screen("the conversation back", |grid| {
+        grid.contents.contains(REPLY)
+    });
+}
+
+#[test]
+fn the_context_usage_and_tools_top_rows_match_the_doc() {
+    let setup = setup_with_read();
+    let mut run = turned(&setup, "go");
+    // `/context`: the top row, the bold sizes, tool results in
+    // `error`, and the handoff marker and label in `attention`.
+    let grid = open_view(&mut run, "context");
+    let (first, last) = assert_top_row(&grid, "Context", "/context");
+    // The sizes row names the window: the doc's "268k tokens" bold
+    // with its dim tail. ("of the" tells it from the panel's "30% of
+    // window".) The base row names no window, so this fails there.
+    let sizes = grid
+        .rows
+        .iter()
+        .position(|row| row.contains("of the") && row.contains("tokens"))
+        .unwrap_or_else(|| panic!("the sizes row in\n{}", grid.contents));
+    let sizes = sizes as u16;
+    let at = col_at(&grid, sizes, "tokens");
+    for dx in 0..6 {
+        assert!(grid.cell(at + dx, sizes).bold, "tokens is bold");
+    }
+    // The bar: the handoff marker in `attention` with its label. The
+    // base bar draws no colour, so both fail there. (Per-category █
+    // runs need a tokens-per-byte rate, which the scripted provider
+    // never reports; the unit tests cover them with an injected rate.)
+    let bar = grid
+        .rows
+        .iter()
+        .position(|row| row.contains('█') && row.contains('│'))
+        .unwrap_or_else(|| panic!("the context bar in\n{}", grid.contents));
+    let bar = bar as u16;
+    assert!(
+        (0..160).any(|x| grid.cell(x, bar).symbol == "│" && grid.cell(x, bar).fg == ATTENTION),
+        "the handoff marker in attention"
+    );
+    let label = col_at(&grid, bar + 1, "handoff 400k");
+    for dx in 0..12 {
+        assert_eq!(
+            grid.cell(label + dx, bar + 1).fg,
+            ATTENTION,
+            "the handoff label {dx}"
+        );
+    }
+    // The read landed in the largest tool results: the heading bold,
+    // the row under it dim. Both draw plain at the base, so both fail
+    // there.
+    let largest = row_with(&grid, "Largest tool results");
+    let at = col_at(&grid, largest, "Largest tool results");
+    for (dx, _cell) in "Largest tool results".chars().enumerate() {
+        assert!(
+            grid.cell(at + dx as u16, largest).bold,
+            "the largest heading is bold"
+        );
+    }
+    let read = largest + 1;
+    let at = col_at(&grid, read, "read");
+    for dx in 0..4 {
+        assert!(grid.cell(at + dx, read).dim, "the tool name is dim");
+    }
+    // A click on the middle of the top row returns to the
+    // conversation: at the base only the ✕ closes, so the wait fails
+    // there.
+    click(&mut run, (first + last) / 2, 0);
+    run.wait_screen("the conversation back", |grid| {
+        grid.contents.contains(REPLY)
+    });
+    // The click leaves the pointer on row 0, where it would hover the
+    // next view's top row off its tint: move it to a body row first.
+    run.write(b"\x1b[<35;1;21M");
+    // `/usage`: the top row, the three bold group headings, and the
+    // dim budget row with `budget.usd` set.
+    let grid = open_view(&mut run, "usage");
+    assert_top_row(&grid, "Usage", "/usage");
+    for heading in ["By turn", "By model", "By delegate"] {
+        let row = row_with(&grid, heading);
+        let at = col_at(&grid, row, heading);
+        for (dx, _cell) in heading.chars().enumerate() {
+            assert!(grid.cell(at + dx as u16, row).bold, "{heading} is bold");
+        }
+    }
+    let budget = row_with(&grid, "budget left $20.00 of $20.00");
+    let at = col_at(&grid, budget, "budget left $20.00 of $20.00");
+    for dx in 0.."budget left $20.00 of $20.00".chars().count() as u16 {
+        assert!(grid.cell(at + dx, budget).dim, "the budget row is dim");
+    }
+    esc_closes(&mut run);
+    // `/tools`: the top row. The tools answer may still be on its
+    // way; the row draws while it waits.
+    let grid = open_view(&mut run, "tools");
+    assert_top_row(&grid, "Tools", "/tools");
+    esc_closes(&mut run);
 }

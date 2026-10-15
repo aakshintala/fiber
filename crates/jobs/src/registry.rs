@@ -88,10 +88,10 @@ pub struct Registry {
     /// What `wait` and `stop` block on: a job's end, a cancel and a clock
     /// move all bump it.
     park: Parker,
-    /// Held from a resume's "ended" check through its commit, so two
-    /// resumes of one job start one run. Taken before the inner lock;
-    /// nothing takes them the other way.
-    resume_gate: Mutex<()>,
+    /// Held by `admit` and `resume` from a delegate start's cap check
+    /// through its commit. Taken before the inner lock; nothing takes
+    /// them the other way.
+    start_gate: Mutex<()>,
     /// Times a background start as `jobs.start`, installed once by the
     /// session before any tool runs. The first install wins; an empty
     /// cell times nothing.
@@ -185,7 +185,7 @@ impl Registry {
                 foreground: Vec::new(),
             }),
             park: Parker::new(),
-            resume_gate: Mutex::new(()),
+            start_gate: Mutex::new(()),
             timing: OnceLock::new(),
             me: Weak::clone(me),
         });
