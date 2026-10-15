@@ -52,7 +52,7 @@ pub struct PruneArgs {
 pub fn prune(
     args: &PruneArgs,
     clock: &dyn Clock,
-    connect: &mut dyn FnMut() -> io::Result<doors::hub::Hub>,
+    connect: &mut dyn FnMut() -> Result<doors::hub::Hub, doors::Error>,
 ) -> i32 {
     let stdin = io::stdin();
     let terminal = stdin.is_terminal();
@@ -85,7 +85,7 @@ fn prune_run(
     now: SystemTime,
     ask: Ask<'_>,
     out: &mut dyn Write,
-    connect: &mut dyn FnMut() -> io::Result<doors::hub::Hub>,
+    connect: &mut dyn FnMut() -> Result<doors::hub::Hub, doors::Error>,
 ) -> Result<(), Failure> {
     let older_than = match &args.older_than {
         None => None,
@@ -155,10 +155,11 @@ fn prune_run(
         Err(e) => {
             // No `delete` was accepted: every remaining directory fails
             // with the connection error, as `reconcile` reports.
+            let failure = crate::sessions::hub_failure(e);
             let results: Vec<Result<(), Failure>> = selected
                 .deletes
                 .iter()
-                .map(|_| Err(failed(ErrorCode::IoFailed, format!("the hub: {e}"))))
+                .map(|_| Err(failure.clone()))
                 .collect();
             return reconcile(
                 out,

@@ -65,7 +65,7 @@ pub fn delete(
     selector: &str,
     cascade: bool,
     yes: bool,
-    connect: &mut dyn FnMut() -> io::Result<doors::hub::Hub>,
+    connect: &mut dyn FnMut() -> Result<doors::hub::Hub, doors::Error>,
 ) -> i32 {
     let stdin = io::stdin();
     let terminal = stdin.is_terminal();
@@ -108,7 +108,7 @@ fn delete_run(
     cascade: bool,
     ask: Ask<'_>,
     out: &mut dyn Write,
-    connect: &mut dyn FnMut() -> io::Result<doors::hub::Hub>,
+    connect: &mut dyn FnMut() -> Result<doors::hub::Hub, doors::Error>,
 ) -> Result<(), Failure> {
     if !ask.yes && !ask.terminal {
         return Err(usage(DELETE_NOBODY));
@@ -136,8 +136,7 @@ fn delete_run(
             return Ok(());
         }
     }
-    let (stream, _) =
-        connect().map_err(|e| failed(ErrorCode::IoFailed, format!("the hub: {e}")))?;
+    let (stream, _) = connect().map_err(crate::sessions::hub_failure)?;
     let mut read = BufReader::new(stream);
     send_delete(&mut read, DELETE_ID, &id, cascade)?;
     print_ids(out, &listed)
@@ -158,6 +157,15 @@ pub(crate) fn send_delete(
         args.insert("cascade".to_owned(), Value::Bool(true));
     }
     request(read, command_id, "delete", args).map(drop)
+}
+
+/// Local connections keep their existing message; listed failures keep their code.
+pub(crate) fn hub_failure(error: doors::Error) -> Failure {
+    if let doors::Error::Local(error) = error {
+        failed(ErrorCode::IoFailed, format!("the hub: {error}"))
+    } else {
+        failed(error.code(), error)
+    }
 }
 
 /// Sends hub command `command` with `args` as `command_id` and reads until

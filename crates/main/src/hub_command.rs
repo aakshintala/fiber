@@ -18,28 +18,54 @@ use serde_json::Value;
 use crate::{cli, settings};
 
 /// Runs a `fiber hub` command.
-pub(crate) fn run(command: cli::HubCommands, exe: Result<PathBuf, String>) -> i32 {
-    let mut connect = || {
-        crate::connect_hub(
-            &config::fiber_home_from_env().map_err(std::io::Error::other)?,
-            &exe,
-            &crate::clock::System,
-        )
-    };
+pub(crate) fn run(
+    command: cli::HubCommands,
+    exe: Result<PathBuf, String>,
+    clock: &dyn contract::clock::Clock,
+) -> i32 {
     match command {
+        cli::HubCommands::Add {
+            name,
+            address,
+            default,
+        } => ::cli::hub_add(&name, &address, default, clock),
+        cli::HubCommands::Remove { name } => ::cli::hub_remove(&name),
         cli::HubCommands::Install { port } => ::cli::hub_install(port, &crate::clock::System),
         cli::HubCommands::Uninstall => ::cli::hub_uninstall(),
         cli::HubCommands::Status { json } => ::cli::hub_status(json, &crate::clock::System),
-        cli::HubCommands::Refresh => ::cli::hub_refresh(&mut connect),
-        cli::HubCommands::Pair { device, address } => {
-            ::cli::hub_pair(&device, address.as_ref(), &mut connect)
+        cli::HubCommands::Refresh { hub } => {
+            client_command(hub.as_deref(), &exe, clock, ::cli::hub_refresh)
         }
-        cli::HubCommands::Token(cli::TokenCommands::List) => ::cli::hub_token_list(&mut connect),
-        cli::HubCommands::Token(cli::TokenCommands::Revoke { device }) => {
-            ::cli::hub_token_revoke(&device, &mut connect)
+        cli::HubCommands::Pair {
+            device,
+            address,
+            hub,
+        } => client_command(hub.as_deref(), &exe, clock, |connect| {
+            ::cli::hub_pair(&device, address.as_ref(), connect)
+        }),
+        cli::HubCommands::Token(cli::TokenCommands::List { hub }) => {
+            client_command(hub.as_deref(), &exe, clock, ::cli::hub_token_list)
+        }
+        cli::HubCommands::Token(cli::TokenCommands::Revoke { device, hub }) => {
+            client_command(hub.as_deref(), &exe, clock, |connect| {
+                ::cli::hub_token_revoke(&device, connect)
+            })
         }
         cli::HubCommands::Serve { installed } => serve(exe, mode(installed)),
     }
+}
+
+fn client_command(
+    named: Option<&str>,
+    exe: &Result<PathBuf, String>,
+    clock: &dyn contract::clock::Clock,
+    run: impl FnOnce(&mut dyn FnMut() -> Result<doors::hub::Hub, doors::Error>) -> i32,
+) -> i32 {
+    let (home, target) = match crate::hub_target(named) {
+        Ok(target) => target,
+        Err(error) => return fail(error),
+    };
+    run(&mut || crate::connect_hub(&home, &target, exe, clock))
 }
 
 /// `--installed` is the login service's hub; without it a client started

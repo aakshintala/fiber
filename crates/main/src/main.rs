@@ -154,10 +154,16 @@ fn run() -> i32 {
             session_command::run(args, clock, fiber)
         }
         cli::Invocation::Run(Some(cli::Commands::Hub(command)), _) => {
-            hub_command::run(command, fiber)
+            hub_command::run(command, fiber, clock.as_ref())
         }
         cli::Invocation::Run(Some(cli::Commands::Sessions(args)), _) => match args.command {
-            None => sessions_list(args.all, args.json, clock.as_ref(), fiber),
+            None => sessions_list(
+                args.all,
+                args.json,
+                args.hub.as_deref(),
+                clock.as_ref(),
+                fiber,
+            ),
             Some(cli::SessionsCommands::Delete { cascade, yes, id }) => {
                 sessions_delete(&id, cascade, yes, clock.as_ref(), fiber)
             }
@@ -739,7 +745,15 @@ fn terminal(
     // connect closure moves it, as is the diagnostic writer's.
     let launch_home = home.clone();
     let diag_home = home.clone();
-    let connect: tui::Connect = Box::new(move || connect_hub(&home, &fiber, hub_clock.as_ref()));
+    let connect: tui::Connect = Box::new(move || {
+        connect_hub(
+            &home,
+            &doors::hub::Target::Local,
+            &fiber,
+            hub_clock.as_ref(),
+        )
+        .map_err(io::Error::other)
+    });
     let identity = doors::project(&workspace);
     let mut launch = launch::launch(
         workspace,
@@ -805,28 +819,44 @@ fn start_hub(exe: Result<PathBuf, String>) -> io::Result<()> {
 /// Connects to the hub under `home`, starting it with `fiber` when none runs.
 fn connect_hub(
     home: &Path,
+    target: &doors::hub::Target,
     fiber: &Result<PathBuf, String>,
     clock: &dyn contract::clock::Clock,
-) -> io::Result<doors::hub::Hub> {
+) -> Result<doors::hub::Hub, doors::Error> {
     let mut start = || start_hub(fiber.clone());
-    doors::hub::connect(home, &mut start, clock)
+    doors::hub::connect_target(home, target, &mut start, clock)
+}
+
+fn hub_target(named: Option<&str>) -> Result<(PathBuf, doors::hub::Target), Failure> {
+    let home = config::fiber_home_from_env().map_err(|e| failed(e.code(), e))?;
+    let workspace = std::env::current_dir()
+        .map_err(|e| failed(ErrorCode::IoFailed, format!("the current directory: {e}")))?;
+    let (_, project) = ::cli::project_of(&home, &workspace)?;
+    let config = Config::load(Sources {
+        home: home.clone(),
+        workspace,
+        project,
+        overrides: Vec::new(),
+    })
+    .map_err(|e| failed(e.code(), e))?;
+    let target = doors::hub::target(&config, &home, named).map_err(|e| failed(e.code(), e))?;
+    Ok((home, target))
 }
 
 /// `fiber sessions`: the hub it reaches is started when none runs.
 fn sessions_list(
     all: bool,
     json: bool,
+    named: Option<&str>,
     clock: &dyn contract::clock::Clock,
     fiber: Result<PathBuf, String>,
 ) -> i32 {
-    let mut connect = || {
-        connect_hub(
-            &config::fiber_home_from_env().map_err(io::Error::other)?,
-            &fiber,
-            clock,
-        )
+    let (home, target) = match hub_target(named) {
+        Ok(target) => target,
+        Err(error) => return fail(error),
     };
-    ::cli::sessions_list(all, json, &mut connect)
+    let mut connect = || connect_hub(&home, &target, &fiber, clock);
+    ::cli::sessions_list(all || target.is_listed(), json, &mut connect)
 }
 
 /// `fiber sessions delete`: the hub it reaches is started when none runs.
@@ -839,7 +869,8 @@ fn sessions_delete(
 ) -> i32 {
     let mut connect = || {
         connect_hub(
-            &config::fiber_home_from_env().map_err(io::Error::other)?,
+            &config::fiber_home_from_env().map_err(doors::Error::Config)?,
+            &doors::hub::Target::Local,
             &fiber,
             clock,
         )
@@ -859,7 +890,8 @@ fn sessions_prune(
 ) -> i32 {
     let mut connect = || {
         connect_hub(
-            &config::fiber_home_from_env().map_err(io::Error::other)?,
+            &config::fiber_home_from_env().map_err(doors::Error::Config)?,
+            &doors::hub::Target::Local,
             &fiber,
             clock,
         )

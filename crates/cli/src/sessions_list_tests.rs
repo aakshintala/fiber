@@ -40,9 +40,10 @@ impl FakeHub {
         }
     }
 
-    fn connect(&mut self) -> io::Result<doors::hub::Hub> {
-        let (client, hub) = UnixStream::pair()?;
-        hub.set_read_timeout(Some(HUB_DEADLINE))?;
+    fn connect(&mut self) -> Result<doors::hub::Hub, doors::Error> {
+        let (client, hub) = UnixStream::pair().map_err(doors::Error::Local)?;
+        hub.set_read_timeout(Some(HUB_DEADLINE))
+            .map_err(doors::Error::Local)?;
         let (tx, rx) = mpsc::channel();
         let answers = self.answers.clone();
         thread::spawn(move || {
@@ -427,7 +428,9 @@ const CHILD: &str = "FIBER_CLI_SESSIONS_LIST_CHILD";
 fn list_exits_zero_on_success_and_fail_code_on_hub_failure() {
     if let Ok(case) = std::env::var(CHILD) {
         let code = match case.as_str() {
-            "connect-error" => list(false, false, &mut || Err(io::Error::other("hub down"))),
+            "connect-error" => list(false, false, &mut || {
+                Err(doors::Error::Local(io::Error::other("hub down")))
+            }),
             "rejected" => {
                 let mut hub = FakeHub::new(&[hub_line(
                     "command_rejected",

@@ -197,7 +197,7 @@ fn qr_rendering_is_pinned_with_and_without_an_address() {
 fn exit_code(answer: Option<Value>) -> i32 {
     let (tx, rx) = mpsc::channel();
     thread::spawn(move || {
-        let mut connect: Box<dyn FnMut() -> io::Result<doors::hub::Hub>> = match answer {
+        let mut connect: Box<dyn FnMut() -> Result<doors::hub::Hub, doors::Error>> = match answer {
             Some(answer) => {
                 let (client, server) = UnixStream::pair().unwrap();
                 client.set_read_timeout(Some(WAIT)).unwrap();
@@ -221,7 +221,7 @@ fn exit_code(answer: Option<Value>) -> i32 {
                     ))
                 })
             }
-            None => Box::new(|| Err(io::Error::other("no hub"))),
+            None => Box::new(|| Err(doors::Error::Local(io::Error::other("no hub")))),
         };
         tx.send(hub_pair("phone", None, &mut *connect))
             .unwrap_or(());

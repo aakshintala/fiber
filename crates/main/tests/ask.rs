@@ -993,6 +993,8 @@ Configuration:
   config set [--project | --repo] <key> <value>  Write one key in one layer's file
 
 The hub:
+  hub add [--default] <name> <address>  Add a hub to this client's list
+  hub remove <name>                    Remove a hub from this client's list
   hub install [--port <port>]          Register the hub as a login service
   hub uninstall                        Remove the hub's login service; running sessions carry on
   hub status [--json]                  Print the hub's state: running, version, port, clients, devices, installed

@@ -118,10 +118,11 @@ impl FakeHub {
         })
     }
 
-    fn connect(&mut self) -> io::Result<doors::hub::Hub> {
+    fn connect(&mut self) -> Result<doors::hub::Hub, doors::Error> {
         self.connects += 1;
-        let (client, hub) = UnixStream::pair()?;
-        hub.set_read_timeout(Some(HUB_DEADLINE))?;
+        let (client, hub) = UnixStream::pair().map_err(doors::Error::Local)?;
+        hub.set_read_timeout(Some(HUB_DEADLINE))
+            .map_err(doors::Error::Local)?;
         let received = Arc::clone(&self.received);
         let mut handler = self.handler.take().expect("prune connects once");
         thread::spawn(move || {
@@ -233,7 +234,9 @@ fn run_prune_no_connect(
         wall(),
         ask,
         &mut out,
-        &mut || -> io::Result<doors::hub::Hub> { Err(io::Error::other("down")) },
+        &mut || -> Result<doors::hub::Hub, doors::Error> {
+            Err(doors::Error::Local(io::Error::other("down")))
+        },
     );
     (
         String::from_utf8(out).unwrap(),

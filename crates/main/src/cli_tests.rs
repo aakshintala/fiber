@@ -13,6 +13,88 @@ use super::{
 };
 
 #[test]
+fn hub_list_commands_and_client_flags_parse() {
+    for args in [
+        vec!["fiber", "hub", "add", "box", "ws://box"],
+        vec!["fiber", "hub", "add", "--default", "box", "unix:/tmp/hub"],
+        vec!["fiber", "hub", "remove", "box"],
+        vec!["fiber", "sessions", "--hub", "box", "--json"],
+        vec!["fiber", "hub", "refresh", "--hub", "box"],
+        vec!["fiber", "hub", "pair", "laptop", "--hub", "box"],
+        vec!["fiber", "hub", "token", "list", "--hub", "box"],
+        vec!["fiber", "hub", "token", "revoke", "laptop", "--hub", "box"],
+    ] {
+        let invocation = parse_from(args.clone());
+        assert!(
+            matches!(invocation, Invocation::Run(Some(_), _)),
+            "{args:?}: {invocation:?}"
+        );
+    }
+    for args in [
+        vec!["fiber", "sessions", "delete", "s_id", "--hub", "box"],
+        vec!["fiber", "hub", "status", "--hub", "box"],
+    ] {
+        assert!(matches!(parse_from(args), Invocation::Usage { .. }));
+    }
+}
+
+#[test]
+fn hub_list_parser_keeps_names_addresses_defaults_and_selected_hubs() {
+    for default in [false, true] {
+        let mut args = vec!["fiber", "hub", "add", "box", "ws://box/hub"];
+        if default {
+            args.push("--default");
+        }
+        let Invocation::Run(
+            Some(Commands::Hub(HubCommands::Add {
+                name,
+                address,
+                default: actual,
+            })),
+            _,
+        ) = parse_from(args)
+        else {
+            panic!("hub add did not parse")
+        };
+        assert_eq!(name, "box");
+        assert_eq!(address, "ws://box/hub");
+        assert_eq!(actual, default);
+    }
+    let Invocation::Run(Some(Commands::Hub(HubCommands::Remove { name })), _) =
+        parse_from(["fiber", "hub", "remove", "box"])
+    else {
+        panic!("hub remove did not parse")
+    };
+    assert_eq!(name, "box");
+    for args in [
+        vec!["fiber", "sessions", "--hub", "box"],
+        vec!["fiber", "hub", "refresh", "--hub", "box"],
+        vec!["fiber", "hub", "pair", "laptop", "--hub", "box"],
+        vec!["fiber", "hub", "token", "list", "--hub", "box"],
+        vec!["fiber", "hub", "token", "revoke", "laptop", "--hub", "box"],
+    ] {
+        let selected = match parse_from(args) {
+            Invocation::Run(Some(Commands::Sessions(SessionsArgs { hub, .. })), _) => hub,
+            Invocation::Run(
+                Some(Commands::Hub(
+                    HubCommands::Refresh { hub }
+                    | HubCommands::Pair { hub, .. }
+                    | HubCommands::Token(
+                        TokenCommands::List { hub } | TokenCommands::Revoke { hub, .. },
+                    ),
+                )),
+                _,
+            ) => hub,
+            invocation
+            @ (Invocation::Print(_) | Invocation::Run(..) | Invocation::Usage { .. }) => {
+                panic!("unexpected invocation: {invocation:?}")
+            }
+        };
+        assert_eq!(selected.as_deref(), Some("box"));
+    }
+}
+
+#[test]
 fn extension_install_accepts_project_scope_and_requires_exactly_one_name() {
     for (args, expected) in [
         (vec!["fiber", "extension", "install", "./acme"], false),
@@ -320,6 +402,7 @@ fn parses_argv_into_its_invocation() {
             &["fiber", "sessions", "export", "s_abc"],
             Invocation::Run(
                 Some(Commands::Sessions(SessionsArgs {
+                    hub: None,
                     command: Some(SessionsCommands::Export {
                         id: "s_abc".to_owned(),
                         path: None,
@@ -334,6 +417,7 @@ fn parses_argv_into_its_invocation() {
             &["fiber", "sessions", "export", "s_abc", "out"],
             Invocation::Run(
                 Some(Commands::Sessions(SessionsArgs {
+                    hub: None,
                     command: Some(SessionsCommands::Export {
                         id: "s_abc".to_owned(),
                         path: Some(PathBuf::from("out")),
@@ -348,6 +432,7 @@ fn parses_argv_into_its_invocation() {
             &["fiber", "sessions", "delete", "s_abc"],
             Invocation::Run(
                 Some(Commands::Sessions(SessionsArgs {
+                    hub: None,
                     command: Some(SessionsCommands::Delete {
                         cascade: false,
                         yes: false,
@@ -363,6 +448,7 @@ fn parses_argv_into_its_invocation() {
             &["fiber", "sessions", "delete", "--cascade", "--yes", "s_abc"],
             Invocation::Run(
                 Some(Commands::Sessions(SessionsArgs {
+                    hub: None,
                     command: Some(SessionsCommands::Delete {
                         cascade: true,
                         yes: true,
@@ -378,6 +464,7 @@ fn parses_argv_into_its_invocation() {
             &["fiber", "sessions", "prune"],
             Invocation::Run(
                 Some(Commands::Sessions(SessionsArgs {
+                    hub: None,
                     command: Some(SessionsCommands::Prune {
                         older_than: None,
                         cascade: false,
@@ -405,6 +492,7 @@ fn parses_argv_into_its_invocation() {
             ],
             Invocation::Run(
                 Some(Commands::Sessions(SessionsArgs {
+                    hub: None,
                     command: Some(SessionsCommands::Prune {
                         older_than: Some("30d".to_owned()),
                         cascade: true,
@@ -422,6 +510,7 @@ fn parses_argv_into_its_invocation() {
             &["fiber", "sessions"],
             Invocation::Run(
                 Some(Commands::Sessions(SessionsArgs {
+                    hub: None,
                     command: None,
                     all: false,
                     json: false,
@@ -433,6 +522,7 @@ fn parses_argv_into_its_invocation() {
             &["fiber", "sessions", "--all"],
             Invocation::Run(
                 Some(Commands::Sessions(SessionsArgs {
+                    hub: None,
                     command: None,
                     all: true,
                     json: false,
@@ -444,6 +534,7 @@ fn parses_argv_into_its_invocation() {
             &["fiber", "sessions", "--json"],
             Invocation::Run(
                 Some(Commands::Sessions(SessionsArgs {
+                    hub: None,
                     command: None,
                     all: false,
                     json: true,
@@ -455,6 +546,7 @@ fn parses_argv_into_its_invocation() {
             &["fiber", "sessions", "--json", "--all"],
             Invocation::Run(
                 Some(Commands::Sessions(SessionsArgs {
+                    hub: None,
                     command: None,
                     all: true,
                     json: true,
@@ -466,6 +558,7 @@ fn parses_argv_into_its_invocation() {
             &["fiber", "sessions", "search", "x"],
             Invocation::Run(
                 Some(Commands::Sessions(SessionsArgs {
+                    hub: None,
                     command: Some(SessionsCommands::Search {
                         all: false,
                         json: false,
@@ -481,6 +574,7 @@ fn parses_argv_into_its_invocation() {
             &["fiber", "sessions", "search", "--all", "x"],
             Invocation::Run(
                 Some(Commands::Sessions(SessionsArgs {
+                    hub: None,
                     command: Some(SessionsCommands::Search {
                         all: true,
                         json: false,
@@ -496,6 +590,7 @@ fn parses_argv_into_its_invocation() {
             &["fiber", "sessions", "search", "--json", "x"],
             Invocation::Run(
                 Some(Commands::Sessions(SessionsArgs {
+                    hub: None,
                     command: Some(SessionsCommands::Search {
                         all: false,
                         json: true,
@@ -511,6 +606,7 @@ fn parses_argv_into_its_invocation() {
             &["fiber", "sessions", "search", "--all", "--json", "x"],
             Invocation::Run(
                 Some(Commands::Sessions(SessionsArgs {
+                    hub: None,
                     command: Some(SessionsCommands::Search {
                         all: true,
                         json: true,
@@ -526,6 +622,7 @@ fn parses_argv_into_its_invocation() {
             &["fiber", "sessions", "search", "--json", "--all", "x"],
             Invocation::Run(
                 Some(Commands::Sessions(SessionsArgs {
+                    hub: None,
                     command: Some(SessionsCommands::Search {
                         all: true,
                         json: true,
@@ -541,6 +638,7 @@ fn parses_argv_into_its_invocation() {
             &["fiber", "sessions", "search", "--", "-n"],
             Invocation::Run(
                 Some(Commands::Sessions(SessionsArgs {
+                    hub: None,
                     command: Some(SessionsCommands::Search {
                         all: false,
                         json: false,
@@ -1008,7 +1106,7 @@ fn parses_argv_into_its_invocation() {
         (
             &["fiber", "hub", "refresh"],
             Invocation::Run(
-                Some(Commands::Hub(HubCommands::Refresh)),
+                Some(Commands::Hub(HubCommands::Refresh { hub: None })),
                 TopLevel::default(),
             ),
         ),
@@ -1018,6 +1116,7 @@ fn parses_argv_into_its_invocation() {
                 Some(Commands::Hub(HubCommands::Pair {
                     device: "phone".to_owned(),
                     address: None,
+                    hub: None,
                 })),
                 TopLevel::default(),
             ),
@@ -1035,6 +1134,7 @@ fn parses_argv_into_its_invocation() {
                 Some(Commands::Hub(HubCommands::Pair {
                     device: "phone".to_owned(),
                     address: Some(::cli::Address::parse("wss://mybox.tailnet.ts.net").unwrap()),
+                    hub: None,
                 })),
                 TopLevel::default(),
             ),
@@ -1042,7 +1142,9 @@ fn parses_argv_into_its_invocation() {
         (
             &["fiber", "hub", "token", "list"],
             Invocation::Run(
-                Some(Commands::Hub(HubCommands::Token(TokenCommands::List))),
+                Some(Commands::Hub(HubCommands::Token(TokenCommands::List {
+                    hub: None,
+                }))),
                 TopLevel::default(),
             ),
         ),
@@ -1050,6 +1152,7 @@ fn parses_argv_into_its_invocation() {
             &["fiber", "hub", "token", "revoke", "phone"],
             Invocation::Run(
                 Some(Commands::Hub(HubCommands::Token(TokenCommands::Revoke {
+                    hub: None,
                     device: "phone".to_owned(),
                 }))),
                 TopLevel::default(),
@@ -2909,11 +3012,12 @@ fn command_path_takes_the_words_before_the_first_argument() {
 fn is_built_follows_the_parser() {
     assert!(is_built(&["ask"]));
     assert!(is_built(&["hub", "token", "list"]));
+    assert!(is_built(&["hub", "add"]));
     assert!(is_built(&[]));
     assert!(!is_built(&["update"]));
     assert!(!is_built(&["doctor"]));
     assert!(!is_built(&["mcp", "serve"]));
-    assert!(!is_built(&["hub", "add"]));
+    assert!(is_built(&["hub", "remove"]));
 }
 
 #[test]
@@ -2949,8 +3053,5 @@ fn every_built_command_synopsis_in_the_doc_matches_the_menu() {
         "these doc synopses are not in the menu: {missing:?}"
     );
     unbuilt.sort();
-    assert_eq!(
-        unbuilt,
-        ["doctor", "hub add", "hub remove", "mcp serve", "update"]
-    );
+    assert_eq!(unbuilt, ["doctor", "mcp serve", "update"]);
 }

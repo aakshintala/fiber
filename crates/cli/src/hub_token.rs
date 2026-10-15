@@ -5,22 +5,21 @@ use serde_json::{Map, Value};
 use std::io::{self, BufReader, Write};
 
 /// Lists the paired devices through the hub's local socket.
-pub fn hub_token_list(connect: &mut dyn FnMut() -> io::Result<doors::hub::Hub>) -> i32 {
+pub fn hub_token_list(connect: &mut dyn FnMut() -> Result<doors::hub::Hub, doors::Error>) -> i32 {
     finish(list(&mut io::stdout(), connect))
 }
 /// Revokes a device and prints its name once the hub accepts the change.
 pub fn hub_token_revoke(
     device: &str,
-    connect: &mut dyn FnMut() -> io::Result<doors::hub::Hub>,
+    connect: &mut dyn FnMut() -> Result<doors::hub::Hub, doors::Error>,
 ) -> i32 {
     finish(revoke(&mut io::stdout(), device, connect))
 }
 fn list(
     out: &mut dyn Write,
-    connect: &mut dyn FnMut() -> io::Result<doors::hub::Hub>,
+    connect: &mut dyn FnMut() -> Result<doors::hub::Hub, doors::Error>,
 ) -> Result<(), Failure> {
-    let (stream, _) =
-        connect().map_err(|e| failed(ErrorCode::IoFailed, format!("the hub: {e}")))?;
+    let (stream, _) = connect().map_err(crate::sessions::hub_failure)?;
     let result = request(
         &mut BufReader::new(stream),
         "c_devices",
@@ -67,10 +66,9 @@ fn list(
 fn revoke(
     out: &mut dyn Write,
     device: &str,
-    connect: &mut dyn FnMut() -> io::Result<doors::hub::Hub>,
+    connect: &mut dyn FnMut() -> Result<doors::hub::Hub, doors::Error>,
 ) -> Result<(), Failure> {
-    let (stream, _) =
-        connect().map_err(|e| failed(ErrorCode::IoFailed, format!("the hub: {e}")))?;
+    let (stream, _) = connect().map_err(crate::sessions::hub_failure)?;
     request(
         &mut BufReader::new(stream),
         "c_revoke",

@@ -19,6 +19,51 @@ use serde_json::{Map, Value, json};
 use super::{Ask, delete, delete_run, export, run};
 use fakes::Deadline;
 
+#[test]
+fn hub_failure_preserves_local_text_and_listed_error_codes() {
+    for (error, code) in [
+        (
+            doors::Error::Local(io::Error::other("down")),
+            ErrorCode::IoFailed,
+        ),
+        (
+            doors::Error::UnknownHub { name: "box".into() },
+            ErrorCode::Usage,
+        ),
+        (
+            doors::Error::MissingDefault { name: "box".into() },
+            ErrorCode::ConfigInvalid,
+        ),
+        (
+            doors::Error::MissingToken { name: "box".into() },
+            ErrorCode::CredentialMissing,
+        ),
+        (
+            doors::Error::Hello {
+                hub: "box".into(),
+                source: io::Error::other("down"),
+            },
+            ErrorCode::ConnectionFailed,
+        ),
+        (
+            doors::Error::Refused {
+                hub: "box".into(),
+                message: "revoked".into(),
+            },
+            ErrorCode::AuthenticationFailed,
+        ),
+    ] {
+        let expected = if matches!(error, doors::Error::Local(_)) {
+            "the hub: down".into()
+        } else {
+            error.to_string()
+        };
+        let failure = super::hub_failure(error);
+        assert_eq!(failure.code, code);
+        assert_eq!(failure.message, expected);
+    }
+}
+
 /// A `session_started` first line for session `id` in `workspace`: a full
 /// envelope, so `resolve` keeps it, in this project's workspace. `from`
 /// continues a session, as a fork does.
@@ -253,10 +298,11 @@ impl FakeHub {
         }
     }
 
-    fn connect(&mut self) -> io::Result<doors::hub::Hub> {
+    fn connect(&mut self) -> Result<doors::hub::Hub, doors::Error> {
         self.connects += 1;
-        let (client, hub) = UnixStream::pair()?;
-        hub.set_read_timeout(Some(HUB_DEADLINE))?;
+        let (client, hub) = UnixStream::pair().map_err(doors::Error::Local)?;
+        hub.set_read_timeout(Some(HUB_DEADLINE))
+            .map_err(doors::Error::Local)?;
         let (tx, rx) = mpsc::channel();
         let answers = self.answers.clone();
         thread::spawn(move || {

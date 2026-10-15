@@ -9,7 +9,7 @@
     reason = "test helpers; a failure is the test's"
 )]
 
-use std::io::{self, BufRead, BufReader, Write};
+use std::io::{BufRead, BufReader, Write};
 use std::os::unix::net::UnixStream;
 use std::sync::mpsc;
 use std::thread;
@@ -60,7 +60,7 @@ fn fake_hub(answers: Vec<Value>) -> (mpsc::Receiver<String>, UnixStream) {
 }
 
 /// `connect` reaching `client`, with a `hub_hello` nobody reads.
-fn connect(client: UnixStream) -> impl FnMut() -> io::Result<doors::hub::Hub> {
+fn connect(client: UnixStream) -> impl FnMut() -> Result<doors::hub::Hub, doors::Error> {
     let mut client = Some(client);
     move || {
         Ok((
