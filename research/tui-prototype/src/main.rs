@@ -3571,7 +3571,8 @@ fn rail_project_head(name: &'static str, dollars: f64, done: u32, w: usize) -> R
 }
 /// The cards (B) design: every project shows, the launch project's group first and the
 /// rest after in start order; numbers follow start order across groups. `density` is
-/// 0 full, 1 medium, 2 compact.
+/// 0 full, 1 medium, 2 compact. `done` is each shown project's exited count.
+#[allow(clippy::too_many_arguments)]
 fn rail_full_b(
     sess: &[Fake],
     shown: &[usize],
@@ -3580,6 +3581,7 @@ fn rail_full_b(
     reduced: bool,
     w: usize,
     density: u8,
+    done: &[u32],
 ) -> (Vec<Row>, Vec<(usize, usize, usize)>) {
     let mut out = vec![];
     // (session index, first row, row count), so a jump can scroll the card into view
@@ -3592,7 +3594,6 @@ fn rail_full_b(
     }
     // the launch project's group first, the rest in start order
     projects.sort_by_key(|p| if **p == *"fiber" { 0 } else { 1 });
-    let done = rail_done();
     for (g, p) in projects.iter().enumerate() {
         if g > 0 {
             out.push(row(vec![sp(" ", Style::new())]));
@@ -6185,9 +6186,7 @@ fn run(
             }
             let avail = cols.saturating_sub(rail_w);
             let narrow = avail < panel_full_w + CONV_MIN;
-            let panel_w = if ui.home_full {
-                0
-            } else if narrow {
+            let panel_w = if ui.home_full || narrow {
                 0
             } else {
                 panel_full_w
@@ -6381,6 +6380,7 @@ fn run(
                         v.reduced,
                         rail_w as usize,
                         ui.density,
+                        &rail_done(),
                     )
                 } else {
                     (
@@ -6414,8 +6414,7 @@ fn run(
                 (ui.home_full && ui.picker.is_none()).then(|| {
                     let sess = live_sessions(f, &ui, vnow);
                     let projs = fleet_projs(&sess);
-                    let today =
-                        format!("${:.2}", sess.iter().map(|s| s.dollars).sum::<f64>());
+                    let today = format!("${:.2}", sess.iter().map(|s| s.dollars).sum::<f64>());
                     let comp = ui.completions.as_ref().map(|cp| {
                         completions::view(cp, &ui.input, (cols as usize).saturating_sub(2))
                     });
@@ -6763,8 +6762,7 @@ fn run(
                 if let Some(i) = focus_card.filter(|i| Some(*i) != hover_card) {
                     for &(si, srow, len) in &rmap {
                         if si == i {
-                            let end =
-                                (srow + len).saturating_sub(ui.rail_top).min(rows as usize);
+                            let end = (srow + len).saturating_sub(ui.rail_top).min(rows as usize);
                             for y in srow.saturating_sub(ui.rail_top)..end {
                                 for x in 0..rail_w.min(cols) {
                                     let c = &mut buf[(x, y as u16)];
@@ -7181,9 +7179,7 @@ fn run(
                                     }
                                     Key::Enter if plain_key => {
                                         // switches to the session, as a click does
-                                        if sess
-                                            .get(fi)
-                                            .is_some_and(|s| s.st == SState::NeedsInput)
+                                        if sess.get(fi).is_some_and(|s| s.st == SState::NeedsInput)
                                         {
                                             ui.screen = fi;
                                         } else if sess
@@ -7234,8 +7230,8 @@ fn run(
                                         ui.fleet.wsel = ui.fleet.wsel.saturating_sub(1);
                                     }
                                     Key::Down if plain_key => {
-                                        ui.fleet.wsel = (ui.fleet.wsel + 1)
-                                            .min(home::RECENTS.len() - 1);
+                                        ui.fleet.wsel =
+                                            (ui.fleet.wsel + 1).min(home::RECENTS.len() - 1);
                                     }
                                     Key::Enter if plain_key => {
                                         ui.fleet.ws = home::RECENTS[ui.fleet.wsel].into();
@@ -7291,9 +7287,8 @@ fn run(
                                             0 => ui.fleet.wpick = Some(ui.fleet.wsel),
                                             1 => ui.fleet.worktree = !ui.fleet.worktree,
                                             2 => {
-                                                ui.picker = Some(model_picker::opened_at(
-                                                    &f.model, None,
-                                                ));
+                                                ui.picker =
+                                                    Some(model_picker::opened_at(&f.model, None));
                                                 ui.vscroll = 0;
                                             }
                                             _ => {
@@ -7317,9 +7312,7 @@ fn run(
                                                 home::FItem::Gone(..) => None,
                                             });
                                         if let Some(Act::Rail(si)) = sidx {
-                                            if sess
-                                                .get(si)
-                                                .is_some_and(|s| s.st == SState::Crashed)
+                                            if sess.get(si).is_some_and(|s| s.st == SState::Crashed)
                                             {
                                                 send(
                                                     &mut ui,
@@ -8135,6 +8128,43 @@ mod tests {
             ..Default::default()
         });
         f
+    }
+
+    #[test]
+    fn rail_shown_lists_every_project_for_cards() {
+        let f = Fold::default();
+        let mut ui = Ui::default();
+        ui.rail = 1;
+        let sess = live_sessions(&f, &ui, 0);
+        assert_eq!(rail_shown(&sess, &ui).len(), sess.len());
+        // the list design hides other projects behind the scope line
+        ui.rail = 0;
+        let shown = rail_shown(&sess, &ui);
+        assert!(shown.iter().all(|&i| sess[i].project == "fiber"));
+        // a dismissal leaves its number's gap
+        ui.rail = 1;
+        ui.dismissed.insert(0);
+        assert!(!rail_shown(&sess, &ui).contains(&0));
+    }
+
+    #[test]
+    fn fleet_groups_launch_first_with_start_numbers() {
+        let f = Fold::default();
+        let ui = Ui::default();
+        let sess = live_sessions(&f, &ui, 0);
+        let projs = fleet_projs(&sess);
+        assert_eq!(projs[0].name, "fiber");
+        let names: Vec<&str> = projs.iter().map(|p| p.name).collect();
+        assert_eq!(names, ["fiber", "pi-rig", "beacon"]);
+        for p in &projs {
+            for s in &p.live {
+                assert!(matches!(s.act, Some(Act::Rail(_))));
+                assert!(s.id.is_none() && s.turns.is_none());
+            }
+        }
+        // numbers follow start order, as the rail's do
+        assert_eq!(projs[0].live[0].n, 1);
+        assert_eq!(projs[1].live[0].n, 6);
     }
     fn find(rows: &[Row], s: &str) -> usize {
         rows.iter().position(|r| plain(r).contains(s)).unwrap()

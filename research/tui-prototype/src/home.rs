@@ -12,7 +12,7 @@ use super::input::{Ev, Key, Mods, Mouse};
 use super::{Act, Args, Term, Ui};
 use super::{
     BI, BLUE, BP, CYAN, ORANGE, RED, SEL, SState, bold, cut, dim, fg, fit, lift, paint, row, slab,
-    sp, state_glyph, width,
+    sp, state_glyph,
 };
 use crate::cases::{Case, Surface};
 use ratatui::style::Style;
@@ -31,7 +31,7 @@ const CASES: &[Case<Look>] = &[
             sel: Some(0),
             fleet: FleetUi {
                 sel: Some(0),
-                ..FleetUi::default()
+                ..fleet()
             },
             ..base()
         },
@@ -53,7 +53,7 @@ const CASES: &[Case<Look>] = &[
             sel: Some(5),
             fleet: FleetUi {
                 sel: Some(5),
-                ..FleetUi::default()
+                ..fleet()
             },
             ..base()
         },
@@ -80,7 +80,7 @@ const CASES: &[Case<Look>] = &[
                 sel: Some(0),
                 wpick: Some(0),
                 wsel: 0,
-                ..FleetUi::default()
+                ..fleet()
             },
             ..base()
         },
@@ -120,8 +120,9 @@ const LOGO_Y: usize = 0;
 const HTEXT_X: usize = 35;
 /// The session list's first row, below the header.
 const LIST_TOP: usize = 5;
-/// The prompt box's rows: the entry row, a blank row, then the chip row.
-const BOX_H: usize = 3;
+/// The prompt box's rows: the slab's thin edge, the entry row, a blank
+/// row, the chip row, and the slab's thin edge.
+const BOX_H: usize = 5;
 /// The workspace picker's first row over the fleet.
 const PICK_Y: usize = 12;
 
@@ -139,6 +140,7 @@ struct Live {
     n: usize,
     st: SState,
     name: &'static str,
+    model: &'static str,
     branch: &'static str,
     spend: &'static str,
     dollars: f64,
@@ -174,6 +176,7 @@ fn projs() -> Vec<Proj> {
                     n: 1,
                     st: SState::Working,
                     name: "fix flaky lock test",
+                    model: "opus-5-5 · high",
                     branch: "main",
                     spend: "$1.35",
                     dollars: 1.35,
@@ -188,6 +191,7 @@ fn projs() -> Vec<Proj> {
                     n: 2,
                     st: SState::NeedsInput,
                     name: "review #688",
+                    model: "gpt-6.1-sol · medium",
                     branch: "review-688",
                     spend: "$1.10",
                     dollars: 1.10,
@@ -202,6 +206,7 @@ fn projs() -> Vec<Proj> {
                     n: 4,
                     st: SState::Crashed,
                     name: "lsp probe",
+                    model: "grok-4.7-high · low",
                     branch: "spike/lsp",
                     spend: "$0.05",
                     dollars: 0.05,
@@ -216,6 +221,7 @@ fn projs() -> Vec<Proj> {
                     n: 5,
                     st: SState::Ready,
                     name: "docs: rail spec",
+                    model: "opus-5-5 · high",
                     branch: "docs/rail-692",
                     spend: "$0.42",
                     dollars: 0.42,
@@ -230,6 +236,7 @@ fn projs() -> Vec<Proj> {
                     n: 7,
                     st: SState::NeedsInput,
                     name: "bump ratatui",
+                    model: "gpt-6.1-sol · low",
                     branch: "deps/ratatui-0.30",
                     spend: "$1.00",
                     dollars: 1.00,
@@ -279,6 +286,7 @@ fn projs() -> Vec<Proj> {
                     n: 3,
                     st: SState::Retrying,
                     name: "backfill embeddings",
+                    model: "grok-4.7-high · high",
                     branch: "backfill/embed",
                     spend: "$0.87",
                     dollars: 0.87,
@@ -293,6 +301,7 @@ fn projs() -> Vec<Proj> {
                     n: 6,
                     st: SState::Working,
                     name: "migrate every provider adapter to the new streaming contract",
+                    model: "grok-4.7-high · max",
                     branch: "migrate/streaming",
                     spend: "$0.64",
                     dollars: 0.64,
@@ -318,6 +327,7 @@ fn projs() -> Vec<Proj> {
                 n: 8,
                 st: SState::Ready,
                 name: "rewrite onboarding tour",
+                model: "opus-5-5 · medium",
                 branch: "tour/rewrite",
                 spend: "$0.35",
                 dollars: 0.35,
@@ -375,16 +385,21 @@ struct Look {
     rail: bool,
 }
 
+/// The stills' fleet state: the launch workspace, a new worktree.
+fn fleet() -> FleetUi {
+    FleetUi {
+        ws: RECENTS[0].into(),
+        worktree: true,
+        ..FleetUi::default()
+    }
+}
+
 fn base() -> Look {
     let (model, level) = crate::model_picker::chosen(&crate::model_picker::for_case("list"));
     Look {
         projs: projs(),
         sel: None,
-        fleet: FleetUi {
-            ws: RECENTS[0].into(),
-            worktree: true,
-            ..FleetUi::default()
-        },
+        fleet: fleet(),
         model,
         level,
         ui: Ui::default(),
@@ -473,7 +488,6 @@ pub(crate) enum FTag {
     Pad,
     Live(Option<Act>, usize),
     Gone(usize),
-    Recent(usize),
 }
 
 /// A state's colour on the fleet: waiting reads attention, ready dim.
@@ -546,11 +560,7 @@ fn proj_head(p: &RProj<'_>) -> Vec<Span<'static>> {
         sp("  ", Style::new()),
         sp(format!("{} live · ${spend:.2}", p.live.len()), dim()),
     ];
-    let waiting = p
-        .live
-        .iter()
-        .filter(|s| s.st == SState::NeedsInput)
-        .count();
+    let waiting = p.live.iter().filter(|s| s.st == SState::NeedsInput).count();
     if waiting > 0 {
         h.push(sp(format!("  {waiting} waiting on you"), fg(ORANGE)));
     }
@@ -635,7 +645,12 @@ fn chip(text: &str, st: Style, on: bool) -> Span<'static> {
 }
 
 /// The chip row's chips: text, style and focus.
-fn chip_defs(st: &FleetUi, workspace: &str, model: &str, level: &str) -> Vec<(String, Style, bool)> {
+fn chip_defs(
+    st: &FleetUi,
+    workspace: &str,
+    model: &str,
+    level: &str,
+) -> Vec<(String, Style, bool)> {
     let on = |i: usize| st.chip == Some(i);
     let (worktree, wst) = if st.worktree {
         ("● new worktree", fg(BLUE))
@@ -779,35 +794,36 @@ pub(crate) fn fleet_rows(v: &FleetView<'_>) -> (Vec<super::Row>, Vec<FTag>) {
         v.st.ws.as_str()
     };
     // The header: the four-row logo top left, beside it the version and the
-    // counts across projects, vertically centred on the logo.
-    for (k, l) in crate::logo::rows("", v.image).iter().enumerate() {
-        let y = LOGO_Y + k;
-        if y < rows {
+    // counts across projects, vertically centred on the logo. Too short
+    // for four rows: the one-row logo, and everything below keeps its rows.
+    if rows < tall_min() {
+        screen[0] = super::Row {
+            spans: fit(&crate::logo::one_row(VERSION), cols),
+            bg: None,
+            ..Default::default()
+        };
+    } else {
+        for (k, l) in crate::logo::rows("", v.image).iter().enumerate() {
+            let y = LOGO_Y + k;
+            if y >= rows {
+                break;
+            }
+            let mut spans = l.clone();
+            let lw: usize = spans.iter().map(|s| s.content.width()).sum();
+            if HTEXT_X > lw {
+                spans.push(sp(" ".repeat(HTEXT_X - lw), Style::new()));
+            }
+            if k == 1 {
+                spans.push(sp(VERSION, dim()));
+            } else if k == 2 {
+                spans.extend(counts_row(v.projs, v.today));
+            }
             screen[y] = super::Row {
-                spans: fit(l, cols),
+                spans: fit(&spans, cols),
                 bg: None,
                 ..Default::default()
             };
         }
-    }
-    if LOGO_Y + 1 < rows {
-        screen[LOGO_Y + 1] = super::Row {
-            spans: fit(
-                &[sp(" ".repeat(HTEXT_X), Style::new()), sp(VERSION, dim())],
-                cols,
-            ),
-            bg: None,
-            ..Default::default()
-        };
-    }
-    if LOGO_Y + 2 < rows {
-        let mut counts = vec![sp(" ".repeat(HTEXT_X), Style::new())];
-        counts.extend(counts_row(v.projs, v.today));
-        screen[LOGO_Y + 2] = super::Row {
-            spans: fit(&counts, cols),
-            bg: None,
-            ..Default::default()
-        };
     }
     let box_top = rows.saturating_sub(1 + BOX_H);
     // The session list between header and prompt box: one block of lines
@@ -836,10 +852,7 @@ pub(crate) fn fleet_rows(v: &FleetView<'_>) -> (Vec<super::Row>, Vec<FTag>) {
             FItem::Gone(pi, gi) => {
                 if *gi == 0 {
                     lines.push((
-                        vec![sp(
-                            format!("  exited · {}", v.projs[*pi].gone.len()),
-                            dim(),
-                        )],
+                        vec![sp(format!("  exited · {}", v.projs[*pi].gone.len()), dim())],
                         FTag::Pad,
                         false,
                     ));
@@ -1123,11 +1136,10 @@ fn frame(c: &Look, cols: usize, rows: usize, image: bool) -> Frame {
         return rail_frame(c, cols, rows);
     }
     let rprojs = to_rprojs(c);
-    let comp = c
-        .ui
-        .completions
-        .as_ref()
-        .map(|cp| crate::completions::view(cp, &c.ui.input, cols));
+    let comp =
+        c.ui.completions
+            .as_ref()
+            .map(|cp| crate::completions::view(cp, &c.ui.input, cols));
     let view = FleetView {
         projs: &rprojs,
         st: &c.fleet,
@@ -1217,6 +1229,7 @@ fn frame(c: &Look, cols: usize, rows: usize, image: bool) -> Frame {
 
 /// The rail-focused still: the rail left with the needs-input card lifted,
 /// the dimmed conversation behind it, a dimmed input box and the foot hint.
+/// Compact cards, so all eight sessions fit the still.
 fn rail_frame(c: &Look, cols: usize, rows: usize) -> Frame {
     let rail_w = 24.min(cols.saturating_sub(2)).max(2);
     let fakes: Vec<super::Fake> = c
@@ -1227,11 +1240,11 @@ fn rail_frame(c: &Look, cols: usize, rows: usize) -> Frame {
                 name: s.name,
                 project: p.name,
                 wait: s.wait.to_string(),
-                model: format!("{} · {}", c.model, c.level),
+                model: s.model.into(),
                 branch: s.branch,
                 ws: p.name,
                 spend: s.spend.to_string(),
-                dollars: 0.0,
+                dollars: s.dollars,
                 ctx: s.ctx,
                 age: s.age.to_string(),
                 st: s.st,
@@ -1244,7 +1257,8 @@ fn rail_frame(c: &Look, cols: usize, rows: usize) -> Frame {
         .position(|s| s.st == SState::NeedsInput)
         .unwrap_or(0);
     let shown: Vec<usize> = (0..fakes.len()).collect();
-    let (rrows, rmap) = super::rail_full_b(&fakes, &shown, screen_idx, 0, true, rail_w, 1);
+    let done: Vec<u32> = c.projs.iter().map(|p| p.gone.len() as u32).collect();
+    let (rrows, rmap) = super::rail_full_b(&fakes, &shown, screen_idx, 0, true, rail_w, 3, &done);
     let back = crate::overlays::backdrop(cols.saturating_sub(rail_w + 1), rows);
     let mut screen = vec![];
     for y in 0..rows {
@@ -1276,27 +1290,27 @@ fn rail_frame(c: &Look, cols: usize, rows: usize) -> Frame {
         ]);
     }
     // The input box keeps its place with a dim stripe and dim text while
-    // the rail has focus.
-    if rows >= 2 {
-        let y = rows - 2;
+    // the rail has focus: the conversation's one-row box, dimmed.
+    if rows >= 4 {
         let w = cols.saturating_sub(rail_w + 1);
-        screen[y][2] = Placed {
-            x: rail_w as u16 + 1,
-            w: w as u16,
-            row: super::Row {
-                spans: fit(
-                    &[
-                        sp("▌", dim()),
-                        sp(" ", Style::new()),
-                        sp("› ", dim()),
-                        sp("the rail has the keyboard", dim()),
-                    ],
-                    w,
-                ),
-                bg: Some(BI),
-                ..Default::default()
-            },
-        };
+        let entry = vec![
+            sp("▌", dim()),
+            sp(" ", Style::new()),
+            sp("› ", dim()),
+            sp("the rail has the keyboard", dim()),
+        ];
+        for (k, r) in slab(vec![row(entry)], BI, None, w).into_iter().enumerate() {
+            let y = rows - 4 + k;
+            screen[y][2] = Placed {
+                x: rail_w as u16 + 1,
+                w: w as u16,
+                row: super::Row {
+                    spans: fit(&r.spans, w),
+                    bg: r.bg,
+                    ..Default::default()
+                },
+            };
+        }
         screen[rows - 1] = vec![Placed {
             x: 0,
             w: cols as u16,
@@ -1574,9 +1588,7 @@ fn on_key(c: &mut Look, k: Key, m: Mods) -> Step {
             Step::Stay
         }
         Key::Enter if plain => {
-            if c.sel.is_some() {
-                Step::Conversation
-            } else if !c.ui.input.trim().is_empty() {
+            if c.sel.is_some() || !c.ui.input.trim().is_empty() {
                 Step::Conversation
             } else {
                 Step::Stay
@@ -1884,10 +1896,7 @@ mod tests {
         assert!(t.contains("41%"), "context missing");
         assert!(t.contains("s_3ab702 · 3 turns"), "id and turns missing");
         assert!(t.contains("exited · 4"), "exited header missing");
-        assert!(
-            t.contains("○ cut the 0.0.1 release"),
-            "exited row missing"
-        );
+        assert!(t.contains("○ cut the 0.0.1 release"), "exited row missing");
         assert!(
             t.contains("s_7f20aa · 5 turns · $1.10 · 3h ago"),
             "exited detail missing"
@@ -1947,10 +1956,7 @@ mod tests {
         let c = crate::cases::lookup(CASES, "full-closing").unwrap();
         let buf = buffer(&c, 160, 48);
         let t = text(&c, 160, 48);
-        let y = t
-            .split('\n')
-            .position(|l| l.contains("CLOSING"))
-            .unwrap() as u16;
+        let y = t.split('\n').position(|l| l.contains("CLOSING")).unwrap() as u16;
         let mut found = false;
         for x in 0..160 {
             if buf[(x, y)].symbol() == "C" {
@@ -1963,7 +1969,10 @@ mod tests {
             }
         }
         assert!(found, "no CLOSING row");
-        assert!(t.contains("fix flaky lock test"), "closing row lost its name");
+        assert!(
+            t.contains("fix flaky lock test"),
+            "closing row lost its name"
+        );
     }
 
     #[test]
@@ -1980,7 +1989,8 @@ mod tests {
     fn rail_still_lifts_the_waiting_card() {
         let c = crate::cases::lookup(CASES, "rail-focused").unwrap();
         let t = text(&c, 160, 48);
-        assert!(t.contains("NEEDS INPUT"), "waiting card missing");
+        // Compact cards name the waiting session instead of its state word.
+        assert!(t.contains("review #688"), "waiting card missing");
         assert!(t.contains("the rail has the keyboard"), "dim input missing");
         assert!(t.contains("⌥1–9"), "foot hint missing");
         assert!(t.contains("back to the session"), "hint label missing");
@@ -1988,14 +1998,10 @@ mod tests {
         let buf = buffer(&c, 160, 48);
         let y = t
             .split('\n')
-            .position(|l| l.contains("NEEDS INPUT"))
+            .position(|l| l.contains("review #688"))
             .unwrap() as u16;
-        let y0 = t.split('\n').position(|l| l.contains("WORKING")).unwrap() as u16;
-        assert_ne!(
-            buf[(3, y)].bg,
-            buf[(3, y0)].bg,
-            "focused card not lifted"
-        );
+        let y0 = t.split('\n').position(|l| l.contains("fix flaky")).unwrap() as u16;
+        assert_ne!(buf[(3, y)].bg, buf[(3, y0)].bg, "focused card not lifted");
     }
 
     #[test]
@@ -2155,7 +2161,7 @@ mod tests {
             for (y, ps) in fr.screen.iter().enumerate() {
                 for p in ps {
                     assert!(
-                        width(&p.row.spans) <= p.w as usize,
+                        crate::width(&p.row.spans) <= p.w as usize,
                         "{name} row {y} overflows its {w} columns",
                         w = p.w
                     );
