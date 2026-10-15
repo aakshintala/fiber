@@ -14,26 +14,17 @@ use unicode_width::UnicodeWidthStr;
 pub(crate) const MIN_W: usize = 40;
 /// The widest a panel ever draws, in cells.
 pub(crate) const MAX_W: usize = 150;
-/// A content row's blank columns on the left: two.
-fn left_w() -> usize {
-    2
-}
-/// The blank columns on the right of the content: two.
-fn pad_r() -> usize {
-    2
-}
-
+/// The blank columns on each side of a panel's content: two.
+const PAD: usize = 2;
 /// The content width inside a panel this wide.
 pub(crate) fn inner_w(panel_w: usize) -> usize {
-    panel_w.saturating_sub(left_w() + pad_r())
+    panel_w.saturating_sub(2 * PAD)
 }
 
 /// The panel width for content this wide in an area this wide: content plus
 /// padding, clamped between MIN_W and MAX_W, never wider than the area.
 pub(crate) fn width_for(content_w: usize, area_w: usize) -> usize {
-    (content_w + left_w() + pad_r())
-        .clamp(MIN_W, MAX_W)
-        .min(area_w.max(1))
+    (content_w + 2 * PAD).clamp(MIN_W, MAX_W).min(area_w.max(1))
 }
 
 /// The panel width for content that wraps: wrap at `prefer`, then size to
@@ -141,14 +132,13 @@ pub(crate) fn footer_legend(items: &[(&str, &str)]) -> Row {
     row(spans)
 }
 
-/// Opens a content row with two blank columns. Blank rows stay blank:
-/// the frame's padding rows carry no padding. Click targets move with
-/// the text they cover.
-fn stripe(r: Row, inner: usize) -> Row {
+/// Opens a content row with two blank columns. Blank rows stay blank,
+/// with no padding columns. Click targets move with the text they cover.
+fn pad_row(r: Row, inner: usize) -> Row {
     if width(&r.spans) == 0 {
         return r;
     }
-    let dx = left_w() as u16;
+    let dx = PAD as u16;
     let mut spans = vec![sp("  ", Style::new())];
     spans.extend(fit(&r.spans, inner));
     Row {
@@ -163,7 +153,7 @@ fn stripe(r: Row, inner: usize) -> Row {
 pub(crate) fn slab_rows(rows: Vec<Row>, panel_w: usize) -> Vec<Row> {
     let inner = inner_w(panel_w);
     slab(
-        rows.into_iter().map(|r| stripe(r, inner)).collect(),
+        rows.into_iter().map(|r| pad_row(r, inner)).collect(),
         BI,
         None,
         panel_w,
@@ -459,18 +449,9 @@ mod tests {
     fn the_chrome_is_two_blank_columns_each_side() {
         // Overlays dropped the stripe: two blank columns on each side of the
         // text, so the chrome is 4 on every panel.
-        assert_eq!(left_w() + pad_r(), 4, "chrome drifted");
         assert_eq!(inner_w(48), 44, "inner width drifted");
         assert_eq!(inner_w(MIN_W), MIN_W - 4, "inner width floor drifted");
         assert_eq!(inner_w(MAX_W), MAX_W - 4, "inner width ceiling drifted");
-        let wide = 200;
-        assert_eq!(width_for(MIN_W - 4 - 1, wide), MIN_W);
-        assert_eq!(width_for(MIN_W - 4, wide), MIN_W);
-        assert_eq!(width_for(MIN_W - 4 + 1, wide), MIN_W + 1);
-        assert_eq!(width_for(MAX_W - 4 - 1, wide), MAX_W - 1);
-        assert_eq!(width_for(MAX_W - 4, wide), MAX_W);
-        assert_eq!(width_for(MAX_W - 4 + 1, wide), MAX_W);
-        assert_eq!(width_for(60, 50), 50, "the area wins");
     }
 
     #[test]

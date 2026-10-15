@@ -891,7 +891,7 @@ mod tests {
         assert!(t.contains("\u{2580}"), "no bottom edge");
         assert!(t.contains("\u{203a} "), "no gutter marker");
         // Names in one fixed column: descriptions start in the same cell on
-        // every row. The stripe and marker are multibyte, so count cells.
+        // every row. The marker is multibyte, so count cells.
         let mut cols = vec![];
         for l in t.split('\n') {
             for d in [
