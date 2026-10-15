@@ -29,7 +29,7 @@ use contract::events::{
 };
 use contract::hook::{
     AfterToolAnswer, AfterToolOutcome, BeforeToolAnswer, BeforeToolOutcome, CheckAnswer,
-    CheckOutcome, Hooks, Refusal,
+    CheckOutcome, HookFailure, Hooks, Refusal,
 };
 use contract::inbox::{Ack, Delivery};
 use contract::provider::{
@@ -43,7 +43,7 @@ use fakes::clock::FakeClock;
 use log::Log;
 use serde_json::{Map, Value, json};
 
-use crate::{BlockLimits, Error, Loop, Model};
+use crate::{BlockLimits, Error, Loop, Model, Reviewer};
 
 /// How long a test waits for a turn, a request or a parked wait: the one
 /// named deadline every receive and join in this file carries.
@@ -77,12 +77,33 @@ pub(crate) fn log_fault() -> Error {
     })
 }
 
+/// Advances the clock by `ms` at each `after_tool` exit boundary, once
+/// per arming: later cap and artifact work the timer must already have
+/// closed before.
+static AFTER_DISPATCH_ADVANCE_MS: Mutex<Option<u64>> = Mutex::new(None);
+
+/// Arms the one-shot post-dispatch clock advance the cap-boundary test drives.
+pub(crate) fn arm_after_dispatch_advance(ms: u64) {
+    *lock(&AFTER_DISPATCH_ADVANCE_MS) = Some(ms);
+}
+
+/// Runs at an `after_tool` dispatch's exit, inside the timed-no-longer
+/// scope. Advances the armed clock, proving later work stays outside.
+pub(crate) fn after_dispatch_exit(clock: &dyn Clock) {
+    if let Some(ms) = lock(&AFTER_DISPATCH_ADVANCE_MS).take() {
+        clock.sleep(Duration::from_millis(ms));
+    }
+}
 /// One scripted provider answer: the reply, after synchronous fake work of
-/// `advance_ms`, all inside the timed model call.
-struct Answer {
-    deltas: Vec<Delta>,
-    end: Result<Reply, CallError>,
-    advance_ms: u64,
+/// `advance_ms`, all inside the timed model call, or a hold until the
+/// test cancels the call.
+enum Answer {
+    Run {
+        deltas: Vec<Delta>,
+        end: Result<Reply, CallError>,
+        advance_ms: u64,
+    },
+    Hold,
 }
 
 fn text_reply(text: &str) -> (Vec<Delta>, Result<Reply, CallError>) {
@@ -105,7 +126,7 @@ fn tool_reply(name: &str, arguments: Value) -> (Vec<Delta>, Result<Reply, CallEr
 
 fn text_answer(text: &str, advance_ms: u64) -> Answer {
     let (deltas, end) = text_reply(text);
-    Answer {
+    Answer::Run {
         deltas,
         end,
         advance_ms,
@@ -114,17 +135,79 @@ fn text_answer(text: &str, advance_ms: u64) -> Answer {
 
 fn tool_answer(name: &str, arguments: Value, advance_ms: u64) -> Answer {
     let (deltas, end) = tool_reply(name, arguments);
-    Answer {
+    Answer::Run {
         deltas,
         end,
         advance_ms,
     }
 }
 
+fn error_answer(code: ErrorCode, advance_ms: u64) -> Answer {
+    Answer::Run {
+        deltas: Vec::new(),
+        end: Err(CallError::Failed {
+            failure: Failure {
+                code,
+                message: "The reviewer call failed.".into(),
+                provider: None,
+                retry_after_ms: None,
+            },
+            should_retry: Some(false),
+            usage: Box::new(fakes::unnamed_usage()),
+        }),
+        advance_ms,
+    }
+}
+
+/// One scripted reviewer answer, clonable so a resume rebuilds it.
+#[derive(Clone)]
+enum ReviewReply {
+    Text { text: String, advance_ms: u64 },
+    Error { code: ErrorCode, advance_ms: u64 },
+    Hold,
+}
+
+fn review_text(text: &str, advance_ms: u64) -> ReviewReply {
+    ReviewReply::Text {
+        text: text.into(),
+        advance_ms,
+    }
+}
+
+fn review_error(code: ErrorCode, advance_ms: u64) -> ReviewReply {
+    ReviewReply::Error { code, advance_ms }
+}
+
+fn review_answers(script: &[ReviewReply]) -> Vec<Answer> {
+    script
+        .iter()
+        .map(|reply| match reply {
+            ReviewReply::Text { text, advance_ms } => {
+                let (deltas, end) = text_reply(text);
+                Answer::Run {
+                    deltas,
+                    end,
+                    advance_ms: *advance_ms,
+                }
+            }
+            ReviewReply::Error { code, advance_ms } => error_answer(code.clone(), *advance_ms),
+            ReviewReply::Hold => Answer::Hold,
+        })
+        .collect()
+}
+
 /// A provider on the model seam whose answers run synchronous fake work.
 struct ScriptProvider {
     clock: Arc<FakeClock>,
     script: Mutex<VecDeque<Answer>>,
+    entered: Mutex<Option<mpsc::Sender<()>>>,
+    calls: AtomicUsize,
+}
+
+impl ScriptProvider {
+    fn called(&self) -> usize {
+        self.calls.load(Ordering::SeqCst)
+    }
 }
 
 impl Provider for ScriptProvider {
@@ -134,11 +217,16 @@ impl Provider for ScriptProvider {
 
     fn call(&self, request: &ModelRequest) -> Box<dyn ModelCall> {
         let _ = request;
+        self.calls.fetch_add(1, Ordering::SeqCst);
+        if let Some(entered) = lock(&self.entered).take() {
+            let _sent = entered.send(());
+        }
         Box::new(ScriptCall {
             clock: Arc::clone(&self.clock),
             answer: lock(&self.script)
                 .pop_front()
                 .expect("the script has a reply"),
+            release: Mutex::new(None),
         })
     }
 }
@@ -146,19 +234,41 @@ impl Provider for ScriptProvider {
 struct ScriptCall {
     clock: Arc<FakeClock>,
     answer: Answer,
+    release: Mutex<Option<mpsc::Sender<()>>>,
 }
 
 impl ModelCall for ScriptCall {
     fn run(&self, sink: &mut dyn FnMut(Delta)) -> Result<Reply, CallError> {
-        for delta in &self.answer.deltas {
-            sink(delta.clone());
+        match &self.answer {
+            Answer::Run {
+                deltas,
+                end,
+                advance_ms,
+            } => {
+                for delta in deltas {
+                    sink(delta.clone());
+                }
+                self.clock.sleep(Duration::from_millis(*advance_ms));
+                clone_end(end)
+            }
+            // Parks until the test cancels the call: the release is the
+            // signal the code under test is waiting on the cancellation.
+            Answer::Hold => {
+                let (tx, rx) = mpsc::channel();
+                *lock(&self.release) = Some(tx);
+                fakes::Deadline::after(WAIT).recv_or_fail(&rx, "the test cancels the hold");
+                Err(CallError::Cancelled {
+                    usage: Box::new(fakes::unnamed_usage()),
+                })
+            }
         }
-        self.clock
-            .sleep(Duration::from_millis(self.answer.advance_ms));
-        clone_end(&self.answer.end)
     }
 
-    fn cancel(&self) {}
+    fn cancel(&self) {
+        if let Some(release) = lock(&self.release).take() {
+            let _sent = release.send(());
+        }
+    }
 }
 
 #[allow(clippy::result_large_err, reason = "test helper mirroring the seam")]
@@ -180,6 +290,19 @@ fn clone_end(end: &Result<Reply, CallError>) -> Result<Reply, CallError> {
     }
 }
 
+/// How a probe tool spills its output, fabricated in the workspace.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum SpillMode {
+    /// No spill: ordinary output.
+    None,
+    /// A kept artifact file the hook sees.
+    Persisted,
+    /// No kept file and no partial file left behind.
+    Unsaved,
+    /// No kept file and a partial file the loop must fail to remove.
+    UnsavedBadLeft,
+}
+
 /// A registered tool with scripted effects, schema and synchronous work.
 struct ProbeTool {
     name: String,
@@ -188,8 +311,13 @@ struct ProbeTool {
     text: String,
     run_ms: u64,
     ask_confirm: bool,
+    boom_on: Option<String>,
+    spill: Mutex<SpillMode>,
+    jobs: Mutex<Vec<contract::jobs::JobRecord>>,
     clock: Mutex<Option<Arc<FakeClock>>>,
+    dir: Mutex<Option<std::path::PathBuf>>,
     ran: AtomicUsize,
+    ran_args: Mutex<Vec<Map<String, Value>>>,
 }
 
 impl ProbeTool {
@@ -242,12 +370,36 @@ impl ProbeTool {
             text: text.into(),
             run_ms: 0,
             ask_confirm: false,
+            boom_on: None,
+            spill: Mutex::new(SpillMode::None),
+            jobs: Mutex::new(Vec::new()),
             clock: Mutex::new(None),
+            dir: Mutex::new(None),
             ran: AtomicUsize::new(0),
+            ran_args: Mutex::new(Vec::new()),
         }
     }
 
-    /// Raises a suspending confirmation and reports its answer.
+    /// Fails the effects function when the arguments carry `key: "boom"`:
+    /// the original call checks, its rewrite does not.
+    fn booming(mut self, key: &str) -> Self {
+        self.boom_on = Some(key.into());
+        self
+    }
+
+    /// Spills the next runs' output as `mode` fabricates.
+    fn spilling(&self, mode: SpillMode) {
+        *lock(&self.spill) = mode;
+    }
+
+    /// Queues `jobs` on the next runs' output.
+    fn queue_jobs(&self, jobs: Vec<contract::jobs::JobRecord>) {
+        *lock(&self.jobs) = jobs;
+    }
+
+    fn ran_args(&self) -> Vec<Map<String, Value>> {
+        lock(&self.ran_args).clone()
+    }
     fn confirming(mut self) -> Self {
         self.ask_confirm = true;
         self
@@ -269,12 +421,20 @@ impl Tool for ProbeTool {
         }
     }
 
-    fn effects(&self, _: &Map<String, Value>) -> Result<Effects, EffectsError> {
+    fn effects(&self, arguments: &Map<String, Value>) -> Result<Effects, EffectsError> {
+        if let Some(key) = &self.boom_on
+            && arguments.get(key).and_then(Value::as_str) == Some("boom")
+        {
+            return Err(EffectsError::Arguments(
+                "the rewrite names no ledger".into(),
+            ));
+        }
         self.effects.clone()
     }
 
-    fn run(&self, _: &Map<String, Value>, _: &dyn Cancel, _: &dyn Emit) -> Output {
+    fn run(&self, arguments: &Map<String, Value>, _: &dyn Cancel, _: &dyn Emit) -> Output {
         self.ran.fetch_add(1, Ordering::SeqCst);
+        lock(&self.ran_args).push(arguments.clone());
         if let Some(clock) = lock(&self.clock).clone() {
             clock.sleep(Duration::from_millis(self.run_ms));
         }
@@ -282,6 +442,8 @@ impl Tool for ProbeTool {
             content: vec![ContentPart::Text {
                 text: self.text.clone(),
             }],
+            jobs: lock(&self.jobs).clone(),
+            spilled: self.spill_output(),
             ..Output::default()
         }
     }
@@ -318,6 +480,48 @@ impl Tool for ProbeTool {
                 }],
                 ..Output::default()
             },
+        }
+    }
+}
+
+impl ProbeTool {
+    /// The run's spill, fabricated in the wired workspace directory.
+    fn spill_output(&self) -> Option<contract::tool::Spilled> {
+        match *lock(&self.spill) {
+            SpillMode::None => None,
+            SpillMode::Persisted => {
+                let dir = lock(&self.dir).clone().expect("the build wires a dir");
+                let path = dir.join("spill.txt");
+                let bytes = b"spilled output";
+                std::fs::write(&path, bytes).expect("the spill file writes");
+                Some(contract::tool::Spilled {
+                    head: "spilled ".into(),
+                    tail: "output".into(),
+                    removed: 0,
+                    file: Ok(contract::tool::SpillFile {
+                        path,
+                        size: bytes.len() as u64,
+                    }),
+                })
+            }
+            SpillMode::Unsaved => Some(contract::tool::Spilled {
+                head: "spilled ".into(),
+                tail: "output".into(),
+                removed: 3,
+                file: Err(contract::tool::Unsaved {
+                    message: "the spill file was not kept".into(),
+                    left: None,
+                }),
+            }),
+            SpillMode::UnsavedBadLeft => Some(contract::tool::Spilled {
+                head: "spilled ".into(),
+                tail: "output".into(),
+                removed: 3,
+                file: Err(contract::tool::Unsaved {
+                    message: "the spill file was not kept".into(),
+                    left: Some(std::path::PathBuf::from("/nonexistent/fiber-spill-part")),
+                }),
+            }),
         }
     }
 }
@@ -405,6 +609,15 @@ fn deny_rule(tool: &str, prefix: &str) -> StandingRules {
 /// `after_tool` leaves the output. Task 2 grows this with timed stages.
 struct ProbeHooks {
     before: Mutex<BeforeToolOutcome>,
+    check: Mutex<CheckOutcome>,
+    after: Mutex<AfterToolOutcome>,
+    before_ms: u64,
+    check_ms: u64,
+    after_ms: u64,
+    before_calls: AtomicUsize,
+    check_calls: AtomicUsize,
+    after_calls: AtomicUsize,
+    clock: Mutex<Option<Arc<FakeClock>>>,
     /// One-shot signal sent on the next `before_tool` entry, then the
     /// entry waits on `gate`: the failed-commit test's shutdown window.
     entered: Mutex<Option<mpsc::Sender<()>>>,
@@ -412,48 +625,90 @@ struct ProbeHooks {
 }
 
 impl ProbeHooks {
-    fn refusing() -> Self {
+    fn passing() -> Self {
+        Self::staged(
+            BeforeToolOutcome::Unchanged,
+            CheckOutcome::Passed,
+            AfterToolOutcome::Unchanged,
+            0,
+            0,
+            0,
+        )
+    }
+
+    fn staged(
+        before: BeforeToolOutcome,
+        check: CheckOutcome,
+        after: AfterToolOutcome,
+        before_ms: u64,
+        check_ms: u64,
+        after_ms: u64,
+    ) -> Self {
         Self {
-            before: Mutex::new(BeforeToolOutcome::Refused(Refusal {
-                extension: "probe".into(),
-                reason: "not this call".into(),
-            })),
+            before: Mutex::new(before),
+            check: Mutex::new(check),
+            after: Mutex::new(after),
+            before_ms,
+            check_ms,
+            after_ms,
+            before_calls: AtomicUsize::new(0),
+            check_calls: AtomicUsize::new(0),
+            after_calls: AtomicUsize::new(0),
+            clock: Mutex::new(None),
             entered: Mutex::new(None),
             gate: Mutex::new(None),
         }
     }
+    fn refusing() -> Self {
+        Self::staged(
+            BeforeToolOutcome::Refused(Refusal {
+                extension: "probe".into(),
+                reason: "not this call".into(),
+            }),
+            CheckOutcome::Passed,
+            AfterToolOutcome::Unchanged,
+            0,
+            0,
+            0,
+        )
+    }
 
     fn rewriting(arguments: Map<String, Value>) -> Self {
-        Self {
-            before: Mutex::new(BeforeToolOutcome::Rewritten {
+        Self::staged(
+            BeforeToolOutcome::Rewritten {
                 arguments,
                 changed_by: vec!["probe".into()],
-            }),
-            entered: Mutex::new(None),
-            gate: Mutex::new(None),
-        }
+            },
+            CheckOutcome::Passed,
+            AfterToolOutcome::Unchanged,
+            0,
+            0,
+            0,
+        )
     }
 
     /// Signals the test on entry, then waits for its release.
     fn gated(entered: mpsc::Sender<()>, gate: mpsc::Receiver<()>) -> Self {
-        Self {
-            before: Mutex::new(BeforeToolOutcome::Refused(Refusal {
-                extension: "probe".into(),
-                reason: "not this call".into(),
-            })),
-            entered: Mutex::new(Some(entered)),
-            gate: Mutex::new(Some(gate)),
-        }
+        let hooks = Self::refusing();
+        *lock(&hooks.entered) = Some(entered);
+        *lock(&hooks.gate) = Some(gate);
+        hooks
     }
 }
 
 impl Hooks for ProbeHooks {
     fn before_tool(&self, _: &contract::hook::BeforeToolCall<'_>) -> BeforeToolAnswer {
+        self.before_calls.fetch_add(1, Ordering::SeqCst);
         if let Some(entered) = lock(&self.entered).take() {
             let _sent = entered.send(());
         }
         if let Some(gate) = lock(&self.gate).take() {
-            fakes::Deadline::after(WAIT).recv(&gate).expect("the test releases the gate");
+            fakes::Deadline::after(WAIT)
+                .recv(&gate)
+                .expect("the test releases the gate");
+        }
+        if let Some(clock) = lock(&self.clock).clone() {
+            clock.sleep(Duration::from_millis(self.before_ms));
         }
         BeforeToolAnswer {
             outcome: lock(&self.before).clone(),
@@ -462,15 +717,23 @@ impl Hooks for ProbeHooks {
     }
 
     fn check_tool(&self, _: &contract::hook::BeforeToolCall<'_>) -> CheckAnswer {
+        self.check_calls.fetch_add(1, Ordering::SeqCst);
+        if let Some(clock) = lock(&self.clock).clone() {
+            clock.sleep(Duration::from_millis(self.check_ms));
+        }
         CheckAnswer {
-            outcome: CheckOutcome::Passed,
+            outcome: lock(&self.check).clone(),
             notices: Vec::new(),
         }
     }
 
     fn after_tool(&self, _: &contract::hook::AfterToolCall<'_>) -> AfterToolAnswer {
+        self.after_calls.fetch_add(1, Ordering::SeqCst);
+        if let Some(clock) = lock(&self.clock).clone() {
+            clock.sleep(Duration::from_millis(self.after_ms));
+        }
         AfterToolAnswer {
-            outcome: AfterToolOutcome::Unchanged,
+            outcome: lock(&self.after).clone(),
             changed_by: Vec::new(),
             notices: Vec::new(),
         }
@@ -538,8 +801,13 @@ impl Wake for InboxWake {
 struct Setup {
     tools: Vec<Arc<ProbeTool>>,
     rules: Arc<FakeRules>,
-    hooks: Option<Arc<dyn Hooks>>,
+    hooks: Option<Arc<ProbeHooks>>,
     no_reviewer: bool,
+    reviewer_script: Option<Vec<ReviewReply>>,
+    reviewer_cost: Option<contract::provider::Cost>,
+    reviewer_wake: Option<mpsc::Sender<()>>,
+    reviewer_limits: Option<(u64, u64)>,
+    budget: Option<f64>,
     answerable: bool,
     debug: bool,
     idle: Option<Duration>,
@@ -552,6 +820,11 @@ impl Setup {
             rules,
             hooks: None,
             no_reviewer: false,
+            reviewer_script: None,
+            reviewer_cost: None,
+            reviewer_wake: None,
+            reviewer_limits: None,
+            budget: None,
             answerable: true,
             debug: true,
             idle: None,
@@ -569,10 +842,15 @@ struct World {
     looped: Option<Loop>,
     rules: Arc<FakeRules>,
     tools: Vec<Arc<ProbeTool>>,
+    provider: Arc<ScriptProvider>,
+    reviewer: Option<Arc<ScriptProvider>>,
+    reviewer_script: Option<Vec<ReviewReply>>,
+    reviewer_cost: Option<contract::provider::Cost>,
+    reviewer_limits: Option<(u64, u64)>,
     answerable: bool,
     debug: bool,
     idle: Option<Duration>,
-    hooks: Option<Arc<dyn Hooks>>,
+    hooks: Option<Arc<ProbeHooks>>,
     no_reviewer: bool,
     credential_files: Vec<std::path::PathBuf>,
 }
@@ -604,11 +882,14 @@ fn build(setup: &Setup, home: fakes::TempDir, script: Vec<Answer>) -> World {
     let provider = Arc::new(ScriptProvider {
         clock: Arc::clone(&clock),
         script: Mutex::new(script.into_iter().collect()),
+        entered: Mutex::new(None),
+        calls: AtomicUsize::new(0),
     });
     // Every timer reads this world's clock: tools, rules and the hook
     // gate advance it from whichever thread they run on.
     for tool in &setup.tools {
         *lock(&tool.clock) = Some(Arc::clone(&clock));
+        *lock(&tool.dir) = Some(workspace.clone());
     }
     *lock(&setup.rules.clock) = Some(Arc::clone(&clock));
     let (inbox_tx, inbox_rx) = mpsc::channel();
@@ -617,7 +898,7 @@ fn build(setup: &Setup, home: fakes::TempDir, script: Vec<Answer>) -> World {
     let mut looped = Loop::start(
         crate::Session {
             log: Arc::clone(&log),
-            provider,
+            provider: Arc::clone(&provider) as Arc<dyn Provider>,
             model: model(),
             prompt: crate::PromptInputs::new(
                 home.path().to_path_buf(),
@@ -668,8 +949,40 @@ fn build(setup: &Setup, home: fakes::TempDir, script: Vec<Answer>) -> World {
             BlockLimits::default(),
         );
     }
+    let mut reviewer: Option<Arc<ScriptProvider>> = None;
+    if let Some(script) = setup.reviewer_script.as_ref() {
+        let judging = Arc::new(ScriptProvider {
+            clock: Arc::clone(&clock),
+            script: Mutex::new(review_answers(script).into_iter().collect()),
+            entered: Mutex::new(setup.reviewer_wake.clone()),
+            calls: AtomicUsize::new(0),
+        });
+        let (consecutive, session) = setup.reviewer_limits.unwrap_or((3, 20));
+        looped = looped.reviewer(
+            Ok(Reviewer {
+                provider: Arc::clone(&judging) as Arc<dyn Provider>,
+                model: Model {
+                    reference: "fake/reviewer".into(),
+                    cost: setup.reviewer_cost.clone(),
+                    subscription: false,
+                },
+                cache_lifetime: contract::events::CacheLifetime::OneHour,
+                context_window: fakes::CONTEXT_WINDOW,
+                thinking_levels: Vec::new(),
+            }),
+            BlockLimits {
+                consecutive,
+                session,
+            },
+        );
+        reviewer = Some(judging);
+    }
     if let Some(hooks) = &setup.hooks {
-        looped = looped.hooks(Arc::clone(hooks));
+        *lock(&hooks.clock) = Some(Arc::clone(&clock));
+        looped = looped.hooks(Arc::clone(hooks) as Arc<dyn Hooks>);
+    }
+    if let Some(budget) = setup.budget {
+        looped = looped.budget(Some(budget));
     }
     looped = looped.inbox_wake(Arc::new(InboxWake(Arc::downgrade(&inbox_tx))));
     if let Some(idle) = setup.idle {
@@ -685,6 +998,11 @@ fn build(setup: &Setup, home: fakes::TempDir, script: Vec<Answer>) -> World {
         looped: Some(looped),
         rules: Arc::clone(&setup.rules),
         tools: setup.tools.iter().map(Arc::clone).collect(),
+        provider: Arc::clone(&provider),
+        reviewer,
+        reviewer_script: setup.reviewer_script.clone(),
+        reviewer_cost: setup.reviewer_cost.clone(),
+        reviewer_limits: setup.reviewer_limits,
         answerable: setup.answerable,
         debug: setup.debug,
         idle: setup.idle,
@@ -732,6 +1050,15 @@ fn spawn_turn(world: &mut World) -> Flight {
     Flight {
         done: done_rx,
         thread: thread_rx,
+    }
+}
+
+/// Borrows the loop parked in the world.
+impl World {
+    fn loop_mut(&mut self) -> &mut Loop {
+        self.looped
+            .as_mut()
+            .expect("the loop is parked in the world")
     }
 }
 
@@ -934,9 +1261,13 @@ fn exit_and_resume(world: &mut World, request: &str, script: Vec<Answer>) {
     let provider = Arc::new(ScriptProvider {
         clock: Arc::clone(&clock),
         script: Mutex::new(script.into_iter().collect()),
+        entered: Mutex::new(None),
+        calls: AtomicUsize::new(0),
     });
+    let workspace = world.home.path().join("workspace");
     for tool in &world.tools {
         *lock(&tool.clock) = Some(Arc::clone(&clock));
+        *lock(&tool.dir) = Some(workspace.clone());
     }
     *lock(&world.rules.clock) = Some(Arc::clone(&clock));
     let workspace = world.home.path().join("workspace");
@@ -947,7 +1278,7 @@ fn exit_and_resume(world: &mut World, request: &str, script: Vec<Answer>) {
     let mut looped = Loop::resume(
         crate::Session {
             log: Arc::clone(&log),
-            provider,
+            provider: Arc::clone(&provider) as Arc<dyn Provider>,
             model: model(),
             prompt: crate::PromptInputs::new(
                 world.home.path().to_path_buf(),
@@ -1000,8 +1331,37 @@ fn exit_and_resume(world: &mut World, request: &str, script: Vec<Answer>) {
             BlockLimits::default(),
         );
     }
+    let mut reviewer: Option<Arc<ScriptProvider>> = None;
+    if let Some(script) = world.reviewer_script.clone() {
+        let judging = Arc::new(ScriptProvider {
+            clock: Arc::clone(&clock),
+            script: Mutex::new(review_answers(&script).into_iter().collect()),
+            entered: Mutex::new(None),
+            calls: AtomicUsize::new(0),
+        });
+        let (consecutive, session) = world.reviewer_limits.unwrap_or((3, 20));
+        looped = looped.reviewer(
+            Ok(Reviewer {
+                provider: Arc::clone(&judging) as Arc<dyn Provider>,
+                model: Model {
+                    reference: "fake/reviewer".into(),
+                    cost: world.reviewer_cost.clone(),
+                    subscription: false,
+                },
+                cache_lifetime: contract::events::CacheLifetime::OneHour,
+                context_window: fakes::CONTEXT_WINDOW,
+                thinking_levels: Vec::new(),
+            }),
+            BlockLimits {
+                consecutive,
+                session,
+            },
+        );
+        reviewer = Some(judging);
+    }
     if let Some(hooks) = &world.hooks {
-        looped = looped.hooks(Arc::clone(hooks));
+        *lock(&hooks.clock) = Some(Arc::clone(&clock));
+        looped = looped.hooks(Arc::clone(hooks) as Arc<dyn Hooks>);
     }
     looped = looped.inbox_wake(Arc::new(InboxWake(Arc::downgrade(&inbox_tx))));
     if let Some(idle) = world.idle {
@@ -1013,6 +1373,8 @@ fn exit_and_resume(world: &mut World, request: &str, script: Vec<Answer>) {
     world.inbox_tx = Some(inbox_tx);
     world.cancel = cancel;
     world.looped = Some(looped);
+    world.provider = provider;
+    world.reviewer = reviewer;
 }
 
 /// Every `permission_resolved` decision in the session log, with who decided.
@@ -1356,7 +1718,10 @@ fn a_hook_refusal_never_enters_permission() {
     prompt(&world, "hi");
     assert_eq!(turn(&mut world).unwrap(), Some(TurnOutcome::Completed));
     assert_eq!(tool.ran(), 0);
-    assert!(tool_records(&world).is_empty(), "{:?}", op_records(&world));
+    // The refused preparation emits its entered hook dispatch, and nothing
+    // else: the permission order is never entered.
+    assert_eq!(ops(&world, "tool.hooks").len(), 1);
+    assert!(ops(&world, "tool.permission").is_empty());
     assert!(
         !kinds(&world).contains(&"permission_requested".to_owned()),
         "a refused call asks nobody"
@@ -1397,7 +1762,12 @@ fn an_invalid_rewrite_never_enters_permission() {
     prompt(&world, "hi");
     assert_eq!(turn(&mut world).unwrap(), Some(TurnOutcome::Completed));
     assert_eq!(tool.ran(), 0);
-    assert!(tool_records(&world).is_empty(), "{:?}", op_records(&world));
+    assert_eq!(
+        ops(&world, "tool.hooks").len(),
+        1,
+        "the entered before dispatch"
+    );
+    assert!(ops(&world, "tool.permission").is_empty());
 }
 
 // A person's allow holds the permission order open: the 7 ms advanced
@@ -2374,5 +2744,1151 @@ fn a_resumed_interaction_runs_with_no_second_permission() {
         1,
         "only the live fast-path order is timed; the resumed run is not judged: {:?}",
         op_records(&world)
+    );
+}
+
+// One entered review stage times its work, including the reviewer's
+// provider call.
+#[test]
+fn a_first_stage_allow_times_one_reviewer_record() {
+    let rules = Arc::new(FakeRules::default());
+    let tool = Arc::new(ProbeTool::executes("atlas", "atlas run"));
+    let mut setup = Setup::new(Arc::clone(&rules));
+    setup.tools.push(Arc::clone(&tool));
+    setup.reviewer_script = Some(vec![review_text("allow", 3)]);
+    let home = fakes::TempDir::new("fiber-tool-timing");
+    let mut world = build(
+        &setup,
+        home,
+        vec![tool_answer("atlas", json!({}), 0), text_answer("Done.", 0)],
+    );
+    prompt(&world, "hi");
+    assert_eq!(turn(&mut world).unwrap(), Some(TurnOutcome::Completed));
+    assert_eq!(tool.ran(), 1, "the allowed call ran");
+    let records = ops(&world, "tool.reviewer");
+    assert_eq!(records.len(), 1);
+    assert_eq!(records[0].ms, 3);
+    assert_tool_wire(&records, "atlas");
+    let permission = ops(&world, "tool.permission");
+    assert_eq!(permission.len(), 1);
+    assert_eq!(permission[0].ms, 3, "the order holds the stage");
+    assert_eq!(
+        resolved_bys(&world),
+        vec![("allow".to_owned(), "reviewer".to_owned())]
+    );
+}
+
+// A check carries the call to a second stage: two stages, two records.
+#[test]
+fn a_check_then_second_allow_times_two_reviewer_records() {
+    let rules = Arc::new(FakeRules::default());
+    let tool = Arc::new(ProbeTool::executes("atlas", "atlas run"));
+    let mut setup = Setup::new(Arc::clone(&rules));
+    setup.tools.push(Arc::clone(&tool));
+    setup.reviewer_script = Some(vec![review_text("check", 3), review_text("allow: fine", 5)]);
+    let home = fakes::TempDir::new("fiber-tool-timing");
+    let mut world = build(
+        &setup,
+        home,
+        vec![tool_answer("atlas", json!({}), 0), text_answer("Done.", 0)],
+    );
+    prompt(&world, "hi");
+    assert_eq!(turn(&mut world).unwrap(), Some(TurnOutcome::Completed));
+    assert_eq!(tool.ran(), 1);
+    let records = ops(&world, "tool.reviewer");
+    assert_eq!(records.len(), 2);
+    assert_eq!(
+        records.iter().map(|record| record.ms).collect::<Vec<_>>(),
+        vec![3, 5],
+        "each stage times only its own work"
+    );
+    assert_tool_wire(&records, "atlas");
+    let permission = ops(&world, "tool.permission");
+    assert_eq!(permission.len(), 1);
+    assert_eq!(permission[0].ms, 8);
+}
+
+// An unreadable verdict is re-asked inside the same stage: still one record.
+#[test]
+fn an_unreadable_verdict_reasks_inside_one_stage_record() {
+    let rules = Arc::new(FakeRules::default());
+    let tool = Arc::new(ProbeTool::executes("atlas", "atlas run"));
+    let mut setup = Setup::new(Arc::clone(&rules));
+    setup.tools.push(Arc::clone(&tool));
+    setup.reviewer_script = Some(vec![review_text("maybe", 3), review_text("allow", 3)]);
+    let home = fakes::TempDir::new("fiber-tool-timing");
+    let mut world = build(
+        &setup,
+        home,
+        vec![tool_answer("atlas", json!({}), 0), text_answer("Done.", 0)],
+    );
+    prompt(&world, "hi");
+    assert_eq!(turn(&mut world).unwrap(), Some(TurnOutcome::Completed));
+    let records = ops(&world, "tool.reviewer");
+    assert_eq!(records.len(), 1, "the re-ask stays inside the stage");
+    assert_eq!(records[0].ms, 6);
+    assert_tool_wire(&records, "atlas");
+}
+
+// A failing first stage escalates to a person with its record kept.
+#[test]
+fn a_failing_first_stage_escalates_with_its_record() {
+    let rules = Arc::new(FakeRules::default());
+    let tool = Arc::new(ProbeTool::executes("atlas", "atlas run"));
+    let mut setup = Setup::new(Arc::clone(&rules));
+    setup.tools.push(Arc::clone(&tool));
+    setup.reviewer_script = Some(vec![review_error(ErrorCode::Other("down".into()), 3)]);
+    let home = fakes::TempDir::new("fiber-tool-timing");
+    let mut world = build(
+        &setup,
+        home,
+        vec![tool_answer("atlas", json!({}), 0), text_answer("Done.", 0)],
+    );
+    prompt(&world, "hi");
+    let flight = spawn_turn(&mut world);
+    let mut watcher = world.log.as_ref().expect("the log is open").watch_all();
+    let (request, _) = wait_requested(&mut watcher, "the escalation is raised");
+    reply(&world, &request, deny());
+    assert_eq!(
+        join_turn(&mut world, flight).unwrap(),
+        Some(TurnOutcome::Completed)
+    );
+    assert_eq!(tool.ran(), 0);
+    let records = ops(&world, "tool.reviewer");
+    assert_eq!(records.len(), 1, "the attempted stage is timed");
+    assert_eq!(records[0].ms, 3);
+    assert_tool_wire(&records, "atlas");
+}
+
+// A failing second stage keeps both stages' records and escalates.
+#[test]
+fn a_failing_second_stage_keeps_both_records() {
+    let rules = Arc::new(FakeRules::default());
+    let tool = Arc::new(ProbeTool::executes("atlas", "atlas run"));
+    let mut setup = Setup::new(Arc::clone(&rules));
+    setup.tools.push(Arc::clone(&tool));
+    setup.reviewer_script = Some(vec![
+        review_text("check", 3),
+        review_error(ErrorCode::Other("down".into()), 5),
+    ]);
+    let home = fakes::TempDir::new("fiber-tool-timing");
+    let mut world = build(
+        &setup,
+        home,
+        vec![tool_answer("atlas", json!({}), 0), text_answer("Done.", 0)],
+    );
+    prompt(&world, "hi");
+    let flight = spawn_turn(&mut world);
+    let mut watcher = world.log.as_ref().expect("the log is open").watch_all();
+    let (request, _) = wait_requested(&mut watcher, "the escalation is raised");
+    reply(&world, &request, deny());
+    assert_eq!(
+        join_turn(&mut world, flight).unwrap(),
+        Some(TurnOutcome::Completed)
+    );
+    let records = ops(&world, "tool.reviewer");
+    assert_eq!(records.len(), 2);
+    assert_eq!(
+        records.iter().map(|record| record.ms).collect::<Vec<_>>(),
+        vec![3, 5]
+    );
+    assert_tool_wire(&records, "atlas");
+}
+
+// Cancelling a running stage completes the call cancelled with its record.
+#[test]
+fn cancelling_a_stage_ends_cancelled_with_its_record() {
+    let rules = Arc::new(FakeRules::default());
+    let tool = Arc::new(ProbeTool::executes("atlas", "atlas run"));
+    let mut setup = Setup::new(Arc::clone(&rules));
+    setup.tools.push(Arc::clone(&tool));
+    setup.reviewer_script = Some(vec![ReviewReply::Hold]);
+    let (entered_tx, entered_rx) = mpsc::channel();
+    setup.reviewer_wake = Some(entered_tx);
+    let home = fakes::TempDir::new("fiber-tool-timing");
+    let mut world = build(
+        &setup,
+        home,
+        vec![
+            tool_answer("atlas", json!({}), 0),
+            text_answer("Done.", 0),
+            text_answer("Spare.", 0),
+            text_answer("Spare.", 0),
+        ],
+    );
+    prompt(&world, "hi");
+    let flight = spawn_turn(&mut world);
+    fakes::Deadline::after(WAIT).recv_or_fail(&entered_rx, "the stage starts its request");
+    assert!(
+        world.cancel.cancel(),
+        "the turn is armed while the stage runs"
+    );
+    world
+        .inbox_tx
+        .as_ref()
+        .expect("the inbox is open")
+        .send(Delivery::Cancelled)
+        .unwrap();
+    assert!(join_turn(&mut world, flight).is_ok());
+    assert_eq!(tool.ran(), 0, "the cancelled call never ran");
+    let records = ops(&world, "tool.reviewer");
+    assert_eq!(records.len(), 1, "the entered stage is timed");
+    assert_tool_wire(&records, "atlas");
+    assert!(
+        kinds(&world).contains(&"tool_call_completed".to_owned()),
+        "the cancelled call still completes"
+    );
+}
+
+// A budget reached between stages times the first stage only.
+#[test]
+fn a_budget_reached_between_stages_times_only_the_first() {
+    let rules = Arc::new(FakeRules::default());
+    let tool = Arc::new(ProbeTool::executes("atlas", "atlas run"));
+    let mut setup = Setup::new(Arc::clone(&rules));
+    setup.tools.push(Arc::clone(&tool));
+    setup.budget = Some(1.0);
+    setup.reviewer_cost = Some(contract::provider::Cost {
+        input: 1_000_000.0,
+        output: 1_000_000.0,
+        cache_read: None,
+        cache_write: None,
+        tiers: Vec::new(),
+    });
+    setup.reviewer_script = Some(vec![review_text("check", 0), review_text("allow: fine", 0)]);
+    let home = fakes::TempDir::new("fiber-tool-timing");
+    let mut world = build(
+        &setup,
+        home,
+        vec![tool_answer("atlas", json!({}), 0), text_answer("Done.", 0)],
+    );
+    prompt(&world, "hi");
+    assert_eq!(turn(&mut world).unwrap(), Some(TurnOutcome::Failed));
+    assert_eq!(tool.ran(), 0, "the over-budget call never ran");
+    let records = ops(&world, "tool.reviewer");
+    assert_eq!(records.len(), 1, "only the admitted stage is timed");
+    assert_tool_wire(&records, "atlas");
+    assert_eq!(
+        resolved_bys(&world),
+        vec![("deny".to_owned(), "budget".to_owned())]
+    );
+}
+
+// A budget already reached admits no stage and times nothing.
+#[test]
+fn a_budget_reached_before_any_stage_times_nothing() {
+    let rules = Arc::new(FakeRules::default());
+    let tool = Arc::new(ProbeTool::executes("atlas", "atlas run"));
+    let mut setup = Setup::new(Arc::clone(&rules));
+    setup.tools.push(Arc::clone(&tool));
+    setup.budget = Some(0.0);
+    setup.reviewer_script = Some(vec![review_text("allow", 0)]);
+    let home = fakes::TempDir::new("fiber-tool-timing");
+    let mut world = build(
+        &setup,
+        home,
+        vec![tool_answer("atlas", json!({}), 0), text_answer("Done.", 0)],
+    );
+    prompt(&world, "hi");
+    assert_eq!(turn(&mut world).unwrap(), Some(TurnOutcome::Failed));
+    assert_eq!(tool.ran(), 0);
+    assert!(world.reviewer.as_ref().expect("a reviewer").called() == 0);
+    assert!(
+        ops(&world, "tool.reviewer").is_empty(),
+        "a refused stage emits nothing"
+    );
+    assert!(
+        resolved_bys(&world).is_empty(),
+        "the step budget gate fails before any decision"
+    );
+}
+
+// With no reviewer model the call escalates with no stage timer.
+#[test]
+fn no_reviewer_model_escalates_with_no_stage_timer() {
+    let rules = Arc::new(FakeRules::default());
+    let tool = Arc::new(ProbeTool::executes("atlas", "atlas run"));
+    let mut setup = Setup::new(Arc::clone(&rules));
+    setup.tools.push(Arc::clone(&tool));
+    setup.no_reviewer = true;
+    let home = fakes::TempDir::new("fiber-tool-timing");
+    let mut world = build(
+        &setup,
+        home,
+        vec![tool_answer("atlas", json!({}), 0), text_answer("Done.", 0)],
+    );
+    prompt(&world, "hi");
+    let flight = spawn_turn(&mut world);
+    let mut watcher = world.log.as_ref().expect("the log is open").watch_all();
+    let (request, _) = wait_requested(&mut watcher, "the escalation is raised");
+    reply(&world, &request, allow());
+    assert_eq!(
+        join_turn(&mut world, flight).unwrap(),
+        Some(TurnOutcome::Completed)
+    );
+    assert_eq!(tool.ran(), 1);
+    assert!(
+        ops(&world, "tool.reviewer").is_empty(),
+        "no stage ran, so no stage is timed"
+    );
+    assert_eq!(ops(&world, "tool.permission").len(), 1);
+}
+
+// A fast path runs no reviewer stage and times none.
+#[test]
+fn a_fast_path_runs_no_reviewer_stage() {
+    let rules = Arc::new(FakeRules::default());
+    let tool = Arc::new(ProbeTool::reads("atlas"));
+    let mut setup = Setup::new(Arc::clone(&rules));
+    setup.tools.push(Arc::clone(&tool));
+    let home = fakes::TempDir::new("fiber-tool-timing");
+    let mut world = build(
+        &setup,
+        home,
+        vec![tool_answer("atlas", json!({}), 0), text_answer("Done.", 0)],
+    );
+    prompt(&world, "hi");
+    assert_eq!(turn(&mut world).unwrap(), Some(TurnOutcome::Completed));
+    assert!(
+        ops(&world, "tool.reviewer").is_empty(),
+        "a fast path meets no reviewer"
+    );
+}
+
+// A block escalated to a person splits cleanly: each stage keeps its own
+// duration, and the permission order holds both stages and the wait.
+#[test]
+fn an_escalated_block_splits_stage_and_wait_durations() {
+    let rules = Arc::new(FakeRules::default());
+    let tool = Arc::new(ProbeTool::executes("atlas", "atlas run"));
+    let mut setup = Setup::new(Arc::clone(&rules));
+    setup.tools.push(Arc::clone(&tool));
+    setup.reviewer_limits = Some((1, 20));
+    setup.reviewer_script = Some(vec![review_text("check", 3), review_text("block: nope", 3)]);
+    let home = fakes::TempDir::new("fiber-tool-timing");
+    let mut world = build(
+        &setup,
+        home,
+        vec![tool_answer("atlas", json!({}), 0), text_answer("Done.", 0)],
+    );
+    prompt(&world, "hi");
+    let flight = spawn_turn(&mut world);
+    let thread = fakes::Deadline::after(WAIT).recv_or_fail(&flight.thread, "the turn starts");
+    let mut watcher = world.log.as_ref().expect("the log is open").watch_all();
+    let (request, _) = wait_requested(&mut watcher, "the escalation is raised");
+    world.clock.advance_when_parked(
+        None,
+        Some(thread),
+        Duration::from_millis(11),
+        &fakes::Deadline::after(WAIT),
+    );
+    reply(&world, &request, allow());
+    assert_eq!(
+        join_turn(&mut world, flight).unwrap(),
+        Some(TurnOutcome::Completed)
+    );
+    assert_eq!(tool.ran(), 1);
+    let records = ops(&world, "tool.reviewer");
+    assert_eq!(records.len(), 2);
+    assert_eq!(
+        records.iter().map(|record| record.ms).collect::<Vec<_>>(),
+        vec![3, 3],
+        "the human wait stays out of the stages"
+    );
+    assert_tool_wire(&records, "atlas");
+    let permission = ops(&world, "tool.permission");
+    assert_eq!(permission.len(), 1);
+    assert_eq!(permission[0].ms, 17, "the order holds stages and wait");
+}
+
+// The handoff selection judges person messages through the same request
+// path but times no tool stage.
+#[test]
+fn a_handoff_selection_reviews_with_no_tool_stage() {
+    let rules = Arc::new(FakeRules::default());
+    let tool = Arc::new(ProbeTool::executes("atlas", "atlas run"));
+    let mut setup = Setup::new(Arc::clone(&rules));
+    setup.tools.push(Arc::clone(&tool));
+    setup.reviewer_script = Some(vec![review_text("allow", 0), review_text("1", 0)]);
+    let home = fakes::TempDir::new("fiber-tool-timing");
+    let mut world = build(
+        &setup,
+        home,
+        vec![tool_answer("atlas", json!({}), 0), text_answer("Done.", 0)],
+    );
+    prompt(&world, "hi");
+    assert_eq!(turn(&mut world).unwrap(), Some(TurnOutcome::Completed));
+    assert_eq!(ops(&world, "tool.reviewer").len(), 1);
+    let turn_id = log::read(&world.home.path().join("s_test"))
+        .unwrap()
+        .into_iter()
+        .find(|line| line.kind == "turn_started")
+        .expect("the turn started")
+        .turn_id
+        .expect("a turn id");
+    world.loop_mut().reviewer_handoff(&turn_id).unwrap();
+    assert_eq!(
+        world.reviewer.as_ref().expect("a reviewer").called(),
+        2,
+        "the selection really asked the reviewer"
+    );
+    assert_eq!(
+        ops(&world, "tool.reviewer").len(),
+        1,
+        "the selection times no tool stage"
+    );
+}
+
+// An unchanged before and a passing check time one hook line each.
+#[test]
+fn unchanged_before_and_check_time_two_hook_lines() {
+    let rules = Arc::new(FakeRules::default());
+    let tool = Arc::new(ProbeTool::reads("atlas"));
+    let hooks = Arc::new(ProbeHooks::staged(
+        BeforeToolOutcome::Unchanged,
+        CheckOutcome::Passed,
+        AfterToolOutcome::Unchanged,
+        1,
+        1,
+        0,
+    ));
+    let mut setup = Setup::new(Arc::clone(&rules));
+    setup.tools.push(Arc::clone(&tool));
+    setup.hooks = Some(Arc::clone(&hooks));
+    let home = fakes::TempDir::new("fiber-tool-timing");
+    let mut world = build(
+        &setup,
+        home,
+        vec![tool_answer("atlas", json!({}), 0), text_answer("Done.", 0)],
+    );
+    prompt(&world, "hi");
+    assert_eq!(turn(&mut world).unwrap(), Some(TurnOutcome::Completed));
+    assert_eq!(tool.ran(), 1);
+    let records = ops(&world, "tool.hooks");
+    assert!(
+        records.len() >= 2,
+        "before and check dispatch: {:?}",
+        records
+    );
+    assert_eq!(
+        records
+            .iter()
+            .take(2)
+            .map(|record| record.ms)
+            .collect::<Vec<_>>(),
+        vec![1, 1]
+    );
+    assert_tool_wire(&records[..2], "atlas");
+    assert_eq!(hooks.before_calls.load(Ordering::SeqCst), 1);
+    assert_eq!(hooks.check_calls.load(Ordering::SeqCst), 1);
+    assert_eq!(ops(&world, "tool.permission").len(), 1);
+}
+
+// A valid rewrite runs with the rewritten arguments and two hook lines.
+#[test]
+fn a_valid_rewrite_runs_rewritten_with_two_hook_lines() {
+    let rules = Arc::new(FakeRules::default());
+    let tool = Arc::new(ProbeTool::classified(
+        "atlas",
+        json!({"type": "object", "required": ["target"]}),
+        Ok(Effects {
+            declared: DeclaredEffects {
+                effects: vec![Effect::Reads],
+                reversible: true,
+                paths: None,
+            },
+            subject: None,
+            prefix: None,
+            always_reviewed: false,
+        }),
+        "read it",
+    ));
+    let hooks = Arc::new(ProbeHooks::staged(
+        BeforeToolOutcome::Rewritten {
+            arguments: Map::from_iter([("target".to_owned(), json!("hooked"))]),
+            changed_by: vec!["probe".into()],
+        },
+        CheckOutcome::Passed,
+        AfterToolOutcome::Unchanged,
+        1,
+        1,
+        0,
+    ));
+    let mut setup = Setup::new(Arc::clone(&rules));
+    setup.tools.push(Arc::clone(&tool));
+    setup.hooks = Some(Arc::clone(&hooks));
+    let home = fakes::TempDir::new("fiber-tool-timing");
+    let mut world = build(
+        &setup,
+        home,
+        vec![
+            tool_answer("atlas", json!({"target": "orig"}), 0),
+            text_answer("Done.", 0),
+        ],
+    );
+    prompt(&world, "hi");
+    assert_eq!(turn(&mut world).unwrap(), Some(TurnOutcome::Completed));
+    assert_eq!(tool.ran(), 1);
+    assert_eq!(
+        tool.ran_args(),
+        vec![Map::from_iter([("target".to_owned(), json!("hooked"))])],
+        "the call runs with the rewritten arguments"
+    );
+    let records = ops(&world, "tool.hooks");
+    assert!(records.len() >= 2);
+    assert_tool_wire(&records[..2], "atlas");
+    assert_eq!(ops(&world, "tool.permission").len(), 1);
+}
+
+// A before refusal emits its own dispatch line and never reaches check.
+#[test]
+fn a_before_refusal_emits_one_line_and_skips_check() {
+    let rules = Arc::new(FakeRules::default());
+    let tool = Arc::new(ProbeTool::reads("atlas"));
+    let hooks = Arc::new(ProbeHooks::staged(
+        BeforeToolOutcome::Refused(Refusal {
+            extension: "probe".into(),
+            reason: "not this call".into(),
+        }),
+        CheckOutcome::Passed,
+        AfterToolOutcome::Unchanged,
+        1,
+        0,
+        0,
+    ));
+    let mut setup = Setup::new(Arc::clone(&rules));
+    setup.tools.push(Arc::clone(&tool));
+    setup.hooks = Some(Arc::clone(&hooks));
+    let home = fakes::TempDir::new("fiber-tool-timing");
+    let mut world = build(
+        &setup,
+        home,
+        vec![tool_answer("atlas", json!({}), 0), text_answer("Done.", 0)],
+    );
+    prompt(&world, "hi");
+    assert_eq!(turn(&mut world).unwrap(), Some(TurnOutcome::Completed));
+    assert_eq!(tool.ran(), 0);
+    let records = ops(&world, "tool.hooks");
+    assert_eq!(records.len(), 1, "only the entered before dispatch");
+    assert_eq!(records[0].ms, 1);
+    assert_tool_wire(&records, "atlas");
+    assert_eq!(
+        hooks.check_calls.load(Ordering::SeqCst),
+        0,
+        "check is not entered"
+    );
+    assert!(
+        tool_records(&world)
+            .iter()
+            .all(|record| record.op == "tool.hooks")
+    );
+}
+
+// A rewrite that fails its schema re-check emits before only.
+#[test]
+fn an_invalid_schema_rewrite_emits_before_only() {
+    let rules = Arc::new(FakeRules::default());
+    let tool = Arc::new(ProbeTool::classified(
+        "atlas",
+        json!({"type": "object", "required": ["target"]}),
+        Ok(Effects {
+            declared: DeclaredEffects {
+                effects: vec![Effect::Reads],
+                reversible: true,
+                paths: None,
+            },
+            subject: None,
+            prefix: None,
+            always_reviewed: false,
+        }),
+        "read it",
+    ));
+    let hooks = Arc::new(ProbeHooks::rewriting(Map::new()));
+    let mut setup = Setup::new(Arc::clone(&rules));
+    setup.tools.push(Arc::clone(&tool));
+    setup.hooks = Some(Arc::clone(&hooks));
+    let home = fakes::TempDir::new("fiber-tool-timing");
+    let mut world = build(
+        &setup,
+        home,
+        vec![
+            tool_answer("atlas", json!({"target": "x"}), 0),
+            text_answer("Done.", 0),
+        ],
+    );
+    prompt(&world, "hi");
+    assert_eq!(turn(&mut world).unwrap(), Some(TurnOutcome::Completed));
+    assert_eq!(tool.ran(), 0);
+    assert_eq!(ops(&world, "tool.hooks").len(), 1);
+    assert_eq!(hooks.check_calls.load(Ordering::SeqCst), 0);
+    assert!(
+        tool_records(&world)
+            .iter()
+            .all(|record| record.op == "tool.hooks")
+    );
+}
+
+// A rewrite that fails its effects re-check emits before only.
+#[test]
+fn an_invalid_effects_rewrite_emits_before_only() {
+    let rules = Arc::new(FakeRules::default());
+    let tool = Arc::new(
+        ProbeTool::classified(
+            "atlas",
+            json!({"type": "object"}),
+            Ok(Effects {
+                declared: DeclaredEffects {
+                    effects: vec![Effect::Reads],
+                    reversible: true,
+                    paths: None,
+                },
+                subject: None,
+                prefix: None,
+                always_reviewed: false,
+            }),
+            "read it",
+        )
+        .booming("__boom__"),
+    );
+    let hooks = Arc::new(ProbeHooks::rewriting(Map::from_iter([(
+        "__boom__".to_owned(),
+        json!("boom"),
+    )])));
+    let mut setup = Setup::new(Arc::clone(&rules));
+    setup.tools.push(Arc::clone(&tool));
+    setup.hooks = Some(Arc::clone(&hooks));
+    let home = fakes::TempDir::new("fiber-tool-timing");
+    let mut world = build(
+        &setup,
+        home,
+        vec![tool_answer("atlas", json!({}), 0), text_answer("Done.", 0)],
+    );
+    prompt(&world, "hi");
+    assert_eq!(turn(&mut world).unwrap(), Some(TurnOutcome::Completed));
+    assert_eq!(tool.ran(), 0);
+    assert_eq!(ops(&world, "tool.hooks").len(), 1);
+    assert_eq!(hooks.check_calls.load(Ordering::SeqCst), 0);
+}
+
+// A check refusal emits before and check, and never permission.
+#[test]
+fn a_check_refusal_emits_two_lines_and_no_permission() {
+    let rules = Arc::new(FakeRules::default());
+    let tool = Arc::new(ProbeTool::reads("atlas"));
+    let hooks = Arc::new(ProbeHooks::staged(
+        BeforeToolOutcome::Unchanged,
+        CheckOutcome::Refused(Refusal {
+            extension: "probe".into(),
+            reason: "not this call".into(),
+        }),
+        AfterToolOutcome::Unchanged,
+        1,
+        1,
+        0,
+    ));
+    let mut setup = Setup::new(Arc::clone(&rules));
+    setup.tools.push(Arc::clone(&tool));
+    setup.hooks = Some(Arc::clone(&hooks));
+    let home = fakes::TempDir::new("fiber-tool-timing");
+    let mut world = build(
+        &setup,
+        home,
+        vec![tool_answer("atlas", json!({}), 0), text_answer("Done.", 0)],
+    );
+    prompt(&world, "hi");
+    assert_eq!(turn(&mut world).unwrap(), Some(TurnOutcome::Completed));
+    assert_eq!(tool.ran(), 0);
+    let records = ops(&world, "tool.hooks");
+    assert_eq!(records.len(), 2);
+    assert_eq!(
+        records.iter().map(|record| record.ms).collect::<Vec<_>>(),
+        vec![1, 1]
+    );
+    assert_tool_wire(&records, "atlas");
+    assert!(ops(&world, "tool.permission").is_empty());
+}
+
+// A failing check emits before and check, and never permission.
+#[test]
+fn a_failing_check_emits_two_lines_and_no_permission() {
+    let rules = Arc::new(FakeRules::default());
+    let tool = Arc::new(ProbeTool::reads("atlas"));
+    let hooks = Arc::new(ProbeHooks::staged(
+        BeforeToolOutcome::Unchanged,
+        CheckOutcome::Failed(HookFailure {
+            extension: "probe".into(),
+            message: "the check broke".into(),
+        }),
+        AfterToolOutcome::Unchanged,
+        0,
+        0,
+        0,
+    ));
+    let mut setup = Setup::new(Arc::clone(&rules));
+    setup.tools.push(Arc::clone(&tool));
+    setup.hooks = Some(Arc::clone(&hooks));
+    let home = fakes::TempDir::new("fiber-tool-timing");
+    let mut world = build(
+        &setup,
+        home,
+        vec![tool_answer("atlas", json!({}), 0), text_answer("Done.", 0)],
+    );
+    prompt(&world, "hi");
+    assert_eq!(turn(&mut world).unwrap(), Some(TurnOutcome::Completed));
+    assert_eq!(tool.ran(), 0);
+    assert_eq!(ops(&world, "tool.hooks").len(), 2);
+    assert!(ops(&world, "tool.permission").is_empty());
+}
+
+// A shutdown before any dispatch emits nothing.
+#[test]
+fn a_shutdown_before_any_dispatch_emits_nothing() {
+    let rules = Arc::new(FakeRules::default());
+    let tool = Arc::new(ProbeTool::reads("atlas"));
+    let hooks = Arc::new(ProbeHooks::passing());
+    let mut setup = Setup::new(Arc::clone(&rules));
+    setup.tools.push(Arc::clone(&tool));
+    setup.hooks = Some(Arc::clone(&hooks));
+    let home = fakes::TempDir::new("fiber-tool-timing");
+    let mut world = build(
+        &setup,
+        home,
+        vec![tool_answer("atlas", json!({}), 0), text_answer("Done.", 0)],
+    );
+    world.cancel.shutdown(0);
+    prompt(&world, "hi");
+    let outcome = turn(&mut world);
+    assert_eq!(outcome.unwrap(), None);
+    assert_eq!(hooks.before_calls.load(Ordering::SeqCst), 0);
+    assert!(tool_records(&world).is_empty());
+}
+
+// A shutdown between before and check emits before only.
+#[test]
+fn a_shutdown_between_before_and_check_emits_before_only() {
+    let rules = Arc::new(FakeRules::default());
+    let tool = Arc::new(ProbeTool::reads("atlas"));
+    let mut hooks = ProbeHooks::passing();
+    let (entered_tx, entered_rx) = mpsc::channel();
+    let (gate_tx, gate_rx) = mpsc::channel();
+    *lock(&hooks.entered) = Some(entered_tx);
+    *lock(&hooks.gate) = Some(gate_rx);
+    hooks.before_ms = 1;
+    let hooks = Arc::new(hooks);
+    let mut setup = Setup::new(Arc::clone(&rules));
+    setup.tools.push(Arc::clone(&tool));
+    setup.hooks = Some(Arc::clone(&hooks));
+    let home = fakes::TempDir::new("fiber-tool-timing");
+    let mut world = build(
+        &setup,
+        home,
+        vec![tool_answer("atlas", json!({}), 0), text_answer("Done.", 0)],
+    );
+    prompt(&world, "hi");
+    let flight = spawn_turn(&mut world);
+    fakes::Deadline::after(WAIT).recv_or_fail(&entered_rx, "the before hooks run");
+    world.cancel.shutdown(0);
+    gate_tx.send(()).expect("the hook waits on the gate");
+    assert!(join_turn(&mut world, flight).is_ok());
+    assert_eq!(tool.ran(), 0);
+    let records = ops(&world, "tool.hooks");
+    assert_eq!(records.len(), 1, "only the entered before dispatch");
+    assert_eq!(records[0].ms, 1);
+    assert_eq!(
+        hooks.check_calls.load(Ordering::SeqCst),
+        0,
+        "check never runs"
+    );
+    assert!(ops(&world, "tool.permission").is_empty());
+}
+
+// Without hooks no dispatch is fabricated.
+#[test]
+fn without_hooks_no_dispatch_is_fabricated() {
+    let rules = Arc::new(FakeRules::default());
+    let tool = Arc::new(ProbeTool::reads("atlas"));
+    let mut setup = Setup::new(Arc::clone(&rules));
+    setup.tools.push(Arc::clone(&tool));
+    let home = fakes::TempDir::new("fiber-tool-timing");
+    let mut world = build(
+        &setup,
+        home,
+        vec![tool_answer("atlas", json!({}), 0), text_answer("Done.", 0)],
+    );
+    prompt(&world, "hi");
+    assert_eq!(turn(&mut world).unwrap(), Some(TurnOutcome::Completed));
+    assert_eq!(tool.ran(), 1);
+    assert!(ops(&world, "tool.hooks").is_empty());
+    assert_eq!(ops(&world, "tool.permission").len(), 1);
+}
+
+// An unchanged after dispatch adds the third hook line with its duration.
+#[test]
+fn an_unchanged_after_adds_the_third_hook_line() {
+    let rules = Arc::new(FakeRules::default());
+    let tool = Arc::new(ProbeTool::reads("atlas"));
+    let hooks = Arc::new(ProbeHooks::staged(
+        BeforeToolOutcome::Unchanged,
+        CheckOutcome::Passed,
+        AfterToolOutcome::Unchanged,
+        0,
+        0,
+        1,
+    ));
+    let mut setup = Setup::new(Arc::clone(&rules));
+    setup.tools.push(Arc::clone(&tool));
+    setup.hooks = Some(Arc::clone(&hooks));
+    let home = fakes::TempDir::new("fiber-tool-timing");
+    let mut world = build(
+        &setup,
+        home,
+        vec![tool_answer("atlas", json!({}), 0), text_answer("Done.", 0)],
+    );
+    prompt(&world, "hi");
+    assert_eq!(turn(&mut world).unwrap(), Some(TurnOutcome::Completed));
+    assert_eq!(hooks.after_calls.load(Ordering::SeqCst), 1);
+    let records = ops(&world, "tool.hooks");
+    assert_eq!(records.len(), 3, "before, check and the one after dispatch");
+    assert_eq!(
+        records.iter().map(|record| record.ms).collect::<Vec<_>>(),
+        vec![0, 0, 1]
+    );
+    assert_tool_wire(&records, "atlas");
+}
+
+// A changed after dispatch keeps its single line and the turn completes.
+#[test]
+fn a_changed_after_keeps_its_single_line() {
+    let rules = Arc::new(FakeRules::default());
+    let tool = Arc::new(ProbeTool::reads("atlas"));
+    let hooks = Arc::new(ProbeHooks::staged(
+        BeforeToolOutcome::Unchanged,
+        CheckOutcome::Passed,
+        AfterToolOutcome::Changed {
+            content: Some("replaced".into()),
+            details: None,
+            artifact: None,
+        },
+        0,
+        0,
+        1,
+    ));
+    let mut setup = Setup::new(Arc::clone(&rules));
+    setup.tools.push(Arc::clone(&tool));
+    setup.hooks = Some(Arc::clone(&hooks));
+    let home = fakes::TempDir::new("fiber-tool-timing");
+    let mut world = build(
+        &setup,
+        home,
+        vec![tool_answer("atlas", json!({}), 0), text_answer("Done.", 0)],
+    );
+    prompt(&world, "hi");
+    assert_eq!(turn(&mut world).unwrap(), Some(TurnOutcome::Completed));
+    assert_eq!(ops(&world, "tool.hooks").len(), 3);
+    assert_eq!(hooks.after_calls.load(Ordering::SeqCst), 1);
+}
+
+// A failed after dispatch keeps its single line and fails the call.
+#[test]
+fn a_failed_after_keeps_its_single_line() {
+    let rules = Arc::new(FakeRules::default());
+    let tool = Arc::new(ProbeTool::reads("atlas"));
+    let hooks = Arc::new(ProbeHooks::staged(
+        BeforeToolOutcome::Unchanged,
+        CheckOutcome::Passed,
+        AfterToolOutcome::Failed(HookFailure {
+            extension: "probe".into(),
+            message: "the after hook broke".into(),
+        }),
+        0,
+        0,
+        1,
+    ));
+    let mut setup = Setup::new(Arc::clone(&rules));
+    setup.tools.push(Arc::clone(&tool));
+    setup.hooks = Some(Arc::clone(&hooks));
+    let home = fakes::TempDir::new("fiber-tool-timing");
+    let mut world = build(
+        &setup,
+        home,
+        vec![tool_answer("atlas", json!({}), 0), text_answer("Done.", 0)],
+    );
+    prompt(&world, "hi");
+    assert_eq!(turn(&mut world).unwrap(), Some(TurnOutcome::Completed));
+    assert_eq!(ops(&world, "tool.hooks").len(), 3);
+}
+
+// A withheld after dispatch keeps its single line.
+#[test]
+fn a_withheld_after_keeps_its_single_line() {
+    let rules = Arc::new(FakeRules::default());
+    let tool = Arc::new(ProbeTool::reads("atlas"));
+    let hooks = Arc::new(ProbeHooks::staged(
+        BeforeToolOutcome::Unchanged,
+        CheckOutcome::Passed,
+        AfterToolOutcome::Withheld {
+            extension: "probe".into(),
+        },
+        0,
+        0,
+        1,
+    ));
+    let mut setup = Setup::new(Arc::clone(&rules));
+    setup.tools.push(Arc::clone(&tool));
+    setup.hooks = Some(Arc::clone(&hooks));
+    let home = fakes::TempDir::new("fiber-tool-timing");
+    let mut world = build(
+        &setup,
+        home,
+        vec![tool_answer("atlas", json!({}), 0), text_answer("Done.", 0)],
+    );
+    prompt(&world, "hi");
+    assert_eq!(turn(&mut world).unwrap(), Some(TurnOutcome::Completed));
+    assert_eq!(ops(&world, "tool.hooks").len(), 3);
+}
+
+// A persisted spill dispatches after exactly once.
+#[test]
+fn a_persisted_spill_dispatches_after_once() {
+    let rules = Arc::new(FakeRules::default());
+    let tool = Arc::new(ProbeTool::reads("atlas"));
+    tool.spilling(SpillMode::Persisted);
+    let hooks = Arc::new(ProbeHooks::passing());
+    let mut setup = Setup::new(Arc::clone(&rules));
+    setup.tools.push(Arc::clone(&tool));
+    setup.hooks = Some(Arc::clone(&hooks));
+    let home = fakes::TempDir::new("fiber-tool-timing");
+    let mut world = build(
+        &setup,
+        home,
+        vec![tool_answer("atlas", json!({}), 0), text_answer("Done.", 0)],
+    );
+    prompt(&world, "hi");
+    assert_eq!(turn(&mut world).unwrap(), Some(TurnOutcome::Completed));
+    assert_eq!(hooks.after_calls.load(Ordering::SeqCst), 1);
+    assert_eq!(
+        ops(&world, "tool.hooks").len(),
+        3,
+        "before, check and the one spilled after dispatch"
+    );
+}
+
+// An unsaved spill dispatches after exactly once.
+#[test]
+fn an_unsaved_spill_dispatches_after_once() {
+    let rules = Arc::new(FakeRules::default());
+    let tool = Arc::new(ProbeTool::reads("atlas"));
+    tool.spilling(SpillMode::Unsaved);
+    let hooks = Arc::new(ProbeHooks::passing());
+    let mut setup = Setup::new(Arc::clone(&rules));
+    setup.tools.push(Arc::clone(&tool));
+    setup.hooks = Some(Arc::clone(&hooks));
+    let home = fakes::TempDir::new("fiber-tool-timing");
+    let mut world = build(
+        &setup,
+        home,
+        vec![tool_answer("atlas", json!({}), 0), text_answer("Done.", 0)],
+    );
+    prompt(&world, "hi");
+    assert_eq!(turn(&mut world).unwrap(), Some(TurnOutcome::Completed));
+    assert_eq!(hooks.after_calls.load(Ordering::SeqCst), 1);
+    assert_eq!(ops(&world, "tool.hooks").len(), 3);
+}
+
+// A spill the loop cannot clean up fails before any after dispatch.
+#[test]
+fn an_unclean_spill_fails_before_any_after_dispatch() {
+    let rules = Arc::new(FakeRules::default());
+    let tool = Arc::new(ProbeTool::reads("atlas"));
+    tool.spilling(SpillMode::UnsavedBadLeft);
+    let hooks = Arc::new(ProbeHooks::passing());
+    let mut setup = Setup::new(Arc::clone(&rules));
+    setup.tools.push(Arc::clone(&tool));
+    setup.hooks = Some(Arc::clone(&hooks));
+    let home = fakes::TempDir::new("fiber-tool-timing");
+    let mut world = build(
+        &setup,
+        home,
+        vec![tool_answer("atlas", json!({}), 0), text_answer("Done.", 0)],
+    );
+    prompt(&world, "hi");
+    let Err(error) = turn(&mut world) else {
+        panic!("an unremovable spill fails the turn");
+    };
+    assert_eq!(error.code(), ErrorCode::IoFailed);
+    assert_eq!(
+        hooks.after_calls.load(Ordering::SeqCst),
+        0,
+        "no after dispatch"
+    );
+    assert_eq!(ops(&world, "tool.hooks").len(), 2, "before and check only");
+}
+
+// A shutdown suppresses the after dispatch: the completion carries no output.
+#[test]
+fn a_shutdown_suppresses_the_after_dispatch() {
+    let rules = Arc::new(FakeRules::default());
+    let tool = Arc::new(ProbeTool::reads("atlas"));
+    let hooks = Arc::new(ProbeHooks::passing());
+    let mut setup = Setup::new(Arc::clone(&rules));
+    setup.tools.push(Arc::clone(&tool));
+    setup.hooks = Some(Arc::clone(&hooks));
+    let home = fakes::TempDir::new("fiber-tool-timing");
+    let mut world = build(
+        &setup,
+        home,
+        vec![tool_answer("atlas", json!({}), 0), text_answer("Done.", 0)],
+    );
+    world.cancel.shutdown(0);
+    let looped = world.loop_mut();
+    let shaped = looped
+        .shape(
+            crate::hooks::Ran {
+                tool: "atlas",
+                arguments: &Map::new(),
+                status: contract::events::CallStatus::Completed,
+                text: vec![contract::shapes::ContentPart::Text {
+                    text: "read it".into(),
+                }],
+                images: Vec::new(),
+                details: None,
+                process: None,
+                rewritten: None,
+                spilled: None,
+            },
+            contract::tool::Bound::DEFAULT,
+            &ActionId("a_test".into()),
+            None,
+        )
+        .expect("a shutdown shapes empty output");
+    assert!(shaped.content.is_empty());
+    assert_eq!(
+        hooks.after_calls.load(Ordering::SeqCst),
+        0,
+        "no after dispatch"
+    );
+    assert!(ops(&world, "tool.hooks").is_empty());
+}
+
+// Later cap work stays outside the closed after timer.
+#[test]
+fn later_cap_work_stays_outside_the_after_timer() {
+    let rules = Arc::new(FakeRules::default());
+    let tool = Arc::new(ProbeTool::reads("atlas"));
+    let hooks = Arc::new(ProbeHooks::staged(
+        BeforeToolOutcome::Unchanged,
+        CheckOutcome::Passed,
+        AfterToolOutcome::Unchanged,
+        0,
+        0,
+        1,
+    ));
+    let mut setup = Setup::new(Arc::clone(&rules));
+    setup.tools.push(Arc::clone(&tool));
+    setup.hooks = Some(Arc::clone(&hooks));
+    let home = fakes::TempDir::new("fiber-tool-timing");
+    let mut world = build(
+        &setup,
+        home,
+        vec![tool_answer("atlas", json!({}), 0), text_answer("Done.", 0)],
+    );
+    arm_after_dispatch_advance(10);
+    prompt(&world, "hi");
+    assert_eq!(turn(&mut world).unwrap(), Some(TurnOutcome::Completed));
+    assert!(
+        world
+            .clock
+            .now()
+            .checked_duration_since(world.origin)
+            .unwrap_or_default()
+            >= Duration::from_millis(10),
+        "the armed boundary really advanced the clock"
+    );
+    let records = ops(&world, "tool.hooks");
+    assert_eq!(records.len(), 3);
+    assert_eq!(
+        records[2].ms, 1,
+        "the timer closed before the later 10 ms of cap work"
+    );
+}
+
+// A tool result carrying job records reaches the shared after dispatch once.
+#[test]
+fn a_job_bearing_result_reaches_one_after_dispatch() {
+    use contract::JobId;
+    use contract::events::{JobCompleted, Outcome};
+    let rules = Arc::new(FakeRules::default());
+    let tool = Arc::new(ProbeTool::reads("atlas"));
+    tool.queue_jobs(vec![contract::jobs::JobRecord::Completed(JobCompleted {
+        job_id: JobId("j_1".into()),
+        status: Outcome::Completed,
+        error: None,
+        process: None,
+        output_tail: None,
+    })]);
+    let hooks = Arc::new(ProbeHooks::passing());
+    let mut setup = Setup::new(Arc::clone(&rules));
+    setup.tools.push(Arc::clone(&tool));
+    setup.hooks = Some(Arc::clone(&hooks));
+    let home = fakes::TempDir::new("fiber-tool-timing");
+    let mut world = build(
+        &setup,
+        home,
+        vec![tool_answer("atlas", json!({}), 0), text_answer("Done.", 0)],
+    );
+    prompt(&world, "hi");
+    assert_eq!(turn(&mut world).unwrap(), Some(TurnOutcome::Completed));
+    assert_eq!(hooks.after_calls.load(Ordering::SeqCst), 1);
+    assert_eq!(
+        ops(&world, "tool.hooks").len(),
+        3,
+        "before, check and the one shared after dispatch"
+    );
+    assert!(
+        kinds(&world).contains(&"job_completed".to_owned()),
+        "the job record is written with the result"
+    );
+}
+
+// An autonomous job end writes its completion with no tool timer.
+#[test]
+fn an_autonomous_job_end_writes_no_tool_timer() {
+    use contract::JobId;
+    use contract::events::{JobCompleted, Outcome};
+    use contract::inbox::{Claim, JobNotice};
+    let rules = Arc::new(FakeRules::default());
+    let tool = Arc::new(ProbeTool::reads("atlas"));
+    let mut setup = Setup::new(Arc::clone(&rules));
+    setup.tools.push(Arc::clone(&tool));
+    let home = fakes::TempDir::new("fiber-tool-timing");
+    let mut world = build(&setup, home, vec![text_answer("Done.", 0)]);
+    world
+        .inbox_tx
+        .as_ref()
+        .expect("the inbox is open")
+        .send(Delivery::Job(JobNotice {
+            completed: JobCompleted {
+                job_id: JobId("j_1".into()),
+                status: Outcome::Completed,
+                error: None,
+                process: None,
+                output_tail: None,
+            },
+            claim: Claim(Box::new(|| Some(Vec::new()))),
+            delegate: None,
+        }))
+        .unwrap();
+    let flight = spawn_turn(&mut world);
+    assert_eq!(
+        join_turn(&mut world, flight).unwrap(),
+        Some(TurnOutcome::Completed)
+    );
+    assert!(
+        tool_records(&world).is_empty(),
+        "no tool ran, so no tool phase"
+    );
+    assert!(
+        kinds(&world).contains(&"job_completed".to_owned()),
+        "the autonomous end still completes"
     );
 }

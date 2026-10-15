@@ -307,6 +307,20 @@ impl Loop {
         let mut note = None;
         let mut why = String::new();
         let mut last = String::new();
+        // A budget already reached admits no stage and times nothing.
+        if self.review_over_budget() {
+            return Ok(StageReply::Budget);
+        }
+        // One entered stage's timer, with the session's registered name
+        // for the call under review. The public replay entry built
+        // outside the registry has no validated name and times nothing.
+        let _stage =
+            self.tools
+                .get_key_value(under.call.name.as_str())
+                .and_then(|(registered, _)| {
+                    self.diag
+                        .timed_tool(contract::diag::Op::ToolReviewer, registered)
+                });
         for _ in 0..2 {
             if self.review_over_budget() {
                 return Ok(StageReply::Budget);

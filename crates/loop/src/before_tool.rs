@@ -154,11 +154,19 @@ impl Loop {
         if self.shutting_down() {
             return Ok(Err(self.cancelled_before_ran()));
         }
-        let answer = hooks.before_tool(&BeforeToolCall {
-            tool: tool_name,
-            arguments: &arguments,
-            declared: &effects.declared,
-        });
+        let answer = {
+            // One actual `before_tool` dispatch: the guard closes before
+            // the notices, so classification and cap work stay outside.
+            // `tool_name` names the registered tool `checked` admitted.
+            let _dispatch = self
+                .diag
+                .timed_tool(contract::diag::Op::ToolHooks, tool_name);
+            hooks.before_tool(&BeforeToolCall {
+                tool: tool_name,
+                arguments: &arguments,
+                declared: &effects.declared,
+            })
+        };
         for notice in answer.notices {
             self.write(&Event::Notice(notice), turn, None)?;
         }
@@ -214,11 +222,18 @@ impl Loop {
         if self.shutting_down() {
             return Ok(Err(self.cancelled_before_ran()));
         }
-        let check = hooks.check_tool(&BeforeToolCall {
-            tool: tool_name,
-            arguments: &arguments,
-            declared: &effects.declared,
-        });
+        let check = {
+            // One actual `check` dispatch: the guard closes before the
+            // notices, as the `before_tool` one does.
+            let _dispatch = self
+                .diag
+                .timed_tool(contract::diag::Op::ToolHooks, tool_name);
+            hooks.check_tool(&BeforeToolCall {
+                tool: tool_name,
+                arguments: &arguments,
+                declared: &effects.declared,
+            })
+        };
         for notice in check.notices {
             self.write(&Event::Notice(notice), turn, None)?;
         }
