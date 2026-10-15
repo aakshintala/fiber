@@ -27,7 +27,9 @@ mod raw_http_server;
 mod record;
 pub mod refused;
 mod rerun;
+mod rules;
 mod scripted_provider;
+mod skills;
 mod temp_dir;
 pub mod ustar;
 mod watchdog;
@@ -44,6 +46,8 @@ pub use emit::Recorder;
 pub use finished::finished;
 pub use gated_http::GatedHttp;
 pub use locks::{FakeLock, NoLock};
+pub use rules::{NoRules, RecordingRules};
+pub use skills::NoSkills;
 pub mod git;
 pub use oauth_server::{OauthReply, OauthRequest, OauthServer, jwt};
 pub use process_group::{
