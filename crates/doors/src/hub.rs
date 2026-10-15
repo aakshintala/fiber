@@ -11,7 +11,9 @@
 //! cannot hang the client; the returned stream has no read timeout.
 
 mod address;
+mod listed;
 pub use address::{Address, NAME_RULE, check_name};
+pub use listed::{Target, target};
 
 use std::io::{self, Read};
 use std::os::unix::net::UnixStream;
