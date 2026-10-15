@@ -624,6 +624,7 @@ Durable. The call's outcome.
 | `content` | content parts | yes | exactly what the model is sent (`docs/tools.md`, "What a result carries") |
 | `details` | any JSON | no | data for clients, such as an edit's diff; never sent to the model |
 | `artifact` | string | no | the full output's path, when the result was cut or a hook returned text for it |
+| `kept` | array | no | when the result was cut, the byte ranges of the full output that `content` holds, each `[start, end]` (integers, `end` exclusive), in order (`docs/tools.md`, "Bounded results") |
 | `changes` | array | no | on a call that changed files, one object per file: `path` (string) and `added` and `removed` (integers, lines) |
 | `control` | object | no | instructions to the loop: `handoff` (string), a handoff note (`docs/handoff.md`); `questions` (`questions`); `name` (string), a session name (`docs/tools.md`, "What a result carries"); `skill` (an object holding `name` and `path`, both strings), a skill the call loaded (`docs/tools.md`, "Skills") |
 | `changed_by` | `changed_by` | no | when an `after_tool` hook rewrote the result |
@@ -1310,6 +1311,7 @@ Every driver command is answered with exactly one of these, echoing its id
 | `commands` | `commands`, an array with one object per `/name` the session runs: `name` (string), `description` (string), `argument_hint` (string, the skill's `argument-hint` or an MCP prompt's arguments, absent when it has none) and `tag` (string: `skill`, `template`, the extension's name, or the MCP server's name) (`docs/invocation.md`, "What each command does") |
 | `skills` | `skills`, an array with one object per skill discovery found, switched-off and shadowed ones included: `name` (string), `description` (string), `path` (string, its `SKILL.md`), `source` (`repository`, `personal`, `extension` or `builtin`), `extension` (string, the extension's name, only when `source` is `extension`), `model_invocable` (boolean, false for a skill with `disable-model-invocation` and for one in an extension's `prompts/`), `disabled` (boolean, true when `skills.disabled` names it), `shadows` (array of strings, the `SKILL.md` paths of the skills it shadows) and `shadowed_by` (string, the winning skill's `SKILL.md` path, only on a shadowed skill) (`docs/invocation.md`, "What each command does") |
 | `history` | `lines`, an array of the session's durable lines in the range asked for, each a whole line as the log holds it, in `seq` order |
+| `artifact_page` | `text` (string), the page, whole lines from `offset`; `next` (integer), the byte offset after the page, absent at the end of the file; and `size` (integer), the file's size in bytes |
 | `shell` | `output` (string), `artifact` (string, when cut) and `process` (`process`), as on `shell_command` |
 | `start` | `session_id` (string), the session the hub started, over the hub (`docs/invocation.md`, "The hub") |
 | `pairing_code` | `code` (string), a new single-use pairing code, over the hub (`docs/invocation.md`, "Remote clients") |
