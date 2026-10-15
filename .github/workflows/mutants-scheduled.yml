@@ -50,17 +50,56 @@ jobs:
         timeout-minutes: 300
         run: cargo nextest run --workspace --no-fail-fast
 
+  list:
+    name: List workspace mutants
+    runs-on: ubuntu-24.04
+    # The list resolves workspace metadata but runs no tests; the bound is
+    # generous because scheduled cold-run history is not available.
+    timeout-minutes: 30
+    outputs:
+      matrix: ${{ steps.rotation.outputs.matrix }}
+    steps:
+      - name: Checkout scheduled SHA
+        timeout-minutes: 5
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+      - name: Install the toolchain
+        timeout-minutes: 10
+        run: rustup toolchain install
+      - name: Restore the build cache
+        timeout-minutes: 5
+        uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+        with:
+          shared-key: ci
+          save-if: false
+      - name: Install cargo-mutants
+        timeout-minutes: 5
+        uses: taiki-e/install-action@83ac0ad63c0167e6f06796fab0fce28db1bf3db0 # v2.87.22
+        with:
+          tool: cargo-mutants
+      - name: Count mutants and pick this rotation day's shards
+        id: rotation
+        timeout-minutes: 15
+        run: |
+          count=$(cargo mutants --workspace --test-tool nextest --list | awk 'NF { n++ } END { print n + 0 }')
+          epoch_day=$(( $(date -u +%s) / 86400 ))
+          rotation=$(scripts/mutants-rotation "$count" "$epoch_day")
+          matrix=$(jq -c '{shard: .shards, total: [.total], day: [.day]}' <<<"$rotation")
+          echo "matrix=$matrix" >>"$GITHUB_OUTPUT"
+          echo "Mutants: $count; rotation: $rotation." >>"$GITHUB_STEP_SUMMARY"
+
   mutants:
-    name: Mutants (shard ${{ matrix.shard }})
-    needs: baseline
+    name: Mutants (day ${{ matrix.day }} shard ${{ matrix.shard }}/${{ matrix.total }})
+    needs: [baseline, list]
     runs-on: ubuntu-24.04
     # Generous initial bound for whole-workspace mutation testing with no scheduled cold-run history.
     timeout-minutes: 360
     strategy:
       fail-fast: false
       max-parallel: 16
-      matrix:
-        shard: [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15]
+      matrix: ${{ fromJSON(needs.list.outputs.matrix) }}
     steps:
       - name: Checkout scheduled SHA
         timeout-minutes: 5
@@ -89,9 +128,12 @@ jobs:
         timeout-minutes: 300
         env:
           SHARD: ${{ matrix.shard }}
+          TOTAL: ${{ matrix.total }}
+          ROTATION_DAY: ${{ matrix.day }}
         run: |
-          mutant_list="$RUNNER_TEMP/mutants-scheduled-$SHARD.txt"
-          cargo mutants --workspace --test-tool nextest --shard "$SHARD/16" --sharding round-robin --list >"$mutant_list"
+          mutant_list="$RUNNER_TEMP/mutants-scheduled-day$ROTATION_DAY-$SHARD-of-$TOTAL.txt"
+          cargo mutants --workspace --test-tool nextest --shard "$SHARD/$TOTAL" --sharding round-robin --list >"$mutant_list"
+          echo "Rotation day $ROTATION_DAY, shard $SHARD of $TOTAL (--shard $SHARD/$TOTAL, round-robin)." >>"$GITHUB_STEP_SUMMARY"
           if [ ! -s "$mutant_list" ]; then
             echo "no mutants in shard $SHARD"
             exit 0
@@ -117,7 +159,7 @@ jobs:
             --test-tool nextest
             --baseline=skip
             --timeout 120
-            --shard "$SHARD/16"
+            --shard "$SHARD/$TOTAL"
             --sharding round-robin
           )
           if systemd-run --user --scope -p MemoryMax=12G -p OOMPolicy=kill -- cargo mutants "${mutant_args[@]}"; then
@@ -138,6 +180,6 @@ jobs:
         if: always()
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
-          name: mutants-scheduled-${{ matrix.shard }}
+          name: mutants-scheduled-day${{ matrix.day }}-shard${{ matrix.shard }}-of${{ matrix.total }}
           path: mutants.out
           if-no-files-found: ignore

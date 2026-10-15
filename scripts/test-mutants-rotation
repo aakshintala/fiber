@@ -1,0 +1,60 @@
+#!/usr/bin/env bash
+# The self-test for scripts/mutants-rotation: the rotation arithmetic the
+# scheduled mutants workflow reads from its list job. Each case pins the
+# exact JSON line, including the day edges (12800 holds one day, 12801
+# needs two) and both rotation days of a two-day rotation.
+set -euo pipefail
+cd "$(git rev-parse --show-toplevel)"
+
+tmp=$(mktemp -d)
+trap 'rm -rf "$tmp"' EXIT
+
+fail() {
+  echo "scripts/test-mutants-rotation: $1" >&2
+  exit 1
+}
+
+check() {
+  local count=$1
+  local epoch_day=$2
+  local want=$3
+  scripts/mutants-rotation "$count" "$epoch_day" >"$tmp/got.txt" 2>"$tmp/err.txt" || fail "exit $? for count $count day $epoch_day"
+  [ -s "$tmp/err.txt" ] && { cat "$tmp/err.txt" >&2; fail "stderr on count $count day $epoch_day"; }
+  printf '%s\n' "$want" >"$tmp/want.txt"
+  cmp -s "$tmp/want.txt" "$tmp/got.txt" || {
+    echo "--- want:" >&2
+    cat "$tmp/want.txt" >&2
+    echo "--- got:" >&2
+    cat "$tmp/got.txt" >&2
+    fail "output differs for count $count day $epoch_day"
+  }
+}
+
+one_day='{"days":1,"day":0,"total":16,"shards":[0,1,2,3,4,5,6,7,8,9,10,11,12,13,14,15]}'
+two_day_0='{"days":2,"day":0,"total":32,"shards":[0,1,2,3,4,5,6,7,8,9,10,11,12,13,14,15]}'
+two_day_1='{"days":2,"day":1,"total":32,"shards":[16,17,18,19,20,21,22,23,24,25,26,27,28,29,30,31]}'
+
+# 12800 mutants are exactly one day of 16 shards of 800.
+check 12800 0 "$one_day"
+# One more mutant needs a second day.
+check 12801 1 "$two_day_1"
+# 23900 mutants still fit in two days.
+check 23900 1 "$two_day_1"
+# The worked example: 20000 mod 2 is 0, so the first block runs.
+check 23900 20000 "$two_day_0"
+# No mutants still names one day, so the workflow has a matrix to run.
+check 0 0 "$one_day"
+
+# A non-numeric count exits 2 with empty stdout.
+rc=0
+scripts/mutants-rotation abc 0 >"$tmp/got.txt" 2>"$tmp/err.txt" || rc=$?
+[ "$rc" -eq 2 ] || fail "non-numeric count exited $rc, want 2"
+[ -s "$tmp/got.txt" ] && fail "non-numeric count printed stdout"
+[ -s "$tmp/err.txt" ] || fail "non-numeric count printed no message"
+
+# A non-numeric epoch day exits 2 with empty stdout.
+rc=0
+scripts/mutants-rotation 12800 abc >"$tmp/got.txt" 2>"$tmp/err.txt" || rc=$?
+[ "$rc" -eq 2 ] || fail "non-numeric epoch day exited $rc, want 2"
+[ -s "$tmp/got.txt" ] && fail "non-numeric epoch day printed stdout"
+[ -s "$tmp/err.txt" ] || fail "non-numeric epoch day printed no message"
