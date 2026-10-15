@@ -199,6 +199,11 @@ pub(crate) fn parts_in(
     let budget = config
         .get("budget.usd", None)
         .and_then(|(value, _)| value.as_f64());
+    // Loading extensions runs under its own timer, from the installed
+    // provider packages through the session extensions' load. The budget
+    // read above stays outside, and the diagnostics below stay outside:
+    // the guard ends before either.
+    let extensions_timing = log::diag::timed(&diag, Op::StartupExtensions, None, None);
     let (mut providers, notices) =
         Providers::load_enabled(&home, &config).map_err(|e| failed(e.code(), e))?;
     startup_notices.extend(notices);
@@ -211,6 +216,7 @@ pub(crate) fn parts_in(
         session_locks,
         host,
     );
+    drop(extensions_timing);
     // The session's diagnostics, installed after load and before any
     // provider work: at debug the installed writer observes eligible
     // provider HTTP and times non-tool hook chains, and the retained sink
@@ -221,6 +227,12 @@ pub(crate) fn parts_in(
             Arc::clone(&diag) as Arc<dyn contract::diag::DebugLog>,
         );
     }
+    // Routing runs under its own timer, from adding the Lua providers
+    // through choosing the model, reading its credential, connecting
+    // and choosing the reviewer. Unloading below stays outside: the
+    // guard ends before it. A failure after entry still emits the line
+    // on drop, with the unchanged error.
+    let routing_timing = log::diag::timed(&diag, Op::StartupRouting, None, None);
     // One runner for every startup credential read: the session key, the
     // Lua discovery and refresh gate, and the reviewer lookup all run
     // through the session's reads, so one cancel reaches them all.
@@ -312,6 +324,7 @@ pub(crate) fn parts_in(
         Ok((reviewer, observe)) => (Ok(reviewer), observe),
         Err(failure) => (Err(failure), None),
     };
+    drop(routing_timing);
     // Every refreshed provider the session does not use is unloaded once
     // its list is written: only the session's and the reviewer's stay
     // loaded, held by `Switching` (`docs/model-routing.md`, "Model

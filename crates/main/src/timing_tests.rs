@@ -192,21 +192,63 @@ fn an_info_start_reads_the_clock_once_and_writes_nothing() {
 }
 
 #[test]
-fn a_debug_start_writes_one_config_line_over_two_reads() {
+fn a_debug_start_times_each_startup_operation_in_order() {
     let reads = Arc::new(crate::switch::Reads::default());
     let (root, clock, started) = parts("debug", "scripted/s.json", reads);
     started.unwrap();
     let lines = op_lines(&root.path().join("home"));
-    assert_eq!(lines.len(), 1);
-    let line = &lines[0];
-    assert_eq!(line["level"], "debug");
-    assert_eq!(line["process"], "session");
-    assert!(line.get("session_id").is_none(), "{line}");
-    assert_eq!(line["code"], "op_timing");
-    assert_eq!(line["message"], "An operation ended.", "{line}");
-    let data = line["data"].as_object().expect("data is an object");
-    assert_eq!(data.keys().collect::<Vec<_>>(), vec!["ms", "op"], "{line}");
-    assert_eq!(line["data"]["op"], "startup.config");
-    assert_eq!(line["data"]["ms"], 2);
-    assert_eq!(clock.reads(), 2);
+    assert_eq!(lines.len(), 3);
+    for line in &lines {
+        assert_eq!(line["level"], "debug");
+        assert_eq!(line["process"], "session");
+        assert!(line.get("session_id").is_none(), "{line}");
+        assert_eq!(line["code"], "op_timing");
+        assert_eq!(line["message"], "An operation ended.", "{line}");
+        let data = line["data"].as_object().expect("data is an object");
+        assert_eq!(data.keys().collect::<Vec<_>>(), vec!["ms", "op"], "{line}");
+    }
+    let ops: Vec<&str> = lines
+        .iter()
+        .map(|line| line["data"]["op"].as_str().unwrap())
+        .collect();
+    assert_eq!(
+        ops,
+        ["startup.config", "startup.extensions", "startup.routing"],
+        "config ends before extensions starts, extensions before routing"
+    );
+    let ms: Vec<u64> = lines
+        .iter()
+        .map(|line| line["data"]["ms"].as_u64().unwrap())
+        .collect();
+    assert_eq!(ms, [2, 4, 6]);
+    assert_eq!(clock.reads(), 6);
+}
+
+#[test]
+fn an_unknown_model_keeps_its_error_and_still_writes_all_three_lines() {
+    let debug_reads = Arc::new(crate::switch::Reads::default());
+    let (debug_root, debug_clock, debug_started) = parts("debug", "nope/x", debug_reads);
+    let debug_failed = debug_started.err().unwrap();
+    let info_reads = Arc::new(crate::switch::Reads::default());
+    let (info_root, info_clock, info_started) = parts("info", "nope/x", info_reads);
+    let info_failed = info_started.err().unwrap();
+    assert_eq!(debug_failed.code, info_failed.code);
+    assert_eq!(debug_failed.message, info_failed.message);
+    let lines = op_lines(&debug_root.path().join("home"));
+    let ops: Vec<&str> = lines
+        .iter()
+        .map(|line| line["data"]["op"].as_str().unwrap())
+        .collect();
+    assert_eq!(
+        ops,
+        ["startup.config", "startup.extensions", "startup.routing"]
+    );
+    let ms: Vec<u64> = lines
+        .iter()
+        .map(|line| line["data"]["ms"].as_u64().unwrap())
+        .collect();
+    assert_eq!(ms, [2, 4, 6]);
+    assert_eq!(debug_clock.reads(), 6);
+    assert!(op_lines(&info_root.path().join("home")).is_empty());
+    assert_eq!(info_clock.reads(), 1);
 }
