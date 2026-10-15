@@ -10,7 +10,7 @@ use std::time::Duration;
 use crate::connect::{Here, connect, connect_observed};
 use config::{Config, Sources};
 use contract::diag::DebugLog as _;
-use contract::diag::Observe;
+use contract::diag::{Observe, Op};
 use contract::provider::Provider;
 use contract::shapes::Failure;
 use contract::{ErrorCode, ThinkingLevel};
@@ -156,6 +156,11 @@ pub(crate) fn parts_in(
     process: log::diag::Process,
 ) -> Result<Parts, Failure> {
     let (sessions, project) = ::cli::project_of(&home, &workspace)?;
+    // The one monotonic read the `startup.config` timer starts from,
+    // taken before the configuration is read so the line covers the
+    // load and the writer's construction. At `info` the timer stays
+    // shut, so this stamp is the only extra cost.
+    let started = clock.now();
     let config = Config::load(Sources {
         home: home.clone(),
         workspace: workspace.clone(),
@@ -176,6 +181,16 @@ pub(crate) fn parts_in(
             log::diag::Level::Info
         },
         Arc::clone(&clock),
+    ));
+    // The configuration timer ends here, dropped at once so it covers
+    // the load and the writer above and ends before any extension work.
+    // A failed load returns before any writer exists, so it writes
+    // nothing and nothing re-reads the configuration.
+    drop(log::diag::timed(
+        &diag,
+        Op::StartupConfig,
+        None,
+        Some(started),
     ));
     // Configuration notices first, then loading, discovery and
     // placeholders, then the thinking notice below: each load's notices
