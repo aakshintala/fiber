@@ -698,6 +698,20 @@ fn a_bound_name_with_a_trailing_comma_is_a_run_time_read() {
 }
 
 #[test]
+fn a_bound_name_followed_by_another_argument_is_not_a_run_time_read() {
+    let files = [runtime_src(
+        "contract",
+        "crates/contract/src/golden_tests.rs",
+        "src/golden_tests.rs",
+        "let p = Path::new(env!(\"CARGO_MANIFEST_DIR\")).join(\"data.bin\");\nlet bytes = std::fs::read(&p, extra).unwrap();\n",
+    )];
+    assert_eq!(
+        runtime_read_mismatches(&files, &members_with_tools()).unwrap(),
+        Vec::<String>::new()
+    );
+}
+
+#[test]
 fn a_two_level_join_passed_to_a_read_is_not_a_run_time_read() {
     let files = [runtime_src(
         "contract",
