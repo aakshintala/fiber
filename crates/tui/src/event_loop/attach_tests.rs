@@ -1665,9 +1665,6 @@ fn attach_stash_peak_at_the_ten_mib_fixture() {
         commands
             .join()
             .unwrap_or_else(|err| panic!("join: {err:?}"));
-        // The top page spans 513 lines, so its fetch is three `history`
-        // commands of at most 256 lines; the later waits stash nothing
-        // more, the hub being exhausted, so the peak still stands.
         // The top page spans 513 lines, fetched in three `history`
         // commands, plus the one stale page the live folds mark next.
         // The later waits stash nothing more, the hub being exhausted,
