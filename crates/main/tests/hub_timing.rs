@@ -21,6 +21,7 @@ use std::sync::{Arc, Mutex};
 
 use fakes::ProviderServer;
 use serde_json::{Value, json};
+use support::kinds_without_attention as kinds;
 use support::*;
 
 /// Prompt and workspace text no timer line may carry.
@@ -33,6 +34,57 @@ fn op_lines(text: &str) -> Vec<Value> {
         .filter(|line: &Value| line["code"] == "op_timing")
         .collect()
 }
+
+/// The event kinds of `lines`, in order, without the observer's own
+/// lines: `session_status` and `attention` fall where they fall, and the
+/// ephemeral `clients` line does too, so none is pinned (as
+/// `hub_start_overrides` filters them).
+fn ordered_kinds(lines: &[Value]) -> Vec<&str> {
+    kinds(lines)
+        .into_iter()
+        .filter(|kind| *kind != "clients")
+        .collect()
+}
+
+/// The complete, ordered stream of the first turn, from the session's
+/// start through its first `turn_completed`.
+const FIRST_TURN_KINDS: [&str; 14] = [
+    "session_started",
+    "fiber_started",
+    "extensions_loaded",
+    "preamble_built",
+    "opening_message",
+    "turn_started",
+    "step_started",
+    "assistant_message_started",
+    "assistant_message_delta",
+    "assistant_message_delta",
+    "text_completed",
+    "usage_recorded",
+    "assistant_message_completed",
+    "turn_completed",
+];
+
+/// The complete, ordered stream the resumed turn collects: the exited
+/// process's `fiber_exited`, already forwarded before the exit the test
+/// closed on, then the resumed process's start through its
+/// `turn_completed`. Deltas are live-only lines, so the resumed stream
+/// carries none: the hub replays what the log holds.
+const SECOND_TURN_KINDS: [&str; 13] = [
+    "fiber_exited",
+    "session_started",
+    "fiber_started",
+    "extensions_loaded",
+    "preamble_built",
+    "opening_message",
+    "turn_started",
+    "step_started",
+    "assistant_message_started",
+    "text_completed",
+    "usage_recorded",
+    "assistant_message_completed",
+    "turn_completed",
+];
 
 /// The `op_timing` lines naming `op`, in file order.
 fn ops<'a>(lines: &'a [Value], op: &str) -> Vec<&'a Value> {
@@ -51,6 +103,7 @@ fn sessions(client: &Socket, id: &str, seen: &mut Vec<Value>) -> Value {
     ));
     let ack = recv_answer(client, id, "the sessions acknowledgement");
     assert_eq!(ack["kind"], "command_accepted", "{ack}");
+    assert_eq!(ack["payload"]["command_id"], json!(id), "{ack}");
     seen.push(ack.clone());
     ack["payload"]["result"].clone()
 }
@@ -118,12 +171,13 @@ fn debug_times_hub_start_resume_listing_replay_and_socket() {
     // Hub start, accepted subscription and first turn.
     let session = start_session(&client, &workspace, PROBE);
     subscribe(&client, &session);
-    seen.extend(until(&client, "the first turn to complete", |line| {
+    let first = until(&client, "the first turn to complete", |line| {
         line["kind"] == "turn_completed"
-    }));
+    });
+    seen.extend(first.iter().cloned());
 
     // A listing while the session runs.
-    sessions(&client, "c_ses1", &mut seen);
+    let listed_live = sessions(&client, "c_ses1", &mut seen);
 
     // Exit through the session's own socket: its EOF is the completion
     // signal the hub's listing after it follows.
@@ -133,13 +187,17 @@ fn debug_times_hub_start_resume_listing_replay_and_socket() {
 
     // A listing after the exit, then a prompt that resumes the session
     // and replays the kept subscription for its second turn.
-    sessions(&client, "c_ses2", &mut seen);
+    let listed_exited = sessions(&client, "c_ses2", &mut seen);
     client.send(&format!(
         "{{\"id\":\"c_p2\",\"session_id\":\"{session}\",\"command\":\"prompt\",\"args\":{{\"content\":[{{\"type\":\"text\",\"text\":\"{PROBE}-again\"}}]}}}}"
     ));
-    seen.extend(until(&client, "the resumed turn to complete", |line| {
+    let resumed_ack = recv_answer(&client, "c_p2", "the resumed prompt acknowledgement");
+    assert_eq!(resumed_ack["kind"], "command_accepted", "{resumed_ack}");
+    seen.push(resumed_ack);
+    let second = until(&client, "the resumed turn to complete", |line| {
         line["kind"] == "turn_completed"
-    }));
+    });
+    seen.extend(second.iter().cloned());
 
     // Exit again, so no session holds the workspace, then stop the hub:
     // both logs are complete once their processes are gone.
@@ -171,6 +229,44 @@ fn debug_times_hub_start_resume_listing_replay_and_socket() {
         &workspace,
     );
     assert_eq!(ops(&hub_timings, "sessions.list").len(), 2);
+
+    // Both turns ran to completion over the socket, in order, with
+    // nothing missing, duplicated or reordered.
+    assert_eq!(ordered_kinds(&first), FIRST_TURN_KINDS, "{first:?}");
+    assert_eq!(ordered_kinds(&second), SECOND_TURN_KINDS, "{second:?}");
+    // The resumed stream opens with the exited process's goodbye.
+    let exited = second
+        .iter()
+        .find(|line| line["kind"] == "fiber_exited")
+        .expect("the exited process says goodbye");
+    assert_eq!(exited["payload"]["exit_code"], json!(0), "{exited}");
+    // The fake model's text arrived on both turns, and every line
+    // naming a session names this one.
+    for (turn, what) in [(&first, "the first turn"), (&second, "the resumed turn")] {
+        let text = turn
+            .iter()
+            .find(|line| line["kind"] == "text_completed")
+            .expect("the turn completes its text");
+        assert_eq!(text["payload"]["text"], json!("Hello."), "{text}");
+        for line in turn {
+            if let Some(id) = line.get("session_id").and_then(Value::as_str) {
+                assert_eq!(id, session, "{what} stays on its session: {line}");
+            }
+        }
+    }
+    // The listings answered with the stable shape, whatever the feed's
+    // scan had followed when each ran: pinning followed contents would
+    // pin scan timing, which is independently triggered.
+    for (listing, id) in [(&listed_live, "c_ses1"), (&listed_exited, "c_ses2")] {
+        let mut keys: Vec<&str> = listing
+            .as_object()
+            .expect("the listing answers with an object")
+            .keys()
+            .map(String::as_str)
+            .collect();
+        keys.sort();
+        assert_eq!(keys, ["exited", "live"], "{id}: {listing}");
+    }
 
     // Both session processes timed their socket preparation into the
     // session's own diagnostic file.

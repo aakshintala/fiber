@@ -36,6 +36,7 @@ use std::sync::atomic::AtomicBool;
 use std::sync::{Arc, Mutex};
 use std::thread;
 
+use contract::diag::DebugLog;
 use contract::{CommandId, ErrorCode, SessionId};
 use serde_json::{Map, Value};
 
@@ -462,17 +463,6 @@ fn attach_inner(
 ) {
     let mark = crate::rejoin::Mark::now(&hub.home, session);
     let mut replay = replay;
-    // An actual replay starts its timer up front: the guard drops at
-    // once on a failure below, and moves into the pending slot once the
-    // worker can observe its acknowledgement. At info there is no timer.
-    let mut replay_timer = replay.as_ref().and_then(|_| {
-        log::diag::timed(
-            &hub.diag,
-            contract::diag::Op::HubSubscribeReplay,
-            None,
-            None,
-        )
-    });
     let mut replayed_id: Option<String> = None;
     let admission = candidate_epoch.map(|_| lock(relays));
     if let Some(candidate_epoch) = candidate_epoch {
@@ -484,6 +474,19 @@ fn attach_inner(
         };
         replay = Some(current);
     }
+    // An actual replay starts its timer here, after the candidate
+    // resolved: the guard drops at once on a failure below, and moves
+    // into the pending slot once the worker can observe its
+    // acknowledgement. At info there is no timer, and the early return
+    // above keeps none.
+    let mut replay_timer = replay.as_ref().and_then(|_| {
+        log::diag::timed(
+            &hub.diag,
+            contract::diag::Op::HubSubscribeReplay,
+            None,
+            None,
+        )
+    });
     let replayed: Replayed = Arc::new(Mutex::new(Vec::new()));
     if let Some(line) = replay.as_mut() {
         let minted = crate::start::mint("c_");
@@ -706,9 +709,16 @@ fn relay(
                     // The filter hook above already ran: waiting on the
                     // relays lock here cannot hold it back, so the forced
                     // transfer interleaving stays possible. The guard
-                    // drops after the lock releases, never under it.
-                    let id = ack.as_ref().map(|ack| ack.id.clone());
-                    let guard = id.and_then(|id| lock(relays).take_replay(session, epoch, &id));
+                    // drops after the lock releases, never under it. The
+                    // completion is timing-only: at info no replay was
+                    // registered, so neither the id allocation nor the
+                    // lock is taken.
+                    let guard = if hub.diag.debugging() {
+                        ack.as_ref()
+                            .and_then(|ack| lock(relays).take_replay(session, epoch, &ack.id))
+                    } else {
+                        None
+                    };
                     drop(guard);
                     continue;
                 }
@@ -810,14 +820,23 @@ fn relay(
     // This worker's outstanding replays complete here, before any
     // follow-on rewind work: a disconnect or EOF before acknowledgement
     // ends the timer instead of waiting for a healthy close. Each guard
-    // drops after the lock releases, never under it.
-    let unfinished = lock(relays).take_session_replays(session, epoch);
+    // drops after the lock releases, never under it. Both drains are
+    // timing-only: at info nothing was registered, so no lock is taken.
+    let unfinished = if hub.diag.debugging() {
+        lock(relays).take_session_replays(session, epoch)
+    } else {
+        Vec::new()
+    };
     drop(unfinished);
     if ended {
         crate::rewind::follow(hub, writer, relays, session);
         // Failure-stamped transfers queued above emit here, outside the
         // lock, without waiting for the target reader to exit.
-        let failed = lock(relays).take_completed_replays();
+        let failed = if hub.diag.debugging() {
+            lock(relays).take_completed_replays()
+        } else {
+            Vec::new()
+        };
         drop(failed);
     }
 }

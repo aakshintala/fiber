@@ -140,11 +140,7 @@ impl Session {
         tools: Vec<ToolInfo>,
         out: Box<dyn Write + Send>,
     ) -> Result<Self, Failure> {
-        let opened = open_in(home, dir, log, clock, tools, out, None);
-        if opened.is_err() {
-            fs::remove_dir_all(dir).unwrap_or(());
-        }
-        opened
+        Self::open_with_timing(home, dir, log, clock, tools, out, None)
     }
 
     /// Opens the door side of a new session with the session's timer:

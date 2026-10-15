@@ -30,7 +30,7 @@ use serde_json::{Value, json};
 
 use crate::connection::{Hub, Refused, lock};
 use crate::fake::{FakeStarter, failure};
-use crate::relay::{Kept, Relay, Relays, Replayed, attach};
+use crate::relay::{Kept, Relay, Relays, Replayed, attach, attach_rejoin};
 use crate::resume::SHUTDOWN_BOUND;
 use crate::start::{self, Outcome, START_DEADLINE};
 
@@ -919,6 +919,92 @@ fn an_initial_replay_completes_on_its_rejected_acknowledgement() {
     let epoch = lock(&relays).entries[0].epoch;
     join_relay(take_thread(&relays, REPLAY_SID, epoch));
     assert_op_line(&op_timings(&temp.hub_log()), "hub.subscribe_replay", 0);
+}
+
+#[test]
+fn a_kept_subscription_rejoin_times_its_replay_to_acknowledgement() {
+    let temp = Temp::new();
+    let hub = temp.hub(FakeStarter::hang(&temp.dir));
+    let relays = timing_relays(&hub);
+    let (writer, client_read) = client();
+    // The sweep's candidate: a kept subscription with its mark still
+    // current, as the production rejoin path collects it.
+    let mark = crate::rejoin::Mark::now(&temp.dir, REPLAY_SID);
+    let candidate = {
+        let mut held = lock(&relays);
+        held.subscribed
+            .push((REPLAY_SID.to_owned(), subscribe_line("c_kept", "full")));
+        let epoch = held.mint();
+        assert!(crate::rejoin::admit(
+            &mut held, REPLAY_SID, false, mark, epoch
+        ));
+        epoch
+    };
+    let (hub_end, session_end) = UnixStream::pair().unwrap();
+    session_end.set_read_timeout(Some(DEADLINE)).unwrap();
+    attach_rejoin(REPLAY_SID, hub_end, &hub, &writer, &relays, candidate);
+    // The hub's replay, under an id of its own: the worker cannot have
+    // completed it, since no acknowledgement was sent.
+    let mut line = String::new();
+    BufReader::new(session_end.try_clone().unwrap())
+        .read_line(&mut line)
+        .expect("the rejoin replays the kept subscription");
+    let replay: Value = serde_json::from_str(line.trim_end()).unwrap();
+    assert_eq!(replay["command"], json!("subscribe"), "{replay}");
+    let id = replay.get("id").cloned().unwrap();
+    assert_ne!(id, json!("c_kept"), "the replay carries a minted id");
+    crate::testkit::await_true("the replay registers", {
+        let watching = Arc::clone(&relays);
+        move || lock(&watching).pending_replay.len() == 1
+    });
+    assert!(
+        op_timings(&temp.hub_log()).is_empty(),
+        "no completed timer while the acknowledgement is withheld"
+    );
+    let mut session_end = session_end;
+    session_end.write_all(&ack_bytes(&id, true)).unwrap();
+    session_end.flush().unwrap();
+    // The whole wait is over in no clock time: the timer reports zero.
+    assert_op_line(&await_op_lines(&temp, 1), "hub.subscribe_replay", 0);
+    assert!(lock(&relays).pending_replay.is_empty());
+    // The acknowledgement was the hub's own: the client never sees it.
+    // A live line behind it is what the client reads first.
+    session_end
+        .write_all(b"{\"kind\":\"session_status\",\"ts\":1,\"schema_version\":1,\"payload\":{}}\n")
+        .unwrap();
+    session_end.flush().unwrap();
+    assert_eq!(client_line(&client_read)["kind"], json!("session_status"));
+    // The acknowledgement came before the disconnect: ending now
+    // completes nothing twice.
+    drop(session_end);
+    let epoch = lock(&relays).entries[0].epoch;
+    join_relay(take_thread(&relays, REPLAY_SID, epoch));
+    assert_op_line(&op_timings(&temp.hub_log()), "hub.subscribe_replay", 0);
+}
+
+#[test]
+fn a_stale_rejoin_candidate_times_nothing() {
+    let temp = Temp::new();
+    let hub = temp.hub(FakeStarter::hang(&temp.dir));
+    let relays = timing_relays(&hub);
+    let (writer, _client_read) = client();
+    let (hub_end, session_end) = UnixStream::pair().unwrap();
+    session_end.set_read_timeout(Some(DEADLINE)).unwrap();
+    // No kept subscription and no mark: the candidate is stale, so the
+    // early return keeps no timer.
+    attach_rejoin(REPLAY_SID, hub_end, &hub, &writer, &relays, 7);
+    let mut reader = BufReader::new(session_end.try_clone().unwrap());
+    let mut buf = String::new();
+    assert_eq!(
+        reader.read_line(&mut buf).unwrap(),
+        0,
+        "a stale rejoin writes no replay"
+    );
+    assert!(lock(&relays).pending_replay.is_empty());
+    assert!(
+        op_timings(&temp.hub_log()).is_empty(),
+        "no kept replay, no timer"
+    );
 }
 
 #[test]

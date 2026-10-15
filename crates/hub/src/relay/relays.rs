@@ -192,17 +192,27 @@ impl Relays {
             return true;
         };
         // The replay's timer registers before the write, beside the muted
-        // id below: an instant reply completes it instead of leaking. At
-        // info, and on unit fixtures with no hub, there is no timer.
-        let key = (session.to_owned(), epoch, minted.clone());
-        if let Some(hub) = self.timing_hub.as_ref().and_then(Weak::upgrade)
-            && let Some(timer) = timed(&hub.diag, Op::HubSubscribeReplay, None, None)
-        {
-            self.pending_replay.insert(key.clone(), timer);
-        }
+        // id below: an instant reply completes it instead of leaking. The
+        // key is built only with a timing context, so at info one `Option`
+        // check finds no context and nothing is allocated or touched.
+        let replay_key: Option<ReplayKey> = if let Some(weak) = self.timing_hub.as_ref() {
+            let key = (session.to_owned(), epoch, minted.clone());
+            if let Some(hub) = weak.upgrade()
+                && let Some(timer) = timed(&hub.diag, Op::HubSubscribeReplay, None, None)
+            {
+                self.pending_replay.insert(key.clone(), timer);
+                Some(key)
+            } else {
+                None
+            }
+        } else {
+            None
+        };
         let wrote = {
             let Some(entry) = self.entries.get_mut(at) else {
-                self.pending_replay.remove(&key);
+                if let Some(key) = replay_key.as_ref() {
+                    self.pending_replay.remove(key);
+                }
                 return true;
             };
             lock(&entry.replayed).push(minted.clone());
@@ -223,7 +233,9 @@ impl Relays {
             // Stamped at this failure for the next post-follow drain,
             // which emits it outside the relays lock; the duration never
             // covers the deferred cleanup.
-            if let Some(mut timer) = self.pending_replay.remove(&key) {
+            if let Some(key) = replay_key.as_ref()
+                && let Some(mut timer) = self.pending_replay.remove(key)
+            {
                 timer.stop();
                 self.completed_replay.push(timer);
             }
