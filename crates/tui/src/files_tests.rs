@@ -206,19 +206,11 @@ fn listed(
     entries(dir, base_text, query, limits, &mut 0, || false)
 }
 
-fn search_limits() -> Limits {
-    Limits {
-        kept: Limits::SEARCH.kept,
-        visits: Limits::SEARCH.visits,
-        check_every: Limits::SEARCH.check_every,
-    }
-}
-
 #[test]
 fn directories_come_first_then_by_name() {
     let dir = seeded(&["mango/", "Apple/", "apricot", "Zebra", "apple-pie"]);
     assert_eq!(
-        listed(dir.path(), "~/proj/", "", &search_limits()),
+        listed(dir.path(), "~/proj/", "", &Limits::SEARCH),
         Some(Ok(owned(&[
             "~/proj/Apple/",
             "~/proj/mango/",
@@ -233,11 +225,11 @@ fn directories_come_first_then_by_name() {
 fn the_base_listing_matches_names_ignoring_case() {
     let dir = seeded(&["README.md", "readme-notes.md", "other.txt", "sub/"]);
     assert_eq!(
-        listed(dir.path(), "~/proj/", "rea", &search_limits()),
+        listed(dir.path(), "~/proj/", "rea", &Limits::SEARCH),
         Some(Ok(owned(&["~/proj/readme-notes.md", "~/proj/README.md"])))
     );
     assert_eq!(
-        listed(dir.path(), "~/proj/", "REA", &search_limits()),
+        listed(dir.path(), "~/proj/", "REA", &Limits::SEARCH),
         Some(Ok(owned(&["~/proj/readme-notes.md", "~/proj/README.md"])))
     );
 }
@@ -272,7 +264,7 @@ fn a_symlink_to_a_directory_is_a_directory_row() {
         dir.path().join("file-link"),
     )
     .unwrap_or_else(|err| panic!("symlink: {err}"));
-    let rows = listed(dir.path(), "~/proj/", "link", &search_limits())
+    let rows = listed(dir.path(), "~/proj/", "link", &Limits::SEARCH)
         .unwrap_or_else(|| panic!("cancelled"))
         .unwrap_or_else(|err| panic!("{err}"));
     assert_eq!(rows, owned(&["~/proj/link/", "~/proj/file-link"]));
@@ -286,7 +278,7 @@ fn a_non_utf8_name_is_listed_lossily() {
     let raw = vec![0x66, 0xFF, 0x6F]; // f, an invalid byte, o
     std::fs::write(dir.path().join(std::ffi::OsString::from_vec(raw)), "x")
         .unwrap_or_else(|err| panic!("{err}"));
-    let rows = listed(dir.path(), "~/proj/", "f", &search_limits())
+    let rows = listed(dir.path(), "~/proj/", "f", &Limits::SEARCH)
         .unwrap_or_else(|| panic!("cancelled"))
         .unwrap_or_else(|err| panic!("{err}"));
     assert_eq!(rows, owned(&["~/proj/f\u{FFFD}o"]));
@@ -301,7 +293,7 @@ fn a_name_with_a_control_character_is_not_listed() {
         dir.path(),
         "~/proj/",
         "",
-        &search_limits(),
+        &Limits::SEARCH,
         &mut examined,
         || false,
     )
@@ -339,7 +331,7 @@ fn the_walk_honours_gitignore_and_skips_dot_git() {
         "vendor/\ndeep/ignored-too.txt\n",
     )
     .unwrap_or_else(|err| panic!(".gitignore: {err}"));
-    let rows = found(dir.path(), "~/proj/", "txt", &search_limits())
+    let rows = found(dir.path(), "~/proj/", "txt", &Limits::SEARCH)
         .unwrap_or_else(|| panic!("cancelled"))
         .unwrap_or_else(|err| panic!("{err}"));
     assert_eq!(rows, owned(&["~/proj/top.txt", "~/proj/deep/kept.txt"]));
@@ -348,11 +340,11 @@ fn the_walk_honours_gitignore_and_skips_dot_git() {
 #[test]
 fn walk_rows_are_relative_to_the_base_as_typed() {
     let dir = seeded(&["sub/inner.txt", "sub/README.md"]);
-    let rows = found(dir.path(), "~/proj/", "rea", &search_limits())
+    let rows = found(dir.path(), "~/proj/", "rea", &Limits::SEARCH)
         .unwrap_or_else(|| panic!("cancelled"))
         .unwrap_or_else(|err| panic!("{err}"));
     assert_eq!(rows, owned(&["~/proj/sub/README.md"]));
-    let rows = found(dir.path(), "/etc/", "inner", &search_limits())
+    let rows = found(dir.path(), "/etc/", "inner", &Limits::SEARCH)
         .unwrap_or_else(|| panic!("cancelled"))
         .unwrap_or_else(|err| panic!("{err}"));
     assert_eq!(rows, owned(&["/etc/sub/inner.txt"]));
@@ -409,7 +401,10 @@ fn the_walk_stops_at_the_visit_bound() {
 #[test]
 fn the_visit_bound_counts_unyielded_and_depth_one_entries() {
     // Eight examined entries, only two matching: the depth-1 `m1` and the
-    // deep `sub/zzz/m2`, examined last in the walk's path order.
+    // deep `sub/zzz/m2`. The walk streams in `read_dir` order, so a cut
+    // inside it keeps no fixed rows: the fixed cuts are before the walk
+    // yields anything (two visits: the depth-1 entries fill the budget)
+    // and past its end.
     let names = [
         "m1",
         "sub/",
@@ -421,7 +416,7 @@ fn the_visit_bound_counts_unyielded_and_depth_one_entries() {
         "sub/zzz/m2",
     ];
     for (visits, want) in [
-        (7, ["~/proj/m1"].as_slice()),
+        (2, ["~/proj/m1"].as_slice()),
         (8, ["~/proj/m1", "~/proj/sub/zzz/m2"].as_slice()),
         (9, ["~/proj/m1", "~/proj/sub/zzz/m2"].as_slice()),
     ] {
@@ -472,7 +467,7 @@ fn a_cancelled_search_returns_none() {
 #[test]
 fn a_missing_base_is_an_error_row_reason() {
     let missing = Path::new("/no/such/base");
-    match found(missing, "/no/such/", "", &search_limits()) {
+    match found(missing, "/no/such/", "", &Limits::SEARCH) {
         Some(Err(reason)) => assert!(reason.contains("No such file or directory"), "{reason}"),
         other => panic!("a missing base is an error, not {other:?}"),
     }
@@ -485,7 +480,7 @@ fn a_file_as_base_is_an_error() {
         &dir.path().join("plain.txt"),
         "~/proj/plain.txt/",
         "",
-        &search_limits(),
+        &Limits::SEARCH,
     ) {
         Some(Err(reason)) => assert!(reason.contains("Not a directory"), "{reason}"),
         other => panic!("a file base is an error, not {other:?}"),

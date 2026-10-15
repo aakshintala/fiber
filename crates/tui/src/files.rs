@@ -137,7 +137,6 @@ fn walk(
         .parents(false)
         .require_git(false)
         .follow_links(false)
-        .sort_by_file_path(|first, second| first.cmp(second))
         .filter_entry(|entry| entry.depth() == 0 || entry.file_name().to_string_lossy() != ".git");
     let rows: Vec<String> = builder
         .build()
@@ -231,6 +230,7 @@ pub(crate) fn find(
     }
     Some(Ok(rows))
 }
+
 /// Whether `path` with `file_type` is a directory: its type is one, or
 /// a symlink whose target is one, so a linked directory stays
 /// navigable. The walk never follows links, so a symlinked directory
