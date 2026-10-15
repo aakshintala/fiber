@@ -1301,3 +1301,37 @@ fn the_next_request_sends_the_models_call_with_the_lines_result() {
     );
     assert_eq!(ran.durable_kinds(), ran_kinds());
 }
+
+/// `Prepared::rewrite` yields the judged arguments with who rewrote them,
+/// or neither when no hook rewrote the call.
+#[test]
+fn rewrite_yields_both_fields_or_neither() {
+    let tool = Arc::new(CountingTool::new("ok"));
+    let arguments: Map<String, Value> =
+        serde_json::from_value(json!({"path": "a.txt"})).unwrap();
+    let effects = Effects {
+        declared: DeclaredEffects {
+            effects: vec![Effect::Reads],
+            reversible: true,
+            paths: None,
+        },
+        subject: Some(String::new()),
+        prefix: None,
+        always_reviewed: false,
+    };
+    let prepared = |rewritten: Option<Vec<String>>| super::Prepared {
+        tool: tool.clone() as Arc<dyn Tool>,
+        arguments: arguments.clone(),
+        effects: effects.clone(),
+        rewritten,
+    };
+    assert_eq!(
+        prepared(Some(Vec::new())).rewrite(),
+        (Some(arguments.clone()), Some(Vec::new()))
+    );
+    assert_eq!(
+        prepared(Some(vec!["e".to_owned()])).rewrite(),
+        (Some(arguments.clone()), Some(vec!["e".to_owned()]))
+    );
+    assert_eq!(prepared(None).rewrite(), (None, None));
+}

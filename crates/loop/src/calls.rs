@@ -18,7 +18,7 @@ use contract::events::{
 use contract::jobs::Taken;
 use contract::provider::ToolDefinition;
 use contract::shapes::{ContentPart, DeclaredEffects};
-use contract::tool::{Bound, Cancel, Output, Tool};
+use contract::tool::{Bound, Cancel, Effects, Output, Tool};
 use contract::{ActionId, RequestId, SessionId, TurnId};
 use log::Log;
 use serde_json::{Map, Value};
@@ -287,15 +287,10 @@ impl Loop {
                             .filter(|(action, _)| *action == id)
                             .map(|(_, request)| request.clone());
                         if again.is_none() {
-                            let (arguments, changed_by) = match &prepared.rewritten {
-                                Some(changed_by) => {
-                                    (Some(prepared.arguments.clone()), Some(changed_by.clone()))
-                                }
-                                None => (None, None),
-                            };
+                            let (arguments, changed_by) = prepared.rewrite();
                             self.append(
                                 &Event::ToolCallStarted(ToolCallStarted {
-                                    always_reviewed: false,
+                                    always_reviewed: prepared.effects.always_reviewed,
                                     declared: prepared.effects.declared.clone(),
                                     arguments,
                                     changed_by,
@@ -531,7 +526,7 @@ impl Loop {
                 id,
                 turn,
                 &call.name,
-                &prepared.effects.declared,
+                &prepared.effects,
                 AskStep::StandingAsk {
                     standing_rule: rule,
                 },
@@ -583,7 +578,7 @@ impl Loop {
         id: &ActionId,
         turn: &TurnId,
         tool: &str,
-        declared: &DeclaredEffects,
+        effects: &Effects,
         step: AskStep,
     ) -> Result<Asked, Error> {
         if !self.answerable {
@@ -592,9 +587,9 @@ impl Loop {
             return Ok(Asked::Gone(self.unanswerable(id, turn)?));
         }
         let request = PermissionRequested {
-            always_reviewed: false,
+            always_reviewed: effects.always_reviewed,
             request_id: RequestId(super::mint("r_")),
-            declared: declared.clone(),
+            declared: effects.declared.clone(),
             step,
         };
         self.append(&Event::PermissionRequested(request.clone()), turn, Some(id))?;

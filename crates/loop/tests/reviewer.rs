@@ -2440,3 +2440,427 @@ fn a_reviewed_call_counts_only_the_session_model_requests() {
     assert_eq!(session.requests().len(), 2);
     assert_eq!(reviewer.requests().len(), 1);
 }
+
+/// A reviewer block below the escalation limits leaves the call's declared
+/// effects on its decision, which raised no request and started nothing.
+#[test]
+fn a_block_below_the_limits_logs_the_calls_declared_effects() {
+    let (session, tool, reviewer, lines) = reviewed_turn(vec![
+        Scripted::text("check"),
+        Scripted::text("block force-pushes to main"),
+    ]);
+    assert_eq!(
+        kinds(&lines),
+        kinds_with(&["permission_resolved", "tool_call_completed"], 2)
+    );
+    assert!(!kinds(&lines).contains(&"permission_requested"));
+    assert!(!kinds(&lines).contains(&"tool_call_started"));
+    let resolved = line(&lines, "permission_resolved");
+    assert_eq!(resolved.payload["decision"], "deny");
+    assert_eq!(resolved.payload["decided_by"], "reviewer");
+    assert_eq!(resolved.payload.get("request_id"), None);
+    assert_eq!(resolved.payload["effects"], json!(["executes"]));
+    assert_eq!(resolved.payload["reversible"], true);
+    assert_eq!(resolved.payload.get("paths"), None);
+    assert_eq!(resolved.payload.get("always_reviewed"), None);
+    assert_eq!(resolved.payload.get("arguments"), None);
+    assert_eq!(resolved.payload.get("changed_by"), None);
+    assert!(tool.ran().is_empty());
+    assert_eq!(reviewer.requests().len(), 2);
+    assert_eq!(session.requests().len(), 2);
+}
+
+/// A headless block at the limit is denied with no request, and its
+/// decision carries the call's declared effects.
+#[test]
+fn a_headless_block_at_the_limit_logs_the_calls_declared_effects() {
+    let tool = shell(None, None);
+    let mut session = Session::with_tools(
+        vec![
+            calls_reply("", &[("shell", paris())]),
+            Scripted::text("Done."),
+        ],
+        None,
+        vec![tool.clone() as Arc<dyn Tool>],
+    )
+    .answerable(false);
+    session.reviewer_limits(
+        vec![
+            Scripted::text("check"),
+            Scripted::text("block force-pushes to main"),
+        ],
+        r#loop::BlockLimits {
+            consecutive: 1,
+            session: 20,
+        },
+    );
+    let lines = go(&mut session);
+    assert!(!kinds(&lines).contains(&"permission_requested"));
+    assert!(!kinds(&lines).contains(&"tool_call_started"));
+    let resolved = line(&lines, "permission_resolved");
+    assert_eq!(resolved.payload["decision"], "deny");
+    assert_eq!(resolved.payload["decided_by"], "reviewer");
+    assert_eq!(
+        resolved.payload["reviewer"],
+        json!({"model": REVIEWER_MODEL, "stage": 2})
+    );
+    assert_eq!(resolved.payload.get("request_id"), None);
+    assert_eq!(resolved.payload["effects"], json!(["executes"]));
+    assert_eq!(resolved.payload["reversible"], true);
+    assert!(tool.ran().is_empty());
+}
+
+/// A headless reviewer failure denies with no request, and its decision
+/// carries the call's declared effects.
+#[test]
+fn a_headless_reviewer_failure_logs_the_calls_declared_effects() {
+    let tool = shell(None, None);
+    let mut session = Session::with_tools(
+        vec![
+            calls_reply("", &[("shell", paris())]),
+            Scripted::text("Done."),
+        ],
+        None,
+        vec![tool.clone() as Arc<dyn Tool>],
+    )
+    .answerable(false);
+    session.reviewer(vec![Scripted::failed(Failure {
+        code: ErrorCode::Timeout,
+        message: "the reviewer timed out".into(),
+        retry_after_ms: None,
+        provider: None,
+    })]);
+    let lines = go(&mut session);
+    assert!(!kinds(&lines).contains(&"permission_requested"));
+    let resolved = line(&lines, "permission_resolved");
+    assert_eq!(resolved.payload["decision"], "deny");
+    assert_eq!(resolved.payload["decided_by"], "reviewer");
+    assert_eq!(
+        resolved.payload["reviewer"],
+        json!({"model": REVIEWER_MODEL, "stage": 1})
+    );
+    assert_eq!(resolved.payload["effects"], json!(["executes"]));
+    assert_eq!(resolved.payload["reversible"], true);
+    assert!(tool.ran().is_empty());
+}
+
+/// A denial with no reviewer set up carries the call's declared effects.
+#[test]
+fn a_denial_with_no_reviewer_logs_the_calls_declared_effects() {
+    let tool = shell(None, None);
+    let mut session = Session::with_tools(
+        vec![
+            calls_reply("", &[("shell", paris())]),
+            Scripted::text("Done."),
+        ],
+        None,
+        vec![tool.clone() as Arc<dyn Tool>],
+    )
+    .answerable(false);
+    session.looped = session.looped.take().map(|l| {
+        l.reviewer(
+            Err(Failure {
+                code: ErrorCode::CredentialMissing,
+                message: "No key for the reviewer's provider.".into(),
+                retry_after_ms: None,
+                provider: None,
+            }),
+            r#loop::BlockLimits::default(),
+        )
+    });
+    let lines = go(&mut session);
+    let resolved = line(&lines, "permission_resolved");
+    assert_eq!(resolved.payload["decision"], "deny");
+    assert_eq!(resolved.payload["decided_by"], "no_reviewer");
+    assert_eq!(resolved.payload.get("reviewer"), None);
+    assert_eq!(resolved.payload.get("request_id"), None);
+    assert_eq!(resolved.payload["effects"], json!(["executes"]));
+    assert_eq!(resolved.payload["reversible"], true);
+    assert!(tool.ran().is_empty());
+}
+
+/// An always-reviewed call's denial carries `always_reviewed` with its
+/// declared paths.
+#[test]
+fn an_always_reviewed_call_logs_always_reviewed_on_its_denial() {
+    let mut declaring = TestTool::declaring(
+        "shell",
+        "Ran it.",
+        vec![Effect::Executes],
+        Some(vec!["/w/a.txt".into()]),
+    );
+    declaring.always_reviewed = true;
+    let tool = Arc::new(declaring);
+    let mut session = Session::with_tools(
+        vec![
+            calls_reply("", &[("shell", paris())]),
+            Scripted::text("Done."),
+        ],
+        None,
+        vec![tool.clone() as Arc<dyn Tool>],
+    );
+    session.reviewer(vec![
+        Scripted::text("check"),
+        Scripted::text("block no"),
+    ]);
+    let lines = go(&mut session);
+    let resolved = line(&lines, "permission_resolved");
+    assert_eq!(resolved.payload["decision"], "deny");
+    assert_eq!(resolved.payload["effects"], json!(["executes"]));
+    assert_eq!(resolved.payload["reversible"], true);
+    assert_eq!(resolved.payload["paths"], json!(["/w/a.txt"]));
+    assert_eq!(resolved.payload["always_reviewed"], true);
+    assert_eq!(resolved.payload.get("arguments"), None);
+    assert_eq!(resolved.payload.get("changed_by"), None);
+    assert!(tool.ran().is_empty());
+}
+
+/// At the consecutive limit the block escalates: the first denial has the
+/// effects with no request, while the person's denial answers a request
+/// that has them and carries none itself.
+#[test]
+fn a_block_a_person_answers_leaves_the_effects_on_the_request_alone() {
+    let tool = shell(None, None);
+    let mut session =
+        Session::with_tools(paired_turns(2), None, vec![tool.clone() as Arc<dyn Tool>]);
+    session.reviewer_limits(
+        vec![
+            Scripted::text("check"),
+            Scripted::text("block first reason"),
+            Scripted::text("check"),
+            Scripted::text("block second reason"),
+        ],
+        r#loop::BlockLimits {
+            consecutive: 2,
+            session: 20,
+        },
+    );
+    // The first block is below the limit: denied with no request.
+    session.inbox.send(delivery("go")).unwrap();
+    assert_eq!(session.turn(), Some(TurnOutcome::Completed));
+    let first = session.lines();
+    assert_eq!(
+        kinds(&first),
+        kinds_with(&["permission_resolved", "tool_call_completed"], 2)
+    );
+    let denied = line(&first, "permission_resolved");
+    assert_eq!(denied.payload.get("request_id"), None);
+    assert_eq!(denied.payload["effects"], json!(["executes"]));
+    assert_eq!(denied.payload["reversible"], true);
+    // The second block is at the limit: escalated, and the person denies.
+    let answered = on_request(&session, {
+        let inbox = session.inbox.clone();
+        move |id| {
+            inbox
+                .send(reply_delivery(id, deny(Some("not this"))))
+                .unwrap()
+        }
+    });
+    session.inbox.send(delivery("go")).unwrap();
+    assert_eq!(session.turn(), Some(TurnOutcome::Completed));
+    let lines = session.lines();
+    answered.join().unwrap();
+    assert_eq!(
+        kinds(&lines),
+        kinds_next(
+            &[
+                "permission_requested",
+                "permission_resolved",
+                "tool_call_completed"
+            ],
+            2
+        )
+    );
+    let requested = line(&lines, "permission_requested");
+    assert_eq!(requested.payload["effects"], json!(["executes"]));
+    assert_eq!(requested.payload["reversible"], true);
+    let persons = line(&lines, "permission_resolved");
+    assert_eq!(persons.payload["decision"], "deny");
+    assert_eq!(persons.payload["decided_by"], "person");
+    assert_eq!(
+        persons.payload["request_id"],
+        requested.payload["request_id"]
+    );
+    assert_eq!(persons.payload.get("effects"), None);
+    assert_eq!(persons.payload.get("reversible"), None);
+    assert_eq!(persons.payload.get("paths"), None);
+    assert_eq!(persons.payload.get("always_reviewed"), None);
+    assert_eq!(persons.payload.get("arguments"), None);
+    assert_eq!(persons.payload.get("changed_by"), None);
+    assert!(tool.ran().is_empty());
+}
+
+fn always_reviewed_tool() -> Arc<TestTool> {
+    let mut declaring =
+        TestTool::declaring("shell", "Ran it.", vec![Effect::Executes], None);
+    declaring.always_reviewed = true;
+    Arc::new(declaring)
+}
+
+/// An always-reviewed call writes `always_reviewed` on its start, its
+/// allow and its request; an ordinary call writes the key nowhere.
+#[test]
+fn an_always_reviewed_call_starts_and_asks_with_always_reviewed() {
+    // Allowed by the reviewer: the allow and the start carry the key.
+    let tool = always_reviewed_tool();
+    let mut session = Session::with_tools(
+        vec![
+            calls_reply("", &[("shell", paris())]),
+            Scripted::text("Done."),
+        ],
+        None,
+        vec![tool.clone() as Arc<dyn Tool>],
+    );
+    session.reviewer(vec![Scripted::text("allow")]);
+    let lines = go(&mut session);
+    let resolved = line(&lines, "permission_resolved");
+    assert_eq!(resolved.payload["decision"], "allow");
+    assert_eq!(resolved.payload["always_reviewed"], true);
+    let started = line(&lines, "tool_call_started");
+    assert_eq!(started.payload["always_reviewed"], true);
+    assert_eq!(tool.ran().len(), 1);
+    // Escalated to a person: the request carries the key, the denial does not.
+    let tool = always_reviewed_tool();
+    let mut session = Session::with_tools(
+        vec![
+            calls_reply("", &[("shell", paris())]),
+            Scripted::text("Done."),
+        ],
+        None,
+        vec![tool.clone() as Arc<dyn Tool>],
+    );
+    session.reviewer_limits(
+        vec![
+            Scripted::text("check"),
+            Scripted::text("block no"),
+        ],
+        r#loop::BlockLimits {
+            consecutive: 1,
+            session: 20,
+        },
+    );
+    let answered = on_request(&session, {
+        let inbox = session.inbox.clone();
+        move |id| inbox.send(reply_delivery(id, deny(None))).unwrap()
+    });
+    session.inbox.send(delivery("go")).unwrap();
+    assert_eq!(session.turn(), Some(TurnOutcome::Completed));
+    let lines = session.lines();
+    answered.join().unwrap();
+    let requested = line(&lines, "permission_requested");
+    assert_eq!(requested.payload["always_reviewed"], true);
+    let persons = line(&lines, "permission_resolved");
+    assert_eq!(persons.payload.get("always_reviewed"), None);
+    assert!(tool.ran().is_empty());
+    // An ordinary tool writes the key nowhere.
+    let (session, tool, _, lines) = reviewed_turn(vec![Scripted::text("allow")]);
+    assert_eq!(session.requests().len(), 2);
+    assert_eq!(tool.ran().len(), 1);
+    assert_eq!(
+        line(&lines, "tool_call_started")
+            .payload
+            .get("always_reviewed"),
+        None
+    );
+    assert_eq!(
+        line(&lines, "permission_resolved")
+            .payload
+            .get("always_reviewed"),
+        None
+    );
+}
+
+/// A reviewer allow carries the call's effects on its decision, matching
+/// the start that follows it.
+#[test]
+fn a_reviewer_allow_logs_the_calls_effects_on_its_resolution() {
+    let (session, tool, reviewer, lines) = reviewed_turn(vec![Scripted::text("allow")]);
+    assert_eq!(
+        kinds(&lines),
+        kinds_with(
+            &[
+                "permission_resolved",
+                "tool_call_started",
+                "tool_call_completed"
+            ],
+            1
+        )
+    );
+    let resolved = line(&lines, "permission_resolved");
+    assert_eq!(resolved.payload["decision"], "allow");
+    assert_eq!(resolved.payload.get("request_id"), None);
+    assert_eq!(resolved.payload["effects"], json!(["executes"]));
+    assert_eq!(resolved.payload["reversible"], true);
+    assert_eq!(resolved.payload.get("paths"), None);
+    assert_eq!(resolved.payload.get("always_reviewed"), None);
+    assert_eq!(resolved.payload.get("arguments"), None);
+    assert_eq!(resolved.payload.get("changed_by"), None);
+    let started = line(&lines, "tool_call_started");
+    assert_eq!(started.payload["effects"], json!(["executes"]));
+    assert_eq!(started.payload["reversible"], true);
+    assert_eq!(tool.ran().len(), 1);
+    assert_eq!(reviewer.requests().len(), 1);
+    assert_eq!(session.requests().len(), 2);
+}
+
+fn standing(tool: &str, decision: RuleDecision, prefix: &str) -> StandingRules {
+    StandingRules {
+        global: vec![Rule {
+            decision,
+            tool: tool.into(),
+            prefix: prefix.into(),
+            added: None,
+            session_id: None,
+        }],
+        project: Vec::new(),
+    }
+}
+
+/// A cancel that lands after a reviewer allow and before the start leaves
+/// the allow's effects in the log with no start.
+#[test]
+fn a_reviewer_allow_cancelled_before_its_start_keeps_the_effects() {
+    let reviewed =
+        TestTool::declaring("reviewed", "Reviewed done.", vec![Effect::Executes], None);
+    let ask = shell(Some("npm publish"), None);
+    let mut session = Session::with_tools(
+        vec![calls_reply(
+            "",
+            &[("reviewed", paris()), ("shell", paris())],
+        )],
+        None,
+        vec![
+            Arc::new(reviewed) as Arc<dyn Tool>,
+            ask.clone() as Arc<dyn Tool>,
+        ],
+    );
+    session
+        .rules
+        .set(standing("shell", RuleDecision::Ask, "npm publish"));
+    session.reviewer(vec![Scripted::text("allow")]);
+    session.inbox.send(delivery("go")).unwrap();
+    let inbox = session.inbox.clone();
+    let cancel = Arc::clone(&session.cancel);
+    let answered = on_request(&session, move |_| {
+        // The first call is already allowed; the cancel lands while the
+        // second waits for its answer.
+        assert!(cancel.cancel());
+        inbox.send(Delivery::Cancelled).unwrap();
+    });
+    assert_eq!(session.turn(), Some(TurnOutcome::Interrupted));
+    answered.join().unwrap();
+    let lines = session.lines();
+    // The allow keeps the call's effects, and the approved call never started.
+    let allows: Vec<_> = lines
+        .iter()
+        .filter(|l| {
+            l.kind == "permission_resolved" && l.payload["decision"] == "allow"
+        })
+        .collect();
+    assert_eq!(allows.len(), 1);
+    assert_eq!(allows[0].payload.get("request_id"), None);
+    assert_eq!(allows[0].payload["effects"], json!(["executes"]));
+    assert_eq!(allows[0].payload["reversible"], true);
+    assert!(lines.iter().all(|l| l.kind != "tool_call_started"));
+    assert_eq!(lines.last().unwrap().payload["outcome"], "interrupted");
+}

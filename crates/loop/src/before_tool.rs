@@ -55,6 +55,20 @@ impl From<Checked> for Prepared {
     }
 }
 
+impl Prepared {
+    /// The logged rewrite: the judged arguments with who rewrote them, or
+    /// neither when no hook rewrote the call.
+    pub(crate) fn rewrite(&self) -> (Option<Map<String, Value>>, Option<Vec<String>>) {
+        match &self.rewritten {
+            Some(changed_by) => (
+                Some(self.arguments.clone()),
+                Some(changed_by.clone()),
+            ),
+            None => (None, None),
+        }
+    }
+}
+
 /// Why the schema-and-effects check failed, before it is worded.
 enum ClassifyFailure {
     /// The arguments do not fit the schema: one line per error.
@@ -276,7 +290,7 @@ fn ready(prepared: Prepared, recorded: &PermissionRequested) -> Again {
         },
     };
     let request = PermissionRequested {
-        always_reviewed: false,
+        always_reviewed: prepared.effects.always_reviewed,
         request_id: recorded.request_id.clone(),
         declared: prepared.effects.declared.clone(),
         step,

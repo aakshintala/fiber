@@ -1239,3 +1239,58 @@ fn a_hosted_search_in_a_reply_cut_off_by_the_output_limit_is_still_logged() {
     let all = kinds(&lines);
     assert!(all.contains(&"tool_call_completed"), "{all:?}");
 }
+
+/// A hosted search whose tool declares the call always reviewed keeps the
+/// key on its start.
+struct AlwaysReviewedSearch;
+
+impl Tool for AlwaysReviewedSearch {
+    fn definition(&self) -> contract::provider::ToolDefinition {
+        HostedSearch.definition()
+    }
+
+    fn effects(
+        &self,
+        _: &serde_json::Map<String, Value>,
+    ) -> Result<contract::tool::Effects, EffectsError> {
+        Ok(contract::tool::Effects {
+            declared: DeclaredEffects {
+                effects: vec![Effect::Network],
+                reversible: true,
+                paths: None,
+            },
+            subject: Some(String::new()),
+            prefix: None,
+            always_reviewed: true,
+        })
+    }
+
+    fn run(
+        &self,
+        _: &serde_json::Map<String, Value>,
+        _: &dyn contract::tool::Cancel,
+        _: &dyn contract::emit::Emit,
+    ) -> contract::tool::Output {
+        panic!("a hosted search is never run by Fiber");
+    }
+}
+
+#[test]
+fn a_hosted_calls_start_keeps_the_registered_tools_always_reviewed() {
+    let mut session = Session::with_tools(
+        vec![hosted_reply(Scripted::text("Rust 1.90 is out."))],
+        None,
+        vec![Arc::new(AlwaysReviewedSearch)],
+    );
+    let reviewer = session.reviewer(Vec::new());
+    session.inbox.send(delivery("search")).unwrap();
+    assert_eq!(session.turn(), Some(TurnOutcome::Completed));
+    let lines = session.lines();
+    let started = lines
+        .iter()
+        .find(|l| l.kind == "tool_call_started")
+        .unwrap();
+    assert_eq!(started.payload["effects"], json!(["network"]));
+    assert_eq!(started.payload["always_reviewed"], true);
+    assert!(reviewer.requests().is_empty());
+}

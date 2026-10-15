@@ -1968,3 +1968,26 @@ fn an_inner_call_settle_is_written_at_the_inner_finish_under_its_action() {
     assert_eq!(completed.payload["job_id"], job);
     assert_eq!(completed.action_id.as_ref(), Some(&id));
 }
+
+/// An inner call of an always-reviewed tool carries the key on its start,
+/// while the outer call's start omits it.
+#[test]
+fn an_inner_calls_start_carries_always_reviewed() {
+    let (outer, _) = outer("inner", json!({}));
+    let mut inner_tool = FakeTool::new("inner", |_, _, _, _| text("inner answer"));
+    inner_tool.effects.always_reviewed = true;
+    let mut session = session(vec![outer, Arc::new(inner_tool)]);
+    assert_eq!(session.turn(), Some(TurnOutcome::Completed));
+    let lines = session.lines();
+    let id = inner_id(&lines);
+    let started = lines
+        .iter()
+        .find(|l| l.action_id.as_ref() == Some(&id) && l.kind == "tool_call_started")
+        .unwrap();
+    assert_eq!(started.payload["always_reviewed"], true);
+    let outer_started = lines
+        .iter()
+        .find(|l| l.kind == "tool_call_started" && l.action_id.as_ref() != Some(&id))
+        .unwrap();
+    assert_eq!(outer_started.payload.get("always_reviewed"), None);
+}

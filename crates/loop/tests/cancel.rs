@@ -453,6 +453,7 @@ fn a_cancelled_review_completes_cancelled() {
     assert_eq!(resolved.len(), 1);
     assert_eq!(resolved[0].payload["decision"], "deny");
     assert_eq!(resolved[0].payload["decided_by"], "cancel");
+    assert_eq!(resolved[0].payload.get("effects"), None);
     // Its completion is cancelled, not denied, and nothing ran.
     let done = completed(&lines);
     assert_eq!(done.len(), 1);
