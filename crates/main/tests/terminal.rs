@@ -335,10 +335,10 @@ fn a_standing_ask_opens_the_approval_panel_and_allow_once_runs_the_call() {
     let asking = run.output().len();
     run.write(b"run it\r");
     run.wait_screen("the approval panel", |grid| {
-        grid.contents.contains("asked by a global rule: echo hi")
+        grid.contents.contains("asked by the global rule echo hi")
     });
     run.wait_screen("the approval choices", |grid| {
-        grid.contents.contains("allow once")
+        grid.contents.contains("Allow once")
     });
     // Enter on the first choice allows once; the call runs and the turn
     // finishes with the answer. The waiting title from before the prompt
@@ -432,10 +432,10 @@ fn an_ask_and_a_shell_waiting_on_approval_show_no_call_json() {
         grid.contents.contains("asked 4 questions")
     });
     run.wait_screen("the approval panel", |grid| {
-        grid.contents.contains("asked by a project rule: echo hi")
+        grid.contents.contains("asked by the project rule echo hi")
     });
     run.wait_screen("the approval choices", |grid| {
-        grid.contents.contains("allow once")
+        grid.contents.contains("Allow once")
     });
     let grid = run.screen();
     let rows = grid.rows;
@@ -1135,10 +1135,10 @@ fn journey_prompt_answer_approval_resize_quit() {
     );
     server.release_one();
     run.wait_screen("the approval panel", |grid| {
-        grid.alternate_screen && grid.contents.contains("asked by a global rule: echo hi")
+        grid.alternate_screen && grid.contents.contains("asked by the global rule echo hi")
     });
     run.wait_screen("the approval choices", |grid| {
-        grid.contents.contains("allow once")
+        grid.contents.contains("Allow once")
     });
     // Enter on the first choice allows once; the call runs, the loop sends
     // its output, and the server holds that follow-up request too. The
