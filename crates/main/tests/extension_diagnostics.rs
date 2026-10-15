@@ -268,10 +268,11 @@ fn debug_ask_records_lua_requests_and_hook_chains() {
         assert_eq!(line["process"], "ask");
         assert_eq!(line["message"], "A provider request ended.");
     }
-    let pid_purposes: Vec<&str> = pid_requests
+    let mut pid_purposes: Vec<&str> = pid_requests
         .iter()
         .map(|line| line["data"]["purpose"].as_str().unwrap())
         .collect();
+    pid_purposes.sort_unstable();
     assert_eq!(pid_purposes, ["model_list", "token_refresh"]);
     // Everything past the attach carries the Ask process and the session.
     let lines = diagnostic_file(&setup, &format!("ask-{id}.log"));
@@ -283,15 +284,24 @@ fn debug_ask_records_lua_requests_and_hook_chains() {
         .iter()
         .filter(|line| line["code"] == "provider_request")
         .collect();
-    // The quota fetch plus the native model call in P3's shape.
+    // The quota fetch plus the native model call in P3's shape. The Lua
+    // quota observation and the native model-call observation reach the
+    // same log from paths with no guaranteed order, so each record is
+    // found by its purpose rather than its position.
     assert_eq!(requests.len(), 2);
-    let quota = requests[0];
+    let quota = requests
+        .iter()
+        .find(|line| line["data"]["purpose"] == "quota")
+        .expect("one quota provider_request");
     assert_eq!(quota["message"], "A provider request ended.");
     assert_eq!(quota["data"]["provider"], "test");
     assert_eq!(quota["data"]["purpose"], "quota");
     assert_eq!(quota["data"]["attempt"], 1);
     assert_eq!(quota["data"]["status"], 200);
-    let native = requests[1];
+    let native = requests
+        .iter()
+        .find(|line| line["data"]["purpose"] == "model_call")
+        .expect("one model_call provider_request");
     assert_eq!(native["data"]["purpose"], "model_call");
     assert_eq!(native["data"]["model"], "m1");
     // Each hook chain timed once per actual dispatch; unrelated installed
