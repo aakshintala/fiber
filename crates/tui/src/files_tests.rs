@@ -317,9 +317,13 @@ fn found(
 
 #[test]
 fn the_walk_honours_gitignore_and_skips_dot_git() {
+    // `.git/notes.txt` matches the query below: it stays out of the
+    // rows only because the walk skips `.git`, so loosening that
+    // filter to depth 1 and below lists it and fails this test.
     let dir = seeded(&[
         ".gitignore",
         ".git/HEAD",
+        ".git/notes.txt",
         ".git/objects/pack",
         "vendor/ignored.txt",
         "deep/ignored-too.txt",
@@ -445,6 +449,24 @@ fn the_walk_does_not_start_when_the_base_fills_the_rows() {
         .unwrap_or_else(|| panic!("cancelled"))
         .unwrap_or_else(|err| panic!("{err}"));
     assert_eq!(rows, owned(&["~/proj/a1", "~/proj/a2"]));
+}
+
+#[test]
+fn the_walk_reaches_its_rows_while_nothing_cancels_it() {
+    // With `check_every: 1` every examined entry is a checkpoint, and
+    // nothing cancels: loosening the checkpoint from `&&` to `||`
+    // abandons the walk at its first countable entry and answers
+    // `None` instead of these rows.
+    let dir = seeded(&["sub/deep.txt"]);
+    let limits = Limits {
+        kept: Limits::SEARCH.kept,
+        visits: Limits::SEARCH.visits,
+        check_every: 1,
+    };
+    assert_eq!(
+        found(dir.path(), "~/proj/", "deep", &limits),
+        Some(Ok(owned(&["~/proj/sub/deep.txt"])))
+    );
 }
 
 #[test]
