@@ -257,6 +257,7 @@ impl Form {
     pub(crate) fn panel(&self, header: String, width: u16) -> Panel {
         let mut panel = Panel {
             lines: Vec::new(),
+            marks: Vec::new(),
             alert: false,
             spots: Vec::new(),
             cursor: None,

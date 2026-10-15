@@ -1005,8 +1005,7 @@ An approval request is a panel at the bottom that replaces the input box
   (`docs/permissions.md`).
 - The asking call's tool group expands so the full call can be read.
 - Esc puts the request aside. It stays pending behind a badge, and clicking the
-  badge reopens it. The badge names the `next_request` action's bound key,
-  leaving the key out when the action is unbound. Denying is always explicit.
+  badge reopens it. Denying is always explicit.
 - Esc steps through waiting requests one at a time. With a question form
   behind an approval, a second Esc declines the form.
 - `/approvals` reopens the waiting queue at the first request. It is the key
@@ -1017,9 +1016,22 @@ and a space: the `approval` tint and an `attention` stripe for a standing
 ask, the `alert` tint and an `error` stripe for a reviewer's escalation.
 
 ```
-▌ Approval 1 of 2 · main · irreversible                  Esc puts it aside
+▌ Approval 1 of 1 · main                                     Esc puts it aside
 ▌ shell cargo mutants -p hub
-▌ runs a command, writes files · asked by the project rule cargo
+▌ runs a command · asked by the project rule cargo
+▌
+▌ ▸ 1 Allow once
+▌   2 Deny  type to add feedback
+▌
+▌ ↑↓ choose · Enter confirms · typing goes to the feedback · click a choice
+```
+
+A review that offers a rule shows the remembering choices:
+
+```
+▌ Approval 1 of 1 · main                                      Esc puts it aside
+▌ shell cargo mutants -p hub
+▌ runs a command · the reviewer blocked the last calls: rm -rf
 ▌
 ▌ ▸ 1 Allow once
 ▌   2 Allow for this session cargo mutants *
@@ -1366,7 +1378,7 @@ focused. When rows hide below, a dim ↓ takes the last shown row's gutter; a
 screen too short for them scrolls, and its last line reads "↑ 4 more · ↓ 12
 more" dim. The footer is "↑↓ move · ←→ tabs · Esc closes".
 
-Hints that name a key, on home and on the approval badge, name the action's
+Hints that name a key, on home, name the action's
 bound key from this table, leaving the key out when the action is unbound.
 
 Every action acts in some of six contexts, and the terminal is in exactly one

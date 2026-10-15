@@ -498,12 +498,12 @@ fn approval_standing_ask() {
     app.on_line(standing(S_A, "a_1", "r_1"));
     let (shown, buf) = wide(&mut app);
     insta::assert_snapshot!("approval_standing_ask", shown);
-    // Header to deny, five rows, take the approval tint with edges above
+    // Header to hint, eight rows, take the approval tint with edges above
     // and below; the rows beyond the edges do not.
-    for row in 6..11 {
+    for row in 3..11 {
         assert_eq!(bg(&buf, row), super::APPROVAL_TINT.bg, "row {row}");
     }
-    assert_eq!(bg(&buf, 5), Some(ratatui::style::Color::Reset));
+    assert_eq!(bg(&buf, 2), Some(ratatui::style::Color::Reset));
     assert_eq!(bg(&buf, 11), Some(ratatui::style::Color::Reset));
 }
 
@@ -578,17 +578,22 @@ fn irreversible_is_bold_error_in_the_header() {
             "standing_rule": {"scope": "project", "prefix": "git push · irreversible"}}),
     ));
     let (shown, buf) = wide(&mut app);
-    let (row, col) = spot(&shown, "1 of 1 · irreversible");
-    let word = col + u16::try_from("1 of 1 · ".chars().count()).expect("a width");
+    let (row, col) = spot(&shown, "· irreversible");
+    let word = col + u16::try_from("· ".chars().count()).expect("a width");
     for x in word..word + 12 {
         let cell = &buf[(x, row)];
         assert_eq!(cell.fg, crate::theme::Role::Error.color(), "col {x}");
         assert!(cell.modifier.contains(Modifier::BOLD), "col {x}");
         assert_eq!(cell.bg, crate::theme::Role::Approval.color(), "col {x}");
     }
-    let before = &buf[(word - 2, row)];
-    assert!(!before.modifier.contains(Modifier::BOLD));
-    assert_eq!(before.fg, ratatui::style::Color::Reset);
+    // The loud run starts at the " · " before it; the session ends in
+    // `attention`, not bold.
+    let loud = &buf[(word - 3, row)];
+    assert!(loud.modifier.contains(Modifier::BOLD));
+    assert_eq!(loud.fg, crate::theme::Role::Error.color());
+    let session_end = &buf[(word - 4, row)];
+    assert!(!session_end.modifier.contains(Modifier::BOLD));
+    assert_eq!(session_end.fg, crate::theme::Role::Attention.color());
     let (rule, at) = spot(&shown, "push · irreversible");
     assert_eq!(rule, row + 1, "{shown}");
     let plain = &buf[(at + 7, rule)];
@@ -642,9 +647,12 @@ fn a_short_screen_drops_the_badge_after_the_hint() {
     app.on_key(Key::Esc, now);
     app.connect_failed("lost".to_owned());
     app.on_key(Key::CtrlC, now);
-    let badge = "! 1 waiting · /approvals or ⌥A";
     assert_eq!(sized(&mut app, 40, 1), "▌ › █\n");
-    assert_eq!(sized(&mut app, 40, 2), format!("{badge}\n▌ › █\n"));
+    // The badge is 41 cells, so at 40 columns its last cell clips.
+    assert_eq!(
+        sized(&mut app, 40, 2),
+        "  ⚠ 1 approvals waiting · click to reope\n▌ › █\n"
+    );
     // The input box's edges take the rows the hint and the badge lose.
     assert_eq!(
         sized(&mut app, 40, 3),
@@ -652,7 +660,11 @@ fn a_short_screen_drops_the_badge_after_the_hint() {
     );
     assert_eq!(
         sized(&mut app, 40, 4),
-        format!("{badge}\n{}\n▌ › █\n{}\n", "▄".repeat(40), "▀".repeat(40))
+        format!(
+            "  ⚠ 1 approvals waiting · click to reope\n{}\n▌ › █\n{}\n",
+            "▄".repeat(40),
+            "▀".repeat(40)
+        )
     );
 }
 
@@ -662,7 +674,7 @@ fn a_panel_taller_than_the_screen_keeps_its_header() {
     app.on_line(standing(S_A, "a_1", "r_1"));
     assert_eq!(
         sized(&mut app, 40, 2),
-        format!("▌ approval · {S_A} · 1 of 1\n▌ asked by a global rule: echo hi\n")
+        format!("▌ Approval 1 of 1 · {S_A}\n▌ Esc puts it aside\n")
     );
 }
 
@@ -1379,11 +1391,11 @@ fn replying(width: u16, height: u16, text: &str) -> App {
 fn the_badge_is_a_target_over_the_cells_it_drew() {
     use crate::mouse::{Target, TargetId};
     let mut app = badged();
-    // The badge's 30 characters on the row above the input box.
+    // The badge's 40 characters on the row above the input box.
     let (_, targets) = pointed(&mut app, 40, 12, None);
     let badge = Target {
         id: TargetId::Badge,
-        rect: Rect::new(0, 8, 30, 1),
+        rect: Rect::new(0, 8, 40, 1),
     };
     // The open turn's prompt, its time and its blank row are stops on
     // the rows above the badge.
@@ -1547,14 +1559,14 @@ fn the_target_under_the_pointer_gets_the_hover_background_only() {
                 panic!("no cell at {x},{y}");
             };
             let mut expected = before.clone();
-            if y == 8 && x < 30 {
+            if y == 8 && x < 40 {
                 expected.bg = super::HOVER_TINT.bg.unwrap_or_default();
             }
             assert_eq!(after, &expected, "cell {x},{y}");
         }
     }
     // Off every target, the frame is the one with no pointer.
-    for pointer in [(30, 8), (0, 11), (0, 9), (39, 0)] {
+    for pointer in [(39, 9), (0, 11), (0, 9), (39, 0)] {
         let (off, _) = pointed(&mut app, 40, 12, Some(pointer));
         assert_eq!(off, plain, "{pointer:?}");
     }
@@ -2296,4 +2308,19 @@ fn ledger_rows_show_parsed_arguments_never_json() {
     assert!(shown.contains("https://example.com/x"), "{shown}");
     assert!(shown.contains("rust errors"), "{shown}");
     assert!(!shown.contains("{\""), "{shown}");
+}
+
+#[test]
+fn the_badge_warning_sign_is_split_from_the_rest_of_the_badge() {
+    let attention = ratatui::style::Style::new().fg(crate::theme::Role::Attention.color());
+    assert_eq!(
+        super::badge_spans("⚠ 1 approvals waiting"),
+        vec![
+            ratatui::text::Span::styled("⚠", attention),
+            ratatui::text::Span::styled(
+                " 1 approvals waiting",
+                attention.add_modifier(Modifier::BOLD),
+            ),
+        ]
+    );
 }

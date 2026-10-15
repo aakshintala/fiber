@@ -285,7 +285,10 @@ fn the_send_target_sends_and_the_cross_puts_it_aside() {
     app.on_click(TargetId::Offer(Spot::Close));
     assert!(!app.offer_open());
     let (screen, _) = draw(&app, 80, 24);
-    assert!(screen.contains("! 1 waiting"), "{screen}");
+    assert!(
+        screen.contains("  ⚠ 1 approvals waiting · click to reopen"),
+        "{screen}"
+    );
 }
 
 #[test]

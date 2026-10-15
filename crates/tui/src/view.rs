@@ -7,7 +7,7 @@
 use ratatui::buffer::Buffer;
 use ratatui::layout::{Position, Rect};
 use ratatui::style::{Modifier, Style};
-use ratatui::text::Line;
+use ratatui::text::{Line, Span};
 use ratatui::widgets::{Paragraph, Widget, Wrap};
 
 use crate::app::App;
@@ -170,7 +170,7 @@ pub(crate) fn render(
     working_line::draw(app, area, buf, &mut bottom, &mut targets);
     if let Some(rect) = app
         .badge()
-        .and_then(|badge| put(buf, area, &mut bottom, &badge, Style::default()))
+        .and_then(|badge| put_spans(buf, area, &mut bottom, badge_spans(&badge)))
     {
         targets.push(Target {
             id: TargetId::Badge,
@@ -288,6 +288,40 @@ pub(crate) fn render(
         }
     }
     targets
+}
+
+/// The badge's spans: `⚠` in `attention`, the rest bold in `attention`
+/// (`docs/tui.md`, "An approval").
+fn badge_spans(badge: &str) -> Vec<Span<'_>> {
+    let rest = Style::new()
+        .fg(Role::Attention.color())
+        .add_modifier(Modifier::BOLD);
+    let mark = Style::new().fg(Role::Attention.color());
+    let end = badge
+        .find('⚠')
+        .map(|at| at.saturating_add('⚠'.len_utf8()))
+        .unwrap_or_default();
+    match (badge.get(..end), badge.get(end..)) {
+        (Some(head), Some(tail)) => {
+            vec![Span::styled(head, mark), Span::styled(tail, rest)]
+        }
+        _ => vec![Span::styled(badge, rest)],
+    }
+}
+
+/// Puts `spans` on the row above `bottom` and moves `bottom` up to it,
+/// returning the cells their text took; nothing once `bottom` reaches the
+/// top of `area`.
+fn put_spans(buf: &mut Buffer, area: Rect, bottom: &mut u16, spans: Vec<Span<'_>>) -> Option<Rect> {
+    let row = bottom.checked_sub(1).filter(|row| *row >= area.y)?;
+    let mut x = area.x;
+    for span in spans {
+        let room = usize::from(area.width).saturating_sub(usize::from(x.saturating_sub(area.x)));
+        let (end, _) = buf.set_stringn(x, row, &span.content, room, span.style);
+        x = end;
+    }
+    *bottom = row;
+    Some(Rect::new(area.x, row, x.saturating_sub(area.x), 1))
 }
 
 /// Puts `text` on the row above `bottom` and moves `bottom` up to it,

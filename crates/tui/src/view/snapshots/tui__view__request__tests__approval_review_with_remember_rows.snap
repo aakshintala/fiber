@@ -1,0 +1,21 @@
+---
+source: crates/tui/src/view/request_tests.rs
+assertion_line: 1129
+expression: shown
+---
+
+
+
+▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
+▌ Approval 1 of 1 · s_aaaaaaaaaaaaaaaa                         Esc puts it aside
+▌ shell cargo mutants -p hub
+▌ runs a command · the reviewer blocked the last calls: it blocked three in a
+▌ row
+▌
+▌ ▸ 1 Allow once
+▌   2 Allow for this session cargo mutants *
+▌   3 Always allow in this project cargo mutants *
+▌   4 Deny  type to add feedback
+▌
+▌ ↑↓ choose · Enter confirms · typing goes to the feedback · click a choice
+▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀

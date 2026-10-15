@@ -2,15 +2,15 @@
 source: crates/tui/src/view_tests.rs
 expression: wide(&mut app).0
 ---
-
-                                                                      ▄▄▄▄▄▄▄▄▄
-                                                                       run it ▐
                                                                       ▀▀▀▀▀▀▀▀▀
                                                                      you 00:00
-
+                                                                               ┃
 ▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
-▌ approval · s_aaaaaaaaaaaaaaaa · 1 of 1 · irreversible
-▌ asked by a project rule: git push
-▌ › allow once
-▌   deny · type to add feedback
+▌ Approval 1 of 1 · s_aaaaaaaaaaaaaaaa · irreversible          Esc puts it aside
+▌ runs a command · asked by the project rule git push
+▌
+▌ ▸ 1 Allow once
+▌   2 Deny  type to add feedback
+▌
+▌ ↑↓ choose · Enter confirms · typing goes to the feedback · click a choice
 ▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀
