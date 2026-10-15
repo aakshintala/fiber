@@ -334,6 +334,11 @@ pub(crate) fn run_new(
     } else {
         None
     };
+    // The registry is built above, before any tool runs: installing the
+    // session's timing times a background start as `jobs.start`.
+    if let Some(timing) = &timing {
+        jobs.install_timing(Arc::clone(timing));
+    }
     let (tools, infos, driver, session_servers) = mcp_servers::session_tools(
         fiber,
         &home,

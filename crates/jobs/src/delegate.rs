@@ -5,6 +5,7 @@ use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::Duration;
 
+use contract::diag::Op;
 use contract::emit::Emit;
 use contract::events::DelegateStarted;
 use contract::jobs::JobRecord;
@@ -244,6 +245,13 @@ impl Tool for DelegateSpawn {
             workspace: self.workspace.clone(),
             resume: false,
         };
+        // The stamp covers building the runner, spawning and listing the
+        // child, and recording the job. No clock is read without an
+        // installed timing.
+        let start = self
+            .registry
+            .timing()
+            .map(|timing| (timing, self.clock.now()));
         let (runner, stop) = Runner::new(
             job_id.clone(),
             session_id.clone(),
@@ -282,6 +290,12 @@ impl Tool for DelegateSpawn {
             delegate.clone(),
         );
         std::thread::spawn(move || runner.drive(child, Some(listing), finish));
+        // The job is recorded running and its own drive thread has been
+        // spawned: the start ends here. The guard writes exactly one
+        // `jobs.start` line on drop, with no tool name.
+        if let Some((timing, started)) = start {
+            drop(timing(Op::JobsStart, None, Some(started)));
+        }
         Output {
             content: vec![ContentPart::Text {
                 text: format!("Started delegate {}. Its log is {}.", job_id.0, output_path),

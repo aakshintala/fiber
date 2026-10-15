@@ -400,6 +400,11 @@ fn resumed_session(
         Arc::clone(&clock),
         Arc::new(log::WeakEmit::new(&log)) as _,
     );
+    // The registry starts empty on a resumed session too: installing the
+    // session's timing times a background start as `jobs.start`.
+    if let Some(timing) = &timing {
+        jobs.install_timing(Arc::clone(timing));
+    }
     // A resumed session declares `delegate_spawn` too, parented to itself.
     let fiber_path = match fiber.clone() {
         Ok(fiber_path) => fiber_path,
