@@ -17,6 +17,7 @@ use std::time::{Duration, Instant};
 
 use contract::RequestId;
 use contract::clock::{Clock, Wake};
+use contract::diag::DebugLog;
 use contract::inbox::Delivery;
 use contract::tool::InnerCalls;
 use serde_json::Value;
@@ -37,6 +38,11 @@ pub(crate) struct Hub {
     shared: Mutex<Shared>,
     changed: Condvar,
     clock: Arc<dyn Clock>,
+    /// The session's diagnostic sink, installed once: the first
+    /// installation wins, so a later session never redirects a running
+    /// VM's observation. Outside the shared state and the admission
+    /// lock: installing it starts no work.
+    diagnostics: Mutex<Option<Arc<dyn DebugLog>>>,
     /// Host replies supplied only by the case runner (`docs/testing.md`, "Testing an extension").
     host_script: Mutex<Option<Arc<HostScript>>>,
     /// A test's pause inside the hub lock where a run's delivery is routed.
@@ -68,6 +74,7 @@ impl Hub {
             shared: Mutex::new(Shared::default()),
             changed: Condvar::new(),
             clock: Arc::clone(&clock),
+            diagnostics: Mutex::new(None),
             host_script: Mutex::new(None),
             #[cfg(test)]
             window: Mutex::new(None),
@@ -80,6 +87,29 @@ impl Hub {
 
     pub(crate) fn clock(&self) -> &dyn Clock {
         self.clock.as_ref()
+    }
+
+    /// Installs the session's diagnostic sink, once: the first
+    /// installation wins and a later one changes nothing. Runs no
+    /// callback, so installing it before provider work is silent.
+    pub(crate) fn set_diagnostics(&self, debug: Arc<dyn DebugLog>) {
+        let mut slot = self
+            .diagnostics
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner);
+        if slot.is_none() {
+            *slot = Some(debug);
+        }
+    }
+
+    /// The installed sink, if any. Test-only until the HTTP
+    /// observation snapshot reads it.
+    #[cfg(test)]
+    pub(crate) fn diagnostics(&self) -> Option<Arc<dyn DebugLog>> {
+        self.diagnostics
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .clone()
     }
 
     pub(crate) fn set_host_script(&self, script: Arc<HostScript>) {

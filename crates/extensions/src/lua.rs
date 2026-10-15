@@ -18,6 +18,7 @@ use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use contract::clock::Clock;
+use contract::diag::DebugLog;
 use serde_json::{Value, json};
 
 use crate::oauth::{Browser, LoginSlot, SystemBrowser};
@@ -313,6 +314,29 @@ impl LuaExtension {
     pub fn with_host_script(self, script: Arc<host::script::HostScript>) -> Self {
         self.hub.set_host_script(script);
         self
+    }
+
+    /// Installs the session's diagnostic sink on this VM, once: the first
+    /// installation wins and a later one changes nothing. Runs no
+    /// callback: use before provider work, not as live reconfiguration.
+    pub fn with_diagnostics(self, debug: Arc<dyn DebugLog>) -> Self {
+        self.hub.set_diagnostics(debug);
+        self
+    }
+
+    /// Installs the sink on an already-shared VM, as
+    /// [`SessionExtensions::with_diagnostics`](crate::SessionExtensions::with_diagnostics)
+    /// does for live handles. The first installation wins.
+    pub(crate) fn set_diagnostics(&self, debug: Arc<dyn DebugLog>) {
+        self.hub.set_diagnostics(debug);
+    }
+
+    /// The installed diagnostic sink, if any. Test-only: no public API
+    /// exposes it, and attachment is otherwise observable only through
+    /// HTTP observation, which a later task adds.
+    #[cfg(test)]
+    pub(crate) fn hub_diagnostics(&self) -> Option<Arc<dyn DebugLog>> {
+        self.hub.diagnostics()
     }
 
     /// The clock this extension's deadlines read.
