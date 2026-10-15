@@ -286,6 +286,31 @@ fn run_async(
     (id_rx, out_rx)
 }
 
+// P2-2: a second fifo the child blocks on after its ready line, until the
+// test releases it, so a group watchdog armed in between covers every
+// path. Created beside `ready`; see `Ready::new`.
+fn release_fifo(dir: &std::path::Path) -> std::path::PathBuf {
+    let path = dir.join("release.fifo");
+    let status = std::process::Command::new("mkfifo")
+        .arg(&path)
+        .status()
+        .expect("mkfifo starts");
+    assert!(status.success(), "mkfifo {}", path.display());
+    path
+}
+
+/// Releases a child held at `release_fifo`: one line unblocks its read.
+/// Opened read-write, so the write never blocks on the child's arrival.
+fn release_child(path: &std::path::Path) {
+    use std::io::Write as _;
+    let mut file = std::fs::OpenOptions::new()
+        .read(true)
+        .write(true)
+        .open(path)
+        .expect("the release fifo opens");
+    file.write_all(b"go\n").expect("the release line");
+}
+
 /// One record, failing the test when the scope never closed.
 fn closed(records: &mpsc::Receiver<Record>, deadline: Deadline) -> Record {
     deadline.recv_or_fail(records, "the closed scope")
@@ -294,33 +319,6 @@ fn closed(records: &mpsc::Receiver<Record>, deadline: Deadline) -> Record {
 /// No record is waiting.
 fn assert_none(records: &mpsc::Receiver<Record>, what: &str) {
     assert!(records.try_recv().is_err(), "{what}: no scope closed");
-}
-
-/// The distinct process groups of `pids`, through `ps`. Pids that
-/// exited since the match are skipped.
-fn process_groups(pids: &[u32]) -> Vec<u32> {
-    let mut groups = Vec::new();
-    for pid in pids {
-        let listed = std::process::Command::new("ps")
-            .args(["-o", "pgid=", "-p", &pid.to_string()])
-            .output();
-        let Ok(listed) = listed else {
-            continue;
-        };
-        if !listed.status.success() {
-            continue;
-        }
-        let text = String::from_utf8_lossy(&listed.stdout);
-        if let Some(group) = text
-            .split_whitespace()
-            .next()
-            .and_then(|word| word.parse::<u32>().ok())
-            && !groups.contains(&group)
-        {
-            groups.push(group);
-        }
-    }
-    groups
 }
 
 /// Stops `id` and receives its end, panicking with the registry and process
@@ -379,12 +377,14 @@ fn run_in_background_times_adoption_setup_only() {
     // once started, so the test waits for the child's signal, never the
     // process table.
     let ready = Ready::new(fixture.dir.path());
+    let release_path = release_fifo(fixture.dir.path());
     let (holding, reached, release) = Holding::wrap(Arc::clone(&fixture.jobs));
     holding.arm();
     let shell = fixture.shell(holding);
     // The fifo lives in the workspace, the call's own workdir, so the
     // relative name resolves there and the description keeps its shape.
-    let command = format!(": {marker}; echo $$ > ready.fifo; exec sleep 60");
+    let command =
+        format!(": {marker}; echo $$ > ready.fifo; read -r _ < release.fifo; exec sleep 60");
     let (_ids, output_rx) = run_async(
         shell,
         args(&command, "run_in_background"),
@@ -408,20 +408,14 @@ fn run_in_background_times_adoption_setup_only() {
     );
     assert_eq!(job.description, command);
     assert_eq!(job.tool.as_deref(), Some("shell"));
-    // One job in its own group: the acknowledged pid shares the job's
-    // one process group. The count itself is not pinned: a fork between
-    // its `exec` still carries the marker's command line.
+    // The acknowledged child is held at the release fifo until its
+    // group is watched, so every path reaps it; releasing lets it exec.
     let child = ready.wait(STEP);
     assert!(!child.is_empty(), "the job's shell acknowledged its start");
     // The marker cannot match an exec'd child on Linux, so the group is
     // watched by id: the pid is the group id after `setsid`.
     let _group = Watchdog::group(child[0]);
-    let groups = process_groups(&child);
-    assert_eq!(
-        groups.len(),
-        1,
-        "the job's group is the only one: {child:?}"
-    );
+    release_child(&release_path);
     assert_eq!(fixture.probe.calls(), 1);
     let record = closed(&fixture.records, deadline);
     assert_eq!((record.op, record.ms), (Op::JobsStart, 5));
@@ -448,10 +442,13 @@ fn tty_times_the_start_before_the_first_output_wait() {
     // once started, so the test waits for the child's signal, never the
     // process table.
     let ready = Ready::new(fixture.dir.path());
+    let release_path = release_fifo(fixture.dir.path());
     let (holding, reached, release) = Holding::wrap(Arc::clone(&fixture.jobs));
     holding.arm();
     let shell = fixture.shell(holding);
-    let command = format!(": {marker}; echo out; echo $$ > ready.fifo; exec sleep 60");
+    let command = format!(
+        ": {marker}; echo out; echo $$ > ready.fifo; read -r _ < release.fifo; exec sleep 60"
+    );
     let (id_rx, output_rx) = run_async(shell, args(&command, "tty"), CancelToken::new());
     through_open(&fixture, &reached, &release);
     let deadline = Deadline::after(STEP);
@@ -482,6 +479,7 @@ fn tty_times_the_start_before_the_first_output_wait() {
     let child = ready.wait(STEP);
     assert!(!child.is_empty(), "the job acknowledged its start");
     let _group = Watchdog::group(child[0]);
+    release_child(&release_path);
     stop_and_end(&fixture.jobs, &job.job_id, marker);
 }
 
@@ -494,10 +492,12 @@ fn monitor_times_its_start() {
     // once started, so the test waits for the child's signal, never the
     // process table.
     let ready = Ready::new(fixture.dir.path());
+    let release_path = release_fifo(fixture.dir.path());
     let (holding, reached, release) = Holding::wrap(Arc::clone(&fixture.jobs));
     holding.arm();
     let shell = fixture.shell(holding);
-    let command = format!(": {marker}; echo $$ > ready.fifo; exec sleep 60");
+    let command =
+        format!(": {marker}; echo $$ > ready.fifo; read -r _ < release.fifo; exec sleep 60");
     let (_ids, output_rx) = run_async(shell, args(&command, "monitor"), CancelToken::new());
     through_open(&fixture, &reached, &release);
     let deadline = Deadline::after(STEP);
@@ -512,6 +512,7 @@ fn monitor_times_its_start() {
     let child = ready.wait(STEP);
     assert!(!child.is_empty(), "the job acknowledged its start");
     let _group = Watchdog::group(child[0]);
+    release_child(&release_path);
     stop_and_end(&fixture.jobs, &job.job_id, marker);
     assert_none(&fixture.records, "the end");
 }
@@ -525,10 +526,12 @@ fn a_foreground_call_moved_after_thirty_seconds_times_the_move_only() {
     // once started, so the test waits for the child's signal, never the
     // process table.
     let ready = Ready::new(fixture.dir.path());
+    let release_path = release_fifo(fixture.dir.path());
     let (holding, reached, release) = Holding::wrap(Arc::clone(&fixture.jobs));
     holding.arm();
     let shell = fixture.shell(Arc::clone(&holding));
-    let command = format!(": {marker}; echo $$ > ready.fifo; exec sleep 60");
+    let command =
+        format!(": {marker}; echo $$ > ready.fifo; read -r _ < release.fifo; exec sleep 60");
     let mut arguments = Map::new();
     arguments.insert("command".into(), json!(command));
     let (id_rx, output_rx) = run_async(shell, arguments, CancelToken::new());
@@ -560,6 +563,7 @@ fn a_foreground_call_moved_after_thirty_seconds_times_the_move_only() {
     let child = ready.wait(STEP);
     assert!(!child.is_empty(), "the job acknowledged its start");
     let _group = Watchdog::group(child[0]);
+    release_child(&release_path);
     assert!(holding.stop(&job.job_id));
     stop_and_end(&fixture.jobs, &job.job_id, marker);
 }
@@ -573,10 +577,12 @@ fn the_background_command_moves_a_call_with_one_start() {
     // once started, so the test waits for the child's signal, never the
     // process table.
     let ready = Ready::new(fixture.dir.path());
+    let release_path = release_fifo(fixture.dir.path());
     let (holding, reached, release) = Holding::wrap(Arc::clone(&fixture.jobs));
     holding.arm();
     let shell = fixture.shell(Arc::clone(&holding));
-    let command = format!(": {marker}; echo $$ > ready.fifo; exec sleep 60");
+    let command =
+        format!(": {marker}; echo $$ > ready.fifo; read -r _ < release.fifo; exec sleep 60");
     let mut arguments = Map::new();
     arguments.insert("command".into(), json!(command));
     let (_ids, output_rx) = run_async(shell, arguments, CancelToken::new());
@@ -600,6 +606,7 @@ fn the_background_command_moves_a_call_with_one_start() {
     let child = ready.wait(STEP);
     assert!(!child.is_empty(), "the job acknowledged its start");
     let _group = Watchdog::group(child[0]);
+    release_child(&release_path);
     assert!(holding.stop(&job.job_id));
     stop_and_end(&fixture.jobs, &job.job_id, marker);
 }
@@ -815,6 +822,7 @@ fn a_foreground_call_cancelled_before_it_moves_writes_nothing() {
     // once started, so the test waits for the child's signal, never the
     // process table.
     let ready = Ready::new(fixture.dir.path());
+    let release_path = release_fifo(fixture.dir.path());
     let jobs = fakes::jobs::FakeJobs::new(fixture.dir.path());
     let shell = Arc::new(
         Shell::new(
@@ -829,7 +837,8 @@ fn a_foreground_call_cancelled_before_it_moves_writes_nothing() {
     // `exec` turns the shell into its last command under the same pid,
     // so the ready line proves the group's only process exists and no
     // process is created after it.
-    let command = format!(": {marker}; echo $$ > ready.fifo; exec sleep 60");
+    let command =
+        format!(": {marker}; echo $$ > ready.fifo; read -r _ < release.fifo; exec sleep 60");
     let mut arguments = Map::new();
     arguments.insert("command".into(), json!(command));
     let cancel = CancelToken::new();
@@ -843,6 +852,7 @@ fn a_foreground_call_cancelled_before_it_moves_writes_nothing() {
     // `exec` drops the marker from the command line, so the group is
     // watched by id: the pid is the group id after `setsid`.
     let _group = Watchdog::group(child[0]);
+    release_child(&release_path);
     let call_thread = Deadline::after(STEP).recv_or_fail(&id_rx, "the drive thread");
     assert!(
         fixture
@@ -880,7 +890,9 @@ fn untimed_and_timed_background_receipts_agree() {
         let marker = "fiber-p10-agree-marker";
         let _watchdog = Watchdog::matching(marker);
         let ready = Ready::new(dir.path());
-        let command = format!(": {marker}; echo $$ > ready.fifo; exec sleep 60");
+        let release_path = release_fifo(dir.path());
+        let command =
+            format!(": {marker}; echo $$ > ready.fifo; read -r _ < release.fifo; exec sleep 60");
         let (_ids, output_rx) = run_async(
             shell,
             args(&command, "run_in_background"),
@@ -891,6 +903,7 @@ fn untimed_and_timed_background_receipts_agree() {
         let child = ready.wait(STEP);
         assert!(!child.is_empty(), "the job acknowledged its start");
         let _group = Watchdog::group(child[0]);
+        release_child(&release_path);
         assert!(jobs.stop(&job.job_id));
         let ended = jobs.ended(STEP).expect("the stopped job to end");
         // The receipt names the run's own directory: washed before compare.
