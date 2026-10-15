@@ -17,11 +17,12 @@ fn read_error(path: &std::path::Path, error: io::Error) -> io::Error {
 }
 
 fn main() -> io::Result<()> {
-    let manifest_dir = env::var("CARGO_MANIFEST_DIR").map_err(io::Error::other)?;
     let out_dir = env::var("OUT_DIR").map_err(io::Error::other)?;
     println!("cargo:rerun-if-changed=build.rs");
     println!("cargo:rerun-if-changed=../../providers");
-    let root = PathBuf::from(manifest_dir).join("../../providers");
+    // The manifest directory is the build script's own working directory,
+    // so the providers tree is a relative path from here.
+    let root = PathBuf::from("../../providers");
     let mut package_dirs = Vec::new();
     for entry in fs::read_dir(&root).map_err(|error| read_error(&root, error))? {
         let entry = entry.map_err(|error| read_error(&root, error))?;
