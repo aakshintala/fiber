@@ -1930,17 +1930,33 @@ struct CancelledCall {
 }
 
 /// Runs `process` of `bytes` off-thread against a child that signals
-/// `ready` then blocks, cancels it, and returns the cancelled call. The
-/// child's pid is reported through the spawn hook, and its group watchdog
-/// is armed while it is still blocked.
+/// `ready` then blocks on the test-held release pipe, cancels it, and
+/// returns the cancelled call. The child's pid is reported through the
+/// spawn hook, and its group watchdog is armed while it is still blocked.
+/// A body that needs the cancel to land after some other child state
+/// reaches that state before signalling readiness, then blocks on the
+/// release like every other body, so the race is forced, never waited for.
 fn cancelled_call(
     prefix: &str,
     bytes: Vec<u8>,
-    body: &dyn Fn(&Path, &Path) -> String,
+    body: &dyn Fn(&Path, &Path, &Path) -> String,
 ) -> CancelledCall {
     let mut client = Fixture::new(prefix);
     let ready = fakes::children::Ready::new(client.path());
-    let fiber = stub(client.path(), &body(client.path(), ready.path()));
+    let release = client.path().join("release.fifo");
+    let mkfifo = std::process::Command::new("mkfifo")
+        .arg(&release)
+        .status()
+        .expect("mkfifo starts");
+    assert!(mkfifo.success(), "mkfifo {release:?}");
+    // Held open until the cancelled result is in: dropping it before the
+    // child opens the pipe would leave the open without a writer.
+    let held = fs::OpenOptions::new()
+        .read(true)
+        .write(true)
+        .open(&release)
+        .expect("the release pipe");
+    let fiber = stub(client.path(), &body(client.path(), ready.path(), &release));
     let (probe, records) = probe();
     let timing = probe.timing();
     let dir = client.path().to_path_buf();
@@ -1964,6 +1980,7 @@ fn cancelled_call(
     assert_eq!(probe.active(), 1, "the scope is open while held");
     cancel.cancel();
     let result = deadline.recv_or_fail(&done_rx, "the cancelled call");
+    drop(held);
     CancelledCall {
         result,
         probe,
@@ -1999,7 +2016,7 @@ fn assert_cancelled(call: CancelledCall) {
 
 #[test]
 fn a_cancel_after_the_child_started_stops_and_times_it() {
-    let call = cancelled_call("fiber-picture-cancel", PNG.to_vec(), &|_, ready| {
+    let call = cancelled_call("fiber-picture-cancel", PNG.to_vec(), &|_, ready, _| {
         format!("echo $$ > '{}'\nexec sleep 3600", ready.display())
     });
     assert_cancelled(call);
@@ -2012,18 +2029,27 @@ fn a_cancel_while_the_write_is_blocked_stops_and_times_it() {
     let call = cancelled_call(
         "fiber-picture-blocked",
         vec![b'x'; 4 * 1024 * 1024],
-        &|_, ready| format!("echo $$ > '{}'\nexec sleep 3600", ready.display()),
+        &|_, ready, _| format!("echo $$ > '{}'\nexec sleep 3600", ready.display()),
     );
     assert_cancelled(call);
 }
 
 #[test]
 fn a_cancel_after_stdout_and_stderr_closed_stops_and_times_it() {
-    // The child closes both pipes, then sleeps: the drains are already
-    // joined when the cancel lands.
-    let call = cancelled_call("fiber-picture-closed", PNG.to_vec(), &|_, ready| {
-        format!("echo $$ > '{}'\nexec sleep 3600 >&- 2>&-", ready.display())
-    });
+    // The child closes both pipes before signalling readiness, then waits
+    // on the release pipe: readiness proves the drains already joined, so
+    // the cancel below deterministically lands after the close.
+    let call = cancelled_call(
+        "fiber-picture-closed",
+        PNG.to_vec(),
+        &|_, ready, release| {
+            format!(
+                "exec 1>&- 2>&-\necho $$ > '{}'\nread ack < '{}'",
+                ready.display(),
+                release.display()
+            )
+        },
+    );
     assert_cancelled(call);
 }
 

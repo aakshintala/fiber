@@ -303,7 +303,6 @@ What is recorded:
   lazy first use, restarts, renewals and post-approval starts, with the
   remote server's actual connector work timed as `net.connect` beside it.
   It excludes cache-only declarations, prompt discovery and tool execution.
-  Other plain agent clients stay unobserved.
 
 An event inside a running session is recorded in that session's log and
 nowhere else, with one exception: a session or ask process's own diagnostic

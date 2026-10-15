@@ -244,6 +244,9 @@ fn an_invalid_pasted_image_is_refused_with_no_picture_run() {
     let setup = Setup::new_with_fm_root();
     let server = ProviderServer::start([hello()]).unwrap();
     setup.provider_with_images(&server);
+    // At debug, so the zero-picture assertion below is sensitive to an
+    // accidental image-child entry: info would suppress timing regardless.
+    debug_home(&setup);
     let id = doors::mint("s_");
     let mut running = setup.start_session(&id, &[]);
 
@@ -463,6 +466,44 @@ fn at_default_an_image_read_writes_no_picture_run() {
 }
 
 #[test]
+fn at_info_an_image_read_writes_no_picture_run() {
+    let setup = Setup::new();
+    fs::write(setup.workspace().join("pic.png"), PIXEL).unwrap();
+    let server = ProviderServer::start(image_read_script()).unwrap();
+    setup.provider_with_images(&server);
+    // After the provider install, which rewrites the home config: info
+    // must still process the image while timing nothing.
+    write_json(
+        &setup.home().join("config.json"),
+        &json!({"model": "fake/m", "diagnostics": {"level": "info"}}),
+    );
+
+    let run = ask(&setup, "look at the picture");
+
+    assert_eq!(run.code, Some(0), "stderr: {}", run.stderr);
+    assert_eq!(run.kinds(), read_kinds());
+    assert_eq!(server.requests().len(), 2, "the read really ran");
+    let completed = run.first("tool_call_completed");
+    assert_eq!(completed["payload"]["status"], "completed");
+    let session = support::session_dir(&setup, run.session_id());
+    let stored: Vec<PathBuf> = fs::read_dir(session.join("artifacts"))
+        .unwrap()
+        .map(|entry| entry.unwrap().path())
+        .collect();
+    assert_eq!(stored.len(), 1, "the image is still processed");
+    assert_eq!(fs::read(&stored[0]).unwrap(), PIXEL);
+    let lines = log_lines(&setup);
+    assert!(
+        picture_runs(&lines).is_empty(),
+        "at info a processed image times nothing"
+    );
+    assert!(
+        lines.iter().all(|line| line["level"] != "debug"),
+        "explicit info stays silent"
+    );
+}
+
+#[test]
 fn a_repository_debug_image_read_stays_silent_with_its_notice() {
     let setup = Setup::new();
     write_json(
@@ -476,6 +517,11 @@ fn a_repository_debug_image_read_stays_silent_with_its_notice() {
     let run = ask(&setup, "look at the picture");
 
     assert_eq!(run.code, Some(0), "stderr: {}", run.stderr);
+    // The notice rides along after the extensions load, before the
+    // preamble; every other kind is the one successful read's.
+    let mut expected = read_kinds();
+    expected.insert(3, "notice");
+    assert_eq!(run.kinds(), expected);
     assert!(
         run.all("notice")
             .iter()
@@ -504,6 +550,7 @@ fn at_debug_an_unreadable_image_read_writes_one_picture_run() {
     let run = ask(&setup, "look at the picture");
 
     assert_eq!(run.code, Some(0), "stderr: {}", run.stderr);
+    assert_eq!(run.kinds(), read_kinds());
     assert_eq!(server.requests().len(), 2, "the read really ran");
     let completed = run.first("tool_call_completed");
     assert_eq!(completed["payload"]["status"], "failed");
