@@ -1131,7 +1131,7 @@ fn a_call_cancelled_before_it_starts_sends_nothing() {
 #[test]
 fn the_whole_fetch_times_out_after_five_minutes_whatever_each_hop_has_left() {
     for hop in [55u64, 48u64] {
-        let hops = 5;
+        let hops = 5usize;
         let script: Vec<_> = (1..=hops)
             .map(|n| redirect(302, &format!("/{n}")))
             .collect();
@@ -1145,7 +1145,7 @@ fn the_whole_fetch_times_out_after_five_minutes_whatever_each_hop_has_left() {
         for n in 1..=hops {
             if n > 1 {
                 assert!(
-                    server.await_requests(n as usize, SIGNAL),
+                    server.await_requests(n, SIGNAL),
                     "hop {n} is in flight"
                 );
             }
