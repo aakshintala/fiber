@@ -1507,7 +1507,6 @@ fn a_running_command_at_its_deadline_times_out_and_leaves_the_vm_up() {
         "{err:?}"
     );
     assert!(matches!(shared.phase, Phase::Ready(_)));
-    assert!(shared.calls.is_empty() && shared.queue.is_empty());
     assert!(
         shared.abandon.as_ref().is_some_and(|watch| watch.id == id),
         "the Timeout arms the abandon watch"

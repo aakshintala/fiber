@@ -440,9 +440,17 @@ fn spawn_failed(
 #[cfg(test)]
 struct Withheld {
     extension: String,
-    point: Option<String>,
-    command: Option<String>,
+    target: WithheldTarget,
     release: Arc<Mutex<std::sync::mpsc::Receiver<()>>>,
+}
+
+/// Which finished callbacks a `Withheld` pause holds: one hook point or one
+/// command name. One field holds either, so an armed pause can never name
+/// both or neither.
+#[cfg(test)]
+enum WithheldTarget {
+    Hook(String),
+    Command(String),
 }
 
 #[cfg(test)]
@@ -462,8 +470,7 @@ pub(super) fn withhold_hook_completion(
         .lock()
         .unwrap_or_else(std::sync::PoisonError::into_inner) = Some(Withheld {
         extension: extension.to_owned(),
-        point: Some(point.to_owned()),
-        command: None,
+        target: WithheldTarget::Hook(point.to_owned()),
         release: Arc::new(Mutex::new(release)),
     });
 }
@@ -482,8 +489,7 @@ pub(super) fn withhold_command_completion(
         .lock()
         .unwrap_or_else(std::sync::PoisonError::into_inner) = Some(Withheld {
         extension: extension.to_owned(),
-        point: None,
-        command: Some(command.to_owned()),
+        target: WithheldTarget::Command(command.to_owned()),
         release: Arc::new(Mutex::new(release)),
     });
 }
@@ -506,8 +512,13 @@ fn await_completion_release(extension: &str, target: &Target) {
         .as_ref()
         .filter(|withheld| {
             withheld.extension == extension
-                && (matches!(target, Target::Hook { point, .. } if Some(point) == withheld.point.as_ref())
-                    || matches!(target, Target::Command(command) if Some(command) == withheld.command.as_ref()))
+                && match (&withheld.target, target) {
+                    (WithheldTarget::Hook(point), Target::Hook { point: held, .. }) => {
+                        point == held
+                    }
+                    (WithheldTarget::Command(command), Target::Command(held)) => command == held,
+                    _ => false,
+                }
         })
         .map(|withheld| Arc::clone(&withheld.release));
     if let Some(waiter) = waiter {
