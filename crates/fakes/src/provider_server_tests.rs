@@ -599,11 +599,15 @@ fn dropping_releases_holds_and_reaps_stalls() {
 #[test]
 fn dropping_an_idle_server_closes_its_port() {
     let server = ProviderServer::start([Response::status(200, "ok")]).unwrap();
-    let addr = server.addr;
+    let probe = server.core.drop_probe();
     drop(server);
     assert!(
-        TcpStream::connect_timeout(&addr, READ_WITHIN).is_err(),
-        "the dropped server's port refuses connections"
+        probe.listener_closed(),
+        "the dropped server closed its listener"
+    );
+    assert!(
+        probe.accept_joined(),
+        "the dropped server joined its accept thread"
     );
 }
 
@@ -646,7 +650,10 @@ fn dropping_gives_up_on_a_responder_that_never_returns() {
     });
     Deadline::after(READ_WITHIN).recv_or_fail(&started_rx, "the blocked responder");
     // The drop ends while the responder is still blocked: it gives the
-    // callback up instead of hanging on it.
+    // callback up instead of hanging on it. The probe is taken before
+    // the server moves into the dropper thread; it holds the shared
+    // core, so it stays valid past the drop.
+    let probe = server.core.drop_probe();
     let (done_tx, done_rx) = mpsc::channel();
     thread::spawn(move || {
         drop(server);
@@ -656,8 +663,12 @@ fn dropping_gives_up_on_a_responder_that_never_returns() {
     });
     Deadline::after(READ_WITHIN).recv_or_fail(&done_rx, "the drop to give up on the responder");
     assert!(
-        TcpStream::connect_timeout(&addr, READ_WITHIN).is_err(),
-        "the dropped server's port refuses connections"
+        probe.listener_closed(),
+        "the dropped server closed its listener"
+    );
+    assert!(
+        !probe.accept_joined(),
+        "the drop gives up on the stuck responder instead of joining it"
     );
     drop(release_tx);
     match Deadline::after(READ_WITHIN).recv(&rx) {

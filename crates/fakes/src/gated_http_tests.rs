@@ -449,10 +449,15 @@ fn dropping_before_goodbye_stops_the_server() {
     let (gated, asked) = open_gated(&url);
     assert_eq!(asked["id"], json!("el-1"));
     drop(gated);
+    let probe = fake.core.drop_probe();
     drop(fake);
     assert!(
-        std::net::TcpStream::connect_timeout(&address(&url), CLIENT_WAIT).is_err(),
-        "the dropped fake's port refuses connections"
+        probe.listener_closed(),
+        "the dropped fake closed its listener"
+    );
+    assert!(
+        probe.accept_joined(),
+        "the dropped fake joined its accept thread"
     );
 }
 
@@ -464,22 +469,15 @@ fn a_dropped_fake_refuses_connections_at_once() {
     let fake = GatedHttp::start_call(elicitation(), gated_result());
     let url = fake.url();
     handshake(&url);
+    let probe = fake.core.drop_probe();
     drop(fake);
-    let deadline = Deadline::after(CLIENT_WAIT);
-    let refused = loop {
-        match std::net::TcpStream::connect(address(&url)) {
-            Ok(open) => {
-                drop(open);
-                if deadline.left().is_zero() {
-                    break false;
-                }
-            }
-            Err(_) => break true,
-        }
-    };
     assert!(
-        refused,
-        "the dropped fake's port refuses connections promptly"
+        probe.listener_closed(),
+        "the dropped fake closed its listener"
+    );
+    assert!(
+        probe.accept_joined(),
+        "the dropped fake joined its accept thread"
     );
 }
 
