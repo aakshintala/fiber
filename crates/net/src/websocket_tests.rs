@@ -192,6 +192,66 @@ fn line_feed_in_a_server_message_closes_1007() {
 }
 
 #[test]
+fn upgrade_reply_uses_the_idle_bound() {
+    let (release, hold) = mpsc::channel::<()>();
+    let (endpoint, done) = server(move |mut peer| {
+        handshake::headers(&mut peer).unwrap();
+        match hold.recv() {
+            Ok(()) | Err(_) => {}
+        }
+    });
+    let result = fakes::within("upgrade idle bound", WAIT, move || {
+        let via = Via {
+            limits: crate::Limits::new(Duration::from_secs(15), Duration::from_millis(100))
+                .unwrap(),
+            ..direct()
+        };
+        connect_with(&endpoint, &via)
+    });
+    assert!(matches!(result, Err(Error::Stalled { idle }) if idle == Duration::from_millis(100)));
+    drop(release);
+    fakes::Deadline::after(WAIT).recv_or_fail(&done, "silent upgrade server released");
+}
+
+#[test]
+fn an_idle_websocket_keeps_its_read_open_after_the_upgrade() {
+    fakes::within("idle websocket read", WAIT, || {
+        let (release, hold) = mpsc::channel::<()>();
+        let (endpoint, done) = server(move |mut peer| {
+            upgrade(&mut peer);
+            match hold.recv() {
+                Ok(()) | Err(_) => {}
+            }
+            peer.write_all(&server_frame(1, b"after release")).unwrap();
+        });
+        let mut via = Via {
+            limits: crate::Limits::new(Duration::from_secs(15), Duration::from_millis(100))
+                .unwrap(),
+            ..direct()
+        };
+        let exit = exits(&mut via);
+        let stream = connect_with(&endpoint, &via).unwrap();
+        let (line, lines) = mpsc::channel();
+        std::thread::spawn(move || {
+            let mut text = String::new();
+            let result = BufReader::new(stream).read_line(&mut text);
+            line.send((result, text)).unwrap();
+        });
+        assert!(matches!(
+            fakes::Deadline::after(Duration::from_millis(400)).recv(&lines),
+            Err(mpsc::RecvTimeoutError::Timeout)
+        ));
+        release.send(()).unwrap();
+        let deadline = fakes::Deadline::after(WAIT);
+        let (result, text) = deadline.recv_or_fail(&lines, "line after held idle interval");
+        assert_eq!(result.unwrap(), 14);
+        assert_eq!(text, "after release\n");
+        both(deadline, &exit);
+        deadline.recv_or_fail(&done, "held frame sent");
+    });
+}
+
+#[test]
 fn a_reset_peer_ends_the_pair_and_both_pumps() {
     fakes::within("reset websocket", WAIT, || {
         let (endpoint, done) = server(|mut peer| {
