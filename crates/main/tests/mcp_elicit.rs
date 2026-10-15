@@ -17,8 +17,10 @@ mod support;
 
 use std::fs;
 use std::path::{Path, PathBuf};
+use std::sync::mpsc::RecvTimeoutError;
 
 use fakes::{Client, ProviderServer, Watchdog};
+use fakes::clock::FakeClock;
 use serde_json::{Value, json};
 use support::{Deadline, Setup, function_call, hello, stream};
 
@@ -146,14 +148,32 @@ fn mkfifo(dir: &Path, name: &str) {
     assert!(status.success(), "mkfifo creates {name}");
 }
 
-/// Reads one FIFO's line, with the test's deadline naming the wait.
-fn read_fifo(deadline: Deadline, path: PathBuf) -> String {
+/// Reads one FIFO's line, with the test's deadline naming the wait. After
+/// `Timeout` the reader thread stays blocked in `open` on the fifo; the
+/// fixture's writer, or process exit, ends it. Nothing joins it, so
+/// nothing hangs.
+fn read_fifo(deadline: Deadline, path: PathBuf) -> Result<String, RecvTimeoutError> {
     let (done, read) = std::sync::mpsc::channel();
     std::thread::spawn(move || {
         let content = fs::read_to_string(&path).expect("the fifo reads");
         done.send(content).expect("collected");
     });
-    deadline.recv(&read).expect("the fifo reads in time")
+    deadline.recv(&read)
+}
+
+#[test]
+fn read_fifo_past_a_spent_deadline_times_out() {
+    let setup = Setup::new();
+    let dir = setup.root.path().join("fifo");
+    fs::create_dir_all(&dir).unwrap();
+    mkfifo(&dir, "never-written");
+    let clock = Box::leak(Box::new(FakeClock::new()));
+    let spent = Deadline::on(&**clock);
+    clock.advance(support::WAITS);
+    assert_eq!(
+        read_fifo(spent, dir.join("never-written")),
+        Err(RecvTimeoutError::Timeout),
+    );
 }
 
 /// Writes one line to a FIFO, with the test's deadline naming the wait.
@@ -390,7 +410,10 @@ fn an_elicitation_with_two_calls_in_flight_names_both() {
     prompt(setup.deadline, &client);
     // `hold` is held first: its acknowledgement proves it is registered,
     // so the elicitation lists it alongside `ask`.
-    assert_eq!(read_fifo(setup.deadline, dir.join("held-hold")), "held\n",);
+    assert_eq!(
+        read_fifo(setup.deadline, dir.join("held-hold")).expect("the fifo reads in time"),
+        "held\n",
+    );
     write_fifo(setup.deadline, dir.join("release-ask"));
     let mut actions = Vec::new();
     for tool in ["mcp__fx__hold", "mcp__fx__ask"] {
