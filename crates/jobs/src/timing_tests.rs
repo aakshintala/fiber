@@ -12,7 +12,7 @@
 )]
 
 use std::process::Command;
-use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex, mpsc};
 use std::thread;
 use std::time::{Duration, Instant};
@@ -376,6 +376,37 @@ fn assert_none(records: &mpsc::Receiver<Record>, what: &str) {
     assert!(records.try_recv().is_err(), "{what}: no scope closed");
 }
 
+/// How long the reap driver waits for the runner's retry park before it
+/// checks its stop: a bound on each wait, never a timing assertion.
+const POLL: Duration = Duration::from_millis(10);
+
+/// Takes the run's end, re-running the runner's reap pass while it holds
+/// its retry park at `park`: the drain's end of file can beat the zombie,
+/// and only a clock wake re-runs the reap. The driver advances zero, which
+/// moves no time and changes no deadline; it only wakes the parked pass.
+/// `park` is the drive start plus the watch retry backoff. Modelled on
+/// `reported_before` in `delegate/run_tests.rs`.
+fn end_after_reap(
+    fixture: &Fixture,
+    park: Instant,
+    deadline: Deadline,
+    what: &str,
+) -> JobCompleted {
+    let stop = Arc::new(AtomicBool::new(false));
+    let driver_stop = Arc::clone(&stop);
+    let clock = Arc::clone(&fixture.clock);
+    thread::spawn(move || {
+        while !driver_stop.load(Ordering::SeqCst) {
+            if clock.await_parked(park, POLL) {
+                clock.advance(Duration::ZERO);
+            }
+        }
+    });
+    let ended = expect_end(&fixture.inbox, deadline, what);
+    stop.store(true, Ordering::SeqCst);
+    ended
+}
+
 /// The run's end from the inbox.
 fn expect_end(inbox: &mpsc::Receiver<Delivery>, deadline: Deadline, what: &str) -> JobCompleted {
     match deadline.recv_or_fail(inbox, what) {
@@ -474,7 +505,12 @@ fn a_new_delegate_times_spawn_to_running() {
     // record and change nothing.
     watch_release.send(()).unwrap();
     halt(&fixture.registry, &started.job_id);
-    let ended = expect_end(&fixture.inbox, deadline, "the run end");
+    let ended = end_after_reap(
+        &fixture,
+        fixture.clock.origin() + Duration::from_millis(57),
+        deadline,
+        "the run end",
+    );
     assert_eq!(ended.job_id, started.job_id);
     assert_eq!(probe.calls(), 1, "the end writes nothing");
     assert_none(&records, "the end");
@@ -492,7 +528,12 @@ fn a_resumed_delegate_times_the_new_run() {
     let output = spawn.run(&spawn_args(), &CancelToken::new(), &Recorder::default());
     let (started, _) = started_records(&output);
     let deadline = Deadline::after(STEP);
-    expect_end(&fixture.inbox, deadline, "the run end");
+    end_after_reap(
+        &fixture,
+        fixture.clock.origin() + Duration::from_millis(50),
+        deadline,
+        "the run end",
+    );
     // Then a resume with a held launch and a 9 ms step inside its start.
     let marker = "fiber-p10-resume";
     let _watchdog = Watchdog::matching(marker);
@@ -519,7 +560,12 @@ fn a_resumed_delegate_times_the_new_run() {
     assert!(second.probe_ok, "the resume emission holds no lock");
     assert_none(&records, "the resume");
     halt(&fixture.registry, &started.job_id);
-    expect_end(&fixture.inbox, deadline, "the run end");
+    end_after_reap(
+        &fixture,
+        fixture.clock.origin() + Duration::from_millis(59),
+        deadline,
+        "the run end",
+    );
     assert_eq!(probe.calls(), 2, "the resumed end writes nothing");
     assert_none(&records, "the resumed end");
 }
@@ -649,7 +695,12 @@ fn refused_and_failed_starts_write_nothing() {
         let shell_end = expect_end(&fixture.inbox, deadline, "the shell end");
         assert_eq!(shell_end.job_id.0, shell_id);
         halt(&fixture.registry, &live_started.job_id);
-        let live_end = expect_end(&fixture.inbox, deadline, "the live end");
+        let live_end = end_after_reap(
+            &fixture,
+            fixture.clock.origin() + Duration::from_millis(50),
+            deadline,
+            "the live end",
+        );
         assert_eq!(live_end.job_id, live_started.job_id);
     }
     // A failed boundary read and a resume spawn failure start nothing.
@@ -674,7 +725,12 @@ fn refused_and_failed_starts_write_nothing() {
         );
         let output = first.run(&spawn_args(), &CancelToken::new(), &Recorder::default());
         let (started, _) = started_records(&output);
-        expect_end(&fixture.inbox, deadline, "the first run end");
+        end_after_reap(
+            &fixture,
+            fixture.clock.origin() + Duration::from_millis(50),
+            deadline,
+            "the first run end",
+        );
         fixture.registry.install_timing(probe.timing());
         let tool = fixture.messenger(launch, refused_watch(), last_seq);
         let attempt = tool.resume_now(&started.job_id.0, "again", &None, &CancelToken::new());
@@ -709,7 +765,12 @@ fn a_pre_cancelled_spawn_still_starts_and_times_once() {
     assert!(record.probe_ok);
     assert_none(&records, "the start");
     halt(&fixture.registry, &started.job_id);
-    expect_end(&fixture.inbox, deadline, "the run end");
+    end_after_reap(
+        &fixture,
+        fixture.clock.origin() + Duration::from_millis(50),
+        deadline,
+        "the run end",
+    );
     assert_eq!(probe.calls(), 1, "the end writes nothing");
 }
 
@@ -751,7 +812,12 @@ fn without_timing_nothing_is_called() {
     assert_eq!(probe.calls(), 0, "the probe was never installed");
     assert_none(&records, "untimed");
     halt(&fixture.registry, &started.job_id);
-    expect_end(&fixture.inbox, Deadline::after(STEP), "the run end");
+    end_after_reap(
+        &fixture,
+        fixture.clock.origin() + Duration::from_millis(50),
+        Deadline::after(STEP),
+        "the run end",
+    );
 }
 
 #[test]
@@ -776,7 +842,12 @@ fn a_second_install_is_ignored() {
     assert_none(&first_records, "the start");
     assert_none(&second_records, "the second timing hears nothing");
     halt(&fixture.registry, &started.job_id);
-    expect_end(&fixture.inbox, deadline, "the run end");
+    end_after_reap(
+        &fixture,
+        fixture.clock.origin() + Duration::from_millis(50),
+        deadline,
+        "the run end",
+    );
 }
 
 #[test]
@@ -797,7 +868,12 @@ fn untimed_and_timed_spawns_agree() {
         let output = spawn.run(&spawn_args(), &CancelToken::new(), &Recorder::default());
         let (started, delegate) = started_records(&output);
         halt(&fixture.registry, &started.job_id);
-        let ended = expect_end(&fixture.inbox, Deadline::after(STEP), "the run end");
+        let ended = end_after_reap(
+            &fixture,
+            fixture.clock.origin() + Duration::from_millis(50),
+            Deadline::after(STEP),
+            "the run end",
+        );
         // The receipt names this run's own ids and directory: washed
         // before compare.
         let washed = text(&output)
