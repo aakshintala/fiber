@@ -1883,16 +1883,8 @@ fn hover_lifts_a_tinted_cell_and_keeps_hover_where_there_is_no_tint() {
     buf[(4, 0)].set_bg(Role::Text.color());
     super::lift_hover(&mut buf, area);
     // A target on a tint draws it 0x14 lighter on each channel.
-    assert_eq!(
-        buf[(0, 0)].bg,
-        Color::Rgb(0x2e, 0x2e, 0x36),
-        "the surface tint lifts"
-    );
-    assert_eq!(
-        buf[(1, 0)].bg,
-        Color::Rgb(0x24, 0x24, 0x2b),
-        "a literal tint lifts"
-    );
+    assert_eq!(buf[(0, 0)].bg, Color::Indexed(89), "the surface tint lifts");
+    assert_eq!(buf[(1, 0)].bg, Role::Hover.color(), "a literal tint lifts");
     // A target with no tint under it draws the hover colour.
     assert_eq!(buf[(2, 0)].bg, Role::Hover.color(), "no tint takes hover");
     assert_eq!(

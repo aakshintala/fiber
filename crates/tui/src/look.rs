@@ -17,9 +17,29 @@ pub(crate) const BAR_TEXT: Color = Color::Rgb(0, 0, 0);
 /// (`docs/tui.md`, "Bindings").
 pub(crate) const TAB_BAR: Color = Color::Rgb(255, 255, 255);
 
-/// How much lighter a hovered or focused tint draws, per channel
-/// (`docs/tui.md`, palette, `hover`).
+/// How much a hovered or focused tint moves per channel, away from the
+/// page (`docs/tui.md`, palette, `hover`).
 const LIFT: u8 = 0x14;
+
+/// One tint lifted 0x14 per channel away from the page: lighter when its
+/// channels average below 0x80, darker otherwise, saturating
+/// (`docs/tui.md`, palette, `hover`).
+fn lift_rgb((red, green, blue): Rgb) -> Rgb {
+    let average = (u16::from(red) + u16::from(green) + u16::from(blue)) / 3;
+    if average < 0x80 {
+        (
+            red.saturating_add(LIFT),
+            green.saturating_add(LIFT),
+            blue.saturating_add(LIFT),
+        )
+    } else {
+        (
+            red.saturating_sub(LIFT),
+            green.saturating_sub(LIFT),
+            blue.saturating_sub(LIFT),
+        )
+    }
+}
 
 /// The theme `tui.theme` names (`docs/configuration.md`, "Keys").
 #[derive(Debug, Default)]
@@ -234,17 +254,17 @@ impl Look {
     }
 
     /// Each role's hover-lift paint in `theme` at `depth`: the shade 0x14
-    /// lighter on each channel before the depth step, so a neutral tint
-    /// keeps the grey ramp at 256 colours; a role the theme leaves to
-    /// the terminal takes the hover paint instead (`docs/tui.md`,
+    /// per channel away from the page before the depth step, so a neutral
+    /// tint keeps the grey ramp at 256 colours; a role the theme leaves
+    /// to the terminal takes the hover paint instead (`docs/tui.md`,
     /// palette, `hover`).
     fn lifted_colours(theme: &Theme, depth: Depth) -> [Paint; ROLES] {
         Self::paints(theme, depth, true)
     }
 
-    /// Each role's paint, lifting the shade 0x14 per channel first when
-    /// `lift`. A lifted role the theme leaves to the terminal takes the
-    /// hover paint.
+    /// Each role's paint, lifting the shade 0x14 per channel away from
+    /// the page first when `lift`. A lifted role the theme leaves to the
+    /// terminal takes the hover paint.
     fn paints(theme: &Theme, depth: Depth, lift: bool) -> [Paint; ROLES] {
         let white_page = theme.shade(Role::Background) == Shade::Rgb((0xff, 0xff, 0xff));
         let hover = Self::paint_role(
@@ -258,17 +278,13 @@ impl Look {
             let shade = theme.shade(role);
             if lift {
                 match shade {
-                    Shade::Rgb((red, green, blue)) => {
+                    Shade::Rgb(rgb) => {
                         return Self::paint_role(
                             theme,
                             depth,
                             white_page,
                             role,
-                            Shade::Rgb((
-                                red.saturating_add(LIFT),
-                                green.saturating_add(LIFT),
-                                blue.saturating_add(LIFT),
-                            )),
+                            Shade::Rgb(lift_rgb(rgb)),
                         );
                     }
                     Shade::Terminal | Shade::Dim => {

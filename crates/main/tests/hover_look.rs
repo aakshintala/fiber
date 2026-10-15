@@ -31,9 +31,10 @@ const SURFACE: Colour = Colour::Rgb(0x1a, 0x1a, 0x22);
 const LIFTED: Colour = Colour::Rgb(0x2e, 0x2e, 0x36);
 const HOVER: Colour = Colour::Rgb(0x1e, 0x1e, 0x26);
 
-/// The light theme's surface tint, lifted, and hover in truecolour.
+/// The light theme's surface tint, lifted away from the page, and hover
+/// in truecolour.
 const LIGHT_SURFACE: Colour = Colour::Rgb(0xea, 0xee, 0xf2);
-const LIGHT_LIFTED: Colour = Colour::Rgb(0xfe, 0xff, 0xff);
+const LIGHT_LIFTED: Colour = Colour::Rgb(0xd6, 0xda, 0xde);
 const LIGHT_HOVER: Colour = Colour::Rgb(0xe3, 0xe7, 0xec);
 
 /// The row's symbols, one per cell.

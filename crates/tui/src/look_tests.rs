@@ -351,18 +351,20 @@ fn paint_lifts_a_tint_marker() {
 
 #[test]
 fn paint_lifts_the_light_surface() {
-    // Light `surface` (#eaeef2) lifted 0x14 per channel saturates two
-    // channels (`docs/tui.md`, palette, `hover`).
+    // Light `surface` (#eaeef2) averages above 0x80, so the lift moves
+    // 0x14 per channel away from the page: darker (`docs/tui.md`,
+    // palette, `hover`).
     let look = look(ThemeSetting::Light, &[("COLORTERM", "truecolor")]);
     let mut buf = row(&[("a", Style::new().bg(Role::Surface.lifted()))]);
     look.paint(&mut buf);
-    assert_eq!(buf[(0, 0)].bg, Color::Rgb(0xfe, 0xff, 0xff));
+    assert_eq!(buf[(0, 0)].bg, Color::Rgb(0xd6, 0xda, 0xde));
 }
 
 #[test]
 fn lifted_light_surface_at_256_takes_the_grey_ramp() {
     // At 256 colours the lifted light surface takes the surface's grey
-    // ramp entry, not the text range's white cube entry.
+    // ramp entry: the lift, the role's ramp and the white-page rule,
+    // end to end.
     let look = look(ThemeSetting::Light, &[("TERM", "xterm-256color")]);
     let mut buf = row(&[("a", Style::new().bg(Role::Surface.lifted()))]);
     look.paint(&mut buf);
@@ -370,11 +372,7 @@ fn lifted_light_surface_at_256_takes_the_grey_ramp() {
         panic!("lifted surface at 256: {:?}", buf[(0, 0)].bg);
     };
     assert!(GREY.contains(&index), "grey ramp: {index}");
-    assert_ne!(
-        Color::Indexed(index),
-        Color::Indexed(ansi256((0xfe, 0xff, 0xff), among(Role::Text))),
-        "not the text range's entry"
-    );
+    assert_eq!(index, 253, "the lifted surface's entry");
 }
 
 #[test]
