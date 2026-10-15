@@ -1075,9 +1075,9 @@ box, as an approval does (`docs/tools.md`, "Asking the person").
 - Each question shows its options with their descriptions, and a row to
   answer in words. Enter on a single-choice option chooses it and moves on.
   In a multi-choice question, Space toggles the option under the cursor and
-  Enter moves on to the next question, or to Submit after the last one. The
-  question ends with a `Next →` row, `Review →` on the last question, that
-  does the same for the mouse.
+  Enter moves on to the next question, or to Submit after the last one. A
+  multi-choice question ends with a `Next →` row, `Review →` on the last
+  question, that does the same for the mouse.
 - ← and → move between the tabs, except in a row that takes typed text (the
   answer in words, or the note), where they move the cursor. Tab and Shift+Tab
   move between the tabs from any row.
