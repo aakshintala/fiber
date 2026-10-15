@@ -11,6 +11,7 @@ use std::sync::Arc;
 
 use contract::ErrorCode;
 use contract::SessionId;
+use contract::diag::DebugLog;
 use contract::events::Event;
 use contract::shapes::{Failure, Worktree};
 use doors::Session;
@@ -419,6 +420,14 @@ fn resumed_session(
     let web_search =
         crate::builtin::web_search(web_search.as_deref(), extensions.search_backend().as_ref())?;
     let skipped = folded.skipped();
+    // The connection timing rides the resumed session's MCP starts at
+    // debug; at info no callable is built, so starting costs the one
+    // level check.
+    let timing = if diag.debugging() {
+        Some(diag.timings())
+    } else {
+        None
+    };
     let (tools, infos, driver, session_servers) = crate::mcp_servers::session_tools(
         fiber,
         &home,
@@ -435,6 +444,7 @@ fn resumed_session(
         &delegates,
         skills,
         extensions.tools(),
+        timing,
     )?;
     let forget = Arc::clone(&session_servers.forget);
     let hosted_stands = crate::switch::hosted_stands(&tools);
