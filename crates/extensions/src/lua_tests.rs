@@ -1606,3 +1606,70 @@ fn a_non_blocking_before_message_hook_past_its_timeout_is_dropped_while_its_comp
         .expect("waited for the hook to run again after its timeout")
         .unwrap();
 }
+
+/// A command spinning past its timeout is answered while its completion is
+/// withheld: the timeout answer must arrive off the clock advance, without
+/// the worker's delivery; the worker's late completion is dropped and the VM
+/// stays usable. Without the fix the answer waits on the worker's delivery,
+/// so this fails at the wait below on every run.
+#[test]
+fn a_running_command_past_its_timeout_is_answered_while_its_completion_is_withheld() {
+    let dir = extension(
+        "withheld-command",
+        "fiber.command(\"echo\", { timeout = 1000, run = function(text) return text end })\n\
+         fiber.command(\"spin\", { timeout = 50, run = function()\n\
+           require(\"go_spin\") while true do end end })\n",
+    );
+    let went = go_module(dir.path(), "spin");
+    let clock = FakeClock::new();
+    let ext = Arc::new(LuaExtension::new(
+        "fiber.test/withheld-command",
+        dir.path(),
+        PathBuf::from("/nonexistent-fiber-home"),
+        clock.clone(),
+    ));
+    // Withhold the worker's completion past the answer wait below.
+    let (hold_tx, hold_rx) = mpsc::channel();
+    super::schedule::withhold_command_completion("fiber.test/withheld-command", "spin", hold_rx);
+    // Calling code that blocks runs on a thread, received here with a
+    // deadline naming the wait.
+    let (tx, rx) = mpsc::channel();
+    let caller = Arc::clone(&ext);
+    thread::spawn(move || tx.send(caller.command("spin", "")));
+    Deadline::after(WAIT)
+        .recv(&went)
+        .expect("waited for the command to start");
+    // The worker runs the command, past the arming of its deadline: the
+    // signal the advance below waits on.
+    assert!(
+        until(&ext.hub, |shared| shared.calls.values().any(
+            |progress| matches!(progress, Progress::Started { parked: false, .. })
+        )),
+        "waited for the worker to run the command"
+    );
+    clock.advance(Duration::from_millis(50));
+    let err = Deadline::after(WAIT)
+        .recv(&rx)
+        .expect("waited for the timeout answer without the worker's delivery")
+        .unwrap_err();
+    assert!(
+        matches!(&err, Error::Timeout { callback, timeout_ms: 50, .. } if callback == "spin"),
+        "{err:?}"
+    );
+    assert!(err.to_string().contains("50 ms timeout"), "{err:?}");
+    // The answer arrived while the worker was still withheld, so this
+    // release only lets its late completion land, dropped, and the VM stays
+    // usable: the next call runs again.
+    drop(hold_tx);
+    super::schedule::release_hook_completion();
+    let (again_tx, again_rx) = mpsc::channel();
+    let again_caller = Arc::clone(&ext);
+    thread::spawn(move || again_tx.send(again_caller.command("echo", "alive")));
+    assert_eq!(
+        Deadline::after(WAIT)
+            .recv(&again_rx)
+            .expect("waited for the next command after the timeout")
+            .unwrap(),
+        "alive"
+    );
+}

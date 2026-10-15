@@ -429,9 +429,9 @@ fn spawn_failed(
     );
 }
 
-/// A test's withheld hook completion: the extension and hook point whose
-/// finished callbacks wait, and the release the test drops to let them
-/// through. No public seam reaches a worker's completion, so an
+/// A test's withheld hook or command completion: the extension and the hook
+/// point or command whose finished callbacks wait, and the release the test
+/// drops to let them through. No public seam reaches a worker's completion, so an
 /// integration test cannot withhold it: this pause is `cfg(test)` for the
 /// in-crate repro, which states that reason here. The worker blocks holding
 /// no lock, so the test stays free to advance the clock and release it.
@@ -440,7 +440,8 @@ fn spawn_failed(
 #[cfg(test)]
 struct Withheld {
     extension: String,
-    point: String,
+    point: Option<String>,
+    command: Option<String>,
     release: Arc<Mutex<std::sync::mpsc::Receiver<()>>>,
 }
 
@@ -461,12 +462,33 @@ pub(super) fn withhold_hook_completion(
         .lock()
         .unwrap_or_else(std::sync::PoisonError::into_inner) = Some(Withheld {
         extension: extension.to_owned(),
-        point: point.to_owned(),
+        point: Some(point.to_owned()),
+        command: None,
         release: Arc::new(Mutex::new(release)),
     });
 }
 
-/// Stops withholding hook completions.
+/// Withholds the finished commands of `extension`'s `command` until the test
+/// drops the matching sender and clears this. Narrow: only that extension's
+/// calls of that command wait, so other tests' workers pass through while
+/// it is armed.
+#[cfg(test)]
+pub(super) fn withhold_command_completion(
+    extension: &str,
+    command: &str,
+    release: std::sync::mpsc::Receiver<()>,
+) {
+    *WITHHELD
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner) = Some(Withheld {
+        extension: extension.to_owned(),
+        point: None,
+        command: Some(command.to_owned()),
+        release: Arc::new(Mutex::new(release)),
+    });
+}
+
+/// Stops withholding hook or command completions.
 #[cfg(test)]
 pub(super) fn release_hook_completion() {
     *WITHHELD
@@ -474,7 +496,7 @@ pub(super) fn release_hook_completion() {
         .unwrap_or_else(std::sync::PoisonError::into_inner) = None;
 }
 
-/// Waits for the test's release when `target` is a withheld hook
+/// Waits for the test's release when `target` is a withheld hook or command
 /// completion, and passes everything else through.
 #[cfg(test)]
 fn await_completion_release(extension: &str, target: &Target) {
@@ -484,7 +506,8 @@ fn await_completion_release(extension: &str, target: &Target) {
         .as_ref()
         .filter(|withheld| {
             withheld.extension == extension
-                && matches!(target, Target::Hook { point, .. } if point == &withheld.point)
+                && (matches!(target, Target::Hook { point, .. } if Some(point) == withheld.point.as_ref())
+                    || matches!(target, Target::Command(command) if Some(command) == withheld.command.as_ref()))
         })
         .map(|withheld| Arc::clone(&withheld.release));
     if let Some(waiter) = waiter {
