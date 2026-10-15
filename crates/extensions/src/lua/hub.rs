@@ -537,8 +537,6 @@ impl Shared {
         asked: Instant,
         now: Instant,
     ) -> (Next, Vec<Delivery>) {
-        #[cfg(test)]
-        await_judge_hold(target);
         // Stopped is final for every waiter, one holding a result included.
         if let Phase::Stopped(reason) = &self.phase {
             let e = reason.error(name);
@@ -701,58 +699,5 @@ impl Wake for Hub {
         // judged and not yet parked cannot miss this wake.
         let _guard = self.lock();
         self.changed.notify_all();
-    }
-}
-
-/// A test's hold inside a call's judgement: the provider whose next
-/// judgement waits, and the release the test drops to let it through.
-/// `cfg(test)`: no public API can freeze a caller inside its locked
-/// section, so the reproduction of a too-early unlocked read needs this
-/// hold. Scoped by provider name, so parallel tests with distinct
-/// providers pass through. The caller blocks holding the hub lock, so the
-/// unlocked read fails while it waits; dropping the release sender frees
-/// the caller, so a failing test never hangs the suite.
-#[cfg(test)]
-struct JudgeHold {
-    provider: String,
-    arrived: std::sync::mpsc::Sender<()>,
-    release: std::sync::mpsc::Receiver<()>,
-}
-
-#[cfg(test)]
-static JUDGE_HOLD: Mutex<Option<JudgeHold>> = Mutex::new(None);
-
-/// Holds the next `provider` judgement inside its locked section until the
-/// test drops the matching sender, returning the arrival signal and the
-/// release. Narrow: only that provider's judgements wait, so other tests'
-/// callers pass through while it is armed. Fires once per arming.
-#[cfg(test)]
-pub(crate) fn pause_judge_done(
-    provider: &str,
-) -> (std::sync::mpsc::Receiver<()>, std::sync::mpsc::Sender<()>) {
-    let (arrived_tx, arrived_rx) = std::sync::mpsc::channel();
-    let (release_tx, release_rx) = std::sync::mpsc::channel();
-    *JUDGE_HOLD.lock().unwrap_or_else(PoisonError::into_inner) = Some(JudgeHold {
-        provider: provider.to_owned(),
-        arrived: arrived_tx,
-        release: release_rx,
-    });
-    (arrived_rx, release_tx)
-}
-
-/// Waits for the test's release when a judgement of the held provider
-/// arrives, and passes everything else through. The caller blocks holding
-/// the hub lock.
-#[cfg(test)]
-fn await_judge_hold(target: &Target) {
-    let gate = JUDGE_HOLD
-        .lock()
-        .unwrap_or_else(PoisonError::into_inner)
-        .take_if(|hold| {
-            matches!(target, Target::Provider { name, .. } if *name == hold.provider)
-        });
-    if let Some(hold) = gate {
-        let _ignored = hold.arrived.send(());
-        let _ignored = hold.release.recv();
     }
 }

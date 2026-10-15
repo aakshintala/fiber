@@ -956,17 +956,24 @@ fn worker_emits_only_after_the_guard_releases() {
     Deadline::after(WAIT)
         .recv(&paused)
         .expect("the scheduler reached its pause");
-    let (held, _unhold) = crate::lua::pause_judge_done("rz");
-    release.send(()).expect("the worker takes its release");
-    Deadline::after(WAIT).recv(&held).expect("the caller reached its hold");
-    assert!(ext.hub_unlocked(), "the guard released before emission");
-    assert!(sink.records().is_empty());
-    // The caller waits on the suspended callback past its own check: its
-    // deadline plus the scheduler's grace for a suspended call.
+    // Both callers settled past every lock acquisition before the guard is
+    // read: the hook caller waits at its deadline while its callback runs
+    // on the thread, and the models caller waits past its check, its
+    // deadline plus the grace for a suspended call, while its callback
+    // stays suspended. A transient hold no longer fails the read below.
+    assert!(
+        clock.await_parked(mark + Duration::from_secs(60), WAIT),
+        "the hook caller parked at its deadline"
+    );
     assert!(
         clock.await_parked(mark + Duration::from_secs(61), WAIT),
         "the caller parked past its check"
     );
+    // With the scheduler frozen past the rendezvous and the worker gated
+    // past it, the admission guard is free and no probe has run: a worker
+    // holding the lock across its pause, or a write before it, fails here.
+    assert!(ext.hub_unlocked(), "the guard released before emission");
+    assert!(sink.records().is_empty());
     // Stamps after this advance prove they ran after the pause: a stamp
     // from before it would end 5000 ms later.
     clock.advance(Duration::from_millis(5000));

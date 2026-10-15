@@ -949,8 +949,6 @@ pub(crate) use host_calls::{
     Pause, pause_observed_execution, pause_settle, unpause_observed_execution, unpause_settle,
 };
 pub(crate) use hub::Hub;
-#[cfg(test)]
-pub(crate) use hub::pause_judge_done;
 use hub::{CallbackTimeouts, Gate, Next, Phase, Shared};
 pub(crate) use hub::{DeclaredHooks, HookPhase};
 #[cfg(test)]
