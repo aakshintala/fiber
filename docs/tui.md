@@ -1371,9 +1371,8 @@ search box and the draft shows without a cursor.
 | Insert a line break | `line_break` | Shift+Enter | Ctrl+J |
 | Close what is on top; interrupt the turn when nothing is open | `close_or_interrupt` | Esc | click the overlay's ✕ or outside it; click "Esc to interrupt" |
 | Clear the draft, then quit | `clear_then_quit` | Ctrl+C, twice within about a second on an empty box | `/quit` |
-| Go home, the rail at full width | `go_home` | ⌥0 | `/home` |
-| Go home to start a new session, with the cursor in its input box | `new_session` | Ctrl+N | `/new` |
-| Focus the rail; a second press widens it to home | `focus_rail` | ← in an empty box | click a card; `/home` |
+| Go home | `go_home` | ⌥0 | `/home` |
+| Start a new session | `new_session` | Ctrl+N | `/new` |
 | Switch to the session of rail card N | `rail_row_n` | ⌥1 to ⌥9 | click the card |
 | Delete the selected exited session in the session list | `delete_session` | Delete, or Backspace, on the row | click the row's ✕ |
 | Recall an earlier prompt from the project of the session on screen | `recall_prompt` | ↑ in an empty box | |
@@ -1390,7 +1389,7 @@ search box and the draft shows without a cursor.
 | Copy the focused item | `copy_focused` | y | select it |
 | Move focus to the panel, the rail, then the conversation | `focus_area` | Tab | click the area |
 | Show or hide the panel | `toggle_panel` | ⌥P | `/panel` |
-| Show or hide the rail, saving `tui.rail.shown` | `toggle_rail` | ⌥R | `/rail`; drag its edge |
+| Show or hide the rail | `toggle_rail` | ⌥R | drag its edge |
 | Search | `search` | Ctrl+F; Cmd+F where forwarded | |
 | Open the search results | `search_results` | Ctrl+F with search open | click the match count |
 | Next or previous match | `search_next_prev` | Enter or ↓, Shift+Enter or ↑, with search open | |
@@ -1460,7 +1459,7 @@ A global action acts in all six. The rest act only where they are listed:
   `model_picker`.
 - Input and Steering: `line_break`, `search_prompts`, `move_word`,
   `delete_word`, `line_start_end`, `paste_image`.
-- Input: `send`, `recall_prompt`, `focus_rail`.
+- Input: `send`, `recall_prompt`.
 - Steering: `amend_steering`.
 - Conversation: `delete_session`, `focus_next_prev`, `open_focused`,
   `copy_focused`, `focus_area`.
@@ -1530,9 +1529,7 @@ later release still applies.
 |---|---|
 | `/home` | Goes home, focused on the session on screen's row. |
 | `/new` | Goes home with the cursor in the input box, to pick the workspace, worktree, model and thinking level for a new session. The session left keeps running. |
-| `/clear` | Starts a fresh session in place and closes the one on screen ("Clearing"). |
 | `/resume` | Goes home, focused on the first exited row. |
-| `/rail` | Shows or hides the rail, saving `tui.rail.shown` ("The rail"). |
 | `/model` | Opens the model picker. |
 | `/thinking [<level>]` | Sets the thinking level for the session's model, saving `models."<model>".thinking`; the default model is unchanged. With no level, opens the model picker on the model's chips: Enter saves the level, Ctrl+S applies it to this session only. |
 | `/credential <label>` | Switches the session's credential label, saved as the provider's `credential` unless marked as this session only (`docs/model-routing.md`, "Which credential a session uses"). The terminal first says the switch rebuilds the cache, with its size. With no label, it lists the provider's labels. |
