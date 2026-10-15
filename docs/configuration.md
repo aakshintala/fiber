@@ -357,7 +357,8 @@ when (`docs/tui.md`, "Swapped views"):
 
 - `tui.theme` at once: the terminal applies the theme it writes
 - any other `tui.*` key when the terminal starts again
-- `hub.*` and `hubs.*` when the hub starts again
+- `hub.port`, `hub.allowed_origins` and `hub.idle_exit_ms` when the hub starts again
+- `hub.default` and `hubs.*` at a client's next connection: the next `fiber` command, or the terminal's next start
 - `diagnostics.level` when each Fiber process starts again
 - `model` and `thinking` for sessions started after the write
 - `skills.disabled` at the next turn start

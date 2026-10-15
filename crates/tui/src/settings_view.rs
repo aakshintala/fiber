@@ -34,6 +34,8 @@ pub(crate) enum Applies {
     Now,
     /// When the terminal starts again.
     TerminalStart,
+    /// At this client's next connection.
+    NextConnection,
     /// When the hub starts again.
     HubStart,
     /// When each Fiber process starts again.
@@ -52,7 +54,9 @@ pub(crate) fn applies(key: &str) -> Applies {
         Applies::Now
     } else if key.starts_with("tui.") {
         Applies::TerminalStart
-    } else if key.starts_with("hub.") || key.starts_with("hubs.") {
+    } else if key == "hub.default" || key.starts_with("hubs.") {
+        Applies::NextConnection
+    } else if key.starts_with("hub.") {
         Applies::HubStart
     } else if key == "diagnostics.level" {
         Applies::ProcessStart
@@ -86,6 +90,7 @@ pub(crate) fn applies_text(key: &str, usage: Option<u64>) -> String {
     match applies(key) {
         Applies::Now => "Applies now.".to_owned(),
         Applies::TerminalStart => "Applies when the terminal starts again.".to_owned(),
+        Applies::NextConnection => "Applies at this client's next connection.".to_owned(),
         Applies::HubStart => "Applies when the hub starts again.".to_owned(),
         Applies::ProcessStart => "Applies when each Fiber process starts again.".to_owned(),
         Applies::NewSessions => "Applies to new sessions.".to_owned(),

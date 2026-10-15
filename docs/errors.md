@@ -82,17 +82,17 @@ asked for the session.
 
 | Code | When | Exit |
 |---|---|---|
-| `usage` | the invocation or its environment is wrong: a bad flag, no prompt with stdin on a terminal, `fiber` without a tty, an empty or relative `FIBER_HOME`, `git` is not installed, `fiber ask --worktree` outside a git repository | 2 |
-| `config_invalid` | invalid JSON, a value of the wrong type, one extension key set under both its full and short name in a configuration or script file (`docs/configuration.md`; `docs/model-routing.md`, "The scripted provider"), or an MCP server marked `required` that declares both `command` and `url` or whose `url` carries a user name or password | 1 |
+| `usage` | the invocation or its environment is wrong: a bad flag, no prompt with stdin on a terminal, `fiber` without a tty, an empty or relative `FIBER_HOME`, `git` is not installed, `fiber ask --worktree` outside a git repository, or an unknown `--hub` name | 2 |
+| `config_invalid` | invalid JSON, a value of the wrong type, one extension key set under both its full and short name in a configuration or script file (`docs/configuration.md`; `docs/model-routing.md`, "The scripted provider"), or an MCP server marked `required` that declares both `command` and `url` or whose `url` carries a user name or password, or `hub.default` names a missing entry or a stored hub address is invalid | 1 |
 | `io_failed` | a filesystem failure, or a `git` command on a worktree that failed: a log write or fsync, or a configuration or credential file that exists but cannot be read or written; the message names the path; or Fiber could not install its signal handlers, and the message starts `signals:`; or the terminal could not start its input reader, and the message starts `terminal:` | 1 |
 | `log_corrupt` | a log line that cannot be encoded, or one read back that does not parse | 1 |
 | `no_model` | nothing chose a model, an installed provider lacks the named model, or no installed provider has a bare model id (`docs/model-routing.md`, "Naming a model") | 1 |
 | `model_ambiguous` | a bare model id matches models of two or more installed providers; the message lists every match (`docs/model-routing.md`, "Naming a model") | 1 |
 | `model_unconfigured` | the session's model names a per-account host whose setting has no value or a value that is not a host; the message names the model and the setting (`docs/model-routing.md`, "A per-account host") | 1 |
-| `credential_missing` | the session model's credential cannot be found, its credential label names none, or a stdio MCP server's `{ "secret" }` env value names no stored credential | 1 |
+| `credential_missing` | the session model's credential cannot be found, its credential label names none, or a stdio MCP server's `{ "secret" }` env value names no stored credential, or a `ws`/`wss` hub entry has no device token | 1 |
 | `credential_failed` | a stored credential is found but cannot be used, the provider's `credential()` call errors, or its `sign()` fails or returns unusable headers (`docs/model-routing.md`, "Credentials") | 1 |
-| `authentication_failed` | the startup OAuth refresh of the session model's token was rejected by the token endpoint, or its `credential()` needed a person to log in and nobody was attached (`docs/model-routing.md`, "Keys, tokens and OAuth"), or `fiber mcp login` got no callback in time | 1 |
-| `connection_failed` | the startup OAuth refresh could not reach the token endpoint | 1 |
+| `authentication_failed` | the startup OAuth refresh of the session model's token was rejected by the token endpoint, or its `credential()` needed a person to log in and nobody was attached (`docs/model-routing.md`, "Keys, tokens and OAuth"), or `fiber mcp login` got no callback in time, or a listed hub refused the client's device token | 1 |
+| `connection_failed` | the startup OAuth refresh could not reach the token endpoint, or a client could not reach a listed hub | 1 |
 | `session_not_found` | a resume names no session | 1 |
 | `session_held` | another process holds the session's lock, or runs it at a schema version this build cannot read | 1 |
 | `extension_missing` | the provider of a `provider/model` is not installed | 1 |
@@ -133,7 +133,7 @@ policy is `docs/model-routing.md`, "When a model call fails".
 |---|---|---|
 | `rate_limited` | HTTP 429 other than a quota or billing error; an OpenRouter in-flight budget 402 that carries a `Retry-After` in seconds | yes |
 | `provider_unavailable` | HTTP 5xx, including 503 and 529 overload, HTTP 408 and HTTP 409 | yes |
-| `connection_failed` | DNS, TLS, a refused or dropped connection, no address connecting within 15 seconds each, or a connection silent for 300 seconds (`docs/model-routing.md`, "When a model call fails") | yes |
+| `connection_failed` | DNS, TLS, a refused or dropped connection, no address connecting within 15 seconds each, or a connection silent for 300 seconds (`docs/model-routing.md`, "When a model call fails"), or a client could not reach a listed hub | yes |
 | `stream_incomplete` | a stream that ended before its protocol's terminal event, an `openai-responses` terminal event whose status is `in_progress` or `queued`, or an error inside an HTTP 200 response that no other code matches | yes |
 | `quota_exceeded` | quota, billing or a subscription limit, as an HTTP status or inside the stream ("Recognising a quota or billing error") | never |
 | `authentication_failed` | HTTP 401, a rejected key, an OAuth refresh the token endpoint rejected, or a login with nobody attached | never |
@@ -261,18 +261,18 @@ the lines that carry it.
 | Code | Where | Meaning |
 |---|---|---|
 | `ambiguous_match` | tool call | an edit block's text occurs more than once (`docs/tools.md`, "File tools") |
-| `authentication_failed` | exit, extension call, model call, turn, driver command (`rewind`) | the provider rejected the credential, an OAuth refresh was rejected, or a login was needed with nobody attached, or `fiber mcp login` got no callback in time, or the server's discovery, registration or token exchange failed |
+| `authentication_failed` | exit, extension call, model call, turn, driver command (`rewind`) | the provider rejected the credential, an OAuth refresh was rejected, or a login was needed with nobody attached, or `fiber mcp login` got no callback in time, or the server's discovery, registration or token exchange failed, or a listed hub refused the client's device token |
 | `blocked` | turn | the block budget ran out with no human to answer |
 | `blocked_host` | tool call | `web_fetch` named a link-local address or a cloud metadata host (`docs/tools.md`, "Web fetch and web search") |
 | `budget_exceeded` | turn | the spending budget was reached, or an extension refused a model request (`docs/loop.md`, "Spending budget") |
 | `busy` | driver command | `prompt` or `reload` while a turn is running, or `rewind` mid-turn (`docs/invocation.md`, "What each command does") |
 | `cache_rebuild` | notice | the terminal rebuilt its completion cache after a model switch (`docs/tui.md`, "Notices") |
 | `closing` | exit, tool call, extension call, driver command, notice | `session_message` named a session that was sent `close` (`docs/tools.md`, "Messaging other sessions"), or `state.set`, `state.unset` or `host.drive` ran after `fiber_exited` (`docs/extensions.md`, "When a session ends"), or a driver command after `close` (`docs/invocation.md`, "Driver commands"), or the session `fiber ask` attached to ended before its turn completed |
-| `config_invalid` | exit, extension call, notice, driver command (`rewind`) | a configuration or script file is invalid, or an MCP server declares both `command` and `url` or has a user name or password in its `url` |
-| `connection_failed` | exit, extension call, model call, tool call, turn, notice, driver command (`rewind`) | the connection to the provider or its token endpoint failed, or `web_fetch` could not reach the host, or `fiber mcp login` could not reach the server or its authorization server, or the terminal lost its hub connection |
+| `config_invalid` | exit, extension call, notice, driver command (`rewind`) | a configuration or script file is invalid, or an MCP server declares both `command` and `url` or has a user name or password in its `url`, or `hub.default` names a missing entry or a stored hub address is invalid |
+| `connection_failed` | exit, extension call, model call, tool call, turn, notice, driver command (`rewind`) | the connection to the provider or its token endpoint failed, or `web_fetch` could not reach the host, or `fiber mcp login` could not reach the server or its authorization server, or the terminal lost its hub connection, or a client could not reach a listed hub |
 | `context_overflow` | model call, turn | the request does not fit the context window |
 | `credential_failed` | exit, extension call, model call, turn, driver command (`rewind`), `mcp_server_failed`, tool call, notice | a stored credential cannot be used, the provider's `credential()` or `sign()` failed, or a stdio MCP server's `{ "secret" }` env value names a stored credential that cannot be read; log in again or fix the credential |
-| `credential_missing` | exit, driver command, `mcp_server_failed`, tool call, notice | no credential was found for the session's model, its credential label names none, or a stdio MCP server's `{ "secret" }` env value names no stored credential; the provider-credential messages list the provider's labels, while a stdio MCP server's message names the missing secret instead |
+| `credential_missing` | exit, driver command, `mcp_server_failed`, tool call, notice | no credential was found for the session's model, its credential label names none, or a stdio MCP server's `{ "secret" }` env value names no stored credential; the provider-credential messages list the provider's labels, while a stdio MCP server's message names the missing secret instead; a `ws`/`wss` hub entry has no device token |
 | `depth_exceeded` | tool call | a delegate tool at depth 2 (`docs/delegates.md`) |
 | `duplicate_command` | driver command | a command repeats the id of one the session already accepted, so it was not applied again (`docs/invocation.md`, "The command line") |
 | `extension_incompatible` | exit, notice, driver command (`rewind`) | an extension needs a newer `fiber` or a different extension API version; `fiber extension install` refuses it and loading skips it (`docs/extensions.md`, "The extension API version") |
@@ -347,7 +347,7 @@ the lines that carry it.
 | `unreachable` | tool call | `session_message` named an id no running session has |
 | `unreadable_reply` | extension call, permission request, handoff | a model replied, but not in the format Fiber asked for, such as a reviewer verdict that could not be read on the second ask (`docs/permissions.md`, "What happens on a block") |
 | `unsupported_file` | extension call, tool call | a file tool was given a directory, device or file it cannot handle |
-| `usage` | exit, driver command (`rewind`) | the invocation or its environment is wrong; exits 2 |
+| `usage` | exit, driver command (`rewind`) | the invocation or its environment is wrong, including an unknown `--hub` name; exits 2 |
 | `version_conflict` | exit, driver command (`rewind`) | an install needs two majors of one dependency, no tag meets a minimum, or the versions cannot be settled; pick compatible versions. Not retried automatically (`docs/extensions.md`, "Versions") |
 
 Notices, for a failure outside any action:

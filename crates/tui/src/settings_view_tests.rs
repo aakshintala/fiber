@@ -433,7 +433,9 @@ fn applies_by_key() {
         ("tui.theme", Applies::Now),
         ("tui.hover", Applies::TerminalStart),
         ("hub.port", Applies::HubStart),
-        ("hubs.x.address", Applies::HubStart),
+        ("hubs.x.address", Applies::NextConnection),
+        ("hub.default", Applies::NextConnection),
+        ("hub.idle_exit_ms", Applies::HubStart),
         ("diagnostics.level", Applies::ProcessStart),
         ("model", Applies::NewSessions),
         ("thinking", Applies::NewSessions),
@@ -442,6 +444,16 @@ fn applies_by_key() {
         ("handoff.tokens", Applies::Reload),
     ] {
         assert_eq!(applies(key), when, "{key}");
+    }
+}
+
+#[test]
+fn client_hub_keys_apply_at_the_next_connection() {
+    for key in ["hub.default", "hubs.box.address"] {
+        assert_eq!(
+            applies_text(key, None),
+            "Applies at this client's next connection."
+        );
     }
 }
 
