@@ -1,0 +1,270 @@
+{
+ "route": "go",
+ "protocol": "completions",
+ "model": "mimo-v2.5-pro",
+ "base": "https://opencode.ai/zen/go",
+ "levels": [
+  {
+   "level": "off",
+   "status": 200,
+   "elapsed_s": 1.16,
+   "request": {
+    "model": "mimo-v2.5-pro",
+    "messages": [
+     {
+      "role": "user",
+      "content": "Reply with the single word: ok"
+     }
+    ],
+    "max_tokens": 64,
+    "reasoning_effort": "none"
+   },
+   "response": {
+    "id": "chatcmpl-4d445105-db6c-930e-97f8-6bae30f1ee3e",
+    "object": "chat.completion",
+    "created": 1792036862,
+    "model": "mimo-v2.5-pro",
+    "choices": [
+     {
+      "index": 0,
+      "finish_reason": "stop",
+      "message": {
+       "role": "assistant",
+       "content": "ok"
+      }
+     }
+    ],
+    "usage": {
+     "prompt_tokens": 260,
+     "completion_tokens": 1,
+     "total_tokens": 261,
+     "prompt_tokens_details": {
+      "cached_tokens": 0
+     }
+    }
+   }
+  },
+  {
+   "level": "minimal",
+   "status": 400,
+   "elapsed_s": 0.81,
+   "request": {
+    "model": "mimo-v2.5-pro",
+    "messages": [
+     {
+      "role": "user",
+      "content": "Reply with the single word: ok"
+     }
+    ],
+    "max_tokens": 64,
+    "reasoning_effort": "minimal"
+   },
+   "response": {
+    "error": {
+     "param": "reasoning_effort must be one of 'none', 'low', 'medium' or 'high'.",
+     "type": "server_error",
+     "message": "Upstream request failed: [400] Param Incorrect"
+    }
+   }
+  },
+  {
+   "level": "low",
+   "status": 200,
+   "elapsed_s": 3.25,
+   "request": {
+    "model": "mimo-v2.5-pro",
+    "messages": [
+     {
+      "role": "user",
+      "content": "Reply with the single word: ok"
+     }
+    ],
+    "max_tokens": 64,
+    "reasoning_effort": "low"
+   },
+   "response": {
+    "id": "chatcmpl-b94d794f-a092-90e4-82ce-8a76899214c0",
+    "object": "chat.completion",
+    "created": 1792036864,
+    "model": "mimo-v2.5-pro",
+    "choices": [
+     {
+      "index": 0,
+      "finish_reason": "stop",
+      "message": {
+       "role": "assistant",
+       "content": "ok",
+       "reasoning_content": "The user is asking me to reply with the single word \"ok\"."
+      }
+     }
+    ],
+    "usage": {
+     "prompt_tokens": 258,
+     "completion_tokens": 17,
+     "total_tokens": 275,
+     "prompt_tokens_details": {
+      "cached_tokens": 256
+     },
+     "completion_tokens_details": {
+      "reasoning_tokens": 14
+     }
+    }
+   }
+  },
+  {
+   "level": "medium",
+   "status": 200,
+   "elapsed_s": 1.47,
+   "request": {
+    "model": "mimo-v2.5-pro",
+    "messages": [
+     {
+      "role": "user",
+      "content": "Reply with the single word: ok"
+     }
+    ],
+    "max_tokens": 64,
+    "reasoning_effort": "medium"
+   },
+   "response": {
+    "id": "chatcmpl-9ad13851-2bdc-984e-9343-cb2fd79f250c",
+    "object": "chat.completion",
+    "created": 1792036868,
+    "model": "mimo-v2.5-pro",
+    "choices": [
+     {
+      "index": 0,
+      "finish_reason": "stop",
+      "message": {
+       "role": "assistant",
+       "content": "ok",
+       "reasoning_content": "The user wants me to reply with just the single word \"ok\"."
+      }
+     }
+    ],
+    "usage": {
+     "prompt_tokens": 258,
+     "completion_tokens": 17,
+     "total_tokens": 275,
+     "prompt_tokens_details": {
+      "cached_tokens": 256
+     },
+     "completion_tokens_details": {
+      "reasoning_tokens": 14
+     }
+    }
+   }
+  },
+  {
+   "level": "high",
+   "status": 200,
+   "elapsed_s": 1.56,
+   "request": {
+    "model": "mimo-v2.5-pro",
+    "messages": [
+     {
+      "role": "user",
+      "content": "Reply with the single word: ok"
+     }
+    ],
+    "max_tokens": 64,
+    "reasoning_effort": "high"
+   },
+   "response": {
+    "id": "chatcmpl-c044865f-0e77-9e0d-b8d9-1e39b534cb14",
+    "object": "chat.completion",
+    "created": 1792036869,
+    "model": "mimo-v2.5-pro",
+    "choices": [
+     {
+      "index": 0,
+      "finish_reason": "stop",
+      "message": {
+       "role": "assistant",
+       "content": "ok",
+       "reasoning_content": "The user is asking me to reply with the single word \"ok\". This is a very simple and straightforward request."
+      }
+     }
+    ],
+    "usage": {
+     "prompt_tokens": 258,
+     "completion_tokens": 26,
+     "total_tokens": 284,
+     "prompt_tokens_details": {
+      "cached_tokens": 256
+     },
+     "completion_tokens_details": {
+      "reasoning_tokens": 23
+     }
+    }
+   }
+  },
+  {
+   "level": "xhigh",
+   "status": 400,
+   "elapsed_s": 0.7,
+   "request": {
+    "model": "mimo-v2.5-pro",
+    "messages": [
+     {
+      "role": "user",
+      "content": "Reply with the single word: ok"
+     }
+    ],
+    "max_tokens": 64,
+    "reasoning_effort": "xhigh"
+   },
+   "response": {
+    "error": {
+     "param": "reasoning_effort must be one of 'none', 'low', 'medium' or 'high'.",
+     "type": "server_error",
+     "message": "Upstream request failed: [400] Param Incorrect"
+    }
+   }
+  },
+  {
+   "level": "max",
+   "status": 200,
+   "elapsed_s": 1.55,
+   "request": {
+    "model": "mimo-v2.5-pro",
+    "messages": [
+     {
+      "role": "user",
+      "content": "Reply with the single word: ok"
+     }
+    ],
+    "max_tokens": 64,
+    "reasoning_effort": "max"
+   },
+   "response": {
+    "id": "chatcmpl-301c97e8-0561-90b5-b98c-42f630a54b1c",
+    "object": "chat.completion",
+    "created": 1792036871,
+    "model": "mimo-v2.5-pro",
+    "choices": [
+     {
+      "index": 0,
+      "finish_reason": "stop",
+      "message": {
+       "role": "assistant",
+       "content": "ok",
+       "reasoning_content": "The user is asking me to reply with a single word: \"ok\"\n\nThis is a simple request. I should just respond with \"ok\" as instructed."
+      }
+     }
+    ],
+    "usage": {
+     "prompt_tokens": 258,
+     "completion_tokens": 35,
+     "total_tokens": 293,
+     "prompt_tokens_details": {
+      "cached_tokens": 256
+     },
+     "completion_tokens_details": {
+      "reasoning_tokens": 32
+     }
+    }
+   }
+  }
+ ]
+}

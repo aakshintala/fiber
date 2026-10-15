@@ -1,0 +1,310 @@
+{
+ "route": "zen",
+ "protocol": "completions",
+ "model": "glm-5.3-flash",
+ "base": "https://opencode.ai/zen",
+ "levels": [
+  {
+   "level": "off",
+   "status": 400,
+   "elapsed_s": 0.56,
+   "request": {
+    "model": "glm-5.3-flash",
+    "messages": [
+     {
+      "role": "user",
+      "content": "Reply with the single word: ok"
+     }
+    ],
+    "max_tokens": 64,
+    "reasoning_effort": "none"
+   },
+   "response": {
+    "error": {
+     "type": "invalid_request_error",
+     "message": "Upstream request failed: [400] GLM-5.3 is a thinking-only model; disabling thinking (reasoning_effort='none') is not supported."
+    }
+   }
+  },
+  {
+   "level": "minimal",
+   "status": 200,
+   "elapsed_s": 0.91,
+   "request": {
+    "model": "glm-5.3-flash",
+    "messages": [
+     {
+      "role": "user",
+      "content": "Reply with the single word: ok"
+     }
+    ],
+    "max_tokens": 64,
+    "reasoning_effort": "minimal"
+   },
+   "response": {
+    "id": "chatcmpl-25a44670",
+    "object": "chat.completion",
+    "created": 1792037265,
+    "model": "glm-5.3-flash",
+    "choices": [
+     {
+      "index": 0,
+      "finish_reason": "stop",
+      "logprobs": null,
+      "message": {
+       "role": "assistant",
+       "content": "ok"
+      }
+     }
+    ],
+    "usage": {
+     "prompt_tokens": 19,
+     "completion_tokens": 3,
+     "total_tokens": 22,
+     "prompt_tokens_details": {
+      "cached_tokens": 0
+     },
+     "completion_tokens_details": {
+      "accepted_prediction_tokens": null,
+      "reasoning_tokens": 0,
+      "rejected_prediction_tokens": null
+     }
+    }
+   }
+  },
+  {
+   "level": "low",
+   "status": 200,
+   "elapsed_s": 0.92,
+   "request": {
+    "model": "glm-5.3-flash",
+    "messages": [
+     {
+      "role": "user",
+      "content": "Reply with the single word: ok"
+     }
+    ],
+    "max_tokens": 64,
+    "reasoning_effort": "low"
+   },
+   "response": {
+    "id": "chatcmpl-c5659e35",
+    "object": "chat.completion",
+    "created": 1792037266,
+    "model": "glm-5.3-flash",
+    "choices": [
+     {
+      "index": 0,
+      "finish_reason": "stop",
+      "logprobs": null,
+      "message": {
+       "role": "assistant",
+       "content": "ok"
+      }
+     }
+    ],
+    "usage": {
+     "prompt_tokens": 19,
+     "completion_tokens": 3,
+     "total_tokens": 22,
+     "prompt_tokens_details": {
+      "cached_tokens": 0
+     },
+     "completion_tokens_details": {
+      "accepted_prediction_tokens": null,
+      "reasoning_tokens": 0,
+      "rejected_prediction_tokens": null
+     }
+    }
+   }
+  },
+  {
+   "level": "medium",
+   "status": 200,
+   "elapsed_s": 1.14,
+   "request": {
+    "model": "glm-5.3-flash",
+    "messages": [
+     {
+      "role": "user",
+      "content": "Reply with the single word: ok"
+     }
+    ],
+    "max_tokens": 64,
+    "reasoning_effort": "medium"
+   },
+   "response": {
+    "id": "chatcmpl-62ec64ca",
+    "object": "chat.completion",
+    "created": 1792037267,
+    "model": "glm-5.3-flash",
+    "choices": [
+     {
+      "index": 0,
+      "finish_reason": "stop",
+      "logprobs": null,
+      "message": {
+       "role": "assistant",
+       "content": "ok",
+       "reasoning_content": "The user's instruction is to reply with the single word \"ok,\" so I'll make sure my response matches that exactly without any extra punctuation or elements."
+      }
+     }
+    ],
+    "usage": {
+     "prompt_tokens": 19,
+     "completion_tokens": 34,
+     "total_tokens": 53,
+     "prompt_tokens_details": {
+      "cached_tokens": 0
+     },
+     "completion_tokens_details": {
+      "accepted_prediction_tokens": null,
+      "reasoning_tokens": 31,
+      "rejected_prediction_tokens": null
+     }
+    }
+   }
+  },
+  {
+   "level": "high",
+   "status": 200,
+   "elapsed_s": 1.07,
+   "request": {
+    "model": "glm-5.3-flash",
+    "messages": [
+     {
+      "role": "user",
+      "content": "Reply with the single word: ok"
+     }
+    ],
+    "max_tokens": 64,
+    "reasoning_effort": "high"
+   },
+   "response": {
+    "id": "chatcmpl-b9936726",
+    "object": "chat.completion",
+    "created": 1792037268,
+    "model": "glm-5.3-flash",
+    "choices": [
+     {
+      "index": 0,
+      "finish_reason": "stop",
+      "logprobs": null,
+      "message": {
+       "role": "assistant",
+       "content": "ok",
+       "reasoning_content": "The user wants me to reply with just \"ok\"."
+      }
+     }
+    ],
+    "usage": {
+     "prompt_tokens": 19,
+     "completion_tokens": 14,
+     "total_tokens": 33,
+     "prompt_tokens_details": {
+      "cached_tokens": 0
+     },
+     "completion_tokens_details": {
+      "accepted_prediction_tokens": null,
+      "reasoning_tokens": 11,
+      "rejected_prediction_tokens": null
+     }
+    }
+   }
+  },
+  {
+   "level": "xhigh",
+   "status": 200,
+   "elapsed_s": 1.12,
+   "request": {
+    "model": "glm-5.3-flash",
+    "messages": [
+     {
+      "role": "user",
+      "content": "Reply with the single word: ok"
+     }
+    ],
+    "max_tokens": 64,
+    "reasoning_effort": "xhigh"
+   },
+   "response": {
+    "id": "chatcmpl-e9e377a0",
+    "object": "chat.completion",
+    "created": 1792037269,
+    "model": "glm-5.3-flash",
+    "choices": [
+     {
+      "index": 0,
+      "finish_reason": "stop",
+      "logprobs": null,
+      "message": {
+       "role": "assistant",
+       "content": "ok",
+       "reasoning_content": "The user is asking me to reply with just a single word: \"ok\"\n\nThis is a simple, clear instruction. There's nothing harmful about it. I should just respond with \"ok\" as requested."
+      }
+     }
+    ],
+    "usage": {
+     "prompt_tokens": 19,
+     "completion_tokens": 45,
+     "total_tokens": 64,
+     "prompt_tokens_details": {
+      "cached_tokens": 0
+     },
+     "completion_tokens_details": {
+      "accepted_prediction_tokens": null,
+      "reasoning_tokens": 42,
+      "rejected_prediction_tokens": null
+     }
+    }
+   }
+  },
+  {
+   "level": "max",
+   "status": 200,
+   "elapsed_s": 1.26,
+   "request": {
+    "model": "glm-5.3-flash",
+    "messages": [
+     {
+      "role": "user",
+      "content": "Reply with the single word: ok"
+     }
+    ],
+    "max_tokens": 64,
+    "reasoning_effort": "max"
+   },
+   "response": {
+    "id": "chatcmpl-d12647d1",
+    "object": "chat.completion",
+    "created": 1792037270,
+    "model": "glm-5.3-flash",
+    "choices": [
+     {
+      "index": 0,
+      "finish_reason": "stop",
+      "logprobs": null,
+      "message": {
+       "role": "assistant",
+       "content": "ok",
+       "reasoning_content": "The user asked me to reply with the single word \"ok\". This is a simple request. There's nothing harmful here \u2014 it's just a formatting/test request. I should comply with the single word \"ok\"."
+      }
+     }
+    ],
+    "usage": {
+     "prompt_tokens": 19,
+     "completion_tokens": 46,
+     "total_tokens": 65,
+     "prompt_tokens_details": {
+      "cached_tokens": 0
+     },
+     "completion_tokens_details": {
+      "accepted_prediction_tokens": null,
+      "reasoning_tokens": 43,
+      "rejected_prediction_tokens": null
+     }
+    }
+   }
+  }
+ ]
+}

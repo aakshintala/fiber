@@ -1,0 +1,337 @@
+{
+ "route": "go",
+ "protocol": "completions",
+ "model": "longcat-2.0",
+ "base": "https://opencode.ai/zen/go",
+ "levels": [
+  {
+   "level": "off",
+   "status": 200,
+   "elapsed_s": 2.93,
+   "request": {
+    "model": "longcat-2.0",
+    "messages": [
+     {
+      "role": "user",
+      "content": "Reply with the single word: ok"
+     }
+    ],
+    "max_tokens": 64,
+    "reasoning_effort": "none"
+   },
+   "response": {
+    "id": "c2253afbee8a4619b8ccd0cf5c3467e1",
+    "object": "chat.completion",
+    "created": 1792036796,
+    "model": "longcat-2.0",
+    "choices": [
+     {
+      "index": 0,
+      "finish_reason": "stop",
+      "logprobs": null,
+      "message": {
+       "role": "assistant",
+       "content": "ok",
+       "reasoning_content": "\nWe are asked: \"Reply with the single word: ok\". So the response should be just \"ok\"."
+      }
+     }
+    ],
+    "usage": {
+     "prompt_tokens": 14,
+     "completion_tokens": 27,
+     "total_tokens": 41,
+     "prompt_tokens_details": {
+      "audio_tokens": 0,
+      "cached_tokens": 0,
+      "cache_write_tokens": 0
+     },
+     "completion_tokens_details": {
+      "reasoning_tokens": 23
+     }
+    }
+   }
+  },
+  {
+   "level": "minimal",
+   "status": 200,
+   "elapsed_s": 2.03,
+   "request": {
+    "model": "longcat-2.0",
+    "messages": [
+     {
+      "role": "user",
+      "content": "Reply with the single word: ok"
+     }
+    ],
+    "max_tokens": 64,
+    "reasoning_effort": "minimal"
+   },
+   "response": {
+    "id": "674d4234e33d4a87be22d4b6817e3856",
+    "object": "chat.completion",
+    "created": 1792036799,
+    "model": "longcat-2.0",
+    "choices": [
+     {
+      "index": 0,
+      "finish_reason": "stop",
+      "logprobs": null,
+      "message": {
+       "role": "assistant",
+       "content": "ok",
+       "reasoning_content": "\nWe are asked: \"Reply with the single word: ok\". So I need to reply with just \"ok\"."
+      }
+     }
+    ],
+    "usage": {
+     "prompt_tokens": 14,
+     "completion_tokens": 28,
+     "total_tokens": 42,
+     "prompt_tokens_details": {
+      "audio_tokens": 0,
+      "cached_tokens": 0,
+      "cache_write_tokens": 0
+     },
+     "completion_tokens_details": {
+      "reasoning_tokens": 24
+     }
+    }
+   }
+  },
+  {
+   "level": "low",
+   "status": 200,
+   "elapsed_s": 2.62,
+   "request": {
+    "model": "longcat-2.0",
+    "messages": [
+     {
+      "role": "user",
+      "content": "Reply with the single word: ok"
+     }
+    ],
+    "max_tokens": 64,
+    "reasoning_effort": "low"
+   },
+   "response": {
+    "id": "c912d19056a04aa1ae83bd6526723185",
+    "object": "chat.completion",
+    "created": 1792036801,
+    "model": "longcat-2.0",
+    "choices": [
+     {
+      "index": 0,
+      "finish_reason": "stop",
+      "logprobs": null,
+      "message": {
+       "role": "assistant",
+       "content": "ok",
+       "reasoning_content": "\nWe are asked: \"Reply with the single word: ok\". So I just need to output \"ok\"."
+      }
+     }
+    ],
+    "usage": {
+     "prompt_tokens": 14,
+     "completion_tokens": 27,
+     "total_tokens": 41,
+     "prompt_tokens_details": {
+      "audio_tokens": 0,
+      "cached_tokens": 0,
+      "cache_write_tokens": 0
+     },
+     "completion_tokens_details": {
+      "reasoning_tokens": 23
+     }
+    }
+   }
+  },
+  {
+   "level": "medium",
+   "status": 200,
+   "elapsed_s": 2.36,
+   "request": {
+    "model": "longcat-2.0",
+    "messages": [
+     {
+      "role": "user",
+      "content": "Reply with the single word: ok"
+     }
+    ],
+    "max_tokens": 64,
+    "reasoning_effort": "medium"
+   },
+   "response": {
+    "id": "4ba88cbe871a4c0b8444a2dccfb8a1e2",
+    "object": "chat.completion",
+    "created": 1792036803,
+    "model": "longcat-2.0",
+    "choices": [
+     {
+      "index": 0,
+      "finish_reason": "stop",
+      "logprobs": null,
+      "message": {
+       "role": "assistant",
+       "content": "ok",
+       "reasoning_content": "\nWe are asked: \"Reply with the single word: ok\". So the answer is just \"ok\"."
+      }
+     }
+    ],
+    "usage": {
+     "prompt_tokens": 14,
+     "completion_tokens": 26,
+     "total_tokens": 40,
+     "prompt_tokens_details": {
+      "audio_tokens": 0,
+      "cached_tokens": 0,
+      "cache_write_tokens": 0
+     },
+     "completion_tokens_details": {
+      "reasoning_tokens": 22
+     }
+    }
+   }
+  },
+  {
+   "level": "high",
+   "status": 200,
+   "elapsed_s": 4.51,
+   "request": {
+    "model": "longcat-2.0",
+    "messages": [
+     {
+      "role": "user",
+      "content": "Reply with the single word: ok"
+     }
+    ],
+    "max_tokens": 64,
+    "reasoning_effort": "high"
+   },
+   "response": {
+    "id": "bed661fd6c43468f8e6897717576574a",
+    "object": "chat.completion",
+    "created": 1792036808,
+    "model": "longcat-2.0",
+    "choices": [
+     {
+      "index": 0,
+      "finish_reason": "stop",
+      "logprobs": null,
+      "message": {
+       "role": "assistant",
+       "content": "ok",
+       "reasoning_content": "\nWe are asked to reply with the single word: ok. So I'll just say \"ok\"."
+      }
+     }
+    ],
+    "usage": {
+     "prompt_tokens": 14,
+     "completion_tokens": 25,
+     "total_tokens": 39,
+     "prompt_tokens_details": {
+      "audio_tokens": 0,
+      "cached_tokens": 0,
+      "cache_write_tokens": 0
+     },
+     "completion_tokens_details": {
+      "reasoning_tokens": 21
+     }
+    }
+   }
+  },
+  {
+   "level": "xhigh",
+   "status": 200,
+   "elapsed_s": 2.68,
+   "request": {
+    "model": "longcat-2.0",
+    "messages": [
+     {
+      "role": "user",
+      "content": "Reply with the single word: ok"
+     }
+    ],
+    "max_tokens": 64,
+    "reasoning_effort": "xhigh"
+   },
+   "response": {
+    "id": "53dcb66fd16c4dd0a7df3dfc359549fa",
+    "object": "chat.completion",
+    "created": 1792036811,
+    "model": "longcat-2.0",
+    "choices": [
+     {
+      "index": 0,
+      "finish_reason": "stop",
+      "logprobs": null,
+      "message": {
+       "role": "assistant",
+       "content": "ok",
+       "reasoning_content": "\nWe are asked: \"Reply with the single word: ok\". So I need to output exactly \"ok\". No other text."
+      }
+     }
+    ],
+    "usage": {
+     "prompt_tokens": 14,
+     "completion_tokens": 31,
+     "total_tokens": 45,
+     "prompt_tokens_details": {
+      "audio_tokens": 0,
+      "cached_tokens": 0,
+      "cache_write_tokens": 0
+     },
+     "completion_tokens_details": {
+      "reasoning_tokens": 27
+     }
+    }
+   }
+  },
+  {
+   "level": "max",
+   "status": 200,
+   "elapsed_s": 2.3,
+   "request": {
+    "model": "longcat-2.0",
+    "messages": [
+     {
+      "role": "user",
+      "content": "Reply with the single word: ok"
+     }
+    ],
+    "max_tokens": 64,
+    "reasoning_effort": "max"
+   },
+   "response": {
+    "id": "cba7059307bb48b1ad3386a80ad1ff6a",
+    "object": "chat.completion",
+    "created": 1792036813,
+    "model": "longcat-2.0",
+    "choices": [
+     {
+      "index": 0,
+      "finish_reason": "stop",
+      "logprobs": null,
+      "message": {
+       "role": "assistant",
+       "content": "ok",
+       "reasoning_content": "\nWe are asked: \"Reply with the single word: ok\". So I just need to output \"ok\"."
+      }
+     }
+    ],
+    "usage": {
+     "prompt_tokens": 14,
+     "completion_tokens": 27,
+     "total_tokens": 41,
+     "prompt_tokens_details": {
+      "audio_tokens": 0,
+      "cached_tokens": 0,
+      "cache_write_tokens": 0
+     },
+     "completion_tokens_details": {
+      "reasoning_tokens": 23
+     }
+    }
+   }
+  }
+ ]
+}

@@ -1,0 +1,364 @@
+{
+ "route": "go",
+ "protocol": "completions",
+ "model": "step-5-preview-free",
+ "base": "https://opencode.ai/zen/go",
+ "levels": [
+  {
+   "level": "off",
+   "status": 400,
+   "elapsed_s": 0.5,
+   "request": {
+    "model": "step-5-preview-free",
+    "messages": [
+     {
+      "role": "user",
+      "content": "Reply with the single word: ok"
+     }
+    ],
+    "max_tokens": 64,
+    "reasoning_effort": "none"
+   },
+   "response": {
+    "error": {
+     "type": "server_error",
+     "message": "Upstream request failed: [400] Reasoning is mandatory for this endpoint and cannot be disabled."
+    }
+   }
+  },
+  {
+   "level": "minimal",
+   "status": 200,
+   "elapsed_s": 1.45,
+   "request": {
+    "model": "step-5-preview-free",
+    "messages": [
+     {
+      "role": "user",
+      "content": "Reply with the single word: ok"
+     }
+    ],
+    "max_tokens": 64,
+    "reasoning_effort": "minimal"
+   },
+   "response": {
+    "id": "gen-1792036992-oH7J22u735ekrlb5Ttce",
+    "object": "chat.completion",
+    "created": 1792036992,
+    "model": "step-5-preview-free",
+    "choices": [
+     {
+      "index": 0,
+      "finish_reason": "stop",
+      "logprobs": null,
+      "message": {
+       "role": "assistant",
+       "content": "ok",
+       "refusal": null,
+       "reasoning": null
+      }
+     }
+    ],
+    "usage": {
+     "prompt_tokens": 28,
+     "completion_tokens": 3,
+     "total_tokens": 31,
+     "prompt_tokens_details": {
+      "audio_tokens": 0,
+      "cached_tokens": 0,
+      "cache_write_tokens": 0
+     },
+     "completion_tokens_details": {
+      "audio_tokens": 0,
+      "reasoning_tokens": 1
+     }
+    }
+   }
+  },
+  {
+   "level": "low",
+   "status": 200,
+   "elapsed_s": 1.58,
+   "request": {
+    "model": "step-5-preview-free",
+    "messages": [
+     {
+      "role": "user",
+      "content": "Reply with the single word: ok"
+     }
+    ],
+    "max_tokens": 64,
+    "reasoning_effort": "low"
+   },
+   "response": {
+    "id": "gen-1792036994-sXuUiJzx7OBVP2ni4wKr",
+    "object": "chat.completion",
+    "created": 1792036994,
+    "model": "step-5-preview-free",
+    "choices": [
+     {
+      "index": 0,
+      "finish_reason": "stop",
+      "logprobs": null,
+      "message": {
+       "role": "assistant",
+       "content": "ok",
+       "refusal": null,
+       "reasoning": "The user wants me to reply with the single word \"ok\".",
+       "reasoning_details": [
+        {
+         "type": "reasoning.text",
+         "text": "The user wants me to reply with the single word \"ok\".",
+         "format": "unknown",
+         "index": 0
+        }
+       ]
+      }
+     }
+    ],
+    "usage": {
+     "prompt_tokens": 28,
+     "completion_tokens": 16,
+     "total_tokens": 44,
+     "prompt_tokens_details": {
+      "audio_tokens": 0,
+      "cached_tokens": 0,
+      "cache_write_tokens": 0
+     },
+     "completion_tokens_details": {
+      "audio_tokens": 0,
+      "reasoning_tokens": 14
+     }
+    }
+   }
+  },
+  {
+   "level": "medium",
+   "status": 200,
+   "elapsed_s": 1.47,
+   "request": {
+    "model": "step-5-preview-free",
+    "messages": [
+     {
+      "role": "user",
+      "content": "Reply with the single word: ok"
+     }
+    ],
+    "max_tokens": 64,
+    "reasoning_effort": "medium"
+   },
+   "response": {
+    "id": "gen-1792036995-SO9ARwxK8daVKTFfuEgt",
+    "object": "chat.completion",
+    "created": 1792036995,
+    "model": "step-5-preview-free",
+    "choices": [
+     {
+      "index": 0,
+      "finish_reason": "stop",
+      "logprobs": null,
+      "message": {
+       "role": "assistant",
+       "content": "ok",
+       "refusal": null,
+       "reasoning": "The user wants a single word reply: \"ok\".",
+       "reasoning_details": [
+        {
+         "type": "reasoning.text",
+         "text": "The user wants a single word reply: \"ok\".",
+         "format": "unknown",
+         "index": 0
+        }
+       ]
+      }
+     }
+    ],
+    "usage": {
+     "prompt_tokens": 28,
+     "completion_tokens": 14,
+     "total_tokens": 42,
+     "prompt_tokens_details": {
+      "audio_tokens": 0,
+      "cached_tokens": 0,
+      "cache_write_tokens": 0
+     },
+     "completion_tokens_details": {
+      "audio_tokens": 0,
+      "reasoning_tokens": 12
+     }
+    }
+   }
+  },
+  {
+   "level": "high",
+   "status": 200,
+   "elapsed_s": 2.08,
+   "request": {
+    "model": "step-5-preview-free",
+    "messages": [
+     {
+      "role": "user",
+      "content": "Reply with the single word: ok"
+     }
+    ],
+    "max_tokens": 64,
+    "reasoning_effort": "high"
+   },
+   "response": {
+    "id": "gen-1792036997-2AwPXtPaEj4WhSBGI6LF",
+    "object": "chat.completion",
+    "created": 1792036997,
+    "model": "step-5-preview-free",
+    "choices": [
+     {
+      "index": 0,
+      "finish_reason": "stop",
+      "logprobs": null,
+      "message": {
+       "role": "assistant",
+       "content": "ok",
+       "refusal": null,
+       "reasoning": "The user asked me to reply with the single word \"ok\". I should do exactly that.\n\nNo need for extra explanation, just the word as requested.",
+       "reasoning_details": [
+        {
+         "type": "reasoning.text",
+         "text": "The user asked me to reply with the single word \"ok\". I should do exactly that.\n\nNo need for extra explanation, just the word as requested.",
+         "format": "unknown",
+         "index": 0
+        }
+       ]
+      }
+     }
+    ],
+    "usage": {
+     "prompt_tokens": 18,
+     "completion_tokens": 34,
+     "total_tokens": 52,
+     "prompt_tokens_details": {
+      "audio_tokens": 0,
+      "cached_tokens": 0,
+      "cache_write_tokens": 0
+     },
+     "completion_tokens_details": {
+      "audio_tokens": 0,
+      "reasoning_tokens": 32
+     }
+    }
+   }
+  },
+  {
+   "level": "xhigh",
+   "status": 200,
+   "elapsed_s": 1.79,
+   "request": {
+    "model": "step-5-preview-free",
+    "messages": [
+     {
+      "role": "user",
+      "content": "Reply with the single word: ok"
+     }
+    ],
+    "max_tokens": 64,
+    "reasoning_effort": "xhigh"
+   },
+   "response": {
+    "id": "gen-1792036999-hBFePy8yZnkNFnsQR4s8",
+    "object": "chat.completion",
+    "created": 1792036999,
+    "model": "step-5-preview-free",
+    "choices": [
+     {
+      "index": 0,
+      "finish_reason": "stop",
+      "logprobs": null,
+      "message": {
+       "role": "assistant",
+       "content": "ok",
+       "refusal": null,
+       "reasoning": "The user wants me to reply with the single word: \"ok\". This is straightforward. I should not add anything else.",
+       "reasoning_details": [
+        {
+         "type": "reasoning.text",
+         "text": "The user wants me to reply with the single word: \"ok\". This is straightforward. I should not add anything else.",
+         "format": "unknown",
+         "index": 0
+        }
+       ]
+      }
+     }
+    ],
+    "usage": {
+     "prompt_tokens": 18,
+     "completion_tokens": 28,
+     "total_tokens": 46,
+     "prompt_tokens_details": {
+      "audio_tokens": 0,
+      "cached_tokens": 0,
+      "cache_write_tokens": 0
+     },
+     "completion_tokens_details": {
+      "audio_tokens": 0,
+      "reasoning_tokens": 26
+     }
+    }
+   }
+  },
+  {
+   "level": "max",
+   "status": 200,
+   "elapsed_s": 1.79,
+   "request": {
+    "model": "step-5-preview-free",
+    "messages": [
+     {
+      "role": "user",
+      "content": "Reply with the single word: ok"
+     }
+    ],
+    "max_tokens": 64,
+    "reasoning_effort": "max"
+   },
+   "response": {
+    "id": "gen-1792037001-dZPRN62geZGWtAMyNNhC",
+    "object": "chat.completion",
+    "created": 1792037001,
+    "model": "step-5-preview-free",
+    "choices": [
+     {
+      "index": 0,
+      "finish_reason": "stop",
+      "logprobs": null,
+      "message": {
+       "role": "assistant",
+       "content": "ok",
+       "refusal": null,
+       "reasoning": "The user wants me to reply with the single word \"ok\". This is a straightforward request with no safety concerns or policy violations. I should simply respond with \"ok\".",
+       "reasoning_details": [
+        {
+         "type": "reasoning.text",
+         "text": "The user wants me to reply with the single word \"ok\". This is a straightforward request with no safety concerns or policy violations. I should simply respond with \"ok\".",
+         "format": "unknown",
+         "index": 0
+        }
+       ]
+      }
+     }
+    ],
+    "usage": {
+     "prompt_tokens": 18,
+     "completion_tokens": 37,
+     "total_tokens": 55,
+     "prompt_tokens_details": {
+      "audio_tokens": 0,
+      "cached_tokens": 0,
+      "cache_write_tokens": 0
+     },
+     "completion_tokens_details": {
+      "audio_tokens": 0,
+      "reasoning_tokens": 35
+     }
+    }
+   }
+  }
+ ]
+}

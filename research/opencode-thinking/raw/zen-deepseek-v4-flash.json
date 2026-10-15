@@ -1,0 +1,162 @@
+{
+ "route": "zen",
+ "protocol": "completions",
+ "model": "deepseek-v4-flash",
+ "base": "https://opencode.ai/zen",
+ "levels": [
+  {
+   "level": "off",
+   "status": 403,
+   "elapsed_s": 0.58,
+   "request": {
+    "model": "deepseek-v4-flash",
+    "messages": [
+     {
+      "role": "user",
+      "content": "Reply with the single word: ok"
+     }
+    ],
+    "max_tokens": 64,
+    "reasoning_effort": "none"
+   },
+   "response": {
+    "error": {
+     "type": "server_error",
+     "message": "Upstream request failed: Model access is disabled"
+    }
+   }
+  },
+  {
+   "level": "minimal",
+   "status": 403,
+   "elapsed_s": 0.45,
+   "request": {
+    "model": "deepseek-v4-flash",
+    "messages": [
+     {
+      "role": "user",
+      "content": "Reply with the single word: ok"
+     }
+    ],
+    "max_tokens": 64,
+    "reasoning_effort": "minimal"
+   },
+   "response": {
+    "error": {
+     "type": "server_error",
+     "message": "Upstream request failed: Model access is disabled"
+    }
+   }
+  },
+  {
+   "level": "low",
+   "status": 403,
+   "elapsed_s": 0.44,
+   "request": {
+    "model": "deepseek-v4-flash",
+    "messages": [
+     {
+      "role": "user",
+      "content": "Reply with the single word: ok"
+     }
+    ],
+    "max_tokens": 64,
+    "reasoning_effort": "low"
+   },
+   "response": {
+    "error": {
+     "type": "server_error",
+     "message": "Upstream request failed: Model access is disabled"
+    }
+   }
+  },
+  {
+   "level": "medium",
+   "status": 403,
+   "elapsed_s": 0.44,
+   "request": {
+    "model": "deepseek-v4-flash",
+    "messages": [
+     {
+      "role": "user",
+      "content": "Reply with the single word: ok"
+     }
+    ],
+    "max_tokens": 64,
+    "reasoning_effort": "medium"
+   },
+   "response": {
+    "error": {
+     "type": "server_error",
+     "message": "Upstream request failed: Model access is disabled"
+    }
+   }
+  },
+  {
+   "level": "high",
+   "status": 403,
+   "elapsed_s": 0.36,
+   "request": {
+    "model": "deepseek-v4-flash",
+    "messages": [
+     {
+      "role": "user",
+      "content": "Reply with the single word: ok"
+     }
+    ],
+    "max_tokens": 64,
+    "reasoning_effort": "high"
+   },
+   "response": {
+    "error": {
+     "type": "server_error",
+     "message": "Upstream request failed: Model access is disabled"
+    }
+   }
+  },
+  {
+   "level": "xhigh",
+   "status": 403,
+   "elapsed_s": 0.45,
+   "request": {
+    "model": "deepseek-v4-flash",
+    "messages": [
+     {
+      "role": "user",
+      "content": "Reply with the single word: ok"
+     }
+    ],
+    "max_tokens": 64,
+    "reasoning_effort": "xhigh"
+   },
+   "response": {
+    "error": {
+     "type": "server_error",
+     "message": "Upstream request failed: Model access is disabled"
+    }
+   }
+  },
+  {
+   "level": "max",
+   "status": 403,
+   "elapsed_s": 0.46,
+   "request": {
+    "model": "deepseek-v4-flash",
+    "messages": [
+     {
+      "role": "user",
+      "content": "Reply with the single word: ok"
+     }
+    ],
+    "max_tokens": 64,
+    "reasoning_effort": "max"
+   },
+   "response": {
+    "error": {
+     "type": "server_error",
+     "message": "Upstream request failed: Model access is disabled"
+    }
+   }
+  }
+ ]
+}

@@ -1,0 +1,198 @@
+{
+ "route": "zen",
+ "protocol": "messages",
+ "model": "qwen3.6-plus",
+ "base": "https://opencode.ai/zen",
+ "levels": [
+  {
+   "level": "off",
+   "status": 403,
+   "elapsed_s": 0.38,
+   "request": {
+    "model": "qwen3.6-plus",
+    "messages": [
+     {
+      "role": "user",
+      "content": "Reply with the single word: ok"
+     }
+    ],
+    "max_tokens": 64
+   },
+   "response": {
+    "type": "error",
+    "error": {
+     "type": "api_error",
+     "message": "Upstream request failed: Model access is disabled"
+    }
+   }
+  },
+  {
+   "level": "minimal",
+   "status": 403,
+   "elapsed_s": 0.44,
+   "request": {
+    "model": "qwen3.6-plus",
+    "messages": [
+     {
+      "role": "user",
+      "content": "Reply with the single word: ok"
+     }
+    ],
+    "max_tokens": 64,
+    "thinking": {
+     "type": "adaptive"
+    },
+    "output_config": {
+     "effort": "minimal"
+    }
+   },
+   "response": {
+    "type": "error",
+    "error": {
+     "type": "api_error",
+     "message": "Upstream request failed: Model access is disabled"
+    }
+   }
+  },
+  {
+   "level": "low",
+   "status": 403,
+   "elapsed_s": 0.45,
+   "request": {
+    "model": "qwen3.6-plus",
+    "messages": [
+     {
+      "role": "user",
+      "content": "Reply with the single word: ok"
+     }
+    ],
+    "max_tokens": 64,
+    "thinking": {
+     "type": "adaptive"
+    },
+    "output_config": {
+     "effort": "low"
+    }
+   },
+   "response": {
+    "type": "error",
+    "error": {
+     "type": "api_error",
+     "message": "Upstream request failed: Model access is disabled"
+    }
+   }
+  },
+  {
+   "level": "medium",
+   "status": 403,
+   "elapsed_s": 0.77,
+   "request": {
+    "model": "qwen3.6-plus",
+    "messages": [
+     {
+      "role": "user",
+      "content": "Reply with the single word: ok"
+     }
+    ],
+    "max_tokens": 64,
+    "thinking": {
+     "type": "adaptive"
+    },
+    "output_config": {
+     "effort": "medium"
+    }
+   },
+   "response": {
+    "type": "error",
+    "error": {
+     "type": "api_error",
+     "message": "Upstream request failed: Model access is disabled"
+    }
+   }
+  },
+  {
+   "level": "high",
+   "status": 403,
+   "elapsed_s": 0.58,
+   "request": {
+    "model": "qwen3.6-plus",
+    "messages": [
+     {
+      "role": "user",
+      "content": "Reply with the single word: ok"
+     }
+    ],
+    "max_tokens": 64,
+    "thinking": {
+     "type": "adaptive"
+    },
+    "output_config": {
+     "effort": "high"
+    }
+   },
+   "response": {
+    "type": "error",
+    "error": {
+     "type": "api_error",
+     "message": "Upstream request failed: Model access is disabled"
+    }
+   }
+  },
+  {
+   "level": "xhigh",
+   "status": 403,
+   "elapsed_s": 0.41,
+   "request": {
+    "model": "qwen3.6-plus",
+    "messages": [
+     {
+      "role": "user",
+      "content": "Reply with the single word: ok"
+     }
+    ],
+    "max_tokens": 64,
+    "thinking": {
+     "type": "adaptive"
+    },
+    "output_config": {
+     "effort": "xhigh"
+    }
+   },
+   "response": {
+    "type": "error",
+    "error": {
+     "type": "api_error",
+     "message": "Upstream request failed: Model access is disabled"
+    }
+   }
+  },
+  {
+   "level": "max",
+   "status": 403,
+   "elapsed_s": 0.45,
+   "request": {
+    "model": "qwen3.6-plus",
+    "messages": [
+     {
+      "role": "user",
+      "content": "Reply with the single word: ok"
+     }
+    ],
+    "max_tokens": 64,
+    "thinking": {
+     "type": "adaptive"
+    },
+    "output_config": {
+     "effort": "max"
+    }
+   },
+   "response": {
+    "type": "error",
+    "error": {
+     "type": "api_error",
+     "message": "Upstream request failed: Model access is disabled"
+    }
+   }
+  }
+ ]
+}

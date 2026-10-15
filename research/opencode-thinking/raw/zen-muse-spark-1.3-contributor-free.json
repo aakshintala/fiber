@@ -1,0 +1,169 @@
+{
+ "route": "zen",
+ "protocol": "responses",
+ "model": "muse-spark-1.3-contributor-free",
+ "base": "https://opencode.ai/zen",
+ "levels": [
+  {
+   "level": "off",
+   "status": 403,
+   "elapsed_s": 0.49,
+   "request": {
+    "model": "muse-spark-1.3-contributor-free",
+    "input": "Reply with the single word: ok",
+    "max_output_tokens": 16,
+    "reasoning": {
+     "effort": "none"
+    },
+    "include": [
+     "reasoning.encrypted_content"
+    ]
+   },
+   "response": {
+    "type": "error",
+    "error": {
+     "type": "FreeTierError",
+     "message": "OpenCode's free tier can only be used from within OpenCode. Download it at https://opencode.ai and keep building."
+    }
+   }
+  },
+  {
+   "level": "minimal",
+   "status": 403,
+   "elapsed_s": 0.43,
+   "request": {
+    "model": "muse-spark-1.3-contributor-free",
+    "input": "Reply with the single word: ok",
+    "max_output_tokens": 16,
+    "reasoning": {
+     "effort": "minimal"
+    },
+    "include": [
+     "reasoning.encrypted_content"
+    ]
+   },
+   "response": {
+    "type": "error",
+    "error": {
+     "type": "FreeTierError",
+     "message": "OpenCode's free tier can only be used from within OpenCode. Download it at https://opencode.ai and keep building."
+    }
+   }
+  },
+  {
+   "level": "low",
+   "status": 403,
+   "elapsed_s": 0.37,
+   "request": {
+    "model": "muse-spark-1.3-contributor-free",
+    "input": "Reply with the single word: ok",
+    "max_output_tokens": 16,
+    "reasoning": {
+     "effort": "low"
+    },
+    "include": [
+     "reasoning.encrypted_content"
+    ]
+   },
+   "response": {
+    "type": "error",
+    "error": {
+     "type": "FreeTierError",
+     "message": "OpenCode's free tier can only be used from within OpenCode. Download it at https://opencode.ai and keep building."
+    }
+   }
+  },
+  {
+   "level": "medium",
+   "status": 403,
+   "elapsed_s": 0.39,
+   "request": {
+    "model": "muse-spark-1.3-contributor-free",
+    "input": "Reply with the single word: ok",
+    "max_output_tokens": 16,
+    "reasoning": {
+     "effort": "medium"
+    },
+    "include": [
+     "reasoning.encrypted_content"
+    ]
+   },
+   "response": {
+    "type": "error",
+    "error": {
+     "type": "FreeTierError",
+     "message": "OpenCode's free tier can only be used from within OpenCode. Download it at https://opencode.ai and keep building."
+    }
+   }
+  },
+  {
+   "level": "high",
+   "status": 403,
+   "elapsed_s": 0.38,
+   "request": {
+    "model": "muse-spark-1.3-contributor-free",
+    "input": "Reply with the single word: ok",
+    "max_output_tokens": 16,
+    "reasoning": {
+     "effort": "high"
+    },
+    "include": [
+     "reasoning.encrypted_content"
+    ]
+   },
+   "response": {
+    "type": "error",
+    "error": {
+     "type": "FreeTierError",
+     "message": "OpenCode's free tier can only be used from within OpenCode. Download it at https://opencode.ai and keep building."
+    }
+   }
+  },
+  {
+   "level": "xhigh",
+   "status": 403,
+   "elapsed_s": 0.4,
+   "request": {
+    "model": "muse-spark-1.3-contributor-free",
+    "input": "Reply with the single word: ok",
+    "max_output_tokens": 16,
+    "reasoning": {
+     "effort": "xhigh"
+    },
+    "include": [
+     "reasoning.encrypted_content"
+    ]
+   },
+   "response": {
+    "type": "error",
+    "error": {
+     "type": "FreeTierError",
+     "message": "OpenCode's free tier can only be used from within OpenCode. Download it at https://opencode.ai and keep building."
+    }
+   }
+  },
+  {
+   "level": "max",
+   "status": 403,
+   "elapsed_s": 0.33,
+   "request": {
+    "model": "muse-spark-1.3-contributor-free",
+    "input": "Reply with the single word: ok",
+    "max_output_tokens": 16,
+    "reasoning": {
+     "effort": "max"
+    },
+    "include": [
+     "reasoning.encrypted_content"
+    ]
+   },
+   "response": {
+    "type": "error",
+    "error": {
+     "type": "FreeTierError",
+     "message": "OpenCode's free tier can only be used from within OpenCode. Download it at https://opencode.ai and keep building."
+    }
+   }
+  }
+ ]
+}

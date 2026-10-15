@@ -1036,24 +1036,61 @@ fn fetch_names_a_failed_curl() {
 
 #[test]
 fn zen_keeps_its_google_generative_ai_models() {
+    use std::collections::BTreeMap;
     let google = || tool_model(json!({"provider": {"npm": "@ai-sdk/google"}}));
-    let other = || tool_model(json!({"provider": {"npm": "@ai-sdk/openai"}}));
-    let zen = PACKAGES
-        .iter()
-        .find(|package| package.path.ends_with("opencode-zen.json"))
-        .unwrap();
-    let (output, left_out) = generate_one(
-        zen,
-        &[
-            ("gemini-3.8-flash", google()),
-            ("gpt-6-luna", other()),
-            ("muse-spark-1.3", other()),
-            ("gpt-6.1-sol", other()),
-        ],
-    );
-    assert!(generated_model(&output, "gemini-3.8-flash").is_some());
+    // Every id each package's table names, so no stale-entry error fires.
+    let mut ids: BTreeMap<&str, Vec<&str>> = BTreeMap::new();
+    for package in &PACKAGES {
+        let entry = ids.entry(package.source).or_default();
+        for id in package
+            .only
+            .iter()
+            .copied()
+            .chain(package.protocol_overrides.iter().map(|entry| entry.0))
+            .chain(package.by_model.iter().map(|entry| entry.0))
+            .chain(package.thinking.iter().map(|entry| entry.0))
+        {
+            if !entry.contains(&id) {
+                entry.push(id);
+            }
+        }
+    }
+    // Plus the models under test: Zen and Go keep them, inheriting or
+    // owning their thinking rows, which is what lets this generate at all.
+    for (source, id) in [
+        ("opencode", "gemini-3.8-flash"),
+        ("opencode", "gpt-6-luna"),
+        ("opencode", "muse-spark-1.3"),
+        ("opencode", "gpt-6.1-sol"),
+        ("opencode-go", "gemini-3.8-flash"),
+        ("opencode-go", "muse-spark-1.3-contributor"),
+        ("opencode-go", "minimax-m2.7"),
+    ] {
+        let entry = ids.entry(source).or_default();
+        if !entry.contains(&id) {
+            entry.push(id);
+        }
+    }
+    let mut sources = Map::new();
+    for (source, models) in &ids {
+        let mut map = Map::new();
+        for id in models {
+            let model = if *id == "gemini-3.8-flash" {
+                google()
+            } else {
+                tool_model(json!({}))
+            };
+            map.insert((*id).to_owned(), model);
+        }
+        let mut provider = Map::new();
+        provider.insert("models".to_owned(), Value::Object(map));
+        sources.insert((*source).to_owned(), Value::Object(provider));
+    }
+    let (outputs, left_out) = generate(&Value::Object(sources), &PACKAGES).unwrap();
+    let output = output_for(&outputs, "opencode-zen.json");
+    assert!(generated_model(output, "gemini-3.8-flash").is_some());
     for id in ["gpt-6-luna", "muse-spark-1.3", "gpt-6.1-sol"] {
-        assert!(generated_model(&output, id).is_some(), "{id}");
+        assert!(generated_model(output, id).is_some(), "{id}");
     }
     assert!(
         !left_out
@@ -1061,22 +1098,8 @@ fn zen_keeps_its_google_generative_ai_models() {
             .any(|line| line.contains("gemini-3.8-flash")),
         "{left_out:?}"
     );
-    let go = PACKAGES
-        .iter()
-        .find(|package| package.path.ends_with("opencode-go.json"))
-        .unwrap();
-    let (output, _) = generate_one(
-        go,
-        &[
-            ("gemini-3.8-flash", google()),
-            ("muse-spark-1.3-contributor", other()),
-            (
-                "minimax-m2.7",
-                tool_model(json!({"provider": {"npm": "@ai-sdk/anthropic"}})),
-            ),
-        ],
-    );
-    assert!(generated_model(&output, "gemini-3.8-flash").is_some());
+    let output = output_for(&outputs, "opencode-go.json");
+    assert!(generated_model(output, "gemini-3.8-flash").is_some());
     let gemini = PACKAGES
         .iter()
         .find(|package| package.path.ends_with("providers/gemini.json"))
