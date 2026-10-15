@@ -930,7 +930,9 @@ fn scripted_reopening(level: &str, accepted: bool, last_seq: Option<u64>, path: 
         // A marker after the replay pins the event's position and count.
         writeln!(stream, "{}", json!({"kind": "fold_marker", "session_id": SID, "ts": 0, "schema_version": 1, "payload": {}})).unwrap();
         played_tx.send(()).unwrap();
-        let _: Result<(), _> = release.recv();
+        match release.recv() {
+            Ok(()) | Err(_) => {}
+        }
     });
     if path == "rejoin" {
         let mark = crate::rejoin::Mark::now(&temp.dir, SID);
