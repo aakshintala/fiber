@@ -1,6 +1,8 @@
 //! Tests for file search: the ranking, the listing and the worker.
 
-use super::{CHECK_EVERY, KEPT, Limits, Query, Roots, Search, entries, find, list, rank, resolve, split};
+use super::{
+    CHECK_EVERY, KEPT, Limits, Query, Roots, Search, entries, find, list, rank, resolve, split,
+};
 use crate::Input;
 use fakes::Deadline;
 use std::cell::Cell;
@@ -104,27 +106,57 @@ fn a_path_query_splits_at_its_last_slash() {
             query: "b"
         }
     );
-    assert_eq!(split("/"), Path { base_text: "/", query: "" });
-    assert_eq!(split("~/"), Path { base_text: "~/", query: "" });
-    assert_eq!(split("../"), Path { base_text: "../", query: "" });
-    assert_eq!(split("/etc"), Path { base_text: "/", query: "etc" });
+    assert_eq!(
+        split("/"),
+        Path {
+            base_text: "/",
+            query: ""
+        }
+    );
+    assert_eq!(
+        split("~/"),
+        Path {
+            base_text: "~/",
+            query: ""
+        }
+    );
+    assert_eq!(
+        split("../"),
+        Path {
+            base_text: "../",
+            query: ""
+        }
+    );
+    assert_eq!(
+        split("/etc"),
+        Path {
+            base_text: "/",
+            query: "etc"
+        }
+    );
     assert_eq!(
         split("../x"),
-        Path { base_text: "../", query: "x" }
+        Path {
+            base_text: "../",
+            query: "x"
+        }
     );
     assert_eq!(
         split("/a/b/c"),
-        Path { base_text: "/a/b/", query: "c" }
+        Path {
+            base_text: "/a/b/",
+            query: "c"
+        }
     );
 }
 
 #[test]
 fn a_base_resolves_against_home_workspace_or_root() {
-    let roots = Roots::new(
-        PathBuf::from("/w"),
-        Some(OsString::from("/home/u")),
+    let roots = Roots::new(PathBuf::from("/w"), Some(OsString::from("/home/u")));
+    assert_eq!(
+        resolve("~/proj/", &roots),
+        Ok(PathBuf::from("/home/u/proj"))
     );
-    assert_eq!(resolve("~/proj/", &roots), Ok(PathBuf::from("/home/u/proj")));
     assert_eq!(resolve("/etc/", &roots), Ok(PathBuf::from("/etc")));
     assert_eq!(resolve("../x/", &roots), Ok(PathBuf::from("/w/../x")));
     let no_home = Roots::new(PathBuf::from("/w"), None);
@@ -138,10 +170,7 @@ fn a_base_resolves_against_home_workspace_or_root() {
 fn an_empty_or_relative_home_is_no_home() {
     for home in [None, Some(OsString::from("")), Some(OsString::from("rel"))] {
         let roots = Roots::new(PathBuf::from("/w"), home);
-        assert_eq!(
-            resolve("~/", &roots),
-            Err("no home directory".to_owned())
-        );
+        assert_eq!(resolve("~/", &roots), Err("no home directory".to_owned()));
     }
     let roots = Roots::new(PathBuf::from("/w"), Some(OsString::from("/home/u")));
     assert_eq!(resolve("~/", &roots), Ok(PathBuf::from("/home/u")));
@@ -168,7 +197,12 @@ fn seeded(names: &[&str]) -> fakes::TempDir {
 /// The base listing of `dir`'s entries matching `query` as `@` rows
 /// typed as `base_text`, with `limits` and a fresh budget.
 #[track_caller]
-fn listed(dir: &Path, base_text: &str, query: &str, limits: &Limits) -> Option<Result<Vec<String>, String>> {
+fn listed(
+    dir: &Path,
+    base_text: &str,
+    query: &str,
+    limits: &Limits,
+) -> Option<Result<Vec<String>, String>> {
     entries(dir, base_text, query, limits, &mut 0, || false)
 }
 
@@ -233,8 +267,11 @@ fn a_symlink_to_a_directory_is_a_directory_row() {
     let dir = seeded(&["real/inner.txt"]);
     std::os::unix::fs::symlink(dir.path().join("real"), dir.path().join("link"))
         .unwrap_or_else(|err| panic!("symlink: {err}"));
-    std::os::unix::fs::symlink(dir.path().join("real/inner.txt"), dir.path().join("file-link"))
-        .unwrap_or_else(|err| panic!("symlink: {err}"));
+    std::os::unix::fs::symlink(
+        dir.path().join("real/inner.txt"),
+        dir.path().join("file-link"),
+    )
+    .unwrap_or_else(|err| panic!("symlink: {err}"));
     let rows = listed(dir.path(), "~/proj/", "link", &search_limits())
         .unwrap_or_else(|| panic!("cancelled"))
         .unwrap_or_else(|err| panic!("{err}"));
@@ -260,9 +297,16 @@ fn a_non_utf8_name_is_listed_lossily() {
 fn a_name_with_a_control_character_is_not_listed() {
     let dir = seeded(&["li\nne", "fine"]);
     let mut examined = 0;
-    let rows = entries(dir.path(), "~/proj/", "", &search_limits(), &mut examined, || false)
-        .unwrap_or_else(|| panic!("cancelled"))
-        .unwrap_or_else(|err| panic!("{err}"));
+    let rows = entries(
+        dir.path(),
+        "~/proj/",
+        "",
+        &search_limits(),
+        &mut examined,
+        || false,
+    )
+    .unwrap_or_else(|| panic!("cancelled"))
+    .unwrap_or_else(|err| panic!("{err}"));
     assert_eq!(rows, owned(&["~/proj/fine"]));
     assert_eq!(examined, 2);
 }
@@ -270,7 +314,12 @@ fn a_name_with_a_control_character_is_not_listed() {
 /// Runs `find` on `dir`'s entries matching `query` as `@` rows typed as
 /// `base_text`, with `limits` and a worker that is never cancelled.
 #[track_caller]
-fn found(dir: &Path, base_text: &str, query: &str, limits: &Limits) -> Option<Result<Vec<String>, String>> {
+fn found(
+    dir: &Path,
+    base_text: &str,
+    query: &str,
+    limits: &Limits,
+) -> Option<Result<Vec<String>, String>> {
     find(dir, base_text, query, limits, || false)
 }
 
@@ -332,8 +381,16 @@ fn the_walk_stops_at_the_visit_bound() {
     // Three depth-1 entries and exactly seven deeper ones, all matching:
     // ten examined entries in total.
     let names = [
-        "a1", "a2", "sub/", "sub/b1", "sub/b2", "sub/deep/", "sub/deep/c1",
-        "sub/deep/c2", "sub/deep/c3", "sub/deep/c4",
+        "a1",
+        "a2",
+        "sub/",
+        "sub/b1",
+        "sub/b2",
+        "sub/deep/",
+        "sub/deep/c1",
+        "sub/deep/c2",
+        "sub/deep/c3",
+        "sub/deep/c4",
     ];
     for visits in [9, 10, 11] {
         let dir = seeded(&names);
@@ -354,9 +411,20 @@ fn the_visit_bound_counts_unyielded_and_depth_one_entries() {
     // Eight examined entries, only two matching: the depth-1 `m1` and the
     // deep `sub/zzz/m2`, examined last in the walk's path order.
     let names = [
-        "m1", "sub/", "sub/n1", "sub/n2", "sub/n3", "sub/n4", "sub/zzz/", "sub/zzz/m2",
+        "m1",
+        "sub/",
+        "sub/n1",
+        "sub/n2",
+        "sub/n3",
+        "sub/n4",
+        "sub/zzz/",
+        "sub/zzz/m2",
     ];
-    for (visits, want) in [(7, ["~/proj/m1"].as_slice()), (8, ["~/proj/m1", "~/proj/sub/zzz/m2"].as_slice()), (9, ["~/proj/m1", "~/proj/sub/zzz/m2"].as_slice())] {
+    for (visits, want) in [
+        (7, ["~/proj/m1"].as_slice()),
+        (8, ["~/proj/m1", "~/proj/sub/zzz/m2"].as_slice()),
+        (9, ["~/proj/m1", "~/proj/sub/zzz/m2"].as_slice()),
+    ] {
         let dir = seeded(&names);
         let limits = Limits {
             kept: Limits::SEARCH.kept,
@@ -413,7 +481,12 @@ fn a_missing_base_is_an_error_row_reason() {
 #[test]
 fn a_file_as_base_is_an_error() {
     let dir = seeded(&["plain.txt"]);
-    match found(&dir.path().join("plain.txt"), "~/proj/plain.txt/", "", &search_limits()) {
+    match found(
+        &dir.path().join("plain.txt"),
+        "~/proj/plain.txt/",
+        "",
+        &search_limits(),
+    ) {
         Some(Err(reason)) => assert!(reason.contains("Not a directory"), "{reason}"),
         other => panic!("a file base is an error, not {other:?}"),
     }
@@ -562,7 +635,10 @@ fn a_path_query_is_answered_while_the_listing_is_blocked() {
             gate.recv().map_err(|err| err.to_string())?;
             Ok(owned(&["a.rs"]))
         },
-        Roots::new(PathBuf::from("/w"), Some(home.path().as_os_str().to_owned())),
+        Roots::new(
+            PathBuf::from("/w"),
+            Some(home.path().as_os_str().to_owned()),
+        ),
         out,
     );
     search.search(1, "~/proj/al".to_owned());
@@ -572,7 +648,9 @@ fn a_path_query_is_answered_while_the_listing_is_blocked() {
         next_result(&rx, "the path search", &Deadline::after(DEADLINE)),
         (1, Ok(owned(&["~/proj/alpha.txt"])))
     );
-    release.send(()).unwrap_or_else(|err| panic!("release: {err}"));
+    release
+        .send(())
+        .unwrap_or_else(|err| panic!("release: {err}"));
     search.search(2, "a".to_owned());
     assert_eq!(
         next_result(&rx, "the workspace search", &Deadline::after(DEADLINE)),
@@ -590,7 +668,10 @@ fn path_searches_use_the_roots_and_ignore_a_failed_listing() {
             gate.recv().map_err(|err| err.to_string())?;
             Err("no git".to_owned())
         },
-        Roots::new(PathBuf::from("/w"), Some(home.path().as_os_str().to_owned())),
+        Roots::new(
+            PathBuf::from("/w"),
+            Some(home.path().as_os_str().to_owned()),
+        ),
         out,
     );
     search.search(1, "~/proj/rea".to_owned());
@@ -598,7 +679,9 @@ fn path_searches_use_the_roots_and_ignore_a_failed_listing() {
         next_result(&rx, "the path search", &Deadline::after(DEADLINE)),
         (1, Ok(owned(&["~/proj/README.md"])))
     );
-    release.send(()).unwrap_or_else(|err| panic!("release: {err}"));
+    release
+        .send(())
+        .unwrap_or_else(|err| panic!("release: {err}"));
     search.search(2, "read".to_owned());
     assert_eq!(
         next_result(&rx, "the failed listing", &Deadline::after(DEADLINE)),
@@ -624,7 +707,10 @@ fn a_path_search_superseded_before_it_ran_is_skipped() {
             gate.recv().map_err(|err| err.to_string())?;
             Ok(owned(&["a.rs"]))
         },
-        Roots::new(PathBuf::from("/w"), Some(home.path().as_os_str().to_owned())),
+        Roots::new(
+            PathBuf::from("/w"),
+            Some(home.path().as_os_str().to_owned()),
+        ),
         out,
     );
     // The workspace job holds the worker in the listing while two path
@@ -632,7 +718,9 @@ fn a_path_search_superseded_before_it_ran_is_skipped() {
     search.search(1, "a".to_owned());
     search.search(2, "~/proj/al".to_owned());
     search.search(3, "~/proj/be".to_owned());
-    release.send(()).unwrap_or_else(|err| panic!("release: {err}"));
+    release
+        .send(())
+        .unwrap_or_else(|err| panic!("release: {err}"));
     assert_eq!(
         next_result(&rx, "the newest search", &Deadline::after(DEADLINE)),
         (3, Ok(owned(&["~/proj/beta.txt"])))
@@ -651,7 +739,10 @@ fn dropping_the_worker_abandons_a_path_search() {
     let (out, rx) = mpsc::channel();
     let search = Search::spawn(
         || Ok(owned(&["a.rs"])),
-        Roots::new(PathBuf::from("/w"), Some(home.path().as_os_str().to_owned())),
+        Roots::new(
+            PathBuf::from("/w"),
+            Some(home.path().as_os_str().to_owned()),
+        ),
         out,
     );
     search.search(1, "~/proj/al".to_owned());

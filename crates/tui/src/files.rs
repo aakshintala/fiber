@@ -138,9 +138,7 @@ fn walk(
         .require_git(false)
         .follow_links(false)
         .sort_by_file_path(|first, second| first.cmp(second))
-        .filter_entry(|entry| {
-            entry.depth() == 0 || entry.file_name().to_string_lossy() != ".git"
-        });
+        .filter_entry(|entry| entry.depth() == 0 || entry.file_name().to_string_lossy() != ".git");
     let rows: Vec<String> = builder
         .build()
         .take_while(|item| {
@@ -170,7 +168,9 @@ fn walk(
                 return None;
             }
             let rel = entry.path().strip_prefix(base).ok()?;
-            let rel = rel.to_string_lossy().replace(std::path::MAIN_SEPARATOR, "/");
+            let rel = rel
+                .to_string_lossy()
+                .replace(std::path::MAIN_SEPARATOR, "/");
             if !rel.to_lowercase().contains(&query) {
                 return None;
             }
@@ -217,7 +217,15 @@ pub(crate) fn find(
         Err(error) => return Some(Err(error)),
     };
     let room = limits.kept.saturating_sub(rows.len());
-    rows.extend(walk(base, base_text, query, room, limits, &mut examined, &cancelled)?);
+    rows.extend(walk(
+        base,
+        base_text,
+        query,
+        room,
+        limits,
+        &mut examined,
+        &cancelled,
+    )?);
     if cancelled() {
         return None;
     }
@@ -229,8 +237,7 @@ pub(crate) fn find(
 /// inside it is still a row ending in `/` but is not descended.
 fn is_dir(file_type: std::fs::FileType, path: &Path) -> bool {
     file_type.is_dir()
-        || (file_type.is_symlink()
-            && std::fs::metadata(path).is_ok_and(|meta| meta.is_dir()))
+        || (file_type.is_symlink() && std::fs::metadata(path).is_ok_and(|meta| meta.is_dir()))
 }
 
 /// Whether `name` can be a row: a row draws on one panel line and is
@@ -424,17 +431,18 @@ impl Search {
                             None => continue,
                         }
                     }
-                    Query::Path { base_text, query: seek } => {
-                        match resolve(base_text, &roots) {
-                            Err(reason) => Err(reason),
-                            Ok(base) => {
-                                match find(&base, base_text, seek, &Limits::SEARCH, cancelled) {
-                                    None => continue,
-                                    Some(result) => result,
-                                }
+                    Query::Path {
+                        base_text,
+                        query: seek,
+                    } => match resolve(base_text, &roots) {
+                        Err(reason) => Err(reason),
+                        Ok(base) => {
+                            match find(&base, base_text, seek, &Limits::SEARCH, cancelled) {
+                                None => continue,
+                                Some(result) => result,
                             }
                         }
-                    }
+                    },
                 };
                 if out.send(Input::Files { generation, result }).is_err() {
                     return;

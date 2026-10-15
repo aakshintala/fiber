@@ -754,4 +754,3 @@ fn slash_range_counts_from_the_entries_actually_drawn() {
         "{drawn:?}"
     );
 }
-

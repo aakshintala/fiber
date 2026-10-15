@@ -1278,4 +1278,3 @@ fn a_file_error_is_a_message_with_no_selection() {
     assert_eq!(completions.selected, None);
     assert!(matches!(completions.rows, super::Rows::Message(_)));
 }
-

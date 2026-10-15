@@ -398,7 +398,8 @@ impl App {
                             // it becomes the row, with no trailing space. The
                             // panel stays open on a newer generation, and the
                             // old rows go, so Enter never inserts a stale one.
-                            self.draft.replace(panel.anchor.saturating_add(1)..end, &chosen);
+                            self.draft
+                                .replace(panel.anchor.saturating_add(1)..end, &chosen);
                             self.overlays.files = Some(FilePanel {
                                 anchor: panel.anchor,
                                 result: None,
