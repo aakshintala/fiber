@@ -15,10 +15,10 @@ fix the parser › ◆ review the parser                       ✕
 
 
 
-⠋ fiber  test/model
-  review the parser
+⠋ review the parser
+  fiber · test/model
 ▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
 ▌ › █
 ▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀
-$0.00
-1 delegate running
+ $0.00
+ ◆ 1 delegate running

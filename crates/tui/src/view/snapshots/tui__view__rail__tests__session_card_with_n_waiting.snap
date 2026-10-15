@@ -4,11 +4,11 @@ expression: text(&buf)
 ---
 
                                                                                                                                ▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
-                                                                                                                                directory  …sers/you/work/fiber
-                                                                                                                                model  test/model
-                                                                                                                                tokens in / out  1 / 2
-                                                                                                                                cache hits  0%
-                                                                                                                                ! 2 waiting · hidden · show
+                                                                                                                                 /Users/you/work/fiber     auto
+                                                                                                                                 test/model
+                                                                                                                                 tokens in / out          1 / 2
+                                                                                                                                 cache hits                  0%
+                                                                                                                                 ! 2 waiting · hidden · show
                                                                                                                                ▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀
 
 

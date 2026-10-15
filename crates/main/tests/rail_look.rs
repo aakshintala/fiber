@@ -148,11 +148,14 @@ fn rail_cards_match_the_doc() {
                         })
             })
         });
-        // The context bar's track in rule with its percentage.
+        // The panel's context bar beside its percentage: `▆` cells
+        // with the track in rule. The rail's cards are below 30 columns
+        // here, so their bars are gone and the panel holds the track.
         let bar = grid.rows.iter().any(|row| row.contains('%'))
             && (0..48).any(|y| {
-                (0..160)
-                    .any(|x| grid.cell(x, y).symbol.as_str() == "░" && grid.cell(x, y).fg == RULE)
+                (0..160).any(|x| {
+                    grid.cell(x, y).symbol.as_str() == "\u{2586}" && grid.cell(x, y).fg == RULE
+                })
             });
         header("  w +") && header("  v +") && branch && bar
     });
@@ -195,17 +198,21 @@ fn rail_cards_match_the_doc() {
         );
     }
 
-    // Every empty bar cell is ░ in rule.
+    // Empty bar cells: the rail's `░` track where its bars draw, and
+    // the panel's `▆` track in rule.
     let mut track = 0;
     for y in 0..48 {
         for x in 0..160 {
-            if grid.cell(x, y).symbol.as_str() == "░" {
-                assert_eq!(grid.cell(x, y).fg, RULE, "track cell ({x}, {y})");
+            let cell = grid.cell(x, y);
+            if cell.symbol.as_str() == "\u{2591}" {
+                assert_eq!(cell.fg, RULE, "track cell ({x}, {y})");
+            }
+            if cell.symbol.as_str() == "\u{2586}" && cell.fg == RULE {
                 track += 1;
             }
         }
     }
-    assert!(track > 0, "the bar's track draws");
+    assert!(track > 0, "the panel bar's track draws");
 
     // Dropping the hub's clients leaves it idle once the terminal
     // quits, so it exits on its own.
