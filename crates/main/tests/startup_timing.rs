@@ -189,8 +189,8 @@ use std::thread;
 
 use fakes::Watchdog;
 use support::{
-    Deadline, Socket, complete_lines, expired, group_alive, kill_group_detached, session_dir,
-    spawn_watched, until, until_close,
+    Deadline, Socket, complete_lines, expired, group_alive, kill_group_detached, kinds,
+    session_dir, spawn_watched, until, until_close,
 };
 
 /// Installs a provider `fake` with `m` and `n` on `openai-responses` at
@@ -458,6 +458,36 @@ fn switch_journey(setup: &Setup, id: &str) -> Vec<Value> {
     let (status, stderr) = running.wait();
     assert!(status.success(), "stderr: {stderr}");
     assert_eq!(stream.last().unwrap()["kind"], "fiber_exited");
+    // The complete ordered kinds, so a duplicated, missing or reordered
+    // event fails (docs/testing.md, "Event streams"): the subscribe
+    // acknowledgement, the switch admitted while idle, the turn on the
+    // new model, then the close.
+    assert_eq!(
+        kinds(&stream),
+        [
+            "command_accepted",
+            "session_started",
+            "fiber_started",
+            "extensions_loaded",
+            "clients",
+            "command_accepted",
+            "model_changed",
+            "preamble_built",
+            "opening_message",
+            "turn_started",
+            "command_accepted",
+            "step_started",
+            "assistant_message_started",
+            "assistant_message_delta",
+            "assistant_message_delta",
+            "text_completed",
+            "usage_recorded",
+            "assistant_message_completed",
+            "turn_completed",
+            "command_accepted",
+            "fiber_exited",
+        ]
+    );
     stream
 }
 
@@ -527,9 +557,35 @@ fn at_default_a_switch_writes_no_timing_line_and_leaves_the_same_log() {
         "the default writes no timing line"
     );
     assert!(!log_kinds(&setup, &id).is_empty());
+    // The complete ordered kinds of the durable log: the switch, the
+    // turn on the new model, then the exit. Each run meets the same
+    // list, so an omitted, duplicated or reordered event fails even when
+    // both runs agree (docs/testing.md, "Event streams").
+    let expected = [
+        "session_started",
+        "fiber_started",
+        "extensions_loaded",
+        "model_changed",
+        "preamble_built",
+        "opening_message",
+        "turn_started",
+        "step_started",
+        "assistant_message_started",
+        "text_completed",
+        "usage_recorded",
+        "assistant_message_completed",
+        "turn_completed",
+        "fiber_exited",
+    ]
+    .map(str::to_owned);
     assert_eq!(
         log_kinds(&setup, &id),
+        expected,
+        "the durable log holds the switch and the turn"
+    );
+    assert_eq!(
         log_kinds(&debug, &debug_id),
-        "the durable log matches the debug run's"
+        expected,
+        "the debug run leaves the same durable log"
     );
 }

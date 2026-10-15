@@ -355,7 +355,7 @@ fn a_switch_to_the_startup_model_writes_one_line_over_two_reads() {
 
 #[test]
 fn a_switch_with_an_unknown_thinking_level_is_rejected_with_one_line() {
-    let (root, clock, switching) = debug_switching();
+    let (root, _, switching) = debug_switching();
     let prepared = bounded_prepare(
         &switching,
         &switch_args("scripted/s.json", Some("nonsense")),
@@ -365,12 +365,11 @@ fn a_switch_with_an_unknown_thinking_level_is_rejected_with_one_line() {
     assert!(!result.0);
     assert_eq!(result.1, "InvalidArguments");
     assert_eq!(switch_lines(&root.path().join("home")).len(), 1);
-    let _ = clock;
 }
 
 #[test]
 fn a_switch_to_a_scripted_model_from_another_session_is_rejected_with_one_line() {
-    let (root, clock, switching) = debug_switching();
+    let (root, _, switching) = debug_switching();
     let prepared = bounded_prepare(&switching, &switch_args("scripted/other.json", None), None);
     let rejection = match prepared {
         Ok(_) => panic!("the switch prepared"),
@@ -379,13 +378,12 @@ fn a_switch_to_a_scripted_model_from_another_session_is_rejected_with_one_line()
     assert_eq!(rejection.code, contract::ErrorCode::InvalidArguments);
     assert_eq!(rejection.message, crate::scripted::START_ONLY);
     assert_eq!(switch_lines(&root.path().join("home")).len(), 1);
-    let _ = clock;
 }
 
 #[test]
 fn a_switch_on_cancelled_reads_is_rejected_with_the_read_code_and_one_line() {
     let reads = Arc::new(crate::switch::Reads::default());
-    let (root, clock, started) = parts("debug", "scripted/s.json", Arc::clone(&reads));
+    let (root, _, started) = parts("debug", "scripted/s.json", Arc::clone(&reads));
     let switching = diagnosed(started.unwrap());
     reads.cancel();
     let prepared = bounded_prepare(&switching, &switch_args("scripted/s.json", None), None);
@@ -395,7 +393,6 @@ fn a_switch_on_cancelled_reads_is_rejected_with_the_read_code_and_one_line() {
     };
     assert_eq!(rejection.code, contract::ErrorCode::Closing);
     assert_eq!(switch_lines(&root.path().join("home")).len(), 1);
-    let _ = clock;
 }
 
 /// Each outcome above, on an info-started `Parts` and on a `Switching`
