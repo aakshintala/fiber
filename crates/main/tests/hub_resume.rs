@@ -372,6 +372,72 @@ fn until_exited(client: &Socket, setup: &Setup) -> Vec<Value> {
 }
 
 #[test]
+fn a_full_resume_announces_its_fold_without_a_subscribe_acknowledgement() {
+    let setup = Setup::new_with_fr_root();
+    let server = ProviderServer::start([hello()]).unwrap();
+    setup.provider(&server);
+    let (code, lines) = setup.run(&["ask", "one"]);
+    assert_eq!(code, Some(0));
+    let id = lines[0]["session_id"].as_str().unwrap().to_owned();
+    let hub = Arc::new(Mutex::new(None));
+    let client = connect_hub(&setup, &hub);
+    client.send(&subscribe("c_sub", &id));
+    until(&client, "the full subscribe", |line| {
+        acknowledges(line, "c_sub")
+    });
+    client.send(&close(&id));
+    until_exited(&client, &setup);
+    client.send(&command("c_tools", &id, "tools", json!({})));
+    let reopened = until(&client, "the reopened stream", |line| {
+        line["kind"] == "stream_reopened"
+    });
+    let boundary = reopened.last().unwrap();
+    assert_eq!(boundary["payload"]["session_id"], id);
+    assert!(boundary.get("session_id").is_none());
+    assert!(boundary.get("seq").is_none());
+    let last = boundary["payload"]["last_seq"]
+        .as_u64()
+        .expect("a nonempty fold has a boundary");
+    let fold = until(&client, "the fold's last line", |line| {
+        line["seq"].as_u64() == Some(last)
+    });
+    let seqs: Vec<_> = fold
+        .iter()
+        .filter_map(|line| line["seq"].as_u64())
+        .collect();
+    assert_eq!(seqs, (0..=last).collect::<Vec<_>>());
+    let log = setup.log(&id);
+    assert_eq!(log.last().unwrap()["seq"], last);
+    let acks: Vec<_> = fold
+        .iter()
+        .filter(|line| {
+            matches!(
+                line["kind"].as_str(),
+                Some("command_accepted" | "command_rejected")
+            )
+        })
+        .collect();
+    assert!(
+        acks.is_empty(),
+        "no subscribe acknowledgement during reopening: {acks:?}"
+    );
+    let answered = until(&client, "the tools acknowledgement", |line| {
+        acknowledges(line, "c_tools")
+    });
+    assert_eq!(
+        answered
+            .iter()
+            .filter(|line| line["kind"] == "stream_reopened")
+            .count(),
+        0
+    );
+    client.send(&close(&id));
+    until_exited(&client, &setup);
+    drop(client);
+    hub.lock().unwrap().take().expect("the hub ran").finish();
+}
+
+#[test]
 fn a_prompt_through_the_hub_resumes_an_exited_session() {
     let setup = Setup::new_with_fr_root();
     let server = ProviderServer::start([hello(), hello()]).unwrap();

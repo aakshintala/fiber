@@ -795,6 +795,10 @@ fn samples() -> Vec<(&'static str, Value)> {
             "command_accepted",
             json!({"command_id": "c", "result": {"text": "z\n", "size": 9000}}),
         ),
+        (
+            "command_accepted",
+            json!({"command_id": "c", "result": {"last_seq": 41}}),
+        ),
         ("command_accepted", json!({"command_id": "c"})),
         (
             "command_rejected",
@@ -816,6 +820,23 @@ fn a_retry_scheduled_without_last_attempt_does_not_read() {
         )
         .is_err()
     );
+}
+
+#[test]
+fn stream_reopened_samples_round_trip_as_hub_lines() {
+    // Hub lines have no session envelope and are not session Event kinds.
+    let samples = [
+        json!({"session_id": "s_0123456789abcdef", "last_seq": 41}),
+        json!({"session_id": "s_0123456789abcdef"}),
+    ];
+    for payload in samples {
+        let sample = json!({"kind": "stream_reopened", "ts": 1,
+            "schema_version": crate::SCHEMA_VERSION, "payload": payload});
+        let read: crate::HubLine = serde_json::from_value(sample.clone()).unwrap();
+        assert_eq!(read.kind, "stream_reopened");
+        assert_eq!(read.payload, payload.as_object().unwrap().clone());
+        assert_eq!(serde_json::to_value(read).unwrap(), sample);
+    }
 }
 
 #[test]
@@ -1231,6 +1252,22 @@ fn result_of(payload: Value) -> CommandResult {
         panic!("not a command_accepted");
     };
     accepted.result.expect("a result")
+}
+
+#[test]
+fn a_subscribe_result_names_the_last_fold_line() {
+    assert_eq!(
+        result_of(json!({"command_id": "c", "result": {"last_seq": 41}})),
+        CommandResult::Subscribe {
+            last_seq: crate::Seq(41)
+        }
+    );
+    let Some(Event::CommandAccepted(accepted)) =
+        read("command_accepted", json!({"command_id": "c"})).unwrap()
+    else {
+        panic!("not an acceptance");
+    };
+    assert_eq!(accepted.result, None);
 }
 
 #[test]

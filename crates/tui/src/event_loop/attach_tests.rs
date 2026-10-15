@@ -17,6 +17,7 @@ use std::collections::VecDeque;
 use std::io::{Read, Write};
 use std::os::unix::net::UnixStream;
 use std::sync::Arc;
+use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::mpsc;
 use std::time::Duration;
 
@@ -915,7 +916,15 @@ fn wait_behind_replay(
     std::thread::Builder::new()
         .name("attach-answer".to_owned())
         .spawn(move || {
-            let result = lp.hub.answer(&rx, "a_1", &mut lp.app, &lp.tick);
+            let result =
+                lp.hub
+                    .answer(&rx, "a_1", &mut lp.app, &lp.tick)
+                    .map(|answer| match answer {
+                        super::super::hub::Answer::Lines(lines) => lines,
+                        super::super::hub::Answer::Reopened => {
+                            panic!("no reopening in this script")
+                        }
+                    });
             let peak = lp.hub.answer_stash_peak();
             let stashed = lp.hub.stashed().len();
             answered_tx
@@ -992,7 +1001,15 @@ fn an_answer_first_leaves_no_stash() {
     std::thread::Builder::new()
         .name("attach-answer".to_owned())
         .spawn(move || {
-            let result = lp.hub.answer(&rx, "a_1", &mut lp.app, &lp.tick);
+            let result =
+                lp.hub
+                    .answer(&rx, "a_1", &mut lp.app, &lp.tick)
+                    .map(|answer| match answer {
+                        super::super::hub::Answer::Lines(lines) => lines,
+                        super::super::hub::Answer::Reopened => {
+                            panic!("no reopening in this script")
+                        }
+                    });
             let peak = lp.hub.answer_stash_peak();
             let stashed = lp.hub.stashed().len();
             answered_tx.send((result, peak, stashed, lp)).unwrap_or(());
@@ -1216,7 +1233,15 @@ fn a_history_wait_at_the_plateau_stashes_queue_plus_one() {
     std::thread::Builder::new()
         .name("attach-answer".to_owned())
         .spawn(move || {
-            let result = lp.hub.answer(&rx, "a_1", &mut lp.app, &lp.tick);
+            let result =
+                lp.hub
+                    .answer(&rx, "a_1", &mut lp.app, &lp.tick)
+                    .map(|answer| match answer {
+                        super::super::hub::Answer::Lines(lines) => lines,
+                        super::super::hub::Answer::Reopened => {
+                            panic!("no reopening in this script")
+                        }
+                    });
             let peak = lp.hub.answer_stash_peak();
             let stashed = lp.hub.stashed().len();
             answered_tx.send((result, peak, stashed, lp)).unwrap_or(());
@@ -1343,6 +1368,7 @@ struct WireLink {
     current: Vec<u8>,
     at: usize,
     handed: usize,
+    count: Arc<AtomicUsize>,
     eof: bool,
 }
 
@@ -1354,6 +1380,7 @@ impl WireLink {
             current: Vec::new(),
             at: 0,
             handed: 0,
+            count: Arc::new(AtomicUsize::new(0)),
             eof: false,
         }
     }
@@ -1384,6 +1411,7 @@ impl Read for WireLink {
             self.current.clear();
             self.at = 0;
             self.handed += 1;
+            self.count.store(self.handed, Ordering::SeqCst);
             self.handouts.send(self.handed).unwrap_or(());
         }
         Ok(end - start)
@@ -1449,6 +1477,7 @@ fn serve_history(
     wire: Arc<Wire>,
     go: mpsc::Receiver<()>,
     lines: Vec<contract::Envelope>,
+    observed: Option<(Arc<AtomicUsize>, mpsc::Sender<usize>)>,
 ) -> (
     std::thread::JoinHandle<()>,
     mpsc::Receiver<(usize, Vec<contract::Envelope>)>,
@@ -1473,6 +1502,9 @@ fn serve_history(
                     continue;
                 }
                 seen += 1;
+                if let Some((count, report)) = &observed {
+                    report.send(count.load(Ordering::SeqCst)).unwrap_or(());
+                }
                 if let Some(go) = go.take() {
                     // The test's go-ahead, sent once the writer is
                     // joined; a dropped sender releases a panicking
@@ -1499,6 +1531,591 @@ fn serve_history(
         })
         .unwrap_or_else(|err| panic!("spawn: {err}"));
     (hub, done)
+}
+
+/// A full subscription's opening boundary, without adding a durable line.
+fn opening(app: &mut crate::app::App, last: u64) {
+    app.on_line(Line::Session(line(
+        "command_accepted",
+        None,
+        None,
+        json!({"command_id": "opening", "result": {"last_seq": last}}),
+    )));
+}
+
+/// A hub event naming one session, with or without a fold boundary.
+fn stream_event(kind: &str, session: &contract::SessionId, last: Option<u64>) -> Line {
+    let mut payload = json!({"session_id": session.0, "how": "crashed"});
+    if let Some(last) = last {
+        payload["last_seq"] = json!(last);
+    }
+    Line::Hub(contract::HubLine {
+        kind: kind.into(),
+        ts: 0,
+        schema_version: contract::SCHEMA_VERSION,
+        payload: payload.as_object().unwrap().clone(),
+    })
+}
+
+/// Scrolls to the dropped first page using the app's injected clock.
+fn demand_top(lp: &mut super::super::Loop<ratatui::backend::TestBackend>) {
+    for _ in 0..100 {
+        lp.app.on_key(crate::keys::Key::PageUp, lp.clock.now());
+    }
+}
+
+#[test]
+fn a_history_wait_does_not_end_on_an_unrelated_hub_line() {
+    let (mut lp, _theirs, tx, rx) = opened();
+    let session = lp.app.session().unwrap().clone();
+    let want = vec![replay(1000)];
+    tx.send(Input::Hub(stream_event("attention", &session, None)))
+        .unwrap();
+    tx.send(Input::Hub(Line::Session(command_answer(
+        "a_1",
+        want.clone(),
+    ))))
+    .unwrap();
+    // Every input is ready and EOF bounds the wait without a timer.
+    drop(tx);
+    let answer = lp.hub.answer(&rx, "a_1", &mut lp.app, &lp.tick);
+    assert_eq!(answer, Ok(super::super::hub::Answer::Lines(want)));
+    assert!(!lp.app.pass_open());
+    let stashed = lp.hub.stashed();
+    assert_eq!(stashed.len(), 1);
+    assert!(matches!(&stashed[0], Input::Hub(Line::Hub(line)) if line.kind == "attention"));
+    assert!(matches!(
+        rx.try_recv(),
+        Err(mpsc::TryRecvError::Disconnected)
+    ));
+}
+
+#[test]
+fn a_full_ack_replaces_its_own_boundary_and_keeps_other_sessions_passes() {
+    let (mut lp, _, _, _) = opened();
+    let last = session().len() as u64 + 10;
+    opening(&mut lp.app, last + 10);
+    opening(&mut lp.app, last);
+    lp.app.on_line(Line::Session(replay(last - 1)));
+    assert!(
+        lp.app.pass_open(),
+        "the replacement boundary is not folded yet"
+    );
+    lp.app.on_line(Line::Session(replay(last)));
+    assert!(
+        !lp.app.pass_open(),
+        "the superseded boundary must not remain"
+    );
+
+    let other = contract::SessionId("s_bbbbbbbbbbbbbbbb".into());
+    lp.app
+        .on_line(stream_event("stream_reopened", &other, Some(last + 20)));
+    opening(&mut lp.app, last);
+    lp.app.on_line(Line::Session(replay(last)));
+    assert!(
+        lp.app.pass_open(),
+        "the acknowledgement preserves the other session's pass"
+    );
+    lp.app.on_line(stream_event("stream_closed", &other, None));
+    assert!(!lp.app.pass_open());
+}
+
+#[test]
+fn marking_a_reopen_pending_replaces_its_session_and_keeps_other_pending_passes() {
+    let (mut lp, _, _, _) = opened();
+    let session = lp.app.session().unwrap().clone();
+    let other = contract::SessionId("s_bbbbbbbbbbbbbbbb".into());
+    let last = super::session().len() as u64 + 10;
+    opening(&mut lp.app, last);
+    lp.app.reopen_pending(session.clone());
+    lp.app.on_line(Line::Session(replay(last)));
+    assert!(
+        lp.app.pass_open(),
+        "a pending reopening supersedes the old boundary"
+    );
+    lp.app.reopen_pending(session.clone());
+    assert!(
+        lp.app.pass_open(),
+        "marking the same session pending again keeps it open"
+    );
+    lp.app.reopen_pending(other.clone());
+    lp.app
+        .on_line(stream_event("stream_reopened", &other, None));
+    assert!(
+        lp.app.pass_open(),
+        "marking another session pending must preserve the first"
+    );
+    lp.app
+        .on_line(stream_event("stream_reopened", &session, None));
+    assert!(!lp.app.pass_open(), "both pending passes have now ended");
+}
+
+#[test]
+fn opening_passes_gate_pages_until_the_boundary_is_folded() {
+    let (mut lp, _, _, _) = opened();
+    demand_top(&mut lp);
+    let needs = lp.app.needs();
+    assert!(!needs.is_empty());
+    let last = session().len() as u64 + 10;
+    opening(&mut lp.app, last);
+    assert!(lp.app.pass_open());
+    assert!(lp.app.needs().is_empty());
+    lp.app.on_line(Line::Session(replay(last - 1)));
+    assert!(lp.app.pass_open());
+    assert!(lp.app.needs().is_empty());
+    lp.app.on_line(Line::Session(replay(last)));
+    assert!(!lp.app.pass_open());
+    assert_eq!(lp.app.needs(), needs);
+    opening(&mut lp.app, last);
+    lp.app.on_line(Line::Session(replay(last + 1)));
+    assert!(!lp.app.pass_open());
+    let empty = line(
+        "command_accepted",
+        None,
+        None,
+        json!({"command_id": "empty"}),
+    );
+    lp.app.on_line(Line::Session(empty));
+    assert!(!lp.app.pass_open());
+}
+
+#[test]
+fn stream_endings_close_only_the_named_pass_and_disconnect_clears_all() {
+    let (mut lp, _, _, _) = opened();
+    let session = lp.app.session().unwrap().clone();
+    let other = contract::SessionId("s_bbbbbbbbbbbbbbbb".into());
+    for kind in ["stream_closed", "session_left"] {
+        opening(&mut lp.app, 9000);
+        lp.app.on_line(stream_event(kind, &other, None));
+        assert!(lp.app.pass_open());
+        lp.app.on_line(stream_event(kind, &session, None));
+        assert!(!lp.app.pass_open());
+    }
+    lp.app
+        .on_line(stream_event("stream_reopened", &session, Some(9000)));
+    assert!(lp.app.pass_open());
+    lp.app
+        .on_line(stream_event("stream_reopened", &other, Some(9001)));
+    lp.app
+        .on_line(stream_event("stream_closed", &session, None));
+    assert!(lp.app.pass_open(), "the delegate session's pass remains");
+    lp.app.on_line(stream_event("session_left", &other, None));
+    assert!(!lp.app.pass_open(), "a delegate crash ends its pass too");
+    lp.app
+        .on_line(stream_event("stream_reopened", &session, Some(9002)));
+    lp.app
+        .on_line(stream_event("stream_reopened", &other, None));
+    assert!(lp.app.pass_open());
+    lp.app
+        .on_line(stream_event("stream_reopened", &session, None));
+    assert!(!lp.app.pass_open(), "an empty reopening has no pass");
+    opening(&mut lp.app, 9000);
+    lp.app.disconnected();
+    assert!(!lp.app.pass_open());
+}
+
+#[test]
+fn pending_reopen_survives_older_end_events_and_seq_lines() {
+    let (mut lp, _, _, _) = opened();
+    let session = lp.app.session().unwrap().clone();
+    lp.app.reopen_pending(session.clone());
+    for kind in ["session_left", "stream_closed"] {
+        lp.app.on_line(stream_event(kind, &session, None));
+        assert!(lp.app.pass_open(), "{kind} predates the pending reopening");
+    }
+    lp.app.on_line(Line::Session(replay(9999)));
+    assert!(lp.app.pass_open(), "only the reopening resolves Pending");
+    lp.app
+        .on_line(stream_event("stream_reopened", &session, Some(10000)));
+    lp.app.on_line(Line::Session(replay(9999)));
+    assert!(lp.app.pass_open());
+    lp.app.on_line(Line::Session(replay(10000)));
+    assert!(!lp.app.pass_open());
+    lp.app.reopen_pending(session);
+    lp.app.disconnected();
+    assert!(!lp.app.pass_open());
+}
+
+#[test]
+fn abandoned_history_answers_are_discarded_once_by_id() {
+    for kind in ["command_accepted", "command_rejected"] {
+        let (mut lp, _, _, _) = opened();
+        lp.app.abandon_history("late".into());
+        let mut answer = line(
+            kind,
+            None,
+            None,
+            json!({"command_id": "late", "result": {"last_seq": 9000}}),
+        );
+        lp.app.on_line(Line::Session(answer.clone()));
+        assert!(!lp.app.pass_open());
+        answer.kind = "command_accepted".into();
+        lp.app.on_line(Line::Session(answer));
+        assert!(
+            lp.app.pass_open(),
+            "the abandoned id leaves the set on its first answer"
+        );
+    }
+    let (mut lp, _, _, _) = opened();
+    lp.app.abandon_history("late".into());
+    lp.app.disconnected();
+    lp.app.on_line(Line::Session(line(
+        "command_accepted",
+        None,
+        None,
+        json!({"command_id": "late", "result": {"last_seq": 9000}}),
+    )));
+    assert!(lp.app.pass_open(), "disconnect clears abandoned ids");
+}
+
+#[test]
+fn the_boundary_line_sends_a_deferred_search_without_another_hub_line() {
+    let (mut lp, _, _, _) = opened();
+    let last = session().len() as u64 + 10;
+    opening(&mut lp.app, last);
+    lp.app.on_key(crate::keys::Key::CtrlF, lp.clock.now());
+    lp.app.on_key(crate::keys::Key::Char('z'), lp.clock.now());
+    assert!(lp.app.find_due(1).is_empty());
+    let outgoing = lp.app.on_line(Line::Session(replay(last)));
+    assert!(outgoing.iter().any(
+        |text| serde_json::from_str::<serde_json::Value>(text).unwrap()["command"] == "history"
+    ));
+}
+
+#[test]
+fn a_session_left_before_the_boundary_allows_history_on_demand() {
+    let (mut lp, theirs, tx, rx) = opened();
+    let session = lp.app.session().unwrap().clone();
+    let last = super::session().len() as u64 + 10;
+    opening(&mut lp.app, last);
+    lp.app.on_line(Line::Session(replay(last - 1)));
+    lp.app.on_line(stream_event("session_left", &session, None));
+    assert!(!lp.app.pass_open());
+    let seen = serve(theirs, tx.clone(), answers_all());
+    let _lp = super::run(lp, rx, &tx, super::to_the_top());
+    assert!(!super::ranges(&seen).is_empty());
+}
+
+/// A mouse report against the targets drawn for the app's current view.
+fn select_report(app: &mut crate::app::App, kind: crate::keys::MouseKind, col: u16, row: u16) {
+    let area = ratatui::layout::Rect::new(0, 0, 60, 12);
+    let mut buffer = ratatui::buffer::Buffer::empty(area);
+    let targets = crate::view::render(app, area, &mut buffer, None);
+    app.on_select(&crate::keys::Mouse { kind, col, row }, &targets);
+}
+
+#[test]
+fn an_open_delegate_item_pass_ends_on_the_delegates_session_left() {
+    use crate::app::items::testkit;
+    let mut app = testkit::home();
+    testkit::opened(&mut app);
+    testkit::start_delegate(&mut app, "j_pass", testkit::DELEGATE_A);
+    let outgoing = testkit::open(&mut app, "j_pass");
+    assert!(app.item_open());
+    let mut accepted = line(
+        "command_accepted",
+        None,
+        None,
+        json!({"command_id": outgoing[0]["id"], "result": {"last_seq": 9000}}),
+    );
+    accepted.session_id = contract::SessionId(testkit::DELEGATE_A.into());
+    app.on_line(Line::Session(accepted));
+    assert!(
+        app.pass_open(),
+        "the item subscribe is consumed only after opening its pass"
+    );
+    app.on_line(stream_event(
+        "session_left",
+        &contract::SessionId(testkit::DELEGATE_A.into()),
+        None,
+    ));
+    assert!(!app.pass_open());
+}
+
+#[test]
+fn a_copy_pins_its_dropped_page_without_loading_during_a_pass() {
+    use crate::keys::{Button, Key, MouseKind};
+    let (mut lp, _, _, _) = opened();
+    demand_top(&mut lp);
+    let needed = lp.app.needs();
+    assert!(!needed.is_empty());
+    // A whole page can span several wire answers; the app loads it whole.
+    let first: Vec<_> = session()
+        .into_iter()
+        .filter(|line| needed[0].contains(&line.seq.unwrap()))
+        .collect();
+    lp.app.load(first.clone());
+    assert!(lp.app.pages().part(0).is_some());
+    select_report(&mut lp.app, MouseKind::Press(Button::Left), 0, 0);
+    select_report(&mut lp.app, MouseKind::Drag(Button::Left), 59, 2);
+    lp.app.on_key(Key::End, lp.clock.now());
+    assert!(lp.app.pages().part(0).is_none());
+    let last = session().len() as u64 + 10;
+    opening(&mut lp.app, last);
+    select_report(&mut lp.app, MouseKind::Release, 59, 2);
+    assert!(lp.app.pages().pinned() > 0);
+    assert_eq!(lp.app.take_copy(), None);
+    assert!(lp.app.needs().is_empty());
+    lp.app.on_line(Line::Session(replay(last)));
+    assert!(lp.app.needs().iter().any(|range| range.start().0 == 0));
+    lp.app.load(first);
+    assert!(
+        lp.app
+            .take_copy()
+            .expect("copy after its page loads")
+            .contains("first")
+    );
+}
+
+/// Runs a history wait whose answer follows a reopening and a finite fold.
+/// The older ending case also queues a key ahead of the reopening.
+fn reopened_history(older_ending: bool) {
+    let (pool, _) = ten_mib_fixture();
+    let r = 367usize;
+    let wire = Wire::new(174);
+    let _guard = CloseOnDrop(Arc::clone(&wire));
+    let (hand_tx, hand_rx) = mpsc::channel();
+    let link = WireLink::new(Arc::clone(&wire), hand_tx);
+    let count = Arc::clone(&link.count);
+    let (mut lp, theirs, tx, rx) = opened();
+    let session_id = lp.app.session().unwrap().clone();
+    let feed = Feed::new(tx.clone(), lp.hub.credits());
+    let (reader, reader_done) = spawn_reader(link, feed);
+    demand_top(&mut lp);
+    let (history_tx, histories) = mpsc::channel();
+    let (server_done_tx, server_done) = mpsc::channel();
+    let server_wire = Arc::clone(&wire);
+    let input = tx.clone();
+    let prefix = if older_ending { 3 } else { 1 };
+    let script = pool[..r].to_vec();
+    let server = std::thread::spawn(move || {
+        let mut commands = std::io::BufReader::new(theirs);
+        let mut text = String::new();
+        let mut seen = 0;
+        loop {
+            text.clear();
+            match std::io::BufRead::read_line(&mut commands, &mut text) {
+                Ok(0) | Err(_) => break,
+                Ok(_) => {}
+            }
+            let command: serde_json::Value = serde_json::from_str(&text).unwrap();
+            if command["command"] != "history" {
+                continue;
+            }
+            seen += 1;
+            history_tx.send(count.load(Ordering::SeqCst)).unwrap_or(());
+            if seen == 1 {
+                let encode = |line: Line| {
+                    let mut bytes = match line {
+                        Line::Hub(line) => serde_json::to_vec(&line).unwrap(),
+                        Line::Session(line) => serde_json::to_vec(&line).unwrap(),
+                    };
+                    bytes.push(b'\n');
+                    bytes
+                };
+                if older_ending {
+                    assert!(server_wire.push(encode(stream_event(
+                        "session_left",
+                        &session_id,
+                        None
+                    ))));
+                    // A second read proves the previous line was sent to
+                    // the input channel before the key is sent there.
+                    assert!(server_wire.push(encode(Line::Session(line(
+                        "read_marker",
+                        None,
+                        None,
+                        json!({})
+                    )))));
+                    let wait = Deadline::after(DEADLINE);
+                    for want in 1..=2 {
+                        assert_eq!(
+                            wait.recv_or_fail(&hand_rx, "the older ending to reach the reader"),
+                            want
+                        );
+                    }
+                    let keys = super::to_the_top()
+                        .into_iter()
+                        .flat_map(|input| {
+                            let Input::Bytes(bytes) = input else {
+                                panic!("PageUp bytes");
+                            };
+                            bytes
+                        })
+                        .collect();
+                    input.send(Input::Bytes(keys)).unwrap();
+                }
+                let last = session().len() + r - 1;
+                assert!(server_wire.push(encode(stream_event(
+                    "stream_reopened",
+                    &session_id,
+                    Some(last as u64)
+                ))));
+                for line in &script {
+                    if !server_wire.push(line.clone()) {
+                        break;
+                    }
+                }
+            }
+            let from = command["args"]["from_seq"].as_u64().unwrap();
+            let to = command["args"]["to_seq"].as_u64().unwrap();
+            let id = command["id"].as_str().unwrap();
+            // The abandoned first answer must never populate page zero.
+            let lines = if seen == 1 {
+                Vec::new()
+            } else {
+                super::history(&session(), from, to)
+            };
+            let mut answer = serde_json::to_vec(&command_answer(id, lines)).unwrap();
+            answer.push(b'\n');
+            if !server_wire.push(answer) {
+                break;
+            }
+        }
+        server_done_tx.send(seen).unwrap_or(());
+    });
+    let (done_tx, done) = mpsc::channel();
+    std::thread::spawn(move || {
+        let code = lp.run(&rx);
+        done_tx.send((code, lp)).unwrap_or(());
+    });
+    for input in super::to_the_top() {
+        tx.send(input).unwrap();
+    }
+    let wait = Deadline::after(DEADLINE);
+    assert_eq!(
+        wait.recv_or_fail(&histories, "the initial history request"),
+        0
+    );
+    let second = wait.recv_or_fail(&histories, "history after the reopened fold");
+    tx.send(quit()).unwrap();
+    let (code, lp) = Deadline::after(DEADLINE).recv_or_fail(&done, "the loop to quit after paging");
+    wire.close();
+    assert!(
+        second >= prefix + r,
+        "history before the last fold line: {second}, prefix {prefix}, replay {r}"
+    );
+    assert!(lp.hub.answer_stash_peak() <= K);
+    assert!(!lp.app.pass_open());
+    assert!(
+        lp.app.pages().part(0).is_some(),
+        "the abandoned empty answer did not mark the page loaded"
+    );
+    assert_eq!(code, 0);
+    drop(lp);
+    Deadline::after(DEADLINE).recv_or_fail(&reader_done, "the reader to end");
+    reader.join().unwrap();
+    let seen = Deadline::after(DEADLINE).recv_or_fail(&server_done, "the command server to end");
+    server.join().unwrap();
+    assert!(seen > 1, "pages load after the pass ends");
+}
+
+#[test]
+fn a_reopen_ends_the_history_wait_at_the_ten_mib_fixture() {
+    reopened_history(false);
+}
+
+#[test]
+fn a_stashed_session_left_and_page_up_cannot_clear_a_pending_reopen() {
+    reopened_history(true);
+}
+
+#[test]
+fn a_history_waits_for_the_opening_pass_at_the_ten_mib_fixture() {
+    let (pool, _) = ten_mib_fixture();
+    for w in [64usize, 65, 66, 174] {
+        let r = 193 + w;
+        let wire = Wire::new(w);
+        let _guard = CloseOnDrop(Arc::clone(&wire));
+        let (hand_tx, hand_rx) = mpsc::channel();
+        let link = WireLink::new(Arc::clone(&wire), hand_tx);
+        let count = Arc::clone(&link.count);
+        let (mut lp, theirs, tx, rx) = opened();
+        let last = session().len() + r - 1;
+        lp.app.on_line(Line::Session(line(
+            "command_accepted",
+            None,
+            None,
+            json!({"command_id": "opening", "result": {"last_seq": last}}),
+        )));
+        lp.app.set_size(70, 12);
+        let feed = Feed::new(tx.clone(), lp.hub.credits());
+        let (reader, reader_done) = spawn_reader(link, feed);
+        let writer_lines = pool[..r].to_vec();
+        let wire_writer = Arc::clone(&wire);
+        let (writer_done_tx, writer_done) = mpsc::channel();
+        let writer = std::thread::spawn(move || {
+            for line in writer_lines {
+                if !wire_writer.push(line) {
+                    break;
+                }
+            }
+            writer_done_tx.send(()).unwrap_or(());
+        });
+        let (observed_tx, observed) = mpsc::channel();
+        let (go_tx, go_rx) = mpsc::channel();
+        go_tx.send(()).unwrap();
+        let (commands, commands_done) = serve_history(
+            theirs,
+            Arc::clone(&wire),
+            go_rx,
+            session(),
+            Some((count, observed_tx)),
+        );
+        let plateau = Deadline::after(DEADLINE);
+        for want in 1..=65usize {
+            assert_eq!(
+                plateau.recv_or_fail(&hand_rx, "the initial reader plateau"),
+                want
+            );
+        }
+        let (reached_tx, reached) = mpsc::channel();
+        let (release_tx, release) = mpsc::channel();
+        let (done_tx, done) = mpsc::channel();
+        std::thread::spawn(move || {
+            pause::install(reached_tx, release);
+            let code = lp.run(&rx);
+            done_tx.send((code, lp)).unwrap_or(());
+        });
+        Deadline::after(DEADLINE).recv_or_fail(&reached, "chunk one to wait");
+        let mut keys = Vec::new();
+        for _ in 0..10 {
+            for input in super::to_the_top() {
+                let Input::Bytes(bytes) = input else {
+                    panic!("PageUp bytes");
+                };
+                keys.extend(bytes);
+            }
+        }
+        keys.extend_from_slice(b"\x06fixture");
+        tx.send(Input::Bytes(keys)).unwrap();
+        tx.send(Input::FindDue(7)).unwrap();
+        drop(release_tx);
+        let first = Deadline::after(DEADLINE).recv_or_fail(&observed, "history after opening");
+        // The answer follows the finite replay on the same wire.
+        let reads = Deadline::after(DEADLINE);
+        loop {
+            if reads.recv_or_fail(&hand_rx, "the first history answer") == r + 1 {
+                break;
+            }
+        }
+        tx.send(quit()).unwrap();
+        let (code, lp) = Deadline::after(DEADLINE).recv_or_fail(&done, "the loop to quit");
+        wire.close();
+        let peak = lp.hub.answer_stash_peak();
+        drop(lp);
+        Deadline::after(DEADLINE).recv_or_fail(&writer_done, "the finite writer");
+        writer.join().unwrap();
+        Deadline::after(DEADLINE).recv_or_fail(&reader_done, "the reader");
+        reader.join().unwrap();
+        let (seen, _) =
+            Deadline::after(DEADLINE).recv_or_fail(&commands_done, "the command thread");
+        commands.join().unwrap();
+        assert_eq!(first, r, "no history before the last opening line, W = {w}");
+        assert!(peak <= K, "answer stash {peak} exceeds K = {K}, W = {w}");
+        assert!(seen > 0, "pages load after the pass");
+        assert_eq!(code, 0);
+    }
 }
 
 #[test]
@@ -1544,7 +2161,8 @@ fn attach_stash_peak_at_the_ten_mib_fixture() {
             .unwrap_or_else(|err| panic!("spawn: {err}"));
         // The command thread serves history from the session's lines.
         let (go_tx, go_rx) = mpsc::channel();
-        let (commands, commands_done) = serve_history(theirs, Arc::clone(&wire), go_rx, session());
+        let (commands, commands_done) =
+            serve_history(theirs, Arc::clone(&wire), go_rx, session(), None);
         // The loop runs on a worker with the fold held. It starts
         // only once the reader has sent its pre-loop 64: the 65
         // hand-outs force 64 takes, which need no release, so the

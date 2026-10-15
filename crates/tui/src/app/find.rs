@@ -441,6 +441,9 @@ impl App {
     /// `history` command of at most [`HISTORY_LINES`] lines. Captures the
     /// layout the fetch reads under, so its answer cannot stamp another.
     fn fetch_page(&mut self, page: usize, from: Option<u64>, held: Vec<contract::Envelope>) {
+        if self.pass_open() {
+            return;
+        }
         let (Some(session), true) = (self.session().cloned(), self.link == Link::Up) else {
             return;
         };

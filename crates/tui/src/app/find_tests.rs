@@ -1284,14 +1284,13 @@ fn a_dropped_pages_usage_change_refetches_it() {
     assert_eq!(count(&app), "no matches");
     // A late usage line for its turn moves its ▣ line: the dropped page
     // scans again, fetched from the hub.
-    app.on_line(numbered(
+    let outgoing = app.on_line(numbered(
         &mut log,
         &mut seq,
         "usage_recorded",
         usage(200),
         Some("a_m"),
     ));
-    let outgoing = app.find_outgoing();
     assert_eq!(outgoing.len(), 1, "the dropped page refetches");
     let range = app
         .pages()
@@ -2796,7 +2795,7 @@ fn a_moved_revision_on_a_dropped_page_counts_the_rescan_once() {
         .unwrap_or_default(),
     };
     crate::work::take();
-    app.on_line(crate::link::Line::Session(correction));
+    let outgoing = app.on_line(crate::link::Line::Session(correction));
     let work = crate::work::take();
     assert!(
         app.pages().index().revision(0) > revision,
@@ -2807,7 +2806,6 @@ fn a_moved_revision_on_a_dropped_page_counts_the_rescan_once() {
         work.search_order_pages, 6,
         "the verification walk, the dirtied visit and both pump passes"
     );
-    let outgoing = app.find_outgoing();
     assert_eq!(outgoing.len(), 1, "the moved page fetches, and only it");
     let (_, from, to) = command(&outgoing[0]);
     assert_eq!(
