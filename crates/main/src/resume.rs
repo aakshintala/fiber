@@ -381,6 +381,15 @@ fn resumed_session(
         web_search,
         ..
     } = parts;
+    // The log is already open: install the writer before any append the
+    // resumed process makes. The level is checked once; its answer gates
+    // both the install and the connection timing below.
+    let timing = if diag.debugging() {
+        log.install_timing(Arc::clone(&diag));
+        Some(diag.timings())
+    } else {
+        None
+    };
     // The recorded workspace, not the launch directory. A failure here,
     // such as not finding the running binary, returns before `fiber_started`,
     // so the log stays as it was. Every configured stdio server starts too.
@@ -420,14 +429,6 @@ fn resumed_session(
     let web_search =
         crate::builtin::web_search(web_search.as_deref(), extensions.search_backend().as_ref())?;
     let skipped = folded.skipped();
-    // The connection timing rides the resumed session's MCP starts at
-    // debug; at info no callable is built, so starting costs the one
-    // level check.
-    let timing = if diag.debugging() {
-        Some(diag.timings())
-    } else {
-        None
-    };
     let (tools, infos, driver, session_servers) = crate::mcp_servers::session_tools(
         fiber,
         &home,
