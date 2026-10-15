@@ -1,6 +1,6 @@
 //! What a session's `command_accepted` and `command_rejected` lines settle:
 //! the kept command each one answers, and the replayed acknowledgements the
-//! relay drops.
+//! relay replaces with an opening boundary at full.
 
 use contract::SessionId;
 use serde_json::{Map, Value};
@@ -85,6 +85,7 @@ pub(crate) struct Ack {
     pub(crate) id: String,
     pub(crate) verdict: Verdict,
     pub(crate) rewound: Option<SessionId>,
+    pub(crate) last_seq: Option<u64>,
 }
 
 pub(crate) fn acknowledgement(line: &[u8]) -> Option<Ack> {
@@ -112,10 +113,15 @@ pub(crate) fn acknowledgement(line: &[u8]) -> Option<Ack> {
     } else {
         None
     };
+    let last_seq = match verdict {
+        Verdict::Accepted => payload.get("result").and_then(|result| result.get("last_seq")).and_then(Value::as_u64),
+        Verdict::Rejected | Verdict::Closing => None,
+    };
     Some(Ack {
         id: id.to_owned(),
         verdict,
         rewound,
+        last_seq,
     })
 }
 

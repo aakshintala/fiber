@@ -394,6 +394,19 @@ fn verdict(line: &[u8]) -> Option<(String, Verdict)> {
 }
 
 #[test]
+fn an_acknowledgement_reads_the_opening_boundary_only_when_accepted() {
+    let line = |kind: &str, payload: Value| serde_json::to_vec(&json!({"kind": kind, "payload": payload})).unwrap();
+    for (kind, result, expected) in [
+        ("command_accepted", json!({"last_seq": 41}), Some(41)),
+        ("command_accepted", json!({}), None),
+        ("command_rejected", json!({"last_seq": 41}), None),
+    ] {
+        let ack = acknowledgement(&line(kind, json!({"command_id": "c", "result": result}))).unwrap();
+        assert_eq!(ack.last_seq, expected);
+    }
+}
+
+#[test]
 fn an_acknowledgement_names_its_command_and_whether_it_is_closing() {
     let line = |kind: &str, payload: Value| {
         serde_json::to_vec(&json!({"kind": kind, "ts": 1, "payload": payload})).unwrap()
@@ -519,6 +532,7 @@ fn start_relay_thread(
         .spawn(move || {
             relay(
                 RelayThread {
+                        reopen: None,
                     epoch,
                     replayed: Replayed::default(),
                     kept,
@@ -1004,6 +1018,13 @@ fn a_failed_transfer_leaves_a_dead_relay_that_a_route_recovers() {
     );
     let mut read = BufReader::new(client_read);
     let mut text = String::new();
+    read.read_line(&mut text).expect("the resumed full stream reopens");
+    let reopened: Value = serde_json::from_str(text.trim_end()).unwrap();
+    assert_eq!(reopened["kind"], "stream_reopened");
+    assert_eq!(reopened["payload"]["session_id"], SID);
+    assert!(reopened["payload"].get("last_seq").is_none());
+    assert!(reopened.get("seq").is_none());
+    text.clear();
     read.read_line(&mut text)
         .expect("the resumed session acknowledges the command");
     let ack: Value = serde_json::from_str(text.trim_end()).unwrap();
@@ -1398,6 +1419,7 @@ fn a_transfer_registers_before_the_session_can_answer() {
             move || {
                 relay(
                     RelayThread {
+                        reopen: None,
                         epoch,
                         replayed,
                         kept,
@@ -2144,6 +2166,7 @@ fn the_relay_parses_each_session_line_once() {
             move || {
                 relay(
                     RelayThread {
+                        reopen: None,
                         epoch,
                         replayed,
                         kept,
