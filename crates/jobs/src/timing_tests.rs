@@ -317,11 +317,9 @@ fn refused_watch() -> Watch {
 fn spawn_args() -> Map<String, Value> {
     match json!({"description": "scan", "prompt": "say hello", "model": "fiber:fake/m"}) {
         Value::Object(map) => map,
-        Value::Null
-        | Value::Bool(_)
-        | Value::Number(_)
-        | Value::String(_)
-        | Value::Array(_) => panic!("arguments are an object"),
+        Value::Null | Value::Bool(_) | Value::Number(_) | Value::String(_) | Value::Array(_) => {
+            panic!("arguments are an object")
+        }
     }
 }
 

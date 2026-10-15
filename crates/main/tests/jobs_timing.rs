@@ -190,10 +190,16 @@ fn shell_journey(setup: &Setup, sentinel: &str, extra: &Value) -> Run {
     write_json(&setup.home().join("config.json"), &config);
     fs::write(
         setup.home().join("rules"),
-        format!("{}\n", json!({"decision": "allow", "tool": "shell", "prefix": ""})),
+        format!(
+            "{}\n",
+            json!({"decision": "allow", "tool": "shell", "prefix": ""})
+        ),
     )
     .unwrap();
-    let run = ask_with(setup, &["ask", &format!("run {sentinel} in the background")]);
+    let run = ask_with(
+        setup,
+        &["ask", &format!("run {sentinel} in the background")],
+    );
     assert_eq!(run.code, Some(0), "stderr: {}", run.stderr);
     assert!(
         server.await_requests(1, setup.deadline.left()),
@@ -212,7 +218,12 @@ fn spawn_call(model: &str) -> Value {
 
 /// A delegate journey at `extra` diagnostics: the model spawns one
 /// delegate on the child server, then answers. Returns the run.
-fn delegate_journey(setup: &Setup, parent: &ProviderServer, child: &ProviderServer, extra: &Value) -> Run {
+fn delegate_journey(
+    setup: &Setup,
+    parent: &ProviderServer,
+    child: &ProviderServer,
+    extra: &Value,
+) -> Run {
     install_url(setup, "pa", &parent.url(), "openai-responses");
     install_url(setup, "pb", &child.url(), "openai-responses");
     let mut config = json!({"model": "pa/m", "reviewer": {"model": "pa/m"}});
@@ -280,7 +291,11 @@ fn child_ids(run: &Run) -> Vec<String> {
 fn a_debug_shell_start_writes_one_jobs_start() {
     let setup = Setup::new();
     let sentinel = "sentinel-shell-8k2p";
-    let run = shell_journey(&setup, sentinel, &json!({"diagnostics": {"level": "debug"}, "session": {"idle_exit_ms": 3600000}}));
+    let run = shell_journey(
+        &setup,
+        sentinel,
+        &json!({"diagnostics": {"level": "debug"}, "session": {"idle_exit_ms": 3600000}}),
+    );
     let id = run.session_id().to_owned();
     // The tool result is the background receipt.
     let completed: Vec<&Value> = run.all("tool_call_completed");
@@ -366,7 +381,13 @@ fn a_debug_resume_times_its_delegate_spawn() {
     assert_jobs_start_wire(
         &found,
         &id,
-        &["say hello", &workspace, "fiber:pb/m", "artifacts", resume_marker],
+        &[
+            "say hello",
+            &workspace,
+            "fiber:pb/m",
+            "artifacts",
+            resume_marker,
+        ],
     );
     let children = child_ids(&resumed);
     assert_eq!(children.len(), 1, "the resume spawned once more");
