@@ -1,0 +1,132 @@
+#!/usr/bin/env bash
+# Regenerates the attach class data pinned by
+# xtask/tests/class_data/9v45-attach-10mib.json from the benchmarks-<sha>
+# artifacts of main runs, through the same Actions artifact listing
+# scripts/stored-results uses. It keeps the artifacts whose CPU model is
+# in the named class (docs/performance.md, "The class columns") and writes
+# the class JSON to stdout: [{"file": "main <short sha>", "samples":
+# [...]}], ordered by file, one object per line. Entries whose artifacts
+# have expired stay in the committed file as the record; the script emits
+# only what the listing still holds.
+#
+# Usage: scripts/class-data <class> <row> [<dir>]
+#
+#   class  fast, middle or slow, as docs/performance.md names them.
+#   row    the benchmark row's fixture; only "10 MiB" (the gated attach
+#          fixture, GATED_ATTACH_FIXTURE in xtask/src/bench/judge.rs) is
+#          supported, read from the terminal_attach_ms metric.
+#   dir    a directory holding listing.json (the artifact listing as the
+#          API returns it) and one benchmarks-<sha>/head.json per
+#          artifact. CLASS_DATA_FROM names the directory instead when set
+#          and wins over dir. With neither, the script reads the live API.
+#
+# Exit 0 on success, 2 on a usage error, 1 on a read failure.
+set -euo pipefail
+
+usage() {
+  echo "usage: scripts/class-data <class: fast|middle|slow> <row: 10 MiB> [<dir>]" >&2
+}
+
+if [ $# -ne 2 ] && [ $# -ne 3 ]; then
+  usage
+  exit 2
+fi
+class=$1
+row=$2
+dir=${3:-${CLASS_DATA_FROM:-}}
+
+# The class's CPU model from docs/performance.md, "The class columns",
+# lowercased: the file's cpu strings match case-insensitively.
+case $class in
+  fast) model="amd epyc 9v45 96-core processor" ;;
+  middle) model="intel(r) xeon(r) platinum 8370c cpu @ 2.80ghz" ;;
+  slow) model="amd epyc 7763 64-core processor" ;;
+  *)
+    usage
+    exit 2
+    ;;
+esac
+
+# The only supported row: the gated attach fixture and its metric.
+if [ "$row" != "10 MiB" ]; then
+  usage
+  exit 2
+fi
+metric=terminal_attach_ms
+fixture="10 MiB"
+
+lines=$(mktemp)
+scratch=$(mktemp -d)
+cleanup() {
+  rm -f "$lines" || true
+  rm -rf "$scratch" || true
+}
+trap cleanup EXIT
+
+# Prints the class line for one artifact: $1 is the artifact name, $2 its
+# head.json. Skips what is not this class's data: a foreign name, a CPU
+# outside the class, or no samples for the row. A head.json that cannot
+# be read is a read failure.
+emit() {
+  local name=$1 head=$2
+  case $name in
+    benchmarks-*) ;;
+    *) return 0 ;;
+  esac
+  local full=${name#benchmarks-}
+  local short=${full:0:8}
+  local cpu
+  cpu=$(jq -r '.cpu // "" | ascii_downcase' "$head") || return 1
+  if [ "$cpu" != "$model" ]; then
+    return 0
+  fi
+  local samples
+  samples=$(jq -r --arg id "$metric" --arg fixture "$fixture" \
+    '[.metrics[$id] // [] | .[] | select(.fixture == $fixture) | ((.ms * 1000 | round) / 1000 | tostring)] | join(", ")' \
+    "$head") || return 1
+  if [ -z "$samples" ]; then
+    return 0
+  fi
+  printf '  {"file": "main %s", "samples": [%s]}\n' "$short" "$samples" >>"$lines"
+}
+
+if [ -n "$dir" ]; then
+  # A directory instead of the API: the test fixture or a capture of it.
+  # The listing filter matches scripts/stored-results: unexpired, from a
+  # main run in this repository.
+  names=$(jq -r '.artifacts[] | select(.expired == false and .workflow_run.head_branch == "main" and .workflow_run.head_repository_id == .workflow_run.repository_id) | .name' "$dir/listing.json") || exit 1
+  while IFS= read -r name; do
+    emit "$name" "$dir/$name/head.json" || exit 1
+  done <<<"$names"
+else
+  # The live API, as scripts/stored-results reads it: every main commit
+  # young enough that its artifact may be unexpired (the repository keeps
+  # artifacts 90 days), nearest first.
+  cd "$(git rev-parse --show-toplevel)" || exit 1
+  repo=${GITHUB_REPOSITORY:-aakshintala/fiber}
+  commits=$(git rev-list --first-parent --since="90 days ago" origin/main) || exit 1
+  for sha in $commits; do
+    name="benchmarks-$sha"
+    listing=$(gh api "repos/$repo/actions/artifacts?name=$name&per_page=100") || exit 1
+    run=$(jq -r '[(.artifacts // [])[] | select(.expired == false and .workflow_run.head_branch == "main" and .workflow_run.head_repository_id == .workflow_run.repository_id)][0].workflow_run.id // empty' <<<"$listing") || exit 1
+    if [ -z "$run" ]; then
+      continue
+    fi
+    dl=$scratch/$name
+    mkdir -p "$dl"
+    if gh run download "$run" --repo "$repo" --name "$name" --dir "$dl" && [ -f "$dl/head.json" ]; then
+      emit "$name" "$dl/head.json" || exit 1
+    else
+      echo "scripts/class-data: downloading $name failed" >&2
+      exit 1
+    fi
+  done
+fi
+
+{
+  echo "["
+  if [ -s "$lines" ]; then
+    LC_ALL=C sort "$lines" | sed 's/$/,/' | sed '$ s/,$//'
+  fi
+  echo "]"
+}
