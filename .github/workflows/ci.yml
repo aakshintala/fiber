@@ -807,7 +807,7 @@ jobs:
     timeout-minutes: 5
     permissions:
       contents: read
-      pull-requests: read
+      pull-requests: write
       issues: write
     env:
       GH_TOKEN: ${{ github.token }}
