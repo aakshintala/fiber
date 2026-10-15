@@ -21,9 +21,10 @@ pub enum Error {
     RepositoryCode(contract::shapes::Failure),
     /// A `blocking` `session_start` hook failed at a start, a resume or a
     /// rewind, so the session did not start (`docs/extensions.md`,
-    /// "When a hook fails").
+    /// "When a hook fails"). Boxed: a second inline `Failure` variant
+    /// would push the error past clippy's large-`Err` bound.
     #[error("{}", .0.message)]
-    HookFailed(contract::shapes::Failure),
+    HookFailed(Box<contract::shapes::Failure>),
 }
 
 impl Error {
@@ -32,7 +33,8 @@ impl Error {
         match self {
             Self::Log(error) => error.code(),
             Self::Unreadable(_) | Self::NoSessionStarted => ErrorCode::LogCorrupt,
-            Self::RepositoryCode(failure) | Self::HookFailed(failure) => failure.code.clone(),
+            Self::RepositoryCode(failure) => failure.code.clone(),
+            Self::HookFailed(failure) => failure.code.clone(),
         }
     }
 }

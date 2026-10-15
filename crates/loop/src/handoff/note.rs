@@ -108,12 +108,14 @@ impl Loop {
         #[cfg(test)]
         crate::lifecycle::pause_after_handoff_start_check();
         if self.hooks.is_some() {
+            // One flag at a time: no test arms both, so each is consumed
+            // by its own check.
             #[cfg(test)]
-            if {
-                let completed = crate::timing_tests::take_fail_handoff_completed();
-                let restarted = crate::timing_tests::take_fail_restarted();
-                completed || restarted
-            } {
+            if crate::timing_tests::take_fail_handoff_completed() {
+                return Err(crate::timing_tests::log_io_error());
+            }
+            #[cfg(test)]
+            if crate::timing_tests::take_fail_restarted() {
                 return Err(crate::timing_tests::log_io_error());
             }
             let cancel = Arc::clone(&self.cancel);

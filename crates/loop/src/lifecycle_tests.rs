@@ -268,10 +268,10 @@ impl Hooks for FakeHooks {
         }
         // On the turn thread: a shutdown forced after this call's final
         // check, before the handoff's guarded completion write.
-        if start.reason == contract::hook::StartReason::Handoff {
-            if let Some(signal) = self.shutdown_after_handoff_check.lock().unwrap().clone() {
-                super::pause_after_handoff_start(Box::new(move || signal.shutdown(143)));
-            }
+        if start.reason == contract::hook::StartReason::Handoff
+            && let Some(signal) = self.shutdown_after_handoff_check.lock().unwrap().clone()
+        {
+            super::pause_after_handoff_start(Box::new(move || signal.shutdown(143)));
         }
         self.session_start
             .lock()
@@ -1146,7 +1146,12 @@ fn a_session_start_context_is_logged_before_turn_started_and_sent_first() {
         .iter()
         .map(|input| match input {
             contract::provider::Input::User { text, .. } => text.clone(),
-            input => panic!("a user message: {input:?}"),
+            input @ (contract::provider::Input::Assistant { .. }
+            | contract::provider::Input::Reasoning { .. }
+            | contract::provider::Input::ToolCall { .. }
+            | contract::provider::Input::ToolResult { .. }) => {
+                panic!("a user message: {input:?}")
+            }
         })
         .collect();
     assert_eq!(
