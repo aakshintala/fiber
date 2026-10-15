@@ -86,7 +86,7 @@ fn the_loop_gives_the_app_the_wall_time() {
 fn alt_one_switches_in_the_loop() {
     let mut lp = wide();
     let (ours, theirs) = UnixStream::pair().unwrap_or_else(|err| panic!("pair: {err}"));
-    lp.hub = Some(ours);
+    lp.hub.store(ours);
     lp.app.on_line(Line::Hub(hello()));
     lp.app.on_line(live(B, 0));
     lp.app.on_line(live(A, 0));

@@ -7,26 +7,61 @@ use std::sync::Arc;
 
 use contract::SessionId;
 use contract::clock::Clock;
-use log::diag::{Diag, Level, Process, Severity};
+use contract::diag::Op;
+use log::diag::{Diag, Level, Process, Severity, Timer};
 
 /// Writes `host.log` lines to the session's diagnostic file, over the
 /// shared writer. One writer per file, owned by the session's loop.
 pub(crate) struct SessionDiag {
     log: Arc<Diag>,
+    /// Whether the preamble scope has been emitted in this process: the
+    /// first actual construction writes one `startup.preamble` line, and a
+    /// same-session rebuild writes none.
+    preamble_done: bool,
 }
 
 impl SessionDiag {
     pub(crate) fn new(home: &Path, session: SessionId, clock: Arc<dyn Clock>) -> Self {
         let log = Diag::new(home, Process::Session, Level::Info, clock);
         log.attach(&session);
-        Self { log: Arc::new(log) }
+        Self {
+            log: Arc::new(log),
+            preamble_done: false,
+        }
     }
 
     /// Shares the session's attached writer: `extension_log`, request and
     /// memory lines go to one file with one session id. The caller sets
     /// the loop's factories first, so every line shares its identity.
     pub(crate) fn shared(log: Arc<Diag>) -> Self {
-        Self { log }
+        Self {
+            log,
+            preamble_done: false,
+        }
+    }
+
+    /// The shared writer, to construct the one operation timer every timed
+    /// place goes through. Borrowing it ends at construction: the guard
+    /// owns all emission state.
+    pub(crate) fn writer(&self) -> &Diag {
+        &self.log
+    }
+
+    /// Starts the one timer for `op`, or nothing at `info` before any
+    /// clock read, through the writer above.
+    pub(crate) fn timed(&self, op: Op) -> Option<Timer> {
+        log::diag::timed(self.writer(), op, None, None)
+    }
+
+    /// Whether the first preamble construction already emitted its scope.
+    pub(crate) fn preamble_done(&self) -> bool {
+        self.preamble_done
+    }
+
+    /// Records that the first preamble construction entered its scope,
+    /// so a same-session rebuild stays silent, including after a failure.
+    pub(crate) fn set_preamble_done(&mut self) {
+        self.preamble_done = true;
     }
 
     /// Writes the `peak_memory` line when debugging: best-effort, like

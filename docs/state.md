@@ -283,8 +283,27 @@ What is recorded:
   call cancelled before entry starts none. A PDF count/cut call owns one
   scope, and each rendered page's own child owns its own; the renderer
   itself and file inspection stay untimed. Its `data` holds only `op` and
-  `ms`. Other plain agent clients stay unobserved, and
-  MCP timing follows in a later part.
+  `ms`. Installed for the loop are `startup.preamble`,
+  `turn.request`, `turn.model_call` and `turn.handoff`. `startup.preamble`
+  covers building and installing the preamble after the approved-code load,
+  before the opening message, once per session start: a same-session rebuild
+  writes no line. `turn.request` covers assembling the history plus the
+  request, ending before the budget, window and hook checks. `turn.model_call`
+  covers one admitted attempt, from entering the model call until its stream
+  ends; a cancel observed before admission writes none, and a retry's backoff
+  stays outside. `turn.handoff` covers one handoff end to end, from its first
+  record through the restart. The scopes nest instead of adding up: a
+  requested handoff holds its note's request and model scopes, and
+  `provider_request`'s network share sits inside `turn.model_call`. Warming
+  refreshes and reviewer judgements run through the same factories but write
+  no turn scope. Other plain agent clients stay unobserved.
+  Installed too is `mcp.connect`: one scope around one actual server
+  connection attempt, from starting or dialing it until its tool list is
+  in hand. It covers stdio and remote servers, eager and required starts,
+  lazy first use, restarts, renewals and post-approval starts, with the
+  remote server's actual connector work timed as `net.connect` beside it.
+  It excludes cache-only declarations, prompt discovery and tool execution.
+  Other plain agent clients stay unobserved.
 
 An event inside a running session is recorded in that session's log and
 nowhere else, with one exception: a session or ask process's own diagnostic

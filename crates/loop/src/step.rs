@@ -113,6 +113,7 @@ impl Loop {
             reviewed,
             changes,
             handoff,
+            diag,
             ..
         } = self;
         let mut transcript = util::Transcript {
@@ -139,33 +140,43 @@ impl Loop {
             Some(observe) => observe(request, attempt),
             None => provider.call(request),
         };
-        let reply = cancel::run_cancellable(&cancel, call, &mut |delta| {
-            let written = match delta {
-                Delta::Text(text) => {
-                    in_reasoning = false;
-                    emit(&Event::AssistantMessageDelta(text), message)
+        let reply = cancel::run_cancellable_timed(
+            &cancel,
+            call,
+            &mut |delta| {
+                #[cfg(test)]
+                if crate::timing_tests::take_fail_stream_write() {
+                    failed.get_or_insert(crate::timing_tests::log_io_error());
+                    return;
                 }
-                Delta::ToolCallArguments(arguments) => {
-                    in_reasoning = false;
-                    emit(&Event::ToolCallArgumentsDelta(arguments), message)
+                let written = match delta {
+                    Delta::Text(text) => {
+                        in_reasoning = false;
+                        emit(&Event::AssistantMessageDelta(text), message)
+                    }
+                    Delta::ToolCallArguments(arguments) => {
+                        in_reasoning = false;
+                        emit(&Event::ToolCallArgumentsDelta(arguments), message)
+                    }
+                    Delta::Reasoning(text) => {
+                        let id = match opened.back() {
+                            Some(id) if in_reasoning => Ok(id.clone()),
+                            _ => {
+                                let id = ActionId(mint("a_"));
+                                opened.push_back(id.clone());
+                                emit(&Event::ReasoningStarted(Empty {}), &id).map(|()| id)
+                            }
+                        };
+                        in_reasoning = true;
+                        id.and_then(|id| emit(&Event::ReasoningDelta(text), &id))
+                    }
+                };
+                if let Err(e) = written {
+                    failed.get_or_insert(e);
                 }
-                Delta::Reasoning(text) => {
-                    let id = match opened.back() {
-                        Some(id) if in_reasoning => Ok(id.clone()),
-                        _ => {
-                            let id = ActionId(mint("a_"));
-                            opened.push_back(id.clone());
-                            emit(&Event::ReasoningStarted(Empty {}), &id).map(|()| id)
-                        }
-                    };
-                    in_reasoning = true;
-                    id.and_then(|id| emit(&Event::ReasoningDelta(text), &id))
-                }
-            };
-            if let Err(e) = written {
-                failed.get_or_insert(e);
-            }
-        });
+            },
+            Some(diag.writer()),
+        );
         match failed {
             Some(e) => Err(e),
             None => Ok((reply, opened)),

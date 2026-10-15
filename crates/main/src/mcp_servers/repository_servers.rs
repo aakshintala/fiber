@@ -394,7 +394,7 @@ impl Later {
                 extension: None,
             }));
         }
-        let mut started = mcp::start(
+        let mut started = mcp::start_observed(
             prepared.ready,
             &workspace,
             &artifacts,
@@ -402,6 +402,9 @@ impl Later {
             &cache,
             &clock,
             env!("CARGO_PKG_VERSION"),
+            // The original session's context follows its late servers:
+            // structs keep their shape, so it is read from the servers.
+            servers.timing(),
         );
         if let Some(failure) = started.required_failed {
             started.servers.stop();

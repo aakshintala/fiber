@@ -251,7 +251,8 @@ pub(crate) struct SessionServers {
 /// The tools one session registers: the built-ins, every MCP server's
 /// tools after them, the extensions' `extension_tools` after those, and the
 /// driver shell, with the failures for the log and the running servers for
-/// the session's end.
+/// the session's end. `timing` times every MCP connection attempt the
+/// session starts, now and in the post-offer load; `None` stays untimed.
 #[allow(
     clippy::type_complexity,
     reason = "one session's tools, as builtin's tuple carries them"
@@ -276,6 +277,7 @@ pub(crate) fn session_tools(
     delegates: &crate::delegates::Delegates,
     skills: Arc<dyn contract::skills::Skills>,
     extension_tools: Vec<(String, Arc<dyn Tool>)>,
+    timing: Option<contract::diag::Timing>,
 ) -> Result<
     (
         Vec<(String, Arc<dyn Tool>)>,
@@ -310,7 +312,7 @@ pub(crate) fn session_tools(
     let mut specs = specs;
     specs.extend(prepared.ready);
     let cache = home.join("cache").join("mcp");
-    let started = mcp::start(
+    let started = mcp::start_observed(
         specs,
         workspace,
         artifacts,
@@ -318,6 +320,7 @@ pub(crate) fn session_tools(
         &cache,
         clock,
         env!("CARGO_PKG_VERSION"),
+        timing,
     );
     if let Some(failure) = started.required_failed {
         started.servers.stop();

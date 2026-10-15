@@ -63,6 +63,18 @@ pub(crate) fn reply_note(reply: &Reply) -> String {
         .join("\n")
 }
 
+/// What one handoff runs from: a requested note, or the tool calls'
+/// own arguments as the note (`docs/handoff.md`, "A tool").
+pub(super) enum Source {
+    /// A handoff with a note request: automatic, a person's or overflow.
+    Requested {
+        trigger: HandoffTrigger,
+        instructions: Option<String>,
+    },
+    /// A tool-started handoff: the taken note, with no note request.
+    Tools { note: Vec<ActionId> },
+}
+
 impl Loop {
     /// What a completed handoff leaves to do: the next request starts a new
     /// context, unmeasured and missing the cache for everything after the
@@ -70,6 +82,10 @@ impl Loop {
     pub(super) fn restarted(&mut self, turn: &TurnId) -> Result<(), Error> {
         self.sent = None;
         self.handoff.measured = None;
+        #[cfg(test)]
+        if crate::timing_tests::take_fail_restarted() {
+            return Err(crate::timing_tests::log_io_error());
+        }
         self.write_opening(Some(turn))?;
         if let Some(forget) = &self.handoff.forget {
             forget();
@@ -77,10 +93,33 @@ impl Loop {
         self.reviewer_handoff(turn)
     }
 
-    /// One handoff: `handoff_started`, the note request, then
+    /// One handoff, end to end: `handoff_started`, the note request, then
     /// `handoff_completed` with how it ended (`docs/handoff.md`,
-    /// "Recording"). A completed one writes the new opening message.
+    /// "Recording"). A completed one writes the new opening message. A
+    /// tool source makes no request for a note and writes no `started`:
+    /// its argument is the note. One guard owns the whole run, across
+    /// both sources and their shared recording and restart.
     pub(super) fn run_handoff(
+        &mut self,
+        turn: &TurnId,
+        source: Source,
+        tokens_before: u64,
+    ) -> Result<Outcome, Error> {
+        // The end-to-end scope begins before the first mutation and ends
+        // after recording and the restart, or any error.
+        let _timer = self.diag.timed(contract::diag::Op::TurnHandoff);
+        match source {
+            Source::Requested {
+                trigger,
+                instructions,
+            } => self.run_requested_handoff(turn, trigger, instructions, tokens_before),
+            Source::Tools { note } => self.run_tool_handoff(turn, note, tokens_before),
+        }
+    }
+
+    /// A requested handoff: `handoff_started`, the note request, then
+    /// `handoff_completed` with how it ended.
+    fn run_requested_handoff(
         &mut self,
         turn: &TurnId,
         trigger: HandoffTrigger,
@@ -88,6 +127,10 @@ impl Loop {
         tokens_before: u64,
     ) -> Result<Outcome, Error> {
         self.handoff.step_ran = true;
+        #[cfg(test)]
+        if crate::timing_tests::take_fail_handoff_started() {
+            return Err(crate::timing_tests::log_io_error());
+        }
         self.append(
             &Event::HandoffStarted(HandoffStarted { trigger }),
             turn,
@@ -103,6 +146,10 @@ impl Loop {
             Noted::Failed(failure) => (Outcome::Failed, Some(failure), None),
             Noted::Cancelled => (Outcome::Cancelled, None, None),
         };
+        #[cfg(test)]
+        if crate::timing_tests::take_fail_handoff_completed() {
+            return Err(crate::timing_tests::log_io_error());
+        }
         self.append(
             &Event::HandoffCompleted(HandoffCompleted {
                 outcome,
@@ -122,6 +169,34 @@ impl Loop {
         Ok(outcome)
     }
 
+    /// A tool-started handoff: no `started` and no note request, with the
+    /// same completion and restart as a requested one. The state flags
+    /// stay the tool path's own: no block is set.
+    fn run_tool_handoff(
+        &mut self,
+        turn: &TurnId,
+        note: Vec<ActionId>,
+        tokens_before: u64,
+    ) -> Result<Outcome, Error> {
+        #[cfg(test)]
+        if crate::timing_tests::take_fail_handoff_completed() {
+            return Err(crate::timing_tests::log_io_error());
+        }
+        self.append(
+            &Event::HandoffCompleted(HandoffCompleted {
+                outcome: Outcome::Completed,
+                error: None,
+                note: Some(Note::Actions { note }),
+                tokens_before,
+                instructions: None,
+            }),
+            turn,
+            None,
+        )?;
+        self.restarted(turn)?;
+        Ok(Outcome::Completed)
+    }
+
     /// Asks the model for its note: the conversation and one more user
     /// input, which is never logged. A cancel that landed before the call
     /// ends it at once, as it ends any call (`cancel::run_cancellable`).
@@ -131,6 +206,13 @@ impl Loop {
         trigger: HandoffTrigger,
         instructions: Option<&str>,
     ) -> Result<Noted, Error> {
+        // The scope covers assembling the note input plus the request,
+        // including the overflow's moved results and their artifact
+        // writes. A missing preamble only means no timer starts.
+        let has_preamble = self.preamble.is_some();
+        let _timer = has_preamble
+            .then(|| self.diag.timed(contract::diag::Op::TurnRequest))
+            .flatten();
         let mut conversation = if trigger == HandoffTrigger::Overflow {
             self.moved_results()
         } else {
@@ -146,6 +228,9 @@ impl Loop {
                 "The preamble was not built.",
             )));
         };
+        #[cfg(test)]
+        crate::timing_tests::request_note_exit(self.log.clock().as_ref());
+        drop(_timer);
         if let Some(over) = self.over_budget().and_then(|ended| ended.error) {
             return Ok(Noted::Failed(over));
         }

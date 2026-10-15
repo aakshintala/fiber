@@ -257,7 +257,7 @@ fn quitting_during_backoff_ends_the_hub_thread() {
 fn dropping_the_loop_ends_a_hub_thread_that_waits_for_a_permit() {
     let (mut lp, _) = new_loop(TestBackend::new(60, 12), None);
     let retry = Retry::new(&lp.clock);
-    lp.retry = Some(Arc::clone(&retry));
+    lp.hub.set_retry(Arc::clone(&retry));
     let (tx, rx) = mpsc::channel();
     let (connect, _called, gone) = dial(Vec::new());
     spawn_hub(connect, tx, retry, Arc::clone(&lp.clock));
@@ -274,7 +274,7 @@ fn dropping_the_loop_ends_a_hub_thread_that_waits_for_a_permit() {
 fn dropping_the_loop_ends_a_hub_thread_that_reads() {
     let (mut lp, _) = new_loop(TestBackend::new(60, 12), None);
     let retry = Retry::new(&lp.clock);
-    lp.retry = Some(Arc::clone(&retry));
+    lp.hub.set_retry(Arc::clone(&retry));
     let (ours, _theirs) = pair();
     let (tx, rx) = mpsc::channel();
     let (connect, _called, gone) = dial(vec![(ours, hello())]);
@@ -295,7 +295,7 @@ fn dropping_the_loop_ends_a_hub_thread_that_reads() {
 fn dropping_the_loop_before_the_connect_is_stepped_ends_the_read() {
     let (mut lp, _) = new_loop(TestBackend::new(60, 12), None);
     let retry = Retry::new(&lp.clock);
-    lp.retry = Some(Arc::clone(&retry));
+    lp.hub.set_retry(Arc::clone(&retry));
     let (ours, _theirs) = pair();
     let (tx, rx) = mpsc::channel();
     let (connect, _called, gone) = dial(vec![(ours, hello())]);

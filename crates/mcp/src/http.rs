@@ -33,6 +33,8 @@ use crate::wait::Shared;
 /// Starts the remote server at `url` over `proxy` under `limits`, and runs
 /// the handshake through [`crate::server::Server::open`]: the only
 /// production caller besides [`crate::server::Server::start`].
+/// A direct remote start without timing: HTTP tests only.
+#[cfg(test)]
 pub(crate) fn start(
     url: &str,
     tokens: Arc<dyn contract::mcp_tokens::TokenFiles>,
@@ -42,6 +44,39 @@ pub(crate) fn start(
     startup_timeout: Duration,
     client_version: &str,
 ) -> Result<OpenServer, StartError> {
+    start_observed(
+        url,
+        tokens,
+        proxy,
+        limits,
+        clock,
+        startup_timeout,
+        client_version,
+        None,
+        &mut None,
+    )
+}
+
+/// As [`start`], threading the attempt's connection guard to the
+/// tool-list boundary and keeping `timing` on the link for the actual
+/// connector work: the handshake consumes the guard there, and every
+/// later exchange builds its agent from the same context. `None` stays
+/// untimed and builds the plain agent.
+#[allow(
+    clippy::too_many_arguments,
+    reason = "the observed companion adds only the Timing and connection guard"
+)]
+pub(crate) fn start_observed(
+    url: &str,
+    tokens: Arc<dyn contract::mcp_tokens::TokenFiles>,
+    proxy: Option<ureq::Proxy>,
+    limits: net::Limits,
+    clock: &Arc<dyn contract::clock::Clock>,
+    startup_timeout: Duration,
+    client_version: &str,
+    timing: Option<contract::diag::Timing>,
+    connection: &mut Option<Box<dyn Send>>,
+) -> Result<OpenServer, StartError> {
     // Sticky: a start after the stop spawns nothing.
     if Stopping.is_cancelled() {
         return Err(shutting_down());
@@ -50,12 +85,13 @@ pub(crate) fn start(
     let shared = Arc::new(Shared::default());
     let (writer, incoming) = mpsc::sync_channel(crate::server::WRITE_QUEUE);
     let writer = Arc::new(writer);
-    let link = Arc::new(Link::new(
+    let link = Arc::new(Link::new_observed(
         url.to_owned(),
         tokens,
         clock.clone(),
         proxy,
         limits,
+        timing,
     ));
     let pumping = Arc::clone(&link);
     let reading = Arc::clone(&shared);
@@ -66,13 +102,14 @@ pub(crate) fn start(
         .map_err(|error| {
             StartError::StartFailed(format!("The server could not be started: {error}."))
         })?;
-    crate::server::Server::open(
+    crate::server::Server::open_observed(
         shared,
         writer,
         crate::server::Peer::Remote(link),
         clock,
         startup_timeout,
         client_version,
+        connection,
     )
 }
 
@@ -118,6 +155,9 @@ pub(crate) struct Link {
     state: Mutex<LinkState>,
     bearer: Arc<crate::token::Bearer>,
     poll: Condvar,
+    /// The timing context actual connector work builds its observed
+    /// agent from: `None` builds the plain agent. Never logged.
+    timing: Option<contract::diag::Timing>,
 }
 
 // The URL's userinfo and query can carry a token, and the session id
@@ -160,12 +200,27 @@ impl std::fmt::Debug for LinkState {
 }
 
 impl Link {
+    /// A link without timing: HTTP tests only.
+    #[cfg(test)]
     fn new(
         url: String,
         tokens: Arc<dyn contract::mcp_tokens::TokenFiles>,
         clock: Arc<dyn contract::clock::Clock>,
         proxy: Option<ureq::Proxy>,
         limits: net::Limits,
+    ) -> Self {
+        Self::new_observed(url, tokens, clock, proxy, limits, None)
+    }
+
+    /// As [`Link::new`], keeping `timing` for the observed agent:
+    /// `None` builds the plain agent, as before.
+    fn new_observed(
+        url: String,
+        tokens: Arc<dyn contract::mcp_tokens::TokenFiles>,
+        clock: Arc<dyn contract::clock::Clock>,
+        proxy: Option<ureq::Proxy>,
+        limits: net::Limits,
+        timing: Option<contract::diag::Timing>,
     ) -> Self {
         let bearer = Arc::new(crate::token::Bearer::new(&url, tokens, clock));
         Self {
@@ -175,6 +230,7 @@ impl Link {
             state: Mutex::new(LinkState::default()),
             bearer,
             poll: Condvar::new(),
+            timing,
         }
     }
 
@@ -308,20 +364,29 @@ impl crate::token::Refresh for Exchange {
 }
 
 /// One agent per exchange, so its connector keeps this exchange's socket.
+/// With a timing context the exchange builds the observed agent, timing
+/// its actual connector work as `net.connect`; without one it builds the
+/// plain agent. Building either agent starts no scope.
 fn agent_for(link: &Arc<Link>, id: u64) -> ureq::Agent {
-    net::agent(
-        net::config()
-            .proxy(link.proxy.clone())
-            .http_status_as_error(false)
-            .max_redirects(0)
-            .build(),
-        Arc::new(Exchange {
-            id,
-            link: Arc::clone(link),
-        }),
-        DefaultResolver::default(),
-        link.limits,
-    )
+    let config = net::config()
+        .proxy(link.proxy.clone())
+        .http_status_as_error(false)
+        .max_redirects(0)
+        .build();
+    let keep = Arc::new(Exchange {
+        id,
+        link: Arc::clone(link),
+    });
+    match &link.timing {
+        Some(timing) => net::agent_observed(
+            config,
+            keep,
+            DefaultResolver::default(),
+            link.limits,
+            timing.clone(),
+        ),
+        None => net::agent(config, keep, DefaultResolver::default(), link.limits),
+    }
 }
 
 /// The headers of every request: JSON in, JSON or an event stream back,

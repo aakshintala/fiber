@@ -79,7 +79,7 @@ fn ctrl_v_then_enter_sends_the_image_to_the_hub() {
     let (out, worker) = mpsc::channel();
     lp.files_out = Some(out);
     let (ours, theirs) = UnixStream::pair().unwrap();
-    lp.hub = Some(ours);
+    lp.hub.store(ours);
     lp.app
         .attach(contract::SessionId("s_aaaaaaaaaaaaaaaa".to_owned()));
     assert!(lp.app.on_line(Line::Hub(hello())).is_empty());

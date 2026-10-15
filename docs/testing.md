@@ -260,10 +260,11 @@ is a real child session process, because it is Fiber. The fakes are:
 - a refused address, loopback port 1: a connect is reset, and a bind of port 0
   never draws it, so no concurrent listener can take it
 - a second client on a session's socket
-- a fake clock, whose time moves only when the test advances it;
-  `advance_marked` marks each thread's latest park, so `await_parked_since`
-  waits for that thread's next park after the advance even when an event
-  woke it out of its park before the advance
+- a fake clock, whose time moves only when the test advances it to a named
+  park through `advance_when_parked`, naming the expected park and the advance
+  separately; `advance_marked` marks each thread's latest park, so
+  `await_parked_since` waits for that thread's next park after the advance
+  even when an event woke it out of its park before the advance
 - a counting allocator, which counts the blocks of 1 MiB or more a thread
   holds at once, and the bytes it allocated and has not freed, from the
   scope's start and never below 0; each block of 64 KiB or more takes a
@@ -564,7 +565,13 @@ A test receives from a channel through `fakes::Deadline`, never with a raw `recv
 
 A test advances a fake clock only after a signal that the code under test is
 waiting on that clock (past its own clock check); a parked caller alone is not
-that signal.
+that signal. A test advances a fake clock to a named park only through
+`fakes::clock::FakeClock::advance_when_parked`, naming the expected instant;
+the ban on raw advances lands with their migration in a later pull request.
+A test creates every watcher, log watch or registration before it starts the
+thread whose event it waits for. That second rule is a review rule: no helper
+can see an event nobody watched, so the review traces each changed test's
+registration to before its emitter's start.
 
 Starting threads in order does not order their requests. A test that needs
 calls to reach a fake in a set order has the fake acknowledge each call it
