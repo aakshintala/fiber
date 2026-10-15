@@ -1695,14 +1695,15 @@ fn focus_home() -> App {
 }
 
 /// Renders home and checks every chip target's cells: the `tinted`
-/// chip carries the hover tint and no reversal, the others neither.
+/// chip carries the lifted surface tint and no reversal, the others
+/// neither.
 fn check_chips(app: &App, tinted: Option<Spot>) {
     use ratatui::style::Modifier;
 
     let area = Rect::new(0, 0, 80, 24);
     let mut buf = Buffer::empty(area);
     let targets = render(app, area, &mut buf, None);
-    let hover = crate::theme::Role::Hover.color();
+    let hover = crate::theme::hover_bg(crate::theme::Role::Surface.color());
     for target in &targets {
         let crate::mouse::TargetId::Home(spot) = target.id else {
             continue;

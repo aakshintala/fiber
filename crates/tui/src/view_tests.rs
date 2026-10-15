@@ -2166,7 +2166,7 @@ fn hovering_a_token_tints_every_cell_of_its_label_only() {
             };
             let mut expected = before.clone();
             if rects.iter().any(|rect| rect.contains(Position::new(x, y))) {
-                expected.bg = super::hover_bg(before.bg);
+                expected.bg = crate::theme::hover_bg(before.bg);
             }
             assert_eq!(after, &expected, "cell {x},{y}");
         }
@@ -2708,7 +2708,7 @@ fn a_view_target_under_the_pointer_gets_the_hover_tint_alone() {
     let (hovered, _) = pointed(&mut app, WIDTH, HEIGHT, Some((WIDTH - 1, 0)));
     // The whole top row is the one close target, so the hover lifts
     // the whole row and no row under it (`docs/tui.md`, "Swapped views").
-    let tint = Some(super::hover_bg(Role::Surface.color()));
+    let tint = Some(crate::theme::hover_bg(Role::Surface.color()));
     for x in 0..WIDTH {
         assert_eq!(
             hovered.cell((x, 0)).map(|cell| cell.bg),

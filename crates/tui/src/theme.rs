@@ -442,6 +442,51 @@ impl Theme {
     }
 }
 
+/// One hovered cell's background: its own tint 0x14 lighter on each
+/// channel, or the hover tint with no tint under it (`docs/tui.md`,
+/// palette, `hover`). The tint resolves through the dark theme: the
+/// draw site carries no look, so the lift is pinned to the dark values
+/// the palette table names.
+pub(crate) fn hover_bg(bg: Color) -> Color {
+    match bg {
+        Color::Rgb(red, green, blue) => lifted(red, green, blue),
+        Color::Indexed(index) => match Role::from_index(index) {
+            Some(role) if role.tint() => match Theme::DARK.shade(role) {
+                Shade::Rgb((red, green, blue)) => lifted(red, green, blue),
+                Shade::Terminal | Shade::Dim => Role::Hover.color(),
+            },
+            Some(_) | None => Role::Hover.color(),
+        },
+        Color::Reset
+        | Color::Black
+        | Color::Red
+        | Color::Green
+        | Color::Yellow
+        | Color::Blue
+        | Color::Magenta
+        | Color::Cyan
+        | Color::Gray
+        | Color::DarkGray
+        | Color::LightRed
+        | Color::LightGreen
+        | Color::LightYellow
+        | Color::LightBlue
+        | Color::LightMagenta
+        | Color::LightCyan
+        | Color::White => Role::Hover.color(),
+    }
+}
+
+/// One tint lifted 0x14 on each channel.
+fn lifted(red: u8, green: u8, blue: u8) -> Color {
+    const LIFT: u8 = 0x14;
+    Color::Rgb(
+        red.saturating_add(LIFT),
+        green.saturating_add(LIFT),
+        blue.saturating_add(LIFT),
+    )
+}
+
 /// `#rrggbb`, either case, as a colour.
 fn hex(text: &str) -> Option<Rgb> {
     let digits = text.strip_prefix('#')?;
