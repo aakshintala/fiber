@@ -169,7 +169,7 @@ rules out a derived database, and the ruling stands while this budget holds.
 ## Measuring
 
 Each number is the median of 5 runs, except a pull request's timing-only
-workloads, which are the median of 3. Every results file records the runner's CPU model.
+workloads and the `paging` jig, which are the median of 3. Every results file records the runner's CPU model.
 Memory is peak RSS on Linux and peak
 footprint on macOS, by the method in `docs/dependencies.md`. The retained rows
 read RssAnon from `/proc/<pid>/status` 10 s after the work ends, once freed
@@ -189,7 +189,7 @@ exact.
 
 Linux x86_64 gates every pull request, and the backstop on `main` measures
 the same benchmarks. On a pull request the base binary runs the timing
-benchmarks only; memory and exact rows compare against the backstop's
+benchmarks only, and only the rows the diff selects (`docs/ci.md`, "Selection"); memory and exact rows compare against the backstop's
 stored results for the base commit (`docs/ci.md`, "On every pull request
 that changes code"). Linux arm64 and macOS arm64 are
 measured at each release and reported, never gated: timings differ by about
