@@ -2326,10 +2326,10 @@ fn serve_after_stop_spawns_nothing() {
 /// A shutdown racing the spawn joins the thread: the pause holds the
 /// serve between its spawn and its slot store, inside the accept lock,
 /// so the racing shutdown blocks on the lock instead of seeing a
-/// spawned thread as unspawned. The listener closure proves the
-/// shutdown reached the lock window before the release; its silence
-/// within a poll bound, with no join published, then proves the wait.
-/// The release then lets both end.
+/// spawned thread as unspawned. A test-only signal immediately before
+/// shutdown takes the contested lock proves it reached the acquisition
+/// before the pause is released; its silence within a poll bound, with
+/// no join published, then proves the wait. The release lets both end.
 #[test]
 fn shutdown_racing_spawn_joins_the_thread() {
     /// Releases the spawn pause when the test unwinds past it: the
@@ -2367,24 +2367,14 @@ fn shutdown_racing_spawn_joins_the_thread() {
             }
         });
         Deadline::after(OP).recv_or_fail(&reached_rx, "the accept thread spawning");
+        let at_accept_lock = server.test_shutdown_before_accept_lock();
         scope.spawn(|| match down_tx.send(server.shutdown()) {
             Ok(()) | Err(_) => {}
         });
-        // Shutdown takes the listener just before blocking on the
-        // contested accept lock, with no blocking work between, so its
-        // closure proves the shutdown thread reached the lock window;
-        // the pause still holds the serve, so the shutdown must block.
-        // Without this, the shutdown thread may still be unscheduled
-        // when the pause releases, and broken publication can pass.
-        let at_lock = Deadline::after(OP);
-        while !probe.listener_closed() {
-            if at_lock.left().is_zero() {
-                panic!(
-                    "waited until the deadline for the racing shutdown reaching the accept lock"
-                );
-            }
-            thread::yield_now();
-        }
+        Deadline::after(OP).recv_or_fail(
+            &at_accept_lock,
+            "the racing shutdown reaching the contested accept lock",
+        );
         assert!(
             Deadline::after(QUIET).recv(&down_rx).is_err(),
             "shutdown waits for the spawning serve instead of publishing a join"

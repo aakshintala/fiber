@@ -154,6 +154,10 @@ pub(crate) struct Shared {
     /// reaches that window.
     #[cfg(test)]
     pause: Mutex<Option<(mpsc::Sender<()>, mpsc::Receiver<()>)>>,
+    /// The next shutdown signals immediately before it takes the accept
+    /// lock, test-only: the spawn-race test waits for the actual contest.
+    #[cfg(test)]
+    shutdown_accept_lock: Mutex<Option<mpsc::Sender<()>>>,
 }
 
 impl Shared {
@@ -489,6 +493,8 @@ impl HttpServer {
             }),
             #[cfg(test)]
             pause: Mutex::new(None),
+            #[cfg(test)]
+            shutdown_accept_lock: Mutex::new(None),
         });
         // Subscribed before any waiter checks: no advance slips between a
         // check and its park.
@@ -737,6 +743,15 @@ impl HttpServer {
         (reached_rx, release_tx)
     }
 
+    /// Signals immediately before the next shutdown takes the accept
+    /// lock, test-only: no outside seam reaches the contested acquisition.
+    #[cfg(test)]
+    pub(crate) fn test_shutdown_before_accept_lock(&self) -> mpsc::Receiver<()> {
+        let (reached_tx, reached_rx) = mpsc::channel();
+        *lock(&self.shared.shutdown_accept_lock) = Some(reached_tx);
+        reached_rx
+    }
+
     /// Stops the server: waits end stopped, open tunnels break, and
     /// every serving thread is joined. True when all stopped within the
     /// shutdown bound.
@@ -764,6 +779,14 @@ impl HttpServer {
                 Ok(()) | Err(_) => {}
             }
             match origin.shutdown(std::net::Shutdown::Both) {
+                Ok(()) | Err(_) => {}
+            }
+        }
+        // Only the spawn-race test installs this signal; with no hook,
+        // shutdown follows the same path directly to the accept lock.
+        #[cfg(test)]
+        if let Some(reached) = lock(&self.shared.shutdown_accept_lock).take() {
+            match reached.send(()) {
                 Ok(()) | Err(_) => {}
             }
         }
