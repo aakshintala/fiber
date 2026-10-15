@@ -665,9 +665,9 @@ impl Reads {
             if empty {
                 return;
             }
-            // Held after the first kill when a test armed a pause: the
-            // take consumes it, so later passes run free and only the
-            // first kill ever pauses.
+            // Held after a kill when a test armed a pause: the take
+            // consumes one armed pause per pass, so passes run free
+            // unless the test armed again meanwhile.
             #[cfg(test)]
             self.pause_after_settle_kill();
             if self.lock().cancelled {
@@ -902,10 +902,11 @@ impl Reads {
         }
     }
 
-    /// Arms one pause after the timeout settlement's first kill: the
+    /// Arms one pause after the timeout settlement kills its group: the
     /// settlement sends on `entered` once it killed its group and blocks
-    /// until `release` arrives, so the test holds the group alive past
-    /// the first kill on every run. The pause is one-shot.
+    /// until `release` arrives, so the test holds the settlement past
+    /// the kill on every run. Each armed pause holds one pass; re-arming
+    /// holds a later pass. The pause is one-shot.
     pub(crate) fn pause_at_settle(&self, entered: mpsc::Sender<()>, release: mpsc::Receiver<()>) {
         *self
             .settle_pause
@@ -914,8 +915,8 @@ impl Reads {
     }
 
     /// Reports the settlement killed its group and blocks until the test
-    /// releases it. Runs free unless a test armed a pause meanwhile; the
-    /// first pass consumes it, so later passes run free.
+    /// releases it. Runs free unless a test armed a pause meanwhile; each
+    /// pass consumes one armed pause, so re-arming pauses a later pass too.
     fn pause_after_settle_kill(&self) {
         let point = self
             .settle_pause
