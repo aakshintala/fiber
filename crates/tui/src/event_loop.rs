@@ -769,7 +769,8 @@ impl<B: Backend> Loop<B> {
             return;
         };
         let workspace = self.app.workspace();
-        let search = files::Search::spawn(move || files::list(&workspace), out.clone());
+        let roots = files::Roots::new(workspace.clone(), std::env::var_os("HOME"));
+        let search = files::Search::spawn(move || files::list(&workspace), roots, out.clone());
         search.search(self.app.generation(), String::new());
         self.search = Some(search);
     }

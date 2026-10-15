@@ -279,6 +279,8 @@ pub fn files() -> Vec<&'static str> {
         "docs/workflow.md",
         "research/tui-prototype/src/main.rs",
         "research/tui-prototype/src/model_picker.rs",
+        "~/proj/sub/",
+        "~/proj/README.md",
         "fixtures/session.jsonl",
     ]
 }
@@ -348,6 +350,12 @@ pub(crate) const CASES: &[Case<State>] = &[
         build: || State { focus: 0 },
     },
     Case {
+        name: "at-path",
+        help: "the `@` path search with a directory and a file row",
+        check: "the input reads `@~/proj/`, a directory row `~/proj/sub/` and a file row `~/proj/README.md` in the shared frame, the first `›` on the accent bar.",
+        build: || State { focus: 0 },
+    },
+    Case {
         name: "narrow-slash",
         help: "the `/` list in a narrow terminal",
         check: "the same framed `/` panel in a 100x40 terminal, above the input box with the narrow status rows below.",
@@ -385,6 +393,7 @@ pub fn input_for(case: &str) -> String {
         "slash-filtered" => "/re".into(),
         "at" | "narrow-at" => "@test".into(),
         "at-empty" => "@zzz".into(),
+        "at-path" => "@~/proj/".into(),
         _ => panic!(
             "--completions {}",
             crate::cases::names(CASES).replace(", ", "|")
@@ -881,6 +890,11 @@ mod tests {
         );
         let t = text(&view(&for_case("at-empty"), "@zzz", 100));
         assert!(t.contains("no files match"), "missing the empty row");
+        let t = text(&view(&for_case("at-path"), "@~/proj/", 100));
+        assert!(
+            t.contains("~/proj/sub/") && t.contains("~/proj/README.md"),
+            "missing the path search rows"
+        );
     }
 
     #[test]

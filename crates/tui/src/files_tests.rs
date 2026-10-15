@@ -1,10 +1,13 @@
 //! Tests for file search: the ranking, the listing and the worker.
 
-use super::{CHECK_EVERY, KEPT, Search, list, rank};
+use super::{
+    CHECK_EVERY, KEPT, Limits, Query, Roots, Search, entries, find, list, rank, resolve, split,
+};
 use crate::Input;
 use fakes::Deadline;
 use std::cell::Cell;
-use std::path::Path;
+use std::ffi::OsString;
+use std::path::{Path, PathBuf};
 use std::sync::mpsc::{self, Receiver};
 use std::time::Duration;
 
@@ -80,6 +83,429 @@ fn next_result(
         Ok(Input::Files { generation, result }) => (generation, result),
         Ok(_) => panic!("{what}: not a file search result"),
         Err(err) => panic!("waited {DEADLINE:?} for {what}: {err}"),
+    }
+}
+
+#[test]
+fn a_path_query_splits_at_its_last_slash() {
+    use Query::{Path, Workspace};
+    for typed in ["foo", "~", "..", "./x", "@~", "~foo", "..foo", ""] {
+        assert_eq!(split(typed), Workspace(typed), "{typed}");
+    }
+    assert_eq!(
+        split("~/proj/rea"),
+        Path {
+            base_text: "~/proj/",
+            query: "rea"
+        }
+    );
+    assert_eq!(
+        split("../../a/b"),
+        Path {
+            base_text: "../../a/",
+            query: "b"
+        }
+    );
+    assert_eq!(
+        split("/"),
+        Path {
+            base_text: "/",
+            query: ""
+        }
+    );
+    assert_eq!(
+        split("~/"),
+        Path {
+            base_text: "~/",
+            query: ""
+        }
+    );
+    assert_eq!(
+        split("../"),
+        Path {
+            base_text: "../",
+            query: ""
+        }
+    );
+    assert_eq!(
+        split("/etc"),
+        Path {
+            base_text: "/",
+            query: "etc"
+        }
+    );
+    assert_eq!(
+        split("../x"),
+        Path {
+            base_text: "../",
+            query: "x"
+        }
+    );
+    assert_eq!(
+        split("/a/b/c"),
+        Path {
+            base_text: "/a/b/",
+            query: "c"
+        }
+    );
+}
+
+#[test]
+fn a_base_resolves_against_home_workspace_or_root() {
+    let roots = Roots::new(PathBuf::from("/w"), Some(OsString::from("/home/u")));
+    assert_eq!(
+        resolve("~/proj/", &roots),
+        Ok(PathBuf::from("/home/u/proj"))
+    );
+    assert_eq!(resolve("/etc/", &roots), Ok(PathBuf::from("/etc")));
+    assert_eq!(resolve("../x/", &roots), Ok(PathBuf::from("/w/../x")));
+    let no_home = Roots::new(PathBuf::from("/w"), None);
+    assert_eq!(
+        resolve("~/proj/", &no_home),
+        Err("no home directory".to_owned())
+    );
+}
+
+#[test]
+fn an_empty_or_relative_home_is_no_home() {
+    for home in [None, Some(OsString::from("")), Some(OsString::from("rel"))] {
+        let roots = Roots::new(PathBuf::from("/w"), home);
+        assert_eq!(resolve("~/", &roots), Err("no home directory".to_owned()));
+    }
+    let roots = Roots::new(PathBuf::from("/w"), Some(OsString::from("/home/u")));
+    assert_eq!(resolve("~/", &roots), Ok(PathBuf::from("/home/u")));
+}
+
+/// A directory holding `names`: a trailing `/` makes a directory.
+#[track_caller]
+fn seeded(names: &[&str]) -> fakes::TempDir {
+    let dir = fakes::TempDir::new("tui-files-base");
+    for name in names {
+        let path = dir.path().join(name);
+        if name.ends_with('/') {
+            std::fs::create_dir_all(&path).unwrap_or_else(|err| panic!("{name}: {err}"));
+        } else {
+            if let Some(parent) = path.parent() {
+                std::fs::create_dir_all(parent).unwrap_or_else(|err| panic!("{name}: {err}"));
+            }
+            std::fs::write(&path, "x").unwrap_or_else(|err| panic!("{name}: {err}"));
+        }
+    }
+    dir
+}
+
+/// The base listing of `dir`'s entries matching `query` as `@` rows
+/// typed as `base_text`, with `limits` and a fresh budget.
+#[track_caller]
+fn listed(
+    dir: &Path,
+    base_text: &str,
+    query: &str,
+    limits: &Limits,
+) -> Option<Result<Vec<String>, String>> {
+    entries(dir, base_text, query, limits, &mut 0, || false)
+}
+
+#[test]
+fn directories_come_first_then_by_name() {
+    let dir = seeded(&["mango/", "Apple/", "apricot", "Zebra", "apple-pie"]);
+    assert_eq!(
+        listed(dir.path(), "~/proj/", "", &Limits::SEARCH),
+        Some(Ok(owned(&[
+            "~/proj/Apple/",
+            "~/proj/mango/",
+            "~/proj/apple-pie",
+            "~/proj/apricot",
+            "~/proj/Zebra",
+        ])))
+    );
+}
+
+#[test]
+fn the_base_listing_matches_names_ignoring_case() {
+    let dir = seeded(&["README.md", "readme-notes.md", "other.txt", "sub/"]);
+    assert_eq!(
+        listed(dir.path(), "~/proj/", "rea", &Limits::SEARCH),
+        Some(Ok(owned(&["~/proj/readme-notes.md", "~/proj/README.md"])))
+    );
+    assert_eq!(
+        listed(dir.path(), "~/proj/", "REA", &Limits::SEARCH),
+        Some(Ok(owned(&["~/proj/readme-notes.md", "~/proj/README.md"])))
+    );
+}
+
+#[test]
+fn the_base_listing_cuts_to_kept() {
+    for count in [2, 3, 4] {
+        let names: Vec<String> = (0..count).map(|at| format!("f{at:02}")).collect();
+        let refs: Vec<&str> = names.iter().map(String::as_str).collect();
+        let dir = seeded(&refs);
+        let limits = Limits {
+            kept: 3,
+            visits: Limits::SEARCH.visits,
+            check_every: Limits::SEARCH.check_every,
+        };
+        let rows = listed(dir.path(), "/b/", "f", &limits)
+            .unwrap_or_else(|| panic!("{count}: cancelled"))
+            .unwrap_or_else(|err| panic!("{count}: {err}"));
+        assert_eq!(rows.len(), count.min(3), "{count} entries");
+        assert_eq!(rows.first().map(String::as_str), Some("/b/f00"), "{count}");
+    }
+}
+
+#[test]
+#[cfg(unix)]
+fn a_symlink_to_a_directory_is_a_directory_row() {
+    let dir = seeded(&["real/inner.txt"]);
+    std::os::unix::fs::symlink(dir.path().join("real"), dir.path().join("link"))
+        .unwrap_or_else(|err| panic!("symlink: {err}"));
+    std::os::unix::fs::symlink(
+        dir.path().join("real/inner.txt"),
+        dir.path().join("file-link"),
+    )
+    .unwrap_or_else(|err| panic!("symlink: {err}"));
+    let rows = listed(dir.path(), "~/proj/", "link", &Limits::SEARCH)
+        .unwrap_or_else(|| panic!("cancelled"))
+        .unwrap_or_else(|err| panic!("{err}"));
+    assert_eq!(rows, owned(&["~/proj/link/", "~/proj/file-link"]));
+}
+
+#[test]
+#[cfg(target_os = "linux")]
+fn a_non_utf8_name_is_listed_lossily() {
+    use std::os::unix::ffi::OsStringExt;
+    let dir = fakes::TempDir::new("tui-files-lossy");
+    let raw = vec![0x66, 0xFF, 0x6F]; // f, an invalid byte, o
+    std::fs::write(dir.path().join(std::ffi::OsString::from_vec(raw)), "x")
+        .unwrap_or_else(|err| panic!("{err}"));
+    let rows = listed(dir.path(), "~/proj/", "f", &Limits::SEARCH)
+        .unwrap_or_else(|| panic!("cancelled"))
+        .unwrap_or_else(|err| panic!("{err}"));
+    assert_eq!(rows, owned(&["~/proj/f\u{FFFD}o"]));
+}
+
+#[test]
+#[cfg(unix)]
+fn a_name_with_a_control_character_is_not_listed() {
+    let dir = seeded(&["li\nne", "fine"]);
+    let mut examined = 0;
+    let rows = entries(
+        dir.path(),
+        "~/proj/",
+        "",
+        &Limits::SEARCH,
+        &mut examined,
+        || false,
+    )
+    .unwrap_or_else(|| panic!("cancelled"))
+    .unwrap_or_else(|err| panic!("{err}"));
+    assert_eq!(rows, owned(&["~/proj/fine"]));
+    assert_eq!(examined, 2);
+}
+
+/// Runs `find` on `dir`'s entries matching `query` as `@` rows typed as
+/// `base_text`, with `limits` and a worker that is never cancelled.
+#[track_caller]
+fn found(
+    dir: &Path,
+    base_text: &str,
+    query: &str,
+    limits: &Limits,
+) -> Option<Result<Vec<String>, String>> {
+    find(dir, base_text, query, limits, || false)
+}
+
+#[test]
+fn the_walk_honours_gitignore_and_skips_dot_git() {
+    // `.git/notes.txt` matches the query below: it stays out of the
+    // rows only because the walk skips `.git`, so loosening that
+    // filter to depth 1 and below lists it and fails this test.
+    let dir = seeded(&[
+        ".gitignore",
+        ".git/HEAD",
+        ".git/notes.txt",
+        ".git/objects/pack",
+        "vendor/ignored.txt",
+        "deep/ignored-too.txt",
+        "deep/kept.txt",
+        "top.txt",
+    ]);
+    std::fs::write(
+        dir.path().join(".gitignore"),
+        "vendor/\ndeep/ignored-too.txt\n",
+    )
+    .unwrap_or_else(|err| panic!(".gitignore: {err}"));
+    let rows = found(dir.path(), "~/proj/", "txt", &Limits::SEARCH)
+        .unwrap_or_else(|| panic!("cancelled"))
+        .unwrap_or_else(|err| panic!("{err}"));
+    assert_eq!(rows, owned(&["~/proj/top.txt", "~/proj/deep/kept.txt"]));
+}
+
+#[test]
+fn walk_rows_are_relative_to_the_base_as_typed() {
+    let dir = seeded(&["sub/inner.txt", "sub/README.md"]);
+    let rows = found(dir.path(), "~/proj/", "rea", &Limits::SEARCH)
+        .unwrap_or_else(|| panic!("cancelled"))
+        .unwrap_or_else(|err| panic!("{err}"));
+    assert_eq!(rows, owned(&["~/proj/sub/README.md"]));
+    let rows = found(dir.path(), "/etc/", "inner", &Limits::SEARCH)
+        .unwrap_or_else(|| panic!("cancelled"))
+        .unwrap_or_else(|err| panic!("{err}"));
+    assert_eq!(rows, owned(&["/etc/sub/inner.txt"]));
+}
+
+#[test]
+fn the_walk_stops_at_the_row_bound() {
+    let names: Vec<String> = (0..8).map(|at| format!("sub/f{at:02}.txt")).collect();
+    let refs: Vec<&str> = names.iter().map(String::as_str).collect();
+    for kept in [5, 6, 7] {
+        let dir = seeded(&refs);
+        let limits = Limits {
+            kept,
+            visits: Limits::SEARCH.visits,
+            check_every: Limits::SEARCH.check_every,
+        };
+        let rows = found(dir.path(), "~/proj/", "f", &limits)
+            .unwrap_or_else(|| panic!("kept {kept}: cancelled"))
+            .unwrap_or_else(|err| panic!("kept {kept}: {err}"));
+        assert_eq!(rows.len(), kept, "kept {kept}");
+    }
+}
+
+#[test]
+fn the_walk_stops_at_the_visit_bound() {
+    // Three depth-1 entries and exactly seven deeper ones, all matching:
+    // ten examined entries in total.
+    let names = [
+        "a1",
+        "a2",
+        "sub/",
+        "sub/b1",
+        "sub/b2",
+        "sub/deep/",
+        "sub/deep/c1",
+        "sub/deep/c2",
+        "sub/deep/c3",
+        "sub/deep/c4",
+    ];
+    for visits in [9, 10, 11] {
+        let dir = seeded(&names);
+        let limits = Limits {
+            kept: Limits::SEARCH.kept,
+            visits,
+            check_every: Limits::SEARCH.check_every,
+        };
+        let rows = found(dir.path(), "~/proj/", "", &limits)
+            .unwrap_or_else(|| panic!("visits {visits}: cancelled"))
+            .unwrap_or_else(|err| panic!("visits {visits}: {err}"));
+        assert_eq!(rows.len(), visits.min(10), "visits {visits}");
+    }
+}
+
+#[test]
+fn the_visit_bound_counts_unyielded_and_depth_one_entries() {
+    // Eight examined entries, only two matching: the depth-1 `m1` and the
+    // deep `sub/zzz/m2`. The walk streams in `read_dir` order, so a cut
+    // inside it keeps no fixed rows: the fixed cuts are before the walk
+    // yields anything (two visits: the depth-1 entries fill the budget)
+    // and past its end.
+    let names = [
+        "m1",
+        "sub/",
+        "sub/n1",
+        "sub/n2",
+        "sub/n3",
+        "sub/n4",
+        "sub/zzz/",
+        "sub/zzz/m2",
+    ];
+    for (visits, want) in [
+        (2, ["~/proj/m1"].as_slice()),
+        (8, ["~/proj/m1", "~/proj/sub/zzz/m2"].as_slice()),
+        (9, ["~/proj/m1", "~/proj/sub/zzz/m2"].as_slice()),
+    ] {
+        let dir = seeded(&names);
+        let limits = Limits {
+            kept: Limits::SEARCH.kept,
+            visits,
+            check_every: Limits::SEARCH.check_every,
+        };
+        let rows = found(dir.path(), "~/proj/", "m", &limits)
+            .unwrap_or_else(|| panic!("visits {visits}: cancelled"))
+            .unwrap_or_else(|err| panic!("visits {visits}: {err}"));
+        assert_eq!(rows, owned(want), "visits {visits}");
+    }
+}
+
+#[test]
+fn the_walk_does_not_start_when_the_base_fills_the_rows() {
+    let dir = seeded(&["a1", "a2", "sub/deep-match.txt"]);
+    let limits = Limits {
+        kept: 2,
+        visits: Limits::SEARCH.visits,
+        check_every: Limits::SEARCH.check_every,
+    };
+    let rows = found(dir.path(), "~/proj/", "a", &limits)
+        .unwrap_or_else(|| panic!("cancelled"))
+        .unwrap_or_else(|err| panic!("{err}"));
+    assert_eq!(rows, owned(&["~/proj/a1", "~/proj/a2"]));
+}
+
+#[test]
+fn the_walk_reaches_its_rows_while_nothing_cancels_it() {
+    // With `check_every: 1` every examined entry is a checkpoint, and
+    // nothing cancels: loosening the checkpoint from `&&` to `||`
+    // abandons the walk at its first countable entry and answers
+    // `None` instead of these rows.
+    let dir = seeded(&["sub/deep.txt"]);
+    let limits = Limits {
+        kept: Limits::SEARCH.kept,
+        visits: Limits::SEARCH.visits,
+        check_every: 1,
+    };
+    assert_eq!(
+        found(dir.path(), "~/proj/", "deep", &limits),
+        Some(Ok(owned(&["~/proj/sub/deep.txt"])))
+    );
+}
+
+#[test]
+fn a_cancelled_search_returns_none() {
+    let dir = seeded(&["a1", "sub/b1"]);
+    let looks = Cell::new(0usize);
+    let cancelled = || {
+        looks.set(looks.get() + 1);
+        looks.get() == 2
+    };
+    let limits = Limits {
+        kept: Limits::SEARCH.kept,
+        visits: Limits::SEARCH.visits,
+        check_every: 1,
+    };
+    assert_eq!(find(dir.path(), "~/proj/", "", &limits, cancelled), None);
+    assert_eq!(looks.get(), 2);
+}
+
+#[test]
+fn a_missing_base_is_an_error_row_reason() {
+    let missing = Path::new("/no/such/base");
+    match found(missing, "/no/such/", "", &Limits::SEARCH) {
+        Some(Err(reason)) => assert!(reason.contains("No such file or directory"), "{reason}"),
+        other => panic!("a missing base is an error, not {other:?}"),
+    }
+}
+
+#[test]
+fn a_file_as_base_is_an_error() {
+    let dir = seeded(&["plain.txt"]);
+    match found(
+        &dir.path().join("plain.txt"),
+        "~/proj/plain.txt/",
+        "",
+        &Limits::SEARCH,
+    ) {
+        Some(Err(reason)) => assert!(reason.contains("Not a directory"), "{reason}"),
+        other => panic!("a file base is an error, not {other:?}"),
     }
 }
 
@@ -169,6 +595,12 @@ fn a_directory_outside_a_repository_gives_the_error() {
     assert!(!error.contains('\n'), "{error}");
 }
 
+/// Roots over an empty workspace and no home: for worker tests that
+/// never resolve a path.
+fn nowhere() -> Roots {
+    Roots::new(PathBuf::from("/w"), None)
+}
+
 #[test]
 fn the_worker_skips_a_search_superseded_before_it_ran() {
     let (out, rx) = mpsc::channel();
@@ -179,6 +611,7 @@ fn the_worker_skips_a_search_superseded_before_it_ran() {
             gate.recv().map_err(|err| err.to_string())?;
             Ok(owned(&["a.rs", "b.rs"]))
         },
+        nowhere(),
         out,
     );
     search.search(1, "a".to_owned());
@@ -201,12 +634,143 @@ fn the_worker_skips_a_search_superseded_before_it_ran() {
 #[test]
 fn a_failed_listing_answers_every_search_with_its_error() {
     let (out, rx) = mpsc::channel();
-    let search = Search::spawn(|| Err("no git".to_owned()), out);
+    let search = Search::spawn(|| Err("no git".to_owned()), nowhere(), out);
     search.search(4, "x".to_owned());
     assert_eq!(
         next_result(&rx, "the error", &Deadline::after(DEADLINE)),
         (4, Err("no git".to_owned()))
     );
+}
+
+#[test]
+fn a_path_query_is_answered_while_the_listing_is_blocked() {
+    let home = seeded(&["proj/alpha.txt", "proj/beta.txt"]);
+    let (out, rx) = mpsc::channel();
+    let (release, gate) = mpsc::channel::<()>();
+    let search = Search::spawn(
+        move || {
+            gate.recv().map_err(|err| err.to_string())?;
+            Ok(owned(&["a.rs"]))
+        },
+        Roots::new(
+            PathBuf::from("/w"),
+            Some(home.path().as_os_str().to_owned()),
+        ),
+        out,
+    );
+    search.search(1, "~/proj/al".to_owned());
+    // The rows arrive while the listing is still gated: a path query
+    // never runs or waits on it.
+    assert_eq!(
+        next_result(&rx, "the path search", &Deadline::after(DEADLINE)),
+        (1, Ok(owned(&["~/proj/alpha.txt"])))
+    );
+    release
+        .send(())
+        .unwrap_or_else(|err| panic!("release: {err}"));
+    search.search(2, "a".to_owned());
+    assert_eq!(
+        next_result(&rx, "the workspace search", &Deadline::after(DEADLINE)),
+        (2, Ok(owned(&["a.rs"])))
+    );
+}
+
+#[test]
+fn path_searches_use_the_roots_and_ignore_a_failed_listing() {
+    let home = seeded(&["proj/README.md"]);
+    let (out, rx) = mpsc::channel();
+    let (release, gate) = mpsc::channel::<()>();
+    let search = Search::spawn(
+        move || {
+            gate.recv().map_err(|err| err.to_string())?;
+            Err("no git".to_owned())
+        },
+        Roots::new(
+            PathBuf::from("/w"),
+            Some(home.path().as_os_str().to_owned()),
+        ),
+        out,
+    );
+    search.search(1, "~/proj/rea".to_owned());
+    assert_eq!(
+        next_result(&rx, "the path search", &Deadline::after(DEADLINE)),
+        (1, Ok(owned(&["~/proj/README.md"])))
+    );
+    release
+        .send(())
+        .unwrap_or_else(|err| panic!("release: {err}"));
+    search.search(2, "read".to_owned());
+    assert_eq!(
+        next_result(&rx, "the failed listing", &Deadline::after(DEADLINE)),
+        (2, Err("no git".to_owned()))
+    );
+    // Without a home, a `~/` search answers why it cannot resolve.
+    let (out, rx) = mpsc::channel();
+    let search = Search::spawn(|| Ok(owned(&["a.rs"])), nowhere(), out);
+    search.search(3, "~/proj/rea".to_owned());
+    assert_eq!(
+        next_result(&rx, "the homeless search", &Deadline::after(DEADLINE)),
+        (3, Err("no home directory".to_owned()))
+    );
+}
+
+#[test]
+fn a_path_search_superseded_before_it_ran_is_skipped() {
+    let home = seeded(&["proj/alpha.txt", "proj/beta.txt"]);
+    let (out, rx) = mpsc::channel();
+    let (release, gate) = mpsc::channel::<()>();
+    let search = Search::spawn(
+        move || {
+            gate.recv().map_err(|err| err.to_string())?;
+            Ok(owned(&["a.rs"]))
+        },
+        Roots::new(
+            PathBuf::from("/w"),
+            Some(home.path().as_os_str().to_owned()),
+        ),
+        out,
+    );
+    // The workspace job holds the worker in the listing while two path
+    // searches queue behind it.
+    search.search(1, "a".to_owned());
+    search.search(2, "~/proj/al".to_owned());
+    search.search(3, "~/proj/be".to_owned());
+    release
+        .send(())
+        .unwrap_or_else(|err| panic!("release: {err}"));
+    assert_eq!(
+        next_result(&rx, "the newest search", &Deadline::after(DEADLINE)),
+        (3, Ok(owned(&["~/proj/beta.txt"])))
+    );
+    // Generation 2 never ran: the next result is the next search's.
+    search.search(4, "a".to_owned());
+    assert_eq!(
+        next_result(&rx, "the next search", &Deadline::after(DEADLINE)),
+        (4, Ok(owned(&["a.rs"])))
+    );
+}
+
+#[test]
+fn dropping_the_worker_abandons_a_path_search() {
+    let home = seeded(&["proj/alpha.txt"]);
+    let (out, rx) = mpsc::channel();
+    let search = Search::spawn(
+        || Ok(owned(&["a.rs"])),
+        Roots::new(
+            PathBuf::from("/w"),
+            Some(home.path().as_os_str().to_owned()),
+        ),
+        out,
+    );
+    search.search(1, "~/proj/al".to_owned());
+    drop(search);
+    // The worker ends without posting: the drop tags every generation
+    // abandoned, so the queued path search answers nothing.
+    match Deadline::after(DEADLINE).recv(&rx) {
+        Err(mpsc::RecvTimeoutError::Disconnected) => {}
+        Err(mpsc::RecvTimeoutError::Timeout) => panic!("waited {DEADLINE:?} for the worker to end"),
+        Ok(_) => panic!("a dropped worker posted a result"),
+    }
 }
 
 #[test]
@@ -234,6 +798,7 @@ fn dropping_the_worker_abandons_the_search_it_was_asked_for() {
             gate.recv().map_err(|err| err.to_string())?;
             Ok(owned(&["a.rs"]))
         },
+        nowhere(),
         out,
     );
     search.search(1, "a".to_owned());

@@ -27,6 +27,7 @@ capture slash-filtered 160 48
 capture slash-hint 160 48
 capture at 160 48
 capture at-empty 160 48
+capture at-path 160 48
 capture narrow-slash 100 40
 capture narrow-at 100 40
 echo "wrote $OUT"

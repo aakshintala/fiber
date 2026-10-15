@@ -1,8 +1,10 @@
 //! File search for the `@` panel: one listing of the files git tracks,
-//! searched on a worker thread that drops a search once a newer one is
-//! asked for (`docs/tui.md`, "Keys" › "Rules").
+//! or one bounded walk under a typed path, searched on a worker thread
+//! that drops a search once a newer one is asked for (`docs/tui.md`,
+//! "Keys" › "Rules").
 
-use std::path::Path;
+use std::ffi::OsString;
+use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -12,6 +14,289 @@ use crate::Input;
 
 /// How many paths a search keeps.
 pub(crate) const KEPT: usize = 50;
+
+/// How many entries a path search examines across the base listing and
+/// the walk before it stops.
+pub(crate) const VISITS: usize = 100_000;
+
+/// The bounds a search runs under: rows kept, entries examined, and
+/// entries between looks at whether the search was abandoned.
+/// `check_every` must be at least 1: the search looks when
+/// `examined % check_every == 0`, which panics on 0.
+#[derive(Clone, Copy, Debug)]
+pub(crate) struct Limits {
+    pub(crate) kept: usize,
+    pub(crate) visits: usize,
+    pub(crate) check_every: usize,
+}
+
+impl Limits {
+    /// The bounds a live search runs under.
+    pub(crate) const SEARCH: Limits = Limits {
+        kept: KEPT,
+        visits: VISITS,
+        check_every: CHECK_EVERY,
+    };
+}
+
+/// What a path search resolves against: the workspace for `../`, and
+/// the home directory for `~/`.
+pub(crate) struct Roots {
+    pub(crate) workspace: PathBuf,
+    pub(crate) home: Option<PathBuf>,
+}
+
+impl Roots {
+    /// Keeps `home` only when it names an absolute directory, as the
+    /// launch and the prompt files rule: an empty or relative `HOME`
+    /// is no home, so a `~/` search answers `Err("no home directory")`.
+    pub(crate) fn new(workspace: PathBuf, home: Option<OsString>) -> Self {
+        let home = home.and_then(|home| {
+            let home = PathBuf::from(home);
+            home.is_absolute().then_some(home)
+        });
+        Self { workspace, home }
+    }
+}
+
+/// What an `@` query searches: the files git tracks, or the entries
+/// under one base directory.
+#[derive(Debug, PartialEq, Eq)]
+pub(crate) enum Query<'a> {
+    /// `typed` does not start with `/`, `~/` or `../`.
+    Workspace(&'a str),
+    /// `base_text` is `typed` up to and including its last `/`, and
+    /// `query` the rest.
+    Path { base_text: &'a str, query: &'a str },
+}
+
+/// Splits `typed`, the text after the `@`, into a workspace query or a
+/// path search: `/`, `~/` or `../` starts a path search, whose base is
+/// the text up to its last `/`; anything else searches the files git
+/// tracks.
+pub(crate) fn split(typed: &str) -> Query<'_> {
+    let path = typed.starts_with('/') || typed.starts_with("~/") || typed.starts_with("../");
+    if !path {
+        return Query::Workspace(typed);
+    }
+    match typed.rfind('/') {
+        Some(at) => Query::Path {
+            base_text: &typed[..at + 1],
+            query: &typed[at + 1..],
+        },
+        // `/`, `~/` and `../` all hold a `/`, so this never runs.
+        None => Query::Workspace(typed),
+    }
+}
+
+/// Resolves a path search's `base_text` against `roots`: `~/rest` joins
+/// the home directory, `/…` is itself, and `../…` joins the workspace.
+pub(crate) fn resolve(base_text: &str, roots: &Roots) -> Result<PathBuf, String> {
+    if let Some(rest) = base_text.strip_prefix("~/") {
+        return match &roots.home {
+            Some(home) => Ok(home.join(rest)),
+            None => Err("no home directory".to_owned()),
+        };
+    }
+    if base_text.starts_with('/') {
+        return Ok(PathBuf::from(base_text));
+    }
+    Ok(roots.workspace.join(base_text))
+}
+
+/// Entries deeper under `base` whose paths hold `query`: one walk with
+/// the `ignore` crate, honouring `.gitignore` even outside a repository,
+/// skipping `.git`, and stopping with at most `room` rows or `limits`
+/// examined entries in total. Rows read `base_text` plus the path
+/// relative to the base, a directory ending in `/`. Every entry the
+/// walk reaches at depth 2 and below counts as examined, matching or
+/// not; `.gitignore`-skipped entries never reach the walk and are not
+/// counted. `None` when `cancelled` says so: asked, with the shared
+/// `examined` count, at every `check_every`-th examined entry.
+fn walk(
+    base: &Path,
+    base_text: &str,
+    query: &str,
+    room: usize,
+    limits: &Limits,
+    examined: &mut usize,
+    cancelled: impl Fn() -> bool,
+) -> Option<Vec<String>> {
+    if room == 0 {
+        return Some(Vec::new());
+    }
+    let query = query.to_lowercase();
+    let mut aborted = false;
+    let mut builder = ignore::WalkBuilder::new(base);
+    builder
+        .hidden(false)
+        .ignore(false)
+        .git_ignore(true)
+        .git_global(false)
+        .git_exclude(false)
+        .parents(false)
+        .require_git(false)
+        .follow_links(false)
+        .filter_entry(|entry| entry.depth() == 0 || entry.file_name().to_string_lossy() != ".git");
+    let rows: Vec<String> = builder
+        .build()
+        .take_while(|item| {
+            // The base listing owns depth 0 and 1; only deeper entries
+            // and errors the walk yields count against the visit bound.
+            let countable = match item {
+                Err(_) => true,
+                Ok(entry) => entry.depth() >= 2,
+            };
+            if !countable {
+                return true;
+            }
+            if *examined >= limits.visits {
+                return false;
+            }
+            let at = *examined;
+            *examined += 1;
+            if at.is_multiple_of(limits.check_every) && cancelled() {
+                aborted = true;
+                return false;
+            }
+            true
+        })
+        .filter_map(|item| {
+            let entry = item.ok()?;
+            if entry.depth() < 2 {
+                return None;
+            }
+            let rel = entry.path().strip_prefix(base).ok()?;
+            let rel = rel
+                .to_string_lossy()
+                .replace(std::path::MAIN_SEPARATOR, "/");
+            if !rel.to_lowercase().contains(&query) {
+                return None;
+            }
+            if !listable(&rel) {
+                return None;
+            }
+            let mut row = format!("{base_text}{rel}");
+            let dir = entry
+                .file_type()
+                .map(|kind| is_dir(kind, entry.path()))
+                .unwrap_or(false);
+            if dir {
+                row.push('/');
+            }
+            Some(row)
+        })
+        .take(room)
+        .collect();
+    if aborted {
+        return None;
+    }
+    Some(rows)
+}
+
+/// The rows a path search shows for `query` under `base`: the base
+/// directory's own matching entries first, then the walk's, at most
+/// `limits.kept` rows over at most `limits.visits` examined entries.
+/// `None` when `cancelled` says so: before the first read, at the first
+/// examined entry and every `check_every`-th one after, and once more
+/// before returning rows. `Some(Err)` when the base cannot be read.
+pub(crate) fn find(
+    base: &Path,
+    base_text: &str,
+    query: &str,
+    limits: &Limits,
+    cancelled: impl Fn() -> bool,
+) -> Option<Result<Vec<String>, String>> {
+    if cancelled() {
+        return None;
+    }
+    let mut examined = 0;
+    let mut rows = match entries(base, base_text, query, limits, &mut examined, &cancelled)? {
+        Ok(rows) => rows,
+        Err(error) => return Some(Err(error)),
+    };
+    let room = limits.kept.saturating_sub(rows.len());
+    rows.extend(walk(
+        base,
+        base_text,
+        query,
+        room,
+        limits,
+        &mut examined,
+        &cancelled,
+    )?);
+    if cancelled() {
+        return None;
+    }
+    Some(Ok(rows))
+}
+
+/// Whether `path` with `file_type` is a directory: its type is one, or
+/// a symlink whose target is one, so a linked directory stays
+/// navigable. The walk never follows links, so a symlinked directory
+/// inside it is still a row ending in `/` but is not descended.
+fn is_dir(file_type: std::fs::FileType, path: &Path) -> bool {
+    file_type.is_dir()
+        || (file_type.is_symlink() && std::fs::metadata(path).is_ok_and(|meta| meta.is_dir()))
+}
+
+/// Whether `name` can be a row: a row draws on one panel line and is
+/// inserted into the draft, where a control character such as a newline
+/// or escape would break the panel and the draft. The lossy U+FFFD form
+/// of a non-UTF-8 name is not a control character and is listed.
+fn listable(name: &str) -> bool {
+    !name.chars().any(char::is_control)
+}
+
+/// The base directory's own entries whose names hold `query`, ignoring
+/// case: directories first, then by lower-cased name, then by name. A
+/// directory row ends in `/`. Reads at most what the `examined` budget
+/// under `limits` still allows, in `read_dir` order before the sort, and
+/// keeps at most `limits.kept` rows; every entry read counts as
+/// examined, listed or not. `None` when `cancelled` says so, asked at
+/// the first examined entry and every `check_every`-th one after.
+fn entries(
+    base: &Path,
+    base_text: &str,
+    query: &str,
+    limits: &Limits,
+    examined: &mut usize,
+    cancelled: impl Fn() -> bool,
+) -> Option<Result<Vec<String>, String>> {
+    let room = limits.visits.saturating_sub(*examined);
+    let read = match std::fs::read_dir(base) {
+        Ok(read) => read,
+        Err(error) => return Some(Err(error.to_string())),
+    };
+    let query = query.to_lowercase();
+    let mut found: Vec<(bool, String, String)> = Vec::new();
+    for entry in read.take(room) {
+        if (*examined).is_multiple_of(limits.check_every) && cancelled() {
+            return None;
+        }
+        *examined += 1;
+        let Ok(entry) = entry else { continue };
+        let name = entry.file_name().to_string_lossy().into_owned();
+        if !listable(&name) {
+            continue;
+        }
+        if !name.to_lowercase().contains(&query) {
+            continue;
+        }
+        let is_dir = entry
+            .file_type()
+            .map(|kind| is_dir(kind, &entry.path()))
+            .unwrap_or(false);
+        let mut row = format!("{base_text}{name}");
+        if is_dir {
+            row.push('/');
+        }
+        found.push((!is_dir, name.to_lowercase(), row));
+    }
+    found.sort_unstable();
+    found.truncate(limits.kept);
+    Some(Ok(found.into_iter().map(|(_, _, row)| row).collect()))
+}
 
 /// How many paths a search checks between looks at whether it was
 /// abandoned.
@@ -96,14 +381,21 @@ pub(crate) struct Search {
 }
 
 impl Search {
-    /// Starts the worker on its own thread: `listing` runs there, and each
-    /// result goes to `out` as [`Input::Files`]. The thread is detached;
-    /// it ends once this handle is dropped or `out` hangs up. A worker
-    /// that cannot start answers every search with why, as [`unstarted`].
+    /// Starts the worker on its own thread: each result goes to `out` as
+    /// [`Input::Files`]. The thread is detached; it ends once this handle
+    /// is dropped or `out` hangs up. A worker that cannot start answers
+    /// every search with why, as [`unstarted`].
+    ///
+    /// A workspace query searches the listing, which runs on the worker
+    /// on the first workspace job only, so a path query typed at once
+    /// never waits on `git ls-files`; a path query resolves its base
+    /// against `roots` and walks it instead, ignoring the listing even
+    /// when it failed.
     ///
     /// [`unstarted`]: Self::unstarted
     pub(crate) fn spawn(
         listing: impl FnOnce() -> Result<Vec<String>, String> + Send + 'static,
+        roots: Roots,
         out: Sender<Input>,
     ) -> Self {
         let (jobs, inbox) = mpsc::channel::<(u64, String)>();
@@ -111,21 +403,46 @@ impl Search {
         let newest = Arc::clone(&current);
         let failed = out.clone();
         let worker = crate::sources::builder("tui-files").spawn(move || {
-            let listed = listing();
+            let mut listing = Some(listing);
+            let mut listed: Option<Result<Vec<String>, String>> = None;
             while let Ok(mut job) = inbox.recv() {
                 while let Ok(next) = inbox.try_recv() {
                     job = next;
                 }
                 let (generation, query) = job;
-                let result = match &listed {
-                    Ok(paths) => {
-                        let cancelled = || newest.load(Ordering::Relaxed) != generation;
-                        let Some(found) = rank(paths, &query, cancelled) else {
-                            continue;
-                        };
-                        Ok(found)
+                let cancelled = || newest.load(Ordering::Relaxed) != generation;
+                let result = match split(&query) {
+                    Query::Workspace(seek) => {
+                        if listed.is_none()
+                            && let Some(list) = listing.take()
+                        {
+                            listed = Some(list());
+                        }
+                        match &listed {
+                            Some(Ok(paths)) => {
+                                let Some(found) = rank(paths, seek, cancelled) else {
+                                    continue;
+                                };
+                                Ok(found)
+                            }
+                            Some(Err(error)) => Err(error.clone()),
+                            // The listing runs on the first workspace job,
+                            // so it is always held past one.
+                            None => continue,
+                        }
                     }
-                    Err(error) => Err(error.clone()),
+                    Query::Path {
+                        base_text,
+                        query: seek,
+                    } => match resolve(base_text, &roots) {
+                        Err(reason) => Err(reason),
+                        Ok(base) => {
+                            match find(&base, base_text, seek, &Limits::SEARCH, cancelled) {
+                                None => continue,
+                                Some(result) => result,
+                            }
+                        }
+                    },
                 };
                 if out.send(Input::Files { generation, result }).is_err() {
                     return;

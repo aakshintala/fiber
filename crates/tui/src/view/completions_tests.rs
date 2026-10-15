@@ -258,6 +258,34 @@ fn at() {
 }
 
 #[test]
+fn at_path() {
+    let mut app = attached(160, 48);
+    type_text(&mut app, "look at @~/proj/");
+    let found = ["~/proj/sub/", "~/proj/README.md"].map(str::to_owned);
+    app.on_files(app.generation(), Ok(found.to_vec()));
+    insta::assert_snapshot!("at-path", screen(&app, 160, 48));
+    let buf = buffer(&app, 160, 48);
+    let bars = barred(&buf);
+    assert_eq!(bars.len(), 1);
+    assert!(row_text(&buf, bars[0]).contains("~/proj/sub/"));
+}
+
+#[test]
+fn a_long_directory_row_keeps_its_trailing_slash_when_cut() {
+    let mut app = attached(40, 24);
+    type_text(&mut app, "@~/proj/");
+    let long = "~/proj/a-very-long-directory-name-that-keeps-going/";
+    app.on_files(app.generation(), Ok(vec![long.to_owned()]));
+    let shown = screen(&app, 40, 24);
+    let buf = buffer(&app, 40, 24);
+    let bars = barred(&buf);
+    assert_eq!(bars.len(), 1, "{shown}");
+    let row = row_text(&buf, bars[0]);
+    assert!(row.contains('…'), "the row is cut\n{shown}");
+    assert!(row.trim_end().ends_with('/'), "{shown}");
+}
+
+#[test]
 fn at_empty() {
     let mut app = attached(160, 48);
     type_text(&mut app, "@zzz");

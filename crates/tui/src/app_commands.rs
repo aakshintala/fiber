@@ -391,6 +391,30 @@ impl App {
             Key::Tab | Key::Enter => {
                 let chosen = chosen?;
                 if let Some(panel) = self.overlays.files.take() {
+                    if chosen.ends_with('/')
+                        && let Some((_, end)) = self.draft.mention(panel.anchor)
+                    {
+                        // A directory row enters the new base and keeps
+                        // searching it: the `@` stays and the text after
+                        // it becomes the row, with no trailing space. The
+                        // panel stays open on a newer generation, and the
+                        // old rows go, so Enter never inserts a stale one.
+                        self.draft
+                            .replace(panel.anchor.saturating_add(1)..end, &chosen);
+                        self.overlays.files = Some(FilePanel {
+                            anchor: panel.anchor,
+                            result: None,
+                        });
+                        self.overlays.selected = 0;
+                        self.overlays.generation = self.overlays.generation.saturating_add(1);
+                        let Some(query) = self.file_query() else {
+                            return Some(Effect::None);
+                        };
+                        return Some(Effect::Search {
+                            generation: self.overlays.generation,
+                            query,
+                        });
+                    }
                     let end = self
                         .draft
                         .mention(panel.anchor)
