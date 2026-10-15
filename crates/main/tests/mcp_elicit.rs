@@ -19,9 +19,9 @@ use std::fs;
 use std::path::{Path, PathBuf};
 use std::sync::mpsc::RecvTimeoutError;
 
-use fakes::{Client, ProviderServer, Watchdog};
-use fakes::clock::FakeClock;
 use extension_harness::Running;
+use fakes::clock::FakeClock;
+use fakes::{Client, ProviderServer, Watchdog};
 use serde_json::{Value, json};
 use support::{Deadline, Setup, function_call, hello, stream};
 
@@ -194,8 +194,7 @@ fn read_fifo_past_a_spent_deadline_times_out() {
 /// tool's closing quote, so a similarly named tool never matches.
 fn hold_report(tool: &str, requests_log: &str, stderr: &str) -> String {
     let reached = requests_log.lines().any(|line| {
-        line.contains("\"method\":\"tools/call\"")
-            && line.contains(&format!("\"name\":\"{tool}\""))
+        line.contains("\"method\":\"tools/call\"") && line.contains(&format!("\"name\":\"{tool}\""))
     });
     let verdict = if reached {
         format!("`tools/call` for {tool} reached the server, so the stall is after it")
@@ -649,11 +648,7 @@ fn a_hold_that_never_reaches_the_server_is_named() {
     let clock = Box::leak(Box::new(FakeClock::new()));
     let spent = Deadline::on(&**clock);
     clock.advance(support::WAITS);
-    let message =
-        read_held(spent, setup.deadline, &running, &dir, "hold").unwrap_err();
-    assert!(
-        message.contains("no `tools/call` for hold"),
-        "{message}",
-    );
+    let message = read_held(spent, setup.deadline, &running, &dir, "hold").unwrap_err();
+    assert!(message.contains("no `tools/call` for hold"), "{message}",);
     assert!(message.contains("never received"), "{message}");
 }
