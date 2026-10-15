@@ -43,6 +43,7 @@ type SessionTools = (
 /// downloads; the model's `shell` moves commands into `jobs`, which the
 /// `jobs` tool lists, waits on and stops. The driver shell runs in the
 /// foreground only. `fiber` is the executable recorded at process startup.
+#[cfg(test)]
 #[allow(
     clippy::too_many_arguments,
     reason = "one session's built-ins need Fiber home and the recorded executable alongside the session's own paths"
@@ -59,10 +60,8 @@ pub(crate) fn builtin(
     delegates: &crate::delegates::Delegates,
     skills: Arc<dyn contract::skills::Skills>,
 ) -> Result<SessionTools, Failure> {
-    // The current production caller and the unit tests: no image-child
-    // timing. The debug path forwards its timing through `builtin_timed`
-    // once that composition lands; then this entry becomes its test-only
-    // form.
+    // The unit tests' entry: no image-child timing. Production forwards
+    // its timing through `builtin_timed`.
     builtin_timed(
         fiber, home, workspace, artifacts, clock, jobs, locks, web_search, delegates, skills, None,
     )
