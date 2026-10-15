@@ -708,7 +708,10 @@ fn slash_rules_opens_the_view_attached_and_on_home() {
     slash_rules(&mut app);
     assert!(app.config_view_open());
     let rows = screen(&app);
-    assert!(rows.iter().any(|row| row.starts_with("  Rules")), "{rows:?}");
+    assert!(
+        rows.iter().any(|row| row.starts_with("  Rules")),
+        "{rows:?}"
+    );
 }
 
 #[test]

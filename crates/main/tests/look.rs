@@ -952,8 +952,7 @@ fn started_run(rail_shown: bool) -> (Setup, Run) {
         &setup.workspace().join("s.json"),
         &serde_json::json!({"steps": [{"text": ["Hel", "lo."]}]}),
     );
-    let mut config =
-        serde_json::json!({"model": "scripted/s.json", "hub": {"idle_exit_ms": 1000}});
+    let mut config = serde_json::json!({"model": "scripted/s.json", "hub": {"idle_exit_ms": 1000}});
     if !rail_shown {
         config["tui"] = serde_json::json!({"rail": {"shown": false}});
     }

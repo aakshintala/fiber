@@ -837,7 +837,10 @@ fn the_approval_panel_draws_above_the_status_row() {
     // The panel's bottom edge sits above the status row.
     assert!(rows[rows.len() - 1].contains("$1.50"), "{rows:?}");
     assert!(
-        rows[rows.len() - 2].trim_start().chars().all(|cell| cell == '▀'),
+        rows[rows.len() - 2]
+            .trim_start()
+            .chars()
+            .all(|cell| cell == '▀'),
         "{rows:?}"
     );
     assert!(
@@ -864,7 +867,10 @@ fn the_approval_panel_takes_the_bottom_row_once_the_status_sheds() {
     // No status row survives, so the panel's bottom edge ends on the last row.
     assert!(!rows.iter().any(|row| row.contains("$1.50")), "{rows:?}");
     assert!(
-        rows[rows.len() - 1].trim_start().chars().all(|cell| cell == '▀'),
+        rows[rows.len() - 1]
+            .trim_start()
+            .chars()
+            .all(|cell| cell == '▀'),
         "{rows:?}"
     );
     assert!(
@@ -906,7 +912,10 @@ fn the_question_caret_sits_inside_the_panel_above_the_status_row() {
     assert!(rows[usize::from(at.y)].contains("qx"), "{rows:?}");
     assert!(usize::from(at.y) < rows.len() - 3, "{rows:?}");
     assert!(
-        rows[rows.len() - 2].trim_start().chars().all(|cell| cell == '▀'),
+        rows[rows.len() - 2]
+            .trim_start()
+            .chars()
+            .all(|cell| cell == '▀'),
         "{rows:?}"
     );
     assert!(

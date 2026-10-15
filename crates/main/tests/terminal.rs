@@ -102,8 +102,7 @@ fn provider_full(
 /// provider helpers wrote.
 fn hide_rail(setup: &support::Setup) {
     let path = setup.home().join("config.json");
-    let mut config: Value =
-        serde_json::from_str(&fs::read_to_string(&path).unwrap()).unwrap();
+    let mut config: Value = serde_json::from_str(&fs::read_to_string(&path).unwrap()).unwrap();
     config["tui"] = json!({"rail": {"shown": false}});
     write_json(&path, &config);
 }

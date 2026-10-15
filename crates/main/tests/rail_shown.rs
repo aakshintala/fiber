@@ -39,11 +39,7 @@ fn rail_shown(rows: &[String]) -> bool {
 fn rail_shown_saved(setup: &Setup) -> Option<bool> {
     let file = fs::read_to_string(setup.home().join("config.json")).unwrap();
     let config: serde_json::Value = serde_json::from_str(&file).unwrap();
-    config
-        .get("tui")?
-        .get("rail")?
-        .get("shown")?
-        .as_bool()
+    config.get("tui")?.get("rail")?.get("shown")?.as_bool()
 }
 
 /// Quits the run's terminal and waits for it. The hub's last client

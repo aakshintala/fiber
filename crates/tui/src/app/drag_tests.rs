@@ -384,7 +384,12 @@ fn a_grip_shown_rail_released_below_the_floor_hides_and_saves_false_last() {
     app.on_drag(&press(0, 20));
     // Past the floor the rail shows, saving on.
     app.on_drag(&drag(21, 20));
-    assert!(app.chrome().layout().and_then(|layout| layout.rail).is_some());
+    assert!(
+        app.chrome()
+            .layout()
+            .and_then(|layout| layout.rail)
+            .is_some()
+    );
     // Back below the floor the release hides it again, saving off last.
     app.on_drag(&drag(20, 20));
     app.on_drag(&release());
@@ -527,10 +532,7 @@ fn a_panel_drag_saves_tui_panel_width() {
     app.on_drag(&press(158, 20));
     app.on_drag(&drag(150, 20));
     app.on_drag(&release());
-    assert_eq!(
-        app.take_saves(),
-        vec![("tui.panel.width", "25".to_owned())]
-    );
+    assert_eq!(app.take_saves(), vec![("tui.panel.width", "25".to_owned())]);
 }
 
 #[test]
