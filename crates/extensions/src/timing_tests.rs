@@ -912,6 +912,28 @@ fn models_lua(name: &str, url: &str) -> String {
     out
 }
 
+/// Waits, at most `within` of real time, until the hub lock is free.
+/// `FakeClock::wait_until` records the caller's park and wakes
+/// `await_parked` before its wait closure runs, and the caller still holds
+/// the hub guard until the condvar wait inside that closure releases it
+/// (`support::clock::park` over `Hub::wait`). A single `hub_unlocked()`
+/// read can land in that window, so the read repeats until one of them
+/// proves the release: success is the proof, and expiry fails naming the
+/// guard, as the assert this replaces did. No pause point can sit in that
+/// window from this file — it spans the fake clock and the shared park —
+/// so waiting for the release-proving read itself is the handshake.
+#[track_caller]
+fn await_unlocked(ext: &LuaExtension, within: Duration) {
+    let deadline = Deadline::after(within);
+    while !ext.hub_unlocked() {
+        assert!(
+            !deadline.left().is_zero(),
+            "the guard released before emission"
+        );
+        std::thread::yield_now();
+    }
+}
+
 #[test]
 fn worker_emits_only_after_the_guard_releases() {
     unpause_observed_execution();
@@ -972,7 +994,10 @@ fn worker_emits_only_after_the_guard_releases() {
     // With the scheduler frozen past the rendezvous and the worker gated
     // past it, the admission guard is free and no probe has run: a worker
     // holding the lock across its pause, or a write before it, fails here.
-    assert!(ext.hub_unlocked(), "the guard released before emission");
+    // The parked signals above fire when each caller records its park,
+    // before its condvar wait releases the hub guard, so the guard is read
+    // only once a read proves the release.
+    await_unlocked(&ext, WAIT);
     assert!(sink.records().is_empty());
     // Stamps after this advance prove they ran after the pause: a stamp
     // from before it would end 5000 ms later.
