@@ -18,6 +18,7 @@ mod finished;
 mod gated_http;
 pub(crate) mod http_server;
 pub mod jobs;
+mod locks;
 mod oauth_server;
 mod process_group;
 mod provider_server;
@@ -42,6 +43,7 @@ pub use deadline::Deadline;
 pub use emit::Recorder;
 pub use finished::finished;
 pub use gated_http::GatedHttp;
+pub use locks::{FakeLock, NoLock};
 pub mod git;
 pub use oauth_server::{OauthReply, OauthRequest, OauthServer, jwt};
 pub use process_group::{
